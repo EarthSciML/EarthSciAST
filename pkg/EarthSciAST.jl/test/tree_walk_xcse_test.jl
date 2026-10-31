@@ -28,7 +28,7 @@ const ESM = EarthSciAST
 
 include("testutils.jl")  # zero_alloc_harness.jl → rhs_alloc_bytes
 
-_xc_fn(name, args...) = ESM.OpExpr("fn", ESM.ASTExpr[args...]; name=String(name))
+_xc_fn(name, args...) = ESM.OpExpr("fn", ESM.ASTExpr[args...]; name = String(name))
 
 # One RHS call's fn-evaluation count, from the build's own containers: every
 # prelude def is evaluated exactly once per call (`_make_rhs`'s two tier loops)
@@ -39,19 +39,19 @@ _xc_fn(name, args...) = ESM.OpExpr("fn", ESM.ASTExpr[args...]; name=String(name)
 # has no children, so a def rewritten to a cache read contributes nothing.
 _xc_count_fn(n::ESM._Node) =
     (n.kind === ESM._NK_OP && n.op === :fn ? 1 : 0) +
-    sum(_xc_count_fn(c) for c in n.children; init=0)
+    sum(_xc_count_fn(c) for c in n.children; init = 0)
 
 function _xc_percall_fn(prelude, kernels)
-    total = sum(_xc_count_fn(d) for d in prelude; init=0)
-    seen = IdDict{ESM._AccKernel,Nothing}()
+    total = sum(_xc_count_fn(d) for d in prelude; init = 0)
+    seen = IdDict{ESM._AccKernel, Nothing}()
     function walk(K)
         haskey(seen, K) && return
         seen[K] = nothing
-        total += sum(_xc_count_fn(r) for r in K.cse.inv_recipes; init=0)
+        total += sum(_xc_count_fn(r) for r in K.cse.inv_recipes; init = 0)
         # the per-cell tiers must be fn-free for the count to be per-call
         @test _xc_count_fn(K.spine) == 0
-        @test sum(_xc_count_fn(r) for r in K.cse.recipes; init=0) == 0
-        foreach(walk, K.subs)
+        @test sum(_xc_count_fn(r) for r in K.cse.recipes; init = 0) == 0
+        return foreach(walk, K.subs)
     end
     foreach(walk, kernels)
     return total
@@ -61,9 +61,11 @@ end
 # `:interpreter`, which is the differential oracle: value-identity must hold
 # through xcse and the kernel-class merge composed, since the class merge runs
 # BEFORE xcse on `:inplace` builds too.
-_xc_build(model; ics=Dict{String,Float64}(), compiler=:native, kw...) =
-    ESM._build_evaluator_impl(model; initial_conditions=ics, compiler=compiler,
-                              kw...)
+_xc_build(model; ics = Dict{String, Float64}(), compiler = :native, kw...) =
+    ESM._build_evaluator_impl(
+    model; initial_conditions = ics, compiler = compiler,
+    kw...
+)
 
 _xc_du(f!, u0, p, t) = (du = zeros(length(u0)); f!(du, u0, p, t); du)
 
@@ -85,17 +87,21 @@ _xc_axis(n) = Any[(j - 1) / (n - 1) for j in 1:n]
 # FastJX-like: K bands, band k an array equation D(c_k[i]) = J_k · c_k[i] with
 # its OWN table (distinct interp per band) — but ONE shared query subtree; and
 # `nshared` of the bands reuse band 1's table (a fully shared interp).
-function _xc_fastjx(K::Int, N::Int; nshared::Int=2)
-    vars = Dict{String,ESM.ModelVariable}()
+function _xc_fastjx(K::Int, N::Int; nshared::Int = 2)
+    vars = Dict{String, ESM.ModelVariable}()
     eqs = ESM.Equation[]
     for k in 1:K
         vars["c$k"] = ESM.ModelVariable(ESM.UnknownVariable)
         tbl = k <= nshared ? Any[1.0, 2.0, 4.0] : Any[1.0 + k, 2.0 + k, 4.0 + k]
         body = _op("*", _xc_J(tbl), _idx("c$k", _v("i")))
-        push!(eqs, ESM.Equation(_ao1(_Didx("c$k", _v("i")), "i", 1, N),
-                                _ao1(body, "i", 1, N)))
+        push!(
+            eqs, ESM.Equation(
+                _ao1(_Didx("c$k", _v("i")), "i", 1, N),
+                _ao1(body, "i", 1, N)
+            )
+        )
     end
-    ics = Dict{String,Float64}()
+    ics = Dict{String, Float64}()
     for k in 1:K, i in 1:N
         ics["c$k[$i]"] = 0.1k + 0.01i
     end
@@ -106,19 +112,27 @@ end
 # k interpolates over a (2+k)-knot axis, so every band is its own class. One
 # kernel per band, one shared query subtree across all of them.
 function _xc_fastjx_unmerged(K::Int, N::Int)
-    vars = Dict{String,ESM.ModelVariable}()
+    vars = Dict{String, ESM.ModelVariable}()
     eqs = ESM.Equation[]
     for k in 1:K
         vars["c$k"] = ESM.ModelVariable(ESM.UnknownVariable)
         n = 2 + k
         tbl = Any[1.0 + k + j for j in 1:n]
-        body = _op("*", _xc_fn("interp.linear", _const(tbl),
-                               _const(_xc_axis(n)), _xc_q()),
-                   _idx("c$k", _v("i")))
-        push!(eqs, ESM.Equation(_ao1(_Didx("c$k", _v("i")), "i", 1, N),
-                                _ao1(body, "i", 1, N)))
+        body = _op(
+            "*", _xc_fn(
+                "interp.linear", _const(tbl),
+                _const(_xc_axis(n)), _xc_q()
+            ),
+            _idx("c$k", _v("i"))
+        )
+        push!(
+            eqs, ESM.Equation(
+                _ao1(_Didx("c$k", _v("i")), "i", 1, N),
+                _ao1(body, "i", 1, N)
+            )
+        )
     end
-    ics = Dict{String,Float64}()
+    ics = Dict{String, Float64}()
     for k in 1:K, i in 1:N
         ics["c$k[$i]"] = 0.1k + 0.01i
     end
@@ -138,8 +152,10 @@ end
         # chain. The composed default build is pinned right below.
         model, ics = _xc_fastjx_unmerged(K, N)
         fon!, u0, p, _, vm, don = _xc_build(model; ics)
-        foff!, u0f, pf, _, _, doff = _xc_build(_xc_fastjx_unmerged(K, N)[1];
-                                               ics, compiler=:interpreter)
+        foff!, u0f, pf, _, _, doff = _xc_build(
+            _xc_fastjx_unmerged(K, N)[1];
+            ics, compiler = :interpreter
+        )
 
         # The pass fired: the shared query chain (0.1·t, cos) is hoisted out of
         # every band's kernel, and each band's copies collapse to reads.
@@ -153,8 +169,10 @@ end
         for t in (0.0, 0.7, 13.9, -2.5)
             don_du = _xc_du(fon!, u0, p, t)
             @test don_du == _xc_du(foff!, u0f, pf, t)
-            J1 = ESM._interp_linear_core([3.0, 4.0, 5.0], _xc_axis(3),
-                                         cos(0.1t))
+            J1 = ESM._interp_linear_core(
+                [3.0, 4.0, 5.0], _xc_axis(3),
+                cos(0.1t)
+            )
             @test don_du[vm["c1[1]"]] === J1 * u0[vm["c1[1]"]]
         end
 
@@ -170,9 +188,11 @@ end
         # composed — the fold and the per-lane tables move WHERE each band's
         # numbers are computed, never the numbers.
         mgmodel, mgics = _xc_fastjx(K, N)
-        fmg!, u0m, pm, _, _, dmg = _xc_build(mgmodel; ics=mgics)
-        fmr!, u0r, pr, _, _, _ = _xc_build(_xc_fastjx(K, N)[1]; ics=mgics,
-                                           compiler=:interpreter)
+        fmg!, u0m, pm, _, _, dmg = _xc_build(mgmodel; ics = mgics)
+        fmr!, u0r, pr, _, _, _ = _xc_build(
+            _xc_fastjx(K, N)[1]; ics = mgics,
+            compiler = :interpreter
+        )
         @test dmg.n_acc_kernels == 1
         @test dmg.n_classmerge_in == K
         @test dmg.n_xcse_slots == 0
@@ -192,7 +212,7 @@ end
     # ----------------------------------------------------------------
     @testset "evaluate-once: one fn evaluation per RHS call" begin
         K, N = 5, 6
-        _, ics = _xc_fastjx(K, N; nshared=K)
+        _, ics = _xc_fastjx(K, N; nshared = K)
         # White-box count over the INTERPRETER kernel IR: a zero primary node
         # budget — a retained tuning threshold — leaves every kernel a residual
         # `_AccKernel` with its inv recipes walkable. Fully emitted, the
@@ -207,7 +227,7 @@ end
             # keeps their value-identical interp chain as ONE preserved inv
             # tier on the single merged kernel — 1 fn eval per call, no scalar
             # slot minted for xcse to hoist onto.
-            fmg!, _, _, _, _, dmg = _xc_build(_xc_fastjx(K, N; nshared=K)[1]; ics, compiler = lax)
+            fmg!, _, _, _, _, dmg = _xc_build(_xc_fastjx(K, N; nshared = K)[1]; ics, compiler = lax)
             @test dmg.n_acc_kernels == 1
             @test dmg.n_classmerge_in == K
             @test dmg.n_xcse_slots == 0
@@ -221,8 +241,10 @@ end
             # interp still evaluated exactly once per call. (The chain itself
             # is `cos(0.1·t)` — ops, not a registered fn — so it does not add
             # to this count; what it adds is the slots pinned above.)
-            fu!, _, _, _, _, du = _xc_build(_xc_fastjx_unmerged(K, N)[1];
-                                            ics=_xc_fastjx_unmerged(K, N)[2], compiler = lax)
+            fu!, _, _, _, _, du = _xc_build(
+                _xc_fastjx_unmerged(K, N)[1];
+                ics = _xc_fastjx_unmerged(K, N)[2], compiler = lax
+            )
             @test du.n_acc_kernels == K
             @test du.n_xcse_slots == 2
             preludeu = getfield(fu!, :cse_prelude)
@@ -237,23 +259,26 @@ end
     @testset "observed chain: kernel def lands on the existing observed slot" begin
         N = 8
         tbl = Any[1.0, 2.0, 4.0]
-        vars = Dict{String,ESM.ModelVariable}(
+        vars = Dict{String, ESM.ModelVariable}(
             "a" => ESM.ModelVariable(ESM.UnknownVariable),
-            "s" => ESM.ModelVariable(ESM.UnknownVariable; default=2.0),
-            "Jobs" => ESM.ModelVariable(ESM.UnknownVariable))
+            "s" => ESM.ModelVariable(ESM.UnknownVariable; default = 2.0),
+            "Jobs" => ESM.ModelVariable(ESM.UnknownVariable)
+        )
         eqs = ESM.Equation[
             ESM.Equation(_v("Jobs"), _xc_J(tbl)),
             ESM.Equation(_D("s"), _op("*", _v("Jobs"), _v("s"))),
-            ESM.Equation(_ao1(_Didx("a", _v("i")), "i", 1, N),
-                         _ao1(_op("*", _xc_J(tbl), _idx("a", _v("i"))), "i", 1, N)),
+            ESM.Equation(
+                _ao1(_Didx("a", _v("i")), "i", 1, N),
+                _ao1(_op("*", _xc_J(tbl), _idx("a", _v("i"))), "i", 1, N)
+            ),
         ]
-        ics = Dict{String,Float64}("s" => 2.0)
+        ics = Dict{String, Float64}("s" => 2.0)
         for i in 1:N
             ics["a[$i]"] = 0.1i
         end
         mk() = ESM.Model(vars, eqs)
         fon!, u0, p, _, _, don = _xc_build(mk(); ics)
-        foff!, u0f, pf, _, _, _ = _xc_build(mk(); ics, compiler=:interpreter)
+        foff!, u0f, pf, _, _, _ = _xc_build(mk(); ics, compiler = :interpreter)
         # The observed def IS the interp chain: the kernel's whole inv chain
         # rewrites onto existing prelude slots — J onto the observed slot
         # itself — minting NO new slot.
@@ -271,30 +296,37 @@ end
     @testset "scalar equation joins the kernels' shared slot" begin
         N = 8
         tbl = Any[1.0, 2.0, 4.0]
-        vars = Dict{String,ESM.ModelVariable}(
+        vars = Dict{String, ESM.ModelVariable}(
             "a" => ESM.ModelVariable(ESM.UnknownVariable),
             "b" => ESM.ModelVariable(ESM.UnknownVariable),
-            "s" => ESM.ModelVariable(ESM.UnknownVariable; default=2.0))
+            "s" => ESM.ModelVariable(ESM.UnknownVariable; default = 2.0)
+        )
         # `b` interpolates over a 4-knot axis so the class merge cannot group
         # the two array kernels: the kernel↔scalar direction this testset is
         # about needs TWO kernels sharing the `a`/`s` interp chain.
-        Jb = _xc_fn("interp.linear", _const(Any[1.0, 2.0, 4.0, 8.0]),
-                    _const(_xc_axis(4)), _xc_q())
+        Jb = _xc_fn(
+            "interp.linear", _const(Any[1.0, 2.0, 4.0, 8.0]),
+            _const(_xc_axis(4)), _xc_q()
+        )
         eqs = ESM.Equation[
-            ESM.Equation(_ao1(_Didx("a", _v("i")), "i", 1, N),
-                         _ao1(_op("*", _xc_J(tbl), _idx("a", _v("i"))), "i", 1, N)),
-            ESM.Equation(_ao1(_Didx("b", _v("i")), "i", 1, N),
-                         _ao1(_op("*", Jb, _idx("b", _v("i"))), "i", 1, N)),
+            ESM.Equation(
+                _ao1(_Didx("a", _v("i")), "i", 1, N),
+                _ao1(_op("*", _xc_J(tbl), _idx("a", _v("i"))), "i", 1, N)
+            ),
+            ESM.Equation(
+                _ao1(_Didx("b", _v("i")), "i", 1, N),
+                _ao1(_op("*", Jb, _idx("b", _v("i"))), "i", 1, N)
+            ),
             ESM.Equation(_D("s"), _op("*", _xc_J(tbl), _v("s"))),
         ]
-        ics = Dict{String,Float64}("s" => 2.0)
+        ics = Dict{String, Float64}("s" => 2.0)
         for i in 1:N
             ics["a[$i]"] = 0.1i
             ics["b[$i]"] = 0.2i
         end
         mk() = ESM.Model(vars, eqs)
         fon!, u0, p, _, _, don = _xc_build(mk(); ics)
-        foff!, u0f, pf, _, _, _ = _xc_build(mk(); ics, compiler=:interpreter)
+        foff!, u0f, pf, _, _, _ = _xc_build(mk(); ics, compiler = :interpreter)
         @test don.n_xcse_slots == 2            # the cos query chain · interp
         @test don.n_xcse_scalar_shared == 1    # the D(s) site reads the slot
         for t in (0.0, 0.7, 5.3)
@@ -317,9 +349,11 @@ end
         du = zeros(length(u0))
         @test rhs_alloc_bytes(fon!, du, u0, p, 0.3) == 0
 
-        foff!, u0f, pf, _, _, _ = _xc_build(_xc_fastjx_unmerged(K, N)[1]; ics,
-                                            compiler=:interpreter)
-        DT = ForwardDiff.Dual{Nothing,Float64,1}
+        foff!, u0f, pf, _, _, _ = _xc_build(
+            _xc_fastjx_unmerged(K, N)[1]; ics,
+            compiler = :interpreter
+        )
+        DT = ForwardDiff.Dual{Nothing, Float64, 1}
         uD = DT.(u0)
         duD = similar(uD)
         fon!(duD, uD, p, 0.3)
@@ -333,19 +367,24 @@ end
     # ----------------------------------------------------------------
     @testset "cost gate: shared plain arithmetic is left per-kernel" begin
         N = 8
-        vars = Dict{String,ESM.ModelVariable}(
+        vars = Dict{String, ESM.ModelVariable}(
             "a" => ESM.ModelVariable(ESM.UnknownVariable),
             "b" => ESM.ModelVariable(ESM.UnknownVariable),
-            "g" => ESM.ModelVariable(ESM.ParameterVariable; default=3.0),
-            "h" => ESM.ModelVariable(ESM.ParameterVariable; default=7.0))
+            "g" => ESM.ModelVariable(ESM.ParameterVariable; default = 3.0),
+            "h" => ESM.ModelVariable(ESM.ParameterVariable; default = 7.0)
+        )
         gh = _op("/", _v("g"), _v("h"))       # invariant, shared, cheap
         eqs = ESM.Equation[
-            ESM.Equation(_ao1(_Didx("a", _v("i")), "i", 1, N),
-                         _ao1(_op("*", gh, _idx("a", _v("i"))), "i", 1, N)),
-            ESM.Equation(_ao1(_Didx("b", _v("i")), "i", 1, N),
-                         _ao1(_op("*", gh, _idx("b", _v("i"))), "i", 1, N)),
+            ESM.Equation(
+                _ao1(_Didx("a", _v("i")), "i", 1, N),
+                _ao1(_op("*", gh, _idx("a", _v("i"))), "i", 1, N)
+            ),
+            ESM.Equation(
+                _ao1(_Didx("b", _v("i")), "i", 1, N),
+                _ao1(_op("*", gh, _idx("b", _v("i"))), "i", 1, N)
+            ),
         ]
-        ics = Dict{String,Float64}()
+        ics = Dict{String, Float64}()
         for i in 1:N
             ics["a[$i]"] = 0.1i
             ics["b[$i]"] = 0.2i
@@ -354,7 +393,7 @@ end
         fon!, u0, p, _, _, don = _xc_build(mk(); ics)
         @test don.n_xcse_slots == 0            # g/h is below the fn cost bar
         @test don.n_xcse_kernel_shared == 0
-        foff!, u0f, pf, _, _, _ = _xc_build(mk(); ics, compiler=:interpreter)
+        foff!, u0f, pf, _, _, _ = _xc_build(mk(); ics, compiler = :interpreter)
         @test _xc_du(fon!, u0, p, 0.4) == _xc_du(foff!, u0f, pf, 0.4)
     end
 
@@ -364,25 +403,32 @@ end
     @testset "guarded kernel spine: pass declines, oracle still bit-exact" begin
         N = 8
         tbl = Any[1.0, 2.0, 4.0]
-        vars = Dict{String,ESM.ModelVariable}(
+        vars = Dict{String, ESM.ModelVariable}(
             "a" => ESM.ModelVariable(ESM.UnknownVariable),
-            "b" => ESM.ModelVariable(ESM.UnknownVariable))
-        guarded(v) = _op("ifelse", _op(">=", _idx(v, _v("i")), _n(0.0)),
-                         _op("*", _xc_J(tbl), _idx(v, _v("i"))), _n(0.0))
+            "b" => ESM.ModelVariable(ESM.UnknownVariable)
+        )
+        guarded(v) = _op(
+            "ifelse", _op(">=", _idx(v, _v("i")), _n(0.0)),
+            _op("*", _xc_J(tbl), _idx(v, _v("i"))), _n(0.0)
+        )
         eqs = ESM.Equation[
-            ESM.Equation(_ao1(_Didx("a", _v("i")), "i", 1, N),
-                         _ao1(guarded("a"), "i", 1, N)),
-            ESM.Equation(_ao1(_Didx("b", _v("i")), "i", 1, N),
-                         _ao1(guarded("b"), "i", 1, N)),
+            ESM.Equation(
+                _ao1(_Didx("a", _v("i")), "i", 1, N),
+                _ao1(guarded("a"), "i", 1, N)
+            ),
+            ESM.Equation(
+                _ao1(_Didx("b", _v("i")), "i", 1, N),
+                _ao1(guarded("b"), "i", 1, N)
+            ),
         ]
-        ics = Dict{String,Float64}()
+        ics = Dict{String, Float64}()
         for i in 1:N
             ics["a[$i]"] = 0.1i - 0.4          # mixed signs: both branches taken
             ics["b[$i]"] = 0.3 - 0.05i
         end
         mk() = ESM.Model(vars, eqs)
         fon!, u0, p, _, _, _ = _xc_build(mk(); ics)
-        foff!, u0f, pf, _, _, _ = _xc_build(mk(); ics, compiler=:interpreter)
+        foff!, u0f, pf, _, _, _ = _xc_build(mk(); ics, compiler = :interpreter)
         for t in (0.0, 0.7, 5.3)
             @test _xc_du(fon!, u0, p, t) == _xc_du(foff!, u0f, pf, t)
         end
@@ -397,7 +443,7 @@ end
         model = _stencil_model(N)
         ics = Dict("u[$k]" => sin(0.3k) for k in 1:N)
         fon!, u0, p, _, _, don = _xc_build(_stencil_model(N); ics)
-        foff!, u0f, pf, _, _, _ = _xc_build(_stencil_model(N); ics, compiler=:interpreter)
+        foff!, u0f, pf, _, _, _ = _xc_build(_stencil_model(N); ics, compiler = :interpreter)
         @test don.n_xcse_slots == 0
         @test don.n_xcse_kernel_shared == 0
         @test _xc_du(fon!, u0, p, 0.0) == _xc_du(foff!, u0f, pf, 0.0)
@@ -428,7 +474,8 @@ end
         model, ics = _xc_fastjx(K, N)
         fon!, u0, p, _, _, _ = _xc_build(model; ics)
         fref!, u0r, pr, _, _, dref = ESM._build_evaluator_impl(
-            _xc_fastjx(K, N)[1]; initial_conditions=ics, compiler=:interpreter)
+            _xc_fastjx(K, N)[1]; initial_conditions = ics, compiler = :interpreter
+        )
         @test dref.n_xcse_slots == 0           # no kernels → nothing to share
         for t in (0.0, 0.7, 5.3)
             @test _xc_du(fon!, u0, p, t) == _xc_du(fref!, u0r, pr, t)

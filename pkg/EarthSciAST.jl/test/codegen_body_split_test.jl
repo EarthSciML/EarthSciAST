@@ -37,31 +37,39 @@ const ESM = EarthSciAST
 # A cell body with enough distinct arithmetic that a small fn-node cap must split
 # it into several helper functions (a 2-D 9-point-ish combination over gathers).
 function _bs_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape=["i", "j"]))
-    g(di, dj) = _idx("u", _op(di < 0 ? "-" : "+", _v("i"), _i(abs(di) == 0 ? 0 : abs(di))),
-                          _op(dj < 0 ? "-" : "+", _v("j"), _i(abs(dj) == 0 ? 0 : abs(dj))))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape = ["i", "j"]))
+    g(di, dj) = _idx(
+        "u", _op(di < 0 ? "-" : "+", _v("i"), _i(abs(di) == 0 ? 0 : abs(di))),
+        _op(dj < 0 ? "-" : "+", _v("j"), _i(abs(dj) == 0 ? 0 : abs(dj)))
+    )
     # nonlinear so the tree is deep and not trivially foldable
     terms = ASTExpr[]
     for di in -1:1, dj in -1:1
         push!(terms, _op("*", g(di, dj), _op("+", g(di, dj), _op("*", _n(0.5), g(0, 0)))))
     end
     body = _op("+", terms...)
-    lhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
-        expr_body=_Didx("u", _v("i"), _v("j")), ranges=Dict("i" => [1, N], "j" => [1, N]))
-    rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
-        expr_body=body, ranges=Dict("i" => [1, N], "j" => [1, N]))
-    ESM.Model(vars, [ESM.Equation(lhs, rhs)])
+    lhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i", "j"],
+        expr_body = _Didx("u", _v("i"), _v("j")), ranges = Dict("i" => [1, N], "j" => [1, N])
+    )
+    rhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i", "j"],
+        expr_body = body, ranges = Dict("i" => [1, N], "j" => [1, N])
+    )
+    return ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 end
 
 # Build at an explicit per-function node cap (a retained tuning threshold);
 # `fncap = nothing` is the shipped cap, which this kernel fits inside, so that
 # build is the un-split reference. `transport` forces the by-value transport.
 # Returns RHS + a tally snapshot.
-function _bs_build(model, ics; fncap=nothing, transport=nothing)
-    withenv("ESS_CODEGEN_FN_NODE_CAP" => (fncap === nothing ? nothing : string(fncap)),
-            "ESS_CODEGEN_SPLIT_TRANSPORT" => transport) do
+function _bs_build(model, ics; fncap = nothing, transport = nothing)
+    return withenv(
+        "ESS_CODEGEN_FN_NODE_CAP" => (fncap === nothing ? nothing : string(fncap)),
+        "ESS_CODEGEN_SPLIT_TRANSPORT" => transport
+    ) do
         ESM._reset_cascade_tally!()
-        f!, u0, p, _t, vm, _diag = ESM._build_evaluator_impl(model; initial_conditions=ics)
+        f!, u0, p, _t, vm, _diag = ESM._build_evaluator_impl(model; initial_conditions = ics)
         (f!, u0, p, copy(ESM._CASCADE_TALLY))
     end
 end
@@ -69,7 +77,7 @@ end
 _bs_du(f!, u, p, t) = (d = similar(u); fill!(d, 0.0); f!(d, u, p, t); d)
 _bs_probe(n, k) = Float64[1.4 + 0.9 * sin(1.3i + 0.7k) * cos(0.31i * k) + 0.05i for i in 1:n]
 _bs_same(a, b) = size(a) == size(b) && all(a .=== b)
-_decl(t) = sum(v for (k, v) in t if startswith(String(k), "codegen_decline"); init=0)
+_decl(t) = sum(v for (k, v) in t if startswith(String(k), "codegen_decline"); init = 0)
 
 @testset "intra-kernel body split" begin
     model = _bs_model(6)
@@ -84,7 +92,7 @@ _decl(t) = sum(v for (k, v) in t if startswith(String(k), "codegen_decline"); in
     # Forced split: a small fn-node cap makes the body exceed one function. It is
     # partitioned into sub-functions — and STILL codegens, on EVERY Julia. The
     # transport differs by version; whether the kernel compiles does not.
-    fs, v0, ps, st = _bs_build(model, ics; fncap=40)
+    fs, v0, ps, st = _bs_build(model, ics; fncap = 40)
     @test get(st, :codegen_kernel, 0) >= 1    # STILL codegen'd (split, not declined)
     @test _decl(st) == 0                      # the split never falls back to the interpreter
 
@@ -103,7 +111,7 @@ _decl(t) = sum(v for (k, v) in t if startswith(String(k), "codegen_decline"); in
     # block above already made; on 1.12+ it is the one that would otherwise
     # never run here, which is the point — a transport a version cannot
     # exercise is the one that rots.
-    fv, w0, pv, vt = _bs_build(model, ics; fncap=40, transport="value")
+    fv, w0, pv, vt = _bs_build(model, ics; fncap = 40, transport = "value")
     @test get(vt, :codegen_kernel, 0) >= 1
     @test _decl(vt) == 0
     @test u0 == w0
@@ -115,7 +123,7 @@ _decl(t) = sum(v for (k, v) in t if startswith(String(k), "codegen_decline"); in
 
     # A by-value build that does NOT split is unchanged by the transport: no
     # sub-function is minted, so nothing is appended to `tabs`.
-    fn, x0, pn, nt = _bs_build(model, ics; transport="value")
+    fn, x0, pn, nt = _bs_build(model, ics; transport = "value")
     @test get(nt, :codegen_kernel, 0) >= 1
     @test _decl(nt) == 0
     @test u0 == x0

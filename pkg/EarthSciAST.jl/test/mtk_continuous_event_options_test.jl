@@ -33,21 +33,31 @@ function _affect_neg_doc(affects::AbstractString)
 end
 
 @testset "MTK continuous events honour affect_neg (esm-spec §5.2)" begin
-    for (label, affects) in (("with a different positive-edge affect",
-                              """[{"lhs": "v", "rhs": 5.0}]"""),
-                             ("with no positive-edge affect", "[]"))
+    for (label, affects) in (
+            (
+                "with a different positive-edge affect",
+                """[{"lhs": "v", "rhs": 5.0}]""",
+            ),
+            ("with no positive-edge affect", "[]"),
+        )
         @testset "$label" begin
             model = EarthSciAST.load_string(_affect_neg_doc(affects)).models["AffectNeg"]
             sys = ModelingToolkit.System(model)
             @test length(ModelingToolkit.continuous_events(sys)) == 1
             simp = ModelingToolkit.mtkcompile(sys)
             prob = ModelingToolkit.ODEProblem(simp, Dict(), (0.0, 3.0))
-            sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5();
-                                            reltol=1e-10, abstol=1e-12)
+            sol = OrdinaryDiffEqTsit5.solve(
+                prob, OrdinaryDiffEqTsit5.Tsit5();
+                reltol = 1.0e-10, abstol = 1.0e-12
+            )
             @test sol.retcode == ModelingToolkit.SciMLBase.ReturnCode.Success
-            x = only(filter(u -> endswith(string(ModelingToolkit.getname(u)), "x"),
-                            ModelingToolkit.unknowns(simp)))
-            @test isapprox(sol(3.0, idxs=x), 1.0; atol=1e-6)
+            x = only(
+                filter(
+                    u -> endswith(string(ModelingToolkit.getname(u)), "x"),
+                    ModelingToolkit.unknowns(simp)
+                )
+            )
+            @test isapprox(sol(3.0, idxs = x), 1.0; atol = 1.0e-6)
         end
     end
 end
@@ -87,15 +97,21 @@ end
             model = EarthSciAST.load_string(_root_find_doc(root_find)).models["RootFind"]
             simp = ModelingToolkit.mtkcompile(ModelingToolkit.System(model))
             prob = ModelingToolkit.ODEProblem(simp, Dict(), (0.0, 2.0))
-            sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5();
-                                            reltol=1e-10, abstol=1e-12)
+            sol = OrdinaryDiffEqTsit5.solve(
+                prob, OrdinaryDiffEqTsit5.Tsit5();
+                reltol = 1.0e-10, abstol = 1.0e-12
+            )
             @test sol.retcode == ModelingToolkit.SciMLBase.ReturnCode.Success
-            s = only(filter(u -> endswith(string(ModelingToolkit.getname(u)), "s"),
-                            ModelingToolkit.unknowns(simp)))
-            s_end = sol(2.0, idxs=s)
+            s = only(
+                filter(
+                    u -> endswith(string(ModelingToolkit.getname(u)), "s"),
+                    ModelingToolkit.unknowns(simp)
+                )
+            )
+            s_end = sol(2.0, idxs = s)
             @info "root_find" root_find s_end
             @test s_end != 7.0                  # the event fired
-            @test abs(s_end) < 1e-6             # at the root
+            @test abs(s_end) < 1.0e-6             # at the root
             @test side === :left ? s_end < 0 : s_end > 0
         end
     end

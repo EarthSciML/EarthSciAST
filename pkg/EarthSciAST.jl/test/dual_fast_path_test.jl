@@ -34,11 +34,13 @@ using ForwardDiff
 include("testutils.jl")
 const ESM = EarthSciAST
 
-function _dfp_build(model, ics; compiler::Symbol=:native, env...)
-    withenv((String(k) => v for (k, v) in pairs(env))...) do
+function _dfp_build(model, ics; compiler::Symbol = :native, env...)
+    return withenv((String(k) => v for (k, v) in pairs(env))...) do
         ESM._reset_cascade_tally!()
-        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
-            initial_conditions=ics, compiler=compiler)
+        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+            model;
+            initial_conditions = ics, compiler = compiler
+        )
         (f!, u0, p, vm, diag, copy(ESM._CASCADE_TALLY))
     end
 end
@@ -57,25 +59,38 @@ const _DFP_TBL = [10.0, 20.0, 40.0, 80.0, 160.0]
 # interp leaf, cross-variable reads) — a
 # zero primary budget forces every kernel off the primary codegen tier.
 function _dfp_model(N)
-    ubody = _op("+",
-        _op("ifelse", _op(">", _idx("u", _v("i")), _n(2.0)),
+    ubody = _op(
+        "+",
+        _op(
+            "ifelse", _op(">", _idx("u", _v("i")), _n(2.0)),
             _op("log", _idx("u", _v("i"))),
-            _op("sin", _idx("u", _v("i")))),
-        _op("fn", _const(_DFP_TBL), _const(_DFP_AX), _idx("u", _v("i"));
-            name="interp.linear"),
-        _op("*", _n(-0.5), _idx("u", _v("i"))))
-    vbody = _op("*",
+            _op("sin", _idx("u", _v("i")))
+        ),
+        _op(
+            "fn", _const(_DFP_TBL), _const(_DFP_AX), _idx("u", _v("i"));
+            name = "interp.linear"
+        ),
+        _op("*", _n(-0.5), _idx("u", _v("i")))
+    )
+    vbody = _op(
+        "*",
         _op("exp", _op("*", _n(-0.3), _idx("v", _v("i")))),
-        _op("+", _n(1.0), _op("*", _n(0.25), _op("cos", _idx("u", _v("i"))))))
-    eq(x, body) = ESM.Equation(_ao1(_Didx(x, _v("i")), "i", 1, N),
-                               _ao1(body, "i", 1, N))
-    vars = Dict{String,ESM.ModelVariable}(
-        n => ESM.ModelVariable(ESM.UnknownVariable) for n in ("u", "v"))
-    ESM.Model(vars, [eq("u", ubody), eq("v", vbody)])
+        _op("+", _n(1.0), _op("*", _n(0.25), _op("cos", _idx("u", _v("i")))))
+    )
+    eq(x, body) = ESM.Equation(
+        _ao1(_Didx(x, _v("i")), "i", 1, N),
+        _ao1(body, "i", 1, N)
+    )
+    vars = Dict{String, ESM.ModelVariable}(
+        n => ESM.ModelVariable(ESM.UnknownVariable) for n in ("u", "v")
+    )
+    return ESM.Model(vars, [eq("u", ubody), eq("v", vbody)])
 end
 
-_dfp_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
-                   for (j, x) in enumerate(("u", "v")), k in 1:N)
+_dfp_ics(N) = Dict(
+    "$x[$k]" => 2.0 + sin(0.3k + 0.1j)
+        for (j, x) in enumerate(("u", "v")), k in 1:N
+)
 
 @testset "dual fast path: overflow codegen tier for budget-declined kernels" begin
     N = 48
@@ -85,9 +100,11 @@ _dfp_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
     # A: primary codegen forced off (budget 0) — the dual overflow tier is the
     #    ONLY compiled representation. C: the interpreter, per-cell under every
     #    T, which is the oracle.
-    fA, uA, pA, vmA, _, tallyA = _dfp_build(model, ics;
-        ESS_CODEGEN_NODE_BUDGET="0")
-    fC, uC, pC, _, _, tallyC = _dfp_build(model, ics; compiler=:interpreter)
+    fA, uA, pA, vmA, _, tallyA = _dfp_build(
+        model, ics;
+        ESS_CODEGEN_NODE_BUDGET = "0"
+    )
+    fC, uC, pC, _, _, tallyC = _dfp_build(model, ics; compiler = :interpreter)
 
     @testset "routing: tally + section introspection" begin
         ksA = getfield(fA, :kernel_section)
@@ -139,7 +156,7 @@ _dfp_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
 
         # A direct Dual-seeded in-place call too (no jacobian scaffolding):
         # values and the one partial, element by element.
-        DT = ForwardDiff.Dual{:dfp,Float64,1}
+        DT = ForwardDiff.Dual{:dfp, Float64, 1}
         uD = DT[DT(uA[i], ForwardDiff.Partials((0.5 + 0.01i,))) for i in eachindex(uA)]
         dA = _dfp_du(fA, uD, pA, 0.7)
         dC = _dfp_du(fC, uD, pC, 0.7)
@@ -148,7 +165,7 @@ _dfp_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
     end
 
     @testset "Dual allocations: strictly fewer than the interpreter routing" begin
-        DT = ForwardDiff.Dual{:dfp,Float64,1}
+        DT = ForwardDiff.Dual{:dfp, Float64, 1}
         uD = DT[DT(uA[i], ForwardDiff.Partials((1.0,))) for i in eachindex(uA)]
         dD = similar(uD)
         # Warm both paths (first call compiles / allocates lazy alt buffers).

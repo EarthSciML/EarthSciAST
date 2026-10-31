@@ -19,8 +19,10 @@ using OrdinaryDiffEqTsit5   # the inline-test surface needs an ODE algorithm
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
-const _DSU_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-                          "data_source_unbound")
+const _DSU_DIR = joinpath(
+    TESTUTILS_REPO_ROOT, "tests", "conformance",
+    "data_source_unbound"
+)
 
 @assert isfile(joinpath(_DSU_DIR, "manifest.json")) "manifest not found in $(_DSU_DIR)"
 const _DSU_MANIFEST = JSON3.read(read(joinpath(_DSU_DIR, "manifest.json"), String))
@@ -47,7 +49,7 @@ _dsu_code(e) = hasproperty(e, :code) ? String(e.code) : ""
                 # document.
                 for compiler in (:native, :interpreter)
                     err = try
-                        esm_problem(path, (0.0, 1.0); compiler=compiler)
+                        esm_problem(path, (0.0, 1.0); compiler = compiler)
                         nothing
                     catch e
                         e
@@ -61,7 +63,7 @@ _dsu_code(e) = hasproperty(e, :code) ? String(e.code) : ""
                 end
 
                 # And an inline test reports the refusal, not a number.
-                results = run_inline_tests(path; alg=Tsit5())
+                results = run_inline_tests(path; alg = Tsit5())
                 @test !isempty(results)
                 for r in results
                     @test r.passed == false
@@ -72,7 +74,7 @@ _dsu_code(e) = hasproperty(e, :code) ? String(e.code) : ""
                 # Both controls go through the inline-test runner, which is
                 # where the pin control's `parameter_overrides` lives and which
                 # is the surface a document author uses.
-                results = run_inline_tests(path; alg=Tsit5())
+                results = run_inline_tests(path; alg = Tsit5())
                 @test !isempty(results)
                 @test all(r -> r.passed, results)
             end
@@ -87,10 +89,12 @@ _dsu_code(e) = hasproperty(e, :code) ? String(e.code) : ""
     @testset "a pinned forcing binds the parameter" begin
         path = joinpath(_DSU_DIR, "fixtures", "unbound_scalar_forcing.esm")
         for compiler in (:native, :interpreter)
-            prob = esm_problem(path, (0.0, 1.0);
-                               compiler=compiler, p=Dict("Forcing.k" => 0.5))
-            sol = solve(prob, Tsit5(); saveat=[0.0, 1.0])
-            @test isapprox(sol.u[end][1], exp(-0.5); rtol=1e-4)
+            prob = esm_problem(
+                path, (0.0, 1.0);
+                compiler = compiler, p = Dict("Forcing.k" => 0.5)
+            )
+            sol = solve(prob, Tsit5(); saveat = [0.0, 1.0])
+            @test isapprox(sol.u[end][1], exp(-0.5); rtol = 1.0e-4)
         end
     end
 end

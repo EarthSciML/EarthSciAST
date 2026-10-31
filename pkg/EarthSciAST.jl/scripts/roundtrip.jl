@@ -48,23 +48,25 @@ struct CliArgs
     module_path::String
     rel_tol::Float64
     abs_tol::Float64
-    system_name::Union{String,Nothing}
-    tspan::Union{Tuple{Float64,Float64},Nothing}
+    system_name::Union{String, Nothing}
+    tspan::Union{Tuple{Float64, Float64}, Nothing}
     n_samples::Int
 end
 
 function parse_args(argv)
     if isempty(argv) || argv[1] in ("-h", "--help")
         println(@doc(Main))  # will be empty but harmless
-        println("Usage: roundtrip.jl <path-to-mtk-module>.jl [--tol rel=1e-6] " *
+        println(
+            "Usage: roundtrip.jl <path-to-mtk-module>.jl [--tol rel=1e-6] " *
                 "[--atol 1e-9] [--name SystemName] [--tspan 0.0,10.0] " *
-                "[--samples 50]")
+                "[--samples 50]"
+        )
         exit(2)
     end
 
     module_path = argv[1]
-    rel_tol = 1e-6
-    abs_tol = 1e-9
+    rel_tol = 1.0e-6
+    abs_tol = 1.0e-9
     name = nothing
     tspan = nothing
     n_samples = 50
@@ -108,11 +110,13 @@ end
 # System discovery
 # -------------------------------------------------------------------
 
-function discover_system(mod::Module, explicit_name::Union{String,Nothing})
+function discover_system(mod::Module, explicit_name::Union{String, Nothing})
     if explicit_name !== nothing
         sym = Symbol(explicit_name)
-        isdefined(mod, sym) || error("system binding '$explicit_name' not " *
-            "defined in module $(mod)")
+        isdefined(mod, sym) || error(
+            "system binding '$explicit_name' not " *
+                "defined in module $(mod)"
+        )
         return getfield(mod, sym), explicit_name
     end
 
@@ -126,7 +130,7 @@ function discover_system(mod::Module, explicit_name::Union{String,Nothing})
     end
 
     # Fallback: first AbstractSystem-valued binding
-    for n in names(mod; all=true)
+    for n in names(mod; all = true)
         n in (:eval, :include) && continue
         try
             val = getfield(mod, n)
@@ -137,22 +141,26 @@ function discover_system(mod::Module, explicit_name::Union{String,Nothing})
         end
     end
 
-    error("no ModelingToolkit.AbstractSystem binding found in $mod; " *
-          "define `system` or pass --name")
+    error(
+        "no ModelingToolkit.AbstractSystem binding found in $mod; " *
+            "define `system` or pass --name"
+    )
 end
 
 # -------------------------------------------------------------------
 # Round-trip core
 # -------------------------------------------------------------------
 
-function roundtrip_one(original::MTK.AbstractSystem, name::AbstractString;
-                       tspan::Tuple{Float64,Float64}, rel_tol::Float64,
-                       abs_tol::Float64, n_samples::Int)
+function roundtrip_one(
+        original::MTK.AbstractSystem, name::AbstractString;
+        tspan::Tuple{Float64, Float64}, rel_tol::Float64,
+        abs_tol::Float64, n_samples::Int
+    )
     # 1. Forward: mtk2esm → tempfile
-    esm_dict = mtk2esm(original; metadata=(; name=name))
+    esm_dict = mtk2esm(original; metadata = (; name = name))
     tmpfile = tempname() * ".esm"
     open(tmpfile, "w") do io
-        write(io, JSON3.write(esm_dict; indent=2))
+        write(io, JSON3.write(esm_dict; indent = 2))
     end
     println("✓ Wrote round-trip file: $tmpfile")
 
@@ -161,11 +169,13 @@ function roundtrip_one(original::MTK.AbstractSystem, name::AbstractString;
 
     name_key = String(name)
     roundtripped = if esm_file.models !== nothing && haskey(esm_file.models, name_key)
-        MTK.System(esm_file.models[name_key]; name=Symbol(name_key))
+        MTK.System(esm_file.models[name_key]; name = Symbol(name_key))
     elseif esm_file.reaction_systems !== nothing &&
-           haskey(esm_file.reaction_systems, name_key)
-        error("reaction_systems round-trip requires Catalyst; call " *
-              "roundtrip_catalyst directly")
+            haskey(esm_file.reaction_systems, name_key)
+        error(
+            "reaction_systems round-trip requires Catalyst; call " *
+                "roundtrip_catalyst directly"
+        )
     else
         error("round-tripped file has no entry under name '$name_key'")
     end
@@ -175,15 +185,19 @@ function roundtrip_one(original::MTK.AbstractSystem, name::AbstractString;
     sol_rt = _simulate(roundtripped, tspan)
 
     # 4. Compare trajectories
-    return _compare_trajectories(sol_orig, sol_rt, original, roundtripped;
-        tspan=tspan, rel_tol=rel_tol, abs_tol=abs_tol, n_samples=n_samples)
+    return _compare_trajectories(
+        sol_orig, sol_rt, original, roundtripped;
+        tspan = tspan, rel_tol = rel_tol, abs_tol = abs_tol, n_samples = n_samples
+    )
 end
 
-function _simulate(sys::MTK.AbstractSystem, tspan::Tuple{Float64,Float64})
+function _simulate(sys::MTK.AbstractSystem, tspan::Tuple{Float64, Float64})
     simp = MTK.mtkcompile(sys)
-    prob = MTK.ODEProblem(simp, Dict{Any,Any}(), tspan)
-    sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5();
-        reltol=1e-9, abstol=1e-12)
+    prob = MTK.ODEProblem(simp, Dict{Any, Any}(), tspan)
+    sol = OrdinaryDiffEqTsit5.solve(
+        prob, OrdinaryDiffEqTsit5.Tsit5();
+        reltol = 1.0e-9, abstol = 1.0e-12
+    )
     return sol, simp
 end
 
@@ -201,16 +215,20 @@ function _find_unknown(simp, state_name::AbstractString)
     return nothing
 end
 
-function _compare_trajectories((sol_a, simp_a), (sol_b, simp_b),
-                               orig_sys, rt_sys;
-                               tspan, rel_tol, abs_tol, n_samples)
+function _compare_trajectories(
+        (sol_a, simp_a), (sol_b, simp_b),
+        orig_sys, rt_sys;
+        tspan, rel_tol, abs_tol, n_samples
+    )
     # Collect state names from the original compiled system
-    orig_names = [_last_segment(string(MTK.getname(u)))
-                  for u in MTK.unknowns(simp_a)]
+    orig_names = [
+        _last_segment(string(MTK.getname(u)))
+            for u in MTK.unknowns(simp_a)
+    ]
 
-    sample_times = collect(range(tspan[1], tspan[2]; length=n_samples))
-    per_var_maxerr = Dict{String,Float64}()
-    failures = Tuple{String,Float64,Float64,Float64,Float64}[]
+    sample_times = collect(range(tspan[1], tspan[2]; length = n_samples))
+    per_var_maxerr = Dict{String, Float64}()
+    failures = Tuple{String, Float64, Float64, Float64, Float64}[]
 
     for state in orig_names
         u_a = _find_unknown(simp_a, state)
@@ -218,8 +236,8 @@ function _compare_trajectories((sol_a, simp_a), (sol_b, simp_b),
         (u_a === nothing || u_b === nothing) && continue
         max_err = 0.0
         for t in sample_times
-            va = sol_a(t, idxs=u_a)
-            vb = sol_b(t, idxs=u_b)
+            va = sol_a(t, idxs = u_a)
+            vb = sol_b(t, idxs = u_b)
             err = abs(va - vb)
             ref = max(abs(va), abs(vb))
             allowed = max(abs_tol, rel_tol * ref)
@@ -237,12 +255,14 @@ function _compare_trajectories((sol_a, simp_a), (sol_b, simp_b),
     end
 
     if !isempty(failures)
-        println("\n✗ FAIL — $(length(failures)) sample(s) exceeded tolerance " *
-                "(rel=$rel_tol, abs=$abs_tol):")
+        println(
+            "\n✗ FAIL — $(length(failures)) sample(s) exceeded tolerance " *
+                "(rel=$rel_tol, abs=$abs_tol):"
+        )
         for (s, t, va, vb, err) in first(failures, 10)
             println("  $s @ t=$t: orig=$va vs rt=$vb (err=$err)")
         end
-        length(failures) > 10 && println("  ... and $(length(failures)-10) more")
+        length(failures) > 10 && println("  ... and $(length(failures) - 10) more")
         return false
     end
 
@@ -250,7 +270,7 @@ function _compare_trajectories((sol_a, simp_a), (sol_b, simp_b),
     return true
 end
 
-_last_segment(s) = (i = findlast('_', s); i === nothing ? s : s[i+1:end])
+_last_segment(s) = (i = findlast('_', s); i === nothing ? s : s[(i + 1):end])
 
 # -------------------------------------------------------------------
 # Entry point
@@ -265,8 +285,10 @@ function main(argv)
     try
         Base.include(sandbox, args.module_path)
     catch e
-        println(stderr, "✗ Failed to include $(args.module_path): " *
-                sprint(showerror, e))
+        println(
+            stderr, "✗ Failed to include $(args.module_path): " *
+                sprint(showerror, e)
+        )
         exit(2)
     end
 
@@ -282,15 +304,19 @@ function main(argv)
     println("tspan: $tspan   rel_tol: $(args.rel_tol)   abs_tol: $(args.abs_tol)")
 
     ok = try
-        roundtrip_one(sys, name; tspan=tspan, rel_tol=args.rel_tol,
-            abs_tol=args.abs_tol, n_samples=args.n_samples)
+        roundtrip_one(
+            sys, name; tspan = tspan, rel_tol = args.rel_tol,
+            abs_tol = args.abs_tol, n_samples = args.n_samples
+        )
     catch e
-        println(stderr, "✗ Simulation / round-trip error: " *
-                sprint(showerror, e))
+        println(
+            stderr, "✗ Simulation / round-trip error: " *
+                sprint(showerror, e)
+        )
         exit(3)
     end
 
-    exit(ok ? 0 : 1)
+    return exit(ok ? 0 : 1)
 end
 
 using Printf

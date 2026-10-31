@@ -40,11 +40,13 @@ struct StructuralError
     path::String
     message::String
     error_type::String
-    details::Dict{String,Any}
+    details::Dict{String, Any}
 
-    StructuralError(path::AbstractString, message::AbstractString, error_type::AbstractString,
-                    details::AbstractDict=Dict{String,Any}()) =
-        new(String(path), String(message), String(error_type), Dict{String,Any}(details))
+    StructuralError(
+        path::AbstractString, message::AbstractString, error_type::AbstractString,
+        details::AbstractDict = Dict{String, Any}()
+    ) =
+        new(String(path), String(message), String(error_type), Dict{String, Any}(details))
 end
 
 """
@@ -94,10 +96,14 @@ struct UnitWarning
     lhs_units::String
     rhs_units::String
 
-    UnitWarning(path::AbstractString, code::AbstractString, message::AbstractString,
-                lhs_units::AbstractString="", rhs_units::AbstractString="") =
-        new(String(path), String(code), String(message),
-            String(lhs_units), String(rhs_units))
+    UnitWarning(
+        path::AbstractString, code::AbstractString, message::AbstractString,
+        lhs_units::AbstractString = "", rhs_units::AbstractString = ""
+    ) =
+        new(
+        String(path), String(code), String(message),
+        String(lhs_units), String(rhs_units)
+    )
 end
 
 # The promoted STRUCTURAL error code -> the `UnitWarning.code` finding kind.
@@ -134,7 +140,7 @@ struct ValidationResult
 end
 
 # Constructor for ValidationResult
-ValidationResult(schema_errors::Vector{SchemaError}, structural_errors::Vector{StructuralError}; unit_warnings::Vector{UnitWarning}=UnitWarning[]) =
+ValidationResult(schema_errors::Vector{SchemaError}, structural_errors::Vector{StructuralError}; unit_warnings::Vector{UnitWarning} = UnitWarning[]) =
     ValidationResult(isempty(schema_errors) && isempty(structural_errors), schema_errors, structural_errors, unit_warnings)
 
 """
@@ -213,12 +219,14 @@ _ptr_child(path::AbstractString, seg) = string(path, "/", _ptr_escape(string(seg
 
 # Schema keywords that carry no assertion of their own (identifiers, metadata,
 # and the `$defs`/`definitions` stores), skipped during the walk.
-const _SCHEMA_ANNOTATION_KEYS = Set{String}([
-    "\$schema", "\$id", "\$ref", "\$anchor", "\$dynamicAnchor", "\$dynamicRef",
-    "\$vocabulary", "\$comment", "\$defs", "definitions",
-    "title", "description", "examples", "default", "deprecated",
-    "readOnly", "writeOnly", "contentEncoding", "contentMediaType",
-])
+const _SCHEMA_ANNOTATION_KEYS = Set{String}(
+    [
+        "\$schema", "\$id", "\$ref", "\$anchor", "\$dynamicAnchor", "\$dynamicRef",
+        "\$vocabulary", "\$comment", "\$defs", "definitions",
+        "title", "description", "examples", "default", "deprecated",
+        "readOnly", "writeOnly", "contentEncoding", "contentMediaType",
+    ]
+)
 
 # A fresh, empty instance path for JSONSchema.jl's private `_validate`. Before
 # v1.6 the path is a `String`; from v1.6 it is an `_InstancePath` segment vector
@@ -295,8 +303,10 @@ function _collect_schema_keyword!(errors::Vector{SchemaError}, x, schema, k::Str
             patterns = get(schema, "patternProperties", nothing)
             _covered(key) =
                 (props isa AbstractDict && haskey(props, String(key))) ||
-                (patterns isa AbstractDict &&
-                 any(p -> occursin(Regex(String(p)), String(key)), keys(patterns)))
+                (
+                patterns isa AbstractDict &&
+                    any(p -> occursin(Regex(String(p)), String(key)), keys(patterns))
+            )
             if v isa Bool
                 v || for (xk, _) in x
                     _covered(xk) || _push_schema_error!(errors, path, "additionalProperties")
@@ -379,7 +389,7 @@ end
 # per-extra-key `additionalProperties` scan can raise the same finding twice).
 # The comparator matches on (keyword, path) sets, so this is loss-free.
 function _dedup_schema_errors(errors::Vector{SchemaError})::Vector{SchemaError}
-    seen = Set{Tuple{String,String}}()
+    seen = Set{Tuple{String, String}}()
     out = SchemaError[]
     for e in errors
         key = (e.path, e.keyword)
@@ -480,8 +490,12 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
         composed = _operator_composed_systems(file)
         for (model_name, model) in file.models
             model_name ∈ coupled && continue
-            append!(errors, validate_model_balance(model, "/models/$model_name";
-                                                   check_excess = model_name ∉ composed))
+            append!(
+                errors, validate_model_balance(
+                    model, "/models/$model_name";
+                    check_excess = model_name ∉ composed
+                )
+            )
         end
     end
 
@@ -498,10 +512,18 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
     scoped_toplevel = units.toplevel
     if file.reaction_systems !== nothing
         for (rs_name, rs) in file.reaction_systems
-            append!(errors, validate_reaction_consistency(rs, "/reaction_systems/$rs_name";
-                                                          indep=_indep_var(file)))
-            append!(errors, validate_reaction_rate_units(rs, "/reaction_systems/$rs_name";
-                                                         toplevel=scoped_toplevel))
+            append!(
+                errors, validate_reaction_consistency(
+                    rs, "/reaction_systems/$rs_name";
+                    indep = _indep_var(file)
+                )
+            )
+            append!(
+                errors, validate_reaction_rate_units(
+                    rs, "/reaction_systems/$rs_name";
+                    toplevel = scoped_toplevel
+                )
+            )
         end
     end
 
@@ -520,8 +542,10 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
         ucscope = _document_declared_names(file)
         union!(ucscope, keys(file.index_sets))
         for model_name in sort!(collect(keys(file.models)))
-            _check_update_unit_conversions!(errors, file, file.models[model_name],
-                                            "/models/$model_name", ucscope)
+            _check_update_unit_conversions!(
+                errors, file, file.models[model_name],
+                "/models/$model_name", ucscope
+            )
         end
     end
 
@@ -529,10 +553,12 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
     # (esm-spec §8.5, `data_source_undefined`).
     if file.models !== nothing
         available = file.data_sources === nothing ? String[] :
-                    sort!(String[String(k) for k in keys(file.data_sources)])
+            sort!(String[String(k) for k in keys(file.data_sources)])
         for model_name in sort!(collect(keys(file.models)))
-            _check_update_sources!(errors, file.models[model_name],
-                                   "/models/$model_name", available)
+            _check_update_sources!(
+                errors, file.models[model_name],
+                "/models/$model_name", available
+            )
         end
     end
 
@@ -558,8 +584,10 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
     # nothing to fill and no scalar reading, so the declaration is malformed.
     if file.models !== nothing
         for model_name in sort!(collect(keys(file.models)))
-            _check_array_defaults_have_shape!(errors, file.models[model_name],
-                                              "/models/$model_name", "Model '$model_name'")
+            _check_array_defaults_have_shape!(
+                errors, file.models[model_name],
+                "/models/$model_name", "Model '$model_name'"
+            )
         end
     end
 
@@ -568,7 +596,7 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
     # not bind (`unbound_index_symbol`).
     if file.models !== nothing
         meta = file.metaparameters === nothing ? Set{String}() :
-               Set{String}(String(k) for k in keys(file.metaparameters))
+            Set{String}(String(k) for k in keys(file.metaparameters))
         for model_name in sort!(collect(keys(file.models)))
             m = file.models[model_name]
             _check_equation_lhs_names!(errors, m, "/models/$model_name", model_name, m, meta)
@@ -581,8 +609,12 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
     if file.models !== nothing
         coupled_ev = _coupled_system_names(file)
         for (model_name, model) in file.models
-            append!(errors, validate_event_consistency(model, "/models/$model_name";
-                                                       is_coupled = model_name ∈ coupled_ev))
+            append!(
+                errors, validate_event_consistency(
+                    model, "/models/$model_name";
+                    is_coupled = model_name ∈ coupled_ev
+                )
+            )
             append!(errors, validate_physical_constant_units(model, "/models/$model_name"))
             append!(errors, validate_conversion_factor_consistency(model, "/models/$model_name"))
             # Dimensional analysis over equations and variable definitions. This
@@ -590,9 +622,12 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
             # was missing entirely until the 2026-07-14 audit (finding J1), which
             # is why `validate()` accepted every dimensionally-inconsistent
             # fixture in the shared corpus.
-            append!(errors, validate_model_unit_consistency(
-                units.models[model_name], "/models/$model_name";
-                toplevel=scoped_toplevel))
+            append!(
+                errors, validate_model_unit_consistency(
+                    units.models[model_name], "/models/$model_name";
+                    toplevel = scoped_toplevel
+                )
+            )
         end
     end
 
@@ -671,11 +706,13 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
     # species name is in the message).
     conflicting = _find_conflicting_derivatives(file)
     for name in conflicting
-        push!(errors, StructuralError(
-            "/",
-            "Species '$name' has both an explicit derivative equation and a reaction contribution",
-            ERROR_CODES.CONFLICTING_DERIVATIVE,
-        ))
+        push!(
+            errors, StructuralError(
+                "/",
+                "Species '$name' has both an explicit derivative equation and a reaction contribution",
+                ERROR_CODES.CONFLICTING_DERIVATIVE,
+            )
+        )
     end
 
     return errors
@@ -712,13 +749,16 @@ function validate(file::EsmFile)::ValidationResult
     # (finding D-8), so `[w.message for w in result.unit_warnings]` reproduces
     # the old `Vector{String}` byte for byte.
     unit_warnings = UnitWarning[
-        UnitWarning(e.path, _unit_finding_code(e.error_type), e.message,
-                    string(get(e.details, "lhs_units", "")),
-                    string(get(e.details, "rhs_units", "")))
-        for e in structural_errors if e.error_type == ERROR_CODES.UNIT_INCONSISTENCY]
+        UnitWarning(
+            e.path, _unit_finding_code(e.error_type), e.message,
+            string(get(e.details, "lhs_units", "")),
+            string(get(e.details, "rhs_units", ""))
+        )
+            for e in structural_errors if e.error_type == ERROR_CODES.UNIT_INCONSISTENCY
+    ]
     _push_dimensionless_literal_warnings!(unit_warnings, units)
 
-    return ValidationResult(schema_errors, structural_errors, unit_warnings=unit_warnings)
+    return ValidationResult(schema_errors, structural_errors, unit_warnings = unit_warnings)
 end
 
 # Bare numeric literals read as dimensionless (esm-spec §4.8.6): a WARNING at
@@ -726,14 +766,20 @@ end
 # failure of the pass itself says nothing about the file: it is downgraded to an
 # `analysis` unit warning, never an error and never a throw out of `validate`.
 # `findings` is the pass, an argument so a test can make it fail.
-function _push_dimensionless_literal_warnings!(unit_warnings::Vector{UnitWarning}, units,
-                                               findings=_dimensionless_literal_findings)
+function _push_dimensionless_literal_warnings!(
+        unit_warnings::Vector{UnitWarning}, units,
+        findings = _dimensionless_literal_findings
+    )
     found = try
         findings(units)
     catch e
         e isa InterruptException && rethrow()
-        push!(unit_warnings, UnitWarning("", ERROR_CODES.ANALYSIS,
-            "Dimensionless-literal check failed: $(sprint(showerror, e))"))
+        push!(
+            unit_warnings, UnitWarning(
+                "", ERROR_CODES.ANALYSIS,
+                "Dimensionless-literal check failed: $(sprint(showerror, e))"
+            )
+        )
         return unit_warnings
     end
     for (path, message) in found
@@ -824,9 +870,9 @@ result = validate_text(read("model.esm", String); base_path=dirname("model.esm")
 result.is_valid
 ```
 """
-function validate_text(text::AbstractString; base_path::AbstractString=pwd())::ValidationResult
+function validate_text(text::AbstractString; base_path::AbstractString = pwd())::ValidationResult
     file = try
-        load_string(text; base_path=base_path)
+        load_string(text; base_path = base_path)
     catch e
         if e isa SchemaValidationError
             return ValidationResult(e.errors, StructuralError[])
@@ -864,16 +910,18 @@ Both the file entry point [`validate_path`](@ref) and the
 conformance producer route load failures through here so the finding is reported
 in the same shape every other binding reports it.
 """
-function load_failure_structural_error(e)::Union{StructuralError,Nothing}
+function load_failure_structural_error(e)::Union{StructuralError, Nothing}
     if e isa SubsystemRefError
         return StructuralError(
             isempty(e.parent_model) ? "" :
                 "/models/$(e.parent_model)/subsystems/$(e.subsystem)",
             e.message,
             e.code,
-            Dict{String,Any}("ref" => e.ref,
-                             "subsystem" => e.subsystem,
-                             "parent_model" => e.parent_model)
+            Dict{String, Any}(
+                "ref" => e.ref,
+                "subsystem" => e.subsystem,
+                "parent_model" => e.parent_model
+            )
         )
     elseif e isa ParseError && !isempty(e.code)
         return StructuralError(e.path, e.message, e.code, e.details)
@@ -990,8 +1038,10 @@ Two exemptions carry over, and both are one-directional:
   shape — `Advection` declares only parameters and writes `D(u) ~ …`, where `u`
   is the advected field the composition supplies.
 """
-function validate_model_balance(model::Model, path::String;
-                                check_excess::Bool=true)::Vector{StructuralError}
+function validate_model_balance(
+        model::Model, path::String;
+        check_excess::Bool = true
+    )::Vector{StructuralError}
     errors = StructuralError[]
 
     unknown_list = unknowns(model)
@@ -1013,31 +1063,43 @@ function validate_model_balance(model::Model, path::String;
 
     report = (shortfall > 0 && !has_subsystems) || (shortfall < 0 && check_excess)
     if report
-        details = Dict{String,Any}("unknowns" => unknown_list, "equations" => n_eqs)
+        details = Dict{String, Any}("unknowns" => unknown_list, "equations" => n_eqs)
         isempty(missing_for) || (details["missing_equations_for"] = missing_for)
-        push!(errors, StructuralError(
-            path,
-            "Number of equations ($n_eqs) does not match number of unknowns ($n_unknowns)",
-            ERROR_CODES.EQUATION_COUNT_MISMATCH,
-            details))
+        push!(
+            errors, StructuralError(
+                path,
+                "Number of equations ($n_eqs) does not match number of unknowns ($n_unknowns)",
+                ERROR_CODES.EQUATION_COUNT_MISMATCH,
+                details
+            )
+        )
     elseif !has_subsystems && !isempty(missing_for)
         # Square by COUNT but not by assignment: some unknown has nothing
         # crediting it while some equation credits a name the model does not
         # declare. Same defect class, same code — the count alone cannot say it.
-        push!(errors, StructuralError(
-            path,
-            "Model declares unknown '$(first(missing_for))' but has no defining " *
-            "equation for it",
-            ERROR_CODES.EQUATION_COUNT_MISMATCH,
-            Dict{String,Any}("unknowns" => unknown_list, "equations" => n_eqs,
-                             "missing_equations_for" => missing_for)))
+        push!(
+            errors, StructuralError(
+                path,
+                "Model declares unknown '$(first(missing_for))' but has no defining " *
+                    "equation for it",
+                ERROR_CODES.EQUATION_COUNT_MISMATCH,
+                Dict{String, Any}(
+                    "unknowns" => unknown_list, "equations" => n_eqs,
+                    "missing_equations_for" => missing_for
+                )
+            )
+        )
     end
 
     # Recursively check subsystems. The operator exemption is inherited: a
     # subsystem of an operator is still acting on the composed system's state.
     for (subsys_name, subsys) in model_subsystems(model)
-        append!(errors, validate_model_balance(subsys, "$path/subsystems/$subsys_name";
-                                               check_excess=check_excess))
+        append!(
+            errors, validate_model_balance(
+                subsys, "$path/subsystems/$subsys_name";
+                check_excess = check_excess
+            )
+        )
     end
 
     return errors
@@ -1051,8 +1113,10 @@ Walk the `unit_conversion` Expression of every `update.from` binding in `model`
 CONSUMING PARAMETER (esm-spec §8.5), so this is where the 0.x loader-variable
 walk moved to. A plain numeric factor has nothing to resolve.
 """
-function _check_update_unit_conversions!(errors::Vector{StructuralError}, file::EsmFile,
-                                         model::Model, path::String, scope::Set{String})
+function _check_update_unit_conversions!(
+        errors::Vector{StructuralError}, file::EsmFile,
+        model::Model, path::String, scope::Set{String}
+    )
     for name in sort!(collect(keys(model.variables)))
         rules = model.variables[name].update
         rules === nothing && continue
@@ -1060,16 +1124,21 @@ function _check_update_unit_conversions!(errors::Vector{StructuralError}, file::
             rule.from === nothing && continue
             uc = rule.from.unit_conversion
             isa(uc, ASTExpr) || continue
-            append!(errors, validate_expression_references(
-                file, uc,
-                _update_rule_path("$path/variables/$name", rules, ri) *
-                    "/from/unit_conversion";
-                scope=scope))
+            append!(
+                errors, validate_expression_references(
+                    file, uc,
+                    _update_rule_path("$path/variables/$name", rules, ri) *
+                        "/from/unit_conversion";
+                    scope = scope
+                )
+            )
         end
     end
     for (subsys_name, subsys) in model_subsystems(model)
-        _check_update_unit_conversions!(errors, file, subsys,
-                                        "$path/subsystems/$subsys_name", scope)
+        _check_update_unit_conversions!(
+            errors, file, subsys,
+            "$path/subsystems/$subsys_name", scope
+        )
     end
     return errors
 end
@@ -1085,8 +1154,10 @@ replaces, it is schema-valid by construction (any string), so the defect
 genuinely reaches structural validation instead of being masked by a schema
 rejection.
 """
-function _check_update_sources!(errors::Vector{StructuralError}, model::Model,
-                                path::String, available::Vector{String})
+function _check_update_sources!(
+        errors::Vector{StructuralError}, model::Model,
+        path::String, available::Vector{String}
+    )
     for name in sort!(collect(keys(model.variables)))
         rules = model.variables[name].update
         rules === nothing && continue
@@ -1094,13 +1165,18 @@ function _check_update_sources!(errors::Vector{StructuralError}, model::Model,
             rule.kind == "data" || continue
             src = rule.source
             (src === nothing || src in available) && continue
-            push!(errors, StructuralError(
-                "$path/variables/$name/update",
-                "Parameter update names data source '$src', which the document " *
-                "does not declare",
-                ERROR_CODES.DATA_SOURCE_UNDEFINED,
-                Dict{String,Any}("variable" => name, "source" => src,
-                                 "available_sources" => available)))
+            push!(
+                errors, StructuralError(
+                    "$path/variables/$name/update",
+                    "Parameter update names data source '$src', which the document " *
+                        "does not declare",
+                    ERROR_CODES.DATA_SOURCE_UNDEFINED,
+                    Dict{String, Any}(
+                        "variable" => name, "source" => src,
+                        "available_sources" => available
+                    )
+                )
+            )
         end
     end
     for (subsys_name, subsys) in model_subsystems(model)
@@ -1120,12 +1196,15 @@ function _check_system_kind!(errors::Vector{StructuralError}, model::Model, path
     declared = declared_system_kind(model)
     derived = system_kind(model)
     if declared !== nothing && declared != derived
-        push!(errors, StructuralError(
-            "$path/system_kind",
-            "Model declares system_kind '$declared' but its equations and " *
-            "parameters derive '$derived'",
-            ERROR_CODES.SYSTEM_KIND_MISMATCH,
-            Dict{String,Any}("declared" => declared, "derived" => derived)))
+        push!(
+            errors, StructuralError(
+                "$path/system_kind",
+                "Model declares system_kind '$declared' but its equations and " *
+                    "parameters derive '$derived'",
+                ERROR_CODES.SYSTEM_KIND_MISMATCH,
+                Dict{String, Any}("declared" => declared, "derived" => derived)
+            )
+        )
     end
     for (subsys_name, subsys) in model_subsystems(model)
         _check_system_kind!(errors, subsys, "$path/subsystems/$subsys_name")
@@ -1150,9 +1229,10 @@ only in a coordinate position (§11.4), and
 `tests/valid/units_dimensional_analysis.esm` declares `x` as an ordinary
 position variable.
 """
-_reserved_declaration_names(indep::AbstractString)::Dict{String,String} = Dict{String,String}(
+_reserved_declaration_names(indep::AbstractString)::Dict{String, String} = Dict{String, String}(
     String(indep) => "independent_variable",
-    _OPERATOR_PLACEHOLDER_VAR => "operator_placeholder")
+    _OPERATOR_PLACEHOLDER_VAR => "operator_placeholder"
+)
 
 """
     _check_reserved_declaration_names!(errors, names, container_path, owner, kind; indep)
@@ -1172,21 +1252,26 @@ fuel time-lag constant.
 system's species and parameters are vectors, and sorted is the ordering every
 binding can produce.
 """
-function _check_reserved_declaration_names!(errors::Vector{StructuralError},
-                                            names, container_path::AbstractString,
-                                            owner::AbstractString, kind::AbstractString;
-                                            indep::AbstractString="t")
+function _check_reserved_declaration_names!(
+        errors::Vector{StructuralError},
+        names, container_path::AbstractString,
+        owner::AbstractString, kind::AbstractString;
+        indep::AbstractString = "t"
+    )
     reserved = _reserved_declaration_names(indep)
     for name in sort!(collect(String.(names)))
         why = get(reserved, name, nothing)
         why === nothing && continue
         role = why == "independent_variable" ? "the document's independent variable" :
-               "the operator-model placeholder"
-        push!(errors, StructuralError(
-            "$container_path/$name",
-            "$owner declares a $kind named '$name', which is $role",
-            ERROR_CODES.RESERVED_VARIABLE_NAME,
-            Dict{String,Any}("name" => name, "reserved_as" => why)))
+            "the operator-model placeholder"
+        push!(
+            errors, StructuralError(
+                "$container_path/$name",
+                "$owner declares a $kind named '$name', which is $role",
+                ERROR_CODES.RESERVED_VARIABLE_NAME,
+                Dict{String, Any}("name" => name, "reserved_as" => why)
+            )
+        )
     end
     return errors
 end
@@ -1203,21 +1288,27 @@ function _check_reserved_file_names!(errors::Vector{StructuralError}, file::EsmF
     indep = _indep_var(file)
     if file.models !== nothing
         for model_name in sort!(collect(keys(file.models)))
-            _check_reserved_model_names!(errors, file.models[model_name],
-                                         "/models/$model_name",
-                                         "Model '$model_name'"; indep=indep)
+            _check_reserved_model_names!(
+                errors, file.models[model_name],
+                "/models/$model_name",
+                "Model '$model_name'"; indep = indep
+            )
         end
     end
     if file.reaction_systems !== nothing
         for rs_name in sort!(collect(keys(file.reaction_systems)))
             rs = file.reaction_systems[rs_name]
             owner = "Reaction system '$rs_name'"
-            _check_reserved_declaration_names!(errors, (s.name for s in rs.species),
-                                               "/reaction_systems/$rs_name/species",
-                                               owner, "species"; indep=indep)
-            _check_reserved_declaration_names!(errors, (p.name for p in rs.parameters),
-                                               "/reaction_systems/$rs_name/parameters",
-                                               owner, "parameter"; indep=indep)
+            _check_reserved_declaration_names!(
+                errors, (s.name for s in rs.species),
+                "/reaction_systems/$rs_name/species",
+                owner, "species"; indep = indep
+            )
+            _check_reserved_declaration_names!(
+                errors, (p.name for p in rs.parameters),
+                "/reaction_systems/$rs_name/parameters",
+                owner, "parameter"; indep = indep
+            )
         end
     end
     return errors
@@ -1229,14 +1320,20 @@ end
 [`_check_reserved_declaration_names!`](@ref) over a model's `variables`,
 recursing into subsystems.
 """
-function _check_reserved_model_names!(errors::Vector{StructuralError}, model::Model,
-                                      path::String, owner::AbstractString;
-                                      indep::AbstractString="t")
-    _check_reserved_declaration_names!(errors, keys(model.variables), "$path/variables",
-                                       owner, "variable"; indep=indep)
+function _check_reserved_model_names!(
+        errors::Vector{StructuralError}, model::Model,
+        path::String, owner::AbstractString;
+        indep::AbstractString = "t"
+    )
+    _check_reserved_declaration_names!(
+        errors, keys(model.variables), "$path/variables",
+        owner, "variable"; indep = indep
+    )
     for (subsys_name, subsys) in model_subsystems(model)
-        _check_reserved_model_names!(errors, subsys, "$path/subsystems/$subsys_name",
-                                     "Model '$subsys_name'"; indep=indep)
+        _check_reserved_model_names!(
+            errors, subsys, "$path/subsystems/$subsys_name",
+            "Model '$subsys_name'"; indep = indep
+        )
     end
     return errors
 end
@@ -1251,23 +1348,32 @@ value: its nesting is matched against the declared shape, so with no shape there
 is nothing for it to fill. Variables are walked in sorted order, as every binding
 can produce.
 """
-function _check_array_defaults_have_shape!(errors::Vector{StructuralError}, model::Model,
-                                           path::String, owner::AbstractString)
+function _check_array_defaults_have_shape!(
+        errors::Vector{StructuralError}, model::Model,
+        path::String, owner::AbstractString
+    )
     for name in sort!(collect(keys(model.variables)))
         var = model.variables[name]
         is_inline_array(var.default) || continue
         (var.shape === nothing || isempty(var.shape)) || continue
-        push!(errors, StructuralError(
-            "$path/variables/$name/default",
-            "$owner variable '$name' has inline array data as its default but declares " *
-            "no shape; inline array data is a shaped variable's value (esm-spec §6.3)",
-            ERROR_CODES.ARRAY_DEFAULT_WITHOUT_SHAPE,
-            Dict{String,Any}("variable" => name,
-                             "variable_type" => _variable_type_word(var.type))))
+        push!(
+            errors, StructuralError(
+                "$path/variables/$name/default",
+                "$owner variable '$name' has inline array data as its default but declares " *
+                    "no shape; inline array data is a shaped variable's value (esm-spec §6.3)",
+                ERROR_CODES.ARRAY_DEFAULT_WITHOUT_SHAPE,
+                Dict{String, Any}(
+                    "variable" => name,
+                    "variable_type" => _variable_type_word(var.type)
+                )
+            )
+        )
     end
-    for (subsys_name, subsys) in sort!(collect(model_subsystems(model)); by=first)
-        _check_array_defaults_have_shape!(errors, subsys, "$path/subsystems/$subsys_name",
-                                          "Model '$subsys_name'")
+    for (subsys_name, subsys) in sort!(collect(model_subsystems(model)); by = first)
+        _check_array_defaults_have_shape!(
+            errors, subsys, "$path/subsystems/$subsys_name",
+            "Model '$subsys_name'"
+        )
     end
     return errors
 end
@@ -1317,14 +1423,18 @@ function validate_variable_map_units(file::EsmFile)::Vector{StructuralError}
         (src_units === nothing || tgt_units === nothing) && continue
         (isempty(src_units) || isempty(tgt_units)) && continue
         src_units == tgt_units && continue
-        push!(errors, StructuralError(
-            "/coupling/$(i-1)",
-            "variable_map identity coupling from '$(entry.from)' ($src_units) to " *
-            "'$(entry.to)' ($tgt_units) connects variables with different declared units",
-            ERROR_CODES.DOMAIN_UNIT_MISMATCH,
-            Dict{String,Any}("from" => entry.from, "to" => entry.to,
-                             "from_units" => src_units, "to_units" => tgt_units)
-        ))
+        push!(
+            errors, StructuralError(
+                "/coupling/$(i - 1)",
+                "variable_map identity coupling from '$(entry.from)' ($src_units) to " *
+                    "'$(entry.to)' ($tgt_units) connects variables with different declared units",
+                ERROR_CODES.DOMAIN_UNIT_MISMATCH,
+                Dict{String, Any}(
+                    "from" => entry.from, "to" => entry.to,
+                    "from_units" => src_units, "to_units" => tgt_units
+                )
+            )
+        )
     end
     return errors
 end
@@ -1352,8 +1462,10 @@ function validate_aggregate_semantics(file::EsmFile)::Vector{StructuralError}
     file.models === nothing && return errors
     registry = Set{String}(keys(file.index_sets))
     for model_name in sort!(collect(keys(file.models)))
-        _check_model_aggregates!(errors, file, file.models[model_name],
-                                 "/models/$model_name", registry)
+        _check_model_aggregates!(
+            errors, file, file.models[model_name],
+            "/models/$model_name", registry
+        )
     end
     return errors
 end
@@ -1362,8 +1474,10 @@ end
 # relational check) and walk each of its expression-bearing fields, then recurse
 # into Model subsystems. The `index_sets` registry is document-scoped, so it is
 # threaded down unchanged.
-function _check_model_aggregates!(errors::Vector{StructuralError}, file::EsmFile,
-                                  model::Model, path::String, registry::Set{String})
+function _check_model_aggregates!(
+        errors::Vector{StructuralError}, file::EsmFile,
+        model::Model, path::String, registry::Set{String}
+    )
     # The continuous-relational guard keys off the CONTINUOUS leaves, which
     # from esm 1.0.0 are derived: the ODE states plus the algebraic unknowns
     # (CONFORMANCE_SPEC §5.7.2). Observed unknowns are deliberately excluded —
@@ -1372,17 +1486,18 @@ function _check_model_aggregates!(errors::Vector{StructuralError}, file::EsmFile
     state_vars = Set{String}(solver_unknowns(model))
     # A join key may name a DATA COLUMN, whose range symbol comes from its
     # declared 1-D shape — so `_check_join_sides!` needs the model's shapes.
-    var_shapes = Dict{String,Vector{String}}(
+    var_shapes = Dict{String, Vector{String}}(
         n => String[String(x) for x in v.shape]
-        for (n, v) in model.variables if v.shape !== nothing)
+            for (n, v) in model.variables if v.shape !== nothing
+    )
 
     for (i, eq) in enumerate(model.equations)
-        _walk_aggregates!(errors, file, eq.lhs, "$path/equations/$(i-1)/lhs", state_vars, registry, var_shapes)
-        _walk_aggregates!(errors, file, eq.rhs, "$path/equations/$(i-1)/rhs", state_vars, registry, var_shapes)
+        _walk_aggregates!(errors, file, eq.lhs, "$path/equations/$(i - 1)/lhs", state_vars, registry, var_shapes)
+        _walk_aggregates!(errors, file, eq.rhs, "$path/equations/$(i - 1)/rhs", state_vars, registry, var_shapes)
     end
     for (i, eq) in enumerate(model.initialization_equations)
-        _walk_aggregates!(errors, file, eq.lhs, "$path/initialization_equations/$(i-1)/lhs", state_vars, registry, var_shapes)
-        _walk_aggregates!(errors, file, eq.rhs, "$path/initialization_equations/$(i-1)/rhs", state_vars, registry, var_shapes)
+        _walk_aggregates!(errors, file, eq.lhs, "$path/initialization_equations/$(i - 1)/lhs", state_vars, registry, var_shapes)
+        _walk_aggregates!(errors, file, eq.rhs, "$path/initialization_equations/$(i - 1)/rhs", state_vars, registry, var_shapes)
     end
     for name in sort!(collect(keys(model.guesses)))
         g = model.guesses[name]
@@ -1400,10 +1515,12 @@ end
 # into the full expression-bearing child set (so a NESTED aggregate is checked
 # too). `anchor` is the field pointer and stays constant through the descent —
 # a finding attaches at the field, not the leaf.
-function _walk_aggregates!(errors::Vector{StructuralError}, file::EsmFile,
-                           expr::ASTExpr, anchor::String, state_vars::Set{String},
-                           registry::Set{String},
-                           var_shapes::Dict{String,Vector{String}})
+function _walk_aggregates!(
+        errors::Vector{StructuralError}, file::EsmFile,
+        expr::ASTExpr, anchor::String, state_vars::Set{String},
+        registry::Set{String},
+        var_shapes::Dict{String, Vector{String}}
+    )
     isa(expr, OpExpr) || return errors
     if expr.op == "faq"
         _check_undefined_index_set!(errors, expr, anchor, registry)
@@ -1432,8 +1549,10 @@ end
 # `template_constraint_unknown_index_set`; a name still unresolved once
 # injection has run is rejected by the evaluating bindings' resolvers
 # (`E_REF_UNDECLARED_INDEX_SET` / `E_TREEWALK_UNDECLARED_INDEX_SET`; issue #185).
-function _check_undefined_index_set!(errors::Vector{StructuralError}, agg::OpExpr,
-                                     anchor::String, registry::Set{String})
+function _check_undefined_index_set!(
+        errors::Vector{StructuralError}, agg::OpExpr,
+        anchor::String, registry::Set{String}
+    )
     (agg.ranges === nothing || isempty(registry)) && return errors
     reported = Set{String}()
     for sym in sort!(collect(keys(agg.ranges)))
@@ -1442,13 +1561,15 @@ function _check_undefined_index_set!(errors::Vector{StructuralError}, agg::OpExp
         from = rv.from
         (from in registry || from in reported) && continue
         push!(reported, from)
-        push!(errors, StructuralError(
-            anchor,
-            "aggregate range '$sym' references index set '$from', which is not " *
-            "declared in the document `index_sets` registry",
-            ERROR_CODES.UNDEFINED_INDEX_SET,
-            Dict{String,Any}("index_set" => from, "range" => sym)
-        ))
+        push!(
+            errors, StructuralError(
+                anchor,
+                "aggregate range '$sym' references index set '$from', which is not " *
+                    "declared in the document `index_sets` registry",
+                ERROR_CODES.UNDEFINED_INDEX_SET,
+                Dict{String, Any}("index_set" => from, "range" => sym)
+            )
+        )
     end
     return errors
 end
@@ -1484,8 +1605,10 @@ end
 # a body that still holds a template reference, which may do the gather out of
 # sight. A set the document does not declare (a §9.7.10 agnostic leaf) is left
 # to the build, as `_check_undefined_index_set!` does.
-function _check_ragged_values_gathered!(errors::Vector{StructuralError}, file::EsmFile,
-                                        agg::OpExpr, anchor::String)
+function _check_ragged_values_gathered!(
+        errors::Vector{StructuralError}, file::EsmFile,
+        agg::OpExpr, anchor::String
+    )
     (agg.ranges === nothing || isempty(file.index_sets)) && return errors
     _is_value_invention_faq(agg) && return errors
     body = ASTExpr[b for b in (agg.expr_body, agg.filter) if b !== nothing]
@@ -1502,15 +1625,17 @@ function _check_ragged_values_gathered!(errors::Vector{StructuralError}, file::E
         values = iset.values::String
         any(r -> r == values || endswith(r, "." * values), refs) && continue
         parent = isempty(rv.of) ? "<parent>" : join(rv.of, ", ")
-        push!(errors, StructuralError(
-            anchor,
-            "faq range '$sym' iterates ragged index set '$(rv.from)', so it binds the " *
-            "POSITION k in 1..$(something(iset.offsets, "offsets"))[$parent], not a " *
-            "member; the body never reads the set's `values` array '$values'. Gather " *
-            "the member explicitly: index($values, $parent, $sym)",
-            ERROR_CODES.RAGGED_VALUES_NOT_GATHERED,
-            Dict{String,Any}("range" => sym, "index_set" => rv.from, "values" => values)
-        ))
+        push!(
+            errors, StructuralError(
+                anchor,
+                "faq range '$sym' iterates ragged index set '$(rv.from)', so it binds the " *
+                    "POSITION k in 1..$(something(iset.offsets, "offsets"))[$parent], not a " *
+                    "member; the body never reads the set's `values` array '$values'. Gather " *
+                    "the member explicitly: index($values, $parent, $sym)",
+                ERROR_CODES.RAGGED_VALUES_NOT_GATHERED,
+                Dict{String, Any}("range" => sym, "index_set" => rv.from, "values" => values)
+            )
+        )
     end
     return errors
 end
@@ -1537,17 +1662,21 @@ end
 #    that spelling is ambiguous at two as well.
 #
 # One finding per aggregate.
-function _check_join_sides!(errors::Vector{StructuralError}, agg::OpExpr,
-                            anchor::String,
-                            var_shapes::Dict{String,Vector{String}})
+function _check_join_sides!(
+        errors::Vector{StructuralError}, agg::OpExpr,
+        anchor::String,
+        var_shapes::Dict{String, Vector{String}}
+    )
     (agg.join === nothing || agg.ranges === nothing) && return errors
     ranges = agg.ranges
-    set_to_syms = Dict{String,Vector{String}}()
+    set_to_syms = Dict{String, Vector{String}}()
     for (sym, spec) in ranges
         spec isa IndexSetRef || continue
         push!(get!(set_to_syms, spec.from, String[]), String(sym))
     end
-    for v in values(set_to_syms); sort!(v); end
+    for v in values(set_to_syms)
+        sort!(v)
+    end
 
     for clause in agg.join
         clause isa AbstractVector || continue      # an overlap clause gates no key
@@ -1555,14 +1684,18 @@ function _check_join_sides!(errors::Vector{StructuralError}, agg::OpExpr,
         if csyms !== nothing
             for cs in csyms
                 haskey(ranges, cs) && continue
-                push!(errors, StructuralError(
-                    anchor,
-                    "aggregate join `syms` names '$cs', which is not a range symbol of " *
-                    "this aggregate; both entries must name one of its `ranges`",
-                    ERROR_CODES.JOIN_SYMS_UNKNOWN_SYMBOL,
-                    Dict{String,Any}("join_syms_entry" => cs,
-                                     "declared_ranges" => sort!(String[String(k) for k in keys(ranges)]))
-                ))
+                push!(
+                    errors, StructuralError(
+                        anchor,
+                        "aggregate join `syms` names '$cs', which is not a range symbol of " *
+                            "this aggregate; both entries must name one of its `ranges`",
+                        ERROR_CODES.JOIN_SYMS_UNKNOWN_SYMBOL,
+                        Dict{String, Any}(
+                            "join_syms_entry" => cs,
+                            "declared_ranges" => sort!(String[String(k) for k in keys(ranges)])
+                        )
+                    )
+                )
                 return errors
             end
             continue      # an explicit `syms` answers every pair of this clause
@@ -1592,12 +1725,16 @@ function _check_join_sides!(errors::Vector{StructuralError}, agg::OpExpr,
                     "aggregate join key '$key' names an index set that $(length(cands)) range " *
                     "symbols of this aggregate draw; reference the range symbol directly, or " *
                     "name the clause's two sides with `syms`"
-                push!(errors, StructuralError(
-                    anchor, msg, ERROR_CODES.JOIN_SIDE_AMBIGUOUS,
-                    Dict{String,Any}("join_key" => key, "side" => side,
-                                     "index_set" => set_name,
-                                     "candidate_range_symbols" => cands)
-                ))
+                push!(
+                    errors, StructuralError(
+                        anchor, msg, ERROR_CODES.JOIN_SIDE_AMBIGUOUS,
+                        Dict{String, Any}(
+                            "join_key" => key, "side" => side,
+                            "index_set" => set_name,
+                            "candidate_range_symbols" => cands
+                        )
+                    )
+                )
                 return errors
             end
         end
@@ -1609,8 +1746,10 @@ end
 # a float or null member — a float repr is not portable across bindings and a
 # null key is unmatchable (RFC semiring-faq-unified-ir §5.3). One finding per
 # aggregate (the first offending key column).
-function _check_join_key_type!(errors::Vector{StructuralError}, file::EsmFile,
-                               agg::OpExpr, anchor::String)
+function _check_join_key_type!(
+        errors::Vector{StructuralError}, file::EsmFile,
+        agg::OpExpr, anchor::String
+    )
     (agg.join === nothing || agg.ranges === nothing) && return errors
     cols = String[]
     for clause in agg.join
@@ -1627,14 +1766,16 @@ function _check_join_key_type!(errors::Vector{StructuralError}, file::EsmFile,
         iset = get(file.index_sets, rv.from, nothing)
         iset === nothing && continue
         _index_set_has_nonportable_key(iset) || continue
-        push!(errors, StructuralError(
-            anchor,
-            "aggregate join key column '$sym' ranges over categorical index set " *
-            "'$(rv.from)', whose members include a non-portable float/null key " *
-            "(value-equality join keys must be integers or strings)",
-            ERROR_CODES.JOIN_KEY_INVALID_TYPE,
-            Dict{String,Any}("index_set" => rv.from, "column" => sym)
-        ))
+        push!(
+            errors, StructuralError(
+                anchor,
+                "aggregate join key column '$sym' ranges over categorical index set " *
+                    "'$(rv.from)', whose members include a non-portable float/null key " *
+                    "(value-equality join keys must be integers or strings)",
+                ERROR_CODES.JOIN_KEY_INVALID_TYPE,
+                Dict{String, Any}("index_set" => rv.from, "column" => sym)
+            )
+        )
         return errors   # one finding per aggregate is enough
     end
     return errors
@@ -1646,8 +1787,10 @@ end
 function _index_set_has_nonportable_key(iset::IndexSet)::Bool
     iset.kind == "categorical" || return false
     iset.members_raw === nothing && return false
-    return any(m -> (m isa AbstractFloat) || (m === nothing) || (m === missing),
-               iset.members_raw)
+    return any(
+        m -> (m isa AbstractFloat) || (m === nothing) || (m === missing),
+        iset.members_raw
+    )
 end
 
 # F-6 check: a `distinct` (value-invention / relational) aggregate whose
@@ -1658,24 +1801,28 @@ end
 # `key`/`expr`/`filter` subtrees (a state read there is the value-invention
 # input) so a `distinct` set former over CONST mesh/parameter literals — e.g.
 # tests/valid/cadence/pure_topology.esm — stays valid.
-function _check_relational_in_continuous!(errors::Vector{StructuralError}, agg::OpExpr,
-                                          anchor::String, state_vars::Set{String})
+function _check_relational_in_continuous!(
+        errors::Vector{StructuralError}, agg::OpExpr,
+        anchor::String, state_vars::Set{String}
+    )
     (agg.distinct === true && !isempty(state_vars)) || return errors
     refs = Set{String}()
-    agg.key       === nothing || _referenced_var_names(agg.key, refs)
+    agg.key === nothing || _referenced_var_names(agg.key, refs)
     agg.expr_body === nothing || _referenced_var_names(agg.expr_body, refs)
-    agg.filter    === nothing || _referenced_var_names(agg.filter, refs)
+    agg.filter === nothing || _referenced_var_names(agg.filter, refs)
     hits = intersect(refs, state_vars)
     isempty(hits) && return errors
     hit = first(sort!(collect(hits)))
-    push!(errors, StructuralError(
-        anchor,
-        "distinct/value-invention aggregate reads state variable '$hit' in its " *
-        "key/body, classifying it CONTINUOUS — a relational node may not run on " *
-        "the per-step hot path (§5.7 guard 2)",
-        ERROR_CODES.RELATIONAL_NODE_IN_CONTINUOUS,
-        Dict{String,Any}("variable" => hit)
-    ))
+    push!(
+        errors, StructuralError(
+            anchor,
+            "distinct/value-invention aggregate reads state variable '$hit' in its " *
+                "key/body, classifying it CONTINUOUS — a relational node may not run on " *
+                "the per-step hot path (§5.7 guard 2)",
+            ERROR_CODES.RELATIONAL_NODE_IN_CONTINUOUS,
+            Dict{String, Any}("variable" => hit)
+        )
+    )
     return errors
 end
 
@@ -1722,9 +1869,11 @@ end
 # Per-model driver for `validate_broadcast_semantics`: the `fn` contract over
 # EVERY expression-bearing field, plus the element-wise axis check wherever the
 # expression has a declared array RESULT shape. Recurses into Model subsystems.
-function _check_model_broadcasts!(errors::Vector{StructuralError}, model::Model,
-                                  path::String)
-    var_shapes = Dict{String,Vector{String}}()
+function _check_model_broadcasts!(
+        errors::Vector{StructuralError}, model::Model,
+        path::String
+    )
+    var_shapes = Dict{String, Vector{String}}()
     for (name, v) in model.variables
         v.shape === nothing && continue
         s = String[String(x) for x in v.shape]
@@ -1732,8 +1881,8 @@ function _check_model_broadcasts!(errors::Vector{StructuralError}, model::Model,
     end
 
     for (i, eq) in enumerate(model.equations)
-        _walk_broadcast_fns!(errors, eq.lhs, "$path/equations/$(i-1)/lhs")
-        anchor = "$path/equations/$(i-1)/rhs"
+        _walk_broadcast_fns!(errors, eq.lhs, "$path/equations/$(i - 1)/lhs")
+        anchor = "$path/equations/$(i - 1)/rhs"
         _walk_broadcast_fns!(errors, eq.rhs, anchor)
         tgt = _wholearray_result_axes(eq.lhs, var_shapes)
         tgt === nothing ||
@@ -1743,8 +1892,8 @@ function _check_model_broadcasts!(errors::Vector{StructuralError}, model::Model,
     # the equation loop above already covers it (its bare-variable LHS gives
     # `_wholearray_result_axes` the same target axes this loop used to supply).
     for (i, eq) in enumerate(model.initialization_equations)
-        _walk_broadcast_fns!(errors, eq.lhs, "$path/initialization_equations/$(i-1)/lhs")
-        _walk_broadcast_fns!(errors, eq.rhs, "$path/initialization_equations/$(i-1)/rhs")
+        _walk_broadcast_fns!(errors, eq.lhs, "$path/initialization_equations/$(i - 1)/lhs")
+        _walk_broadcast_fns!(errors, eq.rhs, "$path/initialization_equations/$(i - 1)/rhs")
     end
     for name in sort!(collect(keys(model.guesses)))
         g = model.guesses[name]
@@ -1762,19 +1911,26 @@ end
 # recurse into the full expression-bearing child set (so a NESTED broadcast is
 # checked too). `anchor` is the field pointer and stays constant through the
 # descent — a finding attaches at the field, not the leaf.
-function _walk_broadcast_fns!(errors::Vector{StructuralError}, expr::ASTExpr,
-                              anchor::String)
+function _walk_broadcast_fns!(
+        errors::Vector{StructuralError}, expr::ASTExpr,
+        anchor::String
+    )
     isa(expr, OpExpr) || return errors
     if expr.op == "broadcast"
         prob = _broadcast_fn_problem(expr.fn, length(expr.args))
         if prob !== nothing
             # ONE cross-binding diagnostic code (esm-spec §9.6.6) for all four
             # defects; `details["reason"]` carries which one.
-            push!(errors, StructuralError(
-                anchor, prob.message, ERROR_CODES.INVALID_BROADCAST_FN,
-                Dict{String,Any}("fn" => expr.fn === nothing ? "" : String(expr.fn),
-                                 "reason" => String(prob.kind),
-                                 "operands" => length(expr.args))))
+            push!(
+                errors, StructuralError(
+                    anchor, prob.message, ERROR_CODES.INVALID_BROADCAST_FN,
+                    Dict{String, Any}(
+                        "fn" => expr.fn === nothing ? "" : String(expr.fn),
+                        "reason" => String(prob.kind),
+                        "operands" => length(expr.args)
+                    )
+                )
+            )
         end
     end
     for c in _expr_children(expr)
@@ -1788,13 +1944,17 @@ end
 # `D(index(v,…))` / `faq(…)` LHS, which carries its own indexing). Mirrors
 # `_lift_wholearray_deriv_equations`' `is_wholearray_D` plus the bare
 # array-observed definition `v = <array rhs>`.
-function _wholearray_result_axes(lhs::ASTExpr,
-                                 var_shapes::Dict{String,Vector{String}})
+function _wholearray_result_axes(
+        lhs::ASTExpr,
+        var_shapes::Dict{String, Vector{String}}
+    )
     name = lhs isa VarExpr ? (lhs::VarExpr).name :
-           (lhs isa OpExpr && (lhs::OpExpr).op == "D" &&
+        (
+            lhs isa OpExpr && (lhs::OpExpr).op == "D" &&
             length((lhs::OpExpr).args) == 1 &&
-            (lhs::OpExpr).args[1] isa VarExpr) ?
-               ((lhs::OpExpr).args[1]::VarExpr).name : nothing
+            (lhs::OpExpr).args[1] isa VarExpr
+        ) ?
+        ((lhs::OpExpr).args[1]::VarExpr).name : nothing
     name === nothing && return nothing
     axes = get(var_shapes, name, nothing)
     axes === nothing && return nothing
@@ -1814,13 +1974,15 @@ end
 # own shape does, matching `_usable_align` / `_index_wrap_var`: without a unique
 # name→axis map the rewrite stays POSITIONAL, so there is nothing name-based to
 # reject.
-function _check_broadcast_axes!(errors::Vector{StructuralError}, expr::ASTExpr,
-                                target::String, axes::Vector{String},
-                                var_shapes::Dict{String,Vector{String}},
-                                anchor::String)
+function _check_broadcast_axes!(
+        errors::Vector{StructuralError}, expr::ASTExpr,
+        target::String, axes::Vector{String},
+        var_shapes::Dict{String, Vector{String}},
+        anchor::String
+    )
     allunique(axes) || return errors
     axset = Set{String}(axes)
-    reported = Set{Tuple{String,String}}()   # one finding per (operand, axis)
+    reported = Set{Tuple{String, String}}()   # one finding per (operand, axis)
     function walk(e::ASTExpr)
         if e isa VarExpr
             vs = get(var_shapes, (e::VarExpr).name, nothing)
@@ -1828,17 +1990,22 @@ function _check_broadcast_axes!(errors::Vector{StructuralError}, expr::ASTExpr,
             for ax in vs
                 (ax in axset || ((e::VarExpr).name, ax) in reported) && continue
                 push!(reported, ((e::VarExpr).name, ax))
-                push!(errors, StructuralError(
-                    anchor,
-                    "Operand '$((e::VarExpr).name)' of the array-level expression " *
-                    "for '$target' is declared over index set '$ax', which " *
-                    "'$target' is not shaped over (esm-spec §4.3.4)",
-                    ERROR_CODES.ARRAY_SHAPE_MISMATCH,
-                    Dict{String,Any}("variable" => (e::VarExpr).name,
-                                     "target" => target,
-                                     "index_set" => ax,
-                                     "operand_shape" => vs,
-                                     "result_shape" => axes)))
+                push!(
+                    errors, StructuralError(
+                        anchor,
+                        "Operand '$((e::VarExpr).name)' of the array-level expression " *
+                            "for '$target' is declared over index set '$ax', which " *
+                            "'$target' is not shaped over (esm-spec §4.3.4)",
+                        ERROR_CODES.ARRAY_SHAPE_MISMATCH,
+                        Dict{String, Any}(
+                            "variable" => (e::VarExpr).name,
+                            "target" => target,
+                            "index_set" => ax,
+                            "operand_shape" => vs,
+                            "result_shape" => axes
+                        )
+                    )
+                )
             end
         elseif e isa OpExpr
             _is_scalar_op((e::OpExpr).op) || return nothing
@@ -1869,8 +2036,10 @@ end
 # system — the surviving `apply_expression_template` references in its rates
 # and constraint equations, and in those of its subsystems at any depth,
 # expanded on a copy.
-function _reaction_system_units_view(file::EsmFile, rs_name::AbstractString,
-                                     rs::ReactionSystem)
+function _reaction_system_units_view(
+        file::EsmFile, rs_name::AbstractString,
+        rs::ReactionSystem
+    )
     file.component_templates === nothing && return rs
     reg = get(file.component_templates, "reaction_systems.$rs_name", nothing)
     reg === nothing && return rs
@@ -1897,19 +2066,25 @@ is that document-wide map already built (`_toplevel_scoped_units`), in place of
 This is what wires the units engine into `validate()`. Before the 2026-07-14
 audit the engine had no caller outside its own test file.
 """
-function validate_model_unit_consistency(model::Model, path::String;
-                                         file=nothing,
-                                         toplevel=nothing)::Vector{StructuralError}
+function validate_model_unit_consistency(
+        model::Model, path::String;
+        file = nothing,
+        toplevel = nothing
+    )::Vector{StructuralError}
     errors = StructuralError[]
     toplevel === nothing && (toplevel = _toplevel_scoped_units(file))
 
-    for f in model_unit_findings(model; toplevel=toplevel)
+    for f in model_unit_findings(model; toplevel = toplevel)
         push!(errors, StructuralError("$path/$(f.subpath)", f.message, f.code))
     end
 
     for (subsys_name, subsys) in model_subsystems(model)
-        append!(errors, validate_model_unit_consistency(subsys, "$path/subsystems/$subsys_name";
-                                                        toplevel=toplevel))
+        append!(
+            errors, validate_model_unit_consistency(
+                subsys, "$path/subsystems/$subsys_name";
+                toplevel = toplevel
+            )
+        )
     end
 
     return errors
@@ -1942,7 +2117,7 @@ order) so the reported cycle and its entry point do not depend on Dict hashing.
 """
 function validate_coupling_cycles(file::EsmFile)::Vector{StructuralError}
     # System name → its kind's pointer prefix, for the error path.
-    prefix = Dict{String,String}()
+    prefix = Dict{String, String}()
     file.models !== nothing && for name in keys(file.models)
         prefix[name] = "/models/$name"
     end
@@ -1951,7 +2126,7 @@ function validate_coupling_cycles(file::EsmFile)::Vector{StructuralError}
     end
     isempty(prefix) && return StructuralError[]
 
-    adj = Dict{String,Set{String}}(name => Set{String}() for name in keys(prefix))
+    adj = Dict{String, Set{String}}(name => Set{String}() for name in keys(prefix))
 
     # Edges from qualified references inside a model's equations.
     if file.models !== nothing
@@ -1971,7 +2146,7 @@ function validate_coupling_cycles(file::EsmFile)::Vector{StructuralError}
     # DFS with an explicit path stack; the first back-edge found in sorted order
     # is reported.
     WHITE, GREY, BLACK = 0, 1, 2
-    color = Dict{String,Int}(name => WHITE for name in keys(prefix))
+    color = Dict{String, Int}(name => WHITE for name in keys(prefix))
     path_stack = String[]
     errors = StructuralError[]
 
@@ -1986,12 +2161,14 @@ function validate_coupling_cycles(file::EsmFile)::Vector{StructuralError}
                 # A dependency cycle is carried by NO single model — it is a
                 # property of the model set — so it attaches at `/models`, not at
                 # any one member's pointer (the corpus pin; TS emits the same).
-                push!(errors, StructuralError(
-                    "/models",
-                    "Circular coupling detected: " * join(cycle, " → "),
-                    ERROR_CODES.CIRCULAR_DEPENDENCY,
-                    Dict{String,Any}("cycle" => cycle)
-                ))
+                push!(
+                    errors, StructuralError(
+                        "/models",
+                        "Circular coupling detected: " * join(cycle, " → "),
+                        ERROR_CODES.CIRCULAR_DEPENDENCY,
+                        Dict{String, Any}("cycle" => cycle)
+                    )
+                )
                 return true
             elseif color[v] == WHITE && dfs(v)
                 return true
@@ -2012,9 +2189,9 @@ end
 
 # The system part of a qualified reference `System.var` (or `A.B.var`), or
 # `nothing` for a bare local name.
-function _qualified_head(ref::AbstractString)::Union{String,Nothing}
+function _qualified_head(ref::AbstractString)::Union{String, Nothing}
     idx = findfirst('.', ref)
-    idx === nothing ? nothing : String(ref[1:prevind(ref, idx)])
+    return idx === nothing ? nothing : String(ref[1:prevind(ref, idx)])
 end
 
 """
@@ -2058,13 +2235,15 @@ function validate_observed_cycles(file::EsmFile)::Vector{StructuralError}
     return errors
 end
 
-function _check_observed_cycles!(errors::Vector{StructuralError}, model::Model,
-                                 path::String)
+function _check_observed_cycles!(
+        errors::Vector{StructuralError}, model::Model,
+        path::String
+    )
     defs = observed_definitions(model)
     if !isempty(defs)
         observed = Set{String}(keys(defs))
         candidates = _recurrence_candidate_names(model, defs)
-        adj = Dict{String,Vector{String}}()
+        adj = Dict{String, Vector{String}}()
         for (name, rhs) in defs
             deps = intersect(_observed_dependency_names(rhs), observed)
             # esm-spec §4.3.1.1 / CONFORMANCE_SPEC §5.19.5: a causal self-read is
@@ -2075,16 +2254,20 @@ function _check_observed_cycles!(errors::Vector{StructuralError}, model::Model,
         end
         cycle = _first_observed_cycle(adj)
         if cycle !== nothing
-            push!(errors, StructuralError(
-                path,
-                "Observed dependency cycle: " * join(cycle, " -> ") * ". Each of these " *
-                "observed variables is defined in terms of the next, so no evaluation " *
-                "order satisfies every definition (esm-spec §4.9.6). Break the cycle by " *
-                "splitting one observed into a pre-value and a post-value.",
-                ERROR_CODES.OBSERVED_CYCLE,
-                Dict{String,Any}("cycle" => cycle,
-                                 "dependency_type" => "observed_definitions"),
-            ))
+            push!(
+                errors, StructuralError(
+                    path,
+                    "Observed dependency cycle: " * join(cycle, " -> ") * ". Each of these " *
+                        "observed variables is defined in terms of the next, so no evaluation " *
+                        "order satisfies every definition (esm-spec §4.9.6). Break the cycle by " *
+                        "splitting one observed into a pre-value and a post-value.",
+                    ERROR_CODES.OBSERVED_CYCLE,
+                    Dict{String, Any}(
+                        "cycle" => cycle,
+                        "dependency_type" => "observed_definitions"
+                    ),
+                )
+            )
         end
     end
 
@@ -2117,8 +2300,10 @@ end
 # The predicate is character-for-character the one `_decline_unmaterialized_recurrences`
 # (tree_walk/build.jl) uses, which is the point: §5.19.5 asks that the two sites
 # agree, not that either be clever.
-function _recurrence_candidate_names(model::Model,
-                                     defs::Dict{String,ASTExpr})::Set{String}
+function _recurrence_candidate_names(
+        model::Model,
+        defs::Dict{String, ASTExpr}
+    )::Set{String}
     out = Set{String}()
     for (name, rhs) in defs
         v = get(model.variables, name, nothing)
@@ -2189,9 +2374,9 @@ end
 # validate CLEAN into a crash. `cursor[i]` is how far into `adj[path_stack[i]]`
 # that frame has got, so resuming a parent after a child finishes picks up
 # exactly where it left off.
-function _first_observed_cycle(adj::Dict{String,Vector{String}})::Union{Vector{String},Nothing}
+function _first_observed_cycle(adj::Dict{String, Vector{String}})::Union{Vector{String}, Nothing}
     WHITE, GREY, BLACK = 0, 1, 2
-    color = Dict{String,Int}(n => WHITE for n in keys(adj))
+    color = Dict{String, Int}(n => WHITE for n in keys(adj))
     path_stack = String[]
     cursor = Int[]
 
@@ -2242,9 +2427,13 @@ function validate_reference_integrity(file::EsmFile)::Vector{StructuralError}
     if file.models !== nothing
         coupled = _coupled_system_names(file)
         for (model_name, model) in file.models
-            append!(errors, validate_model_references(file, model, "/models/$model_name";
-                                                      model_name=model_name,
-                                                      is_coupled=(model_name ∈ coupled)))
+            append!(
+                errors, validate_model_references(
+                    file, model, "/models/$model_name";
+                    model_name = model_name,
+                    is_coupled = (model_name ∈ coupled)
+                )
+            )
         end
     end
 
@@ -2269,18 +2458,30 @@ function validate_reference_integrity(file::EsmFile)::Vector{StructuralError}
             union!(scope, _callback_injected_names(file))
             rs_path = "/reaction_systems/$rs_name"
             for (i, eq) in enumerate(rs.constraint_equations)
-                append!(errors, validate_expression_references(
-                    file, eq.lhs, "$rs_path/constraint_equations/$(i-1)/lhs"; scope=scope))
-                append!(errors, validate_expression_references(
-                    file, eq.rhs, "$rs_path/constraint_equations/$(i-1)/rhs"; scope=scope))
+                append!(
+                    errors, validate_expression_references(
+                        file, eq.lhs, "$rs_path/constraint_equations/$(i - 1)/lhs"; scope = scope
+                    )
+                )
+                append!(
+                    errors, validate_expression_references(
+                        file, eq.rhs, "$rs_path/constraint_equations/$(i - 1)/rhs"; scope = scope
+                    )
+                )
             end
             for (i, event) in enumerate(rs.discrete_events)
-                append!(errors, validate_event_references(
-                    file, event, "$rs_path/discrete_events/$(i-1)"; scope=scope))
+                append!(
+                    errors, validate_event_references(
+                        file, event, "$rs_path/discrete_events/$(i - 1)"; scope = scope
+                    )
+                )
             end
             for (i, event) in enumerate(rs.continuous_events)
-                append!(errors, validate_event_references(
-                    file, event, "$rs_path/continuous_events/$(i-1)"; scope=scope))
+                append!(
+                    errors, validate_event_references(
+                        file, event, "$rs_path/continuous_events/$(i - 1)"; scope = scope
+                    )
+                )
             end
             append!(errors, _validate_test_references(file, rs.tests, rs_path, scope))
         end
@@ -2288,7 +2489,7 @@ function validate_reference_integrity(file::EsmFile)::Vector{StructuralError}
 
     # Validate coupling references
     for (i, coupling_entry) in enumerate(file.coupling)
-        append!(errors, validate_coupling_references(file, coupling_entry, "/coupling/$(i-1)"))
+        append!(errors, validate_coupling_references(file, coupling_entry, "/coupling/$(i - 1)"))
     end
 
     # esm-spec §10.10.3: a mis-bound `coupling_import` is a bad edge, and the
@@ -2338,8 +2539,10 @@ function _validate_imported_coupling_edges(file::EsmFile)::Vector{StructuralErro
         entry isa CouplingImport || continue
         local edges
         try
-            edges = _expand_one(_default_coupling_load_ref(entry.ref, base),
-                                entry.ref, entry.bind, file)
+            edges = _expand_one(
+                _default_coupling_load_ref(entry.ref, base),
+                entry.ref, entry.bind, file
+            )
         catch
             continue
         end
@@ -2355,20 +2558,23 @@ function _validate_imported_coupling_edges(file::EsmFile)::Vector{StructuralErro
                 end
                 cause === nothing && continue
                 component, roles = _bound_component_for(entry.bind, ref)
-                push!(errors, StructuralError(
-                    "/coupling/$(i-1)",
-                    "coupling_import '$(entry.ref)' binds role '$roles' to '$component', " *
-                    "which does not provide '$ref' referenced by the library: " *
-                    "cannot resolve '$side' reference '$ref': $cause",
-                    ERROR_CODES.UNRESOLVED_SCOPED_REF,
-                    Dict{String,Any}(
-                        "reference" => ref,
-                        "coupling_type" => "variable_map",
-                        "direction" => side,
-                        "coupling_import" => entry.ref,
-                        "role" => roles,
-                        "bound_component" => component,
-                    )))
+                push!(
+                    errors, StructuralError(
+                        "/coupling/$(i - 1)",
+                        "coupling_import '$(entry.ref)' binds role '$roles' to '$component', " *
+                            "which does not provide '$ref' referenced by the library: " *
+                            "cannot resolve '$side' reference '$ref': $cause",
+                        ERROR_CODES.UNRESOLVED_SCOPED_REF,
+                        Dict{String, Any}(
+                            "reference" => ref,
+                            "coupling_type" => "variable_map",
+                            "direction" => side,
+                            "coupling_import" => entry.ref,
+                            "role" => roles,
+                            "bound_component" => component,
+                        )
+                    )
+                )
             end
         end
     end
@@ -2381,7 +2587,7 @@ end
 # listed under `variables` (an ODE state may appear only as `D(u)`). Dotted
 # cross-system targets are left to the qualified-reference resolver. Returns
 # `nothing` when no bare local name can be extracted.
-function _equation_lhs_target(eq::Equation)::Union{String,Nothing}
+function _equation_lhs_target(eq::Equation)::Union{String, Nothing}
     lhs = eq.lhs
     if isa(lhs, VarExpr)
         return occursin('.', lhs.name) ? nothing : lhs.name
@@ -2563,8 +2769,10 @@ function _callback_injected_names(file::EsmFile)::Set{String}
 end
 
 # The assertion `reference` expressions of a component's inline tests (§6.6).
-function _validate_test_references(file::EsmFile, tests, path::String,
-                                   scope::Set{String})::Vector{StructuralError}
+function _validate_test_references(
+        file::EsmFile, tests, path::String,
+        scope::Set{String}
+    )::Vector{StructuralError}
     errors = StructuralError[]
     for (i, t) in enumerate(tests)
         for (j, a) in enumerate(t.assertions)
@@ -2572,8 +2780,11 @@ function _validate_test_references(file::EsmFile, tests, path::String,
             # A `from_file` reference (esm-spec §6.6.5 convention 3) is data, not
             # an expression, and carries no names to resolve.
             ref isa ASTExpr || continue
-            append!(errors, validate_expression_references(
-                file, ref, "$path/tests/$(i-1)/assertions/$(j-1)/reference"; scope=scope))
+            append!(
+                errors, validate_expression_references(
+                    file, ref, "$path/tests/$(i - 1)/assertions/$(j - 1)/reference"; scope = scope
+                )
+            )
         end
     end
     return errors
@@ -2585,9 +2796,11 @@ end
 Validate variable references within a model.
 """
 
-function validate_model_references(file::EsmFile, model::Model, path::String;
-                                   model_name::AbstractString="",
-                                   is_coupled::Bool=false)::Vector{StructuralError}
+function validate_model_references(
+        file::EsmFile, model::Model, path::String;
+        model_name::AbstractString = "",
+        is_coupled::Bool = false
+    )::Vector{StructuralError}
     errors = StructuralError[]
 
     # Names in scope for this model's equations: its declared variables (state,
@@ -2640,10 +2853,10 @@ function validate_model_references(file::EsmFile, model::Model, path::String;
     # `manifold`) is a literal. Expansion keeps the equation order, so pointers
     # still name the authored equation.
     eqs = isempty(model_name) ? model.equations :
-          _units_view(file, model_name, model).equations
+        _units_view(file, model_name, model).equations
     for (i, eq) in enumerate(eqs)
-        append!(errors, validate_expression_references(file, eq.lhs, "$path/equations/$(i-1)/lhs"; scope=scope))
-        append!(errors, validate_expression_references(file, eq.rhs, "$path/equations/$(i-1)/rhs"; scope=scope))
+        append!(errors, validate_expression_references(file, eq.lhs, "$path/equations/$(i - 1)/lhs"; scope = scope))
+        append!(errors, validate_expression_references(file, eq.rhs, "$path/equations/$(i - 1)/rhs"; scope = scope))
     end
 
     # ---------------------------------------------------------------------
@@ -2675,10 +2888,13 @@ function validate_model_references(file::EsmFile, model::Model, path::String;
         for (ri, rule) in enumerate(rules)
             for (field, e) in (("when", rule.when), ("expression", rule.expression))
                 e === nothing && continue
-                append!(errors, validate_expression_references(
-                    file, e,
-                    _update_rule_path("$path/variables/$name", rules, ri) * "/$field";
-                    scope=scope))
+                append!(
+                    errors, validate_expression_references(
+                        file, e,
+                        _update_rule_path("$path/variables/$name", rules, ri) * "/$field";
+                        scope = scope
+                    )
+                )
             end
         end
     end
@@ -2688,16 +2904,25 @@ function validate_model_references(file::EsmFile, model::Model, path::String;
     for name in sort!(collect(keys(model.guesses)))
         g = model.guesses[name]
         isa(g, ASTExpr) || continue
-        append!(errors, validate_expression_references(
-            file, g, "$path/guesses/$name"; scope=scope))
+        append!(
+            errors, validate_expression_references(
+                file, g, "$path/guesses/$name"; scope = scope
+            )
+        )
     end
 
     # 3. `initialization_equations`.
     for (i, eq) in enumerate(model.initialization_equations)
-        append!(errors, validate_expression_references(
-            file, eq.lhs, "$path/initialization_equations/$(i-1)/lhs"; scope=scope))
-        append!(errors, validate_expression_references(
-            file, eq.rhs, "$path/initialization_equations/$(i-1)/rhs"; scope=scope))
+        append!(
+            errors, validate_expression_references(
+                file, eq.lhs, "$path/initialization_equations/$(i - 1)/lhs"; scope = scope
+            )
+        )
+        append!(
+            errors, validate_expression_references(
+                file, eq.rhs, "$path/initialization_equations/$(i - 1)/rhs"; scope = scope
+            )
+        )
     end
 
     # 4. Inline `tests` blocks: an assertion may carry a `reference` expression.
@@ -2706,12 +2931,12 @@ function validate_model_references(file::EsmFile, model::Model, path::String;
     # Validate discrete event references. `scope` is threaded now — without it
     # the descent happened but the bare-variable check was a no-op.
     for (i, event) in enumerate(model.discrete_events)
-        append!(errors, validate_event_references(file, event, "$path/discrete_events/$(i-1)"; scope=scope))
+        append!(errors, validate_event_references(file, event, "$path/discrete_events/$(i - 1)"; scope = scope))
     end
 
     # Validate continuous event references
     for (i, event) in enumerate(model.continuous_events)
-        append!(errors, validate_event_references(file, event, "$path/continuous_events/$(i-1)"; scope=scope))
+        append!(errors, validate_event_references(file, event, "$path/continuous_events/$(i - 1)"; scope = scope))
     end
 
     # Recursively check subsystems
@@ -2856,8 +3081,10 @@ matching Rust `for_each_child` / Go `validateExprNodeChildren`:
    skipped, but the full child set is still descended so an `operator_apply`
    hidden outside `args` is not missed.
 """
-function validate_expression_references(file::EsmFile, expr::ASTExpr, path::String;
-                                        scope::Union{Set{String},Nothing}=nothing)::Vector{StructuralError}
+function validate_expression_references(
+        file::EsmFile, expr::ASTExpr, path::String;
+        scope::Union{Set{String}, Nothing} = nothing
+    )::Vector{StructuralError}
     errors = StructuralError[]
     # `path` is the expression-bearing FIELD's pointer (`equations[i]/rhs`, an
     # observed `expression`, a `guesses` entry, an event trigger/condition, …).
@@ -2872,9 +3099,11 @@ function validate_expression_references(file::EsmFile, expr::ASTExpr, path::Stri
     return errors
 end
 
-function _check_expression_references!(errors::Vector{StructuralError}, file::EsmFile,
-                                       expr::ASTExpr, path::String, anchor::String,
-                                       scope::Union{Set{String},Nothing})
+function _check_expression_references!(
+        errors::Vector{StructuralError}, file::EsmFile,
+        expr::ASTExpr, path::String, anchor::String,
+        scope::Union{Set{String}, Nothing}
+    )
     if isa(expr, VarExpr)
         _check_bare_variable!(errors, expr.name, anchor, scope)
     elseif isa(expr, OpExpr)
@@ -2891,11 +3120,13 @@ function _check_expression_references!(errors::Vector{StructuralError}, file::Es
         # bare undefined variable.
         skip_operator_arg = false
         if expr.op == "operator_apply" && !isempty(expr.args) && isa(expr.args[1], VarExpr)
-            push!(errors, StructuralError(
-                anchor,
-                "Operator '$(expr.args[1].name)' referenced but not defined",
-                ERROR_CODES.UNDEFINED_OPERATOR
-            ))
+            push!(
+                errors, StructuralError(
+                    anchor,
+                    "Operator '$(expr.args[1].name)' referenced but not defined",
+                    ERROR_CODES.UNDEFINED_OPERATOR
+                )
+            )
             skip_operator_arg = true
         end
 
@@ -2928,18 +3159,22 @@ end
 # leaves a bare `t` looking legal. It is credited into `scope` instead, from the
 # document (see `_indep_var`), together with the coordinate namespace — both
 # belong to the DOMAIN, not to any `variables` block (finding (a)).
-function _check_bare_variable!(errors::Vector{StructuralError}, name::String,
-                               path::String, scope::Union{Set{String},Nothing})
+function _check_bare_variable!(
+        errors::Vector{StructuralError}, name::String,
+        path::String, scope::Union{Set{String}, Nothing}
+    )
     scope === nothing && return errors
     occursin('.', name) && return errors
     (startswith(name, "d(") || name in _BUILTIN_FUNCTION_NAMES) && return errors
     if !(name in scope)
-        push!(errors, StructuralError(
-            path,
-            "Variable '$name' referenced in equation is not declared",
-            ERROR_CODES.UNDEFINED_VARIABLE,
-            Dict{String,Any}("variable" => name)
-        ))
+        push!(
+            errors, StructuralError(
+                path,
+                "Variable '$name' referenced in equation is not declared",
+                ERROR_CODES.UNDEFINED_VARIABLE,
+                Dict{String, Any}("variable" => name)
+            )
+        )
     end
     return errors
 end
@@ -2947,18 +3182,22 @@ end
 # Try to resolve `ref` as a qualified reference; on failure push a
 # StructuralError at `path` whose message is "<desc> '<ref>': <cause>".
 # Non-QualifiedReferenceError exceptions are rethrown.
-function _check_resolvable!(errors::Vector{StructuralError}, file::EsmFile,
-                            ref::String, path::String, desc::String,
-                            error_type::String)
+function _check_resolvable!(
+        errors::Vector{StructuralError}, file::EsmFile,
+        ref::String, path::String, desc::String,
+        error_type::String
+    )
     try
         resolve_qualified_reference(file, ref)
     catch e
         if isa(e, QualifiedReferenceError)
-            push!(errors, StructuralError(
-                path,
-                "$desc '$ref': $(e.message)",
-                error_type
-            ))
+            push!(
+                errors, StructuralError(
+                    path,
+                    "$desc '$ref': $(e.message)",
+                    error_type
+                )
+            )
         else
             rethrow()
         end
@@ -2969,8 +3208,10 @@ end
 # Resolve every qualified name inside a `couple` connector's equation
 # `expression`s. The connector is raw JSON (`Dict{String,Any}` straight off the
 # parser), so this reads it defensively rather than through the typed AST.
-function _check_connector_expressions(file::EsmFile, entry::CouplingCouple,
-                                      path::String)::Vector{StructuralError}
+function _check_connector_expressions(
+        file::EsmFile, entry::CouplingCouple,
+        path::String
+    )::Vector{StructuralError}
     errors = StructuralError[]
     eqs = get(entry.connector, "equations", nothing)
     eqs isa AbstractVector || return errors
@@ -2984,19 +3225,21 @@ function _check_connector_expressions(file::EsmFile, entry::CouplingCouple,
         catch
             continue    # a malformed expression is the schema's business
         end
-        epath = "$path/connector/equations/$(i-1)/expression"
+        epath = "$path/connector/equations/$(i - 1)/expression"
         for name in sort!(collect(_referenced_var_names(expr)))
             occursin('.', name) || continue    # bare names are not cross-system refs
             try
                 resolve_qualified_reference(file, name)
             catch e
                 e isa QualifiedReferenceError || rethrow()
-                push!(errors, StructuralError(
-                    epath,
-                    "Variable \"$name\" referenced in connector equation expression does not resolve",
-                    ERROR_CODES.UNRESOLVED_SCOPED_REF,
-                    Dict{String,Any}("variable" => name)
-                ))
+                push!(
+                    errors, StructuralError(
+                        epath,
+                        "Variable \"$name\" referenced in connector equation expression does not resolve",
+                        ERROR_CODES.UNRESOLVED_SCOPED_REF,
+                        Dict{String, Any}("variable" => name)
+                    )
+                )
             end
         end
     end
@@ -3014,16 +3257,18 @@ with the import-time check in `coupling_imports.jl`, so the two cannot drift.
 """
 function _check_coupling_role_references(file::EsmFile, coupling_entry::CouplingEntry, path::String)::Vector{StructuralError}
     errors = StructuralError[]
-    roles = file.coupling_roles === nothing ? Dict{String,Any}() : file.coupling_roles
+    roles = file.coupling_roles === nothing ? Dict{String, Any}() : file.coupling_roles
     segments = _collect_role_segments(serialize_coupling_entry(coupling_entry))
     for role in sort!(collect(Iterators.filter(s -> !haskey(roles, s), segments)))
-        push!(errors, StructuralError(
-            path,
-            "edge references '$role', which is not a declared role " *
-            "(esm-spec §10.9: a coupling library's refs name a role in `coupling_roles`)",
-            ERROR_CODES.COUPLING_EDGE_UNKNOWN_ROLE,
-            Dict{String,Any}("role" => role, "expected_in" => "coupling_roles")
-        ))
+        push!(
+            errors, StructuralError(
+                path,
+                "edge references '$role', which is not a declared role " *
+                    "(esm-spec §10.9: a coupling library's refs name a role in `coupling_roles`)",
+                ERROR_CODES.COUPLING_EDGE_UNKNOWN_ROLE,
+                Dict{String, Any}("role" => role, "expected_in" => "coupling_roles")
+            )
+        )
     end
     return errors
 end
@@ -3052,12 +3297,14 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
         # not the individual `/systems/j` element (TS emits the same).
         for system_name in coupling_entry.systems
             if !system_exists_in_file(file, system_name)
-                push!(errors, StructuralError(
-                    "$path/systems",
-                    "System '$system_name' referenced in operator_compose coupling not found",
-                    ERROR_CODES.UNDEFINED_SYSTEM,
-                    Dict{String,Any}("system" => system_name)
-                ))
+                push!(
+                    errors, StructuralError(
+                        "$path/systems",
+                        "System '$system_name' referenced in operator_compose coupling not found",
+                        ERROR_CODES.UNDEFINED_SYSTEM,
+                        Dict{String, Any}("system" => system_name)
+                    )
+                )
             end
         end
 
@@ -3065,12 +3312,14 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
         # Validate that all referenced systems exist
         for system_name in coupling_entry.systems
             if !system_exists_in_file(file, system_name)
-                push!(errors, StructuralError(
-                    "$path/systems",
-                    "System '$system_name' referenced in couple coupling not found",
-                    ERROR_CODES.UNDEFINED_SYSTEM,
-                    Dict{String,Any}("system" => system_name)
-                ))
+                push!(
+                    errors, StructuralError(
+                        "$path/systems",
+                        "System '$system_name' referenced in couple coupling not found",
+                        ERROR_CODES.UNDEFINED_SYSTEM,
+                        Dict{String, Any}("system" => system_name)
+                    )
+                )
             end
         end
 
@@ -3085,29 +3334,37 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
     elseif isa(coupling_entry, CouplingVariableMap)
         # Validate 'from' reference
         if !validate_reference_syntax(coupling_entry.from)
-            push!(errors, StructuralError(
-                "$path/from",
-                "Invalid reference syntax: '$(coupling_entry.from)'",
-                ERROR_CODES.INVALID_REFERENCE_SYNTAX
-            ))
+            push!(
+                errors, StructuralError(
+                    "$path/from",
+                    "Invalid reference syntax: '$(coupling_entry.from)'",
+                    ERROR_CODES.INVALID_REFERENCE_SYNTAX
+                )
+            )
         else
             # A `variable_map` endpoint is a SCOPED reference (`System.var`); an
             # unresolvable one is `unresolved_scoped_ref` (§7.1), not the generic
             # `unresolved_reference` spelling.
-            _check_resolvable!(errors, file, coupling_entry.from, "$path/from",
-                               "Cannot resolve 'from' reference", ERROR_CODES.UNRESOLVED_SCOPED_REF)
+            _check_resolvable!(
+                errors, file, coupling_entry.from, "$path/from",
+                "Cannot resolve 'from' reference", ERROR_CODES.UNRESOLVED_SCOPED_REF
+            )
         end
 
         # Validate 'to' reference
         if !validate_reference_syntax(coupling_entry.to)
-            push!(errors, StructuralError(
-                "$path/to",
-                "Invalid reference syntax: '$(coupling_entry.to)'",
-                ERROR_CODES.INVALID_REFERENCE_SYNTAX
-            ))
+            push!(
+                errors, StructuralError(
+                    "$path/to",
+                    "Invalid reference syntax: '$(coupling_entry.to)'",
+                    ERROR_CODES.INVALID_REFERENCE_SYNTAX
+                )
+            )
         else
-            _check_resolvable!(errors, file, coupling_entry.to, "$path/to",
-                               "Cannot resolve 'to' reference", ERROR_CODES.UNRESOLVED_SCOPED_REF)
+            _check_resolvable!(
+                errors, file, coupling_entry.to, "$path/to",
+                "Cannot resolve 'to' reference", ERROR_CODES.UNRESOLVED_SCOPED_REF
+            )
         end
 
         # `transform` may be an EXPRESSION rather than one of the named string
@@ -3115,55 +3372,68 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
         # cross-system references, so they are fully qualified (§4.6) and are
         # resolved by the qualified-reference resolver, not against a model scope.
         if isa(coupling_entry.transform, ASTExpr)
-            append!(errors, validate_expression_references(
-                file, coupling_entry.transform, "$path/transform"))
+            append!(
+                errors, validate_expression_references(
+                    file, coupling_entry.transform, "$path/transform"
+                )
+            )
             for name in _referenced_var_names(coupling_entry.transform)
                 occursin('.', name) || continue
-                _check_resolvable!(errors, file, name, "$path/transform",
-                                   "Cannot resolve reference", ERROR_CODES.UNRESOLVED_SCOPED_REF)
+                _check_resolvable!(
+                    errors, file, name, "$path/transform",
+                    "Cannot resolve reference", ERROR_CODES.UNRESOLVED_SCOPED_REF
+                )
             end
         end
 
     elseif isa(coupling_entry, CouplingOperatorApply)
         # The top-level `operators` block was removed in esm-spec v0.3.0 (§9
         # closure), so the referenced operator can never resolve — flag it.
-        push!(errors, StructuralError(
-            "$path/operator",
-            "Operator '$(coupling_entry.operator)' referenced in operator_apply coupling not found",
-            ERROR_CODES.UNDEFINED_OPERATOR
-        ))
+        push!(
+            errors, StructuralError(
+                "$path/operator",
+                "Operator '$(coupling_entry.operator)' referenced in operator_apply coupling not found",
+                ERROR_CODES.UNDEFINED_OPERATOR
+            )
+        )
 
     elseif isa(coupling_entry, CouplingCallback)
         # Basic validation - callback_id should be a non-empty string
         if isempty(coupling_entry.callback_id)
-            push!(errors, StructuralError(
-                "$path/callback_id",
-                "Callback ID cannot be empty",
-                ERROR_CODES.EMPTY_CALLBACK_ID
-            ))
+            push!(
+                errors, StructuralError(
+                    "$path/callback_id",
+                    "Callback ID cannot be empty",
+                    ERROR_CODES.EMPTY_CALLBACK_ID
+                )
+            )
         end
 
     elseif isa(coupling_entry, CouplingEvent)
         # Validate affect equations
         for (i, affect) in enumerate(coupling_entry.affects)
-            _check_resolvable!(errors, file, affect.lhs, "$path/affects/$(i-1)/lhs",
-                               "Cannot resolve affect target", "unresolved_affect_target")
-            append!(errors, validate_expression_references(file, affect.rhs, "$path/affects/$(i-1)/rhs"))
+            _check_resolvable!(
+                errors, file, affect.lhs, "$path/affects/$(i - 1)/lhs",
+                "Cannot resolve affect target", "unresolved_affect_target"
+            )
+            append!(errors, validate_expression_references(file, affect.rhs, "$path/affects/$(i - 1)/rhs"))
         end
 
         # Validate negative affect equations if present
         if coupling_entry.affect_neg !== nothing
             for (i, affect) in enumerate(coupling_entry.affect_neg)
-                _check_resolvable!(errors, file, affect.lhs, "$path/affect_neg/$(i-1)/lhs",
-                                   "Cannot resolve negative affect target", "unresolved_affect_target")
-                append!(errors, validate_expression_references(file, affect.rhs, "$path/affect_neg/$(i-1)/rhs"))
+                _check_resolvable!(
+                    errors, file, affect.lhs, "$path/affect_neg/$(i - 1)/lhs",
+                    "Cannot resolve negative affect target", "unresolved_affect_target"
+                )
+                append!(errors, validate_expression_references(file, affect.rhs, "$path/affect_neg/$(i - 1)/rhs"))
             end
         end
 
         # Validate condition expressions if present (for continuous events)
         if coupling_entry.conditions !== nothing
             for (i, condition) in enumerate(coupling_entry.conditions)
-                append!(errors, validate_expression_references(file, condition, "$path/conditions/$(i-1)"))
+                append!(errors, validate_expression_references(file, condition, "$path/conditions/$(i - 1)"))
             end
         end
 
@@ -3190,19 +3460,21 @@ finding (h)). It stays optional (`nothing`) only for the coupling-level event
 call sites, whose names are fully-qualified cross-system references resolved by
 the qualified-reference resolver rather than against any one model's scope.
 """
-function validate_event_references(file::EsmFile, event::EventType, path::String;
-                                   scope::Union{Set{String},Nothing}=nothing)::Vector{StructuralError}
+function validate_event_references(
+        file::EsmFile, event::EventType, path::String;
+        scope::Union{Set{String}, Nothing} = nothing
+    )::Vector{StructuralError}
     errors = StructuralError[]
 
     if isa(event, ContinuousEvent)
         # Validate condition expressions
         for (i, condition) in enumerate(event.conditions)
-            append!(errors, validate_expression_references(file, condition, "$path/conditions/$(i-1)"; scope=scope))
+            append!(errors, validate_expression_references(file, condition, "$path/conditions/$(i - 1)"; scope = scope))
         end
 
         # Validate affect references
         for (i, affect) in enumerate(event.affects)
-            append!(errors, validate_expression_references(file, affect.rhs, "$path/affects/$(i-1)/rhs"; scope=scope))
+            append!(errors, validate_expression_references(file, affect.rhs, "$path/affects/$(i - 1)/rhs"; scope = scope))
             # affect.lhs is a string (variable name) - would need model context to validate
         end
 
@@ -3211,13 +3483,13 @@ function validate_event_references(file::EsmFile, event::EventType, path::String
         # affect is pinned at `.../affects/i/rhs` (the cross-binding contract
         # §7.1.3(h); TS emits the same).
         for (i, affect) in enumerate(event.affects)
-            append!(errors, validate_expression_references(file, affect.rhs, "$path/affects/$(i-1)/rhs"; scope=scope))
+            append!(errors, validate_expression_references(file, affect.rhs, "$path/affects/$(i - 1)/rhs"; scope = scope))
             # affect.lhs is a string (variable name) - would need model context to validate
         end
 
         # Validate trigger references (if condition-based)
         if isa(event.trigger, ConditionTrigger)
-            append!(errors, validate_expression_references(file, event.trigger.expression, "$path/trigger/expression"; scope=scope))
+            append!(errors, validate_expression_references(file, event.trigger.expression, "$path/trigger/expression"; scope = scope))
         end
     end
 
@@ -3230,8 +3502,10 @@ end
 Validate reaction system consistency: species declared, positive stoichiometries,
 no null-null reactions, rate references declared.
 """
-function validate_reaction_consistency(rs::ReactionSystem, path::String;
-                                       indep::AbstractString="t")::Vector{StructuralError}
+function validate_reaction_consistency(
+        rs::ReactionSystem, path::String;
+        indep::AbstractString = "t"
+    )::Vector{StructuralError}
     errors = StructuralError[]
 
     # Get set of declared species / parameters
@@ -3240,7 +3514,7 @@ function validate_reaction_consistency(rs::ReactionSystem, path::String;
 
     # Validate each reaction
     for (i, reaction) in enumerate(rs.reactions)
-        reaction_path = "$path/reactions/$(i-1)"
+        reaction_path = "$path/reactions/$(i - 1)"
 
         # Check substrates (reactants) are declared species (ordered
         # StoichiometryEntry vector, not the backward-compat Dict view). An
@@ -3250,21 +3524,25 @@ function validate_reaction_consistency(rs::ReactionSystem, path::String;
         if substrates_field !== nothing
             for (j, entry) in enumerate(substrates_field)
                 if entry.species ∉ species_names
-                    push!(errors, StructuralError(
-                        "$reaction_path/substrates/$(j-1)/species",
-                        "Species '$(entry.species)' not declared",
-                        ERROR_CODES.UNDEFINED_SPECIES,
-                        Dict{String,Any}("species" => entry.species)
-                    ))
+                    push!(
+                        errors, StructuralError(
+                            "$reaction_path/substrates/$(j - 1)/species",
+                            "Species '$(entry.species)' not declared",
+                            ERROR_CODES.UNDEFINED_SPECIES,
+                            Dict{String, Any}("species" => entry.species)
+                        )
+                    )
                 end
 
                 # Check positive stoichiometry
                 if entry.stoichiometry <= 0
-                    push!(errors, StructuralError(
-                        "$reaction_path/substrates/$(j-1)/species",
-                        "Species '$(entry.species)' has non-positive stoichiometry $(entry.stoichiometry)",
-                        ERROR_CODES.INVALID_STOICHIOMETRY
-                    ))
+                    push!(
+                        errors, StructuralError(
+                            "$reaction_path/substrates/$(j - 1)/species",
+                            "Species '$(entry.species)' has non-positive stoichiometry $(entry.stoichiometry)",
+                            ERROR_CODES.INVALID_STOICHIOMETRY
+                        )
+                    )
                 end
             end
         end
@@ -3275,21 +3553,25 @@ function validate_reaction_consistency(rs::ReactionSystem, path::String;
         if products_field !== nothing
             for (j, entry) in enumerate(products_field)
                 if entry.species ∉ species_names
-                    push!(errors, StructuralError(
-                        "$reaction_path/products/$(j-1)/species",
-                        "Species '$(entry.species)' not declared",
-                        ERROR_CODES.UNDEFINED_SPECIES,
-                        Dict{String,Any}("species" => entry.species)
-                    ))
+                    push!(
+                        errors, StructuralError(
+                            "$reaction_path/products/$(j - 1)/species",
+                            "Species '$(entry.species)' not declared",
+                            ERROR_CODES.UNDEFINED_SPECIES,
+                            Dict{String, Any}("species" => entry.species)
+                        )
+                    )
                 end
 
                 # Check positive stoichiometry
                 if entry.stoichiometry <= 0
-                    push!(errors, StructuralError(
-                        "$reaction_path/products/$(j-1)/species",
-                        "Species '$(entry.species)' has non-positive stoichiometry $(entry.stoichiometry)",
-                        ERROR_CODES.INVALID_STOICHIOMETRY
-                    ))
+                    push!(
+                        errors, StructuralError(
+                            "$reaction_path/products/$(j - 1)/species",
+                            "Species '$(entry.species)' has non-positive stoichiometry $(entry.stoichiometry)",
+                            ERROR_CODES.INVALID_STOICHIOMETRY
+                        )
+                    )
                 end
             end
         end
@@ -3298,11 +3580,13 @@ function validate_reaction_consistency(rs::ReactionSystem, path::String;
         has_substrates = substrates_field !== nothing && !isempty(substrates_field)
         has_products = products_field !== nothing && !isempty(products_field)
         if !has_substrates && !has_products
-            push!(errors, StructuralError(
-                reaction_path,
-                "Reaction has no reactants or products (null-null reaction)",
-                ERROR_CODES.NULL_REACTION
-            ))
+            push!(
+                errors, StructuralError(
+                    reaction_path,
+                    "Reaction has no reactants or products (null-null reaction)",
+                    ERROR_CODES.NULL_REACTION
+                )
+            )
         end
 
         # Rate expression references. A DOTTED name (`Meteo.T`) is a qualified
@@ -3319,19 +3603,25 @@ function validate_reaction_consistency(rs::ReactionSystem, path::String;
             occursin('.', name) && continue
             (name == indep || name in _BUILTIN_FUNCTION_NAMES) && continue
             (name in species_names || name in param_names) && continue
-            push!(errors, StructuralError(
-                "$reaction_path/rate",
-                "Parameter '$name' referenced in rate expression is not declared",
-                ERROR_CODES.UNDEFINED_PARAMETER,
-                Dict{String,Any}("variable" => name)
-            ))
+            push!(
+                errors, StructuralError(
+                    "$reaction_path/rate",
+                    "Parameter '$name' referenced in rate expression is not declared",
+                    ERROR_CODES.UNDEFINED_PARAMETER,
+                    Dict{String, Any}("variable" => name)
+                )
+            )
         end
     end
 
     # Recursively check subsystems
     for (subsys_name, subsys) in rs.subsystems
-        append!(errors, validate_reaction_consistency(subsys, "$path/subsystems/$subsys_name";
-                                                      indep=indep))
+        append!(
+            errors, validate_reaction_consistency(
+                subsys, "$path/subsystems/$subsys_name";
+                indep = indep
+            )
+        )
     end
 
     return errors
@@ -3353,9 +3643,11 @@ declares, with the precedence [`model_unit_findings`](@ref) uses: the system's
 own names, then paths relative to its own subsystems, then the top-level
 components of `file` (or the prebuilt `toplevel` map).
 """
-function validate_reaction_rate_units(rs::ReactionSystem, path::String;
-                                      file=nothing,
-                                      toplevel=nothing)::Vector{StructuralError}
+function validate_reaction_rate_units(
+        rs::ReactionSystem, path::String;
+        file = nothing,
+        toplevel = nothing
+    )::Vector{StructuralError}
     errors = StructuralError[]
     toplevel === nothing && (toplevel = _toplevel_scoped_units(file))
     scoped = _UnitEnv(Dict{String, String}(), _relative_scoped_units(rs), toplevel)
@@ -3382,8 +3674,10 @@ function validate_reaction_rate_units(rs::ReactionSystem, path::String;
         # literals, which defeats literal dimensional analysis.
         isa(reaction.rate, VarExpr) || continue
         rate_name = reaction.rate.name
-        rate_units_str = get(param_units, rate_name,
-                             get(species_units, rate_name, get(scoped, rate_name, nothing)))
+        rate_units_str = get(
+            param_units, rate_name,
+            get(species_units, rate_name, get(scoped, rate_name, nothing))
+        )
         rate_units_str === nothing && continue
         rate_dim = parse_units(rate_units_str)
         rate_dim === nothing && continue
@@ -3403,8 +3697,10 @@ function validate_reaction_rate_units(rs::ReactionSystem, path::String;
         total_order = 0.0
         fractional_substrate = false
         for substrate in substrates_field
-            sp_units_str = get(species_units, substrate.species,
-                               get(scoped, substrate.species, nothing))
+            sp_units_str = get(
+                species_units, substrate.species,
+                get(scoped, substrate.species, nothing)
+            )
             if sp_units_str === nothing
                 resolvable = false
                 break
@@ -3436,20 +3732,26 @@ function validate_reaction_rate_units(rs::ReactionSystem, path::String;
             first_sp = substrates_field[1].species
             first_sp_units = get(species_units, first_sp, get(scoped, first_sp, ""))
             order_str = isinteger(total_order) ? string(Int(total_order)) : string(total_order)
-            push!(errors, StructuralError(
-                "$path/reactions/$(i-1)",
-                "Reaction $(reaction.id) rate '$rate_name' units '$rate_units_str' " *
-                "incompatible with order-$order_str reaction for species units " *
-                "'$first_sp_units' (expected rate*substrates to have dimensions of species/time)",
-                ERROR_CODES.UNIT_INCONSISTENCY,
-            ))
+            push!(
+                errors, StructuralError(
+                    "$path/reactions/$(i - 1)",
+                    "Reaction $(reaction.id) rate '$rate_name' units '$rate_units_str' " *
+                        "incompatible with order-$order_str reaction for species units " *
+                        "'$first_sp_units' (expected rate*substrates to have dimensions of species/time)",
+                    ERROR_CODES.UNIT_INCONSISTENCY,
+                )
+            )
         end
     end
 
     # Recurse into subsystems
     for (subsys_name, subsys) in rs.subsystems
-        append!(errors, validate_reaction_rate_units(subsys, "$path/subsystems/$subsys_name";
-                                                     toplevel=toplevel))
+        append!(
+            errors, validate_reaction_rate_units(
+                subsys, "$path/subsystems/$subsys_name";
+                toplevel = toplevel
+            )
+        )
     end
 
     return errors
@@ -3517,29 +3819,43 @@ Validate event consistency: continuous conditions are expressions,
 discrete conditions produce booleans, affect variables declared,
 functional affect refs valid.
 """
-function validate_event_consistency(model::Model, path::String;
-                                    is_coupled::Bool=false)::Vector{StructuralError}
+function validate_event_consistency(
+        model::Model, path::String;
+        is_coupled::Bool = false
+    )::Vector{StructuralError}
     errors = StructuralError[]
 
     # Validate discrete events
     for (i, event) in enumerate(model.discrete_events)
-        event_path = "$path/discrete_events/$(i-1)"
-        append!(errors, validate_single_event_consistency(model, event, event_path;
-                                                          is_coupled=is_coupled))
+        event_path = "$path/discrete_events/$(i - 1)"
+        append!(
+            errors, validate_single_event_consistency(
+                model, event, event_path;
+                is_coupled = is_coupled
+            )
+        )
     end
 
     # Validate continuous events
     for (i, event) in enumerate(model.continuous_events)
-        event_path = "$path/continuous_events/$(i-1)"
-        append!(errors, validate_single_event_consistency(model, event, event_path;
-                                                          is_coupled=is_coupled))
+        event_path = "$path/continuous_events/$(i - 1)"
+        append!(
+            errors, validate_single_event_consistency(
+                model, event, event_path;
+                is_coupled = is_coupled
+            )
+        )
     end
 
     # Recursively check subsystems. A subsystem of a coupled model is composed
     # along with its parent, so it inherits the exemption.
     for (subsys_name, subsys) in model_subsystems(model)
-        append!(errors, validate_event_consistency(subsys, "$path/subsystems/$subsys_name";
-                                                   is_coupled=is_coupled))
+        append!(
+            errors, validate_event_consistency(
+                subsys, "$path/subsystems/$subsys_name";
+                is_coupled = is_coupled
+            )
+        )
     end
 
     return errors
@@ -3563,8 +3879,10 @@ const _OPERATOR_PLACEHOLDER_VAR = "_var"
 _is_declared_event_target(model::Model, name::AbstractString, is_coupled::Bool)::Bool =
     haskey(model.variables, name) || (is_coupled && name == _OPERATOR_PLACEHOLDER_VAR)
 
-function validate_single_event_consistency(model::Model, event::EventType, event_path::String;
-                                           is_coupled::Bool=false)::Vector{StructuralError}
+function validate_single_event_consistency(
+        model::Model, event::EventType, event_path::String;
+        is_coupled::Bool = false
+    )::Vector{StructuralError}
     errors = StructuralError[]
 
     if isa(event, ContinuousEvent)
@@ -3575,12 +3893,14 @@ function validate_single_event_consistency(model::Model, event::EventType, event
         # `event_var_undeclared` at the affect's `lhs` field (§7.1 / §7.1.3(h)).
         for (j, affect) in enumerate(event.affects)
             _is_declared_event_target(model, affect.lhs, is_coupled) && continue
-            push!(errors, StructuralError(
-                "$event_path/affects/$(j-1)/lhs",
-                "Variable '$(affect.lhs)' in event affects is not declared",
-                ERROR_CODES.EVENT_VAR_UNDECLARED,
-                Dict{String,Any}("variable" => affect.lhs)
-            ))
+            push!(
+                errors, StructuralError(
+                    "$event_path/affects/$(j - 1)/lhs",
+                    "Variable '$(affect.lhs)' in event affects is not declared",
+                    ERROR_CODES.EVENT_VAR_UNDECLARED,
+                    Dict{String, Any}("variable" => affect.lhs)
+                )
+            )
         end
         _check_event_affects_unknowns!(errors, model, event, event_path, "continuous")
 
@@ -3595,12 +3915,14 @@ function validate_single_event_consistency(model::Model, event::EventType, event
         # `event_var_undeclared` at the affect's `lhs` field.
         for (j, affect) in enumerate(event.affects)
             _is_declared_event_target(model, affect.lhs, is_coupled) && continue
-            push!(errors, StructuralError(
-                "$event_path/affects/$(j-1)/lhs",
-                "Variable '$(affect.lhs)' in event affects is not declared",
-                ERROR_CODES.EVENT_VAR_UNDECLARED,
-                Dict{String,Any}("variable" => affect.lhs)
-            ))
+            push!(
+                errors, StructuralError(
+                    "$event_path/affects/$(j - 1)/lhs",
+                    "Variable '$(affect.lhs)' in event affects is not declared",
+                    ERROR_CODES.EVENT_VAR_UNDECLARED,
+                    Dict{String, Any}("variable" => affect.lhs)
+                )
+            )
         end
         _check_event_affects_unknowns!(errors, model, event, event_path, "discrete")
 
@@ -3642,7 +3964,7 @@ function _lhs_variable(model::Model, name::String, root_name::String, root::Mode
         cur = cur0
         cur === nothing && continue
         ok = true
-        for p in parts[start:end-1]
+        for p in parts[start:(end - 1)]
             sub = get(cur.subsystems, String(p), nothing)
             if sub isa Model
                 cur = sub
@@ -3659,8 +3981,10 @@ end
 
 # Free string subscripts of `index` nodes in `e`: not bound by an enclosing faq
 # (or by `bound`), and naming no declared variable or metaparameter.
-function _free_lhs_index_symbols!(out::Vector{String}, e, bound::Set{String},
-                                  names::Set{String})
+function _free_lhs_index_symbols!(
+        out::Vector{String}, e, bound::Set{String},
+        names::Set{String}
+    )
     e isa OpExpr || return out
     o = e::OpExpr
     if _is_faq_op(o.op)
@@ -3697,24 +4021,30 @@ index symbol on it must be bound by a faq on that side or, for the bare-index
 definition, by the right side's faq `output_idx` (`unbound_index_symbol`).
 Recurses into inline subsystems.
 """
-function _check_equation_lhs_names!(errors::Vector{StructuralError}, model::Model,
-                                    path::String, root_name::String, root::Model,
-                                    meta::Set{String})
+function _check_equation_lhs_names!(
+        errors::Vector{StructuralError}, model::Model,
+        path::String, root_name::String, root::Model,
+        meta::Set{String}
+    )
     names = Set{String}(keys(model.variables))
     union!(names, meta)
     for (k, eq) in enumerate(model.equations)
         lhs = eq.lhs
         (lhs isa OpExpr && (lhs::OpExpr).op == "ic") && continue
-        lpath = "$path/equations/$(k-1)/lhs"
+        lpath = "$path/equations/$(k - 1)/lhs"
         dn = _lhs_defined_name(lhs)
         if dn !== nothing
             v = _lhs_variable(model, dn, root_name, root)
             if v !== nothing && v.type == ParameterVariable
-                push!(errors, StructuralError(lpath,
-                    "Equation $(k-1) defines '$(dn)', which is a parameter; an " *
-                    "equation defines unknowns only",
-                    ERROR_CODES.EQUATION_DEFINES_PARAMETER,
-                    Dict{String,Any}("variable" => dn)))
+                push!(
+                    errors, StructuralError(
+                        lpath,
+                        "Equation $(k - 1) defines '$(dn)', which is a parameter; an " *
+                            "equation defines unknowns only",
+                        ERROR_CODES.EQUATION_DEFINES_PARAMETER,
+                        Dict{String, Any}("variable" => dn)
+                    )
+                )
             end
         end
         rhs = eq.rhs
@@ -3724,11 +4054,15 @@ function _check_equation_lhs_names!(errors::Vector{StructuralError}, model::Mode
         end
         free = unique!(_free_lhs_index_symbols!(String[], lhs, rb, names))
         for sym in free
-            push!(errors, StructuralError(lpath,
-                "Equation $(k-1)" * (dn === nothing ? "" : " (defining '$(dn)')") *
-                " subscripts its left-hand side with '$(sym)', which no faq binds",
-                ERROR_CODES.UNBOUND_INDEX_SYMBOL,
-                Dict{String,Any}("symbol" => sym)))
+            push!(
+                errors, StructuralError(
+                    lpath,
+                    "Equation $(k - 1)" * (dn === nothing ? "" : " (defining '$(dn)')") *
+                        " subscripts its left-hand side with '$(sym)', which no faq binds",
+                    ERROR_CODES.UNBOUND_INDEX_SYMBOL,
+                    Dict{String, Any}("symbol" => sym)
+                )
+            )
         end
     end
     for (sname, sub) in model.subsystems
@@ -3752,36 +4086,42 @@ the diagnostic tells the author what to write instead of only what is wrong: a
 periodic/preset-times trigger becomes a `schedule`, a boolean condition becomes
 a `condition`, and a continuous event's zero crossing becomes a `crossing`.
 """
-function _check_event_affects_unknowns!(errors::Vector{StructuralError},
-                                        model::Model, event, event_path::String,
-                                        event_kind::String)
+function _check_event_affects_unknowns!(
+        errors::Vector{StructuralError},
+        model::Model, event, event_path::String,
+        event_kind::String
+    )
     affects = event.affects
     for (j, affect) in enumerate(affects)
         var = get(model.variables, affect.lhs, nothing)
         (var !== nothing && var.type == ParameterVariable) || continue
-        details = Dict{String,Any}(
+        details = Dict{String, Any}(
             "variable" => affect.lhs,
             "variable_type" => "parameter",
             "event_type" => event_kind,
-            "remedy" => _event_affect_remedy(event, affect.lhs))
+            "remedy" => _event_affect_remedy(event, affect.lhs)
+        )
         ename = _event_name(event)
         ename === nothing || (details["event_name"] = ename)
         tkind = _event_trigger_kind(event)
         tkind === nothing || (details["trigger_type"] = tkind)
         subject = ename === nothing ? "Event" : "Event '$(ename)'"
-        push!(errors, StructuralError(
-            "$event_path/affects/$(j-1)",
-            "$(subject) affects '$(affect.lhs)', which is a parameter; " *
-            "an event may affect unknowns only",
-            ERROR_CODES.EVENT_AFFECTS_PARAMETER,
-            details))
+        push!(
+            errors, StructuralError(
+                "$event_path/affects/$(j - 1)",
+                "$(subject) affects '$(affect.lhs)', which is a parameter; " *
+                    "an event may affect unknowns only",
+                ERROR_CODES.EVENT_AFFECTS_PARAMETER,
+                details
+            )
+        )
     end
     return errors
 end
 
-_event_name(event)::Union{String,Nothing} = event.name
+_event_name(event)::Union{String, Nothing} = event.name
 
-function _event_trigger_kind(event)::Union{String,Nothing}
+function _event_trigger_kind(event)::Union{String, Nothing}
     isa(event, DiscreteEvent) || return nothing
     t = event.trigger
     t isa PeriodicTrigger && return "periodic"
@@ -3797,17 +4137,17 @@ function _event_affect_remedy(event, name::AbstractString)::String
         t = event.trigger
         if t isa PeriodicTrigger
             return "declare the change as update: {kind: \"schedule\", " *
-                   "interval: $(t.period)} on '$(name)' (esm-spec 5.4)"
+                "interval: $(t.period)} on '$(name)' (esm-spec 5.4)"
         elseif t isa PresetTimesTrigger
             return "declare the change as update: {kind: \"schedule\", times: " *
-                   "$(t.times)} on '$(name)' (esm-spec 5.4)"
+                "$(t.times)} on '$(name)' (esm-spec 5.4)"
         elseif t isa ConditionTrigger
             return "declare the change as update: {kind: \"condition\", when: …} " *
-                   "on '$(name)' (esm-spec 5.4)"
+                "on '$(name)' (esm-spec 5.4)"
         end
     elseif isa(event, ContinuousEvent)
         return "declare the change as update: {kind: \"crossing\", when: …} " *
-               "on '$(name)' (esm-spec 5.4)"
+            "on '$(name)' (esm-spec 5.4)"
     end
     return "declare the change as the parameter's own update (esm-spec 5.4)"
 end
@@ -3894,13 +4234,15 @@ function validate_physical_constant_units(model::Model, path::String)::Vector{St
         end
         target = usage_name === nothing ? constant_name : usage_name
 
-        push!(errors, StructuralError(
-            "$path/variables/$target",
-            "Physical constant used with incorrect dimensional analysis " *
-            "(constant '$constant_name' ($description) declared with units '$declared_str', " *
-            "expected dimensions compatible with '$canonical')",
-            ERROR_CODES.UNIT_INCONSISTENCY,
-        ))
+        push!(
+            errors, StructuralError(
+                "$path/variables/$target",
+                "Physical constant used with incorrect dimensional analysis " *
+                    "(constant '$constant_name' ($description) declared with units '$declared_str', " *
+                    "expected dimensions compatible with '$canonical')",
+                ERROR_CODES.UNIT_INCONSISTENCY,
+            )
+        )
     end
 
     # Recurse into subsystems
@@ -3915,7 +4257,7 @@ end
 # `nothing` when the conversion is affine (e.g., degC → K) or the units can't
 # be parsed/converted. A conversion is linear iff 0 `from_units` converts to
 # 0 `to_units` (within tolerance).
-function _linear_conversion_factor(from_units::String, to_units::String)::Union{Float64,Nothing}
+function _linear_conversion_factor(from_units::String, to_units::String)::Union{Float64, Nothing}
     from_unit = parse_units(from_units)
     to_unit = parse_units(to_units)
     (from_unit === nothing || to_unit === nothing) && return nothing
@@ -3923,7 +4265,7 @@ function _linear_conversion_factor(from_units::String, to_units::String)::Union{
     try
         q0 = Unitful.ustrip(Unitful.uconvert(to_unit, 0.0 * from_unit))
         q1 = Unitful.ustrip(Unitful.uconvert(to_unit, 1.0 * from_unit))
-        abs(q0) > 1e-12 && return nothing  # affine
+        abs(q0) > 1.0e-12 && return nothing  # affine
         # Identical exact scales imply no conversion, so the coefficient is free;
         # otherwise the expected factor is formed EXACTLY and rounded once, so the
         # caller's tolerance only absorbs the literal's spelling (esm-spec §4.8.1).
@@ -3979,15 +4321,17 @@ function validate_conversion_factor_consistency(model::Model, path::String)::Vec
 
         factor = _linear_conversion_factor(String(src_units), String(lhs_units))
         (factor === nothing || factor == 0) && continue
-        abs(numeric - factor) <= 1e-9 * max(abs(factor), 1.0) && continue
+        abs(numeric - factor) <= 1.0e-9 * max(abs(factor), 1.0) && continue
 
-        push!(errors, StructuralError(
-            "$path/variables/$vname",
-            "Unit conversion factor is incorrect for specified unit transformation " *
-            "(variable '$vname', declared_units='$lhs_units', source_units='$src_units', " *
-            "declared_factor=$numeric, expected_factor=$factor)",
-            ERROR_CODES.UNIT_INCONSISTENCY,
-        ))
+        push!(
+            errors, StructuralError(
+                "$path/variables/$vname",
+                "Unit conversion factor is incorrect for specified unit transformation " *
+                    "(variable '$vname', declared_units='$lhs_units', source_units='$src_units', " *
+                    "declared_factor=$numeric, expected_factor=$factor)",
+                ERROR_CODES.UNIT_INCONSISTENCY,
+            )
+        )
     end
 
     # Recurse into subsystems

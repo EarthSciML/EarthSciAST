@@ -40,8 +40,10 @@ import OrdinaryDiffEqTsit5
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
-const _RTD_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-                          "rhs_time_derivative")
+const _RTD_DIR = joinpath(
+    TESTUTILS_REPO_ROOT, "tests", "conformance",
+    "rhs_time_derivative"
+)
 
 "Every structural `D` (`wrt` absent or `\"t\"`) reachable from `e`."
 function _structural_ds(e)
@@ -61,9 +63,11 @@ end
 
 "The right-hand side of the `name ~ …` equation of `flat`, or `nothing`."
 function _rhs_of(flat, name)
-    idx = findfirst(eq -> eq.lhs isa EarthSciAST.VarExpr &&
-                          (eq.lhs::EarthSciAST.VarExpr).name == name,
-                    flat.equations)
+    idx = findfirst(
+        eq -> eq.lhs isa EarthSciAST.VarExpr &&
+            (eq.lhs::EarthSciAST.VarExpr).name == name,
+        flat.equations
+    )
     return idx === nothing ? nothing : flat.equations[idx].rhs
 end
 
@@ -156,8 +160,10 @@ end
         # The closed set stops at `+ - neg * /`. `^` needs the power RULE, and a
         # self-referential tendency would substitute into itself without end —
         # so both survive untouched, for the `unlowered_operator` gate to refuse.
-        for (file, lhs) in (("d_of_unsupported.esm", "M.dsq"),
-                            ("d_of_cycle.esm",       "M.dx"))
+        for (file, lhs) in (
+                ("d_of_unsupported.esm", "M.dsq"),
+                ("d_of_cycle.esm", "M.dx"),
+            )
             f = EarthSciAST.flatten(load_path(joinpath(_RTD_DIR, "fixtures", file)))
             rhs = _rhs_of(f, lhs)
             @test rhs !== nothing
@@ -182,12 +188,14 @@ end
         # one shape this runner CAN read: `l` is a STATE. Its tendency names
         # `D(b)/dt`, so without step 3c the derivative never resolves and `l`
         # stays at its initial 1.0 instead of reaching 1 + 3*sla*growth = 31.
-        results = run_inline_tests(path; model_name="M",
-                                alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                reltol=1e-12, abstol=1e-14)
+        results = run_inline_tests(
+            path; model_name = "M",
+            alg = OrdinaryDiffEqTsit5.Tsit5(),
+            reltol = 1.0e-12, abstol = 1.0e-14
+        )
         row = only(r for r in results if r.variable == "l")
         @test row.actual !== nothing
-        @test row.actual !== nothing && isapprox(Float64(row.actual), 31.0; rtol=1e-8)
+        @test row.actual !== nothing && isapprox(Float64(row.actual), 31.0; rtol = 1.0e-8)
         @test row.passed
     end
 end
@@ -209,7 +217,7 @@ end
     # Both halves are present: dropping the refusal half would leave §4.2's
     # "in particular not 0" sentence ungated.
     @test Set(String(c.outcome) for fx in manifest.fixtures for c in fx.cases) ==
-          Set(["value", "refused"])
+        Set(["value", "refused"])
 
     # The manifest's `integrators.julia` block is the contract for HOW this
     # category is integrated here, exactly as `integrators.python` /
@@ -224,10 +232,12 @@ end
             # A category whose document one binding cannot even parse would be a
             # format divergence hiding behind a runner result.
             @test EarthSciAST.flatten(load_path(path)) !== nothing
-            results = run_inline_tests(path; model_name=String(fx.model),
-                                       alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                       reltol=Float64(integ.reltol),
-                                       abstol=Float64(integ.abstol))
+            results = run_inline_tests(
+                path; model_name = String(fx.model),
+                alg = OrdinaryDiffEqTsit5.Tsit5(),
+                reltol = Float64(integ.reltol),
+                abstol = Float64(integ.abstol)
+            )
             for c in fx.cases
                 rows = [r for r in results if r.variable == String(c.variable)]
                 @test length(rows) == 1
@@ -239,8 +249,10 @@ end
                     # wrong is caught too.
                     @test row.actual !== nothing
                     @test row.actual !== nothing &&
-                          isapprox(Float64(row.actual), Float64(c.expected);
-                                   rtol=1e-8, atol=1e-10)
+                        isapprox(
+                        Float64(row.actual), Float64(c.expected);
+                        rtol = 1.0e-8, atol = 1.0e-10
+                    )
                     @test row.passed == Bool(c.passed)
                 else
                     # REFUSED. No actual to record, and the cross-binding

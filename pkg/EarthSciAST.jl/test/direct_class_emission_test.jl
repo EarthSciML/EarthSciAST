@@ -46,16 +46,16 @@ const ESM = EarthSciAST
 
 # ---- fixtures ---------------------------------------------------------------
 
-const _DCE_AX  = [0.0, 1.0, 2.0, 3.0]
-const _DCE_TA  = [0.0, 10.0, 20.0, 30.0]
-const _DCE_TB  = [0.0, -100.0, -200.0, -300.0]
+const _DCE_AX = [0.0, 1.0, 2.0, 3.0]
+const _DCE_TA = [0.0, 10.0, 20.0, 30.0]
+const _DCE_TB = [0.0, -100.0, -200.0, -300.0]
 const _DCE_BAX = [0.0, 1.0, 2.0]
 const _DCE_BTA = Any[Any[1.0, 1.5, 2.0], Any[1.1, 1.6, 2.1], Any[1.2, 1.7, 2.2]]
 const _DCE_BTB = Any[Any[-9.0, 3.0, -1.0], Any[2.5, -4.0, 0.5], Any[-0.25, 8.0, -6.0]]
 const _DCE_SSA = [0.5, 1.5, 2.5, 3.5]
 const _DCE_SSB = [1.0, 2.0, 2.0, 3.0]     # duplicates: the fiddly boundary case
 
-_dce_constarr(v) = OpExpr("const", ESM.ASTExpr[]; value=v)
+_dce_constarr(v) = OpExpr("const", ESM.ASTExpr[]; value = v)
 # Contracted bound `i+2-i`: evaluates to 2 for every cell but is syntactically
 # expression-valued, so `_is_const_int_range` is false and the equation takes
 # the per-cell path (`:percell_acc`) with a 2-term `_NK_CONTRACTION` per cell.
@@ -66,33 +66,52 @@ _dce_khi() = _op("-", _op("+", _v("i"), _i(2)), _v("i"))
 # 1:N÷2, region 2 = the rest — each region's `vals` entry carries its OWN
 # interp table, the class-fragmentation source under content keying.
 function _dce_percell_model(vals::Vector{ESM.ASTExpr}, N::Int)
-    mk = OpExpr("makearray", ESM.ASTExpr[];
-        regions=[[[1, N ÷ 2]], [[N ÷ 2 + 1, N]]], values=vals)
-    lhs = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
-        expr_body=_Didx("u", _v("i")), ranges=Dict("i" => [1, N]))
-    rhs = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
-        expr_body=_op("*", _op("index", mk, _v("i")), _v("k")),
-        ranges=Dict("i" => [1, N], "k" => Any[_i(1), _dce_khi()]), reduce="+")
-    vars = Dict{String,ESM.ModelVariable}(
+    mk = OpExpr(
+        "makearray", ESM.ASTExpr[];
+        regions = [[[1, N ÷ 2]], [[N ÷ 2 + 1, N]]], values = vals
+    )
+    lhs = OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i"],
+        expr_body = _Didx("u", _v("i")), ranges = Dict("i" => [1, N])
+    )
+    rhs = OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i"],
+        expr_body = _op("*", _op("index", mk, _v("i")), _v("k")),
+        ranges = Dict("i" => [1, N], "k" => Any[_i(1), _dce_khi()]), reduce = "+"
+    )
+    vars = Dict{String, ESM.ModelVariable}(
         "u" => ESM.ModelVariable(ESM.UnknownVariable),
-        "g" => ESM.ModelVariable(ESM.ParameterVariable; default=3.0),
-        "h" => ESM.ModelVariable(ESM.ParameterVariable; default=7.0))
-    ESM.Model(vars, [ESM.Equation(lhs, rhs)])
+        "g" => ESM.ModelVariable(ESM.ParameterVariable; default = 3.0),
+        "h" => ESM.ModelVariable(ESM.ParameterVariable; default = 7.0)
+    )
+    return ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 end
 
-_dce_linear(tbl)  = _op("fn", _dce_constarr(tbl), _dce_constarr(_DCE_AX),
-                        _idx("u", _v("i")); name="interp.linear")
-_dce_bilin(tbl)   = _op("fn", _dce_constarr(tbl), _dce_constarr(_DCE_BAX),
-                        _dce_constarr(_DCE_BAX), _idx("u", _v("i")),
-                        _idx("u", _v("i")); name="interp.bilinear")
-_dce_search(xs)   = _op("fn", _idx("u", _v("i")), _dce_constarr(xs);
-                        name="interp.searchsorted")
-_dce_guarded(tbl) = _op("ifelse", _op(">", _idx("u", _v("i")), _n(1.0)),
-                        _dce_linear(tbl), _n(-1.0))
+_dce_linear(tbl) = _op(
+    "fn", _dce_constarr(tbl), _dce_constarr(_DCE_AX),
+    _idx("u", _v("i")); name = "interp.linear"
+)
+_dce_bilin(tbl) = _op(
+    "fn", _dce_constarr(tbl), _dce_constarr(_DCE_BAX),
+    _dce_constarr(_DCE_BAX), _idx("u", _v("i")),
+    _idx("u", _v("i")); name = "interp.bilinear"
+)
+_dce_search(xs) = _op(
+    "fn", _idx("u", _v("i")), _dce_constarr(xs);
+    name = "interp.searchsorted"
+)
+_dce_guarded(tbl) = _op(
+    "ifelse", _op(">", _idx("u", _v("i")), _n(1.0)),
+    _dce_linear(tbl), _n(-1.0)
+)
 # Loop-INVARIANT interp query (g/h): the invariant-tier fixture (§4 above).
-_dce_invq(tbl) = _op("*", _op("fn", _dce_constarr(tbl), _dce_constarr(_DCE_AX),
-                              _op("/", _v("g"), _v("h")); name="interp.linear"),
-                     _idx("u", _v("i")))
+_dce_invq(tbl) = _op(
+    "*", _op(
+        "fn", _dce_constarr(tbl), _dce_constarr(_DCE_AX),
+        _op("/", _v("g"), _v("h")); name = "interp.linear"
+    ),
+    _idx("u", _v("i"))
+)
 
 _dce_model(mk, N) = _dce_percell_model(ESM.ASTExpr[mk(1), mk(2)], N)
 _dce_linear_model(N) = _dce_model(r -> _dce_linear(r == 1 ? _DCE_TA : _DCE_TB), N)
@@ -115,13 +134,15 @@ _dce_probe(n, k) = Float64[1.0 + 0.9 * sin(1.3i + 0.7k) for i in 1:n]
 # The default build is `native`'s tier plan with `strict` off: a strict
 # `native` refuses the in-place per-cell build this file is about (it grows with
 # the array), so a non-strict plan is the one that still takes it.
-const _DCE_NATIVE = ESM._plan_with(ESM._compiler_plan(:native); strict=false)
-function _dce_build(model, ics; codegen::Bool=true, compiler=_DCE_NATIVE)
-    withenv("ESS_CODEGEN_NODE_BUDGET" => (codegen ? nothing : "0")) do
+const _DCE_NATIVE = ESM._plan_with(ESM._compiler_plan(:native); strict = false)
+function _dce_build(model, ics; codegen::Bool = true, compiler = _DCE_NATIVE)
+    return withenv("ESS_CODEGEN_NODE_BUDGET" => (codegen ? nothing : "0")) do
         ESM._reset_cascade_tally!()
-        f, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
-            initial_conditions=ics, compiler=compiler)
-        (f=f, u0=u0, p=p, vm=vm, diag=diag, tally=copy(ESM._CASCADE_TALLY))
+        f, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+            model;
+            initial_conditions = ics, compiler = compiler
+        )
+        (f = f, u0 = u0, p = p, vm = vm, diag = diag, tally = copy(ESM._CASCADE_TALLY))
     end
 end
 
@@ -131,7 +152,7 @@ _dce_bitsame(a, b) = size(a) == size(b) && all(a .=== b)
 # Does any `:fn` node reachable from K carry a per-lane spec? (Spines are DAGs
 # post-CSE; the visited set keeps the walk linear.)
 function _dce_has_lanespec(K)
-    seen = IdDict{Any,Nothing}()
+    seen = IdDict{Any, Nothing}()
     visit(nd) = begin
         haskey(seen, nd) && return false
         seen[nd] = nothing
@@ -166,10 +187,14 @@ _dce_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
         # Signature: non-direct = byte-for-byte the content key (2-arg ≡
         # 3-arg false); direct = shape key (same-shape different-content
         # specs SHARE a signature that content keying splits).
-        fnnode(tbl) = ESM._mknode(kind=ESM._NK_OP, op=:fn,
-            payload=("interp.linear",
-                     ESM._build_interp_spec("interp.linear", Any[tbl, _DCE_AX])),
-            children=ESM._Node[ESM._mknode(kind=ESM._NK_STATE, idx=1)])
+        fnnode(tbl) = ESM._mknode(
+            kind = ESM._NK_OP, op = :fn,
+            payload = (
+                "interp.linear",
+                ESM._build_interp_spec("interp.linear", Any[tbl, _DCE_AX]),
+            ),
+            children = ESM._Node[ESM._mknode(kind = ESM._NK_STATE, idx = 1)]
+        )
         sig(n, args...) = String(take!(ESM._struct_sig!(IOBuffer(), n, args...)))
         nA, nB = fnnode(_DCE_TA), fnnode(_DCE_TB)
         @test sig(nA) == sig(nA, false)          # 2-arg ≡ explicit false
@@ -180,7 +205,8 @@ _dce_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
         # direct (4-arg) form mints the per-lane spec table in cell order
         # with `_outs_cells` addressing.
         @test_throws ESM.TreeWalkError ESM._acc_merge_nodes(
-            ESM._Node[nA, nB], 2, ESM._AccDesc[])
+            ESM._Node[nA, nB], 2, ESM._AccDesc[]
+        )
         merged = ESM._acc_merge_nodes(ESM._Node[nA, nB], 2, ESM._AccDesc[], true)
         @test merged.kind === ESM._NK_OP && merged.op === :fn
         h = merged.payload[2]
@@ -189,8 +215,10 @@ _dce_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
         @test [s.table for s in h.specs] == [_DCE_TA, _DCE_TB]
         # Content-equal specs still ride ONE scalar payload (no gratuitous
         # lane table), exactly the pre-direct behavior.
-        merged_eq = ESM._acc_merge_nodes(ESM._Node[fnnode(_DCE_TA), fnnode(copy(_DCE_TA))],
-                                         2, ESM._AccDesc[], true)
+        merged_eq = ESM._acc_merge_nodes(
+            ESM._Node[fnnode(_DCE_TA), fnnode(copy(_DCE_TA))],
+            2, ESM._AccDesc[], true
+        )
         @test merged_eq.payload[2] isa ESM._InterpLinearSpec
     end
 
@@ -198,9 +226,10 @@ _dce_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
             ("interp.linear", _dce_linear_model(6)),
             ("interp.bilinear", _dce_bilinear_model(6)),
             ("interp.searchsorted", _dce_search_model(6)),
-            ("guarded interp.linear", _dce_guard_model(6)))
+            ("guarded interp.linear", _dce_guard_model(6)),
+        )
         ics = _dce_ics(6)
-        rdef = _dce_build(model, ics; codegen=false)
+        rdef = _dce_build(model, ics; codegen = false)
 
         # The fixture really takes the per-cell path.
         @test get(rdef.tally, :percell_acc, 0) == 1
@@ -217,24 +246,25 @@ _dce_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
 
         # INTERPRETER: no class kernel of either provenance, and no access
         # kernel at all — the equation stays on the per-cell scalar walker.
-        rref = _dce_build(model, ics; compiler=:interpreter)
+        rref = _dce_build(model, ics; compiler = :interpreter)
         @test get(rref.tally, :direct_class_kernel, 0) == 0
         @test count(_dce_has_lanespec, _dce_kernels(rref.f)) == 0
     end
 
     @testset "bit-identity vs the scalar reference — $name" for
-            (name, mkmodel) in (
+        (name, mkmodel) in (
             ("interp.linear", _dce_linear_model),
             ("interp.bilinear", _dce_bilinear_model),
             ("interp.searchsorted", _dce_search_model),
             ("guarded interp.linear", _dce_guard_model),
-            ("invariant-query interp.linear", _dce_inv_model))
+            ("invariant-query interp.linear", _dce_inv_model),
+        )
         N = 7                                     # odd: unequal region sizes
         model = mkmodel(N)
         ics = _dce_ics(N)
         rdef = _dce_build(model, ics)                       # direct + codegen
-        rdefi = _dce_build(model, ics; codegen=false)       # direct, interpreted
-        rref = _dce_build(model, ics; compiler=:interpreter) # per-cell scalar walk
+        rdefi = _dce_build(model, ics; codegen = false)       # direct, interpreted
+        rref = _dce_build(model, ics; compiler = :interpreter) # per-cell scalar walk
         @test rdef.u0 == rref.u0
         for k in 1:4, t in (0.0, 0.7, 3.25)
             u = k == 1 ? copy(rdef.u0) : _dce_probe(N, k)
@@ -245,10 +275,14 @@ _dce_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
 
         # ForwardDiff Duals: values AND partials bit-identical through the
         # direct class kernel, emitted and interpreted.
-        Jd = ForwardDiff.jacobian((du, u) -> rdef.f(du, u, rdef.p, 0.4),
-                                  zero(rdef.u0), rdef.u0)
-        Jr = ForwardDiff.jacobian((du, u) -> rref.f(du, u, rref.p, 0.4),
-                                  zero(rref.u0), rref.u0)
+        Jd = ForwardDiff.jacobian(
+            (du, u) -> rdef.f(du, u, rdef.p, 0.4),
+            zero(rdef.u0), rdef.u0
+        )
+        Jr = ForwardDiff.jacobian(
+            (du, u) -> rref.f(du, u, rref.p, 0.4),
+            zero(rref.u0), rref.u0
+        )
         @test _dce_bitsame(Jd, Jr)
     end
 
@@ -263,26 +297,32 @@ _dce_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
         # which is why the counter is what this pins.)
         N = 6
         ics = _dce_ics(N)
-        rdef = _dce_build(_dce_inv_model(N), ics; codegen=false)
-        rref = _dce_build(_dce_inv_model(N), ics; compiler=:interpreter)
+        rdef = _dce_build(_dce_inv_model(N), ics; codegen = false)
+        rref = _dce_build(_dce_inv_model(N), ics; compiler = :interpreter)
         @test rdef.diag.n_acc_kernels == 1
         @test rdef.diag.n_acc_inv_slots >= 1     # kept by construction
         for t in (0.0, 0.42)
-            @test _dce_bitsame(_dce_du(rdef.f, rdef.u0, rdef.p, t),
-                               _dce_du(rref.f, rref.u0, rref.p, t))
+            @test _dce_bitsame(
+                _dce_du(rdef.f, rdef.u0, rdef.p, t),
+                _dce_du(rref.f, rref.u0, rref.p, t)
+            )
         end
     end
 
     @testset "direct path is grid-independent (grid_invariance methodology)" begin
         N1, N2 = 8, 24
-        A = _dce_build(_dce_linear_model(N1), _dce_ics(N1); codegen=false)
-        B = _dce_build(_dce_linear_model(N2), _dce_ics(N2); codegen=false)
+        A = _dce_build(_dce_linear_model(N1), _dce_ics(N1); codegen = false)
+        B = _dce_build(_dce_linear_model(N2), _dce_ics(N2); codegen = false)
 
         # Structural counters: identical at 3x the grid (n_mat_array_cells is
         # the one documented O(cells) diag field; this fixture materializes
         # nothing, but mirror grid_invariance_test and drop it anyway).
-        drop(d) = (; [k => getfield(d, k) for k in keys(d)
-                      if k !== :n_mat_array_cells]...)
+        drop(d) = (;
+            [
+                k => getfield(d, k) for k in keys(d)
+                    if k !== :n_mat_array_cells
+            ]...,
+        )
         @test drop(A.diag) == drop(B.diag)
         @test A.diag.n_acc_kernels == 1
 
@@ -295,24 +335,34 @@ _dce_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
 
         # Per-kernel structural signature (spine/recipe shapes, descriptor
         # kinds, bound) identical; descriptor/lane VALUES excluded.
-        shape!(out, nd) = (push!(out, (nd.kind, nd.op));
-                           foreach(c -> shape!(out, c), nd.children); out)
-        ksig(K) = repr((; shape = shape!(Tuple{UInt8,Symbol}[], K.spine),
-                        acc_kinds = UInt8[d.kind for d in K.acc],
-                        cell_recipes = [shape!(Tuple{UInt8,Symbol}[], r)
-                                        for r in K.cse.recipes],
-                        inv_recipes = [shape!(Tuple{UInt8,Symbol}[], r)
-                                       for r in K.cse.inv_recipes],
-                        n_subs = length(K.subs),
-                        bound = nameof(typeof(K.bound))))
+        shape!(out, nd) = (
+            push!(out, (nd.kind, nd.op));
+            foreach(c -> shape!(out, c), nd.children); out
+        )
+        ksig(K) = repr(
+            (;
+                shape = shape!(Tuple{UInt8, Symbol}[], K.spine),
+                acc_kinds = UInt8[d.kind for d in K.acc],
+                cell_recipes = [
+                    shape!(Tuple{UInt8, Symbol}[], r)
+                        for r in K.cse.recipes
+                ],
+                inv_recipes = [
+                    shape!(Tuple{UInt8, Symbol}[], r)
+                        for r in K.cse.inv_recipes
+                ],
+                n_subs = length(K.subs),
+                bound = nameof(typeof(K.bound)),
+            )
+        )
         @test sort!(map(ksig, _dce_kernels(A.f))) ==
-              sort!(map(ksig, _dce_kernels(B.f)))
+            sort!(map(ksig, _dce_kernels(B.f)))
 
         # Per-lane data — out slots + descriptor tables + lane-spec lane
         # counts — grows EXACTLY linearly (3x cells ⇒ 3x data).
         function lanes(K)
             n = Ref(0)
-            seen = IdDict{Any,Nothing}()
+            seen = IdDict{Any, Nothing}()
             visit(nd) = begin
                 haskey(seen, nd) && return
                 seen[nd] = nothing
@@ -329,9 +379,11 @@ _dce_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
             foreach(visit, K.cse.inv_recipes)
             return n[]
         end
-        data(ks) = sum(length(K.cells.outs) + lanes(K) +
-                       sum(length(d.arr) + length(d.conn) for d in K.acc; init=0)
-                       for K in ks; init=0)
+        data(ks) = sum(
+            length(K.cells.outs) + lanes(K) +
+                sum(length(d.arr) + length(d.conn) for d in K.acc; init = 0)
+                for K in ks; init = 0
+        )
         dA, dB = data(_dce_kernels(A.f)), data(_dce_kernels(B.f))
         @test dA > 0
         @test dA * N2 == dB * N1

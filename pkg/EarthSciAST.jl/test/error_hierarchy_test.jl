@@ -33,7 +33,7 @@ include("testutils.jl")
         strays = String[]
         found = 0
         for mod in (EarthSciAST, EarthSciAST.Cadence, EarthSciAST.Relational)
-            for n in names(mod; all=true)
+            for n in names(mod; all = true)
                 v = try
                     getfield(mod, n)
                 catch
@@ -60,15 +60,17 @@ include("testutils.jl")
             try
                 load_path(path)
             finally
-                rm(path; force=true)
+                rm(path; force = true)
             end
         end
         caught = Symbol[]
-        for f in (() -> parse_expression("1 +"),                              # parse_expression_text.jl
-                  () -> evaluate_closed_function("no_such_function", Any[1.0]),  # registered_functions.jl
-                  () -> canonicalize(NumExpr(NaN)),                           # canonicalize.jl
-                  () -> migrate(EsmFile("0.5.0", Metadata("m")), "1.0.0"),     # migration.jl
-                  bad_json)                                                   # parse.jl
+        for f in (
+                () -> parse_expression("1 +"),                              # parse_expression_text.jl
+                () -> evaluate_closed_function("no_such_function", Any[1.0]),  # registered_functions.jl
+                () -> canonicalize(NumExpr(NaN)),                           # canonicalize.jl
+                () -> migrate(EsmFile("0.5.0", Metadata("m")), "1.0.0"),     # migration.jl
+                bad_json,
+            )                                                   # parse.jl
             try
                 f()
                 push!(caught, :no_throw)
@@ -109,17 +111,21 @@ include("testutils.jl")
         # Field names are the SCREAMING_SNAKE_CASE of their values, the
         # convention TypeScript's ERROR_CODES and Python's ErrorCode share, so
         # a reader can go from a wire code back to the field without a lookup.
-        @test all(k -> string(k) == uppercase(getproperty(ERROR_CODES, k)),
-                  keys(ERROR_CODES))
+        @test all(
+            k -> string(k) == uppercase(getproperty(ERROR_CODES, k)),
+            keys(ERROR_CODES)
+        )
     end
 
     @testset "the corpus-pinned codes are registered" begin
         # Spot-check across every family, so a family dropped wholesale is caught.
-        for c in ("undefined_variable", "equation_count_mismatch",
-                  "unit_inconsistency", "unit_parse_error",
-                  "unresolved_subsystem_ref", "template_import_unresolved",
-                  "coupling_library_illegal_payload", "unknown_closed_function",
-                  "metaparameter_type_error", "unlowered_operator")
+        for c in (
+                "undefined_variable", "equation_count_mismatch",
+                "unit_inconsistency", "unit_parse_error",
+                "unresolved_subsystem_ref", "template_import_unresolved",
+                "coupling_library_illegal_payload", "unknown_closed_function",
+                "metaparameter_type_error", "unlowered_operator",
+            )
             @test c in error_code_names()
         end
     end
@@ -130,8 +136,10 @@ include("testutils.jl")
         spec = read(joinpath(@__DIR__, "..", "..", "..", "esm-spec.md"), String)
         sections = filter(s -> startswith(s, "9.6.6 "), split(spec, "\n#### "))
         @test length(sections) == 1
-        codes = [String(m.captures[1])
-                 for m in eachmatch(r"^\| `([a-z][a-z0-9_]*)` \|"m, only(sections))]
+        codes = [
+            String(m.captures[1])
+                for m in eachmatch(r"^\| `([a-z][a-z0-9_]*)` \|"m, only(sections))
+        ]
         # Guard the extraction: a heading or table-layout change that matched
         # nothing would pass the membership check vacuously.
         @test length(codes) >= 30

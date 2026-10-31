@@ -33,43 +33,59 @@ function _opexpr_child_stmts(wrap::Function)::Vector{Expr}
     stmts = Expr[]
     for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
         if spec.kind === :expr
-            push!(stmts, :(let x = e.$f
-                x === nothing || $(wrap(:x))
-            end))
+            push!(
+                stmts, :(
+                    let x = e.$f
+                        x === nothing || $(wrap(:x))
+                    end
+                )
+            )
         elseif spec.kind === :expr_vec
             # `args` is the one never-`nothing` instance; the guard folds away.
-            push!(stmts, :(let v = e.$f
-                if v !== nothing
-                    for x in v
-                        $(wrap(:x))
-                    end
-                end
-            end))
-        elseif spec.kind === :expr_map
-            push!(stmts, :(let m = e.$f
-                if m !== nothing
-                    for mk in sort!(collect(keys(m)))
-                        let x = m[mk]
-                            $(wrap(:x))
-                        end
-                    end
-                end
-            end))
-        elseif spec.kind === :ranges
-            # A `ranges` entry is an `IndexSetRef` (no sub-expressions) or a
-            # dense bound vector whose entries may be expression-valued.
-            push!(stmts, :(let m = e.$f
-                if m !== nothing
-                    for mk in sort!(collect(keys(m)))
-                        v = m[mk]
-                        if v isa AbstractVector
+            push!(
+                stmts, :(
+                    let v = e.$f
+                        if v !== nothing
                             for x in v
-                                x isa ASTExpr && $(wrap(:x))
+                                $(wrap(:x))
                             end
                         end
                     end
-                end
-            end))
+                )
+            )
+        elseif spec.kind === :expr_map
+            push!(
+                stmts, :(
+                    let m = e.$f
+                        if m !== nothing
+                            for mk in sort!(collect(keys(m)))
+                                let x = m[mk]
+                                    $(wrap(:x))
+                                end
+                            end
+                        end
+                    end
+                )
+            )
+        elseif spec.kind === :ranges
+            # A `ranges` entry is an `IndexSetRef` (no sub-expressions) or a
+            # dense bound vector whose entries may be expression-valued.
+            push!(
+                stmts, :(
+                    let m = e.$f
+                        if m !== nothing
+                            for mk in sort!(collect(keys(m)))
+                                v = m[mk]
+                                if v isa AbstractVector
+                                    for x in v
+                                        x isa ASTExpr && $(wrap(:x))
+                                    end
+                                end
+                            end
+                        end
+                    end
+                )
+            )
         end
     end
     return stmts
@@ -182,18 +198,18 @@ visits (e.g. accumulating names into a `Set`) are identical between the
 two walkers.
 """
 function foreach_subexpr_once(f, expr::ASTExpr)
-    _foreach_subexpr_once(f, expr, IdDict{OpExpr,Nothing}())
+    _foreach_subexpr_once(f, expr, IdDict{OpExpr, Nothing}())
     return nothing
 end
 
-_foreach_subexpr_once(f, e::NumExpr, ::IdDict{OpExpr,Nothing}) = (f(e); nothing)
-_foreach_subexpr_once(f, e::IntExpr, ::IdDict{OpExpr,Nothing}) = (f(e); nothing)
-_foreach_subexpr_once(f, e::VarExpr, ::IdDict{OpExpr,Nothing}) = (f(e); nothing)
+_foreach_subexpr_once(f, e::NumExpr, ::IdDict{OpExpr, Nothing}) = (f(e); nothing)
+_foreach_subexpr_once(f, e::IntExpr, ::IdDict{OpExpr, Nothing}) = (f(e); nothing)
+_foreach_subexpr_once(f, e::VarExpr, ::IdDict{OpExpr, Nothing}) = (f(e); nothing)
 # Generated from OPEXPR_FIELD_TABLE via the same `_opexpr_child_stmts`
 # splice as `_foreach_subexpr_children` — the field list lives in exactly
 # one place (do NOT hand-roll it here). The `seen` check is on ENTRY, so a
 # shared node's children are enumerated once no matter its in-degree.
-@eval function _foreach_subexpr_once(f, e::OpExpr, seen::IdDict{OpExpr,Nothing})
+@eval function _foreach_subexpr_once(f, e::OpExpr, seen::IdDict{OpExpr, Nothing})
     haskey(seen, e) && return nothing
     seen[e] = nothing
     f(e)
@@ -202,48 +218,58 @@ _foreach_subexpr_once(f, e::VarExpr, ::IdDict{OpExpr,Nothing}) = (f(e); nothing)
 end
 
 @eval function foreach_child_with_path(g, e::OpExpr, path::String)
-    $((
-        begin
-            w = string(spec.wire)
-            if spec.kind === :expr
-                :(let x = e.$f
-                    x === nothing || g(x, string(path, $("/" * w)))
-                end)
-            elseif spec.kind === :expr_vec
-                :(let v = e.$f
-                    if v !== nothing
-                        for (i, x) in enumerate(v)
-                            g(x, string(path, $("/" * w * "/"), i - 1))
+    $(
+        (
+            begin
+                w = string(spec.wire)
+                if spec.kind === :expr
+                    :(
+                        let x = e.$f
+                            x === nothing || g(x, string(path, $("/" * w)))
                         end
-                    end
-                end)
-            elseif spec.kind === :expr_map
-                :(let m = e.$f
-                    if m !== nothing
-                        for mk in sort!(collect(keys(m)))
-                            g(m[mk], string(path, $("/" * w * "/"), mk))
-                        end
-                    end
-                end)
-            else # :ranges
-                :(let m = e.$f
-                    if m !== nothing
-                        for mk in sort!(collect(keys(m)))
-                            v = m[mk]
-                            if v isa AbstractVector
+                    )
+                elseif spec.kind === :expr_vec
+                    :(
+                        let v = e.$f
+                            if v !== nothing
                                 for (i, x) in enumerate(v)
-                                    x isa ASTExpr &&
-                                        g(x, string(path, $("/" * w * "/"), mk, "/", i - 1))
+                                    g(x, string(path, $("/" * w * "/"), i - 1))
                                 end
                             end
                         end
-                    end
-                end)
+                    )
+                elseif spec.kind === :expr_map
+                    :(
+                        let m = e.$f
+                            if m !== nothing
+                                for mk in sort!(collect(keys(m)))
+                                    g(m[mk], string(path, $("/" * w * "/"), mk))
+                                end
+                            end
+                        end
+                    )
+                else # :ranges
+                    :(
+                        let m = e.$f
+                            if m !== nothing
+                                for mk in sort!(collect(keys(m)))
+                                    v = m[mk]
+                                    if v isa AbstractVector
+                                        for (i, x) in enumerate(v)
+                                            x isa ASTExpr &&
+                                                g(x, string(path, $("/" * w * "/"), mk, "/", i - 1))
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    )
+                end
             end
-        end
-        for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
-        if spec.kind in (:expr, :expr_vec, :expr_map, :ranges)
-    )...)
+                for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
+                if spec.kind in (:expr, :expr_vec, :expr_map, :ranges)
+        )...
+    )
     return nothing
 end
 
@@ -326,17 +352,33 @@ function _opexpr_map_children_parts()
             if f === :args
                 push!(stmts, :($nf = ASTExpr[mapf(x) for x in e.$f]))
             else
-                push!(stmts, :($nf = e.$f === nothing ? nothing :
-                    ASTExpr[mapf(x) for x in e.$f]))
+                push!(
+                    stmts, :(
+                        $nf = e.$f === nothing ? nothing :
+                            ASTExpr[mapf(x) for x in e.$f]
+                    )
+                )
             end
         elseif spec.kind === :expr_map
-            push!(stmts, :($nf = e.$f === nothing ? nothing :
-                Dict{String,ASTExpr}(k => mapf(v) for (k, v) in e.$f)))
+            push!(
+                stmts, :(
+                    $nf = e.$f === nothing ? nothing :
+                        Dict{String, ASTExpr}(k => mapf(v) for (k, v) in e.$f)
+                )
+            )
         elseif spec.kind === :ranges
-            push!(stmts, :($nf = e.$f === nothing ? nothing :
-                Dict{String,Any}(k => (v isa AbstractVector ?
-                        Any[x isa ASTExpr ? mapf(x) : x for x in v] : v)
-                    for (k, v) in e.$f)))
+            push!(
+                stmts, :(
+                    $nf = e.$f === nothing ? nothing :
+                        Dict{String, Any}(
+                            k => (
+                                v isa AbstractVector ?
+                                Any[x isa ASTExpr ? mapf(x) : x for x in v] : v
+                            )
+                            for (k, v) in e.$f
+                        )
+                )
+            )
         else
             continue
         end
@@ -386,15 +428,15 @@ bindings = Dict{String,ASTExpr}("T_wall" => NumExpr(300.5),
 to_ascii(substitute(e, bindings))  # "2 * k0 * (300.5 - T_air)"
 ```
 """
-function substitute(expr::NumExpr, bindings::Dict{String,ASTExpr})::ASTExpr
+function substitute(expr::NumExpr, bindings::Dict{String, ASTExpr})::ASTExpr
     return expr  # Numeric literals are unchanged
 end
 
-function substitute(expr::IntExpr, bindings::Dict{String,ASTExpr})::ASTExpr
+function substitute(expr::IntExpr, bindings::Dict{String, ASTExpr})::ASTExpr
     return expr  # Integer literals are unchanged
 end
 
-function substitute(expr::VarExpr, bindings::Dict{String,ASTExpr})::ASTExpr
+function substitute(expr::VarExpr, bindings::Dict{String, ASTExpr})::ASTExpr
     return get(bindings, expr.name, expr)  # Replace if bound, otherwise keep original
 end
 
@@ -414,7 +456,7 @@ end
 # precisely the symbols binders bind — so it cannot assume this and does
 # capture-avoiding descent instead. Do not carry this paragraph over to a
 # binding map whose keys are loop variables.
-substitute(expr::OpExpr, bindings::Dict{String,ASTExpr})::ASTExpr =
+substitute(expr::OpExpr, bindings::Dict{String, ASTExpr})::ASTExpr =
     map_children(x -> substitute(x, bindings), expr)
 
 # ========================================
@@ -461,11 +503,13 @@ function free_variables(expr::OpExpr)::Set{String}
     # per-path recursion re-walked a node once per PATH — exponential on a
     # doubling chain. The memo is per top-level call, so the returned set (a
     # fresh `Set` per distinct node) is never aliased across calls.
-    return _free_variables_dag(expr, IdDict{OpExpr,Set{String}}())
+    return _free_variables_dag(expr, IdDict{OpExpr, Set{String}}())
 end
 
-function _free_variables_dag(expr::OpExpr,
-                             memo::IdDict{OpExpr,Set{String}})::Set{String}
+function _free_variables_dag(
+        expr::OpExpr,
+        memo::IdDict{OpExpr, Set{String}}
+    )::Set{String}
     cached = get(memo, expr, nothing)
     cached === nothing || return cached
     # Union of free variables from EVERY expression-bearing field (via the
@@ -678,10 +722,10 @@ function simplify(expr::OpExpr)::ASTExpr
     # table and there is no parallel operator switch in this module.
     if all(is_literal, simplified_args)
         try
-            result_value = evaluate_expr(recursed, Dict{String,Float64}())
+            result_value = evaluate_expr(recursed, Dict{String, Float64}())
             all_int = all(arg -> isa(arg, IntExpr), simplified_args)
             if all_int && isfinite(result_value) && result_value == trunc(result_value) &&
-               _int64_maybe_representable(result_value)
+                    _int64_maybe_representable(result_value)
                 return IntExpr(Int64(result_value))
             end
             return NumExpr(result_value)
@@ -695,7 +739,7 @@ function simplify(expr::OpExpr)::ASTExpr
 
     # Helper: true when arg is a numeric literal equal to v (compared by value).
     is_lit_val(arg, v) = (isa(arg, NumExpr) && arg.value == v) ||
-                         (isa(arg, IntExpr) && Float64(arg.value) == v)
+        (isa(arg, IntExpr) && Float64(arg.value) == v)
 
     # Algebraic simplification rules
     if op == "+"
@@ -706,7 +750,7 @@ function simplify(expr::OpExpr)::ASTExpr
         elseif length(non_zero_args) == 1
             return non_zero_args[1]
         else
-            return reconstruct(recursed; args=ASTExpr[non_zero_args...])
+            return reconstruct(recursed; args = ASTExpr[non_zero_args...])
         end
 
     elseif op == "*"
@@ -724,7 +768,7 @@ function simplify(expr::OpExpr)::ASTExpr
         elseif length(non_one_args) == 1
             return non_one_args[1]
         else
-            return reconstruct(recursed; args=ASTExpr[non_one_args...])
+            return reconstruct(recursed; args = ASTExpr[non_one_args...])
         end
 
     elseif op == "^" && length(simplified_args) == 2

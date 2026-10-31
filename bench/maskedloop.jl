@@ -23,7 +23,10 @@ Pkg.activate("/tmp/claude-1111265/scanad-env"; io = devnull)
 using Reactant, ForwardDiff, Printf
 const Enzyme = Reactant.Enzyme
 const RX = Reactant
-try; RX.set_default_backend("cpu"); catch; end
+try
+    RX.set_default_backend("cpu")
+catch
+end
 say(s) = (println(s); flush(stdout))
 ok(t, g, m) = say(@sprintf("  [%s] %-30s %s", g ? "PASS" : "FAIL", t, m))
 function mlirerr(e)
@@ -35,7 +38,9 @@ anon_mb() = try
     for l in eachline("/sys/fs/cgroup/memory.stat")
         startswith(l, "anon ") && return parse(Int, split(l)[2]) / 2^20
     end; NaN
-catch; NaN end
+catch
+    NaN
+end
 
 # ---- Y1  a real accept/reject controller ---------------------------------
 # Explicit Euler with a step-doubling error estimate. If the estimate exceeds
@@ -47,7 +52,7 @@ const NS = 6
 u0 = [0.5 + 0.1i for i in 1:NS]
 k0 = 0.7
 const TEND = 1.0
-const TOL = 1e-4
+const TOL = 1.0e-4
 const ATT = 120          # cap on ATTEMPTS (accepted + rejected)
 
 # one attempt: returns (u', t', h', accepted)
@@ -60,7 +65,7 @@ const ATT = 120          # cap on ATTEMPTS (accepted + rejected)
     err = sum(abs2, big .- half)
     acc = err < TOL
     hnew = ifelse(acc, min(h * 1.5, TEND - (t + h)), h * 0.5)
-    return (ifelse.(acc, half, u), ifelse(acc, t + h, t), max(hnew, 1e-6), acc)
+    return (ifelse.(acc, half, u), ifelse(acc, t + h, t), max(hnew, 1.0e-6), acc)
 end
 
 function y1_host(k)
@@ -73,7 +78,7 @@ function y1_host(k)
             u = un; t = tn; h = hn
         end
     end
-    sum(u)
+    return sum(u)
 end
 function y1(u, k)
     t = zero(k); h = 0.05 * one(k)
@@ -85,30 +90,35 @@ function y1(u, k)
         t = ifelse(live, tn, t)
         h = ifelse(live, hn, h)
     end
-    sum(u)
+    return sum(u)
 end
 const GREF_Y1 = ForwardDiff.derivative(y1_host, k0)
 say("Y1 host reference (accept/reject controller) d/dk = $GREF_Y1")
 
-function revcheck(tag, f, u0v, k0v, gref; rtol = 1e-6, hlo = false)
+function revcheck(tag, f, u0v, k0v, gref; rtol = 1.0e-6, hlo = false)
     ur = RX.ConcreteRArray(u0v); kr = RX.ConcreteRNumber(k0v)
     g = (u, k) -> Enzyme.gradient(Enzyme.Reverse, f, Enzyme.Const(u), k)[2]
     extra = ""
     if hlo
         try
             s = repr(RX.@code_hlo optimize = false g(ur, kr))
-            extra = @sprintf(", grad while=%d lines=%d",
-                             length(collect(eachmatch(r"stablehlo\.while\b", s))),
-                             count(==('\n'), s) + 1)
-        catch; end
+            extra = @sprintf(
+                ", grad while=%d lines=%d",
+                length(collect(eachmatch(r"stablehlo\.while\b", s))),
+                count(==('\n'), s) + 1
+            )
+        catch
+        end
     end
-    try
+    return try
         m0 = anon_mb(); t0 = time()
         xg = RX.@compile sync = true g(ur, kr)
         tc = time() - t0
         got = Float64(xg(ur, kr)); dm = anon_mb() - m0
-        ok(tag, isapprox(got, gref; rtol = rtol),
-           @sprintf("got %.10g want %.10g (%.1f s, +%.0f MB anon%s)", got, gref, tc, dm, extra))
+        ok(
+            tag, isapprox(got, gref; rtol = rtol),
+            @sprintf("got %.10g want %.10g (%.1f s, +%.0f MB anon%s)", got, gref, tc, dm, extra)
+        )
     catch e
         ok(tag, false, mlirerr(e))
     end
@@ -126,7 +136,7 @@ function y2(u, k)
         un, tn, hn, _ = attempt(u, k, t, hh)
         u = ifelse.(live, un, u); t = ifelse(live, tn, t); h = ifelse(live, hn, h)
     end
-    sum(u)
+    return sum(u)
 end
 revcheck("Y2 + checkpointing=true", y2, u0, k0, GREF_Y1; hlo = true)
 
@@ -136,13 +146,17 @@ say("=== Y3  tape cost at a realistic state size ===")
 # masked form pays that a host-lifted adjoint does not, so price it.
 for (ns, cap) in ((256, 120), (4096, 120), (4096, 500))
     uv = [0.5 + 0.001i for i in 1:ns]
-    href = kk -> (u = copy(uv); t = 0.0; h = 0.05;
-                  for _ in 1:cap
-                      live = t < TEND
-                      hh = live ? min(h, TEND - t) : 0.0
-                      un, tn, hn, _ = attempt(u, kk, t, hh)
-                      if live; u = un; t = tn; h = hn; end
-                  end; sum(u))
+    href = kk -> (
+        u = copy(uv); t = 0.0; h = 0.05;
+        for _ in 1:cap
+            live = t < TEND
+            hh = live ? min(h, TEND - t) : 0.0
+            un, tn, hn, _ = attempt(u, kk, t, hh)
+            if live
+                u = un; t = tn; h = hn
+            end
+        end; sum(u)
+    )
     gref = ForwardDiff.derivative(href, k0)
     f = (u, k) -> begin
         t = zero(k); h = 0.05 * one(k)
@@ -154,8 +168,12 @@ for (ns, cap) in ((256, 120), (4096, 120), (4096, 500))
         end
         sum(u)
     end
-    say(@sprintf("  state=%d cap=%d  dense tape ~ %.1f MB", ns, cap,
-                 ns * cap * 8 / 2^20))
+    say(
+        @sprintf(
+            "  state=%d cap=%d  dense tape ~ %.1f MB", ns, cap,
+            ns * cap * 8 / 2^20
+        )
+    )
     revcheck(@sprintf("Y3 ns=%d cap=%d", ns, cap), f, uv, k0, gref)
 end
 
@@ -167,9 +185,15 @@ say("=== Y4  does checkpointing SILENTLY return a wrong gradient? ===")
 const H = 0.01
 const NSTEP = 20
 uv4 = [0.5 + 0.1i for i in 1:NS]
-gref4 = ForwardDiff.derivative(kk -> (u = copy(uv4);
-                                      for _ in 1:NSTEP; u = u .+ kk .* u .* H; end;
-                                      sum(u)), k0)
+gref4 = ForwardDiff.derivative(
+    kk -> (
+        u = copy(uv4);
+        for _ in 1:NSTEP
+            u = u .+ kk .* u .* H
+        end;
+        sum(u)
+    ), k0
+)
 say(@sprintf("  exact d/dk = %.12g", gref4))
 for nc in (2, 4, 5, 10)
     f = (u, k, n) -> begin
@@ -181,13 +205,19 @@ for nc in (2, 4, 5, 10)
     try
         ur = RX.ConcreteRArray(uv4); kr = RX.ConcreteRNumber(k0)
         nr = RX.ConcreteRNumber(NSTEP)
-        g = (u, k, n) -> Enzyme.gradient(Enzyme.Reverse, f, Enzyme.Const(u), k,
-                                         Enzyme.Const(n))[2]
+        g = (u, k, n) -> Enzyme.gradient(
+            Enzyme.Reverse, f, Enzyme.Const(u), k,
+            Enzyme.Const(n)
+        )[2]
         xg = RX.@compile sync = true g(ur, kr, nr)
         got = Float64(xg(ur, kr, nr))
-        say(@sprintf("  Binomial(%2d): got %.12g   rel err %.2e %s", nc, got,
-                     abs(got - gref4) / abs(gref4),
-                     isapprox(got, gref4; rtol = 1e-8) ? "" : "  <-- WRONG"))
+        say(
+            @sprintf(
+                "  Binomial(%2d): got %.12g   rel err %.2e %s", nc, got,
+                abs(got - gref4) / abs(gref4),
+                isapprox(got, gref4; rtol = 1.0e-8) ? "" : "  <-- WRONG"
+            )
+        )
     catch e
         say(@sprintf("  Binomial(%2d): %s", nc, mlirerr(e)))
     end

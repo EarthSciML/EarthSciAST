@@ -26,46 +26,60 @@ using EarthSciAST
 const ESM = EarthSciAST
 using Test
 
-_v(n)   = VarExpr(String(n))
+_v(n) = VarExpr(String(n))
 _num(x) = NumExpr(Float64(x))
 _op(o, a...; kw...) = OpExpr(String(o), ESM.ASTExpr[a...]; kw...)
-_ix(base, subs...) = _op("index", (base isa ESM.ASTExpr ? base : _v(base)),
-                         [s isa String ? _v(s) : _num(s) for s in subs]...)
+_ix(base, subs...) = _op(
+    "index", (base isa ESM.ASTExpr ? base : _v(base)),
+    [s isa String ? _v(s) : _num(s) for s in subs]...
+)
 
 const NS = 8
 const NR = 6
-const PATHS = ["SOA","pNO3","pNH4","pSO4","PrimaryPM25"]
-const FACT=28766.639; const RRK=1.06; const PSC=1.0465819687408728; const MSC=1.025229357798165
+const PATHS = ["SOA", "pNO3", "pNH4", "pSO4", "PrimaryPM25"]
+const FACT = 28766.639; const RRK = 1.06; const PSC = 1.0465819687408728; const MSC = 1.025229357798165
 
-conc(p) = _op("faq"; output_idx=Any["rcv"], semiring="sum_product",
-    ranges=Dict{String,Any}("s"=>Any[1,NS], "rcv"=>Any[1,NR]),
-    expr_body=_op("*", _ix("SR_$p","s","rcv"), _ix("E_$p","s")))
+conc(p) = _op(
+    "faq"; output_idx = Any["rcv"], semiring = "sum_product",
+    ranges = Dict{String, Any}("s" => Any[1, NS], "rcv" => Any[1, NR]),
+    expr_body = _op("*", _ix("SR_$p", "s", "rcv"), _ix("E_$p", "s"))
+)
 tpm() = _op("*", _num(FACT), _op("+", [_ix(conc(p), "rcv") for p in PATHS]...))
-tpm_as_agg() = _op("faq"; output_idx=Any["rcv"],
-    ranges=Dict{String,Any}("rcv"=>Any[1,NR]), expr_body=tpm())
-deaths_body(rr) = _op("*",
-    _op("*",
-        _op("*",
+tpm_as_agg() = _op(
+    "faq"; output_idx = Any["rcv"],
+    ranges = Dict{String, Any}("rcv" => Any[1, NR]), expr_body = tpm()
+)
+deaths_body(rr) = _op(
+    "*",
+    _op(
+        "*",
+        _op(
+            "*",
             _op("-", _op("exp", _op("*", _op("/", _op("log", _num(rr)), _num(10.0)), tpm())), _num(1.0)),
-            _op("*", _ix("TotalPop","rcv"), _num(PSC))),
-        _op("/", _ix("MortalityRate","rcv"), _num(1e5))),
-    _num(MSC))
-deathsK() = _op("faq"; output_idx=Any["rcv"],
-    ranges=Dict{String,Any}("rcv"=>Any[1,NR]), expr_body=deaths_body(RRK))
+            _op("*", _ix("TotalPop", "rcv"), _num(PSC))
+        ),
+        _op("/", _ix("MortalityRate", "rcv"), _num(1.0e5))
+    ),
+    _num(MSC)
+)
+deathsK() = _op(
+    "faq"; output_idx = Any["rcv"],
+    ranges = Dict{String, Any}("rcv" => Any[1, NR]), expr_body = deaths_body(RRK)
+)
 
 function make_ca()
-    ca = Dict{String,Any}()
-    for (pi,p) in enumerate(PATHS)
-        ca["SR_$p"] = [0.001*(s + 0.3*rcv + 2*pi) for s in 1:NS, rcv in 1:NR]
-        ca["E_$p"]  = Float64[0.5*s + pi for s in 1:NS]
+    ca = Dict{String, Any}()
+    for (pi, p) in enumerate(PATHS)
+        ca["SR_$p"] = [0.001 * (s + 0.3 * rcv + 2 * pi) for s in 1:NS, rcv in 1:NR]
+        ca["E_$p"] = Float64[0.5 * s + pi for s in 1:NS]
     end
-    ca["TotalPop"]      = Float64[100.0*rcv + 50 for rcv in 1:NR]
+    ca["TotalPop"] = Float64[100.0 * rcv + 50 for rcv in 1:NR]
     ca["MortalityRate"] = Float64[800.0 + rcv for rcv in 1:NR]
     return ca
 end
 
-const REG = Dict{String,Function}()
-const NOP = Dict{String,Float64}()
+const REG = Dict{String, Function}()
+const NOP = Dict{String, Float64}()
 const CELLS = [[r] for r in 1:NR]
 
 @testset "wall2 Phase E — engagement on real deathsK structure" begin
@@ -79,14 +93,14 @@ const CELLS = [[r] for r in 1:NR]
     # (2) bit-identity + NO fallback (deathsK — the full nested structure).
     ESM._CELLWISE_FASTPATH_HITS[] = 0; ESM._CELLWISE_FASTPATH_MISS[] = 0
     dk = deathsK()
-    fast = ESM.evaluate_cellwise(dk, CELLS; const_arrays=ca)
-    ref  = Float64[ESM._eval_cellwise(ESM._PerCellLicense(), dk, [r]; const_arrays=ca) for r in 1:NR]
+    fast = ESM.evaluate_cellwise(dk, CELLS; const_arrays = ca)
+    ref = Float64[ESM._eval_cellwise(ESM._PerCellLicense(), dk, [r]; const_arrays = ca) for r in 1:NR]
     @test fast == ref                              # bit-identical
     @test ESM._CELLWISE_FASTPATH_MISS[] == 0       # nothing fell back
     @test ESM._CELLWISE_FASTPATH_HITS[] >= 1
 
     # (3) TotalPM25 (non-contracting over nested contractions).
-    tp_fast = ESM.evaluate_cellwise(tpm_as_agg(), CELLS; const_arrays=ca)
-    tp_ref  = Float64[ESM._eval_cellwise(ESM._PerCellLicense(), tpm_as_agg(), [r]; const_arrays=ca) for r in 1:NR]
+    tp_fast = ESM.evaluate_cellwise(tpm_as_agg(), CELLS; const_arrays = ca)
+    tp_ref = Float64[ESM._eval_cellwise(ESM._PerCellLicense(), tpm_as_agg(), [r]; const_arrays = ca) for r in 1:NR]
     @test tp_fast == tp_ref
 end

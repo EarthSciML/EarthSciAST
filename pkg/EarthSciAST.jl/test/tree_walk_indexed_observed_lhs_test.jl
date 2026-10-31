@@ -37,11 +37,13 @@ const ESM_IOL = EarthSciAST
 
     N = 4
     isets = Dict("lev" => ESM_IOL.IndexSet("interval"; size = N))
-    _iol_rng() = Dict{String,Any}("k" => ESM_IOL.IndexSetRef("lev"))
-    _iol_agg(body; kw...) = ESM_IOL.OpExpr("faq", ESM_IOL.ASTExpr[];
-                                           output_idx = Any["k"],
-                                           ranges = _iol_rng(),
-                                           expr_body = body, kw...)
+    _iol_rng() = Dict{String, Any}("k" => ESM_IOL.IndexSetRef("lev"))
+    _iol_agg(body; kw...) = ESM_IOL.OpExpr(
+        "faq", ESM_IOL.ASTExpr[];
+        output_idx = Any["k"],
+        ranges = _iol_rng(),
+        expr_body = body, kw...
+    )
     _iol_vars() = Dict(
         "u" => ESM_IOL.ModelVariable(ESM_IOL.UnknownVariable; shape = ["lev"]),
         "w" => ESM_IOL.ModelVariable(ESM_IOL.UnknownVariable; shape = ["lev"]),
@@ -49,22 +51,27 @@ const ESM_IOL = EarthSciAST
     # The observed's per-cell body, `2·u[k]`, and the state equation that reads
     # it — `D(u[k]) = w[k]` — shared by all three spellings.
     _iol_body() = _op("*", _n(2.0), _idx("u", _v("k")))
-    _iol_deriv() = ESM_IOL.Equation(_iol_agg(_Didx("u", _v("k"))),
-                                    _iol_agg(_idx("w", _v("k"))))
+    _iol_deriv() = ESM_IOL.Equation(
+        _iol_agg(_Didx("u", _v("k"))),
+        _iol_agg(_idx("w", _v("k")))
+    )
 
-    bare_eq     = () -> ESM_IOL.Equation(_v("w"), _iol_agg(_iol_body()))
-    indexed_eq  = () -> ESM_IOL.Equation(_iol_agg(_idx("w", _v("k"))),
-                                         _iol_agg(_iol_body()))
-    percell_eq  = () -> ESM_IOL.Equation(_iol_agg(_idx("w", _v("k"))), _iol_body())
+    bare_eq = () -> ESM_IOL.Equation(_v("w"), _iol_agg(_iol_body()))
+    indexed_eq = () -> ESM_IOL.Equation(
+        _iol_agg(_idx("w", _v("k"))),
+        _iol_agg(_iol_body())
+    )
+    percell_eq = () -> ESM_IOL.Equation(_iol_agg(_idx("w", _v("k"))), _iol_body())
 
     ics = Dict("u[$j]" => Float64(j) for j in 1:N)
     _iol_build(eq) = ESM_IOL._build_evaluator_impl(
         ESM_IOL.Model(_iol_vars(), [eq(), _iol_deriv()]);
-        index_sets = isets, initial_conditions = ics)
+        index_sets = isets, initial_conditions = ics
+    )
     _iol_du(built, u) = (du = similar(u); built[1](du, u, built[3], 0.0); du)
 
     @testset "all three spellings build and agree" begin
-        bare    = _iol_build(bare_eq)
+        bare = _iol_build(bare_eq)
         indexed = _iol_build(indexed_eq)      # threw E_TREEWALK_UNSUPPORTED_SHAPE
         percell = _iol_build(percell_eq)      # threw E_TREEWALK_UNSUPPORTED_SHAPE
 
@@ -116,33 +123,67 @@ const ESM_IOL = EarthSciAST
         end
 
         # A shell that GATES is computing, not addressing.
-        @test untouched([ESM_IOL.Equation(
-            _iol_agg(_idx("w", _v("k")); filter = _op(">", _v("k"), _i(1))),
-            _iol_agg(_iol_body())), _iol_deriv()])
+        @test untouched(
+            [
+                ESM_IOL.Equation(
+                    _iol_agg(_idx("w", _v("k")); filter = _op(">", _v("k"), _i(1))),
+                    _iol_agg(_iol_body())
+                ), _iol_deriv(),
+            ]
+        )
         # A non-identity gather writes somewhere else.
-        @test untouched([ESM_IOL.Equation(
-            _iol_agg(_idx("w", _op("+", _v("k"), _i(1)))),
-            _iol_agg(_iol_body())), _iol_deriv()])
+        @test untouched(
+            [
+                ESM_IOL.Equation(
+                    _iol_agg(_idx("w", _op("+", _v("k"), _i(1)))),
+                    _iol_agg(_iol_body())
+                ), _iol_deriv(),
+            ]
+        )
         # A SCALAR reduction (empty `output_idx`) is no frame at all.
-        @test untouched([ESM_IOL.Equation(
-            ESM_IOL.OpExpr("faq", ESM_IOL.ASTExpr[];
-                           output_idx = Any[], ranges = _iol_rng(),
-                           expr_body = _idx("w", _v("k"))),
-            _iol_agg(_iol_body())), _iol_deriv()])
+        @test untouched(
+            [
+                ESM_IOL.Equation(
+                    ESM_IOL.OpExpr(
+                        "faq", ESM_IOL.ASTExpr[];
+                        output_idx = Any[], ranges = _iol_rng(),
+                        expr_body = _idx("w", _v("k"))
+                    ),
+                    _iol_agg(_iol_body())
+                ), _iol_deriv(),
+            ]
+        )
         # `w` is an ODE STATE here (it carries its own `D`), not an observed.
-        @test untouched([ESM_IOL.Equation(_iol_agg(_idx("w", _v("k"))),
-                                          _iol_agg(_iol_body())),
-                         ESM_IOL.Equation(_iol_agg(_Didx("w", _v("k"))),
-                                          _iol_agg(_idx("u", _v("k")))),
-                         _iol_deriv()])
+        @test untouched(
+            [
+                ESM_IOL.Equation(
+                    _iol_agg(_idx("w", _v("k"))),
+                    _iol_agg(_iol_body())
+                ),
+                ESM_IOL.Equation(
+                    _iol_agg(_Didx("w", _v("k"))),
+                    _iol_agg(_idx("u", _v("k")))
+                ),
+                _iol_deriv(),
+            ]
+        )
         # Rank mismatch: a rank-1 frame does not define a rank-2 variable.
         let vars = Dict(
                 "u" => ESM_IOL.ModelVariable(ESM_IOL.UnknownVariable; shape = ["lev"]),
-                "w" => ESM_IOL.ModelVariable(ESM_IOL.UnknownVariable;
-                                             shape = ["lev", "lev"]))
-            m = ESM_IOL.Model(vars, [ESM_IOL.Equation(_iol_agg(_idx("w", _v("k"))),
-                                                      _iol_agg(_iol_body())),
-                                     _iol_deriv()])
+                "w" => ESM_IOL.ModelVariable(
+                    ESM_IOL.UnknownVariable;
+                    shape = ["lev", "lev"]
+                )
+            )
+            m = ESM_IOL.Model(
+                vars, [
+                    ESM_IOL.Equation(
+                        _iol_agg(_idx("w", _v("k"))),
+                        _iol_agg(_iol_body())
+                    ),
+                    _iol_deriv(),
+                ]
+            )
             @test ESM_IOL._normalize_indexed_observed_lhs(m.equations, m) === m.equations
         end
     end
@@ -159,21 +200,26 @@ end
 
     N = 4
     isets = Dict("lev" => ESM_IOL.IndexSet("interval"; size = N))
-    _bi_agg(body) = ESM_IOL.OpExpr("faq", ESM_IOL.ASTExpr[];
-                                   output_idx = Any["k"],
-                                   ranges = Dict{String,Any}("k" => ESM_IOL.IndexSetRef("lev")),
-                                   expr_body = body)
+    _bi_agg(body) = ESM_IOL.OpExpr(
+        "faq", ESM_IOL.ASTExpr[];
+        output_idx = Any["k"],
+        ranges = Dict{String, Any}("k" => ESM_IOL.IndexSetRef("lev")),
+        expr_body = body
+    )
     _bi_vars() = Dict(
         "u" => ESM_IOL.ModelVariable(ESM_IOL.UnknownVariable; shape = ["lev"]),
         "w" => ESM_IOL.ModelVariable(ESM_IOL.UnknownVariable; shape = ["lev"]),
     )
     _bi_body() = _op("*", _n(2.0), _idx("u", _v("k")))
-    _bi_deriv() = ESM_IOL.Equation(_bi_agg(_Didx("u", _v("k"))),
-                                   _bi_agg(_idx("w", _v("k"))))
+    _bi_deriv() = ESM_IOL.Equation(
+        _bi_agg(_Didx("u", _v("k"))),
+        _bi_agg(_idx("w", _v("k")))
+    )
     ics = Dict("u[$j]" => Float64(j) for j in 1:N)
     _bi_build(eq) = ESM_IOL._build_evaluator_impl(
         ESM_IOL.Model(_bi_vars(), [eq, _bi_deriv()]);
-        index_sets = isets, initial_conditions = ics)
+        index_sets = isets, initial_conditions = ics
+    )
     _bi_du(built, u) = (du = similar(u); built[1](du, u, built[3], 0.0); du)
 
     @testset "the runnable form builds and agrees with the bare spelling" begin
@@ -188,9 +234,13 @@ end
     end
 
     @testset "it normalizes to exactly the bare spelling" begin
-        m = ESM_IOL.Model(_bi_vars(),
-                          [ESM_IOL.Equation(_idx("w", _v("k")), _bi_agg(_bi_body())),
-                           _bi_deriv()])
+        m = ESM_IOL.Model(
+            _bi_vars(),
+            [
+                ESM_IOL.Equation(_idx("w", _v("k")), _bi_agg(_bi_body())),
+                _bi_deriv(),
+            ]
+        )
         out = ESM_IOL._normalize_indexed_observed_lhs(m.equations, m)
         @test (out[1].lhs::ESM_IOL.VarExpr).name == "w"
         @test out[1].rhs === m.equations[1].rhs
@@ -206,8 +256,11 @@ end
                 # a subscript the right-hand `faq` does not bind
                 ESM_IOL.Equation(_idx("w", _v("j")), _bi_agg(_bi_body())),
                 # a NESTED gather addresses a cell of a cell, not the whole array
-                ESM_IOL.Equation(_op("index", _idx("w", _v("j")), _v("k")),
-                                 _bi_agg(_bi_body())))
+                ESM_IOL.Equation(
+                    _op("index", _idx("w", _v("j")), _v("k")),
+                    _bi_agg(_bi_body())
+                ),
+            )
             err = try
                 _bi_build(eq)
                 nothing
@@ -220,15 +273,19 @@ end
             # reference-integrity gate (`unbound_index_symbol`); the offset
             # subscript, whose symbol IS bound, reaches the form check.
             @test occursin("indexed_definition_unsupported_form", msg) ||
-                  occursin("unbound_index_symbol", msg)
+                occursin("unbound_index_symbol", msg)
             @test occursin("'w'", msg)
         end
     end
 
     @testset "a value-invention output is left exactly as authored" begin
-        m = ESM_IOL.Model(_bi_vars(),
-                          [ESM_IOL.Equation(_idx("w", _v("k")), _n(5.0)), _bi_deriv()])
-        @test ESM_IOL._normalize_indexed_observed_lhs(m.equations, m;
-                                                      vi_vars = Set(["w"])) === m.equations
+        m = ESM_IOL.Model(
+            _bi_vars(),
+            [ESM_IOL.Equation(_idx("w", _v("k")), _n(5.0)), _bi_deriv()]
+        )
+        @test ESM_IOL._normalize_indexed_observed_lhs(
+            m.equations, m;
+            vi_vars = Set(["w"])
+        ) === m.equations
     end
 end

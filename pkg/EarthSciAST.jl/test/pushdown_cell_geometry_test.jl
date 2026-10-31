@@ -21,10 +21,12 @@ using Test
 using EarthSciAST
 const EA = EarthSciAST
 
-_ix(f, idx...) = Dict{String,Any}("op" => "index", "args" => Any[f, idx...])
-_op(o, args...) = Dict{String,Any}("op" => o, "args" => Any[args...])
-_param(shape) = Dict{String,Any}("type" => "parameter", "default" => 0.0,
-                                 "shape" => Any[shape...])
+_ix(f, idx...) = Dict{String, Any}("op" => "index", "args" => Any[f, idx...])
+_op(o, args...) = Dict{String, Any}("op" => o, "args" => Any[args...])
+_param(shape) = Dict{String, Any}(
+    "type" => "parameter", "default" => 0.0,
+    "shape" => Any[shape...]
+)
 
 _ring(x0, y0, x1, y1) = [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]
 
@@ -42,16 +44,18 @@ const SR = [1.0 0.5; 2.0 0.25; 3.0 0.125; 4.0 0.0625]
 # record 2's 0.36; cell 3 is met by nothing.
 const EXPECT_E = [10.0 * 0.25, 10.0 * 0.25, 0.0, 4.0 * 0.36]
 
-_env_overlap() = _op("and",
+_env_overlap() = _op(
+    "and",
     _op("<=", _ix("src_W", "c"), _ix("rec_xmax", "r")),
     _op("<=", _ix("rec_xmin", "r"), _ix("src_E", "c")),
     _op("<=", _ix("src_S", "c"), _ix("rec_ymax", "r")),
-    _op("<=", _ix("rec_ymin", "r"), _ix("src_N", "c")))
+    _op("<=", _ix("rec_ymin", "r"), _ix("src_N", "c"))
+)
 
 # The polygon-allocation document: an envelope broad phase, an intersection area
 # for the narrow phase, and a data-fed SR array for the mat-vec.
 function _doc()
-    v = Dict{String,Any}()
+    v = Dict{String, Any}()
     for n in ("src_W", "src_S", "src_E", "src_N", "cell_area")
         v[n] = _param(["src_cells"])
     end
@@ -59,52 +63,84 @@ function _doc()
         v[n] = _param(["emis_records"])
     end
     v["cell_ring"] = _param(["src_cells", "ring_vertex", "xy"])
-    v["rec_ring"]  = _param(["emis_records", "ring_vertex", "xy"])
-    v["SR_PM25"] = Dict{String,Any}(
+    v["rec_ring"] = _param(["emis_records", "ring_vertex", "xy"])
+    v["SR_PM25"] = Dict{String, Any}(
         "type" => "parameter", "default" => 0.0, "units" => "1",
         "shape" => Any["src_cells", "rcv_cells"],
-        "update" => Dict{String,Any}("kind" => "data", "source" => "MockSR",
-                                     "from" => Dict("file_variable" => "PM25")))
-    v["E_PM25"] = Dict{String,Any}("type" => "unknown", "shape" => Any["src_cells"])
-    v["conc_PM25"] = Dict{String,Any}("type" => "unknown", "shape" => Any["rcv_cells"])
+        "update" => Dict{String, Any}(
+            "kind" => "data", "source" => "MockSR",
+            "from" => Dict("file_variable" => "PM25")
+        )
+    )
+    v["E_PM25"] = Dict{String, Any}("type" => "unknown", "shape" => Any["src_cells"])
+    v["conc_PM25"] = Dict{String, Any}("type" => "unknown", "shape" => Any["rcv_cells"])
 
-    E_body = _op("*",
+    E_body = _op(
+        "*",
         _op("ifelse", _env_overlap(), 1.0, 0.0),
-        _op("*", _ix("emis_annual", "r"),
-                 _op("/", Dict{String,Any}("op" => "polygon_intersection_area",
-                                           "manifold" => "planar",
-                                           "args" => Any[_ix("cell_ring", "c"),
-                                                         _ix("rec_ring", "r")]),
-                          _ix("cell_area", "c"))))
+        _op(
+            "*", _ix("emis_annual", "r"),
+            _op(
+                "/", Dict{String, Any}(
+                    "op" => "polygon_intersection_area",
+                    "manifold" => "planar",
+                    "args" => Any[
+                        _ix("cell_ring", "c"),
+                        _ix("rec_ring", "r"),
+                    ]
+                ),
+                _ix("cell_area", "c")
+            )
+        )
+    )
     eqs = Any[
-        Dict{String,Any}("lhs" => "E_PM25", "rhs" => Dict{String,Any}(
-            "op" => "faq", "reduce" => "+", "output_idx" => Any["c"],
-            "ranges" => Dict{String,Any}("c" => Dict("from" => "src_cells"),
-                                         "r" => Dict("from" => "emis_records")),
-            "args" => Any["src_W", "src_S", "src_E", "src_N",
-                          "rec_xmin", "rec_ymin", "rec_xmax", "rec_ymax",
-                          "cell_ring", "cell_area", "rec_ring", "emis_annual"],
-            "expr" => E_body)),
-        Dict{String,Any}("lhs" => "conc_PM25", "rhs" => Dict{String,Any}(
-            "op" => "faq", "reduce" => "+", "output_idx" => Any["rcv"],
-            "ranges" => Dict{String,Any}("rcv" => Dict("from" => "rcv_cells"),
-                                         "s" => Dict("from" => "src_cells")),
-            "args" => Any["SR_PM25", "E_PM25"],
-            "expr" => _op("*", _ix("SR_PM25", "s", "rcv"), _ix("E_PM25", "s")))),
+        Dict{String, Any}(
+            "lhs" => "E_PM25", "rhs" => Dict{String, Any}(
+                "op" => "faq", "reduce" => "+", "output_idx" => Any["c"],
+                "ranges" => Dict{String, Any}(
+                    "c" => Dict("from" => "src_cells"),
+                    "r" => Dict("from" => "emis_records")
+                ),
+                "args" => Any[
+                    "src_W", "src_S", "src_E", "src_N",
+                    "rec_xmin", "rec_ymin", "rec_xmax", "rec_ymax",
+                    "cell_ring", "cell_area", "rec_ring", "emis_annual",
+                ],
+                "expr" => E_body
+            )
+        ),
+        Dict{String, Any}(
+            "lhs" => "conc_PM25", "rhs" => Dict{String, Any}(
+                "op" => "faq", "reduce" => "+", "output_idx" => Any["rcv"],
+                "ranges" => Dict{String, Any}(
+                    "rcv" => Dict("from" => "rcv_cells"),
+                    "s" => Dict("from" => "src_cells")
+                ),
+                "args" => Any["SR_PM25", "E_PM25"],
+                "expr" => _op("*", _ix("SR_PM25", "s", "rcv"), _ix("E_PM25", "s"))
+            )
+        ),
     ]
-    return Dict{String,Any}(
+    return Dict{String, Any}(
         "esm" => "1.1.0",
-        "metadata" => Dict{String,Any}("name" => "pushdown_cell_geometry"),
-        "data_sources" => Dict{String,Any}("MockSR" => Dict{String,Any}(
-            "kind" => "static", "source" => Dict("url_template" => "mock://sr"))),
-        "index_sets" => Dict{String,Any}(
-            "src_cells"    => Dict("kind" => "interval", "size" => 4),
-            "rcv_cells"    => Dict("kind" => "interval", "size" => 2),
+        "metadata" => Dict{String, Any}("name" => "pushdown_cell_geometry"),
+        "data_sources" => Dict{String, Any}(
+            "MockSR" => Dict{String, Any}(
+                "kind" => "static", "source" => Dict("url_template" => "mock://sr")
+            )
+        ),
+        "index_sets" => Dict{String, Any}(
+            "src_cells" => Dict("kind" => "interval", "size" => 4),
+            "rcv_cells" => Dict("kind" => "interval", "size" => 2),
             "emis_records" => Dict("kind" => "interval", "size" => 3),
-            "ring_vertex"  => Dict("kind" => "interval", "size" => 5),
-            "xy"           => Dict("kind" => "interval", "size" => 2)),
-        "models" => Dict{String,Any}("Binned" =>
-            Dict{String,Any}("variables" => v, "equations" => eqs)))
+            "ring_vertex" => Dict("kind" => "interval", "size" => 5),
+            "xy" => Dict("kind" => "interval", "size" => 2)
+        ),
+        "models" => Dict{String, Any}(
+            "Binned" =>
+                Dict{String, Any}("variables" => v, "equations" => eqs)
+        )
+    )
 end
 
 # A binning body carrying `polygon_intersection_area` is SETUP-TIME geometry, so
@@ -118,9 +154,11 @@ end
 # build's own materialized arrays; this alias is what pins that it does.
 _field(prep, name::AbstractString) = EA.observed_field(prep, name)
 
-_defs(out) = Dict(String(e["lhs"]) => e["rhs"]
-                  for e in out["models"]["Binned"]["equations"]
-                  if get(e, "lhs", nothing) isa AbstractString)
+_defs(out) = Dict(
+    String(e["lhs"]) => e["rhs"]
+        for e in out["models"]["Binned"]["equations"]
+        if get(e, "lhs", nothing) isa AbstractString
+)
 
 # Every `index(F, …)` base name reachable from `node`.
 function _bases!(node, out::Set{String})
@@ -130,9 +168,13 @@ function _bases!(node, out::Set{String})
             a isa AbstractVector && !isempty(a) && a[1] isa AbstractString &&
                 push!(out, String(a[1]))
         end
-        for v in values(node); _bases!(v, out); end
+        for v in values(node)
+            _bases!(v, out)
+        end
     elseif node isa AbstractVector
-        for x in node; _bases!(x, out); end
+        for x in node
+            _bases!(x, out)
+        end
     end
     return out
 end
@@ -140,9 +182,13 @@ end
 function _find_pia(node, out::Vector{Any})
     if node isa AbstractDict
         get(node, "op", nothing) == "polygon_intersection_area" && push!(out, node)
-        for v in values(node); _find_pia(v, out); end
+        for v in values(node)
+            _find_pia(v, out)
+        end
     elseif node isa AbstractVector
-        for x in node; _find_pia(x, out); end
+        for x in node
+            _find_pia(x, out)
+        end
     end
     return out
 end
@@ -154,7 +200,7 @@ mutable struct MockGatedPoly
 end
 EA.provider_refresh_times(::MockGatedPoly) = Float64[]
 EA.provider_supports_selection(::MockGatedPoly) = true
-function EA.provider_sample(m::MockGatedPoly, ::Real; selection=nothing)
+function EA.provider_sample(m::MockGatedPoly, ::Real; selection = nothing)
     if selection === nothing
         push!(m.calls, (:wholesale,))
         return m.full
@@ -164,18 +210,21 @@ function EA.provider_sample(m::MockGatedPoly, ::Real; selection=nothing)
 end
 
 @testset "pushdown: every cell-axis array is gathered, rank-preserving" begin
-    out = EA.desugar_pushdown(_doc(); model_name="Binned")
+    out = EA.desugar_pushdown(_doc(); model_name = "Binned")
     @test out !== nothing
     v = out["models"]["Binned"]["variables"]
     gathers = Dict(k => v[k]["shape"] for k in keys(v) if startswith(k, "pd_cell__"))
-    @test Set(keys(gathers)) == Set([
-        "pd_cell__src_cells__src_W", "pd_cell__src_cells__src_S",
-        "pd_cell__src_cells__src_E", "pd_cell__src_cells__src_N",
-        "pd_cell__src_cells__cell_area", "pd_cell__src_cells__cell_ring"])
+    @test Set(keys(gathers)) == Set(
+        [
+            "pd_cell__src_cells__src_W", "pd_cell__src_cells__src_S",
+            "pd_cell__src_cells__src_E", "pd_cell__src_cells__src_N",
+            "pd_cell__src_cells__cell_area", "pd_cell__src_cells__cell_ring",
+        ]
+    )
 
     # RANK-PRESERVING: only the FIRST axis moves onto the derived set.
     @test gathers["pd_cell__src_cells__cell_ring"] ==
-          Any["pd_support__src_cells", "ring_vertex", "xy"]
+        Any["pd_support__src_cells", "ring_vertex", "xy"]
     @test gathers["pd_cell__src_cells__cell_area"] == Any["pd_support__src_cells"]
 
     defs = _defs(out)
@@ -192,14 +241,22 @@ end
 end
 
 @testset "pushdown: the body's cell reads follow the envelopes onto the gathers" begin
-    out = EA.desugar_pushdown(_doc(); model_name="Binned")
+    out = EA.desugar_pushdown(_doc(); model_name = "Binned")
     body = _defs(out)["E_PM25"]
     @test body["ranges"]["c"]["from"] == "pd_support__src_cells"
 
     bases = _bases!(body, Set{String}())
     # NOTHING in the rewritten body still reads a full-grid cell-axis array.
-    @test isempty(intersect(bases, Set(["cell_ring", "cell_area",
-                                        "src_W", "src_S", "src_E", "src_N"])))
+    @test isempty(
+        intersect(
+            bases, Set(
+                [
+                    "cell_ring", "cell_area",
+                    "src_W", "src_S", "src_E", "src_N",
+                ]
+            )
+        )
+    )
     @test "pd_cell__src_cells__cell_ring" in bases
     @test "pd_cell__src_cells__cell_area" in bases
 
@@ -220,7 +277,7 @@ end
     body = doc["models"]["Binned"]["equations"][1]["rhs"]["expr"]
     body["args"][2]["args"][2]["args"][2] = _ix("cell_area", _op("+", "c", 1))
     err = try
-        EA.desugar_pushdown(doc; model_name="Binned")
+        EA.desugar_pushdown(doc; model_name = "Binned")
         nothing
     catch e
         e
@@ -244,21 +301,26 @@ end
     push!(rhs["args"], "temperature")
     rhs["expr"] = _op("*", rhs["expr"], _ix("temperature", _op("+", "c", 4)))
 
-    out = EA.desugar_pushdown(doc; model_name="Binned")
+    out = EA.desugar_pushdown(doc; model_name = "Binned")
     @test !haskey(out["models"]["Binned"]["variables"], "pd_cell__src_cells__temperature")
     @test "temperature" in _bases!(_defs(out)["E_PM25"], Set{String}())
 end
 
 @testset "pushdown: rewritten polygon allocation matches the dense evaluation" begin
-    ca = Dict{String,Any}(
+    ca = Dict{String, Any}(
         "src_W" => CW, "src_S" => CS, "src_E" => CE, "src_N" => CN,
         "cell_area" => fill(1.0, 4),
-        "cell_ring" => cat([permutedims(hcat(_ring(CW[c], CS[c], CE[c], CN[c])...))
-                            for c in 1:4]...; dims=3),
-        "rec_ring" => cat([permutedims(hcat(_ring(r...)...)) for r in RECS]...; dims=3),
+        "cell_ring" => cat(
+            [
+                permutedims(hcat(_ring(CW[c], CS[c], CE[c], CN[c])...))
+                    for c in 1:4
+            ]...; dims = 3
+        ),
+        "rec_ring" => cat([permutedims(hcat(_ring(r...)...)) for r in RECS]...; dims = 3),
         "rec_xmin" => [r[1] for r in RECS], "rec_ymin" => [r[2] for r in RECS],
         "rec_xmax" => [r[3] for r in RECS], "rec_ymax" => [r[4] for r in RECS],
-        "emis_annual" => EMIS)
+        "emis_annual" => EMIS
+    )
     # `cat(…; dims=3)` stacks along the LAST axis; the declaration is
     # [cells, vertex, xy], so bring the stacking axis to the front.
     ca["cell_ring"] = permutedims(ca["cell_ring"], (3, 1, 2))
@@ -270,9 +332,9 @@ end
     end
 
     # --- dense reference: no rewrite, SR an ordinary const array -------------
-    dense_ca = merge(ca, Dict{String,Any}("SR_PM25" => SR, "Binned.SR_PM25" => SR))
+    dense_ca = merge(ca, Dict{String, Any}("SR_PM25" => SR, "Binned.SR_PM25" => SR))
     dense_insp = EA.BuildInspection()
-    dense = EA.esm_problem(_doc(), (0.0, 1.0); const_arrays=dense_ca, inspect=dense_insp)
+    dense = EA.esm_problem(_doc(), (0.0, 1.0); const_arrays = dense_ca, inspect = dense_insp)
     E_dense = _field(dense, "E_PM25")
     conc_dense = _field(dense, "conc_PM25")
     # The dense arm is itself checked against a hand oracle, so a shared bug in
@@ -283,9 +345,11 @@ end
     # --- rewritten: SR gated, cell_ring gathered onto the support axis -------
     g = MockGatedPoly(SR, Any[])
     insp = EA.BuildInspection()
-    prep = EA.esm_problem(_doc(), (0.0, 1.0); const_arrays=ca,
-                      providers=Dict{String,Any}("Binned.SR_PM25" => g),
-                      inspect=insp, pushdown_rewrite=true)
+    prep = EA.esm_problem(
+        _doc(), (0.0, 1.0); const_arrays = ca,
+        providers = Dict{String, Any}("Binned.SR_PM25" => g),
+        inspect = insp, pushdown_rewrite = true
+    )
     mf = Int.(insp.const_arrays["pd_member_factor__src_cells"])
     @test mf == [1, 2, 4]                     # 1-based; cell 3 is met by nothing
     @test _field(prep, "E_PM25") ≈ EXPECT_E[mf]

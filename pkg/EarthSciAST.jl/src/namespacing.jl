@@ -31,19 +31,25 @@ document-scoped registry with plain names shared by every component. (A former
 `idx_names` parameter that could opt component-local index identifiers into
 prefixing was dead — every caller passed it empty — and has been removed.)
 """
-function namespace_expr(expr::NumExpr, prefix::String,
-                        local_names::Set{String})::ASTExpr
+function namespace_expr(
+        expr::NumExpr, prefix::String,
+        local_names::Set{String}
+    )::ASTExpr
     return expr
 end
 
-function namespace_expr(expr::IntExpr, prefix::String,
-                        local_names::Set{String})::ASTExpr
+function namespace_expr(
+        expr::IntExpr, prefix::String,
+        local_names::Set{String}
+    )::ASTExpr
     return expr
 end
 
-function namespace_expr(expr::VarExpr, prefix::String,
-                        local_names::Set{String},
-                        shadowed::Set{String}=_NO_SHADOW)::ASTExpr
+function namespace_expr(
+        expr::VarExpr, prefix::String,
+        local_names::Set{String},
+        shadowed::Set{String} = _NO_SHADOW
+    )::ASTExpr
     if occursin('.', expr.name)
         first_part = String(split(expr.name, '.')[1])
         if first_part in local_names
@@ -73,14 +79,20 @@ end
 # however many locals the component declares, and a document without that
 # collision never leaves the root scope.
 const _NO_SHADOW = Set{String}()
-const _NsMemo = IdDict{OpExpr,ASTExpr}
-const _NsMemos = Dict{Set{String},_NsMemo}
-_namespace_expr(e::NumExpr, ::String, ::Set{String}, ::Set{String}, ::_NsMemo,
-                ::_NsMemos) = e
-_namespace_expr(e::IntExpr, ::String, ::Set{String}, ::Set{String}, ::_NsMemo,
-                ::_NsMemos) = e
-_namespace_expr(e::VarExpr, prefix::String, local_names::Set{String},
-                shadowed::Set{String}, ::_NsMemo, ::_NsMemos) =
+const _NsMemo = IdDict{OpExpr, ASTExpr}
+const _NsMemos = Dict{Set{String}, _NsMemo}
+_namespace_expr(
+    e::NumExpr, ::String, ::Set{String}, ::Set{String}, ::_NsMemo,
+    ::_NsMemos
+) = e
+_namespace_expr(
+    e::IntExpr, ::String, ::Set{String}, ::Set{String}, ::_NsMemo,
+    ::_NsMemos
+) = e
+_namespace_expr(
+    e::VarExpr, prefix::String, local_names::Set{String},
+    shadowed::Set{String}, ::_NsMemo, ::_NsMemos
+) =
     namespace_expr(e, prefix, local_names, shadowed)
 
 # The binder set is THIS node's own loop symbols: its `output_idx` entries and
@@ -117,8 +129,10 @@ end
 # node's own ranges (`_vi_join_index_sym`, `_join_sym_for_key`) — so prefixing a
 # shadowed symbol makes it resolve to nothing. Without this the gate mis-fires on
 # the legal case of a component declaring a variable named like a loop symbol.
-function _namespace_join(join, binders::Set{String}, prefix::String,
-                         local_names::Set{String})
+function _namespace_join(
+        join, binders::Set{String}, prefix::String,
+        local_names::Set{String}
+    )
     join === nothing && return nothing
     nsname(n) = begin
         s = String(n)
@@ -137,24 +151,33 @@ function _namespace_join(join, binders::Set{String}, prefix::String,
     # scalar and never rewrites. A bin-equality clause namespaces its key columns.
     nsclause(clause::_OverlapJoinSpec) = _OverlapJoinSpec(
         String[nsname(n) for n in clause.src_env],
-        String[nsname(n) for n in clause.tgt_env], clause.eps, clause.eps_given)
+        String[nsname(n) for n in clause.tgt_env], clause.eps, clause.eps_given
+    )
     # Key COLUMNS are references and are namespaced; a clause's `syms` name
     # range symbols the node BINDS and must be carried through untouched.
-    nsclause(clause) = _with_pairs(clause,
-        Tuple{String,String}[(nsname(l), nsname(r)) for (l, r) in clause])
+    nsclause(clause) = _with_pairs(
+        clause,
+        Tuple{String, String}[(nsname(l), nsname(r)) for (l, r) in clause]
+    )
     return Any[nsclause(clause) for clause in join]
 end
 
-function namespace_expr(expr::OpExpr, prefix::String,
-                        local_names::Set{String})::ASTExpr
+function namespace_expr(
+        expr::OpExpr, prefix::String,
+        local_names::Set{String}
+    )::ASTExpr
     memo = _NsMemo()
-    return _namespace_expr(expr, prefix, local_names, _NO_SHADOW, memo,
-                           _NsMemos(_NO_SHADOW => memo))
+    return _namespace_expr(
+        expr, prefix, local_names, _NO_SHADOW, memo,
+        _NsMemos(_NO_SHADOW => memo)
+    )
 end
 
-function _namespace_expr(expr::OpExpr, prefix::String,
-                         local_names::Set{String}, shadowed::Set{String},
-                         memo::_NsMemo, memos::_NsMemos)::ASTExpr
+function _namespace_expr(
+        expr::OpExpr, prefix::String,
+        local_names::Set{String}, shadowed::Set{String},
+        memo::_NsMemo, memos::_NsMemos
+    )::ASTExpr
     r = get(memo, expr, nothing)
     r === nothing || return r
     # A loop symbol is local to the node that binds it (an `output_idx` entry, a
@@ -169,7 +192,7 @@ function _namespace_expr(expr::OpExpr, prefix::String,
     # outer binding; one that rebinds it shadows it again.
     child_shadowed, child_memo = shadowed, memo
     if expr.output_idx !== nothing || expr.ranges !== nothing ||
-       expr.int_var !== nothing
+            expr.int_var !== nothing
         for b in _bound_symbols(expr)
             (b in local_names && !(b in child_shadowed)) || continue
             child_shadowed === shadowed && (child_shadowed = copy(shadowed))
@@ -193,9 +216,12 @@ function _namespace_expr(expr::OpExpr, prefix::String,
     # manifold, …) — earlier this rebuild hand-listed keywords and silently
     # dropped int_var/lower/upper/table/table_axes/output.
     result = map_children(
-        x -> _namespace_expr(x, prefix, local_names, child_shadowed, child_memo,
-                             memos),
-        expr)::OpExpr
+        x -> _namespace_expr(
+            x, prefix, local_names, child_shadowed, child_memo,
+            memos
+        ),
+        expr
+    )::OpExpr
     # `map_children` recurses into expression-bearing fields only. One field
     # carries plain-name identifiers that also need namespacing: a `join.on` key
     # column may name a component-local bin buffer (see `_namespace_join`).
@@ -205,7 +231,7 @@ function _namespace_expr(expr::OpExpr, prefix::String,
     # and never prefixed.
     nj = expr.join === nothing ? nothing :
         _namespace_join(expr.join, _join_binders(expr), prefix, local_names)
-    res = nj === expr.join ? result : reconstruct(result; join=nj)
+    res = nj === expr.join ? result : reconstruct(result; join = nj)
     memo[expr] = res
     return res
 end
@@ -232,12 +258,16 @@ function _namespace_variable_update(var::ModelVariable, _ns)::ModelVariable
         nw = r.when === nothing ? nothing : _ns(r.when)
         ne = r.expression === nothing ? nothing : _ns(r.expression)
         (nw !== r.when || ne !== r.expression) && (changed = true)
-        push!(rules, ParameterUpdate(r.kind; times=r.times, interval=r.interval,
-            initial_offset=r.initial_offset, when=nw, direction=r.direction,
-            source=r.source, hook=r.hook, expression=ne, from=r.from,
-            handler=r.handler))
+        push!(
+            rules, ParameterUpdate(
+                r.kind; times = r.times, interval = r.interval,
+                initial_offset = r.initial_offset, when = nw, direction = r.direction,
+                source = r.source, hook = r.hook, expression = ne, from = r.from,
+                handler = r.handler
+            )
+        )
     end
-    return changed ? reconstruct(var; update=rules) : var
+    return changed ? reconstruct(var; update = rules) : var
 end
 
 """
@@ -275,27 +305,35 @@ into subsystems, whose templates merged into their owner's registry at load.
 # half produced `Transport._var = 1e-3` beside a condition still reading
 # `_var`: one placeholder spelled two ways in one event, which is the
 # partial-rename fingerprint this fixture family was cleaned up to remove.
-function _collect_events!(continuous_events::Vector{ContinuousEvent},
-                          discrete_events::Vector{DiscreteEvent},
-                          component_continuous::Vector{ContinuousEvent},
-                          component_discrete::Vector{DiscreteEvent},
-                          prefix::String, ns)
+function _collect_events!(
+        continuous_events::Vector{ContinuousEvent},
+        discrete_events::Vector{DiscreteEvent},
+        component_continuous::Vector{ContinuousEvent},
+        component_discrete::Vector{DiscreteEvent},
+        prefix::String, ns
+    )
     ns_affects(affects) = AffectEquation[
-        AffectEquation(is_placeholder(a.lhs) || occursin('.', a.lhs) ? a.lhs :
-                       "$(prefix).$(a.lhs)",
-                       ns(a.rhs))
-        for a in affects
+        AffectEquation(
+            is_placeholder(a.lhs) || occursin('.', a.lhs) ? a.lhs :
+                "$(prefix).$(a.lhs)",
+            ns(a.rhs)
+        )
+            for a in affects
     ]
     for ev in component_continuous
-        push!(continuous_events,
-              ContinuousEvent(ASTExpr[ns(c) for c in ev.conditions],
-                              ns_affects(ev.affects);
-                              affect_neg=ev.affect_neg === nothing ? nothing :
-                                  ns_affects(ev.affect_neg),
-                              root_find=ev.root_find,
-                              reinitialize=ev.reinitialize,
-                              description=ev.description,
-                              name=ev.name))
+        push!(
+            continuous_events,
+            ContinuousEvent(
+                ASTExpr[ns(c) for c in ev.conditions],
+                ns_affects(ev.affects);
+                affect_neg = ev.affect_neg === nothing ? nothing :
+                    ns_affects(ev.affect_neg),
+                root_find = ev.root_find,
+                reinitialize = ev.reinitialize,
+                description = ev.description,
+                name = ev.name
+            )
+        )
     end
 
     for ev in component_discrete
@@ -304,23 +342,29 @@ function _collect_events!(continuous_events::Vector{ContinuousEvent},
         else
             ev.trigger
         end
-        push!(discrete_events,
-              DiscreteEvent(new_trigger, ns_affects(ev.affects);
-                            reinitialize=ev.reinitialize,
-                            description=ev.description, name=ev.name))
+        push!(
+            discrete_events,
+            DiscreteEvent(
+                new_trigger, ns_affects(ev.affects);
+                reinitialize = ev.reinitialize,
+                description = ev.description, name = ev.name
+            )
+        )
     end
     return nothing
 end
 
-function _collect_model!(states::OrderedDict{String, ModelVariable},
-                         params::OrderedDict{String, ModelVariable},
-                         observeds::OrderedDict{String, ModelVariable},
-                         equations::Vector{Equation},
-                         contribs::Vector{Vector{Contribution}},
-                         continuous_events::Vector{ContinuousEvent},
-                         discrete_events::Vector{DiscreteEvent},
-                         model::Model, prefix::String;
-                         tpl_rename::Union{Nothing,AbstractDict{String,String}}=nothing)
+function _collect_model!(
+        states::OrderedDict{String, ModelVariable},
+        params::OrderedDict{String, ModelVariable},
+        observeds::OrderedDict{String, ModelVariable},
+        equations::Vector{Equation},
+        contribs::Vector{Vector{Contribution}},
+        continuous_events::Vector{ContinuousEvent},
+        discrete_events::Vector{DiscreteEvent},
+        model::Model, prefix::String;
+        tpl_rename::Union{Nothing, AbstractDict{String, String}} = nothing
+    )
     local_names = Set{String}(keys(model.variables))
     # Also include subsystem-qualified names from this level's subsystems so
     # that references inside the model to subsystem variables get namespaced.
@@ -330,7 +374,7 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
 
     # Namespace, then follow the registry rename (identity when there is none).
     _ns(e) = tpl_rename === nothing ? namespace_expr(e, prefix, local_names) :
-             _rename_expr_apply_refs(namespace_expr(e, prefix, local_names), tpl_rename)
+        _rename_expr_apply_refs(namespace_expr(e, prefix, local_names), tpl_rename)
 
     # esm-spec v0.8.0: index sets are a single document-scoped registry (seeded
     # once by `flatten` from the top-level object) with plain names shared by every
@@ -375,7 +419,7 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
     for eq in model.equations
         lhs = _ns(eq.lhs)
         rhs = _ns(eq.rhs)
-        push!(equations, Equation(lhs, rhs; _comment=eq._comment))
+        push!(equations, Equation(lhs, rhs; _comment = eq._comment))
         push!(contribs, _authored(rhs, _component_origin(prefix)))
     end
 
@@ -384,8 +428,10 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
     # left to synthesize from a variable-level `expression`, which no longer
     # exists (esm-spec §6.3).
 
-    _collect_events!(continuous_events, discrete_events,
-                     model.continuous_events, model.discrete_events, prefix, _ns)
+    _collect_events!(
+        continuous_events, discrete_events,
+        model.continuous_events, model.discrete_events, prefix, _ns
+    )
 
     for (sub_name, sub_model) in model.subsystems
         # esm 1.0.0: a data source is a document-scoped registry entry, not a
@@ -395,11 +441,14 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
         # own namespaced key, and the bound value reaches the RHS through the
         # const/refresh array registry keyed by that same name.
         sub_model isa Model || continue
-        _collect_model!(states, params, observeds, equations, contribs,
-                        continuous_events, discrete_events,
-                        sub_model, "$(prefix).$(sub_name)";
-                        tpl_rename=tpl_rename)
+        _collect_model!(
+            states, params, observeds, equations, contribs,
+            continuous_events, discrete_events,
+            sub_model, "$(prefix).$(sub_name)";
+            tpl_rename = tpl_rename
+        )
     end
+    return
 end
 
 """
@@ -416,14 +465,16 @@ parameter's fixed value, so it still reads as a concentration in every rate
 law. Were it left a state with no equation instead, it would sit in `u` with a
 permanently-zero derivative — a zero row in the chemistry Jacobian block.
 """
-function _collect_reaction_system!(states::OrderedDict{String, ModelVariable},
-                                   params::OrderedDict{String, ModelVariable},
-                                   equations::Vector{Equation},
-                                   contribs::Vector{Vector{Contribution}},
-                                   continuous_events::Vector{ContinuousEvent},
-                                   discrete_events::Vector{DiscreteEvent},
-                                   rsys::ReactionSystem, prefix::String;
-                                   templates=nothing)
+function _collect_reaction_system!(
+        states::OrderedDict{String, ModelVariable},
+        params::OrderedDict{String, ModelVariable},
+        equations::Vector{Equation},
+        contribs::Vector{Vector{Contribution}},
+        continuous_events::Vector{ContinuousEvent},
+        discrete_events::Vector{DiscreteEvent},
+        rsys::ReactionSystem, prefix::String;
+        templates = nothing
+    )
     local_names = Set{String}()
     for sp in rsys.species
         push!(local_names, sp.name)
@@ -440,7 +491,8 @@ function _collect_reaction_system!(states::OrderedDict{String, ModelVariable},
         target = sp.constant === true ? params : states
         target[namespaced] = ModelVariable(
             sp.constant === true ? ParameterVariable : UnknownVariable;
-            default=sp.default, description=sp.description, units=sp.units)
+            default = sp.default, description = sp.description, units = sp.units
+        )
     end
     for p in rsys.parameters
         namespaced = "$(prefix).$(p.name)"
@@ -448,10 +500,12 @@ function _collect_reaction_system!(states::OrderedDict{String, ModelVariable},
         # it is the only channel binding a parameter to a data source
         # (esm-spec §5.4), so leaving it behind here would flatten a
         # data-driven parameter into a constant.
-        params[namespaced] = ModelVariable(ParameterVariable;
-            default=p.default, description=p.description, units=p.units,
-            default_units=p.default_units, shape=p.shape,
-            distribution=p.distribution, update=p.update)
+        params[namespaced] = ModelVariable(
+            ParameterVariable;
+            default = p.default, description = p.description, units = p.units,
+            default_units = p.default_units, shape = p.shape,
+            distribution = p.distribution, update = p.update
+        )
     end
 
     # v0.8.0: every component shares the document's single `domain`; a system
@@ -477,7 +531,7 @@ function _collect_reaction_system!(states::OrderedDict{String, ModelVariable},
         rhs0 = templates === nothing ? eq.rhs : _expand_expr_refs(eq.rhs, templates)
         lhs = namespace_expr(eq.lhs, prefix, local_names)
         rhs = namespace_expr(rhs0, prefix, local_names)
-        push!(equations, Equation(lhs, rhs; _comment=eq._comment))
+        push!(equations, Equation(lhs, rhs; _comment = eq._comment))
         push!(contribs, _authored(rhs, _component_origin(prefix)))
     end
 
@@ -487,14 +541,21 @@ function _collect_reaction_system!(states::OrderedDict{String, ModelVariable},
     # references are expanded eagerly at collect, and an event expression is a
     # component-scoped expression exactly like a rate, so it takes the same
     # expansion before namespacing.
-    _ns_event(e) = namespace_expr(templates === nothing ? e :
-                                  _expand_expr_refs(e, templates), prefix, local_names)
-    _collect_events!(continuous_events, discrete_events,
-                     rsys.continuous_events, rsys.discrete_events, prefix, _ns_event)
+    _ns_event(e) = namespace_expr(
+        templates === nothing ? e :
+            _expand_expr_refs(e, templates), prefix, local_names
+    )
+    _collect_events!(
+        continuous_events, discrete_events,
+        rsys.continuous_events, rsys.discrete_events, prefix, _ns_event
+    )
 
     for (sub_name, sub_rsys) in rsys.subsystems
-        _collect_reaction_system!(states, params, equations, contribs,
-                                  continuous_events, discrete_events,
-                                  sub_rsys, "$(prefix).$(sub_name)"; templates=templates)
+        _collect_reaction_system!(
+            states, params, equations, contribs,
+            continuous_events, discrete_events,
+            sub_rsys, "$(prefix).$(sub_name)"; templates = templates
+        )
     end
+    return
 end

@@ -40,8 +40,10 @@ import SciMLBase           # solve / remake, and the SymbolicIndexingInterface i
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
-const _MRR_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-                          "merged_rename_reach")
+const _MRR_DIR = joinpath(
+    TESTUTILS_REPO_ROOT, "tests", "conformance",
+    "merged_rename_reach"
+)
 
 # A missing manifest is a hard failure, not a skip: the manifest IS the contract
 # this file exists to enforce.
@@ -73,7 +75,7 @@ _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
         @test "julia" in _MRR_MANIFEST.surfaces.override_keys.bindings
         @test "julia" in _MRR_MANIFEST.surfaces.output_selection.bindings
         @test _MRR_MANIFEST.merged_variable_renames_field.julia ==
-              "FlattenMetadata.merged_variable_renames"
+            "FlattenMetadata.merged_variable_renames"
     end
 
     for case in _MRR_FLATTEN
@@ -83,10 +85,14 @@ _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
             # (1) The merge RECORDS which names it deleted. That map is what a
             # consumer addressing a state by name resolves through, so it is
             # part of the flattened form's contract, not a private detail.
-            recorded = Dict{String,String}(String(k) => String(v)
-                                           for (k, v) in flat.metadata.merged_variable_renames)
-            expected = Dict{String,String}(String(k) => String(v)
-                                           for (k, v) in pairs(case.merged_variable_renames))
+            recorded = Dict{String, String}(
+                String(k) => String(v)
+                    for (k, v) in flat.metadata.merged_variable_renames
+            )
+            expected = Dict{String, String}(
+                String(k) => String(v)
+                    for (k, v) in pairs(case.merged_variable_renames)
+            )
             @test recorded == expected
 
             # (2) The merged-away name survives NOWHERE — not in the variable
@@ -109,8 +115,10 @@ _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
             # outright would satisfy "the dead name survives nowhere" by doing
             # nothing at all.
             target = String(case.tendency_of)
-            idx = findfirst(eq -> EarthSciAST.lhs_dependent_variable(eq.lhs) == target,
-                            flat.equations)
+            idx = findfirst(
+                eq -> EarthSciAST.lhs_dependent_variable(eq.lhs) == target,
+                flat.equations
+            )
             @test idx !== nothing
             if idx !== nothing
                 rhs = to_ascii(flat.equations[idx].rhs)
@@ -129,9 +137,11 @@ _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
             # declared default — which is what an unresolved key silently left
             # in place.
             flat = _mrr_flatten(case)
-            u0 = Dict{String,Float64}(String(k) => Float64(v)
-                                      for (k, v) in pairs(case.initial_conditions))
-            prob = EarthSciAST.esm_problem(flat, (0.0, 1.0); u0=u0)
+            u0 = Dict{String, Float64}(
+                String(k) => Float64(v)
+                    for (k, v) in pairs(case.initial_conditions)
+            )
+            prob = EarthSciAST.esm_problem(flat, (0.0, 1.0); u0 = u0)
             for (name, want) in pairs(case.resolves_to)
                 slot = get(prob.var_map, String(name), nothing)
                 @test slot !== nothing
@@ -184,10 +194,11 @@ _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
             # The plot recipe's data path: it classifies each name by its
             # timeseries, then reads the solution at a dense vector of times.
             @test SII.get_all_timeseries_indexes(sol, dead) ==
-                  SII.get_all_timeseries_indexes(sol, live)
+                SII.get_all_timeseries_indexes(sol, live)
             to_arrays(sym) = SciMLBase.diffeq_to_arrays(
                 sol, false, true, 50, nothing,
-                SciMLBase.interpret_vars([sym], sol), :identity, nothing)
+                SciMLBase.interpret_vars([sym], sol), :identity, nothing
+            )
             @test first(to_arrays(dead)) == first(to_arrays(live))
 
             # `remake` rebuilds the index from the remade problem and keeps it.
@@ -206,15 +217,21 @@ _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
             # rewrites the affect's RHS and leaves its target pointing at a
             # state the flattened system no longer declares.
             flat = _mrr_flatten(case)
-            recorded = Dict{String,String}(String(k) => String(v)
-                                           for (k, v) in flat.metadata.merged_variable_renames)
-            expected = Dict{String,String}(String(k) => String(v)
-                                           for (k, v) in pairs(case.merged_variable_renames))
+            recorded = Dict{String, String}(
+                String(k) => String(v)
+                    for (k, v) in flat.metadata.merged_variable_renames
+            )
+            expected = Dict{String, String}(
+                String(k) => String(v)
+                    for (k, v) in pairs(case.merged_variable_renames)
+            )
             @test recorded == expected
             @test collect(keys(flat.state_variables)) == [String(s) for s in case.state_variables]
 
-            affects = [a for ev in vcat(flat.discrete_events, flat.continuous_events)
-                       for a in ev.affects]
+            affects = [
+                a for ev in vcat(flat.discrete_events, flat.continuous_events)
+                    for a in ev.affects
+            ]
             @test length(affects) == length(case.event_affects)
             for (affect, want) in zip(affects, case.event_affects)
                 @test affect.lhs == String(want.lhs)
@@ -225,12 +242,18 @@ _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
             end
 
             for (var_name, wanted) in pairs(case.variable_updates)
-                v = get(flat.parameters, String(var_name),
-                        get(flat.state_variables, String(var_name), nothing))
+                v = get(
+                    flat.parameters, String(var_name),
+                    get(flat.state_variables, String(var_name), nothing)
+                )
                 @test v !== nothing
                 if v !== nothing && v.update !== nothing
-                    rendered = join([to_ascii(r.expression) for r in v.update
-                                     if r.expression !== nothing], " ")
+                    rendered = join(
+                        [
+                            to_ascii(r.expression) for r in v.update
+                                if r.expression !== nothing
+                        ], " "
+                    )
                     for name in wanted
                         @test occursin(String(name), rendered)
                     end
@@ -240,13 +263,20 @@ _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
             # The dead spelling survives in NEITHER, in either form: not the
             # qualified name a collect-time namespacing carries through, and not
             # the bare local a coupling-time one leaves behind.
-            haystack = join(vcat(
-                [to_ascii(a.rhs) for a in affects],
-                [a.lhs for a in affects],
-                [to_ascii(r.expression)
-                 for v in vcat(collect(values(flat.parameters)),
-                               collect(values(flat.state_variables)))
-                 if v.update !== nothing for r in v.update if r.expression !== nothing]), " ")
+            haystack = join(
+                vcat(
+                    [to_ascii(a.rhs) for a in affects],
+                    [a.lhs for a in affects],
+                    [
+                        to_ascii(r.expression)
+                            for v in vcat(
+                                collect(values(flat.parameters)),
+                                collect(values(flat.state_variables))
+                            )
+                            if v.update !== nothing for r in v.update if r.expression !== nothing
+                    ]
+                ), " "
+            )
             for gone in case.absent_from_events_and_updates
                 @test !(String(gone) in split(haystack))
             end
@@ -281,7 +311,7 @@ _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
             # the survivor's declared default is the `initial_conditions` half:
             # a key that silently resolved to nothing would leave the run at
             # that default and the test would still return a verdict.
-            results = run_inline_tests(joinpath(_MRR_DIR, String(case.path)); alg=Tsit5())
+            results = run_inline_tests(joinpath(_MRR_DIR, String(case.path)); alg = Tsit5())
             matching = [r for r in results if r.test_id == String(case.test_id)]
             @test !isempty(matching)
             if !isempty(matching)
@@ -289,9 +319,11 @@ _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
                 @test r.passed == case.passes
                 @test r.actual !== nothing
                 if r.actual !== nothing
-                    @test isapprox(r.actual, Float64(case.expected); rtol=1e-6)
-                    @test !isapprox(r.actual, Float64(case.default_without_resolution);
-                                    rtol=1e-6)
+                    @test isapprox(r.actual, Float64(case.expected); rtol = 1.0e-6)
+                    @test !isapprox(
+                        r.actual, Float64(case.default_without_resolution);
+                        rtol = 1.0e-6
+                    )
                 end
             end
         end

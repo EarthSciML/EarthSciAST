@@ -63,9 +63,9 @@ function _split_observeds!(model::AbstractDict)
         # first — the redeclaration would be silently inert.
         i = findfirst(e -> e isa AbstractDict && get(e, "lhs", nothing) == name, eqs)
         if i === nothing
-            push!(eqs, Dict{String,Any}("lhs" => name, "rhs" => rhs))
+            push!(eqs, Dict{String, Any}("lhs" => name, "rhs" => rhs))
         else
-            eqs[i] = Dict{String,Any}("lhs" => name, "rhs" => rhs)
+            eqs[i] = Dict{String, Any}("lhs" => name, "rhs" => rhs)
         end
     end
     return model
@@ -77,7 +77,7 @@ end
 function canon(io::IO, x, level::Int)
     pad = "  "^level
     padin = "  "^(level + 1)
-    if x isa AbstractDict
+    return if x isa AbstractDict
         ks = sort!(collect(String.(keys(x))))
         isempty(ks) && return print(io, "{}")
         print(io, "{\n")
@@ -124,13 +124,14 @@ end
 const MAX_FIXTURE_EXTENT = 1024
 
 function check_extents(doc, origin::AbstractString)
-    for (name, set) in get(doc, "index_sets", Dict{String,Any}())
+    for (name, set) in get(doc, "index_sets", Dict{String, Any}())
         n = get(set, "kind", nothing) == "interval" ? get(set, "size", 0) :
             length(get(set, "members", ()))
         n isa Integer && n > MAX_FIXTURE_EXTENT && error(
             "$(origin): index set `$(name)` declares $(n) members, over the " *
-            "$(MAX_FIXTURE_EXTENT) a corpus fixture may carry. Reduce the grid " *
-            "extents before committing (see tests/conformance/pushdown/README.md).")
+                "$(MAX_FIXTURE_EXTENT) a corpus fixture may carry. Reduce the grid " *
+                "extents before committing (see tests/conformance/pushdown/README.md)."
+        )
     end
     return doc
 end
@@ -141,7 +142,7 @@ function write_canon(path::AbstractString, doc)
         canon(io, doc, 0)
         print(io, "\n")
     end
-    println("  wrote $path")
+    return println("  wrote $path")
 end
 
 # ---------------------------------------------------------------------------
@@ -150,9 +151,11 @@ end
 # ---------------------------------------------------------------------------
 _ix(f, args...) = Dict("op" => "index", "args" => Any[f, args...])
 _op(o, args...) = Dict("op" => o, "args" => Any[args...])
-function _agg(output_idx, ranges, expr; reduce=nothing, args=String[], extra...)
-    d = Dict{String,Any}("op" => "faq", "output_idx" => collect(output_idx),
-                         "ranges" => ranges, "args" => collect(args), "expr" => expr)
+function _agg(output_idx, ranges, expr; reduce = nothing, args = String[], extra...)
+    d = Dict{String, Any}(
+        "op" => "faq", "output_idx" => collect(output_idx),
+        "ranges" => ranges, "args" => collect(args), "expr" => expr
+    )
     reduce === nothing || (d["reduce"] = reduce)
     for (k, v) in extra
         d[String(k)] = v
@@ -163,9 +166,9 @@ end
 _d2r(d) = d * pi / 180
 function _lcc_consts(lat1, lat2, lat0, lon0)
     p1 = _d2r(lat1); p2 = _d2r(lat2); p0 = _d2r(lat0); l0 = _d2r(lon0)
-    n  = log(cos(p1) / cos(p2)) / log(tan(pi/4 + p2/2) / tan(pi/4 + p1/2))
-    F  = cos(p1) * tan(pi/4 + p1/2)^n / n
-    r0 = F / tan(pi/4 + p0/2)^n
+    n = log(cos(p1) / cos(p2)) / log(tan(pi / 4 + p2 / 2) / tan(pi / 4 + p1 / 2))
+    F = cos(p1) * tan(pi / 4 + p1 / 2)^n / n
+    r0 = F / tan(pi / 4 + p0 / 2)^n
     return (n = n, rf = F, rho0 = r0, lam0 = l0)
 end
 
@@ -179,98 +182,142 @@ function build_l1_doc()
 
     _latr(e) = _op("*", _ix("emis_lat", e), "lcc_d2r")
     _lonr(e) = _op("*", _ix("emis_lon", e), "lcc_d2r")
-    _rho(e)  = _op("/", "lcc_rf",
-                   _op("^", _op("tan", _op("+", "lcc_qp", _op("/", _latr(e), 2.0))), "lcc_n"))
-    _theta(e)= _op("*", "lcc_n", _op("-", _lonr(e), "lcc_lam0"))
+    _rho(e) = _op(
+        "/", "lcc_rf",
+        _op("^", _op("tan", _op("+", "lcc_qp", _op("/", _latr(e), 2.0))), "lcc_n")
+    )
+    _theta(e) = _op("*", "lcc_n", _op("-", _lonr(e), "lcc_lam0"))
     _Xbody(e) = _op("*", _rho(e), _op("sin", _theta(e)))
     _Ybody(e) = _op("-", "lcc_rho0", _op("*", _rho(e), _op("cos", _theta(e))))
-    _proj_obs(bodyfn) = _agg(["e"], Dict("e"=>Dict("from"=>"emis_records")),
-                             bodyfn("e"); args=["emis_lon", "emis_lat"])
+    _proj_obs(bodyfn) = _agg(
+        ["e"], Dict("e" => Dict("from" => "emis_records")),
+        bodyfn("e"); args = ["emis_lon", "emis_lat"]
+    )
 
-    _contain = _op("and",
+    _contain = _op(
+        "and",
         _op("<=", _ix("src_W", "c"), _ix("X", "r")), _op("<", _ix("X", "r"), _ix("src_E", "c")),
-        _op("<=", _ix("src_S", "c"), _ix("Y", "r")), _op("<", _ix("Y", "r"), _ix("src_N", "c")))
-    _E_agg(is_p) = _agg(["c"],
-        Dict("c"=>Dict("from"=>"src_cells"), "r"=>Dict("from"=>"emis_records")),
-        _op("*", _op("ifelse", _contain, 1.0, 0.0),
-                 _op("*", _ix("emis_annual", "r"), _ix(is_p, "r")));
-        reduce="+", args=["src_W","src_S","src_E","src_N","X","Y","emis_annual",is_p])
-    _conc_agg(SRname, Ename) = _agg(["rcv"],
-        Dict("s"=>Dict("from"=>"src_cells"), "rcv"=>Dict("from"=>"rcv_cells")),
+        _op("<=", _ix("src_S", "c"), _ix("Y", "r")), _op("<", _ix("Y", "r"), _ix("src_N", "c"))
+    )
+    _E_agg(is_p) = _agg(
+        ["c"],
+        Dict("c" => Dict("from" => "src_cells"), "r" => Dict("from" => "emis_records")),
+        _op(
+            "*", _op("ifelse", _contain, 1.0, 0.0),
+            _op("*", _ix("emis_annual", "r"), _ix(is_p, "r"))
+        );
+        reduce = "+", args = ["src_W", "src_S", "src_E", "src_N", "X", "Y", "emis_annual", is_p]
+    )
+    _conc_agg(SRname, Ename) = _agg(
+        ["rcv"],
+        Dict("s" => Dict("from" => "src_cells"), "rcv" => Dict("from" => "rcv_cells")),
         _op("*", _ix(SRname, "s", "rcv"), _ix(Ename, "s"));
-        reduce="+", args=[SRname, Ename])
-    _deaths(rr) = _agg(["rcv"], Dict("rcv"=>Dict("from"=>"rcv_cells")),
-        _op("*", _op("*", _op("*",
-            _op("-", _op("exp", _op("*",
-                _op("/", _op("log", rr), 10), _ix("TotalPM25", "rcv"))), 1),
-            _op("*", _ix("TotalPop", "rcv"), "pop_scale")),
-            _op("/", _ix("MortalityRate", "rcv"), 100000)), "mort_scale");
-        args=["TotalPM25","TotalPop","MortalityRate"])
+        reduce = "+", args = [SRname, Ename]
+    )
+    _deaths(rr) = _agg(
+        ["rcv"], Dict("rcv" => Dict("from" => "rcv_cells")),
+        _op(
+            "*", _op(
+                "*", _op(
+                    "*",
+                    _op(
+                        "-", _op(
+                            "exp", _op(
+                                "*",
+                                _op("/", _op("log", rr), 10), _ix("TotalPM25", "rcv")
+                            )
+                        ), 1
+                    ),
+                    _op("*", _ix("TotalPop", "rcv"), "pop_scale")
+                ),
+                _op("/", _ix("MortalityRate", "rcv"), 100000)
+            ), "mort_scale"
+        );
+        args = ["TotalPM25", "TotalPop", "MortalityRate"]
+    )
 
-    param(shape) = Dict("type"=>"parameter", "default"=>0.0, "shape"=>shape)
+    param(shape) = Dict("type" => "parameter", "default" => 0.0, "shape" => shape)
     # esm 1.0.0: an observed quantity is an `unknown` DECLARED here and DEFINED
     # by a bare-variable-LHS equation; the variable carries no `expression`.
     # `obs` stashes the defining RHS under a private key that `_split_observeds!`
     # lifts into the model's `equations` in declaration order.
-    obs(shape, expr) = Dict("type"=>"unknown", "shape"=>shape, _DEFKEY=>expr)
-    scal(v) = Dict("type"=>"parameter", "default"=>v)
+    obs(shape, expr) = Dict("type" => "unknown", "shape" => shape, _DEFKEY => expr)
+    scal(v) = Dict("type" => "parameter", "default" => v)
 
-    variables = Dict{String,Any}(
-        "emis_lon"=>param(["emis_records"]), "emis_lat"=>param(["emis_records"]),
-        "X"=>obs(["emis_records"], _proj_obs(_Xbody)),
-        "Y"=>obs(["emis_records"], _proj_obs(_Ybody)),
-        "emis_annual"=>param(["emis_records"]),
-        "is_VOC"=>param(["emis_records"]), "is_NOx"=>param(["emis_records"]),
-        "is_NH3"=>param(["emis_records"]), "is_SOx"=>param(["emis_records"]),
-        "is_PM25"=>param(["emis_records"]),
-        "src_W"=>param(["src_cells"]), "src_S"=>param(["src_cells"]),
-        "src_E"=>param(["src_cells"]), "src_N"=>param(["src_cells"]),
-        "TotalPop"=>param(["rcv_cells"]), "MortalityRate"=>param(["rcv_cells"]),
-        "SR_SOA"=>param(["src_cells","rcv_cells"]),
-        "SR_pNO3"=>param(["src_cells","rcv_cells"]),
-        "SR_pNH4"=>param(["src_cells","rcv_cells"]),
-        "SR_pSO4"=>param(["src_cells","rcv_cells"]),
-        "SR_PrimaryPM25"=>param(["src_cells","rcv_cells"]),
-        "E_VOC"=>obs(["src_cells"], _E_agg("is_VOC")),
-        "E_NOx"=>obs(["src_cells"], _E_agg("is_NOx")),
-        "E_NH3"=>obs(["src_cells"], _E_agg("is_NH3")),
-        "E_SOx"=>obs(["src_cells"], _E_agg("is_SOx")),
-        "E_PM25"=>obs(["src_cells"], _E_agg("is_PM25")),
-        "conc_SOA"=>obs(["rcv_cells"], _conc_agg("SR_SOA","E_VOC")),
-        "conc_pNO3"=>obs(["rcv_cells"], _conc_agg("SR_pNO3","E_NOx")),
-        "conc_pNH4"=>obs(["rcv_cells"], _conc_agg("SR_pNH4","E_NH3")),
-        "conc_pSO4"=>obs(["rcv_cells"], _conc_agg("SR_pSO4","E_SOx")),
-        "conc_PrimaryPM25"=>obs(["rcv_cells"], _conc_agg("SR_PrimaryPM25","E_PM25")),
-        "TotalPM25"=>obs(["rcv_cells"], _agg(["rcv"],
-            Dict("rcv"=>Dict("from"=>"rcv_cells")),
-            _op("*", "fact", _op("+", _ix("conc_SOA","rcv"), _ix("conc_pNO3","rcv"),
-                _ix("conc_pNH4","rcv"), _ix("conc_pSO4","rcv"),
-                _ix("conc_PrimaryPM25","rcv")));
-            args=["conc_SOA","conc_pNO3","conc_pNH4","conc_pSO4","conc_PrimaryPM25"])),
-        "deathsK"=>obs(["rcv_cells"], _deaths("rr_K")),
-        "deathsL"=>obs(["rcv_cells"], _deaths("rr_L")),
-        "lcc_n"=>scal(C.n), "lcc_rf"=>scal(C.rf), "lcc_rho0"=>scal(C.rho0),
-        "lcc_lam0"=>scal(C.lam0), "lcc_qp"=>scal(pi/4), "lcc_d2r"=>scal(pi/180),
-        "fact"=>scal(FACT), "pop_scale"=>scal(POP_SCALE), "mort_scale"=>scal(MORT_SCALE),
-        "rr_K"=>scal(RR_K), "rr_L"=>scal(RR_L))
+    variables = Dict{String, Any}(
+        "emis_lon" => param(["emis_records"]), "emis_lat" => param(["emis_records"]),
+        "X" => obs(["emis_records"], _proj_obs(_Xbody)),
+        "Y" => obs(["emis_records"], _proj_obs(_Ybody)),
+        "emis_annual" => param(["emis_records"]),
+        "is_VOC" => param(["emis_records"]), "is_NOx" => param(["emis_records"]),
+        "is_NH3" => param(["emis_records"]), "is_SOx" => param(["emis_records"]),
+        "is_PM25" => param(["emis_records"]),
+        "src_W" => param(["src_cells"]), "src_S" => param(["src_cells"]),
+        "src_E" => param(["src_cells"]), "src_N" => param(["src_cells"]),
+        "TotalPop" => param(["rcv_cells"]), "MortalityRate" => param(["rcv_cells"]),
+        "SR_SOA" => param(["src_cells", "rcv_cells"]),
+        "SR_pNO3" => param(["src_cells", "rcv_cells"]),
+        "SR_pNH4" => param(["src_cells", "rcv_cells"]),
+        "SR_pSO4" => param(["src_cells", "rcv_cells"]),
+        "SR_PrimaryPM25" => param(["src_cells", "rcv_cells"]),
+        "E_VOC" => obs(["src_cells"], _E_agg("is_VOC")),
+        "E_NOx" => obs(["src_cells"], _E_agg("is_NOx")),
+        "E_NH3" => obs(["src_cells"], _E_agg("is_NH3")),
+        "E_SOx" => obs(["src_cells"], _E_agg("is_SOx")),
+        "E_PM25" => obs(["src_cells"], _E_agg("is_PM25")),
+        "conc_SOA" => obs(["rcv_cells"], _conc_agg("SR_SOA", "E_VOC")),
+        "conc_pNO3" => obs(["rcv_cells"], _conc_agg("SR_pNO3", "E_NOx")),
+        "conc_pNH4" => obs(["rcv_cells"], _conc_agg("SR_pNH4", "E_NH3")),
+        "conc_pSO4" => obs(["rcv_cells"], _conc_agg("SR_pSO4", "E_SOx")),
+        "conc_PrimaryPM25" => obs(["rcv_cells"], _conc_agg("SR_PrimaryPM25", "E_PM25")),
+        "TotalPM25" => obs(
+            ["rcv_cells"], _agg(
+                ["rcv"],
+                Dict("rcv" => Dict("from" => "rcv_cells")),
+                _op(
+                    "*", "fact", _op(
+                        "+", _ix("conc_SOA", "rcv"), _ix("conc_pNO3", "rcv"),
+                        _ix("conc_pNH4", "rcv"), _ix("conc_pSO4", "rcv"),
+                        _ix("conc_PrimaryPM25", "rcv")
+                    )
+                );
+                args = ["conc_SOA", "conc_pNO3", "conc_pNH4", "conc_pSO4", "conc_PrimaryPM25"]
+            )
+        ),
+        "deathsK" => obs(["rcv_cells"], _deaths("rr_K")),
+        "deathsL" => obs(["rcv_cells"], _deaths("rr_L")),
+        "lcc_n" => scal(C.n), "lcc_rf" => scal(C.rf), "lcc_rho0" => scal(C.rho0),
+        "lcc_lam0" => scal(C.lam0), "lcc_qp" => scal(pi / 4), "lcc_d2r" => scal(pi / 180),
+        "fact" => scal(FACT), "pop_scale" => scal(POP_SCALE), "mort_scale" => scal(MORT_SCALE),
+        "rr_K" => scal(RR_K), "rr_L" => scal(RR_L)
+    )
 
     # esm 1.0.0: a data source is a document-scoped INGEST REGISTRY, not a
     # component. It no longer declares the fields it provides, it is not a
     # coupling endpoint, and the 15 variable_map entries that used to wire its
     # fields into the model are gone. The CONSUMING PARAMETER carries the
     # binding instead, and owns the units.
-    data_sources = Dict{String,Any}(
-        "MockSR" => Dict{String,Any}(
+    data_sources = Dict{String, Any}(
+        "MockSR" => Dict{String, Any}(
             "kind" => "static",
-            "source" => Dict{String,Any}("url_template" => "mock://sr"),
-            "metadata" => Dict{String,Any}("x_esd" => Dict{String,Any}(
-                "gated_select" => Dict{String,Any}(
-                    "axes" => Any[Dict("fixed"=>[0]),
-                                  Dict("gated_by"=>"stale_hand_authored_set"), "all"],
-                    "applies_to" => Any[LVARS...])))),
-        "MockPts" => Dict{String,Any}(
+            "source" => Dict{String, Any}("url_template" => "mock://sr"),
+            "metadata" => Dict{String, Any}(
+                "x_esd" => Dict{String, Any}(
+                    "gated_select" => Dict{String, Any}(
+                        "axes" => Any[
+                            Dict("fixed" => [0]),
+                            Dict("gated_by" => "stale_hand_authored_set"), "all",
+                        ],
+                        "applies_to" => Any[LVARS...]
+                    )
+                )
+            )
+        ),
+        "MockPts" => Dict{String, Any}(
             "kind" => "points",
-            "source" => Dict{String,Any}("url_template" => "mock://pts")))
+            "source" => Dict{String, Any}("url_template" => "mock://pts")
+        )
+    )
 
     # `update` binds the model parameter to the file variable the loader used to
     # publish. `shape` is already declared by `param`, which a `data` update
@@ -278,35 +325,44 @@ function build_l1_doc()
     function _fed!(vname, src, file_variable)
         v = variables[vname]
         v["units"] = "1"
-        v["update"] = Dict{String,Any}(
+        v["update"] = Dict{String, Any}(
             "kind" => "data", "source" => src,
-            "from" => Dict{String,Any}("file_variable" => file_variable))
+            "from" => Dict{String, Any}("file_variable" => file_variable)
+        )
         return v
     end
-    for lv in LVARS; _fed!("SR_$lv", "MockSR", lv); end
+    for lv in LVARS
+        _fed!("SR_$lv", "MockSR", lv)
+    end
     _fed!("TotalPop", "MockSR", "TotalPop")
     _fed!("MortalityRate", "MockSR", "MortalityRate")
     _fed!("emis_lon", "MockPts", "lon")
     _fed!("emis_lat", "MockPts", "lat")
     _fed!("emis_annual", "MockPts", "annual")
-    for (vn, fv) in (("is_VOC", "vVOC"), ("is_NOx", "vNOx"), ("is_NH3", "vNH3"),
-                     ("is_SOx", "vSOx"), ("is_PM25", "vPM25"))
+    for (vn, fv) in (
+            ("is_VOC", "vVOC"), ("is_NOx", "vNOx"), ("is_NH3", "vNH3"),
+            ("is_SOx", "vSOx"), ("is_PM25", "vPM25"),
+        )
         _fed!(vn, "MockPts", fv)
     end
 
     # 1.1.0 is a FLOOR here, not a preference: every one of these documents
     # carries `faq` nodes (`_agg`), which arrive at esm 1.1.0. It is also what
     # the committed fixtures declare, so the generator reproduces them.
-    doc = Dict{String,Any}(
+    doc = Dict{String, Any}(
         "esm" => "1.1.0",
-        "metadata" => Dict{String,Any}("name" => "prepare_pushdown_L1"),
-        "index_sets" => Dict{String,Any}(
-            "src_cells"    => Dict("kind"=>"interval", "size"=>GRID),
-            "rcv_cells"    => Dict("kind"=>"interval", "size"=>N_RCV),
-            "emis_records" => Dict("kind"=>"interval", "size"=>N_REC)),
+        "metadata" => Dict{String, Any}("name" => "prepare_pushdown_L1"),
+        "index_sets" => Dict{String, Any}(
+            "src_cells" => Dict("kind" => "interval", "size" => GRID),
+            "rcv_cells" => Dict("kind" => "interval", "size" => N_RCV),
+            "emis_records" => Dict("kind" => "interval", "size" => N_REC)
+        ),
         "data_sources" => data_sources,
-        "models" => Dict{String,Any}("ISRM" =>
-            Dict{String,Any}("variables"=>variables, "equations"=>Any[])))
+        "models" => Dict{String, Any}(
+            "ISRM" =>
+                Dict{String, Any}("variables" => variables, "equations" => Any[])
+        )
+    )
     _split_observeds!(doc["models"]["ISRM"])
     return doc
 end
@@ -322,18 +378,24 @@ end
 # aggregate now ranges over. Deliberately tiny so the whole rewritten document
 # is reviewable in a diff.
 # ---------------------------------------------------------------------------
-_pd_contain() = _op("and",
+_pd_contain() = _op(
+    "and",
     _op("<=", _ix("src_W", "c"), _ix("px", "r")), _op("<", _ix("px", "r"), _ix("src_E", "c")),
-    _op("<=", _ix("src_S", "c"), _ix("py", "r")), _op("<", _ix("py", "r"), _ix("src_N", "c")))
+    _op("<=", _ix("src_S", "c"), _ix("py", "r")), _op("<", _ix("py", "r"), _ix("src_N", "c"))
+)
 
-_pd_param(shape) = Dict{String,Any}("type"=>"parameter", "default"=>0.0, "shape"=>shape)
-_pd_obs(shape, expr) = Dict{String,Any}("type"=>"unknown", "shape"=>shape, _DEFKEY=>expr)
+_pd_param(shape) = Dict{String, Any}("type" => "parameter", "default" => 0.0, "shape" => shape)
+_pd_obs(shape, expr) = Dict{String, Any}("type" => "unknown", "shape" => shape, _DEFKEY => expr)
 
 # The 4 cell-rect factors + the 2 record point coordinates, shared by both docs.
 function _pd_geometry_vars()
-    v = Dict{String,Any}()
-    for n in ("src_W", "src_S", "src_E", "src_N"); v[n] = _pd_param(["src_cells"]); end
-    for n in ("px", "py", "emis_annual"); v[n] = _pd_param(["emis_records"]); end
+    v = Dict{String, Any}()
+    for n in ("src_W", "src_S", "src_E", "src_N")
+        v[n] = _pd_param(["src_cells"])
+    end
+    for n in ("px", "py", "emis_annual")
+        v[n] = _pd_param(["emis_records"])
+    end
     return v
 end
 
@@ -341,24 +403,36 @@ function build_gated_dense_doc()
     NC = 4; NR = 3; NRCV = 2
     variables = _pd_geometry_vars()
     variables["SR_PM25"] = _pd_param(["src_cells", "rcv_cells"])
-    variables["E_PM25"] = _pd_obs(["src_cells"], _agg(["c"],
-        Dict("c"=>Dict("from"=>"src_cells"), "r"=>Dict("from"=>"emis_records")),
-        _op("*", _op("ifelse", _pd_contain(), 1.0, 0.0), _ix("emis_annual", "r"));
-        reduce="+", args=["src_W","src_S","src_E","src_N","px","py","emis_annual"]))
-    variables["conc_PM25"] = _pd_obs(["rcv_cells"], _agg(["rcv"],
-        Dict("s"=>Dict("from"=>"src_cells"), "rcv"=>Dict("from"=>"rcv_cells")),
-        _op("*", _ix("SR_PM25", "s", "rcv"), _ix("E_PM25", "s"));
-        reduce="+", args=["SR_PM25", "E_PM25"]))
+    variables["E_PM25"] = _pd_obs(
+        ["src_cells"], _agg(
+            ["c"],
+            Dict("c" => Dict("from" => "src_cells"), "r" => Dict("from" => "emis_records")),
+            _op("*", _op("ifelse", _pd_contain(), 1.0, 0.0), _ix("emis_annual", "r"));
+            reduce = "+", args = ["src_W", "src_S", "src_E", "src_N", "px", "py", "emis_annual"]
+        )
+    )
+    variables["conc_PM25"] = _pd_obs(
+        ["rcv_cells"], _agg(
+            ["rcv"],
+            Dict("s" => Dict("from" => "src_cells"), "rcv" => Dict("from" => "rcv_cells")),
+            _op("*", _ix("SR_PM25", "s", "rcv"), _ix("E_PM25", "s"));
+            reduce = "+", args = ["SR_PM25", "E_PM25"]
+        )
+    )
     # `faq` floor, as in `build_l1_doc` above.
-    doc = Dict{String,Any}(
+    doc = Dict{String, Any}(
         "esm" => "1.1.0",
-        "metadata" => Dict{String,Any}("name" => "pushdown_gated_dense"),
-        "index_sets" => Dict{String,Any}(
-            "src_cells"    => Dict("kind"=>"interval", "size"=>NC),
-            "rcv_cells"    => Dict("kind"=>"interval", "size"=>NRCV),
-            "emis_records" => Dict("kind"=>"interval", "size"=>NR)),
-        "models" => Dict{String,Any}("Binned" =>
-            Dict{String,Any}("variables"=>variables, "equations"=>Any[])))
+        "metadata" => Dict{String, Any}("name" => "pushdown_gated_dense"),
+        "index_sets" => Dict{String, Any}(
+            "src_cells" => Dict("kind" => "interval", "size" => NC),
+            "rcv_cells" => Dict("kind" => "interval", "size" => NRCV),
+            "emis_records" => Dict("kind" => "interval", "size" => NR)
+        ),
+        "models" => Dict{String, Any}(
+            "Binned" =>
+                Dict{String, Any}("variables" => variables, "equations" => Any[])
+        )
+    )
     _split_observeds!(doc["models"]["Binned"])
     return doc
 end
@@ -388,15 +462,23 @@ function build_mirror_doc()
     d["metadata"]["name"] = "pushdown_mirror"
     v = d["models"]["Binned"]["variables"]
     # plume_top[r] — the north edge of the cell each record falls in.
-    v["plume_top"] = _pd_obs(["emis_records"], _agg(["r"],
-        Dict("c"=>Dict("from"=>"src_cells"), "r"=>Dict("from"=>"emis_records")),
-        _op("*", _op("ifelse", _pd_contain(), 1.0, 0.0), _ix("src_N", "c"));
-        reduce="+", args=["src_W","src_S","src_E","src_N","px","py"]))
+    v["plume_top"] = _pd_obs(
+        ["emis_records"], _agg(
+            ["r"],
+            Dict("c" => Dict("from" => "src_cells"), "r" => Dict("from" => "emis_records")),
+            _op("*", _op("ifelse", _pd_contain(), 1.0, 0.0), _ix("src_N", "c"));
+            reduce = "+", args = ["src_W", "src_S", "src_E", "src_N", "px", "py"]
+        )
+    )
     # in_grid[r] — 1 when the record is inside SOME cell, 0 otherwise.
-    v["in_grid"] = _pd_obs(["emis_records"], _agg(["r"],
-        Dict("c"=>Dict("from"=>"src_cells"), "r"=>Dict("from"=>"emis_records")),
-        _op("ifelse", _pd_contain(), 1.0, 0.0);
-        reduce="+", args=["src_W","src_S","src_E","src_N","px","py"]))
+    v["in_grid"] = _pd_obs(
+        ["emis_records"], _agg(
+            ["r"],
+            Dict("c" => Dict("from" => "src_cells"), "r" => Dict("from" => "emis_records")),
+            _op("ifelse", _pd_contain(), 1.0, 0.0);
+            reduce = "+", args = ["src_W", "src_S", "src_E", "src_N", "px", "py"]
+        )
+    )
     # `plume_top` and `in_grid` are declared AFTER build_gated_dense_doc has
     # already split its own observeds, so they still carry the private defining
     # key and need a second lift. Without this the two mirror artifacts diverge
@@ -435,14 +517,18 @@ end
 #     forward, the already-fixed `C`/`R` for a mirror) and that a mirror is NOT
 #     misread as a second forward.
 # ---------------------------------------------------------------------------
-_pd_env_overlap() = _op("and",
+_pd_env_overlap() = _op(
+    "and",
     _op("<=", _ix("src_W", "c"), _ix("rec_xmax", "r")),
     _op("<=", _ix("rec_xmin", "r"), _ix("src_E", "c")),
     _op("<=", _ix("src_S", "c"), _ix("rec_ymax", "r")),
-    _op("<=", _ix("rec_ymin", "r"), _ix("src_N", "c")))
+    _op("<=", _ix("rec_ymin", "r"), _ix("src_N", "c"))
+)
 
-const _PD_ENV_ARGS = ["src_W","src_S","src_E","src_N",
-                      "rec_xmin","rec_ymin","rec_xmax","rec_ymax"]
+const _PD_ENV_ARGS = [
+    "src_W", "src_S", "src_E", "src_N",
+    "rec_xmin", "rec_ymin", "rec_xmax", "rec_ymax",
+]
 
 function build_envelope_overlap_doc()
     d = build_gated_dense_doc()
@@ -456,16 +542,26 @@ function build_envelope_overlap_doc()
     # document computes (clipped area / record area); the rewrite neither reads
     # nor touches it.
     v["overlap_frac"] = _pd_param(["emis_records"])
-    v["E_PM25"] = _pd_obs(["src_cells"], _agg(["c"],
-        Dict("c"=>Dict("from"=>"src_cells"), "r"=>Dict("from"=>"emis_records")),
-        _op("*", _op("ifelse", _pd_env_overlap(), 1.0, 0.0),
-                 _op("*", _ix("emis_annual", "r"), _ix("overlap_frac", "r")));
-        reduce="+", args=vcat(_PD_ENV_ARGS, ["emis_annual", "overlap_frac"])))
+    v["E_PM25"] = _pd_obs(
+        ["src_cells"], _agg(
+            ["c"],
+            Dict("c" => Dict("from" => "src_cells"), "r" => Dict("from" => "emis_records")),
+            _op(
+                "*", _op("ifelse", _pd_env_overlap(), 1.0, 0.0),
+                _op("*", _ix("emis_annual", "r"), _ix("overlap_frac", "r"))
+            );
+            reduce = "+", args = vcat(_PD_ENV_ARGS, ["emis_annual", "overlap_frac"])
+        )
+    )
     # MIRROR: how many cells this record spills into. Gate only.
-    v["overlapping_cells"] = _pd_obs(["emis_records"], _agg(["r"],
-        Dict("c"=>Dict("from"=>"src_cells"), "r"=>Dict("from"=>"emis_records")),
-        _op("ifelse", _pd_env_overlap(), 1.0, 0.0);
-        reduce="+", args=_PD_ENV_ARGS))
+    v["overlapping_cells"] = _pd_obs(
+        ["emis_records"], _agg(
+            ["r"],
+            Dict("c" => Dict("from" => "src_cells"), "r" => Dict("from" => "emis_records")),
+            _op("ifelse", _pd_env_overlap(), 1.0, 0.0);
+            reduce = "+", args = _PD_ENV_ARGS
+        )
+    )
     _split_observeds!(d["models"]["Binned"])
     return d
 end
@@ -504,25 +600,41 @@ end
 function build_polygon_area_doc()
     d = build_envelope_overlap_doc()
     d["metadata"]["name"] = "pushdown_polygon_area"
-    d["index_sets"]["ring_vertex"] = Dict("kind"=>"interval", "size"=>5)
-    d["index_sets"]["xy"] = Dict("kind"=>"interval", "size"=>2)
+    d["index_sets"]["ring_vertex"] = Dict("kind" => "interval", "size" => 5)
+    d["index_sets"]["xy"] = Dict("kind" => "interval", "size" => 2)
     v = d["models"]["Binned"]["variables"]
     delete!(v, "overlap_frac")
     v["cell_ring"] = _pd_param(["src_cells", "ring_vertex", "xy"])
     v["cell_area"] = _pd_param(["src_cells"])
-    v["rec_ring"]  = _pd_param(["emis_records", "ring_vertex", "xy"])
+    v["rec_ring"] = _pd_param(["emis_records", "ring_vertex", "xy"])
     # E[c] = Σ_r [envelopes meet] · emis[r] · area(cell_c ∩ rec_r) / area(cell_c)
-    v["E_PM25"] = _pd_obs(["src_cells"], _agg(["c"],
-        Dict("c"=>Dict("from"=>"src_cells"), "r"=>Dict("from"=>"emis_records")),
-        _op("*", _op("ifelse", _pd_env_overlap(), 1.0, 0.0),
-                 _op("*", _ix("emis_annual", "r"),
-                          _op("/", Dict("op"=>"polygon_intersection_area",
-                                        "manifold"=>"planar",
-                                        "args"=>Any[_ix("cell_ring", "c"),
-                                                    _ix("rec_ring", "r")]),
-                                   _ix("cell_area", "c"))));
-        reduce="+", args=vcat(_PD_ENV_ARGS,
-                              ["cell_ring", "cell_area", "rec_ring", "emis_annual"])))
+    v["E_PM25"] = _pd_obs(
+        ["src_cells"], _agg(
+            ["c"],
+            Dict("c" => Dict("from" => "src_cells"), "r" => Dict("from" => "emis_records")),
+            _op(
+                "*", _op("ifelse", _pd_env_overlap(), 1.0, 0.0),
+                _op(
+                    "*", _ix("emis_annual", "r"),
+                    _op(
+                        "/", Dict(
+                            "op" => "polygon_intersection_area",
+                            "manifold" => "planar",
+                            "args" => Any[
+                                _ix("cell_ring", "c"),
+                                _ix("rec_ring", "r"),
+                            ]
+                        ),
+                        _ix("cell_area", "c")
+                    )
+                )
+            );
+            reduce = "+", args = vcat(
+                _PD_ENV_ARGS,
+                ["cell_ring", "cell_area", "rec_ring", "emis_annual"]
+            )
+        )
+    )
     # The MIRROR stays as `build_envelope_overlap_doc` left it: a per-record
     # aggregate keeps the FULL cell axis, so nothing about it is re-pointed and
     # it needs no gathers even though it reads cell factors.
@@ -562,24 +674,35 @@ function build_template_body_doc()
     m = d["models"]["Binned"]
     # The body names ONLY its own params; every geometry factor arrives as a
     # binding. `r` and `c` are the call site's own range symbols.
-    tpl_contain = _op("and",
+    tpl_contain = _op(
+        "and",
         _op("<=", _ix("xmin", "c"), _ix("ptx", "r")),
-        _op("<",  _ix("ptx", "r"),  _ix("xmax", "c")),
+        _op("<", _ix("ptx", "r"), _ix("xmax", "c")),
         _op("<=", _ix("ymin", "c"), _ix("pty", "r")),
-        _op("<",  _ix("pty", "r"),  _ix("ymax", "c")))
-    m["expression_templates"] = Dict{String,Any}(
-        "bin_into_cell" => Dict{String,Any}(
+        _op("<", _ix("pty", "r"), _ix("ymax", "c"))
+    )
+    m["expression_templates"] = Dict{String, Any}(
+        "bin_into_cell" => Dict{String, Any}(
             "params" => Any["xmin", "ymin", "xmax", "ymax", "ptx", "pty", "wgt"],
-            "body" => _op("*", _op("ifelse", tpl_contain, 1.0, 0.0), _ix("wgt", "r"))))
-    m["variables"]["E_PM25"] = _pd_obs(["src_cells"], _agg(["c"],
-        Dict("c"=>Dict("from"=>"src_cells"), "r"=>Dict("from"=>"emis_records")),
-        Dict{String,Any}("op" => "apply_expression_template", "args" => Any[],
-                         "name" => "bin_into_cell",
-                         "bindings" => Dict{String,Any}(
-                             "xmin"=>"src_W", "ymin"=>"src_S",
-                             "xmax"=>"src_E", "ymax"=>"src_N",
-                             "ptx"=>"px", "pty"=>"py", "wgt"=>"emis_annual"));
-        reduce="+", args=["src_W","src_S","src_E","src_N","px","py","emis_annual"]))
+            "body" => _op("*", _op("ifelse", tpl_contain, 1.0, 0.0), _ix("wgt", "r"))
+        )
+    )
+    m["variables"]["E_PM25"] = _pd_obs(
+        ["src_cells"], _agg(
+            ["c"],
+            Dict("c" => Dict("from" => "src_cells"), "r" => Dict("from" => "emis_records")),
+            Dict{String, Any}(
+                "op" => "apply_expression_template", "args" => Any[],
+                "name" => "bin_into_cell",
+                "bindings" => Dict{String, Any}(
+                    "xmin" => "src_W", "ymin" => "src_S",
+                    "xmax" => "src_E", "ymax" => "src_N",
+                    "ptx" => "px", "pty" => "py", "wgt" => "emis_annual"
+                )
+            );
+            reduce = "+", args = ["src_W", "src_S", "src_E", "src_N", "px", "py", "emis_annual"]
+        )
+    )
     # `E_PM25` is REDECLARED here, after `build_gated_dense_doc` lifted its own
     # definition — so its defining equation is rewritten, not duplicated.
     _split_observeds!(m)
@@ -602,18 +725,30 @@ function build_unreadable_join_doc()
     d = build_gated_dense_doc()
     d["metadata"]["name"] = "pushdown_unreadable_join"
     v = d["models"]["Binned"]["variables"]
-    v["pz"]    = _pd_param(["emis_records"])
+    v["pz"] = _pd_param(["emis_records"])
     v["src_B"] = _pd_param(["src_cells"])
     v["src_T"] = _pd_param(["src_cells"])
-    v["E_PM25"] = _pd_obs(["src_cells"], _agg(["c"],
-        Dict("c"=>Dict("from"=>"src_cells"), "r"=>Dict("from"=>"emis_records")),
-        _op("*", _op("ifelse", _op("and",
-            _op("<=", _ix("src_W","c"), _ix("px","r")), _op("<", _ix("px","r"), _ix("src_E","c")),
-            _op("<=", _ix("src_S","c"), _ix("py","r")), _op("<", _ix("py","r"), _ix("src_N","c")),
-            _op("<=", _ix("src_B","c"), _ix("pz","r")), _op("<", _ix("pz","r"), _ix("src_T","c"))),
-            1.0, 0.0), _ix("emis_annual", "r"));
-        reduce="+", args=["src_W","src_S","src_E","src_N","src_B","src_T",
-                          "px","py","pz","emis_annual"]))
+    v["E_PM25"] = _pd_obs(
+        ["src_cells"], _agg(
+            ["c"],
+            Dict("c" => Dict("from" => "src_cells"), "r" => Dict("from" => "emis_records")),
+            _op(
+                "*", _op(
+                    "ifelse", _op(
+                        "and",
+                        _op("<=", _ix("src_W", "c"), _ix("px", "r")), _op("<", _ix("px", "r"), _ix("src_E", "c")),
+                        _op("<=", _ix("src_S", "c"), _ix("py", "r")), _op("<", _ix("py", "r"), _ix("src_N", "c")),
+                        _op("<=", _ix("src_B", "c"), _ix("pz", "r")), _op("<", _ix("pz", "r"), _ix("src_T", "c"))
+                    ),
+                    1.0, 0.0
+                ), _ix("emis_annual", "r")
+            );
+            reduce = "+", args = [
+                "src_W", "src_S", "src_E", "src_N", "src_B", "src_T",
+                "px", "py", "pz", "emis_annual",
+            ]
+        )
+    )
     # As in `build_template_body_doc`: `E_PM25` is redeclared over an already
     # lifted definition, so this rewrites that equation in place.
     _split_observeds!(d["models"]["Binned"])
@@ -625,28 +760,28 @@ function main()
     println("emitting pushdown conformance corpus under $OUTDIR")
 
     l1 = build_l1_doc()
-    l1r = EA.desugar_pushdown(l1; model_name="ISRM")
+    l1r = EA.desugar_pushdown(l1; model_name = "ISRM")
     l1r === l1 && error("L1 fixture: desugar_pushdown did not fire")
     EA.desugar_pushdown(l1r) === l1r || error("L1 golden re-desugars (idempotency broken)")
     write_canon(joinpath(OUTDIR, "fixtures", "pushdown_l1.esm"), l1)
     write_canon(joinpath(OUTDIR, "golden", "pushdown_l1.rewritten.json"), l1r)
 
     gd = build_gated_dense_doc()
-    gdr = EA.desugar_pushdown(gd; model_name="Binned")
+    gdr = EA.desugar_pushdown(gd; model_name = "Binned")
     gdr === gd && error("gated-dense fixture: desugar_pushdown did not fire")
     EA.desugar_pushdown(gdr) === gdr || error("gated-dense golden re-desugars (idempotency broken)")
     write_canon(joinpath(OUTDIR, "fixtures", "pushdown_gated_dense.esm"), gd)
     write_canon(joinpath(OUTDIR, "golden", "pushdown_gated_dense.rewritten.json"), gdr)
 
     mr = build_mirror_doc()
-    mrr = EA.desugar_pushdown(mr; model_name="Binned")
+    mrr = EA.desugar_pushdown(mr; model_name = "Binned")
     mrr === mr && error("mirror fixture: desugar_pushdown did not fire")
     EA.desugar_pushdown(mrr) === mrr || error("mirror golden re-desugars (idempotency broken)")
     write_canon(joinpath(OUTDIR, "fixtures", "pushdown_mirror.esm"), mr)
     write_canon(joinpath(OUTDIR, "golden", "pushdown_mirror.rewritten.json"), mrr)
 
     eo = build_envelope_overlap_doc()
-    eor = EA.desugar_pushdown(eo; model_name="Binned")
+    eor = EA.desugar_pushdown(eo; model_name = "Binned")
     eor === eo && error("envelope-overlap fixture: desugar_pushdown did not fire")
     EA.desugar_pushdown(eor) === eor || error("envelope-overlap golden re-desugars (idempotency broken)")
     EA.load_document(eo)  # the fixture must be a VALID document, not just a dict
@@ -654,7 +789,7 @@ function main()
     write_canon(joinpath(OUTDIR, "golden", "pushdown_envelope_overlap.rewritten.json"), eor)
 
     pa = build_polygon_area_doc()
-    par = EA.desugar_pushdown(pa; model_name="Binned")
+    par = EA.desugar_pushdown(pa; model_name = "Binned")
     par === pa && error("polygon-area fixture: desugar_pushdown did not fire")
     EA.desugar_pushdown(par) === par || error("polygon-area golden re-desugars (idempotency broken)")
     EA.load_document(pa)  # the fixture must be a VALID document, not just a dict
@@ -662,7 +797,7 @@ function main()
     write_canon(joinpath(OUTDIR, "golden", "pushdown_polygon_area.rewritten.json"), par)
 
     tb = build_template_body_doc()
-    tbr = EA.desugar_pushdown(tb; model_name="Binned")
+    tbr = EA.desugar_pushdown(tb; model_name = "Binned")
     tbr === tb && error("template-body fixture: desugar_pushdown did not fire")
     EA.desugar_pushdown(tbr) === tbr || error("template-body golden re-desugars (idempotency broken)")
     EA.load_document(tb)  # the fixture must be a VALID document, not just a dict
@@ -670,9 +805,9 @@ function main()
     write_canon(joinpath(OUTDIR, "golden", "pushdown_template_body.rewritten.json"), tbr)
 
     uj = build_unreadable_join_doc()
-    ujr = EA.desugar_pushdown(uj; model_name="Binned")
+    ujr = EA.desugar_pushdown(uj; model_name = "Binned")
     ujr === uj || error("unreadable-join fixture: desugar_pushdown fired but must not")
-    ujd = EA.pushdown_diagnostics(uj; model_name="Binned")
+    ujd = EA.pushdown_diagnostics(uj; model_name = "Binned")
     isempty(ujd) && error("unreadable-join fixture: no residual diagnostic emitted")
     EA.load_document(uj)  # the fixture must be a VALID document, not just a dict
     write_canon(joinpath(OUTDIR, "fixtures", "pushdown_unreadable_join.esm"), uj)
@@ -684,8 +819,10 @@ function main()
     # ISRM_ESM_REFRESH=1 to re-cut the input from a checkout instead.
     isrm_fixture = joinpath(OUTDIR, "fixtures", "isrm.esm")
     if get(ENV, "ISRM_ESM_REFRESH", "0") == "1"
-        isrm_path = get(ENV, "ISRM_ESM",
-                        normpath(joinpath(REPO, "..", "isrm.esm", "isrm.esm")))
+        isrm_path = get(
+            ENV, "ISRM_ESM",
+            normpath(joinpath(REPO, "..", "isrm.esm", "isrm.esm"))
+        )
         isfile(isrm_path) || error("isrm.esm not found at $isrm_path (set ISRM_ESM)")
         ser = EA.serialize_esm_file(EA.load_path(isrm_path))   # metaparameter defaults folded
         check_extents(ser, "ISRM_ESM_REFRESH=1 re-cut from $(isrm_path)")
@@ -701,7 +838,7 @@ function main()
     isrm === ser && error("isrm.esm: desugar_pushdown did not fire")
     EA.desugar_pushdown(isrm) === isrm || error("isrm golden re-desugars (idempotency broken)")
     write_canon(joinpath(OUTDIR, "golden", "isrm.rewritten.json"), isrm)
-    println("done")
+    return println("done")
 end
 
 main()

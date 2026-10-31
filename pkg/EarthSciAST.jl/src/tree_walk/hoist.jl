@@ -98,10 +98,10 @@ end
 
 mutable struct _HoistCtx
     model_vars::AbstractDict                          # the model's own variables
-    vars::OrderedDict{String,ModelVariable}
+    vars::OrderedDict{String, ModelVariable}
     eqs::Vector{Equation}
-    memo::Dict{Tuple{UInt,Vector{String}},ASTExpr}   # (reduction, S-cell sets) → reader
-    owner::Dict{String,String}                        # lifted name → the equation's LHS name
+    memo::Dict{Tuple{UInt, Vector{String}}, ASTExpr}   # (reduction, S-cell sets) → reader
+    owner::Dict{String, String}                        # lifted name → the equation's LHS name
 end
 
 _hoist_scalar_reduction(e::OpExpr) = _is_faq_op(e.op) &&
@@ -112,8 +112,10 @@ _hoist_plain(e::OpExpr) = e.op != "index" && e.op != "fn" && !_is_faq_op(e.op) &
     e.expr_body === nothing && e.values === nothing && e.filter === nothing &&
     e.lower === nothing && e.upper === nothing && e.key === nothing
 
-function _hoist_walk(e::ASTExpr, out_idx::Vector{String}, ranges, contracted::Set{String},
-                     owner::String, hc::_HoistCtx)
+function _hoist_walk(
+        e::ASTExpr, out_idx::Vector{String}, ranges, contracted::Set{String},
+        owner::String, hc::_HoistCtx
+    )
     e isa OpExpr || return e
     o = e::OpExpr
     if _hoist_scalar_reduction(o)
@@ -135,7 +137,7 @@ function _hoist_walk(e::ASTExpr, out_idx::Vector{String}, ranges, contracted::Se
             new[j] = b
         end
     end
-    return new === o.args ? o : reconstruct(o; args=new)
+    return new === o.args ? o : reconstruct(o; args = new)
 end
 
 # A DATA GATHER: an `index` read of a named array with a subscript that reads
@@ -153,8 +155,10 @@ function _hoist_data_gather(g::OpExpr, ranges, hc::_HoistCtx)
     return false
 end
 
-function _hoist_try(g::OpExpr, out_idx::Vector{String}, ranges, contracted::Set{String},
-                    owner::String, hc::_HoistCtx)
+function _hoist_try(
+        g::OpExpr, out_idx::Vector{String}, ranges, contracted::Set{String},
+        owner::String, hc::_HoistCtx
+    )
     gather = g.op == "index"
     if !gather
         (g.join === nothing && g.join_gates === nothing) || return nothing
@@ -182,11 +186,11 @@ function _hoist_try(g::OpExpr, out_idx::Vector{String}, ranges, contracted::Set{
     hit = get(hc.memo, key, nothing)
     hit === nothing || return hit
     name = string(_HOIST_PREFIX, gather ? "g" : "", length(hc.memo) + 1, '\0', owner)
-    rng = gather ? Dict{String,Any}() : Dict{String,Any}(String(k) => v for (k, v) in g.ranges)
+    rng = gather ? Dict{String, Any}() : Dict{String, Any}(String(k) => v for (k, v) in g.ranges)
     # A gather is lifted as the faq producing it over S, its body the gather.
     lift(oi, rg) = gather ?
-        OpExpr("faq", ASTExpr[]; output_idx=oi, ranges=rg, expr_body=g) :
-        reconstruct(g; output_idx=oi, ranges=rg)
+        OpExpr("faq", ASTExpr[]; output_idx = oi, ranges = rg, expr_body = g) :
+        reconstruct(g; output_idx = oi, ranges = rg)
     if isempty(S)
         rng[_HOIST_ONE_IDX] = IndexSetRef(_HOIST_ONE_SET)
         def = lift(Any[_HOIST_ONE_IDX], rng)
@@ -200,7 +204,7 @@ function _hoist_try(g::OpExpr, out_idx::Vector{String}, ranges, contracted::Set{
         shape = sets
         reader = OpExpr("index", ASTExpr[VarExpr(name), (VarExpr(s) for s in S)...])
     end
-    hc.vars[name] = ModelVariable(UnknownVariable; shape=shape)
+    hc.vars[name] = ModelVariable(UnknownVariable; shape = shape)
     push!(hc.eqs, Equation(VarExpr(name), def))
     hc.owner[name] = owner
     hc.memo[key] = reader
@@ -228,8 +232,10 @@ _hoist_filtered_producer(e::OpExpr) = _is_faq_op(e.op) && e.filter !== nothing &
     e.join === nothing && e.join_gates === nothing && e.expr_body !== nothing &&
     e.ranges !== nothing && _is_array_producer(e) &&
     all(x -> x isa AbstractString, e.output_idx) &&
-    all(x -> (r = get(e.ranges, String(x), nothing); r isa IndexSetRef && isempty(r.of)),
-        e.output_idx)
+    all(
+    x -> (r = get(e.ranges, String(x), nothing); r isa IndexSetRef && isempty(r.of)),
+    e.output_idx
+)
 
 # REGION-SPLIT OPERANDS of elementwise arithmetic are lifted too. A rule that
 # lowers a spatial `D` builds a `makearray` whose regions split the axis it
@@ -256,8 +262,10 @@ _hoist_filtered_producer(e::OpExpr) = _is_faq_op(e.op) && e.filter !== nothing &
 
 # The qualifying `makearray` operands of `e` (see above) against the
 # left-hand side's dimension sizes `dims`.
-function _hoist_split_operands!(out::Vector{OpExpr}, e::ASTExpr, dims::Vector{Int},
-                                seen::IdDict{OpExpr,Nothing})
+function _hoist_split_operands!(
+        out::Vector{OpExpr}, e::ASTExpr, dims::Vector{Int},
+        seen::IdDict{OpExpr, Nothing}
+    )
     e isa OpExpr || return out
     o = e::OpExpr
     haskey(seen, o) && return out
@@ -276,8 +284,10 @@ end
 
 function _hoist_split_qualifies(m::OpExpr, dims::Vector{Int})
     regs = m.regions
-    (regs === nothing || m.values === nothing || length(regs) < 2 ||
-     length(m.values) != length(regs)) && return false
+    (
+        regs === nothing || m.values === nothing || length(regs) < 2 ||
+            length(m.values) != length(regs)
+    ) && return false
     nd = length(dims)
     for reg in regs
         length(reg) == nd || return false
@@ -319,7 +329,7 @@ function _hoist_lift_split(g::OpExpr, owner::String, shape::Vector{String}, hc::
     hit = get(hc.memo, key, nothing)
     hit === nothing || return hit
     name = string(_HOIST_PREFIX, "m", length(hc.memo) + 1, '\0', owner)
-    hc.vars[name] = ModelVariable(UnknownVariable; shape=copy(shape))
+    hc.vars[name] = ModelVariable(UnknownVariable; shape = copy(shape))
     push!(hc.eqs, Equation(VarExpr(name), g))
     hc.owner[name] = owner
     reader = VarExpr(name)
@@ -346,8 +356,10 @@ end
 # that shares a subexpression (a doubling DAG of `n + n`) must be walked once
 # per distinct node, not once per path. `split`, when given, is the set of
 # region-split operands to lift and the left-hand side's shape.
-function _hoist_operand_walk(e::ASTExpr, owner::String, hc::_HoistCtx,
-                             memo::IdDict{OpExpr,ASTExpr}, split=nothing)
+function _hoist_operand_walk(
+        e::ASTExpr, owner::String, hc::_HoistCtx,
+        memo::IdDict{OpExpr, ASTExpr}, split = nothing
+    )
     e isa OpExpr || return e
     o = e::OpExpr
     _hoist_plain(o) || return o
@@ -369,7 +381,7 @@ function _hoist_operand_walk(e::ASTExpr, owner::String, hc::_HoistCtx,
             new[j] = b
         end
     end
-    out = new === o.args ? o : reconstruct(o; args=new)
+    out = new === o.args ? o : reconstruct(o; args = new)
     memo[o] = out
     return out
 end
@@ -380,7 +392,7 @@ function _hoist_lift_producer(g::OpExpr, owner::String, hc::_HoistCtx)
     hit === nothing || return hit
     name = string(_HOIST_PREFIX, "a", length(hc.memo) + 1, '\0', owner)
     shape = String[(g.ranges[String(x)]::IndexSetRef).from for x in g.output_idx]
-    hc.vars[name] = ModelVariable(UnknownVariable; shape=shape)
+    hc.vars[name] = ModelVariable(UnknownVariable; shape = shape)
     push!(hc.eqs, Equation(VarExpr(name), g))
     hc.owner[name] = owner
     reader = VarExpr(name)
@@ -391,44 +403,62 @@ end
 # A compiler-report rule label with every lifted name replaced by the variable
 # whose equation it was lifted from (the name ends in it, after a NUL).
 _hoist_public_label(label::AbstractString) =
-    replace(replace(replace(replace(label,
-                r"\0hoist\0g\d+\0([^\0\[\]]*)" => s"\1 (hoisted gather)"),
-                r"\0hoist\0a\d+\0([^\0\[\]]*)" => s"\1 (hoisted aggregate)"),
-                r"\0hoist\0m\d+\0([^\0\[\]]*)" => s"\1 (hoisted region term)"),
-            r"\0hoist\0\d+\0([^\0\[\]]*)" => s"\1 (hoisted reduction)")
+    replace(
+    replace(
+        replace(
+            replace(
+                label,
+                r"\0hoist\0g\d+\0([^\0\[\]]*)" => s"\1 (hoisted gather)"
+            ),
+            r"\0hoist\0a\d+\0([^\0\[\]]*)" => s"\1 (hoisted aggregate)"
+        ),
+        r"\0hoist\0m\d+\0([^\0\[\]]*)" => s"\1 (hoisted region term)"
+    ),
+    r"\0hoist\0\d+\0([^\0\[\]]*)" => s"\1 (hoisted reduction)"
+)
 
 # The build's copy of `model` with every qualifying nested reduction lifted
 # (see the header), the index sets with the one-cell set added when one was
 # lifted over it, and the lifted name → owning variable map. `model` itself
 # when nothing qualifies.
 function _hoist_nested_reductions(model::Model, index_sets::AbstractDict)
-    hc = _HoistCtx(model.variables, OrderedDict{String,ModelVariable}(), Equation[],
-                   Dict{Tuple{UInt,Vector{String}},ASTExpr}(), Dict{String,String}())
+    hc = _HoistCtx(
+        model.variables, OrderedDict{String, ModelVariable}(), Equation[],
+        Dict{Tuple{UInt, Vector{String}}, ASTExpr}(), Dict{String, String}()
+    )
     eqs = model.equations
     for (i, eq) in enumerate(model.equations)
         rhs = eq.rhs
         if rhs isa OpExpr && _hoist_plain(rhs::OpExpr) &&
-           (eq.lhs isa VarExpr || (eq.lhs isa OpExpr && (eq.lhs::OpExpr).op == "D"))
-            names = sort!(collect(_hoist_free_names!(Set{String}(), eq.lhs,
-                                                     Set{String}(["t"]))))
+                (eq.lhs isa VarExpr || (eq.lhs isa OpExpr && (eq.lhs::OpExpr).op == "D"))
+            names = sort!(
+                collect(
+                    _hoist_free_names!(
+                        Set{String}(), eq.lhs,
+                        Set{String}(["t"])
+                    )
+                )
+            )
             owner = eq.lhs isa VarExpr ? (eq.lhs::VarExpr).name :
-                    isempty(names) ? "" : first(names)
+                isempty(names) ? "" : first(names)
             split = nothing
             od = _hoist_owner_dims(owner, hc, index_sets)
             if od !== nothing
-                ops = _hoist_split_operands!(OpExpr[], rhs, od[2], IdDict{OpExpr,Nothing}())
+                ops = _hoist_split_operands!(OpExpr[], rhs, od[2], IdDict{OpExpr, Nothing}())
                 length(ops) >= 2 &&
-                    (split = (IdDict{OpExpr,Nothing}(o => nothing for o in ops), od[1]))
+                    (split = (IdDict{OpExpr, Nothing}(o => nothing for o in ops), od[1]))
             end
-            new_rhs = _hoist_operand_walk(rhs, owner, hc, IdDict{OpExpr,ASTExpr}(), split)
+            new_rhs = _hoist_operand_walk(rhs, owner, hc, IdDict{OpExpr, ASTExpr}(), split)
             new_rhs === rhs && continue
             eqs === model.equations && (eqs = copy(model.equations))
-            eqs[i] = Equation(eq.lhs, new_rhs; _comment=eq._comment)
+            eqs[i] = Equation(eq.lhs, new_rhs; _comment = eq._comment)
             continue
         end
-        (rhs isa OpExpr && _is_faq_op((rhs::OpExpr).op) &&
-         (rhs::OpExpr).output_idx !== nothing && (rhs::OpExpr).ranges !== nothing &&
-         (rhs::OpExpr).expr_body !== nothing) || continue
+        (
+            rhs isa OpExpr && _is_faq_op((rhs::OpExpr).op) &&
+                (rhs::OpExpr).output_idx !== nothing && (rhs::OpExpr).ranges !== nothing &&
+                (rhs::OpExpr).expr_body !== nothing
+        ) || continue
         f = rhs::OpExpr
         # A filter or a join leaves output cells where the body is never
         # evaluated; the lifted fill would evaluate it there, and a gather or
@@ -438,26 +468,34 @@ function _hoist_nested_reductions(model::Model, index_sets::AbstractDict)
         out_idx = String[String(x) for x in f.output_idx if x isa AbstractString]
         isempty(out_idx) && continue
         contracted = Set{String}(String(k) for k in keys(f.ranges) if !(String(k) in out_idx))
-        lhs_names = sort!(collect(_hoist_free_names!(Set{String}(), eq.lhs,
-                                                     Set{String}(["t"]))))
+        lhs_names = sort!(
+            collect(
+                _hoist_free_names!(
+                    Set{String}(), eq.lhs,
+                    Set{String}(["t"])
+                )
+            )
+        )
         owner = eq.lhs isa VarExpr ? (eq.lhs::VarExpr).name :
-                isempty(lhs_names) ? "" : first(lhs_names)
+            isempty(lhs_names) ? "" : first(lhs_names)
         body = _hoist_walk(f.expr_body, out_idx, f.ranges, contracted, owner, hc)
         body === f.expr_body && continue
         eqs === model.equations && (eqs = copy(model.equations))
-        eqs[i] = Equation(eq.lhs, reconstruct(f; expr_body=body); _comment=eq._comment)
+        eqs[i] = Equation(eq.lhs, reconstruct(f; expr_body = body); _comment = eq._comment)
     end
     isempty(hc.eqs) && return model, index_sets, hc.owner
-    vars = OrderedDict{String,ModelVariable}(model.variables)
+    vars = OrderedDict{String, ModelVariable}(model.variables)
     merge!(vars, hc.vars)
-    m = Model(vars, vcat(eqs, hc.eqs), model.discrete_events, model.continuous_events,
-              model.subsystems; tolerance=model.tolerance, tests=model.tests,
-              analyses=model.analyses, initialization_equations=model.initialization_equations,
-              guesses=model.guesses, system_kind=model.system_kind, reference=model.reference)
+    m = Model(
+        vars, vcat(eqs, hc.eqs), model.discrete_events, model.continuous_events,
+        model.subsystems; tolerance = model.tolerance, tests = model.tests,
+        analyses = model.analyses, initialization_equations = model.initialization_equations,
+        guesses = model.guesses, system_kind = model.system_kind, reference = model.reference
+    )
     isets = index_sets
     if any(v -> v.shape == [_HOIST_ONE_SET], values(hc.vars))
         isets = copy(index_sets)
-        isets[_HOIST_ONE_SET] = IndexSet("interval"; size=1)
+        isets[_HOIST_ONE_SET] = IndexSet("interval"; size = 1)
     end
     return m, isets, hc.owner
 end

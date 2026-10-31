@@ -34,12 +34,12 @@ const ESM_PC = EarthSciAST
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
 
-_pc_D(v) = Dict{String,Any}("op" => "D", "args" => Any[v], "wrt" => "t")
-_pc_o(o, a...) = Dict{String,Any}("op" => o, "args" => Any[a...])
-_pc_ix(v, i...) = Dict{String,Any}("op" => "index", "args" => Any[v, i...])
+_pc_D(v) = Dict{String, Any}("op" => "D", "args" => Any[v], "wrt" => "t")
+_pc_o(o, a...) = Dict{String, Any}("op" => o, "args" => Any[a...])
+_pc_ix(v, i...) = Dict{String, Any}("op" => "index", "args" => Any[v, i...])
 _pc_param(v; shape = nothing) = shape === nothing ?
-    Dict{String,Any}("type" => "parameter", "default" => v) :
-    Dict{String,Any}("type" => "parameter", "default" => v, "shape" => shape)
+    Dict{String, Any}("type" => "parameter", "default" => v) :
+    Dict{String, Any}("type" => "parameter", "default" => v, "shape" => shape)
 
 # One 0-D state, four parameters that reach the build by four different routes:
 #   k       — RHS only                      ⇒ :numeric
@@ -49,36 +49,50 @@ _pc_param(v; shape = nothing) = shape === nothing ?
 # `fold_ic` toggles ONLY whether the ic equation exists, so it is the control
 # for "the class follows consumption, not declaration".
 function _pc_doc(; fold_ic::Bool = true)
-    eqs = Any[Dict{String,Any}(
-        "lhs" => _pc_D("y"),
-        "rhs" => _pc_o("*", "k", _pc_o("*", _pc_ix("dat", 1.0), _pc_ix("buf", 1.0))))]
-    fold_ic && push!(eqs, Dict{String,Any}(
-        "lhs" => _pc_o("ic", "y"), "rhs" => _pc_o("*", "y0", 2.0)))
-    Dict{String,Any}(
-        "esm" => "1.0.0", "metadata" => Dict{String,Any}("name" => "PC"),
-        "index_sets" => Dict{String,Any}(
-            "n" => Dict{String,Any}("kind" => "interval", "size" => 2)),
-        "models" => Dict{String,Any}("M" => Dict{String,Any}(
-            "variables" => Dict{String,Any}(
-                "y" => Dict{String,Any}("type" => "unknown", "default" => 0.0),
-                "k" => _pc_param(1.5),
-                "y0" => _pc_param(3.0),
-                "dat" => _pc_param(0.0; shape = Any["n"]),
-                "buf" => _pc_param(0.0; shape = Any["n"])),
-            "equations" => eqs)))
+    eqs = Any[
+        Dict{String, Any}(
+            "lhs" => _pc_D("y"),
+            "rhs" => _pc_o("*", "k", _pc_o("*", _pc_ix("dat", 1.0), _pc_ix("buf", 1.0)))
+        ),
+    ]
+    fold_ic && push!(
+        eqs, Dict{String, Any}(
+            "lhs" => _pc_o("ic", "y"), "rhs" => _pc_o("*", "y0", 2.0)
+        )
+    )
+    return Dict{String, Any}(
+        "esm" => "1.0.0", "metadata" => Dict{String, Any}("name" => "PC"),
+        "index_sets" => Dict{String, Any}(
+            "n" => Dict{String, Any}("kind" => "interval", "size" => 2)
+        ),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "y" => Dict{String, Any}("type" => "unknown", "default" => 0.0),
+                    "k" => _pc_param(1.5),
+                    "y0" => _pc_param(3.0),
+                    "dat" => _pc_param(0.0; shape = Any["n"]),
+                    "buf" => _pc_param(0.0; shape = Any["n"])
+                ),
+                "equations" => eqs
+            )
+        )
+    )
 end
 
 # Both spellings: `EarthSciAST._build_evaluator(::Dict)` builds the document as authored (bare
 # names), while `esm_problem` FLATTENS first (`M.dat`). Same arrays either way.
-_pc_const() = Dict{String,Any}("dat" => [2.0, 0.0], "M.dat" => [2.0, 0.0])
-_pc_param_arrays() = Dict{String,Any}("buf" => [5.0, 0.0], "M.buf" => [5.0, 0.0])
+_pc_const() = Dict{String, Any}("dat" => [2.0, 0.0], "M.dat" => [2.0, 0.0])
+_pc_param_arrays() = Dict{String, Any}("buf" => [5.0, 0.0], "M.buf" => [5.0, 0.0])
 
 @testset "parameter classes" begin
     @testset "the four classes, derived from what the build read" begin
         insp = BuildInspection()
-        f!, u0, p, _t, vm = ESM_PC._build_evaluator(_pc_doc();
+        f!, u0, p, _t, vm = ESM_PC._build_evaluator(
+            _pc_doc();
             const_arrays = _pc_const(), param_arrays = _pc_param_arrays(),
-            inspect = insp)
+            inspect = insp
+        )
         cls = parameter_classes(insp)
         @test cls["k"] === :numeric
         @test cls["y0"] === :structural       # read by the ic() fold
@@ -93,7 +107,7 @@ _pc_param_arrays() = Dict{String,Any}("buf" => [5.0, 0.0], "M.buf" => [5.0, 0.0]
         @test all(haskey(pm, n) for (n, c) in cls if c === :numeric)
         @test haskey(pm, "y0") && cls["y0"] === :structural
         @test sort(collect(keys(pm))) ==
-              sort([n for (n, c) in cls if c === :numeric || c === :structural])
+            sort([n for (n, c) in cls if c === :numeric || c === :structural])
         # The structural read actually happened: u0 = 2*y0.
         @test u0[vm["y"]] ≈ 6.0
     end
@@ -102,17 +116,23 @@ _pc_param_arrays() = Dict{String,Any}("buf" => [5.0, 0.0], "M.buf" => [5.0, 0.0]
         # Same variable, same declaration, one document with the `ic()` equation
         # and one without. Declared type cannot tell them apart; the build can.
         i1 = BuildInspection(); i2 = BuildInspection()
-        ESM_PC._build_evaluator(_pc_doc(fold_ic = true);
-            const_arrays = _pc_const(), param_arrays = _pc_param_arrays(), inspect = i1)
-        ESM_PC._build_evaluator(_pc_doc(fold_ic = false);
-            const_arrays = _pc_const(), param_arrays = _pc_param_arrays(), inspect = i2)
+        ESM_PC._build_evaluator(
+            _pc_doc(fold_ic = true);
+            const_arrays = _pc_const(), param_arrays = _pc_param_arrays(), inspect = i1
+        )
+        ESM_PC._build_evaluator(
+            _pc_doc(fold_ic = false);
+            const_arrays = _pc_const(), param_arrays = _pc_param_arrays(), inspect = i2
+        )
         @test parameter_classes(i1)["y0"] === :structural
         @test parameter_classes(i2)["y0"] === :numeric
     end
 
     @testset "the problem carries the partition" begin
-        prob = ESM_PC.esm_problem(_pc_doc(), (0.0, 1.0); const_arrays = _pc_const(),
-                                  param_arrays = _pc_param_arrays())
+        prob = ESM_PC.esm_problem(
+            _pc_doc(), (0.0, 1.0); const_arrays = _pc_const(),
+            param_arrays = _pc_param_arrays()
+        )
         cls = parameter_classes(prob)
         @test cls["M.k"] === :numeric
         @test cls["M.y0"] === :structural
@@ -123,20 +143,24 @@ _pc_param_arrays() = Dict{String,Any}("buf" => [5.0, 0.0], "M.buf" => [5.0, 0.0]
     # ---- the narrowed refusal -------------------------------------------- #
     @testset "a NUMERIC override rides `p` through remake" begin
         Y = Symbol("M.y")
-        prob = ESM_PC.esm_problem(_pc_doc(), (0.0, 1.0); const_arrays = _pc_const(),
-                                  param_arrays = _pc_param_arrays())
+        prob = ESM_PC.esm_problem(
+            _pc_doc(), (0.0, 1.0); const_arrays = _pc_const(),
+            param_arrays = _pc_param_arrays()
+        )
         base = solve(prob, Tsit5())
         over = solve(remake(prob; p = Dict("M.k" => 3.0)), Tsit5())
         # dy/dt = k*dat[1]*buf[1] = k*10, y(0) = 6  ⇒  y(1) = 6 + 10k.
-        @test base[Y][end] ≈ 6.0 + 10 * 1.5 rtol = 1e-8
-        @test over[Y][end] ≈ 6.0 + 10 * 3.0 rtol = 1e-8
+        @test base[Y][end] ≈ 6.0 + 10 * 1.5 rtol = 1.0e-8
+        @test over[Y][end] ≈ 6.0 + 10 * 3.0 rtol = 1.0e-8
         @test !isapprox(base[Y][end], over[Y][end])     # it MOVED
         # …and it agrees with baking the same value in at construction time.
-        prob2 = ESM_PC.esm_problem(_pc_doc(), (0.0, 1.0); p = Dict("M.k" => 3.0),
-                                   const_arrays = _pc_const(),
-                                   param_arrays = _pc_param_arrays())
+        prob2 = ESM_PC.esm_problem(
+            _pc_doc(), (0.0, 1.0); p = Dict("M.k" => 3.0),
+            const_arrays = _pc_const(),
+            param_arrays = _pc_param_arrays()
+        )
         baked = solve(prob2, Tsit5())
-        @test over[Y][end] ≈ baked[Y][end] rtol = 1e-10
+        @test over[Y][end] ≈ baked[Y][end] rtol = 1.0e-10
         # `remake` does NOT mutate the problem it came from (§2.5.5).
         @test prob.p.var"M.k" == 1.5
         again = solve(prob, Tsit5())
@@ -146,11 +170,15 @@ _pc_param_arrays() = Dict{String,Any}("buf" => [5.0, 0.0], "M.buf" => [5.0, 0.0]
     end
 
     @testset "structural / const-folded / forcing are refused BY CLASS" begin
-        prob = ESM_PC.esm_problem(_pc_doc(), (0.0, 1.0); const_arrays = _pc_const(),
-                                  param_arrays = _pc_param_arrays())
-        for (name, word, fix) in (("M.y0", "STRUCTURAL", "esm_problem"),
-                                  ("M.dat", "CONST-FOLDED", "esm_problem"),
-                                  ("M.buf", "LIVE FORCING", "param_buffers"))
+        prob = ESM_PC.esm_problem(
+            _pc_doc(), (0.0, 1.0); const_arrays = _pc_const(),
+            param_arrays = _pc_param_arrays()
+        )
+        for (name, word, fix) in (
+                ("M.y0", "STRUCTURAL", "esm_problem"),
+                ("M.dat", "CONST-FOLDED", "esm_problem"),
+                ("M.buf", "LIVE FORCING", "param_buffers"),
+            )
             err = nothing
             try
                 remake(prob; p = Dict(name => 1.0))
@@ -168,8 +196,10 @@ _pc_param_arrays() = Dict{String,Any}("buf" => [5.0, 0.0], "M.buf" => [5.0, 0.0]
     end
 
     @testset "remake_parameters is a `p` swap, not a rebuild" begin
-        prob = ESM_PC.esm_problem(_pc_doc(), (0.0, 1.0); const_arrays = _pc_const(),
-                                  param_arrays = _pc_param_arrays())
+        prob = ESM_PC.esm_problem(
+            _pc_doc(), (0.0, 1.0); const_arrays = _pc_const(),
+            param_arrays = _pc_param_arrays()
+        )
         p2 = remake_parameters(prob, Dict("M.k" => 7.0))
         # Same NamedTuple shape and ORDER as `prob.p` (every `_NK_PARAM` node's
         # `idx` was minted against that order), one value changed.
@@ -177,7 +207,7 @@ _pc_param_arrays() = Dict{String,Any}("buf" => [5.0, 0.0], "M.buf" => [5.0, 0.0]
         @test param_map(p2) == param_map(prob.p)
         @test p2.var"M.k" == 7.0
         @test prob.p.var"M.k" == 1.5                  # the problem is untouched
-        @test remake_parameters(prob, Dict{String,Float64}()) === prob.p
+        @test remake_parameters(prob, Dict{String, Float64}()) === prob.p
         du = zeros(length(prob.u0))
         prob.f!(du, copy(prob.u0), p2, 0.0)
         @test du[prob.var_map["M.y"]] ≈ 7.0 * 10

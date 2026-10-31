@@ -38,7 +38,8 @@ using JSON3
         @test EarthSciAST.expression_from_json(1.0) isa IntExpr
         @test EarthSciAST.expression_from_json(8.0) == IntExpr(8)
         int_ratio = EarthSciAST.expression_from_json(
-            Dict("op" => "/", "args" => [1.0, 8.0]))
+            Dict("op" => "/", "args" => [1.0, 8.0])
+        )
         @test int_ratio.args[1] isa IntExpr
         @test int_ratio.args[2] isa IntExpr
         @test EarthSciAST.expression_from_json(2.5) isa NumExpr
@@ -140,18 +141,18 @@ using JSON3
 
     @testset "Round-trip Serialization" begin
         # Create test data
-        metadata = Metadata("test_roundtrip", authors=["Author 1", "Author 2"])
+        metadata = Metadata("test_roundtrip", authors = ["Author 1", "Author 2"])
 
-        variables = Dict("x" => ModelVariable(UnknownVariable, default=1.0))
+        variables = Dict("x" => ModelVariable(UnknownVariable, default = 1.0))
 
-        lhs = OpExpr("D", Vector{EarthSciAST.ASTExpr}([VarExpr("x")]), wrt="t")
+        lhs = OpExpr("D", Vector{EarthSciAST.ASTExpr}([VarExpr("x")]), wrt = "t")
         rhs = OpExpr("*", Vector{EarthSciAST.ASTExpr}([NumExpr(-0.1), VarExpr("x")]))
         equations = [Equation(lhs, rhs)]
 
         model = Model(variables, equations)
         models = Dict("test_model" => model)
 
-        original_file = EsmFile("0.1.0", metadata, models=models)
+        original_file = EsmFile("0.1.0", metadata, models = models)
 
         # Test round-trip
         temp_file = tempname() * ".json"
@@ -297,7 +298,8 @@ using JSON3
         # The same events also parse when handed native Dicts (the second
         # dict-like carrier coercion can see).
         model2 = EarthSciAST.coerce_model(
-            JSON3.read(JSON3.write(JSON3.read(model_json))))
+            JSON3.read(JSON3.write(JSON3.read(model_json)))
+        )
         @test length(model2.discrete_events) == 1
         @test length(model2.continuous_events) == 1
     end
@@ -315,19 +317,21 @@ using JSON3
     end
 
     @testset "coerce_esm_file accepts a plain native Dict document" begin
-        doc = Dict{String,Any}(
+        doc = Dict{String, Any}(
             "esm" => "0.8.0",
-            "metadata" => Dict{String,Any}("name" => "native_dict_doc"),
-            "models" => Dict{String,Any}(
-                "M" => Dict{String,Any}(
-                    "variables" => Dict{String,Any}(
-                        "x" => Dict{String,Any}("type" => "unknown", "default" => 2.5),
-                        "k" => Dict{String,Any}("type" => "parameter", "default" => 0.1),
+            "metadata" => Dict{String, Any}("name" => "native_dict_doc"),
+            "models" => Dict{String, Any}(
+                "M" => Dict{String, Any}(
+                    "variables" => Dict{String, Any}(
+                        "x" => Dict{String, Any}("type" => "unknown", "default" => 2.5),
+                        "k" => Dict{String, Any}("type" => "parameter", "default" => 0.1),
                     ),
-                    "equations" => Any[Dict{String,Any}(
-                        "lhs" => Dict{String,Any}("op" => "D", "args" => Any["x"], "wrt" => "t"),
-                        "rhs" => Dict{String,Any}("op" => "*", "args" => Any["k", "x"]),
-                    )],
+                    "equations" => Any[
+                        Dict{String, Any}(
+                            "lhs" => Dict{String, Any}("op" => "D", "args" => Any["x"], "wrt" => "t"),
+                            "rhs" => Dict{String, Any}("op" => "*", "args" => Any["k", "x"]),
+                        ),
+                    ],
                 ),
             ),
         )
@@ -344,9 +348,11 @@ using JSON3
 
         # Missing required fields surface as ParseError, not property errors.
         @test_throws ParseError EarthSciAST.coerce_esm_file(
-            Dict{String,Any}("metadata" => Dict{String,Any}("name" => "x")))
+            Dict{String, Any}("metadata" => Dict{String, Any}("name" => "x"))
+        )
         @test_throws ParseError EarthSciAST.coerce_esm_file(
-            Dict{String,Any}("esm" => "0.8.0"))
+            Dict{String, Any}("esm" => "0.8.0")
+        )
     end
 
     # `load_path(::AbstractDict)` — a document held in memory is the SAME document a
@@ -356,18 +362,28 @@ using JSON3
     # unresolved `SubsystemRef` (`_collect_model!`), so a merely-coerced document
     # with a `{ref}` would flatten to a system missing that whole subsystem.
     @testset "load_path(::AbstractDict) matches load_path(::String) on the same document" begin
-        leaf = Dict{String,Any}(
-            "esm" => "0.8.0", "metadata" => Dict{String,Any}("name" => "leaf"),
-            "models" => Dict{String,Any}("Inner" => Dict{String,Any}(
-                "variables" => Dict{String,Any}(
-                    "x" => Dict{String,Any}("type" => "unknown", "default" => 1.0)),
-                "equations" => Any[Dict{String,Any}(
-                    "lhs" => Dict{String,Any}("op" => "D", "args" => Any["x"], "wrt" => "t"),
-                    "rhs" => 1.0)])))
-        parent = Dict{String,Any}(
-            "esm" => "0.8.0", "metadata" => Dict{String,Any}("name" => "parent"),
-            "models" => Dict{String,Any}(
-                "Ref" => Dict{String,Any}("ref" => "leaf.esm")))
+        leaf = Dict{String, Any}(
+            "esm" => "0.8.0", "metadata" => Dict{String, Any}("name" => "leaf"),
+            "models" => Dict{String, Any}(
+                "Inner" => Dict{String, Any}(
+                    "variables" => Dict{String, Any}(
+                        "x" => Dict{String, Any}("type" => "unknown", "default" => 1.0)
+                    ),
+                    "equations" => Any[
+                        Dict{String, Any}(
+                            "lhs" => Dict{String, Any}("op" => "D", "args" => Any["x"], "wrt" => "t"),
+                            "rhs" => 1.0
+                        ),
+                    ]
+                )
+            )
+        )
+        parent = Dict{String, Any}(
+            "esm" => "0.8.0", "metadata" => Dict{String, Any}("name" => "parent"),
+            "models" => Dict{String, Any}(
+                "Ref" => Dict{String, Any}("ref" => "leaf.esm")
+            )
+        )
 
         mktempdir() do dir
             write(joinpath(dir, "leaf.esm"), JSON3.write(leaf))
@@ -385,16 +401,20 @@ using JSON3
             end
             # ...and both flatten to the same system — the ref-skip would leave it empty.
             @test Set(keys(EarthSciAST.flatten(from_dict).state_variables)) ==
-                  Set(keys(EarthSciAST.flatten(from_path).state_variables))
+                Set(keys(EarthSciAST.flatten(from_path).state_variables))
             @test !isempty(EarthSciAST.flatten(from_dict).state_variables)
         end
 
         # Unlike `coerce_esm_file`, `load` schema-validates.
-        bad = Dict{String,Any}(
-            "esm" => "0.8.0", "metadata" => Dict{String,Any}("name" => "bad"),
-            "models" => Dict{String,Any}("M" => Dict{String,Any}(
-                "variables" => Dict{String,Any}("y" => Dict{String,Any}("type" => "nope")),
-                "equations" => Any[])))
+        bad = Dict{String, Any}(
+            "esm" => "0.8.0", "metadata" => Dict{String, Any}("name" => "bad"),
+            "models" => Dict{String, Any}(
+                "M" => Dict{String, Any}(
+                    "variables" => Dict{String, Any}("y" => Dict{String, Any}("type" => "nope")),
+                    "equations" => Any[]
+                )
+            )
+        )
         @test_throws EarthSciAST.SchemaValidationError EarthSciAST.load_document(bad)
     end
 
@@ -495,9 +515,11 @@ using JSON3
         @test rt.args[2] == "Sink.offset"
 
         # factor + expression transform is rejected.
-        bad = replace(esm_json,
+        bad = replace(
+            esm_json,
             "\"transform\": { \"op\": \"+\"" =>
-            "\"factor\": 2.0, \"transform\": { \"op\": \"+\"")
+                "\"factor\": 2.0, \"transform\": { \"op\": \"+\""
+        )
         @test_throws Exception load_string(IOBuffer(bad))
     end
 
@@ -557,7 +579,7 @@ using JSON3
         u_rate_dx = observed_definition(file.models["M"], "dx")
         @test u_rate_dx.args[1] isa IntExpr
         @test u_rate_dx.args[2] isa IntExpr
-        @test EarthSciAST.evaluate_expr(u_rate_dx, Dict{String,Float64}()) == 0.125
+        @test EarthSciAST.evaluate_expr(u_rate_dx, Dict{String, Float64}()) == 0.125
     end
 
 end

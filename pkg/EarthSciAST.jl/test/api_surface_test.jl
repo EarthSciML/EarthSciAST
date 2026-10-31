@@ -54,23 +54,27 @@ include("testutils.jl")
     extra = sort(collect(setdiff(exported, declared)))
     if !isempty(extra)
         @info """exported by EarthSciAST but absent from api-surface.json.
-              Add them by re-running `python3 scripts/gen-api-surface.py`, then \
-              assign each a tier in API_SPEC.md.""" extra
+        Add them by re-running `python3 scripts/gen-api-surface.py`, then \
+        assign each a tier in API_SPEC.md.""" extra
     end
     @test isempty(extra)
 
     missing_syms = sort(collect(setdiff(declared, exported)))
     if !isempty(missing_syms)
         @info """declared for julia in api-surface.json but not exported.
-              Either restore the export or drop it from the manifest — dropping a \
-              `stable` symbol is a major-version break (API_SPEC.md §3).""" missing_syms
+        Either restore the export or drop it from the manifest — dropping a \
+        `stable` symbol is a major-version break (API_SPEC.md §3).""" missing_syms
     end
     @test isempty(missing_syms)
 
     # Every exported name must actually resolve: an `export` of a name nothing
     # defines is legal Julia and silently ships a broken surface.
-    unresolved = sort([n for n in exported
-                       if !isdefined(EarthSciAST, Symbol(n))])
+    unresolved = sort(
+        [
+            n for n in exported
+                if !isdefined(EarthSciAST, Symbol(n))
+        ]
+    )
     @test isempty(unresolved)
 
     # A symbol the manifest calls a `type` must be a type here, and one it calls

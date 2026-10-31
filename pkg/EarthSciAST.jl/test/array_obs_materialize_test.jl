@@ -38,9 +38,11 @@ end
     N = 8
     isets = Dict("x" => ESM_AOM.IndexSet("interval"; size = N))
     _rng = Dict("i" => ESM_AOM.IndexSetRef("x"))
-    _agg(body) = ESM_AOM.OpExpr("faq", ESM_AOM.ASTExpr[];
-                                output_idx = Any["i"], ranges = copy(_rng),
-                                expr_body = body)
+    _agg(body) = ESM_AOM.OpExpr(
+        "faq", ESM_AOM.ASTExpr[];
+        output_idx = Any["i"], ranges = copy(_rng),
+        expr_body = body
+    )
     vars = Dict(
         "u" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
         "g" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
@@ -49,10 +51,18 @@ end
     )
     eqs = [
         ESM_AOM.Equation(_v("g"), _agg(_op("*", _n(2.0), _idx("u", _v("i"))))),
-        ESM_AOM.Equation(_v("h"), _agg(_op("+", _idx("g", _v("i")),
-                                            _idx("g", _op("+", _v("i"), _i(1)))))),
-        ESM_AOM.Equation(_agg(_Didx("u", _v("i"))),
-                         _agg(_op("*", _v("k"), _idx("h", _v("i"))))),
+        ESM_AOM.Equation(
+            _v("h"), _agg(
+                _op(
+                    "+", _idx("g", _v("i")),
+                    _idx("g", _op("+", _v("i"), _i(1)))
+                )
+            )
+        ),
+        ESM_AOM.Equation(
+            _agg(_Didx("u", _v("i"))),
+            _agg(_op("*", _v("k"), _idx("h", _v("i"))))
+        ),
     ]
     model = ESM_AOM.Model(vars, eqs)
     ics = Dict("u[$j]" => Float64(j) for j in 1:N)
@@ -71,7 +81,7 @@ end
         end
         # ...and the value is the hand-computed one (h ghosts past the edge).
         du = _aom_du(fac, u0)
-        h = [2.0 * u0[j] + (j < N ? 2.0 * u0[j+1] : 0.0) for j in 1:N]
+        h = [2.0 * u0[j] + (j < N ? 2.0 * u0[j + 1] : 0.0) for j in 1:N]
         @test du == 0.25 .* h
     end
 
@@ -133,8 +143,10 @@ end
             ESM_AOM.Equation(_v("c"), _agg(_op("*", _v("k"), _op("sin", _v("i"))))),
             ESM_AOM.Equation(_v("d"), _agg(_op("*", _idx("c", _v("i")), _idx("u", _v("i"))))),
             ESM_AOM.Equation(_v("q"), _agg(_op("*", _v("t"), _idx("c", _v("i"))))),
-            ESM_AOM.Equation(_agg(_Didx("u", _v("i"))),
-                             _agg(_op("+", _idx("d", _v("i")), _idx("q", _v("i"))))),
+            ESM_AOM.Equation(
+                _agg(_Didx("u", _v("i"))),
+                _agg(_op("+", _idx("d", _v("i")), _idx("q", _v("i"))))
+            ),
         ]
         m3 = ESM_AOM.Model(vars3, eqs3)
         f3, i3 = _aom_build_both(m3; index_sets = isets, initial_conditions = ics)
@@ -145,9 +157,11 @@ end
         fi!, _, _, _, _, _ = i3
         du, dref = similar(u0), similar(u0)
         p2 = typeof(p)(map(x -> 3.0 * x, values(p)))
-        for (uu, pp, tt) in ((u0, p, 0.0), (u0, p, 0.0), (u0, p, 1.5),
-                             (fill(2.0, N), p, 1.5), (u0, p2, 1.5), (u0, p2, 1.5),
-                             (u0, p, 0.5))
+        for (uu, pp, tt) in (
+                (u0, p, 0.0), (u0, p, 0.0), (u0, p, 1.5),
+                (fill(2.0, N), p, 1.5), (u0, p2, 1.5), (u0, p2, 1.5),
+                (u0, p, 0.5),
+            )
             ff!(du, uu, pp, tt)
             fi!(dref, uu, pp, tt)
             @test du == dref
@@ -170,15 +184,25 @@ end
         )
         eqs4 = [
             ESM_AOM.Equation(_v("c"), _agg(_op("*", _v("k"), _op("sin", _v("i"))))),
-            ESM_AOM.Equation(_v("w"), _agg(_op("+", _op("*", _v("t"), _idx("F", _v("i"))),
-                                                _idx("c", _v("i"))))),
-            ESM_AOM.Equation(_agg(_Didx("u", _v("i"))),
-                             _agg(_op("*", _idx("w", _v("i")), _idx("u", _v("i"))))),
+            ESM_AOM.Equation(
+                _v("w"), _agg(
+                    _op(
+                        "+", _op("*", _v("t"), _idx("F", _v("i"))),
+                        _idx("c", _v("i"))
+                    )
+                )
+            ),
+            ESM_AOM.Equation(
+                _agg(_Didx("u", _v("i"))),
+                _agg(_op("*", _idx("w", _v("i")), _idx("u", _v("i"))))
+            ),
         ]
         m4 = ESM_AOM.Model(vars4, eqs4)
         F = [1.0 + 0.5j for j in 1:N]
-        f4, i4 = _aom_build_both(m4; index_sets = isets, initial_conditions = ics,
-                                 param_arrays = Dict("F" => F))
+        f4, i4 = _aom_build_both(
+            m4; index_sets = isets, initial_conditions = ics,
+            param_arrays = Dict("F" => F)
+        )
         @test f4[6].n_mat_const_levels == 1
         @test f4[6].n_mat_time_levels == 1
         ff!, u0, p, _, _, _ = f4
@@ -186,8 +210,10 @@ end
         du, dref = similar(u0), similar(u0)
         p2 = typeof(p)(map(x -> 3.0 * x, values(p)))
         check(uu, pp, tt) = (ff!(du, uu, pp, tt); fi!(dref, uu, pp, tt); du == dref)
-        for (uu, pp, tt) in ((u0, p, 0.0), (u0, p, 0.0), (fill(2.0, N), p, 0.0),
-                             (u0, p, 1.5), (u0, p2, 1.5), (u0, p, 1.5))
+        for (uu, pp, tt) in (
+                (u0, p, 0.0), (u0, p, 0.0), (fill(2.0, N), p, 0.0),
+                (u0, p, 1.5), (u0, p2, 1.5), (u0, p, 1.5),
+            )
             @test check(uu, pp, tt)
         end
         # A refresh in place at the same t, through the supported write path.
@@ -223,8 +249,10 @@ end
         m3 = ESM_AOM.Model(vars3, eqs3)
         for compiler in (:native, :interpreter)
             err = try
-                ESM_AOM._build_evaluator_impl(m3; compiler = compiler, index_sets = isets,
-                                              initial_conditions = ics)
+                ESM_AOM._build_evaluator_impl(
+                    m3; compiler = compiler, index_sets = isets,
+                    initial_conditions = ics
+                )
                 nothing
             catch e
                 e
@@ -232,10 +260,14 @@ end
             @test err isa ESM_AOM.TreeWalkError
             @test err isa ESM_AOM.TreeWalkError && err.code == "E_TREEWALK_OBSERVED_CYCLE"
         end
-        file = ESM_AOM.EsmFile("1.0.0", ESM_AOM.Metadata("selfread");
-                               models = Dict("M" => m3), index_sets = isets)
-        @test any(e -> e.error_type == "observed_cycle",
-                  ESM_AOM.validate(file).structural_errors)
+        file = ESM_AOM.EsmFile(
+            "1.0.0", ESM_AOM.Metadata("selfread");
+            models = Dict("M" => m3), index_sets = isets
+        )
+        @test any(
+            e -> e.error_type == "observed_cycle",
+            ESM_AOM.validate(file).structural_errors
+        )
     end
 
     # ---- Observeds that MUST stay inlined ----
@@ -247,39 +279,86 @@ end
     @testset "structural-position references keep the inline path" begin
         base = [ESM_AOM.Equation(_v("g"), _agg(_op("+", _idx("u", _v("i")), _n(1.0))))]
         pick(eqs) = ESM_AOM._collect_materialized_array_obs(
-            ESM_AOM.Model(vars, eqs), eqs, Set(["g"]), Set{String}())
+            ESM_AOM.Model(vars, eqs), eqs, Set(["g"]), Set{String}()
+        )
 
         # (a) plain gather of `g` — factored.
-        @test pick(vcat(base, [ESM_AOM.Equation(_agg(_Didx("u", _v("i"))),
-                                                _agg(_idx("g", _v("i"))))])) ==
-              Set(["g"])
+        @test pick(
+            vcat(
+                base, [
+                    ESM_AOM.Equation(
+                        _agg(_Didx("u", _v("i"))),
+                        _agg(_idx("g", _v("i")))
+                    ),
+                ]
+            )
+        ) ==
+            Set(["g"])
         # (b) `g` as a gather SUBSCRIPT. It reads the state, so the subscript is
         #     a run-time gather whether `g` is inlined or read from its buffer,
         #     and it is factored; a state-free `g` there stays inlined, where
         #     the build resolves the subscript.
-        @test pick(vcat(base,
-            [ESM_AOM.Equation(_agg(_Didx("u", _v("i"))),
-                              _agg(_idx("M", _idx("g", _v("i")))))])) == Set(["g"])
+        @test pick(
+            vcat(
+                base,
+                [
+                    ESM_AOM.Equation(
+                        _agg(_Didx("u", _v("i"))),
+                        _agg(_idx("M", _idx("g", _v("i"))))
+                    ),
+                ]
+            )
+        ) == Set(["g"])
         free = [ESM_AOM.Equation(_v("g"), _agg(_op("+", _v("i"), _n(1.0))))]
-        @test isempty(pick(vcat(free,
-            [ESM_AOM.Equation(_agg(_Didx("u", _v("i"))),
-                              _agg(_idx("M", _idx("g", _v("i")))))])))
+        @test isempty(
+            pick(
+                vcat(
+                    free,
+                    [
+                        ESM_AOM.Equation(
+                            _agg(_Didx("u", _v("i"))),
+                            _agg(_idx("M", _idx("g", _v("i"))))
+                        ),
+                    ]
+                )
+            )
+        )
         # (c) `g` in an aggregate RANGE BOUND — must stay inlined.
-        redu = ESM_AOM.OpExpr("faq", ESM_AOM.ASTExpr[];
-                              output_idx = Any["i"],
-                              ranges = Dict("i" => copy(_rng)["i"],
-                                            "m" => Any[1, _idx("g", _v("i"))]),
-                              expr_body = _idx("u", _v("m")))
-        @test isempty(pick(vcat(base,
-            [ESM_AOM.Equation(_agg(_Didx("u", _v("i"))), redu)])))
+        redu = ESM_AOM.OpExpr(
+            "faq", ESM_AOM.ASTExpr[];
+            output_idx = Any["i"],
+            ranges = Dict(
+                "i" => copy(_rng)["i"],
+                "m" => Any[1, _idx("g", _v("i"))]
+            ),
+            expr_body = _idx("u", _v("m"))
+        )
+        @test isempty(
+            pick(
+                vcat(
+                    base,
+                    [ESM_AOM.Equation(_agg(_Didx("u", _v("i"))), redu)]
+                )
+            )
+        )
         # (d) `g` inside a `makearray` region value the reader gathers — an
         #     ordinary EXPRESSION position, so it is still factored.
-        mk = ESM_AOM.OpExpr("makearray", ESM_AOM.ASTExpr[];
-                            regions = [[[1, N]]],
-                            values = ESM_AOM.ASTExpr[_agg(_idx("g", _v("i")))])
-        @test pick(vcat(base, [ESM_AOM.Equation(_agg(_Didx("u", _v("i"))),
-                                                _agg(_op("index", mk, _v("i"))))])) ==
-              Set(["g"])
+        mk = ESM_AOM.OpExpr(
+            "makearray", ESM_AOM.ASTExpr[];
+            regions = [[[1, N]]],
+            values = ESM_AOM.ASTExpr[_agg(_idx("g", _v("i")))]
+        )
+        @test pick(
+            vcat(
+                base, [
+                    ESM_AOM.Equation(
+                        _agg(_Didx("u", _v("i"))),
+                        _agg(_op("index", mk, _v("i")))
+                    ),
+                ]
+            )
+        ) ==
+            Set(["g"])
     end
 
     # ---- SILENT-WRONG-ANSWER regression: D of an array observed ----
@@ -294,19 +373,29 @@ end
     @testset "D of an array observed == D of the identical state" begin
         M = 6
         rngM = Dict("i" => Any[1, M])
-        aggM(body) = ESM_AOM.OpExpr("faq", ESM_AOM.ASTExpr[];
-                                    output_idx = Any["i"], ranges = copy(rngM),
-                                    expr_body = body)
+        aggM(body) = ESM_AOM.OpExpr(
+            "faq", ESM_AOM.ASTExpr[];
+            output_idx = Any["i"], ranges = copy(rngM),
+            expr_body = body
+        )
         # the lowered centered-difference-with-periodic-wrap region form
         function lowered_D(f)
-            interior = aggM(_op("/", _op("-", _idx(f, _op("+", _v("i"), _i(1))),
-                                              _idx(f, _op("-", _v("i"), _i(1)))),
-                                _n(2.0)))
+            interior = aggM(
+                _op(
+                    "/", _op(
+                        "-", _idx(f, _op("+", _v("i"), _i(1))),
+                        _idx(f, _op("-", _v("i"), _i(1)))
+                    ),
+                    _n(2.0)
+                )
+            )
             west = aggM(_op("/", _op("-", _idx(f, _i(2)), _idx(f, _i(M))), _n(2.0)))
             east = aggM(_op("/", _op("-", _idx(f, _i(1)), _idx(f, _i(M - 1))), _n(2.0)))
-            return ESM_AOM.OpExpr("makearray", ESM_AOM.ASTExpr[];
-                                  regions = [[[1, 1]], [[2, M - 1]], [[M, M]]],
-                                  values = ESM_AOM.ASTExpr[west, interior, east])
+            return ESM_AOM.OpExpr(
+                "makearray", ESM_AOM.ASTExpr[];
+                regions = [[[1, 1]], [[2, M - 1]], [[M, M]]],
+                values = ESM_AOM.ASTExpr[west, interior, east]
+            )
         end
         varsD = Dict(
             "u" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
@@ -322,15 +411,17 @@ end
             ESM_AOM.Equation(_op("D", _v("A"); wrt = "t"), lowered_D("w")),
             ESM_AOM.Equation(_op("D", _v("B"); wrt = "t"), lowered_D("u")),
         ]
-        icsD = Dict{String,Float64}()
+        icsD = Dict{String, Float64}()
         for j in 1:M
             icsD["u[$j]"] = Float64(j)^2
             icsD["A[$j]"] = 0.0
             icsD["B[$j]"] = 0.0
         end
         isetsM = Dict("x" => ESM_AOM.IndexSet("interval"; size = M))
-        f!, u0, p, _, vmD, dD = ESM_AOM._build_evaluator_impl(varsD |> vs ->
-            ESM_AOM.Model(vs, eqsD); index_sets = isetsM, initial_conditions = icsD)
+        f!, u0, p, _, vmD, dD = ESM_AOM._build_evaluator_impl(
+            varsD |> vs ->
+            ESM_AOM.Model(vs, eqsD); index_sets = isetsM, initial_conditions = icsD
+        )
         @test dD.n_mat_array_obs == 1
         du = similar(u0); f!(du, u0, p, 0.0)
         A = [du[vmD["A[$j]"]] for j in 1:M]
@@ -338,8 +429,10 @@ end
         @test A == B                       # THE invariant — exact, not approximate
         @test !all(iszero, A)              # and non-vacuous (it used to be all zeros)
         # the hand-computed centered difference of u = j², periodic wrap
-        @test B == [(4.0 - 36.0) / 2, (9.0 - 1.0) / 2, (16.0 - 4.0) / 2,
-                    (25.0 - 9.0) / 2, (36.0 - 16.0) / 2, (1.0 - 25.0) / 2]
+        @test B == [
+            (4.0 - 36.0) / 2, (9.0 - 1.0) / 2, (16.0 - 4.0) / 2,
+            (25.0 - 9.0) / 2, (36.0 - 16.0) / 2, (1.0 - 25.0) / 2,
+        ]
 
         # ---- and the sibling shape: index(<observed HOLDING a lowered D>) ----
         # `hz` is an observed whose own definition IS the lowered derivative
@@ -351,15 +444,22 @@ end
         varsC = copy(varsD)
         varsC["hz"] = ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"])
         varsC["C"] = ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"])
-        eqsC = vcat(eqsD, [ESM_AOM.Equation(_v("hz"), lowered_D("u")),
-                           ESM_AOM.Equation(_op("D", _v("C"); wrt = "t"),
-                                            aggM(_idx("hz", _v("i"))))])
+        eqsC = vcat(
+            eqsD, [
+                ESM_AOM.Equation(_v("hz"), lowered_D("u")),
+                ESM_AOM.Equation(
+                    _op("D", _v("C"); wrt = "t"),
+                    aggM(_idx("hz", _v("i")))
+                ),
+            ]
+        )
         icsC = copy(icsD)
         for j in 1:M
             icsC["C[$j]"] = 0.0
         end
         fC!, u0C, pC, _, vmC, dC2 = ESM_AOM._build_evaluator_impl(
-            ESM_AOM.Model(varsC, eqsC); index_sets = isetsM, initial_conditions = icsC)
+            ESM_AOM.Model(varsC, eqsC); index_sets = isetsM, initial_conditions = icsC
+        )
         duC = similar(u0C); fC!(duC, u0C, pC, 0.0)
         Cv = [duC[vmC["C[$j]"]] for j in 1:M]
         Bv = [duC[vmC["B[$j]"]] for j in 1:M]
@@ -380,24 +480,37 @@ end
     # hands this contracting producer over bare — which makes this testset the
     # live guard on that derivation rather than a test of an avoided path.
     @testset "const-weight contraction ≡ the inlining build" begin
-        Wm = [0.5 0.0 0.0; 0.5 0.0 0.0; 0.0 0.5 0.0;
-              0.0 0.5 0.0; 0.0 0.0 0.5; 0.0 0.0 0.5]
+        Wm = [
+            0.5 0.0 0.0; 0.5 0.0 0.0; 0.0 0.5 0.0;
+            0.0 0.5 0.0; 0.0 0.0 0.5; 0.0 0.0 0.5
+        ]
         src = [0.0, 2.0, 1.0, 3.0, 2.0, 4.0]
-        gdef = ESM_AOM.OpExpr("faq", ESM_AOM.ASTExpr[];
+        gdef = ESM_AOM.OpExpr(
+            "faq", ESM_AOM.ASTExpr[];
             semiring = "sum_product", output_idx = Any["j"],
             ranges = Dict("i" => [1, 6], "j" => [1, 3]),
-            expr_body = _op("*", _idx("W", _v("i"), _v("j")), _idx("src", _v("i"))))
-        aggJ(body) = ESM_AOM.OpExpr("faq", ESM_AOM.ASTExpr[];
-            output_idx = Any["j"], ranges = Dict("j" => [1, 3]), expr_body = body)
+            expr_body = _op("*", _idx("W", _v("i"), _v("j")), _idx("src", _v("i")))
+        )
+        aggJ(body) = ESM_AOM.OpExpr(
+            "faq", ESM_AOM.ASTExpr[];
+            output_idx = Any["j"], ranges = Dict("j" => [1, 3]), expr_body = body
+        )
         mR = ESM_AOM.Model(
-            Dict("c" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["tgt"]),
-                 "g" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["tgt"])),
+            Dict(
+                "c" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["tgt"]),
+                "g" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["tgt"])
+            ),
             # esm 1.0.0: `g`'s contraction body is its defining equation.
-            [ESM_AOM.Equation(_v("g"), gdef),
-             ESM_AOM.Equation(aggJ(_Didx("c", _v("j"))), aggJ(_idx("g", _v("j"))))])
-        kw = (; index_sets = Dict("tgt" => ESM_AOM.IndexSet("interval"; size = 3)),
-                initial_conditions = Dict("c[$j]" => 0.0 for j in 1:3),
-                const_arrays = Dict("W" => Wm, "src" => src))
+            [
+                ESM_AOM.Equation(_v("g"), gdef),
+                ESM_AOM.Equation(aggJ(_Didx("c", _v("j"))), aggJ(_idx("g", _v("j")))),
+            ]
+        )
+        kw = (;
+            index_sets = Dict("tgt" => ESM_AOM.IndexSet("interval"; size = 3)),
+            initial_conditions = Dict("c[$j]" => 0.0 for j in 1:3),
+            const_arrays = Dict("W" => Wm, "src" => src),
+        )
         fac, inl = _aom_build_both(mR; kw...)
         @test fac[6].n_mat_array_obs == 1
         du_f = _aom_du(fac, fac[2])
@@ -422,26 +535,43 @@ end
     # `:percell_acc` equations in that build.
     @testset "a CONTRACTING materialized observed reaches the affine tier" begin
         Nx, Ny = 6, 4
-        isetsC = Dict("x" => ESM_AOM.IndexSet("interval"; size = Nx),
-                      "y" => ESM_AOM.IndexSet("interval"; size = Ny))
+        isetsC = Dict(
+            "x" => ESM_AOM.IndexSet("interval"; size = Nx),
+            "y" => ESM_AOM.IndexSet("interval"; size = Ny)
+        )
         # s[i] = Σ_j u[i,j] — `j` is contracted (in `ranges`, not `output_idx`).
-        colsum = ESM_AOM.OpExpr("faq", ESM_AOM.ASTExpr[];
+        colsum = ESM_AOM.OpExpr(
+            "faq", ESM_AOM.ASTExpr[];
             output_idx = Any["i"], reduce = "+",
-            ranges = Dict("i" => ESM_AOM.IndexSetRef("x"),
-                          "j" => ESM_AOM.IndexSetRef("y")),
-            expr_body = _idx("u", _v("i"), _v("j")))
-        agg2(body) = ESM_AOM.OpExpr("faq", ESM_AOM.ASTExpr[];
+            ranges = Dict(
+                "i" => ESM_AOM.IndexSetRef("x"),
+                "j" => ESM_AOM.IndexSetRef("y")
+            ),
+            expr_body = _idx("u", _v("i"), _v("j"))
+        )
+        agg2(body) = ESM_AOM.OpExpr(
+            "faq", ESM_AOM.ASTExpr[];
             output_idx = Any["i", "j"],
-            ranges = Dict("i" => ESM_AOM.IndexSetRef("x"),
-                          "j" => ESM_AOM.IndexSetRef("y")),
-            expr_body = body)
+            ranges = Dict(
+                "i" => ESM_AOM.IndexSetRef("x"),
+                "j" => ESM_AOM.IndexSetRef("y")
+            ),
+            expr_body = body
+        )
         mC = ESM_AOM.Model(
-            Dict("u" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x", "y"]),
-                 "s" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
-                 "k" => ESM_AOM.ModelVariable(ESM_AOM.ParameterVariable; default = 0.5)),
-            [ESM_AOM.Equation(_v("s"), colsum),
-             ESM_AOM.Equation(agg2(_Didx("u", _v("i"), _v("j"))),
-                              agg2(_op("*", _v("k"), _idx("s", _v("i")))))])
+            Dict(
+                "u" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x", "y"]),
+                "s" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+                "k" => ESM_AOM.ModelVariable(ESM_AOM.ParameterVariable; default = 0.5)
+            ),
+            [
+                ESM_AOM.Equation(_v("s"), colsum),
+                ESM_AOM.Equation(
+                    agg2(_Didx("u", _v("i"), _v("j"))),
+                    agg2(_op("*", _v("k"), _idx("s", _v("i"))))
+                ),
+            ]
+        )
         icsC = Dict("u[$i,$j]" => Float64(10i + j) for i in 1:Nx, j in 1:Ny)
         kwC = (; index_sets = isetsC, initial_conditions = icsC)
 
@@ -458,8 +588,10 @@ end
         # unwrap at all.
         inlC = ESM_AOM._build_evaluator_impl(mC; compiler = :interpreter, kwC...)
         u0 = facC[2]
-        for probe in (u0, fill(1.0, length(u0)),
-                      collect(range(-3.0, 3.0; length = length(u0))))
+        for probe in (
+                u0, fill(1.0, length(u0)),
+                collect(range(-3.0, 3.0; length = length(u0))),
+            )
             @test _aom_du(facC, probe) == _aom_du(inlC, probe)
         end
 
@@ -492,34 +624,49 @@ end
     @testset "prefix scan over a factored observed ≡ the inlining build" begin
         Ns = 12
         isetsS = Dict("x" => ESM_AOM.IndexSet("interval"; size = Ns))
-        aggS(body) = ESM_AOM.OpExpr("faq", ESM_AOM.ASTExpr[];
+        aggS(body) = ESM_AOM.OpExpr(
+            "faq", ESM_AOM.ASTExpr[];
             output_idx = Any["i"], ranges = Dict("i" => Any[1, Ns]),
-            expr_body = body)
+            expr_body = body
+        )
         # c is a state whose RHS is Σ_{j<=i} g[j], and g is a factored observed.
-        scan_rhs = ESM_AOM.OpExpr("faq", ESM_AOM.ASTExpr[];
+        scan_rhs = ESM_AOM.OpExpr(
+            "faq", ESM_AOM.ASTExpr[];
             output_idx = Any["i"], reduce = "+",
             ranges = Dict("i" => Any[1, Ns], "j" => Any[1, Ns]),
             filter = _op("<=", _v("j"), _v("i")),
-            expr_body = _idx("g", _v("j")))
+            expr_body = _idx("g", _v("j"))
+        )
         mS = ESM_AOM.Model(
-            Dict("u" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
-                 "c" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
-                 "g" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"])),
-            [ESM_AOM.Equation(_v("g"), aggS(_op("*", _n(2.0), _idx("u", _v("i"))))),
-             ESM_AOM.Equation(aggS(_Didx("c", _v("i"))), scan_rhs),
-             ESM_AOM.Equation(aggS(_Didx("u", _v("i"))), aggS(_n(0.0)))])
-        icsS = merge(Dict("u[$j]" => Float64(j) for j in 1:Ns),
-                     Dict("c[$j]" => 0.0 for j in 1:Ns))
-        facS, inlS = _aom_build_both(mS; index_sets = isetsS,
-                                     initial_conditions = icsS)
+            Dict(
+                "u" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+                "c" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+                "g" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"])
+            ),
+            [
+                ESM_AOM.Equation(_v("g"), aggS(_op("*", _n(2.0), _idx("u", _v("i"))))),
+                ESM_AOM.Equation(aggS(_Didx("c", _v("i"))), scan_rhs),
+                ESM_AOM.Equation(aggS(_Didx("u", _v("i"))), aggS(_n(0.0))),
+            ]
+        )
+        icsS = merge(
+            Dict("u[$j]" => Float64(j) for j in 1:Ns),
+            Dict("c[$j]" => 0.0 for j in 1:Ns)
+        )
+        facS, inlS = _aom_build_both(
+            mS; index_sets = isetsS,
+            initial_conditions = icsS
+        )
         @test facS[6].n_mat_array_obs == 1        # g is factored
         @test facS[6].n_scan_folds == 1           # ...and the scan STILL fires
         @test inlS[6].n_mat_array_obs == 0
         # The interpreter has no scan rewrite either — it is part of the affine
         # build — so the reference computes the same prefix sums cell by cell.
         @test inlS[6].n_scan_folds == 0
-        for probe in (facS[2], fill(1.0, length(facS[2])),
-                      collect(range(-3.0, 3.0; length = length(facS[2]))))
+        for probe in (
+                facS[2], fill(1.0, length(facS[2])),
+                collect(range(-3.0, 3.0; length = length(facS[2]))),
+            )
             @test _aom_du(facS, probe) == _aom_du(inlS, probe)
         end
         # g[j] = 2u[j], so D(c)[i] is 2·(the i-th triangular number) at u[j] = j.
@@ -543,48 +690,79 @@ end
 # (`compiler=:interpreter`).
 @testset "inlined aggregate does not capture a reader's loop variable" begin
     NI, NK = 2, 4
-    _agg(out, rngs, body) = Dict{String,Any}(
+    _agg(out, rngs, body) = Dict{String, Any}(
         "op" => "faq", "args" => Any[], "output_idx" => Any[out...],
-        "ranges" => Dict(rngs...), "expr" => body)
-    _ix(a, ks...) = Dict{String,Any}("op" => "index", "args" => Any[a, ks...])
+        "ranges" => Dict(rngs...), "expr" => body
+    )
+    _ix(a, ks...) = Dict{String, Any}("op" => "index", "args" => Any[a, ks...])
 
-    doc = Dict{String,Any}(
+    doc = Dict{String, Any}(
         "esm" => "1.0.0", "metadata" => Dict("name" => "agg_inline_capture"),
-        "models" => Dict("R" => Dict{String,Any}(
-            "variables" => Dict(
-                "q"    => Dict("type" => "unknown",    "shape" => Any["gi", "gk"]),
-                "w"    => Dict("type" => "unknown", "shape" => Any["gi"]),
-                "mean" => Dict("type" => "unknown", "shape" => Any["gi", "gk"])),
-            "equations" => Any[
-                # w[gi] = Σ_gk q[gi,gk]           — `gk` CONTRACTED
-                Dict("lhs" => "w",
-                     "rhs" => merge(_agg(["gi"], ["gi" => Any[1, NI], "gk" => Any[1, NK]],
-                                         _ix("q", "gi", "gk")),
-                                    Dict("reduce" => "+"))),
-                # mean[gi,gk] = w[gi] / 2         — `gk` an OUTPUT index
-                Dict("lhs" => "mean",
-                     "rhs" => _agg(["gi", "gk"], ["gi" => Any[1, NI], "gk" => Any[1, NK]],
-                                   Dict("op" => "/", "args" => Any[_ix("w", "gi"), 2.0]))),
-                Dict("lhs" => _agg(["gi", "gk"], ["gi" => Any[1, NI], "gk" => Any[1, NK]],
-                                   Dict("op" => "D", "wrt" => "t",
-                                        "args" => Any[_ix("q", "gi", "gk")])),
-                     "rhs" => _agg(["gi", "gk"], ["gi" => Any[1, NI], "gk" => Any[1, NK]],
-                                   Dict("op" => "-", "args" => Any[_ix("mean", "gi", "gk"),
-                                                                   _ix("q", "gi", "gk")])))])))
+        "models" => Dict(
+            "R" => Dict{String, Any}(
+                "variables" => Dict(
+                    "q" => Dict("type" => "unknown", "shape" => Any["gi", "gk"]),
+                    "w" => Dict("type" => "unknown", "shape" => Any["gi"]),
+                    "mean" => Dict("type" => "unknown", "shape" => Any["gi", "gk"])
+                ),
+                "equations" => Any[
+                    # w[gi] = Σ_gk q[gi,gk]           — `gk` CONTRACTED
+                    Dict(
+                        "lhs" => "w",
+                        "rhs" => merge(
+                            _agg(
+                                ["gi"], ["gi" => Any[1, NI], "gk" => Any[1, NK]],
+                                _ix("q", "gi", "gk")
+                            ),
+                            Dict("reduce" => "+")
+                        )
+                    ),
+                    # mean[gi,gk] = w[gi] / 2         — `gk` an OUTPUT index
+                    Dict(
+                        "lhs" => "mean",
+                        "rhs" => _agg(
+                            ["gi", "gk"], ["gi" => Any[1, NI], "gk" => Any[1, NK]],
+                            Dict("op" => "/", "args" => Any[_ix("w", "gi"), 2.0])
+                        )
+                    ),
+                    Dict(
+                        "lhs" => _agg(
+                            ["gi", "gk"], ["gi" => Any[1, NI], "gk" => Any[1, NK]],
+                            Dict(
+                                "op" => "D", "wrt" => "t",
+                                "args" => Any[_ix("q", "gi", "gk")]
+                            )
+                        ),
+                        "rhs" => _agg(
+                            ["gi", "gk"], ["gi" => Any[1, NI], "gk" => Any[1, NK]],
+                            Dict(
+                                "op" => "-", "args" => Any[
+                                    _ix("mean", "gi", "gk"),
+                                    _ix("q", "gi", "gk"),
+                                ]
+                            )
+                        )
+                    ),
+                ]
+            )
+        )
+    )
 
-    ics = Dict{String,Any}("q[$i,$k]" => Float64(10i + k) for i in 1:NI, k in 1:NK)
+    ics = Dict{String, Any}("q[$i,$k]" => Float64(10i + k) for i in 1:NI, k in 1:NK)
     # du[gi,gk] = (Σ_kk q[gi,kk])/2 − q[gi,gk]
     want(i, k) = sum(Float64(10i + kk) for kk in 1:NK) / 2 - Float64(10i + k)
 
     function du_iip(; inline)
-        f!, u0, p, _, vm = EarthSciAST._build_evaluator(doc;
-            initial_conditions = ics, compiler = inline ? :interpreter : :native)
+        f!, u0, p, _, vm = EarthSciAST._build_evaluator(
+            doc;
+            initial_conditions = ics, compiler = inline ? :interpreter : :native
+        )
         du = similar(u0); f!(du, u0, p, 0.0)
         return [du[vm["q[$i,$k]"]] for i in 1:NI, k in 1:NK]
     end
     ref = [want(i, k) for i in 1:NI, k in 1:NK]
     @test du_iip(inline = false) == ref          # factored: was already right
-    @test du_iip(inline = true)  == ref          # inlined: the capture path
+    @test du_iip(inline = true) == ref          # inlined: the capture path
 end
 
 # An out-of-place BUILD materializes array observeds too, and its plan agrees
@@ -599,26 +777,41 @@ end
 @testset "an out-of-place build materializes array observeds too" begin
     Ns = 6
     isetsO = Dict("x" => ESM_AOM.IndexSet("interval"; size = Ns))
-    aggO(body) = ESM_AOM.OpExpr("faq", ESM_AOM.ASTExpr[];
-        output_idx = Any["i"], ranges = Dict("i" => Any[1, Ns]), expr_body = body)
+    aggO(body) = ESM_AOM.OpExpr(
+        "faq", ESM_AOM.ASTExpr[];
+        output_idx = Any["i"], ranges = Dict("i" => Any[1, Ns]), expr_body = body
+    )
     # tot = Σ_j u[j]^2 — a genuine CONTRACTION, so inlining it into every reader
     # is exactly the blow-up this pins against. Scalar-shaped, hence read by all.
-    totO = ESM_AOM.OpExpr("faq", ESM_AOM.ASTExpr[];
+    totO = ESM_AOM.OpExpr(
+        "faq", ESM_AOM.ASTExpr[];
         output_idx = Any["i"], reduce = "+",
         ranges = Dict("i" => Any[1, Ns], "j" => Any[1, Ns]),
-        expr_body = _op("*", _idx("u", _v("j")), _idx("u", _v("j"))))
+        expr_body = _op("*", _idx("u", _v("j")), _idx("u", _v("j")))
+    )
     mO = ESM_AOM.Model(
-        Dict("u" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
-             "g" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"])),
-        [ESM_AOM.Equation(_v("g"), totO),
-         ESM_AOM.Equation(aggO(_Didx("u", _v("i"))),
-                          aggO(_op("-", _idx("g", _v("i")), _idx("u", _v("i")))))])
+        Dict(
+            "u" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+            "g" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"])
+        ),
+        [
+            ESM_AOM.Equation(_v("g"), totO),
+            ESM_AOM.Equation(
+                aggO(_Didx("u", _v("i"))),
+                aggO(_op("-", _idx("g", _v("i")), _idx("u", _v("i"))))
+            ),
+        ]
+    )
     icsO = Dict("u[$j]" => 0.5 * j for j in 1:Ns)
 
-    iip = ESM_AOM._build_evaluator_impl(mO; index_sets = isetsO,
-                                        initial_conditions = icsO)
-    oop = ESM_AOM._build_evaluator_impl(mO; index_sets = isetsO,
-                                        initial_conditions = icsO, form = :oop)
+    iip = ESM_AOM._build_evaluator_impl(
+        mO; index_sets = isetsO,
+        initial_conditions = icsO
+    )
+    oop = ESM_AOM._build_evaluator_impl(
+        mO; index_sets = isetsO,
+        initial_conditions = icsO, form = :oop
+    )
     # BOTH emitters buffer the observed. Without this the value check below would
     # still pass on the inlining build it exists to rule out.
     @test iip[6].n_mat_array_obs == 1
@@ -632,5 +825,5 @@ end
     @test oop[6].n_mat_array_cells == iip[6].n_mat_array_cells
     ir = getfield(oop[1], :rhs)
     @test getfield(ir, :n_total) - getfield(ir, :n_states) ==
-          oop[6].n_mat_array_cells
+        oop[6].n_mat_array_cells
 end

@@ -98,9 +98,9 @@ Base.showerror(io::IO, e::CadenceError) = print(io, "CadenceError: ", e.msg)
 # fixtures are small, so the up-front copy is cheap; the production build path
 # never runs this conversion (it parses straight into the typed IR).
 
-to_native(x::JSON3.Object) = Dict{String,Any}(String(k) => to_native(v) for (k, v) in pairs(x))
+to_native(x::JSON3.Object) = Dict{String, Any}(String(k) => to_native(v) for (k, v) in pairs(x))
 to_native(x::JSON3.Array) = Any[to_native(v) for v in x]
-to_native(x::AbstractDict) = Dict{String,Any}(String(k) => to_native(v) for (k, v) in x)
+to_native(x::AbstractDict) = Dict{String, Any}(String(k) => to_native(v) for (k, v) in x)
 to_native(x::AbstractVector) = Any[to_native(v) for v in x]
 to_native(x) = x
 
@@ -116,7 +116,7 @@ not about that field).
 """
 function load_model_json(path::AbstractString, model_name::AbstractString)
     doc = to_native(JSON3.read(read(path, String)))
-    models = get(doc, "models", Dict{String,Any}())
+    models = get(doc, "models", Dict{String, Any}())
     haskey(models, model_name) ||
         throw(CadenceError("$(path): model $(repr(model_name)) not found"))
     model = models[model_name]
@@ -125,7 +125,7 @@ function load_model_json(path::AbstractString, model_name::AbstractString)
     # and decide `discrete` (temporal) vs `const` (no temporal).
     sources = get(doc, "data_sources", nothing)
     if isa(sources, AbstractDict) && !haskey(model, "data_sources")
-        model = merge(model, Dict{String,Any}("data_sources" => sources))
+        model = merge(model, Dict{String, Any}("data_sources" => sources))
     end
     return model
 end
@@ -134,7 +134,7 @@ end
 
 """The lattice join (max) over cadence classes — the §5.7 propagation rule."""
 _join(classes) = isempty(classes) ? "const" :
-                 RANK_CLASS[maximum(CLASS_RANK[c] for c in classes)]
+    RANK_CLASS[maximum(CLASS_RANK[c] for c in classes)]
 
 """
     _observed_definitions(model) -> Dict{String,Any}
@@ -155,15 +155,15 @@ definition wins, matching the reference implementation
 function _observed_definitions(model)
     cached = get(model, "_observed_defs", nothing)
     cached === nothing || return cached
-    variables = get(model, "variables", Dict{String,Any}())
-    roles = Tuple{Symbol,String,Any}[]
+    variables = get(model, "variables", Dict{String, Any}())
+    roles = Tuple{Symbol, String, Any}[]
     for eq in get(model, "equations", Any[])
         isa(eq, AbstractDict) || continue
         role, name = _raw_lhs_role(get(eq, "lhs", nothing))
         push!(roles, (role, name, eq))
     end
     states = Set(name for (role, name, _) in roles if role === :derivative)
-    defs = Dict{String,Any}()
+    defs = Dict{String, Any}()
     for (role, name, eq) in roles
         role === :definition || continue
         name in states && continue
@@ -200,7 +200,7 @@ function _raw_lhs_role(lhs)
     head = _raw_lhs_unwrap(lhs)
     isa(head, AbstractString) && return (:definition, String(head))
     if isa(head, AbstractDict) && get(head, "op", nothing) == "D" &&
-       get(head, "wrt", "t") in ("t", nothing)
+            get(head, "wrt", "t") in ("t", nothing)
         args = get(head, "args", nothing)
         if isa(args, AbstractVector) && !isempty(args)
             base = _raw_lhs_unwrap(args[1])
@@ -241,23 +241,26 @@ observed resolves to the class of its defining equation's RHS, computed by this
 same pass and memoised; `resolving` carries the chain currently being resolved
 so a definition cycle is REPORTED rather than recursed forever.
 """
-function seed_leaf(leaf, model, resolving::Tuple=())
+function seed_leaf(leaf, model, resolving::Tuple = ())
     # numeric literal (Bool is excluded, mirroring the reference's `not bool`)
     if (isa(leaf, Integer) && !isa(leaf, Bool)) || isa(leaf, AbstractFloat)
         return "const"
     end
     isa(leaf, AbstractString) || throw(CadenceError("unexpected leaf $(repr(leaf))"))
     leaf == "t" && return "continuous"
-    variables = get(model, "variables", Dict{String,Any}())
+    variables = get(model, "variables", Dict{String, Any}())
     if haskey(variables, leaf)
         var = variables[leaf]
         kind = get(var, "type", nothing)
         if kind == "unknown"
             defs = _observed_definitions(model)
             if haskey(defs, leaf)
-                leaf in resolving && throw(CadenceError(
-                    "observed definition cycle through $(repr(leaf)): " *
-                    join(String[resolving..., leaf], " -> ")))
+                leaf in resolving && throw(
+                    CadenceError(
+                        "observed definition cycle through $(repr(leaf)): " *
+                            join(String[resolving..., leaf], " -> ")
+                    )
+                )
                 return classify(defs[leaf], model, ClassMemo(), (resolving..., leaf))
             end
             # An ODE state or an algebraic unknown: continuous.
@@ -287,14 +290,16 @@ end
 rule object or an ordered array of two or more (esm-spec §5.4); both read the
 same here."""
 _update_rules(update) = isa(update, AbstractVector) ? update :
-                        (isa(update, AbstractDict) ? Any[update] : Any[])
+    (isa(update, AbstractDict) ? Any[update] : Any[])
 
 """True iff any of the parameter's update rules is a `wiener` process. The schema
 forbids `wiener` inside an array, so in practice an array update is never
 Brownian — but the test reads through the rules rather than assuming it."""
 _update_has_wiener(update) =
-    any(r -> isa(r, AbstractDict) && get(r, "kind", nothing) == "wiener",
-        _update_rules(update))
+    any(
+    r -> isa(r, AbstractDict) && get(r, "kind", nothing) == "wiener",
+    _update_rules(update)
+)
 
 """
     _source_without_temporal(var, model) -> Bool
@@ -351,7 +356,7 @@ end
 # through the walkers so each node is classified exactly once per pass instead
 # of re-running the recursive `classify` from scratch at every visit
 # (quadratic-plus on deep trees).
-const ClassMemo = IdDict{Any,String}
+const ClassMemo = IdDict{Any, String}
 
 """
     classify(node, model[, memo::ClassMemo]) -> String
@@ -370,29 +375,33 @@ rather than recursed forever. A nested resolution runs with its own memo,
 because a node's class inside an observed's definition is derived under a
 different resolution chain.
 """
-function classify(node, model, memo::ClassMemo=ClassMemo(), resolving::Tuple=())
+function classify(node, model, memo::ClassMemo = ClassMemo(), resolving::Tuple = ())
     isa(node, AbstractDict) || return seed_leaf(node, model, resolving)
     cached = get(memo, node, nothing)
     cached !== nothing && return cached
     children = child_exprs(node)
     cls = isempty(children) ? "const" :
-          _join(String[classify(c, model, memo, resolving) for c in children])
+        _join(String[classify(c, model, memo, resolving) for c in children])
     memo[node] = cls
     return cls
 end
 
 """Walk the tree; wherever a node carries `expect_cadence`, assert the derived
 class agrees (§5.7.6 guard 3). Appends a message per disagreement to `problems`."""
-function check_expect_cadence!(node, model, problems::Vector{String},
-                               memo::ClassMemo=ClassMemo())
+function check_expect_cadence!(
+        node, model, problems::Vector{String},
+        memo::ClassMemo = ClassMemo()
+    )
     isa(node, AbstractDict) || return
     if haskey(node, "expect_cadence")
         derived = classify(node, model, memo)
         want = node["expect_cadence"]
         if derived != want
-            push!(problems,
+            push!(
+                problems,
                 "expect_cadence mismatch on op=$(repr(get(node, "op", nothing))): " *
-                "declared $(repr(want)) but derived $(repr(derived))")
+                    "declared $(repr(want)) but derived $(repr(derived))"
+            )
         end
     end
     for c in child_exprs(node)
@@ -403,8 +412,10 @@ end
 
 """Count annotated nodes (those carrying `expect_cadence`) by derived class —
 the golden `class_summary`."""
-function tally_classes!(node, model, counts::Dict{String,Int},
-                        memo::ClassMemo=ClassMemo())
+function tally_classes!(
+        node, model, counts::Dict{String, Int},
+        memo::ClassMemo = ClassMemo()
+    )
     isa(node, AbstractDict) || return
     if haskey(node, "expect_cadence")
         c = classify(node, model, memo)
@@ -423,18 +434,23 @@ strictly lower than its parent's is a materialization point (the maximal
 lower-cadence sub-DAG below that edge is cut, stored in a buffer, referenced by
 the parent). We record the boundary and do NOT recurse into it. A bare
 scalar-constant leaf is not a buffer, so scalar inlining is excluded."""
-function materialization_frontier!(node, model, out::Vector{Any},
-                                   memo::ClassMemo=ClassMemo())
+function materialization_frontier!(
+        node, model, out::Vector{Any},
+        memo::ClassMemo = ClassMemo()
+    )
     isa(node, AbstractDict) || return
     parent = classify(node, model, memo)
     for c in child_exprs(node)
         isa(c, AbstractDict) || continue
         cc = classify(c, model, memo)
         if CLASS_RANK[cc] < CLASS_RANK[parent]
-            push!(out, Dict{String,Any}(
-                "threshold" => "$(cc)->$(parent)",
-                "kind" => "expr_edge",
-                "op" => get(c, "op", nothing)))
+            push!(
+                out, Dict{String, Any}(
+                    "threshold" => "$(cc)->$(parent)",
+                    "kind" => "expr_edge",
+                    "op" => get(c, "op", nothing)
+                )
+            )
         else
             materialization_frontier!(c, model, out, memo)
         end
@@ -443,7 +459,7 @@ function materialization_frontier!(node, model, out::Vector{Any},
 end
 
 """True iff any value under `node` is `continuous` (drives hot-tree emptiness)."""
-function has_continuous(node, model, memo::ClassMemo=ClassMemo())
+function has_continuous(node, model, memo::ClassMemo = ClassMemo())
     if isa(node, AbstractDict)
         classify(node, model, memo) == "continuous" && return true
         return any(has_continuous(c, model, memo) for c in child_exprs(node))
@@ -460,16 +476,19 @@ end
 aggregate) that classifies `continuous` is rejected — state-dependent topology
 may not run on the per-step hot path in v1. Throws [`CadenceError`](@ref).
 """
-function assert_no_continuous_relational(node, model, memo::ClassMemo=ClassMemo())
+function assert_no_continuous_relational(node, model, memo::ClassMemo = ClassMemo())
     isa(node, AbstractDict) || return
     op = get(node, "op", nothing)
     is_relational = (op in RELATIONAL_OPS) ||
-                    (op == "faq" && get(node, "distinct", false) == true)
+        (op == "faq" && get(node, "distinct", false) == true)
     if is_relational && classify(node, model, memo) == "continuous"
-        throw(CadenceError(
-            "relational/value-invention node op=$(repr(op)) classifies CONTINUOUS — " *
-            "it may not run on the hot path (§5.7 guard 2). A state-dependent " *
-            "distinct/join/skolem/rank is out of scope for v1."))
+        throw(
+            CadenceError(
+                "relational/value-invention node op=$(repr(op)) classifies CONTINUOUS — " *
+                    "it may not run on the hot path (§5.7 guard 2). A state-dependent " *
+                    "distinct/join/skolem/rank is out of scope for v1."
+            )
+        )
     end
     for c in child_exprs(node)
         assert_no_continuous_relational(c, model, memo)
@@ -489,9 +508,9 @@ small graph and checked by the SHARED three-color DFS
 naming the cycle.
 """
 function assert_acyclic_index_sets(model)
-    index_sets = get(model, "index_sets", Dict{String,Any}())
+    index_sets = get(model, "index_sets", Dict{String, Any}())
     # Map each aggregate node id → the index sets it reads (ranges {from}).
-    node_reads = Dict{String,Set{String}}()
+    node_reads = Dict{String, Set{String}}()
 
     function collect_reads(node)
         isa(node, AbstractDict) || return
@@ -519,10 +538,10 @@ function assert_acyclic_index_sets(model)
     end
 
     # Edges: set --(from_faq)--> node --(reads)--> set.
-    set_to_node = Dict{String,String}()
+    set_to_node = Dict{String, String}()
     for (name, s) in index_sets
         if isa(s, AbstractDict) && get(s, "kind", nothing) == "derived" &&
-           get(s, "from_faq", nothing) !== nothing
+                get(s, "from_faq", nothing) !== nothing
             set_to_node[name] = String(s["from_faq"])
         end
     end
@@ -532,8 +551,12 @@ function assert_acyclic_index_sets(model)
     # deterministic DFS over it.
     g = ReferenceGraph("cadence-index-set-deps")
     for name in keys(set_to_node)
-        _ensure_vertex!(g, ReferenceVertex(String(name), "index_set", String(name),
-                                           nothing, nothing, nothing))
+        _ensure_vertex!(
+            g, ReferenceVertex(
+                String(name), "index_set", String(name),
+                nothing, nothing, nothing
+            )
+        )
     end
     for (name, node_id) in set_to_node
         for nxt in get(node_reads, node_id, Set{String}())
@@ -542,9 +565,12 @@ function assert_acyclic_index_sets(model)
         end
     end
     cyc = detect_cycle(g)
-    cyc === nothing || throw(CadenceError(
-        "cycle in the ≤DISCRETE index-set dependency graph " *
-        "(implicit solve, out of scope — §5.7 guard 1): " * join(cyc, " -> ")))
+    cyc === nothing || throw(
+        CadenceError(
+            "cycle in the ≤DISCRETE index-set dependency graph " *
+                "(implicit solve, out of scope — §5.7 guard 1): " * join(cyc, " -> ")
+        )
+    )
     return
 end
 

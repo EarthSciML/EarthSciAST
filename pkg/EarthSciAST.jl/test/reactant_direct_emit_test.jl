@@ -54,66 +54,110 @@ const EXT_DE = Base.get_extension(EarthSciAST, :EarthSciASTReactantExt)
 
 # ---- document builders -------------------------------------------------------
 
-_de_Dt(v) = Dict{String,Any}("op" => "D", "args" => Any[v], "wrt" => "t")
-_de_ix(v, i...) = Dict{String,Any}("op" => "index", "args" => Any[v, i...])
-_de_o(o, a...) = Dict{String,Any}("op" => o, "args" => Any[a...])
-_de_cst(v) = Dict{String,Any}("op" => "const", "value" => v)
-_de_fnop(nm, a...) = Dict{String,Any}("op" => "fn", "name" => nm, "args" => Any[a...])
-_de_ao(e) = Dict{String,Any}("op" => "faq", "output_idx" => Any["i"],
-    "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")),
-    "args" => Any[], "expr" => e)
+_de_Dt(v) = Dict{String, Any}("op" => "D", "args" => Any[v], "wrt" => "t")
+_de_ix(v, i...) = Dict{String, Any}("op" => "index", "args" => Any[v, i...])
+_de_o(o, a...) = Dict{String, Any}("op" => o, "args" => Any[a...])
+_de_cst(v) = Dict{String, Any}("op" => "const", "value" => v)
+_de_fnop(nm, a...) = Dict{String, Any}("op" => "fn", "name" => nm, "args" => Any[a...])
+_de_ao(e) = Dict{String, Any}(
+    "op" => "faq", "output_idx" => Any["i"],
+    "ranges" => Dict{String, Any}("i" => Dict{String, Any}("from" => "n")),
+    "args" => Any[], "expr" => e
+)
 _de_doc(name, vars, eqs; index_sets = nothing) = begin
-    d = Dict{String,Any}(
-        "esm" => "1.0.0", "metadata" => Dict{String,Any}("name" => name),
-        "models" => Dict{String,Any}("M" => Dict{String,Any}(
-            "variables" => vars, "equations" => eqs)))
+    d = Dict{String, Any}(
+        "esm" => "1.0.0", "metadata" => Dict{String, Any}("name" => name),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => vars, "equations" => eqs
+            )
+        )
+    )
     index_sets === nothing || (d["index_sets"] = index_sets)
     d
 end
-_de_nset(N) = Dict{String,Any}("n" => Dict{String,Any}("kind" => "interval", "size" => N))
-_de_state(; kw...) = Dict{String,Any}("type" => "unknown",
-                                      (String(k) => v for (k, v) in kw)...)
-_de_param(v) = Dict{String,Any}("type" => "parameter", "default" => v)
+_de_nset(N) = Dict{String, Any}("n" => Dict{String, Any}("kind" => "interval", "size" => N))
+_de_state(; kw...) = Dict{String, Any}(
+    "type" => "unknown",
+    (String(k) => v for (k, v) in kw)...
+)
+_de_param(v) = Dict{String, Any}("type" => "parameter", "default" => v)
 
 # 1-D reaction–diffusion: the stencil GATHER, a boundary const vector, the
 # hoisted invariant `exp(-Ea/T)`, the literal-exponent `c[i]^2`, and the
 # degenerate single-cell boundary kernels.
 function _de_rd(N)
-    stencil = _de_o("+", _de_o("-", _de_ix("c", _de_o("-", "i", 1.0)),
-                               _de_o("*", 2.0, _de_ix("c", "i"))),
-                    _de_ix("c", _de_o("+", "i", 1.0)))
+    stencil = _de_o(
+        "+", _de_o(
+            "-", _de_ix("c", _de_o("-", "i", 1.0)),
+            _de_o("*", 2.0, _de_ix("c", "i"))
+        ),
+        _de_ix("c", _de_o("+", "i", 1.0))
+    )
     rate = _de_o("*", "k_rxn", _de_o("exp", _de_o("neg", _de_o("/", "Ea", "T"))))
-    _de_doc("RD",
-        Dict{String,Any}("c" => _de_state(shape = Any["n"]), "k_diff" => _de_param(0.1),
-                         "k_rxn" => _de_param(0.3), "Ea" => _de_param(50.0),
-                         "T" => _de_param(300.0)),
-        Any[Dict{String,Any}("lhs" => _de_ao(_de_Dt(_de_ix("c", "i"))),
-            "rhs" => _de_ao(_de_o("-", _de_o("*", "k_diff", stencil),
-                                  _de_o("*", rate, _de_o("^", _de_ix("c", "i"), 2.0)))))];
-        index_sets = _de_nset(N))
+    return _de_doc(
+        "RD",
+        Dict{String, Any}(
+            "c" => _de_state(shape = Any["n"]), "k_diff" => _de_param(0.1),
+            "k_rxn" => _de_param(0.3), "Ea" => _de_param(50.0),
+            "T" => _de_param(300.0)
+        ),
+        Any[
+            Dict{String, Any}(
+                "lhs" => _de_ao(_de_Dt(_de_ix("c", "i"))),
+                "rhs" => _de_ao(
+                    _de_o(
+                        "-", _de_o("*", "k_diff", stencil),
+                        _de_o("*", rate, _de_o("^", _de_ix("c", "i"), 2.0))
+                    )
+                )
+            ),
+        ];
+        index_sets = _de_nset(N)
+    )
 end
 
 # `D(c[i]) = -k*c[i] + wind[i]`, `wind` a LIVE forcing buffer bound by reference
 # through `param_arrays` — the discrete-cadence loader channel.
 function _de_forced(N)
-    body = _de_o("+", _de_o("*", -1.0, _de_o("*", "k", _de_ix("c", "i"))),
-                 _de_ix("wind", "i"))
-    _de_doc("F", Dict{String,Any}("c" => _de_state(shape = Any["n"]),
-                                  "k" => _de_param(0.5)),
-        Any[Dict{String,Any}("lhs" => _de_ao(_de_Dt(_de_ix("c", "i"))),
-                             "rhs" => _de_ao(body))];
-        index_sets = _de_nset(N))
+    body = _de_o(
+        "+", _de_o("*", -1.0, _de_o("*", "k", _de_ix("c", "i"))),
+        _de_ix("wind", "i")
+    )
+    return _de_doc(
+        "F", Dict{String, Any}(
+            "c" => _de_state(shape = Any["n"]),
+            "k" => _de_param(0.5)
+        ),
+        Any[
+            Dict{String, Any}(
+                "lhs" => _de_ao(_de_Dt(_de_ix("c", "i"))),
+                "rhs" => _de_ao(body)
+            ),
+        ];
+        index_sets = _de_nset(N)
+    )
 end
 
 # A closed `interp.linear` over a frozen table, the query being the state.
 function _de_interpdoc()
     table = Any[0.0, 1.0, 4.0, 9.0, 16.0]
     axis = Any[0.0, 1.0, 2.0, 3.0, 4.0]
-    _de_doc("IT", Dict{String,Any}("y" => _de_state(default = 1.5),
-                                   "k" => _de_param(2.0)),
-        Any[Dict{String,Any}("lhs" => _de_Dt("y"),
-            "rhs" => _de_o("*", "k",
-                           _de_fnop("interp.linear", _de_cst(table), _de_cst(axis), "y")))])
+    return _de_doc(
+        "IT", Dict{String, Any}(
+            "y" => _de_state(default = 1.5),
+            "k" => _de_param(2.0)
+        ),
+        Any[
+            Dict{String, Any}(
+                "lhs" => _de_Dt("y"),
+                "rhs" => _de_o(
+                    "*", "k",
+                    _de_fnop("interp.linear", _de_cst(table), _de_cst(axis), "y")
+                )
+            ),
+        ]
+    )
 end
 
 # The hard-error fixture. It used to be `log10`, which the ladder now lowers as
@@ -127,9 +171,15 @@ end
 # emission. What the test is about is unchanged: the message must name the
 # construct in the IR's own vocabulary AND the rule it came from.
 function _de_unsupported_op()
-    _de_doc("U", Dict{String,Any}("y" => _de_state(default = 2.0)),
-        Any[Dict{String,Any}("lhs" => _de_Dt("y"),
-                             "rhs" => _de_o("neg", _de_o("/", "y", 2.0, 3.0)))])
+    return _de_doc(
+        "U", Dict{String, Any}("y" => _de_state(default = 2.0)),
+        Any[
+            Dict{String, Any}(
+                "lhs" => _de_Dt("y"),
+                "rhs" => _de_o("neg", _de_o("/", "y", 2.0, 3.0))
+            ),
+        ]
+    )
 end
 
 # The nine `datetime.*` closed functions, one equation each, plus the two shapes
@@ -137,26 +187,44 @@ end
 # than the bare time, whose integer result then flows into ordinary Float64
 # arithmetic (`hour(t + tz) + lon/15` — a local solar hour), and `log10` beside
 # them so the two gaps this file grew for are exercised in one program.
-const _DE_DT_FNS = ("year", "month", "day", "hour", "minute", "second",
-                    "day_of_year", "julian_day", "is_leap_year")
+const _DE_DT_FNS = (
+    "year", "month", "day", "hour", "minute", "second",
+    "day_of_year", "julian_day", "is_leap_year",
+)
 
 function _de_dtdoc()
-    vars = Dict{String,Any}("tz" => _de_param(3600.0), "lon" => _de_param(-88.2),
-                            "k_log" => _de_param(2.0),
-                            "local_hour" => _de_state(default = 0.0),
-                            "lg" => _de_state(default = 5.0))
+    vars = Dict{String, Any}(
+        "tz" => _de_param(3600.0), "lon" => _de_param(-88.2),
+        "k_log" => _de_param(2.0),
+        "local_hour" => _de_state(default = 0.0),
+        "lg" => _de_state(default = 5.0)
+    )
     eqs = Any[]
     for f in _DE_DT_FNS
         vars["c_$f"] = _de_state(default = 0.0)
-        push!(eqs, Dict{String,Any}("lhs" => _de_Dt("c_$f"),
-                                    "rhs" => _de_fnop("datetime.$f", "t")))
+        push!(
+            eqs, Dict{String, Any}(
+                "lhs" => _de_Dt("c_$f"),
+                "rhs" => _de_fnop("datetime.$f", "t")
+            )
+        )
     end
-    push!(eqs, Dict{String,Any}("lhs" => _de_Dt("local_hour"),
-        "rhs" => _de_o("+", _de_fnop("datetime.hour", _de_o("+", "t", "tz")),
-                       _de_o("/", "lon", 15.0))))
-    push!(eqs, Dict{String,Any}("lhs" => _de_Dt("lg"),
-                                "rhs" => _de_o("*", "k_log", _de_o("log10", "lg"))))
-    _de_doc("DT", vars, eqs)
+    push!(
+        eqs, Dict{String, Any}(
+            "lhs" => _de_Dt("local_hour"),
+            "rhs" => _de_o(
+                "+", _de_fnop("datetime.hour", _de_o("+", "t", "tz")),
+                _de_o("/", "lon", 15.0)
+            )
+        )
+    )
+    push!(
+        eqs, Dict{String, Any}(
+            "lhs" => _de_Dt("lg"),
+            "rhs" => _de_o("*", "k_log", _de_o("log10", "lg"))
+        )
+    )
+    return _de_doc("DT", vars, eqs)
 end
 
 # The times a calendar gets wrong, which is the only reason to test one:
@@ -165,8 +233,10 @@ end
 # year boundary half a second short (the family truncates to whole
 # milliseconds), and `t` just below and exactly on a day boundary. The same
 # eight times the `datetime_log10` conformance fixture probes.
-const _DE_DT_TIMES = [0.0, -1.0, -0.5, -58039200.0, 1582979696.0,
-                      1704067199.5, 86399.75, 86400.0]
+const _DE_DT_TIMES = [
+    0.0, -1.0, -0.5, -58039200.0, 1582979696.0,
+    1704067199.5, 86399.75, 86400.0,
+]
 
 # The flat slot of an element, whether or not the evaluator's map spells it with
 # the model namespace.
@@ -194,7 +264,7 @@ _de_seed(n) = [0.6sin(0.7k) - 0.15 for k in 1:n]
 
 # Count `stablehlo.<op>` / `chlo.<op>` occurrences in a printed module.
 function _de_census(modstr::AbstractString)
-    c = Dict{String,Int}()
+    c = Dict{String, Int}()
     for m in eachmatch(r"\b(?:stablehlo|chlo)\.([a-z_0-9]+)", modstr)
         k = m.captures[1]
         c[k] = get(c, k, 0) + 1
@@ -223,6 +293,7 @@ function _de_print_census(label, c)
     for k in sort!(collect(keys(c)))
         println("    ", rpad(k, 24), c[k])
     end
+    return
 end
 
 _de_dumpdir() = get(ENV, "ESM_DIRECT_EMIT_DUMP_DIR", "")
@@ -231,14 +302,16 @@ function _de_dump(name, which, modstr)
     d = _de_dumpdir()
     isempty(d) && return
     mkpath(d)
-    write(joinpath(d, "$(name).$(which).mlir"), modstr)
+    return write(joinpath(d, "$(name).$(which).mlir"), modstr)
 end
 
 # Compare direct emission against the interpreter at a list of (u, t) samples.
 # `buffers === nothing` uses the three-argument form; otherwise the explicit
 # buffers form, with the SAME host buffers the interpreter reads.
-function _de_compare(name, fo, fi!, p, samples; buffers = nothing, rtol = 1e-12,
-                     census = true)
+function _de_compare(
+        name, fo, fi!, p, samples; buffers = nothing, rtol = 1.0e-12,
+        census = true
+    )
     d = EXT_DE.direct_rhs(fo)
     callee = buffers === nothing ? d : EXT_DE.direct_rhs_with_buffers(d)
     pr = _de_dev(p)
@@ -249,29 +322,39 @@ function _de_compare(name, fo, fi!, p, samples; buffers = nothing, rtol = 1e-12,
         (RX_DE.@compile sync = true callee(ur, pr, tr)) :
         (RX_DE.@compile sync = true callee(ur, pr, tr, buffers))
     println("  direct-emission tallies (", name, "): ", d.stats)
-    rows = Tuple{String,Float64,Float64,Float64}[]
+    rows = Tuple{String, Float64, Float64, Float64}[]
     for (u, t) in samples
         du_i = _de_ip(fi!, u, p, t)
         uu = RX_DE.ConcreteRArray(copy(u)); tt = RX_DE.ConcreteRNumber(t)
-        du_d = Array(buffers === nothing ? compiled(uu, pr, tt) :
-                                           compiled(uu, pr, tt, buffers))
+        du_d = Array(
+            buffers === nothing ? compiled(uu, pr, tt) :
+                compiled(uu, pr, tt, buffers)
+        )
         aerr = maximum(abs.(du_d .- du_i))
-        rerr = maximum(abs.(du_d .- du_i) ./ max.(abs.(du_i), 1e-300))
+        rerr = maximum(abs.(du_d .- du_i) ./ max.(abs.(du_i), 1.0e-300))
         # The sample LABEL, not the sample: a 343-cell state printed in full is
         # three screens of log for one row.
         head = repr(round.(u[1:min(end, 4)]; sigdigits = 3))
-        push!(rows, (string("t=", t, " u[1:", min(length(u), 4), "]=", head,
-                            length(u) > 4 ? " …($(length(u)))" : ""),
-                     aerr, rerr, maximum(abs.(du_i))))
+        push!(
+            rows, (
+                string(
+                    "t=", t, " u[1:", min(length(u), 4), "]=", head,
+                    length(u) > 4 ? " …($(length(u)))" : ""
+                ),
+                aerr, rerr, maximum(abs.(du_i)),
+            )
+        )
         @test isapprox(du_d, du_i; rtol = rtol, atol = 0.0)
     end
     println("  numerical comparison (", name, "):")
-    println("    ", rpad("sample", 44), rpad("max |Δ|", 14), rpad("max rel", 14),
-            "max |ref|")
+    println(
+        "    ", rpad("sample", 44), rpad("max |Δ|", 14), rpad("max rel", 14),
+        "max |ref|"
+    )
     for (s, a, r, m) in rows
         println("    ", rpad(s, 44), rpad(string(a), 14), rpad(string(r), 14), m)
     end
-    census || return (d, Dict{String,Int}())
+    census || return (d, Dict{String, Int}())
     # The raw module census. INFORMATIONAL — printed so a change in emitted shape
     # is visible in the log, never a gate.
     mod_direct = buffers === nothing ?
@@ -287,17 +370,25 @@ end
 # `c` on the n+1 nodes, terms on the n centres. `u` is held fixed so the
 # equation under test owns `c` alone, and the fold lands on `du`.
 function _de_scan_stag(n::Int; reduce = "+")
-    vars = Dict("u" => ESM_DE.ModelVariable(ESM_DE.UnknownVariable),
-                "c" => ESM_DE.ModelVariable(ESM_DE.UnknownVariable))
-    rhs = ESM_DE.OpExpr("faq", ESM_DE.ASTExpr[]; output_idx = Any["i"],
+    vars = Dict(
+        "u" => ESM_DE.ModelVariable(ESM_DE.UnknownVariable),
+        "c" => ESM_DE.ModelVariable(ESM_DE.UnknownVariable)
+    )
+    rhs = ESM_DE.OpExpr(
+        "faq", ESM_DE.ASTExpr[]; output_idx = Any["i"],
         expr_body = _idx("u", _v("j")),
         ranges = Dict("i" => [1, n + 1], "j" => [1, n]), reduce = reduce,
-        filter = _op("<", _v("j"), _v("i")))
-    ESM_DE.Model(vars, [
-        ESM_DE.Equation(_ao1(_Didx("c", _v("i")), "i", 1, n + 1), rhs),
-        ESM_DE.Equation(_ao1(_Didx("u", _v("i")), "i", 1, n),
-                        _ao1(_n(0.0), "i", 1, n)),
-    ])
+        filter = _op("<", _v("j"), _v("i"))
+    )
+    return ESM_DE.Model(
+        vars, [
+            ESM_DE.Equation(_ao1(_Didx("c", _v("i")), "i", 1, n + 1), rhs),
+            ESM_DE.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, n),
+                _ao1(_n(0.0), "i", 1, n)
+            ),
+        ]
+    )
 end
 
 # The same staggered scan as a MATERIALIZED ARRAY OBSERVED's fill, which is
@@ -308,25 +399,40 @@ end
 # than of `du`. `D(u[i]) = Mz[i+1] - Mz[i]` reads the buffer at two distinct
 # index expressions, which is what keeps `Mz` materialized.
 function _de_scan_stag_obs(n::Int)
-    isets = Dict("lev" => ESM_DE.IndexSet("interval"; size = n),
-                 "levn" => ESM_DE.IndexSet("interval"; size = n + 1))
-    agg_lev(body) = ESM_DE.OpExpr("faq", ESM_DE.ASTExpr[];
+    isets = Dict(
+        "lev" => ESM_DE.IndexSet("interval"; size = n),
+        "levn" => ESM_DE.IndexSet("interval"; size = n + 1)
+    )
+    agg_lev(body) = ESM_DE.OpExpr(
+        "faq", ESM_DE.ASTExpr[];
         output_idx = Any["i"], expr_body = body,
-        ranges = Dict{String,Any}("i" => ESM_DE.IndexSetRef("lev")))
-    mz = ESM_DE.OpExpr("faq", ESM_DE.ASTExpr[]; output_idx = Any["ke"],
+        ranges = Dict{String, Any}("i" => ESM_DE.IndexSetRef("lev"))
+    )
+    mz = ESM_DE.OpExpr(
+        "faq", ESM_DE.ASTExpr[]; output_idx = Any["ke"],
         expr_body = _op("*", _v("w"), _idx("u", _v("k"))),
-        ranges = Dict{String,Any}("ke" => ESM_DE.IndexSetRef("levn"),
-                                  "k" => ESM_DE.IndexSetRef("lev")),
-        reduce = "+", filter = _op("<", _v("k"), _v("ke")))
+        ranges = Dict{String, Any}(
+            "ke" => ESM_DE.IndexSetRef("levn"),
+            "k" => ESM_DE.IndexSetRef("lev")
+        ),
+        reduce = "+", filter = _op("<", _v("k"), _v("ke"))
+    )
     vars = Dict(
         "u" => ESM_DE.ModelVariable(ESM_DE.UnknownVariable; shape = ["lev"]),
         "Mz" => ESM_DE.ModelVariable(ESM_DE.UnknownVariable; shape = ["levn"]),
-        "w" => ESM_DE.ModelVariable(ESM_DE.ParameterVariable; default = 0.75))
+        "w" => ESM_DE.ModelVariable(ESM_DE.ParameterVariable; default = 0.75)
+    )
     eqs = [
         ESM_DE.Equation(_v("Mz"), mz),
-        ESM_DE.Equation(agg_lev(_Didx("u", _v("i"))),
-                        agg_lev(_op("-", _idx("Mz", _op("+", _v("i"), _i(1))),
-                                    _idx("Mz", _v("i"))))),
+        ESM_DE.Equation(
+            agg_lev(_Didx("u", _v("i"))),
+            agg_lev(
+                _op(
+                    "-", _idx("Mz", _op("+", _v("i"), _i(1))),
+                    _idx("Mz", _v("i"))
+                )
+            )
+        ),
     ]
     return ESM_DE.Model(vars, eqs), isets
 end
@@ -345,41 +451,72 @@ end
 # affine tier's, compiled once for the whole array, and leaves nothing to batch.
 function _de_halo(; NI = 6, NJ = 6, M = 7)
     NQ = max(NI, NJ) + M - 1
-    W = [[[[Float64((i + 2j + 3k + 5l) % 7) for l in 1:M] for k in 1:M]
-          for j in 1:NJ] for i in 1:NI]
-    donor(a, b) = Dict{String,Any}("op" => "-",
-        "args" => Any[Dict{String,Any}("op" => "+", "args" => Any[a, b]), 1])
-    agg = Dict{String,Any}("op" => "faq", "semiring" => "sum_product", "args" => Any[],
+    W = [
+        [
+            [[Float64((i + 2j + 3k + 5l) % 7) for l in 1:M] for k in 1:M]
+                for j in 1:NJ
+        ] for i in 1:NI
+    ]
+    donor(a, b) = Dict{String, Any}(
+        "op" => "-",
+        "args" => Any[Dict{String, Any}("op" => "+", "args" => Any[a, b]), 1]
+    )
+    agg = Dict{String, Any}(
+        "op" => "faq", "semiring" => "sum_product", "args" => Any[],
         "output_idx" => Any["i", "j"],
-        "ranges" => Dict{String,Any}("i" => Any[1, NI], "j" => Any[1, NJ],
-                                     "k" => Any[1, M], "l" => Any[1, M]),
-        "expr" => Dict{String,Any}("op" => "*", "args" => Any[
-            Dict{String,Any}("op" => "index", "args" => Any[
-                Dict{String,Any}("op" => "const", "args" => Any[], "value" => W),
-                "i", "j", "k", "l"]),
-            Dict{String,Any}("op" => "index",
-                             "args" => Any["q", donor("i", "k"), donor("j", "l")])]))
-    zero_rhs = Dict{String,Any}("op" => "faq", "args" => Any[],
+        "ranges" => Dict{String, Any}(
+            "i" => Any[1, NI], "j" => Any[1, NJ],
+            "k" => Any[1, M], "l" => Any[1, M]
+        ),
+        "expr" => Dict{String, Any}(
+            "op" => "*", "args" => Any[
+                Dict{String, Any}(
+                    "op" => "index", "args" => Any[
+                        Dict{String, Any}("op" => "const", "args" => Any[], "value" => W),
+                        "i", "j", "k", "l",
+                    ]
+                ),
+                Dict{String, Any}(
+                    "op" => "index",
+                    "args" => Any["q", donor("i", "k"), donor("j", "l")]
+                ),
+            ]
+        )
+    )
+    zero_rhs = Dict{String, Any}(
+        "op" => "faq", "args" => Any[],
         "output_idx" => Any["a", "b"],
-        "ranges" => Dict{String,Any}("a" => Any[1, NQ], "b" => Any[1, NQ]), "expr" => 0.0)
-    q_lhs = Dict{String,Any}("op" => "faq", "args" => Any[],
+        "ranges" => Dict{String, Any}("a" => Any[1, NQ], "b" => Any[1, NQ]), "expr" => 0.0
+    )
+    q_lhs = Dict{String, Any}(
+        "op" => "faq", "args" => Any[],
         "output_idx" => Any["a", "b"],
-        "ranges" => Dict{String,Any}("a" => Any[1, NQ], "b" => Any[1, NQ]),
-        "expr" => _de_Dt(_de_ix("q", "a", "b")))
-    out_lhs = Dict{String,Any}("op" => "faq", "args" => Any[],
+        "ranges" => Dict{String, Any}("a" => Any[1, NQ], "b" => Any[1, NQ]),
+        "expr" => _de_Dt(_de_ix("q", "a", "b"))
+    )
+    out_lhs = Dict{String, Any}(
+        "op" => "faq", "args" => Any[],
         "output_idx" => Any["i", "j"],
-        "ranges" => Dict{String,Any}("i" => Any[1, NI], "j" => Any[1, NJ]),
-        "expr" => _de_Dt(_de_ix("out", "i", "j")))
-    doc = Dict{String,Any}("esm" => "1.1.0",
-        "metadata" => Dict{String,Any}("name" => "de_halo"),
-        "models" => Dict{String,Any}("R" => Dict{String,Any}(
-            "variables" => Dict{String,Any}(
-                "q" => _de_state(shape = Any["a", "b"]),
-                "out" => _de_state(shape = Any["i", "j"])),
-            "equations" => Any[
-                Dict{String,Any}("lhs" => q_lhs, "rhs" => zero_rhs),
-                Dict{String,Any}("lhs" => out_lhs, "rhs" => agg)])))
-    ics = Dict{String,Any}()
+        "ranges" => Dict{String, Any}("i" => Any[1, NI], "j" => Any[1, NJ]),
+        "expr" => _de_Dt(_de_ix("out", "i", "j"))
+    )
+    doc = Dict{String, Any}(
+        "esm" => "1.1.0",
+        "metadata" => Dict{String, Any}("name" => "de_halo"),
+        "models" => Dict{String, Any}(
+            "R" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "q" => _de_state(shape = Any["a", "b"]),
+                    "out" => _de_state(shape = Any["i", "j"])
+                ),
+                "equations" => Any[
+                    Dict{String, Any}("lhs" => q_lhs, "rhs" => zero_rhs),
+                    Dict{String, Any}("lhs" => out_lhs, "rhs" => agg),
+                ]
+            )
+        )
+    )
+    ics = Dict{String, Any}()
     for i in 1:NI, j in 1:NJ
         ics["out[$i,$j]"] = 0.0
     end
@@ -396,30 +533,40 @@ end
 # preempts the affine tier only when the output has fewer cells than the
 # contraction has terms, which `_de_halo`'s default `M` is sized for.
 _de_halo_build(doc, ics; form = :oop, batch = true) =
-    withenv("ESS_CONTRACTION_LOOP_MIN" => "8",
-            "ESS_ARRAY_CONTRACTION_MIN" => "1024") do
-        EarthSciAST._build_evaluator(doc; initial_conditions = ics, form = form,
-                        compiler = batch ? :native : :interpreter)
-    end
+    withenv(
+    "ESS_CONTRACTION_LOOP_MIN" => "8",
+    "ESS_ARRAY_CONTRACTION_MIN" => "1024"
+) do
+    EarthSciAST._build_evaluator(
+        doc; initial_conditions = ics, form = form,
+        compiler = batch ? :native : :interpreter
+    )
+end
 
 @testset "direct StableHLO emission from the compiled IR" begin
     @testset "elementwise_gather conformance fixture" begin
-        fixture = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-                           "elementwise_observed_gather", "fixtures",
-                           "elementwise_gather.esm")
-        golden_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-                               "elementwise_observed_gather", "golden",
-                               "elementwise_gather.json")
+        fixture = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "conformance",
+            "elementwise_observed_gather", "fixtures",
+            "elementwise_gather.esm"
+        )
+        golden_path = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "conformance",
+            "elementwise_observed_gather", "golden",
+            "elementwise_gather.json"
+        )
         @test isfile(fixture)
         file = ESM_DE.load_path(fixture)
         fo, u0, p, tspan, vmap = EarthSciAST._build_evaluator(file; model_name = "Column", form = :oop)
         fi!, u0i, _, _, _ = EarthSciAST._build_evaluator(file; model_name = "Column")
         @test u0 == u0i
         n = length(u0)
-        samples = [(copy(u0), 0.0),
-                   (collect(1.0:n), 0.37),
-                   (sin.(1.0:n) .* 3.0, 1.0),
-                   (fill(-2.5, n), 0.5)]
+        samples = [
+            (copy(u0), 0.0),
+            (collect(1.0:n), 0.37),
+            (sin.(1.0:n) .* 3.0, 1.0),
+            (fill(-2.5, n), 0.5),
+        ]
         d, cd_ = _de_compare("elementwise_gather", fo, fi!, p, samples)
 
         # The RHS of this fixture is state-independent and u0 = 0 over a unit
@@ -433,7 +580,7 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
             idx = a.assertion_idx
             # assertion order in the fixture: u[lev=1], u[lev=3], max, min, s
             slot = idx == 1 ? vmap["u[1]"] : idx == 2 ? vmap["u[3]"] : vmap["s"]
-            @test abs(du_d[slot] - a.actual) <= 1e-11
+            @test abs(du_d[slot] - a.actual) <= 1.0e-11
         end
 
         # What the IR asked for, and nothing else. The `total` contraction is a
@@ -485,12 +632,12 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         ur = RX_DE.ConcreteRArray(copy(u)); tr = RX_DE.ConcreteRNumber(0.0)
         xla = RX_DE.@compile sync = true db(ur, pr, tr, dev)
         before = _de_ip(fi!, u, p, 0.0)
-        @test isapprox(Array(xla(ur, pr, tr, dev)), before; rtol = 1e-12)
+        @test isapprox(Array(xla(ur, pr, tr, dev)), before; rtol = 1.0e-12)
         wind .= 100.0                                  # the in-place host refresh
         ESM_DE.sync_forcing!(dev, host)                # the post_refresh hook
         fresh = _de_ip(fi!, u, p, 0.0)
-        @test maximum(abs, fresh .- before) ≈ 99.0 rtol = 1e-12   # it really changed
-        @test isapprox(Array(xla(ur, pr, tr, dev)), fresh; rtol = 1e-12)
+        @test maximum(abs, fresh .- before) ≈ 99.0 rtol = 1.0e-12   # it really changed
+        @test isapprox(Array(xla(ur, pr, tr, dev)), fresh; rtol = 1.0e-12)
 
         # And the THREE-argument form refuses this model by name, rather than
         # baking the host buffer in as a constant.
@@ -521,8 +668,10 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         n = length(u0)
         u1 = Float64[sin(0.1 * i) + 1.5 for i in 1:n]
         u2 = Float64[0.5 + 0.01 * i + cos(0.3 * i)^2 for i in 1:n]
-        d, _ = _de_compare("template_subkernels", fo, fi!, p,
-                              [(u1, 0.0), (u2, 0.75)]; census = false)
+        d, _ = _de_compare(
+            "template_subkernels", fo, fi!, p,
+            [(u1, 0.0), (u2, 0.75)]; census = false
+        )
         @test get(d.stats, :subcall, 0) >= 1
     end
 
@@ -568,20 +717,26 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         # The cap is overridable, and lifting it leaves the average-run test
         # alone — the negative control for the clause, and the shape the cap of
         # 64 this replaces produced.
-        withenv("ESM_DIRECT_EMIT_READ" => "gather",
-                "ESM_DIRECT_GATHER_MAX_PIECES" => string(typemax(Int))) do
+        withenv(
+            "ESM_DIRECT_EMIT_READ" => "gather",
+            "ESM_DIRECT_GATHER_MAX_PIECES" => string(typemax(Int))
+        ) do
             @test !EXT_DE._de_gather_is_cheaper(936, 6552)
             @test !EXT_DE._de_gather_is_cheaper(100, 100_000)
             @test EXT_DE._de_gather_is_cheaper(400, 1104)    # the average-run test
         end
-        withenv("ESM_DIRECT_EMIT_READ" => "gather",
-                "ESM_DIRECT_GATHER_MAX_PIECES" => "64") do
+        withenv(
+            "ESM_DIRECT_EMIT_READ" => "gather",
+            "ESM_DIRECT_GATHER_MAX_PIECES" => "64"
+        ) do
             @test EXT_DE._de_gather_is_cheaper(65, 65 * 7)
             @test !EXT_DE._de_gather_is_cheaper(64, 64 * 7)
             @test !EXT_DE._de_gather_is_cheaper(9, 9 * 7)
         end
-        withenv("ESM_DIRECT_EMIT_READ" => "gather",
-                "ESM_DIRECT_GATHER_MAX_PIECES" => "4") do
+        withenv(
+            "ESM_DIRECT_EMIT_READ" => "gather",
+            "ESM_DIRECT_GATHER_MAX_PIECES" => "4"
+        ) do
             @test EXT_DE._de_gather_is_cheaper(5, 10_000)
             @test !EXT_DE._de_gather_is_cheaper(4, 10_000)
         end
@@ -592,14 +747,18 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         # a read that shatters past the cap and not against one that is a single
         # affine run. `runs` never builds one, so it stays the exact negative
         # control; `always` builds one for anything with more than a single run.
-        withenv("ESM_DIRECT_EMIT_READ" => "gather",
-                "ESM_DIRECT_GATHER_MAX_PIECES" => nothing) do
+        withenv(
+            "ESM_DIRECT_EMIT_READ" => "gather",
+            "ESM_DIRECT_GATHER_MAX_PIECES" => nothing
+        ) do
             @test EXT_DE._de_canon_worth(9)
             @test !EXT_DE._de_canon_worth(8)
             @test !EXT_DE._de_canon_worth(3)
         end
-        withenv("ESM_DIRECT_EMIT_READ" => "gather",
-                "ESM_DIRECT_GATHER_MAX_PIECES" => "64") do
+        withenv(
+            "ESM_DIRECT_EMIT_READ" => "gather",
+            "ESM_DIRECT_GATHER_MAX_PIECES" => "64"
+        ) do
             @test EXT_DE._de_canon_worth(65)
             @test !EXT_DE._de_canon_worth(64)
             @test !EXT_DE._de_canon_worth(8)
@@ -611,8 +770,10 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
             @test EXT_DE._de_canon_worth(2)
             @test !EXT_DE._de_canon_worth(1)
         end
-        withenv("ESM_DIRECT_EMIT_READ" => "gather",
-                "ESM_DIRECT_GATHER_MAX_PIECES" => "2") do
+        withenv(
+            "ESM_DIRECT_EMIT_READ" => "gather",
+            "ESM_DIRECT_GATHER_MAX_PIECES" => "2"
+        ) do
             @test EXT_DE._de_canon_worth(3)
             @test !EXT_DE._de_canon_worth(2)
         end
@@ -629,7 +790,7 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         # a cross-producer gather also needs the producers concatenated, and
         # that concatenate is what the budget bounds.
         let small = EXT_DE._de_gather_base_max(3744),      # a 288-cell model
-            conus = EXT_DE._de_gather_base_max(85_176)     # a continental one
+                conus = EXT_DE._de_gather_base_max(85_176)     # a continental one
             # THE BUDGET IS RELATIVE TO THE EXTENDED STATE, with the old
             # absolute value as a floor. A small model keeps the headroom it
             # had; a large one gets a budget its own whole state fits inside,
@@ -684,14 +845,14 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         ref = _de_ip(fi!, u1, p, 0.4)
         pr = _de_dev(p)
         ur = RX_DE.ConcreteRArray(copy(u1)); tr = RX_DE.ConcreteRNumber(0.4)
-        tallies = Dict{String,Dict{Symbol,Int}}()
-        outs = Dict{String,Vector{Float64}}()
+        tallies = Dict{String, Dict{Symbol, Int}}()
+        outs = Dict{String, Vector{Float64}}()
         for mode in ("runs", "gather", "always")
             withenv("ESM_DIRECT_EMIT_READ" => mode) do
                 d = EXT_DE.direct_rhs(fo)
                 xla = RX_DE.@compile sync = true d(ur, pr, tr)
                 outs[mode] = Array(xla(ur, pr, tr))
-                @test isapprox(outs[mode], ref; rtol = 1e-12, atol = 0.0)
+                @test isapprox(outs[mode], ref; rtol = 1.0e-12, atol = 0.0)
                 tallies[mode] = copy(d.stats)
             end
         end
@@ -701,7 +862,7 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         withenv("ESM_DIRECT_GATHER_BASE_MAX" => "64") do
             d = EXT_DE.direct_rhs(fo)
             xla = RX_DE.@compile sync = true d(ur, pr, tr)
-            @test isapprox(Array(xla(ur, pr, tr)), ref; rtol = 1e-12, atol = 0.0)
+            @test isapprox(Array(xla(ur, pr, tr)), ref; rtol = 1.0e-12, atol = 0.0)
             tallies["base64"] = copy(d.stats)
         end
         # AND THE PIECE CAP, emitted rather than asserted in arithmetic. The
@@ -712,12 +873,14 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         # BELOW the fixture's reads: every read past it becomes one gather, and
         # the numbers do not move.
         for (nm, cap) in (("cap64", "64"), ("cap2", "2"))
-            withenv("ESM_DIRECT_EMIT_READ" => "gather",
-                    "ESM_DIRECT_GATHER_MAX_PIECES" => cap) do
+            withenv(
+                "ESM_DIRECT_EMIT_READ" => "gather",
+                "ESM_DIRECT_GATHER_MAX_PIECES" => cap
+            ) do
                 d = EXT_DE.direct_rhs(fo)
                 xla = RX_DE.@compile sync = true d(ur, pr, tr)
                 outs[nm] = Array(xla(ur, pr, tr))
-                @test isapprox(outs[nm], ref; rtol = 1e-12, atol = 0.0)
+                @test isapprox(outs[nm], ref; rtol = 1.0e-12, atol = 0.0)
                 tallies[nm] = copy(d.stats)
             end
         end
@@ -737,9 +900,11 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         # visible difference — the assembly falls back to slices per run, the
         # descriptor reads are emitted identically, and the numbers agree to the
         # last bit either way (the `isapprox` above).
-        for k in (:kernels, :subcall, :arith, :broadcast_in_dim,
-                  Symbol("sliceN@kernel.runs"), Symbol("gather@kernel.x"),
-                  Symbol("concat@kernel.x"))
+        for k in (
+                :kernels, :subcall, :arith, :broadcast_in_dim,
+                Symbol("sliceN@kernel.runs"), Symbol("gather@kernel.x"),
+                Symbol("concat@kernel.x"),
+            )
             @test get(tallies["base64"], k, 0) == get(tallies["gather"], k, 0)
         end
         # THE OUTPUT ASSEMBLY EMITS NOTHING once the map has a canonical base.
@@ -751,13 +916,15 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         # spans every producer there is and a 64-element copy does not hold it,
         # so that arm builds strictly fewer canonical bases and emits the
         # assembly as slices.
-        for k in (Symbol("slice1@assemble.runs"), Symbol("sliceN@assemble.runs"),
-                  Symbol("gather@assemble.x"), Symbol("concat@assemble.x"))
+        for k in (
+                Symbol("slice1@assemble.runs"), Symbol("sliceN@assemble.runs"),
+                Symbol("gather@assemble.x"), Symbol("concat@assemble.x"),
+            )
             @test get(tallies["gather"], k, 0) == 0
         end
         @test get(tallies["gather"], :canon_base, 0) >= 1
         @test get(tallies["base64"], :canon_base, 0) <
-              get(tallies["gather"], :canon_base, 0)
+            get(tallies["gather"], :canon_base, 0)
         @test get(tallies["base64"], Symbol("gather@assemble.x"), 0) == 0
         @test get(tallies["base64"], Symbol("slice1@assemble.runs"), 0) > 0
         # THE PIECE CAP: past it a read is one gather however its runs look. The
@@ -768,9 +935,9 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         @test get(tallies["gather"], :gather, 0) == get(tallies["cap64"], :gather, 0)
         @test get(tallies["cap2"], :slice, 0) < get(tallies["gather"], :slice, 0)
         @test get(tallies["cap2"], :gather, 0) > get(tallies["gather"], :gather, 0)
-        @test isapprox(outs["gather"], outs["cap64"]; rtol = 1e-12, atol = 0.0)
-        @test isapprox(outs["gather"], outs["cap2"]; rtol = 1e-12, atol = 0.0)
-        @test isapprox(outs["gather"], outs["runs"]; rtol = 1e-12, atol = 0.0)
+        @test isapprox(outs["gather"], outs["cap64"]; rtol = 1.0e-12, atol = 0.0)
+        @test isapprox(outs["gather"], outs["cap2"]; rtol = 1.0e-12, atol = 0.0)
+        @test isapprox(outs["gather"], outs["runs"]; rtol = 1.0e-12, atol = 0.0)
         # `always` gathers everything with more than one run, so it is the floor
         # on slices and the ceiling on gathers.
         @test get(tallies["always"], :slice, 0) <= get(tallies["gather"], :slice, 0)
@@ -786,8 +953,10 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         # back as a different gather over a different value at exactly the same
         # indices — so it is interned on its CONTENTS, separately from the
         # gather, and a module carries one copy of each distinct one.
-        fix = joinpath(TESTUTILS_REPO_ROOT, "tests", "bench",
-                       "transport_3axis_7cubed_fullrank.esm")
+        fix = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "bench",
+            "transport_3axis_7cubed_fullrank.esm"
+        )
         @test isfile(fix)
         flat = ESM_DE.flatten(ESM_DE.load_path(fix))
         fo, u0, p, _, _ = EarthSciAST._build_evaluator(flat; form = :oop)
@@ -800,24 +969,28 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
 
         # `always` is the shape that spends index data: every read with more
         # than one run becomes a gather, so the module is all index vector.
-        mods = Dict{String,String}()
-        tallies = Dict{String,Dict{Symbol,Int}}()
+        mods = Dict{String, String}()
+        tallies = Dict{String, Dict{Symbol, Int}}()
         for bits in ("32", "64")
-            withenv("ESM_DIRECT_EMIT_READ" => "always",
-                    "ESM_DIRECT_GATHER_INDEX_BITS" => bits) do
+            withenv(
+                "ESM_DIRECT_EMIT_READ" => "always",
+                "ESM_DIRECT_GATHER_INDEX_BITS" => bits
+            ) do
                 d = EXT_DE.direct_rhs(fo)
                 mods[bits] = repr(RX_DE.@code_hlo optimize = false d(ur, pr, tr))
                 tallies[bits] = copy(d.stats)
                 xla = RX_DE.@compile sync = true d(ur, pr, tr)
-                @test isapprox(Array(xla(ur, pr, tr)), ref; rtol = 1e-12, atol = 0.0)
+                @test isapprox(Array(xla(ur, pr, tr)), ref; rtol = 1.0e-12, atol = 0.0)
             end
         end
         idx32 = _de_index_constants(mods["32"])
         idx64 = _de_index_constants(mods["64"])
-        println("  index vectors: ", length(idx32), " constants, ",
-                length(Set(idx32)), " distinct; tally ",
-                get(tallies["32"], :gather_index, 0), " of ",
-                get(tallies["32"], :gather, 0), " gathers")
+        println(
+            "  index vectors: ", length(idx32), " constants, ",
+            length(Set(idx32)), " distinct; tally ",
+            get(tallies["32"], :gather_index, 0), " of ",
+            get(tallies["32"], :gather, 0), " gathers"
+        )
         @test !isempty(idx32)
         # ONE CONSTANT PER DISTINCT VECTOR, which is the whole of the lever:
         # no two index constants in the module carry the same contents, and
@@ -825,7 +998,7 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         @test length(Set(idx32)) == length(idx32)
         @test length(idx32) == get(tallies["32"], :gather_index, 0)
         @test get(tallies["32"], :gather_index, 0) <=
-              get(tallies["32"], :gather, 0)
+            get(tallies["32"], :gather, 0)
         # And the gather itself is interned the way the slice and concatenate
         # forms are, so a read that recurs over the same value costs one.
         @test get(tallies["32"], :gather, 0) >= 1
@@ -890,9 +1063,11 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         @test isempty(rb.rest)
 
         n = length(u0)
-        samples = [(copy(u0), 0.0),
-                   (Float64[u0[k] + 0.25sin(0.3k) for k in 1:n], 1.0),
-                   (Float64[u0[k] * (1 + 0.1cos(0.7k)) for k in 1:n], -2.0)]
+        samples = [
+            (copy(u0), 0.0),
+            (Float64[u0[k] + 0.25sin(0.3k) for k in 1:n], 1.0),
+            (Float64[u0[k] * (1 + 0.1cos(0.7k)) for k in 1:n], -2.0),
+        ]
         d, _ = _de_compare("halo (lane-batched)", fo, fi!, p, samples)
 
         # The GROUP was emitted as a group, once.
@@ -904,8 +1079,10 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         # no longer follows the cell count.
         fn, u0n, pn, _, _ = _de_halo_build(doc, ics; batch = false)
         @test isempty(getfield(getfield(fn, :rhs), :rhs_batches).groups)
-        dn, _ = _de_compare("halo (per-entry, compiler=:interpreter)", fn, fi!, pn,
-                               samples; census = false)
+        dn, _ = _de_compare(
+            "halo (per-entry, compiler=:interpreter)", fn, fi!, pn,
+            samples; census = false
+        )
         println("  batched tally:   ", d.stats)
         println("  per-entry tally: ", dn.stats)
         @test get(dn.stats, :scalar_batch, 0) == 0
@@ -919,11 +1096,11 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         # read at all and exactly `M*M` whole-lane reads — one per position of
         # the tent, whatever form the cost model gives each one.
         reads1(stats) = get(stats, Symbol("slice1@rhs_scalar.stategather"), 0) +
-                        get(stats, Symbol("slice1@rhs_scalar.state"), 0)
+            get(stats, Symbol("slice1@rhs_scalar.state"), 0)
         @test reads1(dn.stats) > 0
         @test reads1(d.stats) == 0
         @test get(d.stats, Symbol("concat@rhs_scalar.x"), 0) +
-              get(d.stats, Symbol("gather@rhs_scalar.x"), 0) == M * M
+            get(d.stats, Symbol("gather@rhs_scalar.x"), 0) == M * M
 
         # WHY THAT IS NOT SPELLED "one gather". This fixture's whole-lane read
         # is AFFINE — lane `(i,j)` reads donor slot `(i+k-1, j+l-1)`, so the
@@ -934,8 +1111,10 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         # of it and the whole-lane read IS one gather per tent position, with
         # the same numbers.
         withenv("ESM_DIRECT_EMIT_READ" => "always") do
-            da, _ = _de_compare("halo (lane-batched, gather)", fo, fi!, p,
-                                   samples; census = false)
+            da, _ = _de_compare(
+                "halo (lane-batched, gather)", fo, fi!, p,
+                samples; census = false
+            )
             println("  batched tally (always): ", da.stats)
             @test get(da.stats, Symbol("gather@rhs_scalar.x"), 0) == M * M
             @test reads1(da.stats) == 0
@@ -952,8 +1131,10 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         fo, u0, p, _, _ = EarthSciAST._build_evaluator(_de_interpdoc(); form = :oop)
         fi!, _, _, _, _ = EarthSciAST._build_evaluator(_de_interpdoc())
         # In range, on a knot, and both clamps.
-        samples = [([1.5], 0.0), ([2.0], 0.0), ([-1.0], 0.0), ([9.0], 0.0),
-                   ([3.25], 1.0)]
+        samples = [
+            ([1.5], 0.0), ([2.0], 0.0), ([-1.0], 0.0), ([9.0], 0.0),
+            ([3.25], 1.0),
+        ]
         # `_de_fn` routes a scalar-spine `interp.*` through the BRANCH-FREE lane
         # evaluators, so every query position the scalar `_interp_linear_core`
         # would branch on — in range, on a knot, and both clamps — lowers as the
@@ -999,8 +1180,12 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         exact = String["c_$f" for f in _DE_DT_FNS if f != "julian_day"]
         for t in _DE_DT_TIMES
             du_i = _de_ip(fi!, u0, p, t)
-            du_d = Array(xla(RX_DE.ConcreteRArray(copy(u0)), pr,
-                             RX_DE.ConcreteRNumber(t)))
+            du_d = Array(
+                xla(
+                    RX_DE.ConcreteRArray(copy(u0)), pr,
+                    RX_DE.ConcreteRNumber(t)
+                )
+            )
             for nm in exact
                 sl = _de_slot(vmap, nm)
                 @test du_d[sl] === du_i[sl]
@@ -1009,7 +1194,7 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
             @test abs(du_d[sj] - du_i[sj]) <= eps(du_i[sj])
             for nm in ("lg", "local_hour")
                 sl = _de_slot(vmap, nm)
-                @test isapprox(du_d[sl], du_i[sl]; rtol = 1e-12, atol = 0.0)
+                @test isapprox(du_d[sl], du_i[sl]; rtol = 1.0e-12, atol = 0.0)
             end
         end
 
@@ -1017,8 +1202,12 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         # same date, so a program that ignored `t` would pass everything above.
         yrs = Float64[]
         for t in _DE_DT_TIMES
-            du_d = Array(xla(RX_DE.ConcreteRArray(copy(u0)), pr,
-                             RX_DE.ConcreteRNumber(t)))
+            du_d = Array(
+                xla(
+                    RX_DE.ConcreteRArray(copy(u0)), pr,
+                    RX_DE.ConcreteRNumber(t)
+                )
+            )
             push!(yrs, du_d[_de_slot(vmap, "c_year")])
         end
         @test sort!(unique(yrs)) == [1968.0, 1969.0, 1970.0, 2020.0, 2023.0]
@@ -1050,30 +1239,40 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         @test dgS.n_scan_folds == 1
         @test length(getfield(getfield(foS, :rhs), :scan_folds)) == 1
         @test getfield(getfield(foS, :rhs), :n_total) ==
-              getfield(getfield(foS, :rhs), :n_states)   # nothing materialized
+            getfield(getfield(foS, :rhs), :n_states)   # nothing materialized
         u = _de_seed(length(u0S))
         samples = [(copy(u), 0.0), (u .* 1.5 .- 0.05, 3.25)]
         _de_compare("scan_staggered_du", foS, fiS!, pS, samples; census = false)
         # The last node really is the running total of every centre — a program
         # that stopped one step short, or that refused, would not get here.
         d = EXT_DE.direct_rhs(foS; var_map = vmS)
-        xla = RX_DE.@compile sync = true d(RX_DE.ConcreteRArray(copy(u)),
-                                           _de_dev(pS), RX_DE.ConcreteRNumber(0.0))
-        du = Array(xla(RX_DE.ConcreteRArray(copy(u)), _de_dev(pS),
-                       RX_DE.ConcreteRNumber(0.0)))
+        xla = RX_DE.@compile sync = true d(
+            RX_DE.ConcreteRArray(copy(u)),
+            _de_dev(pS), RX_DE.ConcreteRNumber(0.0)
+        )
+        du = Array(
+            xla(
+                RX_DE.ConcreteRArray(copy(u)), _de_dev(pS),
+                RX_DE.ConcreteRNumber(0.0)
+            )
+        )
         terms = Float64[u[vmS["u[$j]"]] for j in 1:n]
         @test du[vmS["c[1]"]] == 0.0
-        @test du[vmS["c[$(n + 1)]"]] ≈ sum(terms) rtol = 1e-13
+        @test du[vmS["c[$(n + 1)]"]] ≈ sum(terms) rtol = 1.0e-13
     end
 
     @testset "a staggered prefix scan over a materialized observed's buffer" begin
         n = 9
         m, isets = _de_scan_stag_obs(n)
         ics = Dict("u[$j]" => 0.4 * j - 1.3 for j in 1:n)
-        foO, u0O, pO, _, vmO, dgO = ESM_DE._build_evaluator_impl(m;
-            index_sets = isets, initial_conditions = ics, form = :oop)
-        fiO!, _, _, _, _, _ = ESM_DE._build_evaluator_impl(m;
-            index_sets = isets, initial_conditions = ics, form = :inplace)
+        foO, u0O, pO, _, vmO, dgO = ESM_DE._build_evaluator_impl(
+            m;
+            index_sets = isets, initial_conditions = ics, form = :oop
+        )
+        fiO!, _, _, _, _, _ = ESM_DE._build_evaluator_impl(
+            m;
+            index_sets = isets, initial_conditions = ics, form = :inplace
+        )
         rO = getfield(foO, :rhs)
         # `Mz` is materialized, its fill carries the fold, and the fold's slots
         # are in the EXTENDED map — the ReSEACT shape, not the `du` one.
@@ -1206,7 +1405,7 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         function _cdiff(f, x0)
             g = similar(x0)
             for k in eachindex(x0)
-                h = 1e-6 * max(abs(x0[k]), 1.0)
+                h = 1.0e-6 * max(abs(x0[k]), 1.0)
                 hi = copy(x0); hi[k] += h
                 lo = copy(x0); lo[k] -= h
                 g[k] = (f(hi) - f(lo)) / (2h)
@@ -1226,16 +1425,20 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         pr = _de_dev(p)
         tr = RX_DE.ConcreteRNumber(t)
 
-        gp = (uu, q, tt) -> EZ.gradient(EZ.Reverse, obj, EZ.Const(uu), q,
-                                        EZ.Const(tt))[2]
+        gp = (uu, q, tt) -> EZ.gradient(
+            EZ.Reverse, obj, EZ.Const(uu), q,
+            EZ.Const(tt)
+        )[2]
         xp = RX_DE.@compile sync = true gp(ur, pr, tr)
         got_p = [Float64(getfield(xp(ur, pr, tr), sym)) for sym in syms]
-        @test isapprox(got_p, g_p; rtol = 1e-6)
+        @test isapprox(got_p, g_p; rtol = 1.0e-6)
 
-        gu = (uu, q, tt) -> EZ.gradient(EZ.Reverse, obj, uu, EZ.Const(q),
-                                        EZ.Const(tt))[1]
+        gu = (uu, q, tt) -> EZ.gradient(
+            EZ.Reverse, obj, uu, EZ.Const(q),
+            EZ.Const(tt)
+        )[1]
         xu = RX_DE.@compile sync = true gu(ur, pr, tr)
-        @test isapprox(Array(xu(ur, pr, tr)), g_u; rtol = 1e-6)
+        @test isapprox(Array(xu(ur, pr, tr)), g_u; rtol = 1.0e-6)
     end
 
     @testset "`p` is a REAL program input, not a baked-in constant" begin
@@ -1258,16 +1461,16 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         d = EXT_DE.direct_rhs(fo)
         xla = RX_DE.@compile sync = true d(ur, _de_dev(p), tr)
         a = Array(xla(ur, _de_dev(p), tr))
-        @test isapprox(a, _de_ip(fi!, u, p, 0.25); rtol = 1e-12, atol = 0.0)
+        @test isapprox(a, _de_ip(fi!, u, p, 0.25); rtol = 1.0e-12, atol = 0.0)
 
         pv2 = copy(pv0)
         pv2[findfirst(==(:k_diff), collect(syms))] *= 2.0
         b = Array(xla(ur, _de_dev(nt(pv2)), tr))           # no recompile
         # It MOVED (so it was not frozen) …
-        @test !isapprox(a, b; rtol = 1e-12)
-        @test maximum(abs, b .- a) > 1e-6
+        @test !isapprox(a, b; rtol = 1.0e-12)
+        @test maximum(abs, b .- a) > 1.0e-6
         # … to the right place …
-        @test isapprox(b, _de_ip(fi!, u, nt(pv2), 0.25); rtol = 1e-12, atol = 0.0)
+        @test isapprox(b, _de_ip(fi!, u, nt(pv2), 0.25); rtol = 1.0e-12, atol = 0.0)
         # … and back again: no hysteresis in the compiled program.
         @test Array(xla(ur, _de_dev(p), tr)) == a
     end
@@ -1303,17 +1506,21 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
         # FORWARD mode crosses it exactly — a real, passing test, and the reason
         # the `@test_broken` below is about REVERSE mode rather than about
         # `@trace while` being untraceable.
-        fwd = (uu, k, n) -> EZ.autodiff(EZ.Forward, traced, EZ.Const(uu),
-                                        EZ.Duplicated(k, one(k)), EZ.Const(n))[1]
+        fwd = (uu, k, n) -> EZ.autodiff(
+            EZ.Forward, traced, EZ.Const(uu),
+            EZ.Duplicated(k, one(k)), EZ.Const(n)
+        )[1]
         xf = RX_DE.@compile sync = true fwd(ur, kr, nr)
-        @test isapprox(Float64(xf(ur, kr, nr)), gref; rtol = 1e-8)
+        @test isapprox(Float64(xf(ur, kr, nr)), gref; rtol = 1.0e-8)
 
         # REVERSE mode does not.
-        rev = (uu, k, n) -> EZ.gradient(EZ.Reverse, traced, EZ.Const(uu), k,
-                                        EZ.Const(n))[2]
+        rev = (uu, k, n) -> EZ.gradient(
+            EZ.Reverse, traced, EZ.Const(uu), k,
+            EZ.Const(n)
+        )[2]
         @test_broken begin
             xg = RX_DE.@compile sync = true rev(ur, kr, nr)
-            isapprox(Float64(xg(ur, kr, nr)), gref; rtol = 1e-8)
+            isapprox(Float64(xg(ur, kr, nr)), gref; rtol = 1.0e-8)
         end
     end
 end

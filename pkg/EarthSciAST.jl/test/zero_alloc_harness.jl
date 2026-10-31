@@ -14,43 +14,43 @@
 # `include("testutils.jl")`, but a direct include stays harmless.
 if !isdefined(Main, :ESM_ZERO_ALLOC_HARNESS_LOADED)
 
-const ESM_ZERO_ALLOC_HARNESS_LOADED = true
+    const ESM_ZERO_ALLOC_HARNESS_LOADED = true
 
-using EarthSciAST
+    using EarthSciAST
 
-"""
-    rhs_alloc_bytes(f!, du, u0, p, t; warmup=3, samples=5) -> Int
+    """
+        rhs_alloc_bytes(f!, du, u0, p, t; warmup=3, samples=5) -> Int
 
-Bytes allocated by a single steady-state `f!(du, u, p, t)` call. `f!` is invoked
-`warmup` times first so every method/specialization is compiled and any one-shot
-setup is paid, then the MINIMUM `@allocated` over `samples` measured calls is
-returned. A genuinely non-allocating `f!` yields 0 on every sample; taking the
-min discards incidental GC-safepoint accounting noise without ever masking a
-real per-call allocation (a real allocation appears on every sample).
-"""
-function rhs_alloc_bytes(f!, du, u0, p, t; warmup::Int=3, samples::Int=5)
-    for _ in 1:warmup
-        f!(du, u0, p, t)
+    Bytes allocated by a single steady-state `f!(du, u, p, t)` call. `f!` is invoked
+    `warmup` times first so every method/specialization is compiled and any one-shot
+    setup is paid, then the MINIMUM `@allocated` over `samples` measured calls is
+    returned. A genuinely non-allocating `f!` yields 0 on every sample; taking the
+    min discards incidental GC-safepoint accounting noise without ever masking a
+    real per-call allocation (a real allocation appears on every sample).
+    """
+    function rhs_alloc_bytes(f!, du, u0, p, t; warmup::Int = 3, samples::Int = 5)
+        for _ in 1:warmup
+            f!(du, u0, p, t)
+        end
+        best = typemax(Int)
+        for _ in 1:samples
+            best = min(best, @allocated f!(du, u0, p, t))
+        end
+        return best
     end
-    best = typemax(Int)
-    for _ in 1:samples
-        best = min(best, @allocated f!(du, u0, p, t))
+
+    """
+        built_rhs_alloc_bytes(model; t=0.0, kwargs...) -> Int
+
+    Build `model`'s evaluator with `EarthSciAST._build_evaluator(model; kwargs...)` and return the
+    steady-state per-call allocation of its RHS (see [`rhs_alloc_bytes`](@ref)). The
+    state is the model's own initial condition; `kwargs` are forwarded verbatim
+    (`initial_conditions`, `const_arrays`, …).
+    """
+    function built_rhs_alloc_bytes(model; t = 0.0, kwargs...)
+        f!, u0, p, _tspan, _vmap = EarthSciAST._build_evaluator(model; kwargs...)
+        du = similar(u0)
+        return rhs_alloc_bytes(f!, du, u0, p, t)
     end
-    return best
-end
-
-"""
-    built_rhs_alloc_bytes(model; t=0.0, kwargs...) -> Int
-
-Build `model`'s evaluator with `EarthSciAST._build_evaluator(model; kwargs...)` and return the
-steady-state per-call allocation of its RHS (see [`rhs_alloc_bytes`](@ref)). The
-state is the model's own initial condition; `kwargs` are forwarded verbatim
-(`initial_conditions`, `const_arrays`, …).
-"""
-function built_rhs_alloc_bytes(model; t=0.0, kwargs...)
-    f!, u0, p, _tspan, _vmap = EarthSciAST._build_evaluator(model; kwargs...)
-    du = similar(u0)
-    return rhs_alloc_bytes(f!, du, u0, p, t)
-end
 
 end # ESM_ZERO_ALLOC_HARNESS_LOADED guard

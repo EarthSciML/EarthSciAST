@@ -46,20 +46,29 @@ const _PV_ESM = EarthSciAST
 
 include("zero_alloc_harness.jl")
 
-_pv_Dt(v) = Dict{String,Any}("op" => "D", "args" => Any[v], "wrt" => "t")
-_pv_ix(v, i...) = Dict{String,Any}("op" => "index", "args" => Any[v, i...])
-_pv_o(o, a...) = Dict{String,Any}("op" => o, "args" => Any[a...])
-_pv_ao(e) = Dict{String,Any}("op" => "faq", "output_idx" => Any["i"],
-    "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")),
-    "args" => Any[], "expr" => e)
-_pv_state(; kw...) = Dict{String,Any}("type" => "unknown",
-                                      (String(k) => v for (k, v) in kw)...)
-_pv_param(v) = Dict{String,Any}("type" => "parameter", "default" => v)
+_pv_Dt(v) = Dict{String, Any}("op" => "D", "args" => Any[v], "wrt" => "t")
+_pv_ix(v, i...) = Dict{String, Any}("op" => "index", "args" => Any[v, i...])
+_pv_o(o, a...) = Dict{String, Any}("op" => o, "args" => Any[a...])
+_pv_ao(e) = Dict{String, Any}(
+    "op" => "faq", "output_idx" => Any["i"],
+    "ranges" => Dict{String, Any}("i" => Dict{String, Any}("from" => "n")),
+    "args" => Any[], "expr" => e
+)
+_pv_state(; kw...) = Dict{String, Any}(
+    "type" => "unknown",
+    (String(k) => v for (k, v) in kw)...
+)
+_pv_param(v) = Dict{String, Any}("type" => "parameter", "default" => v)
 _pv_doc(name, vars, eqs; index_sets = nothing) = begin
-    d = Dict{String,Any}("esm" => "0.5.0",
-                         "metadata" => Dict{String,Any}("name" => name),
-                         "models" => Dict{String,Any}("M" => Dict{String,Any}(
-                             "variables" => vars, "equations" => eqs)))
+    d = Dict{String, Any}(
+        "esm" => "0.5.0",
+        "metadata" => Dict{String, Any}("name" => name),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => vars, "equations" => eqs
+            )
+        )
+    )
     index_sets === nothing || (d["index_sets"] = index_sets)
     d
 end
@@ -67,36 +76,65 @@ end
 # 1-D reaction–diffusion: the ARRAY path — access
 # kernels, the lane-invariant `exp(-Ea/T)` hoist, and the codegen tier.
 function _pv_rd(N)
-    stencil = _pv_o("+", _pv_o("-", _pv_ix("c", _pv_o("-", "i", 1.0)),
-                               _pv_o("*", 2.0, _pv_ix("c", "i"))),
-                    _pv_ix("c", _pv_o("+", "i", 1.0)))
+    stencil = _pv_o(
+        "+", _pv_o(
+            "-", _pv_ix("c", _pv_o("-", "i", 1.0)),
+            _pv_o("*", 2.0, _pv_ix("c", "i"))
+        ),
+        _pv_ix("c", _pv_o("+", "i", 1.0))
+    )
     rate = _pv_o("*", "k_rxn", _pv_o("exp", _pv_o("neg", _pv_o("/", "Ea", "T"))))
-    _pv_doc("RD",
-        Dict{String,Any}("c" => _pv_state(shape = Any["n"]),
-                         "k_diff" => _pv_param(0.1), "k_rxn" => _pv_param(0.3),
-                         "Ea" => _pv_param(50.0), "T" => _pv_param(300.0)),
-        Any[Dict{String,Any}("lhs" => _pv_ao(_pv_Dt(_pv_ix("c", "i"))),
-            "rhs" => _pv_ao(_pv_o("-", _pv_o("*", "k_diff", stencil),
-                                  _pv_o("*", rate,
-                                        _pv_o("^", _pv_ix("c", "i"), 2.0)))))];
-        index_sets = Dict{String,Any}(
-            "n" => Dict{String,Any}("kind" => "interval", "size" => N)))
+    return _pv_doc(
+        "RD",
+        Dict{String, Any}(
+            "c" => _pv_state(shape = Any["n"]),
+            "k_diff" => _pv_param(0.1), "k_rxn" => _pv_param(0.3),
+            "Ea" => _pv_param(50.0), "T" => _pv_param(300.0)
+        ),
+        Any[
+            Dict{String, Any}(
+                "lhs" => _pv_ao(_pv_Dt(_pv_ix("c", "i"))),
+                "rhs" => _pv_ao(
+                    _pv_o(
+                        "-", _pv_o("*", "k_diff", stencil),
+                        _pv_o(
+                            "*", rate,
+                            _pv_o("^", _pv_ix("c", "i"), 2.0)
+                        )
+                    )
+                )
+            ),
+        ];
+        index_sets = Dict{String, Any}(
+            "n" => Dict{String, Any}("kind" => "interval", "size" => N)
+        )
+    )
 end
 
 # 0-D with a shared subexpression: a non-empty CSE prelude, so the SCALAR `_Node`
 # walker (`_eval_node`) is exercised and not only the array kernels.
 # Between the two models every `_NK_PARAM` arm in the package is reached.
 function _pv_zerod()
-    shared = _pv_o("*", _pv_o("exp", _pv_o("neg", _pv_o("/", "Ea", "T"))),
-                   _pv_o("*", "x", "y"))
-    _pv_doc("Z",
-        Dict{String,Any}("x" => _pv_state(default = 0.7),
-                         "y" => _pv_state(default = 0.4),
-                         "Ea" => _pv_param(50.0), "T" => _pv_param(300.0),
-                         "k" => _pv_param(1.3)),
-        Any[Dict{String,Any}("lhs" => _pv_Dt("x"),
-                             "rhs" => _pv_o("neg", _pv_o("*", "k", shared))),
-            Dict{String,Any}("lhs" => _pv_Dt("y"), "rhs" => shared)])
+    shared = _pv_o(
+        "*", _pv_o("exp", _pv_o("neg", _pv_o("/", "Ea", "T"))),
+        _pv_o("*", "x", "y")
+    )
+    return _pv_doc(
+        "Z",
+        Dict{String, Any}(
+            "x" => _pv_state(default = 0.7),
+            "y" => _pv_state(default = 0.4),
+            "Ea" => _pv_param(50.0), "T" => _pv_param(300.0),
+            "k" => _pv_param(1.3)
+        ),
+        Any[
+            Dict{String, Any}(
+                "lhs" => _pv_Dt("x"),
+                "rhs" => _pv_o("neg", _pv_o("*", "k", shared))
+            ),
+            Dict{String, Any}("lhs" => _pv_Dt("y"), "rhs" => shared),
+        ]
+    )
 end
 
 _pv_seed(n) = [0.5 + 0.1k for k in 1:n]
@@ -107,7 +145,7 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
     @testset "param_map is the build's own parameter order" begin
         _, _, p, _, _ = _PV_ESM._build_evaluator(_pv_rd(8))
         pm = param_map(p)
-        @test pm isa Dict{String,Int}
+        @test pm isa Dict{String, Int}
         # It IS `keys(p)`'s order, and `keys(p)` is `sort!(param_names)`.
         @test sort(collect(keys(pm))) == sort(String[String(k) for k in keys(p)])
         for (i, k) in enumerate(keys(p))
@@ -115,7 +153,7 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
         end
         @test sort(collect(values(pm))) == collect(1:length(p))
         @test collect(keys(pm))[sortperm(collect(values(pm)))] ==
-              sort(String[String(k) for k in keys(p)])
+            sort(String[String(k) for k in keys(p)])
         # …and a ComponentVector built from `p` agrees with it component by
         # component, which is the whole contract a caller relies on.
         cv = ComponentVector(p)
@@ -123,12 +161,14 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
             @test cv[i] == p[Symbol(name)]
         end
         # A parameter-free model maps to the empty Dict, not to an error.
-        @test param_map(nothing) == Dict{String,Int}()
+        @test param_map(nothing) == Dict{String, Int}()
     end
 
     @testset "both emitters accept a vector `p`, BIT-IDENTICALLY" begin
-        for (name, doc, N) in [("reaction-diffusion N=16", _pv_rd(16), 16),
-                               ("0-D with a CSE prelude", _pv_zerod(), 2)]
+        for (name, doc, N) in [
+                ("reaction-diffusion N=16", _pv_rd(16), 16),
+                ("0-D with a CSE prelude", _pv_zerod(), 2),
+            ]
             @testset "$name" begin
                 fi, u0, p, _, _ = _PV_ESM._build_evaluator(doc)
                 u = length(u0) == 2 ? [0.7, 0.4] : _pv_seed(N)
@@ -168,7 +208,8 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
         end
         # The NamedTuple reference, i.e. what parameter_gradient_test.jl pins.
         g_ref = ForwardDiff.gradient(
-            θ -> obj(NamedTuple{syms}(Tuple(θ))), pv0)
+            θ -> obj(NamedTuple{syms}(Tuple(θ))), pv0
+        )
         @test all(!iszero, g_ref)
 
         # Same gradient, `p` handed over as a plain Vector …
@@ -197,8 +238,10 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
         fi, u0, p, _, _ = _PV_ESM._build_evaluator(_pv_rd(N))
         u = _pv_seed(N)
         du = similar(u)
-        for (name, q) in ["NamedTuple" => p, "ComponentVector" => ComponentVector(p),
-                          "Vector" => collect(Float64, values(p))]
+        for (name, q) in [
+                "NamedTuple" => p, "ComponentVector" => ComponentVector(p),
+                "Vector" => collect(Float64, values(p)),
+            ]
             @testset "$name" begin
                 @test rhs_alloc_bytes(fi, du, u, q, 0.37) == 0
             end

@@ -55,7 +55,7 @@
 # hold it in a tuple and every call site is statically dispatched — an abstractly
 # typed field here would box `t` on every right-hand-side call, which the tier's
 # zero-allocation property does not allow.
-struct _ArrayContraction{F,TB,M}
+struct _ArrayContraction{F, TB, M}
     f::F
     tabs::TB
     tcache::_SecTCache
@@ -66,7 +66,7 @@ struct _ArrayContraction{F,TB,M}
     # contraction a section holds (`_ac_drop_remit`). The closure captures the
     # nest's whole fold, per-entry columns included, so a contraction that
     # outlived the build with it would keep a second copy of its table.
-    remit::Union{Nothing,Tuple{Vector{Int},Function}}
+    remit::Union{Nothing, Tuple{Vector{Int}, Function}}
 end
 _ArrayContraction(f, tabs, tcache::_SecTCache, mask = nothing) =
     _ArrayContraction(f, tabs, tcache, mask, nothing)
@@ -106,14 +106,14 @@ end
 # ordinal's local, `(refs, los, steps, lens, cv)`: what a ragged loop in the term
 # needs to lay its rows out per cell (`_ac_ragged_entries`).
 struct _CGScalarCtx
-    loops::IdDict{Any,Symbol}
+    loops::IdDict{Any, Symbol}
     entry::Any      # `nothing`, or the TABLE fold's `_ACEntries` while its term is emitted
-    spans::IdDict{Any,Tuple{Int,Int}}
+    spans::IdDict{Any, Tuple{Int, Int}}
     nest::Any
 end
 _CGScalarCtx(loops, entry, spans) = _CGScalarCtx(loops, entry, spans, nothing)
-_CGScalarCtx(loops, entry) = _CGScalarCtx(loops, entry, IdDict{Any,Tuple{Int,Int}}())
-_CGScalarCtx() = _CGScalarCtx(IdDict{Any,Symbol}(), nothing)
+_CGScalarCtx(loops, entry) = _CGScalarCtx(loops, entry, IdDict{Any, Tuple{Int, Int}}())
+_CGScalarCtx() = _CGScalarCtx(IdDict{Any, Symbol}(), nothing)
 
 # A gather subscript that is a loop counter itself: the counter's local, an
 # `Int` already (the walker's `round(Int, T(counter))` is that integer), and
@@ -141,8 +141,10 @@ function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
     if k === _NK_LITERAL
         return nd.literal
     elseif k === _NK_STATE
-        return _cg_uread(_cg_slot_side(ctx.nst, nd.idx, nd.idx),
-                         _cg_geo!(ctx, nd.idx, (nd, :idx)))
+        return _cg_uread(
+            _cg_slot_side(ctx.nst, nd.idx, nd.idx),
+            _cg_geo!(ctx, nd.idx, (nd, :idx))
+        )
     elseif k === _NK_PARAM
         return :(_read_param(p, $(QuoteNode(nd.sym)), $(nd.idx)))
     elseif k === _NK_TIME
@@ -281,11 +283,11 @@ end
 # them is lifted (the row would evaluate what a term might not).
 function _ragged_hoists(body::_Node, ref)
     out = _Node[]
-    reads = IdDict{_Node,Bool}()
+    reads = IdDict{_Node, Bool}()
     _ragged_hoists!(out, body, ref, reads)
     return out
 end
-function _reads_ref(nd::_Node, ref, memo::IdDict{_Node,Bool})
+function _reads_ref(nd::_Node, ref, memo::IdDict{_Node, Bool})
     got = get(memo, nd, nothing)
     got === nothing || return got
     r = (nd.kind === _NK_LOOPVAR && nd.payload === ref) ||
@@ -294,7 +296,7 @@ function _reads_ref(nd::_Node, ref, memo::IdDict{_Node,Bool})
     memo[nd] = r
     return r
 end
-function _ragged_hoists!(out::Vector{_Node}, nd::_Node, ref, memo::IdDict{_Node,Bool})
+function _ragged_hoists!(out::Vector{_Node}, nd::_Node, ref, memo::IdDict{_Node, Bool})
     if !_reads_ref(nd, ref, memo)
         (nd.kind === _NK_LITERAL || nd.kind === _NK_LOOPVAR || nd.kind === _NK_TIME) ||
             any(x -> x === nd, out) || push!(out, nd)
@@ -350,8 +352,10 @@ function _ac_ragged_entries(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
         end
     end
     fold = _ACFold(Base.RefValue{Int}[spec.ref], nd.op, nd.literal, seg, Vector{Int}[kcol])
-    return _ACEntries(_cg_name(ctx, "rent"), fold, nest.refs, nest.los, nest.steps,
-                      nest.lens, IdDict{Any,Vector{Int}}())
+    return _ACEntries(
+        _cg_name(ctx, "rent"), fold, nest.refs, nest.los, nest.steps,
+        nest.lens, IdDict{Any, Vector{Int}}()
+    )
 end
 
 # Whether a node reads only literals, build-constant arrays and the given loop
@@ -361,8 +365,10 @@ function _ac_cell_only(nd::_Node, refs)
     if k === _NK_LOOPVAR
         return any(r -> r === nd.payload, refs)
     end
-    (k === _NK_LITERAL || k === _NK_CONST_GATHER ||
-     (k === _NK_OP && nd.op !== :fn)) || return false
+    (
+        k === _NK_LITERAL || k === _NK_CONST_GATHER ||
+            (k === _NK_OP && nd.op !== :fn)
+    ) || return false
     return all(c -> _ac_cell_only(c, refs), nd.children)
 end
 
@@ -381,7 +387,7 @@ _cg_oplus_fn(op::Symbol) =
 # the range's bounds as the caller emits them; `span`, when given, is the
 # counter's least and greatest value, which lets a gather the counter
 # subscripts drop its range test.
-function _cg_contraction_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi; span=nothing)
+function _cg_contraction_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi; span = nothing)
     spec = nd.payload::_ContractLoop
     haskey(kc.loops, spec.ref) && throw(_CodegenDecline(:contraction_loop_reentered))
     fnsym = _cg_oplus_fn(nd.op)
@@ -416,8 +422,10 @@ function _cg_nest_contraction_loop(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
     lo = _cg_geo!(ctx, spec.lo, (spec, :lo))
     st = _cg_geo!(ctx, spec.step, (spec, :step), true)
     hi = _cg_geo!(ctx, spec.hi, (spec, :hi))
-    return _cg_contraction_loop(ctx, kc, nd, lo, st, hi;
-                                span=extrema((first(rng), last(rng))))
+    return _cg_contraction_loop(
+        ctx, kc, nd, lo, st, hi;
+        span = extrema((first(rng), last(rng)))
+    )
 end
 
 # `_NK_CONST_GATHER`: evaluate the subscripts in dimension order, resolve each on
@@ -443,8 +451,10 @@ function _cg_const_gather(ctx::_CGCtx, kc, nd::_Node)
         push!(binds, :($sd = _const_gather_sub($cgv, $d, $sub)))
         push!(off, :(($sd - 1) * $(_cg_geo!(ctx, cg.strides[d], (cg.strides, d), true))))
     end
-    return Expr(:let, Expr(:block, binds...),
-                Expr(:block, :($cgv.flat[$(_cg_foldl(:+, off))])))
+    return Expr(
+        :let, Expr(:block, binds...),
+        Expr(:block, :($cgv.flat[$(_cg_foldl(:+, off))]))
+    )
 end
 
 # The element a const gather reads at each TABLE entry, by `_const_gather_sub`
@@ -457,8 +467,14 @@ function _ac_const_gather_entries(kc::_CGScalarCtx, cg::_ConstGatherArray, child
     for d in eachindex(cols), e in 1:nent
         x = cols[d][e]
         n = cg.dims[d]
-        (1 <= x <= n || (n >= 1 && (cg.boundary[d] === :periodic ||
-                                    cg.boundary[d] === :clamp))) || return nothing
+        (
+            1 <= x <= n || (
+                n >= 1 && (
+                    cg.boundary[d] === :periodic ||
+                        cg.boundary[d] === :clamp
+                )
+            )
+        ) || return nothing
     end
     vals = Vector{Float64}(undef, nent)
     for e in 1:nent
@@ -509,41 +525,57 @@ function _cg_state_gather(ctx::_CGCtx, kc, nd::_Node)
             side = _cg_slot_side(ctx.nst, _cg_table_extent(ctx, pre)...)
             all(!=(0), pre) && return _cg_uread(side, :($col[$ev]))
             sv = _cg_name(ctx, "esl")
-            return :(let $sv = $col[$ev]
-                         $sv == 0 ? zero(eltype(u)) : $(_cg_uread(side, sv))
-                     end)
+            return :(
+                let $sv = $col[$ev]
+                    $sv == 0 ? zero(eltype(u)) : $(_cg_uread(side, sv))
+                end
+            )
         end
     end
     sgv = _cg_name(ctx, "sga")
     inner = _cg_state_gather_dim(ctx, kc, nd, sg, sgv, 1, Any[0])
-    return Expr(:let, Expr(:block, :($sgv = $(_cg_tab!(ctx, sg)))),
-                Expr(:block, inner))
+    return Expr(
+        :let, Expr(:block, :($sgv = $(_cg_tab!(ctx, sg)))),
+        Expr(:block, inner)
+    )
 end
 
-function _cg_state_gather_dim(ctx::_CGCtx, kc, nd::_Node,
-                              sg::_StateGather, sgv::Symbol, d::Int, off::Vector{Any})
+function _cg_state_gather_dim(
+        ctx::_CGCtx, kc, nd::_Node,
+        sg::_StateGather, sgv::Symbol, d::Int, off::Vector{Any}
+    )
     children = nd.children
     if d > length(children)
         side = _cg_slot_side(ctx.nst, _cg_table_extent(ctx, sg.slot_flat)...)
         _cg_slot_run(sg.slot_flat) &&
-            return _cg_uread(side, :($(_cg_geo!(ctx, sg.slot_flat[1], (sg.slot_flat, :run))) +
-                                     $(_cg_foldl(:+, off))))
+            return _cg_uread(
+            side, :(
+                $(_cg_geo!(ctx, sg.slot_flat[1], (sg.slot_flat, :run))) +
+                    $(_cg_foldl(:+, off))
+            )
+        )
         return _cg_uread(side, :($sgv.slot_flat[$(_cg_foldl(:+, off)) + 1]))
     end
     sd = _cg_name(ctx, "sgs")
     lo = _cg_geo!(ctx, sg.lo[d], (sg.lo, d))
     hi = _cg_geo!(ctx, sg.hi[d], (sg.hi, d))
     sd_stride = _cg_geo!(ctx, sg.strides[d], (sg.strides, d), true)
-    nxt = _cg_state_gather_dim(ctx, kc, nd, sg, sgv, d + 1,
-                               push!(copy(off), :(($sd - $lo) * $sd_stride)))
+    nxt = _cg_state_gather_dim(
+        ctx, kc, nd, sg, sgv, d + 1,
+        push!(copy(off), :(($sd - $lo) * $sd_stride))
+    )
     cs = _cg_counter_subscript(kc, children[d])
-    cs === nothing && return Expr(:let,
+    cs === nothing && return Expr(
+        :let,
         Expr(:block, :($sd = round(Int, $(_cg_emit(ctx, kc, children[d]))))),
-        Expr(:block, :(($lo <= $sd <= $hi) ? $nxt : zero(eltype(u)))))
+        Expr(:block, :(($lo <= $sd <= $hi) ? $nxt : zero(eltype(u))))
+    )
     span = cs[2]
     inside = span !== nothing && sg.lo[d] <= span[1] && span[2] <= sg.hi[d]
-    return Expr(:let, Expr(:block, :($sd = $(cs[1]))),
-                Expr(:block, inside ? nxt : :(($lo <= $sd <= $hi) ? $nxt : zero(eltype(u)))))
+    return Expr(
+        :let, Expr(:block, :($sd = $(cs[1]))),
+        Expr(:block, inside ? nxt : :(($lo <= $sd <= $hi) ? $nxt : zero(eltype(u))))
+    )
 end
 
 # ---- One contraction → its generated function -------------------------------
@@ -578,14 +610,14 @@ struct _ACFold
     refs::Vector{Base.RefValue{Int}}   # the contracted indices' loop counters
     op::Symbol                         # ⊕
     zerobar::Float64                   # its 0̄
-    ranges::Vector{StepRange{Int,Int}} # STATIC: each counter's range (empty for TABLE)
+    ranges::Vector{StepRange{Int, Int}} # STATIC: each counter's range (empty for TABLE)
     seg::Vector{Int}                   # TABLE: length ncells + 1
     cols::Vector{Vector{Int}}          # TABLE: per contracted dim, its value at each entry
 end
-_ACFold(refs, op::Symbol, zerobar::Float64, ranges::Vector{StepRange{Int,Int}}) =
+_ACFold(refs, op::Symbol, zerobar::Float64, ranges::Vector{StepRange{Int, Int}}) =
     _ACFold(refs, op, zerobar, ranges, Int[], Vector{Int}[])
 _ACFold(refs, op::Symbol, zerobar::Float64, seg::Vector{Int}, cols::Vector{Vector{Int}}) =
-    _ACFold(refs, op, zerobar, StepRange{Int,Int}[], seg, cols)
+    _ACFold(refs, op, zerobar, StepRange{Int, Int}[], seg, cols)
 _acfold_is_table(f::_ACFold) = !isempty(f.seg)
 
 # A TABLE fold fixes every loop counter its term can read at each entry: the
@@ -603,15 +635,17 @@ struct _ACEntries
     los::Vector{Int}
     steps::Vector{Int}
     lens::Vector{Int}
-    vals::IdDict{Any,Vector{Int}}      # counter → its value at each entry (filled lazily)
+    vals::IdDict{Any, Vector{Int}}      # counter → its value at each entry (filled lazily)
     # While `compact[]`, a per-entry column bound for the term is a compacted
     # copy (`_ACMask`): `pairs` holds each (original, copy) local pair.
     compact::Base.RefValue{Bool}
-    pairs::Vector{Tuple{Symbol,Symbol}}
+    pairs::Vector{Tuple{Symbol, Symbol}}
 end
 _ACEntries(ev, fold, out_refs, los, steps, lens, vals) =
-    _ACEntries(ev, fold, out_refs, los, steps, lens, vals, Ref(false),
-               Tuple{Symbol,Symbol}[])
+    _ACEntries(
+    ev, fold, out_refs, los, steps, lens, vals, Ref(false),
+    Tuple{Symbol, Symbol}[]
+)
 
 function _ac_entry_vals!(en::_ACEntries, ref)
     got = get(en.vals, ref, nothing)
@@ -624,10 +658,10 @@ function _ac_entry_vals!(en::_ACEntries, ref)
     d = findfirst(x -> x === ref, en.out_refs)
     d === nothing && return nothing
     v = Vector{Int}(undef, f.seg[end] - 1)
-    div_d = prod(@view en.lens[1:d-1]; init = 1)
+    div_d = prod(@view en.lens[1:(d - 1)]; init = 1)
     for c in 1:(length(f.seg) - 1)
         x = en.los[d] + (div((c - 1), div_d) % en.lens[d]) * en.steps[d]
-        for e in f.seg[c]:(f.seg[c+1] - 1)
+        for e in f.seg[c]:(f.seg[c + 1] - 1)
             v[e] = x
         end
     end
@@ -663,7 +697,7 @@ end
 
 # A per-entry column bound to a local ahead of the cell loop; under a
 # compacting entry context, its compacted copy (paired with the original).
-function _ac_entry_local(ctx::_CGCtx, col, en=nothing)
+function _ac_entry_local(ctx::_CGCtx, col, en = nothing)
     s = _cg_name(ctx, "ecol")
     if en isa _ACEntries && en.compact[]
         so = _cg_name(ctx, "ecol")
@@ -683,12 +717,14 @@ end
 _cg_boxaddr(::_CGCtx, ::_CGScalarCtx, ::Int, ::Int, ::Int, ::Int, ::Vector{Int}, key) =
     throw(_CodegenDecline(:lane_spec_on_scalar_spine))
 
-function _try_codegen_array_contraction(refs::Vector{Base.RefValue{Int}},
+function _try_codegen_array_contraction(
+        refs::Vector{Base.RefValue{Int}},
         los::Vector{Int}, steps::Vector{Int}, lens::Vector{Int},
-        outs::Vector{Int}, body::_Node; fold::Union{Nothing,_ACFold}=nothing,
-        nst::Int=0, consumer=nothing)
+        outs::Vector{Int}, body::_Node; fold::Union{Nothing, _ACFold} = nothing,
+        nst::Int = 0, consumer = nothing
+    )
     _codegen_disabled() && return :codegen_disabled
-    ctx = _CGCtx(_codegen_node_budget(); nst=nst)
+    ctx = _CGCtx(_codegen_node_budget(); nst = nst)
     cons = nothing
     if consumer !== nothing
         Kc, ix, delta = consumer
@@ -696,11 +732,15 @@ function _try_codegen_array_contraction(refs::Vector{Base.RefValue{Int}},
         cons = (K = Kc, ix = ix, delta = delta, store = true, invsyms = _cg_inv!(ctx, Kc))
     end
     entries = fold !== nothing && _acfold_is_table(fold) ?
-        _ACEntries(_cg_name(ctx, "ent"), fold, refs, los, steps, lens,
-                   IdDict{Any,Vector{Int}}()) : nothing
+        _ACEntries(
+            _cg_name(ctx, "ent"), fold, refs, los, steps, lens,
+            IdDict{Any, Vector{Int}}()
+        ) : nothing
     cv = _cg_name(ctx, "c")
-    kc = _CGScalarCtx(IdDict{Any,Symbol}(), entries, IdDict{Any,Tuple{Int,Int}}(),
-                      (refs = refs, los = los, steps = steps, lens = lens, cv = cv))
+    kc = _CGScalarCtx(
+        IdDict{Any, Symbol}(), entries, IdDict{Any, Tuple{Int, Int}}(),
+        (refs = refs, los = los, steps = steps, lens = lens, cv = cv)
+    )
     rv = _cg_name(ctx, "r")
     seek = Any[:(local $rv = $cv - 1)]
     # The same odometer stepped instead of divided: `start` decomposes the
@@ -724,8 +764,10 @@ function _try_codegen_array_contraction(refs::Vector{Base.RefValue{Int}},
         push!(start, :(local $iv = $lo + $qv * $st))
         push!(start, :($rv = div($rv, $len)))
         push!(stepper, (qv, iv, lo, len, st))
-        lens[d] >= 1 && (kc.spans[refs[d]] =
-            extrema((los[d], los[d] + (lens[d] - 1) * steps[d])))
+        lens[d] >= 1 && (
+            kc.spans[refs[d]] =
+                extrema((los[d], los[d] + (lens[d] - 1) * steps[d]))
+        )
     end
     advance = nothing
     for (qv, iv, lo, len, st) in reverse(stepper[2:end])
@@ -785,11 +827,15 @@ function _try_codegen_array_contraction(refs::Vector{Base.RefValue{Int}},
     cell = try
         if gated === nothing
             term = _cg_emit(ctx, kc, body)
-            fold === nothing ? term : _cg_fold(ctx, fold, cv, kvs, term,
-                                               entries === nothing ? nothing : entries.ev)
+            fold === nothing ? term : _cg_fold(
+                    ctx, fold, cv, kvs, term,
+                    entries === nothing ? nothing : entries.ev
+                )
         else
-            cell, maskloop = _ac_emit_gated(ctx, kc, entries, gated..., cv, kvs, seek,
-                                            length(outs))
+            cell, maskloop = _ac_emit_gated(
+                ctx, kc, entries, gated..., cv, kvs, seek,
+                length(outs)
+            )
             cell
         end
     catch err
@@ -857,45 +903,63 @@ function _try_codegen_array_contraction(refs::Vector{Base.RefValue{Int}},
     end
     ngrp = length(ctx.tab_types)
     grpstmts = Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]
-    ex = Expr(:function, Expr(:tuple, :du, :u, :p, :t, :tabs, :_cgci, :_cgnc),
-        Expr(:block, grpstmts...,
-             :(local _cgT = _rhs_value_type(u, p, t)),
-             ctx.helpers...,
-             Expr(:macrocall, Symbol("@inbounds"), ln, loop),
-             :(return nothing)))
+    ex = Expr(
+        :function, Expr(:tuple, :du, :u, :p, :t, :tabs, :_cgci, :_cgnc),
+        Expr(
+            :block, grpstmts...,
+            :(local _cgT = _rhs_value_type(u, p, t)),
+            ctx.helpers...,
+            Expr(:macrocall, Symbol("@inbounds"), ln, loop),
+            :(return nothing)
+        )
+    )
     f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
-        @__MODULE__, @__MODULE__, ex)
+        @__MODULE__, @__MODULE__, ex
+    )
     mask = nothing
     if maskloop !== nothing
-        mex = Expr(:function, Expr(:tuple, :du, :u, :p, :t, :tabs, :_cgci, :_cgnc),
-            Expr(:block, grpstmts...,
-                 :(local _cgT = _rhs_value_type(u, p, t)),
-                 ctx.helpers...,
-                 Expr(:macrocall, Symbol("@inbounds"), ln,
-                      quote
-                          $(ctx.geosink...)
-                          $maskloop
-                      end),
-                 :(return nothing)))
-        mask = _ACMask(RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
-                           @__MODULE__, @__MODULE__, mex), _CSE_INVALID, 0)
+        mex = Expr(
+            :function, Expr(:tuple, :du, :u, :p, :t, :tabs, :_cgci, :_cgnc),
+            Expr(
+                :block, grpstmts...,
+                :(local _cgT = _rhs_value_type(u, p, t)),
+                ctx.helpers...,
+                Expr(
+                    :macrocall, Symbol("@inbounds"), ln,
+                    quote
+                        $(ctx.geosink...)
+                        $maskloop
+                    end
+                ),
+                :(return nothing)
+            )
+        )
+        mask = _ACMask(
+            RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
+                @__MODULE__, @__MODULE__, mex
+            ), _CSE_INVALID, 0
+        )
     end
     tabpack = ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp)
     # Output slots are globally unique — each was claimed in `covered` at build,
     # which throws on a second claim — so the cell axis chunks like the kernel
     # section's, and for the same reason: every ⊕-fold is inside one cell.
-    return _ArrayContraction(f, tabpack,
-                             _SecTCache(length(outs), true, _ac_work(length(outs), fold, body)),
-                             mask)
+    return _ArrayContraction(
+        f, tabpack,
+        _SecTCache(length(outs), true, _ac_work(length(outs), fold, body)),
+        mask
+    )
 end
 
 # `(gate, term)` when `body` is `ifelse(gate, term, 0.0)` folded under `+` from
 # +0.0 over a TABLE, and the gate reads nothing that can change while `p`
 # stands still: literals, parameters, the loop counters (fixed per entry) and
 # build-constant arrays. `nothing` otherwise.
-function _ac_param_gate(body::_Node, fold::Union{Nothing,_ACFold})
-    (fold !== nothing && _acfold_is_table(fold) && fold.op === :+ &&
-     fold.zerobar === 0.0) || return nothing
+function _ac_param_gate(body::_Node, fold::Union{Nothing, _ACFold})
+    (
+        fold !== nothing && _acfold_is_table(fold) && fold.op === :+ &&
+            fold.zerobar === 0.0
+    ) || return nothing
     (body.kind === _NK_OP && body.op === :ifelse && length(body.children) == 3) ||
         return nothing
     gate, term, other = body.children
@@ -906,27 +970,35 @@ end
 
 function _ac_param_only(nd::_Node)
     k = nd.kind
-    (k === _NK_LITERAL || k === _NK_PARAM || k === _NK_LOOPVAR ||
-     k === _NK_CONST_GATHER || k === _NK_OP) || return false
+    (
+        k === _NK_LITERAL || k === _NK_PARAM || k === _NK_LOOPVAR ||
+            k === _NK_CONST_GATHER || k === _NK_OP
+    ) || return false
     return all(_ac_param_only, nd.children)
 end
 
 # The gated TABLE fold: the cell folds its compacted entries `segc[c]:segc[c+1]-1`
 # with the term alone, and the returned mask loop refills `segc` and every
 # compacted column from the gate, entry by entry in table order.
-function _ac_emit_gated(ctx::_CGCtx, kc::_CGScalarCtx, entries::_ACEntries,
-                        gate::_Node, term::_Node, cv::Symbol, kvs::Vector{Symbol},
-                        seek::Vector{Any}, ncells::Int)
+function _ac_emit_gated(
+        ctx::_CGCtx, kc::_CGScalarCtx, entries::_ACEntries,
+        gate::_Node, term::_Node, cv::Symbol, kvs::Vector{Symbol},
+        seek::Vector{Any}, ncells::Int
+    )
     fold = entries.fold
     ev = entries.ev
     gx = _cg_emit(ctx, kc, gate)
     sego = _ac_entry_local(ctx, fold.seg)
-    obinds = Any[:(local $(kvs[r]) = $(_ac_entry_local(ctx, fold.cols[r]))[$ev])
-                 for r in eachindex(kvs)]
+    obinds = Any[
+        :(local $(kvs[r]) = $(_ac_entry_local(ctx, fold.cols[r]))[$ev])
+            for r in eachindex(kvs)
+    ]
     entries.compact[] = true
     tx = _cg_emit(ctx, kc, term)
-    cbinds = Any[:(local $(kvs[r]) = $(_ac_entry_local(ctx, fold.cols[r], entries))[$ev])
-                 for r in eachindex(kvs)]
+    cbinds = Any[
+        :(local $(kvs[r]) = $(_ac_entry_local(ctx, fold.cols[r], entries))[$ev])
+            for r in eachindex(kvs)
+    ]
     entries.compact[] = false
     segc = _ac_entry_local(ctx, _ws_scratch!(copy(fold.seg)))
     acc = _cg_name(ctx, "acc")
@@ -974,7 +1046,7 @@ end
 # fold), so a contraction whose cells each fold many terms (a dense
 # contraction, a TABLE fold's admitted pairs) is chunked at fewer cells than a
 # section whose cells are one expression each.
-function _ac_work(ncells::Int, fold::Union{Nothing,_ACFold}, body::_Node)
+function _ac_work(ncells::Int, fold::Union{Nothing, _ACFold}, body::_Node)
     tw = _node_work(body)
     fold === nothing && return Base.Checked.checked_mul(ncells, 1 + tw)
     terms = if _acfold_is_table(fold)
@@ -995,16 +1067,20 @@ end
 # (`_eval_contraction`) seeds it: under a `Dual` value type `0̄ ⊕ term` then
 # carries the term's partials exactly, where a seed converted to the value type
 # would add zero partials to them and turn a `-0.0` partial into `0.0`.
-function _cg_fold(ctx::_CGCtx, fold::_ACFold, cv::Symbol, kvs::Vector{Symbol}, term,
-                  ev::Union{Nothing,Symbol}=nothing)
+function _cg_fold(
+        ctx::_CGCtx, fold::_ACFold, cv::Symbol, kvs::Vector{Symbol}, term,
+        ev::Union{Nothing, Symbol} = nothing
+    )
     fnsym = _cg_oplus_fn(fold.op)
     acc = _cg_name(ctx, "acc")
     upd = :($acc = $fnsym($acc, $term))
     loop = if _acfold_is_table(fold)
         ev === nothing && (ev = _cg_name(ctx, "ent"))
         segv = _ac_entry_local(ctx, fold.seg)
-        binds = Any[:(local $(kvs[r]) = $(_ac_entry_local(ctx, fold.cols[r]))[$ev])
-                    for r in eachindex(kvs)]
+        binds = Any[
+            :(local $(kvs[r]) = $(_ac_entry_local(ctx, fold.cols[r]))[$ev])
+                for r in eachindex(kvs)
+        ]
         quote
             for $ev in $segv[$cv]:($segv[$cv + 1] - 1)
                 $(binds...)
@@ -1057,8 +1133,10 @@ Base.isempty(s::_ContractionSection) = isempty(s.gens)
     return _run_acgens!(Base.tail(gs), du, u, p, t, T)
 end
 
-@inline function _apply_array_contractions!(du, u, p, t,
-        s::_ContractionSection, ::Type{T}) where {T}
+@inline function _apply_array_contractions!(
+        du, u, p, t,
+        s::_ContractionSection, ::Type{T}
+    ) where {T}
     _run_acgens!(s.gens, du, u, p, t, T)
     return nothing
 end
@@ -1074,8 +1152,10 @@ end
 # and, threaded, puts it in the nest's dispatch. The observed is still stored,
 # for any other reader. A kernel already taken (`consumed`) is not offered
 # again; a nest whose re-emission declines keeps its plain form.
-function _ac_take_consumers(acs::AbstractVector, Ks::AbstractVector{_AccKernel},
-                            nst::Int, consumed::IdDict{Any,Bool})
+function _ac_take_consumers(
+        acs::AbstractVector, Ks::AbstractVector{_AccKernel},
+        nst::Int, consumed::IdDict{Any, Bool}
+    )
     (isempty(acs) || nst <= 0 || _codegen_disabled()) && return acs
     out = similar(acs, 0)
     for g in acs

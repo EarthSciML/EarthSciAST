@@ -51,10 +51,12 @@
 # Compile-time membership gating preserves the interpreter's failure mode: an
 # op outside this set throws E_TREEWALK_GEOMETRY_SETUP (not the runtime
 # ladder's unevaluable_operator).
-const _GEO_STRUCTURAL_OPS = Set{String}([
-    "index", "intersect_polygon", "polygon_intersection_area", "skolem",
-    "true", "false", "faq",
-])
+const _GEO_STRUCTURAL_OPS = Set{String}(
+    [
+        "index", "intersect_polygon", "polygon_intersection_area", "skolem",
+        "true", "false", "faq",
+    ]
+)
 const _GEO_SCALAR_OPS = setdiff(_GEO_EVAL_OPS, _GEO_STRUCTURAL_OPS)
 
 # ---- Compiled payload specs -------------------------------------------------
@@ -104,8 +106,8 @@ end
 struct _GeoAggSpec
     slots::Vector{Int}
     exts::Vector{Int}
-    gates::Union{Nothing,Vector{_GeoSlotGate}}
-    filter::Union{Nothing,_Node}
+    gates::Union{Nothing, Vector{_GeoSlotGate}}
+    filter::Union{Nothing, _Node}
     body::_Node
 end
 
@@ -118,8 +120,8 @@ end
 # so the sweep sizes ONE frame for the whole tree).
 struct _GeoCompileCtx
     ctx::_GeoCtx
-    scope::Dict{String,Int}
-    setof::Dict{String,String}
+    scope::Dict{String, Int}
+    setof::Dict{String, String}
     nslots::Base.RefValue{Int}
 end
 
@@ -133,12 +135,12 @@ _geo_newslot!(g::_GeoCompileCtx) = (g.nslots[] += 1)
 # threw — just at compile (before the sweep) instead of at the first cell.
 function _geo_compile(expr, g::_GeoCompileCtx)::_Node
     if expr isa NumExpr
-        return _mknode(kind=_NK_LITERAL, literal=expr.value)
+        return _mknode(kind = _NK_LITERAL, literal = expr.value)
     elseif expr isa IntExpr
-        return _mknode(kind=_NK_LITERAL, literal=Float64(expr.value))
+        return _mknode(kind = _NK_LITERAL, literal = Float64(expr.value))
     elseif expr isa VarExpr
         s = get(g.scope, expr.name, 0)
-        s != 0 && return _mknode(kind=_NK_STATE, idx=s)   # loop index (Float64 in u)
+        s != 0 && return _mknode(kind = _NK_STATE, idx = s)   # loop index (Float64 in u)
         v = get(g.ctx.env, expr.name, nothing)
         # A scalar `env` entry folded to a literal is the setup-time geometry's
         # read of a model parameter (`atol`, `dx`, a projection constant) — the
@@ -147,41 +149,61 @@ function _geo_compile(expr, g::_GeoCompileCtx)::_Node
         # build-time evaluation scope.
         if v isa Real
             _PARAM_READS[] === nothing || _record_param_read(expr.name)
-            return _mknode(kind=_NK_LITERAL, literal=Float64(v))
+            return _mknode(kind = _NK_LITERAL, literal = Float64(v))
         end
-        v === nothing && throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-            "unbound name '$(expr.name)' in setup-time geometry"))
+        v === nothing && throw(
+            TreeWalkError(
+                "E_TREEWALK_GEOMETRY_SETUP",
+                "unbound name '$(expr.name)' in setup-time geometry"
+            )
+        )
         # Array-valued names are legal only in SOURCE position (an `index`
         # base, a polygon operand) — those are compiled by `_geo_source`.
-        throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-            "array-valued name '$(expr.name)' used in scalar position in setup-time geometry"))
+        throw(
+            TreeWalkError(
+                "E_TREEWALK_GEOMETRY_SETUP",
+                "array-valued name '$(expr.name)' used in scalar position in setup-time geometry"
+            )
+        )
     elseif expr isa OpExpr
         op = expr.op
         if op == "index"
             src = _geo_source(expr.args[1], g)
             nidx = length(expr.args) - 1
             r = _geo_source_rank(src)
-            nidx == r || throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-                "index of a non-array or partial index ($(nidx) of $(r) dims) " *
-                "in scalar position in setup-time geometry"))
+            nidx == r || throw(
+                TreeWalkError(
+                    "E_TREEWALK_GEOMETRY_SETUP",
+                    "index of a non-array or partial index ($(nidx) of $(r) dims) " *
+                        "in scalar position in setup-time geometry"
+                )
+            )
             children = _Node[_geo_compile(expr.args[k], g) for k in 2:length(expr.args)]
-            return _mknode(kind=_NK_OP, op=:geo_gather, children=children, payload=src)
+            return _mknode(kind = _NK_OP, op = :geo_gather, children = children, payload = src)
         elseif op == "polygon_intersection_area"
-            expr.manifold === nothing && throw(TreeWalkError("E_TREEWALK_GEOMETRY_NO_MANIFOLD",
-                "polygon_intersection_area requires a manifold"))
-            return _mknode(kind=_NK_OP, op=:geo_pia,
-                           payload=_GeoPiaSpec(_geo_source(expr.args[1], g),
-                                               _geo_source(expr.args[2], g),
-                                               expr.manifold))
+            expr.manifold === nothing && throw(
+                TreeWalkError(
+                    "E_TREEWALK_GEOMETRY_NO_MANIFOLD",
+                    "polygon_intersection_area requires a manifold"
+                )
+            )
+            return _mknode(
+                kind = _NK_OP, op = :geo_pia,
+                payload = _GeoPiaSpec(
+                    _geo_source(expr.args[1], g),
+                    _geo_source(expr.args[2], g),
+                    expr.manifold
+                )
+            )
         elseif op == "skolem"
             # Deterministic per-arg-tuple id, only ever COMPARED within one
             # build (see `_SKOLEM_HASH_CAP`); args are scalar quantizations.
             children = _Node[_geo_compile(a, g) for a in expr.args]
-            return _mknode(kind=_NK_OP, op=:geo_skolem, children=children)
+            return _mknode(kind = _NK_OP, op = :geo_skolem, children = children)
         elseif op == "true"
-            return _mknode(kind=_NK_LITERAL, literal=1.0)
+            return _mknode(kind = _NK_LITERAL, literal = 1.0)
         elseif op == "false"
-            return _mknode(kind=_NK_LITERAL, literal=0.0)
+            return _mknode(kind = _NK_LITERAL, literal = 0.0)
         elseif op == "faq"
             return _geo_compile_agg(expr, g)
         elseif op == "-" && length(expr.args) >= 3
@@ -190,19 +212,29 @@ function _geo_compile(expr, g::_GeoCompileCtx)::_Node
             # (esm-spec), so the fold happens here at compile.
             node = _geo_compile(expr.args[1], g)
             for k in 2:length(expr.args)
-                node = _mknode(kind=_NK_OP, op=:-,
-                               children=_Node[node, _geo_compile(expr.args[k], g)])
+                node = _mknode(
+                    kind = _NK_OP, op = :-,
+                    children = _Node[node, _geo_compile(expr.args[k], g)]
+                )
             end
             return node
         elseif op in _GEO_SCALAR_OPS
             children = _Node[_geo_compile(a, g) for a in expr.args]
-            return _mknode(kind=_NK_OP, op=Symbol(op), children=children)
+            return _mknode(kind = _NK_OP, op = Symbol(op), children = children)
         end
-        throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-            "unsupported op '$(op)' in setup-time geometry"))
+        throw(
+            TreeWalkError(
+                "E_TREEWALK_GEOMETRY_SETUP",
+                "unsupported op '$(op)' in setup-time geometry"
+            )
+        )
     end
-    throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-        "unsupported expression $(typeof(expr)) in setup-time geometry"))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_GEOMETRY_SETUP",
+            "unsupported expression $(typeof(expr)) in setup-time geometry"
+        )
+    )
 end
 
 # A ring/array SOURCE: an env array by name, a partial `index` slice of a
@@ -213,25 +245,45 @@ function _geo_source(expr, g::_GeoCompileCtx)
     if expr isa VarExpr
         v = get(g.ctx.env, expr.name, nothing)
         v isa AbstractArray && return v
-        throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-            v === nothing ? "unbound name '$(expr.name)' in setup-time geometry" :
-                "index of a non-array in setup-time geometry"))
+        throw(
+            TreeWalkError(
+                "E_TREEWALK_GEOMETRY_SETUP",
+                v === nothing ? "unbound name '$(expr.name)' in setup-time geometry" :
+                    "index of a non-array in setup-time geometry"
+            )
+        )
     elseif expr isa OpExpr && expr.op == "index"
         base = _geo_source(expr.args[1], g)
         nidx = length(expr.args) - 1
-        nidx < _geo_source_rank(base) || throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-            "polygon operand must be an array (a full index yields a scalar) in setup-time geometry"))
-        return _GeoRingRef(base,
-            _Node[_geo_compile(expr.args[k], g) for k in 2:length(expr.args)])
+        nidx < _geo_source_rank(base) || throw(
+            TreeWalkError(
+                "E_TREEWALK_GEOMETRY_SETUP",
+                "polygon operand must be an array (a full index yields a scalar) in setup-time geometry"
+            )
+        )
+        return _GeoRingRef(
+            base,
+            _Node[_geo_compile(expr.args[k], g) for k in 2:length(expr.args)]
+        )
     elseif expr isa OpExpr && expr.op == "intersect_polygon"
-        expr.manifold === nothing && throw(TreeWalkError("E_TREEWALK_GEOMETRY_NO_MANIFOLD",
-            "intersect_polygon requires a manifold"))
-        return _GeoClipRef(_geo_source(expr.args[1], g),
-                           _geo_source(expr.args[2], g), expr.manifold)
+        expr.manifold === nothing && throw(
+            TreeWalkError(
+                "E_TREEWALK_GEOMETRY_NO_MANIFOLD",
+                "intersect_polygon requires a manifold"
+            )
+        )
+        return _GeoClipRef(
+            _geo_source(expr.args[1], g),
+            _geo_source(expr.args[2], g), expr.manifold
+        )
     end
-    throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-        "operand must be a build-time array (a const/setup array name, an index " *
-        "slice of one, or an intersect_polygon clip) in setup-time geometry"))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_GEOMETRY_SETUP",
+            "operand must be a build-time array (a const/setup array name, an index " *
+                "slice of one, or an intersect_polygon clip) in setup-time geometry"
+        )
+    )
 end
 
 _geo_source_rank(a::AbstractArray) = ndims(a)
@@ -245,8 +297,10 @@ _geo_source_rank(::_GeoClipRef) = 2
 # compile.
 function _geo_compile_agg(expr::OpExpr, g::_GeoCompileCtx)::_Node
     loopvars = collect(keys(expr.ranges))
-    exts = Int[_geo_index_extent(expr.ranges[v], g.ctx.index_sets, g.ctx.derived_extents)
-               for v in loopvars]
+    exts = Int[
+        _geo_index_extent(expr.ranges[v], g.ctx.index_sets, g.ctx.derived_extents)
+            for v in loopvars
+    ]
     scope = copy(g.scope)
     setof = copy(g.setof)
     slots = Vector{Int}(undef, length(loopvars))
@@ -260,8 +314,10 @@ function _geo_compile_agg(expr::OpExpr, g::_GeoCompileCtx)::_Node
     gates = _geo_slot_gates(expr, inner)
     filt = expr.filter === nothing ? nothing : _geo_compile(expr.filter, inner)
     body = _geo_compile(expr.expr_body, inner)
-    return _mknode(kind=_NK_OP, op=:geo_agg,
-                   payload=_GeoAggSpec(slots, exts, gates, filt, body))
+    return _mknode(
+        kind = _NK_OP, op = :geo_agg,
+        payload = _GeoAggSpec(slots, exts, gates, filt, body)
+    )
 end
 
 # Resolve a node's `join` to slot-addressed gates: `_resolve_geo_join_gates`
@@ -278,8 +334,12 @@ function _geo_slot_gates(expr, g::_GeoCompileCtx)
         # `_geo_loopvar_for` only returns vars present in `setof`, which is
         # built from in-scope loop vars — so this cannot fire; fail closed
         # anyway rather than emit a gate that reads slot 0.
-        (sA == 0 || sB == 0) && throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-            "join-gate loop var out of scope in setup-time geometry"))
+        (sA == 0 || sB == 0) && throw(
+            TreeWalkError(
+                "E_TREEWALK_GEOMETRY_SETUP",
+                "join-gate loop var out of scope in setup-time geometry"
+            )
+        )
         push!(gates, _GeoSlotGate(jg.arrA, sA, jg.arrB, sB))
     end
     return gates
@@ -297,9 +357,13 @@ end
 # as before. A clip source runs the Sutherland–Hodgman kernel per cell.
 _geo_ring_value(a::AbstractArray, u, p, t, ::Type{T}) where {T} = a
 function _geo_ring_value(r::_GeoClipRef, u, p, t, ::Type{T}) where {T}
-    return close_ring(intersect_polygon(_geo_ring_value(r.a, u, p, t, T),
-                                        _geo_ring_value(r.b, u, p, t, T),
-                                        r.manifold))
+    return close_ring(
+        intersect_polygon(
+            _geo_ring_value(r.a, u, p, t, T),
+            _geo_ring_value(r.b, u, p, t, T),
+            r.manifold
+        )
+    )
 end
 function _geo_ring_value(r::_GeoRingRef, u, p, t, ::Type{T}) where {T}
     # `r.src` is typed `Any` (an array, another `_GeoRingRef`, or a
@@ -315,15 +379,15 @@ function _geo_ring_value(r::_GeoRingRef, u, p, t, ::Type{T}) where {T}
     # had to be resolved. Anything else takes the same generic call as before.
     src = r.src
     ix = r.idx
-    if src isa Array{Float64,3}
+    if src isa Array{Float64, 3}
         return _geo_ring_slice(src, ix, u, p, t, T)
-    elseif src isa Array{Float64,2}
+    elseif src isa Array{Float64, 2}
         return _geo_ring_slice(src, ix, u, p, t, T)
     end
     base = _geo_ring_value(src, u, p, t, T)
-    if base isa Array{Float64,3}
+    if base isa Array{Float64, 3}
         return _geo_ring_slice(base, ix, u, p, t, T)
-    elseif base isa Array{Float64,2}
+    elseif base isa Array{Float64, 2}
         return _geo_ring_slice(base, ix, u, p, t, T)
     end
     return _geo_ring_slice(base, ix, u, p, t, T)
@@ -365,11 +429,11 @@ function _geo_gather_value(n::_Node, u, p, t, ::Type{T})::Float64 where {T}
     # bounded-const wrapper, a `_GeoRingRef`, a `_GeoClipRef`, a non-Float64 or
     # higher-rank array) falls to the same generic call as before.
     pl = n.payload
-    if pl isa Array{Float64,1}
+    if pl isa Array{Float64, 1}
         return _geo_gather_from(pl, n.children, u, p, t, T)
-    elseif pl isa Array{Float64,2}
+    elseif pl isa Array{Float64, 2}
         return _geo_gather_from(pl, n.children, u, p, t, T)
-    elseif pl isa Array{Float64,3}
+    elseif pl isa Array{Float64, 3}
         return _geo_gather_from(pl, n.children, u, p, t, T)
     end
     return _geo_gather_from(pl, n.children, u, p, t, T)
@@ -381,12 +445,20 @@ function _geo_gather_from(src, c::Vector{_Node}, u, p, t, ::Type{T})::Float64 wh
     if k == 1
         return Float64(arr[_geo_ix_value(c[1], u, p, t, T)])
     elseif k == 2
-        return Float64(arr[_geo_ix_value(c[1], u, p, t, T),
-                           _geo_ix_value(c[2], u, p, t, T)])
+        return Float64(
+            arr[
+                _geo_ix_value(c[1], u, p, t, T),
+                _geo_ix_value(c[2], u, p, t, T),
+            ]
+        )
     elseif k == 3
-        return Float64(arr[_geo_ix_value(c[1], u, p, t, T),
-                           _geo_ix_value(c[2], u, p, t, T),
-                           _geo_ix_value(c[3], u, p, t, T)])
+        return Float64(
+            arr[
+                _geo_ix_value(c[1], u, p, t, T),
+                _geo_ix_value(c[2], u, p, t, T),
+                _geo_ix_value(c[3], u, p, t, T),
+            ]
+        )
     end
     idxs = Int[_geo_ix_value(c[i], u, p, t, T) for i in eachindex(c)]
     return Float64(arr[idxs...])
@@ -444,8 +516,10 @@ _geo_slot_eq(a, b, i::Int, j::Int) = a[i] == b[j]
 # `polygon_intersection_area` of two resolved ring sources. Split out of the
 # `:geo_pia` arm so the operand types can be narrowed at the call site.
 function _geo_pia_value(a, b, manifold::String, u, p, t, ::Type{T})::Float64 where {T}
-    return _polygon_intersection_area(_geo_ring_value(a, u, p, t, T),
-                                      _geo_ring_value(b, u, p, t, T), manifold)
+    return _polygon_intersection_area(
+        _geo_ring_value(a, u, p, t, T),
+        _geo_ring_value(b, u, p, t, T), manifold
+    )
 end
 
 # The `:geo_*` dispatch — the cold tail arm of `_eval_node_op` (compile.jl).

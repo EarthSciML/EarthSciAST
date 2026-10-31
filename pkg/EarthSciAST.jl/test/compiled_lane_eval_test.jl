@@ -14,7 +14,7 @@ const ESM = EarthSciAST
     nbr = Float64[mod1(3i + 2k, 7) for i in 1:7, k in 1:2]
     bad = [1.0 NaN; 2.0 3.0]
     periodic = ESM._wrap_bounded_const(Float64[10, 20, 30], (:periodic,), "per")
-    const_arrays = Dict{String,Any}("nbr" => nbr, "bad" => bad, "per" => periodic)
+    const_arrays = Dict{String, Any}("nbr" => nbr, "bad" => bad, "per" => periodic)
     exprs = [
         _v("i"), _i(4), _n(3.0), _op("+", _v("i"), _i(1), _v("k")), _op("-", _v("i"), _v("k")),
         _op("-", _v("k")), _op("neg", _v("i")), _op("*", _i(2), _v("i"), _v("k")),
@@ -43,13 +43,15 @@ const ESM = EarthSciAST
             end
             # It answers every in-range, plain-array case.
             if !(ref isa Exception) && !occursin("per", sprint(show, e)) &&
-               !occursin("bad", sprint(show, e))
+                    !occursin("bad", sprint(show, e))
                 @test ok
             end
         end
     end
-    for e in [_v("j"), _n(1.5), _op("+"), _op("sin", _v("i")), _idx("nope", _v("i")),
-              _idx("nbr", _v("i"))]
+    for e in [
+            _v("j"), _n(1.5), _op("+"), _op("sin", _v("i")), _idx("nope", _v("i")),
+            _idx("nbr", _v("i")),
+        ]
         @test ESM._ix_compile(e, idx_names, const_arrays) === nothing
     end
 
@@ -57,16 +59,26 @@ const ESM = EarthSciAST
     L = ESM.StateLayout(String[], ["u" => ([1], [7])])
     pg = ESM._PGatherArray(zeros(7 * 2), [7, 2])
     recs = [
-        ESM._LaneRecipe(ESM.LANE_STATE, "u", ESM.ASTExpr[_idx("nbr", _v("i"), _v("k"))],
-                        [1], [7], nothing, ""),
-        ESM._LaneRecipe(ESM.LANE_STATE, "u", ESM.ASTExpr[_op("+", _v("i"), _v("k"))],
-                        [1], [7], nothing, ""),                     # ghosts past 7
-        ESM._LaneRecipe(ESM.LANE_STATE, "u", ESM.ASTExpr[_op("-", _v("i"), _v("k"))],
-                        [1], [7], nothing, "", (0, [1])),
-        ESM._LaneRecipe(ESM.LANE_CONST, "nbr", ESM.ASTExpr[_v("i"), _v("k")],
-                        Int[], Int[], nbr, ""),
-        ESM._LaneRecipe(ESM.LANE_PGATHER, "f", ESM.ASTExpr[_v("i"), _v("k")],
-                        Int[], Int[], pg, ""),
+        ESM._LaneRecipe(
+            ESM.LANE_STATE, "u", ESM.ASTExpr[_idx("nbr", _v("i"), _v("k"))],
+            [1], [7], nothing, ""
+        ),
+        ESM._LaneRecipe(
+            ESM.LANE_STATE, "u", ESM.ASTExpr[_op("+", _v("i"), _v("k"))],
+            [1], [7], nothing, ""
+        ),                     # ghosts past 7
+        ESM._LaneRecipe(
+            ESM.LANE_STATE, "u", ESM.ASTExpr[_op("-", _v("i"), _v("k"))],
+            [1], [7], nothing, "", (0, [1])
+        ),
+        ESM._LaneRecipe(
+            ESM.LANE_CONST, "nbr", ESM.ASTExpr[_v("i"), _v("k")],
+            Int[], Int[], nbr, ""
+        ),
+        ESM._LaneRecipe(
+            ESM.LANE_PGATHER, "f", ESM.ASTExpr[_v("i"), _v("k")],
+            Int[], Int[], pg, ""
+        ),
         ESM._LaneRecipe(ESM.LANE_LOOPLIT, "", ESM.ASTExpr[], Int[], Int[], nothing, "k"),
     ]
     for rec in recs

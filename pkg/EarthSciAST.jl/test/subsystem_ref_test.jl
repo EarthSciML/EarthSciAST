@@ -20,23 +20,23 @@ using JSON3
 
     @testset "resolve_subsystem_refs! on file with models but no refs" begin
         vars = Dict{String, ModelVariable}(
-            "T" => ModelVariable(UnknownVariable, default=300.0)
+            "T" => ModelVariable(UnknownVariable, default = 300.0)
         )
         model = Model(vars, Equation[])
         models = Dict{String, Model}("Atm" => model)
         metadata = Metadata("model_no_refs")
-        file = EsmFile("0.1.0", metadata, models=models)
+        file = EsmFile("0.1.0", metadata, models = models)
 
         resolve_subsystem_refs!(file, tempdir())
         @test haskey(file.models, "Atm")
     end
 
     @testset "resolve_subsystem_refs! on file with reaction systems but no refs" begin
-        species = [Species("O3", default=1e-6)]
+        species = [Species("O3", default = 1.0e-6)]
         rsys = ReactionSystem(species, Reaction[])
         rsys_dict = Dict{String, ReactionSystem}("Chem" => rsys)
         metadata = Metadata("rsys_no_refs")
-        file = EsmFile("0.1.0", metadata, reaction_systems=rsys_dict)
+        file = EsmFile("0.1.0", metadata, reaction_systems = rsys_dict)
 
         resolve_subsystem_refs!(file, tempdir())
         @test haskey(file.reaction_systems, "Chem")
@@ -44,18 +44,18 @@ using JSON3
 
     @testset "resolve_subsystem_refs! on file with nested subsystems (no refs)" begin
         inner_vars = Dict{String, ModelVariable}(
-            "x" => ModelVariable(UnknownVariable, default=1.0)
+            "x" => ModelVariable(UnknownVariable, default = 1.0)
         )
         inner = Model(inner_vars, Equation[])
 
         outer_vars = Dict{String, ModelVariable}(
-            "y" => ModelVariable(UnknownVariable, default=2.0)
+            "y" => ModelVariable(UnknownVariable, default = 2.0)
         )
-        outer = Model(outer_vars, Equation[], subsystems=Dict{String, Model}("Inner" => inner))
+        outer = Model(outer_vars, Equation[], subsystems = Dict{String, Model}("Inner" => inner))
 
         models = Dict{String, Model}("Outer" => outer)
         metadata = Metadata("nested_no_refs")
-        file = EsmFile("0.1.0", metadata, models=models)
+        file = EsmFile("0.1.0", metadata, models = models)
 
         resolve_subsystem_refs!(file, tempdir())
         @test haskey(file.models["Outer"].subsystems, "Inner")
@@ -123,7 +123,7 @@ using JSON3
             @test loaded.metadata.name == "Referenced Model"
             @test haskey(loaded.models, "SubModel")
         finally
-            rm(tmp_dir, recursive=true, force=true)
+            rm(tmp_dir, recursive = true, force = true)
         end
     end
 
@@ -157,7 +157,7 @@ using JSON3
             @test loaded isa EsmFile
             @test loaded.metadata.name == "Test File"
         finally
-            rm(tmp_dir, recursive=true, force=true)
+            rm(tmp_dir, recursive = true, force = true)
         end
     end
 
@@ -178,11 +178,13 @@ using JSON3
         tmp_dir = mktempdir()
         try
             path = joinpath(tmp_dir, "loader_only.esm")
-            write(path, """{
-                "esm": "0.1.0",
-                "metadata": {"name": "loader only", "authors": ["Test"]},
-                "data_sources": {"Met": $loader_json}
-            }""")
+            write(
+                path, """{
+                    "esm": "0.1.0",
+                    "metadata": {"name": "loader only", "authors": ["Test"]},
+                    "data_sources": {"Met": $loader_json}
+                }"""
+            )
             loaded = EarthSciAST.load_path(path)
             @test loaded isa EsmFile
             @test loaded.data_sources !== nothing
@@ -192,7 +194,7 @@ using JSON3
             # The registry entry declares no variables of its own.
             @test !hasproperty(loaded.data_sources["Met"], :variables)
         finally
-            rm(tmp_dir, recursive=true, force=true)
+            rm(tmp_dir, recursive = true, force = true)
         end
     end
 
@@ -204,18 +206,20 @@ using JSON3
         tmp_dir = mktempdir()
         try
             path = joinpath(tmp_dir, "main.esm")
-            write(path, """{
-                "esm": "0.1.0",
-                "metadata": {"name": "main", "authors": ["Test"]},
-                "models": {"Regridder": {
-                    "variables": {},
-                    "equations": [],
-                    "subsystems": {"Met": $loader_json}
-                }}
-            }""")
+            write(
+                path, """{
+                    "esm": "0.1.0",
+                    "metadata": {"name": "main", "authors": ["Test"]},
+                    "models": {"Regridder": {
+                        "variables": {},
+                        "equations": [],
+                        "subsystems": {"Met": $loader_json}
+                    }}
+                }"""
+            )
             @test_throws Exception EarthSciAST.load_path(path)
         finally
-            rm(tmp_dir, recursive=true, force=true)
+            rm(tmp_dir, recursive = true, force = true)
         end
     end
 
@@ -226,21 +230,23 @@ using JSON3
         tmp_dir = mktempdir()
         try
             path = joinpath(tmp_dir, "main.esm")
-            write(path, """{
-                "esm": "0.1.0",
-                "metadata": {"name": "main", "authors": ["Test"]},
-                "data_sources": {"Met": $loader_json},
-                "models": {"Regridder": {
-                    "variables": {
-                        "emis": {
-                            "type": "parameter", "units": "kg/m^2/s", "shape": [],
-                            "update": {"kind": "data", "source": "Met",
-                                       "from": {"file_variable": "EMIS"}}
-                        }
-                    },
-                    "equations": []
-                }}
-            }""")
+            write(
+                path, """{
+                    "esm": "0.1.0",
+                    "metadata": {"name": "main", "authors": ["Test"]},
+                    "data_sources": {"Met": $loader_json},
+                    "models": {"Regridder": {
+                        "variables": {
+                            "emis": {
+                                "type": "parameter", "units": "kg/m^2/s", "shape": [],
+                                "update": {"kind": "data", "source": "Met",
+                                           "from": {"file_variable": "EMIS"}}
+                            }
+                        },
+                        "equations": []
+                    }}
+                }"""
+            )
             loaded = EarthSciAST.load_path(path)
             m = loaded.models["Regridder"]
             @test isempty(m.subsystems)
@@ -261,7 +267,7 @@ using JSON3
             @test haskey(rt["data_sources"]["Met"], "source")
             @test !haskey(rt["data_sources"]["Met"], "variables")
         finally
-            rm(tmp_dir, recursive=true, force=true)
+            rm(tmp_dir, recursive = true, force = true)
         end
     end
 
@@ -272,24 +278,28 @@ using JSON3
         # loudly instead of resolving to a pseudo-component.
         tmp_dir = mktempdir()
         try
-            write(joinpath(tmp_dir, "loader.esm"), """{
-                "esm": "0.1.0",
-                "metadata": {"name": "loader", "authors": ["Test"]},
-                "data_sources": {"GEOSFP": $loader_json}
-            }""")
+            write(
+                joinpath(tmp_dir, "loader.esm"), """{
+                    "esm": "0.1.0",
+                    "metadata": {"name": "loader", "authors": ["Test"]},
+                    "data_sources": {"GEOSFP": $loader_json}
+                }"""
+            )
             main_path = joinpath(tmp_dir, "main.esm")
-            write(main_path, """{
-                "esm": "0.1.0",
-                "metadata": {"name": "main", "authors": ["Test"]},
-                "models": {"Regridder": {
-                    "variables": {},
-                    "equations": [],
-                    "subsystems": {"Met": {"ref": "./loader.esm"}}
-                }}
-            }""")
+            write(
+                main_path, """{
+                    "esm": "0.1.0",
+                    "metadata": {"name": "main", "authors": ["Test"]},
+                    "models": {"Regridder": {
+                        "variables": {},
+                        "equations": [],
+                        "subsystems": {"Met": {"ref": "./loader.esm"}}
+                    }}
+                }"""
+            )
             @test_throws SubsystemRefError EarthSciAST.load_path(main_path)
         finally
-            rm(tmp_dir, recursive=true, force=true)
+            rm(tmp_dir, recursive = true, force = true)
         end
     end
 
@@ -297,24 +307,28 @@ using JSON3
         tmp_dir = mktempdir()
         try
             # Two top-level loaders: ambiguous, not a single-component file.
-            write(joinpath(tmp_dir, "two_loaders.esm"), """{
-                "esm": "0.1.0",
-                "metadata": {"name": "two loaders", "authors": ["Test"]},
-                "data_sources": {"A": $loader_json, "B": $loader_json}
-            }""")
+            write(
+                joinpath(tmp_dir, "two_loaders.esm"), """{
+                    "esm": "0.1.0",
+                    "metadata": {"name": "two loaders", "authors": ["Test"]},
+                    "data_sources": {"A": $loader_json, "B": $loader_json}
+                }"""
+            )
             main_path = joinpath(tmp_dir, "main.esm")
-            write(main_path, """{
-                "esm": "0.1.0",
-                "metadata": {"name": "main", "authors": ["Test"]},
-                "models": {"Outer": {
-                    "variables": {},
-                    "equations": [],
-                    "subsystems": {"Bad": {"ref": "./two_loaders.esm"}}
-                }}
-            }""")
+            write(
+                main_path, """{
+                    "esm": "0.1.0",
+                    "metadata": {"name": "main", "authors": ["Test"]},
+                    "models": {"Outer": {
+                        "variables": {},
+                        "equations": [],
+                        "subsystems": {"Bad": {"ref": "./two_loaders.esm"}}
+                    }}
+                }"""
+            )
             @test_throws EarthSciAST.SubsystemRefError EarthSciAST.load_path(main_path)
         finally
-            rm(tmp_dir, recursive=true, force=true)
+            rm(tmp_dir, recursive = true, force = true)
         end
     end
 
@@ -323,21 +337,25 @@ using JSON3
     @testset "top-level model {ref} stub resolves on load_path()" begin
         tmp_dir = mktempdir()
         try
-            write(joinpath(tmp_dir, "child.esm"), """{
-                "esm": "0.1.0",
-                "metadata": {"name": "child", "authors": ["Test"]},
-                "models": {"Inner": {
-                    "variables": {"u": {"type": "unknown", "default": 1.0}},
-                    "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
-                                   "rhs": {"op": "*", "args": ["u", 0.0]}}]
-                }}
-            }""")
+            write(
+                joinpath(tmp_dir, "child.esm"), """{
+                    "esm": "0.1.0",
+                    "metadata": {"name": "child", "authors": ["Test"]},
+                    "models": {"Inner": {
+                        "variables": {"u": {"type": "unknown", "default": 1.0}},
+                        "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+                                       "rhs": {"op": "*", "args": ["u", 0.0]}}]
+                    }}
+                }"""
+            )
             main_path = joinpath(tmp_dir, "main.esm")
-            write(main_path, """{
-                "esm": "0.1.0",
-                "metadata": {"name": "main", "authors": ["Test"]},
-                "models": {"Comp": {"ref": "./child.esm"}}
-            }""")
+            write(
+                main_path, """{
+                    "esm": "0.1.0",
+                    "metadata": {"name": "main", "authors": ["Test"]},
+                    "models": {"Comp": {"ref": "./child.esm"}}
+                }"""
+            )
             loaded = EarthSciAST.load_path(main_path)
             # Named by the parent model key; the ref stub is replaced by the model.
             @test haskey(loaded.models, "Comp")
@@ -346,40 +364,44 @@ using JSON3
             @test haskey(m.variables, "u")
             @test length(m.equations) == 1
         finally
-            rm(tmp_dir, recursive=true, force=true)
+            rm(tmp_dir, recursive = true, force = true)
         end
     end
 
     @testset "top-level model ref merges component function_tables" begin
         tmp_dir = mktempdir()
         try
-            write(joinpath(tmp_dir, "child.esm"), """{
-                "esm": "0.4.0",
-                "metadata": {"name": "child", "authors": ["Test"]},
-                "function_tables": {"sig": {
-                    "axes": [{"name": "i", "values": [1, 2, 3, 4]}],
-                    "interpolation": "linear", "out_of_bounds": "clamp",
-                    "data": [1.0, 2.0, 3.0, 4.0]
-                }},
-                "models": {"Inner": {
-                    "variables": {"k": {"type": "unknown", "default": 0.0}},
-                    "equations": [{"lhs": {"op": "D", "args": ["k"], "wrt": "t"},
-                                   "rhs": {"op": "table_lookup", "table": "sig",
-                                           "axes": {"i": 2}, "args": []}}]
-                }}
-            }""")
+            write(
+                joinpath(tmp_dir, "child.esm"), """{
+                    "esm": "0.4.0",
+                    "metadata": {"name": "child", "authors": ["Test"]},
+                    "function_tables": {"sig": {
+                        "axes": [{"name": "i", "values": [1, 2, 3, 4]}],
+                        "interpolation": "linear", "out_of_bounds": "clamp",
+                        "data": [1.0, 2.0, 3.0, 4.0]
+                    }},
+                    "models": {"Inner": {
+                        "variables": {"k": {"type": "unknown", "default": 0.0}},
+                        "equations": [{"lhs": {"op": "D", "args": ["k"], "wrt": "t"},
+                                       "rhs": {"op": "table_lookup", "table": "sig",
+                                               "axes": {"i": 2}, "args": []}}]
+                    }}
+                }"""
+            )
             main_path = joinpath(tmp_dir, "main.esm")
-            write(main_path, """{
-                "esm": "0.4.0",
-                "metadata": {"name": "main", "authors": ["Test"]},
-                "models": {"Comp": {"ref": "./child.esm"}}
-            }""")
+            write(
+                main_path, """{
+                    "esm": "0.4.0",
+                    "metadata": {"name": "main", "authors": ["Test"]},
+                    "models": {"Comp": {"ref": "./child.esm"}}
+                }"""
+            )
             loaded = EarthSciAST.load_path(main_path)
             # The table_lookup the spliced model references resolves at the parent.
             @test loaded.function_tables !== nothing
             @test haskey(loaded.function_tables, "sig")
         finally
-            rm(tmp_dir, recursive=true, force=true)
+            rm(tmp_dir, recursive = true, force = true)
         end
     end
 
@@ -391,138 +413,162 @@ using JSON3
             # the component is spliced into the parent (a different directory).
             comp_dir = joinpath(tmp_dir, "components")
             mkpath(comp_dir)
-            write(joinpath(comp_dir, "leaf.esm"), """{
-                "esm": "0.1.0",
-                "metadata": {"name": "leaf", "authors": ["Test"]},
-                "models": {"Leaf": {
-                    "variables": {"q": {"type": "parameter", "units": "1", "default": 1.0}},
-                    "equations": []
-                }}
-            }""")
-            write(joinpath(comp_dir, "comp.esm"), """{
-                "esm": "0.1.0",
-                "metadata": {"name": "comp", "authors": ["Test"]},
-                "models": {"Inner": {
-                    "variables": {},
-                    "equations": [],
-                    "subsystems": {"Met": {"ref": "./leaf.esm"}}
-                }}
-            }""")
+            write(
+                joinpath(comp_dir, "leaf.esm"), """{
+                    "esm": "0.1.0",
+                    "metadata": {"name": "leaf", "authors": ["Test"]},
+                    "models": {"Leaf": {
+                        "variables": {"q": {"type": "parameter", "units": "1", "default": 1.0}},
+                        "equations": []
+                    }}
+                }"""
+            )
+            write(
+                joinpath(comp_dir, "comp.esm"), """{
+                    "esm": "0.1.0",
+                    "metadata": {"name": "comp", "authors": ["Test"]},
+                    "models": {"Inner": {
+                        "variables": {},
+                        "equations": [],
+                        "subsystems": {"Met": {"ref": "./leaf.esm"}}
+                    }}
+                }"""
+            )
             main_path = joinpath(tmp_dir, "main.esm")
-            write(main_path, """{
-                "esm": "0.1.0",
-                "metadata": {"name": "main", "authors": ["Test"]},
-                "models": {"Comp": {"ref": "./components/comp.esm"}}
-            }""")
+            write(
+                main_path, """{
+                    "esm": "0.1.0",
+                    "metadata": {"name": "main", "authors": ["Test"]},
+                    "models": {"Comp": {"ref": "./components/comp.esm"}}
+                }"""
+            )
             loaded = EarthSciAST.load_path(main_path)
             met = loaded.models["Comp"].subsystems["Met"]
             @test met isa Model
             @test !(met isa SubsystemRef)
             @test haskey(met.variables, "q")
         finally
-            rm(tmp_dir, recursive=true, force=true)
+            rm(tmp_dir, recursive = true, force = true)
         end
     end
 
     @testset "top-level model ref to a multi-model file errors" begin
         tmp_dir = mktempdir()
         try
-            write(joinpath(tmp_dir, "two_models.esm"), """{
-                "esm": "0.1.0",
-                "metadata": {"name": "two models", "authors": ["Test"]},
-                "models": {
-                    "A": {"variables": {"x": {"type": "unknown", "default": 1.0}}, "equations": []},
-                    "B": {"variables": {"y": {"type": "unknown", "default": 2.0}}, "equations": []}
-                }
-            }""")
+            write(
+                joinpath(tmp_dir, "two_models.esm"), """{
+                    "esm": "0.1.0",
+                    "metadata": {"name": "two models", "authors": ["Test"]},
+                    "models": {
+                        "A": {"variables": {"x": {"type": "unknown", "default": 1.0}}, "equations": []},
+                        "B": {"variables": {"y": {"type": "unknown", "default": 2.0}}, "equations": []}
+                    }
+                }"""
+            )
             main_path = joinpath(tmp_dir, "main.esm")
-            write(main_path, """{
-                "esm": "0.1.0",
-                "metadata": {"name": "main", "authors": ["Test"]},
-                "models": {"Comp": {"ref": "./two_models.esm"}}
-            }""")
+            write(
+                main_path, """{
+                    "esm": "0.1.0",
+                    "metadata": {"name": "main", "authors": ["Test"]},
+                    "models": {"Comp": {"ref": "./two_models.esm"}}
+                }"""
+            )
             @test_throws EarthSciAST.SubsystemRefError EarthSciAST.load_path(main_path)
         finally
-            rm(tmp_dir, recursive=true, force=true)
+            rm(tmp_dir, recursive = true, force = true)
         end
     end
 
     @testset "circular top-level model ref is detected" begin
         tmp_dir = mktempdir()
         try
-            write(joinpath(tmp_dir, "a.esm"), """{
-                "esm": "0.1.0",
-                "metadata": {"name": "a", "authors": ["Test"]},
-                "models": {"B": {"ref": "./b.esm"}}
-            }""")
-            write(joinpath(tmp_dir, "b.esm"), """{
-                "esm": "0.1.0",
-                "metadata": {"name": "b", "authors": ["Test"]},
-                "models": {"A": {"ref": "./a.esm"}}
-            }""")
+            write(
+                joinpath(tmp_dir, "a.esm"), """{
+                    "esm": "0.1.0",
+                    "metadata": {"name": "a", "authors": ["Test"]},
+                    "models": {"B": {"ref": "./b.esm"}}
+                }"""
+            )
+            write(
+                joinpath(tmp_dir, "b.esm"), """{
+                    "esm": "0.1.0",
+                    "metadata": {"name": "b", "authors": ["Test"]},
+                    "models": {"A": {"ref": "./a.esm"}}
+                }"""
+            )
             @test_throws EarthSciAST.SubsystemRefError EarthSciAST.load_path(joinpath(tmp_dir, "a.esm"))
         finally
-            rm(tmp_dir, recursive=true, force=true)
+            rm(tmp_dir, recursive = true, force = true)
         end
     end
 
     @testset "top-level model ref selects one model from a multi-model file" begin
         tmp_dir = mktempdir()
         try
-            write(joinpath(tmp_dir, "lib.esm"), """{
-                "esm": "0.1.0",
-                "metadata": {"name": "lib", "authors": ["Test"]},
-                "models": {
-                    "KernelA": {"variables": {"a": {"type": "unknown", "default": 1.0}}, "equations": []},
-                    "KernelB": {"variables": {"b": {"type": "unknown", "default": 2.0}}, "equations": []}
-                }
-            }""")
+            write(
+                joinpath(tmp_dir, "lib.esm"), """{
+                    "esm": "0.1.0",
+                    "metadata": {"name": "lib", "authors": ["Test"]},
+                    "models": {
+                        "KernelA": {"variables": {"a": {"type": "unknown", "default": 1.0}}, "equations": []},
+                        "KernelB": {"variables": {"b": {"type": "unknown", "default": 2.0}}, "equations": []}
+                    }
+                }"""
+            )
             main_path = joinpath(tmp_dir, "main.esm")
-            write(main_path, """{
-                "esm": "0.1.0",
-                "metadata": {"name": "main", "authors": ["Test"]},
-                "models": {"Pick": {"ref": "./lib.esm", "model": "KernelB"}}
-            }""")
+            write(
+                main_path, """{
+                    "esm": "0.1.0",
+                    "metadata": {"name": "main", "authors": ["Test"]},
+                    "models": {"Pick": {"ref": "./lib.esm", "model": "KernelB"}}
+                }"""
+            )
             loaded = EarthSciAST.load_path(main_path)
             @test haskey(loaded.models, "Pick")
             @test haskey(loaded.models["Pick"].variables, "b")
             @test !haskey(loaded.models["Pick"].variables, "a")
             # A selector naming a missing model errors.
             bad_path = joinpath(tmp_dir, "bad.esm")
-            write(bad_path, """{
-                "esm": "0.1.0",
-                "metadata": {"name": "bad", "authors": ["Test"]},
-                "models": {"Pick": {"ref": "./lib.esm", "model": "KernelZ"}}
-            }""")
+            write(
+                bad_path, """{
+                    "esm": "0.1.0",
+                    "metadata": {"name": "bad", "authors": ["Test"]},
+                    "models": {"Pick": {"ref": "./lib.esm", "model": "KernelZ"}}
+                }"""
+            )
             @test_throws EarthSciAST.SubsystemRefError EarthSciAST.load_path(bad_path)
         finally
-            rm(tmp_dir, recursive=true, force=true)
+            rm(tmp_dir, recursive = true, force = true)
         end
     end
 
     @testset "same single-model file referenced by multiple instances" begin
         tmp_dir = mktempdir()
         try
-            write(joinpath(tmp_dir, "child.esm"), """{
-                "esm": "0.1.0",
-                "metadata": {"name": "child", "authors": ["Test"]},
-                "models": {"Inner": {"variables": {"u": {"type": "unknown", "default": 1.0}}, "equations": []}}
-            }""")
+            write(
+                joinpath(tmp_dir, "child.esm"), """{
+                    "esm": "0.1.0",
+                    "metadata": {"name": "child", "authors": ["Test"]},
+                    "models": {"Inner": {"variables": {"u": {"type": "unknown", "default": 1.0}}, "equations": []}}
+                }"""
+            )
             main_path = joinpath(tmp_dir, "main.esm")
-            write(main_path, """{
-                "esm": "0.1.0",
-                "metadata": {"name": "main", "authors": ["Test"]},
-                "models": {
-                    "First":  {"ref": "./child.esm"},
-                    "Second": {"ref": "./child.esm"}
-                }
-            }""")
+            write(
+                main_path, """{
+                    "esm": "0.1.0",
+                    "metadata": {"name": "main", "authors": ["Test"]},
+                    "models": {
+                        "First":  {"ref": "./child.esm"},
+                        "Second": {"ref": "./child.esm"}
+                    }
+                }"""
+            )
             loaded = EarthSciAST.load_path(main_path)
             # Path-scoped cycle detection allows the same file in sibling slots.
             @test haskey(loaded.models["First"].variables, "u")
             @test haskey(loaded.models["Second"].variables, "u")
         finally
-            rm(tmp_dir, recursive=true, force=true)
+            rm(tmp_dir, recursive = true, force = true)
         end
     end
 
@@ -576,17 +622,20 @@ using JSON3
             try
                 write(joinpath(tmp, "child_regrid.esm"), _child)
                 p = joinpath(tmp, "parent.esm")
-                write(p, _parent(
-                    """{"NX": "NX", "NY": "NY", "NTGT": {"op": "*", "args": ["NX", "NY"]}}"""))
+                write(
+                    p, _parent(
+                        """{"NX": "NX", "NY": "NY", "NTGT": {"op": "*", "args": ["NX", "NY"]}}"""
+                    )
+                )
                 # The child's index sets merge into the importing document's
                 # registry (§4.7); their sizes come from the folded bindings.
-                f = EarthSciAST.load_path(p; metaparameters=Dict("NX" => 18, "NY" => 20))
+                f = EarthSciAST.load_path(p; metaparameters = Dict("NX" => 18, "NY" => 20))
                 @test f.index_sets["tgt_cells"].size == 360   # derived NX*NY
                 @test f.index_sets["gx"].size == 18
                 @test f.index_sets["gy"].size == 20
                 @test f.models["Host"].subsystems["Regrid"] isa EarthSciAST.Model
             finally
-                rm(tmp, recursive=true, force=true)
+                rm(tmp, recursive = true, force = true)
             end
         end
 
@@ -595,12 +644,15 @@ using JSON3
             try
                 write(joinpath(tmp, "child_regrid.esm"), _child)
                 p = joinpath(tmp, "parent.esm")
-                write(p, _parent(
-                    """{"NX": "NX", "NY": "NY", "NTGT": {"op": "*", "args": ["NX", "NY"]}}"""))
+                write(
+                    p, _parent(
+                        """{"NX": "NX", "NY": "NY", "NTGT": {"op": "*", "args": ["NX", "NY"]}}"""
+                    )
+                )
                 f = EarthSciAST.load_path(p)   # parent defaults NX=18, NY=20
                 @test f.index_sets["tgt_cells"].size == 360
             finally
-                rm(tmp, recursive=true, force=true)
+                rm(tmp, recursive = true, force = true)
             end
         end
 
@@ -615,7 +667,7 @@ using JSON3
                 @test f.index_sets["gx"].size == 5
                 @test f.index_sets["gy"].size == 6
             finally
-                rm(tmp, recursive=true, force=true)
+                rm(tmp, recursive = true, force = true)
             end
         end
 
@@ -624,12 +676,15 @@ using JSON3
             try
                 write(joinpath(tmp, "child_regrid.esm"), _child)
                 p = joinpath(tmp, "parent.esm")
-                write(p, _parent(
-                    """{"NX": "NX", "NY": "NX", "NTGT": {"op": "*", "args": ["NX", "NZZ"]}}"""))
-                @test _err(() -> EarthSciAST.load_path(p; metaparameters=Dict("NX" => 18))) ==
-                      "template_import_unknown_name"
+                write(
+                    p, _parent(
+                        """{"NX": "NX", "NY": "NX", "NTGT": {"op": "*", "args": ["NX", "NZZ"]}}"""
+                    )
+                )
+                @test _err(() -> EarthSciAST.load_path(p; metaparameters = Dict("NX" => 18))) ==
+                    "template_import_unknown_name"
             finally
-                rm(tmp, recursive=true, force=true)
+                rm(tmp, recursive = true, force = true)
             end
         end
     end
@@ -642,17 +697,19 @@ using JSON3
         # bytes, smaller system, no error.
         tmp_dir = mktempdir()
         try
-            write(joinpath(tmp_dir, "child.esm"), """{
-                "esm": "0.1.0",
-                "metadata": {"name": "child", "authors": ["Test"]},
-                "models": {"Inner": {
-                    "variables": {"u": {"type": "unknown", "default": 1.0},
-                                  "k": {"type": "parameter", "units": "s^-1",
-                                        "default": 0.5}},
-                    "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
-                                   "rhs": {"op": "*", "args": ["k", "u"]}}]
-                }}
-            }""")
+            write(
+                joinpath(tmp_dir, "child.esm"), """{
+                    "esm": "0.1.0",
+                    "metadata": {"name": "child", "authors": ["Test"]},
+                    "models": {"Inner": {
+                        "variables": {"u": {"type": "unknown", "default": 1.0},
+                                      "k": {"type": "parameter", "units": "s^-1",
+                                            "default": 0.5}},
+                        "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+                                       "rhs": {"op": "*", "args": ["k", "u"]}}]
+                    }}
+                }"""
+            )
             main_path = joinpath(tmp_dir, "main.esm")
             main_json = """{
                 "esm": "0.1.0",
@@ -667,9 +724,11 @@ using JSON3
             write(main_path, main_json)
 
             from_path = EarthSciAST.load_path(main_path)
-            from_io = EarthSciAST.load_string(IOBuffer(main_json); base_path=tmp_dir)
-            from_dict = EarthSciAST.load_document(JSON3.read(main_json, Dict{String,Any});
-                                         base_path=tmp_dir)
+            from_io = EarthSciAST.load_string(IOBuffer(main_json); base_path = tmp_dir)
+            from_dict = EarthSciAST.load_document(
+                JSON3.read(main_json, Dict{String, Any});
+                base_path = tmp_dir
+            )
 
             # The ref is linked, not left as a stub, on every entry point.
             for f in (from_path, from_io, from_dict)
@@ -684,16 +743,16 @@ using JSON3
             @test "Host.Sub.u" in collect(keys(fi.state_variables))
             for other in (fi, fd)
                 @test collect(keys(other.state_variables)) ==
-                      collect(keys(fp.state_variables))
+                    collect(keys(fp.state_variables))
                 @test collect(keys(other.parameters)) == collect(keys(fp.parameters))
                 @test length(other.equations) == length(fp.equations)
                 @test [to_ascii(e.lhs) for e in other.equations] ==
-                      [to_ascii(e.lhs) for e in fp.equations]
+                    [to_ascii(e.lhs) for e in fp.equations]
                 @test [to_ascii(e.rhs) for e in other.equations] ==
-                      [to_ascii(e.rhs) for e in fp.equations]
+                    [to_ascii(e.rhs) for e in fp.equations]
             end
         finally
-            rm(tmp_dir, recursive=true, force=true)
+            rm(tmp_dir, recursive = true, force = true)
         end
     end
 

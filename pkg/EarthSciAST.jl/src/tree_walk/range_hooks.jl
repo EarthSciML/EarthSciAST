@@ -13,8 +13,10 @@ _range_spec_now() = get(task_local_storage(), _RANGE_SPEC_KEY, nothing)
 _with_range_spec(f, spec) = task_local_storage(f, _RANGE_SPEC_KEY, spec)
 
 # The equation stream after the ODE partition, clipped to the needed cells.
-_range_restrict_parts(::Nothing, model, cls, parts, index_sets, const_arrays,
-                      param_arrays) = parts
+_range_restrict_parts(
+    ::Nothing, model, cls, parts, index_sets, const_arrays,
+    param_arrays
+) = parts
 
 # Each array state's block, rebased onto the cells the program stores.
 _range_state_boxes!(::Nothing, array_var_info) = array_var_info
@@ -63,10 +65,10 @@ _range_affine_view(::Nothing, var, clipped, var_map, array_var_info, xeq) = noth
 # build on several threads at once, hence the lock.
 struct _ProgramMemo
     lock::ReentrantLock
-    arrays::IdDict{Any,Any}             # const data → its Float64 array
-    flats::IdDict{Any,Vector{Float64}}  # a const array → its flat copy
-    inline::Dict{Any,Any}               # a shaped parameter's broadcast value
-    verdicts::Dict{Any,Any}             # an affine-tier box check → its answer
+    arrays::IdDict{Any, Any}             # const data → its Float64 array
+    flats::IdDict{Any, Vector{Float64}}  # a const array → its flat copy
+    inline::Dict{Any, Any}               # a shaped parameter's broadcast value
+    verdicts::Dict{Any, Any}             # an affine-tier box check → its answer
     # The first decomposition the program was asked about (`halo`,
     # `restrict`), and the tile over its whole domain under it, through which
     # a workspace made after that evaluates the program (`_decomposed_form`):
@@ -74,9 +76,11 @@ struct _ProgramMemo
     dec::Base.RefValue{Any}
     form::Base.RefValue{Any}
 end
-_ProgramMemo() = _ProgramMemo(ReentrantLock(), IdDict{Any,Any}(),
-                              IdDict{Any,Vector{Float64}}(), Dict{Any,Any}(),
-                              Dict{Any,Any}(), Ref{Any}(nothing), Ref{Any}(missing))
+_ProgramMemo() = _ProgramMemo(
+    ReentrantLock(), IdDict{Any, Any}(),
+    IdDict{Any, Vector{Float64}}(), Dict{Any, Any}(),
+    Dict{Any, Any}(), Ref{Any}(nothing), Ref{Any}(missing)
+)
 
 # The memo this build reads (`nothing` for none), and whether it is the
 # program's own build, which records every answer.
@@ -84,8 +88,10 @@ _range_memo(::Nothing) = nothing
 _range_memo_records(::Nothing) = false
 
 # `memo.<table>[key]`, else `make()`, recorded where `record`.
-function _memo_get(make, memo::Union{Nothing,_ProgramMemo}, table::Symbol, key,
-                   record::Bool)
+function _memo_get(
+        make, memo::Union{Nothing, _ProgramMemo}, table::Symbol, key,
+        record::Bool
+    )
     memo === nothing && return make()
     d = getfield(memo, table)
     got = lock(() -> get(d, key, nothing), memo.lock)
@@ -147,9 +153,9 @@ _range_fixed_ident(::Nothing, acc, i) = nothing
 # A layout answering every name the way its `L` does, which records, for each
 # slot it hands out by name, the variable that slot belongs to: the virtual
 # layout's blocks overlap past the tile's cells, so a slot alone does not say.
-struct _RangeVMap <: AbstractDict{String,Int}
+struct _RangeVMap <: AbstractDict{String, Int}
     L::StateLayout
-    names::Dict{Int,String}
+    names::Dict{Int, String}
 end
 
 function Base.get(m::_RangeVMap, key::AbstractString, default)
@@ -178,20 +184,20 @@ struct _RangeAffineView
     vm::_RangeVMap
     # Every variable's whole-domain extents, the bounds a read is checked
     # against (a read outside them is a ghost, as in the whole-domain build).
-    avi::Dict{String,Tuple{Vector{Int},Vector{Int}}}
+    avi::Dict{String, Tuple{Vector{Int}, Vector{Int}}}
     shift::Int
     real::StateLayout                 # the tile's own layout
     xeq::Any                          # the tier's cross-equation store for this view
-    done::IdDict{Any,Nothing}         # descriptor tables already moved onto `real`
+    done::IdDict{Any, Nothing}         # descriptor tables already moved onto `real`
     # Per descriptor table moved onto `real`, the cell each of its fixed slots
     # reads (`_range_real_fixed!`); one store per tile build.
-    fixed::IdDict{Any,Dict{Int,Any}}
+    fixed::IdDict{Any, Dict{Int, Any}}
 end
 
 # The virtual layout of `L` with each block spanning `whole[name]`, and its
 # shift.
 function _range_virtual_layout(L::StateLayout, whole::AbstractDict)
-    ext = Tuple{_ArrayBlock,Vector{Int},Vector{Int},Int}[]
+    ext = Tuple{_ArrayBlock, Vector{Int}, Vector{Int}, Int}[]
     lowest = 1
     for b in L.blocks
         wlo, whi = get(whole, b.name, (b.lo, b.hi))
@@ -210,11 +216,15 @@ function _range_virtual_layout(L::StateLayout, whole::AbstractDict)
         @inbounds for d in eachindex(wlo)
             span += (whi[d] - wlo[d]) * b.strides[d]
         end
-        push!(blocks, _ArrayBlock(b.name, base + shift, copy(wlo), copy(whi),
-                                  copy(b.strides), span))
+        push!(
+            blocks, _ArrayBlock(
+                b.name, base + shift, copy(wlo), copy(whi),
+                copy(b.strides), span
+            )
+        )
         top = max(top, base + shift + span - 1)
     end
-    scalars = Dict{String,Int}(k => v + shift for (k, v) in L.scalars)
+    scalars = Dict{String, Int}(k => v + shift for (k, v) in L.scalars)
     V = StateLayout(copy(L.scalar_names), scalars, blocks, copy(L.block_of), top)
     return V, shift
 end
@@ -259,8 +269,12 @@ function _range_real_repls!(view::_RangeAffineView, lane_repl, recipes)
                 # Cells laid out one by one: each is the tile's slot plus `shift`.
                 conn = (first(a.conn) - view.shift):(last(a.conn) - view.shift)
                 (first(conn) >= 1 && last(conn) <= view.real.n) ||
-                    throw(ErrorException("internal error: tile build: the slots " *
-                        "$(a.conn) of '$(rec.var_name)' are not slots of the tile's layout"))
+                    throw(
+                    ErrorException(
+                        "internal error: tile build: the slots " *
+                            "$(a.conn) of '$(rec.var_name)' are not slots of the tile's layout"
+                    )
+                )
             end
         elseif a.kind === _AK_STATE_TBL_BOX
             tbl = a.conn::Vector{Int}
@@ -272,9 +286,13 @@ function _range_real_repls!(view::_RangeAffineView, lane_repl, recipes)
                 view.done[tbl] = nothing
             end
         end
-        lane_repl[k] = _AccRepl(_AccDesc(a.kind, a.arr, conn, a.delta,
-                                         _range_var_slot(view, rec, b), a.width, a.col,
-                                         a.dim, a.s1, a.s2, a.s3, off, a.v, a.sx))
+        lane_repl[k] = _AccRepl(
+            _AccDesc(
+                a.kind, a.arr, conn, a.delta,
+                _range_var_slot(view, rec, b), a.width, a.col,
+                a.dim, a.s1, a.s2, a.s3, off, a.v, a.sx
+            )
+        )
     end
     return lane_repl
 end
@@ -306,7 +324,7 @@ function _range_real_fixed!(view::_RangeAffineView, kernels)
                 name = get(view.vm.names, a.idx, nothing)
                 name == "" && (name = nothing)
                 acc[i] = _AccStateFixed(_range_real_slot(view, name, a.idx))
-                get!(() -> Dict{Int,Any}(), view.fixed, acc)[i] = (name, a.idx)
+                get!(() -> Dict{Int, Any}(), view.fixed, acc)[i] = (name, a.idx)
             end
         end
     end
@@ -323,9 +341,9 @@ end
 # open records nothing.
 struct _WsCapture
     pgathers::Vector{Any}
-    scratch::IdDict{Any,Nothing}
+    scratch::IdDict{Any, Nothing}
 end
-_WsCapture() = _WsCapture(Any[], IdDict{Any,Nothing}())
+_WsCapture() = _WsCapture(Any[], IdDict{Any, Nothing}())
 
 const _WS_CAPTURE_KEY = :earthsci_ws_capture
 

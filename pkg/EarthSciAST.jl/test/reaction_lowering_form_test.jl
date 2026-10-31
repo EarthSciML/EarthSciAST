@@ -24,13 +24,14 @@ if !isdefined(Main, :ESM_TESTUTILS_LOADED)
 end
 
 const _REACTION_LOWERING_CORPUS_PATH = joinpath(
-    TESTUTILS_REPO_ROOT, "tests", "conformance", "reactions", "lowering_form.json")
+    TESTUTILS_REPO_ROOT, "tests", "conformance", "reactions", "lowering_form.json"
+)
 
 """JSON equality that keeps integers and non-integers apart."""
 function _lowering_same(actual, expected)::Bool
     if expected isa Real
         return actual isa Real && (actual isa Integer) == (expected isa Integer) &&
-               actual == expected
+            actual == expected
     elseif expected isa AbstractDict
         actual isa AbstractDict || return false
         Set(String.(collect(keys(actual)))) == Set(String.(collect(keys(expected)))) || return false
@@ -72,12 +73,14 @@ end
                 end
 
                 flat = flatten(file)
-                selected = Tuple{Any,Vector{EarthSciAST.Contribution},EarthSciAST.Contribution}[]
+                selected = Tuple{Any, Vector{EarthSciAST.Contribution}, EarthSciAST.Contribution}[]
                 for (eq, contributions) in zip(flat.equations, flat.equation_contributions)
-                    mine = [c for c in contributions
+                    mine = [
+                        c for c in contributions
                             if length(c.origins) == 1 &&
-                               c.origins[1].component == system_name &&
-                               c.origins[1].coupling === nothing]
+                            c.origins[1].component == system_name &&
+                            c.origins[1].coupling === nothing
+                    ]
                     isempty(mine) && continue
                     @test length(mine) == 1
                     push!(selected, (eq, contributions, mine[1]))
@@ -86,13 +89,19 @@ end
                 for ((eq, contributions, contribution), exp) in zip(selected, case["flatten"])
                     lhs = EarthSciAST.serialize_expression(eq.lhs)
                     @test _lowering_species(lhs) == exp["species"]
-                    @test _lowering_same(EarthSciAST.serialize_expression(contribution.expr),
-                                         exp["contribution"])
+                    @test _lowering_same(
+                        EarthSciAST.serialize_expression(contribution.expr),
+                        exp["contribution"]
+                    )
                     if !case["lifted"]
                         @test length(contributions) == 1
                         @test _lowering_same(EarthSciAST.serialize_expression(eq.rhs), exp["contribution"])
-                        @test _lowering_same(lhs, Dict("op" => "D",
-                            "args" => Any[exp["species"]], "wrt" => "t"))
+                        @test _lowering_same(
+                            lhs, Dict(
+                                "op" => "D",
+                                "args" => Any[exp["species"]], "wrt" => "t"
+                            )
+                        )
                     end
                 end
             end

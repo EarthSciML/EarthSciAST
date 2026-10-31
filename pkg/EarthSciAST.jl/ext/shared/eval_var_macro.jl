@@ -30,8 +30,10 @@ end
 
 Returns the first element of the vector the macro returns.
 """
-function _eval_var_macro(mod::Module, macro_sym::Symbol, call_args...;
-                         bindings=())
+function _eval_var_macro(
+        mod::Module, macro_sym::Symbol, call_args...;
+        bindings = ()
+    )
     mc = Core.Expr(:macrocall, macro_sym, LineNumberNode(0), call_args...)
     binds = [Core.Expr(:(=), name, val) for (name, val) in bindings]
     block = Core.Expr(:block, binds..., mc)

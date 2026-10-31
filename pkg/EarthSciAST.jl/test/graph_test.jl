@@ -12,21 +12,27 @@ const ESSG = EarthSciAST
 
 _graph_model() = Model(
     Dict(
-        "x" => ModelVariable(UnknownVariable, default=1.0),
-        "k" => ModelVariable(ParameterVariable, default=0.5),
+        "x" => ModelVariable(UnknownVariable, default = 1.0),
+        "k" => ModelVariable(ParameterVariable, default = 0.5),
     ),
-    [Equation(
-        OpExpr("D", ESSG.ASTExpr[VarExpr("x")], wrt="t"),
-        OpExpr("*", ESSG.ASTExpr[VarExpr("k"), VarExpr("x")]),
-    )],
+    [
+        Equation(
+            OpExpr("D", ESSG.ASTExpr[VarExpr("x")], wrt = "t"),
+            OpExpr("*", ESSG.ASTExpr[VarExpr("k"), VarExpr("x")]),
+        ),
+    ],
 )
 
 _graph_rsys() = ReactionSystem(
     [Species("NO2"), Species("O3")],
-    [Reaction("r1",
-              [ESSG.StoichiometryEntry("NO2", 1)],
-              [ESSG.StoichiometryEntry("O3", 1)],
-              VarExpr("kr"))],
+    [
+        Reaction(
+            "r1",
+            [ESSG.StoichiometryEntry("NO2", 1)],
+            [ESSG.StoichiometryEntry("O3", 1)],
+            VarExpr("kr")
+        ),
+    ],
 )
 
 @testset "Graph analysis" begin
@@ -34,7 +40,7 @@ _graph_rsys() = ReactionSystem(
 
     @testset "expression_graph handles model-only files" begin
         # reaction_systems === nothing must not throw
-        file = EsmFile("0.1.0", metadata, models=Dict("M" => _graph_model()))
+        file = EsmFile("0.1.0", metadata, models = Dict("M" => _graph_model()))
         g = expression_graph(file)
         @test any(n -> n.name == "M.x", g.nodes)
         @test any(n -> n.name == "M.k", g.nodes)
@@ -42,16 +48,18 @@ _graph_rsys() = ReactionSystem(
 
     @testset "expression_graph handles reaction-only files" begin
         # models === nothing must not throw
-        file = EsmFile("0.1.0", metadata, reaction_systems=Dict("R" => _graph_rsys()))
+        file = EsmFile("0.1.0", metadata, reaction_systems = Dict("R" => _graph_rsys()))
         g = expression_graph(file)
         @test any(n -> n.name == "R.NO2", g.nodes)
         @test any(n -> n.name == "R.O3", g.nodes)
     end
 
     @testset "variable_map coupling edge description interpolates" begin
-        file = EsmFile("0.1.0", metadata,
-                       models=Dict("M" => _graph_model(), "N" => _graph_model()),
-                       coupling=CouplingEntry[CouplingVariableMap("M.x", "N.x", "identity")])
+        file = EsmFile(
+            "0.1.0", metadata,
+            models = Dict("M" => _graph_model(), "N" => _graph_model()),
+            coupling = CouplingEntry[CouplingVariableMap("M.x", "N.x", "identity")]
+        )
         g = component_graph(file)
         @test length(g.edges) == 1
         desc = g.edges[1].data.description
@@ -67,16 +75,18 @@ _graph_rsys() = ReactionSystem(
         @test render_chemical_formula("x2") == "x2"
         # Graph rendering and display rendering agree
         @test render_chemical_formula("CO2") ==
-              ESSG.format_chemical_subscripts("CO2", :unicode)
+            ESSG.format_chemical_subscripts("CO2", :unicode)
         # 1-arg format_node_label
         @test format_node_label("CO2") == "CO₂"
         @test format_node_label("temp") == "temp"
     end
 
     @testset "to_mermaid sanitizes dotted ids and quotes labels" begin
-        file = EsmFile("0.1.0", metadata,
-                       models=Dict("M" => _graph_model()),
-                       reaction_systems=Dict("R" => _graph_rsys()))
+        file = EsmFile(
+            "0.1.0", metadata,
+            models = Dict("M" => _graph_model()),
+            reaction_systems = Dict("R" => _graph_rsys())
+        )
         g = expression_graph(file)  # node names are scoped: "M.x", "R.NO2", ...
         mmd = to_mermaid(g)
         # ids: dots replaced with underscores; labels: original names, quoted
@@ -98,7 +108,7 @@ _graph_rsys() = ReactionSystem(
         @test ESSG._mermaid_id("model.x") == "model_x"
         @test ESSG._mermaid_label("say \"hi\"") == "say #quot;hi#quot;"
 
-        file = EsmFile("0.1.0", metadata, models=Dict("M" => _graph_model()))
+        file = EsmFile("0.1.0", metadata, models = Dict("M" => _graph_model()))
         dot = to_dot(expression_graph(file))
         @test startswith(dot, "digraph ExpressionGraph {")
         @test occursin("\"M.x\"", dot)
@@ -109,9 +119,11 @@ _graph_rsys() = ReactionSystem(
     # serializer (§8 item 2); its `Graph` methods stay one minor as an alias
     # and must render byte-identical output.
     @testset "to_json_graph dispatches per graph type" begin
-        file = EsmFile("0.1.0", metadata,
-                       models=Dict("M" => _graph_model()),
-                       coupling=CouplingEntry[CouplingOperatorCompose(["M", "M"])])
+        file = EsmFile(
+            "0.1.0", metadata,
+            models = Dict("M" => _graph_model()),
+            coupling = CouplingEntry[CouplingOperatorCompose(["M", "M"])]
+        )
         cg = component_graph(file)
         eg = expression_graph(file)
 
@@ -130,7 +142,7 @@ _graph_rsys() = ReactionSystem(
     end
 
     @testset "component_graph handles reaction-only files" begin
-        file = EsmFile("0.1.0", metadata, reaction_systems=Dict("R" => _graph_rsys()))
+        file = EsmFile("0.1.0", metadata, reaction_systems = Dict("R" => _graph_rsys()))
         g = component_graph(file)
         @test length(g.nodes) == 1
         @test g.nodes[1].type == "reaction_system"
@@ -141,26 +153,39 @@ _graph_rsys() = ReactionSystem(
         # A target-free `apply_expression_template` reference survives load; its
         # BODY's free `k` is a real dependency of `y` that `free_variables` can
         # only see after the boundary expansion (`bindings` alone reach just `z`).
-        doc = Dict{String,Any}(
+        doc = Dict{String, Any}(
             "esm" => "0.9.0",
-            "metadata" => Dict{String,Any}("name" => "graph_tpl"),
-            "models" => Dict{String,Any}("M" => Dict{String,Any}(
-                "expression_templates" => Dict{String,Any}("scale" => Dict{String,Any}(
-                    "params" => Any["x"],
-                    "body" => Dict{String,Any}("op" => "*", "args" => Any["k", "x"]))),
-                "variables" => Dict{String,Any}(
-                    "k" => Dict{String,Any}("type" => "parameter", "default" => 0.5),
-                    "y" => Dict{String,Any}("type" => "unknown", "default" => 1.0),
-                    "z" => Dict{String,Any}("type" => "unknown", "default" => 2.0)),
-                "equations" => Any[
-                    Dict{String,Any}(
-                        "lhs" => Dict{String,Any}("op" => "D", "args" => Any["y"], "wrt" => "t"),
-                        "rhs" => Dict{String,Any}("op" => "apply_expression_template",
-                            "args" => Any[], "name" => "scale",
-                            "bindings" => Dict{String,Any}("x" => "z"))),
-                    Dict{String,Any}(
-                        "lhs" => Dict{String,Any}("op" => "D", "args" => Any["z"], "wrt" => "t"),
-                        "rhs" => Dict{String,Any}("op" => "-", "args" => Any["z"]))])))
+            "metadata" => Dict{String, Any}("name" => "graph_tpl"),
+            "models" => Dict{String, Any}(
+                "M" => Dict{String, Any}(
+                    "expression_templates" => Dict{String, Any}(
+                        "scale" => Dict{String, Any}(
+                            "params" => Any["x"],
+                            "body" => Dict{String, Any}("op" => "*", "args" => Any["k", "x"])
+                        )
+                    ),
+                    "variables" => Dict{String, Any}(
+                        "k" => Dict{String, Any}("type" => "parameter", "default" => 0.5),
+                        "y" => Dict{String, Any}("type" => "unknown", "default" => 1.0),
+                        "z" => Dict{String, Any}("type" => "unknown", "default" => 2.0)
+                    ),
+                    "equations" => Any[
+                        Dict{String, Any}(
+                            "lhs" => Dict{String, Any}("op" => "D", "args" => Any["y"], "wrt" => "t"),
+                            "rhs" => Dict{String, Any}(
+                                "op" => "apply_expression_template",
+                                "args" => Any[], "name" => "scale",
+                                "bindings" => Dict{String, Any}("x" => "z")
+                            )
+                        ),
+                        Dict{String, Any}(
+                            "lhs" => Dict{String, Any}("op" => "D", "args" => Any["z"], "wrt" => "t"),
+                            "rhs" => Dict{String, Any}("op" => "-", "args" => Any["z"])
+                        ),
+                    ]
+                )
+            )
+        )
         file = ESSG.load_string(IOBuffer(JSON3.write(doc)))
         @test file.component_templates !== nothing       # the reference survived load
         g = expression_graph(file)

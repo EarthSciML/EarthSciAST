@@ -260,7 +260,7 @@ refusal must not lose the diagnostic.)
   keeps the half-implemented path from drifting unnoticed.
 
 """
-const _FC_DIVERGENCES = Dict{String,Vector{String}}(
+const _FC_DIVERGENCES = Dict{String, Vector{String}}(
     "complete_coupling_types" => ["equations"],
     "edge_enumeration_area_eff" => ["equations"],
     "advection_reaction_loaded_ic_bc" => ["equations"],
@@ -286,7 +286,7 @@ _fc_compare(id, key) = !(key in _fc_skips(id))
 """A default / literal in the corpus's JSON-safe form."""
 _fc_scalar(::Nothing) = nothing
 _fc_scalar(v::Real) = v
-_fc_scalar(v::ASTExpr) = Dict{String,Any}("expr" => to_ascii(v))
+_fc_scalar(v::ASTExpr) = Dict{String, Any}("expr" => to_ascii(v))
 
 """The ordered `update.kind` tags of a variable, `[]` when it declares none."""
 _fc_update_kinds(v::ModelVariable) =
@@ -302,16 +302,16 @@ header for all three.
 """
 function _fc_variable(name::AbstractString, v::ModelVariable, role::AbstractString)
     parts = split(String(name), '.')
-    Dict{String,Any}(
+    return Dict{String, Any}(
         "name" => String(name),
         "role" => role,
         "units" => v.units,
         "default" => _fc_scalar(v.default),
         "shape" => (v.shape === nothing || isempty(v.shape)) ? nothing :
-                   String[s for s in v.shape],
+            String[s for s in v.shape],
         "update_kinds" => _fc_update_kinds(v),
         "distribution_kind" => v.distribution === nothing ? nothing : v.distribution.kind,
-        "source_system" => length(parts) > 1 ? join(parts[1:end-1], ".") : "",
+        "source_system" => length(parts) > 1 ? join(parts[1:(end - 1)], ".") : "",
     )
 end
 
@@ -324,17 +324,21 @@ as `observed_variables` ("`state_variables` is the solved-for vector, not a
 classification"), and such an entry is `observed` in both. `observed` names the
 observed map so the state map can defer to it.
 """
-_fc_variable_map(m, role; observed=nothing) =
-    [_fc_variable(k, v,
-                  (observed !== nothing && haskey(observed, k)) ? "observed" : role)
-     for (k, v) in m]
+_fc_variable_map(m, role; observed = nothing) =
+    [
+    _fc_variable(
+        k, v,
+        (observed !== nothing && haskey(observed, k)) ? "observed" : role
+    )
+        for (k, v) in m
+]
 
-_fc_event(ev::ContinuousEvent) = Dict{String,Any}(
+_fc_event(ev::ContinuousEvent) = Dict{String, Any}(
     "name" => ev.name,
     "conditions" => String[to_ascii(c) for c in ev.conditions],
     "affects" => String["$(a.lhs) = $(to_ascii(a.rhs))" for a in ev.affects],
 )
-_fc_event(ev::DiscreteEvent) = Dict{String,Any}(
+_fc_event(ev::DiscreteEvent) = Dict{String, Any}(
     "name" => ev.name,
     "conditions" => ev.trigger isa ConditionTrigger ?
         String[to_ascii(ev.trigger.expression)] : String[],
@@ -350,50 +354,72 @@ oracle's Option-A one (esm-spec §9.6.4 rule 2: identical observable behaviour).
 """
 function _fc_record(flat)
     eqsrc = isempty(flat.template_registry) ? flat : expand_flattened_refs(flat)
-    Dict{String,Any}(
+    return Dict{String, Any}(
         "system_kind" => system_kind(flat),
         "independent_variables" => String[String(iv) for iv in flat.independent_variables],
-        "state_variables" => _fc_variable_map(flat.state_variables, "state";
-                                              observed=flat.observed_variables),
+        "state_variables" => _fc_variable_map(
+            flat.state_variables, "state";
+            observed = flat.observed_variables
+        ),
         "parameters" => _fc_variable_map(flat.parameters, "parameter"),
         "observed_variables" => _fc_variable_map(flat.observed_variables, "observed"),
         "algebraic_variables" => String[k for k in keys(flat.algebraic_variables)],
         "brownian_parameters" => String[k for k in keys(flat.brownian_parameters)],
         "discrete_parameters" => String[k for k in keys(flat.discrete_parameters)],
         "equation_count" => length(flat.equations),
-        "equations" => [Dict{String,Any}("lhs" => to_ascii(eq.lhs),
-                                         "rhs" => to_ascii(eq.rhs),
-                                         "contributions" => _fc_contributions(cs))
-                        for (eq, cs) in zip(eqsrc.equations,
-                                            equation_contributions(eqsrc))],
+        "equations" => [
+            Dict{String, Any}(
+                "lhs" => to_ascii(eq.lhs),
+                "rhs" => to_ascii(eq.rhs),
+                "contributions" => _fc_contributions(cs)
+            )
+                for (eq, cs) in zip(
+                    eqsrc.equations,
+                    equation_contributions(eqsrc)
+                )
+        ],
         "continuous_events" => [_fc_event(e) for e in flat.continuous_events],
         "discrete_events" => [_fc_event(e) for e in flat.discrete_events],
         "domain" => flat.domain === nothing ? nothing :
-            Dict{String,Any}("independent_variable" => flat.domain.independent_variable,
-                             "element_type" => flat.domain.element_type,
-                             "array_type" => flat.domain.array_type),
-        "metadata" => Dict{String,Any}(
+            Dict{String, Any}(
+                "independent_variable" => flat.domain.independent_variable,
+                "element_type" => flat.domain.element_type,
+                "array_type" => flat.domain.array_type
+            ),
+        "metadata" => Dict{String, Any}(
             "source_systems" => String[s for s in flat.metadata.source_systems],
             "coupling_rules" => String[s for s in flat.metadata.coupling_rules_applied],
-            "operator_applies" => String[replace(r, "operator_apply:" => "")
-                                         for r in flat.metadata.opaque_coupling_refs
-                                         if startswith(r, "operator_apply:")],
-            "callbacks" => String[replace(r, "callback:" => "")
-                                  for r in flat.metadata.opaque_coupling_refs
-                                  if startswith(r, "callback:")],
+            "operator_applies" => String[
+                replace(r, "operator_apply:" => "")
+                    for r in flat.metadata.opaque_coupling_refs
+                    if startswith(r, "operator_apply:")
+            ],
+            "callbacks" => String[
+                replace(r, "callback:" => "")
+                    for r in flat.metadata.opaque_coupling_refs
+                    if startswith(r, "callback:")
+            ],
         ),
         "index_sets" => String[k for k in keys(flat.index_sets)],
         "function_tables" => String[k for k in keys(flat.function_tables)],
         "template_registry" => String[String(k) for k in keys(flat.template_registry)],
-        "field_ics" => [Dict{String,Any}("state" => st, "expr" => to_ascii(ex))
-                        for (st, ex) in flat.field_ics],
-        "loader_fields" => [Dict{String,Any}("name" => lf.name, "owner" => lf.owner,
-                                             "source" => lf.subkey,
-                                             "file_variable" => lf.var,
-                                             "cadence" => lf.cadence)
-                            for lf in flat.loader_fields],
-        "lifted_shapes" => Dict{String,Any}(k => collect(v)
-                                            for (k, v) in flat.lifted_shapes),
+        "field_ics" => [
+            Dict{String, Any}("state" => st, "expr" => to_ascii(ex))
+                for (st, ex) in flat.field_ics
+        ],
+        "loader_fields" => [
+            Dict{String, Any}(
+                "name" => lf.name, "owner" => lf.owner,
+                "source" => lf.subkey,
+                "file_variable" => lf.var,
+                "cadence" => lf.cadence
+            )
+                for lf in flat.loader_fields
+        ],
+        "lifted_shapes" => Dict{String, Any}(
+            k => collect(v)
+                for (k, v) in flat.lifted_shapes
+        ),
         # Not a corpus field: which states the lift promoted, so the comparison
         # can skip exactly those states' `shape` (see the header).
         "_lifted" => Set{String}(keys(flat.lifted_shapes)),
@@ -402,18 +428,22 @@ end
 
 """One origin in the corpus's shape: `{"component": path}` or `{"coupling": k}`."""
 _fc_origin(o::TermOrigin) = o.component === nothing ?
-    Dict{String,Any}("coupling" => o.coupling) :
-    Dict{String,Any}("component" => o.component)
+    Dict{String, Any}("coupling" => o.coupling) :
+    Dict{String, Any}("component" => o.component)
 
 """An equation's per-term provenance in the corpus's shape (CONFORMANCE_SPEC §5.48)."""
-_fc_contributions(cs) = [Dict{String,Any}("rhs" => to_ascii(c.expr),
-                                          "origins" => Any[_fc_origin(o) for o in c.origins])
-                         for c in cs]
+_fc_contributions(cs) = [
+    Dict{String, Any}(
+        "rhs" => to_ascii(c.expr),
+        "origins" => Any[_fc_origin(o) for o in c.origins]
+    )
+        for c in cs
+]
 
 # ── comparison helpers ──────────────────────────────────────────────────────
 
 """A corpus JSON value as plain Julia (`JSON3.Object`/`Array` → Dict/Vector)."""
-_fc_plain(v::JSON3.Object) = Dict{String,Any}(String(k) => _fc_plain(x) for (k, x) in pairs(v))
+_fc_plain(v::JSON3.Object) = Dict{String, Any}(String(k) => _fc_plain(x) for (k, x) in pairs(v))
 _fc_plain(v::JSON3.Array) = Any[_fc_plain(x) for x in v]
 _fc_plain(v) = v
 
@@ -434,12 +464,12 @@ function _fc_check_variable(id, key, i, exp, act, lifted)
         @test (id, key, i, f, act[f]) == (id, key, i, f, exp[f])
     end
     @test (id, key, i, "role", _fc_role(act["role"])) ==
-          (id, key, i, "role", _fc_role(exp["role"]))
+        (id, key, i, "role", _fc_role(exp["role"]))
     @test (id, key, i, "default", _fc_eq(act["default"], exp["default"])) ==
-          (id, key, i, "default", true)
+        (id, key, i, "default", true)
     # A lifted state's shape is the post-lift grid in Julia, the declared shape in
     # the oracle; `lifted_shapes` is what pins the grid, and it is compared exactly.
-    act["name"] in lifted ||
+    return act["name"] in lifted ||
         @test (id, key, i, "shape", act["shape"]) == (id, key, i, "shape", exp["shape"])
 end
 
@@ -447,11 +477,12 @@ function _fc_check_variable_list(id, key, exp, act, lifted)
     # NAMES IN ORDER first: this is the document-order contract, and reporting it
     # as one comparison makes a reordering readable instead of N field failures.
     @test (id, key, [v["name"] for v in act]) ==
-          (id, key, [v["name"] for v in exp])
+        (id, key, [v["name"] for v in exp])
     length(exp) == length(act) || return
     for (i, (e, a)) in enumerate(zip(exp, act))
         _fc_check_variable(id, key, i, e, a, lifted)
     end
+    return
 end
 
 # ── the corpus ──────────────────────────────────────────────────────────────
@@ -473,27 +504,33 @@ end
         lifted = act["_lifted"]
 
         @test (id, "system_kind", act["system_kind"]) ==
-              (id, "system_kind", exp["system_kind"])
+            (id, "system_kind", exp["system_kind"])
         if _fc_compare(id, "independent_variables")
             @test (id, "independent_variables", act["independent_variables"]) ==
-                  (id, "independent_variables", exp["independent_variables"])
+                (id, "independent_variables", exp["independent_variables"])
         else
             # The one skipped case (`operator_compose_translate`) diverges by an
             # axis the oracle MISSES, not by order — so containment is still a
             # real check: every axis the oracle found must be here too, and the
             # extra one is pinned locally below.
-            @test (id, "independent_variables (⊇)",
-                   String[x for x in exp["independent_variables"]
-                          if !(String(x) in act["independent_variables"])]) ==
-                  (id, "independent_variables (⊇)", String[])
+            @test (
+                id, "independent_variables (⊇)",
+                String[
+                    x for x in exp["independent_variables"]
+                        if !(String(x) in act["independent_variables"])
+                ],
+            ) ==
+                (id, "independent_variables (⊇)", String[])
         end
 
         for key in ("state_variables", "parameters", "observed_variables")
             _fc_compare(id, key) || continue
             _fc_check_variable_list(id, key, exp[key], act[key], lifted)
         end
-        for key in ("algebraic_variables", "brownian_parameters", "discrete_parameters",
-                    "index_sets", "function_tables", "template_registry")
+        for key in (
+                "algebraic_variables", "brownian_parameters", "discrete_parameters",
+                "index_sets", "function_tables", "template_registry",
+            )
             _fc_compare(id, key) || continue
             @test (id, key, act[key]) == (id, key, exp[key])
         end
@@ -503,33 +540,47 @@ end
         # the invariant a "move the wiener parameter out" implementation breaks —
         # and the corpus alone cannot catch a binding that drops both sides.
         params = Set(v["name"] for v in act["parameters"])
-        @test (id, "brownian ⊆ parameters",
-               issubset(Set(act["brownian_parameters"]), params)) ==
-              (id, "brownian ⊆ parameters", true)
-        @test (id, "discrete ⊆ parameters",
-               issubset(Set(act["discrete_parameters"]), params)) ==
-              (id, "discrete ⊆ parameters", true)
-        @test (id, "brownian ∩ discrete",
-               isempty(intersect(Set(act["brownian_parameters"]),
-                                 Set(act["discrete_parameters"])))) ==
-              (id, "brownian ∩ discrete", true)
+        @test (
+            id, "brownian ⊆ parameters",
+            issubset(Set(act["brownian_parameters"]), params),
+        ) ==
+            (id, "brownian ⊆ parameters", true)
+        @test (
+            id, "discrete ⊆ parameters",
+            issubset(Set(act["discrete_parameters"]), params),
+        ) ==
+            (id, "discrete ⊆ parameters", true)
+        @test (
+            id, "brownian ∩ discrete",
+            isempty(
+                intersect(
+                    Set(act["brownian_parameters"]),
+                    Set(act["discrete_parameters"])
+                )
+            ),
+        ) ==
+            (id, "brownian ∩ discrete", true)
         # `algebraic_variables` is a SUBSET of `state_variables`, not a sibling:
         # a DAE solves for its algebraic unknowns, so they occupy `u` slots.
         unknowns = Set(v["name"] for v in act["state_variables"])
         union!(unknowns, Set(v["name"] for v in act["observed_variables"]))
-        @test (id, "algebraic ⊆ unknowns",
-               issubset(Set(act["algebraic_variables"]), unknowns)) ==
-              (id, "algebraic ⊆ unknowns", true)
+        @test (
+            id, "algebraic ⊆ unknowns",
+            issubset(Set(act["algebraic_variables"]), unknowns),
+        ) ==
+            (id, "algebraic ⊆ unknowns", true)
         # §6.3.1 row 1: a non-empty brownian bucket IS what makes it an SDE.
-        @test (id, "sde iff brownian",
-               isempty(act["brownian_parameters"]) || act["system_kind"] == "sde") ==
-              (id, "sde iff brownian", true)
+        @test (
+            id, "sde iff brownian",
+            isempty(act["brownian_parameters"]) || act["system_kind"] == "sde",
+        ) ==
+            (id, "sde iff brownian", true)
 
         # Equations: the COUNT (which §4.7.5 step 4's `field_ics` removal makes
         # comparable across bindings) and every rendering, in order.
         if _fc_compare(id, "equation_count")
             @test (id, "equation_count", act["equation_count"]) ==
-                  (id, "equation_count", exp["equation_count"])
+                (id, "equation_count", exp["equation_count"])
         end
         if _fc_compare(id, "equations") && length(act["equations"]) == length(exp["equations"])
             for (i, (e, a)) in enumerate(zip(exp["equations"], act["equations"]))
@@ -538,7 +589,7 @@ end
                 # Per-term provenance (CONFORMANCE_SPEC §5.48): the whole list,
                 # expressions and origins, exactly and in order.
                 @test (id, "eq", i, "contributions", a["contributions"]) ==
-                      (id, "eq", i, "contributions", e["contributions"])
+                    (id, "eq", i, "contributions", e["contributions"])
             end
         end
         # The ORIGINS are compared for every case, including one whose equation
@@ -553,24 +604,30 @@ end
         if length(act["equations"]) == length(exp["equations"])
             for (i, (e, a)) in enumerate(zip(exp["equations"], act["equations"]))
                 @test (id, "eq", i, "origins", _origins(a)) ==
-                      (id, "eq", i, "origins", _origins(e))
+                    (id, "eq", i, "origins", _origins(e))
             end
         else
-            by_lhs(eqs) = (d = Dict{String,Vector{Any}}();
-                           for eq in eqs push!(get!(d, String(eq["lhs"]), Any[]), _origins(eq)) end;
-                           d)
+            by_lhs(eqs) = (
+                d = Dict{String, Vector{Any}}();
+                for eq in eqs
+                    push!(get!(d, String(eq["lhs"]), Any[]), _origins(eq))
+                end;
+                d
+            )
             a_by, e_by = by_lhs(act["equations"]), by_lhs(exp["equations"])
             @test (id, "origins: equation LHSs", sort!(collect(keys(a_by)))) ==
-                  (id, "origins: equation LHSs", sort!(collect(keys(e_by))))
+                (id, "origins: equation LHSs", sort!(collect(keys(e_by))))
             for lhs in sort!(collect(intersect(keys(a_by), keys(e_by))))
                 @test (id, "lhs", lhs, "origins", a_by[lhs]) ==
-                      (id, "lhs", lhs, "origins", e_by[lhs])
+                    (id, "lhs", lhs, "origins", e_by[lhs])
             end
         end
         # No `ic` equation may survive in `equations` (§4.7.5 step 4, normative).
-        @test (id, "no ic left in equations",
-               !any(startswith(e["lhs"], "ic(") for e in act["equations"])) ==
-              (id, "no ic left in equations", true)
+        @test (
+            id, "no ic left in equations",
+            !any(startswith(e["lhs"], "ic(") for e in act["equations"]),
+        ) ==
+            (id, "no ic left in equations", true)
 
         for key in ("continuous_events", "discrete_events")
             _fc_compare(id, key) || continue
@@ -580,30 +637,36 @@ end
         # `field_ics` — the entries removed from `equations`, in order.
         @test (id, "field_ics", act["field_ics"]) == (id, "field_ics", exp["field_ics"])
         @test (id, "loader_fields", act["loader_fields"]) ==
-              (id, "loader_fields", exp["loader_fields"])
+            (id, "loader_fields", exp["loader_fields"])
         # The corpus records `lifted_shapes` sorted by key, so this one map is
         # compared as a sorted association list rather than positionally.
-        @test (id, "lifted_shapes", sort!(collect(pairs(act["lifted_shapes"])), by=first)) ==
-              (id, "lifted_shapes", sort!(collect(pairs(exp["lifted_shapes"])), by=first))
+        @test (id, "lifted_shapes", sort!(collect(pairs(act["lifted_shapes"])), by = first)) ==
+            (id, "lifted_shapes", sort!(collect(pairs(exp["lifted_shapes"])), by = first))
 
         # Domain: presence is pinned; Julia's materialized `"t"` default is
         # accepted where the oracle preserved the field's absence (see header).
         @test (id, "domain present", act["domain"] === nothing) ==
-              (id, "domain present", exp["domain"] === nothing)
+            (id, "domain present", exp["domain"] === nothing)
         if act["domain"] !== nothing && exp["domain"] !== nothing
             want = exp["domain"]["independent_variable"]
-            @test (id, "domain iv", want === nothing ||
-                   want == act["domain"]["independent_variable"]) ==
-                  (id, "domain iv", true)
+            @test (
+                id, "domain iv", want === nothing ||
+                    want == act["domain"]["independent_variable"],
+            ) ==
+                (id, "domain iv", true)
         end
 
         # Metadata: `source_systems` IS document order and is pinned exactly.
         @test (id, "source_systems", act["metadata"]["source_systems"]) ==
-              (id, "source_systems", exp["metadata"]["source_systems"])
-        @test (id, "coupling_rule kinds",
-               [_fc_rule_kind(r) for r in act["metadata"]["coupling_rules"]]) ==
-              (id, "coupling_rule kinds",
-               [_fc_rule_kind(r) for r in exp["metadata"]["coupling_rules"]])
+            (id, "source_systems", exp["metadata"]["source_systems"])
+        @test (
+            id, "coupling_rule kinds",
+            [_fc_rule_kind(r) for r in act["metadata"]["coupling_rules"]],
+        ) ==
+            (
+            id, "coupling_rule kinds",
+            [_fc_rule_kind(r) for r in exp["metadata"]["coupling_rules"]],
+        )
         for key in ("operator_applies", "callbacks")
             @test (id, key, act["metadata"][key]) == (id, key, exp["metadata"][key])
         end
@@ -620,7 +683,7 @@ end
         # sorts, so the corpus records [t, lat, lev, lon] and cannot pin this.
         flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "valid", "full_coupled.esm")))
         @test String[String(iv) for iv in flat.independent_variables] ==
-              ["t", "lon", "lat", "lev"]
+            ["t", "lon", "lat", "lev"]
     end
 
     @testset "a reaction system's parameter keeps its `update` through flatten" begin
@@ -634,16 +697,26 @@ end
         # parameter to a data source, so dropping it does not lose annotation —
         # it turns a data-driven parameter into a constant. §6.3.1 then makes
         # such a parameter DISCRETE.
-        for (fixture, param) in (("minimal_chemistry", "SimpleOzone.T"),
-                                 ("full_coupled", "AtmosphericChemistry.T"),
-                                 ("metadata_inheritance_coupled",
-                                  "AtmosphericChemistry.T"))
-            flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "valid",
-                                              "$(fixture).esm")))
+        for (fixture, param) in (
+                ("minimal_chemistry", "SimpleOzone.T"),
+                ("full_coupled", "AtmosphericChemistry.T"),
+                (
+                    "metadata_inheritance_coupled",
+                    "AtmosphericChemistry.T",
+                ),
+            )
+            flat = flatten(
+                load_path(
+                    joinpath(
+                        _FLATTEN_TESTS_DIR, "valid",
+                        "$(fixture).esm"
+                    )
+                )
+            )
             v = flat.parameters[param]
             @test (fixture, param, _fc_update_kinds(v)) == (fixture, param, ["data"])
             @test (fixture, param, param in keys(flat.discrete_parameters)) ==
-                  (fixture, param, true)
+                (fixture, param, true)
             # ... and the sibling parameters that declare `update: null` stay
             # empty, which is what rules out the update being misassigned across
             # the parameter list.
@@ -656,9 +729,11 @@ end
             # `_collect_loader_fields!` walks models only, so this parameter is
             # classified discrete but nothing fetches it. Pinned so the gap is
             # visible here rather than only as a runtime surprise.
-            @test (fixture, "loader_fields",
-                   param in String[lf.name for lf in flat.loader_fields]) ==
-                  (fixture, "loader_fields", false)
+            @test (
+                fixture, "loader_fields",
+                param in String[lf.name for lf in flat.loader_fields],
+            ) ==
+                (fixture, "loader_fields", false)
         end
     end
 
@@ -709,21 +784,25 @@ end
         # Position: OH FIRST, in `models` order ahead of the reaction system —
         # agreeing with the corpus, where Julia used to have it last.
         @test String[String(split(e, " = ")[1]) for e in eqs] ==
-              ["D(AtmosphericChemistry.OH)/Dt", "D(AtmosphericChemistry.O3)/Dt",
-               "D(AtmosphericChemistry.NO)/Dt", "D(AtmosphericChemistry.NO2)/Dt"]
+            [
+            "D(AtmosphericChemistry.OH)/Dt", "D(AtmosphericChemistry.O3)/Dt",
+            "D(AtmosphericChemistry.NO)/Dt", "D(AtmosphericChemistry.NO2)/Dt",
+        ]
         # Transport alone, with no leading `0 +`.
         @test eqs[1] == "D(AtmosphericChemistry.OH)/Dt = " *
-              "(-Transport.u) * grad(AtmosphericChemistry.OH) + " *
-              "(-Transport.v) * grad(AtmosphericChemistry.OH) + " *
-              "(-Transport.w) * grad(AtmosphericChemistry.OH) + " *
-              "Transport.K_h * laplacian(AtmosphericChemistry.OH) + " *
-              "Transport.K_v * laplacian(AtmosphericChemistry.OH)"
+            "(-Transport.u) * grad(AtmosphericChemistry.OH) + " *
+            "(-Transport.v) * grad(AtmosphericChemistry.OH) + " *
+            "(-Transport.w) * grad(AtmosphericChemistry.OH) + " *
+            "Transport.K_h * laplacian(AtmosphericChemistry.OH) + " *
+            "Transport.K_v * laplacian(AtmosphericChemistry.OH)"
         # ... and every equation is byte-identical to what the shared corpus
         # records. The `-1 * rate` vs `-rate` rendering that used to separate O3
         # and NO is gone: esm-libraries-spec §4.6.2 writes a loss of 1 as
         # `-1 * rate` in every binding.
-        corpus_case = first(c for c in JSON3.read(read(_FLATTEN_CORPUS_PATH, String)).cases
-                            if String(c.id) == "full_coupled")
+        corpus_case = first(
+            c for c in JSON3.read(read(_FLATTEN_CORPUS_PATH, String)).cases
+                if String(c.id) == "full_coupled"
+        )
         corpus_eqs = String["$(e.lhs) = $(e.rhs)" for e in corpus_case.equations]
         @test eqs == corpus_eqs
     end
@@ -733,12 +812,18 @@ end
         # itself — a `_var` template cloned once per state of A and summed onto
         # A's own tendency — is pinned here in full as well as against the
         # corpus. A loss of 1 renders `-1 * rate` (esm-libraries-spec §4.6.2).
-        flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "valid",
-                                          "minimal_chemistry.esm")))
+        flat = flatten(
+            load_path(
+                joinpath(
+                    _FLATTEN_TESTS_DIR, "valid",
+                    "minimal_chemistry.esm"
+                )
+            )
+        )
         chem = "-1 * 1.8e-12 * exp(-1370 / SimpleOzone.T) * SimpleOzone.M * " *
-               "SimpleOzone.NO * SimpleOzone.O3 + SimpleOzone.jNO2 * SimpleOzone.NO2"
+            "SimpleOzone.NO * SimpleOzone.O3 + SimpleOzone.jNO2 * SimpleOzone.NO2"
         adv(v) = " + (-Advection.u_wind) * grad(SimpleOzone.$(v))" *
-                 " + (-Advection.v_wind) * grad(SimpleOzone.$(v))"
+            " + (-Advection.v_wind) * grad(SimpleOzone.$(v))"
         @test String[to_ascii(eq) for eq in flat.equations] == [
             "D(SimpleOzone.O3)/Dt = " * chem * adv("O3"),
             "D(SimpleOzone.NO)/Dt = " * chem * adv("NO"),
@@ -747,13 +832,19 @@ end
                 "SimpleOzone.jNO2 * SimpleOzone.NO2" * adv("NO2"),
         ]
 
-        flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "valid",
-                                          "metadata_inheritance_coupled.esm")))
+        flat = flatten(
+            load_path(
+                joinpath(
+                    _FLATTEN_TESTS_DIR, "valid",
+                    "metadata_inheritance_coupled.esm"
+                )
+            )
+        )
         chem2 = "-1 * 1.8e-12 * exp(-1370 / AtmosphericChemistry.T) * " *
-                "AtmosphericChemistry.NO * AtmosphericChemistry.O3 + " *
-                "AtmosphericChemistry.jNO2 * AtmosphericChemistry.NO2"
+            "AtmosphericChemistry.NO * AtmosphericChemistry.O3 + " *
+            "AtmosphericChemistry.jNO2 * AtmosphericChemistry.NO2"
         adv2(v) = " + (-AdvectionTransport.u_wind) * grad(AtmosphericChemistry.$(v))" *
-                  " + (-AdvectionTransport.v_wind) * grad(AtmosphericChemistry.$(v))"
+            " + (-AdvectionTransport.v_wind) * grad(AtmosphericChemistry.$(v))"
         @test String[to_ascii(eq) for eq in flat.equations] == [
             "D(AtmosphericChemistry.O3)/Dt = " * chem2 * adv2("O3"),
             "D(AtmosphericChemistry.NO)/Dt = " * chem2 * adv2("NO"),
@@ -771,10 +862,16 @@ end
         # case exists to pin — a bare `translate` map that finally MATCHES, the
         # merge under A's spelling, and the prune of the two merged-away
         # declarations — is asserted here in full instead.
-        flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "coupling",
-                                          "operator_compose_resolution_fixtures.esm")))
+        flat = flatten(
+            load_path(
+                joinpath(
+                    _FLATTEN_TESTS_DIR, "coupling",
+                    "operator_compose_resolution_fixtures.esm"
+                )
+            )
+        )
         diff(v) = " + DiffusionSystem.kh * laplacian(ChemistrySystem.$(v))" *
-                  " + DiffusionSystem.kv * D(ChemistrySystem.$(v))/Dz"
+            " + DiffusionSystem.kv * D(ChemistrySystem.$(v))/Dz"
         @test String[to_ascii(eq) for eq in flat.equations] == [
             "D(ChemistrySystem.O3)/Dt = -1 * ChemistrySystem.k1 * " *
                 "ChemistrySystem.O3" * diff("O3"),
@@ -794,12 +891,14 @@ end
         # The prune: `DiffusionSystem.ozone_conc` / `.nitrogen_oxide` were merged
         # away and must not survive as unconstrained unknowns.
         @test collect(keys(flat.state_variables)) ==
-              ["ChemistrySystem.O3", "ChemistrySystem.NO", "ChemistrySystem.NO2",
-               "AdvectionSystem.u"]
+            [
+            "ChemistrySystem.O3", "ChemistrySystem.NO", "ChemistrySystem.NO2",
+            "AdvectionSystem.u",
+        ]
         @test isempty(flat.algebraic_variables)
         # §4.7.6: `D` with `wrt != "t"` names a spatial axis too, so `z` is in.
         @test String[String(v) for v in flat.independent_variables] ==
-              ["t", "z", "x", "y"]
+            ["t", "z", "x", "y"]
     end
 
     @testset "operator_compose: a translation match rewrites B's dependent var" begin
@@ -828,7 +927,7 @@ end
         """
         flat = flatten(load_string(doc))
         @test String[to_ascii(eq) for eq in flat.equations] ==
-              ["D(A.x)/Dt = -A.x + T.w * A.x"]
+            ["D(A.x)/Dt = -A.x + T.w * A.x"]
         # The rewrite is the point: `T.z` must not survive in the merged RHS.
         @test !occursin("T.z", to_ascii(flat.equations[1]))
         # ... and the PRUNE is its other half (§4.7.1 step 4, esm-spec §10.2):
@@ -870,8 +969,8 @@ end
         """
         render(f) = String[to_ascii(eq) for eq in f.equations]
         scoped = flatten(load_string(doc("A.x", "T.z")))
-        bare   = flatten(load_string(doc("x", "z")))
-        mixed  = flatten(load_string(doc("x", "T.z")))
+        bare = flatten(load_string(doc("x", "z")))
+        mixed = flatten(load_string(doc("x", "T.z")))
         @test render(bare) == render(scoped)
         @test render(mixed) == render(scoped)
         @test render(bare) == ["D(A.x)/Dt = -A.x + T.w * A.x"]
@@ -907,7 +1006,7 @@ end
         """
         flat = flatten(load_string(doc))
         @test String[to_ascii(eq) for eq in flat.equations] ==
-              ["D(A.x)/Dt = -A.x + T.w * A.x", "C.flux = C.vd * A.x"]
+            ["D(A.x)/Dt = -A.x + T.w * A.x", "C.flux = C.vd * A.x"]
         @test collect(keys(flat.state_variables)) == ["A.x"]
         @test collect(keys(flat.observed_variables)) == ["C.flux"]
         # No `T.z` anywhere: not as a declaration, not as a reference.
@@ -922,14 +1021,22 @@ end
         # Consulting the map on the POST-expansion dependent variable made all
         # three collapse onto one equation and left `NO`/`NO2` as unconstrained
         # algebraic unknowns; the corpus records four separate equations.
-        flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "scoping",
-                                          "bare_reference_resolution.esm")))
+        flat = flatten(
+            load_path(
+                joinpath(
+                    _FLATTEN_TESTS_DIR, "scoping",
+                    "bare_reference_resolution.esm"
+                )
+            )
+        )
         @test length(flat.equations) == 4
         @test isempty(flat.algebraic_variables)
         @test String[String(split(to_ascii(eq), " = ")[1]) for eq in flat.equations] ==
-              ["D(SimpleChemistry.O3)/Dt", "D(SimpleChemistry.NO)/Dt",
-               "D(SimpleChemistry.NO2)/Dt",
-               "D(SimpleChemistry.Photochemistry.NO2_photo)/Dt"]
+            [
+            "D(SimpleChemistry.O3)/Dt", "D(SimpleChemistry.NO)/Dt",
+            "D(SimpleChemistry.NO2)/Dt",
+            "D(SimpleChemistry.Photochemistry.NO2_photo)/Dt",
+        ]
     end
 
     @testset "operator_compose: CHAINED entries over one state keep merging" begin
@@ -950,8 +1057,14 @@ end
         # the SAME file. What stays here is the rendered answer: the corpus
         # records it too, but reading it as prose is what makes a regression
         # legible.
-        flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "coupling",
-                                          "chained_operator_compose.esm")))
+        flat = flatten(
+            load_path(
+                joinpath(
+                    _FLATTEN_TESTS_DIR, "coupling",
+                    "chained_operator_compose.esm"
+                )
+            )
+        )
         # ONE equation per species, every chained contribution in its RHS. The
         # POSITIONS are the merge trail: each merge keeps the surviving A
         # equation's document slot, so NO's chain ends at the sink's slot and
@@ -1001,31 +1114,33 @@ end
         """
         compose = """{"type": "operator_compose", "systems": ["Chem", "Adv"]}"""
         couple = """{"type": "couple", "systems": ["Chem", "Scale"],
-                     "connector": {"equations": [
-                       {"from": "Scale.factor", "to": "Chem.O3",
-                        "transform": "multiplicative", "expression": "Scale.factor"}]}}"""
+        "connector": {"equations": [
+          {"from": "Scale.factor", "to": "Chem.O3",
+           "transform": "multiplicative", "expression": "Scale.factor"}]}}"""
         varmap = """{"type": "variable_map", "from": "Scale.factor", "to": "Chem.loss",
-                     "transform": "identity"}"""
+        "transform": "identity"}"""
 
         declared = flatten(load_string(doc([couple, varmap, compose])))
         permuted = flatten(load_string(doc([compose, couple, varmap])))
 
         # Same flattened equations, whichever order the author typed them in.
         @test String[to_ascii(eq) for eq in declared.equations] ==
-              String[to_ascii(eq) for eq in permuted.equations]
+            String[to_ascii(eq) for eq in permuted.equations]
         # ... and it is the BY-KIND answer: `operator_compose` runs first, so
         # advection is summed onto the tendency and only then is the whole sum
         # scaled by the multiplicative connector. Declaration order would have
         # scaled the bare reaction term and added advection outside the product.
         @test length(declared.equations) == 1
         @test to_ascii(declared.equations[1]) ==
-              "D(Chem.O3)/Dt = ((-Scale.factor) * Chem.O3 + " *
-              "(-Adv.wind) * grad(Chem.O3)) * Scale.factor"
+            "D(Chem.O3)/Dt = ((-Scale.factor) * Chem.O3 + " *
+            "(-Adv.wind) * grad(Chem.O3)) * Scale.factor"
 
         # METADATA still reports DECLARATION order — application order and
         # reporting order are separate, which is why these two disagree.
-        kinds(f) = String[String(first(split(r, '('))) for r in
-                          f.metadata.coupling_rules_applied]
+        kinds(f) = String[
+            String(first(split(r, '('))) for r in
+                f.metadata.coupling_rules_applied
+        ]
         @test kinds(declared) == ["couple", "variable_map", "operator_compose"]
         @test kinds(permuted) == ["operator_compose", "couple", "variable_map"]
     end
@@ -1035,16 +1150,24 @@ end
         # is declared on the SUBSYSTEM `SimpleChemistry.Photochemistry`; the
         # oracle only sees hoisted top-level events and records none, so the
         # corpus cannot pin this and `discrete_events` is skipped for the case.
-        flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "scoping",
-                                          "bare_reference_resolution.esm")))
+        flat = flatten(
+            load_path(
+                joinpath(
+                    _FLATTEN_TESTS_DIR, "scoping",
+                    "bare_reference_resolution.esm"
+                )
+            )
+        )
         @test length(flat.discrete_events) == 1
         ev = flat.discrete_events[1]
         @test ev.name == "daily_reset"
         @test String[a.lhs for a in ev.affects] ==
-              ["SimpleChemistry.Photochemistry.photolysis_rate"]
+            ["SimpleChemistry.Photochemistry.photolysis_rate"]
         @test ev.trigger isa EarthSciAST.ConditionTrigger
-        @test occursin("SimpleChemistry.Photochemistry.solar_zenith",
-                       to_ascii(ev.trigger.expression))
+        @test occursin(
+            "SimpleChemistry.Photochemistry.solar_zenith",
+            to_ascii(ev.trigger.expression)
+        )
     end
 
     @testset "operator_compose: the placeholder ranges over STATES only" begin
@@ -1053,10 +1176,18 @@ end
         # unknown, `Chemistry.deposition_flux`, defined algebraically. Expanding
         # over "anything with a defining equation" instead gave it an advection
         # term — a transported diagnostic.
-        flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "coupling",
-                                          "advanced_coupling.esm")))
-        @test any(to_ascii(eq) == "Chemistry.deposition_flux = Chemistry.O3 * 1.0e-3"
-                  for eq in flat.equations)
+        flat = flatten(
+            load_path(
+                joinpath(
+                    _FLATTEN_TESTS_DIR, "coupling",
+                    "advanced_coupling.esm"
+                )
+            )
+        )
+        @test any(
+            to_ascii(eq) == "Chemistry.deposition_flux = Chemistry.O3 * 1.0e-3"
+                for eq in flat.equations
+        )
     end
 
     @testset "couple `multiplicative` onto something with no tendency" begin

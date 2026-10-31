@@ -52,8 +52,10 @@ _mig_file(version) = EarthSciAST.EsmFile(String(version), EarthSciAST.Metadata("
         @test supported_migration_targets("12.34.56") == String[] # much higher major
 
         @testset "malformed version strings" begin
-            for source in ["not-a-version", "1.0", "", "1.0.0-alpha.1", "v1.0.0",
-                           "1.0.0 ", "01.0.0.0"]
+            for source in [
+                    "not-a-version", "1.0", "", "1.0.0-alpha.1", "v1.0.0",
+                    "1.0.0 ", "01.0.0.0",
+                ]
                 @test supported_migration_targets(source) == String[]
             end
         end
@@ -169,8 +171,10 @@ _mig_file(version) = EarthSciAST.EsmFile(String(version), EarthSciAST.Metadata("
     @testset "marker-only: every other field survives" begin
         # A real loaded document, so the carried-across fields are the populated
         # ones an actual file has rather than a hand-built skeleton's `nothing`s.
-        fixture = joinpath(TESTUTILS_REPO_ROOT, "tests", "version_compatibility",
-                           "version_1_0_0_baseline.esm")
+        fixture = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "version_compatibility",
+            "version_1_0_0_baseline.esm"
+        )
         if _require_fixture(fixture)
             source = EarthSciAST.load_path(fixture)
             @test source.esm == "1.0.0"
@@ -186,7 +190,7 @@ _mig_file(version) = EarthSciAST.EsmFile(String(version), EarthSciAST.Metadata("
             for f in fieldnames(EarthSciAST.EsmFile)
                 f === :esm && continue
                 @test getfield(migrated, f) === getfield(source, f) ||
-                      getfield(migrated, f) == getfield(source, f)
+                    getfield(migrated, f) == getfield(source, f)
             end
         end
     end
@@ -198,8 +202,10 @@ _mig_file(version) = EarthSciAST.EsmFile(String(version), EarthSciAST.Metadata("
         # rewrite a human performs: the SOURCE is unloadable by a 1.x library and
         # the TARGET loads. So `migrate` must refuse the source's version, and
         # the target's version must be one it accepts (as an identity no-op).
-        matrix_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "version_compatibility",
-                               "compatibility_matrix.json")
+        matrix_path = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "version_compatibility",
+            "compatibility_matrix.json"
+        )
         if _require_fixture(matrix_path)
             matrix = JSON3.read(read(matrix_path, String))
             root = matrix["version_compatibility_test_matrix"]
@@ -228,10 +234,14 @@ _mig_file(version) = EarthSciAST.EsmFile(String(version), EarthSciAST.Metadata("
             for mt in root["migration_tests"]
                 src_name = String(mt["source"])
                 tgt_name = String(mt["target"])
-                src_path = joinpath(TESTUTILS_REPO_ROOT, "tests",
-                                    "version_compatibility", src_name)
-                tgt_path = joinpath(TESTUTILS_REPO_ROOT, "tests",
-                                    "version_compatibility", tgt_name)
+                src_path = joinpath(
+                    TESTUTILS_REPO_ROOT, "tests",
+                    "version_compatibility", src_name
+                )
+                tgt_path = joinpath(
+                    TESTUTILS_REPO_ROOT, "tests",
+                    "version_compatibility", tgt_name
+                )
                 (isfile(src_path) && isfile(tgt_path)) || continue
 
                 src_version = String(JSON3.read(read(src_path, String))["esm"])

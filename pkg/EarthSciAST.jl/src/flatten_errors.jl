@@ -25,8 +25,10 @@ end
 
 function Base.showerror(io::IO, e::ConflictingDerivativeError)
     names = join(e.species, ", ")
-    print(io, "ConflictingDerivativeError: species have both an explicit ",
-          "derivative equation and a reaction contribution: ", names)
+    return print(
+        io, "ConflictingDerivativeError: species have both an explicit ",
+        "derivative equation and a reaction contribution: ", names
+    )
 end
 
 """
@@ -136,11 +138,13 @@ struct VariableMapUnresolvedEndpointError <: EarthSciASTError
 end
 
 Base.showerror(io::IO, e::VariableMapUnresolvedEndpointError) =
-    print(io, "VariableMapUnresolvedEndpointError: variable_map(", e.from, " -> ", e.to,
-          "): the '", e.side, "' endpoint '", e.endpoint, "' resolves to no variable, ",
-          "parameter or observed in the flattened system (esm-spec §4.6, §10.4). A scoped ",
-          "reference walks EVERY dot-separated segment, so a subsystem endpoint is spelled ",
-          "'<Model>.<Subsystem>.<name>'.")
+    print(
+    io, "VariableMapUnresolvedEndpointError: variable_map(", e.from, " -> ", e.to,
+    "): the '", e.side, "' endpoint '", e.endpoint, "' resolves to no variable, ",
+    "parameter or observed in the flattened system (esm-spec §4.6, §10.4). A scoped ",
+    "reference walks EVERY dot-separated segment, so a subsystem endpoint is spelled ",
+    "'<Model>.<Subsystem>.<name>'."
+)
 
 """
     DimensionPromotionError
@@ -166,8 +170,10 @@ struct UnmappedDomainError <: EarthSciASTError
     target::String
 end
 Base.showerror(io::IO, e::UnmappedDomainError) =
-    print(io, "UnmappedDomainError: no Interface maps domain '", e.source,
-          "' to domain '", e.target, "'")
+    print(
+    io, "UnmappedDomainError: no Interface maps domain '", e.source,
+    "' to domain '", e.target, "'"
+)
 
 """
     UnsupportedMappingError
@@ -184,8 +190,10 @@ struct UnsupportedMappingError <: EarthSciASTError
     mapping_type::String
 end
 Base.showerror(io::IO, e::UnsupportedMappingError) =
-    print(io, "UnsupportedMappingError: mapping type '",
-          e.mapping_type, "' is not supported by this library tier")
+    print(
+    io, "UnsupportedMappingError: mapping type '",
+    e.mapping_type, "' is not supported by this library tier"
+)
 
 """
     DomainUnitMismatchError
@@ -199,9 +207,11 @@ struct DomainUnitMismatchError <: EarthSciASTError
     target_units::String
 end
 Base.showerror(io::IO, e::DomainUnitMismatchError) =
-    print(io, "DomainUnitMismatchError: variable '", e.variable,
-          "' has units '", e.source_units, "' on source and '",
-          e.target_units, "' on target")
+    print(
+    io, "DomainUnitMismatchError: variable '", e.variable,
+    "' has units '", e.source_units, "' on source and '",
+    e.target_units, "' on target"
+)
 
 """
     DomainExtentMismatchError
@@ -217,8 +227,10 @@ struct DomainExtentMismatchError <: EarthSciASTError
     variable::String
 end
 Base.showerror(io::IO, e::DomainExtentMismatchError) =
-    print(io, "DomainExtentMismatchError: domain extent mismatch on ",
-          "independent variable '", e.variable, "' under identity mapping")
+    print(
+    io, "DomainExtentMismatchError: domain extent mismatch on ",
+    "independent variable '", e.variable, "' under identity mapping"
+)
 
 """
     SliceOutOfDomainError
@@ -233,8 +245,10 @@ struct SliceOutOfDomainError <: EarthSciASTError
     value::String
 end
 Base.showerror(io::IO, e::SliceOutOfDomainError) =
-    print(io, "SliceOutOfDomainError: slice coordinate '", e.coordinate,
-          "' = ", e.value, " lies outside the source domain extent")
+    print(
+    io, "SliceOutOfDomainError: slice coordinate '", e.coordinate,
+    "' = ", e.value, " lies outside the source domain extent"
+)
 
 """
     CyclicPromotionError
@@ -249,5 +263,7 @@ struct CyclicPromotionError <: EarthSciASTError
     variables::Vector{String}
 end
 Base.showerror(io::IO, e::CyclicPromotionError) =
-    print(io, "CyclicPromotionError: cyclic promotion detected involving ",
-          "variables ", e.variables)
+    print(
+    io, "CyclicPromotionError: cyclic promotion detected involving ",
+    "variables ", e.variables
+)

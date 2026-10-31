@@ -23,7 +23,7 @@ include("testutils.jl")
                         "x" => Dict("type" => "unknown")
                     ),
                     "equations" => [
-                        Dict("lhs" => "x", "rhs" => 1.0)
+                        Dict("lhs" => "x", "rhs" => 1.0),
                     ]
                 )
             )
@@ -82,8 +82,10 @@ include("testutils.jl")
         # An `ic`-op equation placed inside a reaction system's
         # constraint_equations is SCHEMA-VALID but MUST be rejected at the
         # raw-JSON structural level with diagnostic code `ic_in_reaction_system`.
-        fixture = joinpath(@__DIR__, "..", "..", "..", "tests", "invalid",
-                           "ic_in_reaction_system.esm")
+        fixture = joinpath(
+            @__DIR__, "..", "..", "..", "tests", "invalid",
+            "ic_in_reaction_system.esm"
+        )
         @test isfile(fixture)
 
         local threw = false
@@ -153,7 +155,7 @@ include("testutils.jl")
         @test by_path isa ValidationResult
         @test by_path.is_valid == typed.is_valid
         @test [e.error_type for e in by_path.structural_errors] ==
-              [e.error_type for e in typed.structural_errors]
+            [e.error_type for e in typed.structural_errors]
 
         # `validate` no longer has a String method: a caller who passes a path
         # gets a MethodError, not a silent file read.
@@ -179,12 +181,12 @@ include("testutils.jl")
         text = read(path, String)
 
         # It agrees with the typed entry point on a good document.
-        typed = validate(EarthSciAST.load_string(text; base_path=dirname(path)))
-        by_text = validate_text(text; base_path=dirname(path))
+        typed = validate(EarthSciAST.load_string(text; base_path = dirname(path)))
+        by_text = validate_text(text; base_path = dirname(path))
         @test by_text isa ValidationResult
         @test by_text.is_valid == typed.is_valid
         @test [e.error_type for e in by_text.structural_errors] ==
-              [e.error_type for e in typed.structural_errors]
+            [e.error_type for e in typed.structural_errors]
 
         # A caller asking "is this valid?" gets a VERDICT for a bad document too,
         # not an exception — the whole reason this entry point exists, and what
@@ -204,7 +206,7 @@ include("testutils.jl")
         # channel, through the same helper validate_path uses.
         ic_bad = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "ic_in_reaction_system.esm")
         if isfile(ic_bad)
-            res = validate_text(read(ic_bad, String); base_path=dirname(ic_bad))
+            res = validate_text(read(ic_bad, String); base_path = dirname(ic_bad))
             @test !res.is_valid
             @test !isempty(res.structural_errors)
         end

@@ -29,20 +29,20 @@
 
 # _NKind encodes what a node is. Keeping it as a Bare integer (UInt8)
 # gives a fast `kind === K_*` dispatch inside `_eval_node`.
-const _NK_LITERAL      = UInt8(1)
-const _NK_STATE        = UInt8(2)   # read u[idx]
-const _NK_PARAM        = UInt8(3)   # read p.<sym>
-const _NK_TIME         = UInt8(4)   # return t
-const _NK_OP           = UInt8(5)   # apply op to children
-const _NK_CONTRACTION  = UInt8(6)   # runtime ⊕-reduction over children (seq. fold)
-const _NK_CACHED       = UInt8(7)   # common-subexpression ref: read cache[idx] (ess-r7h)
+const _NK_LITERAL = UInt8(1)
+const _NK_STATE = UInt8(2)   # read u[idx]
+const _NK_PARAM = UInt8(3)   # read p.<sym>
+const _NK_TIME = UInt8(4)   # return t
+const _NK_OP = UInt8(5)   # apply op to children
+const _NK_CONTRACTION = UInt8(6)   # runtime ⊕-reduction over children (seq. fold)
+const _NK_CACHED = UInt8(7)   # common-subexpression ref: read cache[idx] (ess-r7h)
 const _NK_PARAM_GATHER = UInt8(8)   # read a captured live forcing buffer: payload[idx] (ess-14f.3)
 const _NK_CONST_GATHER = UInt8(9)   # read a captured const/provider array at an EVAL-TIME-computed offset (wall2 Phase B)
-const _NK_LOOPVAR       = UInt8(10)  # read the current value of an enclosing runtime contraction loop counter (ess-runtime-contraction)
+const _NK_LOOPVAR = UInt8(10)  # read the current value of an enclosing runtime contraction loop counter (ess-runtime-contraction)
 const _NK_CONTRACTION_LOOP = UInt8(11)  # compile-once ⊕-reduction: iterate a static range, fold ONE body per iteration (ess-runtime-contraction)
 const _NK_STATE_GATHER = UInt8(12)  # read u at a slot computed at eval time from loop-var-dependent subscripts (ess-runtime-contraction)
 const _NK_RECUR_GATHER = UInt8(13)  # a recurrence's causal self-read: a PUBLISHED cell of its own buffer, or a fault (recurrence_sweep.jl)
-const _NK_RAGGED_LOOP  = UInt8(14)  # ⊕-reduction over a range whose bounds are evaluated per call (a ragged `offsets` bound), seeded from 0̄
+const _NK_RAGGED_LOOP = UInt8(14)  # ⊕-reduction over a range whose bounds are evaluated per call (a ragged `offsets` bound), seeded from 0̄
 
 # The ONE compiled IR node — scalar spines and access-kernel spines are both trees
 # of these. `kind` selects which fields are live. The catch-all `payload::Any` slot
@@ -207,7 +207,7 @@ end
 # (`_build_evaluator_impl`) so it never grows across builds; a loop-var name is
 # GLOBALLY UNIQUE (a monotonic counter), so a stale entry can never be confused
 # with a fresh one within a build. Build is single-threaded, so no locking.
-const _LOOPVAR_REFS = Dict{Symbol,Base.RefValue{Int}}()
+const _LOOPVAR_REFS = Dict{Symbol, Base.RefValue{Int}}()
 const _LOOPVAR_COUNTER = Ref(0)
 const _LOOPVAR_PREFIX = "__esm_lv_"
 _fresh_loopvar_name() = (_LOOPVAR_COUNTER[] += 1; "$(_LOOPVAR_PREFIX)$(_LOOPVAR_COUNTER[])")
@@ -273,7 +273,7 @@ end
 # slot; it depends ONLY on the state array's `var_map` layout, so it is built once
 # per state var per build and shared across every output cell's loop node. Cleared
 # at the top of every build (`_build_evaluator_impl`).
-const _STATE_SLOT_TABLES = Dict{String,Tuple{Vector{Int},Vector{Int}}}()
+const _STATE_SLOT_TABLES = Dict{String, Tuple{Vector{Int}, Vector{Int}}}()
 
 # ── Per-equation build memo (ess-perf: compile one representative per group) ──
 # Within one array equation's cell loop every cell resolves/compiles against the
@@ -298,17 +298,19 @@ const _STATE_SLOT_TABLES = Dict{String,Tuple{Vector{Int},Vector{Int}}}()
 # resolved under, not on the node alone, so it is not memoized when any guard
 # was in force (`_resolve_indices`).
 struct _BuildMemo
-    resolve::IdDict{OpExpr,ASTExpr}
-    compile::IdDict{OpExpr,_Node}
+    resolve::IdDict{OpExpr, ASTExpr}
+    compile::IdDict{OpExpr, _Node}
     deferrals::Base.RefValue{Int}
 end
-_BuildMemo() = _BuildMemo(IdDict{OpExpr,ASTExpr}(), IdDict{OpExpr,_Node}(), Ref(0))
-const _MaybeMemo = Union{Nothing,_BuildMemo}
+_BuildMemo() = _BuildMemo(IdDict{OpExpr, ASTExpr}(), IdDict{OpExpr, _Node}(), Ref(0))
+const _MaybeMemo = Union{Nothing, _BuildMemo}
 
-function _mknode(; kind::UInt8, op::Symbol=Symbol(""),
-                 literal::Float64=0.0, idx::Int=0,
-                 sym::Symbol=Symbol(""), payload=nothing,
-                 children::Vector{_Node}=_Node[])
+function _mknode(;
+        kind::UInt8, op::Symbol = Symbol(""),
+        literal::Float64 = 0.0, idx::Int = 0,
+        sym::Symbol = Symbol(""), payload = nothing,
+        children::Vector{_Node} = _Node[]
+    )
     return _Node(kind, op, literal, idx, sym, payload, children)
 end
 
@@ -334,12 +336,17 @@ end
 # node's subscript `children` (one per dimension, in dimension order). Phase C calls
 # this to lower a `index(const_array, subs...)` gather whose subscripts are not all
 # build-time constants. `subscript_nodes` must have one entry per dimension of `A`.
-function _const_gather_node(A::AbstractArray, subscript_nodes::Vector{_Node};
-                            name::AbstractString="")
+function _const_gather_node(
+        A::AbstractArray, subscript_nodes::Vector{_Node};
+        name::AbstractString = ""
+    )
     sz = size(A)
-    length(subscript_nodes) == length(sz) || throw(ArgumentError(
-        "_const_gather_node: expected $(length(sz)) subscript node(s) for a " *
-        "$(length(sz))-D array, got $(length(subscript_nodes))"))
+    length(subscript_nodes) == length(sz) || throw(
+        ArgumentError(
+            "_const_gather_node: expected $(length(sz)) subscript node(s) for a " *
+                "$(length(sz))-D array, got $(length(subscript_nodes))"
+        )
+    )
     # SHARE the source array's buffer rather than COPY it. A dense `Float64` array
     # `vec`s to a `Vector{Float64}` ALIASING the same memory (no data copy), so every
     # gather into the same const array references ONE buffer. A plain
@@ -351,8 +358,8 @@ function _const_gather_node(A::AbstractArray, subscript_nodes::Vector{_Node};
     # for a live buffer). Non-dense / non-`Float64` inputs fall back to one
     # convert-copy — bounded, since those are not the hot contraction path.
     flat = A isa Vector{Float64} ? A :
-           A isa Array{Float64}  ? vec(A)::Vector{Float64} :
-           Vector{Float64}(vec(A))
+        A isa Array{Float64} ? vec(A)::Vector{Float64} :
+        Vector{Float64}(vec(A))
     strides = Vector{Int}(undef, length(sz))
     acc = 1
     @inbounds for d in eachindex(sz)
@@ -360,10 +367,14 @@ function _const_gather_node(A::AbstractArray, subscript_nodes::Vector{_Node};
         acc *= sz[d]
     end
     boundary = Symbol[_const_dim_boundary(A, d) for d in eachindex(sz)]
-    return _mknode(kind=_NK_CONST_GATHER,
-                   payload=_ConstGatherArray(flat, strides, collect(Int, sz),
-                                             boundary, String(name)),
-                   children=subscript_nodes)
+    return _mknode(
+        kind = _NK_CONST_GATHER,
+        payload = _ConstGatherArray(
+            flat, strides, collect(Int, sz),
+            boundary, String(name)
+        ),
+        children = subscript_nodes
+    )
 end
 
 # The 1-based position a run-time const gather reads on axis `d` for subscript
@@ -394,23 +405,47 @@ end
 # per-position `(code, message)` diagnostics for a non-const argument.
 const _FN_CONST_ARG_SPECS = (
     # Spec arg order: (x, xs) — xs const, x scalar.
-    (fname = "interp.searchsorted", arity = 2, const_positions = (2,),
-     const_errs = ((ERROR_CODES.INTERP_AXIS_NOT_CONST,
-                    "interp.searchsorted: `xs` (2nd arg) must be a `const`-op array"),)),
+    (
+        fname = "interp.searchsorted", arity = 2, const_positions = (2,),
+        const_errs = (
+            (
+                ERROR_CODES.INTERP_AXIS_NOT_CONST,
+                "interp.searchsorted: `xs` (2nd arg) must be a `const`-op array",
+            ),
+        ),
+    ),
     # Spec arg order: (table, axis, x) — table & axis const, x scalar.
-    (fname = "interp.linear", arity = 3, const_positions = (1, 2),
-     const_errs = ((ERROR_CODES.INTERP_TABLE_NOT_CONST,
-                    "interp.linear: `table` argument must be a `const`-op array node"),
-                   (ERROR_CODES.INTERP_AXIS_NOT_CONST,
-                    "interp.linear: `axis` argument must be a `const`-op array node"))),
+    (
+        fname = "interp.linear", arity = 3, const_positions = (1, 2),
+        const_errs = (
+            (
+                ERROR_CODES.INTERP_TABLE_NOT_CONST,
+                "interp.linear: `table` argument must be a `const`-op array node",
+            ),
+            (
+                ERROR_CODES.INTERP_AXIS_NOT_CONST,
+                "interp.linear: `axis` argument must be a `const`-op array node",
+            ),
+        ),
+    ),
     # Spec arg order: (table, axis_x, axis_y, x, y) — first three const.
-    (fname = "interp.bilinear", arity = 5, const_positions = (1, 2, 3),
-     const_errs = ((ERROR_CODES.INTERP_TABLE_NOT_CONST,
-                    "interp.bilinear: `table` argument must be a `const`-op array node"),
-                   (ERROR_CODES.INTERP_AXIS_NOT_CONST,
-                    "interp.bilinear: `axis_x` argument must be a `const`-op array node"),
-                   (ERROR_CODES.INTERP_AXIS_NOT_CONST,
-                    "interp.bilinear: `axis_y` argument must be a `const`-op array node"))),
+    (
+        fname = "interp.bilinear", arity = 5, const_positions = (1, 2, 3),
+        const_errs = (
+            (
+                ERROR_CODES.INTERP_TABLE_NOT_CONST,
+                "interp.bilinear: `table` argument must be a `const`-op array node",
+            ),
+            (
+                ERROR_CODES.INTERP_AXIS_NOT_CONST,
+                "interp.bilinear: `axis_x` argument must be a `const`-op array node",
+            ),
+            (
+                ERROR_CODES.INTERP_AXIS_NOT_CONST,
+                "interp.bilinear: `axis_y` argument must be a `const`-op array node",
+            ),
+        ),
+    ),
 )
 
 # The `_FN_CONST_ARG_SPECS` entry for `fname`, or `nothing` for a closed
@@ -430,13 +465,21 @@ end
 # reference, a non-`const` expression, a scalar `const`). A NESTED `const` where a
 # rank-1 one belongs is the spec builder's to refuse
 # (`_validate_searchsorted_table` raises the same `interp_axis_not_const`).
-@inline function _const_array_arg(arg, err::Tuple{String,String})
+@inline function _const_array_arg(arg, err::Tuple{String, String})
     arg isa OpExpr && arg.op == "const" && arg.value isa AbstractVector &&
         return arg.value
-    throw(ClosedFunctionError(err[1], err[2] * " (esm-spec §9.2); got " *
-        (arg isa OpExpr ? (arg.op == "const" ? "a scalar `const`" :
-                           "a `$(arg.op)` expression") :
-         arg isa VarExpr ? "the variable reference `$(arg.name)`" : "a $(typeof(arg))")))
+    throw(
+        ClosedFunctionError(
+            err[1], err[2] * " (esm-spec §9.2); got " *
+                (
+                arg isa OpExpr ? (
+                        arg.op == "const" ? "a scalar `const`" :
+                        "a `$(arg.op)` expression"
+                    ) :
+                    arg isa VarExpr ? "the variable reference `$(arg.name)`" : "a $(typeof(arg))"
+            )
+        )
+    )
 end
 
 # Build the validated, typed `_Interp*Spec` (registered_functions.jl) for a
@@ -456,8 +499,10 @@ end
 # (the merge guard, `_check_fn_group_specs`) hit and a merged kernel's per-lane
 # spec table shares one object per distinct content. Identity when the pool is
 # off (outside a build, or with lane interning off).
-function _build_interp_spec(fname::AbstractString, const_args::Vector{Any};
-                            strict::String = "")
+function _build_interp_spec(
+        fname::AbstractString, const_args::Vector{Any};
+        strict::String = ""
+    )
     if fname == "interp.linear"
         return _lane_intern(_build_interp_linear_spec(fname, const_args...; strict))
     elseif fname == "interp.bilinear"
@@ -465,8 +510,12 @@ function _build_interp_spec(fname::AbstractString, const_args::Vector{Any};
     elseif fname == "interp.searchsorted"
         return _lane_intern(_build_interp_searchsorted_spec(fname, const_args...; strict))
     end
-    throw(TreeWalkError("E_TREEWALK_UNKNOWN_CLOSED_FUNCTION",
-        "fn '$(fname)' carries const args but has no interp.* spec builder"))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_UNKNOWN_CLOSED_FUNCTION",
+            "fn '$(fname)' carries const args but has no interp.* spec builder"
+        )
+    )
 end
 
 # `param_syms` tells a parameter from an unbound-variable error without another
@@ -483,21 +532,21 @@ end
 #     those nodes get `idx = 0` and are NamedTuple-only by construction.
 #
 # Keeping both is why the seam is `(sym, idx)` rather than `idx` alone.
-@inline _is_param(ps::AbstractDict{Symbol,Int}, sym::Symbol) = haskey(ps, sym)
+@inline _is_param(ps::AbstractDict{Symbol, Int}, sym::Symbol) = haskey(ps, sym)
 @inline _is_param(ps, sym::Symbol) = sym in ps
-@inline _param_index(ps::AbstractDict{Symbol,Int}, sym::Symbol) = get(ps, sym, 0)
+@inline _param_index(ps::AbstractDict{Symbol, Int}, sym::Symbol) = get(ps, sym, 0)
 @inline _param_index(_, ::Symbol) = 0
 
-function _compile(expr::NumExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo=nothing)
-    return _mknode(kind=_NK_LITERAL, literal=expr.value)
+function _compile(expr::NumExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo = nothing)
+    return _mknode(kind = _NK_LITERAL, literal = expr.value)
 end
-function _compile(expr::IntExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo=nothing)
-    return _mknode(kind=_NK_LITERAL, literal=Float64(expr.value))
+function _compile(expr::IntExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo = nothing)
+    return _mknode(kind = _NK_LITERAL, literal = Float64(expr.value))
 end
-function _compile(expr::VarExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo=nothing)
+function _compile(expr::VarExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo = nothing)
     name = expr.name
     if name == "t"
-        return _mknode(kind=_NK_TIME)
+        return _mknode(kind = _NK_TIME)
     end
     idx = get(var_map, name, 0)
     if idx != 0
@@ -506,12 +555,12 @@ function _compile(expr::VarExpr, var_map, param_syms, reg_funcs, memo::_MaybeMem
         # pseudo-state. Outside one it is an ordinary state slot and the sink is
         # `nothing`, so this is a load + branch. See `_PARAM_READS` (build.jl).
         _PARAM_READS[] === nothing || _record_param_read(name)
-        return _mknode(kind=_NK_STATE, idx=idx)
+        return _mknode(kind = _NK_STATE, idx = idx)
     end
     sym = Symbol(name)
     if _is_param(param_syms, sym)
         _PARAM_READS[] === nothing || _record_param_read(name)
-        return _mknode(kind=_NK_PARAM, sym=sym, idx=_param_index(param_syms, sym))
+        return _mknode(kind = _NK_PARAM, sym = sym, idx = _param_index(param_syms, sym))
     end
     # A reserved runtime-contraction loop variable (ess-runtime-contraction):
     # `_resolve_scalar_faq` kept the contracted index symbolic and registered
@@ -519,11 +568,11 @@ function _compile(expr::VarExpr, var_map, param_syms, reg_funcs, memo::_MaybeMem
     # ref at eval time (the enclosing `_NK_CONTRACTION_LOOP` writes it per iteration).
     lref = get(_LOOPVAR_REFS, sym, nothing)
     if lref !== nothing
-        return _mknode(kind=_NK_LOOPVAR, payload=lref)
+        return _mknode(kind = _NK_LOOPVAR, payload = lref)
     end
     throw(TreeWalkError("E_TREEWALK_UNBOUND_VARIABLE", name))
 end
-function _compile(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo=nothing)
+function _compile(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo = nothing)
     _BENCH_ON[] && (_BENCH_COMPILE_CALLS[] += 1)   # §12 node-lowering counter (off by default)
     memo === nothing && return _compile_op(expr, var_map, param_syms, reg_funcs, nothing)
     m = memo.compile
@@ -578,13 +627,19 @@ function _compile_fn_node(expr::OpExpr, compile_child)
         # diagnostic is unchanged, and an undeclared function keeps the boxed
         # `(fname, nothing)` route on every tier exactly as before.
         tc = _fn_typed_core_spec(fname)
-        payload = (tc !== nothing && tc.arity == 1 &&
-                   length(children) == tc.arity) ? (fname, tc) :
-                                                   (fname, nothing)
+        payload = (
+                tc !== nothing && tc.arity == 1 &&
+                length(children) == tc.arity
+            ) ? (fname, tc) :
+            (fname, nothing)
     else
         length(expr.args) == cspec.arity ||
-            throw(TreeWalkError("E_TREEWALK_FN_ARITY",
-                "$(fname) expects $(cspec.arity) args, got $(length(expr.args))"))
+            throw(
+            TreeWalkError(
+                "E_TREEWALK_FN_ARITY",
+                "$(fname) expects $(cspec.arity) args, got $(length(expr.args))"
+            )
+        )
         # Validate + extract every const position first (matching the
         # pre-table ladders, which never compiled a scalar arg before a
         # failed const check), then compile the scalar args — in spec
@@ -594,17 +649,25 @@ function _compile_fn_node(expr::OpExpr, compile_child)
         # `isa`-matches that concrete tuple type so the spec is read without
         # a per-call re-box (a `Tuple{String,Any}` read would box the inline
         # immutable struct every call).
-        const_args = Any[_const_array_arg(expr.args[pos], cspec.const_errs[k])
-                         for (k, pos) in enumerate(cspec.const_positions)]
-        children = _Node[compile_child(expr.args[pos])
-                         for pos in 1:cspec.arity if !(pos in cspec.const_positions)]
+        const_args = Any[
+            _const_array_arg(expr.args[pos], cspec.const_errs[k])
+                for (k, pos) in enumerate(cspec.const_positions)
+        ]
+        children = _Node[
+            compile_child(expr.args[pos])
+                for pos in 1:cspec.arity if !(pos in cspec.const_positions)
+        ]
         # A lookup lowered from an `out_of_bounds: "error"` table carries the
         # table id on this node (lower_table_lookup.jl); the spec checks its
         # query against the axis before the core runs.
-        payload = (fname, _build_interp_spec(fname, const_args;
-                                             strict = something(expr.table, "")))
+        payload = (
+            fname, _build_interp_spec(
+                fname, const_args;
+                strict = something(expr.table, "")
+            ),
+        )
     end
-    return _mknode(kind=_NK_OP, op=:fn, children=children, payload=payload)
+    return _mknode(kind = _NK_OP, op = :fn, children = children, payload = payload)
 end
 
 # The `unevaluable_operator` diagnostic (esm-spec §9.6.6): `op` IS in the §4.2
@@ -613,14 +676,17 @@ end
 _unevaluable_operator(op, why::AbstractString) = TreeWalkError(
     ERROR_CODES.UNEVALUABLE_OPERATOR,
     "operator '$(op)' is an evaluable-core op with no evaluation rule in the tree-walk " *
-    "evaluator: $(why) (esm-spec §4.2 / §9.6.6).")
+        "evaluator: $(why) (esm-spec §4.2 / §9.6.6)."
+)
 
 function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo)
     op_sym = Symbol(expr.op)
     payload = nothing
     if op_sym === :fn
-        return _compile_fn_node(expr,
-            a -> _compile(a, var_map, param_syms, reg_funcs, memo))
+        return _compile_fn_node(
+            expr,
+            a -> _compile(a, var_map, param_syms, reg_funcs, memo)
+        )
     end
     # Runtime contraction loop marker (ess-runtime-contraction): the loop body is
     # the single child arg, compiled ONCE here; the loop metadata rides on `.value`.
@@ -631,15 +697,19 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
     if op_sym === :__contract_loop
         lb = expr.value::_ContractLoopBuild
         body = _compile(expr.args[1], var_map, param_syms, reg_funcs, memo)
-        return _mknode(kind=_NK_CONTRACTION_LOOP, op=lb.oplus, literal=lb.zerobar,
-                       payload=_ContractLoop(lb.ref, lb.lo, lb.hi, lb.step),
-                       children=_Node[body])
+        return _mknode(
+            kind = _NK_CONTRACTION_LOOP, op = lb.oplus, literal = lb.zerobar,
+            payload = _ContractLoop(lb.ref, lb.lo, lb.hi, lb.step),
+            children = _Node[body]
+        )
     end
     if op_sym === :__ragged_loop
         lb = expr.value::_RaggedLoopBuild
         kids = _Node[_compile(a, var_map, param_syms, reg_funcs, memo) for a in expr.args]
-        return _mknode(kind=_NK_RAGGED_LOOP, op=lb.oplus, literal=lb.zerobar,
-                       payload=_RaggedLoop(lb.ref, lb.step, lb.reach), children=kids)
+        return _mknode(
+            kind = _NK_RAGGED_LOOP, op = lb.oplus, literal = lb.zerobar,
+            payload = _RaggedLoop(lb.ref, lb.step, lb.reach), children = kids
+        )
     end
     # Runtime state gather (ess-runtime-contraction): a state read at a
     # loop-var-dependent slot. The subscript `args` compile as children (a loop
@@ -648,10 +718,14 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
     if op_sym === :__state_gather
         ref = expr.value::_StateGatherRef
         subs = _Node[_compile(a, var_map, param_syms, reg_funcs, memo) for a in expr.args]
-        return _mknode(kind=_NK_STATE_GATHER,
-                       payload=_StateGather(ref.slot_flat, ref.strides, ref.lo, ref.hi,
-                                            length(ref.slot_flat)),
-                       children=subs)
+        return _mknode(
+            kind = _NK_STATE_GATHER,
+            payload = _StateGather(
+                ref.slot_flat, ref.strides, ref.lo, ref.hi,
+                length(ref.slot_flat)
+            ),
+            children = subs
+        )
     end
 
     # A recurrence's causal self-read (recurrence_sweep.jl): the subscripts
@@ -659,37 +733,51 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
     if op_sym === :__recur_read
         ref = expr.value::_RecurGatherRef
         subs = _Node[_compile(a, var_map, param_syms, reg_funcs, memo) for a in expr.args]
-        return _mknode(kind=_NK_RECUR_GATHER, payload=ref.gather, children=subs)
+        return _mknode(kind = _NK_RECUR_GATHER, payload = ref.gather, children = subs)
     end
 
-    children = _Node[_compile(a, var_map, param_syms, reg_funcs, memo)
-                     for a in expr.args]
+    children = _Node[
+        _compile(a, var_map, param_syms, reg_funcs, memo)
+            for a in expr.args
+    ]
     if op_sym === :const
         # Scalar `const` ops fold to a literal at compile time. Non-scalar
         # `const` only ever appears as an argument to ops that consume
         # arrays (handled in their respective compile paths above).
         v = expr.value
         if v isa Real && !(v isa Bool)
-            return _mknode(kind=_NK_LITERAL, literal=Float64(v))
+            return _mknode(kind = _NK_LITERAL, literal = Float64(v))
         end
-        throw(_unevaluable_operator(expr.op,
-            "a non-scalar `const` is consumed only by an array-consuming position"))
+        throw(
+            _unevaluable_operator(
+                expr.op,
+                "a non-scalar `const` is consumed only by an array-consuming position"
+            )
+        )
     elseif op_sym === Symbol("true")
         # The boolean literals (esm-spec §4.2), in the evaluator's float encoding.
         # (`:true` is the Bool `true`, not a Symbol, so it cannot be compared here.)
-        return _mknode(kind=_NK_LITERAL, literal=1.0)
+        return _mknode(kind = _NK_LITERAL, literal = 1.0)
     elseif op_sym === Symbol("false")
-        return _mknode(kind=_NK_LITERAL, literal=0.0)
+        return _mknode(kind = _NK_LITERAL, literal = 0.0)
     elseif op_sym === :enum
-        throw(_unevaluable_operator(expr.op,
-            "`enum` must be lowered to `const` at load — call `lower_enums!` before compile"))
+        throw(
+            _unevaluable_operator(
+                expr.op,
+                "`enum` must be lowered to `const` at load — call `lower_enums!` before compile"
+            )
+        )
     elseif op_sym === :call
         # Removed in v0.3.0 (esm-spec §9 closure). `expression_from_json` already
         # rejects file-loaded `call` ops; reaching this arm means a caller
         # constructed a `call` OpExpr programmatically.
-        throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_OP",
-            "`call` op was removed in v0.3.0 — migrate to `fn` ops " *
-            "or AST equations (esm-spec §9 closure, RFC closed-function-registry)"))
+        throw(
+            TreeWalkError(
+                "E_TREEWALK_UNSUPPORTED_OP",
+                "`call` op was removed in v0.3.0 — migrate to `fn` ops " *
+                    "or AST equations (esm-spec §9 closure, RFC closed-function-registry)"
+            )
+        )
     elseif op_sym === :D
         # esm-spec §4.2 / §9.6.8 (open-op-namespace RFC, Change B): `D` is an
         # evaluable-core op only in its STRUCTURAL equation-LHS role. A `D`
@@ -698,34 +786,54 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         # must lower it to a stencil before evaluation. The gate fires here,
         # before evaluation, with the uniform `unlowered_operator` code.
         wrtdesc = expr.wrt === nothing ? "" : " (wrt=$(expr.wrt))"
-        throw(TreeWalkError(ERROR_CODES.UNLOWERED_OPERATOR,
-            "unlowered derivative operator 'D'$wrtdesc reached evaluation: a " *
-            "spatial or right-hand-side `D` must be lowered to a stencil by a " *
-            "rewrite rule before evaluation (esm-spec §4.2 / §9.6.8)."))
+        throw(
+            TreeWalkError(
+                ERROR_CODES.UNLOWERED_OPERATOR,
+                "unlowered derivative operator 'D'$wrtdesc reached evaluation: a " *
+                    "spatial or right-hand-side `D` must be lowered to a stencil by a " *
+                    "rewrite rule before evaluation (esm-spec §4.2 / §9.6.8)."
+            )
+        )
     elseif op_sym === :ic
         # `ic` (esm-spec v0.8.0) is an equation-LHS-only marker, like `D`:
         # `ic(var) = <initial field>` declares an initial condition. It must
         # never appear in an RHS / general expression position.
-        throw(TreeWalkError("E_TREEWALK_IC_IN_RHS",
-                            "ic(...) only allowed in equation LHS"))
+        throw(
+            TreeWalkError(
+                "E_TREEWALK_IC_IN_RHS",
+                "ic(...) only allowed in equation LHS"
+            )
+        )
     elseif op_sym === :faq || op_sym === :aggregate
         # If _resolve_indices ran, scalar aggregate (empty output_idx) was
         # already expanded to a plain arithmetic tree and never reaches here.
         # Reaching this branch means an array-producing aggregate (non-empty
         # output_idx) appeared without being wrapped in an index() call.
-        throw(_unevaluable_operator(expr.op,
-                            "with non-empty output_idx in expression position it " *
-                            "requires wrapping in index($(expr.op)(...), k1, k2, ...)"))
+        throw(
+            _unevaluable_operator(
+                expr.op,
+                "with non-empty output_idx in expression position it " *
+                    "requires wrapping in index($(expr.op)(...), k1, k2, ...)"
+            )
+        )
     elseif op_sym === :makearray
         # makearray in expression position must be wrapped in index().
-        throw(_unevaluable_operator(expr.op,
-                            "in expression position it requires wrapping " *
-                            "in index(makearray(...), k1, k2, ...)"))
+        throw(
+            _unevaluable_operator(
+                expr.op,
+                "in expression position it requires wrapping " *
+                    "in index(makearray(...), k1, k2, ...)"
+            )
+        )
     elseif op_sym === :broadcast || op_sym === :reshape ||
-           op_sym === :transpose || op_sym === :concat
-        throw(_unevaluable_operator(expr.op,
-                            "outside an index(...) the tree-walk path has no rule for " *
-                            "this shape op; index(op(...), k1, k2, ...) is a gather of its operand"))
+            op_sym === :transpose || op_sym === :concat
+        throw(
+            _unevaluable_operator(
+                expr.op,
+                "outside an index(...) the tree-walk path has no rule for " *
+                    "this shape op; index(op(...), k1, k2, ...) is a gather of its operand"
+            )
+        )
     elseif op_sym === :index
         # A forcing gather over a live `param_arrays` buffer (ess-14f.3): the
         # `index` branch of `_resolve_indices` already bounds-checked and
@@ -739,7 +847,7 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         # `index`); see the JL-J0 feasibility-gate note in `_build_evaluator_impl`.
         if expr.value isa _PGatherRef
             ref = expr.value::_PGatherRef
-            return _mknode(kind=_NK_PARAM_GATHER, idx=ref.lin, payload=ref.flat)
+            return _mknode(kind = _NK_PARAM_GATHER, idx = ref.lin, payload = ref.flat)
         end
         # A const/provider-array read at a RUNTIME-computed offset (wall2 Phase C).
         # `_resolve_indices` (const-array branch) stashed a `_ConstGatherRef` in
@@ -749,7 +857,7 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         # `_const_gather_node` (Phase B) so the offset is computed at eval time.
         if expr.value isa _ConstGatherRef
             ref = expr.value::_ConstGatherRef
-            return _const_gather_node(ref.vals, children; name=ref.name)
+            return _const_gather_node(ref.vals, children; name = ref.name)
         end
         # A gather `_resolve_indices` left alone because its base names no
         # array it knows: a variable with no declared or inferred shape, no
@@ -757,17 +865,25 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         base = isempty(expr.args) ? nothing : expr.args[1]
         if base isa VarExpr
             bn = (base::VarExpr).name
-            throw(TreeWalkError("E_TREEWALK_INDEX_NOT_ARRAY",
-                "index($(bn), …): '$(bn)' is not an array the build can gather from — " *
-                "it has no declared `shape`, no data bound to it, and no equation " *
-                "that defines its cells, so it has no element to read"))
+            throw(
+                TreeWalkError(
+                    "E_TREEWALK_INDEX_NOT_ARRAY",
+                    "index($(bn), …): '$(bn)' is not an array the build can gather from — " *
+                        "it has no declared `shape`, no data bound to it, and no equation " *
+                        "that defines its cells, so it has no element to read"
+                )
+            )
         end
         # Otherwise: index ops must be resolved to state-slot references by
         # _resolve_indices before reaching _compile; encountering one here
         # means the caller skipped that pass.
-        throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_OP",
-                            "$(expr.op) reached _compile unresolved — " *
-                            "_resolve_indices must run first"))
+        throw(
+            TreeWalkError(
+                "E_TREEWALK_UNSUPPORTED_OP",
+                "$(expr.op) reached _compile unresolved — " *
+                    "_resolve_indices must run first"
+            )
+        )
     end
     # ── Generic open-tier rejection gate (esm-spec §4.2 / §9.6.6, the uniform
     #    `unlowered_operator` rule) ──
@@ -784,20 +900,28 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
     # own T member above. The gate fires before evaluation; the op is lowered to a
     # stencil by a discretization rule (e.g. EarthSciDiscretizations), not here.
     if _op_in_T(expr.op)
-        throw(TreeWalkError(ERROR_CODES.UNLOWERED_OPERATOR,
-            "unlowered rewrite-target operator '$(expr.op)' reached evaluation: " *
-            "no rewrite rule lowered it to a stencil before evaluation " *
-            "(esm-spec §4.2 / §9.6.8). Open-tier ops are lowered by discretization " *
-            "rules (e.g. EarthSciDiscretizations), not evaluated directly."))
+        throw(
+            TreeWalkError(
+                ERROR_CODES.UNLOWERED_OPERATOR,
+                "unlowered rewrite-target operator '$(expr.op)' reached evaluation: " *
+                    "no rewrite rule lowered it to a stencil before evaluation " *
+                    "(esm-spec §4.2 / §9.6.8). Open-tier ops are lowered by discretization " *
+                    "rules (e.g. EarthSciDiscretizations), not evaluated directly."
+            )
+        )
     end
     # ── Evaluable-core op with no rule (esm-spec §9.6.6) ──
     # A core op `_eval_node_op` has no arm for (`skolem`, `rank`, `distinct`,
     # `argmin`, `argmax`, `apply_expression_template`, …) is refused HERE, while
     # the evaluator is built, rather than at the first RHS call.
-    _has_tree_walk_rule(expr.op) || throw(_unevaluable_operator(expr.op,
-        "an earlier pipeline stage (value invention, or a load-time lowering pass) " *
-        "must eliminate it"))
-    return _mknode(kind=_NK_OP, op=op_sym, children=children, payload=payload)
+    _has_tree_walk_rule(expr.op) || throw(
+        _unevaluable_operator(
+            expr.op,
+            "an earlier pipeline stage (value invention, or a load-time lowering pass) " *
+                "must eliminate it"
+        )
+    )
+    return _mknode(kind = _NK_OP, op = op_sym, children = children, payload = payload)
 end
 
 # ============================================================
@@ -932,13 +1056,15 @@ _cse_hoistable(e::OpExpr) =
 # The ops `_eval_node_op` has an arm for: the registry-generated mechanical arms
 # plus the hand-written ones. `_compile_op` refuses any other op reaching its
 # generic tail with `unevaluable_operator` (esm-spec §9.6.6).
-const _TREE_WALK_RULE_OPS = Set{Symbol}(vcat(
-    Symbol[row.sym for row in _UNARY_ELEMENTWISE_OPS],
-    Symbol[row.sym for row in _COMPARISON_ELEMENTWISE_OPS],
-    Symbol[row.sym for row in _BINARY_ELEMENTWISE_OPS],
-    Symbol[row.sym for row in _NARY_MINMAX_OPS],
-    Symbol[:+, :*, :-, :neg, :and, :or, :not, :ifelse, :atan, :pi, :π, :e, :Pre, :fn],
-))
+const _TREE_WALK_RULE_OPS = Set{Symbol}(
+    vcat(
+        Symbol[row.sym for row in _UNARY_ELEMENTWISE_OPS],
+        Symbol[row.sym for row in _COMPARISON_ELEMENTWISE_OPS],
+        Symbol[row.sym for row in _BINARY_ELEMENTWISE_OPS],
+        Symbol[row.sym for row in _NARY_MINMAX_OPS],
+        Symbol[:+, :*, :-, :neg, :and, :or, :not, :ifelse, :atan, :pi, :π, :e, :Pre, :fn],
+    )
+)
 _has_tree_walk_rule(op::AbstractString) = Symbol(op) in _TREE_WALK_RULE_OPS
 _cse_hoistable(::ASTExpr) = false
 
@@ -987,10 +1113,10 @@ const _PGATHER_KEY_NAME = "__pgather"
 # at most once, so the whole pass is O(nodes) across every `_cse_key` call) plus the
 # distinctness witness (`name` → the buffer it was seen bound to).
 struct _PGatherKeyCtx
-    memo::IdDict{OpExpr,ASTExpr}
-    seen::Dict{String,Vector{Float64}}
+    memo::IdDict{OpExpr, ASTExpr}
+    seen::Dict{String, Vector{Float64}}
 end
-_PGatherKeyCtx() = _PGatherKeyCtx(IdDict{OpExpr,ASTExpr}(), Dict{String,Vector{Float64}}())
+_PGatherKeyCtx() = _PGatherKeyCtx(IdDict{OpExpr, ASTExpr}(), Dict{String, Vector{Float64}}())
 
 # The key identity `(name, lin)` is only injective if `name` names ONE buffer. That
 # holds by construction today; check it anyway, because the failure mode of a broken
@@ -1000,12 +1126,16 @@ function _pgather_check_distinct!(ctx::_PGatherKeyCtx, ref::_PGatherRef)
     if prev === nothing
         ctx.seen[ref.name] = ref.flat
     elseif prev !== ref.flat
-        throw(TreeWalkError("E_TREEWALK_PGATHER_KEY_COLLISION",
-            "internal: forcing-buffer name '$(ref.name)' resolved to two different " *
-            "buffers within one build. The CSE key for a live gather is " *
-            "(buffer name, offset); a name bound to two buffers would let CSE merge " *
-            "two DIFFERENT reads into one cache slot. Registration of every `pgather` " *
-            "entry must precede expression resolution — that invariant is broken."))
+        throw(
+            TreeWalkError(
+                "E_TREEWALK_PGATHER_KEY_COLLISION",
+                "internal: forcing-buffer name '$(ref.name)' resolved to two different " *
+                    "buffers within one build. The CSE key for a live gather is " *
+                    "(buffer name, offset); a name bound to two buffers would let CSE merge " *
+                    "two DIFFERENT reads into one cache slot. Registration of every `pgather` " *
+                    "entry must precede expression resolution — that invariant is broken."
+            )
+        )
     end
     return nothing
 end
@@ -1030,8 +1160,10 @@ function _pgather_key_expr_uncached(e::OpExpr, ctx::_PGatherKeyCtx)
     if e.value isa _PGatherRef
         ref = e.value::_PGatherRef
         _pgather_check_distinct!(ctx, ref)
-        return OpExpr(e.op, ASTExpr[]; name=_PGATHER_KEY_NAME,
-                      value=Any[ref.name, ref.lin])
+        return OpExpr(
+            e.op, ASTExpr[]; name = _PGATHER_KEY_NAME,
+            value = Any[ref.name, ref.lin]
+        )
     end
     # `map_children` (expression.jl) is the ONE field-preserving rewrite primitive —
     # it visits every expression-bearing field, so a gather buried in an aggregate
@@ -1080,7 +1212,7 @@ end
 # NOT refused: those folds *are* value-preserving, so two expressions sharing
 # such a key really do compute the same value.
 # ---------------------------------------------------------------------------
-function _cse_key(e::ASTExpr, pgctx::Union{Nothing,_PGatherKeyCtx})
+function _cse_key(e::ASTExpr, pgctx::Union{Nothing, _PGatherKeyCtx})
     return _cse_key(e, pgctx, _CSEKeyMemos())
 end
 
@@ -1098,10 +1230,10 @@ end
 # byte-identical to one per path. The count pass and the compile pass share
 # ONE memo pair (via `_CSEContext`) for the same reason they share `pgctx`.
 struct _CSEKeyMemos
-    canon::IdDict{OpExpr,Any}   # ASTExpr result or CanonicalizeError
-    key::IdDict{OpExpr,Any}     # String or nothing
+    canon::IdDict{OpExpr, Any}   # ASTExpr result or CanonicalizeError
+    key::IdDict{OpExpr, Any}     # String or nothing
 end
-_CSEKeyMemos() = _CSEKeyMemos(IdDict{OpExpr,Any}(), IdDict{OpExpr,Any}())
+_CSEKeyMemos() = _CSEKeyMemos(IdDict{OpExpr, Any}(), IdDict{OpExpr, Any}())
 
 # Identity-memoized `canonicalize`: drives the recursion over unique nodes
 # only, delegating the per-node work to `_canonicalize_shallow`
@@ -1109,7 +1241,7 @@ _CSEKeyMemos() = _CSEKeyMemos(IdDict{OpExpr,Any}(), IdDict{OpExpr,Any}())
 # byte-identical to the plain recursion on any tree and processes a shared
 # subtree once on a DAG. A `CanonicalizeError` is memoized and re-thrown so
 # repeated consumers of a failing shared subtree see the plain behavior.
-function _canonicalize_memo(e::ASTExpr, memo::IdDict{OpExpr,Any})
+function _canonicalize_memo(e::ASTExpr, memo::IdDict{OpExpr, Any})
     e isa OpExpr || return canonicalize(e)
     v = get(memo, e, nothing)
     if v !== nothing
@@ -1122,7 +1254,7 @@ function _canonicalize_memo(e::ASTExpr, memo::IdDict{OpExpr,Any})
         for (i, a) in enumerate(e.args)
             new_args[i] = _canonicalize_memo(a, memo)
         end
-        res = _canonicalize_shallow(reconstruct(e; args=new_args))
+        res = _canonicalize_shallow(reconstruct(e; args = new_args))
     catch err
         if err isa CanonicalizeError
             memo[e] = err
@@ -1133,8 +1265,10 @@ function _canonicalize_memo(e::ASTExpr, memo::IdDict{OpExpr,Any})
     return res
 end
 
-function _cse_key(e::ASTExpr, pgctx::Union{Nothing,_PGatherKeyCtx},
-                  memos::_CSEKeyMemos)
+function _cse_key(
+        e::ASTExpr, pgctx::Union{Nothing, _PGatherKeyCtx},
+        memos::_CSEKeyMemos
+    )
     if e isa OpExpr
         v = get(memos.key, e, _CSE_KEY_UNSET)
         v === _CSE_KEY_UNSET || return v
@@ -1192,15 +1326,17 @@ const _CSE_KEY_UNSET = _CSEKeyUnset()
 # numbers as the recursion, occurrence for occurrence; additions saturate at
 # `typemax(Int)` so a deeply-shared DAG cannot overflow the tally (the hoist
 # rule only ever asks >= 2 / >= 1).
-function _cse_count!(e::ASTExpr, counts::Dict{String,Tuple{Int,Int}},
-                     pgctx::Union{Nothing,_PGatherKeyCtx},
-                     memos::_CSEKeyMemos=_CSEKeyMemos())
+function _cse_count!(
+        e::ASTExpr, counts::Dict{String, Tuple{Int, Int}},
+        pgctx::Union{Nothing, _PGatherKeyCtx},
+        memos::_CSEKeyMemos = _CSEKeyMemos()
+    )
     (e isa OpExpr && _cse_hoistable(e)) || return
     # Unique hoistable nodes in postorder (children before parents). The walk
     # descends only through hoistable nodes — a non-hoistable node is a
     # counting barrier, exactly as in the original recursion.
     order = OpExpr[]
-    seen = IdDict{OpExpr,Nothing}()
+    seen = IdDict{OpExpr, Nothing}()
     function dfs(n::ASTExpr)
         (n isa OpExpr && _cse_hoistable(n)) || return
         haskey(seen, n) && return
@@ -1208,11 +1344,11 @@ function _cse_count!(e::ASTExpr, counts::Dict{String,Tuple{Int,Int}},
         for a in n.args
             dfs(a)
         end
-        push!(order, n)
+        return push!(order, n)
     end
     dfs(e)
-    total = IdDict{OpExpr,Int}()
-    uncond = IdDict{OpExpr,Int}()
+    total = IdDict{OpExpr, Int}()
+    uncond = IdDict{OpExpr, Int}()
     total[e] = 1
     uncond[e] = 1
     # Reverse postorder = parents before children along DAG edges.
@@ -1299,9 +1435,11 @@ end
 struct _CSEInvalid end
 const _CSE_INVALID = _CSEInvalid()
 
-_CSECache() = _CSECache(Float64[], nothing, _CSE_INVALID, _CSE_INVALID,
-                        _CSE_INVALID, NaN, UInt64(0), _CSE_INVALID, _CSE_INVALID,
-                        UInt64(0), _new_forcing_epoch())
+_CSECache() = _CSECache(
+    Float64[], nothing, _CSE_INVALID, _CSE_INVALID,
+    _CSE_INVALID, NaN, UInt64(0), _CSE_INVALID, _CSE_INVALID,
+    UInt64(0), _new_forcing_epoch()
+)
 
 """
     notify_forcing_refresh!()
@@ -1533,11 +1671,15 @@ end
 # specialization, so at Float64 (and under AD `Dual`s) the branch folds away and
 # the zero-alloc / instruction-identical property of the hot path is untouched.
 @inline function _reject_float32_state(u)
-    eltype(u) === Float32 && throw(TreeWalkError("E_TREEWALK_FLOAT32_STATE",
-        "Float32 state is not supported: the compiled RHS's literals and const " *
-        "data are Float64, so Float32 `u` silently promotes and computes in " *
-        "Float64 anyway — with an extra convert per state access, i.e. strictly " *
-        "slower than Float64 state. Pass the state as Vector{Float64}."))
+    eltype(u) === Float32 && throw(
+        TreeWalkError(
+            "E_TREEWALK_FLOAT32_STATE",
+            "Float32 state is not supported: the compiled RHS's literals and const " *
+                "data are Float64, so Float32 `u` silently promotes and computes in " *
+                "Float64 anyway — with an extra convert per state access, i.e. strictly " *
+                "slower than Float64 state. Pass the state as Vector{Float64}."
+        )
+    )
     return nothing
 end
 
@@ -1549,22 +1691,22 @@ end
 # the compile pass MUST key with the same `pgctx` or their keys would not match.
 mutable struct _CSEContext
     cached::Set{String}
-    slot::Dict{String,Int}
+    slot::Dict{String, Int}
     defs::Vector{_Node}
     cache::_CSECache
-    pgctx::Union{Nothing,_PGatherKeyCtx}
+    pgctx::Union{Nothing, _PGatherKeyCtx}
     # The SAME key/canonical memo pair the count pass used (the two passes
     # must key identically), plus a compiled-node identity memo so a subtree
     # shared under many parents is lowered once (`_compile_cse` is a pure
     # function of the node for a fixed build context).
     keymemos::_CSEKeyMemos
-    compiled::IdDict{OpExpr,_Node}
+    compiled::IdDict{OpExpr, _Node}
     # NAMED scalar-observed slots (ess-obs-slots): observed name → prelude slot.
     # Filled by `_cse_compile_scalar` as it compiles each observed def (in
     # dependency order, before any equation); a `VarExpr` reader whose name is
     # registered here lowers to `_NK_CACHED` on that slot instead of a spliced
     # copy of the body (see `_plan_observed_slots`, build.jl).
-    obs_slot::Dict{String,Int}
+    obs_slot::Dict{String, Int}
 end
 
 # Rebuild the `_Node` that plain `_compile` would emit for a hoistable `expr`,
@@ -1576,12 +1718,16 @@ end
 # hoistable op is a plain `_NK_OP` whose operands are all scalar.
 function _cse_rebuild(expr::OpExpr, var_map, param_syms, reg_funcs, ctx::_CSEContext)
     if expr.op == "fn"
-        return _compile_fn_node(expr,
-            a -> _compile_cse(a, var_map, param_syms, reg_funcs, ctx))
+        return _compile_fn_node(
+            expr,
+            a -> _compile_cse(a, var_map, param_syms, reg_funcs, ctx)
+        )
     end
-    children = _Node[_compile_cse(a, var_map, param_syms, reg_funcs, ctx)
-                     for a in expr.args]
-    return _mknode(kind=_NK_OP, op=Symbol(expr.op), children=children)
+    children = _Node[
+        _compile_cse(a, var_map, param_syms, reg_funcs, ctx)
+            for a in expr.args
+    ]
+    return _mknode(kind = _NK_OP, op = Symbol(expr.op), children = children)
 end
 
 # Compile `expr` to a `_Node`, hoisting any subexpression whose canonical key is
@@ -1596,7 +1742,7 @@ function _compile_cse(expr::ASTExpr, var_map, param_syms, reg_funcs, ctx::_CSECo
     # so this shadows nothing.
     if expr isa VarExpr
         s = get(ctx.obs_slot, expr.name, 0)
-        s != 0 && return _mknode(kind=_NK_CACHED, idx=s, payload=ctx.cache)
+        s != 0 && return _mknode(kind = _NK_CACHED, idx = s, payload = ctx.cache)
         return _compile(expr, var_map, param_syms, reg_funcs)
     end
     (expr isa OpExpr && _cse_hoistable(expr)) ||
@@ -1616,7 +1762,7 @@ function _compile_cse(expr::ASTExpr, var_map, param_syms, reg_funcs, ctx::_CSECo
     if key !== nothing && key in ctx.cached
         s = get(ctx.slot, key, 0)
         if s != 0
-            out = _mknode(kind=_NK_CACHED, idx=s, payload=ctx.cache)
+            out = _mknode(kind = _NK_CACHED, idx = s, payload = ctx.cache)
         else
             # First occurrence: compile children first (assigning them lower
             # slots, keeping `defs` topologically ordered), reserve this slot,
@@ -1626,7 +1772,7 @@ function _compile_cse(expr::ASTExpr, var_map, param_syms, reg_funcs, ctx::_CSECo
             s = length(ctx.defs) + 1
             ctx.slot[key] = s
             push!(ctx.defs, defnode)
-            out = _mknode(kind=_NK_CACHED, idx=s, payload=ctx.cache)
+            out = _mknode(kind = _NK_CACHED, idx = s, payload = ctx.cache)
         end
     else
         # Not cached: reconstruct the same `_Node` `_compile` would, but with
@@ -1646,18 +1792,20 @@ end
 # cache (`!isempty(pgather)`). It is a required keyword, not a defaulted one: a
 # forgotten `false` would silently restore the ess-qic coverage hole rather than
 # fail, and a hole that fails closed is exactly the bug this argument exists to fix.
-function _cse_compile_scalar(entries::Vector{Tuple{Int,ASTExpr}},
-                             var_map, param_syms, reg_funcs; has_pgather::Bool,
-                             # Named scalar-observed defs (ess-obs-slots), in
-                             # dependency order, already `_resolve_indices`d.
-                             # Each compiles ONCE as a prelude def; readers
-                             # (`VarExpr` of the name, in entries or in later
-                             # defs) lower to `_NK_CACHED` on its slot.
-                             obs_defs::Vector{Pair{String,ASTExpr}}=Pair{String,ASTExpr}[])
+function _cse_compile_scalar(
+        entries::Vector{Tuple{Int, ASTExpr}},
+        var_map, param_syms, reg_funcs; has_pgather::Bool,
+        # Named scalar-observed defs (ess-obs-slots), in
+        # dependency order, already `_resolve_indices`d.
+        # Each compiles ONCE as a prelude def; readers
+        # (`VarExpr` of the name, in entries or in later
+        # defs) lower to `_NK_CACHED` on its slot.
+        obs_defs::Vector{Pair{String, ASTExpr}} = Pair{String, ASTExpr}[]
+    )
     pgctx = has_pgather ? _PGatherKeyCtx() : nothing
     # One memo pair for BOTH passes: count and compile must key identically.
     keymemos = _CSEKeyMemos()
-    counts = Dict{String,Tuple{Int,Int}}()
+    counts = Dict{String, Tuple{Int, Int}}()
     # Observed def bodies participate in anonymous CSE alongside the equations
     # (a subtree shared between a def and an equation gets one slot); each def
     # root is an unconditional occurrence — the prelude evaluates it every call.
@@ -1679,8 +1827,10 @@ function _cse_compile_scalar(entries::Vector{Tuple{Int,ASTExpr}},
         end
     end
     cache = _CSECache()
-    ctx = _CSEContext(cached, Dict{String,Int}(), _Node[], cache, pgctx,
-                      keymemos, IdDict{OpExpr,_Node}(), Dict{String,Int}())
+    ctx = _CSEContext(
+        cached, Dict{String, Int}(), _Node[], cache, pgctx,
+        keymemos, IdDict{OpExpr, _Node}(), Dict{String, Int}()
+    )
     # ---- Named observed prelude defs, in dependency order (ess-obs-slots) ----
     # Compiled BEFORE the equations so every reader's slot exists, and in
     # dependency order so a def's slot reads land strictly below it (the
@@ -1698,7 +1848,7 @@ function _cse_compile_scalar(entries::Vector{Tuple{Int,ASTExpr}},
             n_obs_own += 1
         end
     end
-    rhs_list = Tuple{Int,_Node}[]
+    rhs_list = Tuple{Int, _Node}[]
     for (idx, e) in entries
         push!(rhs_list, (idx, _compile_cse(e, var_map, param_syms, reg_funcs, ctx)))
     end
@@ -1709,8 +1859,10 @@ function _cse_compile_scalar(entries::Vector{Tuple{Int,ASTExpr}},
     # `n_slots` stays the ANONYMOUS-CSE slot count (the observed slots are
     # reported as `n_obs_slots`, aliased-or-own; `n_obs_own` of them occupy
     # their own prelude slot, so the prelude length is `n_slots + n_obs_own`).
-    diag = (; n_slots = length(ctx.defs) - n_obs_own, n_occurrences = n_occ,
-              n_obs_slots = length(obs_defs))
+    diag = (;
+        n_slots = length(ctx.defs) - n_obs_own, n_occurrences = n_occ,
+        n_obs_slots = length(obs_defs),
+    )
     return rhs_list, ctx.defs, cache, diag
 end
 
@@ -1842,10 +1994,12 @@ end
 
 # The fault, off the hot path: the first `nd` subscripts (the ones the read
 # evaluated) are evaluated again for the message.
-@noinline function _recur_unavailable(rg::_RecurGather, children, nd::Int, u, p, t,
-                                      ::Type{T}) where {T}
+@noinline function _recur_unavailable(
+        rg::_RecurGather, children, nd::Int, u, p, t,
+        ::Type{T}
+    ) where {T}
     subs = Int[round(Int, _eval_node(children[d], u, p, t, T)) for d in 1:nd]
-    _recur_unavailable_at(rg, rg.cur[], subs)
+    return _recur_unavailable_at(rg, rg.cur[], subs)
 end
 
 # `E_TREEWALK_RECUR_UNAVAILABLE` for a self-read of `rg`'s variable at `subs` (the
@@ -1855,22 +2009,28 @@ end
 @noinline function _recur_unavailable_at(rg::_RecurGather, cur::Int, subs::Vector{Int})
     r = cur
     cell = zeros(Int, length(rg.dims))
-    for d in sortperm(rg.sweep_w; rev=true)
+    for d in sortperm(rg.sweep_w; rev = true)
         q, r = divrem(r, rg.sweep_w[d])
         cell[d] = q + 1
     end
     inframe = length(subs) == length(rg.dims) &&
-              all(d -> 1 <= subs[d] <= rg.dims[d], eachindex(subs))
-    throw(TreeWalkError("E_TREEWALK_RECUR_UNAVAILABLE",
-        "causal self-read of '$(rg.name)' at [$(join(subs, ", "))" *
-        (length(subs) < length(rg.dims) ? ", …" : "") *
-        "] while evaluating cell [$(join(cell, ", "))]: " *
-        (inframe ? "that cell has not been published yet" :
-                   "that position is outside the recurrence's frame " *
-                   "[$(join(("1:$e" for e in rg.dims), ", "))]") *
-        " (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.4). A self-read is never " *
-        "resolved to a value it cannot have; write the base case as an `ifelse` " *
-        "guard in the body"))
+        all(d -> 1 <= subs[d] <= rg.dims[d], eachindex(subs))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_RECUR_UNAVAILABLE",
+            "causal self-read of '$(rg.name)' at [$(join(subs, ", "))" *
+                (length(subs) < length(rg.dims) ? ", …" : "") *
+                "] while evaluating cell [$(join(cell, ", "))]: " *
+                (
+                inframe ? "that cell has not been published yet" :
+                    "that position is outside the recurrence's frame " *
+                    "[$(join(("1:$e" for e in rg.dims), ", "))]"
+            ) *
+                " (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.4). A self-read is never " *
+                "resolved to a value it cannot have; write the base case as an `ifelse` " *
+                "guard in the body"
+        )
+    )
 end
 
 # Compile-once runtime ⊕-reduction (ess-runtime-contraction). Iterates the static
@@ -2025,15 +2185,19 @@ end
 # grows every ladder at once.
 let arms = :(return nothing)
     for row in reverse(_UNARY_ELEMENTWISE_OPS)
-        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
-                         quote
-                             _expect_arity_n(op, c, 1)
-                             return $(row.sym)(_eval_node(c[1], u, p, t, T))
-                         end,
-                         arms)
+        arms = Core.Expr(
+            :if, :(op === $(QuoteNode(row.sym))),
+            quote
+                _expect_arity_n(op, c, 1)
+                return $(row.sym)(_eval_node(c[1], u, p, t, T))
+            end,
+            arms
+        )
     end
-    @eval @inline function _eval_node_unary_elementwise(op::Symbol, c::Vector{_Node},
-                                                        u, p, t, ::Type{T}) where {T}
+    @eval @inline function _eval_node_unary_elementwise(
+            op::Symbol, c::Vector{_Node},
+            u, p, t, ::Type{T}
+        ) where {T}
         $arms
     end
 end
@@ -2041,16 +2205,22 @@ end
 # Comparisons → 1.0/0.0 (match `evaluate` semantics).
 let arms = :(return nothing)
     for row in reverse(_COMPARISON_ELEMENTWISE_OPS)
-        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
-                         quote
-                             _expect_arity_n(op, c, 2)
-                             return $(row.fnsym)(_eval_node(c[1], u, p, t, T),
-                                                 _eval_node(c[2], u, p, t, T)) ? 1.0 : 0.0
-                         end,
-                         arms)
+        arms = Core.Expr(
+            :if, :(op === $(QuoteNode(row.sym))),
+            quote
+                _expect_arity_n(op, c, 2)
+                return $(row.fnsym)(
+                        _eval_node(c[1], u, p, t, T),
+                        _eval_node(c[2], u, p, t, T)
+                    ) ? 1.0 : 0.0
+            end,
+            arms
+        )
     end
-    @eval @inline function _eval_node_comparison(op::Symbol, c::Vector{_Node},
-                                                 u, p, t, ::Type{T}) where {T}
+    @eval @inline function _eval_node_comparison(
+            op::Symbol, c::Vector{_Node},
+            u, p, t, ::Type{T}
+        ) where {T}
         $arms
     end
 end
@@ -2072,16 +2242,22 @@ end
 # generate.
 let arms = :(return nothing)
     for row in reverse(_BINARY_ELEMENTWISE_OPS)
-        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
-                         quote
-                             _expect_arity_n(op, c, 2)
-                             return $(row.fnsym)(_eval_node(c[1], u, p, t, T),
-                                                 _eval_node(c[2], u, p, t, T))
-                         end,
-                         arms)
+        arms = Core.Expr(
+            :if, :(op === $(QuoteNode(row.sym))),
+            quote
+                _expect_arity_n(op, c, 2)
+                return $(row.fnsym)(
+                    _eval_node(c[1], u, p, t, T),
+                    _eval_node(c[2], u, p, t, T)
+                )
+            end,
+            arms
+        )
     end
-    @eval @inline function _eval_node_binary_elementwise(op::Symbol, c::Vector{_Node},
-                                                         u, p, t, ::Type{T}) where {T}
+    @eval @inline function _eval_node_binary_elementwise(
+            op::Symbol, c::Vector{_Node},
+            u, p, t, ::Type{T}
+        ) where {T}
         $arms
     end
 end
@@ -2089,20 +2265,28 @@ end
 # n-ary `min`/`max` (esm-spec §4.2 — arity ≥ 2), folded in child order.
 let arms = :(return nothing)
     for row in reverse(_NARY_MINMAX_OPS)
-        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
-                         quote
-                             length(c) < 2 && throw(TreeWalkError("E_TREEWALK_ARITY",
-                                 $(row.name * " needs ≥2 args")))
-                             acc = _eval_node(c[1], u, p, t, T)
-                             @inbounds for i in 2:length(c)
-                                 acc = $(row.fnsym)(acc, _eval_node(c[i], u, p, t, T))
-                             end
-                             return acc
-                         end,
-                         arms)
+        arms = Core.Expr(
+            :if, :(op === $(QuoteNode(row.sym))),
+            quote
+                length(c) < 2 && throw(
+                    TreeWalkError(
+                        "E_TREEWALK_ARITY",
+                        $(row.name * " needs ≥2 args")
+                    )
+                )
+                acc = _eval_node(c[1], u, p, t, T)
+                @inbounds for i in 2:length(c)
+                    acc = $(row.fnsym)(acc, _eval_node(c[i], u, p, t, T))
+                end
+                return acc
+            end,
+            arms
+        )
     end
-    @eval @inline function _eval_node_minmax(op::Symbol, c::Vector{_Node},
-                                             u, p, t, ::Type{T}) where {T}
+    @eval @inline function _eval_node_minmax(
+            op::Symbol, c::Vector{_Node},
+            u, p, t, ::Type{T}
+        ) where {T}
         $arms
     end
 end
@@ -2141,18 +2325,18 @@ function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
         # may carry `neg` ops where the source had `-x`.
         _expect_arity_n(op, c, 1)
         return -_eval_node(c[1], u, p, t, T)
-    # Fixed-2-ary elementwise (`/`, `^`, `pow`, `atan2`) — GENERATED from the
-    # registry (see `_eval_node_binary_elementwise` above, where `^`'s
-    # literal-exponent note now lives). The probe sits where `/` sat.
+        # Fixed-2-ary elementwise (`/`, `^`, `pow`, `atan2`) — GENERATED from the
+        # registry (see `_eval_node_binary_elementwise` above, where `^`'s
+        # literal-exponent note now lives). The probe sits where `/` sat.
     elseif (bin = _eval_node_binary_elementwise(op, c, u, p, t, T)) !== nothing
         return bin
 
-    # Comparisons → 1.0/0.0 (match `evaluate` semantics) — GENERATED from the
-    # registry (see `_eval_node_comparison` above).
+        # Comparisons → 1.0/0.0 (match `evaluate` semantics) — GENERATED from the
+        # registry (see `_eval_node_comparison` above).
     elseif (cmp = _eval_node_comparison(op, c, u, p, t, T)) !== nothing
         return cmp
 
-    # Logical
+        # Logical
     elseif op === :and
         for child in c
             _eval_node(child, u, p, t, T) == 0 && return 0.0
@@ -2170,13 +2354,13 @@ function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
     elseif op === :ifelse
         _expect_arity_n(op, c, 3)
         return _eval_node(c[1], u, p, t, T) != 0 ?
-               _eval_node(c[2], u, p, t, T) :
-               _eval_node(c[3], u, p, t, T)
+            _eval_node(c[2], u, p, t, T) :
+            _eval_node(c[3], u, p, t, T)
 
-    # Elementary functions. The mechanical unary arms (`sin` … `ceil`) are
-    # GENERATED from the registry (see `_eval_node_unary_elementwise` above);
-    # the probe sits where the first mechanical arm (`sin`) sat. `atan`
-    # (1-or-2-ary) stays hand-written; `atan2` is handled by the binary probe.
+        # Elementary functions. The mechanical unary arms (`sin` … `ceil`) are
+        # GENERATED from the registry (see `_eval_node_unary_elementwise` above);
+        # the probe sits where the first mechanical arm (`sin`) sat. `atan`
+        # (1-or-2-ary) stays hand-written; `atan2` is handled by the binary probe.
     elseif (unary = _eval_node_unary_elementwise(op, c, u, p, t, T)) !== nothing
         return unary
     elseif op === :atan
@@ -2187,7 +2371,7 @@ function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
         end
         throw(TreeWalkError("E_TREEWALK_ARITY", "atan expects 1 or 2 args"))
 
-    # n-ary min/max (esm-spec §4.2 — arity ≥ 2) — GENERATED from the registry.
+        # n-ary min/max (esm-spec §4.2 — arity ≥ 2) — GENERATED from the registry.
     elseif (mm = _eval_node_minmax(op, c, u, p, t, T)) !== nothing
         return mm
 
@@ -2215,23 +2399,23 @@ function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
         # order excluding the const positions (`_compile_op`): linear → c[1]=x;
         # bilinear → c[1]=x, c[2]=y; searchsorted → c[1]=x.
         pl = n.payload
-        if pl isa Tuple{String,_InterpLinearSpec}
+        if pl isa Tuple{String, _InterpLinearSpec}
             spec = pl[2]
             x = _eval_node(c[1], u, p, t, T)
             return _interp_linear_core(spec, x)
-        elseif pl isa Tuple{String,_InterpBilinearSpec}
+        elseif pl isa Tuple{String, _InterpBilinearSpec}
             spec = pl[2]
             x = _eval_node(c[1], u, p, t, T)
             y = _eval_node(c[2], u, p, t, T)
             return _interp_bilinear_core(spec, x, y)
-        elseif pl isa Tuple{String,_InterpSearchsortedSpec}
+        elseif pl isa Tuple{String, _InterpSearchsortedSpec}
             spec = pl[2]
             x = _eval_node(c[1], u, p, t, T)
             # `convert(T, …)`, not `Float64(…)`: the index is discrete (no
             # derivative), but the ARM must still land in the evaluator's value
             # type or the `:fn` arm infers as a `Union` under ForwardDiff.
             return convert(T, _interp_searchsorted_core(spec, x))
-        elseif pl isa Tuple{String,_FnTypedCoreSpec}
+        elseif pl isa Tuple{String, _FnTypedCoreSpec}
             # Registry-declared typed scalar core (registered_functions.jl,
             # ess-dtcore). `T === Float64` folds at compile time (the same
             # fold `_eval_closed_fn` runs on): the Float64 walk calls the
@@ -2246,7 +2430,7 @@ function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
             end
             args_evaluated = Any[_eval_node(ci, u, p, t, T) for ci in c]
             return convert(T, _eval_closed_fn(pl[1], args_evaluated, T))
-        elseif pl isa Tuple{String,Nothing}
+        elseif pl isa Tuple{String, Nothing}
             # All-scalar closed functions WITHOUT a typed-core declaration:
             # boxed path (no such function exists in the v0.3.0 set — every
             # `datetime.*` entry declares a core — but the arm stays as the
@@ -2271,11 +2455,15 @@ function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
         # Unreachable if `_compile_op` and this arm agree (via
         # `_FN_CONST_ARG_SPECS`) on which closed functions carry a typed spec —
         # throw explicitly rather than falling through to an implicit `nothing`.
-        throw(TreeWalkError("E_TREEWALK_UNKNOWN_CLOSED_FUNCTION",
-            "fn payload $(typeof(pl)) is neither a typed interp spec tuple nor (String, Nothing)"))
+        throw(
+            TreeWalkError(
+                "E_TREEWALK_UNKNOWN_CLOSED_FUNCTION",
+                "fn payload $(typeof(pl)) is neither a typed interp spec tuple nor (String, Nothing)"
+            )
+        )
 
     elseif op === :geo_gather || op === :geo_pia || op === :geo_skolem ||
-           op === :geo_agg
+            op === :geo_agg
         # Compiled setup-time GEOMETRY nodes (tree_walk/geometry_compile.jl).
         # These exist only in build-time compiled geometry bodies — `u` is a
         # small loop-index frame there, never the ODE state — so this arm is
@@ -2293,7 +2481,11 @@ end
 # happens solely on the throw branch, so the happy path stays allocation-free.
 @inline function _expect_arity_n(op::Symbol, c::AbstractVector, n::Int)
     length(c) == n ||
-        throw(TreeWalkError("E_TREEWALK_ARITY",
-                            "$op expects $n args, got $(length(c))"))
+        throw(
+        TreeWalkError(
+            "E_TREEWALK_ARITY",
+            "$op expects $n args, got $(length(c))"
+        )
+    )
     return nothing
 end

@@ -12,12 +12,12 @@ using Pkg
 
 project_root = dirname(dirname(dirname(@__FILE__)))
 julia_pkg = joinpath(project_root, "pkg", "EarthSciAST.jl")
-Pkg.activate(julia_pkg; io=devnull)
+Pkg.activate(julia_pkg; io = devnull)
 
 using EarthSciAST
 using JSON3
 
-function roundtrip_one(path::String)::Dict{String,Any}
+function roundtrip_one(path::String)::Dict{String, Any}
     try
         raw = read(path, String)
         data = JSON3.read(raw)
@@ -37,19 +37,19 @@ function roundtrip_one(path::String)::Dict{String,Any}
         # outer `JSON3.write` emits them as integers (no heterogeneous-array
         # re-floating). Emit `out` verbatim.
         normalized = EarthSciAST.serialize_expression(expr)
-        return Dict{String,Any}("ok" => true, "value" => normalized)
+        return Dict{String, Any}("ok" => true, "value" => normalized)
     catch err
-        return Dict{String,Any}("ok" => false, "error" => sprint(showerror, err))
+        return Dict{String, Any}("ok" => false, "error" => sprint(showerror, err))
     end
 end
 
 function main()
-    results = Dict{String,Any}()
+    results = Dict{String, Any}()
     for p in ARGS
         results[basename(p)] = roundtrip_one(p)
     end
     JSON3.write(stdout, results)
-    println(stdout)
+    return println(stdout)
 end
 
 main()

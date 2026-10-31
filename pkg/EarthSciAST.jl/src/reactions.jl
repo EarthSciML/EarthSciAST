@@ -25,8 +25,8 @@ signed-stoichiometry iteration shared by `lower_reactions_to_equations`,
 `stoichiometric_matrix`, and flatten's reaction-species collection
 (`_collect_reaction_species!`).
 """
-function each_stoich_term(rxn::Reaction)::Vector{Tuple{String,Float64}}
-    terms = Tuple{String,Float64}[]
+function each_stoich_term(rxn::Reaction)::Vector{Tuple{String, Float64}}
+    terms = Tuple{String, Float64}[]
     substrates = raw_substrates(rxn)
     if substrates !== nothing
         for entry in substrates
@@ -87,16 +87,16 @@ function derive_odes(rxn_sys::ReactionSystem)::Model
     # PARAMETERS: the same treatment as the flatten path
     # (namespacing.jl `_collect_reaction_system!`) and the Catalyst path
     # (codegen.jl `[isconstantspecies=true]`).
-    variables = Dict{String,ModelVariable}()
+    variables = Dict{String, ModelVariable}()
     for species in rxn_sys.species
         variables[species.name] = ModelVariable(
             species.constant === true ? ParameterVariable : UnknownVariable,
             # Honor the species' declared scalar `default` (matching the main
             # flatten path in flatten.jl `_collect_reaction_system!`); fall back
             # to the library convention only when no default is declared.
-            default=something(species.default, DEFAULT_SPECIES_CONCENTRATION),
-            description="Concentration of species $(species.name)",
-            units=DEFAULT_SPECIES_UNITS
+            default = something(species.default, DEFAULT_SPECIES_CONCENTRATION),
+            description = "Concentration of species $(species.name)",
+            units = DEFAULT_SPECIES_UNITS
         )
     end
 
@@ -107,13 +107,13 @@ function derive_odes(rxn_sys::ReactionSystem)::Model
     for param in rxn_sys.parameters
         variables[param.name] = ModelVariable(
             ParameterVariable,
-            default=param.default,
-            description=param.description,
-            units=param.units,
-            default_units=param.default_units,
-            shape=param.shape,
-            distribution=param.distribution,
-            update=param.update
+            default = param.default,
+            description = param.description,
+            units = param.units,
+            default_units = param.default_units,
+            shape = param.shape,
+            distribution = param.distribution,
+            update = param.update
         )
     end
 
@@ -121,12 +121,12 @@ function derive_odes(rxn_sys::ReactionSystem)::Model
     equations = lower_reactions_to_equations(rxn_sys.reactions, rxn_sys.species)
 
     # Handle subsystems recursively
-    subsystems = Dict{String,Model}()
+    subsystems = Dict{String, Model}()
     for (name, subsys) in rxn_sys.subsystems
         subsystems[name] = derive_odes(subsys)
     end
 
-    return Model(variables, equations, subsystems=subsystems)
+    return Model(variables, equations, subsystems = subsystems)
 end
 
 """
@@ -223,8 +223,12 @@ function mass_action_rate(reaction::Reaction, species::Vector{Species})::ASTExpr
         if entry.stoichiometry == 1
             push!(mass_action_terms, species_expr)
         else
-            push!(mass_action_terms, OpExpr("^",
-                ASTExpr[species_expr, _stoich_literal(entry.stoichiometry)]))
+            push!(
+                mass_action_terms, OpExpr(
+                    "^",
+                    ASTExpr[species_expr, _stoich_literal(entry.stoichiometry)]
+                )
+            )
         end
     end
 

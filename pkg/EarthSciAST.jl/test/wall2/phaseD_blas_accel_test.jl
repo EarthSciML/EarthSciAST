@@ -36,33 +36,39 @@ _op(op, args...; kw...) = OpExpr(String(op), ESM.ASTExpr[args...]; kw...)
 _idxv(var, ix...) = _op("index", _v(var), [_v(String(s)) for s in ix]...)
 
 # conc[rcv] = Σ_c A[c,rcv]·E[c]
-make_conc(N_src) = _op("faq"; output_idx = Any["rcv"], semiring = "sum_product",
+make_conc(N_src) = _op(
+    "faq"; output_idx = Any["rcv"], semiring = "sum_product",
     expr_body = _op("*", _idxv("A", "c", "rcv"), _idxv("E", "c")),
-    ranges = Dict{String,Any}("c" => Any[1, N_src]))
+    ranges = Dict{String, Any}("c" => Any[1, N_src])
+)
 
 # conc2[i,j] = Σ_c A3[c,i,j]·E[c]   (rank-2 output)
-make_conc2(N_src) = _op("faq"; output_idx = Any["i", "j"], semiring = "sum_product",
+make_conc2(N_src) = _op(
+    "faq"; output_idx = Any["i", "j"], semiring = "sum_product",
     expr_body = _op("*", _idxv("A", "c", "i", "j"), _idxv("E", "c")),
-    ranges = Dict{String,Any}("c" => Any[1, N_src]))
+    ranges = Dict{String, Any}("c" => Any[1, N_src])
+)
 
 # deaths[rcv] = exp(k·conc[rcv]) − 1   (elementwise wrapper over the nested aggregate)
-make_deaths(N_src; k = 1e-3) =
+make_deaths(N_src; k = 1.0e-3) =
     _op("-", _op("exp", _op("*", _num(k), make_conc(N_src))), _num(1.0))
 
 # ---- evaluation helpers -----------------------------------------------------
 # Phase C (the correctness baseline): compile-once path, BLAS accelerator OFF.
-_phaseC(expr, cells; ca, params = Dict{String,Float64}()) =
+_phaseC(expr, cells; ca, params = Dict{String, Float64}()) =
     ESM.evaluate_cellwise(expr, cells; const_arrays = ca, params = params, blas_accel = false)
 # The BLAS accelerator path.
-_blas(expr, cells; ca, params = Dict{String,Float64}()) =
+_blas(expr, cells; ca, params = Dict{String, Float64}()) =
     ESM.evaluate_cellwise(expr, cells; const_arrays = ca, params = params, blas_accel = true)
 # The pre-Phase-C per-cell reference (SMALL N only — allocation-heavy at scale).
-_percell(expr, cells; ca, params = Dict{String,Float64}()) =
-    Float64[ESM._eval_cellwise(ESM._PerCellLicense(), expr, collect(Int, c); const_arrays = ca, params = params)
-            for c in cells]
+_percell(expr, cells; ca, params = Dict{String, Float64}()) =
+    Float64[
+    ESM._eval_cellwise(ESM._PerCellLicense(), expr, collect(Int, c); const_arrays = ca, params = params)
+        for c in cells
+]
 # Does the BLAS recogniser engage on this shape?
-_engages(expr, cells, ca; params = Dict{String,Float64}()) =
-    ESM._evaluate_cellwise_blas(expr, cells, ca, Dict{String,Function}(), params) !== nothing
+_engages(expr, cells, ca; params = Dict{String, Float64}()) =
+    ESM._evaluate_cellwise_blas(expr, cells, ca, Dict{String, Function}(), params) !== nothing
 
 # max |a-b| / |b| over the field (atol=0 relative agreement; A/E>0 ⇒ b≠0).
 _maxreldiff(a, b) = maximum(abs.(a .- b) ./ abs.(b))
@@ -83,13 +89,13 @@ _rss_mib() = parse(Int, split(read(`ps -o rss= -p $(getpid())`, String))[1]) / 2
                 Random.seed!(seed)
                 A = rand(N_src, N_rcv)
                 E = rand(N_src)
-                ca = Dict{String,Any}("A" => A, "E" => E)
+                ca = Dict{String, Any}("A" => A, "E" => E)
                 conc = make_conc(N_src)
 
                 @test _engages(conc, cells, ca)          # BLAS path is what is under test
                 bl = _blas(conc, cells; ca = ca)
                 pc = _phaseC(conc, cells; ca = ca)
-                @test isapprox(bl, pc; rtol = 1e-10, atol = 0.0)
+                @test isapprox(bl, pc; rtol = 1.0e-10, atol = 0.0)
                 global_maxrd = max(global_maxrd, _maxreldiff(bl, pc))
             end
         end
@@ -102,13 +108,13 @@ _rss_mib() = parse(Int, split(read(`ps -o rss= -p $(getpid())`, String))[1]) / 2
                 Random.seed!(seed)
                 A3 = rand(N_src, N_i, N_j)
                 E = rand(N_src)
-                ca = Dict{String,Any}("A" => A3, "E" => E)
+                ca = Dict{String, Any}("A" => A3, "E" => E)
                 conc2 = make_conc2(N_src)
 
                 @test _engages(conc2, cells, ca)
                 bl = _blas(conc2, cells; ca = ca)
                 pc = _phaseC(conc2, cells; ca = ca)
-                @test isapprox(bl, pc; rtol = 1e-10, atol = 0.0)
+                @test isapprox(bl, pc; rtol = 1.0e-10, atol = 0.0)
                 global_maxrd = max(global_maxrd, _maxreldiff(bl, pc))
             end
         end
@@ -120,25 +126,25 @@ _rss_mib() = parse(Int, split(read(`ps -o rss= -p $(getpid())`, String))[1]) / 2
             Random.seed!(0xC3)
             A = rand(N_src, N_rcv)
             E = rand(N_src)
-            ca = Dict{String,Any}("A" => A, "E" => E)
+            ca = Dict{String, Any}("A" => A, "E" => E)
             # literal-k and parameter-k wrappers.
-            deaths = make_deaths(N_src; k = 1e-3)
+            deaths = make_deaths(N_src; k = 1.0e-3)
             deaths_p = _op("-", _op("exp", _op("*", _v("k"), make_conc(N_src))), _num(1.0))
-            params = Dict{String,Float64}("k" => 2.5e-3)
+            params = Dict{String, Float64}("k" => 2.5e-3)
 
             @test _engages(deaths, cells, ca)
             @test _engages(deaths_p, cells, ca; params = params)
-            for (expr, ps) in ((deaths, Dict{String,Float64}()), (deaths_p, params))
+            for (expr, ps) in ((deaths, Dict{String, Float64}()), (deaths_p, params))
                 bl = _blas(expr, cells; ca = ca, params = ps)
                 pc = _phaseC(expr, cells; ca = ca, params = ps)
-                @test isapprox(bl, pc; rtol = 1e-10, atol = 0.0)
+                @test isapprox(bl, pc; rtol = 1.0e-10, atol = 0.0)
                 global_maxrd = max(global_maxrd, _maxreldiff(bl, pc))
             end
         end
     end
 
-    @info "measured max relative difference BLAS-vs-PhaseC" maxreldiff = global_maxrd tolerance_used = 1e-10
-    @test global_maxrd < 1e-10
+    @info "measured max relative difference BLAS-vs-PhaseC" maxreldiff = global_maxrd tolerance_used = 1.0e-10
+    @test global_maxrd < 1.0e-10
 
     @testset "fallback — non-linear observeds decline BLAS, stay bit-identical" begin
         N_src, N_rcv = 128, 60           # small enough to also anchor against _percell
@@ -146,21 +152,27 @@ _rss_mib() = parse(Int, split(read(`ps -o rss= -p $(getpid())`, String))[1]) / 2
         Random.seed!(0xE5)
         A = rand(N_src, N_rcv)
         E = rand(N_src)
-        ca = Dict{String,Any}("A" => A, "E" => E)
+        ca = Dict{String, Any}("A" => A, "E" => E)
 
         # (a) max-semiring aggregate of the SAME shape — the soundness guard.
-        maxagg = _op("faq"; output_idx = Any["rcv"], semiring = "max_product",
+        maxagg = _op(
+            "faq"; output_idx = Any["rcv"], semiring = "max_product",
             expr_body = _op("*", _idxv("A", "c", "rcv"), _idxv("E", "c")),
-            ranges = Dict{String,Any}("c" => Any[1, N_src]))
+            ranges = Dict{String, Any}("c" => Any[1, N_src])
+        )
         # (b) non-affine body A[c,rcv]^2 · E[c] — not a plain product of index reads.
-        sqagg = _op("faq"; output_idx = Any["rcv"], semiring = "sum_product",
+        sqagg = _op(
+            "faq"; output_idx = Any["rcv"], semiring = "sum_product",
             expr_body = _op("*", _op("^", _idxv("A", "c", "rcv"), _num(2.0)), _idxv("E", "c")),
-            ranges = Dict{String,Any}("c" => Any[1, N_src]))
+            ranges = Dict{String, Any}("c" => Any[1, N_src])
+        )
         # (c) runtime filter aggregate — restricts contributing terms.
-        filtagg = _op("faq"; output_idx = Any["rcv"], semiring = "sum_product",
+        filtagg = _op(
+            "faq"; output_idx = Any["rcv"], semiring = "sum_product",
             expr_body = _op("*", _idxv("A", "c", "rcv"), _idxv("E", "c")),
-            ranges = Dict{String,Any}("c" => Any[1, N_src]),
-            filter = _op("<", _v("c"), _num(40.0)))
+            ranges = Dict{String, Any}("c" => Any[1, N_src]),
+            filter = _op("<", _v("c"), _num(40.0))
+        )
 
         for expr in (maxagg, sqagg, filtagg)
             @test !_engages(expr, cells, ca)                 # BLAS path DECLINES
@@ -177,9 +189,9 @@ _rss_mib() = parse(Int, split(read(`ps -o rss= -p $(getpid())`, String))[1]) / 2
         Random.seed!(0xD4)
         A = rand(N_src, N_rcv)
         E = rand(N_src)
-        ca = Dict{String,Any}("A" => A, "E" => E)
+        ca = Dict{String, Any}("A" => A, "E" => E)
 
-        for expr in (make_conc(N_src), make_deaths(N_src; k = 1e-3))
+        for expr in (make_conc(N_src), make_deaths(N_src; k = 1.0e-3))
             # No kwarg (default) == explicit blas_accel=false == the per-cell oracle.
             default = ESM.evaluate_cellwise(expr, cells; const_arrays = ca)
             @test default == _phaseC(expr, cells; ca = ca)
@@ -193,14 +205,14 @@ _rss_mib() = parse(Int, split(read(`ps -o rss= -p $(getpid())`, String))[1]) / 2
         Random.seed!(0xF6)
         A = rand(N_src, N_rcv)           # 1520×2000×8 B ≈ 24 MiB
         E = rand(N_src)
-        ca = Dict{String,Any}("A" => A, "E" => E)
+        ca = Dict{String, Any}("A" => A, "E" => E)
         cells = [[r] for r in 1:N_rcv]
         conc = make_conc(N_src)
 
         # correctness at bench scale, then timing.
         bl = _blas(conc, cells; ca = ca)
         pc = _phaseC(conc, cells; ca = ca)
-        @test isapprox(bl, pc; rtol = 1e-10, atol = 0.0)
+        @test isapprox(bl, pc; rtol = 1.0e-10, atol = 0.0)
 
         bench(f) = (f(); minimum(@elapsed(f()) for _ in 1:5))
         t_blas = bench(() -> _blas(conc, cells; ca = ca))

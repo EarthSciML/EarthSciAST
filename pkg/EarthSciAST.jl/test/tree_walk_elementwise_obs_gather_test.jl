@@ -34,13 +34,15 @@ const ESM_EOG = EarthSciAST
     u0val = 2.0
     hvals = u0val .* fvals               # `h = u * f` at the default state
 
-    fixture = joinpath(TESTUTILS_REPO_ROOT, "pkg", "EarthSciAST.jl", "test",
-                       "fixtures", "elementwise_obs_gather.esm")
+    fixture = joinpath(
+        TESTUTILS_REPO_ROOT, "pkg", "EarthSciAST.jl", "test",
+        "fixtures", "elementwise_obs_gather.esm"
+    )
 
     @testset "fixture builds and evaluates" begin
         @test isfile(fixture)
         file = ESM_EOG.load_path(fixture)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(file; model_name="Column")
+        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(file; model_name = "Column")
         du = similar(u0)
         f!(du, u0, p, 0.0)
 
@@ -61,19 +63,25 @@ const ESM_EOG = EarthSciAST
     # (above), the explicit `faq` gather spelling, and the elementwise body
     # consumed directly in a state RHS.
     function _column_model(f_rhs)
-        vars = Dict{String,ModelVariable}(
-            "zc" => ModelVariable(UnknownVariable; shape=["lev"]),
-            "f"  => ModelVariable(UnknownVariable; shape=["lev"]),
-            "s"  => ModelVariable(UnknownVariable; default=0.0),
+        vars = Dict{String, ModelVariable}(
+            "zc" => ModelVariable(UnknownVariable; shape = ["lev"]),
+            "f" => ModelVariable(UnknownVariable; shape = ["lev"]),
+            "s" => ModelVariable(UnknownVariable; default = 0.0),
         )
         eqs = Equation[
-            Equation(OpExpr("D", ASTExpr[VarExpr("s")]; wrt="t"),
-                     OpExpr("faq", ASTExpr[VarExpr("f")];
-                            semiring="sum_product", output_idx=Any[],
-                            ranges=Dict{String,Any}("j" => Any[1, 4]),
-                            expr_body=OpExpr("index", ASTExpr[VarExpr("f"), VarExpr("j")]))),
-            Equation(VarExpr("zc"),
-                     OpExpr("const", ASTExpr[]; value=zc)),
+            Equation(
+                OpExpr("D", ASTExpr[VarExpr("s")]; wrt = "t"),
+                OpExpr(
+                    "faq", ASTExpr[VarExpr("f")];
+                    semiring = "sum_product", output_idx = Any[],
+                    ranges = Dict{String, Any}("j" => Any[1, 4]),
+                    expr_body = OpExpr("index", ASTExpr[VarExpr("f"), VarExpr("j")])
+                )
+            ),
+            Equation(
+                VarExpr("zc"),
+                OpExpr("const", ASTExpr[]; value = zc)
+            ),
             Equation(VarExpr("f"), f_rhs),
         ]
         return ESM_EOG.Model(vars, eqs)
@@ -83,13 +91,29 @@ const ESM_EOG = EarthSciAST
 
     @testset "explicit-gather spelling agrees" begin
         # f = aggregate(i from lev; 1 + cos(pi*index(zc, i)))
-        body = OpExpr("+", ASTExpr[NumExpr(1.0),
-                 OpExpr("cos", ASTExpr[OpExpr("*", ASTExpr[NumExpr(_pi),
-                   OpExpr("index", ASTExpr[VarExpr("zc"), VarExpr("i")])])])])
-        model = _column_model(OpExpr("faq", ASTExpr[VarExpr("zc")];
-                                     semiring="sum_product", output_idx=Any["i"],
-                                     ranges=Dict{String,Any}("i" => Any[1, 4]),
-                                     expr_body=body))
+        body = OpExpr(
+            "+", ASTExpr[
+                NumExpr(1.0),
+                OpExpr(
+                    "cos", ASTExpr[
+                        OpExpr(
+                            "*", ASTExpr[
+                                NumExpr(_pi),
+                                OpExpr("index", ASTExpr[VarExpr("zc"), VarExpr("i")]),
+                            ]
+                        ),
+                    ]
+                ),
+            ]
+        )
+        model = _column_model(
+            OpExpr(
+                "faq", ASTExpr[VarExpr("zc")];
+                semiring = "sum_product", output_idx = Any["i"],
+                ranges = Dict{String, Any}("i" => Any[1, 4]),
+                expr_body = body
+            )
+        )
         f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model)
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[vmap["s"]] ≈ sum(fvals)
@@ -97,9 +121,21 @@ const ESM_EOG = EarthSciAST
 
     @testset "elementwise spelling agrees" begin
         # f = 1 + cos(pi*zc), read only through `index(f, j)` — the #175 shape.
-        body = OpExpr("+", ASTExpr[NumExpr(1.0),
-                 OpExpr("cos", ASTExpr[OpExpr("*", ASTExpr[NumExpr(_pi),
-                   VarExpr("zc")])])])
+        body = OpExpr(
+            "+", ASTExpr[
+                NumExpr(1.0),
+                OpExpr(
+                    "cos", ASTExpr[
+                        OpExpr(
+                            "*", ASTExpr[
+                                NumExpr(_pi),
+                                VarExpr("zc"),
+                            ]
+                        ),
+                    ]
+                ),
+            ]
+        )
         model = _column_model(body)
         f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model)
         du = similar(u0); f!(du, u0, p, 0.0)
@@ -115,25 +151,57 @@ const ESM_EOG = EarthSciAST
         @test !A(VarExpr("k"))
         @test !A(NumExpr(1.0))
         # nested elementwise: the whole point of the fix
-        nested = OpExpr("+", ASTExpr[NumExpr(1.0),
-                   OpExpr("cos", ASTExpr[OpExpr("*", ASTExpr[NumExpr(_pi),
-                     VarExpr("zc")])])])
+        nested = OpExpr(
+            "+", ASTExpr[
+                NumExpr(1.0),
+                OpExpr(
+                    "cos", ASTExpr[
+                        OpExpr(
+                            "*", ASTExpr[
+                                NumExpr(_pi),
+                                VarExpr("zc"),
+                            ]
+                        ),
+                    ]
+                ),
+            ]
+        )
         @test A(nested)
         # elementwise over scalars only stays scalar
-        @test !A(OpExpr("+", ASTExpr[NumExpr(1.0),
-                   OpExpr("cos", ASTExpr[VarExpr("k")])]))
+        @test !A(
+            OpExpr(
+                "+", ASTExpr[
+                    NumExpr(1.0),
+                    OpExpr("cos", ASTExpr[VarExpr("k")]),
+                ]
+            )
+        )
         # a producer node is array-valued; a SCALAR reduction is not
         @test A(OpExpr("makearray", ASTExpr[]))
-        @test A(OpExpr("faq", ASTExpr[]; output_idx=Any["i"],
-                       ranges=Dict{String,Any}("i" => Any[1, 4]),
-                       expr_body=NumExpr(1.0)))
-        @test !A(OpExpr("faq", ASTExpr[]; output_idx=Any[],
-                        ranges=Dict{String,Any}("j" => Any[1, 4]),
-                        expr_body=OpExpr("index", ASTExpr[VarExpr("zc"), VarExpr("j")])))
+        @test A(
+            OpExpr(
+                "faq", ASTExpr[]; output_idx = Any["i"],
+                ranges = Dict{String, Any}("i" => Any[1, 4]),
+                expr_body = NumExpr(1.0)
+            )
+        )
+        @test !A(
+            OpExpr(
+                "faq", ASTExpr[]; output_idx = Any[],
+                ranges = Dict{String, Any}("j" => Any[1, 4]),
+                expr_body = OpExpr("index", ASTExpr[VarExpr("zc"), VarExpr("j")])
+            )
+        )
         # an already-gathered leaf is scalar — `index` is not an elementwise op,
         # so the walk does not descend into it and re-wrap the gather.
-        @test !A(OpExpr("+", ASTExpr[NumExpr(1.0),
-                   OpExpr("index", ASTExpr[VarExpr("zc"), VarExpr("j")])]))
+        @test !A(
+            OpExpr(
+                "+", ASTExpr[
+                    NumExpr(1.0),
+                    OpExpr("index", ASTExpr[VarExpr("zc"), VarExpr("j")]),
+                ]
+            )
+        )
     end
 
     @testset "a one-element const field is a SCALAR, not a gatherable array" begin

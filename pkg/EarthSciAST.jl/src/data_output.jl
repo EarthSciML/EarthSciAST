@@ -95,8 +95,8 @@ Fields (RFC §16.3):
 """
 struct StateSnapshot
     t::Float64
-    state::Vector{Tuple{Array,Tuple{Vararg{UnitRange{Int}}}}}
-    observed::Dict{String,Array}
+    state::Vector{Tuple{Array, Tuple{Vararg{UnitRange{Int}}}}}
+    observed::Dict{String, Array}
 end
 
 # --------------------------------------------------------------------------- #
@@ -123,9 +123,12 @@ sink contributes no fixed tstops). The output-side mirror of
 (EarthSciIO) or a test mock.
 """
 function sink_output_times end
-sink_output_times(s) = throw(OutputError(
-    "sink_output_times not implemented for $(typeof(s)); the data binding " *
-    "(EarthSciIO) or a mock must add a method"))
+sink_output_times(s) = throw(
+    OutputError(
+        "sink_output_times not implemented for $(typeof(s)); the data binding " *
+            "(EarthSciIO) or a mock must add a method"
+    )
+)
 
 """
     sink_open!(sink)
@@ -135,9 +138,12 @@ Open `sink` for writing against its OWN `OutputSchema` (declare dims / coordinat
 [`sink_write!`](@ref). Concrete impls live in the data binding or a test mock.
 """
 function sink_open! end
-sink_open!(s) = throw(OutputError(
-    "sink_open! not implemented for $(typeof(s)); the data binding " *
-    "(EarthSciIO) or a mock must add a method"))
+sink_open!(s) = throw(
+    OutputError(
+        "sink_open! not implemented for $(typeof(s)); the data binding " *
+            "(EarthSciIO) or a mock must add a method"
+    )
+)
 
 """
     sink_write!(sink, snap::StateSnapshot; selection=nothing)
@@ -154,9 +160,12 @@ deferred Reactant shard-local [`state_snapshot`](@ref) + [`sink_supports_partial
 Concrete impls live in the data binding or a test mock.
 """
 function sink_write! end
-sink_write!(s, ::StateSnapshot; selection=nothing) = throw(OutputError(
-    "sink_write! not implemented for $(typeof(s)); the data binding " *
-    "(EarthSciIO) or a mock must add a method"))
+sink_write!(s, ::StateSnapshot; selection = nothing) = throw(
+    OutputError(
+        "sink_write! not implemented for $(typeof(s)); the data binding " *
+            "(EarthSciIO) or a mock must add a method"
+    )
+)
 
 """
     sink_flush!(sink)
@@ -165,9 +174,12 @@ Durable barrier: make every record written so far durable (the checkpoint-bounda
 commit). Concrete impls live in the data binding or a test mock.
 """
 function sink_flush! end
-sink_flush!(s) = throw(OutputError(
-    "sink_flush! not implemented for $(typeof(s)); the data binding " *
-    "(EarthSciIO) or a mock must add a method"))
+sink_flush!(s) = throw(
+    OutputError(
+        "sink_flush! not implemented for $(typeof(s)); the data binding " *
+            "(EarthSciIO) or a mock must add a method"
+    )
+)
 
 """
     sink_close!(sink)
@@ -177,9 +189,12 @@ release resources. Called once after the last [`sink_write!`](@ref). Concrete im
 live in the data binding or a test mock.
 """
 function sink_close! end
-sink_close!(s) = throw(OutputError(
-    "sink_close! not implemented for $(typeof(s)); the data binding " *
-    "(EarthSciIO) or a mock must add a method"))
+sink_close!(s) = throw(
+    OutputError(
+        "sink_close! not implemented for $(typeof(s)); the data binding " *
+            "(EarthSciIO) or a mock must add a method"
+    )
+)
 
 """
     sink_supports_partial(sink) -> Bool
@@ -230,8 +245,9 @@ it changes only this function, not the sink or the callback.
 """
 function state_snapshot(integrator)
     u = integrator.u
-    return Tuple{Array,Tuple{Vararg{UnitRange{Int}}}}[
-        (Array(u), (1:length(u),))]
+    return Tuple{Array, Tuple{Vararg{UnitRange{Int}}}}[
+        (Array(u), (1:length(u),)),
+    ]
 end
 
 # --------------------------------------------------------------------------- #
@@ -282,10 +298,13 @@ function build_output_callback end
 
 # Fallback (varargs ⇒ strictly less specific than the extension's
 # zero-positional keyword method): fires only when the extension is NOT loaded.
-build_output_callback(args...; kwargs...) = throw(OutputError(
-    "build_output_callback requires the DiffEqCallbacks + SciMLBase extension; " *
-    "add `using DiffEqCallbacks, SciMLBase` (or a solver stack that loads them) so " *
-    "EarthSciASTDataOutputExt is active"))
+build_output_callback(args...; kwargs...) = throw(
+    OutputError(
+        "build_output_callback requires the DiffEqCallbacks + SciMLBase extension; " *
+            "add `using DiffEqCallbacks, SciMLBase` (or a solver stack that loads them) so " *
+            "EarthSciASTDataOutputExt is active"
+    )
+)
 
 # --------------------------------------------------------------------------- #
 # Flat→gridded inversion (RFC §7). The shared, language-neutral piece: invert the
@@ -344,20 +363,23 @@ double-covered one (which would silently drop a cell) is an [`OutputError`](@ref
 not a silent mis-write.
 """
 function derive_output_gridding(var_map::AbstractDict)
-    groups = Dict{String,Vector{Tuple{Int,Vector{Int}}}}()  # base => [(flat_idx, indices)]
+    groups = Dict{String, Vector{Tuple{Int, Vector{Int}}}}()  # base => [(flat_idx, indices)]
     for (key, idx) in var_map
         parsed = _parse_cell_key(String(key))
         base, inds = parsed === nothing ? (String(key), Int[]) : parsed
-        push!(get!(groups, base, Tuple{Int,Vector{Int}}[]), (Int(idx), inds))
+        push!(get!(groups, base, Tuple{Int, Vector{Int}}[]), (Int(idx), inds))
     end
     out = VarGridding[]
     for base in sort!(collect(keys(groups)))
         entries = groups[base]
         ndim = maximum(length(e[2]) for e in entries)
         if ndim == 0
-            length(entries) == 1 || throw(OutputError(
-                "scalar variable '$base' maps to $(length(entries)) flat indices; a " *
-                "scalar cell key must be unique"))
+            length(entries) == 1 || throw(
+                OutputError(
+                    "scalar variable '$base' maps to $(length(entries)) flat indices; a " *
+                        "scalar cell key must be unique"
+                )
+            )
             fi = entries[1][1]
             # A scalar carries NO spatial axis: shape `[]`, no dim names, a 0-d
             # grid. See the `VarGridding` docstring and RFC §16.12.
@@ -365,20 +387,26 @@ function derive_output_gridding(var_map::AbstractDict)
         else
             shape = zeros(Int, ndim)
             for (_, inds) in entries
-                length(inds) == ndim || throw(OutputError(
-                    "variable '$base' has cells of differing dimensionality " *
-                    "($(length(inds)) vs $ndim); a gridded variable must be rectangular"))
+                length(inds) == ndim || throw(
+                    OutputError(
+                        "variable '$base' has cells of differing dimensionality " *
+                            "($(length(inds)) vs $ndim); a gridded variable must be rectangular"
+                    )
+                )
                 @inbounds for d in 1:ndim
-                    inds[d] >= 1 || throw(OutputError(
-                        "variable '$base' has cell index 0 on axis $(d - 1); cell keys " *
-                        "are 1-based"))
+                    inds[d] >= 1 || throw(
+                        OutputError(
+                            "variable '$base' has cell index 0 on axis $(d - 1); cell keys " *
+                                "are 1-based"
+                        )
+                    )
                     shape[d] = max(shape[d], inds[d])
                 end
             end
             flat = Int[e[1] for e in entries]
             cart = CartesianIndex[CartesianIndex(Tuple(e[2])...) for e in entries]
             _check_dense(base, shape, cart)
-            dimnames = String["$(base)_d$(d-1)" for d in 1:ndim]
+            dimnames = String["$(base)_d$(d - 1)" for d in 1:ndim]
             push!(out, VarGridding(base, shape, dimnames, flat, cart))
         end
     end
@@ -388,18 +416,26 @@ end
 # The grid must be covered exactly once. Without this a gap left an uninitialized
 # hole in the written array and a repeated cell silently dropped a flat slot —
 # both are wrong science written out as if it were right.
-function _check_dense(base::AbstractString, shape::Vector{Int},
-                      cart::Vector{CartesianIndex})
+function _check_dense(
+        base::AbstractString, shape::Vector{Int},
+        cart::Vector{CartesianIndex}
+    )
     total = prod(shape)
-    length(cart) == total || throw(OutputError(
-        "variable '$base' supplies $(length(cart)) cell(s) for a $shape grid of " *
-        "$total; a gridded output variable must be dense"))
+    length(cart) == total || throw(
+        OutputError(
+            "variable '$base' supplies $(length(cart)) cell(s) for a $shape grid of " *
+                "$total; a gridded output variable must be dense"
+        )
+    )
     lin = LinearIndices(Tuple(shape))
     seen = falses(total)
     for c in cart
         o = lin[c]
-        seen[o] && throw(OutputError(
-            "variable '$base' maps two flat slots to grid cell $(collect(Tuple(c)))"))
+        seen[o] && throw(
+            OutputError(
+                "variable '$base' maps two flat slots to grid cell $(collect(Tuple(c)))"
+            )
+        )
         seen[o] = true
     end
     return nothing
@@ -508,20 +544,22 @@ the flattened run document by [`derive_output_meta`](@ref).
 """
 struct OutputMeta
     model_name::String
-    index_sets::Dict{String,Int}
-    var_dims::Dict{String,Vector{String}}
-    var_attrs::Dict{String,Dict{String,Any}}
-    var_types::Dict{String,String}
-    coordinates::Dict{String,Any}
+    index_sets::Dict{String, Int}
+    var_dims::Dict{String, Vector{String}}
+    var_attrs::Dict{String, Dict{String, Any}}
+    var_types::Dict{String, String}
+    coordinates::Dict{String, Any}
     time_dim::String
 end
 
 "Fallback record-axis name when the document declares no `independent_variable`."
 const DEFAULT_TIME_DIM = "time"
 
-const _EMPTY_OUTPUT_META = OutputMeta("", Dict{String,Int}(),
-    Dict{String,Vector{String}}(), Dict{String,Dict{String,Any}}(),
-    Dict{String,String}(), Dict{String,Any}(), DEFAULT_TIME_DIM)
+const _EMPTY_OUTPUT_META = OutputMeta(
+    "", Dict{String, Int}(),
+    Dict{String, Vector{String}}(), Dict{String, Dict{String, Any}}(),
+    Dict{String, String}(), Dict{String, Any}(), DEFAULT_TIME_DIM
+)
 
 # Look `base` up in one of the `var_*` tables: exact first (bare or namespaced),
 # then the last dotted segment — so a nested namespace the exact keys do not
@@ -564,7 +602,7 @@ silently falling back to positional ones. A bare name claimed by more than one
 model is ambiguous and only the qualified key survives.
 """
 function derive_output_meta(doc::AbstractDict)
-    idx = Dict{String,Int}()
+    idx = Dict{String, Int}()
     isets = get(doc, "index_sets", nothing)
     if isets isa AbstractDict
         for (nm, is) in isets
@@ -574,7 +612,7 @@ function derive_output_meta(doc::AbstractDict)
 
     coords = get(doc, "coordinates", nothing)
     cdict = coords isa AbstractDict ?
-        Dict{String,Any}(String(k) => v for (k, v) in coords) : Dict{String,Any}()
+        Dict{String, Any}(String(k) => v for (k, v) in coords) : Dict{String, Any}()
 
     dom = get(doc, "domain", nothing)
     iv = dom isa AbstractDict ? get(dom, "independent_variable", nothing) : nothing
@@ -582,14 +620,15 @@ function derive_output_meta(doc::AbstractDict)
 
     models = get(doc, "models", nothing)
     (models isa AbstractDict && !isempty(models)) || return OutputMeta(
-        "", idx, Dict{String,Vector{String}}(), Dict{String,Dict{String,Any}}(),
-        Dict{String,String}(), cdict, tdim)
+        "", idx, Dict{String, Vector{String}}(), Dict{String, Dict{String, Any}}(),
+        Dict{String, String}(), cdict, tdim
+    )
     mnames = sort!(String[String(k) for k in keys(models)])
     sname = mnames[1]
 
     # A bare variable name claimed by two models cannot disambiguate a flat base
     # name, so only the qualified key is registered for it.
-    bare_counts = Dict{String,Int}()
+    bare_counts = Dict{String, Int}()
     for mn in mnames
         vars = models[mn]
         vars = vars isa AbstractDict ? get(vars, "variables", nothing) : nothing
@@ -600,9 +639,9 @@ function derive_output_meta(doc::AbstractDict)
         end
     end
 
-    vdims = Dict{String,Vector{String}}()
-    vattrs = Dict{String,Dict{String,Any}}()
-    vtypes = Dict{String,String}()
+    vdims = Dict{String, Vector{String}}()
+    vattrs = Dict{String, Dict{String, Any}}()
+    vtypes = Dict{String, String}()
     for mn in mnames
         model = models[mn]
         vars = model isa AbstractDict ? get(model, "variables", nothing) : nothing
@@ -614,7 +653,7 @@ function derive_output_meta(doc::AbstractDict)
             get(bare_counts, vn, 0) > 1 || push!(keys_for_var, vn)
 
             shp = get(v, "shape", nothing)
-            a = Dict{String,Any}()
+            a = Dict{String, Any}()
             for k in ("units", "standard_name", "description")
                 haskey(v, k) && v[k] !== nothing && (a[k] = v[k])
             end
@@ -626,7 +665,7 @@ function derive_output_meta(doc::AbstractDict)
             # equation is the observed one.
             vt = get(v, "type", nothing)
             vt = (vt == "unknown" && vn in _output_observed_names(model)) ?
-                 "observed" : (vt === nothing ? nothing : String(vt))
+                "observed" : (vt === nothing ? nothing : String(vt))
 
             for key in keys_for_var
                 shp isa AbstractVector && (vdims[key] = String[String(s) for s in shp])
@@ -689,14 +728,20 @@ end
 function _name_gridding(g::VarGridding, meta::OutputMeta)
     dims = _meta_lookup(meta.var_dims, g.base)
     dims === nothing && return g                      # scalar / undeclared → positional
-    length(dims) == length(g.shape) || throw(OutputError(
-        "output metadata for '$(g.base)' declares $(length(dims)) dim(s) $(dims), but the " *
-        "flat state grids it to $(length(g.shape)) axis/axes $(g.shape)"))
+    length(dims) == length(g.shape) || throw(
+        OutputError(
+            "output metadata for '$(g.base)' declares $(length(dims)) dim(s) $(dims), but the " *
+                "flat state grids it to $(length(g.shape)) axis/axes $(g.shape)"
+        )
+    )
     for d in eachindex(dims)
         sz = get(meta.index_sets, dims[d], nothing)
-        (sz === nothing || sz == 0 || sz == g.shape[d]) || throw(OutputError(
-            "output metadata: '$(g.base)' axis $d is index set '$(dims[d])' of size $sz, " *
-            "but the flat state grids that axis to length $(g.shape[d])"))
+        (sz === nothing || sz == 0 || sz == g.shape[d]) || throw(
+            OutputError(
+                "output metadata: '$(g.base)' axis $d is index set '$(dims[d])' of size $sz, " *
+                    "but the flat state grids that axis to length $(g.shape[d])"
+            )
+        )
     end
     return VarGridding(g.base, g.shape, copy(dims), g.flat_indices, g.cart)
 end
@@ -717,7 +762,7 @@ checkpoint frequency; restrict a sink to a grid's variables via `build_zarr_sink
 """
 function group_gridding_by_grid(gridding::AbstractVector{VarGridding})
     order = Vector{String}[]
-    groups = Dict{Vector{String},Vector{VarGridding}}()
+    groups = Dict{Vector{String}, Vector{VarGridding}}()
     for g in gridding
         sig = sort(collect(String, g.dimnames))
         haskey(groups, sig) || push!(order, sig)
@@ -739,7 +784,7 @@ emits inline-`values` dimension coordinates.
 struct DimCoord
     name::String
     values::Vector{Float64}
-    attrs::Dict{String,Any}
+    attrs::Dict{String, Any}
 end
 
 """
@@ -755,7 +800,7 @@ dimension-coordinate path handles inline values); they are the documented next
 drop-in. Dims with no registry entry emit no coordinate (bare integer axis, as before).
 """
 function plan_dimension_coordinates(gridding::AbstractVector{VarGridding}, meta::OutputMeta)
-    dimlen = Dict{String,Int}()
+    dimlen = Dict{String, Int}()
     order = String[]
     for g in gridding, d in eachindex(g.dimnames)
         nm = g.dimnames[d]
@@ -769,10 +814,13 @@ function plan_dimension_coordinates(gridding::AbstractVector{VarGridding}, meta:
         vals = get(entry, "values", nothing)
         vals isa AbstractVector || continue           # source/aux: not the inline-dim path
         v = Float64[Float64(x) for x in vals]
-        length(v) == dimlen[nm] || throw(OutputError(
-            "coordinate '$nm' supplies $(length(v)) value(s) but dimension '$nm' has " *
-            "length $(dimlen[nm])"))
-        attrs = Dict{String,Any}()
+        length(v) == dimlen[nm] || throw(
+            OutputError(
+                "coordinate '$nm' supplies $(length(v)) value(s) but dimension '$nm' has " *
+                    "length $(dimlen[nm])"
+            )
+        )
+        attrs = Dict{String, Any}()
         for k in ("standard_name", "units", "axis")
             haskey(entry, k) && entry[k] !== nothing && (attrs[k] = entry[k])
         end
@@ -807,7 +855,7 @@ the [`VarGridding`](@ref) that scatters a flat state into it.
 struct VarPlan
     name::String
     dims::Vector{String}
-    attrs::Dict{String,Any}
+    attrs::Dict{String, Any}
     dtype::String
     gridding::VarGridding
 end
@@ -822,7 +870,7 @@ record-axis name, the grid's CF dimension [`DimCoord`](@ref)s, and its
 is derived once and stays valid however many records get written.
 """
 struct GridPlan
-    dims::Vector{Pair{String,Int}}
+    dims::Vector{Pair{String, Int}}
     time_dim::String
     coords::Vector{DimCoord}
     vars::Vector{VarPlan}
@@ -862,22 +910,32 @@ Derive the whole output plan for a run (RFC §7–§9) — the Julia mirror of
   here: the caller resolves it through `merged_variable_renames` first
   (CONFORMANCE_SPEC §5.17.4).
 """
-function derive_output_plan(doc::AbstractDict, var_map::AbstractDict;
-                            observed = String[])
+function derive_output_plan(
+        doc::AbstractDict, var_map::AbstractDict;
+        observed = String[]
+    )
     return derive_output_plan(var_map, derive_output_meta(doc); observed = observed)
 end
 
-function derive_output_plan(var_map::AbstractDict, meta::OutputMeta;
-                            observed = String[])
+function derive_output_plan(
+        var_map::AbstractDict, meta::OutputMeta;
+        observed = String[]
+    )
     gridding = derive_output_gridding(var_map, meta)
 
     requested = _resolve_output_requests(observed, String[g.base for g in gridding])
-    kept = VarGridding[g for g in gridding
-                       if _meta_lookup(meta.var_types, g.base) != "observed" ||
-                          g.base in requested]
+    kept = VarGridding[
+        g for g in gridding
+            if _meta_lookup(meta.var_types, g.base) != "observed" ||
+            g.base in requested
+    ]
 
-    return OutputPlan(GridPlan[_build_grid_plan(grp, meta)
-                               for grp in group_gridding_by_grid(kept)])
+    return OutputPlan(
+        GridPlan[
+            _build_grid_plan(grp, meta)
+                for grp in group_gridding_by_grid(kept)
+        ]
+    )
 end
 
 _last_segment(name::AbstractString) = String(last(split(name, '.')))
@@ -898,35 +956,47 @@ function _resolve_output_requests(observed, bases::Vector{String})
         if length(hits) == 1
             push!(selected, only(hits))
         elseif isempty(hits)
-            throw(OutputError(
-                "requested observed output '$name' has no slot in the flat state; the " *
-                "runner must evaluate and append it before the plan is derived"))
+            throw(
+                OutputError(
+                    "requested observed output '$name' has no slot in the flat state; the " *
+                        "runner must evaluate and append it before the plan is derived"
+                )
+            )
         else
-            throw(OutputError(
-                "requested output '$name' names no variable exactly, and its last " *
-                "segment '$tail' is shared by $(join(hits, ", ")); name one of them " *
-                "in full", ERROR_CODES.AMBIGUOUS_OUTPUT_NAME))
+            throw(
+                OutputError(
+                    "requested output '$name' names no variable exactly, and its last " *
+                        "segment '$tail' is shared by $(join(hits, ", ")); name one of them " *
+                        "in full", ERROR_CODES.AMBIGUOUS_OUTPUT_NAME
+                )
+            )
         end
     end
     return selected
 end
 
 function _build_grid_plan(group::Vector{VarGridding}, meta::OutputMeta)
-    dims = Pair{String,Int}[]
-    owner = Dict{String,String}()
+    dims = Pair{String, Int}[]
+    owner = Dict{String, String}()
     for g in group, d in eachindex(g.dimnames)
         nm = g.dimnames[d]
-        nm == meta.time_dim && throw(OutputError(
-            "variable '$(g.base)' has a spatial dimension named '$nm', which collides " *
-            "with the record axis"))
+        nm == meta.time_dim && throw(
+            OutputError(
+                "variable '$(g.base)' has a spatial dimension named '$nm', which collides " *
+                    "with the record axis"
+            )
+        )
         k = findfirst(p -> first(p) == nm, dims)
         if k === nothing
             push!(dims, nm => g.shape[d])
             owner[nm] = g.base
         elseif last(dims[k]) != g.shape[d]
-            throw(OutputError(
-                "dimension '$nm' has length $(last(dims[k])) on variable " *
-                "'$(owner[nm])' but length $(g.shape[d]) on variable '$(g.base)'"))
+            throw(
+                OutputError(
+                    "dimension '$nm' has length $(last(dims[k])) on variable " *
+                        "'$(owner[nm])' but length $(g.shape[d]) on variable '$(g.base)'"
+                )
+            )
         end
     end
 
@@ -934,9 +1004,13 @@ function _build_grid_plan(group::Vector{VarGridding}, meta::OutputMeta)
     vars = VarPlan[]
     for g in group
         attrs = _meta_lookup(meta.var_attrs, g.base)
-        push!(vars, VarPlan(g.base, output_var_dims(g, meta.time_dim),
-                            attrs === nothing ? Dict{String,Any}() : copy(attrs),
-                            DTYPE_FLOAT64, g))
+        push!(
+            vars, VarPlan(
+                g.base, output_var_dims(g, meta.time_dim),
+                attrs === nothing ? Dict{String, Any}() : copy(attrs),
+                DTYPE_FLOAT64, g
+            )
+        )
     end
     return GridPlan(dims, meta.time_dim, coords, vars)
 end
@@ -971,9 +1045,12 @@ Requires `EarthSciIO` to be loaded (the concrete sink is in the
 [`OutputError`](@ref).
 """
 function build_zarr_sink end
-build_zarr_sink(args...; kwargs...) = throw(OutputError(
-    "build_zarr_sink requires the EarthSciIO extension; add `using EarthSciIO` so " *
-    "EarthSciASTEarthSciIOExt (the concrete Zarr sink) is active"))
+build_zarr_sink(args...; kwargs...) = throw(
+    OutputError(
+        "build_zarr_sink requires the EarthSciIO extension; add `using EarthSciIO` so " *
+            "EarthSciASTEarthSciIOExt (the concrete Zarr sink) is active"
+    )
+)
 
 """
     zarr_restart_state(prep, base_url; kwargs...) -> (t0::Float64, u0::Vector{Float64})
@@ -990,9 +1067,12 @@ Requires `EarthSciIO` to be loaded (the reader/manifest live there); calling it
 without EarthSciIO throws [`OutputError`](@ref).
 """
 function zarr_restart_state end
-zarr_restart_state(args...; kwargs...) = throw(OutputError(
-    "zarr_restart_state requires the EarthSciIO extension; add `using EarthSciIO` so " *
-    "EarthSciASTEarthSciIOExt (the reader + output manifest) is active"))
+zarr_restart_state(args...; kwargs...) = throw(
+    OutputError(
+        "zarr_restart_state requires the EarthSciIO extension; add `using EarthSciIO` so " *
+            "EarthSciASTEarthSciIOExt (the reader + output manifest) is active"
+    )
+)
 
 # --------------------------------------------------------------------------- #
 # Checkpoint triggers (RFC §10, §16.7). A checkpoint fires on any composition of a
@@ -1033,9 +1113,11 @@ the `end_time_env` environment variable; returns `false` when it is absent or
 unparseable — i.e. not running under SLURM ⇒ never fires. `clock` (a `() -> Real`
 Unix-seconds source) is injectable for testing.
 """
-function slurm_walltime_predicate(; margin_seconds::Real = 300,
-                                  clock = _unix_now,
-                                  end_time_env::AbstractString = "SLURM_JOB_END_TIME")
+function slurm_walltime_predicate(;
+        margin_seconds::Real = 300,
+        clock = _unix_now,
+        end_time_env::AbstractString = "SLURM_JOB_END_TIME"
+    )
     return function ()
         endt = tryparse(Float64, get(ENV, end_time_env, ""))
         endt === nothing && return false
@@ -1083,6 +1165,9 @@ Requires `DiffEqCallbacks` + `SciMLBase` (the constructor is a package extension
 calling it without them throws [`OutputError`](@ref).
 """
 function build_checkpoint_callback end
-build_checkpoint_callback(args...; kwargs...) = throw(OutputError(
-    "build_checkpoint_callback requires the DiffEqCallbacks + SciMLBase extension; " *
-    "add `using DiffEqCallbacks, SciMLBase` so EarthSciASTDataOutputExt is active"))
+build_checkpoint_callback(args...; kwargs...) = throw(
+    OutputError(
+        "build_checkpoint_callback requires the DiffEqCallbacks + SciMLBase extension; " *
+            "add `using DiffEqCallbacks, SciMLBase` so EarthSciASTDataOutputExt is active"
+    )
+)

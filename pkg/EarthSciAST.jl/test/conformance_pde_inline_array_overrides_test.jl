@@ -30,9 +30,11 @@ import OrdinaryDiffEqTsit5
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
 const _AOV_REPO_ROOT = TESTUTILS_REPO_ROOT
-const _AOV_CAT_DIR   = joinpath(_AOV_REPO_ROOT, "tests", "conformance",
-                                "pde_inline_array_overrides")
-const _AOV_MANIFEST  = joinpath(_AOV_CAT_DIR, "manifest.json")
+const _AOV_CAT_DIR = joinpath(
+    _AOV_REPO_ROOT, "tests", "conformance",
+    "pde_inline_array_overrides"
+)
+const _AOV_MANIFEST = joinpath(_AOV_CAT_DIR, "manifest.json")
 
 @testset "Conformance: pde_inline_array_overrides (manifest-driven)" begin
     @test isfile(_AOV_MANIFEST)
@@ -49,7 +51,7 @@ const _AOV_MANIFEST  = joinpath(_AOV_CAT_DIR, "manifest.json")
     for fixture in manifest.fixtures
         id = String(fixture.id)
         @testset "$(id)" begin
-            esm_path    = joinpath(_AOV_CAT_DIR, String(fixture.path))
+            esm_path = joinpath(_AOV_CAT_DIR, String(fixture.path))
             golden_path = joinpath(_AOV_CAT_DIR, String(fixture.golden))
             @test isfile(esm_path)
             @test isfile(golden_path)
@@ -57,9 +59,11 @@ const _AOV_MANIFEST  = joinpath(_AOV_CAT_DIR, "manifest.json")
             golden = JSON3.read(read(golden_path, String))
             @test String(golden.reference_binding) == "julia"
 
-            results = run_inline_tests(esm_path; model_name=String(fixture.model),
-                                    alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                    reltol=1e-12, abstol=1e-14)
+            results = run_inline_tests(
+                esm_path; model_name = String(fixture.model),
+                alg = OrdinaryDiffEqTsit5.Tsit5(),
+                reltol = 1.0e-12, abstol = 1.0e-14
+            )
             @test length(results) == length(golden.assertions)
 
             # Index by (test_id, assertion_idx) — each fixture carries several
@@ -73,7 +77,7 @@ const _AOV_MANIFEST  = joinpath(_AOV_CAT_DIR, "manifest.json")
                 r = by_key[key]
                 @test r.passed
                 @test r.actual !== nothing
-                @test isapprox(r.actual, Float64(g.actual); rtol=rtol, atol=atol)
+                @test isapprox(r.actual, Float64(g.actual); rtol = rtol, atol = atol)
             end
         end
     end
@@ -90,14 +94,16 @@ end
         # element at `(i, j)`. The 2x3 slab has unequal extents and pairwise-
         # distinct values, so a column-major read disagrees on every
         # off-diagonal cell instead of coincidentally agreeing.
-        raw = JSON3.read(read(esm_path, String), Dict{String,Any})
+        raw = JSON3.read(read(esm_path, String), Dict{String, Any})
         file = EarthSciAST.coerce_esm_file(raw)
         declared = file.models["Slab"].variables["kprof"].default
         @test declared isa AbstractArray
         @test size(declared) == (2, 3)
 
-        sim = solve(EarthSciAST.esm_problem(esm_path, (0.0, 1.0)),
-                    OrdinaryDiffEqTsit5.Tsit5(); saveat=[0.0])
+        sim = solve(
+            EarthSciAST.esm_problem(esm_path, (0.0, 1.0)),
+            OrdinaryDiffEqTsit5.Tsit5(); saveat = [0.0]
+        )
         @test SciMLBase.successful_retcode(sim)
         for i in 1:2, j in 1:3
             @test sim[Symbol("Slab.a[$(i),$(j)]")][1] == declared[i, j]
@@ -109,6 +115,7 @@ end
         # never silently truncated or broadcast.
         col_path = joinpath(_AOV_CAT_DIR, "fixtures", "column_array_overrides.esm")
         @test_throws EarthSciAST.TreeWalkError EarthSciAST.esm_problem(
-            col_path, (0.0, 1.0); p=Dict("theta0" => [1.0, 2.0]))
+            col_path, (0.0, 1.0); p = Dict("theta0" => [1.0, 2.0])
+        )
     end
 end

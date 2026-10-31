@@ -25,25 +25,25 @@ _expr_equal(::ESS.ASTExpr, ::ESS.ASTExpr) = false
 
 # Small helpers so each testset can build a fresh fixture.
 function _make_eq(lhs_name::String, coef::Float64)
-    lhs = OpExpr("D", ESS.ASTExpr[VarExpr(lhs_name)], wrt="t")
+    lhs = OpExpr("D", ESS.ASTExpr[VarExpr(lhs_name)], wrt = "t")
     rhs = OpExpr("*", ESS.ASTExpr[NumExpr(coef), VarExpr(lhs_name)])
     return Equation(lhs, rhs)
 end
 
 function _make_model()
-    vars = Dict{String,ModelVariable}(
-        "x" => ModelVariable(UnknownVariable, default=1.0),
-        "k" => ModelVariable(ParameterVariable, default=0.5),
+    vars = Dict{String, ModelVariable}(
+        "x" => ModelVariable(UnknownVariable, default = 1.0),
+        "k" => ModelVariable(ParameterVariable, default = 0.5),
     )
     eqs = Equation[_make_eq("x", 2.0)]
     return Model(vars, eqs)
 end
 
 function _make_reaction_system()
-    species = [Species("A", default=1.0), Species("B", default=0.0)]
+    species = [Species("A", default = 1.0), Species("B", default = 0.0)]
     rate = OpExpr("*", ESS.ASTExpr[VarExpr("k"), VarExpr("A")])
     rxn = Reaction("r1", [SE("A", 1)], [SE("B", 1)], rate)
-    return ReactionSystem(species, [rxn]; parameters=[Parameter("k", 0.1)])
+    return ReactionSystem(species, [rxn]; parameters = [Parameter("k", 0.1)])
 end
 
 @testset "Section 4 Editing Operations" begin
@@ -52,16 +52,18 @@ end
         # Editing operations rebuild immutable structs; fields not touched by
         # the edit (initialization_equations, guesses, system_kind, enums,
         # index_sets, …) must survive the rebuild instead of being reset.
-        vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(UnknownVariable, default=1.0),
+        vars = Dict{String, ModelVariable}(
+            "x" => ModelVariable(UnknownVariable, default = 1.0),
         )
         init_eqs = Equation[Equation(VarExpr("x"), NumExpr(1.0))]
-        m = Model(vars, Equation[_make_eq("x", 2.0)];
-                  initialization_equations=init_eqs,
-                  guesses=Dict{String,Union{Float64,ESS.ASTExpr}}("x" => 0.5),
-                  system_kind="ode")
+        m = Model(
+            vars, Equation[_make_eq("x", 2.0)];
+            initialization_equations = init_eqs,
+            guesses = Dict{String, Union{Float64, ESS.ASTExpr}}("x" => 0.5),
+            system_kind = "ode"
+        )
 
-        m2 = add_variable(m, "y", ModelVariable(UnknownVariable, default=0.0))
+        m2 = add_variable(m, "y", ModelVariable(UnknownVariable, default = 0.0))
         @test m2.initialization_equations == init_eqs
         @test m2.guesses["x"] == 0.5
         @test m2.system_kind == "ode"
@@ -70,10 +72,12 @@ end
         @test m3.initialization_equations == init_eqs
         @test m3.system_kind == "ode"
 
-        file = EsmFile("0.8.0", Metadata("t");
-                       models=Dict("M" => m),
-                       coupling=CouplingEntry[],
-                       enums=Dict("phase" => Dict("gas" => 1)))
+        file = EsmFile(
+            "0.8.0", Metadata("t");
+            models = Dict("M" => m),
+            coupling = CouplingEntry[],
+            enums = Dict("phase" => Dict("gas" => 1))
+        )
         file2 = add_coupling(file, CouplingOperatorCompose(["M", "M"]))
         @test file2.enums !== nothing
         @test file2.enums["phase"]["gas"] == 1
@@ -83,7 +87,7 @@ end
         m = _make_model()
         @test length(m.variables) == 2
 
-        new_var = ModelVariable(UnknownVariable, default=5.0, description="new state")
+        new_var = ModelVariable(UnknownVariable, default = 5.0, description = "new state")
         m2 = add_variable(m, "y", new_var)
 
         @test length(m2.variables) == 3
@@ -100,7 +104,7 @@ end
     @testset "remove_variable" begin
         m = _make_model()
         # Add a second state variable that has no equation dependency
-        m = add_variable(m, "y", ModelVariable(UnknownVariable, default=0.0))
+        m = add_variable(m, "y", ModelVariable(UnknownVariable, default = 0.0))
         @test haskey(m.variables, "y")
 
         m2 = remove_variable(m, "y")
@@ -112,7 +116,7 @@ end
 
         # Removing a referenced variable still succeeds but warns; equations
         # are kept (per implementation contract).
-        m3 = @test_logs (:warn,) match_mode=:any remove_variable(m2, "x")
+        m3 = @test_logs (:warn,) match_mode = :any remove_variable(m2, "x")
         @test !haskey(m3.variables, "x")
         @test length(m3.equations) == length(m2.equations)
 
@@ -174,7 +178,7 @@ end
         @test remaining.lhs.args[1].name == "k"
 
         # Pattern with no match: throws EditError
-        bogus = OpExpr("D", ESS.ASTExpr[VarExpr("nonexistent")], wrt="t")
+        bogus = OpExpr("D", ESS.ASTExpr[VarExpr("nonexistent")], wrt = "t")
         @test_throws ESS.EditError remove_equation(m2, bogus)
     end
 
@@ -207,10 +211,10 @@ end
         sys = ReactionSystem(
             [Species("A"), Species("B")],
             [rxn];
-            parameters=[Parameter("k", 0.1)],
+            parameters = [Parameter("k", 0.1)],
         )
 
-        bindings = Dict{String,ESS.ASTExpr}("param_rate" => VarExpr("A"))
+        bindings = Dict{String, ESS.ASTExpr}("param_rate" => VarExpr("A"))
         new_rate = substitute(sys.reactions[1].rate, bindings)
 
         @test new_rate isa OpExpr
@@ -237,7 +241,7 @@ end
         rxn = Reaction("R1", nothing, [SE("A", 1)], rate)
         sys = ReactionSystem([Species("A")], [rxn])
 
-        bindings = Dict{String,ESS.ASTExpr}(
+        bindings = Dict{String, ESS.ASTExpr}(
             "k" => NumExpr(0.1),
             "temp" => VarExpr("T"),
         )
@@ -248,9 +252,9 @@ end
         @test new_rate.args[1] isa NumExpr && new_rate.args[1].value == 0.1
         @test new_rate.args[2] isa OpExpr && new_rate.args[2].op == "^"
         @test new_rate.args[2].args[1] isa VarExpr &&
-              new_rate.args[2].args[1].name == "T"
+            new_rate.args[2].args[1].name == "T"
         @test new_rate.args[2].args[2] isa NumExpr &&
-              new_rate.args[2].args[2].value == 2.0
+            new_rate.args[2].args[2].value == 2.0
 
         # Source reaction shape preserved: substrates remain `nothing`,
         # products still reference species "A". Use getfield to bypass the
@@ -264,12 +268,12 @@ end
         # reference onto an existing parameter.
         rxn = Reaction("R1", nothing, [SE("A", 1)], VarExpr("param"))
         sys = ReactionSystem(
-            [Species("A", default=18.0)],
+            [Species("A", default = 18.0)],
             [rxn];
-            parameters=[Parameter("k", 0.1; units="1/s")],
+            parameters = [Parameter("k", 0.1; units = "1/s")],
         )
 
-        bindings = Dict{String,ESS.ASTExpr}("param" => VarExpr("k"))
+        bindings = Dict{String, ESS.ASTExpr}("param" => VarExpr("k"))
         new_rate = substitute(sys.reactions[1].rate, bindings)
 
         # Rewritten rate is the bound VarExpr.
@@ -306,7 +310,7 @@ end
 
     @testset "add_species / remove_species" begin
         sys = _make_reaction_system()
-        sys2 = add_species(sys, "C", Species("C", default=2.0))
+        sys2 = add_species(sys, "C", Species("C", default = 2.0))
         @test length(sys2.species) == 3
         @test any(s -> s.name == "C", sys2.species)
 
@@ -316,7 +320,7 @@ end
         @test !any(s -> s.name == "C", sys3.species)
 
         # Remove a species that IS used in a reaction (A): warns about dependency
-        sys4 = @test_logs (:warn,) match_mode=:any remove_species(sys3, "A")
+        sys4 = @test_logs (:warn,) match_mode = :any remove_species(sys3, "A")
         @test !any(s -> s.name == "A", sys4.species)
 
         # Removing nonexistent: throws EditError
@@ -329,12 +333,12 @@ end
         disc = DiscreteEvent(
             ConditionTrigger(VarExpr("x")),
             [AffectEquation("x", NumExpr(0.0))],
-            description="reset",
+            description = "reset",
         )
         cont = ContinuousEvent(
             ESS.ASTExpr[VarExpr("x")],
             [AffectEquation("x", NumExpr(1.0))],
-            description="bounce",
+            description = "bounce",
         )
 
         m2 = add_discrete_event(m, disc)
@@ -362,10 +366,10 @@ end
     end
 
     @testset "add_coupling / remove_coupling" begin
-        file = EsmFile("0.1.0", Metadata("test"); coupling=CouplingEntry[])
+        file = EsmFile("0.1.0", Metadata("test"); coupling = CouplingEntry[])
         @test length(file.coupling) == 0
 
-        entry1 = CouplingOperatorCompose(["A", "B"]; description="compose AB")
+        entry1 = CouplingOperatorCompose(["A", "B"]; description = "compose AB")
         file1 = add_coupling(file, entry1)
         @test length(file1.coupling) == 1
         @test file1.coupling[1] isa CouplingOperatorCompose
@@ -384,7 +388,7 @@ end
     end
 
     @testset "compose (convenience for operator_compose)" begin
-        file = EsmFile("0.1.0", Metadata("test"); coupling=CouplingEntry[])
+        file = EsmFile("0.1.0", Metadata("test"); coupling = CouplingEntry[])
         file2 = compose(file, "Atmosphere", "Ocean")
         @test length(file2.coupling) == 1
         entry = file2.coupling[1]
@@ -393,8 +397,8 @@ end
     end
 
     @testset "map_variable (convenience for variable_map)" begin
-        file = EsmFile("0.1.0", Metadata("test"); coupling=CouplingEntry[])
-        file2 = map_variable(file, "Atmosphere.T", "Ocean.T_surf"; transform="identity")
+        file = EsmFile("0.1.0", Metadata("test"); coupling = CouplingEntry[])
+        file2 = map_variable(file, "Atmosphere.T", "Ocean.T_surf"; transform = "identity")
         @test length(file2.coupling) == 1
         entry = file2.coupling[1]
         @test entry isa CouplingVariableMap
@@ -404,15 +408,19 @@ end
     end
 
     @testset "merge combines two ESM files" begin
-        model_a = Model(Dict("x" => ModelVariable(UnknownVariable, default=1.0)), Equation[])
-        model_b = Model(Dict("y" => ModelVariable(UnknownVariable, default=2.0)), Equation[])
+        model_a = Model(Dict("x" => ModelVariable(UnknownVariable, default = 1.0)), Equation[])
+        model_b = Model(Dict("y" => ModelVariable(UnknownVariable, default = 2.0)), Equation[])
 
-        file_a = EsmFile("0.1.0", Metadata("a");
-                         models=Dict("A" => model_a),
-                         coupling=CouplingEntry[CouplingOperatorCompose(["A", "A"])])
-        file_b = EsmFile("0.1.0", Metadata("b");
-                         models=Dict("B" => model_b),
-                         coupling=CouplingEntry[CouplingVariableMap("A.x", "B.y", "identity")])
+        file_a = EsmFile(
+            "0.1.0", Metadata("a");
+            models = Dict("A" => model_a),
+            coupling = CouplingEntry[CouplingOperatorCompose(["A", "A"])]
+        )
+        file_b = EsmFile(
+            "0.1.0", Metadata("b");
+            models = Dict("B" => model_b),
+            coupling = CouplingEntry[CouplingVariableMap("A.x", "B.y", "identity")]
+        )
 
         merged = ESS.merge(file_a, file_b)
         @test length(merged.models) == 2
@@ -424,11 +432,11 @@ end
     end
 
     @testset "merge prefers file_b on key conflicts" begin
-        m1 = Model(Dict("x" => ModelVariable(UnknownVariable, default=1.0)), Equation[])
-        m2 = Model(Dict("x" => ModelVariable(UnknownVariable, default=999.0)), Equation[])
+        m1 = Model(Dict("x" => ModelVariable(UnknownVariable, default = 1.0)), Equation[])
+        m2 = Model(Dict("x" => ModelVariable(UnknownVariable, default = 999.0)), Equation[])
 
-        fa = EsmFile("0.1.0", Metadata("a"); models=Dict("Shared" => m1))
-        fb = EsmFile("0.1.0", Metadata("b"); models=Dict("Shared" => m2))
+        fa = EsmFile("0.1.0", Metadata("a"); models = Dict("Shared" => m1))
+        fb = EsmFile("0.1.0", Metadata("b"); models = Dict("Shared" => m2))
 
         merged = ESS.merge(fa, fb)
         @test length(merged.models) == 1
@@ -445,9 +453,11 @@ end
         map_entry = CouplingVariableMap("A.x", "B.y", "identity")
         unrelated = CouplingOperatorCompose(["B", "C"])
 
-        file = EsmFile("0.1.0", Metadata("all");
-                       models=Dict("A" => model_a, "B" => model_b, "C" => model_c),
-                       coupling=CouplingEntry[compose_entry, map_entry, unrelated])
+        file = EsmFile(
+            "0.1.0", Metadata("all");
+            models = Dict("A" => model_a, "B" => model_b, "C" => model_c),
+            coupling = CouplingEntry[compose_entry, map_entry, unrelated]
+        )
 
         ex = ESS.extract(file, "A")
         @test length(ex.models) == 1
@@ -464,9 +474,11 @@ end
     end
 
     @testset "extract throws EditError when component not found" begin
-        file = EsmFile("0.1.0", Metadata("t");
-                       models=Dict("A" => Model(Dict{String,ModelVariable}(), Equation[])),
-                       coupling=CouplingEntry[])
+        file = EsmFile(
+            "0.1.0", Metadata("t");
+            models = Dict("A" => Model(Dict{String, ModelVariable}(), Equation[])),
+            coupling = CouplingEntry[]
+        )
         @test_throws ESS.EditError ESS.extract(file, "Missing")
         # EditError carries the message in its `msg` field
         err = try
@@ -500,14 +512,14 @@ end
                 expected_expr = ESS.expression_from_json(case[:expected])
                 bindings = Dict{String, ESS.ASTExpr}(
                     string(k) => ESS.expression_from_json(v)
-                    for (k, v) in pairs(case[:bindings])
+                        for (k, v) in pairs(case[:bindings])
                 )
 
                 # Wrap the fixture expression as the RHS of a lone equation in
                 # a minimal model. The LHS references a state variable the
                 # bindings won't touch so we can isolate RHS substitution.
-                vars = Dict{String,ModelVariable}(
-                    "out" => ModelVariable(UnknownVariable, default=0.0),
+                vars = Dict{String, ModelVariable}(
+                    "out" => ModelVariable(UnknownVariable, default = 0.0),
                 )
                 eq = Equation(VarExpr("out"), input_expr)
                 model = Model(vars, Equation[eq])
@@ -522,22 +534,26 @@ end
         end
 
         @testset "substitute_in_equations preserves variable metadata" begin
-            vars = Dict{String,ModelVariable}(
-                "x" => ModelVariable(UnknownVariable,
-                                     default=1.0,
-                                     description="state var",
-                                     units="kg"),
-                "param" => ModelVariable(ParameterVariable,
-                                         default=0.5,
-                                         description="rate",
-                                         units="1/s"),
+            vars = Dict{String, ModelVariable}(
+                "x" => ModelVariable(
+                    UnknownVariable,
+                    default = 1.0,
+                    description = "state var",
+                    units = "kg"
+                ),
+                "param" => ModelVariable(
+                    ParameterVariable,
+                    default = 0.5,
+                    description = "rate",
+                    units = "1/s"
+                ),
             )
             # D(x) = param
-            lhs = OpExpr("D", ESS.ASTExpr[VarExpr("x")], wrt="t")
+            lhs = OpExpr("D", ESS.ASTExpr[VarExpr("x")], wrt = "t")
             rhs = VarExpr("param")
             model = Model(vars, Equation[Equation(lhs, rhs)])
 
-            bindings = Dict{String,ESS.ASTExpr}("param" => NumExpr(0.5))
+            bindings = Dict{String, ESS.ASTExpr}("param" => NumExpr(0.5))
             result = substitute_in_equations(model, bindings)
 
             # Equations rewritten
@@ -563,12 +579,12 @@ end
         end
 
         @testset "substitute_in_equations on empty-equations model" begin
-            vars = Dict{String,ModelVariable}(
-                "x" => ModelVariable(UnknownVariable, default=1.0),
+            vars = Dict{String, ModelVariable}(
+                "x" => ModelVariable(UnknownVariable, default = 1.0),
             )
             model = Model(vars, Equation[])
 
-            result = substitute_in_equations(model, Dict{String,ESS.ASTExpr}("a" => VarExpr("b")))
+            result = substitute_in_equations(model, Dict{String, ESS.ASTExpr}("a" => VarExpr("b")))
             @test isempty(result.equations)
             @test result.variables == model.variables
         end
@@ -576,15 +592,17 @@ end
         @testset "rename_variable across a model" begin
             # Model with two equations that both reference the variable being
             # renamed, plus a parameter that should survive untouched.
-            vars = Dict{String,ModelVariable}(
-                "C" => ModelVariable(UnknownVariable,
-                                     default=1.0,
-                                     description="concentration",
-                                     units="mol/m^3"),
-                "k" => ModelVariable(ParameterVariable, default=0.1, units="1/s"),
+            vars = Dict{String, ModelVariable}(
+                "C" => ModelVariable(
+                    UnknownVariable,
+                    default = 1.0,
+                    description = "concentration",
+                    units = "mol/m^3"
+                ),
+                "k" => ModelVariable(ParameterVariable, default = 0.1, units = "1/s"),
             )
             eq1 = Equation(
-                OpExpr("D", ESS.ASTExpr[VarExpr("C")], wrt="t"),
+                OpExpr("D", ESS.ASTExpr[VarExpr("C")], wrt = "t"),
                 OpExpr("*", ESS.ASTExpr[NumExpr(-1.0), VarExpr("k"), VarExpr("C")]),
             )
             eq2 = Equation(

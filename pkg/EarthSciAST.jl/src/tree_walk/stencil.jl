@@ -56,7 +56,7 @@ struct _LaneRecipe
     # slot as `base + Σ inds_d·strides_d` — no per-cell index Vector, no formatted
     # `_cell_key` String. `nothing` for a non-affine (or non-state) layout, which
     # keeps the exact string lookup.
-    affine::Union{Nothing,Tuple{Int,Vector{Int}}}
+    affine::Union{Nothing, Tuple{Int, Vector{Int}}}
 end
 _LaneRecipe(kind, var_name, idx_args, lo, hi, arr, loop_name) =
     _LaneRecipe(kind, var_name, idx_args, lo, hi, arr, loop_name, nothing)
@@ -111,10 +111,10 @@ const _SUBCALL_SENT_BASE = 1_000_000_000
 struct _SubVariant
     tmpl::_Node
     recipes::Vector{_LaneRecipe}
-    subcalls::Vector{Tuple{_SubVariant,Int}}
-    acc_cache::Dict{String,Any}
+    subcalls::Vector{Tuple{_SubVariant, Int}}
+    acc_cache::Dict{String, Any}
 end
-const _SubCallSite = Tuple{_SubVariant,Int}   # (variant, lane base in enclosing recipes)
+const _SubCallSite = Tuple{_SubVariant, Int}   # (variant, lane base in enclosing recipes)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CROSS-EQUATION VARIANT MEMOIZATION (perf plan A3). A `_SubVariant` is a pure
@@ -154,14 +154,16 @@ const _SubCallSite = Tuple{_SubVariant,Int}   # (variant, lane base in enclosing
 _xeq_disabled() = !_compiler_plan_now().xeq_variant
 
 struct _XEqStore
-    variants::Dict{Tuple{UInt64,String,String},_SubVariant}
-    bound_bodies::IdDict{OpExpr,Vector{Tuple{Vector{ASTExpr},ASTExpr}}}
-    obs_memo::IdDict{OpExpr,ASTExpr}          # a shared `_SubMemo`
+    variants::Dict{Tuple{UInt64, String, String}, _SubVariant}
+    bound_bodies::IdDict{OpExpr, Vector{Tuple{Vector{ASTExpr}, ASTExpr}}}
+    obs_memo::IdDict{OpExpr, ASTExpr}          # a shared `_SubMemo`
     obs_bindings::Base.RefValue{Any}          # the bindings object it was built against
 end
-_XEqStore() = _XEqStore(Dict{Tuple{UInt64,String,String},_SubVariant}(),
-                        IdDict{OpExpr,Vector{Tuple{Vector{ASTExpr},ASTExpr}}}(),
-                        IdDict{OpExpr,ASTExpr}(), Base.RefValue{Any}(nothing))
+_XEqStore() = _XEqStore(
+    Dict{Tuple{UInt64, String, String}, _SubVariant}(),
+    IdDict{OpExpr, Vector{Tuple{Vector{ASTExpr}, ASTExpr}}}(),
+    IdDict{OpExpr, ASTExpr}(), Base.RefValue{Any}(nothing)
+)
 
 # The shared obs-inline memo, valid only for ONE bindings object per build
 # (pinned on first use). A different bindings object returns a fresh memo —
@@ -173,7 +175,7 @@ function _xeq_obs_memo(store::_XEqStore, bindings)
         return store.obs_memo
     end
     ob === bindings && return store.obs_memo
-    return IdDict{OpExpr,ASTExpr}()
+    return IdDict{OpExpr, ASTExpr}()
 end
 
 # Canonical key for an equation's loop-index-name set (order-insensitive: the
@@ -194,11 +196,11 @@ _idxset_key(idx_names::Vector{String}) = join(sort(idx_names), '\0')
 # build-level constants (see the A3 note above), which is what makes the
 # hoisted cache sound.
 struct _TemplateCtx
-    sites::IdDict{OpExpr,OpExpr}
-    variants::Dict{Tuple{UInt64,String,String},_SubVariant}
-    gmemo::IdDict{OpExpr,Bool}
+    sites::IdDict{OpExpr, OpExpr}
+    variants::Dict{Tuple{UInt64, String, String}, _SubVariant}
+    gmemo::IdDict{OpExpr, Bool}
     bio::IOBuffer
-    var_map::AbstractDict{String,Int}
+    var_map::AbstractDict{String, Int}
     param_sym_set::Any
     reg_funcs::Any
     # Index-bound bodies for expansion roots that are ARRAY PRODUCERS (an
@@ -211,24 +213,28 @@ struct _TemplateCtx
     # vkey root). Each entry holds the k-arg objects it was bound against
     # (branch-invariant in practice, so the inner vector stays length 1) plus
     # the shared bound body.
-    bound_bodies::IdDict{OpExpr,Vector{Tuple{Vector{ASTExpr},ASTExpr}}}
+    bound_bodies::IdDict{OpExpr, Vector{Tuple{Vector{ASTExpr}, ASTExpr}}}
     # This equation's loop-index-set key — the per-equation component of vkey.
     idxkey::String
     # Node-count memo for the nested-boundary size gate (`_nested_site_big`):
     # per expansion-root identity, computed once per equation.
-    szmemo::IdDict{OpExpr,Int}
+    szmemo::IdDict{OpExpr, Int}
 end
-function _TemplateCtx(sites::IdDict{OpExpr,OpExpr}, var_map::AbstractDict{String,Int},
-                      param_sym_set, reg_funcs;
-                      idxkey::String="", store::Union{Nothing,_XEqStore}=nothing)
-    variants = store === nothing ? Dict{Tuple{UInt64,String,String},_SubVariant}() :
-               store.variants
+function _TemplateCtx(
+        sites::IdDict{OpExpr, OpExpr}, var_map::AbstractDict{String, Int},
+        param_sym_set, reg_funcs;
+        idxkey::String = "", store::Union{Nothing, _XEqStore} = nothing
+    )
+    variants = store === nothing ? Dict{Tuple{UInt64, String, String}, _SubVariant}() :
+        store.variants
     bound = store === nothing ?
-            IdDict{OpExpr,Vector{Tuple{Vector{ASTExpr},ASTExpr}}}() :
-            store.bound_bodies
-    return _TemplateCtx(sites, variants, IdDict{OpExpr,Bool}(), IOBuffer(),
-                        var_map, param_sym_set, reg_funcs, bound, idxkey,
-                        IdDict{OpExpr,Int}())
+        IdDict{OpExpr, Vector{Tuple{Vector{ASTExpr}, ASTExpr}}}() :
+        store.bound_bodies
+    return _TemplateCtx(
+        sites, variants, IdDict{OpExpr, Bool}(), IOBuffer(),
+        var_map, param_sym_set, reg_funcs, bound, idxkey,
+        IdDict{OpExpr, Int}()
+    )
 end
 
 # ---- Nested compile-once boundaries (ess-nested-template-boundary) ----------
@@ -323,7 +329,7 @@ end
 struct _StencilCtx
     idxset::Set{String}
     recipes::Vector{_LaneRecipe}
-    idx_env::Dict{String,Int}
+    idx_env::Dict{String, Int}
     array_var_info::Any
     const_arrays::AbstractDict
     pgather::AbstractDict
@@ -333,17 +339,17 @@ struct _StencilCtx
     # the structural ctx, so memoizing by node identity keeps the sentinel spine a
     # DAG instead of re-inflating it to a tree (~2M nodes for a PPM operator). Reset
     # per `_build_branch_template` because it references that call's lane recipes.
-    smemo::IdDict{OpExpr,ASTExpr}
+    smemo::IdDict{OpExpr, ASTExpr}
     # Memoized per-node "refers to a loop index" flag for the guard, so
     # `_stencilize`'s per-node check is an O(1) memo hit rather than an O(subtree)
     # re-walk (`_refs_loop_var`) plus a boxed-capture closure at every node — and a
     # Bool per node instead of a Set{String}.
-    vsmemo::IdDict{OpExpr,Bool}
+    vsmemo::IdDict{OpExpr, Bool}
     # Compile-once template tier: the sub-kernel call sites this walk emitted
     # (sentinel j ↔ subcalls[j]), and the per-equation template context
     # (`nothing` on every reference-free build).
     subcalls::Vector{_SubCallSite}
-    tctx::Union{Nothing,_TemplateCtx}
+    tctx::Union{Nothing, _TemplateCtx}
     # True while walking a VARIANT BODY (inside `_stencilize_shared`): a nested
     # expansion root met there becomes its own compile-once boundary only when
     # its body clears `_nested_boundary_min_nodes()` — a small helper template
@@ -352,14 +358,20 @@ struct _StencilCtx
     nested::Bool
 end
 _StencilCtx(idxset, recipes, idx_env, array_var_info, const_arrays, pgather) =
-    _StencilCtx(idxset, recipes, idx_env, array_var_info, const_arrays, pgather,
-                IdDict{OpExpr,ASTExpr}(), IdDict{OpExpr,Bool}(),
-                _SubCallSite[], nothing, false)
-_StencilCtx(idxset, recipes, idx_env, array_var_info, const_arrays, pgather,
-            tctx::Union{Nothing,_TemplateCtx}) =
-    _StencilCtx(idxset, recipes, idx_env, array_var_info, const_arrays, pgather,
-                IdDict{OpExpr,ASTExpr}(), IdDict{OpExpr,Bool}(),
-                _SubCallSite[], tctx, false)
+    _StencilCtx(
+    idxset, recipes, idx_env, array_var_info, const_arrays, pgather,
+    IdDict{OpExpr, ASTExpr}(), IdDict{OpExpr, Bool}(),
+    _SubCallSite[], nothing, false
+)
+_StencilCtx(
+    idxset, recipes, idx_env, array_var_info, const_arrays, pgather,
+    tctx::Union{Nothing, _TemplateCtx}
+) =
+    _StencilCtx(
+    idxset, recipes, idx_env, array_var_info, const_arrays, pgather,
+    IdDict{OpExpr, ASTExpr}(), IdDict{OpExpr, Bool}(),
+    _SubCallSite[], tctx, false
+)
 
 # `_stencilize` transforms `expr` into the sentinel spine and appends a
 # `_LaneRecipe` (to `ctx.recipes`) for every loop-var-dependent leaf.
@@ -397,7 +409,7 @@ function _stencilize_op(e::OpExpr, ctx::_StencilCtx)
     # subtree reuses its cached sentinel exactly like any shared subtree.
     tctx = ctx.tctx
     if tctx !== nothing && haskey(tctx.sites, e) &&
-       (!ctx.nested || _nested_site_big(e, tctx))
+            (!ctx.nested || _nested_site_big(e, tctx))
         ctx.nested && _tally_cascade!(:nested_template_boundary)
         return _stencilize_site(e, ctx, tctx)
     end
@@ -411,16 +423,18 @@ function _stencilize_op_core(e::OpExpr, ctx::_StencilCtx)
         # Closed function: recurse into the (scalar) query args; the const-array
         # table/axis args are loop-invariant and returned verbatim by recursion.
         new_args = ASTExpr[_stencilize(a, ctx) for a in e.args]
-        return reconstruct(e; args=new_args)
+        return reconstruct(e; args = new_args)
     elseif op in _STENCIL_ELEMENTWISE_OPS
         # Pure elementwise op — must carry no sub-expression structure (a defensive
         # guard: elementwise ops never legitimately do; if one does, fall back).
-        (e.expr_body === nothing && e.values === nothing && e.ranges === nothing &&
-         e.output_idx === nothing && e.filter === nothing && e.lower === nothing &&
-         e.upper === nothing && e.table_axes === nothing && e.key === nothing) ||
+        (
+            e.expr_body === nothing && e.values === nothing && e.ranges === nothing &&
+                e.output_idx === nothing && e.filter === nothing && e.lower === nothing &&
+                e.upper === nothing && e.table_axes === nothing && e.key === nothing
+        ) ||
             throw(_StencilFallback("elementwise op '$op' carries structural fields"))
         new_args = ASTExpr[_stencilize(a, ctx) for a in e.args]
-        return reconstruct(e; args=new_args)
+        return reconstruct(e; args = new_args)
     end
     # SUBTERM-GRANULAR fallback (subtree-table rescue): before declining the
     # WHOLE equation over this one construct, try to isolate it as a
@@ -504,8 +518,10 @@ end
 # slips through unchecked; `bindings` (pre-lowered template sugar) is
 # conservatively rejected outright. Cold path — once per offending subtree
 # per branch template, never per cell.
-function _exprtbl_evaluable(e::ASTExpr, bound::Set{String},
-                            const_arrays::AbstractDict)::Bool
+function _exprtbl_evaluable(
+        e::ASTExpr, bound::Set{String},
+        const_arrays::AbstractDict
+    )::Bool
     (e isa NumExpr || e isa IntExpr) && return true
     if e isa VarExpr
         nm = (e::VarExpr).name
@@ -543,8 +559,10 @@ function _exprtbl_evaluable(e::ASTExpr, bound::Set{String},
     for a in o.args
         chk(a) || return false
     end
-    (chk(o.lower) && chk(o.upper) && chk(o.expr_body) && chk(o.filter) &&
-     chk(o.key)) || return false
+    (
+        chk(o.lower) && chk(o.upper) && chk(o.expr_body) && chk(o.filter) &&
+            chk(o.key)
+    ) || return false
     if o.values !== nothing
         for v in o.values
             chk(v) || return false
@@ -573,8 +591,12 @@ function _try_exprtbl_lane(e::OpExpr, ctx::_StencilCtx)
     _is_array_producer(e) && return nothing
     _exprtbl_evaluable(e, ctx.idxset, ctx.const_arrays) || return nothing
     names = sort!(collect(ctx.idxset))
-    push!(ctx.recipes, _LaneRecipe(LANE_EXPRTBL, "", ASTExpr[], Int[], Int[],
-                                   _ExprTblSpec(e, names, nothing), ""))
+    push!(
+        ctx.recipes, _LaneRecipe(
+            LANE_EXPRTBL, "", ASTExpr[], Int[], Int[],
+            _ExprTblSpec(e, names, nothing), ""
+        )
+    )
     _tally_cascade!(:affine_subtree_tbl)
     return VarExpr(_lane_name(length(ctx.recipes)))
 end
@@ -588,19 +610,26 @@ end
 # `_compile` cannot evaluate, an unresolvable gather, a loop index named "t")
 # throws the whole-equation `_StencilFallback` the rescue displaced — the
 # original decline, one hop later.
-function _attach_exprtbl_evals!(rs::Vector{_LaneRecipe},
-                                const_arrays::AbstractDict, reg_funcs)
+function _attach_exprtbl_evals!(
+        rs::Vector{_LaneRecipe},
+        const_arrays::AbstractDict, reg_funcs
+    )
     for r in rs
         r.kind == LANE_EXPRTBL || continue
         spec = r.arr::_ExprTblSpec
         spec.ce === nothing || continue
-        ce = _cellwise_compile_once_impl(spec.expr, length(spec.idx_names),
-                                         const_arrays, reg_funcs, _EMPTY_PARAMS;
-                                         bind_syms=spec.idx_names)
-        ce === nothing && throw(_StencilFallback(
-            "subtree-table lane: compile-once evaluator declined (op '" *
-            (spec.expr isa OpExpr ? (spec.expr::OpExpr).op : string(typeof(spec.expr))) *
-            "')"))
+        ce = _cellwise_compile_once_impl(
+            spec.expr, length(spec.idx_names),
+            const_arrays, reg_funcs, _EMPTY_PARAMS;
+            bind_syms = spec.idx_names
+        )
+        ce === nothing && throw(
+            _StencilFallback(
+                "subtree-table lane: compile-once evaluator declined (op '" *
+                    (spec.expr isa OpExpr ? (spec.expr::OpExpr).op : string(typeof(spec.expr))) *
+                    "')"
+            )
+        )
         spec.ce = ce
     end
     return rs
@@ -622,8 +651,10 @@ _stencilize_site(root::OpExpr, ctx::_StencilCtx, tctx::_TemplateCtx) =
 # expansion root hit directly in scalar position (`bypass=true` — its own walk
 # must not re-enter the site check) or an index-bound producer body
 # (`bypass=false` — the bound body is a fresh object, never in `sites`).
-function _stencilize_shared(node::OpExpr, ctx::_StencilCtx, tctx::_TemplateCtx,
-                            bypass::Bool)
+function _stencilize_shared(
+        node::OpExpr, ctx::_StencilCtx, tctx::_TemplateCtx,
+        bypass::Bool
+    )
     _branch_key!(tctx.bio, node, ctx.idxset, ctx.idx_env, ctx.const_arrays, tctx.gmemo)
     bodykey = String(take!(tctx.bio))
     # (root identity ≡ structure after A1 interning, loop-index-set key, region
@@ -647,11 +678,13 @@ function _stencilize_shared(node::OpExpr, ctx::_StencilCtx, tctx::_TemplateCtx,
         # region class otherwise). Nested region selections still reach the
         # variant key through `_branch_key!`, which descends everything
         # identically. Without the opt-in, boundaries stay outermost-only.
-        subctx = _StencilCtx(ctx.idxset, rs, ctx.idx_env, ctx.array_var_info,
-                             ctx.const_arrays, ctx.pgather,
-                             IdDict{OpExpr,ASTExpr}(), tctx.gmemo,
-                             _SubCallSite[],
-                             _nested_boundary_disabled() ? nothing : tctx, true)
+        subctx = _StencilCtx(
+            ctx.idxset, rs, ctx.idx_env, ctx.array_var_info,
+            ctx.const_arrays, ctx.pgather,
+            IdDict{OpExpr, ASTExpr}(), tctx.gmemo,
+            _SubCallSite[],
+            _nested_boundary_disabled() ? nothing : tctx, true
+        )
         spine = bypass ? _stencilize_op_core(node, subctx) : _stencilize(node, subctx)
         # Rescued-subtree lanes need their compile-once evaluator before any
         # box materializes them; the variant path finalizes recipes here, not
@@ -659,10 +692,14 @@ function _stencilize_shared(node::OpExpr, ctx::_StencilCtx, tctx::_TemplateCtx,
         _attach_exprtbl_evals!(rs, ctx.const_arrays, tctx.reg_funcs)
         vm_ext = _ext_var_map(tctx.var_map, rs, subctx.subcalls)
         bmemo = _BuildMemo()
-        tmpl = _compile(_resolve_indices(spine, ctx.array_var_info, vm_ext,
-                                         ctx.const_arrays, ctx.pgather, bmemo),
-                        vm_ext, tctx.param_sym_set, tctx.reg_funcs, bmemo)
-        variant = _SubVariant(tmpl, rs, subctx.subcalls, Dict{String,Any}())
+        tmpl = _compile(
+            _resolve_indices(
+                spine, ctx.array_var_info, vm_ext,
+                ctx.const_arrays, ctx.pgather, bmemo
+            ),
+            vm_ext, tctx.param_sym_set, tctx.reg_funcs, bmemo
+        )
+        variant = _SubVariant(tmpl, rs, subctx.subcalls, Dict{String, Any}())
         tctx.variants[vkey] = variant
     end
     base = length(ctx.recipes)
@@ -674,22 +711,24 @@ end
 # An array-producer expansion root reached through `index(makearray → root, k…)`
 # (the ESD stencil shape): bind the producer's output indices to the k-args ONCE
 # per (root, k-arg identity) — the shared bound body — then compile-once on it.
-function _stencilize_bound_site(producer::OpExpr, oi::Vector{String},
-                                kargs::Vector{ASTExpr}, body::ASTExpr,
-                                ctx::_StencilCtx, tctx::_TemplateCtx)
+function _stencilize_bound_site(
+        producer::OpExpr, oi::Vector{String},
+        kargs::Vector{ASTExpr}, body::ASTExpr,
+        ctx::_StencilCtx, tctx::_TemplateCtx
+    )
     entries = get!(tctx.bound_bodies, producer) do
-        Tuple{Vector{ASTExpr},ASTExpr}[]
+        Tuple{Vector{ASTExpr}, ASTExpr}[]
     end
     sub_body = nothing
     for (ka, sb) in entries
         if length(ka) == length(kargs) &&
-           all(i -> ka[i] === kargs[i], eachindex(kargs))
+                all(i -> ka[i] === kargs[i], eachindex(kargs))
             sub_body = sb
             break
         end
     end
     if sub_body === nothing
-        idx_exprs = Dict{String,ASTExpr}(oi[d] => kargs[d] for d in 1:length(oi))
+        idx_exprs = Dict{String, ASTExpr}(oi[d] => kargs[d] for d in 1:length(oi))
         sub_body = _sub_preserving(body, idx_exprs)
         # The substitution rebuilds every subtree that references a bound index,
         # which detaches NESTED expansion roots from `tctx.sites` by identity —
@@ -728,35 +767,51 @@ function _stencilize_index(e::OpExpr, ctx::_StencilCtx)
     # declines the equation to the tiers that gather at run time.
     if !all(a -> _lane_subscript_static(a, ctx.idxset, ctx.const_arrays), idx_args)
         if first_arg isa OpExpr && (first_arg::OpExpr).op == "const" ||
-           first_arg isa VarExpr && haskey(ctx.const_arrays, first_arg.name)
+                first_arg isa VarExpr && haskey(ctx.const_arrays, first_arg.name)
             lane = _try_exprtbl_lane(e, ctx)
             lane === nothing || return lane
         end
-        throw(_StencilFallback("index subscript is not an integer function of the " *
-                               "loop indices and build-time tables"))
+        throw(
+            _StencilFallback(
+                "index subscript is not an integer function of the " *
+                    "loop indices and build-time tables"
+            )
+        )
     end
     if first_arg isa VarExpr && haskey(ctx.array_var_info, first_arg.name)
         lo, hi = ctx.array_var_info[first_arg.name]
         length(idx_args) == length(lo) ||
             throw(_StencilFallback("index ndim mismatch on '$(first_arg.name)'"))
-        push!(ctx.recipes, _LaneRecipe(LANE_STATE, first_arg.name, idx_args,
-                                       copy(lo), copy(hi), nothing, ""))
+        push!(
+            ctx.recipes, _LaneRecipe(
+                LANE_STATE, first_arg.name, idx_args,
+                copy(lo), copy(hi), nothing, ""
+            )
+        )
         return VarExpr(_lane_name(length(ctx.recipes)))
     end
     if first_arg isa VarExpr && haskey(ctx.pgather, first_arg.name)
         pg = ctx.pgather[first_arg.name]::_PGatherArray
         length(idx_args) == length(pg.dims) ||
             throw(_StencilFallback("pgather ndim mismatch on '$(first_arg.name)'"))
-        push!(ctx.recipes, _LaneRecipe(LANE_PGATHER, first_arg.name, idx_args,
-                                       Int[], Int[], pg, ""))
+        push!(
+            ctx.recipes, _LaneRecipe(
+                LANE_PGATHER, first_arg.name, idx_args,
+                Int[], Int[], pg, ""
+            )
+        )
         return VarExpr(_lane_name(length(ctx.recipes)))
     end
     if first_arg isa VarExpr && haskey(ctx.const_arrays, first_arg.name)
         arr = ctx.const_arrays[first_arg.name]
         length(idx_args) == ndims(arr) ||
             throw(_StencilFallback("const-array ndim mismatch on '$(first_arg.name)'"))
-        push!(ctx.recipes, _LaneRecipe(LANE_CONST, first_arg.name, idx_args,
-                                       Int[], Int[], arr, ""))
+        push!(
+            ctx.recipes, _LaneRecipe(
+                LANE_CONST, first_arg.name, idx_args,
+                Int[], Int[], arr, ""
+            )
+        )
         return VarExpr(_lane_name(length(ctx.recipes)))
     end
     # An INLINE `const` array literal, `index({op:const, value:[…]}, k…)`, is a
@@ -766,14 +821,18 @@ function _stencilize_index(e::OpExpr, ctx::_StencilCtx)
     # and one boundary policy. A contraction's run-time fold reads it at the
     # contracted index this way.
     if first_arg isa OpExpr && (first_arg::OpExpr).op == "const" &&
-       (first_arg::OpExpr).value isa AbstractVector
+            (first_arg::OpExpr).value isa AbstractVector
         arr, cname = _intern_inline_const(first_arg::OpExpr, ctx.const_arrays)
         haskey(ctx.const_arrays, cname) ||
             throw(_StencilFallback("inline const array outside a const registry"))
         length(idx_args) == ndims(arr) ||
             throw(_StencilFallback("const-array ndim mismatch on an inline const"))
-        push!(ctx.recipes, _LaneRecipe(LANE_CONST, cname, idx_args,
-                                       Int[], Int[], arr, ""))
+        push!(
+            ctx.recipes, _LaneRecipe(
+                LANE_CONST, cname, idx_args,
+                Int[], Int[], arr, ""
+            )
+        )
         return VarExpr(_lane_name(length(ctx.recipes)))
     end
     # COMBINATION producer: `index(a ⊕ b, k…)` where ⊕ is elementwise. Push the
@@ -794,24 +853,34 @@ function _stencilize_index(e::OpExpr, ctx::_StencilCtx)
         # folded elementwise array observed (`index(1 + cos(pi*zc), j)`) pushes
         # down here too rather than declining to the per-cell tier (issue #175).
         _leaf_is_array(n) = haskey(ctx.array_var_info, n) || haskey(ctx.pgather, n) ||
-                            (haskey(ctx.const_arrays, n) &&
-                             !_is_scalar_const_field(ctx.const_arrays[n]))
-        _amemo = IdDict{OpExpr,Bool}()
+            (
+            haskey(ctx.const_arrays, n) &&
+                !_is_scalar_const_field(ctx.const_arrays[n])
+        )
+        _amemo = IdDict{OpExpr, Bool}()
         _arrayish(a) = _index_pushdown_arrayish(a, _leaf_is_array, _amemo)
         if any(_arrayish, fa.args)
-            pushed = ASTExpr[_arrayish(a) ? OpExpr("index", ASTExpr[a, idx_args...]) : a
-                             for a in fa.args]
+            pushed = ASTExpr[
+                _arrayish(a) ? OpExpr("index", ASTExpr[a, idx_args...]) : a
+                    for a in fa.args
+            ]
             return _stencilize(reconstruct(fa; args = pushed), ctx)
         end
     end
     # Name the producer: "some var is not an array" is not actionable, and the
     # thing that failed to resolve is exactly what you need to see.
-    throw(_StencilFallback("index into non-array/unknown var (loop-var-dependent): " *
-                          (first_arg isa VarExpr ? "'$(first_arg.name)'" :
-                           first_arg isa OpExpr ?
-                             "producer op '$((first_arg::OpExpr).op)' :: " *
-                             first(sprint(show, first_arg), 160) :
-                           "non-var $(typeof(first_arg))")))
+    throw(
+        _StencilFallback(
+            "index into non-array/unknown var (loop-var-dependent): " *
+                (
+                first_arg isa VarExpr ? "'$(first_arg.name)'" :
+                    first_arg isa OpExpr ?
+                    "producer op '$((first_arg::OpExpr).op)' :: " *
+                    first(sprint(show, first_arg), 160) :
+                    "non-var $(typeof(first_arg))"
+            )
+        )
+    )
 end
 
 # Whether `_eval_const_int` evaluates subscript `e` at a cell from the loop
@@ -819,10 +888,16 @@ end
 # names, the integer ops it implements, and gathers from a const array (by
 # name or inline) at such subscripts. Anything else (an array producer, a
 # name that is not a loop index) leaves `_eval_const_int` without a value.
-const _LANE_SUBSCRIPT_OPS = Set(["+", "-", "*", "/", "floor", "mod", "max", "min",
-                                 "ifelse", "<", "<=", ">", ">=", "==", "neg"])
-function _lane_subscript_static(e::ASTExpr, idxset::Set{String},
-                                const_arrays::AbstractDict)::Bool
+const _LANE_SUBSCRIPT_OPS = Set(
+    [
+        "+", "-", "*", "/", "floor", "mod", "max", "min",
+        "ifelse", "<", "<=", ">", ">=", "==", "neg",
+    ]
+)
+function _lane_subscript_static(
+        e::ASTExpr, idxset::Set{String},
+        const_arrays::AbstractDict
+    )::Bool
     e isa IntExpr && return true
     e isa NumExpr && return isinteger((e::NumExpr).value)
     e isa VarExpr && return (e::VarExpr).name in idxset
@@ -831,8 +906,10 @@ function _lane_subscript_static(e::ASTExpr, idxset::Set{String},
     if o.op == "index"
         isempty(o.args) && return false
         h = o.args[1]
-        (h isa VarExpr && haskey(const_arrays, (h::VarExpr).name) ||
-         h isa OpExpr && (h::OpExpr).op == "const" && (h::OpExpr).value isa AbstractVector) ||
+        (
+            h isa VarExpr && haskey(const_arrays, (h::VarExpr).name) ||
+                h isa OpExpr && (h::OpExpr).op == "const" && (h::OpExpr).value isa AbstractVector
+        ) ||
             return false
         for k in 2:length(o.args)
             _lane_subscript_static(o.args[k], idxset, const_arrays) || return false
@@ -871,13 +948,19 @@ function _stencilize_indexed(producer::OpExpr, kargs::Vector{ASTExpr}, ctx::_Ste
             # The pinned axes need no verification: region coverage already
             # fixed their k-values to the singleton bound.
             ns = region === nothing ? Int[] :
-                 Int[d for d in 1:length(kargs) if region[d][1] != region[d][2]]
+                Int[d for d in 1:length(kargs) if region[d][1] != region[d][2]]
             rank == length(ns) ||
-                throw(_StencilFallback("makearray reduced-rank region value: region " *
-                    "$r value op '$(re.op)' rank $rank vs $(length(ns)) " *
-                    "non-singleton of $(length(kargs)) index args" *
-                    (re.op == "makearray" ? "" :
-                     ", output_idx $(re.output_idx)")))
+                throw(
+                _StencilFallback(
+                    "makearray reduced-rank region value: region " *
+                        "$r value op '$(re.op)' rank $rank vs $(length(ns)) " *
+                        "non-singleton of $(length(kargs)) index args" *
+                        (
+                        re.op == "makearray" ? "" :
+                            ", output_idx $(re.output_idx)"
+                    )
+                )
+            )
             return _stencilize_indexed(re, kargs[ns], ctx)
         end
         return _stencilize(sel, ctx)
@@ -913,14 +996,20 @@ function _stencilize_indexed(producer::OpExpr, kargs::Vector{ASTExpr}, ctx::_Ste
         for n in cnames
             raw = ranges[n]
             (raw isa AbstractVector && _is_const_int_range(raw)) ||
-                throw(_StencilFallback("index(aggregate) contracted index '$n' " *
-                                       "has no constant dense range"))
+                throw(
+                _StencilFallback(
+                    "index(aggregate) contracted index '$n' " *
+                        "has no constant dense range"
+                )
+            )
             push!(citers, collect(_expand_int_range(raw)))
         end
         oplus, zerobar = _aggregate_oplus_identity(producer.semiring, producer.reduce)
         terms = ASTExpr[]
-        _foreach_aggregate_term(body, cnames, citers, nothing, nothing,
-                                zerobar) do term
+        _foreach_aggregate_term(
+            body, cnames, citers, nothing, nothing,
+            zerobar
+        ) do term
             push!(terms, term)
         end
         body = _combine_with_reducer(oplus, zerobar, terms)
@@ -931,11 +1020,11 @@ function _stencilize_indexed(producer::OpExpr, kargs::Vector{ASTExpr}, ctx::_Ste
     # re-fused into every branch spine.
     tctx = ctx.tctx
     if tctx !== nothing && haskey(tctx.sites, producer) &&
-       (!ctx.nested || _nested_site_big(producer, tctx))
+            (!ctx.nested || _nested_site_big(producer, tctx))
         ctx.nested && _tally_cascade!(:nested_template_boundary)
         return _stencilize_bound_site(producer, oi, kargs, body, ctx, tctx)
     end
-    idx_exprs = Dict{String,ASTExpr}(oi[d] => kargs[d] for d in 1:length(oi))
+    idx_exprs = Dict{String, ASTExpr}(oi[d] => kargs[d] for d in 1:length(oi))
     sub_body = _sub_preserving(body, idx_exprs)
     return _stencilize(sub_body, ctx)
 end
@@ -955,12 +1044,12 @@ end
 # `e` reference any loop index in `idxset`? — so memoize THAT by node identity.
 # Short-circuits on the first hit; `idxset` is fixed per build, so the answer is a
 # pure function of the node. Byte-for-byte the same guard decision.
-_child_refs_idxset(x::VarExpr, idxset::Set{String}, ::IdDict{OpExpr,Bool}) = x.name in idxset
-_child_refs_idxset(::NumExpr, ::Set{String}, ::IdDict{OpExpr,Bool}) = false
-_child_refs_idxset(::IntExpr, ::Set{String}, ::IdDict{OpExpr,Bool}) = false
-_child_refs_idxset(x::OpExpr, idxset::Set{String}, memo::IdDict{OpExpr,Bool}) =
+_child_refs_idxset(x::VarExpr, idxset::Set{String}, ::IdDict{OpExpr, Bool}) = x.name in idxset
+_child_refs_idxset(::NumExpr, ::Set{String}, ::IdDict{OpExpr, Bool}) = false
+_child_refs_idxset(::IntExpr, ::Set{String}, ::IdDict{OpExpr, Bool}) = false
+_child_refs_idxset(x::OpExpr, idxset::Set{String}, memo::IdDict{OpExpr, Bool}) =
     _refs_idxset(x, idxset, memo)
-function _refs_idxset(e::OpExpr, idxset::Set{String}, memo::IdDict{OpExpr,Bool})
+function _refs_idxset(e::OpExpr, idxset::Set{String}, memo::IdDict{OpExpr, Bool})
     cached = get(memo, e, nothing)
     cached === nothing || return cached
     r = _scan_refs_idxset(e, idxset, memo)
@@ -969,7 +1058,7 @@ function _refs_idxset(e::OpExpr, idxset::Set{String}, memo::IdDict{OpExpr,Bool})
 end
 # Same field set / order as `child_exprs`, but returns as soon as any child refers
 # to a loop index (no Set, no `child_exprs` vector, no closure).
-function _scan_refs_idxset(e::OpExpr, idxset::Set{String}, memo::IdDict{OpExpr,Bool})
+function _scan_refs_idxset(e::OpExpr, idxset::Set{String}, memo::IdDict{OpExpr, Bool})
     for a in e.args
         _child_refs_idxset(a, idxset, memo) && return true
     end
@@ -1028,10 +1117,12 @@ end
 # is a deterministic function of the fixed body DAG plus the per-cell region
 # selections, so two cells produce equal deduped keys iff they select equal
 # regions at every reachable site iff their per-path keys were equal.
-function _branch_key!(io::IOBuffer, e, idxset::Set{String}, idx_env, const_arrays,
-                      memo::IdDict{OpExpr,Bool},
-                      seen::IdDict{OpExpr,Nothing}=IdDict{OpExpr,Nothing}(),
-                      segs::Dict{Any,Int}=Dict{Any,Int}())
+function _branch_key!(
+        io::IOBuffer, e, idxset::Set{String}, idx_env, const_arrays,
+        memo::IdDict{OpExpr, Bool},
+        seen::IdDict{OpExpr, Nothing} = IdDict{OpExpr, Nothing}(),
+        segs::Dict{Any, Int} = Dict{Any, Int}()
+    )
     e isa OpExpr || return
     _refs_idxset(e, idxset, memo) || return
     haskey(seen, e) && return
@@ -1046,9 +1137,11 @@ function _branch_key!(io::IOBuffer, e, idxset::Set{String}, idx_env, const_array
         # operands, so a producer among them selects its region at `k…`, and
         # the key must see that selection where the spine makes it.
         if fa isa OpExpr && _is_scalar_op((fa::OpExpr).op) &&
-           _reaches_indexable_producer(fa::OpExpr)
-            _branch_key_pushdown!(io, fa::OpExpr, e.args[2:end], idxset, idx_env,
-                                  const_arrays, memo, seen, segs)
+                _reaches_indexable_producer(fa::OpExpr)
+            _branch_key_pushdown!(
+                io, fa::OpExpr, e.args[2:end], idxset, idx_env,
+                const_arrays, memo, seen, segs
+            )
             for k in 2:length(e.args)
                 _branch_key!(io, e.args[k], idxset, idx_env, const_arrays, memo, seen, segs)
             end
@@ -1066,7 +1159,7 @@ function _branch_key!(io::IOBuffer, e, idxset::Set{String}, idx_env, const_array
         _branch_key!(io, a, idxset, idx_env, const_arrays, memo, seen, segs)
     end
     e.expr_body !== nothing && _branch_key!(io, e.expr_body, idxset, idx_env, const_arrays, memo, seen, segs)
-    if e.values !== nothing
+    return if e.values !== nothing
         for v in e.values
             _branch_key!(io, v, idxset, idx_env, const_arrays, memo, seen, segs)
         end
@@ -1077,8 +1170,10 @@ end
 # whose ranges are all constant and dense, with fewer terms than the
 # contraction loop's floor: the one the affine spine unrolls.
 function _is_short_scalar_contraction(e::OpExpr)
-    (_is_faq_op(e.op) && e.expr_body !== nothing && e.join_gates === nothing &&
-     e.filter === nothing && !_is_array_producer(e)) || return false
+    (
+        _is_faq_op(e.op) && e.expr_body !== nothing && e.join_gates === nothing &&
+            e.filter === nothing && !_is_array_producer(e)
+    ) || return false
     n = 1
     for v in values(_ranges_dict(e))
         (v isa AbstractVector && _is_const_int_range(v)) || return false
@@ -1098,10 +1193,12 @@ end
 # The key of `index(fa, kargs…)` for an elementwise `fa`: each producer operand
 # keyed as gathered at `kargs`, nested elementwise operands followed, and every
 # other operand keyed as it stands.
-function _branch_key_pushdown!(io::IOBuffer, fa::OpExpr, kargs::Vector{ASTExpr},
-                               idxset::Set{String}, idx_env, const_arrays,
-                               memo::IdDict{OpExpr,Bool}, seen::IdDict{OpExpr,Nothing},
-                               segs::Dict{Any,Int})
+function _branch_key_pushdown!(
+        io::IOBuffer, fa::OpExpr, kargs::Vector{ASTExpr},
+        idxset::Set{String}, idx_env, const_arrays,
+        memo::IdDict{OpExpr, Bool}, seen::IdDict{OpExpr, Nothing},
+        segs::Dict{Any, Int}
+    )
     for a in fa.args
         a isa OpExpr || continue
         ao = a::OpExpr
@@ -1113,12 +1210,15 @@ function _branch_key_pushdown!(io::IOBuffer, fa::OpExpr, kargs::Vector{ASTExpr},
             _branch_key!(io, ao, idxset, idx_env, const_arrays, memo, seen, segs)
         end
     end
+    return
 end
 
-function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTExpr},
-                              idxset::Set{String}, idx_env, const_arrays,
-                              memo::IdDict{OpExpr,Bool}, seen::IdDict{OpExpr,Nothing},
-                              segs::Dict{Any,Int})
+function _branch_key_indexed!(
+        io::IOBuffer, producer::OpExpr, kargs::Vector{ASTExpr},
+        idxset::Set{String}, idx_env, const_arrays,
+        memo::IdDict{OpExpr, Bool}, seen::IdDict{OpExpr, Nothing},
+        segs::Dict{Any, Int}
+    )
     if producer.op == "makearray"
         kvals = Int[_eval_const_int(a, idx_env, const_arrays) for a in kargs]
         r, region = _select_region(producer, kvals)
@@ -1190,8 +1290,12 @@ function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTE
         # all), or a ragged / expression-valued bound, which has no value without
         # the enclosing per-cell environment.
         raw isa AbstractVector && _is_const_int_range(raw) ||
-            throw(_StencilFallback("branch key: contracted index '$(cnames[d])' " *
-                                   "has no constant dense range"))
+            throw(
+            _StencilFallback(
+                "branch key: contracted index '$(cnames[d])' " *
+                    "has no constant dense range"
+            )
+        )
         citers[d] = collect(_expand_int_range(raw))
     end
     # ONE SEGMENT PER BINDING. Each gather walks the body afresh under its own
@@ -1209,7 +1313,7 @@ function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTE
     end
     sub = IOBuffer()
     n = length(oi)
-    saved = Vector{Union{Nothing,Int}}(undef, n)
+    saved = Vector{Union{Nothing, Int}}(undef, n)
     added = falses(n)
     for d in 1:n
         nm = oi[d]
@@ -1221,7 +1325,7 @@ function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTE
         end
     end
     nc = length(cnames)
-    csaved = Vector{Union{Nothing,Int}}(undef, nc)
+    csaved = Vector{Union{Nothing, Int}}(undef, nc)
     cadded = falses(nc)
     for d in 1:nc
         nm = cnames[d]
@@ -1243,9 +1347,11 @@ function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTE
         # this producer adds gets a fresh memo. `seen` is per binding for the
         # same reason as below: a node shared with another gather of this
         # producer, at other subscripts, must be keyed again at these.
-        bmemo = any(added) ? IdDict{OpExpr,Bool}() : memo
-        _branch_key!(sub, body, idxset, idx_env, const_arrays, bmemo,
-                     IdDict{OpExpr,Nothing}(), segs)
+        bmemo = any(added) ? IdDict{OpExpr, Bool}() : memo
+        _branch_key!(
+            sub, body, idxset, idx_env, const_arrays, bmemo,
+            IdDict{OpExpr, Nothing}(), segs
+        )
     else
         # FRESH `_refs_idxset` memo. That memo caches, per node, whether the node
         # references `idxset` — and `idxset` just GREW by the contracted names. An
@@ -1255,14 +1361,16 @@ function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTE
         # different branch structure would key equal and merge into one affine
         # kernel — wrong, and silently. Rebuilding costs a walk on a path that only
         # inlining builds reach.
-        cmemo = IdDict{OpExpr,Bool}()
+        cmemo = IdDict{OpExpr, Bool}()
         for tup in Iterators.product(citers...)
             for d in 1:nc
                 idx_env[cnames[d]] = tup[d]
             end
             print(sub, 'C')
-            _branch_key!(sub, body, idxset, idx_env, const_arrays, cmemo,
-                         IdDict{OpExpr,Nothing}(), segs)
+            _branch_key!(
+                sub, body, idxset, idx_env, const_arrays, cmemo,
+                IdDict{OpExpr, Nothing}(), segs
+            )
         end
     end
     for d in nc:-1:1
@@ -1280,16 +1388,16 @@ function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTE
     segs[skey] = length(segs) + 1
     print(io, 'S', length(segs), '{')
     write(io, take!(sub))
-    print(io, '}')
+    return print(io, '}')
 end
 
 # Extend `var_map` with the lane sentinels → a negative slot marker. `_compile`
 # maps `VarExpr(lane_name(k))` to `_NK_STATE(idx = -k)`, which the box
 # processor's `_lower_to_access` decodes back to `recipes[k]`. Built ONCE per
 # equation (not per cell), as an overlay on `var_map` rather than a copy of it.
-function _lane_var_map(var_map::AbstractDict{String,Int}, recipes::Vector{_LaneRecipe})
+function _lane_var_map(var_map::AbstractDict{String, Int}, recipes::Vector{_LaneRecipe})
     isempty(recipes) && return var_map
-    ext = Dict{String,Int}()
+    ext = Dict{String, Int}()
     for k in eachindex(recipes)
         ext[_lane_name(k)] = -k
     end
@@ -1299,10 +1407,12 @@ end
 # Lane sentinels plus sub-kernel call sentinels (compile-once tier): call site j
 # maps to the disjoint negative range `-(_SUBCALL_SENT_BASE + j)`, decoded by
 # `_lower_to_access`.
-function _ext_var_map(var_map::AbstractDict{String,Int}, recipes::Vector{_LaneRecipe},
-                      subcalls::Vector{_SubCallSite})
+function _ext_var_map(
+        var_map::AbstractDict{String, Int}, recipes::Vector{_LaneRecipe},
+        subcalls::Vector{_SubCallSite}
+    )
     (isempty(recipes) && isempty(subcalls)) && return var_map
-    ext = Dict{String,Int}()
+    ext = Dict{String, Int}()
     for k in eachindex(recipes)
         ext[_lane_name(k)] = -k
     end
@@ -1315,8 +1425,10 @@ end
 # Evaluate one lane recipe for the current cell (`idx_env`). Byte-for-byte the
 # `_resolve_indices` outcome for that leaf: a STATE slot (≥1), 0 for a ghost cell,
 # a linear PGATHER offset, or a folded const / loop-index literal.
-function _eval_recipe(rec::_LaneRecipe, idx_env::Dict{String,Int},
-                      var_map::AbstractDict{String,Int}, const_arrays::AbstractDict)
+function _eval_recipe(
+        rec::_LaneRecipe, idx_env::Dict{String, Int},
+        var_map::AbstractDict{String, Int}, const_arrays::AbstractDict
+    )
     if rec.kind == LANE_LOOPLIT
         return Float64(idx_env[rec.loop_name])
     end
@@ -1329,8 +1441,11 @@ function _eval_recipe(rec::_LaneRecipe, idx_env::Dict{String,Int},
         # class as the state/pgather table materializers — never per eval.
         spec = rec.arr::_ExprTblSpec
         ce = spec.ce
-        ce === nothing && throw(_StencilFallback(
-            "subtree-table lane evaluated before its evaluator was attached"))
+        ce === nothing && throw(
+            _StencilFallback(
+                "subtree-table lane evaluated before its evaluator was attached"
+            )
+        )
         cell = Vector{Int}(undef, length(spec.idx_names))
         @inbounds for d in eachindex(spec.idx_names)
             cell[d] = idx_env[spec.idx_names[d]]
@@ -1370,9 +1485,11 @@ function _eval_recipe(rec::_LaneRecipe, idx_env::Dict{String,Int},
         arr = rec.arr
         inds = Vector{Int}(undef, n)
         @inbounds for d in 1:n
-            inds[d] = _resolve_const_index(arr, rec.var_name, d,
-                          _eval_const_int(rec.idx_args[d], idx_env, const_arrays),
-                          size(arr, d))
+            inds[d] = _resolve_const_index(
+                arr, rec.var_name, d,
+                _eval_const_int(rec.idx_args[d], idx_env, const_arrays),
+                size(arr, d)
+            )
         end
         return Float64(arr[inds...])
     else  # LANE_PGATHER
@@ -1381,9 +1498,13 @@ function _eval_recipe(rec::_LaneRecipe, idx_env::Dict{String,Int},
         @inbounds for d in 1:n
             v = _eval_const_int(rec.idx_args[d], idx_env, const_arrays)
             (1 <= v <= pg.dims[d]) ||
-                throw(TreeWalkError("E_TREEWALK_PGATHER_OOB",
+                throw(
+                TreeWalkError(
+                    "E_TREEWALK_PGATHER_OOB",
                     "forcing array '$(rec.var_name)' index $(v) out of range " *
-                    "[1, $(pg.dims[d])] on dim $(d)"))
+                        "[1, $(pg.dims[d])] on dim $(d)"
+                )
+            )
             inds[d] = v
         end
         return LinearIndices(Tuple(pg.dims))[inds...]
@@ -1403,8 +1524,8 @@ end
 # table and every error are exactly the per-cell resolution's.
 
 const _IX_LIT, _IX_LOOP, _IX_ADD, _IX_SUB, _IX_NEG, _IX_MUL, _IX_DIV, _IX_MOD,
-      _IX_MAX, _IX_MIN, _IX_IFELSE, _IX_LT, _IX_LE, _IX_GT, _IX_GE, _IX_EQ,
-      _IX_GATHER = Int8.(1:17)
+    _IX_MAX, _IX_MIN, _IX_IFELSE, _IX_LT, _IX_LE, _IX_GT, _IX_GE, _IX_EQ,
+    _IX_GATHER = Int8.(1:17)
 
 struct _IdxNode
     kind::Int8
@@ -1413,11 +1534,13 @@ struct _IdxNode
     flat::Vector{Float64}       # gather: the const array's data, column-major
     dims::Vector{Int}
 end
-_IdxNode(kind::Int8, val::Int, args::Vector{_IdxNode}=_IdxNode[]) =
+_IdxNode(kind::Int8, val::Int, args::Vector{_IdxNode} = _IdxNode[]) =
     _IdxNode(kind, val, args, Float64[], Int[])
 
-const _IX_BINOPS = Dict{String,Int8}("/" => _IX_DIV, "mod" => _IX_MOD, "<" => _IX_LT,
-    "<=" => _IX_LE, ">" => _IX_GT, ">=" => _IX_GE, "==" => _IX_EQ)
+const _IX_BINOPS = Dict{String, Int8}(
+    "/" => _IX_DIV, "mod" => _IX_MOD, "<" => _IX_LT,
+    "<=" => _IX_LE, ">" => _IX_GT, ">=" => _IX_GE, "==" => _IX_EQ
+)
 
 # The `_IdxNode` form of an index expression, or `nothing` when some part of it
 # is outside what `_ix_eval` models (the caller keeps `_eval_const_int`).
@@ -1434,11 +1557,13 @@ function _ix_compile(e::ASTExpr, idx_names::Vector{String}, const_arrays::Abstra
     elseif e isa OpExpr
         op = e.op
         c = e.args
-        sub() = (xs = _IdxNode[]; for a in c
-                     x = _ix_compile(a, idx_names, const_arrays)
-                     x === nothing && return nothing
-                     push!(xs, x)
-                 end; xs)
+        sub() = (
+            xs = _IdxNode[]; for a in c
+                x = _ix_compile(a, idx_names, const_arrays)
+                x === nothing && return nothing
+                push!(xs, x)
+            end; xs
+        )
         if op == "index"
             (length(c) >= 2 && c[1] isa VarExpr) || return nothing
             arr = get(const_arrays, (c[1]::VarExpr).name, nothing)
@@ -1478,7 +1603,7 @@ end
 
 # `(value, ok)`: `_eval_const_int` of the compiled expression at loop values
 # `loop`, or `ok = false` where that call would throw or apply a boundary policy.
-function _ix_eval(n::_IdxNode, loop::Vector{Int})::Tuple{Int,Bool}
+function _ix_eval(n::_IdxNode, loop::Vector{Int})::Tuple{Int, Bool}
     k = n.kind
     k === _IX_LIT && return (n.val, true)
     k === _IX_LOOP && return (@inbounds(loop[n.val]), true)
@@ -1490,7 +1615,7 @@ function _ix_eval(n::_IdxNode, loop::Vector{Int})::Tuple{Int,Bool}
             v, ok = _ix_eval(a[j], loop)
             ok || return (0, false)
             acc = k === _IX_ADD ? acc + v : k === _IX_MUL ? acc * v :
-                  k === _IX_MAX ? max(acc, v) : min(acc, v)
+                k === _IX_MAX ? max(acc, v) : min(acc, v)
         end
         return (acc, true)
     elseif k === _IX_NEG
@@ -1538,8 +1663,8 @@ struct _LaneEval{M}
     args::Vector{_IdxNode}
     lo::Vector{Int}
     hi::Vector{Int}
-    affine::Union{Nothing,Tuple{Int,Vector{Int}}}
-    blk::Union{Nothing,_ArrayBlock}     # LANE_STATE with no affine map
+    affine::Union{Nothing, Tuple{Int, Vector{Int}}}
+    blk::Union{Nothing, _ArrayBlock}     # LANE_STATE with no affine map
     var_map::M
     var_name::String
     flat::Vector{Float64}               # LANE_CONST data / LANE_PGATHER extents
@@ -1549,13 +1674,17 @@ struct _LaneEval{M}
 end
 
 # `nothing` when the recipe (or one of its subscripts) has no compiled form.
-function _lane_evaluator(rec::_LaneRecipe, idx_names::Vector{String}, var_map,
-                         const_arrays::AbstractDict)
+function _lane_evaluator(
+        rec::_LaneRecipe, idx_names::Vector{String}, var_map,
+        const_arrays::AbstractDict
+    )
     if rec.kind == LANE_LOOPLIT
         pos = findfirst(==(rec.loop_name), idx_names)
         pos === nothing && return nothing
-        return _LaneEval(rec.kind, _IdxNode[], rec.lo, rec.hi, nothing, nothing, var_map,
-                         rec.var_name, Float64[], Int[], pos, Int[])
+        return _LaneEval(
+            rec.kind, _IdxNode[], rec.lo, rec.hi, nothing, nothing, var_map,
+            rec.var_name, Float64[], Int[], pos, Int[]
+        )
     end
     rec.kind == LANE_EXPRTBL && return nothing
     args = _IdxNode[]
@@ -1580,8 +1709,10 @@ function _lane_evaluator(rec::_LaneRecipe, idx_names::Vector{String}, var_map,
         length(pg.dims) == n || return nothing
         dims = collect(Int, pg.dims)
     end
-    return _LaneEval(rec.kind, args, rec.lo, rec.hi, rec.affine, blk, var_map,
-                     rec.var_name, flat, dims, 0, Vector{Int}(undef, n))
+    return _LaneEval(
+        rec.kind, args, rec.lo, rec.hi, rec.affine, blk, var_map,
+        rec.var_name, flat, dims, 0, Vector{Int}(undef, n)
+    )
 end
 
 function _lane_eval(le::_LaneEval, loop::Vector{Int})
@@ -1616,7 +1747,7 @@ end
 
 # `_lane_eval` of a LANE_STATE evaluator: the slot (0 for a ghost) as an `Int`,
 # so a caller that knows the kind gets a concrete result type.
-function _lane_eval_state(le::_LaneEval, loop::Vector{Int})::Tuple{Int,Bool}
+function _lane_eval_state(le::_LaneEval, loop::Vector{Int})::Tuple{Int, Bool}
     args = le.args
     aff = le.affine
     ghost = false
@@ -1650,7 +1781,7 @@ end
 # the recipe indices that are STATE gathers (the ghost-key columns), and the
 # sub-kernel call sites its spine references (empty on every reference-free
 # build and on the whole symbolic path).
-const _StencilBranch = Tuple{_Node,Vector{_LaneRecipe},Vector{Int},Vector{_SubCallSite}}
+const _StencilBranch = Tuple{_Node, Vector{_LaneRecipe}, Vector{Int}, Vector{_SubCallSite}}
 
 # Build one branch's spine template. Sentinels pass through resolve untouched
 # and compile to `_NK_STATE(idx = -k)` via the extended var-map; a real
@@ -1661,8 +1792,10 @@ const _StencilBranch = Tuple{_Node,Vector{_LaneRecipe},Vector{Int},Vector{_SubCa
 # Returns `nothing` if any probe cell is absent or the layout is not affine on the
 # var's `[lo,hi]` box — in which case `_eval_recipe` keeps the exact string lookup.
 # ~2^D + D probes, once per var per branch template (cold); the payoff is per-cell.
-function _derive_var_affine(var_name::String, lo::Vector{Int}, hi::Vector{Int},
-                            var_map::AbstractDict{String,Int})
+function _derive_var_affine(
+        var_name::String, lo::Vector{Int}, hi::Vector{Int},
+        var_map::AbstractDict{String, Int}
+    )
     n = length(lo)
     (n == 0 || length(hi) != n) && return nothing
     base0 = get(var_map, _cell_key(var_name, lo), 0)
@@ -1693,14 +1826,18 @@ function _derive_var_affine(var_name::String, lo::Vector{Int}, hi::Vector{Int},
     return (base, strides)
 end
 
-function _build_branch_template(body::ASTExpr, ctx_proto::_StencilCtx,
-                                var_map::AbstractDict{String,Int},
-                                param_sym_set, reg_funcs)::_StencilBranch
+function _build_branch_template(
+        body::ASTExpr, ctx_proto::_StencilCtx,
+        var_map::AbstractDict{String, Int},
+        param_sym_set, reg_funcs
+    )::_StencilBranch
     _BENCH_ON[] && (_BENCH_BRANCH_TEMPLATES[] += 1)   # §12 spine-template counter (off by default)
     rs = _LaneRecipe[]
-    ctx = _StencilCtx(ctx_proto.idxset, rs, ctx_proto.idx_env,
-                      ctx_proto.array_var_info, ctx_proto.const_arrays,
-                      ctx_proto.pgather, ctx_proto.tctx)
+    ctx = _StencilCtx(
+        ctx_proto.idxset, rs, ctx_proto.idx_env,
+        ctx_proto.array_var_info, ctx_proto.const_arrays,
+        ctx_proto.pgather, ctx_proto.tctx
+    )
     spine = _stencilize(body, ctx)
     # Attach each state gather's affine slot map (cold, once per branch) so the hot
     # per-cell `_eval_recipe` avoids the `_cell_key` String + index Vector.
@@ -1708,15 +1845,19 @@ function _build_branch_template(body::ASTExpr, ctx_proto::_StencilCtx,
     # map (its lo/hi are the var's array_var_info bounds), so derive it ONCE per var
     # rather than once per recipe (the derivation's `_cell_key` probes were the top
     # allocator otherwise).
-    aff_cache = Dict{String,Union{Nothing,Tuple{Int,Vector{Int}}}}()
+    aff_cache = Dict{String, Union{Nothing, Tuple{Int, Vector{Int}}}}()
     @inbounds for k in eachindex(rs)
         r = rs[k]
         r.kind == LANE_STATE || continue
-        aff = get!(() -> _derive_var_affine(r.var_name, r.lo, r.hi, var_map),
-                   aff_cache, r.var_name)
+        aff = get!(
+            () -> _derive_var_affine(r.var_name, r.lo, r.hi, var_map),
+            aff_cache, r.var_name
+        )
         aff === nothing && continue
-        rs[k] = _LaneRecipe(r.kind, r.var_name, r.idx_args, r.lo, r.hi,
-                            r.arr, r.loop_name, aff)
+        rs[k] = _LaneRecipe(
+            r.kind, r.var_name, r.idx_args, r.lo, r.hi,
+            r.arr, r.loop_name, aff
+        )
     end
     # Rescued-subtree lanes: compile each spec's `_CellEval` now that
     # `reg_funcs` is in scope (once per branch template, cold; a compile
@@ -1728,10 +1869,15 @@ function _build_branch_template(body::ASTExpr, ctx_proto::_StencilCtx,
     # template instead of re-inflating it (the `_BuildMemo` contract: forwarding it
     # only removes duplicate work, never changes a result).
     bmemo = _BuildMemo()
-    tmpl = _compile(_resolve_indices(spine, ctx.array_var_info, vm_ext,
-                                     ctx.const_arrays, ctx.pgather, bmemo),
-                    vm_ext, param_sym_set, reg_funcs, bmemo)
-    return (tmpl, rs, Int[k for k in eachindex(rs) if rs[k].kind == LANE_STATE],
-            ctx.subcalls)
+    tmpl = _compile(
+        _resolve_indices(
+            spine, ctx.array_var_info, vm_ext,
+            ctx.const_arrays, ctx.pgather, bmemo
+        ),
+        vm_ext, param_sym_set, reg_funcs, bmemo
+    )
+    return (
+        tmpl, rs, Int[k for k in eachindex(rs) if rs[k].kind == LANE_STATE],
+        ctx.subcalls,
+    )
 end
-

@@ -50,10 +50,12 @@ const ESM = EarthSciAST
     # front, and that image built by per-site re-expansion.
     function memo_oracle(fix; nstates = nothing, compiler = :native)
         flat = flatten(load_path(fix))
-        on     = probe(flat; compiler = compiler)
+        on = probe(flat; compiler = compiler)
         atload = probe(expand_flattened_refs(flat); compiler = compiler)
-        nomemo = probe(expand_flattened_refs(flat; memo = nothing);
-                       compiler = compiler)
+        nomemo = probe(
+            expand_flattened_refs(flat; memo = nothing);
+            compiler = compiler
+        )
         for other in (atload, nomemo)
             @test on[3] == other[3]                 # identical state map
             @test on[2] == other[2]                 # identical u0 (bitwise Float64 ==)

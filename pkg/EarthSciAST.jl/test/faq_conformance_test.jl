@@ -27,14 +27,18 @@ const _AGG_REPO_ROOT = TESTUTILS_REPO_ROOT
 
 # Evaluate a shared aggregate fixture and return (du, vmap), seeding every
 # state element to zero (the constant-RHS worked examples start from rest).
-function _eval_aggregate_fixture(filename::AbstractString, model_name::AbstractString,
-                                 elements::Vector{<:AbstractString})
+function _eval_aggregate_fixture(
+        filename::AbstractString, model_name::AbstractString,
+        elements::Vector{<:AbstractString}
+    )
     path = joinpath(_AGG_REPO_ROOT, "tests", "valid", "faq", filename)
     @test isfile(path)
     file = EarthSciAST.load_path(path)
     ics = Dict(e => 0.0 for e in elements)
-    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(file; model_name=model_name,
-                                         initial_conditions=ics)
+    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
+        file; model_name = model_name,
+        initial_conditions = ics
+    )
     du = similar(u0)
     f!(du, u0, p, 0.0)
     return du, vmap
@@ -46,7 +50,8 @@ end
     @testset "fvm_diffusion_sum_product" begin
         du, vmap = _eval_aggregate_fixture(
             "fvm_diffusion_sum_product.esm", "FvmDiffusionSumProduct",
-            ["flux[1]", "flux[2]", "degenerate[1]", "degenerate[2]"])
+            ["flux[1]", "flux[2]", "degenerate[1]", "degenerate[2]"]
+        )
         @test du[vmap["flux[1]"]] ≈ 6.0
         @test du[vmap["flux[2]"]] ≈ 12.0
         # Empty sum_product contraction returns the normative 0̄ identity (0).
@@ -57,7 +62,8 @@ end
     # min_sum (tropical): ⊕ = min over the additive body i+j.
     @testset "min_sum_tropical" begin
         du, vmap = _eval_aggregate_fixture(
-            "min_sum_tropical.esm", "MinSumTropical", ["dist[1]", "dist[2]"])
+            "min_sum_tropical.esm", "MinSumTropical", ["dist[1]", "dist[2]"]
+        )
         @test du[vmap["dist[1]"]] ≈ 2.0   # min(2,3,4)
         @test du[vmap["dist[2]"]] ≈ 3.0   # min(3,4,5)
     end
@@ -65,7 +71,8 @@ end
     # max_product: ⊕ = max over the product body i*j.
     @testset "max_product_saturation" begin
         du, vmap = _eval_aggregate_fixture(
-            "max_product_saturation.esm", "MaxProductSaturation", ["best[1]", "best[2]"])
+            "max_product_saturation.esm", "MaxProductSaturation", ["best[1]", "best[2]"]
+        )
         @test du[vmap["best[1]"]] ≈ 3.0   # max(1,2,3)
         @test du[vmap["best[2]"]] ≈ 6.0   # max(2,4,6)
     end
@@ -75,7 +82,8 @@ end
     @testset "categorical_index_set" begin
         du, vmap = _eval_aggregate_fixture(
             "categorical_index_set.esm", "CategoricalIndexSet",
-            ["emissions[1]", "emissions[2]"])
+            ["emissions[1]", "emissions[2]"]
+        )
         @test du[vmap["emissions[1]"]] ≈ 6.0
         @test du[vmap["emissions[2]"]] ≈ 12.0
     end
@@ -91,7 +99,8 @@ end
     @testset "area_eff_edge_faq (downstream geometric FAQ over the edge set)" begin
         du, vmap = _eval_aggregate_fixture(
             "area_eff_edge_faq.esm", "AreaEffEdgeFaq",
-            ["area_eff[1]", "area_eff[2]"])
+            ["area_eff[1]", "area_eff[2]"]
+        )
         @test du[vmap["area_eff[1]"]] ≈ 15.0   # Σ_{e=1..5} 1·e = 15
         @test du[vmap["area_eff[2]"]] ≈ 30.0   # Σ_{e=1..5} 2·e = 30
     end
@@ -104,12 +113,14 @@ end
 # undeclared name. Schema-only bindings (TypeScript/Go) accept it; see
 # tests/invalid/expected_errors.json (resolver_only entry).
 @testset "invalid: undeclared {from} index set rejected (ess-my4.1.6)" begin
-    path = joinpath(_AGG_REPO_ROOT, "tests", "invalid", "faq",
-                    "undeclared_from_name.esm")
+    path = joinpath(
+        _AGG_REPO_ROOT, "tests", "invalid", "faq",
+        "undeclared_from_name.esm"
+    )
     @test isfile(path)
     file = EarthSciAST.load_path(path)   # schema-valid: load must succeed
     err = try
-        EarthSciAST._build_evaluator(file; model_name="UndeclaredFrom")
+        EarthSciAST._build_evaluator(file; model_name = "UndeclaredFrom")
         nothing
     catch e
         e
@@ -129,8 +140,10 @@ end
 # every conforming leaf. The typo case stays covered by the negative fixture
 # above (which DOES declare a registry) and by `build_evaluator`.
 @testset "valid: agnostic leaf's injected {from} index set is not a load error (#185)" begin
-    path = joinpath(_AGG_REPO_ROOT, "tests", "conformance", "expression_templates",
-                    "inject_agnostic_faq", "fixture.esm")
+    path = joinpath(
+        _AGG_REPO_ROOT, "tests", "conformance", "expression_templates",
+        "inject_agnostic_faq", "fixture.esm"
+    )
     @test isfile(path)
     file = EarthSciAST.load_path(path)
     result = EarthSciAST.validate(file)
@@ -152,7 +165,8 @@ end
     @testset "join_moves_running_exhaust (degenerate positional)" begin
         du, vmap = _eval_aggregate_fixture(
             "join_moves_running_exhaust.esm", "MovesRunningExhaust",
-            ["running_exhaust[1]", "running_exhaust[2]"])
+            ["running_exhaust[1]", "running_exhaust[2]"]
+        )
         @test du[vmap["running_exhaust[1]"]] ≈ 9.0
         @test du[vmap["running_exhaust[2]"]] ≈ 18.0
     end
@@ -163,7 +177,8 @@ end
     # (vs the join-free full product 3·3 = 9), pinning the m·n cardinality.
     @testset "join_disaggregation_m2m (m·n cardinality)" begin
         du, vmap = _eval_aggregate_fixture(
-            "join_disaggregation_m2m.esm", "Disaggregation", ["count"])
+            "join_disaggregation_m2m.esm", "Disaggregation", ["count"]
+        )
         @test du[vmap["count"]] ≈ 4.0
     end
 
@@ -173,7 +188,8 @@ end
     # permuted-input -> identical-result proof.
     @testset "join_disaggregation_m2m_permuted (determinism)" begin
         du, vmap = _eval_aggregate_fixture(
-            "join_disaggregation_m2m_permuted.esm", "DisaggregationPermuted", ["count"])
+            "join_disaggregation_m2m_permuted.esm", "DisaggregationPermuted", ["count"]
+        )
         @test du[vmap["count"]] ≈ 4.0
     end
 
@@ -186,7 +202,8 @@ end
     # ignores or drops the clause computes for the full 4x3 product.
     @testset "join_on_data_columns (1-D variables as key columns)" begin
         du, vmap = _eval_aggregate_fixture(
-            "join_on_data_columns.esm", "DataColumnJoin", ["count"])
+            "join_on_data_columns.esm", "DataColumnJoin", ["count"]
+        )
         @test du[vmap["count"]] == 5.0
     end
 
@@ -198,7 +215,8 @@ end
     # would not pin WHICH pairs were admitted.
     @testset "join_on_self_join (a relation joined to itself)" begin
         du, vmap = _eval_aggregate_fixture(
-            "join_on_self_join.esm", "SelfJoin", ["priorSum", "pairCount"])
+            "join_on_self_join.esm", "SelfJoin", ["priorSum", "pairCount"]
+        )
         @test du[vmap["priorSum"]] == 1111.0   # NOT 11110 (transposed) or 55555 (ungated)
         @test du[vmap["pairCount"]] == 4.0     # NOT 25 (the full product)
     end
@@ -209,7 +227,8 @@ end
     # computes 1111, dropping the clause computes 55555, correct is 11110.
     @testset "join_on_self_join_syms (explicit sides)" begin
         du, vmap = _eval_aggregate_fixture(
-            "join_on_self_join_syms.esm", "SelfJoin", ["priorSum", "pairCount"])
+            "join_on_self_join_syms.esm", "SelfJoin", ["priorSum", "pairCount"]
+        )
         @test du[vmap["priorSum"]] == 11110.0
         @test du[vmap["pairCount"]] == 4.0
     end
@@ -222,13 +241,17 @@ end
     # silently bucket on a non-portable key.
     @testset "build-time key-type rejection" begin
         function _build_error_msg(filename, model_name)
-            path = joinpath(_AGG_REPO_ROOT, "tests", "invalid", "faq",
-                            "build_time", filename)
+            path = joinpath(
+                _AGG_REPO_ROOT, "tests", "invalid", "faq",
+                "build_time", filename
+            )
             @test isfile(path)
             file = EarthSciAST.load_path(path)
             try
-                EarthSciAST._build_evaluator(file; model_name=model_name,
-                                initial_conditions=Dict("count" => 0.0))
+                EarthSciAST._build_evaluator(
+                    file; model_name = model_name,
+                    initial_conditions = Dict("count" => 0.0)
+                )
                 return nothing
             catch e
                 return sprint(showerror, e)
@@ -251,13 +274,23 @@ end
     # per-binding copy of the expected code is how five bindings drift apart one
     # fixture at a time.
     @testset "build-time self-join SIDE rejection (shared pin)" begin
-        pins = JSON3.read(read(joinpath(_AGG_REPO_ROOT, "tests", "invalid",
-                                        "expected_errors.json"), String))
-        for name in ("self_join_three_ranges_ambiguous.esm",
-                     "self_join_index_set_key_ambiguous.esm",
-                     "self_join_syms_unknown_symbol.esm")
-            path = joinpath(_AGG_REPO_ROOT, "tests", "invalid", "faq",
-                            "build_time", name)
+        pins = JSON3.read(
+            read(
+                joinpath(
+                    _AGG_REPO_ROOT, "tests", "invalid",
+                    "expected_errors.json"
+                ), String
+            )
+        )
+        for name in (
+                "self_join_three_ranges_ambiguous.esm",
+                "self_join_index_set_key_ambiguous.esm",
+                "self_join_syms_unknown_symbol.esm",
+            )
+            path = joinpath(
+                _AGG_REPO_ROOT, "tests", "invalid", "faq",
+                "build_time", name
+            )
             @test isfile(path)
             pin = pins[Symbol(name)]
             @test pin["is_valid"] == false
@@ -282,18 +315,29 @@ end
     @testset "ragged_member_gather (padded values, explicit gather)" begin
         du, vmap = _eval_aggregate_fixture(
             "ragged_member_gather.esm", "RaggedMemberGather",
-            ["perParentTotal[1]", "perParentTotal[2]", "perParentTotal[3]"])
+            ["perParentTotal[1]", "perParentTotal[2]", "perParentTotal[3]"]
+        )
         @test du[vmap["perParentTotal[1]"]] ≈ 10.0
         @test du[vmap["perParentTotal[2]"]] ≈ 50.0
         @test du[vmap["perParentTotal[3]"]] ≈ 150.0
-        @test EarthSciAST.validate_path(joinpath(_AGG_REPO_ROOT, "tests", "valid", "faq",
-                                                 "ragged_member_gather.esm")).is_valid
+        @test EarthSciAST.validate_path(
+            joinpath(
+                _AGG_REPO_ROOT, "tests", "valid", "faq",
+                "ragged_member_gather.esm"
+            )
+        ).is_valid
     end
 
     @testset "ragged_values_not_gathered (shared pin)" begin
         name = "ragged_values_not_gathered.esm"
-        pins = JSON3.read(read(joinpath(_AGG_REPO_ROOT, "tests", "invalid",
-                                        "expected_errors.json"), String))
+        pins = JSON3.read(
+            read(
+                joinpath(
+                    _AGG_REPO_ROOT, "tests", "invalid",
+                    "expected_errors.json"
+                ), String
+            )
+        )
         pin = pins[Symbol(name)]
         want = Set((String(e["code"]), String(e["path"])) for e in pin["structural_errors"])
         @test !isempty(want)

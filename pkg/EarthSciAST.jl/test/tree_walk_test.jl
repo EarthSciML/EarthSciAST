@@ -10,10 +10,12 @@ const MTK = ModelingToolkit
 
 # Evaluate an expression via a throw-away build_evaluator call so the
 # unit tests exercise the same code path as real ODE solves.
-function _eval1(expr::ESM.ASTExpr; u_vals=Dict{String,Float64}(),
-                p_vals=Dict{String,Float64}(), t=0.0,
-                registered_functions=Dict{String,Function}())
-    vars = Dict{String,ModelVariable}()
+function _eval1(
+        expr::ESM.ASTExpr; u_vals = Dict{String, Float64}(),
+        p_vals = Dict{String, Float64}(), t = 0.0,
+        registered_functions = Dict{String, Function}()
+    )
+    vars = Dict{String, ModelVariable}()
     # Include all free variables (except "t") either as states or
     # parameters. Free variable names that appear in u_vals → state;
     # those in p_vals → parameter.
@@ -21,13 +23,13 @@ function _eval1(expr::ESM.ASTExpr; u_vals=Dict{String,Float64}(),
     for name in fv
         name == "t" && continue
         if haskey(u_vals, name)
-            vars[name] = ModelVariable(UnknownVariable; default=u_vals[name])
+            vars[name] = ModelVariable(UnknownVariable; default = u_vals[name])
         elseif haskey(p_vals, name)
-            vars[name] = ModelVariable(ParameterVariable; default=p_vals[name])
+            vars[name] = ModelVariable(ParameterVariable; default = p_vals[name])
         else
             # Default parameter 0.0 (harmless for eval — tests supplying
             # every needed binding won't hit this branch).
-            vars[name] = ModelVariable(ParameterVariable; default=0.0)
+            vars[name] = ModelVariable(ParameterVariable; default = 0.0)
         end
     end
     # Anchor with a dummy state "_probe" whose derivative = expr so we
@@ -36,11 +38,13 @@ function _eval1(expr::ESM.ASTExpr; u_vals=Dict{String,Float64}(),
     # the `import ModelingToolkit` at the top of this file, and earlier in
     # the suite by mtk_catalyst_test.jl), and its `Equation` export shadows
     # ESM's at the Main namespace level under MTK 11.
-    vars["_probe"] = ModelVariable(UnknownVariable; default=0.0)
+    vars["_probe"] = ModelVariable(UnknownVariable; default = 0.0)
     eq = ESM.Equation(_D("_probe"), expr)
     model = ESM.Model(vars, [eq])
-    f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(model;
-        registered_functions=registered_functions)
+    f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(
+        model;
+        registered_functions = registered_functions
+    )
     # Override state values from u_vals
     for (k, v) in u_vals
         if haskey(var_map, k)
@@ -79,8 +83,8 @@ end
     # detection, the solves, and the ModelingToolkit parity sampling.
 
     @testset "Time variable and Pre" begin
-        @test _eval1(_v("t"); t=3.5) == 3.5
-        @test _eval1(_op("Pre", _v("x")); u_vals=Dict("x" => 2.0)) == 2.0
+        @test _eval1(_v("t"); t = 3.5) == 3.5
+        @test _eval1(_op("Pre", _v("x")); u_vals = Dict("x" => 2.0)) == 2.0
     end
 
     @testset "Closed function registry (fn op)" begin
@@ -88,20 +92,20 @@ end
         # `datetime.year` returns the proleptic-Gregorian year (Int32, lifted
         # to Float64 by tree_walk).
         # 2026-01-01T00:00:00Z = 1767225600 seconds since epoch.
-        expr_year = _op("fn", _n(1767225600.0); name="datetime.year")
+        expr_year = _op("fn", _n(1767225600.0); name = "datetime.year")
         @test _eval1(expr_year) == 2026.0
 
         # `interp.searchsorted` with const-array second arg.
-        const_xs = OpExpr("const", ESM.ASTExpr[]; value=[1.0, 2.0, 3.0, 4.0, 5.0])
-        expr_ss = _op("fn", _n(2.5), const_xs; name="interp.searchsorted")
+        const_xs = OpExpr("const", ESM.ASTExpr[]; value = [1.0, 2.0, 3.0, 4.0, 5.0])
+        expr_ss = _op("fn", _n(2.5), const_xs; name = "interp.searchsorted")
         @test _eval1(expr_ss) == 3.0  # smallest 1-based i with xs[i] >= 2.5
 
         # Unknown closed-function name → TreeWalkError.
-        bad = _op("fn", _n(1.0); name="datetime.century")
+        bad = _op("fn", _n(1.0); name = "datetime.century")
         @test_throws ESM.TreeWalkError _eval1(bad)
 
         # Removed `call` op fails compile.
-        @test_throws ESM.TreeWalkError _eval1(_op("call", _n(1.0); handler_id="x"))
+        @test_throws ESM.TreeWalkError _eval1(_op("call", _n(1.0); handler_id = "x"))
     end
 
     @testset "Graceful errors on unsupported ops" begin
@@ -112,13 +116,21 @@ end
         # `unevaluable_operator` (esm-spec §9.6.6).
         @test_throws ESM.TreeWalkError _eval1(_op("wibble", _n(1.0)))
         @test_throws ESM.TreeWalkError _eval1(_op("faq", _n(1.0)))
-        @test_throws ESM.TreeWalkError _eval1(_op("grad", _v("x");
-                                                  dim="x");
-                                               u_vals=Dict("x" => 1.0))
+        @test_throws ESM.TreeWalkError _eval1(
+            _op(
+                "grad", _v("x");
+                dim = "x"
+            );
+            u_vals = Dict("x" => 1.0)
+        )
         # D in RHS is an error (LHS-only marker).
-        @test_throws ESM.TreeWalkError _eval1(_op("*", _n(1.0),
-                                                 _op("D", _v("x"); wrt="t"));
-                                              u_vals=Dict("x" => 1.0))
+        @test_throws ESM.TreeWalkError _eval1(
+            _op(
+                "*", _n(1.0),
+                _op("D", _v("x"); wrt = "t")
+            );
+            u_vals = Dict("x" => 1.0)
+        )
     end
 
     @testset "unlowered rewrite-target op surfaced before evaluation" begin
@@ -130,8 +142,10 @@ end
         # before evaluation. Supersedes the old E_TREEWALK_UNREACHABLE_SPATIAL_OP.
         for opname in ("grad", "div", "laplacian")
             err = try
-                _eval1(_op(opname, _v("x"); dim="x");
-                       u_vals=Dict("x" => 1.0))
+                _eval1(
+                    _op(opname, _v("x"); dim = "x");
+                    u_vals = Dict("x" => 1.0)
+                )
                 nothing
             catch e
                 e
@@ -151,7 +165,7 @@ end
         # structural handling in resolve.jl, so they never reach this gate.)
         for opname in ("godunov_hamiltonian", "my_custom_flux")
             err = try
-                _eval1(_op(opname, _v("x")); u_vals=Dict("x" => 1.0))
+                _eval1(_op(opname, _v("x")); u_vals = Dict("x" => 1.0))
                 nothing
             catch e
                 e
@@ -167,9 +181,9 @@ end
     # Observed variable inlining
     # ========================================================
     @testset "Observed variable inlining" begin
-        vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(UnknownVariable; default=1.0),
-            "k" => ModelVariable(ParameterVariable; default=0.5),
+        vars = Dict{String, ModelVariable}(
+            "x" => ModelVariable(UnknownVariable; default = 1.0),
+            "k" => ModelVariable(ParameterVariable; default = 0.5),
             "y" => ModelVariable(UnknownVariable),
         )
         # y = 2*k; D(x) = -y*x
@@ -196,9 +210,9 @@ end
         # Acyclic chain c → b → a: `_resolve_observed` must fully collapse it,
         # regardless of the order the equations are declared in (the Dict/loop
         # order is not the dependency order).
-        vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(UnknownVariable; default=1.0),
-            "k" => ModelVariable(ParameterVariable; default=2.0),
+        vars = Dict{String, ModelVariable}(
+            "x" => ModelVariable(UnknownVariable; default = 1.0),
+            "k" => ModelVariable(ParameterVariable; default = 2.0),
             "a" => ModelVariable(UnknownVariable),
             "b" => ModelVariable(UnknownVariable),
             "c" => ModelVariable(UnknownVariable),
@@ -216,8 +230,8 @@ end
         @test du[var_map["x"]] === (2.0 * 2.0 + 1.0) * 1.0
 
         # Cyclic: a = b + 1; b = a + 1. Must throw, not hang.
-        cyc_vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(UnknownVariable; default=1.0),
+        cyc_vars = Dict{String, ModelVariable}(
+            "x" => ModelVariable(UnknownVariable; default = 1.0),
             "a" => ModelVariable(UnknownVariable),
             "b" => ModelVariable(UnknownVariable),
         )
@@ -240,32 +254,38 @@ end
     # Full solve: exponential decay
     # ========================================================
     @testset "Exponential decay solve" begin
-        vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(UnknownVariable; default=1.0),
-            "k" => ModelVariable(ParameterVariable; default=0.1),
+        vars = Dict{String, ModelVariable}(
+            "x" => ModelVariable(UnknownVariable; default = 1.0),
+            "k" => ModelVariable(ParameterVariable; default = 0.1),
         )
         eq = ESM.Equation(_D("x"), _op("*", _op("-", _v("k")), _v("x")))
         model = ESM.Model(vars, [eq])
         f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(model)
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, (0.0, 10.0), p)
-        sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5();
-                                        reltol=1e-8, abstol=1e-10)
-        @test isapprox(sol.u[end][var_map["x"]], exp(-1.0); rtol=1e-6)
+        sol = OrdinaryDiffEqTsit5.solve(
+            prob, OrdinaryDiffEqTsit5.Tsit5();
+            reltol = 1.0e-8, abstol = 1.0e-10
+        )
+        @test isapprox(sol.u[end][var_map["x"]], exp(-1.0); rtol = 1.0e-6)
     end
 
     # ========================================================
     # Default tspan from inline tests block
     # ========================================================
     @testset "tspan picked from tests block" begin
-        vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(UnknownVariable; default=1.0),
-            "k" => ModelVariable(ParameterVariable; default=0.1),
+        vars = Dict{String, ModelVariable}(
+            "x" => ModelVariable(UnknownVariable; default = 1.0),
+            "k" => ModelVariable(ParameterVariable; default = 0.1),
         )
         eq = ESM.Equation(_D("x"), _op("*", _op("-", _v("k")), _v("x")))
-        tests = [ESM.InlineTest("default_span",
-                       ESM.TimeSpan(0.0, 25.0),
-                       ESM.Assertion[]; description="default")]
-        model = ESM.Model(vars, [eq]; tests=tests)
+        tests = [
+            ESM.InlineTest(
+                "default_span",
+                ESM.TimeSpan(0.0, 25.0),
+                ESM.Assertion[]; description = "default"
+            ),
+        ]
+        model = ESM.Model(vars, [eq]; tests = tests)
         _, _, _, tspan_default, _ = EarthSciAST._build_evaluator(model)
         @test tspan_default == (0.0, 25.0)
     end
@@ -277,40 +297,46 @@ end
         N = 20
         dx = 1.0 / (N + 1)
         α = 0.5
-        vars = Dict{String,ModelVariable}()
+        vars = Dict{String, ModelVariable}()
         eqs = ESM.Equation[]
         for i in 1:N
             name = "u_$i"
             # Initial: sin(π x_i). Interior i=1..N, x_i = i*dx.
             u0_i = sinpi(i * dx)
-            vars[name] = ModelVariable(UnknownVariable; default=u0_i)
+            vars[name] = ModelVariable(UnknownVariable; default = u0_i)
         end
-        vars["alpha"] = ModelVariable(ParameterVariable; default=α)
+        vars["alpha"] = ModelVariable(ParameterVariable; default = α)
         # Build centered-difference RHS equations. Left/right neighbours
         # inlined as 0.0 at the Dirichlet boundary.
         for i in 1:N
             here = _v("u_$i")
-            left = i == 1 ? _n(0.0) : _v("u_$(i-1)")
-            right = i == N ? _n(0.0) : _v("u_$(i+1)")
-            lap_num = _op("+",
+            left = i == 1 ? _n(0.0) : _v("u_$(i - 1)")
+            right = i == N ? _n(0.0) : _v("u_$(i + 1)")
+            lap_num = _op(
+                "+",
                 _op("-", left, here),      # left - here
-                _op("-", right, here))     # + right - here
+                _op("-", right, here)
+            )     # + right - here
             # α * (left - 2*here + right) / dx^2
-            rhs = _op("*",
+            rhs = _op(
+                "*",
                 _v("alpha"),
-                _op("/", lap_num, _n(dx^2)))
+                _op("/", lap_num, _n(dx^2))
+            )
             push!(eqs, ESM.Equation(_D("u_$i"), rhs))
         end
         model = ESM.Model(vars, eqs)
         f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(model)
         # Diffusion time ~ L² / α = 1 / 0.5 = 2. Integrate to t = 5.
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, (0.0, 5.0), p)
-        sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5();
-                                        reltol=1e-8, abstol=1e-10)
+        sol = OrdinaryDiffEqTsit5.solve(
+            prob, OrdinaryDiffEqTsit5.Tsit5();
+            reltol = 1.0e-8, abstol = 1.0e-10
+        )
         # Analytical: u(x,t) = sin(π x) exp(-α π² t). At t=5:
         #   exp(-0.5 * π² * 5) ≈ 1.6e-11 → essentially zero.
         for i in 1:N
-            @test abs(sol.u[end][var_map["u_$i"]]) < 1e-6
+            @test abs(sol.u[end][var_map["u_$i"]]) < 1.0e-6
         end
     end
 
@@ -321,21 +347,25 @@ end
         N = 10
         dx = 1.0 / (N + 1)
         α = 0.75
-        vars = Dict{String,ModelVariable}()
+        vars = Dict{String, ModelVariable}()
         eqs = ESM.Equation[]
         for i in 1:N
-            vars["u_$i"] = ModelVariable(UnknownVariable; default=sinpi(i * dx))
+            vars["u_$i"] = ModelVariable(UnknownVariable; default = sinpi(i * dx))
         end
-        vars["alpha"] = ModelVariable(ParameterVariable; default=α)
+        vars["alpha"] = ModelVariable(ParameterVariable; default = α)
         for i in 1:N
             here = _v("u_$i")
-            left = i == 1 ? _n(0.0) : _v("u_$(i-1)")
-            right = i == N ? _n(0.0) : _v("u_$(i+1)")
-            rhs = _op("*",
+            left = i == 1 ? _n(0.0) : _v("u_$(i - 1)")
+            right = i == N ? _n(0.0) : _v("u_$(i + 1)")
+            rhs = _op(
+                "*",
                 _v("alpha"),
-                _op("/",
+                _op(
+                    "/",
                     _op("+", _op("-", left, here), _op("-", right, here)),
-                    _n(dx^2)))
+                    _n(dx^2)
+                )
+            )
             push!(eqs, ESM.Equation(_D("u_$i"), rhs))
         end
         model = ESM.Model(vars, eqs)
@@ -344,9 +374,9 @@ end
         f_tw!, u0_tw, p_tw, _tspan, var_map = EarthSciAST._build_evaluator(model)
 
         # MTK path
-        sys = MTK.System(model; name=:HeatParity)
+        sys = MTK.System(model; name = :HeatParity)
         simp = MTK.mtkcompile(sys)
-        prob_mtk = MTK.ODEProblem(simp, Dict{Any,Any}(), (0.0, 1.0))
+        prob_mtk = MTK.ODEProblem(simp, Dict{Any, Any}(), (0.0, 1.0))
         f_mtk = prob_mtk.f
         u0_mtk = prob_mtk.u0
         p_mtk = prob_mtk.p
@@ -356,13 +386,13 @@ end
         # variable names (simp's unknown ending in "_u_i" matches our
         # "u_i" in var_map).
         mtk_unknowns = MTK.unknowns(simp)
-        mtk_name_to_idx = Dict{String,Int}()
+        mtk_name_to_idx = Dict{String, Int}()
         for (j, u) in enumerate(mtk_unknowns)
             nm = string(MTK.getname(u))
             # MTK sanitizes names as `HeatParity₊u_i` or similar; match suffix
             for (vname, _) in var_map
                 if nm == vname || endswith(nm, "_" * vname) ||
-                   endswith(nm, "₊" * vname)
+                        endswith(nm, "₊" * vname)
                     mtk_name_to_idx[vname] = j
                 end
             end
@@ -384,7 +414,7 @@ end
 
             for (vname, idx_tw) in var_map
                 idx_mtk = mtk_name_to_idx[vname]
-                @test isapprox(du_tw[idx_tw], du_mtk[idx_mtk]; rtol=1e-12)
+                @test isapprox(du_tw[idx_tw], du_mtk[idx_mtk]; rtol = 1.0e-12)
             end
         end
     end
@@ -402,20 +432,28 @@ end
                         "N" => Dict("type" => "unknown", "default" => 100.0),
                         "lambda" => Dict("type" => "parameter", "default" => 0.1),
                     ),
-                    "equations" => [Dict(
-                        "lhs" => Dict("op" => "D", "args" => ["N"], "wrt" => "t"),
-                        "rhs" => Dict("op" => "*",
-                                      "args" => [Dict("op" => "-", "args" => ["lambda"]),
-                                                 "N"]),
-                    )],
+                    "equations" => [
+                        Dict(
+                            "lhs" => Dict("op" => "D", "args" => ["N"], "wrt" => "t"),
+                            "rhs" => Dict(
+                                "op" => "*",
+                                "args" => [
+                                    Dict("op" => "-", "args" => ["lambda"]),
+                                    "N",
+                                ]
+                            ),
+                        ),
+                    ],
                 ),
             ),
         )
         f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(esm)
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, (0.0, 10.0), p)
-        sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5();
-                                        reltol=1e-8, abstol=1e-10)
-        @test isapprox(sol.u[end][var_map["N"]], 100.0 * exp(-1.0); rtol=1e-6)
+        sol = OrdinaryDiffEqTsit5.solve(
+            prob, OrdinaryDiffEqTsit5.Tsit5();
+            reltol = 1.0e-8, abstol = 1.0e-10
+        )
+        @test isapprox(sol.u[end][var_map["N"]], 100.0 * exp(-1.0); rtol = 1.0e-6)
     end
 
     # ========================================================
@@ -427,17 +465,17 @@ end
         dx = 1.0 / Nx
         dy = 1.0 / Ny
         vx, vy = 1.0, 0.5
-        vars = Dict{String,ModelVariable}()
+        vars = Dict{String, ModelVariable}()
         eqs = ESM.Equation[]
         # Initial condition: a single bump at (0.5, 0.5).
         for i in 1:Nx, j in 1:Ny
             x = (i - 0.5) * dx
             y = (j - 0.5) * dy
             u0 = exp(-((x - 0.5)^2 + (y - 0.5)^2) / 0.02)
-            vars["u_$(i)_$(j)"] = ModelVariable(UnknownVariable; default=u0)
+            vars["u_$(i)_$(j)"] = ModelVariable(UnknownVariable; default = u0)
         end
-        vars["vx"] = ModelVariable(ParameterVariable; default=vx)
-        vars["vy"] = ModelVariable(ParameterVariable; default=vy)
+        vars["vx"] = ModelVariable(ParameterVariable; default = vx)
+        vars["vy"] = ModelVariable(ParameterVariable; default = vy)
         # Wrap indices (periodic BC).
         wrap(k, N) = k < 1 ? N : (k > N ? 1 : k)
         for i in 1:Nx, j in 1:Ny
@@ -445,10 +483,14 @@ end
             # Upwind: velocities > 0 so use left/below neighbours.
             left = _v("u_$(wrap(i - 1, Nx))_$(j)")
             below = _v("u_$(i)_$(wrap(j - 1, Ny))")
-            flux_x = _op("*", _v("vx"),
-                         _op("/", _op("-", here, left), _n(dx)))
-            flux_y = _op("*", _v("vy"),
-                         _op("/", _op("-", here, below), _n(dy)))
+            flux_x = _op(
+                "*", _v("vx"),
+                _op("/", _op("-", here, left), _n(dx))
+            )
+            flux_y = _op(
+                "*", _v("vy"),
+                _op("/", _op("-", here, below), _n(dy))
+            )
             # D(u_ij)/dt = -(flux_x + flux_y)  (continuity form)
             rhs = _op("-", _op("+", flux_x, flux_y))
             push!(eqs, ESM.Equation(_D("u_$(i)_$(j)"), rhs))
@@ -466,8 +508,10 @@ end
         # the "100 steps" count).
         tspan_adv = (0.0, 100 * min(dx / vx, dy / vy))
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, tspan_adv, p)
-        integrator = OrdinaryDiffEqTsit5.init(prob, OrdinaryDiffEqTsit5.Tsit5();
-            reltol=1e-4, abstol=1e-6, save_everystep=false)
+        integrator = OrdinaryDiffEqTsit5.init(
+            prob, OrdinaryDiffEqTsit5.Tsit5();
+            reltol = 1.0e-4, abstol = 1.0e-6, save_everystep = false
+        )
         t_solve = @elapsed for _ in 1:100
             OrdinaryDiffEqTsit5.step!(integrator)
         end
@@ -480,7 +524,7 @@ end
         # upwind introduces numerical diffusion but the total mass
         # telescopes exactly in the continuous scheme — the integrator
         # error is what loosens the bound.
-        @test isapprox(sum(integrator.u), sum(u0); rtol=5e-3)
+        @test isapprox(sum(integrator.u), sum(u0); rtol = 5.0e-3)
     end
 
     # ========================================================
@@ -488,15 +532,19 @@ end
     # ========================================================
     @testset "Large diagonal system (1024 states) — build + evaluate" begin
         N = 1024
-        vars = Dict{String,ModelVariable}()
+        vars = Dict{String, ModelVariable}()
         eqs = ESM.Equation[]
         for i in 1:N
-            vars["u_$i"] = ModelVariable(UnknownVariable; default=0.1)
+            vars["u_$i"] = ModelVariable(UnknownVariable; default = 0.1)
         end
-        vars["alpha"] = ModelVariable(ParameterVariable; default=1.0)
+        vars["alpha"] = ModelVariable(ParameterVariable; default = 1.0)
         for i in 1:N
-            push!(eqs, ESM.Equation(_D("u_$i"),
-                _op("-", _op("*", _v("alpha"), _v("u_$i")))))
+            push!(
+                eqs, ESM.Equation(
+                    _D("u_$i"),
+                    _op("-", _op("*", _v("alpha"), _v("u_$i")))
+                )
+            )
         end
         model = ESM.Model(vars, eqs)
         t_build = @elapsed begin

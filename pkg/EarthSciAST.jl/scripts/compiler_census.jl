@@ -67,24 +67,24 @@ using Logging
 # ─────────────────────────────────────────────────────────────────────────────
 _jesc(s) = sprint() do io
     for c in s
-        c == '"'  ? print(io, "\\\"") :
-        c == '\\' ? print(io, "\\\\") :
-        c == '\n' ? print(io, "\\n")  :
-        c == '\r' ? print(io, "\\r")  :
-        c == '\t' ? print(io, "\\t")  :
-        c < ' '   ? print(io, "\\u", lpad(string(UInt16(c), base=16), 4, '0')) :
-        print(io, c)
+        c == '"' ? print(io, "\\\"") :
+            c == '\\' ? print(io, "\\\\") :
+            c == '\n' ? print(io, "\\n") :
+            c == '\r' ? print(io, "\\r") :
+            c == '\t' ? print(io, "\\t") :
+            c < ' ' ? print(io, "\\u", lpad(string(UInt16(c), base = 16), 4, '0')) :
+            print(io, c)
     end
 end
 
 _jval(x::AbstractString) = "\"" * _jesc(String(x)) * "\""
-_jval(x::Symbol)         = _jval(String(x))
-_jval(x::Bool)           = x ? "true" : "false"
-_jval(x::Integer)        = string(x)
-_jval(x::AbstractFloat)  = isfinite(x) ? string(round(x; digits = 4)) : "null"
-_jval(::Nothing)         = "null"
+_jval(x::Symbol) = _jval(String(x))
+_jval(x::Bool) = x ? "true" : "false"
+_jval(x::Integer) = string(x)
+_jval(x::AbstractFloat) = isfinite(x) ? string(round(x; digits = 4)) : "null"
+_jval(::Nothing) = "null"
 _jval(x::AbstractVector) = "[" * join((_jval(v) for v in x), ",") * "]"
-_jval(x::AbstractDict)   = "{" *
+_jval(x::AbstractDict) = "{" *
     join(("$(_jval(String(k))):$(_jval(v))" for (k, v) in sort!(collect(x); by = first)), ",") *
     "}"
 
@@ -117,7 +117,7 @@ _census_compiler() = Symbol(get(ENV, "CENSUS_COMPILER", "native"))
 
 function _census_one(M, path::AbstractString)
     CENSUS_COMPILER = _census_compiler()
-    rec = Dict{String,Any}("path" => String(path), "compiler" => String(CENSUS_COMPILER))
+    rec = Dict{String, Any}("path" => String(path), "compiler" => String(CENSUS_COMPILER))
     err1_code = nothing; err1_msg = nothing; err1_type = nothing
     rhs_ok = nothing; rhs_err = nothing; rhs_first = nothing; rhs_second = nothing
     tiers = nothing; nstate = nothing
@@ -147,7 +147,7 @@ function _census_one(M, path::AbstractString)
                     entry = "esm_problem"
                     ok = true
                     try
-                        tiers = Dict{String,Int}(String(k) => v for (k, v) in M.tier_histogram(M.compiler_report(prob)))
+                        tiers = Dict{String, Int}(String(k) => v for (k, v) in M.tier_histogram(M.compiler_report(prob)))
                     catch
                     end
                     nstate = length(prob.u0)
@@ -175,7 +175,7 @@ function _census_one(M, path::AbstractString)
                     M._reset_cascade_tally!()
                     file = M.load_path(String(path))
                     names = file.models === nothing ? String[] :
-                            sort!(String[String(k) for k in keys(file.models)])
+                        sort!(String[String(k) for k in keys(file.models)])
                     if length(names) <= 1
                         M._build_evaluator(file; compiler = CENSUS_COMPILER)
                     else
@@ -189,29 +189,31 @@ function _census_one(M, path::AbstractString)
     catch err
         err_type = string(typeof(err))
         err_code = hasproperty(err, :code) ? string(getproperty(err, :code)) : nothing
-        err_msg  = first(sprint(showerror, err), 600)
+        err_msg = first(sprint(showerror, err), 600)
     end
     t_build = time() - t0
     close(errio)
 
-    tally = Dict{String,Int}(String(k) => v for (k, v) in M._CASCADE_TALLY)
+    tally = Dict{String, Int}(String(k) => v for (k, v) in M._CASCADE_TALLY)
 
     percell_build = sum(get(tally, k, 0) for k in PERCELL_BUILD_KEYS)
-    cg_decl  = Dict{String,Int}()
-    dual_decl = Dict{String,Int}()
+    cg_decl = Dict{String, Int}()
+    dual_decl = Dict{String, Int}()
     for (k, v) in tally
         if startswith(k, "dual_codegen_decline_")
-            dual_decl[k[length("dual_codegen_decline_")+1:end]] = v
+            dual_decl[k[(length("dual_codegen_decline_") + 1):end]] = v
         elseif startswith(k, "codegen_decline_")
-            cg_decl[k[length("codegen_decline_")+1:end]] = v
+            cg_decl[k[(length("codegen_decline_") + 1):end]] = v
         end
     end
 
     debug = String[]
     try
         for ln in eachline(errpath)
-            (occursin("[ess-", ln) || occursin("affine stencil fallback", ln) ||
-             occursin("DECLINED", ln)) && push!(debug, first(ln, 300))
+            (
+                occursin("[ess-", ln) || occursin("affine stencil fallback", ln) ||
+                    occursin("DECLINED", ln)
+            ) && push!(debug, first(ln, 300))
         end
     finally
         rm(errpath; force = true)
@@ -226,37 +228,39 @@ function _census_one(M, path::AbstractString)
     rec["rhs_second_s"] = rhs_second
     rec["tiers"] = tiers === nothing ? nothing : tiers
     rec["nstate"] = nstate
-    rec["entry"]          = entry
-    rec["ok"]             = ok
-    rec["build_seconds"]  = t_build
-    rec["error_type"]     = err_type
-    rec["error_code"]     = err_code
-    rec["error_message"]  = first(something(err_msg, ""), 600)
-    rec["tally"]          = tally
-    rec["percell_build"]  = percell_build
-    rec["codegen_kernels"]      = get(tally, "codegen_kernel", 0)
+    rec["entry"] = entry
+    rec["ok"] = ok
+    rec["build_seconds"] = t_build
+    rec["error_type"] = err_type
+    rec["error_code"] = err_code
+    rec["error_message"] = first(something(err_msg, ""), 600)
+    rec["tally"] = tally
+    rec["percell_build"] = percell_build
+    rec["codegen_kernels"] = get(tally, "codegen_kernel", 0)
     rec["dual_codegen_kernels"] = get(tally, "dual_codegen_kernel", 0)
-    rec["codegen_declines"]     = cg_decl
-    rec["dual_declines"]        = dual_decl
-    rec["n_codegen_decline"]    = isempty(cg_decl)   ? 0 : sum(values(cg_decl))
+    rec["codegen_declines"] = cg_decl
+    rec["dual_declines"] = dual_decl
+    rec["n_codegen_decline"] = isempty(cg_decl) ? 0 : sum(values(cg_decl))
     # THE headline: kernels neither emission covered, i.e. `dual_resid` —
     # `_run_acc_kernel!` walks these per cell on every RHS call.
-    rec["n_interp_at_rhs"]      = isempty(dual_decl) ? 0 : sum(values(dual_decl))
+    rec["n_interp_at_rhs"] = isempty(dual_decl) ? 0 : sum(values(dual_decl))
     # The whole-array contraction tier. Its nest is EMITTED (array_contraction.jl),
     # so an equation landing here carries no tree walk at RHS-call time; it is
     # counted separately anyway because it is a different unit — these are
     # equations, `n_interp_at_rhs` counts kernels — and because it is the tier
     # whose reach the census exists to measure.
-    rec["n_array_contraction"]  = get(tally, "array_contraction_codegen", 0)
+    rec["n_array_contraction"] = get(tally, "array_contraction_codegen", 0)
     # Per-cell at BUILD only: the equation was scalarized per output cell during
     # construction and the resulting kernels then compiled, so the RHS-call path
     # carries no tree walk from it. This is the distinction a raw
     # `:percell_acc` count hides.
-    rec["percell_build_only"]   = (rec["n_interp_at_rhs"] == 0 &&
-                                   rec["n_array_contraction"] == 0) ?
-                                  percell_build : 0
-    rec["debug"]                = first(debug, 40)
-    rec["status"]               = ok ? "ok" : "build_error"
+    rec["percell_build_only"] = (
+            rec["n_interp_at_rhs"] == 0 &&
+            rec["n_array_contraction"] == 0
+        ) ?
+        percell_build : 0
+    rec["debug"] = first(debug, 40)
+    rec["status"] = ok ? "ok" : "build_error"
     return rec
 end
 
@@ -266,30 +270,47 @@ end
 # (and would time out) whichever document happened to be first in the shard.
 # Embedded rather than read from `tests/` so the warm-up cannot itself be the
 # pathological document, and so the script works from any working directory.
-const WARMUP_DOC = Dict{String,Any}(
+const WARMUP_DOC = Dict{String, Any}(
     "esm" => "1.0.0",
-    "metadata" => Dict{String,Any}(
+    "metadata" => Dict{String, Any}(
         "name" => "CensusWarmup",
         "description" => "Scalar decay, built once per worker to pay the front door's JIT.",
         "authors" => ["EarthSciAST Authors and Contributors"],
-        "created" => "2026-09-21T00:00:00Z"),
-    "models" => Dict{String,Any}("Warmup" => Dict{String,Any}(
-        "variables" => Dict{String,Any}(
-            "x" => Dict{String,Any}("type" => "unknown", "units" => "mol/mol",
-                                    "default" => 1.0e-6),
-            "k" => Dict{String,Any}("type" => "parameter", "units" => "1/s",
-                                    "default" => 0.01)),
-        "equations" => [Dict{String,Any}(
-            "lhs" => Dict{String,Any}("op" => "D", "args" => ["x"], "wrt" => "t"),
-            "rhs" => Dict{String,Any}("op" => "*",
-                "args" => [Dict{String,Any}("op" => "-", "args" => ["k"]), "x"]))])))
+        "created" => "2026-09-21T00:00:00Z"
+    ),
+    "models" => Dict{String, Any}(
+        "Warmup" => Dict{String, Any}(
+            "variables" => Dict{String, Any}(
+                "x" => Dict{String, Any}(
+                    "type" => "unknown", "units" => "mol/mol",
+                    "default" => 1.0e-6
+                ),
+                "k" => Dict{String, Any}(
+                    "type" => "parameter", "units" => "1/s",
+                    "default" => 0.01
+                )
+            ),
+            "equations" => [
+                Dict{String, Any}(
+                    "lhs" => Dict{String, Any}("op" => "D", "args" => ["x"], "wrt" => "t"),
+                    "rhs" => Dict{String, Any}(
+                        "op" => "*",
+                        "args" => [Dict{String, Any}("op" => "-", "args" => ["k"]), "x"]
+                    )
+                ),
+            ]
+        )
+    )
+)
 
 function _warmup(M)
     try
         M.esm_problem(WARMUP_DOC, (0.0, 1.0); compiler = _census_compiler())
     catch err
-        println(stderr, "warm-up failed (continuing): ",
-                first(sprint(showerror, err), 200))
+        println(
+            stderr, "warm-up failed (continuing): ",
+            first(sprint(showerror, err), 200)
+        )
     end
     M._reset_cascade_tally!()
     return nothing
@@ -308,13 +329,18 @@ function run_worker(manifest::String, outpath::String, from::Int, to::Int)
             isempty(p) && continue
             # Progress marker FIRST: the driver reads it to know which document
             # is in flight, so a worker killed mid-build can be attributed.
-            println(io, _jline(Dict{String,Any}(
-                "marker" => "start", "index" => i, "path" => p,
-                # WHOLE seconds: a `Float64` epoch prints as `1.7584e9`, and the
-                # driver's `[0-9.]+` timestamp pattern would read that as
-                # `1.7584` — an age of half a century, so it would kill the
-                # worker on its first poll.
-                "at" => floor(Int, time()))))
+            println(
+                io, _jline(
+                    Dict{String, Any}(
+                        "marker" => "start", "index" => i, "path" => p,
+                        # WHOLE seconds: a `Float64` epoch prints as `1.7584e9`, and the
+                        # driver's `[0-9.]+` timestamp pattern would read that as
+                        # `1.7584` — an age of half a century, so it would kill the
+                        # worker on its first poll.
+                        "at" => floor(Int, time())
+                    )
+                )
+            )
             flush(io)
             # `invokelatest`: the package was loaded by `_load_esm` AFTER this
             # function's world age, so every call into it needs the current world.
@@ -345,9 +371,11 @@ function _last_start(f::String)
         a = match(r"\"at\":([0-9.]+)", ln)
         p = match(r"\"path\":\"([^\"]*)\"", ln)
         i === nothing && continue
-        last = (parse(Int, i.captures[1]),
-                p === nothing ? "" : p.captures[1],
-                a === nothing ? time() : parse(Float64, a.captures[1]))
+        last = (
+            parse(Int, i.captures[1]),
+            p === nothing ? "" : p.captures[1],
+            a === nothing ? time() : parse(Float64, a.captures[1]),
+        )
     end
     return last
 end
@@ -364,15 +392,21 @@ function _done_indices(f::String)
     return s
 end
 
-function run_shard(manifest::String, shard_out::String, from::Int, to::Int,
-                   timeout_s::Int, script::String, project::String)
+function run_shard(
+        manifest::String, shard_out::String, from::Int, to::Int,
+        timeout_s::Int, script::String, project::String
+    )
     i = from
     while i <= to
         cmd = Cmd(`$(Base.julia_cmd()) --project=$project --threads=2 $script
                    --worker $manifest $shard_out $i $to`)
-        proc = run(pipeline(cmd; stdout = shard_out * ".out",
-                            stderr = shard_out * ".err", append = true);
-                   wait = false)
+        proc = run(
+            pipeline(
+                cmd; stdout = shard_out * ".out",
+                stderr = shard_out * ".err", append = true
+            );
+            wait = false
+        )
         killed_at = nothing
         while process_running(proc)
             sleep(2)
@@ -391,9 +425,14 @@ function run_shard(manifest::String, shard_out::String, from::Int, to::Int,
             # The worker died before it even started a document (a load
             # failure); nothing more this shard can do.
             open(shard_out, "a") do io
-                println(io, _jline(Dict{String,Any}(
-                    "index" => i, "path" => "", "status" => "worker_load_failure",
-                    "ok" => false, "n_interp_at_rhs" => 0, "percell_build" => 0)))
+                println(
+                    io, _jline(
+                        Dict{String, Any}(
+                            "index" => i, "path" => "", "status" => "worker_load_failure",
+                            "ok" => false, "n_interp_at_rhs" => 0, "percell_build" => 0
+                        )
+                    )
+                )
             end
             return
         end
@@ -406,23 +445,31 @@ function run_shard(manifest::String, shard_out::String, from::Int, to::Int,
         else
             # The in-flight document killed the worker.
             open(shard_out, "a") do io
-                println(io, _jline(Dict{String,Any}(
-                    "index" => st[1], "path" => st[2],
-                    "status" => killed_at === nothing ? "crashed" : "timeout",
-                    "ok" => false, "error_type" =>
-                        killed_at === nothing ? "worker died (likely OOM)" :
-                        "exceeded $(timeout_s)s",
-                    "n_interp_at_rhs" => 0, "percell_build" => 0,
-                    "build_seconds" => Float64(timeout_s))))
+                println(
+                    io, _jline(
+                        Dict{String, Any}(
+                            "index" => st[1], "path" => st[2],
+                            "status" => killed_at === nothing ? "crashed" : "timeout",
+                            "ok" => false, "error_type" =>
+                                killed_at === nothing ? "worker died (likely OOM)" :
+                                "exceeded $(timeout_s)s",
+                            "n_interp_at_rhs" => 0, "percell_build" => 0,
+                            "build_seconds" => Float64(timeout_s)
+                        )
+                    )
+                )
             end
             i = st[1] + 1
         end
     end
+    return
 end
 
-function run_driver(manifest::String, out::String; jobs::Int = 4,
-                    timeout_s::Int = 180, resume::Bool = false,
-                    project::String = Base.active_project())
+function run_driver(
+        manifest::String, out::String; jobs::Int = 4,
+        timeout_s::Int = 180, resume::Bool = false,
+        project::String = Base.active_project()
+    )
     script = abspath(@__FILE__)
     n = count(!isempty, strip.(readlines(manifest)))
     per = cld(n, jobs)
@@ -441,7 +488,7 @@ function run_driver(manifest::String, out::String; jobs::Int = 4,
             occursin("\"marker\":\"start\"", ln) || println(io, ln)
         end
     end
-    println("census: $n documents -> $out")
+    return println("census: $n documents -> $out")
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -461,19 +508,21 @@ function main(args)
     i = 1
     while i <= length(args)
         a = args[i]
-        a == "--manifest" ? (manifest = args[i+1]; i += 2) :
-        a == "--out"      ? (out = args[i+1];      i += 2) :
-        a == "--jobs"     ? (jobs = parse(Int, args[i+1]); i += 2) :
-        a == "--timeout"  ? (timeout_s = parse(Int, args[i+1]); i += 2) :
-        a == "--resume"   ? (resume = true; i += 1) :
-        a == "--project"  ? (project = abspath(args[i+1]); i += 2) :
-        a == "--compiler" ? (ENV["CENSUS_COMPILER"] = args[i+1]; i += 2) :
-        error("compiler_census.jl: unknown argument '$a'")
+        a == "--manifest" ? (manifest = args[i + 1]; i += 2) :
+            a == "--out" ? (out = args[i + 1]; i += 2) :
+            a == "--jobs" ? (jobs = parse(Int, args[i + 1]); i += 2) :
+            a == "--timeout" ? (timeout_s = parse(Int, args[i + 1]); i += 2) :
+            a == "--resume" ? (resume = true; i += 1) :
+            a == "--project" ? (project = abspath(args[i + 1]); i += 2) :
+            a == "--compiler" ? (ENV["CENSUS_COMPILER"] = args[i + 1]; i += 2) :
+            error("compiler_census.jl: unknown argument '$a'")
     end
     (manifest === nothing || out === nothing) &&
         error("compiler_census.jl: --manifest and --out are required")
-    run_driver(manifest, out; jobs = jobs, timeout_s = timeout_s, resume = resume,
-               project = project)
+    run_driver(
+        manifest, out; jobs = jobs, timeout_s = timeout_s, resume = resume,
+        project = project
+    )
     return 0
 end
 

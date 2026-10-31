@@ -25,7 +25,7 @@
 # name in the model scope; the empty default scope keeps every bare name as-is.
 # Read-only sentinel — see the `_EMPTY_*` invariant block next to
 # `_EMPTY_DERIVED_EXTENTS`.
-const _EMPTY_FACTOR_SCOPE = Dict{String,String}()
+const _EMPTY_FACTOR_SCOPE = Dict{String, String}()
 
 # A ragged set's `offsets` / `values` keyed factors bind by BARE name in the
 # model scope (§5.4), but flattening prefixes every variable with its owning
@@ -36,7 +36,7 @@ const _EMPTY_FACTOR_SCOPE = Dict{String,String}()
 # subsystem's original) — unique at that depth, else left bare so the unbound-
 # name error surfaces. Empty for documents without ragged index sets.
 function _ragged_factor_scope(index_sets::AbstractDict, variables::AbstractDict)
-    factor_scope = Dict{String,String}()
+    factor_scope = Dict{String, String}()
     for (_, iset) in index_sets
         (iset isa IndexSet && iset.kind == "ragged") || continue
         for f in (iset.offsets, iset.values)
@@ -59,28 +59,49 @@ end
 # name to the in-scope variable that backs it (flattening prefixes variables with
 # their owning component path, e.g. "nEdgesOnCell" → "Divergence.nEdgesOnCell",
 # while the document-scoped registry keeps the bare authored name).
-function _resolve_one_index_set_ref(ref::IndexSetRef, index_sets::AbstractDict,
-                                    derived_extents::AbstractDict=_EMPTY_DERIVED_EXTENTS,
-                                    factor_scope::AbstractDict=_EMPTY_FACTOR_SCOPE)
-    haskey(index_sets, ref.from) || throw(TreeWalkError(
-        "E_TREEWALK_UNDECLARED_INDEX_SET",
-        "undeclared index set '$(ref.from)' referenced in ranges; declare it in " *
-        "the model's `index_sets` registry (no implicit interval is inferred)"))
+function _resolve_one_index_set_ref(
+        ref::IndexSetRef, index_sets::AbstractDict,
+        derived_extents::AbstractDict = _EMPTY_DERIVED_EXTENTS,
+        factor_scope::AbstractDict = _EMPTY_FACTOR_SCOPE
+    )
+    haskey(index_sets, ref.from) || throw(
+        TreeWalkError(
+            "E_TREEWALK_UNDECLARED_INDEX_SET",
+            "undeclared index set '$(ref.from)' referenced in ranges; declare it in " *
+                "the model's `index_sets` registry (no implicit interval is inferred)"
+        )
+    )
     is = index_sets[ref.from]
     if is.kind == "interval"
-        is.size === nothing && throw(TreeWalkError("E_TREEWALK_INDEX_SET_INCOMPLETE",
-            "interval index set '$(ref.from)' requires a `size`"))
+        is.size === nothing && throw(
+            TreeWalkError(
+                "E_TREEWALK_INDEX_SET_INCOMPLETE",
+                "interval index set '$(ref.from)' requires a `size`"
+            )
+        )
         return Any[1, Int(is.size)]
     elseif is.kind == "categorical"
-        is.members === nothing && throw(TreeWalkError("E_TREEWALK_INDEX_SET_INCOMPLETE",
-            "categorical index set '$(ref.from)' requires `members`"))
+        is.members === nothing && throw(
+            TreeWalkError(
+                "E_TREEWALK_INDEX_SET_INCOMPLETE",
+                "categorical index set '$(ref.from)' requires `members`"
+            )
+        )
         return Any[1, length(is.members)]
     elseif is.kind == "ragged"
-        is.offsets === nothing && throw(TreeWalkError("E_TREEWALK_INDEX_SET_INCOMPLETE",
-            "ragged index set '$(ref.from)' requires an `offsets` backing factor"))
-        isempty(ref.of) && throw(TreeWalkError("E_TREEWALK_RAGGED_NO_PARENTS",
-            "ragged index set '$(ref.from)' referenced without `of` parent index " *
-            "variable(s); a ragged set's per-tuple length is a function of its parent"))
+        is.offsets === nothing && throw(
+            TreeWalkError(
+                "E_TREEWALK_INDEX_SET_INCOMPLETE",
+                "ragged index set '$(ref.from)' requires an `offsets` backing factor"
+            )
+        )
+        isempty(ref.of) && throw(
+            TreeWalkError(
+                "E_TREEWALK_RAGGED_NO_PARENTS",
+                "ragged index set '$(ref.from)' referenced without `of` parent index " *
+                    "variable(s); a ragged set's per-tuple length is a function of its parent"
+            )
+        )
         # Per-cell dynamic upper bound |set(of…)| = offsets[of…]. The member
         # gather through `values` is authored in the body (e.g.
         # index(values, of…, k)) and resolved by the existing const_array path.
@@ -99,24 +120,36 @@ function _resolve_one_index_set_ref(ref::IndexSetRef, index_sets::AbstractDict,
         # is refused rather than contracted as empty: an empty range would fold
         # to the additive identity and read as a plausible 0 (esm-spec §9.6.6).
         faq = is.from_faq
-        faq === nothing && throw(TreeWalkError("E_TREEWALK_DERIVED_NO_FAQ",
-            "derived index set '$(ref.from)' requires a `from_faq` naming its " *
-            "producing node (§5.5)"))
-        haskey(derived_extents, faq) || throw(TreeWalkError("derived_index_set_unmaterialized",
-            "derived index set '$(ref.from)' (from_faq '$faq') is not materialized: no " *
-            "geometry or value-invention producer supplied its extent at setup. " *
-            "Materialized: $(sort(collect(keys(derived_extents))))."))
+        faq === nothing && throw(
+            TreeWalkError(
+                "E_TREEWALK_DERIVED_NO_FAQ",
+                "derived index set '$(ref.from)' requires a `from_faq` naming its " *
+                    "producing node (§5.5)"
+            )
+        )
+        haskey(derived_extents, faq) || throw(
+            TreeWalkError(
+                "derived_index_set_unmaterialized",
+                "derived index set '$(ref.from)' (from_faq '$faq') is not materialized: no " *
+                    "geometry or value-invention producer supplied its extent at setup. " *
+                    "Materialized: $(sort(collect(keys(derived_extents))))."
+            )
+        )
         return Any[1, derived_extents[faq]]
     end
-    throw(TreeWalkError("E_TREEWALK_UNKNOWN_INDEX_SET_KIND",
-        "unknown index set kind '$(is.kind)' for '$(ref.from)'"))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_UNKNOWN_INDEX_SET_KIND",
+            "unknown index set kind '$(is.kind)' for '$(ref.from)'"
+        )
+    )
 end
 
 # True iff any node in the subtree carries a `ranges` entry that is an IndexSetRef.
 # Identity-deduped (ESS-0hh): a pure existence predicate over a possibly
 # structurally-shared tree — the per-path recursion was exponential on a DAG.
-_has_index_set_ref(expr::OpExpr) = _has_index_set_ref(expr, IdDict{OpExpr,Nothing}())
-function _has_index_set_ref(expr::OpExpr, seen::IdDict{OpExpr,Nothing})
+_has_index_set_ref(expr::OpExpr) = _has_index_set_ref(expr, IdDict{OpExpr, Nothing}())
+function _has_index_set_ref(expr::OpExpr, seen::IdDict{OpExpr, Nothing})
     haskey(seen, expr) && return false
     seen[expr] = nothing
     if expr.ranges !== nothing
@@ -152,10 +185,12 @@ _has_index_set_ref(eq::Equation) = _has_index_set_ref(eq.lhs) || _has_index_set_
 # an exponentially large tree for every stage downstream. Identity
 # preservation also keeps `_translate_equation_sites!` cheap: its lockstep
 # walk short-circuits on `old === new`.
-function _resolve_isr(expr::OpExpr, index_sets::AbstractDict,
-                      derived_extents::AbstractDict=_EMPTY_DERIVED_EXTENTS,
-                      factor_scope::AbstractDict=_EMPTY_FACTOR_SCOPE,
-                      memo::IdDict{OpExpr,ASTExpr}=IdDict{OpExpr,ASTExpr}())
+function _resolve_isr(
+        expr::OpExpr, index_sets::AbstractDict,
+        derived_extents::AbstractDict = _EMPTY_DERIVED_EXTENTS,
+        factor_scope::AbstractDict = _EMPTY_FACTOR_SCOPE,
+        memo::IdDict{OpExpr, ASTExpr} = IdDict{OpExpr, ASTExpr}()
+    )
     cached = get(memo, expr, nothing)
     cached === nothing || return cached
     changed = false
@@ -172,29 +207,37 @@ function _resolve_isr(expr::OpExpr, index_sets::AbstractDict,
     new_ranges = expr.ranges
     if expr.ranges !== nothing && any(v -> v isa IndexSetRef, values(expr.ranges))
         changed = true
-        new_ranges = Dict{String,Any}()
+        new_ranges = Dict{String, Any}()
         for (k, v) in expr.ranges
             new_ranges[k] = v isa IndexSetRef ?
                 _resolve_one_index_set_ref(v, index_sets, derived_extents, factor_scope) : v
         end
     end
     result = changed ?
-        reconstruct(expr; args=new_args, expr_body=new_body,
-                    values=new_values, lower=new_lower, upper=new_upper,
-                    ranges=new_ranges) : expr
+        reconstruct(
+            expr; args = new_args, expr_body = new_body,
+            values = new_values, lower = new_lower, upper = new_upper,
+            ranges = new_ranges
+        ) : expr
     memo[expr] = result
     return result
 end
-_resolve_isr(expr::ASTExpr, ::AbstractDict, ::AbstractDict=_EMPTY_DERIVED_EXTENTS,
-             ::AbstractDict=_EMPTY_FACTOR_SCOPE,
-             ::IdDict{OpExpr,ASTExpr}=IdDict{OpExpr,ASTExpr}()) = expr
-_resolve_isr(eq::Equation, index_sets::AbstractDict,
-             derived_extents::AbstractDict=_EMPTY_DERIVED_EXTENTS,
-             factor_scope::AbstractDict=_EMPTY_FACTOR_SCOPE,
-             memo::IdDict{OpExpr,ASTExpr}=IdDict{OpExpr,ASTExpr}()) =
-    Equation(_resolve_isr(eq.lhs, index_sets, derived_extents, factor_scope, memo),
-             _resolve_isr(eq.rhs, index_sets, derived_extents, factor_scope, memo);
-             _comment=eq._comment)
+_resolve_isr(
+    expr::ASTExpr, ::AbstractDict, ::AbstractDict = _EMPTY_DERIVED_EXTENTS,
+    ::AbstractDict = _EMPTY_FACTOR_SCOPE,
+    ::IdDict{OpExpr, ASTExpr} = IdDict{OpExpr, ASTExpr}()
+) = expr
+_resolve_isr(
+    eq::Equation, index_sets::AbstractDict,
+    derived_extents::AbstractDict = _EMPTY_DERIVED_EXTENTS,
+    factor_scope::AbstractDict = _EMPTY_FACTOR_SCOPE,
+    memo::IdDict{OpExpr, ASTExpr} = IdDict{OpExpr, ASTExpr}()
+) =
+    Equation(
+    _resolve_isr(eq.lhs, index_sets, derived_extents, factor_scope, memo),
+    _resolve_isr(eq.rhs, index_sets, derived_extents, factor_scope, memo);
+    _comment = eq._comment
+)
 
 # Resolve all index-set references across a vector of equations. Returns the
 # input unchanged when no equation uses a `{from}` reference — preserving
@@ -202,13 +245,17 @@ _resolve_isr(eq::Equation, index_sets::AbstractDict,
 # One shared memo across the vector: the registries are fixed for the whole
 # call, so a subtree shared BETWEEN equations also resolves once and stays
 # shared.
-function _resolve_index_set_ranges(eqs::Vector{Equation}, index_sets::AbstractDict,
-                                   derived_extents::AbstractDict=_EMPTY_DERIVED_EXTENTS,
-                                   factor_scope::AbstractDict=_EMPTY_FACTOR_SCOPE)
+function _resolve_index_set_ranges(
+        eqs::Vector{Equation}, index_sets::AbstractDict,
+        derived_extents::AbstractDict = _EMPTY_DERIVED_EXTENTS,
+        factor_scope::AbstractDict = _EMPTY_FACTOR_SCOPE
+    )
     any(_has_index_set_ref, eqs) || return eqs
-    memo = IdDict{OpExpr,ASTExpr}()
-    return Equation[_resolve_isr(eq, index_sets, derived_extents, factor_scope, memo)
-                    for eq in eqs]
+    memo = IdDict{OpExpr, ASTExpr}()
+    return Equation[
+        _resolve_isr(eq, index_sets, derived_extents, factor_scope, memo)
+            for eq in eqs
+    ]
 end
 
 # ---- Shared aggregate/einsum expansion core (one spelling, three sites) --------
@@ -236,7 +283,7 @@ end
 # index tuple itself (in the same order, through the same gates) instead of the
 # substituted term, for a caller that only needs the indices (the TABLE fold's
 # entry list, `_array_contraction_table`). A filter is not applied in keys mode.
-const _AggBody = Union{ASTExpr,Nothing}
+const _AggBody = Union{ASTExpr, Nothing}
 
 # A REVERSE scan folds DESCENDING (esm-spec §4.3.1): its suffix `⊕_{j ≥ i}` is
 # the left fold `((b_N ⊕ b_{N-1}) ⊕ …) ⊕ b_i`, so one running accumulator
@@ -250,40 +297,48 @@ const _AggBody = Union{ASTExpr,Nothing}
 # the high side of an inequality whose other side is an output index
 # (`j >= i`, `j > i`, `i <= j`, `i < j`). A bound that is not an output index
 # (`j >= 2`, `j >= p`) is a plain filter and keeps the ascending order.
-function _reverse_window(filt, contract_names::AbstractVector{<:AbstractString},
-                         out_names)
+function _reverse_window(
+        filt, contract_names::AbstractVector{<:AbstractString},
+        out_names
+    )
     length(contract_names) == 1 || return false
     filt isa OpExpr || return false
     f = filt::OpExpr
     length(f.args) == 2 || return false
     hi, lo = (f.op == ">=" || f.op == ">") ? (f.args[1], f.args[2]) :
-             (f.op == "<=" || f.op == "<") ? (f.args[2], f.args[1]) : return false
+        (f.op == "<=" || f.op == "<") ? (f.args[2], f.args[1]) : return false
     return hi isa VarExpr && (hi::VarExpr).name == contract_names[1] &&
-           lo isa VarExpr && (lo::VarExpr).name in out_names
+        lo isa VarExpr && (lo::VarExpr).name in out_names
 end
 
 # The contracted iterators in the order the filter `filt` visits them.
 _window_iters(iters, filt, contract_names, out_names) =
     _reverse_window(filt, contract_names, out_names) ?
-        [collect(Int, Iterators.reverse(iters[1]))] : iters
+    [collect(Int, Iterators.reverse(iters[1]))] : iters
 
-function _foreach_aggregate_term(emit!::F, body::_AggBody,
+function _foreach_aggregate_term(
+        emit!::F, body::_AggBody,
         contract_names::Vector{String}, contract_iters,
         gates, filt, zerobar::Float64,
-        out_env::Union{Nothing,Dict{String,Int}}=nothing) where {F}
-    k_exprs = Dict{String,ASTExpr}()
+        out_env::Union{Nothing, Dict{String, Int}} = nothing
+    ) where {F}
+    k_exprs = Dict{String, ASTExpr}()
     binding = gates === nothing ? nothing :
-              (out_env === nothing ? Dict{String,Int}() : Dict{String,Int}(out_env))
+        (out_env === nothing ? Dict{String, Int}() : Dict{String, Int}(out_env))
     # A gate carrying a prebuilt pair index can DRIVE this expansion instead
     # of merely filtering it — a `join.overlap` broad phase (§5.5.6 / Wall #1) or
     # a `join.on` value-equality match set (§5.5.8) alike — routed to
     # `_foreach_aggregate_term_gated`. Everything else (no join, a gate that
     # materialised no index) takes the untouched product below.
     ov = gates === nothing ? nothing : _drivable_gate(gates)
-    ov === nothing || return _foreach_aggregate_term_gated(emit!, body,
-        contract_names, contract_iters, gates, filt, zerobar, binding, ov, k_exprs)
-    return _foreach_aggregate_product(emit!, body, contract_names, contract_iters,
-                                      gates, filt, zerobar, binding, k_exprs, Val(false))
+    ov === nothing || return _foreach_aggregate_term_gated(
+        emit!, body,
+        contract_names, contract_iters, gates, filt, zerobar, binding, ov, k_exprs
+    )
+    return _foreach_aggregate_product(
+        emit!, body, contract_names, contract_iters,
+        gates, filt, zerobar, binding, k_exprs, Val(false)
+    )
 end
 
 # The shared unroll: `Iterators.product` over `iters` (which vary
@@ -292,9 +347,11 @@ end
 # `_VI_ENUM_VISITS` instrumentation exists ONLY in the overlap-gated
 # specialisation — the ungated expansion, the engine's hottest loop, keeps
 # exactly the instruction stream it had.
-function _foreach_aggregate_product(emit!::F, body::_AggBody,
+function _foreach_aggregate_product(
+        emit!::F, body::_AggBody,
         contract_names::Vector{String}, iters, gates, filt, zerobar::Float64,
-        binding, k_exprs::Dict{String,ASTExpr}, ::Val{COUNT}) where {F,COUNT}
+        binding, k_exprs::Dict{String, ASTExpr}, ::Val{COUNT}
+    ) where {F, COUNT}
     body === nothing && length(iters) == 1 &&
         return _foreach_keys1(emit!, contract_names[1], iters[1], gates, binding, Val(COUNT))
     for k_tuple in Iterators.product(iters...)
@@ -324,8 +381,10 @@ end
 
 # Keys mode over one contracted index: the product above with a single
 # iterator, behind a function barrier so the loop is typed.
-function _foreach_keys1(emit!::F, name::String, it, gates, binding,
-                        ::Val{COUNT}) where {F,COUNT}
+function _foreach_keys1(
+        emit!::F, name::String, it, gates, binding,
+        ::Val{COUNT}
+    ) where {F, COUNT}
     for k in it
         if binding !== nothing
             COUNT && (_VI_ENUM_VISITS[] += 1)
@@ -367,20 +426,28 @@ end
 # (`_combine_with_reducer`, and the explicit `rhs_zerobar` literal in
 # `_compile_faq_percell!`) — e.g. an emission record outside the grid sums
 # to 0 under `(+, 0)`.
-function _foreach_aggregate_term_gated(emit!::F, body::_AggBody,
+function _foreach_aggregate_term_gated(
+        emit!::F, body::_AggBody,
         contract_names::Vector{String}, contract_iters, gates, filt,
-        zerobar::Float64, binding, ov, k_exprs::Dict{String,ASTExpr}) where {F}
-    plan = _overlap_drive_plan(ov, contract_names, binding,
-               s -> contract_iters[findfirst(==(s), contract_names)::Int])
+        zerobar::Float64, binding, ov, k_exprs::Dict{String, ASTExpr}
+    ) where {F}
+    plan = _overlap_drive_plan(
+        ov, contract_names, binding,
+        s -> contract_iters[findfirst(==(s), contract_names)::Int]
+    )
     kind = plan[1]
     if kind === :reject
         return nothing
     elseif kind === :restrict
         d = findfirst(==(plan[2]), contract_names)::Int
-        iters = Any[i == d ? plan[3] : contract_iters[i]
-                    for i in 1:length(contract_iters)]
-        return _foreach_aggregate_product(emit!, body, contract_names, iters,
-                    gates, filt, zerobar, binding, k_exprs, Val(true))
+        iters = Any[
+            i == d ? plan[3] : contract_iters[i]
+                for i in 1:length(contract_iters)
+        ]
+        return _foreach_aggregate_product(
+            emit!, body, contract_names, iters,
+            gates, filt, zerobar, binding, k_exprs, Val(true)
+        )
     elseif kind === :pairs && length(contract_names) == 2
         # `Iterators.product` varies `contract_names[1]` fastest, so the product
         # ORDER over the surviving tuples is the pair list sorted by
@@ -388,21 +455,27 @@ function _foreach_aggregate_term_gated(emit!::F, body::_AggBody,
         fast_is_l = plan[2] == contract_names[1]
         prs = sort(plan[4]; by = fast_is_l ? (p -> (p[2], p[1])) : (p -> (p[1], p[2])))
         cols = fast_is_l ? Any[Int[p[1] for p in prs], Int[p[2] for p in prs]] :
-                           Any[Int[p[2] for p in prs], Int[p[1] for p in prs]]
-        return _foreach_aggregate_pairs(emit!, body, contract_names, cols,
-                    gates, filt, zerobar, binding, k_exprs)
+            Any[Int[p[2] for p in prs], Int[p[1] for p in prs]]
+        return _foreach_aggregate_pairs(
+            emit!, body, contract_names, cols,
+            gates, filt, zerobar, binding, k_exprs
+        )
     end
-    return _foreach_aggregate_product(emit!, body, contract_names, contract_iters,
-                gates, filt, zerobar, binding, k_exprs, Val(true))
+    return _foreach_aggregate_product(
+        emit!, body, contract_names, contract_iters,
+        gates, filt, zerobar, binding, k_exprs, Val(true)
+    )
 end
 
 # The `:pairs` drive shape: the two contracted symbols are bound TOGETHER from
 # the gate's candidate pairs (already reordered by the caller to match
 # `Iterators.product`'s slow/fast convention), so the emitted term sequence is
 # the exact subsequence the filtered full product emitted.
-function _foreach_aggregate_pairs(emit!::F, body::_AggBody,
+function _foreach_aggregate_pairs(
+        emit!::F, body::_AggBody,
         contract_names::Vector{String}, cols, gates, filt, zerobar::Float64,
-        binding, k_exprs::Dict{String,ASTExpr}) where {F}
+        binding, k_exprs::Dict{String, ASTExpr}
+    ) where {F}
     for p in 1:length(cols[1])
         _VI_ENUM_VISITS[] += 1
         for d in 1:length(contract_names)
@@ -439,29 +512,41 @@ _contracted_index_names(ranges_dict, output_idx) =
 # is evaluated under the current output-index environment `idx_env` via
 # `_expand_int_range_dyn` (variable-valence segment reduction over the CSR
 # offsets keyed factor — a const array; no host-side padding).
-_expand_contract_range(rspec, idx_env::Dict{String,Int}, const_arrays::AbstractDict) =
-    collect(_is_const_int_range(rspec) ? _expand_int_range(rspec) :
-            _expand_int_range_dyn(rspec, idx_env, const_arrays))
+_expand_contract_range(rspec, idx_env::Dict{String, Int}, const_arrays::AbstractDict) =
+    collect(
+    _is_const_int_range(rspec) ? _expand_int_range(rspec) :
+        _expand_int_range_dyn(rspec, idx_env, const_arrays)
+)
 
 # Resolve index(faq(...), k1, k2, ...) in expression position by
 # substituting the output_idx values and unrolling contracted indices at
 # build time. Mirrors the LHS-faq expansion (`_compile_faq_percell!`,
 # the `_is_faq_D_lhs` branch of the derivative loop) but produces a scalar
 # ASTExpr instead of writing to rhs_list.
-function _resolve_index_of_faq(faq_expr::OpExpr, idx_args::Vector{ASTExpr},
-                                    array_var_info, var_map, const_arrays,
-                                    pgather::AbstractDict=_EMPTY_PGATHER,
-                                    memo::_MaybeMemo=nothing,
-                                    bound_syms::Set{String}=_EMPTY_BOUND_SYMS)
+function _resolve_index_of_faq(
+        faq_expr::OpExpr, idx_args::Vector{ASTExpr},
+        array_var_info, var_map, const_arrays,
+        pgather::AbstractDict = _EMPTY_PGATHER,
+        memo::_MaybeMemo = nothing,
+        bound_syms::Set{String} = _EMPTY_BOUND_SYMS
+    )
     output_idx_strs = _output_idx_strings(faq_expr)
     length(output_idx_strs) == length(idx_args) ||
-        throw(TreeWalkError("E_TREEWALK_ARRAYOP_INDEX_NDIM",
-              "faq output_idx has $(length(output_idx_strs)) dims " *
-              "but $(length(idx_args)) index args"))
+        throw(
+        TreeWalkError(
+            "E_TREEWALK_ARRAYOP_INDEX_NDIM",
+            "faq output_idx has $(length(output_idx_strs)) dims " *
+                "but $(length(idx_args)) index args"
+        )
+    )
     body = faq_expr.expr_body
     body === nothing &&
-        throw(TreeWalkError("E_TREEWALK_ARRAYOP_NO_BODY",
-                            "faq requires an expr body"))
+        throw(
+        TreeWalkError(
+            "E_TREEWALK_ARRAYOP_NO_BODY",
+            "faq requires an expr body"
+        )
+    )
     ranges_dict = _ranges_dict(faq_expr)
     oplus, zerobar = _aggregate_oplus_identity(faq_expr.semiring, faq_expr.reduce)
 
@@ -474,7 +559,7 @@ function _resolve_index_of_faq(faq_expr::OpExpr, idx_args::Vector{ASTExpr},
     nd = length(output_idx_strs)
     symbolic = falses(nd)
     k_vals = Vector{Int}(undef, nd)
-    idx_exprs = Dict{String,ASTExpr}()
+    idx_exprs = Dict{String, ASTExpr}()
     for d in 1:nd
         a = idx_args[d]
         if _subscript_is_runtime(a, const_arrays)
@@ -496,18 +581,24 @@ function _resolve_index_of_faq(faq_expr::OpExpr, idx_args::Vector{ASTExpr},
     # value in `_out_idx_env`, so `_expand_int_range_dyn` throws `unbound loop var`
     # and the compile-once fast path falls back — exactly the intended coverage.
     contract_names = _contracted_index_names(ranges_dict, output_idx_strs)
-    _out_idx_env = Dict{String,Int}(output_idx_strs[d] => k_vals[d]
-                                    for d in 1:nd if !symbolic[d])
+    _out_idx_env = Dict{String, Int}(
+        output_idx_strs[d] => k_vals[d]
+            for d in 1:nd if !symbolic[d]
+    )
     # A ragged bound over a symbolic output index becomes a run-time loop
     # (`_NK_RAGGED_LOOP`), which reads the bound at the cell the call is at.
     if any_symbolic && !isempty(bound_syms) &&
-       any(n -> !_is_const_int_range(ranges_dict[n]), contract_names)
-        return _resolve_ragged_faq_loop(faq_expr, sub_body, ranges_dict, idx_exprs,
-                                        contract_names, oplus, zerobar, array_var_info,
-                                        var_map, const_arrays, pgather, bound_syms)
+            any(n -> !_is_const_int_range(ranges_dict[n]), contract_names)
+        return _resolve_ragged_faq_loop(
+            faq_expr, sub_body, ranges_dict, idx_exprs,
+            contract_names, oplus, zerobar, array_var_info,
+            var_map, const_arrays, pgather, bound_syms
+        )
     end
-    contract_iters = [_expand_contract_range(ranges_dict[n], _out_idx_env, const_arrays)
-                      for n in contract_names]
+    contract_iters = [
+        _expand_contract_range(ranges_dict[n], _out_idx_env, const_arrays)
+            for n in contract_names
+    ]
 
     gates = faq_expr.join_gates
     filt0 = faq_expr.filter
@@ -517,12 +608,18 @@ function _resolve_index_of_faq(faq_expr::OpExpr, idx_args::Vector{ASTExpr},
     # refuse the fast path here — the compile-once wrapper catches this and falls
     # back to the exact per-cell expansion (concrete mode is unaffected).
     any_symbolic && (gates !== nothing || filt0 !== nothing) &&
-        throw(TreeWalkError("E_TREEWALK_COMPILE_ONCE_UNSUPPORTED",
+        throw(
+        TreeWalkError(
+            "E_TREEWALK_COMPILE_ONCE_UNSUPPORTED",
             "aggregate join_gates/filter are not supported on the symbolic " *
-            "compile-once path; falling back to per-cell resolution"))
+                "compile-once path; falling back to per-cell resolution"
+        )
+    )
     if isempty(contract_names) && gates === nothing && filt0 === nothing
-        return _resolve_indices(sub_body, array_var_info, var_map, const_arrays,
-                                pgather, memo, bound_syms)
+        return _resolve_indices(
+            sub_body, array_var_info, var_map, const_arrays,
+            pgather, memo, bound_syms
+        )
     end
 
     # Join/filter expansion via the shared core; the filter carries the (fixed)
@@ -532,10 +629,16 @@ function _resolve_index_of_faq(faq_expr::OpExpr, idx_args::Vector{ASTExpr},
     filt = filt0 === nothing ? nothing : _sub_preserving(filt0, idx_exprs)
     contract_iters = _window_iters(contract_iters, filt0, contract_names, output_idx_strs)
     terms = ASTExpr[]
-    _foreach_aggregate_term(sub_body, contract_names, contract_iters,
-                            gates, filt, zerobar, _out_idx_env) do term
-        push!(terms, _resolve_indices(term, array_var_info, var_map, const_arrays,
-                                      pgather, memo, bound_syms))
+    _foreach_aggregate_term(
+        sub_body, contract_names, contract_iters,
+        gates, filt, zerobar, _out_idx_env
+    ) do term
+        push!(
+            terms, _resolve_indices(
+                term, array_var_info, var_map, const_arrays,
+                pgather, memo, bound_syms
+            )
+        )
     end
     return _combine_with_reducer(oplus, zerobar, terms)
 end
@@ -553,12 +656,18 @@ end
 # the interpreter builds at a concrete cell. Taken only for one contracted
 # index with no join and no filter; anything else declines with
 # `E_TREEWALK_COMPILE_ONCE_UNSUPPORTED`, as the symbolic path always has.
-function _resolve_ragged_faq_loop(faq_expr::OpExpr, sub_body::ASTExpr, ranges_dict,
-        idx_exprs::Dict{String,ASTExpr}, contract_names::Vector{String},
+function _resolve_ragged_faq_loop(
+        faq_expr::OpExpr, sub_body::ASTExpr, ranges_dict,
+        idx_exprs::Dict{String, ASTExpr}, contract_names::Vector{String},
         oplus::String, zerobar::Float64, array_var_info, var_map, const_arrays,
-        pgather::AbstractDict, bound_syms::Set{String})
-    decline(why) = throw(TreeWalkError("E_TREEWALK_COMPILE_ONCE_UNSUPPORTED",
-        "ragged contraction on the symbolic compile-once path: " * why))
+        pgather::AbstractDict, bound_syms::Set{String}
+    )
+    decline(why) = throw(
+        TreeWalkError(
+            "E_TREEWALK_COMPILE_ONCE_UNSUPPORTED",
+            "ragged contraction on the symbolic compile-once path: " * why
+        )
+    )
     length(contract_names) == 1 || decline("more than one contracted index")
     (faq_expr.join_gates === nothing && faq_expr.filter === nothing) ||
         decline("a join or a filter")
@@ -572,23 +681,33 @@ function _resolve_ragged_faq_loop(faq_expr::OpExpr, sub_body::ASTExpr, ranges_di
         step == 0 && decline("a zero step")
     end
     bound(x) = x isa Integer ? IntExpr(Int64(x)) :
-        x isa ASTExpr ? _resolve_indices(_sub_preserving(x, idx_exprs), array_var_info,
-                                         var_map, const_arrays, pgather, nothing,
-                                         bound_syms) :
+        x isa ASTExpr ? _resolve_indices(
+            _sub_preserving(x, idx_exprs), array_var_info,
+            var_map, const_arrays, pgather, nothing,
+            bound_syms
+        ) :
         decline("a bound that is not an integer or an expression")
     lo = bound(rspec[1])
     hi = bound(rspec[end])
     kname = _fresh_loopvar_name()
     kref = Ref(0)
-    body = _sub_preserving(sub_body,
-                           Dict{String,ASTExpr}(contract_names[1] => VarExpr(kname)))
+    body = _sub_preserving(
+        sub_body,
+        Dict{String, ASTExpr}(contract_names[1] => VarExpr(kname))
+    )
     kbsyms = union(bound_syms, Set{String}((kname,)))
-    resolved = _resolve_indices(body, array_var_info, var_map, const_arrays, pgather,
-                                nothing, kbsyms)
+    resolved = _resolve_indices(
+        body, array_var_info, var_map, const_arrays, pgather,
+        nothing, kbsyms
+    )
     _LOOPVAR_REFS[Symbol(kname)] = kref
-    return OpExpr("__ragged_loop", ASTExpr[resolved, lo, hi];
-                  value=_RaggedLoopBuild(kref, step, _ragged_reach(rspec, const_arrays),
-                                         Symbol(oplus), zerobar))
+    return OpExpr(
+        "__ragged_loop", ASTExpr[resolved, lo, hi];
+        value = _RaggedLoopBuild(
+            kref, step, _ragged_reach(rspec, const_arrays),
+            Symbol(oplus), zerobar
+        )
+    )
 end
 
 # The mean row length of a ragged range `[1, index(offsets, …)]` over a const
@@ -596,8 +715,10 @@ end
 # any other expression.
 function _ragged_reach(rspec, const_arrays::AbstractDict)
     hi = rspec[end]
-    (rspec[1] == 1 && hi isa OpExpr && (hi::OpExpr).op == "index" &&
-     !isempty((hi::OpExpr).args) && (hi::OpExpr).args[1] isa VarExpr) || return 1
+    (
+        rspec[1] == 1 && hi isa OpExpr && (hi::OpExpr).op == "index" &&
+            !isempty((hi::OpExpr).args) && (hi::OpExpr).args[1] isa VarExpr
+    ) || return 1
     arr = get(const_arrays, ((hi::OpExpr).args[1]::VarExpr).name, nothing)
     (arr isa AbstractArray{<:Real} && !isempty(arr)) || return 1
     m = sum(Float64, arr) / length(arr)
@@ -608,28 +729,40 @@ end
 # selecting the value expression whose region covers (k1, k2, ...).
 # Later regions overwrite earlier ones, matching the Python reference
 # semantics (`_eval_makearray` in numpy_interpreter.py).
-function _resolve_index_of_makearray(makearray_expr::OpExpr, idx_args::Vector{ASTExpr},
-                                      array_var_info, var_map, const_arrays,
-                                      pgather::AbstractDict=_EMPTY_PGATHER,
-                                      memo::_MaybeMemo=nothing,
-                                      bound_syms::Set{String}=_EMPTY_BOUND_SYMS)
+function _resolve_index_of_makearray(
+        makearray_expr::OpExpr, idx_args::Vector{ASTExpr},
+        array_var_info, var_map, const_arrays,
+        pgather::AbstractDict = _EMPTY_PGATHER,
+        memo::_MaybeMemo = nothing,
+        bound_syms::Set{String} = _EMPTY_BOUND_SYMS
+    )
     regions = makearray_expr.regions === nothing ?
-              Vector{Vector{Vector{Any}}}() : makearray_expr.regions
-    values  = makearray_expr.values  === nothing ? ASTExpr[] : makearray_expr.values
+        Vector{Vector{Vector{Any}}}() : makearray_expr.regions
+    values = makearray_expr.values === nothing ? ASTExpr[] : makearray_expr.values
     length(regions) == length(values) ||
-        throw(TreeWalkError("E_TREEWALK_MAKEARRAY_MISMATCH",
-              "makearray regions/values length mismatch " *
-              "($(length(regions)) vs $(length(values)))"))
+        throw(
+        TreeWalkError(
+            "E_TREEWALK_MAKEARRAY_MISMATCH",
+            "makearray regions/values length mismatch " *
+                "($(length(regions)) vs $(length(values)))"
+        )
+    )
     k_vals = [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays) for a in idx_args]
-    ndim   = length(k_vals)
+    ndim = length(k_vals)
     result_expr::ASTExpr = NumExpr(0.0)  # default: 0 if no region covers the point
     result_region = nothing
     for (region, val_expr) in zip(regions, values)
         length(region) == ndim ||
-            throw(TreeWalkError("E_TREEWALK_MAKEARRAY_NDIM",
-                  "makearray region has $(length(region)) dims but $(ndim) indices"))
-        in_region = all(k_vals[d] >= region[d][1] && k_vals[d] <= region[d][2]
-                        for d in 1:ndim)
+            throw(
+            TreeWalkError(
+                "E_TREEWALK_MAKEARRAY_NDIM",
+                "makearray region has $(length(region)) dims but $(ndim) indices"
+            )
+        )
+        in_region = all(
+            k_vals[d] >= region[d][1] && k_vals[d] <= region[d][2]
+                for d in 1:ndim
+        )
         in_region && ((result_expr, result_region) = (val_expr, region))  # overwrite; last match wins
     end
     # esm-spec §9.6.8: a region value MAY be a self-contained ARRAY-VALUED
@@ -647,25 +780,37 @@ function _resolve_index_of_makearray(makearray_expr::OpExpr, idx_args::Vector{AS
         sel = if rank == ndim
             k_vals
         else
-            nonsingleton = [d for d in 1:ndim
-                            if result_region === nothing ||
-                               result_region[d][1] != result_region[d][2]]
+            nonsingleton = [
+                d for d in 1:ndim
+                    if result_region === nothing ||
+                    result_region[d][1] != result_region[d][2]
+            ]
             rank == length(nonsingleton) ||
-                throw(TreeWalkError("E_TREEWALK_MAKEARRAY_VALUE_RANK",
-                      "makearray region value produces a rank-$(rank) array " *
-                      "but the region has $(length(nonsingleton)) non-singleton " *
-                      "axis/axes of $(ndim) total"))
+                throw(
+                TreeWalkError(
+                    "E_TREEWALK_MAKEARRAY_VALUE_RANK",
+                    "makearray region value produces a rank-$(rank) array " *
+                        "but the region has $(length(nonsingleton)) non-singleton " *
+                        "axis/axes of $(ndim) total"
+                )
+            )
             k_vals[nonsingleton]
         end
         sel_exprs = ASTExpr[IntExpr(Int64(v)) for v in sel]
         return re.op == "makearray" ?
-            _resolve_index_of_makearray(re, sel_exprs, array_var_info, var_map,
-                                        const_arrays, pgather, memo, bound_syms) :
-            _resolve_index_of_faq(re, sel_exprs, array_var_info, var_map,
-                                      const_arrays, pgather, memo, bound_syms)
+            _resolve_index_of_makearray(
+                re, sel_exprs, array_var_info, var_map,
+                const_arrays, pgather, memo, bound_syms
+            ) :
+            _resolve_index_of_faq(
+                re, sel_exprs, array_var_info, var_map,
+                const_arrays, pgather, memo, bound_syms
+            )
     end
-    return _resolve_indices(result_expr, array_var_info, var_map, const_arrays,
-                            pgather, memo, bound_syms)
+    return _resolve_indices(
+        result_expr, array_var_info, var_map, const_arrays,
+        pgather, memo, bound_syms
+    )
 end
 
 # ── Shape ops as index maps (esm-spec §4.3.5) ────────────────────────────────
@@ -688,17 +833,19 @@ end
 const _SHAPE_REMAP_OPS = ("reshape", "transpose", "concat")
 
 _try_const_int(a::ASTExpr, const_arrays) =
-    try
-        _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
-    catch err
-        err isa TreeWalkError || rethrow()
-        nothing
-    end
+try
+    _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
+catch err
+    err isa TreeWalkError || rethrow()
+    nothing
+end
 
 # `(lo, ext)` of an array-valued expression the shape-op remap can see through,
 # `(Int[], Int[])` for a scalar, `nothing` when the shape is not known here.
-function _remap_operand_shape(e::ASTExpr, array_var_info, const_arrays,
-                              pgather::AbstractDict=_EMPTY_PGATHER)
+function _remap_operand_shape(
+        e::ASTExpr, array_var_info, const_arrays,
+        pgather::AbstractDict = _EMPTY_PGATHER
+    )
     e isa NumExpr && return (Int[], Int[])
     e isa IntExpr && return (Int[], Int[])
     if e isa VarExpr
@@ -757,20 +904,28 @@ function _positional_broadcast_extent(exts::Vector{Vector{Int}}, at::OpExpr)
         if out[d] == 1
             out[d] = xd
         elseif xd != 1 && xd != out[d]
-            throw(TreeWalkError("E_TREEWALK_BROADCAST_SHAPE",
-                  "operands of '$(at.op)' are not broadcast-compatible: extents " *
-                  "$(join(exts, ", ")) disagree on axis $(d) (esm-spec §4.3.4)"))
+            throw(
+                TreeWalkError(
+                    "E_TREEWALK_BROADCAST_SHAPE",
+                    "operands of '$(at.op)' are not broadcast-compatible: extents " *
+                        "$(join(exts, ", ")) disagree on axis $(d) (esm-spec §4.3.4)"
+                )
+            )
         end
     end
     return out
 end
 
 function _transpose_perm(o::OpExpr, rank::Int)
-    perm = o.perm === nothing ? collect(rank-1:-1:0) : copy(o.perm)
-    sort(perm) == collect(0:rank-1) ||
-        throw(TreeWalkError("E_TREEWALK_SHAPE_OP",
-              "transpose perm $(perm) is not a permutation of the operand's $(rank) axes " *
-              "(esm-spec §4.3.5)"))
+    perm = o.perm === nothing ? collect((rank - 1):-1:0) : copy(o.perm)
+    sort(perm) == collect(0:(rank - 1)) ||
+        throw(
+        TreeWalkError(
+            "E_TREEWALK_SHAPE_OP",
+            "transpose perm $(perm) is not a permutation of the operand's $(rank) axes " *
+                "(esm-spec §4.3.5)"
+        )
+    )
     return perm
 end
 
@@ -779,21 +934,27 @@ _remap_shift(k::ASTExpr, lo::Int) =
     lo == 1 ? k : OpExpr("+", ASTExpr[k, IntExpr(Int64(lo - 1))])
 
 _shape_remap_refuse(o::OpExpr, why::AbstractString) =
-    throw(TreeWalkError("E_TREEWALK_SHAPE_OP",
-          "index($(o.op)(…), …): $(why) (esm-spec §4.3.5)"))
+    throw(
+    TreeWalkError(
+        "E_TREEWALK_SHAPE_OP",
+        "index($(o.op)(…), …): $(why) (esm-spec §4.3.5)"
+    )
+)
 
 # `index(o, subs…)` with `o` a shape op → `index(X, subs′…)` (or the scalar
 # operand itself for a scalar `concat` part). Not yet resolved: the caller runs
 # `_resolve_indices` on the result, which recurses through nested shape ops.
-function _index_through_shape_op(o::OpExpr, subs::Vector{ASTExpr},
-                                 array_var_info, const_arrays,
-                                 pgather::AbstractDict=_EMPTY_PGATHER)::ASTExpr
+function _index_through_shape_op(
+        o::OpExpr, subs::Vector{ASTExpr},
+        array_var_info, const_arrays,
+        pgather::AbstractDict = _EMPTY_PGATHER
+    )::ASTExpr
     shp = _remap_operand_shape(o, array_var_info, const_arrays, pgather)
     shp === nothing && _shape_remap_refuse(o, "the operand's shape is not known at build time")
     ext = shp[2]
     length(subs) == length(ext) ||
         _shape_remap_refuse(o, "the result is rank $(length(ext)) but got $(length(subs)) subscripts")
-    ks = Union{Int,Nothing}[_try_const_int(s, const_arrays) for s in subs]
+    ks = Union{Int, Nothing}[_try_const_int(s, const_arrays) for s in subs]
     for d in eachindex(ks)
         k = ks[d]
         (k === nothing || 1 <= k <= ext[d]) ||
@@ -816,8 +977,10 @@ function _index_through_shape_op(o::OpExpr, subs::Vector{ASTExpr},
         xs0 === nothing && _shape_remap_refuse(o, "the operand's shape is not known at build time")
         xlo, xext = xs0
         prod(xext) == prod(ext) ||
-            _shape_remap_refuse(o, "shape $(ext) holds $(prod(ext)) elements but the " *
-                                   "operand holds $(prod(xext))")
+            _shape_remap_refuse(
+            o, "shape $(ext) holds $(prod(ext)) elements but the " *
+                "operand holds $(prod(xext))"
+        )
         if all(k -> k !== nothing, ks)
             lin = 0; stride = 1
             for d in eachindex(ext)
@@ -833,8 +996,10 @@ function _index_through_shape_op(o::OpExpr, subs::Vector{ASTExpr},
         nz_t = [d for d in eachindex(ext) if ext[d] != 1]
         nz_x = [d for d in eachindex(xext) if xext[d] != 1]
         ext[nz_t] == xext[nz_x] ||
-            _shape_remap_refuse(o, "a symbolic subscript through a reshape that reorders " *
-                                   "elements needs integer division, which has no gather form")
+            _shape_remap_refuse(
+            o, "a symbolic subscript through a reshape that reorders " *
+                "elements needs integer division, which has no gather form"
+        )
         xs = ASTExpr[IntExpr(Int64(xlo[d])) for d in eachindex(xext)]
         for (dt, dx) in zip(nz_t, nz_x)
             xs[dx] = at(dt, xlo[dx])
@@ -845,34 +1010,42 @@ function _index_through_shape_op(o::OpExpr, subs::Vector{ASTExpr},
     ax = something(o.axis, 0) + 1
     kax = ks[ax]
     kax === nothing &&
-        _shape_remap_refuse(o, "a symbolic subscript on the joined axis selects an operand " *
-                               "per cell, which has no gather form")
+        _shape_remap_refuse(
+        o, "a symbolic subscript on the joined axis selects an operand " *
+            "per cell, which has no gather form"
+    )
     off = 0
     for a in o.args
         plo, pext = _remap_operand_shape(a, array_var_info, const_arrays, pgather)
         n = isempty(pext) ? 1 : pext[ax]
         if kax <= off + n
             isempty(pext) && return a
-            xs = ASTExpr[d == ax ? IntExpr(Int64(kax - off - 1 + plo[d])) : at(d, plo[d])
-                         for d in eachindex(pext)]
+            xs = ASTExpr[
+                d == ax ? IntExpr(Int64(kax - off - 1 + plo[d])) : at(d, plo[d])
+                    for d in eachindex(pext)
+            ]
             return OpExpr("index", ASTExpr[a, xs...])
         end
         off += n
     end
-    _shape_remap_refuse(o, "subscript $(kax) is past the joined axis")
+    return _shape_remap_refuse(o, "subscript $(kax) is past the joined axis")
 end
 
 # True iff a shape op is an operand of `e`, looking through elementwise ops.
-_mentions_shape_op(e::ASTExpr) = e isa OpExpr && ((e::OpExpr).op in _SHAPE_REMAP_OPS ||
-    (_is_scalar_op((e::OpExpr).op) && any(_mentions_shape_op, (e::OpExpr).args)))
+_mentions_shape_op(e::ASTExpr) = e isa OpExpr && (
+    (e::OpExpr).op in _SHAPE_REMAP_OPS ||
+        (_is_scalar_op((e::OpExpr).op) && any(_mentions_shape_op, (e::OpExpr).args))
+)
 
 # The subscripts one operand of an elementwise combination is gathered at, under
 # the §4.3.4 positional rule: an operand of lower rank reads the leading
 # subscripts, and an operand axis of extent 1 against a longer result axis reads
 # its one element. `nothing` when the operand needs no adjustment.
-function _broadcast_operand_subs(a::ASTExpr, subs::Vector{ASTExpr}, result_ext::Vector{Int},
-                                 array_var_info, const_arrays,
-                                 pgather::AbstractDict=_EMPTY_PGATHER)
+function _broadcast_operand_subs(
+        a::ASTExpr, subs::Vector{ASTExpr}, result_ext::Vector{Int},
+        array_var_info, const_arrays,
+        pgather::AbstractDict = _EMPTY_PGATHER
+    )
     s = _remap_operand_shape(a, array_var_info, const_arrays, pgather)
     s === nothing && return nothing
     lo, ext = s
@@ -931,23 +1104,29 @@ end
 # a const-array subscript lowers to a runtime `_NK_CONST_GATHER` (existing Phase-C
 # machinery); a loop var reaching a STATE index or a ragged bound throws
 # `E_TREEWALK_UNBOUND_LOOP_VAR` here — caught, and we unroll (correctness first).
-function _try_build_contraction_loop(body::ASTExpr, contract_names::Vector{String},
+function _try_build_contraction_loop(
+        body::ASTExpr, contract_names::Vector{String},
         ranges::AbstractVector, oplus::String, zerobar::Float64,
         array_var_info, var_map, const_arrays, pgather::AbstractDict;
         # The enclosing symbolic resolve's own bound names, which the body may
         # read (a reduction nested in the whole-array nest's term).
-        outer_syms::Set{String}=_EMPTY_BOUND_SYMS)
+        outer_syms::Set{String} = _EMPTY_BOUND_SYMS
+    )
     names = String[_fresh_loopvar_name() for _ in contract_names]
-    refs  = Base.RefValue{Int}[Ref(0) for _ in contract_names]
-    subs  = Dict{String,ASTExpr}(contract_names[d] => VarExpr(names[d])
-                                 for d in eachindex(contract_names))
+    refs = Base.RefValue{Int}[Ref(0) for _ in contract_names]
+    subs = Dict{String, ASTExpr}(
+        contract_names[d] => VarExpr(names[d])
+            for d in eachindex(contract_names)
+    )
     subbed = _sub_preserving(body, subs)
-    bsyms  = union(Set{String}(names), outer_syms)
+    bsyms = union(Set{String}(names), outer_syms)
     resolved = try
         # memo=nothing: the symbolic (bound-sym) resolution must never share the
         # concrete RHS-build memo (same invariant the compile-once path relies on).
-        _resolve_indices(subbed, array_var_info, var_map, const_arrays,
-                         pgather, nothing, bsyms)
+        _resolve_indices(
+            subbed, array_var_info, var_map, const_arrays,
+            pgather, nothing, bsyms
+        )
     catch err
         _is_resource_error(err) && rethrow()
         return nothing
@@ -964,9 +1143,13 @@ function _try_build_contraction_loop(body::ASTExpr, contract_names::Vector{Strin
     # matches the unrolled `_combine_with_reducer` accumulation.
     for d in eachindex(contract_names)
         r = ranges[d]
-        node = OpExpr("__contract_loop", ASTExpr[node];
-                      value=_ContractLoopBuild(refs[d], first(r), last(r), step(r),
-                                               oplus_sym, zerobar))
+        node = OpExpr(
+            "__contract_loop", ASTExpr[node];
+            value = _ContractLoopBuild(
+                refs[d], first(r), last(r), step(r),
+                oplus_sym, zerobar
+            )
+        )
     end
     return node
 end
@@ -1016,12 +1199,16 @@ end
 # Returns `(out_refs, marker)` in `out_names` order, or `nothing` when the body
 # does not resolve symbolically — the same "correctness first, fall back to the
 # existing cascade" contract `_try_build_contraction_loop` has.
-function _try_build_array_contraction(body::ASTExpr, out_names::Vector{String},
+function _try_build_array_contraction(
+        body::ASTExpr, out_names::Vector{String},
         contract_names::Vector{String}, contract_ranges::AbstractVector,
         oplus::String, zerobar::Float64,
-        array_var_info, var_map, const_arrays, pgather::AbstractDict)
-    got = _resolve_array_contraction_term(body, out_names, contract_names,
-                                          array_var_info, var_map, const_arrays, pgather)
+        array_var_info, var_map, const_arrays, pgather::AbstractDict
+    )
+    got = _resolve_array_contraction_term(
+        body, out_names, contract_names,
+        array_var_info, var_map, const_arrays, pgather
+    )
     got === nothing && return nothing
     out_refs, contract_refs, resolved = got
     oplus_sym = Symbol(oplus)
@@ -1030,9 +1217,13 @@ function _try_build_array_contraction(body::ASTExpr, out_names::Vector{String},
     # tier's nesting — so this tier's fold order IS that tier's fold order.
     for d in eachindex(contract_names)
         r = contract_ranges[d]
-        node = OpExpr("__contract_loop", ASTExpr[node];
-                      value=_ContractLoopBuild(contract_refs[d], first(r), last(r),
-                                               step(r), oplus_sym, zerobar))
+        node = OpExpr(
+            "__contract_loop", ASTExpr[node];
+            value = _ContractLoopBuild(
+                contract_refs[d], first(r), last(r),
+                step(r), oplus_sym, zerobar
+            )
+        )
     end
     return (out_refs, node)
 end
@@ -1043,26 +1234,32 @@ end
 # resolve that way. `_try_build_array_contraction` wraps it in the static
 # contraction loops; the table-driven form of the nest (array_contraction.jl)
 # drives the contracted refs from the admitted tuples instead.
-function _resolve_array_contraction_term(body::ASTExpr, out_names::Vector{String},
+function _resolve_array_contraction_term(
+        body::ASTExpr, out_names::Vector{String},
         contract_names::Vector{String},
         array_var_info, var_map, const_arrays, pgather::AbstractDict;
         # The whole-array nest's own resolve, whose emitter writes a nested
         # scalar reduction as a loop (`_NEST_SCALAR_LOOPS`).
-        nest_scalar_loops::Bool=false)
+        nest_scalar_loops::Bool = false
+    )
     nout = length(out_names)
     all_names = vcat(out_names, contract_names)
     fresh = String[_fresh_loopvar_name() for _ in all_names]
-    refs  = Base.RefValue{Int}[Ref(0) for _ in all_names]
-    subs  = Dict{String,ASTExpr}(all_names[d] => VarExpr(fresh[d])
-                                 for d in eachindex(all_names))
+    refs = Base.RefValue{Int}[Ref(0) for _ in all_names]
+    subs = Dict{String, ASTExpr}(
+        all_names[d] => VarExpr(fresh[d])
+            for d in eachindex(all_names)
+    )
     subbed = _sub_preserving(body, subs)
-    bsyms  = Set{String}(fresh)
+    bsyms = Set{String}(fresh)
     nest_scalar_loops && push!(bsyms, _NEST_SCALAR_LOOPS)
     resolved = try
         # memo=nothing, as in `_try_build_contraction_loop`: a symbolic resolve
         # must never share the concrete RHS-build memo.
-        _resolve_indices(subbed, array_var_info, var_map, const_arrays,
-                         pgather, nothing, bsyms)
+        _resolve_indices(
+            subbed, array_var_info, var_map, const_arrays,
+            pgather, nothing, bsyms
+        )
     catch err
         # errors.jl: the three resource errors are never a tier decline. The
         # per-cell path this returns to resolves the SAME body once per output
@@ -1075,21 +1272,27 @@ function _resolve_array_contraction_term(body::ASTExpr, out_names::Vector{String
     for d in eachindex(fresh)
         _LOOPVAR_REFS[Symbol(fresh[d])] = refs[d]
     end
-    return (refs[1:nout], refs[nout+1:end], resolved)
+    return (refs[1:nout], refs[(nout + 1):end], resolved)
 end
 
 # Expand a scalar faq (empty output_idx) to a plain scalar ASTExpr by
 # unrolling all contracted indices at build time and combining them with the
 # declared reducer. This is the build-time equivalent of an einsum over a
 # general expression body — compile once, evaluate cheaply at every RHS call.
-function _resolve_scalar_faq(faq_expr::OpExpr, array_var_info, var_map, const_arrays,
-                                 pgather::AbstractDict=_EMPTY_PGATHER,
-                                 memo::_MaybeMemo=nothing,
-                                 bound_syms::Set{String}=_EMPTY_BOUND_SYMS)
+function _resolve_scalar_faq(
+        faq_expr::OpExpr, array_var_info, var_map, const_arrays,
+        pgather::AbstractDict = _EMPTY_PGATHER,
+        memo::_MaybeMemo = nothing,
+        bound_syms::Set{String} = _EMPTY_BOUND_SYMS
+    )
     body = faq_expr.expr_body
     body === nothing &&
-        throw(TreeWalkError("E_TREEWALK_ARRAYOP_NO_BODY",
-                            "faq requires an expr body"))
+        throw(
+        TreeWalkError(
+            "E_TREEWALK_ARRAYOP_NO_BODY",
+            "faq requires an expr body"
+        )
+    )
     ranges_dict = _ranges_dict(faq_expr)
     oplus, zerobar = _aggregate_oplus_identity(faq_expr.semiring, faq_expr.reduce)
     # Every range key contracts (a scalar aggregate has no output indices).
@@ -1101,8 +1304,10 @@ function _resolve_scalar_faq(faq_expr::OpExpr, array_var_info, var_map, const_ar
     # so the bound is evaluable now via `_eval_const_int` against `const_arrays`
     # with the empty idx_env (any surviving symbol would be unbound — an error,
     # as before). Constant bounds pass through unchanged (backward compatible).
-    contract_iters = [_expand_contract_range(ranges_dict[n], _EMPTY_IDX_ENV, const_arrays)
-                      for n in contract_names]
+    contract_iters = [
+        _expand_contract_range(ranges_dict[n], _EMPTY_IDX_ENV, const_arrays)
+            for n in contract_names
+    ]
     # M2 (§5.3 / §7.2): build-time join gates + runtime filter guard. Every join
     # key of a scalar aggregate is a contracted symbol, so the binding is the
     # contraction tuple (no output-index seed). With neither join nor filter,
@@ -1110,8 +1315,10 @@ function _resolve_scalar_faq(faq_expr::OpExpr, array_var_info, var_map, const_ar
     gates = faq_expr.join_gates
     filt0 = faq_expr.filter
     if isempty(contract_names) && gates === nothing && filt0 === nothing
-        return _resolve_indices(body, array_var_info, var_map, const_arrays,
-                                pgather, memo, bound_syms)
+        return _resolve_indices(
+            body, array_var_info, var_map, const_arrays,
+            pgather, memo, bound_syms
+        )
     end
     # ── Runtime contraction loop opt-in (ess-runtime-contraction) ──────────────
     # Emit a compile-once loop for a SIMPLE UNIFORM reduction; everything else keeps
@@ -1127,14 +1334,16 @@ function _resolve_scalar_faq(faq_expr::OpExpr, array_var_info, var_map, const_ar
     #   * the body resolves with the index symbolic (`_try_build_contraction_loop`
     #     returns `nothing` otherwise → unroll).
     if _contraction_loop_enabled() && _ARRAY_CELL_DEPTH[] == 0 &&
-       isempty(bound_syms) && gates === nothing && filt0 === nothing &&
-       (oplus == "+" || oplus == "*" || oplus == "max" || oplus == "min") &&
-       all(n -> _is_const_int_range(ranges_dict[n]), contract_names)
+            isempty(bound_syms) && gates === nothing && filt0 === nothing &&
+            (oplus == "+" || oplus == "*" || oplus == "max" || oplus == "min") &&
+            all(n -> _is_const_int_range(ranges_dict[n]), contract_names)
         ranges = [_expand_int_range(ranges_dict[n]) for n in contract_names]
         total = isempty(ranges) ? 0 : prod(length(r) for r in ranges)
         if total >= _contraction_loop_min() && all(!isempty, ranges)
-            looped = _try_build_contraction_loop(body, contract_names, ranges,
-                        oplus, zerobar, array_var_info, var_map, const_arrays, pgather)
+            looped = _try_build_contraction_loop(
+                body, contract_names, ranges,
+                oplus, zerobar, array_var_info, var_map, const_arrays, pgather
+            )
             looped === nothing || return looped
         end
     end
@@ -1146,22 +1355,30 @@ function _resolve_scalar_faq(faq_expr::OpExpr, array_var_info, var_map, const_ar
     # contracted indices keep unrolling, since nested loops would group the sum
     # by the outer index.
     if _NEST_SCALAR_LOOPS in bound_syms && gates === nothing &&
-       filt0 === nothing && length(contract_names) == 1 &&
-       (oplus == "+" || oplus == "*" || oplus == "max" || oplus == "min") &&
-       _is_const_int_range(ranges_dict[contract_names[1]])
+            filt0 === nothing && length(contract_names) == 1 &&
+            (oplus == "+" || oplus == "*" || oplus == "max" || oplus == "min") &&
+            _is_const_int_range(ranges_dict[contract_names[1]])
         r = _expand_int_range(ranges_dict[contract_names[1]])
         if length(r) >= _contraction_loop_min()
-            looped = _try_build_contraction_loop(body, contract_names, [r], oplus,
-                        zerobar, array_var_info, var_map, const_arrays,
-                        pgather; outer_syms = bound_syms)
+            looped = _try_build_contraction_loop(
+                body, contract_names, [r], oplus,
+                zerobar, array_var_info, var_map, const_arrays,
+                pgather; outer_syms = bound_syms
+            )
             looped === nothing || return looped
         end
     end
     terms = ASTExpr[]
-    _foreach_aggregate_term(body, contract_names, contract_iters,
-                            gates, filt0, zerobar) do term
-        push!(terms, _resolve_indices(term, array_var_info, var_map, const_arrays,
-                                      pgather, memo, bound_syms))
+    _foreach_aggregate_term(
+        body, contract_names, contract_iters,
+        gates, filt0, zerobar
+    ) do term
+        push!(
+            terms, _resolve_indices(
+                term, array_var_info, var_map, const_arrays,
+                pgather, memo, bound_syms
+            )
+        )
     end
     return _combine_with_reducer(oplus, zerobar, terms; scalar = true)
 end
@@ -1176,14 +1393,14 @@ end
 #   also used for indirect gather: u[index(conn, c, k)] resolves conn[c,k] as an integer index.
 # Read-only sentinel — see the `_EMPTY_*` invariant block next to
 # `_EMPTY_DERIVED_EXTENTS`.
-const _EMPTY_CONST_ARRAYS = Dict{String,AbstractArray{Float64}}()
+const _EMPTY_CONST_ARRAYS = Dict{String, AbstractArray{Float64}}()
 
 # Empty scalar-parameter scope for a build-time cellwise evaluation with no
 # parameters bound (the common case). Shared so `_eval_cellwise` /
 # `evaluate_cellwise` avoid allocating a fresh dict per call on the no-param
 # path. Read-only sentinel — see the `_EMPTY_*` invariant block next to
 # `_EMPTY_DERIVED_EXTENTS`.
-const _EMPTY_PARAMS = Dict{String,Float64}()
+const _EMPTY_PARAMS = Dict{String, Float64}()
 
 # A live forcing buffer bound by reference into the evaluator (ess-14f.3, JL-J0).
 # Unlike `const_arrays` (build-time-FROZEN: `index(arr,…)` const-folds to a
@@ -1203,7 +1420,7 @@ struct _PGatherArray
 end
 # Read-only sentinel — see the `_EMPTY_*` invariant block next to
 # `_EMPTY_DERIVED_EXTENTS`.
-const _EMPTY_PGATHER = Dict{String,_PGatherArray}()
+const _EMPTY_PGATHER = Dict{String, _PGatherArray}()
 
 # The set of OUTPUT-INDEX symbol names kept SYMBOLIC through `_resolve_indices`
 # (wall2 Phase C). It is EMPTY on every path except the compile-once
@@ -1233,8 +1450,10 @@ _refs_bound_sym(::ASTExpr, ::Set{String}) = false
 # subscript holds is an array in an `index` head position or a binder of a
 # producer inside it. `local` holds names that do not count: a producer's own
 # binders, and for a caller that keeps bound symbols on its own path, those.
-function _subscript_is_runtime(e::ASTExpr, local_names::Set{String},
-                               const_arrays::Union{Nothing,AbstractDict}=nothing)::Bool
+function _subscript_is_runtime(
+        e::ASTExpr, local_names::Set{String},
+        const_arrays::Union{Nothing, AbstractDict} = nothing
+    )::Bool
     e isa VarExpr && return !((e::VarExpr).name in local_names)
     e isa OpExpr || return false
     o = e::OpExpr
@@ -1285,9 +1504,11 @@ _subscript_is_runtime(e::ASTExpr, const_arrays::AbstractDict) =
 # then raised at build only when every guard is decided at build and taken;
 # otherwise it becomes a run-time gather that raises the same error if it is
 # ever evaluated.
-const _ResolveGuards = Vector{Tuple{ASTExpr,Bool}}
-_resolve_guards() = get!(() -> _ResolveGuards(), task_local_storage(),
-                         :esm_resolve_guards)::_ResolveGuards
+const _ResolveGuards = Vector{Tuple{ASTExpr, Bool}}
+_resolve_guards() = get!(
+    () -> _ResolveGuards(), task_local_storage(),
+    :esm_resolve_guards
+)::_ResolveGuards
 
 # Whether the read the current guards protect is certainly evaluated: every
 # guard reads only literals (so its value is the build's to know) and has the
@@ -1297,8 +1518,10 @@ function _guarded_read_taken(guards::_ResolveGuards)
     for (c, want) in guards
         isempty(_referenced_var_names(c)) || return false
         v = try
-            _eval_node(_compile(c, Dict{String,Int}(), Set{Symbol}(), Dict{String,Any}()),
-                       Float64[], NamedTuple(), 0.0)
+            _eval_node(
+                _compile(c, Dict{String, Int}(), Set{Symbol}(), Dict{String, Any}()),
+                Float64[], NamedTuple(), 0.0
+            )
         catch err
             err isa EarthSciASTError || rethrow()
             return false
@@ -1312,21 +1535,27 @@ end
 # the run-time gather, which resolves each subscript under the array's
 # boundary policy when — and only if — it is evaluated.
 _deferred_const_gather(vals::AbstractArray, name::String, subs::Vector{Int}) =
-    OpExpr("index", ASTExpr[IntExpr(Int64(i)) for i in subs];
-           value=_ConstGatherRef(vals, name))
+    OpExpr(
+    "index", ASTExpr[IntExpr(Int64(i)) for i in subs];
+    value = _ConstGatherRef(vals, name)
+)
 
 # Resolve `ifelse` / `and` / `or` with each lazily evaluated operand under its
 # guard (see above). Every other operand is resolved exactly as the generic
 # recursion does, and an unchanged node is returned as is.
-function _resolve_guarded_op(expr::OpExpr, array_var_info, var_map, const_arrays,
-                             pgather, memo, bound_syms)
+function _resolve_guarded_op(
+        expr::OpExpr, array_var_info, var_map, const_arrays,
+        pgather, memo, bound_syms
+    )
     args = expr.args
     guards = _resolve_guards()
     depth = length(guards)
     new_args = Vector{ASTExpr}(undef, length(args))
     res(a) = (a isa OpExpr || a isa VarExpr) ?
-        _resolve_indices(a, array_var_info, var_map, const_arrays, pgather, memo,
-                         bound_syms) : a
+        _resolve_indices(
+            a, array_var_info, var_map, const_arrays, pgather, memo,
+            bound_syms
+        ) : a
     try
         new_args[1] = res(args[1])
         if expr.op == "ifelse"
@@ -1336,7 +1565,7 @@ function _resolve_guarded_op(expr::OpExpr, array_var_info, var_map, const_arrays
             new_args[3] = res(args[3])
         else
             for j in 2:length(args)
-                push!(guards, (new_args[j-1], expr.op == "and"))
+                push!(guards, (new_args[j - 1], expr.op == "and"))
                 new_args[j] = res(args[j])
             end
         end
@@ -1344,7 +1573,7 @@ function _resolve_guarded_op(expr::OpExpr, array_var_info, var_map, const_arrays
         resize!(guards, depth)
     end
     all(i -> new_args[i] === args[i], eachindex(args)) && return expr
-    return reconstruct(expr; args=new_args)
+    return reconstruct(expr; args = new_args)
 end
 
 # Gather from a build-time-constant Float64 array `vals` (registry `name`, used
@@ -1358,38 +1587,50 @@ end
 # read runtime-varying and lowers to a `_ConstGatherRef` (→ `_NK_CONST_GATHER`),
 # with the constant dims still folded to `IntExpr`s under the same
 # `_resolve_const_index` boundary policy.
-function _resolve_const_array_gather(vals::AbstractArray, name::String,
+function _resolve_const_array_gather(
+        vals::AbstractArray, name::String,
         idx_args_expr::Vector{ASTExpr},
-        array_var_info::Dict{String,Tuple{Vector{Int},Vector{Int}}},
-        var_map::AbstractDict{String,Int}, const_arrays::AbstractDict,
-        pgather::AbstractDict, memo::_MaybeMemo, bound_syms::Set{String})
+        array_var_info::Dict{String, Tuple{Vector{Int}, Vector{Int}}},
+        var_map::AbstractDict{String, Int}, const_arrays::AbstractDict,
+        pgather::AbstractDict, memo::_MaybeMemo, bound_syms::Set{String}
+    )
     length(idx_args_expr) == ndims(vals) ||
-        throw(TreeWalkError("E_TREEWALK_CONSTARRAY_NDIM",
-              "const array '$(name)' is $(ndims(vals))D " *
-              "but got $(length(idx_args_expr)) indices"))
+        throw(
+        TreeWalkError(
+            "E_TREEWALK_CONSTARRAY_NDIM",
+            "const array '$(name)' is $(ndims(vals))D " *
+                "but got $(length(idx_args_expr)) indices"
+        )
+    )
     if any(a -> _subscript_is_runtime(a, const_arrays), idx_args_expr)
         sub_nodes = Vector{ASTExpr}(undef, length(idx_args_expr))
         for d in 1:ndims(vals)
             a = idx_args_expr[d]
             if _subscript_is_runtime(a, const_arrays)
-                sub_nodes[d] = _resolve_indices(a, array_var_info, var_map,
-                                                const_arrays, pgather, memo, bound_syms)
+                sub_nodes[d] = _resolve_indices(
+                    a, array_var_info, var_map,
+                    const_arrays, pgather, memo, bound_syms
+                )
             else
                 ci = _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
                 ci = _resolve_const_index(vals, name, d, ci, size(vals, d))
                 sub_nodes[d] = IntExpr(Int64(ci))
             end
         end
-        return OpExpr("index", sub_nodes; value=_ConstGatherRef(vals, name))
+        return OpExpr("index", sub_nodes; value = _ConstGatherRef(vals, name))
     end
     # Fully-constant subscripts: inline the value as a NumExpr literal.
-    int_indices = [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
-                   for a in idx_args_expr]
+    int_indices = [
+        _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
+            for a in idx_args_expr
+    ]
     guards = _resolve_guards()
     if !isempty(guards) &&
-       any(d -> !(1 <= int_indices[d] <= size(vals, d)) &&
-                _const_dim_boundary(vals, d) === :error, 1:ndims(vals)) &&
-       !_guarded_read_taken(guards)
+            any(
+            d -> !(1 <= int_indices[d] <= size(vals, d)) &&
+                _const_dim_boundary(vals, d) === :error, 1:ndims(vals)
+        ) &&
+            !_guarded_read_taken(guards)
         memo === nothing || (memo.deferrals[] += 1)
         return _deferred_const_gather(vals, name, int_indices)
     end
@@ -1444,19 +1685,25 @@ _refs_loopvar(::ASTExpr) = false
 # `index(conn,i,k)` → a nested `_NK_CONST_GATHER`) and become the node's children,
 # evaluated + bounds-checked at eval time. A missing state cell (sparse layout)
 # throws, which the loop-build try/catch converts to a fall-back to the exact unroll.
-function _resolve_state_gather(vname::String, lo::Vector{Int}, hi::Vector{Int},
-        idx_args::Vector{ASTExpr}, array_var_info, var_map::AbstractDict{String,Int},
+function _resolve_state_gather(
+        vname::String, lo::Vector{Int}, hi::Vector{Int},
+        idx_args::Vector{ASTExpr}, array_var_info, var_map::AbstractDict{String, Int},
         const_arrays::AbstractDict, pgather::AbstractDict, memo::_MaybeMemo,
-        bound_syms::Set{String})
+        bound_syms::Set{String}
+    )
     nd = length(lo)
-    sub_nodes = ASTExpr[_resolve_indices(a, array_var_info, var_map, const_arrays,
-                                         pgather, memo, bound_syms) for a in idx_args]
+    sub_nodes = ASTExpr[
+        _resolve_indices(
+            a, array_var_info, var_map, const_arrays,
+            pgather, memo, bound_syms
+        ) for a in idx_args
+    ]
     slot_flat, strides = get!(_STATE_SLOT_TABLES, vname) do
         dims = Int[hi[d] - lo[d] + 1 for d in 1:nd]
         strd = Vector{Int}(undef, nd)
         strd[1] = 1
         for d in 2:nd
-            strd[d] = strd[d-1] * dims[d-1]
+            strd[d] = strd[d - 1] * dims[d - 1]
         end
         total = prod(dims)
         sf = Vector{Int}(undef, total)
@@ -1466,12 +1713,12 @@ function _resolve_state_gather(vname::String, lo::Vector{Int}, hi::Vector{Int},
         # the integers it holds.
         blk = _vm_block(var_map, vname)
         if blk !== nothing && blk.lo == lo && blk.hi == hi && blk.strides == strd
-            for lin in 0:total-1
-                sf[lin+1] = blk.base + lin
+            for lin in 0:(total - 1)
+                sf[lin + 1] = blk.base + lin
             end
             return (sf, strd)
         end
-        for lin in 0:total-1
+        for lin in 0:(total - 1)
             rem = lin
             for d in 1:nd
                 cur[d] = lo[d] + (rem % dims[d]); rem ÷= dims[d]
@@ -1483,12 +1730,14 @@ function _resolve_state_gather(vname::String, lo::Vector{Int}, hi::Vector{Int},
                     throw(TreeWalkError("E_TREEWALK_MISSING_CELL", cname))
                 slot = var_map[cname]
             end
-            sf[lin+1] = slot
+            sf[lin + 1] = slot
         end
         (sf, strd)
     end
-    return OpExpr("__state_gather", sub_nodes;
-                  value=_StateGatherRef(slot_flat, strides, copy(lo), copy(hi)))
+    return OpExpr(
+        "__state_gather", sub_nodes;
+        value = _StateGatherRef(slot_flat, strides, copy(lo), copy(hi))
+    )
 end
 
 # Resolve each expression in `args`, returning `(resolved, changed)`. When no
@@ -1496,13 +1745,15 @@ end
 # allocation) and `changed` is false, letting the caller keep its node verbatim;
 # only the first differing element triggers a single copy. Shared by the `index`
 # fallback and the generic-recurse arm of `_resolve_indices`.
-function _resolve_arg_vec(args::Vector{ASTExpr},
-                          array_var_info::Dict{String,Tuple{Vector{Int},Vector{Int}}},
-                          var_map::AbstractDict{String,Int},
-                          const_arrays::AbstractDict,
-                          pgather::AbstractDict,
-                          memo::_MaybeMemo=nothing,
-                          bound_syms::Set{String}=_EMPTY_BOUND_SYMS)
+function _resolve_arg_vec(
+        args::Vector{ASTExpr},
+        array_var_info::Dict{String, Tuple{Vector{Int}, Vector{Int}}},
+        var_map::AbstractDict{String, Int},
+        const_arrays::AbstractDict,
+        pgather::AbstractDict,
+        memo::_MaybeMemo = nothing,
+        bound_syms::Set{String} = _EMPTY_BOUND_SYMS
+    )
     changed = false
     new_args = args
     @inbounds for i in eachindex(args)
@@ -1512,7 +1763,7 @@ function _resolve_arg_vec(args::Vector{ASTExpr},
         # `IntExpr` resolve to themselves, so short-circuit them; `VarExpr` may
         # const-fold (scalar loader field) so it keeps its call; `OpExpr` recurses —
         # both now dispatch statically.
-        r = a isa OpExpr  ? _resolve_indices(a, array_var_info, var_map, const_arrays, pgather, memo, bound_syms) :
+        r = a isa OpExpr ? _resolve_indices(a, array_var_info, var_map, const_arrays, pgather, memo, bound_syms) :
             a isa VarExpr ? _resolve_indices(a, array_var_info, var_map, const_arrays, pgather, memo, bound_syms) :
             a                                            # NumExpr / IntExpr: verbatim
         if r !== a
@@ -1526,31 +1777,37 @@ function _resolve_arg_vec(args::Vector{ASTExpr},
     return new_args, changed
 end
 
-function _resolve_indices(expr::NumExpr,
-                          array_var_info::Dict{String,Tuple{Vector{Int},Vector{Int}}},
-                          var_map::AbstractDict{String,Int},
-                          const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
-                          pgather::AbstractDict=_EMPTY_PGATHER,
-                          memo::_MaybeMemo=nothing,
-                          bound_syms::Set{String}=_EMPTY_BOUND_SYMS)
+function _resolve_indices(
+        expr::NumExpr,
+        array_var_info::Dict{String, Tuple{Vector{Int}, Vector{Int}}},
+        var_map::AbstractDict{String, Int},
+        const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS,
+        pgather::AbstractDict = _EMPTY_PGATHER,
+        memo::_MaybeMemo = nothing,
+        bound_syms::Set{String} = _EMPTY_BOUND_SYMS
+    )
     return expr
 end
-function _resolve_indices(expr::IntExpr,
-                          array_var_info::Dict{String,Tuple{Vector{Int},Vector{Int}}},
-                          var_map::AbstractDict{String,Int},
-                          const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
-                          pgather::AbstractDict=_EMPTY_PGATHER,
-                          memo::_MaybeMemo=nothing,
-                          bound_syms::Set{String}=_EMPTY_BOUND_SYMS)
+function _resolve_indices(
+        expr::IntExpr,
+        array_var_info::Dict{String, Tuple{Vector{Int}, Vector{Int}}},
+        var_map::AbstractDict{String, Int},
+        const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS,
+        pgather::AbstractDict = _EMPTY_PGATHER,
+        memo::_MaybeMemo = nothing,
+        bound_syms::Set{String} = _EMPTY_BOUND_SYMS
+    )
     return expr
 end
-function _resolve_indices(expr::VarExpr,
-                          array_var_info::Dict{String,Tuple{Vector{Int},Vector{Int}}},
-                          var_map::AbstractDict{String,Int},
-                          const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
-                          pgather::AbstractDict=_EMPTY_PGATHER,
-                          memo::_MaybeMemo=nothing,
-                          bound_syms::Set{String}=_EMPTY_BOUND_SYMS)
+function _resolve_indices(
+        expr::VarExpr,
+        array_var_info::Dict{String, Tuple{Vector{Int}, Vector{Int}}},
+        var_map::AbstractDict{String, Int},
+        const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS,
+        pgather::AbstractDict = _EMPTY_PGATHER,
+        memo::_MaybeMemo = nothing,
+        bound_syms::Set{String} = _EMPTY_BOUND_SYMS
+    )
     # Bare (un-indexed) reference to a const-array-backed SCALAR field
     # (RFC pure-io-data-loaders §4.3): a pure-I/O data-loader subsystem lowers
     # each of its variables to a const-array-backed observed keyed
@@ -1571,13 +1828,15 @@ function _resolve_indices(expr::VarExpr,
     end
     return expr
 end
-function _resolve_indices(expr::OpExpr,
-                          array_var_info::Dict{String,Tuple{Vector{Int},Vector{Int}}},
-                          var_map::AbstractDict{String,Int},
-                          const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
-                          pgather::AbstractDict=_EMPTY_PGATHER,
-                          memo::_MaybeMemo=nothing,
-                          bound_syms::Set{String}=_EMPTY_BOUND_SYMS)
+function _resolve_indices(
+        expr::OpExpr,
+        array_var_info::Dict{String, Tuple{Vector{Int}, Vector{Int}}},
+        var_map::AbstractDict{String, Int},
+        const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS,
+        pgather::AbstractDict = _EMPTY_PGATHER,
+        memo::_MaybeMemo = nothing,
+        bound_syms::Set{String} = _EMPTY_BOUND_SYMS
+    )
     # The memo is keyed on node identity and is a pure function of the node ONLY
     # for a fixed `bound_syms`. It is threaded exclusively on the empty-`bound_syms`
     # RHS-build path (the compile-once fast path passes `memo=nothing`), so the two
@@ -1596,32 +1855,46 @@ function _resolve_indices(expr::OpExpr,
     (memo.deferrals[] == n0 || isempty(_resolve_guards())) && (m[expr] = r)
     return r
 end
-function _resolve_indices_op(expr::OpExpr,
-                          array_var_info::Dict{String,Tuple{Vector{Int},Vector{Int}}},
-                          var_map::AbstractDict{String,Int},
-                          const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
-                          pgather::AbstractDict=_EMPTY_PGATHER,
-                          memo::_MaybeMemo=nothing,
-                          bound_syms::Set{String}=_EMPTY_BOUND_SYMS)
+function _resolve_indices_op(
+        expr::OpExpr,
+        array_var_info::Dict{String, Tuple{Vector{Int}, Vector{Int}}},
+        var_map::AbstractDict{String, Int},
+        const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS,
+        pgather::AbstractDict = _EMPTY_PGATHER,
+        memo::_MaybeMemo = nothing,
+        bound_syms::Set{String} = _EMPTY_BOUND_SYMS
+    )
     if expr.op == "polygon_intersection_area"
         # FUSED clip+area scalar leaf (esm-spec §8.6.1). Both operands are
         # build-time-known const polygon rings (registered in `const_arrays`), so the
         # whole leaf const-folds to the scalar overlap area: clip under `manifold`,
         # then shoelace / spherical-excess area over the CLOSED ring. Reuses the
         # existing `intersect_polygon` + `polygon_area` FAQ kernels verbatim.
-        length(expr.args) == 2 || throw(TreeWalkError("E_TREEWALK_GEOMETRY_ARITY",
-            "polygon_intersection_area is strictly binary; got $(length(expr.args)) operand(s)"))
-        expr.manifold === nothing && throw(TreeWalkError("E_TREEWALK_GEOMETRY_NO_MANIFOLD",
-            "polygon_intersection_area requires a `manifold` (planar / spherical / geodesic)"))
+        length(expr.args) == 2 || throw(
+            TreeWalkError(
+                "E_TREEWALK_GEOMETRY_ARITY",
+                "polygon_intersection_area is strictly binary; got $(length(expr.args)) operand(s)"
+            )
+        )
+        expr.manifold === nothing && throw(
+            TreeWalkError(
+                "E_TREEWALK_GEOMETRY_NO_MANIFOLD",
+                "polygon_intersection_area requires a `manifold` (planar / spherical / geodesic)"
+            )
+        )
         a = _pia_operand_ring(expr.args[1], const_arrays)
         b = _pia_operand_ring(expr.args[2], const_arrays)
         return NumExpr(_polygon_intersection_area(a, b, expr.manifold))
     end
-    if (expr.op == "ifelse" && length(expr.args) == 3 ||
-        (expr.op == "and" || expr.op == "or") && length(expr.args) >= 2) &&
-       expr.expr_body === nothing && expr.values === nothing
-        return _resolve_guarded_op(expr, array_var_info, var_map, const_arrays,
-                                   pgather, memo, bound_syms)
+    if (
+            expr.op == "ifelse" && length(expr.args) == 3 ||
+                (expr.op == "and" || expr.op == "or") && length(expr.args) >= 2
+        ) &&
+            expr.expr_body === nothing && expr.values === nothing
+        return _resolve_guarded_op(
+            expr, array_var_info, var_map, const_arrays,
+            pgather, memo, bound_syms
+        )
     end
     if expr.op == "index"
         isempty(expr.args) &&
@@ -1632,22 +1905,29 @@ function _resolve_indices_op(expr::OpExpr,
         # unrolling contracted indices (same strategy as the `_is_faq_D_lhs`
         # branch of `_build_evaluator_impl`'s derivative loop).
         if first_arg isa OpExpr && _is_faq_op(first_arg.op)
-            return _resolve_index_of_faq(first_arg::OpExpr, expr.args[2:end],
-                                             array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
+            return _resolve_index_of_faq(
+                first_arg::OpExpr, expr.args[2:end],
+                array_var_info, var_map, const_arrays, pgather, memo, bound_syms
+            )
         end
         # Expression-position makearray: index(makearray(...), k1, k2, ...)
         # Select the value whose region covers (k1,...); later regions win.
         if first_arg isa OpExpr && first_arg.op == "makearray"
-            return _resolve_index_of_makearray(first_arg::OpExpr, expr.args[2:end],
-                                               array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
+            return _resolve_index_of_makearray(
+                first_arg::OpExpr, expr.args[2:end],
+                array_var_info, var_map, const_arrays, pgather, memo, bound_syms
+            )
         end
         # Expression-position shape op: index(reshape|transpose|concat(X), k…) is
         # the gather index(X, k′…) (see `_index_through_shape_op`).
         if first_arg isa OpExpr && (first_arg::OpExpr).op in _SHAPE_REMAP_OPS
             return _resolve_indices(
-                _index_through_shape_op(first_arg::OpExpr, expr.args[2:end],
-                                        array_var_info, const_arrays, pgather),
-                array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
+                _index_through_shape_op(
+                    first_arg::OpExpr, expr.args[2:end],
+                    array_var_info, const_arrays, pgather
+                ),
+                array_var_info, var_map, const_arrays, pgather, memo, bound_syms
+            )
         end
 
         # Expression-position ELEMENTWISE COMBINATION:
@@ -1682,9 +1962,11 @@ function _resolve_indices_op(expr::OpExpr,
             # SOURCE the branches below can gather: an array state slot, a live
             # forcing buffer, and a const array.
             _leaf_is_array(n) = haskey(array_var_info, n) || haskey(pgather, n) ||
-                                (haskey(const_arrays, n) &&
-                                 !_is_scalar_const_field(const_arrays[n]))
-            _amemo = IdDict{OpExpr,Bool}()
+                (
+                haskey(const_arrays, n) &&
+                    !_is_scalar_const_field(const_arrays[n])
+            )
+            _amemo = IdDict{OpExpr, Bool}()
             _arrayish(a) = _index_pushdown_arrayish(a, _leaf_is_array, _amemo)
             if any(_arrayish, fa.args)
                 # A combination with a shape-op operand is anonymous, and its
@@ -1696,12 +1978,20 @@ function _resolve_indices_op(expr::OpExpr,
                     _remap_operand_shape(fa, array_var_info, const_arrays, pgather) : nothing
                 rext = fshape === nothing ? nothing : fshape[2]
                 _subs_for(a) = (rext === nothing || length(rext) != length(subs)) ? subs :
-                    something(_broadcast_operand_subs(a, subs, rext, array_var_info,
-                                                      const_arrays, pgather), subs)
-                pushed = ASTExpr[_arrayish(a) ? OpExpr("index", ASTExpr[a, _subs_for(a)...]) : a
-                                 for a in fa.args]
-                return _resolve_indices(reconstruct(fa; args = pushed), array_var_info,
-                                        var_map, const_arrays, pgather, memo, bound_syms)
+                    something(
+                        _broadcast_operand_subs(
+                            a, subs, rext, array_var_info,
+                            const_arrays, pgather
+                        ), subs
+                    )
+                pushed = ASTExpr[
+                    _arrayish(a) ? OpExpr("index", ASTExpr[a, _subs_for(a)...]) : a
+                        for a in fa.args
+                ]
+                return _resolve_indices(
+                    reconstruct(fa; args = pushed), array_var_info,
+                    var_map, const_arrays, pgather, memo, bound_syms
+                )
             end
         end
         # Expression-position INLINE `const` array literal:
@@ -1716,18 +2006,24 @@ function _resolve_indices_op(expr::OpExpr,
         # `const` (a `Real` value) is not an array target — it falls through to the
         # generic recurse and const-folds in `_compile` as before.
         if first_arg isa OpExpr && (first_arg::OpExpr).op == "const" &&
-           (first_arg::OpExpr).value isa AbstractVector
+                (first_arg::OpExpr).value isa AbstractVector
             vals, cname = _intern_inline_const(first_arg::OpExpr, const_arrays)
-            return _resolve_const_array_gather(vals, cname, expr.args[2:end],
-                array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
+            return _resolve_const_array_gather(
+                vals, cname, expr.args[2:end],
+                array_var_info, var_map, const_arrays, pgather, memo, bound_syms
+            )
         end
         if first_arg isa VarExpr && haskey(array_var_info, first_arg.name)
             vname = first_arg.name
             lo, hi = array_var_info[vname]
             idx_args = expr.args[2:end]
             length(idx_args) == length(lo) ||
-                throw(TreeWalkError("E_TREEWALK_INDEX_NDIM",
-                      "$(vname) has $(length(lo))D but got $(length(idx_args)) index args"))
+                throw(
+                TreeWalkError(
+                    "E_TREEWALK_INDEX_NDIM",
+                    "$(vname) has $(length(lo))D but got $(length(idx_args)) index args"
+                )
+            )
             # Runtime state gather (ess-runtime-contraction): a subscript depends on
             # a contraction loop variable, so the slot is not a build-time constant.
             # Lower to `_NK_STATE_GATHER` (the state-source loop case). Fires ONLY on
@@ -1736,10 +2032,14 @@ function _resolve_indices_op(expr::OpExpr,
             # A subscript computed at run time from a parameter, a state or an
             # observed (bound symbols keep their own path) reads its slot the
             # same way.
-            if any(a -> _refs_loopvar(a) || _subscript_is_runtime(a, bound_syms, const_arrays),
-                   idx_args)
-                return _resolve_state_gather(vname, lo, hi, idx_args, array_var_info,
-                                             var_map, const_arrays, pgather, memo, bound_syms)
+            if any(
+                    a -> _refs_loopvar(a) || _subscript_is_runtime(a, bound_syms, const_arrays),
+                    idx_args
+                )
+                return _resolve_state_gather(
+                    vname, lo, hi, idx_args, array_var_info,
+                    var_map, const_arrays, pgather, memo, bound_syms
+                )
             end
             # Pass const_arrays so nested index expressions like u[conn[c,k]] can be
             # resolved: _eval_const_int will look up conn[c,k] as an integer. A
@@ -1748,11 +2048,15 @@ function _resolve_indices_op(expr::OpExpr,
             indices = try
                 [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays) for a in idx_args]
             catch err
-                (err isa TreeWalkError && err.code == "E_TREEWALK_CONSTARRAY_OOB" &&
-                 !isempty(_resolve_guards()) && !_guarded_read_taken(_resolve_guards())) ||
+                (
+                    err isa TreeWalkError && err.code == "E_TREEWALK_CONSTARRAY_OOB" &&
+                        !isempty(_resolve_guards()) && !_guarded_read_taken(_resolve_guards())
+                ) ||
                     rethrow()
-                return _resolve_state_gather(vname, lo, hi, idx_args, array_var_info,
-                                             var_map, const_arrays, pgather, memo, bound_syms)
+                return _resolve_state_gather(
+                    vname, lo, hi, idx_args, array_var_info,
+                    var_map, const_arrays, pgather, memo, bound_syms
+                )
             end
             for d in 1:length(indices)
                 if indices[d] < lo[d] || indices[d] > hi[d]
@@ -1781,34 +2085,48 @@ function _resolve_indices_op(expr::OpExpr,
             pg = pgather[first_arg.name]::_PGatherArray
             idx_args_expr = expr.args[2:end]
             length(idx_args_expr) == length(pg.dims) ||
-                throw(TreeWalkError("E_TREEWALK_PGATHER_NDIM",
-                      "forcing array '$(first_arg.name)' is $(length(pg.dims))D " *
-                      "but got $(length(idx_args_expr)) indices"))
-            int_indices = [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
-                           for a in idx_args_expr]
+                throw(
+                TreeWalkError(
+                    "E_TREEWALK_PGATHER_NDIM",
+                    "forcing array '$(first_arg.name)' is $(length(pg.dims))D " *
+                        "but got $(length(idx_args_expr)) indices"
+                )
+            )
+            int_indices = [
+                _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
+                    for a in idx_args_expr
+            ]
             for d in 1:length(pg.dims)
                 (1 <= int_indices[d] <= pg.dims[d]) ||
-                    throw(TreeWalkError("E_TREEWALK_PGATHER_OOB",
-                          "forcing array '$(first_arg.name)' index $(int_indices[d]) " *
-                          "out of range [1, $(pg.dims[d])] on dim $(d)"))
+                    throw(
+                    TreeWalkError(
+                        "E_TREEWALK_PGATHER_OOB",
+                        "forcing array '$(first_arg.name)' index $(int_indices[d]) " *
+                            "out of range [1, $(pg.dims[d])] on dim $(d)"
+                    )
+                )
             end
             lin = LinearIndices(Tuple(pg.dims))[int_indices...]
-            return OpExpr("index", ASTExpr[];
-                          value=_PGatherRef(pg.flat, lin, first_arg.name))
+            return OpExpr(
+                "index", ASTExpr[];
+                value = _PGatherRef(pg.flat, lin, first_arg.name)
+            )
         end
         # Pre-computed constant arrays (1D Fornberg weights, or ND mesh arrays).
         # RUNTIME-VARYING vs. fully-constant subscripts are handled uniformly by
         # `_resolve_const_array_gather` (see there); with an empty `bound_syms`
         # this is byte-identical to the pre-Phase-C const-fold.
         if first_arg isa VarExpr && haskey(const_arrays, first_arg.name)
-            return _resolve_const_array_gather(const_arrays[first_arg.name],
+            return _resolve_const_array_gather(
+                const_arrays[first_arg.name],
                 first_arg.name, expr.args[2:end], array_var_info, var_map,
-                const_arrays, pgather, memo, bound_syms)
+                const_arrays, pgather, memo, bound_syms
+            )
         end
         # scalar or unknown variable inside index — recurse on sub-exprs only
         new_args, changed = _resolve_arg_vec(expr.args, array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
         changed || return expr   # nothing under this index resolved → keep node intact
-        return reconstruct(expr; args=new_args)
+        return reconstruct(expr; args = new_args)
     end
     if expr.op == "integral"
         # Euler/midpoint quadrature: integral(u, var=x) → dx * sum(u[k] for k in lo..hi)
@@ -1816,20 +2134,32 @@ function _resolve_indices_op(expr::OpExpr,
         # array_var_info. Falls through to generic recurse when integrand is not
         # an array var (e.g. a scalar parameter expression).
         isempty(expr.args) &&
-            throw(TreeWalkError("E_TREEWALK_INTEGRAL_EMPTY",
-                  "integral op requires at least one arg"))
+            throw(
+            TreeWalkError(
+                "E_TREEWALK_INTEGRAL_EMPTY",
+                "integral op requires at least one arg"
+            )
+        )
         integrand = expr.args[1]
         iv = expr.int_var
         iv === nothing &&
-            throw(TreeWalkError("E_TREEWALK_INTEGRAL_NO_INTVAR",
-                  "integral op requires `var` field (integration variable name)"))
+            throw(
+            TreeWalkError(
+                "E_TREEWALK_INTEGRAL_NO_INTVAR",
+                "integral op requires `var` field (integration variable name)"
+            )
+        )
         if integrand isa VarExpr && haskey(array_var_info, integrand.name)
             vname = integrand.name
             lo_vec, hi_vec = array_var_info[vname]
             length(lo_vec) == 1 ||
-                throw(TreeWalkError("E_TREEWALK_INTEGRAL_NDIM",
-                      "euler_integral supports 1D integration only; " *
-                      "'$vname' has $(length(lo_vec)) dimensions"))
+                throw(
+                TreeWalkError(
+                    "E_TREEWALK_INTEGRAL_NDIM",
+                    "euler_integral supports 1D integration only; " *
+                        "'$vname' has $(length(lo_vec)) dimensions"
+                )
+            )
             lo1 = lo_vec[1]; hi1 = hi_vec[1]
             cells = ASTExpr[VarExpr(_cell_key(vname, [i])) for i in lo1:hi1]
             for c in cells
@@ -1866,19 +2196,23 @@ function _resolve_indices_op(expr::OpExpr,
     # already fully resolved; return it verbatim rather than rebuilding a ~30-field
     # OpExpr. In a stencil RHS the pure-parameter subtrees hit this fast path.
     changed || return expr
-    return reconstruct(expr; args=new_args, expr_body=new_body, values=new_values)
+    return reconstruct(expr; args = new_args, expr_body = new_body, values = new_values)
 end
 
 # Detect which state variables are used in array context (inside index ops)
 # by scanning equation LHS patterns and initial_condition keys.
-function _detect_array_vars(equations::Vector{Equation},
-                             state_var_names::Set{String},
-                             initial_conditions::AbstractDict)
+function _detect_array_vars(
+        equations::Vector{Equation},
+        state_var_names::Set{String},
+        initial_conditions::AbstractDict
+    )
     detected = Set{String}()
     # From initial conditions: "u[3]" style keys imply array usage.
-    _foreach_ic_cell(initial_conditions,
+    _foreach_ic_cell(
+        initial_conditions,
         (vname, _) -> (vname in state_var_names && push!(detected, vname)),
-        (vname, _, _) -> (vname in state_var_names && push!(detected, vname)))
+        (vname, _, _) -> (vname in state_var_names && push!(detected, vname))
+    )
     # From equation LHS patterns.
     for eq in equations
         lhs = eq.lhs
@@ -1913,16 +2247,23 @@ end
 function _discover_array_cells(
         equations::Vector{Equation},
         initial_conditions::AbstractDict,
-        array_var_names::Set{String})
-    cells = Dict{String,_DiscoveredCells}()
+        array_var_names::Set{String}
+    )
+    cells = Dict{String, _DiscoveredCells}()
 
     # From initial conditions: "u[3]" or "u[2,3]" style keys, and whole inline
     # array profiles.
-    _foreach_ic_cell(initial_conditions,
-        (vname, indices) -> (vname in array_var_names &&
-            _cellset_push_point!(get!(_DiscoveredCells, cells, vname), indices, vname)),
-        (vname, lo, hi) -> (vname in array_var_names &&
-            _cellset_push_box!(get!(_DiscoveredCells, cells, vname), lo, hi, vname)))
+    _foreach_ic_cell(
+        initial_conditions,
+        (vname, indices) -> (
+            vname in array_var_names &&
+                _cellset_push_point!(get!(_DiscoveredCells, cells, vname), indices, vname)
+        ),
+        (vname, lo, hi) -> (
+            vname in array_var_names &&
+                _cellset_push_box!(get!(_DiscoveredCells, cells, vname), lo, hi, vname)
+        )
+    )
 
     # From equation LHS.
     for eq in equations
@@ -2031,8 +2372,8 @@ end
 
 function _scan_lhs_cells!(cells, lhs::ASTExpr, array_var_names::Set{String})
     if _is_time_derivative(lhs) &&
-           length(lhs.args) == 1 && lhs.args[1] isa OpExpr &&
-           lhs.args[1].op == "index"
+            length(lhs.args) == 1 && lhs.args[1] isa OpExpr &&
+            lhs.args[1].op == "index"
         # D(index(var, k...))
         inner = lhs.args[1]
         first_arg = inner.args[1]
@@ -2076,7 +2417,7 @@ function _scan_lhs_cells!(cells, lhs::ASTExpr, array_var_names::Set{String})
             return
         end
         try
-            idx_env = Dict{String,Int}()
+            idx_env = Dict{String, Int}()
             indices = Vector{Int}(undef, length(idx_args))
             for idx_tuple in Iterators.product(range_iters...)
                 for d in 1:length(idx_names)
@@ -2107,14 +2448,14 @@ end
 # Identify D(scalar_var) — the classic scalar ODE LHS.
 function _is_scalar_D_lhs(lhs)
     return _is_time_derivative(lhs) &&
-           length(lhs.args) == 1 && isa(lhs.args[1], VarExpr)
+        length(lhs.args) == 1 && isa(lhs.args[1], VarExpr)
 end
 
 # Identify D(index(var, k...)) — indexed scalar derivative.
 function _is_indexed_D_lhs(lhs)
     return _is_time_derivative(lhs) &&
-           length(lhs.args) == 1 &&
-           isa(lhs.args[1], OpExpr) && lhs.args[1].op == "index"
+        length(lhs.args) == 1 &&
+        isa(lhs.args[1], OpExpr) && lhs.args[1].op == "index"
 end
 
 # Identify faq(D(index(var, ...)), ...) — array-loop derivative LHS.
@@ -2123,8 +2464,8 @@ function _is_faq_D_lhs(lhs)
     body = lhs.expr_body
     body === nothing && return false
     return _is_time_derivative(body) &&
-           length(body.args) == 1 &&
-           body.args[1] isa OpExpr && body.args[1].op == "index"
+        length(body.args) == 1 &&
+        body.args[1] isa OpExpr && body.args[1].op == "index"
 end
 
 # Extract the scalar body from a faq node (or return expr unchanged).
@@ -2136,7 +2477,7 @@ function _extract_faq_body(expr::ASTExpr)
     return expr
 end
 
-function _select_model(file::EsmFile, name::Union{Nothing,AbstractString})
+function _select_model(file::EsmFile, name::Union{Nothing, AbstractString})
     file.models === nothing &&
         throw(TreeWalkError("E_TREEWALK_NO_MODEL", "EsmFile.models is nothing"))
     models = file.models
@@ -2146,8 +2487,12 @@ function _select_model(file::EsmFile, name::Union{Nothing,AbstractString})
         return models[String(name)]
     end
     length(models) == 1 ||
-        throw(TreeWalkError("E_TREEWALK_AMBIGUOUS_MODEL",
-                            "specify model_name; have: " *
-                            join(collect(keys(models)), ", ")))
+        throw(
+        TreeWalkError(
+            "E_TREEWALK_AMBIGUOUS_MODEL",
+            "specify model_name; have: " *
+                join(collect(keys(models)), ", ")
+        )
+    )
     return first(values(models))
 end

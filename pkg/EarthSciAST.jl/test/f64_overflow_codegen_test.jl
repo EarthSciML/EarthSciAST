@@ -29,11 +29,13 @@ using EarthSciAST
 include("testutils.jl")
 const ESM = EarthSciAST
 
-function _fof_build(model, ics; compiler::Symbol=:native, env...)
-    withenv((String(k) => v for (k, v) in pairs(env))...) do
+function _fof_build(model, ics; compiler::Symbol = :native, env...)
+    return withenv((String(k) => v for (k, v) in pairs(env))...) do
         ESM._reset_cascade_tally!()
-        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
-            initial_conditions=ics, compiler=compiler)
+        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+            model;
+            initial_conditions = ics, compiler = compiler
+        )
         (f!, u0, p, vm, diag, copy(ESM._CASCADE_TALLY))
     end
 end
@@ -53,25 +55,38 @@ const _FOF_TBL = [10.0, 20.0, 40.0, 80.0, 160.0]
 # a zero primary budget forces every kernel off
 # the primary codegen tier onto the overflow path.
 function _fof_model(N)
-    ubody = _op("+",
-        _op("ifelse", _op(">", _idx("u", _v("i")), _n(2.0)),
+    ubody = _op(
+        "+",
+        _op(
+            "ifelse", _op(">", _idx("u", _v("i")), _n(2.0)),
             _op("log", _idx("u", _v("i"))),
-            _op("sin", _idx("u", _v("i")))),
-        _op("fn", _const(_FOF_TBL), _const(_FOF_AX), _idx("u", _v("i"));
-            name="interp.linear"),
-        _op("*", _n(-0.5), _idx("u", _v("i"))))
-    vbody = _op("*",
+            _op("sin", _idx("u", _v("i")))
+        ),
+        _op(
+            "fn", _const(_FOF_TBL), _const(_FOF_AX), _idx("u", _v("i"));
+            name = "interp.linear"
+        ),
+        _op("*", _n(-0.5), _idx("u", _v("i")))
+    )
+    vbody = _op(
+        "*",
         _op("exp", _op("*", _n(-0.3), _idx("v", _v("i")))),
-        _op("+", _n(1.0), _op("*", _n(0.25), _op("cos", _idx("u", _v("i"))))))
-    eq(x, body) = ESM.Equation(_ao1(_Didx(x, _v("i")), "i", 1, N),
-                               _ao1(body, "i", 1, N))
-    vars = Dict{String,ESM.ModelVariable}(
-        n => ESM.ModelVariable(ESM.UnknownVariable) for n in ("u", "v"))
-    ESM.Model(vars, [eq("u", ubody), eq("v", vbody)])
+        _op("+", _n(1.0), _op("*", _n(0.25), _op("cos", _idx("u", _v("i")))))
+    )
+    eq(x, body) = ESM.Equation(
+        _ao1(_Didx(x, _v("i")), "i", 1, N),
+        _ao1(body, "i", 1, N)
+    )
+    vars = Dict{String, ESM.ModelVariable}(
+        n => ESM.ModelVariable(ESM.UnknownVariable) for n in ("u", "v")
+    )
+    return ESM.Model(vars, [eq("u", ubody), eq("v", vbody)])
 end
 
-_fof_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
-                   for (j, x) in enumerate(("u", "v")), k in 1:N)
+_fof_ics(N) = Dict(
+    "$x[$k]" => 2.0 + sin(0.3k + 0.1j)
+        for (j, x) in enumerate(("u", "v")), k in 1:N
+)
 
 @testset "f64 overflow codegen: compiled overflow serves budget-declined Float64 kernels" begin
     N = 48
@@ -80,9 +95,11 @@ _fof_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
 
     # A: primary codegen forced off (budget 0) — the overflow function serves
     #    Float64. C: the interpreter, per-cell at Float64, the oracle.
-    fA, uA, pA, vmA, _, tallyA = _fof_build(model, ics;
-        ESS_CODEGEN_NODE_BUDGET="0")
-    fC, uC, pC, _, _, tallyC = _fof_build(model, ics; compiler=:interpreter)
+    fA, uA, pA, vmA, _, tallyA = _fof_build(
+        model, ics;
+        ESS_CODEGEN_NODE_BUDGET = "0"
+    )
+    fC, uC, pC, _, _, tallyC = _fof_build(model, ics; compiler = :interpreter)
 
     @testset "routing: tally + section introspection" begin
         ksA = getfield(fA, :kernel_section)
@@ -125,7 +142,7 @@ _fof_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
         # compute nothing (du stays zero) — instead the output must still be
         # bit-identical to the interpreter oracle. (This mutation is why this
         # build is a throwaway: build it fresh, poison it, compare, drop it.)
-        fW, uW, pW, _, _, _ = _fof_build(model, ics; ESS_CODEGEN_NODE_BUDGET="0")
+        fW, uW, pW, _, _, _ = _fof_build(model, ics; ESS_CODEGEN_NODE_BUDGET = "0")
         ksW = getfield(fW, :kernel_section)
         @test isempty(getfield(ksW, :dual_resid))
         empty!(getfield(ksW, :kernels))

@@ -34,11 +34,13 @@ Hooks (see the file header for why each is a policy point):
 - `unary_ops`: op names lowered as `getfield(Base, Symbol(op))(arg)`.
 - `extended_op(op, expr)`: all remaining `OpExpr` arms.
 """
-function _esm_to_symbolic_core(expr::EsmExpr, recurse::Function;
-                               number_value::Function,
-                               resolve_var::Function,
-                               unary_ops,
-                               extended_op::Function)
+function _esm_to_symbolic_core(
+        expr::EsmExpr, recurse::Function;
+        number_value::Function,
+        resolve_var::Function,
+        unary_ops,
+        extended_op::Function
+    )
     if expr isa IntExpr
         return expr.value
     elseif expr isa NumExpr
@@ -69,8 +71,11 @@ function _esm_to_symbolic_core(expr::EsmExpr, recurse::Function;
             fn = getfield(Base, Symbol(op))
             return fn(arg)
         elseif op == "min" || op == "max"
-            length(expr.args) < 2 && throw(ArgumentError(
-                "$op requires at least 2 arguments (esm-spec §4.2)"))
+            length(expr.args) < 2 && throw(
+                ArgumentError(
+                    "$op requires at least 2 arguments (esm-spec §4.2)"
+                )
+            )
             args = [recurse(a) for a in expr.args]
             fn = op == "min" ? min : max
             # Left fold, matching both pre-dedup copies (`foldl` in the MTK

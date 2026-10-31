@@ -192,22 +192,24 @@ end
 # same as the post-hoc merge's mints.
 function _direct_merge_fn_payload(nodes::Vector{_Node})
     m = length(nodes)
-    fname1, spec1 = (nodes[1].payload)::Tuple{String,Any}
+    fname1, spec1 = (nodes[1].payload)::Tuple{String, Any}
     varying = false
     @inbounds for k in 2:m
-        fnamek, speck = (nodes[k].payload)::Tuple{String,Any}
-        if !(fnamek == fname1 &&
-             (speck === spec1 || _fn_spec_content_equal(speck, spec1)))
+        fnamek, speck = (nodes[k].payload)::Tuple{String, Any}
+        if !(
+                fnamek == fname1 &&
+                    (speck === spec1 || _fn_spec_content_equal(speck, spec1))
+            )
             varying = true
             break
         end
     end
     varying || return nodes[1].payload
     ok = spec1 isa _InterpLinearSpec || spec1 isa _InterpBilinearSpec ||
-         spec1 isa _InterpSearchsortedSpec
+        spec1 isa _InterpSearchsortedSpec
     if ok
         @inbounds for k in 2:m
-            fnamek, speck = (nodes[k].payload)::Tuple{String,Any}
+            fnamek, speck = (nodes[k].payload)::Tuple{String, Any}
             if !(fnamek == fname1 && _direct_lane_shape_ok(spec1, speck))
                 ok = false
                 break
@@ -216,16 +218,22 @@ function _direct_merge_fn_payload(nodes::Vector{_Node})
     end
     if ok
         if spec1 isa _InterpLinearSpec
-            specs = _InterpLinearSpec[((nodes[k].payload)::Tuple{String,Any})[2]
-                                      for k in 1:m]
+            specs = _InterpLinearSpec[
+                ((nodes[k].payload)::Tuple{String, Any})[2]
+                    for k in 1:m
+            ]
             return (fname1, _InterpLinearLaneSpec(specs, 1, 0, 0, 1))
         elseif spec1 isa _InterpBilinearSpec
-            specs = _InterpBilinearSpec[((nodes[k].payload)::Tuple{String,Any})[2]
-                                        for k in 1:m]
+            specs = _InterpBilinearSpec[
+                ((nodes[k].payload)::Tuple{String, Any})[2]
+                    for k in 1:m
+            ]
             return (fname1, _InterpBilinearLaneSpec(specs, 1, 0, 0, 1))
         else # _InterpSearchsortedSpec
-            specs = _InterpSearchsortedSpec[((nodes[k].payload)::Tuple{String,Any})[2]
-                                            for k in 1:m]
+            specs = _InterpSearchsortedSpec[
+                ((nodes[k].payload)::Tuple{String, Any})[2]
+                    for k in 1:m
+            ]
             return (fname1, _InterpSearchsortedLaneSpec(specs, 1, 0, 0, 1))
         end
     end
@@ -427,7 +435,7 @@ Base.isequal(a::_LaneInternKey, b::_LaneInternKey) =
 Base.:(==)(a::_LaneInternKey, b::_LaneInternKey) = isequal(a, b)
 
 const _LANE_INTERN_POOL =
-    Base.RefValue{Union{Nothing,Dict{_LaneInternKey,Any}}}(nothing)
+    Base.RefValue{Union{Nothing, Dict{_LaneInternKey, Any}}}(nothing)
 
 # The closed set of spec types the pool canonicalizes — exactly the types
 # `_fn_spec_hash`/`_fn_spec_content_equal` content-model AND whose tables are
@@ -466,24 +474,30 @@ end
 # objects (an unmemoized rebuild, or a hash collision).
 function _check_fn_group_specs(nodes::Vector{_Node})
     length(nodes) <= 1 && return nothing
-    fname1, spec1 = (nodes[1].payload)::Tuple{String,Any}
+    fname1, spec1 = (nodes[1].payload)::Tuple{String, Any}
     @inbounds for k in 2:length(nodes)
-        fnamek, speck = (nodes[k].payload)::Tuple{String,Any}
+        fnamek, speck = (nodes[k].payload)::Tuple{String, Any}
         speck === spec1 && fnamek == fname1 && continue
         (fnamek == fname1 && _fn_spec_content_equal(speck, spec1)) && continue
-        throw(TreeWalkError("E_TREEWALK_FN_SPEC_MISMATCH",
-            "vectorized array kernel: cells grouped as structurally identical carry " *
-            "DIFFERENT closed-function specs for '$(fname1)' (cell 1 vs cell $(k)" *
-            (fnamek == fname1 ? ": same function, different const table/axis" :
-                                ": different functions '$(fname1)' vs '$(fnamek)'") *
-            "). A merged kernel carries ONE spec for all its lanes, so these cells " *
-            "cannot share a vectorized kernel — evaluating them together would " *
-            "silently compute every cell against the FIRST cell's table. Cells whose " *
-            "const tables differ (e.g. `makearray` regions each calling `interp.*` " *
-            "with their own table) must land in SEPARATE structural groups; " *
-            "`_struct_sig!` keys the spec's content precisely so they do, so reaching " *
-            "this is a grouping-invariant break (a hash collision, or a signature that " *
-            "stopped keying the spec), not a model error."))
+        throw(
+            TreeWalkError(
+                "E_TREEWALK_FN_SPEC_MISMATCH",
+                "vectorized array kernel: cells grouped as structurally identical carry " *
+                    "DIFFERENT closed-function specs for '$(fname1)' (cell 1 vs cell $(k)" *
+                    (
+                    fnamek == fname1 ? ": same function, different const table/axis" :
+                        ": different functions '$(fname1)' vs '$(fnamek)'"
+                ) *
+                    "). A merged kernel carries ONE spec for all its lanes, so these cells " *
+                    "cannot share a vectorized kernel — evaluating them together would " *
+                    "silently compute every cell against the FIRST cell's table. Cells whose " *
+                    "const tables differ (e.g. `makearray` regions each calling `interp.*` " *
+                    "with their own table) must land in SEPARATE structural groups; " *
+                    "`_struct_sig!` keys the spec's content precisely so they do, so reaching " *
+                    "this is a grouping-invariant break (a hash collision, or a signature that " *
+                    "stopped keying the spec), not a model error."
+            )
+        )
     end
     return nothing
 end
@@ -509,8 +523,10 @@ end
 # content-equal-or-throw contract byte for byte.
 _acc_merge_nodes(nodes::Vector{_Node}, len::Int, acc::Vector{_AccDesc})::_Node =
     _acc_merge_nodes(nodes, len, acc, false)
-function _acc_merge_nodes(nodes::Vector{_Node}, len::Int,
-                          acc::Vector{_AccDesc}, direct::Bool)::_Node
+function _acc_merge_nodes(
+        nodes::Vector{_Node}, len::Int,
+        acc::Vector{_AccDesc}, direct::Bool
+    )::_Node
     n1 = nodes[1]
     k = n1.kind
     if k === _NK_LITERAL
@@ -544,11 +560,17 @@ function _acc_merge_nodes(nodes::Vector{_Node}, len::Int,
         return _acc(length(acc))
     elseif k === _NK_CONTRACTION
         m = length(n1.children)
-        ch = _Node[_acc_merge_nodes(_Node[nd.children[c] for nd in nodes], len,
-                                    acc, direct)
-                   for c in 1:m]
-        return _mknode(kind=_NK_CONTRACTION, op=n1.op, literal=n1.literal,
-                       children=ch)
+        ch = _Node[
+            _acc_merge_nodes(
+                _Node[nd.children[c] for nd in nodes], len,
+                acc, direct
+            )
+                for c in 1:m
+        ]
+        return _mknode(
+            kind = _NK_CONTRACTION, op = n1.op, literal = n1.literal,
+            children = ch
+        )
     else  # _NK_OP / fn
         pay = n1.payload
         if n1.op === :fn
@@ -559,17 +581,21 @@ function _acc_merge_nodes(nodes::Vector{_Node}, len::Int,
             end
         end
         m = length(n1.children)
-        ch = _Node[_acc_merge_nodes(_Node[nd.children[c] for nd in nodes], len,
-                                    acc, direct)
-                   for c in 1:m]
-        return _mknode(kind=_NK_OP, op=n1.op, payload=pay, children=ch)
+        ch = _Node[
+            _acc_merge_nodes(
+                _Node[nd.children[c] for nd in nodes], len,
+                acc, direct
+            )
+                for c in 1:m
+        ]
+        return _mknode(kind = _NK_OP, op = n1.op, payload = pay, children = ch)
     end
 end
 
 # Group an array equation's per-cell `(du_slot, node)` entries by structure and
 # build one indirect-outs `_AccKernel` per group, in first-seen group order —
 # deterministic kernel boundaries, lane order, and out-slot order.
-function _acc_from_cell_entries(entries::Vector{Tuple{Int,_Node}})::Vector{_AccKernel}
+function _acc_from_cell_entries(entries::Vector{Tuple{Int, _Node}})::Vector{_AccKernel}
     isempty(entries) && return _AccKernel[]
     # Direct class emission (see the section above `_direct_class_emit_disabled`):
     # group by SHAPE-keyed signature and mint per-lane spec tables at merge
@@ -578,7 +604,7 @@ function _acc_from_cell_entries(entries::Vector{Tuple{Int,_Node}})::Vector{_AccK
     # content-keyed assemble-then-merge front half.
     direct = _direct_class_emit_enabled()
     order = String[]
-    groups = Dict{String,Tuple{Vector{Int},Vector{_Node}}}()
+    groups = Dict{String, Tuple{Vector{Int}, Vector{_Node}}}()
     sigbuf = IOBuffer()
     for (slot, node) in entries
         sig = String(take!(_struct_sig!(sigbuf, node, direct)))
@@ -605,9 +631,13 @@ function _acc_from_cell_entries(entries::Vector{Tuple{Int,_Node}})::Vector{_AccK
         # CSE + invariant hoisting on the merged spine — skipped on a
         # lazy-bearing one (see the header) so the SCALAR reference stays lazy.
         spine, cse = _acc_node_has_lazy(spine) ? (spine, _ACC_NO_CSE) :
-                     _build_acc_cse(spine, acc)
-        push!(kernels, _AccKernel(_outs_cells(slots), spine, acc,
-                                  _FixedBound(0), 0.0, cse))
+            _build_acc_cse(spine, acc)
+        push!(
+            kernels, _AccKernel(
+                _outs_cells(slots), spine, acc,
+                _FixedBound(0), 0.0, cse
+            )
+        )
     end
     return kernels
 end
@@ -635,25 +665,29 @@ end
 # `Vector{Float64}` and only the parameter VALUES are `Dual`, so a scratch sized
 # from `eltype(u)` alone would compile and then throw `Float64(::Dual)` on its first
 # store.
-function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
-                   cse_prelude::AbstractVector{_Node},
-                   cse_cache::_CSECache,
-                   acc_kernels::AbstractVector{_AccKernel},
-                   const_slots::AbstractVector{Int},
-                   time_slots::AbstractVector{Int},
-                   dyn_slots::AbstractVector{Int},
-                   scan_folds::AbstractVector{_ScanFold}=_ScanFold[],
-                   array_contractions=_make_contraction_section(_ArrayContraction[]);
-                   scalar=nothing, fused_scans::Tuple=(), nst::Int=0)
+function _make_rhs(
+        rhs_list::AbstractVector{Tuple{Int, _Node}},
+        cse_prelude::AbstractVector{_Node},
+        cse_cache::_CSECache,
+        acc_kernels::AbstractVector{_AccKernel},
+        const_slots::AbstractVector{Int},
+        time_slots::AbstractVector{Int},
+        dyn_slots::AbstractVector{Int},
+        scan_folds::AbstractVector{_ScanFold} = _ScanFold[],
+        array_contractions = _make_contraction_section(_ArrayContraction[]);
+        scalar = nothing, fused_scans::Tuple = (), nst::Int = 0
+    )
     # The prefix scans: the unfused folds and the fused ones (scan_fused.jl).
     scan_section = _make_scan_section(scan_folds, fused_scans)
     # The scalar codegen tier (scalar_codegen.jl): with a scalar section the
     # equations and the prelude run as generated code, and only what it left
     # behind is walked.
     scalar === nothing ||
-        return _make_rhs_scalar_cg(scalar, cse_prelude, cse_cache, acc_kernels,
-                                   const_slots, time_slots, scan_section,
-                                   array_contractions; nst=nst)
+        return _make_rhs_scalar_cg(
+        scalar, cse_prelude, cse_cache, acc_kernels,
+        const_slots, time_slots, scan_section,
+        array_contractions; nst = nst
+    )
     # B1 codegen tier (codegen_kernel.jl): every kernel the emitter can model is
     # compiled ONCE, here at build time, into a single RuntimeGeneratedFunction
     # (bit-identical, eltype-generic); the rest keep the per-cell scalar
@@ -662,15 +696,19 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
     # shared-prelude (`_CSECache`) reads into the generated kernels, because
     # `f!` below fills every prelude tier into that exact cache — at the same
     # value type `T` — before `kernel_section(du, u, p, t, T)` runs.
-    kernel_section = _make_kernel_section(acc_kernels;
-                                          shared_cache=cse_cache, nst=nst)
+    kernel_section = _make_kernel_section(
+        acc_kernels;
+        shared_cache = cse_cache, nst = nst
+    )
     # Without a scalar section every prelude slot and scalar equation is walked:
     # the interpreter's walker, which takes a license (scalar_codegen.jl).
     n_slots = length(const_slots) + length(time_slots) + length(dyn_slots)
-    walk = _scalar_walk_license(n_slots + length(rhs_list) > 0,
+    walk = _scalar_walk_license(
+        n_slots + length(rhs_list) > 0,
         isempty(rhs_list) ? "the scalar prelude" : "state slot $(rhs_list[1][1])",
         "$(length(rhs_list)) scalar equations and $n_slots shared-subexpression slots",
-        () -> vcat(_Node[nd for (_, nd) in rhs_list], cse_prelude))
+        () -> vcat(_Node[nd for (_, nd) in rhs_list], cse_prelude)
+    )
     function f!(du, u, p, t)
         _reject_float32_state(u)   # loud, statically-folded (see compile.jl)
         T = _rhs_value_type(u, p, t)

@@ -30,7 +30,7 @@ using EarthSciAST
     # Piecewise-linear table with three cells of DIFFERENT slope, so a wrong
     # derivative cannot coincidentally match: 10.0 on [0,1], 2.0 on [1,2],
     # 4.0 on [2,4].
-    axis  = [0.0, 1.0, 2.0, 4.0]
+    axis = [0.0, 1.0, 2.0, 4.0]
     table = [10.0, 20.0, 22.0, 30.0]
     lin(x) = evaluate_closed_function_ad("interp.linear", Any[table, axis, x])
 
@@ -78,13 +78,15 @@ using EarthSciAST
         # zero-partial Dual (lifted `t`) and `Float64(::Dual)` threw.
         t0 = 1462345200.0  # 2016-05-04T07:00:00Z
         d0 = ForwardDiff.Dual{Nothing}(t0, 1.0)
-        for name in ("datetime.year", "datetime.month", "datetime.day",
-                     "datetime.hour", "datetime.minute", "datetime.second",
-                     "datetime.day_of_year", "datetime.is_leap_year")
+        for name in (
+                "datetime.year", "datetime.month", "datetime.day",
+                "datetime.hour", "datetime.minute", "datetime.second",
+                "datetime.day_of_year", "datetime.is_leap_year",
+            )
             # Must not throw, and must agree with the Float64 path exactly —
             # these are piecewise constant, so the primal is the whole answer.
             @test evaluate_closed_function_ad(name, Any[d0]) ===
-                  evaluate_closed_function(name, Any[t0])
+                evaluate_closed_function(name, Any[t0])
         end
     end
 

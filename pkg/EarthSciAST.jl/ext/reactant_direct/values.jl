@@ -17,7 +17,7 @@ end
 
 # Slot map entry: which emitted value holds this slot, and at which lane
 # position. `nothing` ⇒ nothing has written the slot YET.
-const _DESlot = Union{Nothing,Tuple{_DEVal,Int}}
+const _DESlot = Union{Nothing, Tuple{_DEVal, Int}}
 
 # A slot map, plus the STATIC write plan the read forms need to interpret a
 # `nothing` entry. `writer[s]` is the SECTION of the emission that first writes
@@ -53,10 +53,12 @@ struct _DEMap
     # ORDER, so slot `s` is element `s` of it. Emitted lazily by the first read
     # that wants it and dropped by the next write, because a base taken before a
     # write describes the map as it was.
-    base::Base.RefValue{Union{Nothing,_DEVal}}
+    base::Base.RefValue{Union{Nothing, _DEVal}}
 end
-_DEMap(n::Int) = _DEMap(Vector{_DESlot}(nothing, n), zeros(Int32, n),
-                        Base.RefValue{Union{Nothing,_DEVal}}(nothing))
+_DEMap(n::Int) = _DEMap(
+    Vector{_DESlot}(nothing, n), zeros(Int32, n),
+    Base.RefValue{Union{Nothing, _DEVal}}(nothing)
+)
 
 function _de_mark!(M::_DEMap, slots, section::Int32)
     w = M.writer
@@ -105,8 +107,8 @@ mutable struct _DECtx
     p::Any
     t::_DEVal
     ue::_DEMap                              # extended-state slot map (1..n_total)
-    consts::Dict{UInt64,_DEVal}             # scalar literal bit pattern -> value
-    arrconsts::Dict{Vector{Float64},_DEVal} # array constant content -> value
+    consts::Dict{UInt64, _DEVal}             # scalar literal bit pattern -> value
+    arrconsts::Dict{Vector{Float64}, _DEVal} # array constant content -> value
     # Live forcing buffers. `hostkeys` are the build's aliased host arrays in the
     # container's (name-sorted) order, `bufs` is THIS call's container of traced
     # program inputs aligned with it, and `bufvals` memoizes the emitted rank-1
@@ -115,14 +117,14 @@ mutable struct _DECtx
     # out of `bufs`.
     bufs::Any
     hostkeys::Vector{Vector{Float64}}
-    bufvals::Vector{Union{Nothing,_DEVal}}
-    static::IdDict{_E._Node,Bool}           # memoized "this subtree is host-computable"
-    bstatic::IdDict{Any,Bool}               # the same, for a lane-batched subtree
+    bufvals::Vector{Union{Nothing, _DEVal}}
+    static::IdDict{_E._Node, Bool}           # memoized "this subtree is host-computable"
+    bstatic::IdDict{Any, Bool}               # the same, for a lane-batched subtree
     reduce_min::Int                         # fold length at which a chain becomes a reduce
-    names::Dict{Int,String}                 # flat slot -> element name (for the rule text)
+    names::Dict{Int, String}                 # flat slot -> element name (for the rule text)
     # Producer-set -> the one concatenation a cross-producer gather reads from,
     # so a read set that recurs (and on a stencil they all do) pays for it once.
-    gather_bases::Dict{Tuple{Vector{_MLIR.IR.Value},Bool},Tuple{_DEVal,Vector{Int},Int}}
+    gather_bases::Dict{Tuple{Vector{_MLIR.IR.Value}, Bool}, Tuple{_DEVal, Vector{Int}, Int}}
     # EMITTER-SIDE CSE OF READS. Two reads of the same span of the same value
     # are the same SSA value, and on a stencil that happens constantly: a
     # neighbour span is read once per consumer, and a reverse-mode program
@@ -131,14 +133,14 @@ mutable struct _DECtx
     # population the emitter knows to be redundant before it writes it.
     # Emission is one straight-line block, so an earlier value always dominates
     # a later use and the reuse needs no scope check.
-    slices::Dict{Tuple{_MLIR.IR.Value,Int,Int,Int},_DEVal}
-    concats::Dict{Vector{_MLIR.IR.Value},_DEVal}
+    slices::Dict{Tuple{_MLIR.IR.Value, Int, Int, Int}, _DEVal}
+    concats::Dict{Vector{_MLIR.IR.Value}, _DEVal}
     # The two gather tables: (value read, positions into it) -> the gather, and
     # (index width, positions) -> the index constant on its own. They are not
     # the same interning; `_de_gather_op` says why.
-    gathers::Dict{Tuple{_MLIR.IR.Value,Vector{Int}},_DEVal}
-    idxconsts::Dict{Tuple{Int,Vector{Int}},_MLIR.IR.Value}
-    stats::Dict{Symbol,Int}
+    gathers::Dict{Tuple{_MLIR.IR.Value, Vector{Int}}, _DEVal}
+    idxconsts::Dict{Tuple{Int, Vector{Int}}, _MLIR.IR.Value}
+    stats::Dict{Symbol, Int}
     # Which SECTION of the emission is running: materialization level `li` while
     # the fills are emitted, `nlev + 1` from the CSE prelude onwards. The read
     # forms compare it against the write plan (`_DEMap`) to tell a zero this
@@ -150,24 +152,30 @@ mutable struct _DECtx
     site::Symbol
 end
 
-function _DECtx(n_states::Int, n_total::Int, p, t::_DEVal, uval::_DEVal,
-                bufs, hostkeys::Vector{Vector{Float64}}, names::Dict{Int,String})
+function _DECtx(
+        n_states::Int, n_total::Int, p, t::_DEVal, uval::_DEVal,
+        bufs, hostkeys::Vector{Vector{Float64}}, names::Dict{Int, String}
+    )
     ue = _DEMap(n_total)
     for s in 1:n_states
         ue.m[s] = (uval, s)
     end
-    return _DECtx(n_states, p, t, ue, Dict{UInt64,_DEVal}(),
-                  Dict{Vector{Float64},_DEVal}(), bufs, hostkeys,
-                  Union{Nothing,_DEVal}[nothing for _ in hostkeys],
-                  IdDict{_E._Node,Bool}(), IdDict{Any,Bool}(),
-                  _de_reduce_min(), names,
-                  Dict{Tuple{Vector{_MLIR.IR.Value},Bool},
-                       Tuple{_DEVal,Vector{Int},Int}}(),
-                  Dict{Tuple{_MLIR.IR.Value,Int,Int,Int},_DEVal}(),
-                  Dict{Vector{_MLIR.IR.Value},_DEVal}(),
-                  Dict{Tuple{_MLIR.IR.Value,Vector{Int}},_DEVal}(),
-                  Dict{Tuple{Int,Vector{Int}},_MLIR.IR.Value}(),
-                  Dict{Symbol,Int}(), Int32(0), :none)
+    return _DECtx(
+        n_states, p, t, ue, Dict{UInt64, _DEVal}(),
+        Dict{Vector{Float64}, _DEVal}(), bufs, hostkeys,
+        Union{Nothing, _DEVal}[nothing for _ in hostkeys],
+        IdDict{_E._Node, Bool}(), IdDict{Any, Bool}(),
+        _de_reduce_min(), names,
+        Dict{
+            Tuple{Vector{_MLIR.IR.Value}, Bool},
+            Tuple{_DEVal, Vector{Int}, Int},
+        }(),
+        Dict{Tuple{_MLIR.IR.Value, Int, Int, Int}, _DEVal}(),
+        Dict{Vector{_MLIR.IR.Value}, _DEVal}(),
+        Dict{Tuple{_MLIR.IR.Value, Vector{Int}}, _DEVal}(),
+        Dict{Tuple{Int, Vector{Int}}, _MLIR.IR.Value}(),
+        Dict{Symbol, Int}(), Int32(0), :none
+    )
 end
 
 # A ⊕-fold this long stops being a chain of binary ops and becomes ONE
@@ -193,8 +201,10 @@ _de_slotname(ctx::_DECtx, s::Int) = get(ctx.names, s, "flat slot $s")
 function _de_slotsname(ctx::_DECtx, slots::Vector{Int})
     isempty(slots) && return "no output slot"
     length(slots) == 1 && return _de_slotname(ctx, slots[1])
-    return string(_de_slotname(ctx, slots[1]), " … ",
-                  _de_slotname(ctx, slots[end]), " (", length(slots), " lanes)")
+    return string(
+        _de_slotname(ctx, slots[1]), " … ",
+        _de_slotname(ctx, slots[end]), " (", length(slots), " lanes)"
+    )
 end
 
 # ---- MLIR plumbing -----------------------------------------------------------
@@ -228,10 +238,10 @@ _de_res(op) = _MLIR.IR.result(op)
 # own op builders rather than building the op here: the `interp.*` knot seams
 # (interp.jl) and the long-fold `stablehlo.reduce` (`_de_fold_terms`). Both are
 # O(1) in the grid, so the program stays IR-shaped either way.
-_de_traced(a::_DEVal) = TracedRArray{Float64,1}((), a.v, (a.len,))
-_de_untraced(x::TracedRArray{Float64,1}) = _DEVal(x.mlir_data, length(x))
+_de_traced(a::_DEVal) = TracedRArray{Float64, 1}((), a.v, (a.len,))
+_de_untraced(x::TracedRArray{Float64, 1}) = _DEVal(x.mlir_data, length(x))
 _de_untraced(x::TracedRNumber{Float64}) =
-    _DEVal(_de_res(_hlo.reshape(x.mlir_data; result_0=_de_ty(1), location=_de_loc())), 1)
+    _DEVal(_de_res(_hlo.reshape(x.mlir_data; result_0 = _de_ty(1), location = _de_loc())), 1)
 
 # ---- constants ---------------------------------------------------------------
 #
@@ -244,8 +254,10 @@ function _de_const(ctx::_DECtx, x::Float64)::_DEVal
     hit = get(ctx.consts, key, nothing)
     hit === nothing || return hit
     _de_tally!(ctx, :constant_scalar)
-    op = _hlo.constant(; output=_de_ty(1),
-                       value=_MLIR.IR.DenseElementsAttribute([x]), location=_de_loc())
+    op = _hlo.constant(;
+        output = _de_ty(1),
+        value = _MLIR.IR.DenseElementsAttribute([x]), location = _de_loc()
+    )
     v = _DEVal(_de_res(op), 1)
     ctx.consts[key] = v
     return v
@@ -256,8 +268,10 @@ function _de_arrconst(ctx::_DECtx, xs::Vector{Float64})::_DEVal
     hit = get(ctx.arrconsts, xs, nothing)
     hit === nothing || return hit
     _de_tally!(ctx, :constant_array)
-    op = _hlo.constant(; output=_de_ty(length(xs)),
-                       value=_MLIR.IR.DenseElementsAttribute(xs), location=_de_loc())
+    op = _hlo.constant(;
+        output = _de_ty(length(xs)),
+        value = _MLIR.IR.DenseElementsAttribute(xs), location = _de_loc()
+    )
     v = _DEVal(_de_res(op), length(xs))
     ctx.arrconsts[copy(xs)] = v
     return v
@@ -265,8 +279,10 @@ end
 
 function _de_boolconst(ctx::_DECtx, m::Vector{Bool})::_MLIR.IR.Value
     _de_tally!(ctx, :constant_mask)
-    op = _hlo.constant(; output=_de_ty_i1(length(m)),
-                       value=_MLIR.IR.DenseElementsAttribute(m), location=_de_loc())
+    op = _hlo.constant(;
+        output = _de_ty_i1(length(m)),
+        value = _MLIR.IR.DenseElementsAttribute(m), location = _de_loc()
+    )
     return _de_res(op)
 end
 
@@ -274,20 +290,26 @@ end
 
 function _de_bcast(ctx::_DECtx, a::_DEVal, L::Int)::_DEVal
     a.len == L && return a
-    a.len == 1 || _de_refuse("a lane-width mismatch",
+    a.len == 1 || _de_refuse(
+        "a lane-width mismatch",
         "a value of length $(a.len) met lane width $L. The two came from the " *
-        "same expression, so one of them was planned at a different lane " *
-        "enumeration than the other — a kernel-plan invariant break, not a " *
-        "coverage gap.")
+            "same expression, so one of them was planned at a different lane " *
+            "enumeration than the other — a kernel-plan invariant break, not a " *
+            "coverage gap."
+    )
     _de_tally!(ctx, :broadcast_in_dim)
-    op = _hlo.broadcast_in_dim(a.v; result_0=_de_ty(L),
-                               broadcast_dimensions=_MLIR.IR.DenseArrayAttribute(Int64[0]),
-                               location=_de_loc())
+    op = _hlo.broadcast_in_dim(
+        a.v; result_0 = _de_ty(L),
+        broadcast_dimensions = _MLIR.IR.DenseArrayAttribute(Int64[0]),
+        location = _de_loc()
+    )
     return _DEVal(_de_res(op), L)
 end
 
-function _de_slice(ctx::_DECtx, src::_DEVal, lo::Int, hi::Int, stride::Int=1;
-                   why::Symbol=:other)::_DEVal
+function _de_slice(
+        ctx::_DECtx, src::_DEVal, lo::Int, hi::Int, stride::Int = 1;
+        why::Symbol = :other
+    )::_DEVal
     L = length(lo:stride:hi)
     (L == src.len && lo == 1 && stride == 1) && return src
     key = (src.v, lo, hi, stride)
@@ -295,11 +317,13 @@ function _de_slice(ctx::_DECtx, src::_DEVal, lo::Int, hi::Int, stride::Int=1;
     hit === nothing || return hit
     _de_tally!(ctx, :slice)
     _de_site!(ctx, L == 1 ? :slice1 : :sliceN, why)
-    op = _hlo.slice(src.v; result_0=_de_ty(L),
-                    start_indices=_MLIR.IR.DenseArrayAttribute(Int64[lo - 1]),
-                    limit_indices=_MLIR.IR.DenseArrayAttribute(Int64[hi]),
-                    strides=_MLIR.IR.DenseArrayAttribute(Int64[stride]),
-                    location=_de_loc())
+    op = _hlo.slice(
+        src.v; result_0 = _de_ty(L),
+        start_indices = _MLIR.IR.DenseArrayAttribute(Int64[lo - 1]),
+        limit_indices = _MLIR.IR.DenseArrayAttribute(Int64[hi]),
+        strides = _MLIR.IR.DenseArrayAttribute(Int64[stride]),
+        location = _de_loc()
+    )
     out = _DEVal(_de_res(op), L)
     ctx.slices[key] = out
     return out
@@ -313,8 +337,10 @@ function _de_concat(ctx::_DECtx, pieces::Vector{_DEVal})::_DEVal
     _de_tally!(ctx, :concatenate)
     _de_site!(ctx, :concat, :x)
     L = sum(pc.len for pc in pieces)
-    op = _hlo.concatenate(key; result_0=_de_ty(L),
-                          dimension=0, location=_de_loc())
+    op = _hlo.concatenate(
+        key; result_0 = _de_ty(L),
+        dimension = 0, location = _de_loc()
+    )
     out = _DEVal(_de_res(op), L)
     ctx.concats[key] = out
     return out
@@ -346,10 +372,12 @@ function _de_gather_index_bits()
     v = get(ENV, "ESM_DIRECT_GATHER_INDEX_BITS", "")
     isempty(v) && return _DE_GATHER_INDEX_BITS
     w = tryparse(Int, v)
-    (w == 32 || w == 64) || _de_refuse("an index width of `$v`",
+    (w == 32 || w == 64) || _de_refuse(
+        "an index width of `$v`",
         "ESM_DIRECT_GATHER_INDEX_BITS is `$v`. A gather's start indices are " *
-        "emitted as 32- or 64-bit integers and as nothing else; unset the " *
-        "variable for the default.")
+            "emitted as 32- or 64-bit integers and as nothing else; unset the " *
+            "variable for the default."
+    )
     return w
 end
 
@@ -366,8 +394,10 @@ function _de_idxconst(ctx::_DECtx, positions::Vector{Int}, bits::Int)
         _MLIR.IR.DenseElementsAttribute(reshape(Int32.(positions) .- Int32(1), L, 1)) :
         _MLIR.IR.DenseElementsAttribute(reshape(Int64.(positions) .- Int64(1), L, 1))
     _de_tally!(ctx, :gather_index)
-    op = _hlo.constant(; output=(bits == 32 ? _de_ty_i32([L, 1]) : _de_ty_i64([L, 1])),
-                       value=attr, location=_de_loc())
+    op = _hlo.constant(;
+        output = (bits == 32 ? _de_ty_i32([L, 1]) : _de_ty_i64([L, 1])),
+        value = attr, location = _de_loc()
+    )
     v = _de_res(op)
     ctx.idxconsts[(bits, copy(positions))] = v
     return v
@@ -382,8 +412,10 @@ function _de_gather_op(ctx::_DECtx, src::_DEVal, positions::Vector{Int})::_DEVal
     _de_tally!(ctx, :gather)
     _de_site!(ctx, :gather, :x)
     L = length(positions)
-    idx = _de_idxconst(ctx, positions,
-                       _de_index_bits(src.len, _de_gather_index_bits()))
+    idx = _de_idxconst(
+        ctx, positions,
+        _de_index_bits(src.len, _de_gather_index_bits())
+    )
     dn = _MLIR.API.stablehloGatherDimensionNumbersGet(
         _MLIR.IR.current_context(),
         0, Int64[],          # offset_dims
@@ -391,10 +423,13 @@ function _de_gather_op(ctx::_DECtx, src::_DEVal, positions::Vector{Int})::_DEVal
         0, Int64[],          # operand_batching_dims
         0, Int64[],          # start_indices_batching_dims
         1, Int64[0],         # start_index_map
-        1)                   # index_vector_dim
-    op = _hlo.gather(src.v, idx; result=_de_ty(L), dimension_numbers=dn,
-                     slice_sizes=_MLIR.IR.DenseArrayAttribute(Int64[1]),
-                     indices_are_sorted=false, location=_de_loc())
+        1
+    )                   # index_vector_dim
+    op = _hlo.gather(
+        src.v, idx; result = _de_ty(L), dimension_numbers = dn,
+        slice_sizes = _MLIR.IR.DenseArrayAttribute(Int64[1]),
+        indices_are_sorted = false, location = _de_loc()
+    )
     out = _DEVal(_de_res(op), L)
     ctx.gathers[(src.v, copy(positions))] = out
     return out
@@ -418,7 +453,7 @@ end
 # one zero constant of that width, the same piece `_de_assemble` emits for an
 # unwritten output run. A read that mixes them with real producers therefore
 # still costs one piece per run and nothing per zero lane.
-const _DESlotSrc = Union{Nothing,_DEVal}
+const _DESlotSrc = Union{Nothing, _DEVal}
 
 # ---- the read cost model -----------------------------------------------------
 #
@@ -514,7 +549,7 @@ _de_read_mode() = get(ENV, "ESM_DIRECT_EMIT_READ", "gather")
 function _de_gather_max_pieces()
     v = get(ENV, "ESM_DIRECT_GATHER_MAX_PIECES", "")
     return isempty(v) ? _DE_GATHER_MAX_PIECES :
-           something(tryparse(Int, v), _DE_GATHER_MAX_PIECES)
+        something(tryparse(Int, v), _DE_GATHER_MAX_PIECES)
 end
 
 function _de_gather_is_cheaper(npieces::Int, n::Int)
@@ -581,8 +616,10 @@ function _de_gather_base(ctx::_DECtx, prods::Vector{_DEVal}, needzero::Bool)
     hit = get(ctx.gather_bases, key, nothing)
     hit === nothing || return hit
     tot = sum(q.len for q in prods) + (needzero ? 1 : 0)
-    _de_gather_base_fits(length(prods), needzero, tot,
-                         _de_gather_base_budget(ctx)) || return nothing
+    _de_gather_base_fits(
+        length(prods), needzero, tot,
+        _de_gather_base_budget(ctx)
+    ) || return nothing
     offs = Int[]
     acc = 0
     for q in prods
@@ -601,9 +638,11 @@ function _de_gather_base(ctx::_DECtx, prods::Vector{_DEVal}, needzero::Bool)
     return out
 end
 
-function _de_runs_as_gather(ctx::_DECtx, srcs::Vector{_DESlot},
-                            runs::Vector{Tuple{_DESlotSrc,Int,Int,Int}},
-                            needzero::Bool)
+function _de_runs_as_gather(
+        ctx::_DECtx, srcs::Vector{_DESlot},
+        runs::Vector{Tuple{_DESlotSrc, Int, Int, Int}},
+        needzero::Bool
+    )
     prods = _DEVal[]
     for r in runs
         sv = r[1]
@@ -620,7 +659,7 @@ function _de_runs_as_gather(ctx::_DECtx, srcs::Vector{_DESlot},
         if e === nothing
             pos[i] = zpos
         else
-            sv, q = e::Tuple{_DEVal,Int}
+            sv, q = e::Tuple{_DEVal, Int}
             k = findfirst(x -> x.v == sv.v, prods)::Int
             pos[i] = offs[k] + q
         end
@@ -633,7 +672,7 @@ end
 function _de_run_decompose(srcs::Vector{_DESlot})
     n = length(srcs)
     # (src, lo, hi, stride); `src === nothing` ⇒ a zero run, `hi` its width.
-    runs = Tuple{_DESlotSrc,Int,Int,Int}[]
+    runs = Tuple{_DESlotSrc, Int, Int, Int}[]
     nzero = 0
     i = 1
     while i <= n
@@ -648,14 +687,14 @@ function _de_run_decompose(srcs::Vector{_DESlot})
             i = j + 1
             continue
         end
-        sv, p0 = e::Tuple{_DEVal,Int}
+        sv, p0 = e::Tuple{_DEVal, Int}
         j = i
         stride = 1
         while j + 1 <= n
             nx = srcs[j + 1]
             nx === nothing && break
             nx[1].v == sv.v || break
-            d = nx[2] - (srcs[j]::Tuple{_DEVal,Int})[2]
+            d = nx[2] - (srcs[j]::Tuple{_DEVal, Int})[2]
             if j == i
                 d >= 1 || break
                 stride = d
@@ -664,21 +703,25 @@ function _de_run_decompose(srcs::Vector{_DESlot})
             end
             j += 1
         end
-        push!(runs, (sv, p0, (srcs[j]::Tuple{_DEVal,Int})[2], stride))
+        push!(runs, (sv, p0, (srcs[j]::Tuple{_DEVal, Int})[2], stride))
         i = j + 1
     end
     return runs, nzero
 end
 
-function _de_emit_decomposed(ctx::_DECtx, srcs::Vector{_DESlot},
-                             runs::Vector{Tuple{_DESlotSrc,Int,Int,Int}},
-                             nzero::Int)::_DEVal
+function _de_emit_decomposed(
+        ctx::_DECtx, srcs::Vector{_DESlot},
+        runs::Vector{Tuple{_DESlotSrc, Int, Int, Int}},
+        nzero::Int
+    )::_DEVal
     if _de_gather_is_cheaper(length(runs), length(srcs))
         g = _de_runs_as_gather(ctx, srcs, runs, nzero > 0)
         g === nothing || return g
     end
-    pieces = _DEVal[r[1] === nothing ? _de_arrconst(ctx, zeros(Float64, r[3])) :
-                    _de_slice(ctx, r[1]::_DEVal, r[2], r[3], r[4]; why=:runs) for r in runs]
+    pieces = _DEVal[
+        r[1] === nothing ? _de_arrconst(ctx, zeros(Float64, r[3])) :
+            _de_slice(ctx, r[1]::_DEVal, r[2], r[3], r[4]; why = :runs) for r in runs
+    ]
     return _de_concat(ctx, pieces)
 end
 
@@ -727,26 +770,28 @@ function _de_canon_worth(npieces::Int)
     return npieces > _de_gather_max_pieces()
 end
 
-function _de_canon_base(ctx::_DECtx, M::_DEMap)::Union{Nothing,_DEVal}
+function _de_canon_base(ctx::_DECtx, M::_DEMap)::Union{Nothing, _DEVal}
     hit = M.base[]
     hit === nothing || return hit
     n = length(M.m)
     n == 0 && return nothing
     prods = _DEVal[]
-    at = Dict{_MLIR.IR.Value,Int}()
+    at = Dict{_MLIR.IR.Value, Int}()
     needzero = false
     for e in M.m
         if e === nothing
             needzero = true
         else
-            sv = (e::Tuple{_DEVal,Int})[1]
+            sv = (e::Tuple{_DEVal, Int})[1]
             haskey(at, sv.v) || (push!(prods, sv); at[sv.v] = length(prods))
         end
     end
     isempty(prods) && return nothing
     tot = sum(q.len for q in prods) + (needzero ? 1 : 0)
-    _de_gather_base_fits(length(prods), needzero, tot,
-                         _de_gather_base_budget(ctx)) || return nothing
+    _de_gather_base_fits(
+        length(prods), needzero, tot,
+        _de_gather_base_budget(ctx)
+    ) || return nothing
     offs = Vector{Int}(undef, length(prods))
     acc = 0
     for k in eachindex(prods)
@@ -761,7 +806,7 @@ function _de_canon_base(ctx::_DECtx, M::_DEMap)::Union{Nothing,_DEVal}
         if e === nothing
             pos[i] = zpos
         else
-            sv, q = e::Tuple{_DEVal,Int}
+            sv, q = e::Tuple{_DEVal, Int}
             pos[i] = offs[at[sv.v]] + q
         end
         pos[i] == i || (inorder = false)
@@ -775,7 +820,7 @@ function _de_canon_base(ctx::_DECtx, M::_DEMap)::Union{Nothing,_DEVal}
         if inorder
             # The concatenation IS in slot order; the only op left is the trim
             # when the producers run past the map's last slot.
-            base.len == n ? base : _de_slice(ctx, base, 1, n; why=:canon)
+            base.len == n ? base : _de_slice(ctx, base, 1, n; why = :canon)
         else
             # MEMOIZED ON THE LAYOUT, not just cached on the map. A write
             # drops the map's base, and a section that interleaves writes with
@@ -803,32 +848,40 @@ end
 # own. `nothing` back means "emit a zero here": either no section writes the
 # slot at all, or the only writer is `section` itself, which is still running.
 # A write by a LATER section is the ordering violation, and it refuses.
-@inline function _de_unwritten(M::_DEMap, s::Int, section::Int32,
-                               name::AbstractString)
+@inline function _de_unwritten(
+        M::_DEMap, s::Int, section::Int32,
+        name::AbstractString
+    )
     w = @inbounds M.writer[s]
     (w == 0 || w <= section) && return nothing
-    _de_refuse("a read-before-write",
+    return _de_refuse(
+        "a read-before-write",
         "$name is read while emitting $(_de_sectionname(section)), and " *
-        "$(_de_sectionname(w)) writes it LATER. The ordering must come from " *
-        "the fill levels, which are supposed to guarantee that a level reads " *
-        "only levels below it. On host the read takes whatever the extended " *
-        "buffer holds at that point — a zero from the out-of-place runner's " *
-        "fresh vector, the PREVIOUS CALL's value from the in-place runner's " *
-        "reused one — so the two interpreters no longer agree either, and it " *
-        "is the level plan that has to change.")
+            "$(_de_sectionname(w)) writes it LATER. The ordering must come from " *
+            "the fill levels, which are supposed to guarantee that a level reads " *
+            "only levels below it. On host the read takes whatever the extended " *
+            "buffer holds at that point — a zero from the out-of-place runner's " *
+            "fresh vector, the PREVIOUS CALL's value from the in-place runner's " *
+            "reused one — so the two interpreters no longer agree either, and it " *
+            "is the level plan that has to change."
+    )
 end
 
 @inline function _de_src(ctx::_DECtx, M::_DEMap, s::Int)::_DESlot
-    (1 <= s <= length(M.m)) || _de_refuse("a read outside the slot map",
-        "slot $s is outside the extended state (length $(length(M.m))).")
+    (1 <= s <= length(M.m)) || _de_refuse(
+        "a read outside the slot map",
+        "slot $s is outside the extended state (length $(length(M.m)))."
+    )
     e = @inbounds M.m[s]
     e === nothing || return e
     return _de_unwritten(M, s, ctx.section, _de_slotname(ctx, s))
 end
 
-_de_read(ctx::_DECtx, M::_DEMap, s::Int, why::Symbol=:read1)::_DEVal =
-    (e = _de_src(ctx, M, s); e === nothing ? _de_const(ctx, 0.0) :
-                             _de_slice(ctx, e[1], e[2], e[2]; why=why))
+_de_read(ctx::_DECtx, M::_DEMap, s::Int, why::Symbol = :read1)::_DEVal =
+    (
+    e = _de_src(ctx, M, s); e === nothing ? _de_const(ctx, 0.0) :
+        _de_slice(ctx, e[1], e[2], e[2]; why = why)
+)
 
 function _de_gather(ctx::_DECtx, M::_DEMap, slots::Vector{Int})::_DEVal
     isempty(slots) &&
@@ -854,9 +907,11 @@ function _de_write!(ctx::_DECtx, M::_DEMap, slots::Vector{Int}, val::_DEVal)
         end
     else
         val.len == length(slots) ||
-            _de_refuse("a scatter of the wrong width",
-                "a kernel result of length $(val.len) is scattered into " *
-                "$(length(slots)) slots ($(_de_slotsname(ctx, slots))).")
+            _de_refuse(
+            "a scatter of the wrong width",
+            "a kernel result of length $(val.len) is scattered into " *
+                "$(length(slots)) slots ($(_de_slotsname(ctx, slots)))."
+        )
         for (l, s) in enumerate(slots)
             m[s] = (val, l)
         end
@@ -890,7 +945,7 @@ function _de_assemble(ctx::_DECtx, M::_DEMap, n::Int)::_DEVal
         if cb !== nothing
             # Slots `1..n` of a base in slot order: the base, or a prefix of it.
             cb.len == n && return cb
-            cb.len > n && return _de_slice(ctx, cb, 1, n; why=:assemble)
+            cb.len > n && return _de_slice(ctx, cb, 1, n; why = :assemble)
         end
     end
     return _de_emit_decomposed(ctx, srcs, runs, nzero)
@@ -915,22 +970,26 @@ function _de_buffer(ctx::_DECtx, arr::Vector{Float64})::_DEVal
             hit = ctx.bufvals[j]
             hit === nothing || return hit
             x = ctx.bufs[j]
-            x isa TracedRArray{Float64,1} ||
-                _de_refuse("a forcing buffer argument of type $(typeof(x))",
-                    "buffer $j of the `buffers` argument is not a traced " *
+            x isa TracedRArray{Float64, 1} ||
+                _de_refuse(
+                "a forcing buffer argument of type $(typeof(x))",
+                "buffer $j of the `buffers` argument is not a traced " *
                     "rank-1 Float64 array. Pass `map(ConcreteRArray, " *
                     "forcing_buffers(f))`, the container the explicit-buffers form " *
-                    "expects.")
+                    "expects."
+            )
             v = _DEVal(x.mlir_data, length(x))
             ctx.bufvals[j] = v
             _de_tally!(ctx, :forcing_input)
             return v
         end
     end
-    _de_refuse("a live forcing buffer of length $(length(arr))",
+    return _de_refuse(
+        "a live forcing buffer of length $(length(arr))",
         "the read's aliased host buffer is not in the `buffers` argument. " *
-        "Compile `direct_rhs_with_buffers(f)` and pass the container " *
-        "`forcing_buffers(f)` names, positionally; a buffer the emitter cannot " *
-        "find in it would otherwise be baked in as a compile-time constant and " *
-        "never see a refresh.")
+            "Compile `direct_rhs_with_buffers(f)` and pass the container " *
+            "`forcing_buffers(f)` names, positionally; a buffer the emitter cannot " *
+            "find in it would otherwise be baked in as a compile-time constant and " *
+            "never see a refresh."
+    )
 end

@@ -25,7 +25,7 @@ The algorithm itself (e.g. `Tsit5`) comes from the caller's own solver package
 module EarthSciASTSimulateExt
 
 using EarthSciAST: EarthSciAST, EsmProblem, SimulateError, DEFAULT_SIM_RELTOL,
-                   DEFAULT_SIM_ABSTOL, callbacks, param_map, sink_open!, sink_close!
+    DEFAULT_SIM_ABSTOL, callbacks, param_map, sink_open!, sink_close!
 import SciMLBase
 
 # SymbolicIndexingInterface reaches us through SciMLBase (which `using`s it), so
@@ -71,7 +71,7 @@ EarthSciAST._solve_problem(prob::EsmProblem, alg; kwargs...) =
 # not invent a name the flattened system does not declare.
 struct _MergedRenameIndex{C}
     cache::C
-    renames::Dict{Symbol,Symbol}
+    renames::Dict{Symbol, Symbol}
 end
 SII.symbolic_container(s::_MergedRenameIndex) = s.cache
 _resolve_merged(s::_MergedRenameIndex, sym) =
@@ -97,7 +97,7 @@ function _symbol_cache(prob::EsmProblem)
     # accepts. Parameter VALUE access (`getp`) is not wired: the carrier is a
     # `NamedTuple`, which SII has no `parameter_values` method for — read a
     # value through `prob.p` / `param_map(prob.p)` instead.
-    pm = prob.p === nothing ? Dict{String,Int}() : param_map(prob.p)
+    pm = prob.p === nothing ? Dict{String, Int}() : param_map(prob.p)
     psyms = Vector{Symbol}(undef, length(pm))
     ok = true
     for (name, i) in pm
@@ -107,8 +107,12 @@ function _symbol_cache(prob::EsmProblem)
     iv = Symbol(prob.output_meta.time_dim)
     sc = SII.SymbolCache(vars, psyms, iv)
     sys = isempty(prob.merged_renames) ? sc :
-          _MergedRenameIndex(sc, Dict{Symbol,Symbol}(Symbol(k) => Symbol(v)
-                                                     for (k, v) in prob.merged_renames))
+        _MergedRenameIndex(
+            sc, Dict{Symbol, Symbol}(
+                Symbol(k) => Symbol(v)
+                for (k, v) in prob.merged_renames
+            )
+        )
     prob.symcache[] = sys
     return sys
 end
@@ -129,9 +133,12 @@ function _ode_problem(prob::EsmProblem, tspan)
     backend === nothing ||
         return EarthSciAST._backend_ode_problem(backend, prob, tspan)
     return SciMLBase.ODEProblem(
-        SciMLBase.ODEFunction(prob.f!; sys = _symbol_cache(prob),
-                              EarthSciAST._ode_derivatives(prob)...),
-        copy(prob.u0), tspan, prob.p)
+        SciMLBase.ODEFunction(
+            prob.f!; sys = _symbol_cache(prob),
+            EarthSciAST._ode_derivatives(prob)...
+        ),
+        copy(prob.u0), tspan, prob.p
+    )
 end
 
 # --------------------------------------------------------------------------- #
@@ -148,7 +155,7 @@ end
 # `tstops` unions with them rather than replacing them.
 # --------------------------------------------------------------------------- #
 function _run_kwargs(prob::EsmProblem; kwargs...)
-    kw = Dict{Symbol,Any}(kwargs)
+    kw = Dict{Symbol, Any}(kwargs)
     # esm-spec §2.2.2: caller > the document's `solver` block > binding default.
     # `haskey` is what makes the first step expressible — a caller who named no
     # tolerance is distinguishable from one who passed the default value, which
@@ -161,11 +168,19 @@ function _run_kwargs(prob::EsmProblem; kwargs...)
     # touched here.
     let solver = EarthSciAST._document_solver(prob)
         haskey(kw, :reltol) ||
-            (kw[:reltol] = something(solver === nothing ? nothing : solver.reltol,
-                                     DEFAULT_SIM_RELTOL))
+            (
+            kw[:reltol] = something(
+                solver === nothing ? nothing : solver.reltol,
+                DEFAULT_SIM_RELTOL
+            )
+        )
         haskey(kw, :abstol) ||
-            (kw[:abstol] = something(solver === nothing ? nothing : solver.abstol,
-                                     DEFAULT_SIM_ABSTOL))
+            (
+            kw[:abstol] = something(
+                solver === nothing ? nothing : solver.abstol,
+                DEFAULT_SIM_ABSTOL
+            )
+        )
     end
     if haskey(kw, :callback)
         kw[:callback] === nothing && delete!(kw, :callback)
@@ -174,8 +189,11 @@ function _run_kwargs(prob::EsmProblem; kwargs...)
         cb === nothing || (kw[:callback] = cb)
     end
     ts = collect(Float64, prob.tstops)
-    haskey(kw, :tstops) && (ts = EarthSciAST._union_tstops(
-        ts, collect(Float64, kw[:tstops])))
+    haskey(kw, :tstops) && (
+        ts = EarthSciAST._union_tstops(
+            ts, collect(Float64, kw[:tstops])
+        )
+    )
     isempty(ts) ? delete!(kw, :tstops) : (kw[:tstops] = ts)
     haskey(kw, :saveat) && kw[:saveat] === nothing && delete!(kw, :saveat)
     # Streaming-output mode (streaming-output-sinks RFC §16.5): the sink owns
@@ -190,9 +208,12 @@ function _run_kwargs(prob::EsmProblem; kwargs...)
     return kw
 end
 
-_need_alg(alg) = alg === nothing && throw(SimulateError(
-    "solving an EsmProblem needs an ODE algorithm: pass `alg = Tsit5()` " *
-    "(and `using OrdinaryDiffEqTsit5`)"))
+_need_alg(alg) = alg === nothing && throw(
+    SimulateError(
+        "solving an EsmProblem needs an ODE algorithm: pass `alg = Tsit5()` " *
+            "(and `using OrdinaryDiffEqTsit5`)"
+    )
+)
 
 # --------------------------------------------------------------------------- #
 # `init` / `__init` — §2.5.6. `step!` and `solve!` then come free: what we hand
@@ -205,8 +226,10 @@ _need_alg(alg) = alg === nothing && throw(SimulateError(
 function SciMLBase.__init(prob::EsmProblem, alg = nothing, args...; kwargs...)
     _need_alg(alg)
     EarthSciAST._prepare_run!(prob, prob.tspan[1])
-    return SciMLBase.init(_ode_problem(prob, prob.tspan), alg, args...;
-                          _run_kwargs(prob; kwargs...)...)
+    return SciMLBase.init(
+        _ode_problem(prob, prob.tspan), alg, args...;
+        _run_kwargs(prob; kwargs...)...
+    )
 end
 
 function SciMLBase.__solve(prob::EsmProblem, alg = nothing, args...; kwargs...)
@@ -229,8 +252,10 @@ function SciMLBase.__solve(prob::EsmProblem, alg = nothing, args...; kwargs...)
         # integrated). `init` hands back OrdinaryDiffEq's NULL integrator,
         # whose `solve!` returns `nothing`; `solve` builds the empty solution
         # the caller can still read observeds off.
-        return SciMLBase.solve(_ode_problem(prob, prob.tspan), alg, args...;
-                               _run_kwargs(prob; kwargs...)...)
+        return SciMLBase.solve(
+            _ode_problem(prob, prob.tspan), alg, args...;
+            _run_kwargs(prob; kwargs...)...
+        )
     finally
         isempty(ls) || foreach(sink_close!, ls)
     end
@@ -253,8 +278,10 @@ function SciMLBase.init(prob::EsmProblem, args...; alg = nothing, kwargs...)
 end
 
 _split_alg(alg, args) = isempty(args) ? (alg, ()) :
-    (alg === nothing ? (first(args), Base.tail(args)) :
-     throw(SimulateError("`alg` was passed both positionally and by keyword")))
+    (
+        alg === nothing ? (first(args), Base.tail(args)) :
+        throw(SimulateError("`alg` was passed both positionally and by keyword"))
+    )
 
 # --------------------------------------------------------------------------- #
 # `remake` — §2.5.5. The logic lives in the core (it needs no solver); this is
@@ -281,9 +308,13 @@ SciMLBase.remake(prob::EsmProblem; kwargs...) = EarthSciAST.remake(prob; kwargs.
 # clone the compiled RHS and BREAK the aliasing between the live forcing buffers
 # and the closure that reads them.
 # --------------------------------------------------------------------------- #
-SciMLBase.EnsembleProblem(prob::EsmProblem, rewrite; safetycopy::Bool = false,
-                          kwargs...) =
-    SciMLBase.EnsembleProblem(prob; prob_func = rewrite, safetycopy = safetycopy,
-                              kwargs...)
+SciMLBase.EnsembleProblem(
+    prob::EsmProblem, rewrite; safetycopy::Bool = false,
+    kwargs...
+) =
+    SciMLBase.EnsembleProblem(
+    prob; prob_func = rewrite, safetycopy = safetycopy,
+    kwargs...
+)
 
 end # module EarthSciASTSimulateExt

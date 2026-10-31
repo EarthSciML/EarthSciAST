@@ -25,7 +25,7 @@ end
 # (as today) or an index-set reference object (RFC §5.2).
 function _serialize_range_value(v)
     if v isa IndexSetRef
-        d = Dict{String,Any}("from" => v.from)
+        d = Dict{String, Any}("from" => v.from)
         isempty(v.of) || (d["of"] = v.of)
         return d
     end
@@ -55,14 +55,15 @@ end
 # { "src_env": […], "tgt_env": […], "eps": … } }`.
 # `eps` is emitted only when the clause spelled it (absent ⇒ the schema default 0).
 function _serialize_join_clause(clause::_OverlapJoinSpec)
-    ov = Dict{String,Any}(
+    ov = Dict{String, Any}(
         "src_env" => copy(clause.src_env),
-        "tgt_env" => copy(clause.tgt_env))
+        "tgt_env" => copy(clause.tgt_env)
+    )
     clause.eps_given && (ov["eps"] = clause.eps)
-    return Dict{String,Any}("overlap" => ov)
+    return Dict{String, Any}("overlap" => ov)
 end
 function _serialize_join_clause(clause)
-    out = Dict{String,Any}("on" => [[p[1], p[2]] for p in clause])
+    out = Dict{String, Any}("on" => [[p[1], p[2]] for p in clause])
     syms = _clause_syms(clause)
     syms === nothing || (out["syms"] = [syms[1], syms[2]])
     return out
@@ -74,8 +75,12 @@ function _serialize_opexpr_field(field::Symbol, v)
     # `MetaparameterExpression` items) — an `ASTExpr` bound has to go back out as
     # its wire form, not as a struct, so it gets a bespoke encoding here.
     if field === :regions
-        return [[[b isa ASTExpr ? serialize_expression(b) : b for b in dim]
-                 for dim in region] for region in v]
+        return [
+            [
+                [b isa ASTExpr ? serialize_expression(b) : b for b in dim]
+                    for dim in region
+            ] for region in v
+        ]
     end
     kind = getproperty(OPEXPR_FIELD_TABLE, field).kind
     if kind === :expr
@@ -83,9 +88,9 @@ function _serialize_opexpr_field(field::Symbol, v)
     elseif kind === :expr_vec
         return [serialize_expression(x) for x in v]
     elseif kind === :ranges
-        return Dict{String,Any}(k => _serialize_range_value(x) for (k, x) in v)
+        return Dict{String, Any}(k => _serialize_range_value(x) for (k, x) in v)
     elseif kind === :expr_map
-        return Dict{String,Any}(k => serialize_expression(x) for (k, x) in v)
+        return Dict{String, Any}(k => serialize_expression(x) for (k, x) in v)
     elseif kind === :join
         return [_serialize_join_clause(clause) for clause in v]
     else
@@ -121,7 +126,7 @@ function serialize_expression(expr::ASTExpr)
         # only when present (`!== nothing`) so nodes round-trip
         # byte-identically; `join_gates` — the build-time resolved join — is
         # deliberately absent from the table and is never serialized.
-        result = Dict{String,Any}(
+        result = Dict{String, Any}(
             "op" => expr.op,
             "args" => [serialize_expression(arg) for arg in expr.args]
         )
@@ -155,7 +160,7 @@ end
 
 Serialize DiscreteEventTrigger to JSON-compatible format.
 """
-function serialize_trigger(trigger::DiscreteEventTrigger)::Dict{String,Any}
+function serialize_trigger(trigger::DiscreteEventTrigger)::Dict{String, Any}
     if isa(trigger, ConditionTrigger)
         return Dict("type" => "condition", "expression" => serialize_expression(trigger.expression))
     elseif isa(trigger, PeriodicTrigger)
@@ -176,9 +181,9 @@ end
 
 Serialize EventType to JSON-compatible format.
 """
-function serialize_event(event::EventType)::Dict{String,Any}
+function serialize_event(event::EventType)::Dict{String, Any}
     if isa(event, ContinuousEvent)
-        result = Dict{String,Any}(
+        result = Dict{String, Any}(
             "conditions" => [serialize_expression(c) for c in event.conditions],
             "affects" => [serialize_affect_equation(a) for a in event.affects]
         )
@@ -194,10 +199,6 @@ function serialize_event(event::EventType)::Dict{String,Any}
 end
 
 
-
-
-
-
 """
     _serialize_subsystem(v) -> Dict{String,Any}
 
@@ -205,23 +206,30 @@ Serialize a single model subsystem value: a child `Model`, or an unresolved
 `SubsystemRef` (which round-trips back to `{"ref": ...}`). From esm 1.0.0 a
 data source is a registry entry, not a component, so it never appears here.
 """
-function _serialize_subsystem(v)::Dict{String,Any}
+function _serialize_subsystem(v)::Dict{String, Any}
     if v isa SubsystemRef
-        out = Dict{String,Any}("ref" => v.ref)
+        out = Dict{String, Any}("ref" => v.ref)
         # Metaparameter bindings at the subsystem edge (esm-spec §9.7.6 site 3)
         # and injected imports (§9.7.10 form A) survive only while the ref is
         # unresolved; a resolved subsystem round-trips as the instantiated,
         # fixpoint-lowered inline component and neither field remains.
-        isempty(v.bindings) || (out["bindings"] = Dict{String,Any}(
-            k => b for (k, b) in v.bindings))
+        isempty(v.bindings) || (
+            out["bindings"] = Dict{String, Any}(
+                k => b for (k, b) in v.bindings
+            )
+        )
         isempty(v.expression_template_imports) ||
-            (out["expression_template_imports"] =
-                [_to_native_json(e) for e in v.expression_template_imports])
+            (
+            out["expression_template_imports"] =
+                [_to_native_json(e) for e in v.expression_template_imports]
+        )
         # Mount-edge index-set renaming (esm-spec §4.7): same fate — it survives
         # only while the ref is unresolved.
         (v.index_set_rename === nothing || isempty(v.index_set_rename)) ||
-            (out["index_set_rename"] =
-                Dict{String,Any}(k => n for (k, n) in v.index_set_rename))
+            (
+            out["index_set_rename"] =
+                Dict{String, Any}(k => n for (k, n) in v.index_set_rename)
+        )
         return out
     else
         return serialize_model(v)
@@ -229,19 +237,13 @@ function _serialize_subsystem(v)::Dict{String,Any}
 end
 
 
-
-
-
-
-
-
 """
     serialize_reaction(reaction::Reaction) -> Dict{String,Any}
 
 Serialize Reaction to JSON-compatible format.
 """
-function serialize_reaction(reaction::Reaction)::Dict{String,Any}
-    result = Dict{String,Any}(
+function serialize_reaction(reaction::Reaction)::Dict{String, Any}
+    result = Dict{String, Any}(
         "id" => reaction.id,
         "rate" => serialize_expression(reaction.rate)
     )
@@ -257,7 +259,7 @@ function serialize_reaction(reaction::Reaction)::Dict{String,Any}
     if substrates_raw !== nothing
         result["substrates"] = [
             Dict("species" => entry.species, "stoichiometry" => _emit_stoich(entry.stoichiometry))
-            for entry in substrates_raw
+                for entry in substrates_raw
         ]
     else
         result["substrates"] = nothing
@@ -267,7 +269,7 @@ function serialize_reaction(reaction::Reaction)::Dict{String,Any}
     if products_raw !== nothing
         result["products"] = [
             Dict("species" => entry.species, "stoichiometry" => _emit_stoich(entry.stoichiometry))
-            for entry in products_raw
+                for entry in products_raw
         ]
     else
         result["products"] = nothing
@@ -285,8 +287,8 @@ end
 
 Serialize ReactionSystem to JSON-compatible format.
 """
-function serialize_reaction_system(rs::ReactionSystem)::Dict{String,Any}
-    result = Dict{String,Any}(
+function serialize_reaction_system(rs::ReactionSystem)::Dict{String, Any}
+    result = Dict{String, Any}(
         "species" => Dict(s.name => serialize_species(s) for s in rs.species),
         "parameters" => Dict(p.name => serialize_parameter(p) for p in rs.parameters),
         "reactions" => [serialize_reaction(r) for r in rs.reactions]
@@ -304,8 +306,9 @@ function serialize_reaction_system(rs::ReactionSystem)::Dict{String,Any}
     # Hierarchy. `coerce_reaction_system` recurses, so this must too — emitting
     # only the root is how the hierarchy used to disappear.
     if !isempty(rs.subsystems)
-        result["subsystems"] = Dict{String,Any}(
-            k => serialize_reaction_system(v) for (k, v) in rs.subsystems)
+        result["subsystems"] = Dict{String, Any}(
+            k => serialize_reaction_system(v) for (k, v) in rs.subsystems
+        )
     end
 
     if rs.tolerance !== nothing
@@ -326,10 +329,6 @@ function serialize_reaction_system(rs::ReactionSystem)::Dict{String,Any}
 end
 
 
-
-
-
-
 # NOTE: `serialize_operator` / `serialize_registered_function` were removed
 # along with the `operators` / `registered_functions` emit path (esm-spec
 # v0.3.0 §9 closure): `serialize_esm_file` now refuses to write those blocks,
@@ -341,7 +340,7 @@ end
 
 Serialize CouplingEntry to JSON-compatible format based on concrete type.
 """
-function serialize_coupling_entry(entry::CouplingEntry)::Dict{String,Any}
+function serialize_coupling_entry(entry::CouplingEntry)::Dict{String, Any}
     if entry isa CouplingOperatorCompose
         return serialize_operator_compose(entry)
     elseif entry isa CouplingCouple
@@ -362,17 +361,15 @@ function serialize_coupling_entry(entry::CouplingEntry)::Dict{String,Any}
 end
 
 
-
-
 """
     serialize_variable_map(entry::CouplingVariableMap) -> Dict{String,Any}
 
 Serialize variable_map coupling entry.
 """
-function serialize_variable_map(entry::CouplingVariableMap)::Dict{String,Any}
+function serialize_variable_map(entry::CouplingVariableMap)::Dict{String, Any}
     # `transform` is a named transform string or an Expression operator node
     # (esm-spec §10.4); expressions round-trip through the standard serializer.
-    result = Dict{String,Any}(
+    result = Dict{String, Any}(
         "type" => "variable_map",
         "from" => entry.from,
         "to" => entry.to,
@@ -394,11 +391,6 @@ function serialize_variable_map(entry::CouplingVariableMap)::Dict{String,Any}
 end
 
 
-
-
-
-
-
 """
     serialize_solver(solver::Solver) -> OrderedDict{String,Any}
 
@@ -410,8 +402,8 @@ stable. The result is EMPTY only for a `Solver` with nothing set — which
 from a document carries one — and callers drop the key rather than writing
 `"solver": {}`, since §2.2 makes the empty block a second spelling of absence.
 """
-function serialize_solver(solver::Solver)::OrderedDict{String,Any}
-    block = OrderedDict{String,Any}()
+function serialize_solver(solver::Solver)::OrderedDict{String, Any}
+    block = OrderedDict{String, Any}()
     solver.stiffness === nothing || (block["stiffness"] = solver.stiffness)
     solver.abstol === nothing || (block["abstol"] = solver.abstol)
     solver.reltol === nothing || (block["reltol"] = solver.reltol)
@@ -421,8 +413,12 @@ function serialize_solver(solver::Solver)::OrderedDict{String,Any}
     solver.external === nothing || (block["external"] = solver.external)
     # The AUTHORED bounds, never their value in seconds (esm-spec §2.2.7).
     solver.time_span === nothing ||
-        (block["time_span"] = OrderedDict{String,Any}("start" => solver.time_span.start,
-                                                      "end" => solver.time_span.stop))
+        (
+        block["time_span"] = OrderedDict{String, Any}(
+            "start" => solver.time_span.start,
+            "end" => solver.time_span.stop
+        )
+    )
     return block
 end
 
@@ -431,8 +427,8 @@ end
 
 Serialize EsmFile to JSON-compatible format.
 """
-function serialize_esm_file(file::EsmFile)::Dict{String,Any}
-    result = Dict{String,Any}(
+function serialize_esm_file(file::EsmFile)::Dict{String, Any}
+    result = Dict{String, Any}(
         "esm" => file.esm,
         "metadata" => serialize_metadata(file.metadata)
     )
@@ -449,15 +445,17 @@ function serialize_esm_file(file::EsmFile)::Dict{String,Any}
     if file.enums !== nothing
         # esm-spec §9.3 — enum names map to objects mapping symbol → integer
         # (any integer). The on-wire shape is the parsed shape unchanged.
-        result["enums"] = Dict{String,Any}(
-            k => Dict{String,Int}(s => i for (s, i) in v) for (k, v) in file.enums)
+        result["enums"] = Dict{String, Any}(
+            k => Dict{String, Int}(s => i for (s, i) in v) for (k, v) in file.enums
+        )
     end
     if file.function_tables !== nothing
         # esm-spec §9.5 — sampled function tables (v0.4.0). Tables are
         # first-class authored constructs; round-trip MUST preserve the
         # authored form (no auto-promotion of inline-const lookups).
-        result["function_tables"] = Dict{String,Any}(
-            k => serialize_function_table(v) for (k, v) in file.function_tables)
+        result["function_tables"] = Dict{String, Any}(
+            k => serialize_function_table(v) for (k, v) in file.function_tables
+        )
     end
     if !isempty(file.coupling)
         result["coupling"] = [serialize_coupling_entry(c) for c in file.coupling]
@@ -468,8 +466,9 @@ function serialize_esm_file(file::EsmFile)::Dict{String,Any}
     # Document-scoped index-set registry (RFC semiring-faq-unified-ir §5.2;
     # esm-spec v0.8.0) — serialized at the top level, a sibling of `models`.
     if !isempty(file.index_sets)
-        result["index_sets"] = Dict{String,Any}(
-            k => serialize_index_set(v) for (k, v) in file.index_sets)
+        result["index_sets"] = Dict{String, Any}(
+            k => serialize_index_set(v) for (k, v) in file.index_sets
+        )
     end
 
     # The top-level `expression_templates` registry and `metaparameters` block,
@@ -511,7 +510,7 @@ function serialize_esm_file(file::EsmFile)::Dict{String,Any}
     # materialized-lexicographic). Keyed "<compkind>.<cname>".
     if file.component_templates !== nothing
         for (key, block) in file.component_templates
-            parts = split(key, "."; limit=2)
+            parts = split(key, "."; limit = 2)
             length(parts) == 2 || continue
             compkind, cname = String(parts[1]), String(parts[2])
             haskey(result, compkind) || continue
@@ -531,8 +530,8 @@ Serialize a [`FunctionTable`](@ref) (esm-spec §9.5) back to a JSON-compatible
 dict. Tables are first-class authored constructs; no auto-promotion or
 demotion of inline-const lookups happens at serialize time.
 """
-function serialize_function_table(ft::FunctionTable)::Dict{String,Any}
-    result = Dict{String,Any}(
+function serialize_function_table(ft::FunctionTable)::Dict{String, Any}
+    result = Dict{String, Any}(
         "axes" => [serialize_function_table_axis(ax) for ax in ft.axes],
         "data" => ft.data,
     )
@@ -557,8 +556,8 @@ function serialize_function_table(ft::FunctionTable)::Dict{String,Any}
     return result
 end
 
-function serialize_function_table_axis(ax::FunctionTableAxis)::Dict{String,Any}
-    result = Dict{String,Any}(
+function serialize_function_table_axis(ax::FunctionTableAxis)::Dict{String, Any}
+    result = Dict{String, Any}(
         "name" => ax.name,
         "values" => ax.values,
     )
@@ -643,18 +642,22 @@ end
 # a case are identity-encoded JSON scalars / arrays / verbatim values.
 function _record_emit_expr(row, v)
     kind = row.kind
-    if kind === :expr
+    return if kind === :expr
         :(serialize_expression($v))
     elseif kind === :expr_vec
         :([serialize_expression(x) for x in $v])
     elseif kind === :number_or_expr
-        :(let x = $v; x isa Number ? x : serialize_expression(x) end)
+        :(
+            let x = $v
+                x isa Number ? x : serialize_expression(x)
+            end
+        )
     elseif kind === :float_map
-        :(Dict{String,Any}(k => x for (k, x) in $v))
+        :(Dict{String, Any}(k => x for (k, x) in $v))
     elseif kind === :value_map
         # A scalar emits as a number; INLINE ARRAY DATA emits as the row-major
         # nested JSON array it was authored as (esm-spec §6.6.2).
-        :(Dict{String,Any}(k => _emit_inline_value(x) for (k, x) in $v))
+        :(Dict{String, Any}(k => _emit_inline_value(x) for (k, x) in $v))
     elseif kind === :inline_value
         :(_emit_inline_value($v))
     elseif kind === :raw_vec
@@ -668,7 +671,7 @@ function _record_emit_expr(row, v)
     elseif kind === :record_vec
         :([$(Symbol(:serialize_, row.of))(x) for x in $v])
     elseif kind === :record_map
-        :(Dict{String,Any}(k => $(Symbol(:serialize_, row.of))(x) for (k, x) in $v))
+        :(Dict{String, Any}(k => $(Symbol(:serialize_, row.of))(x) for (k, x) in $v))
     else
         v
     end
@@ -692,8 +695,8 @@ Emit a [`Distribution`](@ref) back to its wire shape, restoring the per-kind
 parameter names the struct stores by role: `normal` writes `mean`/`std`,
 `lognormal` writes `mu`/`sigma`, `uniform` writes `low`/`high` (esm-spec §6.3).
 """
-function serialize_distribution(d::Distribution)::Dict{String,Any}
-    out = Dict{String,Any}("kind" => d.kind)
+function serialize_distribution(d::Distribution)::Dict{String, Any}
+    out = Dict{String, Any}("kind" => d.kind)
     if d.kind == "normal"
         out["mean"] = d.location
         d.scale === nothing || (out["std"] = d.scale)
@@ -713,7 +716,7 @@ end
 # `distribution`: a plain optional record through the hand-written per-kind
 # serializer. Shared by `ModelVariable` and a reaction system's `Parameter` —
 # esm-spec §6.3's value model is ONE model, spelled identically on both.
-_emit_distribution(v::Union{ModelVariable,Parameter}) =
+_emit_distribution(v::Union{ModelVariable, Parameter}) =
     v.distribution === nothing ? nothing : serialize_distribution(v.distribution)
 
 # `update`: the object-or-array union of esm-spec §5.4. One rule emits as the
@@ -722,7 +725,7 @@ _emit_distribution(v::Union{ModelVariable,Parameter}) =
 # is stable. `_update_is_scalar_form` (types.jl) is that decision,
 # shared with `_update_rule_path` so an emitted document and a diagnostic
 # pointer into it can never disagree about which form this update has.
-function _emit_parameter_update_spec(v::Union{ModelVariable,Parameter})
+function _emit_parameter_update_spec(v::Union{ModelVariable, Parameter})
     v.update === nothing && return nothing
     rules = v.update
     isempty(rules) && return nothing
@@ -731,7 +734,7 @@ function _emit_parameter_update_spec(v::Union{ModelVariable,Parameter})
 end
 
 # coupling_import `bind`: always emitted (an empty bind map round-trips as {}).
-_emit_coupling_import_bind(entry::CouplingImport) = Dict{String,Any}(entry.bind)
+_emit_coupling_import_bind(entry::CouplingImport) = Dict{String, Any}(entry.bind)
 
 # index_sets `members`: `members_raw` — the originally-typed values — is what
 # round-trips back to the wire `members` key when present (mirroring
@@ -744,12 +747,12 @@ _emit_index_set_members(is::IndexSet) =
 # Model `subsystems`: emitted when non-empty; each entry dispatches on its
 # §4.7 union arm (`_serialize_subsystem`).
 _emit_model_subsystems(m::Model) = isempty(m.subsystems) ? nothing :
-    Dict{String,Any}(k => _serialize_subsystem(v) for (k, v) in m.subsystems)
+    Dict{String, Any}(k => _serialize_subsystem(v) for (k, v) in m.subsystems)
 
 # Model `guesses`: number-or-Expression map (gt-ebuq).
 function _emit_model_guesses(m::Model)
     isempty(m.guesses) && return nothing
-    out = Dict{String,Any}()
+    out = Dict{String, Any}()
     for (k, v) in m.guesses
         out[k] = v isa ASTExpr ? serialize_expression(v) : v
     end
@@ -770,7 +773,7 @@ function _emit_assertion_reference(a::Assertion)
     if a.reference isa ASTExpr
         return serialize_expression(a.reference)
     elseif a.reference isa AbstractDict
-        ref_out = Dict{String,Any}()
+        ref_out = Dict{String, Any}()
         for (k, v) in a.reference
             ref_out[string(k)] = v
         end
@@ -786,22 +789,26 @@ function _record_emit_stmt(row)
     w = row.wire
     f = row.f
     emit = row.emit
-    if emit === :never
+    return if emit === :never
         nothing
     elseif emit === :always
         :(result[$w] = $(_record_emit_expr(row, :(x.$f))))
     elseif emit === :nonnothing
-        :(let v = x.$f
-              v === nothing || (result[$w] = $(_record_emit_expr(row, :v)))
-          end)
+        :(
+            let v = x.$f
+                v === nothing || (result[$w] = $(_record_emit_expr(row, :v)))
+            end
+        )
     elseif emit === :nonempty
         :(isempty(x.$f) || (result[$w] = $(_record_emit_expr(row, :(x.$f)))))
     elseif emit === :nondefault
         :(x.$f == $(row.default) || (result[$w] = $(_record_emit_expr(row, :(x.$f)))))
     elseif emit === :custom
-        :(let v = $(row.emit_fn)(x)
-              v === nothing || (result[$w] = v)
-          end)
+        :(
+            let v = $(row.emit_fn)(x)
+                v === nothing || (result[$w] = v)
+            end
+        )
     else
         error("RECORD_FIELD_TABLES: unknown emit policy $(emit) for field $(row.f)")
     end
@@ -817,18 +824,20 @@ for spec in RECORD_FIELD_TABLES
         s = _record_emit_stmt(row)
         s === nothing || push!(stmts, s)
     end
-    @eval function $sname(x::$(spec.T))::Dict{String,Any}
-        result = Dict{String,Any}()
+    @eval function $sname(x::$(spec.T))::Dict{String, Any}
+        result = Dict{String, Any}()
         $(stmts...)
         return result
     end
-    @eval @doc $("""
-        serialize_$(spec.fn)(x::$(spec.T)) -> Dict{String,Any}
+    @eval @doc $(
+        """
+            serialize_$(spec.fn)(x::$(spec.T)) -> Dict{String,Any}
 
-    Serialize `$(spec.T)` to its JSON-compatible wire form. GENERATED from
-    `RECORD_FIELD_TABLES` (types.jl); the parse direction is generated from
-    the same table in parse.jl.
-    """) $sname
+        Serialize `$(spec.T)` to its JSON-compatible wire form. GENERATED from
+        `RECORD_FIELD_TABLES` (types.jl); the parse direction is generated from
+        the same table in parse.jl.
+        """
+    ) $sname
 end
 
 """

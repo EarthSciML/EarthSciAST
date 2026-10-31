@@ -32,11 +32,11 @@ _xeq_probe_states(n) = (
 )
 
 # Build under `compiler` and return (du probes, u0, p, var_map, counters).
-function _xeq_probe(build; compiler=:native)
+function _xeq_probe(build; compiler = :native)
     _BENCH_ON[] = true
     _bench_reset!()
     f, u0, p, _, vmap = build(compiler)
-    counters = (variants=_BENCH_BODY_VARIANTS[], compiles=_BENCH_COMPILE_CALLS[])
+    counters = (variants = _BENCH_BODY_VARIANTS[], compiles = _BENCH_COMPILE_CALLS[])
     _BENCH_ON[] = false
     dus = Vector{Float64}[]
     for (ti, u) in zip((0.0, 0.7, 3.25), _xeq_probe_states(length(u0)))
@@ -49,8 +49,8 @@ end
 
 # The native/interpreter differential for one builder; returns both for extra pins.
 function _xeq_oracle(build)
-    on = _xeq_probe(build; compiler=:native)
-    off = _xeq_probe(build; compiler=:interpreter)
+    on = _xeq_probe(build; compiler = :native)
+    off = _xeq_probe(build; compiler = :interpreter)
     @test on[4] == off[4]                    # identical state map
     @test on[2] == off[2]                    # identical u0 (bitwise: Float64 ==)
     @test on[3] === off[3] || isequal(on[3], off[3])   # identical params
@@ -66,14 +66,20 @@ end
 # interning, both equations instantiate the SAME template expansion roots —
 # the D(m,t)/D(mq,t)/D(dev,t) sharing shape in miniature).
 function _xeq_two_eq_fixture(fix::AbstractString)
-    raw = JSON3.read(read(fix, String), Dict{String,Any})
+    raw = JSON3.read(read(fix, String), Dict{String, Any})
     m = raw["models"]["Transport"]
-    m["variables"]["r"] = Dict("type" => "unknown", "units" => "1",
-                               "shape" => ["x", "y", "z"], "default" => 0.25)
+    m["variables"]["r"] = Dict(
+        "type" => "unknown", "units" => "1",
+        "shape" => ["x", "y", "z"], "default" => 0.25
+    )
     adv = m["equations"][1]["rhs"]
-    m["equations"] = Any[m["equations"][1],
-        Dict("lhs" => Dict("op" => "D", "args" => Any["r"], "wrt" => "t"),
-             "rhs" => Dict("op" => "*", "args" => Any[0.5, adv]))]
+    m["equations"] = Any[
+        m["equations"][1],
+        Dict(
+            "lhs" => Dict("op" => "D", "args" => Any["r"], "wrt" => "t"),
+            "rhs" => Dict("op" => "*", "args" => Any[0.5, adv])
+        ),
+    ]
     out = joinpath(mktempdir(), "transport_two_eq.esm")
     open(out, "w") do io
         JSON3.write(io, raw)
@@ -88,23 +94,34 @@ function _xeq_observed_faq_model(N)
     kuv = _op("*", _v("k0"), _op("+", _idx("u", _v("i")), _idx("v", _v("i"))))
     # esm 1.0.0 (esm-spec §6.3.1): `w` is a plain unknown; its `makearray` body
     # is the bare-variable-LHS equation spliced in below.
-    wdef = ESM.OpExpr("makearray", ESM.ASTExpr[];
-        regions=[[[1, N]]], values=ESM.ASTExpr[kuv])
+    wdef = ESM.OpExpr(
+        "makearray", ESM.ASTExpr[];
+        regions = [[[1, N]]], values = ESM.ASTExpr[kuv]
+    )
     vars = Dict(
         "u" => ESM.ModelVariable(ESM.UnknownVariable),
         "v" => ESM.ModelVariable(ESM.UnknownVariable),
-        "k0" => ESM.ModelVariable(ESM.ParameterVariable; default=2.0),
-        "w" => ESM.ModelVariable(ESM.UnknownVariable))
-    lap(x) = _op("+", _idx(x, _op("-", _v("i"), _i(1))),
-                 _op("*", _n(-2.0), _idx(x, _v("i"))),
-                 _idx(x, _op("+", _v("i"), _i(1))))
+        "k0" => ESM.ModelVariable(ESM.ParameterVariable; default = 2.0),
+        "w" => ESM.ModelVariable(ESM.UnknownVariable)
+    )
+    lap(x) = _op(
+        "+", _idx(x, _op("-", _v("i"), _i(1))),
+        _op("*", _n(-2.0), _idx(x, _v("i"))),
+        _idx(x, _op("+", _v("i"), _i(1)))
+    )
     wref = _op("index", _v("w"), _v("i"))
-    eqs = [ESM.Equation(_v("w"), wdef),
-           ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                        _ao1(_op("+", lap("u"), wref), "i", 1, N)),
-           ESM.Equation(_ao1(_Didx("v", _v("i")), "i", 1, N),
-                        _ao1(_op("-", lap("v"), wref), "i", 1, N))]
-    ESM.Model(vars, eqs)
+    eqs = [
+        ESM.Equation(_v("w"), wdef),
+        ESM.Equation(
+            _ao1(_Didx("u", _v("i")), "i", 1, N),
+            _ao1(_op("+", lap("u"), wref), "i", 1, N)
+        ),
+        ESM.Equation(
+            _ao1(_Didx("v", _v("i")), "i", 1, N),
+            _ao1(_op("-", lap("v"), wref), "i", 1, N)
+        ),
+    ]
+    return ESM.Model(vars, eqs)
 end
 
 # The one-equation fixture's compiled-variant count, so the two-equation
@@ -118,8 +135,10 @@ const ONE_EQ_VARIANTS = Ref(0)
     @testset "compile-once fixture (7³, one equation)" begin
         # Single equation: no cross-equation sharing possible — the hoist must
         # be a pure no-op (same variant count, same bits).
-        build(compiler) = ESM._build_evaluator(ESM.flatten(ESM.load_path(FIX));
-                                              compiler=compiler)
+        build(compiler) = ESM._build_evaluator(
+            ESM.flatten(ESM.load_path(FIX));
+            compiler = compiler
+        )
         on, _off = _xeq_oracle(build)
         @test length(on[2]) == 343
         @test on[5].variants == 15
@@ -128,8 +147,10 @@ const ONE_EQ_VARIANTS = Ref(0)
 
     @testset "two equations sharing template roots" begin
         FIX2 = _xeq_two_eq_fixture(FIX)
-        build(compiler) = ESM._build_evaluator(ESM.flatten(ESM.load_path(FIX2));
-                                              compiler=compiler)
+        build(compiler) = ESM._build_evaluator(
+            ESM.flatten(ESM.load_path(FIX2));
+            compiler = compiler
+        )
         on, off = _xeq_oracle(build)
         @test length(on[2]) == 2 * 343
         # THE A3 property, stated without an oracle switch: two equations over
@@ -147,13 +168,15 @@ const ONE_EQ_VARIANTS = Ref(0)
     @testset "multi-equation observed chain (shared obs memo, no templates)" begin
         N = 16
         model = _xeq_observed_faq_model(N)
-        ics = Dict{String,Float64}()
+        ics = Dict{String, Float64}()
         for k in 1:N
             ics["u[$k]"] = sin(0.3k) + 0.1k
             ics["v[$k]"] = cos(0.2k) + 0.05k
         end
-        build(compiler) = ESM._build_evaluator(model; initial_conditions=ics,
-                                              compiler=compiler)
+        build(compiler) = ESM._build_evaluator(
+            model; initial_conditions = ics,
+            compiler = compiler
+        )
         # `:native` is what the shared obs memo runs on, and its du must be
         # non-trivial or the memo was never reached. There is no interpreter
         # oracle for this one: `:interpreter` inlines every array observed, and
@@ -162,17 +185,21 @@ const ONE_EQ_VARIANTS = Ref(0)
         # than in the memo, and it is older than the `compiler` keyword — pinned
         # here so it is visible, and so closing it fails this line instead of
         # passing silently.
-        on = _xeq_probe(build; compiler=:native)
+        on = _xeq_probe(build; compiler = :native)
         @test any(du -> sum(abs, du) > 0, on[1])
         @test_throws ESM.TreeWalkError build(:interpreter)
     end
 
     @testset "proxy27 bench fixture" begin
-        P27 = joinpath(TESTUTILS_REPO_ROOT, "scripts", "bench", "fixtures",
-                       "proxy27.esm")
+        P27 = joinpath(
+            TESTUTILS_REPO_ROOT, "scripts", "bench", "fixtures",
+            "proxy27.esm"
+        )
         if isfile(P27)
-            build(compiler) = ESM._build_evaluator(ESM.load_path(P27);
-                                                  compiler=compiler)
+            build(compiler) = ESM._build_evaluator(
+                ESM.load_path(P27);
+                compiler = compiler
+            )
             _xeq_oracle(build)
         else
             @info "proxy27.esm not found; skipping" P27

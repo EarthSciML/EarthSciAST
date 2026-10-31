@@ -17,8 +17,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
 
 @testset "template-library imports + metaparameters (esm-spec §9.7)" begin
     repo_root = TESTUTILS_REPO_ROOT
-    conf(parts...) = joinpath(repo_root, "tests", "conformance",
-                              "expression_templates", parts...)
+    conf(parts...) = joinpath(
+        repo_root, "tests", "conformance",
+        "expression_templates", parts...
+    )
     invalid_dir = joinpath(repo_root, "tests", "invalid", "template_imports")
 
     # Raw §9.7 pipeline (resolve → lower → Expand). esm-spec §9.6.4 Option B:
@@ -62,7 +64,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
     @testset "import_smoke: the §9.7.8 four-file layering" begin
         # Raw pipeline matches the golden byte-for-byte structurally.
         @test _expand_raw(conf("import_smoke", "fixture.esm")) ==
-              _golden(conf("import_smoke", "expanded.esm"))
+            _golden(conf("import_smoke", "expanded.esm"))
 
         # Typed happy path: index sets merged and folded at the edge bindings.
         f = EarthSciAST.load_path(conf("import_smoke", "fixture.esm"))
@@ -115,21 +117,21 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # (d) Value preservation: 1/8 is true float division = 0.125.
         f = EarthSciAST.load_path(fixture)
         dxv = observed_definition(f.models["M"], "dx")
-        @test EarthSciAST.evaluate_expr(dxv, Dict{String,Float64}()) == 0.125
+        @test EarthSciAST.evaluate_expr(dxv, Dict{String, Float64}()) == 0.125
     end
 
     @testset "import_diamond: deep-equal dedup at first occurrence" begin
         @test _expand_raw(conf("import_diamond", "fixture.esm")) ==
-              _golden(conf("import_diamond", "expanded.esm"))
+            _golden(conf("import_diamond", "expanded.esm"))
         f = EarthSciAST.load_path(conf("import_diamond", "fixture.esm"))
         @test f.index_sets["cells"].size == 10   # NC default, deduped once
     end
 
     @testset "effective order: import order pins the tie-break, priority flips it" begin
         @test _expand_raw(conf("import_order_determinism", "fixture_import_order.esm")) ==
-              _golden(conf("import_order_determinism", "expanded_import_order.esm"))
+            _golden(conf("import_order_determinism", "expanded_import_order.esm"))
         @test _expand_raw(conf("import_order_determinism", "fixture_priority_override.esm")) ==
-              _golden(conf("import_order_determinism", "expanded_priority_override.esm"))
+            _golden(conf("import_order_determinism", "expanded_priority_override.esm"))
         # Winner sanity, independent of the goldens: earlier import wins the
         # equal-priority tie (2*x); explicit priority 10 out-ranks it (5*x).
         d1 = _expand_raw(conf("import_order_determinism", "fixture_import_order.esm"))
@@ -141,21 +143,31 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
     @testset "valid suite: library file + minimal consumer" begin
         # A model-less template-library document loads (esm-spec §9.7.1);
         # round-trip strips every §9.7 construct, leaving the folded registry.
-        lib = EarthSciAST.load_path(joinpath(repo_root, "tests", "valid",
-                                                  "template_import_lib.esm"))
+        lib = EarthSciAST.load_path(
+            joinpath(
+                repo_root, "tests", "valid",
+                "template_import_lib.esm"
+            )
+        )
         @test lib.models === nothing
         @test lib.index_sets["cells"].size == 8   # size "N" folded by default
         # Loader-API binding overrides the default on the library itself.
         lib12 = EarthSciAST.load_path(
             joinpath(repo_root, "tests", "valid", "template_import_lib.esm");
-            metaparameters=Dict("N" => 12))
+            metaparameters = Dict("N" => 12)
+        )
         @test lib12.index_sets["cells"].size == 12
 
         # esm-spec §9.6.4 Option B: references survive by default; pin the
         # Option-A expanded image with `expanded_file`.
         m = EarthSciAST.expanded_file(
-            EarthSciAST.load_path(joinpath(repo_root, "tests", "valid",
-                                           "template_import_minimal.esm")))
+            EarthSciAST.load_path(
+                joinpath(
+                    repo_root, "tests", "valid",
+                    "template_import_minimal.esm"
+                )
+            )
+        )
         @test m.index_sets["cells"].size == 8     # §9.7.5 merge into consumer
         y = observed_definition(m.models["M"], "y")
         @test y isa OpExpr && y.op == "*"
@@ -163,8 +175,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
     end
 
     @testset "metaparameter_resolutions: subsystem-ref bindings (§9.7.6 site 3)" begin
-        for (wrapper, golden, n) in [("wrapper_n4.esm", "expanded_n4.esm", 4),
-                                     ("wrapper_n8.esm", "expanded_n8.esm", 8)]
+        for (wrapper, golden, n) in [
+                ("wrapper_n4.esm", "expanded_n4.esm", 4),
+                ("wrapper_n8.esm", "expanded_n8.esm", 8),
+            ]
             f = EarthSciAST.load_path(conf("metaparameter_resolutions", wrapper))
             sub = f.models["Sweep"].subsystems["Problem"]
             # Expression position: bare "N" substituted as an integer literal.
@@ -180,13 +194,13 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             @test ramp.ranges["i"] == [1, div(n, 2)]
             # Typed round-trip matches the golden.
             @test _normj(serialize_esm_file(f)) ==
-                  _golden(conf("metaparameter_resolutions", golden))
+                _golden(conf("metaparameter_resolutions", golden))
         end
     end
 
     @testset "import_rename_two_instances: one library, two prefixed instances (§9.7.7)" begin
         @test _expand_raw(conf("import_rename_two_instances", "fixture.esm")) ==
-              _golden(conf("import_rename_two_instances", "expanded.esm"))
+            _golden(conf("import_rename_two_instances", "expanded.esm"))
         f = EarthSciAST.load_path(conf("import_rename_two_instances", "fixture.esm"))
         # Transitive rename: the index set arrives per instance and the sizes
         # come from each edge's own bindings.
@@ -204,7 +218,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
 
     @testset "import_where_rename_two_instances: §9.7.7 rename carries where.shape" begin
         @test _expand_raw(conf("import_where_rename_two_instances", "fixture.esm")) ==
-              _golden(conf("import_where_rename_two_instances", "expanded.esm"))
+            _golden(conf("import_where_rename_two_instances", "expanded.esm"))
         f = EarthSciAST.load_path(conf("import_where_rename_two_instances", "fixture.esm"))
         # The where-constrained div rule registered under each prefix (its
         # `where.F.shape` rewritten x -> meshA.x / meshB.x in lockstep with the
@@ -252,16 +266,18 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # A `where` shape naming a set the library never declares stays as
         # spelled through the rename (the unmapped-name rule) and is rejected at
         # rule registration — the fix does not paper over genuine typos.
-        code = _err_code(() ->
-            EarthSciAST.load_path(conf("import_where_rename_unknown_index_set", "fixture.esm")))
+        code = _err_code(
+            () ->
+            EarthSciAST.load_path(conf("import_where_rename_unknown_index_set", "fixture.esm"))
+        )
         @test code == "template_constraint_unknown_index_set"
     end
 
     @testset "import_library_enum: a library's enum ops resolve in the library's block (§9.3)" begin
         @test _expand_raw(conf("import_library_enum", "fixture.esm")) ==
-              _golden(conf("import_library_enum", "expanded.esm"))
+            _golden(conf("import_library_enum", "expanded.esm"))
         @test _expand_raw(conf("import_library_enum", "fixture_importer_redeclares.esm")) ==
-              _golden(conf("import_library_enum", "expanded_importer_redeclares.esm"))
+            _golden(conf("import_library_enum", "expanded_importer_redeclares.esm"))
         # The importer's same-name enum (g_per_hp_hr = 7) does not reach the
         # library body, which keeps the library's 1; the importer's own enum ops,
         # including one bound into the template's parameter, resolve against 7.
@@ -269,7 +285,8 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # reference is not target-bearing and survives load (esm-spec §9.6.4
         # rule 1); the values are checked on its expansion (rule 2).
         f = EarthSciAST.load_path(
-            conf("import_library_enum", "fixture_importer_redeclares.esm"))
+            conf("import_library_enum", "fixture_importer_redeclares.esm")
+        )
         EarthSciAST._expand_refs!(f)
         doc = _normj(serialize_esm_file(f))
         library_body = _defrhs(doc, "Consumer", "isPerHorsepowerHour")
@@ -311,7 +328,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
 
     @testset "import_rebind_keyed_factors: MPAS-style free-name rebinding (§9.7.7)" begin
         @test _expand_raw(conf("import_rebind_keyed_factors", "fixture.esm")) ==
-              _golden(conf("import_rebind_keyed_factors", "expanded.esm"))
+            _golden(conf("import_rebind_keyed_factors", "expanded.esm"))
         f = EarthSciAST.load_path(conf("import_rebind_keyed_factors", "fixture.esm"))
         # The ragged set's keyed factors were rebound in the merged registry...
         @test f.index_sets["nz_of_row"].offsets == "meshA_count"
@@ -329,14 +346,14 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
 
     @testset "import_rename_diamond: distinct instances vs dedupe (§9.7.4 + §9.7.7)" begin
         @test _expand_raw(conf("import_rename_diamond", "fixture.esm")) ==
-              _golden(conf("import_rename_diamond", "expanded.esm"))
+            _golden(conf("import_rename_diamond", "expanded.esm"))
         # Effective order = DFS post-order over the edges; the identical
         # (prefix a, NC 6) edges deduped at first occurrence, the (prefix b,
         # NC 9) edge registered as a DISTINCT instance.
         raw = JSON3.read(read(conf("import_rename_diamond", "fixture.esm"), String))
         res = resolve_template_machinery(raw, conf("import_rename_diamond"))
         @test collect(keys(res["models"]["Diamond"]["expression_templates"])) ==
-              ["a.n_cells", "a.scale_by_cells", "b.n_cells", "b.scale_by_cells"]
+            ["a.n_cells", "a.scale_by_cells", "b.n_cells", "b.scale_by_cells"]
         # Both renamed rule instances match the axis-less scale_by_cells node;
         # the §9.6.3 equal-priority tie breaks by that order, so instance a
         # (NC = 6) wins: y = 6 * x, not 9 * x.
@@ -356,7 +373,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # and writes each one in an expression position too, so the golden pins
         # both halves of the split at once.
         @test _expand_raw(conf("metaparam_axis_name_collision", "fixture.esm")) ==
-              _golden(conf("metaparam_axis_name_collision", "expanded.esm"))
+            _golden(conf("metaparam_axis_name_collision", "expanded.esm"))
 
         d = _expand_raw(conf("metaparam_axis_name_collision", "fixture.esm"))
         eqs = d["models"]["M"]["equations"]
@@ -408,13 +425,15 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # beside the loop symbol `p` (a metaparameter spelled like a loop symbol
         # is `metaparameter_name_conflict`).
         @test _expand_raw(conf("metaparam_structural_field_collision", "fixture.esm")) ==
-              _golden(conf("metaparam_structural_field_collision", "expanded.esm"))
+            _golden(conf("metaparam_structural_field_collision", "expanded.esm"))
 
         d = _expand_raw(conf("metaparam_structural_field_collision", "fixture.esm"))
         m = d["models"]["M"]
         @test m["system_kind"] == "ode"
-        @test m["reference"] == Dict("citation" => "edge", "doi" => "edge",
-                                     "url" => "edge", "notes" => "row_id")
+        @test m["reference"] == Dict(
+            "citation" => "edge", "doi" => "edge",
+            "url" => "edge", "notes" => "row_id"
+        )
         @test m["variables"]["u"]["default_units"] == "m"
         @test m["variables"]["u"]["location"] == "edge"
         deq = only(filter(eq -> !(eq["lhs"] isa AbstractString), m["equations"]))
@@ -457,23 +476,33 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # The key sets are derived from a classification of every string-capable
         # schema property (scripts/check-metaparameter-substitution-fields.py);
         # all five bindings compare against the same file.
-        cls = JSON3.read(read(joinpath(repo_root, "tests", "metaparameter_substitution",
-                                       "field_classification.json"), String))
+        cls = JSON3.read(
+            read(
+                joinpath(
+                    repo_root, "tests", "metaparameter_substitution",
+                    "field_classification.json"
+                ), String
+            )
+        )
         @test EarthSciAST._META_SUBST_SKIP_KEYS == Set{String}(String.(cls["skip_keys"]))
         @test EarthSciAST._NAME_KEYED_MAP_KEYS ==
-              Set{String}(String.(cls["name_keyed_map_keys"]))
+            Set{String}(String.(cls["name_keyed_map_keys"]))
     end
 
     @testset "loader-API bindings (§9.7.6 site 4) and defaults (site 5)" begin
         problem = conf("metaparameter_resolutions", "problem.esm")
         fdef = EarthSciAST.load_path(problem)
         @test observed_definition(fdef.models["Problem"], "npts").value == 2  # default
-        fapi = EarthSciAST.load_path(problem; metaparameters=Dict("N" => 6))
+        fapi = EarthSciAST.load_path(problem; metaparameters = Dict("N" => 6))
         @test observed_definition(fapi.models["Problem"], "npts").value == 6  # API > default
         @test observed_definition(fapi.models["Problem"], "ramp").ranges["i"] == [1, 3]
         # Binding a name the document does not declare is an error.
-        @test _err_code(() -> EarthSciAST.load_path(problem;
-            metaparameters=Dict("Q" => 1))) == "template_import_unknown_name"
+        @test _err_code(
+            () -> EarthSciAST.load_path(
+                problem;
+                metaparameters = Dict("Q" => 1)
+            )
+        ) == "template_import_unknown_name"
     end
 
     @testset "round-trip expands CALL SITES, keeps DECLARATIONS (§9.6.4 rule 5)" begin
@@ -502,7 +531,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             @test reloaded.index_sets["lon"].size == 288
             @test reloaded.models["Advection"].equations[1].rhs.args[2].op == "makearray"
         finally
-            isfile(tmp) && rm(tmp, force=true)
+            isfile(tmp) && rm(tmp, force = true)
         end
     end
 
@@ -545,7 +574,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                 @test reloaded.expression_templates !== nothing
                 @test EarthSciAST.validate(reloaded).is_valid
             finally
-                isfile(tmp) && rm(tmp, force=true)
+                isfile(tmp) && rm(tmp, force = true)
             end
         end
     end
@@ -574,7 +603,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
 
             # The DECLARATIONS survive the resolver, verbatim.
             @test _normj(resolved["expression_templates"]) ==
-                  _normj(authored.expression_templates)
+                _normj(authored.expression_templates)
             @test _normj(resolved["metaparameters"]) == _normj(authored.metaparameters)
             # The import EDGE, by contrast, is consumed.
             @test !haskey(resolved, "expression_template_imports")
@@ -584,15 +613,19 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             doc = EarthSciAST.emit_document(JSON3.read(read(src, String)), dirname(src))
             @test _normj(doc["expression_templates"]) == _normj(authored.expression_templates)
             @test _normj(doc["metaparameters"]) == _normj(authored.metaparameters)
-            @test any(k -> haskey(doc, k),
-                      ("models", "reaction_systems", "data_sources", "operators",
-                       "expression_templates"))
+            @test any(
+                k -> haskey(doc, k),
+                (
+                    "models", "reaction_systems", "data_sources", "operators",
+                    "expression_templates",
+                )
+            )
             tmp = tempname() * ".esm"
             try
                 write(tmp, EarthSciAST.emit_esm_string(doc))
                 @test EarthSciAST.load_path(tmp) isa EarthSciAST.EsmFile
             finally
-                isfile(tmp) && rm(tmp, force=true)
+                isfile(tmp) && rm(tmp, force = true)
             end
         end
     end
@@ -610,15 +643,22 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test resolved["index_sets"]["lat"]["size"] == 181
 
         text = EarthSciAST.emit_esm_string(
-            EarthSciAST.emit_document(JSON3.read(read(src, String)), dirname(src)))
+            EarthSciAST.emit_document(JSON3.read(read(src, String)), dirname(src))
+        )
         @test !occursin("metaparameters", text)
         @test !occursin("NLON", text)
         @test !occursin("NLAT", text)
     end
 
     @testset "invalid fixtures: every §9.7 diagnostic code, machine-checked" begin
-        expected = JSON3.read(read(joinpath(repo_root, "tests", "invalid",
-                                            "expected_errors.json"), String))
+        expected = JSON3.read(
+            read(
+                joinpath(
+                    repo_root, "tests", "invalid",
+                    "expected_errors.json"
+                ), String
+            )
+        )
         fixtures = sort(filter(f -> endswith(f, ".esm"), readdir(invalid_dir)))
         @test !isempty(fixtures)
         seen_codes = Set{String}()
@@ -640,18 +680,20 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # still schema-valid. The rule itself
         # is still pinned, directly on `reject_template_imports_pre_v08`, by the
         # "version gate helper" testset below.
-        for code in ["template_import_not_library", "template_library_illegal_payload",
-                     "subsystem_ref_is_template_library", "template_import_cycle",
-                     "template_import_name_conflict", "template_import_unknown_name",
-                     "template_import_index_set_conflict",
-                     "apply_expression_template_recursive_body",
-                     "template_body_expansion_too_deep", "metaparameter_unbound",
-                     "metaparameter_type_error", "metaparameter_name_conflict",
-                     "template_import_rename_unknown_name",
-                     "template_import_rebind_unknown_name",
-                     "template_import_rename_collision",
-                     "template_import_rename_invalid",
-                     "makearray_region_inverted", "subsystem_index_set_conflict"]
+        for code in [
+                "template_import_not_library", "template_library_illegal_payload",
+                "subsystem_ref_is_template_library", "template_import_cycle",
+                "template_import_name_conflict", "template_import_unknown_name",
+                "template_import_index_set_conflict",
+                "apply_expression_template_recursive_body",
+                "template_body_expansion_too_deep", "metaparameter_unbound",
+                "metaparameter_type_error", "metaparameter_name_conflict",
+                "template_import_rename_unknown_name",
+                "template_import_rebind_unknown_name",
+                "template_import_rename_collision",
+                "template_import_rename_invalid",
+                "makearray_region_inverted", "subsystem_index_set_conflict",
+            ]
             @test code in seen_codes
         end
     end
@@ -660,8 +702,12 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # tests/valid/subsystem_index_set_merge.esm mounts subsystem_mesh_lib.esm:
         # the mesh file's top-level index_sets join the importing document's
         # registry (deep-equal `cells` idempotent; `vertices` added).
-        f = EarthSciAST.load_path(joinpath(repo_root, "tests", "valid",
-                                                "subsystem_index_set_merge.esm"))
+        f = EarthSciAST.load_path(
+            joinpath(
+                repo_root, "tests", "valid",
+                "subsystem_index_set_merge.esm"
+            )
+        )
         @test f.index_sets["cells"].size == 5        # deep-equal redeclaration
         @test f.index_sets["vertices"].size == 4     # merged in from the mesh file
         sub = f.models["Host"].subsystems["M"]
@@ -669,8 +715,12 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test haskey(sub.variables, "q")
         # The mounted mesh file loads standalone too (it is an ordinary
         # single-model document owning its axes).
-        mesh = EarthSciAST.load_path(joinpath(repo_root, "tests", "valid",
-                                                   "subsystem_mesh_lib.esm"))
+        mesh = EarthSciAST.load_path(
+            joinpath(
+                repo_root, "tests", "valid",
+                "subsystem_mesh_lib.esm"
+            )
+        )
         @test mesh.index_sets["cells"].size == 5
     end
 
@@ -715,8 +765,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # discretized derivative whose interior region [2, N-1] folds to the
         # canonical EMPTY bound [2, 1] at the default N = 2 — a legal,
         # load-clean spelling that contributes no elements.
-        fixture = joinpath(repo_root, "tests", "valid",
-                           "makearray_empty_region_min_extent.esm")
+        fixture = joinpath(
+            repo_root, "tests", "valid",
+            "makearray_empty_region_min_extent.esm"
+        )
         f = EarthSciAST.load_path(fixture)
         @test f.index_sets["lon"].size == 2
         ma = f.models["Advection"].equations[1].rhs
@@ -735,10 +787,14 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # The SAME file re-bound below the scheme's minimum extent at the
         # loader API (§9.7.6 site 4) folds the interior region to [2, 0] —
         # INVERTED (stop < start - 1) — and MUST fail loudly at load.
-        @test _err_code(() -> EarthSciAST.load_path(fixture;
-            metaparameters=Dict("N" => 1))) == "makearray_region_inverted"
+        @test _err_code(
+            () -> EarthSciAST.load_path(
+                fixture;
+                metaparameters = Dict("N" => 1)
+            )
+        ) == "makearray_region_inverted"
         # N = 3 has a genuine 1-cell interior [2, 2]: still legal.
-        f3 = EarthSciAST.load_path(fixture; metaparameters=Dict("N" => 3))
+        f3 = EarthSciAST.load_path(fixture; metaparameters = Dict("N" => 3))
         @test f3.models["Advection"].equations[1].rhs.regions[1] == [[2, 2], [1, 3]]
     end
 
@@ -746,7 +802,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
     # Unit-level behavior over generated files
     # ------------------------------------------------------------------
 
-    _model_json(extra_model_fields, top_fields="") = """
+    _model_json(extra_model_fields, top_fields = "") = """
     {
       "esm": "1.1.0",
       "metadata": {"name": "t"},$top_fields
@@ -763,89 +819,115 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
     @testset "template_import_unresolved: missing / unparsable ref" begin
         mktempdir() do dir
             p = joinpath(dir, "m.esm")
-            write(p, _model_json(
-                """
-                "expression_template_imports": [{"ref": "./nope.esm"}],"""))
+            write(
+                p, _model_json(
+                    """
+                    "expression_template_imports": [{"ref": "./nope.esm"}],"""
+                )
+            )
             @test _err_code(() -> EarthSciAST.load_path(p)) == "template_import_unresolved"
             write(joinpath(dir, "junk.esm"), "{not json")
-            write(p, _model_json(
-                """
-                "expression_template_imports": [{"ref": "./junk.esm"}],"""))
+            write(
+                p, _model_json(
+                    """
+                    "expression_template_imports": [{"ref": "./junk.esm"}],"""
+                )
+            )
             @test _err_code(() -> EarthSciAST.load_path(p)) == "template_import_unresolved"
         end
     end
 
     @testset "`only` filters visibility, not the target's internal wiring" begin
         mktempdir() do dir
-            write(joinpath(dir, "lib.esm"), """
-            {
-              "esm": "1.1.0",
-              "metadata": {"name": "lib"},
-              "expression_templates": {
-                "t_inner": {"params": [], "body": 7},
-                "t_keep": {"params": [], "body": {"op": "*", "args": [2,
-                  {"op": "apply_expression_template", "args": [], "name": "t_inner", "bindings": {}}]}},
-                "t_drop": {"params": [], "body": 9}
-              }
-            }
-            """)
+            write(
+                joinpath(dir, "lib.esm"), """
+                {
+                  "esm": "1.1.0",
+                  "metadata": {"name": "lib"},
+                  "expression_templates": {
+                    "t_inner": {"params": [], "body": 7},
+                    "t_keep": {"params": [], "body": {"op": "*", "args": [2,
+                      {"op": "apply_expression_template", "args": [], "name": "t_inner", "bindings": {}}]}},
+                    "t_drop": {"params": [], "body": 9}
+                  }
+                }
+                """
+            )
             # esm-spec §9.6.4 Option B: t_keep's body reference to t_inner
             # resolved in the LIBRARY's own scope. Bodies are no longer inlined
             # (§9.7.3), so importing `only: [t_keep]` carries the internal-wiring
             # reference-closure (t_inner) along and the reference SURVIVES;
             # `Expand` yields 2 * 7 (the Option-A image, §9.6.4 rule 2).
             p = joinpath(dir, "m.esm")
-            write(p, _model_json(
-                """
-                "expression_template_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],"""))
+            write(
+                p, _model_json(
+                    """
+                    "expression_template_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],"""
+                )
+            )
             raw = JSON3.read(read(p, String))
             resolved = resolve_template_machinery(raw, dir)
             tpl = resolved["models"]["M"]["expression_templates"]
             # t_keep kept explicitly; t_inner carried by the reference closure;
             # t_drop (unreferenced, filtered) is gone.
             @test Set(keys(tpl)) == Set(["t_keep", "t_inner"])
-            @test _normj(tpl["t_keep"]["body"]) == Dict{String,Any}(
-                "op" => "*", "args" => Any[2, Dict{String,Any}(
-                    "op" => "apply_expression_template", "args" => Any[],
-                    "name" => "t_inner", "bindings" => Dict{String,Any}())])
+            @test _normj(tpl["t_keep"]["body"]) == Dict{String, Any}(
+                "op" => "*", "args" => Any[
+                    2, Dict{String, Any}(
+                        "op" => "apply_expression_template", "args" => Any[],
+                        "name" => "t_inner", "bindings" => Dict{String, Any}()
+                    ),
+                ]
+            )
             @test _normj(tpl["t_inner"]["body"]) == 7
             # The surviving reference expands to the inlined value.
             loaded = lower_expression_templates(resolved)
             @test _normj(EarthSciAST.Expand(loaded)["models"]["M"]) !== nothing
             # Referencing a filtered-out name from an expression position fails.
             p2 = joinpath(dir, "m2.esm")
-            write(p2, _model_json(
-                """
-                "expression_template_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],
-                "expression_templates": {"local_uses_drop": {"params": [],
-                  "body": {"op": "apply_expression_template", "args": [], "name": "t_drop", "bindings": {}}}},"""))
+            write(
+                p2, _model_json(
+                    """
+                    "expression_template_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],
+                    "expression_templates": {"local_uses_drop": {"params": [],
+                      "body": {"op": "apply_expression_template", "args": [], "name": "t_drop", "bindings": {}}}},"""
+                )
+            )
             @test _err_code(() -> EarthSciAST.load_path(p2)) ==
-                  "apply_expression_template_unknown_template"
+                "apply_expression_template_unknown_template"
         end
     end
 
     @testset "diamond with conflicting edge bindings is rejected (§9.7.6)" begin
         mktempdir() do dir
-            write(joinpath(dir, "grid.esm"), """
-            {"esm": "1.1.0", "metadata": {"name": "grid"},
-             "metaparameters": {"NC": {"type": "integer"}},
-             "index_sets": {"cells": {"kind": "interval", "size": "NC"}},
-             "expression_templates": {"nc": {"params": [], "body": "NC"}}}
-            """)
+            write(
+                joinpath(dir, "grid.esm"), """
+                {"esm": "1.1.0", "metadata": {"name": "grid"},
+                 "metaparameters": {"NC": {"type": "integer"}},
+                 "index_sets": {"cells": {"kind": "interval", "size": "NC"}},
+                 "expression_templates": {"nc": {"params": [], "body": "NC"}}}
+                """
+            )
             p = joinpath(dir, "m.esm")
-            write(p, _model_json(
-                """
-                "expression_template_imports": [
-                  {"ref": "./grid.esm", "bindings": {"NC": 4}},
-                  {"ref": "./grid.esm", "bindings": {"NC": 8}}],"""))
+            write(
+                p, _model_json(
+                    """
+                    "expression_template_imports": [
+                      {"ref": "./grid.esm", "bindings": {"NC": 4}},
+                      {"ref": "./grid.esm", "bindings": {"NC": 8}}],"""
+                )
+            )
             @test _err_code(() -> EarthSciAST.load_path(p)) in
-                  ("template_import_name_conflict", "template_import_index_set_conflict")
+                ("template_import_name_conflict", "template_import_index_set_conflict")
             # Equal instantiation on both edges dedups cleanly.
-            write(p, _model_json(
-                """
-                "expression_template_imports": [
-                  {"ref": "./grid.esm", "bindings": {"NC": 4}},
-                  {"ref": "./grid.esm", "bindings": {"NC": 4}}],"""))
+            write(
+                p, _model_json(
+                    """
+                    "expression_template_imports": [
+                      {"ref": "./grid.esm", "bindings": {"NC": 4}},
+                      {"ref": "./grid.esm", "bindings": {"NC": 4}}],"""
+                )
+            )
             f = EarthSciAST.load_path(p)
             @test f.index_sets["cells"].size == 4
         end
@@ -853,26 +935,34 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
 
     @testset "edge bindings: unknown names and non-integer values" begin
         mktempdir() do dir
-            write(joinpath(dir, "lib.esm"), """
-            {"esm": "1.1.0", "metadata": {"name": "lib"},
-             "metaparameters": {"N": {"type": "integer", "default": 8}},
-             "expression_templates": {"n": {"params": [], "body": "N"}}}
-            """)
-            p = joinpath(dir, "m.esm")
-            write(p, _model_json(
+            write(
+                joinpath(dir, "lib.esm"), """
+                {"esm": "1.1.0", "metadata": {"name": "lib"},
+                 "metaparameters": {"N": {"type": "integer", "default": 8}},
+                 "expression_templates": {"n": {"params": [], "body": "N"}}}
                 """
-                "expression_template_imports": [{"ref": "./lib.esm", "bindings": {"Q": 1}}],"""))
+            )
+            p = joinpath(dir, "m.esm")
+            write(
+                p, _model_json(
+                    """
+                    "expression_template_imports": [{"ref": "./lib.esm", "bindings": {"Q": 1}}],"""
+                )
+            )
             @test _err_code(() -> EarthSciAST.load_path(p)) == "template_import_unknown_name"
             # A non-integer binding is schema-invalid (TemplateImport.bindings
             # is integer-typed), so `load` rejects at schema validation; the
             # resolver-level backstop still reports metaparameter_type_error.
-            write(p, _model_json(
-                """
-                "expression_template_imports": [{"ref": "./lib.esm", "bindings": {"N": 2.5}}],"""))
+            write(
+                p, _model_json(
+                    """
+                    "expression_template_imports": [{"ref": "./lib.esm", "bindings": {"N": 2.5}}],"""
+                )
+            )
             @test_throws EarthSciAST.SchemaValidationError EarthSciAST.load_path(p)
             raw = JSON3.read(read(p, String))
             @test _err_code(() -> resolve_template_machinery(raw, dir)) ==
-                  "metaparameter_type_error"
+                "metaparameter_type_error"
         end
     end
 
@@ -889,16 +979,21 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                 write(joinpath(dir, "grid.esm"), _grid_lib)
                 # Mid-layer library mounts the grid under prefix g, leaves g.N
                 # open (re-exported), and composes g.dx into its own template.
-                write(joinpath(dir, "layer.esm"), """
-                {"esm": "1.1.0", "metadata": {"name": "layer"},
-                 "expression_template_imports": [{"ref": "./grid.esm", "prefix": "g"}],
-                 "expression_templates": {"two_dx": {"params": [], "body": {"op": "*", "args": [2,
-                    {"op": "apply_expression_template", "args": [], "name": "g.dx", "bindings": {}}]}}}}
-                """)
-                p = joinpath(dir, "m.esm")
-                write(p, _model_json(
+                write(
+                    joinpath(dir, "layer.esm"), """
+                    {"esm": "1.1.0", "metadata": {"name": "layer"},
+                     "expression_template_imports": [{"ref": "./grid.esm", "prefix": "g"}],
+                     "expression_templates": {"two_dx": {"params": [], "body": {"op": "*", "args": [2,
+                        {"op": "apply_expression_template", "args": [], "name": "g.dx", "bindings": {}}]}}}}
                     """
-                    "expression_template_imports": [{"ref": "./layer.esm", "prefix": "l", "bindings": {"g.N": 5}}],"""))
+                )
+                p = joinpath(dir, "m.esm")
+                write(
+                    p, _model_json(
+                        """
+                        "expression_template_imports": [{"ref": "./layer.esm", "prefix": "l", "bindings": {"g.N": 5}}],"""
+                    )
+                )
                 # The consumer edge binds the RE-EXPORTED (already-renamed)
                 # name g.N, then mounts everything under l.*: prefixes nest.
                 f = EarthSciAST.load_path(p)
@@ -906,13 +1001,16 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                 raw = JSON3.read(read(p, String))
                 res = resolve_template_machinery(raw, dir)
                 @test collect(keys(res["models"]["M"]["expression_templates"])) ==
-                      ["l.g.dx", "l.two_dx"]
+                    ["l.g.dx", "l.two_dx"]
                 # Loader-API binding site also speaks the renamed name: leave
                 # g.N open through both edges and close it at the root.
-                write(p, _model_json(
-                    """
-                    "expression_template_imports": [{"ref": "./layer.esm", "prefix": "l"}],"""))
-                f7 = EarthSciAST.load_path(p; metaparameters=Dict("l.g.N" => 7))
+                write(
+                    p, _model_json(
+                        """
+                        "expression_template_imports": [{"ref": "./layer.esm", "prefix": "l"}],"""
+                    )
+                )
+                f7 = EarthSciAST.load_path(p; metaparameters = Dict("l.g.N" => 7))
                 @test f7.index_sets["l.g.x"].size == 7
             end
         end
@@ -921,73 +1019,87 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             mktempdir() do dir
                 write(joinpath(dir, "grid.esm"), _grid_lib)
                 p = joinpath(dir, "m.esm")
-                write(p, _model_json(
-                    """
-                    "expression_template_imports": [{"ref": "./grid.esm",
-                       "bindings": {"N": 4}, "rename": {"dx": "dx"}}],"""))
+                write(
+                    p, _model_json(
+                        """
+                        "expression_template_imports": [{"ref": "./grid.esm",
+                           "bindings": {"N": 4}, "rename": {"dx": "dx"}}],"""
+                    )
+                )
                 f = EarthSciAST.load_path(p)
                 @test f.index_sets["x"].size == 4
                 # A metaparameter closed by this edge's `bindings` is no longer
                 # exported, so renaming it is a loud unknown-name error.
-                write(p, _model_json(
-                    """
-                    "expression_template_imports": [{"ref": "./grid.esm",
-                       "bindings": {"N": 4}, "rename": {"N": "M"}}],"""))
+                write(
+                    p, _model_json(
+                        """
+                        "expression_template_imports": [{"ref": "./grid.esm",
+                           "bindings": {"N": 4}, "rename": {"N": "M"}}],"""
+                    )
+                )
                 @test _err_code(() -> EarthSciAST.load_path(p)) ==
-                      "template_import_rename_unknown_name"
+                    "template_import_rename_unknown_name"
                 # `rename` keys live in the post-`only` surviving export set.
-                write(joinpath(dir, "two.esm"), """
-                {"esm": "1.1.0", "metadata": {"name": "two"},
-                 "expression_templates": {"keep": {"params": [], "body": 1},
-                                          "drop": {"params": [], "body": 2}}}
-                """)
-                write(p, _model_json(
+                write(
+                    joinpath(dir, "two.esm"), """
+                    {"esm": "1.1.0", "metadata": {"name": "two"},
+                     "expression_templates": {"keep": {"params": [], "body": 1},
+                                              "drop": {"params": [], "body": 2}}}
                     """
-                    "expression_template_imports": [{"ref": "./two.esm",
-                       "only": ["keep"], "rename": {"drop": "d2"}}],"""))
+                )
+                write(
+                    p, _model_json(
+                        """
+                        "expression_template_imports": [{"ref": "./two.esm",
+                           "only": ["keep"], "rename": {"drop": "d2"}}],"""
+                    )
+                )
                 @test _err_code(() -> EarthSciAST.load_path(p)) ==
-                      "template_import_rename_unknown_name"
+                    "template_import_rename_unknown_name"
             end
         end
 
         @testset "rebind guards: declared names, bound indices, target capture" begin
             mktempdir() do dir
-                write(joinpath(dir, "ragged.esm"), """
-                {"esm": "1.1.0", "metadata": {"name": "ragged"},
-                 "metaparameters": {"NR": {"type": "integer", "default": 2}},
-                 "index_sets": {"rows": {"kind": "interval", "size": "NR"},
-                                "nz": {"kind": "ragged", "of": ["rows"],
-                                       "offsets": "cnt", "values": "cols"}},
-                 "expression_templates": {"rsum": {"params": ["F"],
-                   "match": {"op": "rsum", "args": ["F"]},
-                   "body": {"op": "faq", "args": ["F", "cols", "wgt"],
-                     "output_idx": ["i"], "semiring": "sum_product",
-                     "ranges": {"i": {"from": "rows"}, "k": {"from": "nz", "of": ["i"]}},
-                     "expr": {"op": "*", "args": [
-                       {"op": "index", "args": ["wgt", "i", "k"]},
-                       {"op": "index", "args": ["F", {"op": "index", "args": ["cols", "i", "k"]}]}]}}}}}
-                """)
+                write(
+                    joinpath(dir, "ragged.esm"), """
+                    {"esm": "1.1.0", "metadata": {"name": "ragged"},
+                     "metaparameters": {"NR": {"type": "integer", "default": 2}},
+                     "index_sets": {"rows": {"kind": "interval", "size": "NR"},
+                                    "nz": {"kind": "ragged", "of": ["rows"],
+                                           "offsets": "cnt", "values": "cols"}},
+                     "expression_templates": {"rsum": {"params": ["F"],
+                       "match": {"op": "rsum", "args": ["F"]},
+                       "body": {"op": "faq", "args": ["F", "cols", "wgt"],
+                         "output_idx": ["i"], "semiring": "sum_product",
+                         "ranges": {"i": {"from": "rows"}, "k": {"from": "nz", "of": ["i"]}},
+                         "expr": {"op": "*", "args": [
+                           {"op": "index", "args": ["wgt", "i", "k"]},
+                           {"op": "index", "args": ["F", {"op": "index", "args": ["cols", "i", "k"]}]}]}}}}}
+                    """
+                )
                 p = joinpath(dir, "m.esm")
                 imp(extra) = _model_json(
                     """
-                    "expression_template_imports": [{"ref": "./ragged.esm", $extra}],""")
+                    "expression_template_imports": [{"ref": "./ragged.esm", $extra}],"""
+                )
                 # Rebinding a DECLARED name (metaparameter) is not a rebind.
                 write(p, imp("\"rebind\": {\"NR\": \"n\"}"))
                 @test _err_code(() -> EarthSciAST.load_path(p)) ==
-                      "template_import_rebind_unknown_name"
+                    "template_import_rebind_unknown_name"
                 # Rebinding a bound index symbol is invalid outright.
                 write(p, imp("\"rebind\": {\"k\": \"kk\"}"))
                 @test _err_code(() -> EarthSciAST.load_path(p)) ==
-                      "template_import_rename_invalid"
+                    "template_import_rename_invalid"
                 # A rebind target must be fresh: colliding with a remaining
                 # free name would silently merge two factors.
                 write(p, imp("\"rebind\": {\"cnt\": \"wgt\"}"))
                 @test _err_code(() -> EarthSciAST.load_path(p)) ==
-                      "template_import_rename_collision"
+                    "template_import_rename_collision"
                 # ...as must two rebind entries mapping onto one target.
                 write(p, imp("\"rebind\": {\"cnt\": \"z\", \"wgt\": \"z\"}"))
                 @test _err_code(() -> EarthSciAST.load_path(p)) ==
-                      "template_import_rename_collision"
+                    "template_import_rename_collision"
                 # Dot-scoped rebind targets (the MPAS mounted-subsystem shape)
                 # are legal identifiers and land in registry + body alike.
                 write(p, imp("\"rebind\": {\"cnt\": \"meshA.cnt\", \"cols\": \"meshA.cols\", \"wgt\": \"meshA.wgt\"}"))
@@ -1003,14 +1115,19 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             mktempdir() do dir
                 write(joinpath(dir, "grid.esm"), _grid_lib)
                 p = joinpath(dir, "m.esm")
-                for bad in ["\"prefix\": \"a..b\"", "\"prefix\": \".a\"",
-                            "\"rename\": {\"dx\": \"has space\"}",
-                            "\"rebind\": {\"q\": \"9bad\"}"]
-                    write(p, _model_json(
-                        """
-                        "expression_template_imports": [{"ref": "./grid.esm", $bad}],"""))
+                for bad in [
+                        "\"prefix\": \"a..b\"", "\"prefix\": \".a\"",
+                        "\"rename\": {\"dx\": \"has space\"}",
+                        "\"rebind\": {\"q\": \"9bad\"}",
+                    ]
+                    write(
+                        p, _model_json(
+                            """
+                            "expression_template_imports": [{"ref": "./grid.esm", $bad}],"""
+                        )
+                    )
                     @test _err_code(() -> EarthSciAST.load_path(p)) ==
-                          "template_import_rename_invalid"
+                        "template_import_rename_invalid"
                 end
             end
         end
@@ -1019,33 +1136,35 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
     @testset "metaparameter fold: ranges / regions / size, exact arithmetic" begin
         mktempdir() do dir
             p = joinpath(dir, "m.esm")
-            write(p, """
-            {
-              "esm": "1.1.0",
-              "metadata": {"name": "fold"},
-              "metaparameters": {"N": {"type": "integer", "default": 6}},
-              "index_sets": {"cells": {"kind": "interval", "size": {"op": "*", "args": ["N", 2]}}},
-              "models": {
-                "M": {
-                  "variables": {
-                    "x": {"type": "unknown", "units": "1", "default": 0.5},
-                    "agg": {"type": "unknown", "units": "1"},
-                    "ma": {"type": "unknown", "units": "1"}
-                  },
-                  "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                                 "rhs": {"op": "-", "args": ["x"]}},
-                                {"lhs": "agg",
-                                 "rhs": {"op": "faq", "output_idx": ["i"], "args": ["x"],
-                                   "ranges": {"i": [1, {"op": "-", "args": ["N", 1]}]},
-                                   "expr": {"op": "*", "args": ["x", "i"]}}},
-                                {"lhs": "ma",
-                                 "rhs": {"op": "makearray", "args": [],
-                                   "regions": [[[{"op": "/", "args": ["N", 2]}, "N"]]],
-                                   "values": [1.5]}}]
+            write(
+                p, """
+                {
+                  "esm": "1.1.0",
+                  "metadata": {"name": "fold"},
+                  "metaparameters": {"N": {"type": "integer", "default": 6}},
+                  "index_sets": {"cells": {"kind": "interval", "size": {"op": "*", "args": ["N", 2]}}},
+                  "models": {
+                    "M": {
+                      "variables": {
+                        "x": {"type": "unknown", "units": "1", "default": 0.5},
+                        "agg": {"type": "unknown", "units": "1"},
+                        "ma": {"type": "unknown", "units": "1"}
+                      },
+                      "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                                     "rhs": {"op": "-", "args": ["x"]}},
+                                    {"lhs": "agg",
+                                     "rhs": {"op": "faq", "output_idx": ["i"], "args": ["x"],
+                                       "ranges": {"i": [1, {"op": "-", "args": ["N", 1]}]},
+                                       "expr": {"op": "*", "args": ["x", "i"]}}},
+                                    {"lhs": "ma",
+                                     "rhs": {"op": "makearray", "args": [],
+                                       "regions": [[[{"op": "/", "args": ["N", 2]}, "N"]]],
+                                       "values": [1.5]}}]
+                    }
+                  }
                 }
-              }
-            }
-            """)
+                """
+            )
             f = EarthSciAST.load_path(p)
             @test f.index_sets["cells"].size == 12
             m = f.models["M"]
@@ -1058,25 +1177,27 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
     @testset "expression-position substitution never folds" begin
         mktempdir() do dir
             p = joinpath(dir, "m.esm")
-            write(p, """
-            {
-              "esm": "1.1.0",
-              "metadata": {"name": "subst"},
-              "metaparameters": {"N": {"type": "integer", "default": 144}},
-              "models": {
-                "M": {
-                  "variables": {
-                    "x": {"type": "unknown", "units": "1", "default": 0.5},
-                    "dlon": {"type": "unknown", "units": "1"}
-                  },
-                  "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                                 "rhs": {"op": "-", "args": ["x"]}},
-                                {"lhs": "dlon",
-                                 "rhs": {"op": "/", "args": [360, "N"]}}]
+            write(
+                p, """
+                {
+                  "esm": "1.1.0",
+                  "metadata": {"name": "subst"},
+                  "metaparameters": {"N": {"type": "integer", "default": 144}},
+                  "models": {
+                    "M": {
+                      "variables": {
+                        "x": {"type": "unknown", "units": "1", "default": 0.5},
+                        "dlon": {"type": "unknown", "units": "1"}
+                      },
+                      "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                                     "rhs": {"op": "-", "args": ["x"]}},
+                                    {"lhs": "dlon",
+                                     "rhs": {"op": "/", "args": [360, "N"]}}]
+                    }
+                  }
                 }
-              }
-            }
-            """)
+                """
+            )
             f = EarthSciAST.load_path(p)
             dlon = observed_definition(f.models["M"], "dlon")
             @test dlon isa OpExpr && dlon.op == "/"
@@ -1089,91 +1210,118 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # esm-spec §9.6.4 Option B: a 3-deep local chain is CHECKED (acyclic,
         # depth-bounded) but NOT inlined; the references survive and `Expand`
         # denotes the fully-inlined value (§9.6.4 rule 2).
-        doc = JSON3.read("""
-        {
-          "esm": "1.1.0",
-          "metadata": {"name": "chain3"},
-          "models": {
-            "M": {
-              "expression_templates": {
-                "c1": {"params": [], "body": {"op": "+", "args": [1,
-                  {"op": "apply_expression_template", "args": [], "name": "c2", "bindings": {}}]}},
-                "c2": {"params": [], "body": {"op": "+", "args": [2,
-                  {"op": "apply_expression_template", "args": [], "name": "c3", "bindings": {}}]}},
-                "c3": {"params": [], "body": 3}
-              },
-              "variables": {"x": {"type": "unknown", "units": "1", "default": 0.5},
-                            "y": {"type": "unknown", "units": "1"}},
-              "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                             "rhs": {"op": "-", "args": ["x"]}},
-                            {"lhs": "y",
-                             "rhs": {"op": "apply_expression_template",
-                                     "args": [], "name": "c1", "bindings": {}}}]
+        doc = JSON3.read(
+            """
+            {
+              "esm": "1.1.0",
+              "metadata": {"name": "chain3"},
+              "models": {
+                "M": {
+                  "expression_templates": {
+                    "c1": {"params": [], "body": {"op": "+", "args": [1,
+                      {"op": "apply_expression_template", "args": [], "name": "c2", "bindings": {}}]}},
+                    "c2": {"params": [], "body": {"op": "+", "args": [2,
+                      {"op": "apply_expression_template", "args": [], "name": "c3", "bindings": {}}]}},
+                    "c3": {"params": [], "body": 3}
+                  },
+                  "variables": {"x": {"type": "unknown", "units": "1", "default": 0.5},
+                                "y": {"type": "unknown", "units": "1"}},
+                  "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                                 "rhs": {"op": "-", "args": ["x"]}},
+                                {"lhs": "y",
+                                 "rhs": {"op": "apply_expression_template",
+                                         "args": [], "name": "c1", "bindings": {}}}]
+                }
+              }
             }
-          }
-        }
-        """)
+            """
+        )
         out = EarthSciAST.Expand(lower_expression_templates(doc))
         y = _normj(_defrhs(out, "M", "y"))
-        @test y == Dict{String,Any}("op" => "+", "args" => Any[1,
-                     Dict{String,Any}("op" => "+", "args" => Any[2, 3])])
+        @test y == Dict{String, Any}(
+            "op" => "+", "args" => Any[
+                1,
+                Dict{String, Any}("op" => "+", "args" => Any[2, 3]),
+            ]
+        )
 
         # Exactly MAX_TEMPLATE_EXPANSION_DEPTH templates chain: accepted;
         # one more: template_body_expansion_too_deep (the shared generated
         # fixture pins the reject side; this pins the boundary).
         function chain_doc(n)
-            tpl = Dict{String,Any}()
+            tpl = Dict{String, Any}()
             for i in 1:n
                 name = "c_" * lpad(i, 2, '0')
                 tpl[name] = i == n ? Dict("params" => [], "body" => 1) :
-                    Dict("params" => [],
-                         "body" => Dict("op" => "apply_expression_template",
-                                        "args" => [], "name" => "c_" * lpad(i + 1, 2, '0'),
-                                        "bindings" => Dict()))
+                    Dict(
+                        "params" => [],
+                        "body" => Dict(
+                            "op" => "apply_expression_template",
+                            "args" => [], "name" => "c_" * lpad(i + 1, 2, '0'),
+                            "bindings" => Dict()
+                        )
+                    )
             end
-            Dict("esm" => "1.1.0", "metadata" => Dict("name" => "chain"),
-                 "models" => Dict("M" => Dict(
-                     "expression_templates" => tpl,
-                     "variables" => Dict("x" => Dict("type" => "unknown", "default" => 0.5)),
-                     "equations" => [Dict(
-                         "lhs" => Dict("op" => "D", "args" => ["x"], "wrt" => "t"),
-                         "rhs" => Dict("op" => "-", "args" => ["x"]))])))
+            Dict(
+                "esm" => "1.1.0", "metadata" => Dict("name" => "chain"),
+                "models" => Dict(
+                    "M" => Dict(
+                        "expression_templates" => tpl,
+                        "variables" => Dict("x" => Dict("type" => "unknown", "default" => 0.5)),
+                        "equations" => [
+                            Dict(
+                                "lhs" => Dict("op" => "D", "args" => ["x"], "wrt" => "t"),
+                                "rhs" => Dict("op" => "-", "args" => ["x"])
+                            ),
+                        ]
+                    )
+                )
+            )
         end
         @test lower_expression_templates(chain_doc(MAX_TEMPLATE_EXPANSION_DEPTH)) isa AbstractDict
-        @test _err_code(() ->
-            lower_expression_templates(chain_doc(MAX_TEMPLATE_EXPANSION_DEPTH + 1))) ==
+        @test _err_code(
+            () ->
+            lower_expression_templates(chain_doc(MAX_TEMPLATE_EXPANSION_DEPTH + 1))
+        ) ==
             "template_body_expansion_too_deep"
 
         # A body may not reference a `match` rule by name.
-        matchref = JSON3.read(_model_json(
-            """
-            "expression_templates": {
-              "rule": {"params": ["f"], "match": {"op": "lowerme", "args": ["f"]},
-                       "body": {"op": "*", "args": [2, "f"]}},
-              "uses_rule": {"params": [], "body": {"op": "apply_expression_template",
-                            "args": [], "name": "rule", "bindings": {"f": 1}}}
-            },"""))
+        matchref = JSON3.read(
+            _model_json(
+                """
+                "expression_templates": {
+                  "rule": {"params": ["f"], "match": {"op": "lowerme", "args": ["f"]},
+                           "body": {"op": "*", "args": [2, "f"]}},
+                  "uses_rule": {"params": [], "body": {"op": "apply_expression_template",
+                                "args": [], "name": "rule", "bindings": {"f": 1}}}
+                },"""
+            )
+        )
         @test _err_code(() -> lower_expression_templates(matchref)) ==
-              "apply_expression_template_unknown_template"
+            "apply_expression_template_unknown_template"
     end
 
     @testset "version gate helper flags every §9.7 construct" begin
         for snippet in [
-            "\"metaparameters\": {\"N\": {\"type\": \"integer\"}},",
-            "\"expression_templates\": {\"t\": {\"params\": [], \"body\": 1}},",
-        ]
-            doc = JSON3.read("""
-            {"esm": "0.7.0", "metadata": {"name": "old"},$snippet
-             "models": {"M": {"variables": {"x": {"type": "unknown", "default": 0.5}},
-                              "equations": []}}}""")
+                "\"metaparameters\": {\"N\": {\"type\": \"integer\"}},",
+                "\"expression_templates\": {\"t\": {\"params\": [], \"body\": 1}},",
+            ]
+            doc = JSON3.read(
+                """
+                {"esm": "0.7.0", "metadata": {"name": "old"},$snippet
+                 "models": {"M": {"variables": {"x": {"type": "unknown", "default": 0.5}},
+                                  "equations": []}}}"""
+            )
             @test _err_code(() -> reject_template_imports_pre_v08(doc)) ==
-                  "template_import_version_too_old"
+                "template_import_version_too_old"
         end
         # 0.8.0 files pass the gate.
-        ok = JSON3.read("""
-        {"esm": "0.8.0", "metadata": {"name": "new"},
-         "metaparameters": {"N": {"type": "integer", "default": 1}},
-         "expression_templates": {"t": {"params": [], "body": 1}}}""")
+        ok = JSON3.read(
+            """
+            {"esm": "0.8.0", "metadata": {"name": "new"},
+             "metaparameters": {"N": {"type": "integer", "default": 1}},
+             "expression_templates": {"t": {"params": [], "body": 1}}}"""
+        )
         @test reject_template_imports_pre_v08(ok) === nothing
     end
 
@@ -1184,14 +1332,14 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # would be visible to nothing; loading refuses it instead.
         head = """{"esm": "1.0.0", "metadata": {"name": "impure"}, "expression_templates": {"double": {"params": ["a"], "body": {"op": "*", "args": [2, "a"]}}}, """
         for (key, snippet) in [
-            "models" => """"models": {"M": {"variables": {"x": {"type": "unknown", "default": 1.0}}, "equations": []}}""",
-            "reaction_systems" => """"reaction_systems": {"R": {"species": {}, "reactions": []}}""",
-            "data_sources" => """"data_sources": {}""",
-            "coupling" => """"coupling": []""",
-            "domain" => """"domain": {"temporal": {}}""",
-        ]
+                "models" => """"models": {"M": {"variables": {"x": {"type": "unknown", "default": 1.0}}, "equations": []}}""",
+                "reaction_systems" => """"reaction_systems": {"R": {"species": {}, "reactions": []}}""",
+                "data_sources" => """"data_sources": {}""",
+                "coupling" => """"coupling": []""",
+                "domain" => """"domain": {"temporal": {}}""",
+            ]
             @test _err_code(() -> EarthSciAST.load_string(head * snippet * "}")) ==
-                  "template_library_illegal_payload"
+                "template_library_illegal_payload"
         end
     end
 
@@ -1223,59 +1371,59 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             @test _canonical_ref("../x.esm", "https://h/a/b") == "https://h/a/x.esm"
             @test _canonical_ref("https://h/a/../x.esm", "/tmp") == "https://h/x.esm"
             @test _canonical_ref("sub/model.esm", "/tmp/base") ==
-                  abspath(joinpath("/tmp/base", "sub/model.esm"))
+                abspath(joinpath("/tmp/base", "sub/model.esm"))
         end
 
         # Offline integration: substitute the URL fetcher (no live network) and
         # drive the real resolvers over a fake https host.
-        _hosted = Dict{String,String}(
+        _hosted = Dict{String, String}(
             # Template libraries: stencil.esm's OWN relative import must join
             # against ITS URL base -> https://esm.invalid/shared/grid.esm.
             "https://esm.invalid/shared/grid.esm" => """
-            {"esm": "1.1.0", "metadata": {"name": "url_grid"},
-             "metaparameters": {"N": {"type": "integer", "default": 8}},
-             "index_sets": {"cells": {"kind": "interval", "size": "N"}},
-             "expression_templates": {"n_cells": {"params": [], "body": "N"}}}""",
+                {"esm": "1.1.0", "metadata": {"name": "url_grid"},
+                 "metaparameters": {"N": {"type": "integer", "default": 8}},
+                 "index_sets": {"cells": {"kind": "interval", "size": "N"}},
+                 "expression_templates": {"n_cells": {"params": [], "body": "N"}}}""",
             "https://esm.invalid/lib/stencil.esm" => """
-            {"esm": "1.1.0", "metadata": {"name": "url_stencil"},
-             "expression_template_imports": [{"ref": "../shared/grid.esm"}],
-             "expression_templates": {
-               "scale_by_n": {"params": ["f"],
-                 "match": {"op": "scale_by_n", "args": ["f"]},
-                 "body": {"op": "*", "args": ["f",
-                   {"op": "apply_expression_template", "args": [],
-                    "name": "n_cells", "bindings": {}}]}}}}""",
+                {"esm": "1.1.0", "metadata": {"name": "url_stencil"},
+                 "expression_template_imports": [{"ref": "../shared/grid.esm"}],
+                 "expression_templates": {
+                   "scale_by_n": {"params": ["f"],
+                     "match": {"op": "scale_by_n", "args": ["f"]},
+                     "body": {"op": "*", "args": ["f",
+                       {"op": "apply_expression_template", "args": [],
+                        "name": "n_cells", "bindings": {}}]}}}}""",
             # Self-import through a dot-segment spelling: canonical URL
             # identity must detect the cycle.
             "https://esm.invalid/cyc/a.esm" => """
-            {"esm": "1.1.0", "metadata": {"name": "url_cycle"},
-             "expression_template_imports": [{"ref": "b/../a.esm"}],
-             "expression_templates": {"t": {"params": [], "body": 1}}}""",
+                {"esm": "1.1.0", "metadata": {"name": "url_cycle"},
+                 "expression_template_imports": [{"ref": "b/../a.esm"}],
+                 "expression_templates": {"t": {"params": [], "body": 1}}}""",
             # Subsystem refs: outer.esm's template import AND nested subsystem
             # ref are both relative to ITS OWN URL directory.
             "https://esm.invalid/models/outer.esm" => """
-            {"esm": "1.1.0", "metadata": {"name": "url_outer"},
-             "models": {"Outer": {
-               "expression_template_imports": [{"ref": "tpl/lib.esm"}],
-               "variables": {
-                 "u": {"type": "unknown", "units": "1", "default": 1.5},
-                 "w": {"type": "unknown", "units": "1"}},
-               "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
-                              "rhs": {"op": "-", "args": ["u"]}},
-                             {"lhs": "w",
-                              "rhs": {"op": "scale_by_n", "args": ["u"]}}],
-               "subsystems": {"Inner": {"ref": "inner.esm"}}}}}""",
+                {"esm": "1.1.0", "metadata": {"name": "url_outer"},
+                 "models": {"Outer": {
+                   "expression_template_imports": [{"ref": "tpl/lib.esm"}],
+                   "variables": {
+                     "u": {"type": "unknown", "units": "1", "default": 1.5},
+                     "w": {"type": "unknown", "units": "1"}},
+                   "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+                                  "rhs": {"op": "-", "args": ["u"]}},
+                                 {"lhs": "w",
+                                  "rhs": {"op": "scale_by_n", "args": ["u"]}}],
+                   "subsystems": {"Inner": {"ref": "inner.esm"}}}}}""",
             "https://esm.invalid/models/tpl/lib.esm" => """
-            {"esm": "1.1.0", "metadata": {"name": "url_outer_lib"},
-             "expression_templates": {
-               "scale_by_n": {"params": ["f"],
-                 "match": {"op": "scale_by_n", "args": ["f"]},
-                 "body": {"op": "*", "args": ["f", 8]}}}}""",
+                {"esm": "1.1.0", "metadata": {"name": "url_outer_lib"},
+                 "expression_templates": {
+                   "scale_by_n": {"params": ["f"],
+                     "match": {"op": "scale_by_n", "args": ["f"]},
+                     "body": {"op": "*", "args": ["f", 8]}}}}""",
             "https://esm.invalid/models/inner.esm" => """
-            {"esm": "1.1.0", "metadata": {"name": "url_inner"},
-             "models": {"Inner": {
-               "variables": {"v": {"type": "unknown", "units": "1", "default": 0.5}},
-               "equations": []}}}""",
+                {"esm": "1.1.0", "metadata": {"name": "url_inner"},
+                 "models": {"Inner": {
+                   "variables": {"v": {"type": "unknown", "units": "1", "default": 0.5}},
+                   "equations": []}}}""",
         )
         _fetched = String[]
         _old_fetcher = _URL_FETCHER[]
@@ -1289,18 +1437,20 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                 # (1) Template-library import: relative refs INSIDE the
                 # URL-loaded library resolve against the URL base.
                 consumer = joinpath(dir, "consumer.esm")
-                write(consumer, """
-                {"esm": "1.1.0", "metadata": {"name": "url_consumer"},
-                 "models": {"M": {
-                   "expression_template_imports":
-                     [{"ref": "https://esm.invalid/lib/stencil.esm"}],
-                   "variables": {
-                     "x": {"type": "unknown", "units": "1", "default": 1.5},
-                     "y": {"type": "unknown", "units": "1"}},
-                   "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                                  "rhs": {"op": "-", "args": ["x"]}},
-                                 {"lhs": "y",
-                                  "rhs": {"op": "scale_by_n", "args": ["x"]}}]}}}""")
+                write(
+                    consumer, """
+                    {"esm": "1.1.0", "metadata": {"name": "url_consumer"},
+                     "models": {"M": {
+                       "expression_template_imports":
+                         [{"ref": "https://esm.invalid/lib/stencil.esm"}],
+                       "variables": {
+                         "x": {"type": "unknown", "units": "1", "default": 1.5},
+                         "y": {"type": "unknown", "units": "1"}},
+                       "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                                      "rhs": {"op": "-", "args": ["x"]}},
+                                     {"lhs": "y",
+                                      "rhs": {"op": "scale_by_n", "args": ["x"]}}]}}}"""
+                )
                 f = EarthSciAST.load_path(consumer)
                 @test f.index_sets["cells"].size == 8
                 y = observed_definition(f.models["M"], "y")
@@ -1310,25 +1460,29 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                 # (2) Cycle detection over canonical URL identity: the
                 # dot-segment self-import collapses to the same key.
                 cyc = joinpath(dir, "cyc.esm")
-                write(cyc, """
-                {"esm": "1.1.0", "metadata": {"name": "url_cyc_consumer"},
-                 "models": {"M": {
-                   "expression_template_imports":
-                     [{"ref": "https://esm.invalid/cyc/a.esm"}],
-                   "variables": {"x": {"type": "unknown", "units": "1", "default": 1.5}},
-                   "equations": []}}}""")
+                write(
+                    cyc, """
+                    {"esm": "1.1.0", "metadata": {"name": "url_cyc_consumer"},
+                     "models": {"M": {
+                       "expression_template_imports":
+                         [{"ref": "https://esm.invalid/cyc/a.esm"}],
+                       "variables": {"x": {"type": "unknown", "units": "1", "default": 1.5}},
+                       "equations": []}}}"""
+                )
                 @test _err_code(() -> EarthSciAST.load_path(cyc)) ==
-                      "template_import_cycle"
+                    "template_import_cycle"
 
                 # (3) Subsystem ref to a URL: the remote document's own
                 # template import and nested subsystem ref join its URL base.
                 wrapper = joinpath(dir, "wrapper.esm")
-                write(wrapper, """
-                {"esm": "1.1.0", "metadata": {"name": "url_wrapper"},
-                 "models": {"Top": {
-                   "variables": {"z": {"type": "unknown", "units": "1", "default": 2.5}},
-                   "equations": [],
-                   "subsystems": {"S": {"ref": "https://esm.invalid/models/outer.esm"}}}}}""")
+                write(
+                    wrapper, """
+                    {"esm": "1.1.0", "metadata": {"name": "url_wrapper"},
+                     "models": {"Top": {
+                       "variables": {"z": {"type": "unknown", "units": "1", "default": 2.5}},
+                       "equations": [],
+                       "subsystems": {"S": {"ref": "https://esm.invalid/models/outer.esm"}}}}}"""
+                )
                 fw = EarthSciAST.load_path(wrapper)
                 sub = fw.models["Top"].subsystems["S"]
                 @test sub isa EarthSciAST.Model
@@ -1356,13 +1510,17 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
     @testset "metaparameter-expression binding values (esm-spec §9.7.6)" begin
         # ---- 1. the folding / validation helpers ----
         @testset "eval_meta_expr / require_meta_expr helpers" begin
-            @test eval_meta_expr(Dict("op" => "*", "args" => ["NX", "NY"]),
-                                 Dict("NX" => 18, "NY" => 20), "t") == 360
+            @test eval_meta_expr(
+                Dict("op" => "*", "args" => ["NX", "NY"]),
+                Dict("NX" => 18, "NY" => 20), "t"
+            ) == 360
             @test eval_meta_expr("NX", Dict("NX" => 7), "t") == 7
-            @test eval_meta_expr(5, Dict{String,Int64}(), "t") == 5
+            @test eval_meta_expr(5, Dict{String, Int64}(), "t") == 5
             # (NX + 2) * NY  with NX=4, NY=3  ->  18
-            nested = Dict("op" => "*",
-                          "args" => Any[Dict("op" => "+", "args" => Any["NX", 2]), "NY"])
+            nested = Dict(
+                "op" => "*",
+                "args" => Any[Dict("op" => "+", "args" => Any["NX", 2]), "NY"]
+            )
             @test eval_meta_expr(nested, Dict("NX" => 4, "NY" => 3), "t") == 18
             # require_meta_expr returns the value UNFOLDED
             prod = Dict("op" => "*", "args" => Any["NX", "NY"])
@@ -1370,17 +1528,27 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
 
             # Structural bad-op / empty-args / float caught at the edge (even with
             # a symbolic arg); unknown free name + inexact division at fold time.
-            _hc(expr, env) = _err_code(() ->
-                (require_meta_expr(expr, "t"); eval_meta_expr(expr, env, "t")))
-            @test _hc(Dict("op" => "%", "args" => Any["NX", 2]),
-                      Dict{String,Int64}()) == "metaparameter_type_error"
-            @test _hc(Dict("op" => "*", "args" => Any[]),
-                      Dict{String,Int64}()) == "metaparameter_type_error"
-            @test _hc(1.5, Dict{String,Int64}()) == "metaparameter_type_error"
-            @test _hc(Dict("op" => "*", "args" => Any["NZ", "NY"]),
-                      Dict("NX" => 18, "NY" => 20)) == "template_import_unknown_name"
-            @test _hc(Dict("op" => "/", "args" => Any["NX", 7]),
-                      Dict("NX" => 18)) == "metaparameter_type_error"
+            _hc(expr, env) = _err_code(
+                () ->
+                (require_meta_expr(expr, "t"); eval_meta_expr(expr, env, "t"))
+            )
+            @test _hc(
+                Dict("op" => "%", "args" => Any["NX", 2]),
+                Dict{String, Int64}()
+            ) == "metaparameter_type_error"
+            @test _hc(
+                Dict("op" => "*", "args" => Any[]),
+                Dict{String, Int64}()
+            ) == "metaparameter_type_error"
+            @test _hc(1.5, Dict{String, Int64}()) == "metaparameter_type_error"
+            @test _hc(
+                Dict("op" => "*", "args" => Any["NZ", "NY"]),
+                Dict("NX" => 18, "NY" => 20)
+            ) == "template_import_unknown_name"
+            @test _hc(
+                Dict("op" => "/", "args" => Any["NX", 7]),
+                Dict("NX" => 18)
+            ) == "metaparameter_type_error"
         end
 
         # ---- 2. import edge: GX = NX*NY carried symbolically, folds at close ----
@@ -1420,8 +1588,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                 write(joinpath(d, "lib_grid.esm"), _lib_grid)
                 bind = """{"op": "*", "args": ["NX", "NY"]}"""
                 # explicit loader-API bindings (3 * 4)
-                out = resolve_template_machinery(JSON3.read(_model_importing(bind)), d;
-                                                 metaparameters=Dict("NX" => 3, "NY" => 4))
+                out = resolve_template_machinery(
+                    JSON3.read(_model_importing(bind)), d;
+                    metaparameters = Dict("NX" => 3, "NY" => 4)
+                )
                 @test out["index_sets"]["cells"]["size"] == 12
                 # via metaparameter defaults (3 * 4)
                 out2 = resolve_template_machinery(JSON3.read(_model_importing(bind)), d)
@@ -1478,9 +1648,12 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             mktempdir() do d
                 write(joinpath(d, "child_regrid.esm"), _child_regrid)
                 p = joinpath(d, "parent_mount.esm")
-                write(p, _parent_mount(
-                    """{"NX": "NX", "NY": "NY", "NTGT": {"op": "*", "args": ["NX", "NY"]}}"""))
-                f = EarthSciAST.load_path(p; metaparameters=Dict("NX" => 18, "NY" => 20))
+                write(
+                    p, _parent_mount(
+                        """{"NX": "NX", "NY": "NY", "NTGT": {"op": "*", "args": ["NX", "NY"]}}"""
+                    )
+                )
+                f = EarthSciAST.load_path(p; metaparameters = Dict("NX" => 18, "NY" => 20))
                 sz = _sizes(f)
                 @test sz["tgt_cells"] == 360   # NX*NY, derived — not a hand-supplied literal
                 @test sz["gx"] == 18
@@ -1492,8 +1665,11 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             mktempdir() do d
                 write(joinpath(d, "child_regrid.esm"), _child_regrid)
                 p = joinpath(d, "parent_mount.esm")
-                write(p, _parent_mount(
-                    """{"NX": "NX", "NY": "NY", "NTGT": {"op": "*", "args": ["NX", "NY"]}}"""))
+                write(
+                    p, _parent_mount(
+                        """{"NX": "NX", "NY": "NY", "NTGT": {"op": "*", "args": ["NX", "NY"]}}"""
+                    )
+                )
                 f = EarthSciAST.load_path(p)   # no API bindings -> parent defaults 18, 20
                 @test _sizes(f)["tgt_cells"] == 360
             end
@@ -1513,10 +1689,17 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             mktempdir() do d
                 write(joinpath(d, "child_regrid.esm"), _child_regrid)
                 p = joinpath(d, "parent_bad.esm")
-                write(p, _parent_mount(
-                    """{"NX": "NX", "NY": "NX", "NTGT": {"op": "*", "args": ["NX", "NZZ"]}}"""))
-                @test _err_code(() -> EarthSciAST.load_path(p;
-                    metaparameters=Dict("NX" => 18))) == "template_import_unknown_name"
+                write(
+                    p, _parent_mount(
+                        """{"NX": "NX", "NY": "NX", "NTGT": {"op": "*", "args": ["NX", "NZZ"]}}"""
+                    )
+                )
+                @test _err_code(
+                    () -> EarthSciAST.load_path(
+                        p;
+                        metaparameters = Dict("NX" => 18)
+                    )
+                ) == "template_import_unknown_name"
             end
         end
     end

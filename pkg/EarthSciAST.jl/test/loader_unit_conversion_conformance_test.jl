@@ -36,17 +36,19 @@ _luc_read(rel) = JSON.parsefile(joinpath(_LUC_TESTS, rel))
             mktempdir() do dir
                 doc = _luc_read(String(fixture["document"]))
                 golden = _luc_read(String(fixture["golden"]))
-                overrides = Dict{String,String}()
+                overrides = Dict{String, String}()
                 for (loader, rel) in get(fixture, "url_overrides", Dict())
                     p = abspath(joinpath(_LUC_TESTS, String(rel)))
                     @test isfile(p)
                     overrides[String(loader)] = "file://" * p
                 end
                 loaders = haskey(fixture, "loaders") ?
-                          String[String(l) for l in fixture["loaders"]] : nothing
-                provs = _LUC.providers_from_document(doc;
+                    String[String(l) for l in fixture["loaders"]] : nothing
+                provs = _LUC.providers_from_document(
+                    doc;
                     cache_root = joinpath(dir, "cache"),
-                    loaders = loaders, url_overrides = overrides)
+                    loaders = loaders, url_overrides = overrides
+                )
 
                 deliver(key) = Float64.(_LUC.provider_sample(provs[key], 0.0))
                 records = Int(golden["records"])

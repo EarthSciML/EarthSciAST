@@ -45,7 +45,7 @@ _ut_same(a, b) = _ut_bits(collect(a)) == _ut_bits(collect(b))
 # The three builds under comparison, from one model-producing thunk.
 _ut_tiered(mk; kw...) = ESM._build_evaluator_impl(mk(); kw...)
 _ut_untiered(mk; kw...) =
-    ESM._build_evaluator_impl(mk(); compiler=:interpreter, kw...)
+    ESM._build_evaluator_impl(mk(); compiler = :interpreter, kw...)
 
 # ---------------------------------------------------------------------------
 # Fixture 1 — the parameter-only Arrhenius chain: `k = A*exp(-Ea/(R*Tref))`
@@ -53,61 +53,90 @@ _ut_untiered(mk; kw...) =
 # CONST-cadence. Carried here rather than borrowed so this file runs standalone.
 # ---------------------------------------------------------------------------
 _ut_arrhenius() = ESM.Model(
-    Dict{String,ModelVariable}(
-        "x"    => ModelVariable(UnknownVariable; default=1.5),
-        "y"    => ModelVariable(UnknownVariable; default=2.5),
-        "A"    => ModelVariable(ParameterVariable; default=3.2e5),
-        "Ea"   => ModelVariable(ParameterVariable; default=5.0e4),
-        "R"    => ModelVariable(ParameterVariable; default=8.314),
-        "Tref" => ModelVariable(ParameterVariable; default=300.0),
+    Dict{String, ModelVariable}(
+        "x" => ModelVariable(UnknownVariable; default = 1.5),
+        "y" => ModelVariable(UnknownVariable; default = 2.5),
+        "A" => ModelVariable(ParameterVariable; default = 3.2e5),
+        "Ea" => ModelVariable(ParameterVariable; default = 5.0e4),
+        "R" => ModelVariable(ParameterVariable; default = 8.314),
+        "Tref" => ModelVariable(ParameterVariable; default = 300.0),
     ),
     begin
-        arr() = _op("*", _v("A"),
-                    _op("exp", _op("/", _op("neg", _v("Ea")),
-                                _op("*", _v("R"), _v("Tref")))))
+        arr() = _op(
+            "*", _v("A"),
+            _op(
+                "exp", _op(
+                    "/", _op("neg", _v("Ea")),
+                    _op("*", _v("R"), _v("Tref"))
+                )
+            )
+        )
         ESM.Equation[
             ESM.Equation(_D("x"), _op("*", arr(), _v("x"))),
             ESM.Equation(_D("y"), _op("*", _op("neg", arr()), _v("y"))),
         ]
-    end)
+    end
+)
 
 # ---------------------------------------------------------------------------
 # Fixture 2 — the FastJX-shaped model: K photolysis bands interpolated over a
 # shared solar-angle chain in `t`, plus a met gather from a LIVE buffer, feeding
 # M chemistry states. Every observed is state-blind, so the slots are TIME.
 # ---------------------------------------------------------------------------
-_ut_fn(name, args...) = OpExpr("fn", ESM.ASTExpr[args...]; name=String(name))
-_ut_const(v) = OpExpr("const", ESM.ASTExpr[]; value=v)
+_ut_fn(name, args...) = OpExpr("fn", ESM.ASTExpr[args...]; name = String(name))
+_ut_const(v) = OpExpr("const", ESM.ASTExpr[]; value = v)
 _ut_axis() = Float64[0.0, 0.25, 0.5, 0.75, 1.0]
 _ut_table(i) = Float64[0.1i, 0.22i, 0.35i, 0.51i, 0.8i]
 
 function _ut_fastjx_model(K::Int, M::Int)
-    vars = Dict{String,ModelVariable}(
-        "w" => ModelVariable(ParameterVariable; default=0.7),
-        "scale" => ModelVariable(ParameterVariable; default=1.5),
+    vars = Dict{String, ModelVariable}(
+        "w" => ModelVariable(ParameterVariable; default = 0.7),
+        "scale" => ModelVariable(ParameterVariable; default = 1.5),
         "sza" => ModelVariable(UnknownVariable),
         "met" => ModelVariable(UnknownVariable),
     )
     eqs = ESM.Equation[
-        ESM.Equation(_v("sza"),
-            _op("+", _n(0.5), _op("*", _n(0.4),
-                _op("sin", _op("*", _v("w"), _v("t")))))),
+        ESM.Equation(
+            _v("sza"),
+            _op(
+                "+", _n(0.5), _op(
+                    "*", _n(0.4),
+                    _op("sin", _op("*", _v("w"), _v("t")))
+                )
+            )
+        ),
         ESM.Equation(_v("met"), _op("*", _idx("F", _i(1)), _v("scale"))),
     ]
     for i in 1:K
         vars["band$i"] = ModelVariable(UnknownVariable)
-        push!(eqs, ESM.Equation(_v("band$i"),
-            _ut_fn("interp.linear", _ut_const(_ut_table(i)), _ut_const(_ut_axis()),
-                   _v("sza"))))
+        push!(
+            eqs, ESM.Equation(
+                _v("band$i"),
+                _ut_fn(
+                    "interp.linear", _ut_const(_ut_table(i)), _ut_const(_ut_axis()),
+                    _v("sza")
+                )
+            )
+        )
     end
     for j in 1:M
-        vars["x$j"] = ModelVariable(UnknownVariable; default=1.0 + 0.25j)
-        terms = ESM.ASTExpr[_op("*", _n(0.1 + 0.05i + 0.02j),
-                                _op("*", _v("band$i"), _v("met"))) for i in 1:K]
+        vars["x$j"] = ModelVariable(UnknownVariable; default = 1.0 + 0.25j)
+        terms = ESM.ASTExpr[
+            _op(
+                "*", _n(0.1 + 0.05i + 0.02j),
+                _op("*", _v("band$i"), _v("met"))
+            ) for i in 1:K
+        ]
         prod = length(terms) == 1 ? terms[1] : OpExpr("+", terms)
-        push!(eqs, ESM.Equation(_D("x$j"),
-            _op("-", prod,
-                _op("*", _n(0.3 + 0.1j), _op("*", _v("met"), _v("x$j"))))))
+        push!(
+            eqs, ESM.Equation(
+                _D("x$j"),
+                _op(
+                    "-", prod,
+                    _op("*", _n(0.3 + 0.1j), _op("*", _v("met"), _v("x$j")))
+                )
+            )
+        )
     end
     return ESM.Model(vars, eqs)
 end
@@ -121,9 +150,10 @@ end
 _ut_file(rel) = ESM.load_path(joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", rel))
 _ut_doc_build(file, name; kw...) = ESM._build_evaluator_impl(
     ESM._select_model(file, name);
-    index_sets=file.index_sets,
-    _template_reg=ESM._component_template_reg(file, name),
-    _model_name=String(name), kw...)
+    index_sets = file.index_sets,
+    _template_reg = ESM._component_template_reg(file, name),
+    _model_name = String(name), kw...
+)
 
 @testset "compiler=:interpreter ≡ the tiered prelude" begin
 
@@ -138,17 +168,17 @@ _ut_doc_build(file, name; kw...) = ESM._build_evaluator_impl(
         @test dt.n_const_slots == 5 && dt.n_dynamic_slots == 0
         @test du.n_const_slots == 0 && du.n_time_slots == 0
         @test du.n_dynamic_slots == dt.n_const_slots + dt.n_time_slots +
-                                    dt.n_dynamic_slots
+            dt.n_dynamic_slots
 
         K, M = 5, 3
         mk() = _ut_fastjx_model(K, M)
         pa = Dict("F" => [6.0])
-        _g, _, _, _, _, gt = _ut_tiered(mk; param_arrays=pa)
-        _gu, _, _, _, _, gu = _ut_untiered(mk; param_arrays=pa)
+        _g, _, _, _, _, gt = _ut_tiered(mk; param_arrays = pa)
+        _gu, _, _, _, _, gu = _ut_untiered(mk; param_arrays = pa)
         @test gt.n_time_slots > 0
         @test gu.n_const_slots == 0 && gu.n_time_slots == 0
         @test gu.n_dynamic_slots == gt.n_const_slots + gt.n_time_slots +
-                                    gt.n_dynamic_slots
+            gt.n_dynamic_slots
         # The prelude itself is unchanged — the switch routes, it does not rewrite.
         @test gu.n_cse_slots == gt.n_cse_slots
         @test gu.n_obs_slots == gt.n_obs_slots
@@ -164,9 +194,11 @@ _ut_doc_build(file, name; kw...) = ESM._build_evaluator_impl(
         fu, _u2, _p2, _ts2, _vm2, _du = _ut_untiered(_ut_arrhenius)
 
         p2 = merge(p, (; A = 7.0 * p.A, R = 8.0))
-        seq = [(u0, p, 0.0), (u0, p, 0.0), (u0, p2, 0.0), ([0.4, -1.3], p, 0.0),
-               (u0, p, 0.5), (u0, p2, 0.5), (u0, p, 0.5), ([2.0, 2.0], p2, 0.0),
-               (u0, p, 0.0)]
+        seq = [
+            (u0, p, 0.0), (u0, p, 0.0), (u0, p2, 0.0), ([0.4, -1.3], p, 0.0),
+            (u0, p, 0.5), (u0, p2, 0.5), (u0, p, 0.5), ([2.0, 2.0], p2, 0.0),
+            (u0, p, 0.0),
+        ]
         for (u, pp, t) in seq
             a = _ut_call(fu, u, pp, t)
             @test _ut_same(_ut_call(fi, u, pp, t), a)
@@ -185,12 +217,12 @@ _ut_doc_build(file, name; kw...) = ESM._build_evaluator_impl(
         buf = [6.0]
         mk() = _ut_fastjx_model(K, M)
         pa() = Dict("F" => buf)
-        fi, u0, p, _ts, _vm, di = _ut_tiered(mk; param_arrays=pa())
-        fu, _u2, _p2, _ts2, _vm2, _du = _ut_untiered(mk; param_arrays=pa())
+        fi, u0, p, _ts, _vm, di = _ut_tiered(mk; param_arrays = pa())
+        fu, _u2, _p2, _ts2, _vm2, _du = _ut_untiered(mk; param_arrays = pa())
         @test di.n_time_slots > 0
 
         p2 = merge(p, (; w = 0.9, scale = 2.25))
-        up = copy(u0); up[1] += 1e-6
+        up = copy(u0); up[1] += 1.0e-6
         seq = Any[]
         push!(seq, (u0, p, 0.0)); push!(seq, (u0, p, 0.0))      # skip
         push!(seq, (up, p, 0.0))                                # FD column, same t
@@ -220,19 +252,25 @@ _ut_doc_build(file, name; kw...) = ESM._build_evaluator_impl(
     @testset "tests/valid fixtures: tiered ≡ untiered" begin
         cases = (
             # (file, model, a second `p` builder or `nothing`)
-            ("units_moves_registry.esm", "UnitsMovesRegistry",
-             p -> merge(p, (; link_avg_speed = 55.0, engine_power = 210.0))),
-            ("units_propagation.esm", "UnitPropagationModel",
-             p -> merge(p, (; temperature = 310.0, pressure = 90000.0))),
-            ("geometry/polygon_intersection_area_planar.esm",
-             "PolygonIntersectionAreaPlanar", nothing),
+            (
+                "units_moves_registry.esm", "UnitsMovesRegistry",
+                p -> merge(p, (; link_avg_speed = 55.0, engine_power = 210.0)),
+            ),
+            (
+                "units_propagation.esm", "UnitPropagationModel",
+                p -> merge(p, (; temperature = 310.0, pressure = 90000.0)),
+            ),
+            (
+                "geometry/polygon_intersection_area_planar.esm",
+                "PolygonIntersectionAreaPlanar", nothing,
+            ),
         )
         for (rel, name, bump) in cases
             @testset "$rel" begin
                 file = _ut_file(rel)
                 fi, u0, p, _ts, _vm, di = _ut_doc_build(file, name)
                 fu, _u2, _p2, _ts2, _vm2, du =
-                    _ut_doc_build(file, name; compiler=:interpreter)
+                    _ut_doc_build(file, name; compiler = :interpreter)
 
                 # The fixture must actually HAVE a prelude, or this proves nothing.
                 nslots = di.n_const_slots + di.n_time_slots + di.n_dynamic_slots

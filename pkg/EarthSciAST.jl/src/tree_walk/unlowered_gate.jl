@@ -28,7 +28,7 @@ _is_unlowered_op(op::String) =
 # core; it propagates to children, so a `D` under an LHS `faq` stays structural.
 # `seen` is shared across calls for the same side: the build's trees are
 # structurally shared DAGs, and a node already walked in that role is clean.
-function _first_unlowered_node(e::ASTExpr, lhs::Bool, seen::IdDict{OpExpr,Nothing})
+function _first_unlowered_node(e::ASTExpr, lhs::Bool, seen::IdDict{OpExpr, Nothing})
     e isa OpExpr || return nothing
     o = e::OpExpr
     haskey(seen, o) && return nothing
@@ -45,19 +45,25 @@ function _first_unlowered_node(e::ASTExpr, lhs::Bool, seen::IdDict{OpExpr,Nothin
     return found
 end
 
-function _reject_unlowered_operators(model::Model,
-                                     seen_lhs::IdDict{OpExpr,Nothing}=IdDict{OpExpr,Nothing}(),
-                                     seen_rhs::IdDict{OpExpr,Nothing}=IdDict{OpExpr,Nothing}())
+function _reject_unlowered_operators(
+        model::Model,
+        seen_lhs::IdDict{OpExpr, Nothing} = IdDict{OpExpr, Nothing}(),
+        seen_rhs::IdDict{OpExpr, Nothing} = IdDict{OpExpr, Nothing}()
+    )
     for eq in model.equations
         node = _first_unlowered_node(eq.lhs, true, seen_lhs)
         node === nothing && (node = _first_unlowered_node(eq.rhs, false, seen_rhs))
         node === nothing && continue
         wrt = node.op == "D" && node.wrt !== nothing ? " (wrt=$(node.wrt))" : ""
-        throw(TreeWalkError(ERROR_CODES.UNLOWERED_OPERATOR,
-            "unlowered rewrite-target operator '$(node.op)'$wrt in the equation for " *
-            "$(eq.lhs): no rewrite rule lowered it before evaluation (esm-spec §9.6.3 " *
-            "constraint 6 / §9.6.8). The gate walks every equation, including an " *
-            "observed nothing reads."))
+        throw(
+            TreeWalkError(
+                ERROR_CODES.UNLOWERED_OPERATOR,
+                "unlowered rewrite-target operator '$(node.op)'$wrt in the equation for " *
+                    "$(eq.lhs): no rewrite rule lowered it before evaluation (esm-spec §9.6.3 " *
+                    "constraint 6 / §9.6.8). The gate walks every equation, including an " *
+                    "observed nothing reads."
+            )
+        )
     end
     for sub in values(model.subsystems)
         sub isa Model && _reject_unlowered_operators(sub, seen_lhs, seen_rhs)

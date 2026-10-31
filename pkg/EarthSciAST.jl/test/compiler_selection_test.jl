@@ -33,8 +33,10 @@ _csel_problem(f::AbstractString, tspan; kw...) = esm_problem(f, tspan; u0 = harn
 # shapes that route through three different arms of the cascade.
 const _CSEL_AGREE = [
     _csel_fixture("fixtures", "faq", "01_pure_ode_analytical.esm"),
-    _csel_fixture("conformance", "pde_simulation", "fixtures",
-                  "diffusion_1d_periodic_n8.esm"),
+    _csel_fixture(
+        "conformance", "pde_simulation", "fixtures",
+        "diffusion_1d_periodic_n8.esm"
+    ),
     _csel_fixture("valid", "faq", "min_sum_tropical.esm"),
     _csel_fixture("valid", "faq", "join_on_self_join.esm"),
     # A document the affine tier DECLINES, so its equation is scalarized one
@@ -50,43 +52,67 @@ const _CSEL_AGREE = [
 # TUNING THRESHOLD (§2.5.10 keeps those), lowered here so the tier engages at a
 # size the test can afford; the routing it produces is the same one a
 # production-sized document gets at the default floor.
-_csel_lhs(v, idx, n) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[idx],
+_csel_lhs(v, idx, n) = Dict(
+    "op" => "faq", "args" => Any[], "output_idx" => Any[idx],
     "ranges" => Dict(idx => Any[1, n]),
-    "expr" => Dict("op" => "D", "args" => Any[
-        Dict("op" => "index", "args" => Any[v, idx])], "wrt" => "t"))
-_csel_zero(idx, n) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[idx],
-    "ranges" => Dict(idx => Any[1, n]), "expr" => 0.0)
+    "expr" => Dict(
+        "op" => "D", "args" => Any[
+            Dict("op" => "index", "args" => Any[v, idx]),
+        ], "wrt" => "t"
+    )
+)
+_csel_zero(idx, n) = Dict(
+    "op" => "faq", "args" => Any[], "output_idx" => Any[idx],
+    "ranges" => Dict(idx => Any[1, n]), "expr" => 0.0
+)
 
 # The contracted range runs DESCENDING, which the affine tier's run-time fold
 # (ascending unit-step ranges only) leaves to the whole-array contraction nest.
 function _csel_contraction_doc(NS::Int = 16, NR::Int = 16)
     SR = [[Float64((3s + 7r) % 11) for r in 1:NR] for s in 1:NS]
-    agg = Dict{String,Any}("op" => "faq", "args" => Any[],
+    agg = Dict{String, Any}(
+        "op" => "faq", "args" => Any[],
         "output_idx" => Any["rcv"],
         "ranges" => Dict("rcv" => Any[1, NR], "s" => Any[NS, -1, 1]),
         "semiring" => "sum_product",
-        "expr" => Dict("op" => "*", "args" => Any[
-            Dict("op" => "index", "args" => Any[
-                Dict("op" => "const", "args" => Any[], "value" => SR), "s", "rcv"]),
-            Dict("op" => "index", "args" => Any["E", "s"])]))
-    doc = Dict{String,Any}("esm" => "1.1.0",
+        "expr" => Dict(
+            "op" => "*", "args" => Any[
+                Dict(
+                    "op" => "index", "args" => Any[
+                        Dict("op" => "const", "args" => Any[], "value" => SR), "s", "rcv",
+                    ]
+                ),
+                Dict("op" => "index", "args" => Any["E", "s"]),
+            ]
+        )
+    )
+    doc = Dict{String, Any}(
+        "esm" => "1.1.0",
         "metadata" => Dict("name" => "csel_sr"),
-        "models" => Dict("R" => Dict{String,Any}(
-            "variables" => Dict(
-                "E"    => Dict("type" => "unknown", "shape" => Any["s"]),
-                "conc" => Dict("type" => "unknown", "shape" => Any["rcv"])),
-            "equations" => Any[
-                Dict("lhs" => _csel_lhs("E", "s", NS), "rhs" => _csel_zero("s", NS)),
-                Dict("lhs" => _csel_lhs("conc", "rcv", NR), "rhs" => agg)])))
-    ics = merge(Dict{String,Any}("E[$s]" => Float64(s % 5) for s in 1:NS),
-                Dict{String,Any}("conc[$r]" => 0.0 for r in 1:NR))
+        "models" => Dict(
+            "R" => Dict{String, Any}(
+                "variables" => Dict(
+                    "E" => Dict("type" => "unknown", "shape" => Any["s"]),
+                    "conc" => Dict("type" => "unknown", "shape" => Any["rcv"])
+                ),
+                "equations" => Any[
+                    Dict("lhs" => _csel_lhs("E", "s", NS), "rhs" => _csel_zero("s", NS)),
+                    Dict("lhs" => _csel_lhs("conc", "rcv", NR), "rhs" => agg),
+                ]
+            )
+        )
+    )
+    ics = merge(
+        Dict{String, Any}("E[$s]" => Float64(s % 5) for s in 1:NS),
+        Dict{String, Any}("conc[$r]" => 0.0 for r in 1:NR)
+    )
     return doc, ics
 end
 
 _csel_contraction_build(doc, ics; compiler) =
     withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
-        EarthSciAST._build_evaluator(doc; initial_conditions = ics, compiler = compiler)
-    end
+    EarthSciAST._build_evaluator(doc; initial_conditions = ics, compiler = compiler)
+end
 
 # `du` at the seeded state, so two builds can be compared element for element.
 function _csel_du(prob)
@@ -99,7 +125,7 @@ end
 
     @testset "the vocabulary is closed" begin
         @test CSEL.COMPILER_VOCABULARY ===
-              (:interpreter, :native, :xla, :mtk, :sympy)
+            (:interpreter, :native, :xla, :mtk, :sympy)
         doc = _CSEL_AGREE[1]
 
         # Outside the vocabulary.
@@ -190,8 +216,10 @@ end
         runs = map(((), (; compiler = :native))) do kw
             insp = BuildInspection()
             f!, u0, p, _t, vm = withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
-                EarthSciAST._build_evaluator(doc; initial_conditions = ics, inspect = insp,
-                                kw...)
+                EarthSciAST._build_evaluator(
+                    doc; initial_conditions = ics, inspect = insp,
+                    kw...
+                )
             end
             du = zeros(Float64, length(u0))
             f!(du, u0, p, 0.0)
@@ -212,31 +240,41 @@ end
 
     @testset "strict :native compiles the whole-array contraction tier" begin
         doc, ics = _csel_contraction_doc()
-        exact = [sum(Float64((3s + 7r) % 11) * Float64(s % 5) for s in 1:16)
-                 for r in 1:16]
+        exact = [
+            sum(Float64((3s + 7r) % 11) * Float64(s % 5) for s in 1:16)
+                for r in 1:16
+        ]
         insp = BuildInspection()
         f!, u0, p, _t, vm = withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
-            EarthSciAST._build_evaluator(doc; initial_conditions = ics, compiler = :native,
-                            inspect = insp)
+            EarthSciAST._build_evaluator(
+                doc; initial_conditions = ics, compiler = :native,
+                inspect = insp
+            )
         end
         du = zeros(Float64, length(u0))
         f!(du, u0, p, 0.0)
         @test [du[vm["conc[$r]"]] for r in 1:16] == exact
         # The tier is named in the report, in its GENERATED form — the walked
         # one is what §2.5.10 refuses, so its absence is half the claim.
-        rows = [r for r in insp.compiler_report.rules
-                if r.tier === :array_contraction_codegen]
+        rows = [
+            r for r in insp.compiler_report.rules
+                if r.tier === :array_contraction_codegen
+        ]
         @test length(rows) == 1
         @test occursin("conc", rows[1].rule)
-        @test !any(r -> r.tier === :array_contraction,
-                   insp.compiler_report.rules)
+        @test !any(
+            r -> r.tier === :array_contraction,
+            insp.compiler_report.rules
+        )
 
         # The SAME document under `:interpreter`, which turns the tier off and
         # reaches the answer through the per-cell path instead. `===` per
         # element: the two compilers agree bit for bit on the shape the tier
         # exists for, which is the property the interpreter exists to witness.
-        fi!, ui, pi_, _ti, vmi = _csel_contraction_build(doc, ics;
-                                                         compiler = :interpreter)
+        fi!, ui, pi_, _ti, vmi = _csel_contraction_build(
+            doc, ics;
+            compiler = :interpreter
+        )
         dui = zeros(Float64, length(ui))
         fi!(dui, ui, pi_, 0.0)
         @test [dui[vmi["conc[$r]"]] for r in 1:16] == exact
@@ -266,12 +304,16 @@ end
     # `sympy`/`mtk` take only some documents and `xla` needs heavy dependencies,
     # so `native` is the one that has to cover everything.
     @testset "native and interpreter read the same observed field: $(basename(f))" for
-            (f, names) in [
-        (_csel_fixture("valid", "nonlinear_mogi_shape.esm"),
-         ["MogiModel.ur", "MogiModel.uz", "ur", "uz"]),
-        (_csel_fixture("valid", "nonlinear_two_component_static.esm"),
-         ["Sites.North.u", "Sites.North.ur", "Sites.South.u"]),
-    ]
+        (f, names) in [
+            (
+                _csel_fixture("valid", "nonlinear_mogi_shape.esm"),
+                ["MogiModel.ur", "MogiModel.uz", "ur", "uz"],
+            ),
+            (
+                _csel_fixture("valid", "nonlinear_two_component_static.esm"),
+                ["Sites.North.u", "Sites.North.ur", "Sites.South.u"],
+            ),
+        ]
         if isfile(f)
             pn = _csel_problem(f, (0.0, 1.0))
             pi = _csel_problem(f, (0.0, 1.0); compiler = :interpreter)
@@ -284,8 +326,10 @@ end
                 # Exact, or within 1e-12 relative. The two paths compile the
                 # same resolved body, so exact is what is expected; the
                 # tolerance is the margin, not the claim.
-                @test all(isequal(x, y) || abs(x - y) <= 1e-12 * max(abs(x), abs(y))
-                          for (x, y) in zip(a, b))
+                @test all(
+                    isequal(x, y) || abs(x - y) <= 1.0e-12 * max(abs(x), abs(y))
+                        for (x, y) in zip(a, b)
+                )
             end
         end
     end
@@ -338,12 +382,16 @@ end
         push!(eqs, eqs[2])
         insp2 = BuildInspection()
         @test_throws TreeWalkError withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
-            EarthSciAST._build_evaluator(doc; initial_conditions = ics, inspect = insp2,
-                            compiler = :native)
+            EarthSciAST._build_evaluator(
+                doc; initial_conditions = ics, inspect = insp2,
+                compiler = :native
+            )
         end
         @test insp2.compiler_report.compiler === :native
-        @test any(r -> r.tier === :array_contraction_codegen,
-                  insp2.compiler_report.rules)
+        @test any(
+            r -> r.tier === :array_contraction_codegen,
+            insp2.compiler_report.rules
+        )
     end
 
     @testset "compiler = :xla builds only the out-of-place product" begin
@@ -352,11 +400,17 @@ end
         # request is refused before anything is loaded or built — and before
         # the availability check, so this session without Reactant hears it.
         doc, _ = _csel_contraction_doc()
-        for call in (() -> CSEL._build_evaluator(doc; compiler = :xla),
-                     () -> CSEL._build_evaluator(load_path(_CSEL_AGREE[1]);
-                                                 compiler = :xla),
-                     () -> CSEL.build_evaluator(doc; compiler = :xla,
-                                                form = :inplace))
+        for call in (
+                () -> CSEL._build_evaluator(doc; compiler = :xla),
+                () -> CSEL._build_evaluator(
+                    load_path(_CSEL_AGREE[1]);
+                    compiler = :xla
+                ),
+                () -> CSEL.build_evaluator(
+                    doc; compiler = :xla,
+                    form = :inplace
+                ),
+            )
             e = try
                 call(); nothing
             catch err
@@ -387,15 +441,17 @@ end
     @testset "the :xla finite-difference Jacobian" begin
         # f(u, t) = [u₁² + t·u₂, sin(u₂)·u₁, 3u₃ − t²]; J and ∂f/∂t in closed form.
         calls = Ref(0)
-        f! = (du, u, p, t) -> (calls[] += 1;
-                               du[1] = u[1]^2 + t * u[2];
-                               du[2] = sin(u[2]) * u[1];
-                               du[3] = 3u[3] - t^2; nothing)
+        f! = (du, u, p, t) -> (
+            calls[] += 1;
+            du[1] = u[1]^2 + t * u[2];
+            du[2] = sin(u[2]) * u[1];
+            du[3] = 3u[3] - t^2; nothing
+        )
         u = [0.7, -1.3, 250.0]; t = 0.4
         J = zeros(3, 3)
         CSEL._XlaFdJacobian(f!, 3)(J, u, nothing, t)
-        Jx = [2u[1] t 0.0; sin(u[2]) u[1]*cos(u[2]) 0.0; 0.0 0.0 3.0]
-        @test isapprox(J, Jx; rtol = 1e-6, atol = 1e-6)
+        Jx = [2u[1] t 0.0; sin(u[2]) u[1] * cos(u[2]) 0.0; 0.0 0.0 3.0]
+        @test isapprox(J, Jx; rtol = 1.0e-6, atol = 1.0e-6)
         @test calls[] == 4                  # n + 1: f(u) once, one per column
         @test u == [0.7, -1.3, 250.0]       # the caller's state is not touched
         # A forward difference cancels to within eps(|f|)/h, so the time
@@ -404,11 +460,11 @@ end
         v = [0.7, -1.3, 0.25]
         dT = zeros(3)
         CSEL._XlaFdTgrad(f!, 3)(dT, v, nothing, t)
-        @test isapprox(dT, [v[2], 0.0, -2t]; rtol = 1e-6, atol = 1e-6)
+        @test isapprox(dT, [v[2], 0.0, -2t]; rtol = 1.0e-6, atol = 1.0e-6)
         # Only an `:xla` Problem carries them; every other compiler's `f!` is a
         # Julia function the solver differentiates itself.
         @test CSEL._ode_derivatives(_csel_problem(_CSEL_AGREE[1], (0.0, 1.0))) ==
-              NamedTuple()
+            NamedTuple()
     end
 
     @testset "build_evaluator is deprecated, and exported until it is removed" begin
@@ -439,7 +495,7 @@ end
         # compiler rather than only for the out-of-place build form.
         prob = _csel_problem(_CSEL_AGREE[1], (0.0, 1.0))
         @test forcing_buffers(prob) isa NamedTuple
-        @test forcing_buffer_index(prob) isa Dict{String,Int}
+        @test forcing_buffer_index(prob) isa Dict{String, Int}
         @test length(forcing_buffers(prob)) == length(forcing_buffer_index(prob))
         insp = BuildInspection()
         _csel_problem(_CSEL_AGREE[1], (0.0, 1.0); inspect = insp)
@@ -457,8 +513,10 @@ end
         @test all(r -> r.passed, interp)
         # The per-document option wins over the keyword, the same precedence
         # every other `InlineTestOptions` field has.
-        viaopts = run_inline_tests(f;
-            options_for = _ -> InlineTestOptions(compiler = :interpreter))
+        viaopts = run_inline_tests(
+            f;
+            options_for = _ -> InlineTestOptions(compiler = :interpreter)
+        )
         @test length(viaopts) == length(native)
         @test all(r -> r.passed, viaopts)
     end
@@ -477,37 +535,52 @@ function _csel_filtered_gather_doc(filtered::Bool)
     rng = Dict("c" => Dict("from" => "col"), "l" => Dict("from" => "lev"))
     rng1 = Dict("c" => Dict("from" => "col"))
     D(v, is...) = Dict("op" => "D", "args" => Any[idx(v, is...)], "wrt" => "t")
-    faq(oi, r, body) = Dict{String,Any}("op" => "faq", "args" => Any[],
-        "output_idx" => Any[oi...], "ranges" => r, "expr" => body)
+    faq(oi, r, body) = Dict{String, Any}(
+        "op" => "faq", "args" => Any[],
+        "output_idx" => Any[oi...], "ranges" => r, "expr" => body
+    )
     body = op("+", op("*", -0.1, idx("u", "c", "l")), idx("k", "c", idx("cnt", "c")))
     rhs = faq(["c", "l"], rng, body)
     filtered && (rhs["filter"] = op(">", idx("cnt", "c"), 0))
     K = [[10.0 * c + j for j in 1:2] for c in 1:3]
-    return Dict{String,Any}("esm" => "1.1.0", "metadata" => Dict("name" => "csel_fg"),
-        "index_sets" => Dict("col" => Dict("kind" => "interval", "size" => 3),
-                             "lev" => Dict("kind" => "interval", "size" => 2),
-                             "kk" => Dict("kind" => "interval", "size" => 2)),
-        "models" => Dict("M" => Dict{String,Any}(
-            "variables" => Dict(
-                "u" => Dict("type" => "unknown", "shape" => Any["col", "lev"]),
-                "cnt" => Dict("type" => "unknown", "shape" => Any["col"]),
-                "k" => Dict("type" => "unknown", "shape" => Any["col", "kk"])),
-            "equations" => Any[
-                Dict("lhs" => faq(["c", "l"], rng, D("u", "c", "l")), "rhs" => rhs),
-                Dict("lhs" => faq(["c"], rng1, D("cnt", "c")), "rhs" => faq(["c"], rng1, 0.0)),
-                Dict("lhs" => "k",
-                     "rhs" => Dict("op" => "const", "args" => Any[], "value" => K))])))
+    return Dict{String, Any}(
+        "esm" => "1.1.0", "metadata" => Dict("name" => "csel_fg"),
+        "index_sets" => Dict(
+            "col" => Dict("kind" => "interval", "size" => 3),
+            "lev" => Dict("kind" => "interval", "size" => 2),
+            "kk" => Dict("kind" => "interval", "size" => 2)
+        ),
+        "models" => Dict(
+            "M" => Dict{String, Any}(
+                "variables" => Dict(
+                    "u" => Dict("type" => "unknown", "shape" => Any["col", "lev"]),
+                    "cnt" => Dict("type" => "unknown", "shape" => Any["col"]),
+                    "k" => Dict("type" => "unknown", "shape" => Any["col", "kk"])
+                ),
+                "equations" => Any[
+                    Dict("lhs" => faq(["c", "l"], rng, D("u", "c", "l")), "rhs" => rhs),
+                    Dict("lhs" => faq(["c"], rng1, D("cnt", "c")), "rhs" => faq(["c"], rng1, 0.0)),
+                    Dict(
+                        "lhs" => "k",
+                        "rhs" => Dict("op" => "const", "args" => Any[], "value" => K)
+                    ),
+                ]
+            )
+        )
+    )
 end
 
 @testset "a gather under a filter is not lifted past it" begin
-    ics = Dict{String,Any}("u[$c,$l]" => 1.0 * c + l for c in 1:3 for l in 1:2)
+    ics = Dict{String, Any}("u[$c,$l]" => 1.0 * c + l for c in 1:3 for l in 1:2)
     for (c, n) in ((1, 2.0), (2, 0.0), (3, 1.0))
         ics["cnt[$c]"] = n
     end
     doc = _csel_filtered_gather_doc(true)
     builds = map((:native, :interpreter)) do comp
-        f!, u0, p, _t, vm = EarthSciAST._build_evaluator(doc; initial_conditions = ics,
-                                                         compiler = comp)
+        f!, u0, p, _t, vm = EarthSciAST._build_evaluator(
+            doc; initial_conditions = ics,
+            compiler = comp
+        )
         du = zeros(Float64, length(u0))
         f!(du, u0, p, 0.0)
         [du[vm["u[$c,$l]"]] for c in 1:3 for l in 1:2]
@@ -519,7 +592,9 @@ end
     # once every column has cnt >= 1).
     ics["cnt[2]"] = 1.0
     insp = BuildInspection()
-    EarthSciAST._build_evaluator(_csel_filtered_gather_doc(false); initial_conditions = ics,
-                                 compiler = :native, inspect = insp)
+    EarthSciAST._build_evaluator(
+        _csel_filtered_gather_doc(false); initial_conditions = ics,
+        compiler = :native, inspect = insp
+    )
     @test any(r -> occursin("hoisted gather", r.rule), insp.compiler_report.rules)
 end

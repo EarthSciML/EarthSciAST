@@ -5,7 +5,7 @@ include("testutils.jl")
 
 const _SOLVER_FIXTURE = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "solver_block.esm")
 
-_solver_base() = JSON3.read(read(_SOLVER_FIXTURE, String), Dict{String,Any})
+_solver_base() = JSON3.read(read(_SOLVER_FIXTURE, String), Dict{String, Any})
 
 function _solver_load(doc)
     path = tempname() * ".esm"
@@ -13,7 +13,7 @@ function _solver_load(doc)
     return EarthSciAST.load_path(path)
 end
 
-_solver_emit(f) = JSON3.read(EarthSciAST.to_json(f), Dict{String,Any})
+_solver_emit(f) = JSON3.read(EarthSciAST.to_json(f), Dict{String, Any})
 
 @testset "solver block (esm-spec §2.2)" begin
     if !_require_fixture(_SOLVER_FIXTURE)
@@ -25,7 +25,7 @@ _solver_emit(f) = JSON3.read(EarthSciAST.to_json(f), Dict{String,Any})
         f = EarthSciAST.load_path(_SOLVER_FIXTURE)
         @test f.solver !== nothing
         @test f.solver.stiffness == "high"
-        @test f.solver.abstol == 1e-8
+        @test f.solver.abstol == 1.0e-8
         @test _solver_emit(f)["solver"] == base["solver"]
     end
 
@@ -34,14 +34,18 @@ _solver_emit(f) = JSON3.read(EarthSciAST.to_json(f), Dict{String,Any})
         # but it means what omitting the block means, so it is dropped at load
         # and never reaches emit. That is what keeps the five bindings from
         # disagreeing about whether `{}` survives `parse -> emit`.
-        f = _solver_load(merge(base, Dict("solver" => Dict{String,Any}())))
+        f = _solver_load(merge(base, Dict("solver" => Dict{String, Any}())))
         @test f.solver === nothing
         @test !haskey(_solver_emit(f), "solver")
     end
 
     @testset "the block is rejected below esm 1.1.0" begin
-        doc = merge(base, Dict("esm" => "1.0.0",
-                               "solver" => Dict{String,Any}("stiffness" => "high")))
+        doc = merge(
+            base, Dict(
+                "esm" => "1.0.0",
+                "solver" => Dict{String, Any}("stiffness" => "high")
+            )
+        )
         err = try
             _solver_load(doc); nothing
         catch e
@@ -53,15 +57,19 @@ _solver_emit(f) = JSON3.read(EarthSciAST.to_json(f), Dict{String,Any})
 
     @testset "tolerances resolve most-specific first (§2.2.2)" begin
         s = EarthSciAST.load_path(_SOLVER_FIXTURE).solver
-        @test EarthSciAST.resolve_tolerances(s; abstol=1e-12, reltol=1e-11) == (1e-12, 1e-11)
-        @test EarthSciAST.resolve_tolerances(s) == (1e-8, 1e-6)
+        @test EarthSciAST.resolve_tolerances(s; abstol = 1.0e-12, reltol = 1.0e-11) == (1.0e-12, 1.0e-11)
+        @test EarthSciAST.resolve_tolerances(s) == (1.0e-8, 1.0e-6)
         @test EarthSciAST.resolve_tolerances(nothing) ==
-              (EarthSciAST.DEFAULT_SIM_ABSTOL, EarthSciAST.DEFAULT_SIM_RELTOL)
+            (EarthSciAST.DEFAULT_SIM_ABSTOL, EarthSciAST.DEFAULT_SIM_RELTOL)
         # Per field: a document declaring only `reltol` leaves `abstol` on the default.
-        only_reltol = _solver_load(merge(base,
-            Dict("solver" => Dict{String,Any}("reltol" => 1e-9)))).solver
+        only_reltol = _solver_load(
+            merge(
+                base,
+                Dict("solver" => Dict{String, Any}("reltol" => 1.0e-9))
+            )
+        ).solver
         @test EarthSciAST.resolve_tolerances(only_reltol) ==
-              (EarthSciAST.DEFAULT_SIM_ABSTOL, 1e-9)
+            (EarthSciAST.DEFAULT_SIM_ABSTOL, 1.0e-9)
     end
 
     @testset "the block reaches the RUN DOCUMENT (§2.2.2 is not dead code)" begin
@@ -74,12 +82,12 @@ _solver_emit(f) = JSON3.read(EarthSciAST.to_json(f), Dict{String,Any})
         f = EarthSciAST.load_path(_SOLVER_FIXTURE)
         doc = EarthSciAST._prepare_run_doc(f)
         @test haskey(doc, "solver")
-        @test doc["solver"]["abstol"] == 1e-8
-        @test doc["solver"]["reltol"] == 1e-6
+        @test doc["solver"]["abstol"] == 1.0e-8
+        @test doc["solver"]["reltol"] == 1.0e-6
         # And what `_document_solver` coerces back out of it is the same block.
         recovered = EarthSciAST.coerce_solver(doc["solver"])
         @test recovered !== nothing
-        @test EarthSciAST.resolve_tolerances(recovered) == (1e-8, 1e-6)
+        @test EarthSciAST.resolve_tolerances(recovered) == (1.0e-8, 1.0e-6)
 
         # A document with no block leaves the key off entirely, which is what
         # keeps absence distinguishable from a declared default.
@@ -96,13 +104,17 @@ _solver_emit(f) = JSON3.read(EarthSciAST.to_json(f), Dict{String,Any})
         # document's 1e-6/1e-8: three bindings, two integration tolerances, one
         # document.
         f = EarthSciAST.load_path(_SOLVER_FIXTURE)
-        @test EarthSciAST._test_integration_tolerances(f.solver) == (1e-6, 1e-8)
+        @test EarthSciAST._test_integration_tolerances(f.solver) == (1.0e-6, 1.0e-8)
         @test EarthSciAST._test_integration_tolerances(nothing) ==
-              (EarthSciAST.DEFAULT_TEST_RELTOL, EarthSciAST.DEFAULT_TEST_ABSTOL)
-        only_reltol = _solver_load(merge(base,
-            Dict("solver" => Dict{String,Any}("reltol" => 1e-9)))).solver
+            (EarthSciAST.DEFAULT_TEST_RELTOL, EarthSciAST.DEFAULT_TEST_ABSTOL)
+        only_reltol = _solver_load(
+            merge(
+                base,
+                Dict("solver" => Dict{String, Any}("reltol" => 1.0e-9))
+            )
+        ).solver
         @test EarthSciAST._test_integration_tolerances(only_reltol) ==
-              (1e-9, EarthSciAST.DEFAULT_TEST_ABSTOL)
+            (1.0e-9, EarthSciAST.DEFAULT_TEST_ABSTOL)
     end
 
     @testset "stiffness picks the stiff solver, and only for `high`" begin
@@ -114,9 +126,9 @@ _solver_emit(f) = JSON3.read(EarthSciAST.to_json(f), Dict{String,Any})
         if rb === nothing
             @test_skip "OrdinaryDiffEqRosenbrock not loaded"
         else
-            @test EarthSciAST._pick_solver(""; stiffness="high")[2] === :rosenbrock23
+            @test EarthSciAST._pick_solver(""; stiffness = "high")[2] === :rosenbrock23
             for declared in ("moderate", "low", nothing)
-                @test EarthSciAST._pick_solver(""; stiffness=declared)[2] !== :rosenbrock23
+                @test EarthSciAST._pick_solver(""; stiffness = declared)[2] !== :rosenbrock23
             end
             # The basename fallback still works for documents that declare nothing.
             @test EarthSciAST._pick_solver("pollu.esm")[2] === :rosenbrock23

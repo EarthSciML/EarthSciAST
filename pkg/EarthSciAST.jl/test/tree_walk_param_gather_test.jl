@@ -24,11 +24,15 @@ const ESM = EarthSciAST
 
     @testset "scalar gather reads live + reflects in-place refresh" begin
         # D(y) = forcing[2]
-        model = ESM.Model(Dict("y" => ModelVariable(UnknownVariable)),
-            [ESM.Equation(_op("D", _v("y"); wrt="t"), _idx("forcing", _i(2)))])
+        model = ESM.Model(
+            Dict("y" => ModelVariable(UnknownVariable)),
+            [ESM.Equation(_op("D", _v("y"); wrt = "t"), _idx("forcing", _i(2)))]
+        )
         buf = [3.0, 7.0, 11.0]
-        f!, u0, p, _t, _vm = EarthSciAST._build_evaluator(model;
-            initial_conditions=Dict("y" => 0.0), param_arrays=Dict("forcing" => buf))
+        f!, u0, p, _t, _vm = EarthSciAST._build_evaluator(
+            model;
+            initial_conditions = Dict("y" => 0.0), param_arrays = Dict("forcing" => buf)
+        )
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[1] == 7.0
         # In-place refresh of the SAME buffer object → RHS sees the new value.
@@ -40,13 +44,21 @@ const ESM = EarthSciAST
     @testset "vectorized gather reads live + reflects in-place refresh" begin
         # D(u[i]) = forcing[i] + u[i]
         N = 6
-        model = ESM.Model(Dict("u" => ModelVariable(UnknownVariable)),
-            [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                          _ao1(_op("+", _idx("forcing", _v("i")), _idx("u", _v("i"))), "i", 1, N))])
-        buf = collect(10.0:10.0:10.0 * N)
+        model = ESM.Model(
+            Dict("u" => ModelVariable(UnknownVariable)),
+            [
+                ESM.Equation(
+                    _ao1(_Didx("u", _v("i")), "i", 1, N),
+                    _ao1(_op("+", _idx("forcing", _v("i")), _idx("u", _v("i"))), "i", 1, N)
+                ),
+            ]
+        )
+        buf = collect(10.0:10.0:(10.0 * N))
         ics = Dict("u[$k]" => 0.0 for k in 1:N)
-        f!, u0, p, _t, _vm = EarthSciAST._build_evaluator(model;
-            initial_conditions=ics, param_arrays=Dict("forcing" => buf))
+        f!, u0, p, _t, _vm = EarthSciAST._build_evaluator(
+            model;
+            initial_conditions = ics, param_arrays = Dict("forcing" => buf)
+        )
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du == buf                       # u0 == 0 ⇒ du == forcing
         buf .= buf .+ 1000.0                  # in-place refresh
@@ -59,12 +71,20 @@ const ESM = EarthSciAST
         # forcing2d[i,3] for each i — i.e. column-major linear index 2*4 + i.
         nx, ny = 4, 5
         f2d = reshape(collect(1.0:Float64(nx * ny)), nx, ny)
-        model = ESM.Model(Dict("u" => ModelVariable(UnknownVariable)),
-            [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, nx),
-                          _ao1(_idx("forcing2d", _v("i"), _i(3)), "i", 1, nx))])
+        model = ESM.Model(
+            Dict("u" => ModelVariable(UnknownVariable)),
+            [
+                ESM.Equation(
+                    _ao1(_Didx("u", _v("i")), "i", 1, nx),
+                    _ao1(_idx("forcing2d", _v("i"), _i(3)), "i", 1, nx)
+                ),
+            ]
+        )
         ics = Dict("u[$k]" => 0.0 for k in 1:nx)
-        f!, u0, p, _t, _vm = EarthSciAST._build_evaluator(model;
-            initial_conditions=ics, param_arrays=Dict("forcing2d" => f2d))
+        f!, u0, p, _t, _vm = EarthSciAST._build_evaluator(
+            model;
+            initial_conditions = ics, param_arrays = Dict("forcing2d" => f2d)
+        )
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du == Float64[f2d[i, 3] for i in 1:nx]
     end
@@ -75,14 +95,22 @@ const ESM = EarthSciAST
         # mutating the forcing buffer in place DOES refresh. This is the cadence
         # routing the node exists to honor: const ⇒ frozen, discrete ⇒ live.
         N = 4
-        model = ESM.Model(Dict("u" => ModelVariable(UnknownVariable)),
-            [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                          _ao1(_op("+", _idx("w", _v("i")), _idx("forcing", _v("i"))), "i", 1, N))])
+        model = ESM.Model(
+            Dict("u" => ModelVariable(UnknownVariable)),
+            [
+                ESM.Equation(
+                    _ao1(_Didx("u", _v("i")), "i", 1, N),
+                    _ao1(_op("+", _idx("w", _v("i")), _idx("forcing", _v("i"))), "i", 1, N)
+                ),
+            ]
+        )
         wsrc = collect(1.0:Float64(N))         # const source (will be inlined)
         fbuf = fill(100.0, N)                   # live forcing buffer
         ics = Dict("u[$k]" => 0.0 for k in 1:N)
-        f!, u0, p, _t, _vm = EarthSciAST._build_evaluator(model; initial_conditions=ics,
-            const_arrays=Dict("w" => wsrc), param_arrays=Dict("forcing" => fbuf))
+        f!, u0, p, _t, _vm = EarthSciAST._build_evaluator(
+            model; initial_conditions = ics,
+            const_arrays = Dict("w" => wsrc), param_arrays = Dict("forcing" => fbuf)
+        )
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du == Float64[wsrc[i] + 100.0 for i in 1:N]
         # Mutating the const SOURCE: NO effect (frozen at build).
@@ -104,15 +132,24 @@ const ESM = EarthSciAST
         N = 3
         vars = Dict(
             "u" => ModelVariable(UnknownVariable),
-            "a" => ModelVariable(ParameterVariable; default=2.0),
-            "forcing" => ModelVariable(ParameterVariable; shape=["i"]))
-        model = ESM.Model(vars,
-            [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                          _ao1(_op("*", _v("a"), _idx("forcing", _v("i"))), "i", 1, N))])
+            "a" => ModelVariable(ParameterVariable; default = 2.0),
+            "forcing" => ModelVariable(ParameterVariable; shape = ["i"])
+        )
+        model = ESM.Model(
+            vars,
+            [
+                ESM.Equation(
+                    _ao1(_Didx("u", _v("i")), "i", 1, N),
+                    _ao1(_op("*", _v("a"), _idx("forcing", _v("i"))), "i", 1, N)
+                ),
+            ]
+        )
         buf = collect(1.0:Float64(N))
         ics = Dict("u[$k]" => 0.0 for k in 1:N)
-        f!, u0, p, _t, _vm = EarthSciAST._build_evaluator(model;
-            initial_conditions=ics, param_arrays=Dict("forcing" => buf))
+        f!, u0, p, _t, _vm = EarthSciAST._build_evaluator(
+            model;
+            initial_conditions = ics, param_arrays = Dict("forcing" => buf)
+        )
         # `p` carries the scalar `a` but NOT the array `forcing`.
         @test haskey(p, :a)
         @test !haskey(p, :forcing)
@@ -131,18 +168,27 @@ const ESM = EarthSciAST
         # hoist. This is the same in-place `buf[2] = 42.0` refresh, run through a
         # CSE'd expression instead of a bare gather.
         #   D(y) = sin(forcing[2]*a) + cos(forcing[2]*a);  D(z) = forcing[2]*a
-        vars = Dict("y" => ModelVariable(UnknownVariable),
-                    "z" => ModelVariable(UnknownVariable),
-                    "a" => ModelVariable(ParameterVariable; default=0.5))
+        vars = Dict(
+            "y" => ModelVariable(UnknownVariable),
+            "z" => ModelVariable(UnknownVariable),
+            "a" => ModelVariable(ParameterVariable; default = 0.5)
+        )
         fa() = _op("*", _idx("forcing", _i(2)), _v("a"))
-        model = ESM.Model(vars, [
-            ESM.Equation(_op("D", _v("y"); wrt="t"),
-                         _op("+", _op("sin", fa()), _op("cos", fa()))),
-            ESM.Equation(_op("D", _v("z"); wrt="t"), fa())])
+        model = ESM.Model(
+            vars, [
+                ESM.Equation(
+                    _op("D", _v("y"); wrt = "t"),
+                    _op("+", _op("sin", fa()), _op("cos", fa()))
+                ),
+                ESM.Equation(_op("D", _v("z"); wrt = "t"), fa()),
+            ]
+        )
         buf = [3.0, 7.0, 11.0]
-        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
-            initial_conditions=Dict("y" => 0.0, "z" => 0.0),
-            param_arrays=Dict("forcing" => buf))
+        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+            model;
+            initial_conditions = Dict("y" => 0.0, "z" => 0.0),
+            param_arrays = Dict("forcing" => buf)
+        )
         # The shared `forcing[2]*a` IS hoisted (3 occurrences) — without that this
         # test would pass vacuously, so pin it.
         @test diag.n_cse_slots >= 1
@@ -171,32 +217,46 @@ const ESM = EarthSciAST
 
     @testset "build-time guards" begin
         N = 3
-        mk(body) = ESM.Model(Dict("u" => ModelVariable(UnknownVariable)),
-            [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N), _ao1(body, "i", 1, N))])
+        mk(body) = ESM.Model(
+            Dict("u" => ModelVariable(UnknownVariable)),
+            [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N), _ao1(body, "i", 1, N))]
+        )
         ics = Dict("u[$k]" => 0.0 for k in 1:N)
 
         # Out-of-range index → E_TREEWALK_PGATHER_OOB.
         err = try
-            EarthSciAST._build_evaluator(mk(_idx("forcing", _i(9)));
-                initial_conditions=ics, param_arrays=Dict("forcing" => fill(0.0, N)))
+            EarthSciAST._build_evaluator(
+                mk(_idx("forcing", _i(9)));
+                initial_conditions = ics, param_arrays = Dict("forcing" => fill(0.0, N))
+            )
             nothing
-        catch e; e end
+        catch e
+            e
+        end
         @test err isa ESM.TreeWalkError && err.code == "E_TREEWALK_PGATHER_OOB"
 
         # ndim mismatch (2 indices into a 1-D buffer) → E_TREEWALK_PGATHER_NDIM.
         err = try
-            EarthSciAST._build_evaluator(mk(_idx("forcing", _v("i"), _i(1)));
-                initial_conditions=ics, param_arrays=Dict("forcing" => fill(0.0, N)))
+            EarthSciAST._build_evaluator(
+                mk(_idx("forcing", _v("i"), _i(1)));
+                initial_conditions = ics, param_arrays = Dict("forcing" => fill(0.0, N))
+            )
             nothing
-        catch e; e end
+        catch e
+            e
+        end
         @test err isa ESM.TreeWalkError && err.code == "E_TREEWALK_PGATHER_NDIM"
 
         # Non-Float64 buffer → E_TREEWALK_PARAM_ARRAY_TYPE.
         err = try
-            EarthSciAST._build_evaluator(mk(_idx("forcing", _v("i")));
-                initial_conditions=ics, param_arrays=Dict("forcing" => [1, 2, 3]))
+            EarthSciAST._build_evaluator(
+                mk(_idx("forcing", _v("i")));
+                initial_conditions = ics, param_arrays = Dict("forcing" => [1, 2, 3])
+            )
             nothing
-        catch e; e end
+        catch e
+            e
+        end
         @test err isa ESM.TreeWalkError && err.code == "E_TREEWALK_PARAM_ARRAY_TYPE"
     end
 end

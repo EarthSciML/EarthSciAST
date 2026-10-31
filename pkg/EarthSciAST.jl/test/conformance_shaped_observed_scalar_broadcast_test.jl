@@ -17,8 +17,10 @@ import OrdinaryDiffEqTsit5
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
 const _SCALAROBS_REPO_ROOT = TESTUTILS_REPO_ROOT
-const _SCALAROBS_CAT_DIR = joinpath(_SCALAROBS_REPO_ROOT, "tests", "conformance",
-                                  "shaped_observed_scalar_broadcast")
+const _SCALAROBS_CAT_DIR = joinpath(
+    _SCALAROBS_REPO_ROOT, "tests", "conformance",
+    "shaped_observed_scalar_broadcast"
+)
 const _SCALAROBS_MANIFEST = joinpath(_SCALAROBS_CAT_DIR, "manifest.json")
 
 @testset "Conformance: shaped_observed_scalar_broadcast (manifest-driven)" begin
@@ -44,9 +46,11 @@ const _SCALAROBS_MANIFEST = joinpath(_SCALAROBS_CAT_DIR, "manifest.json")
             golden = JSON3.read(read(golden_path, String))
             @test String(golden.reference_binding) == "julia"
 
-            results = run_inline_tests(esm_path; model_name=String(fixture.model),
-                                    alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                    reltol=1e-12, abstol=1e-14)
+            results = run_inline_tests(
+                esm_path; model_name = String(fixture.model),
+                alg = OrdinaryDiffEqTsit5.Tsit5(),
+                reltol = 1.0e-12, abstol = 1.0e-14
+            )
             @test length(results) == length(golden.assertions)
 
             # Index the Julia run by assertion_idx and gate each against BOTH
@@ -59,12 +63,12 @@ const _SCALAROBS_MANIFEST = joinpath(_SCALAROBS_CAT_DIR, "manifest.json")
                 r = by_idx[gi]
                 @test r.passed
                 @test r.actual !== nothing
-                @test isapprox(r.actual, Float64(g.actual); rtol=rtol, atol=atol)
+                @test isapprox(r.actual, Float64(g.actual); rtol = rtol, atol = atol)
             end
             for a in fixture.assertions
                 r = by_idx[Int(a.assertion_idx)]
                 @test String(r.variable) == String(a.variable)
-                @test isapprox(r.actual, Float64(a.expected); rtol=rtol, atol=atol)
+                @test isapprox(r.actual, Float64(a.expected); rtol = rtol, atol = atol)
             end
         end
     end

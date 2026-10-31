@@ -33,7 +33,7 @@ const ESM = EarthSciAST
 # whitelist MUST have an entry here — the first testset below enforces that, so
 # adding an op to a whitelist without teaching this table fails with a clear
 # message instead of silently skipping the new op.
-const _OT_ARITY = Dict{String,Int}(
+const _OT_ARITY = Dict{String, Int}(
     "+" => 2, "-" => 2, "*" => 2, "/" => 2, "^" => 2, "pow" => 2,
     "neg" => 1, "sqrt" => 1, "abs" => 1, "sign" => 1,
     "exp" => 1, "log" => 1, "log10" => 1,
@@ -52,11 +52,15 @@ _ot_argval(op) = op == "acosh" ? 1.5 : 0.5
 
 # Build a compiled scalar `_Node` for a representative application of `op`.
 function _ot_node(op::String)
-    haskey(_OT_ARITY, op) || error("op-table test: no arity entry for op '" *
-        op * "' — add it to _OT_ARITY in tree_walk_op_table_test.jl")
+    haskey(_OT_ARITY, op) || error(
+        "op-table test: no arity entry for op '" *
+            op * "' — add it to _OT_ARITY in tree_walk_op_table_test.jl"
+    )
     args = ESM.ASTExpr[NumExpr(_ot_argval(op)) for _ in 1:_OT_ARITY[op]]
-    return ESM._compile(OpExpr(op, args), Dict{String,Int}(), Set{Symbol}(),
-                        Dict{String,Any}())
+    return ESM._compile(
+        OpExpr(op, args), Dict{String, Int}(), Set{Symbol}(),
+        Dict{String, Any}()
+    )
 end
 
 # True iff evaluating `op` through the scalar walker does NOT hit the
@@ -82,8 +86,10 @@ function _ot_acc_kernel(op::String)
     node = _ot_node(op)
     acc = ESM._AccDesc[]
     spine = ESM._acc_merge_nodes(ESM._Node[node, node], 2, acc)
-    return ESM._AccKernel(ESM._outs_cells([1, 2]), spine, acc,
-                          ESM._FixedBound(0), 0.0)
+    return ESM._AccKernel(
+        ESM._outs_cells([1, 2]), spine, acc,
+        ESM._FixedBound(0), 0.0
+    )
 end
 function _ot_vector_supported(op::String)
     du = zeros(2)
@@ -93,8 +99,12 @@ function _ot_vector_supported(op::String)
         return true
     catch err
         if err isa ESM.TreeWalkError
-            return !(err.code in ("E_TREEWALK_ACC_UNSUPPORTED_OP",
-                                  "unevaluable_operator"))
+            return !(
+                err.code in (
+                    "E_TREEWALK_ACC_UNSUPPORTED_OP",
+                    "unevaluable_operator",
+                )
+            )
         end
         rethrow()
     end
@@ -153,7 +163,7 @@ end
         # evaluate through `_eval_node_op`'s registry-generated arms. Pin that
         # every op of the documented polygon-area / overlap-join FAQ
         # vocabulary still compiles AND evaluates to a Float64.
-        geo_ops = Dict{String,Vector{Float64}}(
+        geo_ops = Dict{String, Vector{Float64}}(
             "+" => [1.0, 2.0], "*" => [2.0, 3.0], "-" => [5.0, 2.0],
             "/" => [6.0, 3.0], "^" => [2.0, 3.0],
             "max" => [1.0, 2.0], "min" => [1.0, 2.0],
@@ -164,10 +174,13 @@ end
             "<=" => [2.0, 2.0], "==" => [2.0, 2.0], "!=" => [1.0, 2.0],
         )
         _geo_test_ctx() = ESM._GeoCompileCtx(
-            ESM._GeoCtx(Dict{String,Any}(), nothing, Dict{String,Int}(),
-                        Dict{String,Vector{String}}()),
-            Dict{String,Int}(), Dict{String,String}(), Ref(0))
-        for (op, args) in sort!(collect(geo_ops); by=first)
+            ESM._GeoCtx(
+                Dict{String, Any}(), nothing, Dict{String, Int}(),
+                Dict{String, Vector{String}}()
+            ),
+            Dict{String, Int}(), Dict{String, String}(), Ref(0)
+        )
+        for (op, args) in sort!(collect(geo_ops); by = first)
             e = OpExpr(op, ESM.ASTExpr[NumExpr(a) for a in args])
             node = ESM._geo_compile(e, _geo_test_ctx())
             v = ESM._eval_node(node, Float64[], nothing, 0.0)
@@ -175,13 +188,17 @@ end
         end
         # The variadic `-` the interpreter accepted still folds (left fold).
         e3 = OpExpr("-", ESM.ASTExpr[NumExpr(9.0), NumExpr(3.0), NumExpr(2.0)])
-        @test ESM._eval_node(ESM._geo_compile(e3, _geo_test_ctx()),
-                             Float64[], nothing, 0.0) == 4.0
+        @test ESM._eval_node(
+            ESM._geo_compile(e3, _geo_test_ctx()),
+            Float64[], nothing, 0.0
+        ) == 4.0
         # And an op outside the vocabulary still raises the explicit
         # setup-geometry error — now at COMPILE time (before the sweep).
         err = try
-            ESM._geo_compile(OpExpr("no_such_op", ESM.ASTExpr[NumExpr(1.0)]),
-                             _geo_test_ctx())
+            ESM._geo_compile(
+                OpExpr("no_such_op", ESM.ASTExpr[NumExpr(1.0)]),
+                _geo_test_ctx()
+            )
             nothing
         catch e
             e
@@ -194,38 +211,52 @@ end
         # A build+evaluate cycle that exercises the scalar path, the faq
         # (vectorized) path, const arrays, and an ic equation — the code paths
         # that receive the shared sentinels as defaults.
-        vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(UnknownVariable; default=1.0),
+        vars = Dict{String, ModelVariable}(
+            "x" => ModelVariable(UnknownVariable; default = 1.0),
             "u" => ModelVariable(UnknownVariable),
-            "k" => ModelVariable(ParameterVariable; default=2.0),
+            "k" => ModelVariable(ParameterVariable; default = 2.0),
         )
         _v(n) = VarExpr(n)
         _i(x) = IntExpr(Int64(x))
         _o(op, a...; kw...) = OpExpr(op, ESM.ASTExpr[a...]; kw...)
-        deqx = ESM.Equation(_o("D", _v("x"); wrt="t"),
-                            _o("*", _v("k"), _v("x")))
-        body_lhs = _o("D", _o("index", _v("u"), _v("i")); wrt="t")
-        lhs = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
-                     ranges=Dict{String,Any}("i" => [1, 4]),
-                     expr_body=body_lhs)
-        rhs = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
-                     ranges=Dict{String,Any}("i" => [1, 4]),
-                     expr_body=_o("*", _o("index", _v("w"), _v("i")),
-                                  _o("index", _v("u"), _v("i"))))
+        deqx = ESM.Equation(
+            _o("D", _v("x"); wrt = "t"),
+            _o("*", _v("k"), _v("x"))
+        )
+        body_lhs = _o("D", _o("index", _v("u"), _v("i")); wrt = "t")
+        lhs = OpExpr(
+            "faq", ESM.ASTExpr[]; output_idx = Any["i"],
+            ranges = Dict{String, Any}("i" => [1, 4]),
+            expr_body = body_lhs
+        )
+        rhs = OpExpr(
+            "faq", ESM.ASTExpr[]; output_idx = Any["i"],
+            ranges = Dict{String, Any}("i" => [1, 4]),
+            expr_body = _o(
+                "*", _o("index", _v("w"), _v("i")),
+                _o("index", _v("u"), _v("i"))
+            )
+        )
         deqa = ESM.Equation(lhs, rhs)
         model = ESM.Model(vars, ESM.Equation[deqx, deqa])
-        f!, u0, p, tspan, var_map = EarthSciAST._build_evaluator(model;
-            const_arrays=Dict("w" => [1.0, 2.0, 3.0, 4.0]),
-            initial_conditions=Dict("u[1]" => 1.0, "u[2]" => 2.0,
-                                    "u[3]" => 3.0, "u[4]" => 4.0))
+        f!, u0, p, tspan, var_map = EarthSciAST._build_evaluator(
+            model;
+            const_arrays = Dict("w" => [1.0, 2.0, 3.0, 4.0]),
+            initial_conditions = Dict(
+                "u[1]" => 1.0, "u[2]" => 2.0,
+                "u[3]" => 3.0, "u[4]" => 4.0
+            )
+        )
         du = similar(u0)
         f!(du, u0, p, 0.0)
         @test du[var_map["x"]] == 2.0
         @test du[var_map["u[2]"]] == 4.0
 
-        for s in (ESM._EMPTY_DERIVED_EXTENTS, ESM._EMPTY_IDX_ENV,
-                  ESM._EMPTY_CONST_ARRAYS, ESM._EMPTY_PARAMS,
-                  ESM._EMPTY_PGATHER, ESM._EMPTY_FACTOR_SCOPE)
+        for s in (
+                ESM._EMPTY_DERIVED_EXTENTS, ESM._EMPTY_IDX_ENV,
+                ESM._EMPTY_CONST_ARRAYS, ESM._EMPTY_PARAMS,
+                ESM._EMPTY_PGATHER, ESM._EMPTY_FACTOR_SCOPE,
+            )
             @test isempty(s)
         end
         @test isempty(ESM._EMPTY_VI_MAPS.maps)

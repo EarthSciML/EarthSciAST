@@ -24,31 +24,44 @@ include("testutils.jl")
 
 const _AR = EarthSciAST
 
-_ar_lhs(v, idxs, ranges) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[idxs...],
+_ar_lhs(v, idxs, ranges) = Dict(
+    "op" => "faq", "args" => Any[], "output_idx" => Any[idxs...],
     "ranges" => Dict(k => Any[r...] for (k, r) in ranges),
-    "expr" => Dict("op" => "D", "args" => Any[
-        Dict("op" => "index", "args" => Any[v, idxs...])], "wrt" => "t"))
+    "expr" => Dict(
+        "op" => "D", "args" => Any[
+            Dict("op" => "index", "args" => Any[v, idxs...]),
+        ], "wrt" => "t"
+    )
+)
 _ar_idx(v, a...) = Dict("op" => "index", "args" => Any[v, a...])
 _ar_op(o, a...) = Dict("op" => o, "args" => Any[a...])
 
 # D(y[i…]) = ⊕_{k…} body, with the source `e` a state decaying at a unit rate.
-function _ar_doc(out_idx, out_ranges, cnames, cranges, body; red="+", filter=nothing,
-                 evars=Dict{String,Any}())
-    agg = Dict{String,Any}("op" => "faq", "args" => Any[], "output_idx" => Any[out_idx...],
-        "ranges" => merge(Dict(k => Any[r...] for (k, r) in zip(out_idx, out_ranges)),
-                          Dict(k => Any[r...] for (k, r) in zip(cnames, cranges))),
-        "reduce" => red, "expr" => body)
+function _ar_doc(
+        out_idx, out_ranges, cnames, cranges, body; red = "+", filter = nothing,
+        evars = Dict{String, Any}()
+    )
+    agg = Dict{String, Any}(
+        "op" => "faq", "args" => Any[], "output_idx" => Any[out_idx...],
+        "ranges" => merge(
+            Dict(k => Any[r...] for (k, r) in zip(out_idx, out_ranges)),
+            Dict(k => Any[r...] for (k, r) in zip(cnames, cranges))
+        ),
+        "reduce" => red, "expr" => body
+    )
     filter === nothing || (agg["filter"] = filter)
-    vars = Dict{String,Any}("y" => Dict("type" => "unknown", "shape" => Any[out_idx...]))
+    vars = Dict{String, Any}("y" => Dict("type" => "unknown", "shape" => Any[out_idx...]))
     merge!(vars, evars)
     eqs = Any[Dict("lhs" => _ar_lhs("y", out_idx, zip(out_idx, out_ranges)), "rhs" => agg)]
-    Dict{String,Any}("esm" => "1.1.0", "metadata" => Dict("name" => "ar"),
-        "models" => Dict("R" => Dict{String,Any}("variables" => vars, "equations" => eqs)))
+    return Dict{String, Any}(
+        "esm" => "1.1.0", "metadata" => Dict("name" => "ar"),
+        "models" => Dict("R" => Dict{String, Any}("variables" => vars, "equations" => eqs))
+    )
 end
 
-function _ar_build(doc, ics; compiler=:native)
+function _ar_build(doc, ics; compiler = :native)
     _AR._reset_cascade_tally!()
-    f!, u0, p, _, vm = _AR._build_evaluator(doc; initial_conditions=ics, compiler=compiler)
+    f!, u0, p, _, vm = _AR._build_evaluator(doc; initial_conditions = ics, compiler = compiler)
     return f!, u0, p, vm, copy(_AR._CASCADE_TALLY)
 end
 
@@ -59,13 +72,13 @@ function _ar_du(f!, u, p)
     du = similar(u)
     fill!(du, NaN)
     f!(du, u, p, 0.25)
-    du
+    return du
 end
 
 # du under native and the interpreter, matched by state name.
 function _ar_agree(doc, ics)
     fn, un, pn, vn, tally = _ar_build(doc, ics)
-    fi, ui, pi_, vi, _ = _ar_build(doc, ics; compiler=:interpreter)
+    fi, ui, pi_, vi, _ = _ar_build(doc, ics; compiler = :interpreter)
     u = _ar_u(un)
     ui2 = similar(ui)
     for (k, j) in vi
@@ -81,7 +94,7 @@ _ar_emitted_nodes(f!) = begin
     ks = getfield(f!, :kernel_section)
     cgf = getfield(ks, :cgf)
     ex = _AR.RuntimeGeneratedFunctions.get_expression(cgf)
-    sz(e) = e isa Expr ? 1 + sum(sz, e.args; init=0) : 1
+    sz(e) = e isa Expr ? 1 + sum(sz, e.args; init = 0) : 1
     sz(ex)
 end
 
@@ -89,30 +102,47 @@ end
 # into the document (the scaling tier's source-receptor K is the same kind of
 # thing): the kernel evaluates it from the loop indices at every term, so its
 # reduction-dim reads are the loop-index leaf of the fold's bound dims.
-_ar_w(i, k) = _ar_op("+",
-    _ar_op("*", 0.001, _ar_op("+", 1, _ar_op("sin",
-        _ar_op("+", _ar_op("*", 0.7, i, k), 0.3)))),
-    _ar_op("/", 0.25, _ar_op("+", i, k)))
+_ar_w(i, k) = _ar_op(
+    "+",
+    _ar_op(
+        "*", 0.001, _ar_op(
+            "+", 1, _ar_op(
+                "sin",
+                _ar_op("+", _ar_op("*", 0.7, i, k), 0.3)
+            )
+        )
+    ),
+    _ar_op("/", 0.25, _ar_op("+", i, k))
+)
 
 # The dense source-receptor shape: y[i] = Σ_k W(i,k)·e[k].
-function _ar_sr_doc(n, m; red="+", filter=nothing, body=nothing)
+function _ar_sr_doc(n, m; red = "+", filter = nothing, body = nothing)
     b = body === nothing ? _ar_op("*", _ar_w("i", "k"), _ar_idx("e", "k")) : body
-    doc = _ar_doc(["i"], [(1, n)], ["k"], [(1, m)], b; red=red, filter=filter,
-                  evars=Dict("e" => Dict("type" => "unknown", "shape" => Any["k"])))
-    push!(doc["models"]["R"]["equations"], Dict(
-        "lhs" => _ar_lhs("e", ["k"], [("k", (1, m))]),
-        "rhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["k"],
-                      "ranges" => Dict("k" => Any[1, m]),
-                      "expr" => _ar_op("-", _ar_idx("e", "k")))))
-    doc
+    doc = _ar_doc(
+        ["i"], [(1, n)], ["k"], [(1, m)], b; red = red, filter = filter,
+        evars = Dict("e" => Dict("type" => "unknown", "shape" => Any["k"]))
+    )
+    push!(
+        doc["models"]["R"]["equations"], Dict(
+            "lhs" => _ar_lhs("e", ["k"], [("k", (1, m))]),
+            "rhs" => Dict(
+                "op" => "faq", "args" => Any[], "output_idx" => Any["k"],
+                "ranges" => Dict("k" => Any[1, m]),
+                "expr" => _ar_op("-", _ar_idx("e", "k"))
+            )
+        )
+    )
+    return doc
 end
-_ar_sr_ics(n, m) = merge(Dict{String,Any}("y[$i]" => 0.1 * i for i in 1:n),
-                         Dict{String,Any}("e[$k]" => 1.0 + 0.01 * k for k in 1:m))
+_ar_sr_ics(n, m) = merge(
+    Dict{String, Any}("y[$i]" => 0.1 * i for i in 1:n),
+    Dict{String, Any}("e[$k]" => 1.0 + 0.01 * k for k in 1:m)
+)
 
 @testset "affine run-time contraction fold" begin
 
     @testset "source-receptor ⊕=$red" for red in ("+", "*", "max", "min")
-        same, tally, _, _ = _ar_agree(_ar_sr_doc(12, 40; red=red), _ar_sr_ics(12, 40))
+        same, tally, _, _ = _ar_agree(_ar_sr_doc(12, 40; red = red), _ar_sr_ics(12, 40))
         @test same
         @test get(tally, :affine_reduce, 0) >= 1
         @test get(tally, :array_contraction_codegen, 0) == 0
@@ -120,7 +150,7 @@ _ar_sr_ics(n, m) = merge(Dict{String,Any}("y[$i]" => 0.1 * i for i in 1:n),
 
     @testset "filter (the unroll's per-term ifelse guard)" begin
         filt = _ar_op(">", _ar_w("i", "k"), 0.02)
-        same, tally, _, _ = _ar_agree(_ar_sr_doc(12, 40; filter=filt), _ar_sr_ics(12, 40))
+        same, tally, _, _ = _ar_agree(_ar_sr_doc(12, 40; filter = filt), _ar_sr_ics(12, 40))
         @test same
         @test get(tally, :affine_reduce, 0) >= 1
     end
@@ -137,14 +167,22 @@ _ar_sr_ics(n, m) = merge(Dict{String,Any}("y[$i]" => 0.1 * i for i in 1:n),
 
     @testset "two contracted indices, the first fastest" begin
         n, m1, m2 = 5, 7, 6
-        body = _ar_op("*", _ar_w("i", "k"), _ar_op("+", 1, _ar_op("*", 0.1, "l")),
-                      _ar_op("+", _ar_idx("e", "k"), _ar_op("*", 0.5, _ar_idx("g", "l"))))
-        doc = _ar_doc(["i"], [(1, n)], ["k", "l"], [(1, m1), (1, m2)], body;
-                      evars=Dict("e" => Dict("type" => "unknown", "shape" => Any["k"]),
-                                 "g" => Dict("type" => "unknown", "shape" => Any["l"])))
-        ics = merge(Dict{String,Any}("y[$i]" => 0.0 for i in 1:n),
-                    Dict{String,Any}("e[$k]" => 1.0 + 0.01k for k in 1:m1),
-                    Dict{String,Any}("g[$l]" => 2.0 - 0.03l for l in 1:m2))
+        body = _ar_op(
+            "*", _ar_w("i", "k"), _ar_op("+", 1, _ar_op("*", 0.1, "l")),
+            _ar_op("+", _ar_idx("e", "k"), _ar_op("*", 0.5, _ar_idx("g", "l")))
+        )
+        doc = _ar_doc(
+            ["i"], [(1, n)], ["k", "l"], [(1, m1), (1, m2)], body;
+            evars = Dict(
+                "e" => Dict("type" => "unknown", "shape" => Any["k"]),
+                "g" => Dict("type" => "unknown", "shape" => Any["l"])
+            )
+        )
+        ics = merge(
+            Dict{String, Any}("y[$i]" => 0.0 for i in 1:n),
+            Dict{String, Any}("e[$k]" => 1.0 + 0.01k for k in 1:m1),
+            Dict{String, Any}("g[$l]" => 2.0 - 0.03l for l in 1:m2)
+        )
         same, tally, _, _ = _ar_agree(doc, ics)
         @test same
         @test get(tally, :affine_reduce, 0) >= 1
@@ -152,13 +190,21 @@ _ar_sr_ics(n, m) = merge(Dict{String,Any}("y[$i]" => 0.1 * i for i in 1:n),
 
     @testset "rank-3 output: the fold binds a fourth loop dim" begin
         ni, nj, nk, m = 3, 4, 2, 9
-        body = _ar_op("*", _ar_w(_ar_op("+", "i", "j"), "q"),
-                      _ar_op("+", 1, _ar_op("*", 0.1, "k")), _ar_idx("e", "q"))
-        doc = _ar_doc(["i", "j", "k"], [(1, ni), (1, nj), (1, nk)], ["q"], [(1, m)], body;
-                      evars=Dict("e" => Dict("type" => "unknown", "shape" => Any["q"])))
-        ics = merge(Dict{String,Any}("y[$i,$j,$k]" => 0.0
-                                     for i in 1:ni, j in 1:nj, k in 1:nk),
-                    Dict{String,Any}("e[$q]" => 1.0 + 0.02q for q in 1:m))
+        body = _ar_op(
+            "*", _ar_w(_ar_op("+", "i", "j"), "q"),
+            _ar_op("+", 1, _ar_op("*", 0.1, "k")), _ar_idx("e", "q")
+        )
+        doc = _ar_doc(
+            ["i", "j", "k"], [(1, ni), (1, nj), (1, nk)], ["q"], [(1, m)], body;
+            evars = Dict("e" => Dict("type" => "unknown", "shape" => Any["q"]))
+        )
+        ics = merge(
+            Dict{String, Any}(
+                "y[$i,$j,$k]" => 0.0
+                    for i in 1:ni, j in 1:nj, k in 1:nk
+            ),
+            Dict{String, Any}("e[$q]" => 1.0 + 0.02q for q in 1:m)
+        )
         same, tally, _, _ = _ar_agree(doc, ics)
         @test same
         @test get(tally, :affine_reduce, 0) >= 1
@@ -170,23 +216,35 @@ _ar_sr_ics(n, m) = merge(Dict{String,Any}("y[$i]" => 0.1 * i for i in 1:n),
     # under a dual number; both must be bitwise the interpreter's.
     @testset "strided operand: interchanged nest ⊕=$red" for red in ("+", "*", "max", "min")
         n, m = 13, 29
-        doc = _ar_sr_doc(n, m; red=red,
-                         body=_ar_op("*", _ar_idx("K", "i", "k"), _ar_idx("e", "k")))
+        doc = _ar_sr_doc(
+            n, m; red = red,
+            body = _ar_op("*", _ar_idx("K", "i", "k"), _ar_idx("e", "k"))
+        )
         doc["models"]["R"]["variables"]["K"] =
             Dict("type" => "unknown", "shape" => Any["i", "k"])
-        push!(doc["models"]["R"]["equations"], Dict(
-            "lhs" => _ar_lhs("K", ["i", "k"], [("i", (1, n)), ("k", (1, m))]),
-            "rhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i", "k"],
-                          "ranges" => Dict("i" => Any[1, n], "k" => Any[1, m]),
-                          "expr" => _ar_op("*", -0.5, _ar_idx("K", "i", "k")))))
-        ics = merge(_ar_sr_ics(n, m),
-                    Dict{String,Any}("K[$i,$k]" => 0.001 * (1 + sin(0.7 * i * k + 0.3))
-                                     for i in 1:n, k in 1:m))
+        push!(
+            doc["models"]["R"]["equations"], Dict(
+                "lhs" => _ar_lhs("K", ["i", "k"], [("i", (1, n)), ("k", (1, m))]),
+                "rhs" => Dict(
+                    "op" => "faq", "args" => Any[], "output_idx" => Any["i", "k"],
+                    "ranges" => Dict("i" => Any[1, n], "k" => Any[1, m]),
+                    "expr" => _ar_op("*", -0.5, _ar_idx("K", "i", "k"))
+                )
+            )
+        )
+        ics = merge(
+            _ar_sr_ics(n, m),
+            Dict{String, Any}(
+                "K[$i,$k]" => 0.001 * (1 + sin(0.7 * i * k + 0.3))
+                    for i in 1:n, k in 1:m
+            )
+        )
         same, tally, (fn, u, pn, vn), (fi, ui, pi_, vi) = _ar_agree(doc, ics)
         @test same
         @test get(tally, :affine_reduce, 0) >= 1
         ex = _AR.RuntimeGeneratedFunctions.get_expression(
-            getfield(getfield(fn, :kernel_section), :cgf))
+            getfield(getfield(fn, :kernel_section), :cgf)
+        )
         @test occursin("eltype(du) === Float64", string(ex))
         seed = Float64[0.3 + 0.01 * sin(i) for i in eachindex(u)]
         seedi = similar(seed)
@@ -226,17 +284,28 @@ _ar_sr_ics(n, m) = merge(Dict{String,Any}("y[$i]" => 0.1 * i for i in 1:n),
         # y[i] = Σ_k w[k]·e[i+k-2]: the source is a ghost past either end, so the
         # contracted axis is cut and the loop form declines.
         n = 10
-        body = _ar_op("*", _ar_op("+", 0.25, _ar_op("*", 0.1, "k")),
-                      _ar_idx("e", _ar_op("-", _ar_op("+", "i", "k"), 2)))
-        doc = _ar_doc(["i"], [(1, n)], ["k"], [(1, 3)], body;
-                      evars=Dict("e" => Dict("type" => "unknown", "shape" => Any["i"])))
-        push!(doc["models"]["R"]["equations"], Dict(
-            "lhs" => _ar_lhs("e", ["i"], [("i", (1, n))]),
-            "rhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
-                          "ranges" => Dict("i" => Any[1, n]),
-                          "expr" => _ar_op("-", _ar_idx("e", "i")))))
-        ics = merge(Dict{String,Any}("y[$i]" => 0.0 for i in 1:n),
-                    Dict{String,Any}("e[$i]" => 1.0 + 0.1i for i in 1:n))
+        body = _ar_op(
+            "*", _ar_op("+", 0.25, _ar_op("*", 0.1, "k")),
+            _ar_idx("e", _ar_op("-", _ar_op("+", "i", "k"), 2))
+        )
+        doc = _ar_doc(
+            ["i"], [(1, n)], ["k"], [(1, 3)], body;
+            evars = Dict("e" => Dict("type" => "unknown", "shape" => Any["i"]))
+        )
+        push!(
+            doc["models"]["R"]["equations"], Dict(
+                "lhs" => _ar_lhs("e", ["i"], [("i", (1, n))]),
+                "rhs" => Dict(
+                    "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                    "ranges" => Dict("i" => Any[1, n]),
+                    "expr" => _ar_op("-", _ar_idx("e", "i"))
+                )
+            )
+        )
+        ics = merge(
+            Dict{String, Any}("y[$i]" => 0.0 for i in 1:n),
+            Dict{String, Any}("e[$i]" => 1.0 + 0.1i for i in 1:n)
+        )
         same, tally, _, _ = _ar_agree(doc, ics)
         @test same
         @test get(tally, :affine_reduce, 0) == 0

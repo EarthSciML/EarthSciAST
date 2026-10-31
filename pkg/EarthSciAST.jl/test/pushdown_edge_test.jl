@@ -38,9 +38,11 @@ const EA = EarthSciAST
 _ix(f, args...) = Dict("op" => "index", "args" => Any[f, args...])
 _op(o, args...) = Dict("op" => o, "args" => Any[args...])
 # elementwise / reducing aggregate helper
-function _agg(output_idx, ranges, expr; reduce=nothing, args=String[], extra...)
-    d = Dict{String,Any}("op" => "faq", "output_idx" => collect(output_idx),
-                         "ranges" => ranges, "args" => collect(args), "expr" => expr)
+function _agg(output_idx, ranges, expr; reduce = nothing, args = String[], extra...)
+    d = Dict{String, Any}(
+        "op" => "faq", "output_idx" => collect(output_idx),
+        "ranges" => ranges, "args" => collect(args), "expr" => expr
+    )
     reduce === nothing || (d["reduce"] = reduce)
     for (k, v) in extra
         d[String(k)] = v
@@ -52,21 +54,21 @@ end
 # GATED PROVIDER MOCK — records every call; slices the synthetic SR per selection.
 # =============================================================================
 mutable struct MockSR
-    full::Dict{String,Array{Float64,3}}     # applies_to name => [layer, src, rcv]
-    gate::Dict{String,Any}
+    full::Dict{String, Array{Float64, 3}}     # applies_to name => [layer, src, rcv]
+    gate::Dict{String, Any}
     calls::Vector{Any}                       # (:selection, sel) or (:wholesale,)
 end
 EA.provider_gate_spec(m::MockSR) = m.gate
 EA.provider_supports_selection(m::MockSR) = true
 EA.provider_refresh_times(m::MockSR) = Float64[]     # const (never reached: gated first)
-function EA.provider_sample(m::MockSR, ::Real; selection=nothing)
+function EA.provider_sample(m::MockSR, ::Real; selection = nothing)
     if selection === nothing
         push!(m.calls, (:wholesale,))
-        return Dict{String,Any}(k => v for (k, v) in m.full)   # MUST NOT happen in the edge
+        return Dict{String, Any}(k => v for (k, v) in m.full)   # MUST NOT happen in the edge
     end
     push!(m.calls, (:selection, deepcopy(selection)))
     lay, src, rcv = selection[1], selection[2], selection[3]   # Integer, Vector, Colon
-    out = Dict{String,Any}()
+    out = Dict{String, Any}()
     for (k, v) in m.full
         # Phase-1 contract: a fixed Integer keeps its axis as length-1.
         out[k] = v[lay:lay, src, rcv]
@@ -78,8 +80,8 @@ end
 # observed as a plain `unknown` and pushes its DEFINING bare-variable-LHS
 # equation onto `eqs` — the pair the classification derivation reads back.
 function obs_v(eqs, name, shape, expr)
-    push!(eqs, Dict("lhs"=>name, "rhs"=>expr))
-    return Dict("type"=>"unknown", "shape"=>shape)
+    push!(eqs, Dict("lhs" => name, "rhs" => expr))
+    return Dict("type" => "unknown", "shape" => shape)
 end
 
 @testset "projection-pushdown const-tier edge — L1 milestone (Phase 2b)" begin
@@ -98,12 +100,12 @@ end
     Y = [1.0, 1.0, 3.0, 5.0, 1.5]
     HAND_MEMBERS = [1, 2, 4, 9]                 # sorted distinct containing cells
     emis_annual = [10.0, 20.0, 30.0, 40.0, 50.0]
-    is_VOC  = [1.0, 0.0, 1.0, 0.0, 0.0]         # e1,e3
-    is_NOx  = [0.0, 1.0, 0.0, 0.0, 0.0]         # e2
-    is_NH3  = [0.0, 0.0, 0.0, 0.0, 1.0]         # e5
-    is_SOx  = [0.0, 0.0, 0.0, 0.0, 0.0]         # none
+    is_VOC = [1.0, 0.0, 1.0, 0.0, 0.0]         # e1,e3
+    is_NOx = [0.0, 1.0, 0.0, 0.0, 0.0]         # e2
+    is_NH3 = [0.0, 0.0, 0.0, 0.0, 1.0]         # e5
+    is_SOx = [0.0, 0.0, 0.0, 0.0, 0.0]         # none
     is_PM25 = [0.0, 0.0, 0.0, 1.0, 0.0]         # e4
-    TotalPop      = [100.0, 200.0, 300.0, 400.0]
+    TotalPop = [100.0, 200.0, 300.0, 400.0]
     MortalityRate = [500.0, 600.0, 700.0, 800.0]
 
     FACT = 28766.639; POP_SCALE = 1.0465819687408728; MORT_SCALE = 1.025229357798165
@@ -111,9 +113,11 @@ end
 
     # synthetic full SR (per pathway): distinct, layer-0 (0-based) is the used slab
     PATHS = ["SR_SOA", "SR_pNO3", "SR_pNH4", "SR_pSO4", "SR_PrimaryPM25"]
-    base = Dict("SR_SOA"=>1.0, "SR_pNO3"=>2.0, "SR_pNH4"=>3.0, "SR_pSO4"=>4.0,
-                "SR_PrimaryPM25"=>5.0)
-    fullSR = Dict{String,Array{Float64,3}}()
+    base = Dict(
+        "SR_SOA" => 1.0, "SR_pNO3" => 2.0, "SR_pNH4" => 3.0, "SR_pSO4" => 4.0,
+        "SR_PrimaryPM25" => 5.0
+    )
+    fullSR = Dict{String, Array{Float64, 3}}()
     for name in PATHS
         A = Array{Float64}(undef, N_LAYER, GRID, N_RCV)
         for l in 1:N_LAYER, s in 1:GRID, r in 1:N_RCV
@@ -123,8 +127,10 @@ end
     end
 
     # ---- plain-Julia STEP-0 ORACLE on these same inputs --------------------
-    pathway_is = Dict("SR_SOA"=>is_VOC, "SR_pNO3"=>is_NOx, "SR_pNH4"=>is_NH3,
-                      "SR_pSO4"=>is_SOx, "SR_PrimaryPM25"=>is_PM25)
+    pathway_is = Dict(
+        "SR_SOA" => is_VOC, "SR_pNO3" => is_NOx, "SR_pNH4" => is_NH3,
+        "SR_pSO4" => is_SOx, "SR_PrimaryPM25" => is_PM25
+    )
     cellW = [W[HAND_MEMBERS[c]] for c in 1:length(HAND_MEMBERS)]
     cellS = [S[HAND_MEMBERS[c]] for c in 1:length(HAND_MEMBERS)]
     cellE = [E[HAND_MEMBERS[c]] for c in 1:length(HAND_MEMBERS)]
@@ -132,151 +138,221 @@ end
     contains(c, r) = cellW[c] <= X[r] < cellE[c] && cellS[c] <= Y[r] < cellN[c]
     NP = length(HAND_MEMBERS)
     function oracle_E(is_p)
-        [sum((contains(c, r) ? 1.0 : 0.0) * emis_annual[r] * is_p[r]
-             for r in 1:N_REC) for c in 1:NP]
+        [
+            sum(
+                (contains(c, r) ? 1.0 : 0.0) * emis_annual[r] * is_p[r]
+                    for r in 1:N_REC
+            ) for c in 1:NP
+        ]
     end
     # SR compact slab (layer-0 == 1-based 1) at the invented members, in order
     srC(name) = [fullSR[name][1, HAND_MEMBERS[c], rcv] for c in 1:NP, rcv in 1:N_RCV]
-    oracle_conc(name) = (Ep = oracle_E(pathway_is[name]);
-        [sum(srC(name)[c, rcv] * Ep[c] for c in 1:NP) for rcv in 1:N_RCV])
-    oracle_TotalPM25 = [FACT * sum(oracle_conc(name)[rcv] for name in PATHS)
-                        for rcv in 1:N_RCV]
-    oracle_deaths(rr) = [(exp(log(rr) / 10 * oracle_TotalPM25[rcv]) - 1) *
-                         TotalPop[rcv] * POP_SCALE *
-                         MortalityRate[rcv] * MORT_SCALE / 100000 for rcv in 1:N_RCV]
+    oracle_conc(name) = (
+        Ep = oracle_E(pathway_is[name]);
+        [sum(srC(name)[c, rcv] * Ep[c] for c in 1:NP) for rcv in 1:N_RCV]
+    )
+    oracle_TotalPM25 = [
+        FACT * sum(oracle_conc(name)[rcv] for name in PATHS)
+            for rcv in 1:N_RCV
+    ]
+    oracle_deaths(rr) = [
+        (exp(log(rr) / 10 * oracle_TotalPM25[rcv]) - 1) *
+            TotalPop[rcv] * POP_SCALE *
+            MortalityRate[rcv] * MORT_SCALE / 100000 for rcv in 1:N_RCV
+    ]
 
     # ---- the document (pushdown-style: derived emis_src_cells + gated SR) ---
     # containment predicate reused by producer filter and E_* narrow phase
-    _contain_and(Wf, Sf, Ef, Nf) = _op("and",
+    _contain_and(Wf, Sf, Ef, Nf) = _op(
+        "and",
         _op("<=", _ix(Wf, "c"), _ix("X", "r")), _op("<", _ix("X", "r"), _ix(Ef, "c")),
-        _op("<=", _ix(Sf, "c"), _ix("Y", "r")), _op("<", _ix("Y", "r"), _ix(Nf, "c")))
+        _op("<=", _ix(Sf, "c"), _ix("Y", "r")), _op("<", _ix("Y", "r"), _ix(Nf, "c"))
+    )
     # producer filter: PRODUCT of comparisons (kept iff > 0), c over pop_cells
-    _prod_filter = _op("*",
-        _op("*", _op("<=", _ix("W", "c"), _ix("X", "r")),
-                 _op("<",  _ix("X", "r"), _ix("E", "c"))),
-        _op("*", _op("<=", _ix("S", "c"), _ix("Y", "r")),
-                 _op("<",  _ix("Y", "r"), _ix("N", "c"))))
+    _prod_filter = _op(
+        "*",
+        _op(
+            "*", _op("<=", _ix("W", "c"), _ix("X", "r")),
+            _op("<", _ix("X", "r"), _ix("E", "c"))
+        ),
+        _op(
+            "*", _op("<=", _ix("S", "c"), _ix("Y", "r")),
+            _op("<", _ix("Y", "r"), _ix("N", "c"))
+        )
+    )
 
-    _E_expr(is_p) = _op("*",
+    _E_expr(is_p) = _op(
+        "*",
         _op("ifelse", _contain_and("cell_W", "cell_S", "cell_E", "cell_N"), 1.0, 0.0),
-        _op("*", _ix("emis_annual", "r"), _ix(is_p, "r")))
-    _E_agg(is_p) = _agg(["c"],
-        Dict("c"=>Dict("from"=>"emis_src_cells"), "r"=>Dict("from"=>"emis_records")),
-        _E_expr(is_p); reduce="+",
-        args=["cell_W","cell_S","cell_E","cell_N","X","Y","emis_annual",is_p])
+        _op("*", _ix("emis_annual", "r"), _ix(is_p, "r"))
+    )
+    _E_agg(is_p) = _agg(
+        ["c"],
+        Dict("c" => Dict("from" => "emis_src_cells"), "r" => Dict("from" => "emis_records")),
+        _E_expr(is_p); reduce = "+",
+        args = ["cell_W", "cell_S", "cell_E", "cell_N", "X", "Y", "emis_annual", is_p]
+    )
 
-    _cell_edge(edge) = _agg(["c"], Dict("c"=>Dict("from"=>"emis_src_cells")),
-        _ix(edge, _ix("src_cell_of_ppl", "c")); args=[edge, "src_cell_of_ppl"])
+    _cell_edge(edge) = _agg(
+        ["c"], Dict("c" => Dict("from" => "emis_src_cells")),
+        _ix(edge, _ix("src_cell_of_ppl", "c")); args = [edge, "src_cell_of_ppl"]
+    )
 
-    _conc_agg(SRname, Ename) = _agg(["rcv"],
-        Dict("s"=>Dict("from"=>"emis_src_cells"), "rcv"=>Dict("from"=>"rcv_cells")),
-        _op("*", _ix(SRname, "s", "rcv"), _ix(Ename, "s")); reduce="+",
-        args=[SRname, Ename])
+    _conc_agg(SRname, Ename) = _agg(
+        ["rcv"],
+        Dict("s" => Dict("from" => "emis_src_cells"), "rcv" => Dict("from" => "rcv_cells")),
+        _op("*", _ix(SRname, "s", "rcv"), _ix(Ename, "s")); reduce = "+",
+        args = [SRname, Ename]
+    )
 
-    _deaths(rr) = _agg(["rcv"], Dict("rcv"=>Dict("from"=>"rcv_cells")),
-        _op("*", _op("*", _op("*",
-            _op("-", _op("exp", _op("*",
-                _op("/", _op("log", rr), 10), _ix("TotalPM25", "rcv"))), 1),
-            _op("*", _ix("TotalPop", "rcv"), "pop_scale")),
-            _op("/", _ix("MortalityRate", "rcv"), 100000)), "mort_scale");
-        args=["TotalPM25","TotalPop","MortalityRate"])
+    _deaths(rr) = _agg(
+        ["rcv"], Dict("rcv" => Dict("from" => "rcv_cells")),
+        _op(
+            "*", _op(
+                "*", _op(
+                    "*",
+                    _op(
+                        "-", _op(
+                            "exp", _op(
+                                "*",
+                                _op("/", _op("log", rr), 10), _ix("TotalPM25", "rcv")
+                            )
+                        ), 1
+                    ),
+                    _op("*", _ix("TotalPop", "rcv"), "pop_scale")
+                ),
+                _op("/", _ix("MortalityRate", "rcv"), 100000)
+            ), "mort_scale"
+        );
+        args = ["TotalPM25", "TotalPop", "MortalityRate"]
+    )
 
-    param(shape) = Dict("type"=>"parameter", "default"=>0.0, "shape"=>shape)
-    scal(v) = Dict("type"=>"parameter", "default"=>v)
+    param(shape) = Dict("type" => "parameter", "default" => 0.0, "shape" => shape)
+    scal(v) = Dict("type" => "parameter", "default" => v)
     # esm 1.0.0 (§5.4/§6.3.1): a variable has NO `expression`. Each `obs_v` call
     # below declares a plain `unknown` and appends its DEFINING bare-variable-LHS
     # equation here; the collected definitions join the model's `equations`.
     obs_eqs = Any[]
 
-    variables = Dict{String,Any}(
-        "X"=>param(["emis_records"]), "Y"=>param(["emis_records"]),
-        "emis_annual"=>param(["emis_records"]),
-        "is_VOC"=>param(["emis_records"]), "is_NOx"=>param(["emis_records"]),
-        "is_NH3"=>param(["emis_records"]), "is_SOx"=>param(["emis_records"]),
-        "is_PM25"=>param(["emis_records"]),
-        "W"=>param(["pop_cells"]), "S"=>param(["pop_cells"]),
-        "E"=>param(["pop_cells"]), "N"=>param(["pop_cells"]),
-        "TotalPop"=>param(["rcv_cells"]), "MortalityRate"=>param(["rcv_cells"]),
-        "SR_SOA"=>param(["emis_src_cells","rcv_cells"]),
-        "SR_pNO3"=>param(["emis_src_cells","rcv_cells"]),
-        "SR_pNH4"=>param(["emis_src_cells","rcv_cells"]),
-        "SR_pSO4"=>param(["emis_src_cells","rcv_cells"]),
-        "SR_PrimaryPM25"=>param(["emis_src_cells","rcv_cells"]),
-        "src_cell_of_ppl"=>param(["emis_src_cells"]),
-        "emis_src_cell_member"=>Dict("type"=>"unknown", "shape"=>["emis_src_cells"]),
-        "cell_W"=>obs_v(obs_eqs, "cell_W", ["emis_src_cells"], _cell_edge("W")),
-        "cell_S"=>obs_v(obs_eqs, "cell_S", ["emis_src_cells"], _cell_edge("S")),
-        "cell_E"=>obs_v(obs_eqs, "cell_E", ["emis_src_cells"], _cell_edge("E")),
-        "cell_N"=>obs_v(obs_eqs, "cell_N", ["emis_src_cells"], _cell_edge("N")),
-        "E_VOC"=>obs_v(obs_eqs, "E_VOC", ["emis_src_cells"], _E_agg("is_VOC")),
-        "E_NOx"=>obs_v(obs_eqs, "E_NOx", ["emis_src_cells"], _E_agg("is_NOx")),
-        "E_NH3"=>obs_v(obs_eqs, "E_NH3", ["emis_src_cells"], _E_agg("is_NH3")),
-        "E_SOx"=>obs_v(obs_eqs, "E_SOx", ["emis_src_cells"], _E_agg("is_SOx")),
-        "E_PM25"=>obs_v(obs_eqs, "E_PM25", ["emis_src_cells"], _E_agg("is_PM25")),
-        "conc_SOA"=>obs_v(obs_eqs, "conc_SOA", ["rcv_cells"], _conc_agg("SR_SOA","E_VOC")),
-        "conc_pNO3"=>obs_v(obs_eqs, "conc_pNO3", ["rcv_cells"], _conc_agg("SR_pNO3","E_NOx")),
-        "conc_pNH4"=>obs_v(obs_eqs, "conc_pNH4", ["rcv_cells"], _conc_agg("SR_pNH4","E_NH3")),
-        "conc_pSO4"=>obs_v(obs_eqs, "conc_pSO4", ["rcv_cells"], _conc_agg("SR_pSO4","E_SOx")),
-        "conc_PrimaryPM25"=>obs_v(obs_eqs, "conc_PrimaryPM25", ["rcv_cells"], _conc_agg("SR_PrimaryPM25","E_PM25")),
-        "TotalPM25"=>obs_v(obs_eqs, "TotalPM25", ["rcv_cells"], _agg(["rcv"],
-            Dict("rcv"=>Dict("from"=>"rcv_cells")),
-            _op("*", "fact", _op("+", _ix("conc_SOA","rcv"), _ix("conc_pNO3","rcv"),
-                _ix("conc_pNH4","rcv"), _ix("conc_pSO4","rcv"),
-                _ix("conc_PrimaryPM25","rcv")));
-            args=["conc_SOA","conc_pNO3","conc_pNH4","conc_pSO4","conc_PrimaryPM25"])),
-        "deathsK"=>obs_v(obs_eqs, "deathsK", ["rcv_cells"], _deaths("rr_K")),
-        "deathsL"=>obs_v(obs_eqs, "deathsL", ["rcv_cells"], _deaths("rr_L")),
-        "fact"=>scal(FACT), "pop_scale"=>scal(POP_SCALE), "mort_scale"=>scal(MORT_SCALE),
-        "rr_K"=>scal(RR_K), "rr_L"=>scal(RR_L))
+    variables = Dict{String, Any}(
+        "X" => param(["emis_records"]), "Y" => param(["emis_records"]),
+        "emis_annual" => param(["emis_records"]),
+        "is_VOC" => param(["emis_records"]), "is_NOx" => param(["emis_records"]),
+        "is_NH3" => param(["emis_records"]), "is_SOx" => param(["emis_records"]),
+        "is_PM25" => param(["emis_records"]),
+        "W" => param(["pop_cells"]), "S" => param(["pop_cells"]),
+        "E" => param(["pop_cells"]), "N" => param(["pop_cells"]),
+        "TotalPop" => param(["rcv_cells"]), "MortalityRate" => param(["rcv_cells"]),
+        "SR_SOA" => param(["emis_src_cells", "rcv_cells"]),
+        "SR_pNO3" => param(["emis_src_cells", "rcv_cells"]),
+        "SR_pNH4" => param(["emis_src_cells", "rcv_cells"]),
+        "SR_pSO4" => param(["emis_src_cells", "rcv_cells"]),
+        "SR_PrimaryPM25" => param(["emis_src_cells", "rcv_cells"]),
+        "src_cell_of_ppl" => param(["emis_src_cells"]),
+        "emis_src_cell_member" => Dict("type" => "unknown", "shape" => ["emis_src_cells"]),
+        "cell_W" => obs_v(obs_eqs, "cell_W", ["emis_src_cells"], _cell_edge("W")),
+        "cell_S" => obs_v(obs_eqs, "cell_S", ["emis_src_cells"], _cell_edge("S")),
+        "cell_E" => obs_v(obs_eqs, "cell_E", ["emis_src_cells"], _cell_edge("E")),
+        "cell_N" => obs_v(obs_eqs, "cell_N", ["emis_src_cells"], _cell_edge("N")),
+        "E_VOC" => obs_v(obs_eqs, "E_VOC", ["emis_src_cells"], _E_agg("is_VOC")),
+        "E_NOx" => obs_v(obs_eqs, "E_NOx", ["emis_src_cells"], _E_agg("is_NOx")),
+        "E_NH3" => obs_v(obs_eqs, "E_NH3", ["emis_src_cells"], _E_agg("is_NH3")),
+        "E_SOx" => obs_v(obs_eqs, "E_SOx", ["emis_src_cells"], _E_agg("is_SOx")),
+        "E_PM25" => obs_v(obs_eqs, "E_PM25", ["emis_src_cells"], _E_agg("is_PM25")),
+        "conc_SOA" => obs_v(obs_eqs, "conc_SOA", ["rcv_cells"], _conc_agg("SR_SOA", "E_VOC")),
+        "conc_pNO3" => obs_v(obs_eqs, "conc_pNO3", ["rcv_cells"], _conc_agg("SR_pNO3", "E_NOx")),
+        "conc_pNH4" => obs_v(obs_eqs, "conc_pNH4", ["rcv_cells"], _conc_agg("SR_pNH4", "E_NH3")),
+        "conc_pSO4" => obs_v(obs_eqs, "conc_pSO4", ["rcv_cells"], _conc_agg("SR_pSO4", "E_SOx")),
+        "conc_PrimaryPM25" => obs_v(obs_eqs, "conc_PrimaryPM25", ["rcv_cells"], _conc_agg("SR_PrimaryPM25", "E_PM25")),
+        "TotalPM25" => obs_v(
+            obs_eqs, "TotalPM25", ["rcv_cells"], _agg(
+                ["rcv"],
+                Dict("rcv" => Dict("from" => "rcv_cells")),
+                _op(
+                    "*", "fact", _op(
+                        "+", _ix("conc_SOA", "rcv"), _ix("conc_pNO3", "rcv"),
+                        _ix("conc_pNH4", "rcv"), _ix("conc_pSO4", "rcv"),
+                        _ix("conc_PrimaryPM25", "rcv")
+                    )
+                );
+                args = ["conc_SOA", "conc_pNO3", "conc_pNH4", "conc_pSO4", "conc_PrimaryPM25"]
+            )
+        ),
+        "deathsK" => obs_v(obs_eqs, "deathsK", ["rcv_cells"], _deaths("rr_K")),
+        "deathsL" => obs_v(obs_eqs, "deathsL", ["rcv_cells"], _deaths("rr_L")),
+        "fact" => scal(FACT), "pop_scale" => scal(POP_SCALE), "mort_scale" => scal(MORT_SCALE),
+        "rr_K" => scal(RR_K), "rr_L" => scal(RR_L)
+    )
 
     producer_eq = Dict(
         "lhs" => _ix("emis_src_cell_member", "m"),
-        "rhs" => _agg(["m"],
-            Dict("r"=>Dict("from"=>"emis_records"), "c"=>Dict("from"=>"pop_cells")),
-            Dict("op"=>"true", "args"=>[]);
-            args=["X","Y","W","S","E","N"],
-            id="emis_src_cells_faq", semiring="bool_and_or", distinct=true,
-            join=[Dict("overlap"=>Dict("src_env"=>["X","Y"],
-                                       "tgt_env"=>["W","S","E","N"], "eps"=>0.0))],
-            filter=_prod_filter,
-            key=Dict("op"=>"skolem", "label"=>"cell", "args"=>["c"])))
+        "rhs" => _agg(
+            ["m"],
+            Dict("r" => Dict("from" => "emis_records"), "c" => Dict("from" => "pop_cells")),
+            Dict("op" => "true", "args" => []);
+            args = ["X", "Y", "W", "S", "E", "N"],
+            id = "emis_src_cells_faq", semiring = "bool_and_or", distinct = true,
+            join = [
+                Dict(
+                    "overlap" => Dict(
+                        "src_env" => ["X", "Y"],
+                        "tgt_env" => ["W", "S", "E", "N"], "eps" => 0.0
+                    )
+                ),
+            ],
+            filter = _prod_filter,
+            key = Dict("op" => "skolem", "label" => "cell", "args" => ["c"])
+        )
+    )
 
     doc = Dict(
         "esm" => "1.1.0",
         "metadata" => Dict("name" => "isrm_pushdown_L1"),
         "index_sets" => Dict(
-            "src_cells"  => Dict("kind"=>"interval", "size"=>GRID),
-            "rcv_cells"  => Dict("kind"=>"interval", "size"=>N_RCV),
-            "pop_cells"  => Dict("kind"=>"interval", "size"=>GRID),
-            "emis_records" => Dict("kind"=>"interval", "size"=>N_REC),
-            "emis_src_cells" => Dict("kind"=>"derived", "from_faq"=>"emis_src_cells_faq",
-                                     "member_factor"=>"src_cell_of_ppl")),
-        "models" => Dict("ISRM" => Dict("variables"=>variables,
-                                        "equations"=>vcat(obs_eqs, Any[producer_eq]))))
+            "src_cells" => Dict("kind" => "interval", "size" => GRID),
+            "rcv_cells" => Dict("kind" => "interval", "size" => N_RCV),
+            "pop_cells" => Dict("kind" => "interval", "size" => GRID),
+            "emis_records" => Dict("kind" => "interval", "size" => N_REC),
+            "emis_src_cells" => Dict(
+                "kind" => "derived", "from_faq" => "emis_src_cells_faq",
+                "member_factor" => "src_cell_of_ppl"
+            )
+        ),
+        "models" => Dict(
+            "ISRM" => Dict(
+                "variables" => variables,
+                "equations" => vcat(obs_eqs, Any[producer_eq])
+            )
+        )
+    )
 
     # const arrays supplied by the caller (Hook 3: X/Y and cell rects are cheap;
     # the runner projects them — SR is the only gated, deferred fetch)
-    ca = Dict{String,Any}(
-        "X"=>X, "Y"=>Y, "emis_annual"=>emis_annual,
-        "is_VOC"=>is_VOC, "is_NOx"=>is_NOx, "is_NH3"=>is_NH3,
-        "is_SOx"=>is_SOx, "is_PM25"=>is_PM25,
-        "W"=>W, "S"=>S, "E"=>E, "N"=>Nn,
-        "TotalPop"=>TotalPop, "MortalityRate"=>MortalityRate)
+    ca = Dict{String, Any}(
+        "X" => X, "Y" => Y, "emis_annual" => emis_annual,
+        "is_VOC" => is_VOC, "is_NOx" => is_NOx, "is_NH3" => is_NH3,
+        "is_SOx" => is_SOx, "is_PM25" => is_PM25,
+        "W" => W, "S" => S, "E" => E, "N" => Nn,
+        "TotalPop" => TotalPop, "MortalityRate" => MortalityRate
+    )
 
-    gate = Dict{String,Any}(
-        "axes" => Any[Dict("fixed"=>[0]), Dict("gated_by"=>"emis_src_cells"), "all"],
-        "applies_to" => PATHS)
+    gate = Dict{String, Any}(
+        "axes" => Any[Dict("fixed" => [0]), Dict("gated_by" => "emis_src_cells"), "all"],
+        "applies_to" => PATHS
+    )
     mock = MockSR(fullSR, gate, Any[])
 
-    f = EA.load_document(doc; base_path=pwd())
+    f = EA.load_document(doc; base_path = pwd())
 
     # ============================================================
     # ASSERTION 1 — the invented member set == hand-computed containing cells
     # ============================================================
     model = EA._select_model(f, "ISRM")
-    vi = EA.materialize_value_invention(model, f.index_sets,
-        Dict{String,Any}("X"=>X, "Y"=>Y, "W"=>W, "S"=>S, "E"=>E, "N"=>Nn),
-        Dict{String,Any}())
+    vi = EA.materialize_value_invention(
+        model, f.index_sets,
+        Dict{String, Any}("X" => X, "Y" => Y, "W" => W, "S" => S, "E" => E, "N" => Nn),
+        Dict{String, Any}()
+    )
     @test sort(collect(Int, vi.members["emis_src_cells_faq"])) == HAND_MEMBERS
     @test vi.extents["emis_src_cells_faq"] == length(HAND_MEMBERS)
 
@@ -288,9 +364,11 @@ end
     # eager-loop deferral ROUTING is exercised by the separate testset below.
     # ============================================================
     insp = EA.BuildInspection()
-    f!, u0, p, _tspan, var_map = EA._build_evaluator(doc;
+    f!, u0, p, _tspan, var_map = EA._build_evaluator(
+        doc;
         model_name = "ISRM", const_arrays = ca, inspect = insp,
-        _gated_providers = Dict{String,Any}("ISRM_SR" => mock), _sample_time = 0.0)
+        _gated_providers = Dict{String, Any}("ISRM_SR" => mock), _sample_time = 0.0
+    )
 
     # ============================================================
     # ASSERTION 2 — gated provider got the pushed-down selection == members,
@@ -310,7 +388,7 @@ end
     # ============================================================
     @test haskey(insp.const_arrays, "src_cell_of_ppl")
     @test Vector{Float64}(insp.const_arrays["src_cell_of_ppl"]) ==
-          Float64.(HAND_MEMBERS)
+        Float64.(HAND_MEMBERS)
     # the gated SR slab landed compact in const_arrays: [members, rcv]
     for name in PATHS
         @test haskey(insp.const_arrays, name)
@@ -319,13 +397,17 @@ end
     end
     # cell_* gathers (evaluate the derived-shaped observeds over the compact axis)
     cell_cells = [[c] for c in 1:NP]
-    for (edge, oracleE) in (("cell_W", cellW), ("cell_S", cellS),
-                            ("cell_E", cellE), ("cell_N", cellN))
+    for (edge, oracleE) in (
+            ("cell_W", cellW), ("cell_S", cellS),
+            ("cell_E", cellE), ("cell_N", cellN),
+        )
         expr = get(insp.observed_exprs, "ISRM.$edge", get(insp.observed_exprs, edge, nothing))
         @test expr !== nothing
-        got = EA.evaluate_cellwise(expr, cell_cells;
-            const_arrays=insp.const_arrays,
-            params=EA._param_scope_with_aliases(insp.params))
+        got = EA.evaluate_cellwise(
+            expr, cell_cells;
+            const_arrays = insp.const_arrays,
+            params = EA._param_scope_with_aliases(insp.params)
+        )
         @test got ≈ oracleE
     end
 
@@ -333,28 +415,36 @@ end
     # ASSERTION 4 — downstream E_*/conc_*/TotalPM25/deaths == STEP-0 oracle
     # ============================================================
     # E_* are shaped over the DERIVED axis → evaluate the resolved expr directly.
-    ev(name) = (expr = get(insp.observed_exprs, "ISRM.$name",
-                           get(insp.observed_exprs, name, nothing));
+    ev(name) = (
+        expr = get(
+            insp.observed_exprs, "ISRM.$name",
+            get(insp.observed_exprs, name, nothing)
+        );
         expr === nothing ? error("no observed expr for $name") :
-        EA.evaluate_cellwise(expr, cell_cells; const_arrays=insp.const_arrays,
-            params=EA._param_scope_with_aliases(insp.params)))
-    @test ev("E_VOC")  ≈ oracle_E(is_VOC)
-    @test ev("E_NOx")  ≈ oracle_E(is_NOx)
-    @test ev("E_NH3")  ≈ oracle_E(is_NH3)
-    @test ev("E_SOx")  ≈ oracle_E(is_SOx)
+            EA.evaluate_cellwise(
+                expr, cell_cells; const_arrays = insp.const_arrays,
+                params = EA._param_scope_with_aliases(insp.params)
+            )
+    )
+    @test ev("E_VOC") ≈ oracle_E(is_VOC)
+    @test ev("E_NOx") ≈ oracle_E(is_NOx)
+    @test ev("E_NH3") ≈ oracle_E(is_NH3)
+    @test ev("E_SOx") ≈ oracle_E(is_SOx)
     @test ev("E_PM25") ≈ oracle_E(is_PM25)
 
     # conc_*/TotalPM25/deaths are shaped over rcv_cells (interval) → _observed_field.
-    rt(name) = (fld = EA._observed_field(insp, f, "ISRM", name);
-        fld === nothing ? error("observed $name not evaluable via _observed_field") : fld[1])
-    @test rt("conc_SOA")  ≈ oracle_conc("SR_SOA")
+    rt(name) = (
+        fld = EA._observed_field(insp, f, "ISRM", name);
+        fld === nothing ? error("observed $name not evaluable via _observed_field") : fld[1]
+    )
+    @test rt("conc_SOA") ≈ oracle_conc("SR_SOA")
     @test rt("conc_pNO3") ≈ oracle_conc("SR_pNO3")
     @test rt("conc_pNH4") ≈ oracle_conc("SR_pNH4")
     @test rt("conc_pSO4") ≈ oracle_conc("SR_pSO4")
     @test rt("conc_PrimaryPM25") ≈ oracle_conc("SR_PrimaryPM25")
     @test rt("TotalPM25") ≈ oracle_TotalPM25
-    @test rt("deathsK")   ≈ oracle_deaths(RR_K)
-    @test rt("deathsL")   ≈ oracle_deaths(RR_L)
+    @test rt("deathsK") ≈ oracle_deaths(RR_K)
+    @test rt("deathsL") ≈ oracle_deaths(RR_L)
 
     # ============================================================
     # PREPARE PATH — the public API (flattens + qualifies names). Proves the
@@ -365,11 +455,13 @@ end
     # namespaced variable keys.)
     # ============================================================
     @testset "full esm_problem() API: eager-loop deferral + fetch" begin
-        ca_q = Dict{String,Any}("ISRM." * k => v for (k, v) in ca)
+        ca_q = Dict{String, Any}("ISRM." * k => v for (k, v) in ca)
         insp2 = EA.BuildInspection()
         mock2 = MockSR(fullSR, gate, Any[])
-        prep = EA.esm_problem(f, (0.0, 1.0); const_arrays=ca_q, providers=Dict("ISRM_SR"=>mock2),
-                          inspect=insp2)
+        prep = EA.esm_problem(
+            f, (0.0, 1.0); const_arrays = ca_q, providers = Dict("ISRM_SR" => mock2),
+            inspect = insp2
+        )
         @test prep isa EA.EsmProblem
         # deferral: NEVER wholesale-materialized in the eager const loop
         @test count(c -> c[1] == :wholesale, mock2.calls) == 0
@@ -378,7 +470,7 @@ end
         @test selc[1][2][2] == HAND_MEMBERS               # pushed-down members, in order
         # members fed back + compact SR merged under the namespaced keys
         @test Vector{Float64}(insp2.const_arrays["ISRM.src_cell_of_ppl"]) ==
-              Float64.(HAND_MEMBERS)
+            Float64.(HAND_MEMBERS)
         @test size(insp2.const_arrays["ISRM.SR_SOA"]) == (NP, N_RCV)
         # end-to-end oracle through the real esm_problem pipeline (spot-check deaths)
         @test EA._observed_field(insp2, f, "ISRM", "deathsK")[1] ≈ oracle_deaths(RR_K)

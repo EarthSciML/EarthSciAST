@@ -75,7 +75,7 @@ end
     hi = _knot_at(v, 2) .+ zero.(i)
     for k in 2:(n - 1)
         sel = i .== Float64(k)
-        lo = ifelse.(sel, _knot_at(v, k),     lo)
+        lo = ifelse.(sel, _knot_at(v, k), lo)
         hi = ifelse.(sel, _knot_at(v, k + 1), hi)
     end
     return lo, hi
@@ -87,9 +87,9 @@ end
     blo = _knot_at(b, 1) .+ zero.(i); bhi = _knot_at(b, 2) .+ zero.(i)
     for k in 2:(n - 1)
         sel = i .== Float64(k)
-        alo = ifelse.(sel, _knot_at(a, k),     alo)
+        alo = ifelse.(sel, _knot_at(a, k), alo)
         ahi = ifelse.(sel, _knot_at(a, k + 1), ahi)
-        blo = ifelse.(sel, _knot_at(b, k),     blo)
+        blo = ifelse.(sel, _knot_at(b, k), blo)
         bhi = ifelse.(sel, _knot_at(b, k + 1), bhi)
     end
     return alo, ahi, blo, bhi
@@ -97,14 +97,14 @@ end
 
 @inline function _bilinear_corners(tbl, i, j, Nx::Int, Ny::Int)
     z = zero.(i .+ j)
-    t_ij    = _tbl_at(tbl, 1, 1) .+ z; t_i1j   = _tbl_at(tbl, 2, 1) .+ z
-    t_ijp1  = _tbl_at(tbl, 1, 2) .+ z; t_i1jp1 = _tbl_at(tbl, 2, 2) .+ z
+    t_ij = _tbl_at(tbl, 1, 1) .+ z; t_i1j = _tbl_at(tbl, 2, 1) .+ z
+    t_ijp1 = _tbl_at(tbl, 1, 2) .+ z; t_i1jp1 = _tbl_at(tbl, 2, 2) .+ z
     for k in 1:(Nx - 1), l in 1:(Ny - 1)
         (k == 1 && l == 1) && continue
         sel = (i .== Float64(k)) .& (j .== Float64(l))
-        t_ij    = ifelse.(sel, _tbl_at(tbl, k,     l),     t_ij)
-        t_i1j   = ifelse.(sel, _tbl_at(tbl, k + 1, l),     t_i1j)
-        t_ijp1  = ifelse.(sel, _tbl_at(tbl, k,     l + 1), t_ijp1)
+        t_ij = ifelse.(sel, _tbl_at(tbl, k, l), t_ij)
+        t_i1j = ifelse.(sel, _tbl_at(tbl, k + 1, l), t_i1j)
+        t_ijp1 = ifelse.(sel, _tbl_at(tbl, k, l + 1), t_ijp1)
         t_i1jp1 = ifelse.(sel, _tbl_at(tbl, k + 1, l + 1), t_i1jp1)
     end
     return t_ij, t_i1j, t_ijp1, t_i1jp1
@@ -144,8 +144,10 @@ function _interp_linear_lanes(h::_InterpLinearSpec, q)
     ai, ai1, ti, ti1 = _knot_pair2(axis, table, i)
     w = (q .- ai) ./ (ai1 .- ai)
     blend = ti .+ w .* (ti1 .- ti)
-    return ifelse.(q .<= axis[1], table[1],
-                   ifelse.(q .>= axis[n], table[n], blend))
+    return ifelse.(
+        q .<= axis[1], table[1],
+        ifelse.(q .>= axis[n], table[n], blend)
+    )
 end
 
 function _interp_searchsorted_lanes(h::_InterpSearchsortedSpec, q)
@@ -171,7 +173,7 @@ function _interp_bilinear_lanes(h::_InterpBilinearSpec, x, y)
     t_ij, t_i1j, t_ijp1, t_i1jp1 = _bilinear_corners(table, i, j, Nx, Ny)
     wx = (x_q .- xi) ./ (xip1 .- xi)
     wy = (y_q .- yj) ./ (yjp1 .- yj)
-    row_j   = t_ij   .+ wx .* (t_i1j   .- t_ij)
+    row_j = t_ij .+ wx .* (t_i1j .- t_ij)
     row_jp1 = t_ijp1 .+ wx .* (t_i1jp1 .- t_ijp1)
     return row_j .+ wy .* (row_jp1 .- row_j)
 end
@@ -227,9 +229,13 @@ function _interp_linear_lanes(h::_InterpLinearLaneSpec, q)
     ai, ai1, ti, ti1 = _knot_pair2(axis, table, i)
     w = (q .- ai) ./ (ai1 .- ai)
     blend = ti .+ w .* (ti1 .- ti)
-    return ifelse.(q .<= _lane_bound(axis[1]), _lane_bound(table[1]),
-                   ifelse.(q .>= _lane_bound(axis[n]), _lane_bound(table[n]),
-                           blend))
+    return ifelse.(
+        q .<= _lane_bound(axis[1]), _lane_bound(table[1]),
+        ifelse.(
+            q .>= _lane_bound(axis[n]), _lane_bound(table[n]),
+            blend
+        )
+    )
 end
 
 function _interp_searchsorted_lanes(h::_InterpSearchsortedLaneSpec, q)
@@ -254,7 +260,7 @@ function _interp_bilinear_lanes(h::_InterpBilinearLaneSpec, x, y)
     t_ij, t_i1j, t_ijp1, t_i1jp1 = _bilinear_corners(table, i, j, Nx, Ny)
     wx = (x_q .- xi) ./ (xip1 .- xi)
     wy = (y_q .- yj) ./ (yjp1 .- yj)
-    row_j   = t_ij   .+ wx .* (t_i1j   .- t_ij)
+    row_j = t_ij .+ wx .* (t_i1j .- t_ij)
     row_jp1 = t_ijp1 .+ wx .* (t_i1jp1 .- t_ijp1)
     return row_j .+ wy .* (row_jp1 .- row_j)
 end

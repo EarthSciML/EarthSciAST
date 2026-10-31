@@ -10,7 +10,7 @@ using EarthSciAST
         tmp = tempname() * ".esm"
         EarthSciAST.write_path(first, tmp)
         second = EarthSciAST.load_path(tmp)
-        rm(tmp; force=true)
+        rm(tmp; force = true)
         return first, second
     end
 

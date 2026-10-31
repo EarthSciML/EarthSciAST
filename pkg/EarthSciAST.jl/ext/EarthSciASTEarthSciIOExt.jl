@@ -67,26 +67,38 @@ function _neutral_selection_to_native(selection::AbstractVector)
         if ax isa Colon
             push!(axes, "all")
         elseif ax isa Integer
-            ax >= 1 || throw(RefreshError(
-                "selection axis $d: index must be 1-based (≥ 1), got $ax"))
+            ax >= 1 || throw(
+                RefreshError(
+                    "selection axis $d: index must be 1-based (≥ 1), got $ax"
+                )
+            )
             push!(axes, Dict("indices" => [Int(ax) - 1]))
         elseif ax isa AbstractVector{<:Integer}
             idx = collect(Int, ax)
-            all(>=(1), idx) || throw(RefreshError(
-                "selection axis $d: indices must be 1-based (≥ 1), got $idx"))
+            all(>=(1), idx) || throw(
+                RefreshError(
+                    "selection axis $d: indices must be 1-based (≥ 1), got $idx"
+                )
+            )
             push!(axes, Dict("indices" => idx .- 1))
         else
-            throw(RefreshError(
-                "selection axis $d: unrecognized entry $(ax)::$(typeof(ax)); use " *
-                "Colon() (whole axis), an Integer (1-based single index), or an " *
-                "AbstractVector{<:Integer} (1-based ordered index list)"))
+            throw(
+                RefreshError(
+                    "selection axis $d: unrecognized entry $(ax)::$(typeof(ax)); use " *
+                        "Colon() (whole axis), an Integer (1-based single index), or an " *
+                        "AbstractVector{<:Integer} (1-based ordered index list)"
+                )
+            )
         end
     end
     return Dict("axes" => axes)
 end
-_neutral_selection_to_native(selection) = throw(RefreshError(
-    "selection must be an AbstractVector with one entry per native axis " *
-    "(Colon / Integer / integer vector), got $(typeof(selection))"))
+_neutral_selection_to_native(selection) = throw(
+    RefreshError(
+        "selection must be an AbstractVector with one entry per native axis " *
+            "(Colon / Integer / integer vector), got $(typeof(selection))"
+    )
+)
 
 # One forcing field at cadence tick `t`, in the source's NATIVE layout (no
 # reorder — see the module docstring). `providers` is keyed one entry per consumer
@@ -104,19 +116,25 @@ function provider_sample(p::EarthSciIO.Provider, t::Real; selection = nothing)
     if selection === nothing
         nds = EarthSciIO.refresh(p, Float64(t))          # == materialize(p, t)
     else
-        provider_supports_selection(p) || throw(RefreshError(
-            "provider does not support selection/pushdown: $(typeof(p)) is not a " *
-            "store-backed reader (provider_supports_selection is false). Sample it " *
-            "without a `selection`, or bind a pushdown-capable provider (zarr)"))
+        provider_supports_selection(p) || throw(
+            RefreshError(
+                "provider does not support selection/pushdown: $(typeof(p)) is not a " *
+                    "store-backed reader (provider_supports_selection is false). Sample it " *
+                    "without a `selection`, or bind a pushdown-capable provider (zarr)"
+            )
+        )
         native = _neutral_selection_to_native(selection)
         nds = EarthSciIO.refresh(p, Float64(t); select = native)
     end
     vars = EarthSciIO.variable_names(nds)
-    length(vars) == 1 || throw(RefreshError(
-        "EarthSciIO provider yields $(length(vars)) variables $(vars); bind one " *
-        "provider per consumer variable (providers[\"<ModelPath>.<param>\"] => " *
-        "provider) so " *
-        "each sample is a single field, or slice the provider upstream"))
+    length(vars) == 1 || throw(
+        RefreshError(
+            "EarthSciIO provider yields $(length(vars)) variables $(vars); bind one " *
+                "provider per consumer variable (providers[\"<ModelPath>.<param>\"] => " *
+                "provider) so " *
+                "each sample is a single field, or slice the provider upstream"
+        )
+    )
     return nds[vars[1]].data
 end
 
@@ -161,9 +179,9 @@ _doc_raw(file) = _doc_raw(serialize_esm_file(file))
 """A loader variable's declared string→number code map (`codes`, §8.9.1).
 `unmapped` is `:drop` (lose the whole record), `:error`, or a `Float64`."""
 struct CodeMap
-    map::Dict{String,Float64}
+    map::Dict{String, Float64}
     case_insensitive::Bool
-    unmapped::Union{Symbol,Float64}
+    unmapped::Union{Symbol, Float64}
 end
 
 # The code for one raw cell, or `nothing` when it is unmapped and the declared
@@ -174,9 +192,12 @@ function _code_lookup(cm::CodeMap, raw::AbstractString, var::AbstractString)
     haskey(cm.map, key) && return cm.map[key]
     cm.unmapped isa Float64 && return cm.unmapped::Float64
     cm.unmapped === :drop && return nothing
-    throw(RefreshError(
-        "loader variable '$var': value $(repr(String(raw))) is not in its declared " *
-        "`codes` map (set codes.unmapped to \"drop\" or a number to accept it)"))
+    throw(
+        RefreshError(
+            "loader variable '$var': value $(repr(String(raw))) is not in its declared " *
+                "`codes` map (set codes.unmapped to \"drop\" or a number to accept it)"
+        )
+    )
 end
 
 """One column of a record-table loader: where it comes from, how it decodes."""
@@ -186,7 +207,7 @@ struct ColumnSpec
     # with different `file_variable`s and their columns must not collide.
     name::String
     file_variable::String     # the on-disk column
-    codes::Union{Nothing,CodeMap}
+    codes::Union{Nothing, CodeMap}
     # The declared `unit_conversion` (esm-spec §8.5), parsed; `nothing` when the
     # variable declares none.
     unit_conversion::Any
@@ -211,7 +232,7 @@ mutable struct RecordTable
     provider::EarthSciIO.Provider
     columns::Vector{ColumnSpec}
     require_finite::Vector{String}      # FILE variable names (esm-spec §8.9)
-    cache::Union{Nothing,Dict{String,Vector{Float64}}}
+    cache::Union{Nothing, Dict{String, Vector{Float64}}}
 end
 
 # One numeric EarthSciIO column widened to Float64. A TEXT column with no
@@ -219,9 +240,12 @@ end
 # numeric, so it is refused at the loader boundary (§8.9.1).
 function _widen_column(name::AbstractString, data)
     eltype(data) <: Real && return Float64[Float64(x) for x in data]
-    throw(RefreshError(
-        "loader variable '$name' decoded as strings; a model forcing must be " *
-        "numeric (declare a `codes` map for it)"))
+    throw(
+        RefreshError(
+            "loader variable '$name' decoded as strings; a model forcing must be " *
+                "numeric (declare a `codes` map for it)"
+        )
+    )
 end
 
 """Decode + filter once; every later column read is free."""
@@ -231,27 +255,36 @@ function _table_columns(t::RecordTable)
 
     # Raw columns (unfiltered), plus the per-record keep mask that the `codes`
     # drops and the finite requirement build up together.
-    raw = Dict{String,Vector{Float64}}()
+    raw = Dict{String, Vector{Float64}}()
     keep = Bool[]
     nrec = -1
     for spec in t.columns
-        haskey(nds.variables, spec.file_variable) || throw(RefreshError(
-            "loader '$(t.loader)': the reader returned no column " *
-            "'$(spec.file_variable)' for variable '$(spec.name)' " *
-            "(present: $(EarthSciIO.variable_names(nds)))"))
+        haskey(nds.variables, spec.file_variable) || throw(
+            RefreshError(
+                "loader '$(t.loader)': the reader returned no column " *
+                    "'$(spec.file_variable)' for variable '$(spec.name)' " *
+                    "(present: $(EarthSciIO.variable_names(nds)))"
+            )
+        )
         f = nds.variables[spec.file_variable]
-        ndims(f.data) == 1 || throw(RefreshError(
-            "loader '$(t.loader)' declares a record filter, but variable " *
-            "'$(spec.name)' is rank $(ndims(f.data)) $(size(f.data)); a record " *
-            "filter needs a single record axis"))
+        ndims(f.data) == 1 || throw(
+            RefreshError(
+                "loader '$(t.loader)' declares a record filter, but variable " *
+                    "'$(spec.name)' is rank $(ndims(f.data)) $(size(f.data)); a record " *
+                    "filter needs a single record axis"
+            )
+        )
         n = length(f.data)
         if nrec < 0
             nrec = n
             keep = trues(n)
         elseif nrec != n
-            throw(RefreshError(
-                "loader '$(t.loader)': column '$(spec.name)' has $n records but an " *
-                "earlier column has $nrec; the reader did not return one aligned table"))
+            throw(
+                RefreshError(
+                    "loader '$(t.loader)': column '$(spec.name)' has $n records but an " *
+                        "earlier column has $nrec; the reader did not return one aligned table"
+                )
+            )
         end
         raw[spec.name] = if spec.codes === nothing
             _widen_column(spec.name, f.data)
@@ -268,10 +301,13 @@ function _table_columns(t::RecordTable)
             end
             col
         else
-            throw(RefreshError(
-                "loader '$(t.loader)' variable '$(spec.name)' declares `codes`, but " *
-                "the column decoded as $(eltype(f.data)); a code map maps a TEXT " *
-                "column to numbers"))
+            throw(
+                RefreshError(
+                    "loader '$(t.loader)' variable '$(spec.name)' declares `codes`, but " *
+                        "the column decoded as $(eltype(f.data)); a code map maps a TEXT " *
+                        "column to numbers"
+                )
+            )
         end
     end
     nrec < 0 && (nrec = 0)
@@ -281,7 +317,7 @@ function _table_columns(t::RecordTable)
     # vocabulary. Resolve it there — through a bound parameter's already-decoded
     # column when one reads it, and straight from the reader otherwise, since a
     # source may filter on a column no parameter goes on to read.
-    by_file = Dict{String,Vector{Float64}}()
+    by_file = Dict{String, Vector{Float64}}()
     for spec in t.columns
         get!(by_file, spec.file_variable) do
             raw[spec.name]
@@ -293,31 +329,42 @@ function _table_columns(t::RecordTable)
         elseif haskey(nds.variables, name)
             _widen_column(name, nds.variables[name].data)
         else
-            throw(RefreshError(
-                "loader '$(t.loader)': record_filter.require_finite names file " *
-                "variable '$name', which the source does not deliver (present: " *
-                "$(EarthSciIO.variable_names(nds)))"))
+            throw(
+                RefreshError(
+                    "loader '$(t.loader)': record_filter.require_finite names file " *
+                        "variable '$name', which the source does not deliver (present: " *
+                        "$(EarthSciIO.variable_names(nds)))"
+                )
+            )
         end
-        length(col) == nrec || throw(RefreshError(
-            "loader '$(t.loader)': record_filter.require_finite column '$name' has " *
-            "$(length(col)) records but the table has $nrec"))
+        length(col) == nrec || throw(
+            RefreshError(
+                "loader '$(t.loader)': record_filter.require_finite column '$name' has " *
+                    "$(length(col)) records but the table has $nrec"
+            )
+        )
         for i in 1:nrec
             isfinite(col[i]) || (keep[i] = false)
         end
     end
 
     kept = count(keep)
-    out = Dict{String,Vector{Float64}}(name => col[keep] for (name, col) in raw)
-    kept == nrec || println("  [esio] loader '$(t.loader)': $nrec records read, ",
-                            "$kept kept by its declared record filter")
+    out = Dict{String, Vector{Float64}}(name => col[keep] for (name, col) in raw)
+    kept == nrec || println(
+        "  [esio] loader '$(t.loader)': $nrec records read, ",
+        "$kept kept by its declared record filter"
+    )
     t.cache = out
     return out
 end
 
 function _table_column(t::RecordTable, name::AbstractString)
     cols = _table_columns(t)
-    haskey(cols, name) || throw(RefreshError(
-        "loader '$(t.loader)' has no column '$name' (declared: $(sort!(collect(keys(cols)))))"))
+    haskey(cols, name) || throw(
+        RefreshError(
+            "loader '$(t.loader)' has no column '$name' (declared: $(sort!(collect(keys(cols)))))"
+        )
+    )
     return cols[name]
 end
 
@@ -329,14 +376,20 @@ end
 # from the index set sized by the same metaparameter.
 function _resolve_bound(doc, ctx::AbstractString, what::AbstractString, v)
     v isa Integer && return Int(v)
-    v isa AbstractString || throw(RefreshError(
-        "$ctx: range.$what must be an integer or a metaparameter name, got $(repr(v))"))
+    v isa AbstractString || throw(
+        RefreshError(
+            "$ctx: range.$what must be an integer or a metaparameter name, got $(repr(v))"
+        )
+    )
     mps = get(doc, "metaparameters", nothing)
     mp = mps isa AbstractDict ? get(mps, String(v), nothing) : nothing
     d = mp isa AbstractDict ? get(mp, "default", nothing) : nothing
-    d isa Integer || throw(RefreshError(
-        "$ctx: range.$what names $(repr(String(v))), which is not a metaparameter " *
-        "with an integer default"))
+    d isa Integer || throw(
+        RefreshError(
+            "$ctx: range.$what names $(repr(String(v))), which is not a metaparameter " *
+                "with an integer default"
+        )
+    )
     return Int(d)
 end
 
@@ -345,29 +398,40 @@ end
 # whether an author wrote it or the pushdown rewrite generated it.
 function _parse_select_axis(doc, ctx::AbstractString, i::Int, ax)
     (ax == "all") && return "all"
-    ax isa AbstractDict || throw(RefreshError(
-        "$ctx axis $i: expected \"all\" or an object, got $(repr(ax))"))
+    ax isa AbstractDict || throw(
+        RefreshError(
+            "$ctx axis $i: expected \"all\" or an object, got $(repr(ax))"
+        )
+    )
     ks = Set(String(k) for k in keys(ax))
     if ks == Set(["fixed"])
         fx = ax["fixed"]
-        return Dict{String,Any}("fixed" => Int(fx isa AbstractVector ? first(fx) : fx))
+        return Dict{String, Any}("fixed" => Int(fx isa AbstractVector ? first(fx) : fx))
     elseif ks == Set(["range"])
         r = ax["range"]
-        r isa AbstractDict && haskey(r, "stop") || throw(RefreshError(
-            "$ctx axis $i: range needs a \"stop\""))
+        r isa AbstractDict && haskey(r, "stop") || throw(
+            RefreshError(
+                "$ctx axis $i: range needs a \"stop\""
+            )
+        )
         start = haskey(r, "start") ? _resolve_bound(doc, "$ctx axis $i", "start", r["start"]) : 0
         stop = _resolve_bound(doc, "$ctx axis $i", "stop", r["stop"])
         step = haskey(r, "step") ? _resolve_bound(doc, "$ctx axis $i", "step", r["step"]) : 1
         step >= 1 || throw(RefreshError("$ctx axis $i: range.step must be >= 1, got $step"))
-        return Dict{String,Any}("range" =>
-            Dict{String,Any}("start" => start, "stop" => stop, "step" => step))
+        return Dict{String, Any}(
+            "range" =>
+                Dict{String, Any}("start" => start, "stop" => stop, "step" => step)
+        )
     elseif ks == Set(["gated_by"])
-        return Dict{String,Any}("gated_by" => String(ax["gated_by"]))
+        return Dict{String, Any}("gated_by" => String(ax["gated_by"]))
     end
-    throw(RefreshError(
-        "$ctx axis $i: unrecognised axis selector keys $(sort!(collect(ks))); one axis " *
-        "is \"all\", {\"fixed\": i}, {\"range\": {start, stop, step}} or " *
-        "{\"gated_by\": \"<derived set>\"}"))
+    throw(
+        RefreshError(
+            "$ctx axis $i: unrecognised axis selector keys $(sort!(collect(ks))); one axis " *
+                "is \"all\", {\"fixed\": i}, {\"range\": {start, stop, step}} or " *
+                "{\"gated_by\": \"<derived set>\"}"
+        )
+    )
 end
 
 function _parse_declared_select(doc, ctx::AbstractString, node)
@@ -391,10 +455,10 @@ function _parse_codes(ctx::AbstractString, vd)
     else
         u = codes["unmapped"]
         u == "drop" ? :drop : u == "error" ? :error :
-        u isa Real ? Float64(u) :
-        throw(RefreshError("$ctx.codes.unmapped must be \"drop\", \"error\" or a number"))
+            u isa Real ? Float64(u) :
+            throw(RefreshError("$ctx.codes.unmapped must be \"drop\", \"error\" or a number"))
     end
-    out = Dict{String,Float64}()
+    out = Dict{String, Float64}()
     for (k, v) in m
         v isa Real || throw(RefreshError("$ctx.codes.map[$(repr(String(k)))] must be a number"))
         out[ci ? uppercase(String(k)) : String(k)] = Float64(v)
@@ -429,9 +493,12 @@ end
 # this is the second of the two.
 function _apply_declared_select(key::AbstractString, arr::AbstractArray, axes)
     all(ax == "all" for ax in axes) && return arr
-    length(axes) == ndims(arr) || throw(RefreshError(
-        "provider '$key': the declared select has $(length(axes)) axes but the array " *
-        "is rank $(ndims(arr)) $(size(arr))"))
+    length(axes) == ndims(arr) || throw(
+        RefreshError(
+            "provider '$key': the declared select has $(length(axes)) axes but the array " *
+                "is rank $(ndims(arr)) $(size(arr))"
+        )
+    )
     idx = Any[]
     drop = Int[]
     for (i, ax) in enumerate(axes)
@@ -440,21 +507,30 @@ function _apply_declared_select(key::AbstractString, arr::AbstractArray, axes)
             push!(idx, Colon())
         elseif haskey(ax, "fixed")
             g = ax["fixed"]
-            0 <= g < dim || throw(RefreshError(
-                "provider '$key': the declared select reaches index $g on axis $i, " *
-                "whose native length is $dim"))
+            0 <= g < dim || throw(
+                RefreshError(
+                    "provider '$key': the declared select reaches index $g on axis $i, " *
+                        "whose native length is $dim"
+                )
+            )
             push!(idx, (g + 1):(g + 1))
             push!(drop, i)
         elseif haskey(ax, "range")
             r = ax["range"]
-            r["stop"] <= dim || throw(RefreshError(
-                "provider '$key': the declared select reaches index $(r["stop"] - 1) on " *
-                "axis $i, whose native length is $dim"))
+            r["stop"] <= dim || throw(
+                RefreshError(
+                    "provider '$key': the declared select reaches index $(r["stop"] - 1) on " *
+                        "axis $i, whose native length is $dim"
+                )
+            )
             push!(idx, (r["start"] + 1):r["step"]:r["stop"])
         else
-            throw(RefreshError(
-                "provider '$key': axis $i gates on '$(ax["gated_by"])', which is " *
-                "resolved by value-invention inside esm_problem, not by an eager sample"))
+            throw(
+                RefreshError(
+                    "provider '$key': axis $i gates on '$(ax["gated_by"])', which is " *
+                        "resolved by value-invention inside esm_problem, not by an eager sample"
+                )
+            )
         end
     end
     out = arr[idx...]
@@ -474,11 +550,11 @@ struct DeclaredProvider
     key::String                                   # "<ModelPath>.<param>"
     varname::String                               # its LOCAL name (the model array)
     inner::EarthSciIO.Provider
-    table::Union{Nothing,RecordTable}
+    table::Union{Nothing, RecordTable}
     column::String
-    select::Union{Nothing,Vector{Any}}
+    select::Union{Nothing, Vector{Any}}
     push_to_reader::Bool                          # where `select` is honoured
-    extent_mp::Union{Nothing,String}
+    extent_mp::Union{Nothing, String}
     unit_conversion::Any                          # the declared §8.5 conversion
 end
 
@@ -498,7 +574,7 @@ provider_extent_metaparameter(p::DeclaredProvider) = p.extent_mp
 function provider_gate_spec(p::DeclaredProvider)
     p.select === nothing && return nothing
     any(ax isa AbstractDict && haskey(ax, "gated_by") for ax in p.select) || return nothing
-    return Dict{String,Any}("axes" => p.select, "applies_to" => Any[p.varname])
+    return Dict{String, Any}("axes" => p.select, "applies_to" => Any[p.varname])
 end
 
 # Produce the values in the variable's DECLARED `units` (esm-spec §8.5).
@@ -529,8 +605,11 @@ function provider_sample(p::DeclaredProvider, t::Real; selection = nothing)
     elseif p.select !== nothing && p.push_to_reader
         nds = EarthSciIO.refresh(p.inner, Float64(t); select = _declared_to_native(p.select))
         vars = EarthSciIO.variable_names(nds)
-        length(vars) == 1 || throw(RefreshError(
-            "provider '$(p.key)': the reader returned $(length(vars)) variables $vars"))
+        length(vars) == 1 || throw(
+            RefreshError(
+                "provider '$(p.key)': the reader returned $(length(vars)) variables $vars"
+            )
+        )
         nds[vars[1]].data
     else
         provider_sample(p.inner, Float64(t))
@@ -539,8 +618,10 @@ function provider_sample(p::DeclaredProvider, t::Real; selection = nothing)
     # engine-side, the whole select does. Both produce the same array.
     p.select === nothing && return _convert_units(p, arr)
     axes = p.push_to_reader ?
-        Any[ax isa AbstractDict && haskey(ax, "fixed") ?
-            Dict{String,Any}("fixed" => 0) : "all" for ax in p.select] : p.select
+        Any[
+            ax isa AbstractDict && haskey(ax, "fixed") ?
+            Dict{String, Any}("fixed" => 0) : "all" for ax in p.select
+        ] : p.select
     return _convert_units(p, _apply_declared_select(p.key, arr, axes))
 end
 
@@ -575,31 +656,40 @@ function _data_update_rule(vd)
     return nothing
 end
 
-function providers_from_document(doc;
-                                 cache_root::AbstractString,
-                                 loaders = nothing,
-                                 url_overrides::AbstractDict = Dict{String,String}())
+function providers_from_document(
+        doc;
+        cache_root::AbstractString,
+        loaders = nothing,
+        url_overrides::AbstractDict = Dict{String, String}()
+    )
     raw = _doc_raw(doc)
     dss = get(raw, "data_sources", nothing)
-    dss isa AbstractDict || throw(RefreshError(
-        "providers_from_document: the document declares no data_sources"))
+    dss isa AbstractDict || throw(
+        RefreshError(
+            "providers_from_document: the document declares no data_sources"
+        )
+    )
     want = loaders === nothing ? nothing : Set(String(l) for l in loaders)
 
     # Group the consuming parameters by the source they name, so one source's
     # Cache and RecordTable are built once and shared.
-    consumers = Dict{String,Vector{NamedTuple}}()
-    _walk_model_variables(get(raw, "models", nothing), "", (key, local_name, vd) -> begin
-        rule = _data_update_rule(vd)
-        rule === nothing && return
-        sname = get(rule, "source", nothing)
-        sname isa AbstractString || return
-        from = get(rule, "from", nothing)
-        from isa AbstractDict || return
-        push!(get!(() -> NamedTuple[], consumers, String(sname)),
-              (key = key, local_name = local_name, from = from))
-    end)
+    consumers = Dict{String, Vector{NamedTuple}}()
+    _walk_model_variables(
+        get(raw, "models", nothing), "", (key, local_name, vd) -> begin
+            rule = _data_update_rule(vd)
+            rule === nothing && return
+            sname = get(rule, "source", nothing)
+            sname isa AbstractString || return
+            from = get(rule, "from", nothing)
+            from isa AbstractDict || return
+            push!(
+                get!(() -> NamedTuple[], consumers, String(sname)),
+                (key = key, local_name = local_name, from = from)
+            )
+        end
+    )
 
-    out = Dict{String,Any}()
+    out = Dict{String, Any}()
     for lname0 in sort!(String[String(k) for k in keys(dss)])
         lname = lname0
         want !== nothing && !(lname in want) && continue
@@ -613,16 +703,24 @@ function providers_from_document(doc;
             # An explicitly requested source MUST be constructible; an
             # unrestricted sweep just skips format-less sources.
             want === nothing && continue
-            throw(RefreshError(
-                "providers_from_document: data_sources.$lname declares no " *
-                "metadata.esio_format — cannot construct a provider for it"))
+            throw(
+                RefreshError(
+                    "providers_from_document: data_sources.$lname declares no " *
+                        "metadata.esio_format — cannot construct a provider for it"
+                )
+            )
         end
         src = get(ld, "source", nothing)
-        url = get(url_overrides, lname,
-                  src isa AbstractDict ? get(src, "url_template", nothing) : nothing)
-        url isa AbstractString || throw(RefreshError(
-            "providers_from_document: data_sources.$lname has no source.url_template " *
-            "(and no url_overrides entry)"))
+        url = get(
+            url_overrides, lname,
+            src isa AbstractDict ? get(src, "url_template", nothing) : nothing
+        )
+        url isa AbstractString || throw(
+            RefreshError(
+                "providers_from_document: data_sources.$lname has no source.url_template " *
+                    "(and no url_overrides entry)"
+            )
+        )
         cache = EarthSciIO.Cache(; root = joinpath(String(cache_root), lname))
 
         # ---- the source's DECLARED ingest (esm-spec §8.9) -------------------
@@ -632,7 +730,7 @@ function providers_from_document(doc;
         # something else silently (spec/registries.md §2.1).
         ropts = get(ld, "reader_options", nothing)
         reader_kwargs = ropts isa AbstractDict ?
-            Dict{Symbol,Any}(Symbol(k) => v for (k, v) in ropts) : Dict{Symbol,Any}()
+            Dict{Symbol, Any}(Symbol(k) => v for (k, v) in ropts) : Dict{Symbol, Any}()
         loader_select = _parse_declared_select(raw, "data_sources.$lname", ld)
         ext = get(ld, "extent", nothing)
         extent_mp = ext isa AbstractDict && get(ext, "metaparameter", nothing) isa AbstractString ?
@@ -647,10 +745,16 @@ function providers_from_document(doc;
         columns = ColumnSpec[]
         for b in binds
             fv = String(get(b.from, "file_variable", b.local_name))
-            push!(columns, ColumnSpec(b.key, fv,
-                _parse_codes("$(b.key).update.from", b.from),
-                parse_unit_conversion(get(b.from, "unit_conversion", nothing);
-                                      variable_name = b.key)))
+            push!(
+                columns, ColumnSpec(
+                    b.key, fv,
+                    _parse_codes("$(b.key).update.from", b.from),
+                    parse_unit_conversion(
+                        get(b.from, "unit_conversion", nothing);
+                        variable_name = b.key
+                    )
+                )
+            )
         end
 
         # A record filter or a code map makes the source a TABLE: one decode,
@@ -659,13 +763,23 @@ function providers_from_document(doc;
         if !isempty(require_finite) || any(c.codes !== nothing for c in columns)
             # A `require_finite` column no parameter reads is still needed to
             # compute the mask, so it is fetched alongside the bound ones.
-            file_vars = sort!(unique(vcat(String[c.file_variable for c in columns],
-                                          require_finite)))
-            table = RecordTable(lname,
-                EarthSciIO.const_provider(cache, String(url); format = String(fmt),
-                                          variables = file_vars, source_loader = lname,
-                                          reader_kwargs = reader_kwargs),
-                columns, require_finite, nothing)
+            file_vars = sort!(
+                unique(
+                    vcat(
+                        String[c.file_variable for c in columns],
+                        require_finite
+                    )
+                )
+            )
+            table = RecordTable(
+                lname,
+                EarthSciIO.const_provider(
+                    cache, String(url); format = String(fmt),
+                    variables = file_vars, source_loader = lname,
+                    reader_kwargs = reader_kwargs
+                ),
+                columns, require_finite, nothing
+            )
         end
 
         for (b, spec) in zip(binds, columns)
@@ -675,19 +789,22 @@ function providers_from_document(doc;
             inner = EarthSciIO.const_provider(
                 cache, String(url); format = String(fmt),
                 variables = [spec.file_variable], source_loader = lname,
-                reader_kwargs = reader_kwargs)
+                reader_kwargs = reader_kwargs
+            )
             # A declared select goes to the reader when it can fetch pre-sliced
             # AND no rows are filtered in front of it; otherwise engine-side.
             # Where it is applied is an optimization, never a semantic.
             push_down = sel !== nothing && table === nothing &&
-                        EarthSciIO.supports_selection(inner) &&
-                        !any(ax isa AbstractDict && haskey(ax, "gated_by") for ax in sel)
+                EarthSciIO.supports_selection(inner) &&
+                !any(ax isa AbstractDict && haskey(ax, "gated_by") for ax in sel)
             # `varname` is the LOCAL name — it is what the gate's `applies_to`
             # names, i.e. the model array. `column` is the flattened name, which
             # is how the shared decode indexes this parameter's column.
-            out[key] = DeclaredProvider(key, b.local_name, inner, table, spec.name,
-                                        sel, push_down, extent_mp,
-                                        spec.unit_conversion)
+            out[key] = DeclaredProvider(
+                key, b.local_name, inner, table, spec.name,
+                sel, push_down, extent_mp,
+                spec.unit_conversion
+            )
         end
     end
     return out
@@ -713,7 +830,7 @@ mutable struct ZarrSink
     base_url::String                 # file:// URL or path of the output store
     gridding::Vector{VarGridding}    # per-base-variable flat→gridded layout (RFC §7)
     coords::Vector{DimCoord}         # CF dimension coordinates (§8.3; may be empty)
-    var_attrs::Dict{String,Dict{String,Any}}  # base var => CF variable attrs (units, …)
+    var_attrs::Dict{String, Dict{String, Any}}  # base var => CF variable attrs (units, …)
     output_times::Vector{Float64}    # solver-second write anchors
     profile::Symbol                  # :diagnostic | :checkpoint (codec params)
     records_per_shard::Int           # time records packed per flushed shard object
@@ -743,16 +860,18 @@ document's `domain.independent_variable` via `meta` (RFC §7), falling back to
 Every variable's on-disk dims are the record axis FIRST, then its spatial axes
 (`output_var_dims`), so a scalar variable's dims are exactly `[time_dim]`.
 """
-function build_zarr_sink(var_map::AbstractDict, base_url::AbstractString;
-                         output_times, profile::Symbol = :diagnostic,
-                         records_per_shard::Integer = 8,
-                         time_dim::Union{Nothing,AbstractString} = nothing,
-                         meta::Union{Nothing,OutputMeta} = nothing,
-                         variables::Union{Nothing,AbstractVector} = nothing)
+function build_zarr_sink(
+        var_map::AbstractDict, base_url::AbstractString;
+        output_times, profile::Symbol = :diagnostic,
+        records_per_shard::Integer = 8,
+        time_dim::Union{Nothing, AbstractString} = nothing,
+        meta::Union{Nothing, OutputMeta} = nothing,
+        variables::Union{Nothing, AbstractVector} = nothing
+    )
     # The record-axis name is the document's `domain.independent_variable`
     # (RFC §7), carried on the OutputMeta; an explicit kwarg still wins.
     tdim = time_dim !== nothing ? String(time_dim) :
-           meta !== nothing ? meta.time_dim : DEFAULT_TIME_DIM
+        meta !== nothing ? meta.time_dim : DEFAULT_TIME_DIM
     g = meta === nothing ? derive_output_gridding(var_map) :
         derive_output_gridding(var_map, meta)
     # Optional per-grid restriction (RFC §9): keep only the named base variables, so
@@ -761,14 +880,19 @@ function build_zarr_sink(var_map::AbstractDict, base_url::AbstractString;
         want = Set(String(v) for v in variables)
         available = String[x.base for x in g]
         g = VarGridding[x for x in g if x.base in want]
-        isempty(g) && throw(OutputError(
-            "build_zarr_sink: `variables` $(collect(want)) selected no variables from " *
-            "$(available)"))
+        isempty(g) && throw(
+            OutputError(
+                "build_zarr_sink: `variables` $(collect(want)) selected no variables from " *
+                    "$(available)"
+            )
+        )
     end
     coords = meta === nothing ? DimCoord[] : plan_dimension_coordinates(g, meta)
-    vattrs = meta === nothing ? Dict{String,Dict{String,Any}}() : meta.var_attrs
-    return ZarrSink(String(base_url), g, coords, vattrs, collect(Float64, output_times),
-                    profile, Int(records_per_shard), tdim, nothing, nothing, nothing)
+    vattrs = meta === nothing ? Dict{String, Dict{String, Any}}() : meta.var_attrs
+    return ZarrSink(
+        String(base_url), g, coords, vattrs, collect(Float64, output_times),
+        profile, Int(records_per_shard), tdim, nothing, nothing, nothing
+    )
 end
 
 build_zarr_sink(prep, base_url::AbstractString; kwargs...) =
@@ -781,7 +905,7 @@ function sink_open!(s::ZarrSink)
     # The growable time axis FIRST (length 0 placeholder — it grows one shard per
     # flush), then the distinct spatial dims in first-seen order. Record-axis-first
     # is the one ordering decision, and it is made once in `output_var_dims`.
-    dims = Pair{String,Int}[s.time_dim => 0]
+    dims = Pair{String, Int}[s.time_dim => 0]
     seen = Set{String}()
     for g in s.gridding, d in eachindex(g.dimnames)
         nm = g.dimnames[d]
@@ -791,22 +915,22 @@ function sink_open!(s::ZarrSink)
     end
 
     # Per-variable CF attrs (units, standard_name, description) from the doc.
-    vars = Pair{String,EarthSciIO.OutputVar}[]
+    vars = Pair{String, EarthSciIO.OutputVar}[]
     for g in s.gridding
         odims = output_var_dims(g, s.time_dim)                    # time FIRST
-        attrs = Dict{String,Any}(get(s.var_attrs, g.base, Dict{String,Any}()))
+        attrs = Dict{String, Any}(get(s.var_attrs, g.base, Dict{String, Any}()))
         push!(vars, g.base => EarthSciIO.OutputVar(odims, Float64; attrs = attrs))
     end
 
     # CF dimension coordinates (§8.3): name == dim, 1-D values + standard_name/units/axis.
-    coords = Pair{String,Tuple{Vector,Dict{String,Any}}}[]
+    coords = Pair{String, Tuple{Vector, Dict{String, Any}}}[]
     for c in s.coords
         push!(coords, c.name => (c.values, c.attrs))
     end
 
     # Default chunk/shard: whole spatial extent per chunk (one map per read); time
     # inner-chunk = 1 record, shard packs `records_per_shard` records per object.
-    chunk = Dict{String,Int}(); shard = Dict{String,Int}()
+    chunk = Dict{String, Int}(); shard = Dict{String, Int}()
     for (nm, len) in dims
         if nm == s.time_dim
             chunk[nm] = 1
@@ -817,10 +941,12 @@ function sink_open!(s::ZarrSink)
         end
     end
 
-    schema = EarthSciIO.OutputSchema(; dims = dims, time_dim = s.time_dim, vars = vars,
-                                     coords = coords,
-                                     chunk_shape = chunk, shard_shape = shard,
-                                     profile = s.profile)
+    schema = EarthSciIO.OutputSchema(;
+        dims = dims, time_dim = s.time_dim, vars = vars,
+        coords = coords,
+        chunk_shape = chunk, shard_shape = shard,
+        profile = s.profile
+    )
     # The registry is the discovery seam (WRITER_REGISTRY["zarr"] is :active); the
     # binding knows it wants zarr, so it constructs the writer directly.
     s.writer = EarthSciIO.ZarrWriter()
@@ -829,14 +955,20 @@ function sink_open!(s::ZarrSink)
 end
 
 function sink_write!(s::ZarrSink, snap::StateSnapshot; selection = nothing)
-    selection === nothing || throw(OutputError(
-        "ZarrSink: `selection`/partial writes are inert in v1 (host-gather delivers " *
-        "the whole state as a single offset-0 slab)"))
-    s.handle === nothing && throw(OutputError(
-        "ZarrSink.sink_write! before sink_open!; open the sink first"))
+    selection === nothing || throw(
+        OutputError(
+            "ZarrSink: `selection`/partial writes are inert in v1 (host-gather delivers " *
+                "the whole state as a single offset-0 slab)"
+        )
+    )
+    s.handle === nothing && throw(
+        OutputError(
+            "ZarrSink.sink_write! before sink_open!; open the sink first"
+        )
+    )
     isempty(snap.state) && throw(OutputError("ZarrSink: empty StateSnapshot.state"))
     u = snap.state[1][1]::AbstractArray            # v1: the whole flat state, offset 0
-    arrays = Dict{String,Any}()
+    arrays = Dict{String, Any}()
     for g in s.gridding
         # A scalar's shape is `[]`, so this is a 0-d `Array{Float64,0}` — the
         # gridded array of a variable whose only on-disk axis is the record axis.
@@ -877,44 +1009,64 @@ function zarr_restart_state(prep, base_url::AbstractString; cache_dir = nothing)
     base = EarthSciIO._output_base(String(base_url))
 
     man = EarthSciIO.read_output_manifest(joinpath(base, "output_manifest.json"))
-    man === nothing && throw(OutputError(
-        "no output manifest under $base; nothing to restart from (was the store " *
-        "opened by a ZarrSink and at least one shard committed?)"))
-    man.last_t === nothing && throw(OutputError(
-        "output manifest at $base has no committed record (last_t is null); a shard " *
-        "must commit — via a full shard, sink_flush!, or sink_close! — before restart"))
+    man === nothing && throw(
+        OutputError(
+            "no output manifest under $base; nothing to restart from (was the store " *
+                "opened by a ZarrSink and at least one shard committed?)"
+        )
+    )
+    man.last_t === nothing && throw(
+        OutputError(
+            "output manifest at $base has no committed record (last_t is null); a shard " *
+                "must commit — via a full shard, sink_flush!, or sink_close! — before restart"
+        )
+    )
     nrec = man.n_records
     nrec >= 1 || throw(OutputError("output manifest reports 0 committed records"))
 
     cd = cache_dir === nothing ? joinpath(base, "_restart_cache") : String(cache_dir)
     cache = EarthSciIO.Cache(EarthSciIO.LocalStore(cd); offline = false)
     varnames = String[g.base for g in gridding]
-    nds = EarthSciIO.read_store(EarthSciIO.ZarrReader(), cache, base_url;
-                                variables = varnames)
+    nds = EarthSciIO.read_store(
+        EarthSciIO.ZarrReader(), cache, base_url;
+        variables = varnames
+    )
 
     u0 = zeros(Float64, length(prep.var_map))
     tname = meta.time_dim
     for g in gridding
         v = nds.variables[g.base]
         tdim = findfirst(==(tname), v.dims)
-        tdim === nothing && throw(OutputError(
-            "restart: variable '$(g.base)' has no '$tname' axis (dims $(v.dims))"))
+        tdim === nothing && throw(
+            OutputError(
+                "restart: variable '$(g.base)' has no '$tname' axis (dims $(v.dims))"
+            )
+        )
         # last COMMITTED time index (1-based); the array may be longer only if a
         # crash left an uncommitted shape bump, so clamp to the manifest count.
         ti = min(nrec, size(v.data, tdim))
         # Slice with a length-1 RANGE and drop the axis, so a scalar variable
         # (dims == [time_dim], rank 1) yields a 0-d array rather than a bare
         # Float64 that `gather_flat!` could not accept.
-        slab = dropdims(v.data[ntuple(d -> d == tdim ? (ti:ti) : Colon(),
-                                      ndims(v.data))...]; dims = tdim)
+        slab = dropdims(
+            v.data[
+                ntuple(
+                    d -> d == tdim ? (ti:ti) : Colon(),
+                    ndims(v.data)
+                )...,
+            ]; dims = tdim
+        )
         # reorder the sliced spatial slab into the gridding's dim order if the reader
         # returned the axes in a different order (robust to dim reordering).
         spatial = String[d for d in v.dims if d != tname]
         if spatial != g.dimnames
             perm = Int[findfirst(==(dn), spatial) for dn in g.dimnames]
-            any(isnothing, perm) && throw(OutputError(
-                "restart: variable '$(g.base)' on-disk dims $(spatial) do not match " *
-                "the model gridding dims $(g.dimnames)"))
+            any(isnothing, perm) && throw(
+                OutputError(
+                    "restart: variable '$(g.base)' on-disk dims $(spatial) do not match " *
+                        "the model gridding dims $(g.dimnames)"
+                )
+            )
             slab = permutedims(slab, perm)
         end
         gather_flat!(u0, g, slab)

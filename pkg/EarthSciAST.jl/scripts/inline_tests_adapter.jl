@@ -53,12 +53,12 @@
 # more Manifest to keep alive for no coverage.
 import Pkg
 let env = normpath(joinpath(@__DIR__, "compiler_agreement_env")),
-    manifest = joinpath(env, "Manifest.toml")
+        manifest = joinpath(env, "Manifest.toml")
     bootstrap() = begin
-        Pkg.activate(env; io=devnull)
+        Pkg.activate(env; io = devnull)
         isfile(manifest) ||
-            Pkg.develop(path=normpath(joinpath(@__DIR__, "..")); io=devnull)
-        Pkg.instantiate(; io=devnull)
+            Pkg.develop(path = normpath(joinpath(@__DIR__, "..")); io = devnull)
+        Pkg.instantiate(; io = devnull)
     end
     try
         bootstrap()
@@ -67,7 +67,7 @@ let env = normpath(joinpath(@__DIR__, "compiler_agreement_env")),
         # that has moved on and then contradict it; one that cannot instantiate
         # has no value, so rebuild rather than fail the gate.
         @warn "compiler_agreement_env did not instantiate; rebuilding Manifest.toml" exception = (err, catch_backtrace())
-        rm(manifest; force=true)
+        rm(manifest; force = true)
         bootstrap()
     end
 end
@@ -89,9 +89,11 @@ const COMPILER_VOCABULARY = ("interpreter", "native", "xla", "mtk", "sympy")
 # REFUSAL — a named exclusion only where the fixture's ledger admits it, never
 # a wrong answer and never a silent skip. Anything else is an ordinary
 # assertion failure.
-const REFUSAL_CODES = ("compiler_refused_rule", "compiler_unavailable",
-                       "unevaluable_operator", "unlowered_operator",
-                       "unsupported_construct", "float32_unsupported")
+const REFUSAL_CODES = (
+    "compiler_refused_rule", "compiler_unavailable",
+    "unevaluable_operator", "unlowered_operator",
+    "unsupported_construct", "float32_unsupported",
+)
 
 function parse_args(args)
     manifest = nothing
@@ -113,9 +115,11 @@ function parse_args(args)
     output === nothing && error("--output is required")
     compiler === nothing && error("--compiler is required")
     compiler in COMPILER_VOCABULARY ||
-        error("--compiler must be one of " * join(COMPILER_VOCABULARY, ", ") *
-              ", got '$compiler'")
-    (manifest, output, compiler)
+        error(
+        "--compiler must be one of " * join(COMPILER_VOCABULARY, ", ") *
+            ", got '$compiler'"
+    )
+    return (manifest, output, compiler)
 end
 
 # Manifest `path` resolves against the manifest's OWN directory first (a
@@ -130,6 +134,7 @@ function tests_root(manifest_path)
         parent == d && return dirname(abspath(manifest_path))
         d = parent
     end
+    return
 end
 
 function fixture_path(manifest_path, fx)
@@ -180,9 +185,10 @@ function compiler_unavailable_reason(compiler)
 end
 
 # The whole-output `unavailable` answer.
-unavailable_payload(compiler, reason) = Dict{String,Any}(
+unavailable_payload(compiler, reason) = Dict{String, Any}(
     "binding" => BINDING, "compiler" => compiler,
-    "status" => "unavailable", "reason" => first(reason, 400))
+    "status" => "unavailable", "reason" => first(reason, 400)
+)
 
 # Thrown out of `run_fixture` when a fixture's run says the COMPILER is
 # unavailable, so `main` can replace the whole output.
@@ -197,24 +203,30 @@ function run_fixture(manifest, fx, manifest_path, compiler)
     isfile(path) || error("fixture document not found at $path")
     file = load_path(path)
     integ = manifest.integrators.julia
-    results = run_inline_tests(file;
-                               model_name=String(fx.model),
-                               alg=solver_alg(file),
-                               reltol=Float64(integ.reltol),
-                               abstol=Float64(integ.abstol),
-                               base_dir=dirname(path),
-                               compiler=Symbol(compiler))
-    isempty(results) && error("the document declares no inline assertions for model " *
-                              String(fx.model))
+    results = run_inline_tests(
+        file;
+        model_name = String(fx.model),
+        alg = solver_alg(file),
+        reltol = Float64(integ.reltol),
+        abstol = Float64(integ.abstol),
+        base_dir = dirname(path),
+        compiler = Symbol(compiler)
+    )
+    isempty(results) && error(
+        "the document declares no inline assertions for model " *
+            String(fx.model)
+    )
 
-    entries = [Dict{String,Any}(
-                   "test_id" => r.test_id,
-                   "assertion_idx" => r.assertion_idx,
-                   "variable" => r.variable,
-                   "passed" => r.passed,
-                   "actual" => r.actual === nothing ? nothing : Float64(r.actual),
-                   "message" => r.message,
-               ) for r in results]
+    entries = [
+        Dict{String, Any}(
+            "test_id" => r.test_id,
+            "assertion_idx" => r.assertion_idx,
+            "variable" => r.variable,
+            "passed" => r.passed,
+            "actual" => r.actual === nothing ? nothing : Float64(r.actual),
+            "message" => r.message,
+        ) for r in results
+    ]
 
     # A run in which EVERY assertion failed carrying ONE coded diagnostic is
     # this compiler declining the document, not this compiler getting every
@@ -222,21 +234,21 @@ function run_fixture(manifest, fx, manifest_path, compiler)
     # bucket as a numeric defect, which is the one conflation §5.45.3 forbids.
     codes = [refusal_code(r.message) for r in results if !r.passed]
     if length(codes) == length(results) && !isempty(codes) &&
-       all(c -> c !== nothing, codes) && length(unique(codes)) == 1
+            all(c -> c !== nothing, codes) && length(unique(codes)) == 1
         codes[1] == "compiler_unavailable" &&
             throw(CompilerUnavailable(results[1].message))
-        return Dict{String,Any}(
+        return Dict{String, Any}(
             "status" => "refused",
             "code" => codes[1],
             "reason" => first(results[1].message, 400),
         )
     end
-    return Dict{String,Any}("assertions" => entries)
+    return Dict{String, Any}("assertions" => entries)
 end
 
 function write_payload(output_path, payload)
     mkpath(dirname(abspath(output_path)))
-    open(output_path, "w") do io
+    return open(output_path, "w") do io
         JSON3.write(io, payload)
         write(io, "\n")
     end
@@ -252,7 +264,7 @@ function main(argv)
         return 0
     end
 
-    fixtures = Dict{String,Any}()
+    fixtures = Dict{String, Any}()
     failed = String[]
     for fx in manifest.fixtures
         id = String(fx.id)
@@ -260,7 +272,7 @@ function main(argv)
             run_fixture(manifest, fx, manifest_path, compiler)
         catch err
             if err isa CompilerUnavailable ||
-               (err isa SimulateError && err.code == ERROR_CODES.COMPILER_UNAVAILABLE)
+                    (err isa SimulateError && err.code == ERROR_CODES.COMPILER_UNAVAILABLE)
                 # A fact about the BINDING, not about a document: it is the
                 # whole output and the remaining fixtures are not attempted.
                 why = err isa CompilerUnavailable ? err.reason : sprint(showerror, err)
@@ -270,23 +282,31 @@ function main(argv)
             msg = sprint(showerror, err)
             code = refusal_code(msg)
             if code !== nothing
-                Dict{String,Any}("status" => "refused", "code" => code,
-                                 "reason" => first(msg, 400))
+                Dict{String, Any}(
+                    "status" => "refused", "code" => code,
+                    "reason" => first(msg, 400)
+                )
             else
                 push!(failed, id)
-                Dict{String,Any}("error" => first(msg, 800))
+                Dict{String, Any}("error" => first(msg, 800))
             end
         end
         fixtures[id] = entry
     end
 
-    write_payload(output_path, Dict{String,Any}("binding" => BINDING, "compiler" => compiler,
-                                                "fixtures" => fixtures))
+    write_payload(
+        output_path, Dict{String, Any}(
+            "binding" => BINDING, "compiler" => compiler,
+            "fixtures" => fixtures
+        )
+    )
     # A non-zero exit WITH a parsable report is legal and is how a run that
     # broke on one fixture still hands the runner the rest.
     isempty(failed) && return 0
-    println(stderr, "inline_tests_adapter: $(length(failed)) fixture(s) errored: " *
-                    join(failed, ", "))
+    println(
+        stderr, "inline_tests_adapter: $(length(failed)) fixture(s) errored: " *
+            join(failed, ", ")
+    )
     return 1
 end
 

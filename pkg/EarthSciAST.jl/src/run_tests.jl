@@ -135,23 +135,27 @@ struct AssertionResult
     variable::String
     time::Float64
     expected::Float64
-    actual::Union{Float64,Nothing}
+    actual::Union{Float64, Nothing}
     status::AssertionStatus
     message::String
     duration_s::Float64
-    reduce::Union{String,Nothing}
+    reduce::Union{String, Nothing}
     rtol::Float64
     atol::Float64
 end
 
 # Historical 12-argument construction (pre-unification field set) — the §6.6.5
 # fields default to "no reduction declared / tolerance never resolved".
-AssertionResult(file, container_kind::Symbol, container_name, test_id,
-                assertion_idx::Integer, variable, time::Real, expected::Real,
-                actual, status::AssertionStatus, message, duration_s::Real) =
-    AssertionResult(file, container_kind, container_name, test_id,
-                    assertion_idx, variable, time, expected, actual, status,
-                    message, duration_s, nothing, 0.0, 0.0)
+AssertionResult(
+    file, container_kind::Symbol, container_name, test_id,
+    assertion_idx::Integer, variable, time::Real, expected::Real,
+    actual, status::AssertionStatus, message, duration_s::Real
+) =
+    AssertionResult(
+    file, container_kind, container_name, test_id,
+    assertion_idx, variable, time, expected, actual, status,
+    message, duration_s, nothing, 0.0, 0.0
+)
 
 # Backcompat virtual properties: `r.passed` predates the `status` field on the
 # PDE runner's results, and `r.model` was that runner's name for
@@ -174,18 +178,20 @@ Base.propertynames(::AssertionResult) =
 # substrings against the absolute discovered path AND the path relative to
 # `esm_root()`, so users can write either "components/gaschem/geoschem_fullchem.esm"
 # or just "geoschem_fullchem.esm".
-function _resolve_exclude(exclude::Union{Nothing,AbstractVector{<:AbstractString}})
+function _resolve_exclude(exclude::Union{Nothing, AbstractVector{<:AbstractString}})
     if exclude !== nothing
         return collect(String, exclude)
     end
     raw = get(ENV, "ESM_TESTS_EXCLUDE", "")
     isempty(raw) && return String[]
-    parts = split(raw, r"[;:]"; keepempty=false)
+    parts = split(raw, r"[;:]"; keepempty = false)
     return String[String(strip(p)) for p in parts if !isempty(strip(p))]
 end
 
-function _is_excluded(path::AbstractString, base::AbstractString,
-                     patterns::Vector{String})
+function _is_excluded(
+        path::AbstractString, base::AbstractString,
+        patterns::Vector{String}
+    )
     isempty(patterns) && return false
     rel = startswith(path, base) ? relpath(path, base) : path
     for pat in patterns
@@ -210,9 +216,11 @@ Pass it to walk a different repo (e.g. EarthSciModels) — do NOT overwrite
 of substring patterns; any discovered file whose absolute or root-relative
 path contains a pattern is dropped.
 """
-function discover_esm_files(roots::AbstractVector{<:AbstractString};
-                            root::AbstractString=esm_root(),
-                            exclude::Union{Nothing,AbstractVector{<:AbstractString}}=nothing)
+function discover_esm_files(
+        roots::AbstractVector{<:AbstractString};
+        root::AbstractString = esm_root(),
+        exclude::Union{Nothing, AbstractVector{<:AbstractString}} = nothing
+    )
     base = String(root)
     patterns = _resolve_exclude(exclude)
     found = String[]
@@ -246,8 +254,8 @@ const _DEFAULT_REL_TOL = 1.0e-6
 # MTK engine's per-test solve and `run_inline_tests`' keyword defaults
 # (tree-walk path): assertion expectations are pinned to many digits, so the
 # integration error must sit well below the default rel=1e-6 assertion gate.
-const DEFAULT_TEST_RELTOL = 1e-10
-const DEFAULT_TEST_ABSTOL = 1e-12
+const DEFAULT_TEST_RELTOL = 1.0e-10
+const DEFAULT_TEST_ABSTOL = 1.0e-12
 
 """
     _test_integration_tolerances(solver_hints) -> (reltol, abstol)
@@ -340,12 +348,14 @@ end
 # `assertion_nonfinite` conformance category (CONFORMANCE_SPEC §5.20) because
 # it never did. NaN fails under the bound alone, so only the infinite case
 # depends on this.
-function _check_assertion(actual::Real, expected::Float64,
-                          rtol::Float64, atol::Float64)
+function _check_assertion(
+        actual::Real, expected::Float64,
+        rtol::Float64, atol::Float64
+    )
     if rtol == 0.0 && atol == 0.0
         return Float64(actual) == expected
     end
-    return isapprox(Float64(actual), expected; rtol=rtol, atol=atol)
+    return isapprox(Float64(actual), expected; rtol = rtol, atol = atol)
 end
 
 # The failure-message format both runners record when `_check_assertion`
@@ -366,10 +376,12 @@ _assertion_fail_message(actual, expected, rtol::Float64, atol::Float64) =
 # exposes compiled-system properties by stripping the system's own name
 # prefix, so the accessible property for "ModelName.sub.var" is "sub_var"
 # (model-relative form), not "ModelName_sub_var".
-const _NO_RENAMES = Dict{String,String}()
+const _NO_RENAMES = Dict{String, String}()
 
-function _resolve_handle(simp, sys_name::Symbol, var_spec::AbstractString,
-                         renames::AbstractDict=_NO_RENAMES)
+function _resolve_handle(
+        simp, sys_name::Symbol, var_spec::AbstractString,
+        renames::AbstractDict = _NO_RENAMES
+    )
     _require_mtk()   # guard only: fail early with a clear error when MTK is absent
     sanitized = replace(String(var_spec), "." => "_")
     qualified = Symbol(String(sys_name) * "_" * sanitized)
@@ -387,7 +399,7 @@ function _resolve_handle(simp, sys_name::Symbol, var_spec::AbstractString,
     # so this is the correct lookup for subsystem-composed models.
     sys_prefix = String(sys_name) * "."
     if startswith(String(var_spec), sys_prefix)
-        relative = String(var_spec)[(length(sys_prefix)+1):end]
+        relative = String(var_spec)[(length(sys_prefix) + 1):end]
         relative_san = Symbol(replace(relative, "." => "_"))
         if hasproperty(simp, relative_san)
             return getproperty(simp, relative_san)
@@ -410,28 +422,39 @@ function _resolve_handle(simp, sys_name::Symbol, var_spec::AbstractString,
             hasproperty(simp, merged) && return getproperty(simp, merged)
         end
     end
-    throw(ArgumentError("Variable '$(var_spec)' not found on compiled system " *
-                         "(tried '$(qualified)', '$(bare)', and model-relative form)."))
+    throw(
+        ArgumentError(
+            "Variable '$(var_spec)' not found on compiled system " *
+                "(tried '$(qualified)', '$(bare)', and model-relative form)."
+        )
+    )
 end
 
 # Package identities of the lazily-required modeling / solver stack, grouped
 # here so each UUID literal lives in exactly one place.
 const _MTK_PKGID = Base.PkgId(
-    Base.UUID("961ee093-0014-501f-94e3-6117800e7a78"), "ModelingToolkit")
+    Base.UUID("961ee093-0014-501f-94e3-6117800e7a78"), "ModelingToolkit"
+)
 const _ROSENBROCK_PKGID = Base.PkgId(
-    Base.UUID("43230ef6-c299-4910-a778-202eb28ce4ce"), "OrdinaryDiffEqRosenbrock")
+    Base.UUID("43230ef6-c299-4910-a778-202eb28ce4ce"), "OrdinaryDiffEqRosenbrock"
+)
 const _TSIT5_PKGID = Base.PkgId(
-    Base.UUID("b1df2697-797e-41e3-8120-5422d3b24e4a"), "OrdinaryDiffEqTsit5")
+    Base.UUID("b1df2697-797e-41e3-8120-5422d3b24e4a"), "OrdinaryDiffEqTsit5"
+)
 const _CATALYST_PKGID = Base.PkgId(
-    Base.UUID("479239e8-5488-4da2-87a7-35f2df7eef83"), "Catalyst")
+    Base.UUID("479239e8-5488-4da2-87a7-35f2df7eef83"), "Catalyst"
+)
 
 # Lazy module lookup so this file can `include` without a hard dep on MTK
 # being loaded at module-init time.
 function _require_mtk()
     mod = _try_require(_MTK_PKGID)
-    mod === nothing && throw(ArgumentError(
-        "run_esm_tests requires ModelingToolkit to be loaded. " *
-        "Call `using ModelingToolkit` first."))
+    mod === nothing && throw(
+        ArgumentError(
+            "run_esm_tests requires ModelingToolkit to be loaded. " *
+                "Call `using ModelingToolkit` first."
+        )
+    )
     return mod
 end
 
@@ -460,9 +483,11 @@ const STIFF_SOLVER_OVERRIDE_FILENAMES = Set(["pollu.esm"])
 #
 # `stiff_files` is the FALLBACK: the set of .esm basenames forced onto
 # Rosenbrock23 when the document declares nothing.
-function _pick_solver(file::AbstractString="";
-                      stiff_files=STIFF_SOLVER_OVERRIDE_FILENAMES,
-                      stiffness=nothing)
+function _pick_solver(
+        file::AbstractString = "";
+        stiff_files = STIFF_SOLVER_OVERRIDE_FILENAMES,
+        stiffness = nothing
+    )
     rb = _try_require(_ROSENBROCK_PKGID)
     if rb !== nothing && (stiffness == "high" || basename(file) in stiff_files)
         return (rb.Rosenbrock23(), :rosenbrock23)
@@ -472,10 +497,13 @@ function _pick_solver(file::AbstractString="";
     rb !== nothing && return (rb.Rosenbrock23(), :rosenbrock23)
     # Named for neither entry point: `run_inline_tests` reaches here too now
     # that it picks a solver for a caller who named none.
-    throw(ArgumentError(
-        "running a document's tests requires an OrdinaryDiffEq solver to be " *
-        "loaded (`using OrdinaryDiffEqTsit5` or `using OrdinaryDiffEqRosenbrock`), " *
-        "or an explicit `alg`."))
+    throw(
+        ArgumentError(
+            "running a document's tests requires an OrdinaryDiffEq solver to be " *
+                "loaded (`using OrdinaryDiffEqTsit5` or `using OrdinaryDiffEqRosenbrock`), " *
+                "or an explicit `alg`."
+        )
+    )
 end
 
 # ---------------------------------------------------------------------------
@@ -507,17 +535,21 @@ end
 # One assertion's evaluated outcome, buffered until the whole test's wall time
 # is known (see the timing comment in `_run_test_frame!`) and only then
 # stamped into `AssertionResult`s with the even per-assertion duration share.
-const _AssertionOutcome = @NamedTuple{idx::Int, variable::String, time::Float64,
-                                      reduce::Union{String,Nothing},
-                                      expected::Float64,
-                                      actual::Union{Float64,Nothing},
-                                      rtol::Float64, atol::Float64,
-                                      status::AssertionStatus, message::String}
+const _AssertionOutcome = @NamedTuple{
+    idx::Int, variable::String, time::Float64,
+    reduce::Union{String, Nothing},
+    expected::Float64,
+    actual::Union{Float64, Nothing},
+    rtol::Float64, atol::Float64,
+    status::AssertionStatus, message::String,
+}
 
-function _run_test_frame!(results::Vector{AssertionResult}, engine,
-                          file::AbstractString, container_kind::Symbol,
-                          container_name::AbstractString, container_tolerance,
-                          tests)
+function _run_test_frame!(
+        results::Vector{AssertionResult}, engine,
+        file::AbstractString, container_kind::Symbol,
+        container_name::AbstractString, container_tolerance,
+        tests
+    )
     for t in tests
         t_start = time()
         handle = _engine_setup(engine, t)
@@ -528,17 +560,23 @@ function _run_test_frame!(results::Vector{AssertionResult}, engine,
         # overcount the test's wall time N-fold.
         outcomes = _AssertionOutcome[]
         for (i, a) in enumerate(t.assertions)
-            rtol, atol = _resolve_tolerance(container_tolerance, t.tolerance,
-                                             a.tolerance)
+            rtol, atol = _resolve_tolerance(
+                container_tolerance, t.tolerance,
+                a.tolerance
+            )
             if handle isa String   # engine setup failed for this test
-                push!(outcomes, (idx=i, variable=a.variable, time=a.time,
-                                  reduce=a.reduce, expected=a.expected,
-                                  actual=nothing, rtol=rtol, atol=atol,
-                                  status=ERROR, message=handle))
+                push!(
+                    outcomes, (
+                        idx = i, variable = a.variable, time = a.time,
+                        reduce = a.reduce, expected = a.expected,
+                        actual = nothing, rtol = rtol, atol = atol,
+                        status = ERROR, message = handle,
+                    )
+                )
                 continue
             end
 
-            local actual_val::Union{Float64,Nothing} = nothing
+            local actual_val::Union{Float64, Nothing} = nothing
             local status::AssertionStatus = FAIL
             local msg::String = ""
             try
@@ -546,8 +584,10 @@ function _run_test_frame!(results::Vector{AssertionResult}, engine,
                 if _check_assertion(actual_val, a.expected, rtol, atol)
                     status = PASS
                 else
-                    msg = _assertion_fail_message(actual_val, a.expected,
-                                                  rtol, atol)
+                    msg = _assertion_fail_message(
+                        actual_val, a.expected,
+                        rtol, atol
+                    )
                 end
             catch err
                 actual_val = nothing
@@ -555,18 +595,25 @@ function _run_test_frame!(results::Vector{AssertionResult}, engine,
                 msg = _engine_error_message(engine, err)
             end
 
-            push!(outcomes, (idx=i, variable=a.variable, time=a.time,
-                              reduce=a.reduce, expected=a.expected,
-                              actual=actual_val, rtol=rtol, atol=atol,
-                              status=status, message=msg))
+            push!(
+                outcomes, (
+                    idx = i, variable = a.variable, time = a.time,
+                    reduce = a.reduce, expected = a.expected,
+                    actual = actual_val, rtol = rtol, atol = atol,
+                    status = status, message = msg,
+                )
+            )
         end
 
         duration_share = (time() - t_start) / max(length(outcomes), 1)
         for o in outcomes
-            push!(results, AssertionResult(
-                String(file), container_kind, String(container_name), t.id,
-                o.idx, o.variable, o.time, o.expected, o.actual, o.status,
-                o.message, duration_share, o.reduce, o.rtol, o.atol))
+            push!(
+                results, AssertionResult(
+                    String(file), container_kind, String(container_name), t.id,
+                    o.idx, o.variable, o.time, o.expected, o.actual, o.status,
+                    o.message, duration_share, o.reduce, o.rtol, o.atol
+                )
+            )
         end
     end
     return results
@@ -584,10 +631,12 @@ end
 # metadata by the EarthSciAST Catalyst extension (the Core.eval path builds
 # bare symbolics). Compensate by seeding u0 and p from the ESM defaults;
 # returns `(defaults_u0, defaults_p)` (both empty for model containers).
-function _catalyst_default_maps(container_kind::Symbol, esm_container, simp,
-                                sys_name::Symbol)
-    defaults_u0 = Dict{Any,Float64}()
-    defaults_p  = Dict{Any,Float64}()
+function _catalyst_default_maps(
+        container_kind::Symbol, esm_container, simp,
+        sys_name::Symbol
+    )
+    defaults_u0 = Dict{Any, Float64}()
+    defaults_p = Dict{Any, Float64}()
     (container_kind === :reaction_system && esm_container !== nothing) ||
         return defaults_u0, defaults_p
     # NO silent skip here. A `try _resolve_handle(...) catch; nothing end` +
@@ -613,8 +662,8 @@ struct MtkTestEngine
     sys_name::Symbol
     container_kind::Symbol
     solver::Any
-    defaults_u0::Dict{Any,Float64}
-    defaults_p::Dict{Any,Float64}
+    defaults_u0::Dict{Any, Float64}
+    defaults_p::Dict{Any, Float64}
     # esm-spec §2.2.2: the INTEGRATION tolerances this engine solves at, already
     # resolved against the document's `solver` block. The runner's own
     # DEFAULT_TEST_* sit at the BOTTOM of that chain -- they are binding
@@ -627,14 +676,18 @@ struct MtkTestEngine
     abstol::Float64
     # `merged_variable_renames` from the document flatten this engine's system
     # was built from — see `_resolve_handle`. Empty on the per-container path.
-    renames::Dict{String,String}
+    renames::Dict{String, String}
 
-    MtkTestEngine(simp, sys_name, container_kind, solver, defaults_u0, defaults_p;
-                  reltol::Float64=DEFAULT_TEST_RELTOL,
-                  abstol::Float64=DEFAULT_TEST_ABSTOL,
-                  renames::AbstractDict=_NO_RENAMES) =
-        new(simp, sys_name, container_kind, solver, defaults_u0, defaults_p,
-            reltol, abstol, Dict{String,String}(renames))
+    MtkTestEngine(
+        simp, sys_name, container_kind, solver, defaults_u0, defaults_p;
+        reltol::Float64 = DEFAULT_TEST_RELTOL,
+        abstol::Float64 = DEFAULT_TEST_ABSTOL,
+        renames::AbstractDict = _NO_RENAMES
+    ) =
+        new(
+        simp, sys_name, container_kind, solver, defaults_u0, defaults_p,
+        reltol, abstol, Dict{String, String}(renames)
+    )
 end
 
 function _engine_setup(e::MtkTestEngine, t)
@@ -651,25 +704,27 @@ function _engine_setup(e::MtkTestEngine, t)
         tspan = (t.time_span.start, t.time_span.stop)
         merged = isempty(p_map) ? u0_map : Base.merge(u0_map, p_map)
         prob = if e.container_kind === :reaction_system
-            MTK.ODEProblem(e.simp, merged, tspan; combinatoric_ratelaws=false)
+            MTK.ODEProblem(e.simp, merged, tspan; combinatoric_ratelaws = false)
         else
             MTK.ODEProblem(e.simp, merged, tspan)
         end
-        return MTK.SciMLBase.solve(prob, e.solver;
-                                    reltol=e.reltol, abstol=e.abstol)
+        return MTK.SciMLBase.solve(
+            prob, e.solver;
+            reltol = e.reltol, abstol = e.abstol
+        )
     catch err
         return "Solve setup failed: $(err)"
     end
 end
 
 _engine_actual(e::MtkTestEngine, sol, a) =
-    sol(a.time, idxs=_resolve_handle(e.simp, e.sys_name, a.variable, e.renames))
+    sol(a.time, idxs = _resolve_handle(e.simp, e.sys_name, a.variable, e.renames))
 
 _engine_error_message(::MtkTestEngine, err) = "Sample/compare failed: $(err)"
 
 function _compile_model(model, name::Symbol)
     MTK = _require_mtk()
-    sys = MTK.System(model; name=name)
+    sys = MTK.System(model; name = name)
     return MTK.mtkcompile(sys)
 end
 
@@ -696,16 +751,19 @@ end
 # contains), so this path was the 1-of-3 outlier among the executing runners.
 function _compile_model_in_document(flat, name::Symbol)
     MTK = _require_mtk()
-    sys = MTK.System(flat; name=name)
+    sys = MTK.System(flat; name = name)
     return MTK.mtkcompile(sys)
 end
 
 function _compile_reaction_system(rs, name::Symbol)
     MTK = _require_mtk()
     cat = _try_require(_CATALYST_PKGID)
-    cat === nothing && throw(ArgumentError(
-        "ReactionSystem inline tests require Catalyst to be loaded."))
-    catalyst_rs = cat.ReactionSystem(rs; name=name)
+    cat === nothing && throw(
+        ArgumentError(
+            "ReactionSystem inline tests require Catalyst to be loaded."
+        )
+    )
+    catalyst_rs = cat.ReactionSystem(rs; name = name)
     return MTK.complete(catalyst_rs)
 end
 
@@ -721,15 +779,17 @@ end
 # seeding (`_catalyst_default_maps`) run OUTSIDE any try/catch on purpose: a
 # missing solver stack or an unresolvable declared default must abort the run
 # loudly, not degrade to per-test ERROR rows.
-function _run_container_tests!(results::Vector{AssertionResult},
-                               path::AbstractString, container_kind::Symbol,
-                               name::AbstractString, container,
-                               compile::Function, label::AbstractString;
-                               esm_container=nothing,
-                               function_tables=nothing,
-                               renames::AbstractDict=_NO_RENAMES,
-                               stiff_files=STIFF_SOLVER_OVERRIDE_FILENAMES,
-                               stiffness=nothing, solver_hints=nothing)
+function _run_container_tests!(
+        results::Vector{AssertionResult},
+        path::AbstractString, container_kind::Symbol,
+        name::AbstractString, container,
+        compile::Function, label::AbstractString;
+        esm_container = nothing,
+        function_tables = nothing,
+        renames::AbstractDict = _NO_RENAMES,
+        stiff_files = STIFF_SOLVER_OVERRIDE_FILENAMES,
+        stiffness = nothing, solver_hints = nothing
+    )
     isempty(container.tests) && return
     sys_name = Symbol(name)
     local simp
@@ -745,35 +805,49 @@ function _run_container_tests!(results::Vector{AssertionResult},
         simp = compile(container, sys_name)
     catch err
         for t in container.tests
-            push!(results, AssertionResult(
-                path, container_kind, String(name), t.id, 0, "", NaN, NaN,
-                nothing, ERROR, "$(label) compile failed: $(err)", 0.0))
+            push!(
+                results, AssertionResult(
+                    path, container_kind, String(name), t.id, 0, "", NaN, NaN,
+                    nothing, ERROR, "$(label) compile failed: $(err)", 0.0
+                )
+            )
         end
         return
     end
-    solver, _solver_kind = _pick_solver(path; stiff_files=stiff_files,
-                                        stiffness=stiffness)
+    solver, _solver_kind = _pick_solver(
+        path; stiff_files = stiff_files,
+        stiffness = stiffness
+    )
     defaults_u0, defaults_p =
         _catalyst_default_maps(container_kind, esm_container, simp, sys_name)
     # esm-spec §2.2.2: the document's declared INTEGRATION tolerances displace
     # the runner's own defaults; each falls through independently.
     reltol, abstol = _test_integration_tolerances(solver_hints)
-    engine = MtkTestEngine(simp, sys_name, container_kind, solver,
-                           defaults_u0, defaults_p; reltol=reltol, abstol=abstol,
-                           renames=renames)
-    _run_test_frame!(results, engine, path, container_kind, String(name),
-                     container.tolerance, container.tests)
+    engine = MtkTestEngine(
+        simp, sys_name, container_kind, solver,
+        defaults_u0, defaults_p; reltol = reltol, abstol = abstol,
+        renames = renames
+    )
+    return _run_test_frame!(
+        results, engine, path, container_kind, String(name),
+        container.tolerance, container.tests
+    )
 end
 
-function run_file_tests!(results::Vector{AssertionResult}, path::AbstractString;
-                         stiff_files=STIFF_SOLVER_OVERRIDE_FILENAMES)
+function run_file_tests!(
+        results::Vector{AssertionResult}, path::AbstractString;
+        stiff_files = STIFF_SOLVER_OVERRIDE_FILENAMES
+    )
     local esm_file
     try
         esm_file = load_path(String(path))
     catch err
-        push!(results, AssertionResult(
-            path, :file, "<parse>", "<load>", 0, "", NaN, NaN, nothing,
-            ERROR, "Parse failed: $(err)", 0.0))
+        push!(
+            results, AssertionResult(
+                path, :file, "<parse>", "<load>", 0, "", NaN, NaN, nothing,
+                ERROR, "Parse failed: $(err)", 0.0
+            )
+        )
         return
     end
 
@@ -828,8 +902,10 @@ function run_file_tests!(results::Vector{AssertionResult}, path::AbstractString;
     if has_model_tests || has_mixed_rs_tests
         try
             lower_table_lookups!(esm_file)
-            doc_flat = flatten(esm_file;
-                               base_path=dirname(abspath(String(path))))
+            doc_flat = flatten(
+                esm_file;
+                base_path = dirname(abspath(String(path)))
+            )
         catch err
             doc_flat_err = err
         end
@@ -839,46 +915,55 @@ function run_file_tests!(results::Vector{AssertionResult}, path::AbstractString;
     # DOCUMENT build can carry one — a container built alone has no coupling —
     # so this is empty on every other path.
     doc_renames = doc_flat === nothing ?
-        Dict{String,String}() : doc_flat.metadata.merged_variable_renames
+        Dict{String, String}() : doc_flat.metadata.merged_variable_renames
 
     if models !== nothing
         for (mname, model) in models
             if doc_flat_err !== nothing
                 for t in model.tests
-                    push!(results, AssertionResult(
-                        path, :model, String(mname), t.id, 0, "", NaN, NaN,
-                        nothing, ERROR,
-                        "Model compile failed: $(doc_flat_err)", 0.0))
+                    push!(
+                        results, AssertionResult(
+                            path, :model, String(mname), t.id, 0, "", NaN, NaN,
+                            nothing, ERROR,
+                            "Model compile failed: $(doc_flat_err)", 0.0
+                        )
+                    )
                 end
                 continue
             end
             compile = doc_flat === nothing ? _compile_model :
                 (_c, sym) -> _compile_model_in_document(doc_flat, sym)
-            _run_container_tests!(results, path, :model, String(mname), model,
-                                  compile, "Model";
-                                  function_tables=tables, renames=doc_renames,
-                                  stiff_files=stiff_files, stiffness=stiffness,
-                                  solver_hints=esm_file.solver)
+            _run_container_tests!(
+                results, path, :model, String(mname), model,
+                compile, "Model";
+                function_tables = tables, renames = doc_renames,
+                stiff_files = stiff_files, stiffness = stiffness,
+                solver_hints = esm_file.solver
+            )
         end
     end
 
-    if rsystems !== nothing
+    return if rsystems !== nothing
         for (rname, rs) in rsystems
             if mixed && doc_flat !== nothing
-                _run_container_tests!(results, path, :reaction_system,
-                                      String(rname), rs,
-                                      (_c, sym) -> _compile_model_in_document(doc_flat, sym),
-                                      "ReactionSystem";
-                                      function_tables=tables, renames=doc_renames,
-                                      stiff_files=stiff_files, stiffness=stiffness,
-                                      solver_hints=esm_file.solver)
+                _run_container_tests!(
+                    results, path, :reaction_system,
+                    String(rname), rs,
+                    (_c, sym) -> _compile_model_in_document(doc_flat, sym),
+                    "ReactionSystem";
+                    function_tables = tables, renames = doc_renames,
+                    stiff_files = stiff_files, stiffness = stiffness,
+                    solver_hints = esm_file.solver
+                )
             else
-                _run_container_tests!(results, path, :reaction_system,
-                                      String(rname), rs, _compile_reaction_system,
-                                      "ReactionSystem"; esm_container=rs,
-                                      function_tables=tables,
-                                      stiff_files=stiff_files, stiffness=stiffness,
-                                      solver_hints=esm_file.solver)
+                _run_container_tests!(
+                    results, path, :reaction_system,
+                    String(rname), rs, _compile_reaction_system,
+                    "ReactionSystem"; esm_container = rs,
+                    function_tables = tables,
+                    stiff_files = stiff_files, stiffness = stiffness,
+                    solver_hints = esm_file.solver
+                )
             end
         end
     end
@@ -913,22 +998,26 @@ path contains one of the listed substrings.
 Rosenbrock23 solver instead of the default non-stiff Tsit5; it defaults to
 `STIFF_SOLVER_OVERRIDE_FILENAMES` (currently just the known-stiff `pollu.esm`).
 """
-function run_esm_tests(roots::AbstractVector{<:AbstractString}=DEFAULT_ROOTS;
-                       root::AbstractString=esm_root(),
-                       junit_xml::Union{AbstractString,Nothing}=nothing,
-                       verbose::Bool=true,
-                       exclude::Union{Nothing,AbstractVector{<:AbstractString}}=nothing,
-                       stiff_files=STIFF_SOLVER_OVERRIDE_FILENAMES,
-                       io::IO=stdout)
-    files = discover_esm_files(roots; root=root, exclude=exclude)
+function run_esm_tests(
+        roots::AbstractVector{<:AbstractString} = DEFAULT_ROOTS;
+        root::AbstractString = esm_root(),
+        junit_xml::Union{AbstractString, Nothing} = nothing,
+        verbose::Bool = true,
+        exclude::Union{Nothing, AbstractVector{<:AbstractString}} = nothing,
+        stiff_files = STIFF_SOLVER_OVERRIDE_FILENAMES,
+        io::IO = stdout
+    )
+    files = discover_esm_files(roots; root = root, exclude = exclude)
     results = AssertionResult[]
     if isempty(files)
         @warn "run_esm_tests discovered no .esm files" roots root
-        verbose && println(io, "No .esm files discovered under: ",
-                            join(roots, ", "))
+        verbose && println(
+            io, "No .esm files discovered under: ",
+            join(roots, ", ")
+        )
     else
         for f in files
-            run_file_tests!(results, f; stiff_files=stiff_files)
+            run_file_tests!(results, f; stiff_files = stiff_files)
         end
     end
 
@@ -988,9 +1077,11 @@ function _mounted_components(path::AbstractString)
     return edges
 end
 
-function _print_summary(io::IO, files::Vector{String},
-                        results::Vector{AssertionResult},
-                        base::AbstractString=esm_root())
+function _print_summary(
+        io::IO, files::Vector{String},
+        results::Vector{AssertionResult},
+        base::AbstractString = esm_root()
+    )
     rel(p) = startswith(p, base) ? relpath(p, base) : p
 
     println(io)
@@ -1005,15 +1096,17 @@ function _print_summary(io::IO, files::Vector{String},
     # but mounts and coupling still says so.
     mounts = [(rel(f), edge) for f in files for edge in _mounted_components(f)]
     if !isempty(mounts)
-        println(io, "Mounted:          ", length(mounts),
-                " (esm-spec §6.6 — a mounted component's inline tests are not run here; ",
-                "they run when its own file is a test target)")
+        println(
+            io, "Mounted:          ", length(mounts),
+            " (esm-spec §6.6 — a mounted component's inline tests are not run here; ",
+            "they run when its own file is a test target)"
+        )
         for (f, edge) in mounts
             println(io, "  - ", f, " :: ", edge)
         end
     end
 
-    by_file = Dict{String,Vector{AssertionResult}}()
+    by_file = Dict{String, Vector{AssertionResult}}()
     for r in results
         push!(get!(by_file, r.file, AssertionResult[]), r)
     end
@@ -1024,7 +1117,7 @@ function _print_summary(io::IO, files::Vector{String},
         return
     end
 
-    namepad = max(20, maximum(length(rel(p)) for p in keys(by_file); init=20))
+    namepad = max(20, maximum(length(rel(p)) for p in keys(by_file); init = 20))
     @printf(io, "  %-*s  %5s  %5s  %5s\n", namepad, "file", "pass", "fail", "err")
     println(io, "  ", repeat("-", namepad + 25))
     for f in sort!(collect(keys(by_file)))
@@ -1039,22 +1132,26 @@ function _print_summary(io::IO, files::Vector{String},
     total_pass = count(r -> r.status == PASS, results)
     total_fail = count(r -> r.status == FAIL, results)
     total_err = count(r -> r.status == ERROR, results)
-    @printf(io, "  %-*s  %5d  %5d  %5d\n", namepad, "TOTAL", total_pass,
-             total_fail, total_err)
+    @printf(
+        io, "  %-*s  %5d  %5d  %5d\n", namepad, "TOTAL", total_pass,
+        total_fail, total_err
+    )
 
     if total_fail + total_err > 0
         println(io)
         println(io, "Failures:")
         for r in results
             (r.status == PASS) && continue
-            println(io, "  - ", rel(r.file), " :: ", r.container_name, "/",
-                     r.test_id, "[", r.assertion_idx, "] (",
-                     r.variable, "@t=", r.time, ") — ",
-                     r.status == ERROR ? "ERROR" : "FAIL")
+            println(
+                io, "  - ", rel(r.file), " :: ", r.container_name, "/",
+                r.test_id, "[", r.assertion_idx, "] (",
+                r.variable, "@t=", r.time, ") — ",
+                r.status == ERROR ? "ERROR" : "FAIL"
+            )
             isempty(r.message) || println(io, "      ", r.message)
         end
     end
-    println(io, "=========================================================")
+    return println(io, "=========================================================")
 end
 
 # ---------------------------------------------------------------------------
@@ -1086,18 +1183,23 @@ itself, so a corpus batch needs nothing here; pass `file` when the documents
 were handed over as in-memory `EsmFile`s (whose rows have no path to carry) and
 one label fits the whole batch.
 """
-function write_junit_xml(results::Vector{AssertionResult}, path::AbstractString;
-                         file::Union{Nothing,AbstractString}=nothing)
+function write_junit_xml(
+        results::Vector{AssertionResult}, path::AbstractString;
+        file::Union{Nothing, AbstractString} = nothing
+    )
     if file !== nothing
         results = AssertionResult[
-            AssertionResult(String(file), r.container_kind, r.container_name,
-                            r.test_id, r.assertion_idx, r.variable, r.time,
-                            r.expected, r.actual, r.status, r.message,
-                            r.duration_s, r.reduce, r.rtol, r.atol)
-            for r in results]
+            AssertionResult(
+                String(file), r.container_kind, r.container_name,
+                r.test_id, r.assertion_idx, r.variable, r.time,
+                r.expected, r.actual, r.status, r.message,
+                r.duration_s, r.reduce, r.rtol, r.atol
+            )
+                for r in results
+        ]
     end
-    by_test = Dict{Tuple{String,String,String},Vector{AssertionResult}}()
-    order = Tuple{String,String,String}[]
+    by_test = Dict{Tuple{String, String, String}, Vector{AssertionResult}}()
+    order = Tuple{String, String, String}[]
     for r in results
         key = (r.file, r.container_name, r.test_id)
         if !haskey(by_test, key)
@@ -1108,37 +1210,51 @@ function write_junit_xml(results::Vector{AssertionResult}, path::AbstractString;
     end
 
     n_tests = length(order)
-    n_fail = sum(any(r -> r.status == FAIL, rs) for rs in values(by_test); init=0)
-    n_err = sum(any(r -> r.status == ERROR, rs) for rs in values(by_test); init=0)
+    n_fail = sum(any(r -> r.status == FAIL, rs) for rs in values(by_test); init = 0)
+    n_err = sum(any(r -> r.status == ERROR, rs) for rs in values(by_test); init = 0)
 
     open(path, "w") do io
         println(io, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
-        println(io, "<testsuites tests=\"", n_tests,
-                 "\" failures=\"", n_fail,
-                 "\" errors=\"", n_err, "\">")
-        println(io, "  <testsuite name=\"esm-inline-tests\" tests=\"",
-                 n_tests, "\" failures=\"", n_fail,
-                 "\" errors=\"", n_err, "\">")
+        println(
+            io, "<testsuites tests=\"", n_tests,
+            "\" failures=\"", n_fail,
+            "\" errors=\"", n_err, "\">"
+        )
+        println(
+            io, "  <testsuite name=\"esm-inline-tests\" tests=\"",
+            n_tests, "\" failures=\"", n_fail,
+            "\" errors=\"", n_err, "\">"
+        )
         for key in order
             file, container, test_id = key
             rs = by_test[key]
             classname = _xml_escape(string(file, "::", container))
             casename = _xml_escape(test_id)
-            duration = sum(r.duration_s for r in rs; init=0.0)
-            println(io, "    <testcase classname=\"", classname,
-                     "\" name=\"", casename,
-                     "\" time=\"", duration, "\">")
+            duration = sum(r.duration_s for r in rs; init = 0.0)
+            println(
+                io, "    <testcase classname=\"", classname,
+                "\" name=\"", casename,
+                "\" time=\"", duration, "\">"
+            )
             for r in rs
                 if r.status == FAIL
-                    println(io, "      <failure type=\"AssertionFailure\" ",
-                             "message=\"", _xml_escape(r.message), "\">",
-                             _xml_escape(string(r.variable, "@t=", r.time,
-                                                 " expected=", r.expected,
-                                                 " actual=", r.actual)),
-                             "</failure>")
+                    println(
+                        io, "      <failure type=\"AssertionFailure\" ",
+                        "message=\"", _xml_escape(r.message), "\">",
+                        _xml_escape(
+                            string(
+                                r.variable, "@t=", r.time,
+                                " expected=", r.expected,
+                                " actual=", r.actual
+                            )
+                        ),
+                        "</failure>"
+                    )
                 elseif r.status == ERROR
-                    println(io, "      <error type=\"RunnerError\" ",
-                             "message=\"", _xml_escape(r.message), "\"/>")
+                    println(
+                        io, "      <error type=\"RunnerError\" ",
+                        "message=\"", _xml_escape(r.message), "\"/>"
+                    )
                 end
             end
             println(io, "    </testcase>")

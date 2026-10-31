@@ -24,14 +24,16 @@ _af_op(op, a...; kw...) = OpExpr(op, ESM.ASTExpr[a...]; kw...)
 
     # ----------------------------------------------------------------
     @testset "scalar ic(var) RHS resolves parameters (spec §6.6.5)" begin
-        vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(UnknownVariable; default=0.0),
-            "k" => ModelVariable(ParameterVariable; default=3.0),
+        vars = Dict{String, ModelVariable}(
+            "x" => ModelVariable(UnknownVariable; default = 0.0),
+            "k" => ModelVariable(ParameterVariable; default = 3.0),
         )
         eqs = ESM.Equation[
-            ESM.Equation(_af_op("ic", _af_v("x")),
-                         _af_op("*", _af_v("k"), _af_n(2.0))),
-            ESM.Equation(_af_op("D", _af_v("x"); wrt="t"), _af_n(0.0)),
+            ESM.Equation(
+                _af_op("ic", _af_v("x")),
+                _af_op("*", _af_v("k"), _af_n(2.0))
+            ),
+            ESM.Equation(_af_op("D", _af_v("x"); wrt = "t"), _af_n(0.0)),
         ]
         model = ESM.Model(vars, eqs)
 
@@ -40,21 +42,27 @@ _af_op(op, a...; kw...) = OpExpr(op, ESM.ASTExpr[a...]; kw...)
         @test u0[var_map["x"]] == 6.0
 
         # parameter_overrides feed the same resolved scope: ic(x) = 5*2 = 10.
-        _, u0b, _, _, vmb = EarthSciAST._build_evaluator(model;
-            parameter_overrides=Dict("k" => 5.0))
+        _, u0b, _, _, vmb = EarthSciAST._build_evaluator(
+            model;
+            parameter_overrides = Dict("k" => 5.0)
+        )
         @test u0b[vmb["x"]] == 10.0
 
         # An explicit initial_conditions entry still wins over the ic equation.
-        _, u0c, _, _, vmc = EarthSciAST._build_evaluator(model;
-            initial_conditions=Dict("x" => 42.0))
+        _, u0c, _, _, vmc = EarthSciAST._build_evaluator(
+            model;
+            initial_conditions = Dict("x" => 42.0)
+        )
         @test u0c[vmc["x"]] == 42.0
 
         # An UNBOUND name in a scalar ic RHS is still a clear error, and the
         # diagnostic now carries the underlying cause.
-        badm = ESM.Model(vars, ESM.Equation[
-            ESM.Equation(_af_op("ic", _af_v("x")), _af_v("nope")),
-            ESM.Equation(_af_op("D", _af_v("x"); wrt="t"), _af_n(0.0)),
-        ])
+        badm = ESM.Model(
+            vars, ESM.Equation[
+                ESM.Equation(_af_op("ic", _af_v("x")), _af_v("nope")),
+                ESM.Equation(_af_op("D", _af_v("x"); wrt = "t"), _af_n(0.0)),
+            ]
+        )
         err = try
             EarthSciAST._build_evaluator(badm)
             nothing
@@ -90,19 +98,23 @@ _af_op(op, a...; kw...) = OpExpr(op, ESM.ASTExpr[a...]; kw...)
         # (`table`, `table_axes`, `output`, `distinct`, `key`) plus `ranges`
         # (which forces the reconstruct path even when nothing binds).
         keyexpr = _af_op("skolem", _af_v("i"))
-        node = OpExpr("faq", ESM.ASTExpr[_af_v("q")];
-                      output_idx=Any["i"],
-                      ranges=Dict{String,Any}("i" => [1, 3]),
-                      expr_body=_af_op("+", _af_v("q"), _af_v("z")),
-                      reduce="+", semiring="sum_product",
-                      table="tbl0",
-                      table_axes=Dict{String,Any}("T" => _af_v("q")),
-                      output=1,
-                      join=Any[], filter=_af_op(">", _af_v("q"), _af_n(0)),
-                      id="node0", manifold="planar",
-                      distinct=true, key=keyexpr)
-        subd = ESM._sub_preserving(node,
-                                   Dict{String,ESM.ASTExpr}("z" => _af_n(7.0)))
+        node = OpExpr(
+            "faq", ESM.ASTExpr[_af_v("q")];
+            output_idx = Any["i"],
+            ranges = Dict{String, Any}("i" => [1, 3]),
+            expr_body = _af_op("+", _af_v("q"), _af_v("z")),
+            reduce = "+", semiring = "sum_product",
+            table = "tbl0",
+            table_axes = Dict{String, Any}("T" => _af_v("q")),
+            output = 1,
+            join = Any[], filter = _af_op(">", _af_v("q"), _af_n(0)),
+            id = "node0", manifold = "planar",
+            distinct = true, key = keyexpr
+        )
+        subd = ESM._sub_preserving(
+            node,
+            Dict{String, ESM.ASTExpr}("z" => _af_n(7.0))
+        )
         @test subd.table == "tbl0"
         @test subd.table_axes !== nothing
         @test subd.output == 1
@@ -121,14 +133,18 @@ _af_op(op, a...; kw...) = OpExpr(op, ESM.ASTExpr[a...]; kw...)
         buf = reshape(Float64[10, 20, 30, 40], 2, 2)
         pg = Dict("F" => ESM._PGatherArray(vec(buf), collect(size(buf))))
         idx_node = _af_op("index", _af_v("F"), IntExpr(Int64(2)), IntExpr(Int64(1)))
-        resolved = ESM._resolve_indices(idx_node,
-            Dict{String,Tuple{Vector{Int},Vector{Int}}}(),
-            Dict{String,Int}(), ESM._EMPTY_CONST_ARRAYS, pg)
+        resolved = ESM._resolve_indices(
+            idx_node,
+            Dict{String, Tuple{Vector{Int}, Vector{Int}}}(),
+            Dict{String, Int}(), ESM._EMPTY_CONST_ARRAYS, pg
+        )
         @test resolved isa OpExpr && resolved.op == "index"
         @test resolved.value isa ESM._PGatherRef
         @test (resolved.value::ESM._PGatherRef).lin == 2   # column-major (2,1)
-        node = ESM._compile(resolved, Dict{String,Int}(), Set{Symbol}(),
-                            Dict{String,Any}())
+        node = ESM._compile(
+            resolved, Dict{String, Int}(), Set{Symbol}(),
+            Dict{String, Any}()
+        )
         @test node.kind == ESM._NK_PARAM_GATHER
         @test ESM._eval_node(node, Float64[], NamedTuple(), 0.0) == 20.0
         # Live: an in-place refresh of the caller's buffer shows through.
@@ -141,10 +157,16 @@ _af_op(op, a...; kw...) = OpExpr(op, ESM.ASTExpr[a...]; kw...)
         # Hand-construct the (compile-unreachable) node shape: const args
         # present, but the name matches no interp.* eval case. The arm must
         # throw, never return `nothing`.
-        bad = ESM._mknode(kind=ESM._NK_OP, op=:fn,
-                          payload=("datetime.julian_day", Any[[1.0]]),
-                          children=ESM._Node[ESM._mknode(kind=ESM._NK_LITERAL,
-                                                         literal=0.0)])
+        bad = ESM._mknode(
+            kind = ESM._NK_OP, op = :fn,
+            payload = ("datetime.julian_day", Any[[1.0]]),
+            children = ESM._Node[
+                ESM._mknode(
+                    kind = ESM._NK_LITERAL,
+                    literal = 0.0
+                ),
+            ]
+        )
         err = try
             ESM._eval_node(bad, Float64[], NamedTuple(), 0.0)
             nothing

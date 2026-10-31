@@ -22,21 +22,33 @@ end
     doc = Dict(
         "esm" => "0.9.0",
         "metadata" => Dict("name" => "expanded_model_seam"),
-        "models" => Dict("T" => Dict(
-            "expression_templates" => Dict(
-                "decay" => Dict(
-                    "params" => ["x", "k"],
-                    "body" => Dict("op" => "*",
-                                   "args" => [Dict("op" => "-", "args" => ["k"]), "x"]))),
-            "variables" => Dict(
-                "a" => Dict("type" => "unknown", "units" => "1", "default" => 1.5),
-                "k" => Dict("type" => "parameter", "units" => "1", "default" => 0.25)),
-            "equations" => [Dict(
-                "lhs" => Dict("op" => "D", "args" => ["a"], "wrt" => "t"),
-                "rhs" => Dict("op" => "apply_expression_template", "args" => [],
-                              "name" => "decay",
-                              "bindings" => Dict("x" => "a", "k" => "k")))],
-        )),
+        "models" => Dict(
+            "T" => Dict(
+                "expression_templates" => Dict(
+                    "decay" => Dict(
+                        "params" => ["x", "k"],
+                        "body" => Dict(
+                            "op" => "*",
+                            "args" => [Dict("op" => "-", "args" => ["k"]), "x"]
+                        )
+                    )
+                ),
+                "variables" => Dict(
+                    "a" => Dict("type" => "unknown", "units" => "1", "default" => 1.5),
+                    "k" => Dict("type" => "parameter", "units" => "1", "default" => 0.25)
+                ),
+                "equations" => [
+                    Dict(
+                        "lhs" => Dict("op" => "D", "args" => ["a"], "wrt" => "t"),
+                        "rhs" => Dict(
+                            "op" => "apply_expression_template", "args" => [],
+                            "name" => "decay",
+                            "bindings" => Dict("x" => "a", "k" => "k")
+                        )
+                    ),
+                ],
+            )
+        ),
     )
     file = coerce_esm_file(JSON3.read(JSON3.write(doc)))
 
@@ -60,7 +72,11 @@ end
 
     @testset "name resolution mirrors build_evaluator" begin
         @test !_has_apply(expanded_model(file, "T").equations[1].rhs)
-        err = try; expanded_model(file, "Nope"); nothing; catch e; e; end
+        err = try
+            expanded_model(file, "Nope"); nothing
+        catch e
+            e
+        end
         @test err isa TreeWalkError && err.code == "E_TREEWALK_NO_MODEL"
     end
 
@@ -68,13 +84,19 @@ end
         plain = Dict(
             "esm" => "0.9.0",
             "metadata" => Dict("name" => "plain"),
-            "models" => Dict("P" => Dict(
-                "variables" => Dict(
-                    "a" => Dict("type" => "unknown", "units" => "1", "default" => 2.0)),
-                "equations" => [Dict(
-                    "lhs" => Dict("op" => "D", "args" => ["a"], "wrt" => "t"),
-                    "rhs" => Dict("op" => "*", "args" => [-1, "a"]))],
-            )),
+            "models" => Dict(
+                "P" => Dict(
+                    "variables" => Dict(
+                        "a" => Dict("type" => "unknown", "units" => "1", "default" => 2.0)
+                    ),
+                    "equations" => [
+                        Dict(
+                            "lhs" => Dict("op" => "D", "args" => ["a"], "wrt" => "t"),
+                            "rhs" => Dict("op" => "*", "args" => [-1, "a"])
+                        ),
+                    ],
+                )
+            ),
         )
         pf = coerce_esm_file(JSON3.read(JSON3.write(plain)))
         m = expanded_model(pf)

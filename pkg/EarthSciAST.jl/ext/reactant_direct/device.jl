@@ -92,7 +92,7 @@ function _de_place end
 # equality on it are `objectid` / `===`, which is what makes the table an
 # identity table. `Base.WeakKeyDict` carries its own lock, so concurrent builds
 # are safe.
-const _DE_PLACES = Base.WeakKeyDict{Any,Any}()
+const _DE_PLACES = Base.WeakKeyDict{Any, Any}()
 
 """
     _de_register_place!(d, place) -> d
@@ -201,7 +201,7 @@ direct_platform(d::DirectCallable) =
 The placement a wrapper was built with.
 """
 direct_client(d::DirectCallable) = _de_place(d).client::Reactant.XLA.AbstractClient
-direct_shard(d::DirectCallable) = _de_place(d).shard::Union{Nothing,DirectShard}
+direct_shard(d::DirectCallable) = _de_place(d).shard::Union{Nothing, DirectShard}
 direct_devicecount(d::DirectCallable) =
     (s = direct_shard(d); s === nothing ? 1 : s.ndevices)
 
@@ -240,7 +240,7 @@ Read it through [`direct_client`](@ref) and [`direct_shard`](@ref).
 """
 struct DirectPlace
     client::Reactant.XLA.AbstractClient
-    shard::Union{Nothing,DirectShard}
+    shard::Union{Nothing, DirectShard}
 end
 
 # The mesh axis is named for what it cuts. One axis only: `u` is rank 1.
@@ -258,9 +258,11 @@ function direct_devices(client::Reactant.XLA.AbstractClient; count = nothing)
     count === nothing && return devs
     n = Int(count)
     n <= length(devs) ||
-        error("asked to shard across $n device(s) but the " *
-              "$(Reactant.XLA.platform_name(client)) client has only " *
-              "$(length(devs)) addressable device(s)")
+        error(
+        "asked to shard across $n device(s) but the " *
+            "$(Reactant.XLA.platform_name(client)) client has only " *
+            "$(length(devs)) addressable device(s)"
+    )
     return devs[1:n]
 end
 
@@ -269,7 +271,7 @@ end
 # scalar state is a bare name, and the layout guarantees each variable's slots
 # are contiguous. Returns `nothing` when the wrapper was built without a var map
 # (no names, so no block structure to check against).
-function _de_state_blocks(names::Dict{Int,String}, n::Int)
+function _de_state_blocks(names::Dict{Int, String}, n::Int)
     isempty(names) && return nothing
     base = Vector{String}(undef, n)
     for i in 1:n
@@ -278,7 +280,7 @@ function _de_state_blocks(names::Dict{Int,String}, n::Int)
         b = findfirst('[', nm)
         base[i] = b === nothing ? nm : nm[1:prevind(nm, b)]
     end
-    blocks = Tuple{Int,Int,String}[]
+    blocks = Tuple{Int, Int, String}[]
     start = 1
     for i in 2:n
         base[i] == base[i - 1] && continue
@@ -302,22 +304,24 @@ function _de_check_block_alignment(blocks, n::Int, ndev::Int)
         # several blocks: accept only if the slab is exactly whole blocks.
         (hit[1][1] == lo && hit[end][2] == hi) && continue
         partial = String[b[3] for b in hit if b[1] < lo || b[2] > hi]
-        _de_refuse("a cell-axis shard slab that straddles a variable block",
+        _de_refuse(
+            "a cell-axis shard slab that straddles a variable block",
             "device $d would hold flat slots $lo:$hi, which is a partial piece " *
-            "of more than one state variable (" * join(partial, ", ") * "). The " *
-            "flat state lays each variable's cells end to end, so a contiguous " *
-            "slab is a clean cell shard only when it stays inside one " *
-            "variable's block or covers whole blocks. Shard across a device " *
-            "count that divides the block structure, or leave `sharding` unset " *
-            "and run on one device. Block boundaries end at flat slots " *
-            join(sort!(collect(edges)), ", ") * ".")
+                "of more than one state variable (" * join(partial, ", ") * "). The " *
+                "flat state lays each variable's cells end to end, so a contiguous " *
+                "slab is a clean cell shard only when it stays inside one " *
+                "variable's block or covers whole blocks. Shard across a device " *
+                "count that divides the block structure, or leave `sharding` unset " *
+                "and run on one device. Block boundaries end at flat slots " *
+                join(sort!(collect(edges)), ", ") * "."
+        )
     end
     return nothing
 end
 
 # `spec` -> a DirectShard, or `nothing` for "run on one device".
-_de_resolve_shard(::Nothing, client, n::Int, names::Dict{Int,String}) = nothing
-function _de_resolve_shard(spec, client, n::Int, names::Dict{Int,String})
+_de_resolve_shard(::Nothing, client, n::Int, names::Dict{Int, String}) = nothing
+function _de_resolve_shard(spec, client, n::Int, names::Dict{Int, String})
     devs = if spec isa Integer
         direct_devices(client; count = spec)
     elseif spec === :cells || spec === true || (spec isa AbstractString && lowercase(String(spec)) == "cells")
@@ -325,27 +329,39 @@ function _de_resolve_shard(spec, client, n::Int, names::Dict{Int,String})
     elseif spec isa AbstractVector
         collect(spec)
     else
-        error("unknown `sharding` request $(repr(spec)); expected `nothing`, " *
-              "`:cells`, a device count, or a vector of devices")
+        error(
+            "unknown `sharding` request $(repr(spec)); expected `nothing`, " *
+                "`:cells`, a device count, or a vector of devices"
+        )
     end
     ndev = length(devs)
     ndev >= 2 ||
-        _de_refuse("a cell-axis shard across $ndev device(s)",
-            "sharding needs at least two devices; the " *
+        _de_refuse(
+        "a cell-axis shard across $ndev device(s)",
+        "sharding needs at least two devices; the " *
             "$(Reactant.XLA.platform_name(client)) client exposes $ndev " *
-            "addressable device(s). Leave `sharding` unset to run on one.")
+            "addressable device(s). Leave `sharding` unset to run on one."
+    )
     n % ndev == 0 ||
-        _de_refuse("a cell-axis shard of a $n-slot state across $ndev devices",
-            "the flat state length is not divisible by the device count, so the " *
+        _de_refuse(
+        "a cell-axis shard of a $n-slot state across $ndev devices",
+        "the flat state length is not divisible by the device count, so the " *
             "slabs would be ragged. Shard across a device count that divides " *
-            "$n, or leave `sharding` unset.")
+            "$n, or leave `sharding` unset."
+    )
     blocks = _de_state_blocks(names, n)
     _de_check_block_alignment(blocks, n, ndev)
-    mesh = Reactant.Sharding.Mesh(reshape(collect(Int64, Reactant.XLA.device_ordinal.(devs)),
-                                          ndev), (_DE_MESH_AXIS,))
-    return DirectShard(mesh,
-                       Reactant.Sharding.NamedSharding(mesh, (_DE_MESH_AXIS,)),
-                       Reactant.Sharding.Replicated(mesh), ndev)
+    mesh = Reactant.Sharding.Mesh(
+        reshape(
+            collect(Int64, Reactant.XLA.device_ordinal.(devs)),
+            ndev
+        ), (_DE_MESH_AXIS,)
+    )
+    return DirectShard(
+        mesh,
+        Reactant.Sharding.NamedSharding(mesh, (_DE_MESH_AXIS,)),
+        Reactant.Sharding.Replicated(mesh), ndev
+    )
 end
 
 # ---- device-resident inputs --------------------------------------------------
@@ -377,10 +393,12 @@ sharding when one was requested. Feed this to the compiled program; `Array(...)`
 on the result brings `du` back.
 """
 direct_state(d::DirectCallable{false}, u::AbstractVector) =
-    Reactant.ConcreteRArray(Array{Float64,1}(u); client = direct_client(d))
+    Reactant.ConcreteRArray(Array{Float64, 1}(u); client = direct_client(d))
 direct_state(d::DirectCallable{true}, u::AbstractVector) =
-    Reactant.ConcreteRArray(Array{Float64,1}(u); client = direct_client(d),
-                            sharding = (direct_shard(d)::DirectShard).state)
+    Reactant.ConcreteRArray(
+    Array{Float64, 1}(u); client = direct_client(d),
+    sharding = (direct_shard(d)::DirectShard).state
+)
 
 """
     direct_time(d, t) -> ConcreteRNumber
@@ -390,8 +408,10 @@ The time input on `d`'s client, replicated across the shard's devices.
 direct_time(d::DirectCallable{false}, t::Real) =
     Reactant.ConcreteRNumber(Float64(t); client = direct_client(d))
 direct_time(d::DirectCallable{true}, t::Real) =
-    Reactant.ConcreteRNumber(Float64(t); client = direct_client(d),
-                             sharding = (direct_shard(d)::DirectShard).replicated)
+    Reactant.ConcreteRNumber(
+    Float64(t); client = direct_client(d),
+    sharding = (direct_shard(d)::DirectShard).replicated
+)
 
 """
     direct_params(d, p) -> NamedTuple
@@ -415,11 +435,15 @@ sharded forcing field would make every read a collective.
 """
 function direct_buffers(d::DirectCallable{false}, bufs)
     cl = direct_client(d)
-    return map(v -> Reactant.ConcreteRArray(Array{Float64,1}(v); client = cl), bufs)
+    return map(v -> Reactant.ConcreteRArray(Array{Float64, 1}(v); client = cl), bufs)
 end
 function direct_buffers(d::DirectCallable{true}, bufs)
     cl = direct_client(d)
     rep = (direct_shard(d)::DirectShard).replicated
-    return map(v -> Reactant.ConcreteRArray(Array{Float64,1}(v); client = cl,
-                                            sharding = rep), bufs)
+    return map(
+        v -> Reactant.ConcreteRArray(
+            Array{Float64, 1}(v); client = cl,
+            sharding = rep
+        ), bufs
+    )
 end

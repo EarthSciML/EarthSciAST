@@ -30,10 +30,10 @@
 import Pkg
 let env = joinpath(@__DIR__, "pde_sim_adapter"), manifest = joinpath(env, "Manifest.toml")
     bootstrap() = begin
-        Pkg.activate(env; io=devnull)
+        Pkg.activate(env; io = devnull)
         isfile(manifest) ||
-            Pkg.develop(path=normpath(joinpath(@__DIR__, "..")); io=devnull)
-        Pkg.instantiate(; io=devnull)
+            Pkg.develop(path = normpath(joinpath(@__DIR__, "..")); io = devnull)
+        Pkg.instantiate(; io = devnull)
     end
     try
         bootstrap()
@@ -54,7 +54,7 @@ let env = joinpath(@__DIR__, "pde_sim_adapter"), manifest = joinpath(env, "Manif
         # EarthSciAST is already in the Project's [deps], so the tracked
         # Project.toml is not touched.
         @warn "pde_sim_adapter env did not instantiate; rebuilding Manifest.toml" exception = (err, catch_backtrace())
-        rm(manifest; force=true)
+        rm(manifest; force = true)
         bootstrap()
     end
 end
@@ -93,39 +93,47 @@ function parse_args(args)
     output === nothing && error("--output is required")
     compiler === nothing && error("--compiler is required")
     compiler in COMPILER_VOCABULARY ||
-        error("--compiler must be one of " * join(COMPILER_VOCABULARY, ", ") *
-              ", got '$compiler'")
-    (manifest, output, compiler)
+        error(
+        "--compiler must be one of " * join(COMPILER_VOCABULARY, ", ") *
+            ", got '$compiler'"
+    )
+    return (manifest, output, compiler)
 end
 
 # Trajectory time key: a plain float string. The Python harness re-normalizes
 # every key via float(k):g, so the exact rendering here only has to round-trip.
 tkey(t) = string(float(t))
 
-_ic_dict(obj) = Dict{String,Float64}(String(k) => Float64(v) for (k, v) in pairs(obj))
+_ic_dict(obj) = Dict{String, Float64}(String(k) => Float64(v) for (k, v) in pairs(obj))
 
 function rhs_at(model, probe_state, t, compiler)
     ics = _ic_dict(probe_state)
-    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions=ics,
-                                         compiler=Symbol(compiler))
+    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
+        model; initial_conditions = ics,
+        compiler = Symbol(compiler)
+    )
     du = similar(u0)
     f!(du, u0, p, Float64(t))
-    Dict{String,Float64}(name => Float64(du[idx]) for (name, idx) in vmap)
+    return Dict{String, Float64}(name => Float64(du[idx]) for (name, idx) in vmap)
 end
 
 function trajectory(model, ic, t0, t1, out_times, reltol, abstol, compiler)
     ics = _ic_dict(ic)
-    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model; initial_conditions=ics,
-                                         compiler=Symbol(compiler))
+    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
+        model; initial_conditions = ics,
+        compiler = Symbol(compiler)
+    )
     prob = ODE.ODEProblem(f!, u0, (Float64(t0), Float64(t1)), p)
-    sol = ODE.solve(prob, ODE.Tsit5(); reltol=reltol, abstol=abstol)
-    out = Dict{String,Any}()
+    sol = ODE.solve(prob, ODE.Tsit5(); reltol = reltol, abstol = abstol)
+    out = Dict{String, Any}()
     for t in out_times
         st = sol(Float64(t))
-        out[tkey(t)] = Dict{String,Float64}(name => Float64(st[idx])
-                                            for (name, idx) in vmap)
+        out[tkey(t)] = Dict{String, Float64}(
+            name => Float64(st[idx])
+                for (name, idx) in vmap
+        )
     end
-    out
+    return out
 end
 
 # ---------------------------------------------------------------------------- #
@@ -143,7 +151,7 @@ end
 # CONST ⇒ materialized once at build time into `const_arrays` under the loader
 # name, reachable by the scoped-`ic` fold (u0) and the loader→consumer gather.
 struct _StubLoaderProvider
-    fields::Dict{String,Array{Float64}}
+    fields::Dict{String, Array{Float64}}
 end
 ESS.provider_refresh_times(::_StubLoaderProvider) = Float64[]
 ESS.provider_sample(p::_StubLoaderProvider, ::Real) = p.fields
@@ -171,12 +179,12 @@ end
 # One shared stub backs every declared loader variable; `providers` maps each
 # `<Loader>.<var>` name to it (mirrors the gate test's `_loaded_providers`).
 function _stub_providers(inputs)
-    fields = Dict{String,Array{Float64}}()
+    fields = Dict{String, Array{Float64}}()
     for (k, v) in pairs(inputs)
         fields[String(k)] = _to_field(v)
     end
     stub = _StubLoaderProvider(fields)
-    return Dict{String,Any}(k => stub for k in keys(fields))
+    return Dict{String, Any}(k => stub for k in keys(fields))
 end
 
 # Index of the saved time point closest to `t` (endpoints are `saveat`-pinned).
@@ -190,7 +198,7 @@ function _time_index(times, t)
             best = i
         end
     end
-    best
+    return best
 end
 
 # Build the provider-folded tree-walk evaluator exactly as `esm_problem` does: fold
@@ -199,13 +207,15 @@ end
 # lifted consumer gather from the loader name).
 function _pipeline_evaluator(path, providers, t0, compiler)
     doc = ESS._prepare_run_doc(path)
-    merged_const = Dict{String,Any}()
+    merged_const = Dict{String, Any}()
     for (rawk, prov) in providers
         k = String(rawk)
         merged_const[k] = ESS._provider_const_field(ESS.provider_sample(prov, t0), k)
     end
-    return EarthSciAST._build_evaluator(doc; const_arrays = merged_const,
-                          compiler = Symbol(compiler))
+    return EarthSciAST._build_evaluator(
+        doc; const_arrays = merged_const,
+        compiler = Symbol(compiler)
+    )
 end
 
 function pipeline_fixture(fx, base, reltol, abstol, compiler)
@@ -217,11 +227,11 @@ function pipeline_fixture(fx, base, reltol, abstol, compiler)
 
     # --- RHS at each probe via the provider-folded evaluator ------------------
     f!, u0, p, _, var_map = _pipeline_evaluator(path, providers, t0, compiler)
-    baremap = Dict{String,Int}()
+    baremap = Dict{String, Int}()
     for (k, idx) in var_map
         baremap[_bare(k)] = idx
     end
-    rhs = Dict{String,Any}()
+    rhs = Dict{String, Any}()
     for pr in fx.rhs_probes
         u = copy(u0)
         for (rawn, val) in pairs(pr.state)
@@ -238,21 +248,29 @@ function pipeline_fixture(fx, base, reltol, abstol, compiler)
         # fixtures whose every state has a `D`-equation.)
         du = zero(u)
         f!(du, u, p, Float64(pr.t))
-        rhs[String(pr.id)] = Dict{String,Float64}(name => Float64(du[idx])
-                                                   for (name, idx) in var_map)
+        rhs[String(pr.id)] = Dict{String, Float64}(
+            name => Float64(du[idx])
+                for (name, idx) in var_map
+        )
     end
 
     # --- Trajectory via the sanctioned EsmProblem provider path ---------------
-    prob = ESS.esm_problem(path, (t0, t1); providers = providers,
-                           compiler = Symbol(compiler))
-    r = SciMLBase.solve(prob, ODE.Tsit5(); reltol = reltol, abstol = abstol,
-                        saveat = checkpoints)
+    prob = ESS.esm_problem(
+        path, (t0, t1); providers = providers,
+        compiler = Symbol(compiler)
+    )
+    r = SciMLBase.solve(
+        prob, ODE.Tsit5(); reltol = reltol, abstol = abstol,
+        saveat = checkpoints
+    )
     SciMLBase.successful_retcode(r) || error("solve failed: retcode $(r.retcode)")
-    traj = Dict{String,Any}()
+    traj = Dict{String, Any}()
     for tc in checkpoints
         ti = _time_index(r.t, tc)
-        traj[tkey(tc)] = Dict{String,Float64}(name => Float64(r.u[ti][idx])
-                                              for (name, idx) in var_map)
+        traj[tkey(tc)] = Dict{String, Float64}(
+            name => Float64(r.u[ti][idx])
+                for (name, idx) in var_map
+        )
     end
     return Dict("rhs" => rhs, "trajectory" => traj)
 end
@@ -264,16 +282,18 @@ function discretized_fixture(fx, base, reltol, abstol, compiler)
     file = load_path(path)
     model = file.models[String(fx.model)]
 
-    rhs = Dict{String,Any}()
+    rhs = Dict{String, Any}()
     for pr in fx.rhs_probes
         rhs[String(pr.id)] = rhs_at(model, pr.state, pr.t, compiler)
     end
 
     tr = fx.trajectory
     ts = tr.time_span
-    traj = trajectory(model, tr.initial_conditions,
-                      ts[Symbol("start")], ts[Symbol("end")],
-                      tr.output_times, reltol, abstol, compiler)
+    traj = trajectory(
+        model, tr.initial_conditions,
+        ts[Symbol("start")], ts[Symbol("end")],
+        tr.output_times, reltol, abstol, compiler
+    )
 
     return Dict("rhs" => rhs, "trajectory" => traj)
 end
@@ -286,19 +306,23 @@ function main()
     abstol = Float64(integ.abstol)
     base = dirname(manifest_path)
 
-    fixtures = Dict{String,Any}()
+    fixtures = Dict{String, Any}()
     for fx in manifest.fixtures
         if haskey(fx, :pipeline) && String(fx.pipeline) == "full"
-            fixtures[String(fx.id)] = pipeline_fixture(fx, base, reltol, abstol,
-                                                      compiler)
+            fixtures[String(fx.id)] = pipeline_fixture(
+                fx, base, reltol, abstol,
+                compiler
+            )
         else
-            fixtures[String(fx.id)] = discretized_fixture(fx, base, reltol, abstol,
-                                                         compiler)
+            fixtures[String(fx.id)] = discretized_fixture(
+                fx, base, reltol, abstol,
+                compiler
+            )
         end
     end
 
     payload = Dict("binding" => "julia", "fixtures" => fixtures)
-    open(output_path, "w") do io
+    return open(output_path, "w") do io
         JSON3.write(io, payload)
     end
 end

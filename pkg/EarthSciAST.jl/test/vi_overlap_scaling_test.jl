@@ -48,13 +48,13 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
     @test hasmethod(ESS.build_spatial_index, Tuple{AbstractVector})
 
     # ---- grid of cells + points at distinct cell centres ------------------
-    Random.seed!(0xC0FFEE)
+    Random.seed!(0x00C0FFEE)
     gx, gy = 200, 100
     ncells = gx * gy                      # 20000
-    npts   = 200
+    npts = 200
     CW = Vector{Float64}(undef, ncells); CS = similar(CW)
     CE = similar(CW);                      CN = similar(CW)
-    cell_ab = Vector{Tuple{Int,Int}}(undef, ncells)
+    cell_ab = Vector{Tuple{Int, Int}}(undef, ncells)
     for k in 1:ncells
         a = (k - 1) ÷ gy                  # column 0..gx-1
         b = (k - 1) % gy                  # row    0..gy-1
@@ -69,18 +69,23 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
         PX[p] = a + 0.5; PY[p] = b + 0.5  # strict interior of exactly one cell
     end
 
-    const_arrays = Dict{String,Any}(
-        "X" => PX, "Y" => PY, "W" => CW, "S" => CS, "E" => CE, "N" => CN)
+    const_arrays = Dict{String, Any}(
+        "X" => PX, "Y" => PY, "W" => CW, "S" => CS, "E" => CE, "N" => CN
+    )
 
     # ---- candidate set construction: O(N log N) STRtree, |cands| == npts ---
     # WARM UP on a tiny same-typed input first (the same JIT-vs-runtime
     # discipline the value-invention timing below already uses): the assertion
     # is about the SCALING of the candidate pass, not about compile time.
-    ESS._overlap_candidate_set(["X", "Y"], ["W", "S", "E", "N"],
-        Dict{String,Any}("X" => [0.5], "Y" => [0.5], "W" => [0.0], "S" => [0.0],
-                         "E" => [1.0], "N" => [1.0]); eps=0.0)
+    ESS._overlap_candidate_set(
+        ["X", "Y"], ["W", "S", "E", "N"],
+        Dict{String, Any}(
+            "X" => [0.5], "Y" => [0.5], "W" => [0.0], "S" => [0.0],
+            "E" => [1.0], "N" => [1.0]
+        ); eps = 0.0
+    )
     tcands = @elapsed cands =
-        ESS._overlap_candidate_set(["X", "Y"], ["W", "S", "E", "N"], const_arrays; eps=0.0)
+        ESS._overlap_candidate_set(["X", "Y"], ["W", "S", "E", "N"], const_arrays; eps = 0.0)
     # each point centre intersects exactly ONE closed cell envelope
     @test length(cands) == npts
     # Blow-up guard, NOT a benchmark. What this must catch is the fast path
@@ -102,48 +107,73 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
     @test length(oracle) == npts          # distinct cells ⇒ npts containments
 
     # (X-W)(E-X)(Y-S)(N-Y) > 0 : strict rectangle-interior narrow phase.
-    _filter = _op(">",
-        _op("*",
-            _op("*", _op("-", _ix("X", "i"), _ix("W", "j")),
-                     _op("-", _ix("E", "j"), _ix("X", "i"))),
-            _op("*", _op("-", _ix("Y", "i"), _ix("S", "j")),
-                     _op("-", _ix("N", "j"), _ix("Y", "i")))),
-        0.0)
+    _filter = _op(
+        ">",
+        _op(
+            "*",
+            _op(
+                "*", _op("-", _ix("X", "i"), _ix("W", "j")),
+                _op("-", _ix("E", "j"), _ix("X", "i"))
+            ),
+            _op(
+                "*", _op("-", _ix("Y", "i"), _ix("S", "j")),
+                _op("-", _ix("N", "j"), _ix("Y", "i"))
+            )
+        ),
+        0.0
+    )
 
     _mkdoc(np, nc) = Dict(
         "esm" => "1.1.0",
         "metadata" => Dict("name" => "vi_overlap_scaling"),
         "index_sets" => Dict(
             "points" => Dict("kind" => "interval", "size" => np),
-            "cells"  => Dict("kind" => "interval", "size" => nc),
-            "present_cells" => Dict("kind" => "derived", "from_faq" => "scaling_producer")),
-        "models" => Dict("ScalingPIR" => Dict(
-            "variables" => Dict(
-                "X" => Dict("type" => "parameter", "shape" => ["points"]),
-                "Y" => Dict("type" => "parameter", "shape" => ["points"]),
-                "W" => Dict("type" => "parameter", "shape" => ["cells"]),
-                "S" => Dict("type" => "parameter", "shape" => ["cells"]),
-                "E" => Dict("type" => "parameter", "shape" => ["cells"]),
-                "N" => Dict("type" => "parameter", "shape" => ["cells"]),
-                "cell_present" => Dict("type" => "unknown", "shape" => ["present_cells"])),
-            "equations" => [Dict(
-                "lhs" => _ix("cell_present", "m"),
-                "rhs" => Dict(
-                    "op" => "faq",
-                    "id" => "scaling_producer",
-                    "semiring" => "bool_and_or",
-                    "distinct" => true,
-                    "output_idx" => ["m"],
-                    "ranges" => Dict("i" => Dict("from" => "points"),
-                                     "j" => Dict("from" => "cells")),
-                    "join" => [Dict("overlap" => Dict(
-                        "src_env" => ["X", "Y"],
-                        "tgt_env" => ["W", "S", "E", "N"],
-                        "eps" => 0.0))],
-                    "filter" => _filter,
-                    "args" => ["X", "Y", "W", "S", "E", "N"],
-                    "key" => Dict("op" => "skolem", "label" => "cell", "args" => ["j"]),
-                    "expr" => Dict("op" => "true", "args" => [])))])))
+            "cells" => Dict("kind" => "interval", "size" => nc),
+            "present_cells" => Dict("kind" => "derived", "from_faq" => "scaling_producer")
+        ),
+        "models" => Dict(
+            "ScalingPIR" => Dict(
+                "variables" => Dict(
+                    "X" => Dict("type" => "parameter", "shape" => ["points"]),
+                    "Y" => Dict("type" => "parameter", "shape" => ["points"]),
+                    "W" => Dict("type" => "parameter", "shape" => ["cells"]),
+                    "S" => Dict("type" => "parameter", "shape" => ["cells"]),
+                    "E" => Dict("type" => "parameter", "shape" => ["cells"]),
+                    "N" => Dict("type" => "parameter", "shape" => ["cells"]),
+                    "cell_present" => Dict("type" => "unknown", "shape" => ["present_cells"])
+                ),
+                "equations" => [
+                    Dict(
+                        "lhs" => _ix("cell_present", "m"),
+                        "rhs" => Dict(
+                            "op" => "faq",
+                            "id" => "scaling_producer",
+                            "semiring" => "bool_and_or",
+                            "distinct" => true,
+                            "output_idx" => ["m"],
+                            "ranges" => Dict(
+                                "i" => Dict("from" => "points"),
+                                "j" => Dict("from" => "cells")
+                            ),
+                            "join" => [
+                                Dict(
+                                    "overlap" => Dict(
+                                        "src_env" => ["X", "Y"],
+                                        "tgt_env" => ["W", "S", "E", "N"],
+                                        "eps" => 0.0
+                                    )
+                                ),
+                            ],
+                            "filter" => _filter,
+                            "args" => ["X", "Y", "W", "S", "E", "N"],
+                            "key" => Dict("op" => "skolem", "label" => "cell", "args" => ["j"]),
+                            "expr" => Dict("op" => "true", "args" => [])
+                        )
+                    ),
+                ]
+            )
+        )
+    )
 
     bigdoc = _mkdoc(npts, ncells)
     file = ESS.coerce_esm_file(JSON3.read(JSON3.write(bigdoc)))
@@ -154,16 +184,18 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
     let sm = _mkdoc(2, 4)
         sf = ESS.coerce_esm_file(JSON3.read(JSON3.write(sm)))
         smodel = ESS._select_model(sf, "ScalingPIR")
-        sconst = Dict{String,Any}("X" => [0.5, 2.5], "Y" => [0.5, 2.5],
+        sconst = Dict{String, Any}(
+            "X" => [0.5, 2.5], "Y" => [0.5, 2.5],
             "W" => [0.0, 1.0, 2.0, 3.0], "S" => [0.0, 0.0, 0.0, 0.0],
-            "E" => [1.0, 2.0, 3.0, 4.0], "N" => [1.0, 1.0, 1.0, 1.0])
-        ESS.materialize_value_invention(smodel, sf.index_sets, sconst, Dict{String,Any}())
+            "E" => [1.0, 2.0, 3.0, 4.0], "N" => [1.0, 1.0, 1.0, 1.0]
+        )
+        ESS.materialize_value_invention(smodel, sf.index_sets, sconst, Dict{String, Any}())
     end
 
     # ---- TIMED, INSTRUMENTED materialisation ------------------------------
     ESS._VI_ENUM_VISITS[] = 0
     twall = @elapsed vi =
-        ESS.materialize_value_invention(model, file.index_sets, const_arrays, Dict{String,Any}())
+        ESS.materialize_value_invention(model, file.index_sets, const_arrays, Dict{String, Any}())
     visits = ESS._VI_ENUM_VISITS[]
 
     # (a) correctness — materialised set == independent brute-force oracle
@@ -197,13 +229,13 @@ end
 # driver must remove work without moving a number.
 # ===========================================================================
 @testset "overlap-gated DENSE aggregate scaling (both orientations)" begin
-    Random.seed!(0xC0FFEE)
+    Random.seed!(0x00C0FFEE)
     gx, gy = 200, 100
     ncells = gx * gy
     npts = 200
     CW = Vector{Float64}(undef, ncells); CS = similar(CW)
     CE = similar(CW);                      CN = similar(CW)
-    cell_ab = Vector{Tuple{Int,Int}}(undef, ncells)
+    cell_ab = Vector{Tuple{Int, Int}}(undef, ncells)
     for k in 1:ncells
         a = (k - 1) ÷ gy; b = (k - 1) % gy
         CW[k] = a; CE[k] = a + 1; CS[k] = b; CN[k] = b + 1
@@ -217,9 +249,11 @@ end
     end
 
     # the rectangle-containment predicate, cell symbol `c`, record symbol `r`
-    _contain(csym, rsym) = _op("and",
+    _contain(csym, rsym) = _op(
+        "and",
         _op("<=", _ix("W", csym), _ix("X", rsym)), _op("<", _ix("X", rsym), _ix("E", csym)),
-        _op("<=", _ix("S", csym), _ix("Y", rsym)), _op("<", _ix("Y", rsym), _ix("N", csym)))
+        _op("<=", _ix("S", csym), _ix("Y", rsym)), _op("<", _ix("Y", rsym), _ix("N", csym))
+    )
 
     # ---- (A) MIRRORED orientation on the MAIN GRAPH ----------------------
     _rectvars = Dict(
@@ -228,53 +262,89 @@ end
         "W" => Dict("type" => "parameter", "shape" => ["cells"]),
         "S" => Dict("type" => "parameter", "shape" => ["cells"]),
         "E" => Dict("type" => "parameter", "shape" => ["cells"]),
-        "N" => Dict("type" => "parameter", "shape" => ["cells"]))
+        "N" => Dict("type" => "parameter", "shape" => ["cells"])
+    )
     _mirror_doc(np, nc) = Dict(
         "esm" => "1.1.0",
         "metadata" => Dict("name" => "dense_overlap_mirror"),
-        "index_sets" => Dict("points" => Dict("kind" => "interval", "size" => np),
-                             "cells"  => Dict("kind" => "interval", "size" => nc)),
-        "models" => Dict("Mirror" => Dict(
-            "variables" => merge(_rectvars,
-                Dict("P" => Dict("type" => "unknown", "shape" => ["points"]))),
-            "equations" => [Dict(
-                "lhs" => Dict("op" => "faq", "args" => [], "output_idx" => ["p"],
-                    "expr" => Dict("op" => "D", "args" => [_ix("P", "p")], "wrt" => "t"),
-                    "ranges" => Dict("p" => [1, np])),
-                "rhs" => Dict("op" => "faq", "semiring" => "sum_product",
-                    "output_idx" => ["p"],
-                    "ranges" => Dict("p" => Dict("from" => "points"),
-                                     "c" => Dict("from" => "cells")),
-                    "join" => [Dict("overlap" => Dict(
-                        "src_env" => ["X", "Y"], "tgt_env" => ["W", "S", "E", "N"],
-                        "eps" => 0.0))],
-                    "filter" => _op("and",
-                        _op("<=", _ix("W", "c"), _ix("X", "p")),
-                        _op("<", _ix("X", "p"), _ix("E", "c")),
-                        _op("<=", _ix("S", "c"), _ix("Y", "p")),
-                        _op("<", _ix("Y", "p"), _ix("N", "c"))),
-                    "args" => ["X", "Y", "W", "S", "E", "N"],
-                    "expr" => _op("+", _ix("W", "c"), _ix("S", "c"))))])))
+        "index_sets" => Dict(
+            "points" => Dict("kind" => "interval", "size" => np),
+            "cells" => Dict("kind" => "interval", "size" => nc)
+        ),
+        "models" => Dict(
+            "Mirror" => Dict(
+                "variables" => merge(
+                    _rectvars,
+                    Dict("P" => Dict("type" => "unknown", "shape" => ["points"]))
+                ),
+                "equations" => [
+                    Dict(
+                        "lhs" => Dict(
+                            "op" => "faq", "args" => [], "output_idx" => ["p"],
+                            "expr" => Dict("op" => "D", "args" => [_ix("P", "p")], "wrt" => "t"),
+                            "ranges" => Dict("p" => [1, np])
+                        ),
+                        "rhs" => Dict(
+                            "op" => "faq", "semiring" => "sum_product",
+                            "output_idx" => ["p"],
+                            "ranges" => Dict(
+                                "p" => Dict("from" => "points"),
+                                "c" => Dict("from" => "cells")
+                            ),
+                            "join" => [
+                                Dict(
+                                    "overlap" => Dict(
+                                        "src_env" => ["X", "Y"], "tgt_env" => ["W", "S", "E", "N"],
+                                        "eps" => 0.0
+                                    )
+                                ),
+                            ],
+                            "filter" => _op(
+                                "and",
+                                _op("<=", _ix("W", "c"), _ix("X", "p")),
+                                _op("<", _ix("X", "p"), _ix("E", "c")),
+                                _op("<=", _ix("S", "c"), _ix("Y", "p")),
+                                _op("<", _ix("Y", "p"), _ix("N", "c"))
+                            ),
+                            "args" => ["X", "Y", "W", "S", "E", "N"],
+                            "expr" => _op("+", _ix("W", "c"), _ix("S", "c"))
+                        )
+                    ),
+                ]
+            )
+        )
+    )
 
-    _mca(np, nc) = Dict{String,Any}("X" => PX[1:np], "Y" => PY[1:np],
-        "W" => CW[1:nc], "S" => CS[1:nc], "E" => CE[1:nc], "N" => CN[1:nc])
+    _mca(np, nc) = Dict{String, Any}(
+        "X" => PX[1:np], "Y" => PY[1:np],
+        "W" => CW[1:nc], "S" => CS[1:nc], "E" => CE[1:nc], "N" => CN[1:nc]
+    )
 
     # warm the whole front door on a tiny same-typed fixture (JIT, not runtime)
     let sm = Dict(
             "esm" => "0.6.0", "metadata" => Dict("name" => "dense_overlap_mirror"),
-            "index_sets" => Dict("points" => Dict("kind" => "interval", "size" => 1),
-                                 "cells"  => Dict("kind" => "interval", "size" => 2)),
-            "models" => _mirror_doc(1, 2)["models"])
-        ESS._build_evaluator(sm; model_name="Mirror",
-            const_arrays=Dict{String,Any}("X" => [0.5], "Y" => [0.5],
+            "index_sets" => Dict(
+                "points" => Dict("kind" => "interval", "size" => 1),
+                "cells" => Dict("kind" => "interval", "size" => 2)
+            ),
+            "models" => _mirror_doc(1, 2)["models"]
+        )
+        ESS._build_evaluator(
+            sm; model_name = "Mirror",
+            const_arrays = Dict{String, Any}(
+                "X" => [0.5], "Y" => [0.5],
                 "W" => [0.0, 1.0], "S" => [0.0, 0.0],
-                "E" => [1.0, 2.0], "N" => [1.0, 1.0]))
+                "E" => [1.0, 2.0], "N" => [1.0, 1.0]
+            )
+        )
     end
 
     ESS._VI_ENUM_VISITS[] = 0
     tmir = @elapsed f!, u0, pp, _, vmap =
-        ESS._build_evaluator(_mirror_doc(npts, ncells); model_name="Mirror",
-                            const_arrays=_mca(npts, ncells))
+        ESS._build_evaluator(
+        _mirror_doc(npts, ncells); model_name = "Mirror",
+        const_arrays = _mca(npts, ncells)
+    )
     mir_visits = ESS._VI_ENUM_VISITS[]
 
     du = similar(u0); f!(du, u0, pp, 0.0)
@@ -291,53 +361,73 @@ end
     # esm 1.0.0 (§5.4/§6.3.1): a variable has NO `expression` — an observed
     # unknown is declared `unknown` and DEFINED by a bare-variable-LHS equation.
     _unk(shape) = Dict("type" => "unknown", "shape" => shape)
-    _defeq(name, e) = Dict{String,Any}("lhs" => name, "rhs" => e)
-    _binagg = Dict("op" => "faq", "output_idx" => ["c"], "reduce" => "+",
+    _defeq(name, e) = Dict{String, Any}("lhs" => name, "rhs" => e)
+    _binagg = Dict(
+        "op" => "faq", "output_idx" => ["c"], "reduce" => "+",
         "ranges" => Dict("c" => Dict("from" => "cells"), "r" => Dict("from" => "points")),
         "args" => ["W", "S", "E", "N", "X", "Y", "annual"],
-        "expr" => _op("*", _op("ifelse", _contain("c", "r"), 1.0, 0.0),
-                      _ix("annual", "r")))
-    _concagg = Dict("op" => "faq", "output_idx" => ["rcv"], "reduce" => "+",
-        "ranges" => Dict("s" => Dict("from" => "cells"),
-                         "rcv" => Dict("from" => "rcv_cells")),
+        "expr" => _op(
+            "*", _op("ifelse", _contain("c", "r"), 1.0, 0.0),
+            _ix("annual", "r")
+        )
+    )
+    _concagg = Dict(
+        "op" => "faq", "output_idx" => ["rcv"], "reduce" => "+",
+        "ranges" => Dict(
+            "s" => Dict("from" => "cells"),
+            "rcv" => Dict("from" => "rcv_cells")
+        ),
         "args" => ["SR", "Emis"],
-        "expr" => _op("*", _ix("SR", "s", "rcv"), _ix("Emis", "s")))
+        "expr" => _op("*", _ix("SR", "s", "rcv"), _ix("Emis", "s"))
+    )
     annual = collect(1.0:npts)
     SR = [Float64((i % 7) + j) for i in 1:ncells, j in 1:2]
-    fwd_doc = Dict{String,Any}(
+    fwd_doc = Dict{String, Any}(
         "esm" => "0.9.0", "metadata" => Dict("name" => "dense_overlap_forward"),
-        "index_sets" => Dict{String,Any}(
+        "index_sets" => Dict{String, Any}(
             "points" => Dict("kind" => "interval", "size" => npts),
             "cells" => Dict("kind" => "interval", "size" => ncells),
-            "rcv_cells" => Dict("kind" => "interval", "size" => 2)),
-        "models" => Dict{String,Any}("Fwd" => Dict{String,Any}(
-            "variables" => Dict{String,Any}(
-                "X" => _param(["points"]), "Y" => _param(["points"]),
-                "annual" => _param(["points"]),
-                "W" => _param(["cells"]), "S" => _param(["cells"]),
-                "E" => _param(["cells"]), "N" => _param(["cells"]),
-                "SR" => _param(["cells", "rcv_cells"]),
-                "Emis" => _unk(["cells"]),
-                "conc" => _unk(["rcv_cells"])),
-            "equations" => Any[_defeq("Emis", _binagg), _defeq("conc", _concagg)])))
+            "rcv_cells" => Dict("kind" => "interval", "size" => 2)
+        ),
+        "models" => Dict{String, Any}(
+            "Fwd" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "X" => _param(["points"]), "Y" => _param(["points"]),
+                    "annual" => _param(["points"]),
+                    "W" => _param(["cells"]), "S" => _param(["cells"]),
+                    "E" => _param(["cells"]), "N" => _param(["cells"]),
+                    "SR" => _param(["cells", "rcv_cells"]),
+                    "Emis" => _unk(["cells"]),
+                    "conc" => _unk(["rcv_cells"])
+                ),
+                "equations" => Any[_defeq("Emis", _binagg), _defeq("conc", _concagg)]
+            )
+        )
+    )
 
-    rw = ESS.desugar_pushdown(fwd_doc; model_name="Fwd")
+    rw = ESS.desugar_pushdown(fwd_doc; model_name = "Fwd")
     @test rw !== fwd_doc
     # the rewrite mutates the DEFINING EQUATION's rhs, not a variable field
-    Emis_expr = first(eq["rhs"] for eq in rw["models"]["Fwd"]["equations"]
-                      if get(eq, "lhs", nothing) == "Emis")
+    Emis_expr = first(
+        eq["rhs"] for eq in rw["models"]["Fwd"]["equations"]
+            if get(eq, "lhs", nothing) == "Emis"
+    )
     # the rewritten binning aggregate carries the DERIVED gate, over the
     # generated compact-axis envelopes (not the full-grid rects)
     @test haskey(Emis_expr, "join")
     ov = Emis_expr["join"][1]["overlap"]
     @test ov["src_env"] == ["X", "Y"]
-    @test ov["tgt_env"] == ["pd_cell__cells__W", "pd_cell__cells__S",
-                            "pd_cell__cells__E", "pd_cell__cells__N"]
+    @test ov["tgt_env"] == [
+        "pd_cell__cells__W", "pd_cell__cells__S",
+        "pd_cell__cells__E", "pd_cell__cells__N",
+    ]
 
-    fca = Dict{String,Any}("X" => PX, "Y" => PY, "annual" => annual,
-        "W" => CW, "S" => CS, "E" => CE, "N" => CN, "SR" => SR)
+    fca = Dict{String, Any}(
+        "X" => PX, "Y" => PY, "annual" => annual,
+        "W" => CW, "S" => CS, "E" => CE, "N" => CN, "SR" => SR
+    )
     insp = ESS.BuildInspection()
-    ESS._build_evaluator(rw; model_name="Fwd", const_arrays=fca, inspect=insp)
+    ESS._build_evaluator(rw; model_name = "Fwd", const_arrays = fca, inspect = insp)
     nsupport = insp.derived_extents["pd_faq__cells"]
     @test nsupport == npts                     # distinct cells, one point each
 

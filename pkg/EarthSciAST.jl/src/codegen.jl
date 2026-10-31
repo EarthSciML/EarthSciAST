@@ -19,12 +19,14 @@ Note: events are handled within individual models, not at the file level.
 Coupling, domain, and data-loader sections are comment-only placeholders
 (their codegen is not yet implemented).
 """
-function _generate_script(file::EsmFile;
-                          language::String,
-                          imports::Vector{String},
-                          model_emitter::Function,
-                          reaction_system_emitter::Function,
-                          emit_data_sources::Bool=false)
+function _generate_script(
+        file::EsmFile;
+        language::String,
+        imports::Vector{String},
+        model_emitter::Function,
+        reaction_system_emitter::Function,
+        emit_data_sources::Bool = false
+    )
     # Expand at the boundary (RFC out-of-line-expression-templates §7.7): the
     # expression emitters have no `apply_expression_template` arm (the generic
     # fallback would render `apply_expression_template()`, dropping name and
@@ -106,7 +108,8 @@ but is not guaranteed to run unmodified against the current ModelingToolkit
 release (e.g. variable default/unit metadata syntax, SDE noise equations).
 """
 function to_julia_code(file::EsmFile)
-    return _generate_script(file;
+    return _generate_script(
+        file;
         language = "Julia",
         imports = [
             "using ModelingToolkit",
@@ -117,7 +120,8 @@ function to_julia_code(file::EsmFile)
         ],
         model_emitter = generate_model_code,
         reaction_system_emitter = generate_reaction_system_code,
-        emit_data_sources = true)
+        emit_data_sources = true
+    )
 end
 
 # Helper functions for Julia code generation
@@ -365,7 +369,7 @@ end
 # backward-compat Dict property shim loses author order). Thin wrapper over
 # display.jl's shared `_format_stoichiometry_side` with code-emitter
 # formatting: bare species names, `<coeff>*` prefixes, ∅ for empty sides.
-_format_reaction_side(entries::Union{Vector{StoichiometryEntry},Nothing}) =
+_format_reaction_side(entries::Union{Vector{StoichiometryEntry}, Nothing}) =
     _format_stoichiometry_side(entries; format_coefficient = c -> "$(c)*")
 
 function format_reaction(reaction::Reaction)
@@ -386,7 +390,7 @@ end
 # ---------------------------------------------------------------------------
 
 # Julia surface syntax: ||, && loosest; ^ tightest and right-associative.
-const _JULIA_CODEGEN_PRECEDENCE = Dict{String,Int}(
+const _JULIA_CODEGEN_PRECEDENCE = Dict{String, Int}(
     "or" => 1, "and" => 2,
     "==" => 3, "!=" => 3, "<" => 3, ">" => 3, "<=" => 3, ">=" => 3,
     "+" => 4, "-" => 4,
@@ -397,12 +401,14 @@ const _JULIA_CODEGEN_PRECEDENCE = Dict{String,Int}(
 # Function calls / atoms: effectively infinite precedence, never parenthesized.
 const _CODEGEN_FUNCTION_PRECEDENCE = 8
 
-_codegen_precedence(table::Dict{String,Int}, op::String) =
+_codegen_precedence(table::Dict{String, Int}, op::String) =
     get(table, op, _CODEGEN_FUNCTION_PRECEDENCE)
 
 # Should `child`, rendered as an operand of infix `parent_op`, be parenthesized?
-function _codegen_needs_parens(table::Dict{String,Int}, parent_op::String,
-                               child::ASTExpr, is_right::Bool)
+function _codegen_needs_parens(
+        table::Dict{String, Int}, parent_op::String,
+        child::ASTExpr, is_right::Bool
+    )
     child isa OpExpr || return false
     parent_prec = _codegen_precedence(table, parent_op)
     # Function-call parents wrap their args in (...) already.
@@ -426,7 +432,7 @@ end
 
 # Render the operand of a unary minus, parenthesizing children that bind
 # looser than multiplication (so `-(a + b)` never degrades to `-a + b`).
-function _format_unary_minus_operand(arg::ASTExpr, table::Dict{String,Int}, fmt::Function)
+function _format_unary_minus_operand(arg::ASTExpr, table::Dict{String, Int}, fmt::Function)
     inner = fmt(arg)
     if arg isa OpExpr && _codegen_precedence(table, arg.op) <= table["+"]
         return "($inner)"
@@ -458,7 +464,7 @@ function format_julia_expression_node(node::OpExpr)
 
     # Format one operand with precedence-aware parenthesization. In n-ary
     # chains (`a - b - c`), every operand after the first is a right operand.
-    fmt(arg, is_right::Bool=false) = begin
+    fmt(arg, is_right::Bool = false) = begin
         s = format_julia_expression(arg)
         _codegen_needs_parens(_JULIA_CODEGEN_PRECEDENCE, op, arg, is_right) ? "($s)" : s
     end
@@ -526,4 +532,3 @@ the generated script defines them.
 function extract_parameter_names(expr::ASTExpr, species_names::Set{String})
     return Set{String}(name for name in free_variables(expr) if !(name in species_names))
 end
-

@@ -29,10 +29,10 @@ const ESM = EarthSciAST
 
 include("testutils.jl")  # _n/_i/_v/_op/_D/_idx + zero-alloc harness
 
-_tc_fn(name, args...) = OpExpr("fn", ESM.ASTExpr[args...]; name=String(name))
-_tc_const(v) = OpExpr("const", ESM.ASTExpr[]; value=v)
+_tc_fn(name, args...) = OpExpr("fn", ESM.ASTExpr[args...]; name = String(name))
+_tc_const(v) = OpExpr("const", ESM.ASTExpr[]; value = v)
 
-_tc_call(f!, u, p, t, ::Type{T}=Float64) where {T} =
+_tc_call(f!, u, p, t, ::Type{T} = Float64) where {T} =
     (d = zeros(T, length(u)); f!(d, u, p, t); d)
 
 # ---------------------------------------------------------------------------
@@ -50,44 +50,69 @@ _tc_axis() = Float64[0.0, 0.25, 0.5, 0.75, 1.0]
 _tc_table(i) = Float64[0.1i, 0.22i, 0.35i, 0.51i, 0.8i]
 
 function _tc_fastjx_model(K::Int, M::Int)
-    vars = Dict{String,ModelVariable}(
-        "w" => ModelVariable(ParameterVariable; default=0.7),
-        "scale" => ModelVariable(ParameterVariable; default=1.5),
+    vars = Dict{String, ModelVariable}(
+        "w" => ModelVariable(ParameterVariable; default = 0.7),
+        "scale" => ModelVariable(ParameterVariable; default = 1.5),
         "sza" => ModelVariable(UnknownVariable),
         "met" => ModelVariable(UnknownVariable),
     )
     eqs = ESM.Equation[
-        ESM.Equation(_v("sza"),
-            _op("+", _n(0.5), _op("*", _n(0.4),
-                _op("sin", _op("*", _v("w"), _v("t")))))),
+        ESM.Equation(
+            _v("sza"),
+            _op(
+                "+", _n(0.5), _op(
+                    "*", _n(0.4),
+                    _op("sin", _op("*", _v("w"), _v("t")))
+                )
+            )
+        ),
         ESM.Equation(_v("met"), _op("*", _idx("F", _i(1)), _v("scale"))),
     ]
     for i in 1:K
         vars["band$i"] = ModelVariable(UnknownVariable)
-        push!(eqs, ESM.Equation(_v("band$i"),
-            _tc_fn("interp.linear", _tc_const(_tc_table(i)), _tc_const(_tc_axis()),
-                   _v("sza"))))
+        push!(
+            eqs, ESM.Equation(
+                _v("band$i"),
+                _tc_fn(
+                    "interp.linear", _tc_const(_tc_table(i)), _tc_const(_tc_axis()),
+                    _v("sza")
+                )
+            )
+        )
     end
     for j in 1:M
-        vars["x$j"] = ModelVariable(UnknownVariable; default=1.0 + 0.25j)
-        terms = ESM.ASTExpr[_op("*", _n(0.1 + 0.05i + 0.02j),
-                                _op("*", _v("band$i"), _v("met"))) for i in 1:K]
+        vars["x$j"] = ModelVariable(UnknownVariable; default = 1.0 + 0.25j)
+        terms = ESM.ASTExpr[
+            _op(
+                "*", _n(0.1 + 0.05i + 0.02j),
+                _op("*", _v("band$i"), _v("met"))
+            ) for i in 1:K
+        ]
         prod = length(terms) == 1 ? terms[1] : OpExpr("+", terms)
-        push!(eqs, ESM.Equation(_D("x$j"),
-            _op("-", prod,
-                _op("*", _n(0.3 + 0.1j), _op("*", _v("met"), _v("x$j"))))))
+        push!(
+            eqs, ESM.Equation(
+                _D("x$j"),
+                _op(
+                    "-", prod,
+                    _op("*", _n(0.3 + 0.1j), _op("*", _v("met"), _v("x$j")))
+                )
+            )
+        )
     end
     return ESM.Model(vars, eqs)
 end
 
 # The reference value of one state's derivative, computed the naive way.
-function _tc_ref_du(K, j, t, F1; w=0.7, scale=1.5, xj=1.0 + 0.25j)
+function _tc_ref_du(K, j, t, F1; w = 0.7, scale = 1.5, xj = 1.0 + 0.25j)
     sza = 0.5 + 0.4 * sin(w * t)
     met = F1 * scale
     acc = 0.0
     for i in 1:K
-        bi = Float64(ESM.evaluate_closed_function(
-            "interp.linear", Any[_tc_table(i), _tc_axis(), sza]))
+        bi = Float64(
+            ESM.evaluate_closed_function(
+                "interp.linear", Any[_tc_table(i), _tc_axis(), sza]
+            )
+        )
         term = (0.1 + 0.05i + 0.02j) * (bi * met)
         acc = i == 1 ? term : acc + term
     end
@@ -106,21 +131,23 @@ end
         K, M = 6, 3
         buf = [2.0]
         _f!, _u0, _p, _ts, _vm, diag = ESM._build_evaluator_impl(
-            _tc_fastjx_model(K, M); param_arrays=Dict("F" => buf))
+            _tc_fastjx_model(K, M); param_arrays = Dict("F" => buf)
+        )
         # sza + met + K bands, all named slots, all t-only.
         @test diag.n_obs_slots == K + 2
         @test diag.n_time_slots >= K + 2
         @test diag.n_const_slots + diag.n_time_slots + diag.n_dynamic_slots ==
-              diag.n_cse_slots + diag.n_obs_slots
+            diag.n_cse_slots + diag.n_obs_slots
 
         # ...and the interpreter demotes every one of them — the const tier
         # with them, since it turns the whole cadence off, not just this tier.
         _f2!, _u02, _p2, _ts2, _vm2, d2 = ESM._build_evaluator_impl(
-            _tc_fastjx_model(K, M); param_arrays=Dict("F" => buf),
-            compiler=:interpreter)
+            _tc_fastjx_model(K, M); param_arrays = Dict("F" => buf),
+            compiler = :interpreter
+        )
         @test d2.n_time_slots == 0 && d2.n_const_slots == 0
         @test d2.n_dynamic_slots == diag.n_const_slots + diag.n_time_slots +
-                                    diag.n_dynamic_slots
+            diag.n_dynamic_slots
     end
 
     # ----------------------------------------------------------------
@@ -135,14 +162,15 @@ end
         K, M = 4, 3
         buf = [10.0]
         f!, u0, p, _ts, vm, _diag = ESM._build_evaluator_impl(
-            _tc_fastjx_model(K, M); param_arrays=Dict("F" => buf))
+            _tc_fastjx_model(K, M); param_arrays = Dict("F" => buf)
+        )
         t = 1.75
         N = length(u0)
 
         # Call 1 (the unperturbed RHS of the fill): evaluates the tier at F[1]=10.
         du = _tc_call(f!, u0, p, t)
         for j in 1:M
-            @test du[vm["x$j"]] === _tc_ref_du(K, j, t, 10.0; xj=u0[vm["x$j"]])
+            @test du[vm["x$j"]] === _tc_ref_du(K, j, t, 10.0; xj = u0[vm["x$j"]])
         end
 
         # Calls 2..N+1: perturb one state per call, advance the probe per call.
@@ -151,42 +179,42 @@ end
         # since the ref value below is pinned at 10.0.
         for col in 1:N
             buf[1] = 100.0 + col                    # probe: no notify, same t
-            up = copy(u0); up[col] += 1e-6 * (1.0 + abs(u0[col]))
+            up = copy(u0); up[col] += 1.0e-6 * (1.0 + abs(u0[col]))
             dup = _tc_call(f!, up, p, t)
             for j in 1:M
-                @test dup[vm["x$j"]] === _tc_ref_du(K, j, t, 10.0; xj=up[vm["x$j"]])
+                @test dup[vm["x$j"]] === _tc_ref_du(K, j, t, 10.0; xj = up[vm["x$j"]])
             end
         end
 
         # Trigger 1 — `t` moved (a new step): re-evaluates, sees the probe's
         # current value. Bit-compare on t means ANY different t refills.
-        t2 = t + 1e-9
+        t2 = t + 1.0e-9
         du2 = _tc_call(f!, u0, p, t2)
-        @test du2[vm["x1"]] === _tc_ref_du(K, 1, t2, 100.0 + N; xj=u0[vm["x1"]])
+        @test du2[vm["x1"]] === _tc_ref_du(K, 1, t2, 100.0 + N; xj = u0[vm["x1"]])
 
         # Trigger 2 — forcing refresh at the SAME t: notify bumps the epoch and
         # the very next call re-evaluates.
         buf[1] = 55.0
         ESM.notify_forcing_refresh!()
         du3 = _tc_call(f!, u0, p, t2)
-        @test du3[vm["x1"]] === _tc_ref_du(K, 1, t2, 55.0; xj=u0[vm["x1"]])
+        @test du3[vm["x1"]] === _tc_ref_du(K, 1, t2, 55.0; xj = u0[vm["x1"]])
 
         # ...and WITHOUT a further notify, the memo holds again at t2.
         buf[1] = 77.0
         du4 = _tc_call(f!, u0, p, t2)
-        @test du4[vm["x1"]] === _tc_ref_du(K, 1, t2, 55.0; xj=u0[vm["x1"]])
+        @test du4[vm["x1"]] === _tc_ref_du(K, 1, t2, 55.0; xj = u0[vm["x1"]])
 
         # Trigger 3 — `p` moved: refills even at an unchanged (t, epoch).
         p2 = merge(p, (; scale = 2.0 * p.scale))
         du5 = _tc_call(f!, u0, p2, t2)
         @test du5[vm["x1"]] ===
-              _tc_ref_du(K, 1, t2, 77.0; scale=2.0 * p.scale, xj=u0[vm["x1"]])
+            _tc_ref_du(K, 1, t2, 77.0; scale = 2.0 * p.scale, xj = u0[vm["x1"]])
 
         # STEP REJECTION: revisit the original t. The slots are pure functions
         # of (p, t, forcing) — no history — so the revisit recomputes exactly
         # the value the first visit would produce with the CURRENT forcing.
         du6 = _tc_call(f!, u0, p, t)
-        @test du6[vm["x1"]] === _tc_ref_du(K, 1, t, 77.0; xj=u0[vm["x1"]])
+        @test du6[vm["x1"]] === _tc_ref_du(K, 1, t, 77.0; xj = u0[vm["x1"]])
     end
 
     # ----------------------------------------------------------------
@@ -199,7 +227,8 @@ end
         K, M = 4, 2
         buf = [3.0]
         f!, u0, p, _ts, _vm, _diag = ESM._build_evaluator_impl(
-            _tc_fastjx_model(K, M); param_arrays=Dict("F" => buf))
+            _tc_fastjx_model(K, M); param_arrays = Dict("F" => buf)
+        )
         t = 0.6
         g!(d, uu) = f!(d, uu, p, t)
         J1 = ForwardDiff.jacobian(g!, zeros(length(u0)), u0)
@@ -228,7 +257,8 @@ end
         buf = [4.0]
         for float_first in (true, false)
             f!, u0, p, _ts, vm, _diag = ESM._build_evaluator_impl(
-                _tc_fastjx_model(K, M); param_arrays=Dict("F" => buf))
+                _tc_fastjx_model(K, M); param_arrays = Dict("F" => buf)
+            )
             t = 0.4     # keeps sza well inside one interp cell (knot at 0.625)
             sumdu(tt) = sum(_tc_call(f!, u0, p, tt, typeof(tt)))
             if float_first
@@ -237,15 +267,18 @@ end
             dS = ForwardDiff.derivative(sumdu, t)  # Dual t, SAME value of t
             # Central-difference reference on the interpreter build (independent).
             fd!, u0d, pd, _tsd, _vmd, _dd = ESM._build_evaluator_impl(
-                _tc_fastjx_model(K, M); param_arrays=Dict("F" => buf),
-                compiler=:interpreter)
-            h = 1e-7
-            ref = (sum(_tc_call(fd!, u0d, pd, t + h)) -
-                   sum(_tc_call(fd!, u0d, pd, t - h))) / 2h
-            @test isapprox(dS, ref; rtol=1e-6, atol=1e-10)
+                _tc_fastjx_model(K, M); param_arrays = Dict("F" => buf),
+                compiler = :interpreter
+            )
+            h = 1.0e-7
+            ref = (
+                sum(_tc_call(fd!, u0d, pd, t + h)) -
+                    sum(_tc_call(fd!, u0d, pd, t - h))
+            ) / 2h
+            @test isapprox(dS, ref; rtol = 1.0e-6, atol = 1.0e-10)
             # And the Float64 path afterwards is not poisoned by the Dual call.
             du = _tc_call(f!, u0, p, t)
-            @test du[vm["x1"]] === _tc_ref_du(K, 1, t, 4.0; xj=u0[vm["x1"]])
+            @test du[vm["x1"]] === _tc_ref_du(K, 1, t, 4.0; xj = u0[vm["x1"]])
         end
     end
 
@@ -260,7 +293,8 @@ end
         K, M = 3, 2
         buf = [2.5]
         f!, u0, p, _ts, _vm, _diag = ESM._build_evaluator_impl(
-            _tc_fastjx_model(K, M); param_arrays=Dict("F" => buf))
+            _tc_fastjx_model(K, M); param_arrays = Dict("F" => buf)
+        )
         t = 1.1
         syms = keys(p)
         pv = collect(values(p))
@@ -269,14 +303,16 @@ end
         cfg = ForwardDiff.GradientConfig(gfun, pv, ForwardDiff.Chunk{1}())
         g = ForwardDiff.gradient(gfun, pv, cfg)
         @test all(!iszero, g)
-        h = 1e-6
+        h = 1.0e-6
         for i in eachindex(pv)
             s = h * max(1.0, abs(pv[i]))
             up = copy(pv); up[i] += s
             um = copy(pv); um[i] -= s
-            fd = (sum(_tc_call(f!, u0, mk(up), t)) -
-                  sum(_tc_call(f!, u0, mk(um), t))) / 2s
-            @test isapprox(g[i], fd; rtol=1e-5, atol=1e-10)
+            fd = (
+                sum(_tc_call(f!, u0, mk(up), t)) -
+                    sum(_tc_call(f!, u0, mk(um), t))
+            ) / 2s
+            @test isapprox(g[i], fd; rtol = 1.0e-5, atol = 1.0e-10)
         end
     end
 
@@ -294,16 +330,18 @@ end
         buf = [6.0]
         mk() = _tc_fastjx_model(K, M)
         pa() = Dict("F" => buf)
-        fi, u0, p, _ts, _vm, di = ESM._build_evaluator_impl(mk(); param_arrays=pa())
-        fun, _u3, _p3, _ts3, _vm3, dun = ESM._build_evaluator_impl(mk();
-            param_arrays=pa(), compiler=:interpreter)
+        fi, u0, p, _ts, _vm, di = ESM._build_evaluator_impl(mk(); param_arrays = pa())
+        fun, _u3, _p3, _ts3, _vm3, dun = ESM._build_evaluator_impl(
+            mk();
+            param_arrays = pa(), compiler = :interpreter
+        )
         @test di.n_time_slots > 0
         @test dun.n_const_slots == 0 && dun.n_time_slots == 0
 
         p2 = merge(p, (; w = 0.9, scale = 2.25))
         seq = Any[]
         push!(seq, (u0, p, 0.0));  push!(seq, (u0, p, 0.0))         # skip
-        up = copy(u0); up[1] += 1e-6
+        up = copy(u0); up[1] += 1.0e-6
         push!(seq, (up, p, 0.0))                                    # FD column
         push!(seq, (u0, p, 0.125)); push!(seq, (u0, p, 0.125))      # new t + skip
         push!(seq, (u0, p2, 0.125))                                 # p change
@@ -334,7 +372,8 @@ end
         K, M = 4, 2
         buf = [1.0]
         f!, u0, p, _ts, _vm, diag = ESM._build_evaluator_impl(
-            _tc_fastjx_model(K, M); param_arrays=Dict("F" => buf))
+            _tc_fastjx_model(K, M); param_arrays = Dict("F" => buf)
+        )
         @test diag.n_time_slots > 0
         du = similar(u0)
         @test rhs_alloc_bytes(f!, du, u0, p, 0.5) == 0
@@ -362,19 +401,26 @@ end
         buf = [2.0]
         prob_of(f!, u0, p) = SciMLBase.ODEProblem(f!, copy(u0), (0.0, 5.0), p)
         fi, u0, p, _ts, _vm, di = ESM._build_evaluator_impl(
-            _tc_fastjx_model(K, M); param_arrays=Dict("F" => buf))
+            _tc_fastjx_model(K, M); param_arrays = Dict("F" => buf)
+        )
         fdis, _u, _p, _ts2, _vm2, ddis = ESM._build_evaluator_impl(
-            _tc_fastjx_model(K, M); param_arrays=Dict("F" => buf),
-            compiler=:interpreter)
+            _tc_fastjx_model(K, M); param_arrays = Dict("F" => buf),
+            compiler = :interpreter
+        )
         @test di.n_time_slots > 0 && ddis.n_time_slots == 0
         for autodiff in (true, false)
             alg = autodiff ? OrdinaryDiffEqRosenbrock.Rosenbrock23() :
                 OrdinaryDiffEqRosenbrock.Rosenbrock23(;
-                    autodiff=OrdinaryDiffEqRosenbrock.AutoFiniteDiff())
-            s1 = OrdinaryDiffEqRosenbrock.solve(prob_of(fi, u0, p), alg;
-                reltol=1e-8, abstol=1e-10)
-            s2 = OrdinaryDiffEqRosenbrock.solve(prob_of(fdis, u0, p), alg;
-                reltol=1e-8, abstol=1e-10)
+                    autodiff = OrdinaryDiffEqRosenbrock.AutoFiniteDiff()
+                )
+            s1 = OrdinaryDiffEqRosenbrock.solve(
+                prob_of(fi, u0, p), alg;
+                reltol = 1.0e-8, abstol = 1.0e-10
+            )
+            s2 = OrdinaryDiffEqRosenbrock.solve(
+                prob_of(fdis, u0, p), alg;
+                reltol = 1.0e-8, abstol = 1.0e-10
+            )
             @test SciMLBase.successful_retcode(s1)
             @test s1.t == s2.t
             @test s1.u == s2.u

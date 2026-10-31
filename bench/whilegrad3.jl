@@ -28,7 +28,10 @@ Pkg.activate("/tmp/claude-1111265/scanad-env"; io = devnull)
 using Reactant, ForwardDiff, Printf
 const Enzyme = Reactant.Enzyme
 const RX = Reactant
-try; RX.set_default_backend("cpu"); catch; end
+try
+    RX.set_default_backend("cpu")
+catch
+end
 say(s) = (println(s); flush(stdout))
 ok(t, g, m) = say(@sprintf("  [%s] %-26s %s", g ? "PASS" : "FAIL", t, m))
 err1(e) = first(split(sprint(showerror, e), '\n'))
@@ -39,21 +42,29 @@ const NSTEP = 20
 u0 = [0.5 + 0.1i for i in 1:N]
 k0 = 0.7
 
-host_fixed(u, k, n) = (for _ in 1:n; u = u .+ k .* u .* H; end; sum(u))
+host_fixed(u, k, n) = (
+    for _ in 1:n
+        u = u .+ k .* u .* H
+    end; sum(u)
+)
 const GREF_FIXED = ForwardDiff.derivative(kk -> host_fixed(u0, kk, NSTEP), k0)
 
 # `f` takes (u, k) and any extra Const args; compare reverse against `gref`.
-function rev(tag, f, gref, extra...; rtol = 1e-8, verbose = false)
+function rev(tag, f, gref, extra...; rtol = 1.0e-8, verbose = false)
     try
         ur = RX.ConcreteRArray(u0); kr = RX.ConcreteRNumber(k0)
-        g = (u, k, e...) -> Enzyme.gradient(Enzyme.Reverse, f, Enzyme.Const(u), k,
-                                            map(Enzyme.Const, e)...)[2]
+        g = (u, k, e...) -> Enzyme.gradient(
+            Enzyme.Reverse, f, Enzyme.Const(u), k,
+            map(Enzyme.Const, e)...
+        )[2]
         t0 = time()
         xg = RX.@compile sync = true g(ur, kr, extra...)
         tc = time() - t0
         got = Float64(xg(ur, kr, extra...))
-        ok(tag, isapprox(got, gref; rtol = rtol),
-           @sprintf("got %.12g want %.12g (compile %.1f s)", got, gref, tc))
+        ok(
+            tag, isapprox(got, gref; rtol = rtol),
+            @sprintf("got %.12g want %.12g (compile %.1f s)", got, gref, tc)
+        )
         return true
     catch e
         ok(tag, false, err1(e))
@@ -80,7 +91,7 @@ function w_hostbound(u, k)
         u = u .+ k .* u .* H
         i = i + 1.0
     end
-    sum(u)
+    return sum(u)
 end
 rev("W1 while, HOST bound", w_hostbound, GREF_FIXED)
 
@@ -91,7 +102,7 @@ function w_tracedbound(u, k, nlim)
         u = u .+ k .* u .* H
         i = i + one(k)
     end
-    sum(u)
+    return sum(u)
 end
 nr = RX.ConcreteRNumber(Float64(NSTEP))
 rev("W2 while, TRACED bound", w_tracedbound, GREF_FIXED, nr; verbose = true)
@@ -104,7 +115,7 @@ function w_periodic(u, k, nlim)
         u = u .+ k .* u .* H
         i = i + one(k)
     end
-    sum(u)
+    return sum(u)
 end
 rev("W3 while + Periodic(5)", w_periodic, GREF_FIXED, nr; verbose = true)
 
@@ -114,7 +125,7 @@ function w_binomial(u, k, nlim)
         u = u .+ k .* u .* H
         i = i + one(k)
     end
-    sum(u)
+    return sum(u)
 end
 rev("W4 while + Binomial(5)", w_binomial, GREF_FIXED, nr; verbose = true)
 
@@ -126,7 +137,7 @@ function host_adapt(u, k, thresh)
         u = u .+ k .* u .* H
         s = sum(u); it += 1
     end
-    sum(u)
+    return sum(u)
 end
 const GREF_ADAPT = ForwardDiff.derivative(kk -> host_adapt(u0, kk, 4.0), k0)
 say("reference (data-dependent trips) d/dk = $GREF_ADAPT")
@@ -138,9 +149,9 @@ function w_adapt(u, k, thresh)
         u = u .+ k .* u .* H
         s = sum(u); it = it + one(k)
     end
-    sum(u)
+    return sum(u)
 end
-rev("W5 adaptive, plain", w_adapt, GREF_ADAPT, thr; rtol = 1e-6, verbose = true)
+rev("W5 adaptive, plain", w_adapt, GREF_ADAPT, thr; rtol = 1.0e-6, verbose = true)
 
 function w_adapt_p(u, k, thresh)
     s = zero(k); it = zero(k)
@@ -148,9 +159,9 @@ function w_adapt_p(u, k, thresh)
         u = u .+ k .* u .* H
         s = sum(u); it = it + one(k)
     end
-    sum(u)
+    return sum(u)
 end
-rev("W6 adaptive + Periodic(10)", w_adapt_p, GREF_ADAPT, thr; rtol = 1e-6, verbose = true)
+rev("W6 adaptive + Periodic(10)", w_adapt_p, GREF_ADAPT, thr; rtol = 1.0e-6, verbose = true)
 
 function w_adapt_b(u, k, thresh)
     s = zero(k); it = zero(k)
@@ -158,25 +169,33 @@ function w_adapt_b(u, k, thresh)
         u = u .+ k .* u .* H
         s = sum(u); it = it + one(k)
     end
-    sum(u)
+    return sum(u)
 end
-rev("W7 adaptive + Binomial(10)", w_adapt_b, GREF_ADAPT, thr; rtol = 1e-6, verbose = true)
+rev("W7 adaptive + Binomial(10)", w_adapt_b, GREF_ADAPT, thr; rtol = 1.0e-6, verbose = true)
 
 say("")
 say("=== W9  does the DIFFERENTIATED program still contain a while region? ===")
 # If Enzyme (or a canonicalizer) unrolled the static-bound loop away, W1 would
 # be a straight-line result wearing a loop's clothes and would say nothing about
 # reverse-over-while. Count while regions in the GRADIENT module.
-for (tag, f, extra) in (("W1 gradient", w_hostbound, ()),
-                        ("W6 gradient", w_adapt_p, (thr,)))
+for (tag, f, extra) in (
+        ("W1 gradient", w_hostbound, ()),
+        ("W6 gradient", w_adapt_p, (thr,)),
+    )
     try
         ur = RX.ConcreteRArray(u0); kr = RX.ConcreteRNumber(k0)
-        g = (u, k, e...) -> Enzyme.gradient(Enzyme.Reverse, f, Enzyme.Const(u), k,
-                                            map(Enzyme.Const, e)...)[2]
+        g = (u, k, e...) -> Enzyme.gradient(
+            Enzyme.Reverse, f, Enzyme.Const(u), k,
+            map(Enzyme.Const, e)...
+        )[2]
         s = repr(RX.@code_hlo optimize = false g(ur, kr, extra...))
         nw = length(collect(eachmatch(r"stablehlo\.while\b", s)))
-        say(@sprintf("  %-26s stablehlo.while=%d  lines=%d", tag, nw,
-                     count(==('\n'), s) + 1))
+        say(
+            @sprintf(
+                "  %-26s stablehlo.while=%d  lines=%d", tag, nw,
+                count(==('\n'), s) + 1
+            )
+        )
     catch e
         say(@sprintf("  %-26s ERROR %s", tag, err1(e)))
     end

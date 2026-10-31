@@ -8,8 +8,10 @@ doc = load_path(joinpath(FIXTURES, "decay.esm"))
 model = doc.models["Decay"]
 
 # Edits return a new Model; the original is left alone.
-decayed = ModelVariable(UnknownVariable; default = 0.0, units = "mol",
-                        description = "Amount that has decayed")
+decayed = ModelVariable(
+    UnknownVariable; default = 0.0, units = "mol",
+    description = "Amount that has decayed"
+)
 edited = add_variable(model, "decayed", decayed)
 edited = add_equation(edited, parse_equation("D(decayed, t) = lambda * N"))
 @assert ode_states(model) == ["N"]

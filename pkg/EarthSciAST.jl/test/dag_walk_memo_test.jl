@@ -24,7 +24,7 @@ const ESM = EarthSciAST
 
 # The doubling observed chain: o1 = x + x; o_k = o_{k-1} + o_{k-1}.
 function _doubling_chain(depth::Int)
-    obs = Dict{String,ESM.ASTExpr}("o1" => _op("+", _v("x"), _v("x")))
+    obs = Dict{String, ESM.ASTExpr}("o1" => _op("+", _v("x"), _v("x")))
     for k in 2:depth
         obs["o$k"] = _op("+", _v("o$(k - 1)"), _v("o$(k - 1)"))
     end
@@ -51,10 +51,10 @@ end
 # `substitute` pre-fix — and every downstream build stage post-fold.
 # b = 2^depth · a = 2^(depth+1) · psi, so the RHS value is exactly checkable.
 function _elemwise_array_chain_model(depth::Int)
-    vars = Dict{String,ModelVariable}(
-        "psi" => ModelVariable(UnknownVariable; shape=["c"]),
-        "a"   => ModelVariable(UnknownVariable; shape=["c"]),
-        "b"   => ModelVariable(UnknownVariable; shape=["c"]),
+    vars = Dict{String, ModelVariable}(
+        "psi" => ModelVariable(UnknownVariable; shape = ["c"]),
+        "a" => ModelVariable(UnknownVariable; shape = ["c"]),
+        "b" => ModelVariable(UnknownVariable; shape = ["c"]),
     )
     eqs = ESM.Equation[
         ESM.Equation(_v("a"), _op("+", _v("psi"), _v("psi"))),
@@ -64,7 +64,7 @@ function _elemwise_array_chain_model(depth::Int)
     return ESM.Model(vars, eqs)
 end
 
-const _CHAIN_INDEX_SETS = Dict("c" => ESM.IndexSet("interval"; size=3))
+const _CHAIN_INDEX_SETS = Dict("c" => ESM.IndexSet("interval"; size = 3))
 const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
 
 @testset "DAG-memoized subexpression walk (ESS-1p5)" begin
@@ -101,7 +101,7 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
 
     @testset "depth-32 doubling chain through _resolve_observed" begin
         obs = _doubling_chain(32)
-        resolved = Dict{String,ESM.ASTExpr}()
+        resolved = Dict{String, ESM.ASTExpr}()
         t = @elapsed (resolved = ESM._resolve_observed(obs))
         @test t < 30   # pre-fix: ~2^31 visits, minutes-to-hang; post-fix: ms
         # Fully collapsed: every observed body bottoms out on the state alone.
@@ -114,12 +114,17 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
         # detonated inside `_split_observed_and_derivatives`. o32 = 2^32 · x,
         # so the RHS value is exactly checkable.
         depth = 32
-        vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(UnknownVariable; default=1.0))
+        vars = Dict{String, ModelVariable}(
+            "x" => ModelVariable(UnknownVariable; default = 1.0)
+        )
         eqs = ESM.Equation[ESM.Equation(_v("o1"), _op("+", _v("x"), _v("x")))]
         for k in 2:depth
-            push!(eqs, ESM.Equation(_v("o$k"),
-                _op("+", _v("o$(k - 1)"), _v("o$(k - 1)"))))
+            push!(
+                eqs, ESM.Equation(
+                    _v("o$k"),
+                    _op("+", _v("o$(k - 1)"), _v("o$(k - 1)"))
+                )
+            )
         end
         for k in 1:depth
             vars["o$k"] = ModelVariable(UnknownVariable)
@@ -147,8 +152,10 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
         model = _elemwise_array_chain_model(3)
         _eqs2, folded = ESM._fold_elementwise_array_observeds(model.equations, model)
         @test folded == Set(["a", "b"])
-        f!, u0, p, _t, vmap = EarthSciAST._build_evaluator(model;
-            index_sets=_CHAIN_INDEX_SETS, initial_conditions=_CHAIN_ICS)
+        f!, u0, p, _t, vmap = EarthSciAST._build_evaluator(
+            model;
+            index_sets = _CHAIN_INDEX_SETS, initial_conditions = _CHAIN_ICS
+        )
         # Folded observeds carry no ODE slots; values are exact powers of two.
         @test !any(k -> occursin(r"^[ab]\[", k), keys(vmap))
         du = similar(u0)
@@ -169,8 +176,10 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
         model = _elemwise_array_chain_model(depth)
         local du, vmap
         t = @elapsed begin
-            f!, u0, p, _t, vmap = EarthSciAST._build_evaluator(model;
-                index_sets=_CHAIN_INDEX_SETS, initial_conditions=_CHAIN_ICS)
+            f!, u0, p, _t, vmap = EarthSciAST._build_evaluator(
+                model;
+                index_sets = _CHAIN_INDEX_SETS, initial_conditions = _CHAIN_ICS
+            )
             du = similar(u0)
             f!(du, u0, p, 0.0)
         end
@@ -203,7 +212,7 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
 
         # A real lowering: correct on the fast path, which is what a small tree
         # takes. `broadcast(fn=F, args) ≡ F(args)`.
-        bc = _op("broadcast", _v("a"), _v("b"); fn="+")
+        bc = _op("broadcast", _v("a"), _v("b"); fn = "+")
         shared = _op("sin", bc)
         e = _op("-", shared, shared)
         low = ESM._lower_broadcast(e)
@@ -214,7 +223,7 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
 
         # The two paths agree up to SHARING — the property that lets the build
         # take either one. `canonical_json` compares them as values.
-        memoed = ESM._lower_broadcast_memoized(e, IdDict{ESM.OpExpr,ESM.ASTExpr}())
+        memoed = ESM._lower_broadcast_memoized(e, IdDict{ESM.OpExpr, ESM.ASTExpr}())
         @test ESM.canonical_json(memoed) == ESM.canonical_json(low)
         # ...and only the memoized path DEDUPES: one output node per input node,
         # which is what stops a shared DAG re-inflating into a 2^d-node tree.
@@ -223,19 +232,24 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
         # No memo leak across unrelated nodes: two structurally EQUAL but
         # distinct broadcast nodes must both lower (identity keys, not value
         # keys).
-        b1 = _op("broadcast", _v("p"); fn="sin")
-        b2 = _op("broadcast", _v("p"); fn="sin")
-        for got in (ESM._lower_broadcast(_op("+", b1, b2)),
-                    ESM._lower_broadcast_memoized(_op("+", b1, b2),
-                                                  IdDict{ESM.OpExpr,ESM.ASTExpr}()))
+        b1 = _op("broadcast", _v("p"); fn = "sin")
+        b2 = _op("broadcast", _v("p"); fn = "sin")
+        for got in (
+                ESM._lower_broadcast(_op("+", b1, b2)),
+                ESM._lower_broadcast_memoized(
+                    _op("+", b1, b2),
+                    IdDict{ESM.OpExpr, ESM.ASTExpr}()
+                ),
+            )
             @test all(a -> (a::ESM.OpExpr).op == "sin", (got::ESM.OpExpr).args)
         end
 
         # A bogus `fn` is a BUILD error on both paths, not a silent pass.
-        bad = _op("+", _op("broadcast", _v("z"); fn="no_such_op"), _n(1.0))
+        bad = _op("+", _op("broadcast", _v("z"); fn = "no_such_op"), _n(1.0))
         @test_throws ESM.TreeWalkError ESM._lower_broadcast(bad)
         @test_throws ESM.TreeWalkError ESM._lower_broadcast_memoized(
-            bad, IdDict{ESM.OpExpr,ESM.ASTExpr}())
+            bad, IdDict{ESM.OpExpr, ESM.ASTExpr}()
+        )
     end
 
     @testset "_hoist_operand_walk is DAG-safe (the filtered-operand lift)" begin
@@ -244,17 +258,25 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
         # Per-path, that walk alone took the depth-32 array chain above past
         # its bound. The leaf here is such an operand, so the lift fires and
         # the rewrite must keep the DAG shared on the way out.
-        scan = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["k"],
-            ranges=Dict{String,Any}("k" => ESM.IndexSetRef("lev"),
-                                    "j" => ESM.IndexSetRef("lev")),
-            expr_body=_op("index", _v("u"), _v("j")), reduce="+",
-            filter=_op("<", _v("j"), _v("k")))
-        vars = Dict{String,ModelVariable}(
-            "u" => ModelVariable(UnknownVariable; shape=["lev"]),
-            "F" => ModelVariable(UnknownVariable; shape=["lev"]))
-        model = ESM.Model(vars, ESM.Equation[
-            ESM.Equation(_v("F"), _doubling_dag(_op("*", _n(0.5), scan), 34))])
-        isets = Dict("lev" => ESM.IndexSet("interval"; size=3))
+        scan = ESM.OpExpr(
+            "faq", ESM.ASTExpr[]; output_idx = Any["k"],
+            ranges = Dict{String, Any}(
+                "k" => ESM.IndexSetRef("lev"),
+                "j" => ESM.IndexSetRef("lev")
+            ),
+            expr_body = _op("index", _v("u"), _v("j")), reduce = "+",
+            filter = _op("<", _v("j"), _v("k"))
+        )
+        vars = Dict{String, ModelVariable}(
+            "u" => ModelVariable(UnknownVariable; shape = ["lev"]),
+            "F" => ModelVariable(UnknownVariable; shape = ["lev"])
+        )
+        model = ESM.Model(
+            vars, ESM.Equation[
+                ESM.Equation(_v("F"), _doubling_dag(_op("*", _n(0.5), scan), 34)),
+            ]
+        )
+        isets = Dict("lev" => ESM.IndexSet("interval"; size = 3))
         t = @elapsed m, _isets, owner = ESM._hoist_nested_reductions(model, isets)
         @test t < 10                    # pre-fix: 2^34 visits
         @test length(m.equations) == 2  # one lift, shared by every path
@@ -270,23 +292,25 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
         # (2^20 occurrences of `g`), not the distinct-node count — the demotion
         # rule's semantics — while completing in O(depth).
         deep = _doubling_dag(_v("g"), 20)
-        tot = Dict{String,Int}(); unc = Dict{String,Int}()
+        tot = Dict{String, Int}(); unc = Dict{String, Int}()
         t = @elapsed ESM._count_obs_refs!(deep, names, tot, unc, false)
         @test t < 10
         @test tot["g"] == 2^20
         @test unc["g"] == 2^20
         # A guard above the shared DAG forwards NO unconditional multiplicity.
         guarded = _op("ifelse", _v("c"), deep, _n(0.0))
-        tot2 = Dict{String,Int}(); unc2 = Dict{String,Int}()
+        tot2 = Dict{String, Int}(); unc2 = Dict{String, Int}()
         ESM._count_obs_refs!(guarded, names, tot2, unc2, false)
         @test tot2["g"] == 2^20
         @test get(unc2, "g", 0) == 0
         # Small-tree reference values (identical to the old per-path recursion):
         # g*g contributes (2 tot, 2 unc); ifelse(q, g, g) contributes (2 tot,
         # 0 unc — both branches are lazy).
-        small = _op("+", _op("*", _v("g"), _v("g")),
-                    _op("ifelse", _v("q"), _v("g"), _v("g")))
-        tot3 = Dict{String,Int}(); unc3 = Dict{String,Int}()
+        small = _op(
+            "+", _op("*", _v("g"), _v("g")),
+            _op("ifelse", _v("q"), _v("g"), _v("g"))
+        )
+        tot3 = Dict{String, Int}(); unc3 = Dict{String, Int}()
         ESM._count_obs_refs!(small, names, tot3, unc3, false)
         @test tot3["g"] == 4
         @test unc3["g"] == 2
@@ -294,7 +318,7 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
         # PATH to the barrier: a shared gather reached twice contributes 2.
         gat = _op("index", _v("arr"), _op("+", _v("g"), _v("g")))
         both = _op("+", gat, gat)
-        tot4 = Dict{String,Int}(); unc4 = Dict{String,Int}()
+        tot4 = Dict{String, Int}(); unc4 = Dict{String, Int}()
         ESM._count_obs_refs!(both, names, tot4, unc4, false)
         @test tot4["g"] == 2
         @test get(unc4, "g", 0) == 0
@@ -306,15 +330,17 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
         # the per-path counter decided (tree_walk_observed_slots_test is the
         # broader pin; this one drives the SHARED shape specifically).
         S = _op("+", _v("g"), _v("g"))     # one object, shared below
-        vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(UnknownVariable; default=0.5),
-            "k" => ModelVariable(ParameterVariable; default=2.0),
+        vars = Dict{String, ModelVariable}(
+            "x" => ModelVariable(UnknownVariable; default = 0.5),
+            "k" => ModelVariable(ParameterVariable; default = 2.0),
             "g" => ModelVariable(UnknownVariable),
         )
         eqs = ESM.Equation[
             ESM.Equation(_v("g"), _op("*", _v("x"), _v("k"))),
-            ESM.Equation(_D("x"),
-                _op("ifelse", _op(">", _v("x"), _n(0.0)), S, _n(0.0))),
+            ESM.Equation(
+                _D("x"),
+                _op("ifelse", _op(">", _v("x"), _n(0.0)), S, _n(0.0))
+            ),
         ]
         f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs))
         @test diag.n_obs_slots == 0     # guard-only → demoted
@@ -326,11 +352,13 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
         # One additional UNCONDITIONAL reader through the SAME shared subtree
         # flips it to a slot (unconditional multiplicity ≥ 1).
         vars2 = copy(vars)
-        vars2["y"] = ModelVariable(UnknownVariable; default=1.0)
+        vars2["y"] = ModelVariable(UnknownVariable; default = 1.0)
         eqs2 = ESM.Equation[
             ESM.Equation(_v("g"), _op("*", _v("x"), _v("k"))),
-            ESM.Equation(_D("x"),
-                _op("ifelse", _op(">", _v("x"), _n(0.0)), S, _n(0.0))),
+            ESM.Equation(
+                _D("x"),
+                _op("ifelse", _op(">", _v("x"), _n(0.0)), S, _n(0.0))
+            ),
             ESM.Equation(_D("y"), S),
         ]
         f2!, u02, p2, _ts2, vm2, diag2 =
@@ -389,23 +417,25 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
         @test fv == Set(["x", "y"])
         # Binder subtraction happens at the binder node: a loop index is bound
         # away, an outer name stays free.
-        agg = _op("faq"; output_idx=Any["i"],
-                  expr_body=_op("+", _v("i"), _v("z")),
-                  ranges=Dict("i" => [1, 3]))
+        agg = _op(
+            "faq"; output_idx = Any["i"],
+            expr_body = _op("+", _v("i"), _v("z")),
+            ranges = Dict("i" => [1, 3])
+        )
         @test ESM.free_variables(agg) == Set(["z"])
     end
 
     @testset "_substitute_shared ≡ substitute up to sharing" begin
         shared = _op("+", _v("o"), _n(1.0))
         e = _op("*", shared, shared)
-        b = Dict{String,ESM.ASTExpr}("o" => _op("neg", _v("x")))
+        b = Dict{String, ESM.ASTExpr}("o" => _op("neg", _v("x")))
         r1 = ESM.substitute(e, b)
         r2 = ESM._substitute_shared(e, b)
         @test ESM.canonical_json(r1) == ESM.canonical_json(r2)
         @test r2 isa ESM.OpExpr
         @test r2.args[1] === r2.args[2]   # sharing preserved, not re-inflated
         # No-hit substitution is fully identity-preserving.
-        @test ESM._substitute_shared(e, Dict{String,ESM.ASTExpr}("zz" => _n(1.0))) === e
+        @test ESM._substitute_shared(e, Dict{String, ESM.ASTExpr}("zz" => _n(1.0))) === e
     end
 end
 
@@ -422,10 +452,10 @@ end
     t_small = minimum(@elapsed(conv(small)) for _ in 1:20)
     t_big = minimum(@elapsed(conv(big)) for _ in 1:20)
     # Hashing the 8 MB text costs milliseconds; the child costs microseconds.
-    @test t_big < 100 * t_small + 1e-4
+    @test t_big < 100 * t_small + 1.0e-4
     # A native node holding one view twice still normalizes it once.
     v = big["t"]
-    out = ESM._to_ordered(Dict{String,Any}("a" => v, "b" => v))
+    out = ESM._to_ordered(Dict{String, Any}("a" => v, "b" => v))
     @test out["a"] === out["b"]
     # Two views of the same text are two instances, and stay two copies.
     out2 = ESM._to_ordered(Any[big["t"], big["t"]])

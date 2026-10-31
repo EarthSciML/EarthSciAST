@@ -12,12 +12,12 @@ using EarthSciAST
 
 @testset "mount_element_type: a mounted leaf's element_type crosses the mount (§4.7)" begin
     dir = joinpath(@__DIR__, "..", "..", "..", "tests", "conformance", "mount_element_type")
-    expected = JSON3.read(read(joinpath(dir, "expected.json"), String), Dict{String,Any})
+    expected = JSON3.read(read(joinpath(dir, "expected.json"), String), Dict{String, Any})
 
     # Every variable (subsystems as `Model.Sub.var`) of an EMITTED document ->
     # its `element_type`, or `nothing`.
     function carried(doc)
-        out = Dict{String,Any}()
+        out = Dict{String, Any}()
         function walk(prefix, system)
             for (name, decl) in get(system, "variables", Dict())
                 out["$(prefix).$(name)"] = get(decl, "element_type", nothing)
@@ -31,14 +31,14 @@ using EarthSciAST
         end
         return out
     end
-    emitted(file) = JSON3.read(JSON3.write(EarthSciAST.serialize_esm_file(file)), Dict{String,Any})
+    emitted(file) = JSON3.read(JSON3.write(EarthSciAST.serialize_esm_file(file)), Dict{String, Any})
 
     for (fixture, want) in expected["loads"]
         @testset "$(fixture)" begin
             doc = emitted(EarthSciAST.load_path(joinpath(dir, fixture)))
             domain = get(get(doc, "domain", Dict()), "element_type", nothing)
             @test domain == want["domain_element_type"]
-            @test carried(doc) == Dict{String,Any}(want["element_types"])
+            @test carried(doc) == Dict{String, Any}(want["element_types"])
             # load -> emit -> load is a fixed point on the written fields.
             again = emitted(EarthSciAST.load_string(JSON3.write(doc)))
             @test carried(again) == carried(doc)

@@ -25,14 +25,14 @@ const CONF = joinpath(ROOT, "tests", "conformance", "expression_templates")
 
 _norm(x) =
     (x isa AbstractDict || x isa JSON3.Object) ?
-        Dict{String,Any}(string(k) => _norm(v) for (k, v) in pairs(x)) :
+    Dict{String, Any}(string(k) => _norm(v) for (k, v) in pairs(x)) :
     (x isa AbstractVector || x isa JSON3.Array) ? Any[_norm(v) for v in x] : x
 
 # Canonical writer: object keys sorted, arrays in order, scalars via JSON3.
 function _write_sorted(io::IO, x, indent::Int)
     pad = "  "^indent
     pad1 = "  "^(indent + 1)
-    if x isa AbstractDict
+    return if x isa AbstractDict
         isempty(x) && return print(io, "{}")
         print(io, "{\n")
         ks = sort(collect(keys(x)))
@@ -63,14 +63,14 @@ function _write_golden(path::String, doc)
         _write_sorted(io, _norm(doc), 0)
         print(io, "\n")
     end
-    println("wrote ", relpath(path, ROOT))
+    return println("wrote ", relpath(path, ROOT))
 end
 
 for (dir, fixture, golden) in [
-    ("inject_subsystem_ref", "fixture.esm", "expanded.esm"),
-    ("inject_coupling_entry", "fixture.esm", "expanded.esm"),
-    ("inject_test_block", "fixture.esm", "roundtrip.esm"),
-]
+        ("inject_subsystem_ref", "fixture.esm", "expanded.esm"),
+        ("inject_coupling_entry", "fixture.esm", "expanded.esm"),
+        ("inject_test_block", "fixture.esm", "roundtrip.esm"),
+    ]
     file = EarthSciAST.load_path(joinpath(CONF, dir, fixture))
     _write_golden(joinpath(CONF, dir, golden), serialize_esm_file(file))
 end

@@ -39,16 +39,20 @@ include("testutils.jl")
 
 # The ops whose argument esm-spec §4.8.3 requires to be dimensionless — the ten
 # strict transcendentals and the three inverse circular functions.
-const _STRICT_ARGUMENT_OPS = ("ln", "log", "log10", "exp",
-                              "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
-                              "asin", "acos", "atan")
+const _STRICT_ARGUMENT_OPS = (
+    "ln", "log", "log10", "exp",
+    "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
+    "asin", "acos", "atan",
+)
 
 # The findings raised for `op(x)` with `x` declared in `unit`.
 function _arg_findings(op::AbstractString, unit::AbstractString)
     findings = String[]
-    EarthSciAST._expr_dimensions!(findings,
+    EarthSciAST._expr_dimensions!(
+        findings,
         EarthSciAST.OpExpr(op, EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")]),
-        Dict("x" => unit))
+        Dict("x" => unit)
+    )
     return findings
 end
 
@@ -99,8 +103,10 @@ end
             for bad in ("sr", "rad^2", "rad*deg")
                 found = _arg_findings(op, bad)
                 @test length(found) == 1
-                @test occursin("Circular function argument must be an angle or " *
-                               "dimensionless", found[1])
+                @test occursin(
+                    "Circular function argument must be an angle or " *
+                        "dimensionless", found[1]
+                )
             end
         end
         # A strict transcendental and an inverse circular function take a PURE
@@ -109,8 +115,10 @@ end
         # `sr` and `rad^2` (scale 1) are accepted, `deg` and `rad*deg` (scale
         # π/180) are refused for their scale. A unit whose angles cancel
         # (`rad/deg`) is not a pure angle and keeps the dimensional refusal.
-        for op in ("ln", "log", "log10", "exp", "sinh", "cosh", "tanh",
-                   "asin", "acos", "atan")
+        for op in (
+                "ln", "log", "log10", "exp", "sinh", "cosh", "tanh",
+                "asin", "acos", "atan",
+            )
             for ok in ("rad", "sr", "rad^2", "1/rad")
                 @test isempty(_arg_findings(op, ok))
             end
@@ -128,8 +136,10 @@ end
         for op in ("asin", "acos", "atan")
             found = _arg_findings(op, "rad/deg")
             @test length(found) == 1
-            @test occursin("Inverse circular function argument must be " *
-                           "dimensionless", found[1])
+            @test occursin(
+                "Inverse circular function argument must be " *
+                    "dimensionless", found[1]
+            )
         end
         # The predicate must not catch a unit that only LOOKS dimensionless:
         # a pure number and the mixing ratios are not on the angle axis.
@@ -157,8 +167,10 @@ end
         E = EarthSciAST.ASTExpr
         V = EarthSciAST.VarExpr
         O = EarthSciAST.OpExpr
-        vu = Dict("th" => "rad", "dg" => "deg", "n" => "1", "pct" => "percent",
-                  "sa" => "sr", "L" => "m")
+        vu = Dict(
+            "th" => "rad", "dg" => "deg", "n" => "1", "pct" => "percent",
+            "sa" => "sr", "L" => "m"
+        )
         unit(e) = (f = String[]; u = EarthSciAST._expr_dimensions!(f, e, vu); (u, f))
         for op in ("+", "-", "min", "max")
             u, f = unit(O(op, E[V("th"), V("n")]))
@@ -183,8 +195,10 @@ end
         # comes first: Unitful holds `rad` and `sr` both as `NoDims` at scale 1,
         # so the angle axis power is what separates them.
         for op in ("+", "min")
-            for args in (E[V("th"), V("sa")], E[V("th"), V("sa"), V("n")],
-                         E[V("n"), V("th"), V("sa")], E[V("th"), V("n"), V("sa")])
+            for args in (
+                    E[V("th"), V("sa")], E[V("th"), V("sa"), V("n")],
+                    E[V("n"), V("th"), V("sa")], E[V("th"), V("n"), V("sa")],
+                )
                 @test !isempty(last(unit(O(op, args))))
             end
         end
@@ -198,8 +212,10 @@ end
         @test !isempty(last(unit(O("concat", E[V("th"), V("n")]))))
         @test !isempty(last(unit(O("concat", E[V("n"), V("th")]))))
         @test isempty(last(unit(O("concat", E[V("th"), V("th")]))))
-        mk = O("makearray", E[]; regions = [[[1, 1]], [[2, 2]]],
-               values = E[V("th"), V("n")])
+        mk = O(
+            "makearray", E[]; regions = [[[1, 1]], [[2, 2]]],
+            values = E[V("th"), V("n")]
+        )
         @test !isempty(last(unit(mk)))
 
         # The two sides of an equation are a place the rule reaches, and the
@@ -216,7 +232,8 @@ end
     @testset "the angle normalization factor" begin
         for spelling in ("rad", "1", "ppm", "m")
             @test EarthSciAST.angle_normalization_factor(
-                EarthSciAST.parse_units(spelling)) === nothing
+                EarthSciAST.parse_units(spelling)
+            ) === nothing
         end
         factor = EarthSciAST.angle_normalization_factor(EarthSciAST.parse_units("deg"))
         @test factor == pi / 180
@@ -261,8 +278,10 @@ end
     # Before `index`/`faq` were typed, this rewrite left every array element
     # unconverted and evaluated cos(60 radians) = -0.952.
     @testset "flatten converts a degree ARRAY ELEMENT" begin
-        path = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-                        "scalar_operator_semantics", "fixtures", "angle_array_element.esm")
+        path = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "conformance",
+            "scalar_operator_semantics", "fixtures", "angle_array_element.esm"
+        )
         if _require_fixture(path)
             file = EarthSciAST.load_path(path)
             flat = EarthSciAST.flatten(file)
@@ -278,7 +297,7 @@ end
             end
             args = Dict(last(split(k, '.')) => v for (k, v) in found)
             @test sort(collect(keys(args))) ==
-                  ["cos_lat", "cos_lat_rad", "sin_colat", "sin_scalar", "sin_sum"]
+                ["cos_lat", "cos_lat_rad", "sin_colat", "sin_scalar", "sin_sum"]
             for name in ("cos_lat", "sin_colat", "sin_sum")
                 arg = args[name]
                 # `index(A, …) * (π/180)`: the element, then the declared scale, once.
@@ -295,16 +314,20 @@ end
     end
 
     @testset "the shared fixtures" begin
-        bad = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
-                       "units_discriminator_transcendental_scaled_argument.esm")
+        bad = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "invalid",
+            "units_discriminator_transcendental_scaled_argument.esm"
+        )
         if _require_fixture(bad)
             result = EarthSciAST.validate(EarthSciAST.load_path(bad))
             @test !result.is_valid
             @test any(occursin("divide by 1 ppm", e.message) for e in result.structural_errors)
         end
 
-        good = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid",
-                        "units_transcendental_scaled_argument_repair.esm")
+        good = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "valid",
+            "units_transcendental_scaled_argument_repair.esm"
+        )
         if _require_fixture(good)
             result = EarthSciAST.validate(EarthSciAST.load_path(good))
             @test result.is_valid

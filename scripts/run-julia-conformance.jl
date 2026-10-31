@@ -45,7 +45,7 @@ _schema_error_dict(e) = Dict{String, Any}(
 
 function _structural_error_dict(e)
     code = hasproperty(e, :code) ? getfield(e, :code) :
-           hasproperty(e, :error_type) ? getfield(e, :error_type) : ""
+        hasproperty(e, :error_type) ? getfield(e, :error_type) : ""
     details = hasproperty(e, :details) ? getfield(e, :details) : Dict{String, Any}()
     return Dict{String, Any}(
         "path" => getfield(e, :path),
@@ -129,8 +129,8 @@ function run_validation(manifest, project_root::String)
         # The verdict is "did this binding accept the document", regardless of
         # WHICH phase answered. A rejection at resolve is still a rejection.
         record["is_valid"] = record["resolve_ok"] === true &&
-                             isempty(record["schema_errors"]) &&
-                             isempty(record["structural_errors"])
+            isempty(record["schema_errors"]) &&
+            isempty(record["structural_errors"])
         record["outcome"] = record["is_valid"] ? "valid" : "invalid"
         results[id] = record
     end
@@ -164,16 +164,16 @@ function run_display(manifest)
         parse_failure = nothing
         try
             target = is_formula ? String(case["input"]) :
-                     EarthSciAST.expression_from_json(case["input"])
+                EarthSciAST.expression_from_json(case["input"])
         catch e
             parse_failure = string(e)
         end
 
         for (fmt, renderer) in (
-            ("unicode", EarthSciAST.to_unicode),
-            ("latex", EarthSciAST.to_latex),
-            ("ascii", EarthSciAST.to_ascii),
-        )
+                ("unicode", EarthSciAST.to_unicode),
+                ("latex", EarthSciAST.to_latex),
+                ("ascii", EarthSciAST.to_ascii),
+            )
             if parse_failure !== nothing
                 record[fmt] = nothing
                 errors[fmt] = parse_failure
@@ -210,11 +210,12 @@ function run_substitution(manifest)
             expr = EarthSciAST.expression_from_json(case["input"])
             bindings = Dict{String, EarthSciAST.ASTExpr}(
                 String(k) => EarthSciAST.expression_from_json(v)
-                for (k, v) in case["bindings"]
+                    for (k, v) in case["bindings"]
             )
             result = EarthSciAST.substitute(expr, bindings)
             results[id] = Dict{String, Any}(
-                "result" => EarthSciAST.serialize_expression(result))
+                "result" => EarthSciAST.serialize_expression(result)
+            )
         catch e
             results[id] = Dict{String, Any}("result" => nothing, "error" => string(e))
         end
@@ -239,8 +240,10 @@ function load_manifest(output_dir::String)
 
     if !isfile(manifest_path)
         println(stderr, "Corpus manifest not found: $manifest_path")
-        println(stderr,
-            "Generate it with: python3 scripts/conformance_corpus.py --output <path>")
+        println(
+            stderr,
+            "Generate it with: python3 scripts/conformance_corpus.py --output <path>"
+        )
         exit(2)
     end
     return JSON3.read(read(manifest_path, String), Dict{String, Any})
@@ -291,21 +294,23 @@ function main()
     mkpath(output_dir)
     results_file = joinpath(output_dir, "results.json")
     open(results_file, "w") do f
-        JSON3.pretty(f, Dict{String, Any}(
-            "language" => "julia",
-            "timestamp" => string(now()),
-            "validation_results" => validation_results,
-            "display_results" => display_results,
-            "substitution_results" => substitution_results,
-            "errors" => errors,
-        ))
+        JSON3.pretty(
+            f, Dict{String, Any}(
+                "language" => "julia",
+                "timestamp" => string(now()),
+                "validation_results" => validation_results,
+                "display_results" => display_results,
+                "substitution_results" => substitution_results,
+                "errors" => errors,
+            )
+        )
     end
     println("Julia conformance results written to: $results_file")
 
     # A producer CRASH is fatal; a fixture-level divergence is not the producer's
     # verdict to make — the comparator owns that judgement, and it needs every
     # binding's results.json to make it.
-    exit(isempty(errors) ? 0 : 1)
+    return exit(isempty(errors) ? 0 : 1)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

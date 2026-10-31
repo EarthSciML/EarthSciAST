@@ -50,44 +50,69 @@ const _AC_ESS = EarthSciAST
 # the one it leaves to the nest; the ascending form is the affine fold's (pinned
 # below, "an ascending contraction is the affine tier's run-time fold").
 _ac_sr(s, r) = Float64((3s + 7r) % 11)
-_ac_e0(s)    = Float64(s % 5)
+_ac_e0(s) = Float64(s % 5)
 
-_ac_lhs(v, idx, n) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[idx],
+_ac_lhs(v, idx, n) = Dict(
+    "op" => "faq", "args" => Any[], "output_idx" => Any[idx],
     "ranges" => Dict(idx => Any[1, n]),
-    "expr" => Dict("op" => "D", "args" => Any[
-        Dict("op" => "index", "args" => Any[v, idx])], "wrt" => "t"))
-_ac_zero(idx, n) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[idx],
-    "ranges" => Dict(idx => Any[1, n]), "expr" => 0.0)
+    "expr" => Dict(
+        "op" => "D", "args" => Any[
+            Dict("op" => "index", "args" => Any[v, idx]),
+        ], "wrt" => "t"
+    )
+)
+_ac_zero(idx, n) = Dict(
+    "op" => "faq", "args" => Any[], "output_idx" => Any[idx],
+    "ranges" => Dict(idx => Any[1, n]), "expr" => 0.0
+)
 
 # `reduce=nothing` keeps the declared `sum_product` semiring (the shape every
 # other case in this file uses); naming a reducer instead exercises the other
 # three ⊕ the tier admits. `coef`/`e` swap in data with no exact zero and no
 # integer value, so a ×-fold cannot collapse to 0̄ and a fold ORDER difference
 # shows up in the last bit.
-function _ac_doc(NS::Int, NR::Int; coef=_ac_sr, red=nothing, asc::Bool=false)
+function _ac_doc(NS::Int, NR::Int; coef = _ac_sr, red = nothing, asc::Bool = false)
     SR = [[coef(s, r) for r in 1:NR] for s in 1:NS]
-    agg = Dict{String,Any}("op" => "faq",
+    agg = Dict{String, Any}(
+        "op" => "faq",
         "args" => Any[], "output_idx" => Any["rcv"],
         "ranges" => Dict("rcv" => Any[1, NR], "s" => asc ? Any[1, NS] : Any[NS, -1, 1]),
-        "expr" => Dict("op" => "*", "args" => Any[
-            Dict("op" => "index", "args" => Any[
-                Dict("op" => "const", "args" => Any[], "value" => SR), "s", "rcv"]),
-            Dict("op" => "index", "args" => Any["E", "s"])]))
+        "expr" => Dict(
+            "op" => "*", "args" => Any[
+                Dict(
+                    "op" => "index", "args" => Any[
+                        Dict("op" => "const", "args" => Any[], "value" => SR), "s", "rcv",
+                    ]
+                ),
+                Dict("op" => "index", "args" => Any["E", "s"]),
+            ]
+        )
+    )
     # The semiring, when declared, is authoritative over `reduce` (§5.1), so the
     # two spellings are mutually exclusive rather than merged.
     red === nothing ? (agg["semiring"] = "sum_product") : (agg["reduce"] = red)
-    Dict{String,Any}("esm" => "1.1.0", "metadata" => Dict("name" => "ac_sr"),
-      "models" => Dict("R" => Dict{String,Any}(
-        "variables" => Dict("E" => Dict("type" => "unknown", "shape" => Any["s"]),
-                            "conc" => Dict("type" => "unknown", "shape" => Any["rcv"])),
-        "equations" => Any[
-          Dict("lhs" => _ac_lhs("E", "s", NS), "rhs" => _ac_zero("s", NS)),
-          Dict("lhs" => _ac_lhs("conc", "rcv", NR), "rhs" => agg)])))
+    return Dict{String, Any}(
+        "esm" => "1.1.0", "metadata" => Dict("name" => "ac_sr"),
+        "models" => Dict(
+            "R" => Dict{String, Any}(
+                "variables" => Dict(
+                    "E" => Dict("type" => "unknown", "shape" => Any["s"]),
+                    "conc" => Dict("type" => "unknown", "shape" => Any["rcv"])
+                ),
+                "equations" => Any[
+                    Dict("lhs" => _ac_lhs("E", "s", NS), "rhs" => _ac_zero("s", NS)),
+                    Dict("lhs" => _ac_lhs("conc", "rcv", NR), "rhs" => agg),
+                ]
+            )
+        )
+    )
 end
-_ac_ics(NS, NR; e=_ac_e0) = merge(Dict{String,Any}("E[$s]" => e(s) for s in 1:NS),
-                                  Dict{String,Any}("conc[$r]" => 0.0 for r in 1:NR))
+_ac_ics(NS, NR; e = _ac_e0) = merge(
+    Dict{String, Any}("E[$s]" => e(s) for s in 1:NS),
+    Dict{String, Any}("conc[$r]" => 0.0 for r in 1:NR)
+)
 _ac_sr_frac(s, r) = _ac_sr(s, r) / 4 + 0.5      # never 0, never an integer
-_ac_e0_frac(s)    = _ac_e0(s) + 0.25            # never 0
+_ac_e0_frac(s) = _ac_e0(s) + 0.25            # never 0
 _ac_exact(NS, NR) = [sum(_ac_sr(s, r) * _ac_e0(s) for s in 1:NS) for r in 1:NR]
 
 # Every build in this file pins the tier's out-of-place floor to 8 — a tuning
@@ -99,23 +124,31 @@ _ac_env(extra) = merge(Dict("ESS_ARRAY_CONTRACTION_MIN" => "8"), extra)
 # the nest, `:interpreter` turns the tier off and unrolls the reduction per
 # output cell. Nothing in this file reads an environment variable to pick a
 # strategy, so no case can silently compare a build against itself.
-function _ac_build(doc, ics; compiler=:native, env=Dict{String,String}(),
-                   const_arrays=Dict{String,Vector{Float64}}())
-    withenv((k => v for (k, v) in _ac_env(env))...) do
+function _ac_build(
+        doc, ics; compiler = :native, env = Dict{String, String}(),
+        const_arrays = Dict{String, Vector{Float64}}()
+    )
+    return withenv((k => v for (k, v) in _ac_env(env))...) do
         _AC_ESS._reset_cascade_tally!()
-        r = EarthSciAST._build_evaluator(doc; initial_conditions=ics, compiler=compiler,
-                            const_arrays=const_arrays)
+        r = EarthSciAST._build_evaluator(
+            doc; initial_conditions = ics, compiler = compiler,
+            const_arrays = const_arrays
+        )
         (r, copy(_AC_ESS._CASCADE_TALLY))
     end
 end
 
 # `du` at the model's own initial condition, plus the build's cascade tally.
-function _ac_du(doc, ics; compiler=:native, env=Dict{String,String}(),
-                const_arrays=Dict{String,Vector{Float64}}())
-    (f!, u0, p, _, vm), tally = _ac_build(doc, ics; compiler=compiler, env=env,
-                                          const_arrays=const_arrays)
+function _ac_du(
+        doc, ics; compiler = :native, env = Dict{String, String}(),
+        const_arrays = Dict{String, Vector{Float64}}()
+    )
+    (f!, u0, p, _, vm), tally = _ac_build(
+        doc, ics; compiler = compiler, env = env,
+        const_arrays = const_arrays
+    )
     du = similar(u0); f!(du, u0, p, 0.0)
-    (du, vm, tally)
+    return (du, vm, tally)
 end
 _ac_outs(du, vm, NR) = [du[vm["conc[$r]"]] for r in 1:NR]
 _ac_tally(t, k) = get(t, k, 0)
@@ -133,9 +166,11 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
     @testset "the strict default compiles an equation this tier accepts" begin
         doc, ics = _ac_doc(16, 16), _ac_ics(16, 16)
         insp = _AC_ESS.BuildInspection()
-        withenv((k => v for (k, v) in _ac_env(Dict{String,String}()))...) do
-            EarthSciAST._build_evaluator(doc; initial_conditions=ics, compiler=:native,
-                            inspect=insp)
+        withenv((k => v for (k, v) in _ac_env(Dict{String, String}()))...) do
+            EarthSciAST._build_evaluator(
+                doc; initial_conditions = ics, compiler = :native,
+                inspect = insp
+            )
         end
         rep = insp.compiler_report
         @test rep.compiler === :native
@@ -150,10 +185,10 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
     # pass, and the exact sum anchors both sides against agreeing on a wrong
     # answer.
     @testset "source-receptor NS=$NS NR=$NR: nest === interpreter === exact" for
-            (NS, NR) in ((16, 16), (24, 8), (8, 24), (20, 12))
+        (NS, NR) in ((16, 16), (24, 8), (8, 24), (20, 12))
         doc, ics = _ac_doc(NS, NR), _ac_ics(NS, NR)
         dn, vn, tn = _ac_du(doc, ics)
-        do_, vo, to = _ac_du(doc, ics; compiler=:interpreter)
+        do_, vo, to = _ac_du(doc, ics; compiler = :interpreter)
         @test _ac_fired(tn) == 1
         @test _ac_fired(to) == 0     # the oracle really is off the tier
         A = _ac_outs(dn, vn, NR)
@@ -168,17 +203,19 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
     # value, so a ×-fold cannot collapse to 0̄ and a fold ORDER difference shows
     # up in the last bit — which the left fold below is the closed form for.
     @testset "reducer $red folds exactly as the unrolled reduction" for
-            red in ("*", "max", "min")
+        red in ("*", "max", "min")
         NS, NR = 16, 10
-        doc = _ac_doc(NS, NR; coef=_ac_sr_frac, red=red)
-        ics = _ac_ics(NS, NR; e=_ac_e0_frac)
+        doc = _ac_doc(NS, NR; coef = _ac_sr_frac, red = red)
+        ics = _ac_ics(NS, NR; e = _ac_e0_frac)
         dn, vn, tn = _ac_du(doc, ics)
-        do_, vo, to = _ac_du(doc, ics; compiler=:interpreter)
+        do_, vo, to = _ac_du(doc, ics; compiler = :interpreter)
         @test _ac_fired(tn) == 1
         @test _ac_fired(to) == 0
         f = red == "*" ? (*) : red == "max" ? max : min
-        ex = [foldl(f, [_ac_sr_frac(s, r) * _ac_e0_frac(s) for s in NS:-1:1])
-              for r in 1:NR]
+        ex = [
+            foldl(f, [_ac_sr_frac(s, r) * _ac_e0_frac(s) for s in NS:-1:1])
+                for r in 1:NR
+        ]
         A = _ac_outs(dn, vn, NR)
         @test all(A[r] === _ac_outs(do_, vo, NR)[r] for r in 1:NR)
         @test all(A[r] === ex[r] for r in 1:NR)
@@ -196,11 +233,20 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
         c1(s, r) = _ac_sr(s, r)          # read at (contracted 1, output 1)
         c2(s, r) = Float64((5s + 2r) % 13)  # read at (contracted 2, output 2)
         e2(a, b) = Float64((a + 3b) % 5)
-        ax(idxs, rngs) = Dict("op" => "faq", "args" => Any[],
-            "output_idx" => Any[idxs...], "ranges" => Dict(rngs))
-        lhs(v, idxs, rngs) = merge(ax(idxs, rngs),
-            Dict("expr" => Dict("op" => "D", "wrt" => "t", "args" => Any[
-                Dict("op" => "index", "args" => Any[v, idxs...])])))
+        ax(idxs, rngs) = Dict(
+            "op" => "faq", "args" => Any[],
+            "output_idx" => Any[idxs...], "ranges" => Dict(rngs)
+        )
+        lhs(v, idxs, rngs) = merge(
+            ax(idxs, rngs),
+            Dict(
+                "expr" => Dict(
+                    "op" => "D", "wrt" => "t", "args" => Any[
+                        Dict("op" => "index", "args" => Any[v, idxs...]),
+                    ]
+                )
+            )
+        )
         zro(idxs, rngs) = merge(ax(idxs, rngs), Dict("expr" => 0.0))
         cst(v) = Dict("op" => "const", "args" => Any[], "value" => v)
         # `c1` is stored over the FULL 1:R1HI axis: the const is subscripted by
@@ -211,38 +257,64 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
         orng = ["r1" => Any[R1LO, R1HI], "r2" => Any[1, NR2]]
         # Descending contracted ranges, as `_ac_doc`'s, so the nest has it.
         crng = ["s1" => Any[NS1, -1, 1], "s2" => Any[NS2, -1, 1]]
-        agg = merge(ax(("r1", "r2"), vcat(orng, crng)),
-            Dict("semiring" => "sum_product",
-                 "expr" => Dict("op" => "*", "args" => Any[
-                    Dict("op" => "index", "args" => Any[cst(C1), "s1", "r1"]),
-                    Dict("op" => "*", "args" => Any[
-                        Dict("op" => "index", "args" => Any[cst(C2), "s2", "r2"]),
-                        Dict("op" => "index", "args" => Any["E", "s1", "s2"])])])))
-        doc = Dict{String,Any}("esm" => "1.1.0",
-          "metadata" => Dict("name" => "ac_sr2"),
-          "models" => Dict("R" => Dict{String,Any}(
-            "variables" => Dict(
-              "E" => Dict("type" => "unknown", "shape" => Any["s1", "s2"]),
-              "conc" => Dict("type" => "unknown", "shape" => Any["r1", "r2"])),
-            "equations" => Any[
-              Dict("lhs" => lhs("E", ("s1", "s2"), srng),
-                   "rhs" => zro(("s1", "s2"), srng)),
-              Dict("lhs" => lhs("conc", ("r1", "r2"), orng), "rhs" => agg)])))
+        agg = merge(
+            ax(("r1", "r2"), vcat(orng, crng)),
+            Dict(
+                "semiring" => "sum_product",
+                "expr" => Dict(
+                    "op" => "*", "args" => Any[
+                        Dict("op" => "index", "args" => Any[cst(C1), "s1", "r1"]),
+                        Dict(
+                            "op" => "*", "args" => Any[
+                                Dict("op" => "index", "args" => Any[cst(C2), "s2", "r2"]),
+                                Dict("op" => "index", "args" => Any["E", "s1", "s2"]),
+                            ]
+                        ),
+                    ]
+                )
+            )
+        )
+        doc = Dict{String, Any}(
+            "esm" => "1.1.0",
+            "metadata" => Dict("name" => "ac_sr2"),
+            "models" => Dict(
+                "R" => Dict{String, Any}(
+                    "variables" => Dict(
+                        "E" => Dict("type" => "unknown", "shape" => Any["s1", "s2"]),
+                        "conc" => Dict("type" => "unknown", "shape" => Any["r1", "r2"])
+                    ),
+                    "equations" => Any[
+                        Dict(
+                            "lhs" => lhs("E", ("s1", "s2"), srng),
+                            "rhs" => zro(("s1", "s2"), srng)
+                        ),
+                        Dict("lhs" => lhs("conc", ("r1", "r2"), orng), "rhs" => agg),
+                    ]
+                )
+            )
+        )
         ics = merge(
-            Dict{String,Any}("E[$a,$b]" => e2(a, b) for a in 1:NS1, b in 1:NS2),
-            Dict{String,Any}("conc[$r,$q]" => 0.0 for r in R1LO:R1HI, q in 1:NR2))
+            Dict{String, Any}("E[$a,$b]" => e2(a, b) for a in 1:NS1, b in 1:NS2),
+            Dict{String, Any}("conc[$r,$q]" => 0.0 for r in R1LO:R1HI, q in 1:NR2)
+        )
         dn, vn, tn = _ac_du(doc, ics)
-        do_, vo, to = _ac_du(doc, ics; compiler=:interpreter)
+        do_, vo, to = _ac_du(doc, ics; compiler = :interpreter)
         @test _ac_fired(tn) == 1
         @test _ac_fired(to) == 0
         cells = [(r, q) for r in R1LO:R1HI, q in 1:NR2]
-        @test all(dn[vn["conc[$r,$q]"]] === do_[vo["conc[$r,$q]"]]
-                  for (r, q) in cells)
+        @test all(
+            dn[vn["conc[$r,$q]"]] === do_[vo["conc[$r,$q]"]]
+                for (r, q) in cells
+        )
         # Integer-valued data again, so the closed form is exactly representable.
-        @test all(dn[vn["conc[$r,$q]"]] ==
-                  sum(c1(a, r) * c2(b, q) * e2(a, b)
-                      for a in 1:NS1, b in 1:NS2)
-                  for (r, q) in cells)
+        @test all(
+            dn[vn["conc[$r,$q]"]] ==
+                sum(
+                c1(a, r) * c2(b, q) * e2(a, b)
+                    for a in 1:NS1, b in 1:NS2
+            )
+                for (r, q) in cells
+        )
     end
 
     @testset "zero-allocation steady-state f!" begin
@@ -279,8 +351,10 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
                 _AC_ESS._bench_reset!()
                 _AC_ESS._BENCH_ON[] = true
                 try
-                    EarthSciAST._build_evaluator(_ac_doc(NS, NR);
-                                    initial_conditions=_ac_ics(NS, NR))
+                    EarthSciAST._build_evaluator(
+                        _ac_doc(NS, NR);
+                        initial_conditions = _ac_ics(NS, NR)
+                    )
                 finally
                     _AC_ESS._BENCH_ON[] = false
                 end
@@ -305,12 +379,16 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
         # contraction loop, which only the out-of-place build has.
         NS, NR = 16, 16
         doc, ics = _ac_doc(NS, NR), _ac_ics(NS, NR)
-        dl, vl, tl = _ac_du(doc, ics; env=Dict("ESS_ARRAY_CONTRACTION_MIN" => "100000",
-                                               "ESS_CONTRACTION_LOOP_MIN" => "8"))
+        dl, vl, tl = _ac_du(
+            doc, ics; env = Dict(
+                "ESS_ARRAY_CONTRACTION_MIN" => "100000",
+                "ESS_CONTRACTION_LOOP_MIN" => "8"
+            )
+        )
         @test _ac_fired(tl) == 1
         @test _ac_tally(tl, :percell_loop) == 0
         @test _ac_tally(tl, :percell_acc) == 0
-        do_, vo, _ = _ac_du(doc, ics; compiler=:interpreter)
+        do_, vo, _ = _ac_du(doc, ics; compiler = :interpreter)
         @test all(_ac_outs(dl, vl, NR)[r] === _ac_outs(do_, vo, NR)[r] for r in 1:NR)
         @test all(_ac_outs(dl, vl, NR)[r] === _ac_exact(NS, NR)[r] for r in 1:NR)
     end
@@ -321,10 +399,10 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
         # per-cell expansion gives.
         NS, NR = 16, 16
         doc, ics = _ac_doc(NS, NR), _ac_ics(NS, NR)
-        dl, vl, tl = _ac_du(doc, ics; env=Dict("ESS_CONTRACTION_LOOP_MIN" => "32"))
+        dl, vl, tl = _ac_du(doc, ics; env = Dict("ESS_CONTRACTION_LOOP_MIN" => "32"))
         @test _ac_fired(tl) == 0
         @test _ac_tally(tl, :affine) == 2
-        do_, vo, _ = _ac_du(doc, ics; compiler=:interpreter)
+        do_, vo, _ = _ac_du(doc, ics; compiler = :interpreter)
         @test all(_ac_outs(dl, vl, NR)[r] === _ac_outs(do_, vo, NR)[r] for r in 1:NR)
     end
 
@@ -333,9 +411,9 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
         # affine tier (interned as the resolver interns it), so the fold takes
         # the ascending source-receptor shape, at any length.
         for (NS, NR) in ((16, 16), (64, 8))
-            doc, ics = _ac_doc(NS, NR; asc=true), _ac_ics(NS, NR)
+            doc, ics = _ac_doc(NS, NR; asc = true), _ac_ics(NS, NR)
             dn, vn, tn = _ac_du(doc, ics)
-            do_, vo, _ = _ac_du(doc, ics; compiler=:interpreter)
+            do_, vo, _ = _ac_du(doc, ics; compiler = :interpreter)
             @test _ac_fired(tn) == 0
             @test _ac_tally(tn, :affine_reduce) == 1
             A = _ac_outs(dn, vn, NR)
@@ -352,12 +430,12 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
     # compares with `isequal` and reads `signbit`, for the nest and for the
     # affine tier's fold alike.
     @testset "the fold's 0̄ seed keeps a -0.0 partial ($(asc ? "affine fold" : "nest"))" for
-            asc in (false, true)
+        asc in (false, true)
         NS, NR = 12, 4
-        doc = _ac_doc(NS, NR; coef=(s, r) -> -0.0, asc=asc)
-        ics = _ac_ics(NS, NR; e=s -> 1.0 + s)
+        doc = _ac_doc(NS, NR; coef = (s, r) -> -0.0, asc = asc)
+        ics = _ac_ics(NS, NR; e = s -> 1.0 + s)
         (fn!, un, pn, _, vn), tn = _ac_build(doc, ics)
-        (fi!, ui, pi_, _, vi), _ = _ac_build(doc, ics; compiler=:interpreter)
+        (fi!, ui, pi_, _, vi), _ = _ac_build(doc, ics; compiler = :interpreter)
         @test (asc ? _ac_tally(tn, :affine_reduce) : _ac_fired(tn)) == 1
         gn(u) = (d = similar(u, eltype(u)); fn!(d, u, pn, 0.0); d[vn["conc[2]"]])
         gi(u) = (d = similar(u, eltype(u)); fi!(d, u, pi_, 0.0); d[vi["conc[2]"]])
@@ -373,14 +451,14 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
     # for `or` and unrolls only a short one, which it does here); both agree
     # with the per-cell fold and with the closed form, `any` over the terms.
     @testset "a bool_and_or contraction of $NS terms folds as the per-cell build" for
-            (NS, nest, thr) in ((16, true, 36.0), (4, false, 20.0))
+        (NS, nest, thr) in ((16, true, 36.0), (4, false, 20.0))
         NR = 6
         doc, ics = _ac_doc(NS, NR), _ac_ics(NS, NR)
         agg = doc["models"]["R"]["equations"][2]["rhs"]
         agg["semiring"] = "bool_and_or"
         agg["expr"] = Dict("op" => ">", "args" => Any[agg["expr"], thr])
         dn, vn, tn = _ac_du(doc, ics)
-        do_, vo, _ = _ac_du(doc, ics; compiler=:interpreter)
+        do_, vo, _ = _ac_du(doc, ics; compiler = :interpreter)
         @test _ac_fired(tn) == (nest ? 1 : 0)
         A = _ac_outs(dn, vn, NR)
         @test all(A[r] === _ac_outs(do_, vo, NR)[r] for r in 1:NR)
@@ -395,7 +473,7 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
     @testset "an empty output range builds under every compiler" begin
         doc, ics = _ac_doc(16, 0), _ac_ics(16, 0)
         for c in (:native, :interpreter)
-            (f!, u0, p, _, vm), tally = _ac_build(doc, ics; compiler=c)
+            (f!, u0, p, _, vm), tally = _ac_build(doc, ics; compiler = c)
             du = similar(u0); f!(du, u0, p, 0.0)
             @test length(u0) == 16
             @test _ac_tally(tally, :empty_output) == 1
@@ -408,30 +486,50 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
     # form.
     @testset "a nest on a materialized observed level, in place" begin
         N = 16
-        ag1(b) = _AC_ESS.OpExpr("faq", _AC_ESS.ASTExpr[]; output_idx=Any["i"],
-            ranges=Dict("i" => _AC_ESS.IndexSetRef("x")), expr_body=b)
+        ag1(b) = _AC_ESS.OpExpr(
+            "faq", _AC_ESS.ASTExpr[]; output_idx = Any["i"],
+            ranges = Dict("i" => _AC_ESS.IndexSetRef("x")), expr_body = b
+        )
         weq = _AC_ESS.Equation(_v("w"), ag1(_op("*", _n(2.0), _idx("u", _v("i")))))
         Cm = [[_ac_sr(j, i) for i in 1:N] for j in 1:N]
         # `j` descending, as `_ac_doc`'s contracted range, so the nest has it.
-        nest = _AC_ESS.OpExpr("faq", _AC_ESS.ASTExpr[]; output_idx=Any["i"],
-            reduce="+", ranges=Dict("i" => _AC_ESS.IndexSetRef("x"),
-                                    "j" => Any[N, -1, 1]),
-            expr_body=_op("*", _op("index", _AC_ESS.OpExpr("const", _AC_ESS.ASTExpr[];
-                                                           value=Cm), _v("j"), _v("i")),
-                          _idx("w", _v("j"))))
-        vars = Dict("u" => _AC_ESS.ModelVariable(_AC_ESS.UnknownVariable; shape=["x"]),
-                    "w" => _AC_ESS.ModelVariable(_AC_ESS.UnknownVariable; shape=["x"]),
-                    "z" => _AC_ESS.ModelVariable(_AC_ESS.UnknownVariable; shape=["x"]))
-        eqs = [weq, _AC_ESS.Equation(_v("z"), nest),
-               _AC_ESS.Equation(ag1(_Didx("u", _v("i"))), ag1(_idx("z", _v("i"))))]
+        nest = _AC_ESS.OpExpr(
+            "faq", _AC_ESS.ASTExpr[]; output_idx = Any["i"],
+            reduce = "+", ranges = Dict(
+                "i" => _AC_ESS.IndexSetRef("x"),
+                "j" => Any[N, -1, 1]
+            ),
+            expr_body = _op(
+                "*", _op(
+                    "index", _AC_ESS.OpExpr(
+                        "const", _AC_ESS.ASTExpr[];
+                        value = Cm
+                    ), _v("j"), _v("i")
+                ),
+                _idx("w", _v("j"))
+            )
+        )
+        vars = Dict(
+            "u" => _AC_ESS.ModelVariable(_AC_ESS.UnknownVariable; shape = ["x"]),
+            "w" => _AC_ESS.ModelVariable(_AC_ESS.UnknownVariable; shape = ["x"]),
+            "z" => _AC_ESS.ModelVariable(_AC_ESS.UnknownVariable; shape = ["x"])
+        )
+        eqs = [
+            weq, _AC_ESS.Equation(_v("z"), nest),
+            _AC_ESS.Equation(ag1(_Didx("u", _v("i"))), ag1(_idx("z", _v("i")))),
+        ]
         u0v = Dict("u[$i]" => Float64(i % 7) for i in 1:N)
-        bld(compiler) = withenv((k => v for (k, v) in _ac_env(Dict{String,String}()))...) do
+        bld(compiler) = withenv((k => v for (k, v) in _ac_env(Dict{String, String}()))...) do
             _AC_ESS._reset_cascade_tally!()
-            (_AC_ESS._build_evaluator_impl(_AC_ESS.Model(vars, eqs);
-                 compiler=compiler,
-                 index_sets=Dict("x" => _AC_ESS.IndexSet("interval"; size=N)),
-                 initial_conditions=u0v),
-             copy(_AC_ESS._CASCADE_TALLY))
+            (
+                _AC_ESS._build_evaluator_impl(
+                    _AC_ESS.Model(vars, eqs);
+                    compiler = compiler,
+                    index_sets = Dict("x" => _AC_ESS.IndexSet("interval"; size = N)),
+                    initial_conditions = u0v
+                ),
+                copy(_AC_ESS._CASCADE_TALLY),
+            )
         end
         run_ip(compiler) = begin
             (r, t) = bld(compiler)
@@ -445,9 +543,11 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
         @test _ac_fired(to) == 0
         @test all(dn[vn["u[$i]"]] === do_[vo["u[$i]"]] for i in 1:N)
         # The closed form: u̇[i] = z[i] = Σ_j C[j,i]·2·u[j].
-        @test all(dn[vn["u[$i]"]] ==
-                  sum(_ac_sr(j, i) * 2.0 * Float64(j % 7) for j in 1:N)
-                  for i in 1:N)
+        @test all(
+            dn[vn["u[$i]"]] ==
+                sum(_ac_sr(j, i) * 2.0 * Float64(j % 7) for j in 1:N)
+                for i in 1:N
+        )
     end
 
     @testset "a per-cell bound takes the table-driven nest" begin
@@ -458,34 +558,64 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
         NI, NK = 4, 12
         valence = [Float64(2 + (i % 3)) for i in 1:NI]     # 2..4 neighbours per cell
         W = [[Float64((i + 2k) % 7) for k in 1:NK] for i in 1:NI]
-        agg = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
+        agg = Dict{String, Any}(
+            "op" => "faq", "semiring" => "sum_product",
             "args" => Any[], "output_idx" => Any["i"],
-            "ranges" => Dict("i" => Any[1, NI],
-                             "k" => Any[1, Dict("op" => "index",
-                                                "args" => Any["valence", "i"])]),
-            "expr" => Dict("op" => "*", "args" => Any[
-                Dict("op" => "index", "args" => Any[
-                    Dict("op" => "const", "args" => Any[], "value" => W), "i", "k"]),
-                Dict("op" => "index", "args" => Any["q", "i"])]))
-        doc = Dict{String,Any}("esm" => "1.1.0", "metadata" => Dict("name" => "ac_ragged"),
-          "models" => Dict("R" => Dict{String,Any}(
-            "variables" => Dict("q" => Dict("type" => "unknown", "shape" => Any["i"]),
-                                "out" => Dict("type" => "unknown", "shape" => Any["i"])),
-            "equations" => Any[
-              Dict("lhs" => _ac_lhs("q", "i", NI), "rhs" => _ac_zero("i", NI)),
-              Dict("lhs" => _ac_lhs("out", "i", NI), "rhs" => agg)])))
-        ics = merge(Dict{String,Any}("q[$i]" => Float64(i) for i in 1:NI),
-                    Dict{String,Any}("out[$i]" => 0.0 for i in 1:NI))
-        du, vm, tally = _ac_du(doc, ics;
-                               const_arrays=Dict("valence" => valence))
-        di, vi, ti = _ac_du(doc, ics; compiler=:interpreter,
-                            const_arrays=Dict("valence" => valence))
+            "ranges" => Dict(
+                "i" => Any[1, NI],
+                "k" => Any[
+                    1, Dict(
+                        "op" => "index",
+                        "args" => Any["valence", "i"]
+                    ),
+                ]
+            ),
+            "expr" => Dict(
+                "op" => "*", "args" => Any[
+                    Dict(
+                        "op" => "index", "args" => Any[
+                            Dict("op" => "const", "args" => Any[], "value" => W), "i", "k",
+                        ]
+                    ),
+                    Dict("op" => "index", "args" => Any["q", "i"]),
+                ]
+            )
+        )
+        doc = Dict{String, Any}(
+            "esm" => "1.1.0", "metadata" => Dict("name" => "ac_ragged"),
+            "models" => Dict(
+                "R" => Dict{String, Any}(
+                    "variables" => Dict(
+                        "q" => Dict("type" => "unknown", "shape" => Any["i"]),
+                        "out" => Dict("type" => "unknown", "shape" => Any["i"])
+                    ),
+                    "equations" => Any[
+                        Dict("lhs" => _ac_lhs("q", "i", NI), "rhs" => _ac_zero("i", NI)),
+                        Dict("lhs" => _ac_lhs("out", "i", NI), "rhs" => agg),
+                    ]
+                )
+            )
+        )
+        ics = merge(
+            Dict{String, Any}("q[$i]" => Float64(i) for i in 1:NI),
+            Dict{String, Any}("out[$i]" => 0.0 for i in 1:NI)
+        )
+        du, vm, tally = _ac_du(
+            doc, ics;
+            const_arrays = Dict("valence" => valence)
+        )
+        di, vi, ti = _ac_du(
+            doc, ics; compiler = :interpreter,
+            const_arrays = Dict("valence" => valence)
+        )
         @test _ac_fired(tally) == 1
         @test _ac_tally(tally, :percell_acc) == 0
         @test _ac_fired(ti) == 0
-        @test all(du[vm["out[$i]"]] ===  di[vi["out[$i]"]] for i in 1:NI)
-        @test all(du[vm["out[$i]"]] ==
-                  sum(Float64((i + 2k) % 7) for k in 1:Int(valence[i])) * Float64(i)
-                  for i in 1:NI)
+        @test all(du[vm["out[$i]"]] === di[vi["out[$i]"]] for i in 1:NI)
+        @test all(
+            du[vm["out[$i]"]] ==
+                sum(Float64((i + 2k) % 7) for k in 1:Int(valence[i])) * Float64(i)
+                for i in 1:NI
+        )
     end
 end

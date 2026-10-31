@@ -28,11 +28,15 @@ import JSON3
 const ESS = EarthSciAST
 
 const REPO_ROOT = normpath(joinpath(@__DIR__, "..", "..", ".."))
-const OVERLAP_FIXTURE = joinpath(REPO_ROOT, "pkg", "earthsci-ast-rs", "tests",
-                                      "fixtures", "pushdown",
-                                      "overlap_gate_point_in_rect.esm")
-const JOIN_FILTER_FIXTURE = joinpath(REPO_ROOT, "tests", "valid", "faq",
-                                     "join_filter.esm")
+const OVERLAP_FIXTURE = joinpath(
+    REPO_ROOT, "pkg", "earthsci-ast-rs", "tests",
+    "fixtures", "pushdown",
+    "overlap_gate_point_in_rect.esm"
+)
+const JOIN_FILTER_FIXTURE = joinpath(
+    REPO_ROOT, "tests", "valid", "faq",
+    "join_filter.esm"
+)
 
 # The one flattened equation whose RHS carries a `join`.
 function producer(flat)
@@ -82,8 +86,10 @@ end
         # the value-invention engine consumes) and materialise it.
         reconstituted = ESS.load_document(ESS.flattened_to_esm(flat))
         model = first(values(reconstituted.models))
-        vi = ESS.materialize_value_invention(model, reconstituted.index_sets, ca,
-                                             Dict{String, Float64}())
+        vi = ESS.materialize_value_invention(
+            model, reconstituted.index_sets, ca,
+            Dict{String, Float64}()
+        )
         @test vi.members["emis_src_cells_faq"] == [1, 2, 4, 9]
     end
 
@@ -102,8 +108,13 @@ end
         m = d["models"]["EmissionsAggregate"]
         m["variables"]["src_bin"] = Dict("type" => "parameter")
         m["variables"]["tgt_bin"] = Dict("type" => "parameter")
-        m["equations"][1]["rhs"]["join"] = Any[Dict("on" => Any[
-            Any["src_bin", "tgt_bin"], Any["src", "sourceType"]])]
+        m["equations"][1]["rhs"]["join"] = Any[
+            Dict(
+                "on" => Any[
+                    Any["src_bin", "tgt_bin"], Any["src", "sourceType"],
+                ]
+            ),
+        ]
         node = producer(ESS.flatten(ESS.load_document(d)))
         @test node.join[1] == [
             ("EmissionsAggregate.src_bin", "EmissionsAggregate.tgt_bin"),
@@ -117,14 +128,22 @@ end
         # (`_rename_join_names`).
         d = JSON3.read(read(OVERLAP_FIXTURE, String), Dict{String, Any})
         d["models"]["EDGE"] = Dict(
-            "variables" => Dict("src_W" => Dict("type" => "parameter",
-                                                "shape" => Any["pop_cells"])),
+            "variables" => Dict(
+                "src_W" => Dict(
+                    "type" => "parameter",
+                    "shape" => Any["pop_cells"]
+                )
+            ),
             "equations" => Any[],
         )
-        d["coupling"] = Any[Dict("type" => "variable_map",
-                                 "from" => "EDGE.src_W",
-                                 "to" => "ISRM.W",
-                                 "transform" => "param_to_var")]
+        d["coupling"] = Any[
+            Dict(
+                "type" => "variable_map",
+                "from" => "EDGE.src_W",
+                "to" => "ISRM.W",
+                "transform" => "param_to_var"
+            ),
+        ]
         flat = ESS.flatten(ESS.load_document(d))
         @test !haskey(flat.parameters, "ISRM.W")
         clause = producer(flat).join[1]
@@ -154,8 +173,13 @@ end
         m = d["models"]["EmissionsAggregate"]
         m["variables"]["o"] = Dict("type" => "parameter")
         m["equations"][1]["rhs"]["output_idx"] = Any["o", 1]
-        m["equations"][1]["rhs"]["join"] = Any[Dict("on" => Any[
-            Any["o", "sourceType"], Any["src", "sourceType"]])]
+        m["equations"][1]["rhs"]["join"] = Any[
+            Dict(
+                "on" => Any[
+                    Any["o", "sourceType"], Any["src", "sourceType"],
+                ]
+            ),
+        ]
         node = producer(ESS.flatten(ESS.load_document(d)))
         @test node.join[1] == [("o", "sourceType"), ("src", "sourceType")]
     end

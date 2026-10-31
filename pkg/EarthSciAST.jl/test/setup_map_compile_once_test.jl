@@ -26,25 +26,30 @@ using EarthSciAST
 const EA = EarthSciAST
 
 # ---- small JSON AST builders ----
-_op(o, args...) = Dict{String,Any}("op" => o, "args" => Any[args...])
-_ix(f, args...) = Dict{String,Any}("op" => "index", "args" => Any[f, args...])
+_op(o, args...) = Dict{String, Any}("op" => o, "args" => Any[args...])
+_ix(f, args...) = Dict{String, Any}("op" => "index", "args" => Any[f, args...])
 _v(n) = n     # a bare String IS a variable reference (parse.jl)
 function _map(output_idx, ranges, expr)
-    Dict{String,Any}("op" => "faq", "output_idx" => collect(output_idx),
-                     "ranges" => Dict{String,Any}(
-                         k => (v isa AbstractString ?
-                               Dict{String,Any}("from" => v) : v)
-                         for (k, v) in ranges),
-                     "args" => Any[],
-                     "expr" => expr)
+    return Dict{String, Any}(
+        "op" => "faq", "output_idx" => collect(output_idx),
+        "ranges" => Dict{String, Any}(
+            k => (
+                v isa AbstractString ?
+                    Dict{String, Any}("from" => v) : v
+            )
+                for (k, v) in ranges
+        ),
+        "args" => Any[],
+        "expr" => expr
+    )
 end
 
-const IDX = Dict{String,Int}("X" => 5, "Y" => 4)
+const IDX = Dict{String, Int}("X" => 5, "Y" => 4)
 
 # Materialize `json` both ways and return (fast, reference, hits, miss).
 function both_ways(json, env)
     rhs = EA.expression_from_json(json)
-    regfns = Dict{String,Function}()
+    regfns = Dict{String, Function}()
     hits0, miss0 = EA._SETUP_MAP_FASTPATH_HITS[], EA._SETUP_MAP_FASTPATH_MISS[]
     fast = EA._materialize_setup_general_map(rhs, copy(env), nothing, IDX, regfns)
     hits = EA._SETUP_MAP_FASTPATH_HITS[] - hits0
@@ -68,7 +73,7 @@ end
 # `exp`/`log`/`neg` below actually produce -0.0, NaN and ±Inf.
 const A = Float64[(-1.0)^(i + j) * (i - 3) * (j - 2) / 4 for i in 1:5, j in 1:4]
 const B = Float64[i + 10j for i in 1:5, j in 1:4]
-const ENV0 = Dict{String,Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
+const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
 
 @testset "setup-map compile-once" begin
 
@@ -82,10 +87,12 @@ const ENV0 = Dict{String,Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         Bxy = _ix(_v("B"), _v("x"), _v("y"))
         bodies = Dict(
             # signed zero out of the false arm of a gated physics branch
-            "gated" => _op("ifelse",
+            "gated" => _op(
+                "ifelse",
                 _op("and", _op(">", Axy, _v("thr")), _op("<", Bxy, 40.0)),
                 _op("exp", _op("*", Axy, _v("s"))),
-                _op("neg", _op("*", 0, Bxy))),
+                _op("neg", _op("*", 0, Bxy))
+            ),
             # -Inf where A is zero
             "log" => _op("log", _op("*", Axy, Axy)),
             # ±Inf where A is zero, finite elsewhere
@@ -108,27 +115,40 @@ const ENV0 = Dict{String,Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         # And such a map is genuinely one the general evaluator (not the compiled
         # geometry materializer) owns.
         @test EA._is_setup_general_map(
-            EA.expression_from_json(_map(["x", "y"], ["x" => "X", "y" => "Y"],
-                                         bodies["log"])))
+            EA.expression_from_json(
+                _map(
+                    ["x", "y"], ["x" => "X", "y" => "Y"],
+                    bodies["log"]
+                )
+            )
+        )
     end
 
     @testset "shifted / arithmetic gather subscripts" begin
         # A subscript that is not the bare output index: the compiled gather must
         # recompute the offset from the rebound index, not from a folded literal.
-        body = _op("exp", _op("-",
-            _ix(_v("B"), _op("+", _v("x"), 1), _v("y")),
-            _ix(_v("B"), _v("x"), _op("min", _op("+", _v("y"), 1), 4))))
+        body = _op(
+            "exp", _op(
+                "-",
+                _ix(_v("B"), _op("+", _v("x"), 1), _v("y")),
+                _ix(_v("B"), _v("x"), _op("min", _op("+", _v("y"), 1), 4))
+            )
+        )
         j = _map(["x", "y"], ["x" => "X2", "y" => "Y"], body)
-        idx = Dict{String,Int}("X2" => 4, "Y" => 4)
+        idx = Dict{String, Int}("X2" => 4, "Y" => 4)
         rhs = EA.expression_from_json(j)
         h0, m0 = EA._SETUP_MAP_FASTPATH_HITS[], EA._SETUP_MAP_FASTPATH_MISS[]
-        fast = EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, idx,
-                                                 Dict{String,Function}())
+        fast = EA._materialize_setup_general_map(
+            rhs, copy(ENV0), nothing, idx,
+            Dict{String, Function}()
+        )
         @test EA._SETUP_MAP_FASTPATH_HITS[] - h0 == 1
         @test EA._SETUP_MAP_FASTPATH_MISS[] - m0 == 0
         ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
-            EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, idx,
-                                              Dict{String,Function}())
+            EA._materialize_setup_general_map(
+                rhs, copy(ENV0), nothing, idx,
+                Dict{String, Function}()
+            )
         end
         @test bitsame(fast, ref)
         @test length(unique(fast)) > 1
@@ -149,8 +169,10 @@ const ENV0 = Dict{String,Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         m0 = EA._SETUP_MAP_FASTPATH_MISS[]
         h0 = EA._SETUP_MAP_FASTPATH_HITS[]
         EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
-            EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, IDX,
-                                              Dict{String,Function}())
+            EA._materialize_setup_general_map(
+                rhs, copy(ENV0), nothing, IDX,
+                Dict{String, Function}()
+            )
         end
         @test EA._SETUP_MAP_FASTPATH_MISS[] - m0 == 1   # forced onto the reference
         @test EA._SETUP_MAP_FASTPATH_HITS[] - h0 == 0
@@ -176,14 +198,20 @@ const ENV0 = Dict{String,Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         end
         # The compile-once guard finds a `/` in a NESTED node's body too, not
         # just in the top-level `args` spine (it walks via `foreach_subexpr_once`).
-        inner = _map(["k"], ["k" => "Y"],
-                     _ix(_v("B"), _op("/", _op("*", _v("x"), 2), 2), _v("k")))
-        nested = _map(["x", "y"], ["x" => "X", "y" => "Y"],
-                      _ix(inner, _v("y")))
+        inner = _map(
+            ["k"], ["k" => "Y"],
+            _ix(_v("B"), _op("/", _op("*", _v("x"), 2), 2), _v("k"))
+        )
+        nested = _map(
+            ["x", "y"], ["x" => "X", "y" => "Y"],
+            _ix(inner, _v("y"))
+        )
         @test !EA._subscripts_int_exact(EA.expression_from_json(nested))
         # A `/` OUTSIDE an index subscript is harmless and must NOT decline.
-        ok = _map(["x", "y"], ["x" => "X", "y" => "Y"],
-                  _op("/", _ix(_v("B"), _v("x"), _v("y")), _v("s")))
+        ok = _map(
+            ["x", "y"], ["x" => "X", "y" => "Y"],
+            _op("/", _ix(_v("B"), _v("x"), _v("y")), _v("s"))
+        )
         _, _, h2, m2 = both_ways(ok, ENV0)
         @test h2 == 1 && m2 == 0
     end
@@ -197,7 +225,7 @@ const ENV0 = Dict{String,Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         # back to, which no longer declines such an array.
         for pol in (:periodic, :clamp)
             wrapped = EA._wrap_bounded_const(copy(B), (pol, :error), "B")
-            env = Dict{String,Any}("A" => A, "B" => wrapped, "s" => 1.5, "thr" => 0.0)
+            env = Dict{String, Any}("A" => A, "B" => wrapped, "s" => 1.5, "thr" => 0.0)
             for sub in (_op("+", _v("x"), 1), _op("-", _v("x"), 2))
                 body = _op("exp", _ix(_v("B"), sub, _v("y")))
                 j = _map(["x", "y"], ["x" => "X", "y" => "Y"], body)
@@ -207,7 +235,7 @@ const ENV0 = Dict{String,Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
                 # The sweep the fill falls back to, on its own.
                 rhs = EA.expression_from_json(j)
                 ca, params = EA._setup_env_split(env)
-                ce = EA._setup_map_compile_once(rhs, 2, ca, Dict{String,Function}(), params)
+                ce = EA._setup_map_compile_once(rhs, 2, ca, Dict{String, Function}(), params)
                 @test ce !== nothing
                 @test (pol, bitsame(EA._fill_map_fast(ce, [5, 4], 2), ref)) == (pol, true)
             end
@@ -223,11 +251,15 @@ const ENV0 = Dict{String,Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         j["reduce"] = "+"
         j["filter"] = _op(">", _v("k"), 1)
         rhs = EA.expression_from_json(j)
-        fast = EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, IDX,
-                                                 Dict{String,Function}())
+        fast = EA._materialize_setup_general_map(
+            rhs, copy(ENV0), nothing, IDX,
+            Dict{String, Function}()
+        )
         ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
-            EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, IDX,
-                                              Dict{String,Function}())
+            EA._materialize_setup_general_map(
+                rhs, copy(ENV0), nothing, IDX,
+                Dict{String, Function}()
+            )
         end
         @test bitsame(fast, ref)
     end
@@ -236,12 +268,16 @@ const ENV0 = Dict{String,Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
     # still lands inside `B`, so the compiled gather read a neighbouring cell
     # (B[x+1, 1] at x = 5 returned B[1, 2]) while the per-cell reference raised.
     @testset "out of range on one axis raises on both paths" begin
-        for body in (_ix(_v("B"), _op("+", _v("x"), 1), 1),
-                     _ix(_v("B"), _op("-", _v("x"), 1), 2))
+        for body in (
+                _ix(_v("B"), _op("+", _v("x"), 1), 1),
+                _ix(_v("B"), _op("-", _v("x"), 1), 2),
+            )
             rhs = EA.expression_from_json(_map(["x"], ["x" => "X"], body))
             for interp in (false, true)
-                mat() = EA._materialize_setup_general_map(rhs, copy(ENV0), nothing,
-                                                          IDX, Dict{String,Function}())
+                mat() = EA._materialize_setup_general_map(
+                    rhs, copy(ENV0), nothing,
+                    IDX, Dict{String, Function}()
+                )
                 err = try
                     interp ?
                         EA._with_compiler_plan(mat, EA._compiler_plan(:interpreter)) :

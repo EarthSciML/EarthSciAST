@@ -52,48 +52,76 @@ const _CTO_ESS = EarthSciAST
 # is what decides which tier it lands on. Integer-valued data, so the grouped and
 # flat sums are bit-equal and the exact value is representable.
 _cto_dpv(i, j, k) = Float64((i + 2j + 3k) % 5)
-_cto_cv(i, j, k)  = Float64((7i + 5j + k) % 6)
+_cto_cv(i, j, k) = Float64((7i + 5j + k) % 6)
 
 function _cto_doc(NI::Int, NJ::Int, NK::Int)
-    agg = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
+    agg = Dict{String, Any}(
+        "op" => "faq", "semiring" => "sum_product",
         "args" => Any[], "output_idx" => Any["i", "j"],
         "ranges" => Dict("i" => Any[1, NI], "j" => Any[1, NJ], "k" => Any[1, NK]),
-        "expr" => Dict("op" => "*", "args" => Any[
-            Dict("op" => "index", "args" => Any["dp", "i", "j", "k"]),
-            Dict("op" => "index", "args" => Any["c", "i", "j", "k"])]))
-    zero_c = Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i", "j", "k"],
+        "expr" => Dict(
+            "op" => "*", "args" => Any[
+                Dict("op" => "index", "args" => Any["dp", "i", "j", "k"]),
+                Dict("op" => "index", "args" => Any["c", "i", "j", "k"]),
+            ]
+        )
+    )
+    zero_c = Dict(
+        "op" => "faq", "args" => Any[], "output_idx" => Any["i", "j", "k"],
         "ranges" => Dict("i" => Any[1, NI], "j" => Any[1, NJ], "k" => Any[1, NK]),
-        "expr" => 0.0)
-    Dict{String,Any}("esm" => "1.1.0", "metadata" => Dict("name" => "cto_colsum"),
-      "models" => Dict("R" => Dict{String,Any}(
-        "variables" => Dict(
-            "c"   => Dict("type" => "unknown", "shape" => Any["i", "j", "k"]),
-            "dp"  => Dict("type" => "parameter", "shape" => Any["i", "j", "k"]),
-            "out" => Dict("type" => "unknown", "shape" => Any["i", "j"])),
-        "equations" => Any[
-          Dict("lhs" => Dict("op" => "faq", "args" => Any[],
-                 "output_idx" => Any["i", "j", "k"],
-                 "ranges" => Dict("i" => Any[1, NI], "j" => Any[1, NJ], "k" => Any[1, NK]),
-                 "expr" => Dict("op" => "D", "args" => Any[
-                     Dict("op" => "index", "args" => Any["c", "i", "j", "k"])], "wrt" => "t")),
-               "rhs" => zero_c),
-          Dict("lhs" => Dict("op" => "faq", "args" => Any[],
-                 "output_idx" => Any["i", "j"],
-                 "ranges" => Dict("i" => Any[1, NI], "j" => Any[1, NJ]),
-                 "expr" => Dict("op" => "D", "args" => Any[
-                     Dict("op" => "index", "args" => Any["out", "i", "j"])], "wrt" => "t")),
-               "rhs" => agg)])))
+        "expr" => 0.0
+    )
+    return Dict{String, Any}(
+        "esm" => "1.1.0", "metadata" => Dict("name" => "cto_colsum"),
+        "models" => Dict(
+            "R" => Dict{String, Any}(
+                "variables" => Dict(
+                    "c" => Dict("type" => "unknown", "shape" => Any["i", "j", "k"]),
+                    "dp" => Dict("type" => "parameter", "shape" => Any["i", "j", "k"]),
+                    "out" => Dict("type" => "unknown", "shape" => Any["i", "j"])
+                ),
+                "equations" => Any[
+                    Dict(
+                        "lhs" => Dict(
+                            "op" => "faq", "args" => Any[],
+                            "output_idx" => Any["i", "j", "k"],
+                            "ranges" => Dict("i" => Any[1, NI], "j" => Any[1, NJ], "k" => Any[1, NK]),
+                            "expr" => Dict(
+                                "op" => "D", "args" => Any[
+                                    Dict("op" => "index", "args" => Any["c", "i", "j", "k"]),
+                                ], "wrt" => "t"
+                            )
+                        ),
+                        "rhs" => zero_c
+                    ),
+                    Dict(
+                        "lhs" => Dict(
+                            "op" => "faq", "args" => Any[],
+                            "output_idx" => Any["i", "j"],
+                            "ranges" => Dict("i" => Any[1, NI], "j" => Any[1, NJ]),
+                            "expr" => Dict(
+                                "op" => "D", "args" => Any[
+                                    Dict("op" => "index", "args" => Any["out", "i", "j"]),
+                                ], "wrt" => "t"
+                            )
+                        ),
+                        "rhs" => agg
+                    ),
+                ]
+            )
+        )
+    )
 end
 
 function _cto_ics(NI, NJ, NK)
-    d = Dict{String,Any}()
+    d = Dict{String, Any}()
     for i in 1:NI, j in 1:NJ
         d["out[$i,$j]"] = 0.0
     end
     for i in 1:NI, j in 1:NJ, k in 1:NK
         d["c[$i,$j,$k]"] = _cto_cv(i, j, k)
     end
-    d
+    return d
 end
 
 _cto_exact(NI, NJ, NK) =
@@ -104,22 +132,26 @@ _cto_exact(NI, NJ, NK) =
 # decide which side of a tier's admission floor this fixture falls on, stated
 # per case so the routing under test is a property of the fixture rather than of
 # the ambient environment.
-function _cto_build(NI, NJ, NK; compiler = :native, env = Dict{String,String}())
+function _cto_build(NI, NJ, NK; compiler = :native, env = Dict{String, String}())
     doc = _cto_doc(NI, NJ, NK)
     ics = _cto_ics(NI, NJ, NK)
-    pairs = ["ESS_CONTRACTION_LOOP_MIN" => get(env, "ESS_CONTRACTION_LOOP_MIN", "8"),
-             "ESS_ARRAY_CONTRACTION_MIN" =>
-                 get(env, "ESS_ARRAY_CONTRACTION_MIN", "1024")]
+    pairs = [
+        "ESS_CONTRACTION_LOOP_MIN" => get(env, "ESS_CONTRACTION_LOOP_MIN", "8"),
+        "ESS_ARRAY_CONTRACTION_MIN" =>
+            get(env, "ESS_ARRAY_CONTRACTION_MIN", "1024"),
+    ]
     dp = [ _cto_dpv(i, j, k) for i in 1:NI, j in 1:NJ, k in 1:NK ]
-    withenv(pairs...) do
+    return withenv(pairs...) do
         _CTO_ESS._reset_cascade_tally!()
         _CTO_ESS._bench_reset!()
         _CTO_ESS._BENCH_ON[] = true
         local f, u0, p, vm
         try
-            f, u0, p, _, vm = EarthSciAST._build_evaluator(doc; initial_conditions = ics,
-                                              compiler = compiler,
-                                              const_arrays = Dict("dp" => dp))
+            f, u0, p, _, vm = EarthSciAST._build_evaluator(
+                doc; initial_conditions = ics,
+                compiler = compiler,
+                const_arrays = Dict("dp" => dp)
+            )
         finally
             _CTO_ESS._BENCH_ON[] = false
         end
@@ -187,8 +219,10 @@ _cto_outs(du, vm, NI, NJ) = [ du[vm["out[$i,$j]"]] for i in 1:NI, j in 1:NJ ]
         # …and bit for bit against the pure unroll. This shape reaches the
         # emitter through a 3-D const gather at two output indices and the
         # contracted one, and a state gather at all three.
-        du_i, vm_i, tally_i, _ = _cto_build(NI, NJ, NK; compiler = :interpreter,
-                                            env = env)
+        du_i, vm_i, tally_i, _ = _cto_build(
+            NI, NJ, NK; compiler = :interpreter,
+            env = env
+        )
         @test _cto_get(tally_i, :array_contraction_codegen) == 0
         @test all(A[i] === _cto_outs(du_i, vm_i, NI, NJ)[i] for i in eachindex(A))
     end
@@ -215,7 +249,7 @@ _cto_outs(du, vm, NI, NJ) = [ du[vm["out[$i,$j]"]] for i in 1:NI, j in 1:NJ ]
     # per output cell cannot hold that.
     @testset "node lowerings are FLAT in output cells" begin
         NK = 8
-        _, _, t6,  n6  = _cto_build(6, 6, NK)      # 36 output cells
+        _, _, t6, n6 = _cto_build(6, 6, NK)      # 36 output cells
         _, _, t12, n12 = _cto_build(12, 12, NK)    # 144
         _, _, t24, n24 = _cto_build(24, 24, NK)    # 576
         for t in (t6, t12, t24)

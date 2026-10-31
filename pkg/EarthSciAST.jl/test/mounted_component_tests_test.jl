@@ -19,15 +19,19 @@ import OrdinaryDiffEqTsit5
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
-const _MCT_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-                          "mounted_component_tests", "fixtures")
+const _MCT_DIR = joinpath(
+    TESTUTILS_REPO_ROOT, "tests", "conformance",
+    "mounted_component_tests", "fixtures"
+)
 
 # #210 unified this runner's result type with the directory runner's: an
 # `AssertionResult` names its component `container_name` — a model OR a reaction
 # system, both of which the runner now walks — and carries a three-valued
 # `status`, not a `passed` Bool.
-_mct_run(name) = run_inline_tests(joinpath(_MCT_DIR, name);
-                                  alg=OrdinaryDiffEqTsit5.Tsit5())
+_mct_run(name) = run_inline_tests(
+    joinpath(_MCT_DIR, name);
+    alg = OrdinaryDiffEqTsit5.Tsit5()
+)
 
 @testset "Mounted components' inline tests (esm-spec §6.6)" begin
     @testset "the leaf alone passes its own test" begin

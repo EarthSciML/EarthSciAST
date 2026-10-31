@@ -49,22 +49,22 @@ B.5 / §5.8.2 sliver floor: `atol ≈ 1e-15·R²`. Near-tangent overlaps are the
 where two clippers legitimately disagree on whether a tiny intersection even
 exists, so sub-`atol` areas are treated as equal-to-zero.
 """
-const SLIVER_ATOL_FACTOR = 1e-15
+const SLIVER_ATOL_FACTOR = 1.0e-15
 
 """
 np.allclose-matching point-comparison tolerances (`atol + rtol·|b|` per
 coordinate) so the closing-vertex drop and consecutive-dedup decisions match
 the Python sibling exactly (np.allclose defaults).
 """
-const PT_ALLCLOSE_ATOL = 1e-8
-const PT_ALLCLOSE_RTOL = 1e-5
+const PT_ALLCLOSE_ATOL = 1.0e-8
+const PT_ALLCLOSE_RTOL = 1.0e-5
 
 """
 Degeneracy floor for the clip-line × subject-segment denominator: a |denom|
 below this is treated as parallel/degenerate and the intersection falls back
 to the in-half-plane endpoint (see `_segment_intersection`).
 """
-const SEGMENT_DENOM_FLOOR = 1e-300
+const SEGMENT_DENOM_FLOOR = 1.0e-300
 
 """
     GeometryError(msg)
@@ -93,13 +93,16 @@ function _spherical_clip_geometryops end
 function _to_matrix(poly)::Matrix{Float64}
     if poly isa AbstractMatrix
         return Matrix{Float64}(poly)
-    elseif poly isa AbstractVector && !isempty(poly) && poly[1] isa Union{AbstractVector,Tuple}
+    elseif poly isa AbstractVector && !isempty(poly) && poly[1] isa Union{AbstractVector, Tuple}
         n = length(poly)
         m = Matrix{Float64}(undef, n, 2)
         for i in 1:n
             row = poly[i]
-            length(row) == 2 || throw(GeometryError(
-                "polygon vertex $i has $(length(row)) coordinates, expected 2 (lon, lat)"))
+            length(row) == 2 || throw(
+                GeometryError(
+                    "polygon vertex $i has $(length(row)) coordinates, expected 2 (lon, lat)"
+                )
+            )
             m[i, 1] = Float64(row[1]); m[i, 2] = Float64(row[2])
         end
         return m
@@ -131,8 +134,11 @@ depend on that. A ring with fewer than 3 *distinct* vertices is degenerate and
 rejected.
 """
 function _as_ring(poly::AbstractMatrix, who::AbstractString)::Matrix{Float64}
-    size(poly, 2) == 2 || throw(GeometryError(
-        "intersect_polygon $who must be an [verts, 2] lon-lat ring, got array of shape $(size(poly))"))
+    size(poly, 2) == 2 || throw(
+        GeometryError(
+            "intersect_polygon $who must be an [verts, 2] lon-lat ring, got array of shape $(size(poly))"
+        )
+    )
     # _dedup_consecutive drops consecutive duplicates AND the wrap pair (a
     # closing first==last duplicate), so padding and explicit closure both
     # collapse to the n distinct vertices with implicit closure. It never mutates
@@ -141,8 +147,11 @@ function _as_ring(poly::AbstractMatrix, who::AbstractString)::Matrix{Float64}
     # freshly-coerced `_to_matrix(...)` result — the defensive copy is redundant
     # and skipped (one fewer allocation per operand per clip).
     arr = _dedup_consecutive(poly isa Matrix{Float64} ? poly : Matrix{Float64}(poly))
-    size(arr, 1) >= 3 || throw(GeometryError(
-        "intersect_polygon $who needs ≥3 distinct vertices, got $(size(arr, 1))"))
+    size(arr, 1) >= 3 || throw(
+        GeometryError(
+            "intersect_polygon $who needs ≥3 distinct vertices, got $(size(arr, 1))"
+        )
+    )
     return arr
 end
 
@@ -193,7 +202,7 @@ function _dedup_consecutive(ring::Matrix{Float64})::Matrix{Float64}
     end
     out = ring[keep, :]
     if size(out, 1) >= 2 && _allclose_pt(out[1, 1], out[1, 2], out[end, 1], out[end, 2])
-        out = out[1:end-1, :]
+        out = out[1:(end - 1), :]
     end
     return out
 end
@@ -210,7 +219,7 @@ operand would silently give the convex-edge intersection and is out of contract.
 function _planar_clip(subject::AbstractMatrix, clip::AbstractMatrix)::Matrix{Float64}
     # Orient the clip ring CCW so "inside == left of each directed edge" holds.
     cl = _signed_area(clip) < 0 ? clip[end:-1:1, :] : clip
-    output = Tuple{Float64,Float64}[(subject[i, 1], subject[i, 2]) for i in 1:size(subject, 1)]
+    output = Tuple{Float64, Float64}[(subject[i, 1], subject[i, 2]) for i in 1:size(subject, 1)]
     nclip = size(cl, 1)
     for i in 1:nclip
         isempty(output) && break
@@ -218,7 +227,7 @@ function _planar_clip(subject::AbstractMatrix, clip::AbstractMatrix)::Matrix{Flo
         inext = i == nclip ? 1 : i + 1
         b = (cl[inext, 1], cl[inext, 2])
         prev = output
-        output = Tuple{Float64,Float64}[]
+        output = Tuple{Float64, Float64}[]
         m = length(prev)
         for j in 1:m
             p = prev[j]
@@ -252,15 +261,17 @@ end
 # `nothing` whenever the general path would do something else (an empty or
 # non-2-column operand, an operand with fewer than 3 distinct vertices, which
 # raises there), so the caller falls back to it.
-const _PtBuf = Vector{NTuple{2,Float64}}
+const _PtBuf = Vector{NTuple{2, Float64}}
 struct _ClipScratch
     a::_PtBuf
     b::_PtBuf
     p::_PtBuf
     q::_PtBuf
 end
-_clip_scratch() = get!(() -> _ClipScratch(_PtBuf(), _PtBuf(), _PtBuf(), _PtBuf()),
-                       task_local_storage(), :esm_planar_clip_scratch)::_ClipScratch
+_clip_scratch() = get!(
+    () -> _ClipScratch(_PtBuf(), _PtBuf(), _PtBuf(), _PtBuf()),
+    task_local_storage(), :esm_planar_clip_scratch
+)::_ClipScratch
 
 function _dedup_into!(buf::_PtBuf, m::AbstractMatrix)
     empty!(buf)
@@ -270,7 +281,7 @@ function _dedup_into!(buf::_PtBuf, m::AbstractMatrix)
             push!(buf, (x, y))
         end
     end
-    _dedup_wrap!(buf)
+    return _dedup_wrap!(buf)
 end
 
 function _dedup_wrap!(buf::_PtBuf)
@@ -280,9 +291,11 @@ function _dedup_wrap!(buf::_PtBuf)
     return buf
 end
 
-function _planar_pia_noalloc(poly_a::AbstractMatrix, poly_b::AbstractMatrix)::Union{Float64,Nothing}
-    (size(poly_a, 2) == 2 && size(poly_b, 2) == 2 &&
-     size(poly_a, 1) > 0 && size(poly_b, 1) > 0) || return nothing
+function _planar_pia_noalloc(poly_a::AbstractMatrix, poly_b::AbstractMatrix)::Union{Float64, Nothing}
+    (
+        size(poly_a, 2) == 2 && size(poly_b, 2) == 2 &&
+            size(poly_a, 1) > 0 && size(poly_b, 1) > 0
+    ) || return nothing
     _bbox_disjoint(poly_a, poly_b) && return 0.0
     sc = _clip_scratch()
     sub = _dedup_into!(sc.a, poly_a)
@@ -386,7 +399,7 @@ end
 # extension) is loaded, so the spherical / geodesic clip is callable. The area FAQ
 # needs no backend — only the spherical *clip* does.
 _spherical_clip_available() =
-    hasmethod(_spherical_clip_geometryops, Tuple{Matrix{Float64},Matrix{Float64},String})
+    hasmethod(_spherical_clip_geometryops, Tuple{Matrix{Float64}, Matrix{Float64}, String})
 
 """
     intersect_polygon(poly_a, poly_b, manifold) -> Matrix{Float64}
@@ -402,12 +415,15 @@ empty `0×2` array when the cells do not overlap. `planar` is dependency-free;
 `EarthSciASTGeometryOpsExt` extension.
 """
 function intersect_polygon(poly_a, poly_b, manifold::AbstractString)::Matrix{Float64}
-    manifold in GEOMETRY_MANIFOLDS || throw(GeometryError(
-        "unknown manifold $(repr(manifold)); the closed set is $(GEOMETRY_MANIFOLDS)"))
+    manifold in GEOMETRY_MANIFOLDS || throw(
+        GeometryError(
+            "unknown manifold $(repr(manifold)); the closed set is $(GEOMETRY_MANIFOLDS)"
+        )
+    )
     # Planar broad-phase: a disjoint bounding box is an exact reject (see
     # `_bbox_disjoint`), so skip the coercion + clip for non-overlapping pairs.
     if manifold == "planar" && poly_a isa AbstractMatrix && poly_b isa AbstractMatrix &&
-       _bbox_disjoint(poly_a, poly_b)
+            _bbox_disjoint(poly_a, poly_b)
         return zeros(Float64, 0, 2)
     end
     a = _as_ring(_to_matrix(poly_a), "poly_a")
@@ -419,10 +435,13 @@ function intersect_polygon(poly_a, poly_b, manifold::AbstractString)::Matrix{Flo
     # share the great-circle-edge model (RFC §B.4), so geodesic reuses the
     # spherical clip, matching the Python sibling.
     if !_spherical_clip_available()
-        throw(GeometryError(
-            "$(manifold) intersect_polygon requires the GeometryOps backend; " *
-            "load it with `import GeometryOps, GeoInterface` to trigger the " *
-            "EarthSciASTGeometryOpsExt extension. The planar manifold needs no backend."))
+        throw(
+            GeometryError(
+                "$(manifold) intersect_polygon requires the GeometryOps backend; " *
+                    "load it with `import GeometryOps, GeoInterface` to trigger the " *
+                    "EarthSciASTGeometryOpsExt extension. The planar manifold needs no backend."
+            )
+        )
     end
     return _spherical_clip_geometryops(a, b, String(manifold))
 end
@@ -470,12 +489,15 @@ both are returned whole. `max_segment_deg` must be positive; `lat_atol` (degrees
 is the tolerance for judging an edge to lie along a parallel. The result is the
 densified ring as `n×2` *distinct* lon-lat vertices (implicit closure preserved).
 """
-function densify_parallel_edges(ring, max_segment_deg::Real; lat_atol::Real=1e-9)::Matrix{Float64}
-    max_segment_deg > 0 || throw(GeometryError(
-        "densify_parallel_edges max_segment_deg must be positive, got $(max_segment_deg)"))
+function densify_parallel_edges(ring, max_segment_deg::Real; lat_atol::Real = 1.0e-9)::Matrix{Float64}
+    max_segment_deg > 0 || throw(
+        GeometryError(
+            "densify_parallel_edges max_segment_deg must be positive, got $(max_segment_deg)"
+        )
+    )
     r = _as_ring(_to_matrix(ring), "ring")
     n = size(r, 1)
-    out = Tuple{Float64,Float64}[]
+    out = Tuple{Float64, Float64}[]
     for i in 1:n
         ax = r[i, 1]; ay = r[i, 2]
         j = i == n ? 1 : i + 1
@@ -484,7 +506,7 @@ function densify_parallel_edges(ring, max_segment_deg::Real; lat_atol::Real=1e-9
         dlon = bx - ax
         if abs(ay - by) <= lat_atol && abs(dlon) > max_segment_deg
             nseg = ceil(Int, abs(dlon) / max_segment_deg)
-            for k in 1:nseg-1
+            for k in 1:(nseg - 1)
                 t = k / nseg
                 push!(out, (ax + t * dlon, ay + t * (by - ay)))
             end
@@ -532,8 +554,8 @@ function _spherical_signed_area(ring::AbstractMatrix, radius::Real)
     n < 3 && return 0.0
     verts = [_lonlat_to_unit(ring[i, 1], ring[i, 2]) for i in 1:n]
     total = 0.0
-    for i in 2:n-1
-        total += _spherical_triangle_excess(verts[1], verts[i], verts[i+1])
+    for i in 2:(n - 1)
+        total += _spherical_triangle_excess(verts[1], verts[i], verts[i + 1])
     end
     return radius * radius * total
 end
@@ -549,10 +571,10 @@ polygon area now routes through the FAQ ([`_polygon_area_via_faq`](@ref)) for bo
 manifolds; this function encodes the same formula the FAQ body does, kept as the
 independent oracle.
 """
-function polygon_area(ring::AbstractMatrix, manifold::AbstractString; radius::Real=1.0)::Float64
+function polygon_area(ring::AbstractMatrix, manifold::AbstractString; radius::Real = 1.0)::Float64
     r = Matrix{Float64}(ring)
     if size(r, 1) >= 2 && _allclose_pt(r[1, 1], r[1, 2], r[end, 1], r[end, 2])
-        r = r[1:end-1, :]
+        r = r[1:(end - 1), :]
     end
     size(r, 1) < 3 && return 0.0
     if manifold == "planar"
@@ -576,8 +598,10 @@ Combined rel+abs area-agreement gate with a sliver floor (B.5 / §5.8.2):
 "absent" one **both pass**. `rtol` is empirically calibrated per the loosest binding
 pair (GeometryOps-vs-S2). Pass an explicit `atol` to override the floor.
 """
-function area_tolerance_ok(area_x::Real, area_ref::Real; rtol::Real,
-                           radius::Real=1.0, atol::Union{Nothing,Real}=nothing)::Bool
+function area_tolerance_ok(
+        area_x::Real, area_ref::Real; rtol::Real,
+        radius::Real = 1.0, atol::Union{Nothing, Real} = nothing
+    )::Bool
     at = atol === nothing ? SLIVER_ATOL_FACTOR * radius * radius : atol
     ax = abs(area_x) <= at ? 0.0 : float(area_x)
     ar = abs(area_ref) <= at ? 0.0 : float(area_ref)

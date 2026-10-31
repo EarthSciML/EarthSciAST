@@ -26,15 +26,17 @@ end
 function _build_display_expr(input)
     op = string(get(input, :op, ""))
     if op == "apply_expression_template"
-        bindings = Dict{String,ESM.ASTExpr}()
+        bindings = Dict{String, ESM.ASTExpr}()
         raw = get(input, :bindings, nothing)
         if raw !== nothing
             for (k, v) in pairs(raw)
                 bindings[string(k)] = ESM.expression_from_json(v)
             end
         end
-        return ESM.OpExpr("apply_expression_template", ESM.ASTExpr[];
-            name=string(input.name), bindings=bindings)
+        return ESM.OpExpr(
+            "apply_expression_template", ESM.ASTExpr[];
+            name = string(input.name), bindings = bindings
+        )
     end
     return ESM.expression_from_json(input)
 end
@@ -47,7 +49,7 @@ const _DISPLAY_FMTS = (
 
 function _run_display_case(t, tname)
     expr = _build_display_expr(t.input)
-    @testset "$tname" begin
+    return @testset "$tname" begin
         for (fmt, fn) in _DISPLAY_FMTS
             @test fn(expr) == String(t[fmt])
         end
@@ -71,12 +73,15 @@ function _run_display_fixture(path)
             _run_display_case(entry, string(get(entry, :name, "case $i")))
         end
     end
+    return
 end
 
 @testset "Display conformance (tests/display fixtures)" begin
     display_dir = joinpath(TESTUTILS_REPO_ROOT, "tests", "display")
-    for fixture in ("structural_ops.json", "comprehensive_operators.json",
-                    "all_operators.json")
+    for fixture in (
+            "structural_ops.json", "comprehensive_operators.json",
+            "all_operators.json",
+        )
         path = joinpath(display_dir, fixture)
         @testset "$fixture" begin
             if _require_fixture(path)

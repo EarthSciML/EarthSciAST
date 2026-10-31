@@ -76,7 +76,7 @@ const R = EarthSciAST.Relational
         @test R.group_aggregate(rows; key = k, value = v, op = min) == [:a => 1, :b => 3, :c => 5]
         # order-independent (assoc + comm ⊕)
         @test R.group_aggregate(reverse(rows); key = k, value = v, op = +) ==
-              R.group_aggregate(rows; key = k, value = v, op = +)
+            R.group_aggregate(rows; key = k, value = v, op = +)
     end
 
     @testset "float VALUES allowed, reduced in canonical order (rule 5)" begin
@@ -94,14 +94,16 @@ const R = EarthSciAST.Relational
         # Two triangles sharing edge (2,3); faces → vertex triples.
         faces = [(1, 2, 3), (2, 4, 3)]
         # Undirected edges of a face list as canonical skolem tuples.
-        edges_of(fs) = reduce(vcat,
-            [[R.skolem_edge(a, b), R.skolem_edge(b, c), R.skolem_edge(c, a)] for (a, b, c) in fs])
+        edges_of(fs) = reduce(
+            vcat,
+            [[R.skolem_edge(a, b), R.skolem_edge(b, c), R.skolem_edge(c, a)] for (a, b, c) in fs]
+        )
 
         # Golden = DuckDB throwaway oracle output:
         #   SELECT DISTINCT e ORDER BY e   ;   dense_rank() OVER (ORDER BY e)
-        golden_set  = [(1, 2), (1, 3), (2, 3), (2, 4), (3, 4)]
+        golden_set = [(1, 2), (1, 3), (2, 3), (2, 4), (3, 4)]
         golden_json = "[[1,2],[1,3],[2,3],[2,4],[3,4]]"
-        golden_ids  = [1, 2, 3, 4, 5]              # Julia 1-based
+        golden_ids = [1, 2, 3, 4, 5]              # Julia 1-based
 
         base = edges_of(faces)
         @test R.distinct(base) == golden_set
@@ -110,10 +112,10 @@ const R = EarthSciAST.Relational
 
         # Adversarial variants — all must collapse to the identical canonical output.
         variants = [
-            "duplicate edges"  => vcat(base, base),
-            "reversed faces"   => edges_of([(c, b, a) for (a, b, c) in faces]),
-            "permuted input"   => reverse(base),
-            "permuted faces"   => edges_of(reverse(faces)),
+            "duplicate edges" => vcat(base, base),
+            "reversed faces" => edges_of([(c, b, a) for (a, b, c) in faces]),
+            "permuted input" => reverse(base),
+            "permuted faces" => edges_of(reverse(faces)),
         ]
         for (name, variant) in variants
             @testset "$name" begin
@@ -128,7 +130,7 @@ const R = EarthSciAST.Relational
         @test R.canonical_index_set_json([3, 1, 2, 1]) == "[1,2,3]"
         @test R.canonical_index_set_json([(2, 1), (1, 2)]) == "[[1,2],[2,1]]"
         @test R.canonical_index_set_json(["a", "B"]) == "[\"B\",\"a\"]"   # codepoint order + JSON-escape
-        @test R.canonical_index_set_json(Tuple{Int,Int}[]) == "[]"
+        @test R.canonical_index_set_json(Tuple{Int, Int}[]) == "[]"
     end
 
     @testset "negative controls (§5.5.4): float keys rejected (rule 1)" begin
@@ -139,8 +141,10 @@ const R = EarthSciAST.Relational
         @test_throws R.FloatKeyError R.equijoin([(1.0,)], [(1.0,)]; on_left = x -> x[1], on_right = x -> x[1])
         @test_throws R.FloatKeyError R.group_aggregate([(1.5, 2)]; key = r -> r[1], value = r -> r[2], op = +)
         # Bool keys ARE allowed (Bool <: Integer): boolean-or-style grouping
-        @test R.group_aggregate([(true, 1), (false, 2), (true, 3)];
-            key = r -> r[1], value = r -> r[2], op = +) == [false => 2, true => 4]
+        @test R.group_aggregate(
+            [(true, 1), (false, 2), (true, 3)];
+            key = r -> r[1], value = r -> r[2], op = +
+        ) == [false => 2, true => 4]
     end
 
 end

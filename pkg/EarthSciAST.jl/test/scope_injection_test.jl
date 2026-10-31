@@ -14,8 +14,10 @@ using EarthSciAST: serialize_esm_file, ExpressionTemplateError,
 include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
 
 @testset "scope-directed template injection (esm-spec §9.7.10)" begin
-    conf(parts...) = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-                              "expression_templates", parts...)
+    conf(parts...) = joinpath(
+        TESTUTILS_REPO_ROOT, "tests", "conformance",
+        "expression_templates", parts...
+    )
 
     _golden(path) = _normj(JSON3.read(read(path, String)))
     _err_code(f) = try
@@ -29,7 +31,8 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # `serialize_esm_file` is reference-preserving. The `expanded.esm` golden
         # is the Option-A image, so this pins it with `expanded_file`.
         f = EarthSciAST.expanded_file(
-            EarthSciAST.load_path(conf("inject_subsystem_ref", "fixture.esm")))
+            EarthSciAST.load_path(conf("inject_subsystem_ref", "fixture.esm"))
+        )
         # The mounted, agnostic leaf's D(c, wrt: lon) is lowered by the injected
         # rule at the mount; the subsystem resolves to a Model (not a ref).
         runoff = f.models["Assembly"].subsystems["Runoff"]
@@ -41,7 +44,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # Round-trip golden: the resolved+lowered assembly; the injection field
         # is gone (form A does not survive parse → emit).
         @test _normj(serialize_esm_file(f)) ==
-              _golden(conf("inject_subsystem_ref", "expanded.esm"))
+            _golden(conf("inject_subsystem_ref", "expanded.esm"))
 
         # The leaf loads standalone with its D intact (agnostic; unlowered).
         leaf = EarthSciAST.load_path(conf("inject_subsystem_ref", "leaf.esm"))
@@ -58,7 +61,8 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
     @testset "form B — coupling-entry injection (§10.8 / §9.7.10)" begin
         # Option B: pin the Option-A `expanded.esm` golden with `expanded_file`.
         f = EarthSciAST.expanded_file(
-            EarthSciAST.load_path(conf("inject_coupling_entry", "fixture.esm")))
+            EarthSciAST.load_path(conf("inject_coupling_entry", "fixture.esm"))
+        )
         # Advection is discretized by name; its lon-derivative is lowered.
         @test f.models["Advection"].equations[1].rhs.args[2].op == "makearray"
         @test f.index_sets["lon"].size == 288
@@ -70,18 +74,26 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test _normj(ser) == _golden(conf("inject_coupling_entry", "expanded.esm"))
 
         # Diagnostics.
-        @test _err_code(() -> EarthSciAST.load_path(
-            conf("inject_coupling_entry", "neg_target_unknown.esm"))) ==
-              "template_inject_target_unknown"
+        @test _err_code(
+            () -> EarthSciAST.load_path(
+                conf("inject_coupling_entry", "neg_target_unknown.esm")
+            )
+        ) ==
+            "template_inject_target_unknown"
         # esm 1.0.0 retires `template_inject_target_is_loader`: a data source is
         # not a component, so it cannot be referenced by a coupling entry at all
         # and a key naming one is reported as `template_inject_target_unknown`
         # or `..._not_component` like any other non-component key (the schema's
         # `expression_template_imports` description states this).
-        @test _err_code(() -> EarthSciAST.load_path(
-            conf("inject_coupling_entry", "neg_target_is_loader.esm"))) in
-              ("template_inject_target_not_component",
-               "template_inject_target_unknown")
+        @test _err_code(
+            () -> EarthSciAST.load_path(
+                conf("inject_coupling_entry", "neg_target_is_loader.esm")
+            )
+        ) in
+            (
+            "template_inject_target_not_component",
+            "template_inject_target_unknown",
+        )
     end
 
     @testset "form C — test/analysis injection (§6.6.6 / §9.7.10)" begin
@@ -93,17 +105,21 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test length(adv.tests) == 2
         @test all(!isempty(t.expression_template_imports) for t in adv.tests)
         @test _normj(serialize_esm_file(f)) ==
-              _golden(conf("inject_test_block", "roundtrip.esm"))
+            _golden(conf("inject_test_block", "roundtrip.esm"))
 
         # One suite, many schemes: each test builds an INDEPENDENT ephemeral
         # instance with its own grid, with the D lowered in that build only —
         # the persisted component is never mutated.
-        e1 = _ephemeral_injected_file(f, conf("inject_test_block", "fixture.esm"),
+        e1 = _ephemeral_injected_file(
+            f, conf("inject_test_block", "fixture.esm"),
             "Advection", adv.tests[1].expression_template_imports,
-            conf("inject_test_block"))
-        e2 = _ephemeral_injected_file(f, conf("inject_test_block", "fixture.esm"),
+            conf("inject_test_block")
+        )
+        e2 = _ephemeral_injected_file(
+            f, conf("inject_test_block", "fixture.esm"),
             "Advection", adv.tests[2].expression_template_imports,
-            conf("inject_test_block"))
+            conf("inject_test_block")
+        )
         @test e1.models["Advection"].equations[1].rhs.args[2].op == "makearray"
         @test e2.models["Advection"].equations[1].rhs.args[2].op == "makearray"
         @test e1.index_sets["lon"].size == 288

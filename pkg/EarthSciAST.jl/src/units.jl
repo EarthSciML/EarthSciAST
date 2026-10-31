@@ -48,7 +48,7 @@ Unitful.@unit _u_btu "BTU" InternationalTableBTU 1055.05585262 * Unitful.u"J" fa
 
 # Microatmosphere — the standard unit of seawater pCO2. Unitful defines `atm`
 # without an SI-prefix mechanism, so `uatm` must be spelled out.
-Unitful.@unit _u_uatm "uatm" MicroAtmosphere 1e-6 * Unitful.u"atm" false
+Unitful.@unit _u_uatm "uatm" MicroAtmosphere 1.0e-6 * Unitful.u"atm" false
 
 # `Dobson` / `DU`: the areal number density of ozone in a column. One DU is a
 # 10 µm-thick layer of pure O3 at STP — 2.6867e20 molec/m^2 (the Loschmidt
@@ -242,17 +242,17 @@ const _UNIT_REGISTRY = Dict{String, Unitful.Units}(
 const _UNIT_SPELLINGS = [
     "\u00B0C" => "degC",
     "\u00B0F" => "degF",
-    "\u00B5"  => "u",      # MICRO SIGN
-    "\u03BC"  => "u",      # GREEK SMALL LETTER MU
-    "\u03A9"  => "Ohm",    # GREEK CAPITAL LETTER OMEGA
-    "\u2126"  => "Ohm",    # OHM SIGN
-    "\u00B7"  => "*",      # MIDDLE DOT — multiplication
-    "\u22C5"  => "*",      # DOT OPERATOR — multiplication
+    "\u00B5" => "u",      # MICRO SIGN
+    "\u03BC" => "u",      # GREEK SMALL LETTER MU
+    "\u03A9" => "Ohm",    # GREEK CAPITAL LETTER OMEGA
+    "\u2126" => "Ohm",    # OHM SIGN
+    "\u00B7" => "*",      # MIDDLE DOT — multiplication
+    "\u22C5" => "*",      # DOT OPERATOR — multiplication
 ]
 
 # Superscript digits and the superscript minus. A RUN of these is an exponent:
 # `m²` is `m^2`, `m⁻³` is `m^-3`.
-const _SUPERSCRIPTS = Dict{Char,Char}(
+const _SUPERSCRIPTS = Dict{Char, Char}(
     '⁰' => '0', '¹' => '1', '²' => '2', '³' => '3', '⁴' => '4',
     '⁵' => '5', '⁶' => '6', '⁷' => '7', '⁸' => '8', '⁹' => '9',
     '⁻' => '-',
@@ -323,12 +323,13 @@ function _up_skip_space!(p::_UnitParser)
     while !_up_eof(p) && _up_space(p.src[p.pos])
         p.pos += 1
     end
+    return
 end
 
 # Peek at the next non-space character, or `nothing` at end of input.
 function _up_peek(p::_UnitParser)
     _up_skip_space!(p)
-    _up_eof(p) ? nothing : p.src[p.pos]
+    return _up_eof(p) ? nothing : p.src[p.pos]
 end
 
 _up_digit(c::Char) = '0' <= c <= '9'
@@ -382,6 +383,7 @@ function _up_unit!(p::_UnitParser)
             return u
         end
     end
+    return
 end
 
 # term := atom (('^' | '**') exponent)?
@@ -433,8 +435,11 @@ function _up_atom!(p::_UnitParser)
         # rejected). Rejecting the scaling factor makes `^(-1/3)` the only
         # spelling of that unit, so the same string cannot silently mean two
         # things.
-        tok == "1" || throw(_UnitParseError(
-            "a number other than 1 is a scaling factor, not a unit (esm-spec 4.8.2); a rational exponent is spelled ^(p/q)"))
+        tok == "1" || throw(
+            _UnitParseError(
+                "a number other than 1 is a scaling factor, not a unit (esm-spec 4.8.2); a rational exponent is spelled ^(p/q)"
+            )
+        )
         return Unitful.NoUnits
     end
     tok == "dimensionless" && return Unitful.NoUnits
@@ -470,8 +475,11 @@ function _up_exponent!(p::_UnitParser)
     negative = _up_minus!(p)
     _up_eof(p) && throw(_UnitParseError("expected an exponent"))
     start = p.pos
-    _up_digit(p.src[p.pos]) || throw(_UnitParseError(
-        "an exponent must be an integer, a decimal, or a rational ^(p/q) at position $start"))
+    _up_digit(p.src[p.pos]) || throw(
+        _UnitParseError(
+            "an exponent must be an integer, a decimal, or a rational ^(p/q) at position $start"
+        )
+    )
     tok, is_number = _up_run!(p)
     is_number || throw(_UnitParseError("malformed exponent '$tok' at position $start"))
     # EXACT: a decimal `1.5` is 15//10, never a float rationalised back.
@@ -693,8 +701,10 @@ function _constant_exponent_value(e::ASTExpr)::Union{Rational{Int}, Nothing}
             u === nothing && return nothing
             # An angle (`rad`, `sr`) is dimensionless to Unitful but carries
             # the angle axis the other bindings track, so it is not a number.
-            (dimension(u) == dimension(Unitful.NoUnits) && isone(_exact_scale(u)) &&
-             !_is_angle_bearing(u)) || return nothing
+            (
+                dimension(u) == dimension(Unitful.NoUnits) && isone(_exact_scale(u)) &&
+                    !_is_angle_bearing(u)
+            ) || return nothing
         end
         return _exponent_rational(e.value)
     end
@@ -706,7 +716,7 @@ function _constant_exponent_value(e::ASTExpr)::Union{Rational{Int}, Nothing}
         v === nothing && return nothing
         push!(vals, v)
     end
-    try
+    return try
         if op == "+"
             return sum(vals)
         elseif op == "*"
@@ -954,7 +964,7 @@ function Base.:/(a::ExactScale, b::ExactScale)
 end
 
 function Base.:^(a::ExactScale, r::Real)
-    q = r isa Rational ? Rational{Int}(r) : Rational{Int}(rationalize(Int, float(r); tol = 1e-9))
+    q = r isa Rational ? Rational{Int}(r) : Rational{Int}(rationalize(Int, float(r); tol = 1.0e-9))
     return _exact_normalize(ExactScale(Dict(p => x * q for (p, x) in a.primes), a.pi * q))
 end
 
@@ -1068,8 +1078,10 @@ _same_unit_ignoring_angle(a, b) =
 # two angles (`rad` against `sr`), a mixed unit (`m*rad` against `m`) — is held
 # to `_same_unit`.
 function _units_agree_where_angle_meets_number(a, b)::Bool
-    ((_is_pure_angle(a) && _is_angle_free_number(b)) ||
-     (_is_angle_free_number(a) && _is_pure_angle(b))) &&
+    (
+        (_is_pure_angle(a) && _is_angle_free_number(b)) ||
+            (_is_angle_free_number(a) && _is_pure_angle(b))
+    ) &&
         return _same_unit_ignoring_angle(a, b)
     return _same_unit(a, b)
 end
@@ -1166,8 +1178,10 @@ _is_pure_number(u)::Bool =
 # registry is a `Dict`, so a sweep would pick `ppmv` or `ppm` depending on
 # iteration order and the five bindings would print different messages for the
 # same document. The same table, in the same order, is in every binding.
-const _SCALED_DIMENSIONLESS_SPELLINGS = (("percent", -2), ("ppm", -6),
-                                         ("ppb", -9), ("ppt", -12))
+const _SCALED_DIMENSIONLESS_SPELLINGS = (
+    ("percent", -2), ("ppm", -6),
+    ("ppb", -9), ("ppt", -12),
+)
 
 # The canonical registry spelling of a dimensionless unit at `scale`, or
 # `nothing` (`1/100` ⇒ "percent", `1e-6` ⇒ "ppm").
@@ -1231,8 +1245,10 @@ end
 # by `_same_unit`: `θ [rad] + ω [sr] + n [1]` is a mismatch whichever operand
 # comes first. An agreeing pure angle and pure number give the pure number's
 # unit, because the angle cancels.
-function _same_dimensions_over(args, var_units, findings, describe;
-                               angle_meets_number::Bool=false)
+function _same_dimensions_over(
+        args, var_units, findings, describe;
+        angle_meets_number::Bool = false
+    )
     arg_dims = [_expr_dimensions!(findings, arg, var_units) for arg in args]
     valid_dims = filter(d -> d !== nothing, arg_dims)
     isempty(valid_dims) && return nothing
@@ -1271,18 +1287,22 @@ end
 function _same_dimension_rule(expr, var_units, findings)
     length(expr.args) == 1 &&
         return _expr_dimensions!(findings, expr.args[1], var_units)
-    return _same_dimensions_over(expr.args, var_units, findings,
+    return _same_dimensions_over(
+        expr.args, var_units, findings,
         (first_dim, dim) -> "Cannot $(expr.op == "-" ? "subtract" : "add") quantities with " *
             "different units: '$(_ustr(first_dim))' $(expr.op) '$(_ustr(dim))'";
-        angle_meets_number=true)
+        angle_meets_number = true
+    )
 end
 
 # "min" / "max" (esm-spec §4.2): all arguments must share dimensions; the
 # result carries them.
 _minmax_rule(expr, var_units, findings) =
-    _same_dimensions_over(expr.args, var_units, findings,
-        (first_dim, dim) -> "Dimensional inconsistency in $(expr.op): " *
-            "'$(_ustr(first_dim))' vs '$(_ustr(dim))'"; angle_meets_number=true)
+    _same_dimensions_over(
+    expr.args, var_units, findings,
+    (first_dim, dim) -> "Dimensional inconsistency in $(expr.op): " *
+        "'$(_ustr(first_dim))' vs '$(_ustr(dim))'"; angle_meets_number = true
+)
 
 # "*": multiply dimensions. A SINGLE indeterminate factor makes the whole
 # product indeterminate — FABRICATION #2. Skipping the unknown factor and
@@ -1346,10 +1366,14 @@ function _power_rule(expr, var_units, findings)
         # provable whenever its dimension is known. An angle is not: it stands
         # in for the angle axis the other bindings track (`_is_angle_bearing`).
         exp_dim = _expr_dimensions!(findings, expr.args[2], var_units)
-        if exp_dim !== nothing && (dimension(exp_dim) != dimension(Unitful.NoUnits) ||
-                                   _is_angle_bearing(exp_dim))
-            push!(findings, "Exponent must be dimensionless, got '$(_ustr(exp_dim))'" *
-                (base_dim === nothing ? "" : " for base with units '$(_ustr(base_dim))'"))
+        if exp_dim !== nothing && (
+                dimension(exp_dim) != dimension(Unitful.NoUnits) ||
+                    _is_angle_bearing(exp_dim)
+            )
+            push!(
+                findings, "Exponent must be dimensionless, got '$(_ustr(exp_dim))'" *
+                    (base_dim === nothing ? "" : " for base with units '$(_ustr(base_dim))'")
+            )
             return nothing
         end
         base_dim === nothing && return nothing
@@ -1380,7 +1404,7 @@ function _sqrt_rule(expr, var_units, findings)
     base_dim = _expr_dimensions!(findings, expr.args[1], var_units)
     base_dim === nothing && return nothing
     try
-        return base_dim^(1//2)
+        return base_dim^(1 // 2)
     catch
         # Unitful rejects a half-power that is not representable (odd exponent
         # on a base unit). Unknown, not an inconsistency — the AUTHOR may have a
@@ -1404,10 +1428,14 @@ function _dimensionless_arg_rule(expr, var_units, findings)
     # it. A PURE angle is the exception: where an angle meets a pure number its
     # axis is removed and its scale KEPT (esm-spec §4.8.3), so `exp(x [rad])`
     # passes and `exp(x [deg])` is refused for its scale below, like `%`.
-    if arg_dim !== nothing && (dimension(arg_dim) != dimension(Unitful.NoUnits) ||
-                               (_is_angle_bearing(arg_dim) && !_is_pure_angle(arg_dim)))
-        push!(findings, "$(_op_family(expr.op)) argument must be dimensionless, " *
-                        "got units '$(_ustr(arg_dim))' (function '$(expr.op)')")
+    if arg_dim !== nothing && (
+            dimension(arg_dim) != dimension(Unitful.NoUnits) ||
+                (_is_angle_bearing(arg_dim) && !_is_pure_angle(arg_dim))
+        )
+        push!(
+            findings, "$(_op_family(expr.op)) argument must be dimensionless, " *
+                "got units '$(_ustr(arg_dim))' (function '$(expr.op)')"
+        )
         return nothing
     end
     # "Dimensionless" means dimensionless AT SCALE 1 (issue #409): `ppm` and
@@ -1441,12 +1469,18 @@ function _circular_arg_rule(expr, var_units, findings)
     # conversion turns a solid angle into a plane one (esm-spec §4.8.3), and
     # multiplying by `scale` where `scale^2` was meant would be silently wrong.
     if arg_dim !== nothing &&
-       ((dimension(arg_dim) != dimension(Unitful.NoUnits) &&
-         dimension(arg_dim) != dimension(u"rad")) ||
-        (_is_angle_bearing(arg_dim) && !_is_plane_angle(arg_dim)))
-        push!(findings, "Circular function argument must be an angle or " *
-                        "dimensionless, got units '$(_ustr(arg_dim))' " *
-                        "(function '$(expr.op)')")
+            (
+            (
+                dimension(arg_dim) != dimension(Unitful.NoUnits) &&
+                    dimension(arg_dim) != dimension(u"rad")
+            ) ||
+                (_is_angle_bearing(arg_dim) && !_is_plane_angle(arg_dim))
+        )
+        push!(
+            findings, "Circular function argument must be an angle or " *
+                "dimensionless, got units '$(_ustr(arg_dim))' " *
+                "(function '$(expr.op)')"
+        )
         return nothing
     end
     # An ANGLE is admitted WHATEVER its scale, because `deg` → `rad` is exact and
@@ -1470,9 +1504,11 @@ function _inverse_circular_rule(expr, var_units, findings)
     if length(expr.args) == 2
         # `atan2(y, x)`: the two operands need only be COMMENSURATE — their
         # ratio is the dimensionless tangent — and the result is an angle.
-        _same_dimensions_over(expr.args, var_units, findings,
+        _same_dimensions_over(
+            expr.args, var_units, findings,
             (a, b) -> "atan2 operands must have the same units, got " *
-                      "'$(_ustr(a))' and '$(_ustr(b))'")
+                "'$(_ustr(a))' and '$(_ustr(b))'"
+        )
         return u"rad"
     end
     if length(expr.args) != 1
@@ -1484,11 +1520,15 @@ function _inverse_circular_rule(expr, var_units, findings)
     # a PURE angle: its argument is a place where an angle meets a pure number
     # (esm-spec §4.8.3), so the axis is removed, the scale kept, and `deg` is
     # refused for its scale below.
-    if arg_dim !== nothing && (dimension(arg_dim) != dimension(Unitful.NoUnits) ||
-                               (_is_angle_bearing(arg_dim) && !_is_pure_angle(arg_dim)))
-        push!(findings, "Inverse circular function argument must be " *
-                        "dimensionless, got units '$(_ustr(arg_dim))' " *
-                        "(function '$(expr.op)')")
+    if arg_dim !== nothing && (
+            dimension(arg_dim) != dimension(Unitful.NoUnits) ||
+                (_is_angle_bearing(arg_dim) && !_is_pure_angle(arg_dim))
+        )
+        push!(
+            findings, "Inverse circular function argument must be " *
+                "dimensionless, got units '$(_ustr(arg_dim))' " *
+                "(function '$(expr.op)')"
+        )
         return nothing
     end
     # A dimensionless RATIO is a PURE NUMBER, not a `percent` whose reading is
@@ -1523,7 +1563,7 @@ end
 # no compact string form.
 function _ustr(u)::String
     s = string(u)
-    isempty(s) ? string(dimension(u)) : s
+    return isempty(s) ? string(dimension(u)) : s
 end
 
 # "ifelse": ifelse(cond, a, b) — the two branches follow the "+" rule (esm-spec
@@ -1535,9 +1575,11 @@ end
 function _ifelse_rule(expr, var_units, findings)
     length(expr.args) == 3 || return nothing
     _expr_dimensions!(findings, expr.args[1], var_units)
-    return _same_dimensions_over(expr.args[2:3], var_units, findings,
+    return _same_dimensions_over(
+        expr.args[2:3], var_units, findings,
         (t_dim, f_dim) -> "Unit inconsistency in ifelse branches: " *
-                          "'$(_ustr(t_dim))' vs '$(_ustr(f_dim))'"; angle_meets_number=true)
+            "'$(_ustr(t_dim))' vs '$(_ustr(f_dim))'"; angle_meets_number = true
+    )
 end
 
 # "sign": strips dimensions — the result is a dimensionless -1/0/+1.
@@ -1558,9 +1600,11 @@ end
 # dimensionless boolean. Literal operands are dimension-neutral here for the
 # same reason they are under "+" — `x > 0` says nothing about the units of 0.
 function _comparison_rule(expr, var_units, findings)
-    _same_dimensions_over(expr.args, var_units, findings,
+    _same_dimensions_over(
+        expr.args, var_units, findings,
         (first_dim, dim) -> "Cannot compare quantities with different units: " *
-            "'$(_ustr(first_dim))' $(expr.op) '$(_ustr(dim))'"; angle_meets_number=true)
+            "'$(_ustr(first_dim))' $(expr.op) '$(_ustr(dim))'"; angle_meets_number = true
+    )
     return Unitful.NoUnits
 end
 
@@ -1614,8 +1658,10 @@ end
 # NO registry row on purpose: an op absent from the registry is classified by
 # `_op_in_T` (lower_expression_templates.jl) as an open-namespace rewrite
 # target, and giving these spellings rows would silently change that.
-const _TRANSCENDENTAL_OPS = union(_ops_with_dim_class(:transcendental),
-                                  Set(["ln", "log2", "expm1"]))
+const _TRANSCENDENTAL_OPS = union(
+    _ops_with_dim_class(:transcendental),
+    Set(["ln", "log2", "expm1"])
+)
 
 # CIRCULAR functions take an ANGLE. An angle is dimensionless (a ratio of two
 # lengths) — Unitful models `rad` with `NoDims`, and this rule is written so it
@@ -1646,30 +1692,30 @@ const _BOOLEAN_OPS = _ops_with_dim_class(:boolean)
 # the bare literal it is (`_literal_unit`).
 _const_units_rule(expr, var_units, findings) =
     expr.units === nothing ? _literal_unit(expr.value, var_units) :
-                             _absolute_unit(parse_units(expr.units))
+    _absolute_unit(parse_units(expr.units))
 
 const _DIMENSION_RULES = let rules = Dict{String, Function}(
-        "+"      => _same_dimension_rule,
-        "-"      => _same_dimension_rule,
-        "*"      => _product_rule,
-        "/"      => _quotient_rule,
-        "^"      => _power_rule,
-        "pow"    => _power_rule,
-        "sqrt"   => _sqrt_rule,
-        "min"    => _minmax_rule,
-        "max"    => _minmax_rule,
+        "+" => _same_dimension_rule,
+        "-" => _same_dimension_rule,
+        "*" => _product_rule,
+        "/" => _quotient_rule,
+        "^" => _power_rule,
+        "pow" => _power_rule,
+        "sqrt" => _sqrt_rule,
+        "min" => _minmax_rule,
+        "max" => _minmax_rule,
         "ifelse" => _ifelse_rule,
-        "sign"   => _dimensionless_result_rule,
-        "abs"    => _preserve_dimension_rule,
+        "sign" => _dimensionless_result_rule,
+        "abs" => _preserve_dimension_rule,
         # `Pre` PRESERVES its operand's dimension (esm-spec §4.8.3) — it names
         # the operand's value at the previous step, not a dimensionless one.
-        "Pre"    => _preserve_dimension_rule,
+        "Pre" => _preserve_dimension_rule,
         # `ic(x)` names x's initial value, so it CARRIES x's unit, dimension
         # and scale (esm-spec §4.8.3) — under either literal rule.
-        "ic"     => _preserve_dimension_rule,
-        "D"      => _derivative_rule,
+        "ic" => _preserve_dimension_rule,
+        "D" => _derivative_rule,
         # A `const` that DECLARES its units has that unit (esm-spec §4.8.5).
-        "const"  => _const_units_rule,
+        "const" => _const_units_rule,
     )
     for op in _TRANSCENDENTAL_OPS
         rules[op] = _dimensionless_arg_rule
@@ -1707,8 +1753,12 @@ end
 # * `broadcast(fn=F, args)` — the unit of `{op: F, args}`.
 # * `faq` — its `filter`, `expr` and operands are always walked for findings;
 #   its own unit is decided by its ⊕ (`_faq_unit`).
-const _ARRAY_ELEMENT_OPS = Set(["faq", "makearray", "index", "reshape",
-                                "transpose", "concat", "broadcast"])
+const _ARRAY_ELEMENT_OPS = Set(
+    [
+        "faq", "makearray", "index", "reshape",
+        "transpose", "concat", "broadcast",
+    ]
+)
 
 function _array_element_rule(expr, var_units, findings)
     if expr.op == "faq"
@@ -1726,13 +1776,17 @@ function _array_element_rule(expr, var_units, findings)
             _expr_dimensions!(findings, a, var_units)
         end
         expr.values === nothing && return nothing
-        return _same_dimensions_over(expr.values, var_units, findings,
+        return _same_dimensions_over(
+            expr.values, var_units, findings,
             (first_dim, dim) -> "'makearray' regions must share units: " *
-                "'$(_ustr(first_dim))' vs '$(_ustr(dim))'")
+                "'$(_ustr(first_dim))' vs '$(_ustr(dim))'"
+        )
     elseif expr.op == "concat"
-        return _same_dimensions_over(expr.args, var_units, findings,
+        return _same_dimensions_over(
+            expr.args, var_units, findings,
             (first_dim, dim) -> "Incompatible dimensions/scales in 'concat': " *
-                "'$(_ustr(first_dim))' vs '$(_ustr(dim))'")
+                "'$(_ustr(first_dim))' vs '$(_ustr(dim))'"
+        )
     elseif expr.op == "broadcast"
         if expr.fn === nothing
             for a in expr.args
@@ -1809,7 +1863,7 @@ Base.iterate(env::_LiteralRuleEnv, state...) = iterate(env.inner, state...)
 # `var_units` with the §4.8.6 literal rule switched on or off.
 _with_literal_rule(var_units::AbstractDict, on::Bool) =
     on ? (var_units isa _LiteralRuleEnv ? var_units : _LiteralRuleEnv(var_units)) :
-         (var_units isa _LiteralRuleEnv ? var_units.inner : var_units)
+    (var_units isa _LiteralRuleEnv ? var_units.inner : var_units)
 
 # The unit of a bare literal (or unit-less `const`) of value `v`: undeterminable
 # under the current rule (esm-spec §4.8.4); under the §4.8.6 rule dimensionless
@@ -1824,8 +1878,10 @@ end
 # The engine proper. Returns the expression's dimension, or `nothing` when it
 # cannot be determined; every PROVABLE inconsistency encountered anywhere in the
 # subtree is appended to `findings`. See the invariant at the top of this block.
-function _expr_dimensions!(findings::Vector{String}, expr::ASTExpr,
-                           var_units::AbstractDict)::Union{Unitful.Units, Nothing}
+function _expr_dimensions!(
+        findings::Vector{String}, expr::ASTExpr,
+        var_units::AbstractDict
+    )::Union{Unitful.Units, Nothing}
     if expr isa NumExpr || expr isa IntExpr
         # A bare number's dimension is INDETERMINATE, not dimensionless — see
         # the implicit-units note (fabrication #1). The three positions where a
@@ -1896,8 +1952,10 @@ builds on.
 (esm-spec §4.8.6); zero stays neutral. Off by default: validity is decided by
 the neutral-literal rule.
 """
-function expression_unit_findings(expr::ASTExpr, var_units::AbstractDict;
-                                  dimensionless_literals::Bool=false)::Vector{String}
+function expression_unit_findings(
+        expr::ASTExpr, var_units::AbstractDict;
+        dimensionless_literals::Bool = false
+    )::Vector{String}
     findings = String[]
     _expr_dimensions!(findings, expr, _with_literal_rule(var_units, dimensionless_literals))
     return findings
@@ -1920,8 +1978,10 @@ reported here as a `@warn` and, for programmatic use, is available from
 `dimensionless_literals` switches on the esm-spec §4.8.6 literal rule, as for
 [`expression_unit_findings`](@ref).
 """
-function get_expression_dimensions(expr::ASTExpr, var_units::AbstractDict;
-                                   dimensionless_literals::Bool=false)::Union{Unitful.Units, Nothing}
+function get_expression_dimensions(
+        expr::ASTExpr, var_units::AbstractDict;
+        dimensionless_literals::Bool = false
+    )::Union{Unitful.Units, Nothing}
     findings = String[]
     dim = _expr_dimensions!(findings, expr, _with_literal_rule(var_units, dimensionless_literals))
     for msg in findings
@@ -1995,17 +2055,23 @@ function _site_check(lhs, rhs, var_units)::Tuple{Vector{String}, Vector{String}}
         state_dim = _expr_dimensions!(String[], state, var_units)
         (state_dim === nothing || right === nothing) && return internal, comparison
         ratio = dimension(state_dim) / dimension(right)
-        _is_time_power(ratio) || push!(comparison,
+        _is_time_power(ratio) || push!(
+            comparison,
             "Derivative of '$(_message_ustr(state_dim))' cannot equal an expression " *
-            "with units '$(_message_ustr(right))' under any time unit (they differ " *
-            "by $(ratio), not by a power of time)")
+                "with units '$(_message_ustr(right))' under any time unit (they differ " *
+                "by $(ratio), not by a power of time)"
+        )
         return internal, comparison
     end
-    (left === nothing || right === nothing ||
-     _units_agree_where_angle_meets_number(left, right)) &&
+    (
+        left === nothing || right === nothing ||
+            _units_agree_where_angle_meets_number(left, right)
+    ) &&
         return internal, comparison
-    push!(comparison, "Left-hand side has units '$(_message_ustr(left))' but " *
-                      "right-hand side has units '$(_message_ustr(right))'")
+    push!(
+        comparison, "Left-hand side has units '$(_message_ustr(left))' but " *
+            "right-hand side has units '$(_message_ustr(right))'"
+    )
     return internal, comparison
 end
 
@@ -2150,15 +2216,19 @@ recursion), keeping this function's pointers purely model-local.
 Iteration over `model.variables` is sorted by name so the finding order is
 deterministic regardless of Dict hashing.
 """
-function model_unit_findings(model::Model; file=nothing,
-                             toplevel=nothing)::Vector{UnitFinding}
+function model_unit_findings(
+        model::Model; file = nothing,
+        toplevel = nothing
+    )::Vector{UnitFinding}
     # Only EXPLICITLY declared units enter the environment, and only those that
     # RESOLVE. A variable with no declared units is unknown, not dimensionless;
     # one whose declared units do not resolve is reported separately below and
     # then treated as unknown, so a single bad string cannot cascade into a
     # bogus mismatch at every site that mentions the variable.
-    var_units = _model_unit_env(model,
-                                toplevel === nothing ? _toplevel_scoped_units(file) : toplevel)
+    var_units = _model_unit_env(
+        model,
+        toplevel === nothing ? _toplevel_scoped_units(file) : toplevel
+    )
 
     out = UnitFinding[]
 
@@ -2170,9 +2240,13 @@ function model_unit_findings(model::Model; file=nothing,
             str === nothing && continue
             isempty(str) && continue
             parse_units(str) === nothing || continue
-            push!(out, UnitFinding("variables/$name",
-                "Unit string '$str' is not a recognised unit " *
-                "(variable '$name', field '$field')", UNIT_PARSE_ERROR))
+            push!(
+                out, UnitFinding(
+                    "variables/$name",
+                    "Unit string '$str' is not a recognised unit " *
+                        "(variable '$name', field '$field')", UNIT_PARSE_ERROR
+                )
+            )
         end
 
         # 2. default_units vs units.
@@ -2180,10 +2254,14 @@ function model_unit_findings(model::Model; file=nothing,
         if du !== nothing && !isempty(du) && u !== nothing && !isempty(u) && du != u
             du_parsed, u_parsed = parse_units(du), parse_units(u)
             if du_parsed !== nothing && u_parsed !== nothing && du_parsed != u_parsed
-                push!(out, UnitFinding("variables/$name",
-                    "Parameter default value units do not match declared units " *
-                    "(variable '$name', declared_units='$u', default_units='$du')",
-                    UNIT_DIMENSION_MISMATCH))
+                push!(
+                    out, UnitFinding(
+                        "variables/$name",
+                        "Parameter default value units do not match declared units " *
+                            "(variable '$name', declared_units='$u', default_units='$du')",
+                        UNIT_DIMENSION_MISMATCH
+                    )
+                )
             end
         end
 
@@ -2200,13 +2278,17 @@ function model_unit_findings(model::Model; file=nothing,
                 # only when there is more than one to distinguish.
                 rule_path = _update_rule_path("variables/$name", rules, ri)
                 rule_label = _update_is_scalar_form(rules) ? "" :
-                             ", update rule $(ri - 1)"
+                    ", update rule $(ri - 1)"
                 for (field, e) in (("when", rule.when), ("expression", rule.expression))
                     e === nothing && continue
                     for msg in expression_unit_findings(e, var_units)
-                        push!(out, UnitFinding("$rule_path/$field",
-                            "$msg (variable '$name'$rule_label, field '$field')",
-                            UNIT_DIMENSION_MISMATCH))
+                        push!(
+                            out, UnitFinding(
+                                "$rule_path/$field",
+                                "$msg (variable '$name'$rule_label, field '$field')",
+                                UNIT_DIMENSION_MISMATCH
+                            )
+                        )
                     end
                 end
             end
@@ -2219,12 +2301,16 @@ function model_unit_findings(model::Model; file=nothing,
     # item 2), whatever kind of equation it sits in.
     for (i, eq) in enumerate(model.equations)
         for msg in equation_unit_findings(eq, var_units)
-            push!(out, UnitFinding("equations/$(i-1)", msg, UNIT_DIMENSION_MISMATCH))
+            push!(out, UnitFinding("equations/$(i - 1)", msg, UNIT_DIMENSION_MISMATCH))
         end
         for (field, side) in (("lhs", eq.lhs), ("rhs", eq.rhs))
             for units in unresolvable_const_units(side)
-                push!(out, UnitFinding("equations/$(i-1)/$field",
-                    "Unit string '$units' is not a recognised unit", UNIT_PARSE_ERROR))
+                push!(
+                    out, UnitFinding(
+                        "equations/$(i - 1)/$field",
+                        "Unit string '$units' is not a recognised unit", UNIT_PARSE_ERROR
+                    )
+                )
             end
         end
     end
@@ -2252,8 +2338,12 @@ function model_unit_findings(model::Model; file=nothing,
         name = lhs.name
         internal, comparison = _site_check(lhs, eq.rhs, var_units)
         for msg in (isempty(internal) ? comparison : internal)
-            push!(out, UnitFinding("variables/$name", "$msg (variable '$name')",
-                                   UNIT_DIMENSION_MISMATCH))
+            push!(
+                out, UnitFinding(
+                    "variables/$name", "$msg (variable '$name')",
+                    UNIT_DIMENSION_MISMATCH
+                )
+            )
         end
     end
 
@@ -2414,18 +2504,24 @@ function _dimensionless_literal_findings(units)::Vector{Tuple{String, String}}
         isempty(found) && return
         isempty(_site_findings(lhs, rhs, env)) || return
         named = join(literals, ", ")
-        push!(out, (pointer,
-            "$pointer: with bare numeric literals read as dimensionless " *
-            "(esm-spec §4.8.6), $(first(found)); bare literal(s): $named. This " *
-            "becomes an error at the next major esm version; a literal that " *
-            "carries a unit is written const(value, units \"...\") (esm-spec §4.8.5)"))
+        push!(
+            out, (
+                pointer,
+                "$pointer: with bare numeric literals read as dimensionless " *
+                    "(esm-spec §4.8.6), $(first(found)); bare literal(s): $named. This " *
+                    "becomes an error at the next major esm version; a literal that " *
+                    "carries a unit is written const(value, units \"...\") (esm-spec §4.8.5)",
+            )
+        )
         return
     end
 
     function walk_model(pointer, model::Model)
         env = _model_unit_env(model, toplevel)
-        for (field, eqs) in (("equations", model.equations),
-                             ("initialization_equations", model.initialization_equations))
+        for (field, eqs) in (
+                ("equations", model.equations),
+                ("initialization_equations", model.initialization_equations),
+            )
             for (i, eq) in enumerate(eqs)
                 visit("$pointer/$field/$(i - 1)", eq.lhs, eq.rhs, env)
             end
@@ -2471,8 +2567,10 @@ function _dimensionless_literal_findings(units)::Vector{Tuple{String, String}}
         for name in sort!(collect(keys(file.reaction_systems)))
             rs = file.reaction_systems[name]
             rs isa ReactionSystem || continue
-            walk_reaction_system("/reaction_systems/$(_ptr_escape(name))",
-                                 _reaction_system_units_view(file, name, rs))
+            walk_reaction_system(
+                "/reaction_systems/$(_ptr_escape(name))",
+                _reaction_system_units_view(file, name, rs)
+            )
         end
     end
     return out
@@ -2522,10 +2620,13 @@ function reject_const_units_pre_v12(raw_data)
     (parse(Int, m.captures[1]), parse(Int, m.captures[2])) >= (1, 2) && return
     path = _find_units_bearing_node(raw_data, "")
     path === nothing && return
-    throw(ExpressionTemplateError(
-        ERROR_CODES.CONST_UNITS_VERSION_TOO_OLD,
-        "declared `units` on an expression node require esm >= 1.2.0; " *
-        "file declares $(string(esm_raw)). Offending path: $path"))
+    throw(
+        ExpressionTemplateError(
+            ERROR_CODES.CONST_UNITS_VERSION_TOO_OLD,
+            "declared `units` on an expression node require esm >= 1.2.0; " *
+                "file declares $(string(esm_raw)). Offending path: $path"
+        )
+    )
 end
 
 _find_units_bearing_node(node, at::String) =

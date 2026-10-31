@@ -84,10 +84,10 @@ through `observed_field`. Swapping the index provider for a translating one was
 tried and does not work: ModelingToolkit's own initialization reads
 `prob.f.sys` back as a `System` and fails on anything else.
 """
-struct MTKCompiler{S,P} <: Function
+struct MTKCompiler{S, P} <: Function
     system::S
     prototype::P
-    handles::Dict{String,Any}
+    handles::Dict{String, Any}
     unknown_names::Vector{String}
     observed_names::Vector{String}
 end
@@ -96,8 +96,10 @@ end
 (f::MTKCompiler)(u, p, t) = f.prototype.f(u, p, t)
 
 Base.show(io::IO, f::MTKCompiler) =
-    print(io, "MTKCompiler(", length(f.unknown_names), " unknowns, ",
-          length(f.observed_names), " observed)")
+    print(
+    io, "MTKCompiler(", length(f.unknown_names), " unknowns, ",
+    length(f.observed_names), " observed)"
+)
 
 EarthSciAST._compiler_backend(f::MTKCompiler) = f
 
@@ -121,31 +123,39 @@ const _MTK_TRY_INSTEAD =
 # The keyword surface `esm_problem` accepts and this compiler cannot honour.
 # Checked BEFORE the load, because the answer does not depend on the document
 # and making the caller wait through a load to hear it is a worse diagnostic.
-function _mtk_refuse_unsupported_inputs(; providers, const_arrays, param_arrays,
-                                        pushdown_rewrite)
+function _mtk_refuse_unsupported_inputs(;
+        providers, const_arrays, param_arrays,
+        pushdown_rewrite
+    )
     if providers !== nothing && !isempty(providers)
         k = String(first(sort!([String(x) for x in keys(providers)])))
-        _mtk_refuse(k,
+        _mtk_refuse(
+            k,
             "it is a DATA-FED parameter — `providers` supplies its field through " *
-            "the loader seam, and this compiler has none: a ModelingToolkit " *
-            "`System` carries symbols and equations, so a loaded field would have " *
-            "to be frozen into the system as a constant (a const provider) or " *
-            "rewritten in a live buffer at a refresh cadence (a discrete one), " *
-            "and neither has a lowering here. $_MTK_TRY_INSTEAD")
+                "the loader seam, and this compiler has none: a ModelingToolkit " *
+                "`System` carries symbols and equations, so a loaded field would have " *
+                "to be frozen into the system as a constant (a const provider) or " *
+                "rewritten in a live buffer at a refresh cadence (a discrete one), " *
+                "and neither has a lowering here. $_MTK_TRY_INSTEAD"
+        )
     end
     for (label, reg) in (("const_arrays", const_arrays), ("param_arrays", param_arrays))
         isempty(reg) && continue
         k = String(first(sort!([String(x) for x in keys(reg)])))
-        _mtk_refuse(k,
+        _mtk_refuse(
+            k,
             "it is supplied as $label data, and this compiler has no array-data " *
-            "channel: the ModelingToolkit lowering resolves every name against " *
-            "the flattened document's own variables, so an array handed in at " *
-            "the call would never be read. $_MTK_TRY_INSTEAD")
+                "channel: the ModelingToolkit lowering resolves every name against " *
+                "the flattened document's own variables, so an array handed in at " *
+                "the call would never be read. $_MTK_TRY_INSTEAD"
+        )
     end
-    pushdown_rewrite && _mtk_refuse("(the document)",
+    pushdown_rewrite && _mtk_refuse(
+        "(the document)",
         "`pushdown_rewrite = true` asks for the projection-pushdown desugar, " *
-        "whose whole purpose is to gate a PROVIDER's fetch to an invented index " *
-        "set — and this compiler has no provider seam to gate. $_MTK_TRY_INSTEAD")
+            "whose whole purpose is to gate a PROVIDER's fetch to an invented index " *
+            "set — and this compiler has no provider seam to gate. $_MTK_TRY_INSTEAD"
+    )
     return nothing
 end
 
@@ -163,14 +173,16 @@ function _mtk_refuse_unsupported_document(flat::FlattenedSystem)
     # `ModelingToolkit.System(flat)` enforces; the list is only for the message.
     if _has_spatial_ivs(flat)
         ivs = [String(iv) for iv in flat.independent_variables if iv != :t]
-        _mtk_refuse(_mtk_first_rule_label(flat),
+        _mtk_refuse(
+            _mtk_first_rule_label(flat),
             "the document declares the continuous spatial independent variable" *
-            (length(ivs) == 1 ? " " : "s ") * join(ivs, ", ") * ", so it is a PDE. " *
-            "This compiler builds the ODE `ModelingToolkit.System`; a continuous " *
-            "spatial dimension needs `ModelingToolkit.PDESystem` and a " *
-            "discretization, which it does not run. Discretize the document (an " *
-            "`arrayop` stencil over an index set), or hand the flattened system to " *
-            "`ModelingToolkit.PDESystem` yourself. $_MTK_TRY_INSTEAD")
+                (length(ivs) == 1 ? " " : "s ") * join(ivs, ", ") * ", so it is a PDE. " *
+                "This compiler builds the ODE `ModelingToolkit.System`; a continuous " *
+                "spatial dimension needs `ModelingToolkit.PDESystem` and a " *
+                "discretization, which it does not run. Discretize the document (an " *
+                "`arrayop` stencil over an index set), or hand the flattened system to " *
+                "`ModelingToolkit.PDESystem` yourself. $_MTK_TRY_INSTEAD"
+        )
     end
 
     # A WIENER-NOISE PARAMETER (`update.kind = "wiener"`) makes the document an
@@ -179,12 +191,14 @@ function _mtk_refuse_unsupported_document(flat::FlattenedSystem)
     # parameter. No compiler in this binding integrates an SDE, so the message
     # points at none.
     if !isempty(flat.brownian_parameters)
-        _mtk_refuse(String(first(keys(flat.brownian_parameters))),
+        _mtk_refuse(
+            String(first(keys(flat.brownian_parameters))),
             "it is a Wiener-noise parameter (`update.kind = \"wiener\"`), so the " *
-            "document is an SDE. This compiler builds the ODE " *
-            "`ModelingToolkit.System` and has no lowering of a noise source to an " *
-            "SDE system, so it would integrate the noise as a constant. No " *
-            "compiler in this binding runs an SDE")
+                "document is an SDE. This compiler builds the ODE " *
+                "`ModelingToolkit.System` and has no lowering of a noise source to an " *
+                "SDE system, so it would integrate the noise as a constant. No " *
+                "compiler in this binding runs an SDE"
+        )
     end
 
     for eq in flat.equations
@@ -192,10 +206,12 @@ function _mtk_refuse_unsupported_document(flat::FlattenedSystem)
         # evaluated against loaded geometry at BUILD by the native setup pass;
         # they are not symbolic functions and have no ModelingToolkit lowering.
         geo = _mtk_find_op(eq.rhs, ("polygon_intersection_area", "intersect_polygon"))
-        geo === nothing || _mtk_refuse(_mtk_equation_label(eq),
+        geo === nothing || _mtk_refuse(
+            _mtk_equation_label(eq),
             "its right-hand side carries the geometry operator `$geo`, which is " *
-            "resolved against loaded polygons at build time and has no symbolic " *
-            "form a ModelingToolkit system can hold. $_MTK_TRY_INSTEAD")
+                "resolved against loaded polygons at build time and has no symbolic " *
+                "form a ModelingToolkit system can hold. $_MTK_TRY_INSTEAD"
+        )
         # `D(<expression>)`. esm-spec calls an equation whose LHS is a time
         # derivative of an EXPRESSION implicit, not a derivative (it credits no
         # state), and `mtkcompile` rejects it outright: "Differential(t)(a + b)
@@ -208,21 +224,25 @@ function _mtk_refuse_unsupported_document(flat::FlattenedSystem)
         # operator's derived document writes for a lifted equation) has no
         # such fill, and building it failed inside Symbolics with a
         # `MethodError` that named neither the rule nor the reason.
-        _mtk_array_region_value(eq.rhs) && _mtk_refuse(_mtk_equation_label(eq),
+        _mtk_array_region_value(eq.rhs) && _mtk_refuse(
+            _mtk_equation_label(eq),
             "its right-hand side holds a `makearray` whose region value is itself " *
-            "an array (an `faq` over the region); this compiler fills a region " *
-            "with one scalar and has no lowering of an array-valued region. " *
-            _MTK_TRY_INSTEAD)
+                "an array (an `faq` over the region); this compiler fills a region " *
+                "with one scalar and has no lowering of an array-valued region. " *
+                _MTK_TRY_INSTEAD
+        )
         lhs = eq.lhs
         if lhs isa OpExpr && lhs.op == "D" && length(lhs.args) == 1 &&
-           !(lhs.args[1] isa VarExpr) &&
-           !(lhs.args[1] isa OpExpr && (lhs.args[1]::OpExpr).op == "index")
-            _mtk_refuse(_mtk_equation_label(eq),
+                !(lhs.args[1] isa VarExpr) &&
+                !(lhs.args[1] isa OpExpr && (lhs.args[1]::OpExpr).op == "index")
+            _mtk_refuse(
+                _mtk_equation_label(eq),
                 "its left-hand side is the time derivative of an EXPRESSION, not " *
-                "of an unknown, so it credits no state. ModelingToolkit has no " *
-                "unknown to differentiate and rejects the system; rewrite it as a " *
-                "residual on the unknowns (an implicit equation, which this " *
-                "compiler does run) or introduce the sum as its own unknown")
+                    "of an unknown, so it credits no state. ModelingToolkit has no " *
+                    "unknown to differentiate and rejects the system; rewrite it as a " *
+                    "residual on the unknowns (an implicit equation, which this " *
+                    "compiler does run) or introduce the sum as its own unknown"
+            )
         end
     end
     return nothing
@@ -240,7 +260,7 @@ function _mtk_array_region_value(expr)::Bool
 end
 
 # The first argument's op name if any node in the tree is one of `ops`.
-function _mtk_find_op(expr, ops)::Union{String,Nothing}
+function _mtk_find_op(expr, ops)::Union{String, Nothing}
     expr isa OpExpr || return nothing
     expr.op in ops && return expr.op
     for a in expr.args
@@ -288,9 +308,11 @@ end
 
 _mtk_first_rule_label(flat::FlattenedSystem) =
     isempty(flat.equations) ?
-        (isempty(flat.state_variables) ? "(the document)" :
-         String(first(keys(flat.state_variables)))) :
-        _mtk_equation_label(flat.equations[1])
+    (
+        isempty(flat.state_variables) ? "(the document)" :
+        String(first(keys(flat.state_variables)))
+    ) :
+    _mtk_equation_label(flat.equations[1])
 
 # ---------------------------------------------------------------------------
 # Names: the flattened ESM spelling ⇄ the compiled system's symbols
@@ -308,17 +330,19 @@ _mtk_first_rule_label(flat::FlattenedSystem) =
 # Two flattened names that sanitize to the SAME identifier (`a.b` and `a_b`)
 # would make the map ambiguous, so that is a refusal rather than a coin flip.
 function _mtk_name_reversal(flat::FlattenedSystem)
-    rev = Dict{Symbol,String}()
+    rev = Dict{Symbol, String}()
     for reg in (flat.state_variables, flat.observed_variables, flat.parameters)
         for name in keys(reg)
             s = String(name)
             key = Symbol(replace(s, '.' => '_'))
             prior = get(rev, key, nothing)
-            (prior === nothing || prior == s) || _mtk_refuse(s,
+            (prior === nothing || prior == s) || _mtk_refuse(
+                s,
                 "it and '$prior' both sanitize to the ModelingToolkit symbol " *
-                "`$key` — a dot is not a Julia identifier character, so the " *
-                "lowering replaces it with an underscore and the two names " *
-                "collide. Rename one of them. $_MTK_TRY_INSTEAD")
+                    "`$key` — a dot is not a Julia identifier character, so the " *
+                    "lowering replaces it with an underscore and the two names " *
+                    "collide. Rename one of them. $_MTK_TRY_INSTEAD"
+            )
             rev[key] = s
         end
     end
@@ -329,7 +353,7 @@ end
 # document did not declare (nothing this file builds produces one, but a
 # ModelingToolkit pass may introduce its own and it must not be reported under
 # a document name it does not have).
-function _mtk_esm_name(sym, rev::Dict{Symbol,String})
+function _mtk_esm_name(sym, rev::Dict{Symbol, String})
     u = Symbolics.unwrap(sym)
     if SymUtils.iscall(u) && SymUtils.operation(u) === getindex
         args = SymUtils.arguments(u)
@@ -343,9 +367,9 @@ end
 
 # The ESM names of a compiled system's unknowns, in state-vector order, and the
 # `var_map` that inverts them.
-function _mtk_unknown_names(system, rev::Dict{Symbol,String})
+function _mtk_unknown_names(system, rev::Dict{Symbol, String})
     names = String[]
-    var_map = Dict{String,Int}()
+    var_map = Dict{String, Int}()
     for (i, u) in enumerate(ModelingToolkit.unknowns(system))
         nm = _mtk_esm_name(u, rev)
         nm === nothing && (nm = string(u))
@@ -383,8 +407,10 @@ end
 function _mtk_ics_to_guesses!(system)
     ics = getfield(system, :initial_conditions)
     (ics isa AbstractDict && !isempty(ics)) || return String[]
-    eliminated = Set{Any}(Symbolics.unwrap(oe.lhs)
-                          for oe in ModelingToolkit.observed(system))
+    eliminated = Set{Any}(
+        Symbolics.unwrap(oe.lhs)
+            for oe in ModelingToolkit.observed(system)
+    )
     isempty(eliminated) && return String[]
     guesses = getfield(system, :guesses)
     moved = Any[]
@@ -405,7 +431,7 @@ function _mtk_eliminated(v, eliminated::Set{Any})
     SymUtils.symtype(v) <: AbstractArray || return false
     cells = Symbolics.scalarize(v)
     return !isempty(cells) &&
-           all(c -> Symbolics.unwrap(c) in eliminated, cells)
+        all(c -> Symbolics.unwrap(c) in eliminated, cells)
 end
 
 # ---------------------------------------------------------------------------
@@ -419,34 +445,50 @@ end
 # native path spells them — the resolution is the SAME helper, so the two
 # compilers cannot drift on which key names which parameter.
 function _mtk_resolve_overrides(flat::FlattenedSystem, overrides::AbstractDict)
-    isempty(overrides) && return Dict{String,Any}()
+    isempty(overrides) && return Dict{String, Any}()
     names = Set{String}(String(k) for k in keys(flat.parameters))
     namespaces = EarthSciAST._override_namespaces(names)
     normalized, unknown, ambiguous, collisions =
         EarthSciAST._canonicalize_override_keys(Any, names, namespaces, overrides)
-    isempty(collisions) || throw(SimulateError(
-        EarthSciAST._override_collision_message(
-            "esm_problem(...; compiler = :mtk, p)", "parameter",
-            first(sort!(collect(collisions), by = first))...)))
-    isempty(unknown) || throw(SimulateError(
-        "esm_problem(...; compiler = :mtk, p): no parameter named " *
-        join(("'" * k * "'" for k in sort(unknown)), ", ") *
-        " in the flattened document (keys may be local or namespaced). Known: " *
-        EarthSciAST._elide_names(sort(collect(names)))))
-    isempty(ambiguous) || throw(SimulateError(
-        "esm_problem(...; compiler = :mtk, p): ambiguous parameter key(s) " *
-        join(("'" * k * "' (matches " * join(sort(v), ", ") * ")"
-              for (k, v) in sort(collect(ambiguous), by = first)), "; ") *
-        "; spell the namespaced name."))
-    out = Dict{String,Any}()
+    isempty(collisions) || throw(
+        SimulateError(
+            EarthSciAST._override_collision_message(
+                "esm_problem(...; compiler = :mtk, p)", "parameter",
+                first(sort!(collect(collisions), by = first))...
+            )
+        )
+    )
+    isempty(unknown) || throw(
+        SimulateError(
+            "esm_problem(...; compiler = :mtk, p): no parameter named " *
+                join(("'" * k * "'" for k in sort(unknown)), ", ") *
+                " in the flattened document (keys may be local or namespaced). Known: " *
+                EarthSciAST._elide_names(sort(collect(names)))
+        )
+    )
+    isempty(ambiguous) || throw(
+        SimulateError(
+            "esm_problem(...; compiler = :mtk, p): ambiguous parameter key(s) " *
+                join(
+                (
+                    "'" * k * "' (matches " * join(sort(v), ", ") * ")"
+                        for (k, v) in sort(collect(ambiguous), by = first)
+                ), "; "
+            ) *
+                "; spell the namespaced name."
+        )
+    )
+    out = Dict{String, Any}()
     for (name, value) in normalized
         # An ARRAY-shaped parameter is a single scalar symbol in this lowering
         # (`_build_var_dict` builds every parameter with `@parameters`), so
         # inline array data has nowhere to land. Named rather than dropped.
-        value isa AbstractArray && _mtk_refuse(name,
+        value isa AbstractArray && _mtk_refuse(
+            name,
             "its override is INLINE ARRAY DATA (esm-spec §6.6.2), and this " *
-            "compiler carries every parameter as one scalar ModelingToolkit " *
-            "symbol, so the column has nowhere to land. $_MTK_TRY_INSTEAD")
+                "compiler carries every parameter as one scalar ModelingToolkit " *
+                "symbol, so the column has nowhere to land. $_MTK_TRY_INSTEAD"
+        )
         out[name] = value
     end
     return out
@@ -461,13 +503,13 @@ end
 # parameter here is an explicit rebuild, which is exactly what `:structural`
 # means and what its refusal tells the caller to do.
 _mtk_param_classes(flat::FlattenedSystem) =
-    Dict{String,Symbol}(String(k) => :structural for k in keys(flat.parameters))
+    Dict{String, Symbol}(String(k) => :structural for k in keys(flat.parameters))
 
 # `param_map` is this package's "name => slot of `p`" reader, and ModelingToolkit's
 # parameter object has no such slots. An empty map (rather than a `MethodError`
 # several frames into `remake`) lets `remake_parameters` reach the class refusal
 # above, which is the message a caller can act on.
-EarthSciAST.param_map(::ModelingToolkit.MTKParameters) = Dict{String,Int}()
+EarthSciAST.param_map(::ModelingToolkit.MTKParameters) = Dict{String, Int}()
 
 # ---------------------------------------------------------------------------
 # The build
@@ -485,8 +527,11 @@ function _mtk_run_system(input; metaparameters, base_path, renames_out)
             throw(SimulateError("esm_problem: no such file '$input'"))
         input = EarthSciAST.load_path(input; metaparameters = metaparameters)
     end
-    input isa AbstractDict && (input = EarthSciAST.load_document(
-        input; base_path = base_path, metaparameters = metaparameters))
+    input isa AbstractDict && (
+        input = EarthSciAST.load_document(
+            input; base_path = base_path, metaparameters = metaparameters
+        )
+    )
     coordinates = nothing
     solver_block = nothing
     if input isa EarthSciAST.EsmFile
@@ -494,12 +539,17 @@ function _mtk_run_system(input; metaparameters, base_path, renames_out)
         solver_block = input.solver
         input = flatten(input)
     end
-    input isa FlattenedSystem || throw(SimulateError(
-        "esm_problem: unsupported input of type $(typeof(input)); pass a path, " *
-        "EsmFile, FlattenedSystem, or native ESM Dict"))
+    input isa FlattenedSystem || throw(
+        SimulateError(
+            "esm_problem: unsupported input of type $(typeof(input)); pass a path, " *
+                "EsmFile, FlattenedSystem, or native ESM Dict"
+        )
+    )
     flat = EarthSciAST.lower_table_lookups(input)
-    EarthSciAST._refuse_parameter_definitions(flat.equations,
-        merge(flat.state_variables, flat.observed_variables, flat.parameters))
+    EarthSciAST._refuse_parameter_definitions(
+        flat.equations,
+        merge(flat.state_variables, flat.observed_variables, flat.parameters)
+    )
     merge!(renames_out, flat.metadata.merged_variable_renames)
     # The run DOCUMENT is metadata only: output naming / CF coordinates, the
     # §2.2 `solver` block, the equation count `show` prints, and the component
@@ -528,12 +578,12 @@ end
 #                       an observed equation of the compiled system
 #   :mtk_observed       an ESM observed the compiled system answers as observed
 #   :mtk_continuous_event / :mtk_discrete_event   lowered to a callback
-function _mtk_report(flat::FlattenedSystem, system, rev::Dict{Symbol,String})
+function _mtk_report(flat::FlattenedSystem, system, rev::Dict{Symbol, String})
     rules = EarthSciAST.CompilerRuleRecord[]
-    tally = Dict{Symbol,Int}()
+    tally = Dict{Symbol, Int}()
     bump!(k) = (tally[k] = get(tally, k, 0) + 1)
 
-    kept = Dict{String,Bool}()          # ESM name => is it a compiled unknown
+    kept = Dict{String, Bool}()          # ESM name => is it a compiled unknown
     for u in ModelingToolkit.unknowns(system)
         nm = _mtk_esm_name(u, rev)
         nm === nothing || (kept[nm] = true)
@@ -567,11 +617,15 @@ function _mtk_report(flat::FlattenedSystem, system, rev::Dict{Symbol,String})
         isempty(targets) && (targets = [name])
         for nm in targets
             tier = get(kept, nm, false) ?
-                   (nm in differential ? :mtk_differential : :mtk_algebraic) :
-                   (nm in observed_set ? :mtk_eliminated : :mtk_dropped)
+                (nm in differential ? :mtk_differential : :mtk_algebraic) :
+                (nm in observed_set ? :mtk_eliminated : :mtk_dropped)
             bump!(tier)
-            push!(rules, EarthSciAST.CompilerRuleRecord(nm, :equation, tier,
-                                                        Pair{Symbol,Symbol}[]))
+            push!(
+                rules, EarthSciAST.CompilerRuleRecord(
+                    nm, :equation, tier,
+                    Pair{Symbol, Symbol}[]
+                )
+            )
         end
     end
     for name in keys(flat.observed_variables)
@@ -580,23 +634,33 @@ function _mtk_report(flat::FlattenedSystem, system, rev::Dict{Symbol,String})
         isempty(targets) && (targets = [name])
         for nm in targets
             tier = nm in observed_set ? :mtk_observed :
-                   get(kept, nm, false) ? :mtk_differential : :mtk_dropped
+                get(kept, nm, false) ? :mtk_differential : :mtk_dropped
             bump!(tier)
-            push!(rules, EarthSciAST.CompilerRuleRecord(nm, :observed, tier,
-                                                        Pair{Symbol,Symbol}[]))
+            push!(
+                rules, EarthSciAST.CompilerRuleRecord(
+                    nm, :observed, tier,
+                    Pair{Symbol, Symbol}[]
+                )
+            )
         end
     end
     for (i, ev) in enumerate(flat.continuous_events)
         bump!(:mtk_continuous_event)
-        push!(rules, EarthSciAST.CompilerRuleRecord(
-            _mtk_event_label("continuous_events", ev, i), :event,
-            :mtk_continuous_event, Pair{Symbol,Symbol}[]))
+        push!(
+            rules, EarthSciAST.CompilerRuleRecord(
+                _mtk_event_label("continuous_events", ev, i), :event,
+                :mtk_continuous_event, Pair{Symbol, Symbol}[]
+            )
+        )
     end
     for (i, ev) in enumerate(flat.discrete_events)
         bump!(:mtk_discrete_event)
-        push!(rules, EarthSciAST.CompilerRuleRecord(
-            _mtk_event_label("discrete_events", ev, i), :event,
-            :mtk_discrete_event, Pair{Symbol,Symbol}[]))
+        push!(
+            rules, EarthSciAST.CompilerRuleRecord(
+                _mtk_event_label("discrete_events", ev, i), :event,
+                :mtk_discrete_event, Pair{Symbol, Symbol}[]
+            )
+        )
     end
     tally[:mtk_unknowns] = length(ModelingToolkit.unknowns(system))
     tally[:mtk_observed_equations] = length(ModelingToolkit.observed(system))
@@ -612,8 +676,10 @@ end
 
 function _mtk_event_label(kind::AbstractString, ev, i::Int)
     nm = hasproperty(ev, :name) ? getproperty(ev, :name) : nothing
-    return string(kind, "[", nm === nothing || isempty(String(nm)) ?
-                  string(i) : String(nm), "]")
+    return string(
+        kind, "[", nm === nothing || isempty(String(nm)) ?
+            string(i) : String(nm), "]"
+    )
 end
 
 """
@@ -622,53 +688,63 @@ end
 `esm_problem(input, tspan; compiler = :mtk, …)`. See the file header for what
 this compiler is for and what it refuses.
 """
-function EarthSciAST._mtk_problem(input, span::Tuple{Float64,Float64};
-                                  p::AbstractDict,
-                                  u0,
-                                  providers,
-                                  model_name,
-                                  metaparameters::AbstractDict,
-                                  base_path::AbstractString,
-                                  sample_time::Float64,
-                                  const_arrays::AbstractDict,
-                                  param_arrays::AbstractDict,
-                                  inspect,
-                                  materialize_out,
-                                  pushdown_rewrite::Bool,
-                                  seed_ic!,
-                                  sinks,
-                                  snapshot,
-                                  pre_write,
-                                  checkpoint_predicates,
-                                  checkpoint_sinks,
-                                  terminate_on_checkpoint::Bool)
+function EarthSciAST._mtk_problem(
+        input, span::Tuple{Float64, Float64};
+        p::AbstractDict,
+        u0,
+        providers,
+        model_name,
+        metaparameters::AbstractDict,
+        base_path::AbstractString,
+        sample_time::Float64,
+        const_arrays::AbstractDict,
+        param_arrays::AbstractDict,
+        inspect,
+        materialize_out,
+        pushdown_rewrite::Bool,
+        seed_ic!,
+        sinks,
+        snapshot,
+        pre_write,
+        checkpoint_predicates,
+        checkpoint_sinks,
+        terminate_on_checkpoint::Bool
+    )
     # Every refusal below goes through `_refuse_rule`, which names the compiler
     # in force — so the whole build runs under the `:mtk` plan.
     return EarthSciAST._with_compiler_plan(EarthSciAST._plan_for(:mtk)) do
-        _mtk_problem_impl(input, span; p, u0, providers, model_name,
-                          metaparameters, base_path, sample_time, const_arrays,
-                          param_arrays, inspect, materialize_out,
-                          pushdown_rewrite, seed_ic!, sinks, snapshot,
-                          pre_write, checkpoint_predicates, checkpoint_sinks,
-                          terminate_on_checkpoint)
+        _mtk_problem_impl(
+            input, span; p, u0, providers, model_name,
+            metaparameters, base_path, sample_time, const_arrays,
+            param_arrays, inspect, materialize_out,
+            pushdown_rewrite, seed_ic!, sinks, snapshot,
+            pre_write, checkpoint_predicates, checkpoint_sinks,
+            terminate_on_checkpoint
+        )
     end
 end
 
-function _mtk_problem_impl(input, span::Tuple{Float64,Float64};
-                           p, u0, providers, model_name, metaparameters,
-                           base_path, sample_time, const_arrays, param_arrays,
-                           inspect, materialize_out, pushdown_rewrite, seed_ic!,
-                           sinks, snapshot, pre_write, checkpoint_predicates,
-                           checkpoint_sinks, terminate_on_checkpoint)
-    _mtk_refuse_unsupported_inputs(; providers = providers,
-                                   const_arrays = const_arrays,
-                                   param_arrays = param_arrays,
-                                   pushdown_rewrite = pushdown_rewrite)
+function _mtk_problem_impl(
+        input, span::Tuple{Float64, Float64};
+        p, u0, providers, model_name, metaparameters,
+        base_path, sample_time, const_arrays, param_arrays,
+        inspect, materialize_out, pushdown_rewrite, seed_ic!,
+        sinks, snapshot, pre_write, checkpoint_predicates,
+        checkpoint_sinks, terminate_on_checkpoint
+    )
+    _mtk_refuse_unsupported_inputs(;
+        providers = providers,
+        const_arrays = const_arrays,
+        param_arrays = param_arrays,
+        pushdown_rewrite = pushdown_rewrite
+    )
 
-    merged_renames = EarthSciAST.OrderedDict{String,String}()
-    flat, doc = _mtk_run_system(input; metaparameters = metaparameters,
-                                base_path = base_path,
-                                renames_out = merged_renames)
+    merged_renames = EarthSciAST.OrderedDict{String, String}()
+    flat, doc = _mtk_run_system(
+        input; metaparameters = metaparameters,
+        base_path = base_path,
+        renames_out = merged_renames
+    )
     # `model_name` selects under the SAME rule `:native` applies: its build runs
     # `_select_model` against the flattened run document, whose one model is
     # the whole flattened system — so both compilers accept the same names and
@@ -678,11 +754,16 @@ function _mtk_problem_impl(input, span::Tuple{Float64,Float64};
 
     overrides = EarthSciAST._resolve_merged_renames(
         merged_renames,
-        Dict{String,Any}(String(k) => EarthSciAST._coerce_inline_value(v)
-                         for (k, v) in p))
+        Dict{String, Any}(
+            String(k) => EarthSciAST._coerce_inline_value(v)
+                for (k, v) in p
+        )
+    )
     u0 = u0 === nothing || isempty(merged_renames) ? u0 :
-         (u0 isa AbstractDict ?
-          EarthSciAST._resolve_merged_renames(merged_renames, u0) : u0)
+        (
+            u0 isa AbstractDict ?
+            EarthSciAST._resolve_merged_renames(merged_renames, u0) : u0
+        )
 
     rev = _mtk_name_reversal(flat)
     resolved = _mtk_resolve_overrides(flat, overrides)
@@ -703,15 +784,17 @@ function _mtk_problem_impl(input, span::Tuple{Float64,Float64};
     # The parameter overrides bind here: `op` is ModelingToolkit's merged
     # initial-value / parameter map, so a value named in `p` is what the
     # compiled problem — and every `ic` expression that reads it — sees.
-    op = Dict{Any,Any}()
+    op = Dict{Any, Any}()
     handles = _mtk_handles(system, rev)
     for (pname, value) in resolved
         sym = get(handles, pname, nothing)
-        sym === nothing && _mtk_refuse(pname,
+        sym === nothing && _mtk_refuse(
+            pname,
             "it is a declared parameter of the document, but the compiled " *
-            "ModelingToolkit system no longer carries it — structural " *
-            "simplification folded it away, so an override could not reach the " *
-            "right-hand side. $_MTK_TRY_INSTEAD")
+                "ModelingToolkit system no longer carries it — structural " *
+                "simplification folded it away, so an override could not reach the " *
+                "right-hand side. $_MTK_TRY_INSTEAD"
+        )
         op[sym] = value
     end
     prototype = ModelingToolkit.SciMLBase.ODEProblem(system, op, span)
@@ -726,7 +809,7 @@ function _mtk_problem_impl(input, span::Tuple{Float64,Float64};
     f! = MTKCompiler(system, prototype, handles, unknown_names, observed_names)
 
     u0_built = prototype.u0 === nothing ? Float64[] :
-               Vector{Float64}(prototype.u0)
+        Vector{Float64}(prototype.u0)
     u0_run = EarthSciAST._seed_u0(u0_built, var_map, u0, seed_ic!)
 
     insp = inspect === nothing ? EarthSciAST.BuildInspection() : inspect
@@ -735,8 +818,11 @@ function _mtk_problem_impl(input, span::Tuple{Float64,Float64};
     # This record now describes the `:mtk` build, whose observeds its backend
     # answers: no earlier problem's read files a row into this report.
     lock(() -> (insp.observed_build = Ref{Any}(nothing)), insp.observed_lock)
-    merge!(insp.params, Dict{String,Float64}(
-        k => Float64(v) for (k, v) in resolved if v isa Real))
+    merge!(
+        insp.params, Dict{String, Float64}(
+            k => Float64(v) for (k, v) in resolved if v isa Real
+        )
+    )
     param_classes = _mtk_param_classes(flat)
     merge!(insp.param_classes, param_classes)
 
@@ -753,31 +839,36 @@ function _mtk_problem_impl(input, span::Tuple{Float64,Float64};
     snapshot = EarthSciAST._observed_snapshot(snapshot, sink_vec, prob_ref)
     if !isempty(sink_vec)
         out_cb, out_tstops = EarthSciAST.build_output_callback(;
-            sinks = sink_vec, snapshot = snapshot, pre_write = pre_write)
+            sinks = sink_vec, snapshot = snapshot, pre_write = pre_write
+        )
         tstops = EarthSciAST._union_tstops(tstops, out_tstops)
         push!(cbs, out_cb)
         save_everystep = false
     end
     ck_vec = checkpoint_sinks === nothing ? sink_vec :
-             collect(Any, checkpoint_sinks)
+        collect(Any, checkpoint_sinks)
     if !isempty(collect(Any, checkpoint_predicates))
-        push!(cbs, EarthSciAST.build_checkpoint_callback(;
-            sinks = ck_vec, predicates = checkpoint_predicates,
-            snapshot = snapshot, pre_write = pre_write,
-            terminate_on_fire = terminate_on_checkpoint))
+        push!(
+            cbs, EarthSciAST.build_checkpoint_callback(;
+                sinks = ck_vec, predicates = checkpoint_predicates,
+                snapshot = snapshot, pre_write = pre_write,
+                terminate_on_fire = terminate_on_checkpoint
+            )
+        )
         save_everystep = false
     end
 
     dm = materialize_out === nothing ? EarthSciAST.DiscreteMaterializer() :
-         materialize_out
+        materialize_out
     prob = EarthSciAST.EsmProblem(
-        f!, u0_run, span, prototype.p, var_map, Dict{String,Any}(),
-        Dict{String,Any}(), dm, EarthSciAST._doc_equation_count(doc),
+        f!, u0_run, span, prototype.p, var_map, Dict{String, Any}(),
+        Dict{String, Any}(), dm, EarthSciAST._doc_equation_count(doc),
         Ref(sample_time), Ref(false), EarthSciAST.derive_output_meta(doc), doc,
         Ref{Any}(nothing), param_classes, insp,
         EarthSciAST._compose_callbacks(cbs), tstops, save_everystep,
         sink_vec, EarthSciAST._distinct_sinks(sink_vec, ck_vec),
-        Ref{Any}(nothing), merged_renames)
+        Ref{Any}(nothing), merged_renames
+    )
     prob_ref[] = prob
     return prob
 end
@@ -791,17 +882,20 @@ function _mtk_compile(system)
     elseif isdefined(ModelingToolkit, :structural_simplify)
         return getfield(ModelingToolkit, :structural_simplify)(system)
     end
-    throw(SimulateError(
-        "compiler=:mtk needs a structural compile, and the loaded " *
-        "ModelingToolkit ($(pkgversion(ModelingToolkit))) exports neither " *
-        "`mtkcompile` nor `structural_simplify`",
-        EarthSciAST.ERROR_CODES.COMPILER_UNAVAILABLE))
+    throw(
+        SimulateError(
+            "compiler=:mtk needs a structural compile, and the loaded " *
+                "ModelingToolkit ($(pkgversion(ModelingToolkit))) exports neither " *
+                "`mtkcompile` nor `structural_simplify`",
+            EarthSciAST.ERROR_CODES.COMPILER_UNAVAILABLE
+        )
+    )
 end
 
 # Flattened ESM name → the symbol the COMPILED system carries for it, for every
 # unknown, observed and parameter it kept.
-function _mtk_handles(system, rev::Dict{Symbol,String})
-    handles = Dict{String,Any}()
+function _mtk_handles(system, rev::Dict{Symbol, String})
+    handles = Dict{String, Any}()
     for u in ModelingToolkit.unknowns(system)
         nm = _mtk_esm_name(u, rev)
         nm === nothing || (handles[nm] = u)
@@ -834,8 +928,10 @@ function EarthSciAST._backend_ode_problem(b::MTKCompiler, prob, tspan)
     pkw = prob.p === b.prototype.p ? (;) : (; p = prob.p)
     b.prototype.u0 === nothing &&
         return ModelingToolkit.SciMLBase.remake(b.prototype; tspan = tspan, pkw...)
-    return ModelingToolkit.SciMLBase.remake(b.prototype;
-                                            u0 = copy(prob.u0), tspan = tspan, pkw...)
+    return ModelingToolkit.SciMLBase.remake(
+        b.prototype;
+        u0 = copy(prob.u0), tspan = tspan, pkw...
+    )
 end
 
 # ---------------------------------------------------------------------------
@@ -855,34 +951,44 @@ end
 # variables against the compiled unknowns), so it does not depend on what u0
 # happens to hold. Given `u` (in the compiled system's unknown order, the
 # order `prob.u0` has) and `t`, the observed is read at that state and time.
-function EarthSciAST._backend_observed_field(b::MTKCompiler, prob,
-                                             name::AbstractString;
-                                             u = nothing, t = nothing)
+function EarthSciAST._backend_observed_field(
+        b::MTKCompiler, prob,
+        name::AbstractString;
+        u = nothing, t = nothing
+    )
     want = get(prob.merged_renames, String(name), String(name))
     target = _mtk_resolve_field_name(b, prob, want, String(name))
     cells = target isa AbstractVector ? target : [target]
     # The state set and the observed definitions are properties of the SYSTEM,
     # so they are built once for the whole read rather than once per cell — a
     # shaped field is thousands of cells on a real document.
-    unknown_set = Set{Any}(Symbolics.unwrap(u)
-                           for u in ModelingToolkit.unknowns(b.system))
-    defs = Dict{Any,Any}()
+    unknown_set = Set{Any}(
+        Symbolics.unwrap(u)
+            for u in ModelingToolkit.unknowns(b.system)
+    )
+    defs = Dict{Any, Any}()
     for oe in ModelingToolkit.observed(b.system)
         defs[Symbolics.unwrap(oe.lhs)] = oe.rhs
     end
     syms = Any[]
     for nm in cells
         sym = get(b.handles, nm, nothing)
-        sym === nothing && throw(SimulateError(
-            "observed_field: '$name' resolved to '$nm', which the compiled " *
-            "ModelingToolkit system does not carry"))
+        sym === nothing && throw(
+            SimulateError(
+                "observed_field: '$name' resolved to '$nm', which the compiled " *
+                    "ModelingToolkit system does not carry"
+            )
+        )
         # Given a state, the observed is read AT it, as under `:native`.
         dep = u === nothing ? _mtk_state_dependency(sym, unknown_set, defs) : nothing
-        dep === nothing || throw(SimulateError(
-            "observed_field: '$name' is not a BUILD-TIME field — the compiled " *
-            "system's observed equation for it depends on the state '$dep', so " *
-            "its value is a function of the trajectory. Read it off a solution " *
-            "instead"))
+        dep === nothing || throw(
+            SimulateError(
+                "observed_field: '$name' is not a BUILD-TIME field — the compiled " *
+                    "system's observed equation for it depends on the state '$dep', so " *
+                    "its value is a function of the trajectory. Read it off a solution " *
+                    "instead"
+            )
+        )
         push!(syms, sym)
     end
     # ONE generated observed function for the whole field, never one per cell.
@@ -891,16 +997,20 @@ function EarthSciAST._backend_observed_field(b::MTKCompiler, prob,
     # GENERATED A FUNCTION per output cell is the thing that rule exists to
     # refuse; SymbolicIndexingInterface takes a vector of symbols and returns
     # one function that answers the whole row.
-    vals = _MTK_SII.observed(b.system, syms)(u === nothing ? prob.u0 : u, prob.p,
-                                             t === nothing ? prob.tspan[1] : t)
+    vals = _MTK_SII.observed(b.system, syms)(
+        u === nothing ? prob.u0 : u, prob.p,
+        t === nothing ? prob.tspan[1] : t
+    )
     return Float64[Float64(v) for v in vals]
 end
 
 # The name(s) to read: one for a scalar observed, the row-major cell list for a
 # shaped one. Raises the same `SimulateError` the native reader raises for a
 # name that is not a build-time-evaluable observed of this document.
-function _mtk_resolve_field_name(b::MTKCompiler, prob, want::String,
-                                 spelled::String)
+function _mtk_resolve_field_name(
+        b::MTKCompiler, prob, want::String,
+        spelled::String
+    )
     isobs(nm) = nm in b.observed_names
     # CELLS FIRST. An array-valued observed is answered as BOTH the whole array
     # (its defining equation's left-hand side is the `Symbolics.Arr`) and its
@@ -917,37 +1027,55 @@ function _mtk_resolve_field_name(b::MTKCompiler, prob, want::String,
         comps = Set{String}()
         for nm in b.observed_names
             stem = _mtk_cell_of(nm)
-            push!(comps, occursin('.', stem) ?
-                  String(rsplit(stem, '.'; limit = 2)[1]) : "")
+            push!(
+                comps, occursin('.', stem) ?
+                    String(rsplit(stem, '.'; limit = 2)[1]) : ""
+            )
         end
-        cands = sort!(unique!(String[_mtk_cell_of(nm) for nm in b.observed_names
-                                     if occursin('.', _mtk_cell_of(nm)) &&
-                                        String(rsplit(_mtk_cell_of(nm), '.';
-                                                      limit = 2)[2]) == want]))
+        cands = sort!(
+            unique!(
+                String[
+                    _mtk_cell_of(nm) for nm in b.observed_names
+                        if occursin('.', _mtk_cell_of(nm)) &&
+                        String(
+                            rsplit(
+                                _mtk_cell_of(nm), '.';
+                                limit = 2
+                            )[2]
+                        ) == want
+                ]
+            )
+        )
         if length(comps) == 1 && !isempty(cands)
             qualified = first(cands)
             cells = _mtk_field_cells(b, qualified)
             isempty(cells) || return cells
             isobs(qualified) && return qualified
         elseif length(comps) > 1 && !isempty(cands)
-            throw(SimulateError(
-                "observed_field: '$spelled' is a bare name and this problem has " *
-                "$(length(comps)) components ($(join(sort!(collect(comps)), ", "))); " *
-                "qualify it as one of: $(join(cands, ", "))"))
+            throw(
+                SimulateError(
+                    "observed_field: '$spelled' is a bare name and this problem has " *
+                        "$(length(comps)) components ($(join(sort!(collect(comps)), ", "))); " *
+                        "qualify it as one of: $(join(cands, ", "))"
+                )
+            )
         end
     end
-    throw(SimulateError(
-        "observed_field: '$spelled' is not a build-time-evaluable observed of " *
-        "the prepared document. compiler=:mtk answers out of the compiled " *
-        "ModelingToolkit system's OBSERVED equations; this name is not one of " *
-        "them (a state the system integrates is read off the solution, not here)"))
+    throw(
+        SimulateError(
+            "observed_field: '$spelled' is not a build-time-evaluable observed of " *
+                "the prepared document. compiler=:mtk answers out of the compiled " *
+                "ModelingToolkit system's OBSERVED equations; this name is not one of " *
+                "them (a state the system integrates is read off the solution, not here)"
+        )
+    )
 end
 
 # `"M.f"` → its cells in ROW-MAJOR order, which is the flattening
 # `observed_field` returns at every rank and the order the Python `np.ndindex`
 # and the Rust enumeration agree on.
 function _mtk_field_cells(b::MTKCompiler, stem::String)
-    hits = Tuple{Vector{Int},String}[]
+    hits = Tuple{Vector{Int}, String}[]
     for nm in b.observed_names
         parsed = EarthSciAST._parse_cell_key(nm)
         parsed === nothing && continue
@@ -965,7 +1093,7 @@ end
 # (`mtkcompile` does not produce one, but this must not be the thing that hangs
 # if it ever did). Symbolic rather than numeric, so the answer does not depend
 # on what `u0` happens to hold.
-function _mtk_state_dependency(sym, unknown_set::Set{Any}, defs::Dict{Any,Any})
+function _mtk_state_dependency(sym, unknown_set::Set{Any}, defs::Dict{Any, Any})
     seen = Set{Any}()
     stack = Any[Symbolics.unwrap(sym)]
     while !isempty(stack)

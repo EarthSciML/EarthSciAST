@@ -76,7 +76,7 @@ const _TABLE_LOOKUP_OP = "table_lookup"
 
 # A table registry to lower against: the document's `function_tables`, or
 # `nothing` for the overwhelmingly common document that declares none.
-const _TableRegistry = Union{Nothing,AbstractDict{String,FunctionTable}}
+const _TableRegistry = Union{Nothing, AbstractDict{String, FunctionTable}}
 
 _no_tables(tables::_TableRegistry) = tables === nothing || isempty(tables)
 
@@ -181,8 +181,10 @@ function lower_table_lookups!(rs::ReactionSystem, tables::_TableRegistry)::React
         rate === r.rate && continue
         # `raw_substrates` / `raw_products`: the ordered StoichiometryEntry
         # fields, not the unordered `Dict` views.
-        rs.reactions[i] = Reaction(r.id, raw_substrates(r), raw_products(r), rate;
-                                   name=r.name, reference=r.reference)
+        rs.reactions[i] = Reaction(
+            r.id, raw_substrates(r), raw_products(r), rate;
+            name = r.name, reference = r.reference
+        )
     end
     for (_, sub) in rs.subsystems
         lower_table_lookups!(sub, tables)
@@ -212,7 +214,7 @@ function lower_table_lookups(flat::FlattenedSystem)::FlattenedSystem
     eqs, contribs = _rewrite_flat_equations(f, flat)
     cev = _lower_events!(copy(flat.continuous_events), f)
     dev = _lower_events!(copy(flat.discrete_events), f)
-    ics = Pair{String,ASTExpr}[name => f(rhs) for (name, rhs) in flat.field_ics]
+    ics = Pair{String, ASTExpr}[name => f(rhs) for (name, rhs) in flat.field_ics]
     states = _lower_variable_updates(flat.state_variables, f)
     params = _lower_variable_updates(flat.parameters, f)
     observed = _lower_variable_updates(flat.observed_variables, f)
@@ -220,15 +222,18 @@ function lower_table_lookups(flat::FlattenedSystem)::FlattenedSystem
     # above, so a rewritten update has to be re-linked into them by name — a
     # subset still holding the pre-lowering object would make the flattened form
     # disagree with itself about that variable.
-    relink(subset, parent) = OrderedDict{String,ModelVariable}(
-        k => get(parent, k, v) for (k, v) in subset)
-    return FlattenedSystem(flat;
-        state_variables=states, parameters=params, observed_variables=observed,
-        equations=eqs, equation_contributions=contribs,
-        continuous_events=cev, discrete_events=dev, field_ics=ics,
-        algebraic_variables=relink(flat.algebraic_variables, states),
-        brownian_parameters=relink(flat.brownian_parameters, params),
-        discrete_parameters=relink(flat.discrete_parameters, params))
+    relink(subset, parent) = OrderedDict{String, ModelVariable}(
+        k => get(parent, k, v) for (k, v) in subset
+    )
+    return FlattenedSystem(
+        flat;
+        state_variables = states, parameters = params, observed_variables = observed,
+        equations = eqs, equation_contributions = contribs,
+        continuous_events = cev, discrete_events = dev, field_ics = ics,
+        algebraic_variables = relink(flat.algebraic_variables, states),
+        brownian_parameters = relink(flat.brownian_parameters, params),
+        discrete_parameters = relink(flat.discrete_parameters, params)
+    )
 end
 
 # ---------------------------------------------------------------------------
@@ -240,7 +245,7 @@ function _lower_equations!(eqs::Vector{Equation}, f)::Vector{Equation}
         lhs = f(eq.lhs)
         rhs = f(eq.rhs)
         (lhs === eq.lhs && rhs === eq.rhs) && continue
-        eqs[i] = Equation(lhs, rhs; _comment=eq._comment)
+        eqs[i] = Equation(lhs, rhs; _comment = eq._comment)
     end
     return eqs
 end
@@ -250,12 +255,16 @@ _lower_affects(affects::Vector{AffectEquation}, f) =
 
 function _lower_events!(events::Vector{ContinuousEvent}, f)::Vector{ContinuousEvent}
     for (i, ev) in enumerate(events)
-        events[i] = ContinuousEvent(ASTExpr[f(c) for c in ev.conditions],
+        events[i] = ContinuousEvent(
+            ASTExpr[f(c) for c in ev.conditions],
             _lower_affects(ev.affects, f);
-            affect_neg=(ev.affect_neg === nothing ? nothing :
-                        _lower_affects(ev.affect_neg, f)),
-            root_find=ev.root_find, reinitialize=ev.reinitialize,
-            description=ev.description, name=ev.name)
+            affect_neg = (
+                ev.affect_neg === nothing ? nothing :
+                    _lower_affects(ev.affect_neg, f)
+            ),
+            root_find = ev.root_find, reinitialize = ev.reinitialize,
+            description = ev.description, name = ev.name
+        )
     end
     return events
 end
@@ -266,8 +275,10 @@ function _lower_events!(events::Vector{DiscreteEvent}, f)::Vector{DiscreteEvent}
         # trigger is pure data.
         trigger = ev.trigger isa ConditionTrigger ?
             ConditionTrigger(f(ev.trigger.expression)) : ev.trigger
-        events[i] = DiscreteEvent(trigger, _lower_affects(ev.affects, f);
-            reinitialize=ev.reinitialize, description=ev.description, name=ev.name)
+        events[i] = DiscreteEvent(
+            trigger, _lower_affects(ev.affects, f);
+            reinitialize = ev.reinitialize, description = ev.description, name = ev.name
+        )
     end
     return events
 end
@@ -282,9 +293,11 @@ function _lower_test_references!(tests::Vector{InlineTest}, f)::Vector{InlineTes
             a.reference isa ASTExpr || continue
             ref = f(a.reference)
             ref === a.reference && continue
-            t.assertions[i] = Assertion(a.variable, a.time, a.expected;
-                tolerance=a.tolerance, coords=a.coords, reduce=a.reduce,
-                reference=ref)
+            t.assertions[i] = Assertion(
+                a.variable, a.time, a.expected;
+                tolerance = a.tolerance, coords = a.coords, reduce = a.reduce,
+                reference = ref
+            )
         end
     end
     return tests
@@ -300,22 +313,26 @@ function _lower_variable_update(var::ModelVariable, f)::ModelVariable
         nw = r.when === nothing ? nothing : f(r.when)
         ne = r.expression === nothing ? nothing : f(r.expression)
         (nw !== r.when || ne !== r.expression) && (changed = true)
-        push!(rules, ParameterUpdate(r.kind; times=r.times, interval=r.interval,
-            initial_offset=r.initial_offset, when=nw, direction=r.direction,
-            source=r.source, hook=r.hook, expression=ne, from=r.from,
-            handler=r.handler))
+        push!(
+            rules, ParameterUpdate(
+                r.kind; times = r.times, interval = r.interval,
+                initial_offset = r.initial_offset, when = nw, direction = r.direction,
+                source = r.source, hook = r.hook, expression = ne, from = r.from,
+                handler = r.handler
+            )
+        )
     end
-    return changed ? reconstruct(var; update=rules) : var
+    return changed ? reconstruct(var; update = rules) : var
 end
 
 # The map form: a NEW map only when some variable's update actually changed, so
 # an unaffected `FlattenedSystem` keeps sharing its variable maps.
-function _lower_variable_updates(vars::OrderedDict{String,ModelVariable}, f)
+function _lower_variable_updates(vars::OrderedDict{String, ModelVariable}, f)
     lowered = nothing
     for (name, var) in vars
         nv = _lower_variable_update(var, f)
         nv === var && continue
-        lowered === nothing && (lowered = OrderedDict{String,ModelVariable}(vars))
+        lowered === nothing && (lowered = OrderedDict{String, ModelVariable}(vars))
         lowered[name] = nv
     end
     return lowered === nothing ? vars : lowered
@@ -348,12 +365,14 @@ _lower_expr_table_lookups(e::ASTExpr, ::_TableRegistry) = e
 # — keeping the pass linear in UNIQUE nodes instead of exponential in paths,
 # exactly as the enum lowering does.
 _lower_expr_table_lookups(e::OpExpr, tables::_TableRegistry) =
-    _lower_expr_table_lookups(e, tables, IdDict{OpExpr,ASTExpr}())
+    _lower_expr_table_lookups(e, tables, IdDict{OpExpr, ASTExpr}())
 
-_lower_expr_table_lookups(e::ASTExpr, ::_TableRegistry, ::IdDict{OpExpr,ASTExpr}) = e
+_lower_expr_table_lookups(e::ASTExpr, ::_TableRegistry, ::IdDict{OpExpr, ASTExpr}) = e
 
-function _lower_expr_table_lookups(e::OpExpr, tables::_TableRegistry,
-                                   memo::IdDict{OpExpr,ASTExpr})::ASTExpr
+function _lower_expr_table_lookups(
+        e::OpExpr, tables::_TableRegistry,
+        memo::IdDict{OpExpr, ASTExpr}
+    )::ASTExpr
     r = get(memo, e, nothing)
     r === nothing || return r
     # BOTTOM-UP: children first (through the one field-preserving rewrite
@@ -373,8 +392,10 @@ end
 # esm-spec §9.5.5 "Order of the lookup checks" (ruling Q-107): the table
 # reference, the named table's OWN ten checks (`_validate_function_table`), then
 # the lookup's own fields — `args`, axis keys, output.
-function _lower_table_lookup_node(node::OpExpr,
-                                  tables::AbstractDict{String,FunctionTable})::ASTExpr
+function _lower_table_lookup_node(
+        node::OpExpr,
+        tables::AbstractDict{String, FunctionTable}
+    )::ASTExpr
     table_id, table = _resolve_lookup_table(node, tables)
     # esm-spec §9.5.1. `clamp` (the default) is exactly what the `interp.*`
     # cores do at the ends, so the lowered tree IS the clamp semantics. An
@@ -401,7 +422,7 @@ node's `args`, axis keys and output — without lowering it. Load and `validate(
 run it on every node (ruling Q-112); the lowering runs the same steps.
 """
 function _check_table_lookup_node(node::OpExpr, tables)::Nothing
-    reg = tables === nothing ? Dict{String,FunctionTable}() : tables
+    reg = tables === nothing ? Dict{String, FunctionTable}() : tables
     table_id, table = _resolve_lookup_table(node, reg)
     _table_axis_inputs(node, table, table_id)
     _table_output_index(node, table, table_id)
@@ -410,40 +431,57 @@ end
 
 # The steps of the lookup checks that precede the axis keys: the table reference,
 # the named table's ten checks, then `args`. Returns `(table_id, table)`.
-function _resolve_lookup_table(node::OpExpr, tables::AbstractDict{String,FunctionTable})
+function _resolve_lookup_table(node::OpExpr, tables::AbstractDict{String, FunctionTable})
     table_id = node.table
-    table_id === nothing && throw(TableLookupError(
-        ERROR_CODES.TABLE_LOOKUP_UNKNOWN_TABLE,
-        "a `table_lookup` node carries no `table` id (esm-spec §9.5.2)"))
-    haskey(tables, table_id) || throw(TableLookupError(
-        ERROR_CODES.TABLE_LOOKUP_UNKNOWN_TABLE,
-        "`table_lookup` references table `$(table_id)`, which the document's " *
-        "`function_tables` block does not declare"))
+    table_id === nothing && throw(
+        TableLookupError(
+            ERROR_CODES.TABLE_LOOKUP_UNKNOWN_TABLE,
+            "a `table_lookup` node carries no `table` id (esm-spec §9.5.2)"
+        )
+    )
+    haskey(tables, table_id) || throw(
+        TableLookupError(
+            ERROR_CODES.TABLE_LOOKUP_UNKNOWN_TABLE,
+            "`table_lookup` references table `$(table_id)`, which the document's " *
+                "`function_tables` block does not declare"
+        )
+    )
     table = tables[table_id]
     _validate_function_table(table, table_id)
-    isempty(node.args) || throw(TableLookupError(
-        ERROR_CODES.TABLE_LOOKUP_ARGS_NONEMPTY,
-        "`table_lookup` on table `$(table_id)` carries $(length(node.args)) " *
-        "positional `args`; the per-axis inputs live under `axes` and `args` MUST " *
-        "be empty (esm-spec §9.5.2)"))
+    isempty(node.args) || throw(
+        TableLookupError(
+            ERROR_CODES.TABLE_LOOKUP_ARGS_NONEMPTY,
+            "`table_lookup` on table `$(table_id)` carries $(length(node.args)) " *
+                "positional `args`; the per-axis inputs live under `axes` and `args` MUST " *
+                "be empty (esm-spec §9.5.2)"
+        )
+    )
     return String(table_id), table
 end
 
 # The §9.5.3 tree for a lookup whose checks all passed.
 function _lowered_lookup_tree(table::FunctionTable, inputs, slice, strict)::ASTExpr
     kind = something(table.interpolation, "linear")
-    axis_const(i) = OpExpr("const", ASTExpr[]; value=copy(table.axes[i].values))
+    axis_const(i) = OpExpr("const", ASTExpr[]; value = copy(table.axes[i].values))
     if kind == "linear"
-        return OpExpr("fn", ASTExpr[_table_const(slice), axis_const(1), inputs[1]];
-                      name="interp.linear", table=strict)
+        return OpExpr(
+            "fn", ASTExpr[_table_const(slice), axis_const(1), inputs[1]];
+            name = "interp.linear", table = strict
+        )
     elseif kind == "bilinear"
-        return OpExpr("fn", ASTExpr[_table_const(slice), axis_const(1), axis_const(2),
-                                    inputs[1], inputs[2]]; name="interp.bilinear",
-                      table=strict)
+        return OpExpr(
+            "fn", ASTExpr[
+                _table_const(slice), axis_const(1), axis_const(2),
+                inputs[1], inputs[2],
+            ]; name = "interp.bilinear",
+            table = strict
+        )
     end
     # `nearest`: `_validate_function_table` admits no other `interpolation`.
-    return _nearest_lookup_tree(_table_const(slice), axis_const(1),
-                                length(table.axes[1].values), inputs[1], strict)
+    return _nearest_lookup_tree(
+        _table_const(slice), axis_const(1),
+        length(table.axes[1].values), inputs[1], strict
+    )
 end
 
 """
@@ -479,59 +517,85 @@ resolves, before any check about the lookup itself (§9.5.5 "Order of the lookup
 checks"), which covers a table built in memory.
 """
 function _validate_function_table(table::FunctionTable, table_id::AbstractString)::Nothing
-    fail(code, msg) = throw(TableLookupError(code,
-        "table `$(table_id)`: " * msg * " (esm-spec §9.5.5)"))
+    fail(code, msg) = throw(
+        TableLookupError(
+            code,
+            "table `$(table_id)`: " * msg * " (esm-spec §9.5.5)"
+        )
+    )
     axes = table.axes
     names = String[ax.name for ax in axes]
-    allunique(names) || fail(ERROR_CODES.TABLE_AXIS_DUPLICATE_NAME,
-        "two axes share the name `$(_first_duplicate(names))`")
+    allunique(names) || fail(
+        ERROR_CODES.TABLE_AXIS_DUPLICATE_NAME,
+        "two axes share the name `$(_first_duplicate(names))`"
+    )
     outputs = table.outputs
     (outputs === nothing || allunique(outputs)) ||
-        fail(ERROR_CODES.TABLE_OUTPUTS_DUPLICATE_NAME,
-             "two `outputs` share the name `$(_first_duplicate(outputs))`")
+        fail(
+        ERROR_CODES.TABLE_OUTPUTS_DUPLICATE_NAME,
+        "two `outputs` share the name `$(_first_duplicate(outputs))`"
+    )
     kind = something(table.interpolation, "linear")
     n = length(axes)
-    (((kind == "linear" || kind == "nearest") && n == 1) ||
-     (kind == "bilinear" && n == 2)) ||
-        fail(ERROR_CODES.TABLE_INTERPOLATION_AXES_MISMATCH,
-             "`interpolation: \"$(kind)\"` over $(n) axes; `linear` and `nearest` " *
-             "require 1, `bilinear` requires 2")
+    (
+        ((kind == "linear" || kind == "nearest") && n == 1) ||
+            (kind == "bilinear" && n == 2)
+    ) ||
+        fail(
+        ERROR_CODES.TABLE_INTERPOLATION_AXES_MISMATCH,
+        "`interpolation: \"$(kind)\"` over $(n) axes; `linear` and `nearest` " *
+            "require 1, `bilinear` requires 2"
+    )
     # NaN over EVERY axis before monotonicity on any: a NaN compares false with
     # everything, so a monotonicity verdict on an axis holding one would depend
     # on how the comparison is written.
     for ax in axes
-        all(isfinite, ax.values) || fail(ERROR_CODES.TABLE_AXIS_NAN,
+        all(isfinite, ax.values) || fail(
+            ERROR_CODES.TABLE_AXIS_NAN,
             "axis `$(ax.name)` carries a value that is not finite (NaN, +Inf or -Inf); axis `values` must be " *
-            "strictly-increasing finite floats")
+                "strictly-increasing finite floats"
+        )
     end
     for ax in axes
         vals = ax.values
         for i in 2:length(vals)
-            vals[i] > vals[i-1] || fail(ERROR_CODES.TABLE_AXIS_NON_MONOTONIC,
+            vals[i] > vals[i - 1] || fail(
+                ERROR_CODES.TABLE_AXIS_NON_MONOTONIC,
                 "axis `$(ax.name)` is not strictly increasing (values[$(i)] = " *
-                "$(vals[i]) is not > values[$(i - 1)] = $(vals[i - 1]))")
+                    "$(vals[i]) is not > values[$(i - 1)] = $(vals[i - 1]))"
+            )
         end
     end
     for ax in axes
-        length(ax.values) >= 2 || fail(ERROR_CODES.TABLE_AXIS_TOO_SHORT,
-            "axis `$(ax.name)` has $(length(ax.values)) values; an axis needs at least 2")
+        length(ax.values) >= 2 || fail(
+            ERROR_CODES.TABLE_AXIS_TOO_SHORT,
+            "axis `$(ax.name)` has $(length(ax.values)) values; an axis needs at least 2"
+        )
     end
     data = table.data
     (outputs !== nothing && data isa AbstractVector && length(data) != length(outputs)) &&
-        fail(ERROR_CODES.TABLE_OUTPUTS_LENGTH_MISMATCH,
-             "`data` has leading dimension $(length(data)) but the table declares " *
-             "$(length(outputs)) `outputs`")
+        fail(
+        ERROR_CODES.TABLE_OUTPUTS_LENGTH_MISMATCH,
+        "`data` has leading dimension $(length(data)) but the table declares " *
+            "$(length(outputs)) `outputs`"
+    )
     implied = Int[length(ax.values) for ax in axes]
     outputs === nothing || pushfirst!(implied, length(outputs))
-    _table_has_shape(data, implied, 1) || fail(ERROR_CODES.TABLE_DATA_SHAPE_MISMATCH,
+    _table_has_shape(data, implied, 1) || fail(
+        ERROR_CODES.TABLE_DATA_SHAPE_MISMATCH,
         "the nesting of `data` is not the shape $(implied) implied by its axes" *
-        (outputs === nothing ? "" : " and `outputs`"))
-    _table_all_finite(data) || fail(ERROR_CODES.TABLE_DATA_NAN,
-        "a leaf of `data` is not finite (NaN, +Inf or -Inf); table data must be finite")
+            (outputs === nothing ? "" : " and `outputs`")
+    )
+    _table_all_finite(data) || fail(
+        ERROR_CODES.TABLE_DATA_NAN,
+        "a leaf of `data` is not finite (NaN, +Inf or -Inf); table data must be finite"
+    )
     (table.shape === nothing || table.shape == implied) ||
-        fail(ERROR_CODES.TABLE_DATA_SHAPE_MISMATCH,
-             "the `shape` assertion $(table.shape) differs from the shape $(implied) " *
-             "implied by its axes" * (outputs === nothing ? "" : " and `outputs`"))
+        fail(
+        ERROR_CODES.TABLE_DATA_SHAPE_MISMATCH,
+        "the `shape` assertion $(table.shape) differs from the shape $(implied) " *
+            "implied by its axes" * (outputs === nothing ? "" : " and `outputs`")
+    )
     return nothing
 end
 
@@ -572,14 +636,19 @@ _table_all_finite(x) = x isa AbstractVector ? all(_table_all_finite, x) : isfini
 # and returns NaN. For an `out_of_bounds: "error"` table every `searchsorted`
 # carries the table id, so the evaluator's strict check on the query runs
 # whichever copy it reaches first.
-function _nearest_lookup_tree(D::OpExpr, A::OpExpr, N::Int, x::ASTExpr,
-                              strict::Union{String,Nothing})::OpExpr
-    j() = OpExpr("fn", ASTExpr[x, A]; name="interp.searchsorted", table=strict)
+function _nearest_lookup_tree(
+        D::OpExpr, A::OpExpr, N::Int, x::ASTExpr,
+        strict::Union{String, Nothing}
+    )::OpExpr
+    j() = OpExpr("fn", ASTExpr[x, A]; name = "interp.searchsorted", table = strict)
     lo() = OpExpr("max", ASTExpr[OpExpr("-", ASTExpr[j(), IntExpr(1)]), IntExpr(1)])
     hi() = OpExpr("min", ASTExpr[j(), IntExpr(N)])
-    nearer_hi = OpExpr("<", ASTExpr[
-        OpExpr("-", ASTExpr[OpExpr("index", ASTExpr[A, hi()]), x]),
-        OpExpr("-", ASTExpr[x, OpExpr("index", ASTExpr[A, lo()])])])
+    nearer_hi = OpExpr(
+        "<", ASTExpr[
+            OpExpr("-", ASTExpr[OpExpr("index", ASTExpr[A, hi()]), x]),
+            OpExpr("-", ASTExpr[x, OpExpr("index", ASTExpr[A, lo()])]),
+        ]
+    )
     pick = OpExpr("index", ASTExpr[D, OpExpr("ifelse", ASTExpr[nearer_hi, hi(), lo()])])
     return OpExpr("ifelse", ASTExpr[OpExpr("==", ASTExpr[x, x]), pick, x])
 end
@@ -587,32 +656,42 @@ end
 # The node's per-axis input expressions, in the table's DECLARED axis order —
 # which is the order of `data`'s inner dimensions, and therefore the argument
 # order of `interp.bilinear`.
-function _table_axis_inputs(node::OpExpr, table::FunctionTable,
-                            table_id::String)::Vector{ASTExpr}
+function _table_axis_inputs(
+        node::OpExpr, table::FunctionTable,
+        table_id::String
+    )::Vector{ASTExpr}
     axes = node.table_axes
     supplied = axes === nothing ? 0 : length(axes)
     out = Vector{ASTExpr}(undef, length(table.axes))
     for (i, axis) in enumerate(table.axes)
         input = axes === nothing ? nothing : get(axes, axis.name, nothing)
-        input === nothing && throw(TableLookupError(
-            ERROR_CODES.TABLE_LOOKUP_AXIS_NAME_MISMATCH,
-            "`table_lookup` on table `$(table_id)` supplies no input for its declared " *
-            "axis `$(axis.name)`"))
+        input === nothing && throw(
+            TableLookupError(
+                ERROR_CODES.TABLE_LOOKUP_AXIS_NAME_MISMATCH,
+                "`table_lookup` on table `$(table_id)` supplies no input for its declared " *
+                    "axis `$(axis.name)`"
+            )
+        )
         out[i] = input
     end
-    supplied == length(table.axes) || throw(TableLookupError(
-        ERROR_CODES.TABLE_LOOKUP_AXIS_NAME_MISMATCH,
-        "`table_lookup` on table `$(table_id)` supplies $(supplied) axis inputs but " *
-        "the table declares $(length(table.axes)) " *
-        "($(join((ax.name for ax in table.axes), ", "))); the key sets must match " *
-        "exactly (esm-spec §9.5.2)"))
+    supplied == length(table.axes) || throw(
+        TableLookupError(
+            ERROR_CODES.TABLE_LOOKUP_AXIS_NAME_MISMATCH,
+            "`table_lookup` on table `$(table_id)` supplies $(supplied) axis inputs but " *
+                "the table declares $(length(table.axes)) " *
+                "($(join((ax.name for ax in table.axes), ", "))); the key sets must match " *
+                "exactly (esm-spec §9.5.2)"
+        )
+    )
     return out
 end
 
 # Resolve `output` (absent, 0-based integer index, or output name) to a 1-based
 # row index into `data`'s leading dimension.
-function _table_output_index(node::OpExpr, table::FunctionTable,
-                             table_id::String)::Int
+function _table_output_index(
+        node::OpExpr, table::FunctionTable,
+        table_id::String
+    )::Int
     out = node.output
     outputs = table.outputs
     out === nothing && return 1
@@ -623,34 +702,51 @@ function _table_output_index(node::OpExpr, table::FunctionTable,
     if out isa Integer && !(out isa Bool)
         idx = Int(out)
         if outputs !== nothing
-            0 <= idx < length(outputs) || throw(TableLookupError(
-                ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE,
-                "`table_lookup.output` $(idx) on table `$(table_id)` is out of range: " *
-                "the table declares $(length(outputs)) outputs"))
+            0 <= idx < length(outputs) || throw(
+                TableLookupError(
+                    ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE,
+                    "`table_lookup.output` $(idx) on table `$(table_id)` is out of range: " *
+                        "the table declares $(length(outputs)) outputs"
+                )
+            )
             return idx + 1
         end
         # No `outputs` list means the table is single-output and `data` has no
         # leading output dimension at all (§9.5.1), so 0 is the only index that
         # names anything.
         idx == 0 && return 1
-        throw(TableLookupError(ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE,
-            "`table_lookup.output` $(idx) on table `$(table_id)`, which declares no " *
-            "`outputs` and is therefore single-output"))
+        throw(
+            TableLookupError(
+                ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE,
+                "`table_lookup.output` $(idx) on table `$(table_id)`, which declares no " *
+                    "`outputs` and is therefore single-output"
+            )
+        )
     elseif out isa AbstractString
-        outputs === nothing && throw(TableLookupError(
-            ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE,
-            "`table_lookup.output` \"$(out)\" names an output, but table `$(table_id)` " *
-            "declares no `outputs` list"))
+        outputs === nothing && throw(
+            TableLookupError(
+                ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE,
+                "`table_lookup.output` \"$(out)\" names an output, but table `$(table_id)` " *
+                    "declares no `outputs` list"
+            )
+        )
         idx = findfirst(==(String(out)), outputs)
-        idx === nothing && throw(TableLookupError(
-            ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE,
-            "`table_lookup.output` \"$(out)\" is not one of table `$(table_id)`'s " *
-            "outputs ($(join(outputs, ", ")))"))
+        idx === nothing && throw(
+            TableLookupError(
+                ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE,
+                "`table_lookup.output` \"$(out)\" is not one of table `$(table_id)`'s " *
+                    "outputs ($(join(outputs, ", ")))"
+            )
+        )
         return idx
     end
-    throw(TableLookupError(ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE,
-        "`table_lookup.output` on table `$(table_id)` must be a non-negative integer " *
-        "or an output name, not a $(typeof(out))"))
+    throw(
+        TableLookupError(
+            ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE,
+            "`table_lookup.output` on table `$(table_id)` must be a non-negative integer " *
+                "or an output name, not a $(typeof(out))"
+        )
+    )
 end
 
 # The `data` sub-array the lowered `const` carries: row `output` of the leading
@@ -665,10 +761,10 @@ _table_output_slice(table::FunctionTable, output::Int) =
 # implementations take, so the lowered call is byte-identical to the
 # hand-written inline-`const` one an author would have spelled (§9.5's
 # bit-equivalence promise) rather than a `Vector{Any}` of JSON leftovers.
-_table_const(slice) = OpExpr("const", ASTExpr[]; value=_table_data_value(slice))
+_table_const(slice) = OpExpr("const", ASTExpr[]; value = _table_data_value(slice))
 
 # `_validate_function_table` has already checked the nesting and that every
 # leaf is a number.
 _table_data_value(slice::AbstractVector) =
     all(_table_leaf, slice) ? Float64[Float64(x) for x in slice] :
-                              Vector{Float64}[_table_data_value(row) for row in slice]
+    Vector{Float64}[_table_data_value(row) for row in slice]

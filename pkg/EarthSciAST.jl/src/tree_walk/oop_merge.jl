@@ -70,10 +70,12 @@
 _oop_merge_disabled() = !_compiler_plan_now().oop_merge
 
 _oop_mergeable_acc_kind(k) =
-    k in (_AK_STATE_AFFINE, _AK_STATE_TBL_BOX, _AK_STATE_FIXED,
-          _AK_SCALAR, _AK_CONST_AFFINE, _AK_CONST_BOX,
-          _AK_CONST_CELL, _AK_LOOP_IDX, _AK_ARR_FIXED,
-          _AK_FORCING_BOX, _AK_ARR_TBL_BOX)
+    k in (
+    _AK_STATE_AFFINE, _AK_STATE_TBL_BOX, _AK_STATE_FIXED,
+    _AK_SCALAR, _AK_CONST_AFFINE, _AK_CONST_BOX,
+    _AK_CONST_CELL, _AK_LOOP_IDX, _AK_ARR_FIXED,
+    _AK_FORCING_BOX, _AK_ARR_TBL_BOX,
+)
 
 # Signature equal for two kernels iff they can be evaluated in LOCKSTEP: same
 # tree shape and op/payload structure, with per-lane-varying leaves (state
@@ -130,8 +132,10 @@ function _oop_fn_append_lanes!(out::Vector{S}, spec, lanes::Int) where {S}
     return out
 end
 
-function _oop_merge_sig!(io::IOBuffer, n::_Node, K::_AccKernel, parentsubs,
-                         why::Base.RefValue{Symbol})
+function _oop_merge_sig!(
+        io::IOBuffer, n::_Node, K::_AccKernel, parentsubs,
+        why::Base.RefValue{Symbol}
+    )
     k = n.kind
     if k === _NK_ACCESS
         a = K.acc[n.idx]
@@ -153,7 +157,9 @@ function _oop_merge_sig!(io::IOBuffer, n::_Node, K::_AccKernel, parentsubs,
         print(io, "C", n.payload === K.cse.scratch ? "c" : "i", n.idx)
     elseif k === _NK_CONTRACTION
         print(io, "K", n.op, "s", n.literal, "(")
-        for c in n.children; _oop_merge_sig!(io, c, K, parentsubs, why); end
+        for c in n.children
+            _oop_merge_sig!(io, c, K, parentsubs, why)
+        end
         print(io, ")")
     elseif k === _NK_SUBCALL
         pos = findfirst(s -> s === n.payload, parentsubs)
@@ -179,7 +185,9 @@ function _oop_merge_sig!(io::IOBuffer, n::_Node, K::_AccKernel, parentsubs,
             length(pl) >= 2 && print(io, "#", _oop_merge_fn_sig_token(pl[2]))
         end
         print(io, "(")
-        for c in n.children; _oop_merge_sig!(io, c, K, parentsubs, why); end
+        for c in n.children
+            _oop_merge_sig!(io, c, K, parentsubs, why)
+        end
         print(io, ")")
     else
         why[] = :node_kind; print(io, "?", Int(k))
@@ -190,9 +198,13 @@ end
 function _oop_merge_trees_sig!(io::IOBuffer, K::_AccKernel, parentsubs, why)
     print(io, "z", K.zerobar, "|")
     _oop_merge_sig!(io, K.spine, K, parentsubs, why); print(io, "|I")
-    for r in K.cse.inv_recipes; _oop_merge_sig!(io, r, K, parentsubs, why); print(io, ";"); end
+    for r in K.cse.inv_recipes
+        _oop_merge_sig!(io, r, K, parentsubs, why); print(io, ";")
+    end
     print(io, "|R")
-    for r in K.cse.recipes; _oop_merge_sig!(io, r, K, parentsubs, why); print(io, ";"); end
+    for r in K.cse.recipes
+        _oop_merge_sig!(io, r, K, parentsubs, why); print(io, ";")
+    end
     return io
 end
 
@@ -232,16 +244,22 @@ function _oop_inv_nodes_identical(nodes::Vector{_Node}, Kof, m::Int)
         return all(i -> nodes[i].payload === Kof(i).cse.inv_scratch, 1:m)
     elseif k === _NK_OP || k === _NK_CONTRACTION
         if k === _NK_OP && r.op === :fn && r.payload isa Tuple
-            fn1, spec1 = (r.payload)::Tuple{String,Any}
+            fn1, spec1 = (r.payload)::Tuple{String, Any}
             for i in 2:m
-                fni, speci = (nodes[i].payload)::Tuple{String,Any}
-                (fni == fn1 && (speci === spec1 ||
-                                _fn_spec_content_equal(speci, spec1))) || return false
+                fni, speci = (nodes[i].payload)::Tuple{String, Any}
+                (
+                    fni == fn1 && (
+                        speci === spec1 ||
+                            _fn_spec_content_equal(speci, spec1)
+                    )
+                ) || return false
             end
         end
         for ci in eachindex(r.children)
-            _oop_inv_nodes_identical(_Node[n.children[ci] for n in nodes],
-                                     Kof, m) || return false
+            _oop_inv_nodes_identical(
+                _Node[n.children[ci] for n in nodes],
+                Kof, m
+            ) || return false
         end
         return true
     else # _NK_ACCESS / _NK_SUBCALL / anything else: decline, fold to cell
@@ -270,18 +288,22 @@ end
 # `nacc0` lane-table pin in the kept-inv clone).
 function _oop_merge_fn_payload(nodes::Vector{_Node}, Ls::Vector{Int}, L::Int)
     m = length(nodes)
-    fname1, spec1 = (nodes[1].payload)::Tuple{String,Any}
+    fname1, spec1 = (nodes[1].payload)::Tuple{String, Any}
     # A per-lane spec is ALWAYS re-tabled when merging further (round 2 over
     # round-1 products): the rep's lane list covers only ITS OWN lanes, so
     # riding it would misalign — concatenation below is the correct merge.
-    varying = m > 1 && (spec1 isa _InterpLinearLaneSpec ||
-                        spec1 isa _InterpBilinearLaneSpec ||
-                        spec1 isa _InterpSearchsortedLaneSpec)
+    varying = m > 1 && (
+        spec1 isa _InterpLinearLaneSpec ||
+            spec1 isa _InterpBilinearLaneSpec ||
+            spec1 isa _InterpSearchsortedLaneSpec
+    )
     if !varying
         for i in 2:m
-            fnamei, speci = (nodes[i].payload)::Tuple{String,Any}
-            if !(fnamei == fname1 &&
-                 (speci === spec1 || _fn_spec_content_equal(speci, spec1)))
+            fnamei, speci = (nodes[i].payload)::Tuple{String, Any}
+            if !(
+                    fnamei == fname1 &&
+                        (speci === spec1 || _fn_spec_content_equal(speci, spec1))
+                )
                 varying = true
                 break
             end
@@ -290,32 +312,40 @@ function _oop_merge_fn_payload(nodes::Vector{_Node}, Ls::Vector{Int}, L::Int)
     varying || return nodes[1].payload
     sh = _oop_fn_shape(spec1)
     if sh !== nothing &&
-       all(i -> begin
-               fni, spi = (nodes[i].payload)::Tuple{String,Any}
-               fni == fname1 && _oop_fn_shape(spi) == sh
-           end, 2:m)
+            all(
+            i -> begin
+                fni, spi = (nodes[i].payload)::Tuple{String, Any}
+                fni == fname1 && _oop_fn_shape(spi) == sh
+            end, 2:m
+        )
         if sh[1] === :linear
             specs = _InterpLinearSpec[]
             sizehint!(specs, L)
             for i in 1:m
-                _oop_fn_append_lanes!(specs,
-                    ((nodes[i].payload)::Tuple{String,Any})[2], Ls[i])
+                _oop_fn_append_lanes!(
+                    specs,
+                    ((nodes[i].payload)::Tuple{String, Any})[2], Ls[i]
+                )
             end
             return (fname1, _InterpLinearLaneSpec(specs, 1, 0, 0, 1))
         elseif sh[1] === :bilinear
             specs = _InterpBilinearSpec[]
             sizehint!(specs, L)
             for i in 1:m
-                _oop_fn_append_lanes!(specs,
-                    ((nodes[i].payload)::Tuple{String,Any})[2], Ls[i])
+                _oop_fn_append_lanes!(
+                    specs,
+                    ((nodes[i].payload)::Tuple{String, Any})[2], Ls[i]
+                )
             end
             return (fname1, _InterpBilinearLaneSpec(specs, 1, 0, 0, 1))
         else # :searchsorted
             specs = _InterpSearchsortedSpec[]
             sizehint!(specs, L)
             for i in 1:m
-                _oop_fn_append_lanes!(specs,
-                    ((nodes[i].payload)::Tuple{String,Any})[2], Ls[i])
+                _oop_fn_append_lanes!(
+                    specs,
+                    ((nodes[i].payload)::Tuple{String, Any})[2], Ls[i]
+                )
             end
             return (fname1, _InterpSearchsortedLaneSpec(specs, 1, 0, 0, 1))
         end
@@ -347,12 +377,17 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
     function merge_trees(Kof, Pof, keep_inv::Bool)
         accvec = _AccDesc[]
         n_inv = length(Kof(1).cse.inv_recipes); n_cell = length(Kof(1).cse.recipes)
-        @assert all(i -> length(Kof(i).cse.inv_recipes) == n_inv &&
-                         length(Kof(i).cse.recipes) == n_cell, 1:m)
+        @assert all(
+            i -> length(Kof(i).cse.inv_recipes) == n_inv &&
+                length(Kof(i).cse.recipes) == n_cell, 1:m
+        )
         keep = keep_inv && n_inv > 0 &&
-               all(i2 -> _oop_inv_nodes_identical(
-                       _Node[Kof(i).cse.inv_recipes[i2] for i in 1:m], Kof, m),
-                   1:n_inv)
+            all(
+            i2 -> _oop_inv_nodes_identical(
+                _Node[Kof(i).cse.inv_recipes[i2] for i in 1:m], Kof, m
+            ),
+            1:n_inv
+        )
         newscr = _AccScratch(keep ? n_cell : n_inv + n_cell)
         invscr = _AccScratch(keep ? n_inv : 0)
         function clone(nodes::Vector{_Node})::_Node
@@ -364,7 +399,7 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
                 end
                 tbl = Vector{Float64}(undef, L); q = 0
                 for i in 1:m
-                    tbl[q+1:q+Ls[i]] .= vals[i]; q += Ls[i]
+                    tbl[(q + 1):(q + Ls[i])] .= vals[i]; q += Ls[i]
                 end
                 push!(accvec, _AccConstBox(tbl, 1, 0, 0, 1))
                 return _Node(_NK_ACCESS, :acc, 0.0, length(accvec), Symbol(""), nothing, _Node[])
@@ -399,27 +434,34 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
                         lk = Ls[i]; idx = nodes[i].idx
                         a = Kof(i).acc[idx]; pl = Pof(i)
                         if a.kind === _AK_STATE_FIXED
-                            tbl[q+1:q+lk] .= a.idx
+                            tbl[(q + 1):(q + lk)] .= a.idx
                         elseif a.kind === _AK_STATE_AFFINE
-                            tbl[q+1:q+lk] .= pl.gathers[idx]
+                            tbl[(q + 1):(q + lk)] .= pl.gathers[idx]
                         else # TBL_BOX: reconstruct the raw table (0 = ghost)
                             g = pl.gathers[idx]; gh = pl.ghost[idx]
-                            if isempty(gh); tbl[q+1:q+lk] .= g
-                            else; for mm in 1:lk; tbl[q+mm] = gh[mm] ? 0 : g[mm]; end; end
+                            if isempty(gh)
+                                tbl[(q + 1):(q + lk)] .= g
+                            else
+                                for mm in 1:lk
+                                    tbl[q + mm] = gh[mm] ? 0 : g[mm]
+                                end
+                            end
                         end
                         q += lk
                     end
                     push!(accvec, _AccStateTblBox(tbl, 1, 0, 0, 1))
-                elseif akind in (_AK_SCALAR, _AK_CONST_AFFINE, _AK_CONST_BOX,
-                                 _AK_CONST_CELL, _AK_LOOP_IDX)
+                elseif akind in (
+                        _AK_SCALAR, _AK_CONST_AFFINE, _AK_CONST_BOX,
+                        _AK_CONST_CELL, _AK_LOOP_IDX,
+                    )
                     tbl = Vector{Float64}(undef, L); q = 0
                     for i in 1:m
                         lk = Ls[i]; idx = nodes[i].idx
                         a = Kof(i).acc[idx]; pl = Pof(i)
                         if a.kind === _AK_SCALAR
-                            tbl[q+1:q+lk] .= a.v
+                            tbl[(q + 1):(q + lk)] .= a.v
                         else
-                            tbl[q+1:q+lk] .= pl.consts[idx]
+                            tbl[(q + 1):(q + lk)] .= pl.consts[idx]
                         end
                         q += lk
                     end
@@ -431,9 +473,9 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
                         lk = Ls[i]; idx = nodes[i].idx
                         a = Kof(i).acc[idx]; pl = Pof(i)
                         if a.kind === _AK_ARR_FIXED
-                            tbl[q+1:q+lk] .= a.idx
+                            tbl[(q + 1):(q + lk)] .= a.idx
                         else
-                            tbl[q+1:q+lk] .= pl.forc[idx]
+                            tbl[(q + 1):(q + lk)] .= pl.forc[idx]
                         end
                         q += lk
                     end
@@ -441,12 +483,12 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
                 end
                 return _Node(_NK_ACCESS, :acc, 0.0, length(accvec), Symbol(""), nothing, _Node[])
             else # _NK_OP / _NK_CONTRACTION: payload rides from the rep, except
-                 # a `:fn` whose specs vary across members — that becomes a
-                 # per-lane spec table (or a loud `_check_fn_group_specs`
-                 # error on any signature-invariant break; see
-                 # `_oop_merge_fn_payload`).
+                # a `:fn` whose specs vary across members — that becomes a
+                # per-lane spec table (or a loud `_check_fn_group_specs`
+                # error on any signature-invariant break; see
+                # `_oop_merge_fn_payload`).
                 pay = (k === _NK_OP && r.op === :fn && r.payload isa Tuple) ?
-                      _oop_merge_fn_payload(nodes, Ls, L) : r.payload
+                    _oop_merge_fn_payload(nodes, Ls, L) : r.payload
                 ch = Vector{_Node}(undef, length(r.children))
                 for ci in eachindex(r.children)
                     ch[ci] = clone(_Node[n.children[ci] for n in nodes])
@@ -487,19 +529,27 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
     for si in 1:nsubs
         # NOTE: these names must not collide with `clone`'s locals — a nested
         # function assigning a name bound in this scope REBINDS the shared box.
-        msp_, mrc_, _mi_, _ms_, mav_, msc_ = merge_trees(i -> kernels[js[i]].subs[si],
-                                                         i -> plans[js[i]].sub_plans[si],
-                                                         false)
+        msp_, mrc_, _mi_, _ms_, mav_, msc_ = merge_trees(
+            i -> kernels[js[i]].subs[si],
+            i -> plans[js[i]].sub_plans[si],
+            false
+        )
         repsub = rep.subs[si]
-        merged_subs[si] = _AccKernel(repsub.cells, msp_, mav_, repsub.bound, repsub.zerobar,
-                                     _AccCSE(mrc_, msc_, _Node[], _AccScratch(0)),
-                                     _AccKernel[])
+        merged_subs[si] = _AccKernel(
+            repsub.cells, msp_, mav_, repsub.bound, repsub.zerobar,
+            _AccCSE(mrc_, msc_, _Node[], _AccScratch(0)),
+            _AccKernel[]
+        )
     end
-    msp_, mrc_, minv_, mis_, mav_, msc_ = merge_trees(i -> kernels[js[i]],
-                                                      i -> plans[js[i]], true)
+    msp_, mrc_, minv_, mis_, mav_, msc_ = merge_trees(
+        i -> kernels[js[i]],
+        i -> plans[js[i]], true
+    )
     outs = reduce(vcat, (plans[j].out_slots for j in js))
-    return _AccKernel(_outs_cells(outs), msp_, mav_, rep.bound, rep.zerobar,
-                      _AccCSE(mrc_, msc_, minv_, mis_), merged_subs)
+    return _AccKernel(
+        _outs_cells(outs), msp_, mav_, rep.bound, rep.zerobar,
+        _AccCSE(mrc_, msc_, minv_, mis_), merged_subs
+    )
 end
 
 # The class merge's per-kernel lane plans, built on first use. Grouping reads
@@ -513,14 +563,16 @@ end
 # slots, taken together, are the same multiset after the round as before it.
 struct _LazyOopPlans <: AbstractVector{_OopAccPlan}
     kernels::Vector{_AccKernel}
-    plans::Vector{Union{Nothing,_OopAccPlan}}
+    plans::Vector{Union{Nothing, _OopAccPlan}}
     vecable::Vector{Int8}                  # -1 not yet known, else 0 / 1
     outs_unique::Base.RefValue{Int8}       # -1 not yet known, else 0 / 1
 end
 _LazyOopPlans(kernels::AbstractVector{_AccKernel}) =
-    _LazyOopPlans(collect(_AccKernel, kernels),
-                  Union{Nothing,_OopAccPlan}[nothing for _ in kernels],
-                  fill(Int8(-1), length(kernels)), Ref(Int8(-1)))
+    _LazyOopPlans(
+    collect(_AccKernel, kernels),
+    Union{Nothing, _OopAccPlan}[nothing for _ in kernels],
+    fill(Int8(-1), length(kernels)), Ref(Int8(-1))
+)
 Base.size(v::_LazyOopPlans) = (length(v.kernels),)
 function Base.getindex(v::_LazyOopPlans, j::Int)
     p = v.plans[j]
@@ -544,7 +596,7 @@ _plan_reduce(v::_LazyOopPlans, j::Int) =
 _plan_reduce(v::AbstractVector{_OopAccPlan}, j::Int) = !isempty(v[j].red_seg)
 
 _plans_empty(v::_LazyOopPlans) =
-    _LazyOopPlans(_AccKernel[], Union{Nothing,_OopAccPlan}[], Int8[], v.outs_unique)
+    _LazyOopPlans(_AccKernel[], Union{Nothing, _OopAccPlan}[], Int8[], v.outs_unique)
 _plans_empty(::AbstractVector{_OopAccPlan}) = _OopAccPlan[]
 function _plans_push!(out::_LazyOopPlans, v::_LazyOopPlans, j::Int)
     push!(out.kernels, v.kernels[j]); push!(out.plans, v.plans[j])
@@ -564,8 +616,10 @@ _plans_push!(out::AbstractVector{_OopAccPlan}, ::_AccKernel, pl::_OopAccPlan) = 
 # plan scatters nothing).
 function _plans_outs_unique(kernels, v::_LazyOopPlans)
     if v.outs_unique[] < 0
-        v.outs_unique[] = _cellsets_outs_unique(kernels[j].cells for j in eachindex(kernels)
-                                                if _plan_vecable(v, j)) ? 1 : 0
+        v.outs_unique[] = _cellsets_outs_unique(
+                kernels[j].cells for j in eachindex(kernels)
+                if _plan_vecable(v, j)
+            ) ? 1 : 0
     end
     return v.outs_unique[] == 1
 end
@@ -585,22 +639,28 @@ counter; the direct class-emission stage passes its own
 (`:direct_classmerge_round1_merge`) so emission work and residual repair work
 stay separately countable.
 """
-function _merge_oop_acc_kernels(kernels::AbstractVector{_AccKernel},
-                                plans::AbstractVector{_OopAccPlan},
-                                tally::Symbol=:classmerge_round1_merge)
-    nodiag = (; n_in = length(kernels), n_out = length(kernels),
-              n_classes = 0, n_blocked = length(kernels), n_failed = 0)
+function _merge_oop_acc_kernels(
+        kernels::AbstractVector{_AccKernel},
+        plans::AbstractVector{_OopAccPlan},
+        tally::Symbol = :classmerge_round1_merge
+    )
+    nodiag = (;
+        n_in = length(kernels), n_out = length(kernels),
+        n_classes = 0, n_blocked = length(kernels), n_failed = 0,
+    )
     length(kernels) <= 1 && return (kernels, plans, nodiag)
 
     # Assignment scatter + globally unique out-slots ⇒ concatenating lanes
     # across kernels cannot reorder any write. Without uniqueness, decline.
     _plans_outs_unique(kernels, plans) || return (kernels, plans, nodiag)
 
-    groups = Dict{String,Vector{Int}}()
+    groups = Dict{String, Vector{Int}}()
     passthrough = Int[]
     for j in eachindex(kernels)
-        s, _why = _oop_merge_kernel_sig(kernels[j], _plan_vecable(plans, j),
-                                        _plan_reduce(plans, j))
+        s, _why = _oop_merge_kernel_sig(
+            kernels[j], _plan_vecable(plans, j),
+            _plan_reduce(plans, j)
+        )
         s === nothing ? push!(passthrough, j) : push!(get!(groups, s, Int[]), j)
     end
 
@@ -644,9 +704,11 @@ function _merge_oop_acc_kernels(kernels::AbstractVector{_AccKernel},
     for j in passthrough
         push!(out_kernels, kernels[j]); _plans_push!(out_plans, plans, j)
     end
-    diag = (; n_in = length(kernels), n_out = length(out_kernels),
-            n_classes = length(groups), n_blocked = length(passthrough),
-            n_failed)
+    diag = (;
+        n_in = length(kernels), n_out = length(out_kernels),
+        n_classes = length(groups), n_blocked = length(passthrough),
+        n_failed,
+    )
     return (out_kernels, out_plans, diag)
 end
 
@@ -705,9 +767,11 @@ end
 _oop_merge_expand_disabled() = !_compiler_plan_now().oop_merge_expand
 
 _oop_x_statefam(k) = k in (_AK_STATE_AFFINE, _AK_STATE_TBL_BOX, _AK_STATE_FIXED)
-_oop_x_forcfam(k)  = k in (_AK_ARR_FIXED, _AK_FORCING_BOX, _AK_ARR_TBL_BOX)
-_oop_x_constfam(k) = k in (_AK_SCALAR, _AK_CONST_AFFINE, _AK_CONST_BOX,
-                           _AK_CONST_CELL, _AK_LOOP_IDX)
+_oop_x_forcfam(k) = k in (_AK_ARR_FIXED, _AK_FORCING_BOX, _AK_ARR_TBL_BOX)
+_oop_x_constfam(k) = k in (
+    _AK_SCALAR, _AK_CONST_AFFINE, _AK_CONST_BOX,
+    _AK_CONST_CELL, _AK_LOOP_IDX,
+)
 
 # Resolve a node through the OWNING kernel's CSE tiers: an own-scratch
 # `_NK_CACHED` read IS its recipe, structurally. Foreign-scratch reads (xcse
@@ -728,8 +792,10 @@ end
 
 # Memoized expansion-normalized structural hash of one tree in kernel context
 # `K`. `parentsubs` positions `_NK_SUBCALL` payloads exactly as round 1 does.
-function _oop_x_sig(n0::_Node, K::_AccKernel, parentsubs,
-                    memo::IdDict{_Node,UInt}, why::Base.RefValue{Symbol})::UInt
+function _oop_x_sig(
+        n0::_Node, K::_AccKernel, parentsubs,
+        memo::IdDict{_Node, UInt}, why::Base.RefValue{Symbol}
+    )::UInt
     n = _oop_x_resolve(n0, K)
     h0 = get(memo, n, UInt(0))
     h0 != 0 && return h0
@@ -745,7 +811,7 @@ function _oop_x_sig(n0::_Node, K::_AccKernel, parentsubs,
             r = hash(:V, UInt(0x2b71))        # value leaf: == a literal
         else
             why[] = :acc_kind
-            r = hash(:badacc, UInt(0x7))
+            r = hash(:badacc, UInt(0x07))
         end
     elseif k === _NK_LITERAL
         r = hash(:V, UInt(0x2b71))            # value leaf: == a frozen const
@@ -768,13 +834,17 @@ function _oop_x_sig(n0::_Node, K::_AccKernel, parentsubs,
         paytok = if n.op === :fn && pl isa Tuple && length(pl) >= 2
             (pl[1], _oop_merge_fn_sig_token(pl[2]))     # SHAPE key (lane-tabled)
         elseif pl === nothing
-            0x0
+            0x00
         else
             objectid(pl)                                # identity: never wrongly merged
         end
-        r = hash((k === _NK_OP ? :O : :K, n.op, paytok,
-                  k === _NK_CONTRACTION ? reinterpret(UInt64, n.literal) : UInt64(0),
-                  length(n.children)), UInt(0x8811))
+        r = hash(
+            (
+                k === _NK_OP ? :O : :K, n.op, paytok,
+                k === _NK_CONTRACTION ? reinterpret(UInt64, n.literal) : UInt64(0),
+                length(n.children),
+            ), UInt(0x8811)
+        )
         for c in n.children
             r = hash(_oop_x_sig(c, K, parentsubs, memo, why), r)
         end
@@ -792,12 +862,12 @@ function _oop_x_kernel_sig(K::_AccKernel, vectorizable::Bool, reduce::Bool)
     why = Ref(:ok)
     vectorizable || (why[] = :unvectorizable)
     reduce && (why[] = :reduce)
-    memo = IdDict{_Node,UInt}()
+    memo = IdDict{_Node, UInt}()
     h = hash(reinterpret(UInt64, K.zerobar), UInt(0xaa33))
     h = hash(_oop_x_sig(K.spine, K, K.subs, memo, why), h)
     for (si, S) in enumerate(K.subs)
         isempty(S.subs) || (why[] = :nested_sub_subs)
-        smemo = IdDict{_Node,UInt}()
+        smemo = IdDict{_Node, UInt}()
         hs = hash(reinterpret(UInt64, S.zerobar), UInt(0xbb44))
         hs = hash(_oop_x_sig(S.spine, S, K.subs, smemo, why), hs)
         h = hash((si, hs), h)
@@ -812,10 +882,10 @@ end
 # — the invariant every runner's prelude fill relies on. Caching a pure
 # deterministic subtree instead of re-walking it cannot change any bit.
 function _oop_x_apply_cse(root::_Node)
-    refcnt = IdDict{_Node,Int}()
+    refcnt = IdDict{_Node, Int}()
     order = _Node[]                      # post-order, each node once
-    seen = IdDict{_Node,Bool}()
-    stack = Tuple{_Node,Int}[(root, 0)]
+    seen = IdDict{_Node, Bool}()
+    stack = Tuple{_Node, Int}[(root, 0)]
     refcnt[root] = 1
     while !isempty(stack)
         n, ci = pop!(stack)
@@ -835,12 +905,12 @@ function _oop_x_apply_cse(root::_Node)
         end
     end
     isrec(n) = (n.kind === _NK_OP || n.kind === _NK_CONTRACTION) &&
-               get(refcnt, n, 0) >= 2 && n !== root
+        get(refcnt, n, 0) >= 2 && n !== root
     nrec = count(isrec, order)
     nrec == 0 && return (root, _Node[], _AccScratch(0))
     scr = _AccScratch(nrec)
     recipes = Vector{_Node}(undef, nrec)
-    repl = IdDict{_Node,_Node}()         # old node -> read/rebuilt replacement
+    repl = IdDict{_Node, _Node}()         # old node -> read/rebuilt replacement
     slot = 0
     for n in order                        # children before parents
         if isempty(n.children)
@@ -852,14 +922,18 @@ function _oop_x_apply_cse(root::_Node)
                 ch[i] = get(repl, n.children[i], n.children[i])
                 changed |= ch[i] !== n.children[i]
             end
-            nn = changed ? _Node(n.kind, n.op, n.literal, n.idx, n.sym,
-                                 n.payload, ch) : n
+            nn = changed ? _Node(
+                    n.kind, n.op, n.literal, n.idx, n.sym,
+                    n.payload, ch
+                ) : n
         end
         if isrec(n)
             slot += 1
             recipes[slot] = nn
-            repl[n] = _Node(_NK_CACHED, Symbol(""), 0.0, slot, Symbol(""),
-                            scr, _Node[])
+            repl[n] = _Node(
+                _NK_CACHED, Symbol(""), 0.0, slot, Symbol(""),
+                scr, _Node[]
+            )
         elseif nn !== n
             repl[n] = nn
         end
@@ -886,7 +960,7 @@ function _oop_x_merge_group(kernels, plans, js::Vector{Int})
 
     function merge_trees(Kof, Pof)
         accvec = _AccDesc[]
-        memo = Dict{Vector{UInt},_Node}()
+        memo = Dict{Vector{UInt}, _Node}()
         function clone(nodes0::Vector{_Node})::_Node
             nodes = _Node[_oop_x_resolve(nodes0[i], Kof(i)) for i in 1:m]
             key = UInt[objectid(n) for n in nodes]
@@ -902,13 +976,18 @@ function _oop_x_merge_group(kernels, plans, js::Vector{Int})
                     lk = Ls[i]; idx = nodes[i].idx
                     a = Kof(i).acc[idx]; pl = Pof(i)
                     if a.kind === _AK_STATE_FIXED
-                        tbl[q+1:q+lk] .= a.idx
+                        tbl[(q + 1):(q + lk)] .= a.idx
                     elseif a.kind === _AK_STATE_AFFINE
-                        tbl[q+1:q+lk] .= pl.gathers[idx]
+                        tbl[(q + 1):(q + lk)] .= pl.gathers[idx]
                     else # TBL_BOX: reconstruct the raw table (0 = ghost)
                         g = pl.gathers[idx]; gh = pl.ghost[idx]
-                        if isempty(gh); tbl[q+1:q+lk] .= g
-                        else; for mm in 1:lk; tbl[q+mm] = gh[mm] ? 0 : g[mm]; end; end
+                        if isempty(gh)
+                            tbl[(q + 1):(q + lk)] .= g
+                        else
+                            for mm in 1:lk
+                                tbl[q + mm] = gh[mm] ? 0 : g[mm]
+                            end
+                        end
                     end
                     q += lk
                 end
@@ -923,16 +1002,18 @@ function _oop_x_merge_group(kernels, plans, js::Vector{Int})
                     lk = Ls[i]; idx = nodes[i].idx
                     a = Kof(i).acc[idx]; pl = Pof(i)
                     if a.kind === _AK_ARR_FIXED
-                        tbl[q+1:q+lk] .= a.idx
+                        tbl[(q + 1):(q + lk)] .= a.idx
                     else
-                        tbl[q+1:q+lk] .= pl.forc[idx]
+                        tbl[(q + 1):(q + lk)] .= pl.forc[idx]
                     end
                     q += lk
                 end
                 push!(accvec, _AccArrTblBox(arr, tbl, 1, 0, 0, 1))
                 _Node(_NK_ACCESS, :acc, 0.0, length(accvec), Symbol(""), nothing, _Node[])
-            elseif all(i -> nodes[i].kind === _NK_LITERAL ||
-                            (isacc(i) && _oop_x_constfam(akind(i))), 1:m)
+            elseif all(
+                    i -> nodes[i].kind === _NK_LITERAL ||
+                        (isacc(i) && _oop_x_constfam(akind(i))), 1:m
+                )
                 # VALUE leaf group: literal and frozen-const members mix — each
                 # lane's table entry is exactly the value that member's leaf
                 # reads (a literal's value, a scalar's v, or the plan-resolved
@@ -941,13 +1022,13 @@ function _oop_x_merge_group(kernels, plans, js::Vector{Int})
                 for i in 1:m
                     lk = Ls[i]; nd = nodes[i]
                     if nd.kind === _NK_LITERAL
-                        tbl[q+1:q+lk] .= nd.literal
+                        tbl[(q + 1):(q + lk)] .= nd.literal
                     else
                         a = Kof(i).acc[nd.idx]
                         if a.kind === _AK_SCALAR
-                            tbl[q+1:q+lk] .= a.v
+                            tbl[(q + 1):(q + lk)] .= a.v
                         else
-                            tbl[q+1:q+lk] .= Pof(i).consts[nd.idx]
+                            tbl[(q + 1):(q + lk)] .= Pof(i).consts[nd.idx]
                         end
                     end
                     q += lk
@@ -965,17 +1046,23 @@ function _oop_x_merge_group(kernels, plans, js::Vector{Int})
             elseif k === _NK_SUBCALL
                 pos = findfirst(s -> s === r.payload, kernels[js[1]].subs)
                 pos !== nothing &&
-                    all(i -> nodes[i].kind === _NK_SUBCALL &&
-                             kernels[js[i]].subs[pos] === nodes[i].payload, 1:m) ||
+                    all(
+                    i -> nodes[i].kind === _NK_SUBCALL &&
+                        kernels[js[i]].subs[pos] === nodes[i].payload, 1:m
+                ) ||
                     error("round-2: subcall alignment mismatch")
                 @assert isassigned(merged_subs, pos) "nested-first order violated"
                 _Node(k, r.op, r.literal, r.idx, r.sym, merged_subs[pos], _Node[])
             elseif k === _NK_OP || k === _NK_CONTRACTION
                 nch = length(r.children)
-                all(i -> nodes[i].kind === k && nodes[i].op === r.op &&
-                         length(nodes[i].children) == nch &&
-                         (k !== _NK_CONTRACTION ||
-                          isequal(nodes[i].literal, r.literal)), 1:m) ||
+                all(
+                    i -> nodes[i].kind === k && nodes[i].op === r.op &&
+                        length(nodes[i].children) == nch &&
+                        (
+                        k !== _NK_CONTRACTION ||
+                            isequal(nodes[i].literal, r.literal)
+                    ), 1:m
+                ) ||
                     error("round-2: op/contraction mismatch in a class")
                 pay = if k === _NK_OP && r.op === :fn && r.payload isa Tuple
                     _oop_merge_fn_payload(nodes, Ls, L)
@@ -1001,36 +1088,48 @@ function _oop_x_merge_group(kernels, plans, js::Vector{Int})
     end
 
     for si in 1:nsubs
-        msp_, mrc_, mav_, msc_ = merge_trees(i -> kernels[js[i]].subs[si],
-                                             i -> plans[js[i]].sub_plans[si])
+        msp_, mrc_, mav_, msc_ = merge_trees(
+            i -> kernels[js[i]].subs[si],
+            i -> plans[js[i]].sub_plans[si]
+        )
         repsub = rep.subs[si]
-        merged_subs[si] = _AccKernel(repsub.cells, msp_, mav_, repsub.bound,
-                                     repsub.zerobar,
-                                     _AccCSE(mrc_, msc_, _Node[], _AccScratch(0)),
-                                     _AccKernel[])
+        merged_subs[si] = _AccKernel(
+            repsub.cells, msp_, mav_, repsub.bound,
+            repsub.zerobar,
+            _AccCSE(mrc_, msc_, _Node[], _AccScratch(0)),
+            _AccKernel[]
+        )
     end
     msp_, mrc_, mav_, msc_ = merge_trees(i -> kernels[js[i]], i -> plans[js[i]])
     outs = reduce(vcat, (plans[j].out_slots for j in js))
-    return _AccKernel(_outs_cells(outs), msp_, mav_, rep.bound, rep.zerobar,
-                      _AccCSE(mrc_, msc_, _Node[], _AccScratch(0)), merged_subs)
+    return _AccKernel(
+        _outs_cells(outs), msp_, mav_, rep.bound, rep.zerobar,
+        _AccCSE(mrc_, msc_, _Node[], _AccScratch(0)), merged_subs
+    )
 end
 
 # Round-2 driver: mirrors `_merge_oop_acc_kernels` (same preconditions, same
 # per-class fallback posture, same caller-named `tally` counter) with the
 # expansion-normalized hash signature.
-function _merge_oop_x_kernels(kernels::AbstractVector{_AccKernel},
-                              plans::AbstractVector{_OopAccPlan},
-                              tally::Symbol=:classmerge_round2_merge)
-    nodiag = (; n_in = length(kernels), n_out = length(kernels),
-              n_classes = 0, n_blocked = length(kernels), n_failed = 0)
+function _merge_oop_x_kernels(
+        kernels::AbstractVector{_AccKernel},
+        plans::AbstractVector{_OopAccPlan},
+        tally::Symbol = :classmerge_round2_merge
+    )
+    nodiag = (;
+        n_in = length(kernels), n_out = length(kernels),
+        n_classes = 0, n_blocked = length(kernels), n_failed = 0,
+    )
     length(kernels) <= 1 && return (kernels, plans, nodiag)
     _plans_outs_unique(kernels, plans) || return (kernels, plans, nodiag)
 
-    groups = Dict{UInt,Vector{Int}}()
+    groups = Dict{UInt, Vector{Int}}()
     passthrough = Int[]
     for j in eachindex(kernels)
-        s, _why = _oop_x_kernel_sig(kernels[j], _plan_vecable(plans, j),
-                                    _plan_reduce(plans, j))
+        s, _why = _oop_x_kernel_sig(
+            kernels[j], _plan_vecable(plans, j),
+            _plan_reduce(plans, j)
+        )
         s === nothing ? push!(passthrough, j) : push!(get!(groups, s, Int[]), j)
     end
 
@@ -1065,9 +1164,11 @@ function _merge_oop_x_kernels(kernels::AbstractVector{_AccKernel},
     for j in passthrough
         push!(out_kernels, kernels[j]); _plans_push!(out_plans, plans, j)
     end
-    diag = (; n_in = length(kernels), n_out = length(out_kernels),
-            n_classes = length(groups), n_blocked = length(passthrough),
-            n_failed)
+    diag = (;
+        n_in = length(kernels), n_out = length(out_kernels),
+        n_classes = length(groups), n_blocked = length(passthrough),
+        n_failed,
+    )
     return (out_kernels, out_plans, diag)
 end
 
@@ -1099,8 +1200,10 @@ _affine_keep_max() =
     something(tryparse(Int, get(ENV, "ESS_AFFINE_KEEP_MAX_KERNELS", "")), 256)
 
 _affine_keep_kind(k) =
-    k in (_AK_STATE_AFFINE, _AK_CONST_AFFINE, _AK_CONST_BOX, _AK_STATE_FIXED,
-          _AK_LOOP_IDX, _AK_SCALAR, _AK_ARR_FIXED, _AK_FORCING_BOX)
+    k in (
+    _AK_STATE_AFFINE, _AK_CONST_AFFINE, _AK_CONST_BOX, _AK_STATE_FIXED,
+    _AK_LOOP_IDX, _AK_SCALAR, _AK_ARR_FIXED, _AK_FORCING_BOX,
+)
 
 # The number of axes along which `K`'s box is more than one cell thick, or 0
 # when `K` is not an affine box kernel the emitter compiles as its own nest.
@@ -1108,13 +1211,13 @@ _affine_keep_kind(k) =
 # count as the parent's.
 _affine_keep_reads(K::_AccKernel) =
     all(a -> _affine_keep_kind(a.kind), K.acc) && all(_affine_keep_reads, K.subs)
-function _affine_keep_has_fn(n::_Node, seen::IdDict{_Node,Nothing})
+function _affine_keep_has_fn(n::_Node, seen::IdDict{_Node, Nothing})
     haskey(seen, n) && return false
     seen[n] = nothing
     (n.kind === _NK_OP && n.op === :fn) && return true
     return any(c -> _affine_keep_has_fn(c, seen), n.children)
 end
-function _affine_keep_has_fn(K::_AccKernel, seen=IdDict{_Node,Nothing}())
+function _affine_keep_has_fn(K::_AccKernel, seen = IdDict{_Node, Nothing}())
     _affine_keep_has_fn(K.spine, seen) && return true
     any(r -> _affine_keep_has_fn(r, seen), K.cse.recipes) && return true
     any(r -> _affine_keep_has_fn(r, seen), K.cse.inv_recipes) && return true
@@ -1122,8 +1225,10 @@ function _affine_keep_has_fn(K::_AccKernel, seen=IdDict{_Node,Nothing}())
 end
 function _affine_box_rank(K::_AccKernel)
     cs = K.cells
-    (_is_outs(cs) || length(cs.strides) < 2 || !_affine_keep_reads(K) ||
-     _affine_keep_has_fn(K)) && return 0
+    (
+        _is_outs(cs) || length(cs.strides) < 2 || !_affine_keep_reads(K) ||
+            _affine_keep_has_fn(K)
+    ) && return 0
     return count(d -> !_cellset_slab(cs, d), eachindex(cs.strides))
 end
 
@@ -1170,23 +1275,31 @@ DECIDED the classes (the direct stage when it ran — so `n_in` is always the
 pre-merge kernel count), `n_out` the final list, `n_failed` the sum over
 every stage.
 """
-function _merge_acc_kernel_classes(kernels::AbstractVector{_AccKernel};
-                                   keep_affine::Bool=false)
+function _merge_acc_kernel_classes(
+        kernels::AbstractVector{_AccKernel};
+        keep_affine::Bool = false
+    )
     (_oop_merge_disabled() || length(kernels) <= 1) && return (kernels, nothing)
     # A tile that shares its code keeps every box kernel: it may own none of a
     # box's cells, and a class of such boxes would have no cell
     # to list, which no merged kernel represents.
     kept = _range_shared_code(_range_spec_now()) ?
-           [j for j in eachindex(kernels)
-            if !_is_outs(kernels[j].cells) && !isempty(kernels[j].cells.strides)] :
-           keep_affine ? _affine_boxes_to_keep(kernels) : Int[]
+        [
+            j for j in eachindex(kernels)
+            if !_is_outs(kernels[j].cells) && !isempty(kernels[j].cells.strides)
+        ] :
+        keep_affine ? _affine_boxes_to_keep(kernels) : Int[]
     if !isempty(kept)
         rest = _AccKernel[kernels[j] for j in eachindex(kernels) if !insorted(j, kept)]
         merged, diag = _merge_acc_kernel_classes(rest)
         out = vcat(_AccKernel[kernels[j] for j in kept], merged)
         diag === nothing && return (out, nothing)
-        return (out, (; diag..., n_in = length(kernels), n_out = length(out),
-                      n_blocked = diag.n_blocked + length(kept)))
+        return (
+            out, (;
+                diag..., n_in = length(kernels), n_out = length(out),
+                n_blocked = diag.n_blocked + length(kept),
+            ),
+        )
     end
     plans = _LazyOopPlans(kernels)
 
@@ -1194,11 +1307,15 @@ function _merge_acc_kernel_classes(kernels::AbstractVector{_AccKernel};
     ddiag = nothing
     dxdiag = nothing
     if _cross_eq_class_emit_enabled()
-        kernels, plans, ddiag = _merge_oop_acc_kernels(kernels, plans,
-            :direct_classmerge_round1_merge)
+        kernels, plans, ddiag = _merge_oop_acc_kernels(
+            kernels, plans,
+            :direct_classmerge_round1_merge
+        )
         if !_oop_merge_expand_disabled() && length(kernels) > 1
-            kernels, plans, dxdiag = _merge_oop_x_kernels(kernels, plans,
-                :direct_classmerge_round2_merge)
+            kernels, plans, dxdiag = _merge_oop_x_kernels(
+                kernels, plans,
+                :direct_classmerge_round2_merge
+            )
         end
     end
 
@@ -1215,16 +1332,20 @@ function _merge_acc_kernel_classes(kernels::AbstractVector{_AccKernel};
         merged, mplans, rxdiag = _merge_oop_x_kernels(merged, mplans)
     end
 
-    base  = ddiag === nothing ? rdiag : ddiag
+    base = ddiag === nothing ? rdiag : ddiag
     basex = ddiag === nothing ? rxdiag : dxdiag
     n_failed = rdiag.n_failed + (rxdiag === nothing ? 0 : rxdiag.n_failed) +
-               (ddiag === nothing ? 0 : ddiag.n_failed) +
-               (dxdiag === nothing ? 0 : dxdiag.n_failed)
-    diag = (; n_in = base.n_in, n_out = length(merged),
-            base.n_classes, base.n_blocked, n_failed)
+        (ddiag === nothing ? 0 : ddiag.n_failed) +
+        (dxdiag === nothing ? 0 : dxdiag.n_failed)
+    diag = (;
+        n_in = base.n_in, n_out = length(merged),
+        base.n_classes, base.n_blocked, n_failed,
+    )
     if basex !== nothing
-        diag = (; diag..., n_x_in = basex.n_in, n_x_out = basex.n_out,
-                n_x_classes = basex.n_classes, n_x_blocked = basex.n_blocked)
+        diag = (;
+            diag..., n_x_in = basex.n_in, n_x_out = basex.n_out,
+            n_x_classes = basex.n_classes, n_x_blocked = basex.n_blocked,
+        )
     end
     return (merged, diag)
 end

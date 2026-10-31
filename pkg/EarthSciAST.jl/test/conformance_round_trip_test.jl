@@ -22,9 +22,9 @@ using EarthSciAST
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
 
-const _TESTS_DIR     = joinpath(TESTUTILS_REPO_ROOT, "tests")
+const _TESTS_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests")
 const _MANIFEST_PATH = joinpath(_TESTS_DIR, "conformance", "round_trip", "manifest.json")
-const _BINDING       = "julia"
+const _BINDING = "julia"
 
 # Applied to BOTH sides, so no relaxation can hide a drop. README §normalizations.
 _is_empty_container(v) = (v isa AbstractVector || v isa AbstractDict) && isempty(v)
@@ -35,7 +35,7 @@ _relaxed_key(ks, parent, y) =
 
 function _normalize(v, parent::String = "")
     if v isa AbstractDict
-        out = OrderedDict{String,Any}()
+        out = OrderedDict{String, Any}()
         for (k, x) in v
             ks = String(k)
             y = _normalize(x, ks)
@@ -77,7 +77,7 @@ end
 
 "`(wire_key, json_path)` for every mapping key in `orig` absent from `emitted`."
 function _dropped_keys(orig, emitted, path = "")
-    out = Tuple{String,String}[]
+    out = Tuple{String, String}[]
     if orig isa AbstractDict && emitted isa AbstractDict
         for (k, v) in orig
             ks = String(k)
@@ -105,7 +105,7 @@ end
     # Fixture id => the divergence entry naming THIS binding non-conformant. A
     # binding listed `conformant`, or listed in neither column, is held to full
     # equality — that is what makes the ledger a ratchet rather than a licence.
-    excused_by_divergence = Dict{String,String}()
+    excused_by_divergence = Dict{String, String}()
     for d in get(manifest, :known_divergences, [])
         _BINDING in String.(d.nonconformant) || continue
         for f in d.fixtures
@@ -125,12 +125,16 @@ end
             original = EarthSciAST.load_path(fixture_path)
             first_json = to_json_compact(original)
 
-            authored_v = _normalize(JSON3.read(read(fixture_path, String),
-                                               OrderedDict{String,Any}))
-            emitted_v = _normalize(JSON3.read(first_json, OrderedDict{String,Any}))
+            authored_v = _normalize(
+                JSON3.read(
+                    read(fixture_path, String),
+                    OrderedDict{String, Any}
+                )
+            )
+            emitted_v = _normalize(JSON3.read(first_json, OrderedDict{String, Any}))
 
             has_transform = haskey(fixture, :load_transforms) &&
-                            !isempty(fixture.load_transforms)
+                !isempty(fixture.load_transforms)
             divergence = get(excused_by_divergence, id, nothing)
             excused = has_transform || divergence !== nothing
 
@@ -139,33 +143,42 @@ end
             # 1. LOAD PRESERVATION (esm-spec §9.6.4 rule 5).
             if !excused
                 @test isempty(diff) ||
-                      error("$(id): save(load(F)) differs from F — either a field is " *
-                            "being dropped/invented, or a spec-REQUIRED load-time " *
-                            "transform needs a `load_transforms` entry citing its " *
-                            "clause. Do NOT add one to silence a drop.\n  " *
-                            join(diff, "\n  "))
+                    error(
+                    "$(id): save(load(F)) differs from F — either a field is " *
+                        "being dropped/invented, or a spec-REQUIRED load-time " *
+                        "transform needs a `load_transforms` entry citing its " *
+                        "clause. Do NOT add one to silence a drop.\n  " *
+                        join(diff, "\n  ")
+                )
             elseif isempty(diff)
                 # Improving, not failing: README adapter contract item 8.
                 push!(stale, id)
             end
 
             # 2. FIELD LOSS — runs on EVERY fixture, excused or not.
-            lost = [where for (key, where) in _dropped_keys(authored_v, emitted_v)
-                    if key in preserved]
+            lost = [
+                where for (key, where) in _dropped_keys(authored_v, emitted_v)
+                    if key in preserved
+            ]
             @test isempty(lost) ||
-                  error("$(id): dropped preserved field(s) at $(lost). A load-time " *
-                        "transform rewrites a CONSTRUCT; it does not licence dropping " *
-                        "the document around it.")
+                error(
+                "$(id): dropped preserved field(s) at $(lost). A load-time " *
+                    "transform rewrites a CONSTRUCT; it does not licence dropping " *
+                    "the document around it."
+            )
 
             # 3. IDEMPOTENCE (esm-spec §9.6.4 rule 5) — still required, no longer alone.
-            second_json = to_json_compact(EarthSciAST.load_document(
-                JSON3.read(first_json, OrderedDict{String,Any})))
+            second_json = to_json_compact(
+                EarthSciAST.load_document(
+                    JSON3.read(first_json, OrderedDict{String, Any})
+                )
+            )
             @test JSON3.read(first_json) == JSON3.read(second_json)
         end
     end
 
     if !isempty(stale)
         @info "round-trip: excused fixtures that now round-trip cleanly in $_BINDING " *
-              "(ledger entry may be stale — trim by hand; this is NOT a failure)" stale
+            "(ledger entry may be stale — trim by hand; this is NOT a failure)" stale
     end
 end

@@ -41,29 +41,37 @@ const ESM = EarthSciAST
 # rate = g·h;  flux = rate + sin(rate)           — scalar observed chain
 # D(x)  = −flux·x                                — scalar rhs entry
 function _gi_model(N)
-    vars = Dict{String,ESM.ModelVariable}(
+    vars = Dict{String, ESM.ModelVariable}(
         "u" => ESM.ModelVariable(ESM.UnknownVariable),
         "y" => ESM.ModelVariable(ESM.UnknownVariable),
-        "x" => ESM.ModelVariable(ESM.UnknownVariable; default=1.0),
-        "g" => ESM.ModelVariable(ESM.ParameterVariable; default=3.0),
-        "h" => ESM.ModelVariable(ESM.ParameterVariable; default=7.0),
+        "x" => ESM.ModelVariable(ESM.UnknownVariable; default = 1.0),
+        "g" => ESM.ModelVariable(ESM.ParameterVariable; default = 3.0),
+        "h" => ESM.ModelVariable(ESM.ParameterVariable; default = 7.0),
         # esm 1.0.0 §6.3: `rate` / `flux` are `unknown`s DEFINED by the
         # bare-variable-LHS equations below; there is no `observed` type.
         "rate" => ESM.ModelVariable(ESM.UnknownVariable),
-        "flux" => ESM.ModelVariable(ESM.UnknownVariable))
-    lap = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
-                   _op("*", _n(-2.0), _idx("u", _v("i"))),
-                   _idx("u", _op("+", _v("i"), _i(1))))
+        "flux" => ESM.ModelVariable(ESM.UnknownVariable)
+    )
+    lap = _op(
+        "+", _idx("u", _op("-", _v("i"), _i(1))),
+        _op("*", _n(-2.0), _idx("u", _v("i"))),
+        _idx("u", _op("+", _v("i"), _i(1)))
+    )
     stencil = _op("*", _op("/", _v("g"), _v("h")), lap)
-    colsum = ESM.OpExpr("faq", ESM.ASTExpr[];
-        output_idx=Any["i"], expr_body=_op("*", _idx("u", _v("i")), _v("k")),
-        ranges=Dict("i" => [1, N], "k" => [1, 3]), reduce="+")
-    ESM.Model(vars, [
-        ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N), _ao1(stencil, "i", 1, N)),
-        ESM.Equation(_ao1(_Didx("y", _v("i")), "i", 1, N), colsum),
-        ESM.Equation(_v("rate"), _op("*", _v("g"), _v("h"))),
-        ESM.Equation(_v("flux"), _op("+", _v("rate"), _op("sin", _v("rate")))),
-        ESM.Equation(_D("x"), _op("*", _op("neg", _v("flux")), _v("x")))])
+    colsum = ESM.OpExpr(
+        "faq", ESM.ASTExpr[];
+        output_idx = Any["i"], expr_body = _op("*", _idx("u", _v("i")), _v("k")),
+        ranges = Dict("i" => [1, N], "k" => [1, 3]), reduce = "+"
+    )
+    return ESM.Model(
+        vars, [
+            ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N), _ao1(stencil, "i", 1, N)),
+            ESM.Equation(_ao1(_Didx("y", _v("i")), "i", 1, N), colsum),
+            ESM.Equation(_v("rate"), _op("*", _v("g"), _v("h"))),
+            ESM.Equation(_v("flux"), _op("+", _v("rate"), _op("sin", _v("rate")))),
+            ESM.Equation(_D("x"), _op("*", _op("neg", _v("flux")), _v("x"))),
+        ]
+    )
 end
 
 # Build with the primary emission's node budget at zero — a retained tuning
@@ -74,26 +82,30 @@ end
 # the affine tier off too, and then there are no kernels at all. Tally
 # reset/copy brackets the build, the scan_prefix idiom.
 function _gi_build(N)
-    ics = Dict{String,Float64}("x" => 1.0)
+    ics = Dict{String, Float64}("x" => 1.0)
     for k in 1:N
         ics["u[$k]"] = sin(0.3k) + 0.1k
         ics["y[$k]"] = 0.0
     end
-    withenv("ESS_CODEGEN_NODE_BUDGET" => "0") do
+    return withenv("ESS_CODEGEN_NODE_BUDGET" => "0") do
         ESM._reset_cascade_tally!()
         # Non-strict: at a zero budget the scalar equation is walked too, which
         # strict native refuses.
-        f, u0, p, _t, vm, diag = ESM._build_evaluator_impl(_gi_model(N);
-            initial_conditions=ics,
-            compiler=ESM._plan_with(ESM._compiler_plan(:native); strict = false))
-        (f=f, u0=u0, p=p, vm=vm, diag=diag, tally=copy(ESM._CASCADE_TALLY),
-         kernels=getfield(getfield(f, :kernel_section), :kernels),
-         n_emitted=getfield(getfield(f, :kernel_section), :n_emitted))
+        f, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+            _gi_model(N);
+            initial_conditions = ics,
+            compiler = ESM._plan_with(ESM._compiler_plan(:native); strict = false)
+        )
+        (
+            f = f, u0 = u0, p = p, vm = vm, diag = diag, tally = copy(ESM._CASCADE_TALLY),
+            kernels = getfield(getfield(f, :kernel_section), :kernels),
+            n_emitted = getfield(getfield(f, :kernel_section), :n_emitted),
+        )
     end
 end
 
 # ---- Structural signature of one kernel: everything that must NOT scale ----
-_gi_nodes(nd::ESM._Node) = 1 + sum(_gi_nodes(c) for c in nd.children; init=0)
+_gi_nodes(nd::ESM._Node) = 1 + sum(_gi_nodes(c) for c in nd.children; init = 0)
 function _gi_shape!(out, nd::ESM._Node)
     push!(out, (nd.kind, nd.op))
     for c in nd.children
@@ -105,14 +117,16 @@ end
 # construction (access_kernel_foundation_test's `-1 + N1`); its KIND and the
 # table WIDTH (descriptor count) are the structural facts.
 function _gi_sig(K::ESM._AccKernel)
-    (; shape = _gi_shape!(Tuple{UInt8,Symbol}[], K.spine),
-       n_spine = _gi_nodes(K.spine),
-       n_acc = length(K.acc),
-       acc_kinds = UInt8[d.kind for d in K.acc],
-       cell_recipe_nodes = Int[_gi_nodes(r) for r in K.cse.recipes],
-       inv_recipe_nodes = Int[_gi_nodes(r) for r in K.cse.inv_recipes],
-       n_subs = length(K.subs),
-       bound = nameof(typeof(K.bound)))
+    return (;
+        shape = _gi_shape!(Tuple{UInt8, Symbol}[], K.spine),
+        n_spine = _gi_nodes(K.spine),
+        n_acc = length(K.acc),
+        acc_kinds = UInt8[d.kind for d in K.acc],
+        cell_recipe_nodes = Int[_gi_nodes(r) for r in K.cse.recipes],
+        inv_recipe_nodes = Int[_gi_nodes(r) for r in K.cse.inv_recipes],
+        n_subs = length(K.subs),
+        bound = nameof(typeof(K.bound)),
+    )
 end
 # Sorted-by-repr so the comparison pins the kernel SET, not an incidental
 # build order (the order IS deterministic today; the pin should not depend
@@ -122,15 +136,23 @@ _gi_sigs(kernels) = sort!([repr(_gi_sig(K)) for K in kernels])
 # ---- Per-lane data: the ONLY thing allowed to grow (and only linearly) ----
 _gi_cells(K::ESM._AccKernel) = ESM._is_outs(K.cells) ?
     length(K.cells.outs) : prod(length.(K.cells.ranges))
-_gi_data(kernels) = sum(_gi_cells(K) + sum(length(d.arr) + length(d.conn)
-                                           for d in K.acc; init=0)
-                        for K in kernels; init=0)
+_gi_data(kernels) = sum(
+    _gi_cells(K) + sum(
+        length(d.arr) + length(d.conn)
+            for d in K.acc; init = 0
+    )
+        for K in kernels; init = 0
+)
 
 # Diag minus the buffer-cell count — the one field documented as O(cells)
 # (`n_mat_array_cells = n_total - n_states`); every other counter is a count
 # of STRUCTURES (kernels, slots, entries, folds), grid-free by design.
-_gi_invariant(d) = (; [k => getfield(d, k) for k in keys(d)
-                       if k !== :n_mat_array_cells]...)
+_gi_invariant(d) = (;
+    [
+        k => getfield(d, k) for k in keys(d)
+            if k !== :n_mat_array_cells
+    ]...,
+)
 
 @testset "compiled IR size is independent of the grid (build-level)" begin
     N1, N2 = 8, 24
@@ -184,13 +206,15 @@ end
 # right-hand side is all generated code.
 _gi_rgf_types(root) = begin
     RGF = ESM.RuntimeGeneratedFunctions
-    seen = IdDict{Any,Nothing}(); types = Set{Any}()
+    seen = IdDict{Any, Nothing}(); types = Set{Any}()
     stack = Any[root]
     while !isempty(stack)
         x = pop!(stack)
         T = typeof(x)
-        (isbitstype(T) || x isa AbstractString || x isa Symbol || x isa Module ||
-         x isa DataType) && continue
+        (
+            isbitstype(T) || x isa AbstractString || x isa Symbol || x isa Module ||
+                x isa DataType
+        ) && continue
         if ismutable(x)
             haskey(seen, x) && continue
             seen[x] = nothing
@@ -201,11 +225,15 @@ _gi_rgf_types(root) = begin
         end
         if x isa Array
             eltype(x) <: Number && continue
-            for i in eachindex(x); isassigned(x, i) && push!(stack, x[i]); end
+            for i in eachindex(x)
+                isassigned(x, i) && push!(stack, x[i])
+            end
         elseif x isa AbstractDict
             continue
         else
-            for i in 1:nfields(x); isdefined(x, i) && push!(stack, getfield(x, i)); end
+            for i in 1:nfields(x)
+                isdefined(x, i) && push!(stack, getfield(x, i))
+            end
         end
     end
     types
@@ -213,13 +241,15 @@ end
 
 @testset "generated functions are shared across grid sizes" begin
     function build(N)
-        ics = Dict{String,Float64}("x" => 1.0)
+        ics = Dict{String, Float64}("x" => 1.0)
         for k in 1:N
             ics["u[$k]"] = sin(0.3k) + 0.1k
             ics["y[$k]"] = 0.0
         end
-        f, u0, p, _t, vm, _ = ESM._build_evaluator_impl(_gi_model(N);
-            initial_conditions=ics)
+        f, u0, p, _t, vm, _ = ESM._build_evaluator_impl(
+            _gi_model(N);
+            initial_conditions = ics
+        )
         f
     end
     A = _gi_rgf_types(build(8))
@@ -228,10 +258,18 @@ end
     @test A == B
 
     fixtures = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "scaling", "fixtures")
-    @testset "$fam" for fam in ("stencil_1d", "stencil_2d", "stencil_3d", "stencil_4d",
-                                "transport_3d", "prefix_scan", "source_receptor")
-        types = [_gi_rgf_types(ESM.esm_problem(joinpath(fixtures, fam, "$(fam)_N$(n).esm"),
-                                               (0.0, 1.0)).f!) for n in (100, 1000)]
+    @testset "$fam" for fam in (
+            "stencil_1d", "stencil_2d", "stencil_3d", "stencil_4d",
+            "transport_3d", "prefix_scan", "source_receptor",
+        )
+        types = [
+            _gi_rgf_types(
+                ESM.esm_problem(
+                    joinpath(fixtures, fam, "$(fam)_N$(n).esm"),
+                    (0.0, 1.0)
+                ).f!
+            ) for n in (100, 1000)
+        ]
         @test !isempty(types[1])
         @test types[1] == types[2]
     end

@@ -51,18 +51,22 @@ struct FlattenMetadata
     coupling_rules_applied::Vector{String}
     dimension_promotions_applied::Vector{NamedTuple}
     opaque_coupling_refs::Vector{String}
-    merged_variable_renames::OrderedDict{String,String}
+    merged_variable_renames::OrderedDict{String, String}
 end
 
-FlattenMetadata(source_systems::Vector{String}=String[],
-                coupling_rules_applied::Vector{String}=String[];
-                dimension_promotions_applied::Vector{<:NamedTuple}=NamedTuple[],
-                opaque_coupling_refs::Vector{String}=String[],
-                merged_variable_renames::AbstractDict=OrderedDict{String,String}()) =
-    FlattenMetadata(source_systems, coupling_rules_applied,
-                    NamedTuple[dp for dp in dimension_promotions_applied],
-                    opaque_coupling_refs,
-                    OrderedDict{String,String}(merged_variable_renames))
+FlattenMetadata(
+    source_systems::Vector{String} = String[],
+    coupling_rules_applied::Vector{String} = String[];
+    dimension_promotions_applied::Vector{<:NamedTuple} = NamedTuple[],
+    opaque_coupling_refs::Vector{String} = String[],
+    merged_variable_renames::AbstractDict = OrderedDict{String, String}()
+) =
+    FlattenMetadata(
+    source_systems, coupling_rules_applied,
+    NamedTuple[dp for dp in dimension_promotions_applied],
+    opaque_coupling_refs,
+    OrderedDict{String, String}(merged_variable_renames)
+)
 
 """
     LoaderField
@@ -98,11 +102,15 @@ struct LoaderField
     cadence::String
     unit_conversion::Union{Float64, ASTExpr, Nothing}
 
-    LoaderField(name::AbstractString, owner::AbstractString,
-                subkey::AbstractString, var::AbstractString,
-                cadence::AbstractString; unit_conversion=nothing) =
-        new(String(name), String(owner), String(subkey), String(var),
-            String(cadence), unit_conversion)
+    LoaderField(
+        name::AbstractString, owner::AbstractString,
+        subkey::AbstractString, var::AbstractString,
+        cadence::AbstractString; unit_conversion = nothing
+    ) =
+        new(
+        String(name), String(owner), String(subkey), String(var),
+        String(cadence), unit_conversion
+    )
 end
 
 """
@@ -248,21 +256,31 @@ struct FlattenedSystem
     # it has. Coercing here keeps such a call working WITHOUT widening the field
     # types, which is what would let hash order back into a positional parameter
     # vector.
-    function FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs, treg,
-                             alg, brw, disc, ics, lfs, lshapes, contribs)
-        length(contribs) == length(eqs) || throw(ArgumentError(
-            "equation_contributions has $(length(contribs)) entries for " *
-            "$(length(eqs)) equations; the two are parallel"))
-        any(isempty, contribs) && throw(ArgumentError(
-            "every flattened equation has at least one contribution"))
-        return new(Symbol[iv for iv in ivs], _flat_od(ModelVariable, sv), _flat_od(ModelVariable, p),
+    function FlattenedSystem(
+            ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs, treg,
+            alg, brw, disc, ics, lfs, lshapes, contribs
+        )
+        length(contribs) == length(eqs) || throw(
+            ArgumentError(
+                "equation_contributions has $(length(contribs)) entries for " *
+                    "$(length(eqs)) equations; the two are parallel"
+            )
+        )
+        any(isempty, contribs) && throw(
+            ArgumentError(
+                "every flattened equation has at least one contribution"
+            )
+        )
+        return new(
+            Symbol[iv for iv in ivs], _flat_od(ModelVariable, sv), _flat_od(ModelVariable, p),
             _flat_od(ModelVariable, obs), eqs, cev, dev, dom, meta,
             _flat_od(IndexSet, isets), _flat_od(FunctionTable, ftabs),
             _flat_od(Any, treg), _flat_od(ModelVariable, alg),
             _flat_od(ModelVariable, brw), _flat_od(ModelVariable, disc),
             Pair{String, ASTExpr}[Pair{String, ASTExpr}(String(k), v) for (k, v) in ics],
             LoaderField[lf for lf in lfs], _flat_od(Vector{Int}, lshapes),
-            Vector{Contribution}[Contribution[c for c in cs] for cs in contribs])
+            Vector{Contribution}[Contribution[c for c in cs] for cs in contribs]
+        )
     end
 end
 
@@ -284,25 +302,35 @@ _flat_od(::Type{V}, d::AbstractDict) where {V} =
 # copy-with-changes goes through the keyword copy-constructor below.
 _flat_empty_vars() = OrderedDict{String, ModelVariable}()
 FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta) =
-    FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta,
-                    OrderedDict{String, IndexSet}(),
-                    OrderedDict{String, FunctionTable}(),
-                    OrderedDict{String, Any}())
+    FlattenedSystem(
+    ivs, sv, p, obs, eqs, cev, dev, dom, meta,
+    OrderedDict{String, IndexSet}(),
+    OrderedDict{String, FunctionTable}(),
+    OrderedDict{String, Any}()
+)
 FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs) =
-    FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs,
-                    OrderedDict{String, Any}())
+    FlattenedSystem(
+    ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs,
+    OrderedDict{String, Any}()
+)
 FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs, treg) =
-    FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs, treg,
-                    _flat_empty_vars(), _flat_empty_vars(), _flat_empty_vars(),
-                    Pair{String, ASTExpr}[], LoaderField[],
-                    OrderedDict{String, Vector{Int}}())
+    FlattenedSystem(
+    ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs, treg,
+    _flat_empty_vars(), _flat_empty_vars(), _flat_empty_vars(),
+    Pair{String, ASTExpr}[], LoaderField[],
+    OrderedDict{String, Vector{Int}}()
+)
 # A caller that predates per-term provenance gets one unattributed contribution
 # per equation (empty `origins`, "author unknown").
-FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs, treg,
-                alg, brw, disc, ics, lfs, lshapes) =
-    FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs, treg,
-                    alg, brw, disc, ics, lfs, lshapes,
-                    _unattributed_contributions(eqs, lshapes))
+FlattenedSystem(
+    ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs, treg,
+    alg, brw, disc, ics, lfs, lshapes
+) =
+    FlattenedSystem(
+    ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs, treg,
+    alg, brw, disc, ics, lfs, lshapes,
+    _unattributed_contributions(eqs, lshapes)
+)
 
 """
     FlattenedSystem(flat::FlattenedSystem; kwargs...) -> FlattenedSystem
@@ -318,7 +346,8 @@ a newly added field is preserved by default instead of silently dropped by an
 body) with EMPTY origins, "author unknown" (esm-libraries-spec §4.7.5). A stale
 list must not survive a caller's edit. A pass that keeps provenance passes both.
 """
-function FlattenedSystem(flat::FlattenedSystem;
+function FlattenedSystem(
+        flat::FlattenedSystem;
         independent_variables = flat.independent_variables,
         state_variables = flat.state_variables,
         parameters = flat.parameters,
@@ -337,18 +366,21 @@ function FlattenedSystem(flat::FlattenedSystem;
         field_ics = flat.field_ics,
         loader_fields = flat.loader_fields,
         lifted_shapes = flat.lifted_shapes,
-        equation_contributions = nothing)
+        equation_contributions = nothing
+    )
     if equation_contributions === nothing
         equation_contributions = equations === flat.equations ?
             flat.equation_contributions :
             _unattributed_contributions(equations, lifted_shapes)
     end
-    return FlattenedSystem(independent_variables, state_variables, parameters,
-                    observed_variables, equations, continuous_events,
-                    discrete_events, domain, metadata, index_sets,
-                    function_tables, template_registry,
-                    algebraic_variables, brownian_parameters, discrete_parameters,
-                    field_ics, loader_fields, lifted_shapes, equation_contributions)
+    return FlattenedSystem(
+        independent_variables, state_variables, parameters,
+        observed_variables, equations, continuous_events,
+        discrete_events, domain, metadata, index_sets,
+        function_tables, template_registry,
+        algebraic_variables, brownian_parameters, discrete_parameters,
+        field_ics, loader_fields, lifted_shapes, equation_contributions
+    )
 end
 
 # ========================================
@@ -363,8 +395,10 @@ Return true when the flattened system has spatial independent variables
 `[:t]` only is a pure ODE; anything else is a PDE.
 """
 function _has_spatial_ivs(flat::FlattenedSystem)
-    return !(length(flat.independent_variables) == 1 &&
-             flat.independent_variables[1] == :t)
+    return !(
+        length(flat.independent_variables) == 1 &&
+            flat.independent_variables[1] == :t
+    )
 end
 
 """
@@ -425,8 +459,10 @@ a differential unknown that never moves; esm-spec §6.3.1 classifies by
 COMPLEMENT, so leaving the equation out is what makes it the ALGEBRAIC unknown it
 is. See the comment at the skip below.
 """
-function lower_reactions_to_equations(reactions::Vector{Reaction},
-                                      species::Vector{Species})::Vector{Equation}
+function lower_reactions_to_equations(
+        reactions::Vector{Reaction},
+        species::Vector{Species}
+    )::Vector{Equation}
     equations = Equation[]
     species_names = [sp.name for sp in species]
     species_idx = Dict{String, Int}(name => i for (i, name) in enumerate(species_names))
@@ -442,8 +478,8 @@ function lower_reactions_to_equations(reactions::Vector{Reaction},
         # Accumulating one signed running sum instead rounds differently for a
         # species listed more than once with fractional coefficients. Only the
         # species the reaction names are visited, in first-mention order.
-        produced = Dict{Int,Float64}()
-        consumed = Dict{Int,Float64}()
+        produced = Dict{Int, Float64}()
+        consumed = Dict{Int, Float64}()
         touched = Int[]
         for (side, entries) in ((consumed, raw_substrates(rxn)), (produced, raw_products(rxn)))
             entries === nothing && continue
@@ -454,11 +490,14 @@ function lower_reactions_to_equations(reactions::Vector{Reaction},
                 # that is never produced) with no diagnostic (esm-spec §7.2,
                 # `undefined_species`). The other bindings refuse it too.
                 i = get(species_idx, sp, 0)
-                i == 0 && throw(ParseError(
-                    "[$(ERROR_CODES.UNDEFINED_SPECIES)] reaction '$(rxn.id)' names species " *
-                    "'$sp', which the reaction system does not declare";
-                    code=ERROR_CODES.UNDEFINED_SPECIES,
-                    details=Dict{String,Any}("species" => sp, "reaction_id" => rxn.id)))
+                i == 0 && throw(
+                    ParseError(
+                        "[$(ERROR_CODES.UNDEFINED_SPECIES)] reaction '$(rxn.id)' names species " *
+                            "'$sp', which the reaction system does not declare";
+                        code = ERROR_CODES.UNDEFINED_SPECIES,
+                        details = Dict{String, Any}("species" => sp, "reaction_id" => rxn.id)
+                    )
+                )
                 haskey(produced, i) || haskey(consumed, i) || push!(touched, i)
                 side[i] = get(side, i, 0.0) + entry.stoichiometry
             end
@@ -499,7 +538,7 @@ function lower_reactions_to_equations(reactions::Vector{Reaction},
         # emitting the zero was a 4-1 outlier, and the divergence was recorded in
         # `flatten_conformance_test.jl`'s `_FC_DIVERGENCES` until this changed.
         isempty(terms[i]) && continue
-        lhs = OpExpr("D", ASTExpr[VarExpr(name)], wrt="t")
+        lhs = OpExpr("D", ASTExpr[VarExpr(name)], wrt = "t")
         rhs = length(terms[i]) == 1 ? terms[i][1] : OpExpr("+", terms[i])
         push!(equations, Equation(lhs, rhs))
     end
@@ -546,16 +585,18 @@ set there made `[t, y, x]` out of a document that writes `x` before `y`.
 """
 function spatial_dims_in_expr(expr::ASTExpr)::Vector{Symbol}
     dims = Symbol[]
-    _collect_spatial_dims!(dims, expr, IdDict{OpExpr,Nothing}())
+    _collect_spatial_dims!(dims, expr, IdDict{OpExpr, Nothing}())
     return dims
 end
 
 # `seen` visits each unique node once: a structurally-shared expression DAG
 # (template expansion) hangs the same subtree under exponentially many paths,
 # and this is a pure query of the node.
-function _collect_spatial_dims!(dims::Vector{Symbol}, expr::ASTExpr,
-                                seen::IdDict{OpExpr,Nothing})
-    if expr isa OpExpr
+function _collect_spatial_dims!(
+        dims::Vector{Symbol}, expr::ASTExpr,
+        seen::IdDict{OpExpr, Nothing}
+    )
+    return if expr isa OpExpr
         haskey(seen, expr) && return
         seen[expr] = nothing
         # A `dim` scalar field names a spatial axis regardless of the op
@@ -601,7 +642,7 @@ The name a structural `D` differentiates, when `args[1]` is a bare variable
 reference; `nothing` otherwise (including for a `D` of a compound expression,
 which names no variable and so cannot be looked up).
 """
-function _rhs_derivative_target(e::ASTExpr)::Union{String,Nothing}
+function _rhs_derivative_target(e::ASTExpr)::Union{String, Nothing}
     _is_structural_time_derivative(e) || return nothing
     a = e.args[1]
     return a isa VarExpr ? (a::VarExpr).name : nothing
@@ -655,12 +696,14 @@ in (esm-libraries-spec §4.7.5).
 Mirrors the Rust `flatten::resolve_rhs_time_derivatives` and the Python
 `_resolve_rhs_time_derivatives` exactly.
 """
-function _resolve_rhs_time_derivatives!(equations::Vector{Equation},
-                                        contribs::Vector{Vector{Contribution}},
-                                        time_invariant::Set{String},
-                                        lifted_shapes::AbstractDict)
-    tendency = Dict{String,ASTExpr}()
-    definition = Dict{String,ASTExpr}()
+function _resolve_rhs_time_derivatives!(
+        equations::Vector{Equation},
+        contribs::Vector{Vector{Contribution}},
+        time_invariant::Set{String},
+        lifted_shapes::AbstractDict
+    )
+    tendency = Dict{String, ASTExpr}()
+    definition = Dict{String, ASTExpr}()
     for eq in equations
         t = _rhs_derivative_target(eq.lhs)
         if t !== nothing
@@ -684,10 +727,14 @@ function _resolve_rhs_time_derivatives!(equations::Vector{Equation},
             own = (eq.lhs::VarExpr).name
         end
         active = own === nothing ? String[] : String[own]
-        resolve(e) = _substitute_time_derivatives(e, tendency, definition,
-                                                  time_invariant, active)
-        resolved, contribs[i] = _rewrite_contributions(resolve, eq, contribs[i],
-                                                       _is_lifted(eq, lifted_shapes))
+        resolve(e) = _substitute_time_derivatives(
+            e, tendency, definition,
+            time_invariant, active
+        )
+        resolved, contribs[i] = _rewrite_contributions(
+            resolve, eq, contribs[i],
+            _is_lifted(eq, lifted_shapes)
+        )
         resolved === eq || (equations[i] = Equation(eq.lhs, resolved.rhs))
     end
     return equations
@@ -714,17 +761,20 @@ cannot answer exactly as authored for the gate to report. `map_children` is
 identity-preserving, so an expression carrying no `D` is returned unchanged
 rather than rebuilt.
 """
-function _substitute_time_derivatives(e::ASTExpr, tendency::Dict{String,ASTExpr},
-                                      definition::Dict{String,ASTExpr},
-                                      time_invariant::Set{String},
-                                      active::Vector{String})::ASTExpr
+function _substitute_time_derivatives(
+        e::ASTExpr, tendency::Dict{String, ASTExpr},
+        definition::Dict{String, ASTExpr},
+        time_invariant::Set{String},
+        active::Vector{String}
+    )::ASTExpr
     e isa OpExpr || return e
     if _is_structural_time_derivative(e)
         out = _deriv(e.args[1], tendency, definition, time_invariant, active)
         return out === nothing ? e : out
     end
     return map_children(
-        x -> _substitute_time_derivatives(x, tendency, definition, time_invariant, active), e)
+        x -> _substitute_time_derivatives(x, tendency, definition, time_invariant, active), e
+    )
 end
 
 """
@@ -732,9 +782,11 @@ end
 
 d/dt of `e`, or `nothing` when this format does not define it.
 """
-function _deriv(e::ASTExpr, tendency::Dict{String,ASTExpr},
-                definition::Dict{String,ASTExpr}, time_invariant::Set{String},
-                active::Vector{String})::Union{ASTExpr,Nothing}
+function _deriv(
+        e::ASTExpr, tendency::Dict{String, ASTExpr},
+        definition::Dict{String, ASTExpr}, time_invariant::Set{String},
+        active::Vector{String}
+    )::Union{ASTExpr, Nothing}
     if e isa VarExpr
         name = (e::VarExpr).name
         # A cycle: stop here and let the gate name it.
@@ -742,8 +794,10 @@ function _deriv(e::ASTExpr, tendency::Dict{String,ASTExpr},
         if haskey(tendency, name)
             push!(active, name)
             try
-                return _substitute_time_derivatives(tendency[name], tendency, definition,
-                                                    time_invariant, active)
+                return _substitute_time_derivatives(
+                    tendency[name], tendency, definition,
+                    time_invariant, active
+                )
             finally
                 pop!(active)
             end
@@ -827,10 +881,10 @@ end
 _zero_expr() = NumExpr(0.0)
 
 _is_zero_expr(e::ASTExpr) = (e isa NumExpr && (e::NumExpr).value == 0.0) ||
-                            (e isa IntExpr && (e::IntExpr).value == 0)
+    (e isa IntExpr && (e::IntExpr).value == 0)
 
 _is_one_expr(e::ASTExpr) = (e isa NumExpr && (e::NumExpr).value == 1.0) ||
-                           (e isa IntExpr && (e::IntExpr).value == 1)
+    (e isa IntExpr && (e::IntExpr).value == 1)
 
 function _sum_expr(terms::Vector{ASTExpr})::ASTExpr
     kept = ASTExpr[t for t in terms if !_is_zero_expr(t)]
@@ -908,10 +962,12 @@ promotes a variable in its place, and the §10.5 pointwise lift rewrites a scala
 state ODE into a `faq`. A per-component answer namespaced after the fact
 would describe the document, not the system produced from it.
 """
-function _classification_model(states::OrderedDict{String, ModelVariable},
-                               params::OrderedDict{String, ModelVariable},
-                               observeds::OrderedDict{String, ModelVariable},
-                               equations::Vector{Equation})::Model
+function _classification_model(
+        states::OrderedDict{String, ModelVariable},
+        params::OrderedDict{String, ModelVariable},
+        observeds::OrderedDict{String, ModelVariable},
+        equations::Vector{Equation}
+    )::Model
     variables = OrderedDict{String, ModelVariable}()
     for m in (states, observeds, params)
         for (name, var) in m
@@ -932,8 +988,10 @@ a vector. §4.7.5 step 4 requires DOCUMENT order of every map on the
 the already-document-ordered map being filtered. Sorting here instead would be
 observable: a parameter vector is positional.
 """
-function _in_document_order(names::AbstractSet{String},
-                            maps::OrderedDict{String, ModelVariable}...)
+function _in_document_order(
+        names::AbstractSet{String},
+        maps::OrderedDict{String, ModelVariable}...
+    )
     out = OrderedDict{String, ModelVariable}()
     for m in maps
         for (name, var) in m
@@ -960,15 +1018,19 @@ Runs LAST, after the pointwise lift and the independent-variable derivation, so
 every intermediate pass still sees the equation list it always did and only the
 FINAL, observable `equations` differs.
 """
-function _extract_field_ics!(equations::Vector{Equation},
-                             contribs::Vector{Vector{Contribution}})
+function _extract_field_ics!(
+        equations::Vector{Equation},
+        contribs::Vector{Vector{Contribution}}
+    )
     ics = Pair{String, ASTExpr}[]
     remaining = Equation[]
     remaining_contribs = Vector{Contribution}[]
     for (eq, cs) in zip(equations, contribs)
         lhs = eq.lhs
-        target = (lhs isa OpExpr && lhs.op == "ic" && length(lhs.args) == 1 &&
-                  lhs.args[1] isa VarExpr) ? (lhs.args[1]::VarExpr).name : nothing
+        target = (
+                lhs isa OpExpr && lhs.op == "ic" && length(lhs.args) == 1 &&
+                lhs.args[1] isa VarExpr
+            ) ? (lhs.args[1]::VarExpr).name : nothing
         if target === nothing
             push!(remaining, eq)
             push!(remaining_contribs, cs)
@@ -1000,8 +1062,10 @@ per record (`"discrete"`), one without is read once (`"const"`). A parameter
 naming a source the document does not declare is skipped — `data_source_undefined`
 is the validator's finding, not flatten's.
 """
-function _collect_loader_fields!(out::Vector{LoaderField}, model::Model,
-                                 prefix::String, data_sources)
+function _collect_loader_fields!(
+        out::Vector{LoaderField}, model::Model,
+        prefix::String, data_sources
+    )
     for (var_name, var) in model.variables
         var.type == ParameterVariable || continue
         var.update === nothing && continue
@@ -1009,10 +1073,14 @@ function _collect_loader_fields!(out::Vector{LoaderField}, model::Model,
             (rule.kind == "data" && rule.from !== nothing && rule.source !== nothing) || continue
             src = data_sources === nothing ? nothing : get(data_sources, rule.source, nothing)
             src === nothing && continue
-            push!(out, LoaderField("$(prefix).$(var_name)", prefix, rule.source,
-                                   rule.from.file_variable,
-                                   src.temporal === nothing ? "const" : "discrete";
-                                   unit_conversion=rule.from.unit_conversion))
+            push!(
+                out, LoaderField(
+                    "$(prefix).$(var_name)", prefix, rule.source,
+                    rule.from.file_variable,
+                    src.temporal === nothing ? "const" : "discrete";
+                    unit_conversion = rule.from.unit_conversion
+                )
+            )
         end
     end
     for (sub_name, sub) in model.subsystems
@@ -1035,8 +1103,10 @@ would integrate a stochastic system as a deterministic one.
 """
 function system_kind(flat::FlattenedSystem)::String
     isempty(flat.brownian_parameters) || return "sde"
-    view = _classification_model(flat.state_variables, flat.parameters,
-                                 flat.observed_variables, flat.equations)
+    view = _classification_model(
+        flat.state_variables, flat.parameters,
+        flat.observed_variables, flat.equations
+    )
     has_spatial_derivative(view) && return "pde"
     has_time_derivative(view) || return "nonlinear"
     return "ode"
@@ -1062,17 +1132,19 @@ rebuilt: nothing downstream of `flatten` consults them, and the result never
 escapes `flatten`.
 """
 _with_coupling(file::EsmFile, coupling::Vector{CouplingEntry})::EsmFile =
-    EsmFile(file.esm, file.metadata;
-            models=file.models,
-            reaction_systems=file.reaction_systems,
-            data_sources=file.data_sources,
-            coupling=coupling,
-            domain=file.domain,
-            enums=file.enums,
-            function_tables=file.function_tables,
-            index_sets=file.index_sets,
-            solver=file.solver,
-            document_base=file.document_base)
+    EsmFile(
+    file.esm, file.metadata;
+    models = file.models,
+    reaction_systems = file.reaction_systems,
+    data_sources = file.data_sources,
+    coupling = coupling,
+    domain = file.domain,
+    enums = file.enums,
+    function_tables = file.function_tables,
+    index_sets = file.index_sets,
+    solver = file.solver,
+    document_base = file.document_base
+)
 
 """
     flatten(file::EsmFile; base_path=".", load_ref=nothing) -> FlattenedSystem
@@ -1098,13 +1170,15 @@ before namespacing. Consumers that need the Option-A expanded image call
 out-of-line-expression-templates §7.7); the tree-walk build expands at its entry
 with site recording (the compile-once tier).
 """
-function flatten(file::EsmFile; base_path::AbstractString=".",
-                 load_ref=nothing)::FlattenedSystem
+function flatten(
+        file::EsmFile; base_path::AbstractString = ".",
+        load_ref = nothing
+    )::FlattenedSystem
     # Step 0a: Expand `coupling_import` entries (esm-spec §10.10.3) into concrete
     # edges BEFORE any coupling-consuming step, so imported edges participate in
     # conflict detection, unit checks, the coupling-rule loop, and the pointwise
     # lift exactly as inline edges would. A file with no imports is unchanged.
-    expanded = expand_coupling_imports(file; base_path=base_path, load_ref=load_ref)
+    expanded = expand_coupling_imports(file; base_path = base_path, load_ref = load_ref)
     if expanded !== file.coupling
         file = _with_coupling(file, expanded)
     end
@@ -1116,12 +1190,15 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
     # library/system distinction observable instead of returning an empty
     # `FlattenedSystem` a caller then has to notice is empty.
     _n_components = (file.models === nothing ? 0 : length(file.models)) +
-                    (file.reaction_systems === nothing ? 0 : length(file.reaction_systems))
-    _n_components == 0 && throw(ArgumentError(
-        "nothing to flatten: '$(file.metadata.name)' declares no `models` and no " *
-        "`reaction_systems`. A file carrying only `expression_templates` is a " *
-        "template LIBRARY (esm-spec §9.7); import it from a document that " *
-        "declares components rather than flattening it directly."))
+        (file.reaction_systems === nothing ? 0 : length(file.reaction_systems))
+    _n_components == 0 && throw(
+        ArgumentError(
+            "nothing to flatten: '$(file.metadata.name)' declares no `models` and no " *
+                "`reaction_systems`. A file carrying only `expression_templates` is a " *
+                "template LIBRARY (esm-spec §9.7); import it from a document that " *
+                "declares components rather than flattening it directly."
+        )
+    )
 
     # Step 0: Pre-flight conflict detection. Spec §4.7.5 item E.
     conflicting = _find_conflicting_derivatives(file)
@@ -1178,10 +1255,12 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
     if file.models !== nothing
         for (name, model) in file.models
             push!(source_systems, name)
-            _collect_model!(states, params, observeds, equations, contribs,
-                            continuous_events, discrete_events,
-                            model, name;
-                            tpl_rename=get(template_rename, name, nothing))
+            _collect_model!(
+                states, params, observeds, equations, contribs,
+                continuous_events, discrete_events,
+                model, name;
+                tpl_rename = get(template_rename, name, nothing)
+            )
             _attribute_equations!(eq_owners, equations, name)
             _collect_loader_fields!(loader_fields, model, name, file.data_sources)
         end
@@ -1196,9 +1275,11 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
             push!(source_systems, name)
             rs_templates = file.component_templates === nothing ? nothing :
                 get(file.component_templates, "reaction_systems.$(name)", nothing)
-            _collect_reaction_system!(states, params, equations, contribs,
-                                      continuous_events, discrete_events,
-                                      rsys, name; templates=rs_templates)
+            _collect_reaction_system!(
+                states, params, equations, contribs,
+                continuous_events, discrete_events,
+                rsys, name; templates = rs_templates
+            )
             _attribute_equations!(eq_owners, equations, name)
         end
     end
@@ -1272,9 +1353,13 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
         # Equations a previous coupling rule introduced belong to no component;
         # `_attribute_equations!` marks them so before the merge reads the vector.
         _attribute_equations!(eq_owners, equations, "")
-        _compose_renames!(merged_renames,
-                          _apply_operator_compose!(equations, contribs, entry, states, observeds,
-                                                   eq_owners; renames=merged_renames))
+        _compose_renames!(
+            merged_renames,
+            _apply_operator_compose!(
+                equations, contribs, entry, states, observeds,
+                eq_owners; renames = merged_renames
+            )
+        )
     end
 
     # §4.7.1 step 4's retarget is document-wide, and "document" is more than the
@@ -1302,16 +1387,20 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
     _attribute_equations!(eq_owners, equations, "")
     for (k, entry) in enumerate(file.coupling)
         entry isa CouplingCouple || continue
-        _apply_couple!(equations, contribs, _retarget_pending_entry(entry, merged_renames),
-                       opaque_refs; index=k - 1, owners=eq_owners, states=states,
-                       components=source_systems)
+        _apply_couple!(
+            equations, contribs, _retarget_pending_entry(entry, merged_renames),
+            opaque_refs; index = k - 1, owners = eq_owners, states = states,
+            components = source_systems
+        )
     end
 
     for (k, entry) in enumerate(file.coupling)
         entry isa CouplingVariableMap || continue
         resolved = _retarget_pending_entry(entry, merged_renames)
-        _apply_variable_map!(equations, contribs, params, resolved;
-                             observeds=observeds, index=k - 1)
+        _apply_variable_map!(
+            equations, contribs, params, resolved;
+            observeds = observeds, index = k - 1
+        )
         resolved.transform isa ASTExpr || push!(map_rewritten_names, resolved.to)
     end
 
@@ -1343,11 +1432,15 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
     # reaction/model state ODE with the spatial operator's advection; array-ify
     # those merged equations (promote the species to the grid shape and wrap in an
     # `faq` over the grid) so the lifted reaction network runs pointwise.
-    _apply_pointwise_lift!(equations, contribs, states, params, observeds, index_sets,
-                           file.coupling;
-                           template_registry=(isempty(template_registry) ? nothing :
-                                              template_registry),
-                           lifted_shapes=lifted_shapes)
+    _apply_pointwise_lift!(
+        equations, contribs, states, params, observeds, index_sets,
+        file.coupling;
+        template_registry = (
+            isempty(template_registry) ? nothing :
+                template_registry
+        ),
+        lifted_shapes = lifted_shapes
+    )
 
     # Step 3c (esm-libraries-spec §4.7.5 step 3a): Resolve a right-hand-side
     # STRUCTURAL time derivative of an ODE unknown to the tendency this system
@@ -1355,8 +1448,10 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
     # equations the lift produced, and after Step 1+2 so a reaction network's
     # mass-action tendency (§7.4) is available to a sibling model's scoped
     # `D(Chem.O3, t)`.
-    _resolve_rhs_time_derivatives!(equations, contribs, Set{String}(keys(params)),
-                                   lifted_shapes)
+    _resolve_rhs_time_derivatives!(
+        equations, contribs, Set{String}(keys(params)),
+        lifted_shapes
+    )
 
     # Step 4: Compute independent variables.
     ivs = _compute_independent_variables(equations)
@@ -1373,9 +1468,9 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
     metadata = FlattenMetadata(
         collect(source_systems),
         coupling_rules_applied;
-        dimension_promotions_applied=NamedTuple[],
-        opaque_coupling_refs=opaque_refs,
-        merged_variable_renames=merged_renames,
+        dimension_promotions_applied = NamedTuple[],
+        opaque_coupling_refs = opaque_refs,
+        merged_variable_renames = merged_renames,
     )
 
     # File-scoped function tables (esm-spec §9.5) are keyed by globally-unique id
@@ -1390,8 +1485,10 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
     # way to ask these questions"), run over the FLATTENED form and re-ordered
     # into document order. No local `update.kind == "wiener"` test lives here.
     view = _classification_model(states, params, observeds, equations)
-    algebraic_variables = _in_document_order(Set(algebraic_unknowns(view)),
-                                             states, observeds)
+    algebraic_variables = _in_document_order(
+        Set(algebraic_unknowns(view)),
+        states, observeds
+    )
     brownian = _in_document_order(Set(brownian_parameters(view)), params)
     discrete_params = _in_document_order(Set(discrete_parameters(view)), params)
 
@@ -1402,9 +1499,11 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
     # Step 8: bring a scaled ANGLE argument of `sin`/`cos`/`tan` to radians
     # (esm-spec §4.8.3, issue #409). See `_normalize_angle_arguments`.
     equations, contribs, field_ics, continuous_events, discrete_events =
-        _normalize_angle_arguments(states, params, observeds,
-                                   equations, contribs, lifted_shapes, field_ics,
-                                   continuous_events, discrete_events)
+        _normalize_angle_arguments(
+        states, params, observeds,
+        equations, contribs, lifted_shapes, field_ics,
+        continuous_events, discrete_events
+    )
 
     return FlattenedSystem(
         ivs, states, params, observeds,
@@ -1436,9 +1535,11 @@ this change strengthens.
 
 The same phase, at the same place in the pipeline, is in every binding.
 """
-function _normalize_angle_arguments(states, params, observeds,
-                                    equations, contribs, lifted_shapes, field_ics,
-                                    continuous_events, discrete_events)
+function _normalize_angle_arguments(
+        states, params, observeds,
+        equations, contribs, lifted_shapes, field_ics,
+        continuous_events, discrete_events
+    )
     var_units = Dict{String, String}()
     for table in (states, params, observeds), (name, var) in table
         haskey(var_units, name) && continue
@@ -1447,17 +1548,23 @@ function _normalize_angle_arguments(states, params, observeds,
     end
     # A document that declares no angle at a scale other than 1 cannot be
     # rewritten, so decide that from the DECLARATIONS and walk nothing.
-    any(angle_normalization_factor(parse_units(u)) !== nothing
-        for u in values(var_units)) || return (equations, contribs, field_ics,
-                                               continuous_events, discrete_events)
+    any(
+        angle_normalization_factor(parse_units(u)) !== nothing
+            for u in values(var_units)
+    ) || return (
+        equations, contribs, field_ics,
+        continuous_events, discrete_events,
+    )
 
     # An array operator carries its element's unit (the checker's rule too, so
     # the two agree), so `cos(index(lat, i))` with `lat` in `deg` is converted
     # like `cos(lat)`.
     rewrite(e) = _normalize_angle_expr(e, var_units)
     # Inside each contribution, so no term crosses a contribution boundary.
-    rewritten = [_rewrite_contributions(rewrite, eq, cs, _is_lifted(eq, lifted_shapes))
-                 for (eq, cs) in zip(equations, contribs)]
+    rewritten = [
+        _rewrite_contributions(rewrite, eq, cs, _is_lifted(eq, lifted_shapes))
+            for (eq, cs) in zip(equations, contribs)
+    ]
     equations = Equation[first(r) for r in rewritten]
     contribs = Vector{Contribution}[last(r) for r in rewritten]
     field_ics = Pair{String, ASTExpr}[name => rewrite(expr) for (name, expr) in field_ics]
@@ -1467,20 +1574,26 @@ function _normalize_angle_arguments(states, params, observeds,
     # a binding still evaluates it.
     affect(a) = AffectEquation(a.lhs, rewrite(a.rhs))
     continuous_events = ContinuousEvent[
-        ContinuousEvent(ASTExpr[rewrite(c) for c in ev.conditions],
-                        AffectEquation[affect(a) for a in ev.affects];
-                        affect_neg = ev.affect_neg === nothing ? nothing :
-                            AffectEquation[affect(a) for a in ev.affect_neg],
-                        root_find = ev.root_find, reinitialize = ev.reinitialize,
-                        description = ev.description, name = ev.name)
-        for ev in continuous_events]
+        ContinuousEvent(
+            ASTExpr[rewrite(c) for c in ev.conditions],
+            AffectEquation[affect(a) for a in ev.affects];
+            affect_neg = ev.affect_neg === nothing ? nothing :
+                AffectEquation[affect(a) for a in ev.affect_neg],
+            root_find = ev.root_find, reinitialize = ev.reinitialize,
+            description = ev.description, name = ev.name
+        )
+            for ev in continuous_events
+    ]
     discrete_events = DiscreteEvent[
-        DiscreteEvent(ev.trigger isa ConditionTrigger ?
-                          ConditionTrigger(rewrite(ev.trigger.expression)) : ev.trigger,
-                      AffectEquation[affect(a) for a in ev.affects];
-                      reinitialize = ev.reinitialize, description = ev.description,
-                      name = ev.name)
-        for ev in discrete_events]
+        DiscreteEvent(
+            ev.trigger isa ConditionTrigger ?
+                ConditionTrigger(rewrite(ev.trigger.expression)) : ev.trigger,
+            AffectEquation[affect(a) for a in ev.affects];
+            reinitialize = ev.reinitialize, description = ev.description,
+            name = ev.name
+        )
+            for ev in discrete_events
+    ]
     return (equations, contribs, field_ics, continuous_events, discrete_events)
 end
 
@@ -1509,9 +1622,11 @@ Convenience: wrap a single Model in a synthetic EsmFile (with a default system
 name) and run the full flattener. This is the call path used by
 `ModelingToolkit.System(::Model)` in the Julia extension (see gt-fpw).
 """
-function flatten(model::Model; name::String="anonymous")::FlattenedSystem
-    file = EsmFile(SCHEMA_VERSION, Metadata(name);
-                   models=Dict{String, Model}(name => model))
+function flatten(model::Model; name::String = "anonymous")::FlattenedSystem
+    file = EsmFile(
+        SCHEMA_VERSION, Metadata(name);
+        models = Dict{String, Model}(name => model)
+    )
     return flatten(file)
 end
 
@@ -1520,9 +1635,11 @@ end
 
 Convenience: wrap a ReactionSystem in a synthetic EsmFile and flatten.
 """
-function flatten(rsys::ReactionSystem; name::String="anonymous")::FlattenedSystem
-    file = EsmFile(SCHEMA_VERSION, Metadata(name);
-                   reaction_systems=Dict{String, ReactionSystem}(name => rsys))
+function flatten(rsys::ReactionSystem; name::String = "anonymous")::FlattenedSystem
+    file = EsmFile(
+        SCHEMA_VERSION, Metadata(name);
+        reaction_systems = Dict{String, ReactionSystem}(name => rsys)
+    )
     return flatten(file)
 end
 
@@ -1588,11 +1705,11 @@ function _scope_component_templates(file::EsmFile)
     # OrderedDict, iterated in the order the parser recorded the components:
     # `_merge_flat_registry` consumes this map positionally now that §4.7.5
     # step 4 makes the merged registry document-ordered.
-    out = OrderedDict{String,Any}()
+    out = OrderedDict{String, Any}()
     for (compkey, block) in ct
-        parts = split(String(compkey), "."; limit=2)
+        parts = split(String(compkey), "."; limit = 2)
         model = length(parts) == 2 && parts[1] == "models" && file.models !== nothing ?
-                get(file.models, String(parts[2]), nothing) : nothing
+            get(file.models, String(parts[2]), nothing) : nothing
         if !(model isa Model) || !_is_object(block)
             out[String(compkey)] = block
             continue
@@ -1602,7 +1719,7 @@ function _scope_component_templates(file::EsmFile)
         for (sub_name, _) in model.subsystems
             push!(local_names, sub_name)
         end
-        newblock = OrderedDict{String,Any}()
+        newblock = OrderedDict{String, Any}()
         for (tname, decl) in pairs(block)
             body_raw = _raw_get(decl, "body")
             if body_raw === nothing
@@ -1616,9 +1733,11 @@ function _scope_component_templates(file::EsmFile)
                     p isa AbstractString && push!(pnames, String(p))
                 end
             end
-            scoped = namespace_expr(expression_from_json(body_raw), cname,
-                                    setdiff(local_names, pnames))
-            nd = OrderedDict{String,Any}(string(k) => v for (k, v) in pairs(decl))
+            scoped = namespace_expr(
+                expression_from_json(body_raw), cname,
+                setdiff(local_names, pnames)
+            )
+            nd = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(decl))
             nd["body"] = serialize_expression(scoped)
             newblock[string(tname)] = nd
         end
@@ -1662,23 +1781,28 @@ function _check_registry_coupling_rewrites(registry, rewritten::Set{String})
             nothing
         end
         hits = sort!(collect(intersect(setdiff(names, pnames), rewritten)))
-        isempty(hits) || throw(ExpressionTemplateError(
-            ERROR_CODES.TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE,
-            "expression template '$(String(tname))' body references " *
-            "'$(join(hits, "', '"))', which a coupling rule rewrote in " *
-            "the flattened equations; the registry body would expand to a stale " *
-            "name at the build boundary. Bind the value through the template's " *
-            "params, or expand the reference before coupling (esm-spec §9.6.4)."))
+        isempty(hits) || throw(
+            ExpressionTemplateError(
+                ERROR_CODES.TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE,
+                "expression template '$(String(tname))' body references " *
+                    "'$(join(hits, "', '"))', which a coupling rule rewrote in " *
+                    "the flattened equations; the registry body would expand to a stale " *
+                    "name at the build boundary. Bind the value through the template's " *
+                    "params, or expand the reference before coupling (esm-spec §9.6.4)."
+            )
+        )
     end
     return nothing
 end
 
-function flattened_to_esm(flat::FlattenedSystem;
-                          name::AbstractString="Flattened",
-                          esm_version::AbstractString=SCHEMA_VERSION)::Dict{String,Any}
+function flattened_to_esm(
+        flat::FlattenedSystem;
+        name::AbstractString = "Flattened",
+        esm_version::AbstractString = SCHEMA_VERSION
+    )::Dict{String, Any}
     sname = String(name)
 
-    variables = Dict{String,Any}()
+    variables = Dict{String, Any}()
     # Order: states, parameters, observeds. `state_variables` and
     # `observed_variables` are NOT disjoint — esm-libraries-spec §4.7.5 step 4
     # files a materialized arrayed observed in both — but the two maps hold the
@@ -1699,11 +1823,14 @@ function flattened_to_esm(flat::FlattenedSystem;
     # without this every field-IC'd state silently seeds to its bare `default`.
     equations = Any[serialize_equation(eq) for eq in flat.equations]
     for (state, rhs) in flat.field_ics
-        push!(equations, serialize_equation(
-            Equation(OpExpr("ic", ASTExpr[VarExpr(state)]), rhs)))
+        push!(
+            equations, serialize_equation(
+                Equation(OpExpr("ic", ASTExpr[VarExpr(state)]), rhs)
+            )
+        )
     end
 
-    model = Dict{String,Any}(
+    model = Dict{String, Any}(
         "variables" => variables,
         "equations" => equations,
     )
@@ -1715,24 +1842,26 @@ function flattened_to_esm(flat::FlattenedSystem;
     # recording). Absent for every reference-free system.
     if !isempty(flat.template_registry)
         model["expression_templates"] =
-            OrderedDict{String,Any}(String(k) => v for (k, v) in flat.template_registry)
+            OrderedDict{String, Any}(String(k) => v for (k, v) in flat.template_registry)
     end
 
-    doc = Dict{String,Any}(
+    doc = Dict{String, Any}(
         "esm" => String(esm_version),
-        "metadata" => Dict{String,Any}("name" => sname),
-        "models" => Dict{String,Any}(sname => model),
+        "metadata" => Dict{String, Any}("name" => sname),
+        "models" => Dict{String, Any}(sname => model),
     )
     # esm-spec v0.8.0: the index-set registry is document-scoped — emit it as a
     # sibling of `models` so the reconstituted document validates and both the
     # typed (`coerce_esm_file`) and value-invention front-doors resolve it.
     if !isempty(flat.index_sets)
-        doc["index_sets"] = Dict{String,Any}(
-            k => serialize_index_set(v) for (k, v) in flat.index_sets)
+        doc["index_sets"] = Dict{String, Any}(
+            k => serialize_index_set(v) for (k, v) in flat.index_sets
+        )
     end
     if !isempty(flat.function_tables)
-        doc["function_tables"] = Dict{String,Any}(
-            k => serialize_function_table(v) for (k, v) in flat.function_tables)
+        doc["function_tables"] = Dict{String, Any}(
+            k => serialize_function_table(v) for (k, v) in flat.function_tables
+        )
     end
     if flat.domain !== nothing
         # v0.8.0: single top-level `domain` object shared by the document; a

@@ -44,7 +44,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         @test S_multi[3, 2] == 1   # C produced
 
         # Test source reaction (no reactants): -> A
-        source_reaction = Reaction(Dict{String,Int}(), Dict("A" => 1), VarExpr("k_source"))
+        source_reaction = Reaction(Dict{String, Int}(), Dict("A" => 1), VarExpr("k_source"))
         rxn_sys_source = ReactionSystem([species_A], [source_reaction])
         S_source = stoichiometric_matrix(rxn_sys_source)
 
@@ -52,7 +52,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         @test S_source[1, 1] == 1  # A produced from source
 
         # Test sink reaction (no products): A ->
-        sink_reaction = Reaction(Dict("A" => 1), Dict{String,Int}(), VarExpr("k_sink"))
+        sink_reaction = Reaction(Dict("A" => 1), Dict{String, Int}(), VarExpr("k_sink"))
         rxn_sys_sink = ReactionSystem([species_A], [sink_reaction])
         S_sink = stoichiometric_matrix(rxn_sys_sink)
 
@@ -95,7 +95,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         @test rate_expr.args[1].name == "k1"
 
         # Test source reaction: -> A
-        source_reaction = Reaction(Dict{String,Int}(), Dict("A" => 1), VarExpr("k_source"))
+        source_reaction = Reaction(Dict{String, Int}(), Dict("A" => 1), VarExpr("k_source"))
         source_rate = mass_action_rate(source_reaction, species)
         @test source_rate isa VarExpr
         @test source_rate.name == "k_source"
@@ -142,8 +142,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
         # Cancellation form: rate = k / A, substrates A + B.
         # Result: (k/A) * A * B — substrate A appears twice (denominator + multiplier).
-        cancellation_rate = OpExpr("/",
-            EarthSciAST.ASTExpr[VarExpr("k_cld"), VarExpr("A")])
+        cancellation_rate = OpExpr(
+            "/",
+            EarthSciAST.ASTExpr[VarExpr("k_cld"), VarExpr("A")]
+        )
         cancellation_reaction = Reaction(
             Dict("A" => 1, "B" => 1),
             Dict("C" => 1),
@@ -180,7 +182,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         species_C = Species("C")
         species = [species_A, species_B, species_C]
 
-        param_k1 = Parameter("k1", 0.1, description="Rate constant", units="1/(mol⋅s)")
+        param_k1 = Parameter("k1", 0.1, description = "Rate constant", units = "1/(mol⋅s)")
         parameters = [param_k1]
 
         reaction = Reaction(
@@ -189,7 +191,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
             VarExpr("k1")
         )
 
-        rxn_sys = ReactionSystem(species, [reaction], parameters=parameters)
+        rxn_sys = ReactionSystem(species, [reaction], parameters = parameters)
         model = derive_odes(rxn_sys)
 
         # Check variables
@@ -237,10 +239,12 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         # Test multiple reactions
         reaction1 = Reaction(Dict("A" => 1), Dict("B" => 1), VarExpr("k1"))
         reaction2 = Reaction(Dict("B" => 1), Dict("C" => 1), VarExpr("k2"))
-        param_k2 = Parameter("k2", 0.05, description="Rate constant 2")
+        param_k2 = Parameter("k2", 0.05, description = "Rate constant 2")
 
-        rxn_sys_multi = ReactionSystem(species, [reaction1, reaction2],
-                                     parameters=[param_k1, param_k2])
+        rxn_sys_multi = ReactionSystem(
+            species, [reaction1, reaction2],
+            parameters = [param_k1, param_k2]
+        )
         model_multi = derive_odes(rxn_sys_multi)
 
         @test length(model_multi.variables) == 5  # 3 species + 2 parameters
@@ -248,10 +252,12 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         @test haskey(model_multi.variables, "k2")
 
         # Test source reaction: -> A with rate k_source
-        param_source = Parameter("k_source", 1.0, description="Source rate")
-        source_reaction = Reaction(Dict{String,Int}(), Dict("A" => 1), VarExpr("k_source"))
-        rxn_sys_source = ReactionSystem([species_A], [source_reaction],
-                                      parameters=[param_source])
+        param_source = Parameter("k_source", 1.0, description = "Source rate")
+        source_reaction = Reaction(Dict{String, Int}(), Dict("A" => 1), VarExpr("k_source"))
+        rxn_sys_source = ReactionSystem(
+            [species_A], [source_reaction],
+            parameters = [param_source]
+        )
         model_source = derive_odes(rxn_sys_source)
 
         @test length(model_source.variables) == 2  # 1 species + 1 parameter
@@ -264,10 +270,12 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         @test eq_source.rhs.name == "k_source"
 
         # Test sink reaction: A -> with rate k_sink
-        param_sink = Parameter("k_sink", 0.2, description="Sink rate")
-        sink_reaction = Reaction(Dict("A" => 1), Dict{String,Int}(), VarExpr("k_sink"))
-        rxn_sys_sink = ReactionSystem([species_A], [sink_reaction],
-                                    parameters=[param_sink])
+        param_sink = Parameter("k_sink", 0.2, description = "Sink rate")
+        sink_reaction = Reaction(Dict("A" => 1), Dict{String, Int}(), VarExpr("k_sink"))
+        rxn_sys_sink = ReactionSystem(
+            [species_A], [sink_reaction],
+            parameters = [param_sink]
+        )
         model_sink = derive_odes(rxn_sys_sink)
 
         @test length(model_sink.variables) == 2  # 1 species + 1 parameter
@@ -287,16 +295,16 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         parameters = [
             Parameter("k_forward", 0.1),
             Parameter("k_reverse", 0.05),
-            Parameter("k_decay", 0.02)
+            Parameter("k_decay", 0.02),
         ]
 
         reactions = [
-            Reaction(Dict("A"=>1, "B"=>1), Dict("C"=>1), VarExpr("k_forward")),
-            Reaction(Dict("C"=>1), Dict("A"=>1, "B"=>1), VarExpr("k_reverse")),
-            Reaction(Dict("C"=>1), Dict("D"=>1), VarExpr("k_decay"))
+            Reaction(Dict("A" => 1, "B" => 1), Dict("C" => 1), VarExpr("k_forward")),
+            Reaction(Dict("C" => 1), Dict("A" => 1, "B" => 1), VarExpr("k_reverse")),
+            Reaction(Dict("C" => 1), Dict("D" => 1), VarExpr("k_decay")),
         ]
 
-        rxn_sys = ReactionSystem(species, reactions, parameters=parameters)
+        rxn_sys = ReactionSystem(species, reactions, parameters = parameters)
         model = derive_odes(rxn_sys)
 
         @test length(model.variables) == 7  # 4 species + 3 parameters
@@ -328,21 +336,21 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
     @testset "Subsystem Handling" begin
         # Create a main system with subsystem
         main_species = [Species("X"), Species("Y")]
-        main_reaction = Reaction(Dict("X"=>1), Dict("Y"=>1), VarExpr("k_main"))
+        main_reaction = Reaction(Dict("X" => 1), Dict("Y" => 1), VarExpr("k_main"))
         main_params = [Parameter("k_main", 0.1)]
 
         # Create subsystem
         sub_species = [Species("A"), Species("B")]
-        sub_reaction = Reaction(Dict("A"=>1), Dict("B"=>1), VarExpr("k_sub"))
+        sub_reaction = Reaction(Dict("A" => 1), Dict("B" => 1), VarExpr("k_sub"))
         sub_params = [Parameter("k_sub", 0.05)]
-        sub_system = ReactionSystem(sub_species, [sub_reaction], parameters=sub_params)
+        sub_system = ReactionSystem(sub_species, [sub_reaction], parameters = sub_params)
 
         # Main system with subsystem
         main_system = ReactionSystem(
             main_species,
             [main_reaction],
-            parameters=main_params,
-            subsystems=Dict("subsys" => sub_system)
+            parameters = main_params,
+            subsystems = Dict("subsys" => sub_system)
         )
 
         model = derive_odes(main_system)
@@ -370,12 +378,12 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         # state variable's initial value (matching the main flatten path), and
         # fall back to 1.0 only when no default is declared.
         species = [
-            Species("A", default=3.0),   # explicit non-fallback default
+            Species("A", default = 3.0),   # explicit non-fallback default
             Species("B"),                # no default -> sensible fallback (1.0)
-            Species("C", default=0.0),   # explicit zero must survive (not fallback)
+            Species("C", default = 0.0),   # explicit zero must survive (not fallback)
         ]
         reaction = Reaction(Dict("A" => 1, "B" => 1), Dict("C" => 1), VarExpr("k1"))
-        rxn_sys = ReactionSystem(species, [reaction], parameters=[Parameter("k1", 0.1)])
+        rxn_sys = ReactionSystem(species, [reaction], parameters = [Parameter("k1", 0.1)])
 
         model = derive_odes(rxn_sys)
 
@@ -384,13 +392,17 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         @test model.variables["C"].default == 0.0
 
         # Defaults must also flow through subsystems.
-        sub = ReactionSystem([Species("S", default=7.5)],
-                             [Reaction(Dict("S" => 1), Dict{String,Int}(), VarExpr("k_s"))],
-                             parameters=[Parameter("k_s", 0.2)])
-        main = ReactionSystem([Species("M", default=2.0)],
-                              [Reaction(Dict("M" => 1), Dict{String,Int}(), VarExpr("k_m"))],
-                              parameters=[Parameter("k_m", 0.3)],
-                              subsystems=Dict("sub" => sub))
+        sub = ReactionSystem(
+            [Species("S", default = 7.5)],
+            [Reaction(Dict("S" => 1), Dict{String, Int}(), VarExpr("k_s"))],
+            parameters = [Parameter("k_s", 0.2)]
+        )
+        main = ReactionSystem(
+            [Species("M", default = 2.0)],
+            [Reaction(Dict("M" => 1), Dict{String, Int}(), VarExpr("k_m"))],
+            parameters = [Parameter("k_m", 0.3)],
+            subsystems = Dict("sub" => sub)
+        )
         main_model = derive_odes(main)
         @test main_model.variables["M"].default == 2.0
         @test main_model.subsystems["sub"].variables["S"].default == 7.5
@@ -402,11 +414,13 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         # equation is generated for it. […] other bindings skip the ODE for that
         # species while still evaluating mass-action contributions from it."
         # R:  CH4 + OH -> HO2,  with CH4 a held-fixed reservoir.
-        species = [Species("CH4", default=1700.0, constant=true),
-                   Species("OH", default=1.0e-4),
-                   Species("HO2", default=0.0)]
+        species = [
+            Species("CH4", default = 1700.0, constant = true),
+            Species("OH", default = 1.0e-4),
+            Species("HO2", default = 0.0),
+        ]
         rxn = Reaction(Dict("CH4" => 1, "OH" => 1), Dict("HO2" => 1), VarExpr("k"))
-        rxn_sys = ReactionSystem(species, [rxn], parameters=[Parameter("k", 6.3e-15)])
+        rxn_sys = ReactionSystem(species, [rxn], parameters = [Parameter("k", 6.3e-15)])
 
         eqs = lower_reactions_to_equations(rxn_sys.reactions, rxn_sys.species)
         targets = Set(String(EarthSciAST.differential_lhs_variable(e.lhs)) for e in eqs)
@@ -416,8 +430,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         # …but it still contributes its concentration to the rates it appears in:
         # dOH/dt must retain a CH4 factor, or the reservoir has been dropped from
         # the kinetics entirely rather than merely held fixed.
-        oh_eq = only(e for e in eqs
-                     if String(EarthSciAST.differential_lhs_variable(e.lhs)) == "OH")
+        oh_eq = only(
+            e for e in eqs
+                if String(EarthSciAST.differential_lhs_variable(e.lhs)) == "OH"
+        )
         @test "CH4" in EarthSciAST._referenced_var_names(oh_eq.rhs)
 
         # A reservoir lowers to a PARAMETER, not to a state with a dead equation —
@@ -440,10 +456,12 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         # Julia was the 4-1 outlier on this (Python, Rust, Go and TypeScript all
         # omit; Rust argues the case in its own `reactions.rs` comment), and
         # §4.6.1 ruled against it. This is the regression pin for that ruling.
-        species = [Species("A", default=1.0), Species("B", default=0.0),
-                   Species("Xe", default=5.0)]   # Xe: declared, in no reaction
+        species = [
+            Species("A", default = 1.0), Species("B", default = 0.0),
+            Species("Xe", default = 5.0),
+        ]   # Xe: declared, in no reaction
         rxn = Reaction(Dict("A" => 1), Dict("B" => 1), VarExpr("k"))
-        rxn_sys = ReactionSystem(species, [rxn], parameters=[Parameter("k", 0.1)])
+        rxn_sys = ReactionSystem(species, [rxn], parameters = [Parameter("k", 0.1)])
 
         eqs = lower_reactions_to_equations(rxn_sys.reactions, rxn_sys.species)
         targets = Set(String(EarthSciAST.differential_lhs_variable(e.lhs)) for e in eqs)
@@ -478,8 +496,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         flat = flatten(load_path(tmp))
         @test haskey(flat.state_variables, "Chem.Xe")       # still solved for
         @test haskey(flat.algebraic_variables, "Chem.Xe")   # …algebraically
-        @test !any(EarthSciAST.differential_lhs_variable(eq.lhs) == "Chem.Xe"
-                   for eq in flat.equations)
+        @test !any(
+            EarthSciAST.differential_lhs_variable(eq.lhs) == "Chem.Xe"
+                for eq in flat.equations
+        )
     end
 
     @testset "Reservoir species stay fixed through flatten (shared fixture)" begin
@@ -488,8 +508,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         # this pins the semantics the other bindings round-trip: O2/CH4/H2O are
         # reservoirs; O3/OH/HO2 are ordinary states. Note reaction R3 PRODUCES O2 —
         # before the §7.4 fix that gave the reservoir a live, growing ODE.
-        path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid",
-                        "reservoir_species_constant.esm")
+        path = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "valid",
+            "reservoir_species_constant.esm"
+        )
         flat = flatten(load_path(path))
 
         for r in ("O2", "CH4", "H2O")
@@ -505,7 +527,11 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
             nm = EarthSciAST.differential_lhs_variable(eq.lhs)
             nm === nothing || push!(targets, String(nm))
         end
-        @test targets == Set(["SuperFastSubset.O3", "SuperFastSubset.OH",
-                              "SuperFastSubset.HO2"])
+        @test targets == Set(
+            [
+                "SuperFastSubset.O3", "SuperFastSubset.OH",
+                "SuperFastSubset.HO2",
+            ]
+        )
     end
 end

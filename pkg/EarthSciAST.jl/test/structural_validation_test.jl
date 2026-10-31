@@ -22,11 +22,15 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         # `unit_warnings` is a STRUCTURED record (finding D-8), matching the
         # Python/TypeScript/Go bindings and CONFORMANCE_SPEC §3.1 — not the bare
         # string it used to be, so a caller can route findings by `code`.
-        unit_warnings = [EarthSciAST.UnitWarning("/models/m/equations/0",
-                                                 "dimensional_mismatch", "Unit warning")]
+        unit_warnings = [
+            EarthSciAST.UnitWarning(
+                "/models/m/equations/0",
+                "dimensional_mismatch", "Unit warning"
+            ),
+        ]
 
         # Test constructor
-        result = EarthSciAST.ValidationResult(schema_errors, structural_errors, unit_warnings=unit_warnings)
+        result = EarthSciAST.ValidationResult(schema_errors, structural_errors, unit_warnings = unit_warnings)
         @test result.is_valid == false
         @test length(result.schema_errors) == 1
         @test length(result.structural_errors) == 1
@@ -52,18 +56,18 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         @testset "Missing equation for state variable" begin
             # Create a model with missing equation for state variable
             variables = Dict(
-                "x" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default=1.0),
-                "y" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default=2.0),
-                "k" => EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable, default=0.5)
+                "x" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default = 1.0),
+                "y" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default = 2.0),
+                "k" => EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable, default = 0.5)
             )
 
             equations = [
-                EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.VarExpr("y"))
+                EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt = "t"), EarthSciAST.VarExpr("y")),
                 # Missing equation for state variable y
             ]
 
             model = EarthSciAST.Model(variables, equations)
-            esm_file = EarthSciAST.EsmFile("0.1.0", metadata, models=Dict("test_model" => model))
+            esm_file = EarthSciAST.EsmFile("0.1.0", metadata, models = Dict("test_model" => model))
 
             errors = EarthSciAST.validate_structural(esm_file)
             @test length(errors) == 1
@@ -76,7 +80,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             # discriminating power the retired `missing_observed_expr` carried.
             @test errors[1].path == "/models/test_model"
             @test errors[1].message ==
-                  "Number of equations (1) does not match number of unknowns (2)"
+                "Number of equations (1) does not match number of unknowns (2)"
             @test errors[1].details["equations"] == 1
             @test errors[1].details["missing_equations_for"] == ["y"]
             @test errors[1].error_type == "equation_count_mismatch"
@@ -85,14 +89,16 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         @testset "Reaction system with undefined species" begin
             species = [EarthSciAST.Species("A"), EarthSciAST.Species("B")]
             reactions = [
-                EarthSciAST.Reaction("rxn1", [EarthSciAST.StoichiometryEntry("A", 1)], [EarthSciAST.StoichiometryEntry("C", 1)], EarthSciAST.VarExpr("k1"))  # C not defined
+                EarthSciAST.Reaction("rxn1", [EarthSciAST.StoichiometryEntry("A", 1)], [EarthSciAST.StoichiometryEntry("C", 1)], EarthSciAST.VarExpr("k1")),  # C not defined
             ]
             # `k1` must be DECLARED, or the rate-reference check fires a second
             # (correct) `undefined_parameter` error and this testset stops
             # isolating the undefined-species rule it exists to test.
-            rs = EarthSciAST.ReactionSystem(species, reactions,
-                                            parameters=[EarthSciAST.Parameter("k1", 0.1)])
-            esm_file = EarthSciAST.EsmFile("0.1.0", metadata, reaction_systems=Dict("test_reactions" => rs))
+            rs = EarthSciAST.ReactionSystem(
+                species, reactions,
+                parameters = [EarthSciAST.Parameter("k1", 0.1)]
+            )
+            esm_file = EarthSciAST.EsmFile("0.1.0", metadata, reaction_systems = Dict("test_reactions" => rs))
 
             errors = EarthSciAST.validate_structural(esm_file)
             @test length(errors) == 1
@@ -111,12 +117,14 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         @testset "Null-null reaction" begin
             species = [EarthSciAST.Species("A")]
             reactions = [
-                EarthSciAST.Reaction("rxn1", nothing, nothing, EarthSciAST.VarExpr("k1"))  # No reactants or products
+                EarthSciAST.Reaction("rxn1", nothing, nothing, EarthSciAST.VarExpr("k1")),  # No reactants or products
             ]
             # As above: declare `k1` so only the null-null rule fires here.
-            rs = EarthSciAST.ReactionSystem(species, reactions,
-                                            parameters=[EarthSciAST.Parameter("k1", 0.1)])
-            esm_file = EarthSciAST.EsmFile("0.1.0", metadata, reaction_systems=Dict("test_reactions" => rs))
+            rs = EarthSciAST.ReactionSystem(
+                species, reactions,
+                parameters = [EarthSciAST.Parameter("k1", 0.1)]
+            )
+            esm_file = EarthSciAST.EsmFile("0.1.0", metadata, reaction_systems = Dict("test_reactions" => rs))
 
             errors = EarthSciAST.validate_structural(esm_file)
             @test length(errors) == 1
@@ -127,19 +135,19 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
 
         @testset "Event with undefined affect variable" begin
             variables = Dict(
-                "x" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default=1.0)
+                "x" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default = 1.0)
             )
             equations = [
-                EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.NumExpr(1.0))
+                EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt = "t"), EarthSciAST.NumExpr(1.0)),
             ]
             events = [
                 EarthSciAST.ContinuousEvent(
                     EarthSciAST.ASTExpr[EarthSciAST.OpExpr("-", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x"), EarthSciAST.NumExpr(10.0)])],
                     [EarthSciAST.AffectEquation("undefined_var", EarthSciAST.NumExpr(0.0))]
-                )
+                ),
             ]
-            model = EarthSciAST.Model(variables, equations, continuous_events=events)
-            esm_file = EarthSciAST.EsmFile("0.1.0", metadata, models=Dict("test_model" => model))
+            model = EarthSciAST.Model(variables, equations, continuous_events = events)
+            esm_file = EarthSciAST.EsmFile("0.1.0", metadata, models = Dict("test_model" => model))
 
             errors = EarthSciAST.validate_structural(esm_file)
             @test length(errors) == 1
@@ -150,14 +158,14 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
 
         @testset "Valid model - no errors" begin
             variables = Dict(
-                "x" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default=1.0),
-                "k" => EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable, default=0.5)
+                "x" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default = 1.0),
+                "k" => EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable, default = 0.5)
             )
             equations = [
-                EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.VarExpr("k"))
+                EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt = "t"), EarthSciAST.VarExpr("k")),
             ]
             model = EarthSciAST.Model(variables, equations)
-            esm_file = EarthSciAST.EsmFile("0.1.0", metadata, models=Dict("test_model" => model))
+            esm_file = EarthSciAST.EsmFile("0.1.0", metadata, models = Dict("test_model" => model))
 
             errors = EarthSciAST.validate_structural(esm_file)
             @test isempty(errors)
@@ -169,13 +177,13 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
 
         @testset "Valid file" begin
             variables = Dict(
-                "x" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default=1.0)
+                "x" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default = 1.0)
             )
             equations = [
-                EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.NumExpr(1.0))
+                EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt = "t"), EarthSciAST.NumExpr(1.0)),
             ]
             model = EarthSciAST.Model(variables, equations)
-            esm_file = EarthSciAST.EsmFile("0.1.0", metadata, models=Dict("test_model" => model))
+            esm_file = EarthSciAST.EsmFile("0.1.0", metadata, models = Dict("test_model" => model))
 
             result = EarthSciAST.validate(esm_file)
             # Note: Schema validation might fail due to simplified conversion in validate function
@@ -186,15 +194,15 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
 
         @testset "File with structural errors" begin
             variables = Dict(
-                "x" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default=1.0),
-                "y" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default=2.0)
+                "x" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default = 1.0),
+                "y" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default = 2.0)
             )
             equations = [
-                EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.NumExpr(1.0))
+                EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt = "t"), EarthSciAST.NumExpr(1.0)),
                 # Missing equation for y
             ]
             model = EarthSciAST.Model(variables, equations)
-            esm_file = EarthSciAST.EsmFile("0.1.0", metadata, models=Dict("test_model" => model))
+            esm_file = EarthSciAST.EsmFile("0.1.0", metadata, models = Dict("test_model" => model))
 
             result = EarthSciAST.validate(esm_file)
             @test result isa EarthSciAST.ValidationResult
@@ -207,9 +215,11 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         metadata = EarthSciAST.Metadata("test-model")
 
         @testset "CouplingOperatorCompose validation" begin
-            model = EarthSciAST.Model(Dict("x" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default=1.0)),
-                                  [EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.NumExpr(1.0))])
-            esm_file = EarthSciAST.EsmFile("0.1.0", metadata, models=Dict("test_model" => model))
+            model = EarthSciAST.Model(
+                Dict("x" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default = 1.0)),
+                [EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt = "t"), EarthSciAST.NumExpr(1.0))]
+            )
+            esm_file = EarthSciAST.EsmFile("0.1.0", metadata, models = Dict("test_model" => model))
 
             # Valid system reference
             coupling = EarthSciAST.CouplingOperatorCompose(["test_model"])
@@ -257,9 +267,11 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         end
 
         @testset "CouplingVariableMap validation" begin
-            model = EarthSciAST.Model(Dict("x" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default=1.0)),
-                                  [EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.NumExpr(1.0))])
-            esm_file = EarthSciAST.EsmFile("0.1.0", metadata, models=Dict("test_model" => model))
+            model = EarthSciAST.Model(
+                Dict("x" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default = 1.0)),
+                [EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt = "t"), EarthSciAST.NumExpr(1.0))]
+            )
+            esm_file = EarthSciAST.EsmFile("0.1.0", metadata, models = Dict("test_model" => model))
 
             # Valid variable mapping
             coupling = EarthSciAST.CouplingVariableMap("test_model.x", "test_model.x", "identity")
@@ -291,11 +303,11 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             # A + B -> C with concentrations in mol/L but rate constant in 1/s
             # (should be L/(mol*s)). Mirrors tests/invalid/units_reaction_rate_mismatch.esm.
             species = [
-                EarthSciAST.Species("A"; units="mol/L", default=1.0),
-                EarthSciAST.Species("B"; units="mol/L", default=1.0),
-                EarthSciAST.Species("C"; units="mol/L", default=0.0),
+                EarthSciAST.Species("A"; units = "mol/L", default = 1.0),
+                EarthSciAST.Species("B"; units = "mol/L", default = 1.0),
+                EarthSciAST.Species("C"; units = "mol/L", default = 0.0),
             ]
-            parameters = [EarthSciAST.Parameter("k", 0.1; units="1/s")]
+            parameters = [EarthSciAST.Parameter("k", 0.1; units = "1/s")]
             reactions = [
                 EarthSciAST.Reaction(
                     "R1",
@@ -304,7 +316,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
                     EarthSciAST.VarExpr("k"),
                 ),
             ]
-            rs = EarthSciAST.ReactionSystem(species, reactions; parameters=parameters)
+            rs = EarthSciAST.ReactionSystem(species, reactions; parameters = parameters)
             errors = EarthSciAST.validate_reaction_rate_units(rs, "/reaction_systems/Bad")
             @test length(errors) == 1
             @test errors[1].error_type == "unit_inconsistency"
@@ -313,11 +325,11 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
 
         @testset "Correctly-dimensioned second-order rate constant passes" begin
             species = [
-                EarthSciAST.Species("A"; units="mol/L", default=1.0),
-                EarthSciAST.Species("B"; units="mol/L", default=1.0),
-                EarthSciAST.Species("C"; units="mol/L", default=0.0),
+                EarthSciAST.Species("A"; units = "mol/L", default = 1.0),
+                EarthSciAST.Species("B"; units = "mol/L", default = 1.0),
+                EarthSciAST.Species("C"; units = "mol/L", default = 0.0),
             ]
-            parameters = [EarthSciAST.Parameter("k", 0.1; units="L/(mol*s)")]
+            parameters = [EarthSciAST.Parameter("k", 0.1; units = "L/(mol*s)")]
             reactions = [
                 EarthSciAST.Reaction(
                     "R1",
@@ -326,7 +338,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
                     EarthSciAST.VarExpr("k"),
                 ),
             ]
-            rs = EarthSciAST.ReactionSystem(species, reactions; parameters=parameters)
+            rs = EarthSciAST.ReactionSystem(species, reactions; parameters = parameters)
             errors = EarthSciAST.validate_reaction_rate_units(rs, "/reaction_systems/Good")
             @test isempty(errors)
         end
@@ -341,7 +353,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
                 # Unit findings are mirrored into unit_warnings (TS-binding parity)
                 @test !isempty(result.unit_warnings)
                 @test length(result.unit_warnings) ==
-                      count(e -> e.error_type == "unit_inconsistency", result.structural_errors)
+                    count(e -> e.error_type == "unit_inconsistency", result.structural_errors)
                 # …and each mirror is the STRUCTURED record (D-8), carrying the
                 # promoted structural error's pointer and code verbatim so a
                 # caller can filter by code without parsing prose.
@@ -351,8 +363,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
                 # UnitWarning['code']) — `dimensional_mismatch`, not the
                 # `unit_inconsistency` structural code it was promoted to.
                 @test all(w -> w.code == "dimensional_mismatch", result.unit_warnings)
-                promoted = [e for e in result.structural_errors
-                            if e.error_type == "unit_inconsistency"]
+                promoted = [
+                    e for e in result.structural_errors
+                        if e.error_type == "unit_inconsistency"
+                ]
                 @test [w.message for w in result.unit_warnings] == [e.message for e in promoted]
                 @test [w.path for w in result.unit_warnings] == [e.path for e in promoted]
             end
@@ -369,9 +383,11 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
                 esm_data = EarthSciAST.load_path(fixture_path)
                 result = EarthSciAST.validate(esm_data)
                 @test !result.is_valid
-                matching = filter(e -> e.error_type == "unit_inconsistency" &&
-                                       occursin("Physical constant used with incorrect dimensional analysis", e.message),
-                                  result.structural_errors)
+                matching = filter(
+                    e -> e.error_type == "unit_inconsistency" &&
+                        occursin("Physical constant used with incorrect dimensional analysis", e.message),
+                    result.structural_errors
+                )
                 @test length(matching) >= 1
                 if !isempty(matching)
                     err = matching[1]
@@ -388,22 +404,31 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         # dimensions match but the numeric scale factor should be 101325 Pa/atm.
         # Mirrors Python's parse._check_conversion_factor_consistency.
         @testset "Conversion factor mismatch flagged" begin
-            variables = Dict{String,EarthSciAST.ModelVariable}(
+            variables = Dict{String, EarthSciAST.ModelVariable}(
                 "p_atm" => EarthSciAST.ModelVariable(
                     EarthSciAST.ParameterVariable;
-                    units="atm", default=1.0),
+                    units = "atm", default = 1.0
+                ),
                 "converted_pressure" => EarthSciAST.ModelVariable(
                     EarthSciAST.UnknownVariable;
-                        units="Pa"),
+                    units = "Pa"
+                ),
             )
             # The defining EQUATION is what makes `converted_pressure` observed from
             # esm 1.0.0 (esm-spec §6.3.1); the declaration carries none.
-            model = EarthSciAST.Model(variables, EarthSciAST.Equation[
-                EarthSciAST.Equation(EarthSciAST.VarExpr("converted_pressure"),
-                    EarthSciAST.OpExpr("*", EarthSciAST.ASTExpr[
-                        EarthSciAST.NumExpr(50000.0),
-                        EarthSciAST.VarExpr("p_atm"),
-                    ]))])
+            model = EarthSciAST.Model(
+                variables, EarthSciAST.Equation[
+                    EarthSciAST.Equation(
+                        EarthSciAST.VarExpr("converted_pressure"),
+                        EarthSciAST.OpExpr(
+                            "*", EarthSciAST.ASTExpr[
+                                EarthSciAST.NumExpr(50000.0),
+                                EarthSciAST.VarExpr("p_atm"),
+                            ]
+                        )
+                    ),
+                ]
+            )
             errors = EarthSciAST.validate_conversion_factor_consistency(model, "/models/M")
             @test length(errors) == 1
             @test errors[1].error_type == "unit_inconsistency"
@@ -413,44 +438,62 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         end
 
         @testset "Correct conversion factor passes" begin
-            variables = Dict{String,EarthSciAST.ModelVariable}(
+            variables = Dict{String, EarthSciAST.ModelVariable}(
                 "p_atm" => EarthSciAST.ModelVariable(
                     EarthSciAST.ParameterVariable;
-                    units="atm", default=1.0),
+                    units = "atm", default = 1.0
+                ),
                 "converted_pressure" => EarthSciAST.ModelVariable(
                     EarthSciAST.UnknownVariable;
-                        units="Pa"),
+                    units = "Pa"
+                ),
             )
             # The defining EQUATION is what makes `converted_pressure` observed from
             # esm 1.0.0 (esm-spec §6.3.1); the declaration carries none.
-            model = EarthSciAST.Model(variables, EarthSciAST.Equation[
-                EarthSciAST.Equation(EarthSciAST.VarExpr("converted_pressure"),
-                    EarthSciAST.OpExpr("*", EarthSciAST.ASTExpr[
-                        EarthSciAST.NumExpr(101325.0),
-                        EarthSciAST.VarExpr("p_atm"),
-                    ]))])
+            model = EarthSciAST.Model(
+                variables, EarthSciAST.Equation[
+                    EarthSciAST.Equation(
+                        EarthSciAST.VarExpr("converted_pressure"),
+                        EarthSciAST.OpExpr(
+                            "*", EarthSciAST.ASTExpr[
+                                EarthSciAST.NumExpr(101325.0),
+                                EarthSciAST.VarExpr("p_atm"),
+                            ]
+                        )
+                    ),
+                ]
+            )
             errors = EarthSciAST.validate_conversion_factor_consistency(model, "/models/M")
             @test isempty(errors)
         end
 
         @testset "Affine conversion (degC -> K) is skipped" begin
             # 0 °C = 273.15 K, so the conversion is affine — must not be flagged.
-            variables = Dict{String,EarthSciAST.ModelVariable}(
+            variables = Dict{String, EarthSciAST.ModelVariable}(
                 "T_C" => EarthSciAST.ModelVariable(
                     EarthSciAST.ParameterVariable;
-                    units="°C", default=0.0),
+                    units = "°C", default = 0.0
+                ),
                 "T_K" => EarthSciAST.ModelVariable(
                     EarthSciAST.UnknownVariable;
-                        units="K"),
+                    units = "K"
+                ),
             )
             # The defining EQUATION is what makes `T_K` observed from
             # esm 1.0.0 (esm-spec §6.3.1); the declaration carries none.
-            model = EarthSciAST.Model(variables, EarthSciAST.Equation[
-                EarthSciAST.Equation(EarthSciAST.VarExpr("T_K"),
-                    EarthSciAST.OpExpr("*", EarthSciAST.ASTExpr[
-                        EarthSciAST.NumExpr(1.0),
-                        EarthSciAST.VarExpr("T_C"),
-                    ]))])
+            model = EarthSciAST.Model(
+                variables, EarthSciAST.Equation[
+                    EarthSciAST.Equation(
+                        EarthSciAST.VarExpr("T_K"),
+                        EarthSciAST.OpExpr(
+                            "*", EarthSciAST.ASTExpr[
+                                EarthSciAST.NumExpr(1.0),
+                                EarthSciAST.VarExpr("T_C"),
+                            ]
+                        )
+                    ),
+                ]
+            )
             errors = EarthSciAST.validate_conversion_factor_consistency(model, "/models/M")
             @test isempty(errors)
         end
@@ -458,36 +501,49 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         @testset "Dimensional mismatch is not a conversion-factor error" begin
             # atm vs m — dimensionally incompatible; other checks handle this,
             # this check silently skips.
-            variables = Dict{String,EarthSciAST.ModelVariable}(
+            variables = Dict{String, EarthSciAST.ModelVariable}(
                 "p_atm" => EarthSciAST.ModelVariable(
                     EarthSciAST.ParameterVariable;
-                    units="atm", default=1.0),
+                    units = "atm", default = 1.0
+                ),
                 "x" => EarthSciAST.ModelVariable(
                     EarthSciAST.UnknownVariable;
-                        units="m"),
+                    units = "m"
+                ),
             )
             # The defining EQUATION is what makes `x` observed from
             # esm 1.0.0 (esm-spec §6.3.1); the declaration carries none.
-            model = EarthSciAST.Model(variables, EarthSciAST.Equation[
-                EarthSciAST.Equation(EarthSciAST.VarExpr("x"),
-                    EarthSciAST.OpExpr("*", EarthSciAST.ASTExpr[
-                        EarthSciAST.NumExpr(2.0),
-                        EarthSciAST.VarExpr("p_atm"),
-                    ]))])
+            model = EarthSciAST.Model(
+                variables, EarthSciAST.Equation[
+                    EarthSciAST.Equation(
+                        EarthSciAST.VarExpr("x"),
+                        EarthSciAST.OpExpr(
+                            "*", EarthSciAST.ASTExpr[
+                                EarthSciAST.NumExpr(2.0),
+                                EarthSciAST.VarExpr("p_atm"),
+                            ]
+                        )
+                    ),
+                ]
+            )
             errors = EarthSciAST.validate_conversion_factor_consistency(model, "/models/M")
             @test isempty(errors)
         end
 
         @testset "Invalid fixture units_conversion_factor_error.esm is rejected" begin
-            fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
-                                    "units_conversion_factor_error.esm")
+            fixture_path = joinpath(
+                TESTUTILS_REPO_ROOT, "tests", "invalid",
+                "units_conversion_factor_error.esm"
+            )
             if _require_fixture(fixture_path)
                 esm_data = EarthSciAST.load_path(fixture_path)
                 result = EarthSciAST.validate(esm_data)
                 @test !result.is_valid
-                matching = filter(e -> e.error_type == "unit_inconsistency" &&
-                                       occursin("Unit conversion factor is incorrect", e.message),
-                                  result.structural_errors)
+                matching = filter(
+                    e -> e.error_type == "unit_inconsistency" &&
+                        occursin("Unit conversion factor is incorrect", e.message),
+                    result.structural_errors
+                )
                 @test length(matching) >= 1
                 if !isempty(matching)
                     err = matching[1]
@@ -512,15 +568,19 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         grad_model(x_var) = begin
             variables = Dict(
                 "c" => EarthSciAST.ModelVariable(
-                    EarthSciAST.UnknownVariable, default=0.0, units="mol/m^3"),
+                    EarthSciAST.UnknownVariable, default = 0.0, units = "mol/m^3"
+                ),
             )
             x_var !== nothing && (variables["x"] = x_var)
             equations = [
                 EarthSciAST.Equation(
                     EarthSciAST.OpExpr(
-                        "D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("c")]; wrt="t"),
+                        "D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("c")]; wrt = "t"
+                    ),
                     EarthSciAST.OpExpr(
-                        "grad", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("c")]; dim="x")),
+                        "grad", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("c")]; dim = "x"
+                    )
+                ),
             ]
             EarthSciAST.Model(variables, equations)
         end
@@ -530,15 +590,18 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
 
         @testset "grad over a units-less / units-bearing / undeclared coordinate is never flagged" begin
             for x_var in (
-                    EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable, default=0.0),
-                    EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable, default=0.0, units="m"),
-                    nothing)
+                    EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable, default = 0.0),
+                    EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable, default = 0.0, units = "m"),
+                    nothing,
+                )
                 model = grad_model(x_var)
-                file = EarthSciAST.EsmFile("0.1.0", metadata, models=Dict("M" => model))
+                file = EarthSciAST.EsmFile("0.1.0", metadata, models = Dict("M" => model))
                 result = EarthSciAST.validate(file)
-                grad_errs = filter(e -> e.error_type == "unit_inconsistency" &&
-                                        e.path == "/models/M/equations/0",
-                                   result.structural_errors)
+                grad_errs = filter(
+                    e -> e.error_type == "unit_inconsistency" &&
+                        e.path == "/models/M/equations/0",
+                    result.structural_errors
+                )
                 @test isempty(grad_errs)
             end
         end
@@ -553,12 +616,16 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
                 esm_data = EarthSciAST.load_path(fixture_path)
                 result = EarthSciAST.validate(esm_data)
                 @test !result.is_valid
-                bad_sum = filter(e -> e.error_type == "unit_inconsistency" &&
-                                      e.path == "/models/SpatialModel/variables/bad_sum",
-                                 result.structural_errors)
+                bad_sum = filter(
+                    e -> e.error_type == "unit_inconsistency" &&
+                        e.path == "/models/SpatialModel/variables/bad_sum",
+                    result.structural_errors
+                )
                 @test length(bad_sum) == 1
-                grad_errs = filter(e -> e.path == "/models/SpatialModel/equations/0",
-                                   result.structural_errors)
+                grad_errs = filter(
+                    e -> e.path == "/models/SpatialModel/equations/0",
+                    result.structural_errors
+                )
                 @test isempty(grad_errs)
             end
         end
@@ -568,8 +635,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         # Invalid fixture: an undefined variable hidden in an aggregate `expr`
         # body (a non-`args` child) must be rejected. Mirrors Rust/Go/TS/Python.
         @testset "Invalid fixture undefined_variable_in_faq_expr.esm is rejected" begin
-            fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
-                                    "undefined_variable_in_faq_expr.esm")
+            fixture_path = joinpath(
+                TESTUTILS_REPO_ROOT, "tests", "invalid",
+                "undefined_variable_in_faq_expr.esm"
+            )
             if _require_fixture(fixture_path)
                 esm_data = EarthSciAST.load_path(fixture_path)
                 result = EarthSciAST.validate(esm_data)
@@ -584,21 +653,32 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         # same sites as a model's: an undefined name in one is `undefined_variable`
         # at the carrying field's pointer (tests/invalid/expected_errors.json).
         for (fixture, pointer) in (
-                ("undefined_variable_in_reaction_system_assertion_reference.esm",
-                 "/reaction_systems/TestReactions/tests/0/assertions/0/reference"),
-                ("undefined_variable_in_reaction_system_constraint_equation.esm",
-                 "/reaction_systems/TestReactions/constraint_equations/0/rhs"),
-                ("undefined_variable_in_reaction_system_continuous_event_condition.esm",
-                 "/reaction_systems/TestReactions/continuous_events/0/conditions/0"),
-                ("undefined_variable_in_reaction_system_discrete_event_trigger.esm",
-                 "/reaction_systems/TestReactions/discrete_events/0/trigger/expression"))
+                (
+                    "undefined_variable_in_reaction_system_assertion_reference.esm",
+                    "/reaction_systems/TestReactions/tests/0/assertions/0/reference",
+                ),
+                (
+                    "undefined_variable_in_reaction_system_constraint_equation.esm",
+                    "/reaction_systems/TestReactions/constraint_equations/0/rhs",
+                ),
+                (
+                    "undefined_variable_in_reaction_system_continuous_event_condition.esm",
+                    "/reaction_systems/TestReactions/continuous_events/0/conditions/0",
+                ),
+                (
+                    "undefined_variable_in_reaction_system_discrete_event_trigger.esm",
+                    "/reaction_systems/TestReactions/discrete_events/0/trigger/expression",
+                ),
+            )
             @testset "Invalid fixture $fixture is rejected" begin
                 fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", fixture)
                 if _require_fixture(fixture_path)
                     result = EarthSciAST.validate(EarthSciAST.load_path(fixture_path))
                     @test !result.is_valid
-                    @test any(e -> e.error_type == "undefined_variable" && e.path == pointer,
-                              result.structural_errors)
+                    @test any(
+                        e -> e.error_type == "undefined_variable" && e.path == pointer,
+                        result.structural_errors
+                    )
                 end
             end
         end
@@ -606,14 +686,22 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         # esm-spec §6.6.2, §6.6.3, §6.6.5: an inline test's assertion target,
         # override keys and assertion rank are checked at validation. Each fixture
         # reports exactly its pinned finding; the spellings fixture validates clean.
-        pins = JSON3.read(read(joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
-                                        "expected_errors.json"), String))
-        for fixture in ("undefined_variable_in_assertion_variable.esm",
-                        "unknown_override_key_parameter_overrides.esm",
-                        "unknown_override_key_initial_conditions.esm",
-                        "unknown_override_key_reaction_system.esm",
-                        "assertion_rank_mismatch_pointwise_on_shaped.esm",
-                        "assertion_rank_mismatch_reduce_on_scalar.esm")
+        pins = JSON3.read(
+            read(
+                joinpath(
+                    TESTUTILS_REPO_ROOT, "tests", "invalid",
+                    "expected_errors.json"
+                ), String
+            )
+        )
+        for fixture in (
+                "undefined_variable_in_assertion_variable.esm",
+                "unknown_override_key_parameter_overrides.esm",
+                "unknown_override_key_initial_conditions.esm",
+                "unknown_override_key_reaction_system.esm",
+                "assertion_rank_mismatch_pointwise_on_shaped.esm",
+                "assertion_rank_mismatch_reduce_on_scalar.esm",
+            )
             @testset "Inline-test static check: $fixture" begin
                 fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", fixture)
                 if _require_fixture(fixture_path)
@@ -624,8 +712,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             end
         end
         @testset "Inline-test static check: every accepted spelling validates clean" begin
-            fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid",
-                                    "inline_test_static_check_spellings.esm")
+            fixture_path = joinpath(
+                TESTUTILS_REPO_ROOT, "tests", "valid",
+                "inline_test_static_check_spellings.esm"
+            )
             if _require_fixture(fixture_path)
                 result = EarthSciAST.validate(EarthSciAST.load_path(fixture_path))
                 @test isempty(result.structural_errors)
@@ -636,24 +726,34 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         # index (`i`, introduced by `ranges`) and a declared variable must NOT
         # flag the bound index. Built via the typed API so it is schema-free.
         @testset "Bound loop index in an aggregate is not flagged" begin
-            variables = Dict{String,EarthSciAST.ModelVariable}(
+            variables = Dict{String, EarthSciAST.ModelVariable}(
                 "q" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable),
             )
-            agg = EarthSciAST.OpExpr("faq",
+            agg = EarthSciAST.OpExpr(
+                "faq",
                 EarthSciAST.ASTExpr[EarthSciAST.VarExpr("q")];
-                output_idx=Any["i"],
-                ranges=Dict{String,Any}("i" => Dict{String,Any}("from" => "cells")),
-                expr_body=EarthSciAST.OpExpr("*", EarthSciAST.ASTExpr[
-                    EarthSciAST.NumExpr(-0.25),
-                    EarthSciAST.OpExpr("index", EarthSciAST.ASTExpr[
-                        EarthSciAST.VarExpr("q"), EarthSciAST.VarExpr("i")]),
-                ]))
+                output_idx = Any["i"],
+                ranges = Dict{String, Any}("i" => Dict{String, Any}("from" => "cells")),
+                expr_body = EarthSciAST.OpExpr(
+                    "*", EarthSciAST.ASTExpr[
+                        EarthSciAST.NumExpr(-0.25),
+                        EarthSciAST.OpExpr(
+                            "index", EarthSciAST.ASTExpr[
+                                EarthSciAST.VarExpr("q"), EarthSciAST.VarExpr("i"),
+                            ]
+                        ),
+                    ]
+                )
+            )
             eq = EarthSciAST.Equation(
-                EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("q")]; wrt="t"),
-                agg)
+                EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("q")]; wrt = "t"),
+                agg
+            )
             model = EarthSciAST.Model(variables, EarthSciAST.Equation[eq])
-            file = EarthSciAST.EsmFile("0.8.0", EarthSciAST.Metadata("AggBoundIdx"),
-                                       models=Dict("M" => model))
+            file = EarthSciAST.EsmFile(
+                "0.8.0", EarthSciAST.Metadata("AggBoundIdx"),
+                models = Dict("M" => model)
+            )
             errors = EarthSciAST.validate_model_references(file, model, "/models/M")
             @test !any(e -> e.error_type == "undefined_variable", errors)
         end
@@ -662,24 +762,34 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         # undeclared name and confirm it IS flagged (so the check above is not
         # vacuous — the bound index `i` is still excused).
         @testset "Undeclared name inside an aggregate body is flagged" begin
-            variables = Dict{String,EarthSciAST.ModelVariable}(
+            variables = Dict{String, EarthSciAST.ModelVariable}(
                 "q" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable),
             )
-            agg = EarthSciAST.OpExpr("faq",
+            agg = EarthSciAST.OpExpr(
+                "faq",
                 EarthSciAST.ASTExpr[EarthSciAST.VarExpr("q")];
-                output_idx=Any["i"],
-                ranges=Dict{String,Any}("i" => Dict{String,Any}("from" => "cells")),
-                expr_body=EarthSciAST.OpExpr("*", EarthSciAST.ASTExpr[
-                    EarthSciAST.NumExpr(-0.25),
-                    EarthSciAST.OpExpr("index", EarthSciAST.ASTExpr[
-                        EarthSciAST.VarExpr("undefined_zzz"), EarthSciAST.VarExpr("i")]),
-                ]))
+                output_idx = Any["i"],
+                ranges = Dict{String, Any}("i" => Dict{String, Any}("from" => "cells")),
+                expr_body = EarthSciAST.OpExpr(
+                    "*", EarthSciAST.ASTExpr[
+                        EarthSciAST.NumExpr(-0.25),
+                        EarthSciAST.OpExpr(
+                            "index", EarthSciAST.ASTExpr[
+                                EarthSciAST.VarExpr("undefined_zzz"), EarthSciAST.VarExpr("i"),
+                            ]
+                        ),
+                    ]
+                )
+            )
             eq = EarthSciAST.Equation(
-                EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("q")]; wrt="t"),
-                agg)
+                EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("q")]; wrt = "t"),
+                agg
+            )
             model = EarthSciAST.Model(variables, EarthSciAST.Equation[eq])
-            file = EarthSciAST.EsmFile("0.8.0", EarthSciAST.Metadata("AggBoundIdxBad"),
-                                       models=Dict("M" => model))
+            file = EarthSciAST.EsmFile(
+                "0.8.0", EarthSciAST.Metadata("AggBoundIdxBad"),
+                models = Dict("M" => model)
+            )
             errors = EarthSciAST.validate_model_references(file, model, "/models/M")
             undefs = filter(e -> e.error_type == "undefined_variable", errors)
             @test !isempty(undefs)
@@ -706,35 +816,56 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
     # and Julia would need a real wire-form marker instead.
     # -----------------------------------------------------------------------
     @testset "update JSON pointers address the wire form, not the normalized vector" begin
-        _bad_expr() = EarthSciAST.OpExpr("*", EarthSciAST.ASTExpr[
-            EarthSciAST.VarExpr("k"), EarthSciAST.VarExpr("undefined_xyz")])
+        _bad_expr() = EarthSciAST.OpExpr(
+            "*", EarthSciAST.ASTExpr[
+                EarthSciAST.VarExpr("k"), EarthSciAST.VarExpr("undefined_xyz"),
+            ]
+        )
 
         function _file(update)
             variables = Dict(
-                "y" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable; units="1"),
-                "k" => EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable;
-                                                 units="1", default=1.0),
-                "v" => EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable;
-                                                 units="1", default=0.0,
-                                                 update=update))
+                "y" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable; units = "1"),
+                "k" => EarthSciAST.ModelVariable(
+                    EarthSciAST.ParameterVariable;
+                    units = "1", default = 1.0
+                ),
+                "v" => EarthSciAST.ModelVariable(
+                    EarthSciAST.ParameterVariable;
+                    units = "1", default = 0.0,
+                    update = update
+                )
+            )
             eq = EarthSciAST.Equation(
-                EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("y")]; wrt="t"),
-                EarthSciAST.VarExpr("k"))
+                EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("y")]; wrt = "t"),
+                EarthSciAST.VarExpr("k")
+            )
             model = EarthSciAST.Model(variables, EarthSciAST.Equation[eq])
-            return EarthSciAST.EsmFile("1.0.0", EarthSciAST.Metadata("UpdatePointer"),
-                                       models=Dict("M" => model)), model
+            return EarthSciAST.EsmFile(
+                    "1.0.0", EarthSciAST.Metadata("UpdatePointer"),
+                    models = Dict("M" => model)
+                ), model
         end
 
-        data_rule(expr) = EarthSciAST.ParameterUpdate("data"; source="L",
-            from=EarthSciAST.DataSourceBinding("v"; unit_conversion=expr))
-        cond_rule(expr) = EarthSciAST.ParameterUpdate("condition";
-            when=EarthSciAST.OpExpr(">", EarthSciAST.ASTExpr[
-                EarthSciAST.VarExpr("y"), EarthSciAST.NumExpr(0.0)]),
-            expression=expr)
+        data_rule(expr) = EarthSciAST.ParameterUpdate(
+            "data"; source = "L",
+            from = EarthSciAST.DataSourceBinding("v"; unit_conversion = expr)
+        )
+        cond_rule(expr) = EarthSciAST.ParameterUpdate(
+            "condition";
+            when = EarthSciAST.OpExpr(
+                ">", EarthSciAST.ASTExpr[
+                    EarthSciAST.VarExpr("y"), EarthSciAST.NumExpr(0.0),
+                ]
+            ),
+            expression = expr
+        )
 
-        undef_paths(file, model) = sort!(String[
-            e.path for e in EarthSciAST.validate_model_references(file, model, "/models/M")
-            if e.error_type == "undefined_variable"])
+        undef_paths(file, model) = sort!(
+            String[
+                e.path for e in EarthSciAST.validate_model_references(file, model, "/models/M")
+                    if e.error_type == "undefined_variable"
+            ]
+        )
 
         @testset "object form: no index segment" begin
             # `unit_conversion`, via _check_update_unit_conversions!
@@ -747,7 +878,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             # `when` / `expression`, via validate_model_references
             file2, model2 = _file(cond_rule(_bad_expr()))
             @test undef_paths(file2, model2) ==
-                  ["/models/M/variables/v/update/expression"]
+                ["/models/M/variables/v/update/expression"]
         end
 
         @testset "array form: the index is real and kept" begin
@@ -760,51 +891,70 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             # `unit_conversion` is the separate `_check_update_unit_conversions!`
             # pass asserted just above. Both index off the same helper.
             @test undef_paths(file, model) ==
-                  ["/models/M/variables/v/update/1/expression"]
+                ["/models/M/variables/v/update/1/expression"]
         end
 
         @testset "unit findings use the same pointers" begin
             # A dimensional mismatch inside an update `expression`: `k` is "1"
             # and `y` is "s", so `k + y` is provably inconsistent.
             variables = Dict(
-                "y" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable; units="s"),
-                "k" => EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable;
-                                                 units="1", default=1.0),
-                "v" => EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable;
-                                                 units="1", default=0.0))
-            bad = EarthSciAST.OpExpr("+", EarthSciAST.ASTExpr[
-                EarthSciAST.VarExpr("k"), EarthSciAST.VarExpr("y")])
+                "y" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable; units = "s"),
+                "k" => EarthSciAST.ModelVariable(
+                    EarthSciAST.ParameterVariable;
+                    units = "1", default = 1.0
+                ),
+                "v" => EarthSciAST.ModelVariable(
+                    EarthSciAST.ParameterVariable;
+                    units = "1", default = 0.0
+                )
+            )
+            bad = EarthSciAST.OpExpr(
+                "+", EarthSciAST.ASTExpr[
+                    EarthSciAST.VarExpr("k"), EarthSciAST.VarExpr("y"),
+                ]
+            )
             eq = EarthSciAST.Equation(
-                EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("y")]; wrt="t"),
-                EarthSciAST.NumExpr(1.0))
+                EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("y")]; wrt = "t"),
+                EarthSciAST.NumExpr(1.0)
+            )
 
             scalar_vars = copy(variables)
-            scalar_vars["v"] = EarthSciAST.reconstruct(variables["v"];
-                update=cond_rule(bad))
+            scalar_vars["v"] = EarthSciAST.reconstruct(
+                variables["v"];
+                update = cond_rule(bad)
+            )
             scalar_model = EarthSciAST.Model(scalar_vars, EarthSciAST.Equation[eq])
             scalar_paths = String[f.subpath for f in EarthSciAST.model_unit_findings(scalar_model)]
             @test "variables/v/update/expression" in scalar_paths
             @test !any(p -> occursin("/update/0/", p), scalar_paths)
             # The message drops the meaningless "update rule 0" too.
-            @test !any(f -> occursin("update rule", f.message),
-                       EarthSciAST.model_unit_findings(scalar_model))
+            @test !any(
+                f -> occursin("update rule", f.message),
+                EarthSciAST.model_unit_findings(scalar_model)
+            )
 
             array_vars = copy(variables)
-            array_vars["v"] = EarthSciAST.reconstruct(variables["v"];
-                update=[cond_rule(bad), cond_rule(bad)])
+            array_vars["v"] = EarthSciAST.reconstruct(
+                variables["v"];
+                update = [cond_rule(bad), cond_rule(bad)]
+            )
             array_model = EarthSciAST.Model(array_vars, EarthSciAST.Equation[eq])
             array_paths = String[f.subpath for f in EarthSciAST.model_unit_findings(array_model)]
             @test "variables/v/update/0/expression" in array_paths
             @test "variables/v/update/1/expression" in array_paths
-            @test any(f -> occursin("update rule 1", f.message),
-                      EarthSciAST.model_unit_findings(array_model))
+            @test any(
+                f -> occursin("update rule 1", f.message),
+                EarthSciAST.model_unit_findings(array_model)
+            )
         end
 
         @testset "the pointer and the emitted document agree" begin
             # One predicate decides both, so a round trip cannot land the rule
             # somewhere the diagnostic did not point.
-            for (update, key) in ((data_rule(_bad_expr()), "object"),
-                                  ([data_rule(_bad_expr()), cond_rule(_bad_expr())], "array"))
+            for (update, key) in (
+                    (data_rule(_bad_expr()), "object"),
+                    ([data_rule(_bad_expr()), cond_rule(_bad_expr())], "array"),
+                )
                 file, _ = _file(update)
                 emitted = EarthSciAST.serialize_esm_file(file)
                 wire = emitted["models"]["M"]["variables"]["v"]["update"]
@@ -815,13 +965,20 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         @testset "a one-element array is not a document Julia must represent" begin
             # The length rule is exact only because the schema forbids `[{...}]`.
             # If this ever relaxes, `_update_is_scalar_form` needs a real marker.
-            schema = EarthSciAST.JSON3.read(read(
-                joinpath(TESTUTILS_REPO_ROOT, "esm-schema.json"), String))
+            schema = EarthSciAST.JSON3.read(
+                read(
+                    joinpath(TESTUTILS_REPO_ROOT, "esm-schema.json"), String
+                )
+            )
             spec = schema[Symbol("\$defs")][:ParameterUpdateSpec]
             array_branch = only(filter(b -> get(b, :type, nothing) == "array", spec[:oneOf]))
             @test array_branch[:minItems] == 2
-            @test isfile(joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
-                                  "parameter_update_singleton_array.esm"))
+            @test isfile(
+                joinpath(
+                    TESTUTILS_REPO_ROOT, "tests", "invalid",
+                    "parameter_update_singleton_array.esm"
+                )
+            )
         end
     end
 
@@ -836,26 +993,38 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
     # esm-spec §6.3 — inline array data is only a SHAPED variable's value. On a
     # variable with no `shape` there is nothing for the array to fill.
     @testset "array_default_without_shape (§6.3)" begin
-        fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
-                                "array_default_without_shape.esm")
+        fixture_path = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "invalid",
+            "array_default_without_shape.esm"
+        )
         if _require_fixture(fixture_path)
             result = EarthSciAST.validate(EarthSciAST.load_path(fixture_path))
             @test !result.is_valid
-            found = sort([(e.path, e.details["variable_type"]) for e in result.structural_errors
-                          if e.error_type == "array_default_without_shape"])
+            found = sort(
+                [
+                    (e.path, e.details["variable_type"]) for e in result.structural_errors
+                        if e.error_type == "array_default_without_shape"
+                ]
+            )
             # The shaped control `w` carries the same data legally and is not reported.
-            @test found == [("/models/Decay/subsystems/Inner/variables/x/default", "unknown"),
-                            ("/models/Decay/variables/k/default", "parameter")]
+            @test found == [
+                ("/models/Decay/subsystems/Inner/variables/x/default", "unknown"),
+                ("/models/Decay/variables/k/default", "parameter"),
+            ]
         end
     end
 
     @testset "reserved_variable_name (§4.9.1.1)" begin
-        _reserved(result) = filter(e -> e.error_type == "reserved_variable_name",
-                                   result.structural_errors)
+        _reserved(result) = filter(
+            e -> e.error_type == "reserved_variable_name",
+            result.structural_errors
+        )
 
         @testset "an observed named after the independent variable is rejected" begin
-            fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
-                                    "reserved_variable_name_observed.esm")
+            fixture_path = joinpath(
+                TESTUTILS_REPO_ROOT, "tests", "invalid",
+                "reserved_variable_name_observed.esm"
+            )
             if _require_fixture(fixture_path)
                 result = EarthSciAST.validate(EarthSciAST.load_path(fixture_path))
                 @test !result.is_valid
@@ -868,11 +1037,18 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
 
         @testset "both globally-scoped names, and both reaction maps" begin
             for (fixture, want) in (
-                    ("reserved_variable_name_parameter.esm",
-                     ["/models/Ingest/variables/_var", "/models/Ingest/variables/t"]),
-                    ("reserved_variable_name_species.esm",
-                     ["/reaction_systems/RateConstants/parameters/t",
-                      "/reaction_systems/TracerDecay/species/t"]))
+                    (
+                        "reserved_variable_name_parameter.esm",
+                        ["/models/Ingest/variables/_var", "/models/Ingest/variables/t"],
+                    ),
+                    (
+                        "reserved_variable_name_species.esm",
+                        [
+                            "/reaction_systems/RateConstants/parameters/t",
+                            "/reaction_systems/TracerDecay/species/t",
+                        ],
+                    ),
+                )
                 fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", fixture)
                 if _require_fixture(fixture_path)
                     result = EarthSciAST.validate(EarthSciAST.load_path(fixture_path))
@@ -886,10 +1062,14 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         # the sibling `reserved_index_symbol` rule does. A binding that hard-codes the
         # literal "t" fails one of these two halves.
         @testset "the rule follows domain.independent_variable" begin
-            invalid_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
-                                    "reserved_variable_name_renamed_independent.esm")
-            valid_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid",
-                                  "independent_variable_renamed.esm")
+            invalid_path = joinpath(
+                TESTUTILS_REPO_ROOT, "tests", "invalid",
+                "reserved_variable_name_renamed_independent.esm"
+            )
+            valid_path = joinpath(
+                TESTUTILS_REPO_ROOT, "tests", "valid",
+                "independent_variable_renamed.esm"
+            )
             if _require_fixture(invalid_path)
                 result = EarthSciAST.validate(EarthSciAST.load_path(invalid_path))
                 @test map(e -> e.path, _reserved(result)) == ["/models/Renamed/variables/s"]
@@ -905,13 +1085,15 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         # unchanged — and a MOUNTED subsystem is the exact shape issue #200 was
         # reported in. A binding that walks only top-level `models` accepts it.
         @testset "an inline subsystem's declarations are covered" begin
-            fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
-                                    "reserved_variable_name_subsystem.esm")
+            fixture_path = joinpath(
+                TESTUTILS_REPO_ROOT, "tests", "invalid",
+                "reserved_variable_name_subsystem.esm"
+            )
             if _require_fixture(fixture_path)
                 result = EarthSciAST.validate(EarthSciAST.load_path(fixture_path))
                 @test !result.is_valid
                 @test map(e -> e.path, _reserved(result)) ==
-                      ["/models/Column/subsystems/Fuel/variables/t"]
+                    ["/models/Column/subsystems/Fuel/variables/t"]
             end
         end
 
@@ -919,8 +1101,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         # a variable may be named after one — tests/valid/units_dimensional_analysis.esm
         # declares `x` as a position.
         @testset "spatial coordinate names are not reserved" begin
-            fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid",
-                                    "units_dimensional_analysis.esm")
+            fixture_path = joinpath(
+                TESTUTILS_REPO_ROOT, "tests", "valid",
+                "units_dimensional_analysis.esm"
+            )
             if _require_fixture(fixture_path)
                 result = EarthSciAST.validate(EarthSciAST.load_path(fixture_path))
                 @test isempty(_reserved(result))

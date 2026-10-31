@@ -12,7 +12,7 @@ mode == "relaxed" && Enzyme.API.strictAliasing!(false)
 if length(ARGS) >= 2 && ARGS[2] == "nocodegen"
     ENV["ESS_CODEGEN_DISABLE"] = "1"
 end
-@info "mode=$mode codegen_disabled=$(get(ENV,"ESS_CODEGEN_DISABLE",""))" v=pkgversion(Enzyme)
+@info "mode=$mode codegen_disabled=$(get(ENV, "ESS_CODEGEN_DISABLE", ""))" v = pkgversion(Enzyme)
 
 include("models.jl")
 
@@ -24,15 +24,17 @@ function run_case(name, doc, n)
     loss = function (uu)
         du = zero(uu)
         fi(du, uu, p, t)
-        sum(abs2, du)
+        return sum(abs2, du)
     end
     g_fd = ForwardDiff.gradient(loss, u)
     println("value            = ", loss(u))
     println("ForwardDiff grad = ", g_fd)
     du = zero(u)
     try
-        Enzyme.autodiff(Enzyme.set_runtime_activity(Enzyme.Reverse),
-                        Enzyme.Const(loss), Enzyme.Active, Enzyme.Duplicated(u, du))
+        Enzyme.autodiff(
+            Enzyme.set_runtime_activity(Enzyme.Reverse),
+            Enzyme.Const(loss), Enzyme.Active, Enzyme.Duplicated(u, du)
+        )
         rel = maximum(abs.(du .- g_fd)) / max(1.0, maximum(abs.(g_fd)))
         println("REVERSE OK; max abs diff vs ForwardDiff = ", rel)
         return :ok

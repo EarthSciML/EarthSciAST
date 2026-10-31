@@ -40,14 +40,14 @@ _env(x0, x1, y0, y1) = (Float64(x0), Float64(y0), Float64(x1), Float64(y1))
 
 # Independent EXACT interior (positive-area) overlap of two axis-aligned envelopes
 # — STRICT inequalities, so edge/corner-touching pairs are NOT "true overlaps".
-function _interior_overlap(a::NTuple{4,Float64}, b::NTuple{4,Float64})
+function _interior_overlap(a::NTuple{4, Float64}, b::NTuple{4, Float64})
     axmin, aymin, axmax, aymax = a
     bxmin, bymin, bxmax, bymax = b
     return max(axmin, bxmin) < min(axmax, bxmax) && max(aymin, bymin) < min(aymax, bymax)
 end
 
 function _true_interior_overlaps(qs, cs)
-    out = Tuple{Int,Int}[]
+    out = Tuple{Int, Int}[]
     for qi in 1:length(qs), cj in 1:length(cs)
         _interior_overlap(qs[qi], cs[cj]) && push!(out, (qi, cj))
     end
@@ -55,9 +55,9 @@ function _true_interior_overlaps(qs, cs)
 end
 
 # BRUTE (core) and FAST (ext) candidate vectors for the same inputs and eps.
-function _brute_and_fast(qs, cs; eps=0.0)
-    brute = ESS.broad_phase_candidates(qs, cs; eps=eps)
-    idx = ESS.build_spatial_index(cs; eps=eps)
+function _brute_and_fast(qs, cs; eps = 0.0)
+    brute = ESS.broad_phase_candidates(qs, cs; eps = eps)
+    idx = ESS.build_spatial_index(cs; eps = eps)
     fast = ESS.broad_phase_candidates(qs, idx)   # idx carries eps
     return brute, fast
 end
@@ -91,7 +91,7 @@ _quad(x0, x1, y0, y1) = Float64[x0 y0; x1 y0; x1 y1; x0 y1]
     _EXT = Base.get_extension(EarthSciAST, :EarthSciASTGeometryOpsExt)
     @testset "extension + fast path available" begin
         @test _EXT !== nothing
-        @test hasmethod(ESS.build_spatial_index, Tuple{Vector{NTuple{4,Float64}}})
+        @test hasmethod(ESS.build_spatial_index, Tuple{Vector{NTuple{4, Float64}}})
     end
 
     # ---------------------------------------------------------------------- #
@@ -99,10 +99,12 @@ _quad(x0, x1, y0, y1) = Float64[x0 y0; x1 y0; x1 y1; x0 y1]
     # ---------------------------------------------------------------------- #
     @testset "(d) hand-checked example" begin
         qs = [_env(0, 1, 0, 1), _env(2, 3, 2, 3)]
-        cs = [_env(0.5, 1.5, 0.5, 1.5),   # c1 overlaps q1 (interior)
-              _env(1, 2, 1, 2),           # c2 corner-touches q1 at (1,1) and q2 at (2,2)
-              _env(2.5, 3.5, 2.5, 3.5),   # c3 overlaps q2 (interior)
-              _env(10, 11, 10, 11)]       # c4 disjoint from all
+        cs = [
+            _env(0.5, 1.5, 0.5, 1.5),   # c1 overlaps q1 (interior)
+            _env(1, 2, 1, 2),           # c2 corner-touches q1 at (1,1) and q2 at (2,2)
+            _env(2.5, 3.5, 2.5, 3.5),   # c3 overlaps q2 (interior)
+            _env(10, 11, 10, 11),
+        ]       # c4 disjoint from all
         expected = [(1, 1), (1, 2), (2, 2), (2, 3)]
         brute = ESS.broad_phase_candidates(qs, cs)
         @test brute == expected
@@ -130,8 +132,12 @@ _quad(x0, x1, y0, y1) = Float64[x0 y0; x1 y0; x1 y1; x0 y1]
 
         @testset "random rectangles (fixed seed)" begin
             Random.seed!(20260721)
-            mkrects(n) = [(x0 = 100rand(); y0 = 100rand();
-                           _env(x0, x0 + 1 + 9rand(), y0, y0 + 1 + 9rand())) for _ in 1:n]
+            mkrects(n) = [
+                (
+                    x0 = 100rand(); y0 = 100rand();
+                    _env(x0, x0 + 1 + 9rand(), y0, y0 + 1 + 9rand())
+                ) for _ in 1:n
+            ]
             cs = mkrects(40)
             qs = mkrects(30)
             brute, fast = _brute_and_fast(qs, cs)
@@ -143,12 +149,16 @@ _quad(x0, x1, y0, y1) = Float64[x0 y0; x1 y0; x1 y1; x0 y1]
 
         @testset "touching + degenerate boxes" begin
             # shared edges, shared corners, and degenerate (zero-area) point/line boxes.
-            cs = [_env(0, 1, 0, 1), _env(1, 2, 0, 1), _env(0, 1, 1, 2),
-                  _env(2, 2, 2, 2),          # degenerate point box
-                  _env(0, 1, 3, 3)]          # degenerate horizontal line box
-            qs = [_env(1, 1, 0, 1),          # degenerate vertical line on the shared edge
-                  _env(0.5, 1.5, 0.5, 1.5),  # straddles four cells
-                  _env(2, 2, 2, 2)]          # coincides with the degenerate point box
+            cs = [
+                _env(0, 1, 0, 1), _env(1, 2, 0, 1), _env(0, 1, 1, 2),
+                _env(2, 2, 2, 2),          # degenerate point box
+                _env(0, 1, 3, 3),
+            ]          # degenerate horizontal line box
+            qs = [
+                _env(1, 1, 0, 1),          # degenerate vertical line on the shared edge
+                _env(0.5, 1.5, 0.5, 1.5),  # straddles four cells
+                _env(2, 2, 2, 2),
+            ]          # coincides with the degenerate point box
             brute, fast = _brute_and_fast(qs, cs)
             @test fast == brute
             # closed predicate: the degenerate point boxes coincide ⇒ (3,4) is a candidate.
@@ -164,12 +174,12 @@ _quad(x0, x1, y0, y1) = Float64[x0 y0; x1 y0; x1 y1; x0 y1]
         end
 
         @testset "empty inputs" begin
-            empt = NTuple{4,Float64}[]
+            empt = NTuple{4, Float64}[]
             some = [_env(0, 1, 0, 1)]
-            @test ESS.broad_phase_candidates(empt, some) == Tuple{Int,Int}[]
-            @test ESS.broad_phase_candidates(some, empt) == Tuple{Int,Int}[]
-            @test ESS.broad_phase_candidates(some, ESS.build_spatial_index(empt)) == Tuple{Int,Int}[]
-            @test ESS.broad_phase_candidates(empt, ESS.build_spatial_index(some)) == Tuple{Int,Int}[]
+            @test ESS.broad_phase_candidates(empt, some) == Tuple{Int, Int}[]
+            @test ESS.broad_phase_candidates(some, empt) == Tuple{Int, Int}[]
+            @test ESS.broad_phase_candidates(some, ESS.build_spatial_index(empt)) == Tuple{Int, Int}[]
+            @test ESS.broad_phase_candidates(empt, ESS.build_spatial_index(some)) == Tuple{Int, Int}[]
         end
     end
 
@@ -179,8 +189,12 @@ _quad(x0, x1, y0, y1) = Float64[x0 y0; x1 y0; x1 y1; x0 y1]
     @testset "(b) conservativeness" begin
         @testset "random rectangles: interior overlaps ⊆ candidates" begin
             Random.seed!(424242)
-            mkrects(n) = [(x0 = 50rand(); y0 = 50rand();
-                           _env(x0, x0 + 0.5 + 5rand(), y0, y0 + 0.5 + 5rand())) for _ in 1:n]
+            mkrects(n) = [
+                (
+                    x0 = 50rand(); y0 = 50rand();
+                    _env(x0, x0 + 0.5 + 5rand(), y0, y0 + 0.5 + 5rand())
+                ) for _ in 1:n
+            ]
             cs = mkrects(50)
             qs = mkrects(40)
             cand = ESS.broad_phase_candidates(qs, cs)
@@ -197,16 +211,20 @@ _quad(x0, x1, y0, y1) = Float64[x0 y0; x1 y0; x1 y1; x0 y1]
             quads = Matrix{Float64}[]
             for _ in 1:24
                 x0 = 20rand(); y0 = 20rand()
-                push!(quads, _rotate(_quad(x0, x0 + 1 + 3rand(), y0, y0 + 1 + 3rand()),
-                                     2π * rand()))
+                push!(
+                    quads, _rotate(
+                        _quad(x0, x0 + 1 + 3rand(), y0, y0 + 1 + 3rand()),
+                        2π * rand()
+                    )
+                )
             end
             envs = [_ring_env(q) for q in quads]
             cand = ESS.broad_phase_candidates(envs, envs)
             # narrow-phase truth: an actual planar polygon clip with positive area.
-            truth = Tuple{Int,Int}[]
+            truth = Tuple{Int, Int}[]
             for i in eachindex(quads), j in eachindex(quads)
                 ring = ESS.intersect_polygon(quads[i], quads[j], "planar")
-                if size(ring, 1) >= 3 && ESS.polygon_area(ring, "planar") > 1e-12
+                if size(ring, 1) >= 3 && ESS.polygon_area(ring, "planar") > 1.0e-12
                     push!(truth, (i, j))
                 end
             end
@@ -220,25 +238,29 @@ _quad(x0, x1, y0, y1) = Float64[x0 y0; x1 y0; x1 y1; x0 y1]
     # ---------------------------------------------------------------------- #
     @testset "(c) eps monotonicity" begin
         Random.seed!(7)
-        mkrects(n) = [(x0 = 30rand(); y0 = 30rand();
-                       _env(x0, x0 + 1 + 2rand(), y0, y0 + 1 + 2rand())) for _ in 1:n]
+        mkrects(n) = [
+            (
+                x0 = 30rand(); y0 = 30rand();
+                _env(x0, x0 + 1 + 2rand(), y0, y0 + 1 + 2rand())
+            ) for _ in 1:n
+        ]
         cs = mkrects(35)
         qs = mkrects(25)
-        c0 = ESS.broad_phase_candidates(qs, cs; eps=0.0)
-        cδ = ESS.broad_phase_candidates(qs, cs; eps=0.75)
-        cδδ = ESS.broad_phase_candidates(qs, cs; eps=3.0)
+        c0 = ESS.broad_phase_candidates(qs, cs; eps = 0.0)
+        cδ = ESS.broad_phase_candidates(qs, cs; eps = 0.75)
+        cδδ = ESS.broad_phase_candidates(qs, cs; eps = 3.0)
         @test issubset(Set(c0), Set(cδ))
         @test issubset(Set(cδ), Set(cδδ))
         @test length(cδ) >= length(c0)
         # fast path identical to brute at each eps (index built with the same eps).
         for e in (0.0, 0.75, 3.0)
-            brute, fast = _brute_and_fast(qs, cs; eps=e)
+            brute, fast = _brute_and_fast(qs, cs; eps = e)
             @test fast == brute
         end
         # eps mismatch between index and query is a hard error (avoids silent
         # inconsistency with the baked cell inflation).
-        idx0 = ESS.build_spatial_index(cs; eps=0.0)
-        @test_throws ArgumentError ESS.broad_phase_candidates(qs, idx0; eps=0.75)
+        idx0 = ESS.build_spatial_index(cs; eps = 0.0)
+        @test_throws ArgumentError ESS.broad_phase_candidates(qs, idx0; eps = 0.75)
     end
 
     # ---------------------------------------------------------------------- #
@@ -248,17 +270,27 @@ _quad(x0, x1, y0, y1) = Float64[x0 y0; x1 y0; x1 y1; x0 y1]
     # the answer is the pairwise one.
     # ---------------------------------------------------------------------- #
     @testset "binned path: sliver cells" begin
-        pairwise(qs, cs) = sort!([(qi, cj) for qi in eachindex(qs) for cj in eachindex(cs)
-            if qs[qi][1] <= cs[cj][3] && cs[cj][1] <= qs[qi][3] &&
-               qs[qi][2] <= cs[cj][4] && cs[cj][2] <= qs[qi][4]])
+        pairwise(qs, cs) = sort!(
+            [
+                (qi, cj) for qi in eachindex(qs) for cj in eachindex(cs)
+                    if qs[qi][1] <= cs[cj][3] && cs[cj][1] <= qs[qi][3] &&
+                    qs[qi][2] <= cs[cj][4] && cs[cj][2] <= qs[qi][4]
+            ]
+        )
         n = 300
         @test n * n > ESS._BROAD_PHASE_GRID_MIN
         qs = [_env((k - 1) / n, k / n, 0.0, 1.0) for k in 1:n]
-        for w in (1e-300, 0.0)
+        for w in (1.0e-300, 0.0)
             # w = 0: every cell but the first is a zero-width segment and the
             # first is 1e-320 wide, so the mean width is subnormal.
-            cs = [(x = (k - 1) / (n - 1); _env(x, x + (w == 0 && k == 1 ? 1e-320 : w),
-                                               0.0, 1.0)) for k in 1:n]
+            cs = [
+                (
+                    x = (k - 1) / (n - 1); _env(
+                        x, x + (w == 0 && k == 1 ? 1.0e-320 : w),
+                        0.0, 1.0
+                    )
+                ) for k in 1:n
+            ]
             @test ESS.broad_phase_candidates(qs, cs) == pairwise(qs, cs)
         end
     end

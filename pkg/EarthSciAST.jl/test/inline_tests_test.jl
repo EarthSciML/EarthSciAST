@@ -23,51 +23,84 @@ const _PIT_N = 8
 
 # Cell-center coordinates x_i = (i - 1/2)/N over the `x` index set — the
 # §9.7 grid-geometry aggregate shape (post-import expansion).
-_pit_x_coord_aggregate() = Dict{String,Any}(
+_pit_x_coord_aggregate() = Dict{String, Any}(
     "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
-    "ranges" => Dict{String,Any}("i" => Dict("from" => "x")),
-    "expr" => Dict{String,Any}("op" => "*",
-        "args" => Any[Dict("op" => "-", "args" => Any["i", 0.5]),
-                      Dict("op" => "/", "args" => Any[1, _PIT_N])]))
+    "ranges" => Dict{String, Any}("i" => Dict("from" => "x")),
+    "expr" => Dict{String, Any}(
+        "op" => "*",
+        "args" => Any[
+            Dict("op" => "-", "args" => Any["i", 0.5]),
+            Dict("op" => "/", "args" => Any[1, _PIT_N]),
+        ]
+    )
+)
 
-_pit_cos_pi_x() = Dict{String,Any}(
+_pit_cos_pi_x() = Dict{String, Any}(
     "op" => "cos",
-    "args" => Any[Dict{String,Any}("op" => "*",
-        "args" => Any[Float64(pi), _pit_x_coord_aggregate()])])
+    "args" => Any[
+        Dict{String, Any}(
+            "op" => "*",
+            "args" => Any[Float64(pi), _pit_x_coord_aggregate()]
+        ),
+    ]
+)
 
 # A lifted field decay model du_i/dt = -u_i seeded by the coordinate
 # expression ic(u) = cos(pi x_i); exact solution e^{-t} cos(pi x_i). The
 # same document the Python / Rust suites are built on; `assertions` is
 # spliced into the single inline test.
 function _pit_decay_doc(assertions::Vector)
-    idx = Dict{String,Any}("op" => "index", "args" => Any["u", "i"])
-    Dict{String,Any}(
+    idx = Dict{String, Any}("op" => "index", "args" => Any["u", "i"])
+    return Dict{String, Any}(
         "esm" => "1.1.0",
         "metadata" => Dict("name" => "pde_inline_decay"),
-        "index_sets" => Dict{String,Any}(
-            "x" => Dict("kind" => "interval", "size" => _PIT_N)),
-        "models" => Dict{String,Any}("M" => Dict{String,Any}(
-            "variables" => Dict{String,Any}(
-                "u" => Dict("type" => "unknown", "units" => "1",
-                            "shape" => Any["x"])),
-            "equations" => Any[
-                Dict{String,Any}("lhs" => Dict("op" => "ic", "args" => Any["u"]),
-                                 "rhs" => _pit_cos_pi_x()),
-                Dict{String,Any}(
-                    "lhs" => Dict{String,Any}("op" => "faq", "args" => Any[],
-                        "output_idx" => Any["i"],
-                        "ranges" => Dict{String,Any}("i" => Any[1, _PIT_N]),
-                        "expr" => Dict{String,Any}("op" => "D", "args" => Any[idx],
-                                                   "wrt" => "t")),
-                    "rhs" => Dict{String,Any}("op" => "faq", "args" => Any[],
-                        "output_idx" => Any["i"],
-                        "ranges" => Dict{String,Any}("i" => Any[1, _PIT_N]),
-                        "expr" => Dict{String,Any}("op" => "*",
-                                                   "args" => Any[-1, idx])))],
-            "tests" => Any[Dict{String,Any}(
-                "id" => "decay",
-                "time_span" => Dict("start" => 0.0, "end" => 1.0),
-                "assertions" => Any[assertions...])])))
+        "index_sets" => Dict{String, Any}(
+            "x" => Dict("kind" => "interval", "size" => _PIT_N)
+        ),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "u" => Dict(
+                        "type" => "unknown", "units" => "1",
+                        "shape" => Any["x"]
+                    )
+                ),
+                "equations" => Any[
+                    Dict{String, Any}(
+                        "lhs" => Dict("op" => "ic", "args" => Any["u"]),
+                        "rhs" => _pit_cos_pi_x()
+                    ),
+                    Dict{String, Any}(
+                        "lhs" => Dict{String, Any}(
+                            "op" => "faq", "args" => Any[],
+                            "output_idx" => Any["i"],
+                            "ranges" => Dict{String, Any}("i" => Any[1, _PIT_N]),
+                            "expr" => Dict{String, Any}(
+                                "op" => "D", "args" => Any[idx],
+                                "wrt" => "t"
+                            )
+                        ),
+                        "rhs" => Dict{String, Any}(
+                            "op" => "faq", "args" => Any[],
+                            "output_idx" => Any["i"],
+                            "ranges" => Dict{String, Any}("i" => Any[1, _PIT_N]),
+                            "expr" => Dict{String, Any}(
+                                "op" => "*",
+                                "args" => Any[-1, idx]
+                            )
+                        )
+                    ),
+                ],
+                "tests" => Any[
+                    Dict{String, Any}(
+                        "id" => "decay",
+                        "time_span" => Dict("start" => 0.0, "end" => 1.0),
+                        "assertions" => Any[assertions...]
+                    ),
+                ]
+            )
+        )
+    )
 end
 
 _pit_load(doc) = _PIT_ESS.load_string(IOBuffer(JSON3.write(doc)))
@@ -78,14 +111,18 @@ _pit_load(doc) = _PIT_ESS.load_string(IOBuffer(JSON3.write(doc)))
 # The subject here is assertion semantics (coords sampling, `reduce`, `time`),
 # not which compiler ran, so the reference evaluator is the right one to
 # measure them under; `compiler_selection_test.jl` pins the refusal itself.
-_pit_run(file; kwargs...) = run_inline_tests(file; model_name="M",
-    alg=OrdinaryDiffEqTsit5.Tsit5(), reltol=1e-12, abstol=1e-14,
-    compiler=:interpreter, kwargs...)
+_pit_run(file; kwargs...) = run_inline_tests(
+    file; model_name = "M",
+    alg = OrdinaryDiffEqTsit5.Tsit5(), reltol = 1.0e-12, abstol = 1.0e-14,
+    compiler = :interpreter, kwargs...
+)
 
-_pit_coords_assert(coords; time=0.0, expected=0.0, abs_tol=1e-9, var="u") =
-    Dict{String,Any}("variable" => var, "time" => time, "expected" => expected,
-                     "tolerance" => Dict("abs" => abs_tol),
-                     "coords" => Dict{String,Any}(coords...))
+_pit_coords_assert(coords; time = 0.0, expected = 0.0, abs_tol = 1.0e-9, var = "u") =
+    Dict{String, Any}(
+    "variable" => var, "time" => time, "expected" => expected,
+    "tolerance" => Dict("abs" => abs_tol),
+    "coords" => Dict{String, Any}(coords...)
+)
 
 @testset "field_reduce integral — unit-measure Riemann sum (== mean)" begin
     f = [1.0, 2.0, 3.0]
@@ -101,15 +138,21 @@ end
     u3 = cos(pi * 2.5 / _PIT_N)
     u6 = cos(pi * 5.5 / _PIT_N)
     u8 = cos(pi * 7.5 / _PIT_N)
-    file = _pit_load(_pit_decay_doc(Any[
-        _pit_coords_assert(["x" => 3]; expected=u3),
-        _pit_coords_assert(["x" => 3.5]; expected=u3),   # tie → lower index 3
-        _pit_coords_assert(["x" => 2.5]; expected=cos(pi * 1.5 / _PIT_N)), # tie → 2
-        _pit_coords_assert(["x" => 5.6]; expected=u6),   # nearest → 6
-        _pit_coords_assert(["x" => 8.5]; expected=u8),   # tie at top edge → 8
-        _pit_coords_assert(["x" => 3]; time=1.0, expected=exp(-1.0) * u3,
-                           abs_tol=1e-8),
-    ]))
+    file = _pit_load(
+        _pit_decay_doc(
+            Any[
+                _pit_coords_assert(["x" => 3]; expected = u3),
+                _pit_coords_assert(["x" => 3.5]; expected = u3),   # tie → lower index 3
+                _pit_coords_assert(["x" => 2.5]; expected = cos(pi * 1.5 / _PIT_N)), # tie → 2
+                _pit_coords_assert(["x" => 5.6]; expected = u6),   # nearest → 6
+                _pit_coords_assert(["x" => 8.5]; expected = u8),   # tie at top edge → 8
+                _pit_coords_assert(
+                    ["x" => 3]; time = 1.0, expected = exp(-1.0) * u3,
+                    abs_tol = 1.0e-8
+                ),
+            ]
+        )
+    )
     results = _pit_run(file)
     @test length(results) == 6
     for r in results
@@ -121,11 +164,15 @@ end
 end
 
 @testset "coords validation rejections" begin
-    file = _pit_load(_pit_decay_doc(Any[
-        _pit_coords_assert(["y" => 1.0]),
-        _pit_coords_assert(["x" => 0.4]),   # → index 0
-        _pit_coords_assert(["x" => 8.6]),   # → index 9
-    ]))
+    file = _pit_load(
+        _pit_decay_doc(
+            Any[
+                _pit_coords_assert(["y" => 1.0]),
+                _pit_coords_assert(["x" => 0.4]),   # → index 0
+                _pit_coords_assert(["x" => 8.6]),   # → index 9
+            ]
+        )
+    )
     results = _pit_run(file)
     @test length(results) == 3
     @test all(r -> !r.passed && r.actual === nothing, results)
@@ -139,72 +186,119 @@ end
     @test occursin("resolves to index 9", results[3].message)
 
     # coords on a scalar (0-D) variable is ill-formed per §6.6.5.
-    scalar_doc = Dict{String,Any}(
+    scalar_doc = Dict{String, Any}(
         "esm" => "1.1.0",
         "metadata" => Dict("name" => "scalar_coords"),
-        "models" => Dict{String,Any}("M" => Dict{String,Any}(
-            "variables" => Dict{String,Any}(
-                "z" => Dict("type" => "unknown", "units" => "1",
-                            "default" => 1.0)),
-            "equations" => Any[Dict{String,Any}(
-                "lhs" => Dict("op" => "D", "args" => Any["z"], "wrt" => "t"),
-                "rhs" => 0.0)],
-            "tests" => Any[Dict{String,Any}(
-                "id" => "scalar",
-                "time_span" => Dict("start" => 0.0, "end" => 1.0),
-                "assertions" => Any[_pit_coords_assert(["x" => 1.0];
-                                                       time=1.0, var="z")])])))
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "z" => Dict(
+                        "type" => "unknown", "units" => "1",
+                        "default" => 1.0
+                    )
+                ),
+                "equations" => Any[
+                    Dict{String, Any}(
+                        "lhs" => Dict("op" => "D", "args" => Any["z"], "wrt" => "t"),
+                        "rhs" => 0.0
+                    ),
+                ],
+                "tests" => Any[
+                    Dict{String, Any}(
+                        "id" => "scalar",
+                        "time_span" => Dict("start" => 0.0, "end" => 1.0),
+                        "assertions" => Any[
+                            _pit_coords_assert(
+                                ["x" => 1.0];
+                                time = 1.0, var = "z"
+                            ),
+                        ]
+                    ),
+                ]
+            )
+        )
+    )
     sres = _pit_run(_pit_load(scalar_doc))
     @test length(sres) == 1
     @test !sres[1].passed
     @test occursin("requires a spatially-shaped variable", sres[1].message)
 
     # coords + reduce is rejected at load (Assertion constructor).
-    bad = _pit_decay_doc(Any[Dict{String,Any}(
-        "variable" => "u", "time" => 0.0, "expected" => 0.0,
-        "coords" => Dict("x" => 1), "reduce" => "mean")])
+    bad = _pit_decay_doc(
+        Any[
+            Dict{String, Any}(
+                "variable" => "u", "time" => 0.0, "expected" => 0.0,
+                "coords" => Dict("x" => 1), "reduce" => "mean"
+            ),
+        ]
+    )
     @test_throws Exception _pit_load(bad)
 end
 
 # A 2-D doc du_ij/dt = 1 with u(0) = 0, so u(t) = t everywhere: pins the
 # strict-subset rule — pinning only `x` is legal iff `y` is singleton.
 function _pit_2d_doc(ny::Int)
-    idx = Dict{String,Any}("op" => "index", "args" => Any["u", "i", "j"])
-    ranges = Dict{String,Any}("i" => Any[1, 4], "j" => Any[1, ny])
-    Dict{String,Any}(
+    idx = Dict{String, Any}("op" => "index", "args" => Any["u", "i", "j"])
+    ranges = Dict{String, Any}("i" => Any[1, 4], "j" => Any[1, ny])
+    return Dict{String, Any}(
         "esm" => "1.1.0",
         "metadata" => Dict("name" => "pde_inline_2d"),
-        "index_sets" => Dict{String,Any}(
+        "index_sets" => Dict{String, Any}(
             "x" => Dict("kind" => "interval", "size" => 4),
-            "y" => Dict("kind" => "interval", "size" => ny)),
-        "models" => Dict{String,Any}("M" => Dict{String,Any}(
-            "variables" => Dict{String,Any}(
-                "u" => Dict("type" => "unknown", "units" => "1",
-                            "shape" => Any["x", "y"])),
-            "equations" => Any[
-                Dict{String,Any}("lhs" => Dict("op" => "ic", "args" => Any["u"]),
-                                 "rhs" => 0.0),
-                Dict{String,Any}(
-                    "lhs" => Dict{String,Any}("op" => "faq", "args" => Any[],
-                        "output_idx" => Any["i", "j"], "ranges" => ranges,
-                        "expr" => Dict{String,Any}("op" => "D", "args" => Any[idx],
-                                                   "wrt" => "t")),
-                    "rhs" => Dict{String,Any}("op" => "faq", "args" => Any[],
-                        "output_idx" => Any["i", "j"], "ranges" => ranges,
-                        "expr" => 1.0))],
-            "tests" => Any[Dict{String,Any}(
-                "id" => "subset",
-                "time_span" => Dict("start" => 0.0, "end" => 1.0),
-                "assertions" => Any[_pit_coords_assert(["x" => 2];
-                                                       time=1.0, expected=1.0,
-                                                       abs_tol=1e-8)])])))
+            "y" => Dict("kind" => "interval", "size" => ny)
+        ),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "u" => Dict(
+                        "type" => "unknown", "units" => "1",
+                        "shape" => Any["x", "y"]
+                    )
+                ),
+                "equations" => Any[
+                    Dict{String, Any}(
+                        "lhs" => Dict("op" => "ic", "args" => Any["u"]),
+                        "rhs" => 0.0
+                    ),
+                    Dict{String, Any}(
+                        "lhs" => Dict{String, Any}(
+                            "op" => "faq", "args" => Any[],
+                            "output_idx" => Any["i", "j"], "ranges" => ranges,
+                            "expr" => Dict{String, Any}(
+                                "op" => "D", "args" => Any[idx],
+                                "wrt" => "t"
+                            )
+                        ),
+                        "rhs" => Dict{String, Any}(
+                            "op" => "faq", "args" => Any[],
+                            "output_idx" => Any["i", "j"], "ranges" => ranges,
+                            "expr" => 1.0
+                        )
+                    ),
+                ],
+                "tests" => Any[
+                    Dict{String, Any}(
+                        "id" => "subset",
+                        "time_span" => Dict("start" => 0.0, "end" => 1.0),
+                        "assertions" => Any[
+                            _pit_coords_assert(
+                                ["x" => 2];
+                                time = 1.0, expected = 1.0,
+                                abs_tol = 1.0e-8
+                            ),
+                        ]
+                    ),
+                ]
+            )
+        )
+    )
 end
 
 @testset "coords strict-subset pinning — singleton remainder only" begin
     ok = _pit_run(_pit_load(_pit_2d_doc(1)))
     @test length(ok) == 1
     @test ok[1].passed
-    @test ok[1].actual ≈ 1.0 atol = 1e-8
+    @test ok[1].actual ≈ 1.0 atol = 1.0e-8
 
     bad = _pit_run(_pit_load(_pit_2d_doc(3)))
     @test length(bad) == 1
@@ -212,30 +306,40 @@ end
     @test occursin("leaves dimension 'y' unpinned with 3 samples", bad[1].message)
 end
 
-_pit_from_file_assert(refdict; reduce="L2_error", abs_tol=1e-12) =
-    Dict{String,Any}("variable" => "u", "time" => 0.0, "expected" => 0.0,
-                     "tolerance" => Dict("abs" => abs_tol), "reduce" => reduce,
-                     "reference" => Dict{String,Any}(refdict...))
+_pit_from_file_assert(refdict; reduce = "L2_error", abs_tol = 1.0e-12) =
+    Dict{String, Any}(
+    "variable" => "u", "time" => 0.0, "expected" => 0.0,
+    "tolerance" => Dict("abs" => abs_tol), "reduce" => reduce,
+    "reference" => Dict{String, Any}(refdict...)
+)
 
 @testset "from_file references — JSON snapshot relative to the .esm dir" begin
     mktempdir() do dir
         vals = [cos(pi * (i - 0.5) / _PIT_N) for i in 1:_PIT_N]
         write(joinpath(dir, "ref.json"), JSON3.write(vals))
-        doc = _pit_decay_doc(Any[
-            _pit_from_file_assert(["type" => "from_file", "path" => "ref.json"]),
-            _pit_from_file_assert(["type" => "from_file", "path" => "ref.json",
-                                   "format" => "json"]; reduce="Linf_error"),
-        ])
+        doc = _pit_decay_doc(
+            Any[
+                _pit_from_file_assert(["type" => "from_file", "path" => "ref.json"]),
+                _pit_from_file_assert(
+                    [
+                        "type" => "from_file", "path" => "ref.json",
+                        "format" => "json",
+                    ]; reduce = "Linf_error"
+                ),
+            ]
+        )
         prob = joinpath(dir, "prob.esm")
         write(prob, JSON3.write(doc))
 
         # Path input: base_dir defaults to the .esm file's directory.
         # `compiler=:interpreter` for the same reason `_pit_run` passes it: the
         # fixture seeds from a coordinate expression.
-        results = run_inline_tests(prob; model_name="M",
-                                alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                reltol=1e-12, abstol=1e-14,
-                                compiler=:interpreter)
+        results = run_inline_tests(
+            prob; model_name = "M",
+            alg = OrdinaryDiffEqTsit5.Tsit5(),
+            reltol = 1.0e-12, abstol = 1.0e-14,
+            compiler = :interpreter
+        )
         @test length(results) == 2
         # Identical evaluation machinery seeded the ic, so the diff is 0.
         for r in results
@@ -244,34 +348,74 @@ _pit_from_file_assert(refdict; reduce="L2_error", abs_tol=1e-12) =
         end
 
         # EsmFile input: explicit base_dir resolves the same way.
-        results2 = _pit_run(_pit_load(doc); base_dir=dir)
+        results2 = _pit_run(_pit_load(doc); base_dir = dir)
         @test all(r -> r.passed, results2)
 
         # Shape mismatch: 7 values for an 8-cell field.
         write(joinpath(dir, "short.json"), JSON3.write(vals[1:7]))
-        short = _pit_run(_pit_load(_pit_decay_doc(Any[_pit_from_file_assert(
-            ["type" => "from_file", "path" => "short.json"])])); base_dir=dir)
+        short = _pit_run(
+            _pit_load(
+                _pit_decay_doc(
+                    Any[
+                        _pit_from_file_assert(
+                            ["type" => "from_file", "path" => "short.json"]
+                        ),
+                    ]
+                )
+            ); base_dir = dir
+        )
         @test !short[1].passed
-        @test occursin("shape mismatch along dimension 1: expected length 8, found 7",
-                       short[1].message)
+        @test occursin(
+            "shape mismatch along dimension 1: expected length 8, found 7",
+            short[1].message
+        )
 
         # Deeper nesting than the field's rank.
         write(joinpath(dir, "deep.json"), JSON3.write([[v] for v in vals]))
-        deep = _pit_run(_pit_load(_pit_decay_doc(Any[_pit_from_file_assert(
-            ["type" => "from_file", "path" => "deep.json"])])); base_dir=dir)
+        deep = _pit_run(
+            _pit_load(
+                _pit_decay_doc(
+                    Any[
+                        _pit_from_file_assert(
+                            ["type" => "from_file", "path" => "deep.json"]
+                        ),
+                    ]
+                )
+            ); base_dir = dir
+        )
         @test !deep[1].passed
         @test occursin("expected a number", deep[1].message)
 
         # Missing file.
-        missing_ = _pit_run(_pit_load(_pit_decay_doc(Any[_pit_from_file_assert(
-            ["type" => "from_file", "path" => "nope.json"])])); base_dir=dir)
+        missing_ = _pit_run(
+            _pit_load(
+                _pit_decay_doc(
+                    Any[
+                        _pit_from_file_assert(
+                            ["type" => "from_file", "path" => "nope.json"]
+                        ),
+                    ]
+                )
+            ); base_dir = dir
+        )
         @test !missing_[1].passed
         @test occursin("file not found", missing_[1].message)
 
         # v1 supports json only.
-        nc = _pit_run(_pit_load(_pit_decay_doc(Any[_pit_from_file_assert(
-            ["type" => "from_file", "path" => "ref.json",
-             "format" => "netcdf"])])); base_dir=dir)
+        nc = _pit_run(
+            _pit_load(
+                _pit_decay_doc(
+                    Any[
+                        _pit_from_file_assert(
+                            [
+                                "type" => "from_file", "path" => "ref.json",
+                                "format" => "netcdf",
+                            ]
+                        ),
+                    ]
+                )
+            ); base_dir = dir
+        )
         @test !nc[1].passed
         @test occursin("format 'netcdf' is not supported", nc[1].message)
     end
@@ -289,60 +433,87 @@ end
 # carries no `expression` field any more, so what was
 # `{"type":"observed","expression":E}` is now `{"type":"unknown"}` plus
 # `{"lhs":"<name>","rhs":E}` in the model's `equations`.
-function _pit_observed_doc(sizes::Vector{Int}, mult::Float64, base_nested,
-                           assertions::Vector)
+function _pit_observed_doc(
+        sizes::Vector{Int}, mult::Float64, base_nested,
+        assertions::Vector
+    )
     R = length(sizes)
     dims = ["d$(k)" for k in 1:R]
     idxs = ["i$(k)" for k in 1:R]
-    ranges = Dict{String,Any}(idxs[k] => Any[1, sizes[k]] for k in 1:R)
-    index_base = Dict{String,Any}("op" => "index", "args" => Any["base", idxs...])
-    scaled_expr = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
+    ranges = Dict{String, Any}(idxs[k] => Any[1, sizes[k]] for k in 1:R)
+    index_base = Dict{String, Any}("op" => "index", "args" => Any["base", idxs...])
+    scaled_expr = Dict{String, Any}(
+        "op" => "faq", "semiring" => "sum_product",
         "output_idx" => Any[idxs...], "ranges" => ranges, "args" => Any["base"],
-        "expr" => Dict{String,Any}("op" => "*", "args" => Any[mult, index_base]))
-    Dict{String,Any}(
+        "expr" => Dict{String, Any}("op" => "*", "args" => Any[mult, index_base])
+    )
+    return Dict{String, Any}(
         "esm" => "1.1.0",
         "metadata" => Dict("name" => "pde_inline_observed_rankN"),
-        "index_sets" => Dict{String,Any}(
-            dims[k] => Dict("kind" => "interval", "size" => sizes[k]) for k in 1:R),
-        "models" => Dict{String,Any}("M" => Dict{String,Any}(
-            "variables" => Dict{String,Any}(
-                "base" => Dict("type" => "unknown", "shape" => Any[dims...]),
-                "scaled" => Dict("type" => "unknown", "shape" => Any[dims...]),
-                "u" => Dict("type" => "unknown", "shape" => Any[dims...],
-                            "default" => 0.5)),
-            "equations" => Any[
-                Dict{String,Any}("lhs" => "base",
-                    "rhs" => Dict("op" => "const", "args" => Any[],
-                                  "value" => base_nested)),
-                Dict{String,Any}("lhs" => "scaled", "rhs" => scaled_expr),
-                Dict{String,Any}(
-                    "lhs" => Dict("op" => "D", "args" => Any["u"], "wrt" => "t"),
-                    "rhs" => "scaled")],
-            "tests" => Any[Dict{String,Any}(
-                "id" => "observed_rankN",
-                "time_span" => Dict("start" => 0.0, "end" => 1.0),
-                "assertions" => Any[assertions...])])))
+        "index_sets" => Dict{String, Any}(
+            dims[k] => Dict("kind" => "interval", "size" => sizes[k]) for k in 1:R
+        ),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "base" => Dict("type" => "unknown", "shape" => Any[dims...]),
+                    "scaled" => Dict("type" => "unknown", "shape" => Any[dims...]),
+                    "u" => Dict(
+                        "type" => "unknown", "shape" => Any[dims...],
+                        "default" => 0.5
+                    )
+                ),
+                "equations" => Any[
+                    Dict{String, Any}(
+                        "lhs" => "base",
+                        "rhs" => Dict(
+                            "op" => "const", "args" => Any[],
+                            "value" => base_nested
+                        )
+                    ),
+                    Dict{String, Any}("lhs" => "scaled", "rhs" => scaled_expr),
+                    Dict{String, Any}(
+                        "lhs" => Dict("op" => "D", "args" => Any["u"], "wrt" => "t"),
+                        "rhs" => "scaled"
+                    ),
+                ],
+                "tests" => Any[
+                    Dict{String, Any}(
+                        "id" => "observed_rankN",
+                        "time_span" => Dict("start" => 0.0, "end" => 1.0),
+                        "assertions" => Any[assertions...]
+                    ),
+                ]
+            )
+        )
+    )
 end
 
-_pit_obs_reduce(kind, expected; var="scaled", time=0.5, abs_tol=1e-9) =
-    Dict{String,Any}("variable" => var, "time" => time, "reduce" => kind,
-                     "expected" => expected, "tolerance" => Dict("abs" => abs_tol))
-_pit_obs_coords(coords, expected; var="scaled", time=0.5, abs_tol=1e-9) =
-    Dict{String,Any}("variable" => var, "time" => time,
-                     "coords" => Dict{String,Any}(coords...),
-                     "expected" => expected, "tolerance" => Dict("abs" => abs_tol))
+_pit_obs_reduce(kind, expected; var = "scaled", time = 0.5, abs_tol = 1.0e-9) =
+    Dict{String, Any}(
+    "variable" => var, "time" => time, "reduce" => kind,
+    "expected" => expected, "tolerance" => Dict("abs" => abs_tol)
+)
+_pit_obs_coords(coords, expected; var = "scaled", time = 0.5, abs_tol = 1.0e-9) =
+    Dict{String, Any}(
+    "variable" => var, "time" => time,
+    "coords" => Dict{String, Any}(coords...),
+    "expected" => expected, "tolerance" => Dict("abs" => abs_tol)
+)
 
 @testset "rank-2 array observed — §6.6.5 materialization (regression: sort! dims)" begin
     # base[i,j] row-major; scaled = 1.5 * base.
     base = Any[Any[0.5, 1.5, 2.5], Any[3.5, 4.5, 5.5]]
-    doc = _pit_observed_doc([2, 3], 1.5, base, Any[
-        _pit_obs_reduce("max", 8.25),                    # 1.5 * 5.5
-        _pit_obs_reduce("min", 0.75),                    # 1.5 * 0.5
-        _pit_obs_coords(["d1" => 2, "d2" => 1], 5.25),   # 1.5 * base[2,1]=3.5
-        _pit_obs_coords(["d1" => 1, "d2" => 3], 3.75),   # 1.5 * base[1,3]=2.5
-        _pit_obs_coords(["d1" => 2, "d2" => 3], 8.25),   # top corner
-        _pit_obs_coords(["d1" => 1, "d2" => 1], 0.75),   # first cell
-    ])
+    doc = _pit_observed_doc(
+        [2, 3], 1.5, base, Any[
+            _pit_obs_reduce("max", 8.25),                    # 1.5 * 5.5
+            _pit_obs_reduce("min", 0.75),                    # 1.5 * 0.5
+            _pit_obs_coords(["d1" => 2, "d2" => 1], 5.25),   # 1.5 * base[2,1]=3.5
+            _pit_obs_coords(["d1" => 1, "d2" => 3], 3.75),   # 1.5 * base[1,3]=2.5
+            _pit_obs_coords(["d1" => 2, "d2" => 3], 8.25),   # top corner
+            _pit_obs_coords(["d1" => 1, "d2" => 1], 0.75),   # first cell
+        ]
+    )
     results = _pit_run(_pit_load(doc))
     @test length(results) == 6
     for r in results
@@ -356,14 +527,18 @@ end
 
 @testset "rank-3 array observed — vec() fix is rank-agnostic" begin
     # base[i,j,k] row-major over a 2x2x2 cube; scaled = 1.5 * base.
-    base = Any[Any[Any[0.5, 1.5], Any[2.5, 3.5]],
-               Any[Any[4.5, 5.5], Any[6.5, 7.5]]]
-    doc = _pit_observed_doc([2, 2, 2], 1.5, base, Any[
-        _pit_obs_reduce("max", 11.25),                              # 1.5 * 7.5
-        _pit_obs_reduce("min", 0.75),                               # 1.5 * 0.5
-        _pit_obs_coords(["d1" => 2, "d2" => 1, "d3" => 2], 8.25),   # base[2,1,2]=5.5
-        _pit_obs_coords(["d1" => 1, "d2" => 2, "d3" => 1], 3.75),   # base[1,2,1]=2.5
-    ])
+    base = Any[
+        Any[Any[0.5, 1.5], Any[2.5, 3.5]],
+        Any[Any[4.5, 5.5], Any[6.5, 7.5]],
+    ]
+    doc = _pit_observed_doc(
+        [2, 2, 2], 1.5, base, Any[
+            _pit_obs_reduce("max", 11.25),                              # 1.5 * 7.5
+            _pit_obs_reduce("min", 0.75),                               # 1.5 * 0.5
+            _pit_obs_coords(["d1" => 2, "d2" => 1, "d3" => 2], 8.25),   # base[2,1,2]=5.5
+            _pit_obs_coords(["d1" => 1, "d2" => 2, "d3" => 1], 3.75),   # base[1,2,1]=2.5
+        ]
+    )
     results = _pit_run(_pit_load(doc))
     @test length(results) == 4
     for r in results
@@ -381,48 +556,69 @@ end
 # out of scope (an observed that reads a state still errors). Mirrors the
 # tests/conformance/pde_inline_observed_param_rank2 fixture.
 function _pit_param_observed_doc(assertions::Vector)
-    idx = Dict{String,Any}("op" => "index", "args" => Any["base", "i", "j"])
-    scaled_expr = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
+    idx = Dict{String, Any}("op" => "index", "args" => Any["base", "i", "j"])
+    scaled_expr = Dict{String, Any}(
+        "op" => "faq", "semiring" => "sum_product",
         "output_idx" => Any["i", "j"],
-        "ranges" => Dict{String,Any}("i" => Any[1, 2], "j" => Any[1, 3]),
+        "ranges" => Dict{String, Any}("i" => Any[1, 2], "j" => Any[1, 3]),
         "args" => Any["base"],
-        "expr" => Dict{String,Any}("op" => "*", "args" => Any["k", idx]))
-    Dict{String,Any}(
+        "expr" => Dict{String, Any}("op" => "*", "args" => Any["k", idx])
+    )
+    return Dict{String, Any}(
         "esm" => "1.1.0",
         "metadata" => Dict("name" => "pde_inline_param_observed"),
-        "index_sets" => Dict{String,Any}(
+        "index_sets" => Dict{String, Any}(
             "d1" => Dict("kind" => "interval", "size" => 2),
-            "d2" => Dict("kind" => "interval", "size" => 3)),
-        "models" => Dict{String,Any}("M" => Dict{String,Any}(
-            "variables" => Dict{String,Any}(
-                "k" => Dict("type" => "parameter", "default" => 1.5),
-                # esm 1.0.0: observed unknowns, defined by the bare-variable-LHS
-                # equations below rather than by a variable `expression`.
-                "base" => Dict("type" => "unknown", "shape" => Any["d1", "d2"]),
-                "scaled" => Dict("type" => "unknown", "shape" => Any["d1", "d2"]),
-                "u" => Dict("type" => "unknown", "shape" => Any["d1", "d2"],
-                            "default" => 0.5)),
-            "equations" => Any[
-                Dict{String,Any}("lhs" => "base",
-                    "rhs" => Dict("op" => "const", "args" => Any[],
-                        "value" => Any[Any[0.5, 1.5, 2.5], Any[3.5, 4.5, 5.5]])),
-                Dict{String,Any}("lhs" => "scaled", "rhs" => scaled_expr),
-                Dict{String,Any}(
-                    "lhs" => Dict("op" => "D", "args" => Any["u"], "wrt" => "t"),
-                    "rhs" => "scaled")],
-            "tests" => Any[Dict{String,Any}(
-                "id" => "param_observed",
-                "time_span" => Dict("start" => 0.0, "end" => 1.0),
-                "assertions" => Any[assertions...])])))
+            "d2" => Dict("kind" => "interval", "size" => 3)
+        ),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "k" => Dict("type" => "parameter", "default" => 1.5),
+                    # esm 1.0.0: observed unknowns, defined by the bare-variable-LHS
+                    # equations below rather than by a variable `expression`.
+                    "base" => Dict("type" => "unknown", "shape" => Any["d1", "d2"]),
+                    "scaled" => Dict("type" => "unknown", "shape" => Any["d1", "d2"]),
+                    "u" => Dict(
+                        "type" => "unknown", "shape" => Any["d1", "d2"],
+                        "default" => 0.5
+                    )
+                ),
+                "equations" => Any[
+                    Dict{String, Any}(
+                        "lhs" => "base",
+                        "rhs" => Dict(
+                            "op" => "const", "args" => Any[],
+                            "value" => Any[Any[0.5, 1.5, 2.5], Any[3.5, 4.5, 5.5]]
+                        )
+                    ),
+                    Dict{String, Any}("lhs" => "scaled", "rhs" => scaled_expr),
+                    Dict{String, Any}(
+                        "lhs" => Dict("op" => "D", "args" => Any["u"], "wrt" => "t"),
+                        "rhs" => "scaled"
+                    ),
+                ],
+                "tests" => Any[
+                    Dict{String, Any}(
+                        "id" => "param_observed",
+                        "time_span" => Dict("start" => 0.0, "end" => 1.0),
+                        "assertions" => Any[assertions...]
+                    ),
+                ]
+            )
+        )
+    )
 end
 
 @testset "parameter-dependent array observed asserted directly (§6.6.5 param scope)" begin
-    doc = _pit_param_observed_doc(Any[
-        _pit_obs_reduce("max", 8.25),                    # 1.5 * 5.5
-        _pit_obs_reduce("min", 0.75),                    # 1.5 * 0.5
-        _pit_obs_coords(["d1" => 2, "d2" => 1], 5.25),   # 1.5 * base[2,1]=3.5
-        _pit_obs_coords(["d1" => 1, "d2" => 3], 3.75),   # 1.5 * base[1,3]=2.5
-    ])
+    doc = _pit_param_observed_doc(
+        Any[
+            _pit_obs_reduce("max", 8.25),                    # 1.5 * 5.5
+            _pit_obs_reduce("min", 0.75),                    # 1.5 * 0.5
+            _pit_obs_coords(["d1" => 2, "d2" => 1], 5.25),   # 1.5 * base[2,1]=3.5
+            _pit_obs_coords(["d1" => 1, "d2" => 3], 3.75),   # 1.5 * base[1,3]=2.5
+        ]
+    )
     results = _pit_run(_pit_load(doc))
     @test length(results) == 4
     for r in results
@@ -438,14 +634,21 @@ end
     # `coerce_assertion` misclassified it as `from_file` and `run_inline_tests`
     # rejected it ("unsupported `reference` shape Dict"). At t=0 the cos(pi x)
     # ic exactly equals the cos(pi x) analytic reference → relative L2 ≈ 0.
-    file = _pit_load(_pit_decay_doc(Any[
-        Dict{String,Any}("variable" => "u", "time" => 0.0, "expected" => 0.0,
-            "tolerance" => Dict("abs" => 1e-12), "reduce" => "L2_error",
-            "reference" => _pit_cos_pi_x())]))
+    file = _pit_load(
+        _pit_decay_doc(
+            Any[
+                Dict{String, Any}(
+                    "variable" => "u", "time" => 0.0, "expected" => 0.0,
+                    "tolerance" => Dict("abs" => 1.0e-12), "reduce" => "L2_error",
+                    "reference" => _pit_cos_pi_x()
+                ),
+            ]
+        )
+    )
     results = _pit_run(file)
     @test length(results) == 1
     @test results[1].passed
-    @test results[1].actual < 1e-12
+    @test results[1].actual < 1.0e-12
 end
 
 @testset "AssertionResult status enum + JUnit emission" begin
@@ -453,11 +656,15 @@ end
     # shared AssertionStatus values, `passed` must mirror `status == PASS`,
     # and the results must ride the same JUnit path as the MTK runner.
     u3 = cos(pi * 2.5 / _PIT_N)
-    file = _pit_load(_pit_decay_doc(Any[
-        _pit_coords_assert(["x" => 3]; expected=u3),          # PASS
-        _pit_coords_assert(["x" => 3]; expected=u3 + 1.0),    # FAIL (wrong value)
-        _pit_coords_assert(["y" => 1.0]),                     # ERROR (bad coords)
-    ]))
+    file = _pit_load(
+        _pit_decay_doc(
+            Any[
+                _pit_coords_assert(["x" => 3]; expected = u3),          # PASS
+                _pit_coords_assert(["x" => 3]; expected = u3 + 1.0),    # FAIL (wrong value)
+                _pit_coords_assert(["y" => 1.0]),                     # ERROR (bad coords)
+            ]
+        )
+    )
     results = _pit_run(file)
     @test length(results) == 3
     @test results[1].status == EarthSciAST.PASS
@@ -470,7 +677,7 @@ end
 
     mktempdir() do tmp
         xml_path = joinpath(tmp, "pde_report.xml")
-        write_junit_xml(results, xml_path; file="pde_inline_decay.esm")
+        write_junit_xml(results, xml_path; file = "pde_inline_decay.esm")
         content = read(xml_path, String)
         @test occursin("<testsuites", content)
         @test occursin("pde_inline_decay.esm::M", content)
@@ -480,15 +687,19 @@ end
 end
 
 @testset "shared fixture — tests/spatial/pde_inline_assertions_exec.esm" begin
-    fixture = joinpath(@__DIR__, "..", "..", "..", "tests", "spatial",
-                       "pde_inline_assertions_exec.esm")
+    fixture = joinpath(
+        @__DIR__, "..", "..", "..", "tests", "spatial",
+        "pde_inline_assertions_exec.esm"
+    )
     @test isfile(fixture)
     # `compiler=:interpreter`: this fixture seeds from a coordinate expression,
     # which the strict `native` refuses (API_SPEC §5.8) — see `_pit_run`.
-    results = run_inline_tests(fixture; model_name="M",
-                            alg=OrdinaryDiffEqTsit5.Tsit5(),
-                            reltol=1e-12, abstol=1e-14,
-                            compiler=:interpreter)
+    results = run_inline_tests(
+        fixture; model_name = "M",
+        alg = OrdinaryDiffEqTsit5.Tsit5(),
+        reltol = 1.0e-12, abstol = 1.0e-14,
+        compiler = :interpreter
+    )
     @test length(results) == 7
     for r in results
         @test r.passed
@@ -496,10 +707,10 @@ end
     # The two tie-sampling coords assertions hit the SAME cell.
     @test results[1].actual == results[2].actual
     # integral == mean == 0 for the symmetric cosine field.
-    @test abs(results[5].actual) < 1e-12
+    @test abs(results[5].actual) < 1.0e-12
     # from_file error norms are ~0 against the committed exact snapshot.
-    @test results[6].actual < 1e-12
-    @test results[7].actual < 1e-12
+    @test results[6].actual < 1.0e-12
+    @test results[7].actual < 1.0e-12
 end
 
 # ---------------------------------------------------------------------------
@@ -519,14 +730,18 @@ end
 # resolving the moment it is mounted under any key but `P`.
 # ---------------------------------------------------------------------------
 
-const _PIT_MOUNT_FIXTURE = joinpath(@__DIR__, "..", "..", "..", "tests", "valid",
-                                    "inline_test_reference_mount_name.esm")
+const _PIT_MOUNT_FIXTURE = joinpath(
+    @__DIR__, "..", "..", "..", "tests", "valid",
+    "inline_test_reference_mount_name.esm"
+)
 
 @testset "shared fixture — tests/valid/inline_test_reference_mount_name.esm" begin
     @test isfile(_PIT_MOUNT_FIXTURE)
-    results = run_inline_tests(_PIT_MOUNT_FIXTURE; model_name="P",
-                            alg=OrdinaryDiffEqTsit5.Tsit5(),
-                            reltol=1e-12, abstol=1e-14)
+    results = run_inline_tests(
+        _PIT_MOUNT_FIXTURE; model_name = "P",
+        alg = OrdinaryDiffEqTsit5.Tsit5(),
+        reltol = 1.0e-12, abstol = 1.0e-14
+    )
     @test length(results) == 4
     for r in results
         @test r.passed
@@ -553,16 +768,18 @@ end
     # anything that merely looks qualified. A name that is a suffix of no
     # flattened name stays UNBOUND, so a typo errors rather than quietly
     # reducing against a zero field.
-    raw = JSON3.read(read(_PIT_MOUNT_FIXTURE, String), Dict{String,Any})
+    raw = JSON3.read(read(_PIT_MOUNT_FIXTURE, String), Dict{String, Any})
     for typo in ("sub.gg", "nope.g", "gg")
-        doc = JSON3.read(JSON3.write(raw), Dict{String,Any})
+        doc = JSON3.read(JSON3.write(raw), Dict{String, Any})
         test1 = doc["models"]["P"]["tests"][1]
         test1["assertions"] = [test1["assertions"][1]]
         test1["assertions"][1]["reference"] = typo
         doc["models"]["P"]["tests"] = [test1]
-        results = run_inline_tests(_pit_load(doc); model_name="P",
-                                alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                reltol=1e-12, abstol=1e-14)
+        results = run_inline_tests(
+            _pit_load(doc); model_name = "P",
+            alg = OrdinaryDiffEqTsit5.Tsit5(),
+            reltol = 1.0e-12, abstol = 1.0e-14
+        )
         @test length(results) == 1
         @test !results[1].passed
         @test occursin(typo, something(results[1].message, ""))
@@ -574,7 +791,7 @@ end
     # every globally unambiguous dotted suffix (esm-spec §6.6.2 rule 3, reused
     # by §6.6.5).
     @test _PIT_ESS._param_scope_with_aliases(Dict("P.sub.g" => 2.0, "P.k" => 1.0), "P") ==
-          Dict("P.sub.g" => 2.0, "sub.g" => 2.0, "g" => 2.0, "P.k" => 1.0, "k" => 1.0)
+        Dict("P.sub.g" => 2.0, "sub.g" => 2.0, "g" => 2.0, "P.k" => 1.0, "k" => 1.0)
     # Two mounts of one subsystem, and the test belongs to NEITHER: `sub.g` and
     # `g` are carried by BOTH, so neither binds and a reference meaning one of
     # them must qualify.
@@ -586,8 +803,10 @@ end
     @test _PIT_ESS._param_scope_with_aliases(ambiguous, "A")["sub.g"] == 1.0
     @test _PIT_ESS._param_scope_with_aliases(ambiguous, "B")["sub.g"] == 2.0
     # A real flattened name is never shadowed by another name's alias.
-    @test _PIT_ESS._param_scope_with_aliases(Dict("A.sub.g" => 1.0, "sub.g" => 7.0),
-                                             "A")["sub.g"] == 7.0
+    @test _PIT_ESS._param_scope_with_aliases(
+        Dict("A.sub.g" => 1.0, "sub.g" => 7.0),
+        "A"
+    )["sub.g"] == 7.0
     # A name that is neither the owner's own nor a globally unambiguous suffix
     # is bound by nothing, which is what keeps a typo an error downstream.
     @test !haskey(_PIT_ESS._param_scope_with_aliases(Dict("P.sub.g" => 2.0), "P"), "sub.gg")
@@ -615,42 +834,61 @@ end
 # assertion of a chemical mechanism was skipped, and skipped SILENTLY, since a
 # component that produced no rows is indistinguishable in the result list from
 # one that was never looked at.
-_pit_reaction_decay_doc() = Dict{String,Any}(
+_pit_reaction_decay_doc() = Dict{String, Any}(
     "esm" => "1.1.0",
     "metadata" => Dict("name" => "inline_test_reaction_system"),
-    "reaction_systems" => Dict{String,Any}("Decay" => Dict{String,Any}(
-        "species" => Dict{String,Any}(
-            "A" => Dict("units" => "mol/mol", "default" => 1.0),
-            "B" => Dict("units" => "mol/mol", "default" => 0.0)),
-        "parameters" => Dict{String,Any}(
-            "k" => Dict("units" => "1/s", "default" => 1.0)),
-        "reactions" => Any[Dict{String,Any}(
-            "id" => "R1",
-            "substrates" => Any[Dict("species" => "A", "stoichiometry" => 1)],
-            "products" => Any[Dict("species" => "B", "stoichiometry" => 1)],
-            "rate" => "k")],
-        "tests" => Any[Dict{String,Any}(
-            "id" => "decays",
-            "time_span" => Dict("start" => 0.0, "end" => 1.0),
-            "assertions" => Any[
-                Dict{String,Any}("variable" => "A", "time" => 1.0,
-                                 "expected" => exp(-1.0),
-                                 "tolerance" => Dict("rel" => 1e-6)),
-                Dict{String,Any}("variable" => "B", "time" => 1.0,
-                                 "expected" => 1.0 - exp(-1.0),
-                                 "tolerance" => Dict("rel" => 1e-6))])])))
+    "reaction_systems" => Dict{String, Any}(
+        "Decay" => Dict{String, Any}(
+            "species" => Dict{String, Any}(
+                "A" => Dict("units" => "mol/mol", "default" => 1.0),
+                "B" => Dict("units" => "mol/mol", "default" => 0.0)
+            ),
+            "parameters" => Dict{String, Any}(
+                "k" => Dict("units" => "1/s", "default" => 1.0)
+            ),
+            "reactions" => Any[
+                Dict{String, Any}(
+                    "id" => "R1",
+                    "substrates" => Any[Dict("species" => "A", "stoichiometry" => 1)],
+                    "products" => Any[Dict("species" => "B", "stoichiometry" => 1)],
+                    "rate" => "k"
+                ),
+            ],
+            "tests" => Any[
+                Dict{String, Any}(
+                    "id" => "decays",
+                    "time_span" => Dict("start" => 0.0, "end" => 1.0),
+                    "assertions" => Any[
+                        Dict{String, Any}(
+                            "variable" => "A", "time" => 1.0,
+                            "expected" => exp(-1.0),
+                            "tolerance" => Dict("rel" => 1.0e-6)
+                        ),
+                        Dict{String, Any}(
+                            "variable" => "B", "time" => 1.0,
+                            "expected" => 1.0 - exp(-1.0),
+                            "tolerance" => Dict("rel" => 1.0e-6)
+                        ),
+                    ]
+                ),
+            ]
+        )
+    )
+)
 
 @testset "run_inline_tests covers reaction_systems (#194)" begin
     file = load_string(JSON3.write(_pit_reaction_decay_doc()))
-    results = run_inline_tests(file; alg=OrdinaryDiffEqTsit5.Tsit5(),
-                               reltol=1e-12, abstol=1e-14)
+    results = run_inline_tests(
+        file; alg = OrdinaryDiffEqTsit5.Tsit5(),
+        reltol = 1.0e-12, abstol = 1.0e-14
+    )
     # Two assertions, both from a component that is NOT a `models` entry.
     @test length(results) == 2
     @test all(r -> r.model == "Decay", results)
     @test all(r -> r.container_kind === :reaction_system, results)
     @test [r.variable for r in results] == ["A", "B"]
-    @test isapprox(results[1].actual, exp(-1.0); rtol=1e-6)
-    @test isapprox(results[2].actual, 1.0 - exp(-1.0); rtol=1e-6)
+    @test isapprox(results[1].actual, exp(-1.0); rtol = 1.0e-6)
+    @test isapprox(results[2].actual, 1.0 - exp(-1.0); rtol = 1.0e-6)
     @test all(r -> r.passed, results)
 end
 
@@ -658,25 +896,37 @@ end
 # assertion's `expected` is therefore a direct read-out of the T the run
 # actually used — which is what makes it a probe for where an override came
 # from.
-function _pit_ramp_doc(expected::Float64; test_overrides=nothing)
-    test = Dict{String,Any}(
+function _pit_ramp_doc(expected::Float64; test_overrides = nothing)
+    test = Dict{String, Any}(
         "id" => "ramp",
         "time_span" => Dict("start" => 0.0, "end" => 1.0),
-        "assertions" => Any[Dict{String,Any}(
-            "variable" => "y", "time" => 1.0, "expected" => expected,
-            "tolerance" => Dict("rel" => 1e-9))])
+        "assertions" => Any[
+            Dict{String, Any}(
+                "variable" => "y", "time" => 1.0, "expected" => expected,
+                "tolerance" => Dict("rel" => 1.0e-9)
+            ),
+        ]
+    )
     test_overrides === nothing || (test["parameter_overrides"] = test_overrides)
-    Dict{String,Any}(
+    return Dict{String, Any}(
         "esm" => "1.1.0",
         "metadata" => Dict("name" => "ramp"),
-        "models" => Dict{String,Any}("M" => Dict{String,Any}(
-            "variables" => Dict{String,Any}(
-                "T" => Dict("type" => "parameter", "units" => "1", "default" => 1.0),
-                "y" => Dict("type" => "unknown", "units" => "1", "default" => 0.0)),
-            "equations" => Any[Dict{String,Any}(
-                "lhs" => Dict("op" => "D", "args" => Any["y"], "wrt" => "t"),
-                "rhs" => "T")],
-            "tests" => Any[test])))
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "T" => Dict("type" => "parameter", "units" => "1", "default" => 1.0),
+                    "y" => Dict("type" => "unknown", "units" => "1", "default" => 0.0)
+                ),
+                "equations" => Any[
+                    Dict{String, Any}(
+                        "lhs" => Dict("op" => "D", "args" => Any["y"], "wrt" => "t"),
+                        "rhs" => "T"
+                    ),
+                ],
+                "tests" => Any[test]
+            )
+        )
+    )
 end
 
 @testset "run_inline_tests options_for is consulted per document (#194)" begin
@@ -691,26 +941,30 @@ end
         # asked about the unreadable file too; a corpus callback keyed on
         # basenames therefore needs a default, not an indexing error.
         options_for = path -> InlineTestOptions(
-            alg=OrdinaryDiffEqTsit5.Tsit5(), reltol=1e-12, abstol=1e-14,
-            parameter_overrides=Dict{String,Any}(
-                "T" => get(seeds, basename(path), 1.0)))
+            alg = OrdinaryDiffEqTsit5.Tsit5(), reltol = 1.0e-12, abstol = 1.0e-14,
+            parameter_overrides = Dict{String, Any}(
+                "T" => get(seeds, basename(path), 1.0)
+            )
+        )
         # A DIRECTORY expands to the .esm files under it, sorted.
-        results = run_inline_tests(tmp; options_for=options_for)
+        results = run_inline_tests(tmp; options_for = options_for)
         @test length(results) == 2
-        @test isapprox(results[1].actual, 3.0; rtol=1e-9)
-        @test isapprox(results[2].actual, 7.0; rtol=1e-9)
+        @test isapprox(results[1].actual, 3.0; rtol = 1.0e-9)
+        @test isapprox(results[2].actual, 7.0; rtol = 1.0e-9)
         @test all(r -> r.passed, results)
 
         # Without the callback both documents run at T's default of 1.0 and
         # both assertions fail — the callback is load-bearing, not decorative.
-        bare = run_inline_tests(tmp; alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                reltol=1e-12, abstol=1e-14)
+        bare = run_inline_tests(
+            tmp; alg = OrdinaryDiffEqTsit5.Tsit5(),
+            reltol = 1.0e-12, abstol = 1.0e-14
+        )
         @test !any(r -> r.passed, bare)
 
         # One bad file must not cost a corpus run every other file's verdicts —
         # and must not vanish either, which is indistinguishable from a pass.
         write(joinpath(tmp, "bad.esm"), "{ not json")
-        batch = run_inline_tests(tmp; options_for=options_for)
+        batch = run_inline_tests(tmp; options_for = options_for)
         load_rows = filter(r -> r.test_id == "<load>", batch)
         @test length(load_rows) == 1
         @test endswith(load_rows[1].file, "bad.esm")
@@ -723,14 +977,20 @@ end
 @testset "run_inline_tests seed yields to the test's own override (#194)" begin
     # A seed supplies what the document left unsaid; it never overrules what the
     # document said. The test names T=5 and the caller seeds T=99, so y(1) = 5.
-    file = load_string(JSON3.write(
-        _pit_ramp_doc(5.0; test_overrides=Dict{String,Any}("T" => 5.0))))
-    results = run_inline_tests([file];
+    file = load_string(
+        JSON3.write(
+            _pit_ramp_doc(5.0; test_overrides = Dict{String, Any}("T" => 5.0))
+        )
+    )
+    results = run_inline_tests(
+        [file];
         options_for = _doc -> InlineTestOptions(
-            alg=OrdinaryDiffEqTsit5.Tsit5(), reltol=1e-12, abstol=1e-14,
-            parameter_overrides=Dict{String,Any}("T" => 99.0)))
+            alg = OrdinaryDiffEqTsit5.Tsit5(), reltol = 1.0e-12, abstol = 1.0e-14,
+            parameter_overrides = Dict{String, Any}("T" => 99.0)
+        )
+    )
     @test length(results) == 1
-    @test isapprox(results[1].actual, 5.0; rtol=1e-9)
+    @test isapprox(results[1].actual, 5.0; rtol = 1.0e-9)
     @test results[1].passed
 end
 
@@ -739,34 +999,68 @@ end
 # cell-centre form with `x` free, a table lookup by `x`, and a gather that
 # REBINDS `x` as its own loop symbol (which must not be wrapped a second time)
 # must all read the same field.
-_pit_free_x_cos() = Dict{String,Any}(
+_pit_free_x_cos() = Dict{String, Any}(
     "op" => "cos",
-    "args" => Any[Dict{String,Any}("op" => "*",
-        "args" => Any[Float64(pi), Dict{String,Any}("op" => "/",
-            "args" => Any[Dict("op" => "-", "args" => Any["x", 0.5]), _PIT_N])])])
+    "args" => Any[
+        Dict{String, Any}(
+            "op" => "*",
+            "args" => Any[
+                Float64(pi), Dict{String, Any}(
+                    "op" => "/",
+                    "args" => Any[Dict("op" => "-", "args" => Any["x", 0.5]), _PIT_N]
+                ),
+            ]
+        ),
+    ]
+)
 
 @testset "§6.6.5 reference binds the field's dimension names" begin
     table = Float64[cos(pi * (i - 0.5) / _PIT_N) for i in 1:_PIT_N]
-    file = _pit_load(_pit_decay_doc(Any[
-        Dict{String,Any}("variable" => "u", "time" => 0.0, "expected" => 0.0,
-                         "tolerance" => Dict("abs" => 1e-12), "reduce" => "L2_error",
-                         "reference" => _pit_free_x_cos()),
-        Dict{String,Any}("variable" => "u", "time" => 0.0, "expected" => 0.0,
-                         "tolerance" => Dict("abs" => 1e-12), "reduce" => "Linf_error",
-                         "reference" => Dict{String,Any}("op" => "index",
-                             "args" => Any[Dict{String,Any}("op" => "const", "args" => Any[],
-                                                            "value" => table), "x"])),
-        Dict{String,Any}("variable" => "u", "time" => 0.0, "expected" => 0.0,
-                         "tolerance" => Dict("abs" => 1e-12), "reduce" => "L2_error",
-                         "reference" => Dict{String,Any}("op" => "faq", "args" => Any[],
-                             "output_idx" => Any["x"],
-                             "ranges" => Dict{String,Any}("x" => Dict("from" => "x")),
-                             "expr" => _pit_free_x_cos())),
-        Dict{String,Any}("variable" => "u", "time" => 1.0, "expected" => 0.0,
-                         "tolerance" => Dict("abs" => 1e-8), "reduce" => "L2_error",
-                         "reference" => Dict{String,Any}("op" => "*",
-                             "args" => Any[Dict("op" => "exp", "args" => Any[-1]),
-                                           _pit_free_x_cos()]))]))
+    file = _pit_load(
+        _pit_decay_doc(
+            Any[
+                Dict{String, Any}(
+                    "variable" => "u", "time" => 0.0, "expected" => 0.0,
+                    "tolerance" => Dict("abs" => 1.0e-12), "reduce" => "L2_error",
+                    "reference" => _pit_free_x_cos()
+                ),
+                Dict{String, Any}(
+                    "variable" => "u", "time" => 0.0, "expected" => 0.0,
+                    "tolerance" => Dict("abs" => 1.0e-12), "reduce" => "Linf_error",
+                    "reference" => Dict{String, Any}(
+                        "op" => "index",
+                        "args" => Any[
+                            Dict{String, Any}(
+                                "op" => "const", "args" => Any[],
+                                "value" => table
+                            ), "x",
+                        ]
+                    )
+                ),
+                Dict{String, Any}(
+                    "variable" => "u", "time" => 0.0, "expected" => 0.0,
+                    "tolerance" => Dict("abs" => 1.0e-12), "reduce" => "L2_error",
+                    "reference" => Dict{String, Any}(
+                        "op" => "faq", "args" => Any[],
+                        "output_idx" => Any["x"],
+                        "ranges" => Dict{String, Any}("x" => Dict("from" => "x")),
+                        "expr" => _pit_free_x_cos()
+                    )
+                ),
+                Dict{String, Any}(
+                    "variable" => "u", "time" => 1.0, "expected" => 0.0,
+                    "tolerance" => Dict("abs" => 1.0e-8), "reduce" => "L2_error",
+                    "reference" => Dict{String, Any}(
+                        "op" => "*",
+                        "args" => Any[
+                            Dict("op" => "exp", "args" => Any[-1]),
+                            _pit_free_x_cos(),
+                        ]
+                    )
+                ),
+            ]
+        )
+    )
     results = _pit_run(file)
     @test length(results) == 4
     for r in results
@@ -787,12 +1081,20 @@ _pit_free_x_cos() = Dict{String,Any}(
     # An `integral`'s integration variable is a binder too (the same node set
     # `_bound_symbols` reports, which is what Rust's `mentions_free` and
     # Python's `_mentions_free` check).
-    integ = EarthSciAST.OpExpr("integral",
-                               EarthSciAST.ASTExpr[EarthSciAST.OpExpr("*",
-                                   EarthSciAST.ASTExpr[EarthSciAST.IntExpr(2),
-                                                       EarthSciAST.VarExpr("x")])];
-                               int_var="x", lower=EarthSciAST.IntExpr(0),
-                               upper=EarthSciAST.IntExpr(1))
+    integ = EarthSciAST.OpExpr(
+        "integral",
+        EarthSciAST.ASTExpr[
+            EarthSciAST.OpExpr(
+                "*",
+                EarthSciAST.ASTExpr[
+                    EarthSciAST.IntExpr(2),
+                    EarthSciAST.VarExpr("x"),
+                ]
+            ),
+        ];
+        int_var = "x", lower = EarthSciAST.IntExpr(0),
+        upper = EarthSciAST.IntExpr(1)
+    )
     @test !EarthSciAST._mentions_free(integ, "x")
     @test EarthSciAST.bind_dimension_names(integ, dims) === integ
 
@@ -800,7 +1102,7 @@ _pit_free_x_cos() = Dict{String,Any}(
     # scope, so it does not trigger the wrap. `free_variables` reports it (it is
     # added after binder subtraction); the Rust `mentions_free` and the Python
     # `_mentions_free` do not, and this binding must agree with them.
-    deriv = EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("u")]; wrt="x")
+    deriv = EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("u")]; wrt = "x")
     @test "x" in EarthSciAST.free_variables(deriv)
     @test !EarthSciAST._mentions_free(deriv, "x")
     @test EarthSciAST.bind_dimension_names(deriv, dims) === deriv
@@ -812,7 +1114,7 @@ _pit_free_x_cos() = Dict{String,Any}(
     # rebinding: wrapping would shadow the parameter with the cell index, so a
     # reference that used to read the parameter would quietly return a
     # different number. One name, two meanings, one scope — ill-formed.
-    clash = Dict{String,Float64}("x" => 3.0)
+    clash = Dict{String, Float64}("x" => 3.0)
     @test_throws EarthSciAST.InlineTestError EarthSciAST.bind_dimension_names(free, dims, clash)
     # No mention of the clashing name: unaffected.
     @test EarthSciAST.bind_dimension_names(lit, dims, clash) === lit
@@ -826,32 +1128,42 @@ _pit_free_x_cos() = Dict{String,Any}(
     # already read, and the wrap would rebind it to the cell's 1-based index:
     # the same expression, a different number, no diagnostic.
     lev_dims = String["lev"]
-    lev_free = EarthSciAST.OpExpr("index",
-        EarthSciAST.ASTExpr[EarthSciAST.VarExpr("table"), EarthSciAST.VarExpr("lev")])
-    empty_params = Dict{String,Float64}()
+    lev_free = EarthSciAST.OpExpr(
+        "index",
+        EarthSciAST.ASTExpr[EarthSciAST.VarExpr("table"), EarthSciAST.VarExpr("lev")]
+    )
+    empty_params = Dict{String, Float64}()
     # The flattened name AND its unambiguous bare alias are both in scope.
-    for reg in (Dict{String,Any}("lev" => [1.0]), Dict{String,Any}("M.lev" => [1.0]))
+    for reg in (Dict{String, Any}("lev" => [1.0]), Dict{String, Any}("M.lev" => [1.0]))
         arrays = EarthSciAST._array_scope_names(reg)
         @test_throws EarthSciAST.InlineTestError EarthSciAST.bind_dimension_names(
-            lev_free, lev_dims, empty_params, arrays)
+            lev_free, lev_dims, empty_params, arrays
+        )
     end
     # An AMBIGUOUS bare alias is not in scope under either spelling, so it does
     # not clash — the same rule `_param_scope_with_aliases` applies.
     ambiguous = EarthSciAST._array_scope_names(
-        Dict{String,Any}("A.lev" => [1.0], "B.lev" => [1.0]))
+        Dict{String, Any}("A.lev" => [1.0], "B.lev" => [1.0])
+    )
     @test !("lev" in ambiguous)
-    @test EarthSciAST.bind_dimension_names(lev_free, lev_dims, empty_params,
-                                           ambiguous).op == "faq"
+    @test EarthSciAST.bind_dimension_names(
+        lev_free, lev_dims, empty_params,
+        ambiguous
+    ).op == "faq"
     # A reference that does not mention the name is unaffected, and so is a
     # gather that rebinds it as its own loop symbol.
-    lev_arrays = EarthSciAST._array_scope_names(Dict{String,Any}("lev" => [1.0]))
+    lev_arrays = EarthSciAST._array_scope_names(Dict{String, Any}("lev" => [1.0]))
     @test EarthSciAST.bind_dimension_names(lit, lev_dims, empty_params, lev_arrays) === lit
-    lev_bound = EarthSciAST.OpExpr("faq", EarthSciAST.ASTExpr[];
-                                   output_idx=Any["lev"],
-                                   ranges=Dict{String,Any}("lev" => EarthSciAST.IndexSetRef("lev")),
-                                   expr_body=lev_free)
-    @test EarthSciAST.bind_dimension_names(lev_bound, lev_dims, empty_params,
-                                           lev_arrays) === lev_bound
+    lev_bound = EarthSciAST.OpExpr(
+        "faq", EarthSciAST.ASTExpr[];
+        output_idx = Any["lev"],
+        ranges = Dict{String, Any}("lev" => EarthSciAST.IndexSetRef("lev")),
+        expr_body = lev_free
+    )
+    @test EarthSciAST.bind_dimension_names(
+        lev_bound, lev_dims, empty_params,
+        lev_arrays
+    ) === lev_bound
 end
 
 # ---------------------------------------------------------------------------
@@ -865,16 +1177,24 @@ end
     # what `_pick_solver` picks for it from its own `solver.stiffness`
     # (esm-spec §2.2) — the same resolution the MTK runner does, and the same
     # one the Python binding's `_method_for` has always done.
-    doc = _pit_decay_doc(Any[_pit_coords_assert(["x" => 3];
-                                                expected=cos(pi * 2.5 / _PIT_N))])
-    results = run_inline_tests(_pit_load(doc); model_name="M",
-                               compiler=:interpreter)
+    doc = _pit_decay_doc(
+        Any[
+            _pit_coords_assert(
+                ["x" => 3];
+                expected = cos(pi * 2.5 / _PIT_N)
+            ),
+        ]
+    )
+    results = run_inline_tests(
+        _pit_load(doc); model_name = "M",
+        compiler = :interpreter
+    )
     @test !isempty(results)
     @test all(r -> r.status == EarthSciAST.PASS, results)
 
     # The picks themselves: a document declaring `high` gets the stiff solver,
     # one declaring nothing gets the non-stiff default.
-    @test EarthSciAST._pick_solver(""; stiffness="high")[2] === :rosenbrock23
+    @test EarthSciAST._pick_solver(""; stiffness = "high")[2] === :rosenbrock23
     @test EarthSciAST._pick_solver("")[2] === :tsit5
 end
 
@@ -888,12 +1208,21 @@ end
     # loaded) is the early return itself — no rows, no error.
     doc = _pit_decay_doc(Any[])
     delete!(doc["models"]["M"], "tests")
-    @test isempty(run_inline_tests(_pit_load(doc); model_name="M"))
+    @test isempty(run_inline_tests(_pit_load(doc); model_name = "M"))
     # …and naming a model that does not exist in the document is the same
     # nothing-to-do case rather than an error.
-    @test isempty(run_inline_tests(_pit_load(_pit_decay_doc(Any[
-        _pit_coords_assert(["x" => 3]; expected=cos(pi * 2.5 / _PIT_N))]));
-        model_name="NoSuchModel"))
+    @test isempty(
+        run_inline_tests(
+            _pit_load(
+                _pit_decay_doc(
+                    Any[
+                        _pit_coords_assert(["x" => 3]; expected = cos(pi * 2.5 / _PIT_N)),
+                    ]
+                )
+            );
+            model_name = "NoSuchModel"
+        )
+    )
 end
 
 @testset "a batch's rows name the document they came from" begin
@@ -903,10 +1232,19 @@ end
     # the two halves of one run inconsistent with each other.
     mktempdir() do dir
         path = joinpath(dir, "decay.esm")
-        write(path, JSON3.write(_pit_decay_doc(Any[
-            _pit_coords_assert(["x" => 3]; expected=cos(pi * 2.5 / _PIT_N))])))
-        results = run_inline_tests([path]; model_name="M",
-                                   compiler=:interpreter)
+        write(
+            path, JSON3.write(
+                _pit_decay_doc(
+                    Any[
+                        _pit_coords_assert(["x" => 3]; expected = cos(pi * 2.5 / _PIT_N)),
+                    ]
+                )
+            )
+        )
+        results = run_inline_tests(
+            [path]; model_name = "M",
+            compiler = :interpreter
+        )
         @test !isempty(results)
         @test all(r -> r.file == path, results)
 
@@ -914,8 +1252,10 @@ end
         # named row rather than ending the run.
         bad = joinpath(dir, "broken.esm")
         write(bad, "{not json")
-        mixed = run_inline_tests([path, bad]; model_name="M",
-                                 compiler=:interpreter)
+        mixed = run_inline_tests(
+            [path, bad]; model_name = "M",
+            compiler = :interpreter
+        )
         @test any(r -> r.file == bad && r.status == EarthSciAST.ERROR, mixed)
         @test any(r -> r.file == path && r.status == EarthSciAST.PASS, mixed)
     end

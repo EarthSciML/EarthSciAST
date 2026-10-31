@@ -36,13 +36,13 @@ const _PW = Polyester.PolyesterWeave
 # `err` is written by whichever chunks throw, from any thread, so it is an
 # atomic field: the first exception wins the compare-and-swap, and the calling
 # thread's atomic read after the waits sees it.
-mutable struct _ThreadJob{B,A}
+mutable struct _ThreadJob{B, A}
     body::B
     args::A
     nchunks::Int
     @atomic err::Any
-    function _ThreadJob{B,A}() where {B,A}
-        j = new{B,A}()
+    function _ThreadJob{B, A}() where {B, A}
+        j = new{B, A}()
         @atomic j.err = nothing
         return j
     end
@@ -81,7 +81,7 @@ end
 end
 
 # Run every chunk of `j`, workers first, and wait for all of them.
-function _dispatch_job!(j::J) where {J<:_ThreadJob}
+function _dispatch_job!(j::J) where {J <: _ThreadJob}
     n = j.nchunks
     threads, torelease = _PW.request_threads(n - 1)
     fptr = _chunk_cfunc(J)
@@ -157,8 +157,10 @@ function _make_scan_section(folds::AbstractVector{_ScanFold}, fused::Tuple = ())
         nslots += length(S.slots)
     end
     # Fewer than two lanes leave nothing to split; the verdict sees no cells.
-    return _ScanSection(collect(folds), lanecum,
-                        _SecTCache(lanecum[end] >= 2 ? nslots : 0, true), fused)
+    return _ScanSection(
+        collect(folds), lanecum,
+        _SecTCache(lanecum[end] >= 2 ? nslots : 0, true), fused
+    )
 end
 
 Base.isempty(s::_ScanSection) = isempty(s.folds) && isempty(s.fused)
@@ -173,8 +175,10 @@ function (b::_ScanChunk)(args, c::Int, nchunks::Int)
     @inbounds for f in eachindex(b.folds)
         lo = max(a, b.lanecum[f])
         hi = min(z, b.lanecum[f + 1])
-        lo < hi && _apply_scan_fold!(du, b.folds[f], lo - b.lanecum[f] + 1,
-                                     hi - b.lanecum[f])
+        lo < hi && _apply_scan_fold!(
+            du, b.folds[f], lo - b.lanecum[f] + 1,
+            hi - b.lanecum[f]
+        )
     end
     return nothing
 end

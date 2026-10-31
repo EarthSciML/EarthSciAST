@@ -26,9 +26,9 @@ function parse_args(argv)
     while i <= length(argv)
         a = argv[i]
         if a == "--manifest"
-            manifest = argv[i+1]; i += 2
+            manifest = argv[i + 1]; i += 2
         elseif a == "--output"
-            output = argv[i+1]; i += 2
+            output = argv[i + 1]; i += 2
         else
             error("determinism_adapter: unknown argument $(repr(a))")
         end
@@ -40,7 +40,7 @@ end
 
 # Recursively convert JSON3 values to native Dict/Vector so the relational
 # primitives see plain Julia Int/String/Bool (not lazy JSON3 views).
-to_native(x::JSON3.Object) = Dict{String,Any}(string(k) => to_native(v) for (k, v) in x)
+to_native(x::JSON3.Object) = Dict{String, Any}(string(k) => to_native(v) for (k, v) in x)
 to_native(x::JSON3.Array) = Any[to_native(v) for v in x]
 to_native(x) = x
 
@@ -79,7 +79,7 @@ function compute_payload(fx, payload)
         serialized = R.canonical_index_set_json(keys)
         ranking = R.rank(keys)                       # native 1-based
         dense = [ranking.id[t] for t in index_set]
-        return Dict{String,Any}(
+        return Dict{String, Any}(
             "index_set" => [collect(t) for t in index_set],
             "serialized" => serialized,
             "dense_ids_canonical" => dense,
@@ -91,7 +91,7 @@ function compute_payload(fx, payload)
         # integers, so reusing the index-set serializer over (k,v) tuples is
         # byte-correct (and keys are unique ⇒ no reorder/dedup).
         serialized = R.canonical_index_set_json([(first(p), last(p)) for p in pairs])
-        return Dict{String,Any}(
+        return Dict{String, Any}(
             "index_set" => [[first(p), last(p)] for p in pairs],
             "serialized" => serialized,
             "dense_ids_canonical" => collect(1:length(pairs)),   # native 1-based
@@ -103,9 +103,9 @@ end
 
 function compute_fixture(fx)
     record = compute_payload(fx, fx["inputs"]["canonical"])
-    variants = get(fx["inputs"], "variants", Dict{String,Any}())
+    variants = get(fx["inputs"], "variants", Dict{String, Any}())
     if !isempty(variants)
-        record["variants"] = Dict{String,Any}(
+        record["variants"] = Dict{String, Any}(
             vname => compute_payload(fx, vpayload) for (vname, vpayload) in variants
         )
     end
@@ -116,12 +116,12 @@ function main(argv)
     manifest_path, output_path = parse_args(argv)
     manifest = to_native(JSON3.read(read(manifest_path, String)))
 
-    fixtures = Dict{String,Any}()
+    fixtures = Dict{String, Any}()
     for fx in manifest["fixtures"]
         fixtures[fx["id"]] = compute_fixture(fx)
     end
 
-    result = Dict{String,Any}("binding" => "julia", "fixtures" => fixtures)
+    result = Dict{String, Any}("binding" => "julia", "fixtures" => fixtures)
     mkpath(dirname(abspath(output_path)))
     open(output_path, "w") do io
         JSON3.write(io, result)

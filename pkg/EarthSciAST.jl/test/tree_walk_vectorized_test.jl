@@ -27,22 +27,38 @@ _bitsame(got, ref) = (got === ref) || (isnan(got) && isnan(ref))
 # field-ic fast path (indices bound as params, compiled a SINGLE time) against the
 # per-cell resolve+compile fallback. Mirrors the wildland-fire InitialPerimeter IC.
 function _fieldic_model(N)
-    vars = Dict("psi" => ModelVariable(UnknownVariable; shape=["i", "j"]))
-    dref = _op("D", _idx("psi", _v("i"), _v("j")); wrt="t")
+    vars = Dict("psi" => ModelVariable(UnknownVariable; shape = ["i", "j"]))
+    dref = _op("D", _idx("psi", _v("i"), _v("j")); wrt = "t")
     drhs = _op("neg", _idx("psi", _v("i"), _v("j")))
-    dlhs = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
-        expr_body=dref, ranges=Dict("i" => [1, N], "j" => [1, N]))
-    drhs_ao = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
-        expr_body=drhs, ranges=Dict("i" => [1, N], "j" => [1, N]))
-    icbody = _op("-",
-        _op("sqrt", _op("+",
-            _op("^", _op("-", _op("*", _op("-", _v("i"), _n(0.5)), _n(2.0)), _n(1.0 * N)), _i(2)),
-            _op("^", _op("-", _op("*", _op("-", _v("j"), _n(0.5)), _n(2.0)), _n(1.0 * N)), _i(2)))),
-        _n(0.3 * N))
-    ic_agg = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
-        expr_body=icbody, ranges=Dict("i" => [1, N], "j" => [1, N]))
-    ESM.Model(vars, [ESM.Equation(dlhs, drhs_ao),
-                     ESM.Equation(_op("ic", _v("psi")), ic_agg)])
+    dlhs = OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i", "j"],
+        expr_body = dref, ranges = Dict("i" => [1, N], "j" => [1, N])
+    )
+    drhs_ao = OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i", "j"],
+        expr_body = drhs, ranges = Dict("i" => [1, N], "j" => [1, N])
+    )
+    icbody = _op(
+        "-",
+        _op(
+            "sqrt", _op(
+                "+",
+                _op("^", _op("-", _op("*", _op("-", _v("i"), _n(0.5)), _n(2.0)), _n(1.0 * N)), _i(2)),
+                _op("^", _op("-", _op("*", _op("-", _v("j"), _n(0.5)), _n(2.0)), _n(1.0 * N)), _i(2))
+            )
+        ),
+        _n(0.3 * N)
+    )
+    ic_agg = OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i", "j"],
+        expr_body = icbody, ranges = Dict("i" => [1, N], "j" => [1, N])
+    )
+    return ESM.Model(
+        vars, [
+            ESM.Equation(dlhs, drhs_ao),
+            ESM.Equation(_op("ic", _v("psi")), ic_agg),
+        ]
+    )
 end
 
 @testset "tree_walk vectorized array-kernel RHS (ess-dhq)" begin
@@ -50,8 +66,10 @@ end
     @testset "N-independent compiled-kernel count (two+ grid sizes)" begin
         diags = map((8, 16, 64)) do N
             ics = Dict("u[$k]" => 0.0 for k in 1:N)
-            _, u0, _, _, _, d = ESM._build_evaluator_impl(_stencil_model(N);
-                                                          initial_conditions=ics)
+            _, u0, _, _, _, d = ESM._build_evaluator_impl(
+                _stencil_model(N);
+                initial_conditions = ics
+            )
             @test length(u0) == N                 # state DOES grow with N …
             d
         end
@@ -62,7 +80,7 @@ end
         akerns(d) = d.n_vec_kernels + d.n_acc_kernels
         @test akerns(diags[1]) == akerns(diags[2]) == akerns(diags[3])
         @test diags[1].template_node_count ==
-              diags[2].template_node_count == diags[3].template_node_count
+            diags[2].template_node_count == diags[3].template_node_count
         @test akerns(diags[1]) >= 1
         # The array equation produced ZERO per-cell scalar RHS entries: it is a
         # whole-array kernel, not an O(N) scalar node list.
@@ -72,39 +90,51 @@ end
     @testset "numeric identity vs analytic stencil (rtol 1e-12)" begin
         for N in (8, 32)
             ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
-            f!, u0, p, _, vmap = EarthSciAST._build_evaluator(_stencil_model(N);
-                                                 initial_conditions=ics)
+            f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
+                _stencil_model(N);
+                initial_conditions = ics
+            )
             du = similar(u0); f!(du, u0, p, 0.0)
             uv(k) = (1 <= k <= N) ? (sin(0.3k) + 0.1k) : 0.0   # ghost → 0
             for i in 1:N
                 expected = uv(i - 1) - 2 * uv(i) + uv(i + 1)
-                @test isapprox(du[vmap["u[$i]"]], expected; rtol=1e-12, atol=1e-12)
+                @test isapprox(du[vmap["u[$i]"]], expected; rtol = 1.0e-12, atol = 1.0e-12)
             end
         end
     end
 
     @testset "contraction (reduction) faq vectorizes + stays correct" begin
         # D(y[i]) = Σ_{k=1..3} A[i,k]·x[k]  (sum_product semiring)
-        vars = Dict("y" => ModelVariable(UnknownVariable),
-                    "x" => ModelVariable(UnknownVariable))
+        vars = Dict(
+            "y" => ModelVariable(UnknownVariable),
+            "x" => ModelVariable(UnknownVariable)
+        )
         body = _op("*", _idx("A", _v("i"), _v("k")), _idx("x", _v("k")))
-        rhs = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"], expr_body=body,
-                     ranges=Dict("i" => [1, 2], "k" => [1, 3]), reduce="+")
+        rhs = OpExpr(
+            "faq", ESM.ASTExpr[]; output_idx = Any["i"], expr_body = body,
+            ranges = Dict("i" => [1, 2], "k" => [1, 3]), reduce = "+"
+        )
         m = ESM.Model(vars, [ESM.Equation(_ao1(_Didx("y", _v("i")), "i", 1, 2), rhs)])
         A = [1.0 2.0 3.0; 4.0 5.0 6.0]
-        ics = Dict("y[1]" => 0.0, "y[2]" => 0.0,
-                   "x[1]" => 1.0, "x[2]" => 1.0, "x[3]" => 1.0)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(m; initial_conditions=ics,
-                                             const_arrays=Dict("A" => A))
-        _, _, _, _, _, d = ESM._build_evaluator_impl(m; initial_conditions=ics,
-                                                     const_arrays=Dict("A" => A))
+        ics = Dict(
+            "y[1]" => 0.0, "y[2]" => 0.0,
+            "x[1]" => 1.0, "x[2]" => 1.0, "x[3]" => 1.0
+        )
+        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
+            m; initial_conditions = ics,
+            const_arrays = Dict("A" => A)
+        )
+        _, _, _, _, _, d = ESM._build_evaluator_impl(
+            m; initial_conditions = ics,
+            const_arrays = Dict("A" => A)
+        )
         # A constant-bound contraction is unrolled onto the affine path by default
         # (acc kernel); either array-kernel flavour satisfies the whole-array intent.
         @test d.n_vec_kernels + d.n_acc_kernels >= 1
         @test d.n_scalar_entries == 0
         du = similar(u0); f!(du, u0, p, 0.0)
-        @test isapprox(du[vmap["y[1]"]], 6.0;  rtol=1e-12)
-        @test isapprox(du[vmap["y[2]"]], 15.0; rtol=1e-12)
+        @test isapprox(du[vmap["y[1]"]], 6.0; rtol = 1.0e-12)
+        @test isapprox(du[vmap["y[2]"]], 15.0; rtol = 1.0e-12)
     end
 
     # ess-wrh: the de-boxed whole-array `interp.*` kernels must reproduce the
@@ -119,28 +149,40 @@ end
         # Map per-cell queries through a one-line faq and read the lanes back.
         function run_unary_interp(fname, const2, queries)
             N = length(queries)
-            body = _op("fn", _idx("u", _v("i")), _const(const2); name=fname)
+            body = _op("fn", _idx("u", _v("i")), _const(const2); name = fname)
             if fname != "interp.searchsorted"
                 # linear/bilinear take (table, axis, x); searchsorted takes (x, xs)
                 error("run_unary_interp only models the (x, const) shape")
             end
-            m = ESM.Model(Dict("u" => ModelVariable(UnknownVariable)),
-                          [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                        _ao1(body, "i", 1, N))])
+            m = ESM.Model(
+                Dict("u" => ModelVariable(UnknownVariable)),
+                [
+                    ESM.Equation(
+                        _ao1(_Didx("u", _v("i")), "i", 1, N),
+                        _ao1(body, "i", 1, N)
+                    ),
+                ]
+            )
             ics = Dict("u[$i]" => queries[i] for i in 1:N)
-            f!, u0, p, _, vmap = EarthSciAST._build_evaluator(m; initial_conditions=ics)
+            f!, u0, p, _, vmap = EarthSciAST._build_evaluator(m; initial_conditions = ics)
             du = similar(u0); f!(du, u0, p, 0.0)
             return [du[vmap["u[$i]"]] for i in 1:N]
         end
         # linear: (table, axis, u[i])
         function run_linear(table, axis, queries)
             N = length(queries)
-            body = _op("fn", _const(table), _const(axis), _idx("u", _v("i")); name="interp.linear")
-            m = ESM.Model(Dict("u" => ModelVariable(UnknownVariable)),
-                          [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                        _ao1(body, "i", 1, N))])
+            body = _op("fn", _const(table), _const(axis), _idx("u", _v("i")); name = "interp.linear")
+            m = ESM.Model(
+                Dict("u" => ModelVariable(UnknownVariable)),
+                [
+                    ESM.Equation(
+                        _ao1(_Didx("u", _v("i")), "i", 1, N),
+                        _ao1(body, "i", 1, N)
+                    ),
+                ]
+            )
             ics = Dict("u[$i]" => queries[i] for i in 1:N)
-            f!, u0, p, _, vmap = EarthSciAST._build_evaluator(m; initial_conditions=ics)
+            f!, u0, p, _, vmap = EarthSciAST._build_evaluator(m; initial_conditions = ics)
             du = similar(u0); f!(du, u0, p, 0.0)
             return [du[vmap["u[$i]"]] for i in 1:N]
         end
@@ -182,18 +224,32 @@ end
             xqs = [10.0, 1000.0, 5.0, 2000.0, 55.0, 500.0, NaN]
             yval = 0.5
             N = length(xqs)
-            body = _op("fn", _const(table), _const(ax), _const(ay),
-                       _idx("u", _v("i")), _v("cz"); name="interp.bilinear")
-            m = ESM.Model(Dict("u" => ModelVariable(UnknownVariable),
-                               "cz" => ModelVariable(ParameterVariable; default=yval)),
-                          [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                        _ao1(body, "i", 1, N))])
+            body = _op(
+                "fn", _const(table), _const(ax), _const(ay),
+                _idx("u", _v("i")), _v("cz"); name = "interp.bilinear"
+            )
+            m = ESM.Model(
+                Dict(
+                    "u" => ModelVariable(UnknownVariable),
+                    "cz" => ModelVariable(ParameterVariable; default = yval)
+                ),
+                [
+                    ESM.Equation(
+                        _ao1(_Didx("u", _v("i")), "i", 1, N),
+                        _ao1(body, "i", 1, N)
+                    ),
+                ]
+            )
             ics = Dict("u[$i]" => xqs[i] for i in 1:N)
-            f!, u0, p, _, vmap = EarthSciAST._build_evaluator(m; initial_conditions=ics)
+            f!, u0, p, _, vmap = EarthSciAST._build_evaluator(m; initial_conditions = ics)
             du = similar(u0); f!(du, u0, p, 0.0)
             for (i, xq) in enumerate(xqs)
-                ref = Float64(ESM.evaluate_closed_function("interp.bilinear",
-                                                           Any[table, ax, ay, xq, yval]))
+                ref = Float64(
+                    ESM.evaluate_closed_function(
+                        "interp.bilinear",
+                        Any[table, ax, ay, xq, yval]
+                    )
+                )
                 @test _bitsame(du[vmap["u[$i]"]], ref)
             end
         end
@@ -212,34 +268,42 @@ end
         # `_compile_op` via `_build_interp_spec`. Hand-built nodes must use the
         # same builder so this white-box seam sees exactly what `_compile_op`
         # produces.
-        mkfn(child) = ESM._mknode(kind=ESM._NK_OP, op=:fn,
-            payload=("interp.linear",
-                     ESM._build_interp_spec("interp.linear", Any[table, axis])),
-            children=ESM._Node[child])
+        mkfn(child) = ESM._mknode(
+            kind = ESM._NK_OP, op = :fn,
+            payload = (
+                "interp.linear",
+                ESM._build_interp_spec("interp.linear", Any[table, axis]),
+            ),
+            children = ESM._Node[child]
+        )
 
         @testset "literal query → invariant-tier hoist (one lookup per call)" begin
-            lit = mkfn(ESM._mknode(kind=ESM._NK_LITERAL, literal=2.0))  # on knot axis[3]
+            lit = mkfn(ESM._mknode(kind = ESM._NK_LITERAL, literal = 2.0))  # on knot axis[3]
             acc = ESM._AccDesc[]
             spine = ESM._acc_merge_nodes(ESM._Node[lit, lit, lit], 3, acc)
             sp2, cse = ESM._build_acc_cse(spine, acc)
             @test length(cse.inv_recipes) == 1        # the whole call hoisted
-            K = ESM._AccKernel(ESM._outs_cells([1, 2, 3]), sp2, acc,
-                               ESM._FixedBound(0), 0.0, cse)
+            K = ESM._AccKernel(
+                ESM._outs_cells([1, 2, 3]), sp2, acc,
+                ESM._FixedBound(0), 0.0, cse
+            )
             du = zeros(3)
             ESM._run_acc_kernel!(du, Float64[], NamedTuple(), 0.0, K)
             @test all(==(40.0), du)
         end
 
         @testset "runtime (state) query is NOT hoisted → per-lane :fn spine op" begin
-            g1 = mkfn(ESM._mknode(kind=ESM._NK_STATE, idx=1))
-            g2 = mkfn(ESM._mknode(kind=ESM._NK_STATE, idx=2))
+            g1 = mkfn(ESM._mknode(kind = ESM._NK_STATE, idx = 1))
+            g2 = mkfn(ESM._mknode(kind = ESM._NK_STATE, idx = 2))
             acc = ESM._AccDesc[]
             spine = ESM._acc_merge_nodes(ESM._Node[g1, g2], 2, acc)
             sp2, cse = ESM._build_acc_cse(spine, acc)
             @test isempty(cse.inv_recipes)            # lane-varying: no hoist
             @test length(acc) == 1                    # ONE gather table, not 2N nodes
-            K = ESM._AccKernel(ESM._outs_cells([3, 4]), sp2, acc,
-                               ESM._FixedBound(0), 0.0, cse)
+            K = ESM._AccKernel(
+                ESM._outs_cells([3, 4]), sp2, acc,
+                ESM._FixedBound(0), 0.0, cse
+            )
             u = [0.0, 2.0, 0.0, 0.0]                  # query u[1]=0 → 10, u[2]=2 → 40
             du = zeros(4)
             ESM._run_acc_kernel!(du, u, NamedTuple(), 0.0, K)
@@ -248,19 +312,27 @@ end
 
         @testset "end-to-end: folded constant-query faq is correct + 0-alloc" begin
             N = 8
-            body = _op("fn", _const(table), _const(axis), _n(2.0); name="interp.linear")
-            m = ESM.Model(Dict("u" => ModelVariable(UnknownVariable)),
-                          [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                        _ao1(body, "i", 1, N))])
+            body = _op("fn", _const(table), _const(axis), _n(2.0); name = "interp.linear")
+            m = ESM.Model(
+                Dict("u" => ModelVariable(UnknownVariable)),
+                [
+                    ESM.Equation(
+                        _ao1(_Didx("u", _v("i")), "i", 1, N),
+                        _ao1(body, "i", 1, N)
+                    ),
+                ]
+            )
             ics = Dict("u[$k]" => 0.0 for k in 1:N)
-            f!, u0, p, _, vmap = EarthSciAST._build_evaluator(m; initial_conditions=ics)
+            f!, u0, p, _, vmap = EarthSciAST._build_evaluator(m; initial_conditions = ics)
             du = similar(u0); f!(du, u0, p, 0.0)
             for i in 1:N
                 @test du[vmap["u[$i]"]] == 40.0   # interp.linear(table, axis, 2.0) on knot
             end
             # A folded literal kernel trivially allocates nothing.
             du2 = similar(u0)
-            for _ in 1:3; f!(du2, u0, p, 0.0); end
+            for _ in 1:3
+                f!(du2, u0, p, 0.0)
+            end
             @test (@allocated f!(du2, u0, p, 0.0)) == 0
         end
     end
@@ -271,15 +343,17 @@ end
 # nodes on `rhs_list`, evaluated by `_eval_node` with no merge machinery).
 @testset "array kernels ≡ per-cell scalar reference (differential)" begin
     _build(model, ics, disable) =
-        EarthSciAST._build_evaluator(model; initial_conditions=ics,
-                        compiler = disable ? :interpreter : :native)
+        EarthSciAST._build_evaluator(
+        model; initial_conditions = ics,
+        compiler = disable ? :interpreter : :native
+    )
 
     # Bit-identical du across interior + ghost-boundary kernels, every grid size.
     @testset "bit-identical du (N=$N)" for N in (8, 32, 64)
         model = _stencil_model(N)
         ics = Dict("u[$k]" => sin(0.7k) - 0.05k for k in 1:N)
         fsym, u0, p, = _build(model, ics, false)
-        ffb,  _,  _, = _build(model, ics, true)
+        ffb, _, _, = _build(model, ics, true)
         for trial in 0:5
             u = Float64[sin(2.3k + 1.1trial) + 0.3cos(0.9k - trial) for k in 1:N]
             dus = similar(u); duf = similar(u)
@@ -297,7 +371,7 @@ end
         ics = Dict("u[$k]" => 0.0 for k in 1:N)
         _build(model, ics, false); _build(model, ics, true)   # warm up both
         a_sym = @allocated _build(model, ics, false)
-        a_fb  = @allocated _build(model, ics, true)
+        a_fb = @allocated _build(model, ics, true)
         @test a_sym < a_fb
     end
 end
@@ -310,8 +384,10 @@ end
 # to the forced per-cell path. `compiler=:interpreter` forces that per-cell path.
 @testset "compile-once field-ic ≡ per-cell fallback (u0, ess-perf)" begin
     _build_u0(N, disable) =
-        EarthSciAST._build_evaluator(_fieldic_model(N);
-                        compiler = disable ? :interpreter : :native)[2]   # u0 is 2nd
+        EarthSciAST._build_evaluator(
+        _fieldic_model(N);
+        compiler = disable ? :interpreter : :native
+    )[2]   # u0 is 2nd
 
     @testset "bit-identical u0 (N=$N)" for N in (4, 16, 32)
         u0_fast = _build_u0(N, false)
@@ -364,16 +440,20 @@ end
     refB = Float64(ESM.evaluate_closed_function("interp.linear", Any[TBL_B, AX, QUERY]))
     @test refA != refB   # the oracle must actually discriminate
 
-    _constarr(v) = OpExpr("const", ESM.ASTExpr[]; value=v)
+    _constarr(v) = OpExpr("const", ESM.ASTExpr[]; value = v)
     # `fn interp.linear(table, axis, u[i])` — a RUNTIME (state) query, so it is not
     # const-folded and really does reach the merged kernel.
-    _interp_u(tbl) = _op("fn", _constarr(tbl), _constarr(AX), _idx("u", _v("i"));
-                         name="interp.linear")
+    _interp_u(tbl) = _op(
+        "fn", _constarr(tbl), _constarr(AX), _idx("u", _v("i"));
+        name = "interp.linear"
+    )
     # Hand-built scalar `_Node`, exactly what `_compile_fn_node` emits: the const args
     # are pulled into the typed spec and only the scalar query stays a child.
-    _fnnode(tbl, child) = ESM._mknode(kind=ESM._NK_OP, op=:fn,
-        payload=("interp.linear", ESM._build_interp_spec("interp.linear", Any[tbl, AX])),
-        children=ESM._Node[child])
+    _fnnode(tbl, child) = ESM._mknode(
+        kind = ESM._NK_OP, op = :fn,
+        payload = ("interp.linear", ESM._build_interp_spec("interp.linear", Any[tbl, AX])),
+        children = ESM._Node[child]
+    )
 
     # -- (a) FAIL LOUD at the merge seam ------------------------------------
     # `_struct_sig!` now separates these, so `_vectorize_cell_entries` can no longer
@@ -382,8 +462,8 @@ end
     # change that stops keying the spec.
     _amerge(nodes, len) = ESM._acc_merge_nodes(nodes, len, ESM._AccDesc[])
     @testset "(a) merging differing const tables throws, with a clear message" begin
-        gA = _fnnode(TBL_A, ESM._mknode(kind=ESM._NK_STATE, idx=1))
-        gB = _fnnode(TBL_B, ESM._mknode(kind=ESM._NK_STATE, idx=2))
+        gA = _fnnode(TBL_A, ESM._mknode(kind = ESM._NK_STATE, idx = 1))
+        gB = _fnnode(TBL_B, ESM._mknode(kind = ESM._NK_STATE, idx = 2))
         err = try
             _amerge(ESM._Node[gA, gB], 2); nothing
         catch e
@@ -397,21 +477,21 @@ end
         # It fires whatever the query shape: a lane-invariant query (a 0-D state
         # read — the whole call would hoist to the invariant CSE tier) and an
         # all-literal one hit the SAME guard, which runs before any lowering.
-        hA = _fnnode(TBL_A, ESM._mknode(kind=ESM._NK_STATE, idx=1))
-        hB = _fnnode(TBL_B, ESM._mknode(kind=ESM._NK_STATE, idx=1))  # SAME slot
+        hA = _fnnode(TBL_A, ESM._mknode(kind = ESM._NK_STATE, idx = 1))
+        hB = _fnnode(TBL_B, ESM._mknode(kind = ESM._NK_STATE, idx = 1))  # SAME slot
         @test _amerge(ESM._Node[hA, hA], 2) isa ESM._Node            # equal specs merge
         @test_throws ESM.TreeWalkError _amerge(ESM._Node[hA, hB], 2)
 
-        fA = _fnnode(TBL_A, ESM._mknode(kind=ESM._NK_LITERAL, literal=QUERY))
-        fB = _fnnode(TBL_B, ESM._mknode(kind=ESM._NK_LITERAL, literal=QUERY))
+        fA = _fnnode(TBL_A, ESM._mknode(kind = ESM._NK_LITERAL, literal = QUERY))
+        fB = _fnnode(TBL_B, ESM._mknode(kind = ESM._NK_LITERAL, literal = QUERY))
         @test _amerge(ESM._Node[fA, fA], 2) isa ESM._Node
         @test_throws ESM.TreeWalkError _amerge(ESM._Node[fA, fB], 2)
     end
 
     # -- (b) the normal case is untouched -----------------------------------
     @testset "(b) one shared table still merges into ONE kernel node" begin
-        g1 = _fnnode(TBL_A, ESM._mknode(kind=ESM._NK_STATE, idx=1))
-        g2 = _fnnode(TBL_A, ESM._mknode(kind=ESM._NK_STATE, idx=2))
+        g1 = _fnnode(TBL_A, ESM._mknode(kind = ESM._NK_STATE, idx = 1))
+        g2 = _fnnode(TBL_A, ESM._mknode(kind = ESM._NK_STATE, idx = 2))
         acc = ESM._AccDesc[]
         merged = ESM._acc_merge_nodes(ESM._Node[g1, g2], 2, acc)
         @test merged.kind === ESM._NK_OP && merged.op === :fn  # one per-lane kernel …
@@ -421,8 +501,8 @@ end
         # CONTENT, not `objectid`: two EQUAL tables built as DIFFERENT Julia objects
         # (the ordinary case — `_compile_fn_node` rebuilds the spec per call) must
         # still merge. Keying identity here would split them and break N-independence.
-        c1 = _fnnode(copy(TBL_A), ESM._mknode(kind=ESM._NK_STATE, idx=1))
-        c2 = _fnnode(copy(TBL_A), ESM._mknode(kind=ESM._NK_STATE, idx=2))
+        c1 = _fnnode(copy(TBL_A), ESM._mknode(kind = ESM._NK_STATE, idx = 1))
+        c2 = _fnnode(copy(TBL_A), ESM._mknode(kind = ESM._NK_STATE, idx = 2))
         @test c1.payload[2] !== c2.payload[2]                  # genuinely distinct objects
         acc2 = ESM._AccDesc[]
         merged_c = ESM._acc_merge_nodes(ESM._Node[c1, c2], 2, acc2)
@@ -436,34 +516,45 @@ end
     # index (was WRONG), and the forced per-cell scalar reference under
     # `compiler=:interpreter` (was WRONG). All three must agree with the oracle.
     N = 4
-    mk_two_tables(tbl1, tbl2) = OpExpr("makearray", ESM.ASTExpr[];
-        regions=[[[1, 2]], [[3, 4]]],
-        values=ESM.ASTExpr[_interp_u(tbl1), _interp_u(tbl2)])
-    lhs = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
-        expr_body=_Didx("u", _v("i")), ranges=Dict("i" => [1, N]))
+    mk_two_tables(tbl1, tbl2) = OpExpr(
+        "makearray", ESM.ASTExpr[];
+        regions = [[[1, 2]], [[3, 4]]],
+        values = ESM.ASTExpr[_interp_u(tbl1), _interp_u(tbl2)]
+    )
+    lhs = OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i"],
+        expr_body = _Didx("u", _v("i")), ranges = Dict("i" => [1, N])
+    )
     # `ranges` carrying a key that is NOT in `output_idx` is a CONTRACTED index — an
     # einsum/aggregate RHS — which is exactly what forces the per-cell path.
-    rhs_of(mk; contract::Bool) = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
-        expr_body=_op("index", mk, _v("i")),
-        ranges=contract ? Dict("i" => [1, N], "k" => [1, 1]) : Dict("i" => [1, N]))
+    rhs_of(mk; contract::Bool) = OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i"],
+        expr_body = _op("index", mk, _v("i")),
+        ranges = contract ? Dict("i" => [1, N], "k" => [1, 1]) : Dict("i" => [1, N])
+    )
 
     function _build_du(rhs; disable_stencil::Bool)
-        model = ESM.Model(Dict("u" => ModelVariable(UnknownVariable)),
-                          [ESM.Equation(lhs, rhs)])
+        model = ESM.Model(
+            Dict("u" => ModelVariable(UnknownVariable)),
+            [ESM.Equation(lhs, rhs)]
+        )
         ics = Dict("u[$k]" => QUERY for k in 1:N)
-        f!, u0, p, _, vmap, d = ESM._build_evaluator_impl(model;
-            initial_conditions=ics,
-            compiler = disable_stencil ? :interpreter : :native)
+        f!, u0, p, _, vmap, d = ESM._build_evaluator_impl(
+            model;
+            initial_conditions = ics,
+            compiler = disable_stencil ? :interpreter : :native
+        )
         du = similar(u0); f!(du, u0, p, 0.0)
         return ([du[vmap["u[$k]"]] for k in 1:N], d)
     end
 
     @testset "(d) makearray regions with different tables — $label" for
-            (label, rhs, disable) in (
-                ("default (affine)",            rhs_of(mk_two_tables(TBL_A, TBL_B); contract=false), false),
-                ("per-cell (contracted index)", rhs_of(mk_two_tables(TBL_A, TBL_B); contract=true),  false),
-                ("per-cell (stencil disabled)", rhs_of(mk_two_tables(TBL_A, TBL_B); contract=false), true))
-        du, d = _build_du(rhs; disable_stencil=disable)
+        (label, rhs, disable) in (
+            ("default (affine)", rhs_of(mk_two_tables(TBL_A, TBL_B); contract = false), false),
+            ("per-cell (contracted index)", rhs_of(mk_two_tables(TBL_A, TBL_B); contract = true), false),
+            ("per-cell (stencil disabled)", rhs_of(mk_two_tables(TBL_A, TBL_B); contract = false), true),
+        )
+        du, d = _build_du(rhs; disable_stencil = disable)
         # Each cell against ITS OWN region's table — bit-identical to the scalar oracle.
         @test _bitsame(du[1], refA)
         @test _bitsame(du[2], refA)
@@ -493,8 +584,10 @@ end
     # are EQUAL but are distinct Julia objects still collapse to ONE kernel.
     @testset "(d') equal tables in both regions still agree with the oracle" begin
         for disable in (false, true)
-            du, _d = _build_du(rhs_of(mk_two_tables(TBL_A, copy(TBL_A)); contract=false);
-                               disable_stencil=disable)
+            du, _d = _build_du(
+                rhs_of(mk_two_tables(TBL_A, copy(TBL_A)); contract = false);
+                disable_stencil = disable
+            )
             @test all(_bitsame(x, refA) for x in du)
         end
         # The contracted-index form unrolls and lands on the affine path, which
@@ -507,8 +600,10 @@ end
         # `n_classmerge_in` pins that the compile still produced two. The
         # content-collapse property of the per-cell merge itself (equal tables
         # as distinct objects → ONE kernel) is pinned white-box in (b).
-        du, d = _build_du(rhs_of(mk_two_tables(TBL_A, copy(TBL_A)); contract=true);
-                          disable_stencil=false)
+        du, d = _build_du(
+            rhs_of(mk_two_tables(TBL_A, copy(TBL_A)); contract = true);
+            disable_stencil = false
+        )
         @test all(_bitsame(x, refA) for x in du)
         @test d.n_vec_kernels + d.n_acc_kernels == 1
         @test d.n_classmerge_in == 2
@@ -519,18 +614,28 @@ end
     # is a property of the document, not of the grid.
     @testset "(c) kernel count / template node count invariant across N" begin
         function _diag(N, disable)
-            mk = OpExpr("makearray", ESM.ASTExpr[];
-                regions=[[[1, N ÷ 2]], [[N ÷ 2 + 1, N]]],
-                values=ESM.ASTExpr[_interp_u(TBL_A), _interp_u(TBL_B)])
-            l = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
-                expr_body=_Didx("u", _v("i")), ranges=Dict("i" => [1, N]))
-            r = OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
-                expr_body=_op("index", mk, _v("i")), ranges=Dict("i" => [1, N]))
-            model = ESM.Model(Dict("u" => ModelVariable(UnknownVariable)),
-                              [ESM.Equation(l, r)])
+            mk = OpExpr(
+                "makearray", ESM.ASTExpr[];
+                regions = [[[1, N ÷ 2]], [[N ÷ 2 + 1, N]]],
+                values = ESM.ASTExpr[_interp_u(TBL_A), _interp_u(TBL_B)]
+            )
+            l = OpExpr(
+                "faq", ESM.ASTExpr[]; output_idx = Any["i"],
+                expr_body = _Didx("u", _v("i")), ranges = Dict("i" => [1, N])
+            )
+            r = OpExpr(
+                "faq", ESM.ASTExpr[]; output_idx = Any["i"],
+                expr_body = _op("index", mk, _v("i")), ranges = Dict("i" => [1, N])
+            )
+            model = ESM.Model(
+                Dict("u" => ModelVariable(UnknownVariable)),
+                [ESM.Equation(l, r)]
+            )
             ics = Dict("u[$k]" => QUERY for k in 1:N)
-            ESM._build_evaluator_impl(model; initial_conditions=ics,
-                compiler = disable ? :interpreter : :native)[6]
+            ESM._build_evaluator_impl(
+                model; initial_conditions = ics,
+                compiler = disable ? :interpreter : :native
+            )[6]
         end
         @testset "affine path" begin
             ds = [_diag(N, false) for N in (8, 16, 64)]
@@ -559,13 +664,15 @@ end
 # ragged loops, or a ragged loop and a plain three-way sum, shared a signature.
 @testset "a ragged loop's merge signature is its own" begin
     sig(n) = String(take!(ESM._struct_sig!(IOBuffer(), n)))
-    st(i) = ESM._mknode(kind=ESM._NK_STATE, idx=i)
-    lit(x) = ESM._mknode(kind=ESM._NK_LITERAL, literal=x)
-    ragged(lo, hi) = ESM._mknode(kind=ESM._NK_RAGGED_LOOP, op=:+, literal=0.0,
-        payload=ESM._RaggedLoop(Ref(0), 1, 4), children=ESM._Node[st(1), lo, hi])
+    st(i) = ESM._mknode(kind = ESM._NK_STATE, idx = i)
+    lit(x) = ESM._mknode(kind = ESM._NK_LITERAL, literal = x)
+    ragged(lo, hi) = ESM._mknode(
+        kind = ESM._NK_RAGGED_LOOP, op = :+, literal = 0.0,
+        payload = ESM._RaggedLoop(Ref(0), 1, 4), children = ESM._Node[st(1), lo, hi]
+    )
     r1 = ragged(lit(1.0), st(2))
     r2 = ragged(lit(1.0), st(2))
-    plus3 = ESM._mknode(kind=ESM._NK_OP, op=:+, children=ESM._Node[st(1), lit(1.0), st(2)])
+    plus3 = ESM._mknode(kind = ESM._NK_OP, op = :+, children = ESM._Node[st(1), lit(1.0), st(2)])
     @test sig(r1) != sig(r2)
     @test sig(r1) != sig(plus3)
     @test sig(r1) == sig(r1)

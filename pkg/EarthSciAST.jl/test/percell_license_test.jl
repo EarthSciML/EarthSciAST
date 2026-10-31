@@ -25,9 +25,13 @@ const _LC = EarthSciAST
 _lc_native(f) = _LC._with_compiler_plan(f, _LC._compiler_plan(:native))
 _lc_interp(f) = _LC._with_compiler_plan(f, _LC._compiler_plan(:interpreter))
 # The other strict plans, without needing their packages loaded.
-const _LC_STRICT = (_LC._compiler_plan(:native), _LC._plan_all(:xla, true, true),
-                    _LC._plan_with(_LC._plan_all(:mtk, true, false);
-                                   setup_map_compile_once = true))
+const _LC_STRICT = (
+    _LC._compiler_plan(:native), _LC._plan_all(:xla, true, true),
+    _LC._plan_with(
+        _LC._plan_all(:mtk, true, false);
+        setup_map_compile_once = true
+    ),
+)
 
 function _lc_refusal(f)
     try
@@ -42,18 +46,22 @@ end
 # True when a `_PerCellLicense` is reachable from `x` through fields, closure
 # captures, tuples, arrays and dicts. Runtime machinery (tasks, locks, modules,
 # types) is not followed.
-function _lc_holds_license(x, seen = IdDict{Any,Nothing}(), depth = 0)
+function _lc_holds_license(x, seen = IdDict{Any, Nothing}(), depth = 0)
     x isa _LC._PerCellLicense && return true
     depth > 200 && return false
     T = typeof(x)
-    (isbitstype(T) || x isa Union{Module,Type,String,Symbol,Task,Base.AbstractLock,
-                                  Core.MethodInstance, Method, IO, Ptr}) && return false
+    (
+        isbitstype(T) || x isa Union{
+            Module, Type, String, Symbol, Task, Base.AbstractLock,
+            Core.MethodInstance, Method, IO, Ptr,
+        }
+    ) && return false
     if ismutable(x) || x isa AbstractArray
         haskey(seen, x) && return false
         seen[x] = nothing
     end
     if x isa AbstractArray
-        (eltype(x) <: Union{Number,Bool,Symbol,String}) && return false
+        (eltype(x) <: Union{Number, Bool, Symbol, String}) && return false
         for i in eachindex(x)
             isassigned(x, i) && _lc_holds_license(x[i], seen, depth + 1) && return true
         end
@@ -61,8 +69,10 @@ function _lc_holds_license(x, seen = IdDict{Any,Nothing}(), depth = 0)
     end
     if x isa AbstractDict
         for (k, v) in x
-            (_lc_holds_license(k, seen, depth + 1) ||
-             _lc_holds_license(v, seen, depth + 1)) && return true
+            (
+                _lc_holds_license(k, seen, depth + 1) ||
+                    _lc_holds_license(v, seen, depth + 1)
+            ) && return true
         end
         return false
     end
@@ -75,7 +85,7 @@ end
 # The kernel section of an evaluator, through the wrapper of a build that
 # fills array observeds into buffers.
 _lc_section(f) = hasfield(typeof(f), :kernel_section) ? getfield(f, :kernel_section) :
-                 _lc_section(getfield(f, :f_state!))
+    _lc_section(getfield(f, :f_state!))
 
 @testset "per-cell evaluation needs a license" begin
 
@@ -91,20 +101,28 @@ _lc_section(f) = hasfield(typeof(f), :kernel_section) ? getfield(f, :kernel_sect
     @testset "a strict plan's license request is the route's named refusal" begin
         probes = Ref(0)
         probe(pr) = (@test pr isa _LC._PerCellProbe; probes[] += 1; :seen)
-        e = _lc_refusal(() -> _lc_native(() ->
-            _LC._percell_license("M.x", r -> "because $(r)"; probe = probe)))
+        e = _lc_refusal(
+            () -> _lc_native(
+                () ->
+                _LC._percell_license("M.x", r -> "because $(r)"; probe = probe)
+            )
+        )
         @test e.code == _LC.ERROR_CODES.COMPILER_REFUSED_RULE
         @test occursin("compiler=:native refuses 'M.x': because seen", e.detail)
         @test probes[] == 1
         # A probe's own error is the document's, and it is what surfaces.
         bad(_) = throw(_LC.TreeWalkError("E_TREEWALK_CONSTARRAY_OOB", "cell 9"))
-        e = _lc_refusal(() -> _lc_native(() ->
-            _LC._percell_license("M.x", "never said"; probe = bad)))
+        e = _lc_refusal(
+            () -> _lc_native(
+                () ->
+                _LC._percell_license("M.x", "never said"; probe = bad)
+            )
+        )
         @test e.code == "E_TREEWALK_CONSTARRAY_OOB"
         # Under the interpreter the probe never runs.
         probes[] = 0
         @test _lc_interp(() -> _LC._percell_license("M.x", "no"; probe = probe)) isa
-              _LC._PerCellLicense
+            _LC._PerCellLicense
         @test probes[] == 0
     end
 
@@ -113,19 +131,19 @@ _lc_section(f) = hasfield(typeof(f), :kernel_section) ? getfield(f, :kernel_sect
         access = _LC._PerCellAccess
         # routine => the type its first argument must be within.
         routines = [
-            _LC._eval_cellwise           => access,  # resolve + compile one cell
-            _LC._resolve_field_ic        => access,  # a field `ic`, one cell
-            _LC._faq_diagnostic_cell     => access,  # an array equation's first cell
-            _LC._fill_map_percell        => lic,     # setup arrays, every cell
-            _LC._walk_init_once!         => lic,     # initialization equations
-            _LC._percell_discrete_fill   => lic,     # the discrete materializer
+            _LC._eval_cellwise => access,  # resolve + compile one cell
+            _LC._resolve_field_ic => access,  # a field `ic`, one cell
+            _LC._faq_diagnostic_cell => access,  # an array equation's first cell
+            _LC._fill_map_percell => lic,     # setup arrays, every cell
+            _LC._walk_init_once! => lic,     # initialization equations
+            _LC._percell_discrete_fill => lic,     # the discrete materializer
             _LC._seed_expression_percell! => lic,    # `seed_expression_ic!`
-            _LC._walk_kernels!           => lic,     # the kernel section's runner
+            _LC._walk_kernels! => lic,     # the kernel section's runner
             # The scalar walker: its `nothing` methods are empty, and the
             # section (or `_make_rhs`) holds no license only with nothing to walk.
-            _LC._walk_prelude_slots!     => Union{lic,Nothing},
-            _LC._walk_scalar_rhs!        => Union{lic,Nothing},
-            _LC._compile_faq_percell!    => Union{lic,_LC._OopCells},  # per-cell build
+            _LC._walk_prelude_slots! => Union{lic, Nothing},
+            _LC._walk_scalar_rhs! => Union{lic, Nothing},
+            _LC._compile_faq_percell! => Union{lic, _LC._OopCells},  # per-cell build
         ]
         for (f, want) in routines
             ms = collect(methods(f))
@@ -139,12 +157,20 @@ _lc_section(f) = hasfield(typeof(f), :kernel_section) ? getfield(f, :kernel_sect
         # The walked recurrence sweep is the license-parameterized type; the
         # draft the emitter reads (`gen === nothing`) has no walk.
         Tsw = _LC._RecurrenceSweep
-        @test hasmethod(_LC._walk_recurrence!,
-                        Tuple{Tsw{_LC._PerCellLicense,Tuple{}},Vector{Float64},Nothing,
-                              Float64,Type{Float64}})
-        @test !hasmethod(_LC._walk_recurrence!,
-                         Tuple{Tsw{Nothing,Tuple{}},Vector{Float64},Nothing,Float64,
-                               Type{Float64}})
+        @test hasmethod(
+            _LC._walk_recurrence!,
+            Tuple{
+                Tsw{_LC._PerCellLicense, Tuple{}}, Vector{Float64}, Nothing,
+                Float64, Type{Float64},
+            }
+        )
+        @test !hasmethod(
+            _LC._walk_recurrence!,
+            Tuple{
+                Tsw{Nothing, Tuple{}}, Vector{Float64}, Nothing, Float64,
+                Type{Float64},
+            }
+        )
     end
 
     @testset "a kernel section that walks cannot be built without a license" begin
@@ -157,9 +183,11 @@ _lc_section(f) = hasfield(typeof(f), :kernel_section) ? getfield(f, :kernel_sect
         f_nat = first(_LC._build_evaluator(file; compiler = :native))
         sec = _lc_section(f_lax)
         @test sec.walk isa _LC._PerCellLicense && !isempty(sec.kernels)
-        rebuild(walk) = _LC._KernelSection(sec.cgf, sec.cgtabs, sec.n_emitted, sec.kernels,
+        rebuild(walk) = _LC._KernelSection(
+            sec.cgf, sec.cgtabs, sec.n_emitted, sec.kernels,
             sec.dualf, sec.dualtabs, sec.n_dual_emitted, sec.dual_resid, sec.f64cg,
-            sec.tcache, sec.dual_tcache, sec.ntiles, walk)
+            sec.tcache, sec.dual_tcache, sec.ntiles, walk
+        )
         @test_throws ArgumentError rebuild(nothing)
         @test rebuild(sec.walk) isa _LC._KernelSection
         nsec = _lc_section(f_nat)
@@ -174,11 +202,15 @@ _lc_section(f) = hasfield(typeof(f), :kernel_section) ? getfield(f, :kernel_sect
         file = _LC.load_path(joinpath(@__DIR__, "fixtures", "discrete_materialize.esm"))
         function build(c)
             dm = _LC.DiscreteMaterializer()
-            f! = first(_LC._build_evaluator(file;
-                initial_conditions = Dict("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0),
-                const_arrays = Dict("W" => [1.0 2.0 3.0; 4.0 5.0 6.0]),
-                param_arrays = Dict("src" => [0.3, 1.7]), materialize_out = dm,
-                compiler = c))
+            f! = first(
+                _LC._build_evaluator(
+                    file;
+                    initial_conditions = Dict("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0),
+                    const_arrays = Dict("W" => [1.0 2.0 3.0; 4.0 5.0 6.0]),
+                    param_arrays = Dict("src" => [0.3, 1.7]), materialize_out = dm,
+                    compiler = c
+                )
+            )
             return (f!, dm)
         end
         @test _lc_holds_license(build(:interpreter))
@@ -194,15 +226,23 @@ _lc_section(f) = hasfield(typeof(f), :kernel_section) ? getfield(f, :kernel_sect
             path == joinpath(src, "compiler.jl") && continue
             for (n, line) in enumerate(eachline(path))
                 code = first(split(line, '#'; limit = 2))
-                (occursin("_compiler_is_strict", code) || occursin(".strict", code) ||
-                 occursin("_PerCellLicense()", code)) &&
+                (
+                    occursin("_compiler_is_strict", code) || occursin(".strict", code) ||
+                        occursin("_PerCellLicense()", code)
+                ) &&
                     push!(offenders, "$(relpath(path, src)):$(n)")
             end
         end
         # `.strict` also names a table lookup's strictness (`_Interp*Spec`), which
         # is a property of the document, not of the compiler.
-        filter!(o -> !any(occursin(f, o) for f in ("acc_merge.jl", "xcse.jl",
-                                                   "registered_functions.jl")), offenders)
+        filter!(
+            o -> !any(
+                occursin(f, o) for f in (
+                        "acc_merge.jl", "xcse.jl",
+                        "registered_functions.jl",
+                    )
+            ), offenders
+        )
         @test isempty(offenders)
     end
 end

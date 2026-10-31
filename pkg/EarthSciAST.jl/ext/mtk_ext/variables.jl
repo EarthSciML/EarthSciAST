@@ -17,8 +17,10 @@ through invented placeholder identifiers.
 function _make_dep_var(name::Symbol, iv_syms::Vector{Any})
     bindings = _iv_holder_bindings(iv_syms)
     call_expr = Core.Expr(:call, name, first.(bindings)...)
-    return _eval_var_macro(Symbolics, Symbol("@variables"), call_expr;
-                           bindings=bindings)
+    return _eval_var_macro(
+        Symbolics, Symbol("@variables"), call_expr;
+        bindings = bindings
+    )
 end
 
 """
@@ -44,8 +46,10 @@ metadata system (that path has latent bugs and duplicates the work of
 `src/units.jl`); stuffing units into the description is a version-stable
 alternative that still surfaces in error messages and plot labels.
 """
-function _build_description(desc::Union{String,Nothing},
-                            units::Union{String,Nothing})
+function _build_description(
+        desc::Union{String, Nothing},
+        units::Union{String, Nothing}
+    )
     if desc === nothing && units === nothing
         return nothing
     elseif units === nothing
@@ -67,8 +71,10 @@ Construct a shape-annotated symbolic variable of the form
 the array-shaped `Symbolics.Arr` object that supports element-wise indexing
 via `u[i]`, `u[i, j]`, etc.
 """
-function _make_array_dep_var(name::Symbol, iv_syms::Vector{Any},
-                             shape::Vector{UnitRange{Int}})
+function _make_array_dep_var(
+        name::Symbol, iv_syms::Vector{Any},
+        shape::Vector{UnitRange{Int}}
+    )
     bindings = _iv_holder_bindings(iv_syms)
     call_expr = Core.Expr(:call, name, first.(bindings)...)
     # Always pad the low side of the shape to 1. MTK's init path treats
@@ -83,8 +89,10 @@ function _make_array_dep_var(name::Symbol, iv_syms::Vector{Any},
     ref_expr = Core.Expr(:ref, call_expr, ranges_ast...)
     # `(name(iv...)[range...])` — the parenthesized form the macro expects.
     paren_expr = Core.Expr(:block, ref_expr)
-    return _eval_var_macro(Symbolics, Symbol("@variables"), paren_expr;
-                           bindings=bindings)
+    return _eval_var_macro(
+        Symbolics, Symbol("@variables"), paren_expr;
+        bindings = bindings
+    )
 end
 
 # ========================================
@@ -100,7 +108,7 @@ end
 # needs one fails with `_range_bounds_int`'s descriptive error rather than
 # silently taking a wrong bound.
 function _index_set_extents(flat::FlattenedSystem)
-    extents = Dict{String,Int}()
+    extents = Dict{String, Int}()
     for (name, iset) in flat.index_sets
         sz = hasproperty(iset, :size) ? getproperty(iset, :size) : nothing
         (sz isa Integer && sz > 0) || continue
@@ -112,7 +120,7 @@ end
 # `name => [1:n₁, …]` for every variable whose defining equation is a `const`
 # array (`tbl ~ {"op": "const", "value": [...]}`).
 function _const_observed_shapes(equations)
-    shapes = Dict{String,Vector{UnitRange{Int}}}()
+    shapes = Dict{String, Vector{UnitRange{Int}}}()
     for eq in equations
         (eq.lhs isa VarExpr && eq.rhs isa OpExpr) || continue
         rhs = eq.rhs::OpExpr
@@ -165,8 +173,8 @@ function _build_var_dict(flat::FlattenedSystem)
     is_pde = _has_spatial_ivs(flat)
 
     # Independent variables
-    t_sym = _get_or_make_dim(Dict{String,Any}(), "t")
-    dim_dict = Dict{String,Any}("t" => t_sym)
+    t_sym = _get_or_make_dim(Dict{String, Any}(), "t")
+    dim_dict = Dict{String, Any}("t" => t_sym)
 
     # Document-scoped index-set extents (`name => size`), the only place an
     # `IndexSetRef` range (`{"from": "x"}`) or an index-set-named variable
@@ -197,7 +205,7 @@ function _build_var_dict(flat::FlattenedSystem)
     # about its extent.
     merge!(inferred_shapes, _const_observed_shapes(flat.equations))
 
-    var_dict = Dict{String,Any}()
+    var_dict = Dict{String, Any}()
     states = Vector{Num}()
     parameters = Vector{Num}()
     observed = Vector{Num}()
@@ -222,7 +230,7 @@ function _build_var_dict(flat::FlattenedSystem)
 
     _with_description(v, desc_text) =
         desc_text === nothing ? v :
-            Symbolics.setmetadata(v, ModelingToolkit.VariableDescription, desc_text)
+        Symbolics.setmetadata(v, ModelingToolkit.VariableDescription, desc_text)
 
     # State variables — functions of independent variables
     for (vname, mvar) in flat.state_variables
@@ -233,7 +241,8 @@ function _build_var_dict(flat::FlattenedSystem)
         if shape === nothing
             v_num = _with_description(
                 _with_default(_make_dep_var(sym_name, iv_syms_any), mvar.default),
-                desc_text)
+                desc_text
+            )
             push!(states, v_num)
             var_dict[vname] = v_num
         else
@@ -241,8 +250,11 @@ function _build_var_dict(flat::FlattenedSystem)
             # A scalar `default` on a shaped state is every cell's (esm-spec
             # §6.3). It goes on the ARRAY, which is where ModelingToolkit reads
             # a cell's default from, so the cells are built after it.
-            mvar.default === nothing || (array_var = Symbolics.setdefaultval(
-                array_var, fill(Float64(mvar.default), size(array_var))))
+            mvar.default === nothing || (
+                array_var = Symbolics.setdefaultval(
+                    array_var, fill(Float64(mvar.default), size(array_var))
+                )
+            )
             var_dict[vname] = array_var
             # Enumerate the individual scalar elements for the dvs vector.
             # Description metadata is attached per-element because
@@ -258,7 +270,8 @@ function _build_var_dict(flat::FlattenedSystem)
     for (pname, mvar) in flat.parameters
         p_num = _with_description(
             _with_default(_make_param(_san(pname)), mvar.default),
-            _build_description(mvar.description, mvar.units))
+            _build_description(mvar.description, mvar.units)
+        )
         push!(parameters, p_num)
         var_dict[pname] = p_num
     end
@@ -274,7 +287,8 @@ function _build_var_dict(flat::FlattenedSystem)
         if shape === nothing
             ov_num = _with_description(
                 _with_default(_make_dep_var(_san(oname), iv_syms_any), mvar.default),
-                desc_text)
+                desc_text
+            )
             push!(observed, ov_num)
             var_dict[oname] = ov_num
         else
@@ -303,7 +317,7 @@ end
 # discrete-parameter machinery for no gain.
 function _wrap_pre_states(expr, state_syms)
     isempty(state_syms) && return expr
-    subs = Dict{Any,Any}()
+    subs = Dict{Any, Any}()
     for sv in state_syms
         u = Symbolics.unwrap(sv)
         subs[u] = ModelingToolkit.Pre(sv)
@@ -314,8 +328,10 @@ function _wrap_pre_states(expr, state_syms)
     return Symbolics.substitute(expr, subs)
 end
 
-function _affect_to_eq(affect, var_dict::Dict{String,Any}, t_sym, dim_dict,
-                      state_syms)
+function _affect_to_eq(
+        affect, var_dict::Dict{String, Any}, t_sym, dim_dict,
+        state_syms
+    )
     if affect isa AffectEquation
         if !haskey(var_dict, affect.lhs)
             @warn "Target variable $(affect.lhs) not found for event affect"
@@ -363,12 +379,15 @@ than being lowered to something that silently never fires.
 function _condition_to_root_equation(cond::ASTExpr, var_dict, t_sym, dim_dict)
     if cond isa OpExpr
         if cond.op in ("and", "or", "not")
-            throw(ArgumentError(
-                "continuous-event condition uses the boolean operator '$(cond.op)', " *
-                "which has no zero-crossing function — a continuous event roots on a " *
-                "CONTINUOUS expression (esm-spec §5). Express the crossing directly " *
-                "(e.g. {\"op\":\"-\",\"args\":[a,b]} for a ~ b), or use a discrete " *
-                "event with a condition trigger."))
+            throw(
+                ArgumentError(
+                    "continuous-event condition uses the boolean operator '$(cond.op)', " *
+                        "which has no zero-crossing function — a continuous event roots on a " *
+                        "CONTINUOUS expression (esm-spec §5). Express the crossing directly " *
+                        "(e.g. {\"op\":\"-\",\"args\":[a,b]} for a ~ b), or use a discrete " *
+                        "event with a condition trigger."
+                )
+            )
         end
         # Binary `-` and the relationals both root where the two sides meet.
         if length(cond.args) == 2 && cond.op in ("-", "<", "<=", ">", ">=", "==")
@@ -382,22 +401,28 @@ end
 
 # esm-spec §5.2: `root_find` names which side of the root the event lands on,
 # mapped to DiffEq's `rootfind` option; absent means `"left"`.
-function _rootfind_option(root_find::Union{Nothing,AbstractString})
+function _rootfind_option(root_find::Union{Nothing, AbstractString})
     root_find == "right" && return ModelingToolkit.SciMLBase.RightRootFind
     return ModelingToolkit.SciMLBase.LeftRootFind
 end
 
-function _build_continuous_events(flat::FlattenedSystem, var_dict, t_sym, dim_dict,
-                                  state_syms)
+function _build_continuous_events(
+        flat::FlattenedSystem, var_dict, t_sym, dim_dict,
+        state_syms
+    )
     cbs = Any[]
     for ev in flat.continuous_events
         conds = ModelingToolkit.Equation[
             _condition_to_root_equation(c, var_dict, t_sym, dim_dict)
-            for c in ev.conditions
+                for c in ev.conditions
         ]
-        to_eqs(list) = filter(!isnothing,
-                              [_affect_to_eq(a, var_dict, t_sym, dim_dict, state_syms)
-                               for a in list])
+        to_eqs(list) = filter(
+            !isnothing,
+            [
+                _affect_to_eq(a, var_dict, t_sym, dim_dict, state_syms)
+                    for a in list
+            ]
+        )
         affects = to_eqs(ev.affects)
         # esm-spec §5.2: `affect_neg` fires on NEGATIVE-going crossings, and "if
         # `null` or absent, `affects` is used for both directions". The absent
@@ -411,21 +436,30 @@ function _build_continuous_events(flat::FlattenedSystem, var_dict, t_sym, dim_di
         (isempty(conds) || (isempty(affects) && isempty(affect_neg))) && continue
         # `conditions` is a Vector{Equation}; each affect a Vector{Equation} that
         # MTK wraps into a SymbolicAffect, or `nothing` for no affect on that edge.
-        push!(cbs, ModelingToolkit.SymbolicContinuousCallback(
-            conds, isempty(affects) ? nothing : affects;
-            affect_neg = isempty(affect_neg) ? nothing : affect_neg,
-            rootfind = _rootfind_option(ev.root_find)))
+        push!(
+            cbs, ModelingToolkit.SymbolicContinuousCallback(
+                conds, isempty(affects) ? nothing : affects;
+                affect_neg = isempty(affect_neg) ? nothing : affect_neg,
+                rootfind = _rootfind_option(ev.root_find)
+            )
+        )
     end
     return cbs
 end
 
-function _build_discrete_events(flat::FlattenedSystem, var_dict, t_sym, dim_dict,
-                                state_syms)
+function _build_discrete_events(
+        flat::FlattenedSystem, var_dict, t_sym, dim_dict,
+        state_syms
+    )
     cbs = Any[]
     for ev in flat.discrete_events
-        affects = filter(!isnothing,
-                         [_affect_to_eq(a, var_dict, t_sym, dim_dict, state_syms)
-                          for a in ev.affects])
+        affects = filter(
+            !isnothing,
+            [
+                _affect_to_eq(a, var_dict, t_sym, dim_dict, state_syms)
+                    for a in ev.affects
+            ]
+        )
         isempty(affects) && continue
         if ev.trigger isa ConditionTrigger
             cond = _esm_to_symbolic(ev.trigger.expression, var_dict, t_sym, dim_dict)
@@ -438,8 +472,11 @@ function _build_discrete_events(flat::FlattenedSystem, var_dict, t_sym, dim_dict
             # PeriodicCallback (fires at tspan[1]+period, 2*period, ...).
             # Pass the full times vector so multi-time triggers are honored.
             if !isempty(ev.trigger.times)
-                push!(cbs, ModelingToolkit.SymbolicDiscreteCallback(
-                    collect(ev.trigger.times), affects))
+                push!(
+                    cbs, ModelingToolkit.SymbolicDiscreteCallback(
+                        collect(ev.trigger.times), affects
+                    )
+                )
             end
         end
     end

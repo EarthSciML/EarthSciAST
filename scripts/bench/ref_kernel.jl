@@ -34,9 +34,11 @@ du[i,j,k] -= w[j] * (F[i+1] - F[i]) with monotone-PPM face fluxes F from tracer
 `q` and face-staggered zonal wind `U` (face i = west edge of cell i, periodic).
 `w` is the per-lat divergence weight (dphi/(dlam*dS)); `ws` is scratch.
 """
-function ppm_lon_sweep!(du::AbstractArray{T,3}, q::AbstractArray{T,3},
-                        U::AbstractArray{T,3}, w::AbstractVector{T},
-                        ws::PPMWork{T}) where {T}
+function ppm_lon_sweep!(
+        du::AbstractArray{T, 3}, q::AbstractArray{T, 3},
+        U::AbstractArray{T, 3}, w::AbstractVector{T},
+        ws::PPMWork{T}
+    ) where {T}
     NLON, NLAT, NLEV = size(q)
     dqm, ae, aL, aR, F = ws.dqm, ws.ae, ws.aL, ws.aR, ws.F
     sixth = T(1) / T(6)
@@ -96,7 +98,7 @@ function setup(nlon::Int, nlat::Int, nlev::Int; T = Float64)
     ppm_lon_sweep!(du, q, U, w, ws)
     for k in 1:nlev, j in 1:nlat   # conservation gate: the periodic sum telescopes
         s = sum(@view du[:, j, k])
-        abs(s) < 1e-12 * nlon || error("reference kernel row sum $s not ~0 (j=$j k=$k)")
+        abs(s) < 1.0e-12 * nlon || error("reference kernel row sum $s not ~0 (j=$j k=$k)")
     end
     fill!(du, zero(T))
     return (; du, q, U, w, ws)

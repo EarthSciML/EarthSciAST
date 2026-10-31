@@ -14,12 +14,14 @@ function _assert_no_spatial_ops(flat::FlattenedSystem)
     for eq in flat.equations
         for side in (eq.lhs, eq.rhs)
             spatial_op = _find_spatial_op(side)
-            spatial_op === nothing || throw(ArgumentError(
-                "UnreachableSpatialOperatorError: encountered '$(spatial_op)' " *
-                "node in simulation evaluation. Spatial operators must be " *
-                "rewritten by ESD discretization rules before reaching the " *
-                "simulator. Pipeline contract violated."
-            ))
+            spatial_op === nothing || throw(
+                ArgumentError(
+                    "UnreachableSpatialOperatorError: encountered '$(spatial_op)' " *
+                        "node in simulation evaluation. Spatial operators must be " *
+                        "rewritten by ESD discretization rules before reaching the " *
+                        "simulator. Pipeline contract violated."
+                )
+            )
         end
     end
     return nothing
@@ -33,16 +35,21 @@ end
 # which has no handler → "Unsupported operator: ic"). Returns the
 # `(variable name, lowered value)` pairs plus the remaining dynamic
 # equations; `_apply_ic_defaults!` folds the values into the states.
-function _split_ic_equations(flat::FlattenedSystem, var_dict::Dict{String,Any},
-                             t_sym, dim_dict::Dict{String,Any})
-    ic_values = Tuple{String,Any}[]
+function _split_ic_equations(
+        flat::FlattenedSystem, var_dict::Dict{String, Any},
+        t_sym, dim_dict::Dict{String, Any}
+    )
+    ic_values = Tuple{String, Any}[]
     dyn_equations = Equation[]
     # `field_ics` are classified OUT of `flat.equations` (esm-libraries-spec
     # §4.7.5 step 4), so they have to be read from their own field or the states
     # they seed silently fall back to their bare `default`.
     for (vn, rhs) in flat.field_ics
-        haskey(var_dict, vn) || throw(ArgumentError(
-            "ic($(vn)) targets unknown variable '$(vn)'"))
+        haskey(var_dict, vn) || throw(
+            ArgumentError(
+                "ic($(vn)) targets unknown variable '$(vn)'"
+            )
+        )
         push!(ic_values, (vn, _esm_to_symbolic(rhs, var_dict, t_sym, dim_dict)))
     end
     for eq in flat.equations
@@ -51,10 +58,15 @@ function _split_ic_equations(flat::FlattenedSystem, var_dict::Dict{String,Any},
             (length(lop.args) == 1 && lop.args[1] isa VarExpr) ||
                 throw(ArgumentError("ic(...) LHS must name a single state variable"))
             vn = (lop.args[1]::VarExpr).name
-            haskey(var_dict, vn) || throw(ArgumentError(
-                "ic($(vn)) targets unknown variable '$(vn)'"))
-            push!(ic_values,
-                  (vn, _esm_to_symbolic(eq.rhs, var_dict, t_sym, dim_dict)))
+            haskey(var_dict, vn) || throw(
+                ArgumentError(
+                    "ic($(vn)) targets unknown variable '$(vn)'"
+                )
+            )
+            push!(
+                ic_values,
+                (vn, _esm_to_symbolic(eq.rhs, var_dict, t_sym, dim_dict))
+            )
         else
             push!(dyn_equations, eq)
         end
@@ -78,8 +90,10 @@ end
 # still index the array without one, and the initial condition never reaches
 # the system (the initialization then solves for the whole state from
 # nothing).
-function _apply_ic_defaults!(var_dict::Dict{String,Any}, states,
-                             ic_values::Vector{Tuple{String,Any}})
+function _apply_ic_defaults!(
+        var_dict::Dict{String, Any}, states,
+        ic_values::Vector{Tuple{String, Any}}
+    )
     for (vn, val) in ic_values
         old = var_dict[vn]
         if old isa Num
@@ -164,9 +178,11 @@ end
 # scalar `D(arr) ~ 0` is not the right closure for a buffer, and no path
 # produces an unmentioned one. This is the ODE constructor only; `PDESystem`
 # takes its initial values as explicit boundary conditions and is untouched.
-function _closures_for_unmentioned_states(flat::FlattenedSystem,
-                                          dyn_equations::Vector{Equation},
-                                          var_dict::Dict{String,Any})
+function _closures_for_unmentioned_states(
+        flat::FlattenedSystem,
+        dyn_equations::Vector{Equation},
+        var_dict::Dict{String, Any}
+    )
     mentioned = Set{String}()
     for eq in dyn_equations
         union!(mentioned, free_variables(eq.lhs))
@@ -176,8 +192,10 @@ function _closures_for_unmentioned_states(flat::FlattenedSystem,
     for vname in keys(flat.state_variables)
         vname in mentioned && continue
         get(var_dict, vname, nothing) isa Num || continue   # scalars only
-        push!(closures,
-              Equation(OpExpr("D", EsmExpr[VarExpr(vname)], wrt="t"), NumExpr(0.0)))
+        push!(
+            closures,
+            Equation(OpExpr("D", EsmExpr[VarExpr(vname)], wrt = "t"), NumExpr(0.0))
+        )
     end
     return closures
 end
@@ -189,17 +207,25 @@ Build a real `ModelingToolkit.ODESystem`/`System` from a flattened ESM system.
 Errors with a clear redirect to `ModelingToolkit.PDESystem` when the flattened
 system has spatial independent variables.
 """
-function ModelingToolkit.System(flat::FlattenedSystem;
-                                name::Union{Symbol,AbstractString}=:anonymous,
-                                kwargs...)
+function ModelingToolkit.System(
+        flat::FlattenedSystem;
+        name::Union{Symbol, AbstractString} = :anonymous,
+        kwargs...
+    )
     # "Expand at your boundary" (RFC out-of-line-expression-templates §7.7):
     # `flatten` carries surviving `apply_expression_template` references; MTK
     # lowering has no template handling, so expand against the merged registry
     # here. No-op for a reference-free system.
     flat = expand_flattened_refs(flat)
     if _has_spatial_ivs(flat)
-        throw(ArgumentError(_use_pde_ctor_msg(flat,
-            "ModelingToolkit.PDESystem", "ModelingToolkit.System")))
+        throw(
+            ArgumentError(
+                _use_pde_ctor_msg(
+                    flat,
+                    "ModelingToolkit.PDESystem", "ModelingToolkit.System"
+                )
+            )
+        )
     end
 
     _assert_no_spatial_ops(flat)
@@ -212,8 +238,10 @@ function ModelingToolkit.System(flat::FlattenedSystem;
     _apply_ic_defaults!(var_dict, states, ic_values)
     # After the `ic` split, so a state whose only appearance is an initial
     # value still counts as unmentioned and gets its closure (see above).
-    append!(dyn_equations,
-            _closures_for_unmentioned_states(flat, dyn_equations, var_dict))
+    append!(
+        dyn_equations,
+        _closures_for_unmentioned_states(flat, dyn_equations, var_dict)
+    )
 
     MTKEquation = ModelingToolkit.Equation
     eqs = Vector{MTKEquation}()
@@ -241,11 +269,13 @@ function ModelingToolkit.System(flat::FlattenedSystem;
 
     # Only pass event kwargs that are non-empty — MTK treats an explicit
     # empty event list differently from an omitted kwarg on some versions.
-    event_kwargs = Pair{Symbol,Any}[]
+    event_kwargs = Pair{Symbol, Any}[]
     isempty(cont_cbs) || push!(event_kwargs, :continuous_events => cont_cbs)
     isempty(disc_cbs) || push!(event_kwargs, :discrete_events => disc_cbs)
-    return ModelingToolkit.System(eqs, t_sym, dvs, parameters;
-        name=sys_name, event_kwargs..., kwargs...)
+    return ModelingToolkit.System(
+        eqs, t_sym, dvs, parameters;
+        name = sys_name, event_kwargs..., kwargs...
+    )
 end
 
 """
@@ -253,11 +283,13 @@ end
 
 Convenience: flatten the model first, then build the `System`.
 """
-function ModelingToolkit.System(model::Model;
-                                name::Union{Symbol,AbstractString}=:anonymous,
-                                kwargs...)
-    flat = flatten(model; name=String(name isa Symbol ? name : Symbol(name)))
-    return ModelingToolkit.System(flat; name=name, kwargs...)
+function ModelingToolkit.System(
+        model::Model;
+        name::Union{Symbol, AbstractString} = :anonymous,
+        kwargs...
+    )
+    flat = flatten(model; name = String(name isa Symbol ? name : Symbol(name)))
+    return ModelingToolkit.System(flat; name = name, kwargs...)
 end
 
 # ========================================
@@ -291,14 +323,21 @@ variable. This implements the Julia-specific convention (§5.1) that
 slice-derived surface source equations become flux BCs rather than pointwise
 source terms in the lowest grid cell.
 """
-function ModelingToolkit.PDESystem(flat::FlattenedSystem;
-                                   name::Union{Symbol,AbstractString}=:anonymous,
-                                   kwargs...)
+function ModelingToolkit.PDESystem(
+        flat::FlattenedSystem;
+        name::Union{Symbol, AbstractString} = :anonymous,
+        kwargs...
+    )
     # Expand at the boundary (RFC §7.7) — same as the System entry above.
     flat = expand_flattened_refs(flat)
     if !_has_spatial_ivs(flat)
-        throw(ArgumentError(_use_ode_ctor_msg(
-            "ModelingToolkit.System", "ModelingToolkit.PDESystem")))
+        throw(
+            ArgumentError(
+                _use_ode_ctor_msg(
+                    "ModelingToolkit.System", "ModelingToolkit.PDESystem"
+                )
+            )
+        )
     end
 
     var_dict, t_sym, dim_dict, states, parameters, observed, spatial_syms =
@@ -315,7 +354,8 @@ function ModelingToolkit.PDESystem(flat::FlattenedSystem;
     #   (3) a base variable <base> that appears in a diffusive PDE equation.
     # If so, emit a flux BC and drop the slice-ODE.
     slice_bcs, slice_vars_to_drop = _lower_slice_sources_to_bcs!(
-        flat, var_dict, t_sym, dim_dict)
+        flat, var_dict, t_sym, dim_dict
+    )
 
     # Route `ic(var) = value` equations out of the PDE set (as the ODE path
     # does) — `_esm_to_symbolic` has no `ic` handler — collecting the explicit
@@ -342,7 +382,7 @@ function ModelingToolkit.PDESystem(flat::FlattenedSystem;
     # variables lowered to flux BCs and states with no initial value are
     # skipped. `flat.state_variables` is an OrderedDict, so the emitted IC
     # order is deterministic.
-    ic_override = Dict{String,Any}(ic_values)
+    ic_override = Dict{String, Any}(ic_values)
     bcs = copy(slice_bcs)
     for (vname, mvar) in flat.state_variables
         vname in slice_vars_to_drop && continue
@@ -362,18 +402,22 @@ function ModelingToolkit.PDESystem(flat::FlattenedSystem;
     dvars = [Num(v) for v in states]
     append!(dvars, Num(v) for v in observed)
 
-    return ModelingToolkit.PDESystem(eqs, bcs, domain_spec, iv_syms, dvars,
-                                     parameters; name=sys_name, kwargs...)
+    return ModelingToolkit.PDESystem(
+        eqs, bcs, domain_spec, iv_syms, dvars,
+        parameters; name = sys_name, kwargs...
+    )
 end
 
 """
     ModelingToolkit.PDESystem(model::Model; name=:anonymous, kwargs...)
 """
-function ModelingToolkit.PDESystem(model::Model;
-                                   name::Union{Symbol,AbstractString}=:anonymous,
-                                   kwargs...)
-    flat = flatten(model; name=String(name isa Symbol ? name : Symbol(name)))
-    return ModelingToolkit.PDESystem(flat; name=name, kwargs...)
+function ModelingToolkit.PDESystem(
+        model::Model;
+        name::Union{Symbol, AbstractString} = :anonymous,
+        kwargs...
+    )
+    flat = flatten(model; name = String(name isa Symbol ? name : Symbol(name)))
+    return ModelingToolkit.PDESystem(flat; name = name, kwargs...)
 end
 
 # ------------------------------------------------------------
@@ -391,7 +435,7 @@ function _find_slice_candidates(flat::FlattenedSystem)
     for vname in keys(flat.state_variables)
         idx = findlast('.', vname)
         idx === nothing && continue
-        tail = vname[(idx+1):end]
+        tail = vname[(idx + 1):end]
         startswith(tail, "at_") || continue
         dim = tail[4:end]
         dim in spatial_dims && push!(candidates, vname)
@@ -405,8 +449,10 @@ check for both a connector-form algebraic equation and a D(·,t) ODE. If
 both exist and the base variable has a diffusive equation in the PDE set,
 emit a flux boundary condition and mark the slice variable for removal.
 """
-function _lower_slice_sources_to_bcs!(flat::FlattenedSystem,
-                                      var_dict, t_sym, dim_dict)
+function _lower_slice_sources_to_bcs!(
+        flat::FlattenedSystem,
+        var_dict, t_sym, dim_dict
+    )
     MTKEquation = ModelingToolkit.Equation
     bcs = MTKEquation[]
     drop = Set{String}()
@@ -419,7 +465,7 @@ function _lower_slice_sources_to_bcs!(flat::FlattenedSystem,
         base_dot = findlast('.', slice_name)
         base_dot === nothing && continue
         prefix = slice_name[1:prevind(slice_name, base_dot)]
-        tail = slice_name[(base_dot+1):end]  # e.g. "at_z"
+        tail = slice_name[(base_dot + 1):end]  # e.g. "at_z"
         dim_name = tail[4:end]                # "z"
         base_name = prefix                    # we emit flux BC on the "prefix" base var
         haskey(var_dict, base_name) || continue
@@ -475,7 +521,7 @@ function _substitute_varname(expr::EsmExpr, old::AbstractString, new::AbstractSt
         return expr
     elseif expr isa OpExpr
         new_args = EsmExpr[_substitute_varname(a, old, new) for a in expr.args]
-        return OpExpr(expr.op, new_args; wrt=expr.wrt, dim=expr.dim)
+        return OpExpr(expr.op, new_args; wrt = expr.wrt, dim = expr.dim)
     else
         return expr
     end
@@ -496,8 +542,10 @@ in an ASTExpr tree and return `D_coeff` as an ASTExpr. Very simple pattern match
 expects the ASTExpr to be a `*` with two operands or a `+`/`-` with one operand
 shaped this way. Returns `nothing` if not found.
 """
-function _extract_diffusion_coefficient(expr::EsmExpr, base_name::String,
-                                        dim_name::String)
+function _extract_diffusion_coefficient(
+        expr::EsmExpr, base_name::String,
+        dim_name::String
+    )
     expr isa OpExpr || return nothing
     if expr.op == "*" && length(expr.args) == 2
         a, b = expr.args
@@ -542,8 +590,10 @@ _is_odelhs_for_slice_var(eq::Equation, drop::Set{String}) =
 # Domain specification helper
 # ------------------------------------------------------------
 
-function _build_domain_spec(domain::Union{Domain,Nothing}, dim_dict,
-                            t_sym, spatial_syms)
+function _build_domain_spec(
+        domain::Union{Domain, Nothing}, dim_dict,
+        t_sym, spatial_syms
+    )
     if domain === nothing
         # Default: 0 ≤ t, and each spatial dim over [0, 1]
         specs = Any[t_sym ∈ Interval(0.0, 1.0)]

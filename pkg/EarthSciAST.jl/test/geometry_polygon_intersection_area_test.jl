@@ -37,11 +37,12 @@ const _PIA_SQUARE_B = [1.0 1.0; 3.0 1.0; 3.0 3.0; 1.0 3.0]
     # --- the fused kernel reuses intersect_polygon + the polygon_area FAQ ---
     @testset "fused kernel equals polygon_area(intersect_polygon(...))" begin
         area = _PIA._polygon_intersection_area(_PIA_SQUARE_A, _PIA_SQUARE_B, "planar")
-        @test isapprox(area, 1.0; atol=1e-12)
+        @test isapprox(area, 1.0; atol = 1.0e-12)
         # Definitionally equal to the unfused clip → shoelace-area composition.
         oracle = _PIA.polygon_area(
-            _PIA.intersect_polygon(_PIA_SQUARE_A, _PIA_SQUARE_B, "planar"), "planar")
-        @test isapprox(area, oracle; atol=1e-12)
+            _PIA.intersect_polygon(_PIA_SQUARE_A, _PIA_SQUARE_B, "planar"), "planar"
+        )
+        @test isapprox(area, oracle; atol = 1.0e-12)
         # A disjoint pair has zero overlap area (degenerate clip → 0.0).
         far = [5.0 5.0; 6.0 5.0; 6.0 6.0; 5.0 6.0]
         @test _PIA._polygon_intersection_area(_PIA_SQUARE_A, far, "planar") == 0.0
@@ -58,20 +59,20 @@ const _PIA_SQUARE_B = [1.0 1.0; 3.0 1.0; 3.0 3.0; 1.0 3.0]
         # Squares padded 1× and 2×: planar overlap unchanged, exactly.
         a1, b2 = pad(_PIA_SQUARE_A, 1), pad(_PIA_SQUARE_B, 2)
         @test _PIA._polygon_intersection_area(a1, b2, "planar") ==
-              _PIA._polygon_intersection_area(_PIA_SQUARE_A, _PIA_SQUARE_B, "planar")
+            _PIA._polygon_intersection_area(_PIA_SQUARE_A, _PIA_SQUARE_B, "planar")
         # Pentagon (the mixed-valence cell) padded to 6 and 7 slots against a
         # covering square: area equals the unpadded pentagon's, exactly.
         pent = vcat(([cosd(90 + 72k) sind(90 + 72k)] for k in 0:4)...)
         big = [-3.0 -3.0; 3.0 -3.0; 3.0 3.0; -3.0 3.0]
         area5 = _PIA._polygon_intersection_area(pent, big, "planar")
-        @test isapprox(area5, 2.5 * sind(72.0); atol=1e-12)   # analytic pentagon area
+        @test isapprox(area5, 2.5 * sind(72.0); atol = 1.0e-12)   # analytic pentagon area
         @test _PIA._polygon_intersection_area(pad(pent, 1), big, "planar") == area5
         @test _PIA._polygon_intersection_area(pad(pent, 2), big, "planar") == area5
         # Padding in the CLIP operand (same operand order as its unpadded
         # baseline — swapping subject/clip roles reorders the FP sums) and an
         # interior (non-trailing) duplicate.
         @test _PIA._polygon_intersection_area(big, pad(pent, 2), "planar") ==
-              _PIA._polygon_intersection_area(big, pent, "planar")
+            _PIA._polygon_intersection_area(big, pent, "planar")
         middup = [0.0 0.0; 2.0 0.0; 2.0 0.0; 2.0 2.0; 0.0 2.0]
         @test _PIA._polygon_intersection_area(middup, big, "planar") == 4.0
         # intersect_polygon's returned ring is in normal form (distinct verts).
@@ -80,7 +81,7 @@ const _PIA_SQUARE_B = [1.0 1.0; 3.0 1.0; 3.0 3.0; 1.0 3.0]
         sqs = [0.0 0.0; 10.0 0.0; 10.0 10.0; 0.0 10.0]
         bigs = [-20.0 -20.0; 30.0 -20.0; 30.0 30.0; -20.0 30.0]
         @test _PIA._polygon_intersection_area(pad(sqs, 2), bigs, "spherical") ==
-              _PIA._polygon_intersection_area(sqs, bigs, "spherical")
+            _PIA._polygon_intersection_area(sqs, bigs, "spherical")
         @test size(_PIA.intersect_polygon(pad(sqs, 1), bigs, "spherical"), 1) == 4
         # Fewer than 3 DISTINCT vertices after dedup is a degenerate operand.
         allpad = [1.5 1.5; 1.5 1.5; 1.5 1.5; 1.5 1.5]
@@ -95,16 +96,18 @@ const _PIA_SQUARE_B = [1.0 1.0; 3.0 1.0; 3.0 3.0; 1.0 3.0]
         @test isfile(path)
         file = EarthSciAST.load_path(path)
         f!, u0, p, tspan, vmap =
-            EarthSciAST._build_evaluator(file; model_name="PolygonIntersectionAreaPaddedRing")
+            EarthSciAST._build_evaluator(file; model_name = "PolygonIntersectionAreaPaddedRing")
         du = similar(u0)
         f!(du, u0, p, 0.0)
         # The fused leaf const-folds the PADDED rings to the deduplicated-ring
         # overlap: the [1.5,2.5]×[1.5,2.5] box, exactly 1.0.
-        @test isapprox(du[vmap["area_state"]], 1.0; atol=1e-9)
+        @test isapprox(du[vmap["area_state"]], 1.0; atol = 1.0e-9)
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, tspan, p)
-        sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5();
-                                        reltol=1e-10, abstol=1e-12)
-        @test isapprox(sol.u[end][vmap["area_state"]], 1.0; atol=1e-9)
+        sol = OrdinaryDiffEqTsit5.solve(
+            prob, OrdinaryDiffEqTsit5.Tsit5();
+            reltol = 1.0e-10, abstol = 1.0e-12
+        )
+        @test isapprox(sol.u[end][vmap["area_state"]], 1.0; atol = 1.0e-9)
     end
 
     # --- the shared conformance fixture through build_evaluator + solve ---
@@ -114,7 +117,7 @@ const _PIA_SQUARE_B = [1.0 1.0; 3.0 1.0; 3.0 3.0; 1.0 3.0]
         file = EarthSciAST.load_path(path)
 
         f!, u0, p, tspan, vmap =
-            EarthSciAST._build_evaluator(file; model_name="PolygonIntersectionAreaPlanar")
+            EarthSciAST._build_evaluator(file; model_name = "PolygonIntersectionAreaPlanar")
         @test haskey(vmap, "area_state")
         @test u0[vmap["area_state"]] == 0.0        # ic(area_state) = 0.0
         @test tspan == (0.0, 1.0)
@@ -123,13 +126,15 @@ const _PIA_SQUARE_B = [1.0 1.0; 3.0 1.0; 3.0 3.0; 1.0 3.0]
         # overlap_area = polygon_intersection_area(src_poly, tgt_poly) = 1.0.
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        @test isapprox(du[vmap["area_state"]], 1.0; atol=1e-9)
+        @test isapprox(du[vmap["area_state"]], 1.0; atol = 1.0e-9)
 
         # Integrate to t = 1: area_state(1) = ∫₀¹ overlap_area dt = 1.0.
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, tspan, p)
-        sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5();
-                                        reltol=1e-10, abstol=1e-12)
-        @test isapprox(sol.u[end][vmap["area_state"]], 1.0; atol=1e-9)
+        sol = OrdinaryDiffEqTsit5.solve(
+            prob, OrdinaryDiffEqTsit5.Tsit5();
+            reltol = 1.0e-10, abstol = 1.0e-12
+        )
+        @test isapprox(sol.u[end][vmap["area_state"]], 1.0; atol = 1.0e-9)
     end
 end
 
@@ -141,34 +146,48 @@ end
 # area to that shape. Both compilers build each document, and their right-hand
 # sides agree bit for bit.
 @testset "polygon geometry through esm_problem, both compilers" begin
-    _scalar_field_param = joinpath(_PIA_REPO_ROOT, "tests", "conformance",
-                                   "expression_templates", "scalar_field_param")
+    _scalar_field_param = joinpath(
+        _PIA_REPO_ROOT, "tests", "conformance",
+        "expression_templates", "scalar_field_param"
+    )
     cases = [
-        (joinpath(_PIA_VALID_GEOM, "polygon_intersection_area_padded_ring.esm"),
-         Dict{String,Any}(), "area_state", 1.0),
-        (joinpath(_PIA_VALID_GEOM, "polygon_intersection_area_planar.esm"),
-         Dict{String,Any}(), "area_state", 1.0),
+        (
+            joinpath(_PIA_VALID_GEOM, "polygon_intersection_area_padded_ring.esm"),
+            Dict{String, Any}(), "area_state", 1.0,
+        ),
+        (
+            joinpath(_PIA_VALID_GEOM, "polygon_intersection_area_planar.esm"),
+            Dict{String, Any}(), "area_state", 1.0,
+        ),
         # An unknown defined by an array `const` node is a constant factor
         # (esm-spec §4.2), so it is an `intersect_polygon` operand like a
         # caller-supplied array.
-        (joinpath(_PIA_VALID_GEOM, "intersect_polygon_planar_ode.esm"),
-         Dict{String,Any}(), "tracer", -1.0),
-        (joinpath(_scalar_field_param, "expanded.esm"),
-         Dict{String,Any}("poly_a" => _PIA_SQUARE_A, "poly_b" => _PIA_SQUARE_B), "u", -1.0),
-        (joinpath(_scalar_field_param, "fixture.esm"),
-         Dict{String,Any}("poly_a" => _PIA_SQUARE_A, "poly_b" => _PIA_SQUARE_B), "u", -1.0),
+        (
+            joinpath(_PIA_VALID_GEOM, "intersect_polygon_planar_ode.esm"),
+            Dict{String, Any}(), "tracer", -1.0,
+        ),
+        (
+            joinpath(_scalar_field_param, "expanded.esm"),
+            Dict{String, Any}("poly_a" => _PIA_SQUARE_A, "poly_b" => _PIA_SQUARE_B), "u", -1.0,
+        ),
+        (
+            joinpath(_scalar_field_param, "fixture.esm"),
+            Dict{String, Any}("poly_a" => _PIA_SQUARE_A, "poly_b" => _PIA_SQUARE_B), "u", -1.0,
+        ),
     ]
     for (path, ca, var, want) in cases
-        dus = Dict{Symbol,Vector{Float64}}()
+        dus = Dict{Symbol, Vector{Float64}}()
         for c in (:interpreter, :native)
-            prob = _PIA.esm_problem(path, (0.0, 1.0); compiler = c, const_arrays = ca,
-                                    u0 = harness_u0(path))
+            prob = _PIA.esm_problem(
+                path, (0.0, 1.0); compiler = c, const_arrays = ca,
+                u0 = harness_u0(path)
+            )
             u = ones(length(prob.u0))
             du = fill(NaN, length(u))
             prob.f!(du, u, prob.p, 0.0)
             dus[c] = du
             k = only(k for k in keys(prob.var_map) if k == var || endswith(k, "." * var))
-            @test du[prob.var_map[k]] ≈ want atol = 1e-12
+            @test du[prob.var_map[k]] ≈ want atol = 1.0e-12
         end
         @test reinterpret(UInt64, dus[:native]) == reinterpret(UInt64, dus[:interpreter])
     end

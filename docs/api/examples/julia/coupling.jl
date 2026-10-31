@@ -17,8 +17,10 @@ sys = flatten(doc)
 # ...and the equations read Heater.T where Box.T_wall was.
 equations = [to_ascii(eq) for eq in sys.equations]
 foreach(println, equations)
-@assert equations == ["D(Heater.T)/Dt = Heater.rate",
-                      "D(Box.T_air)/Dt = Box.k * (Heater.T - Box.T_air)"]
+@assert equations == [
+    "D(Heater.T)/Dt = Heater.rate",
+    "D(Box.T_air)/Dt = Box.k * (Heater.T - Box.T_air)",
+]
 # endregion
 
 # region: component_graph ops=component_graph,to_mermaid,to_dot

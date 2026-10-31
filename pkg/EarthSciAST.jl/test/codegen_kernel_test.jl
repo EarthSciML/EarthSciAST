@@ -21,11 +21,13 @@ const ESM = EarthSciAST
 
 # Build with the codegen tier on (default) or off (the differential reference).
 # Returns (f!, u0, p, vmap, diag, tally-snapshot).
-function _cgk_build(model, ics; codegen::Bool, const_arrays=Dict(), form=:inplace)
+function _cgk_build(model, ics; codegen::Bool, const_arrays = Dict(), form = :inplace)
     ESM._reset_cascade_tally!()
-    f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
-        initial_conditions=ics, const_arrays=const_arrays, form=form,
-        compiler = codegen ? :native : :interpreter)
+    f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+        model;
+        initial_conditions = ics, const_arrays = const_arrays, form = form,
+        compiler = codegen ? :native : :interpreter
+    )
     return (f!, u0, p, vm, diag, copy(ESM._CASCADE_TALLY))
 end
 
@@ -41,11 +43,15 @@ _cgk_bitsame(a, b) = size(a) == size(b) && all(a .=== b)
 
 # The full differential: several (u, t) probes bit-compared at Float64, plus
 # the ForwardDiff Jacobian over the state bit-compared (the Dual axis).
-function _cgk_differential(model, ics; const_arrays=Dict(), jacobian::Bool=true)
-    fc, u0, p, _, _, tally = _cgk_build(model, ics; codegen=true,
-                                        const_arrays=const_arrays)
-    fr, v0, q, _, _, rtally = _cgk_build(model, ics; codegen=false,
-                                         const_arrays=const_arrays)
+function _cgk_differential(model, ics; const_arrays = Dict(), jacobian::Bool = true)
+    fc, u0, p, _, _, tally = _cgk_build(
+        model, ics; codegen = true,
+        const_arrays = const_arrays
+    )
+    fr, v0, q, _, _, rtally = _cgk_build(
+        model, ics; codegen = false,
+        const_arrays = const_arrays
+    )
     @test _cgk_fired(tally) >= 1            # the tier fired, not a silent decline
     @test _cgk_fired(rtally) == 0           # …and the kill switch really kills it
     @test u0 == v0
@@ -64,41 +70,65 @@ end
 # ---- fixture models (locally prefixed to avoid clashes under runtests.jl) ----
 
 function _cgk_2d_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape=["i", "j"]))
-    body = _op("+",
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape = ["i", "j"]))
+    body = _op(
+        "+",
         _idx("u", _op("-", _v("i"), _i(1)), _v("j")),
         _op("*", _n(-4.0), _idx("u", _v("i"), _v("j"))),
         _idx("u", _op("+", _v("i"), _i(1)), _v("j")),
         _idx("u", _v("i"), _op("-", _v("j"), _i(1))),
-        _idx("u", _v("i"), _op("+", _v("j"), _i(1))))
-    lhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
-        expr_body=_Didx("u", _v("i"), _v("j")), ranges=Dict("i" => [1, N], "j" => [1, N]))
-    rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
-        expr_body=body, ranges=Dict("i" => [1, N], "j" => [1, N]))
-    ESM.Model(vars, [ESM.Equation(lhs, rhs)])
+        _idx("u", _v("i"), _op("+", _v("j"), _i(1)))
+    )
+    lhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i", "j"],
+        expr_body = _Didx("u", _v("i"), _v("j")), ranges = Dict("i" => [1, N], "j" => [1, N])
+    )
+    rhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i", "j"],
+        expr_body = body, ranges = Dict("i" => [1, N], "j" => [1, N])
+    )
+    return ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 end
 
 function _cgk_makearray_model(N)
     vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     fwd = _op("-", _idx("u", _op("+", _v("i"), _i(1))), _idx("u", _v("i")))
-    ctr = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
-                   _op("*", _n(-2.0), _idx("u", _v("i"))),
-                   _idx("u", _op("+", _v("i"), _i(1))))
+    ctr = _op(
+        "+", _idx("u", _op("-", _v("i"), _i(1))),
+        _op("*", _n(-2.0), _idx("u", _v("i"))),
+        _idx("u", _op("+", _v("i"), _i(1)))
+    )
     bwd = _op("-", _idx("u", _v("i")), _idx("u", _op("-", _v("i"), _i(1))))
-    mk = ESM.OpExpr("makearray", ESM.ASTExpr[];
-        regions=[[[1, 1]], [[2, N - 1]], [[N, N]]],
-        values=ESM.ASTExpr[fwd, ctr, bwd])
-    ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                  _ao1(_op("index", mk, _v("i")), "i", 1, N))])
+    mk = ESM.OpExpr(
+        "makearray", ESM.ASTExpr[];
+        regions = [[[1, 1]], [[2, N - 1]], [[N, N]]],
+        values = ESM.ASTExpr[fwd, ctr, bwd]
+    )
+    return ESM.Model(
+        vars, [
+            ESM.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, N),
+                _ao1(_op("index", mk, _v("i")), "i", 1, N)
+            ),
+        ]
+    )
 end
 
 function _cgk_const_coef_model(N)
     vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
-    lap = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
-                   _op("*", _n(-2.0), _idx("u", _v("i"))),
-                   _idx("u", _op("+", _v("i"), _i(1))))
-    ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                  _ao1(_op("*", _idx("K", _v("i")), lap), "i", 1, N))])
+    lap = _op(
+        "+", _idx("u", _op("-", _v("i"), _i(1))),
+        _op("*", _n(-2.0), _idx("u", _v("i"))),
+        _idx("u", _op("+", _v("i"), _i(1)))
+    )
+    return ESM.Model(
+        vars, [
+            ESM.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, N),
+                _ao1(_op("*", _idx("K", _v("i")), lap), "i", 1, N)
+            ),
+        ]
+    )
 end
 
 # Guarded singularities: the codegen emission must stay LAZY (`ifelse` as a
@@ -106,35 +136,60 @@ end
 function _cgk_guarded_model(N)
     vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     ui = _idx("u", _v("i"))
-    guarded = _op("+",
+    guarded = _op(
+        "+",
         _op("ifelse", _op(">", ui, _n(0.0)), _op("log", ui), _n(-1.0)),
-        _op("ifelse", _op(">=", ui, _n(0.25)),
-            _op("sqrt", _op("-", ui, _n(0.25))), _n(0.0)),
-        _op("ifelse", _op("and", _op(">", ui, _n(0.0)), _op("<", ui, _n(10.0))),
-            _op("^", ui, _n(0.5)), _n(0.0)))
-    lap = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
-                   _op("*", _n(-2.0), ui),
-                   _idx("u", _op("+", _v("i"), _i(1))))
-    ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                  _ao1(_op("+", guarded, lap), "i", 1, N))])
+        _op(
+            "ifelse", _op(">=", ui, _n(0.25)),
+            _op("sqrt", _op("-", ui, _n(0.25))), _n(0.0)
+        ),
+        _op(
+            "ifelse", _op("and", _op(">", ui, _n(0.0)), _op("<", ui, _n(10.0))),
+            _op("^", ui, _n(0.5)), _n(0.0)
+        )
+    )
+    lap = _op(
+        "+", _idx("u", _op("-", _v("i"), _i(1))),
+        _op("*", _n(-2.0), ui),
+        _idx("u", _op("+", _v("i"), _i(1)))
+    )
+    return ESM.Model(
+        vars, [
+            ESM.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, N),
+                _ao1(_op("+", guarded, lap), "i", 1, N)
+            ),
+        ]
+    )
 end
 
 function _cgk_param_model(N)
-    vars = Dict{String,ESM.ModelVariable}(
+    vars = Dict{String, ESM.ModelVariable}(
         "u" => ESM.ModelVariable(ESM.UnknownVariable),
-        "alpha" => ESM.ModelVariable(ESM.ParameterVariable; default=0.35))
-    lap = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
-                   _op("*", _n(-2.0), _idx("u", _v("i"))),
-                   _idx("u", _op("+", _v("i"), _i(1))))
-    ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                  _ao1(_op("*", _v("alpha"), lap), "i", 1, N))])
+        "alpha" => ESM.ModelVariable(ESM.ParameterVariable; default = 0.35)
+    )
+    lap = _op(
+        "+", _idx("u", _op("-", _v("i"), _i(1))),
+        _op("*", _n(-2.0), _idx("u", _v("i"))),
+        _idx("u", _op("+", _v("i"), _i(1)))
+    )
+    return ESM.Model(
+        vars, [
+            ESM.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, N),
+                _ao1(_op("*", _v("alpha"), lap), "i", 1, N)
+            ),
+        ]
+    )
 end
 
-function _cgk_reduce_model(statevars, ybody, ni, klo, khi; reduce="+", filt=nothing)
+function _cgk_reduce_model(statevars, ybody, ni, klo, khi; reduce = "+", filt = nothing)
     vars = Dict(v => ESM.ModelVariable(ESM.UnknownVariable) for v in statevars)
-    rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"], expr_body=ybody,
-        ranges=Dict("i" => [1, ni], "k" => [klo, khi]), reduce=reduce, filter=filt)
-    ESM.Model(vars, [ESM.Equation(_ao1(_Didx(statevars[1], _v("i")), "i", 1, ni), rhs)])
+    rhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i"], expr_body = ybody,
+        ranges = Dict("i" => [1, ni], "k" => [klo, khi]), reduce = reduce, filter = filt
+    )
+    return ESM.Model(vars, [ESM.Equation(_ao1(_Didx(statevars[1], _v("i")), "i", 1, ni), rhs)])
 end
 
 const _CGK_LT = [10.0, 20.0, 40.0, 80.0, 160.0]
@@ -142,30 +197,54 @@ const _CGK_LA = [0.0, 1.0, 2.0, 3.0, 4.0]
 
 function _cgk_interp_model(N)
     vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
-    itp = _op("fn", _const(_CGK_LT), _const(_CGK_LA),
-              _idx("u", _op("+", _v("i"), _i(1))); name="interp.linear")
-    lap = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
-                   _op("*", _n(-2.0), _idx("u", _v("i"))),
-                   _idx("u", _op("+", _v("i"), _i(1))))
-    ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                  _ao1(_op("+", itp, lap), "i", 1, N))])
+    itp = _op(
+        "fn", _const(_CGK_LT), _const(_CGK_LA),
+        _idx("u", _op("+", _v("i"), _i(1))); name = "interp.linear"
+    )
+    lap = _op(
+        "+", _idx("u", _op("-", _v("i"), _i(1))),
+        _op("*", _n(-2.0), _idx("u", _v("i"))),
+        _idx("u", _op("+", _v("i"), _i(1)))
+    )
+    return ESM.Model(
+        vars, [
+            ESM.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, N),
+                _ao1(_op("+", itp, lap), "i", 1, N)
+            ),
+        ]
+    )
 end
 
 function _cgk_searchsorted_model(N)
     vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
-    body = _op("fn", _idx("u", _v("i")), _const(_CGK_LA); name="interp.searchsorted")
-    ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                  _ao1(body, "i", 1, N))])
+    body = _op("fn", _idx("u", _v("i")), _const(_CGK_LA); name = "interp.searchsorted")
+    return ESM.Model(
+        vars, [
+            ESM.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, N),
+                _ao1(body, "i", 1, N)
+            ),
+        ]
+    )
 end
 
 const _CGK_BT = Any[Any[1.0, 1.5, 2.0], Any[1.1, 1.6, 2.1], Any[1.2, 1.7, 2.2]]
 function _cgk_bilinear_model(N)
     vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
-    body = _op("fn", _const(_CGK_BT), _const([0.0, 1.0, 2.0]), _const([0.0, 1.0, 2.0]),
-               _idx("u", _v("i")), _idx("u", _op("+", _v("i"), _i(1)));
-               name="interp.bilinear")
-    ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                  _ao1(body, "i", 1, N))])
+    body = _op(
+        "fn", _const(_CGK_BT), _const([0.0, 1.0, 2.0]), _const([0.0, 1.0, 2.0]),
+        _idx("u", _v("i")), _idx("u", _op("+", _v("i"), _i(1)));
+        name = "interp.bilinear"
+    )
+    return ESM.Model(
+        vars, [
+            ESM.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, N),
+                _ao1(body, "i", 1, N)
+            ),
+        ]
+    )
 end
 
 @testset "codegen tier ≡ pre-codegen runners (differential, B1)" begin
@@ -189,7 +268,7 @@ end
         N = 24
         ics = Dict("u[$k]" => sin(0.5k) for k in 1:N)
         K = [1.0 + 0.1k for k in 1:N]
-        _cgk_differential(_cgk_const_coef_model(N), ics; const_arrays=Dict("K" => K))
+        _cgk_differential(_cgk_const_coef_model(N), ics; const_arrays = Dict("K" => K))
     end
 
     @testset "lazy guards over singular ops" begin
@@ -210,17 +289,21 @@ end
         A = [1.0 2.0 3.0; 4.0 5.0 6.0]
         body = _op("*", _idx("A", _v("i"), _v("k")), _idx("x", _v("k")))
         m = _cgk_reduce_model(["y", "x"], body, 2, 1, 3)
-        ics = Dict("y[1]" => 0.0, "y[2]" => 0.0,
-                   "x[1]" => 1.0, "x[2]" => 2.0, "x[3]" => 3.0)
-        _cgk_differential(m, ics; const_arrays=Dict("A" => A))
+        ics = Dict(
+            "y[1]" => 0.0, "y[2]" => 0.0,
+            "x[1]" => 1.0, "x[2]" => 2.0, "x[3]" => 3.0
+        )
+        _cgk_differential(m, ics; const_arrays = Dict("A" => A))
     end
 
     @testset "min/max/filtered reductions" begin
-        for (red, filt) in (("min", nothing), ("max", nothing),
-                            ("+", _op("<=", _v("k"), _i(2))))
+        for (red, filt) in (
+                ("min", nothing), ("max", nothing),
+                ("+", _op("<=", _v("k"), _i(2))),
+            )
             body = _op("*", _idx("u", _v("i")), _v("k"))
-            m = _cgk_reduce_model(["w", "u"], body, 6, 1, 4; reduce=red, filt=filt)
-            ics = Dict{String,Float64}()
+            m = _cgk_reduce_model(["w", "u"], body, 6, 1, 4; reduce = red, filt = filt)
+            ics = Dict{String, Float64}()
             for k in 1:6
                 ics["w[$k]"] = 0.0
                 ics["u[$k]"] = 0.5k - 1.6
@@ -233,21 +316,25 @@ end
         N = 16
         ics = Dict("u[$k]" => 2.0 + sin(0.3k) for k in 1:N)
         _cgk_differential(_cgk_interp_model(N), ics)
-        _cgk_differential(_cgk_searchsorted_model(N), ics; jacobian=false)
+        _cgk_differential(_cgk_searchsorted_model(N), ics; jacobian = false)
         _cgk_differential(_cgk_bilinear_model(N), ics)
     end
 
     @testset "template sub-kernels (_NK_SUBCALL): 7³ transport fixture" begin
-        FIX = joinpath(TESTUTILS_REPO_ROOT, "tests", "bench",
-                       "transport_3axis_7cubed_fullrank.esm")
+        FIX = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "bench",
+            "transport_3axis_7cubed_fullrank.esm"
+        )
         if !isfile(FIX)
             @test_skip "bench fixture transport_3axis_7cubed_fullrank.esm missing"
         else
             flat = ESM.flatten(ESM.load_path(FIX))
             function build(codegen)
                 ESM._reset_cascade_tally!()
-                f!, u0, p, _, _ = ESM._build_evaluator(flat;
-                    compiler = codegen ? :native : :interpreter)
+                f!, u0, p, _, _ = ESM._build_evaluator(
+                    flat;
+                    compiler = codegen ? :native : :interpreter
+                )
                 return (f!, u0, p, copy(ESM._CASCADE_TALLY))
             end
             fc, u0, p, tally = build(true)
@@ -279,13 +366,21 @@ end
         # silently keep the scalar runner.
         N = 24
         mk1d(lo, hi, dW, dE) = begin
-            acc = ESM._AccDesc[ESM._AccStateAffine(dW), ESM._AccStateAffine(0),
-                               ESM._AccStateAffine(dE)]
-            sp = ESM._aop(:+, ESM._aop(:-, ESM._acc(1),
-                                       ESM._aop(:*, ESM._alit(2.0), ESM._acc(2))),
-                          ESM._acc(3))
-            ESM._AccKernel(ESM._CellSet([1], UnitRange{Int}[lo:hi], 0), sp, acc,
-                           ESM._FixedBound(0), 0.0)
+            acc = ESM._AccDesc[
+                ESM._AccStateAffine(dW), ESM._AccStateAffine(0),
+                ESM._AccStateAffine(dE),
+            ]
+            sp = ESM._aop(
+                :+, ESM._aop(
+                    :-, ESM._acc(1),
+                    ESM._aop(:*, ESM._alit(2.0), ESM._acc(2))
+                ),
+                ESM._acc(3)
+            )
+            ESM._AccKernel(
+                ESM._CellSet([1], UnitRange{Int}[lo:hi], 0), sp, acc,
+                ESM._FixedBound(0), 0.0
+            )
         end
         K1 = mk1d(2, N - 1, -1, 1)
         # Rank-4 box over a 2×2×2×3 slab (strides 1/2/4/8 with base -14, so
@@ -294,11 +389,14 @@ end
         foreign = ESM._AccScratch(1)
         foreign.f64[1] = 0.5
         acc4 = ESM._AccDesc[ESM._AccStateAffine(0)]
-        sp4 = ESM._aop(:*, ESM._mknode(kind=ESM._NK_CACHED, idx=1, payload=foreign),
-                       ESM._acc(1))
+        sp4 = ESM._aop(
+            :*, ESM._mknode(kind = ESM._NK_CACHED, idx = 1, payload = foreign),
+            ESM._acc(1)
+        )
         K2 = ESM._AccKernel(
             ESM._CellSet([1, 2, 4, 8], UnitRange{Int}[1:2, 1:2, 1:2, 1:3], -14),
-            sp4, acc4, ESM._FixedBound(0), 0.0)
+            sp4, acc4, ESM._FixedBound(0), 0.0
+        )
         kernels = ESM._AccKernel[K1, K2]
         ESM._reset_cascade_tally!()
         section = ESM._make_kernel_section(kernels)
@@ -322,21 +420,30 @@ end
         # to the scalar runner (codegen_threaded_test.jl chunks a rank-4 box).
         for (strides, ranges, base) in (
                 ([1, 2, 4, 8], UnitRange{Int}[1:2, 1:2, 1:2, 1:3], -14),
-                ([1, 2, 6, 12, 24], UnitRange{Int}[1:2, 1:3, 1:2, 1:2, 1:2], -44))
+                ([1, 2, 6, 12, 24], UnitRange{Int}[1:2, 1:3, 1:2, 1:2, 1:2], -44),
+            )
             nd = length(strides)
             ncell = prod(length, ranges)
             cst = [0.25 * k + 0.01 * k^2 for k in 1:ncell]
-            acc = ESM._AccDesc[ESM._AccStateAffine(0),
-                               ESM._AccConstBox(cst, [prod(length(ranges[e]) for e in 1:d-1; init=1)
-                                                      for d in 1:nd], 1),
-                               (ESM._AccLoopIdx(d) for d in 1:nd)...]
+            acc = ESM._AccDesc[
+                ESM._AccStateAffine(0),
+                ESM._AccConstBox(
+                    cst, [
+                        prod(length(ranges[e]) for e in 1:(d - 1); init = 1)
+                            for d in 1:nd
+                    ], 1
+                ),
+                (ESM._AccLoopIdx(d) for d in 1:nd)...,
+            ]
             terms = ESM._Node[ESM._aop(:*, ESM._acc(1), ESM._acc(2))]
             for d in 1:nd
                 push!(terms, ESM._aop(:*, ESM._alit(0.1 * d), ESM._acc(2 + d)))
             end
             sp = ESM._aop(:+, terms...)
-            K = ESM._AccKernel(ESM._CellSet(strides, ranges, base), sp, acc,
-                               ESM._FixedBound(0), 0.0)
+            K = ESM._AccKernel(
+                ESM._CellSet(strides, ranges, base), sp, acc,
+                ESM._FixedBound(0), 0.0
+            )
             ESM._reset_cascade_tally!()
             section = ESM._make_kernel_section(ESM._AccKernel[K])
             @test get(ESM._CASCADE_TALLY, :codegen_kernel, 0) == 1
@@ -353,7 +460,7 @@ end
     @testset "zero allocations at Float64 (codegen path)" begin
         N = 32
         ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
-        f!, u0, p, _, _, tally = _cgk_build(_stencil_model(N), ics; codegen=true)
+        f!, u0, p, _, _, tally = _cgk_build(_stencil_model(N), ics; codegen = true)
         @test _cgk_fired(tally) >= 1
         du = zero(u0)
         f!(du, u0, p, 0.0)                       # warm up

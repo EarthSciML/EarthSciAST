@@ -38,8 +38,8 @@
 # insensitive, so the visited set is exactly equivalent — and O(nodes) on the
 # structurally-shared trees the fold/template passes produce.
 _expr_has_intersect_polygon(e::OpExpr) =
-    _expr_has_intersect_polygon(e, IdDict{OpExpr,Nothing}())
-function _expr_has_intersect_polygon(e::OpExpr, seen::IdDict{OpExpr,Nothing})
+    _expr_has_intersect_polygon(e, IdDict{OpExpr, Nothing}())
+function _expr_has_intersect_polygon(e::OpExpr, seen::IdDict{OpExpr, Nothing})
     e.op == "intersect_polygon" && return true
     haskey(seen, e) && return false
     seen[e] = nothing
@@ -47,7 +47,7 @@ function _expr_has_intersect_polygon(e::OpExpr, seen::IdDict{OpExpr,Nothing})
         a isa OpExpr && _expr_has_intersect_polygon(a, seen) && return true
     end
     return e.expr_body isa OpExpr &&
-           _expr_has_intersect_polygon(e.expr_body::OpExpr, seen)
+        _expr_has_intersect_polygon(e.expr_body::OpExpr, seen)
 end
 _expr_has_intersect_polygon(::ASTExpr) = false
 _equations_have_intersect_polygon(eqs) =
@@ -63,19 +63,29 @@ _model_has_intersect_polygon(model::Model) =
 # runs at setup, so each operand must be a constant factor (esm-spec §4.2): a
 # variable supplied in `const_arrays`, or an unknown whose defining equation is an
 # array `const` node (materialized into `const_obs`).
-function _geometry_operand(arg::ASTExpr, const_arrays_kw::AbstractDict, who::AbstractString,
-                           const_obs::AbstractDict = _EMPTY_CONST_OBS)
-    arg isa VarExpr || throw(TreeWalkError("E_TREEWALK_GEOMETRY_OPERAND",
-        "intersect_polygon operand for '$who' must be a polygon variable name"))
+function _geometry_operand(
+        arg::ASTExpr, const_arrays_kw::AbstractDict, who::AbstractString,
+        const_obs::AbstractDict = _EMPTY_CONST_OBS
+    )
+    arg isa VarExpr || throw(
+        TreeWalkError(
+            "E_TREEWALK_GEOMETRY_OPERAND",
+            "intersect_polygon operand for '$who' must be a polygon variable name"
+        )
+    )
     name = (arg::VarExpr).name
     haskey(const_arrays_kw, name) && return const_arrays_kw[name]
     haskey(const_obs, name) && return const_obs[name]
-    throw(TreeWalkError("E_TREEWALK_GEOMETRY_OPERAND",
-        "intersect_polygon operand '$name' for '$who' must be a constant factor: supplied " *
-        "in `const_arrays`, or an unknown defined by an array `const` node (the clip runs " *
-        "at setup time; RFC Appendix B.1)"))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_GEOMETRY_OPERAND",
+            "intersect_polygon operand '$name' for '$who' must be a constant factor: supplied " *
+                "in `const_arrays`, or an unknown defined by an array `const` node (the clip runs " *
+                "at setup time; RFC Appendix B.1)"
+        )
+    )
 end
-const _EMPTY_CONST_OBS = Dict{String,Array{Float64}}()
+const _EMPTY_CONST_OBS = Dict{String, Array{Float64}}()
 
 # Run one setup-time polygon clip, translating the geometry kernel's
 # `GeometryError` into the build-time diagnostic (`E_TREEWALK_GEOMETRY_CLIP`).
@@ -98,11 +108,13 @@ end
 # `(rings, extents)`: observed-var-name → CLOSED ring matrix `[n+1, 2]`, and
 # `from_faq` key (the clip node `id` AND the observed var name) → distinct vertex
 # count `n`. `geom_ring_vars` are the observed vars whose RHS is intersect_polygon.
-function _materialize_geometry_rings(equations, const_arrays_kw::AbstractDict,
-                                     geom_ring_vars::Set{String},
-                                     const_obs::AbstractDict = _EMPTY_CONST_OBS)
-    rings = Dict{String,Matrix{Float64}}()
-    extents = Dict{String,Int}()
+function _materialize_geometry_rings(
+        equations, const_arrays_kw::AbstractDict,
+        geom_ring_vars::Set{String},
+        const_obs::AbstractDict = _EMPTY_CONST_OBS
+    )
+    rings = Dict{String, Matrix{Float64}}()
+    extents = Dict{String, Int}()
     for eq in equations
         eq.lhs isa VarExpr || continue
         vname = (eq.lhs::VarExpr).name
@@ -111,10 +123,18 @@ function _materialize_geometry_rings(equations, const_arrays_kw::AbstractDict,
         (rhs isa OpExpr && (rhs::OpExpr).op == "intersect_polygon") || continue
         op = rhs::OpExpr
         manifold = op.manifold
-        manifold === nothing && throw(TreeWalkError("E_TREEWALK_GEOMETRY_NO_MANIFOLD",
-            "intersect_polygon observed '$vname' requires a `manifold` (planar / spherical / geodesic)"))
-        length(op.args) == 2 || throw(TreeWalkError("E_TREEWALK_GEOMETRY_ARITY",
-            "intersect_polygon is strictly binary; '$vname' has $(length(op.args)) operand(s)"))
+        manifold === nothing && throw(
+            TreeWalkError(
+                "E_TREEWALK_GEOMETRY_NO_MANIFOLD",
+                "intersect_polygon observed '$vname' requires a `manifold` (planar / spherical / geodesic)"
+            )
+        )
+        length(op.args) == 2 || throw(
+            TreeWalkError(
+                "E_TREEWALK_GEOMETRY_ARITY",
+                "intersect_polygon is strictly binary; '$vname' has $(length(op.args)) operand(s)"
+            )
+        )
         poly_a = _geometry_operand(op.args[1], const_arrays_kw, vname, const_obs)
         poly_b = _geometry_operand(op.args[2], const_arrays_kw, vname, const_obs)
         ring = _clip_or_treewalk_error(poly_a, poly_b, manifold)
@@ -149,8 +169,8 @@ end
 # `_expr_has_intersect_polygon` above (see the Wave-3 note there), including
 # its identity-deduped visited set (ESS-0hh).
 _expr_has_polygon_intersection_area(e::OpExpr) =
-    _expr_has_polygon_intersection_area(e, IdDict{OpExpr,Nothing}())
-function _expr_has_polygon_intersection_area(e::OpExpr, seen::IdDict{OpExpr,Nothing})
+    _expr_has_polygon_intersection_area(e, IdDict{OpExpr, Nothing}())
+function _expr_has_polygon_intersection_area(e::OpExpr, seen::IdDict{OpExpr, Nothing})
     e.op == "polygon_intersection_area" && return true
     haskey(seen, e) && return false
     seen[e] = nothing
@@ -158,7 +178,7 @@ function _expr_has_polygon_intersection_area(e::OpExpr, seen::IdDict{OpExpr,Noth
         a isa OpExpr && _expr_has_polygon_intersection_area(a, seen) && return true
     end
     return e.expr_body isa OpExpr &&
-           _expr_has_polygon_intersection_area(e.expr_body::OpExpr, seen)
+        _expr_has_polygon_intersection_area(e.expr_body::OpExpr, seen)
 end
 _expr_has_polygon_intersection_area(::ASTExpr) = false
 
@@ -167,8 +187,10 @@ _expr_has_polygon_intersection_area(::ASTExpr) = false
 # look.
 function _model_has_polygon_intersection_area(model::Model, equations)
     for eq in equations
-        (_expr_has_polygon_intersection_area(eq.lhs) ||
-         _expr_has_polygon_intersection_area(eq.rhs)) && return true
+        (
+            _expr_has_polygon_intersection_area(eq.lhs) ||
+                _expr_has_polygon_intersection_area(eq.rhs)
+        ) && return true
     end
     return false
 end
@@ -237,13 +259,17 @@ function _fill_const_dense!(A::Array{Float64}, val, dims::Vector{Int})
     return _fill_const_level!(vec(A), val, 1, 1, dims, strides)
 end
 
-_fill_const_level!(A::Vector{Float64}, node, depth::Int, off::Int, dims::Vector{Int},
-                   strides::Vector{Int})::Bool =
+_fill_const_level!(
+    A::Vector{Float64}, node, depth::Int, off::Int, dims::Vector{Int},
+    strides::Vector{Int}
+)::Bool =
     node isa Vector{Any} ? _fill_const_level_vec!(A, node, depth, off, dims, strides) :
     node isa AbstractVector ? _fill_const_level_vec!(A, node, depth, off, dims, strides) : false
 
-function _fill_const_level_vec!(A::Vector{Float64}, node::AbstractVector, depth::Int, off::Int,
-                                dims::Vector{Int}, strides::Vector{Int})::Bool
+function _fill_const_level_vec!(
+        A::Vector{Float64}, node::AbstractVector, depth::Int, off::Int,
+        dims::Vector{Int}, strides::Vector{Int}
+    )::Bool
     n = length(node)
     n == dims[depth] || return false
     s = strides[depth]
@@ -259,8 +285,10 @@ function _fill_const_level_vec!(A::Vector{Float64}, node::AbstractVector, depth:
             sub = node[k]
             o = off + (k - 1) * s
             # The common nested `Vector{Any}` row takes a static call.
-            (sub isa Vector{Any} ? _fill_const_level_vec!(A, sub, depth + 1, o, dims, strides) :
-                                   _fill_const_level!(A, sub, depth + 1, o, dims, strides)) ||
+            (
+                sub isa Vector{Any} ? _fill_const_level_vec!(A, sub, depth + 1, o, dims, strides) :
+                    _fill_const_level!(A, sub, depth + 1, o, dims, strides)
+            ) ||
                 return false
         end
     end
@@ -303,9 +331,13 @@ end
 function _pia_operand_ring(arg::ASTExpr, const_arrays::AbstractDict)
     arg isa VarExpr && haskey(const_arrays, (arg::VarExpr).name) &&
         return const_arrays[(arg::VarExpr).name]
-    throw(TreeWalkError("E_TREEWALK_GEOMETRY_OPERAND",
-        "polygon_intersection_area operand must be a build-time-known polygon ring " *
-        "(a const-array variable name)"))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_GEOMETRY_OPERAND",
+            "polygon_intersection_area operand must be a build-time-known polygon ring " *
+                "(a const-array variable name)"
+        )
+    )
 end
 
 # ============================================================
@@ -338,10 +370,14 @@ function _geo_index_extent(ref, index_sets, derived_extents)
         e === nothing || return Int(e)
     end
     sz = s === nothing ? nothing :
-         hasproperty(s, :size) ? getproperty(s, :size) :
-         (s isa AbstractDict ? get(s, "size", get(s, :size, nothing)) : nothing)
-    sz === nothing && throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-        "cannot resolve extent of index set '$(name)' for setup-time geometry"))
+        hasproperty(s, :size) ? getproperty(s, :size) :
+        (s isa AbstractDict ? get(s, "size", get(s, :size, nothing)) : nothing)
+    sz === nothing && throw(
+        TreeWalkError(
+            "E_TREEWALK_GEOMETRY_SETUP",
+            "cannot resolve extent of index set '$(name)' for setup-time geometry"
+        )
+    )
     return Int(sz)
 end
 
@@ -459,37 +495,47 @@ _is_ranged_clip(rhs) =
 # vertex count (the pad repeats the closing vertex so the shoelace pad-edges add
 # zero area), into one dense const array `[outer…, maxn+1, coord]`; record the
 # clip_ring extent so the polygon_area FAQ ranges `[1, maxn]` over it.
-function _materialize_ranged_clip(faq, env, index_sets, derived_extents,
-                                  var_shapes=Dict{String,Vector{String}}())
-    body  = faq.expr_body::OpExpr          # index(intersect_polygon(...), w, c)
+function _materialize_ranged_clip(
+        faq, env, index_sets, derived_extents,
+        var_shapes = Dict{String, Vector{String}}()
+    )
+    body = faq.expr_body::OpExpr          # index(intersect_polygon(...), w, c)
     ipoly = body.args[1]::OpExpr
-    ringvar  = (body.args[2]::VarExpr).name
+    ringvar = (body.args[2]::VarExpr).name
     coordvar = (body.args[3]::VarExpr).name
     outer = String[v for v in faq.output_idx if v != ringvar && v != coordvar]
-    outer_ext = Int[_geo_index_extent(faq.ranges[v], index_sets, derived_extents)
-                    for v in outer]
+    outer_ext = Int[
+        _geo_index_extent(faq.ranges[v], index_sets, derived_extents)
+            for v in outer
+    ]
     coord_ext = _geo_index_extent(faq.ranges[coordvar], index_sets, derived_extents)
     manifold = ipoly.manifold
-    manifold === nothing && throw(TreeWalkError("E_TREEWALK_GEOMETRY_NO_MANIFOLD",
-        "ranged intersect_polygon requires a manifold"))
+    manifold === nothing && throw(
+        TreeWalkError(
+            "E_TREEWALK_GEOMETRY_NO_MANIFOLD",
+            "ranged intersect_polygon requires a manifold"
+        )
+    )
     ctx = _GeoCtx(env, index_sets, derived_extents, var_shapes)
     # Compile the two polygon operands ONCE (ring sources over the outer loop
     # slots); each pair then resolves them against the frame — a `view`, no
     # copy, exactly as before (see tree_walk/geometry_compile.jl).
     nslots = Ref(0)
-    scope = Dict{String,Int}()
+    scope = Dict{String, Int}()
     for lv in outer
         nslots[] += 1
         scope[lv] = nslots[]
     end
-    g = _GeoCompileCtx(ctx, scope, Dict{String,String}(), nslots)
+    g = _GeoCompileCtx(ctx, scope, Dict{String, String}(), nslots)
     srcA = _geo_source(ipoly.args[1], g)
     srcB = _geo_source(ipoly.args[2], g)
     u = zeros(Float64, nslots[])
-    rings = Dict{Tuple,Matrix{Float64}}()
+    rings = Dict{Tuple, Matrix{Float64}}()
     maxn = 0
     for tup in Iterators.product((1:e for e in outer_ext)...)
-        @inbounds for k in eachindex(outer); u[k] = Float64(tup[k]); end
+        @inbounds for k in eachindex(outer)
+            u[k] = Float64(tup[k])
+        end
         A = _geo_ring_value(srcA, u, nothing, 0.0, Float64)
         B = _geo_ring_value(srcB, u, nothing, 0.0, Float64)
         # A non-overlapping pair yields a degenerate (< 3 vertex) clip → a zero-area
@@ -517,7 +563,7 @@ function _materialize_ranged_clip(faq, env, index_sets, derived_extents,
         end
     end
     ringset = faq.ranges[ringvar] isa IndexSetRef ?
-              (faq.ranges[ringvar]::IndexSetRef).from : ringvar
+        (faq.ranges[ringvar]::IndexSetRef).from : ringvar
     derived_extents[ringset] = maxn
     ipoly.id === nothing || (derived_extents[ipoly.id] = maxn)
     return clip
@@ -551,9 +597,13 @@ function _geo_reduce_fold(reduce_spec, semiring_spec)
         # A `semiring` name resolves ⊕ through the same closed registry as the
         # runtime — unknown names fail closed here too.
         sr = get(_SEMIRING_REGISTRY, semiring_spec, nothing)
-        sr === nothing && throw(TreeWalkError("E_TREEWALK_UNKNOWN_SEMIRING",
-            "unknown semiring '$semiring_spec'; the closed registry is " *
-            join(sort(collect(keys(_SEMIRING_REGISTRY))), ", ")))
+        sr === nothing && throw(
+            TreeWalkError(
+                "E_TREEWALK_UNKNOWN_SEMIRING",
+                "unknown semiring '$semiring_spec'; the closed registry is " *
+                    join(sort(collect(keys(_SEMIRING_REGISTRY))), ", ")
+            )
+        )
         sr.oplus
     else
         "+"   # unspecified → additive fold (§5.1 note 1)
@@ -562,9 +612,13 @@ function _geo_reduce_fold(reduce_spec, semiring_spec)
     oplus == "min" && return (_OPLUS_IDENTITY["min"], min)
     oplus == "max" && return (_OPLUS_IDENTITY["max"], max)
     oplus == "*"   && return (_OPLUS_IDENTITY["*"], *)
-    throw(TreeWalkError("E_TREEWALK_ARRAYOP_UNKNOWN_REDUCE",
-        "unsupported geometry reduce=$(repr(reduce_spec)) / semiring=$(repr(semiring_spec)); " *
-        "expected reduce ∈ (+, sum, *, prod, max, min) or a numeric registry semiring"))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_ARRAYOP_UNKNOWN_REDUCE",
+            "unsupported geometry reduce=$(repr(reduce_spec)) / semiring=$(repr(semiring_spec)); " *
+                "expected reduce ∈ (+, sum, *, prod, max, min) or a numeric registry semiring"
+        )
+    )
 end
 
 # ---- The RANK-SPECIALIZED sweep (the geometry materializer's inner loops) ----
@@ -612,11 +666,13 @@ _geom_sweep_specialize_disabled() = !_compiler_plan_now().geom_sweep_specialize
 # run on the rank-abstract reference. Purely observational — reset (`[] = 0`)
 # around a build to attribute counts to one run.
 const _GEOM_SWEEP_FAST = Ref{Int}(0)
-const _GEOM_SWEEP_REF  = Ref{Int}(0)
+const _GEOM_SWEEP_REF = Ref{Int}(0)
 
 # MAP sweep (no contracted indices), specialized on the output rank `N`.
-function _geom_sweep_map!(arr::Array{Float64,N}, body, gates, filt,
-                          u::Vector{Float64}, ov=nothing) where {N}
+function _geom_sweep_map!(
+        arr::Array{Float64, N}, body, gates, filt,
+        u::Vector{Float64}, ov = nothing
+    ) where {N}
     for I in CartesianIndices(arr)
         @inbounds for k in 1:N
             u[k] = Float64(I[k])
@@ -637,9 +693,11 @@ end
 # CONTRACTING sweep, specialized on the output rank `N`, the contracted rank
 # `M` and the fold `F`. The contracted slots follow the output slots in the
 # frame (`_materialize_geom_array` allocates them in that order).
-function _geom_sweep_contract!(arr::Array{Float64,N}, body, gates, filt,
-                               u::Vector{Float64}, cidx::CartesianIndices{M},
-                               init::Float64, fold::F, ov=nothing) where {N,M,F}
+function _geom_sweep_contract!(
+        arr::Array{Float64, N}, body, gates, filt,
+        u::Vector{Float64}, cidx::CartesianIndices{M},
+        init::Float64, fold::F, ov = nothing
+    ) where {N, M, F}
     for I in CartesianIndices(arr)
         @inbounds for k in 1:N
             u[k] = Float64(I[k])
@@ -666,10 +724,14 @@ end
 # they keep the `Iterators.product((1:e for e in exts)...)` splat (which is
 # where most of it lived) but not the rank-abstract `setindex!`. What matters
 # for their job is that the term sequence is the ORIGINAL one.
-function _geom_sweep_map_ref!(arr, exts::Vector{Int}, body, gates, filt,
-                              u::Vector{Float64}, nout::Int, ov=nothing)
+function _geom_sweep_map_ref!(
+        arr, exts::Vector{Int}, body, gates, filt,
+        u::Vector{Float64}, nout::Int, ov = nothing
+    )
     for tup in Iterators.product((1:e for e in exts)...)
-        @inbounds for k in 1:nout; u[k] = Float64(tup[k]); end
+        @inbounds for k in 1:nout
+            u[k] = Float64(tup[k])
+        end
         _geo_ov_ok(ov, u) || continue
         _geo_gate_ok(gates, filt, u) || continue
         arr[tup...] = _eval_node(body, u, nothing, 0.0, Float64)
@@ -677,14 +739,20 @@ function _geom_sweep_map_ref!(arr, exts::Vector{Int}, body, gates, filt,
     return arr
 end
 
-function _geom_sweep_contract_ref!(arr, exts::Vector{Int}, cexts::Vector{Int},
-                                   body, gates, filt, u::Vector{Float64},
-                                   nout::Int, ncon::Int, init, fold, ov=nothing)
+function _geom_sweep_contract_ref!(
+        arr, exts::Vector{Int}, cexts::Vector{Int},
+        body, gates, filt, u::Vector{Float64},
+        nout::Int, ncon::Int, init, fold, ov = nothing
+    )
     for tup in Iterators.product((1:e for e in exts)...)
-        @inbounds for k in 1:nout; u[k] = Float64(tup[k]); end
+        @inbounds for k in 1:nout
+            u[k] = Float64(tup[k])
+        end
         acc = init
         for ct in Iterators.product((1:e for e in cexts)...)
-            @inbounds for k in 1:ncon; u[nout + k] = Float64(ct[k]); end
+            @inbounds for k in 1:ncon
+                u[nout + k] = Float64(ct[k])
+            end
             _geo_ov_ok(ov, u) || continue
             _geo_gate_ok(gates, filt, u) || continue
             acc = fold(acc, _eval_node(body, u, nothing, 0.0, Float64))
@@ -743,9 +811,9 @@ _geom_overlap_gate_disabled() = !_compiler_plan_now().geom_overlap_gate
 # dense with a per-tuple membership test; NONE those with no usable overlap
 # clause. Purely observational — reset (`[] = 0`) around a build to attribute
 # counts to one run. A silently-declining drive shows up as DRIVE=0.
-const _GEOM_OVERLAP_DRIVE     = Ref{Int}(0)
+const _GEOM_OVERLAP_DRIVE = Ref{Int}(0)
 const _GEOM_OVERLAP_GATE_ONLY = Ref{Int}(0)
-const _GEOM_OVERLAP_NONE      = Ref{Int}(0)
+const _GEOM_OVERLAP_NONE = Ref{Int}(0)
 
 # A resolved setup-time OVERLAP gate: the shared `_JoinGate` (so it can be
 # handed straight to `_overlap_drive_plan`) plus the frame slots its two range
@@ -779,8 +847,12 @@ function _geo_overlap_index(clause::_OverlapJoinSpec, env::AbstractDict, cache)
         hit = get(cache, key, nothing)
         hit === nothing || return hit::_OverlapIndex
     end
-    oi = _OverlapIndex(_overlap_candidate_set(clause.src_env, clause.tgt_env, env;
-                                              eps=clause.eps))
+    oi = _OverlapIndex(
+        _overlap_candidate_set(
+            clause.src_env, clause.tgt_env, env;
+            eps = clause.eps
+        )
+    )
     cache === nothing || (cache[key] = oi)
     return oi
 end
@@ -832,8 +904,12 @@ function _geo_overlap_gate(faq, ctx::_GeoCtx, setof, scope, cache)
         end
         (_geo_env_ok(clause.src_env) && _geo_env_ok(clause.tgt_env)) || continue
         oi = _geo_overlap_index(clause, ctx.env, cache)
-        return _GeoOverlapGate(_JoinGate(sym_l, sym_r, Dict{Int,Int}(),
-                                         Dict{Int,Int}(), oi), sl, sr)
+        return _GeoOverlapGate(
+            _JoinGate(
+                sym_l, sym_r, Dict{Int, Int}(),
+                Dict{Int, Int}(), oi
+            ), sl, sr
+        )
     end
     return nothing
 end
@@ -862,16 +938,20 @@ end
 # positions. Returns `nothing` for any shape it declines, or that this sweep
 # cannot express — the caller then sweeps densely with the membership test, so
 # a decline costs speed, never correctness.
-function _geo_overlap_drive(ov::_GeoOverlapGate, out::Vector{String},
-                            contract::Vector{String}, exts::Vector{Int},
-                            index_sets, derived_extents, faq)
+function _geo_overlap_drive(
+        ov::_GeoOverlapGate, out::Vector{String},
+        contract::Vector{String}, exts::Vector{Int},
+        index_sets, derived_extents, faq
+    )
     g = ov.gate
     nout = length(out)
     if isempty(contract)
         # A pure MAP: both gated symbols are free, so the planner returns the
         # candidate PAIRS and they enumerate the output cells directly.
-        plan = _overlap_drive_plan(g, out, Dict{String,Int}(),
-            s -> (k = findfirst(==(s), out); k === nothing ? (1:0) : (1:exts[k])))
+        plan = _overlap_drive_plan(
+            g, out, Dict{String, Int}(),
+            s -> (k = findfirst(==(s), out); k === nothing ? (1:0) : (1:exts[k]))
+        )
         plan[1] === :pairs || return nothing
         pl = findfirst(==(g.sym_l), out)
         pr = findfirst(==(g.sym_r), out)
@@ -885,11 +965,15 @@ function _geo_overlap_drive(ov::_GeoOverlapGate, out::Vector{String},
     # A CONTRACTION: bind the output indices (the planner only needs to know
     # WHICH are bound, so the probe cell's positions are immaterial) and ask
     # what the still-free contracted symbols may be restricted to.
-    cexts = Int[_geo_index_extent(faq.ranges[c], index_sets, derived_extents)
-                for c in contract]
-    probe = Dict{String,Int}(o => 1 for o in out)
-    plan = _overlap_drive_plan(g, contract, probe,
-        s -> (k = findfirst(==(s), contract); k === nothing ? (1:0) : (1:cexts[k])))
+    cexts = Int[
+        _geo_index_extent(faq.ranges[c], index_sets, derived_extents)
+            for c in contract
+    ]
+    probe = Dict{String, Int}(o => 1 for o in out)
+    plan = _overlap_drive_plan(
+        g, contract, probe,
+        s -> (k = findfirst(==(s), contract); k === nothing ? (1:0) : (1:cexts[k]))
+    )
     plan[1] === :restrict || return nothing
     free = String(plan[2])
     gc = findfirst(==(free), contract)
@@ -900,7 +984,7 @@ function _geo_overlap_drive(ov::_GeoOverlapGate, out::Vector{String},
     side = fixed == g.sym_l ? :l : :r
     # Same slot check as above, for both ends of the pair.
     slot_fixed = fixed == g.sym_l ? ov.slot_l : ov.slot_r
-    slot_free  = free  == g.sym_l ? ov.slot_l : ov.slot_r
+    slot_free = free == g.sym_l ? ov.slot_l : ov.slot_r
     (slot_fixed == po && slot_free == nout + gc) || return nothing
     return _GeoOverlapDrive(:restrict, po, gc, Int[], side)
 end
@@ -924,9 +1008,11 @@ end
 # are of a kind the index declines, keeps the dense sweep.
 const _GEOM_EQ_DRIVE = Ref{Int}(0)
 
-function _geo_equality_drive(gates, out::Vector{String}, contract::Vector{String},
-                             exts::Vector{Int}, index_sets, derived_extents, faq;
-                             eq_cache=nothing)
+function _geo_equality_drive(
+        gates, out::Vector{String}, contract::Vector{String},
+        exts::Vector{Int}, index_sets, derived_extents, faq;
+        eq_cache = nothing
+    )
     (gates === nothing || isempty(gates)) && return nothing
     _join_on_gate_disabled() && return nothing
     nout = length(out)
@@ -946,12 +1032,18 @@ function _geo_equality_drive(gates, out::Vector{String}, contract::Vector{String
         oi = if eq_cache === nothing
             _equality_match_index(1:eA, p -> a[p], 1:eB, p -> b[p])
         else
-            get!(() -> _equality_match_index(1:eA, p -> a[p], 1:eB, p -> b[p]),
-                 eq_cache, (objectid(a), objectid(b), eA, eB))
+            get!(
+                () -> _equality_match_index(1:eA, p -> a[p], 1:eB, p -> b[p]),
+                eq_cache, (objectid(a), objectid(b), eA, eB)
+            )
         end
         oi === nothing && continue
-        g = _GeoOverlapGate(_JoinGate(slotname(sA), slotname(sB), Dict{Int,Int}(),
-                                      Dict{Int,Int}(), oi), sA, sB)
+        g = _GeoOverlapGate(
+            _JoinGate(
+                slotname(sA), slotname(sB), Dict{Int, Int}(),
+                Dict{Int, Int}(), oi
+            ), sA, sB
+        )
         d = _geo_overlap_drive(g, out, contract, exts, index_sets, derived_extents, faq)
         d === nothing || return (g, d)
     end
@@ -968,12 +1060,14 @@ end
 # writes each cell independently, so the visit order cannot affect the result.
 # An out-of-range position (an envelope factor longer than the declared range)
 # is skipped rather than trusted.
-function _geom_sweep_pairs_map!(arr::Array{Float64,N}, body, gates, filt,
-                                u::Vector{Float64},
-                                pairs::Vector{Tuple{Int,Int}},
-                                pos_l::Int, pos_r::Int,
-                                restpos::NTuple{K,Int},
-                                restidx::CartesianIndices{K}) where {N,K}
+function _geom_sweep_pairs_map!(
+        arr::Array{Float64, N}, body, gates, filt,
+        u::Vector{Float64},
+        pairs::Vector{Tuple{Int, Int}},
+        pos_l::Int, pos_r::Int,
+        restpos::NTuple{K, Int},
+        restidx::CartesianIndices{K}
+    ) where {N, K}
     ix = zeros(Int, N)
     eL = size(arr, pos_l)
     eR = size(arr, pos_r)
@@ -1007,11 +1101,13 @@ end
 # their nesting — so the visited tuples are exactly the dense column-major
 # sequence with the gate-rejected ones removed, in the same relative order.
 # Every removed term would have contributed 0̄, by the gate's definition.
-function _geom_sweep_restrict_contract!(arr::Array{Float64,N}, body, gates, filt,
-                                        u::Vector{Float64}, oi::_OverlapIndex,
-                                        side::Symbol, pos_o::Int,
-                                        cexts::NTuple{M,Int}, gc::Int, nout::Int,
-                                        init::Float64, fold::F) where {N,M,F}
+function _geom_sweep_restrict_contract!(
+        arr::Array{Float64, N}, body, gates, filt,
+        u::Vector{Float64}, oi::_OverlapIndex,
+        side::Symbol, pos_o::Int,
+        cexts::NTuple{M, Int}, gc::Int, nout::Int,
+        init::Float64, fold::F
+    ) where {N, M, F}
     for I in CartesianIndices(arr)
         @inbounds for k in 1:N
             u[k] = Float64(I[k])
@@ -1051,10 +1147,12 @@ end
 # honor the aggregate's `join` / `filter` gate (`_geo_gate_ok`): a rejected
 # contraction tuple contributes the additive identity 0̄ (RFC §5.3 / §5.8). This is
 # the setup-time twin of the ODE faq einsum path.
-function _materialize_geom_array(faq, env, index_sets, derived_extents,
-                                 var_shapes=Dict{String,Vector{String}}();
-                                 ov_cache=nothing, eq_cache=nothing)
-    out  = String[v for v in faq.output_idx]
+function _materialize_geom_array(
+        faq, env, index_sets, derived_extents,
+        var_shapes = Dict{String, Vector{String}}();
+        ov_cache = nothing, eq_cache = nothing
+    )
+    out = String[v for v in faq.output_idx]
     exts = Int[_geo_index_extent(faq.ranges[v], index_sets, derived_extents) for v in out]
     # Contracted indices: `ranges` keys not among the output indices (§5.1). Their
     # extents are reduced (⊕ = + for the sum_product FAQ) per output cell.
@@ -1062,7 +1160,7 @@ function _materialize_geom_array(faq, env, index_sets, derived_extents,
     # Seed the loop-var → index-set map with this faq's output AND contracted
     # indices, so a join can resolve a key column indexed by either (per-cell F_tgt
     # keys on an outer output var; the row-sum keys on the contracted `i`).
-    setof = Dict{String,String}()
+    setof = Dict{String, String}()
     for v in Iterators.flatten((out, contract))
         r = faq.ranges[v]
         r isa IndexSetRef && (setof[v] = r.from)
@@ -1076,7 +1174,7 @@ function _materialize_geom_array(faq, env, index_sets, derived_extents,
     # dispatch, no per-node Dict lookups, no raw-AST re-walk (this sweep was
     # the #1 build hotspot).
     nslots = Ref(0)
-    scope = Dict{String,Int}()
+    scope = Dict{String, Int}()
     for v in Iterators.flatten((out, contract))
         nslots[] += 1
         scope[v] = nslots[]
@@ -1095,8 +1193,10 @@ function _materialize_geom_array(faq, env, index_sets, derived_extents,
     # (`ov`), which is the same admitted set at the full product's cost.
     ov = _geo_overlap_gate(faq, ctx, setof, scope, ov_cache)
     drive = ov === nothing ? nothing :
-            _geo_overlap_drive(ov, out, contract, exts, index_sets, derived_extents,
-                               faq)
+        _geo_overlap_drive(
+            ov, out, contract, exts, index_sets, derived_extents,
+            faq
+        )
     ovdense = drive === nothing ? ov : nothing     # gate per tuple only if not driven
     if ov === nothing
         _GEOM_OVERLAP_NONE[] += 1
@@ -1110,8 +1210,10 @@ function _materialize_geom_array(faq, env, index_sets, derived_extents,
     # whose candidate index the driven sweep reads.
     dov = ov
     if ov === nothing
-        eq = _geo_equality_drive(gates, out, contract, exts, index_sets,
-                                 derived_extents, faq; eq_cache=eq_cache)
+        eq = _geo_equality_drive(
+            gates, out, contract, exts, index_sets,
+            derived_extents, faq; eq_cache = eq_cache
+        )
         if eq !== nothing
             dov, drive = eq
             _GEOM_EQ_DRIVE[] += 1
@@ -1130,10 +1232,12 @@ function _materialize_geom_array(faq, env, index_sets, derived_extents,
     if isempty(contract)
         if drive !== nothing
             rp = Tuple(drive.restpos)
-            _geom_sweep_pairs_map!(arr, body, gates, filt, u,
-                                   _overlap_sorted_pairs(dov.gate.candidates::_OverlapIndex),
-                                   drive.pos_l, drive.pos_r, rp,
-                                   CartesianIndices(map(k -> exts[k], rp)))
+            _geom_sweep_pairs_map!(
+                arr, body, gates, filt, u,
+                _overlap_sorted_pairs(dov.gate.candidates::_OverlapIndex),
+                drive.pos_l, drive.pos_r, rp,
+                CartesianIndices(map(k -> exts[k], rp))
+            )
         elseif fast
             bump()
             _geom_sweep_map!(arr, body, gates, filt, u, ovdense)
@@ -1143,24 +1247,32 @@ function _materialize_geom_array(faq, env, index_sets, derived_extents,
         end
     else
         init, fold = _geo_reduce_fold(faq.reduce, faq.semiring)
-        cexts = Int[_geo_index_extent(faq.ranges[c], index_sets, derived_extents)
-                    for c in contract]
+        cexts = Int[
+            _geo_index_extent(faq.ranges[c], index_sets, derived_extents)
+                for c in contract
+        ]
         ncon = length(contract)
         if drive !== nothing
-            _geom_sweep_restrict_contract!(arr, body, gates, filt, u,
-                                           dov.gate.candidates::_OverlapIndex,
-                                           drive.side, drive.pos_l,
-                                           Tuple(cexts), drive.pos_r, nout,
-                                           Float64(init), fold)
+            _geom_sweep_restrict_contract!(
+                arr, body, gates, filt, u,
+                dov.gate.candidates::_OverlapIndex,
+                drive.side, drive.pos_l,
+                Tuple(cexts), drive.pos_r, nout,
+                Float64(init), fold
+            )
         elseif fast
             bump()
-            _geom_sweep_contract!(arr, body, gates, filt, u,
-                                  CartesianIndices(Tuple(cexts)), Float64(init), fold,
-                                  ovdense)
+            _geom_sweep_contract!(
+                arr, body, gates, filt, u,
+                CartesianIndices(Tuple(cexts)), Float64(init), fold,
+                ovdense
+            )
         else
             bump()
-            _geom_sweep_contract_ref!(arr, exts, cexts, body, gates, filt, u,
-                                      nout, ncon, init, fold, ovdense)
+            _geom_sweep_contract_ref!(
+                arr, exts, cexts, body, gates, filt, u,
+                nout, ncon, init, fold, ovdense
+            )
         end
     end
     return arr
@@ -1223,7 +1335,7 @@ function _is_setup_general_map(rhs)
     rhs.expr_body === nothing && return false
     (rhs.join === nothing && rhs.join_gates === nothing && rhs.filter === nothing) || return false
     out = Set{String}(String(s) for s in rhs.output_idx if s isa AbstractString)
-    ranges = rhs.ranges === nothing ? Dict{String,Any}() : rhs.ranges
+    ranges = rhs.ranges === nothing ? Dict{String, Any}() : rhs.ranges
     all(k -> String(k) in out, keys(ranges)) || return false   # pure MAP: no contraction
     return _body_needs_general_eval(rhs::OpExpr)
 end
@@ -1319,9 +1431,11 @@ end
 # The compile-once cell evaluator for a promoted-physics MAP, or `nothing` to
 # keep the per-cell loop. Every decline is silent and lossless — the caller falls
 # back to the byte-identical reference path.
-function _setup_map_compile_once(rhs::OpExpr, nd::Int, ca::AbstractDict,
-                                 registered_functions::AbstractDict,
-                                 params::AbstractDict)
+function _setup_map_compile_once(
+        rhs::OpExpr, nd::Int, ca::AbstractDict,
+        registered_functions::AbstractDict,
+        params::AbstractDict
+    )
     nd >= 1 || return nothing
     _setup_map_compile_once_disabled() && return nothing
     _subscripts_int_exact(rhs) || return nothing
@@ -1336,10 +1450,12 @@ end
 # scalar params bind by name). Byte-identical to the ODE RHS resolver — the twin of
 # `_materialize_setup_wholearray`, just ranging over the aggregate's declared
 # `output_idx`/`ranges` extents instead of a makearray's regions.
-function _materialize_setup_general_map(rhs::OpExpr, env::AbstractDict,
-                                        index_sets, derived_extents,
-                                        registered_functions::AbstractDict)
-    out  = String[String(s) for s in rhs.output_idx if s isa AbstractString]
+function _materialize_setup_general_map(
+        rhs::OpExpr, env::AbstractDict,
+        index_sets, derived_extents,
+        registered_functions::AbstractDict
+    )
+    out = String[String(s) for s in rhs.output_idx if s isa AbstractString]
     exts = Int[_geo_index_extent(rhs.ranges[v], index_sets, derived_extents) for v in out]
     ca, params = _setup_env_split(env)
     nd = length(out)
@@ -1347,8 +1463,10 @@ function _materialize_setup_general_map(rhs::OpExpr, env::AbstractDict,
     # The MAP filled through the right-hand-side cascade and emitted code, once.
     # A decline, or a run that raises, leaves the compile-once sweep and the
     # per-cell reference below exactly as they were.
-    filled = _setup_fill_array(rhs, exts; const_arrays=ca, params=params,
-                               reg_funcs=registered_functions)
+    filled = _setup_fill_array(
+        rhs, exts; const_arrays = ca, params = params,
+        reg_funcs = registered_functions
+    )
     if filled !== nothing
         _SETUP_MAP_FASTPATH_HITS[] += 1
         _record_rule!(_current_rule_label(), :setup_array, :setup_codegen)
@@ -1362,7 +1480,7 @@ function _materialize_setup_general_map(rhs::OpExpr, env::AbstractDict,
     ce = _setup_map_compile_once(rhs, nd, ca, registered_functions, params)
     # The cell the compiled sweep failed at, if it failed: the one cell a strict
     # compiler checks against the per-cell reference before refusing.
-    failed_at = Ref{Union{Nothing,Vector{Int}}}(nothing)
+    failed_at = Ref{Union{Nothing, Vector{Int}}}(nothing)
     if ce !== nothing
         fast = try
             _fill_map_fast(ce, exts, nd; failed_at = failed_at)
@@ -1391,20 +1509,26 @@ function _materialize_setup_general_map(rhs::OpExpr, env::AbstractDict,
     # refusal, so a strict compiler's probe runs the per-cell reference at one
     # cell, for its diagnostic only, before the refusal is raised: the cell the
     # compiled sweep failed at, or else the first.
-    lic = _percell_evaluation_license(_current_rule_label(),
+    lic = _percell_evaluation_license(
+        _current_rule_label(),
         "the setup MAP materializer", prod(exts); one_cell = true,
         probe = pr -> all(>(0), exts) &&
-            _eval_cellwise(pr, rhs, something(failed_at[], ones(Int, length(exts)));
-                           const_arrays=ca, registered_functions=registered_functions,
-                           params=params))
+            _eval_cellwise(
+            pr, rhs, something(failed_at[], ones(Int, length(exts)));
+            const_arrays = ca, registered_functions = registered_functions,
+            params = params
+        )
+    )
     _record_rule!(_current_rule_label(), :setup_array, :setup_percell)
     return _fill_map_percell(lic, rhs, exts, ca, registered_functions, params)
 end
 
 # Compile-once cell sweep: one preallocated `cell` buffer, rebound per cell. On
 # a throw, `failed_at` holds the cell it was evaluating.
-function _fill_map_fast(ce, exts::Vector{Int}, nd::Int;
-                        failed_at::Base.RefValue = Ref{Any}(nothing))
+function _fill_map_fast(
+        ce, exts::Vector{Int}, nd::Int;
+        failed_at::Base.RefValue = Ref{Any}(nothing)
+    )
     arr = zeros(Float64, exts...)
     cell = Vector{Int}(undef, nd)
     try
@@ -1424,14 +1548,18 @@ end
 # The REFERENCE cell sweep — the original per-cell loop, unchanged. It is both
 # the fallback for anything the fast path declines and the oracle a build with
 # the compile-once tier off runs.
-function _fill_map_percell(lic::_PerCellLicense, rhs::OpExpr, exts::Vector{Int},
-                           ca::AbstractDict, registered_functions::AbstractDict,
-                           params::AbstractDict)
+function _fill_map_percell(
+        lic::_PerCellLicense, rhs::OpExpr, exts::Vector{Int},
+        ca::AbstractDict, registered_functions::AbstractDict,
+        params::AbstractDict
+    )
     arr = zeros(Float64, exts...)
     for I in CartesianIndices(Tuple(exts))
-        arr[I] = _eval_cellwise(lic, rhs, Int[Tuple(I)...]; const_arrays=ca,
-                                registered_functions=registered_functions,
-                                params=params)
+        arr[I] = _eval_cellwise(
+            lic, rhs, Int[Tuple(I)...]; const_arrays = ca,
+            registered_functions = registered_functions,
+            params = params
+        )
     end
     return arr
 end
@@ -1465,30 +1593,42 @@ _is_setup_wholearray_op(rhs) =
 # aggregate path. Fallbacks keep a shapeless op materializable: a makearray's
 # per-dimension region maximum (the regions partition the whole output), or a
 # reshape's own integer/symbolic target `shape`.
-function _setup_wholearray_extents(rhs::OpExpr, shape_sets::Vector{String},
-                                   index_sets, derived_extents)
+function _setup_wholearray_extents(
+        rhs::OpExpr, shape_sets::Vector{String},
+        index_sets, derived_extents
+    )
     isempty(shape_sets) ||
         return Int[_geo_index_extent(s, index_sets, derived_extents) for s in shape_sets]
     if rhs.op == "makearray"
         regions = rhs.regions === nothing ? Vector{Vector{Vector{Any}}}() : rhs.regions
-        isempty(regions) && throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-            "cannot determine makearray output shape at setup (no declared shape, no regions)"))
+        isempty(regions) && throw(
+            TreeWalkError(
+                "E_TREEWALK_GEOMETRY_SETUP",
+                "cannot determine makearray output shape at setup (no declared shape, no regions)"
+            )
+        )
         nd = length(regions[1])
         return Int[maximum(r[d][2] for r in regions) for d in 1:nd]
     end
     shp = rhs.shape
-    shp === nothing && throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-        "reshape at setup requires a target `shape`"))
-    return Int[s isa Integer ? Int(s) :
-               _geo_index_extent(String(s), index_sets, derived_extents) for s in shp]
+    shp === nothing && throw(
+        TreeWalkError(
+            "E_TREEWALK_GEOMETRY_SETUP",
+            "reshape at setup requires a target `shape`"
+        )
+    )
+    return Int[
+        s isa Integer ? Int(s) :
+            _geo_index_extent(String(s), index_sets, derived_extents) for s in shp
+    ]
 end
 
 # Split `env` into the (frozen) const-array registry (its array-valued entries —
 # e.g. the regridded `elev_xy`) and the scalar-parameter scope (its Real entries —
 # the grid spacing `dx`/`dy`, offsets, …) the build-time cell pipeline reads.
 function _setup_env_split(env::AbstractDict)
-    ca = Dict{String,AbstractArray{Float64}}()
-    params = Dict{String,Float64}()
+    ca = Dict{String, AbstractArray{Float64}}()
+    params = Dict{String, Float64}()
     for (k, v) in env
         ks = String(k)
         if v isa AbstractArray{Float64}
@@ -1522,18 +1662,30 @@ end
 #    (`args[1]`, itself a setup array / aggregate / makearray) to a dense array and
 #    reshape column-major (matching the numpy reference `reshape([1..6],[2,3])`
 #    with `M[1,2]==3`) to the declared target shape.
-function _materialize_setup_wholearray(rhs::OpExpr, env::AbstractDict,
-                                       index_sets, derived_extents,
-                                       shape_sets::Vector{String},
-                                       registered_functions::AbstractDict)
+function _materialize_setup_wholearray(
+        rhs::OpExpr, env::AbstractDict,
+        index_sets, derived_extents,
+        shape_sets::Vector{String},
+        registered_functions::AbstractDict
+    )
     exts = _setup_wholearray_extents(rhs, shape_sets, index_sets, derived_extents)
     if rhs.op == "reshape"
-        isempty(rhs.args) && throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-            "reshape at setup requires a source array operand"))
-        src = _setup_source_array(rhs.args[1], env, index_sets, derived_extents,
-                                  registered_functions)
-        length(src) == prod(exts) || throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-            "reshape source has $(length(src)) elements but target shape needs $(prod(exts))"))
+        isempty(rhs.args) && throw(
+            TreeWalkError(
+                "E_TREEWALK_GEOMETRY_SETUP",
+                "reshape at setup requires a source array operand"
+            )
+        )
+        src = _setup_source_array(
+            rhs.args[1], env, index_sets, derived_extents,
+            registered_functions
+        )
+        length(src) == prod(exts) || throw(
+            TreeWalkError(
+                "E_TREEWALK_GEOMETRY_SETUP",
+                "reshape source has $(length(src)) elements but target shape needs $(prod(exts))"
+            )
+        )
         return reshape(Array{Float64}(src), exts...)   # column-major, numpy-parity
     end
     ca, params = _setup_env_split(env)
@@ -1541,8 +1693,10 @@ function _materialize_setup_wholearray(rhs::OpExpr, env::AbstractDict,
     # and emitted code, once (setup_fill.jl) — the same lowering an
     # `index(makearray, …)` in the right-hand side gets, region selection
     # included.
-    arr = _setup_fill_array(rhs, exts; const_arrays=ca, params=params,
-                            reg_funcs=registered_functions)
+    arr = _setup_fill_array(
+        rhs, exts; const_arrays = ca, params = params,
+        reg_funcs = registered_functions
+    )
     if arr !== nothing
         _record_rule!(_current_rule_label(), :setup_array, :setup_codegen)
         return arr
@@ -1551,11 +1705,15 @@ function _materialize_setup_wholearray(rhs::OpExpr, env::AbstractDict,
     # output cell. A strict compiler refuses that once its probe has evaluated
     # the first cell, so that a stencil no form can evaluate raises the
     # document's own error instead.
-    lic = _percell_evaluation_license(_current_rule_label(),
+    lic = _percell_evaluation_license(
+        _current_rule_label(),
         "the whole-array setup materializer", prod(exts); one_cell = true,
         probe = pr -> all(>(0), exts) &&
-            _eval_cellwise(pr, rhs, ones(Int, length(exts)); const_arrays=ca,
-                           registered_functions=registered_functions, params=params))
+            _eval_cellwise(
+            pr, rhs, ones(Int, length(exts)); const_arrays = ca,
+            registered_functions = registered_functions, params = params
+        )
+    )
     _record_rule!(_current_rule_label(), :setup_array, :setup_percell)
     return _fill_map_percell(lic, rhs, exts, ca, registered_functions, params)
 end
@@ -1563,20 +1721,28 @@ end
 # The dense source array of a setup-time `reshape`: a bare reference to an
 # already-materialized setup / const array in `env`, or an inline array producer
 # (an aggregate map / a nested makearray) materialized in place.
-function _setup_source_array(src, env, index_sets, derived_extents,
-                             registered_functions)
+function _setup_source_array(
+        src, env, index_sets, derived_extents,
+        registered_functions
+    )
     if src isa VarExpr && haskey(env, src.name) && env[src.name] isa AbstractArray
         return env[src.name]
     elseif src isa OpExpr && _is_faq_op(src.op) &&
-           src.output_idx !== nothing && !isempty(src.output_idx)
+            src.output_idx !== nothing && !isempty(src.output_idx)
         return _materialize_geom_array(src, env, index_sets, derived_extents)
     elseif src isa OpExpr && _is_setup_wholearray_op(src)
-        return _materialize_setup_wholearray(src, env, index_sets, derived_extents,
-                                             String[], registered_functions)
+        return _materialize_setup_wholearray(
+            src, env, index_sets, derived_extents,
+            String[], registered_functions
+        )
     end
-    throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-        "reshape source must be a build-once array (a setup/const array reference " *
-        "or an inline array producer) at setup"))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_GEOMETRY_SETUP",
+            "reshape source must be a build-once array (a setup/const array reference " *
+                "or an inline array producer) at setup"
+        )
+    )
 end
 
 # Geometry-derived ARRAY observeds to materialize at setup: those whose defining
@@ -1612,7 +1778,7 @@ end
 # so the plain path-walk (`foreach_subexpr`) was exponential on an observed
 # chain whose levels each reference their predecessor ≥2× (ESS-1p5). A name set
 # is dedup-insensitive, so the result is identical to the un-memoized walk.
-function _referenced_var_names(expr, acc::Set{String}=Set{String}())
+function _referenced_var_names(expr, acc::Set{String} = Set{String}())
     expr isa ASTExpr || return acc
     foreach_subexpr_once(expr) do e
         if e isa VarExpr
@@ -1637,9 +1803,11 @@ function _saturate!(sweep::Function)
     return nothing
 end
 
-function _geometry_setup_vars(model, equations, geom_ring_vars, state_var_names,
-                              live_params)
-    defs = Dict{String,ASTExpr}()
+function _geometry_setup_vars(
+        model, equations, geom_ring_vars, state_var_names,
+        live_params
+    )
+    defs = Dict{String, ASTExpr}()
     for eq in equations
         eq.lhs isa VarExpr || continue
         defs[(eq.lhs::VarExpr).name] = eq.rhs
@@ -1674,8 +1842,10 @@ function _geometry_setup_vars(model, equations, geom_ring_vars, state_var_names,
         # overlap area with no exposed ring (§8.6.1) — so an `A_ij[i,j] =
         # polygon_intersection_area(src[i], tgt[j])` aggregate is a build-once setup
         # const exactly like a ranged clip, just dense (no derived clip_ring set).
-        (_expr_has_intersect_polygon(defs[n]) ||
-         _expr_has_polygon_intersection_area(defs[n])) && push!(setup, n)
+        (
+            _expr_has_intersect_polygon(defs[n]) ||
+                _expr_has_polygon_intersection_area(defs[n])
+        ) && push!(setup, n)
     end
     mvars = Set{String}(keys(model.variables))
     # An array observed is build-once-SETUP-materializable only if it does NOT read a
@@ -1720,11 +1890,13 @@ function _geometry_setup_vars(model, equations, geom_ring_vars, state_var_names,
     _saturate!() do   # SETUP-FORWARD pass: state-free dependents of setup vars
         changed = false
         for (n, rhs) in defs
-            (is_arr_obs(n) && !(n in setup) && !(n in geom_ring_vars) &&
-             !(n in tainted) && !(n in blocked)) || continue
+            (
+                is_arr_obs(n) && !(n in setup) && !(n in geom_ring_vars) &&
+                    !(n in tainted) && !(n in blocked)
+            ) || continue
             refs = intersect(_referenced_var_names(rhs), mvars)
             if any(f -> (f in setup) || (f in geom_ring_vars), refs) &&
-               !any(f -> f in state_var_names, refs)
+                    !any(f -> f in state_var_names, refs)
                 push!(setup, n); changed = true
             end
         end
@@ -1748,9 +1920,11 @@ function _geometry_setup_vars(model, equations, geom_ring_vars, state_var_names,
         changed = false
         for n in collect(setup)
             for r in intersect(_referenced_var_names(defs[n]), mvars)
-                (is_arr_obs(r) && !(r in setup) && !(r in geom_ring_vars) &&
-                 !(r in tainted) && !(r in blocked) && haskey(defs, r) &&
-                 !_is_const_op(defs[r]) && !(defs[r] isa VarExpr)) || continue
+                (
+                    is_arr_obs(r) && !(r in setup) && !(r in geom_ring_vars) &&
+                        !(r in tainted) && !(r in blocked) && haskey(defs, r) &&
+                        !_is_const_op(defs[r]) && !(defs[r] isa VarExpr)
+                ) || continue
                 rrefs = intersect(_referenced_var_names(defs[r]), mvars)
                 any(f -> f in state_var_names, rrefs) && continue
                 push!(setup, r); changed = true
@@ -1772,8 +1946,12 @@ function _geom_setup_order(setup, defs)
                 push!(order, n); push!(done, n); progressed = true
             end
         end
-        progressed || throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
-            "cyclic setup-time geometry dependency"))
+        progressed || throw(
+            TreeWalkError(
+                "E_TREEWALK_GEOMETRY_SETUP",
+                "cyclic setup-time geometry dependency"
+            )
+        )
     end
     return order
 end
@@ -1840,10 +2018,12 @@ end
 #    a setup-time broad-phase `join` gates on; without the gate the denominator
 #    row-sum contracts DENSELY and picks up spurious sub-grid slivers, breaking
 #    the partition of unity (RFC §5.3 / §5.8).
-function _build_setup_env(model, const_arrays_kw;
-                          param_overrides=Dict{String,Float64}(),
-                          const_obs_arrays=nothing, vi_maps=nothing)
-    env = Dict{String,Any}()
+function _build_setup_env(
+        model, const_arrays_kw;
+        param_overrides = Dict{String, Float64}(),
+        const_obs_arrays = nothing, vi_maps = nothing
+    )
+    env = Dict{String, Any}()
     for (k, v) in const_arrays_kw
         env[String(k)] = v isa AbstractArray ? Array{Float64}(v) : v
     end
@@ -1879,7 +2059,7 @@ end
 
 # Declared shapes (index-set names per dim) — used to resolve join key columns.
 function _declared_var_shapes(model)
-    var_shapes = Dict{String,Vector{String}}()
+    var_shapes = Dict{String, Vector{String}}()
     for (n, v) in model.variables
         v.shape === nothing && continue
         var_shapes[n] = String[String(s) for s in v.shape if s isa AbstractString]
@@ -1892,17 +2072,21 @@ end
 # broad-phase `join` gates on (RFC §5.3); `param_overrides` carries scalar
 # parameter values (e.g. a sliver-filter `atol`, the bin width `dx`/`dy`) so a
 # setup-time `filter`/quantization that references them resolves.
-function _materialize_geometry_setup(setup, defs, model, const_arrays_kw,
-                                     index_sets, derived_extents;
-                                     vi_maps=Dict{String,Any}(),
-                                     param_overrides=Dict{String,Float64}(),
-                                     const_obs_arrays=Dict{String,Array{Float64}}(),
-                                     registered_functions=Dict{String,Function}())
-    out = Dict{String,AbstractArray{Float64}}()
+function _materialize_geometry_setup(
+        setup, defs, model, const_arrays_kw,
+        index_sets, derived_extents;
+        vi_maps = Dict{String, Any}(),
+        param_overrides = Dict{String, Float64}(),
+        const_obs_arrays = Dict{String, Array{Float64}}(),
+        registered_functions = Dict{String, Function}()
+    )
+    out = Dict{String, AbstractArray{Float64}}()
     isempty(setup) && return out
-    env = _build_setup_env(model, const_arrays_kw;
-                           param_overrides=param_overrides,
-                           const_obs_arrays=const_obs_arrays, vi_maps=vi_maps)
+    env = _build_setup_env(
+        model, const_arrays_kw;
+        param_overrides = param_overrides,
+        const_obs_arrays = const_obs_arrays, vi_maps = vi_maps
+    )
     var_shapes = _declared_var_shapes(model)
     # One broad-phase candidate index per distinct `overlap` clause, shared
     # across this pass (`_geo_overlap_index`). A conservative regrid resolves the
@@ -1910,10 +2094,10 @@ function _materialize_geometry_setup(setup, defs, model, const_arrays_kw,
     # per applied species; building the STRtree six times, and its adjacency
     # views six times, is pure waste. Scoped to this call, where a name→array
     # binding in `env` is written once and never replaced.
-    ov_cache = Dict{Tuple{Vector{String},Vector{String},Float64},_OverlapIndex}()
+    ov_cache = Dict{Tuple{Vector{String}, Vector{String}, Float64}, _OverlapIndex}()
     # Likewise one bin-equality match index per pair of key columns (the env
     # buffers stay bound, so their identities are stable for the pass).
-    eq_cache = Dict{Tuple{UInt,UInt,Int,Int},Union{Nothing,_OverlapIndex}}()
+    eq_cache = Dict{Tuple{UInt, UInt, Int, Int}, Union{Nothing, _OverlapIndex}}()
     for n in _geom_setup_order(setup, defs)
         rhs = defs[n]
         _open_rule!(n, :setup_array)
@@ -1923,8 +2107,10 @@ function _materialize_geometry_setup(setup, defs, model, const_arrays_kw,
             # A `makearray` stencil (a `D(field)` lowering) or `reshape` — no
             # `output_idx`/`ranges` to range over. Evaluate per output cell via the
             # general build-time array pipeline against the materialized `env`.
-            _materialize_setup_wholearray(rhs, env, index_sets, derived_extents,
-                                          get(var_shapes, n, String[]), registered_functions)
+            _materialize_setup_wholearray(
+                rhs, env, index_sets, derived_extents,
+                get(var_shapes, n, String[]), registered_functions
+            )
         elseif _is_setup_general_map(rhs)
             # A promoted PER-CELL PHYSICS lookup (fuel/moisture/wind over the fire
             # grid): a pure MAP aggregate whose body reaches an op OUTSIDE the
@@ -1934,11 +2120,15 @@ function _materialize_geometry_setup(setup, defs, model, const_arrays_kw,
             # geometry aggregate (a geometry weight, a contraction, a constructed ring,
             # a reindex — all `_GEO_EVAL_OPS`) fails `_is_setup_general_map` and falls
             # through to the compiled geometry materializer below.
-            _materialize_setup_general_map(rhs, env, index_sets, derived_extents,
-                                           registered_functions)
+            _materialize_setup_general_map(
+                rhs, env, index_sets, derived_extents,
+                registered_functions
+            )
         else
-            _materialize_geom_array(rhs, env, index_sets, derived_extents, var_shapes;
-                                    ov_cache=ov_cache, eq_cache=eq_cache)
+            _materialize_geom_array(
+                rhs, env, index_sets, derived_extents, var_shapes;
+                ov_cache = ov_cache, eq_cache = eq_cache
+            )
         end
         env[n] = arr
         out[n] = arr
@@ -1977,8 +2167,12 @@ const _REDUCE_PROJECTION_KINDS = ("min", "max", "sum", "prod")
 # names, not data references.
 function _agg_bound_syms(e::OpExpr)
     bound = Set{String}()
-    e.ranges !== nothing && for k in keys(e.ranges); push!(bound, String(k)); end
-    e.output_idx !== nothing && for k in e.output_idx; push!(bound, String(k)); end
+    e.ranges !== nothing && for k in keys(e.ranges)
+        push!(bound, String(k))
+    end
+    e.output_idx !== nothing && for k in e.output_idx
+        push!(bound, String(k))
+    end
     return bound
 end
 
@@ -1987,7 +2181,7 @@ end
 # build-time data); a `const`-op / kwarg-supplied array observed is already seeded
 # into `env` and is not a materialization candidate.
 function _agg_array_obs_defs(model, env)
-    d = Dict{String,OpExpr}()
+    d = Dict{String, OpExpr}()
     for (n, e) in observed_definitions(model)
         _is_array_shape(model.variables[n].shape) || continue
         haskey(env, n) && continue
@@ -2009,15 +2203,17 @@ end
 # Determinism is preserved: a coordinate whose closure reaches a live STATE variable
 # (or any name absent from the build-time env) is NOT build-time-constant, so it is
 # never materialised and never becomes an index target. Returns name → values.
-function _derive_binning_coords(model, index_sets, const_arrays_kw, param_overrides,
-                                vi_index_targets=Set{String}(),
-                                registered_functions::AbstractDict=Dict{String,Function}())
-    out = Dict{String,Vector{Float64}}()
+function _derive_binning_coords(
+        model, index_sets, const_arrays_kw, param_overrides,
+        vi_index_targets = Set{String}(),
+        registered_functions::AbstractDict = Dict{String, Function}()
+    )
+    out = Dict{String, Vector{Float64}}()
     # The shared setup env (see `_build_setup_env` for the precedence proof that
     # this equals the assembly formerly inlined here): in-file `const`-op ring
     # stacks the projection gathers per cell via `index(src_poly, i)`, the
     # kwarg const arrays, and the scalar params/overrides.
-    env = _build_setup_env(model, const_arrays_kw; param_overrides=param_overrides)
+    env = _build_setup_env(model, const_arrays_kw; param_overrides = param_overrides)
     # The LIVE names a build-time derivation may never read: the ODE states plus
     # the algebraic unknowns (esm-spec §6.3.1). An observed is not live by
     # declaration — whether it resolves is decided by whether its own factors
@@ -2030,8 +2226,10 @@ function _derive_binning_coords(model, index_sets, const_arrays_kw, param_overri
     seeds = String[]
     for (n, e) in cand
         length(get(var_shapes, n, String[])) == 1 || continue
-        (n in vi_index_targets ||
-         (e.reduce !== nothing && e.reduce in _REDUCE_PROJECTION_KINDS)) || continue
+        (
+            n in vi_index_targets ||
+                (e.reduce !== nothing && e.reduce in _REDUCE_PROJECTION_KINDS)
+        ) || continue
         push!(seeds, n)
     end
     isempty(seeds) && return out             # byte-identical for a coordinate-free model
@@ -2054,7 +2252,7 @@ function _derive_binning_coords(model, index_sets, const_arrays_kw, param_overri
     # build-time env / not yet accepted — is skipped; its dependents then fail to
     # materialise and are simply not returned (the coordinate falls back to the
     # existing error). The fixpoint yields a valid topological order.
-    derived_extents = Dict{String,Int}()
+    derived_extents = Dict{String, Int}()
     accepted = Set{String}()
     _saturate!() do   # CLOSURE-MATERIALIZATION pass: accept once every dep resolves
         changed = false
@@ -2084,8 +2282,10 @@ function _derive_binning_coords(model, index_sets, const_arrays_kw, param_overri
             # is unchanged (`_body_needs_general_eval` is false there).
             _open_rule!(n, :setup_array)
             env[n] = if _body_needs_general_eval(e)
-                _materialize_setup_general_map(e, env, index_sets, derived_extents,
-                                               registered_functions)
+                _materialize_setup_general_map(
+                    e, env, index_sets, derived_extents,
+                    registered_functions
+                )
             else
                 _materialize_geom_array(e, env, index_sets, derived_extents, var_shapes)
             end
@@ -2134,7 +2334,7 @@ end
 # from `model`'s variable expressions and equations.
 function _overlap_env_factor_names(model)
     names = Set{String}()
-    seen = IdDict{OpExpr,Nothing}()
+    seen = IdDict{OpExpr, Nothing}()
     function visit(e)
         e isa OpExpr || return
         haskey(seen, e) && return
@@ -2142,13 +2342,21 @@ function _overlap_env_factor_names(model)
         if e.join !== nothing
             for clause in e.join
                 clause isa _OverlapJoinSpec || continue
-                for f in clause.src_env; push!(names, String(f)); end
-                for f in clause.tgt_env; push!(names, String(f)); end
+                for f in clause.src_env
+                    push!(names, String(f))
+                end
+                for f in clause.tgt_env
+                    push!(names, String(f))
+                end
             end
         end
-        for a in e.args; visit(a); end
+        for a in e.args
+            visit(a)
+        end
         visit(e.expr_body); visit(e.filter); visit(e.lower); visit(e.upper)
-        e.values === nothing || for v in e.values; visit(v); end
+        return e.values === nothing || for v in e.values
+            visit(v)
+        end
     end
     for eqs in (model.equations, model.initialization_equations)
         eqs === nothing && continue
@@ -2159,17 +2367,19 @@ function _overlap_env_factor_names(model)
     return names
 end
 
-function _derive_overlap_env_factors(model, index_sets, const_arrays_kw, param_overrides,
-                                     vi_extents,
-                                     registered_functions::AbstractDict=Dict{String,Function}())
-    out = Dict{String,Vector{Float64}}()
+function _derive_overlap_env_factors(
+        model, index_sets, const_arrays_kw, param_overrides,
+        vi_extents,
+        registered_functions::AbstractDict = Dict{String, Function}()
+    )
+    out = Dict{String, Vector{Float64}}()
     want = _overlap_env_factor_names(model)
     isempty(want) && return out                  # byte-identical: no overlap gate
-    env = _build_setup_env(model, const_arrays_kw; param_overrides=param_overrides)
+    env = _build_setup_env(model, const_arrays_kw; param_overrides = param_overrides)
     todo = sort!(String[n for n in want if !haskey(env, n)])
     isempty(todo) && return out                  # every factor is already const data
     # Derived-set extents keyed by SET NAME (value invention keys them by producer id).
-    derived_extents = Dict{String,Int}()
+    derived_extents = Dict{String, Int}()
     for (sname, iset) in index_sets
         (iset isa IndexSet && iset.kind == "derived" && iset.from_faq !== nothing) || continue
         e = get(vi_extents, String(iset.from_faq), nothing)
@@ -2198,8 +2408,10 @@ function _derive_overlap_env_factors(model, index_sets, const_arrays_kw, param_o
             end
             ok || continue
             _open_rule!(n, :setup_array)
-            arr = _materialize_setup_general_map(e, env, index_sets, derived_extents,
-                                                 registered_functions)
+            arr = _materialize_setup_general_map(
+                e, env, index_sets, derived_extents,
+                registered_functions
+            )
             env[n] = arr
             out[n] = vec(Array{Float64}(arr))
             changed = true

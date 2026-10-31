@@ -31,8 +31,8 @@ function _pr_refuses(f, needle::AbstractString; one_cell::Bool = false)
     catch err
         err isa _PR.TreeWalkError || rethrow()
         return err.code == _PR.ERROR_CODES.COMPILER_REFUSED_RULE &&
-               occursin(needle, err.detail) &&
-               (!one_cell || occursin(_PR._ONE_CELL_NOTE, err.detail))
+            occursin(needle, err.detail) &&
+            (!one_cell || occursin(_PR._ONE_CELL_NOTE, err.detail))
     end
     return false
 end
@@ -44,33 +44,60 @@ _pr_rows(rep, tier) = [r for r in rep.rules if r.tier === tier]
 # it), `F` a live forcing buffer read at the output index; with `filt`, only
 # the terms `k ≥ 2`.
 function _pr_rank4_doc(W::Vector{Float64}; past::Int = 0, filt::Bool = false)
-    rng = Dict{String,Any}(n => Any[1, 1] for n in ("a", "b", "c", "d"))
-    agg = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
+    rng = Dict{String, Any}(n => Any[1, 1] for n in ("a", "b", "c", "d"))
+    agg = Dict{String, Any}(
+        "op" => "faq", "semiring" => "sum_product",
         "args" => Any[], "output_idx" => Any["a", "b", "c", "d"],
-        "ranges" => merge(rng, Dict{String,Any}("k" => Any[1, length(W) + past])),
-        "expr" => Dict("op" => "*", "args" => Any[
-            Dict("op" => "index", "args" => Any[
-                Dict("op" => "const", "args" => Any[], "value" => W), "k"]),
-            Dict("op" => "index", "args" => Any["F", "a", "b", "c", "d"])]))
+        "ranges" => merge(rng, Dict{String, Any}("k" => Any[1, length(W) + past])),
+        "expr" => Dict(
+            "op" => "*", "args" => Any[
+                Dict(
+                    "op" => "index", "args" => Any[
+                        Dict("op" => "const", "args" => Any[], "value" => W), "k",
+                    ]
+                ),
+                Dict("op" => "index", "args" => Any["F", "a", "b", "c", "d"]),
+            ]
+        )
+    )
     filt && (agg["filter"] = Dict("op" => ">=", "args" => Any["k", 2]))
-    Dict{String,Any}("esm" => "1.1.0",
+    return Dict{String, Any}(
+        "esm" => "1.1.0",
         "metadata" => Dict("name" => "pr_rank4_contraction"),
-        "models" => Dict("R" => Dict{String,Any}(
-            "variables" => Dict(
-                "F" => Dict("type" => "parameter", "shape" => Any["a", "b", "c", "d"]),
-                "out" => Dict("type" => "unknown", "shape" => Any["a", "b", "c", "d"])),
-            "equations" => Any[Dict(
-                "lhs" => Dict("op" => "faq", "args" => Any[],
-                    "output_idx" => Any["a", "b", "c", "d"], "ranges" => rng,
-                    "expr" => Dict("op" => "D", "args" => Any[Dict("op" => "index",
-                        "args" => Any["out", "a", "b", "c", "d"])], "wrt" => "t")),
-                "rhs" => agg)])))
+        "models" => Dict(
+            "R" => Dict{String, Any}(
+                "variables" => Dict(
+                    "F" => Dict("type" => "parameter", "shape" => Any["a", "b", "c", "d"]),
+                    "out" => Dict("type" => "unknown", "shape" => Any["a", "b", "c", "d"])
+                ),
+                "equations" => Any[
+                    Dict(
+                        "lhs" => Dict(
+                            "op" => "faq", "args" => Any[],
+                            "output_idx" => Any["a", "b", "c", "d"], "ranges" => rng,
+                            "expr" => Dict(
+                                "op" => "D", "args" => Any[
+                                    Dict(
+                                        "op" => "index",
+                                        "args" => Any["out", "a", "b", "c", "d"]
+                                    ),
+                                ], "wrt" => "t"
+                            )
+                        ),
+                        "rhs" => agg
+                    ),
+                ]
+            )
+        )
+    )
 end
 _pr_rank4_build(doc, compiler; kw...) =
     withenv("ESS_CONTRACTION_LOOP_MIN" => "8") do
-        _PR._build_evaluator(doc; initial_conditions = Dict("out[1,1,1,1]" => 0.0),
-            param_arrays = Dict("F" => fill(3.0, 1, 1, 1, 1)), compiler = compiler, kw...)
-    end
+    _PR._build_evaluator(
+        doc; initial_conditions = Dict("out[1,1,1,1]" => 0.0),
+        param_arrays = Dict("F" => fill(3.0, 1, 1, 1, 1)), compiler = compiler, kw...
+    )
+end
 
 @testset "per-cell routes under strict native" begin
 
@@ -100,13 +127,15 @@ _pr_rank4_build(doc, compiler; kw...) =
     @testset "the discrete-cadence materializer compiles once, and is reported" begin
         file = _PR.load_path(joinpath(@__DIR__, "fixtures", "discrete_materialize.esm"))
         W = [1.0 2.0 3.0; 4.0 5.0 6.0]
-        ics = Dict{String,Float64}("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0)
+        ics = Dict{String, Float64}("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0)
         function build(compiler)
             dm = _PR.DiscreteMaterializer(); insp = _PR.BuildInspection()
             src = [0.3, 1.7]
-            r = _PR._build_evaluator(file; initial_conditions = ics,
+            r = _PR._build_evaluator(
+                file; initial_conditions = ics,
                 const_arrays = Dict("W" => W), param_arrays = Dict("src" => src),
-                materialize_out = dm, inspect = insp, compiler = compiler)
+                materialize_out = dm, inspect = insp, compiler = compiler
+            )
             (dm = dm, src = src, report = insp.compiler_report, r = r)
         end
         n, i = build(:native), build(:interpreter)
@@ -138,38 +167,69 @@ _pr_rank4_build(doc, compiler; kw...) =
     # refused, naming the field.
     @testset "a discrete-cadence fill compiles once, or refuses by name" begin
         W = Float64[1, 2, 3, 4, 5, 6, 7, 8]
-        rng = Dict{String,Any}(n => Any[1, 2] for n in ("a", "b", "c", "d"))
-        agg = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
+        rng = Dict{String, Any}(n => Any[1, 2] for n in ("a", "b", "c", "d"))
+        agg = Dict{String, Any}(
+            "op" => "faq", "semiring" => "sum_product",
             "args" => Any[], "output_idx" => Any["a", "b", "c", "d"],
-            "ranges" => merge(rng, Dict{String,Any}("k" => Any[1, length(W)])),
-            "expr" => Dict("op" => "*", "args" => Any[
-                Dict("op" => "index", "args" => Any[
-                    Dict("op" => "const", "args" => Any[], "value" => W), "k"]),
-                Dict("op" => "index", "args" => Any["F", "a", "b", "c", "d"])]))
-        doc = Dict{String,Any}("esm" => "1.1.0",
+            "ranges" => merge(rng, Dict{String, Any}("k" => Any[1, length(W)])),
+            "expr" => Dict(
+                "op" => "*", "args" => Any[
+                    Dict(
+                        "op" => "index", "args" => Any[
+                            Dict("op" => "const", "args" => Any[], "value" => W), "k",
+                        ]
+                    ),
+                    Dict("op" => "index", "args" => Any["F", "a", "b", "c", "d"]),
+                ]
+            )
+        )
+        doc = Dict{String, Any}(
+            "esm" => "1.1.0",
             "metadata" => Dict("name" => "pr_discrete_rank4"),
-            "models" => Dict("R" => Dict{String,Any}(
-                "variables" => Dict(
-                    "F" => Dict("type" => "parameter", "shape" => Any["a", "b", "c", "d"]),
-                    "g" => Dict("type" => "unknown", "shape" => Any["a", "b", "c", "d"]),
-                    "out" => Dict("type" => "unknown", "shape" => Any["a", "b", "c", "d"])),
-                "equations" => Any[
-                    Dict("lhs" => "g", "rhs" => agg),
-                    Dict("lhs" => Dict("op" => "faq", "args" => Any[],
-                            "output_idx" => Any["a", "b", "c", "d"], "ranges" => rng,
-                            "expr" => Dict("op" => "D", "args" => Any[Dict("op" => "index",
-                                "args" => Any["out", "a", "b", "c", "d"])], "wrt" => "t")),
-                         "rhs" => Dict("op" => "faq", "args" => Any[],
-                            "output_idx" => Any["a", "b", "c", "d"], "ranges" => rng,
-                            "expr" => Dict("op" => "index",
-                                "args" => Any["g", "a", "b", "c", "d"])))])))
+            "models" => Dict(
+                "R" => Dict{String, Any}(
+                    "variables" => Dict(
+                        "F" => Dict("type" => "parameter", "shape" => Any["a", "b", "c", "d"]),
+                        "g" => Dict("type" => "unknown", "shape" => Any["a", "b", "c", "d"]),
+                        "out" => Dict("type" => "unknown", "shape" => Any["a", "b", "c", "d"])
+                    ),
+                    "equations" => Any[
+                        Dict("lhs" => "g", "rhs" => agg),
+                        Dict(
+                            "lhs" => Dict(
+                                "op" => "faq", "args" => Any[],
+                                "output_idx" => Any["a", "b", "c", "d"], "ranges" => rng,
+                                "expr" => Dict(
+                                    "op" => "D", "args" => Any[
+                                        Dict(
+                                            "op" => "index",
+                                            "args" => Any["out", "a", "b", "c", "d"]
+                                        ),
+                                    ], "wrt" => "t"
+                                )
+                            ),
+                            "rhs" => Dict(
+                                "op" => "faq", "args" => Any[],
+                                "output_idx" => Any["a", "b", "c", "d"], "ranges" => rng,
+                                "expr" => Dict(
+                                    "op" => "index",
+                                    "args" => Any["g", "a", "b", "c", "d"]
+                                )
+                            )
+                        ),
+                    ]
+                )
+            )
+        )
         ics = Dict("out[$a,$b,$c,$d]" => 0.0 for a in 1:2, b in 1:2, c in 1:2, d in 1:2)
         F = reshape(collect(1.0:16.0), 2, 2, 2, 2)
         build(compiler) = withenv("ESS_CONTRACTION_LOOP_MIN" => "8") do
             dm = _PR.DiscreteMaterializer(); insp = _PR.BuildInspection()
-            _PR._build_evaluator(doc; initial_conditions = ics,
+            _PR._build_evaluator(
+                doc; initial_conditions = ics,
                 param_arrays = Dict("F" => copy(F)), materialize_out = dm,
-                inspect = insp, compiler = compiler)
+                inspect = insp, compiler = compiler
+            )
             (dm, insp.compiler_report)
         end
         (dn, rn), (di, _) = build(:native), build(:interpreter)
@@ -181,23 +241,45 @@ _pr_rank4_build(doc, compiler; kw...) =
         ragged = deepcopy(doc)
         m = ragged["models"]["R"]
         m["variables"] = Dict(n => Dict(v..., "shape" => Any["a"]) for (n, v) in m["variables"])
-        m["equations"][1]["rhs"] = Dict{String,Any}("op" => "faq", "semiring" => "sum_product",
+        m["equations"][1]["rhs"] = Dict{String, Any}(
+            "op" => "faq", "semiring" => "sum_product",
             "args" => Any[], "output_idx" => Any["a"],
-            "ranges" => Dict{String,Any}("a" => Any[1, N], "k" => Any[1,
-                Dict("op" => "-", "args" => Any[Dict("op" => "+", "args" => Any["a", 4]), "a"])]),
-            "expr" => Dict("op" => "*", "args" => Any[
-                Dict("op" => "index", "args" => Any["F", "a"]), "k"]))
-        m["equations"][2] = Dict("lhs" => Dict("op" => "faq", "args" => Any[],
+            "ranges" => Dict{String, Any}(
+                "a" => Any[1, N], "k" => Any[
+                    1,
+                    Dict("op" => "-", "args" => Any[Dict("op" => "+", "args" => Any["a", 4]), "a"]),
+                ]
+            ),
+            "expr" => Dict(
+                "op" => "*", "args" => Any[
+                    Dict("op" => "index", "args" => Any["F", "a"]), "k",
+                ]
+            )
+        )
+        m["equations"][2] = Dict(
+            "lhs" => Dict(
+                "op" => "faq", "args" => Any[],
                 "output_idx" => Any["a"], "ranges" => Dict("a" => Any[1, N]),
-                "expr" => Dict("op" => "D", "wrt" => "t", "args" => Any[
-                    Dict("op" => "index", "args" => Any["out", "a"])])),
-            "rhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["a"],
+                "expr" => Dict(
+                    "op" => "D", "wrt" => "t", "args" => Any[
+                        Dict("op" => "index", "args" => Any["out", "a"]),
+                    ]
+                )
+            ),
+            "rhs" => Dict(
+                "op" => "faq", "args" => Any[], "output_idx" => Any["a"],
                 "ranges" => Dict("a" => Any[1, N]),
-                "expr" => Dict("op" => "index", "args" => Any["g", "a"])))
-        build_r(compiler) = (dm = _PR.DiscreteMaterializer();
-            _PR._build_evaluator(ragged; initial_conditions = Dict("out[$a]" => 0.0 for a in 1:N),
+                "expr" => Dict("op" => "index", "args" => Any["g", "a"])
+            )
+        )
+        build_r(compiler) = (
+            dm = _PR.DiscreteMaterializer();
+            _PR._build_evaluator(
+                ragged; initial_conditions = Dict("out[$a]" => 0.0 for a in 1:N),
                 param_arrays = Dict("F" => collect(1.0:N)), materialize_out = dm,
-                compiler = compiler); dm)
+                compiler = compiler
+            ); dm
+        )
         @test _pr_refuses(() -> build_r(:native), "refuses 'g'"; one_cell = true)
         @test build_r(:interpreter).caches["g"] == [10.0 * a for a in 1:N]
     end
@@ -205,20 +287,26 @@ _pr_rank4_build(doc, compiler; kw...) =
     # ── faq-valued initialization equations (#482) ────────────────────────────
     iset = Dict("x" => _PR.IndexSet("interval"; size = 5))
     uvar() = Dict("u" => _PR.ModelVariable(_PR.UnknownVariable; shape = ["x"]))
-    faq1(body) = _PR.OpExpr("faq", _PR.ASTExpr[]; output_idx = Any["i"],
-                            ranges = Dict("i" => Any[1, 5]), expr_body = body)
+    faq1(body) = _PR.OpExpr(
+        "faq", _PR.ASTExpr[]; output_idx = Any["i"],
+        ranges = Dict("i" => Any[1, 5]), expr_body = body
+    )
     zero_eq() = _PR.Equation(faq1(_Didx("u", _v("i"))), faq1(_n(0.0)))
     seed(model, compiler; kw...) = begin
         insp = _PR.BuildInspection()
-        r = _PR._build_evaluator_impl(model; compiler = compiler, index_sets = iset,
-                                      inspect = insp, kw...)
+        r = _PR._build_evaluator_impl(
+            model; compiler = compiler, index_sets = iset,
+            inspect = insp, kw...
+        )
         (r[2], r[5], insp.compiler_report)
     end
 
     @testset "a faq initialization equation is a compiled fill, bit-identically" begin
         body = _op("+", _op("*", _n(0.37), _v("i")), _op("/", _n(1.0), _op("+", _v("i"), _n(2.0))))
-        m = _PR.Model(uvar(), [zero_eq()];
-                      initialization_equations = [_PR.Equation(_v("u"), faq1(body))])
+        m = _PR.Model(
+            uvar(), [zero_eq()];
+            initialization_equations = [_PR.Equation(_v("u"), faq1(body))]
+        )
         un, vn, rn = seed(m, :native)
         ui, vi, ri = seed(m, :interpreter)
         @test all(un[vn["u[$i]"]] === ui[vi["u[$i]"]] for i in 1:5)
@@ -232,12 +320,16 @@ _pr_rank4_build(doc, compiler; kw...) =
     # alike. `max_sum`'s 0̄ is -Inf, so a filter read as 0.0 would show.
     @testset "a faq initialization equation with a pointwise filter" begin
         for (sr, zb) in (("sum_product", 0.0), ("max_sum", -Inf))
-            agg = _PR.OpExpr("faq", _PR.ASTExpr[]; output_idx = Any["i"],
-                             ranges = Dict("i" => Any[1, 5]), semiring = sr,
-                             expr_body = _op("*", _n(10.0), _v("i")),
-                             filter = _op("<=", _v("i"), _n(2.0)))
-            m = _PR.Model(uvar(), [zero_eq()];
-                          initialization_equations = [_PR.Equation(_v("u"), agg)])
+            agg = _PR.OpExpr(
+                "faq", _PR.ASTExpr[]; output_idx = Any["i"],
+                ranges = Dict("i" => Any[1, 5]), semiring = sr,
+                expr_body = _op("*", _n(10.0), _v("i")),
+                filter = _op("<=", _v("i"), _n(2.0))
+            )
+            m = _PR.Model(
+                uvar(), [zero_eq()];
+                initialization_equations = [_PR.Equation(_v("u"), agg)]
+            )
             un, vn, rn = seed(m, :native)
             ui, vi, _ = seed(m, :interpreter)
             @test [ui[vi["u[$i]"]] for i in 1:5] == [10.0, 20.0, zb, zb, zb]
@@ -250,9 +342,15 @@ _pr_rank4_build(doc, compiler; kw...) =
     # the way the right-hand side does.
     Fvar() = Dict("F" => _PR.ModelVariable(_PR.ParameterVariable; shape = ["x"]))
     @testset "a faq initialization equation reading a forcing buffer is a compiled fill" begin
-        m = _PR.Model(merge(uvar(), Fvar()), [zero_eq()];
-                      initialization_equations = [_PR.Equation(_v("u"),
-                          faq1(_op("*", _n(2.0), _idx("F", _v("i")))))])
+        m = _PR.Model(
+            merge(uvar(), Fvar()), [zero_eq()];
+            initialization_equations = [
+                _PR.Equation(
+                    _v("u"),
+                    faq1(_op("*", _n(2.0), _idx("F", _v("i"))))
+                ),
+            ]
+        )
         F = collect(1.0:5.0)
         un, vn, rn = seed(m, :native; param_arrays = Dict("F" => F))
         ui, vi, _ = seed(m, :interpreter; param_arrays = Dict("F" => F))
@@ -265,13 +363,27 @@ _pr_rank4_build(doc, compiler; kw...) =
     # the compiled fill takes that state as a snapshot of its current values,
     # beside a live forcing buffer read at the output index.
     @testset "a faq initialization equation reading another state is a compiled fill" begin
-        vvar = Dict("v" => _PR.ModelVariable(_PR.UnknownVariable; shape = ["x"],
-                                             default = 0.5))
+        vvar = Dict(
+            "v" => _PR.ModelVariable(
+                _PR.UnknownVariable; shape = ["x"],
+                default = 0.5
+            )
+        )
         vzero = _PR.Equation(faq1(_Didx("v", _v("i"))), faq1(_n(0.0)))
-        m = _PR.Model(merge(uvar(), Fvar(), vvar), [zero_eq(), vzero];
-                      initialization_equations = [_PR.Equation(_v("u"),
-                          faq1(_op("+", _op("*", _n(2.0), _idx("F", _v("i"))),
-                                   _idx("v", _v("i")))))])
+        m = _PR.Model(
+            merge(uvar(), Fvar(), vvar), [zero_eq(), vzero];
+            initialization_equations = [
+                _PR.Equation(
+                    _v("u"),
+                    faq1(
+                        _op(
+                            "+", _op("*", _n(2.0), _idx("F", _v("i"))),
+                            _idx("v", _v("i"))
+                        )
+                    )
+                ),
+            ]
+        )
         F = collect(1.0:5.0)
         un, vn, rn = seed(m, :native; param_arrays = Dict("F" => F))
         ui, vi, _ = seed(m, :interpreter; param_arrays = Dict("F" => F))
@@ -284,9 +396,15 @@ _pr_rank4_build(doc, compiler; kw...) =
     # tree at every cell against the state as it is being written. A strict
     # compiler refuses that by name; the interpreter takes it.
     @testset "a self-reading faq initialization equation refuses under native" begin
-        m = _PR.Model(uvar(), [zero_eq()];
-                      initialization_equations = [_PR.Equation(_v("u"),
-                          faq1(_op("+", _op("*", _n(2.0), _v("i")), _idx("u", _v("i")))))])
+        m = _PR.Model(
+            uvar(), [zero_eq()];
+            initialization_equations = [
+                _PR.Equation(
+                    _v("u"),
+                    faq1(_op("+", _op("*", _n(2.0), _v("i")), _idx("u", _v("i"))))
+                ),
+            ]
+        )
         e = try
             seed(m, :native); nothing
         catch err
@@ -302,8 +420,10 @@ _pr_rank4_build(doc, compiler; kw...) =
 
     # ── Field initial conditions answered once per field (#482) ───────────────
     @testset "a broadcast-constant field ic is evaluated once and filled" begin
-        path = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "scalar_ic",
-                        "fixtures", "scalar_ic_in_array_model.esm")
+        path = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "conformance", "scalar_ic",
+            "fixtures", "scalar_ic_in_array_model.esm"
+        )
         pn = esm_problem(path, (0.0, 1.0))
         pi_ = esm_problem(path, (0.0, 1.0); compiler = :interpreter)
         @test pn.u0 == pi_.u0
@@ -316,22 +436,41 @@ _pr_rank4_build(doc, compiler; kw...) =
     # probe: the fold names the empty target first, under every compiler.
     @testset "a field ic over an empty cell set is the document's error" begin
         eqs(rhs) = Any[
-            Dict("lhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+            Dict(
+                "lhs" => Dict(
+                    "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
                     "ranges" => Dict("i" => Dict("from" => "x")),
-                    "expr" => Dict("op" => "D", "wrt" => "t",
-                        "args" => Any[Dict("op" => "index", "args" => Any["f", "i"])])),
-                 "rhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
-                    "ranges" => Dict("i" => Dict("from" => "x")), "expr" => 0.0)),
-            Dict("lhs" => Dict("op" => "ic", "args" => Any["f"]), "rhs" => rhs)]
-        doc(rhs) = Dict{String,Any}("esm" => "1.1.0",
+                    "expr" => Dict(
+                        "op" => "D", "wrt" => "t",
+                        "args" => Any[Dict("op" => "index", "args" => Any["f", "i"])]
+                    )
+                ),
+                "rhs" => Dict(
+                    "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                    "ranges" => Dict("i" => Dict("from" => "x")), "expr" => 0.0
+                )
+            ),
+            Dict("lhs" => Dict("op" => "ic", "args" => Any["f"]), "rhs" => rhs),
+        ]
+        doc(rhs) = Dict{String, Any}(
+            "esm" => "1.1.0",
             "metadata" => Dict("name" => "pr_empty_ic"),
             "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 0)),
-            "models" => Dict("N" => Dict{String,Any}(
-                "variables" => Dict("f" => Dict("type" => "unknown", "shape" => Any["x"])),
-                "equations" => eqs(rhs))))
-        for rhs in (1.5, Dict("op" => "sin", "args" => Any[
-                        Dict("op" => "index", "args" => Any["f", 1])])),
-            c in (:native, :interpreter)
+            "models" => Dict(
+                "N" => Dict{String, Any}(
+                    "variables" => Dict("f" => Dict("type" => "unknown", "shape" => Any["x"])),
+                    "equations" => eqs(rhs)
+                )
+            )
+        )
+        for rhs in (
+                    1.5, Dict(
+                        "op" => "sin", "args" => Any[
+                            Dict("op" => "index", "args" => Any["f", 1]),
+                        ]
+                    ),
+                ),
+                c in (:native, :interpreter)
             e = try
                 esm_problem(doc(rhs), (0.0, 1.0); compiler = c); nothing
             catch err
@@ -347,21 +486,35 @@ _pr_rank4_build(doc, compiler; kw...) =
     # with its arity error. `native` rejects it with the same error rather than
     # a refusal that blames the compiler; `min`, which is n-ary, builds.
     @testset "a malformed operator arity is the document's error under native" begin
-        doc(rhs) = Dict{String,Any}("esm" => "1.1.0",
+        doc(rhs) = Dict{String, Any}(
+            "esm" => "1.1.0",
             "metadata" => Dict("name" => "pr_arity"),
-            "models" => Dict("U" => Dict{String,Any}(
-                "variables" => Dict("y" => Dict("type" => "unknown", "default" => 2.0),
-                                    "z" => Dict("type" => "unknown", "default" => 0.5)),
-                "equations" => Any[
-                    Dict("lhs" => Dict("op" => "D", "args" => Any["y"], "wrt" => "t"),
-                         "rhs" => rhs),
-                    Dict("lhs" => Dict("op" => "D", "args" => Any["z"], "wrt" => "t"),
-                         "rhs" => 0.0)])))
+            "models" => Dict(
+                "U" => Dict{String, Any}(
+                    "variables" => Dict(
+                        "y" => Dict("type" => "unknown", "default" => 2.0),
+                        "z" => Dict("type" => "unknown", "default" => 0.5)
+                    ),
+                    "equations" => Any[
+                        Dict(
+                            "lhs" => Dict("op" => "D", "args" => Any["y"], "wrt" => "t"),
+                            "rhs" => rhs
+                        ),
+                        Dict(
+                            "lhs" => Dict("op" => "D", "args" => Any["z"], "wrt" => "t"),
+                            "rhs" => 0.0
+                        ),
+                    ]
+                )
+            )
+        )
         op(o, a...) = Dict("op" => o, "args" => Any[a...])
-        for (rhs, needle) in ((op("neg", op("/", "y", 2.0, 3.0)), "/ expects 2 args, got 3"),
-                              (op("-", "y", 2.0, "z"), "- expects 1 or 2 args"),
-                              (op("^", "y", 2.0, "z"), "^ expects 2 args, got 3"),
-                              (op("atan2", "y", 2.0, "z"), "atan2 expects 2 args, got 3"))
+        for (rhs, needle) in (
+                (op("neg", op("/", "y", 2.0, 3.0)), "/ expects 2 args, got 3"),
+                (op("-", "y", 2.0, "z"), "- expects 1 or 2 args"),
+                (op("^", "y", 2.0, "z"), "^ expects 2 args, got 3"),
+                (op("atan2", "y", 2.0, "z"), "atan2 expects 2 args, got 3"),
+            )
             for c in (:native, :interpreter)
                 e = try
                     p = esm_problem(doc(rhs), (0.0, 1.0); compiler = c)
@@ -390,37 +543,66 @@ _pr_rank4_build(doc, compiler; kw...) =
     # cannot compile is provoked here. The problem is built first, at the
     # default budgets: under zero budgets its scalar equation would itself be
     # left on the scalar walker, which native refuses at build.
-    mk_doc() = Dict{String,Any}("esm" => "1.1.0",
+    mk_doc() = Dict{String, Any}(
+        "esm" => "1.1.0",
         "metadata" => Dict("name" => "pr_observed_routes"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 3)),
-        "models" => Dict("M" => Dict{String,Any}(
-            "variables" => Dict(
-                "c" => Dict("type" => "unknown", "default" => 1.0),
-                "h" => Dict("type" => "unknown", "shape" => Any["x"]),
-                "k" => Dict("type" => "unknown", "shape" => Any["x"])),
-            "equations" => Any[
-                Dict("lhs" => Dict("op" => "D", "args" => Any["c"], "wrt" => "t"),
-                     "rhs" => 0.0),
-                Dict("lhs" => "h", "rhs" => Dict("op" => "makearray", "args" => Any[],
-                    "regions" => Any[Any[Any[1, 1]], Any[Any[2, 3]]],
-                    "values" => Any[5.0, 7.0])),
-                Dict("lhs" => "k", "rhs" => Dict("op" => "faq", "args" => Any[],
-                    "output_idx" => Any["i"],
-                    "ranges" => Dict("i" => Dict("from" => "x")),
-                    "expr" => Dict("op" => "*", "args" => Any[2.0, "i"])))],
-            "tests" => Any[Dict("id" => "h_cell",
-                "time_span" => Dict("start" => 0.0, "end" => 1.0),
-                "assertions" => Any[Dict("variable" => "h", "time" => 0.0,
-                    "coords" => Dict("x" => 2), "expected" => 7.0)])])))
+        "models" => Dict(
+            "M" => Dict{String, Any}(
+                "variables" => Dict(
+                    "c" => Dict("type" => "unknown", "default" => 1.0),
+                    "h" => Dict("type" => "unknown", "shape" => Any["x"]),
+                    "k" => Dict("type" => "unknown", "shape" => Any["x"])
+                ),
+                "equations" => Any[
+                    Dict(
+                        "lhs" => Dict("op" => "D", "args" => Any["c"], "wrt" => "t"),
+                        "rhs" => 0.0
+                    ),
+                    Dict(
+                        "lhs" => "h", "rhs" => Dict(
+                            "op" => "makearray", "args" => Any[],
+                            "regions" => Any[Any[Any[1, 1]], Any[Any[2, 3]]],
+                            "values" => Any[5.0, 7.0]
+                        )
+                    ),
+                    Dict(
+                        "lhs" => "k", "rhs" => Dict(
+                            "op" => "faq", "args" => Any[],
+                            "output_idx" => Any["i"],
+                            "ranges" => Dict("i" => Dict("from" => "x")),
+                            "expr" => Dict("op" => "*", "args" => Any[2.0, "i"])
+                        )
+                    ),
+                ],
+                "tests" => Any[
+                    Dict(
+                        "id" => "h_cell",
+                        "time_span" => Dict("start" => 0.0, "end" => 1.0),
+                        "assertions" => Any[
+                            Dict(
+                                "variable" => "h", "time" => 0.0,
+                                "coords" => Dict("x" => 2), "expected" => 7.0
+                            ),
+                        ]
+                    ),
+                ]
+            )
+        )
+    )
 
-    no_codegen(f) = withenv(f, "ESS_CODEGEN_NODE_BUDGET" => "0",
-                            "ESS_DUAL_CODEGEN_NODE_BUDGET" => "0")
+    no_codegen(f) = withenv(
+        f, "ESS_CODEGEN_NODE_BUDGET" => "0",
+        "ESS_DUAL_CODEGEN_NODE_BUDGET" => "0"
+    )
 
     @testset "observed_field: a read native cannot compile refuses" begin
         p0 = esm_problem(mk_doc(), (0.0, 1.0))
-        @test _pr_refuses(() -> no_codegen() do
-                              observed_field(p0, "h")
-                          end, "refuses 'M.h'")
+        @test _pr_refuses(
+            () -> no_codegen() do
+                observed_field(p0, "h")
+            end, "refuses 'M.h'"
+        )
         pn = esm_problem(mk_doc(), (0.0, 1.0))
         pi_ = esm_problem(mk_doc(), (0.0, 1.0); compiler = :interpreter)
         @test observed_field(pn, "h") == observed_field(pi_, "h") == [5.0, 7.0, 7.0]
@@ -447,7 +629,7 @@ _pr_rank4_build(doc, compiler; kw...) =
         @test observed_field(pi_, "k") == [2.0, 4.0, 6.0]
         @test _PR._CELLWISE_FASTPATH_HITS[] > hits0
         @test [r.tier for r in compiler_report(pi_).rules if r.kind === :observed] ==
-              [:output_compiled_once]
+            [:output_compiled_once]
     end
 
     @testset "inline-test assertions run under the problem's compiler" begin
@@ -467,10 +649,15 @@ _pr_rank4_build(doc, compiler; kw...) =
     # ── seed_expression_ic! (#482) ─────────────────────────────────────────────
     @testset "seed_expression_ic! compiles once and agrees with the per-cell walk" begin
         vm = Dict("M.u[$i,$j]" => (j - 1) * 3 + i for i in 1:3, j in 1:2)
-        vm = Dict{String,Int}(vm)
-        expr = _PR.expression_from_json(Dict{String,Any}("op" => "+", "args" => Any[
-            Dict{String,Any}("op" => "*", "args" => Any["x", "x"]),
-            Dict{String,Any}("op" => "sin", "args" => Any["y"])]))
+        vm = Dict{String, Int}(vm)
+        expr = _PR.expression_from_json(
+            Dict{String, Any}(
+                "op" => "+", "args" => Any[
+                    Dict{String, Any}("op" => "*", "args" => Any["x", "x"]),
+                    Dict{String, Any}("op" => "sin", "args" => Any["y"]),
+                ]
+            )
+        )
         coords = ["x" => [0.1, 0.2, 0.3], "y" => [1.0, 2.0]]
         uc = seed_expression_ic!(zeros(6), vm, "M.u", expr, coords)
         ur = _PR._with_compiler_plan(_PR._compiler_plan(:interpreter)) do
@@ -485,34 +672,63 @@ _pr_rank4_build(doc, compiler; kw...) =
     # too. `T[i] = h[1]·i` names the makearray observed `h`: under `native` the
     # compiled program materializes `h` as a level of its own, and under
     # `interpreter` the build-time route materializes it per cell.
-    obs_doc() = Dict{String,Any}("esm" => "1.1.0",
+    obs_doc() = Dict{String, Any}(
+        "esm" => "1.1.0",
         "metadata" => Dict("name" => "pr_observed_memo"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 3)),
-        "models" => Dict("M" => Dict{String,Any}(
-            "variables" => Dict(
-                "c" => Dict("type" => "unknown", "default" => 1.0),
-                "s" => Dict("type" => "parameter", "default" => 1.0),
-                "y" => Dict("type" => "unknown", "shape" => Any["x"]),
-                "h" => Dict("type" => "unknown", "shape" => Any["x"]),
-                "T" => Dict("type" => "unknown", "shape" => Any["x"])),
-            "equations" => Any[
-                Dict("lhs" => Dict("op" => "D", "args" => Any["c"], "wrt" => "t"),
-                     "rhs" => Dict("op" => "*", "args" => Any[
-                         Dict("op" => "neg", "args" => Any["s"]), "c"])),
-                Dict("lhs" => "y", "rhs" => Dict("op" => "faq", "args" => Any[],
-                    "output_idx" => Any["i"],
-                    "ranges" => Dict("i" => Dict("from" => "x")),
-                    "expr" => Dict("op" => "*", "args" => Any["s", "i"]))),
-                Dict("lhs" => "h", "rhs" => Dict("op" => "makearray", "args" => Any[],
-                    "regions" => Any[Any[Any[1, 1]], Any[Any[2, 3]]],
-                    "values" => Any[5.0, 7.0])),
-                Dict("lhs" => "T", "rhs" => Dict("op" => "faq", "args" => Any[],
-                    "output_idx" => Any["i"],
-                    "ranges" => Dict("i" => Dict("from" => "x")),
-                    "expr" => Dict("op" => "*", "args" => Any[
-                        Dict("op" => "index", "args" => Any["h", 1]), "i"])))])))
-    obs_rows(prob, name) = [r for r in compiler_report(prob).rules
-                            if r.kind === :observed && r.rule == name]
+        "models" => Dict(
+            "M" => Dict{String, Any}(
+                "variables" => Dict(
+                    "c" => Dict("type" => "unknown", "default" => 1.0),
+                    "s" => Dict("type" => "parameter", "default" => 1.0),
+                    "y" => Dict("type" => "unknown", "shape" => Any["x"]),
+                    "h" => Dict("type" => "unknown", "shape" => Any["x"]),
+                    "T" => Dict("type" => "unknown", "shape" => Any["x"])
+                ),
+                "equations" => Any[
+                    Dict(
+                        "lhs" => Dict("op" => "D", "args" => Any["c"], "wrt" => "t"),
+                        "rhs" => Dict(
+                            "op" => "*", "args" => Any[
+                                Dict("op" => "neg", "args" => Any["s"]), "c",
+                            ]
+                        )
+                    ),
+                    Dict(
+                        "lhs" => "y", "rhs" => Dict(
+                            "op" => "faq", "args" => Any[],
+                            "output_idx" => Any["i"],
+                            "ranges" => Dict("i" => Dict("from" => "x")),
+                            "expr" => Dict("op" => "*", "args" => Any["s", "i"])
+                        )
+                    ),
+                    Dict(
+                        "lhs" => "h", "rhs" => Dict(
+                            "op" => "makearray", "args" => Any[],
+                            "regions" => Any[Any[Any[1, 1]], Any[Any[2, 3]]],
+                            "values" => Any[5.0, 7.0]
+                        )
+                    ),
+                    Dict(
+                        "lhs" => "T", "rhs" => Dict(
+                            "op" => "faq", "args" => Any[],
+                            "output_idx" => Any["i"],
+                            "ranges" => Dict("i" => Dict("from" => "x")),
+                            "expr" => Dict(
+                                "op" => "*", "args" => Any[
+                                    Dict("op" => "index", "args" => Any["h", 1]), "i",
+                                ]
+                            )
+                        )
+                    ),
+                ]
+            )
+        )
+    )
+    obs_rows(prob, name) = [
+        r for r in compiler_report(prob).rules
+            if r.kind === :observed && r.rule == name
+    ]
 
     @testset "observed_field: a reused BuildInspection answers for its own build" begin
         insp = _PR.BuildInspection()
@@ -551,7 +767,7 @@ _pr_rank4_build(doc, compiler; kw...) =
         @test observed_field(p2, "y") == [2.0, 4.0, 6.0]
         for pr in (remake(p2; p = Dict("s" => 5.0)), remake(p2; u0 = Dict("c" => 9.0)))
             @test observed_field(pr, "y") == _PR._observed_field_impl(pr, "y") ==
-                  [2.0, 4.0, 6.0]
+                [2.0, 4.0, 6.0]
         end
         @test length(obs_rows(p2, "y")) == 1
     end
@@ -568,9 +784,13 @@ _pr_rank4_build(doc, compiler; kw...) =
     end
 
     @testset "the per-cell signal counts this task's evaluations only" begin
-        h = _PR.expression_from_json(Dict{String,Any}("op" => "makearray",
-            "args" => Any[], "regions" => Any[Any[Any[1, 1]], Any[Any[2, 3]]],
-            "values" => Any[5.0, 7.0]))
+        h = _PR.expression_from_json(
+            Dict{String, Any}(
+                "op" => "makearray",
+                "args" => Any[], "regions" => Any[Any[Any[1, 1]], Any[Any[2, 3]]],
+                "values" => Any[5.0, 7.0]
+            )
+        )
         cells = [[1], [2], [3]]
         v, n = _PR._counting_percell() do
             fetch(Threads.@spawn _PR.evaluate_cellwise(h, cells))
@@ -594,22 +814,44 @@ _pr_rank4_build(doc, compiler; kw...) =
     code_of(e) = e isa _PR.TreeWalkError ? e.code : nothing
 
     @testset "seed_expression_ic!: an undeclared name is the caller's error" begin
-        vm = Dict{String,Int}("M.u[$i]" => i for i in 1:3)
-        bad = _PR.expression_from_json(Dict{String,Any}("op" => "*",
-                                                        "args" => Any["x", "q"]))
+        vm = Dict{String, Int}("M.u[$i]" => i for i in 1:3)
+        bad = _PR.expression_from_json(
+            Dict{String, Any}(
+                "op" => "*",
+                "args" => Any["x", "q"]
+            )
+        )
         native(f) = _PR._with_compiler_plan(f, _PR._compiler_plan(:native))
-        @test err_of(() -> native(() -> seed_expression_ic!(zeros(3), vm, "M.u", bad,
-                                                            ["x" => [1.0, 2.0, 3.0]]))) isa
-              _PR.UnboundVariableError
+        @test err_of(
+            () -> native(
+                () -> seed_expression_ic!(
+                    zeros(3), vm, "M.u", bad,
+                    ["x" => [1.0, 2.0, 3.0]]
+                )
+            )
+        ) isa
+            _PR.UnboundVariableError
         # …and one that evaluates per cell but not once still refuses.
-        tx = _PR.expression_from_json(Dict{String,Any}("op" => "*", "args" => Any["t", 2.0]))
-        @test _pr_refuses(() -> native(() -> seed_expression_ic!(zeros(3), vm, "M.u", tx,
-                                                                 ["t" => [1.0, 2.0, 3.0]])),
-                          "seed_expression_ic!(M.u)"; one_cell = true)
+        tx = _PR.expression_from_json(Dict{String, Any}("op" => "*", "args" => Any["t", 2.0]))
+        @test _pr_refuses(
+            () -> native(
+                () -> seed_expression_ic!(
+                    zeros(3), vm, "M.u", tx,
+                    ["t" => [1.0, 2.0, 3.0]]
+                )
+            ),
+            "seed_expression_ic!(M.u)"; one_cell = true
+        )
         # Over no cell at all (a variable the map does not hold), nothing is
         # evaluated first, and the refusal does not say one cell was.
-        e = err_of(() -> native(() -> seed_expression_ic!(zeros(3), vm, "M.v", tx,
-                                                          ["t" => [1.0, 2.0, 3.0]])))
+        e = err_of(
+            () -> native(
+                () -> seed_expression_ic!(
+                    zeros(3), vm, "M.v", tx,
+                    ["t" => [1.0, 2.0, 3.0]]
+                )
+            )
+        )
         @test code_of(e) == _PR.ERROR_CODES.COMPILER_REFUSED_RULE
         @test occursin("over 0 cells", e.detail)
         @test !occursin(_PR._ONE_CELL_NOTE, e.detail)
@@ -619,9 +861,12 @@ _pr_rank4_build(doc, compiler; kw...) =
         cvar = Dict("C" => _PR.ModelVariable(_PR.ParameterVariable; shape = ["x"]))
         for (body, code) in (
                 (_op("*", _n(2.0), _v("q")), "E_TREEWALK_UNBOUND_VARIABLE"),
-                (_op("*", _v("i"), _idx("C", _PR.IntExpr(11))), "E_TREEWALK_CONSTARRAY_OOB"))
-            m = _PR.Model(merge(uvar(), cvar), [zero_eq()];
-                          initialization_equations = [_PR.Equation(_v("u"), faq1(body))])
+                (_op("*", _v("i"), _idx("C", _PR.IntExpr(11))), "E_TREEWALK_CONSTARRAY_OOB"),
+            )
+            m = _PR.Model(
+                merge(uvar(), cvar), [zero_eq()];
+                initialization_equations = [_PR.Equation(_v("u"), faq1(body))]
+            )
             for c in (:native, :interpreter)
                 e = err_of(() -> seed(m, c; const_arrays = Dict("C" => collect(1.0:5.0))))
                 @test code_of(e) == code
@@ -631,20 +876,30 @@ _pr_rank4_build(doc, compiler; kw...) =
 
     @testset "discrete-cadence materializer: an out-of-range gather, an undeclared name" begin
         W = [1.0 2.0 3.0; 4.0 5.0 6.0]
-        ics = Dict{String,Float64}("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0)
-        raw() = JSON3.read(read(joinpath(@__DIR__, "fixtures", "discrete_materialize.esm"),
-                                String), Dict{String,Any})
+        ics = Dict{String, Float64}("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0)
+        raw() = JSON3.read(
+            read(
+                joinpath(@__DIR__, "fixtures", "discrete_materialize.esm"),
+                String
+            ), Dict{String, Any}
+        )
         oob = raw(); oob["models"]["M"]["equations"][2]["rhs"]["ranges"]["i"] = Any[1, 3]
         unb = raw()
         unb["models"]["M"]["equations"][2]["rhs"]["expr"]["args"][1] =
             Dict("op" => "index", "args" => Any["Wq", "i", "j"])
-        for (doc, code) in ((oob, "E_TREEWALK_CONSTARRAY_OOB"),
-                            (unb, "E_TREEWALK_UNBOUND_VARIABLE"))
+        for (doc, code) in (
+                (oob, "E_TREEWALK_CONSTARRAY_OOB"),
+                (unb, "E_TREEWALK_UNBOUND_VARIABLE"),
+            )
             file = _PR.load_string(JSON3.write(doc))
             for c in (:native, :interpreter)
-                e = err_of(() -> _PR._build_evaluator(file; initial_conditions = ics,
-                    const_arrays = Dict("W" => W), param_arrays = Dict("src" => [1.0, 1.0]),
-                    materialize_out = _PR.DiscreteMaterializer(), compiler = c))
+                e = err_of(
+                    () -> _PR._build_evaluator(
+                        file; initial_conditions = ics,
+                        const_arrays = Dict("W" => W), param_arrays = Dict("src" => [1.0, 1.0]),
+                        materialize_out = _PR.DiscreteMaterializer(), compiler = c
+                    )
+                )
                 @test code_of(e) == code
             end
         end
@@ -686,8 +941,10 @@ _pr_rank4_build(doc, compiler; kw...) =
         @test n_long == n_short
         e_oob, _ = lowerings(100_000, 1)
         @test code_of(e_oob) == "E_TREEWALK_CONSTARRAY_OOB"
-        fi!, ui, pi_, _, vi = _pr_rank4_build(_pr_rank4_doc(collect(1.0:8.0); filt),
-                                              :interpreter)
+        fi!, ui, pi_, _, vi = _pr_rank4_build(
+            _pr_rank4_doc(collect(1.0:8.0); filt),
+            :interpreter
+        )
         di = similar(ui); fi!(di, ui, pi_, 0.0)
         @test di[vi["out[1,1,1,1]"]] == want(8)
     end
@@ -701,26 +958,54 @@ _pr_rank4_build(doc, compiler; kw...) =
     # at the ends of its contracted range when it is long, which the note says.
     @testset "a contraction no compile-once form takes is refused by name" begin
         N = 3
-        rag(len) = Dict{String,Any}("esm" => "1.1.0",
+        rag(len) = Dict{String, Any}(
+            "esm" => "1.1.0",
             "metadata" => Dict("name" => "pr_ragged_forcing"),
-            "models" => Dict("R" => Dict{String,Any}(
-                "variables" => Dict(
-                    "F" => Dict("type" => "parameter", "shape" => Any["i"]),
-                    "u" => Dict("type" => "unknown", "shape" => Any["i"])),
-                "equations" => Any[Dict(
-                    "lhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
-                        "ranges" => Dict("i" => Any[1, N]),
-                        "expr" => Dict("op" => "D", "wrt" => "t", "args" => Any[
-                            Dict("op" => "index", "args" => Any["u", "i"])])),
-                    "rhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
-                        "ranges" => Dict("i" => Any[1, N], "k" => Any[1,
-                            Dict("op" => "-", "args" => Any[
-                                Dict("op" => "+", "args" => Any["i", len]), "i"])]),
-                        "expr" => Dict("op" => "*", "args" => Any[
-                            Dict("op" => "index", "args" => Any["F", "i"]), "k"])))])))
-        build(len, c) = _PR._build_evaluator(rag(len);
+            "models" => Dict(
+                "R" => Dict{String, Any}(
+                    "variables" => Dict(
+                        "F" => Dict("type" => "parameter", "shape" => Any["i"]),
+                        "u" => Dict("type" => "unknown", "shape" => Any["i"])
+                    ),
+                    "equations" => Any[
+                        Dict(
+                            "lhs" => Dict(
+                                "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                                "ranges" => Dict("i" => Any[1, N]),
+                                "expr" => Dict(
+                                    "op" => "D", "wrt" => "t", "args" => Any[
+                                        Dict("op" => "index", "args" => Any["u", "i"]),
+                                    ]
+                                )
+                            ),
+                            "rhs" => Dict(
+                                "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                                "ranges" => Dict(
+                                    "i" => Any[1, N], "k" => Any[
+                                        1,
+                                        Dict(
+                                            "op" => "-", "args" => Any[
+                                                Dict("op" => "+", "args" => Any["i", len]), "i",
+                                            ]
+                                        ),
+                                    ]
+                                ),
+                                "expr" => Dict(
+                                    "op" => "*", "args" => Any[
+                                        Dict("op" => "index", "args" => Any["F", "i"]), "k",
+                                    ]
+                                )
+                            )
+                        ),
+                    ]
+                )
+            )
+        )
+        build(len, c) = _PR._build_evaluator(
+            rag(len);
             initial_conditions = Dict("u[$i]" => 0.0 for i in 1:N),
-            param_arrays = Dict("F" => collect(1.0:N)), compiler = c)
+            param_arrays = Dict("F" => collect(1.0:N)), compiler = c
+        )
         e = err_of(() -> build(4, :native))
         @test code_of(e) == _PR.ERROR_CODES.COMPILER_REFUSED_RULE
         @test occursin("declined by the whole-array contraction tier", e.detail)
@@ -741,22 +1026,35 @@ _pr_rank4_build(doc, compiler; kw...) =
     # leaves no term built, and the refusal says so rather than the one-cell
     # note, which would claim a document error could have surfaced.
     @testset "the refusal diagnostic says how much of the cell it evaluated" begin
-        body = _PR.OpExpr("*", _PR.ASTExpr[_PR.VarExpr("k"),
-            _PR.OpExpr("index", _PR.ASTExpr[_PR.VarExpr("u"), _PR.VarExpr("i")])])
-        lhs = _PR.OpExpr("D", _PR.ASTExpr[
-            _PR.OpExpr("index", _PR.ASTExpr[_PR.VarExpr("u"), _PR.VarExpr("i")])])
+        body = _PR.OpExpr(
+            "*", _PR.ASTExpr[
+                _PR.VarExpr("k"),
+                _PR.OpExpr("index", _PR.ASTExpr[_PR.VarExpr("u"), _PR.VarExpr("i")]),
+            ]
+        )
+        lhs = _PR.OpExpr(
+            "D", _PR.ASTExpr[
+                _PR.OpExpr("index", _PR.ASTExpr[_PR.VarExpr("u"), _PR.VarExpr("i")]),
+            ]
+        )
         K = 2000
-        gate = [_PR._JoinGate("i", "k", Dict(1 => 7),
-                              Dict(k => (k == K ÷ 2 ? 7 : 0) for k in 1:K))]
-        diag(gates, n) = _PR._faq_diagnostic_cell(_PR._PerCellProbe(), lhs, body;
+        gate = [
+            _PR._JoinGate(
+                "i", "k", Dict(1 => 7),
+                Dict(k => (k == K ÷ 2 ? 7 : 0) for k in 1:K)
+            ),
+        ]
+        diag(gates, n) = _PR._faq_diagnostic_cell(
+            _PR._PerCellProbe(), lhs, body;
             idx_names = ["i"], range_iters = [[1]], contract_names = ["k"],
             contract_ranges = [Any[1, n]], contract_const = [collect(1:n)],
             rhs_zerobar = 0.0, agg_gates = gates, agg_filter = nothing,
-            resolved_obs = Dict{String,_PR.ASTExpr}(),
+            resolved_obs = Dict{String, _PR.ASTExpr}(),
             array_var_info = Dict("u" => ([1], [1])),
-            var_map = Dict("u[1]" => 1), const_registry = Dict{String,Any}(),
-            pgather = Dict{String,Any}(), param_sym_set = Dict{Symbol,Int}(),
-            reg_funcs = Dict{String,Any}())
+            var_map = Dict("u[1]" => 1), const_registry = Dict{String, Any}(),
+            pgather = Dict{String, Any}(), param_sym_set = Dict{Symbol, Int}(),
+            reg_funcs = Dict{String, Any}()
+        )
         @test diag(nothing, 8) === :cell
         @test diag(nothing, K) === :part
         @test diag(gate, K) === :none
@@ -765,40 +1063,75 @@ _pr_rank4_build(doc, compiler; kw...) =
     @testset "setup materializers: an out-of-range gather, an undeclared name" begin
         native(f) = _PR._with_compiler_plan(f, _PR._compiler_plan(:native))
         interp(f) = _PR._with_compiler_plan(f, _PR._compiler_plan(:interpreter))
-        env = Dict{String,Any}("B" => reshape(collect(1.0:20.0), 5, 4))
-        idx = Dict{String,Int}("X" => 5)
+        env = Dict{String, Any}("B" => reshape(collect(1.0:20.0), 5, 4))
+        idx = Dict{String, Int}("X" => 5)
         # A MAP whose last cell reads past the end of `B`'s first axis: the
         # compiled-once sweep fails there, and so does the per-cell reference.
-        map_oob = _PR.expression_from_json(Dict{String,Any}("op" => "faq",
-            "args" => Any[], "output_idx" => Any["x"],
-            "ranges" => Dict{String,Any}("x" => Dict{String,Any}("from" => "X")),
-            "expr" => Dict{String,Any}("op" => "index", "args" => Any["B",
-                Dict{String,Any}("op" => "+", "args" => Any["x", 1]), 1])))
+        map_oob = _PR.expression_from_json(
+            Dict{String, Any}(
+                "op" => "faq",
+                "args" => Any[], "output_idx" => Any["x"],
+                "ranges" => Dict{String, Any}("x" => Dict{String, Any}("from" => "X")),
+                "expr" => Dict{String, Any}(
+                    "op" => "index", "args" => Any[
+                        "B",
+                        Dict{String, Any}("op" => "+", "args" => Any["x", 1]), 1,
+                    ]
+                )
+            )
+        )
         for run in (native, interp)
-            e = err_of(() -> run(() -> _PR._materialize_setup_general_map(map_oob,
-                copy(env), nothing, idx, Dict{String,Function}())))
+            e = err_of(
+                () -> run(
+                    () -> _PR._materialize_setup_general_map(
+                        map_oob,
+                        copy(env), nothing, idx, Dict{String, Function}()
+                    )
+                )
+            )
             @test code_of(e) == "E_TREEWALK_CONSTARRAY_OOB"
         end
         # A makearray stencil (no compiled-once form at all) naming an undeclared
         # array.
-        mk = _PR.expression_from_json(Dict{String,Any}("op" => "makearray",
-            "args" => Any[], "regions" => Any[Any[Any[1, 5]]],
-            "values" => Any[Dict{String,Any}("op" => "index", "args" => Any["Bq", 1, 1])]))
+        mk = _PR.expression_from_json(
+            Dict{String, Any}(
+                "op" => "makearray",
+                "args" => Any[], "regions" => Any[Any[Any[1, 5]]],
+                "values" => Any[Dict{String, Any}("op" => "index", "args" => Any["Bq", 1, 1])]
+            )
+        )
         for run in (native, interp)
-            e = err_of(() -> run(() -> _PR._materialize_setup_wholearray(mk, copy(env),
-                nothing, idx, ["X"], Dict{String,Function}())))
+            e = err_of(
+                () -> run(
+                    () -> _PR._materialize_setup_wholearray(
+                        mk, copy(env),
+                        nothing, idx, ["X"], Dict{String, Function}()
+                    )
+                )
+            )
             @test code_of(e) == "E_TREEWALK_UNBOUND_VARIABLE"
         end
         # …and a makearray that evaluates is a compiled fill under native, equal
         # to the interpreter's per-cell materialization bit for bit.
-        ok = _PR.expression_from_json(Dict{String,Any}("op" => "makearray",
-            "args" => Any[], "regions" => Any[Any[Any[1, 2]], Any[Any[3, 5]]],
-            "values" => Any[Dict{String,Any}("op" => "index", "args" => Any["B", 1, 1]),
-                            Dict{String,Any}("op" => "*", "args" => Any[
-                                Dict{String,Any}("op" => "index", "args" => Any["B", 2, 3]),
-                                0.5])]))
-        mat() = _PR._materialize_setup_wholearray(ok, copy(env), nothing, idx, ["X"],
-                                                  Dict{String,Function}())
+        ok = _PR.expression_from_json(
+            Dict{String, Any}(
+                "op" => "makearray",
+                "args" => Any[], "regions" => Any[Any[Any[1, 2]], Any[Any[3, 5]]],
+                "values" => Any[
+                    Dict{String, Any}("op" => "index", "args" => Any["B", 1, 1]),
+                    Dict{String, Any}(
+                        "op" => "*", "args" => Any[
+                            Dict{String, Any}("op" => "index", "args" => Any["B", 2, 3]),
+                            0.5,
+                        ]
+                    ),
+                ]
+            )
+        )
+        mat() = _PR._materialize_setup_wholearray(
+            ok, copy(env), nothing, idx, ["X"],
+            Dict{String, Function}()
+        )
         insp = _PR._BuildRecord(_PR._compiler_plan(:native))
         an = native(() -> _PR._with_build_record(mat, insp))
         ai = interp(mat)
@@ -809,8 +1142,10 @@ _pr_rank4_build(doc, compiler; kw...) =
 
     # ── Field initial conditions: the cell-independent forms, once ────────────
     @testset "a broadcast-constant field ic under the interpreter" begin
-        path = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "scalar_ic",
-                        "fixtures", "scalar_ic_in_array_model.esm")
+        path = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "conformance", "scalar_ic",
+            "fixtures", "scalar_ic_in_array_model.esm"
+        )
         pi_ = esm_problem(path, (0.0, 1.0); compiler = :interpreter)
         rows = [r for r in compiler_report(pi_).rules if startswith(r.rule, "ic(")]
         @test !isempty(rows)
@@ -822,9 +1157,13 @@ _pr_rank4_build(doc, compiler; kw...) =
         # computed once, the per-cell resolve reports THAT attempt rather than
         # evaluating the constant again at this cell.
         rhs = _op("+", _v("nope"), _n(1.0))
-        e = err_of(() -> _PR._resolve_field_ic(_PR._PerCellLicense(), "u", rhs, [1], Dict{String,Any}(),
-                                               Dict{String,Any}();
-                                               uniform = (nothing, ["as constant: SENTINEL"])))
+        e = err_of(
+            () -> _PR._resolve_field_ic(
+                _PR._PerCellLicense(), "u", rhs, [1], Dict{String, Any}(),
+                Dict{String, Any}();
+                uniform = (nothing, ["as constant: SENTINEL"])
+            )
+        )
         @test code_of(e) == "E_TREEWALK_UNSUPPORTED_EQUATION"
         @test occursin("SENTINEL", e.detail)
         @test count("as constant:", e.detail) == 1
@@ -835,20 +1174,34 @@ end
 # (user ruling; the Rust and Python front doors seed the same way), and a cell
 # the caller names keeps the caller's value.
 @testset "esm_problem: an initialization equation reads the caller's u0" begin
-    faqx(body) = Dict{String,Any}("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
-                                  "ranges" => Dict("i" => Dict("from" => "x")), "expr" => body)
-    ixd(v) = Dict{String,Any}("op" => "index", "args" => Any[v, "i"])
-    Dd(x) = Dict{String,Any}("op" => "D", "args" => Any[x], "wrt" => "t")
-    doc = Dict{String,Any}("esm" => "1.1.0", "metadata" => Dict("name" => "init_reads_u0"),
+    faqx(body) = Dict{String, Any}(
+        "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+        "ranges" => Dict("i" => Dict("from" => "x")), "expr" => body
+    )
+    ixd(v) = Dict{String, Any}("op" => "index", "args" => Any[v, "i"])
+    Dd(x) = Dict{String, Any}("op" => "D", "args" => Any[x], "wrt" => "t")
+    doc = Dict{String, Any}(
+        "esm" => "1.1.0", "metadata" => Dict("name" => "init_reads_u0"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 3)),
-        "models" => Dict("M" => Dict{String,Any}(
-            "variables" => Dict{String,Any}(
-                "u" => Dict{String,Any}("type" => "unknown", "shape" => Any["x"], "default" => 1.0),
-                "w" => Dict{String,Any}("type" => "unknown", "shape" => Any["x"], "default" => 0.0)),
-            "equations" => Any[Dict("lhs" => faqx(Dd(ixd("u"))), "rhs" => faqx(0.0)),
-                               Dict("lhs" => faqx(Dd(ixd("w"))), "rhs" => faqx(0.0))],
-            "initialization_equations" => Any[Dict("lhs" => "w",
-                "rhs" => faqx(Dict{String,Any}("op" => "*", "args" => Any[2.0, ixd("u")])))])))
+        "models" => Dict(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "u" => Dict{String, Any}("type" => "unknown", "shape" => Any["x"], "default" => 1.0),
+                    "w" => Dict{String, Any}("type" => "unknown", "shape" => Any["x"], "default" => 0.0)
+                ),
+                "equations" => Any[
+                    Dict("lhs" => faqx(Dd(ixd("u"))), "rhs" => faqx(0.0)),
+                    Dict("lhs" => faqx(Dd(ixd("w"))), "rhs" => faqx(0.0)),
+                ],
+                "initialization_equations" => Any[
+                    Dict(
+                        "lhs" => "w",
+                        "rhs" => faqx(Dict{String, Any}("op" => "*", "args" => Any[2.0, ixd("u")]))
+                    ),
+                ]
+            )
+        )
+    )
     cells(prob, v) = [prob.u0[prob.var_map["M.$v[$i]"]] for i in 1:3]
     for compiler in (:interpreter, :native)
         p1 = _PR.esm_problem(doc, (0.0, 1.0); compiler = compiler, u0 = Dict("u[2]" => 7.0))
@@ -872,6 +1225,6 @@ end
             err
         end
         @test e isa _PR.TreeWalkError &&
-              e.code == _PR.ERROR_CODES.EQUATION_DEFINES_PARAMETER
+            e.code == _PR.ERROR_CODES.EQUATION_DEFINES_PARAMETER
     end
 end

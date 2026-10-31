@@ -46,9 +46,9 @@
 # lane tables rather than the lane count; see the lane-dedup section for why
 # that difference is what keeps the constant off the grid size.
 
-const _RxIdx = Union{TracedRArray{<:Any,1},TracedRNumber}
-const _RxKnots = Union{Vector{Float64},Vector{Vector{Float64}}}
-const _RxTbl = Union{Vector{Vector{Float64}},Matrix{Vector{Float64}}}
+const _RxIdx = Union{TracedRArray{<:Any, 1}, TracedRNumber}
+const _RxKnots = Union{Vector{Float64}, Vector{Vector{Float64}}}
+const _RxTbl = Union{Vector{Vector{Float64}}, Matrix{Vector{Float64}}}
 
 # --- lane-shape plumbing (host-side, trace time only) -------------------------
 #
@@ -57,27 +57,29 @@ const _RxTbl = Union{Vector{Vector{Float64}},Matrix{Vector{Float64}}}
 # column per lane). `0` means "no lane axis of its own"; the result carries a
 # lane axis iff either does, and when neither does the gather runs at length 1
 # and is unwrapped back to a traced scalar.
-@inline _rx_len(x::TracedRArray{<:Any,1}) = length(x)
+@inline _rx_len(x::TracedRArray{<:Any, 1}) = length(x)
 @inline _rx_len(::TracedRNumber) = 0
 @inline _rx_cols(::Vector{Float64}) = 0
 @inline _rx_cols(v::Vector{Vector{Float64}}) = length(v[1])
 @inline _rx_tbl_cols(::Vector{Vector{Float64}}) = 0
 @inline _rx_tbl_cols(t::Matrix{Vector{Float64}}) = length(t[1, 1])
 
-@inline _rx_vec(x::TracedRArray{<:Any,1}, ::Int) = x
+@inline _rx_vec(x::TracedRArray{<:Any, 1}, ::Int) = x
 @inline _rx_vec(x::TracedRNumber, n::Int) = Reactant.broadcast_to_size(x, (n,))
 @inline _rx_unwrap(r::AbstractVector, L::Int) = L == 0 ? (@allowscalar r[1]) : r
 
 # f64 lane index (exactly integral and in `[1, n-1]` by the callers' clamp) → i64.
-@inline _rx_int(i::TracedRArray{T,1}) where {T} =
-    Reactant.Ops.convert(TracedRArray{Int64,1}, i)
+@inline _rx_int(i::TracedRArray{T, 1}) where {T} =
+    Reactant.Ops.convert(TracedRArray{Int64, 1}, i)
 
 # ONE `stablehlo.gather` of a constant table at 1-based traced indices.
 # `Ops.constant` memoizes by value, so N call sites sharing a table share one
 # constant in the module.
-@inline _rx_take(vals::Vector{Float64}, lin::TracedRArray{Int64,1}) =
-    Reactant.Ops.gather_getindex(Reactant.Ops.constant(vals),
-                                 Reactant.Ops.reshape(lin, length(lin), 1))
+@inline _rx_take(vals::Vector{Float64}, lin::TracedRArray{Int64, 1}) =
+    Reactant.Ops.gather_getindex(
+    Reactant.Ops.constant(vals),
+    Reactant.Ops.reshape(lin, length(lin), 1)
+)
 
 # --- lane dedup ---------------------------------------------------------------
 #
@@ -117,7 +119,7 @@ function _rx_lane_groups(cols::AbstractArray{Vector{Float64}})
     L = length(first(cols))
     n = length(cols)
     key = Vector{Float64}(undef, n)
-    ids = Dict{Vector{Float64},Int}()
+    ids = Dict{Vector{Float64}, Int}()
     gid = Vector{Int64}(undef, L)
     reps = Int[]
     @inbounds for l in 1:L
@@ -138,8 +140,8 @@ end
 
 # The two knot shapes, as (flat host constant, knot index → linear index, the
 # stride from one knot to the next). Knot-major, deduplicated across lanes.
-@inline _rx_knot_lin(v::Vector{Float64}, ik::TracedRArray{Int64,1}) = (v, ik, 1)
-function _rx_knot_lin(v::Vector{Vector{Float64}}, ik::TracedRArray{Int64,1})
+@inline _rx_knot_lin(v::Vector{Float64}, ik::TracedRArray{Int64, 1}) = (v, ik, 1)
+function _rx_knot_lin(v::Vector{Vector{Float64}}, ik::TracedRArray{Int64, 1})
     reps, gid = _rx_lane_groups(v)
     D = length(reps); n = length(v)
     flat = Vector{Float64}(undef, n * D)
@@ -361,7 +363,7 @@ function _rx_affine_fit(v::Vector{Float64}, cmp::F) where {F}
     (n >= 2 && isfinite(v[1]) && isfinite(v[n]) && v[n] > v[1]) || return nothing
     for a in ((n - 1) / (v[n] - v[1]), 1 / ((v[n] - v[1]) / (n - 1)), 1 / (v[2] - v[1]))
         (isfinite(a) && a > 0) || continue
-        for delta in (0.0, 1e-9, 1e-6, 1e-12, 1e-3)
+        for delta in (0.0, 1.0e-9, 1.0e-6, 1.0e-12, 1.0e-3)
             b = (1.0 - v[1] * a) - delta
             _rx_affine_ok(v, a, b, cmp) && return (a, b)
         end
@@ -425,8 +427,10 @@ function _knot_pair(v::_RxKnots, i::_RxIdx)
     ik = _rx_int(_rx_vec(i, max(L, 1)))
     # One dedup pass serves both knots: the next knot is one stride on.
     flat, lin, dk = _rx_knot_lin(v, ik)
-    return (_rx_unwrap(_rx_take(flat, lin), L),
-            _rx_unwrap(_rx_take(flat, lin .+ Int64(dk)), L))
+    return (
+        _rx_unwrap(_rx_take(flat, lin), L),
+        _rx_unwrap(_rx_take(flat, lin .+ Int64(dk)), L),
+    )
 end
 
 # Two tables at one index. The default fuses them to share the ladder's
@@ -439,14 +443,18 @@ end
 
 # bilinear corners: four gathers of one flat table constant at
 # `lin`, `lin+Δk`, `lin+Δl`, `lin+Δk+Δl` — no `Nx·Ny` cell ladder.
-function _bilinear_corners(tbl::_RxTbl, i::_RxIdx, j::_RxIdx,
-                               Nx::Int, Ny::Int)
+function _bilinear_corners(
+        tbl::_RxTbl, i::_RxIdx, j::_RxIdx,
+        Nx::Int, Ny::Int
+    )
     L = max(_rx_tbl_cols(tbl), _rx_len(i), _rx_len(j))
     n = max(L, 1)
     ii = _rx_int(_rx_vec(i, n)); jj = _rx_int(_rx_vec(j, n))
     flat, lin, dk, dl = _rx_tbl_lin(tbl, ii, jj, Nx, Ny)
-    return (_rx_unwrap(_rx_take(flat, lin), L),
-            _rx_unwrap(_rx_take(flat, lin .+ Int64(dk)), L),
-            _rx_unwrap(_rx_take(flat, lin .+ Int64(dl)), L),
-            _rx_unwrap(_rx_take(flat, lin .+ Int64(dk + dl)), L))
+    return (
+        _rx_unwrap(_rx_take(flat, lin), L),
+        _rx_unwrap(_rx_take(flat, lin .+ Int64(dk)), L),
+        _rx_unwrap(_rx_take(flat, lin .+ Int64(dl)), L),
+        _rx_unwrap(_rx_take(flat, lin .+ Int64(dk + dl)), L),
+    )
 end

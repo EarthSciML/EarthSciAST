@@ -28,8 +28,10 @@ import OrdinaryDiffEqTsit5
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
-const _OKD_CAT_DIR  = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-                               "override_key_diagnostics")
+const _OKD_CAT_DIR = joinpath(
+    TESTUTILS_REPO_ROOT, "tests", "conformance",
+    "override_key_diagnostics"
+)
 const _OKD_MANIFEST = joinpath(_OKD_CAT_DIR, "manifest.json")
 
 @testset "Conformance: override_key_diagnostics (manifest-driven)" begin
@@ -40,7 +42,7 @@ const _OKD_MANIFEST = joinpath(_OKD_CAT_DIR, "manifest.json")
     @test "python" in manifest.bindings_required
     @test "rust" in manifest.bindings_required
 
-    fixture  = manifest.fixtures[1]
+    fixture = manifest.fixtures[1]
     esm_path = joinpath(_OKD_CAT_DIR, String(fixture.path))
     @test isfile(esm_path)
     rtol = Float64(manifest.tolerances.trajectory_rtol)
@@ -49,24 +51,30 @@ const _OKD_MANIFEST = joinpath(_OKD_CAT_DIR, "manifest.json")
     # All three outcomes must be exercised, or the category proves nothing
     # about ambiguous-vs-unknown being distinct.
     @test Set(String(c.outcome) for c in fixture.cases) ==
-          Set(["resolved", "ambiguous", "unknown"])
+        Set(["resolved", "ambiguous", "unknown"])
 
     # The whole category rests on `gain` being carried by two components and
     # `solo` by one: pin the flattened parameter names so a change in
     # flattening cannot quietly defuse it.
-    flat_params = sort!(String[String(n) for n in
-                              keys(EarthSciAST.flatten(EarthSciAST.load_path(esm_path)).parameters)])
+    flat_params = sort!(
+        String[
+            String(n) for n in
+                keys(EarthSciAST.flatten(EarthSciAST.load_path(esm_path)).parameters)
+        ]
+    )
     @test flat_params == sort!(String[String(p) for p in fixture.parameters])
 
-    run(params) = solve(EarthSciAST.esm_problem(esm_path, (0.0, 1.0); p=params), OrdinaryDiffEqTsit5.Tsit5();
-                                       saveat=[1.0])
+    run(params) = solve(
+        EarthSciAST.esm_problem(esm_path, (0.0, 1.0); p = params), OrdinaryDiffEqTsit5.Tsit5();
+        saveat = [1.0]
+    )
 
     # Non-vacuity: the fixture integrates on its own, so every rejection below
     # is about the KEY and not about the document.
-    base = run(Dict{String,Float64}())
+    base = run(Dict{String, Float64}())
     @test SciMLBase.successful_retcode(base)
     for (name, want) in pairs(fixture.defaults_at_t1)
-        @test isapprox(base[Symbol(String(name))][1], Float64(want); rtol=rtol, atol=atol)
+        @test isapprox(base[Symbol(String(name))][1], Float64(want); rtol = rtol, atol = atol)
     end
 
     for case in fixture.cases
@@ -78,7 +86,7 @@ const _OKD_MANIFEST = joinpath(_OKD_CAT_DIR, "manifest.json")
                 sim = run(Dict(key => val))
                 @test SciMLBase.successful_retcode(sim)
                 for (name, want) in pairs(case.trajectory_at_t1)
-                    @test isapprox(sim[Symbol(String(name))][1], Float64(want); rtol=rtol, atol=atol)
+                    @test isapprox(sim[Symbol(String(name))][1], Float64(want); rtol = rtol, atol = atol)
                 end
             else
                 err = try
@@ -131,25 +139,29 @@ end
     @test EarthSciAST._dotted_suffix_hit(names, ns, "Doc.Left.solo") === nothing
     @test EarthSciAST._dotted_suffix_hit(names, ns, "Left.Left.solo") == "Left.solo"
     _, unknown, _, _ = EarthSciAST._canonicalize_override_keys(
-        Float64, names, ns, Dict("Doc.Left.solo" => 9.0))
+        Float64, names, ns, Dict("Doc.Left.solo" => 9.0)
+    )
     @test unknown == ["Doc.Left.solo"]
     # The §4.6 fully-qualified spelling of a name the build holds shorter, with
     # `P` the model's own name and `sub` its mounted subsystem.
     sub_names = Set{String}(["sub.g", "g"])
     sub_ns = EarthSciAST._override_namespaces(sub_names; model_name = "P")
     sub, u, a, c = EarthSciAST._canonicalize_override_keys(
-        Float64, sub_names, sub_ns, Dict("P.sub.g" => 1.5))
+        Float64, sub_names, sub_ns, Dict("P.sub.g" => 1.5)
+    )
     @test sub == Dict("sub.g" => 1.5)
     @test isempty(u) && isempty(a) && isempty(c)
     # ...and with `P` out of scope the same key names nothing.
     _, u_np, _, _ = EarthSciAST._canonicalize_override_keys(
         Float64, sub_names, EarthSciAST._override_namespaces(sub_names),
-        Dict("P.sub.g" => 1.5))
+        Dict("P.sub.g" => 1.5)
+    )
     @test u_np == ["P.sub.g"]
     # A key none of whose suffixes is a name, and which is the suffix of no
     # name either, stays UNKNOWN under both rule 2 and the widened rule 3.
     _, u2, _, _ = EarthSciAST._canonicalize_override_keys(
-        Float64, names, ns, Dict("Missing.solo" => 1.0))
+        Float64, names, ns, Dict("Missing.solo" => 1.0)
+    )
     @test u2 == ["Missing.solo"]
 end
 
@@ -165,7 +177,8 @@ end
     ns = EarthSciAST._override_namespaces(names)
     for key in ("P.sub.g", "sub.g", "g")
         n, u, a, c = EarthSciAST._canonicalize_override_keys(
-            Float64, names, ns, Dict(key => 1.5))
+            Float64, names, ns, Dict(key => 1.5)
+        )
         @test n == Dict("P.sub.g" => 1.5)
         @test isempty(u) && isempty(a) && isempty(c)
     end
@@ -173,7 +186,8 @@ end
     # not turn it into a trailing-segment match on `P.sub.g`.
     for key in ("Missing.solo", "Missing.g", "x.sub.g")
         _, u, _, _ = EarthSciAST._canonicalize_override_keys(
-            Float64, names, ns, Dict(key => 1.5))
+            Float64, names, ns, Dict(key => 1.5)
+        )
         @test u == [key]
     end
     # A suffix carried by TWO names is AMBIGUOUS, never tie-broken.
@@ -181,13 +195,15 @@ end
     two_ns = EarthSciAST._override_namespaces(two)
     for key in ("sub.g", "g")
         _, u, a, _ = EarthSciAST._canonicalize_override_keys(
-            Float64, two, two_ns, Dict(key => 1.5))
+            Float64, two, two_ns, Dict(key => 1.5)
+        )
         @test isempty(u)
         @test sort(a[key]) == ["Left.sub.g", "Right.sub.g"]
     end
     # Two spellings of ONE name still collide rather than racing.
     _, _, _, c = EarthSciAST._canonicalize_override_keys(
-        Float64, names, ns, Dict("sub.g" => 1.5, "g" => 2.5))
+        Float64, names, ns, Dict("sub.g" => 1.5, "g" => 2.5)
+    )
     @test c == Dict("P.sub.g" => ["g", "sub.g"])
 end
 
@@ -205,32 +221,38 @@ end
     @test c1 == Dict("Left.solo" => ["Doc.Left.solo", "solo"])
     # Two rule-2 keys on one name, in either insertion order.
     @test collide(["A.Left.solo" => 1.0, "B.Left.solo" => 2.0]) ==
-          Dict("Left.solo" => ["A.Left.solo", "B.Left.solo"])
+        Dict("Left.solo" => ["A.Left.solo", "B.Left.solo"])
     @test collide(["B.Left.solo" => 2.0, "A.Left.solo" => 1.0]) ==
-          Dict("Left.solo" => ["A.Left.solo", "B.Left.solo"])
+        Dict("Left.solo" => ["A.Left.solo", "B.Left.solo"])
     # An EXACT hit wins outright over the competing suffix claims, which are
     # discarded rather than reported.
     n, u, a, c = EarthSciAST._canonicalize_override_keys(
         Float64, names, ns,
-        Dict("Left.solo" => 1.0, "solo" => 2.0, "Doc.Left.solo" => 9.0))
+        Dict("Left.solo" => 1.0, "solo" => 2.0, "Doc.Left.solo" => 9.0)
+    )
     @test n == Dict("Left.solo" => 1.0)
     @test isempty(u) && isempty(a) && isempty(c)
     # The cross-binding message, verbatim.
     @test EarthSciAST._override_collision_message(
-              "parameter_overrides", "parameter", "Left.solo",
-              ["Doc.Left.solo", "solo"]) ==
-          "parameter_overrides: 2 keys designate the parameter 'Left.solo' " *
-          "(Doc.Left.solo, solo). Supply exactly one override key per name " *
-          "(esm-spec §6.6.2)."
+        "parameter_overrides", "parameter", "Left.solo",
+        ["Doc.Left.solo", "solo"]
+    ) ==
+        "parameter_overrides: 2 keys designate the parameter 'Left.solo' " *
+        "(Doc.Left.solo, solo). Supply exactly one override key per name " *
+        "(esm-spec §6.6.2)."
 end
 
 # End to end through the document front door: the collision is reported by
 # `esm_problem`, not swallowed into a silent winner.
 @testset "override keys: a collision reaches the front door" begin
     err = try
-        EarthSciAST.esm_problem(joinpath(_OKD_CAT_DIR, "fixtures",
-                                         "override_key_diagnostics.esm"), (0.0, 1.0);
-                                p = Dict("solo" => 9.0, "Left.Left.solo" => 8.0))
+        EarthSciAST.esm_problem(
+            joinpath(
+                _OKD_CAT_DIR, "fixtures",
+                "override_key_diagnostics.esm"
+            ), (0.0, 1.0);
+            p = Dict("solo" => 9.0, "Left.Left.solo" => 8.0)
+        )
         nothing
     catch e
         e

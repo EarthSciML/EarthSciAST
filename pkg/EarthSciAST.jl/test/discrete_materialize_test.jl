@@ -15,18 +15,20 @@ _dm_fixture() = joinpath(@__DIR__, "fixtures", "discrete_materialize.esm")
 
 # g[j] = sum_i W[i,j]*src[i]   (param-tainted -> discrete);  k[j] = sum_i W[i,j]*offset
 const _DM_W = [1.0 2.0 3.0; 4.0 5.0 6.0]     # W[i,j], i=1..2, j=1..3
-_dm_g(src)     = [sum(_DM_W[i, j] * src[i] for i in 1:2) for j in 1:3]
-_dm_k(offset)  = [sum(_DM_W[i, j] * offset for i in 1:2) for j in 1:3]
+_dm_g(src) = [sum(_DM_W[i, j] * src[i] for i in 1:2) for j in 1:3]
+_dm_k(offset) = [sum(_DM_W[i, j] * offset for i in 1:2) for j in 1:3]
 
 @testset "discrete-cadence materialization (DiscreteMaterializer)" begin
     file = _DM_ESS.load_path(_dm_fixture())
-    ics = Dict{String,Float64}("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0)
+    ics = Dict{String, Float64}("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0)
 
     @testset "cut matches the inline baseline; only the param-tainted var is cached" begin
         # Inline baseline (no sink): g and k are both inlined into the state RHS.
         srcA = [1.0, 1.0]
-        f0!, u00, p0, _, vm0 = _DM_ESS._build_evaluator(file; initial_conditions=ics,
-            const_arrays=Dict("W" => _DM_W), param_arrays=Dict("src" => srcA))
+        f0!, u00, p0, _, vm0 = _DM_ESS._build_evaluator(
+            file; initial_conditions = ics,
+            const_arrays = Dict("W" => _DM_W), param_arrays = Dict("src" => srcA)
+        )
         du0 = zero(u00); f0!(du0, u00, p0, 0.0)
         base = [du0[vm0["c[$j]"]] for j in 1:3]
         @test base ≈ _dm_g([1.0, 1.0]) .+ _dm_k(1.0)   # offset default = 1.0
@@ -34,9 +36,11 @@ _dm_k(offset)  = [sum(_DM_W[i, j] * offset for i in 1:2) for j in 1:3]
         # Cut (sink): g becomes a discrete cache; k (const-fed) stays inline.
         srcB = [1.0, 1.0]
         dm = _DM_ESS.DiscreteMaterializer()
-        f!, u0, p, _, vm = _DM_ESS._build_evaluator(file; initial_conditions=ics,
-            const_arrays=Dict("W" => _DM_W), param_arrays=Dict("src" => srcB),
-            materialize_out=dm)
+        f!, u0, p, _, vm = _DM_ESS._build_evaluator(
+            file; initial_conditions = ics,
+            const_arrays = Dict("W" => _DM_W), param_arrays = Dict("src" => srcB),
+            materialize_out = dm
+        )
         @test haskey(dm.caches, "g")             # param-tainted, state-free -> cached
         @test !haskey(dm.caches, "k")            # const-fed -> NOT cached (regression guard)
         @test dm.caches["g"] == _dm_g([1.0, 1.0])
@@ -47,9 +51,11 @@ _dm_k(offset)  = [sum(_DM_W[i, j] * offset for i in 1:2) for j in 1:3]
     @testset "the cache is discrete: stale until materialize!, then tracks" begin
         srcB = [1.0, 1.0]
         dm = _DM_ESS.DiscreteMaterializer()
-        f!, u0, p, _, vm = _DM_ESS._build_evaluator(file; initial_conditions=ics,
-            const_arrays=Dict("W" => _DM_W), param_arrays=Dict("src" => srcB),
-            materialize_out=dm)
+        f!, u0, p, _, vm = _DM_ESS._build_evaluator(
+            file; initial_conditions = ics,
+            const_arrays = Dict("W" => _DM_W), param_arrays = Dict("src" => srcB),
+            materialize_out = dm
+        )
         du = zero(u0); f!(du, u0, p, 0.0)
         initial = [du[vm["c[$j]"]] for j in 1:3]
 
@@ -70,8 +76,10 @@ _dm_k(offset)  = [sum(_DM_W[i, j] * offset for i in 1:2) for j in 1:3]
     @testset "no sink ⇒ no discrete cut (opt-in), build still succeeds" begin
         # Without the sink the param-tainted g stays inlined — the pre-cut path.
         src = [1.0, 1.0]
-        f!, u0, p, _, vm = _DM_ESS._build_evaluator(file; initial_conditions=ics,
-            const_arrays=Dict("W" => _DM_W), param_arrays=Dict("src" => src))
+        f!, u0, p, _, vm = _DM_ESS._build_evaluator(
+            file; initial_conditions = ics,
+            const_arrays = Dict("W" => _DM_W), param_arrays = Dict("src" => src)
+        )
         du = zero(u0); f!(du, u0, p, 0.0)
         @test [du[vm["c[$j]"]] for j in 1:3] ≈ _dm_g([1.0, 1.0]) .+ _dm_k(1.0)
     end
@@ -100,17 +108,22 @@ _dmc_idx(vv, is...) = _dmc_op("index", _dmc_v(vv), is...)
 
 # `Fcache[j] = Σ raw[j]` over a LIVE forcing buffer `raw` — param-tainted. Whether it
 # is state-reaching depends ONLY on `extra`, the field under test.
-_dmc_agg(; kw...) = _dmc_op("faq"; output_idx=Any["j"], ranges=Dict("j" => [1, 4]),
-    reduce="+", expr_body=_dmc_idx("raw", _dmc_v("j")), kw...)
+_dmc_agg(; kw...) = _dmc_op(
+    "faq"; output_idx = Any["j"], ranges = Dict("j" => [1, 4]),
+    reduce = "+", expr_body = _dmc_idx("raw", _dmc_v("j")), kw...
+)
 
 # Run the cadence split on a single def. Returns the discrete set.
-_dmc_split(rhs) = first(_DM_ESS._discrete_materialize_split(
-    _DM_ESS.Equation[_DM_ESS.Equation(_dmc_v("Fcache"), rhs)],
-    Set(["Fcache"]),      # inline candidates (array observeds)
-    Set{String}(),        # const-tier pool
-    ["u"],                # continuous state var names
-    ["raw"],              # live `param_arrays` forcing buffer names
-    Set{String}()))       # scalar params
+_dmc_split(rhs) = first(
+    _DM_ESS._discrete_materialize_split(
+        _DM_ESS.Equation[_DM_ESS.Equation(_dmc_v("Fcache"), rhs)],
+        Set(["Fcache"]),      # inline candidates (array observeds)
+        Set{String}(),        # const-tier pool
+        ["u"],                # continuous state var names
+        ["raw"],              # live `param_arrays` forcing buffer names
+        Set{String}()
+    )
+)       # scalar params
 
 @testset "cadence classifier sees state refs in every expression field (ess-5d1)" begin
     @testset "control: a state-free, param-tainted aggregate IS still cut" begin
@@ -118,46 +131,63 @@ _dmc_split(rhs) = first(_DM_ESS._discrete_materialize_split(
         @test _dmc_split(_dmc_agg()) == Set(["Fcache"])
         # And a state read from the BODY (the field the walker always saw) is still
         # correctly kept OUT — the pre-existing behavior, unchanged.
-        @test _dmc_split(_dmc_op("faq"; output_idx=Any["j"],
-            ranges=Dict("j" => [1, 4]), reduce="+",
-            expr_body=_dmc_op("*", _dmc_idx("raw", _dmc_v("j")),
-                              _dmc_idx("u", _dmc_v("j"))))) == Set{String}()
+        @test _dmc_split(
+            _dmc_op(
+                "faq"; output_idx = Any["j"],
+                ranges = Dict("j" => [1, 4]), reduce = "+",
+                expr_body = _dmc_op(
+                    "*", _dmc_idx("raw", _dmc_v("j")),
+                    _dmc_idx("u", _dmc_v("j"))
+                )
+            )
+        ) == Set{String}()
     end
 
     @testset "state in `filter` ⇒ NOT discrete (the ess-5d1 regression)" begin
         # aggregate(raw[j], filter = u[j] > 0): `u` appears ONLY in the filter, which
         # lowers to a runtime `ifelse(u[j] > 0, raw[j], 0)` guard — a live state read.
-        agg = _dmc_agg(filter=_dmc_op(">", _dmc_idx("u", _dmc_v("j")), _dmc_n(0)))
+        agg = _dmc_agg(filter = _dmc_op(">", _dmc_idx("u", _dmc_v("j")), _dmc_n(0)))
         @test "u" in _DM_ESS._referenced_var_names(agg)
         @test _dmc_split(agg) == Set{String}()
         # `t` in the filter is the same bug (the fill runs at t = 0).
-        @test _dmc_split(_dmc_agg(
-            filter=_dmc_op(">", _dmc_v("t"), _dmc_n(0)))) == Set{String}()
+        @test _dmc_split(
+            _dmc_agg(
+                filter = _dmc_op(">", _dmc_v("t"), _dmc_n(0))
+            )
+        ) == Set{String}()
     end
 
     @testset "state in `key` ⇒ NOT discrete" begin
-        agg = _dmc_agg(distinct=true,
-            key=_dmc_op("skolem", _dmc_idx("u", _dmc_v("j"))))
+        agg = _dmc_agg(
+            distinct = true,
+            key = _dmc_op("skolem", _dmc_idx("u", _dmc_v("j")))
+        )
         @test "u" in _DM_ESS._referenced_var_names(agg)
         @test _dmc_split(agg) == Set{String}()
     end
 
     @testset "state in `table_axes` ⇒ NOT discrete" begin
         # A table lookup whose axis coordinate is a state value.
-        lookup = _dmc_op("table_lookup"; table="T",
-            table_axes=Dict{String,_DM_ESS.ASTExpr}("x" => _dmc_idx("u", _dmc_v("j"))))
-        agg = _dmc_op("faq"; output_idx=Any["j"], ranges=Dict("j" => [1, 4]),
-            reduce="+", expr_body=_dmc_op("*", _dmc_idx("raw", _dmc_v("j")), lookup))
+        lookup = _dmc_op(
+            "table_lookup"; table = "T",
+            table_axes = Dict{String, _DM_ESS.ASTExpr}("x" => _dmc_idx("u", _dmc_v("j")))
+        )
+        agg = _dmc_op(
+            "faq"; output_idx = Any["j"], ranges = Dict("j" => [1, 4]),
+            reduce = "+", expr_body = _dmc_op("*", _dmc_idx("raw", _dmc_v("j")), lookup)
+        )
         @test "u" in _DM_ESS._referenced_var_names(agg)
         @test _dmc_split(agg) == Set{String}()
     end
 
     @testset "state in a dense `ranges` bound ⇒ NOT discrete" begin
         # An expression-valued dense range bound (child_exprs walks these).
-        agg = _dmc_op("faq"; output_idx=Any["j"],
-            ranges=Dict("j" => [1, 4], "i" => Any[_dmc_i(1), _dmc_idx("u", _dmc_i(1))]),
-            reduce="+",
-            expr_body=_dmc_op("*", _dmc_idx("raw", _dmc_v("j")), _dmc_v("i")))
+        agg = _dmc_op(
+            "faq"; output_idx = Any["j"],
+            ranges = Dict("j" => [1, 4], "i" => Any[_dmc_i(1), _dmc_idx("u", _dmc_i(1))]),
+            reduce = "+",
+            expr_body = _dmc_op("*", _dmc_idx("raw", _dmc_v("j")), _dmc_v("i"))
+        )
         @test "u" in _DM_ESS._referenced_var_names(agg)
         @test _dmc_split(agg) == Set{String}()
     end
@@ -166,10 +196,14 @@ _dmc_split(rhs) = first(_DM_ESS._discrete_materialize_split(
         # `lower`/`upper`/`values` were already walked — pin them so routing the
         # walker through `child_exprs` did not LOSE coverage.
         @test "u" in _DM_ESS._referenced_var_names(
-            _dmc_op("integral", _dmc_v("x"); int_var="x",
-                    lower=_dmc_n(0), upper=_dmc_idx("u", _dmc_i(1))))
+            _dmc_op(
+                "integral", _dmc_v("x"); int_var = "x",
+                lower = _dmc_n(0), upper = _dmc_idx("u", _dmc_i(1))
+            )
+        )
         @test "u" in _DM_ESS._referenced_var_names(
-            _dmc_op("makearray"; values=_DM_ESS.ASTExpr[_dmc_idx("u", _dmc_i(1))]))
+            _dmc_op("makearray"; values = _DM_ESS.ASTExpr[_dmc_idx("u", _dmc_i(1))])
+        )
     end
 end
 
@@ -183,18 +217,20 @@ end
     mk(pgather) = _DM_ESS._build_discrete_materializer!(
         _DM_ESS.DiscreteMaterializer(),
         Set(["Fcache"]),
-        Dict{String,_DM_ESS.ASTExpr}("Fcache" => pgather),
-        Dict{String,_DM_ESS.ASTExpr}(),                                  # resolved_obs
-        Dict{String,Tuple{Vector{Int},Vector{Int}}}("u" => ([1], [4])),  # array_var_info
-        Dict{String,Int}("u[$j]" => j for j in 1:4),                     # var_map
-        Dict{String,Any}(),                                              # const_arrays
-        Dict{String,_DM_ESS._PGatherArray}(                              # live buffers
-            "raw" => _DM_ESS._PGatherArray(raw, [4])),
-        Set{Symbol}(), Dict{String,Any}(), nothing, 4)
+        Dict{String, _DM_ESS.ASTExpr}("Fcache" => pgather),
+        Dict{String, _DM_ESS.ASTExpr}(),                                  # resolved_obs
+        Dict{String, Tuple{Vector{Int}, Vector{Int}}}("u" => ([1], [4])),  # array_var_info
+        Dict{String, Int}("u[$j]" => j for j in 1:4),                     # var_map
+        Dict{String, Any}(),                                              # const_arrays
+        Dict{String, _DM_ESS._PGatherArray}(                              # live buffers
+            "raw" => _DM_ESS._PGatherArray(raw, [4])
+        ),
+        Set{Symbol}(), Dict{String, Any}(), nothing, 4
+    )
 
     @testset "a state-reading fill throws E_TREEWALK_DISCRETE_MATERIALIZE" begin
         err = try
-            mk(_dmc_agg(filter=_dmc_op(">", _dmc_idx("u", _dmc_v("j")), _dmc_n(0))))
+            mk(_dmc_agg(filter = _dmc_op(">", _dmc_idx("u", _dmc_v("j")), _dmc_n(0))))
             nothing
         catch e
             e
@@ -207,7 +243,7 @@ end
 
     @testset "a `t`-reading fill throws too" begin
         err = try
-            mk(_dmc_agg(filter=_dmc_op(">", _dmc_v("t"), _dmc_n(0))))
+            mk(_dmc_agg(filter = _dmc_op(">", _dmc_v("t"), _dmc_n(0))))
             nothing
         catch e
             e
@@ -221,16 +257,19 @@ end
     @testset "control: the legitimate state-free fill still builds and fills" begin
         # A `_NK_PARAM_GATHER` (the raw forcing read) is EXPECTED, not rejected.
         dm = _DM_ESS.DiscreteMaterializer()
-        _DM_ESS._build_discrete_materializer!(dm,
+        _DM_ESS._build_discrete_materializer!(
+            dm,
             Set(["Fcache"]),
-            Dict{String,_DM_ESS.ASTExpr}("Fcache" => _dmc_agg()),
-            Dict{String,_DM_ESS.ASTExpr}(),
-            Dict{String,Tuple{Vector{Int},Vector{Int}}}("u" => ([1], [4])),
-            Dict{String,Int}("u[$j]" => j for j in 1:4),
-            Dict{String,Any}(),
-            Dict{String,_DM_ESS._PGatherArray}(
-                "raw" => _DM_ESS._PGatherArray(raw, [4])),
-            Set{Symbol}(), Dict{String,Any}(), nothing, 4)
+            Dict{String, _DM_ESS.ASTExpr}("Fcache" => _dmc_agg()),
+            Dict{String, _DM_ESS.ASTExpr}(),
+            Dict{String, Tuple{Vector{Int}, Vector{Int}}}("u" => ([1], [4])),
+            Dict{String, Int}("u[$j]" => j for j in 1:4),
+            Dict{String, Any}(),
+            Dict{String, _DM_ESS._PGatherArray}(
+                "raw" => _DM_ESS._PGatherArray(raw, [4])
+            ),
+            Set{Symbol}(), Dict{String, Any}(), nothing, 4
+        )
         @test dm.caches["Fcache"] == raw       # initial fill reads the live buffer
         raw .= [9.0, 9.0, 9.0, 9.0]
         dm.materialize!()                      # and refreshes on demand
@@ -247,40 +286,75 @@ end
 # RuntimeGeneratedFunction types — Julia compiles each once, not once per N),
 # land the field on the same tier, and fill a cache bit-identical to the
 # interpreter's per-cell walk.
-_dmn_doc(N) = Dict{String,Any}("esm" => "1.1.0",
+_dmn_doc(N) = Dict{String, Any}(
+    "esm" => "1.1.0",
     "metadata" => Dict("name" => "dm_across_n"),
-    "models" => Dict("M" => Dict{String,Any}(
-        "variables" => Dict(
-            "src" => Dict("type" => "parameter", "shape" => Any["i"]),
-            "F" => Dict("type" => "parameter", "shape" => Any["j"]),
-            "g" => Dict("type" => "unknown", "shape" => Any["j"]),
-            "c" => Dict("type" => "unknown", "shape" => Any["j"], "default" => 0.0)),
-        "equations" => Any[
-            Dict("lhs" => "g", "rhs" => Dict("op" => "faq", "args" => Any[],
-                "output_idx" => Any["j"],
-                "ranges" => Dict("j" => Any[1, N], "i" => Any[1, 2]),
-                "expr" => Dict("op" => "+", "args" => Any[
-                    Dict("op" => "*", "args" => Any[
-                        Dict("op" => "index", "args" => Any["W", "i", "j"]),
-                        Dict("op" => "index", "args" => Any["src", "i"])]),
-                    Dict("op" => "*", "args" => Any[2.0,
-                        Dict("op" => "index", "args" => Any["F", "j"])])]))),
-            Dict("lhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["j"],
-                    "ranges" => Dict("j" => Any[1, N]),
-                    "expr" => Dict("op" => "D", "args" => Any[Dict("op" => "index",
-                        "args" => Any["c", "j"])], "wrt" => "t")),
-                 "rhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["j"],
-                    "ranges" => Dict("j" => Any[1, N]),
-                    "expr" => Dict("op" => "index", "args" => Any["g", "j"])))])))
+    "models" => Dict(
+        "M" => Dict{String, Any}(
+            "variables" => Dict(
+                "src" => Dict("type" => "parameter", "shape" => Any["i"]),
+                "F" => Dict("type" => "parameter", "shape" => Any["j"]),
+                "g" => Dict("type" => "unknown", "shape" => Any["j"]),
+                "c" => Dict("type" => "unknown", "shape" => Any["j"], "default" => 0.0)
+            ),
+            "equations" => Any[
+                Dict(
+                    "lhs" => "g", "rhs" => Dict(
+                        "op" => "faq", "args" => Any[],
+                        "output_idx" => Any["j"],
+                        "ranges" => Dict("j" => Any[1, N], "i" => Any[1, 2]),
+                        "expr" => Dict(
+                            "op" => "+", "args" => Any[
+                                Dict(
+                                    "op" => "*", "args" => Any[
+                                        Dict("op" => "index", "args" => Any["W", "i", "j"]),
+                                        Dict("op" => "index", "args" => Any["src", "i"]),
+                                    ]
+                                ),
+                                Dict(
+                                    "op" => "*", "args" => Any[
+                                        2.0,
+                                        Dict("op" => "index", "args" => Any["F", "j"]),
+                                    ]
+                                ),
+                            ]
+                        )
+                    )
+                ),
+                Dict(
+                    "lhs" => Dict(
+                        "op" => "faq", "args" => Any[], "output_idx" => Any["j"],
+                        "ranges" => Dict("j" => Any[1, N]),
+                        "expr" => Dict(
+                            "op" => "D", "args" => Any[
+                                Dict(
+                                    "op" => "index",
+                                    "args" => Any["c", "j"]
+                                ),
+                            ], "wrt" => "t"
+                        )
+                    ),
+                    "rhs" => Dict(
+                        "op" => "faq", "args" => Any[], "output_idx" => Any["j"],
+                        "ranges" => Dict("j" => Any[1, N]),
+                        "expr" => Dict("op" => "index", "args" => Any["g", "j"])
+                    )
+                ),
+            ]
+        )
+    )
+)
 
 function _dmn_build(N, compiler)
     dm = _DM_ESS.DiscreteMaterializer(); insp = _DM_ESS.BuildInspection()
     W = [sin(0.1 * i * j) for i in 1:2, j in 1:N]
-    ics = Dict{String,Float64}("c[$j]" => 0.0 for j in 1:N)
-    _DM_ESS._build_evaluator(_dmn_doc(N); initial_conditions = ics,
+    ics = Dict{String, Float64}("c[$j]" => 0.0 for j in 1:N)
+    _DM_ESS._build_evaluator(
+        _dmn_doc(N); initial_conditions = ics,
         const_arrays = Dict("W" => W),
         param_arrays = Dict("src" => [0.7, -1.3], "F" => [cos(0.2j) for j in 1:N]),
-        materialize_out = dm, inspect = insp, compiler = compiler)
+        materialize_out = dm, inspect = insp, compiler = compiler
+    )
     return dm, insp.compiler_report
 end
 
@@ -288,13 +362,15 @@ end
 # grid_invariance_test.jl uses on a right-hand side).
 function _dmn_rgf_types(root)
     RGF = _DM_ESS.RuntimeGeneratedFunctions
-    seen = IdDict{Any,Nothing}(); types = Set{Any}()
+    seen = IdDict{Any, Nothing}(); types = Set{Any}()
     stack = Any[root]
     while !isempty(stack)
         x = pop!(stack)
         T = typeof(x)
-        (isbitstype(T) || x isa AbstractString || x isa Symbol || x isa Module ||
-         x isa DataType) && continue
+        (
+            isbitstype(T) || x isa AbstractString || x isa Symbol || x isa Module ||
+                x isa DataType
+        ) && continue
         if ismutable(x)
             haskey(seen, x) && continue
             seen[x] = nothing
@@ -305,11 +381,15 @@ function _dmn_rgf_types(root)
         end
         if x isa Array
             eltype(x) <: Number && continue
-            for i in eachindex(x); isassigned(x, i) && push!(stack, x[i]); end
+            for i in eachindex(x)
+                isassigned(x, i) && push!(stack, x[i])
+            end
         elseif x isa AbstractDict
             continue
         else
-            for i in 1:nfields(x); isdefined(x, i) && push!(stack, getfield(x, i)); end
+            for i in 1:nfields(x)
+                isdefined(x, i) && push!(stack, getfield(x, i))
+            end
         end
     end
     return types
@@ -342,7 +422,7 @@ using JSON3
 # The fixture with `g[j] = Σ_i W[i,j]·src[i]·offset`: the discrete field now
 # reads the scalar parameter `offset` as well as the live buffer.
 function _dmp_file()
-    d = JSON3.read(read(_dm_fixture(), String), Dict{String,Any})
+    d = JSON3.read(read(_dm_fixture(), String), Dict{String, Any})
     g = d["models"]["M"]["equations"][2]["rhs"]
     g["expr"]["args"] = Any[g["expr"]["args"]..., "offset"]
     return _DM_ESS.load_string(JSON3.write(d))
@@ -350,14 +430,16 @@ end
 _dmp_expected(src, offset) = _dm_g(src) .* offset .+ _dm_k(offset)
 
 @testset "a discrete fill that reads a parameter follows the call's p" begin
-    ics = Dict{String,Float64}("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0)
+    ics = Dict{String, Float64}("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0)
     src = [1.0, 2.0]
     for compiler in (:native, :interpreter)
         @testset "$compiler" begin
             dm = _DM_ESS.DiscreteMaterializer()
-            f!, u0, p, _, vm = _DM_ESS._build_evaluator(_dmp_file(); compiler = compiler,
+            f!, u0, p, _, vm = _DM_ESS._build_evaluator(
+                _dmp_file(); compiler = compiler,
                 initial_conditions = ics, const_arrays = Dict("W" => _DM_W),
-                param_arrays = Dict("src" => src), materialize_out = dm)
+                param_arrays = Dict("src" => src), materialize_out = dm
+            )
             @test haskey(dm.caches, "g")
             key = only(k for k in keys(p) if endswith(String(k), "offset"))
             rhs(q) = (du = zero(u0); f!(du, u0, q, 0.0); [du[vm["c[$j]"]] for j in 1:3])
@@ -375,10 +457,12 @@ _dmp_expected(src, offset) = _dm_g(src) .* offset .+ _dm_k(offset)
         end
     end
     @testset "esm_problem + remake, bit for bit across the compilers" begin
-        runs = Dict{Symbol,Any}()
+        runs = Dict{Symbol, Any}()
         for compiler in (:native, :interpreter)
-            prob = _DM_ESS.esm_problem(_dmp_file(), (0.0, 1.0); compiler = compiler,
-                const_arrays = Dict("W" => _DM_W), param_arrays = Dict("src" => copy(src)))
+            prob = _DM_ESS.esm_problem(
+                _dmp_file(), (0.0, 1.0); compiler = compiler,
+                const_arrays = Dict("W" => _DM_W), param_arrays = Dict("src" => copy(src))
+            )
             prob2 = _DM_ESS.remake(prob; p = Dict("offset" => 2.0))
             rhs(pr) = (du = zero(pr.u0); pr.f!(du, pr.u0, pr.p, 0.0); du)
             d2 = rhs(prob2)
@@ -393,9 +477,11 @@ _dmp_expected(src, offset) = _dm_g(src) .* offset .+ _dm_k(offset)
     if VERSION >= v"1.12"
         @testset "a same-p call does not allocate" begin
             dm = _DM_ESS.DiscreteMaterializer()
-            f!, u0, p, _, _ = _DM_ESS._build_evaluator(_dmp_file(); compiler = :native,
+            f!, u0, p, _, _ = _DM_ESS._build_evaluator(
+                _dmp_file(); compiler = :native,
                 initial_conditions = ics, const_arrays = Dict("W" => _DM_W),
-                param_arrays = Dict("src" => copy(src)), materialize_out = dm)
+                param_arrays = Dict("src" => copy(src)), materialize_out = dm
+            )
             du = zero(u0)
             f!(du, u0, p, 0.0); f!(du, u0, p, 0.0)
             @test (@allocated f!(du, u0, p, 0.0)) == 0

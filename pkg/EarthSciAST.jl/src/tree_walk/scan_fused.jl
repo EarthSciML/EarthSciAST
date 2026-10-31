@@ -49,7 +49,7 @@
 # One fused scan: the generated function `f(du, u, p, t, tabs, ci, nc)`, which
 # runs lanes `[a, b)` of chunk `ci` of `nc`, its tables, and the most chunks its
 # lanes split into (its lane count; fewer for a column scan).
-struct _FusedScan{F,TB}
+struct _FusedScan{F, TB}
     f::F
     tabs::TB
     nlanes::Int
@@ -72,8 +72,10 @@ function _cellset_is_shifted(cs::_CellSet, slots::Vector{Int}, delta::Int)
     end
     return _box_is_shifted(cs.base, Tuple(cs.strides), Tuple(cs.ranges), slots, delta)
 end
-function _box_is_shifted(base::Int, st::NTuple{N,Int}, rs::NTuple{N,UnitRange{Int}},
-                         slots::Vector{Int}, delta::Int) where {N}
+function _box_is_shifted(
+        base::Int, st::NTuple{N, Int}, rs::NTuple{N, UnitRange{Int}},
+        slots::Vector{Int}, delta::Int
+    ) where {N}
     k = 0
     @inbounds for I in CartesianIndices(rs)
         o = base
@@ -94,8 +96,10 @@ end
 # The descriptor kinds a consumer's body may read: each is addressed by `oln`
 # (or nothing), so the body can run at the scan's cell with `oln` = the scan's
 # slot minus `delta`.
-const _SCAN_CONSUMER_KINDS = (_AK_SCALAR, _AK_STATE_AFFINE, _AK_CONST_AFFINE,
-                              _AK_STATE_FIXED, _AK_ARR_FIXED)
+const _SCAN_CONSUMER_KINDS = (
+    _AK_SCALAR, _AK_STATE_AFFINE, _AK_CONST_AFFINE,
+    _AK_STATE_FIXED, _AK_ARR_FIXED,
+)
 
 # Whether a consumer's spine (or recipe) uses only leaves and plain operators:
 # nothing addressed by the cell ordinal or the loop index, no reduction, no
@@ -104,8 +108,10 @@ function _scan_consumer_node_ok(nd::_Node)
     k = nd.kind
     if k === _NK_OP
         nd.payload === nothing || return false
-    elseif !(k === _NK_ACCESS || k === _NK_LITERAL || k === _NK_PARAM ||
-             k === _NK_TIME || k === _NK_CACHED)
+    elseif !(
+            k === _NK_ACCESS || k === _NK_LITERAL || k === _NK_PARAM ||
+                k === _NK_TIME || k === _NK_CACHED
+        )
         return false
     end
     return all(_scan_consumer_node_ok, nd.children)
@@ -124,7 +130,7 @@ function _scan_desc_extent(a::_AccDesc, olnext)
     elseif k === _AK_STATE_FIXED
         return (a.idx, a.idx)
     elseif k === _AK_STATE_INDIRECT || k === _AK_STATE_INDIRECT_COL ||
-           k === _AK_STATE_TBL_BOX
+            k === _AK_STATE_TBL_BOX
         isempty(a.conn) && return nothing
         lo, hi = typemax(Int), typemin(Int)
         for s in a.conn
@@ -139,8 +145,10 @@ _scan_overlaps(e, lo::Int, hi::Int) = e !== nothing && e[1] <= hi && e[2] >= lo
 
 # Whether any descriptor of `K` (sub-kernels included) other than `K.acc[skip]`
 # may read a slot in `lo:hi`.
-function _scan_kernel_reads(K::_AccKernel, lo::Int, hi::Int, skip::Int = 0,
-                            olnext = _cg_oln_extent(K.cells))
+function _scan_kernel_reads(
+        K::_AccKernel, lo::Int, hi::Int, skip::Int = 0,
+        olnext = _cg_oln_extent(K.cells)
+    )
     for (j, a) in enumerate(K.acc)
         j == skip && continue
         _scan_overlaps(_scan_desc_extent(a, olnext), lo, hi) && return true
@@ -185,9 +193,11 @@ function _scan_consumer(slots::Vector{Int}, Ks::AbstractVector{_AccKernel}, nst:
     end
     ix == 0 && return nothing
     _scan_node_reads(K.spine, ix) || return nothing
-    (_scan_consumer_node_ok(K.spine) &&
-     all(_scan_consumer_node_ok, K.cse.recipes) &&
-     all(_scan_consumer_node_ok, K.cse.inv_recipes)) || return nothing
+    (
+        _scan_consumer_node_ok(K.spine) &&
+            all(_scan_consumer_node_ok, K.cse.recipes) &&
+            all(_scan_consumer_node_ok, K.cse.inv_recipes)
+    ) || return nothing
     any(r -> _scan_node_reads(r, ix), K.cse.inv_recipes) && return nothing
     delta = K.acc[ix].delta
     _cellset_is_shifted(K.cells, slots, delta) || return nothing
@@ -206,9 +216,11 @@ end
 # equation names it, the state equations have no per-cell scalar entries and
 # no contraction nests (whose reads are not checked here), and the consumer is
 # the only state kernel any of whose reads can reach its slots.
-function _scan_consumer_plan(levels, Ks::AbstractVector{_AccKernel}, nst::Int,
-                             scalar_entries, percell, contractions, defsets)
-    plan = IdDict{Any,Any}()
+function _scan_consumer_plan(
+        levels, Ks::AbstractVector{_AccKernel}, nst::Int,
+        scalar_entries, percell, contractions, defsets
+    )
+    plan = IdDict{Any, Any}()
     _codegen_disabled() && return plan
     for (li, (owner, cadence, _, kernels, scans, _, _)) in enumerate(levels)
         cadence === :dynamic || continue
@@ -226,10 +238,14 @@ function _scan_consumer_plan(levels, Ks::AbstractVector{_AccKernel}, nst::Int,
             end
             c === nothing && continue
             name = get(owner, S, nothing)
-            store = !(name !== nothing && isempty(percell) && isempty(contractions) &&
-                      !any(e -> name in _referenced_var_names(e[2]), scalar_entries) &&
-                      !any(d -> any(ex -> name in _referenced_var_names(ex), values(d)),
-                           defsets))
+            store = !(
+                name !== nothing && isempty(percell) && isempty(contractions) &&
+                    !any(e -> name in _referenced_var_names(e[2]), scalar_entries) &&
+                    !any(
+                    d -> any(ex -> name in _referenced_var_names(ex), values(d)),
+                    defsets
+                )
+            )
             plan[S] = c isa NamedTuple ? merge(c, (store = store,)) : (c..., store)
         end
     end
@@ -239,12 +255,12 @@ end
 # Emit and compile the fused scan of fold `S` over its term kernel `K`, or
 # return `nothing` when the emitter declines the kernel. `consumer` is
 # `nothing` or `(Kc, ix, delta, store)` (see above).
-function _build_fused_scan(S::_ScanFold, K::_AccKernel; nst::Int=0, consumer=nothing)
+function _build_fused_scan(S::_ScanFold, K::_AccKernel; nst::Int = 0, consumer = nothing)
     op = S.oplus
     opsym = op === :+ ? :+ : op === :* ? :* : op === :max ? :max :
-            op === :min ? :min : nothing
+        op === :min ? :min : nothing
     opsym === nothing && return nothing
-    ctx = _CGCtx(_codegen_node_budget(); nst=nst)
+    ctx = _CGCtx(_codegen_node_budget(); nst = nst)
     acc = _cg_name(ctx, "acc")
     av = _cg_name(ctx, "a")
     bv = _cg_name(ctx, "b")
@@ -259,11 +275,15 @@ function _build_fused_scan(S::_ScanFold, K::_AccKernel; nst::Int=0, consumer=not
         if consumer !== nothing
             Kc, ix, delta, store = consumer
             _cg_note_nest!(ctx, Kc)
-            cons = (K = Kc, ix = ix, delta = delta, store = store,
-                    invsyms = _cg_inv!(ctx, Kc))
+            cons = (
+                K = Kc, ix = ix, delta = delta, store = store,
+                invsyms = _cg_inv!(ctx, Kc),
+            )
         end
-        ctx.scanmode = (acc = acc, a = av, b = bv, op = opsym, inclusive = S.inclusive,
-                        cons = cons)
+        ctx.scanmode = (
+            acc = acc, a = av, b = bv, op = opsym, inclusive = S.inclusive,
+            cons = cons,
+        )
         geo = Any[]
         nest = _cg_with_geosink(ctx, geo) do
             _cg_tbl_versions(() -> _cg_emit_kernel_nest!(ctx, K, invsyms), ctx)
@@ -291,29 +311,46 @@ function _build_fused_scan(S::_ScanFold, K::_AccKernel; nst::Int=0, consumer=not
     grpstmts = Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]
     byval = _cg_split_by_value()
     fnstmts = byval && !isempty(ctx.helpers) ?
-              Any[:(local $(_CG_FNS) = tabs[$(ngrp + 1)])] : Any[]
+        Any[:(local $(_CG_FNS) = tabs[$(ngrp + 1)])] : Any[]
     helperdefs = byval ? Any[] : ctx.helpers
     # `u` read-only in an alias scope, as in the kernel section: the term
     # reads no slot the scan writes (a level's `(ue, ue)` call included).
-    run = Expr(:macrocall, GlobalRef(Base.Experimental, Symbol("@aliasscope")), ln,
-               Expr(:let, _cg_section_bindings(consumer === nothing ? nst : 0,
-                                               _AccKernel[K]),
-                    Expr(:block,
-                         Expr(:macrocall, Symbol("@inbounds"), ln,
-                              Expr(:block, ctx.prologue...)),
-                         Expr(:macrocall, Symbol("@inbounds"), ln, blk))))
-    body = Expr(:block, grpstmts..., fnstmts...,
-                :(local _cgT = _rhs_value_type(u, p, t)),
-                helperdefs...,
-                run,
-                :(return nothing))
+    run = Expr(
+        :macrocall, GlobalRef(Base.Experimental, Symbol("@aliasscope")), ln,
+        Expr(
+            :let, _cg_section_bindings(
+                consumer === nothing ? nst : 0,
+                _AccKernel[K]
+            ),
+            Expr(
+                :block,
+                Expr(
+                    :macrocall, Symbol("@inbounds"), ln,
+                    Expr(:block, ctx.prologue...)
+                ),
+                Expr(:macrocall, Symbol("@inbounds"), ln, blk)
+            )
+        )
+    )
+    body = Expr(
+        :block, grpstmts..., fnstmts...,
+        :(local _cgT = _rhs_value_type(u, p, t)),
+        helperdefs...,
+        run,
+        :(return nothing)
+    )
     ex = Expr(:function, Expr(:tuple, :du, :u, :p, :t, :tabs, :_cgci, :_cgnc), body)
     f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(@__MODULE__, @__MODULE__, ex)
     tabpack = ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp)
     if byval && !isempty(ctx.helpers)
-        tabpack = (tabpack...,
-                   Tuple(RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
-                             @__MODULE__, @__MODULE__, h) for h in ctx.helpers))
+        tabpack = (
+            tabpack...,
+            Tuple(
+                RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
+                    @__MODULE__, @__MODULE__, h
+                ) for h in ctx.helpers
+            )
+        )
     end
     nlanes = div(length(S.slots), S.len)
     _tally_cascade!(:scan_fused)
@@ -324,8 +361,10 @@ function _build_fused_scan(S::_ScanFold, K::_AccKernel; nst::Int=0, consumer=not
     # Fewer than two lanes leave nothing to split; the verdict sees no cells.
     # Each slot computes its term as well as folding it.
     nsl = nlanes >= 2 ? length(S.slots) : 0
-    return _FusedScan(f, tabpack, nlanes,
-                      _SecTCache(nsl, true, nsl * (1 + _acc_kernel_work(K))))
+    return _FusedScan(
+        f, tabpack, nlanes,
+        _SecTCache(nsl, true, nsl * (1 + _acc_kernel_work(K)))
+    )
 end
 
 # Split the in-place build's prefix scans into the fused ones and the rest.
@@ -334,32 +373,34 @@ end
 # `consumers` maps a fold (by identity) to its consumer `(Kc, ix, delta, store)`;
 # `consumed` collects each consumer kernel whose fused scan was emitted, for
 # the caller to take out of the state kernels.
-function _detach_fused_scans(kernels::Vector{_AccKernel}, folds::Vector{_ScanFold};
-                             nst::Int=0, consumers::IdDict{Any,Any}=IdDict{Any,Any}(),
-                             consumed::IdDict{Any,Bool}=IdDict{Any,Bool}())
+function _detach_fused_scans(
+        kernels::Vector{_AccKernel}, folds::Vector{_ScanFold};
+        nst::Int = 0, consumers::IdDict{Any, Any} = IdDict{Any, Any}(),
+        consumed::IdDict{Any, Bool} = IdDict{Any, Bool}()
+    )
     (isempty(folds) || _codegen_disabled()) && return kernels, folds, ()
     gens = Any[]
     plain = _ScanFold[]
-    drop = IdDict{Any,Bool}()
+    drop = IdDict{Any, Bool}()
     for S in folds
         g = nothing
         if length(S.terms) == 1
             K = S.terms[1]
             if K isa _AccKernel && any(k -> k === K, kernels) && _scan_fusable(K, S)
                 cons = get(consumers, S, nothing)
-                g = _build_fused_scan(S, K; nst=nst, consumer=cons)
+                g = _build_fused_scan(S, K; nst = nst, consumer = cons)
                 if g === nothing && cons !== nothing
-                    g = _build_fused_scan(S, K; nst=nst)
+                    g = _build_fused_scan(S, K; nst = nst)
                 elseif g !== nothing && cons !== nothing
                     consumed[cons[1]] = true
                 end
                 g === nothing || (drop[K] = true)
             elseif K isa _AccKernel && any(k -> k === K, kernels) &&
-                   (sh = _colscan_shape(S, K)) !== nothing
+                    (sh = _colscan_shape(S, K)) !== nothing
                 cons = get(consumers, S, nothing)
-                g = _build_colscan(S, K, sh; nst=nst, consumer=cons)
+                g = _build_colscan(S, K, sh; nst = nst, consumer = cons)
                 if g === nothing && cons !== nothing
-                    g = _build_colscan(S, K, sh; nst=nst)
+                    g = _build_colscan(S, K, sh; nst = nst)
                 elseif g !== nothing && cons !== nothing
                     consumed[cons.K] = true
                 end
@@ -423,8 +464,10 @@ function _colscan_shape(S::_ScanFold, K::_AccKernel)
     r1, r2 = cs.ranges
     S2 = cs.strides[2]
     nl = length(r1)
-    (nl >= 2 && S.len >= 1 && div(length(S.slots), S.len) == nl &&
-     abs(S.kstride) == S2 && S2 >= nl) || return nothing
+    (
+        nl >= 2 && S.len >= 1 && div(length(S.slots), S.len) == nl &&
+            abs(S.kstride) == S2 && S2 >= nl
+    ) || return nothing
     rev = S.kstride < 0
     nt = length(r2)
     (S.len == nt || (S.len == nt + 1 && !S.inclusive && !rev)) || return nothing
@@ -445,7 +488,7 @@ _colscan_levels(S::_ScanFold, sh) =
 # (a contraction nest or a recurrence).
 function _level_write_extents(level)
     _, _, scalars, kernels, scans, acs, recurs = level
-    ext = Tuple{Int,Int}[]
+    ext = Tuple{Int, Int}[]
     for (slot, _) in scalars
         push!(ext, (slot, slot))
     end
@@ -463,8 +506,10 @@ end
 # `levels` / `li` are the pending observed levels and the scan's, for which
 # other observed slots the consumer may read (those no level from the scan's on
 # writes).
-function _colscan_consumer(S::_ScanFold, K::_AccKernel, sh, Ks::AbstractVector{_AccKernel},
-                           nst::Int, levels, li::Int)
+function _colscan_consumer(
+        S::_ScanFold, K::_AccKernel, sh, Ks::AbstractVector{_AccKernel},
+        nst::Int, levels, li::Int
+    )
     isempty(S.slots) && return nothing
     lo, hi = extrema(S.slots)
     found = nothing
@@ -481,7 +526,7 @@ function _colscan_consumer(S::_ScanFold, K::_AccKernel, sh, Ks::AbstractVector{_
     (cc.strides == K.cells.strides && cc.ranges == K.cells.ranges) || return nothing
     olnext = _cg_oln_extent(cc)
     (1 <= olnext[1] && olnext[2] <= nst) || return nothing
-    later = Tuple{Int,Int}[]
+    later = Tuple{Int, Int}[]
     opaque = false
     for k in li:length(levels)
         e, o = _level_write_extents(levels[k])
@@ -501,7 +546,7 @@ function _colscan_consumer(S::_ScanFold, K::_AccKernel, sh, Ks::AbstractVector{_
     lv = _colscan_levels(S, sh)
     j1 = sh.rev ? last(sh.r2) : first(sh.r2)
     S2 = sh.S2
-    reads = Dict{Int,Int}()
+    reads = Dict{Int, Int}()
     for (j, a) in enumerate(Kc.acc)
         e = _scan_desc_extent(a, olnext)
         e === nothing && continue
@@ -542,8 +587,10 @@ function _cellset_foreach_slot(f, cs::_CellSet)
     end
     return nothing
 end
-function _box_foreach_slot(f, base::Int, st::NTuple{N,Int},
-                           rs::NTuple{N,UnitRange{Int}}) where {N}
+function _box_foreach_slot(
+        f, base::Int, st::NTuple{N, Int},
+        rs::NTuple{N, UnitRange{Int}}
+    ) where {N}
     for I in CartesianIndices(rs)
         o = base
         for d in 1:N
@@ -557,12 +604,12 @@ end
 # Emit and compile the column scan of fold `S` over its term kernel `K`, or
 # `nothing` when the emitter declines a kernel. `consumer` is `nothing` or
 # `(K, reads, store)` from `_colscan_consumer`.
-function _build_colscan(S::_ScanFold, K::_AccKernel, sh; nst::Int=0, consumer=nothing)
+function _build_colscan(S::_ScanFold, K::_AccKernel, sh; nst::Int = 0, consumer = nothing)
     op = S.oplus
     opsym = op === :+ ? :+ : op === :* ? :* : op === :max ? :max :
-            op === :min ? :min : nothing
+        op === :min ? :min : nothing
     opsym === nothing && return nothing
-    ctx = _CGCtx(_codegen_node_budget(); nst=nst)
+    ctx = _CGCtx(_codegen_node_budget(); nst = nst)
     nlanes = length(sh.r1)
     blk = try
         for Sub in K.subs
@@ -577,8 +624,12 @@ function _build_colscan(S::_ScanFold, K::_AccKernel, sh; nst::Int=0, consumer=no
         end
         geo = Any[]
         nest = _cg_with_geosink(ctx, geo) do
-            _cg_tbl_versions(() -> _colscan_nest(ctx, S, K, sh, invsyms, opsym,
-                                                 consumer, cinv), ctx)
+            _cg_tbl_versions(
+                () -> _colscan_nest(
+                    ctx, S, K, sh, invsyms, opsym,
+                    consumer, cinv
+                ), ctx
+            )
         end
         quote
             $(geo...)
@@ -594,27 +645,44 @@ function _build_colscan(S::_ScanFold, K::_AccKernel, sh; nst::Int=0, consumer=no
     grpstmts = Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]
     byval = _cg_split_by_value()
     fnstmts = byval && !isempty(ctx.helpers) ?
-              Any[:(local $(_CG_FNS) = tabs[$(ngrp + 1)])] : Any[]
+        Any[:(local $(_CG_FNS) = tabs[$(ngrp + 1)])] : Any[]
     helperdefs = byval ? Any[] : ctx.helpers
-    run = Expr(:macrocall, GlobalRef(Base.Experimental, Symbol("@aliasscope")), ln,
-               Expr(:let, _cg_section_bindings(consumer === nothing ? nst : 0,
-                                               _AccKernel[K]),
-                    Expr(:block,
-                         Expr(:macrocall, Symbol("@inbounds"), ln,
-                              Expr(:block, ctx.prologue...)),
-                         Expr(:macrocall, Symbol("@inbounds"), ln, blk))))
-    body = Expr(:block, grpstmts..., fnstmts...,
-                :(local _cgT = _rhs_value_type(u, p, t)),
-                helperdefs...,
-                run,
-                :(return nothing))
+    run = Expr(
+        :macrocall, GlobalRef(Base.Experimental, Symbol("@aliasscope")), ln,
+        Expr(
+            :let, _cg_section_bindings(
+                consumer === nothing ? nst : 0,
+                _AccKernel[K]
+            ),
+            Expr(
+                :block,
+                Expr(
+                    :macrocall, Symbol("@inbounds"), ln,
+                    Expr(:block, ctx.prologue...)
+                ),
+                Expr(:macrocall, Symbol("@inbounds"), ln, blk)
+            )
+        )
+    )
+    body = Expr(
+        :block, grpstmts..., fnstmts...,
+        :(local _cgT = _rhs_value_type(u, p, t)),
+        helperdefs...,
+        run,
+        :(return nothing)
+    )
     ex = Expr(:function, Expr(:tuple, :du, :u, :p, :t, :tabs, :_cgci, :_cgnc), body)
     f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(@__MODULE__, @__MODULE__, ex)
     tabpack = ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp)
     if byval && !isempty(ctx.helpers)
-        tabpack = (tabpack...,
-                   Tuple(RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
-                             @__MODULE__, @__MODULE__, h) for h in ctx.helpers))
+        tabpack = (
+            tabpack...,
+            Tuple(
+                RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
+                    @__MODULE__, @__MODULE__, h
+                ) for h in ctx.helpers
+            )
+        )
     end
     _tally_cascade!(:scan_colscan)
     if consumer !== nothing
@@ -623,10 +691,12 @@ function _build_colscan(S::_ScanFold, K::_AccKernel, sh; nst::Int=0, consumer=no
     end
     nsl = length(S.slots)
     work = nsl * (1 + _acc_kernel_work(K)) +
-           (consumer === nothing ? 0 : nsl * _acc_kernel_work(consumer.K))
+        (consumer === nothing ? 0 : nsl * _acc_kernel_work(consumer.K))
     # Threads split the lanes, at least `_COLSCAN_MIN_LANES` to a chunk.
-    return _FusedScan(f, tabpack, max(1, div(nlanes, _COLSCAN_MIN_LANES)),
-                      _SecTCache(nsl, true, work))
+    return _FusedScan(
+        f, tabpack, max(1, div(nlanes, _COLSCAN_MIN_LANES)),
+        _SecTCache(nsl, true, work)
+    )
 end
 
 # The lanes a chunk runs are blocked by this many, so a block's running values
@@ -640,8 +710,10 @@ const _COLSCAN_BLOCK = 4096
 # `_THREAD_MIN_RMW_CELLS`.
 const _COLSCAN_MIN_LANES = 1024
 
-function _colscan_nest(ctx::_CGCtx, S::_ScanFold, K::_AccKernel, sh, invsyms, opsym,
-                       consumer, cinv)
+function _colscan_nest(
+        ctx::_CGCtx, S::_ScanFold, K::_AccKernel, sh, invsyms, opsym,
+        consumer, cinv
+    )
     cs = K.cells
     po, no = _colscan_offsets(S.inclusive, sh.rev)
     lv = _colscan_levels(S, sh)
@@ -695,7 +767,7 @@ function _colscan_nest(ctx::_CGCtx, S::_ScanFold, K::_AccKernel, sh, invsyms, op
             xn = _cg_name(ctx, "xn")
             push!(st, :(local $xp = convert(eltype(du), $pv)))
             push!(st, :(local $xn = convert(eltype(du), $nv)))
-            sub = Dict{Int,Any}()
+            sub = Dict{Int, Any}()
             for (ix, off) in consumer.reads
                 (first && off == po && !((j1v + off) in lv)) && continue
                 sub[ix] = off == po ? xp : xn

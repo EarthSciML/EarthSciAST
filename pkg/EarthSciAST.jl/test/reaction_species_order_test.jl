@@ -35,13 +35,14 @@ if !isdefined(Main, :ESM_TESTUTILS_LOADED)
 end
 
 const _REACTION_ORDER_CORPUS_PATH = joinpath(
-    TESTUTILS_REPO_ROOT, "tests", "conformance", "reactions", "species_order.json")
+    TESTUTILS_REPO_ROOT, "tests", "conformance", "reactions", "species_order.json"
+)
 
 """Rows of a `Matrix` as plain `Vector{Float64}`s, for row-wise comparison."""
 _rows(S::AbstractMatrix) = [Float64.(collect(S[i, :])) for i in 1:size(S, 1)]
 
 """Rows of the corpus' nested-array expectation, likewise as `Vector{Float64}`."""
-_rows(rows::Union{JSON3.Array,AbstractVector}) = [Float64.(collect(r)) for r in rows]
+_rows(rows::Union{JSON3.Array, AbstractVector}) = [Float64.(collect(r)) for r in rows]
 
 """
 The species each equation of `model` differentiates, in EQUATION order.
@@ -92,7 +93,7 @@ end
                 # Rows = species in DECLARATION order, columns = reactions in
                 # declaration order, entries = products − substrates.
                 @test _rows(stoichiometric_matrix(system)) ==
-                      _rows(case["stoichiometric_matrix"])
+                    _rows(case["stoichiometric_matrix"])
 
                 # Equation order of the DERIVED model. A reservoir species
                 # (`constant: true`) keeps its matrix row but lowers to a

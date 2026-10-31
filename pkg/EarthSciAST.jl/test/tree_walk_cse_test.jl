@@ -27,9 +27,9 @@ include("testutils.jl")  # zero_alloc_harness.jl → rhs_alloc_bytes
 _cse_n(x) = NumExpr(Float64(x))
 _cse_v(n) = VarExpr(n)
 _cse_op(op, args...; kw...) = OpExpr(op, ESM.ASTExpr[args...]; kw...)
-_cse_D(varname) = _cse_op("D", _cse_v(varname); wrt="t")
-_cse_const(v) = OpExpr("const", ESM.ASTExpr[]; value=v)
-_cse_fn(name, args...) = OpExpr("fn", ESM.ASTExpr[args...]; name=String(name))
+_cse_D(varname) = _cse_op("D", _cse_v(varname); wrt = "t")
+_cse_const(v) = OpExpr("const", ESM.ASTExpr[]; value = v)
+_cse_fn(name, args...) = OpExpr("fn", ESM.ASTExpr[args...]; name = String(name))
 
 @testset "tree_walk common-subexpression elimination (ess-r7h)" begin
 
@@ -39,15 +39,17 @@ _cse_fn(name, args...) = OpExpr("fn", ESM.ASTExpr[args...]; name=String(name))
     #   D(b) = k * (a+b)             (a+b again, across equations) → 3 total
     # ----------------------------------------------------------------
     @testset "instrumented count: K occurrences → 1 cached subexpression" begin
-        vars = Dict{String,ModelVariable}(
-            "a" => ModelVariable(UnknownVariable; default=0.3),
-            "b" => ModelVariable(UnknownVariable; default=0.5),
-            "k" => ModelVariable(ParameterVariable; default=2.0),
+        vars = Dict{String, ModelVariable}(
+            "a" => ModelVariable(UnknownVariable; default = 0.3),
+            "b" => ModelVariable(UnknownVariable; default = 0.5),
+            "k" => ModelVariable(ParameterVariable; default = 2.0),
         )
         apb = _cse_op("+", _cse_v("a"), _cse_v("b"))
         eqs = ESM.Equation[
-            ESM.Equation(_cse_D("a"),
-                         _cse_op("+", _cse_op("sin", apb), _cse_op("cos", apb))),
+            ESM.Equation(
+                _cse_D("a"),
+                _cse_op("+", _cse_op("sin", apb), _cse_op("cos", apb))
+            ),
             ESM.Equation(_cse_D("b"), _cse_op("*", _cse_v("k"), apb)),
         ]
         f!, u0, p, _tspan, var_map, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs))
@@ -73,14 +75,16 @@ _cse_fn(name, args...) = OpExpr("fn", ESM.ASTExpr[args...]; name=String(name))
     #   D(a) = sin((a+b)*(a+b));  D(b) = cos((a+b)*(a+b));  D(c) = a+b
     # ----------------------------------------------------------------
     @testset "nested cached subexpressions are topologically ordered" begin
-        vars = Dict{String,ModelVariable}(
-            "a" => ModelVariable(UnknownVariable; default=0.7),
-            "b" => ModelVariable(UnknownVariable; default=0.2),
-            "c" => ModelVariable(UnknownVariable; default=0.0),
+        vars = Dict{String, ModelVariable}(
+            "a" => ModelVariable(UnknownVariable; default = 0.7),
+            "b" => ModelVariable(UnknownVariable; default = 0.2),
+            "c" => ModelVariable(UnknownVariable; default = 0.0),
         )
-        s  = _cse_op("+", _cse_v("a"), _cse_v("b"))
-        ss = _cse_op("*", _cse_op("+", _cse_v("a"), _cse_v("b")),
-                          _cse_op("+", _cse_v("a"), _cse_v("b")))
+        s = _cse_op("+", _cse_v("a"), _cse_v("b"))
+        ss = _cse_op(
+            "*", _cse_op("+", _cse_v("a"), _cse_v("b")),
+            _cse_op("+", _cse_v("a"), _cse_v("b"))
+        )
         eqs = ESM.Equation[
             ESM.Equation(_cse_D("a"), _cse_op("sin", ss)),
             ESM.Equation(_cse_D("b"), _cse_op("cos", ss)),
@@ -108,10 +112,10 @@ _cse_fn(name, args...) = OpExpr("fn", ESM.ASTExpr[args...]; name=String(name))
     # prelude — the compiled rhs nodes are byte-identical to the pre-CSE path.
     # ----------------------------------------------------------------
     @testset "no common subexpressions → empty prelude (unchanged f!)" begin
-        vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(UnknownVariable; default=1.0),
-            "y" => ModelVariable(UnknownVariable; default=2.0),
-            "r" => ModelVariable(ParameterVariable; default=0.5),
+        vars = Dict{String, ModelVariable}(
+            "x" => ModelVariable(UnknownVariable; default = 1.0),
+            "y" => ModelVariable(UnknownVariable; default = 2.0),
+            "r" => ModelVariable(ParameterVariable; default = 0.5),
         )
         eqs = ESM.Equation[
             ESM.Equation(_cse_D("x"), _cse_op("*", _cse_op("neg", _cse_v("r")), _cse_v("x"))),
@@ -134,12 +138,12 @@ _cse_fn(name, args...) = OpExpr("fn", ESM.ASTExpr[args...]; name=String(name))
     #   f1 = k1*A*B , f2 = k2*C
     # ----------------------------------------------------------------
     @testset "reaction-network fluxes shared across species balances" begin
-        vars = Dict{String,ModelVariable}(
-            "A" => ModelVariable(UnknownVariable; default=1.5),
-            "B" => ModelVariable(UnknownVariable; default=0.8),
-            "C" => ModelVariable(UnknownVariable; default=0.4),
-            "k1" => ModelVariable(ParameterVariable; default=0.3),
-            "k2" => ModelVariable(ParameterVariable; default=0.7),
+        vars = Dict{String, ModelVariable}(
+            "A" => ModelVariable(UnknownVariable; default = 1.5),
+            "B" => ModelVariable(UnknownVariable; default = 0.8),
+            "C" => ModelVariable(UnknownVariable; default = 0.4),
+            "k1" => ModelVariable(ParameterVariable; default = 0.3),
+            "k2" => ModelVariable(ParameterVariable; default = 0.7),
         )
         f1() = _cse_op("*", _cse_v("k1"), _cse_v("A"), _cse_v("B"))
         f2() = _cse_op("*", _cse_v("k2"), _cse_v("C"))
@@ -185,23 +189,28 @@ _cse_fn(name, args...) = OpExpr("fn", ESM.ASTExpr[args...]; name=String(name))
     @testset "integration unchanged by CSE (analytic decay)" begin
         λ = 0.9
         N0 = 5.0
-        vars = Dict{String,ModelVariable}(
-            "N" => ModelVariable(UnknownVariable; default=N0),
-            "lam" => ModelVariable(ParameterVariable; default=λ),
+        vars = Dict{String, ModelVariable}(
+            "N" => ModelVariable(UnknownVariable; default = N0),
+            "lam" => ModelVariable(ParameterVariable; default = λ),
         )
         # D(N) = -(lam*N) - (lam*N) + (lam*N)  ≡ -(lam*N); lam*N appears 3×.
         lamN() = _cse_op("*", _cse_v("lam"), _cse_v("N"))
-        rhs = _cse_op("+", _cse_op("neg", lamN()),
-                      _cse_op("+", _cse_op("neg", lamN()), lamN()))
+        rhs = _cse_op(
+            "+", _cse_op("neg", lamN()),
+            _cse_op("+", _cse_op("neg", lamN()), lamN())
+        )
         f!, u0, p, _tspan, var_map, diag = ESM._build_evaluator_impl(
-            ESM.Model(vars, ESM.Equation[ESM.Equation(_cse_D("N"), rhs)]))
+            ESM.Model(vars, ESM.Equation[ESM.Equation(_cse_D("N"), rhs)])
+        )
         @test diag.n_cse_slots >= 1
         @test diag.n_cse_occurrences >= 3
 
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, (0.0, 1.5), p)
-        sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5();
-                                        reltol=1e-10, abstol=1e-12)
-        @test isapprox(sol.u[end][var_map["N"]], N0 * exp(-λ * 1.5); rtol=1e-6)
+        sol = OrdinaryDiffEqTsit5.solve(
+            prob, OrdinaryDiffEqTsit5.Tsit5();
+            reltol = 1.0e-10, abstol = 1.0e-12
+        )
+        @test isapprox(sol.u[end][var_map["N"]], N0 * exp(-λ * 1.5); rtol = 1.0e-6)
     end
 end
 
@@ -243,17 +252,20 @@ end
     # inside the prelude loop.
     # ----------------------------------------------------------------
     @testset "a guarded sqrt is not hoisted out of its ifelse" begin
-        guarded() = _cse_op("ifelse", _cse_op(">=", _cse_v("a"), _cse_n(0)),
-                            _cse_op("sqrt", _cse_v("a")), _cse_n(0))
+        guarded() = _cse_op(
+            "ifelse", _cse_op(">=", _cse_v("a"), _cse_n(0)),
+            _cse_op("sqrt", _cse_v("a")), _cse_n(0)
+        )
         model(a0) = ESM.Model(
-            Dict{String,ModelVariable}(
-                "a" => ModelVariable(UnknownVariable; default=a0),
-                "b" => ModelVariable(UnknownVariable; default=0.0),
+            Dict{String, ModelVariable}(
+                "a" => ModelVariable(UnknownVariable; default = a0),
+                "b" => ModelVariable(UnknownVariable; default = 0.0),
             ),
             ESM.Equation[
                 ESM.Equation(_cse_D("a"), guarded()),
                 ESM.Equation(_cse_D("b"), _cse_op("*", _cse_n(2), guarded())),
-            ])
+            ]
+        )
 
         # Guard NOT taken (a < 0): `sqrt(a)` must never be evaluated.
         du, vm, diag = _guard_rhs(model(-1.0))
@@ -277,15 +289,20 @@ end
     #   D(a) = D(b) = or(a < 0, log(a) > 1)
     # ----------------------------------------------------------------
     @testset "a short-circuited log is not hoisted out of its `or`" begin
-        disj() = _cse_op("or", _cse_op("<", _cse_v("a"), _cse_n(0)),
-                         _cse_op(">", _cse_op("log", _cse_v("a")), _cse_n(1)))
+        disj() = _cse_op(
+            "or", _cse_op("<", _cse_v("a"), _cse_n(0)),
+            _cse_op(">", _cse_op("log", _cse_v("a")), _cse_n(1))
+        )
         m = ESM.Model(
-            Dict{String,ModelVariable}(
-                "a" => ModelVariable(UnknownVariable; default=-1.0),
-                "b" => ModelVariable(UnknownVariable; default=0.0),
+            Dict{String, ModelVariable}(
+                "a" => ModelVariable(UnknownVariable; default = -1.0),
+                "b" => ModelVariable(UnknownVariable; default = 0.0),
             ),
-            ESM.Equation[ESM.Equation(_cse_D("a"), disj()),
-                         ESM.Equation(_cse_D("b"), disj())])
+            ESM.Equation[
+                ESM.Equation(_cse_D("a"), disj()),
+                ESM.Equation(_cse_D("b"), disj()),
+            ]
+        )
 
         du, vm, _diag = _guard_rhs(m)
         # `a < 0` is true, so the disjunction short-circuits to 1.0 without ever
@@ -297,15 +314,20 @@ end
     # `and` is the mirror image: arg 2 runs only when arg 1 is TRUE.
     #   D(a) = D(b) = and(a >= 0, sqrt(a) > 1)      at a = -1 → 0.0, no sqrt(-1)
     @testset "a short-circuited sqrt is not hoisted out of an `and`" begin
-        conj() = _cse_op("and", _cse_op(">=", _cse_v("a"), _cse_n(0)),
-                         _cse_op(">", _cse_op("sqrt", _cse_v("a")), _cse_n(1)))
+        conj() = _cse_op(
+            "and", _cse_op(">=", _cse_v("a"), _cse_n(0)),
+            _cse_op(">", _cse_op("sqrt", _cse_v("a")), _cse_n(1))
+        )
         m = ESM.Model(
-            Dict{String,ModelVariable}(
-                "a" => ModelVariable(UnknownVariable; default=-1.0),
-                "b" => ModelVariable(UnknownVariable; default=0.0),
+            Dict{String, ModelVariable}(
+                "a" => ModelVariable(UnknownVariable; default = -1.0),
+                "b" => ModelVariable(UnknownVariable; default = 0.0),
             ),
-            ESM.Equation[ESM.Equation(_cse_D("a"), conj()),
-                         ESM.Equation(_cse_D("b"), conj())])
+            ESM.Equation[
+                ESM.Equation(_cse_D("a"), conj()),
+                ESM.Equation(_cse_D("b"), conj()),
+            ]
+        )
         du, vm, _ = _guard_rhs(m)
         @test du[vm["a"]] === 0.0
         @test du[vm["b"]] === 0.0
@@ -323,17 +345,22 @@ end
     @testset "1 unconditional + 1 guarded occurrence is still shared" begin
         apb() = _cse_op("+", _cse_v("a"), _cse_v("b"))
         m = ESM.Model(
-            Dict{String,ModelVariable}(
-                "a" => ModelVariable(UnknownVariable; default=0.3),
-                "b" => ModelVariable(UnknownVariable; default=0.5),
-                "c" => ModelVariable(UnknownVariable; default=0.0),
+            Dict{String, ModelVariable}(
+                "a" => ModelVariable(UnknownVariable; default = 0.3),
+                "b" => ModelVariable(UnknownVariable; default = 0.5),
+                "c" => ModelVariable(UnknownVariable; default = 0.0),
             ),
             ESM.Equation[
-                ESM.Equation(_cse_D("a"),
-                    _cse_op("ifelse", _cse_op(">=", _cse_v("a"), _cse_n(0)),
-                            _cse_op("sin", apb()), _cse_n(0))),
+                ESM.Equation(
+                    _cse_D("a"),
+                    _cse_op(
+                        "ifelse", _cse_op(">=", _cse_v("a"), _cse_n(0)),
+                        _cse_op("sin", apb()), _cse_n(0)
+                    )
+                ),
                 ESM.Equation(_cse_D("c"), apb()),
-            ])
+            ]
+        )
         f!, u0, p, _ts, var_map, diag = ESM._build_evaluator_impl(m)
         @test diag.n_cse_slots >= 1            # `a+b` IS cached
         @test diag.n_cse_occurrences >= 2      # both occurrences replaced
@@ -365,19 +392,19 @@ end
 # ====================================================================
 @testset "tree_walk CSE keys on canonical identity (reassociation is shared)" begin
     # (1e16 + -1e16) + 1.0 == 1.0   but   1e16 + (-1e16 + 1.0) == 0.0
-    A, B, C = 1e16, -1e16, 1.0
+    A, B, C = 1.0e16, -1.0e16, 1.0
     @test (A + B) + C === 1.0
     @test A + (B + C) === 0.0
 
-    _vars() = Dict{String,ModelVariable}(
-        "a" => ModelVariable(UnknownVariable; default=A),
-        "b" => ModelVariable(UnknownVariable; default=B),
-        "c" => ModelVariable(UnknownVariable; default=C),
-        "x" => ModelVariable(UnknownVariable; default=0.0),
-        "y" => ModelVariable(UnknownVariable; default=0.0),
+    _vars() = Dict{String, ModelVariable}(
+        "a" => ModelVariable(UnknownVariable; default = A),
+        "b" => ModelVariable(UnknownVariable; default = B),
+        "c" => ModelVariable(UnknownVariable; default = C),
+        "x" => ModelVariable(UnknownVariable; default = 0.0),
+        "y" => ModelVariable(UnknownVariable; default = 0.0),
     )
     _held() = ESM.Equation[ESM.Equation(_cse_D(s), _cse_n(0)) for s in ("a", "b", "c")]
-    left()  = _cse_op("+", _cse_op("+", _cse_v("a"), _cse_v("b")), _cse_v("c"))
+    left() = _cse_op("+", _cse_op("+", _cse_v("a"), _cse_v("b")), _cse_v("c"))
     right() = _cse_op("+", _cse_v("a"), _cse_op("+", _cse_v("b"), _cse_v("c")))
 
     # The two trees ARE one canonical expression — this is the whole mechanism.
@@ -396,16 +423,24 @@ end
 
     # Add a canonically-equal sibling that is seen FIRST: one slot for both, and
     # `D(y)` now reads back `(a+b)+c` — the first-seen association.
-    du2, vm2, diag2 = _du(ESM.Equation[_held()...,
-        ESM.Equation(_cse_D("x"), left()), ESM.Equation(_cse_D("y"), right())])
+    du2, vm2, diag2 = _du(
+        ESM.Equation[
+            _held()...,
+            ESM.Equation(_cse_D("x"), left()), ESM.Equation(_cse_D("y"), right()),
+        ]
+    )
     @test diag2.n_cse_slots == 1
     @test diag2.n_cse_occurrences == 2
     @test du2[vm2["x"]] === 1.0
     @test du2[vm2["y"]] === 1.0      # ← NOT 0.0: `D(y)`'s own equation is unchanged
 
     # Swap the order and the OTHER association wins for both — "first-seen", exactly.
-    du3, vm3, diag3 = _du(ESM.Equation[_held()...,
-        ESM.Equation(_cse_D("y"), right()), ESM.Equation(_cse_D("x"), left())])
+    du3, vm3, diag3 = _du(
+        ESM.Equation[
+            _held()...,
+            ESM.Equation(_cse_D("y"), right()), ESM.Equation(_cse_D("x"), left()),
+        ]
+    )
     @test diag3.n_cse_slots == 1
     @test du3[vm3["y"]] === 0.0
     @test du3[vm3["x"]] === 0.0      # ← NOT 1.0, for the same reason
@@ -441,10 +476,14 @@ end
     # A `Solar.cos_zenith`-shaped observed: an arithmetic body over TWO boxed
     # `datetime.*` closed-function calls (the "countable side-effect-free cost").
     #   sza = sin(datetime.hour(t)/24 + datetime.minute(t)/1440)
-    _sza_expr() = _cse_op("sin",
-        _cse_op("+",
+    _sza_expr() = _cse_op(
+        "sin",
+        _cse_op(
+            "+",
             _cse_op("/", _cse_fn("datetime.hour", _cse_v("t")), _cse_n(24.0)),
-            _cse_op("/", _cse_fn("datetime.minute", _cse_v("t")), _cse_n(1440.0))))
+            _cse_op("/", _cse_fn("datetime.minute", _cse_v("t")), _cse_n(1440.0))
+        )
+    )
 
     # The box's shape, parameterized by fan-out:
     #   observed sza  = <2 datetime.* calls>                       (the deep subtree)
@@ -454,18 +493,28 @@ end
     # only the `F_i` (and the `sza` beneath them) can be shared. That is precisely
     # the sharing the `fn` barrier used to forbid.
     function _fanout_model(K::Int, M::Int)
-        vars = Dict{String,ModelVariable}("sza" => ModelVariable(UnknownVariable))
+        vars = Dict{String, ModelVariable}("sza" => ModelVariable(UnknownVariable))
         eqs = ESM.Equation[ESM.Equation(_cse_v("sza"), _sza_expr())]
         for i in 1:K
             vars["F$i"] = ModelVariable(UnknownVariable)
-            push!(eqs, ESM.Equation(_cse_v("F$i"),
-                _cse_fn("interp.linear", _cse_const(_band_table(i)),
-                        _cse_const(_band_axis()), _cse_v("sza"))))
+            push!(
+                eqs, ESM.Equation(
+                    _cse_v("F$i"),
+                    _cse_fn(
+                        "interp.linear", _cse_const(_band_table(i)),
+                        _cse_const(_band_axis()), _cse_v("sza")
+                    )
+                )
+            )
         end
         for j in 1:M
-            vars["x$j"] = ModelVariable(UnknownVariable; default=0.0)
-            terms = ESM.ASTExpr[_cse_op("*", _cse_n(1.0 + 0.5 * i + 0.25 * j),
-                                        _cse_v("F$i")) for i in 1:K]
+            vars["x$j"] = ModelVariable(UnknownVariable; default = 0.0)
+            terms = ESM.ASTExpr[
+                _cse_op(
+                    "*", _cse_n(1.0 + 0.5 * i + 0.25 * j),
+                    _cse_v("F$i")
+                ) for i in 1:K
+            ]
             push!(eqs, ESM.Equation(_cse_D("x$j"), OpExpr("+", terms)))
         end
         return ESM.Model(vars, eqs)
@@ -475,12 +524,17 @@ end
     # the SAME operand order the compiler emits — so `===` is a bit-exactness test,
     # not an approximate one.
     function _reference_du(K::Int, j::Int, t::Float64)
-        sza = sin(Float64(ESM.evaluate_closed_function("datetime.hour", Any[t])) / 24.0 +
-                  Float64(ESM.evaluate_closed_function("datetime.minute", Any[t])) / 1440.0)
+        sza = sin(
+            Float64(ESM.evaluate_closed_function("datetime.hour", Any[t])) / 24.0 +
+                Float64(ESM.evaluate_closed_function("datetime.minute", Any[t])) / 1440.0
+        )
         acc = 0.0
         for i in 1:K
-            fi = Float64(ESM.evaluate_closed_function(
-                "interp.linear", Any[_band_table(i), _band_axis(), sza]))
+            fi = Float64(
+                ESM.evaluate_closed_function(
+                    "interp.linear", Any[_band_table(i), _band_axis(), sza]
+                )
+            )
             term = (1.0 + 0.5 * i + 0.25 * j) * fi
             acc = i == 1 ? term : acc + term
         end
@@ -493,8 +547,10 @@ end
         # `(p, t, epoch)` and warm same-`t` calls skip it entirely — this probe
         # wants the per-CALL evaluation cost, not the memoized one. The same-`t`
         # skip has its own suite (tree_walk_tcadence_test.jl).
-        f!, u0, p, _ts, _vm = EarthSciAST._build_evaluator(_fanout_model(K, M);
-                                              compiler=:interpreter)
+        f!, u0, p, _ts, _vm = EarthSciAST._build_evaluator(
+            _fanout_model(K, M);
+            compiler = :interpreter
+        )
         du = similar(u0)
         rhs_alloc_bytes(f!, du, u0, p, t)
     end
@@ -566,9 +622,9 @@ end
     # ----------------------------------------------------------------
     @testset "subexpressions inside a `fn` argument are shared with outside uses" begin
         tbl, ax = _band_table(1), _band_axis()
-        vars = Dict{String,ModelVariable}(
-            "a" => ModelVariable(UnknownVariable; default=0.3),
-            "b" => ModelVariable(UnknownVariable; default=0.5),
+        vars = Dict{String, ModelVariable}(
+            "a" => ModelVariable(UnknownVariable; default = 0.3),
+            "b" => ModelVariable(UnknownVariable; default = 0.5),
         )
         apb() = _cse_op("+", _cse_v("a"), _cse_v("b"))
         call() = _cse_fn("interp.linear", _cse_const(tbl), _cse_const(ax), apb())
@@ -610,33 +666,40 @@ end
     # `F[1]*k` three times over: twice inside D(x), once as D(y).
     #   D(x) = sin(F[1]*k) + cos(F[1]*k);   D(y) = F[1]*k
     _pg_shared_model() = ESM.Model(
-        Dict{String,ModelVariable}(
-            "x" => ModelVariable(UnknownVariable; default=1.0),
-            "y" => ModelVariable(UnknownVariable; default=1.0),
-            "k" => ModelVariable(ParameterVariable; default=2.0),
+        Dict{String, ModelVariable}(
+            "x" => ModelVariable(UnknownVariable; default = 1.0),
+            "y" => ModelVariable(UnknownVariable; default = 1.0),
+            "k" => ModelVariable(ParameterVariable; default = 2.0),
         ),
         begin
             fk() = _cse_op("*", _idx("F", _i(1)), _cse_v("k"))
             ESM.Equation[
-                ESM.Equation(_cse_D("x"),
-                    _cse_op("+", _cse_op("sin", fk()), _cse_op("cos", fk()))),
+                ESM.Equation(
+                    _cse_D("x"),
+                    _cse_op("+", _cse_op("sin", fk()), _cse_op("cos", fk()))
+                ),
                 ESM.Equation(_cse_D("y"), fk()),
             ]
-        end)
+        end
+    )
 
     @testset "a shared expression over a LIVE forcing buffer is cached (ess-qic)" begin
         # Baseline: bound as a FROZEN const array the gather folds to a literal, so
         # `F[1]*k` is a plain parameter product — 1 slot, 3 occurrences.
-        _, _, _, _, _, d_const = ESM._build_evaluator_impl(_pg_shared_model();
-            const_arrays=Dict("F" => [5.0, 6.0]))
+        _, _, _, _, _, d_const = ESM._build_evaluator_impl(
+            _pg_shared_model();
+            const_arrays = Dict("F" => [5.0, 6.0])
+        )
         @test d_const.n_cse_slots == 1
         @test d_const.n_cse_occurrences == 3
 
         # The SAME model with `F` bound as a LIVE buffer must share identically.
         # Before ess-qic this reported 0 slots / 0 occurrences.
         buf = [5.0, 6.0]
-        f!, u0, p, _ts, vm, d_live = ESM._build_evaluator_impl(_pg_shared_model();
-            param_arrays=Dict("F" => buf))
+        f!, u0, p, _ts, vm, d_live = ESM._build_evaluator_impl(
+            _pg_shared_model();
+            param_arrays = Dict("F" => buf)
+        )
         @test d_live.n_cse_slots == 1
         @test d_live.n_cse_occurrences == 3
 
@@ -657,12 +720,12 @@ end
         # `G[1]*k` (DIFFERENT buffer, SAME offset) — each duplicated so each is a
         # hoist candidate in its own right. Distinct buffer VALUES make a merge show
         # up as a wrong number, not just a wrong slot count.
-        vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(UnknownVariable; default=1.0),
-            "y" => ModelVariable(UnknownVariable; default=1.0),
-            "z" => ModelVariable(UnknownVariable; default=1.0),
-            "w" => ModelVariable(UnknownVariable; default=1.0),
-            "k" => ModelVariable(ParameterVariable; default=2.0),
+        vars = Dict{String, ModelVariable}(
+            "x" => ModelVariable(UnknownVariable; default = 1.0),
+            "y" => ModelVariable(UnknownVariable; default = 1.0),
+            "z" => ModelVariable(UnknownVariable; default = 1.0),
+            "w" => ModelVariable(UnknownVariable; default = 1.0),
+            "k" => ModelVariable(ParameterVariable; default = 2.0),
         )
         prod(buf, off) = _cse_op("*", _idx(buf, _i(off)), _cse_v("k"))
         both(e) = _cse_op("+", _cse_op("sin", e), _cse_op("cos", e))
@@ -674,8 +737,10 @@ end
         ]
         F = [3.0, 5.0]
         G = [7.0, 11.0]
-        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs);
-            param_arrays=Dict("F" => F, "G" => G))
+        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(
+            ESM.Model(vars, eqs);
+            param_arrays = Dict("F" => F, "G" => G)
+        )
 
         # THREE slots, not one: F[1]*k, F[2]*k, G[1]*k are three distinct values.
         @test diag.n_cse_slots == 3
@@ -700,8 +765,10 @@ end
         # in-tree write paths `_write_forcing!`/`materialize!` bump it themselves),
         # and through the `t` key at any new `t`.
         buf = [5.0, 6.0]
-        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(_pg_shared_model();
-            param_arrays=Dict("F" => buf))
+        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(
+            _pg_shared_model();
+            param_arrays = Dict("F" => buf)
+        )
         @test diag.n_cse_slots >= 1          # the expression IS cached...
         k = 2.0
         du = similar(u0)
@@ -726,23 +793,27 @@ end
     # must key distinctly from each other AND refresh (their contents change on a
     # data-refresh event, between calls — a `materialize!`).
     _PG_W = [1.0 2.0 3.0; 4.0 5.0 6.0]   # W[i,j], i=1..2, j=1..3
-    _pg_agg(scale) = OpExpr("faq", ESM.ASTExpr[];
-        output_idx=Any["j"], reduce="+", ranges=Dict("j" => [1, 3], "i" => [1, 2]),
-        expr_body=_cse_op("*", _cse_n(scale),
-                          _cse_op("*", _idx("W", _v("i"), _v("j")), _idx("src", _v("i")))))
+    _pg_agg(scale) = OpExpr(
+        "faq", ESM.ASTExpr[];
+        output_idx = Any["j"], reduce = "+", ranges = Dict("j" => [1, 3], "i" => [1, 2]),
+        expr_body = _cse_op(
+            "*", _cse_n(scale),
+            _cse_op("*", _idx("W", _v("i"), _v("j")), _idx("src", _v("i")))
+        )
+    )
     # g[j] = Σᵢ W[i,j]·src[i];  h[j] = Σᵢ 3·W[i,j]·src[i]  (both state-free +
     # param-tainted ⇒ discrete caches). Scalar readers:
     #   D(x) = sin(g[1]*k) + cos(g[1]*k);  D(y) = g[1]*k;  D(z) = sin(h[1]*k) + cos(h[1]*k)
     _pg_discrete_model() = ESM.Model(
-        Dict{String,ModelVariable}(
-            "x" => ModelVariable(UnknownVariable; default=1.0),
-            "y" => ModelVariable(UnknownVariable; default=1.0),
-            "z" => ModelVariable(UnknownVariable; default=1.0),
-            "k" => ModelVariable(ParameterVariable; default=2.0),
+        Dict{String, ModelVariable}(
+            "x" => ModelVariable(UnknownVariable; default = 1.0),
+            "y" => ModelVariable(UnknownVariable; default = 1.0),
+            "z" => ModelVariable(UnknownVariable; default = 1.0),
+            "k" => ModelVariable(ParameterVariable; default = 2.0),
             # esm 1.0.0: `g` / `h` are plain unknowns; their defining bodies are
             # the bare-variable-LHS equations below (esm-spec §6.3.1).
-            "g" => ModelVariable(UnknownVariable; shape=["j"]),
-            "h" => ModelVariable(UnknownVariable; shape=["j"]),
+            "g" => ModelVariable(UnknownVariable; shape = ["j"]),
+            "h" => ModelVariable(UnknownVariable; shape = ["j"]),
         ),
         begin
             gk() = _cse_op("*", _idx("g", _i(1)), _cse_v("k"))
@@ -750,20 +821,27 @@ end
             ESM.Equation[
                 ESM.Equation(_cse_v("g"), _pg_agg(1.0)),
                 ESM.Equation(_cse_v("h"), _pg_agg(3.0)),
-                ESM.Equation(_cse_D("x"),
-                    _cse_op("+", _cse_op("sin", gk()), _cse_op("cos", gk()))),
+                ESM.Equation(
+                    _cse_D("x"),
+                    _cse_op("+", _cse_op("sin", gk()), _cse_op("cos", gk()))
+                ),
                 ESM.Equation(_cse_D("y"), gk()),
-                ESM.Equation(_cse_D("z"),
-                    _cse_op("+", _cse_op("sin", hk()), _cse_op("cos", hk()))),
+                ESM.Equation(
+                    _cse_D("z"),
+                    _cse_op("+", _cse_op("sin", hk()), _cse_op("cos", hk()))
+                ),
             ]
-        end)
+        end
+    )
 
     @testset "discrete-cadence cache gathers are CSE'd, distinct, and refresh (ess-qic)" begin
         src = [1.0, 1.0]
         dm = ESM.DiscreteMaterializer()
-        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(_pg_discrete_model();
-            const_arrays=Dict("W" => _PG_W), param_arrays=Dict("src" => src),
-            materialize_out=dm)
+        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(
+            _pg_discrete_model();
+            const_arrays = Dict("W" => _PG_W), param_arrays = Dict("src" => src),
+            materialize_out = dm
+        )
         @test haskey(dm.caches, "g") && haskey(dm.caches, "h")
 
         # TWO slots — `g[1]*k` and `h[1]*k` gather two DIFFERENT cache buffers at the
@@ -811,7 +889,7 @@ end
 # ================================================================
 
 # `f!` with a `du` of whatever value type the call induces (`Dual` under AD).
-_ct_call(f!, u, p, t, ::Type{T}=Float64) where {T} =
+_ct_call(f!, u, p, t, ::Type{T} = Float64) where {T} =
     (d = zeros(T, length(u)); f!(d, u, p, t); d)
 
 # The model's `p` with every value lifted to a 1-partial `Dual` — the shape ForwardDiff
@@ -823,23 +901,30 @@ _ct_dualp(p) = NamedTuple{keys(p)}(map(v -> ForwardDiff.Dual{Nothing}(v, 1.0), v
 # five slots are const-cadence.
 #   D(x) = k*x ;  D(y) = (-k)*y
 _ct_arrhenius() = ESM.Model(
-    Dict{String,ModelVariable}(
-        "x"    => ModelVariable(UnknownVariable; default=1.5),
-        "y"    => ModelVariable(UnknownVariable; default=2.5),
-        "A"    => ModelVariable(ParameterVariable; default=3.2e5),
-        "Ea"   => ModelVariable(ParameterVariable; default=5.0e4),
-        "R"    => ModelVariable(ParameterVariable; default=8.314),
-        "Tref" => ModelVariable(ParameterVariable; default=300.0),
+    Dict{String, ModelVariable}(
+        "x" => ModelVariable(UnknownVariable; default = 1.5),
+        "y" => ModelVariable(UnknownVariable; default = 2.5),
+        "A" => ModelVariable(ParameterVariable; default = 3.2e5),
+        "Ea" => ModelVariable(ParameterVariable; default = 5.0e4),
+        "R" => ModelVariable(ParameterVariable; default = 8.314),
+        "Tref" => ModelVariable(ParameterVariable; default = 300.0),
     ),
     begin
-        arr() = _cse_op("*", _cse_v("A"),
-                    _cse_op("exp", _cse_op("/", _cse_op("neg", _cse_v("Ea")),
-                                _cse_op("*", _cse_v("R"), _cse_v("Tref")))))
+        arr() = _cse_op(
+            "*", _cse_v("A"),
+            _cse_op(
+                "exp", _cse_op(
+                    "/", _cse_op("neg", _cse_v("Ea")),
+                    _cse_op("*", _cse_v("R"), _cse_v("Tref"))
+                )
+            )
+        )
         ESM.Equation[
             ESM.Equation(_cse_D("x"), _cse_op("*", arr(), _cse_v("x"))),
             ESM.Equation(_cse_D("y"), _cse_op("*", _cse_op("neg", arr()), _cse_v("y"))),
         ]
-    end)
+    end
+)
 
 _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
 
@@ -860,7 +945,7 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
         @test diag.n_dynamic_slots == 0
         # The three counters partition the FINAL prelude (CSE slots + invariant slots).
         @test diag.n_const_slots + diag.n_time_slots + diag.n_dynamic_slots ==
-              diag.n_cse_slots + diag.n_invariant_slots
+            diag.n_cse_slots + diag.n_invariant_slots
 
         # Bit-exact — `===`, not `≈`. Skipping the const refill must not perturb a
         # single bit of the arithmetic the untiered prelude did.
@@ -907,21 +992,25 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
         @test all(!iszero, g)
 
         # And assert the actual values against central differences on `f!` itself.
-        h = 1e-6
+        h = 1.0e-6
         for i in eachindex(pv)
             s = h * max(1.0, abs(pv[i]))
             up = copy(pv); up[i] += s
             um = copy(pv); um[i] -= s
-            fd = (sum(_ct_call(f!, u0, mk(up), 0.0)) -
-                  sum(_ct_call(f!, u0, mk(um), 0.0))) / 2s
-            @test isapprox(g[i], fd; rtol=1e-5, atol=1e-12)
+            fd = (
+                sum(_ct_call(f!, u0, mk(up), 0.0)) -
+                    sum(_ct_call(f!, u0, mk(um), 0.0))
+            ) / 2s
+            @test isapprox(g[i], fd; rtol = 1.0e-5, atol = 1.0e-12)
         end
 
         # The closed form, for the one the chain rule makes easiest to get wrong:
         # ∂/∂A [k*x + (-k)*y] = exp(-Ea/(R*Tref)) * (x - y).
         E = exp(-p.Ea / (p.R * p.Tref))
-        @test isapprox(g[findfirst(==(:A), collect(syms))],
-                       E * (u0[vm["x"]] - u0[vm["y"]]); rtol=1e-12)
+        @test isapprox(
+            g[findfirst(==(:A), collect(syms))],
+            E * (u0[vm["x"]] - u0[vm["y"]]); rtol = 1.0e-12
+        )
     end
 
     # ----------------------------------------------------------------
@@ -1029,8 +1118,10 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
         @test refused(Dict("k" => 1.0))
         @test refused((; k = 1.0, name = "a"))
         @test refused(zeros(ESM._PSTAMP_MAX_ELEMS + 1))
-        @test ESM._pstamp_same(ESM._pstamp(zeros(ESM._PSTAMP_MAX_ELEMS)),
-                               zeros(ESM._PSTAMP_MAX_ELEMS))
+        @test ESM._pstamp_same(
+            ESM._pstamp(zeros(ESM._PSTAMP_MAX_ELEMS)),
+            zeros(ESM._PSTAMP_MAX_ELEMS)
+        )
     end
 
     # ----------------------------------------------------------------
@@ -1045,7 +1136,7 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
             f!, u0, p, _ts, vm, _diag = ESM._build_evaluator_impl(_ct_arrhenius())
             k = _ct_k(p)
             pd = _ct_dualp(p)
-            D1 = ForwardDiff.Dual{Nothing,Float64,1}
+            D1 = ForwardDiff.Dual{Nothing, Float64, 1}
             kd = _ct_k(pd)
 
             float_first || _ct_call(f!, u0, pd, 0.0, D1)   # Dual buffer created first
@@ -1060,9 +1151,9 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
                 # shows up in one or the other.
                 @test ForwardDiff.value(dud[vm["x"]]) ≈ ForwardDiff.value(kd * u0[vm["x"]])
                 @test ForwardDiff.partials(dud[vm["x"]], 1) ≈
-                      ForwardDiff.partials(kd * u0[vm["x"]], 1)
+                    ForwardDiff.partials(kd * u0[vm["x"]], 1)
                 @test ForwardDiff.partials(dud[vm["y"]], 1) ≈
-                      ForwardDiff.partials(-kd * u0[vm["y"]], 1)
+                    ForwardDiff.partials(-kd * u0[vm["y"]], 1)
                 @test all(isfinite ∘ ForwardDiff.value, dud)
                 @test any(!iszero, ForwardDiff.partials.(dud, 1))
             end
@@ -1081,25 +1172,31 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
     #   D(x) = sin(F[1]*k) + cos(F[1]*k) ;  D(y) = F[1]*k ;  D(z) = exp(k*m) + 2*exp(k*m)
     # ----------------------------------------------------------------
     @testset "a slot reading a live forcing buffer is TIME-cadence, not const" begin
-        vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(UnknownVariable; default=1.0),
-            "y" => ModelVariable(UnknownVariable; default=1.0),
-            "z" => ModelVariable(UnknownVariable; default=1.0),
-            "k" => ModelVariable(ParameterVariable; default=2.0),
-            "m" => ModelVariable(ParameterVariable; default=3.0),
+        vars = Dict{String, ModelVariable}(
+            "x" => ModelVariable(UnknownVariable; default = 1.0),
+            "y" => ModelVariable(UnknownVariable; default = 1.0),
+            "z" => ModelVariable(UnknownVariable; default = 1.0),
+            "k" => ModelVariable(ParameterVariable; default = 2.0),
+            "m" => ModelVariable(ParameterVariable; default = 3.0),
         )
         km() = _cse_op("exp", _cse_op("*", _cse_v("k"), _cse_v("m")))   # → CONST
         fk() = _cse_op("*", _idx("F", _i(1)), _cse_v("k"))              # → TIME
         eqs = ESM.Equation[
-            ESM.Equation(_cse_D("x"),
-                _cse_op("+", _cse_op("sin", fk()), _cse_op("cos", fk()))),
+            ESM.Equation(
+                _cse_D("x"),
+                _cse_op("+", _cse_op("sin", fk()), _cse_op("cos", fk()))
+            ),
             ESM.Equation(_cse_D("y"), fk()),
-            ESM.Equation(_cse_D("z"),
-                _cse_op("+", km(), _cse_op("*", _cse_n(2.0), km()))),
+            ESM.Equation(
+                _cse_D("z"),
+                _cse_op("+", km(), _cse_op("*", _cse_n(2.0), km()))
+            ),
         ]
         buf = [5.0, 6.0]
-        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs);
-            param_arrays=Dict("F" => buf))
+        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(
+            ESM.Model(vars, eqs);
+            param_arrays = Dict("F" => buf)
+        )
 
         # 3 slots: `k*m` and `exp(k*m)` are const; `F[1]*k` reads the live buffer.
         @test diag.n_cse_slots == 3
@@ -1139,18 +1236,31 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
     # caller's N-d array reaches the build that reads it through its `vec`.
     # ----------------------------------------------------------------
     @testset "a refresh invalidates only the builds that read the buffer" begin
-        vars = Dict{String,ModelVariable}(
-            "y" => ModelVariable(UnknownVariable; default=1.0),
-            "k" => ModelVariable(ParameterVariable; default=2.0))
-        mk(ix...) = ESM.Model(vars, ESM.Equation[ESM.Equation(_cse_D("y"),
-            _cse_op("+", _cse_op("*", _idx("F", ix...), _cse_v("k")),
-                         _cse_op("*", _idx("F", ix...), _cse_v("k"))))])
+        vars = Dict{String, ModelVariable}(
+            "y" => ModelVariable(UnknownVariable; default = 1.0),
+            "k" => ModelVariable(ParameterVariable; default = 2.0)
+        )
+        mk(ix...) = ESM.Model(
+            vars, ESM.Equation[
+                ESM.Equation(
+                    _cse_D("y"),
+                    _cse_op(
+                        "+", _cse_op("*", _idx("F", ix...), _cse_v("k")),
+                        _cse_op("*", _idx("F", ix...), _cse_v("k"))
+                    )
+                ),
+            ]
+        )
         bufA = [5.0 6.0; 7.0 8.0]
         bufB = [1.0, 2.0]
-        fA, uA, pA, _, vmA, dA = ESM._build_evaluator_impl(mk(_i(1), _i(1));
-            param_arrays=Dict("F" => bufA))
-        fB, uB, pB, _, vmB, dB = ESM._build_evaluator_impl(mk(_i(1));
-            param_arrays=Dict("F" => bufB))
+        fA, uA, pA, _, vmA, dA = ESM._build_evaluator_impl(
+            mk(_i(1), _i(1));
+            param_arrays = Dict("F" => bufA)
+        )
+        fB, uB, pB, _, vmB, dB = ESM._build_evaluator_impl(
+            mk(_i(1));
+            param_arrays = Dict("F" => bufB)
+        )
         @test dA.n_time_slots >= 1
         eA = getfield(fA, :cse_cache).epoch
         eB = getfield(fB, :cse_cache).epoch
@@ -1177,9 +1287,9 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
     #   D(a) = sin(a+b) + cos(sin(a+b)) ;  D(b) = 2*sin(a+b)
     # ----------------------------------------------------------------
     @testset "a def reading a DYNAMIC slot through a cache ref is DYNAMIC" begin
-        vars = Dict{String,ModelVariable}(
-            "a" => ModelVariable(UnknownVariable; default=0.3),
-            "b" => ModelVariable(UnknownVariable; default=0.5),
+        vars = Dict{String, ModelVariable}(
+            "a" => ModelVariable(UnknownVariable; default = 0.3),
+            "b" => ModelVariable(UnknownVariable; default = 0.5),
         )
         S() = _cse_op("+", _cse_v("a"), _cse_v("b"))
         Q() = _cse_op("sin", S())
@@ -1227,9 +1337,11 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
     # makes it usable as an oracle here.)
     # ----------------------------------------------------------------
     @testset "`form=:inplace` (tiered) agrees bit-for-bit with the interpreter" begin
-        fi, u0, p, _ts, _vm, di = ESM._build_evaluator_impl(_ct_arrhenius(); form=:inplace)
-        fu, _u0, _p, _ts2, _vm2, dun = ESM._build_evaluator_impl(_ct_arrhenius();
-            form=:inplace, compiler=:interpreter)
+        fi, u0, p, _ts, _vm, di = ESM._build_evaluator_impl(_ct_arrhenius(); form = :inplace)
+        fu, _u0, _p, _ts2, _vm2, dun = ESM._build_evaluator_impl(
+            _ct_arrhenius();
+            form = :inplace, compiler = :interpreter
+        )
 
         # The classification is a property of the PRELUDE; the compiler only
         # changes which tier each slot is ROUTED to, and the interpreter routes

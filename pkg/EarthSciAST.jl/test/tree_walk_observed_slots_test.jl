@@ -26,7 +26,7 @@ include("testutils.jl")  # zero_alloc_harness.jl → rhs_alloc_bytes
 _obs_n(x) = NumExpr(Float64(x))
 _obs_v(n) = VarExpr(n)
 _obs_op(op, args...; kw...) = OpExpr(op, ESM.ASTExpr[args...]; kw...)
-_obs_D(v) = _obs_op("D", _obs_v(v); wrt="t")
+_obs_D(v) = _obs_op("D", _obs_v(v); wrt = "t")
 
 @testset "scalar observeds compile as named prelude slots (ess-obs-slots)" begin
 
@@ -35,10 +35,10 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt="t")
     # anonymous CSE (the name carries the sharing), bit-exact numerics.
     # ----------------------------------------------------------------
     @testset "one named slot, many readers, no anonymous CSE" begin
-        vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(UnknownVariable; default=0.4),
-            "y" => ModelVariable(UnknownVariable; default=1.1),
-            "k" => ModelVariable(ParameterVariable; default=0.7),
+        vars = Dict{String, ModelVariable}(
+            "x" => ModelVariable(UnknownVariable; default = 0.4),
+            "y" => ModelVariable(UnknownVariable; default = 1.1),
+            "k" => ModelVariable(ParameterVariable; default = 0.7),
             "flux" => ModelVariable(UnknownVariable),
         )
         # flux = k*x*y; D(x) = -flux; D(y) = flux + sin(flux)
@@ -64,9 +64,9 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt="t")
     # store + a load around a bare read.
     # ----------------------------------------------------------------
     @testset "observed-into-observed chains are slot-to-slot reads" begin
-        vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(UnknownVariable; default=1.0),
-            "k" => ModelVariable(ParameterVariable; default=2.0),
+        vars = Dict{String, ModelVariable}(
+            "x" => ModelVariable(UnknownVariable; default = 1.0),
+            "k" => ModelVariable(ParameterVariable; default = 2.0),
             "a" => ModelVariable(UnknownVariable),
             "b" => ModelVariable(UnknownVariable),
             "c" => ModelVariable(UnknownVariable),
@@ -93,15 +93,19 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt="t")
     # the same rule CSE applies per-key).
     # ----------------------------------------------------------------
     @testset "guard-only observed stays inlined (no new DomainError)" begin
-        vars = Dict{String,ModelVariable}(
-            "a" => ModelVariable(UnknownVariable; default=-1.0),
+        vars = Dict{String, ModelVariable}(
+            "a" => ModelVariable(UnknownVariable; default = -1.0),
             "g" => ModelVariable(UnknownVariable),
         )
         eqs = ESM.Equation[
             ESM.Equation(_obs_v("g"), _obs_op("sqrt", _obs_v("a"))),
-            ESM.Equation(_obs_D("a"),
-                _obs_op("ifelse", _obs_op(">=", _obs_v("a"), _obs_n(0.0)),
-                        _obs_v("g"), _obs_n(0.0))),
+            ESM.Equation(
+                _obs_D("a"),
+                _obs_op(
+                    "ifelse", _obs_op(">=", _obs_v("a"), _obs_n(0.0)),
+                    _obs_v("g"), _obs_n(0.0)
+                )
+            ),
         ]
         f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs))
         @test diag.n_obs_slots == 0
@@ -117,17 +121,21 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt="t")
     # share it.
     # ----------------------------------------------------------------
     @testset "one unconditional reference keeps the slot" begin
-        vars = Dict{String,ModelVariable}(
-            "a" => ModelVariable(UnknownVariable; default=2.25),
-            "z" => ModelVariable(UnknownVariable; default=0.0),
+        vars = Dict{String, ModelVariable}(
+            "a" => ModelVariable(UnknownVariable; default = 2.25),
+            "z" => ModelVariable(UnknownVariable; default = 0.0),
             "g" => ModelVariable(UnknownVariable),
         )
         eqs = ESM.Equation[
             ESM.Equation(_obs_v("g"), _obs_op("sqrt", _obs_v("a"))),
             ESM.Equation(_obs_D("z"), _obs_v("g")),                       # unconditional
-            ESM.Equation(_obs_D("a"),
-                _obs_op("ifelse", _obs_op(">=", _obs_v("a"), _obs_n(0.0)),
-                        _obs_v("g"), _obs_n(0.0))),                       # guarded
+            ESM.Equation(
+                _obs_D("a"),
+                _obs_op(
+                    "ifelse", _obs_op(">=", _obs_v("a"), _obs_n(0.0)),
+                    _obs_v("g"), _obs_n(0.0)
+                )
+            ),                       # guarded
         ]
         f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs))
         @test diag.n_obs_slots == 1
@@ -144,17 +152,21 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt="t")
     # must fall back to inlining.
     # ----------------------------------------------------------------
     @testset "a slot kept alive only by a demoted def is demoted too" begin
-        vars = Dict{String,ModelVariable}(
-            "a" => ModelVariable(UnknownVariable; default=-4.0),
+        vars = Dict{String, ModelVariable}(
+            "a" => ModelVariable(UnknownVariable; default = -4.0),
             "X" => ModelVariable(UnknownVariable),
             "Y" => ModelVariable(UnknownVariable),
         )
         eqs = ESM.Equation[
             ESM.Equation(_obs_v("X"), _obs_op("sqrt", _obs_v("a"))),
             ESM.Equation(_obs_v("Y"), _obs_op("+", _obs_v("X"), _obs_n(1.0))),
-            ESM.Equation(_obs_D("a"),
-                _obs_op("ifelse", _obs_op(">=", _obs_v("a"), _obs_n(0.0)),
-                        _obs_v("Y"), _obs_n(0.0))),
+            ESM.Equation(
+                _obs_D("a"),
+                _obs_op(
+                    "ifelse", _obs_op(">=", _obs_v("a"), _obs_n(0.0)),
+                    _obs_v("Y"), _obs_n(0.0)
+                )
+            ),
         ]
         f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs))
         @test diag.n_obs_slots == 0
@@ -170,26 +182,32 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt="t")
     # const-index folding still works.
     # ----------------------------------------------------------------
     @testset "observed in a gather subscript stays inlined" begin
-        vars = Dict{String,ModelVariable}(
-            "u" => ModelVariable(UnknownVariable; shape=["i"]),
+        vars = Dict{String, ModelVariable}(
+            "u" => ModelVariable(UnknownVariable; shape = ["i"]),
             "sel" => ModelVariable(UnknownVariable),
-            "z" => ModelVariable(UnknownVariable; default=0.0),
+            "z" => ModelVariable(UnknownVariable; default = 0.0),
         )
         # sel = 1 + 1 (an OpExpr body, but referenced as a subscript);
         # D(z) = u[sel]; D(u[i]) = 0 for i in 1..3
         eqs = ESM.Equation[
             ESM.Equation(_obs_v("sel"), _obs_op("+", _obs_n(1.0), _obs_n(1.0))),
-            ESM.Equation(_obs_D("z"),
-                _obs_op("index", _obs_v("u"), _obs_v("sel"))),
+            ESM.Equation(
+                _obs_D("z"),
+                _obs_op("index", _obs_v("u"), _obs_v("sel"))
+            ),
         ]
         for i in 1:3
-            push!(eqs, ESM.Equation(
-                _obs_op("D", _obs_op("index", _obs_v("u"), IntExpr(Int64(i))); wrt="t"),
-                _obs_n(0.0)))
+            push!(
+                eqs, ESM.Equation(
+                    _obs_op("D", _obs_op("index", _obs_v("u"), IntExpr(Int64(i))); wrt = "t"),
+                    _obs_n(0.0)
+                )
+            )
         end
-        ics = Dict{String,Float64}("u[1]" => 10.0, "u[2]" => 20.0, "u[3]" => 30.0)
+        ics = Dict{String, Float64}("u[1]" => 10.0, "u[2]" => 20.0, "u[3]" => 30.0)
         f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(
-            ESM.Model(vars, eqs); initial_conditions=ics)
+            ESM.Model(vars, eqs); initial_conditions = ics
+        )
         @test diag.n_obs_slots == 0
         @test diag.n_obs_inlined == 1
         du = similar(u0)
@@ -203,8 +221,8 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt="t")
     # exactly the shared value.
     # ----------------------------------------------------------------
     @testset "identical observed bodies alias one prelude def" begin
-        vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(UnknownVariable; default=0.9),
+        vars = Dict{String, ModelVariable}(
+            "x" => ModelVariable(UnknownVariable; default = 0.9),
             "p1" => ModelVariable(UnknownVariable),
             "p2" => ModelVariable(UnknownVariable),
         )
@@ -229,16 +247,18 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt="t")
     # while `p` has not moved — and a state-reading one is DYNAMIC.
     # ----------------------------------------------------------------
     @testset "parameter-only observed slot lands in the const tier" begin
-        vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(UnknownVariable; default=1.0),
-            "A" => ModelVariable(ParameterVariable; default=3.0),
-            "Ea" => ModelVariable(ParameterVariable; default=0.5),
+        vars = Dict{String, ModelVariable}(
+            "x" => ModelVariable(UnknownVariable; default = 1.0),
+            "A" => ModelVariable(ParameterVariable; default = 3.0),
+            "Ea" => ModelVariable(ParameterVariable; default = 0.5),
             "arr" => ModelVariable(UnknownVariable),   # A*exp(-Ea) — p-only
             "sc" => ModelVariable(UnknownVariable),    # arr*x — state-reading
         )
         eqs = ESM.Equation[
-            ESM.Equation(_obs_v("arr"),
-                _obs_op("*", _obs_v("A"), _obs_op("exp", _obs_op("neg", _obs_v("Ea"))))),
+            ESM.Equation(
+                _obs_v("arr"),
+                _obs_op("*", _obs_v("A"), _obs_op("exp", _obs_op("neg", _obs_v("Ea"))))
+            ),
             ESM.Equation(_obs_v("sc"), _obs_op("*", _obs_v("arr"), _obs_v("x"))),
             ESM.Equation(_obs_D("x"), _obs_op("neg", _obs_v("sc"))),
         ]
@@ -256,10 +276,10 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt="t")
     # contract as the CSE prelude (steady state, repeated same-`p` calls).
     # ----------------------------------------------------------------
     @testset "slot prelude keeps f! allocation-free at Float64" begin
-        vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(UnknownVariable; default=0.4),
-            "y" => ModelVariable(UnknownVariable; default=1.1),
-            "k" => ModelVariable(ParameterVariable; default=0.7),
+        vars = Dict{String, ModelVariable}(
+            "x" => ModelVariable(UnknownVariable; default = 0.4),
+            "y" => ModelVariable(UnknownVariable; default = 1.1),
+            "k" => ModelVariable(ParameterVariable; default = 0.7),
             "flux" => ModelVariable(UnknownVariable),
         )
         eqs = ESM.Equation[
@@ -281,23 +301,31 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt="t")
     # pins it against the out-of-place walker.
     # ----------------------------------------------------------------
     @testset "ForwardDiff through observed slots; tiered ≡ untiered" begin
-        vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(UnknownVariable; default=0.8),
-            "k" => ModelVariable(ParameterVariable; default=1.3),
+        vars = Dict{String, ModelVariable}(
+            "x" => ModelVariable(UnknownVariable; default = 0.8),
+            "k" => ModelVariable(ParameterVariable; default = 1.3),
             "r" => ModelVariable(UnknownVariable),
         )
         # r = k * x^2; D(x) = -r + sin(r)
         eqs = ESM.Equation[
-            ESM.Equation(_obs_v("r"),
-                _obs_op("*", _obs_v("k"), _obs_op("^", _obs_v("x"), _obs_n(2.0)))),
-            ESM.Equation(_obs_D("x"), _obs_op("+", _obs_op("neg", _obs_v("r")),
-                                              _obs_op("sin", _obs_v("r")))),
+            ESM.Equation(
+                _obs_v("r"),
+                _obs_op("*", _obs_v("k"), _obs_op("^", _obs_v("x"), _obs_n(2.0)))
+            ),
+            ESM.Equation(
+                _obs_D("x"), _obs_op(
+                    "+", _obs_op("neg", _obs_v("r")),
+                    _obs_op("sin", _obs_v("r"))
+                )
+            ),
         ]
         model = ESM.Model(vars, eqs)
         f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(model)
         @test diag.n_obs_slots == 1
-        fun, _u2, _p2, _ts2, _vm2, d2 = ESM._build_evaluator_impl(model;
-            compiler=:interpreter)
+        fun, _u2, _p2, _ts2, _vm2, d2 = ESM._build_evaluator_impl(
+            model;
+            compiler = :interpreter
+        )
         @test d2.n_const_slots == 0 && d2.n_time_slots == 0
 
         # Analytic: du/dx of (-kx² + sin(kx²)) = -2kx + cos(kx²)·2kx
@@ -305,15 +333,17 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt="t")
         dref = -2k * x + cos(k * x^2) * 2k * x
         # over the STATE (in place — the Dual alt buffer)
         J = ForwardDiff.jacobian((du, u) -> f!(du, u, p, 0.0), similar(u0), u0)
-        @test isapprox(J[1, 1], dref; rtol=1e-12, atol=1e-12)
+        @test isapprox(J[1, 1], dref; rtol = 1.0e-12, atol = 1.0e-12)
         # over the PARAMETERS (Dual p values; u stays Float64)
-        g = ForwardDiff.derivative(kk -> begin
-            du = zeros(typeof(kk), 1)
-            f!(du, u0, (; k=kk), 0.0)
-            du[vm["x"]]
-        end, k)
+        g = ForwardDiff.derivative(
+            kk -> begin
+                du = zeros(typeof(kk), 1)
+                f!(du, u0, (; k = kk), 0.0)
+                du[vm["x"]]
+            end, k
+        )
         gref = -x^2 + cos(k * x^2) * x^2
-        @test isapprox(g, gref; rtol=1e-12, atol=1e-12)
+        @test isapprox(g, gref; rtol = 1.0e-12, atol = 1.0e-12)
         # Float64: the tiered build is bit-identical to the untiered one
         du = similar(u0)
         dun = similar(u0)
@@ -334,33 +364,41 @@ _obs_D(v) = _obs_op("D", _obs_v(v); wrt="t")
     # evaluation.
     # ----------------------------------------------------------------
     @testset "slot values are the hand-evaluated values, bit for bit" begin
-        vars = Dict{String,ModelVariable}(
-            "T" => ModelVariable(UnknownVariable; default=300.0),
-            "q" => ModelVariable(UnknownVariable; default=0.01),
+        vars = Dict{String, ModelVariable}(
+            "T" => ModelVariable(UnknownVariable; default = 300.0),
+            "q" => ModelVariable(UnknownVariable; default = 0.01),
             "es" => ModelVariable(UnknownVariable),
             "rh" => ModelVariable(UnknownVariable),
         )
         # es = 610.78*exp(17.27*(T-273.15)/(T-35.85)); rh = q*1e5/(0.622*es)
-        es_body = _obs_op("*", _obs_n(610.78),
-            _obs_op("exp", _obs_op("/",
-                _obs_op("*", _obs_n(17.27), _obs_op("-", _obs_v("T"), _obs_n(273.15))),
-                _obs_op("-", _obs_v("T"), _obs_n(35.85)))))
-        rh_body = _obs_op("/", _obs_op("*", _obs_v("q"), _obs_n(1e5)),
-                          _obs_op("*", _obs_n(0.622), _obs_v("es")))
+        es_body = _obs_op(
+            "*", _obs_n(610.78),
+            _obs_op(
+                "exp", _obs_op(
+                    "/",
+                    _obs_op("*", _obs_n(17.27), _obs_op("-", _obs_v("T"), _obs_n(273.15))),
+                    _obs_op("-", _obs_v("T"), _obs_n(35.85))
+                )
+            )
+        )
+        rh_body = _obs_op(
+            "/", _obs_op("*", _obs_v("q"), _obs_n(1.0e5)),
+            _obs_op("*", _obs_n(0.622), _obs_v("es"))
+        )
         eqs = ESM.Equation[
             ESM.Equation(_obs_v("es"), es_body),
             ESM.Equation(_obs_v("rh"), rh_body),
             ESM.Equation(_obs_D("T"), _obs_op("*", _obs_n(-0.01), _obs_v("rh"))),
-            ESM.Equation(_obs_D("q"), _obs_op("*", _obs_n(-1e-6), _obs_v("es"))),
+            ESM.Equation(_obs_D("q"), _obs_op("*", _obs_n(-1.0e-6), _obs_v("es"))),
         ]
         f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs))
         @test diag.n_obs_slots == 2
         T, q = 300.0, 0.01
         es = 610.78 * exp(17.27 * (T - 273.15) / (T - 35.85))
-        rh = q * 1e5 / (0.622 * es)
+        rh = q * 1.0e5 / (0.622 * es)
         du = similar(u0)
         f!(du, u0, p, 0.0)
         @test du[vm["T"]] === -0.01 * rh
-        @test du[vm["q"]] === -1e-6 * es
+        @test du[vm["q"]] === -1.0e-6 * es
     end
 end

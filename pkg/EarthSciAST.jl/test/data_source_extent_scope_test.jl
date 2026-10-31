@@ -38,9 +38,11 @@ const _EXTENT_SCOPE_DIR =
 # The merged `records` axis declaration, whatever shape the registry holds.
 _extent_records(f::EarthSciAST.EsmFile) = f.index_sets["records"]
 
-_extent_load(name; metaparameters=Dict{String,Int}()) =
-    EarthSciAST.load_path(joinpath(_EXTENT_SCOPE_DIR, name);
-                          metaparameters=metaparameters)
+_extent_load(name; metaparameters = Dict{String, Int}()) =
+    EarthSciAST.load_path(
+    joinpath(_EXTENT_SCOPE_DIR, name);
+    metaparameters = metaparameters
+)
 
 _extent_err(f) = try
     f()
@@ -55,10 +57,10 @@ end
 # differently-named files, so their messages differ where their meanings must
 # not. Used where the portable contract is "these two agree with each other"
 # rather than an absolute value.
-function _extent_outcome(name; metaparameters=Dict{String,Int}())
-    e = _extent_err(() -> _extent_load(name; metaparameters=metaparameters))
+function _extent_outcome(name; metaparameters = Dict{String, Int}())
+    e = _extent_err(() -> _extent_load(name; metaparameters = metaparameters))
     e === nothing || return (:error, e.code)
-    return (:ok, _extent_records(_extent_load(name; metaparameters=metaparameters)).size)
+    return (:ok, _extent_records(_extent_load(name; metaparameters = metaparameters)).size)
 end
 
 @testset "§8.9.4 discovered extent binds where the name is declared" begin
@@ -76,7 +78,7 @@ end
         # configured nothing. The check now accepts a name declared by any
         # document the root mounts, and the mount edge forwards the value into
         # the leaf's own close.
-        f = _extent_load("extent_root_toplevel.esm"; metaparameters=Dict("N_REC" => 3))
+        f = _extent_load("extent_root_toplevel.esm"; metaparameters = Dict("N_REC" => 3))
         @test _extent_records(f).size == 3
     end
 
@@ -84,8 +86,10 @@ end
         # Widening the check must not delete it. A name neither the root nor
         # anything it mounts declares is still `template_import_unknown_name` —
         # §9.7.6: bindings never invent metaparameters, a typo fails loudly.
-        err = _extent_err(() ->
-            _extent_load("extent_root_toplevel.esm"; metaparameters=Dict("N_RECS" => 3)))
+        err = _extent_err(
+            () ->
+            _extent_load("extent_root_toplevel.esm"; metaparameters = Dict("N_RECS" => 3))
+        )
         @test err isa ExpressionTemplateError
         @test err.code == ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME
         @test occursin("N_RECS", err.message)
@@ -106,8 +110,8 @@ end
         # ingested field was ZERO-LENGTH — with no diagnostic, a clean validate
         # and a clean exit. §4.7 says a binding MUST NOT make the two forms
         # differ; this is the test that says so out loud.
-        top = _extent_load("extent_root_toplevel.esm"; metaparameters=Dict("N_REC" => 3))
-        sub = _extent_load("extent_root_subsystem.esm"; metaparameters=Dict("N_REC" => 3))
+        top = _extent_load("extent_root_toplevel.esm"; metaparameters = Dict("N_REC" => 3))
+        sub = _extent_load("extent_root_subsystem.esm"; metaparameters = Dict("N_REC" => 3))
         @test _extent_records(top).size == 3
         @test _extent_records(sub).size == 3  # a subsystem-mounted leaf used to
         # size its axis at the placeholder default while a top-level-mounted one
@@ -137,7 +141,7 @@ end
         # `mount-edge-index-set-renaming.md` open question 2), so the portable
         # contract is that the two spellings agree with each other.
         @test _extent_outcome("assembler_root_with_import.esm") ==
-              _extent_outcome("assembler_root_no_import.esm")
+            _extent_outcome("assembler_root_no_import.esm")
 
         # …and the ABSOLUTE form, which Julia now reaches too.
         #
@@ -198,8 +202,12 @@ end
         # mounting document closes it (§9.7.6 site 5, §4.7 "Index-set merge").
         # `assembler_partial_overlap_root.esm` below is where forwarding an
         # UNRELATED name can actually be caught.
-        @test _extent_records(_extent_load("assembler_root_with_import.esm";
-                                           metaparameters=Dict("N_REC" => 5))).size == 5
+        @test _extent_records(
+            _extent_load(
+                "assembler_root_with_import.esm";
+                metaparameters = Dict("N_REC" => 5)
+            )
+        ).size == 5
     end
 
     @testset "the site-4 backfill at a `subsystems.<k>` edge, all four halves" begin
@@ -216,42 +224,56 @@ end
         # without it "forward the whole loader-API map" is a silent no-op on every
         # test in this file.
         dir = mktempdir()
-        write(joinpath(dir, "leaf.esm"), """
+        write(
+            joinpath(dir, "leaf.esm"), """
             {"esm":"1.1.0","metadata":{"name":"leaf"},
              "metaparameters":{"NLEV":{"type":"integer","default":4}},
              "index_sets":{"lev":{"kind":"interval","size":"NLEV"}},
              "models":{"Column":{
                "variables":{"u":{"type":"unknown","units":"1","shape":["lev"],"default":1.0}},
                "equations":[{"lhs":{"op":"D","args":["u"],"wrt":"t"},
-                             "rhs":{"op":"*","args":[-1.0,"u"]}}]}}}""")
+                             "rhs":{"op":"*","args":[-1.0,"u"]}}]}}}"""
+        )
         host_body(edge) = """
-            {"esm":"1.1.0","metadata":{"name":"host"},
-             "metaparameters":{"NLEV":{"type":"integer","default":12},
-                               "NROWS":{"type":"integer","default":2}},
-             "models":{"Host":{
-               "variables":{"q":{"type":"unknown","units":"1","default":1.0}},
-               "equations":[{"lhs":{"op":"D","args":["q"],"wrt":"t"},
-                             "rhs":{"op":"*","args":[-1.0,"q"]}}],
-               "subsystems":{"M":{"ref":"./leaf.esm"$edge}}}}}"""
+        {"esm":"1.1.0","metadata":{"name":"host"},
+         "metaparameters":{"NLEV":{"type":"integer","default":12},
+                           "NROWS":{"type":"integer","default":2}},
+         "models":{"Host":{
+           "variables":{"q":{"type":"unknown","units":"1","default":1.0}},
+           "equations":[{"lhs":{"op":"D","args":["q"],"wrt":"t"},
+                         "rhs":{"op":"*","args":[-1.0,"q"]}}],
+           "subsystems":{"M":{"ref":"./leaf.esm"$edge}}}}}"""
         write(joinpath(dir, "bare.esm"), host_body(""))
         write(joinpath(dir, "bound.esm"), host_body(""","bindings":{"NLEV":7}"""))
         lev(f) = f.index_sets["lev"].size
 
         # (1) the loader API DOES reach a subsystem-mounted leaf, for the names
         #     the leaf declares — the property a discovered `extent` rides on.
-        @test lev(EarthSciAST.load_path(joinpath(dir, "bare.esm");
-                                        metaparameters=Dict("NLEV" => 9))) == 9
+        @test lev(
+            EarthSciAST.load_path(
+                joinpath(dir, "bare.esm");
+                metaparameters = Dict("NLEV" => 9)
+            )
+        ) == 9
         # (2) an explicit edge `bindings` entry (site 3) outranks the backfill.
-        @test lev(EarthSciAST.load_path(joinpath(dir, "bound.esm");
-                                        metaparameters=Dict("NLEV" => 9))) == 7
+        @test lev(
+            EarthSciAST.load_path(
+                joinpath(dir, "bound.esm");
+                metaparameters = Dict("NLEV" => 9)
+            )
+        ) == 7
         # (3) the HOST's own declared default (12) is its site-5 close, not a
         #     binding on what it mounts, and never reaches the leaf.
         @test lev(EarthSciAST.load_path(joinpath(dir, "bare.esm"))) == 4
         # (4) a loader-API name the LEAF does not declare is dropped, not
         #     forwarded: the leaf never asked for `NROWS`, so it must neither be
         #     bound by it nor raise `template_import_unknown_name` about it.
-        @test lev(EarthSciAST.load_path(joinpath(dir, "bare.esm");
-                                        metaparameters=Dict("NROWS" => 3))) == 4
+        @test lev(
+            EarthSciAST.load_path(
+                joinpath(dir, "bare.esm");
+                metaparameters = Dict("NROWS" => 3)
+            )
+        ) == 4
     end
 
     @testset "the fixtures say what they are" begin
@@ -275,8 +297,10 @@ end
         # that declares something — which is how an unbound `NLEV: default 12`
         # silently resizes a leaf axis the edge never bound (esm-spec §4.7, the
         # PR #298 precedence invariant).
-        f = _extent_load("assembler_partial_overlap_root.esm";
-                         metaparameters=Dict("N_REC" => 3, "N_OTHER" => 7))
+        f = _extent_load(
+            "assembler_partial_overlap_root.esm";
+            metaparameters = Dict("N_REC" => 3, "N_OTHER" => 7)
+        )
         @test _extent_records(f).size == 3
     end
 
@@ -289,8 +313,10 @@ end
         # what a discovered `extent` does. The static check runs on the AUTHORED
         # tree, before the imports resolve, so it has to walk the import edges
         # too or it refuses a document §9.7.6 accepts.
-        f = _extent_load("extent_reexport_root.esm";
-                         metaparameters=Dict("N_REC" => 3))
+        f = _extent_load(
+            "extent_reexport_root.esm";
+            metaparameters = Dict("N_REC" => 3)
+        )
         @test _extent_records(f).size == 3
         # …and standalone, at the library's default, with no bindings at all.
         @test _extent_records(_extent_load("extent_reexport_root.esm")).size == 0
@@ -310,12 +336,18 @@ end
     @testset "the idempotency fixtures say what they are" begin
         # Both fixtures above are load-bearing by ABSENCE, which a silent edit
         # could restore without any suite going red.
-        reexport = JSON3.read(read(
-            joinpath(_EXTENT_SCOPE_DIR, "extent_reexport_root.esm"), String))
+        reexport = JSON3.read(
+            read(
+                joinpath(_EXTENT_SCOPE_DIR, "extent_reexport_root.esm"), String
+            )
+        )
         @test !haskey(reexport, :metaparameters)   # the name arrives by re-export
         @test reexport[:index_sets][:records][:size] == "N_REC"
-        resolved = JSON3.read(read(
-            joinpath(_EXTENT_SCOPE_DIR, "extent_resolved_shape.esm"), String))
+        resolved = JSON3.read(
+            read(
+                joinpath(_EXTENT_SCOPE_DIR, "extent_resolved_shape.esm"), String
+            )
+        )
         @test !haskey(resolved, :metaparameters)   # a mount consumed the leaf's block
         @test resolved[:index_sets][:records][:size] == 3          # already folded
         @test !haskey(resolved[:models][:Ingest], :ref)            # already inlined

@@ -50,14 +50,17 @@ without waiting through a load and a flatten.
 """
 function _xla_extension()
     ext = Base.get_extension(@__MODULE__, :EarthSciASTReactantExt)
-    ext === nothing && throw(SimulateError(
-        "compiler=:xla needs Reactant loaded: it is the specialty compiler " *
-        "that exists only with a heavy external dependency (Reactant bundles " *
-        "the XLA runtime the emitted StableHLO is compiled and run on). Add " *
-        "`using Reactant` to this session and build again, or build with " *
-        "compiler=:native, the universally fast option that needs no external " *
-        "dependency",
-        ERROR_CODES.COMPILER_UNAVAILABLE))
+    ext === nothing && throw(
+        SimulateError(
+            "compiler=:xla needs Reactant loaded: it is the specialty compiler " *
+                "that exists only with a heavy external dependency (Reactant bundles " *
+                "the XLA runtime the emitted StableHLO is compiled and run on). Add " *
+                "`using Reactant` to this session and build again, or build with " *
+                "compiler=:native, the universally fast option that needs no external " *
+                "dependency",
+            ERROR_CODES.COMPILER_UNAVAILABLE
+        )
+    )
     return ext
 end
 
@@ -91,8 +94,11 @@ const XLA_DEVICE_ENV = "EARTHSCI_JULIA_XLA_DEVICE"
 function _xla_device()
     d = lowercase(strip(get(ENV, XLA_DEVICE_ENV, "cpu")))
     isempty(d) && (d = "cpu")
-    d in ("cpu", "gpu") || throw(ArgumentError(
-        "$XLA_DEVICE_ENV must be 'cpu' or 'gpu', got '$d'"))
+    d in ("cpu", "gpu") || throw(
+        ArgumentError(
+            "$XLA_DEVICE_ENV must be 'cpu' or 'gpu', got '$d'"
+        )
+    )
     return d
 end
 
@@ -120,8 +126,12 @@ build's product, not inside it), and a refusal that read the ambient plan there
 would name `:native` for a run the caller asked to be `:xla`.
 """
 _xla_refuse(rule::AbstractString, reason::AbstractString) =
-    throw(TreeWalkError(ERROR_CODES.COMPILER_REFUSED_RULE,
-                        "compiler=:xla refuses '$rule': $reason"))
+    throw(
+    TreeWalkError(
+        ERROR_CODES.COMPILER_REFUSED_RULE,
+        "compiler=:xla refuses '$rule': $reason"
+    )
+)
 
 """
     _xla_check_form(compiler, form)
@@ -134,12 +144,15 @@ form would hand back a host closure under a report that says `:xla` — a
 fallback in everything but name. It is an `ArgumentError` instead.
 """
 function _xla_check_form(compiler::Symbol, form::Symbol)
-    compiler === :xla && form !== :oop && throw(ArgumentError(
-        "compiler=:xla builds only the out-of-place product (`form = :oop`) the " *
-        "direct StableHLO emitter lowers, not the in-place evaluator (form " *
-        ":$form), which is compiler=:native's. For a runnable :xla " *
-        "right-hand side build `esm_problem(input, tspan; compiler = :xla)`; " *
-        "for the in-place evaluator, build with compiler=:native"))
+    compiler === :xla && form !== :oop && throw(
+        ArgumentError(
+            "compiler=:xla builds only the out-of-place product (`form = :oop`) the " *
+                "direct StableHLO emitter lowers, not the in-place evaluator (form " *
+                ":$form), which is compiler=:native's. For a runnable :xla " *
+                "right-hand side build `esm_problem(input, tspan; compiler = :xla)`; " *
+                "for the in-place evaluator, build with compiler=:native"
+        )
+    )
     return nothing
 end
 
@@ -148,8 +161,10 @@ end
 # verbatim rather than an anonymous failure. Nothing here retries, demotes or
 # falls back: `:xla` either runs the whole document or names what it refused.
 function _xla_refuse_emit(err::DirectEmitError)
-    _xla_refuse(err.rule,
-        "the direct StableHLO emitter cannot lower $(err.construct): $(err.detail)")
+    return _xla_refuse(
+        err.rule,
+        "the direct StableHLO emitter cannot lower $(err.construct): $(err.detail)"
+    )
 end
 
 """
@@ -174,14 +189,16 @@ function _xla_compile_rhs end
 # result to say so, so it is a named refusal instead.
 function _xla_refuse_live_buffers(names)
     ns = sort!(String.(collect(names)))
-    _xla_refuse("live forcing buffers (" * join(ns, ", ") * ")",
+    return _xla_refuse(
+        "live forcing buffers (" * join(ns, ", ") * ")",
         "this document binds $(length(ns)) live forcing buffer(s), which a " *
-        "compiled program must receive as arguments and have re-synced to the " *
-        "device at each cadence boundary; `esm_problem(…; compiler = :xla)` " *
-        "does not wire that refresh yet, and the buffer-free form would bake " *
-        "the build-time forcing in as a constant and run the whole simulation " *
-        "against it. Build with compiler=:native, or drive the compiled lane " *
-        "directly (`direct_rhs_with_buffers` + `sync_forcing!`)")
+            "compiled program must receive as arguments and have re-synced to the " *
+            "device at each cadence boundary; `esm_problem(…; compiler = :xla)` " *
+            "does not wire that refresh yet, and the buffer-free form would bake " *
+            "the build-time forcing in as a constant and run the whole simulation " *
+            "against it. Build with compiler=:native, or drive the compiled lane " *
+            "directly (`direct_rhs_with_buffers` + `sync_forcing!`)"
+    )
 end
 
 """
@@ -276,12 +293,18 @@ rows say how each rule was lowered INTO the intermediate representation the
 emitter then walked, which is the same question `native` answers and the same
 answer.
 """
-function _xla_record!(report::CompilerReport, device::AbstractString,
-                      stats::AbstractDict{Symbol,Int})
-    push!(report.rules,
-          CompilerRuleRecord("the right-hand side", :rhs_program,
-                             Symbol("xla_direct_", device),
-                             Pair{Symbol,Symbol}[]))
+function _xla_record!(
+        report::CompilerReport, device::AbstractString,
+        stats::AbstractDict{Symbol, Int}
+    )
+    push!(
+        report.rules,
+        CompilerRuleRecord(
+            "the right-hand side", :rhs_program,
+            Symbol("xla_direct_", device),
+            Pair{Symbol, Symbol}[]
+        )
+    )
     for (k, v) in stats
         report.tally[Symbol("xla_", k)] = v
     end
@@ -325,8 +348,10 @@ struct _XlaFdJacobian{F}
     f1::Vector{Float64}         # f(u + h eⱼ)
 end
 _XlaFdJacobian(f!, n::Integer) =
-    _XlaFdJacobian(f!, Vector{Float64}(undef, n), Vector{Float64}(undef, n),
-                   Vector{Float64}(undef, n))
+    _XlaFdJacobian(
+    f!, Vector{Float64}(undef, n), Vector{Float64}(undef, n),
+    Vector{Float64}(undef, n)
+)
 
 function (J::_XlaFdJacobian)(Jm::AbstractMatrix, u::AbstractVector, p, t)
     n = length(u)

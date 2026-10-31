@@ -123,15 +123,19 @@ struct _OopBatchNode
     step::Int
     children::Vector{_OopBatchNode}
 end
-function _mkbatch(; kind::UInt8, op::Symbol=Symbol(""), literal::Float64=0.0,
-                  idx::Int=0, sym::Symbol=Symbol(""), payload=nothing,
-                  lanes_f::Vector{Float64}=Float64[], slots::Vector{Int}=Int[],
-                  nodes::Vector{_Node}=_Node[],
-                  refs::Vector{Base.RefValue{Int}}=Base.RefValue{Int}[],
-                  lo::Int=0, hi::Int=0, step::Int=1,
-                  children::Vector{_OopBatchNode}=_OopBatchNode[])
-    return _OopBatchNode(kind, op, literal, idx, sym, payload, lanes_f, slots,
-                         nodes, refs, lo, hi, step, children)
+function _mkbatch(;
+        kind::UInt8, op::Symbol = Symbol(""), literal::Float64 = 0.0,
+        idx::Int = 0, sym::Symbol = Symbol(""), payload = nothing,
+        lanes_f::Vector{Float64} = Float64[], slots::Vector{Int} = Int[],
+        nodes::Vector{_Node} = _Node[],
+        refs::Vector{Base.RefValue{Int}} = Base.RefValue{Int}[],
+        lo::Int = 0, hi::Int = 0, step::Int = 1,
+        children::Vector{_OopBatchNode} = _OopBatchNode[]
+    )
+    return _OopBatchNode(
+        kind, op, literal, idx, sym, payload, lanes_f, slots,
+        nodes, refs, lo, hi, step, children
+    )
 end
 
 # One batched group: the (disjoint) output slots, lane-aligned, and the lowered
@@ -145,10 +149,10 @@ struct _OopScalarBatch
 end
 struct _OopScalarBatches
     groups::Vector{_OopScalarBatch}
-    rest::Vector{Tuple{Int,_Node}}
+    rest::Vector{Tuple{Int, _Node}}
     n_batched::Int
 end
-const _OOP_NO_BATCH = _OopScalarBatches(_OopScalarBatch[], Tuple{Int,_Node}[], 0)
+const _OOP_NO_BATCH = _OopScalarBatches(_OopScalarBatch[], Tuple{Int, _Node}[], 0)
 
 # Canonical structural signature: two entries share one iff `_oop_batch_lower`
 # can lane-batch them together. Writes into `io`; returns `false` for a node
@@ -184,8 +188,10 @@ function _oop_batch_sig!(io::IO, n::_Node, fixed_lit::Bool)::Bool
         print(io, "lv")
     elseif k === _NK_CONTRACTION_LOOP
         spec = n.payload::_ContractLoop
-        print(io, "cl(", n.op, ",", n.literal, ",", spec.lo, ":", spec.step,
-              ":", spec.hi, "){")
+        print(
+            io, "cl(", n.op, ",", n.literal, ",", spec.lo, ":", spec.step,
+            ":", spec.hi, "){"
+        )
         _oop_batch_sig!(io, n.children[1], false) || return false
         print(io, "}")
     elseif k === _NK_CONTRACTION
@@ -199,13 +205,13 @@ function _oop_batch_sig!(io::IO, n::_Node, fixed_lit::Bool)::Bool
         op = n.op
         if op === :fn
             pl = n.payload
-            if pl isa Tuple{String,_FnTypedCoreSpec}
+            if pl isa Tuple{String, _FnTypedCoreSpec}
                 print(io, "fn(", pl[1], ",", pl[2].id, ")")
-            elseif pl isa Tuple{String,Nothing}
+            elseif pl isa Tuple{String, Nothing}
                 print(io, "fn0(", pl[1], ")")
-            elseif pl isa Tuple{String,_InterpLinearSpec} ||
-                   pl isa Tuple{String,_InterpBilinearSpec} ||
-                   pl isa Tuple{String,_InterpSearchsortedSpec}
+            elseif pl isa Tuple{String, _InterpLinearSpec} ||
+                    pl isa Tuple{String, _InterpBilinearSpec} ||
+                    pl isa Tuple{String, _InterpSearchsortedSpec}
                 # Spec OBJECT identity: the build memo shares one compiled node
                 # (hence one spec) across cells; content-equal distinct objects
                 # merely fragment the group, never miscompile it.
@@ -241,7 +247,7 @@ function _oop_batch_sig!(io::IO, n::_Node, fixed_lit::Bool)::Bool
     end
     return true
 end
-function _oop_batch_sig(n::_Node)::Union{Nothing,String}
+function _oop_batch_sig(n::_Node)::Union{Nothing, String}
     io = IOBuffer()
     return _oop_batch_sig!(io, n, false) ? String(take!(io)) : nothing
 end
@@ -250,7 +256,7 @@ end
 # congruence the signature promises is RE-CHECKED here (a `nothing` return
 # declines the whole group back to the scalar path — a signature collision can
 # lose batching, never correctness).
-function _oop_batch_lower(nodes::Vector{_Node})::Union{Nothing,_OopBatchNode}
+function _oop_batch_lower(nodes::Vector{_Node})::Union{Nothing, _OopBatchNode}
     n1 = @inbounds nodes[1]
     k = n1.kind
     @inbounds for l in 2:length(nodes)
@@ -258,68 +264,86 @@ function _oop_batch_lower(nodes::Vector{_Node})::Union{Nothing,_OopBatchNode}
     end
     if k === _NK_LITERAL
         all(nd -> isequal(nd.literal, n1.literal), nodes) &&
-            return _mkbatch(kind=k, literal=n1.literal)
-        return _mkbatch(kind=k, lanes_f=Float64[nd.literal for nd in nodes])
+            return _mkbatch(kind = k, literal = n1.literal)
+        return _mkbatch(kind = k, lanes_f = Float64[nd.literal for nd in nodes])
     elseif k === _NK_STATE
-        all(nd -> nd.idx == n1.idx, nodes) && return _mkbatch(kind=k, idx=n1.idx)
-        return _mkbatch(kind=k, slots=Int[nd.idx for nd in nodes])
+        all(nd -> nd.idx == n1.idx, nodes) && return _mkbatch(kind = k, idx = n1.idx)
+        return _mkbatch(kind = k, slots = Int[nd.idx for nd in nodes])
     elseif k === _NK_PARAM
         # `idx` rides along with `sym` (the read seam wants both). It is not part
         # of the congruence test because it is a FUNCTION of `sym` — one build's
         # parameter order — so equal syms already imply equal indices.
         all(nd -> nd.sym === n1.sym, nodes) || return nothing
-        return _mkbatch(kind=k, sym=n1.sym, idx=n1.idx)
+        return _mkbatch(kind = k, sym = n1.sym, idx = n1.idx)
     elseif k === _NK_TIME
-        return _mkbatch(kind=k)
+        return _mkbatch(kind = k)
     elseif k === _NK_CACHED
         all(nd -> nd.idx == n1.idx && nd.payload === n1.payload, nodes) || return nothing
-        return _mkbatch(kind=k, idx=n1.idx, payload=n1.payload)
+        return _mkbatch(kind = k, idx = n1.idx, payload = n1.payload)
     elseif k === _NK_PARAM_GATHER
         arr = n1.payload::Vector{Float64}
         all(nd -> nd.payload === arr, nodes) || return nothing
         all(nd -> nd.idx == n1.idx, nodes) &&
-            return _mkbatch(kind=k, idx=n1.idx, payload=arr)
-        return _mkbatch(kind=k, payload=arr, slots=Int[nd.idx for nd in nodes])
+            return _mkbatch(kind = k, idx = n1.idx, payload = arr)
+        return _mkbatch(kind = k, payload = arr, slots = Int[nd.idx for nd in nodes])
     elseif k === _NK_CONST_GATHER || k === _NK_STATE_GATHER
-        return _mkbatch(kind=k, nodes=nodes)
+        return _mkbatch(kind = k, nodes = nodes)
     elseif k === _NK_LOOPVAR
-        return _mkbatch(kind=k,
-            refs=Base.RefValue{Int}[nd.payload::Base.RefValue{Int} for nd in nodes])
+        return _mkbatch(
+            kind = k,
+            refs = Base.RefValue{Int}[nd.payload::Base.RefValue{Int} for nd in nodes]
+        )
     elseif k === _NK_CONTRACTION_LOOP
         spec = n1.payload::_ContractLoop
         for nd in nodes
             sp = nd.payload::_ContractLoop
-            (nd.op === n1.op && isequal(nd.literal, n1.literal) &&
-             sp.lo == spec.lo && sp.hi == spec.hi && sp.step == spec.step &&
-             length(nd.children) == 1) || return nothing
+            (
+                nd.op === n1.op && isequal(nd.literal, n1.literal) &&
+                    sp.lo == spec.lo && sp.hi == spec.hi && sp.step == spec.step &&
+                    length(nd.children) == 1
+            ) || return nothing
         end
         body = _oop_batch_lower(_Node[nd.children[1] for nd in nodes])
         body === nothing && return nothing
-        return _mkbatch(kind=k, op=n1.op, literal=n1.literal,
-            refs=Base.RefValue{Int}[(nd.payload::_ContractLoop).ref for nd in nodes],
-            lo=spec.lo, hi=spec.hi, step=spec.step,
-            children=_OopBatchNode[body])
+        return _mkbatch(
+            kind = k, op = n1.op, literal = n1.literal,
+            refs = Base.RefValue{Int}[(nd.payload::_ContractLoop).ref for nd in nodes],
+            lo = spec.lo, hi = spec.hi, step = spec.step,
+            children = _OopBatchNode[body]
+        )
     elseif k === _NK_CONTRACTION || k === _NK_OP
         nc = length(n1.children)
         for nd in nodes
-            (nd.op === n1.op && length(nd.children) == nc &&
-             (k !== _NK_CONTRACTION || isequal(nd.literal, n1.literal))) ||
+            (
+                nd.op === n1.op && length(nd.children) == nc &&
+                    (k !== _NK_CONTRACTION || isequal(nd.literal, n1.literal))
+            ) ||
                 return nothing
         end
         if k === _NK_OP && n1.op === :fn
             pl = n1.payload
-            ok = if pl isa Tuple{String,_FnTypedCoreSpec}
-                all(nd -> (q = nd.payload;
-                           q isa Tuple{String,_FnTypedCoreSpec} &&
-                           q[1] == pl[1] && q[2].id === pl[2].id), nodes)
-            elseif pl isa Tuple{String,Nothing}
-                all(nd -> (q = nd.payload;
-                           q isa Tuple{String,Nothing} && q[1] == pl[1]), nodes)
-            elseif pl isa Tuple{String,_InterpLinearSpec} ||
-                   pl isa Tuple{String,_InterpBilinearSpec} ||
-                   pl isa Tuple{String,_InterpSearchsortedSpec}
-                all(nd -> nd.payload isa Tuple && length(nd.payload) == 2 &&
-                          nd.payload[2] === pl[2], nodes)
+            ok = if pl isa Tuple{String, _FnTypedCoreSpec}
+                all(
+                    nd -> (
+                        q = nd.payload;
+                        q isa Tuple{String, _FnTypedCoreSpec} &&
+                            q[1] == pl[1] && q[2].id === pl[2].id
+                    ), nodes
+                )
+            elseif pl isa Tuple{String, Nothing}
+                all(
+                    nd -> (
+                        q = nd.payload;
+                        q isa Tuple{String, Nothing} && q[1] == pl[1]
+                    ), nodes
+                )
+            elseif pl isa Tuple{String, _InterpLinearSpec} ||
+                    pl isa Tuple{String, _InterpBilinearSpec} ||
+                    pl isa Tuple{String, _InterpSearchsortedSpec}
+                all(
+                    nd -> nd.payload isa Tuple && length(nd.payload) == 2 &&
+                        nd.payload[2] === pl[2], nodes
+                )
             else
                 false
             end
@@ -331,9 +355,11 @@ function _oop_batch_lower(nodes::Vector{_Node})::Union{Nothing,_OopBatchNode}
             ci === nothing && return nothing
             children[i] = ci
         end
-        return _mkbatch(kind=k, op=n1.op, literal=n1.literal,
-                        payload=(k === _NK_OP ? n1.payload : nothing),
-                        children=children)
+        return _mkbatch(
+            kind = k, op = n1.op, literal = n1.literal,
+            payload = (k === _NK_OP ? n1.payload : nothing),
+            children = children
+        )
     end
     return nothing
 end
@@ -342,11 +368,13 @@ end
 # come out in first-appearance order with lanes in original entry order; every
 # other entry stays in `rest`, original relative order preserved. With the
 # feature disabled everything is `rest`, the per-entry surface.
-function _oop_batch_scalars(entries::AbstractVector{Tuple{Int,_Node}})
+function _oop_batch_scalars(entries::AbstractVector{Tuple{Int, _Node}})
     (!_oop_batch_enabled() || length(entries) < 2) &&
-        return _OopScalarBatches(_OopScalarBatch[],
-                                 collect(Tuple{Int,_Node}, entries), 0)
-    order = Dict{String,Int}()          # key -> first-appearance group ordinal
+        return _OopScalarBatches(
+        _OopScalarBatch[],
+        collect(Tuple{Int, _Node}, entries), 0
+    )
+    order = Dict{String, Int}()          # key -> first-appearance group ordinal
     members = Vector{Vector{Int}}()     # ordinal -> entry indices
     for (i, (_, nd)) in enumerate(entries)
         s = _oop_batch_sig(nd)
@@ -370,7 +398,7 @@ function _oop_batch_scalars(entries::AbstractVector{Tuple{Int,_Node}})
             single[i] = false
         end
     end
-    rest = Tuple{Int,_Node}[entries[i] for i in eachindex(entries) if single[i]]
+    rest = Tuple{Int, _Node}[entries[i] for i in eachindex(entries) if single[i]]
     return _OopScalarBatches(groups, rest, n_batched)
 end
 
@@ -389,8 +417,8 @@ struct _OopAccPlan
     consts::Vector{Vector{Float64}}   # per descriptor: frozen lane values (empty otherwise)
     forc::Vector{Vector{Int}}         # per descriptor: LIVE forcing flat indices (empty otherwise)
     ghost::Vector{Vector{Bool}}       # per descriptor: ghost-lane mask for a STATE_TBL_BOX with
-                                      # a 0 slot (empty ⇒ no ghost); true lanes select 0.0 after
-                                      # a gather at a SAFE index (see _build_oop_acc_plan)
+    # a 0 slot (empty ⇒ no ghost); true lanes select 0.0 after
+    # a gather at a SAFE index (see _build_oop_acc_plan)
     # Template-body sub-kernels (compile-once tier, `_NK_SUBCALL`): the parent's
     # FLAT transitive `K.subs` list and, aligned with it, each sub-kernel's own
     # lane plan built against the PARENT's lane enumeration (a sub is evaluated at
@@ -413,17 +441,23 @@ struct _OopAccPlan
     red_plan::Vector{_OopAccPlan}
 end
 const _OOP_ACC_FALLBACK =
-    _OopAccPlan(false, Int[], Vector{Int}[], Vector{Float64}[], Vector{Int}[], Vector{Bool}[],
-                _AccKernel[], _OopAccPlan[], Int[], _OopAccPlan[])
+    _OopAccPlan(
+    false, Int[], Vector{Int}[], Vector{Float64}[], Vector{Int}[], Vector{Bool}[],
+    _AccKernel[], _OopAccPlan[], Int[], _OopAccPlan[]
+)
 
 # Identity lookup of a sub-kernel in the parent plan's flat transitive list.
 @inline function _oop_sub_index(subs::Vector{_AccKernel}, S::_AccKernel)
     @inbounds for j in eachindex(subs)
         subs[j] === S && return j
     end
-    throw(TreeWalkError("E_TREEWALK_ACC_SUBCALL_UNKNOWN",
-        "vectorized oop: a _NK_SUBCALL references a sub-kernel absent from the " *
-        "parent's transitive K.subs list — a `_collect_subkernels` invariant break."))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_ACC_SUBCALL_UNKNOWN",
+            "vectorized oop: a _NK_SUBCALL references a sub-kernel absent from the " *
+                "parent's transitive K.subs list — a `_collect_subkernels` invariant break."
+        )
+    )
 end
 
 # Lane enumeration mirroring `_run_acc_kernel!` / `_run_box_kernel!` order:
@@ -442,11 +476,13 @@ function _oop_acc_lanes(cs::_CellSet)
         return out, [copy(out), fill(1, length(out)), fill(1, length(out))]
     end
     nd = length(cs.strides)
-    return _oop_box_lanes(cs.base, ntuple(d -> cs.strides[d], nd),
-                          ntuple(d -> cs.ranges[d], nd))
+    return _oop_box_lanes(
+        cs.base, ntuple(d -> cs.strides[d], nd),
+        ntuple(d -> cs.ranges[d], nd)
+    )
 end
 
-function _oop_box_lanes(b::Int, st::NTuple{N,Int}, rg::NTuple{N,UnitRange{Int}}) where {N}
+function _oop_box_lanes(b::Int, st::NTuple{N, Int}, rg::NTuple{N, UnitRange{Int}}) where {N}
     L = prod(length, rg)
     out = Vector{Int}(undef, L)
     mis = [fill(1, L) for _ in 1:max(N, 3)]
@@ -454,9 +490,13 @@ function _oop_box_lanes(b::Int, st::NTuple{N,Int}, rg::NTuple{N,UnitRange{Int}})
     @inbounds for I in CartesianIndices(rg)
         q += 1
         oln = b
-        for d in 1:N; oln += I[d]*st[d]; end
+        for d in 1:N
+            oln += I[d] * st[d]
+        end
         out[q] = oln
-        for d in 1:N; mis[d][q] = I[d]; end
+        for d in 1:N
+            mis[d][q] = I[d]
+        end
     end
     return out, mis
 end
@@ -464,7 +504,7 @@ end
 # Lane `l`'s box address `off + Σ_d (m_d[l] - 1)·s_d` — `_acc_boxaddr` over the
 # lane multi-index vectors.
 @inline function _oop_boxaddr(a::_AccDesc, mis::Vector{Vector{Int}}, l::Int)
-    x = a.off + (mis[1][l]-1)*a.s1 + (mis[2][l]-1)*a.s2 + (mis[3][l]-1)*a.s3
+    x = a.off + (mis[1][l] - 1) * a.s1 + (mis[2][l] - 1) * a.s2 + (mis[3][l] - 1) * a.s3
     @inbounds for d in eachindex(a.sx)
         x += (mis[d + 3][l] - 1) * a.sx[d]
     end
@@ -514,14 +554,14 @@ function _oop_acc_vecable(n::_Node, K::_AccKernel, in_reduce::Bool)
         # planned at the parent, so this check and the plan build agree.
         S = n.payload::_AccKernel
         return _oop_acc_vecable(S.spine, S) &&
-               all(r -> _oop_acc_vecable(r, S), S.cse.recipes) &&
-               all(r -> _oop_acc_vecable(r, S), S.cse.inv_recipes)
+            all(r -> _oop_acc_vecable(r, S), S.cse.recipes) &&
+            all(r -> _oop_acc_vecable(r, S), S.cse.inv_recipes)
     end
     if k === _NK_ACCESS
         a = K.acc[n.idx]
         ak = a.kind
         if ak === _AK_CONST_EDGE || ak === _AK_STATE_INDIRECT ||
-           ak === _AK_STATE_INDIRECT_COL
+                ak === _AK_STATE_INDIRECT_COL
             # n-indexed: only resolvable inside a CSR segment fold.
             return in_reduce && _oop_reduce_desc_ok(ak)
         end
@@ -548,14 +588,16 @@ end
 # template-body sub-kernel — evaluated at the PARENT's lanes — resolves its own
 # descriptors against those same parent lanes (its `_contig_cells(0)` carries no
 # lanes of its own). Returns the four aligned per-descriptor vectors.
-function _build_oop_desc_vectors(acc::Vector{_AccDesc},
-                                 out::Vector{Int}, mis::Vector{Vector{Int}})
+function _build_oop_desc_vectors(
+        acc::Vector{_AccDesc},
+        out::Vector{Int}, mis::Vector{Vector{Int}}
+    )
     L = length(out)
     nacc = length(acc)
     gathers = [Int[] for _ in 1:nacc]
-    consts  = [Float64[] for _ in 1:nacc]
-    forc    = [Int[] for _ in 1:nacc]
-    ghost   = [Bool[] for _ in 1:nacc]
+    consts = [Float64[] for _ in 1:nacc]
+    forc = [Int[] for _ in 1:nacc]
+    ghost = [Bool[] for _ in 1:nacc]
     for (i, a) in enumerate(acc)
         k = a.kind
         if k === _AK_STATE_AFFINE
@@ -568,7 +610,7 @@ function _build_oop_desc_vectors(acc::Vector{_AccDesc},
             # sees ONE whole-array gather plus a select against a constant mask.
             raw = Int[@inbounds a.conn[_oop_boxaddr(a, mis, l)] for l in 1:L]
             if any(==(0), raw)
-                ghost[i]   = Bool[s == 0 for s in raw]
+                ghost[i] = Bool[s == 0 for s in raw]
                 gathers[i] = Int[s == 0 ? 1 : s for s in raw]
             else
                 gathers[i] = raw
@@ -603,16 +645,16 @@ function _oop_reduce_segments(K::_AccKernel, N::Int)
     seg_off = Vector{Int}(undef, N + 1)
     seg_off[1] = 1
     @inbounds for c in 1:N
-        seg_off[c+1] = seg_off[c] + _nbrcount(K.bound, c)
+        seg_off[c + 1] = seg_off[c] + _nbrcount(K.bound, c)
     end
-    E = seg_off[N+1] - 1
+    E = seg_off[N + 1] - 1
     seg_cell = Vector{Int}(undef, E)
-    seg_n    = Vector{Int}(undef, E)
+    seg_n = Vector{Int}(undef, E)
     @inbounds for c in 1:N
         base = seg_off[c] - 1
         for n in 1:_nbrcount(K.bound, c)
-            seg_cell[base+n] = c
-            seg_n[base+n]    = n
+            seg_cell[base + n] = c
+            seg_n[base + n] = n
         end
     end
     return seg_off, seg_cell, seg_n
@@ -624,22 +666,24 @@ end
 # for them). `out[c]` is cell `c`'s output slot (== c for the contiguous set a
 # reduce always has). Only the state kinds produce a `gathers` vector (the sole
 # state access, whole-array); everything else is frozen `consts`.
-function _build_oop_reduce_desc_vectors(acc::Vector{_AccDesc}, seg_cell::Vector{Int},
-                                        seg_n::Vector{Int}, out::Vector{Int})
+function _build_oop_reduce_desc_vectors(
+        acc::Vector{_AccDesc}, seg_cell::Vector{Int},
+        seg_n::Vector{Int}, out::Vector{Int}
+    )
     E = length(seg_cell)
     nacc = length(acc)
     gathers = [Int[] for _ in 1:nacc]
-    consts  = [Float64[] for _ in 1:nacc]
+    consts = [Float64[] for _ in 1:nacc]
     for (i, a) in enumerate(acc)
         k = a.kind
         if k === _AK_STATE_AFFINE
             gathers[i] = Int[@inbounds out[seg_cell[e]] + a.delta for e in 1:E]
         elseif k === _AK_STATE_INDIRECT
-            gathers[i] = Int[@inbounds a.conn[(seg_cell[e]-1)*a.width + seg_n[e]] for e in 1:E]
+            gathers[i] = Int[@inbounds a.conn[(seg_cell[e] - 1) * a.width + seg_n[e]] for e in 1:E]
         elseif k === _AK_STATE_INDIRECT_COL
-            gathers[i] = Int[@inbounds a.conn[(seg_cell[e]-1)*a.width + a.col] for e in 1:E]
+            gathers[i] = Int[@inbounds a.conn[(seg_cell[e] - 1) * a.width + a.col] for e in 1:E]
         elseif k === _AK_CONST_EDGE
-            consts[i] = Float64[@inbounds a.arr[(seg_cell[e]-1)*a.width + seg_n[e]] for e in 1:E]
+            consts[i] = Float64[@inbounds a.arr[(seg_cell[e] - 1) * a.width + seg_n[e]] for e in 1:E]
         elseif k === _AK_CONST_CELL
             consts[i] = Float64[@inbounds a.arr[seg_cell[e]] for e in 1:E]   # c == oln (contiguous)
         elseif k === _AK_CONST_AFFINE
@@ -686,8 +730,10 @@ function _build_oop_acc_plan_inner(K::_AccKernel)
             sg, sc, sf, sgh = _build_oop_desc_vectors(S.acc, out, mis)
             # A sub carries no cells of its own; `out_slots` is unused for a sub
             # (only the top-level plan scatters), so reuse the parent lane slots.
-            sub_plans[j] = _OopAccPlan(true, out, sg, sc, sf, sgh,
-                                       _AccKernel[], _OopAccPlan[], Int[], _OopAccPlan[])
+            sub_plans[j] = _OopAccPlan(
+                true, out, sg, sc, sf, sgh,
+                _AccKernel[], _OopAccPlan[], Int[], _OopAccPlan[]
+            )
         end
     end
     # Variable-valence reduction: build the CSR segments + the E-lane body plan.
@@ -701,12 +747,18 @@ function _build_oop_acc_plan_inner(K::_AccKernel)
         eg, ec = _build_oop_reduce_desc_vectors(K.acc, seg_cell, seg_n, out)
         nacc = length(K.acc)
         red_seg = seg_off
-        red_plan = _OopAccPlan[_OopAccPlan(true, Int[], eg, ec,
-                        [Int[] for _ in 1:nacc], [Bool[] for _ in 1:nacc],
-                        _AccKernel[], _OopAccPlan[], Int[], _OopAccPlan[])]
+        red_plan = _OopAccPlan[
+            _OopAccPlan(
+                true, Int[], eg, ec,
+                [Int[] for _ in 1:nacc], [Bool[] for _ in 1:nacc],
+                _AccKernel[], _OopAccPlan[], Int[], _OopAccPlan[]
+            ),
+        ]
     end
-    return _OopAccPlan(true, out, gathers, consts, forc, ghost, subs, sub_plans,
-                       red_seg, red_plan)
+    return _OopAccPlan(
+        true, out, gathers, consts, forc, ghost, subs, sub_plans,
+        red_seg, red_plan
+    )
 end
 
 # ---- The build's out-of-place product ---------------------------------------
@@ -738,27 +790,32 @@ publishes it on the `inspect` sink, which is how it reaches
 function _forcing_buffer_container(pgather)
     buf_names = sort!(String[String(k) for k in keys(pgather)])
     host_bufs = NamedTuple{Tuple(Symbol(n) for n in buf_names)}(
-        Tuple((pgather[n]::_PGatherArray).flat for n in buf_names))
-    buffer_index = Dict{String,Int}(n => i for (i, n) in enumerate(buf_names))
+        Tuple((pgather[n]::_PGatherArray).flat for n in buf_names)
+    )
+    buffer_index = Dict{String, Int}(n => i for (i, n) in enumerate(buf_names))
     return host_bufs, buffer_index
 end
 
-struct _OopRHS{F,B} <: Function
+struct _OopRHS{F, B} <: Function
     rhs::F                          # the compiled IR (`_CompiledIR`)
     buffers::B                      # NamedTuple: name => aliased HOST buffer, stable order
-    buffer_index::Dict{String,Int}  # buffer name -> position in `buffers`
+    buffer_index::Dict{String, Int}  # buffer name -> position in `buffers`
 end
 
 # Host evaluation of this form is a compiled backend's job. The in-place `f!`
 # (`form = :inplace`, the default) is the host evaluator, and it is also the
 # reference the compiled backends are gated against; `compiler=:interpreter`
 # gives its untiered variant, which recomputes every prelude slot on every call.
-(f::_OopRHS)(u, p, t) = throw(TreeWalkError("E_TREEWALK_OOP_NOT_EVALUABLE",
-    "an out-of-place build product is the compiled intermediate " *
-    "representation a backend lowers, not a host evaluator. For a compiled " *
-    "right-hand side build `esm_problem(input, tspan; compiler = :xla)`; for " *
-    "the host evaluator build `esm_problem(input, tspan)` and call " *
-    "`prob.f!(du, u, prob.p, t)`."))
+(f::_OopRHS)(u, p, t) = throw(
+    TreeWalkError(
+        "E_TREEWALK_OOP_NOT_EVALUABLE",
+        "an out-of-place build product is the compiled intermediate " *
+            "representation a backend lowers, not a host evaluator. For a compiled " *
+            "right-hand side build `esm_problem(input, tspan; compiler = :xla)`; for " *
+            "the host evaluator build `esm_problem(input, tspan)` and call " *
+            "`prob.f!(du, u, prob.p, t)`."
+    )
+)
 
 """
     forcing_buffers(f) -> NamedTuple
@@ -790,7 +847,7 @@ forcing_buffer_index(f::_OopRHS) = f.buffer_index
 # spines, access kernels, fill levels and fold descriptors `_make_rhs`
 # (acc_merge.jl) lowers into `f!`, but reachable as data rather than closed over
 # by an evaluator. `_make_rhs_oop` below assembles one per build.
-struct _CompiledIR{R,C,K,S,M,A,B,MB}
+struct _CompiledIR{R, C, K, S, M, A, B, MB}
     rhs_list::R                        # (slot, node) scalar state equations
     cse_prelude::C                     # shared-subexpression prelude, in slot order
     acc_kernels::K                     # the unified array IR
@@ -804,15 +861,17 @@ struct _CompiledIR{R,C,K,S,M,A,B,MB}
     n_total::Int                       # extended state length (states + materialized observeds)
 end
 
-function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
-                       cse_prelude::AbstractVector{_Node},
-                       acc_kernels::AbstractVector{_AccKernel},
-                       n_states::Int,
-                       pgather::AbstractDict=_EMPTY_PGATHER,
-                       scan_folds::AbstractVector{_ScanFold}=_ScanFold[],
-                       mat_levels::Tuple=(),
-                       n_total::Int=n_states,
-                       array_contractions::AbstractVector=_ArrayContraction[])
+function _make_rhs_oop(
+        rhs_list::AbstractVector{Tuple{Int, _Node}},
+        cse_prelude::AbstractVector{_Node},
+        acc_kernels::AbstractVector{_AccKernel},
+        n_states::Int,
+        pgather::AbstractDict = _EMPTY_PGATHER,
+        scan_folds::AbstractVector{_ScanFold} = _ScanFold[],
+        mat_levels::Tuple = (),
+        n_total::Int = n_states,
+        array_contractions::AbstractVector = _ArrayContraction[]
+    )
     # Vectorized lane plans for the acc kernels (host index data, built once).
     # The kernel-CLASS merge (oop_merge.jl) no longer runs here: it is hoisted
     # into `_build_evaluator_impl` phase 4 (`_merge_acc_kernel_classes`), before
@@ -827,8 +886,10 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
     # tooling reflects on them); `rhs_batches`/`mat_batches` are ADDITIVE
     # fields — a group count of zero means everything runs the scalar path.
     rhs_batches = _oop_batch_scalars(rhs_list)
-    mat_batches = map(lvl -> _oop_batch_scalars(lvl[1]::Vector{Tuple{Int,_Node}}),
-                      mat_levels)
+    mat_batches = map(
+        lvl -> _oop_batch_scalars(lvl[1]::Vector{Tuple{Int, _Node}}),
+        mat_levels
+    )
     # The buffers container: every live forcing buffer this build registered —
     # raw `param_arrays` entries AND DiscreteMaterializer caches, both of which
     # live in `pgather` by the time this runs — in a STABLE order (names
@@ -836,9 +897,13 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
     # an aligned container of device arrays to the explicit-buffers form, so a
     # discrete-cadence refresh reaches the compiled program (`sync_forcing!`).
     host_bufs, buffer_index = _forcing_buffer_container(pgather)
-    return _OopRHS(_CompiledIR(rhs_list, cse_prelude, acc_kernels, acc_plans,
-                               scan_folds, mat_levels,
-                               map!(_ac_drop_remit, similar(array_contractions), array_contractions),
-                               rhs_batches, mat_batches, n_states, n_total),
-                   host_bufs, buffer_index)
+    return _OopRHS(
+        _CompiledIR(
+            rhs_list, cse_prelude, acc_kernels, acc_plans,
+            scan_folds, mat_levels,
+            map!(_ac_drop_remit, similar(array_contractions), array_contractions),
+            rhs_batches, mat_batches, n_states, n_total
+        ),
+        host_bufs, buffer_index
+    )
 end

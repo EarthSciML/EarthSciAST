@@ -92,12 +92,14 @@ end
 # right-hand-side call where the build's plan is no longer in scope.
 
 _plan_all(name::Symbol, strict::Bool, on::Bool) =
-    CompilerPlan(name, strict,
-                 on, on, on, on, on, on, on,
-                 on, on, on, on, on, on, on, on, on,
-                 on, on, on, on, on, on, on,
-                 on, on,
-                 on, on, on, on)
+    CompilerPlan(
+    name, strict,
+    on, on, on, on, on, on, on,
+    on, on, on, on, on, on, on, on, on,
+    on, on, on, on, on, on, on,
+    on, on,
+    on, on, on, on
+)
 
 # `plan` with the named fields replaced.
 _plan_with(plan::CompilerPlan; kw...) =
@@ -148,14 +150,17 @@ function _compiler_plan(compiler::Symbol)
         # remains the universally fast default with no heavy external
         # dependency; `:interpreter` remains the simple oracle that checks them.
         Base.get_extension(EarthSciAST, :EarthSciASTMTKExt) === nothing &&
-            throw(SimulateError(
+            throw(
+            SimulateError(
                 "compiler=:mtk builds a ModelingToolkit `System` and needs " *
-                "ModelingToolkit loaded — add `using ModelingToolkit` so the " *
-                "EarthSciASTMTKExt extension activates. It is a SPECIALTY " *
-                "compiler that runs only some documents (it is the one that runs " *
-                "events and implicit equations); compiler=:native is the " *
-                "universally fast default",
-                ERROR_CODES.COMPILER_UNAVAILABLE))
+                    "ModelingToolkit loaded — add `using ModelingToolkit` so the " *
+                    "EarthSciASTMTKExt extension activates. It is a SPECIALTY " *
+                    "compiler that runs only some documents (it is the one that runs " *
+                    "events and implicit equations); compiler=:native is the " *
+                    "universally fast default",
+                ERROR_CODES.COMPILER_UNAVAILABLE
+            )
+        )
         # Every right-hand-side tier is OFF: this compiler emits nothing of
         # this package's own, so a tier flag would describe a cascade that
         # never runs. `strict` stays TRUE — `:mtk` refuses a document it cannot
@@ -170,17 +175,23 @@ function _compiler_plan(compiler::Symbol)
         # take the per-cell route, which a strict plan refuses.
         return _plan_with(_plan_all(:mtk, true, false); setup_map_compile_once = true)
     elseif compiler === :sympy
-        throw(SimulateError(
-            "compiler=:sympy is a Python-binding compiler (a lambdified SymPy " *
-            "scalar right-hand side) and has no Julia implementation; use " *
-            "compiler=:native, or the Python binding's esm_problem(..., " *
-            "compiler=\"sympy\")",
-            ERROR_CODES.COMPILER_UNAVAILABLE))
+        throw(
+            SimulateError(
+                "compiler=:sympy is a Python-binding compiler (a lambdified SymPy " *
+                    "scalar right-hand side) and has no Julia implementation; use " *
+                    "compiler=:native, or the Python binding's esm_problem(..., " *
+                    "compiler=\"sympy\")",
+                ERROR_CODES.COMPILER_UNAVAILABLE
+            )
+        )
     end
-    throw(SimulateError(
-        "compiler=:$compiler is outside the vocabulary; it is one of " *
-        join((":" * String(v) for v in COMPILER_VOCABULARY), ", "),
-        ERROR_CODES.COMPILER_UNKNOWN))
+    throw(
+        SimulateError(
+            "compiler=:$compiler is outside the vocabulary; it is one of " *
+                join((":" * String(v) for v in COMPILER_VOCABULARY), ", "),
+            ERROR_CODES.COMPILER_UNKNOWN
+        )
+    )
 end
 
 # The plan in force. Task-local so a nested build cannot leak its plan into the
@@ -262,7 +273,7 @@ struct CompilerRuleRecord
     rule::String
     kind::Symbol
     tier::Symbol
-    declines::Vector{Pair{Symbol,Symbol}}
+    declines::Vector{Pair{Symbol, Symbol}}
 end
 
 """
@@ -283,10 +294,10 @@ What a build did, per rule. [`compiler_report`](@ref) returns one.
 struct CompilerReport
     compiler::Symbol
     rules::Vector{CompilerRuleRecord}
-    tally::Dict{Symbol,Int}
+    tally::Dict{Symbol, Int}
 end
 CompilerReport(compiler::Symbol) =
-    CompilerReport(compiler, CompilerRuleRecord[], Dict{Symbol,Int}())
+    CompilerReport(compiler, CompilerRuleRecord[], Dict{Symbol, Int}())
 
 """
     tier_histogram(report::CompilerReport) -> Vector{Pair{Symbol,Int}}
@@ -295,7 +306,7 @@ The report's rules folded into `tier => count`, ordered by descending count and
 then by tier name, so two builds of the same document print the same line.
 """
 function tier_histogram(r::CompilerReport)
-    h = Dict{Symbol,Int}()
+    h = Dict{Symbol, Int}()
     for rec in r.rules
         h[rec.tier] = get(h, rec.tier, 0) + 1
     end
@@ -309,20 +320,24 @@ function Base.show(io::IO, r::CompilerReport)
     for (tier, n) in tier_histogram(r)
         print(io, ", ", tier, "=", n)
     end
-    print(io, ")")
+    return print(io, ")")
 end
 
 function Base.show(io::IO, ::MIME"text/plain", r::CompilerReport)
     println(io, "CompilerReport — compiler :", r.compiler)
     hist = tier_histogram(r)
-    println(io, "  tiers: ",
-            isempty(hist) ? "(no rules recorded)" :
-            join(("$(t)=$(n)" for (t, n) in hist), ", "))
+    println(
+        io, "  tiers: ",
+        isempty(hist) ? "(no rules recorded)" :
+            join(("$(t)=$(n)" for (t, n) in hist), ", ")
+    )
     for rec in r.rules
         print(io, "  ", rec.kind, " ", rec.rule, " → ", rec.tier)
         isempty(rec.declines) ||
-            print(io, "  [declined: ",
-                  join(("$(t):$(why)" for (t, why) in rec.declines), ", "), "]")
+            print(
+            io, "  [declined: ",
+            join(("$(t):$(why)" for (t, why) in rec.declines), ", "), "]"
+        )
         println(io)
     end
     return nothing
@@ -339,20 +354,22 @@ end
 mutable struct _BuildRecord
     plan::CompilerPlan
     rules::Vector{CompilerRuleRecord}
-    tally::Dict{Symbol,Int}
+    tally::Dict{Symbol, Int}
     # The rule the cascade is working on, so a decline raised several frames
     # deeper can name it. Empty between rules.
     current::String
     current_kind::Symbol
-    declines::Vector{Pair{Symbol,Symbol}}
+    declines::Vector{Pair{Symbol, Symbol}}
 end
 _BuildRecord(plan::CompilerPlan) =
-    _BuildRecord(plan, CompilerRuleRecord[], Dict{Symbol,Int}(), "", :equation,
-                 Pair{Symbol,Symbol}[])
+    _BuildRecord(
+    plan, CompilerRuleRecord[], Dict{Symbol, Int}(), "", :equation,
+    Pair{Symbol, Symbol}[]
+)
 
 const _BUILD_RECORD_KEY = :earthsci_build_record
 
-_build_record()::Union{Nothing,_BuildRecord} =
+_build_record()::Union{Nothing, _BuildRecord} =
     get(task_local_storage(), _BUILD_RECORD_KEY, nothing)
 
 _with_build_record(f, rec::_BuildRecord) =
@@ -380,8 +397,12 @@ function _land_rule!(tier::Symbol)
     rec = _build_record()
     rec === nothing && return nothing
     isempty(rec.current) && return nothing
-    push!(rec.rules, CompilerRuleRecord(rec.current, rec.current_kind, tier,
-                                        copy(rec.declines)))
+    push!(
+        rec.rules, CompilerRuleRecord(
+            rec.current, rec.current_kind, tier,
+            copy(rec.declines)
+        )
+    )
     rec.current = ""
     empty!(rec.declines)
     return nothing
@@ -389,8 +410,10 @@ end
 
 # A rule with no cascade stage of its own (a setup array, a materialized
 # observed): one call, no open/close pair.
-function _record_rule!(rule::AbstractString, kind::Symbol, tier::Symbol;
-                       declines::Vector{Pair{Symbol,Symbol}} = Pair{Symbol,Symbol}[])
+function _record_rule!(
+        rule::AbstractString, kind::Symbol, tier::Symbol;
+        declines::Vector{Pair{Symbol, Symbol}} = Pair{Symbol, Symbol}[]
+    )
     rec = _build_record()
     rec === nothing && return nothing
     push!(rec.rules, CompilerRuleRecord(String(rule), kind, tier, declines))
@@ -405,15 +428,19 @@ end
 # — the assembled right-hand side belongs to every array equation at once, so
 # there is no one rule to name.
 _current_rule_label(fallback::AbstractString = "(unnamed rule)") =
-    (rec = _build_record(); rec === nothing || isempty(rec.current) ?
-     String(fallback) : rec.current)
+    (
+    rec = _build_record(); rec === nothing || isempty(rec.current) ?
+        String(fallback) : rec.current
+)
 
 function _finish_report(rec::_BuildRecord)
     # A nested reduction the build lifted into an internal observed
     # (tree_walk/hoist.jl) reports under the variable it was lifted from.
-    rules = CompilerRuleRecord[_is_hoisted_name(r.rule) ?
-        CompilerRuleRecord(_hoist_public_label(r.rule), r.kind, r.tier, r.declines) : r
-        for r in rec.rules]
+    rules = CompilerRuleRecord[
+        _is_hoisted_name(r.rule) ?
+            CompilerRuleRecord(_hoist_public_label(r.rule), r.kind, r.tier, r.declines) : r
+            for r in rec.rules
+    ]
     return CompilerReport(rec.plan.name, rules, copy(rec.tally))
 end
 
@@ -430,7 +457,7 @@ end
 # counted (`_percell_mark` / `_percell_restore!`).
 const _PERCELL_COUNT_KEY = :earthsci_percell_count
 
-_percell_counter()::Union{Nothing,Base.RefValue{Int}} =
+_percell_counter()::Union{Nothing, Base.RefValue{Int}} =
     get(task_local_storage(), _PERCELL_COUNT_KEY, nothing)
 
 # `(f(), n)`: the value and the number of per-cell evaluations that served it.
@@ -460,8 +487,12 @@ shape §2.5.10 fixes and what the compiler-agreement tier reads back.
 """
 function _refuse_rule(rule::AbstractString, reason::AbstractString)
     plan = _compiler_plan_now()
-    throw(TreeWalkError(ERROR_CODES.COMPILER_REFUSED_RULE,
-        "compiler=:$(plan.name) refuses '$rule': $reason"))
+    throw(
+        TreeWalkError(
+            ERROR_CODES.COMPILER_REFUSED_RULE,
+            "compiler=:$(plan.name) refuses '$rule': $reason"
+        )
+    )
 end
 
 # True when the compiler in force refuses a rule it cannot express rather than
@@ -513,10 +544,14 @@ struct _PerCellLicense
         plan = _compiler_plan_now()
         # Reached only by a route that skipped `_percell_license`; the route's
         # own refusal would have named its rule.
-        plan.strict && throw(TreeWalkError(ERROR_CODES.COMPILER_REFUSED_RULE,
-            "compiler=:$(plan.name) refuses a per-cell evaluation: a strict " *
-            "compiler has no per-cell route (esm-libraries-spec §2.5.10). Build " *
-            "with compiler=:interpreter to run it"))
+        plan.strict && throw(
+            TreeWalkError(
+                ERROR_CODES.COMPILER_REFUSED_RULE,
+                "compiler=:$(plan.name) refuses a per-cell evaluation: a strict " *
+                    "compiler has no per-cell route (esm-libraries-spec §2.5.10). Build " *
+                    "with compiler=:interpreter to run it"
+            )
+        )
         return new(plan.name)
     end
 end
@@ -530,7 +565,7 @@ cells or a structure that walks per call.
 """
 struct _PerCellProbe end
 
-const _PerCellAccess = Union{_PerCellLicense,_PerCellProbe}
+const _PerCellAccess = Union{_PerCellLicense, _PerCellProbe}
 
 """
     _OopCells
@@ -552,7 +587,7 @@ with `reason` — a string, or a function of the probe's result.
 function _percell_license(rule::AbstractString, reason; probe = nothing)
     _compiler_is_strict() || return _PerCellLicense()
     r = probe === nothing ? nothing : probe(_PerCellProbe())
-    _refuse_rule(rule, reason isa AbstractString ? reason : reason(r))
+    return _refuse_rule(rule, reason isa AbstractString ? reason : reason(r))
 end
 
 """
@@ -570,11 +605,13 @@ A compile-once sweep that then evaluates an ALREADY COMPILED node per cell is
 not one of these and never asks: what is refused is re-deriving the program for
 every cell.
 """
-function _percell_evaluation_license(rule::AbstractString, what::AbstractString,
-                                     cells::Union{Nothing,Integer};
-                                     probe = nothing, one_cell::Bool = false)
+function _percell_evaluation_license(
+        rule::AbstractString, what::AbstractString,
+        cells::Union{Nothing, Integer};
+        probe = nothing, one_cell::Bool = false
+    )
     over = cells === nothing ? "" :
-           ", over $cells cell" * (cells == 1 ? "" : "s")
+        ", over $cells cell" * (cells == 1 ? "" : "s")
     reason = "$what resolves and compiles the expression once per cell$over, " *
         "because the compile-once form declined it. That is a tree walk per " *
         "cell at construction time, which esm-libraries-spec §2.5.10 puts " *

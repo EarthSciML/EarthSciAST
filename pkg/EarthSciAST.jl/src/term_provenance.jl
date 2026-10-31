@@ -30,20 +30,28 @@ Who authored one [`Contribution`](@ref). Exactly one field is set:
   sequence `metadata.coupling_rules_applied` lists).
 """
 struct TermOrigin
-    component::Union{String,Nothing}
-    coupling::Union{Int,Nothing}
+    component::Union{String, Nothing}
+    coupling::Union{Int, Nothing}
 
     function TermOrigin(component, coupling)
-        (component === nothing) == (coupling === nothing) && throw(ArgumentError(
-            "a TermOrigin names exactly one of `component` or `coupling`"))
-        coupling === nothing || coupling >= 0 || throw(ArgumentError(
-            "a TermOrigin's `coupling` index is 0-based and cannot be negative (got $(coupling))"))
-        return new(component === nothing ? nothing : String(component),
-                   coupling === nothing ? nothing : Int(coupling))
+        (component === nothing) == (coupling === nothing) && throw(
+            ArgumentError(
+                "a TermOrigin names exactly one of `component` or `coupling`"
+            )
+        )
+        coupling === nothing || coupling >= 0 || throw(
+            ArgumentError(
+                "a TermOrigin's `coupling` index is 0-based and cannot be negative (got $(coupling))"
+            )
+        )
+        return new(
+            component === nothing ? nothing : String(component),
+            coupling === nothing ? nothing : Int(coupling)
+        )
     end
 end
 
-TermOrigin(; component=nothing, coupling=nothing) = TermOrigin(component, coupling)
+TermOrigin(; component = nothing, coupling = nothing) = TermOrigin(component, coupling)
 
 """
     Contribution(expr, origins)
@@ -79,8 +87,10 @@ _coupling_origin(index::Integer) = TermOrigin(nothing, Int(index))
 _authored(expr::ASTExpr, origin::TermOrigin) = Contribution[Contribution(expr, TermOrigin[origin])]
 
 """Every origin of `contributions`, then `extra`, deduplicated in first-appearance order."""
-function _union_origins(contributions::AbstractVector{Contribution},
-                        extra::TermOrigin...)::Vector{TermOrigin}
+function _union_origins(
+        contributions::AbstractVector{Contribution},
+        extra::TermOrigin...
+    )::Vector{TermOrigin}
     out = TermOrigin[]
     for c in contributions, o in c.origins
         o in out || push!(out, o)
@@ -112,8 +122,10 @@ contribution sum. An authored `faq` right-hand side is an ordinary contribution.
 """
 function _is_lifted(eq::Equation, lifted_shapes::AbstractDict)::Bool
     isempty(lifted_shapes) && return false
-    (eq.rhs isa OpExpr && (eq.rhs::OpExpr).op == "faq" &&
-     (eq.rhs::OpExpr).expr_body !== nothing) || return false
+    (
+        eq.rhs isa OpExpr && (eq.rhs::OpExpr).op == "faq" &&
+            (eq.rhs::OpExpr).expr_body !== nothing
+    ) || return false
     lhs = eq.lhs
     (lhs isa OpExpr && lhs.op == "faq" && lhs.expr_body isa OpExpr) || return false
     d = lhs.expr_body::OpExpr
@@ -131,11 +143,13 @@ _contribution_body(eq::Equation, lifted::Bool)::ASTExpr =
 `eq` with its right-hand side REBUILT from `contributions` (re-wrapped in the
 lift's `faq` when `lifted`), and `lhs` replaced when given.
 """
-function _equation_from(eq::Equation, contributions::AbstractVector{Contribution},
-                        lifted::Bool=false; lhs::ASTExpr=eq.lhs)::Equation
+function _equation_from(
+        eq::Equation, contributions::AbstractVector{Contribution},
+        lifted::Bool = false; lhs::ASTExpr = eq.lhs
+    )::Equation
     body = _fold_contributions(contributions)
-    rhs = lifted ? reconstruct(eq.rhs::OpExpr; expr_body=body) : body
-    return Equation(lhs, rhs; _comment=eq._comment)
+    rhs = lifted ? reconstruct(eq.rhs::OpExpr; expr_body = body) : body
+    return Equation(lhs, rhs; _comment = eq._comment)
 end
 
 """
@@ -148,9 +162,11 @@ in the loop scope the per-cell body has — and the rebuilt shell is the one `f`
 returned for the first contribution. Returns `eq` and `contributions` themselves
 when `f` changed nothing.
 """
-function _rewrite_contributions(f, eq::Equation,
-                                contributions::Vector{Contribution},
-                                lifted::Bool)
+function _rewrite_contributions(
+        f, eq::Equation,
+        contributions::Vector{Contribution},
+        lifted::Bool
+    )
     if !lifted
         out = Contribution[Contribution(f(c.expr), c.origins) for c in contributions]
         all(i -> out[i].expr === contributions[i].expr, eachindex(out)) &&
@@ -158,28 +174,43 @@ function _rewrite_contributions(f, eq::Equation,
         return _equation_from(eq, out), out
     end
     shell = eq.rhs::OpExpr
-    shells = ASTExpr[f(reconstruct(shell; expr_body=c.expr)) for c in contributions]
+    shells = ASTExpr[f(reconstruct(shell; expr_body = c.expr)) for c in contributions]
     for s in shells
-        (s isa OpExpr && s.op == "faq" && s.expr_body !== nothing) || throw(ArgumentError(
-            "a rewrite of a pointwise-lifted equation must keep its `faq` shell"))
+        (s isa OpExpr && s.op == "faq" && s.expr_body !== nothing) || throw(
+            ArgumentError(
+                "a rewrite of a pointwise-lifted equation must keep its `faq` shell"
+            )
+        )
     end
-    out = Contribution[Contribution((shells[i]::OpExpr).expr_body::ASTExpr,
-                                    contributions[i].origins)
-                       for i in eachindex(contributions)]
+    out = Contribution[
+        Contribution(
+            (shells[i]::OpExpr).expr_body::ASTExpr,
+            contributions[i].origins
+        )
+            for i in eachindex(contributions)
+    ]
     first_shell = shells[1]::OpExpr
-    rhs = reconstruct(first_shell; expr_body=_fold_contributions(out))
-    return Equation(eq.lhs, rhs; _comment=eq._comment), out
+    rhs = reconstruct(first_shell; expr_body = _fold_contributions(out))
+    return Equation(eq.lhs, rhs; _comment = eq._comment), out
 end
 
 """
 The list a caller-built equation set gets when it carries no provenance: one
 contribution per equation, its body, with EMPTY origins ("author unknown").
 """
-_unattributed_contributions(equations::AbstractVector{Equation},
-                            lifted_shapes::AbstractDict) =
-    Vector{Contribution}[Contribution[Contribution(_contribution_body(eq, _is_lifted(eq, lifted_shapes)),
-                                                   TermOrigin[])]
-                         for eq in equations]
+_unattributed_contributions(
+    equations::AbstractVector{Equation},
+    lifted_shapes::AbstractDict
+) =
+    Vector{Contribution}[
+    Contribution[
+        Contribution(
+            _contribution_body(eq, _is_lifted(eq, lifted_shapes)),
+            TermOrigin[]
+        ),
+    ]
+        for eq in equations
+]
 
 """Structural equality of two expressions: identity, else their serialized forms."""
 _same_expr(a::ASTExpr, b::ASTExpr)::Bool =
@@ -213,18 +244,21 @@ without the other after `flatten`:
 function _flat_contributions(flat)::Vector{Vector{Contribution}}
     eqs = flat.equations
     lists = flat.equation_contributions
-    length(eqs) == length(lists) || throw(ArgumentError(
-        "the flattened system has $(length(eqs)) equations but " *
-        "$(length(lists)) equation_contributions entries; the two are parallel " *
-        "(esm-libraries-spec §4.7.5) — add or remove an equation through the " *
-        "`FlattenedSystem(flat; equations=…, equation_contributions=…)` copy constructor"))
+    length(eqs) == length(lists) || throw(
+        ArgumentError(
+            "the flattened system has $(length(eqs)) equations but " *
+                "$(length(lists)) equation_contributions entries; the two are parallel " *
+                "(esm-libraries-spec §4.7.5) — add or remove an equation through the " *
+                "`FlattenedSystem(flat; equations=…, equation_contributions=…)` copy constructor"
+        )
+    )
     out = Vector{Vector{Contribution}}(undef, length(eqs))
     for i in eachindex(eqs)
         eq, cs = eqs[i], lists[i]
         body = _contribution_body(eq, _is_lifted(eq, flat.lifted_shapes))
         out[i] = isempty(cs) ? Contribution[Contribution(body, TermOrigin[])] :
-                 _folds_to(cs, body) ? cs :
-                 Contribution[Contribution(body, _union_origins(cs))]
+            _folds_to(cs, body) ? cs :
+            Contribution[Contribution(body, _union_origins(cs))]
     end
     return out
 end
@@ -239,14 +273,16 @@ rebuild each right-hand side from its list. The shared path for a pass over a
 lowering — so provenance survives it; pass both results to the keyword copy
 constructor.
 """
-function _rewrite_flat_equations(f, flat; lhs_rewrite=f)
+function _rewrite_flat_equations(f, flat; lhs_rewrite = f)
     eqs = Equation[]
     contribs = Vector{Contribution}[]
     for (eq, cs) in zip(flat.equations, _flat_contributions(flat))
         rewritten, new_cs = _rewrite_contributions(f, eq, cs, _is_lifted(eq, flat.lifted_shapes))
         lhs = lhs_rewrite(eq.lhs)
-        push!(eqs, lhs === eq.lhs ? rewritten :
-                   Equation(lhs, rewritten.rhs; _comment=eq._comment))
+        push!(
+            eqs, lhs === eq.lhs ? rewritten :
+                Equation(lhs, rewritten.rhs; _comment = eq._comment)
+        )
         push!(contribs, new_cs)
     end
     return eqs, contribs

@@ -65,10 +65,10 @@ _intern_disabled() = !_compiler_plan_now().intern
 # short-circuits re-visits of already-processed nodes (any node object is
 # interned at most once per build, so the pass is linear in distinct nodes).
 struct _InternCtx
-    table::Dict{UInt,Vector{OpExpr}}
-    memo::IdDict{OpExpr,OpExpr}
+    table::Dict{UInt, Vector{OpExpr}}
+    memo::IdDict{OpExpr, OpExpr}
 end
-_InternCtx() = _InternCtx(Dict{UInt,Vector{OpExpr}}(), IdDict{OpExpr,OpExpr}())
+_InternCtx() = _InternCtx(Dict{UInt, Vector{OpExpr}}(), IdDict{OpExpr, OpExpr}())
 
 # ------------------------------------------------------------------------
 # Fail-closed structural equality / hash for NON-child-slot payloads: the
@@ -157,7 +157,7 @@ function _intern_expr_vec(v::Vector{ASTExpr}, ctx::_InternCtx)
     return out
 end
 _intern_expr_map(::Nothing, ::_InternCtx) = nothing
-function _intern_expr_map(m::Dict{String,ASTExpr}, ctx::_InternCtx)
+function _intern_expr_map(m::Dict{String, ASTExpr}, ctx::_InternCtx)
     out = m
     for (k, x) in m
         r = x isa OpExpr ? _intern_expr(x, ctx) : x
@@ -207,34 +207,56 @@ const _INTERN_EXPR_KINDS = (:expr, :expr_vec, :expr_map, :ranges)
 # itself when nothing changed, else a `reconstruct` copy with the interned
 # slots (all other fields copied verbatim by `reconstruct`'s contract).
 @eval function _intern_children(e::OpExpr, ctx::_InternCtx)
-    $((
-        begin
-            nf = Symbol(:new_, f)
-            if spec.kind === :expr
-                :($nf = (let x = e.$f
-                    x isa OpExpr ? _intern_expr(x, ctx) : x
-                end))
-            elseif spec.kind === :expr_vec
-                :($nf = (let v = e.$f
-                    v === nothing ? nothing : _intern_expr_vec(v, ctx)
-                end))
-            elseif spec.kind === :expr_map
-                :($nf = _intern_expr_map(e.$f, ctx))
-            else # :ranges
-                :($nf = _intern_ranges(e.$f, ctx))
+    $(
+        (
+            begin
+                nf = Symbol(:new_, f)
+                if spec.kind === :expr
+                    :(
+                        $nf = (
+                            let x = e.$f
+                                x isa OpExpr ? _intern_expr(x, ctx) : x
+                            end
+                        )
+                    )
+                elseif spec.kind === :expr_vec
+                    :(
+                        $nf = (
+                            let v = e.$f
+                                v === nothing ? nothing : _intern_expr_vec(v, ctx)
+                            end
+                        )
+                    )
+                elseif spec.kind === :expr_map
+                    :($nf = _intern_expr_map(e.$f, ctx))
+                else # :ranges
+                    :($nf = _intern_ranges(e.$f, ctx))
+                end
             end
-        end
-        for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
-        if spec.kind in _INTERN_EXPR_KINDS
-    )...)
-    if $(foldl((acc, f) -> :($acc && $(Symbol(:new_, f)) === e.$f),
-               [f for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
-                if spec.kind in _INTERN_EXPR_KINDS]; init=true))
+                for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
+                if spec.kind in _INTERN_EXPR_KINDS
+        )...
+    )
+    if $(
+            foldl(
+                (acc, f) -> :($acc && $(Symbol(:new_, f)) === e.$f),
+                [
+                    f for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
+                        if spec.kind in _INTERN_EXPR_KINDS
+                ]; init = true
+            )
+        )
         return e
     end
-    return reconstruct(e; $((Expr(:kw, f, Symbol(:new_, f))
-                             for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
-                             if spec.kind in _INTERN_EXPR_KINDS)...))
+    return reconstruct(
+        e; $(
+            (
+                Expr(:kw, f, Symbol(:new_, f))
+                    for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
+                    if spec.kind in _INTERN_EXPR_KINDS
+            )...
+        )
+    )
 end
 
 # (2) Shallow structural hash of a node whose expression-bearing slots are
@@ -243,45 +265,59 @@ end
 # `===` the equality side uses), everything else `_plain_hash`. Each field
 # folds its ordinal so field boundaries cannot alias.
 @eval function _intern_node_hash(e::OpExpr)::UInt
-    h = hash(e.op, UInt(0xA57))
-    $((
-        begin
-            fi = UInt(i)
-            if spec.kind === :expr
-                :(h = (let x = e.$f
-                    x === nothing ? hash($fi, h) : hash(objectid(x), hash($fi, h))
-                end))
-            elseif spec.kind === :expr_vec
-                :(h = (let v = e.$f
-                    if v === nothing
-                        hash($fi, h)
-                    else
-                        local hh = hash(length(v), hash($fi, h))
-                        for x in v
-                            hh = hash(objectid(x), hh)
-                        end
-                        hh
-                    end
-                end))
-            elseif spec.kind === :expr_map
-                :(h = (let m = e.$f
-                    if m === nothing
-                        hash($fi, h)
-                    else
-                        local acc = UInt(0)
-                        for (k, x) in m
-                            acc ⊻= hash(objectid(x), hash(k, UInt(0x9e37)))
-                        end
-                        hash(acc, hash(length(m), hash($fi, h)))
-                    end
-                end))
-            else # :scalar / :join / :internal / :ranges — plain payload
-                :(h = _plain_hash(e.$f, hash($fi, h)))
+    h = hash(e.op, UInt(0x0A57))
+    $(
+        (
+            begin
+                fi = UInt(i)
+                if spec.kind === :expr
+                    :(
+                        h = (
+                            let x = e.$f
+                                x === nothing ? hash($fi, h) : hash(objectid(x), hash($fi, h))
+                            end
+                        )
+                    )
+                elseif spec.kind === :expr_vec
+                    :(
+                        h = (
+                            let v = e.$f
+                                if v === nothing
+                                    hash($fi, h)
+                                else
+                                    local hh = hash(length(v), hash($fi, h))
+                                    for x in v
+                                        hh = hash(objectid(x), hh)
+                                    end
+                                    hh
+                                end
+                            end
+                        )
+                    )
+                elseif spec.kind === :expr_map
+                    :(
+                        h = (
+                            let m = e.$f
+                                if m === nothing
+                                    hash($fi, h)
+                                else
+                                    local acc = UInt(0)
+                                    for (k, x) in m
+                                        acc ⊻= hash(objectid(x), hash(k, UInt(0x9e37)))
+                                    end
+                                    hash(acc, hash(length(m), hash($fi, h)))
+                                end
+                            end
+                        )
+                    )
+                else # :scalar / :join / :internal / :ranges — plain payload
+                    :(h = _plain_hash(e.$f, hash($fi, h)))
+                end
             end
-        end
-        for (i, (f, spec)) in enumerate(pairs(OPEXPR_FIELD_TABLE))
-        if f !== :op
-    )...)
+                for (i, (f, spec)) in enumerate(pairs(OPEXPR_FIELD_TABLE))
+                if f !== :op
+        )...
+    )
     return h
 end
 
@@ -290,49 +326,53 @@ end
 # `_plain_eq` (fail-closed).
 @eval function _intern_shallow_equal(a::OpExpr, b::OpExpr)::Bool
     a.op == b.op || return false
-    $((
-        begin
-            if spec.kind === :expr
-                :(a.$f === b.$f || return false)
-            elseif spec.kind === :expr_vec
-                quote
-                    let va = a.$f, vb = b.$f
-                        if va !== vb
-                            (va === nothing || vb === nothing) && return false
-                            length(va) == length(vb) || return false
-                            for i in eachindex(va)
-                                va[i] === vb[i] || return false
+    $(
+        (
+            begin
+                if spec.kind === :expr
+                    :(a.$f === b.$f || return false)
+                elseif spec.kind === :expr_vec
+                    quote
+                        let va = a.$f, vb = b.$f
+                            if va !== vb
+                                (va === nothing || vb === nothing) && return false
+                                length(va) == length(vb) || return false
+                                for i in eachindex(va)
+                                    va[i] === vb[i] || return false
+                                end
                             end
                         end
                     end
-                end
-            elseif spec.kind === :expr_map
-                quote
-                    let ma = a.$f, mb = b.$f
-                        if ma !== mb
-                            (ma === nothing || mb === nothing) && return false
-                            length(ma) == length(mb) || return false
-                            for (k, v) in ma
-                                w = get(mb, k, nothing)
-                                v === w || return false
+                elseif spec.kind === :expr_map
+                    quote
+                        let ma = a.$f, mb = b.$f
+                            if ma !== mb
+                                (ma === nothing || mb === nothing) && return false
+                                length(ma) == length(mb) || return false
+                                for (k, v) in ma
+                                    w = get(mb, k, nothing)
+                                    v === w || return false
+                                end
                             end
                         end
                     end
+                else # :scalar / :join / :internal / :ranges
+                    :(_plain_eq(a.$f, b.$f) || return false)
                 end
-            else # :scalar / :join / :internal / :ranges
-                :(_plain_eq(a.$f, b.$f) || return false)
             end
-        end
-        for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
-        if f !== :op
-    )...)
+                for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
+                if f !== :op
+        )...
+    )
     return true
 end
 
 # Exhaustiveness pin: the walkers above dispatch on the field kinds known
 # today; a new kind must be classified here before it can ship.
-@assert all(spec.kind in (:expr, :expr_vec, :expr_map, :ranges, :scalar, :join, :internal)
-            for (_, spec) in pairs(OPEXPR_FIELD_TABLE)) "intern.jl: unknown OPEXPR_FIELD_TABLE kind — extend the intern walkers"
+@assert all(
+    spec.kind in (:expr, :expr_vec, :expr_map, :ranges, :scalar, :join, :internal)
+        for (_, spec) in pairs(OPEXPR_FIELD_TABLE)
+) "intern.jl: unknown OPEXPR_FIELD_TABLE kind — extend the intern walkers"
 
 # ------------------------------------------------------------------------
 # The intern pass proper.
@@ -379,7 +419,7 @@ function _intern_equations(eqs::Vector{Equation}, ctx::_InternCtx)
         l = _intern_expr(eq.lhs, ctx)
         r = _intern_expr(eq.rhs, ctx)
         if l !== eq.lhs || r !== eq.rhs
-            out[i] = Equation(l, r; _comment=eq._comment)
+            out[i] = Equation(l, r; _comment = eq._comment)
             changed = true
         else
             out[i] = eq
@@ -416,12 +456,16 @@ function _intern_model(model::Model, ctx::_InternCtx)::Model
             nsubs[k] = ns
         end
     end
-    (nvars === vars && eqs === model.equations &&
-     ieqs === model.initialization_equations && ng === guesses &&
-     nsubs === subs) && return model
-    return Model(nvars, eqs, model.discrete_events, model.continuous_events,
-                 nsubs; tolerance=model.tolerance, tests=model.tests,
-                 analyses=model.analyses,
-                 initialization_equations=ieqs, guesses=ng,
-                 system_kind=model.system_kind, reference=model.reference)
+    (
+        nvars === vars && eqs === model.equations &&
+            ieqs === model.initialization_equations && ng === guesses &&
+            nsubs === subs
+    ) && return model
+    return Model(
+        nvars, eqs, model.discrete_events, model.continuous_events,
+        nsubs; tolerance = model.tolerance, tests = model.tests,
+        analyses = model.analyses,
+        initialization_equations = ieqs, guesses = ng,
+        system_kind = model.system_kind, reference = model.reference
+    )
 end

@@ -24,12 +24,18 @@ end
 const _TP_TESTS = joinpath(TESTUTILS_REPO_ROOT, "tests")
 const _TP_DIR = joinpath(_TP_TESTS, "conformance", "term_provenance", "fixtures")
 const _TP_FIXTURES = sort(filter(f -> endswith(f, ".esm"), readdir(_TP_DIR)))
-const _TP_CORPUS = JSON3.read(read(joinpath(_TP_TESTS, "conformance", "flatten", "cases.json"),
-                                   String)).cases
+const _TP_CORPUS = JSON3.read(
+    read(
+        joinpath(_TP_TESTS, "conformance", "flatten", "cases.json"),
+        String
+    )
+).cases
 
 _tp_flatten(path) = flatten(load_path(path))
-_tp_origins(c::Contribution) = [o.component === nothing ? (:coupling, o.coupling) :
-                                (:component, o.component) for o in c.origins]
+_tp_origins(c::Contribution) = [
+    o.component === nothing ? (:coupling, o.coupling) :
+        (:component, o.component) for o in c.origins
+]
 
 function _tp_equation(flat, lhs::AbstractString)
     hits = [i for (i, eq) in enumerate(flat.equations) if to_ascii(eq.lhs) == lhs]
@@ -62,7 +68,7 @@ function _tp_scalar_values(flat, eq, cs, salt)
     for c in cs
         union!(names, free_variables(c.expr))
     end
-    bindings = Dict{String,Float64}()
+    bindings = Dict{String, Float64}()
     for n in names
         n == "t" && continue
         v = get(flat.state_variables, n, get(flat.parameters, n, nothing))
@@ -79,8 +85,8 @@ end
 # own `faq` shell, the body as the right-hand side itself.
 function _tp_lifted_values(flat, eq, cs, salt)
     rhs = eq.rhs::OpExpr
-    arrays = Dict{String,Any}()
-    params = Dict{String,Float64}()
+    arrays = Dict{String, Any}()
+    params = Dict{String, Float64}()
     for c in cs, n in free_variables(c.expr)
         n in rhs.output_idx && continue
         n == "t" && continue
@@ -88,15 +94,17 @@ function _tp_lifted_values(flat, eq, cs, salt)
         if shape === nothing
             params[n] = _tp_sample(n, salt)
         else
-            arrays[n] = reshape([_tp_sample("$(n)[$k]", salt) for k in 1:prod(shape)],
-                                Tuple(shape))
+            arrays[n] = reshape(
+                [_tp_sample("$(n)[$k]", salt) for k in 1:prod(shape)],
+                Tuple(shape)
+            )
         end
     end
     species = only(keys(flat.lifted_shapes))
     cells = [collect(Tuple(ci)) for ci in CartesianIndices(Tuple(flat.lifted_shapes[species]))]
-    ev(e) = evaluate_cellwise(e, cells; const_arrays=arrays, params=params, t=0.75)
+    ev(e) = evaluate_cellwise(e, cells; const_arrays = arrays, params = params, t = 0.75)
     body = ev(rhs)
-    per_c = [ev(EarthSciAST.reconstruct(rhs; expr_body=c.expr)) for c in cs]
+    per_c = [ev(EarthSciAST.reconstruct(rhs; expr_body = c.expr)) for c in cs]
     return body, [Float64[p[k] for p in per_c] for k in eachindex(cells)]
 end
 
@@ -107,13 +115,13 @@ evaluate the equation (an undiscretized spatial operator, an arrayed operand
 outside the lift); `discriminating` is true when some sample sums the
 contributions to different bits in the right-nested association.
 """
-function _tp_check_invariant(flat, eq, cs; label="")
+function _tp_check_invariant(flat, eq, cs; label = "")
     lifted = EarthSciAST._is_lifted(eq, flat.lifted_shapes)
     discriminating = false
     for salt in 1:_TP_SAMPLES
         bodies, partss = try
             lifted ? _tp_lifted_values(flat, eq, cs, salt) :
-                     _tp_scalar_values(flat, eq, cs, salt)
+                _tp_scalar_values(flat, eq, cs, salt)
         catch err
             err isa InterruptException && rethrow()
             return false, false
@@ -121,9 +129,9 @@ function _tp_check_invariant(flat, eq, cs; label="")
         for (body, parts) in zip(bodies, partss)
             fold = _tp_left_fold(parts)
             @test (label, to_ascii(eq.lhs), salt, reinterpret(UInt64, body)) ==
-                  (label, to_ascii(eq.lhs), salt, reinterpret(UInt64, fold))
+                (label, to_ascii(eq.lhs), salt, reinterpret(UInt64, fold))
             discriminating |= reinterpret(UInt64, _tp_right_fold(parts)) !=
-                              reinterpret(UInt64, fold)
+                reinterpret(UInt64, fold)
         end
     end
     return true, discriminating
@@ -134,8 +142,10 @@ end
     @testset "invariant: $(f)" for f in _TP_FIXTURES
         flat = _tp_flatten(joinpath(_TP_DIR, f))
         isempty(flat.template_registry) || (flat = expand_flattened_refs(flat))
-        results = [_tp_check_invariant(flat, eq, cs; label=f)
-                   for (eq, cs) in zip(flat.equations, equation_contributions(flat))]
+        results = [
+            _tp_check_invariant(flat, eq, cs; label = f)
+                for (eq, cs) in zip(flat.equations, equation_contributions(flat))
+        ]
         # Only `grad` without a discretization is out of the evaluator's reach.
         f == "placeholder_expansion.esm" || @test (f, all(first, results)) == (f, true)
         # With three or more contributions the check must be able to see the order.
@@ -155,7 +165,7 @@ end
             end
             isempty(flat.template_registry) || (flat = expand_flattened_refs(flat))
             for (eq, cs) in zip(flat.equations, equation_contributions(flat))
-                ok, _ = _tp_check_invariant(flat, eq, cs; label=String(case.id))
+                ok, _ = _tp_check_invariant(flat, eq, cs; label = String(case.id))
                 evaluated += ok
             end
         end
@@ -172,7 +182,7 @@ end
                 @test (id, to_ascii(eq.lhs), isempty(cs)) == (id, to_ascii(eq.lhs), false)
                 for c in cs
                     @test (id, to_ascii(eq.lhs), isempty(c.origins), allunique(c.origins)) ==
-                          (id, to_ascii(eq.lhs), false, true)
+                        (id, to_ascii(eq.lhs), false, true)
                 end
             end
         end
@@ -184,7 +194,7 @@ end
         _, ab = _tp_equation(_tp_flatten(joinpath(_TP_DIR, "systems_order_ab.esm")), "D(Chem.O3)/Dt")
         _, ba = _tp_equation(_tp_flatten(joinpath(_TP_DIR, "systems_order_ba.esm")), "D(Chem.O3)/Dt")
         pairs(cs) = [(to_ascii(c.expr), _tp_origins(c)) for c in cs]
-        @test sort(pairs(ab), by=string) == sort(pairs(ba), by=string)
+        @test sort(pairs(ab), by = string) == sort(pairs(ba), by = string)
         @test [_tp_origins(c) for c in ab] == [[(:component, "Chem")], [(:component, "Sink")]]
         @test [_tp_origins(c) for c in ba] == [[(:component, "Sink")], [(:component, "Chem")]]
     end
@@ -193,14 +203,14 @@ end
         _, cs = _tp_equation(_tp_flatten(joinpath(_TP_DIR, "non_vacuity.esm")), "D(Chem.O3)/Dt")
         @test [to_ascii(c.expr) for c in cs[2:end]] == ["Emis.flux", "Emis.flux"]
         @test [_tp_origins(c) for c in cs[2:end]] ==
-              [[(:component, "OpA")], [(:component, "OpB")]]
+            [[(:component, "OpA")], [(:component, "OpB")]]
     end
 
     @testset "a chained compose names every author" begin
         flat = _tp_flatten(joinpath(_TP_TESTS, "coupling", "chained_operator_compose.esm"))
         eq, cs = _tp_equation(flat, "D(Chem.O3)/Dt")
         @test [_tp_origins(c) for c in cs] ==
-              [[(:component, c)] for c in ("Src", "Sink", "Chem", "Adv")]
+            [[(:component, c)] for c in ("Src", "Sink", "Chem", "Adv")]
         # The right-hand side is built from the list: one sum over the four.
         @test eq.rhs isa OpExpr && eq.rhs.op == "+" && length(eq.rhs.args) == 4
     end
@@ -218,18 +228,20 @@ end
     end
 
     @testset "a multiplicative couple collapses to the union" begin
-        _, cs = _tp_equation(_tp_flatten(joinpath(_TP_DIR, "couple_multiplicative.esm")),
-                             "D(Chem.O3)/Dt")
+        _, cs = _tp_equation(
+            _tp_flatten(joinpath(_TP_DIR, "couple_multiplicative.esm")),
+            "D(Chem.O3)/Dt"
+        )
         @test length(cs) == 1
         @test _tp_origins(cs[1]) ==
-              [(:component, "Chem"), (:component, "Sink"), (:coupling, 1)]
+            [(:component, "Chem"), (:component, "Sink"), (:coupling, 1)]
     end
 
     @testset "a translate factor collapses only a multi-contribution B" begin
         flat = _tp_flatten(joinpath(_TP_DIR, "translate_factor.esm"))
         _, y = _tp_equation(flat, "D(Host.Y)/Dt")
         @test [_tp_origins(c) for c in y] ==
-              [[(:component, "Host")], [(:component, "Chem"), (:component, "Sink")]]
+            [[(:component, "Host")], [(:component, "Chem"), (:component, "Sink")]]
         _, w = _tp_equation(flat, "D(Host.W)/Dt")
         @test [_tp_origins(c) for c in w] == [[(:component, "Host")], [(:component, "Chem")]]
     end
@@ -243,16 +255,20 @@ end
     end
 
     @testset "a resolved time derivative keeps the referencing origin" begin
-        eq, cs = _tp_equation(_tp_flatten(joinpath(_TP_DIR, "rhs_time_derivative.esm")),
-                              "Diag.rate")
+        eq, cs = _tp_equation(
+            _tp_flatten(joinpath(_TP_DIR, "rhs_time_derivative.esm")),
+            "Diag.rate"
+        )
         @test [_tp_origins(c) for c in cs] == [[(:component, "Diag")]]
         @test !occursin("D(", to_ascii(eq.rhs))
     end
 
     @testset "the lift indexes inside each contribution and wraps their sum" begin
         flat = _tp_flatten(joinpath(_TP_DIR, "pointwise_lift.esm"))
-        lifted = [(eq, cs) for (eq, cs) in zip(flat.equations, equation_contributions(flat))
-                  if EarthSciAST._is_lifted(eq, flat.lifted_shapes)]
+        lifted = [
+            (eq, cs) for (eq, cs) in zip(flat.equations, equation_contributions(flat))
+                if EarthSciAST._is_lifted(eq, flat.lifted_shapes)
+        ]
         @test length(lifted) == 1
         eq, cs = only(lifted)
         @test eq.rhs isa OpExpr && eq.rhs.op == "faq"
@@ -269,17 +285,21 @@ end
     end
 
     @testset "table-lookup lowering keeps the contributions" begin
-        flat = _tp_flatten(joinpath(_TP_TESTS, "conformance", "function_tables", "linear",
-                                    "fixture.esm"))
+        flat = _tp_flatten(
+            joinpath(
+                _TP_TESTS, "conformance", "function_tables", "linear",
+                "fixture.esm"
+            )
+        )
         lowered = EarthSciAST.lower_table_lookups(flat)
         @test lowered !== flat
         changed = 0
         for (i, (eq, cs)) in enumerate(zip(lowered.equations, equation_contributions(lowered)))
             @test [_tp_origins(c) for c in cs] ==
-                  [_tp_origins(c) for c in equation_contributions(flat)[i]]
+                [_tp_origins(c) for c in equation_contributions(flat)[i]]
             @test all(!isempty(c.origins) for c in cs)
             changed += to_ascii(eq.rhs) != to_ascii(flat.equations[i].rhs)
-            ok, _ = _tp_check_invariant(lowered, eq, cs; label="lowered")
+            ok, _ = _tp_check_invariant(lowered, eq, cs; label = "lowered")
             @test ok
         end
         @test changed > 0
@@ -289,13 +309,19 @@ end
         # `D(x) ~ f` then `x ~ g`: the factor goes to the LAST `D(x)` equation,
         # never to the bare one even though it comes later.
         f, g, m = VarExpr("f"), VarExpr("g"), VarExpr("m")
-        A, C = TermOrigin(component="A"), TermOrigin(coupling=0)
-        eqs = Equation[Equation(OpExpr("D", ASTExpr[VarExpr("x")], wrt="t"), f),
-                       Equation(VarExpr("x"), g)]
-        cs = Vector{Contribution}[Contribution[Contribution(f, [A])],
-                                  Contribution[Contribution(g, [A])]]
-        EarthSciAST._combine_tendency_term!(eqs, cs, "x", m, "*", C;
-            owners=["A", "A"], states=Dict("x" => nothing), components=["A"])
+        A, C = TermOrigin(component = "A"), TermOrigin(coupling = 0)
+        eqs = Equation[
+            Equation(OpExpr("D", ASTExpr[VarExpr("x")], wrt = "t"), f),
+            Equation(VarExpr("x"), g),
+        ]
+        cs = Vector{Contribution}[
+            Contribution[Contribution(f, [A])],
+            Contribution[Contribution(g, [A])],
+        ]
+        EarthSciAST._combine_tendency_term!(
+            eqs, cs, "x", m, "*", C;
+            owners = ["A", "A"], states = Dict("x" => nothing), components = ["A"]
+        )
         @test to_ascii(eqs[1].rhs) == to_ascii(OpExpr("*", ASTExpr[f, m]))
         @test [_tp_origins(c) for c in cs[1]] == [[(:component, "A"), (:coupling, 0)]]
         @test eqs[2].rhs === g
@@ -304,13 +330,18 @@ end
         bare = Equation[Equation(VarExpr("x"), g)]
         @test_throws ArgumentError EarthSciAST._combine_tendency_term!(
             bare, Vector{Contribution}[Contribution[Contribution(g, [A])]], "x", m, "*", C;
-            owners=["A"], states=Dict("x" => nothing), components=["A"])
+            owners = ["A"], states = Dict("x" => nothing), components = ["A"]
+        )
     end
 
     # ── a caller's edits between flatten and a public pass ───────────────────
 
-    _tp_table_flat() = _tp_flatten(joinpath(_TP_TESTS, "conformance", "function_tables",
-                                            "linear", "fixture.esm"))
+    _tp_table_flat() = _tp_flatten(
+        joinpath(
+            _TP_TESTS, "conformance", "function_tables",
+            "linear", "fixture.esm"
+        )
+    )
 
     @testset "an edited right-hand side survives a pass that rebuilds from the list" begin
         flat = _tp_table_flat()
@@ -350,21 +381,21 @@ end
     # ── the types and the copy constructor ───────────────────────────────────
 
     @testset "a TermOrigin names exactly one author" begin
-        @test TermOrigin(component="A.B").component == "A.B"
-        @test TermOrigin(coupling=0).coupling == 0
+        @test TermOrigin(component = "A.B").component == "A.B"
+        @test TermOrigin(coupling = 0).coupling == 0
         @test_throws ArgumentError TermOrigin()
-        @test_throws ArgumentError TermOrigin(component="A", coupling=0)
-        @test_throws ArgumentError TermOrigin(coupling=-1)
-        @test TermOrigin(component="A") == TermOrigin(component="A")
+        @test_throws ArgumentError TermOrigin(component = "A", coupling = 0)
+        @test_throws ArgumentError TermOrigin(coupling = -1)
+        @test TermOrigin(component = "A") == TermOrigin(component = "A")
     end
 
     @testset "replacing the equations alone resets the list to unknown authors" begin
         flat = _tp_flatten(joinpath(_TP_TESTS, "coupling", "chained_operator_compose.esm"))
         # Copying any other field keeps the list.
-        same = FlattenedSystem(flat; domain=flat.domain)
+        same = FlattenedSystem(flat; domain = flat.domain)
         @test equation_contributions(same) == equation_contributions(flat)
         eqs = copy(flat.equations)
-        reset = FlattenedSystem(flat; equations=eqs)
+        reset = FlattenedSystem(flat; equations = eqs)
         @test length(equation_contributions(reset)) == length(eqs)
         for (eq, cs) in zip(eqs, equation_contributions(reset))
             @test length(cs) == 1
@@ -372,7 +403,9 @@ end
             @test isempty(cs[1].origins)
         end
         # A list that does not match the equations is refused.
-        @test_throws ArgumentError FlattenedSystem(flat; equations=eqs[1:end-1],
-            equation_contributions=equation_contributions(flat))
+        @test_throws ArgumentError FlattenedSystem(
+            flat; equations = eqs[1:(end - 1)],
+            equation_contributions = equation_contributions(flat)
+        )
     end
 end

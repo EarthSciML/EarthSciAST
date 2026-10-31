@@ -24,18 +24,21 @@ const ESM = EarthSciAST
 
 # Build `model` under both compilers; returns tag → (f!, u0, p, tally).
 function _pgt_build3(model, ics, bufs)
-    out = Dict{Symbol,Any}()
+    out = Dict{Symbol, Any}()
     for (tag, compiler) in ((:tbl, :native), (:ref, :interpreter))
         ESM._reset_cascade_tally!()
-        f!, u0, p, _t, _vm, _diag = ESM._build_evaluator_impl(model;
-            initial_conditions=ics, param_arrays=bufs, compiler=compiler)
+        f!, u0, p, _t, _vm, _diag = ESM._build_evaluator_impl(
+            model;
+            initial_conditions = ics, param_arrays = bufs, compiler = compiler
+        )
         out[tag] = (f!, u0, p, copy(ESM._CASCADE_TALLY))
     end
-    out
+    return out
 end
-function _pgt_eval(b, t=0.0)
+function _pgt_eval(b, t = 0.0)
     f!, u0, p, _ = b
-    du = zero(u0); f!(du, u0, p, t); du
+    du = zero(u0); f!(du, u0, p, t)
+    return du
 end
 
 # Clamped subscript helpers: max(e, 1) / min(e, N).
@@ -46,11 +49,19 @@ _clamp_hi(e, N) = _op("min", e, _i(N))
 # column-wall clamp pattern; pure forcing so the pgather lane is isolated.
 function _pgt_clamped_model(N)
     vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
-    body = _op("+",
+    body = _op(
+        "+",
         _idx("forcing", _clamp_lo(_op("-", _v("i"), _i(1)))),
-        _idx("forcing", _clamp_hi(_op("+", _v("i"), _i(1)), N)))
-    ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                  _ao1(body, "i", 1, N))])
+        _idx("forcing", _clamp_hi(_op("+", _v("i"), _i(1)), N))
+    )
+    return ESM.Model(
+        vars, [
+            ESM.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, N),
+                _ao1(body, "i", 1, N)
+            ),
+        ]
+    )
 end
 
 # (2) Clamped forcing + Laplacian: the non-affine forcing lane rides in a
@@ -60,12 +71,20 @@ end
 # cut and stays affine per box, defeating the differential).
 function _pgt_mixed_model(N)
     vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
-    lap = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
-                   _op("*", _n(-2.0), _idx("u", _v("i"))),
-                   _idx("u", _op("+", _v("i"), _i(1))))
+    lap = _op(
+        "+", _idx("u", _op("-", _v("i"), _i(1))),
+        _op("*", _n(-2.0), _idx("u", _v("i"))),
+        _idx("u", _op("+", _v("i"), _i(1)))
+    )
     body = _op("+", _idx("forcing", _clamp_lo(_op("-", _v("i"), _i(2)))), lap)
-    ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                  _ao1(body, "i", 1, N))])
+    return ESM.Model(
+        vars, [
+            ESM.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, N),
+                _ao1(body, "i", 1, N)
+            ),
+        ]
+    )
 end
 
 # (3) ARRAY OBSERVED forcing chain indexed in a stencil (the A2 shape proper):
@@ -76,23 +95,36 @@ end
 #   D(u[i]) = M[i+1] − M[i] + u[i]·(-0.1)
 function _pgt_obschain_model(N)
     w = 0.25
-    ed(e) = _op("+",
+    ed(e) = _op(
+        "+",
         _op("*", _n(1.0 - w), _idx("F0", _clamp_lo(_op("-", e, _i(1))))),
-        _op("*", _n(w), _idx("F0", _clamp_hi(e, N))))
+        _op("*", _n(w), _idx("F0", _clamp_hi(e, N)))
+    )
     Mbody = ed(_v("e"))
-    M = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["e"],
-                   expr_body=Mbody, ranges=Dict{String,Any}("e" => Any[1, N + 1]))
+    M = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["e"],
+        expr_body = Mbody, ranges = Dict{String, Any}("e" => Any[1, N + 1])
+    )
     # esm 1.0.0 (§5.4/§6.3.1): `M` is a plain `unknown`; what made it OBSERVED —
     # its defining expression — is now the bare-variable-LHS equation `M ~ …`.
     vars = Dict(
         "u" => ESM.ModelVariable(ESM.UnknownVariable),
-        "M" => ESM.ModelVariable(ESM.UnknownVariable; shape=["e"]))
-    body = _op("+",
+        "M" => ESM.ModelVariable(ESM.UnknownVariable; shape = ["e"])
+    )
+    body = _op(
+        "+",
         _op("-", _idx("M", _op("+", _v("i"), _i(1))), _idx("M", _v("i"))),
-        _op("*", _idx("u", _v("i")), _n(-0.1)))
-    ESM.Model(vars, [ESM.Equation(ESM.VarExpr("M"), M),
-                     ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                  _ao1(body, "i", 1, N))])
+        _op("*", _idx("u", _v("i")), _n(-0.1))
+    )
+    return ESM.Model(
+        vars, [
+            ESM.Equation(ESM.VarExpr("M"), M),
+            ESM.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, N),
+                _ao1(body, "i", 1, N)
+            ),
+        ]
+    )
 end
 
 function _pgt_oracle(model, ics, bufs; refresh!)
@@ -130,22 +162,28 @@ end
     @testset "clamped forcing D(u[i])=F[max/min] (N=$N)" for N in (8, 32)
         buf = Float64[0.5 + 0.2k for k in 1:N]
         ics = Dict("u[$k]" => 0.0 for k in 1:N)
-        _pgt_oracle(_pgt_clamped_model(N), ics, Dict("forcing" => buf);
-                    refresh! = () -> (buf .= Float64[-2.0 + 0.9k for k in 1:N]))
+        _pgt_oracle(
+            _pgt_clamped_model(N), ics, Dict("forcing" => buf);
+            refresh! = () -> (buf .= Float64[-2.0 + 0.9k for k in 1:N])
+        )
     end
 
     @testset "clamped forcing + Laplacian, ghost boxes (N=$N)" for N in (8, 32)
         buf = Float64[0.5 + 0.2k for k in 1:N]
         ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
-        _pgt_oracle(_pgt_mixed_model(N), ics, Dict("forcing" => buf);
-                    refresh! = () -> (buf .= Float64[-3.0 + 0.7k for k in 1:N]))
+        _pgt_oracle(
+            _pgt_mixed_model(N), ics, Dict("forcing" => buf);
+            refresh! = () -> (buf .= Float64[-3.0 + 0.7k for k in 1:N])
+        )
     end
 
     @testset "array-observed forcing chain in a stencil (N=$N)" for N in (8, 24)
         buf = Float64[1.0 + 0.3k for k in 1:N]
         ics = Dict("u[$k]" => 0.4 + 0.05k for k in 1:N)
-        _pgt_oracle(_pgt_obschain_model(N), ics, Dict("F0" => buf);
-                    refresh! = () -> (buf .= Float64[2.0 - 0.4k for k in 1:N]))
+        _pgt_oracle(
+            _pgt_obschain_model(N), ics, Dict("F0" => buf);
+            refresh! = () -> (buf .= Float64[2.0 - 0.4k for k in 1:N])
+        )
     end
 
     @testset "kernel count N-independent (tables grow, kernels do not)" begin
@@ -153,8 +191,9 @@ end
             buf = Float64[0.2k for k in 1:N]
             ics = Dict("u[$k]" => 0.1k for k in 1:N)
             _f, _u, _p, _t, _vm, diag = ESM._build_evaluator_impl(
-                _pgt_mixed_model(N); initial_conditions=ics,
-                param_arrays=Dict("forcing" => Float64[0.2k for k in 1:N]))
+                _pgt_mixed_model(N); initial_conditions = ics,
+                param_arrays = Dict("forcing" => Float64[0.2k for k in 1:N])
+            )
             diag.n_acc_kernels
         end
         @test all(==(counts[1]), counts)
@@ -168,13 +207,16 @@ end
         buf = Float64[0.5 + 0.2k for k in 1:N]
         ics = Dict("u[$k]" => 0.1k for k in 1:N)
         model = _pgt_clamped_model(N)
-        build(compiler) = ESM._build_evaluator_impl(model;
-            initial_conditions=ics, param_arrays=Dict("forcing" => buf),
-            compiler=compiler)
+        build(compiler) = ESM._build_evaluator_impl(
+            model;
+            initial_conditions = ics, param_arrays = Dict("forcing" => buf),
+            compiler = compiler
+        )
         f!, u0, p, _t, _vm, _d = build(:native)
         fr!, _, _, _, _, _ = build(:interpreter)
         jac(g) = ForwardDiff.jacobian(
-            uu -> (d = similar(uu, eltype(uu)); fill!(d, 0); g(d, uu, p, 0.0); d), u0)
+            uu -> (d = similar(uu, eltype(uu)); fill!(d, 0); g(d, uu, p, 0.0); d), u0
+        )
         @test jac(f!) == jac(fr!)
     end
 end

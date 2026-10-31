@@ -37,17 +37,21 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
     # Build and return (du values at the probes, u0, counters). `atload`
     # expands the surviving references before the build sees them, which is the
     # Option-A image; `compiler` picks the evaluator.
-    function build_and_probe(fix::AbstractString; atload::Bool=false,
-                             compiler::Symbol=:native)
+    function build_and_probe(
+            fix::AbstractString; atload::Bool = false,
+            compiler::Symbol = :native
+        )
         let
             flat = flatten(load_path(fix))
             atload && (flat = expand_flattened_refs(flat))
             _BENCH_ON[] = true
             _bench_reset!()
-            f, u0, p, _, _ = EarthSciAST._build_evaluator(flat; compiler=compiler)
-            counters = (branches=_BENCH_BRANCH_TEMPLATES[],
-                        variants=_BENCH_BODY_VARIANTS[],
-                        compiles=_BENCH_COMPILE_CALLS[])
+            f, u0, p, _, _ = EarthSciAST._build_evaluator(flat; compiler = compiler)
+            counters = (
+                branches = _BENCH_BRANCH_TEMPLATES[],
+                variants = _BENCH_BODY_VARIANTS[],
+                compiles = _BENCH_COMPILE_CALLS[],
+            )
             _BENCH_ON[] = false
             dus = Vector{Float64}[]
             for (ti, u) in zip((0.0, 0.7, 3.25), probe_states(length(u0)))
@@ -65,14 +69,14 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
 
         # Both spellings, lifted or not, are the same right-hand side.
         lifted, _, _ = build_and_probe(WHOLE)
-        lifted_percell, _, _ = build_and_probe(WHOLE; compiler=:interpreter)
+        lifted_percell, _, _ = build_and_probe(WHOLE; compiler = :interpreter)
         fast, u0, cfast = build_and_probe(FIX)
         for k in 1:3
             @test lifted[k] == fast[k]
             @test lifted[k] == lifted_percell[k]
         end
-        atload, _, catload = build_and_probe(FIX; atload=true)
-        percell, _, _ = build_and_probe(FIX; compiler=:interpreter)
+        atload, _, catload = build_and_probe(FIX; atload = true)
+        percell, _, _ = build_and_probe(FIX; compiler = :interpreter)
 
         @test length(u0) == 343
         for k in 1:3
@@ -102,7 +106,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         # per-cell fallback kernel outright.
         FIX = fullrank_per_cell_fixture()
         flat = flatten(load_path(FIX))
-        fo, u0, p, _, _ = EarthSciAST._build_evaluator(flat; form=:oop)
+        fo, u0, p, _, _ = EarthSciAST._build_evaluator(flat; form = :oop)
         # `fo` is the `_OopRHS` wrapper; the compiled IR — and its lane plans —
         # is its `rhs` field.
         oplans = getfield(getfield(fo, :rhs), :acc_plans)
@@ -118,7 +122,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         # ref-aware attempt → fused retry → symbolic → per-cell, all sound.
         FIX = bench("transport_3axis_7cubed.esm")
         fast, u0, _ = build_and_probe(FIX)
-        atload, _, _ = build_and_probe(FIX; atload=true)
+        atload, _, _ = build_and_probe(FIX; atload = true)
         for k in 1:3
             @test fast[k] == atload[k]
             @test sum(abs, fast[k]) > 0
@@ -134,66 +138,107 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         # (exercises the sub-kernel invariant CSE tier filled by the runner
         # prologue).
         idx(f, off) = off == 0 ? Dict("op" => "index", "args" => [f, "i"]) :
-            Dict("op" => "index", "args" => [f,
-                Dict("op" => (off > 0 ? "+" : "-"), "args" => ["i", abs(off)])])
+            Dict(
+                "op" => "index", "args" => [
+                    f,
+                    Dict("op" => (off > 0 ? "+" : "-"), "args" => ["i", abs(off)]),
+                ]
+            )
         pin(f, at) = Dict("op" => "index", "args" => [f, at])
         doc = Dict(
             "esm" => "1.1.0",
             "metadata" => Dict("name" => "nested_1d"),
             "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 8)),
-            "models" => Dict("T" => Dict(
-                "expression_templates" => Dict(
-                    "pair_diff" => Dict(
-                        "params" => ["f", "w"],
-                        "body" => Dict("op" => "*", "args" => ["w",
-                            Dict("op" => "-", "args" => [idx("f", 1), idx("f", -1)])]),
+            "models" => Dict(
+                "T" => Dict(
+                    "expression_templates" => Dict(
+                        "pair_diff" => Dict(
+                            "params" => ["f", "w"],
+                            "body" => Dict(
+                                "op" => "*", "args" => [
+                                    "w",
+                                    Dict("op" => "-", "args" => [idx("f", 1), idx("f", -1)]),
+                                ]
+                            ),
+                        ),
+                        "flux_int" => Dict(
+                            "params" => ["f"],
+                            "body" => Dict(
+                                "op" => "faq", "output_idx" => ["i"],
+                                "args" => ["f"], "ranges" => Dict("i" => [2, 7]),
+                                "expr" => Dict(
+                                    "op" => "*", "args" => [
+                                        Dict(
+                                            "op" => "exp", "args" => [
+                                                Dict("op" => "neg", "args" => [0.3]),
+                                            ]
+                                        ),
+                                        Dict(
+                                            "op" => "apply_expression_template", "args" => [],
+                                            "name" => "pair_diff",
+                                            "bindings" => Dict("f" => "f", "w" => 0.25)
+                                        ),
+                                    ]
+                                )
+                            ),
+                        ),
+                        "flux_lo" => Dict(
+                            "params" => ["f"],
+                            "body" => Dict(
+                                "op" => "faq", "output_idx" => ["i"],
+                                "args" => ["f"], "ranges" => Dict("i" => [1, 1]),
+                                "expr" => Dict("op" => "-", "args" => [pin("f", 2), pin("f", 1)])
+                            ),
+                        ),
+                        "flux_hi" => Dict(
+                            "params" => ["f"],
+                            "body" => Dict(
+                                "op" => "faq", "output_idx" => ["i"],
+                                "args" => ["f"], "ranges" => Dict("i" => [8, 8]),
+                                "expr" => Dict("op" => "-", "args" => [pin("f", 8), pin("f", 7)])
+                            ),
+                        ),
+                        "Dx1" => Dict(
+                            "params" => ["f"],
+                            "match" => Dict("op" => "D", "args" => ["f"], "wrt" => "x"),
+                            "body" => Dict(
+                                "op" => "makearray", "args" => [],
+                                "regions" => [[[2, 7]], [[1, 1]], [[8, 8]]],
+                                "values" => [
+                                    Dict(
+                                        "op" => "apply_expression_template", "args" => [],
+                                        "name" => "flux_int", "bindings" => Dict("f" => "f")
+                                    ),
+                                    Dict(
+                                        "op" => "apply_expression_template", "args" => [],
+                                        "name" => "flux_lo", "bindings" => Dict("f" => "f")
+                                    ),
+                                    Dict(
+                                        "op" => "apply_expression_template", "args" => [],
+                                        "name" => "flux_hi", "bindings" => Dict("f" => "f")
+                                    ),
+                                ]
+                            ),
+                        ),
                     ),
-                    "flux_int" => Dict(
-                        "params" => ["f"],
-                        "body" => Dict("op" => "faq", "output_idx" => ["i"],
-                            "args" => ["f"], "ranges" => Dict("i" => [2, 7]),
-                            "expr" => Dict("op" => "*", "args" => [
-                                Dict("op" => "exp", "args" => [
-                                    Dict("op" => "neg", "args" => [0.3])]),
-                                Dict("op" => "apply_expression_template", "args" => [],
-                                     "name" => "pair_diff",
-                                     "bindings" => Dict("f" => "f", "w" => 0.25))])),
+                    "variables" => Dict(
+                        "q" => Dict(
+                            "type" => "unknown", "units" => "1",
+                            "shape" => ["x"], "default" => 1.5
+                        )
                     ),
-                    "flux_lo" => Dict(
-                        "params" => ["f"],
-                        "body" => Dict("op" => "faq", "output_idx" => ["i"],
-                            "args" => ["f"], "ranges" => Dict("i" => [1, 1]),
-                            "expr" => Dict("op" => "-", "args" => [pin("f", 2), pin("f", 1)])),
-                    ),
-                    "flux_hi" => Dict(
-                        "params" => ["f"],
-                        "body" => Dict("op" => "faq", "output_idx" => ["i"],
-                            "args" => ["f"], "ranges" => Dict("i" => [8, 8]),
-                            "expr" => Dict("op" => "-", "args" => [pin("f", 8), pin("f", 7)])),
-                    ),
-                    "Dx1" => Dict(
-                        "params" => ["f"],
-                        "match" => Dict("op" => "D", "args" => ["f"], "wrt" => "x"),
-                        "body" => Dict("op" => "makearray", "args" => [],
-                            "regions" => [[[2, 7]], [[1, 1]], [[8, 8]]],
-                            "values" => [
-                                Dict("op" => "apply_expression_template", "args" => [],
-                                     "name" => "flux_int", "bindings" => Dict("f" => "f")),
-                                Dict("op" => "apply_expression_template", "args" => [],
-                                     "name" => "flux_lo", "bindings" => Dict("f" => "f")),
-                                Dict("op" => "apply_expression_template", "args" => [],
-                                     "name" => "flux_hi", "bindings" => Dict("f" => "f")),
-                            ]),
-                    ),
-                ),
-                "variables" => Dict(
-                    "q" => Dict("type" => "unknown", "units" => "1",
-                                "shape" => ["x"], "default" => 1.5)),
-                "equations" => [Dict(
-                    "lhs" => Dict("op" => "D", "args" => ["q"], "wrt" => "t"),
-                    "rhs" => Dict("op" => "-", "args" => [
-                        Dict("op" => "D", "args" => ["q"], "wrt" => "x")]))],
-            )),
+                    "equations" => [
+                        Dict(
+                            "lhs" => Dict("op" => "D", "args" => ["q"], "wrt" => "t"),
+                            "rhs" => Dict(
+                                "op" => "-", "args" => [
+                                    Dict("op" => "D", "args" => ["q"], "wrt" => "x"),
+                                ]
+                            )
+                        ),
+                    ],
+                )
+            ),
         )
         mktempdir() do dir
             fix = joinpath(dir, "nested_1d.esm")
@@ -201,7 +246,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
                 JSON3.write(io, doc)
             end
             fast, u0, cfast = build_and_probe(fix)
-            atload, _, _ = build_and_probe(fix; atload=true)
+            atload, _, _ = build_and_probe(fix; atload = true)
             @test length(u0) == 8
             for k in 1:3
                 @test fast[k] == atload[k]
@@ -225,14 +270,22 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         doc = Dict(
             "esm" => "0.9.0",
             "metadata" => Dict("name" => "orphan_ref"),
-            "models" => Dict("T" => Dict(
-                "variables" => Dict(
-                    "a" => Dict("type" => "unknown", "units" => "1", "default" => 1.5)),
-                "equations" => [Dict(
-                    "lhs" => Dict("op" => "D", "args" => ["a"], "wrt" => "t"),
-                    "rhs" => Dict("op" => "apply_expression_template", "args" => [],
-                                  "name" => "ghost", "bindings" => Dict()))],
-            )),
+            "models" => Dict(
+                "T" => Dict(
+                    "variables" => Dict(
+                        "a" => Dict("type" => "unknown", "units" => "1", "default" => 1.5)
+                    ),
+                    "equations" => [
+                        Dict(
+                            "lhs" => Dict("op" => "D", "args" => ["a"], "wrt" => "t"),
+                            "rhs" => Dict(
+                                "op" => "apply_expression_template", "args" => [],
+                                "name" => "ghost", "bindings" => Dict()
+                            )
+                        ),
+                    ],
+                )
+            ),
         )
         file = coerce_esm_file(JSON3.read(JSON3.write(doc)))
         err = try
@@ -261,37 +314,66 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         doc = Dict(
             "esm" => "0.9.0",
             "metadata" => Dict("name" => "rtmpl_param_to_var"),
-            "reaction_systems" => Dict("Chem" => Dict(
-                "parameters" => Dict(
-                    "k" => Dict("units" => "1/s", "default" => 1.0),
-                    "T" => Dict("units" => "K", "default" => 300.0)),
-                "species" => Dict(
-                    "A" => Dict("units" => "1", "default" => 1.0),
-                    "B" => Dict("units" => "1", "default" => 0.0)),
-                "expression_templates" => Dict("krate" => Dict(
-                    "params" => ["kk"],
-                    # kk * (T / 300): kk is the template param (bound to Chem.k),
-                    # T is the reaction system's own free scalar param.
-                    "body" => Dict("op" => "*", "args" => ["kk",
-                        Dict("op" => "/", "args" => ["T", 300.0])]))),
-                "reactions" => [Dict(
-                    "id" => "R1",
-                    "substrates" => [Dict("stoichiometry" => 1, "species" => "A")],
-                    "products" => [Dict("stoichiometry" => 1, "species" => "B")],
-                    "rate" => Dict("op" => "apply_expression_template", "args" => [],
-                                   "name" => "krate", "bindings" => Dict("kk" => "k")))],
-            )),
-            "models" => Dict("Src" => Dict(
-                # esm 1.0.0: an observed unknown is DEFINED BY its equation
-                # (esm-spec §6.3.1), not by a field on the declaration.
-                "variables" => Dict("Tsrc" => Dict(
-                    "type" => "unknown", "units" => "K")),
-                "equations" => Any[Dict(
-                    "lhs" => "Tsrc",
-                    "rhs" => Dict("op" => "+", "args" => [290.0, 10.0]))])),
-            "coupling" => [Dict("type" => "variable_map",
-                                "from" => "Src.Tsrc", "to" => "Chem.T",
-                                "transform" => "param_to_var")],
+            "reaction_systems" => Dict(
+                "Chem" => Dict(
+                    "parameters" => Dict(
+                        "k" => Dict("units" => "1/s", "default" => 1.0),
+                        "T" => Dict("units" => "K", "default" => 300.0)
+                    ),
+                    "species" => Dict(
+                        "A" => Dict("units" => "1", "default" => 1.0),
+                        "B" => Dict("units" => "1", "default" => 0.0)
+                    ),
+                    "expression_templates" => Dict(
+                        "krate" => Dict(
+                            "params" => ["kk"],
+                            # kk * (T / 300): kk is the template param (bound to Chem.k),
+                            # T is the reaction system's own free scalar param.
+                            "body" => Dict(
+                                "op" => "*", "args" => [
+                                    "kk",
+                                    Dict("op" => "/", "args" => ["T", 300.0]),
+                                ]
+                            )
+                        )
+                    ),
+                    "reactions" => [
+                        Dict(
+                            "id" => "R1",
+                            "substrates" => [Dict("stoichiometry" => 1, "species" => "A")],
+                            "products" => [Dict("stoichiometry" => 1, "species" => "B")],
+                            "rate" => Dict(
+                                "op" => "apply_expression_template", "args" => [],
+                                "name" => "krate", "bindings" => Dict("kk" => "k")
+                            )
+                        ),
+                    ],
+                )
+            ),
+            "models" => Dict(
+                "Src" => Dict(
+                    # esm 1.0.0: an observed unknown is DEFINED BY its equation
+                    # (esm-spec §6.3.1), not by a field on the declaration.
+                    "variables" => Dict(
+                        "Tsrc" => Dict(
+                            "type" => "unknown", "units" => "K"
+                        )
+                    ),
+                    "equations" => Any[
+                        Dict(
+                            "lhs" => "Tsrc",
+                            "rhs" => Dict("op" => "+", "args" => [290.0, 10.0])
+                        ),
+                    ]
+                )
+            ),
+            "coupling" => [
+                Dict(
+                    "type" => "variable_map",
+                    "from" => "Src.Tsrc", "to" => "Chem.T",
+                    "transform" => "param_to_var"
+                ),
+            ],
         )
         mktempdir() do dir
             fix = joinpath(dir, "rtmpl_param_to_var.esm")
@@ -302,7 +384,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
             # must BOTH succeed and agree bit-for-bit. Before the fix the default
             # build threw E_TREEWALK_UNBOUND_VARIABLE: T.
             refbuild, u0, _ = build_and_probe(fix)
-            atload, _, _ = build_and_probe(fix; atload=true)
+            atload, _, _ = build_and_probe(fix; atload = true)
             @test length(u0) == 2                       # Chem.A, Chem.B (0-D)
             for k in 1:3
                 @test refbuild[k] == atload[k]
@@ -323,34 +405,65 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
             "metadata" => Dict("name" => "shadow_registry_guard"),
             "models" => Dict(
                 "M" => Dict(
-                    "expression_templates" => Dict("scaleT" => Dict(
-                        "params" => ["kk"],
-                        # kk is the template's own param; T is the MODEL's param,
-                        # free in the body (scoped to `M.T` in the flat registry).
-                        "body" => Dict("op" => "*", "args" => ["kk",
-                            Dict("op" => "/", "args" => ["T", 300.0])]))),
+                    "expression_templates" => Dict(
+                        "scaleT" => Dict(
+                            "params" => ["kk"],
+                            # kk is the template's own param; T is the MODEL's param,
+                            # free in the body (scoped to `M.T` in the flat registry).
+                            "body" => Dict(
+                                "op" => "*", "args" => [
+                                    "kk",
+                                    Dict("op" => "/", "args" => ["T", 300.0]),
+                                ]
+                            )
+                        )
+                    ),
                     "variables" => Dict(
-                        "T" => Dict("type" => "parameter", "units" => "K",
-                                    "default" => 300.0),
-                        "a" => Dict("type" => "unknown", "units" => "1",
-                                    "default" => 1.0)),
-                    "equations" => [Dict(
-                        "lhs" => Dict("op" => "D", "args" => ["a"], "wrt" => "t"),
-                        "rhs" => Dict("op" => "-", "args" => [
-                            Dict("op" => "apply_expression_template", "args" => [],
-                                 "name" => "scaleT",
-                                 "bindings" => Dict("kk" => 0.5))]))],
+                        "T" => Dict(
+                            "type" => "parameter", "units" => "K",
+                            "default" => 300.0
+                        ),
+                        "a" => Dict(
+                            "type" => "unknown", "units" => "1",
+                            "default" => 1.0
+                        )
+                    ),
+                    "equations" => [
+                        Dict(
+                            "lhs" => Dict("op" => "D", "args" => ["a"], "wrt" => "t"),
+                            "rhs" => Dict(
+                                "op" => "-", "args" => [
+                                    Dict(
+                                        "op" => "apply_expression_template", "args" => [],
+                                        "name" => "scaleT",
+                                        "bindings" => Dict("kk" => 0.5)
+                                    ),
+                                ]
+                            )
+                        ),
+                    ],
                 ),
                 "Src" => Dict(
-                    "variables" => Dict("Tsrc" => Dict(
-                        "type" => "unknown", "units" => "K")),
-                    "equations" => Any[Dict(
-                        "lhs" => "Tsrc",
-                        "rhs" => Dict("op" => "+", "args" => [290.0, 10.0]))]),
+                    "variables" => Dict(
+                        "Tsrc" => Dict(
+                            "type" => "unknown", "units" => "K"
+                        )
+                    ),
+                    "equations" => Any[
+                        Dict(
+                            "lhs" => "Tsrc",
+                            "rhs" => Dict("op" => "+", "args" => [290.0, 10.0])
+                        ),
+                    ]
+                ),
             ),
-            "coupling" => [Dict("type" => "variable_map",
-                                "from" => "Src.Tsrc", "to" => "M.T",
-                                "transform" => "param_to_var")],
+            "coupling" => [
+                Dict(
+                    "type" => "variable_map",
+                    "from" => "Src.Tsrc", "to" => "M.T",
+                    "transform" => "param_to_var"
+                ),
+            ],
         )
         mktempdir() do dir
             fix = joinpath(dir, "shadow_registry_guard.esm")

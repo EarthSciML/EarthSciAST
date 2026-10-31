@@ -50,7 +50,7 @@ const _UC_EVALUATOR = "Julia tree-walk evaluator"
                 doc = EarthSciAST.load_path(path)
                 n_models = doc.models === nothing ? 0 : length(doc.models)
                 n_rs = doc.reaction_systems === nothing ? 0 :
-                       length(doc.reaction_systems)
+                    length(doc.reaction_systems)
                 target = (n_models == 1 && n_rs == 0) ? doc : EarthSciAST.flatten(doc)
                 err = try
                     EarthSciAST._build_evaluator(target)
@@ -64,7 +64,7 @@ const _UC_EVALUATOR = "Julia tree-walk evaluator"
                 @test err !== nothing && occursin(_UC_EVALUATOR, err.detail)
 
                 # And an inline test reports the refusal, not a number.
-                results = run_inline_tests(path; alg=Tsit5())
+                results = run_inline_tests(path; alg = Tsit5())
                 @test !isempty(results)
                 for r in results
                     @test r.passed == false
@@ -73,7 +73,7 @@ const _UC_EVALUATOR = "Julia tree-walk evaluator"
                     @test occursin(_UC_EVALUATOR, r.message)
                 end
             else
-                results = run_inline_tests(path; alg=Tsit5())
+                results = run_inline_tests(path; alg = Tsit5())
                 @test !isempty(results)
                 @test all(r -> r.passed, results)
             end

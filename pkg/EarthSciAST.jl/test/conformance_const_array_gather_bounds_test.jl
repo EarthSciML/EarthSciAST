@@ -15,8 +15,10 @@ import OrdinaryDiffEqTsit5
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
-const _CAGB_CAT_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-                               "const_array_gather_bounds")
+const _CAGB_CAT_DIR = joinpath(
+    TESTUTILS_REPO_ROOT, "tests", "conformance",
+    "const_array_gather_bounds"
+)
 
 @testset "Conformance: const_array_gather_bounds (manifest-driven)" begin
     manifest = JSON3.read(read(joinpath(_CAGB_CAT_DIR, "manifest.json"), String))
@@ -28,10 +30,12 @@ const _CAGB_CAT_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
 
     for fixture in manifest.fixtures
         @testset "$(fixture.id)" begin
-            results = run_inline_tests(joinpath(_CAGB_CAT_DIR, String(fixture.path));
-                                       model_name=String(fixture.model),
-                                       alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                       reltol=1e-12, abstol=1e-14)
+            results = run_inline_tests(
+                joinpath(_CAGB_CAT_DIR, String(fixture.path));
+                model_name = String(fixture.model),
+                alg = OrdinaryDiffEqTsit5.Tsit5(),
+                reltol = 1.0e-12, abstol = 1.0e-14
+            )
             @test length(results) == 1
             r = only(results)
             if fixture.outcome == "pass"

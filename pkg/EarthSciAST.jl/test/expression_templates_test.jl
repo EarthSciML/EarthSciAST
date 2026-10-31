@@ -74,7 +74,8 @@ end
         # the Option-A image, which `expanded_file` produces from the loaded
         # file — where the rate is the inline `*`.
         file = EarthSciAST.expanded_file(
-            EarthSciAST.load_string(IOBuffer(ARRHENIUS_FIXTURE_JSON)))
+            EarthSciAST.load_string(IOBuffer(ARRHENIUS_FIXTURE_JSON))
+        )
         rs = file.reaction_systems["chem"]
         # Sanity: expanded rate is a `*` with three args.
         rate1 = rs.reactions[1].rate
@@ -124,7 +125,7 @@ end
     end
 
     @testset "rejects unknown template name" begin
-        bad = replace(ARRHENIUS_FIXTURE_JSON, "\"name\": \"arrhenius\"" => "\"name\": \"unknown_form\"", count=1)
+        bad = replace(ARRHENIUS_FIXTURE_JSON, "\"name\": \"arrhenius\"" => "\"name\": \"unknown_form\"", count = 1)
         io = IOBuffer(bad)
         err = nothing
         try
@@ -138,8 +139,10 @@ end
 
     @testset "rejects bindings missing a param" begin
         # Drop Ea from the first reaction's bindings.
-        bad = replace(ARRHENIUS_FIXTURE_JSON,
-            "\"bindings\": {\"A_pre\": 1.8e-12, \"Ea\": 1500}" => "\"bindings\": {\"A_pre\": 1.8e-12}")
+        bad = replace(
+            ARRHENIUS_FIXTURE_JSON,
+            "\"bindings\": {\"A_pre\": 1.8e-12, \"Ea\": 1500}" => "\"bindings\": {\"A_pre\": 1.8e-12}"
+        )
         io = IOBuffer(bad)
         err = nothing
         try
@@ -152,9 +155,11 @@ end
     end
 
     @testset "rejects extra bindings entries" begin
-        bad = replace(ARRHENIUS_FIXTURE_JSON,
+        bad = replace(
+            ARRHENIUS_FIXTURE_JSON,
             "\"bindings\": {\"A_pre\": 1.8e-12, \"Ea\": 1500}" =>
-            "\"bindings\": {\"A_pre\": 1.8e-12, \"Ea\": 1500, \"bogus\": 99}")
+                "\"bindings\": {\"A_pre\": 1.8e-12, \"Ea\": 1500, \"bogus\": 99}"
+        )
         io = IOBuffer(bad)
         err = nothing
         try
@@ -167,9 +172,11 @@ end
     end
 
     @testset "rejects nested apply_expression_template inside template body" begin
-        bad = replace(ARRHENIUS_FIXTURE_JSON,
+        bad = replace(
+            ARRHENIUS_FIXTURE_JSON,
             "\"body\": {\n            \"op\": \"*\"" =>
-            "\"body\": {\n            \"op\": \"apply_expression_template\", \"args\": [], \"name\": \"arrhenius\", \"bindings\": {\"A_pre\": 1, \"Ea\": 1}, \"_dummy\": {\"op\": \"*\"")
+                "\"body\": {\n            \"op\": \"apply_expression_template\", \"args\": [], \"name\": \"arrhenius\", \"bindings\": {\"A_pre\": 1, \"Ea\": 1}, \"_dummy\": {\"op\": \"*\""
+        )
         # Above injection is too messy — use a cleaner fixture.
         nested = """
         {
@@ -214,10 +221,14 @@ end
         # Drives the cross-binding `tests/conformance/expression_templates/`
         # arrhenius_smoke fixture against its pinned expanded.esm form.
         repo_root = TESTUTILS_REPO_ROOT
-        fixture_path = joinpath(repo_root, "tests", "conformance",
-            "expression_templates", "arrhenius_smoke", "fixture.esm")
-        expanded_path = joinpath(repo_root, "tests", "conformance",
-            "expression_templates", "arrhenius_smoke", "expanded.esm")
+        fixture_path = joinpath(
+            repo_root, "tests", "conformance",
+            "expression_templates", "arrhenius_smoke", "fixture.esm"
+        )
+        expanded_path = joinpath(
+            repo_root, "tests", "conformance",
+            "expression_templates", "arrhenius_smoke", "expanded.esm"
+        )
         raw = JSON3.read(read(fixture_path, String))
         expanded_via_pass = _lowerx(raw)
         expanded_dict = JSON3.read(read(expanded_path, String))
@@ -233,15 +244,17 @@ end
         # the RECEIVING component expands at load against that component's
         # registry (§9.6.4).
         repo_root = TESTUTILS_REPO_ROOT
-        case = joinpath(repo_root, "tests", "conformance",
-            "expression_templates", "coupling_transform_expression")
+        case = joinpath(
+            repo_root, "tests", "conformance",
+            "expression_templates", "coupling_transform_expression"
+        )
         raw = JSON3.read(read(joinpath(case, "fixture.esm"), String))
         expanded_via_pass = _lowerx(raw)
         expanded_dict = JSON3.read(read(joinpath(case, "expanded.esm"), String))
         @test _normj(expanded_via_pass["coupling"]) ==
-              _normj(expanded_dict.coupling)
+            _normj(expanded_dict.coupling)
         @test _normj(expanded_via_pass["models"]) ==
-              _normj(expanded_dict.models)
+            _normj(expanded_dict.models)
         # Typed load: the expanded transform arrives as an ASTExpr operator node.
         f = EarthSciAST.load_path(joinpath(case, "fixture.esm"))
         entry = f.coupling[1]
@@ -252,13 +265,16 @@ end
 
     @testset "AST-valued bindings are accepted and substituted" begin
         # Bind `Ea` to an expression `(3 * T)` rather than a scalar.
-        ast_bound = replace(ARRHENIUS_FIXTURE_JSON,
+        ast_bound = replace(
+            ARRHENIUS_FIXTURE_JSON,
             "\"bindings\": {\"A_pre\": 1.8e-12, \"Ea\": 1500}" =>
-            "\"bindings\": {\"A_pre\": 1.8e-12, \"Ea\": {\"op\": \"*\", \"args\": [3, \"T\"]}}")
+                "\"bindings\": {\"A_pre\": 1.8e-12, \"Ea\": {\"op\": \"*\", \"args\": [3, \"T\"]}}"
+        )
         # Option B: references survive by default; pin the Option-A expanded
         # image with `expanded_file`.
         file = EarthSciAST.expanded_file(
-            EarthSciAST.load_string(IOBuffer(ast_bound)))
+            EarthSciAST.load_string(IOBuffer(ast_bound))
+        )
         rate = file.reaction_systems["chem"].reactions[1].rate
         @test rate isa OpExpr
         @test rate.op == "*"
@@ -277,8 +293,10 @@ end
 end
 
 @testset "expression_templates rewrite engine — 0.8.0 outermost-first + fixpoint" begin
-    _conf(fix) = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-                          "expression_templates", fix)
+    _conf(fix) = joinpath(
+        TESTUTILS_REPO_ROOT, "tests", "conformance",
+        "expression_templates", fix
+    )
 
     function _lower_conf(fix)
         raw = JSON3.read(read(joinpath(_conf(fix), "fixture.esm"), String))
@@ -292,8 +310,10 @@ end
         exp = JSON3.read(read(joinpath(_conf(fix), "expanded.esm"), String))
         return (_normj(exp.models.m.variables), _normj(exp.models.m.equations))
     end
-    _lowered_model(out) = (_normj(out["models"]["m"]["variables"]),
-                           _normj(out["models"]["m"]["equations"]))
+    _lowered_model(out) = (
+        _normj(out["models"]["m"]["variables"]),
+        _normj(out["models"]["m"]["equations"]),
+    )
 
     @testset "godunov compound rule beats inner derivative (priority + outermost-first)" begin
         # Anti-regression for the old innermost-first/bottom-up single pass:
@@ -390,7 +410,7 @@ end
         """
         out = _lowerx(JSON3.read(src))
         expr = _normj(_et_defrhs(out["models"]["m"], "y"))
-        @test expr == Dict{String,Any}("op" => "*", "args" => Any[1.4, "u"])
+        @test expr == Dict{String, Any}("op" => "*", "args" => Any[1.4, "u"])
     end
 
     @testset "the same binding from a DOCUMENT, not a string literal" begin
@@ -401,12 +421,14 @@ end
         # raw JSON → rewrite fixpoint) rather than a hand-built dict, and its
         # companion `open_op_attrs.esm` gates the typed round trip from
         # corpus_fidelity_test.jl.
-        fixture = joinpath(@__DIR__, "fixtures", "round_trip",
-                           "open_op_attrs_match.esm")
+        fixture = joinpath(
+            @__DIR__, "fixtures", "round_trip",
+            "open_op_attrs_match.esm"
+        )
         out = _lowerx(JSON3.read(read(fixture, String)))
         m = out["models"]["HamiltonJacobi"]
         @test _normj(_et_defrhs(m, "H")) ==
-              Dict{String,Any}("op" => "*", "args" => Any[1.4, "phi"])
+            Dict{String, Any}("op" => "*", "args" => Any[1.4, "phi"])
         # §9.6.4 rule 5: a match-only registry is dropped once its rules fire.
         @test !haskey(_normj(m), "expression_templates")
     end
@@ -444,10 +466,11 @@ end
         """
         out = _lowerx(JSON3.read(src))
         expr = _normj(_et_defrhs(out["models"]["M"], "area"))
-        @test expr == Dict{String,Any}(
+        @test expr == Dict{String, Any}(
             "op" => "polygon_intersection_area",
             "manifold" => "planar",
-            "args" => Any["pa", "pb"])
+            "args" => Any["pa", "pb"]
+        )
     end
 
     @testset "scalar-field param threads through registration-time body composition (§9.7.3)" begin
@@ -483,11 +506,16 @@ end
         """
         out = _lowerx(JSON3.read(src))
         expr = _normj(_et_defrhs(out["models"]["M"], "scaled"))
-        @test expr == Dict{String,Any}("op" => "*", "args" => Any[
-            Dict{String,Any}("op" => "polygon_intersection_area",
-                             "manifold" => "spherical",
-                             "args" => Any["pa", "pb"]),
-            2.0])
+        @test expr == Dict{String, Any}(
+            "op" => "*", "args" => Any[
+                Dict{String, Any}(
+                    "op" => "polygon_intersection_area",
+                    "manifold" => "spherical",
+                    "args" => Any["pa", "pb"]
+                ),
+                2.0,
+            ]
+        )
     end
 
     @testset "invalid substituted manifold rejected post-expansion (§9.6.4)" begin
@@ -561,8 +589,10 @@ end
     # Drives tests/conformance/expression_templates/scalar_field_param — the
     # scalar-field substitution site rule (esm-spec §9.6.1) instantiated twice
     # (planar / spherical) — against its pinned Julia-generated expanded.esm.
-    case = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-        "expression_templates", "scalar_field_param")
+    case = joinpath(
+        TESTUTILS_REPO_ROOT, "tests", "conformance",
+        "expression_templates", "scalar_field_param"
+    )
     raw = JSON3.read(read(joinpath(case, "fixture.esm"), String))
     out = _lowerx(raw)
     expanded = JSON3.read(read(joinpath(case, "expanded.esm"), String))
@@ -576,23 +606,31 @@ end
     # index-set/shape scoping of `match` rules. Constraint evaluation reads
     # declared variable shapes only and filters BEFORE the §9.6.3
     # priority/declaration-order selection.
-    _conf2(fix) = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-                           "expression_templates", fix)
+    _conf2(fix) = joinpath(
+        TESTUTILS_REPO_ROOT, "tests", "conformance",
+        "expression_templates", fix
+    )
     _nw(x) =
         (x isa AbstractDict || x isa JSON3.Object) ?
-            Dict{String,Any}(string(k) => _nw(v) for (k, v) in pairs(x)) :
+        Dict{String, Any}(string(k) => _nw(v) for (k, v) in pairs(x)) :
         (x isa AbstractVector || x isa JSON3.Array) ?
-            Any[_nw(v) for v in x] : x
+        Any[_nw(v) for v in x] : x
     function _lower2(fix)
         raw = JSON3.read(read(joinpath(_conf2(fix), "fixture.esm"), String))
         return _lowerx(raw)
     end
-    _golden_model(fix) = let exp = JSON3.read(read(joinpath(_conf2(fix), "expanded.esm"),
-                                                   String))
+    _golden_model(fix) = let exp = JSON3.read(
+            read(
+                joinpath(_conf2(fix), "expanded.esm"),
+                String
+            )
+        )
         (_nw(exp.models.m.variables), _nw(exp.models.m.equations))
     end
-    _lowered2(out) = (_nw(out["models"]["m"]["variables"]),
-                      _nw(out["models"]["m"]["equations"]))
+    _lowered2(out) = (
+        _nw(out["models"]["m"]["variables"]),
+        _nw(out["models"]["m"]["equations"]),
+    )
 
     @testset "constrained_match_scope: positive + negative in one document" begin
         out = _lower2("constrained_match_scope")
@@ -658,21 +696,23 @@ end
     @testset "constraints filter BEFORE priority selection" begin
         # A priority-10 constraint-excluded rule must NOT shadow the
         # priority-0 unconstrained rule (esm-spec §9.6.3 constraint 2).
-        src = _scoped_doc("""
-        {
-          "fancy_edges_only": {
-            "params": ["F"], "priority": 10,
-            "match": {"op": "div", "args": ["F"]},
-            "where": {"F": {"shape": ["edges"]}},
-            "body": {"op": "*", "args": [1.5, "F"]}
-          },
-          "plain_any": {
-            "params": ["F"], "priority": 0,
-            "match": {"op": "div", "args": ["F"]},
-            "body": {"op": "*", "args": ["s", "F"]}
-          }
-        }
-        """)
+        src = _scoped_doc(
+            """
+            {
+              "fancy_edges_only": {
+                "params": ["F"], "priority": 10,
+                "match": {"op": "div", "args": ["F"]},
+                "where": {"F": {"shape": ["edges"]}},
+                "body": {"op": "*", "args": [1.5, "F"]}
+              },
+              "plain_any": {
+                "params": ["F"], "priority": 0,
+                "match": {"op": "div", "args": ["F"]},
+                "body": {"op": "*", "args": ["s", "F"]}
+              }
+            }
+            """
+        )
         out = _lowerx(JSON3.read(src))
         expr = _nw(_et_defrhs(out["models"]["m"], "d"))
         @test expr["op"] == "*"
@@ -682,81 +722,105 @@ end
     @testset "compound argument fails a shape constraint (conservative judgment)" begin
         # div(2.5 * F_edge): the bound sub-AST is not a bare variable
         # reference, so the constraint fails and the node survives.
-        src = replace(_scoped_doc("""
-        {
-          "edges_only": {
-            "params": ["F"],
-            "match": {"op": "div", "args": ["F"]},
-            "where": {"F": {"shape": ["edges"]}},
-            "body": {"op": "*", "args": ["s", "F"]}
-          }
-        }
-        """), "{\"op\": \"div\", \"args\": [\"F_cell\"]}" =>
-              "{\"op\": \"div\", \"args\": [{\"op\": \"*\", \"args\": [2.5, \"F_edge\"]}]}")
+        src = replace(
+            _scoped_doc(
+                """
+                {
+                  "edges_only": {
+                    "params": ["F"],
+                    "match": {"op": "div", "args": ["F"]},
+                    "where": {"F": {"shape": ["edges"]}},
+                    "body": {"op": "*", "args": ["s", "F"]}
+                  }
+                }
+                """
+            ), "{\"op\": \"div\", \"args\": [\"F_cell\"]}" =>
+                "{\"op\": \"div\", \"args\": [{\"op\": \"*\", \"args\": [2.5, \"F_edge\"]}]}"
+        )
         out = _lowerx(JSON3.read(src))
         expr = _nw(_et_defrhs(out["models"]["m"], "d"))
         @test expr["op"] == "div"   # never rewritten; not an error
     end
 
     @testset "where without match is an invalid declaration" begin
-        src = _scoped_doc("""
-        {
-          "broken": {
-            "params": ["F"],
-            "where": {"F": {"shape": ["edges"]}},
-            "body": {"op": "*", "args": ["s", "F"]}
-          }
-        }
-        """)
-        err = try lower_expression_templates(JSON3.read(src)); nothing catch e; e end
+        src = _scoped_doc(
+            """
+            {
+              "broken": {
+                "params": ["F"],
+                "where": {"F": {"shape": ["edges"]}},
+                "body": {"op": "*", "args": ["s", "F"]}
+              }
+            }
+            """
+        )
+        err = try
+            lower_expression_templates(JSON3.read(src)); nothing
+        catch e
+            e
+        end
         @test err isa ExpressionTemplateError
         @test err.code == "apply_expression_template_invalid_declaration"
     end
 
     @testset "where key must be a declared param" begin
-        src = _scoped_doc("""
-        {
-          "broken": {
-            "params": ["F"],
-            "match": {"op": "div", "args": ["F"]},
-            "where": {"G": {"shape": ["edges"]}},
-            "body": {"op": "*", "args": ["s", "F"]}
-          }
-        }
-        """)
-        err = try lower_expression_templates(JSON3.read(src)); nothing catch e; e end
+        src = _scoped_doc(
+            """
+            {
+              "broken": {
+                "params": ["F"],
+                "match": {"op": "div", "args": ["F"]},
+                "where": {"G": {"shape": ["edges"]}},
+                "body": {"op": "*", "args": ["s", "F"]}
+              }
+            }
+            """
+        )
+        err = try
+            lower_expression_templates(JSON3.read(src)); nothing
+        catch e
+            e
+        end
         @test err isa ExpressionTemplateError
         @test err.code == "apply_expression_template_invalid_declaration"
     end
 
     @testset "unknown constraint kind rejected (v1 vocabulary is exactly shape)" begin
-        src = _scoped_doc("""
-        {
-          "broken": {
-            "params": ["F"],
-            "match": {"op": "div", "args": ["F"]},
-            "where": {"F": {"units": "m"}},
-            "body": {"op": "*", "args": ["s", "F"]}
-          }
-        }
-        """)
-        err = try lower_expression_templates(JSON3.read(src)); nothing catch e; e end
+        src = _scoped_doc(
+            """
+            {
+              "broken": {
+                "params": ["F"],
+                "match": {"op": "div", "args": ["F"]},
+                "where": {"F": {"units": "m"}},
+                "body": {"op": "*", "args": ["s", "F"]}
+              }
+            }
+            """
+        )
+        err = try
+            lower_expression_templates(JSON3.read(src)); nothing
+        catch e
+            e
+        end
         @test err isa ExpressionTemplateError
         @test err.code == "apply_expression_template_invalid_declaration"
     end
 
     @testset "shape must match exactly (names AND order)" begin
         # F_cell is over [cells]; a constraint over [cells, edges] fails.
-        src = _scoped_doc("""
-        {
-          "two_axes_only": {
-            "params": ["F"],
-            "match": {"op": "div", "args": ["F"]},
-            "where": {"F": {"shape": ["cells", "edges"]}},
-            "body": {"op": "*", "args": ["s", "F"]}
-          }
-        }
-        """)
+        src = _scoped_doc(
+            """
+            {
+              "two_axes_only": {
+                "params": ["F"],
+                "match": {"op": "div", "args": ["F"]},
+                "where": {"F": {"shape": ["cells", "edges"]}},
+                "body": {"op": "*", "args": ["s", "F"]}
+              }
+            }
+            """
+        )
         out = _lowerx(JSON3.read(src))
         expr = _nw(_et_defrhs(out["models"]["m"], "d"))
         @test expr["op"] == "div"   # constraint unsatisfied; rule never fires
@@ -770,46 +834,50 @@ end
     # there (esm-spec §9.6.1) — and the constraint scopes the imported rule
     # inside the consuming component.
     mktempdir() do dir
-        write(joinpath(dir, "meshlib.esm"), """
-        {
-          "esm": "0.8.0",
-          "metadata": {"name": "meshlib"},
-          "index_sets": {
-            "cells": {"kind": "interval", "size": 4},
-            "edges": {"kind": "interval", "size": 6}
-          },
-          "expression_templates": {
-            "fv_div_edges": {
-              "params": ["F"],
-              "match": {"op": "div", "args": ["F"]},
-              "where": {"F": {"shape": ["edges"]}},
-              "body": {"op": "*", "args": [0.5, "F"]}
-            }
-          }
-        }
-        """)
-        model_path = joinpath(dir, "consumer.esm")
-        write(model_path, """
-        {
-          "esm": "0.8.0",
-          "metadata": {"name": "consumer"},
-          "models": {
-            "m": {
-              "expression_template_imports": [{"ref": "meshlib.esm"}],
-              "variables": {
-                "F_edge": {"type": "unknown", "units": "1", "default": 1.5, "shape": ["edges"]},
-                "F_cell": {"type": "unknown", "units": "1", "default": 2.5, "shape": ["cells"]},
-                "d_edge": {"type": "unknown", "units": "1"},
-                "d_cell": {"type": "unknown", "units": "1"}
+        write(
+            joinpath(dir, "meshlib.esm"), """
+            {
+              "esm": "0.8.0",
+              "metadata": {"name": "meshlib"},
+              "index_sets": {
+                "cells": {"kind": "interval", "size": 4},
+                "edges": {"kind": "interval", "size": 6}
               },
-              "equations": [
-                  {"lhs": "d_edge", "rhs": {"op": "div", "args": ["F_edge"]}},
-                  {"lhs": "d_cell", "rhs": {"op": "div", "args": ["F_cell"]}}
-                ]
+              "expression_templates": {
+                "fv_div_edges": {
+                  "params": ["F"],
+                  "match": {"op": "div", "args": ["F"]},
+                  "where": {"F": {"shape": ["edges"]}},
+                  "body": {"op": "*", "args": [0.5, "F"]}
+                }
+              }
             }
-          }
-        }
-        """)
+            """
+        )
+        model_path = joinpath(dir, "consumer.esm")
+        write(
+            model_path, """
+            {
+              "esm": "0.8.0",
+              "metadata": {"name": "consumer"},
+              "models": {
+                "m": {
+                  "expression_template_imports": [{"ref": "meshlib.esm"}],
+                  "variables": {
+                    "F_edge": {"type": "unknown", "units": "1", "default": 1.5, "shape": ["edges"]},
+                    "F_cell": {"type": "unknown", "units": "1", "default": 2.5, "shape": ["cells"]},
+                    "d_edge": {"type": "unknown", "units": "1"},
+                    "d_cell": {"type": "unknown", "units": "1"}
+                  },
+                  "equations": [
+                      {"lhs": "d_edge", "rhs": {"op": "div", "args": ["F_edge"]}},
+                      {"lhs": "d_cell", "rhs": {"op": "div", "args": ["F_cell"]}}
+                    ]
+                }
+              }
+            }
+            """
+        )
         f = EarthSciAST.load_path(model_path)
         m = f.models["m"]
         @test (observed_definition(m, "d_edge")::OpExpr).op == "*"    # constrained rule fired

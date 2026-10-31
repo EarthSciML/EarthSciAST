@@ -44,7 +44,7 @@ function _vi_typed_lhs_base(expr)
 end
 
 # The aggregate's `ranges` map, empty when absent.
-_vi_ranges(node::OpExpr) = node.ranges === nothing ? Dict{String,Any}() : node.ranges
+_vi_ranges(node::OpExpr) = node.ranges === nothing ? Dict{String, Any}() : node.ranges
 
 # The relational body ops that mark a value-invention output (excluded from the ODE).
 const _VI_BODY_OPS = ("skolem", "rank", "distinct")
@@ -94,7 +94,7 @@ end
 # is exactly the equation list: an observed unknown's defining right-hand side
 # IS an equation, so there is no variable-level `expression` to append.
 _vi_model_assignments(model::Model) =
-    Tuple{Any,ASTExpr}[(eq.lhs, eq.rhs) for eq in model.equations]
+    Tuple{Any, ASTExpr}[(eq.lhs, eq.rhs) for eq in model.equations]
 
 # Every `index` target name reachable in a sub-tree (the array a value reads
 # from): `index(NAME, …)` → NAME. Walks EVERY expression-bearing `OpExpr` field
@@ -179,8 +179,12 @@ function _vi_is_derived(node::OpExpr, vi_var_names)
     gsym = String(oi[1])
     node.join === nothing || return false
     all(==(gsym), keys(_vi_ranges(node))) || return false
-    return !isempty(intersect(_vi_index_targets!(Set{String}(), node.expr_body),
-                              vi_var_names))
+    return !isempty(
+        intersect(
+            _vi_index_targets!(Set{String}(), node.expr_body),
+            vi_var_names
+        )
+    )
 end
 
 """
@@ -201,9 +205,9 @@ fixpoint discovery order is a valid materialisation (topological) order.
 """
 function _vi_detect(model::Model)
     vi_var_names = Set{String}()
-    maps = Tuple{String,OpExpr}[]
-    producers = Tuple{String,OpExpr}[]
-    candidates = Tuple{String,OpExpr}[]   # plain numeric aggregates — grouped/derived?
+    maps = Tuple{String, OpExpr}[]
+    producers = Tuple{String, OpExpr}[]
+    candidates = Tuple{String, OpExpr}[]   # plain numeric aggregates — grouped/derived?
     for (lhs, rhs) in _vi_model_assignments(model)
         base = lhs isa AbstractString ? String(lhs) : _vi_typed_lhs_base(lhs)
         base === nothing && continue
@@ -222,11 +226,11 @@ function _vi_detect(model::Model)
     # reading a VI buffer ⇒ :derived. Both signatures are narrow (see the helpers)
     # so ordinary model aggregates — including the regridder's bin-to-bin gather —
     # are left on the simulate path.
-    chain = Tuple{String,OpExpr,Symbol}[]
+    chain = Tuple{String, OpExpr, Symbol}[]
     changed = true
     while changed
         changed = false
-        rest = Tuple{String,OpExpr}[]
+        rest = Tuple{String, OpExpr}[]
         for (base, node) in candidates
             if _vi_grouped_key(node, vi_var_names) !== nothing
                 push!(vi_var_names, base); push!(chain, (base, node, :grouped)); changed = true
@@ -239,23 +243,25 @@ function _vi_detect(model::Model)
         candidates = rest
     end
     has_vi = !isempty(maps) || !isempty(producers) || !isempty(chain)
-    return (has_vi=has_vi, vi_var_names=vi_var_names, maps=maps, producers=producers,
-            chain=chain)
+    return (
+        has_vi = has_vi, vi_var_names = vi_var_names, maps = maps, producers = producers,
+        chain = chain,
+    )
 end
 
 # ---- Build-time evaluation context -----------------------------------------
 
 struct _ViCtx
-    const_arrays::Dict{String,Any}
-    params::Dict{String,Float64}
-    index_sets::Dict{String,IndexSet}
-    variables::OrderedDict{String,ModelVariable}
-    maps::Dict{String,Dict{Any,Any}}   # materialised map var → (output-index → value)
+    const_arrays::Dict{String, Any}
+    params::Dict{String, Float64}
+    index_sets::Dict{String, IndexSet}
+    variables::OrderedDict{String, ModelVariable}
+    maps::Dict{String, Dict{Any, Any}}   # materialised map var → (output-index → value)
     # Per-name cadence SEED, derived once from the model (esm-spec §6.3.1 /
     # CONFORMANCE_SPEC §5.7.2). From esm 1.0.0 the seed cannot be read off a
     # declared type, so it is computed by `_vi_seed_map` and carried here rather
     # than re-derived at every leaf.
-    seeds::Dict{String,Int}
+    seeds::Dict{String, Int}
 end
 
 # Coerce a build-time numeric to an exact integer relational key component
@@ -264,9 +270,13 @@ end
 function _vi_key_int(x)
     isa(x, Integer) && return Int(x)
     if isa(x, AbstractFloat)
-        isinteger(x) || throw(TreeWalkError("E_TREEWALK_VI_FLOAT_KEY",
-            "value-invention key component $(repr(x)) is not integer-valued; relational " *
-            "keys must be integer / categorical IDs (CONFORMANCE_SPEC.md §5.5.1 rule 1)"))
+        isinteger(x) || throw(
+            TreeWalkError(
+                "E_TREEWALK_VI_FLOAT_KEY",
+                "value-invention key component $(repr(x)) is not integer-valued; relational " *
+                    "keys must be integer / categorical IDs (CONFORMANCE_SPEC.md §5.5.1 rule 1)"
+            )
+        )
         return Int(x)
     end
     throw(TreeWalkError("E_TREEWALK_VI_KEY", "non-numeric key component $(repr(x))"))
@@ -284,8 +294,12 @@ function _vi_param(ctx::_ViCtx, name::AbstractString)
     if v !== nothing && v.default !== nothing
         return Float64(v.default)
     end
-    throw(TreeWalkError("E_TREEWALK_VI_PARAM",
-        "value-invention scalar parameter '$name' has no override or default"))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_PARAM",
+            "value-invention scalar parameter '$name' has no override or default"
+        )
+    )
 end
 
 # Evaluate a value-invention node that MUST reduce to a build-time number.
@@ -298,10 +312,14 @@ end
 function _vi_num(node, ctx::_ViCtx, bindings::AbstractDict)
     v = _vi_eval(node, ctx, bindings)
     isa(v, Real) && return v
-    throw(TreeWalkError("E_TREEWALK_VI_SYMBOL",
-        "value-invention expression requires a build-time number here but got " *
-        "$(repr(v)); an unresolved name (range symbol, const-array factor, or " *
-        "scalar parameter) degraded to a relation tag"))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_SYMBOL",
+            "value-invention expression requires a build-time number here but got " *
+                "$(repr(v)); an unresolved name (range symbol, const-array factor, or " *
+                "scalar parameter) degraded to a relation tag"
+        )
+    )
 end
 
 # Evaluate a typed value-invention sub-expression. Returns an Int / Float64 /
@@ -359,7 +377,7 @@ function _vi_eval(node, ctx::_ViCtx, bindings::AbstractDict)
             return sum(Float64(_vi_num(a, ctx, bindings)) for a in args)
         elseif op == "-"
             return length(args) == 1 ? -Float64(_vi_num(args[1], ctx, bindings)) :
-                   Float64(_vi_num(args[1], ctx, bindings)) - Float64(_vi_num(args[2], ctx, bindings))
+                Float64(_vi_num(args[1], ctx, bindings)) - Float64(_vi_num(args[2], ctx, bindings))
         elseif op in ("<", ">", "<=", ">=", "==", "!=")
             a = Float64(_vi_num(args[1], ctx, bindings))
             b = Float64(_vi_num(args[2], ctx, bindings))
@@ -370,8 +388,12 @@ function _vi_eval(node, ctx::_ViCtx, bindings::AbstractDict)
             op == "==" && return a == b
             return a != b
         end
-        throw(TreeWalkError("E_TREEWALK_VI_OP",
-            "value-invention build-time evaluator does not support op '$op'"))
+        throw(
+            TreeWalkError(
+                "E_TREEWALK_VI_OP",
+                "value-invention build-time evaluator does not support op '$op'"
+            )
+        )
     end
     throw(TreeWalkError("E_TREEWALK_VI_NODE", "unevaluable value-invention node $(repr(node))"))
 end
@@ -385,18 +407,30 @@ function _vi_index(node::OpExpr, ctx::_ViCtx, bindings::AbstractDict)
     args = node.args
     name = !isempty(args) && args[1] isa VarExpr ? args[1].name : nothing
     if name !== nothing && haskey(ctx.maps, name)
-        length(args) == 2 || throw(TreeWalkError("E_TREEWALK_VI_INDEX",
-            "materialised value-invention buffer '$name' is a 1-D buffer; expected one " *
-            "index, got $(length(args) - 1)"))
+        length(args) == 2 || throw(
+            TreeWalkError(
+                "E_TREEWALK_VI_INDEX",
+                "materialised value-invention buffer '$name' is a 1-D buffer; expected one " *
+                    "index, got $(length(args) - 1)"
+            )
+        )
         idx = _vi_key_int(_vi_eval(args[2], ctx, bindings))
-        haskey(ctx.maps[name], idx) || throw(TreeWalkError("E_TREEWALK_VI_INDEX",
-            "materialised value-invention buffer '$name' has no entry at index $idx"))
+        haskey(ctx.maps[name], idx) || throw(
+            TreeWalkError(
+                "E_TREEWALK_VI_INDEX",
+                "materialised value-invention buffer '$name' has no entry at index $idx"
+            )
+        )
         return ctx.maps[name][idx]
     end
     name !== nothing && haskey(ctx.const_arrays, name) ||
-        throw(TreeWalkError("E_TREEWALK_VI_INDEX",
+        throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_INDEX",
             "value-invention index target '$(repr(name === nothing ? (isempty(args) ? nothing : args[1]) : name))' " *
-            "must be a const-array factor or an already-materialised value-invention buffer"))
+                "must be a const-array factor or an already-materialised value-invention buffer"
+        )
+    )
     arr = ctx.const_arrays[name]
     idxs = Tuple(Int(_vi_num(a, ctx, bindings)) for a in args[2:end])
     # A factor carrying a declared per-dimension boundary policy resolves an
@@ -405,10 +439,16 @@ function _vi_index(node::OpExpr, ctx::_ViCtx, bindings::AbstractDict)
     # existing behavior, so genuine connectivity OOB still surfaces.
     if isa(arr, BoundedConstArray)
         ndims(arr) == length(idxs) ||
-            throw(TreeWalkError("E_TREEWALK_CONSTARRAY_NDIM",
-                "const array '$(name)' is $(ndims(arr))D but got $(length(idxs)) indices"))
-        idxs = ntuple(d -> _resolve_const_index(arr, String(name), d, idxs[d], size(arr, d)),
-                      length(idxs))
+            throw(
+            TreeWalkError(
+                "E_TREEWALK_CONSTARRAY_NDIM",
+                "const array '$(name)' is $(ndims(arr))D but got $(length(idxs)) indices"
+            )
+        )
+        idxs = ntuple(
+            d -> _resolve_const_index(arr, String(name), d, idxs[d], size(arr, d)),
+            length(idxs)
+        )
     end
     return arr[idxs...]
 end
@@ -450,8 +490,12 @@ function _vi_order_syms(ranges)
                 progressed = true
             end
         end
-        progressed || throw(TreeWalkError("E_TREEWALK_VI_RANGE_CYCLE",
-            "value-invention ranges have a cyclic `of` dependency: $(remaining)"))
+        progressed || throw(
+            TreeWalkError(
+                "E_TREEWALK_VI_RANGE_CYCLE",
+                "value-invention ranges have a cyclic `of` dependency: $(remaining)"
+            )
+        )
     end
     return ordered
 end
@@ -462,40 +506,60 @@ end
 # from the set's `values` factor sliced by its `offsets` factor (so a range
 # symbol over `face_vertices` binds to the vertex IDs of the parent face, §5.2).
 function _vi_range_values(spec, ctx::_ViCtx, bindings::AbstractDict)
-    spec isa IndexSetRef || throw(TreeWalkError("E_TREEWALK_VI_RANGE",
-        "value-invention range must reference a declared index set " *
-        "(`{from: <name>}`); got $(repr(spec))"))
+    spec isa IndexSetRef || throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_RANGE",
+            "value-invention range must reference a declared index set " *
+                "(`{from: <name>}`); got $(repr(spec))"
+        )
+    )
     is = get(ctx.index_sets, spec.from, nothing)
-    is === nothing && throw(TreeWalkError("E_TREEWALK_VI_RANGE",
-        "value-invention range references undeclared index set '$(spec.from)'"))
+    is === nothing && throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_RANGE",
+            "value-invention range references undeclared index set '$(spec.from)'"
+        )
+    )
     if is.kind == "interval"
         return 1:Int(is.size)
     elseif is.kind == "categorical"
         return 1:length(is.members)
     elseif is.kind == "ragged"
         of = _vi_range_of(spec)
-        isempty(of) && throw(TreeWalkError("E_TREEWALK_VI_RANGE",
-            "ragged value-invention range '$(spec.from)' needs an `of` parent"))
+        isempty(of) && throw(
+            TreeWalkError(
+                "E_TREEWALK_VI_RANGE",
+                "ragged value-invention range '$(spec.from)' needs an `of` parent"
+            )
+        )
         parent = Int(bindings[of[1]])
         for f in (is.offsets, is.values)
-            haskey(ctx.const_arrays, f) || throw(TreeWalkError("E_TREEWALK_VI_INDEX",
-                "ragged keyed factor '$f' of index set '$(spec.from)' is not bound in " *
-                "const_arrays: it must be a constant factor (esm-spec §4.2)"))
+            haskey(ctx.const_arrays, f) || throw(
+                TreeWalkError(
+                    "E_TREEWALK_VI_INDEX",
+                    "ragged keyed factor '$f' of index set '$(spec.from)' is not bound in " *
+                        "const_arrays: it must be a constant factor (esm-spec §4.2)"
+                )
+            )
         end
         offs = ctx.const_arrays[is.offsets]
         vals = ctx.const_arrays[is.values]
         nmem = Int(offs[parent])
         return Any[_vi_key_int(vals[parent, l]) for l in 1:nmem]
     end
-    throw(TreeWalkError("E_TREEWALK_VI_RANGE",
-        "value-invention range over index set kind '$(repr(is.kind))' is unsupported"))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_RANGE",
+            "value-invention range over index set kind '$(repr(is.kind))' is unsupported"
+        )
+    )
 end
 
 # Enumerate every full binding of an aggregate's `ranges`, calling `cb(bindings)`
 # at each leaf (bindings is reused — copy if retained).
 function _vi_enumerate(ranges, ctx::_ViCtx, cb)
     syms = _vi_order_syms(ranges)
-    bindings = Dict{String,Any}()
+    bindings = Dict{String, Any}()
     function rec(k)
         if k > length(syms)
             cb(bindings)
@@ -506,7 +570,7 @@ function _vi_enumerate(ranges, ctx::_ViCtx, cb)
             bindings[s] = v
             rec(k + 1)
         end
-        delete!(bindings, s)
+        return delete!(bindings, s)
     end
     rec(1)
     return
@@ -518,17 +582,29 @@ end
 # the producer range whose `from` equals the variable's (1-D) shape index set.
 function _vi_join_index_sym(vname, producer_ranges, ctx::_ViCtx)
     v = get(ctx.variables, vname, nothing)
-    v === nothing && throw(TreeWalkError("E_TREEWALK_VI_JOIN",
-        "join references unknown variable '$(vname)'"))
+    v === nothing && throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_JOIN",
+            "join references unknown variable '$(vname)'"
+        )
+    )
     shape = v.shape === nothing ? String[] : v.shape
-    length(shape) == 1 || throw(TreeWalkError("E_TREEWALK_VI_JOIN",
-        "value-invention join key '$(vname)' must be a 1-D buffer; shape=$(shape)"))
+    length(shape) == 1 || throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_JOIN",
+            "value-invention join key '$(vname)' must be a 1-D buffer; shape=$(shape)"
+        )
+    )
     target = shape[1]
     for (sym, spec) in producer_ranges
         spec isa IndexSetRef && spec.from == target && return sym
     end
-    throw(TreeWalkError("E_TREEWALK_VI_JOIN",
-        "no producer range binds the index set '$(target)' of join key '$(vname)'"))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_JOIN",
+            "no producer range binds the index set '$(target)' of join key '$(vname)'"
+        )
+    )
 end
 
 # One resolved value-invention join gate (built ONCE per producer/arg-witness,
@@ -542,9 +618,9 @@ end
 struct _ViJoinGate
     sym_l::String
     sym_r::String
-    map_l::Union{Dict{Any,Any},Nothing}
-    map_r::Union{Dict{Any,Any},Nothing}
-    candidates::Union{_OverlapIndex,Nothing}
+    map_l::Union{Dict{Any, Any}, Nothing}
+    map_r::Union{Dict{Any, Any}, Nothing}
+    candidates::Union{_OverlapIndex, Nothing}
 end
 
 # Envelope vectors for a value-invention OVERLAP gate: look each env-factor name
@@ -566,9 +642,11 @@ function _vi_resolve_join(join, producer_ranges, ctx::_ViCtx)
         if clause isa _OverlapJoinSpec
             sym_l = _vi_join_index_sym(clause.src_env[1], producer_ranges, ctx)
             sym_r = _vi_join_index_sym(clause.tgt_env[1], producer_ranges, ctx)
-            cands = _overlap_candidate_set(_vi_env_vectors(clause.src_env, ctx),
-                                           _vi_env_vectors(clause.tgt_env, ctx);
-                                           eps=clause.eps)
+            cands = _overlap_candidate_set(
+                _vi_env_vectors(clause.src_env, ctx),
+                _vi_env_vectors(clause.tgt_env, ctx);
+                eps = clause.eps
+            )
             push!(gates, _ViJoinGate(sym_l, sym_r, nothing, nothing, _OverlapIndex(cands)))
         else
             for pair in clause
@@ -650,13 +728,17 @@ end
 # range. With NO drivable gate this is `_vi_enumerate` itself. The callback is
 # identical in both paths and STILL applies the narrow `filter` and the full
 # `_vi_join_ok` re-check downstream.
-function _vi_enumerate_join(ranges, gates::Union{Vector{_ViJoinGate},Nothing},
-                            ctx::_ViCtx, cb)
+function _vi_enumerate_join(
+        ranges, gates::Union{Vector{_ViJoinGate}, Nothing},
+        ctx::_ViCtx, cb
+    )
     counted = bindings -> (_VI_ENUM_VISITS[] += 1; cb(bindings))
     ov = _drivable_gate(gates)
     ov === nothing && return _vi_enumerate(ranges, ctx, counted)   # full product
-    _vi_enumerate_driven(_vi_order_syms(ranges), ranges, ctx, Dict{String,Any}(), ov,
-                         counted)
+    _vi_enumerate_driven(
+        _vi_order_syms(ranges), ranges, ctx, Dict{String, Any}(), ov,
+        counted
+    )
     return
 end
 
@@ -678,7 +760,7 @@ function _vi_enumerate_driven(syms, ranges, ctx::_ViCtx, bindings::AbstractDict,
             bindings[s] = v
             rec(k + 1)
         end
-        delete!(bindings, s)
+        return delete!(bindings, s)
     end
     rec(1)
     return
@@ -696,27 +778,45 @@ end
 # `join` (a bin-Skolem broad-phase prune, §5.3) and/or `filter` restrict the
 # candidate set; an empty candidate set is an error (no index witnesses an empty
 # argmin — a point with no candidate generator is undefined).
-function _vi_argreduce(node::OpExpr, ctx::_ViCtx, outer_bindings::AbstractDict, outer_ranges,
-                       gate_cache::Base.RefValue{Any} = Ref{Any}(missing))
+function _vi_argreduce(
+        node::OpExpr, ctx::_ViCtx, outer_bindings::AbstractDict, outer_ranges,
+        gate_cache::Base.RefValue{Any} = Ref{Any}(missing)
+    )
     op = node.op
     inner_ranges = _vi_ranges(node)
     arg_sym = node.arg
-    arg_sym === nothing && throw(TreeWalkError("E_TREEWALK_VI_ARG",
-        "arg-witness op '$op' requires an `arg` naming the witnessing index symbol"))
+    arg_sym === nothing && throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_ARG",
+            "arg-witness op '$op' requires an `arg` naming the witnessing index symbol"
+        )
+    )
     arg_sym = String(arg_sym)
     value_expr = node.expr_body
-    value_expr === nothing && throw(TreeWalkError("E_TREEWALK_VI_ARG",
-        "arg-witness op '$op' requires an `expr` body (the scalar to optimise)"))
-    haskey(inner_ranges, arg_sym) || throw(TreeWalkError("E_TREEWALK_VI_ARG",
-        "arg-witness `arg`='$arg_sym' must name one of the contracted `ranges` symbols"))
-    haskey(outer_bindings, arg_sym) && throw(TreeWalkError("E_TREEWALK_VI_ARG",
-        "arg-witness `arg`='$arg_sym' shadows an outer index symbol"))
+    value_expr === nothing && throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_ARG",
+            "arg-witness op '$op' requires an `expr` body (the scalar to optimise)"
+        )
+    )
+    haskey(inner_ranges, arg_sym) || throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_ARG",
+            "arg-witness `arg`='$arg_sym' must name one of the contracted `ranges` symbols"
+        )
+    )
+    haskey(outer_bindings, arg_sym) && throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_ARG",
+            "arg-witness `arg`='$arg_sym' shadows an outer index symbol"
+        )
+    )
     filt = node.filter
     # The join gates, resolved on the first point of a map and reused for the rest.
     gate_cache[] === missing && (gate_cache[] = _vi_argreduce_gates(node, ctx, outer_ranges))
     join_gates = gate_cache[]
     syms = _vi_order_syms(inner_ranges)
-    bindings = Dict{String,Any}(outer_bindings)
+    bindings = Dict{String, Any}(outer_bindings)
     best_val = nothing
     best_arg = nothing
     leaf = function (bindings)
@@ -755,14 +855,18 @@ function _vi_argreduce(node::OpExpr, ctx::_ViCtx, outer_bindings::AbstractDict, 
             bindings[s] = val
             rec(k + 1)
         end
-        delete!(bindings, s)
+        return delete!(bindings, s)
     end
     ov = _drivable_gate(join_gates)
     ov === nothing ? rec(1) :
         _vi_enumerate_driven(syms, inner_ranges, ctx, bindings, ov, leaf)
-    best_arg === nothing && throw(TreeWalkError("E_TREEWALK_VI_ARGEMPTY",
-        "arg-witness op '$op' has an empty candidate set; no index witnesses the " *
-        "optimum (a point with no candidate generator is undefined)"))
+    best_arg === nothing && throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_ARGEMPTY",
+            "arg-witness op '$op' has an empty candidate set; no index witnesses the " *
+                "optimum (a point with no candidate generator is undefined)"
+        )
+    )
     return best_arg
 end
 
@@ -774,7 +878,7 @@ end
 # `Base.merge` — the module shadows `merge` with an `EsmFile` method.
 function _vi_argreduce_gates(node::OpExpr, ctx::_ViCtx, outer_ranges)
     node.join === nothing && return nothing
-    combined = Base.merge(Dict{String,Any}(outer_ranges), Dict{String,Any}(_vi_ranges(node)))
+    combined = Base.merge(Dict{String, Any}(outer_ranges), Dict{String, Any}(_vi_ranges(node)))
     return _vi_resolve_join(node.join, combined, ctx)
 end
 
@@ -804,13 +908,17 @@ struct _ViC
     args::Vector{_ViC}
 end
 const _VIC_NOARR = Float64[]
-_ViC(kind::Int; op::Symbol = :none, ival::Int = 0, fval::Float64 = 0.0,
-     arr::Array{Float64} = _VIC_NOARR, args::Vector{_ViC} = _ViC[]) =
+_ViC(
+    kind::Int; op::Symbol = :none, ival::Int = 0, fval::Float64 = 0.0,
+    arr::Array{Float64} = _VIC_NOARR, args::Vector{_ViC} = _ViC[]
+) =
     _ViC(kind, op, ival, fval, arr, args)
 
-const _VIC_OPS = Dict{String,Symbol}("floor" => :floor, "ceil" => :ceil, "/" => :/,
+const _VIC_OPS = Dict{String, Symbol}(
+    "floor" => :floor, "ceil" => :ceil, "/" => :/,
     "*" => :*, "+" => :+, "-" => :-, "<" => :<, ">" => :>, "<=" => :<=,
-    ">=" => :>=, "==" => :(==), "!=" => :!=)
+    ">=" => :>=, "==" => :(==), "!=" => :!=
+)
 
 function _vi_compile_node(node, ctx::_ViCtx, sym::String)
     if node isa IntExpr
@@ -882,7 +990,7 @@ end
 
 # `_vi_eval` arm for arm (the `_vi_num` guards cannot fire: every compiled
 # value is a number).
-function _vic_eval(n::_ViC, v::Int)::Union{Int,Float64,Bool}
+function _vic_eval(n::_ViC, v::Int)::Union{Int, Float64, Bool}
     k = n.kind
     k == _VIC_INT && return n.ival
     k == _VIC_NUM && return n.fval
@@ -910,7 +1018,7 @@ function _vic_eval(n::_ViC, v::Int)::Union{Int,Float64,Bool}
         return acc
     elseif op === :-
         return length(a) == 1 ? -Float64(_vic_eval(a[1], v)) :
-               Float64(_vic_eval(a[1], v)) - Float64(_vic_eval(a[2], v))
+            Float64(_vic_eval(a[1], v)) - Float64(_vic_eval(a[2], v))
     end
     x = Float64(_vic_eval(a[1], v))
     y = Float64(_vic_eval(a[2], v))
@@ -943,33 +1051,43 @@ end
 # Materialise a per-element value-invention map var → Dict(output-index → value).
 function _vi_materialize_map!(ctx::_ViCtx, vname::AbstractString, node::OpExpr)
     output_idx = node.output_idx === nothing ? Any[] : node.output_idx
-    length(output_idx) == 1 || throw(TreeWalkError("E_TREEWALK_VI_MAP",
-        "value-invention map '$(vname)' must have a single output index; got $(output_idx)"))
+    length(output_idx) == 1 || throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_MAP",
+            "value-invention map '$(vname)' must have a single output index; got $(output_idx)"
+        )
+    )
     body = node.expr_body
-    body === nothing && throw(TreeWalkError("E_TREEWALK_VI_MAP",
-        "value-invention map '$(vname)' has no `expr` body"))
+    body === nothing && throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_MAP",
+            "value-invention map '$(vname)' has no `expr` body"
+        )
+    )
     outer_ranges = _vi_ranges(node)
     is_arg = body isa OpExpr && body.op in _VI_ARGWITNESS_OPS
-    out = Dict{Any,Any}()
+    out = Dict{Any, Any}()
     sym = String(output_idx[1])
     gates = Ref{Any}(missing)
     if !is_arg && length(outer_ranges) == 1 && haskey(outer_ranges, sym)
         spec = outer_ranges[sym]
         is = spec isa IndexSetRef ? get(ctx.index_sets, spec.from, nothing) : nothing
         compiled = is !== nothing && is.kind in ("interval", "categorical") ?
-                   _vi_compile_map_body(body, ctx, sym) : nothing
+            _vi_compile_map_body(body, ctx, sym) : nothing
         if compiled !== nothing
-            _vic_fill!(out, _vi_range_values(spec, ctx, Dict{String,Any}()), compiled)
+            _vic_fill!(out, _vi_range_values(spec, ctx, Dict{String, Any}()), compiled)
             ctx.maps[vname] = out
             return out
         end
     end
-    _vi_enumerate(outer_ranges, ctx, bindings -> begin
-        # An arg-witness body runs the inner reduction (with the outer point bound)
-        # and emits the witnessing INDEX; an ordinary body (skolem) emits its value.
-        out[bindings[sym]] = is_arg ? _vi_argreduce(body, ctx, bindings, outer_ranges, gates) :
-                                      _vi_eval(body, ctx, bindings)
-    end)
+    _vi_enumerate(
+        outer_ranges, ctx, bindings -> begin
+            # An arg-witness body runs the inner reduction (with the outer point bound)
+            # and emits the witnessing INDEX; an ordinary body (skolem) emits its value.
+            out[bindings[sym]] = is_arg ? _vi_argreduce(body, ctx, bindings, outer_ranges, gates) :
+                _vi_eval(body, ctx, bindings)
+        end
+    )
     ctx.maps[vname] = out
     return out
 end
@@ -978,8 +1096,12 @@ end
 # sorted total order, via the Relational engine). Returns the member vector.
 function _vi_materialize_producer(ctx::_ViCtx, node::OpExpr)
     key = node.key
-    key === nothing && throw(TreeWalkError("E_TREEWALK_VI_PRODUCER",
-        "value-invention producer aggregate requires a `key` (§5.5)"))
+    key === nothing && throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_PRODUCER",
+            "value-invention producer aggregate requires a `key` (§5.5)"
+        )
+    )
     ranges = _vi_ranges(node)
     filt = node.filter
     join = node.join
@@ -990,16 +1112,18 @@ function _vi_materialize_producer(ctx::_ViCtx, node::OpExpr)
     # full product exactly as before.
     join_gates = join === nothing ? nothing : _vi_resolve_join(join, ranges, ctx)
     members = Any[]
-    _vi_enumerate_join(ranges, join_gates, ctx, bindings -> begin
-        if filt !== nothing
-            fv = _vi_eval(filt, ctx, bindings)
-            (fv === true || (isa(fv, Real) && fv > 0)) || return
+    _vi_enumerate_join(
+        ranges, join_gates, ctx, bindings -> begin
+            if filt !== nothing
+                fv = _vi_eval(filt, ctx, bindings)
+                (fv === true || (isa(fv, Real) && fv > 0)) || return
+            end
+            if join_gates !== nothing && !_vi_join_ok(join_gates, bindings)
+                return
+            end
+            push!(members, _vi_skolem(key, ctx, bindings))
         end
-        if join_gates !== nothing && !_vi_join_ok(join_gates, bindings)
-            return
-        end
-        push!(members, _vi_skolem(key, ctx, bindings))
-    end)
+    )
     return Relational.distinct(members)
 end
 
@@ -1019,7 +1143,7 @@ end
 const _VI_CLASS_CONST = 0
 const _VI_CLASS_DISCRETE = 1
 const _VI_CLASS_CONTINUOUS = 2
-const _VI_NO_OVERRIDES = Dict{String,Int}()
+const _VI_NO_OVERRIDES = Dict{String, Int}()
 
 """
     _vi_seed_map(model::Model) -> Dict{String,Int}
@@ -1041,14 +1165,26 @@ CONTINUOUS would stop a state-free observed folding at bind — which is exactly
 what this build-time value-invention pass relies on — while seeding it CONST
 (the 0.x shortcut) would fold a value that reads a live state.
 """
-function _vi_seed_map(model::Model)::Dict{String,Int}
-    seeds = Dict{String,Int}()
-    for n in ode_states(model);          seeds[n] = _VI_CLASS_CONTINUOUS; end
-    for n in algebraic_unknowns(model);  seeds[n] = _VI_CLASS_CONTINUOUS; end
-    for n in brownian_parameters(model); seeds[n] = _VI_CLASS_CONTINUOUS; end
-    for n in discrete_parameters(model); seeds[n] = _VI_CLASS_DISCRETE;   end
-    for n in sampled_parameters(model);  seeds[n] = _VI_CLASS_CONST;      end
-    for n in constant_parameters(model); seeds[n] = _VI_CLASS_CONST;      end
+function _vi_seed_map(model::Model)::Dict{String, Int}
+    seeds = Dict{String, Int}()
+    for n in ode_states(model)
+        seeds[n] = _VI_CLASS_CONTINUOUS
+    end
+    for n in algebraic_unknowns(model)
+        seeds[n] = _VI_CLASS_CONTINUOUS
+    end
+    for n in brownian_parameters(model)
+        seeds[n] = _VI_CLASS_CONTINUOUS
+    end
+    for n in discrete_parameters(model)
+        seeds[n] = _VI_CLASS_DISCRETE
+    end
+    for n in sampled_parameters(model)
+        seeds[n] = _VI_CLASS_CONST
+    end
+    for n in constant_parameters(model)
+        seeds[n] = _VI_CLASS_CONST
+    end
     # Observed unknowns resolve through their defining equations, memoised, with
     # a cycle guard (a cycle is a defect; it seeds CONTINUOUS, the conservative
     # answer, and the acyclicity guard reports it).
@@ -1074,9 +1210,11 @@ function _vi_seed_map(model::Model)::Dict{String,Int}
     return seeds
 end
 
-function _vi_seed_class(name::AbstractString,
-                        seeds::Dict{String,Int},
-                        overrides::Dict{String,Int})
+function _vi_seed_class(
+        name::AbstractString,
+        seeds::Dict{String, Int},
+        overrides::Dict{String, Int}
+    )
     name == "t" && return _VI_CLASS_CONTINUOUS   # the independent variable
     cls = get(overrides, name, nothing)
     cls === nothing || return cls                # re-typed VI map buffer (§6.1)
@@ -1087,8 +1225,10 @@ end
 
 # Derive a typed expression's cadence class: max over the generated child walk
 # (`foreach_child`, expression.jl — every expression-bearing `OpExpr` field).
-function _vi_class(expr::ASTExpr, seeds::Dict{String,Int},
-                   overrides::Dict{String,Int})::Int
+function _vi_class(
+        expr::ASTExpr, seeds::Dict{String, Int},
+        overrides::Dict{String, Int}
+    )::Int
     expr isa VarExpr && return _vi_seed_class(expr.name, seeds, overrides)
     expr isa OpExpr || return _VI_CLASS_CONST    # IntExpr / NumExpr literals
     cls = _VI_CLASS_CONST
@@ -1105,8 +1245,8 @@ end
 # table) so the §5.7 guard 2 below classifies a producer/arg-witness that joins
 # on it correctly (a CONST-derived bin map passes; a genuinely state-dependent
 # one keeps its declared seed and still classifies CONTINUOUS → reject).
-function _vi_map_class_overrides(model::Model, maps, seeds::Dict{String,Int})
-    overrides = Dict{String,Int}()
+function _vi_map_class_overrides(model::Model, maps, seeds::Dict{String, Int})
+    overrides = Dict{String, Int}()
     for (vname, node) in maps
         haskey(model.variables, vname) || continue
         body = node.expr_body
@@ -1128,9 +1268,13 @@ function _vi_oplus_fn(spelling::AbstractString)
     spelling == "*"   && return *
     spelling == "max" && return max
     spelling == "min" && return min
-    throw(TreeWalkError("E_TREEWALK_VI_SEMIRING",
-        "grouped value-invention reduction ⊕='$spelling' is unsupported; expected one of " *
-        "+, *, max, min (a numeric semiring — not the index-set-producing bool_and_or)"))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_SEMIRING",
+            "grouped value-invention reduction ⊕='$spelling' is unsupported; expected one of " *
+                "+, *, max, min (a numeric semiring — not the index-set-producing bool_and_or)"
+        )
+    )
 end
 
 # §5.7 guard 2 for grouped / derived buffers: a build-time reduction may read only
@@ -1142,11 +1286,14 @@ function _vi_assert_buildtime(ctx::_ViCtx, vname, node, vi_var_names)
     for r in _vi_index_targets!(Set{String}(), node)
         r in vi_var_names && continue            # an already-materialised VI buffer
         haskey(ctx.const_arrays, r) && continue  # a build-time const-array factor
-        get(ctx.seeds, r, _VI_CLASS_CONST) == _VI_CLASS_CONTINUOUS && throw(TreeWalkError(
-            "E_TREEWALK_VI_CONTINUOUS",
-            "grouped/derived value-invention buffer '$vname' reads live state '$r' — a " *
-            "build-time reduction's inputs must be CONST/DISCRETE factors or materialised " *
-            "buffers (RFC §5.7 guard 2)"))
+        get(ctx.seeds, r, _VI_CLASS_CONST) == _VI_CLASS_CONTINUOUS && throw(
+            TreeWalkError(
+                "E_TREEWALK_VI_CONTINUOUS",
+                "grouped/derived value-invention buffer '$vname' reads live state '$r' — a " *
+                    "build-time reduction's inputs must be CONST/DISCRETE factors or materialised " *
+                    "buffers (RFC §5.7 guard 2)"
+            )
+        )
     end
     return
 end
@@ -1160,18 +1307,34 @@ end
 # the front-door calls it (it was a library helper only). Empty groups fold to 0̄.
 function _vi_materialize_grouped!(ctx::_ViCtx, vname::AbstractString, node::OpExpr)
     output_idx = node.output_idx === nothing ? Any[] : node.output_idx
-    length(output_idx) == 1 || throw(TreeWalkError("E_TREEWALK_VI_GROUP",
-        "grouped value-invention aggregate '$vname' must have a single output index; got $(output_idx)"))
+    length(output_idx) == 1 || throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_GROUP",
+            "grouped value-invention aggregate '$vname' must have a single output index; got $(output_idx)"
+        )
+    )
     gsym = String(output_idx[1])
     ranges = _vi_ranges(node)
-    haskey(ranges, gsym) || throw(TreeWalkError("E_TREEWALK_VI_GROUP",
-        "grouped aggregate '$vname' output index '$gsym' is not among its `ranges`"))
+    haskey(ranges, gsym) || throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_GROUP",
+            "grouped aggregate '$vname' output index '$gsym' is not among its `ranges`"
+        )
+    )
     body = node.expr_body
-    body === nothing && throw(TreeWalkError("E_TREEWALK_VI_GROUP",
-        "grouped aggregate '$vname' has no `expr` body"))
+    body === nothing && throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_GROUP",
+            "grouped aggregate '$vname' has no `expr` body"
+        )
+    )
     join = node.join
-    join === nothing && throw(TreeWalkError("E_TREEWALK_VI_GROUP",
-        "grouped aggregate '$vname' needs a `join` pairing its group-key buffer with '$gsym'"))
+    join === nothing && throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_GROUP",
+            "grouped aggregate '$vname' needs a `join` pairing its group-key buffer with '$gsym'"
+        )
+    )
     # The group KEY buffer: the join column (paired with the output index `gsym`)
     # that names a materialised VI buffer (`assign`). It is read at the contraction
     # symbol that ranges over its 1-D index set.
@@ -1184,21 +1347,29 @@ function _vi_materialize_grouped!(ctx::_ViCtx, vname::AbstractString, node::OpEx
             a == gsym && haskey(ctx.maps, b) && (keyvar = b)
         end
     end
-    keyvar === nothing && throw(TreeWalkError("E_TREEWALK_VI_GROUP",
-        "grouped aggregate '$vname' `join` must pair a materialised value-invention " *
-        "buffer with the output index '$gsym'"))
+    keyvar === nothing && throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_GROUP",
+            "grouped aggregate '$vname' `join` must pair a materialised value-invention " *
+                "buffer with the output index '$gsym'"
+        )
+    )
     keysym = _vi_join_index_sym(keyvar, ranges, ctx)
     oplus_str, zerobar = _aggregate_oplus_identity(node.semiring, node.reduce)
     op = _vi_oplus_fn(oplus_str)
     # Contraction ranges: every range symbol except the output index.
-    contract = Dict{String,Any}(s => spec for (s, spec) in ranges if s != gsym)
-    rows = Tuple{Any,Float64}[]
-    _vi_enumerate(contract, ctx, bindings -> push!(rows,
-        (ctx.maps[keyvar][bindings[keysym]], Float64(_vi_eval(body, ctx, bindings)))))
-    agg = Dict{Any,Any}(Relational.group_aggregate(rows; key=first, value=last, op=op))
+    contract = Dict{String, Any}(s => spec for (s, spec) in ranges if s != gsym)
+    rows = Tuple{Any, Float64}[]
+    _vi_enumerate(
+        contract, ctx, bindings -> push!(
+            rows,
+            (ctx.maps[keyvar][bindings[keysym]], Float64(_vi_eval(body, ctx, bindings)))
+        )
+    )
+    agg = Dict{Any, Any}(Relational.group_aggregate(rows; key = first, value = last, op = op))
     # Densify over the output index set; a generator with no assigned point is 0̄.
-    out = Dict{Any,Any}()
-    for g in _vi_range_values(ranges[gsym], ctx, Dict{String,Any}())
+    out = Dict{Any, Any}()
+    for g in _vi_range_values(ranges[gsym], ctx, Dict{String, Any}())
         out[g] = Float64(get(agg, g, zerobar))
     end
     ctx.maps[vname] = out
@@ -1210,16 +1381,28 @@ end
 # materialised buffers (resolved by `_vi_index` from `ctx.maps`).
 function _vi_materialize_derived!(ctx::_ViCtx, vname::AbstractString, node::OpExpr)
     output_idx = node.output_idx === nothing ? Any[] : node.output_idx
-    length(output_idx) == 1 || throw(TreeWalkError("E_TREEWALK_VI_DERIVED",
-        "derived value-invention aggregate '$vname' must have a single output index; got $(output_idx)"))
+    length(output_idx) == 1 || throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_DERIVED",
+            "derived value-invention aggregate '$vname' must have a single output index; got $(output_idx)"
+        )
+    )
     gsym = String(output_idx[1])
     ranges = _vi_ranges(node)
     body = node.expr_body
-    body === nothing && throw(TreeWalkError("E_TREEWALK_VI_DERIVED",
-        "derived value-invention aggregate '$vname' has no `expr` body"))
-    out = Dict{Any,Any}()
-    _vi_enumerate(ranges, ctx, bindings -> (out[bindings[gsym]] =
-        Float64(_vi_eval(body, ctx, bindings))))
+    body === nothing && throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_DERIVED",
+            "derived value-invention aggregate '$vname' has no `expr` body"
+        )
+    )
+    out = Dict{Any, Any}()
+    _vi_enumerate(
+        ranges, ctx, bindings -> (
+            out[bindings[gsym]] =
+                Float64(_vi_eval(body, ctx, bindings))
+        )
+    )
     ctx.maps[vname] = out
     return out
 end
@@ -1258,20 +1441,24 @@ the keys are computed from); `params` supplies scalar parameter overrides. A
 producer (or arg-witness assignment) that classifies CONTINUOUS — or a grouped /
 derived buffer reading live state — is rejected (§5.7 guard 2).
 """
-function materialize_value_invention(model::Model, index_sets::AbstractDict,
-                                     const_arrays::AbstractDict,
-                                     params::AbstractDict)
+function materialize_value_invention(
+        model::Model, index_sets::AbstractDict,
+        const_arrays::AbstractDict,
+        params::AbstractDict
+    )
     det = _vi_detect(model)
-    extents = Dict{String,Int}()
-    members = Dict{String,Vector{Any}}()
-    assignments = Dict{String,Vector{Int}}()
-    map_sets = Dict{String,String}()
-    groups = Dict{String,Vector{Float64}}()
-    det.has_vi || return (extents=extents, members=members, assignments=assignments,
-                          groups=groups, vi_var_names=det.vi_var_names,
-                          maps=Dict{String,Dict{Any,Any}}(), map_sets=map_sets)
+    extents = Dict{String, Int}()
+    members = Dict{String, Vector{Any}}()
+    assignments = Dict{String, Vector{Int}}()
+    map_sets = Dict{String, String}()
+    groups = Dict{String, Vector{Float64}}()
+    det.has_vi || return (
+        extents = extents, members = members, assignments = assignments,
+        groups = groups, vi_var_names = det.vi_var_names,
+        maps = Dict{String, Dict{Any, Any}}(), map_sets = map_sets,
+    )
 
-    ca = Dict{String,Any}(String(k) => v for (k, v) in const_arrays)
+    ca = Dict{String, Any}(String(k) => v for (k, v) in const_arrays)
     # A ragged range binds its members through keyed factors named by BARE name;
     # a const-backed factor may be registered under its in-scope (flattened) name.
     for (bare, scoped) in _ragged_factor_scope(index_sets, model.variables)
@@ -1279,11 +1466,12 @@ function materialize_value_invention(model::Model, index_sets::AbstractDict,
     end
     ctx = _ViCtx(
         ca,
-        Dict{String,Float64}(String(k) => Float64(v) for (k, v) in params),
-        Dict{String,IndexSet}(String(k) => v for (k, v) in index_sets),
+        Dict{String, Float64}(String(k) => Float64(v) for (k, v) in params),
+        Dict{String, IndexSet}(String(k) => v for (k, v) in index_sets),
         model.variables,
-        Dict{String,Dict{Any,Any}}(),
-        _vi_seed_map(model))
+        Dict{String, Dict{Any, Any}}(),
+        _vi_seed_map(model)
+    )
 
     # Cadence class overrides for the §5.7 guard-2 checks below (see
     # `_vi_map_class_overrides`): each value-invention MAP var re-seeds to its
@@ -1302,9 +1490,13 @@ function materialize_value_invention(model::Model, index_sets::AbstractDict,
         body = node.expr_body
         (body isa OpExpr && body.op in _VI_ARGWITNESS_OPS) || continue
         _vi_class(node, ctx.seeds, overrides) == _VI_CLASS_CONTINUOUS &&
-            throw(TreeWalkError("E_TREEWALK_VI_CONTINUOUS",
+            throw(
+            TreeWalkError(
+                "E_TREEWALK_VI_CONTINUOUS",
                 "arg-witness map '$vname' classifies CONTINUOUS — a build-time assignment " *
-                "buffer's inputs must be CONST/DISCRETE (RFC §5.7 guard 2)"))
+                    "buffer's inputs must be CONST/DISCRETE (RFC §5.7 guard 2)"
+            )
+        )
     end
 
     # Maps first (a producer's join/key — or an arg-witness `join` — may reference them).
@@ -1338,14 +1530,14 @@ function materialize_value_invention(model::Model, index_sets::AbstractDict,
     for (vname, node, kind) in det.chain
         _vi_assert_buildtime(ctx, vname, node, det.vi_var_names)
         kind == :grouped ? _vi_materialize_grouped!(ctx, vname, node) :
-                           _vi_materialize_derived!(ctx, vname, node)
+            _vi_materialize_derived!(ctx, vname, node)
         m = ctx.maps[vname]
         groups[vname] = Float64[Float64(m[k]) for k in sort!(collect(keys(m)))]
     end
 
     # `from_faq` id → derived index-set name (so we only materialise producers a
     # derived set actually names; geometry producers are handled elsewhere).
-    faq_to_set = Dict{String,String}()
+    faq_to_set = Dict{String, String}()
     for (sname, is) in ctx.index_sets
         is.kind == "derived" || continue
         is.from_faq === nothing || (faq_to_set[String(is.from_faq)] = String(sname))
@@ -1353,31 +1545,45 @@ function materialize_value_invention(model::Model, index_sets::AbstractDict,
 
     for (_, node) in det.producers
         id = node.id
-        id === nothing && throw(TreeWalkError("E_TREEWALK_VI_PRODUCER",
-            "value-invention producer aggregate requires an `id` naming it for `from_faq`"))
+        id === nothing && throw(
+            TreeWalkError(
+                "E_TREEWALK_VI_PRODUCER",
+                "value-invention producer aggregate requires an `id` naming it for `from_faq`"
+            )
+        )
         id = String(id)
         haskey(faq_to_set, id) || continue   # no derived set names this producer
         # §5.7 guard 2: a relational node may not run on the hot path. The code is
         # the one structural validation reports for the same document.
         _vi_class(node, ctx.seeds, overrides) == _VI_CLASS_CONTINUOUS &&
-            throw(TreeWalkError("relational_node_in_continuous",
+            throw(
+            TreeWalkError(
+                "relational_node_in_continuous",
                 "value-invention producer '$id' classifies CONTINUOUS — it may not run per " *
-                "step (RFC §5.7 guard 2); its inputs must be CONST/DISCRETE"))
+                    "step (RFC §5.7 guard 2); its inputs must be CONST/DISCRETE"
+            )
+        )
         # Any other failure leaves the derived set with no members to count, so it
         # is refused under the set's name rather than surfaced as an engine detail.
         mem = try
             _vi_materialize_producer(ctx, node)
         catch err
             err isa TreeWalkError || rethrow()
-            throw(TreeWalkError("derived_index_set_unmaterialized",
-                "derived index set '$(faq_to_set[id])' (from_faq '$id') cannot be " *
-                "materialized: $(err.code): $(err.detail)"))
+            throw(
+                TreeWalkError(
+                    "derived_index_set_unmaterialized",
+                    "derived index set '$(faq_to_set[id])' (from_faq '$id') cannot be " *
+                        "materialized: $(err.code): $(err.detail)"
+                )
+            )
         end
         members[id] = mem
         extents[id] = length(mem)
     end
 
-    return (extents=extents, members=members, assignments=assignments,
-            groups=groups, vi_var_names=det.vi_var_names,
-            maps=ctx.maps, map_sets=map_sets)
+    return (
+        extents = extents, members = members, assignments = assignments,
+        groups = groups, vi_var_names = det.vi_var_names,
+        maps = ctx.maps, map_sets = map_sets,
+    )
 end

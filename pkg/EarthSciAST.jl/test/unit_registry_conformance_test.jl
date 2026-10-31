@@ -42,7 +42,8 @@ _ur_read(rel) = JSON.parsefile(joinpath(_UR_TESTS, rel))
             # the affine units too: it is what a scale agreement is decided on
             # (esm-spec §4.8.1), so it is what the five registries must share.
             @test EarthSciAST.exact_ratio_string(
-                EarthSciAST._exact_scale(u) / EarthSciAST._exact_scale(c)) ==
+                EarthSciAST._exact_scale(u) / EarthSciAST._exact_scale(c)
+            ) ==
                 String(entry["scale_exact"])
             scale = entry["scale_to_canonical"]
             # `null` is exactly the affine units, whose offset §4.8.1
@@ -50,7 +51,7 @@ _ur_read(rel) = JSON.parsefile(joinpath(_UR_TESTS, rel))
             # not a physically meaningful conversion.
             scale === nothing && continue
             got = Float64(Unitful.ustrip(Unitful.uconvert(c, 1.0 * u)))
-            @test isapprox(got, Float64(scale); rtol = 1e-12)
+            @test isapprox(got, Float64(scale); rtol = 1.0e-12)
         end
     end
 

@@ -82,15 +82,17 @@ const COMPILER_ARG = let c = ""
     end
     c
 end
-let env = joinpath(@__DIR__, COMPILER_ARG == "mtk" ? "compiler_agreement_mtk_env" :
-                             COMPILER_ARG == "xla" ? "compiler_agreement_reactant_env" :
-                             "compiler_agreement_env"),
-    manifest = joinpath(env, "Manifest.toml")
+let env = joinpath(
+        @__DIR__, COMPILER_ARG == "mtk" ? "compiler_agreement_mtk_env" :
+            COMPILER_ARG == "xla" ? "compiler_agreement_reactant_env" :
+            "compiler_agreement_env"
+    ),
+        manifest = joinpath(env, "Manifest.toml")
     bootstrap() = begin
-        Pkg.activate(env; io=devnull)
+        Pkg.activate(env; io = devnull)
         isfile(manifest) ||
-            Pkg.develop(path=normpath(joinpath(@__DIR__, "..")); io=devnull)
-        Pkg.instantiate(; io=devnull)
+            Pkg.develop(path = normpath(joinpath(@__DIR__, "..")); io = devnull)
+        Pkg.instantiate(; io = devnull)
     end
     try
         bootstrap()
@@ -101,7 +103,7 @@ let env = joinpath(@__DIR__, COMPILER_ARG == "mtk" ? "compiler_agreement_mtk_env
         # writes the Manifest here — EarthSciAST is already in the Project's
         # [deps], so the tracked Project.toml is not touched.
         @warn "$(basename(env)) did not instantiate; rebuilding Manifest.toml" exception = (err, catch_backtrace())
-        rm(manifest; force=true)
+        rm(manifest; force = true)
         bootstrap()
     end
 end
@@ -149,7 +151,7 @@ function load_compiler_runtime(compiler)
             @eval import Reactant
         catch err
             @warn "Reactant could not be loaded; esm_problem will report " *
-                  "compiler=:xla unavailable" exception = (err, catch_backtrace())
+                "compiler=:xla unavailable" exception = (err, catch_backtrace())
         end
     end
     return nothing
@@ -175,9 +177,11 @@ function parse_args(args)
     output === nothing && error("--output is required")
     compiler === nothing && error("--compiler is required")
     compiler in COMPILER_VOCABULARY ||
-        error("--compiler must be one of " * join(COMPILER_VOCABULARY, ", ") *
-              ", got '$compiler'")
-    (manifest, output, compiler)
+        error(
+        "--compiler must be one of " * join(COMPILER_VOCABULARY, ", ") *
+            ", got '$compiler'"
+    )
+    return (manifest, output, compiler)
 end
 
 # Manifest `path` is relative to the repository's `tests/` directory: walk up
@@ -196,6 +200,7 @@ function tests_root(manifest_path)
         parent == cur && return dir
         cur = parent
     end
+    return
 end
 
 # The save-time key: a plain float string. The runner canonicalizes both sides
@@ -211,7 +216,7 @@ tkey(t) = string(float(t))
 # source of truth for its own run and the save times are the named test's
 # ASSERTION TIMES. Save times are never the adapter's to choose.
 
-_float_map(obj) = Dict{String,Any}(String(k) => v for (k, v) in pairs(obj))
+_float_map(obj) = Dict{String, Any}(String(k) => v for (k, v) in pairs(obj))
 
 function inline_test(doc, fx)
     model = get(get(doc, :models, Dict()), Symbol(String(fx.model)), nothing)
@@ -230,16 +235,22 @@ function fixture_run(doc, fx)
     if String(tr.from) == "manifest"
         span = (Float64(tr.tspan[1]), Float64(tr.tspan[2]))
         saveat = Float64[Float64(t) for t in tr.saveat]
-        return (span, _float_map(tr.initial_conditions),
-                _float_map(get(tr, :parameter_overrides, Dict())), saveat)
+        return (
+            span, _float_map(tr.initial_conditions),
+            _float_map(get(tr, :parameter_overrides, Dict())), saveat,
+        )
     end
     t = inline_test(doc, fx)
     span = (Float64(t.time_span.start), Float64(t.time_span[Symbol("end")]))
     times = sort!(unique!(Float64[Float64(a.time) for a in get(t, :assertions, ())]))
-    isempty(times) && error("inline test $(String(tr.test_id)) has no timed " *
-                            "assertions, so it defines no save times")
-    return (span, _float_map(get(t, :initial_conditions, Dict())),
-            _float_map(get(t, :parameter_overrides, Dict())), times)
+    isempty(times) && error(
+        "inline test $(String(tr.test_id)) has no timed " *
+            "assertions, so it defines no save times"
+    )
+    return (
+        span, _float_map(get(t, :initial_conditions, Dict())),
+        _float_map(get(t, :parameter_overrides, Dict())), times,
+    )
 end
 
 # The flattened system's parameter and state names, or `nothing` when the
@@ -249,8 +260,10 @@ end
 function flattened_names(path)
     try
         flat = flatten(load_path(path))
-        return union(Set{String}(String(n) for n in keys(flat.parameters)),
-                     Set{String}(String(n) for n in keys(flat.state_variables)))
+        return union(
+            Set{String}(String(n) for n in keys(flat.parameters)),
+            Set{String}(String(n) for n in keys(flat.state_variables))
+        )
     catch
         return nothing
     end
@@ -268,7 +281,7 @@ end
 # way.
 function scope_to_model(overrides, known, mname)
     (isempty(overrides) || known === nothing) && return overrides
-    out = Dict{String,Any}()
+    out = Dict{String, Any}()
     for (k, v) in overrides
         q = string(mname, ".", k)
         out[q in known ? q : k] = v
@@ -291,7 +304,7 @@ end
 # bare names unambiguous: two mounted components each declaring a `u` would
 # collide the moment the namespace came off.
 function model_slots(var_map, mname)
-    out = Tuple{Int,String}[]
+    out = Tuple{Int, String}[]
     prefix = mname * "."
     for (name, idx) in var_map
         s = String(name)
@@ -356,7 +369,7 @@ function time_index(times, t)
         d = abs(times[i] - t)
         d < bestd && (bestd = d; best = i)
     end
-    best
+    return best
 end
 
 function fixture_trajectory(fx, base, compiler)
@@ -369,8 +382,9 @@ function fixture_trajectory(fx, base, compiler)
     named = [String(n) for n in get(fx.trajectory, :observed, ())]
     isempty(named) || error(
         "fixture $(String(fx.id)) names observed fields $(join(named, ", ")), and " *
-        "this adapter reads state rows only; add an output-time observed reader " *
-        "here before that fixture can be gated")
+            "this adapter reads state rows only; add an output-time observed reader " *
+            "here before that fixture can be gated"
+    )
 
     path = joinpath(base, String(fx.path))
     doc = JSON3.read(read(path, String))
@@ -381,26 +395,34 @@ function fixture_trajectory(fx, base, compiler)
     abstol = Float64(integ.abstol)
 
     known = flattened_names(path)
-    prob = esm_problem(path, span;
-                       u0 = scope_to_model(ics, known, mname),
-                       p = scope_to_model(pover, known, mname),
-                       compiler = Symbol(compiler))
+    prob = esm_problem(
+        path, span;
+        u0 = scope_to_model(ics, known, mname),
+        p = scope_to_model(pover, known, mname),
+        compiler = Symbol(compiler)
+    )
     slots = model_slots(prob.var_map, mname)
 
-    sol = SciMLBase.solve(prob, solver_alg(doc);
-                          reltol = reltol, abstol = abstol, saveat = saveat)
+    sol = SciMLBase.solve(
+        prob, solver_alg(doc);
+        reltol = reltol, abstol = abstol, saveat = saveat
+    )
     SciMLBase.successful_retcode(sol) || error("solve failed: retcode $(sol.retcode)")
 
-    state = Dict{String,Any}()
+    state = Dict{String, Any}()
     for t in saveat
         ti = time_index(sol.t, t)
-        state[tkey(t)] = Dict{String,Float64}(name => Float64(sol.u[ti][idx])
-                                              for (idx, name) in slots)
+        state[tkey(t)] = Dict{String, Float64}(
+            name => Float64(sol.u[ti][idx])
+                for (idx, name) in slots
+        )
     end
 
-    return Dict("state_order" => [name for (_, name) in slots],
-                "state" => state,
-                "observed" => Dict{String,Any}())
+    return Dict(
+        "state_order" => [name for (_, name) in slots],
+        "state" => state,
+        "observed" => Dict{String, Any}()
+    )
 end
 
 # The refusal's `rule` and `reason`, off the message `_refuse_rule` builds:
@@ -419,7 +441,7 @@ function main()
     manifest = JSON3.read(read(manifest_path, String))
     base = tests_root(manifest_path)
 
-    fixtures = Dict{String,Any}()
+    fixtures = Dict{String, Any}()
     failed = false
     unavailable = nothing
     for fx in manifest.fixtures
@@ -428,7 +450,7 @@ function main()
             fixtures[id] = fixture_trajectory(fx, base, compiler)
         catch err
             if err isa SimulateError &&
-               err.code == ERROR_CODES.COMPILER_UNAVAILABLE
+                    err.code == ERROR_CODES.COMPILER_UNAVAILABLE
                 # A fact about the BINDING, not about a document, so it becomes
                 # the whole output and the remaining fixtures are not attempted:
                 # each would raise the identical error, and a per-fixture answer
@@ -436,22 +458,30 @@ function main()
                 unavailable = err.msg
                 break
             elseif err isa TreeWalkError &&
-                   err.code == ERROR_CODES.COMPILER_REFUSED_RULE
+                    err.code == ERROR_CODES.COMPILER_REFUSED_RULE
                 rule, reason = refusal_parts(err.detail)
-                fixtures[id] = Dict("status" => "refused",
-                                    "rule" => rule, "reason" => reason)
+                fixtures[id] = Dict(
+                    "status" => "refused",
+                    "rule" => rule, "reason" => reason
+                )
             else
                 failed = true
-                fixtures[id] = Dict("error" => string(typeof(err), ": ",
-                                                      sprint(showerror, err)))
+                fixtures[id] = Dict(
+                    "error" => string(
+                        typeof(err), ": ",
+                        sprint(showerror, err)
+                    )
+                )
             end
         end
     end
 
     payload = unavailable === nothing ?
         Dict("binding" => BINDING, "compiler" => compiler, "fixtures" => fixtures) :
-        Dict("binding" => BINDING, "compiler" => compiler,
-             "status" => "unavailable", "reason" => unavailable)
+        Dict(
+            "binding" => BINDING, "compiler" => compiler,
+            "status" => "unavailable", "reason" => unavailable
+        )
     open(output_path, "w") do io
         JSON3.write(io, payload)
     end
@@ -459,7 +489,7 @@ function main()
     # one fixture errored" (README, Adapter contract). A REFUSAL is not an error:
     # it is the documented outcome of the hard-error policy, and the runner
     # decides from the fixture's `required` map whether it fails the gate.
-    failed && exit(1)
+    return failed && exit(1)
 end
 
 load_compiler_runtime(COMPILER_ARG)

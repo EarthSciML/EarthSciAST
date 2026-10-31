@@ -19,54 +19,77 @@ const ESM = EarthSciAST
 # Build the model under affine and per-cell, binding `buf` by reference. Returns
 # a Dict tag → (f!, u0, p, diag).
 function _pg_build_both(model, ics, buf)
-    out = Dict{Symbol,Any}()
+    out = Dict{Symbol, Any}()
     for (tag, compiler) in ((:aff, :native), (:ref, :interpreter))
-        f!, u0, p, _t, _vm, diag = ESM._build_evaluator_impl(model;
-            initial_conditions=ics, param_arrays=Dict("forcing" => buf),
-            compiler=compiler)
+        f!, u0, p, _t, _vm, diag = ESM._build_evaluator_impl(
+            model;
+            initial_conditions = ics, param_arrays = Dict("forcing" => buf),
+            compiler = compiler
+        )
         out[tag] = (f!, u0, p, diag)
     end
-    out
+    return out
 end
 function _pg_eval(t)
     f!, u0, p, _ = t
-    du = zero(u0); f!(du, u0, p, 0.0); du
+    du = zero(u0); f!(du, u0, p, 0.0)
+    return du
 end
 
 # D(u[i]) = forcing[i]  — pure forcing, one box, isolates _AccForcingBox.
 function _pg_pure_model(N)
     vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
-    ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                  _ao1(_idx("forcing", _v("i")), "i", 1, N))])
+    return ESM.Model(
+        vars, [
+            ESM.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, N),
+                _ao1(_idx("forcing", _v("i")), "i", 1, N)
+            ),
+        ]
+    )
 end
 
 # D(u[i]) = forcing[i] + (u[i-1] − 2u[i] + u[i+1]) — lane-affine forcing summed
 # with a Laplacian, so every box (interior + 2 boundary) carries a forcing leaf.
 function _pg_1d_model(N)
     vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
-    lap = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
-                   _op("*", _n(-2.0), _idx("u", _v("i"))),
-                   _idx("u", _op("+", _v("i"), _i(1))))
-    ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                  _ao1(_op("+", _idx("forcing", _v("i")), lap), "i", 1, N))])
+    lap = _op(
+        "+", _idx("u", _op("-", _v("i"), _i(1))),
+        _op("*", _n(-2.0), _idx("u", _v("i"))),
+        _idx("u", _op("+", _v("i"), _i(1)))
+    )
+    return ESM.Model(
+        vars, [
+            ESM.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, N),
+                _ao1(_op("+", _idx("forcing", _v("i")), lap), "i", 1, N)
+            ),
+        ]
+    )
 end
 
 # D(u[i,j]) = forcing[i,j] + 5-point Laplacian — exercises 2-D forcing strides
 # (s1=1, s2=N) alongside the multi-dim box structure.
 function _pg_2d_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape=["i", "j"]))
-    lap = _op("+",
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape = ["i", "j"]))
+    lap = _op(
+        "+",
         _idx("u", _op("-", _v("i"), _i(1)), _v("j")),
         _op("*", _n(-4.0), _idx("u", _v("i"), _v("j"))),
         _idx("u", _op("+", _v("i"), _i(1)), _v("j")),
         _idx("u", _v("i"), _op("-", _v("j"), _i(1))),
-        _idx("u", _v("i"), _op("+", _v("j"), _i(1))))
+        _idx("u", _v("i"), _op("+", _v("j"), _i(1)))
+    )
     body = _op("+", _idx("forcing", _v("i"), _v("j")), lap)
-    lhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
-        expr_body=_Didx("u", _v("i"), _v("j")), ranges=Dict("i" => [1, N], "j" => [1, N]))
-    rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
-        expr_body=body, ranges=Dict("i" => [1, N], "j" => [1, N]))
-    ESM.Model(vars, [ESM.Equation(lhs, rhs)])
+    lhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i", "j"],
+        expr_body = _Didx("u", _v("i"), _v("j")), ranges = Dict("i" => [1, N], "j" => [1, N])
+    )
+    rhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i", "j"],
+        expr_body = body, ranges = Dict("i" => [1, N], "j" => [1, N])
+    )
+    return ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 end
 
 @testset "affine live-forcing pgather ≡ per-cell (differential, ess-affine)" begin
@@ -115,7 +138,7 @@ end
         @test b[:aff][4].n_acc_kernels >= 1
         @test b[:aff][4].n_vec_kernels == 0
         @test du_a == du_r
-        buf .= Float64[-1.0 + 0.05i*j for i in 1:N, j in 1:N]   # in-place refresh
+        buf .= Float64[-1.0 + 0.05i * j for i in 1:N, j in 1:N]   # in-place refresh
         du_a2 = _pg_eval(b[:aff]); du_r2 = _pg_eval(b[:ref])
         @test du_a2 == du_r2
         @test du_a2 != du_a

@@ -31,7 +31,7 @@ struct HandLoop
     row!::Function       # (du, u, t, st, r) -> nothing
 end
 
-const HAND_LOOPS = Dict{String,HandLoop}()
+const HAND_LOOPS = Dict{String, HandLoop}()
 
 function hand_serial!(row!::F, du, u, t, st) where {F}
     for r in 1:st.nrows
@@ -45,7 +45,7 @@ end
 # would then see two array types where the serial loop sees one, and dispatch
 # dynamically in its innermost loop. Capturing one struct instead hands the
 # workers the same arrays the serial loop reads.
-struct _RowArgs{F,D,U,T,S}
+struct _RowArgs{F, D, U, T, S}
     row!::F
     du::D
     u::U
@@ -84,8 +84,10 @@ function _block_offset(vm, name, dims)
     S = _slots(vm, name, dims)
     o = S[1] - 1
     for (c, s) in enumerate(S)
-        s == o + c || error("$name is not one contiguous column-major block in the state " *
-                            "vector, which this hand loop assumes")
+        s == o + c || error(
+            "$name is not one contiguous column-major block in the state " *
+                "vector, which this hand loop assumes"
+        )
     end
     return o
 end
@@ -131,9 +133,9 @@ end
     acc = ip + im
     @inbounds begin
         for (P, op, M, om) in outer
-            acc = (acc + P[op+i]) + M[om+i]
+            acc = (acc + P[op + i]) + M[om + i]
         end
-        du[b+i] = kappa * (acc - c * u[b+i])
+        du[b + i] = kappa * (acc - c * u[b + i])
     end
     return nothing
 end
@@ -142,15 +144,15 @@ end
 @inline function _stencil_inner!(du, u, b, s, lo, hi, kappa, c, outer)
     @inbounds begin
         if lo == 1
-            _stencil_cell!(du, u, b, 1, s > 1 ? u[b+2] : Z, Z, kappa, c, outer)
+            _stencil_cell!(du, u, b, 1, s > 1 ? u[b + 2] : Z, Z, kappa, c, outer)
             lo = 2
         end
         if hi == s && s > 1
-            _stencil_cell!(du, u, b, s, Z, u[b+s-1], kappa, c, outer)
+            _stencil_cell!(du, u, b, s, Z, u[b + s - 1], kappa, c, outer)
             hi = s - 1
         end
         for i in lo:hi
-            _stencil_cell!(du, u, b, i, u[b+i+1], u[b+i-1], kappa, c, outer)
+            _stencil_cell!(du, u, b, i, u[b + i + 1], u[b + i - 1], kappa, c, outer)
         end
     end
     return nothing
@@ -158,14 +160,14 @@ end
 
 @inline function _st1_row!(du, u, t, st, r)
     (; o, s, kappa, c) = st
-    _stencil_inner!(du, u, o, s, (r - 1) * _BLOCK + 1, min(r * _BLOCK, s), kappa, c, ())
+    return _stencil_inner!(du, u, o, s, (r - 1) * _BLOCK + 1, min(r * _BLOCK, s), kappa, c, ())
 end
 
 @inline function _st2_row!(du, u, t, st, r)
     (; o, s, kappa, c, zrow) = st
     j = r
     b = o + (j - 1) * s
-    _stencil_inner!(du, u, b, s, 1, s, kappa, c, (_nbrows(u, zrow, b, s, j < s, j > 1),))
+    return _stencil_inner!(du, u, b, s, 1, s, kappa, c, (_nbrows(u, zrow, b, s, j < s, j > 1),))
 end
 
 @inline function _st3_row!(du, u, t, st, r)
@@ -174,9 +176,12 @@ end
     s2 = s * s
     for j in 1:s
         b = o + (j - 1) * s + (k - 1) * s2
-        _stencil_inner!(du, u, b, s, 1, s, kappa, c,
-                        (_nbrows(u, zrow, b, s, j < s, j > 1), _nbrows(u, zrow, b, s2, k < s, k > 1)))
+        _stencil_inner!(
+            du, u, b, s, 1, s, kappa, c,
+            (_nbrows(u, zrow, b, s, j < s, j > 1), _nbrows(u, zrow, b, s2, k < s, k > 1))
+        )
     end
+    return
 end
 
 @inline function _st4_row!(du, u, t, st, r)
@@ -186,10 +191,15 @@ end
     s3 = s2 * s
     for k in 1:s, j in 1:s
         b = o + (j - 1) * s + (k - 1) * s2 + (l - 1) * s3
-        _stencil_inner!(du, u, b, s, 1, s, kappa, c,
-                        (_nbrows(u, zrow, b, s, j < s, j > 1), _nbrows(u, zrow, b, s2, k < s, k > 1),
-                         _nbrows(u, zrow, b, s3, l < s, l > 1)))
+        _stencil_inner!(
+            du, u, b, s, 1, s, kappa, c,
+            (
+                _nbrows(u, zrow, b, s, j < s, j > 1), _nbrows(u, zrow, b, s2, k < s, k > 1),
+                _nbrows(u, zrow, b, s3, l < s, l > 1),
+            )
+        )
     end
+    return
 end
 
 HAND_LOOPS["stencil_1d"] = HandLoop(_stencil_setup(1), _st1_row!)
@@ -212,8 +222,10 @@ HAND_LOOPS["stencil_4d"] = HandLoop(_stencil_setup(4), _st4_row!)
 @inline _tr_c2(fm, fp) = 0.5 * (fp - fm)
 @inline _tr_c7(fs, fs1, fs2) = 1.5 * (fs - fs1) - 0.5 * (fs1 - fs2)
 @inline function _tr_int(m2, m1, c, p1, p2)
-    return ((0.6666666666666666 * (p1 - m1) + -0.08333333333333333 * (p2 - m2)) +
-            0.05 * (min(p1, c) - max(m1, c))) + 0.025 * (min(p2, p1) - max(m2, m1))
+    return (
+        (0.6666666666666666 * (p1 - m1) + -0.08333333333333333 * (p2 - m2)) +
+            0.05 * (min(p1, c) - max(m1, c))
+    ) + 0.025 * (min(p2, p1) - max(m2, m1))
 end
 
 function _transport_setup(prob, doc, entry)
@@ -225,13 +237,13 @@ end
 # du[b+i] = Dx at (i, j, k) for the row whose cell i is slot b + i.
 @inline function _tr_dx!(du, u, b, s)
     @inbounds begin
-        du[b+1] = _tr_c1(u[b+1], u[b+2], u[b+3])
-        du[b+2] = _tr_c2(u[b+1], u[b+3])
-        for i in 3:s-2
-            du[b+i] = _tr_int(u[b+i-2], u[b+i-1], u[b+i], u[b+i+1], u[b+i+2])
+        du[b + 1] = _tr_c1(u[b + 1], u[b + 2], u[b + 3])
+        du[b + 2] = _tr_c2(u[b + 1], u[b + 3])
+        for i in 3:(s - 2)
+            du[b + i] = _tr_int(u[b + i - 2], u[b + i - 1], u[b + i], u[b + i + 1], u[b + i + 2])
         end
-        du[b+s-1] = _tr_c2(u[b+s-2], u[b+s])
-        du[b+s] = _tr_c7(u[b+s], u[b+s-1], u[b+s-2])
+        du[b + s - 1] = _tr_c2(u[b + s - 2], u[b + s])
+        du[b + s] = _tr_c7(u[b + s], u[b + s - 1], u[b + s - 2])
     end
     return nothing
 end
@@ -242,19 +254,19 @@ end
         f0 = b - (n - 1) * st            # f(m) is u[f0 + (m-1)*st + i]
         if n == 1
             for i in 1:s
-                du[b+i] += _tr_c1(u[f0+i], u[f0+st+i], u[f0+2st+i])
+                du[b + i] += _tr_c1(u[f0 + i], u[f0 + st + i], u[f0 + 2st + i])
             end
         elseif n == 2 || n == s - 1
             for i in 1:s
-                du[b+i] += _tr_c2(u[b-st+i], u[b+st+i])
+                du[b + i] += _tr_c2(u[b - st + i], u[b + st + i])
             end
         elseif n == s
             for i in 1:s
-                du[b+i] += _tr_c7(u[b+i], u[b-st+i], u[b-2st+i])
+                du[b + i] += _tr_c7(u[b + i], u[b - st + i], u[b - 2st + i])
             end
         else
             for i in 1:s
-                du[b+i] += _tr_int(u[b-2st+i], u[b-st+i], u[b+i], u[b+st+i], u[b+2st+i])
+                du[b + i] += _tr_int(u[b - 2st + i], u[b - st + i], u[b + i], u[b + st + i], u[b + 2st + i])
             end
         end
     end
@@ -271,7 +283,7 @@ end
         _tr_add!(du, u, b, s, s, j)
         _tr_add!(du, u, b, s, s2, k)
         for i in 1:s
-            du[b+i] = -du[b+i]
+            du[b + i] = -du[b + i]
         end
     end
     return nothing
@@ -284,11 +296,15 @@ HAND_LOOPS["transport_3d"] = HandLoop(_transport_setup, _tr_row!)
 # families
 # ---------------------------------------------------------------------------
 
-const POLLU_SPECIES = ("NO2", "NO", "O3P", "O3", "HO2", "OH", "CH2O", "CO", "ALD", "MEO2",
-                       "C2O3", "CO2", "PAN", "CH3O", "HNO3", "O1D", "SO2", "SO4", "NO3", "N2O5")
-const POLLU_RATES = ("jNO2_O3P", "k2", "k3", "jH2COa", "jH2COb", "k6", "jALD", "k8", "k9", "k10",
-                     "jPAN", "k12", "k13", "k14", "k15", "jO3_O1D", "jO3_O3P", "k18", "k19", "k20",
-                     "jNO3_NO", "jNO3_NO2", "k23", "k24", "jN2O5")
+const POLLU_SPECIES = (
+    "NO2", "NO", "O3P", "O3", "HO2", "OH", "CH2O", "CO", "ALD", "MEO2",
+    "C2O3", "CO2", "PAN", "CH3O", "HNO3", "O1D", "SO2", "SO4", "NO3", "N2O5",
+)
+const POLLU_RATES = (
+    "jNO2_O3P", "k2", "k3", "jH2COa", "jH2COb", "k6", "jALD", "k8", "k9", "k10",
+    "jPAN", "k12", "k13", "k14", "k15", "jO3_O1D", "jO3_O3P", "k18", "k19", "k20",
+    "jNO3_NO", "jNO3_NO2", "k23", "k24", "jN2O5",
+)
 
 _pollu_rates(p, prefix) = ntuple(r -> _param(p, prefix * POLLU_RATES[r]), Val(25))
 
@@ -321,26 +337,28 @@ _pollu_rates(p, prefix) = ntuple(r -> _param(p, prefix * POLLU_RATES[r]), Val(25
     r23 = k[23] * NO2 * O3
     r24 = k[24] * NO3 * NO2
     r25 = k[25] * N2O5
-    return (-r1 + r2 + r3 + r9 - r10 + r11 + r12 - r14 + r22 - r23 - r24 + r25,   # NO2
-            r1 - r2 - r3 - r9 - r12 + r21,                                    # NO
-            r1 - r15 + r17 + r19 + r22,                                       # O3P
-            -r2 + r15 - r16 - r17 - r23,                                      # O3
-            -r3 + 2 * r4 + r6 + r7 + r13 + r20,                               # HO2
-            r3 - r6 - r8 - r14 + 2 * r18 - r20,                               # OH
-            -r4 - r5 - r6 + r13,                                              # CH2O
-            r4 + r5 + r6 + r7,                                                # CO
-            -r7 - r8,                                                         # ALD
-            r7 + r9 - r12,                                                    # MEO2
-            r8 - r9 - r10 + r11,                                              # C2O3
-            r9,                                                               # CO2
-            r10 - r11,                                                        # PAN
-            r12 - r13,                                                        # CH3O
-            r14,                                                              # HNO3
-            r16 - r18 - r19,                                                  # O1D
-            -r20,                                                             # SO2
-            r20,                                                              # SO4
-            -r21 - r22 + r23 - r24 + r25,                                     # NO3
-            r24 - r25)                                                        # N2O5
+    return (
+        -r1 + r2 + r3 + r9 - r10 + r11 + r12 - r14 + r22 - r23 - r24 + r25,   # NO2
+        r1 - r2 - r3 - r9 - r12 + r21,                                    # NO
+        r1 - r15 + r17 + r19 + r22,                                       # O3P
+        -r2 + r15 - r16 - r17 - r23,                                      # O3
+        -r3 + 2 * r4 + r6 + r7 + r13 + r20,                               # HO2
+        r3 - r6 - r8 - r14 + 2 * r18 - r20,                               # OH
+        -r4 - r5 - r6 + r13,                                              # CH2O
+        r4 + r5 + r6 + r7,                                                # CO
+        -r7 - r8,                                                         # ALD
+        r7 + r9 - r12,                                                    # MEO2
+        r8 - r9 - r10 + r11,                                              # C2O3
+        r9,                                                               # CO2
+        r10 - r11,                                                        # PAN
+        r12 - r13,                                                        # CH3O
+        r14,                                                              # HNO3
+        r16 - r18 - r19,                                                  # O1D
+        -r20,                                                             # SO2
+        r20,                                                              # SO4
+        -r21 - r22 + r23 - r24 + r25,                                     # NO3
+        r24 - r25,
+    )                                                        # N2O5
 end
 
 # Chemistry on a lon x lat grid plus -u_wind * grad_lon(species): centred in
@@ -362,13 +380,13 @@ end
     (; nlon, offs, k, uw, dx) = st
     o = offs[q] + b
     @inbounds begin
-        du[o+1] = _pollu(ntuple(s -> u[offs[s]+b+1], Val(20)), k)[q] + -uw * ((u[o+2] - u[o+1]) / dx)
-        for i in 2:nlon-1
-            dc = _pollu(ntuple(s -> u[offs[s]+b+i], Val(20)), k)[q]
-            du[o+i] = dc + -uw * ((u[o+i+1] - u[o+i-1]) / (2 * dx))
+        du[o + 1] = _pollu(ntuple(s -> u[offs[s] + b + 1], Val(20)), k)[q] + -uw * ((u[o + 2] - u[o + 1]) / dx)
+        for i in 2:(nlon - 1)
+            dc = _pollu(ntuple(s -> u[offs[s] + b + i], Val(20)), k)[q]
+            du[o + i] = dc + -uw * ((u[o + i + 1] - u[o + i - 1]) / (2 * dx))
         end
-        du[o+nlon] = _pollu(ntuple(s -> u[offs[s]+b+nlon], Val(20)), k)[q] +
-                     -uw * ((u[o+nlon] - u[o+nlon-1]) / dx)
+        du[o + nlon] = _pollu(ntuple(s -> u[offs[s] + b + nlon], Val(20)), k)[q] +
+            -uw * ((u[o + nlon] - u[o + nlon - 1]) / dx)
     end
     return nothing
 end
@@ -426,8 +444,8 @@ end
     (; o, n, dz) = st
     acc = 0.0
     @inbounds for i in 1:n
-        acc += u[o+i] * dz[i]
-        du[o+i] = -0.001 * acc
+        acc += u[o + i] * dz[i]
+        du[o + i] = -0.001 * acc
     end
     return nothing
 end
@@ -461,10 +479,10 @@ end
     acc = 0.0
     @inbounds begin
         for j in 1:n
-            acc += KT[j, i] * u[oe+j]
+            acc += KT[j, i] * u[oe + j]
         end
-        du[oc+i] = acc
-        du[oe+i] = -kd * u[oe+i]
+        du[oc + i] = acc
+        du[oe + i] = -kd * u[oe + i]
     end
     return nothing
 end
@@ -503,7 +521,7 @@ function _regrid_setup(prob, doc, entry)
     atol = _param(p, "Regrid.atol")
     kd = _param(p, "Regrid.kd")
     bin(r) = (floor(r[1] / bdx), floor(r[3] / bdy))
-    bysrc = Dict{Tuple{Float64,Float64},Vector{Int}}()
+    bysrc = Dict{Tuple{Float64, Float64}, Vector{Int}}()
     for (i, r) in enumerate(src)
         push!(get!(bysrc, bin(r), Int[]), i)
     end
@@ -536,11 +554,11 @@ end
     j = r
     acc = 0.0
     @inbounds begin
-        for q in rowptr[j]:(rowptr[j+1]-1)
-            acc += wts[q] * u[os+cols[q]]
+        for q in rowptr[j]:(rowptr[j + 1] - 1)
+            acc += wts[q] * u[os + cols[q]]
         end
-        du[ot+j] = acc - u[ot+j]
-        du[os+j] = -kd * u[os+j]
+        du[ot + j] = acc - u[ot + j]
+        du[os + j] = -kd * u[os + j]
     end
     return nothing
 end
@@ -568,13 +586,13 @@ end
 
 @inline function _gather_row!(du, u, t, st, r)
     (; m, o, nbr, kappa) = st
-    @inbounds for c in ((r-1)*_BLOCK+1):min(r * _BLOCK, m)
-        uc = u[o+c]
-        acc = kappa * (u[o+nbr[1, c]] - uc)
-        acc += kappa * (u[o+nbr[2, c]] - uc)
-        acc += kappa * (u[o+nbr[3, c]] - uc)
-        acc += kappa * (u[o+nbr[4, c]] - uc)
-        du[o+c] = acc
+    @inbounds for c in ((r - 1) * _BLOCK + 1):min(r * _BLOCK, m)
+        uc = u[o + c]
+        acc = kappa * (u[o + nbr[1, c]] - uc)
+        acc += kappa * (u[o + nbr[2, c]] - uc)
+        acc += kappa * (u[o + nbr[3, c]] - uc)
+        acc += kappa * (u[o + nbr[4, c]] - uc)
+        du[o + c] = acc
     end
     return nothing
 end
@@ -609,9 +627,9 @@ end
 
 @inline function _gidx_row!(du, u, t, st, r)
     (; n, o, cls, rate, emis) = st
-    @inbounds for i in ((r-1)*_BLOCK+1):min(r * _BLOCK, n)
+    @inbounds for i in ((r - 1) * _BLOCK + 1):min(r * _BLOCK, n)
         c = cls[i]
-        du[o+i] = -rate[c] * u[o+i] + emis[c]
+        du[o + i] = -rate[c] * u[o + i] + emis[c]
     end
     return nothing
 end
@@ -635,19 +653,19 @@ end
 
 @inline function _csearch_row!(du, u, t, st, r)
     (; nc, nl, o, cnt, sel) = st
-    qs = ((r-1)*_BLOCK+1):min(r * _BLOCK, nc)
+    qs = ((r - 1) * _BLOCK + 1):min(r * _BLOCK, nc)
     @inbounds begin
         for q in qs
             cnt[q] = 0.0
         end
         for l in 1:nl, q in qs
-            cnt[q] += ifelse(u[o+q+(l-1)*nc] > 1.0, 1.0, 0.0)
+            cnt[q] += ifelse(u[o + q + (l - 1) * nc] > 1.0, 1.0, 0.0)
         end
         for q in qs
-            sel[q] = u[o+q+(Int(max(1.0, cnt[q]))-1)*nc]
+            sel[q] = u[o + q + (Int(max(1.0, cnt[q])) - 1) * nc]
         end
         for l in 1:nl, q in qs
-            du[o+q+(l-1)*nc] = -0.1 * u[o+q+(l-1)*nc] + 0.01 * sel[q]
+            du[o + q + (l - 1) * nc] = -0.1 * u[o + q + (l - 1) * nc] + 0.01 * sel[q]
         end
     end
     return nothing
@@ -671,16 +689,16 @@ end
 
 @inline function _csum_row!(du, u, t, st, r)
     (; nc, nl, o, acc) = st
-    qs = ((r-1)*_BLOCK+1):min(r * _BLOCK, nc)
+    qs = ((r - 1) * _BLOCK + 1):min(r * _BLOCK, nc)
     @inbounds begin
         for q in qs
             acc[q] = 0.0
         end
         for l in 1:nl, q in qs
-            acc[q] += u[o+q+(l-1)*nc]
+            acc[q] += u[o + q + (l - 1) * nc]
         end
         for l in 1:nl, q in qs
-            du[o+q+(l-1)*nc] = -0.1 * u[o+q+(l-1)*nc] + 0.001 * acc[q]
+            du[o + q + (l - 1) * nc] = -0.1 * u[o + q + (l - 1) * nc] + 0.001 * acc[q]
         end
     end
     return nothing
@@ -718,8 +736,8 @@ end
 
 @inline function _join_row!(du, u, t, st, r)
     (; n, o, agg) = st
-    @inbounds for i in ((r-1)*_BLOCK+1):min(r * _BLOCK, n)
-        du[o+i] = -0.1 * u[o+i] + 0.001 * agg[i]
+    @inbounds for i in ((r - 1) * _BLOCK + 1):min(r * _BLOCK, n)
+        du[o + i] = -0.1 * u[o + i] + 0.001 * agg[i]
     end
     return nothing
 end
@@ -746,7 +764,7 @@ end
 
 @inline function _mscan_row!(du, u, t, st, r)
     (; nc, nl, o, dz, acc) = st
-    qs = ((r-1)*_BLOCK+1):min(r * _BLOCK, nc)
+    qs = ((r - 1) * _BLOCK + 1):min(r * _BLOCK, nc)
     @inbounds begin
         for q in qs
             acc[q] = 0.0
@@ -776,7 +794,7 @@ HAND_LOOPS["makearray_scan"] = HandLoop(_mscan_setup, _mscan_row!)
 
 @inline function _sscan_row!(du, u, t, st, r)
     (; nc, nl, o, dz, acc) = st
-    qs = ((r-1)*_BLOCK+1):min(r * _BLOCK, nc)
+    qs = ((r - 1) * _BLOCK + 1):min(r * _BLOCK, nc)
     @inbounds begin
         for q in qs
             acc[q] = 0.0
@@ -817,7 +835,7 @@ function _ragged_setup(prob, doc, entry)
         for k in 1:Int(counts[c])
             push!(nbr, Int32(tbl[c][k]))
         end
-        start[c+1] = length(nbr) + 1
+        start[c + 1] = length(nbr) + 1
     end
     kappa = _param(prob.p, "Mesh.kappa")
     return (; m, o, start, nbr, kappa, nrows = cld(m, _BLOCK))
@@ -825,13 +843,13 @@ end
 
 @inline function _ragged_row!(du, u, t, st, r)
     (; m, o, start, nbr, kappa) = st
-    @inbounds for c in ((r-1)*_BLOCK+1):min(r * _BLOCK, m)
-        uc = u[o+c]
+    @inbounds for c in ((r - 1) * _BLOCK + 1):min(r * _BLOCK, m)
+        uc = u[o + c]
         acc = 0.0
-        for e in start[c]:(start[c+1]-1)
-            acc += kappa * (uc - u[o+nbr[e]])
+        for e in start[c]:(start[c + 1] - 1)
+            acc += kappa * (uc - u[o + nbr[e]])
         end
-        du[o+c] = -acc
+        du[o + c] = -acc
     end
     return nothing
 end
@@ -858,13 +876,13 @@ end
     (; n, ou, oj, kd) = st
     i = r
     @inbounds begin
-        ui = u[ou+i]
+        ui = u[ou + i]
         acc = 0.0
         for j in 1:n
-            acc += ((0.001 * (i + 2j)) * u[ou+j]) * ui
+            acc += ((0.001 * (i + 2j)) * u[ou + j]) * ui
         end
-        du[oj+i] = acc
-        du[ou+i] = -kd * ui
+        du[oj + i] = acc
+        du[ou + i] = -kd * ui
     end
     return nothing
 end

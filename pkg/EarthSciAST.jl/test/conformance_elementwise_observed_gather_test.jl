@@ -31,9 +31,11 @@ import OrdinaryDiffEqTsit5
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
 const _EOG_REPO_ROOT = TESTUTILS_REPO_ROOT
-const _EOG_CAT_DIR   = joinpath(_EOG_REPO_ROOT, "tests", "conformance",
-                                "elementwise_observed_gather")
-const _EOG_MANIFEST  = joinpath(_EOG_CAT_DIR, "manifest.json")
+const _EOG_CAT_DIR = joinpath(
+    _EOG_REPO_ROOT, "tests", "conformance",
+    "elementwise_observed_gather"
+)
+const _EOG_MANIFEST = joinpath(_EOG_CAT_DIR, "manifest.json")
 
 @testset "Conformance: elementwise_observed_gather (manifest-driven)" begin
     @test isfile(_EOG_MANIFEST)
@@ -49,12 +51,12 @@ const _EOG_MANIFEST  = joinpath(_EOG_CAT_DIR, "manifest.json")
     atol = Float64(manifest.tolerances.assertion_atol)
 
     # actual-by-assertion-index, per fixture, for the cross-spelling check below.
-    actuals = Dict{String,Dict{Int,Float64}}()
+    actuals = Dict{String, Dict{Int, Float64}}()
 
     for fixture in manifest.fixtures
         id = String(fixture.id)
         @testset "$(id)" begin
-            esm_path    = joinpath(_EOG_CAT_DIR, String(fixture.path))
+            esm_path = joinpath(_EOG_CAT_DIR, String(fixture.path))
             golden_path = joinpath(_EOG_CAT_DIR, String(fixture.golden))
             @test isfile(esm_path)
             @test isfile(golden_path)
@@ -62,23 +64,25 @@ const _EOG_MANIFEST  = joinpath(_EOG_CAT_DIR, "manifest.json")
             golden = JSON3.read(read(golden_path, String))
             @test String(golden.reference_binding) == "julia"
 
-            results = run_inline_tests(esm_path; model_name=String(fixture.model),
-                                    alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                    reltol=1e-12, abstol=1e-14)
+            results = run_inline_tests(
+                esm_path; model_name = String(fixture.model),
+                alg = OrdinaryDiffEqTsit5.Tsit5(),
+                reltol = 1.0e-12, abstol = 1.0e-14
+            )
             @test length(results) == length(golden.assertions)
 
             # Gate each assertion against BOTH the golden actual (the
             # cross-binding anchor) and the fixture's own declared `expected`
             # (author intent), and require pass=true.
             by_idx = Dict(r.assertion_idx => r for r in results)
-            mine = Dict{Int,Float64}()
+            mine = Dict{Int, Float64}()
             for g in golden.assertions
                 gi = Int(g.assertion_idx)
                 @test haskey(by_idx, gi)
                 r = by_idx[gi]
                 @test r.passed
                 @test r.actual !== nothing
-                @test isapprox(r.actual, Float64(g.actual); rtol=rtol, atol=atol)
+                @test isapprox(r.actual, Float64(g.actual); rtol = rtol, atol = atol)
                 mine[gi] = Float64(r.actual)
             end
             actuals[id] = mine
@@ -92,7 +96,7 @@ const _EOG_MANIFEST  = joinpath(_EOG_CAT_DIR, "manifest.json")
         if ew !== nothing && ex !== nothing
             @test sort(collect(keys(ew))) == sort(collect(keys(ex)))
             for k in keys(ew)
-                @test isapprox(ew[k], ex[k]; rtol=rtol, atol=atol)
+                @test isapprox(ew[k], ex[k]; rtol = rtol, atol = atol)
             end
         end
     end

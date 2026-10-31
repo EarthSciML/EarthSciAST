@@ -30,9 +30,11 @@ import OrdinaryDiffEqTsit5
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
 const _ICPO_REPO_ROOT = TESTUTILS_REPO_ROOT
-const _ICPO_CAT_DIR   = joinpath(_ICPO_REPO_ROOT, "tests", "conformance",
-                                 "pde_inline_ic_param_override")
-const _ICPO_MANIFEST  = joinpath(_ICPO_CAT_DIR, "manifest.json")
+const _ICPO_CAT_DIR = joinpath(
+    _ICPO_REPO_ROOT, "tests", "conformance",
+    "pde_inline_ic_param_override"
+)
+const _ICPO_MANIFEST = joinpath(_ICPO_CAT_DIR, "manifest.json")
 
 @testset "Conformance: pde_inline_ic_param_override (manifest-driven)" begin
     @test isfile(_ICPO_MANIFEST)
@@ -49,7 +51,7 @@ const _ICPO_MANIFEST  = joinpath(_ICPO_CAT_DIR, "manifest.json")
     for fixture in manifest.fixtures
         id = String(fixture.id)
         @testset "$(id)" begin
-            esm_path    = joinpath(_ICPO_CAT_DIR, String(fixture.path))
+            esm_path = joinpath(_ICPO_CAT_DIR, String(fixture.path))
             golden_path = joinpath(_ICPO_CAT_DIR, String(fixture.golden))
             @test isfile(esm_path)
             @test isfile(golden_path)
@@ -64,10 +66,12 @@ const _ICPO_MANIFEST  = joinpath(_ICPO_CAT_DIR, "manifest.json")
             # override scope against a committed golden, so it is measured under
             # the reference evaluator, as CONFORMANCE_SPEC §5.44 has every
             # non-compiler conformance stage pin.
-            results = run_inline_tests(esm_path; model_name=String(fixture.model),
-                                    alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                    reltol=1e-12, abstol=1e-14,
-                                    compiler=:interpreter)
+            results = run_inline_tests(
+                esm_path; model_name = String(fixture.model),
+                alg = OrdinaryDiffEqTsit5.Tsit5(),
+                reltol = 1.0e-12, abstol = 1.0e-14,
+                compiler = :interpreter
+            )
             @test length(results) == length(golden.assertions)
 
             # Index by (test_id, assertion_idx) — this category has THREE tests
@@ -81,7 +85,7 @@ const _ICPO_MANIFEST  = joinpath(_ICPO_CAT_DIR, "manifest.json")
                 r = by_key[key]
                 @test r.passed
                 @test r.actual !== nothing
-                @test isapprox(r.actual, Float64(g.actual); rtol=rtol, atol=atol)
+                @test isapprox(r.actual, Float64(g.actual); rtol = rtol, atol = atol)
             end
         end
     end
@@ -96,11 +100,15 @@ end
     for (spelling, key) in (("local", "A"), ("qualified", "M.A"))
         @testset "$(spelling) override key" begin
             insp = EarthSciAST.BuildInspection()
-            sim = solve(EarthSciAST.esm_problem(esm_path, (0.0, 1.0); inspect=insp,
-                                       p=Dict(key => 0.0),
-                                       compiler=:interpreter),
-                                       OrdinaryDiffEqTsit5.Tsit5();
-                                       saveat=[0.0])
+            sim = solve(
+                EarthSciAST.esm_problem(
+                    esm_path, (0.0, 1.0); inspect = insp,
+                    p = Dict(key => 0.0),
+                    compiler = :interpreter
+                ),
+                OrdinaryDiffEqTsit5.Tsit5();
+                saveat = [0.0]
+            )
             @test SciMLBase.successful_retcode(sim)
             # The build resolved the parameter to the OVERRIDE, not the 1.0
             # default, whichever spelling the caller used.
@@ -120,7 +128,10 @@ end
     # nothing happens, and the run measures the configuration they thought they
     # had switched off while still reporting a verdict. Rust already raised
     # `InvalidParameter` here; Julia and Python now match it.
-    @test_throws ArgumentError solve(EarthSciAST.esm_problem(
-        esm_path, (0.0, 1.0); compiler=:interpreter,
-        p=Dict("not_a_param" => 7.0)), OrdinaryDiffEqTsit5.Tsit5(); saveat=[0.0])
+    @test_throws ArgumentError solve(
+        EarthSciAST.esm_problem(
+            esm_path, (0.0, 1.0); compiler = :interpreter,
+            p = Dict("not_a_param" => 7.0)
+        ), OrdinaryDiffEqTsit5.Tsit5(); saveat = [0.0]
+    )
 end

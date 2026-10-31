@@ -25,9 +25,9 @@ const ESM_Expr = EarthSciAST.ASTExpr
             (0.0, "0.0"),
             (-0.0, "-0.0"),
             (2.5, "2.5"),
-            (1e25, "1e25"),
-            (5e-324, "5e-324"),
-            (1e-7, "1e-7"),
+            (1.0e25, "1e25"),
+            (5.0e-324, "5e-324"),
+            (1.0e-7, "1e-7"),
         ]
         for (v, want) in cases
             @test format_canonical_float(v) == want
@@ -50,11 +50,13 @@ const ESM_Expr = EarthSciAST.ASTExpr
     end
 
     @testset "§5.4.8 worked example" begin
-        e = op("+", Any[
-            op("*", Any["a", 0]),
-            "b",
-            op("+", Any["a", 1]),
-        ])
+        e = op(
+            "+", Any[
+                op("*", Any["a", 0]),
+                "b",
+                op("+", Any["a", 1]),
+            ]
+        )
         @test canonical_json(e) == "{\"args\":[1,\"a\",\"b\"],\"op\":\"+\"}"
     end
 
@@ -97,15 +99,17 @@ const ESM_Expr = EarthSciAST.ASTExpr
 
     @testset "canonicalize preserves ALL OpExpr fields (reconstruct-backed)" begin
         E = EarthSciAST
-        agg = OpExpr("faq", ESM_Expr[];
-            semiring="sum_product", output_idx=Any[],
-            ranges=Dict{String,Any}("i" => E.IndexSetRef("cells")),
-            expr_body=OpExpr("*", ESM_Expr[VarExpr("A"), VarExpr("F")]),
-            join=Any[[("a", "b")]],
-            filter=OpExpr(">", ESM_Expr[VarExpr("A"), NumExpr(0.0)]),
-            id="prod", manifold="planar", distinct=true, key=VarExpr("k"),
-            table="tbl", table_axes=Dict{String,ESM_Expr}("code" => VarExpr("fm")),
-            output=2)
+        agg = OpExpr(
+            "faq", ESM_Expr[];
+            semiring = "sum_product", output_idx = Any[],
+            ranges = Dict{String, Any}("i" => E.IndexSetRef("cells")),
+            expr_body = OpExpr("*", ESM_Expr[VarExpr("A"), VarExpr("F")]),
+            join = Any[[("a", "b")]],
+            filter = OpExpr(">", ESM_Expr[VarExpr("A"), NumExpr(0.0)]),
+            id = "prod", manifold = "planar", distinct = true, key = VarExpr("k"),
+            table = "tbl", table_axes = Dict{String, ESM_Expr}("code" => VarExpr("fm")),
+            output = 2
+        )
         c = canonicalize(agg)
         # Previously ~11 of these were silently dropped by a hand-listed rebuild.
         @test c.semiring == "sum_product"
@@ -118,10 +122,12 @@ const ESM_Expr = EarthSciAST.ASTExpr
 
     @testset "canonical_json refuses out-of-encoding nodes (no ambiguous bytes)" begin
         E = EarthSciAST
-        mkagg(body) = OpExpr("faq", ESM_Expr[];
-            output_idx=Any[],
-            ranges=Dict{String,Any}("i" => E.IndexSetRef("cells")),
-            expr_body=body)
+        mkagg(body) = OpExpr(
+            "faq", ESM_Expr[];
+            output_idx = Any[],
+            ranges = Dict{String, Any}("i" => E.IndexSetRef("cells")),
+            expr_body = body
+        )
         a1 = mkagg(VarExpr("x"))
         a2 = mkagg(VarExpr("y"))
         # Regression: with only op/args emitted, a1 and a2 (differing only in
@@ -148,14 +154,14 @@ const ESM_Expr = EarthSciAST.ASTExpr
         @test err.code == "E_CANONICAL_UNSUPPORTED_FIELD"
 
         # Emissible field set is untouched: wrt/dim/fn/name/value still emit.
-        d = OpExpr("D", ESM_Expr[VarExpr("u")]; wrt="t")
+        d = OpExpr("D", ESM_Expr[VarExpr("u")]; wrt = "t")
         @test canonical_json(d) == "{\"args\":[\"u\"],\"op\":\"D\",\"wrt\":\"t\"}"
-        bc = OpExpr("bc", ESM_Expr[VarExpr("u")]; fn="dirichlet", dim="x")
+        bc = OpExpr("bc", ESM_Expr[VarExpr("u")]; fn = "dirichlet", dim = "x")
         @test occursin("\"fn\":\"dirichlet\"", canonical_json(bc))
     end
 
     @testset "E_CANONICAL_BAD_CONST for unsupported const value types" begin
-        n = OpExpr("const", EarthSciAST.ASTExpr[]; value=Dict("a" => 1))
+        n = OpExpr("const", EarthSciAST.ASTExpr[]; value = Dict("a" => 1))
         err = try
             canonical_json(n)
             nothing
@@ -165,7 +171,7 @@ const ESM_Expr = EarthSciAST.ASTExpr
         @test err isa CanonicalizeError
         @test err.code == "E_CANONICAL_BAD_CONST"
         # supported payloads still emit canonically
-        okv = OpExpr("const", EarthSciAST.ASTExpr[]; value=Any[1, 2.5])
+        okv = OpExpr("const", EarthSciAST.ASTExpr[]; value = Any[1, 2.5])
         @test canonical_json(okv) == "{\"args\":[],\"op\":\"const\",\"value\":[1,2.5]}"
     end
 
@@ -174,12 +180,12 @@ const ESM_Expr = EarthSciAST.ASTExpr
         # Julia storage. `[1, 2.5]` is a Vector{Float64} — the integral 1.0
         # must still emit as the integer token `1` (mirroring JSON3's numeric
         # narrowing and the Rust/Python emitters for integer-token sources).
-        fv = OpExpr("const", EarthSciAST.ASTExpr[]; value=[1, 2.5])
+        fv = OpExpr("const", EarthSciAST.ASTExpr[]; value = [1, 2.5])
         @test canonical_json(fv) == "{\"args\":[],\"op\":\"const\",\"value\":[1,2.5]}"
         # -0.0 narrows to 0 (JSON3.read("-0.0") == Int64 0); out-of-Int64-range
         # integral floats keep the RFC float layout; AST NumExpr literals keep
         # the trailing-.0 disambiguation (§5.4.6) — narrowing is const-data-only.
-        edge = OpExpr("const", EarthSciAST.ASTExpr[]; value=Any[-0.0, 1.0e21])
+        edge = OpExpr("const", EarthSciAST.ASTExpr[]; value = Any[-0.0, 1.0e21])
         @test canonical_json(edge) == "{\"args\":[],\"op\":\"const\",\"value\":[0,1e21]}"
         @test canonical_json(NumExpr(1.0)) == "1.0"
     end

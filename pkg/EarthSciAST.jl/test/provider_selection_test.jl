@@ -15,7 +15,7 @@ using Test
 using EarthSciAST
 using EarthSciIO
 using EarthSciIO: Cache, LocalStore, ZarrReader, CSVReader, const_provider,
-                  materialize, cache_key, supports_selection
+    materialize, cache_key, supports_selection
 import Blosc
 import JSON
 using SHA: sha256
@@ -27,12 +27,16 @@ _corder(a::AbstractVector) = collect(a)
 _corder(a::AbstractArray) = vec(permutedims(a, reverse(1:ndims(a))))
 
 function _z_zarray(shape, chunks, dtype)
-    d = Dict("zarr_format" => 2, "shape" => collect(shape), "chunks" => collect(chunks),
-             "dtype" => dtype,
-             "compressor" => Dict("id" => "blosc", "cname" => "lz4", "clevel" => 5,
-                                  "shuffle" => 1, "blocksize" => 0),
-             "fill_value" => 0.0, "order" => "C", "filters" => nothing,
-             "dimension_separator" => nothing)
+    d = Dict(
+        "zarr_format" => 2, "shape" => collect(shape), "chunks" => collect(chunks),
+        "dtype" => dtype,
+        "compressor" => Dict(
+            "id" => "blosc", "cname" => "lz4", "clevel" => 5,
+            "shuffle" => 1, "blocksize" => 0
+        ),
+        "fill_value" => 0.0, "order" => "C", "filters" => nothing,
+        "dimension_separator" => nothing
+    )
     return Vector{UInt8}(codeunits(JSON.json(d)))
 end
 
@@ -49,8 +53,10 @@ function _z_populate(root, objects)
         staged = EarthSciIO.staging_path(store)
         write(staged, data)
         EarthSciIO.put_blob!(store, key, staged; ext = "")
-        m = EarthSciIO.Manifest(url, nothing, nothing, bytes2hex(sha256(data)),
-                                length(data), "2026-06-26T00:00:00Z", nothing, nothing)
+        m = EarthSciIO.Manifest(
+            url, nothing, nothing, bytes2hex(sha256(data)),
+            length(data), "2026-06-26T00:00:00Z", nothing, nothing
+        )
         EarthSciIO.put_meta!(store, key, m)
     end
     return store
@@ -92,10 +98,15 @@ end
 # Build the on-disk store from SR_A: shape (3,50,4), chunks (1,10,4) -> 3x5x1 = 15
 # chunk objects. `store_ctor` wraps the freshly-populated LocalStore.
 function _sr_store(root; store_ctor = identity)
-    objs = Dict{String,Vector{UInt8}}()
+    objs = Dict{String, Vector{UInt8}}()
     objs["$ZSEL/sr/.zarray"] = _z_zarray((3, 50, 4), (1, 10, 4), "<f4")
-    objs["$ZSEL/sr/.zattrs"] = Vector{UInt8}(codeunits(JSON.json(
-        Dict("_ARRAY_DIMENSIONS" => ["layer", "source", "receptor"]))))
+    objs["$ZSEL/sr/.zattrs"] = Vector{UInt8}(
+        codeunits(
+            JSON.json(
+                Dict("_ARRAY_DIMENSIONS" => ["layer", "source", "receptor"])
+            )
+        )
+    )
     for c0 in 0:2, c1 in 0:4, c2 in 0:0
         chunk = Array{Float32}(undef, 1, 10, 4)
         for j0 in 0:0, j1 in 0:9, j2 in 0:3
@@ -107,8 +118,10 @@ function _sr_store(root; store_ctor = identity)
     return store_ctor(_z_populate(root, objs))
 end
 
-_zarr_provider(store) = const_provider(Cache(store; offline = true, verify = false),
-                                       ZSEL; format = "zarr", variables = ["sr"])
+_zarr_provider(store) = const_provider(
+    Cache(store; offline = true, verify = false),
+    ZSEL; format = "zarr", variables = ["sr"]
+)
 
 # A source with NO protocol methods — provider_supports_selection must default false.
 struct _FakeCSVSource end
@@ -136,8 +149,14 @@ struct _FakeCSVSource end
 
         # 0-based indices: layer 0 (chunk 0); sources [2,6,9,24] -> chunks {0,2};
         # receptor chunk 0.  So ONLY chunks (0,0,0) and (0,2,0), plus .zarray/.zattrs.
-        expected = Set(cache_key.(["$ZSEL/sr/.zarray", "$ZSEL/sr/.zattrs",
-                                    "$ZSEL/sr/0.0.0", "$ZSEL/sr/0.2.0"]))
+        expected = Set(
+            cache_key.(
+                [
+                    "$ZSEL/sr/.zarray", "$ZSEL/sr/.zattrs",
+                    "$ZSEL/sr/0.0.0", "$ZSEL/sr/0.2.0",
+                ]
+            )
+        )
         @test Set(store.gets) == expected
         @test length(store.gets) == 4
         # Explicitly: none of the other 13 chunk objects were fetched.

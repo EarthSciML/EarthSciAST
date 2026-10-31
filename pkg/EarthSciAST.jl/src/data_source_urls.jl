@@ -75,14 +75,17 @@ the template cannot be resolved.
 function resolve_source_url(template::AbstractString, base_dir::AbstractString)
     t = String(template)
     if occursin("\${", t)
-        throw(ExpressionTemplateError(
-            ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
-            "url template $(repr(t)) carries an unexpanded '\${...}' variable. " *
-            "esm-spec §8.2.1 does not expand environment variables into a data " *
-            "source's location: a document that reads one does not say what it " *
-            "reads, and the value is spliced into a URL that is then fetched. " *
-            "Write a path relative to this document instead (it resolves against " *
-            "the document's own directory), or symlink the data to that path."))
+        throw(
+            ExpressionTemplateError(
+                ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
+                "url template $(repr(t)) carries an unexpanded '\${...}' variable. " *
+                    "esm-spec §8.2.1 does not expand environment variables into a data " *
+                    "source's location: a document that reads one does not say what it " *
+                    "reads, and the value is spliced into a URL that is then fetched. " *
+                    "Write a path relative to this document instead (it resolves against " *
+                    "the document's own directory), or symlink the data to that path."
+            )
+        )
     end
     # Substitution-led: the author's own substitution supplies the location, so
     # there is no literal prefix to classify. §8.2 requires unrecognized
@@ -93,11 +96,14 @@ function resolve_source_url(template::AbstractString, base_dir::AbstractString)
     joined = startswith(t, "/") ? t : _absolute_url_base(base_dir) * "/" * t
     resolved = _remove_url_dot_segments(joined)
     if occursin('?', resolved) || occursin('#', resolved)
-        throw(ExpressionTemplateError(
-            ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
-            "url template $(repr(t)) resolves to $(repr(resolved)), whose '?' or " *
-            "'#' would be read as a URL query or fragment rather than as part of " *
-            "the path (esm-spec §8.2.1). Rename or relocate the file."))
+        throw(
+            ExpressionTemplateError(
+                ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
+                "url template $(repr(t)) resolves to $(repr(resolved)), whose '?' or " *
+                    "'#' would be read as a URL query or fragment rather than as part of " *
+                    "the path (esm-spec §8.2.1). Rename or relocate the file."
+            )
+        )
     end
     return "file://" * resolved
 end
@@ -111,8 +117,10 @@ A resolution failure must name the entry AND the template: "io error at
 /\${MOVES_SNAPSHOTS}/x.parquet" names neither, and a source whose location
 silently fails to resolve is indistinguishable from one that read zeros.
 """
-function _resolved_source_url(template::AbstractString, base_dir::AbstractString,
-                              where::AbstractString)
+function _resolved_source_url(
+        template::AbstractString, base_dir::AbstractString,
+        where::AbstractString
+    )
     try
         return resolve_source_url(template, base_dir)
     catch e
@@ -149,7 +157,8 @@ function _resolve_data_source_urls(raw_data, base_path::AbstractString)
         t = _raw_get(src, "url_template")
         if t isa AbstractString
             changed |= _resolved_source_url(
-                t, base_path, "data_sources.$(string(name)).source.url_template") != String(t)
+                t, base_path, "data_sources.$(string(name)).source.url_template"
+            ) != String(t)
         end
         ms = _raw_get(src, "mirrors")
         if ms !== nothing && _is_array(ms)
@@ -157,7 +166,8 @@ function _resolve_data_source_urls(raw_data, base_path::AbstractString)
                 m isa AbstractString || continue
                 changed |= _resolved_source_url(
                     m, base_path,
-                    "data_sources.$(string(name)).source.mirrors[$(i - 1)]") != String(m)
+                    "data_sources.$(string(name)).source.mirrors[$(i - 1)]"
+                ) != String(m)
             end
         end
     end
@@ -171,15 +181,19 @@ function _resolve_data_source_urls(raw_data, base_path::AbstractString)
         t = get(src, "url_template", nothing)
         if t isa AbstractString
             src["url_template"] = _resolved_source_url(
-                t, base_path, "data_sources.$(string(name)).source.url_template")
+                t, base_path, "data_sources.$(string(name)).source.url_template"
+            )
         end
         ms = get(src, "mirrors", nothing)
         if ms !== nothing && _is_array(ms)
-            src["mirrors"] = Any[m isa AbstractString ?
-                                 _resolved_source_url(
-                                     m, base_path,
-                                     "data_sources.$(string(name)).source.mirrors[$(i - 1)]") : m
-                                 for (i, m) in enumerate(ms)]
+            src["mirrors"] = Any[
+                m isa AbstractString ?
+                    _resolved_source_url(
+                        m, base_path,
+                        "data_sources.$(string(name)).source.mirrors[$(i - 1)]"
+                    ) : m
+                    for (i, m) in enumerate(ms)
+            ]
         end
     end
     return doc

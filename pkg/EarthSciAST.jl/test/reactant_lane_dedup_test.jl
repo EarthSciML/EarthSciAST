@@ -75,10 +75,13 @@ _ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
 # lowering the trace executes, so comparing against it would only say the tracer
 # agrees with itself. (The host lowering is pinned against these same cores in
 # test/interp_lanes_test.jl, without Reactant.)
-_ld_core_ref(h, xs, ys) = [ESM._interp_bilinear_core(
+_ld_core_ref(h, xs, ys) = [
+    ESM._interp_bilinear_core(
         h.specs[l].table, h.specs[l].axis_x, h.specs[l].axis_y,
         xs isa AbstractVector ? xs[l] : xs,
-        ys isa AbstractVector ? ys[l] : ys) for l in eachindex(h.specs)]
+        ys isa AbstractVector ? ys[l] : ys
+    ) for l in eachindex(h.specs)
+]
 
 @testset "traced interp lane dedup (grid-independent constants)" begin
 
@@ -87,10 +90,20 @@ _ld_core_ref(h, xs, ys) = [ESM._interp_bilinear_core(
         @test RXE !== nothing
 
         # 3 distinct columns repeated over 4 lanes each.
-        cols = [Float64[c for c in (1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0,
-                                    3.0, 3.0, 3.0, 3.0)],
-                Float64[10c for c in (1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0,
-                                      3.0, 3.0, 3.0, 3.0)]]
+        cols = [
+            Float64[
+                c for c in (
+                        1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0,
+                        3.0, 3.0, 3.0, 3.0,
+                    )
+            ],
+            Float64[
+                10c for c in (
+                        1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0,
+                        3.0, 3.0, 3.0, 3.0,
+                    )
+            ],
+        ]
         reps, gid = RXE._rx_lane_groups(cols)
         @test length(reps) == 3
         @test gid == Int64[1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3]
@@ -131,7 +144,7 @@ _ld_core_ref(h, xs, ys) = [ESM._interp_bilinear_core(
         @test length(got) == L
         # The corners are GATHERED (exact); only the blend can be reassociated,
         # so a few ULP is the honest tolerance.
-        @test all(isapprox(a, b; rtol = 1e-14) for (a, b) in zip(got, ref))
+        @test all(isapprox(a, b; rtol = 1.0e-14) for (a, b) in zip(got, ref))
         # ...and the lanes are not permuted: each band's block must differ.
         @test length(unique(round.(got; digits = 9))) > 1
     end
@@ -184,7 +197,7 @@ _ld_core_ref(h, xs, ys) = [ESM._interp_bilinear_core(
         got = Array((RX.@compile sync = true f(xr))(xr))
         @test length(got) == L
         ref = _ld_core_ref(h, xs, 1.25)
-        @test all(isapprox(a, b; rtol = 1e-14) for (a, b) in zip(got, ref))
+        @test all(isapprox(a, b; rtol = 1.0e-14) for (a, b) in zip(got, ref))
     end
 
     # ---- the lane-table-intern change's TRACED-SIDE claims, measured in HLO.
@@ -220,7 +233,8 @@ _ld_core_ref(h, xs, ys) = [ESM._interp_bilinear_core(
         ax = [5.0, 6.0, 7.25]
         band(b) = ESM._InterpBilinearSpec(
             [Float64[b + 0.01j + 0.1i for j in 0:2] for i in 0:2],
-            copy(ax), copy(ax))
+            copy(ax), copy(ax)
+        )
         specs = ESM._InterpBilinearSpec[band(Float64(1 + (l - 1) % 3)) for l in 1:21]
         h = ESM._InterpBilinearLaneSpec(specs, 1, 0, 0, 1)
         L = length(h.specs)                    # 21 lanes, D = 3 tables, 1 axis
@@ -257,8 +271,8 @@ _ld_core_ref(h, xs, ys) = [ESM._interp_bilinear_core(
         goff = ESM._with_compiler_plan(ESM._compiler_plan(:interpreter)) do
             Array((RX.@compile sync = true f(xr, yr))(xr, yr))
         end
-        @test all(isapprox(a, b; rtol = 1e-14) for (a, b) in zip(gon, ref))
-        @test all(isapprox(a, b; rtol = 1e-14) for (a, b) in zip(goff, ref))
+        @test all(isapprox(a, b; rtol = 1.0e-14) for (a, b) in zip(gon, ref))
+        @test all(isapprox(a, b; rtol = 1.0e-14) for (a, b) in zip(goff, ref))
     end
 
     # The same claims through the FRONT DOOR: a model built by
@@ -278,33 +292,62 @@ _ld_core_ref(h, xs, ys) = [ESM._interp_bilinear_core(
         ta_f = Any[Any[1.0, 2.0, 3.0], Any[4.0, 5.5, 6.0], Any[7.0, 8.0, 9.0]]
         ta_i = Any[Any[1, 2, 3], Any[4, 5.5, 6], Any[7, 8, 9]]
         tb = Any[Any[-9.0, 3.0, -1.0], Any[2.5, -4.0, 0.5], Any[-0.25, 8.0, -6.0]]
-        bil(x, tbl) = Dict{String,Any}("op" => "fn", "name" => "interp.bilinear",
-            "args" => Any[Dict{String,Any}("op" => "const", "value" => tbl),
-                          Dict{String,Any}("op" => "const", "value" => ax),
-                          Dict{String,Any}("op" => "const", "value" => ax),
-                          Dict{String,Any}("op" => "index", "args" => Any[x, "i"]),
-                          Dict{String,Any}("op" => "index", "args" => Any[x, "i"])])
-        ao(e) = Dict{String,Any}("op" => "faq", "output_idx" => Any["i"],
-            "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")),
-            "args" => Any[], "expr" => e)
-        eq(x, rhs) = Dict{String,Any}(
-            "lhs" => ao(Dict{String,Any}("op" => "D", "wrt" => "t",
-                "args" => Any[Dict{String,Any}("op" => "index",
-                                               "args" => Any[x, "i"])])),
-            "rhs" => ao(rhs))
-        st() = Dict{String,Any}("type" => "unknown", "shape" => Any["n"])
-        doc = Dict{String,Any}(
-            "esm" => "0.5.0", "metadata" => Dict{String,Any}("name" => "LD"),
-            "index_sets" => Dict{String,Any}("n" => Dict{String,Any}(
-                "kind" => "interval", "size" => N)),
-            "models" => Dict{String,Any}("M" => Dict{String,Any}(
-                "variables" => Dict{String,Any}("u" => st(), "v" => st(),
-                                                "w" => st(), "z" => st()),
-                "equations" => Any[
-                    eq("u", bil("u", ta_f)), eq("v", bil("v", ta_i)),
-                    eq("w", bil("w", tb)),
-                    eq("z", Dict{String,Any}("op" => "*",
-                        "args" => Any[2.0, bil("z", ta_f)]))])))
+        bil(x, tbl) = Dict{String, Any}(
+            "op" => "fn", "name" => "interp.bilinear",
+            "args" => Any[
+                Dict{String, Any}("op" => "const", "value" => tbl),
+                Dict{String, Any}("op" => "const", "value" => ax),
+                Dict{String, Any}("op" => "const", "value" => ax),
+                Dict{String, Any}("op" => "index", "args" => Any[x, "i"]),
+                Dict{String, Any}("op" => "index", "args" => Any[x, "i"]),
+            ]
+        )
+        ao(e) = Dict{String, Any}(
+            "op" => "faq", "output_idx" => Any["i"],
+            "ranges" => Dict{String, Any}("i" => Dict{String, Any}("from" => "n")),
+            "args" => Any[], "expr" => e
+        )
+        eq(x, rhs) = Dict{String, Any}(
+            "lhs" => ao(
+                Dict{String, Any}(
+                    "op" => "D", "wrt" => "t",
+                    "args" => Any[
+                        Dict{String, Any}(
+                            "op" => "index",
+                            "args" => Any[x, "i"]
+                        ),
+                    ]
+                )
+            ),
+            "rhs" => ao(rhs)
+        )
+        st() = Dict{String, Any}("type" => "unknown", "shape" => Any["n"])
+        doc = Dict{String, Any}(
+            "esm" => "0.5.0", "metadata" => Dict{String, Any}("name" => "LD"),
+            "index_sets" => Dict{String, Any}(
+                "n" => Dict{String, Any}(
+                    "kind" => "interval", "size" => N
+                )
+            ),
+            "models" => Dict{String, Any}(
+                "M" => Dict{String, Any}(
+                    "variables" => Dict{String, Any}(
+                        "u" => st(), "v" => st(),
+                        "w" => st(), "z" => st()
+                    ),
+                    "equations" => Any[
+                        eq("u", bil("u", ta_f)), eq("v", bil("v", ta_i)),
+                        eq("w", bil("w", tb)),
+                        eq(
+                            "z", Dict{String, Any}(
+                                "op" => "*",
+                                "args" => Any[2.0, bil("z", ta_f)]
+                            )
+                        ),
+                    ]
+                )
+            )
+        )
 
         RXE = Base.get_extension(EarthSciAST, :EarthSciASTReactantExt)
         fo, _, p, _, _ = ESM._build_evaluator(doc; form = :oop)
@@ -342,10 +385,10 @@ _ld_core_ref(h, xs, ys) = [ESM._interp_bilinear_core(
         # interned and oracle alike (XLA reassociates — tolerance, not ==).
         du = zero(u); fi(du, u, p, 0.0)
         got = Array((RX.@compile sync = true d(ur, pr, tr))(ur, pr, tr))
-        @test all(isapprox(a, b; rtol = 1e-12, atol = 1e-13) for (a, b) in zip(got, du))
+        @test all(isapprox(a, b; rtol = 1.0e-12, atol = 1.0e-13) for (a, b) in zip(got, du))
         got_off = ESM._with_compiler_plan(ESM._compiler_plan(:interpreter)) do
             Array((RX.@compile sync = true d_off(ur, pr, tr))(ur, pr, tr))
         end
-        @test all(isapprox(a, b; rtol = 1e-12, atol = 1e-13) for (a, b) in zip(got_off, du))
+        @test all(isapprox(a, b; rtol = 1.0e-12, atol = 1.0e-13) for (a, b) in zip(got_off, du))
     end
 end

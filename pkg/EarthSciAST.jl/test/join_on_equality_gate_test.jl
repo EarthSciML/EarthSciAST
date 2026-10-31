@@ -40,45 +40,63 @@ _ix(f, a...) = Dict("op" => "index", "args" => Any[f, a...])
 # A scalar rollup `D(count)/dt = Σ_{l∈src_rows, r∈emf_rows : on} body` whose key
 # columns are DATA COLUMNS — declared 1-D parameters fed as const arrays. This
 # is the MOVES shape: one table's sourceTypeID column against another's.
-function _join_doc(N::Int, M::Int; body = 1.0, on = [["src_type", "emf_type"]],
-                   extra_vars = Dict{String,Any}(), extra_sets = Dict{String,Any}())
-    vars = Dict{String,Any}(
+function _join_doc(
+        N::Int, M::Int; body = 1.0, on = [["src_type", "emf_type"]],
+        extra_vars = Dict{String, Any}(), extra_sets = Dict{String, Any}()
+    )
+    vars = Dict{String, Any}(
         "src_type" => Dict("type" => "parameter", "shape" => ["src_rows"]),
         "emf_type" => Dict("type" => "parameter", "shape" => ["emf_rows"]),
-        "count"    => Dict("type" => "unknown", "default" => 0.0))
+        "count" => Dict("type" => "unknown", "default" => 0.0)
+    )
     merge!(vars, extra_vars)
-    sets = Dict{String,Any}(
+    sets = Dict{String, Any}(
         "src_rows" => Dict("kind" => "interval", "size" => N),
-        "emf_rows" => Dict("kind" => "interval", "size" => M))
+        "emf_rows" => Dict("kind" => "interval", "size" => M)
+    )
     merge!(sets, extra_sets)
-    Dict("esm" => "1.1.0",
-         "metadata" => Dict("name" => "join_on_gate"),
-         "index_sets" => sets,
-         "models" => Dict("Rollup" => Dict(
-             "variables" => vars,
-             "equations" => [Dict(
-                 "lhs" => Dict("op" => "D", "args" => ["count"], "wrt" => "t"),
-                 "rhs" => Dict("op" => "faq", "args" => [], "output_idx" => [],
-                     "semiring" => "sum_product", "reduce" => "+",
-                     "ranges" => Dict("l" => Dict("from" => "src_rows"),
-                                      "r" => Dict("from" => "emf_rows")),
-                     "join" => [Dict("on" => on)],
-                     "expr" => body))])))
+    return Dict(
+        "esm" => "1.1.0",
+        "metadata" => Dict("name" => "join_on_gate"),
+        "index_sets" => sets,
+        "models" => Dict(
+            "Rollup" => Dict(
+                "variables" => vars,
+                "equations" => [
+                    Dict(
+                        "lhs" => Dict("op" => "D", "args" => ["count"], "wrt" => "t"),
+                        "rhs" => Dict(
+                            "op" => "faq", "args" => [], "output_idx" => [],
+                            "semiring" => "sum_product", "reduce" => "+",
+                            "ranges" => Dict(
+                                "l" => Dict("from" => "src_rows"),
+                                "r" => Dict("from" => "emf_rows")
+                            ),
+                            "join" => [Dict("on" => on)],
+                            "expr" => body
+                        )
+                    ),
+                ]
+            )
+        )
+    )
 end
 
 # Build + evaluate one such document, returning `(du, visits, seconds)`.
 # `_VI_ENUM_VISITS` counts leaves a GATE-DRIVEN enumerator entered, so 0 means
 # the driver declined and the ungated product ran.
-function _run(doc, const_arrays; disable::Bool=false)
+function _run(doc, const_arrays; disable::Bool = false)
     file = ESS.coerce_esm_file(JSON3.read(JSON3.write(doc)))
     let
         ESS._VI_ENUM_VISITS[] = 0
         du = nothing
         t = @elapsed begin
-            f!, u0, p, _, _ = EarthSciAST._build_evaluator(file; model_name="Rollup",
-                const_arrays=Dict{String,Any}(const_arrays),
-                initial_conditions=Dict("count" => 0.0),
-                compiler = disable ? :interpreter : :native)
+            f!, u0, p, _, _ = EarthSciAST._build_evaluator(
+                file; model_name = "Rollup",
+                const_arrays = Dict{String, Any}(const_arrays),
+                initial_conditions = Dict("count" => 0.0),
+                compiler = disable ? :interpreter : :native
+            )
             du = similar(u0)
             f!(du, u0, p, 0.0)
         end
@@ -88,8 +106,10 @@ end
 
 # `K` one-to-one matching rows, the rest unmatched on both sides.
 function _one_to_one_cols(N::Int, M::Int, K::Int)
-    (Float64[i <= K ? i : 1_000_000 + i for i in 1:N],
-     Float64[j <= K ? j : 2_000_000 + j for j in 1:M])
+    return (
+        Float64[i <= K ? i : 1_000_000 + i for i in 1:N],
+        Float64[j <= K ? j : 2_000_000 + j for j in 1:M],
+    )
 end
 
 # ===========================================================================
@@ -101,12 +121,16 @@ end
     #     4 is unmatched. A binding that drops the clause computes the full
     #     product's 12; one that cannot resolve a data-column key raises
     #     E_TREEWALK_JOIN_UNKNOWN_KEY, which is what Julia did before §5.5.8.
-    path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "faq",
-                    "join_on_data_columns.esm")
+    path = joinpath(
+        TESTUTILS_REPO_ROOT, "tests", "valid", "faq",
+        "join_on_data_columns.esm"
+    )
     @test isfile(path)
     file = ESS.load_path(path)
-    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(file; model_name="DataColumnJoin",
-                                         initial_conditions=Dict("count" => 0.0))
+    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
+        file; model_name = "DataColumnJoin",
+        initial_conditions = Dict("count" => 0.0)
+    )
     du = similar(u0); f!(du, u0, p, 0.0)
     @test du[vmap["count"]] == 5.0            # NOT 12.0 (the ungated product)
 
@@ -114,8 +138,12 @@ end
     #     than document-literal `makearray` observeds — the other storage a
     #     build-time-constant key column can arrive in.
     doc = _join_doc(4, 3)
-    val, visits, _ = _run(doc, Dict("src_type" => [7.0, 9.0, 7.0, 4.0],
-                                    "emf_type" => [7.0, 9.0, 7.0]))
+    val, visits, _ = _run(
+        doc, Dict(
+            "src_type" => [7.0, 9.0, 7.0, 4.0],
+            "emf_type" => [7.0, 9.0, 7.0]
+        )
+    )
     @test val == 5.0
     @test visits == 5                          # driven: |matches|, not 4*3
 
@@ -125,30 +153,45 @@ end
     #     symbols, whose key values are the interval IDs 1..N — so the join is
     #     the diagonal, 3 matches over a 3x3 product, NOT whatever the columns
     #     named `l` / `r` hold.
-    doc2 = _join_doc(3, 3; on = [["l", "r"]],
-                     extra_vars = Dict{String,Any}(
-                         "l" => Dict("type" => "parameter", "shape" => ["src_rows"]),
-                         "r" => Dict("type" => "parameter", "shape" => ["emf_rows"])))
-    val2, visits2, _ = _run(doc2, Dict("src_type" => [1.0, 2.0, 3.0],
-                                       "emf_type" => [1.0, 2.0, 3.0],
-                                       "l" => [9.0, 9.0, 9.0],
-                                       "r" => [9.0, 9.0, 9.0]))
+    doc2 = _join_doc(
+        3, 3; on = [["l", "r"]],
+        extra_vars = Dict{String, Any}(
+            "l" => Dict("type" => "parameter", "shape" => ["src_rows"]),
+            "r" => Dict("type" => "parameter", "shape" => ["emf_rows"])
+        )
+    )
+    val2, visits2, _ = _run(
+        doc2, Dict(
+            "src_type" => [1.0, 2.0, 3.0],
+            "emf_type" => [1.0, 2.0, 3.0],
+            "l" => [9.0, 9.0, 9.0],
+            "r" => [9.0, 9.0, 9.0]
+        )
+    )
     @test val2 == 3.0                          # the diagonal; the columns say 9
     @test visits2 == 3
 
     # (d) A name resolving to NEITHER a binder nor a declared 1-D column is a
     #     build error, not a silent no-op (§5.5.8).
     doc3 = _join_doc(3, 3; on = [["nope", "emf_type"]])
-    @test_throws ESS.TreeWalkError _run(doc3, Dict("src_type" => [1.0, 2.0, 3.0],
-                                                   "emf_type" => [1.0, 2.0, 3.0]))
+    @test_throws ESS.TreeWalkError _run(
+        doc3, Dict(
+            "src_type" => [1.0, 2.0, 3.0],
+            "emf_type" => [1.0, 2.0, 3.0]
+        )
+    )
 
     # (e) FLOAT KEYS STAY FORBIDDEN. A float-stored column is admissible only
     #     where every value is exactly integral (then it IS an integer ID
     #     column); a non-integral value is a named error, never a non-portable
     #     float-equality join.
     doc4 = _join_doc(3, 3)
-    @test_throws ESS.TreeWalkError _run(doc4, Dict("src_type" => [1.0, 2.5, 3.0],
-                                                   "emf_type" => [1.0, 2.0, 3.0]))
+    @test_throws ESS.TreeWalkError _run(
+        doc4, Dict(
+            "src_type" => [1.0, 2.5, 3.0],
+            "emf_type" => [1.0, 2.0, 3.0]
+        )
+    )
     err = try
         _run(doc4, Dict("src_type" => [1.0, 2.5, 3.0], "emf_type" => [1.0, 2.0, 3.0]))
         nothing
@@ -166,18 +209,23 @@ end
     # (type, year) = (7,1) (7,2) (9,1); emf rows carry (7,1) (9,1) (7,3).
     # Tuple matches: row1~row1, row3~row2  ⇒  2, against 4 for either pair alone
     # and 9 for the ungated product.
-    doc = _join_doc(3, 3; on = [["src_type", "emf_type"], ["src_year", "emf_year"]],
-                    extra_vars = Dict{String,Any}(
-                        "src_year" => Dict("type" => "parameter", "shape" => ["src_rows"]),
-                        "emf_year" => Dict("type" => "parameter", "shape" => ["emf_rows"])))
-    ca = Dict("src_type" => [7.0, 7.0, 9.0], "src_year" => [1.0, 2.0, 1.0],
-              "emf_type" => [7.0, 9.0, 7.0], "emf_year" => [1.0, 1.0, 3.0])
+    doc = _join_doc(
+        3, 3; on = [["src_type", "emf_type"], ["src_year", "emf_year"]],
+        extra_vars = Dict{String, Any}(
+            "src_year" => Dict("type" => "parameter", "shape" => ["src_rows"]),
+            "emf_year" => Dict("type" => "parameter", "shape" => ["emf_rows"])
+        )
+    )
+    ca = Dict(
+        "src_type" => [7.0, 7.0, 9.0], "src_year" => [1.0, 2.0, 1.0],
+        "emf_type" => [7.0, 9.0, 7.0], "emf_year" => [1.0, 1.0, 3.0]
+    )
     val, visits, _ = _run(doc, ca)
     @test val == 2.0
     # The COMPOSITE match set drives, not the first pair's (which admits 4).
     @test visits == 2
     # …and the answer is the same with the driver killed (the pre-change path).
-    val_off, visits_off, _ = _run(doc, ca; disable=true)
+    val_off, visits_off, _ = _run(doc, ca; disable = true)
     @test val_off == val
     @test visits_off == 0
 end
@@ -209,8 +257,10 @@ end
     codes_l, codes_r = ESS._encode_join_keys(vals_l, vals_r)
     kl = Dict(p => codes_l[i] for (i, p) in enumerate(pos_l))
     kr = Dict(p => codes_r[i] for (i, p) in enumerate(pos_r))
-    want = sort!([(a, b) for a in pos_l for b in pos_r if kl[a] == kr[b]];
-                 by = t -> (kl[t[1]], t[1], t[2]))
+    want = sort!(
+        [(a, b) for a in pos_l for b in pos_r if kl[a] == kr[b]];
+        by = t -> (kl[t[1]], t[1], t[2])
+    )
     @test prs == want
     # It is NOT merely position-sorted — so a test asserting position order
     # would have missed a canonical-key regression, and vice versa.
@@ -221,8 +271,12 @@ end
     # position→key mapping is unchanged and only the INPUT ORDER differs. An
     # implementation that emitted in input order, or in bucket-walk order, gives
     # a different list here; this one must not.
-    reversed_group = [("l", "r", reverse(pos_l), reverse(pos_r),
-                       reverse(vals_l), reverse(vals_r))]
+    reversed_group = [
+        (
+            "l", "r", reverse(pos_l), reverse(pos_r),
+            reverse(vals_l), reverse(vals_r),
+        ),
+    ]
     @test ESS._on_gate_match_pairs(reversed_group) == prs
     # …and rebuilding is a pure function of the input (no cached state leaking).
     @test ESS._on_gate_match_pairs(group) == prs
@@ -245,21 +299,23 @@ end
     # one is still a `VarExpr` and is read back from `out_env`.
     _leafval(x, env) = x isa ESS.VarExpr ? env[x.name] : Int(x.value)
     collect_seq(gates, names, iters, out_env) = begin
-        seq = Tuple{Int,Int}[]
-        env = out_env === nothing ? Dict{String,Int}() : out_env
+        seq = Tuple{Int, Int}[]
+        env = out_env === nothing ? Dict{String, Int}() : out_env
         ESS._foreach_aggregate_term(
             t -> push!(seq, (_leafval(t.args[1], env), _leafval(t.args[2], env))),
-            body, names, iters, gates, nothing, 0.0, out_env)
+            body, names, iters, gates, nothing, 0.0, out_env
+        )
         seq
     end
     ungated = ESS._JoinGate("l", "r", codes_l, codes_r, nothing)
     prs = ESS._on_gate_match_pairs(
-        [("l", "r", [1, 2, 3, 4], [1, 2, 3], Any[1, 2, 1, 3], Any[1, 1, 2])])
+        [("l", "r", [1, 2, 3, 4], [1, 2, 3], Any[1, 2, 1, 3], Any[1, 1, 2])]
+    )
     driven = ESS._JoinGate("l", "r", codes_l, codes_r, ESS._OverlapIndex(Set(prs)))
 
     # (a) :pairs — both gated symbols contracted.
     a = collect_seq([ungated], String["l", "r"], Any[1:4, 1:3], nothing)
-    b = collect_seq([driven],  String["l", "r"], Any[1:4, 1:3], nothing)
+    b = collect_seq([driven], String["l", "r"], Any[1:4, 1:3], nothing)
     @test a == b
     @test length(a) == length(prs)
 
@@ -269,7 +325,7 @@ end
     for rpos in 1:3
         oe = Dict("r" => rpos)
         a1 = collect_seq([ungated], String["l"], Any[1:4], oe)
-        b1 = collect_seq([driven],  String["l"], Any[1:4], oe)
+        b1 = collect_seq([driven], String["l"], Any[1:4], oe)
         @test a1 == b1
     end
 
@@ -280,9 +336,10 @@ end
     # (d) A gate whose two sides are the SAME range symbol must NOT drive — a
     #     pair list cannot bind one symbol to two positions.
     self = ESS._JoinGate("l", "l", codes_l, codes_l, ESS._OverlapIndex(Set(prs)))
-    @test ESS._overlap_drive_plan(self, String["l"], Dict{String,Int}(), _ -> 1:4) === (:none,)
+    @test ESS._overlap_drive_plan(self, String["l"], Dict{String, Int}(), _ -> 1:4) === (:none,)
     @test ESS._on_gate_match_pairs(
-        [("l", "l", [1, 2], [1, 2], Any[1, 2], Any[1, 2])]) === nothing
+        [("l", "l", [1, 2], [1, 2], Any[1, 2], Any[1, 2])]
+    ) === nothing
 end
 
 # ===========================================================================
@@ -294,7 +351,7 @@ end
     # vi_overlap_scaling_test.jl).
     let (st, et) = _one_to_one_cols(20, 10, 5)
         _run(_join_doc(20, 10), Dict("src_type" => st, "emf_type" => et))
-        _run(_join_doc(20, 10), Dict("src_type" => st, "emf_type" => et); disable=true)
+        _run(_join_doc(20, 10), Dict("src_type" => st, "emf_type" => et); disable = true)
     end
 
     # ---- ARM 1: the index-set PRODUCT grows 200x, the match count is FIXED.
@@ -319,17 +376,21 @@ end
     # The driven arm must track the MATCHES.
     for (K2, expect) in [(500, 500), (1000, 1000)]
         st, et = _one_to_one_cols(10_000, 1000, K2)
-        val, visits, _ = _run(_join_doc(10_000, 1000),
-                              Dict("src_type" => st, "emf_type" => et))
+        val, visits, _ = _run(
+            _join_doc(10_000, 1000),
+            Dict("src_type" => st, "emf_type" => et)
+        )
         @test val == Float64(expect)
         @test visits == expect
     end
     # …including a MANY-TO-MANY shape, where |matches| exceeds min(N, M): 100
     # keys, 10 left rows and 10 right rows each ⇒ 100*10*10 = 10 000 terms.
     let st = Float64[i <= 1000 ? ((i - 1) % 100) + 1 : 1_000_000 + i for i in 1:10_000],
-        et = Float64[j <= 1000 ? ((j - 1) % 100) + 1 : 2_000_000 + j for j in 1:1000]
-        val, visits, _ = _run(_join_doc(10_000, 1000),
-                              Dict("src_type" => st, "emf_type" => et))
+            et = Float64[j <= 1000 ? ((j - 1) % 100) + 1 : 2_000_000 + j for j in 1:1000]
+        val, visits, _ = _run(
+            _join_doc(10_000, 1000),
+            Dict("src_type" => st, "emf_type" => et)
+        )
         @test val == 10_000.0
         @test visits == 10_000
     end
@@ -342,7 +403,7 @@ end
     let (st, et) = _one_to_one_cols(1000, 500, 500)
         ca = Dict("src_type" => st, "emf_type" => et)
         on_val, on_visits, on_t = _run(_join_doc(1000, 500), ca)
-        off_val, off_visits, off_t = _run(_join_doc(1000, 500), ca; disable=true)
+        off_val, off_visits, off_t = _run(_join_doc(1000, 500), ca; disable = true)
         @test isequal(on_val, off_val)     # bit-identical, not merely ≈
         @test on_visits == 500
         @test off_visits == 0              # 0 ⇒ the gate declined; the filter ran
@@ -360,29 +421,46 @@ end
 # that isolates -004 from -001: before the driver landed it resolved, filtered
 # the full product, and visited 0 gate-driven leaves.
 @testset "an index-set member key column drives too (BEHAV-10-B-004)" begin
-    doc = Dict("esm" => "1.1.0",
+    doc = Dict(
+        "esm" => "1.1.0",
         "metadata" => Dict("name" => "join_on_member_columns"),
         "index_sets" => Dict(
-            "src_cat" => Dict("kind" => "categorical",
-                              "members" => ["a", "b", "c", "d"]),
-            "emf_cat" => Dict("kind" => "categorical",
-                              "members" => ["b", "c", "x"])),
-        "models" => Dict("Rollup" => Dict(
-            "variables" => Dict("count" => Dict("type" => "unknown", "default" => 0.0)),
-            "equations" => [Dict(
-                "lhs" => Dict("op" => "D", "args" => ["count"], "wrt" => "t"),
-                "rhs" => Dict("op" => "faq", "args" => [], "output_idx" => [],
-                    "semiring" => "sum_product", "reduce" => "+",
-                    "ranges" => Dict("l" => Dict("from" => "src_cat"),
-                                     "r" => Dict("from" => "emf_cat")),
-                    "join" => [Dict("on" => [["src_cat", "emf_cat"]])],
-                    "expr" => 1.0))])))
-    val, visits, _ = _run(doc, Dict{String,Any}())
+            "src_cat" => Dict(
+                "kind" => "categorical",
+                "members" => ["a", "b", "c", "d"]
+            ),
+            "emf_cat" => Dict(
+                "kind" => "categorical",
+                "members" => ["b", "c", "x"]
+            )
+        ),
+        "models" => Dict(
+            "Rollup" => Dict(
+                "variables" => Dict("count" => Dict("type" => "unknown", "default" => 0.0)),
+                "equations" => [
+                    Dict(
+                        "lhs" => Dict("op" => "D", "args" => ["count"], "wrt" => "t"),
+                        "rhs" => Dict(
+                            "op" => "faq", "args" => [], "output_idx" => [],
+                            "semiring" => "sum_product", "reduce" => "+",
+                            "ranges" => Dict(
+                                "l" => Dict("from" => "src_cat"),
+                                "r" => Dict("from" => "emf_cat")
+                            ),
+                            "join" => [Dict("on" => [["src_cat", "emf_cat"]])],
+                            "expr" => 1.0
+                        )
+                    ),
+                ]
+            )
+        )
+    )
+    val, visits, _ = _run(doc, Dict{String, Any}())
     @test val == 2.0                    # members "b" and "c"; NOT the 4*3 product
     @test visits == 2                   # DRIVEN — 0 here means the gate filtered
 
     # Same document, driver killed: same answer, no driven leaves.
-    val_off, visits_off, _ = _run(doc, Dict{String,Any}(); disable=true)
+    val_off, visits_off, _ = _run(doc, Dict{String, Any}(); disable = true)
     @test isequal(val_off, val)
     @test visits_off == 0
 end
@@ -392,8 +470,12 @@ end
 # ===========================================================================
 @testset "an empty match set reduces to 0̄" begin
     doc = _join_doc(3, 3)
-    val, visits, _ = _run(doc, Dict("src_type" => [1.0, 2.0, 3.0],
-                                    "emf_type" => [4.0, 5.0, 6.0]))
+    val, visits, _ = _run(
+        doc, Dict(
+            "src_type" => [1.0, 2.0, 3.0],
+            "emf_type" => [4.0, 5.0, 6.0]
+        )
+    )
     @test val == 0.0                       # sum_product 0̄, not a hole or NaN
     @test visits == 0                      # nothing to visit — the driver knows
 end
@@ -403,37 +485,73 @@ end
 # build is folded into the match set, and it is STRUCTURAL, so `remake` refuses
 # to change it — under both compilers (CONFORMANCE_SPEC §5.5.8).
 @testset "a key column computed from a parameter is baked into the gate" begin
-    doc(off) = Dict{String,Any}(
+    doc(off) = Dict{String, Any}(
         "esm" => "1.2.0", "metadata" => Dict("name" => "param_key"),
-        "index_sets" => Dict("rows" => Dict("kind" => "interval", "size" => 4),
-                             "keys" => Dict("kind" => "interval", "size" => 2)),
-        "models" => Dict("M" => Dict{String,Any}(
-            "variables" => Dict(
-                "off" => Dict("type" => "parameter", "units" => "1", "default" => off),
-                "row_key" => Dict("type" => "unknown", "units" => "1", "shape" => ["rows"]),
-                "want" => Dict("type" => "unknown", "units" => "1", "shape" => ["keys"]),
-                "total" => Dict("type" => "unknown", "units" => "1", "shape" => ["keys"])),
-            "equations" => Any[
-                Dict("lhs" => "row_key", "rhs" => Dict("op" => "faq", "args" => Any[],
-                    "output_idx" => ["r"], "ranges" => Dict("r" => Dict("from" => "rows")),
-                    "expr" => Dict("op" => "-", "args" => Any["r", Dict("op" => "*",
-                        "args" => Any[2, Dict("op" => "floor", "args" => Any[Dict("op" => "/",
-                            "args" => Any[Dict("op" => "-", "args" => Any["r", 1]), 2])])])]))),
-                Dict("lhs" => "want", "rhs" => Dict("op" => "faq", "args" => Any[],
-                    "output_idx" => ["k"], "ranges" => Dict("k" => Dict("from" => "keys")),
-                    "expr" => Dict("op" => "+", "args" => Any["k", "off"]))),
-                Dict("lhs" => "total", "rhs" => Dict("op" => "faq", "args" => Any[],
-                    "semiring" => "sum_product", "output_idx" => ["k"],
-                    "ranges" => Dict("k" => Dict("from" => "keys"), "r" => Dict("from" => "rows")),
-                    "join" => Any[Dict("on" => Any[Any["want", "row_key"]])],
-                    "expr" => 1.0))])))
+        "index_sets" => Dict(
+            "rows" => Dict("kind" => "interval", "size" => 4),
+            "keys" => Dict("kind" => "interval", "size" => 2)
+        ),
+        "models" => Dict(
+            "M" => Dict{String, Any}(
+                "variables" => Dict(
+                    "off" => Dict("type" => "parameter", "units" => "1", "default" => off),
+                    "row_key" => Dict("type" => "unknown", "units" => "1", "shape" => ["rows"]),
+                    "want" => Dict("type" => "unknown", "units" => "1", "shape" => ["keys"]),
+                    "total" => Dict("type" => "unknown", "units" => "1", "shape" => ["keys"])
+                ),
+                "equations" => Any[
+                    Dict(
+                        "lhs" => "row_key", "rhs" => Dict(
+                            "op" => "faq", "args" => Any[],
+                            "output_idx" => ["r"], "ranges" => Dict("r" => Dict("from" => "rows")),
+                            "expr" => Dict(
+                                "op" => "-", "args" => Any[
+                                    "r", Dict(
+                                        "op" => "*",
+                                        "args" => Any[
+                                            2, Dict(
+                                                "op" => "floor", "args" => Any[
+                                                    Dict(
+                                                        "op" => "/",
+                                                        "args" => Any[Dict("op" => "-", "args" => Any["r", 1]), 2]
+                                                    ),
+                                                ]
+                                            ),
+                                        ]
+                                    ),
+                                ]
+                            )
+                        )
+                    ),
+                    Dict(
+                        "lhs" => "want", "rhs" => Dict(
+                            "op" => "faq", "args" => Any[],
+                            "output_idx" => ["k"], "ranges" => Dict("k" => Dict("from" => "keys")),
+                            "expr" => Dict("op" => "+", "args" => Any["k", "off"])
+                        )
+                    ),
+                    Dict(
+                        "lhs" => "total", "rhs" => Dict(
+                            "op" => "faq", "args" => Any[],
+                            "semiring" => "sum_product", "output_idx" => ["k"],
+                            "ranges" => Dict("k" => Dict("from" => "keys"), "r" => Dict("from" => "rows")),
+                            "join" => Any[Dict("on" => Any[Any["want", "row_key"]])],
+                            "expr" => 1.0
+                        )
+                    ),
+                ]
+            )
+        )
+    )
     for c in (:native, :interpreter)
         prob = esm_problem(doc(0.0), (0.0, 0.0); compiler = c)
         @test observed_field(prob, "M.total") == [2.0, 2.0]
         @test parameter_classes(prob)["M.off"] === :structural
         @test_throws EarthSciAST.SimulateError remake_parameters(prob, Dict("M.off" => 1.0))
-        @test observed_field(esm_problem(doc(1.0), (0.0, 0.0); compiler = c),
-                             "M.total") == [2.0, 0.0]
+        @test observed_field(
+            esm_problem(doc(1.0), (0.0, 0.0); compiler = c),
+            "M.total"
+        ) == [2.0, 0.0]
     end
 end
 
@@ -443,40 +561,85 @@ end
 # compiled construction-time fill — a strict compiler has no per-position
 # route, so building at all shows it took none — and both compilers agree.
 @testset "a key column computed through its own join is compiled once" begin
-    rows(k) = Dict("op" => "-", "args" => Any["r", Dict("op" => "*",
-        "args" => Any[2, Dict("op" => "floor", "args" => Any[Dict("op" => "/",
-            "args" => Any[Dict("op" => "-", "args" => Any["r", 1]), 2])])])])
-    doc = Dict{String,Any}(
+    rows(k) = Dict(
+        "op" => "-", "args" => Any[
+            "r", Dict(
+                "op" => "*",
+                "args" => Any[
+                    2, Dict(
+                        "op" => "floor", "args" => Any[
+                            Dict(
+                                "op" => "/",
+                                "args" => Any[Dict("op" => "-", "args" => Any["r", 1]), 2]
+                            ),
+                        ]
+                    ),
+                ]
+            ),
+        ]
+    )
+    doc = Dict{String, Any}(
         "esm" => "1.2.0", "metadata" => Dict("name" => "gated_key"),
-        "index_sets" => Dict("rows" => Dict("kind" => "interval", "size" => 4),
-                             "keys" => Dict("kind" => "interval", "size" => 3)),
-        "models" => Dict("M" => Dict{String,Any}(
-            "variables" => Dict(
-                "row_key" => Dict("type" => "unknown", "units" => "1", "shape" => ["rows"]),
-                "kk" => Dict("type" => "unknown", "units" => "1", "shape" => ["keys"]),
-                "has" => Dict("type" => "unknown", "units" => "1", "shape" => ["keys"]),
-                "pick" => Dict("type" => "unknown", "units" => "1", "shape" => ["keys"]),
-                "total" => Dict("type" => "unknown", "units" => "1", "shape" => ["keys"])),
-            "equations" => Any[
-                Dict("lhs" => "row_key", "rhs" => Dict("op" => "faq", "args" => Any[],
-                    "output_idx" => ["r"], "ranges" => Dict("r" => Dict("from" => "rows")),
-                    "expr" => rows(0))),
-                Dict("lhs" => "kk", "rhs" => Dict("op" => "faq", "args" => Any[],
-                    "output_idx" => ["k"], "ranges" => Dict("k" => Dict("from" => "keys")),
-                    "expr" => "k")),
-                Dict("lhs" => "has", "rhs" => Dict("op" => "faq", "args" => Any[],
-                    "semiring" => "sum_product", "output_idx" => ["k"],
-                    "ranges" => Dict("k" => Dict("from" => "keys"), "r" => Dict("from" => "rows")),
-                    "join" => Any[Dict("on" => Any[Any["kk", "row_key"]])], "expr" => 1.0)),
-                Dict("lhs" => "pick", "rhs" => Dict("op" => "faq", "args" => Any[],
-                    "output_idx" => ["k"], "ranges" => Dict("k" => Dict("from" => "keys")),
-                    "expr" => Dict("op" => "ifelse", "args" => Any[
-                        Dict("op" => ">", "args" => Any[Dict("op" => "index", "args" => Any["has", "k"]), 0.0]),
-                        "k", 99.0]))),
-                Dict("lhs" => "total", "rhs" => Dict("op" => "faq", "args" => Any[],
-                    "semiring" => "sum_product", "output_idx" => ["k"],
-                    "ranges" => Dict("k" => Dict("from" => "keys"), "r" => Dict("from" => "rows")),
-                    "join" => Any[Dict("on" => Any[Any["pick", "row_key"]])], "expr" => 1.0))])))
+        "index_sets" => Dict(
+            "rows" => Dict("kind" => "interval", "size" => 4),
+            "keys" => Dict("kind" => "interval", "size" => 3)
+        ),
+        "models" => Dict(
+            "M" => Dict{String, Any}(
+                "variables" => Dict(
+                    "row_key" => Dict("type" => "unknown", "units" => "1", "shape" => ["rows"]),
+                    "kk" => Dict("type" => "unknown", "units" => "1", "shape" => ["keys"]),
+                    "has" => Dict("type" => "unknown", "units" => "1", "shape" => ["keys"]),
+                    "pick" => Dict("type" => "unknown", "units" => "1", "shape" => ["keys"]),
+                    "total" => Dict("type" => "unknown", "units" => "1", "shape" => ["keys"])
+                ),
+                "equations" => Any[
+                    Dict(
+                        "lhs" => "row_key", "rhs" => Dict(
+                            "op" => "faq", "args" => Any[],
+                            "output_idx" => ["r"], "ranges" => Dict("r" => Dict("from" => "rows")),
+                            "expr" => rows(0)
+                        )
+                    ),
+                    Dict(
+                        "lhs" => "kk", "rhs" => Dict(
+                            "op" => "faq", "args" => Any[],
+                            "output_idx" => ["k"], "ranges" => Dict("k" => Dict("from" => "keys")),
+                            "expr" => "k"
+                        )
+                    ),
+                    Dict(
+                        "lhs" => "has", "rhs" => Dict(
+                            "op" => "faq", "args" => Any[],
+                            "semiring" => "sum_product", "output_idx" => ["k"],
+                            "ranges" => Dict("k" => Dict("from" => "keys"), "r" => Dict("from" => "rows")),
+                            "join" => Any[Dict("on" => Any[Any["kk", "row_key"]])], "expr" => 1.0
+                        )
+                    ),
+                    Dict(
+                        "lhs" => "pick", "rhs" => Dict(
+                            "op" => "faq", "args" => Any[],
+                            "output_idx" => ["k"], "ranges" => Dict("k" => Dict("from" => "keys")),
+                            "expr" => Dict(
+                                "op" => "ifelse", "args" => Any[
+                                    Dict("op" => ">", "args" => Any[Dict("op" => "index", "args" => Any["has", "k"]), 0.0]),
+                                    "k", 99.0,
+                                ]
+                            )
+                        )
+                    ),
+                    Dict(
+                        "lhs" => "total", "rhs" => Dict(
+                            "op" => "faq", "args" => Any[],
+                            "semiring" => "sum_product", "output_idx" => ["k"],
+                            "ranges" => Dict("k" => Dict("from" => "keys"), "r" => Dict("from" => "rows")),
+                            "join" => Any[Dict("on" => Any[Any["pick", "row_key"]])], "expr" => 1.0
+                        )
+                    ),
+                ]
+            )
+        )
+    )
     for c in (:native, :interpreter)
         prob = esm_problem(doc, (0.0, 0.0); compiler = c)
         @test observed_field(prob, "M.total") == [2.0, 2.0, 0.0]

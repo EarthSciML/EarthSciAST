@@ -51,13 +51,13 @@ Built by `EarthSciAST._xla_compile_rhs`; never constructed by hand. `stats` is
 the emitter's op census of the program inside it, shared with the [`DirectRHS`](@ref)
 it was compiled from and folded into the build's `compiler_report`.
 """
-struct XlaProblemRHS{D,C,U,P} <: Function
+struct XlaProblemRHS{D, C, U, P} <: Function
     d::D                        # the DirectRHS wrapper that was emitted
     compiled::C                 # the XLA executable
     u_dev::U                    # the program's state input, written per call
     p_host::Base.RefValue{P}    # the `p` currently on the device
     p_dev::Base.RefValue{Any}   # …as device scalars
-    stats::Dict{Symbol,Int}     # the emitter's op census (informational)
+    stats::Dict{Symbol, Int}     # the emitter's op census (informational)
 end
 
 # THE FUNCTION BARRIER IN FRONT OF `@compile`, for the reason spelled out at
@@ -91,24 +91,31 @@ function _E._xla_client(device::AbstractString)
     try
         return direct_client(device)
     catch err
-        throw(_E.SimulateError(
-            "compiler=:xla was asked to run on '$device' " *
-            "($(_E.XLA_DEVICE_ENV)), and this process has no XLA client for " *
-            "it: $(sprint(showerror, err)). Run where that device is attached, " *
-            "or set $(_E.XLA_DEVICE_ENV)=cpu",
-            _E.ERROR_CODES.COMPILER_UNAVAILABLE))
+        throw(
+            _E.SimulateError(
+                "compiler=:xla was asked to run on '$device' " *
+                    "($(_E.XLA_DEVICE_ENV)), and this process has no XLA client for " *
+                    "it: $(sprint(showerror, err)). Run where that device is attached, " *
+                    "or set $(_E.XLA_DEVICE_ENV)=cpu",
+                _E.ERROR_CODES.COMPILER_UNAVAILABLE
+            )
+        )
     end
 end
 
-function _E._xla_compile_rhs(f::_E._OopRHS, var_map, u0::AbstractVector,
-                             p, device::AbstractString)
+function _E._xla_compile_rhs(
+        f::_E._OopRHS, var_map, u0::AbstractVector,
+        p, device::AbstractString
+    )
     d = direct_rhs(f; var_map = var_map, client = _E._xla_client(device))
-    u_dev = direct_state(d, Array{Float64,1}(u0))
+    u_dev = direct_state(d, Array{Float64, 1}(u0))
     p_dev = direct_params(d, _xla_params(p))
     t_dev = direct_time(d, 0.0)
     compiled = _xla_compile_barrier(d, u_dev, p_dev, t_dev)
-    return XlaProblemRHS(d, compiled, u_dev, Ref{Any}(p), Ref{Any}(p_dev),
-                         d.stats)
+    return XlaProblemRHS(
+        d, compiled, u_dev, Ref{Any}(p), Ref{Any}(p_dev),
+        d.stats
+    )
 end
 
 # The parameter carrier the device builders accept. A parameter-free model
@@ -121,22 +128,28 @@ end
 # would reveal.
 _xla_params(::Nothing) = nothing
 _xla_params(p::NamedTuple) = p
-_xla_params(p) = _E._xla_refuse("the parameter carrier",
+_xla_params(p) = _E._xla_refuse(
+    "the parameter carrier",
     "compiler=:xla feeds parameters to the compiled program as Float64 device " *
-    "scalars, and this build's `p` is a $(typeof(p)), which it will not " *
-    "convert behind the author's back. Build with compiler=:native to run " *
-    "this parameter carrier, or pass the scalars as the NamedTuple the build " *
-    "produces")
+        "scalars, and this build's `p` is a $(typeof(p)), which it will not " *
+        "convert behind the author's back. Build with compiler=:native to run " *
+        "this parameter carrier, or pass the scalars as the NamedTuple the build " *
+        "produces"
+)
 
-function (w::XlaProblemRHS)(du::AbstractVector{Float64}, u::AbstractVector{Float64},
-                            p, t)
+function (w::XlaProblemRHS)(
+        du::AbstractVector{Float64}, u::AbstractVector{Float64},
+        p, t
+    )
     copyto!(w.u_dev, u)
     if !(p === w.p_host[])
         w.p_host[] = p
         w.p_dev[] = direct_params(w.d, _xla_params(p))
     end
-    _xla_run_barrier!(du, w.compiled, w.u_dev, w.p_dev[],
-                      direct_time(w.d, Float64(t)))
+    _xla_run_barrier!(
+        du, w.compiled, w.u_dev, w.p_dev[],
+        direct_time(w.d, Float64(t))
+    )
     return nothing
 end
 
@@ -148,17 +161,21 @@ end
 # pushed through, and the honest answer is to say so and name the two ways out.
 (w::XlaProblemRHS)(du, u, p, t) = _xla_wrong_eltype(eltype(du), eltype(u))
 
-_xla_wrong_eltype(::Type{TD}, ::Type{TU}) where {TD,TU} =
-    _E._xla_refuse("the right-hand side",
-        "the compiled StableHLO program is Float64 throughout, and this call " *
+_xla_wrong_eltype(::Type{TD}, ::Type{TU}) where {TD, TU} =
+    _E._xla_refuse(
+    "the right-hand side",
+    "the compiled StableHLO program is Float64 throughout, and this call " *
         "carries du::$TD / u::$TU. A compiled device program cannot be " *
         "differentiated on the host. `solve` on the Problem already hands the " *
         "solver a finite-difference Jacobian through the compiled program; a " *
         "caller building its own `ODEProblem` from `prob.f!` needs one too " *
         "(`autodiff = AutoFiniteDiff()`), and a document that changes " *
-        "precision needs compiler=:native")
+        "precision needs compiler=:native"
+)
 
 function Base.show(io::IO, w::XlaProblemRHS)
-    print(io, "XlaProblemRHS(", length(w.u_dev), " state elements, direct ",
-          "StableHLO on ", direct_platform(w.d), ")")
+    return print(
+        io, "XlaProblemRHS(", length(w.u_dev), " state elements, direct ",
+        "StableHLO on ", direct_platform(w.d), ")"
+    )
 end

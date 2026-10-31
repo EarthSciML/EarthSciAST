@@ -25,8 +25,10 @@
 
 # Output shape (vector of index-set / dim names; empty = scalar) of an expression
 # under the current per-variable shape map.
-function _infer_expr_shape(expr::ASTExpr,
-                           shapes::Dict{String,Vector{String}})::Vector{String}
+function _infer_expr_shape(
+        expr::ASTExpr,
+        shapes::Dict{String, Vector{String}}
+    )::Vector{String}
     if expr isa NumExpr || expr isa IntExpr
         return String[]
     elseif expr isa VarExpr
@@ -90,10 +92,13 @@ function _infer_expr_shape(expr::ASTExpr,
                         # Typed error from the flatten taxonomy (§4.7.6): a shape
                         # conflict is a failed dimension promotion, not a generic
                         # argument error.
-                        throw(DimensionPromotionError(
-                            "shape-promotion: conflicting operand shapes $(sh) vs $(s) " *
-                            "in op '$(op)' — neither operand's index sets are a subset " *
-                            "of the other's, so no broadcast result shape exists"))
+                        throw(
+                            DimensionPromotionError(
+                                "shape-promotion: conflicting operand shapes $(sh) vs $(s) " *
+                                    "in op '$(op)' — neither operand's index sets are a subset " *
+                                    "of the other's, so no broadcast result shape exists"
+                            )
+                        )
                     end
                 end
             end
@@ -144,15 +149,17 @@ pre-alignment behaviour exactly.
 """
 struct _AxisAlign
     axes::Vector{String}
-    var_shapes::Dict{String,Vector{String}}
+    var_shapes::Dict{String, Vector{String}}
 end
 
 # An alignment context is USABLE only when its axis names are positionally
 # parallel to `loops` and mutually DISTINCT: a result that names the same index
 # set on two axes (`[x,x]`, a square operator field) has no unambiguous
 # name→axis map, so such a rewrite stays positional.
-function _usable_align(align::Union{Nothing,_AxisAlign},
-                       loops::Vector{String})::Union{Nothing,_AxisAlign}
+function _usable_align(
+        align::Union{Nothing, _AxisAlign},
+        loops::Vector{String}
+    )::Union{Nothing, _AxisAlign}
     align === nothing && return nothing
     length(align.axes) == length(loops) || return nothing
     allunique(align.axes) || return nothing
@@ -182,23 +189,29 @@ end
 # position (name-aligned) and the interior of a non-element-wise op (positional),
 # so one memo would let the first visit's answer leak into the other context.
 struct _WrapMemo
-    aligned::IdDict{OpExpr,ASTExpr}
-    plain::IdDict{OpExpr,ASTExpr}
+    aligned::IdDict{OpExpr, ASTExpr}
+    plain::IdDict{OpExpr, ASTExpr}
 end
-_WrapMemo() = _WrapMemo(IdDict{OpExpr,ASTExpr}(), IdDict{OpExpr,ASTExpr}())
+_WrapMemo() = _WrapMemo(IdDict{OpExpr, ASTExpr}(), IdDict{OpExpr, ASTExpr}())
 _wrap_memo(m::_WrapMemo, align) = align === nothing ? m.plain : m.aligned
 
-function _wrap_bare_array_refs(expr::ASTExpr, arrayvars::Set{String},
-                               loops::Vector{String};
-                               wrap_node, stop_node,
-                               align::Union{Nothing,_AxisAlign}=nothing)::ASTExpr
-    return _wrap_bare_array_refs(expr, arrayvars, loops, wrap_node, stop_node,
-                                 _WrapMemo(), _usable_align(align, loops))
+function _wrap_bare_array_refs(
+        expr::ASTExpr, arrayvars::Set{String},
+        loops::Vector{String};
+        wrap_node, stop_node,
+        align::Union{Nothing, _AxisAlign} = nothing
+    )::ASTExpr
+    return _wrap_bare_array_refs(
+        expr, arrayvars, loops, wrap_node, stop_node,
+        _WrapMemo(), _usable_align(align, loops)
+    )
 end
-function _wrap_bare_array_refs(expr::ASTExpr, arrayvars::Set{String},
-                               loops::Vector{String}, wrap_node, stop_node,
-                               memo::_WrapMemo,
-                               align::Union{Nothing,_AxisAlign}=nothing)::ASTExpr
+function _wrap_bare_array_refs(
+        expr::ASTExpr, arrayvars::Set{String},
+        loops::Vector{String}, wrap_node, stop_node,
+        memo::_WrapMemo,
+        align::Union{Nothing, _AxisAlign} = nothing
+    )::ASTExpr
     if expr isa VarExpr
         expr.name in arrayvars || return expr
         return _index_wrap_var(expr, loops, align)
@@ -218,10 +231,14 @@ function _wrap_bare_array_refs(expr::ASTExpr, arrayvars::Set{String},
             # arrays under its own contract, not name-aligned cells, so its
             # operands keep the historical positional gather.
             inner = _is_scalar_op(expr.op) ? align : nothing
-            new_args = ASTExpr[_wrap_bare_array_refs(a, arrayvars, loops,
-                                                     wrap_node, stop_node, memo, inner)
-                               for a in expr.args]
-            reconstruct(expr; args=new_args)
+            new_args = ASTExpr[
+                _wrap_bare_array_refs(
+                    a, arrayvars, loops,
+                    wrap_node, stop_node, memo, inner
+                )
+                    for a in expr.args
+            ]
+            reconstruct(expr; args = new_args)
         end
         tbl[expr] = result
         return result
@@ -238,8 +255,10 @@ _index_wrap(node::ASTExpr, loops::Vector{String})::OpExpr =
 # (esm-spec §4.3.4). Falls back to the positional whole-loop gather for a
 # variable with no declared shape, a shape identical to the result's, or a shape
 # that repeats an index set (no unambiguous name→axis map).
-function _index_wrap_var(v::VarExpr, loops::Vector{String},
-                         align::Union{Nothing,_AxisAlign})::OpExpr
+function _index_wrap_var(
+        v::VarExpr, loops::Vector{String},
+        align::Union{Nothing, _AxisAlign}
+    )::OpExpr
     align === nothing && return _index_wrap(v, loops)
     vs = get(align.var_shapes, v.name, nothing)
     (vs === nothing || isempty(vs) || vs == align.axes || !allunique(vs)) &&
@@ -248,10 +267,14 @@ function _index_wrap_var(v::VarExpr, loops::Vector{String},
     subs[1] = v
     for (d, ax) in enumerate(vs)
         p = findfirst(isequal(ax), align.axes)
-        p === nothing && throw(TreeWalkError("E_TREEWALK_ARRAY_SHAPE_MISMATCH",
-            "Operand '$(v.name)' of an array-level expression is declared over " *
-            "index set '$(ax)' (shape $(vs)), which the result shape " *
-            "$(align.axes) is not shaped over (esm-spec §4.3.4)"))
+        p === nothing && throw(
+            TreeWalkError(
+                "E_TREEWALK_ARRAY_SHAPE_MISMATCH",
+                "Operand '$(v.name)' of an array-level expression is declared over " *
+                    "index set '$(ax)' (shape $(vs)), which the result shape " *
+                    "$(align.axes) is not shaped over (esm-spec §4.3.4)"
+            )
+        )
         subs[d + 1] = VarExpr(loops[p])
     end
     return OpExpr("index", subs)
@@ -273,13 +296,17 @@ end
 # `align` (optional) turns the array-VARIABLE gathers name-based (esm-spec
 # §4.3.4 / [`_AxisAlign`](@ref)); without it every leaf is gathered positionally
 # over all `loops`, the pre-alignment behaviour.
-function _index_array_leaves(expr::ASTExpr,
-                             arrayvars::Set{String}, loops::Vector{String};
-                             align::Union{Nothing,_AxisAlign}=nothing)::ASTExpr
-    return _wrap_bare_array_refs(expr, arrayvars, loops;
+function _index_array_leaves(
+        expr::ASTExpr,
+        arrayvars::Set{String}, loops::Vector{String};
+        align::Union{Nothing, _AxisAlign} = nothing
+    )::ASTExpr
+    return _wrap_bare_array_refs(
+        expr, arrayvars, loops;
         wrap_node = _is_array_producer,
         stop_node = e -> e.op in _SELF_INDEXED_OPS,
-        align = align)
+        align = align
+    )
 end
 
 # True iff `expr` is an array-PRODUCING node: a `makearray`, or an
@@ -310,23 +337,29 @@ end
 # convention, the §4.3.4 name alignment, the faq wrapper — MUST stay shared
 # with the build's own promotion, which is why this takes a keyword instead of
 # being copied.
-function _lift_to_faq(expr::ASTExpr, shape::Vector{String},
-                          arrayvars::Set{String},
-                          var_shapes::Dict{String,Vector{String}}=
-                              Dict{String,Vector{String}}();
-                          bounds::Union{Nothing,Vector{Int}}=nothing)::OpExpr
+function _lift_to_faq(
+        expr::ASTExpr, shape::Vector{String},
+        arrayvars::Set{String},
+        var_shapes::Dict{String, Vector{String}} =
+            Dict{String, Vector{String}}();
+        bounds::Union{Nothing, Vector{Int}} = nothing
+    )::OpExpr
     n = bounds === nothing ? length(shape) : length(bounds)
-    loops = String["_p$(i-1)" for i in 1:n]
+    loops = String["_p$(i - 1)" for i in 1:n]
     ranges = bounds === nothing ?
-        Dict{String,Any}(loops[i] => IndexSetRef(shape[i]) for i in eachindex(shape)) :
-        Dict{String,Any}(loops[i] => Any[1, bounds[i]] for i in eachindex(bounds))
+        Dict{String, Any}(loops[i] => IndexSetRef(shape[i]) for i in eachindex(shape)) :
+        Dict{String, Any}(loops[i] => Any[1, bounds[i]] for i in eachindex(bounds))
     # `_AxisAlign` self-disables (`_usable_align`) when its axes are not
     # positionally parallel to `loops`, so a shape/bounds length mismatch
     # degrades to the historical positional gather rather than misaligning.
-    body = _index_array_leaves(expr, arrayvars, loops;
-                               align = _AxisAlign(shape, var_shapes))
-    return OpExpr("faq", ASTExpr[];
-                  output_idx=Any[l for l in loops], ranges=ranges, expr_body=body)
+    body = _index_array_leaves(
+        expr, arrayvars, loops;
+        align = _AxisAlign(shape, var_shapes)
+    )
+    return OpExpr(
+        "faq", ASTExpr[];
+        output_idx = Any[l for l in loops], ranges = ranges, expr_body = body
+    )
 end
 
 """
@@ -358,8 +391,8 @@ function algebraic_states_to_observeds(flat::FlattenedSystem)::FlattenedSystem
             push!(alg_defined, (eq.lhs::VarExpr).name)
         end
     end
-    new_states = OrderedDict{String,ModelVariable}()
-    new_obs = OrderedDict{String,ModelVariable}(flat.observed_variables)
+    new_states = OrderedDict{String, ModelVariable}()
+    new_obs = OrderedDict{String, ModelVariable}(flat.observed_variables)
     for (k, v) in flat.state_variables
         if (k in alg_defined) && !(k in diff_states)
             # Both sides are `unknown` from esm 1.0.0; the move between the
@@ -371,8 +404,10 @@ function algebraic_states_to_observeds(flat::FlattenedSystem)::FlattenedSystem
             new_states[k] = v
         end
     end
-    return FlattenedSystem(flat; state_variables=new_states,
-                           observed_variables=new_obs)
+    return FlattenedSystem(
+        flat; state_variables = new_states,
+        observed_variables = new_obs
+    )
 end
 
 """
@@ -401,7 +436,7 @@ function inline_elementwise_array_observeds(flat::FlattenedSystem)::FlattenedSys
         return v.shape !== nothing && !isempty(v.shape)
     end
     is_elementwise(rhs) = !(rhs isa OpExpr && (rhs::OpExpr).op in _ARRAY_PRODUCER_OPS)
-    targets = Dict{String,ASTExpr}()
+    targets = Dict{String, ASTExpr}()
     for eq in flat.equations
         eq.lhs isa VarExpr || continue
         nm = (eq.lhs::VarExpr).name
@@ -426,30 +461,38 @@ function inline_elementwise_array_observeds(flat::FlattenedSystem)::FlattenedSys
                 progressed = true
             end
         end
-        progressed || throw(DimensionPromotionError(
-            "inline_elementwise_array_observeds: cyclic elementwise " *
-            "array-observed dependency among $(sort!(collect(setdiff(keys(targets), done))))"))
+        progressed || throw(
+            DimensionPromotionError(
+                "inline_elementwise_array_observeds: cyclic elementwise " *
+                    "array-observed dependency among $(sort!(collect(setdiff(keys(targets), done))))"
+            )
+        )
     end
-    resolved = Dict{String,ASTExpr}()
+    resolved = Dict{String, ASTExpr}()
     for nm in order
         resolved[nm] = substitute(targets[nm], resolved)
     end
 
-    new_obs = OrderedDict{String,ModelVariable}(
-        k => v for (k, v) in flat.observed_variables if !haskey(targets, k))
+    new_obs = OrderedDict{String, ModelVariable}(
+        k => v for (k, v) in flat.observed_variables if !haskey(targets, k)
+    )
     # The substitution applies inside each contribution; a dropped definition
     # leaves with its contributions (esm-libraries-spec §4.7.5).
     new_eqs = Equation[]
     new_contribs = Vector{Contribution}[]
     for (eq, cs) in zip(flat.equations, _flat_contributions(flat))
         (eq.lhs isa VarExpr && haskey(targets, (eq.lhs::VarExpr).name)) && continue  # drop the def
-        rewritten, new_cs = _rewrite_contributions(e -> substitute(e, resolved), eq, cs,
-                                                   _is_lifted(eq, flat.lifted_shapes))
+        rewritten, new_cs = _rewrite_contributions(
+            e -> substitute(e, resolved), eq, cs,
+            _is_lifted(eq, flat.lifted_shapes)
+        )
         push!(new_eqs, rewritten)
         push!(new_contribs, new_cs)
     end
-    return FlattenedSystem(flat; observed_variables=new_obs, equations=new_eqs,
-                           equation_contributions=new_contribs)
+    return FlattenedSystem(
+        flat; observed_variables = new_obs, equations = new_eqs,
+        equation_contributions = new_contribs
+    )
 end
 
 """
@@ -479,10 +522,12 @@ rewrite (the pre-fix behaviour, kept as a regression kill switch).
 against them); supply them on the FlattenedSystem before calling. Returns a new
 FlattenedSystem; the input is untouched.
 """
-function promote_downstream_shapes(flat::FlattenedSystem;
-                                   index_consumer_refs::Bool=true)::FlattenedSystem
+function promote_downstream_shapes(
+        flat::FlattenedSystem;
+        index_consumer_refs::Bool = true
+    )::FlattenedSystem
     # Current shapes from declarations (scalar = []).
-    shapes = Dict{String,Vector{String}}()
+    shapes = Dict{String, Vector{String}}()
     for d in (flat.state_variables, flat.parameters, flat.observed_variables)
         for (k, v) in d
             shapes[k] = v.shape === nothing ? String[] : String[string(s) for s in v.shape]
@@ -491,7 +536,7 @@ function promote_downstream_shapes(flat::FlattenedSystem;
 
     # Index the ALGEBRAIC defining equations (bare `x = expr`). State equations
     # (`D(x,t) = …`) don't define x's shape (x keeps its declared shape).
-    defs = Dict{String,ASTExpr}()
+    defs = Dict{String, ASTExpr}()
     for eq in flat.equations
         eq.lhs isa VarExpr || continue
         defs[(eq.lhs::VarExpr).name] = eq.rhs
@@ -520,7 +565,7 @@ function promote_downstream_shapes(flat::FlattenedSystem;
             else
                 anon = string(name, "__", sym)
                 if !haskey(index_sets, anon)
-                    added || (index_sets = OrderedDict{String,IndexSet}(index_sets); added = true)
+                    added || (index_sets = OrderedDict{String, IndexSet}(index_sets); added = true)
                     index_sets[anon] = IndexSet("interval"; size = n)
                 end
                 push!(names, anon)
@@ -550,7 +595,7 @@ function promote_downstream_shapes(flat::FlattenedSystem;
 
     # Rebuild variable partitions with promoted shapes.
     function promote_partition(part)
-        out = OrderedDict{String,ModelVariable}()
+        out = OrderedDict{String, ModelVariable}()
         for (k, v) in part
             s = get(shapes, k, String[])
             if !isempty(s) && (v.shape === nothing || isempty(v.shape))
@@ -591,8 +636,8 @@ function promote_downstream_shapes(flat::FlattenedSystem;
     for (eq, cs) in zip(flat.equations, _flat_contributions(flat))
         out, out_cs = eq, cs
         if eq.lhs isa VarExpr && (eq.lhs::VarExpr).name in arrayvars &&
-                 haskey(defs, (eq.lhs::VarExpr).name) &&
-                 (flat_was_scalar(flat, (eq.lhs::VarExpr).name))
+                haskey(defs, (eq.lhs::VarExpr).name) &&
+                (flat_was_scalar(flat, (eq.lhs::VarExpr).name))
             wrapped = _lift_to_faq(eq.rhs, shapes[(eq.lhs::VarExpr).name], arrayvars, shapes)
             if wrapped !== eq.rhs
                 out_cs = Contribution[Contribution(wrapped, _union_origins(cs))]
@@ -602,15 +647,18 @@ function promote_downstream_shapes(flat::FlattenedSystem;
         if index_consumer_refs
             out, out_cs = _rewrite_contributions(
                 e -> _index_promoted_consumer_refs(e, newly_promoted, shapes), out, out_cs,
-                _is_lifted(out, flat.lifted_shapes))
+                _is_lifted(out, flat.lifted_shapes)
+            )
         end
         push!(new_eqs, out)
         push!(new_contribs, out_cs)
     end
 
-    return FlattenedSystem(flat; state_variables=new_states, parameters=new_params,
-                           observed_variables=new_observeds, equations=new_eqs,
-                           equation_contributions=new_contribs, index_sets=index_sets)
+    return FlattenedSystem(
+        flat; state_variables = new_states, parameters = new_params,
+        observed_variables = new_observeds, equations = new_eqs,
+        equation_contributions = new_contribs, index_sets = index_sets
+    )
 end
 
 # `[(output symbol, extent)…]` of a `faq` producer every one of whose output
@@ -620,7 +668,7 @@ function _inline_producer_axes(rhs::ASTExpr)
     o = rhs::OpExpr
     (o.output_idx === nothing || isempty(o.output_idx) || o.ranges === nothing) &&
         return nothing
-    axes = Tuple{String,Int}[]
+    axes = Tuple{String, Int}[]
     for x in o.output_idx
         x isa AbstractString || return nothing
         r = get(o.ranges, String(x), nothing)
@@ -632,8 +680,10 @@ function _inline_producer_axes(rhs::ASTExpr)
 end
 
 # A declared shape against the inline extents of the `faq` defining it.
-function _check_declared_producer_extents(name::String, declared::Vector{String},
-                                          axes::Vector{Tuple{String,Int}}, index_sets)
+function _check_declared_producer_extents(
+        name::String, declared::Vector{String},
+        axes::Vector{Tuple{String, Int}}, index_sets
+    )
     ext = Int[]
     for d in declared
         is = get(index_sets, d, nothing)
@@ -641,11 +691,14 @@ function _check_declared_producer_extents(name::String, declared::Vector{String}
         push!(ext, is.size)
     end
     ext == Int[n for (_, n) in axes] && return nothing
-    throw(DimensionPromotionError(
-        "array_shape_mismatch: '$(name)' declares shape $(declared) with extents $(ext), " *
-        "but the faq defining it ranges over extents $([n for (_, n) in axes]) " *
-        "(esm-spec §6.3: a variable defined over inline ranges takes its shape from " *
-        "them, and a declared shape must agree)"))
+    throw(
+        DimensionPromotionError(
+            "array_shape_mismatch: '$(name)' declares shape $(declared) with extents $(ext), " *
+                "but the faq defining it ranges over extents $([n for (_, n) in axes]) " *
+                "(esm-spec §6.3: a variable defined over inline ranges takes its shape from " *
+                "them, and a declared shape must agree)"
+        )
+    )
 end
 
 """
@@ -711,19 +764,25 @@ output DAG instead of re-inflating into an exponential tree; entering a
 producer opens a fresh scope (and memo), since the same node can legally
 rewrite differently under different loop bindings.
 """
-function _index_promoted_consumer_refs(expr::ASTExpr, promoted::Set{String},
-                                       var_shapes::Dict{String,Vector{String}})::ASTExpr
+function _index_promoted_consumer_refs(
+        expr::ASTExpr, promoted::Set{String},
+        var_shapes::Dict{String, Vector{String}}
+    )::ASTExpr
     isempty(promoted) && return expr
-    return _index_promoted_in_scope(expr, promoted, var_shapes,
-                                    Dict{String,Union{String,Nothing}}(), nothing,
-                                    IdDict{OpExpr,ASTExpr}())
+    return _index_promoted_in_scope(
+        expr, promoted, var_shapes,
+        Dict{String, Union{String, Nothing}}(), nothing,
+        IdDict{OpExpr, ASTExpr}()
+    )
 end
 
-function _index_promoted_in_scope(expr::ASTExpr, promoted::Set{String},
-                                  var_shapes::Dict{String,Vector{String}},
-                                  env::Dict{String,Union{String,Nothing}},
-                                  poslocal::Union{Nothing,Vector{String}},
-                                  memo::IdDict{OpExpr,ASTExpr})::ASTExpr
+function _index_promoted_in_scope(
+        expr::ASTExpr, promoted::Set{String},
+        var_shapes::Dict{String, Vector{String}},
+        env::Dict{String, Union{String, Nothing}},
+        poslocal::Union{Nothing, Vector{String}},
+        memo::IdDict{OpExpr, ASTExpr}
+    )::ASTExpr
     if expr isa VarExpr
         expr.name in promoted || return expr
         # Scalar position: no enclosing loop scope, nothing to bind against.
@@ -746,19 +805,23 @@ function _index_promoted_in_scope(expr::ASTExpr, promoted::Set{String},
     elseif expr isa OpExpr
         cached = get(memo, expr, nothing)
         cached === nothing || return cached
-        result = _index_promoted_opexpr(expr, promoted, var_shapes, env,
-                                        poslocal, memo)
+        result = _index_promoted_opexpr(
+            expr, promoted, var_shapes, env,
+            poslocal, memo
+        )
         memo[expr] = result
         return result
     end
     return expr
 end
 
-function _index_promoted_opexpr(expr::OpExpr, promoted::Set{String},
-                                var_shapes::Dict{String,Vector{String}},
-                                env::Dict{String,Union{String,Nothing}},
-                                poslocal::Union{Nothing,Vector{String}},
-                                memo::IdDict{OpExpr,ASTExpr})::ASTExpr
+function _index_promoted_opexpr(
+        expr::OpExpr, promoted::Set{String},
+        var_shapes::Dict{String, Vector{String}},
+        env::Dict{String, Union{String, Nothing}},
+        poslocal::Union{Nothing, Vector{String}},
+        memo::IdDict{OpExpr, ASTExpr}
+    )::ASTExpr
     if expr.op == "index"
         # The gathered operand keeps its own indexing (`_index_bare` twin);
         # only the subscript expressions recurse.
@@ -767,16 +830,18 @@ function _index_promoted_opexpr(expr::OpExpr, promoted::Set{String},
         new_args = Vector{ASTExpr}(undef, length(expr.args))
         new_args[1] = expr.args[1]
         for i in 2:length(expr.args)
-            r = _index_promoted_in_scope(expr.args[i], promoted, var_shapes,
-                                         env, poslocal, memo)
+            r = _index_promoted_in_scope(
+                expr.args[i], promoted, var_shapes,
+                env, poslocal, memo
+            )
             r === expr.args[i] || (changed = true)
             new_args[i] = r
         end
-        return changed ? reconstruct(expr; args=new_args) : expr
+        return changed ? reconstruct(expr; args = new_args) : expr
     end
     env2, pos2, memo2 = env, poslocal, memo
     if expr.op in _ARRAY_PRODUCER_OPS && expr.expr_body !== nothing &&
-       expr.ranges !== nothing
+            expr.ranges !== nothing
         env2 = copy(env)
         seen = Set{String}()
         for (loop, spec) in expr.ranges
@@ -792,14 +857,17 @@ function _index_promoted_opexpr(expr::OpExpr, promoted::Set{String},
         # The positional fallback is only ever the INNERMOST producer's own
         # loops: an unusable output_idx (literal singleton dims, empty)
         # CLEARS it rather than letting an outer scope's loops leak in.
-        pos2 = (oi !== nothing && !isempty(oi) &&
-                all(x -> x isa AbstractString, oi)) ?
-               String[String(x) for x in oi] : nothing
-        memo2 = IdDict{OpExpr,ASTExpr}()      # new loop scope ⇒ new memo
+        pos2 = (
+                oi !== nothing && !isempty(oi) &&
+                all(x -> x isa AbstractString, oi)
+            ) ?
+            String[String(x) for x in oi] : nothing
+        memo2 = IdDict{OpExpr, ASTExpr}()      # new loop scope ⇒ new memo
     end
     return map_children(
         c -> _index_promoted_in_scope(c, promoted, var_shapes, env2, pos2, memo2),
-        expr)
+        expr
+    )
 end
 
 """
@@ -815,8 +883,10 @@ it matches the literal grid-loop names the `discretize` grad-rule lowering emits
 for a 2-D spatial state equation. Mutates and returns the native `doc`. This
 generalizes the driver's hand `couple_fields` bare→index rewrite.
 """
-function index_promoted_refs!(doc::AbstractDict, arrayvars;
-                              spatial_loops::Vector{String}=["i","j"])::AbstractDict
+function index_promoted_refs!(
+        doc::AbstractDict, arrayvars;
+        spatial_loops::Vector{String} = ["i", "j"]
+    )::AbstractDict
     av = Set{String}(String(x) for x in arrayvars)
     isempty(av) && return doc
     models = get(doc, "models", nothing)
@@ -840,17 +910,17 @@ end
 # loop-context switching at `faq`) rather than typed Exprs.
 function _index_bare(node, av::Set{String}, loops::Vector{String})
     if node isa AbstractString
-        return node in av ? Dict{String,Any}("op"=>"index", "args"=>Any[node, loops...]) : node
+        return node in av ? Dict{String, Any}("op" => "index", "args" => Any[node, loops...]) : node
     elseif node isa AbstractVector
         return Any[_index_bare(x, av, loops) for x in node]
     elseif node isa AbstractDict
         op = get(node, "op", "")
         nm = get(node, "name", nothing)
         if op == "" && nm isa AbstractString && String(nm) in av
-            return Dict{String,Any}("op"=>"index", "args"=>Any[node, loops...])
+            return Dict{String, Any}("op" => "index", "args" => Any[node, loops...])
         elseif op == "faq"
             inner = String[String(x) for x in get(node, "output_idx", Any[])]
-            out = Dict{String,Any}()
+            out = Dict{String, Any}()
             for (k, v) in node
                 out[String(k)] = (k == "expr" && !isempty(inner)) ?
                     _index_bare(v, av, inner) : _index_bare(v, av, loops)
@@ -863,7 +933,7 @@ function _index_bare(node, av::Set{String}, loops::Vector{String})
             out["args"] = Any[i == 1 ? a[1] : _index_bare(a[i], av, loops) for i in eachindex(a)]
             return out
         else
-            out = Dict{String,Any}()
+            out = Dict{String, Any}()
             for (k, v) in node
                 out[String(k)] = _index_bare(v, av, loops)
             end
@@ -886,5 +956,5 @@ end
 # variable's definition — there is no scalar `expression` on the declaration
 # left to clear, so this is a shape change and nothing else.
 function _with_shape(v::ModelVariable, shape::Vector{String})::ModelVariable
-    return reconstruct(v; shape=copy(shape))
+    return reconstruct(v; shape = copy(shape))
 end

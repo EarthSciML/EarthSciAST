@@ -54,20 +54,36 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         # form now runs the §4.7 edge pipeline, so the rename applies: the spec
         # says the refusal "closes when that gap does".
         dir = mktempdir()
-        leaf = Dict{String,Any}(
+        leaf = Dict{String, Any}(
             "esm" => "1.0.0", "metadata" => Dict("name" => "leaf"),
             "index_sets" => Dict("ax" => Dict("kind" => "interval", "size" => 3)),
-            "models" => Dict("Leaf" => Dict(
-                "variables" => Dict("u" => Dict("type" => "unknown", "units" => "1",
-                                                "shape" => ["ax"], "default" => 1.0)),
-                "equations" => [Dict(
-                    "lhs" => Dict("op" => "D", "args" => ["u"], "wrt" => "t"),
-                    "rhs" => Dict("op" => "*", "args" => [-1.0, "u"]))])))
+            "models" => Dict(
+                "Leaf" => Dict(
+                    "variables" => Dict(
+                        "u" => Dict(
+                            "type" => "unknown", "units" => "1",
+                            "shape" => ["ax"], "default" => 1.0
+                        )
+                    ),
+                    "equations" => [
+                        Dict(
+                            "lhs" => Dict("op" => "D", "args" => ["u"], "wrt" => "t"),
+                            "rhs" => Dict("op" => "*", "args" => [-1.0, "u"])
+                        ),
+                    ]
+                )
+            )
+        )
         write(joinpath(dir, "leaf.esm"), JSON3.write(leaf))
-        host = Dict{String,Any}(
+        host = Dict{String, Any}(
             "esm" => "1.0.0", "metadata" => Dict("name" => "host"),
-            "models" => Dict("L" => Dict("ref" => "./leaf.esm",
-                                         "index_set_rename" => Dict("ax" => "renamed_ax"))))
+            "models" => Dict(
+                "L" => Dict(
+                    "ref" => "./leaf.esm",
+                    "index_set_rename" => Dict("ax" => "renamed_ax")
+                )
+            )
+        )
         write(joinpath(dir, "host.esm"), JSON3.write(host))
         f = EarthSciAST.load_path(joinpath(dir, "host.esm"))
         # The leaf's axis merges under its POST-rename name.
@@ -80,10 +96,15 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
         # A key the resolved mounted document does not declare is still
         # `subsystem_index_set_rename_unknown_name` — renames never invent names.
-        bad_host = Dict{String,Any}(
+        bad_host = Dict{String, Any}(
             "esm" => "1.0.0", "metadata" => Dict("name" => "host_bad"),
-            "models" => Dict("L" => Dict("ref" => "./leaf.esm",
-                                         "index_set_rename" => Dict("nope" => "renamed_ax"))))
+            "models" => Dict(
+                "L" => Dict(
+                    "ref" => "./leaf.esm",
+                    "index_set_rename" => Dict("nope" => "renamed_ax")
+                )
+            )
+        )
         write(joinpath(dir, "host_bad.esm"), JSON3.write(bad_host))
         err = try
             EarthSciAST.load_path(joinpath(dir, "host_bad.esm"))
@@ -103,20 +124,34 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         # Refusing rather than ignoring keeps it loud (esm-spec §4.7 "Where it
         # applies"); the refusal closes when THAT gap does.
         dir = mktempdir()
-        leaf = Dict{String,Any}(
+        leaf = Dict{String, Any}(
             "esm" => "1.0.0", "metadata" => Dict("name" => "rs_leaf"),
-            "reaction_systems" => Dict("RS" => Dict(
-                "species" => Dict("A" => Dict("units" => "mol/m^3", "default" => 1.0),
-                                  "B" => Dict("units" => "mol/m^3", "default" => 0.0)),
-                "reactions" => [Dict("reactants" => Dict("A" => 1),
-                                     "products" => Dict("B" => 1),
-                                     "rate" => 0.5)])))
+            "reaction_systems" => Dict(
+                "RS" => Dict(
+                    "species" => Dict(
+                        "A" => Dict("units" => "mol/m^3", "default" => 1.0),
+                        "B" => Dict("units" => "mol/m^3", "default" => 0.0)
+                    ),
+                    "reactions" => [
+                        Dict(
+                            "reactants" => Dict("A" => 1),
+                            "products" => Dict("B" => 1),
+                            "rate" => 0.5
+                        ),
+                    ]
+                )
+            )
+        )
         write(joinpath(dir, "rs_leaf.esm"), JSON3.write(leaf))
-        host = Dict{String,Any}(
+        host = Dict{String, Any}(
             "esm" => "1.0.0", "metadata" => Dict("name" => "rs_host"),
-            "reaction_systems" => Dict("R" => Dict(
-                "ref" => "./rs_leaf.esm",
-                "index_set_rename" => Dict("ax" => "renamed_ax"))))
+            "reaction_systems" => Dict(
+                "R" => Dict(
+                    "ref" => "./rs_leaf.esm",
+                    "index_set_rename" => Dict("ax" => "renamed_ax")
+                )
+            )
+        )
         write(joinpath(dir, "rs_host.esm"), JSON3.write(host))
         err = try
             EarthSciAST.load_path(joinpath(dir, "rs_host.esm"))
@@ -132,8 +167,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
     @testset "a rename key the mounted document does not declare is loud" begin
         # Renames never invent names — the §9.7.7 rule at a mount edge.
-        bad = joinpath(repo_root, "tests", "invalid", "template_imports",
-                       "mount_rename_unknown_index_set.esm")
+        bad = joinpath(
+            repo_root, "tests", "invalid", "template_imports",
+            "mount_rename_unknown_index_set.esm"
+        )
         err = try
             EarthSciAST.load_path(bad)
             nothing
@@ -158,8 +195,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         @test file.models["Soil"].variables["Tsoil"].shape == ["soil_lev"]
         @test file.models["Atm"].variables["T"].shape == ["lev"]
 
-        bad = joinpath(repo_root, "tests", "invalid", "template_imports",
-                       "mount_rename_unknown_index_set_toplevel.esm")
+        bad = joinpath(
+            repo_root, "tests", "invalid", "template_imports",
+            "mount_rename_unknown_index_set_toplevel.esm"
+        )
         err = try
             EarthSciAST.load_path(bad)
             nothing
@@ -198,11 +237,13 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         # file may be mounted by several keys — only a cycle ALONG THE CURRENT
         # PATH is the error.
         dir = mktempdir()
-        doc(name, ref) = JSON3.write(Dict(
-            "esm" => "1.0.0",
-            "metadata" => Dict("name" => name, "description" => "mount cycle probe"),
-            "models" => Dict("M" => Dict("ref" => ref)),
-        ))
+        doc(name, ref) = JSON3.write(
+            Dict(
+                "esm" => "1.0.0",
+                "metadata" => Dict("name" => name, "description" => "mount cycle probe"),
+                "models" => Dict("M" => Dict("ref" => ref)),
+            )
+        )
         write(joinpath(dir, "a.esm"), doc("a", "./b.esm"))
         write(joinpath(dir, "b.esm"), doc("b", "./a.esm"))
         write(joinpath(dir, "root.esm"), doc("root", "./a.esm"))

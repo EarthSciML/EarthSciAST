@@ -29,9 +29,11 @@ using OrderedCollections: OrderedDict
 # The post-wire carriers are tested first: a concrete type is one type-tag
 # compare, an abstract one a subtype query, and these run once per node of
 # every whole-document walk.
-@inline _is_object(x) = (x isa OrderedDict{String,Any} || x isa Dict{String,Any} ||
-                         x isa AbstractDict || x isa JSON3.Object)
-@inline _is_array(x)  = (x isa Vector{Any} || x isa AbstractVector || x isa JSON3.Array)
+@inline _is_object(x) = (
+    x isa OrderedDict{String, Any} || x isa Dict{String, Any} ||
+        x isa AbstractDict || x isa JSON3.Object
+)
+@inline _is_array(x) = (x isa Vector{Any} || x isa AbstractVector || x isa JSON3.Array)
 
 # A JSON leaf: neither an object nor an array (the concrete leaf types first,
 # as above).
@@ -89,14 +91,14 @@ time would be O(children × text).
 Always returns fresh containers (a deep, sharing-preserving copy), so callers
 may mutate the result without touching the input.
 """
-_to_ordered(x) = _to_ordered_memo(x, IdDict{Any,Any}())
+_to_ordered(x) = _to_ordered_memo(x, IdDict{Any, Any}())
 
 # `_to_ordered` for a consumer that only reads the result: a leaf-only
 # `Vector{Any}` (an inline number array) is shared with the input instead of
 # copied, so normalizing an already-native document allocates nothing per row.
-_to_ordered_shared(x) = _to_ordered_memo(x, IdDict{Any,Any}(), true)
+_to_ordered_shared(x) = _to_ordered_memo(x, IdDict{Any, Any}(), true)
 
-function _to_ordered_memo(x, memo::IdDict{Any,Any}, share_leaves::Bool=false)
+function _to_ordered_memo(x, memo::IdDict{Any, Any}, share_leaves::Bool = false)
     if x isa JSON3.Object || x isa JSON3.Array
         key = _view_key(x)
         r = get(memo, key, nothing)
@@ -107,7 +109,7 @@ function _to_ordered_memo(x, memo::IdDict{Any,Any}, share_leaves::Bool=false)
     elseif _is_object(x)
         r = get(memo, x, nothing)
         r === nothing || return r
-        out = OrderedDict{String,Any}()
+        out = OrderedDict{String, Any}()
         memo[x] = out
         for (k, v) in pairs(x)
             out[string(k)] = _to_ordered_memo(v, memo, share_leaves)
@@ -134,12 +136,12 @@ end
 # fresh for every view it makes (the root's in `JSON3.read`, a child's on each
 # access), so two references share it exactly when they are the same view.
 # Hashing the view instead would hash its `buf`, the whole parsed text.
-_view_key(x::Union{JSON3.Object,JSON3.Array}) = getfield(x, :inds)
+_view_key(x::Union{JSON3.Object, JSON3.Array}) = getfield(x, :inds)
 
 # The memo-free conversion of the tree under one JSON3 view: every child is a
 # view of the same parsed text or a scalar leaf, so nothing below can alias.
 function _json3_to_ordered(x::JSON3.Object)
-    out = OrderedDict{String,Any}()
+    out = OrderedDict{String, Any}()
     for (k, v) in pairs(x)
         out[string(k)] = _json3_to_ordered(v)
     end
@@ -167,7 +169,7 @@ per level, or `nothing` when no object matches. The path string is assembled
 only for the hit, so a search through a document of large inline arrays costs
 no string per visited element.
 """
-function _find_json_path(hit, node, at::AbstractString="")
+function _find_json_path(hit, node, at::AbstractString = "")
     segs = _find_json_segs(hit, node)
     segs === nothing && return nothing
     return string(at, (string("/", s) for s in Iterators.reverse(segs))...)
@@ -243,7 +245,7 @@ function _walk_json(f, node)
     return nothing
 end
 
-function _walk_json_impl(f, key::Union{Nothing,String}, node)
+function _walk_json_impl(f, key::Union{Nothing, String}, node)
     f(key, node) === false && return nothing
     if _is_object(node)
         for (k, v) in pairs(node)
@@ -297,11 +299,11 @@ function _map_json(f, node)
     return _map_json_impl(f, nothing, node)
 end
 
-function _map_json_impl(f, key::Union{Nothing,String}, node)
+function _map_json_impl(f, key::Union{Nothing, String}, node)
     r = f(key, node)
     r === _JSON_DESCEND || return r
     if _is_object(node)
-        out = OrderedDict{String,Any}()
+        out = OrderedDict{String, Any}()
         for (k, v) in pairs(node)
             out[string(k)] = _map_json_impl(f, string(k), v)
         end

@@ -26,8 +26,10 @@ import OrdinaryDiffEqTsit5
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
-const _SEA_CAT_DIR  = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-                               "static_evaluation_assertions")
+const _SEA_CAT_DIR = joinpath(
+    TESTUTILS_REPO_ROOT, "tests", "conformance",
+    "static_evaluation_assertions"
+)
 const _SEA_MANIFEST = joinpath(_SEA_CAT_DIR, "manifest.json")
 
 @testset "Conformance: static_evaluation_assertions (manifest-driven)" begin
@@ -47,7 +49,7 @@ const _SEA_MANIFEST = joinpath(_SEA_CAT_DIR, "manifest.json")
     for fixture in manifest.fixtures
         id = String(fixture.id)
         @testset "$(id)" begin
-            esm_path    = joinpath(_SEA_CAT_DIR, String(fixture.path))
+            esm_path = joinpath(_SEA_CAT_DIR, String(fixture.path))
             golden_path = joinpath(_SEA_CAT_DIR, String(fixture.golden))
             @test isfile(esm_path)
             @test isfile(golden_path)
@@ -55,9 +57,11 @@ const _SEA_MANIFEST = joinpath(_SEA_CAT_DIR, "manifest.json")
             golden = JSON3.read(read(golden_path, String))
             @test String(golden.reference_binding) == "julia"
 
-            results = run_inline_tests(esm_path; model_name=String(fixture.model),
-                                       alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                       reltol=reltol, abstol=abstol)
+            results = run_inline_tests(
+                esm_path; model_name = String(fixture.model),
+                alg = OrdinaryDiffEqTsit5.Tsit5(),
+                reltol = reltol, abstol = abstol
+            )
             @test length(results) == length(golden.assertions)
 
             # Gate each assertion against BOTH the golden actual (the
@@ -70,7 +74,7 @@ const _SEA_MANIFEST = joinpath(_SEA_CAT_DIR, "manifest.json")
                 r = by_key[key]
                 @test r.passed
                 @test r.actual !== nothing
-                @test isapprox(r.actual, Float64(g.actual); rtol=rtol, atol=atol)
+                @test isapprox(r.actual, Float64(g.actual); rtol = rtol, atol = atol)
             end
         end
     end
@@ -102,12 +106,12 @@ end
     """
     for (time, expected) in ((0.0, 0.0), (5.0, 10.0), (10.0, 20.0))
         file = EarthSciAST.load_string(probe(time, expected))
-        results = run_inline_tests(file; alg=OrdinaryDiffEqTsit5.Tsit5())
+        results = run_inline_tests(file; alg = OrdinaryDiffEqTsit5.Tsit5())
         @test length(results) == 1
         r = results[1]
         @test r.passed
         @test r.actual !== nothing
-        @test isapprox(r.actual, expected; atol=1e-12)
+        @test isapprox(r.actual, expected; atol = 1.0e-12)
     end
 end
 
@@ -117,15 +121,23 @@ end
 # `params`, because the compiler maps the name `t` to the evaluator's time slot
 # and never resolves it as a parameter read.
 @testset "evaluate_cellwise binds the simulation time it is given (#406)" begin
-    expr = EarthSciAST.OpExpr("*", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("a"),
-                                                       EarthSciAST.VarExpr("t")])
-    params = Dict{String,Float64}("a" => 2.0)
-    @test EarthSciAST.evaluate_cellwise(expr, [Int[]]; params=params) == [0.0]
-    @test EarthSciAST.evaluate_cellwise(expr, [Int[]]; params=params, t=5.0) == [10.0]
+    expr = EarthSciAST.OpExpr(
+        "*", EarthSciAST.ASTExpr[
+            EarthSciAST.VarExpr("a"),
+            EarthSciAST.VarExpr("t"),
+        ]
+    )
+    params = Dict{String, Float64}("a" => 2.0)
+    @test EarthSciAST.evaluate_cellwise(expr, [Int[]]; params = params) == [0.0]
+    @test EarthSciAST.evaluate_cellwise(expr, [Int[]]; params = params, t = 5.0) == [10.0]
     # A `params` entry spelled "t" is NOT the time: the slot is its own channel.
-    @test EarthSciAST.evaluate_cellwise(expr, [Int[]];
-                                        params=merge(params,
-                                                     Dict("t" => 5.0))) == [0.0]
+    @test EarthSciAST.evaluate_cellwise(
+        expr, [Int[]];
+        params = merge(
+            params,
+            Dict("t" => 5.0)
+        )
+    ) == [0.0]
 end
 
 # esm-spec §6.6.3 constrains an assertion's `time` to `[time_span.start,
@@ -162,8 +174,10 @@ end
       }}
     }
     """
-    results = run_inline_tests(EarthSciAST.load_string(doc);
-                               alg=OrdinaryDiffEqTsit5.Tsit5())
+    results = run_inline_tests(
+        EarthSciAST.load_string(doc);
+        alg = OrdinaryDiffEqTsit5.Tsit5()
+    )
     by_test = Dict(r.test_id => r for r in results)
     @test length(by_test) == 3
     for id in ("past_end", "before_start")
@@ -173,7 +187,7 @@ end
     end
     # The span's own endpoint is inside it and still answers.
     @test by_test["at_the_end"].passed
-    @test isapprox(by_test["at_the_end"].actual, 2.0; atol=1e-12)
+    @test isapprox(by_test["at_the_end"].actual, 2.0; atol = 1.0e-12)
 end
 
 # The evaluation grid itself, stated directly: the span's endpoints are always
@@ -182,9 +196,9 @@ end
 # the out-of-span ones are dropped.
 @testset "_static_evaluation_times restricts the grid to the span (#406)" begin
     @test EarthSciAST._static_evaluation_times([0.0, 4.0, 8.0], 0.0, 8.0) ==
-          [0.0, 4.0, 8.0]
+        [0.0, 4.0, 8.0]
     @test EarthSciAST._static_evaluation_times([100.0, -5.0, 0.5], 0.0, 1.0) ==
-          [0.0, 0.5, 1.0]
+        [0.0, 0.5, 1.0]
     @test EarthSciAST._static_evaluation_times(Float64[], 0.0, 1.0) == [0.0, 1.0]
     # A span written backwards still yields an ordered grid.
     @test EarthSciAST._static_evaluation_times([0.5], 1.0, 0.0) == [0.0, 0.5, 1.0]
@@ -220,8 +234,10 @@ end
       }}
     }
     """
-    results = run_inline_tests(EarthSciAST.load_string(doc);
-                               alg=OrdinaryDiffEqTsit5.Tsit5())
+    results = run_inline_tests(
+        EarthSciAST.load_string(doc);
+        alg = OrdinaryDiffEqTsit5.Tsit5()
+    )
     @test length(results) == 1
     r = results[1]
     @test !r.passed
@@ -245,9 +261,11 @@ end
     # dimension name, so it wraps rather than refusing.
     @test EarthSciAST.bind_dimension_names(tref, ["t"]) !== tref
     # A binder's own loop symbol is not a free mention.
-    bound = EarthSciAST.OpExpr("faq", EarthSciAST.ASTExpr[];
-                               output_idx=Any["t"],
-                               ranges=Dict{String,Any}("t" => EarthSciAST.IndexSetRef("x")),
-                               expr_body=EarthSciAST.VarExpr("t"))
+    bound = EarthSciAST.OpExpr(
+        "faq", EarthSciAST.ASTExpr[];
+        output_idx = Any["t"],
+        ranges = Dict{String, Any}("t" => EarthSciAST.IndexSetRef("x")),
+        expr_body = EarthSciAST.VarExpr("t")
+    )
     @test EarthSciAST.bind_dimension_names(bound, ["x"]) === bound
 end

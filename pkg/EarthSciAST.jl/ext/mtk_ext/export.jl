@@ -16,18 +16,18 @@ states `x(t)` become `VarExpr("x")` instead of the schema-invalid
 `OpExpr("x", [VarExpr("t")])` shape.
 """
 function EarthSciAST.Model(sys::ModelingToolkit.AbstractSystem)
-    variables = Dict{String,ModelVariable}()
+    variables = Dict{String, ModelVariable}()
 
     sys_defaults = try
         ModelingToolkit.defaults(sys)
     catch e
-        @debug "Model(sys): ModelingToolkit.defaults unavailable" exception=(e, catch_backtrace())
+        @debug "Model(sys): ModelingToolkit.defaults unavailable" exception = (e, catch_backtrace())
         Dict()
     end
     obs_eqs = try
         ModelingToolkit.observed(sys)
     catch e
-        @debug "Model(sys): ModelingToolkit.observed unavailable" exception=(e, catch_backtrace())
+        @debug "Model(sys): ModelingToolkit.observed unavailable" exception = (e, catch_backtrace())
         []
     end
 
@@ -46,14 +46,18 @@ function EarthSciAST.Model(sys::ModelingToolkit.AbstractSystem)
 
     for state in ModelingToolkit.unknowns(sys)
         var_name = _strip_time(string(ModelingToolkit.getname(state)))
-        variables[var_name] = ModelVariable(UnknownVariable;
-            default=_lookup_default(state, sys_defaults))
+        variables[var_name] = ModelVariable(
+            UnknownVariable;
+            default = _lookup_default(state, sys_defaults)
+        )
     end
 
     for param in ModelingToolkit.parameters(sys)
         pname = string(ModelingToolkit.getname(param))
-        variables[pname] = ModelVariable(ParameterVariable;
-            default=_lookup_default(param, sys_defaults))
+        variables[pname] = ModelVariable(
+            ParameterVariable;
+            default = _lookup_default(param, sys_defaults)
+        )
     end
 
     # An MTK observed exports as an `unknown` DECLARATION plus a
@@ -66,13 +70,21 @@ function EarthSciAST.Model(sys::ModelingToolkit.AbstractSystem)
 
     equations = Equation[]
     for eq in ModelingToolkit.equations(sys)
-        push!(equations, Equation(_symbolic_to_esm_export(eq.lhs, known_vars),
-                                  _symbolic_to_esm_export(eq.rhs, known_vars)))
+        push!(
+            equations, Equation(
+                _symbolic_to_esm_export(eq.lhs, known_vars),
+                _symbolic_to_esm_export(eq.rhs, known_vars)
+            )
+        )
     end
     for obs in obs_eqs
         oname = _strip_time(string(ModelingToolkit.getname(obs.lhs)))
-        push!(equations, Equation(VarExpr(oname),
-                                  _symbolic_to_esm_export(obs.rhs, known_vars)))
+        push!(
+            equations, Equation(
+                VarExpr(oname),
+                _symbolic_to_esm_export(obs.rhs, known_vars)
+            )
+        )
     end
 
     return Model(variables, equations)
@@ -93,17 +105,25 @@ function _sys_kind(sys)
     # qualification and type parameters, unlike matching on the printed
     # type string).
     tn = string(nameof(typeof(sys)))
-    tn in ("PDESystem", "SDESystem", "ReactionSystem",
-           "NonlinearSystem", "ODESystem", "System") && return tn
+    tn in (
+        "PDESystem", "SDESystem", "ReactionSystem",
+        "NonlinearSystem", "ODESystem", "System",
+    ) && return tn
     # Fallback for wrapped/renamed types (e.g. `MyPDESystemAdapter`): keep
     # the historical order-sensitive substring matching on the printed type.
     t = string(typeof(sys))
-    if occursin("PDESystem", t);       return "PDESystem"
-    elseif occursin("SDESystem", t);   return "SDESystem"
-    elseif occursin("ReactionSystem", t); return "ReactionSystem"
-    elseif occursin("NonlinearSystem", t); return "NonlinearSystem"
-    elseif occursin("ODESystem", t);   return "ODESystem"
-    else;                              return "System"
+    if occursin("PDESystem", t)
+        return "PDESystem"
+    elseif occursin("SDESystem", t)
+        return "SDESystem"
+    elseif occursin("ReactionSystem", t)
+        return "ReactionSystem"
+    elseif occursin("NonlinearSystem", t)
+        return "NonlinearSystem"
+    elseif occursin("ODESystem", t)
+        return "ODESystem"
+    else
+        return "System"
     end
 end
 
@@ -136,7 +156,8 @@ const _MTK_EXPORT_OP_TABLE = (
     (exp, "exp"), (log, "log"), (log10, "log10"),
     (sin, "sin"), (cos, "cos"), (tan, "tan"),
     (sqrt, "sqrt"), (abs, "abs"),
-    (ifelse, "ifelse"), (min, "min"), (max, "max"))
+    (ifelse, "ifelse"), (min, "min"), (max, "max"),
+)
 
 # Check op equality, handling SymbolicUtils-wrapped forms.
 _op_matches(op, target) = op == target || string(nameof(op)) == string(nameof(target))
@@ -149,8 +170,10 @@ _op_matches(op, target) = op == target || string(nameof(op)) == string(nameof(ta
 # `known_vars` lets us recognize those nodes and emit `VarExpr("x")`.
 # (Scalar fast-paths, the Const-node branch, and the operator-table scan are
 # shared with the Catalyst rate walk — see ext/shared/symbolic_to_esm.jl.)
-function _symbolic_to_esm_export(expr, known_vars::Set{String},
-                                 strip_ns::Function=identity)
+function _symbolic_to_esm_export(
+        expr, known_vars::Set{String},
+        strip_ns::Function = identity
+    )
     # Scalar fast-paths
     lit = _number_to_esm_literal(expr)
     lit === nothing || return lit
@@ -179,9 +202,11 @@ function _symbolic_to_esm_export(expr, known_vars::Set{String},
         false
     end
     if is_diff
-        inner = _symbolic_to_esm_export(Symbolics.arguments(raw)[1],
-                                         known_vars, strip_ns)
-        return OpExpr("D", EsmExpr[inner], wrt="t")
+        inner = _symbolic_to_esm_export(
+            Symbolics.arguments(raw)[1],
+            known_vars, strip_ns
+        )
+        return OpExpr("D", EsmExpr[inner], wrt = "t")
     end
 
     if Symbolics.iscall(raw)
@@ -216,15 +241,21 @@ function _symbolic_to_esm_export(expr, known_vars::Set{String},
     return VarExpr(string(expr))
 end
 
-function _symbolic_to_esm_with_gaps(expr, known_vars::Set{String},
-                                    gaps::Vector{GapReport}, where_str::String;
-                                    strip_ns::Function=identity)
+function _symbolic_to_esm_with_gaps(
+        expr, known_vars::Set{String},
+        gaps::Vector{GapReport}, where_str::String;
+        strip_ns::Function = identity
+    )
     try
         return _symbolic_to_esm_export(expr, known_vars, strip_ns)
     catch e
-        push!(gaps, GapReport("unknown",
-            "unable to serialize symbolic node: $(sprint(showerror, e))",
-            where_str))
+        push!(
+            gaps, GapReport(
+                "unknown",
+                "unable to serialize symbolic node: $(sprint(showerror, e))",
+                where_str
+            )
+        )
         return VarExpr("__TODO_GAP__")
     end
 end
@@ -238,49 +269,57 @@ end
 # `observed_eqs` receives one `oname ~ rhs` equation per MTK observed: from esm
 # 1.0.0 the bare-variable-LHS equation is what MAKES a variable observed
 # (esm-spec §6.3.1), so the export has to emit it alongside the declaration.
-function _export_variables!(esm_vars::AbstractDict{String,ModelVariable},
-                            known_vars::Set{String}, gaps::Vector{GapReport},
-                            sys, strip_ns::Function,
-                            observed_eqs::Vector{Equation}=Equation[])
+function _export_variables!(
+        esm_vars::AbstractDict{String, ModelVariable},
+        known_vars::Set{String}, gaps::Vector{GapReport},
+        sys, strip_ns::Function,
+        observed_eqs::Vector{Equation} = Equation[]
+    )
     # System-level defaults dict — variables declared via `defaults=Dict(...)`
     # on System construction surface here rather than on the symbolic
     # metadata. We look up both and prefer the system-level value.
     sys_defaults = try
         ModelingToolkit.defaults(sys)
     catch e
-        @debug "mtk2esm: ModelingToolkit.defaults unavailable" exception=(e, catch_backtrace())
+        @debug "mtk2esm: ModelingToolkit.defaults unavailable" exception = (e, catch_backtrace())
         Dict()
     end
 
     for state in ModelingToolkit.unknowns(sys)
         var_name = strip_ns(_strip_time(string(ModelingToolkit.getname(state))))
         push!(known_vars, var_name)
-        esm_vars[var_name] = ModelVariable(UnknownVariable;
-            default=_lookup_default(state, sys_defaults),
-            units=_get_units_str(state),
-            description=_get_description_str(state))
+        esm_vars[var_name] = ModelVariable(
+            UnknownVariable;
+            default = _lookup_default(state, sys_defaults),
+            units = _get_units_str(state),
+            description = _get_description_str(state)
+        )
     end
 
     for param in ModelingToolkit.parameters(sys)
         pname = strip_ns(string(ModelingToolkit.getname(param)))
         push!(known_vars, pname)
-        esm_vars[pname] = ModelVariable(ParameterVariable;
-            default=_lookup_default(param, sys_defaults),
-            units=_get_units_str(param),
-            description=_get_description_str(param))
+        esm_vars[pname] = ModelVariable(
+            ParameterVariable;
+            default = _lookup_default(param, sys_defaults),
+            units = _get_units_str(param),
+            description = _get_description_str(param)
+        )
     end
 
     obs_exprs = try
         ModelingToolkit.observed(sys)
     catch e
-        @debug "mtk2esm: ModelingToolkit.observed unavailable" exception=(e, catch_backtrace())
+        @debug "mtk2esm: ModelingToolkit.observed unavailable" exception = (e, catch_backtrace())
         []
     end
     for obs in obs_exprs
         oname = strip_ns(_strip_time(string(ModelingToolkit.getname(obs.lhs))))
         push!(known_vars, oname)
-        rhs_esm = _symbolic_to_esm_with_gaps(obs.rhs, known_vars, gaps,
-            "observed[$oname].rhs"; strip_ns=strip_ns)
+        rhs_esm = _symbolic_to_esm_with_gaps(
+            obs.rhs, known_vars, gaps,
+            "observed[$oname].rhs"; strip_ns = strip_ns
+        )
         # Declaration + defining equation: the bare-variable LHS is what makes
         # it observed from esm 1.0.0 (esm-spec §6.3.1).
         esm_vars[oname] = ModelVariable(UnknownVariable)
@@ -290,28 +329,38 @@ function _export_variables!(esm_vars::AbstractDict{String,ModelVariable},
     # Brownian variables (SDE noise sources) — gt-kuxo gate.
     brownians = _mtk_brownians(sys)
     if !isempty(brownians)
-        push!(gaps, GapReport("gt-kuxo",
-            "system has $(length(brownians)) brownian variable(s); " *
-            "SDE noise serialization requires gt-kuxo to land first",
-            "system.brownians"))
+        push!(
+            gaps, GapReport(
+                "gt-kuxo",
+                "system has $(length(brownians)) brownian variable(s); " *
+                    "SDE noise serialization requires gt-kuxo to land first",
+                "system.brownians"
+            )
+        )
         # A Brownian noise source is a PARAMETER with a unit-normal
         # distribution and a `wiener` update from esm 1.0.0 (esm-spec §5.4);
         # `brownian_parameters` derives it back, and its presence is what makes
         # `system_kind` "sde".
         for b in brownians
             bname = string(ModelingToolkit.getname(b))
-            esm_vars[bname] = ModelVariable(ParameterVariable;
-                distribution=Distribution("normal"; location=0.0, scale=1.0),
-                update=ParameterUpdate("wiener"))
+            esm_vars[bname] = ModelVariable(
+                ParameterVariable;
+                distribution = Distribution("normal"; location = 0.0, scale = 1.0),
+                update = ParameterUpdate("wiener")
+            )
         end
     end
 
     noise_eqs = _mtk_noise_eqs(sys)
     if noise_eqs !== nothing && !isempty(noise_eqs)
-        push!(gaps, GapReport("gt-kuxo",
-            "system has explicit noise_eqs matrix; serialization of SDE " *
-            "diffusion terms requires gt-kuxo to land first",
-            "system.noise_eqs"))
+        push!(
+            gaps, GapReport(
+                "gt-kuxo",
+                "system has explicit noise_eqs matrix; serialization of SDE " *
+                    "diffusion terms requires gt-kuxo to land first",
+                "system.noise_eqs"
+            )
+        )
     end
     return nothing
 end
@@ -333,7 +382,7 @@ Fields left as placeholders (filled in Phase 2 per-model migrations):
 - `description`, `version`, `reference`, `tests`, `analyses`
 - `metadata.tags`, `metadata.source_ref` (populated from `metadata` kwarg)
 """
-function mtk2esm(sys::ModelingToolkit.AbstractSystem; metadata=(;))
+function mtk2esm(sys::ModelingToolkit.AbstractSystem; metadata = (;))
     gaps = GapReport[]
 
     kind = _sys_kind(sys)
@@ -346,10 +395,10 @@ function mtk2esm(sys::ModelingToolkit.AbstractSystem; metadata=(;))
     # systems without the prefix pass through untouched.
     sys_name_prefix = sys_name * "_"
     strip_ns = s -> startswith(s, sys_name_prefix) ?
-        s[length(sys_name_prefix)+1:end] : s
+        s[(length(sys_name_prefix) + 1):end] : s
 
     # 1. Variables -----------------------------------------------------------
-    esm_vars = Dict{String,ModelVariable}()
+    esm_vars = Dict{String, ModelVariable}()
     known_vars = Set{String}()
     observed_eqs = Equation[]
     _export_variables!(esm_vars, known_vars, gaps, sys, strip_ns, observed_eqs)
@@ -374,9 +423,13 @@ function mtk2esm(sys::ModelingToolkit.AbstractSystem; metadata=(;))
     if kind == "PDESystem"
         # PDESystem carries domain info; we flag as gap for now since the
         # round-trip of domain specs requires dedicated lowering logic.
-        push!(gaps, GapReport("gt-vzwk",
-            "PDESystem domain specification is not yet serialized — see gt-vzwk",
-            "system.domain"))
+        push!(
+            gaps, GapReport(
+                "gt-vzwk",
+                "PDESystem domain specification is not yet serialized — see gt-vzwk",
+                "system.domain"
+            )
+        )
     end
 
     # 5. Build ESM Model and wrap in EsmFile --------------------------------
@@ -385,8 +438,10 @@ function mtk2esm(sys::ModelingToolkit.AbstractSystem; metadata=(;))
     # round-trip is still an open gap (gt-vzwk, flagged above), and `esm_domain`
     # is always `nothing` here, so there is nothing to place at the document
     # level yet — the kwarg is simply dropped.
-    esm_model = Model(esm_vars, esm_equations;
-        discrete_events=disc_events, continuous_events=cont_events)
+    esm_model = Model(
+        esm_vars, esm_equations;
+        discrete_events = disc_events, continuous_events = cont_events
+    )
 
     # Serialize directly to a Dict so callers can mutate and embed
     # TODO_GAP notes before writing to disk. We bypass the EsmFile type
@@ -401,8 +456,9 @@ function mtk2esm(sys::ModelingToolkit.AbstractSystem; metadata=(;))
     # this with a real citation when the source docstring is scraped.
     ref_notes_lines = _reference_notes(metadata, gaps)
     if !isempty(ref_notes_lines)
-        model_dict["reference"] = Dict{String,Any}(
-            "notes" => join(ref_notes_lines, "\n"))
+        model_dict["reference"] = Dict{String, Any}(
+            "notes" => join(ref_notes_lines, "\n")
+        )
     end
     # Always emit placeholder tests/analyses arrays: the schema treats them
     # as optional, but their empty presence is the downstream migration
@@ -411,10 +467,10 @@ function mtk2esm(sys::ModelingToolkit.AbstractSystem; metadata=(;))
     model_dict["analyses"] = Any[]
 
     # 6. Wrap in EsmFile-shaped Dict ----------------------------------------
-    out = Dict{String,Any}(
+    out = Dict{String, Any}(
         "esm" => EarthSciAST.SCHEMA_VERSION,
         "metadata" => _esm_file_metadata(metadata, sys_name),
-        "models" => Dict{String,Any}(sys_name => model_dict),
+        "models" => Dict{String, Any}(sys_name => model_dict),
     )
 
     # 7. Emit warnings --------------------------------------------------------
@@ -424,20 +480,26 @@ function mtk2esm(sys::ModelingToolkit.AbstractSystem; metadata=(;))
 end
 
 # Serialize the system's equations, flagging init equations (gt-ebuq gate).
-function _export_equations(sys, known_vars::Set{String},
-                           gaps::Vector{GapReport}, strip_ns::Function)
+function _export_equations(
+        sys, known_vars::Set{String},
+        gaps::Vector{GapReport}, strip_ns::Function
+    )
     esm_equations = Equation[]
     raw_eqs = try
         ModelingToolkit.equations(sys)
     catch e
-        @debug "mtk2esm: ModelingToolkit.equations unavailable" exception=(e, catch_backtrace())
+        @debug "mtk2esm: ModelingToolkit.equations unavailable" exception = (e, catch_backtrace())
         []
     end
     for (i, eq) in enumerate(raw_eqs)
-        lhs_esm = _symbolic_to_esm_with_gaps(eq.lhs, known_vars, gaps,
-            "equations[$i].lhs"; strip_ns=strip_ns)
-        rhs_esm = _symbolic_to_esm_with_gaps(eq.rhs, known_vars, gaps,
-            "equations[$i].rhs"; strip_ns=strip_ns)
+        lhs_esm = _symbolic_to_esm_with_gaps(
+            eq.lhs, known_vars, gaps,
+            "equations[$i].lhs"; strip_ns = strip_ns
+        )
+        rhs_esm = _symbolic_to_esm_with_gaps(
+            eq.rhs, known_vars, gaps,
+            "equations[$i].rhs"; strip_ns = strip_ns
+        )
         push!(esm_equations, Equation(lhs_esm, rhs_esm))
     end
 
@@ -445,14 +507,18 @@ function _export_equations(sys, known_vars::Set{String},
     init_eqs = try
         ModelingToolkit.initialization_equations(sys)
     catch e
-        @debug "mtk2esm: initialization_equations unavailable" exception=(e, catch_backtrace())
+        @debug "mtk2esm: initialization_equations unavailable" exception = (e, catch_backtrace())
         []
     end
     if !isempty(init_eqs)
-        push!(gaps, GapReport("gt-ebuq",
-            "system declares $(length(init_eqs)) init equation(s); " *
-            "serialization of initialization blocks requires gt-ebuq",
-            "system.initialization_equations"))
+        push!(
+            gaps, GapReport(
+                "gt-ebuq",
+                "system declares $(length(init_eqs)) init equation(s); " *
+                    "serialization of initialization blocks requires gt-ebuq",
+                "system.initialization_equations"
+            )
+        )
     end
     return esm_equations
 end
@@ -465,7 +531,7 @@ function _export_events(sys, known_vars::Set{String}, gaps::Vector{GapReport})
     cont_cbs = try
         ModelingToolkit.continuous_events(sys)
     catch e
-        @debug "mtk2esm: continuous_events unavailable" exception=(e, catch_backtrace())
+        @debug "mtk2esm: continuous_events unavailable" exception = (e, catch_backtrace())
         []
     end
     for (i, cb) in enumerate(cont_cbs)
@@ -476,7 +542,7 @@ function _export_events(sys, known_vars::Set{String}, gaps::Vector{GapReport})
     disc_cbs = try
         ModelingToolkit.discrete_events(sys)
     catch e
-        @debug "mtk2esm: discrete_events unavailable" exception=(e, catch_backtrace())
+        @debug "mtk2esm: discrete_events unavailable" exception = (e, catch_backtrace())
         []
     end
     for (i, cb) in enumerate(disc_cbs)
@@ -501,7 +567,7 @@ function _get_default_or(var, default)
     catch e
         # `getdefault` throws when the symbol carries no default metadata —
         # an expected miss, but log it so genuine failures stay diagnosable.
-        @debug "mtk2esm: no readable default for $(var)" exception=(e, catch_backtrace())
+        @debug "mtk2esm: no readable default for $(var)" exception = (e, catch_backtrace())
         return default
     end
 end
@@ -530,7 +596,7 @@ function _get_units_str(var)
             m !== nothing && return String(m.captures[1])
         end
     catch e
-        @debug "mtk2esm: units metadata unreadable for $(var)" exception=(e, catch_backtrace())
+        @debug "mtk2esm: units metadata unreadable for $(var)" exception = (e, catch_backtrace())
     end
     return nothing
 end
@@ -546,15 +612,17 @@ function _get_description_str(var)
             return isempty(stripped) ? nothing : String(stripped)
         end
     catch e
-        @debug "mtk2esm: description metadata unreadable for $(var)" exception=(e, catch_backtrace())
+        @debug "mtk2esm: description metadata unreadable for $(var)" exception = (e, catch_backtrace())
     end
     return nothing
 end
 
 # --- event conversion (MTK → ESM) ---
 
-function _continuous_cb_to_esm(cb, known_vars::Set{String},
-                               gaps::Vector{GapReport}, where_str::String)
+function _continuous_cb_to_esm(
+        cb, known_vars::Set{String},
+        gaps::Vector{GapReport}, where_str::String
+    )
     # MTK callbacks expose fields via property access that differs across
     # versions; we try a few shapes and fall back to a gap report if we
     # can't extract the pieces we need.
@@ -562,8 +630,12 @@ function _continuous_cb_to_esm(cb, known_vars::Set{String},
         conds = cb.conditions isa AbstractArray ? cb.conditions : [cb.conditions]
         esm_conds = EsmExpr[]
         for c in conds
-            push!(esm_conds, _symbolic_to_esm_with_gaps(c, known_vars, gaps,
-                where_str * ".condition"))
+            push!(
+                esm_conds, _symbolic_to_esm_with_gaps(
+                    c, known_vars, gaps,
+                    where_str * ".condition"
+                )
+            )
         end
         affects = cb.affects isa AbstractArray ? cb.affects : [cb.affects]
         esm_affs = AffectEquation[]
@@ -573,15 +645,21 @@ function _continuous_cb_to_esm(cb, known_vars::Set{String},
         end
         return ContinuousEvent(esm_conds, esm_affs)
     catch e
-        push!(gaps, GapReport("unknown",
-            "unable to serialize continuous callback: $(sprint(showerror, e))",
-            where_str))
+        push!(
+            gaps, GapReport(
+                "unknown",
+                "unable to serialize continuous callback: $(sprint(showerror, e))",
+                where_str
+            )
+        )
         return nothing
     end
 end
 
-function _discrete_cb_to_esm(cb, known_vars::Set{String},
-                             gaps::Vector{GapReport}, where_str::String)
+function _discrete_cb_to_esm(
+        cb, known_vars::Set{String},
+        gaps::Vector{GapReport}, where_str::String
+    )
     try
         trig_raw = hasproperty(cb, :condition) ? cb.condition : cb.conditions
         trigger = if trig_raw isa Real
@@ -589,21 +667,31 @@ function _discrete_cb_to_esm(cb, known_vars::Set{String},
         elseif trig_raw isa AbstractVector{<:Real}
             PresetTimesTrigger(Float64.(trig_raw))
         else
-            ConditionTrigger(_symbolic_to_esm_with_gaps(trig_raw, known_vars,
-                gaps, where_str * ".condition"))
+            ConditionTrigger(
+                _symbolic_to_esm_with_gaps(
+                    trig_raw, known_vars,
+                    gaps, where_str * ".condition"
+                )
+            )
         end
         affects = cb.affects isa AbstractArray ? cb.affects : [cb.affects]
         esm_affs = AffectEquation[]
         for a in affects
-            af = _affect_to_esm(a, known_vars, gaps,
-                where_str * ".affect")
+            af = _affect_to_esm(
+                a, known_vars, gaps,
+                where_str * ".affect"
+            )
             af !== nothing && push!(esm_affs, af)
         end
         return DiscreteEvent(trigger, esm_affs)
     catch e
-        push!(gaps, GapReport("unknown",
-            "unable to serialize discrete callback: $(sprint(showerror, e))",
-            where_str))
+        push!(
+            gaps, GapReport(
+                "unknown",
+                "unable to serialize discrete callback: $(sprint(showerror, e))",
+                where_str
+            )
+        )
         return nothing
     end
 end
@@ -612,17 +700,21 @@ end
 # ESM `AffectEquation` (the affect shape shared by continuous and discrete
 # events). Returns `nothing` when the affect's pieces can't be extracted (the
 # enclosing callback then simply carries fewer affects).
-function _affect_to_esm(a, known_vars::Set{String},
-                        gaps::Vector{GapReport}, where_str::String)
+function _affect_to_esm(
+        a, known_vars::Set{String},
+        gaps::Vector{GapReport}, where_str::String
+    )
     try
         lhs_sym = hasproperty(a, :lhs) ? a.lhs : a[1]
         rhs_sym = hasproperty(a, :rhs) ? a.rhs : a[2]
         lhs_name = _strip_time(string(ModelingToolkit.getname(lhs_sym)))
-        rhs_esm = _symbolic_to_esm_with_gaps(rhs_sym, known_vars, gaps,
-            where_str * ".rhs")
+        rhs_esm = _symbolic_to_esm_with_gaps(
+            rhs_sym, known_vars, gaps,
+            where_str * ".rhs"
+        )
         return AffectEquation(lhs_name, rhs_esm)
     catch e
-        @debug "mtk2esm: unable to serialize event affect at $(where_str)" exception=(e, catch_backtrace())
+        @debug "mtk2esm: unable to serialize event affect at $(where_str)" exception = (e, catch_backtrace())
         return nothing
     end
 end
@@ -634,24 +726,33 @@ end
 # src/op_registry.jl (flag `:mtk_known`) and pinned by op_registry_test.jl.
 const _KNOWN_OPS = EarthSciAST._ops_with(:mtk_known)
 
-function _detect_registered_call_gaps!(gaps::Vector{GapReport},
-                                       equations::Vector{Equation})
+function _detect_registered_call_gaps!(
+        gaps::Vector{GapReport},
+        equations::Vector{Equation}
+    )
     seen = Set{String}()
     for (i, eq) in enumerate(equations)
         _walk_expr_for_gaps!(eq.lhs, seen, gaps, "equations[$i].lhs")
         _walk_expr_for_gaps!(eq.rhs, seen, gaps, "equations[$i].rhs")
     end
+    return
 end
 
-function _walk_expr_for_gaps!(expr, seen::Set{String}, gaps::Vector{GapReport},
-                              where_str::String)
-    if expr isa OpExpr
+function _walk_expr_for_gaps!(
+        expr, seen::Set{String}, gaps::Vector{GapReport},
+        where_str::String
+    )
+    return if expr isa OpExpr
         if !(expr.op in _KNOWN_OPS) && !(expr.op in seen)
             push!(seen, expr.op)
-            push!(gaps, GapReport("gt-p3ep",
-                "non-standard op '$(expr.op)' likely requires a registered " *
-                "function declaration — see gt-p3ep",
-                where_str))
+            push!(
+                gaps, GapReport(
+                    "gt-p3ep",
+                    "non-standard op '$(expr.op)' likely requires a registered " *
+                        "function declaration — see gt-p3ep",
+                    where_str
+                )
+            )
         end
         for a in expr.args
             _walk_expr_for_gaps!(a, seen, gaps, where_str)
@@ -673,20 +774,24 @@ function mtk2esm_gaps(sys::ModelingToolkit.AbstractSystem)
     sys_name = _resolve_sys_name(sys, (;), "UnnamedSystem")
     sys_name_prefix = sys_name * "_"
     strip_ns = s -> startswith(s, sys_name_prefix) ?
-        s[length(sys_name_prefix)+1:end] : s
+        s[(length(sys_name_prefix) + 1):end] : s
 
     # Mirror `mtk2esm`'s detection sequence (steps 1–4), discarding the built
     # ESM structures — only the collected `gaps` matter here.
-    esm_vars = Dict{String,ModelVariable}()
+    esm_vars = Dict{String, ModelVariable}()
     known_vars = Set{String}()
     _export_variables!(esm_vars, known_vars, gaps, sys, strip_ns)
     esm_equations = _export_equations(sys, known_vars, gaps, strip_ns)
     _detect_registered_call_gaps!(gaps, esm_equations)
     _export_events(sys, known_vars, gaps)
     if kind == "PDESystem"
-        push!(gaps, GapReport("gt-vzwk",
-            "PDESystem domain specification is not yet serialized — see gt-vzwk",
-            "system.domain"))
+        push!(
+            gaps, GapReport(
+                "gt-vzwk",
+                "PDESystem domain specification is not yet serialized — see gt-vzwk",
+                "system.domain"
+            )
+        )
     end
     return gaps
 end

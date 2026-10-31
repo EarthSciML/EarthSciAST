@@ -27,11 +27,12 @@ _event_construct(::DiscreteEvent) = "discrete event"
 # for every entry that can still see the events: `build_evaluator` on a model or
 # on a flattened system, and `simulate` / `run_inline_tests`. The event is named
 # `'name'`, or `(unnamed)`.
-_event_refusal(ev::Union{ContinuousEvent,DiscreteEvent}) = TreeWalkError(
+_event_refusal(ev::Union{ContinuousEvent, DiscreteEvent}) = TreeWalkError(
     ERROR_CODES.UNSUPPORTED_CONSTRUCT,
     "$(_event_construct(ev)) $(ev.name === nothing ? "(unnamed)" : "'$(ev.name)'") " *
-    "is not supported by the Julia tree-walk evaluator; " *
-    "refusing the build rather than running the model without it")
+        "is not supported by the Julia tree-walk evaluator; " *
+        "refusing the build rather than running the model without it"
+)
 
 # Throw the refusal when a flattened system carries an event, continuous or
 # discrete. Called before `flattened_to_esm`, which does not carry events into
@@ -56,8 +57,8 @@ end
 #
 # First in equation order, so a document with several gets a stable message.
 function _first_doubly_defined_unknown(equations)
-    diff_eqs = Dict{String,Equation}()
-    bare_eqs = Dict{String,Equation}()
+    diff_eqs = Dict{String, Equation}()
+    bare_eqs = Dict{String, Equation}()
     for eq in equations
         role, name = _lhs_role(eq.lhs)
         if role === :derivative
@@ -82,7 +83,8 @@ end
 _wiener_refusal(name::AbstractString) = TreeWalkError(
     ERROR_CODES.UNSUPPORTED_CONSTRUCT,
     "Wiener noise parameter '$name' is not supported by the Julia tree-walk " *
-    "evaluator; refusing the build rather than running the model without it")
+        "evaluator; refusing the build rather than running the model without it"
+)
 
 # Throw the refusal when a flattened system carries a Wiener-noise parameter.
 # Called next to `_refuse_flat_events`, while the flattened system is in hand.
@@ -94,7 +96,7 @@ end
 
 # The first Wiener-noise parameter `model` or any of its subsystems declares;
 # `nothing` when there is none.
-function _first_wiener_parameter(model::Model)::Union{Nothing,String}
+function _first_wiener_parameter(model::Model)::Union{Nothing, String}
     names = brownian_parameters(model)
     isempty(names) || return first(names)
     for sub in values(model.subsystems)
@@ -118,8 +120,9 @@ _symbolic_update_construct(kind::AbstractString) =
 _symbolic_update_refusal(name::AbstractString, kind::AbstractString) = TreeWalkError(
     ERROR_CODES.UNSUPPORTED_CONSTRUCT,
     "$(_symbolic_update_construct(kind)) (the `$(kind)` update of parameter '$name', " *
-    "which recomputes it from an expression) is not supported by the Julia tree-walk " *
-    "evaluator; refusing the build rather than running the model without it")
+        "which recomputes it from an expression) is not supported by the Julia tree-walk " *
+        "evaluator; refusing the build rather than running the model without it"
+)
 
 # The first (name, kind) among `vars` whose update carries a symbolic
 # `expression` rule; `nothing` when there is none. Sorted by name, so the
@@ -159,12 +162,13 @@ end
 # and both equations.
 _doubly_defined_refusal(name::AbstractString, diff_eq::Equation, bare_eq::Equation) =
     TreeWalkError(
-        ERROR_CODES.EQUATION_COUNT_MISMATCH,
-        "unknown '$name' is defined twice — by `$(to_ascii(diff_eq))` and by " *
+    ERROR_CODES.EQUATION_COUNT_MISMATCH,
+    "unknown '$name' is defined twice — by `$(to_ascii(diff_eq))` and by " *
         "`$(to_ascii(bare_eq))`. esm-spec §4.9.4 counts an equation whichever form " *
         "its LHS takes, so this system has one more equation than it has unknowns " *
         "to bind; keeping the derivative and dropping the constraint would run a " *
-        "model the document does not describe. Remove one of the two definitions.")
+        "model the document does not describe. Remove one of the two definitions."
+)
 
 # Throw that refusal when `equations` doubly-defines an unknown.
 #
@@ -182,7 +186,7 @@ end
 
 # The first event `model` or any of its subsystems declares, a continuous one
 # before a discrete one; `nothing` when there is none.
-function _first_event(model::Model)::Union{Nothing,ContinuousEvent,DiscreteEvent}
+function _first_event(model::Model)::Union{Nothing, ContinuousEvent, DiscreteEvent}
     isempty(model.continuous_events) || return model.continuous_events[1]
     isempty(model.discrete_events) || return model.discrete_events[1]
     for sub in values(model.subsystems)
@@ -217,25 +221,33 @@ end
 # `prefix` is empty for the flattened single model `esm_problem` builds, whose
 # variable names already carry their component (`"Forcing.k"`), and grows for a
 # raw model handed to `build_evaluator` directly.
-function _collect_data_feeds!(out::Vector{_DataFeed}, model::Model,
-                              prefix::AbstractString)
+function _collect_data_feeds!(
+        out::Vector{_DataFeed}, model::Model,
+        prefix::AbstractString
+    )
     for (var_name, var) in model.variables
         var.type == ParameterVariable || continue
         var.update === nothing && continue
         for rule in var.update
             (rule.kind == "data" && rule.from !== nothing) || continue
-            push!(out, _DataFeed(isempty(prefix) ? String(var_name) :
-                                 "$(prefix).$(var_name)",
-                                 rule.source === nothing ? "(unnamed)" :
-                                 String(rule.source), var))
+            push!(
+                out, _DataFeed(
+                    isempty(prefix) ? String(var_name) :
+                        "$(prefix).$(var_name)",
+                    rule.source === nothing ? "(unnamed)" :
+                        String(rule.source), var
+                )
+            )
             break                      # one parameter is fed by one source
         end
     end
     for (sub_name, sub) in model.subsystems
         sub isa Model || continue
-        _collect_data_feeds!(out, sub,
-                             isempty(prefix) ? String(sub_name) :
-                             "$(prefix).$(sub_name)")
+        _collect_data_feeds!(
+            out, sub,
+            isempty(prefix) ? String(sub_name) :
+                "$(prefix).$(sub_name)"
+        )
     end
     return out
 end
@@ -313,26 +325,28 @@ end
 # so the re-inflation is paid per cell — the build-time OOM this memo removes.
 # The memo is created fresh per top-level call: `bindings` is fixed within one
 # call, so mapping input identity → output is sound.
-const _SubMemo = IdDict{OpExpr,ASTExpr}
+const _SubMemo = IdDict{OpExpr, ASTExpr}
 
-_sub_preserving(expr::NumExpr, ::Dict{String,ASTExpr}) = expr
-_sub_preserving(expr::IntExpr, ::Dict{String,ASTExpr}) = expr
-_sub_preserving(expr::VarExpr, bindings::Dict{String,ASTExpr}) =
+_sub_preserving(expr::NumExpr, ::Dict{String, ASTExpr}) = expr
+_sub_preserving(expr::IntExpr, ::Dict{String, ASTExpr}) = expr
+_sub_preserving(expr::VarExpr, bindings::Dict{String, ASTExpr}) =
     get(bindings, expr.name, expr)
-_sub_preserving(expr::OpExpr, bindings::Dict{String,ASTExpr}) =
+_sub_preserving(expr::OpExpr, bindings::Dict{String, ASTExpr}) =
     _sub_preserving(expr, bindings, _SubMemo())
 
 # 3-arg forms thread the memo. Leaves ignore it (returned verbatim, no allocation).
-_sub_preserving(expr::NumExpr, ::Dict{String,ASTExpr}, ::_SubMemo) = expr
-_sub_preserving(expr::IntExpr, ::Dict{String,ASTExpr}, ::_SubMemo) = expr
-_sub_preserving(expr::VarExpr, bindings::Dict{String,ASTExpr}, ::_SubMemo) =
+_sub_preserving(expr::NumExpr, ::Dict{String, ASTExpr}, ::_SubMemo) = expr
+_sub_preserving(expr::IntExpr, ::Dict{String, ASTExpr}, ::_SubMemo) = expr
+_sub_preserving(expr::VarExpr, bindings::Dict{String, ASTExpr}, ::_SubMemo) =
     get(bindings, expr.name, expr)
 
 # Substitute each expression in `args`, returning `(substituted, changed)`. Like
 # `_resolve_arg_vec`, the ORIGINAL vector is returned untouched (no allocation)
 # when no element binds, and only the first differing element triggers a copy.
-function _sub_arg_vec(args::Vector{ASTExpr}, bindings::Dict{String,ASTExpr},
-                      memo::_SubMemo)
+function _sub_arg_vec(
+        args::Vector{ASTExpr}, bindings::Dict{String, ASTExpr},
+        memo::_SubMemo
+    )
     changed = false
     new_args = args
     @inbounds for i in eachindex(args)
@@ -343,7 +357,7 @@ function _sub_arg_vec(args::Vector{ASTExpr}, bindings::Dict{String,ASTExpr},
         # build profile. Narrowing with `isa` lets the `OpExpr`/`VarExpr` calls
         # resolve statically and short-circuits the `NumExpr`/`IntExpr` leaves
         # (which `_sub_preserving` returns verbatim) with no call at all.
-        r = a isa OpExpr  ? _sub_preserving(a, bindings, memo) :
+        r = a isa OpExpr ? _sub_preserving(a, bindings, memo) :
             a isa VarExpr ? get(bindings, a.name, a) :
             a                                            # NumExpr / IntExpr: verbatim
         if r !== a
@@ -362,7 +376,7 @@ end
 # carrying none of the three binder fields — every plain math op, which is the
 # overwhelming majority of a per-cell substitution — answers `false` after three
 # `=== nothing` checks and no name vector is built.
-function _binds_any(expr::OpExpr, bindings::Dict{String,ASTExpr})
+function _binds_any(expr::OpExpr, bindings::Dict{String, ASTExpr})
     isempty(bindings) && return false
     iv = expr.int_var
     if iv !== nothing && haskey(bindings, iv::String)
@@ -386,16 +400,16 @@ end
 # `bindings` minus the names `expr` binds — the substitution map that may enter
 # `expr`'s scope. Off the hot path (only reached when `_binds_any` fires), so it
 # reuses `_bound_symbols` directly.
-function _shadowed_bindings(expr::OpExpr, bindings::Dict{String,ASTExpr})
+function _shadowed_bindings(expr::OpExpr, bindings::Dict{String, ASTExpr})
     bound = Set{String}(_bound_symbols(expr))
-    out = Dict{String,ASTExpr}()
+    out = Dict{String, ASTExpr}()
     for (n, v) in bindings
         n in bound || (out[n] = v)
     end
     return out
 end
 
-function _sub_preserving(expr::OpExpr, bindings::Dict{String,ASTExpr}, memo::_SubMemo)
+function _sub_preserving(expr::OpExpr, bindings::Dict{String, ASTExpr}, memo::_SubMemo)
     # Identity memo: a shared node substitutes to a single shared output node.
     cached = get(memo, expr, nothing)
     cached === nothing || return cached
@@ -470,8 +484,10 @@ function _sub_preserving(expr::OpExpr, bindings::Dict{String,ASTExpr}, memo::_Su
     new_ranges = _sub_ranges(expr.ranges, bindings, memo)
     # `reconstruct` (types.jl) copies every remaining OpExpr field, so the full
     # preservation this helper promises holds even as fields are added.
-    result = reconstruct(expr; args=new_args, expr_body=new_body,
-                       values=new_values, filter=new_filter, ranges=new_ranges)
+    result = reconstruct(
+        expr; args = new_args, expr_body = new_body,
+        values = new_values, filter = new_filter, ranges = new_ranges
+    )
     memo[expr] = result
     return result
 end
@@ -480,9 +496,9 @@ end
 # Each entry is a vector whose elements are Int (left as-is) or an ASTExpr bound
 # (recursively `_sub_preserving`d). Returns `nothing` unchanged when ranges is
 # nothing; otherwise a fresh Dict so the original is never mutated.
-_sub_ranges(ranges::Nothing, ::Dict{String,ASTExpr}, ::_SubMemo) = nothing
-function _sub_ranges(ranges, bindings::Dict{String,ASTExpr}, memo::_SubMemo)
-    out = Dict{String,Any}()
+_sub_ranges(ranges::Nothing, ::Dict{String, ASTExpr}, ::_SubMemo) = nothing
+function _sub_ranges(ranges, bindings::Dict{String, ASTExpr}, memo::_SubMemo)
+    out = Dict{String, Any}()
     for (k, v) in ranges
         out[String(k)] = v isa AbstractVector ?
             Any[(e isa ASTExpr ? _sub_preserving(e, bindings, memo) : e) for e in v] : v
@@ -502,8 +518,8 @@ end
 # mechanism is now the NAMED PRELUDE SLOT (`_plan_observed_slots`, build.jl),
 # which compiles each safe scalar observed's RAW body once and leaves its
 # references by-name — this resolved map then covers only the non-slot names.
-function _resolve_observed(obs::Dict{String,ASTExpr})
-    resolved = Dict{String,ASTExpr}()
+function _resolve_observed(obs::Dict{String, ASTExpr})
+    resolved = Dict{String, ASTExpr}()
     for (k, v) in obs
         resolved[k] = v
     end
@@ -529,8 +545,12 @@ function _resolve_observed(obs::Dict{String,ASTExpr})
         end
         any_change || return resolved
     end
-    throw(TreeWalkError("E_TREEWALK_OBSERVED_CYCLE",
-                        join(sort(collect(keys(obs))), ",")))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_OBSERVED_CYCLE",
+            join(sort(collect(keys(obs))), ",")
+        )
+    )
 end
 
 # ============================================================
@@ -560,15 +580,17 @@ end
 # once-per-path exponential (ESS-0hh).
 const _OBS_SEEN_SPINE = 0x01
 const _OBS_SEEN_MARKALL = 0x02
-const _ObsSeen = IdDict{OpExpr,UInt8}
+const _ObsSeen = IdDict{OpExpr, UInt8}
 
 # Collect (into `hits`) every candidate observed name referenced anywhere in
 # `e` — the transitive-name primitive of the structural scan below. Same
 # name/`wrt` collection as `_referenced_var_names`, but threaded through the
 # shared (node, mode) visited set so repeated structural positions over one
 # shared sub-DAG are scanned once.
-function _obs_mark_refs!(e::ASTExpr, names::Set{String}, hits::Set{String},
-                         seen::_ObsSeen)
+function _obs_mark_refs!(
+        e::ASTExpr, names::Set{String}, hits::Set{String},
+        seen::_ObsSeen
+    )
     if e isa VarExpr
         e.name in names && push!(hits, e.name)
         return nothing
@@ -595,8 +617,10 @@ end
 # so the scan recurses rather than flags. Visits are (node, mode)-memoized via
 # `seen` (see the `_ObsSeen` note above): a spine re-entry of an already
 # spine- or mark-all-visited node adds nothing to `hits` and is skipped.
-function _obs_structural_refs!(e::ASTExpr, names::Set{String}, hits::Set{String},
-                               seen::_ObsSeen=_ObsSeen())
+function _obs_structural_refs!(
+        e::ASTExpr, names::Set{String}, hits::Set{String},
+        seen::_ObsSeen = _ObsSeen()
+    )
     e isa OpExpr || return nothing
     bits = get(seen, e, 0x00)
     bits == 0x00 || return nothing   # spine-visited, or mark-all (its superset)
@@ -671,8 +695,10 @@ end
 _count_obs_barrier(op::String) =
     _is_faq_op(op) || op == "makearray" || op == "index"
 
-function _count_obs_refs!(e::ASTExpr, names::Set{String},
-                          tot::Dict{String,Int}, unc::Dict{String,Int}, cond::Bool)
+function _count_obs_refs!(
+        e::ASTExpr, names::Set{String},
+        tot::Dict{String, Int}, unc::Dict{String, Int}, cond::Bool
+    )
     if e isa VarExpr
         if e.name in names
             tot[e.name] = _sat_add(get(tot, e.name, 0), 1)
@@ -683,7 +709,7 @@ function _count_obs_refs!(e::ASTExpr, names::Set{String},
     e isa OpExpr || return nothing
     # ---- unique nodes in postorder (children before parents, args edges) ----
     order = OpExpr[]
-    seen = IdDict{OpExpr,Nothing}()
+    seen = IdDict{OpExpr, Nothing}()
     function dfs(n::OpExpr)
         haskey(seen, n) && return
         seen[n] = nothing
@@ -692,12 +718,12 @@ function _count_obs_refs!(e::ASTExpr, names::Set{String},
                 a isa OpExpr && dfs(a)
             end
         end
-        push!(order, n)
+        return push!(order, n)
     end
     dfs(e)
     # ---- multiplicity propagation: reverse postorder = parents first ----
-    total = IdDict{OpExpr,Int}()
-    uncond = IdDict{OpExpr,Int}()
+    total = IdDict{OpExpr, Int}()
+    uncond = IdDict{OpExpr, Int}()
     total[e] = 1
     uncond[e] = cond ? 0 : 1
     for i in length(order):-1:1
@@ -751,7 +777,7 @@ end
 function _cell_key(var_name::String, indices)
     # The one- and two-index keys (every grid cell of a 1-D or 2-D variable)
     # are spelled without `join`'s IOBuffer; the string is the same.
-    if indices isa Union{AbstractVector{<:Integer},Tuple{Vararg{Integer}}}
+    if indices isa Union{AbstractVector{<:Integer}, Tuple{Vararg{Integer}}}
         length(indices) == 1 && return string(var_name, "[", indices[1], "]")
         length(indices) == 2 &&
             return string(var_name, "[", indices[1], ",", indices[2], "]")
@@ -791,21 +817,29 @@ neither serves, with `attempts` recording why the constant form failed, for the
 diagnostic step (4) raises if no later form serves either. A loaded field whose
 rank matches neither the grid nor a single element raises here.
 """
-function _field_ic_uniform(target::AbstractString, rhs::EarthSciAST.ASTExpr,
-                           rank::Int, const_arrays, registered_functions;
-                           params::AbstractDict=_EMPTY_PARAMS)
+function _field_ic_uniform(
+        target::AbstractString, rhs::EarthSciAST.ASTExpr,
+        rank::Int, const_arrays, registered_functions;
+        params::AbstractDict = _EMPTY_PARAMS
+    )
     # (1) Loaded field supplied as a const array over the lifted grid.
     if rhs isa VarExpr && haskey(const_arrays, rhs.name)
         arr = const_arrays[rhs.name]
-        ndims(arr) == rank && return ((:setup_loaded, cell -> Float64(arr[cell...])),
-                                      String[])
+        ndims(arr) == rank && return (
+            (:setup_loaded, cell -> Float64(arr[cell...])),
+            String[],
+        )
         if length(arr) == 1
             v = Float64(first(arr))
             return ((:setup_loaded, _ -> v), String[])
         end
-        throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
-            "ic($(target)): loaded field '$(rhs.name)' has ndims=$(ndims(arr)) " *
-            "which does not match the $(rank)-D lifted target grid"))
+        throw(
+            TreeWalkError(
+                "E_TREEWALK_UNSUPPORTED_EQUATION",
+                "ic($(target)): loaded field '$(rhs.name)' has ndims=$(ndims(arr)) " *
+                    "which does not match the $(rank)-D lifted target grid"
+            )
+        )
     end
     # (2) Broadcast constant (scalar model PARAMETERS in scope as load-time
     # constants; STATE is not — `params` carries only resolved scalar params).
@@ -813,7 +847,7 @@ function _field_ic_uniform(target::AbstractString, rhs::EarthSciAST.ASTExpr,
     # attached to the step-(4) diagnostic so the reason the form was rejected is
     # never silently swallowed.
     try
-        v = Float64(evaluate_expr(rhs, params; registered_functions=registered_functions))
+        v = Float64(evaluate_expr(rhs, params; registered_functions = registered_functions))
         return ((:setup_constant, _ -> v), String[])
     catch err
         # A resource error is not a reason to try the NEXT form — the next form
@@ -849,13 +883,17 @@ dropped.
 Step 3 resolves and compiles once per cell, so `access` is a `_PerCellLicense`
 or a refusal's one-cell probe (compiler.jl).
 """
-function _resolve_field_ic(access::_PerCellAccess, target::AbstractString,
-                           rhs::EarthSciAST.ASTExpr,
-                           cell::Vector{Int}, const_arrays, registered_functions;
-                           params::AbstractDict=_EMPTY_PARAMS,
-                           uniform=_field_ic_uniform(target, rhs, length(cell),
-                                                     const_arrays, registered_functions;
-                                                     params=params))::Float64
+function _resolve_field_ic(
+        access::_PerCellAccess, target::AbstractString,
+        rhs::EarthSciAST.ASTExpr,
+        cell::Vector{Int}, const_arrays, registered_functions;
+        params::AbstractDict = _EMPTY_PARAMS,
+        uniform = _field_ic_uniform(
+            target, rhs, length(cell),
+            const_arrays, registered_functions;
+            params = params
+        )
+    )::Float64
     # (1) and (2) do not depend on the cell: `uniform` is their verdict, which a
     # caller seeding a whole field computes once and passes for every cell.
     hit, attempts = uniform
@@ -868,9 +906,11 @@ function _resolve_field_ic(access::_PerCellAccess, target::AbstractString,
         # `_resolve_indices` → `_compile` for this one cell, so seeding a field
         # costs one whole lowering per cell. Steps (1) and (2) above do not.
         v = try
-            _eval_cellwise(access, rhs, cell; const_arrays=const_arrays,
-                           registered_functions=registered_functions,
-                           params=params)
+            _eval_cellwise(
+                access, rhs, cell; const_arrays = const_arrays,
+                registered_functions = registered_functions,
+                params = params
+            )
         catch err
             _is_resource_error(err) && rethrow()
             push!(_errs, "as coordinate expression: $(sprint(showerror, err))")
@@ -881,10 +921,14 @@ function _resolve_field_ic(access::_PerCellAccess, target::AbstractString,
     # (4) Unsupported RHS — a clear error, never a silent drop.
     _fld = rhs isa VarExpr ? " (no const_arrays entry named '$(rhs.name)')" : ""
     _why = isempty(_errs) ? "" : "; attempts failed — " * join(_errs, "; ")
-    throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
-        "ic($(target)): RHS is neither a loaded const-array field, a constant, " *
-        "nor a per-cell coordinate expression$(_fld); supply the initial field " *
-        "via const_arrays or a grid-geometry expression$(_why)"))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_UNSUPPORTED_EQUATION",
+            "ic($(target)): RHS is neither a loaded const-array field, a constant, " *
+                "nor a per-cell coordinate expression$(_fld); supply the initial field " *
+                "via const_arrays or a grid-geometry expression$(_why)"
+        )
+    )
 end
 
 """
@@ -905,9 +949,11 @@ function _index_at_cell(expr::EarthSciAST.ASTExpr, idxs::Vector{Int})::EarthSciA
             end
             return OpExpr("index", idx_args)
         end
-        (expr.op == "faq" || expr.op == "makearray" ||
-         expr.op == "index") && return expr
-        return reconstruct(expr; args=ASTExpr[_index_at_cell(a, idxs) for a in expr.args])
+        (
+            expr.op == "faq" || expr.op == "makearray" ||
+                expr.op == "index"
+        ) && return expr
+        return reconstruct(expr; args = ASTExpr[_index_at_cell(a, idxs) for a in expr.args])
     end
     return expr
 end
@@ -926,8 +972,10 @@ same scalar-leaf passthrough — so the resulting reduction term order (and thus
 floating-point sum) is byte-identical to the per-cell path with the output index
 folded to a literal.
 """
-function _index_at_cell_sym(expr::EarthSciAST.ASTExpr,
-                            syms::Vector{String})::EarthSciAST.ASTExpr
+function _index_at_cell_sym(
+        expr::EarthSciAST.ASTExpr,
+        syms::Vector{String}
+    )::EarthSciAST.ASTExpr
     if expr isa OpExpr
         if _is_array_producer(expr)
             idx_args = ASTExpr[expr]
@@ -936,9 +984,11 @@ function _index_at_cell_sym(expr::EarthSciAST.ASTExpr,
             end
             return OpExpr("index", idx_args)
         end
-        (expr.op == "faq" || expr.op == "makearray" ||
-         expr.op == "index") && return expr
-        return reconstruct(expr; args=ASTExpr[_index_at_cell_sym(a, syms) for a in expr.args])
+        (
+            expr.op == "faq" || expr.op == "makearray" ||
+                expr.op == "index"
+        ) && return expr
+        return reconstruct(expr; args = ASTExpr[_index_at_cell_sym(a, syms) for a in expr.args])
     end
     return expr
 end
@@ -966,23 +1016,27 @@ end
 #
 # One resolve and compile per call, so per cell: it takes a license (or a
 # refusal's one-cell probe), compiler.jl.
-function _eval_cellwise(::_PerCellAccess, expr::EarthSciAST.ASTExpr, cell::Vector{Int};
-                        const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS,
-                        registered_functions::AbstractDict=Dict{String,Function}(),
-                        params::AbstractDict=_EMPTY_PARAMS,
-                        t::Float64=0.0)::Float64
+function _eval_cellwise(
+        ::_PerCellAccess, expr::EarthSciAST.ASTExpr, cell::Vector{Int};
+        const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS,
+        registered_functions::AbstractDict = Dict{String, Function}(),
+        params::AbstractDict = _EMPTY_PARAMS,
+        t::Float64 = 0.0
+    )::Float64
     cellwise = _index_at_cell(expr, cell)
-    resolved = _resolve_indices(cellwise,
-                                Dict{String,Tuple{Vector{Int},Vector{Int}}}(),
-                                Dict{String,Int}(), const_arrays)
-    reg = Dict{String,Any}(String(k) => v for (k, v) in registered_functions)
+    resolved = _resolve_indices(
+        cellwise,
+        Dict{String, Tuple{Vector{Int}, Vector{Int}}}(),
+        Dict{String, Int}(), const_arrays
+    )
+    reg = Dict{String, Any}(String(k) => v for (k, v) in registered_functions)
     if isempty(params)
-        node = _compile(resolved, Dict{String,Int}(), Set{Symbol}(), reg)
+        node = _compile(resolved, Dict{String, Int}(), Set{Symbol}(), reg)
         return _eval_node(node, Float64[], NamedTuple(), t)
     end
     psyms = Symbol[Symbol(k) for k in keys(params)]
     pvals = Float64[Float64(params[k]) for k in keys(params)]
-    node = _compile(resolved, Dict{String,Int}(), Set{Symbol}(psyms), reg)
+    node = _compile(resolved, Dict{String, Int}(), Set{Symbol}(psyms), reg)
     p_nt = NamedTuple{Tuple(psyms)}(Tuple(pvals))
     return _eval_node(node, Float64[], p_nt, t)
 end
@@ -997,8 +1051,10 @@ function _ic_body_is_closed_form(e)::Bool
     e isa OpExpr || return true
     (e.op == "index" || e.op == "makearray" || e.op == "faq") && return false
     _is_array_producer(e) && return false
-    (e.lower !== nothing || e.upper !== nothing || e.filter !== nothing ||
-     e.key !== nothing || e.table_axes !== nothing || e.ranges !== nothing) && return false
+    (
+        e.lower !== nothing || e.upper !== nothing || e.filter !== nothing ||
+            e.key !== nothing || e.table_axes !== nothing || e.ranges !== nothing
+    ) && return false
     for a in e.args
         _ic_body_is_closed_form(a) || return false
     end
@@ -1020,8 +1076,10 @@ end
 # path: `_eval_node` computes every leaf in `Float64`, so a loop index bound as a
 # `Float64` param equals that index folded to a `Float64` literal. Returns a
 # `(cell) -> Float64` closure, or `nothing` to signal the per-cell fallback.
-function _try_field_ic_fastpath(rhs, params::AbstractDict,
-                                registered_functions, const_arrays)
+function _try_field_ic_fastpath(
+        rhs, params::AbstractDict,
+        registered_functions, const_arrays
+    )
     rhs isa OpExpr || return nothing
     (rhs.op == "faq") || return nothing
     (rhs.join_gates === nothing && rhs.filter === nothing) || return nothing
@@ -1033,7 +1091,7 @@ function _try_field_ic_fastpath(rhs, params::AbstractDict,
     isempty(oi) && return nothing
     # Non-contracting: every declared range index is an output index (a contracted
     # index would need reduction, not a single per-cell value).
-    ranges = rhs.ranges === nothing ? Dict{String,Any}() : rhs.ranges
+    ranges = rhs.ranges === nothing ? Dict{String, Any}() : rhs.ranges
     all(n -> n in oi, keys(ranges)) || return nothing
     # A loop index must not collide with a scalar-param name or the time symbol.
     for nm in oi
@@ -1041,14 +1099,14 @@ function _try_field_ic_fastpath(rhs, params::AbstractDict,
     end
     _ic_body_is_closed_form(body) || return nothing
 
-    reg = Dict{String,Any}(String(k) => v for (k, v) in registered_functions)
+    reg = Dict{String, Any}(String(k) => v for (k, v) in registered_functions)
     pkeys = collect(keys(params))
     psyms = Symbol[Symbol(k) for k in pkeys]
     for nm in oi
         push!(psyms, Symbol(nm))
     end
     node = try
-        _compile(body, Dict{String,Int}(), Set{Symbol}(psyms), reg)
+        _compile(body, Dict{String, Int}(), Set{Symbol}(psyms), reg)
     catch err
         _is_resource_error(err) && rethrow()
         return nothing   # anything the closed-form guard missed → per-cell fallback
@@ -1058,8 +1116,12 @@ function _try_field_ic_fastpath(rhs, params::AbstractDict,
     nidx = length(oi)
     symtup = Tuple(psyms)
     return function (cell::AbstractVector{<:Integer})
-        length(cell) == nidx || throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
-            "field-ic fast path: cell rank $(length(cell)) ≠ output rank $nidx"))
+        length(cell) == nidx || throw(
+            TreeWalkError(
+                "E_TREEWALK_UNSUPPORTED_EQUATION",
+                "field-ic fast path: cell rank $(length(cell)) ≠ output rank $nidx"
+            )
+        )
         vals = Vector{Float64}(undef, npar + nidx)
         @inbounds for d in 1:npar
             vals[d] = pbase[d]
@@ -1109,9 +1171,9 @@ end
 # `_eval_cellwise` for why it cannot travel as a parameter. It is fixed per
 # evaluator (one assertion reads one time), stays `Float64` so the struct is
 # still isbits, and is `0.0` for every build-time caller.
-struct _CellEval{syms,NP,NI}
+struct _CellEval{syms, NP, NI}
     node::_Node
-    base::NTuple{NP,Float64}
+    base::NTuple{NP, Float64}
     t::Float64
 end
 
@@ -1121,7 +1183,7 @@ end
 @inline _idx_tuple(cell, ::Val{NI}) where {NI} =
     ntuple(d -> @inbounds(Float64(cell[d])), Val(NI))
 
-@inline function (ce::_CellEval{syms,NP,NI})(cell::AbstractVector{<:Integer}) where {syms,NP,NI}
+@inline function (ce::_CellEval{syms, NP, NI})(cell::AbstractVector{<:Integer}) where {syms, NP, NI}
     vals = (ce.base..., _idx_tuple(cell, Val(NI))...)   # isbits tuple → stack
     p_nt = NamedTuple{syms}(vals)                        # type-stable (syms is a type param)
     return _eval_node(ce.node, _NO_STATE_U, p_nt, ce.t)
@@ -1141,15 +1203,19 @@ const _CELLWISE_FASTPATH_MISS = Ref{Int}(0)
 # Thin instrumentation wrapper: forwards verbatim to `_cellwise_compile_once_impl`
 # and bumps the HIT/MISS counter by the impl's result. Behaviour-identical to the
 # impl — same return value, same signature — so no call site changes.
-function _cellwise_compile_once(expr::EarthSciAST.ASTExpr, nidx::Int,
-                                const_arrays::AbstractDict,
-                                registered_functions::AbstractDict,
-                                params::AbstractDict;
-                                bind_syms::Union{Nothing,Vector{String}}=nothing,
-                                t::Float64=0.0)
-    ce = _cellwise_compile_once_impl(expr, nidx, const_arrays,
-                                     registered_functions, params;
-                                     bind_syms=bind_syms, t=t)
+function _cellwise_compile_once(
+        expr::EarthSciAST.ASTExpr, nidx::Int,
+        const_arrays::AbstractDict,
+        registered_functions::AbstractDict,
+        params::AbstractDict;
+        bind_syms::Union{Nothing, Vector{String}} = nothing,
+        t::Float64 = 0.0
+    )
+    ce = _cellwise_compile_once_impl(
+        expr, nidx, const_arrays,
+        registered_functions, params;
+        bind_syms = bind_syms, t = t
+    )
     if ce === nothing
         _CELLWISE_FASTPATH_MISS[] += 1
     else
@@ -1162,12 +1228,14 @@ end
 # `nothing` if the fast path cannot apply (the caller falls back to per-cell). The
 # resolve+compile is attempted ONCE with the output indices bound as reserved
 # parameters; ANY failure (unsupported construct, unbound name, …) yields `nothing`.
-function _cellwise_compile_once_impl(expr::EarthSciAST.ASTExpr, nidx::Int,
-                                const_arrays::AbstractDict,
-                                registered_functions::AbstractDict,
-                                params::AbstractDict;
-                                bind_syms::Union{Nothing,Vector{String}}=nothing,
-                                t::Float64=0.0)
+function _cellwise_compile_once_impl(
+        expr::EarthSciAST.ASTExpr, nidx::Int,
+        const_arrays::AbstractDict,
+        registered_functions::AbstractDict,
+        params::AbstractDict;
+        bind_syms::Union{Nothing, Vector{String}} = nothing,
+        t::Float64 = 0.0
+    )
     # `nidx == 0` is a SHAPELESS (rank-0) target — one cell, no output index to
     # bind. It compiles exactly like any other: no reserved index parameters, an
     # empty symbol list for `_index_at_cell_sym` (which then makes the same
@@ -1193,20 +1261,22 @@ function _cellwise_compile_once_impl(expr::EarthSciAST.ASTExpr, nidx::Int,
         push!(psyms, Symbol(s))
     end
     bound = Set{String}(syms_str)
-    reg = Dict{String,Any}(String(k) => v for (k, v) in registered_functions)
+    reg = Dict{String, Any}(String(k) => v for (k, v) in registered_functions)
     node = try
         cellwise = _index_at_cell_sym(expr, syms_str)
-        resolved = _resolve_indices(cellwise,
-                                    Dict{String,Tuple{Vector{Int},Vector{Int}}}(),
-                                    Dict{String,Int}(), const_arrays,
-                                    _EMPTY_PGATHER, nothing, bound)
-        _compile(resolved, Dict{String,Int}(), Set{Symbol}(psyms), reg)
+        resolved = _resolve_indices(
+            cellwise,
+            Dict{String, Tuple{Vector{Int}, Vector{Int}}}(),
+            Dict{String, Int}(), const_arrays,
+            _EMPTY_PGATHER, nothing, bound
+        )
+        _compile(resolved, Dict{String, Int}(), Set{Symbol}(psyms), reg)
     catch err
         _is_resource_error(err) && rethrow()
         return nothing   # anything unsupported → per-cell fallback
     end
     base = ntuple(i -> Float64(params[pkeys[i]]), length(pkeys))
-    return _CellEval{Tuple(psyms),length(pkeys),nidx}(node, base, t)
+    return _CellEval{Tuple(psyms), length(pkeys), nidx}(node, base, t)
 end
 
 # Compile a SCALAR term once with `syms` — every loop symbol it reads, output and
@@ -1228,10 +1298,12 @@ end
 # gate's own key sequence keeps the whole field on one compile, which is what
 # `compiler=:native` promises; `:interpreter` remains the oracle it is checked
 # against.
-function _scalarwise_compile_once(expr::EarthSciAST.ASTExpr, syms::Vector{String},
-                                  const_arrays::AbstractDict,
-                                  registered_functions::AbstractDict,
-                                  params::AbstractDict; t::Float64=0.0)
+function _scalarwise_compile_once(
+        expr::EarthSciAST.ASTExpr, syms::Vector{String},
+        const_arrays::AbstractDict,
+        registered_functions::AbstractDict,
+        params::AbstractDict; t::Float64 = 0.0
+    )
     isempty(syms) && return nothing
     length(unique(syms)) == length(syms) || return nothing
     for s in syms
@@ -1243,25 +1315,27 @@ function _scalarwise_compile_once(expr::EarthSciAST.ASTExpr, syms::Vector{String
         push!(psyms, Symbol(s))
     end
     bound = Set{String}(syms)
-    reg = Dict{String,Any}(String(k) => v for (k, v) in registered_functions)
+    reg = Dict{String, Any}(String(k) => v for (k, v) in registered_functions)
     node = try
-        resolved = _resolve_indices(expr,
-                                    Dict{String,Tuple{Vector{Int},Vector{Int}}}(),
-                                    Dict{String,Int}(), const_arrays,
-                                    _EMPTY_PGATHER, nothing, bound)
-        _compile(resolved, Dict{String,Int}(), Set{Symbol}(psyms), reg)
+        resolved = _resolve_indices(
+            expr,
+            Dict{String, Tuple{Vector{Int}, Vector{Int}}}(),
+            Dict{String, Int}(), const_arrays,
+            _EMPTY_PGATHER, nothing, bound
+        )
+        _compile(resolved, Dict{String, Int}(), Set{Symbol}(psyms), reg)
     catch err
         _is_resource_error(err) && rethrow()
         return nothing
     end
     base = ntuple(i -> Float64(params[pkeys[i]]), length(pkeys))
-    return _CellEval{Tuple(psyms),length(pkeys),length(syms)}(node, base, t)
+    return _CellEval{Tuple(psyms), length(pkeys), length(syms)}(node, base, t)
 end
 
 # Function barrier: evaluate `ce` at every cell. `ce` arrives concretely typed
 # (`CE` is inferred from it), so the per-cell call is a STATIC dispatch and the loop
 # body allocates nothing beyond the single output vector.
-function _eval_cells(ce::CE, cells::AbstractVector) where {CE<:_CellEval}
+function _eval_cells(ce::CE, cells::AbstractVector) where {CE <: _CellEval}
     out = Vector{Float64}(undef, length(cells))
     @inbounds for i in eachindex(cells)
         out[i] = ce(cells[i])
@@ -1287,14 +1361,22 @@ end
 # be concrete integers — expression-valued bounds are not supported by the
 # tree-walk evaluator).
 function _expand_int_range(r::AbstractVector)
-    all(x -> x isa Integer, r) || throw(TreeWalkError("E_TREEWALK_DYNAMIC_RANGE",
-        "expression-valued range bounds are not supported in the tree-walk " *
-        "evaluator; use a structured-grid discretization, whose bounds are " *
-        "concrete integers by construction"))
+    all(x -> x isa Integer, r) || throw(
+        TreeWalkError(
+            "E_TREEWALK_DYNAMIC_RANGE",
+            "expression-valued range bounds are not supported in the tree-walk " *
+                "evaluator; use a structured-grid discretization, whose bounds are " *
+                "concrete integers by construction"
+        )
+    )
     length(r) == 2 && return Int(r[1]):Int(r[2])
     length(r) == 3 && return Int(r[1]):Int(r[2]):Int(r[3])
-    throw(TreeWalkError("E_TREEWALK_RANGE_ARITY",
-          "range entry must have 2 or 3 entries, got $(length(r))"))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_RANGE_ARITY",
+            "range entry must have 2 or 3 entries, got $(length(r))"
+        )
+    )
 end
 
 # A unit-step range as itself, any other range as its value list.
@@ -1328,16 +1410,20 @@ function _no_huge_pages(ptr::Ptr{Cvoid}, nbytes::Int)
     pg = UInt(4096)
     lo = (UInt(ptr) + pg - 1) & ~(pg - 1)
     hi = (UInt(ptr) + UInt(nbytes)) & ~(pg - 1)
-    hi > lo && ccall(:madvise, Cint, (Ptr{Cvoid}, Csize_t, Cint),
-                     Ptr{Cvoid}(lo), hi - lo, 15)   # MADV_NOHUGEPAGE
+    hi > lo && ccall(
+        :madvise, Cint, (Ptr{Cvoid}, Csize_t, Cint),
+        Ptr{Cvoid}(lo), hi - lo, 15
+    )   # MADV_NOHUGEPAGE
     return nothing
 end
 
 # The constant contracted ranges as value lists, for the per-cell loops that
 # store them into `Vector{Int}` slots (converted once here, not once per cell).
 _contract_lists(::Nothing) = nothing
-_contract_lists(cc) = Union{Vector{Int},Nothing}[c === nothing ? nothing : convert(Vector{Int}, c)
-                                                 for c in cc]
+_contract_lists(cc) = Union{Vector{Int}, Nothing}[
+    c === nothing ? nothing : convert(Vector{Int}, c)
+        for c in cc
+]
 
 # The output-index iterators of a `faq` equation, one per name: the ranges
 # themselves when every one is unit-step (so a grid-sized axis is never
@@ -1363,35 +1449,49 @@ _is_const_int_range(r::AbstractVector) = all(x -> x isa Integer, r)
 # upper bound is each cell's true valence, evaluated lazily per output cell.
 # Integer elements pass through unchanged, so a fully-constant range gives the
 # same result as `_expand_int_range` (backward compatible).
-function _expand_int_range_dyn(r::AbstractVector, idx_env::Dict{String,Int},
-                               const_arrays::AbstractDict)
+function _expand_int_range_dyn(
+        r::AbstractVector, idx_env::Dict{String, Int},
+        const_arrays::AbstractDict
+    )
     bnd(x) = x isa Integer ? Int(x) : _eval_const_int(x, idx_env, const_arrays)
     length(r) == 2 && return bnd(r[1]):bnd(r[2])
     length(r) == 3 && return bnd(r[1]):bnd(r[2]):bnd(r[3])
-    throw(TreeWalkError("E_TREEWALK_RANGE_ARITY",
-          "range entry must have 2 or 3 entries, got $(length(r))"))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_RANGE_ARITY",
+            "range entry must have 2 or 3 entries, got $(length(r))"
+        )
+    )
 end
 
 # Evaluate a purely-arithmetic expression (literals + idx_env bindings + const_array
 # lookups) to a concrete Int. Used to resolve index(u, i+1) after loop-var
 # substitution, and for indirect gather: u[index(conn, c, k)] where conn is a
 # 2D const_array holding neighbor indices.
-function _eval_const_int(expr::NumExpr, idx_env::Dict{String,Int},
-                          const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS)
+function _eval_const_int(
+        expr::NumExpr, idx_env::Dict{String, Int},
+        const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS
+    )
     return Int(expr.value)
 end
-function _eval_const_int(expr::IntExpr, idx_env::Dict{String,Int},
-                          const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS)
+function _eval_const_int(
+        expr::IntExpr, idx_env::Dict{String, Int},
+        const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS
+    )
     return expr.value
 end
-function _eval_const_int(expr::VarExpr, idx_env::Dict{String,Int},
-                          const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS)
+function _eval_const_int(
+        expr::VarExpr, idx_env::Dict{String, Int},
+        const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS
+    )
     haskey(idx_env, expr.name) ||
         throw(TreeWalkError("E_TREEWALK_UNBOUND_LOOP_VAR", expr.name))
     return idx_env[expr.name]
 end
-function _eval_const_int(expr::OpExpr, idx_env::Dict{String,Int},
-                          const_arrays::AbstractDict=_EMPTY_CONST_ARRAYS)
+function _eval_const_int(
+        expr::OpExpr, idx_env::Dict{String, Int},
+        const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS
+    )
     op = expr.op
     c = expr.args
     if op == "+"
@@ -1457,8 +1557,12 @@ function _eval_const_int(expr::OpExpr, idx_env::Dict{String,Int},
         # subscripts with one. It is the `NumExpr` arm above.
         v = expr.value
         (v isa Real && !(v isa Bool)) ||
-            throw(TreeWalkError("E_TREEWALK_INDEX_NOT_CONST",
-                "a non-scalar `const` is not an integer index"))
+            throw(
+            TreeWalkError(
+                "E_TREEWALK_INDEX_NOT_CONST",
+                "a non-scalar `const` is not an integer index"
+            )
+        )
         return Int(v)
     elseif op == "index"
         # Indirect gather: index(const_array_name, i1, i2, ...) → Int
@@ -1467,32 +1571,52 @@ function _eval_const_int(expr::OpExpr, idx_env::Dict{String,Int},
         # also be an inline `const` literal, `index({op:const, value:[…]}, i)`,
         # read through the interning the expression-position gather uses
         # (`_intern_inline_const`), so both spellings share one boundary policy.
-        isempty(c) && throw(TreeWalkError("E_TREEWALK_INDEX_EMPTY",
-                                           "index op in index position requires at least one arg"))
+        isempty(c) && throw(
+            TreeWalkError(
+                "E_TREEWALK_INDEX_EMPTY",
+                "index op in index position requires at least one arg"
+            )
+        )
         first = c[1]
         if first isa OpExpr && first.op == "const" && first.value isa AbstractVector
             arr, name = _intern_inline_const(first, const_arrays)
         else
             first isa VarExpr ||
-                throw(TreeWalkError("E_TREEWALK_INDEX_NOT_CONST",
+                throw(
+                TreeWalkError(
+                    "E_TREEWALK_INDEX_NOT_CONST",
                     "index op in index position: first arg must be a variable name " *
-                    "or an inline `const` array"))
+                        "or an inline `const` array"
+                )
+            )
             haskey(const_arrays, first.name) ||
-                throw(TreeWalkError("E_TREEWALK_INDEX_NOT_CONST",
+                throw(
+                TreeWalkError(
+                    "E_TREEWALK_INDEX_NOT_CONST",
                     "non-const array '$(first.name)' used in index position; " *
-                    "add it to const_arrays or use a state-variable index"))
+                        "add it to const_arrays or use a state-variable index"
+                )
+            )
             arr, name = const_arrays[first.name], first.name
         end
         idx_args = c[2:end]
         length(idx_args) == ndims(arr) ||
-            throw(TreeWalkError("E_TREEWALK_INDEX_NOT_CONST",
-                "const array '$(name)' is $(ndims(arr))D but got $(length(idx_args)) indices"))
+            throw(
+            TreeWalkError(
+                "E_TREEWALK_INDEX_NOT_CONST",
+                "const array '$(name)' is $(ndims(arr))D but got $(length(idx_args)) indices"
+            )
+        )
         int_indices = [_eval_const_int(a, idx_env, const_arrays) for a in idx_args]
         for d in 1:ndims(arr)
             int_indices[d] = _resolve_const_index(arr, name, d, int_indices[d], size(arr, d))
         end
         return Int(round(arr[int_indices...]))
     end
-    throw(TreeWalkError("E_TREEWALK_INDEX_NOT_CONST",
-          "cannot evaluate '$(op)' as a constant integer index"))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_INDEX_NOT_CONST",
+            "cannot evaluate '$(op)' as a constant integer index"
+        )
+    )
 end

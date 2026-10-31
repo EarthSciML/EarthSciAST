@@ -42,18 +42,28 @@ const ESM = EarthSciAST
 # `·u[i]` — a STATE reference inside the offending subtree, the negative
 # control (`_exprtbl_evaluable` must reject it; "u" is neither a loop index
 # nor a const array).
-function _stt_model(N; state_in_agg::Bool=false)
+function _stt_model(N; state_in_agg::Bool = false)
     vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
-    lap = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
-                   _op("*", _n(-2.0), _idx("u", _v("i"))),
-                   _idx("u", _op("+", _v("i"), _i(1))))
+    lap = _op(
+        "+", _idx("u", _op("-", _v("i"), _i(1))),
+        _op("*", _n(-2.0), _idx("u", _v("i"))),
+        _idx("u", _op("+", _v("i"), _i(1)))
+    )
     term = state_in_agg ?
         _op("*", _idx("W", _v("i"), _v("k")), _idx("u", _v("i"))) :
         _op("*", _idx("W", _v("i"), _v("k")), _v("k"))
-    agg = ESM.OpExpr("faq", ESM.ASTExpr[]; expr_body=term,
-        ranges=Dict{String,Any}("k" => Any[1, 3]), reduce="+")
-    ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                  _ao1(_op("+", lap, agg), "i", 1, N))])
+    agg = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; expr_body = term,
+        ranges = Dict{String, Any}("k" => Any[1, 3]), reduce = "+"
+    )
+    return ESM.Model(
+        vars, [
+            ESM.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, N),
+                _ao1(_op("+", lap, agg), "i", 1, N)
+            ),
+        ]
+    )
 end
 
 # Row sums genuinely vary per cell (sin data), so the interior box's table can
@@ -64,44 +74,58 @@ _stt_ics(N) = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
 
 # Build `model` under both compilers; tag → (f!, u0, p, tally, diag).
 function _stt_build3(model, ics, W)
-    out = Dict{Symbol,Any}()
+    out = Dict{Symbol, Any}()
     for (tag, compiler) in ((:tbl, :native), (:ref, :interpreter))
         ESM._reset_cascade_tally!()
-        f!, u0, p, _t, _vm, diag = ESM._build_evaluator_impl(model;
-            initial_conditions=ics, const_arrays=Dict("W" => W),
-            compiler=compiler)
+        f!, u0, p, _t, _vm, diag = ESM._build_evaluator_impl(
+            model;
+            initial_conditions = ics, const_arrays = Dict("W" => W),
+            compiler = compiler
+        )
         out[tag] = (f!, u0, p, copy(ESM._CASCADE_TALLY), diag)
     end
-    out
+    return out
 end
 function _stt_du(t)
     f!, u0, p, _, _ = t
-    du = zero(u0); f!(du, u0, p, 0.0); du
+    du = zero(u0); f!(du, u0, p, 0.0)
+    return du
 end
 _stt_jac(t) = ForwardDiff.jacobian(
-    uu -> (d = similar(uu); fill!(d, 0); t[1](d, uu, t[3], 0.0); d), t[2])
+    uu -> (d = similar(uu); fill!(d, 0); t[1](d, uu, t[3], 0.0); d), t[2]
+)
 
 # Structural introspection build (grid pin): a zero primary node budget — a
 # retained tuning threshold — keeps the complete kernel list in
 # `kernel_section.kernels` (the grid_invariance_test idiom — n_emitted == 0
 # asserted at the use site).
 function _stt_kernels(N)
-    withenv("ESS_CODEGEN_NODE_BUDGET" => "0") do
+    return withenv("ESS_CODEGEN_NODE_BUDGET" => "0") do
         ESM._reset_cascade_tally!()
-        f, u0, p, _t, _vm, _diag = ESM._build_evaluator_impl(_stt_model(N);
-            initial_conditions=_stt_ics(N), const_arrays=Dict("W" => _stt_W(N)))
+        f, u0, p, _t, _vm, _diag = ESM._build_evaluator_impl(
+            _stt_model(N);
+            initial_conditions = _stt_ics(N), const_arrays = Dict("W" => _stt_W(N))
+        )
         ks = getfield(getfield(f, :kernel_section), :kernels)
-        (kernels=ks, tally=copy(ESM._CASCADE_TALLY),
-         n_emitted=getfield(getfield(f, :kernel_section), :n_emitted))
+        (
+            kernels = ks, tally = copy(ESM._CASCADE_TALLY),
+            n_emitted = getfield(getfield(f, :kernel_section), :n_emitted),
+        )
     end
 end
 # Total materialized const-box table length across kernels. In this fixture W
 # is read ONLY through the rescued lane, so every `_AK_CONST_BOX` descriptor
 # IS a per-box subtree table (single-cell edge boxes fold to literals via the
 # exhaustive all-equal fold — vals has one entry — leaving the interior box).
-_stt_tbl_len(kernels) = sum(sum(Int[length(d.arr) for d in K.acc
-                                    if d.kind == ESM._AK_CONST_BOX])
-                            for K in kernels; init=0)
+_stt_tbl_len(kernels) = sum(
+    sum(
+        Int[
+            length(d.arr) for d in K.acc
+                if d.kind == ESM._AK_CONST_BOX
+        ]
+    )
+        for K in kernels; init = 0
+)
 
 @testset "subtree-table rescue ≡ per-cell (subterm-granular fallback)" begin
 
@@ -141,7 +165,7 @@ _stt_tbl_len(kernels) = sum(sum(Int[length(d.arr) for d in K.acc
     end
 
     @testset "NEGATIVE control: state inside the subtree still declines (N=$N)" for N in (8,)
-        b = _stt_build3(_stt_model(N; state_in_agg=true), _stt_ics(N), _stt_W(N))
+        b = _stt_build3(_stt_model(N; state_in_agg = true), _stt_ics(N), _stt_W(N))
         # `_exprtbl_evaluable` rejects the state reference BEFORE any recipe
         # or tally, so no subtree table is built. The reduction is three terms,
         # below the contraction loop's floor, so the affine tier unrolls it

@@ -19,8 +19,8 @@ using EarthSciAST
 
 const _UW = EarthSciAST
 
-_uw_var(; shape=nothing, default=nothing) = begin
-    v = Dict{String,Any}("type" => "unknown", "units" => "1")
+_uw_var(; shape = nothing, default = nothing) = begin
+    v = Dict{String, Any}("type" => "unknown", "units" => "1")
     shape === nothing || (v["shape"] = shape)
     default === nothing || (v["default"] = default)
     v
@@ -28,25 +28,36 @@ end
 
 # A 0-D box: `c` is a state with a trivial tendency, `extra` an observed nothing
 # reads, defined by `extra_rhs`.
-function _uw_box(extra_rhs; shaped=false)
+function _uw_box(extra_rhs; shaped = false)
     shape = shaped ? ["lev"] : nothing
-    doc = Dict{String,Any}(
+    doc = Dict{String, Any}(
         "esm" => "1.0.0",
-        "metadata" => Dict{String,Any}("name" => "UnloweredWalk", "authors" => ["test"]),
-        "models" => Dict{String,Any}("Box" => Dict{String,Any}(
-            "variables" => Dict{String,Any}(
-                "c" => _uw_var(; shape=shape, default=1.0),
-                "extra" => _uw_var(; shape=shape)),
-            "equations" => Any[
-                Dict{String,Any}("lhs" => Dict{String,Any}("op" => "D", "args" => ["c"], "wrt" => "t"),
-                                 "rhs" => 1.0),
-                Dict{String,Any}("lhs" => "extra", "rhs" => extra_rhs)])))
-    shaped && (doc["index_sets"] = Dict{String,Any}(
-        "lev" => Dict{String,Any}("kind" => "interval", "size" => 4)))
+        "metadata" => Dict{String, Any}("name" => "UnloweredWalk", "authors" => ["test"]),
+        "models" => Dict{String, Any}(
+            "Box" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "c" => _uw_var(; shape = shape, default = 1.0),
+                    "extra" => _uw_var(; shape = shape)
+                ),
+                "equations" => Any[
+                    Dict{String, Any}(
+                        "lhs" => Dict{String, Any}("op" => "D", "args" => ["c"], "wrt" => "t"),
+                        "rhs" => 1.0
+                    ),
+                    Dict{String, Any}("lhs" => "extra", "rhs" => extra_rhs),
+                ]
+            )
+        )
+    )
+    shaped && (
+        doc["index_sets"] = Dict{String, Any}(
+            "lev" => Dict{String, Any}("kind" => "interval", "size" => 4)
+        )
+    )
     return doc
 end
 
-_uw_op(op, args...) = Dict{String,Any}("op" => op, "args" => Any[args...])
+_uw_op(op, args...) = Dict{String, Any}("op" => op, "args" => Any[args...])
 
 function _uw_error(f)
     try
@@ -66,22 +77,25 @@ end
     end
 
     @testset "a dead elementwise array observed, folded away by the build, is refused" begin
-        doc = _uw_box(_uw_op("+", _uw_op("div", "c"), 1.0); shaped=true)
+        doc = _uw_box(_uw_op("+", _uw_op("div", "c"), 1.0); shaped = true)
         err = _uw_error(() -> esm_problem(doc, (0.0, 1.0)))
         @test err isa _UW.TreeWalkError && err.code == "unlowered_operator"
         @test err isa _UW.TreeWalkError && occursin("div", err.detail)
     end
 
     @testset "a dead array observed reports unlowered_operator, not a shape error" begin
-        doc = _uw_box(_uw_op("div", "c"); shaped=true)
+        doc = _uw_box(_uw_op("div", "c"); shaped = true)
         err = _uw_error(() -> esm_problem(doc, (0.0, 1.0)))
         @test err isa _UW.TreeWalkError && err.code == "unlowered_operator"
     end
 
     @testset "an unlowered op in an initial condition is refused" begin
         doc = _uw_box(1.0)
-        push!(doc["models"]["Box"]["equations"], Dict{String,Any}(
-            "lhs" => _uw_op("ic", "c"), "rhs" => _uw_op("godunov_hamiltonian", 2.0)))
+        push!(
+            doc["models"]["Box"]["equations"], Dict{String, Any}(
+                "lhs" => _uw_op("ic", "c"), "rhs" => _uw_op("godunov_hamiltonian", 2.0)
+            )
+        )
         err = _uw_error(() -> esm_problem(doc, (0.0, 1.0)))
         @test err isa _UW.TreeWalkError && err.code == "unlowered_operator"
         @test err isa _UW.TreeWalkError && occursin("godunov_hamiltonian", err.detail)
@@ -99,20 +113,33 @@ end
     end
 
     @testset "a structural time D under an equation-LHS faq is still core" begin
-        doc = Dict{String,Any}(
+        doc = Dict{String, Any}(
             "esm" => "1.1.0",
-            "metadata" => Dict{String,Any}("name" => "FaqLhsD", "authors" => ["test"]),
-            "index_sets" => Dict{String,Any}("lev" => Dict{String,Any}("kind" => "interval", "size" => 4)),
-            "models" => Dict{String,Any}("Column" => Dict{String,Any}(
-                "variables" => Dict{String,Any}("theta" => _uw_var(; shape=["lev"], default=1.0)),
-                "equations" => Any[Dict{String,Any}(
-                    "lhs" => Dict{String,Any}("op" => "faq", "args" => Any[], "output_idx" => ["k"],
-                        "expr" => Dict{String,Any}("op" => "D", "wrt" => "t",
-                            "args" => Any[_uw_op("index", "theta", "k")]),
-                        "ranges" => Dict{String,Any}("k" => Dict{String,Any}("from" => "lev"))),
-                    "rhs" => Dict{String,Any}("op" => "faq", "args" => Any[], "output_idx" => ["k"],
-                        "expr" => 1.0,
-                        "ranges" => Dict{String,Any}("k" => Dict{String,Any}("from" => "lev"))))])))
+            "metadata" => Dict{String, Any}("name" => "FaqLhsD", "authors" => ["test"]),
+            "index_sets" => Dict{String, Any}("lev" => Dict{String, Any}("kind" => "interval", "size" => 4)),
+            "models" => Dict{String, Any}(
+                "Column" => Dict{String, Any}(
+                    "variables" => Dict{String, Any}("theta" => _uw_var(; shape = ["lev"], default = 1.0)),
+                    "equations" => Any[
+                        Dict{String, Any}(
+                            "lhs" => Dict{String, Any}(
+                                "op" => "faq", "args" => Any[], "output_idx" => ["k"],
+                                "expr" => Dict{String, Any}(
+                                    "op" => "D", "wrt" => "t",
+                                    "args" => Any[_uw_op("index", "theta", "k")]
+                                ),
+                                "ranges" => Dict{String, Any}("k" => Dict{String, Any}("from" => "lev"))
+                            ),
+                            "rhs" => Dict{String, Any}(
+                                "op" => "faq", "args" => Any[], "output_idx" => ["k"],
+                                "expr" => 1.0,
+                                "ranges" => Dict{String, Any}("k" => Dict{String, Any}("from" => "lev"))
+                            )
+                        ),
+                    ]
+                )
+            )
+        )
         prob = esm_problem(doc, (0.0, 1.0))
         @test prob !== nothing
     end

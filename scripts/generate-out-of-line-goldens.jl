@@ -25,15 +25,15 @@ function _write_emit(dir::String, fixture::String, golden::String)
     open(joinpath(CONF, dir, golden), "w") do io
         write(io, s)
     end
-    println("wrote ", relpath(joinpath(CONF, dir, golden), ROOT))
+    return println("wrote ", relpath(joinpath(CONF, dir, golden), ROOT))
 end
 
 for (dir, fixture, golden) in [
-    ("emit_materialized_registry", "fixture.esm", "emitted.esm"),
-    ("emit_rename_dotted_keys", "fixture.esm", "emitted.esm"),
-    ("eager_target_bearing", "fixture.esm", "emitted.esm"),
-    ("opacity_negative", "fixture.esm", "emitted.esm"),
-    ("opacity_priority_shadowing", "fixture.esm", "emitted.esm"),
-]
+        ("emit_materialized_registry", "fixture.esm", "emitted.esm"),
+        ("emit_rename_dotted_keys", "fixture.esm", "emitted.esm"),
+        ("eager_target_bearing", "fixture.esm", "emitted.esm"),
+        ("opacity_negative", "fixture.esm", "emitted.esm"),
+        ("opacity_priority_shadowing", "fixture.esm", "emitted.esm"),
+    ]
     _write_emit(dir, fixture, golden)
 end

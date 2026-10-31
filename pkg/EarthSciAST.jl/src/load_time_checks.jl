@@ -33,7 +33,7 @@
 const _INTERP_FN_NAMES = ("interp.searchsorted", "interp.linear", "interp.bilinear")
 
 # One finding: the JSON pointer of the table or expression field, and the error.
-const _LoadCheckFinding = Tuple{String,Union{ClosedFunctionError,TableLookupError}}
+const _LoadCheckFinding = Tuple{String, Union{ClosedFunctionError, TableLookupError}}
 
 """
     _check_function_tables(tables, findings; first_only) -> findings
@@ -41,8 +41,10 @@ const _LoadCheckFinding = Tuple{String,Union{ClosedFunctionError,TableLookupErro
 Run the ten esm-spec §9.5.5 checks on every entry of `tables`, in document
 order, pushing `("/function_tables/<id>", err)` for each table that fails one.
 """
-function _check_function_tables(tables, findings::Vector{_LoadCheckFinding};
-                                first_only::Bool=false)
+function _check_function_tables(
+        tables, findings::Vector{_LoadCheckFinding};
+        first_only::Bool = false
+    )
     tables === nothing && return findings
     for (id, table) in tables
         try
@@ -69,11 +71,16 @@ function _check_interp_fn_node(e::OpExpr)::Nothing
     (e.op == "fn" && e.name !== nothing && e.name in _INTERP_FN_NAMES) || return nothing
     fname = String(e.name)
     cspec = _fn_const_arg_spec(fname)
-    length(e.args) == cspec.arity || throw(ClosedFunctionError(
-        ERROR_CODES.CLOSED_FUNCTION_ARITY,
-        "$(fname) expects $(cspec.arity) arguments, got $(length(e.args)) (esm-spec §9.2)"))
-    const_args = Any[_const_array_arg(e.args[pos], cspec.const_errs[k])
-                     for (k, pos) in enumerate(cspec.const_positions)]
+    length(e.args) == cspec.arity || throw(
+        ClosedFunctionError(
+            ERROR_CODES.CLOSED_FUNCTION_ARITY,
+            "$(fname) expects $(cspec.arity) arguments, got $(length(e.args)) (esm-spec §9.2)"
+        )
+    )
+    const_args = Any[
+        _const_array_arg(e.args[pos], cspec.const_errs[k])
+            for (k, pos) in enumerate(cspec.const_positions)
+    ]
     if fname == "interp.linear"
         _build_interp_linear_spec(fname, const_args...)
     elseif fname == "interp.bilinear"
@@ -88,8 +95,10 @@ end
 # expression-bearing field (the generated `OPEXPR_FIELD_TABLE` walk). `seen` is
 # shared across the whole document, so a subtree the template machinery shares
 # between fields is checked once.
-function _check_interp_fns_in!(findings::Vector{_LoadCheckFinding}, root, path::String,
-                               seen::IdDict{OpExpr,Nothing}, tables)
+function _check_interp_fns_in!(
+        findings::Vector{_LoadCheckFinding}, root, path::String,
+        seen::IdDict{OpExpr, Nothing}, tables
+    )
     root isa ASTExpr || return nothing
     try
         _foreach_subexpr_once(root, seen) do x
@@ -228,8 +237,10 @@ function _foreach_model_expression(f, m::Model, path::String, reg)
         _foreach_update_expression(f, var.update, "$(path)/variables/$(vname)", reg)
     end
     _foreach_equation_expression(f, m.equations, "$(path)/equations", reg)
-    _foreach_equation_expression(f, m.initialization_equations,
-                                 "$(path)/initialization_equations", reg)
+    _foreach_equation_expression(
+        f, m.initialization_equations,
+        "$(path)/initialization_equations", reg
+    )
     for (gname, g) in m.guesses
         g isa ASTExpr && f(g, "$(path)/guesses/$(gname)", reg)
     end
@@ -249,8 +260,10 @@ function _foreach_rs_expression(f, rs::ReactionSystem, path::String, reg)
     for p in rs.parameters
         _foreach_update_expression(f, p.update, "$(path)/parameters/$(p.name)", reg)
     end
-    _foreach_equation_expression(f, rs.constraint_equations,
-                                 "$(path)/constraint_equations", reg)
+    _foreach_equation_expression(
+        f, rs.constraint_equations,
+        "$(path)/constraint_equations", reg
+    )
     _foreach_event_expression(f, rs.continuous_events, rs.discrete_events, path, reg)
     _foreach_test_expression(f, rs.tests, path, reg)
     for (sname, sub) in rs.subsystems
@@ -291,15 +304,17 @@ table checks on every `function_tables` entry, then the `interp.*` argument
 checks and the `table_lookup` checks on every expression field. `first_only` stops at the first finding (the
 load path, which throws it).
 """
-function _load_time_check_findings(file::EsmFile; first_only::Bool=false)
+function _load_time_check_findings(file::EsmFile; first_only::Bool = false)
     findings = _LoadCheckFinding[]
-    _check_function_tables(file.function_tables, findings; first_only=first_only)
+    _check_function_tables(file.function_tables, findings; first_only = first_only)
     first_only && !isempty(findings) && return findings
-    seen = IdDict{OpExpr,Nothing}()
+    seen = IdDict{OpExpr, Nothing}()
     _foreach_expression_field(file) do expr, path, reg
         first_only && !isempty(findings) && return nothing
-        _check_interp_fns_in!(findings, _expand_for_check(expr, reg), path, seen,
-                              file.function_tables)
+        _check_interp_fns_in!(
+            findings, _expand_for_check(expr, reg), path, seen,
+            file.function_tables
+        )
     end
     return findings
 end
@@ -314,7 +329,7 @@ it on the loaded document, after template lowering, enum lowering and mount
 resolution.
 """
 function check_closed_functions_and_tables(file::EsmFile)::EsmFile
-    findings = _load_time_check_findings(file; first_only=true)
+    findings = _load_time_check_findings(file; first_only = true)
     isempty(findings) || throw(findings[1][2])
     return file
 end
@@ -327,6 +342,8 @@ structural error per broken table and per expression field holding a bad
 `interp.*` call, each carrying its esm-spec §9.2 / §9.5.5 code.
 """
 function validate_closed_functions_and_tables(file::EsmFile)::Vector{StructuralError}
-    return StructuralError[StructuralError(path, err.message, err.code)
-                           for (path, err) in _load_time_check_findings(file)]
+    return StructuralError[
+        StructuralError(path, err.message, err.code)
+            for (path, err) in _load_time_check_findings(file)
+    ]
 end

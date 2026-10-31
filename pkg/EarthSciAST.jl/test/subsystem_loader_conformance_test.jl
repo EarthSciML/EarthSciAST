@@ -67,8 +67,8 @@ _ESS_SL.provider_sample(p::_SubsysLoaderStub, ::Real) = p.field
 
         # (b) the run binds both fields through the offline CONST provider seam,
         # keyed by the flattened PARAMETER name.
-        providers = Dict{String,Any}(
-            "Box.k"    => _SubsysLoaderStub(Vector{Float64}(golden["loaders"]["Box.k"]["native"])),
+        providers = Dict{String, Any}(
+            "Box.k" => _SubsysLoaderStub(Vector{Float64}(golden["loaders"]["Box.k"]["native"])),
             "Box.wind" => _SubsysLoaderStub(Vector{Float64}(golden["loaders"]["Box.wind"]["native"])),
         )
         @test _ESS_SL.provider_is_const(providers["Box.k"])
@@ -78,16 +78,16 @@ _ESS_SL.provider_sample(p::_SubsysLoaderStub, ::Real) = p.field
         atimes = sort!(Float64[parse(Float64, String(k)) for k in keys(traj) if String(k) != "comment"])
 
         prob = _ESS_SL.esm_problem(fixture, tspan; providers = providers)
-        r = solve(prob, Tsit5(); reltol = 1e-9, abstol = 1e-11, saveat = atimes)
+        r = solve(prob, Tsit5(); reltol = 1.0e-9, abstol = 1.0e-11, saveat = atimes)
         @test SciMLBase.successful_retcode(r)
         @test haskey(prob.var_map, "Box.c")
 
-        rtol = 1e-4   # trajectory band (manifest §5.11 tolerances)
-        atol = 1e-6
+        rtol = 1.0e-4   # trajectory band (manifest §5.11 tolerances)
+        atol = 1.0e-6
         for tk in keys(traj)
             String(tk) == "comment" && continue
             t = parse(Float64, String(tk))
-            ti = findfirst(x -> isapprox(x, t; atol = 1e-9), r.t)
+            ti = findfirst(x -> isapprox(x, t; atol = 1.0e-9), r.t)
             @test ti !== nothing
             expected = Float64(traj[tk]["Box.c"])
             @test isapprox(r[Symbol("Box.c")][ti], expected; rtol = rtol, atol = atol)

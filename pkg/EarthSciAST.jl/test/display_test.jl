@@ -147,7 +147,7 @@ using EarthSciAST
 
     @testset "Equation Display" begin
         # Test Equation show method
-        lhs = OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt="t")
+        lhs = OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt = "t")
         rhs = OpExpr("*", EarthSciAST.ASTExpr[NumExpr(2.0), VarExpr("x")])
         eq = Equation(lhs, rhs)
 
@@ -161,7 +161,7 @@ using EarthSciAST
     end
 
     @testset "EsmFile Display" begin
-        metadata = Metadata("test_model", description="Test model")
+        metadata = Metadata("test_model", description = "Test model")
         esm_file = EsmFile("0.1.0", metadata)
 
         # 2-arg show: compact one-liner (used in reprs and collections)
@@ -181,13 +181,15 @@ using EarthSciAST
 
     @testset "Model and ReactionSystem Display" begin
         variables = Dict(
-            "x" => ModelVariable(UnknownVariable, default=1.0),
-            "k" => ModelVariable(ParameterVariable, default=0.5),
+            "x" => ModelVariable(UnknownVariable, default = 1.0),
+            "k" => ModelVariable(ParameterVariable, default = 0.5),
         )
-        equations = [Equation(
-            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt="t"),
-            OpExpr("*", EarthSciAST.ASTExpr[VarExpr("k"), VarExpr("x")]),
-        )]
+        equations = [
+            Equation(
+                OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt = "t"),
+                OpExpr("*", EarthSciAST.ASTExpr[VarExpr("k"), VarExpr("x")]),
+            ),
+        ]
         model = Model(variables, equations)
 
         # 2-arg show: compact, single line — safe inside collections
@@ -206,11 +208,15 @@ using EarthSciAST
 
         rs = ReactionSystem(
             [Species("A"), Species("B")],
-            [Reaction("r1",
-                      [EarthSciAST.StoichiometryEntry("A", 1)],
-                      [EarthSciAST.StoichiometryEntry("B", 1)],
-                      VarExpr("k"))];
-            parameters=[Parameter("k", 0.1)],
+            [
+                Reaction(
+                    "r1",
+                    [EarthSciAST.StoichiometryEntry("A", 1)],
+                    [EarthSciAST.StoichiometryEntry("B", 1)],
+                    VarExpr("k")
+                ),
+            ];
+            parameters = [Parameter("k", 0.1)],
         )
 
         show(io, rs)
@@ -249,13 +255,25 @@ using EarthSciAST
     # `ArgumentError` on `Model` / `ReactionSystem` / `EsmFile`, so an
     # `EsmFile` summary was renderable in one format and not the other two.
     @testset "to_unicode / to_latex / to_ascii accept containers" begin
-        model = Model(Dict("x" => ModelVariable(EarthSciAST.UnknownVariable)),
-                      [Equation(OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")]; wrt="t"),
-                                NumExpr(1.0))])
-        rsys = ReactionSystem([Species("A"), Species("B")],
-                              [Reaction(Dict("A" => 1.0), Dict("B" => 1.0),
-                                        NumExpr(1.0))])
-        file = EsmFile("1.0.0", Metadata("Containers"); models=Dict("M" => model))
+        model = Model(
+            Dict("x" => ModelVariable(EarthSciAST.UnknownVariable)),
+            [
+                Equation(
+                    OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")]; wrt = "t"),
+                    NumExpr(1.0)
+                ),
+            ]
+        )
+        rsys = ReactionSystem(
+            [Species("A"), Species("B")],
+            [
+                Reaction(
+                    Dict("A" => 1.0), Dict("B" => 1.0),
+                    NumExpr(1.0)
+                ),
+            ]
+        )
+        file = EsmFile("1.0.0", Metadata("Containers"); models = Dict("M" => model))
 
         for target in (model, rsys, file)
             for render in (to_ascii, to_unicode, to_latex)

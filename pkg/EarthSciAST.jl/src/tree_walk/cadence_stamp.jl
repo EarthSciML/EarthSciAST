@@ -44,16 +44,20 @@ end
 
 @noinline function _pstamp_refuse(p, nelems::Int)
     why = nelems > _PSTAMP_MAX_ELEMS ?
-          "it holds more than $(_PSTAMP_MAX_ELEMS) numbers" :
-          "it holds a value that is not a number, tuple, NamedTuple or array of these"
-    throw(TreeWalkError("E_TREEWALK_PARAM_UNSTAMPABLE",
-          "parameter object of type $(typeof(p)) cannot be used with memoized " *
-          "parameter-dependent values: $(why). Pass `p` as a NamedTuple, tuple " *
-          "or array of numbers (at most $(_PSTAMP_MAX_ELEMS) in total)"))
+        "it holds more than $(_PSTAMP_MAX_ELEMS) numbers" :
+        "it holds a value that is not a number, tuple, NamedTuple or array of these"
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_PARAM_UNSTAMPABLE",
+            "parameter object of type $(typeof(p)) cannot be used with memoized " *
+                "parameter-dependent values: $(why). Pass `p` as a NamedTuple, tuple " *
+                "or array of numbers (at most $(_PSTAMP_MAX_ELEMS) in total)"
+        )
+    )
 end
 
 _pstamp_comparable(x, n::Base.RefValue{Int}) = isbits(x)
-_pstamp_comparable(x::Union{Tuple,NamedTuple}, n::Base.RefValue{Int}) =
+_pstamp_comparable(x::Union{Tuple, NamedTuple}, n::Base.RefValue{Int}) =
     all(y -> _pstamp_comparable(y, n), values(x))
 function _pstamp_comparable(x::AbstractArray, n::Base.RefValue{Int})
     n[] += length(x)
@@ -107,7 +111,7 @@ end
 # different partials, keep it. The test does not allocate: it compares `s`
 # against the primal of each number in `p` where it stands.
 _pprimal(x::Number) = _value(x)
-_pprimal(x::Union{Tuple,NamedTuple}) = map(_pprimal, x)
+_pprimal(x::Union{Tuple, NamedTuple}) = map(_pprimal, x)
 _pprimal(x::AbstractArray) = map(_pprimal, x)
 _pprimal(x) = x
 
@@ -174,7 +178,7 @@ Base.setindex!(e::_ForcingEpoch, v) = (e.n = UInt64(v); e)
 # Data pointer => the builds reading that buffer: a weak reference to the
 # registered array (so a recycled address is told apart from the buffer it
 # once was) and a weak reference to each build's epoch.
-const _BUFFER_EPOCHS = Dict{UInt,Vector{Tuple{WeakRef,WeakRef}}}()
+const _BUFFER_EPOCHS = Dict{UInt, Vector{Tuple{WeakRef, WeakRef}}}()
 const _BUFFER_EPOCHS_LOCK = ReentrantLock()
 
 # Registrations die with their build or buffer, but nothing removes them then (a
@@ -185,7 +189,7 @@ const _BUFFER_EPOCHS_SWEEP_AT = Ref(64)
 
 _buffer_key(buf::AbstractArray) = UInt(pointer(buf))
 
-_live_registration(r::Tuple{WeakRef,WeakRef}) =
+_live_registration(r::Tuple{WeakRef, WeakRef}) =
     r[1].value !== nothing && r[2].value !== nothing
 
 function _sweep_buffer_epochs!()
@@ -203,7 +207,7 @@ function _register_forcing_buffers!(epoch::_ForcingEpoch, buffers)
         for buf in buffers
             buf isa DenseArray || continue
             k = _buffer_key(buf)
-            regs = get!(Vector{Tuple{WeakRef,WeakRef}}, _BUFFER_EPOCHS, k)
+            regs = get!(Vector{Tuple{WeakRef, WeakRef}}, _BUFFER_EPOCHS, k)
             filter!(_live_registration, regs)
             push!(regs, (WeakRef(buf), WeakRef(epoch)))
         end

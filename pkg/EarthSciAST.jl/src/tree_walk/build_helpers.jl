@@ -22,26 +22,30 @@ const _BENCH_BRANCH_TEMPLATES = Ref(0)
 # Compile-once tier (RFC §7.7 "compile references natively"): distinct template-
 # body variants compiled — one per (use site, region class). The RFC's ~21.
 const _BENCH_BODY_VARIANTS = Ref(0)
-_bench_reset!() = (_BENCH_COMPILE_CALLS[] = 0; _BENCH_BRANCH_TEMPLATES[] = 0;
-                   _BENCH_BODY_VARIANTS[] = 0;
-                   empty!(_BENCH_PHASE); empty!(_BENCH_PHASE_N);
-                   empty!(_BENCH_PHASE_GC); nothing)
+_bench_reset!() = (
+    _BENCH_COMPILE_CALLS[] = 0; _BENCH_BRANCH_TEMPLATES[] = 0;
+    _BENCH_BODY_VARIANTS[] = 0;
+    empty!(_BENCH_PHASE); empty!(_BENCH_PHASE_N);
+    empty!(_BENCH_PHASE_GC); nothing
+)
 
 # ---- BUILD PHASE TIMERS (diagnostic; `_BENCH_ON[]` gated, like the counters) --
 # `_BENCH_COMPILE_CALLS` counts node lowerings, which after the contraction-tier
 # fix is FLAT in the grid while build wall time is not. These accumulate wall
 # seconds and call counts per named build phase, so the O(#cells) term can be
 # attributed to a phase rather than inferred from IR volume.
-const _BENCH_PHASE   = Dict{Symbol,Float64}()
-const _BENCH_PHASE_N = Dict{Symbol,Int}()
-const _BENCH_PHASE_GC = Dict{Symbol,Float64}()
-@inline function _bench_phase!(k::Symbol, t0::UInt64, g0::UInt64=UInt64(0))
+const _BENCH_PHASE = Dict{Symbol, Float64}()
+const _BENCH_PHASE_N = Dict{Symbol, Int}()
+const _BENCH_PHASE_GC = Dict{Symbol, Float64}()
+@inline function _bench_phase!(k::Symbol, t0::UInt64, g0::UInt64 = UInt64(0))
     _BENCH_ON[] || return nothing
-    dt = (time_ns() - t0) / 1e9
-    _BENCH_PHASE[k]   = get(_BENCH_PHASE, k, 0.0) + dt
+    dt = (time_ns() - t0) / 1.0e9
+    _BENCH_PHASE[k] = get(_BENCH_PHASE, k, 0.0) + dt
     _BENCH_PHASE_N[k] = get(_BENCH_PHASE_N, k, 0) + 1
-    g0 == 0 || (_BENCH_PHASE_GC[k] = get(_BENCH_PHASE_GC, k, 0.0) +
-                                     (Base.gc_time_ns() - g0) / 1e9)
+    g0 == 0 || (
+        _BENCH_PHASE_GC[k] = get(_BENCH_PHASE_GC, k, 0.0) +
+            (Base.gc_time_ns() - g0) / 1.0e9
+    )
     return nothing
 end
 # Guarded on `_BENCH_ON[]` so a default build takes no clock reading at all.
@@ -50,7 +54,7 @@ end
 # argument is a `get!` with a `do` block — duplicating that would compile the
 # closure twice, so that site uses `@_bench_hot` below instead.
 macro _bench(k, ex)
-    quote
+    return quote
         if _BENCH_ON[]
             local _t0 = time_ns()
             local _g0 = Base.gc_time_ns()
@@ -68,7 +72,7 @@ end
 # in a per-lane loop — today that is `:spine_lower`, once per box, wrapping a
 # cache lookup that is already doing real work.
 macro _bench_hot(k, ex)
-    quote
+    return quote
         local _t0 = time_ns()
         local _g0 = Base.gc_time_ns()
         local _v = $(esc(ex))
@@ -91,9 +95,11 @@ end
 # repeat (old, new) visit through another parent is redundant, and skipping it
 # keeps the lockstep walk O(distinct nodes) on a shared DAG (unchanged
 # subtrees already short-circuit via `old === new`).
-function _translate_sites_lockstep!(sites::IdDict{OpExpr,OpExpr},
-                                    old::ASTExpr, new::ASTExpr,
-                                    seen::IdDict{OpExpr,Nothing}=IdDict{OpExpr,Nothing}())
+function _translate_sites_lockstep!(
+        sites::IdDict{OpExpr, OpExpr},
+        old::ASTExpr, new::ASTExpr,
+        seen::IdDict{OpExpr, Nothing} = IdDict{OpExpr, Nothing}()
+    )
     old === new && return nothing
     (old isa OpExpr && new isa OpExpr) || return nothing
     haskey(seen, old) && return nothing
@@ -108,8 +114,10 @@ function _translate_sites_lockstep!(sites::IdDict{OpExpr,OpExpr},
     end
     return nothing
 end
-function _translate_equation_sites!(sites::Union{Nothing,IdDict{OpExpr,OpExpr}},
-                                    old_eqs::Vector{Equation}, new_eqs::Vector{Equation})
+function _translate_equation_sites!(
+        sites::Union{Nothing, IdDict{OpExpr, OpExpr}},
+        old_eqs::Vector{Equation}, new_eqs::Vector{Equation}
+    )
     (sites === nothing || old_eqs === new_eqs) && return nothing
     length(old_eqs) == length(new_eqs) || return nothing
     for i in eachindex(old_eqs)
@@ -174,12 +182,14 @@ function _cover_any(c::_Covered, lo::Int, hi::Int)
 end
 
 # Claim `lo:hi`, as bits (`run = false`) or as one range.
-function _cover_fill!(c::_Covered, lo::Int, hi::Int; run::Bool=false)
+function _cover_fill!(c::_Covered, lo::Int, hi::Int; run::Bool = false)
     lo > hi && return c
     (1 <= lo && hi <= c.n) || throw(BoundsError(c, lo:hi))
     if run
-        insert!(c.runs, searchsortedlast(c.runs, lo; by = r -> r isa Int ? r : first(r)) + 1,
-                lo:hi)
+        insert!(
+            c.runs, searchsortedlast(c.runs, lo; by = r -> r isa Int ? r : first(r)) + 1,
+            lo:hi
+        )
     else
         fill!(view(_cover_bits!(c), lo:hi), true)
     end
@@ -204,7 +214,7 @@ end
 # pinned by a test that asserts each sentinel is still empty after a full
 # build+evaluate cycle (tree_walk_op_table_test.jl).
 # ─────────────────────────────────────────────────────────────────────────────
-const _EMPTY_DERIVED_EXTENTS = Dict{String,Int}()
+const _EMPTY_DERIVED_EXTENTS = Dict{String, Int}()
 
 # Shared read-only empty loop-variable environment (see the `_EMPTY_*` sentinel
 # block above). `_eval_const_int` only ever
@@ -214,7 +224,7 @@ const _EMPTY_DERIVED_EXTENTS = Dict{String,Int}()
 # instance instead of allocating a fresh `Dict{String,Int}()` per index arg. In
 # a stencil RHS that is a handful of freshly-GC'd dicts per neighbour gather per
 # cell removed from the build-time allocation load.
-const _EMPTY_IDX_ENV = Dict{String,Int}()
+const _EMPTY_IDX_ENV = Dict{String, Int}()
 
 # An explicit empty shape (`[]`, a rank-0 declaration) is scalar, not an array;
 # only a non-empty declared shape marks an array variable. `nothing` (no shape) is
@@ -229,7 +239,7 @@ _is_array_shape(shape) = shape !== nothing && !isempty(shape)
 # duplicated across the build/resolve expansion and cell-discovery sites).
 _output_idx_strings(op::OpExpr) = op.output_idx === nothing ? String[] :
     String[String(s) for s in op.output_idx if s isa AbstractString]
-_ranges_dict(op::OpExpr) = op.ranges === nothing ? Dict{String,Any}() : op.ranges
+_ranges_dict(op::OpExpr) = op.ranges === nothing ? Dict{String, Any}() : op.ranges
 
 # ---- Kahn-style dependency ordering (shared ready-set loop) ---------------------
 # Order `names` so every name comes after the names it depends on. `deps(name)`
@@ -239,7 +249,7 @@ _ranges_dict(op::OpExpr) = op.ranges === nothing ? Dict{String,Any}() : op.range
 # pass over the remaining names makes no progress, i.e. the residue is cyclic.
 # Within a pass the scan follows the iteration order of `names`, so the result
 # is deterministic for a given input collection.
-function _dependency_order(names, deps::F; on_cycle::G) where {F,G}
+function _dependency_order(names, deps::F; on_cycle::G) where {F, G}
     order = String[]
     done = Set{String}()
     total = length(names)
@@ -281,9 +291,9 @@ const _CONST_BOUNDARY_KINDS = (:periodic, :clamp, :error)
 # `AbstractArray{Float64,N}` (forwards size/getindex to `data`), so it flows
 # through the existing `const_arrays` threading transparently; only the gather's
 # out-of-range handling branches on the wrapper via `_const_dim_boundary`.
-struct BoundedConstArray{N} <: AbstractArray{Float64,N}
-    data::Array{Float64,N}
-    boundary::NTuple{N,Symbol}   # per-dim: :periodic | :clamp | :error
+struct BoundedConstArray{N} <: AbstractArray{Float64, N}
+    data::Array{Float64, N}
+    boundary::NTuple{N, Symbol}   # per-dim: :periodic | :clamp | :error
 end
 Base.size(a::BoundedConstArray) = size(a.data)
 Base.IndexStyle(::Type{<:BoundedConstArray}) = IndexLinear()
@@ -296,8 +306,10 @@ _const_dim_boundary(::AbstractArray, ::Int) = :error
 
 # Resolve a possibly-out-of-range 1-based index `i` in dimension `d` (size `n`) of
 # const array `name` per its boundary policy. In-range indices pass through.
-function _resolve_const_index(arr::AbstractArray, name::AbstractString,
-                              d::Int, i::Int, n::Int)
+function _resolve_const_index(
+        arr::AbstractArray, name::AbstractString,
+        d::Int, i::Int, n::Int
+    )
     (1 <= i <= n) && return i
     return _resolve_const_index_oob(_const_dim_boundary(arr, d), name, d, i, n)
 end
@@ -305,30 +317,44 @@ end
 # The out-of-range half of `_resolve_const_index`, for a caller that holds the
 # dimension's policy symbol rather than the array (the run-time `_NK_CONST_GATHER`
 # arm, `_const_gather_sub`).
-@noinline function _resolve_const_index_oob(pol::Symbol, name::AbstractString,
-                                            d::Int, i::Int, n::Int)
+@noinline function _resolve_const_index_oob(
+        pol::Symbol, name::AbstractString,
+        d::Int, i::Int, n::Int
+    )
     if n >= 1
         pol === :periodic && return mod1(i, n)
         pol === :clamp && return clamp(i, 1, n)
     end
-    throw(TreeWalkError("E_TREEWALK_CONSTARRAY_OOB",
-          "const array '$(name)' index $(i) out of range 1..$(n) in dim $(d)"))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_CONSTARRAY_OOB",
+            "const array '$(name)' index $(i) out of range 1..$(n) in dim $(d)"
+        )
+    )
 end
 
 # Wrap a const array with a declared per-dimension boundary policy. `boundary` is
 # an iterable of per-dim policy symbols (or strings); its length must equal the
 # array rank and each entry must be one of `_CONST_BOUNDARY_KINDS`.
-function _wrap_bounded_const(arr::Array{Float64,N}, boundary, name::AbstractString) where {N}
+function _wrap_bounded_const(arr::Array{Float64, N}, boundary, name::AbstractString) where {N}
     syms = Symbol[Symbol(b) for b in boundary]
     length(syms) == N ||
-        throw(TreeWalkError("E_TREEWALK_CONSTARRAY_BOUNDARY_NDIM",
-              "const array '$(name)' boundary has $(length(syms)) dims but array is $(N)D"))
+        throw(
+        TreeWalkError(
+            "E_TREEWALK_CONSTARRAY_BOUNDARY_NDIM",
+            "const array '$(name)' boundary has $(length(syms)) dims but array is $(N)D"
+        )
+    )
     for s in syms
         s in _CONST_BOUNDARY_KINDS ||
-            throw(TreeWalkError("E_TREEWALK_CONSTARRAY_BOUNDARY_KIND",
-                  "const array '$(name)' boundary '$(s)' must be one of $(_CONST_BOUNDARY_KINDS)"))
+            throw(
+            TreeWalkError(
+                "E_TREEWALK_CONSTARRAY_BOUNDARY_KIND",
+                "const array '$(name)' boundary '$(s)' must be one of $(_CONST_BOUNDARY_KINDS)"
+            )
+        )
     end
-    return BoundedConstArray{N}(arr, NTuple{N,Symbol}(syms))
+    return BoundedConstArray{N}(arr, NTuple{N, Symbol}(syms))
 end
 
 # ---- `broadcast` lowering (esm-spec §4.3.4) -----------------------------------
@@ -386,7 +412,7 @@ function _lower_broadcast(expr::ASTExpr)::ASTExpr
     catch err
         err isa _BroadcastBudgetExceeded || rethrow()
     end
-    return _lower_broadcast_memoized(expr, IdDict{OpExpr,ASTExpr}())
+    return _lower_broadcast_memoized(expr, IdDict{OpExpr, ASTExpr}())
 end
 
 # The lowering itself, shared by both walks: `e` is the node with its children
@@ -405,17 +431,21 @@ function _lower_broadcast_budgeted(expr::ASTExpr, fuel::Ref{Int})::ASTExpr
     expr isa OpExpr || return expr
     (fuel[] -= 1) > 0 || throw(_BroadcastBudgetExceeded())
     return _lower_broadcast_node(
-        map_children(x -> _lower_broadcast_budgeted(x, fuel), expr::OpExpr))
+        map_children(x -> _lower_broadcast_budgeted(x, fuel), expr::OpExpr)
+    )
 end
 
-function _lower_broadcast_memoized(expr::ASTExpr,
-                                   memo::IdDict{OpExpr,ASTExpr})::ASTExpr
+function _lower_broadcast_memoized(
+        expr::ASTExpr,
+        memo::IdDict{OpExpr, ASTExpr}
+    )::ASTExpr
     expr isa OpExpr || return expr
     key = expr::OpExpr
     hit = get(memo, key, nothing)
     hit === nothing || return hit
     out = _lower_broadcast_node(
-        map_children(x -> _lower_broadcast_memoized(x, memo), key))
+        map_children(x -> _lower_broadcast_memoized(x, memo), key)
+    )
     memo[key] = out
     return out
 end
@@ -437,7 +467,7 @@ function _lower_broadcast_model(model::Model)::Model
             nr = _lower_broadcast(eq.rhs)
             if nl !== eq.lhs || nr !== eq.rhs
                 out === eqs && (out = copy(eqs))
-                out[i] = Equation(nl, nr; _comment=eq._comment)
+                out[i] = Equation(nl, nr; _comment = eq._comment)
             end
         end
         out
@@ -464,14 +494,18 @@ function _lower_broadcast_model(model::Model)::Model
             nsubs[k] = ns
         end
     end
-    (nvars === vars && eqs === model.equations &&
-     ieqs === model.initialization_equations && ng === guesses &&
-     nsubs === subs) && return model
-    return Model(nvars, eqs, model.discrete_events, model.continuous_events,
-                 nsubs; tolerance=model.tolerance, tests=model.tests,
-                 analyses=model.analyses,
-                 initialization_equations=ieqs, guesses=ng,
-                 system_kind=model.system_kind, reference=model.reference)
+    (
+        nvars === vars && eqs === model.equations &&
+            ieqs === model.initialization_equations && ng === guesses &&
+            nsubs === subs
+    ) && return model
+    return Model(
+        nvars, eqs, model.discrete_events, model.continuous_events,
+        nsubs; tolerance = model.tolerance, tests = model.tests,
+        analyses = model.analyses,
+        initialization_equations = ieqs, guesses = ng,
+        system_kind = model.system_kind, reference = model.reference
+    )
 end
 
 # ---- Indexed observed-LHS normalization (esm-spec §6.3.1) ---------------------
@@ -527,8 +561,10 @@ end
 # rather than left to fall through to a shape error. A value-invention output
 # (`vi_vars`) is materialized by its own engine and filtered out of the ODE
 # later, so its definitions are left exactly as authored.
-function _normalize_indexed_observed_lhs(eqs::Vector{Equation}, model::Model;
-                                         vi_vars=Set{String}())
+function _normalize_indexed_observed_lhs(
+        eqs::Vector{Equation}, model::Model;
+        vi_vars = Set{String}()
+    )
     observed_here = Set{String}(observed_unknowns(model))
     isempty(observed_here) && return eqs
     out = nothing
@@ -550,8 +586,10 @@ end
 
 # One equation of the above: the rewritten `V ~ …` equation, or `nothing` when
 # this LHS is not the indexed-observed spelling (leave it exactly as authored).
-function _rewrite_indexed_observed_lhs(eq::Equation, model::Model,
-                                       observed_here::Set{String})
+function _rewrite_indexed_observed_lhs(
+        eq::Equation, model::Model,
+        observed_here::Set{String}
+    )
     lhs = eq.lhs
     lhs isa OpExpr || return nothing
     shell = lhs::OpExpr
@@ -559,8 +597,10 @@ function _rewrite_indexed_observed_lhs(eq::Equation, model::Model,
     # addressing shells to `_lhs_unwrap`, so both normalize here.
     (shell.op == "faq") || return nothing
     # A shell that CONTRACTS or GATES is not pure addressing — it computes.
-    (shell.filter === nothing && shell.join === nothing && shell.key === nothing &&
-     shell.distinct !== true) || return nothing
+    (
+        shell.filter === nothing && shell.join === nothing && shell.key === nothing &&
+            shell.distinct !== true
+    ) || return nothing
     body = shell.expr_body
     body isa OpExpr || return nothing
     gather = body::OpExpr
@@ -599,12 +639,14 @@ function _rewrite_indexed_observed_lhs(eq::Equation, model::Model,
     rhs = eq.rhs
     rhs_free = free_variables(rhs)
     if any(s -> s in rhs_free, syms)
-        rhs = OpExpr("faq", ASTExpr[];
-                     output_idx=Any[s for s in syms],
-                     ranges=Dict{String,Any}(s => ranges[s] for s in syms),
-                     expr_body=rhs)
+        rhs = OpExpr(
+            "faq", ASTExpr[];
+            output_idx = Any[s for s in syms],
+            ranges = Dict{String, Any}(s => ranges[s] for s in syms),
+            expr_body = rhs
+        )
     end
-    return Equation(VarExpr(name), rhs; _comment=eq._comment)
+    return Equation(VarExpr(name), rhs; _comment = eq._comment)
 end
 
 # The variable a bare-index LHS writes, read through nested `index` wrappers the
@@ -625,8 +667,10 @@ end
 # j), k)` addresses a cell of a cell, not the whole of `V`. Flatten namespaces a
 # free LHS subscript (`k` becomes `Model.k`) but not a `faq` binder, so a
 # subscript matches its binder in either spelling.
-function _rewrite_bare_index_observed_lhs(eq::Equation, model::Model,
-                                          observed_here::Set{String}, vi_vars)
+function _rewrite_bare_index_observed_lhs(
+        eq::Equation, model::Model,
+        observed_here::Set{String}, vi_vars
+    )
     gather = eq.lhs::OpExpr
     isempty(gather.args) && return nothing
     head = gather.args[1]
@@ -653,9 +697,13 @@ function _rewrite_bare_index_observed_lhs(eq::Equation, model::Model,
             sn = (s::VarExpr).name
             (sn in binders || haskey(model.variables, sn)) && continue
             local_sym = startswith(sn, prefix) ? sn[(length(prefix) + 1):end] : sn
-            throw(TreeWalkError(ERROR_CODES.UNBOUND_INDEX_SYMBOL,
-                "'$name' is defined by a left-hand side that subscripts with " *
-                "'$local_sym', which no faq binds (esm-spec §6.3.1)"))
+            throw(
+                TreeWalkError(
+                    ERROR_CODES.UNBOUND_INDEX_SYMBOL,
+                    "'$name' is defined by a left-hand side that subscripts with " *
+                        "'$local_sym', which no faq binds (esm-spec §6.3.1)"
+                )
+            )
         end
         h = g.args[1]
         (h isa OpExpr && (h::OpExpr).op == "index" && !isempty((h::OpExpr).args)) || break
@@ -664,18 +712,22 @@ function _rewrite_bare_index_observed_lhs(eq::Equation, model::Model,
     binds = head isa VarExpr &&
         frame !== nothing && !isempty(subs) && length(frame) == length(subs) &&
         all(zip(subs, frame)) do (s, b)
-            s isa VarExpr && b isa AbstractString &&
-                ((s::VarExpr).name == b || (s::VarExpr).name == prefix * b)
-        end
+        s isa VarExpr && b isa AbstractString &&
+            ((s::VarExpr).name == b || (s::VarExpr).name == prefix * b)
+    end
     var = get(model.variables, name, nothing)
     rank_agrees = var === nothing || !_is_array_shape(var.shape) ||
         length(var.shape) == length(subs)
     (binds && rank_agrees) ||
-        throw(TreeWalkError(ERROR_CODES.INDEXED_DEFINITION_UNSUPPORTED_FORM,
+        throw(
+        TreeWalkError(
+            ERROR_CODES.INDEXED_DEFINITION_UNSUPPORTED_FORM,
             "'$name' is defined by a bare-index LHS that is not runnable; the RHS " *
-            "must be a faq whose output_idx names the LHS subscripts in order " *
-            "(esm-spec §6.3.1)"))
-    return Equation(VarExpr(name), rhs; _comment=eq._comment)
+                "must be a faq whose output_idx names the LHS subscripts in order " *
+                "(esm-spec §6.3.1)"
+        )
+    )
+    return Equation(VarExpr(name), rhs; _comment = eq._comment)
 end
 
 # ---- Whole-array declared-shape derivative lift -------------------------------
@@ -689,8 +741,10 @@ end
 # `_discover_array_cells` enumerate the state's cells from the lifted `faq`
 # ranges — a declared array state with a broadcast `ic` and no per-cell equation
 # otherwise resolves to no cells.
-function _lift_wholearray_deriv_equations(eqs::Vector{Equation},
-        var_shapes::Dict{String,Vector{String}}, arrayvars::Set{String})
+function _lift_wholearray_deriv_equations(
+        eqs::Vector{Equation},
+        var_shapes::Dict{String, Vector{String}}, arrayvars::Set{String}
+    )
     # `D(x)` where the whole (un-indexed) `x` is a declared array variable.
     is_wholearray_D(lhs) = lhs isa OpExpr && (lhs::OpExpr).op == "D" &&
         length((lhs::OpExpr).args) == 1 &&
@@ -716,16 +770,16 @@ function _lift_wholearray_deriv_equations(eqs::Vector{Equation},
             # variable (or the state itself is so named), fall back to the
             # historical suffixed names for THIS equation — the pre-A3 scheme,
             # whose own collision exposure was the same one suffix over.
-            loops = String["_lp$(i-1)" for i in 1:length(shape)]
+            loops = String["_lp$(i - 1)" for i in 1:length(shape)]
             clash = vname in loops
             clash || foreach_subexpr_once(eq.rhs) do x
                 clash || (x isa VarExpr && x.name in loops && (clash = true))
                 nothing
             end
             if clash
-                loops = String["_lp$(i-1)_$(vname)" for i in 1:length(shape)]
+                loops = String["_lp$(i - 1)_$(vname)" for i in 1:length(shape)]
             end
-            ranges = Dict{String,Any}()
+            ranges = Dict{String, Any}()
             for i in eachindex(shape)
                 ranges[loops[i]] = IndexSetRef(shape[i])
             end
@@ -733,18 +787,22 @@ function _lift_wholearray_deriv_equations(eqs::Vector{Equation},
             for l in loops
                 push!(idx_args, VarExpr(l))
             end
-            lhs_body = OpExpr("D", ASTExpr[OpExpr("index", idx_args)]; wrt=lhs.wrt)
-            new_lhs = OpExpr("faq", ASTExpr[];
-                             output_idx=Any[l for l in loops], ranges=ranges,
-                             expr_body=lhs_body)
+            lhs_body = OpExpr("D", ASTExpr[OpExpr("index", idx_args)]; wrt = lhs.wrt)
+            new_lhs = OpExpr(
+                "faq", ASTExpr[];
+                output_idx = Any[l for l in loops], ranges = ranges,
+                expr_body = lhs_body
+            )
             # Name-based operand alignment (esm-spec §4.3.4): each array-variable
             # leaf is gathered at the loops bound to ITS OWN declared index sets,
             # so a lower-rank operand broadcasts along the missing axes and a
             # name-permuted operand transposes instead of being reinterpreted.
             # Anonymous-shape nodes (producers, literals) stay positional.
-            new_rhs = _index_array_leaves(eq.rhs, arrayvars, loops;
-                                          align = _AxisAlign(shape, var_shapes))
-            push!(out, Equation(new_lhs, new_rhs; _comment=eq._comment))
+            new_rhs = _index_array_leaves(
+                eq.rhs, arrayvars, loops;
+                align = _AxisAlign(shape, var_shapes)
+            )
+            push!(out, Equation(new_lhs, new_rhs; _comment = eq._comment))
         else
             push!(out, eq)
         end
@@ -792,8 +850,10 @@ const _WS4_FOLDABLE_ELEMENTWISE_OPS = _ops_with(:ws4_foldable)
 # `bindings` is fixed within one call, so input identity → output is sound.
 # (Spelled `IdDict{OpExpr,ASTExpr}`, not the `_SubMemo` alias — helpers.jl,
 # which defines the alias, is included after this file.)
-function _substitute_shared(e::ASTExpr, bindings::Dict{String,ASTExpr},
-                            memo::IdDict{OpExpr,ASTExpr}=IdDict{OpExpr,ASTExpr}())
+function _substitute_shared(
+        e::ASTExpr, bindings::Dict{String, ASTExpr},
+        memo::IdDict{OpExpr, ASTExpr} = IdDict{OpExpr, ASTExpr}()
+    )
     e isa OpExpr || return substitute(e, bindings)
     cached = get(memo, e, nothing)
     cached === nothing || return cached
@@ -852,8 +912,10 @@ end
 # the const-fold already returns.
 _is_scalar_const_field(v) = v isa AbstractArray && length(v) == 1
 
-function _index_pushdown_arrayish(e::ASTExpr, is_array_leaf,
-                                  memo::IdDict{OpExpr,Bool}=IdDict{OpExpr,Bool}())::Bool
+function _index_pushdown_arrayish(
+        e::ASTExpr, is_array_leaf,
+        memo::IdDict{OpExpr, Bool} = IdDict{OpExpr, Bool}()
+    )::Bool
     if e isa VarExpr
         return is_array_leaf((e::VarExpr).name)
     elseif e isa OpExpr
@@ -861,8 +923,10 @@ function _index_pushdown_arrayish(e::ASTExpr, is_array_leaf,
         cached = get(memo, o, nothing)
         cached === nothing || return cached::Bool
         r = _is_array_producer(o) || o.op in _SHAPE_REMAP_OPS ||
-            (_is_scalar_op(o.op) &&
-             any(a -> _index_pushdown_arrayish(a, is_array_leaf, memo), o.args))
+            (
+            _is_scalar_op(o.op) &&
+                any(a -> _index_pushdown_arrayish(a, is_array_leaf, memo), o.args)
+        )
         memo[o] = r
         return r
     end
@@ -898,11 +962,11 @@ function _fold_elementwise_array_observeds(equations::Vector{Equation}, model::M
     function is_array_obs(name)
         var = get(model.variables, name, nothing)
         return var !== nothing && name in observed_here &&
-               _is_array_shape(var.shape)
+            _is_array_shape(var.shape)
     end
     # A bare `name = rhs` algebraic definition per name (the D(state,t) equation
     # has an OpExpr lhs, so it is never a target — only its RHS is rewritten).
-    defs = Dict{String,ASTExpr}()
+    defs = Dict{String, ASTExpr}()
     for eq in equations
         lhs = eq.lhs
         if lhs isa VarExpr
@@ -920,7 +984,7 @@ function _fold_elementwise_array_observeds(equations::Vector{Equation}, model::M
         var = get(model.variables, rhs.name, nothing)
         return var !== nothing && !_is_array_shape(var.shape)
     end
-    targets = Dict{String,ASTExpr}()
+    targets = Dict{String, ASTExpr}()
     # Selection runs to a FIXED POINT, because an observed that merely ALIASES
     # another target (`chain = lit`, `lit = 1.5`) has to fold with it: the
     # substitution below rewrites every surviving reader, so folding only the
@@ -934,8 +998,8 @@ function _fold_elementwise_array_observeds(equations::Vector{Equation}, model::M
         for (name, rhs) in defs
             (haskey(targets, name) || !is_array_obs(name)) && continue
             if (rhs isa OpExpr && rhs.op in _WS4_FOLDABLE_ELEMENTWISE_OPS) ||
-               is_scalar_rhs(rhs) ||
-               (rhs isa VarExpr && haskey(targets, rhs.name))
+                    is_scalar_rhs(rhs) ||
+                    (rhs isa VarExpr && haskey(targets, rhs.name))
                 targets[name] = rhs
                 grew = true
             end
@@ -947,15 +1011,23 @@ function _fold_elementwise_array_observeds(equations::Vector{Equation}, model::M
     # Dependency order among the targets (the chain is feed-forward; a cycle is a
     # genuine authoring error). Only target→target edges are ordered; references
     # to producer observeds / params / state are leaves left in place.
-    deps = Dict(name => intersect(free_variables(rhs), keys(targets))
-                for (name, rhs) in targets)
-    order = _dependency_order(collect(keys(targets)), name -> deps[name];
-        on_cycle=_ -> throw(TreeWalkError("E_TREEWALK_CYCLIC_ARRAY_OBSERVED",
-            "cyclic elementwise array-observed dependency among $(collect(keys(targets)))")))
+    deps = Dict(
+        name => intersect(free_variables(rhs), keys(targets))
+            for (name, rhs) in targets
+    )
+    order = _dependency_order(
+        collect(keys(targets)), name -> deps[name];
+        on_cycle = _ -> throw(
+            TreeWalkError(
+                "E_TREEWALK_CYCLIC_ARRAY_OBSERVED",
+                "cyclic elementwise array-observed dependency among $(collect(keys(targets)))"
+            )
+        )
+    )
     # `_substitute_shared`, not plain `substitute`: a raw target body can be a
     # DAG (template lowering shares subtrees by reference), and the per-path
     # rebuild would materialize it as an exponentially large tree.
-    resolved = Dict{String,ASTExpr}()
+    resolved = Dict{String, ASTExpr}()
     for name in order
         resolved[name] = _substitute_shared(targets[name], resolved)
     end
@@ -969,8 +1041,12 @@ function _fold_elementwise_array_observeds(equations::Vector{Equation}, model::M
         if lhs isa VarExpr && lhs.name in folded
             continue
         end
-        push!(out, Equation(lhs, _substitute_shared(eq.rhs, resolved);
-                            _comment=eq._comment))
+        push!(
+            out, Equation(
+                lhs, _substitute_shared(eq.rhs, resolved);
+                _comment = eq._comment
+            )
+        )
     end
     return (out, folded)
 end

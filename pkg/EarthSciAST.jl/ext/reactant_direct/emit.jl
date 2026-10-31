@@ -10,17 +10,21 @@ _de_param(ctx::_DECtx, nd::_E._Node)::_DEVal = _de_param(ctx, nd.sym)
 function _de_param(ctx::_DECtx, sym::Symbol)::_DEVal
     p = ctx.p
     p isa NamedTuple ||
-        _de_refuse("a parameter read on a `p` of type $(typeof(p))",
-            "the emitter reads parameters by NAME out of a NamedTuple, the " *
+        _de_refuse(
+        "a parameter read on a `p` of type $(typeof(p))",
+        "the emitter reads parameters by NAME out of a NamedTuple, the " *
             "shape a build hands back as `p`. A vector `p` (`ComponentVector`, " *
-            "`Vector`) reaches parameters by flat index and is not wired here.")
+            "`Vector`) reaches parameters by flat index and is not wired here."
+    )
     hasproperty(p, sym) ||
-        _de_refuse("the parameter `$(sym)`",
-            "it is not a field of the parameter NamedTuple passed to this call.")
+        _de_refuse(
+        "the parameter `$(sym)`",
+        "it is not a field of the parameter NamedTuple passed to this call."
+    )
     x = getfield(p, sym)
     if x isa TracedRNumber{Float64}
         _de_tally!(ctx, :param_input)
-        op = _hlo.reshape(x.mlir_data; result_0=_de_ty(1), location=_de_loc())
+        op = _hlo.reshape(x.mlir_data; result_0 = _de_ty(1), location = _de_loc())
         return _DEVal(_de_res(op), 1)
     elseif x isa Real
         # A HOST parameter is a compile-time constant. Pass `ConcreteRNumber`s
@@ -28,19 +32,23 @@ function _de_param(ctx::_DECtx, sym::Symbol)::_DEVal
         # recompile).
         return _de_const(ctx, Float64(x))
     end
-    _de_refuse("the parameter `$(sym)` of type $(typeof(x))",
+    return _de_refuse(
+        "the parameter `$(sym)` of type $(typeof(x))",
         "a parameter is either a host `Real` (baked as a constant) or a traced " *
-        "`Float64` scalar (a program input).")
+            "`Float64` scalar (a program input)."
+    )
 end
 
 function _de_time(t)
     if t isa TracedRNumber{Float64}
-        op = _hlo.reshape(t.mlir_data; result_0=_de_ty(1), location=_de_loc())
+        op = _hlo.reshape(t.mlir_data; result_0 = _de_ty(1), location = _de_loc())
         return _DEVal(_de_res(op), 1)
     end
-    _de_refuse("a time argument of type $(typeof(t))",
+    return _de_refuse(
+        "a time argument of type $(typeof(t))",
         "`t` must be traced so the program can be stepped without recompiling; " *
-        "pass a `ConcreteRNumber{Float64}`.")
+            "pass a `ConcreteRNumber{Float64}`."
+    )
 end
 
 # ---- the scalar spine --------------------------------------------------------
@@ -92,25 +100,27 @@ function _de_scalar(ctx::_DECtx, nd::_E._Node, cache::Vector{_DEVal})::_DEVal
         # Live forcing, read from the `buffers` ARGUMENT (never from the build's
         # captured host array — see `_de_buffer`).
         buf = _de_buffer(ctx, nd.payload::Vector{Float64})
-        return _de_slice(ctx, buf, nd.idx, nd.idx; why=:pgather)
+        return _de_slice(ctx, buf, nd.idx, nd.idx; why = :pgather)
     elseif k === _E._NK_OP
         if nd.op === :fn
             return _de_fn(ctx, nd, ch -> _de_scalar(ctx, ch, cache))
         end
         if (nd.op === :^ || nd.op === :pow) && length(nd.children) == 2 &&
-           nd.children[2].kind === _E._NK_LITERAL
+                nd.children[2].kind === _E._NK_LITERAL
             base = _de_scalar(ctx, nd.children[1], cache)
             return _de_bin(ctx, _hlo.power, base, _de_const(ctx, nd.children[2].literal))
         end
         c = _DEVal[_de_scalar(ctx, ch, cache) for ch in nd.children]
         return _de_op(ctx, nd, c)
     end
-    _de_refuse("the scalar-spine node kind $(_de_kindname(k))",
-        "no arm of `_de_scalar` lowers it.")
+    return _de_refuse(
+        "the scalar-spine node kind $(_de_kindname(k))",
+        "no arm of `_de_scalar` lowers it."
+    )
 end
 
 # Node-kind names, so a refusal says `_NK_SUBCALL` rather than `7`.
-const _DE_KINDS = Dict{UInt8,String}(
+const _DE_KINDS = Dict{UInt8, String}(
     _E._NK_LITERAL => "_NK_LITERAL", _E._NK_STATE => "_NK_STATE",
     _E._NK_PARAM => "_NK_PARAM", _E._NK_TIME => "_NK_TIME",
     _E._NK_CACHED => "_NK_CACHED", _E._NK_OP => "_NK_OP",
@@ -125,7 +135,7 @@ const _DE_KINDS = Dict{UInt8,String}(
 )
 _de_kindname(k::UInt8) = get(_DE_KINDS, k, "kind $(Int(k))")
 
-const _DE_AKINDS = Dict{UInt8,String}(
+const _DE_AKINDS = Dict{UInt8, String}(
     _E._AK_STATE_AFFINE => "_AK_STATE_AFFINE",
     _E._AK_STATE_INDIRECT => "_AK_STATE_INDIRECT",
     _E._AK_STATE_INDIRECT_COL => "_AK_STATE_INDIRECT_COL",
@@ -152,8 +162,10 @@ struct _DESubRT
     invvals::Vector{Vector{_DEVal}}
     cellvals::Vector{Vector{_DEVal}}
 end
-const _DE_NO_SUB = _DESubRT(_E._AccKernel[], _E._OopAccPlan[],
-                            Vector{_DEVal}[], Vector{_DEVal}[])
+const _DE_NO_SUB = _DESubRT(
+    _E._AccKernel[], _E._OopAccPlan[],
+    Vector{_DEVal}[], Vector{_DEVal}[]
+)
 
 function _de_build_subrt(plan::_E._OopAccPlan)
     subs = plan.subs
@@ -182,8 +194,10 @@ end
 # never `-0.0` because the seed is `+0.0`; `*` with 1.0; `max`/`min` with ∓Inf),
 # so the padding changes no value. The op count is O(W) — the widest cell's
 # valence, a property of the connectivity — and never O(#cells).
-function _de_reduce_fold(ctx::_DECtx, bodyE::_DEVal, seg::Vector{Int},
-                         zerobar::Float64, op::Symbol)::_DEVal
+function _de_reduce_fold(
+        ctx::_DECtx, bodyE::_DEVal, seg::Vector{Int},
+        zerobar::Float64, op::Symbol
+    )::_DEVal
     N = length(seg) - 1
     N >= 1 || _de_refuse("_NK_REDUCE", "the CSR row-pointer vector is empty.")
     widths = Int[seg[c + 1] - seg[c] for c in 1:N]
@@ -202,8 +216,10 @@ function _de_reduce_fold(ctx::_DECtx, bodyE::_DEVal, seg::Vector{Int},
         end
         short = Bool[widths[c] < m for c in 1:N]
         if any(short)
-            term = _de_select(ctx, _de_boolconst(ctx, short), N, zpad,
-                              _de_bcast(ctx, term, N))
+            term = _de_select(
+                ctx, _de_boolconst(ctx, short), N, zpad,
+                _de_bcast(ctx, term, N)
+            )
         end
         s = _de_bin(ctx, f, s, term)
     end
@@ -213,9 +229,11 @@ end
 
 # ---- access kernels ----------------------------------------------------------
 
-function _de_acck(ctx::_DECtx, nd::_E._Node, K::_E._AccKernel, plan::_E._OopAccPlan,
-                  invvals::Vector{_DEVal}, cellvals::Vector{_DEVal},
-                  sub::_DESubRT)::_DEVal
+function _de_acck(
+        ctx::_DECtx, nd::_E._Node, K::_E._AccKernel, plan::_E._OopAccPlan,
+        invvals::Vector{_DEVal}, cellvals::Vector{_DEVal},
+        sub::_DESubRT
+    )::_DEVal
     folded = _de_try_fold(ctx, nd)
     folded === nothing || return folded
     k = nd.kind
@@ -223,7 +241,7 @@ function _de_acck(ctx::_DECtx, nd::_E._Node, K::_E._AccKernel, plan::_E._OopAccP
         a = K.acc[nd.idx]
         ak = a.kind
         if ak === _E._AK_STATE_AFFINE || ak === _E._AK_STATE_INDIRECT ||
-           ak === _E._AK_STATE_INDIRECT_COL
+                ak === _E._AK_STATE_INDIRECT_COL
             return _de_gather(ctx, ctx.ue, plan.gathers[nd.idx])
         elseif ak === _E._AK_STATE_TBL_BOX
             g = _de_gather(ctx, ctx.ue, plan.gathers[nd.idx])
@@ -237,7 +255,7 @@ function _de_acck(ctx::_DECtx, nd::_E._Node, K::_E._AccKernel, plan::_E._OopAccP
         elseif ak === _E._AK_ARR_FIXED
             # LIVE forcing, invariant slot: one element of a program input.
             buf = _de_buffer(ctx, a.arr)
-            return _de_slice(ctx, buf, a.idx, a.idx; why=:akarrfixed)
+            return _de_slice(ctx, buf, a.idx, a.idx; why = :akarrfixed)
         elseif ak === _E._AK_FORCING_BOX || ak === _E._AK_ARR_TBL_BOX
             # LIVE forcing lanes: one read of a program input at host-frozen
             # indices — slices plus a concatenate, or one gather.
@@ -270,55 +288,69 @@ function _de_acck(ctx::_DECtx, nd::_E._Node, K::_E._AccKernel, plan::_E._OopAccP
         return _de_acck(ctx, S.spine, S, Sp, iv, cv, sub)
     elseif k === _E._NK_REDUCE
         isempty(plan.red_plan) &&
-            _de_refuse("_NK_REDUCE", "this kernel's plan carries no E-lane " *
-                       "reduce plan, so the body cannot be evaluated per entry.")
+            _de_refuse(
+            "_NK_REDUCE", "this kernel's plan carries no E-lane " *
+                "reduce plan, so the body cannot be evaluated per entry."
+        )
         Ep = plan.red_plan[1]
         bodyE = _de_acck(ctx, nd.children[1], K, Ep, invvals, cellvals, sub)
         return _de_reduce_fold(ctx, bodyE, plan.red_seg, K.zerobar, :+)
     elseif k === _E._NK_CONTRACTION
-        terms = _DEVal[_de_acck(ctx, ch, K, plan, invvals, cellvals, sub)
-                       for ch in nd.children]
+        terms = _DEVal[
+            _de_acck(ctx, ch, K, plan, invvals, cellvals, sub)
+                for ch in nd.children
+        ]
         return _de_fold_terms(ctx, nd.op, nd.literal, terms)
     elseif k === _E._NK_OP
         if nd.op === :fn
             return _de_fn(ctx, nd, ch -> _de_acck(ctx, ch, K, plan, invvals, cellvals, sub))
         end
         if (nd.op === :^ || nd.op === :pow) && length(nd.children) == 2 &&
-           nd.children[2].kind === _E._NK_LITERAL
+                nd.children[2].kind === _E._NK_LITERAL
             base = _de_acck(ctx, nd.children[1], K, plan, invvals, cellvals, sub)
             return _de_bin(ctx, _hlo.power, base, _de_const(ctx, nd.children[2].literal))
         end
-        c = _DEVal[_de_acck(ctx, ch, K, plan, invvals, cellvals, sub)
-                   for ch in nd.children]
+        c = _DEVal[
+            _de_acck(ctx, ch, K, plan, invvals, cellvals, sub)
+                for ch in nd.children
+        ]
         return _de_op(ctx, nd, c)
     end
-    _de_refuse("the access-kernel node kind $(_de_kindname(k))",
-        "no arm of `_de_acck` lowers it.")
+    return _de_refuse(
+        "the access-kernel node kind $(_de_kindname(k))",
+        "no arm of `_de_acck` lowers it."
+    )
 end
 
 function _de_sub_index(subs::Vector{_E._AccKernel}, S::_E._AccKernel)
     for j in eachindex(subs)
         subs[j] === S && return j
     end
-    _de_refuse("_NK_SUBCALL",
+    return _de_refuse(
+        "_NK_SUBCALL",
         "the call references a sub-kernel absent from the parent plan's " *
-        "transitive `K.subs` list — a `_collect_subkernels` invariant break, " *
-        "not a coverage gap.")
+            "transitive `K.subs` list — a `_collect_subkernels` invariant break, " *
+            "not a coverage gap."
+    )
 end
 
 # One vectorized kernel: the sub-kernels' invariant tiers, then this kernel's
 # invariant and per-cell tiers, the spine, and the scatter into the target slot
 # map. One kernel: sub-kernel invariant tiers, then this kernel's own CSE tiers
 # in slot order, the spine over whole lanes, and ONE write.
-function _de_run_kernel!(ctx::_DECtx, out::_DEMap, K::_E._AccKernel,
-                         plan::_E._OopAccPlan)
+function _de_run_kernel!(
+        ctx::_DECtx, out::_DEMap, K::_E._AccKernel,
+        plan::_E._OopAccPlan
+    )
     plan.vectorizable ||
-        _de_refuse("a per-cell fallback access kernel",
-            "its lane plan is not vectorizable, so the interpreter runs it one " *
+        _de_refuse(
+        "a per-cell fallback access kernel",
+        "its lane plan is not vectorizable, so the interpreter runs it one " *
             "cell at a time. A compiled program cannot: the emitted graph would " *
             "grow with the grid. Find what made `_build_oop_acc_plan` decline " *
             "(an unsupported descriptor kind or an unbounded reduce) and lower " *
-            "that instead.")
+            "that instead."
+    )
     sub = _de_build_subrt(plan)
     for j in eachindex(sub.subs)
         S = sub.subs[j]
@@ -427,13 +459,15 @@ function _de_emit!(ctx::_DECtx, rhs)::_DEVal
     # stay under the tier's floor, which is every model the backend has been run
     # on; say so rather than emit a program that is missing a section.
     let nac = length(getfield(rhs, :array_contractions)) +
-              sum(length(lvl[5]) for lvl in getfield(rhs, :mat_levels); init=0)
+            sum(length(lvl[5]) for lvl in getfield(rhs, :mat_levels); init = 0)
         nac == 0 ||
-            _de_refuse("$nac whole-array contraction(s)",
-                "the array-contraction tier (ess-array-contraction) is a " *
+            _de_refuse(
+            "$nac whole-array contraction(s)",
+            "the array-contraction tier (ess-array-contraction) is a " *
                 "section of the in-place RHS with no arm in this walk. " *
                 "Emitting the rest would leave its output slots zero, so the " *
-                "emission stops here.")
+                "emission stops here."
+        )
     end
     du = _DEMap(n_states)
     _de_plan_writes!(ctx, rhs, du)
@@ -445,13 +479,17 @@ function _de_emit!(ctx::_DECtx, rhs)::_DEVal
         scalars, kernels, plans, scans = lvl
         empty_cache = _DEVal[]
         _de_at!(ctx, :mat_scalar)
-        _de_scalar_surface!(ctx, ctx.ue, mat_batches[li], empty_cache,
-                            "the observed fill at materialization level $li")
+        _de_scalar_surface!(
+            ctx, ctx.ue, mat_batches[li], empty_cache,
+            "the observed fill at materialization level $li"
+        )
         _de_at!(ctx, :mat_kernel)
         for j in eachindex(kernels)
-            _de_rule!("the observed fill kernel writing " *
-                      "$(_de_slotsname(ctx, plans[j].out_slots)) " *
-                      "(materialization level $li)") do
+            _de_rule!(
+                "the observed fill kernel writing " *
+                    "$(_de_slotsname(ctx, plans[j].out_slots)) " *
+                    "(materialization level $li)"
+            ) do
                 _de_run_kernel!(ctx, ctx.ue, kernels[j], plans[j])
             end
         end
@@ -478,8 +516,10 @@ function _de_emit!(ctx::_DECtx, rhs)::_DEVal
     # emission whose varying state leaves are gathers rather than a
     # one-element slice per cell.
     _de_at!(ctx, :rhs_scalar)
-    _de_scalar_surface!(ctx, du, getfield(rhs, :rhs_batches), cache,
-                        "the state equation")
+    _de_scalar_surface!(
+        ctx, du, getfield(rhs, :rhs_batches), cache,
+        "the state equation"
+    )
     kernels = getfield(rhs, :acc_kernels)
     plans = getfield(rhs, :acc_plans)
     _de_at!(ctx, :kernel)

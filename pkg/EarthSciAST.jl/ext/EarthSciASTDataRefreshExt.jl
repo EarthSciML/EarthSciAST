@@ -40,17 +40,22 @@ const _derivative_discontinuity! =
 # the grouping, the tstops union, and the affect! are deterministic regardless of
 # the `providers` dict's iteration order.
 function _group_discrete_providers(providers::AbstractDict, buffers::RefreshBuffers)
-    groups = Tuple{Any,Vector{String}}[]   # (provider, [var,…]) in first-seen order
-    slot = Base.IdDict{Any,Int}()           # provider identity → index into `groups`
+    groups = Tuple{Any, Vector{String}}[]   # (provider, [var,…]) in first-seen order
+    slot = Base.IdDict{Any, Int}()           # provider identity → index into `groups`
     # Sort by stringified variable name for deterministic grouping/tstops/affect,
     # independent of the dict's key type and iteration order.
-    entries = sort!(Tuple{String,Any}[(String(k), v) for (k, v) in pairs(providers)];
-                    by=first)
+    entries = sort!(
+        Tuple{String, Any}[(String(k), v) for (k, v) in pairs(providers)];
+        by = first
+    )
     for (var, prov) in entries
         provider_is_const(prov) && continue
-        haskey(buffers, var) || throw(RefreshError(
-            "build_refresh_callback: no buffer for refreshed variable '$var'; add it to " *
-            "`buffers` (the same Array{Float64} passed to `esm_problem`'s `param_arrays`)"))
+        haskey(buffers, var) || throw(
+            RefreshError(
+                "build_refresh_callback: no buffer for refreshed variable '$var'; add it to " *
+                    "`buffers` (the same Array{Float64} passed to `esm_problem`'s `param_arrays`)"
+            )
+        )
         i = get(slot, prov, 0)
         if i == 0
             push!(groups, (prov, String[var]))
@@ -66,9 +71,10 @@ end
 # provider/buffer registries; it never reads the model). More specific than the
 # core's varargs fallback, so it wins whenever this extension is loaded.
 function build_refresh_callback(;
-                                providers::AbstractDict,
-                                buffers::RefreshBuffers,
-                                post_refresh::Function = () -> nothing)
+        providers::AbstractDict,
+        buffers::RefreshBuffers,
+        post_refresh::Function = () -> nothing
+    )
     groups = _group_discrete_providers(providers, buffers)
 
     # tstops = sorted, de-duplicated union of the DISCRETE providers' refresh
