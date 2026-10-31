@@ -1,0 +1,87 @@
+{
+ "category": "faq_equality_scatter",
+ "version": "1.0",
+ "description": "Right-hand sides whose faq has an equality conjunct on an output index (esm-spec §4.3.1, one-pass scatter). Each binding builds every fixture under `interpreter` and `native`, evaluates the right-hand side once at the document's initial state with default parameters at t = 0, and requires both to equal golden/<id>.json BIT FOR BIT. The goldens come from generate.py's naive Python loop, outside every binding.",
+ "model": "Scatter",
+ "t": 0.0,
+ "tolerance": {
+  "rel": 0.0,
+  "abs": 0.0
+ },
+ "excluded": "per fixture, binding -> why it does not run the fixture today; that binding's test asserts the fixture still fails there, so a fixed exclusion turns red until it is removed",
+ "golden_encoding": "du maps element names (`w[2]`, `w[1,3]`, `g`) under the model to a number, or to the string NaN, Infinity or -Infinity; -0.0 is written as -0.0 and compared by sign. Where the bindings' interpreters disagree today (a NaN in a max/min window, max_min_nan only), the value is an object {julia, python, rust} and each binding compares with its own entry",
+ "fixtures": [
+  {
+   "id": "plus_cancelling",
+   "path": "fixtures/plus_cancelling.esm",
+   "golden": "golden/plus_cancelling.json",
+   "excluded": {}
+  },
+  {
+   "id": "max_min_nan",
+   "path": "fixtures/max_min_nan.esm",
+   "golden": "golden/max_min_nan.json",
+   "excluded": {}
+  },
+  {
+   "id": "two_pinned_2d",
+   "path": "fixtures/two_pinned_2d.esm",
+   "golden": "golden/two_pinned_2d.json",
+   "excluded": {}
+  },
+  {
+   "id": "one_free",
+   "path": "fixtures/one_free.esm",
+   "golden": "golden/one_free.json",
+   "excluded": {}
+  },
+  {
+   "id": "out_of_range",
+   "path": "fixtures/out_of_range.esm",
+   "golden": "golden/out_of_range.json",
+   "excluded": {}
+  },
+  {
+   "id": "scan_comparison",
+   "path": "fixtures/scan_comparison.esm",
+   "golden": "golden/scan_comparison.json",
+   "excluded": {}
+  },
+  {
+   "id": "pinned_twice",
+   "path": "fixtures/pinned_twice.esm",
+   "golden": "golden/pinned_twice.json",
+   "excluded": {}
+  },
+  {
+   "id": "nested_rank0",
+   "path": "fixtures/nested_rank0.esm",
+   "golden": "golden/nested_rank0.json",
+   "excluded": {}
+  },
+  {
+   "id": "runtime_map",
+   "path": "fixtures/runtime_map.esm",
+   "golden": "golden/runtime_map.json",
+   "excluded": {}
+  },
+  {
+   "id": "ragged",
+   "path": "fixtures/ragged.esm",
+   "golden": "golden/ragged.json",
+   "excluded": {
+    "python": "the NumPy evaluator refuses a filter over a ragged contracted range"
+   }
+  },
+  {
+   "id": "ragged_contracted_parent",
+   "path": "fixtures/ragged_contracted_parent.esm",
+   "golden": "golden/ragged_contracted_parent.json",
+   "excluded": {
+    "julia": "E_TREEWALK_UNBOUND_LOOP_VAR on a ragged range whose parent is a contracted index, under both compilers",
+    "rust": "the interpreter silently returns 0 for pm[2..4] (only pm[1] is right); native refuses (ragged bound's parent is not an output index)",
+    "python": "the NumPy evaluator refuses a filter over a ragged contracted range"
+   }
+  }
+ ]
+}
