@@ -71,7 +71,7 @@ made, so the message is part of the contract.
 The document-level halves of the same contract are
 `tests/valid/units_inventory_registry.esm` (the FF10 units),
 `tests/valid/units_moves_registry.esm` (the MOVES units — `mi`, `mi/h`, `lb`,
-`hp`, `gal`, `inHg` and the compounds they build) and
+`hp`, `gal`, `inHg`, `MJ` and the compounds they build) and
 `tests/invalid/units_discriminator_scaling_factor.esm` (a scaling factor is a
 hard `unit_parse_error`) — those go through the ordinary
 `scripts/compare-conformance-outputs.py` agreement check, which is what pins

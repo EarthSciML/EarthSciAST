@@ -84,7 +84,8 @@ def table : List (String × U) := [
   ("nmol", mk amount (1 / 10 ^ 9)), ("M", mk conc 1000),
   -- Derived
   ("Hz", mk freq 1), ("N", mk force 1), ("Pa", mk pressure 1), ("J", mk energy 1),
-  ("kJ", mk energy 1000), ("cal", mk energy 4.184), ("kcal", mk energy 4184),
+  ("kJ", mk energy 1000), ("MJ", mk energy (10 ^ 6)),
+  ("cal", mk energy 4.184), ("kcal", mk energy 4184),
   ("W", mk power 1), ("kW", mk power 1000), ("MW", mk power (10 ^ 6)),
   ("hp", mk power (550 * 0.3048 * 0.45359237 * 9.80665)),
   -- Pressure

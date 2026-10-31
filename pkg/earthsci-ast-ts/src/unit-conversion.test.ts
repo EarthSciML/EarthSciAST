@@ -285,7 +285,7 @@ describe('unit-conversion', () => {
         ms us ns min h hr day yr year
         L l mL gal
         kmol mmol umol nmol M
-        Hz N Pa J kJ cal kcal W kW MW hp
+        Hz N Pa J kJ MJ cal kcal W kW MW hp
         atm uatm bar hPa kPa mbar Torr mmHg inHg psi
         erg BTU Wh kWh
         C V Ohm F T

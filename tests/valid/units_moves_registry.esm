@@ -124,6 +124,18 @@
           "default": 1.0,
           "description": "The same mass as the entry above, in the unit the FF10 inventory is written in."
         },
+        "fuel_energy_content": {
+          "type": "parameter",
+          "units": "MJ/kg",
+          "default": 43.488,
+          "description": "Fuel energy content, in the unit MOVES tabulates it in (MJ/kg). Without `MJ` this column must be declared in a unit it is not stored in."
+        },
+        "reference_energy_content": {
+          "type": "parameter",
+          "units": "J/kg",
+          "default": 43488000.0,
+          "description": "The same energy content in J/kg (1 MJ = 1e6 J exactly)."
+        },
         "travel_time": {
           "type": "unknown",
           "units": "h",
@@ -158,6 +170,11 @@
           "type": "unknown",
           "units": "lb/short_ton",
           "description": "`lb` ÷ `short_ton`, declared `lb/short_ton`: dimensionless, scale exactly 1/2000. A scale-aware checker rejects this ratio declared as `1` (esm-spec §4.8.3); the dimension and exact scale of each unit are pinned by tests/conformance/unit_registry."
+        },
+        "energy_content_ratio": {
+          "type": "unknown",
+          "units": "MJ/J",
+          "description": "`MJ` ÷ `J`, declared `MJ/J`: dimensionless, scale exactly 1e6. `MJ` has to resolve as an ENERGY in every binding for this document to load at all. A scale-aware checker rejects this ratio declared as `1` (esm-spec §4.8.3); the dimension and exact scale of each unit are pinned by tests/conformance/unit_registry."
         },
         "fuel_mass_rate": {
           "type": "unknown",
@@ -253,6 +270,16 @@
             "args": [
               "pound_mass",
               "ton_mass"
+            ]
+          }
+        },
+        {
+          "lhs": "energy_content_ratio",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "fuel_energy_content",
+              "reference_energy_content"
             ]
           }
         },

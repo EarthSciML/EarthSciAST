@@ -159,7 +159,7 @@ const _UNIT_REGISTRY = Dict{String, Unitful.Units}(
     "nmol" => u"nmol", "M" => u"M",
 
     # Derived.
-    "Hz" => u"Hz", "N" => u"N", "Pa" => u"Pa", "J" => u"J", "kJ" => u"kJ",
+    "Hz" => u"Hz", "N" => u"N", "Pa" => u"Pa", "J" => u"J", "kJ" => u"kJ", "MJ" => u"MJ",
     "cal" => u"cal", "kcal" => u"kcal", "W" => u"W", "kW" => u"kW", "MW" => u"MW",
     "hp" => _u_hp,
 

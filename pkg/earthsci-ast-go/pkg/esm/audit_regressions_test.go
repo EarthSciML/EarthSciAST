@@ -907,7 +907,7 @@ func TestAuditT4_UnitRegistryAndGrammarContract(t *testing.T) {
 		"m", "kg", "s", "mol", "K", "A", "cd", "rad",
 		"g", "mg", "ug", "dm", "cm", "mm", "um", "nm", "km",
 		"ms", "us", "ns", "min", "h", "hr", "day", "yr", "year",
-		"L", "l", "mL", "Hz", "N", "Pa", "J", "kJ", "cal", "kcal", "W",
+		"L", "l", "mL", "Hz", "N", "Pa", "J", "kJ", "MJ", "cal", "kcal", "W",
 		"kmol", "mmol", "umol", "nmol", "M",
 		// Pressure and energy multiples.
 		"atm", "bar", "hPa", "kPa", "mbar", "Torr", "mmHg", "psi",

@@ -231,6 +231,27 @@
       "why": "esm-spec 4.8.1: exactly 1000 cal."
     },
     {
+      "canonical": "J",
+      "scale_exact": "1000000",
+      "scale_to_canonical": 1000000.0,
+      "units": "MJ",
+      "why": "esm-spec 4.8.1: the megajoule, exactly 1e6 J. A flat-table entry, not `M` composed with `J`: `M` alone is MOLAR."
+    },
+    {
+      "canonical": "m^2/s^2",
+      "scale_exact": "1000000",
+      "scale_to_canonical": 1000000.0,
+      "units": "MJ/kg",
+      "why": "EPA MOVES tabulates fuel energy content in MJ/kg. Without `MJ` a document must either declare a wrong unit or carry a hidden factor of 1000 through `kJ`."
+    },
+    {
+      "canonical": "m^2/s^2",
+      "scale_exact": "1",
+      "scale_to_canonical": 1.0,
+      "units": "MJ/kg/ppm",
+      "why": "A MOVES fuel-property sensitivity: energy content per ppm. The left-to-right solidus (4.8.2) reads it as (MJ/kg)/ppm, and the 1e6 of `MJ` and the 1e-6 of `ppm` must cancel EXACTLY to 1."
+    },
+    {
       "canonical": "1",
       "scale_exact": "1/1000000",
       "scale_to_canonical": 1e-06,

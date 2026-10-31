@@ -83,7 +83,7 @@ using Unitful
                   "dm", "cm", "mm", "um", "nm", "km", "ft", "mi",
                   "ms", "us", "ns", "min", "h", "hr", "day", "yr", "year",
                   "L", "l", "mL", "gal", "kmol", "mmol", "umol", "nmol", "M",
-                  "Hz", "N", "Pa", "J", "kJ", "cal", "kcal", "W", "kW", "MW",
+                  "Hz", "N", "Pa", "J", "kJ", "MJ", "cal", "kcal", "W", "kW", "MW",
                   "hp",
                   "atm", "uatm", "bar", "hPa", "kPa", "mbar", "Torr", "mmHg",
                   "inHg", "psi",
