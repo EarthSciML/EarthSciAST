@@ -600,3 +600,127 @@ fn a_million_cell_non_shift_scatter_builds_through_the_tuple_list() {
         assert_eq!(x.to_bits(), want.to_bits(), "cell {j}");
     }
 }
+
+/// A ragged range whose parent is contracted: `pm[j] = Σ_{r, k ∈ row r :
+/// j = floor((mem[r, k] - 1) / 3) + 1} W[mem] s[mem]` over `m` members in
+/// rows of length 3, 1, 4, 2, …, the members a scrambled numbering. Returns
+/// the document, the members row by row, and `W`.
+fn ragged_parent_doc(m: usize) -> (Value, Vec<Vec<usize>>, Vec<f64>) {
+    let lens = [3usize, 1, 4, 2];
+    let mut rows: Vec<Vec<usize>> = Vec::new();
+    let mut t = 0usize;
+    while t < m {
+        let len = lens[rows.len() % 4].min(m - t);
+        rows.push((t..t + len).map(|x| (x * 7919) % m + 1).collect());
+        t += len;
+    }
+    let max_len = 4;
+    let row_len: Vec<usize> = rows.iter().map(Vec::len).collect();
+    let row_mem: Vec<Vec<usize>> = rows
+        .iter()
+        .map(|r| {
+            (0..max_len)
+                .map(|k| r.get(k).copied().unwrap_or(0))
+                .collect()
+        })
+        .collect();
+    let w: Vec<f64> = (0..m)
+        .map(|x| [1e16, 1.0, -1e16, 3.0, 0.5][x % 5] * (1.0 + (x % 7) as f64))
+        .collect();
+    let n_out = m.div_ceil(3);
+    let mem = || ix("rowMem", vec![json!("r"), json!("k")]);
+    let e = plus(
+        op(
+            "floor",
+            vec![op("/", vec![op("-", vec![mem(), json!(1)]), json!(3)])],
+        ),
+        json!(1),
+    );
+    let rhs = json!({"op": "faq", "args": [], "output_idx": ["j"], "reduce": "+",
+        "ranges": {"j": {"from": "nout"}, "r": {"from": "rows"},
+                   "k": {"from": "row_members", "of": ["r"]}},
+        "filter": eq(json!("j"), e),
+        "expr": op("*", vec![ix("W", vec![mem()]), ix("s", vec![mem()])])});
+    let d = json!({
+        "esm": "1.3.0",
+        "metadata": {"name": "ragged_parent_scatter", "authors": ["test"]},
+        "index_sets": {
+            "ns": {"kind": "interval", "size": m},
+            "nout": {"kind": "interval", "size": n_out},
+            "rows": {"kind": "interval", "size": rows.len()},
+            "maxLen": {"kind": "interval", "size": max_len},
+            "row_members": {"kind": "ragged", "of": ["rows"], "offsets": "rowLen",
+                            "values": "rowMem"}
+        },
+        "models": {"M": {
+            "variables": {
+                "s": {"type": "unknown", "units": "1", "shape": ["ns"], "default": 1.0},
+                "pm": {"type": "unknown", "units": "1", "shape": ["nout"], "default": 0.0},
+                "rowLen": {"type": "unknown", "units": "1", "shape": ["rows"]},
+                "rowMem": {"type": "unknown", "units": "1", "shape": ["rows", "maxLen"]},
+                "W": {"type": "unknown", "units": "1", "shape": ["ns"]}
+            },
+            "equations": [
+                {"lhs": faq(&["q"], &[("q", 1, m as i64)], "+", Value::Null,
+                    json!({"op": "D", "args": [ix("s", vec![json!("q")])], "wrt": "t"})),
+                 "rhs": faq(&["q"], &[("q", 1, m as i64)], "+", Value::Null, json!(0.0))},
+                {"lhs": "rowLen", "rhs": {"op": "const", "args": [], "value": row_len}},
+                {"lhs": "rowMem", "rhs": {"op": "const", "args": [], "value": row_mem}},
+                {"lhs": "W", "rhs": {"op": "const", "args": [], "value": w}},
+                {"lhs": faq(&["j"], &[("j", 1, n_out as i64)], "+", Value::Null,
+                    json!({"op": "D", "args": [ix("pm", vec![json!("j")])], "wrt": "t"})),
+                 "rhs": rhs}
+            ]
+        }}
+    });
+    (d, rows, w)
+}
+
+#[test]
+fn a_ragged_range_under_a_contracted_parent_scatters_in_one_pass() {
+    // Bits against the interpreter at a size it walks quickly.
+    let (d, _, _) = ragged_parent_doc(60);
+    agree("ragged contracted parent", &d);
+
+    // Build time grows linearly: a per-cell walk of the whole nest would
+    // grow tenfold per cell count, a hundredfold per tenfold in size.
+    let mut builds = Vec::new();
+    for m in [100_000usize, 1_000_000] {
+        let (d, rows, w) = ragged_parent_doc(m);
+        let t0 = std::time::Instant::now();
+        let native = program(&d, Compiler::Native);
+        builds.push(t0.elapsed().as_secs_f64());
+        let n = native.n_states();
+        let u = vec![1.0; n];
+        let out = eval(&native, &u);
+        // The interpreter's order: rows ascending, each row's members
+        // ascending; each cell folds its terms from +0.0.
+        let n_out = m.div_ceil(3);
+        let mut want = vec![0.0f64; n_out];
+        for row in &rows {
+            for &mem in row {
+                let j = (mem - 1) / 3;
+                want[j] += w[mem - 1] * 1.0;
+            }
+        }
+        let pm = native
+            .state_layout()
+            .iter()
+            .find(|b| b.name == "pm" || b.name.ends_with(".pm"))
+            .expect("pm block")
+            .flat_offset;
+        let got = &out[pm..pm + n_out];
+        for (j, (x, y)) in got.iter().zip(&want).enumerate() {
+            assert_eq!(
+                x.to_bits(),
+                y.to_bits(),
+                "m = {m}, cell {j}: {x:e} vs {y:e}"
+            );
+        }
+    }
+    eprintln!("ragged contracted parent builds: {builds:?}");
+    assert!(
+        builds[1] < 30.0 * builds[0],
+        "build grew superlinearly: {builds:?}"
+    );
+}
