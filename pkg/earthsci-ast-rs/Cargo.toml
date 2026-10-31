@@ -167,7 +167,7 @@ js-sys = { version = "0.3", optional = true }
 web-sys = { version = "0.3", optional = true }
 # Performance dependencies
 rayon = { version = "1.8", optional = true }
-simd-json = { version = "0.18", optional = true }
+simd-json = { version = "0.19", optional = true }
 smallvec = { version = "1.11", features = ["serde"] }
 # Fast, *fixed-seed* (hence deterministic — unlike std's randomized RandomState)
 # hasher for the hot per-cell interpreter maps (`simulate_array`). Keys are
