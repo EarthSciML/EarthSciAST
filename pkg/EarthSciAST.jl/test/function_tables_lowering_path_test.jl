@@ -305,6 +305,8 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
             err
         end
         doc = JSON3.read(read(path, String), Dict{String,Any})
+        # The array equation below is a `faq`, which arrives at esm 1.1.0.
+        doc["esm"] = "1.1.0"
         # A state reads the strict table through a scalar lookup and a lookup in
         # an array equation (the array tiers), and a bilinear one on each axis.
         doc["function_tables"]["bi_tab"] = Dict{String,Any}(
