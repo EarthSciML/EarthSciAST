@@ -307,6 +307,9 @@ jobs:
       fail-fast: false
       matrix:
         # The two newest Node LTS lines, whatever they are when the job runs.
+        # package.json's `engines.node` floor and the @types/node major must
+        # equal lts/-1, so the oldest Node it accepts is tested and type-checked
+        # against: raise both when a Node LTS moves lts/-1 past them.
         node-version: ['lts/-1', 'lts/*']
     defaults:
       run:
@@ -351,17 +354,20 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Setup Python
+        id: setup-python
         uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
 
+      # Keyed on the RESOLVED Python version: `3.x` is an alias, so a key built
+      # from the matrix value would keep restoring the old release's wheels.
       - name: Cache Python dependencies
         uses: actions/cache@v6
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('pkg/earthsci-ast-py/pyproject.toml') }}
+          key: ${{ runner.os }}-pip-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('pkg/earthsci-ast-py/pyproject.toml') }}
           restore-keys: |
-            ${{ runner.os }}-pip-${{ matrix.python-version }}-
+            ${{ runner.os }}-pip-${{ steps.setup-python.outputs.python-version }}-
 
       - name: Install Python dependencies
         run: |
@@ -563,8 +569,9 @@ jobs:
       fail-fast: false
       matrix:
         # The two Go releases the Go team supports, whatever they are when the
-        # job runs. go.mod's `go` line is the floor; keep it at or below
-        # oldstable so both legs can build.
+        # job runs. go.mod's `go` line is the floor and must equal oldstable, so
+        # the oldest version the module accepts is the one built here: raise it
+        # when a Go release moves oldstable past it.
         go-version: ['oldstable', 'stable']
     defaults:
       run:
@@ -654,11 +661,13 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Setup Julia
+        id: setup-julia
         uses: julia-actions/setup-julia@v3
         with:
           version: ${{ env.JULIA_VERSION }}
 
       - name: Setup Node.js
+        id: setup-node
         uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -666,6 +675,7 @@ jobs:
           cache-dependency-path: pkg/earthsci-ast-ts/package-lock.json
 
       - name: Setup Python
+        id: setup-python
         uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -701,9 +711,14 @@ jobs:
           # those two out of the shared project is what stopped every Julia
           # stage here precompiling the SciML symbolic stack for a compiler none
           # of them names.
-          key: ${{ runner.os }}-conformance-${{ hashFiles('pkg/*/Project.toml', 'pkg/EarthSciAST.jl/scripts/compiler_agreement_env/Project.toml', 'pkg/*/package*.json', 'pkg/*/pyproject.toml', 'pkg/*/Cargo.lock') }}
+          #
+          # The key also carries the RESOLVED Julia, Node and Python versions.
+          # The env above names aliases, so when one moves (a new Julia LTS, say)
+          # a key without them would exact-hit a depot compiled for the old
+          # release, recompile everything and never save the new one.
+          key: ${{ runner.os }}-conformance-jl${{ steps.setup-julia.outputs.julia-version }}-node${{ steps.setup-node.outputs.node-version }}-py${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('pkg/*/Project.toml', 'pkg/EarthSciAST.jl/scripts/compiler_agreement_env/Project.toml', 'pkg/*/package*.json', 'pkg/*/pyproject.toml', 'pkg/*/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-conformance-
+            ${{ runner.os }}-conformance-jl${{ steps.setup-julia.outputs.julia-version }}-node${{ steps.setup-node.outputs.node-version }}-py${{ steps.setup-python.outputs.python-version }}-
 
       # Install dependencies for all languages
       - name: Install Julia dependencies

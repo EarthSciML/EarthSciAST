@@ -34,10 +34,11 @@ All implementations must maintain conformance across languages through our compr
 
 Ensure you have the following installed:
 
-- **Julia** 1.9+ (for Julia package development and testing)
-- **Node.js** 20+ and npm (for TypeScript/JavaScript packages)
-- **Python** 3.8+ and pip (for Python package development)
-- **Rust** 1.75.0+ and Cargo (for Rust package development)
+- **Julia** 1.10+ (for Julia package development and testing)
+- **Node.js** 22+ and npm (for TypeScript/JavaScript packages)
+- **Python** 3.11+ and pip (for Python package development)
+- **Go** 1.26+ (for the Go package)
+- **Rust** 1.89.0+ and Cargo (for Rust package development)
   - No C/C++ toolchain needed. The spherical-geometry kernel is `s2rst`, a
     pure-Rust port of Google's s2geometry, so `cargo build` works from a clean
     checkout with nothing but Cargo — and cross-compiles to `wasm32-unknown-unknown`

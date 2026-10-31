@@ -50,6 +50,13 @@ jobs:
     needs: release-analysis
     if: needs.release-analysis.outputs.needs_release == 'true'
     uses: ./.github/workflows/conformance-testing.yml
+    # A called workflow's jobs may ask for no more than the caller grants, and
+    # GitHub checks that before anything runs. conformance-testing.yml's
+    # `conformance-results` job asks for `pull-requests: write`, so without
+    # this the workflow-level `contents: read` rejects the whole run.
+    permissions:
+      contents: read
+      pull-requests: write
     with:
       release_validation: true
     secrets: inherit

@@ -31,6 +31,11 @@ updates:
       # which is part of the published types. Adopt a new major as its own change.
       - dependency-name: "json-schema-to-typescript"
         update-types: ["version-update:semver-major"]
+      # The @types/node major tracks the engines.node floor (the oldest tested
+      # Node LTS), so the type-checker rejects APIs that floor lacks. Raise it
+      # with the floor, not on Node's release schedule.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       npm:
         patterns: ["*"]
