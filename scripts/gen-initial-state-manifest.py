@@ -181,9 +181,7 @@ def evaluate(expr, env, sizes):
     cells = next((a for a in args if isinstance(a, dict)), None)
     if cells is None:
         return fold(op, args)
-    return {
-        i: fold(op, [a[i] if isinstance(a, dict) else a for a in args]) for i in cells
-    }
+    return {i: fold(op, [a[i] if isinstance(a, dict) else a for a in args]) for i in cells}
 
 
 def expected(case):
@@ -219,7 +217,7 @@ def expected(case):
     for eq in model.get("initialization_equations", []) or []:
         name = eq["lhs"]
         value = evaluate(eq["rhs"], env, sizes)
-        for c, v in (value.items() if isinstance(value, dict) else [(None, value)]):
+        for c, v in value.items() if isinstance(value, dict) else [(None, value)]:
             state[(name, c)] = v
     for key, v in case["u0"].items():
         name, _, rest = key.partition("[")
