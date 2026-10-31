@@ -279,6 +279,7 @@ pub(crate) struct FieldIcRecord {
 ///
 /// Initial-condition overrides are applied over the result, not read by it.
 #[cfg(feature = "solve")]
+#[derive(Clone)]
 pub(crate) struct FieldIcMemo {
     params: Vec<u64>,
     forcing_generation: u64,
@@ -1407,6 +1408,45 @@ impl ArrayCompiled {
         initial_conditions: &HashMap<String, f64>,
         param_vec: &[f64],
     ) -> Result<Vec<f64>, SimulateError> {
+        self.build_initial_state_with(initial_conditions, param_vec, true)
+    }
+
+    /// The initial state vector `u0` a solve under `params` and
+    /// `initial_conditions` starts from, in flat state-vector order (the
+    /// order of [`Self::qualified_state_names`]): the same
+    /// [`Self::build_initial_state`] the solve runs, without integrating.
+    ///
+    /// It reads the memo of construction's field initial conditions without
+    /// taking it ([`FieldIcMemo`]), so the first solve after it still answers
+    /// from the memo. Like the solve, it reports an out-of-range constant-array
+    /// gather an initial condition made rather than returning the `NaN` the
+    /// gather substituted.
+    #[cfg(feature = "solve")]
+    pub(crate) fn initial_state(
+        &self,
+        params: &HashMap<String, f64>,
+        initial_conditions: &HashMap<String, f64>,
+    ) -> Result<Vec<f64>, SimulateError> {
+        crate::simulate_array::take_const_array_oob();
+        let param_vec = self.build_param_vec(params)?;
+        let u0 = self.build_initial_state_with(initial_conditions, &param_vec, false)?;
+        if let Some(details) = crate::simulate_array::take_const_array_oob() {
+            return Err(
+                crate::compile_error::CompileError::InterpreterBuildError { details }.into(),
+            );
+        }
+        Ok(u0)
+    }
+
+    /// [`Self::build_initial_state`], taking construction's memo
+    /// (`consume_memo`, what a solve does) or reading a copy of it.
+    #[cfg(feature = "solve")]
+    fn build_initial_state_with(
+        &self,
+        initial_conditions: &HashMap<String, f64>,
+        param_vec: &[f64],
+        consume_memo: bool,
+    ) -> Result<Vec<f64>, SimulateError> {
         // Same §6.6.2 canonicalization as `build_param_vec`, on the state side.
         let initial_conditions = crate::simulate::canonicalize_override_keys(
             &super::layout::SlotNames(&self.var_shapes),
@@ -1417,7 +1457,12 @@ impl ArrayCompiled {
         .map_err(crate::simulate::ic_key_error)?;
         // What construction resolved, when it resolved it under these
         // parameters ([`FieldIcMemo`]).
-        let memo = self.field_ic_memo.borrow_mut().take().filter(|m| {
+        let memo = if consume_memo {
+            self.field_ic_memo.borrow_mut().take()
+        } else {
+            self.field_ic_memo.borrow().clone()
+        };
+        let memo = memo.filter(|m| {
             m.params == param_bits(param_vec)
                 && m.forcing_generation == self.forcing_generation.get()
         });
