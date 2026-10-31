@@ -1630,13 +1630,20 @@ function formatExpressionNodeMathML(node: ExprNode): string {
   return `<mrow><mi>${node.op}</mi><mo>(</mo>${argList}<mo>)</mo></mrow>`
 }
 
+/** Math-mode spellings of the characters a `\` prefix cannot escape. */
+const LATEX_NAME_SYMBOLS: Record<string, string> = {
+  '\\': '\\backslash{}',
+  '^': '\\hat{}',
+  '~': '\\sim{}',
+}
+
 /**
  * Escape a bare operator / identifier name for `\mathrm{...}`. Only `_` ever
  * occurs in a real operator or table name; the rest are escaped so that any
  * declared name still yields well-formed LaTeX.
  */
 function latexName(name: string): string {
-  return name.replace(/[\\{}_$%#&]/g, (c) => (c === '\\' ? '\\backslash{}' : '\\' + c))
+  return name.replace(/[\\{}_$%#&^~]/g, (c) => LATEX_NAME_SYMBOLS[c] ?? '\\' + c)
 }
 
 /** Render a sub-expression in the requested text format. */

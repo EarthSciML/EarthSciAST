@@ -309,4 +309,10 @@ describe('LaTeX operator / table names', () => {
       '\\mathrm{a\\backslash{}b\\{c\\}\\%\\#\\&\\$}(x)',
     )
   })
+
+  it('spells ^ and ~ as math symbols, since a backslash prefix does not escape them', () => {
+    expect(toLatex({ op: 'fn', name: 'a^b~c', args: ['x'] } as never)).toBe(
+      '\\mathrm{a\\hat{}b\\sim{}c}(x)',
+    )
+  })
 })
