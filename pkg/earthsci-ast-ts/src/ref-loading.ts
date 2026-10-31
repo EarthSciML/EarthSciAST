@@ -48,6 +48,7 @@ import {
   readFileSyncNode,
 } from './path-utils.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
+import { applyMountUrlSubstitutions } from './data-source-urls.js'
 import { loadString, validateSchema, ROOT_PATH } from './parse.js'
 import { toJson } from './serialize.js'
 import { prepareDocumentOps, raiseFaqVersionFloor, rejectVersionGatedConstructs } from './parse.js'
@@ -846,6 +847,8 @@ interface RefEdge {
   expression_template_imports?: unknown
   /** esm-spec §4.7 "Mount-edge index-set renaming" — index-set name → importer-visible name. */
   index_set_rename?: unknown
+  /** esm-spec §4.7 "Binding a data source's location at the mount" — placeholder → text. */
+  url_substitutions?: unknown
 }
 
 /**
@@ -995,6 +998,15 @@ function resolveRefEdge(
       enclosingEnv,
     )
     carryMountedElementType(parsed, leafPrecision, precision, ref, pointer)
+    // esm-spec §4.7 "Binding a data source's location at the mount", at BOTH
+    // mount forms (this skeleton serves both): bind the leaf's `{name}`
+    // placeholders on the document as resolved at this edge, a leading value
+    // anchoring on THIS (the mounting) document's directory. This binding does
+    // not hoist a mounted document's `data_sources` at either form, so the
+    // rewritten locations go no further — but the edge's keys are still checked
+    // here, so a misspelt key is `url_substitution_unknown_name` exactly as in
+    // the bindings that do hoist.
+    applyMountUrlSubstitutions(parsed, sub.url_substitutions, basePath, `${mountForm} ref '${ref}'`)
     inline(parsed, refBasePath)
   } finally {
     resolving.delete(chainKey)

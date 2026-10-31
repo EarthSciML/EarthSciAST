@@ -356,6 +356,7 @@ const OPAQUE_KEYS = [
   'rename',
   'rebind',
   'index_set_rename',
+  'url_substitutions',
   'source',
   'file_variable',
   'path',
@@ -428,6 +429,7 @@ export const NAME_KEYED_MAP_KEYS: ReadonlySet<string> = new Set<string>([
   'rename',
   'rebind',
   'index_set_rename',
+  'url_substitutions',
   'where',
 ])
 

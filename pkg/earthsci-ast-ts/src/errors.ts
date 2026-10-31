@@ -411,6 +411,12 @@ export const ERROR_CODES = {
   SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM:
     'subsystem_index_set_rename_unsupported_mount_form',
   /**
+   * A mount edge's `url_substitutions` key names no bare `{name}` placeholder
+   * of the referenced document's `data_sources` locations (esm-spec §4.7
+   * "Binding a data source's location at the mount").
+   */
+  URL_SUBSTITUTION_UNKNOWN_NAME: 'url_substitution_unknown_name',
+  /**
    * A §4.7 `{ ref }` mount at a form this binding does not implement — a
    * top-level `reaction_systems.<k>` `{ ref }` (esm-spec §4.7 "Two mount forms,
    * one mechanism"). Refused at `/reaction_systems/<k>` rather than left as an
