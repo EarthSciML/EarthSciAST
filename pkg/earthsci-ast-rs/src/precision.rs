@@ -320,7 +320,7 @@ pub fn subsystem_declarations(
 ) -> Vec<(String, Option<String>)> {
     subsystems
         .and_then(serde_json::Value::as_object)
-        .map(|subs| subsystem_declarations_in(subs))
+        .map(subsystem_declarations_in)
         .unwrap_or_default()
 }
 

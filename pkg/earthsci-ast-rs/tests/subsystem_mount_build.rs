@@ -286,8 +286,7 @@ fn mixing_a_subsystem_precision_is_mixed_element_type() {
         .as_array_mut()
         .unwrap()
         .push(json!({"lhs": "x2", "rhs": {"op": "+", "args": ["x", "key"]}}));
-    inside["variables"]["x2"] =
-        json!({"type": "unknown", "units": "1", "element_type": "Float32"});
+    inside["variables"]["x2"] = json!({"type": "unknown", "units": "1", "element_type": "Float32"});
     let e = evaluate(&host(inside, vec![], None), "Leaf.x2")
         .expect_err("a mixed subsystem equation built");
     assert!(e.contains("mixed_element_type"), "{e}");

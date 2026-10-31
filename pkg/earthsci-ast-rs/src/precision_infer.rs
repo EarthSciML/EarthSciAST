@@ -427,16 +427,14 @@ pub fn model_declarations(
 ) -> Vec<crate::precision::ModelDeclarations<'_>> {
     models
         .iter()
-        .map(|(mname, model)| {
-            crate::precision::ModelDeclarations {
-                model: mname,
-                variables: model
-                    .variables
-                    .iter()
-                    .map(|(v, d)| (v.as_str(), d.element_type.as_deref()))
-                    .collect(),
-                subsystem_variables: subsystem_declarations_of(model),
-            }
+        .map(|(mname, model)| crate::precision::ModelDeclarations {
+            model: mname,
+            variables: model
+                .variables
+                .iter()
+                .map(|(v, d)| (v.as_str(), d.element_type.as_deref()))
+                .collect(),
+            subsystem_variables: subsystem_declarations_of(model),
         })
         .collect()
 }
