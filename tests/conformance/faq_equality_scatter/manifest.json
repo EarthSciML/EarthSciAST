@@ -69,19 +69,13 @@
    "id": "ragged",
    "path": "fixtures/ragged.esm",
    "golden": "golden/ragged.json",
-   "excluded": {
-    "python": "the NumPy evaluator refuses a filter over a ragged contracted range"
-   }
+   "excluded": {}
   },
   {
    "id": "ragged_contracted_parent",
    "path": "fixtures/ragged_contracted_parent.esm",
    "golden": "golden/ragged_contracted_parent.json",
-   "excluded": {
-    "julia": "E_TREEWALK_UNBOUND_LOOP_VAR on a ragged range whose parent is a contracted index, under both compilers",
-    "rust": "the interpreter silently returns 0 for pm[2..4] (only pm[1] is right); native refuses (ragged bound's parent is not an output index)",
-    "python": "the NumPy evaluator refuses a filter over a ragged contracted range"
-   }
+   "excluded": {}
   }
  ]
 }
