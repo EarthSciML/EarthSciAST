@@ -168,7 +168,8 @@
       "Mid.key_next": 2265007015
     },
     "deep.esm": {
-      "Host.x": 1.0
+      "Host.x": 1.0,
+      "Leaf.Inner.x": 0.9999999403953552
     },
     "mid_f64.esm": {
       "Leaf.x": 0.9999999403953552,
@@ -177,17 +178,20 @@
     "chain_f32.esm": {
       "Mid.x": 0.9999999403953552,
       "Mid.key_next": 2265007015
+    },
+    "subsystems.esm": {
+      "Host.Leaf.x": 0.9999999403953552,
+      "Host.Leaf.key_next": 2265007015,
+      "Host.y": 2.0
     }
   },
   "build_errors": {
-    "mixed_coupling.esm": "mixed_element_type",
-    "subsystems.esm": "element_type_uncarried",
-    "deep.esm": "element_type_uncarried"
+    "mixed_coupling.esm": "mixed_element_type"
   },
   "notes": {
-    "subsystems.esm": "The build error is a Rust limitation, not a format rule: its precision inference reads top-level model variables only, so a written element_type inside a subsystems.<k> component is refused rather than ignored. A binding that evaluates subsystem precision would assert values here instead.",
     "values": "key_next = key + 5 with key = 2265007010 declared Float64 inside the Float32 leaf: 2265007015 exactly, where binary32 would give 2265007104.",
     "load_errors": "The reaction-system refusal is reached through whichever reaction-system mount form a binding implements. Rust, Python, TypeScript and Go mount a reaction system at a reaction system's subsystems.<k> {ref} and refuse the top-level reaction_systems.<k> {ref} form (mount_form_unsupported, esm-spec §4.7); Julia is the reverse — it mounts the top-level form and refuses a reaction-system subsystems.<k> {ref} at parse.",
-    "deep.esm": "Host evaluates (its value is pinned): the leaf's subsystem precision belongs to Leaf, which is not the model being built. Building Leaf is the same Rust limitation as subsystems.esm, refused rather than evaluated in the wrong precision."
+    "deep.esm": "Host evaluates in binary64 beside the Float32 leaf; building Leaf evaluates its subsystem Inner in the Float32 the mount wrote onto it.",
+    "subsystems": "A precision written into a subsystems.<k> component is evaluated, not refused: subsystems.esm and deep.esm assert values. Rust refused both (element_type_uncarried) until its precision inference read subsystem variables."
   }
 }
