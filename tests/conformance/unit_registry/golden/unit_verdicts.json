@@ -420,6 +420,22 @@
       "why": "As `mile`: the mass is spelled `lb` and there is deliberately one spelling."
     },
     {
+      "units": "GJ",
+      "why": "`MJ` and `MW` are flat-table entries, not a mega-/giga- prefix mechanism (4.8.1). A binding that resolves `MJ` through its units library's prefix rules (Unitful, pint, uom) would accept this too."
+    },
+    {
+      "units": "MPa",
+      "why": "As `GJ`: `M` composes with nothing. `Pa`, `hPa` and `kPa` are the pressure keys."
+    },
+    {
+      "units": "MWh",
+      "why": "As `GJ`: `Wh` and `kWh` are table keys and `MWh` is not, so a prefix leak on `Wh` shows up here."
+    },
+    {
+      "units": "Mmol",
+      "why": "`M` alone is MOLAR (4.8.1), which is exactly why `MJ` is a table entry and not mega- times `J`. A prefix rule would read this as megamole."
+    },
+    {
       "units": "  ",
       "why": "esm-spec 4.8.2 (Q-104 a): a whitespace-only string has no tokens and derives no unit. Only \"\" is the empty unit."
     },

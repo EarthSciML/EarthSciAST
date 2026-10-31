@@ -51,6 +51,7 @@ describe('unit-conversion', () => {
       expect(convertUnits(1, 'atm', 'Pa')).toBeCloseTo(101325, 6)
       expect(convertUnits(1, 'bar', 'hPa')).toBeCloseTo(1000, 6)
       expect(convertUnits(1, 'kJ', 'J')).toBeCloseTo(1000, 10)
+      expect(convertUnits(1, 'MJ', 'J')).toBeCloseTo(1e6, 6)
       expect(convertUnits(1, 'N', 'kg*m/s^2')).toBeCloseTo(1, 10)
     })
 
