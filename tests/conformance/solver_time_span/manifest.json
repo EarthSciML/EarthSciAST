@@ -335,14 +335,14 @@
     ]
   },
   "clock": {
-    "notes": "The clock accessors `time_origin` and `timestamp_to_seconds` (API_SPEC §5.8), in the bindings that carry them. Each case gives a document's `domain` as raw JSON (null: the document has none). A binding calls both accessors on that raw value, and, when `typed` is true, on the typed domain built from it and on a document built in memory that carries it, both built in memory rather than loaded; every form MUST give the same answer. `typed` is false for a domain whose shape only raw JSON can hold (a `null` origin field, a `temporal` that is not an object). `origin` is what `time_origin` returns; each `timestamps` entry is what `timestamp_to_seconds` returns for it. A value is binary64 seconds, compared EXACTLY; a refusal is its code, and every refusal is one of `timestamp_malformed`, `timestamp_no_calendar_day` and `time_origin_invalid`, checked in that order. Values were computed from the esm-spec §2.2.7 arithmetic, not by a binding.",
+    "notes": "The clock accessors `time_origin` and `timestamp_to_seconds` (API_SPEC §5.8), in the bindings that carry them. Each case gives a document's `domain` as raw JSON (null: the document has none). A binding calls both accessors on that raw value, and, when `typed` is true, on the typed domain built from it and on a document built in memory that carries it, both built in memory rather than loaded; every form MUST give the same answer. `typed` is false for a domain whose shape only raw JSON can hold (a `null` origin field, a `temporal` that is not an object, a `domain` that is not an object). `origin` is what `time_origin` returns; each `timestamps` entry is what `timestamp_to_seconds` returns for it. A value is binary64 seconds, compared EXACTLY; a refusal is its code, and every refusal is one of `timestamp_malformed`, `timestamp_no_calendar_day` and `time_origin_invalid`, checked in that order. Values were computed from the esm-spec §2.2.7 arithmetic, not by a binding.",
     "bindings_required": [
       "julia",
       "python",
       "rust"
     ],
     "fields": {
-      "domain": "The document's `domain`, as raw JSON; null when the document has none.",
+      "domain": "The document's `domain`, as raw JSON; null when the document has none. A `domain` that is neither an object nor null has no readable origin: `time_origin_invalid`, naming `/domain`.",
       "typed": "Whether the typed domain can hold this one, so that a binding also runs the case on the typed domain and on a document built in memory that carries it.",
       "origin": "`{\"seconds\": x}`: `time_origin` returns x. `{\"error_code\": c}`: it raises c.",
       "timestamps": "Each `{timestamp, seconds}` or `{timestamp, error_code}`: what `timestamp_to_seconds` returns or raises. A non-string `timestamp` is `timestamp_malformed`; a binding whose signature admits only a string (Rust) skips it."
@@ -723,6 +723,60 @@
           {
             "timestamp": "2019-07-01T00:00:00Z",
             "seconds": 1561939200.0
+          }
+        ]
+      },
+      {
+        "id": "domain_a_string",
+        "domain": "2019-07-01T00:00:00Z",
+        "typed": false,
+        "origin": {
+          "error_code": "time_origin_invalid"
+        },
+        "timestamps": [
+          {
+            "timestamp": "2019-07-01T00:00:00Z",
+            "error_code": "time_origin_invalid"
+          },
+          {
+            "timestamp": "2019-07-01",
+            "error_code": "timestamp_malformed"
+          }
+        ]
+      },
+      {
+        "id": "domain_an_array",
+        "domain": [],
+        "typed": false,
+        "origin": {
+          "error_code": "time_origin_invalid"
+        },
+        "timestamps": [
+          {
+            "timestamp": "2019-07-01T00:00:00Z",
+            "error_code": "time_origin_invalid"
+          },
+          {
+            "timestamp": "2019-07-01",
+            "error_code": "timestamp_malformed"
+          }
+        ]
+      },
+      {
+        "id": "domain_a_number",
+        "domain": 0,
+        "typed": false,
+        "origin": {
+          "error_code": "time_origin_invalid"
+        },
+        "timestamps": [
+          {
+            "timestamp": "2019-07-01T00:00:00Z",
+            "error_code": "time_origin_invalid"
+          },
+          {
+            "timestamp": "2019-07-01",
+            "error_code": "timestamp_malformed"
           }
         ]
       }

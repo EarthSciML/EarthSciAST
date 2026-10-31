@@ -587,3 +587,63 @@ fn the_clock_accessors_on_a_domain() {
         check_clock_case(case, "document", &file);
     }
 }
+
+#[test]
+fn the_accessors_take_a_document_behind_a_pointer() {
+    // The generic source still accepts what the old `&EsmFile` parameter
+    // reached by deref: a document in a `Box`, an `Rc` or an `Arc`.
+    let doc = serde_json::json!({
+        "esm": "1.3.0",
+        "metadata": {"name": "m"},
+        "domain": {"temporal": {"reference_time": "2019-07-01T00:00:00Z"}},
+    });
+    let file = || -> earthsci_ast::EsmFile { serde_json::from_value(doc.clone()).expect("doc") };
+    let want = 1561939200.0_f64.to_bits();
+    assert_eq!(
+        outcome!(earthsci_ast::time_origin(&Box::new(file()))),
+        Ok(want)
+    );
+    assert_eq!(
+        outcome!(earthsci_ast::time_origin(&std::rc::Rc::new(file()))),
+        Ok(want)
+    );
+    let shared = std::sync::Arc::new(file());
+    assert_eq!(outcome!(earthsci_ast::time_origin(&shared)), Ok(want));
+    assert_eq!(
+        outcome!(earthsci_ast::timestamp_to_seconds(
+            &shared,
+            "2019-07-03T00:00:00Z"
+        )),
+        Ok(172800.0_f64.to_bits())
+    );
+}
+
+#[test]
+fn no_domain_counts_from_the_epoch_as_api_spec_spells_it() {
+    // API_SPEC §5.8's Rust spellings of "against no domain".
+    let stamp = "2019-07-01T00:00:00.5Z";
+    let want = Ok(1561939200.5_f64.to_bits());
+    assert_eq!(
+        outcome!(earthsci_ast::timestamp_to_seconds(&Value::Null, stamp)),
+        want
+    );
+    assert_eq!(
+        outcome!(earthsci_ast::timestamp_to_seconds(
+            &None::<earthsci_ast::Domain>,
+            stamp
+        )),
+        want
+    );
+}
+
+#[test]
+fn a_raw_domain_that_is_not_an_object_names_domain() {
+    let e = earthsci_ast::time_origin(&serde_json::json!("2019-07-01T00:00:00Z"))
+        .expect_err("a string domain has no origin");
+    assert_eq!(e.code, "time_origin_invalid");
+    assert!(
+        e.message.contains("/domain is \"2019-07-01T00:00:00Z\""),
+        "{}",
+        e.message
+    );
+}

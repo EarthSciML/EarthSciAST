@@ -7124,7 +7124,9 @@ The cases cover the three origins, offsets and a lowercase `t`, fractions on
 both sides, including a pair where `(W − W₀) + (f − f₀)` and
 `(W + f) − (W₀ + f₀)` differ, years 1 and 9999, each malformed shape, days a
 month does not have, and an origin that is unreadable, names no day, is a leap
-second, has an offset out of range, ends in a newline or is `null`.
+second, has an offset out of range, ends in a newline or is `null`, and a
+`domain` that is not an object (a string, an array, a number), which every
+binding refuses as `time_origin_invalid` rather than reading it as the epoch.
 
 **Mounting.** At both mount forms, a root reports its own interval or none,
 its emitted `solver` block carries nothing of the leaf's, and a root mounting a

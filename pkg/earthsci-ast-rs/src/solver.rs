@@ -619,7 +619,10 @@ mod sealed {
     /// Where a [`super::TimeOriginSource`] keeps its `domain.temporal`. Private,
     /// so the set of sources is this crate's to extend.
     pub trait Temporal {
-        fn temporal(&self) -> Option<&serde_json::Value>;
+        /// `Ok(temporal)` (`None`: no `temporal`), or `Err(domain)` for a raw
+        /// `domain` that is neither an object nor `null`, which has no origin
+        /// to read.
+        fn temporal(&self) -> Result<Option<&serde_json::Value>, &serde_json::Value>;
     }
 }
 
@@ -634,52 +637,78 @@ mod sealed {
 ///   been loaded — read as the load-time check reads it, so a present key
 ///   selects its field, `null` included, and a `domain` or `temporal` that is
 ///   not an object has no origin field (a missing domain is `Value::Null`);
-/// - `Option<T>` (`None` is a document without a domain) and `&T`, for any
-///   source `T`.
+/// - `Option<T>` (`None` is a document without a domain), `&T`, `Box<T>`,
+///   `Rc<T>` and `Arc<T>`, for any source `T`, so a caller holding a document
+///   behind a pointer passes it as it is.
+///
+/// A raw `domain` that is neither an object nor `null` (a string, an array, a
+/// number or a boolean) has no origin to read: the accessors refuse it with
+/// `time_origin_invalid`, naming `/domain`.
 ///
 /// The trait is sealed: its one method is private to this crate.
 pub trait TimeOriginSource: sealed::Temporal {}
 
 impl sealed::Temporal for crate::EsmFile {
-    fn temporal(&self) -> Option<&Value> {
-        self.domain.as_ref().and_then(|d| d.temporal.as_ref())
+    fn temporal(&self) -> Result<Option<&Value>, &Value> {
+        Ok(self.domain.as_ref().and_then(|d| d.temporal.as_ref()))
     }
 }
 impl TimeOriginSource for crate::EsmFile {}
 
 impl sealed::Temporal for crate::Domain {
-    fn temporal(&self) -> Option<&Value> {
-        self.temporal.as_ref()
+    fn temporal(&self) -> Result<Option<&Value>, &Value> {
+        Ok(self.temporal.as_ref())
     }
 }
 impl TimeOriginSource for crate::Domain {}
 
 impl sealed::Temporal for Value {
-    fn temporal(&self) -> Option<&Value> {
-        self.get("temporal")
+    fn temporal(&self) -> Result<Option<&Value>, &Value> {
+        match self {
+            Value::Null => Ok(None),
+            Value::Object(domain) => Ok(domain.get("temporal")),
+            _ => Err(self),
+        }
     }
 }
 impl TimeOriginSource for Value {}
 
 impl<T: TimeOriginSource> sealed::Temporal for Option<T> {
-    fn temporal(&self) -> Option<&Value> {
-        self.as_ref().and_then(sealed::Temporal::temporal)
+    fn temporal(&self) -> Result<Option<&Value>, &Value> {
+        self.as_ref().map_or(Ok(None), sealed::Temporal::temporal)
     }
 }
 impl<T: TimeOriginSource> TimeOriginSource for Option<T> {}
 
-impl<T: TimeOriginSource + ?Sized> sealed::Temporal for &T {
-    fn temporal(&self) -> Option<&Value> {
-        (**self).temporal()
-    }
+/// A source behind a reference or an owning pointer reads as the source
+/// itself. Without these, a generic `&S` would no longer deref `&Arc<EsmFile>`
+/// to `&EsmFile` the way the old `&EsmFile` parameter did.
+macro_rules! forward_time_origin_source {
+    ($($ptr:ty),*) => {$(
+        impl<T: TimeOriginSource + ?Sized> sealed::Temporal for $ptr {
+            fn temporal(&self) -> Result<Option<&Value>, &Value> {
+                (**self).temporal()
+            }
+        }
+        impl<T: TimeOriginSource + ?Sized> TimeOriginSource for $ptr {}
+    )*};
 }
-impl<T: TimeOriginSource + ?Sized> TimeOriginSource for &T {}
+forward_time_origin_source!(&T, Box<T>, std::rc::Rc<T>, std::sync::Arc<T>);
 
 /// The source's time origin as an [`Instant`], or `time_origin_invalid`
-/// naming the field. One lookup path, shared by [`time_origin`] and
-/// [`timestamp_to_seconds`].
+/// naming the field (or `/domain`, for a raw domain that is not an object).
+/// One lookup path, shared by [`time_origin`] and [`timestamp_to_seconds`].
 fn origin_instant<S: TimeOriginSource + ?Sized>(source: &S) -> Result<Instant, DiagnosticError> {
-    time_origin_of(sealed::Temporal::temporal(source)).map_err(|fault| {
+    let temporal = sealed::Temporal::temporal(source).map_err(|domain| {
+        err(
+            codes::TIME_ORIGIN_INVALID,
+            format!(
+                "/domain is {domain}, which is not an object, so it has no time origin \
+                 to count a timestamp from (esm-spec §2.2.7)."
+            ),
+        )
+    })?;
+    time_origin_of(temporal).map_err(|fault| {
         err(
             codes::TIME_ORIGIN_INVALID,
             format!("{} (esm-spec §2.2.7).", fault.message("the time origin")),
@@ -699,7 +728,8 @@ fn origin_instant<S: TimeOriginSource + ?Sized>(source: &S) -> Result<Instant, D
 /// `time_origin(&file)`, `time_origin(&domain)`, `time_origin(&doc["domain"])`.
 ///
 /// A field that is present but is not an RFC 3339 date-time naming a calendar
-/// day fails with `time_origin_invalid`, naming its pointer.
+/// day fails with `time_origin_invalid`, naming its pointer; so does a raw
+/// `domain` that is not an object, naming `/domain`.
 pub fn time_origin<S: TimeOriginSource + ?Sized>(source: &S) -> Result<f64, DiagnosticError> {
     let origin = origin_instant(source)?;
     Ok(origin.whole as f64 + origin.frac)
@@ -719,7 +749,8 @@ pub fn time_origin<S: TimeOriginSource + ?Sized>(source: &S) -> Result<f64, Diag
 /// 1. `timestamp_malformed` -- `timestamp` is not of that form;
 /// 2. `timestamp_no_calendar_day` -- it is, but its day is not in its month
 ///    (`2019-02-30`, `02-29` outside a leap year);
-/// 3. `time_origin_invalid` -- the origin field that applies cannot be read.
+/// 3. `time_origin_invalid` -- the origin field that applies cannot be read,
+///    or a raw `domain` is not an object.
 pub fn timestamp_to_seconds<S: TimeOriginSource + ?Sized>(
     source: &S,
     timestamp: &str,

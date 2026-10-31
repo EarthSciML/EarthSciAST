@@ -590,15 +590,18 @@ check a raw document's `solver.time_span` itself, say:
 
 | Binding | Signatures |
 |---|---|
-| Julia | `time_origin(file::EsmFile)`, `time_origin(domain::Union{Domain,AbstractDict,Nothing})`; `timestamp_to_seconds` takes the same first argument, then `timestamp` |
-| Python | `time_origin(source)`, `timestamp_to_seconds(source, timestamp)`, `source` an `EsmFile`, a `Domain`, a raw `dict` or `None`; another type is a `TypeError` |
-| Rust | `time_origin<S: TimeOriginSource + ?Sized>(source: &S) -> Result<f64, _>`, `timestamp_to_seconds(source: &S, timestamp: &str) -> Result<f64, _>`; the sealed trait `TimeOriginSource` is implemented for `EsmFile`, `Domain`, `serde_json::Value`, `Option<T>` and `&T` |
+| Julia | `time_origin(file::EsmFile)`, `time_origin(domain)` with `domain` a `Domain`, a raw JSON value (an `AbstractDict` with String or Symbol keys, a `JSON3.Object` included, or a string, vector, number or boolean) or `nothing`; `timestamp_to_seconds` takes the same first argument, then `timestamp` |
+| Python | `time_origin(source)`, `timestamp_to_seconds(source, timestamp)`, `source` an `EsmFile`, a `Domain`, a raw JSON value (`dict`, `list`, `str`, `int`, `float`, `bool`) or `None`; another type is a `TypeError`, raised before `timestamp` is looked at |
+| Rust | `time_origin<S: TimeOriginSource + ?Sized>(source: &S) -> Result<f64, _>`, `timestamp_to_seconds(source: &S, timestamp: &str) -> Result<f64, _>`; the sealed trait `TimeOriginSource` is implemented for `EsmFile`, `Domain`, `serde_json::Value`, `Option<T>`, `&T`, `Box<T>`, `Rc<T>` and `Arc<T>` |
 
 The raw form is the document's `domain` JSON value, `null` (or Julia
 `nothing`, Python `None`, Rust `Value::Null`) for a document without one. It is
 read as the load-time check reads it (esm-spec §2.2.7): a present origin key
 selects its field, `null` included, and a `temporal` that is not an object has
-no origin field. Every form gives the same answer for the same domain.
+no origin field. A `domain` that is neither an object nor `null` (a string, an
+array, a number or a boolean) has no origin to read, and is refused with
+`time_origin_invalid` naming `/domain` rather than read as the epoch. Every
+form gives the same answer for the same domain.
 
 **Refusals.** Each cause has its own code, so a caller tells them apart without
 reading the message:
@@ -607,7 +610,7 @@ reading the message:
 |---|---|
 | `timestamp_malformed` | `timestamp` is not a string, or not of the form `YYYY-MM-DDThh:mm:ss[.f]Z` |
 | `timestamp_no_calendar_day` | `timestamp` is of that form, but its day is not in its month (`2019-02-30`, `02-29` outside a leap year) |
-| `time_origin_invalid` | the origin field that applies is present but is not an RFC 3339 date-time naming a calendar day; the message names its pointer |
+| `time_origin_invalid` | the origin field that applies is present but is not an RFC 3339 date-time naming a calendar day, or a raw `domain` is not an object; the message names the pointer (`/domain/temporal/...` or `/domain`) |
 
 `timestamp_to_seconds` checks them in that order, the timestamp before the
 origin, in every binding. `time_origin` can only raise `time_origin_invalid`.
@@ -621,7 +624,11 @@ Reconstructing a timestamp's POSIX time from the pair is a separate matter.
 to within binary64 rounding — exactly when the fractions are representable
 (origin `.25`, timestamp `.5`), one ulp off otherwise (origin `.2`, timestamp
 `.1`). A caller who needs a timestamp's POSIX time converts it against no
-domain, `timestamp_to_seconds(nothing, ts)`, whose origin is the epoch itself.
+domain, whose origin is the epoch itself: `timestamp_to_seconds(nothing, ts)`
+in Julia, `timestamp_to_seconds(None, ts)` in Python, and in Rust
+`timestamp_to_seconds(&serde_json::Value::Null, ts)` or
+`timestamp_to_seconds(&None::<Domain>, ts)` (a bare `&None` leaves the source
+type unnamed and does not compile).
 
 Julia, Python and Rust carry all three operations. TypeScript and Go carry
 `resolve_time_span` but not the two accessors — neither binding simulates, and

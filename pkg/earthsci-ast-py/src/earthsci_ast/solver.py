@@ -20,6 +20,7 @@ tolerance and interval resolution orders (§2.2.2, §2.2.7).
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import re
@@ -564,42 +565,56 @@ def resolve_time_span(
     return _time_span_seconds(span.start, span.end, temporal)
 
 
-def _temporal_of(source: Any) -> Any:
-    """The ``domain.temporal`` the clock accessors read from ``source``.
+def _domain_of(source: Any) -> Any:
+    """The ``domain`` the clock accessors read an origin from ``source``.
 
     ``source`` is an :class:`~earthsci_ast.esm_types.EsmFile`, a typed
-    :class:`~earthsci_ast.esm_types.Domain`, a raw JSON ``domain`` dict (a
-    document that has not been loaded), or ``None`` for a document without a
-    domain. A raw ``temporal`` comes back as it is, for :func:`_origin_field`
-    to read with the load-time check's rules.
+    :class:`~earthsci_ast.esm_types.Domain`, the raw JSON ``domain`` value of a
+    document that has not been loaded (any JSON value: :func:`_origin_parts`
+    refuses one that is not an object), or ``None`` for a document without a
+    domain. Raises :class:`TypeError` for a ``source`` of another type, a
+    caller's mistake rather than a document's, so the accessors check it before
+    anything else.
     """
     from .esm_types import Domain, EsmFile
 
     if isinstance(source, EsmFile):
-        source = source.domain
-    if source is None:
-        return None
-    if isinstance(source, dict):
-        return source.get("temporal")
-    if isinstance(source, Domain):
-        return source.temporal
+        return source.domain
+    if source is None or isinstance(source, (Domain, dict, list, str, int, float)):
+        return source
     raise TypeError(
-        "a time origin is read from an EsmFile, a Domain, a raw JSON domain dict "
+        "a time origin is read from an EsmFile, a Domain, a raw JSON domain value "
         f"or None, not {type(source).__name__}"
     )
 
 
-def _origin_parts(source: Any) -> tuple[int, float]:
-    """(*W₀*, *f₀*) of ``source``'s time origin, or a refusal (esm-spec §2.2.7).
+def _origin_parts(domain: Any) -> tuple[int, float]:
+    """(*W₀*, *f₀*) of ``domain``'s time origin, or a refusal (esm-spec §2.2.7).
 
-    The origin is ``domain.temporal.reference_time``, else
-    ``domain.temporal.start``, else the POSIX epoch. Raises
-    ``time_origin_invalid`` naming ``/domain/temporal/...`` when the field
-    that applies is present but is not an RFC 3339 date-time naming a calendar
-    day.
+    ``domain`` is what :func:`_domain_of` returns. The origin is
+    ``domain.temporal.reference_time``, else ``domain.temporal.start``, else
+    the POSIX epoch. Raises ``time_origin_invalid`` naming
+    ``/domain/temporal/...`` when the field that applies is present but is not
+    an RFC 3339 date-time naming a calendar day, and naming ``/domain`` when a
+    raw ``domain`` is not an object. A raw ``temporal`` is read with the
+    load-time check's rules (:func:`_origin_field`).
     """
+    from .esm_types import Domain
+
+    if domain is None:
+        temporal = None
+    elif isinstance(domain, Domain):
+        temporal = domain.temporal
+    elif isinstance(domain, dict):
+        temporal = domain.get("temporal")
+    else:
+        raise SolverBlockError(
+            TIME_ORIGIN_INVALID,
+            f"/domain is {json.dumps(domain)}, which is not an object, so it has no "
+            "time origin to count a timestamp from (esm-spec §2.2.7)",
+        )
     try:
-        return _read_origin(_temporal_of(source))
+        return _read_origin(temporal)
     except _OriginUnreadable as exc:
         raise SolverBlockError(
             TIME_ORIGIN_INVALID,
@@ -627,9 +642,11 @@ def time_origin(source: EsmFile | Domain | dict[str, Any] | None) -> float:
 
     Raises ``time_origin_invalid`` naming ``/domain/temporal/...`` when the
     origin field that applies is present but is not an RFC 3339 date-time naming
-    a calendar day, and :class:`TypeError` for a ``source`` of another type.
+    a calendar day, and naming ``/domain`` when a raw ``domain`` is not an object
+    (a string, a list, a number or a boolean); :class:`TypeError` for a
+    ``source`` of any other type.
     """
-    whole, frac = _origin_parts(source)
+    whole, frac = _origin_parts(_domain_of(source))
     return float(whole) + frac
 
 
@@ -649,8 +666,13 @@ def timestamp_to_seconds(source: EsmFile | Domain | dict[str, Any] | None, times
        form;
     2. ``timestamp_no_calendar_day`` -- it is of that form but its day is not
        in its month (``2019-02-30``, ``02-29`` outside a leap year);
-    3. ``time_origin_invalid`` -- the origin field that applies cannot be read.
+    3. ``time_origin_invalid`` -- the origin field that applies cannot be read,
+       or a raw ``domain`` is not an object.
+
+    A ``source`` of a type :func:`time_origin` does not take is a
+    :class:`TypeError`, raised before the timestamp is looked at.
     """
+    domain = _domain_of(source)
     parsed: tuple[int, float] | None = None
     if isinstance(timestamp, str):
         try:
@@ -658,16 +680,19 @@ def timestamp_to_seconds(source: EsmFile | Domain | dict[str, Any] | None, times
         except _NoCalendarDay:
             raise SolverBlockError(
                 TIMESTAMP_NO_CALENDAR_DAY,
-                f"timestamp {timestamp!r} names no calendar day (esm-spec §2.2.7)",
+                f'timestamp "{timestamp}" names no calendar day (esm-spec §2.2.7)',
             ) from None
     if parsed is None:
+        # Worded as in Julia and Rust: a string in double quotes, any other
+        # value as its repr in parentheses.
+        shown = f'"{timestamp}"' if isinstance(timestamp, str) else f"({timestamp!r})"
         raise SolverBlockError(
             TIMESTAMP_MALFORMED,
-            f"timestamp {timestamp!r} is not an RFC 3339 UTC timestamp "
+            f"timestamp {shown} is not an RFC 3339 UTC timestamp "
             "(YYYY-MM-DDThh:mm:ss[.f]Z) (esm-spec §2.2.7)",
         )
     whole, frac = parsed
-    w0, f0 = _origin_parts(source)
+    w0, f0 = _origin_parts(domain)
     return float(whole - w0) + (frac - f0)
 
 

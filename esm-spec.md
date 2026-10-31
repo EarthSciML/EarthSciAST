@@ -352,7 +352,7 @@ Advisory as the fields are, six things are **required** of every binding:
 | `solver_time_span_invalid` | `solver.time_span` does not describe an interval: `end` is not after `start`, a timestamp names no calendar day, or the time origin a timestamp needs cannot be read (§2.2.7). |
 | `timestamp_malformed` | A timestamp handed to a binding's clock accessor is not in the `time_span` bound form (§2.2.7). Raised by the accessor (API_SPEC §5.8), never at load. |
 | `timestamp_no_calendar_day` | A timestamp handed to a binding's clock accessor is in the bound form but names no calendar day (§2.2.7). Raised by the accessor, never at load. |
-| `time_origin_invalid` | The time origin a binding's clock accessor reads is present but cannot be read (§2.2.7). Raised by the accessor, never at load; a load reports the same fault as `solver_time_span_invalid`. |
+| `time_origin_invalid` | The time origin a binding's clock accessor reads is present but cannot be read, or the raw `domain` handed to the accessor is not an object (§2.2.7). Raised by the accessor, never at load; a load reports the same fault as `solver_time_span_invalid`. |
 
 #### 2.2.6 `external`: resolving the run-configuration reference
 

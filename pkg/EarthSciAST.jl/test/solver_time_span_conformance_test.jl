@@ -213,14 +213,50 @@ include("testutils.jl")   # TESTUTILS_REPO_ROOT
                 "2019-07-01T00:00:00Z", "2019-07-02T00:00:00Z")))))
         @test e isa EarthSciAST.ExpressionTemplateError &&
               e.code == EarthSciAST.ERROR_CODES.SOLVER_TIME_SPAN_INVALID
+
+        # A non-string timestamp is the structured error, not a MethodError.
+        for bad in (0, nothing, :t)
+            e = caught(() -> EarthSciAST.timestamp_to_seconds(ref, bad))
+            @test e isa EarthSciAST.ExpressionTemplateError &&
+                  e.code == EarthSciAST.ERROR_CODES.TIMESTAMP_MALFORMED &&
+                  occursin("not an RFC 3339 UTC timestamp", e.message)
+        end
+
+        # A raw `domain` that is not an object names `/domain`.
+        e = caught(() -> EarthSciAST.time_origin("2019-07-01T00:00:00Z"))
+        @test e isa EarthSciAST.ExpressionTemplateError &&
+              e.code == EarthSciAST.ERROR_CODES.TIME_ORIGIN_INVALID &&
+              occursin("/domain is", e.message)
+
+        # Reconstructing a timestamp's POSIX time from the pair is correct only
+        # to within rounding: `time_origin` and `timestamp_to_seconds` round
+        # `W₀ + f₀` and `(W − W₀) + (f − f₀)` separately. With an exactly
+        # representable fraction they agree; with origin `.2` and timestamp
+        # `.1` the sum is one ulp high.
+        rounding = EarthSciAST.EsmFile("1.3.0", EarthSciAST.Metadata("m");
+            domain=EarthSciAST.Domain(temporal=Dict{String,Any}(
+                "reference_time" => "2019-07-01T00:00:00.2Z")))
+        @test EarthSciAST.time_origin(rounding) === 1561939200.2
+        @test EarthSciAST.timestamp_to_seconds(rounding, "2019-07-01T00:00:00.1Z") === -0.1
+        @test EarthSciAST.time_origin(rounding) +
+              EarthSciAST.timestamp_to_seconds(rounding, "2019-07-01T00:00:00.1Z") ===
+              nextfloat(1561939200.1)
     end
 
-    # The shared pin of the clock accessors: each case's domain as raw JSON,
-    # as a typed `Domain`, and inside a document built in memory.
+    # The shared pin of the clock accessors: each case's domain as raw JSON
+    # (as the planner gets it off the wire, a `JSON3.Object`; as a
+    # `Dict{String,Any}`; Symbol-keyed), as a typed `Domain`, and inside a
+    # document built in memory.
+    _symbol_keyed(x::AbstractDict) = Dict{Symbol,Any}(Symbol(k) => _symbol_keyed(v) for (k, v) in x)
+    _symbol_keyed(x) = x
     @testset "the clock accessors on a domain: $(c.id)" for c in manifest.clock.cases
         @test "julia" in manifest.clock.bindings_required
-        raw = c.domain === nothing ? nothing : JSON3.read(JSON3.write(c.domain), Dict{String,Any})
-        forms = Any[raw]
+        wire = JSON3.read(JSON3.write(c.domain))
+        raw = wire isa JSON3.Object ? JSON3.read(JSON3.write(c.domain), Dict{String,Any}) : wire
+        forms = Any[wire]
+        if wire isa JSON3.Object
+            push!(forms, raw, _symbol_keyed(raw))
+        end
         if c.typed
             temporal = raw === nothing ? nothing : get(raw, "temporal", nothing)
             typed = raw === nothing ? nothing : EarthSciAST.Domain(temporal=temporal)

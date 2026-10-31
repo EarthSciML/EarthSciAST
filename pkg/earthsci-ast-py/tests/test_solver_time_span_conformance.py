@@ -354,8 +354,35 @@ def test_resolve_time_span_keeps_its_one_code() -> None:
 
 
 def test_the_accessors_refuse_a_source_that_is_no_domain() -> None:
+    """A source that is neither a document nor a domain is the caller's mistake:
+    a TypeError, raised before the timestamp is looked at, so it never comes
+    back as a timestamp code."""
+    source = Path("model.esm")
     with pytest.raises(TypeError):
-        earthsci_ast.time_origin("model.esm")  # type: ignore[arg-type]
+        earthsci_ast.time_origin(source)  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        earthsci_ast.timestamp_to_seconds(source, "2019-07-01")  # type: ignore[arg-type]
+
+
+def test_a_raw_domain_that_is_not_an_object_names_domain() -> None:
+    """A raw JSON `domain` of another shape is a document's fault, not the
+    caller's: `time_origin_invalid`, naming `/domain`, as in Julia and Rust."""
+    with pytest.raises(earthsci_ast.SolverBlockError) as excinfo:
+        earthsci_ast.time_origin("2019-07-01T00:00:00Z")  # type: ignore[arg-type]
+    assert excinfo.value.code == "time_origin_invalid"
+    assert '/domain is "2019-07-01T00:00:00Z"' in str(excinfo.value)
+
+
+def test_a_timestamp_refusal_is_worded_as_in_the_other_bindings() -> None:
+    with pytest.raises(earthsci_ast.SolverBlockError) as excinfo:
+        earthsci_ast.timestamp_to_seconds(None, "2019-07-01")
+    assert 'timestamp "2019-07-01" is not' in str(excinfo.value)
+    with pytest.raises(earthsci_ast.SolverBlockError) as excinfo:
+        earthsci_ast.timestamp_to_seconds(None, "2019-02-30T00:00:00Z")
+    assert 'timestamp "2019-02-30T00:00:00Z" names no calendar day' in str(excinfo.value)
+    with pytest.raises(earthsci_ast.SolverBlockError) as excinfo:
+        earthsci_ast.timestamp_to_seconds(None, 0)  # type: ignore[arg-type]
+    assert "timestamp (0) is not" in str(excinfo.value)
 
 
 # --- the shared pin of the clock accessors (manifest `clock`) -----------------
