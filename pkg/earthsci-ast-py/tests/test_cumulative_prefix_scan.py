@@ -172,16 +172,15 @@ def test_reverse_extremum_scans_fold_descending_bit_for_bit(n, cmp, reduce_op, c
 @pytest.mark.parametrize(
     "reduce_op,u,want",
     [
-        ("max", [1.0, np.nan, 3.0], [3.0, 3.0, 3.0]),
-        ("min", [3.0, np.nan, 1.0], [1.0, 1.0, 1.0]),
+        ("max", [1.0, np.nan, 3.0], [np.nan, np.nan, 3.0]),
+        ("min", [3.0, np.nan, 1.0], [np.nan, np.nan, 1.0]),
     ],
 )
 @pytest.mark.parametrize("compiler", ["native", "interpreter"])
-def test_a_reverse_extremum_over_a_nan_folds_from_the_top(reduce_op, u, want, compiler):
-    """A ``max`` / ``min`` step keeps its accumulator unless the term beats it,
-    so a NaN is skipped once the accumulator holds a number and sticks when it
-    comes first: order decides the answer. Folded from the top, cell 2's window
-    ``[NaN, 3]`` starts at 3; folded ascending it would start at the NaN."""
+def test_a_reverse_extremum_over_a_nan_is_nan(reduce_op, u, want, compiler):
+    """A NaN term makes a ``max`` / ``min`` reduction NaN wherever it is in the
+    window (esm-spec §4.2): every window that holds the NaN is NaN, from the top
+    or from the bottom, and the window past it is not."""
     policy = CompilerPolicy(compiler=compiler, every_tier_off=compiler == "interpreter")
     with use_policy(policy):
         got = eval_expr(_prefix_agg(">=", 3, reduce_op), _ctx(np.array(u)))
@@ -190,7 +189,7 @@ def test_a_reverse_extremum_over_a_nan_folds_from_the_top(reduce_op, u, want, co
 
 # Signed zeros and NaNs, leading and interior: the inputs on which a max / min
 # accumulate that is not the per-cell step (np.maximum keeps the later of two
-# equal zeros and propagates a NaN) gives different bits.
+# equal zeros; a NaN-skipping step drops a NaN) gives different bits.
 _EXTREMUM_EDGES = {
     "zeros": [0.0, -0.0, -0.0, 0.0, -1.0, 0.0, -0.0],
     "neg-zeros": [-0.0, 0.0, 0.0, -0.0, 1.0, -0.0, 0.0],

@@ -628,9 +628,9 @@ impl<'a> Emitter<'a> {
             BinCode::Div => self.wrap(a.div_(b), "div"),
             BinCode::Pow => self.wrap(a.pow(b), "pow"),
             BinCode::Atan2 => self.wrap(a.atan2(b), "atan2"),
-            // `f64::min`/`max` return the OTHER operand when one is NaN; XLA's
-            // Min/Max propagate it. Re-select so the two agree on NaN, which
-            // costs four ops and removes a whole class of silent divergence.
+            // A NaN operand makes the result NaN (esm-spec §4.2), as the
+            // interpreter's `faq::nan_min` / `nan_max` kernels do. XLA's own
+            // Min/Max are not relied on for that: the select pins it.
             BinCode::Min => self.nan_aware(a, b, true),
             BinCode::Max => self.nan_aware(a, b, false),
             BinCode::Eq => cmp(a.eq(b), "eq"),
@@ -666,8 +666,8 @@ impl<'a> Emitter<'a> {
         };
         let a_nan = self.wrap(a.ne(a), "a is NaN")?;
         let b_nan = self.wrap(b.ne(b), "b is NaN")?;
-        let r = self.wrap(b_nan.select(a, &base), "min/max: b NaN")?;
-        self.wrap(a_nan.select(b, &r), "min/max: a NaN")
+        let r = self.wrap(b_nan.select(b, &base), "min/max: b NaN")?;
+        self.wrap(a_nan.select(a, &r), "min/max: a NaN")
     }
 
     /// `unary_kernel_of(op)` in XLA. XLA's op set has no `tan`, `asin`,

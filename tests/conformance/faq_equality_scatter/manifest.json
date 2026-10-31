@@ -9,7 +9,7 @@
   "abs": 0.0
  },
  "excluded": "per fixture, binding -> why it does not run the fixture today; that binding's test asserts the fixture still fails there, so a fixed exclusion turns red until it is removed",
- "golden_encoding": "du maps element names (`w[2]`, `w[1,3]`, `g`) under the model to a number, or to the string NaN, Infinity or -Infinity; -0.0 is written as -0.0 and compared by sign. Where the bindings' interpreters disagree today (a NaN in a max/min window, max_min_nan only), the value is an object {julia, python, rust} and each binding compares with its own entry",
+ "golden_encoding": "du maps element names (`w[2]`, `w[1,3]`, `g`) under the model to a number, or to the string NaN, Infinity or -Infinity; -0.0 is written as -0.0 and compared by sign.",
  "fixtures": [
   {
    "id": "plus_cancelling",
