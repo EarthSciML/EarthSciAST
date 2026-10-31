@@ -168,7 +168,7 @@ function _hoist_try(
     free = _hoist_free_names!(Set{String}(), g, Set{String}())
     any(n -> n in contracted, free) && return nothing
     S = String[s for s in out_idx if s in free]
-    length(S) == length(out_idx) && return nothing
+    length(S) == length(out_idx) && !(!gather && _hoist_pins_outer(g, S)) && return nothing
     # A scalar reduction whose filter bounds its index from below by an outer
     # output index would become a reverse scan once lifted over it, folding
     # descending (`_reverse_window`); in place it folds ascending, as the
@@ -209,6 +209,29 @@ function _hoist_try(
     hc.owner[name] = owner
     hc.memo[key] = reader
     return reader
+end
+
+# A SCATTER-SHAPED reduction is lifted even when it reads every enclosing
+# output index: one whose filter pins an enclosing output index `s` by an
+# equality conjunct `s == e` (or `e == s`) with `e` reading none of them. In
+# place it tests every point of its box at every output cell; lifted, it is a
+# `faq` over S whose filter pins its own output index, which the build folds
+# as a one-pass scatter (scatter.jl), and the enclosing body reads the buffer.
+# The lifted fill evaluates it at every S-cell, as the original was evaluated
+# at every output cell, folding the same terms in the same order.
+function _hoist_pins_outer(g::OpExpr, S::Vector{String})
+    g.filter === nothing && return false
+    for c in _scatter_conjuncts!(ASTExpr[], g.filter)
+        (c isa OpExpr && (c::OpExpr).op == "==" && length((c::OpExpr).args) == 2) || continue
+        a, b = (c::OpExpr).args
+        for (x, e) in ((a, b), (b, a))
+            (x isa VarExpr && (x::VarExpr).name in S) || continue
+            haskey(g.ranges, (x::VarExpr).name) && continue
+            any(n -> n in S, _hoist_free_names!(Set{String}(), e, Set{String}())) && continue
+            return true
+        end
+    end
+    return false
 end
 
 # FILTERED AGGREGATE OPERANDS of whole-array arithmetic are lifted too. An

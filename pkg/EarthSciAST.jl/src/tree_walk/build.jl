@@ -6513,6 +6513,32 @@ function _compile_faq_equation!(
     scan_fold = nothing
     affine_kernels = nothing
     affine_first_try = false
+    # ── One-pass equality scatter (scatter.jl) ──────────────────────────────
+    # A filter that pins an output index by equality (`j == i + 1`) admits each
+    # contracted point into one output cell. Every form below would test every
+    # point at every cell, O(cells × points); the scatter folds the points into
+    # their cells in one pass, in the naive visit order, so it is offered
+    # first. A decline leaves `covered` untouched and the cascade goes on.
+    if !rhs_list_compiled && !_stencil_disabled() && _array_contraction_enabled() &&
+            !empty_output && !isempty(range_iters)
+        sc = _detect_equality_scatter(
+            idx_names, contract_names, contract_ranges, contract_const,
+            agg_gates, agg_filter, rhs_oplus
+        )
+        if sc !== nothing
+            push!(offered, :equality_scatter)
+            ac = _try_compile_array_contraction(
+                lhs_body, rhs_body, covered; ac_kwargs...,
+                agg_gates = agg_gates, agg_filter = agg_filter,
+                contract_const = contract_const, scatter = sc
+            )
+            if ac !== nothing
+                _tally_cascade!(:array_contraction_codegen)
+                push!(array_contractions, ac)
+                return nothing
+            end
+        end
+    end
     # A contraction loop (out-of-place only) preempts this block when it is the
     # cheaper tier; otherwise it waits behind it as the fallback, which is the
     # `use_contraction_loop` read below.
@@ -7020,7 +7046,8 @@ function _faq_percell_license(
                 :affine_fold => "the affine tier's run-time fold",
                 :affine => "the affine tier",
                 :scan => "the prefix-scan tier",
-                :array_contraction => "the whole-array contraction tier"
+                :array_contraction => "the whole-array contraction tier",
+                :equality_scatter => "the one-pass equality scatter"
             )
             # Why the affine tier had nothing to try, when it had nothing.
             unoffered = if any(in((:affine_fold, :affine, :scan)), offered)
@@ -7179,7 +7206,20 @@ function _try_compile_array_contraction(
         # the admitted tuples become data (the TABLE form of `_ACFold`); a
         # filter is the per-cell expansion's `ifelse(filter, term, 0̄)` guard,
         # kept symbolic in the term.
-        agg_gates = nothing, agg_filter = nothing, contract_const = nothing, obs_nst::Int = 0
+        agg_gates = nothing, agg_filter = nothing, contract_const = nothing, obs_nst::Int = 0,
+        # A `_ScatterSpec` (scatter.jl): the filter pins output indices by
+        # equality, and the contraction is folded as a one-pass scatter.
+        scatter = nothing
+    )
+    scatter === nothing || return _try_compile_scatter(
+        lhs_body, rhs_body, covered, scatter; idx_names = idx_names,
+        ranges_dict = ranges_dict, range_iters = range_iters,
+        contract_names = contract_names, contract_ranges = contract_ranges,
+        contract_const = contract_const, rhs_oplus = rhs_oplus,
+        rhs_zerobar = rhs_zerobar, resolved_obs = resolved_obs,
+        array_var_info = array_var_info, var_map = var_map,
+        const_registry = const_registry, pgather = pgather,
+        param_sym_set = param_sym_set, reg_funcs = reg_funcs, obs_nst = obs_nst
     )
     # With no contracted index the equation is elementwise: the cell's value is
     # its term, written as it is with no fold and no seed (a pointwise filter is
@@ -7238,8 +7278,46 @@ function _try_compile_array_contraction(
                 for d in eachindex(contract_names)
             ]
         )
-    # The output cells, in `Iterators.product` order (dimension 1 fastest) — the
-    # order the emitted odometer reconstructs the loop counters in.
+    outs = _ac_claim_all_outs!(covered, lhs_body, idx_names, range_iters, var_map)
+    rngs = [_expand_int_range(ranges_dict[n]) for n in idx_names]
+    los = Int[first(r) for r in rngs]
+    stps = Int[step(r) for r in rngs]
+    lens = Int[length(r) for r in rngs]
+    # Emit the nest (array_contraction.jl). The whole equation is ONE body, so
+    # the emission is O(1) in both extents like the nest itself. A `Symbol` back
+    # is the emitter's decline reason: this tier has no interpreted form, so the
+    # equation goes back to the cascade, whose next and last form is the
+    # per-cell build (refused by a strict compiler, with this reason).
+    gen = _try_codegen_array_contraction(
+        out_refs, los, stps, lens, outs, node;
+        fold = fold, nst = obs_nst
+    )
+    if gen isa Symbol
+        # Hand the cells back untouched: every one was unclaimed on entry (the
+        # loop above throws on a second claim), so clearing restores `covered`.
+        _uncover!(covered, outs)
+        _note_decline!(:array_contraction, gen)
+        return nothing
+    end
+    # On the two-buffer slot space an observed's nest can take in the state
+    # kernel that consumes it (`_ac_take_consumers`), which needs it emitted again.
+    obs_nst > 0 || return gen
+    return _with_remit(
+        gen, outs,
+        cons -> _try_codegen_array_contraction(
+            out_refs, los, stps, lens, outs, node;
+            fold = fold, nst = obs_nst, consumer = cons
+        )
+    )
+end
+
+# The output cells' slots, in `Iterators.product` order (dimension 1 fastest)
+# — the order the emitted odometer reconstructs the loop counters in — each
+# claimed in `covered`.
+function _ac_claim_all_outs!(
+        covered::_Covered, lhs_body::OpExpr, idx_names::Vector{String},
+        range_iters, var_map::AbstractDict{String, Int}
+    )
     n_cells = prod(length(r) for r in range_iters)
     outs = Vector{Int}(undef, n_cells)
     c = 0
@@ -7297,36 +7375,7 @@ function _try_compile_array_contraction(
             outs[c] = idx
         end
     end
-    rngs = [_expand_int_range(ranges_dict[n]) for n in idx_names]
-    los = Int[first(r) for r in rngs]
-    stps = Int[step(r) for r in rngs]
-    lens = Int[length(r) for r in rngs]
-    # Emit the nest (array_contraction.jl). The whole equation is ONE body, so
-    # the emission is O(1) in both extents like the nest itself. A `Symbol` back
-    # is the emitter's decline reason: this tier has no interpreted form, so the
-    # equation goes back to the cascade, whose next and last form is the
-    # per-cell build (refused by a strict compiler, with this reason).
-    gen = _try_codegen_array_contraction(
-        out_refs, los, stps, lens, outs, node;
-        fold = fold, nst = obs_nst
-    )
-    if gen isa Symbol
-        # Hand the cells back untouched: every one was unclaimed on entry (the
-        # loop above throws on a second claim), so clearing restores `covered`.
-        _uncover!(covered, outs)
-        _note_decline!(:array_contraction, gen)
-        return nothing
-    end
-    # On the two-buffer slot space an observed's nest can take in the state
-    # kernel that consumes it (`_ac_take_consumers`), which needs it emitted again.
-    obs_nst > 0 || return gen
-    return _with_remit(
-        gen, outs,
-        cons -> _try_codegen_array_contraction(
-            out_refs, los, stps, lens, outs, node;
-            fold = fold, nst = obs_nst, consumer = cons
-        )
-    )
+    return outs
 end
 
 # The admitted contracted tuples of every output cell, as the TABLE form of
