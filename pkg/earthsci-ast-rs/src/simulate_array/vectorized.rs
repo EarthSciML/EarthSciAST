@@ -1322,8 +1322,8 @@ pub(super) fn vec_combine<'a>(
         BinCode::Mul => vec_combine_with(|x, y| x * y, a, b, pool),
         BinCode::Div => vec_combine_with(|x, y| x / y, a, b, pool),
         BinCode::Pow => vec_combine_with(|x: f64, y: f64| x.powf(y), a, b, pool),
-        BinCode::Min => vec_combine_with(|x: f64, y: f64| x.min(y), a, b, pool),
-        BinCode::Max => vec_combine_with(|x: f64, y: f64| x.max(y), a, b, pool),
+        BinCode::Min => vec_combine_with(crate::faq::nan_min, a, b, pool),
+        BinCode::Max => vec_combine_with(crate::faq::nan_max, a, b, pool),
         other => vec_combine_with(binary_kernel_of(other), a, b, pool),
     }
 }

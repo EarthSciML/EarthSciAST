@@ -3192,8 +3192,8 @@ def _masked_row_fold(
       ``+0.0`` would not do: ``-0.0 + 0.0`` is ``+0.0``.
     * ``max`` / ``min``: the :func:`_reduce_step` chain replaces its accumulator
       only by a term that strictly beats it, so it ends on the FIRST admitted
-      term equal to the NaN-skipping extremum — unless the first admitted term
-      is a NaN, which nothing beats.
+      term equal to the extremum — unless an admitted term is a NaN, which
+      makes the row NaN (esm-spec §4.2).
     * ``or``: 1 if any admitted term is non-zero.
     """
     n_rows = term2d.shape[0]
@@ -3213,12 +3213,12 @@ def _masked_row_fold(
         return out
     is_max = reducer == "max"
     rows = np.arange(n_rows)
-    first = term2d[rows, np.argmax(admit2d, axis=1)]
+    has_nan = (admit2d & np.isnan(term2d)).any(axis=1)
     extreme = (np.fmax if is_max else np.fmin).reduce(
         np.where(admit2d, term2d, -np.inf if is_max else np.inf), axis=1
     )
     at = np.argmax(admit2d & (term2d == extreme[:, None]), axis=1)
-    res = np.where(np.isnan(first), first, term2d[rows, at])
+    res = np.where(has_nan, np.nan, term2d[rows, at])
     out[live] = res[live]
     return out
 
@@ -3596,10 +3596,13 @@ def _reduce_step(op: str, acc: float | None, val: float) -> float:
         return acc + val
     if op == "*":
         return acc * val
+    # max / min: a NaN term, wherever it is, makes the reduction NaN (esm-spec
+    # §4.2); otherwise the accumulator is replaced only by a term that strictly
+    # beats it, so a tie keeps the earlier term.
     if op == "max":
-        return max(acc, val)
+        return val if (val > acc or val != val) else acc
     if op == "min":
-        return min(acc, val)
+        return val if (val < acc or val != val) else acc
     raise NumpyInterpreterError(f"Unsupported reduce: {op}")
 
 
@@ -3607,9 +3610,9 @@ def _reduce_step_box(op: str, acc: np.ndarray | None, val: np.ndarray) -> np.nda
     """Array analog of :func:`_reduce_step`: one ⊕-fold step over whole
     output-box term slabs (the broadcast contraction path). Element-wise it
     performs the IDENTICAL operation chain as the scalar fold — ``max``/``min``
-    keep Python's ``b if b > a else a`` selection (and hence its NaN behaviour)
-    via ``np.where`` rather than adopting ``np.maximum``'s NaN propagation — so
-    each output cell's reduction is bit-for-bit the scalar path's."""
+    keep its ``b if b beats a else a`` selection, a NaN term propagating, via
+    ``np.where`` rather than ``np.maximum`` (which keeps the later of two equal
+    zeros) — so each output cell's reduction is bit-for-bit the scalar path's."""
     if op == "or":
         if acc is None:
             return np.where(val != 0.0, 1.0, 0.0)
@@ -3621,9 +3624,9 @@ def _reduce_step_box(op: str, acc: np.ndarray | None, val: np.ndarray) -> np.nda
     if op == "*":
         return acc * val
     if op == "max":
-        return np.where(val > acc, val, acc)
+        return np.where((val > acc) | np.isnan(val), val, acc)
     if op == "min":
-        return np.where(val < acc, val, acc)
+        return np.where((val < acc) | np.isnan(val), val, acc)
     raise NumpyInterpreterError(f"Unsupported reduce: {op}")
 
 
@@ -4862,22 +4865,22 @@ def _folds_descending(
 def _running_extremum(reducer: str, seq: np.ndarray) -> np.ndarray:
     """Running ``max`` / ``min`` along the last axis, bit for bit the per-cell
     :func:`_reduce_step` chain seeded from the first term: the accumulator is
-    replaced only by a term that strictly beats it. So a tie keeps the earlier
-    term (the sign of a zero is the first zero's), a NaN term is skipped, and a
-    leading NaN sticks for the whole row. ``np.maximum.accumulate`` is none of
-    these: it keeps the later of two equal zeros and propagates every NaN.
+    replaced only by a term that strictly beats it, so a tie keeps the earlier
+    term (the sign of a zero is the first zero's), and from the first NaN on
+    every cell is NaN (esm-spec §4.2). ``np.maximum.accumulate`` keeps the later
+    of two equal zeros, so it is not used for the values.
 
     The NaN-skipping running value (``fmax`` / ``fmin``) marks the positions where
     the accumulator is replaced; each cell then takes the term at the latest
-    replacement at or before it."""
+    replacement at or before it, or NaN once a NaN has been seen."""
     beats = np.greater if reducer == "max" else np.less
     running = (np.fmax if reducer == "max" else np.fmin).accumulate(seq, axis=-1)
     replaced = np.ones(seq.shape, dtype=bool)
     replaced[..., 1:] = beats(running[..., 1:], running[..., :-1])
     pos = np.where(replaced, np.arange(seq.shape[-1]), 0)
     acc = np.take_along_axis(seq, np.maximum.accumulate(pos, axis=-1), axis=-1)
-    first = seq[..., :1]
-    return np.where(np.isnan(first), first, acc)
+    seen_nan = np.logical_or.accumulate(np.isnan(seq), axis=-1)
+    return np.where(seen_nan, np.nan, acc)
 
 
 def _eval_faq_prefix_scan(

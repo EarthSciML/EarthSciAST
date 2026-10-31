@@ -25,8 +25,6 @@ _MANIFEST = json.loads((_TIER / "manifest.json").read_text())
 
 
 def _golden(v) -> float:
-    if isinstance(v, dict):  # the interpreters disagree here today: our own entry
-        v = v["python"]
     if isinstance(v, str):
         return {"NaN": math.nan, "Infinity": math.inf, "-Infinity": -math.inf}[v]
     return float(v)

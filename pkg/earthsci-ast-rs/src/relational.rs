@@ -256,8 +256,8 @@ impl SemiringOp {
                 Num::Float(match self {
                     SemiringOp::Sum => prec.round(x + y),
                     SemiringOp::Prod => prec.round(x * y),
-                    SemiringOp::Min => x.min(y),
-                    SemiringOp::Max => x.max(y),
+                    SemiringOp::Min => crate::faq::nan_min(x, y),
+                    SemiringOp::Max => crate::faq::nan_max(x, y),
                 })
             }
         }

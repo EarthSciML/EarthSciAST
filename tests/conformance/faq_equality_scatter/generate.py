@@ -105,13 +105,13 @@ def s_of(sym):
 # The naive oracle
 # --------------------------------------------------------------------------- #
 
-def fold(red, terms, nan_rule="rust"):
+def fold(red, terms):
     """The naive left fold of the admitted terms, in visit order.
 
-    `+` is seeded with +0.0 (esm-spec §4.3.1). For `max` / `min` the bindings'
-    interpreters disagree on a NaN term today, so the oracle states each rule
-    and the golden records each binding's value where they differ (see
-    NAN_RULES). On numbers the three rules agree. An empty fold is the identity.
+    `+` is seeded with +0.0 (esm-spec §4.3.1). `max` / `min` start from the
+    identity and take a term only if it beats the accumulator, except that a
+    NaN term, wherever it is, makes the result NaN (esm-spec §4.2). An empty
+    fold is the identity.
     """
     if red == "+":
         acc = 0.0
@@ -119,47 +119,13 @@ def fold(red, terms, nan_rule="rust"):
             acc = acc + t
         return acc
     beats = (lambda t, a: t > a) if red == "max" else (lambda t, a: t < a)
-    identity = -math.inf if red == "max" else math.inf
-    if nan_rule == "julia":
-        # NaN propagates wherever it is (IEEE 754-2019 maximum / minimum, §4.2).
-        acc = identity
-        for t in terms:
-            acc = math.nan if (math.isnan(t) or math.isnan(acc)) else (t if beats(t, acc) else acc)
-        return acc
-    if nan_rule == "python":
-        # Seeded from the first admitted term; afterwards a term replaces the
-        # accumulator only if it beats it: a leading NaN stays, a later one is
-        # skipped.
-        acc = None
-        for t in terms:
-            if acc is None or beats(t, acc):
-                acc = t
-        return identity if acc is None else acc
-    # "rust": seeded from the identity; a term replaces the accumulator only if
-    # it beats it, so every NaN is skipped.
-    acc = identity
+    acc = -math.inf if red == "max" else math.inf
     for t in terms:
-        if beats(t, acc):
+        if math.isnan(t) or math.isnan(acc):
+            acc = math.nan
+        elif beats(t, acc):
             acc = t
     return acc
-
-
-#: The three NaN rules of a `max` / `min` fold the interpreters follow today
-#: (esm-spec §4.2 says one NaN term makes the reduction NaN; §4.3.1 describes a
-#: fold step that keeps its accumulator unless a term beats it). Only the
-#: max_min_nan fixture puts a NaN in a window; its golden carries a value per
-#: binding where the rules differ.
-NAN_RULES = ("julia", "python", "rust")
-
-
-def per_binding(values_by_rule):
-    """One golden value, or a {binding: value} map where the rules differ."""
-    vals = [values_by_rule[r] for r in NAN_RULES]
-    first = vals[0]
-    if all((math.isnan(v) and math.isnan(first)) or v == first and math.copysign(1, v) == math.copysign(1, first)
-           for v in vals):
-        return first
-    return {r: values_by_rule[r] for r in NAN_RULES}
 
 
 def rng(lo, hi):
@@ -272,7 +238,7 @@ def observed_then_rate(variables, eqs, du, name, shape_set, red_rhs, values, des
         "lhs": d_lhs(rate, ["j"], {"j": {"from": shape_set}}),
         "rhs": faq(["j"], {"j": {"from": shape_set}}, finite_marker_ast(ix(obs, "j"))),
     })
-    put1(du, rate, [per_binding({r: finite_marker(v[r]) for r in NAN_RULES}) for v in values])
+    put1(du, rate, [finite_marker(v) for v in values])
 
 
 def case_max_min_nan():
@@ -284,20 +250,19 @@ def case_max_min_nan():
             variables, eqs, du, name, "n3",
             faq(["j"], {"j": {"from": "n3"}, "i": [1, 16]}, body,
                 filt=op("==", "j", block("i", 4)), reduce=red),
-            [{rule: fold(red, [terms[i - 1] for i in rng(1, 16) if blk(i, 4) == j], rule) for rule in NAN_RULES}
-             for j in rng(1, 3)],
+            [fold(red, [terms[i - 1] for i in rng(1, 16) if blk(i, 4) == j]) for j in rng(1, 3)],
             f"{red}_{{i : j == floor((i-1)/4)+1}} num[i]/den[i] s[i] over i = 1..16, j = 1..3: cell 1 holds numbers only, cell 2 a NaN after a number (i = 6), cell 3 a NaN first (i = 9); the NaN at i = 14 maps to j = 4, outside j's range, and must reach no cell.",
         )
     observed_then_rate(
         variables, eqs, du, "me", "n2",
         faq(["j"], {"j": {"from": "n2"}, "i": [1, 3]}, s_of("i"),
             filt=op("==", "j", op("+", "i", 5)), reduce="max"),
-        [{rule: fold("max", [1.0 for i in rng(1, 3) if i + 5 == j], rule) for rule in NAN_RULES} for j in rng(1, 2)],
+        [fold("max", [1.0 for i in rng(1, 3) if i + 5 == j]) for j in rng(1, 2)],
         "max over a filter that admits nothing (j == i + 5, i = 1..3, j = 1..2): every cell is the max identity, -Inf.",
     )
     return ("`max` and `min` with a NaN after a number in one cell, a NaN first in another, one at a point no cell admits, and an all-empty `max`. "
             "The reductions are observeds read by the right-hand side, which reports NaN as -1 and -Inf as -2 so every derivative is finite. "
-            "The interpreters fold a NaN differently today, so the golden of a NaN cell is per binding.",
+            "A NaN term propagates wherever it is in the window (esm-spec §4.2).",
             {"n2": 2, "n3": 3}, variables, eqs, du)
 
 
@@ -570,8 +535,7 @@ def build(cid):
         "t": 0.0,
         "state": "every state at its document default",
         "reference": "generate.py's naive loop (ascending contracted indices, full filter per point)",
-        "du": {k: ({b: golden_value(x) for b, x in v.items()} if isinstance(v, dict) else golden_value(v))
-               for k, v in sorted(du.items())},
+        "du": {k: golden_value(v) for k, v in sorted(du.items())},
     }
     return doc, golden
 
@@ -589,7 +553,7 @@ def manifest():
         "t": 0.0,
         "tolerance": {"rel": 0.0, "abs": 0.0},
         "excluded": "per fixture, binding -> why it does not run the fixture today; that binding's test asserts the fixture still fails there, so a fixed exclusion turns red until it is removed",
-        "golden_encoding": "du maps element names (`w[2]`, `w[1,3]`, `g`) under the model to a number, or to the string NaN, Infinity or -Infinity; -0.0 is written as -0.0 and compared by sign. Where the bindings' interpreters disagree today (a NaN in a max/min window, max_min_nan only), the value is an object {julia, python, rust} and each binding compares with its own entry",
+        "golden_encoding": "du maps element names (`w[2]`, `w[1,3]`, `g`) under the model to a number, or to the string NaN, Infinity or -Infinity; -0.0 is written as -0.0 and compared by sign.",
         "fixtures": [
             {"id": cid, "path": f"fixtures/{cid}.esm", "golden": f"golden/{cid}.json",
              "excluded": EXCLUSIONS.get(cid, {})} for cid in CASES

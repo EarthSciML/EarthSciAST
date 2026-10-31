@@ -30,8 +30,6 @@ fn read_json(rel: &str) -> Value {
 
 fn golden_value(v: &Value) -> f64 {
     match v {
-        // The interpreters disagree on this element today: Rust's own entry.
-        Value::Object(per) => golden_value(per.get("rust").expect("a rust entry")),
         Value::String(s) => match s.as_str() {
             "NaN" => f64::NAN,
             "Infinity" => f64::INFINITY,
