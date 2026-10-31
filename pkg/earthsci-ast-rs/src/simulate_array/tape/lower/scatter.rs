@@ -501,8 +501,9 @@ impl TapeBuilder<'_> {
         };
         self.tuples_held = self.tuples_held.saturating_add(m as u64);
         let list = TupleList { rows, cols };
-        self.lower_tuple_list(&spec, list, lo, shape, combine_op)
-            .map(Some)
+        let v = self.lower_tuple_list(&spec, list, lo, shape, combine_op);
+        self.held_exprs.extend(residual);
+        v.map(Some)
     }
 }
 
@@ -511,8 +512,8 @@ impl TapeBuilder<'_> {
     /// `j == i + k` (or `i - k`, `i`, mirrored), with nothing else in the
     /// filter: each cell `j` of the shifted range receives exactly one term,
     /// the body at `i = j - k`, and every other cell none. That is a stencil
-    /// read, not a scatter: the body is lowered over the output box narrowed
-    /// to the cells that receive a term, with `i` replaced by `j - k`, and
+    /// read, not a scatter: the body is lowered over the output box with `i`
+    /// replaced by `j - k`, filtered to the cells that receive a term, and
     /// combined once into the identity, `identity ⊕ term` — the fold of a
     /// one-term run. No point is walked at build time.
     ///
@@ -582,62 +583,61 @@ impl TapeBuilder<'_> {
             }),
         };
         let body = substitute(body, i_name, &i_as);
-        let mut sub_lo = lo.clone();
-        let mut sub_shape = shape.clone();
-        sub_lo[d] = a;
-        sub_shape[d] = (b - a + 1) as usize;
+        // The cells outside the shifted range receive no term: a filter on
+        // `j` alone, under which the body is a lazily evaluated position
+        // there, as it is at every excluded point of the naive walk.
+        let mut keep: Vec<Expr> = Vec::new();
+        let jv = || Expr::Variable(idx_names[d].clone());
+        let cmp = |op: &str, x: Expr, y: Expr| {
+            Expr::operator(ExpressionNode {
+                op: op.to_string(),
+                args: vec![x, y],
+                ..Default::default()
+            })
+        };
+        if a > lo[d] {
+            keep.push(cmp(">=", jv(), Expr::Integer(a)));
+        }
+        if b < out_hi {
+            keep.push(cmp("<=", jv(), Expr::Integer(b)));
+        }
+        let keep = match keep.len() {
+            0 => None,
+            1 => keep.pop(),
+            _ => Some(and_of(keep)),
+        };
         self.push_scope();
         let bx = LBox {
             syms: idx_names,
-            lo: sub_lo.clone(),
-            shape: sub_shape.clone(),
+            lo: lo.clone(),
+            shape: shape.clone(),
             cnames: &[],
             cvals: SmallVec::new(),
             tuple: 0,
             visit: SmallVec::new(),
         };
-        let term = self.lower_expr(&body, &bx);
+        let term = self.lower_filtered(&body, keep.as_ref(), &bx, LV::Lit(identity));
         self.pop_scope();
-        let term = term?;
+        self.held_exprs.push(body);
+        self.held_exprs.extend(keep);
+        let Some(term) = term? else {
+            return Ok(Some(self.emit_fill(
+                &LV::Lit(identity),
+                shape,
+                lo,
+                Cadence::Const,
+            )));
+        };
         if matches!(&term, LV::State(_)) && self.lv_box(&term).is_some() {
             bail_tape!("scatter: term reduced to a bare whole-array view");
         }
         let term = match self.lv_box(&term) {
-            None => self.emit_fill(&term, &sub_shape, &sub_lo, Cadence::Const),
-            Some((s, o)) if s == sub_shape && o == sub_lo => term,
-            Some(_) => bail_tape!("scatter: term box does not match the shifted box"),
+            None => self.emit_fill(&term, shape, lo, Cadence::Const),
+            Some((s, o)) if s == *shape && o == *lo => term,
+            Some(_) => bail_tape!("scatter: term box does not match the output box"),
         };
         let combine_op = self.array_combine_op(reduce, "contracted")?;
-        let v = self.emit_bin(combine_op, LV::Lit(identity), term)?;
-        if sub_shape == *shape {
-            return Ok(Some(v));
-        }
-        let LV::Arr(src) = v else {
-            bail_tape!("scatter: the shifted term is not an array");
-        };
-        let base = self.emit_fill(&LV::Lit(identity), shape, lo, Cadence::Const);
-        let LV::Arr(base) = base else {
-            bail_tape!("scatter: the identity fill is not an array");
-        };
-        let region = tape_index(self.regions.len(), "regions")?;
-        let mut dest_lo: DimU = DimU::from_elem(0usize, shape.len());
-        dest_lo[d] = (a - lo[d]) as usize;
-        self.regions.push(RegionSpec {
-            dest_lo,
-            shape: sub_shape,
-        });
-        let sec = self.placement(self.slots[src as usize].cadence);
-        let out = self.new_slot(shape, lo, false, sec);
-        self.emit(
-            Instr::Region {
-                base,
-                src: Operand::Slot(src),
-                region,
-                out,
-            },
-            sec,
-        );
-        Ok(Some(LV::Arr(out)))
+        self.emit_bin(combine_op, LV::Lit(identity), term).map(Some)
     }
 }
 

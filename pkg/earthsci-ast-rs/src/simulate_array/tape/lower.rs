@@ -609,6 +609,11 @@ pub(crate) struct TapeBuilder<'m> {
     /// Nested conditional-branch buffers (top = innermost).
     branch_bufs: Vec<Vec<Tagged>>,
     hoist: FxHashMap<(BoxKey, VnKey), LV>,
+    /// Expressions the builder synthesized and lowered (the equality
+    /// scatter's rewritten bodies and filters). Value numbering keys a node by
+    /// its address, so each is held as long as the builder is: a freed node's
+    /// address reused by another would otherwise hit its stale entry.
+    held_exprs: Vec<Expr>,
     /// Hoist insertions of the CURRENT rule (rollback on bail).
     hoist_journal: Vec<(BoxKey, VnKey)>,
     /// Observed values defined so far, in rule order.
@@ -892,6 +897,7 @@ impl<'m> TapeBuilder<'m> {
             scope_frames: Vec::new(),
             branch_bufs: Vec::new(),
             hoist: FxHashMap::default(),
+            held_exprs: Vec::new(),
             hoist_journal: Vec::new(),
             obs_defined: FxHashMap::default(),
             fault_first: None,
