@@ -219,11 +219,6 @@ pub mod esio_provider;
 #[cfg(feature = "xla")]
 pub mod xla_runtime;
 
-/// The `ndarray` this crate's public API is written against (`ArrayD<f64>` in
-/// problem, simulation and provider types). Name it as `earthsci_ast::ndarray`
-/// so a caller's arrays always match, whatever `ndarray` it depends on itself.
-pub use ndarray;
-
 // Re-export main types
 pub use cadence::{
     Cadence, CadenceError, ClassSummary, MaterializationPoint, Partition, classify, compute_fold,
