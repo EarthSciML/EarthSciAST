@@ -225,6 +225,14 @@ CASES: list[tuple[str, str, str]] = [
         "index_symbol_shadows_variable",
         "scoping/index_symbol_shadows_variable.esm",
     ),
+    # The same rule's edges: an `integral`'s `var` and a non-faq (`argmin`)
+    # `ranges` key shadow parameters of the same name, and a dotted `j.x`
+    # reaching a subsystem `j` inside a node that binds `j` is still prefixed.
+    (
+        "arrayed",
+        "loop_binder_shadowing_edges",
+        "scoping/loop_binder_shadowing_edges.esm",
+    ),
     # --- function_tables / table_lookup --------------------------------------
     (
         "function_tables",

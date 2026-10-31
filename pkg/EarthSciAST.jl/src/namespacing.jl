@@ -12,11 +12,18 @@ using OrderedCollections: OrderedDict
 """
     namespace_expr(expr, prefix, local_names) -> ASTExpr
 
-Return a new ASTExpr tree with every VarExpr referencing a name in `local_names`
-rewritten as `"<prefix>.<name>"`. For dotted names (e.g. `Sub.var`), the first
-segment is treated as the local symbol: if it is in `local_names` (a local
-subsystem), the whole dotted path is prefixed; otherwise the reference is
-already external and is left unchanged. Numeric literals are unchanged.
+Return a new ASTExpr tree with every free VarExpr referencing a name in
+`local_names` rewritten as `"<prefix>.<name>"`. For dotted names (e.g.
+`Sub.var`), the first segment is treated as the local symbol: if it is in
+`local_names` (a local subsystem), the whole dotted path is prefixed; otherwise
+the reference is already external and is left unchanged. Numeric literals are
+unchanged.
+
+A bare name bound as a loop symbol by an enclosing node (an `output_idx` entry,
+a `ranges` key, or an `integral`'s `int_var`) is not free: inside that node it
+is the loop index and stays as written even when `local_names` holds a variable
+of the same name (esm-spec §4.3, "Shadowing"). A dotted name is never a loop
+index, so its first segment is still resolved against `local_names`.
 
 Index-set references (`shape` entries, `ranges[*]` `{from}`, producer `id`s)
 are NOT namespaced: as of esm-spec v0.8.0 index sets are a single
@@ -35,7 +42,8 @@ function namespace_expr(expr::IntExpr, prefix::String,
 end
 
 function namespace_expr(expr::VarExpr, prefix::String,
-                        local_names::Set{String})::ASTExpr
+                        local_names::Set{String},
+                        shadowed::Set{String}=_NO_SHADOW)::ASTExpr
     if occursin('.', expr.name)
         first_part = String(split(expr.name, '.')[1])
         if first_part in local_names
@@ -43,7 +51,7 @@ function namespace_expr(expr::VarExpr, prefix::String,
         end
         return expr
     end
-    if expr.name in local_names
+    if expr.name in local_names && !(expr.name in shadowed)
         return VarExpr("$(prefix).$(expr.name)")
     end
     return expr
@@ -56,20 +64,40 @@ end
 # every leaf (the common case here: every local reference gets the prefix)
 # re-materializes a shared DAG as an exponential tree.
 #
-# The scope is not traversal-constant: a node that binds loop symbols removes
-# them from `local_names` for its children (see `_namespace_expr(::OpExpr, …)`).
-# One subtree can therefore be rewritten differently inside and outside such a
-# node, so there is one memo per distinct `local_names` set, kept in `memos`
-# and passed down as `memo` for the current scope. Only a node whose binders
-# actually shadow a local opens a new scope (and pays for the lookup), which a
-# document without that collision never does.
+# The scope is not traversal-constant: a node that binds a loop symbol spelled
+# like a local adds it to `shadowed` for its children (see
+# `_namespace_expr(::OpExpr, …)`). One subtree can therefore be rewritten
+# differently inside and outside such a node, so there is one memo per distinct
+# `shadowed` set, kept in `memos` and passed down as `memo` for the current
+# scope. `shadowed` holds only the colliding names, so keying on it stays cheap
+# however many locals the component declares, and a document without that
+# collision never leaves the root scope.
+const _NO_SHADOW = Set{String}()
 const _NsMemo = IdDict{OpExpr,ASTExpr}
 const _NsMemos = Dict{Set{String},_NsMemo}
-_namespace_expr(e::NumExpr, ::String, ::Set{String}, ::_NsMemo, ::_NsMemos) = e
-_namespace_expr(e::IntExpr, ::String, ::Set{String}, ::_NsMemo, ::_NsMemos) = e
+_namespace_expr(e::NumExpr, ::String, ::Set{String}, ::Set{String}, ::_NsMemo,
+                ::_NsMemos) = e
+_namespace_expr(e::IntExpr, ::String, ::Set{String}, ::Set{String}, ::_NsMemo,
+                ::_NsMemos) = e
 _namespace_expr(e::VarExpr, prefix::String, local_names::Set{String},
-                ::_NsMemo, ::_NsMemos) =
-    namespace_expr(e, prefix, local_names)
+                shadowed::Set{String}, ::_NsMemo, ::_NsMemos) =
+    namespace_expr(e, prefix, local_names, shadowed)
+
+# The binder set is THIS node's own loop symbols: its `output_idx` entries and
+# `ranges` keys. A join column is resolved against this node's `ranges`, so its
+# own binders are the exact shadowing set — and a node-local set is what lets
+# every binding implement one rule. `output_idx` may hold literal singleton
+# dimensions (Int 1) alongside symbols; only the Strings are binders.
+function _join_binders(expr::OpExpr)::Set{String}
+    binders = Set{String}()
+    if expr.output_idx !== nothing
+        for s in expr.output_idx
+            s isa AbstractString && push!(binders, String(s))
+        end
+    end
+    expr.ranges === nothing || union!(binders, keys(expr.ranges))
+    return binders
+end
 
 # Namespace a value-equality `join`'s key-column names (RFC §5.3). A join column
 # may name a value-invention MAP buffer that IS a component-local variable — the
@@ -83,10 +111,9 @@ _namespace_expr(e::VarExpr, prefix::String, local_names::Set{String},
 #
 # `binders` are the loop symbols THIS node binds (`output_idx` entries and
 # `ranges` keys) and they WIN over `local_names`: an index symbol is local to the
-# enclosing `faq` and shadows any coincident variable name (esm-spec
-# §4.3.1 — "a given string can be a variable reference in most contexts but
-# serves as an index symbol inside `aggregate.output_idx`, `aggregate.expr`, and
-# `aggregate.ranges` keys"), and an `on` key column is resolved against this
+# enclosing `faq` and shadows any coincident variable name (esm-spec §4.3 —
+# "a given string can be a variable reference in most contexts but serves as an
+# index symbol inside `faq.output_idx`, `faq.expr`, and `faq.ranges` keys"), and an `on` key column is resolved against this
 # node's own ranges (`_vi_join_index_sym`, `_join_sym_for_key`) — so prefixing a
 # shadowed symbol makes it resolve to nothing. Without this the gate mis-fires on
 # the legal case of a component declaring a variable named like a loop symbol.
@@ -121,38 +148,35 @@ end
 function namespace_expr(expr::OpExpr, prefix::String,
                         local_names::Set{String})::ASTExpr
     memo = _NsMemo()
-    return _namespace_expr(expr, prefix, local_names, memo,
-                           _NsMemos(local_names => memo))
+    return _namespace_expr(expr, prefix, local_names, _NO_SHADOW, memo,
+                           _NsMemos(_NO_SHADOW => memo))
 end
 
 function _namespace_expr(expr::OpExpr, prefix::String,
-                         local_names::Set{String},
+                         local_names::Set{String}, shadowed::Set{String},
                          memo::_NsMemo, memos::_NsMemos)::ASTExpr
     r = get(memo, expr, nothing)
     r === nothing || return r
-    # The binder set is THIS node's own loop symbols: its `output_idx` entries
-    # and `ranges` keys. `output_idx` may hold literal singleton dimensions
-    # (Int 1) alongside symbols; only the Strings are binders.
-    binders = Set{String}()
-    if expr.output_idx !== nothing
-        for s in expr.output_idx
-            s isa AbstractString && push!(binders, String(s))
-        end
-    end
-    expr.ranges === nothing || union!(binders, keys(expr.ranges))
-    # A loop symbol is local to the node that binds it and shadows any variable
-    # of the same name throughout that node's children (esm-spec §4.3: "Index
-    # symbols are local to the enclosing `faq` node"; §4.7.5 step 1). Inside
+    # A loop symbol is local to the node that binds it (an `output_idx` entry, a
+    # `ranges` key, an `integral`'s `int_var` — `_bound_symbols`) and shadows
+    # any variable of the same name throughout that node's children (esm-spec
+    # §4.3, "Shadowing"; esm-libraries-spec §4.7.5 step 2). Inside
     # `faq(output_idx=[j], expr=index(u, j))` in a model that also declares a
     # parameter `j`, the `j` in the body is the loop index and must stay `j`;
     # prefixing it to `<prefix>.j` silently turns the loop into a constant
-    # subscript read from the parameter. So the children are rewritten with the
-    # binders removed from `local_names`. A nested node that does not rebind a
-    # name sees the outer binding; one that rebinds it shadows it again.
-    child_locals, child_memo = local_names, memo
-    if !isempty(binders) && !isdisjoint(binders, local_names)
-        child_locals = setdiff(local_names, binders)
-        child_memo = get!(_NsMemo, memos, child_locals)
+    # subscript read from the parameter. So the children see the colliding
+    # binders in `shadowed`. A nested node that does not rebind a name sees the
+    # outer binding; one that rebinds it shadows it again.
+    child_shadowed, child_memo = shadowed, memo
+    if expr.output_idx !== nothing || expr.ranges !== nothing ||
+       expr.int_var !== nothing
+        for b in _bound_symbols(expr)
+            (b in local_names && !(b in child_shadowed)) || continue
+            child_shadowed === shadowed && (child_shadowed = copy(shadowed))
+            push!(child_shadowed, b)
+        end
+        child_shadowed === shadowed ||
+            (child_memo = get!(_NsMemo, memos, child_shadowed))
     end
     # Recurse into EVERY variable-bearing sub-expression via the shared
     # field-preserving rewrite so prefix rewrites reach faq / makearray
@@ -169,7 +193,8 @@ function _namespace_expr(expr::OpExpr, prefix::String,
     # manifold, …) — earlier this rebuild hand-listed keywords and silently
     # dropped int_var/lower/upper/table/table_axes/output.
     result = map_children(
-        x -> _namespace_expr(x, prefix, child_locals, child_memo, memos),
+        x -> _namespace_expr(x, prefix, local_names, child_shadowed, child_memo,
+                             memos),
         expr)::OpExpr
     # `map_children` recurses into expression-bearing fields only. One field
     # carries plain-name identifiers that also need namespacing: a `join.on` key
@@ -178,10 +203,8 @@ function _namespace_expr(expr::OpExpr, prefix::String,
     # byte-identical to before (and skip the reconstruct copy). Index-set
     # identifier fields (`id`, `ranges[*].from`) are document-scoped (v0.8.0)
     # and never prefixed.
-    # A join column is resolved against this node's `ranges`, so its own
-    # binders (computed above) are the exact shadowing set — and a node-local
-    # set is what lets every binding implement one rule.
-    nj = _namespace_join(expr.join, binders, prefix, local_names)
+    nj = expr.join === nothing ? nothing :
+        _namespace_join(expr.join, _join_binders(expr), prefix, local_names)
     res = nj === expr.join ? result : reconstruct(result; join=nj)
     memo[expr] = res
     return res

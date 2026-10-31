@@ -4040,6 +4040,165 @@
       "lifted_shapes": {}
     },
     {
+      "id": "loop_binder_shadowing_edges",
+      "tier": "arrayed",
+      "fixture": "scoping/loop_binder_shadowing_edges.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "Edges.a",
+          "role": "state",
+          "units": null,
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Edges"
+        },
+        {
+          "name": "Edges.b",
+          "role": "state",
+          "units": null,
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Edges"
+        },
+        {
+          "name": "Outer.u",
+          "role": "state",
+          "units": null,
+          "default": 1.0,
+          "shape": [
+            "cell"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Outer"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "Edges.w",
+          "role": "parameter",
+          "units": null,
+          "default": 1.0,
+          "shape": [
+            "cell"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Edges"
+        },
+        {
+          "name": "Edges.z",
+          "role": "parameter",
+          "units": null,
+          "default": 0.5,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Edges"
+        },
+        {
+          "name": "Edges.g",
+          "role": "parameter",
+          "units": null,
+          "default": 2.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Edges"
+        },
+        {
+          "name": "Outer.j.x",
+          "role": "parameter",
+          "units": null,
+          "default": 3.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Outer.j"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 3,
+      "equations": [
+        {
+          "lhs": "D(Edges.a)/Dt",
+          "rhs": "Edges.z * integral(z * Edges.a, z, 0, 1)",
+          "source_system": "Edges",
+          "contributions": [
+            {
+              "rhs": "Edges.z * integral(z * Edges.a, z, 0, 1)",
+              "origins": [
+                {
+                  "component": "Edges"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "D(Edges.b)/Dt",
+          "rhs": "Edges.g * argmin[g] (Edges.w[g]) where {g in 1:3}",
+          "source_system": "Edges",
+          "contributions": [
+            {
+              "rhs": "Edges.g * argmin[g] (Edges.w[g]) where {g in 1:3}",
+              "origins": [
+                {
+                  "component": "Edges"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "D(Outer.u)/Dt",
+          "rhs": "sum[j] (Outer.u[j] * Outer.j.x) where {j in 1:3}",
+          "source_system": "Outer",
+          "contributions": [
+            {
+              "rhs": "sum[j] (Outer.u[j] * Outer.j.x) where {j in 1:3}",
+              "origins": [
+                {
+                  "component": "Outer"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "Edges",
+          "Outer"
+        ],
+        "coupling_rules": [],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [
+        "cell"
+      ],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {}
+    },
+    {
       "id": "function_tables_linear",
       "tier": "function_tables",
       "fixture": "conformance/function_tables/linear/fixture.esm",

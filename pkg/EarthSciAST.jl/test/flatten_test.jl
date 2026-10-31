@@ -669,6 +669,29 @@ end
         @test !_uses_var(eq_u.rhs, "Shadow.j")
         eq_y = _find_eq(flat, "Shadow.y")
         @test eq_y !== nothing && _uses_var(eq_y.rhs, "Shadow.j")
+
+        # An integral's `int_var` binds like a faq symbol, and a dotted name is
+        # never a loop index: inside a node binding `j`, `j.x` still reaches the
+        # local subsystem `j`.
+        integ = E.OpExpr("integral", E.ASTExpr[_op("*", _V("z"), _V("y"))];
+            int_var="z", lower=E.NumExpr(0.0), upper=E.NumExpr(1.0))
+        out = E.namespace_expr(_op("*", _V("z"), integ), "M", Set(["y", "z"]))
+        @test to_ascii(out.args[1]) == "M.z"
+        @test to_ascii(out.args[2].args[1]) == "z * M.y"
+        sub = E.OpExpr("faq", E.ASTExpr[]; output_idx=Any["j"],
+            ranges=Dict{String,Any}("j" => Any[1, 3]),
+            expr_body=_op("*", _op("index", _V("u"), _V("j")), _V("j.x")))
+        out = E.namespace_expr(sub, "M", Set(["u", "j"]))
+        @test to_ascii(out.expr_body) == "M.u[j] * M.j.x"
+
+        flat = flatten(EarthSciAST.load_path(joinpath(TESTUTILS_REPO_ROOT,
+            "tests", "scoping", "loop_binder_shadowing_edges.esm")))
+        @test to_ascii(_find_eq(flat, "Edges.a").rhs) ==
+            "Edges.z * integral(z * Edges.a, z, 0, 1)"
+        @test to_ascii(_find_eq(flat, "Edges.b").rhs) ==
+            "Edges.g * argmin[g] (Edges.w[g]) where {g in 1:3}"
+        @test to_ascii(_find_eq(flat, "Outer.u").rhs) ==
+            "sum[j] (Outer.u[j] * Outer.j.x) where {j in 1:3}"
     end
 
     @testset "14. §4.7.6 DomainUnitMismatchError from real variable_map flatten" begin

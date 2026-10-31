@@ -324,7 +324,7 @@
       "class": "semantic",
       "phase": 5,
       "area": "flatten",
-      "note": "A faq binder (output_idx entry or ranges key) shadows a same-named component variable throughout the binding node's children; flatten prefixes only the free occurrences. Pinned by tests/scoping/index_symbol_shadows_variable.esm in the flatten conformance corpus."
+      "note": "A loop binder of any node (output_idx entry, ranges key, or integral int_var) shadows a same-named component variable throughout the binding node's children; flatten prefixes only the free occurrences. Dotted references are never shadowed. Pinned by tests/scoping/index_symbol_shadows_variable.esm in the flatten conformance corpus."
     },
     {
       "id": "spec.4.3.1.ragged-values-not-gathered",
