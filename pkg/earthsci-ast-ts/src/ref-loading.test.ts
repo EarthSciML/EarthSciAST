@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { resolveSubsystemRefs, CircularReferenceError, RefLoadError } from './ref-loading.js'
 import type { EsmFile, Model, ReactionSystem } from './types.js'
 import { loadPath } from './parse.js'
+import { validate } from './validate.js'
 import { fixturesDir } from './test-helpers.js'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
@@ -234,6 +235,18 @@ describe('a mounted leaf runs every version gate on its own esm', () => {
 
   it('accepts an older root mounting a newer leaf', async () => {
     expect(await codeOf(fixturesDir('valid', 'version_gate_older_mounts_newer.esm'))).toBe(null)
+  })
+
+  it('validates the resolved form of an older root mounting a newer leaf', async () => {
+    // validate() re-enters the loader with the RESOLVED document, which now
+    // carries the leaf's 1.2.0 unit-bearing const under the root's version, so
+    // resolution raises the declared floor to 1.2.0.
+    const p = fixturesDir('valid', 'version_gate_older_mounts_newer.esm')
+    const file = loadPath(p)
+    await resolveSubsystemRefs(file, path.dirname(p))
+    expect((file as unknown as { esm: string }).esm).toBe('1.2.0')
+    const result = validate(file)
+    expect(result.structural_errors).toEqual([])
   })
 
   it('reads the leaf version as raised by the aggregate normalization', async () => {

@@ -51,6 +51,7 @@ import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import { loadString, validateSchema, ROOT_PATH } from './parse.js'
 import { toJson } from './serialize.js'
 import { prepareDocumentOps, raiseFaqVersionFloor, rejectVersionGatedConstructs } from './parse.js'
+import { raiseConstUnitsVersionFloor } from './solver.js'
 
 /**
  * Error thrown when a circular reference is detected during subsystem resolution.
@@ -306,6 +307,8 @@ export function resolveSubsystemRefsSync(
   // object — so without the floor the §2.2.4 gate fires on a document nobody
   // mis-authored. Same stamp `toJson` applies on the way out.
   raiseFaqVersionFloor(file)
+  // Likewise a mounted esm 1.2.0 leaf's unit-bearing `const` (esm-spec §4.8.5).
+  raiseConstUnitsVersionFloor(file)
 }
 
 /**
