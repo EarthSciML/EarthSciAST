@@ -7362,6 +7362,47 @@ the evaluator. Go and TypeScript do not simulate; they only register the code.
 hands both equations to `mtkcompile`, which reports the imbalance in its own
 vocabulary.
 
+### 5.53 The Initial State a Problem Integrates From (normative)
+
+**Decision pinned.** `initial_state(prob)` (API_SPEC §5.8) returns the state a
+solve of `prob` starts from, one value per state element, without integrating:
+per element the first of the Problem's `u0` entry, an initialization equation
+(esm-spec §6.2), an `ic` equation or field initial condition (§11.4, §11.4.1),
+and the declared `default`, with the Problem's `p` (else the parameter defaults)
+bound in every initial condition's scope (§6.6.5). It MUST equal, bit for bit,
+the state at `tspan[0]` of a solve of the same Problem.
+
+**Reason.** A host that drives its own integrator (an operator-splitting
+planner, a restart writer) needs the initial state as the binding builds it, and
+the declared defaults are not it: an `ic` equation, a field `ic` or an
+initialization equation overrides them, and only the build knows which applies.
+Before the accessor a Rust caller recovered it by solving over a zero-length
+span, which is what each case is checked against.
+
+**Shape.** `tests/conformance/initial_state/manifest.json` lists eleven cases
+over four REFERENCED documents (`scalar_ic/fixtures/*.esm` and
+`pde_inline_ic_param_override/fixtures/ic_param_override.esm`, whose inline
+tests pin the same values at `t = 0` through a solve): a scalar `ic` that
+const-folds, one that reads a parameter, one a `u0` entry overrides, and a state
+with no `ic` that keeps its default; a broadcast array `ic` beside a 0-D one; a
+`faq` initialization equation with a filtered-out cell and cells outside its
+range; and a coordinate-expression `ic` under three values of its parameter.
+Each case gives the Problem's `p` and `u0` and the expected value of EVERY state
+element keyed by its flattened name (`M.u`, `F.u[2]`), so a binding checks the
+whole vector, not a sample. The expected values are the documents' own
+formulas, evaluated in binary64 in the documents' operation order by
+`scripts/gen-initial-state-manifest.py`, which reads the expressions from the
+fixtures (`--check` reports a manifest a fixture edit left stale); the
+tolerance (`rtol` 1e-14, `atol` 1e-15) leaves room only for a `cos` that differs
+in its last bit.
+
+**Adapters.** Rust — `pkg/earthsci-ast-rs/tests/initial_state_conformance.rs`,
+which also checks each case against a zero-length solve bit for bit, and that a
+static Problem and a Float32 Problem that integrates have no initial state. `bindings_required` is `["rust"]`: Julia
+holds the state in the `prob.u0` field and Python only as `init(prob).u`, and
+neither exports `initial_state` yet (`bindings_pending` in the manifest says so).
+Go and TypeScript do not simulate.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow

@@ -601,6 +601,38 @@ operations. TypeScript and Go carry `resolve_time_span` but not the two new
 accessors — neither binding simulates, and the pair exists for a host driving a
 run.
 
+#### The initial state: `initial_state`
+
+```
+initial_state(prob) -> u0                      # Rust only; extension tier
+```
+
+The state a Problem integrates from at `tspan[0]`, one value per state element,
+aligned with the Problem's state names (Rust: `prob.state_variable_names()`, the
+flattened element names a `Solution`'s state rows carry). It is built exactly as
+a solve builds it, without integrating: per element, the first of the Problem's
+`u0` entry, an initialization equation (esm-spec §6.2), an `ic` equation or
+field initial condition (§11.4, §11.4.1), and the declared `default`, with the
+Problem's `p` (else the parameter defaults) bound in every initial condition's
+scope (§6.6.5). So it depends on neither `tspan` nor any solver option, and a
+field `ic` reads the forcing as construction bound it, without the
+discrete-cadence fields a solve refreshes, so it gives the same state before and
+after a solve. A Problem with no solve has no initial state: nothing to
+integrate is `NotDynamic` and a Float32 document that integrates is
+`Float32Unsupported`, as for `solve`; an element no source values is
+`InvalidInitialCondition`, as in a solve. A Rust
+`RhsProgram`'s `default_state()` is the declared defaults alone.
+
+The SciML name `u0` already means the CALLER's override bindings in Python
+(`prob.u0`, a dict) and Rust (`EsmProblem::u0()`), so the built state takes a
+name of its own. Julia holds it in the `prob.u0` field (a vector indexed through
+`prob.var_map`), an extension seam rather than an exported accessor. Python has
+no accessor: the built state is reachable only as `init(prob).u` before the
+first step. The shared cases in `tests/conformance/initial_state/`
+(CONFORMANCE_SPEC §5.53) are keyed by element name, so a second binding that
+adds `initial_state` runs them as they stand; the name becomes `stable` once it
+does.
+
 #### `compiler`: which strategy builds the right-hand side
 
 `compiler` names the strategy a Problem's right-hand side is built with. Each
