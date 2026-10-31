@@ -1003,7 +1003,14 @@ def _vi_materialize_producer(ctx: _ViCtx, node: Mapping[str, Any]) -> list[Any]:
 # Grouped / derived build-time buffers (the SCVT centroid step)
 # --------------------------------------------------------------------------- #
 
-_VI_OPLUS_FUNS = {"+": lambda a, b: a + b, "*": lambda a, b: a * b, "max": max, "min": min}
+#: ``max`` / ``min`` propagate a NaN term (esm-spec §4.2); Python's built-ins
+#: would keep the other operand when the NaN comes second.
+_VI_OPLUS_FUNS = {
+    "+": lambda a, b: a + b,
+    "*": lambda a, b: a * b,
+    "max": lambda a, b: b if (b > a or b != b) else a,
+    "min": lambda a, b: b if (b < a or b != b) else a,
+}
 _VI_SEMIRING_OPLUS = {
     "sum_product": ("+", 0.0),
     "max_product": ("max", float("-inf")),

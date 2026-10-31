@@ -26,9 +26,6 @@ compares each state element's derivative with `golden/<id>.json`:
   are allowed, but no golden uses them today: the `max`/`min` fixture reports a
   NaN reduction as `-1` and an empty one as `-2` through an `ifelse`, because a
   binding may refuse a non-finite derivative;
-- where the interpreters disagree today, the value is an object
-  `{"julia": …, "python": …, "rust": …}` and each binding compares with its own
-  entry (below);
 - the comparison is on bits, so `-0.0` and `+0.0` differ.
 
 The goldens are written by `generate.py`, whose oracle is a literal loop in
@@ -65,24 +62,13 @@ fold order other than ascending changes the low bits.
 | `ragged` | a ragged `from`/`of` range under a free parent, `e` reading the position symbol |
 | `ragged_contracted_parent` | a ragged range whose parent is contracted, `e` reading the member gathered at the position; each cell's terms come from one row |
 
-## A NaN in a `max` / `min` window: the interpreters disagree
+## A NaN in a `max` / `min` window
 
-On base (`3d6e2fd5d`) the three interpreters fold a NaN term differently, and
-each native compiler matches its own interpreter:
-
-| Binding | Rule | `[1, NaN, 1, -1e16]` max | `[NaN, 1e16, -1e16, 5]` max |
-|---|---|---|---|
-| Julia | NaN propagates wherever it is (esm-spec §4.2) | NaN | NaN |
-| Python | seeded from the first admitted term, then replaced only by a term that beats it | 1 | NaN |
-| Rust | seeded from the identity, then replaced only by a term that beats it | 1 | 1e16 |
-
-esm-spec §4.2 says one NaN term makes a `faq` `max`/`min` reduction NaN, while
-§4.3.1's reverse-scan paragraph describes a fold step that keeps its accumulator
-unless a term beats it. The scatter's license is about order, not about this
-rule, so `max_min_nan` pins each binding to ITS OWN interpreter's bits: the
-golden's NaN cells carry one value per binding, each from a naive loop of that
-rule in `generate.py`. The cell of numbers only, and the NaN at a point no cell
-admits, are common to all three.
+A NaN term makes a `max` / `min` reduction NaN wherever it sits in the window
+(esm-spec §4.2), so `max_min_nan`'s NaN cells are NaN (reported as `-1`) in every
+binding, under both compilers. Before this tier the three interpreters
+disagreed (Julia propagated, Python kept only a leading NaN, Rust skipped every
+NaN); they were brought to the §4.2 rule together with it.
 
 ## Exclusions
 

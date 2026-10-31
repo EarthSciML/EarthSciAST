@@ -917,8 +917,8 @@ pub(crate) fn apply_binary(op: &str, x: f64, y: f64) -> f64 {
         "/" => x / y,
         "^" | "pow" => x.powf(y),
         "atan2" => x.atan2(y),
-        "min" => x.min(y),
-        "max" => x.max(y),
+        "min" => crate::faq::nan_min(x, y),
+        "max" => crate::faq::nan_max(x, y),
         // Comparison + logical kernels, so the broadcast paths (`combine` /
         // `broadcast_binary`) carry array operands elementwise.
         "==" | "!=" | "<" | "<=" | ">" | ">=" => scalar_compare(op, x, y),
@@ -1035,8 +1035,8 @@ pub(crate) fn binary_kernel_of(op: BinCode) -> fn(f64, f64) -> f64 {
         BinCode::Div => |x, y| x / y,
         BinCode::Pow => |x: f64, y: f64| x.powf(y),
         BinCode::Atan2 => |x: f64, y: f64| x.atan2(y),
-        BinCode::Min => |x: f64, y: f64| x.min(y),
-        BinCode::Max => |x: f64, y: f64| x.max(y),
+        BinCode::Min => crate::faq::nan_min,
+        BinCode::Max => crate::faq::nan_max,
         BinCode::Eq => |x: f64, y: f64| (x == y) as i32 as f64,
         BinCode::Ne => |x: f64, y: f64| (x != y) as i32 as f64,
         BinCode::Lt => |x: f64, y: f64| (x < y) as i32 as f64,
@@ -1077,8 +1077,8 @@ pub(crate) fn binary_kernel_f32_of(op: BinCode) -> fn(f64, f64) -> f64 {
         BinCode::Div => |x: f64, y: f64| ((x as f32) / (y as f32)) as f64,
         BinCode::Pow => |x: f64, y: f64| (x as f32).powf(y as f32) as f64,
         BinCode::Atan2 => |x: f64, y: f64| (x as f32).atan2(y as f32) as f64,
-        BinCode::Min => |x: f64, y: f64| (x as f32).min(y as f32) as f64,
-        BinCode::Max => |x: f64, y: f64| (x as f32).max(y as f32) as f64,
+        BinCode::Min => |x: f64, y: f64| crate::faq::nan_min_f32(x as f32, y as f32) as f64,
+        BinCode::Max => |x: f64, y: f64| crate::faq::nan_max_f32(x as f32, y as f32) as f64,
         // Comparisons and the logical flags are exact on binary32 operands and
         // return the same 1.0 / 0.0 flags, but they still narrow: comparing the
         // f64 carriers of two values that round to the SAME f32 must say equal.
@@ -1498,8 +1498,8 @@ mod kernel_equivalence_tests {
                     ("/", (xf() / yf()) as f64),
                     ("^", xf().powf(yf()) as f64),
                     ("atan2", xf().atan2(yf()) as f64),
-                    ("min", xf().min(yf()) as f64),
-                    ("max", xf().max(yf()) as f64),
+                    ("min", crate::faq::nan_min_f32(xf(), yf()) as f64),
+                    ("max", crate::faq::nan_max_f32(xf(), yf()) as f64),
                     ("==", (xf() == yf()) as i32 as f64),
                     ("!=", (xf() != yf()) as i32 as f64),
                     ("<", (xf() < yf()) as i32 as f64),
@@ -1600,7 +1600,7 @@ mod kernel_equivalence_tests {
                 let cases: &[(&str, f64)] = &[
                     ("+", x + y), ("-", x - y), ("*", x * y), ("/", x / y),
                     ("^", x.powf(y)), ("atan2", x.atan2(y)),
-                    ("min", x.min(y)), ("max", x.max(y)),
+                    ("min", crate::faq::nan_min(x, y)), ("max", crate::faq::nan_max(x, y)),
                     ("==", (x == y) as i32 as f64), ("!=", (x != y) as i32 as f64),
                     ("<", (x < y) as i32 as f64), ("<=", (x <= y) as i32 as f64),
                     (">", (x > y) as i32 as f64), (">=", (x >= y) as i32 as f64),
