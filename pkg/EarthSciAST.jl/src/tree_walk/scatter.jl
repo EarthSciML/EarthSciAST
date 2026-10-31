@@ -41,6 +41,11 @@
 # gate, a ragged contracted bound, a ⊕ other than +, *, max, min, or a term or
 # key that does not resolve with its indices symbolic.
 
+# The kernels a shifted scatter's pieces compiled to, held out of the kernel
+# class merge (`_merge_acc_kernel_classes`). Build-scoped, like
+# `_LOOPVAR_REFS`: emptied at the top of every build.
+const _SCATTER_KEEP = IdDict{Any, Nothing}()
+
 # The equality conjuncts that pin output indices, and the conjuncts left over.
 struct _ScatterSpec
     pins::Vector{Tuple{Int, ASTExpr}}   # (position in the output indices, its key `e`)

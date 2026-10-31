@@ -5260,6 +5260,7 @@ function _build_evaluator_impl_inner(
     # prior build so it never accumulates across builds. Loop-var names are
     # globally unique, so this only drops dead entries.
     empty!(_LOOPVAR_REFS)
+    empty!(_SCATTER_KEEP)        # build-scoped shifted-scatter kernels (scatter.jl)
     empty!(_STATE_SLOT_TABLES)   # build-scoped state-gather slot tables (ess-runtime-contraction)
     # ---- Compile-once template tier: expand references at the entry, keeping
     # the SITES (RFC out-of-line-expression-templates §7.7). Every phase and
@@ -6545,6 +6546,7 @@ function _compile_faq_equation!(
                 )
                 plabel = w == 0 ? "$(label), cells no point reaches ($(where_))" :
                     "$(label), shifted scatter ($(where_))"
+                nk0 = length(acc_kernels)
                 _compile_faq_equation!(
                     percell_scalar, acc_kernels, scan_folds,
                     array_contractions, covered, peq, resolved_obs, array_var_info,
@@ -6553,6 +6555,9 @@ function _compile_faq_equation!(
                     rhs_list_compiled = rhs_list_compiled, obs_nst = obs_nst,
                     rule_label = plabel, rule_declines = declines
                 )
+                for k in (nk0 + 1):length(acc_kernels)
+                    _SCATTER_KEEP[acc_kernels[k]] = nothing
+                end
             end
             return nothing
         end

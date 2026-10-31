@@ -260,6 +260,31 @@ _hoist_filtered_producer(e::OpExpr) = _is_faq_op(e.op) && e.filter !== nothing &
     e.output_idx
 )
 
+# An operand whose output ranges are integer bounds `[1, n_d]` rather than
+# index sets qualifies the same way when those bounds are exactly the extents
+# of the left-hand side's declared shape, axis for axis (a derived document
+# writes `faq(_j1; _j1 ∈ [1, 8], i ∈ [2, 7]; i - 1 == _j1)` against a `[x]`
+# unknown of size 8): the lifted observed takes that declared shape, and its
+# fill covers the same cells the whole-array arithmetic did.
+function _hoist_filtered_producer_on(e::OpExpr, od)
+    od === nothing && return false
+    (
+        _is_faq_op(e.op) && e.filter !== nothing && e.join === nothing &&
+            e.join_gates === nothing && e.expr_body !== nothing && e.ranges !== nothing &&
+            _is_array_producer(e) && all(x -> x isa AbstractString, e.output_idx)
+    ) || return false
+    shape, dims = od
+    length(e.output_idx) == length(dims) || return false
+    for (d, x) in enumerate(e.output_idx)
+        r = get(e.ranges, String(x), nothing)
+        (
+            r isa AbstractVector && length(r) == 2 && r[1] isa Integer && r[2] isa Integer &&
+                r[1] == 1 && r[2] == dims[d]
+        ) || return false
+    end
+    return true
+end
+
 # REGION-SPLIT OPERANDS of elementwise arithmetic are lifted too. A rule that
 # lowers a spatial `D` builds a `makearray` whose regions split the axis it
 # differentiates along (the interior stencil and its boundary faces, §9.6.8).
@@ -381,7 +406,7 @@ end
 # region-split operands to lift and the left-hand side's shape.
 function _hoist_operand_walk(
         e::ASTExpr, owner::String, hc::_HoistCtx,
-        memo::IdDict{OpExpr, ASTExpr}, split = nothing
+        memo::IdDict{OpExpr, ASTExpr}, split = nothing, od = nothing
     )
     e isa OpExpr || return e
     o = e::OpExpr
@@ -396,8 +421,10 @@ function _hoist_operand_walk(
             _hoist_lift_split(a::OpExpr, owner, split[2], hc)
         elseif a isa OpExpr && _hoist_filtered_producer(a::OpExpr)
             _hoist_lift_producer(a::OpExpr, owner, hc)
+        elseif a isa OpExpr && _hoist_filtered_producer_on(a::OpExpr, od)
+            _hoist_lift_producer(a::OpExpr, owner, hc; shape = od[1])
         else
-            _hoist_operand_walk(a, owner, hc, memo, split)
+            _hoist_operand_walk(a, owner, hc, memo, split, od)
         end
         if b !== a
             new === o.args && (new = copy(o.args))
@@ -409,12 +436,16 @@ function _hoist_operand_walk(
     return out
 end
 
-function _hoist_lift_producer(g::OpExpr, owner::String, hc::_HoistCtx)
-    key = (objectid(g), String["\0producer"])
+function _hoist_lift_producer(
+        g::OpExpr, owner::String, hc::_HoistCtx;
+        shape::Union{Nothing, Vector{String}} = nothing
+    )
+    key = (objectid(g), vcat(String["\0producer"], something(shape, String[])))
     hit = get(hc.memo, key, nothing)
     hit === nothing || return hit
     name = string(_HOIST_PREFIX, "a", length(hc.memo) + 1, '\0', owner)
-    shape = String[(g.ranges[String(x)]::IndexSetRef).from for x in g.output_idx]
+    shape === nothing &&
+        (shape = String[(g.ranges[String(x)]::IndexSetRef).from for x in g.output_idx])
     hc.vars[name] = ModelVariable(UnknownVariable; shape = shape)
     push!(hc.eqs, Equation(VarExpr(name), g))
     hc.owner[name] = owner
@@ -471,7 +502,7 @@ function _hoist_nested_reductions(model::Model, index_sets::AbstractDict)
                 length(ops) >= 2 &&
                     (split = (IdDict{OpExpr, Nothing}(o => nothing for o in ops), od[1]))
             end
-            new_rhs = _hoist_operand_walk(rhs, owner, hc, IdDict{OpExpr, ASTExpr}(), split)
+            new_rhs = _hoist_operand_walk(rhs, owner, hc, IdDict{OpExpr, ASTExpr}(), split, od)
             new_rhs === rhs && continue
             eqs === model.equations && (eqs = copy(model.equations))
             eqs[i] = Equation(eq.lhs, new_rhs; _comment = eq._comment)
