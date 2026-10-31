@@ -1,6 +1,6 @@
 module github.com/EarthSciML/EarthSciAST/docs/api/examples/go
 
-go 1.22
+go 1.26
 
 // The examples document the package in this checkout, not a published release.
 // go.work adds the package to the workspace, so its own go.mod and go.sum pin

@@ -77,50 +77,55 @@ func loadAPIManifest(t *testing.T) apiManifest {
 func exportedSurface(t *testing.T) map[string]string {
 	t.Helper()
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, 0)
+	entries, err := os.ReadDir(".")
 	if err != nil {
-		t.Fatalf("parsing package: %v", err)
+		t.Fatalf("listing package: %v", err)
+	}
+	var files []*ast.File
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parsing package: %v", err)
+		}
+		files = append(files, f)
 	}
 
 	surface := make(map[string]string)
-	for _, p := range pkgs {
-		if strings.HasSuffix(p.Name, "_test") {
-			continue
-		}
-		for _, f := range p.Files {
-			for _, decl := range f.Decls {
-				switch d := decl.(type) {
-				case *ast.FuncDecl:
-					if !d.Name.IsExported() || d.Recv != nil {
-						continue // methods belong to their receiver type's entry
-					}
-					surface[d.Name.Name] = "function"
-				case *ast.GenDecl:
-					for _, spec := range d.Specs {
-						switch s := spec.(type) {
-						case *ast.TypeSpec:
-							if !s.Name.IsExported() {
+	for _, f := range files {
+		for _, decl := range f.Decls {
+			switch d := decl.(type) {
+			case *ast.FuncDecl:
+				if !d.Name.IsExported() || d.Recv != nil {
+					continue // methods belong to their receiver type's entry
+				}
+				surface[d.Name.Name] = "function"
+			case *ast.GenDecl:
+				for _, spec := range d.Specs {
+					switch s := spec.(type) {
+					case *ast.TypeSpec:
+						if !s.Name.IsExported() {
+							continue
+						}
+						kind := "type"
+						if strings.HasSuffix(s.Name.Name, "Error") ||
+							strings.HasSuffix(s.Name.Name, "Exception") {
+							kind = "error"
+						}
+						surface[s.Name.Name] = kind
+					case *ast.ValueSpec:
+						for _, n := range s.Names {
+							if !n.IsExported() {
 								continue
 							}
-							kind := "type"
-							if strings.HasSuffix(s.Name.Name, "Error") ||
-								strings.HasSuffix(s.Name.Name, "Exception") {
-								kind = "error"
+							kind := "constant"
+							if d.Tok == token.VAR && strings.HasPrefix(n.Name, "Err") {
+								kind = "error" // a sentinel error value
 							}
-							surface[s.Name.Name] = kind
-						case *ast.ValueSpec:
-							for _, n := range s.Names {
-								if !n.IsExported() {
-									continue
-								}
-								kind := "constant"
-								if d.Tok == token.VAR && strings.HasPrefix(n.Name, "Err") {
-									kind = "error" // a sentinel error value
-								}
-								surface[n.Name] = kind
-							}
+							surface[n.Name] = kind
 						}
 					}
 				}
