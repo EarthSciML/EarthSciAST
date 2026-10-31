@@ -104,7 +104,14 @@ _mnr_same(a, b) = length(a) == length(b) && all(a[k] === b[k] for k in eachindex
             nat, tally = _mnr_du(_mnr_doc(N, rhs), ics; compiler=:native)
             @test _mnr_same(nat, interp)
             @test _mnr_same(nat, ref)
-            @test get(tally, :array_contraction_codegen, 0) >= 1
+            # A reduction shorter than the contraction loop's floor is unrolled
+            # by the affine tier, as a top-level one is; a longer one is kept a
+            # loop by the whole-array nest.
+            if N >= _MNR._contraction_loop_min()
+                @test get(tally, :array_contraction_codegen, 0) >= 1
+            else
+                @test get(tally, :affine, 0) >= 1
+            end
             @test get(tally, :percell_acc, 0) == 0
         end
         # The data make the fold order visible: the exact sum is not the fold.

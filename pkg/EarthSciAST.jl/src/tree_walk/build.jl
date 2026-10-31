@@ -6163,6 +6163,11 @@ _ma_region_bound(x) = nothing
 function _makearray_region_equations(eq::Equation, lhs_op::OpExpr, lhs_body::OpExpr,
                                      idx_names::Vector{String}, range_iters)
     rhs = eq.rhs
+    # The lifted form of a whole-array equation gathers an `faq` whose body is
+    # the makearray gather (`index(faq(index(makearray(…), i), i), _lp0)`, the
+    # form a derived document writes): see through it to that gather.
+    beta = _beta_identity_gather(rhs, idx_names)
+    beta === nothing || (rhs = beta)
     rhs isa OpExpr || return nothing
     g = rhs::OpExpr
     nd = length(idx_names)
@@ -6241,6 +6246,37 @@ function _makearray_region_equations(eq::Equation, lhs_op::OpExpr, lhs_body::OpE
         end
     end
     return out
+end
+
+# `index(faq(B), loops…)` — the identity gather, at this equation's own loop
+# symbols in order, of an `faq` that contracts nothing and carries no filter or
+# join — is `B` with the producer's output indices renamed onto the loops: at
+# every cell the gather reads the producer's element there, which is `B` at that
+# cell. A name free in `B` that is also a loop is that same loop, whose value at
+# the cell is the subscript it is renamed to, so nothing is captured. `nothing`
+# for any other expression.
+function _beta_identity_gather(rhs::ASTExpr, idx_names::Vector{String})
+    rhs isa OpExpr || return nothing
+    g = rhs::OpExpr
+    nd = length(idx_names)
+    (g.op == "index" && length(g.args) == nd + 1 && nd >= 1) || return nothing
+    for d in 1:nd
+        v = g.args[d + 1]
+        (v isa VarExpr && (v::VarExpr).name == idx_names[d]) || return nothing
+    end
+    a = g.args[1]
+    (a isa OpExpr && _is_faq_op((a::OpExpr).op)) || return nothing
+    a = a::OpExpr
+    (a.expr_body === nothing || a.filter !== nothing || a.join_gates !== nothing) &&
+        return nothing
+    aout = _output_idx_strings(a)
+    length(aout) == nd || return nothing
+    isempty(_contracted_index_names(_ranges_dict(a), aout)) || return nothing
+    ren = Dict{String,ASTExpr}()
+    for d in 1:nd
+        aout[d] == idx_names[d] || (ren[aout[d]] = VarExpr(idx_names[d]))
+    end
+    return isempty(ren) ? a.expr_body : _sub_preserving(a.expr_body, ren)
 end
 
 # A region's value as the right-hand side of the equation over its cells (see

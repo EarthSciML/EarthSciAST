@@ -369,6 +369,10 @@ function _has_indexed_producer(e, seen::IdDict{OpExpr,Nothing}=IdDict{OpExpr,Not
     if e.op == "index" && !isempty(e.args)
         fa = e.args[1]
         fa isa OpExpr && (fa.op == "makearray" || _is_faq_op(fa.op)) && return true
+        # A gather pushed through an elementwise producer (`index(a + b, i)`)
+        # indexes the producers among its operands (`_branch_key_pushdown!`).
+        fa isa OpExpr && _is_scalar_op(fa.op) && _reaches_indexable_producer(fa) &&
+            return true
     end
     for a in e.args
         _has_indexed_producer(a, seen) && return true
@@ -741,54 +745,181 @@ end
 # boundary (`_select_region`), and — unlike a ghost transition — that boundary can
 # sit anywhere in the range, including mid-domain, so the edge-inward scan cannot
 # be relied on to reach it. Harvest every region boundary from the body up front
-# (O(#regions), grid-independent) so it is probed explicitly. A boundary is mapped
-# to an output dim only when its makearray is indexed by a BARE loop var there
-# (the region-tiling case, e.g. PPM's seven columns and any hemisphere split);
-# anything fancier is left to the edge scan + per-box corner verification.
-function _collect_makearray_bounds!(cands::Vector{Set{Int}}, mk::OpExpr,
-                                    kargs::Vector{ASTExpr}, idx_names::Vector{String})
-    regions = mk.regions
-    if regions !== nothing
-        for (j, ka) in enumerate(kargs)
-            ka isa VarExpr || continue
-            d = findfirst(==(ka.name), idx_names)
-            d === nothing && continue
-            for region in regions
-                j <= length(region) && length(region[j]) >= 2 || continue
-                push!(cands[d], region[j][1]); push!(cands[d], region[j][2] + 1)
+# (O(#regions), grid-independent) so it is probed explicitly.
+#
+# A box takes the template of its first cell (`_process_affine_box!`) and nothing
+# checks the region selections of the rest of it, so a boundary the harvest and
+# the edge scans both miss is a box spanning two regions that silently computes
+# the first one's value everywhere. The harvest therefore follows each
+# makearray subscript back to the loop indices, through every name that binds
+# one, and answers for every subscript it meets:
+#
+#   * a loop index plus a constant, `i + c` — directly, or through the output
+#     index of an `faq` gathered at one (`index(faq(index(makearray, i), i),
+#     _lp0)`, the lifted form of a whole-array equation): the region bounds,
+#     shifted by `c`, are the candidates;
+#   * any other function of ONE loop index (a clamp, a `mod`, a contracted index
+#     added to it): every cell of that index is a candidate, which costs a key
+#     per cell along it and finds every change;
+#   * a function of two or more loop indices: no set of per-dim cuts describes
+#     where its selection changes, so the tier declines the equation.
+#
+# Region selection reached through an elementwise producer (`index(a + b, i)`)
+# is followed into its operands, as `_stencilize_index` pushes the gather.
+#
+# Returns the candidate starts per dim and, per dim, whether every cell of it is
+# a candidate.
+function _region_cut_candidates(body, idx_names::Vector{String})
+    D = length(idx_names)
+    cands = [Set{Int}() for _ in 1:D]
+    full = falses(D)
+    # What a name is in terms of the loop indices: `(d, c)` for `loop[d] + c`, a
+    # `Vector{Int}` of the dims it depends on otherwise. A name absent from the
+    # map depends on none (a constant, a contracted index, a variable).
+    alias0 = Dict{String,Any}(idx_names[d] => (d, 0) for d in 1:D)
+    # Deduped per (node, alias map CONTENT) (ESS-0hh): a Set-collector over the
+    # region bounds is path-multiplicity-insensitive, so entering each distinct
+    # node once per distinct binding collects exactly the same candidate sets,
+    # and a template gathered along many paths at the same subscripts is walked
+    # once, not once per path.
+    alias_ids = Dict{Vector{Pair{String,Any}},Int}()
+    aid_of = IdDict{Dict{String,Any},Int}()
+    aid(a) = get!(aid_of, a) do
+        get!(alias_ids, sort!(collect(a); by = first), length(alias_ids) + 1)
+    end
+    seen = Set{Tuple{UInt,Int}}()
+    iseen = Set{Tuple{UInt,Vector{Any},Int}}()
+    lit(x) = x isa IntExpr || (x isa NumExpr && isinteger((x::NumExpr).value))
+    litval(x) = x isa IntExpr ? Int((x::IntExpr).value) : Int((x::NumExpr).value)
+    function deps!(acc::Set{Int}, e, alias)
+        if e isa VarExpr
+            v = get(alias, (e::VarExpr).name, nothing)
+            v isa Tuple && push!(acc, v[1])
+            v isa Vector{Int} && union!(acc, v)
+        elseif e isa OpExpr
+            foreach(c -> deps!(acc, c, alias), child_exprs(e::OpExpr))
+        end
+        return acc
+    end
+    # A subscript as `nothing` (no loop dependence), `(d, c)` or a dim vector.
+    function sub(e, alias)
+        e isa VarExpr && return get(alias, (e::VarExpr).name, nothing)
+        if e isa OpExpr && ((e::OpExpr).op == "+" || (e::OpExpr).op == "-")
+            o = e::OpExpr
+            if o.op == "+" || length(o.args) == 2
+                aff = nothing; c = 0; ok = true
+                for (k, a) in enumerate(o.args)
+                    sgn = (o.op == "-" && k == 2) ? -1 : 1
+                    if lit(a)
+                        c += sgn * litval(a)
+                        continue
+                    end
+                    s = sub(a, alias)
+                    s === nothing && (ok = false; break)
+                    (s isa Tuple && aff === nothing && sgn == 1) || (ok = false; break)
+                    aff = s
+                end
+                ok && aff !== nothing && return (aff[1], aff[2] + c)
             end
         end
+        d = deps!(Set{Int}(), e, alias)
+        isempty(d) && return nothing
+        return sort!(collect(d))
     end
-    # A region's value may itself be a makearray; it inherits the same k-args.
-    if mk.values !== nothing
-        for v in mk.values
-            v isa OpExpr && v.op == "makearray" &&
-                _collect_makearray_bounds!(cands, v, kargs, idx_names)
+    function mark!(s, lo_hi)
+        s === nothing && return
+        if s isa Tuple
+            d, c = s
+            lo = _ma_region_bound(lo_hi[1]); hi = _ma_region_bound(lo_hi[2])
+            if lo === nothing || hi === nothing
+                full[d] = true
+            else
+                push!(cands[d], lo - c); push!(cands[d], hi + 1 - c)
+            end
+        elseif length(s) == 1
+            full[s[1]] = true
+        else
+            throw(_StencilFallback("makearray region selected by a subscript of " *
+                                   "several loop indices; no box cut describes it"))
         end
     end
-end
-function _region_cut_candidates(body, idx_names::Vector{String})
-    cands = [Set{Int}() for _ in idx_names]
-    # Identity-deduped (ESS-0hh): a Set-collector over the region bounds is
-    # path-multiplicity-insensitive, so entering each distinct node once
-    # collects exactly the same candidate sets — O(nodes) on a structurally-
-    # shared body instead of once per path.
-    seen = IdDict{OpExpr,Nothing}()
-    walk(n) = begin
+    # A producer gathered at subscripts `subs` (one analysis per axis).
+    function indexed!(p, subs, alias)
+        p isa OpExpr || return
+        pe = p::OpExpr
+        ikey = (objectid(pe), subs, aid(alias))
+        ikey in iseen && return
+        push!(iseen, ikey)
+        if pe.op == "makearray"
+            regions = pe.regions === nothing ? Vector{Vector{Vector{Any}}}() : pe.regions
+            values = pe.values === nothing ? ASTExpr[] : pe.values
+            for region in regions
+                length(region) == length(subs) || continue
+                for j in eachindex(subs)
+                    length(region[j]) >= 2 && mark!(subs[j], region[j])
+                end
+            end
+            for (r, v) in enumerate(values)
+                if _is_array_producer(v)
+                    ve = v::OpExpr
+                    rank = ve.op == "makearray" ?
+                        ((ve.regions === nothing || isempty(ve.regions)) ? 0 :
+                         length(ve.regions[1])) :
+                        count(s -> s isa AbstractString, ve.output_idx)
+                    vs = subs
+                    if rank != length(subs) && r <= length(regions)
+                        reg = regions[r]
+                        ns = [j for j in eachindex(subs)
+                              if j <= length(reg) && reg[j][1] != reg[j][2]]
+                        vs = subs[ns]
+                    end
+                    length(vs) == rank ? indexed!(ve, vs, alias) : walk(ve, alias)
+                else
+                    walk(v, alias)
+                end
+            end
+        elseif _is_faq_op(pe.op)
+            oi = String[String(s) for s in something(pe.output_idx, Any[])
+                        if s isa AbstractString]
+            inner = copy(alias)
+            pe.ranges === nothing || foreach(k -> delete!(inner, String(k)), keys(pe.ranges))
+            for (d, n) in enumerate(oi)
+                s = d <= length(subs) ? subs[d] : nothing
+                s === nothing ? delete!(inner, n) : (inner[n] = s)
+            end
+            pe.expr_body === nothing || walk(pe.expr_body, inner)
+            pe.filter === nothing || walk(pe.filter, inner)
+        elseif _is_scalar_op(pe.op)
+            for a in pe.args
+                indexed!(a, subs, alias)
+            end
+        else
+            walk(pe, alias)
+        end
+    end
+    function walk(n, alias)
         n isa OpExpr || return
-        haskey(seen, n) && return
-        seen[n] = nothing
-        if n.op == "index" && !isempty(n.args) &&
-           n.args[1] isa OpExpr && (n.args[1]::OpExpr).op == "makearray"
-            _collect_makearray_bounds!(cands, n.args[1]::OpExpr,
-                                       ASTExpr[a for a in n.args[2:end]], idx_names)
+        o = n::OpExpr
+        key = (objectid(o), aid(alias))
+        key in seen && return
+        push!(seen, key)
+        if o.op == "index" && !isempty(o.args) && o.args[1] isa OpExpr
+            for k in 2:length(o.args); walk(o.args[k], alias); end
+            indexed!(o.args[1], Any[sub(k, alias) for k in o.args[2:end]], alias)
+            return
         end
-        for a in n.args; walk(a); end
-        n.expr_body !== nothing && walk(n.expr_body)
-        n.values !== nothing && (for v in n.values; walk(v); end)
+        inner = alias
+        if o.ranges !== nothing || o.output_idx !== nothing
+            # A binder outside a gather: its names are not loop indices here.
+            inner = copy(alias)
+            o.ranges === nothing || foreach(k -> delete!(inner, String(k)), keys(o.ranges))
+            o.output_idx === nothing ||
+                foreach(s -> s isa AbstractString && delete!(inner, String(s)), o.output_idx)
+        end
+        foreach(c -> walk(c, inner), child_exprs(o))
     end
-    walk(body)
-    return cands
+    walk(body, alias0)
+    return cands, full
 end
 
 # How many consecutive identical per-cell signatures certify that the interior of
@@ -837,7 +968,10 @@ function _affine_cut_points(sig::_AffineSig, body, idx_names, ranges, ctx_proto,
                             okey::Union{Nothing,Tuple{Int,Vector{Int}}}=nothing)
     D = length(idx_names)
     cuts = Vector{Vector{Int}}(undef, D)
-    region_cands = _region_cut_candidates(body, idx_names)
+    region_cands, full = _region_cut_candidates(body, idx_names)
+    for d in 1:D
+        full[d] && union!(region_cands[d], (first(ranges[d]) + 1):last(ranges[d]))
+    end
     for d in 1:D
         starts = _scan_dim_cuts(sig, body, idx_names, ranges, ctx_proto, var_map,
                                 param_sym_set, reg_funcs, region_cands, d, okey)
