@@ -78,14 +78,14 @@ jobs:
     with:
       tag: ${{ needs.resolve.outputs.tag }}
       version: ${{ needs.resolve.outputs.version }}
-      # Default features only: `esio` resolves earthsciio through a path into
-      # the sibling EarthSciIO checkout, which does not exist on a CI runner.
       crates: pkg/earthsci-ast-rs
       npm-dir: pkg/earthsci-ast-ts
       # Ships as a library only (API_SPEC.md H-5): a module tag and a proxy fetch.
       go-module-dir: pkg/earthsci-ast-go
       cli-name: esm-cli
-      cli-bins: pkg/earthsci-ast-rs:esm pkg/earthsci-narrative:esm-narrative
+      # `esm` with `esio`, so the downloaded binary can read the parquet,
+      # netcdf and zarr files a document's `data_sources` name (issue #530).
+      cli-bins: pkg/earthsci-ast-rs:esm:esio pkg/earthsci-narrative:esm-narrative
       install-notes: |
         ```
         using Pkg; Pkg.add("EarthSciAST")   # Julia
