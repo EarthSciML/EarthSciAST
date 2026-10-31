@@ -42,12 +42,16 @@ on:
       - 'scripts/**'
       - '.github/workflows/mtk-compiler.yml'
   workflow_call:
+    # Every checkout below is the default one: on a call that is the caller's
+    # `github.sha`, the release commit. There is deliberately no `ref` input. A
+    # checkout of a caller-chosen ref in a job that saves a cache would let that
+    # ref's code write the cache every later run on main restores.
     inputs:
-      ref:
-        description: 'Git ref to check out (e.g. a release tag)'
+      release_validation:
+        description: 'Run as part of release validation'
         required: false
-        type: string
-        default: ''
+        type: boolean
+        default: false
   workflow_dispatch:
 
 permissions:
@@ -63,8 +67,8 @@ concurrency:
   # Julia registration. `github.workflow` is this file's name on its own run and
   # the caller's name on a called one, so the two groups differ; the literal
   # prefix keeps the called group distinct from any group the caller declares.
-  # `inputs.ref` (the release commit, set only on a call) keeps two releases apart.
-  group: mtk-compiler-${{ github.workflow }}-${{ inputs.ref || github.ref }}
+  # On a release call the commit (`github.sha`, the caller's) keeps two releases apart.
+  group: mtk-compiler-${{ github.workflow }}-${{ inputs.release_validation && github.sha || github.ref }}
   # Same reasoning as the conformance workflow: a superseded run must not hold a
   # runner while HEAD queues behind it.
   cancel-in-progress: true
@@ -72,7 +76,7 @@ concurrency:
 env:
   # The version conformance-testing.yml runs its harness job at, so this stage is
   # gated at the same Julia as the `interpreter` and `native` ones it left.
-  JULIA_VERSION: '1.10'
+  JULIA_VERSION: 'lts'
 
 jobs:
   mtk-compiler-agreement:
@@ -84,10 +88,9 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref || '' }}
 
       - name: Setup Julia
+        id: setup-julia
         uses: julia-actions/setup-julia@v3
         with:
           version: ${{ env.JULIA_VERSION }}
@@ -98,7 +101,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v7
         with:
-          python-version: '3.11'
+          python-version: '3.x'
 
       # This job's OWN depot cache, keyed on the `mtk` environment's
       # Project.toml. It must not share a key with the conformance workflow's:
@@ -109,9 +112,9 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.julia
-          key: ${{ runner.os }}-mtk-compiler-${{ env.JULIA_VERSION }}-${{ hashFiles('pkg/EarthSciAST.jl/Project.toml', 'pkg/EarthSciAST.jl/scripts/compiler_agreement_mtk_env/Project.toml') }}
+          key: ${{ runner.os }}-mtk-compiler-${{ steps.setup-julia.outputs.julia-version }}-${{ hashFiles('pkg/EarthSciAST.jl/Project.toml', 'pkg/EarthSciAST.jl/scripts/compiler_agreement_mtk_env/Project.toml') }}
           restore-keys: |
-            ${{ runner.os }}-mtk-compiler-${{ env.JULIA_VERSION }}-
+            ${{ runner.os }}-mtk-compiler-${{ steps.setup-julia.outputs.julia-version }}-
 
       # The adapter self-bootstraps this env on first use (activate,
       # `Pkg.develop` the package when Manifest.toml is absent, instantiate), so

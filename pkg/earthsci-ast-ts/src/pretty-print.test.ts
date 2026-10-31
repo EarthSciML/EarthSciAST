@@ -298,3 +298,21 @@ describe('MathML formatting', () => {
     expect(namedEntities).toEqual([])
   })
 })
+
+describe('LaTeX operator / table names', () => {
+  it('escapes underscores as before', () => {
+    expect(toLatex({ op: 'fn', name: 'my_fn', args: ['x'] } as never)).toBe('\\mathrm{my\\_fn}(x)')
+  })
+
+  it('escapes the other LaTeX specials, backslash included, so any name is well formed', () => {
+    expect(toLatex({ op: 'fn', name: 'a\\b{c}%#&$', args: ['x'] } as never)).toBe(
+      '\\mathrm{a\\backslash{}b\\{c\\}\\%\\#\\&\\$}(x)',
+    )
+  })
+
+  it('spells ^ and ~ as math symbols, since a backslash prefix does not escape them', () => {
+    expect(toLatex({ op: 'fn', name: 'a^b~c', args: ['x'] } as never)).toBe(
+      '\\mathrm{a\\hat{}b\\sim{}c}(x)',
+    )
+  })
+})

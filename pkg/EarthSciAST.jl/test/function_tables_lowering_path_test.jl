@@ -194,7 +194,7 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
               _FTP.serialize_expression(rhs["n_tie_2_4_hand"])
         # Evaluated by both tree-walk compilers on a non-uniform axis: ties
         # low, clamped outside the axis, NaN -> NaN.
-        doc = Dict{String,Any}("esm" => "1.0.0",
+        doc = Dict{String,Any}("esm" => "1.1.0",
             "metadata" => Dict("name" => "N", "authors" => Any["a"]),
             "function_tables" => Dict("t" => Dict(
                 "axes" => Any[Dict("name" => "p", "values" => [1.0, 2.0, 4.0, 8.0])],
@@ -305,6 +305,8 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
             err
         end
         doc = JSON3.read(read(path, String), Dict{String,Any})
+        # The array equation below is a `faq`, which arrives at esm 1.1.0.
+        doc["esm"] = "1.1.0"
         # A state reads the strict table through a scalar lookup and a lookup in
         # an array equation (the array tiers), and a bilinear one on each axis.
         doc["function_tables"]["bi_tab"] = Dict{String,Any}(

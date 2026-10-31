@@ -376,12 +376,37 @@ function formatChemicalSuffixInner(variable: string): string {
  * charge.
  */
 function splitCharge(formula: string): { body: string; charge: string | null } {
-  let m = /^(.+?)(\d+)([+-])$/.exec(formula) // digits-then-sign, e.g. "Ca2+"
-  if (m) return { body: m[1], charge: m[2] + m[3] }
-  m = /^(.+?)([+-])(\d+)$/.exec(formula) // sign-then-digits, e.g. "SO4-2"
-  if (m) return { body: m[1], charge: m[3] + m[2] }
-  m = /^(.+?)([+-])$/.exec(formula) // bare sign, e.g. "Na+"
-  if (m) return { body: m[1], charge: m[2] }
+  // A scan with the same results as the regexes `^(.+?)(\d+)([+-])$`,
+  // `^(.+?)([+-])(\d+)$` and `^(.+?)([+-])$`, tried in that order; the lazy
+  // body against a digit run backtracks polynomially on long digit runs. The
+  // body is never empty and, like `.`, never holds a line terminator.
+  const n = formula.length
+  const isDigitAt = (i: number): boolean => formula[i]! >= '0' && formula[i]! <= '9'
+  const isSignAt = (i: number): boolean => formula[i] === '+' || formula[i] === '-'
+  const bodyOk = (end: number): boolean =>
+    end >= 1 && !/[\n\r\u2028\u2029]/.test(formula.slice(0, end))
+  if (n >= 2 && isSignAt(n - 1)) {
+    // digits-then-sign, e.g. "Ca2+": the shortest body leaves the most digits.
+    let q = n - 1
+    while (q > 0 && isDigitAt(q - 1)) q--
+    const bodyEnd = Math.max(q, 1)
+    if (bodyEnd < n - 1 && bodyOk(bodyEnd)) {
+      return {
+        body: formula.slice(0, bodyEnd),
+        charge: formula.slice(bodyEnd, n - 1) + formula[n - 1],
+      }
+    }
+  }
+  // sign-then-digits, e.g. "SO4-2": the sign sits just before the trailing digits.
+  let r = n
+  while (r > 0 && isDigitAt(r - 1)) r--
+  if (r < n && r >= 2 && isSignAt(r - 1) && bodyOk(r - 1)) {
+    return { body: formula.slice(0, r - 1), charge: formula.slice(r) + formula[r - 1] }
+  }
+  // bare sign, e.g. "Na+"
+  if (n >= 2 && isSignAt(n - 1) && bodyOk(n - 1)) {
+    return { body: formula.slice(0, n - 1), charge: formula[n - 1]! }
+  }
   return { body: formula, charge: null }
 }
 
@@ -502,7 +527,9 @@ function formatChemicalLatex(variable: string): string {
         }
         return result
       }
-      // No chemical segments → plain multi-word variable
+      // No chemical segments → plain multi-word variable. Only `_` is escaped:
+      // a backslash or brace here is the author's own LaTeX markup (e.g.
+      // `\mathbf{u_x}`, see isPreformattedLatex), which must pass through.
       const escaped = variable.replace(/_/g, '\\_')
       return `\\mathrm{${escaped}}`
     }
@@ -1603,9 +1630,20 @@ function formatExpressionNodeMathML(node: ExprNode): string {
   return `<mrow><mi>${node.op}</mi><mo>(</mo>${argList}<mo>)</mo></mrow>`
 }
 
-/** Escape LaTeX-special underscores in a bare operator / identifier name. */
+/** Math-mode spellings of the characters a `\` prefix cannot escape. */
+const LATEX_NAME_SYMBOLS: Record<string, string> = {
+  '\\': '\\backslash{}',
+  '^': '\\hat{}',
+  '~': '\\sim{}',
+}
+
+/**
+ * Escape a bare operator / identifier name for `\mathrm{...}`. Only `_` ever
+ * occurs in a real operator or table name; the rest are escaped so that any
+ * declared name still yields well-formed LaTeX.
+ */
 function latexName(name: string): string {
-  return name.replace(/_/g, '\\_')
+  return name.replace(/[\\{}_$%#&^~]/g, (c) => LATEX_NAME_SYMBOLS[c] ?? '\\' + c)
 }
 
 /** Render a sub-expression in the requested text format. */

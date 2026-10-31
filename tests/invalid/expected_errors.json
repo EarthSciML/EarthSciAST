@@ -4363,5 +4363,16 @@
     "is_valid": false,
     "resolver_error_code": "solver_version_too_old",
     "notes": "The 1.1.0 root mounts a 1.0.0 leaf carrying a top-level `solver` block. Version gates read the file that holds the construct (esm-spec \u00a74.7), so the leaf's solver block is rejected although the root is new enough."
+  },
+  "units_angle_deg_meets_pure_number.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadAngleModel/variables/bad_ratio",
+        "code": "unit_inconsistency"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3 'An angle meets a pure number': the [angle] axis is removed but the scale is kept, so `bad_ratio [1] = theta_deg [deg]` is a scale mismatch (1 vs pi/180). The rad control beside it is clean. Valid half: tests/valid/units_angle_meets_pure_number.esm."
   }
 }

@@ -6,7 +6,7 @@ use crate::{EsmFile, error::EsmError};
 // rule and the load-time rejection of a binder that shadows it cannot drift.
 use crate::flatten::VAR_PLACEHOLDER;
 use jsonschema::error::ValidationErrorKind;
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::{Draft, Validator};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -30,13 +30,13 @@ const ESM_SCHEMA_JSON: &str = include_str!("esm-schema.json");
 /// "date-time"` (and other `format` keywords in the schema) actually reject
 /// malformed strings — this is required for cross-language parity with Julia
 /// and Python, which both enforce format validation.
-fn get_schema() -> &'static JSONSchema {
-    static SCHEMA: OnceLock<JSONSchema> = OnceLock::new();
+fn get_schema() -> &'static Validator {
+    static SCHEMA: OnceLock<Validator> = OnceLock::new();
     SCHEMA.get_or_init(|| {
-        JSONSchema::options()
+        jsonschema::options()
             .with_draft(Draft::Draft202012)
             .should_validate_formats(true)
-            .compile(get_schema_value())
+            .build(get_schema_value())
             .expect("Bundled schema should compile successfully")
     })
 }
@@ -481,15 +481,11 @@ pub fn validate_schema(json_value: &Value) -> Result<(), EsmError> {
     if schema.is_valid(json_value) {
         return Ok(());
     }
-    let validation_result = schema.validate(json_value);
-
-    match validation_result {
-        Ok(_) => Ok(()),
-        Err(errors) => {
-            let error_messages: Vec<String> = errors.map(|error| error.to_string()).collect();
-            Err(EsmError::SchemaValidation(error_messages.join("; ")))
-        }
-    }
+    let error_messages: Vec<String> = schema
+        .iter_errors(json_value)
+        .map(|error| error.to_string())
+        .collect();
+    Err(EsmError::SchemaValidation(error_messages.join("; ")))
 }
 
 /// Map a `jsonschema` [`ValidationErrorKind`] to the STANDARD JSON-Schema
@@ -501,9 +497,10 @@ fn schema_keyword_for_kind(kind: &ValidationErrorKind) -> &'static str {
     match kind {
         K::AdditionalItems { .. } => "additionalItems",
         K::AdditionalProperties { .. } => "additionalProperties",
-        K::AnyOf => "anyOf",
-        // A regex that blew its backtrack budget failed the `pattern` keyword.
-        K::BacktrackLimitExceeded { .. } => "pattern",
+        K::AnyOf { .. } => "anyOf",
+        // A regex that blew its backtrack budget, or whose engine failed
+        // outright, failed the `pattern` keyword.
+        K::BacktrackLimitExceeded { .. } | K::RegexEngineFailure { .. } => "pattern",
         K::Constant { .. } => "const",
         K::Contains => "contains",
         K::ContentEncoding { .. } => "contentEncoding",
@@ -513,13 +510,8 @@ fn schema_keyword_for_kind(kind: &ValidationErrorKind) -> &'static str {
         K::ExclusiveMaximum { .. } => "exclusiveMaximum",
         K::ExclusiveMinimum { .. } => "exclusiveMinimum",
         K::FalseSchema => "false",
-        K::FileNotFound { .. } => "$ref",
         K::Format { .. } => "format",
         K::FromUtf8 { .. } => "contentEncoding",
-        K::Utf8 { .. } => "format",
-        K::JSONParse { .. } => "$ref",
-        K::InvalidReference { .. } => "$ref",
-        K::InvalidURL { .. } => "format",
         K::MaxItems { .. } => "maxItems",
         K::Maximum { .. } => "maximum",
         K::MaxLength { .. } => "maxLength",
@@ -530,16 +522,16 @@ fn schema_keyword_for_kind(kind: &ValidationErrorKind) -> &'static str {
         K::MinProperties { .. } => "minProperties",
         K::MultipleOf { .. } => "multipleOf",
         K::Not { .. } => "not",
-        K::OneOfMultipleValid | K::OneOfNotValid => "oneOf",
+        K::OneOfMultipleValid { .. } | K::OneOfNotValid { .. } => "oneOf",
         K::Pattern { .. } => "pattern",
         K::PropertyNames { .. } => "propertyNames",
         K::Required { .. } => "required",
-        K::Schema => "schema",
         K::Type { .. } => "type",
+        K::UnevaluatedItems { .. } => "unevaluatedItems",
         K::UnevaluatedProperties { .. } => "unevaluatedProperties",
         K::UniqueItems => "uniqueItems",
-        K::UnknownReferenceScheme { .. } => "$ref",
-        K::Resolver { .. } => "$ref",
+        // An unresolvable or unretrievable `$ref`.
+        K::Referencing(_) => "$ref",
     }
 }
 
@@ -573,14 +565,11 @@ pub fn collect_schema_errors(json_value: &Value) -> Vec<crate::validate::SchemaE
     let root = get_schema_value();
     let defs = root.get("$defs");
     let mut out = Vec::new();
-    let mut cache: std::collections::HashMap<String, Option<JSONSchema>> =
+    let mut cache: std::collections::HashMap<String, Option<Validator>> =
         std::collections::HashMap::new();
     // The top level reuses the pre-compiled full schema; branches below compile
     // on demand.
-    let summaries = match get_schema().validate(json_value) {
-        Ok(()) => Vec::new(),
-        Err(errors) => summarize_errors(errors),
-    };
+    let summaries = summarize_errors(get_schema().iter_errors(json_value));
     handle_schema_errors(
         root, defs, &mut cache, root, json_value, "", &summaries, 0, &mut out,
     );
@@ -607,15 +596,15 @@ fn summarize_errors<'a>(
 ) -> Vec<ErrSummary> {
     errors
         .map(|error| ErrSummary {
-            instance_path: error.instance_path.to_string(),
-            schema_path: error.schema_path.to_string(),
-            keyword: schema_keyword_for_kind(&error.kind).to_string(),
+            instance_path: error.instance_path().to_string(),
+            schema_path: error.schema_path().to_string(),
+            keyword: schema_keyword_for_kind(error.kind()).to_string(),
             message: error.to_string(),
             is_composition: matches!(
-                error.kind,
-                ValidationErrorKind::OneOfNotValid
-                    | ValidationErrorKind::OneOfMultipleValid
-                    | ValidationErrorKind::AnyOf
+                error.kind(),
+                ValidationErrorKind::OneOfNotValid { .. }
+                    | ValidationErrorKind::OneOfMultipleValid { .. }
+                    | ValidationErrorKind::AnyOf { .. }
             ),
         })
         .collect()
@@ -630,7 +619,7 @@ fn summarize_errors<'a>(
 fn handle_schema_errors(
     root: &Value,
     defs: Option<&Value>,
-    cache: &mut std::collections::HashMap<String, Option<JSONSchema>>,
+    cache: &mut std::collections::HashMap<String, Option<Validator>>,
     nav_schema: &Value,
     instance: &Value,
     base: &str,
@@ -692,16 +681,13 @@ fn handle_schema_errors(
 /// errors against `instance`. The compiled schema — and thus the `cache` borrow
 /// — is released on return, freeing the caller to recurse.
 fn validate_and_summarize(
-    cache: &mut std::collections::HashMap<String, Option<JSONSchema>>,
+    cache: &mut std::collections::HashMap<String, Option<Validator>>,
     defs: Option<&Value>,
     branch_schema: &Value,
     instance: &Value,
 ) -> Vec<ErrSummary> {
     match compile_branch(cache, defs, branch_schema) {
-        Some(compiled) => match compiled.validate(instance) {
-            Ok(()) => Vec::new(),
-            Err(errors) => summarize_errors(errors),
-        },
+        Some(compiled) => summarize_errors(compiled.iter_errors(instance)),
         None => Vec::new(),
     }
 }
@@ -751,8 +737,21 @@ fn resolve_schema_at<'a>(
     start: &'a Value,
     segments: &[String],
 ) -> Option<&'a Value> {
+    // Past a `$ref` the crate reports the schema path from the document root
+    // (`/$defs/<Name>/…`) rather than from `start`. A branch is compiled with
+    // the root's own `$defs` injected, so such a path resolves against `root`.
+    let start = if segments.first().is_some_and(|s| s == "$defs") {
+        root
+    } else {
+        start
+    };
     let mut cur = follow_refs(root, start);
     for seg in segments {
+        // The crate's `schema_path` names each `$ref` it crosses as a segment
+        // of its own; `follow_refs` has already stepped through it.
+        if seg == "$ref" {
+            continue;
+        }
         cur = follow_refs(root, cur);
         cur = match cur {
             Value::Object(_) => cur.get(seg)?,
@@ -767,10 +766,10 @@ fn resolve_schema_at<'a>(
 /// its internal `$ref`s resolve), memoized by the branch's JSON text. `None` if
 /// the fragment cannot be compiled.
 fn compile_branch<'c>(
-    cache: &'c mut std::collections::HashMap<String, Option<JSONSchema>>,
+    cache: &'c mut std::collections::HashMap<String, Option<Validator>>,
     defs: Option<&Value>,
     branch_schema: &Value,
-) -> Option<&'c JSONSchema> {
+) -> Option<&'c Validator> {
     let key = branch_schema.to_string();
     cache
         .entry(key)
@@ -779,10 +778,10 @@ fn compile_branch<'c>(
             if let (Some(obj), Some(defs)) = (wrapper.as_object_mut(), defs) {
                 obj.entry("$defs").or_insert_with(|| defs.clone());
             }
-            JSONSchema::options()
+            jsonschema::options()
                 .with_draft(Draft::Draft202012)
                 .should_validate_formats(true)
-                .compile(&wrapper)
+                .build(&wrapper)
                 .ok()
         })
         .as_ref()

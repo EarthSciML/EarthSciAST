@@ -37,7 +37,7 @@ env:
   # The current stable release, like conformance-testing.yml's julia-tests
   # leg whose depot this restores.
   JULIA_VERSION: '1'
-  PYTHON_VERSION: '3.11'
+  PYTHON_VERSION: '3.x'
 
 jobs:
   rust:

@@ -26,6 +26,10 @@ on:
     paths: [ 'pkg/EarthSciAST.jl/Project.toml' ]
   workflow_dispatch:
 
+# Every job reads only, except the registration, which asks for its own write.
+permissions:
+  contents: read
+
 concurrency:
   group: release-register
   cancel-in-progress: false
@@ -46,9 +50,15 @@ jobs:
     needs: release-analysis
     if: needs.release-analysis.outputs.needs_release == 'true'
     uses: ./.github/workflows/conformance-testing.yml
+    # A called workflow's jobs may ask for no more than the caller grants, and
+    # GitHub checks that before anything runs. conformance-testing.yml's
+    # `conformance-results` job asks for `pull-requests: write`, so without
+    # this the workflow-level `contents: read` rejects the whole run.
+    permissions:
+      contents: read
+      pull-requests: write
     with:
       release_validation: true
-      ref: ${{ github.sha }}
     secrets: inherit
 
   # The `mtk` leg of the compiler-agreement tier, which lives in its own
@@ -58,7 +68,7 @@ jobs:
     if: needs.release-analysis.outputs.needs_release == 'true'
     uses: ./.github/workflows/mtk-compiler.yml
     with:
-      ref: ${{ github.sha }}
+      release_validation: true
     secrets: inherit
 
   register-julia:

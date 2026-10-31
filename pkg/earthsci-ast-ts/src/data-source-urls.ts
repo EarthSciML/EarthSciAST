@@ -55,6 +55,16 @@ export function removeDotSegments(path: string): string {
  * relative path after `file://` would silently make its first segment the URL
  * HOST — the exact misresolution §8.2.1 exists to stop.
  */
+/**
+ * `s` without its trailing slashes. A scan rather than `/\/+$/`, which
+ * backtracks quadratically on a long run of slashes not at the end.
+ */
+function stripTrailingSlashes(s: string): string {
+  let end = s.length
+  while (end > 0 && s[end - 1] === '/') end--
+  return s.slice(0, end)
+}
+
 function absoluteBase(baseDir: string): string {
   const b = (baseDir || '.').replace(/\\/g, '/')
   if (b.startsWith('/')) return b
@@ -62,7 +72,7 @@ function absoluteBase(baseDir: string): string {
     typeof process !== 'undefined' && typeof process.cwd === 'function'
       ? process.cwd().replace(/\\/g, '/')
       : '/'
-  return cwd.replace(/\/+$/, '') + '/' + b
+  return stripTrailingSlashes(cwd) + '/' + b
 }
 
 /** Resolve one `url_template` / `mirrors` entry per esm-spec §8.2.1. */
@@ -86,7 +96,7 @@ export function resolveSourceUrl(template: string, baseDir: string): string {
 
   const joined = template.startsWith('/')
     ? template
-    : absoluteBase(baseDir).replace(/\/+$/, '') + '/' + template
+    : stripTrailingSlashes(absoluteBase(baseDir)) + '/' + template
   const resolved = removeDotSegments(joined)
   if (resolved.includes('?') || resolved.includes('#')) {
     throw new EsmDiagnosticError(

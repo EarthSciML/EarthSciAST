@@ -18,6 +18,10 @@ on:
         required: true
         type: string
 
+# Every job reads only, except those that ask for more below.
+permissions:
+  contents: read
+
 concurrency:
   group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
@@ -50,7 +54,7 @@ jobs:
 
       - uses: actions/setup-python@v7
         with:
-          python-version: '3.11'
+          python-version: '3.x'
 
       - name: Build and check distributions
         working-directory: pkg/earthsci-ast-py

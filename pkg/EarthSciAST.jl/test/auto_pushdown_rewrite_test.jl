@@ -204,7 +204,7 @@ end
             "rr_K"=>scal(RR_K), "rr_L"=>scal(RR_L))
 
         return Dict(
-            "esm" => "0.9.0",
+            "esm" => "1.1.0",
             "metadata" => Dict("name" => "isrm_clean_L1"),
             "index_sets" => Dict(
                 "src_cells"    => Dict("kind"=>"interval", "size"=>GRID),

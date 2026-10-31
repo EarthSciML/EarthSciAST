@@ -441,27 +441,46 @@ export function resolveTimeSpan(
 export function rejectConstUnitsPreV12(view: unknown): void {
   if (!isObject(view)) return
   if (!below1(declaredMinor(view), 2)) return
-  const find = (node: unknown, at: string): string | null => {
-    if (Array.isArray(node)) {
-      for (let i = 0; i < node.length; i++) {
-        const hit = find(node[i], `${at}/${i}`)
-        if (hit !== null) return hit
-      }
-    } else if (isObject(node)) {
-      if ('op' in node && 'units' in node) return at
-      for (const key of Object.keys(node)) {
-        const hit = find(node[key], `${at}/${key}`)
-        if (hit !== null) return hit
-      }
-    }
-    return null
-  }
-  const path = find(view, '')
+  const path = findUnitBearingNode(view, '')
   if (path === null) return
   throw new EsmMachineryError(
     ERROR_CODES.CONST_UNITS_VERSION_TOO_OLD,
     `declared \`units\` on an expression node require esm >= 1.2.0; file declares ${String(view.esm)}. Offending path: ${path}`,
   )
+}
+
+/** The JSON-pointer path of the first expression node declaring `units`, or null. */
+function findUnitBearingNode(node: unknown, at: string): string | null {
+  if (Array.isArray(node)) {
+    for (let i = 0; i < node.length; i++) {
+      const hit = findUnitBearingNode(node[i], `${at}/${i}`)
+      if (hit !== null) return hit
+    }
+  } else if (isObject(node)) {
+    if ('op' in node && 'units' in node) return at
+    for (const key of Object.keys(node)) {
+      const hit = findUnitBearingNode(node[key], `${at}/${key}`)
+      if (hit !== null) return hit
+    }
+  }
+  return null
+}
+
+/**
+ * Raise a RESOLVED document's declared `esm` to the 1.2.0 floor when it
+ * contains a unit-bearing `const` but declares less. FLOOR only.
+ *
+ * The §4.8.5 gate reads the file that holds the construct (esm-spec §4.7), so
+ * a 1.0.0 parent may mount a 1.2.0 leaf that uses one. Once the leaf is
+ * inlined, the resolved document carries the node under the parent's version,
+ * and `validate()` re-enters the loader with exactly that object. This is the
+ * const-units counterpart of `raiseFaqVersionFloor`.
+ */
+export function raiseConstUnitsVersionFloor(doc: unknown): void {
+  if (!isObject(doc)) return
+  if (!below1(declaredMinor(doc), 2)) return
+  if (findUnitBearingNode(doc, '') === null) return
+  doc.esm = '1.2.0'
 }
 
 /**

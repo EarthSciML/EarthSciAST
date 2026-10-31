@@ -22,6 +22,20 @@ updates:
     directory: "/pkg/earthsci-ast-ts"
     schedule:
       interval: "weekly"
+    ignore:
+      # No typescript-eslint release accepts TypeScript 7 yet (its peer range
+      # stops below 6.1), so the bump makes `npm ci` fail. Drop this once it does.
+      - dependency-name: "typescript"
+        versions: [">=7"]
+      # Each major from 14 on changes the shape of the generated src/generated.ts,
+      # which is part of the published types. Adopt a new major as its own change.
+      - dependency-name: "json-schema-to-typescript"
+        update-types: ["version-update:semver-major"]
+      # The @types/node major tracks the engines.node floor (the oldest tested
+      # Node LTS), so the type-checker rejects APIs that floor lacks. Raise it
+      # with the floor, not on Node's release schedule.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       npm:
         patterns: ["*"]
@@ -32,6 +46,15 @@ updates:
       - "/pkg/earthsci-typst-plugin"
     schedule:
       interval: "weekly"
+    ignore:
+      # diffsol 0.18 changes the integrator's numbers (two data-source tests
+      # move by ~1.5e-6 against a 1e-6 bar). Take it as its own numerics review.
+      - dependency-name: "diffsol"
+        versions: [">=0.12"]
+      # Everything in the graph links getrandom 0.3, and 0.4's `wasm_js` does
+      # not build under the Typst plugin's custom random source.
+      - dependency-name: "getrandom"
+        versions: [">=0.4"]
     groups:
       cargo:
         patterns: ["*"]

@@ -467,7 +467,10 @@ export function formatCanonicalFloat(f: number): string {
 }
 
 function normalizeExponent(s: string): string {
-  const m = /^(-?[0-9]*\.?[0-9]*)[eE]([+-]?[0-9]+)$/.exec(s)
+  // `[0-9]*(?:\.[0-9]*)?` accepts the same mantissas as `[0-9]*\.?[0-9]*`
+  // without the two adjacent digit runs, which backtrack quadratically on a
+  // long run of digits that never reaches an exponent.
+  const m = /^(-?[0-9]*(?:\.[0-9]*)?)[eE]([+-]?[0-9]+)$/.exec(s)
   if (!m) return s
   const mant = m[1]!
   let exp = m[2]!
@@ -483,5 +486,14 @@ function normalizeExponent(s: string): string {
 
 function expandToPlain(f: number): string {
   const s = f.toFixed(20)
-  return s.replace(/(\.[0-9]*?)0+$/, '$1').replace(/\.$/, '')
+  // Drop the fraction's trailing zeros, then a dot left with nothing after it.
+  // A scan rather than `/(\.[0-9]*?)0+$/`, which backtracks quadratically.
+  // toFixed falls back to exponent notation at |f| >= 1e21; that has no
+  // all-digit fraction to trim.
+  const dot = s.indexOf('.')
+  if (dot < 0 || !/^[0-9]*$/.test(s.slice(dot + 1))) return s
+  let end = s.length
+  while (end > dot + 1 && s[end - 1] === '0') end--
+  if (end === dot + 1) end = dot
+  return s.slice(0, end)
 }
