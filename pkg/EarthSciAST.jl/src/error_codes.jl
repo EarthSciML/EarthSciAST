@@ -261,6 +261,11 @@ const ERROR_CODES = (
     # renaming") — the mount-edge mirror of
     # `template_import_rename_unknown_name`.
     SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME = "subsystem_index_set_rename_unknown_name",
+    # A mount edge's `url_substitutions` key names no bare `{name}` placeholder
+    # of any `url_template` / `mirrors` entry of the referenced document's
+    # `data_sources` (esm-spec §4.7 "Binding a data source's location at the
+    # mount"): like `index_set_rename`, the edge never invents a name.
+    URL_SUBSTITUTION_UNKNOWN_NAME = "url_substitution_unknown_name",
 
     # `index_set_rename` on a mount form that does not implement it (esm-spec
     # §4.7 "Mount-edge index-set renaming", "Where it applies"). The field is a

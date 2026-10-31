@@ -1300,7 +1300,36 @@ function _resolve_mount_edge_core(
             nested_contributed = nested_contributed
         )
     end
+    # Step (3), the leaf's data-source locations (esm-spec §4.7 "Binding a data
+    # source's location at the mount", §8.2.1). The leaf as resolved at this edge
+    # already carries what its own nested mounts hoisted into it, so this edge's
+    # `url_substitutions` bind those placeholders too, a leading value anchored
+    # on THIS (the mounting) document's directory. Then the leaf's locations
+    # resolve against the LEAF's directory — the file that wrote them — before
+    # either mount form hoists them into a document with a different one.
+    _resolve_mount_data_sources!(comp, entry, base_path, compdir, mount_noun)
     return comp, compdir, leaf_fold_env, leaf_precision
+end
+
+"""
+    _resolve_mount_data_sources!(comp, entry, base_path, compdir, mount_noun) -> comp
+
+At one mount edge: apply the edge's `url_substitutions` to the referenced
+document `comp` with the mounting document's directory `base_path` (esm-spec
+§4.7 "Binding a data source's location at the mount"), then resolve `comp`'s
+`data_sources` locations per §8.2.1 against the referenced document's own
+directory `compdir`. In place; `comp` is a mutable native tree.
+"""
+function _resolve_mount_data_sources!(
+        comp::AbstractDict, entry, base_path::AbstractString,
+        compdir::AbstractString, mount_noun::AbstractString
+    )
+    apply_mount_url_substitutions!(
+        comp, _get_field(entry, :url_substitutions, nothing), base_path, mount_noun
+    )
+    resolved = _resolve_data_source_urls(comp, compdir)
+    resolved === nothing || (comp["data_sources"] = resolved["data_sources"])
+    return comp
 end
 
 """
@@ -1743,6 +1772,14 @@ function _inline_toplevel_reaction_system_refs!(
                 comp, compdir, visited;
                 precision = leaf_effective
             )
+            # esm-spec §4.7 "Binding a data source's location at the mount" and
+            # §8.2.1, as at every other mount edge: this edge's
+            # `url_substitutions`, then the leaf's own locations against its
+            # own directory, before the merge below hoists them.
+            _resolve_mount_data_sources!(
+                comp, entry, base_path, compdir,
+                "top-level reaction system ref '$(ref)'"
+            )
             crsystems = get(comp, "reaction_systems", nothing)
             crsystems isa AbstractDict || throw(
                 SubsystemRefError(
@@ -2149,6 +2186,7 @@ function _resolve_subsystem_ref(
         injected_imports = ref.expression_template_imports,
         index_set_rename = ref.index_set_rename,
         rename_where = "subsystem ref '$(ref.ref)'",
+        url_substitutions = ref.url_substitutions,
         precision = precision
     )
     n_models = loaded.models === nothing ? 0 : length(loaded.models)
@@ -2215,6 +2253,7 @@ function _load_ref(
         injected_imports::AbstractVector = Any[],
         index_set_rename = nothing,
         rename_where::AbstractString = "mount edge",
+        url_substitutions = nothing,
         precision::AbstractString = _DEFAULT_ELEMENT_TYPE
     )::EsmFile
     # esm-spec §4.7: expand `${VAR}` from the environment before resolving.
@@ -2238,6 +2277,8 @@ function _load_ref(
                 injected_imports = injected_imports,
                 index_set_rename = index_set_rename,
                 rename_where = rename_where,
+                url_substitutions = url_substitutions,
+                binder_dir = base_path,
                 precision = precision
             )
         else
@@ -2248,6 +2289,7 @@ function _load_ref(
                 injected_imports = injected_imports,
                 index_set_rename = index_set_rename,
                 rename_where = rename_where,
+                url_substitutions = url_substitutions,
                 precision = precision
             )
         end
@@ -2445,6 +2487,7 @@ function _load_local_ref(
         injected_imports::AbstractVector = Any[],
         index_set_rename = nothing,
         rename_where::AbstractString = "mount edge",
+        url_substitutions = nothing,
         precision::AbstractString = _DEFAULT_ELEMENT_TYPE
     )::EsmFile
     resolved_path = abspath(joinpath(base_path, ref))
@@ -2505,8 +2548,20 @@ function _load_local_ref(
         metaparameters = api_meta,
         precision = leaf_effective
     )
+    leaf_doc = inlined_ref === nothing ? ref_doc : inlined_ref
+    # esm-spec §4.7 "Binding a data source's location at the mount" / §8.2.1:
+    # this edge's `url_substitutions` on the leaf as resolved here (its own
+    # top-level mounts already hoisted), then the leaf's locations against its
+    # own directory — the same step `_resolve_mount_edge_core` runs.
+    if url_substitutions !== nothing
+        leaf_doc = _to_ordered(leaf_doc)
+        _resolve_mount_data_sources!(
+            leaf_doc, Dict{String, Any}("url_substitutions" => url_substitutions),
+            base_path, ref_base, rename_where
+        )
+    end
     file = _load_parsed(
-        inlined_ref === nothing ? ref_doc : inlined_ref; base_path = ref_base,
+        leaf_doc; base_path = ref_base,
         metaparameters = effective,
         injected_imports = injected_imports,
         index_set_rename = index_set_rename,
@@ -2551,6 +2606,8 @@ function _load_remote_ref(
         injected_imports::AbstractVector = Any[],
         index_set_rename = nothing,
         rename_where::AbstractString = "mount edge",
+        url_substitutions = nothing,
+        binder_dir::AbstractString = "",
         precision::AbstractString = _DEFAULT_ELEMENT_TYPE
     )::EsmFile
     local content::String
@@ -2594,6 +2651,15 @@ function _load_remote_ref(
     # subsystem-ref edge's injected discretization (esm-spec §9.7.10 form A)
     # folds into the single component's scope before resolution.
     url_base = _url_dirname(url)
+    # esm-spec §4.7 "Binding a data source's location at the mount": this edge's
+    # `url_substitutions`, a leading value anchored on the MOUNTING document's
+    # location. A remote leaf's own locations are not §8.2.1-resolved here.
+    if url_substitutions !== nothing
+        raw_data = _to_ordered(raw_data)
+        apply_mount_url_substitutions!(
+            raw_data, url_substitutions, binder_dir, rename_where
+        )
+    end
     effective = _backfill_leaf_metaparameters(raw_data, metaparameters, api_meta)
     file = _lower_and_coerce(
         raw_data, url_base; metaparameters = effective,
