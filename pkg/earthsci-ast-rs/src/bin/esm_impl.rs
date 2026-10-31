@@ -2851,7 +2851,7 @@ fn format_csv_float(v: f64) -> String {
 /// plan), so pointing the CLI at a real Zarr sink later is a swap of the
 /// serializer, not of the derivation. It is deliberately NOT done here:
 /// EarthSciIO is behind the opt-in `esio` feature, which raises the crate's
-/// MSRV above its declared 1.89, and `esm` ships on the default features.
+/// MSRV above its declared 1.89, and `esm` also builds without it.
 fn gridded_results(
     esm_file: &earthsci_ast::EsmFile,
     sol: &earthsci_ast::Solution,
@@ -3696,7 +3696,8 @@ impl Verdict {
 // cannot, naming the source.
 //
 // The reader itself is EarthSciIO, behind the crate's opt-in `esio` feature
-// (it pulls netcdf/hdf5 C libraries no other consumer should have to build).
+// (a dependency tree no library consumer should have to build). The release
+// binaries turn it on; a `cargo install` without it gets the refusal below.
 // A binary built without it still detects a consumed source and refuses,
 // which is the whole point: the two builds differ in what they can read, never
 // in whether they tell you.

@@ -25,10 +25,13 @@ earthsci-ast = "0.3"
 ### As a CLI Tool
 
 ```bash
-cargo install earthsci-ast
+cargo install earthsci-ast --features esio
 ```
 
-(The `cli` feature is part of the default feature set.)
+(The `cli` feature is part of the default feature set. `esio` links the
+EarthSciIO data readers, so `esm` can run documents whose parameters read
+`data_sources` (parquet, netcdf, zarr, ...); without it `esm` refuses such a
+document. The prebuilt binaries attached to each GitHub release include it.)
 
 ### For WASM
 

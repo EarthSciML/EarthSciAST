@@ -458,6 +458,13 @@ jobs:
       - name: Build CLI binary
         run: cargo build --bin esm --verbose
 
+      # A consumer that only builds problems (EarthSciIntegrator's planner)
+      # depends on the crate with `default-features = false`, so the library
+      # must compile without `solve` (esm-libraries-spec §2.5.9, issue #581).
+      # The library only: the test suite integrates trajectories throughout.
+      - name: Build library without default features
+        run: cargo check --lib --no-default-features --verbose
+
       - name: Install wasm32 target
         if: matrix.rust == 'stable'
         run: rustup target add wasm32-unknown-unknown
