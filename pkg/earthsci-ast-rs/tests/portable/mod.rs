@@ -87,6 +87,8 @@ pub const SCALING_FIXTURES: &[(&str, u64, &str)] = &[
     scaling_fixture!("ragged_contraction", 1000),
     scaling_fixture!("makearray_nested_sum", 100),
     scaling_fixture!("makearray_nested_sum", 1000),
+    scaling_fixture!("band_transpose", 100),
+    scaling_fixture!("band_transpose", 1000),
 ];
 
 macro_rules! tier_doc {
