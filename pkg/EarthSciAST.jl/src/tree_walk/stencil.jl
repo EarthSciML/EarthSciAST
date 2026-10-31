@@ -431,6 +431,18 @@ function _stencilize_op_core(e::OpExpr, ctx::_StencilCtx)
     # per-cell tier.
     lane = _try_exprtbl_lane(e, ctx)
     lane === nothing || return lane
+    # A SHORT scalar contraction (an `faq` with no output index) in expression
+    # position is the gather `index(faq, k…)` with no subscripts, so it unrolls
+    # exactly as `_stencilize_indexed` unrolls a contracting producer: the term
+    # list, order and fold the per-cell reference builds for it
+    # (`_resolve_index_of_faq` with no index arguments). The column mean of a
+    # flattened model, `c·(Σ_k u[i,j,k]/L − u[i,j,k])` in a makearray region
+    # value summed with other terms, reaches the tier this way; the reduction
+    # hoist (hoist.jl) does not look inside a region value. Below the
+    # contraction loop's floor only, as for a top-level contraction
+    # (`long_contraction`): a longer one is left to the tiers that keep it a
+    # loop, and refused by name where none does.
+    _is_short_scalar_contraction(e) && return _stencilize_indexed(e, ASTExpr[], ctx)
     throw(_StencilFallback("unsupported loop-var-dependent op '$op'"))
 end
 
@@ -1018,7 +1030,8 @@ end
 # regions at every reachable site iff their per-path keys were equal.
 function _branch_key!(io::IOBuffer, e, idxset::Set{String}, idx_env, const_arrays,
                       memo::IdDict{OpExpr,Bool},
-                      seen::IdDict{OpExpr,Nothing}=IdDict{OpExpr,Nothing}())
+                      seen::IdDict{OpExpr,Nothing}=IdDict{OpExpr,Nothing}(),
+                      segs::Dict{Any,Int}=Dict{Any,Int}())
     e isa OpExpr || return
     _refs_idxset(e, idxset, memo) || return
     haskey(seen, e) && return
@@ -1026,23 +1039,86 @@ function _branch_key!(io::IOBuffer, e, idxset::Set{String}, idx_env, const_array
     if e.op == "index" && !isempty(e.args)
         fa = e.args[1]
         if fa isa OpExpr && (fa.op == "makearray" || _is_faq_op(fa.op))
-            _branch_key_indexed!(io, fa::OpExpr, e.args[2:end], idxset, idx_env, const_arrays, memo, seen)
+            _branch_key_indexed!(io, fa::OpExpr, e.args[2:end], idxset, idx_env, const_arrays, memo, seen, segs)
+            return
+        end
+        # `index(a ⊕ b, k…)`: `_stencilize_index` pushes the gather into the
+        # operands, so a producer among them selects its region at `k…`, and
+        # the key must see that selection where the spine makes it.
+        if fa isa OpExpr && _is_scalar_op((fa::OpExpr).op) &&
+           _reaches_indexable_producer(fa::OpExpr)
+            _branch_key_pushdown!(io, fa::OpExpr, e.args[2:end], idxset, idx_env,
+                                  const_arrays, memo, seen, segs)
+            for k in 2:length(e.args)
+                _branch_key!(io, e.args[k], idxset, idx_env, const_arrays, memo, seen, segs)
+            end
             return
         end
     end
-    for a in e.args
-        _branch_key!(io, a, idxset, idx_env, const_arrays, memo, seen)
+    # A short scalar contraction is unrolled by the spine (`_stencilize_op_core`),
+    # its contracted indices bound term by term: key it the same way, so a
+    # region select at a contracted index is keyed at each of its values.
+    if _is_short_scalar_contraction(e)
+        _branch_key_indexed!(io, e, ASTExpr[], idxset, idx_env, const_arrays, memo, seen, segs)
+        return
     end
-    e.expr_body !== nothing && _branch_key!(io, e.expr_body, idxset, idx_env, const_arrays, memo, seen)
+    for a in e.args
+        _branch_key!(io, a, idxset, idx_env, const_arrays, memo, seen, segs)
+    end
+    e.expr_body !== nothing && _branch_key!(io, e.expr_body, idxset, idx_env, const_arrays, memo, seen, segs)
     if e.values !== nothing
         for v in e.values
-            _branch_key!(io, v, idxset, idx_env, const_arrays, memo, seen)
+            _branch_key!(io, v, idxset, idx_env, const_arrays, memo, seen, segs)
         end
     end
 end
+
+# An `faq` with no output index, no filter and no join (a scalar reduction)
+# whose ranges are all constant and dense, with fewer terms than the
+# contraction loop's floor: the one the affine spine unrolls.
+function _is_short_scalar_contraction(e::OpExpr)
+    (_is_faq_op(e.op) && e.expr_body !== nothing && e.join_gates === nothing &&
+     e.filter === nothing && !_is_array_producer(e)) || return false
+    n = 1
+    for v in values(_ranges_dict(e))
+        (v isa AbstractVector && _is_const_int_range(v)) || return false
+        n *= length(_expand_int_range(v))
+    end
+    return n < _contraction_loop_min()
+end
+
+# Whether an elementwise operand tree holds an array producer that a gather
+# pushed through it (`_stencilize_index`) would index.
+function _reaches_indexable_producer(e::OpExpr)
+    (e.op == "makearray" || _is_array_producer(e)) && return true
+    _is_scalar_op(e.op) || return false
+    return any(a -> a isa OpExpr && _reaches_indexable_producer(a::OpExpr), e.args)
+end
+
+# The key of `index(fa, kargs…)` for an elementwise `fa`: each producer operand
+# keyed as gathered at `kargs`, nested elementwise operands followed, and every
+# other operand keyed as it stands.
+function _branch_key_pushdown!(io::IOBuffer, fa::OpExpr, kargs::Vector{ASTExpr},
+                               idxset::Set{String}, idx_env, const_arrays,
+                               memo::IdDict{OpExpr,Bool}, seen::IdDict{OpExpr,Nothing},
+                               segs::Dict{Any,Int})
+    for a in fa.args
+        a isa OpExpr || continue
+        ao = a::OpExpr
+        if ao.op == "makearray" || _is_array_producer(ao)
+            _branch_key_indexed!(io, ao, kargs, idxset, idx_env, const_arrays, memo, seen, segs)
+        elseif _is_scalar_op(ao.op)
+            _branch_key_pushdown!(io, ao, kargs, idxset, idx_env, const_arrays, memo, seen, segs)
+        else
+            _branch_key!(io, ao, idxset, idx_env, const_arrays, memo, seen, segs)
+        end
+    end
+end
+
 function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTExpr},
                               idxset::Set{String}, idx_env, const_arrays,
-                              memo::IdDict{OpExpr,Bool}, seen::IdDict{OpExpr,Nothing})
+                              memo::IdDict{OpExpr,Bool}, seen::IdDict{OpExpr,Nothing},
+                              segs::Dict{Any,Int})
     if producer.op == "makearray"
         kvals = Int[_eval_const_int(a, idx_env, const_arrays) for a in kargs]
         r, region = _select_region(producer, kvals)
@@ -1068,9 +1144,9 @@ function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTE
                 rank == length(ns) || return
                 ka = kargs[ns]
             end
-            _branch_key_indexed!(io, re, ka, idxset, idx_env, const_arrays, memo, seen)
+            _branch_key_indexed!(io, re, ka, idxset, idx_env, const_arrays, memo, seen, segs)
         else
-            _branch_key!(io, sel, idxset, idx_env, const_arrays, memo, seen)
+            _branch_key!(io, sel, idxset, idx_env, const_arrays, memo, seen, segs)
         end
         return
     end
@@ -1118,6 +1194,20 @@ function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTE
                                    "has no constant dense range"))
         citers[d] = collect(_expand_int_range(raw))
     end
+    # ONE SEGMENT PER BINDING. Each gather walks the body afresh under its own
+    # bindings (below), so a producer gathered again at the same subscripts, in
+    # the same environment, prints a back-reference to the segment it printed
+    # the first time instead of walking the body again: a nest of templates
+    # gathered through each other costs a walk per DISTINCT binding, not per
+    # path. Equal keys still mean equal selections: a back-reference names a
+    # segment printed earlier in the same key, at the same place in the walk.
+    skey = (objectid(producer), kvals, sort!(collect(idx_env); by = first))
+    sid = get(segs, skey, 0)
+    if sid != 0
+        print(io, 'R', sid, ';')
+        return
+    end
+    sub = IOBuffer()
     n = length(oi)
     saved = Vector{Union{Nothing,Int}}(undef, n)
     added = falses(n)
@@ -1142,7 +1232,20 @@ function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTE
         end
     end
     if nc == 0
-        _branch_key!(io, body, idxset, idx_env, const_arrays, memo, seen)
+        # The output indices are binders too, and the same two caches go stale
+        # under them. `memo` was filled under the idxset WITHOUT this producer's
+        # output names: a body read before as "references no loop index" (it
+        # names only `i`, which was not yet a loop index) would be PRUNED here,
+        # so a region select inside it would never reach the key. That is the
+        # lifted equation `faq(index(makearray(…), i), i)`: gathered at `_lp0`,
+        # its makearray picks a region per cell, but every cell keyed equal and
+        # took the first cell's template, values and all, silently. So a name
+        # this producer adds gets a fresh memo. `seen` is per binding for the
+        # same reason as below: a node shared with another gather of this
+        # producer, at other subscripts, must be keyed again at these.
+        bmemo = any(added) ? IdDict{OpExpr,Bool}() : memo
+        _branch_key!(sub, body, idxset, idx_env, const_arrays, bmemo,
+                     IdDict{OpExpr,Nothing}(), segs)
     else
         # FRESH `_refs_idxset` memo. That memo caches, per node, whether the node
         # references `idxset` — and `idxset` just GREW by the contracted names. An
@@ -1157,9 +1260,9 @@ function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTE
             for d in 1:nc
                 idx_env[cnames[d]] = tup[d]
             end
-            print(io, 'C')
-            _branch_key!(io, body, idxset, idx_env, const_arrays, cmemo,
-                         IdDict{OpExpr,Nothing}())
+            print(sub, 'C')
+            _branch_key!(sub, body, idxset, idx_env, const_arrays, cmemo,
+                         IdDict{OpExpr,Nothing}(), segs)
         end
     end
     for d in nc:-1:1
@@ -1174,6 +1277,10 @@ function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTE
         old === nothing ? delete!(idx_env, nm) : (idx_env[nm] = old)
         added[d] && delete!(idxset, nm)
     end
+    segs[skey] = length(segs) + 1
+    print(io, 'S', length(segs), '{')
+    write(io, take!(sub))
+    print(io, '}')
 end
 
 # Extend `var_map` with the lane sentinels → a negative slot marker. `_compile`

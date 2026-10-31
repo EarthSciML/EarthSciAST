@@ -319,6 +319,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("makearray_nested_reduction_test.jl")   # #547: a nested scalar reduction in a makearray region
     include("affine_reduce_test.jl")                # the affine tier's run-time contraction fold
     include("native_probe_fixtures_test.jl")        # native's probe fixtures: rank > 3, fill sections, const subscripts
+    include("native_lifted_makearray_test.jl")      # a makearray gathered in a lifted equation (EarthSciIntegrator #34)
     include("tree_walk_tcadence_test.jl")           # B3 time-cadence tier (t-memoized slots)
     # `compiler=:interpreter`: an in-place build that skips no prelude slot,
     # which is what the tiering tests above use as their differential oracle.

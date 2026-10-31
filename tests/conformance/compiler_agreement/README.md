@@ -27,20 +27,32 @@ Design decisions of record (2026-09-21) that this tier implements:
 * Fixtures are **referenced by path** from the tiers that already own them.
   Nothing about a document's physics is decided here.
 
-> **Status.** `golden/` holds all six reference trajectories, minted from the
+> **Status.** `golden/` holds all eight reference trajectories, minted from the
 > Julia `interpreter` and committed; each one reproduces the analytic anchor its
 > fixture carries. Julia, Rust and Python each answer for both `interpreter`
 > and `native` with no refusals on any fixture, and all three are
 > `bindings_required` for each. Every fixture's `required` map names `native`
 > for all three, so a `native` refusal anywhere in the tier is red (for Julia
 > and Rust whatever the map says; for Python because the map names it); Python is `bindings_required` for `sympy`,
-> which refuses the four array fixtures by name and runs the two scalar ones.
+> which refuses the six array fixtures by name and runs the two scalar ones.
 > **Julia is `bindings_required` for `mtk`** as of 2026-09-22:
 > `esm_problem(…; compiler = :mtk)` builds every one of the six fixtures
 > through `ModelingToolkit.System` → `mtkcompile` → `ODEProblem` and lands
 > inside each fixture's band, with no refusals — the array fixtures included,
 > because their stencils are already `arrayop` over an index set and so carry no
 > continuous spatial dimension for that compiler to refuse.
+>
+> **The two lifted fixtures** (`faq_lifted_makearray_upwind`,
+> `faq_lifted_column_mean`, added 2026-10-30 after EarthSciIntegrator PR #34
+> found Julia's `native` wrong on the first form and refusing the second) are
+> the shape an operator's derived document writes: a whole-array `D(u)` whose
+> right-hand side gathers a `makearray` inside a lifting `faq`, with an `faq`
+> over the region as a region value. Julia, Rust and Python answer for both
+> under `interpreter` and `native`; Python's `sympy` refuses both by name, as
+> it refuses every array fixture; and Julia's `mtk` refuses both by name
+> (`compiler_refused_rule`: a region value that is itself an array, which it
+> fills with one scalar and has no lowering of). Neither has been run under
+> `xla` yet.
 >
 > Two things about the `mtk` stage that are properties of the compiler rather
 > than of this tier. It needs ModelingToolkit **and a nonlinear solver** — an
@@ -156,6 +168,8 @@ carry an inline `tests` block.
 | `diffusion_2d_dirichlet_n3` | `conformance/pde_simulation/fixtures/diffusion_2d_dirichlet_n3.esm` | `Diff2D` | `pde_simulation` | copied | the rank-2 twin: a neighbour-coupled 5-point stencil |
 | `advection_1d_periodic_n4` | `conformance/pde_simulation/fixtures/advection_1d_periodic_n4.esm` | `Advect1D` | `pde_simulation` | copied | upwind advection — a wrap gather rather than a symmetric stencil |
 | `faq_discretized_1d_heat` | `fixtures/faq/15_discretized_1d_heat.esm` | `Heat1D` | `simulate_faq` | `reduction` | the same physics written as a `faq` over a `makearray` with ghost regions, so the array machinery rather than a pre-discretized operator is what each compiler has to lower |
+| `faq_lifted_makearray_upwind` | `fixtures/faq/30_lifted_makearray_upwind.esm` | `Upwind1D` | `simulate_faq` | `reduction` | a whole-array equation in the lifted form an operator's derived document writes, `D(u) = faq_i(index(makearray(…), i))`: an upwind stencil region and a fixed inflow face, the makearray gathered at the lifted `faq`'s own index rather than at the equation's loop. Julia's `native` once gave every cell the face's value (zero), with no diagnostic |
+| `faq_lifted_column_mean` | `fixtures/faq/31_lifted_column_mean.esm` | `ColumnMean` | `simulate_faq` | `reduction` | the same lifted form with a contracting `faq` (a column sum) inside the makearray's region value, which Julia's `native` once refused |
 | `logistic_growth` | `valid/tests_analyses_comprehensive.esm` | `LogisticGrowth` | inline `tests` | `transcendental` | an **unshaped** ODE with a closed-form solution. `native` must run this on its compiled tiers, not a scalar interpreter: no document-type switch inside a compiler |
 | `decay_solver_block` | `valid/solver_block.esm` | `Decay` | inline `tests` | `transcendental` | the smallest unshaped ODE with a closed form, and the one that carries a `solver` block. **Its `solver.stiffness: "high"` is load-bearing, and the stiff method must be a high-order one** (the golden is minted with `Rodas5P`) — see below |
 

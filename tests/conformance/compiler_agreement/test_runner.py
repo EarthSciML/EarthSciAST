@@ -621,7 +621,7 @@ def test_the_stub_answers_for_every_manifest_fixture(tmp_path):
     payload = json.loads(out.read_text())
     ids = [fx["id"] for fx in json.loads(COMMITTED_MANIFEST.read_text())["fixtures"]]
     assert set(payload["fixtures"]) == set(ids)
-    assert len(ids) == 6
+    assert len(ids) == 8
 
 
 def test_the_stub_is_reproducible():

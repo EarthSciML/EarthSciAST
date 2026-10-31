@@ -202,6 +202,17 @@ function _mtk_refuse_unsupported_document(flat::FlattenedSystem)
         # is present in the system but a + b is not an unknown". Named here so
         # the refusal says which equation and why, instead of surfacing MTK's
         # message about a symbol the document never wrote.
+        # AN ARRAY-VALUED MAKEARRAY REGION. `_build_makearray` fills each region
+        # with ONE scalar, broadcast over it; a region whose value is itself an
+        # array (an `faq` over the region, esm-spec §4.3.2 — the stencil an
+        # operator's derived document writes for a lifted equation) has no
+        # such fill, and building it failed inside Symbolics with a
+        # `MethodError` that named neither the rule nor the reason.
+        _mtk_array_region_value(eq.rhs) && _mtk_refuse(_mtk_equation_label(eq),
+            "its right-hand side holds a `makearray` whose region value is itself " *
+            "an array (an `faq` over the region); this compiler fills a region " *
+            "with one scalar and has no lowering of an array-valued region. " *
+            _MTK_TRY_INSTEAD)
         lhs = eq.lhs
         if lhs isa OpExpr && lhs.op == "D" && length(lhs.args) == 1 &&
            !(lhs.args[1] isa VarExpr) &&
@@ -215,6 +226,17 @@ function _mtk_refuse_unsupported_document(flat::FlattenedSystem)
         end
     end
     return nothing
+end
+
+# Whether any `makearray` in the tree has a region value that is an array.
+function _mtk_array_region_value(expr)::Bool
+    found = false
+    EarthSciAST.foreach_subexpr(expr) do x
+        found && return
+        x isa OpExpr && x.op == "makearray" && x.values !== nothing &&
+            any(EarthSciAST._is_array_producer, x.values) && (found = true)
+    end
+    return found
 end
 
 # The first argument's op name if any node in the tree is one of `ops`.

@@ -129,6 +129,8 @@ def test_sympy_refuses_an_array_document_by_name(payloads) -> None:
         "diffusion_2d_dirichlet_n3",
         "advection_1d_periodic_n4",
         "faq_discretized_1d_heat",
+        "faq_lifted_makearray_upwind",
+        "faq_lifted_column_mean",
     }
     for fid, rec in refused.items():
         assert rec["status"] == "refused"
