@@ -521,8 +521,8 @@ fn document_asserting_the_ingested_parameter(url: &str, scale: f64) -> Value {
              "expected": ANN[0] * scale},
             {"variable": "annual", "time": 0.0, "coords": {"records": 3},
              "expected": ANN[2] * scale},
-            {"variable": "annual", "time": 0.0, "reduce": "sum",
-             "expected": ANN_TOTAL * scale, "tolerance": {"rel": 1e-12}}
+            {"variable": "annual", "time": 0.0, "reduce": "mean",
+             "expected": ANN_MEAN * scale, "tolerance": {"rel": 1e-12}}
         ]
     }]);
     doc
