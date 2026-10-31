@@ -122,6 +122,28 @@
         "go": "Go binding has no faq numeric executor; round-trip only."
       },
       "notes": "The CONTROL twin of fixture 28 (issue #407): the same shaped four-cell decay with a sum-`faq` observed, differing only in that this one spells `wrt: t` on the `D` while 28 omits it. esm-spec §4.2 makes the two mean the same thing, so the two fixtures must produce the same trajectory. It earns its place by being the thing 28 is compared AGAINST: a corpus carrying only the short form would go red on a binding that cannot build it, but would not pin that the two spellings AGREE, which is the actual content of §4.2's default."
+    },
+    {
+      "id": "fixtures/faq/30_lifted_makearray_upwind",
+      "path": "fixtures/faq/30_lifted_makearray_upwind.esm",
+      "tags": ["faq", "makearray", "stencil", "lifted", "region_dispatch", "regression"],
+      "executing_bindings": ["python", "rust", "julia"],
+      "skip_bindings": {
+        "typescript": "TypeScript binding has no faq numeric executor; round-trip only.",
+        "go": "Go binding has no faq numeric executor; round-trip only."
+      },
+      "notes": "A lifted whole-array equation, D(u) = faq_i(index(makearray(...), i)), the form an operator's derived document writes (EarthSciIntegrator spec/plan.md section 6.1.2): a first-order upwind stencil over the interior region [2,6] and a fixed inflow face at [1,1]. The makearray is gathered at the lifted faq's own index, so the region has to be chosen per cell through that binding. Julia's native compiler once keyed every cell alike and gave all of them the face's value, zero, with no diagnostic (found by EarthSciIntegrator PR #34). The pulse's closed form u[i](t) = 1 + (k t)^(i-2)/(i-2)! exp(-k t) is the anchor."
+    },
+    {
+      "id": "fixtures/faq/31_lifted_column_mean",
+      "path": "fixtures/faq/31_lifted_column_mean.esm",
+      "tags": ["faq", "makearray", "contraction", "lifted", "column", "regression"],
+      "executing_bindings": ["python", "rust", "julia"],
+      "skip_bindings": {
+        "typescript": "TypeScript binding has no faq numeric executor; round-trip only.",
+        "go": "Go binding has no faq numeric executor; round-trip only."
+      },
+      "notes": "A lifted whole-array equation whose makearray region value holds a contracting faq: the column relaxation c*(sum_kk u[i,kk]/4 - u[i,k]), the form a derived document writes for a column operator. Julia's native compiler once refused it by name (found by EarthSciIntegrator PR #34). Each column's mean is conserved and every element relaxes to it as exp(-c t)."
     }
   ]
 }

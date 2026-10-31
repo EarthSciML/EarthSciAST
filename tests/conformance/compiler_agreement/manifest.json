@@ -294,6 +294,104 @@
       }
     },
     {
+      "id": "faq_lifted_makearray_upwind",
+      "path": "fixtures/faq/30_lifted_makearray_upwind.esm",
+      "model": "Upwind1D",
+      "tags": [
+        "faq",
+        "makearray",
+        "stencil",
+        "lifted",
+        "region_dispatch"
+      ],
+      "source_tier": "simulate_faq",
+      "trajectory": {
+        "from": "inline_tests",
+        "test_id": "upwind_pulse_t1",
+        "observed": [],
+        "detail": "`tspan`, `initial_conditions` and the save times come from the model's inline `tests` entry; the assertion times are the save times."
+      },
+      "integration": {
+        "reltol": 1e-10,
+        "abstol": 1e-12
+      },
+      "tolerance": {
+        "source": "derived",
+        "class": "reduction",
+        "rtol_class": 1e-11,
+        "atol_scaled_class": 1e-14,
+        "reltol_integration": 1e-10,
+        "abstol_integration": 1e-12,
+        "integration_factor": 100,
+        "integration_factor_detail": "the \u00a75.44.2 integration safety factor: a solver's reltol/abstol bound its LOCAL error per step, while the value compared here carries the GLOBAL error, which exceeds it by an integrator-dependent factor. Without it the band demands that every binding's integrator beat a promise no integrator makes, and two correct integrators read as a compiler disagreement. 100x on 1e-10 is still six orders below any compiler-level defect.",
+        "detail": "a lifted equation gathering a makearray at the lifted faq's own index: each cell's region is chosen through that binding, which Julia's native compiler once missed, giving every cell the face's value (EarthSciIntegrator PR #34). The stencil is a fold, so the reduction class"
+      },
+      "anchor": {
+        "source": "inline_tests",
+        "detail": "u[i](t) = 1 + (k t)^(i-2)/(i-2)! exp(-k t), a closed form outside every binding"
+      },
+      "required": {
+        "julia": [
+          "native"
+        ],
+        "rust": [
+          "native"
+        ],
+        "python": [
+          "native"
+        ]
+      }
+    },
+    {
+      "id": "faq_lifted_column_mean",
+      "path": "fixtures/faq/31_lifted_column_mean.esm",
+      "model": "ColumnMean",
+      "tags": [
+        "faq",
+        "makearray",
+        "contraction",
+        "lifted",
+        "column"
+      ],
+      "source_tier": "simulate_faq",
+      "trajectory": {
+        "from": "inline_tests",
+        "test_id": "column_relax_t2",
+        "observed": [],
+        "detail": "`tspan`, `initial_conditions` and the save times come from the model's inline `tests` entry; the assertion times are the save times."
+      },
+      "integration": {
+        "reltol": 1e-10,
+        "abstol": 1e-12
+      },
+      "tolerance": {
+        "source": "derived",
+        "class": "reduction",
+        "rtol_class": 1e-11,
+        "atol_scaled_class": 1e-14,
+        "reltol_integration": 1e-10,
+        "abstol_integration": 1e-12,
+        "integration_factor": 100,
+        "integration_factor_detail": "the \u00a75.44.2 integration safety factor: a solver's reltol/abstol bound its LOCAL error per step, while the value compared here carries the GLOBAL error, which exceeds it by an integrator-dependent factor. Without it the band demands that every binding's integrator beat a promise no integrator makes, and two correct integrators read as a compiler disagreement. 100x on 1e-10 is still six orders below any compiler-level defect.",
+        "detail": "a contracting faq (a column sum) inside the makearray region value of a lifted equation, which Julia's native compiler once refused (EarthSciIntegrator PR #34); the contraction is a fold, so the reduction class"
+      },
+      "anchor": {
+        "source": "inline_tests",
+        "detail": "u[i,k](t) = m_i + (u[i,k](0) - m_i) exp(-c t), with m_i the conserved column mean, a closed form outside every binding"
+      },
+      "required": {
+        "julia": [
+          "native"
+        ],
+        "rust": [
+          "native"
+        ],
+        "python": [
+          "native"
+        ]
+      }
+    },
+    {
       "id": "logistic_growth",
       "path": "valid/tests_analyses_comprehensive.esm",
       "model": "LogisticGrowth",

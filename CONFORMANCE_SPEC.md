@@ -6375,14 +6375,16 @@ Go and TypeScript are **out of scope**: neither has a Problem type, so neither
 has a compiler to name (`API_SPEC.md` §3, capability profiles).
 
 **What answers today.** Julia, Rust and Python each answer for `interpreter` and
-`native` on all six fixtures with no refusals and are `bindings_required` for both;
+`native` on all eight fixtures with no refusals and are `bindings_required` for both;
 Python is required for `sympy`, which runs the two scalar fixtures and refuses the
-four array ones by name. **Julia is required for `mtk`** as of 2026-09-22 — it runs
-all six, the array fixtures included, because their stencils are already
+six array ones by name. **Julia is required for `mtk`** as of 2026-09-22 — it runs
+the six fixtures of that date, the array fixtures included, because their stencils are already
 `arrayop` over an index set and carry no continuous spatial dimension for that
-compiler to refuse. What `mtk` DOES refuse is not exercised by these fixtures: a
-document fed by loaded data, one with a continuous spatial dimension, a geometry
-operator, and a time derivative of an expression. **Rust is `bindings_required`
+compiler to refuse. It refuses by name the two lifted fixtures added on
+2026-10-30, whose `makearray` region values are themselves arrays (it fills a
+region with one scalar). The rest of what `mtk` refuses is not exercised by these
+fixtures: a document fed by loaded data, one with a continuous spatial dimension,
+a geometry operator, and a time derivative of an expression. **Rust is `bindings_required`
 for `xla` as of 2026-09-22**: `esm_problem(…, compiler = Xla)` emits the model's
 tape as an XLA computation and solves on the compiled right-hand side, and all
 six fixtures agree with the golden with no refusals. That entry carries a BUILD
