@@ -180,9 +180,7 @@ rustc-hash = "2"
 bumpalo = { version = "3.14", optional = true }
 wide = { version = "1.7", optional = true }
 bytemuck = { version = "1.14", optional = true }
-# 0.7, not 0.8: criterion 0.8 links `alloca`, whose C build script needs a
-# cross compiler for the aarch64 clippy leg of the lint workflow.
-criterion = { version = "0.7", optional = true }
+criterion = { version = "0.8", optional = true }
 # OPT-IN data-provider bridge (feature `esio`, src/esio_provider.rs). Resolved
 # from crates.io, NOT by path: cargo resolves every dependency in the manifest at
 # metadata time, optional ones included, so a path into a sibling EarthSciIO
@@ -192,7 +190,7 @@ criterion = { version = "0.7", optional = true }
 #     earthsciio = { path = "../../../EarthSciIO/rust" }
 # Optional so the default build neither links EarthSciIO nor inherits its
 # netcdf/hdf5 C build requirements.
-earthsciio = { version = "0.1.4", optional = true }
+earthsciio = { version = "0.2.0", optional = true }
 time = { version = "0.3", optional = true }
 # OPT-IN XLA compiled backend (feature `xla`, src/simulate_array/tape/xla_emit.rs
 # + src/xla_runtime.rs). Emits the tape IR as an XLA computation through
@@ -232,7 +230,7 @@ rayon = "1.8"
 # (`tests/wasm_suite.rs`) needs none of them, so gating them off wasm keeps
 # `wasm-pack test` from dragging them into the wasm build.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-criterion = { version = "0.7", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 proptest = "1.4"
 tempfile = "3.10"
 # Writes the FF10 zip fixture the loader-ingest test decodes (the same pure-Rust
