@@ -333,5 +333,453 @@
         ]
       }
     ]
+  },
+  "clock": {
+    "notes": "The clock accessors `time_origin` and `timestamp_to_seconds` (API_SPEC §5.8), in the bindings that carry them. Each case gives a document's `domain` as raw JSON (null: the document has none). A binding calls both accessors on that raw value, and, when `typed` is true, on the typed domain built from it and on a document built in memory that carries it, both built in memory rather than loaded; every form MUST give the same answer. `typed` is false for a domain whose shape only raw JSON can hold (a `null` origin field, a `temporal` that is not an object, a `domain` that is not an object). `origin` is what `time_origin` returns; each `timestamps` entry is what `timestamp_to_seconds` returns for it. A value is binary64 seconds, compared EXACTLY; a refusal is its code, and every refusal is one of `timestamp_malformed`, `timestamp_no_calendar_day` and `time_origin_invalid`, checked in that order. Values were computed from the esm-spec §2.2.7 arithmetic, not by a binding.",
+    "bindings_required": [
+      "julia",
+      "python",
+      "rust"
+    ],
+    "fields": {
+      "domain": "The document's `domain`, as raw JSON; null when the document has none. A `domain` that is neither an object nor null has no readable origin: `time_origin_invalid`, naming `/domain`.",
+      "typed": "Whether the typed domain can hold this one, so that a binding also runs the case on the typed domain and on a document built in memory that carries it.",
+      "origin": "`{\"seconds\": x}`: `time_origin` returns x. `{\"error_code\": c}`: it raises c.",
+      "timestamps": "Each `{timestamp, seconds}` or `{timestamp, error_code}`: what `timestamp_to_seconds` returns or raises. A non-string `timestamp` is `timestamp_malformed`; a binding whose signature admits only a string (Rust) skips it."
+    },
+    "cases": [
+      {
+        "id": "no_domain",
+        "domain": null,
+        "typed": true,
+        "origin": {
+          "seconds": 0.0
+        },
+        "timestamps": [
+          {
+            "timestamp": "1970-01-01T00:00:00Z",
+            "seconds": 0.0
+          },
+          {
+            "timestamp": "2019-07-01T00:00:00Z",
+            "seconds": 1561939200.0
+          },
+          {
+            "timestamp": "2019-07-03T00:00:00Z",
+            "seconds": 1562112000.0
+          },
+          {
+            "timestamp": "2019-07-01T00:00:00.5Z",
+            "seconds": 1561939200.5
+          },
+          {
+            "timestamp": "1969-12-31T23:59:59.5Z",
+            "seconds": -0.5
+          },
+          {
+            "timestamp": "2019-07-01",
+            "error_code": "timestamp_malformed"
+          },
+          {
+            "timestamp": "2019-07-01T00:00:00+00:00",
+            "error_code": "timestamp_malformed"
+          },
+          {
+            "timestamp": "2019-07-01T00:00:00z",
+            "error_code": "timestamp_malformed"
+          },
+          {
+            "timestamp": "2019-07-01t00:00:00Z",
+            "error_code": "timestamp_malformed"
+          },
+          {
+            "timestamp": "2019-07-01T00:00:60Z",
+            "error_code": "timestamp_malformed"
+          },
+          {
+            "timestamp": "2019-13-01T00:00:00Z",
+            "error_code": "timestamp_malformed"
+          },
+          {
+            "timestamp": "2019-07-01T00:00:00Z\n",
+            "error_code": "timestamp_malformed"
+          },
+          {
+            "timestamp": "2019-07-01T00:00:00.Z",
+            "error_code": "timestamp_malformed"
+          },
+          {
+            "timestamp": 0,
+            "error_code": "timestamp_malformed"
+          },
+          {
+            "timestamp": "2019-02-30T00:00:00Z",
+            "error_code": "timestamp_no_calendar_day"
+          },
+          {
+            "timestamp": "2019-04-31T00:00:00Z",
+            "error_code": "timestamp_no_calendar_day"
+          },
+          {
+            "timestamp": "2100-02-29T00:00:00Z",
+            "error_code": "timestamp_no_calendar_day"
+          }
+        ]
+      },
+      {
+        "id": "no_temporal",
+        "domain": {},
+        "typed": true,
+        "origin": {
+          "seconds": 0.0
+        },
+        "timestamps": [
+          {
+            "timestamp": "2019-07-01T00:00:00Z",
+            "seconds": 1561939200.0
+          }
+        ]
+      },
+      {
+        "id": "reference_time_wins",
+        "domain": {
+          "temporal": {
+            "reference_time": "2019-07-01T00:00:00Z",
+            "start": "2019-06-30T00:00:00Z"
+          }
+        },
+        "typed": true,
+        "origin": {
+          "seconds": 1561939200.0
+        },
+        "timestamps": [
+          {
+            "timestamp": "2019-07-01T00:00:00Z",
+            "seconds": 0.0
+          },
+          {
+            "timestamp": "2019-07-03T00:00:00Z",
+            "seconds": 172800.0
+          },
+          {
+            "timestamp": "2000-02-29T12:00:00Z",
+            "seconds": -610113600.0
+          }
+        ]
+      },
+      {
+        "id": "temporal_start",
+        "domain": {
+          "temporal": {
+            "start": "2019-06-30T00:00:00Z",
+            "end": "2019-07-30T00:00:00Z"
+          }
+        },
+        "typed": true,
+        "origin": {
+          "seconds": 1561852800.0
+        },
+        "timestamps": [
+          {
+            "timestamp": "2019-07-01T00:00:00Z",
+            "seconds": 86400.0
+          },
+          {
+            "timestamp": "2019-06-29T23:59:59.75Z",
+            "seconds": -0.25
+          }
+        ]
+      },
+      {
+        "id": "offset_origin",
+        "domain": {
+          "temporal": {
+            "reference_time": "2019-07-01T02:00:00+02:00"
+          }
+        },
+        "typed": true,
+        "origin": {
+          "seconds": 1561939200.0
+        },
+        "timestamps": [
+          {
+            "timestamp": "2019-07-01T00:00:00Z",
+            "seconds": 0.0
+          }
+        ]
+      },
+      {
+        "id": "negative_offset_lowercase_origin",
+        "domain": {
+          "temporal": {
+            "start": "2019-07-01t22:00:00-02:00"
+          }
+        },
+        "typed": true,
+        "origin": {
+          "seconds": 1562025600.0
+        },
+        "timestamps": [
+          {
+            "timestamp": "2019-07-02T00:00:00.5Z",
+            "seconds": 0.5
+          }
+        ]
+      },
+      {
+        "id": "fractional_origin",
+        "domain": {
+          "temporal": {
+            "reference_time": "2019-07-01T00:00:00.25Z"
+          }
+        },
+        "typed": true,
+        "origin": {
+          "seconds": 1561939200.25
+        },
+        "timestamps": [
+          {
+            "timestamp": "2019-07-01T00:00:00.5Z",
+            "seconds": 0.25
+          },
+          {
+            "timestamp": "2019-07-01T00:00:01.25Z",
+            "seconds": 1.0
+          }
+        ]
+      },
+      {
+        "id": "fractions_subtract_in_binary64",
+        "domain": {
+          "temporal": {
+            "reference_time": "2019-07-01T00:00:00.2Z"
+          }
+        },
+        "typed": true,
+        "origin": {
+          "seconds": 1561939200.2
+        },
+        "timestamps": [
+          {
+            "timestamp": "2019-07-02T00:00:00.1Z",
+            "seconds": 86399.9
+          },
+          {
+            "timestamp": "2019-07-01T00:00:00.1Z",
+            "seconds": -0.1
+          }
+        ]
+      },
+      {
+        "id": "far_from_the_epoch",
+        "domain": {
+          "temporal": {
+            "reference_time": "0001-01-01T00:00:00Z"
+          }
+        },
+        "typed": true,
+        "origin": {
+          "seconds": -62135596800.0
+        },
+        "timestamps": [
+          {
+            "timestamp": "9999-12-31T23:59:59.5Z",
+            "seconds": 315537897599.5
+          }
+        ]
+      },
+      {
+        "id": "unreadable_reference_time",
+        "domain": {
+          "temporal": {
+            "reference_time": "not-a-date",
+            "start": "2019-06-30T00:00:00Z"
+          }
+        },
+        "typed": true,
+        "origin": {
+          "error_code": "time_origin_invalid"
+        },
+        "timestamps": [
+          {
+            "timestamp": "2019-07-01T00:00:00Z",
+            "error_code": "time_origin_invalid"
+          },
+          {
+            "timestamp": "2019-02-30T00:00:00Z",
+            "error_code": "timestamp_no_calendar_day"
+          },
+          {
+            "timestamp": "2019-07-01",
+            "error_code": "timestamp_malformed"
+          }
+        ]
+      },
+      {
+        "id": "start_names_no_day",
+        "domain": {
+          "temporal": {
+            "start": "2019-02-30T00:00:00Z"
+          }
+        },
+        "typed": true,
+        "origin": {
+          "error_code": "time_origin_invalid"
+        },
+        "timestamps": [
+          {
+            "timestamp": "2019-07-01T00:00:00Z",
+            "error_code": "time_origin_invalid"
+          }
+        ]
+      },
+      {
+        "id": "leap_second_origin",
+        "domain": {
+          "temporal": {
+            "reference_time": "2019-06-30T23:59:60Z"
+          }
+        },
+        "typed": true,
+        "origin": {
+          "error_code": "time_origin_invalid"
+        },
+        "timestamps": [
+          {
+            "timestamp": "2019-07-01T00:00:00Z",
+            "error_code": "time_origin_invalid"
+          }
+        ]
+      },
+      {
+        "id": "offset_out_of_range_origin",
+        "domain": {
+          "temporal": {
+            "reference_time": "2019-07-01T00:00:00+24:00"
+          }
+        },
+        "typed": true,
+        "origin": {
+          "error_code": "time_origin_invalid"
+        },
+        "timestamps": [
+          {
+            "timestamp": "2019-07-01T00:00:00Z",
+            "error_code": "time_origin_invalid"
+          }
+        ]
+      },
+      {
+        "id": "trailing_newline_origin",
+        "domain": {
+          "temporal": {
+            "reference_time": "2019-07-01T00:00:00Z\n"
+          }
+        },
+        "typed": true,
+        "origin": {
+          "error_code": "time_origin_invalid"
+        },
+        "timestamps": [
+          {
+            "timestamp": "2019-07-01T00:00:00Z",
+            "error_code": "time_origin_invalid"
+          }
+        ]
+      },
+      {
+        "id": "null_reference_time",
+        "domain": {
+          "temporal": {
+            "reference_time": null,
+            "start": "2019-06-30T00:00:00Z"
+          }
+        },
+        "typed": false,
+        "origin": {
+          "error_code": "time_origin_invalid"
+        },
+        "timestamps": [
+          {
+            "timestamp": "2019-07-01T00:00:00Z",
+            "error_code": "time_origin_invalid"
+          },
+          {
+            "timestamp": "2019-07-01",
+            "error_code": "timestamp_malformed"
+          }
+        ]
+      },
+      {
+        "id": "temporal_not_an_object",
+        "domain": {
+          "temporal": "2019-07-01T00:00:00Z"
+        },
+        "typed": false,
+        "origin": {
+          "seconds": 0.0
+        },
+        "timestamps": [
+          {
+            "timestamp": "2019-07-01T00:00:00Z",
+            "seconds": 1561939200.0
+          }
+        ]
+      },
+      {
+        "id": "domain_a_string",
+        "domain": "2019-07-01T00:00:00Z",
+        "typed": false,
+        "origin": {
+          "error_code": "time_origin_invalid"
+        },
+        "timestamps": [
+          {
+            "timestamp": "2019-07-01T00:00:00Z",
+            "error_code": "time_origin_invalid"
+          },
+          {
+            "timestamp": "2019-07-01",
+            "error_code": "timestamp_malformed"
+          }
+        ]
+      },
+      {
+        "id": "domain_an_array",
+        "domain": [],
+        "typed": false,
+        "origin": {
+          "error_code": "time_origin_invalid"
+        },
+        "timestamps": [
+          {
+            "timestamp": "2019-07-01T00:00:00Z",
+            "error_code": "time_origin_invalid"
+          },
+          {
+            "timestamp": "2019-07-01",
+            "error_code": "timestamp_malformed"
+          }
+        ]
+      },
+      {
+        "id": "domain_a_number",
+        "domain": 0,
+        "typed": false,
+        "origin": {
+          "error_code": "time_origin_invalid"
+        },
+        "timestamps": [
+          {
+            "timestamp": "2019-07-01T00:00:00Z",
+            "error_code": "time_origin_invalid"
+          },
+          {
+            "timestamp": "2019-07-01",
+            "error_code": "timestamp_malformed"
+          }
+        ]
+      }
+    ]
   }
 }

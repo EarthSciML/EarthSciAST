@@ -161,6 +161,17 @@ const (
 	// interval -- `end` not after `start`, a timestamp naming no calendar day,
 	// or an unreadable time origin (esm-spec §2.2.7).
 	CodeSolverTimeSpanInvalid = "solver_time_span_invalid"
+	// CodeTimestampMalformed, CodeTimestampNoCalendarDay and
+	// CodeTimeOriginInvalid: the causes the §2.2.7 clock accessors
+	// (`time_origin`, `timestamp_to_seconds`; API_SPEC §5.8) report, one code
+	// each -- a timestamp not in the `solver.time_span` bound form, one whose
+	// day is not in its month, and an unreadable `domain.temporal` origin. Go
+	// does not simulate and carries no clock accessor, so nothing here raises
+	// them; the constants keep the vocabulary uniform across the five
+	// registries.
+	CodeTimestampMalformed     = "timestamp_malformed"
+	CodeTimestampNoCalendarDay = "timestamp_no_calendar_day"
+	CodeTimeOriginInvalid      = "time_origin_invalid"
 )
 
 // --- Diagnostic codes: §10.9-§10.11 coupling libraries / coupling_import

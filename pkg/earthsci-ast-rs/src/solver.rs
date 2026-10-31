@@ -615,66 +615,160 @@ pub fn resolve_time_span(
     .map(Some)
 }
 
-/// Neutral `solver_time_span_invalid` for the public §2.2.7 accessors: the
-/// message names the offending input, not `/solver/time_span`.
-fn accessor_error(fault: &OriginFault) -> DiagnosticError {
-    err(
-        codes::SOLVER_TIME_SPAN_INVALID,
-        format!(
-            "{} (esm-spec §2.2.7).",
-            fault.message("the document's time origin")
-        ),
-    )
+mod sealed {
+    /// Where a [`super::TimeOriginSource`] keeps its `domain.temporal`. Private,
+    /// so the set of sources is this crate's to extend.
+    pub trait Temporal {
+        /// `Ok(temporal)` (`None`: no `temporal`), or `Err(domain)` for a raw
+        /// `domain` that is neither an object nor `null`, which has no origin
+        /// to read.
+        fn temporal(&self) -> Result<Option<&serde_json::Value>, &serde_json::Value>;
+    }
 }
 
-/// The document's time origin as an [`Instant`], or the accessors' refusal.
+/// What the §2.2.7 clock accessors read a time origin from: a document, or
+/// its `domain` alone (esm-spec §2.2.7).
+///
+/// Implemented for
+///
+/// - [`crate::EsmFile`], a loaded or in-memory document;
+/// - [`crate::Domain`], a typed domain;
+/// - [`serde_json::Value`], the raw JSON `domain` of a document that has not
+///   been loaded — read as the load-time check reads it, so a present key
+///   selects its field, `null` included, and a `domain` or `temporal` that is
+///   not an object has no origin field (a missing domain is `Value::Null`);
+/// - `Option<T>` (`None` is a document without a domain), `&T`, `Box<T>`,
+///   `Rc<T>` and `Arc<T>`, for any source `T`, so a caller holding a document
+///   behind a pointer passes it as it is.
+///
+/// A raw `domain` that is neither an object nor `null` (a string, an array, a
+/// number or a boolean) has no origin to read: the accessors refuse it with
+/// `time_origin_invalid`, naming `/domain`.
+///
+/// The trait is sealed: its one method is private to this crate.
+pub trait TimeOriginSource: sealed::Temporal {}
+
+impl sealed::Temporal for crate::EsmFile {
+    fn temporal(&self) -> Result<Option<&Value>, &Value> {
+        Ok(self.domain.as_ref().and_then(|d| d.temporal.as_ref()))
+    }
+}
+impl TimeOriginSource for crate::EsmFile {}
+
+impl sealed::Temporal for crate::Domain {
+    fn temporal(&self) -> Result<Option<&Value>, &Value> {
+        Ok(self.temporal.as_ref())
+    }
+}
+impl TimeOriginSource for crate::Domain {}
+
+impl sealed::Temporal for Value {
+    fn temporal(&self) -> Result<Option<&Value>, &Value> {
+        match self {
+            Value::Null => Ok(None),
+            Value::Object(domain) => Ok(domain.get("temporal")),
+            _ => Err(self),
+        }
+    }
+}
+impl TimeOriginSource for Value {}
+
+impl<T: TimeOriginSource> sealed::Temporal for Option<T> {
+    fn temporal(&self) -> Result<Option<&Value>, &Value> {
+        self.as_ref().map_or(Ok(None), sealed::Temporal::temporal)
+    }
+}
+impl<T: TimeOriginSource> TimeOriginSource for Option<T> {}
+
+/// A source behind a reference or an owning pointer reads as the source
+/// itself. Without these, a generic `&S` would no longer deref `&Arc<EsmFile>`
+/// to `&EsmFile` the way the old `&EsmFile` parameter did.
+macro_rules! forward_time_origin_source {
+    ($($ptr:ty),*) => {$(
+        impl<T: TimeOriginSource + ?Sized> sealed::Temporal for $ptr {
+            fn temporal(&self) -> Result<Option<&Value>, &Value> {
+                (**self).temporal()
+            }
+        }
+        impl<T: TimeOriginSource + ?Sized> TimeOriginSource for $ptr {}
+    )*};
+}
+forward_time_origin_source!(&T, Box<T>, std::rc::Rc<T>, std::sync::Arc<T>);
+
+/// The source's time origin as an [`Instant`], or `time_origin_invalid`
+/// naming the field (or `/domain`, for a raw domain that is not an object).
 /// One lookup path, shared by [`time_origin`] and [`timestamp_to_seconds`].
-fn origin_instant(file: &crate::EsmFile) -> Result<Instant, DiagnosticError> {
-    let temporal = file.domain.as_ref().and_then(|d| d.temporal.as_ref());
-    time_origin_of(temporal).map_err(|f| accessor_error(&f))
+fn origin_instant<S: TimeOriginSource + ?Sized>(source: &S) -> Result<Instant, DiagnosticError> {
+    let temporal = sealed::Temporal::temporal(source).map_err(|domain| {
+        err(
+            codes::TIME_ORIGIN_INVALID,
+            format!(
+                "/domain is {domain}, which is not an object, so it has no time origin \
+                 to count a timestamp from (esm-spec §2.2.7)."
+            ),
+        )
+    })?;
+    time_origin_of(temporal).map_err(|fault| {
+        err(
+            codes::TIME_ORIGIN_INVALID,
+            format!("{} (esm-spec §2.2.7).", fault.message("the time origin")),
+        )
+    })
 }
 
-/// The document's time origin in seconds from the POSIX epoch (esm-spec
-/// §2.2.7): `domain.temporal.reference_time`, else `domain.temporal.start`,
-/// else the epoch itself, as `W0 + f0` -- whole seconds converted, the
-/// fraction added in binary64.
+/// The time origin in seconds from the POSIX epoch (esm-spec §2.2.7):
+/// `domain.temporal.reference_time`, else `domain.temporal.start`, else the
+/// epoch itself, as `W0 + f0` -- whole seconds converted, the fraction added in
+/// binary64.
 ///
 /// This is the origin a `solver.time_span` timestamp counts from: the `W0`/`f0`
 /// half of what [`resolve_time_span`] does, exposed so a caller can convert a
-/// timestamp of its own with [`timestamp_to_seconds`]. A field that is present
-/// but is not an RFC 3339 date-time naming a calendar day fails with
-/// `solver_time_span_invalid`, naming its pointer.
-pub fn time_origin(file: &crate::EsmFile) -> Result<f64, DiagnosticError> {
-    let origin = origin_instant(file)?;
+/// timestamp of its own with [`timestamp_to_seconds`]. `source` is a document
+/// or its domain, typed or raw JSON ([`TimeOriginSource`]):
+/// `time_origin(&file)`, `time_origin(&domain)`, `time_origin(&doc["domain"])`.
+///
+/// A field that is present but is not an RFC 3339 date-time naming a calendar
+/// day fails with `time_origin_invalid`, naming its pointer; so does a raw
+/// `domain` that is not an object, naming `/domain`.
+pub fn time_origin<S: TimeOriginSource + ?Sized>(source: &S) -> Result<f64, DiagnosticError> {
+    let origin = origin_instant(source)?;
     Ok(origin.whole as f64 + origin.frac)
 }
 
-/// `timestamp` as seconds from `file`'s time origin (esm-spec §2.2.7).
+/// `timestamp` as seconds from `source`'s time origin (esm-spec §2.2.7).
 ///
 /// `timestamp` is an RFC 3339 UTC timestamp (`YYYY-MM-DDThh:mm:ss[.f]Z`, the
 /// `solver.time_span` bound form). The result is `(W - W0) + (f - f0)`: the
 /// whole-second difference in integers, then the fractions added in binary64,
-/// exactly as [`resolve_time_span`] converts a `time_span` timestamp. The
-/// origin is [`time_origin`].
+/// exactly as [`resolve_time_span`] converts a `time_span` timestamp. `source`
+/// and the origin are as for [`time_origin`].
 ///
-/// Fails with `solver_time_span_invalid` when `timestamp` is not of that form
-/// or names no calendar day, or when the document's origin cannot be read. The
-/// timestamp is checked BEFORE the origin, so the two errors -- which share a
-/// code -- are reported in the same order as in Julia and Python.
-pub fn timestamp_to_seconds(
-    file: &crate::EsmFile,
+/// Each cause has its own code, checked in this order, so the first that
+/// applies is the one returned:
+///
+/// 1. `timestamp_malformed` -- `timestamp` is not of that form;
+/// 2. `timestamp_no_calendar_day` -- it is, but its day is not in its month
+///    (`2019-02-30`, `02-29` outside a leap year);
+/// 3. `time_origin_invalid` -- the origin field that applies cannot be read,
+///    or a raw `domain` is not an object.
+pub fn timestamp_to_seconds<S: TimeOriginSource + ?Sized>(
+    source: &S,
     timestamp: &str,
 ) -> Result<f64, DiagnosticError> {
     let stamp = parse_date_time(timestamp, true).map_err(|kind| {
+        let code = match &kind {
+            StampError::Form => codes::TIMESTAMP_MALFORMED,
+            StampError::NoDay => codes::TIMESTAMP_NO_CALENDAR_DAY,
+        };
         err(
-            codes::SOLVER_TIME_SPAN_INVALID,
+            code,
             format!(
                 "{} (esm-spec §2.2.7).",
                 stamp_error("timestamp", timestamp, kind)
             ),
         )
     })?;
-    let origin = origin_instant(file)?;
+    let origin = origin_instant(source)?;
     Ok((stamp.whole - origin.whole) as f64 + (stamp.frac - origin.frac))
 }
 

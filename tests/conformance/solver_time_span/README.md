@@ -18,7 +18,7 @@ converted value through `resolve_time_span` (`resolveTimeSpan`,
 
 | File | What it is |
 |------|------------|
-| `manifest.json` | The SHARED pin: every case, its expected seconds and emitted `solver` block or its refusal, and the call-site cases. |
+| `manifest.json` | The SHARED pin: every case, its expected seconds and emitted `solver` block or its refusal, the call-site cases, and the clock accessors' cases. |
 | `fixtures/<id>.esm` | One document per case. A document has one `time_span` and one time origin, so each case is its own file. |
 | `fixtures/mount_*.esm`, `fixtures/leaves/*.esm` | A root mounting a leaf whose `solver` carries `time_span`, at both mount forms. Two leaves would be refused on their own — one reversed, one at esm 1.2.0 — and the root still loads. |
 
@@ -35,5 +35,14 @@ For each `fixtures[]` entry, load `path` (relative to this directory) by path.
 
 For each `call_site.cases[]` entry, load `fixtures/<fixture>.esm` and call the
 accessor with `call_site` as the explicit interval; it MUST return `resolved`.
+
+For each `clock.cases[]` entry (Julia, Python and Rust, the bindings that
+carry the clock accessors of API_SPEC §5.8), call `time_origin` and
+`timestamp_to_seconds` with `domain`, the raw JSON value (null: the document
+has none). When `typed` is true, also call them with the typed domain built
+from it and with a document built in memory that carries it. `time_origin`
+MUST give `origin`, and `timestamp_to_seconds` each entry of `timestamps`:
+`seconds` exactly, or a refusal with `error_code`. A binding whose signature
+admits only a string timestamp skips a non-string one.
 
 Every pinned value is exact in binary64, so no tolerance applies.

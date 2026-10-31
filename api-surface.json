@@ -95,18 +95,18 @@
     }
   },
   "counts": {
-    "symbols": 1006,
+    "symbols": 1011,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 344,
       "typescript": 245,
       "python": 274,
-      "rust": 386,
-      "go": 470
+      "rust": 387,
+      "go": 473
     },
     "by_tier": {
-      "extension": 701,
-      "stable": 305
+      "extension": 707,
+      "stable": 304
     }
   },
   "planned": [
@@ -1966,6 +1966,30 @@
       }
     },
     {
+      "name": "code_time_origin_invalid",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTimeOriginInvalid"
+      }
+    },
+    {
+      "name": "code_timestamp_malformed",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTimestampMalformed"
+      }
+    },
+    {
+      "name": "code_timestamp_no_calendar_day",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTimestampNoCalendarDay"
+      }
+    },
+    {
       "name": "code_undefined_index_set",
       "kind": "constant",
       "tier": "extension",
@@ -3795,18 +3819,17 @@
     {
       "name": "expand",
       "kind": "function",
-      "tier": "stable",
+      "tier": "extension",
       "bindings": {
-        "go": "Expand",
-        "python": "Expand"
-      },
-      "notes": "spelling differs from the §2 rule: python=Expand (expected expand)"
+        "go": "Expand"
+      }
     },
     {
       "name": "expand",
       "kind": "type",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
+        "python": "Expand",
         "typescript": "Expand"
       }
     },
@@ -4573,7 +4596,7 @@
     },
     {
       "name": "geometry_backend_unavailable",
-      "kind": "error",
+      "kind": "type",
       "tier": "extension",
       "bindings": {
         "python": "GeometryBackendUnavailable"
@@ -8095,6 +8118,14 @@
       }
     },
     {
+      "name": "time_origin_source",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "TimeOriginSource"
+      }
+    },
+    {
       "name": "time_point",
       "kind": "type",
       "tier": "stable",
@@ -8786,10 +8817,17 @@
     },
     {
       "name": "validation_error",
-      "kind": "type",
-      "tier": "stable",
+      "kind": "error",
+      "tier": "extension",
       "bindings": {
-        "python": "ValidationError",
+        "python": "ValidationError"
+      }
+    },
+    {
+      "name": "validation_error",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
         "typescript": "ValidationError"
       }
     },

@@ -206,6 +206,18 @@ diagnostic_code_registry! {
     /// origin. The message names `/solver/time_span` (and the origin's pointer
     /// when the origin is at fault).
     SOLVER_TIME_SPAN_INVALID = "solver_time_span_invalid";
+    /// A timestamp handed to the §2.2.7 clock accessor `timestamp_to_seconds`
+    /// that is not in the `solver.time_span` bound form
+    /// (`YYYY-MM-DDThh:mm:ss[.f]Z`).
+    TIMESTAMP_MALFORMED = "timestamp_malformed";
+    /// A timestamp handed to `timestamp_to_seconds` that is in the bound form
+    /// but whose day is not in its month (esm-spec §2.2.7).
+    TIMESTAMP_NO_CALENDAR_DAY = "timestamp_no_calendar_day";
+    /// The time origin the §2.2.7 clock accessors read
+    /// (`domain.temporal.reference_time`, else `start`) is present but is not
+    /// an RFC 3339 date-time naming a calendar day. The message names its
+    /// pointer.
+    TIME_ORIGIN_INVALID = "time_origin_invalid";
     /// Declared `units` on an expression node in a document declaring `esm` <
     /// 1.2.0 (esm-spec §4.8.5).
     CONST_UNITS_VERSION_TOO_OLD = "const_units_version_too_old";
@@ -781,6 +793,9 @@ mod error_code_tests {
             "template_inject_target_not_component",
             "template_inject_target_unknown",
             "template_library_illegal_payload",
+            "time_origin_invalid",
+            "timestamp_malformed",
+            "timestamp_no_calendar_day",
             "toplevel_model_ref_unresolved",
             "unbound_index_symbol",
             "undefined_index_set",

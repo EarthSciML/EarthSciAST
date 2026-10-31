@@ -232,6 +232,12 @@ SOLVER_EXTERNAL_UNRESOLVED = "solver_external_unresolved"
 SOLVER_TIME_SPAN_VERSION_TOO_OLD = "solver_time_span_version_too_old"
 SOLVER_TIME_SPAN_INVALID = "solver_time_span_invalid"
 
+# The §2.2.7 clock accessors (``time_origin``, ``timestamp_to_seconds``), one
+# code per cause, so a caller tells them apart without reading the message.
+TIMESTAMP_MALFORMED = "timestamp_malformed"
+TIMESTAMP_NO_CALENDAR_DAY = "timestamp_no_calendar_day"
+TIME_ORIGIN_INVALID = "time_origin_invalid"
+
 # Declared `units` on an expression node in a document declaring esm < 1.2.0
 # (esm-spec §4.8.5), raised as ``ConstUnitsError`` from ``units.py``.
 CONST_UNITS_VERSION_TOO_OLD = "const_units_version_too_old"

@@ -745,6 +745,14 @@
       "note": "Behaviour of a binding's time-span accessor given a call-site interval."
     },
     {
+      "id": "conf.5.49.1.clock-accessor-forms-agree",
+      "section": "5.49.1",
+      "quote": "that carries it; all forms MUST agree.",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "The clock accessors time_origin and timestamp_to_seconds give the same answer for a domain whether it is passed as raw JSON, as a typed domain, or inside a document: binding API behaviour."
+    },
+    {
       "id": "conf.5.49.1.leaf-time-span-not-checked",
       "section": "5.49.1",
       "quote": "a root mounting a leaf whose `time_span` is reversed, or a 1.2.0 leaf that carries one, MUST load",

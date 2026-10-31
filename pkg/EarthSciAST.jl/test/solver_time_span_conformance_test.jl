@@ -179,70 +179,54 @@ include("testutils.jl")   # TESTUTILS_REPO_ROOT
         @test EarthSciAST.timestamp_to_seconds(frac, "2019-07-01T00:00:00.5Z") === 0.25
         @test EarthSciAST.timestamp_to_seconds(frac, "2019-07-01T00:00:01.25Z") === 1.0
 
-        # Refusals carry §2.2.7's code and name the offending input, not
-        # `/solver/time_span` (there is none).
+        # Refusals carry the code of their cause and name the offending input,
+        # not `/solver/time_span` (there is none).
         bad_origin = EarthSciAST.EsmFile("1.3.0", EarthSciAST.Metadata("m");
             domain=EarthSciAST.Domain(temporal=Dict{String,Any}(
                 "reference_time" => "not-a-date")))
-        e = try
-            EarthSciAST.time_origin(bad_origin)
+        caught(f) = try
+            f()
             nothing
         catch err
             err
         end
+        e = caught(() -> EarthSciAST.time_origin(bad_origin))
         @test e isa EarthSciAST.ExpressionTemplateError &&
-              e.code == EarthSciAST.ERROR_CODES.SOLVER_TIME_SPAN_INVALID &&
+              e.code == EarthSciAST.ERROR_CODES.TIME_ORIGIN_INVALID &&
               occursin("/domain/temporal/reference_time", e.message)
-        e = try
-            EarthSciAST.timestamp_to_seconds(bad_origin, "2019-07-01T00:00:00Z")
-            nothing
-        catch err
-            err
-        end
+        e = caught(() -> EarthSciAST.timestamp_to_seconds(bad_origin, "2019-07-01T00:00:00Z"))
         @test e isa EarthSciAST.ExpressionTemplateError &&
+              e.code == EarthSciAST.ERROR_CODES.TIME_ORIGIN_INVALID &&
               occursin("/domain/temporal/reference_time", e.message)
-        e = try
-            EarthSciAST.timestamp_to_seconds(ref, "2019-07-01")
-            nothing
-        catch err
-            err
-        end
+        e = caught(() -> EarthSciAST.timestamp_to_seconds(ref, "2019-07-01"))
         @test e isa EarthSciAST.ExpressionTemplateError &&
-              e.code == EarthSciAST.ERROR_CODES.SOLVER_TIME_SPAN_INVALID &&
+              e.code == EarthSciAST.ERROR_CODES.TIMESTAMP_MALFORMED &&
               occursin("not an RFC 3339 UTC timestamp", e.message)
-        e = try
-            EarthSciAST.timestamp_to_seconds(ref, "2019-02-30T00:00:00Z")
-            nothing
-        catch err
-            err
-        end
+        e = caught(() -> EarthSciAST.timestamp_to_seconds(ref, "2019-02-30T00:00:00Z"))
         @test e isa EarthSciAST.ExpressionTemplateError &&
+              e.code == EarthSciAST.ERROR_CODES.TIMESTAMP_NO_CALENDAR_DAY &&
               occursin("names no calendar day", e.message)
-
-        # A bad timestamp is reported BEFORE a bad origin: the two share a code,
-        # so the order must match Python and Rust.
-        e = try
-            EarthSciAST.timestamp_to_seconds(bad_origin, "2019-07-01")
-            nothing
-        catch err
-            err
-        end
+        # `resolve_time_span` keeps the one §2.2.7 code for every cause.
+        e = caught(() -> EarthSciAST.resolve_time_span(EarthSciAST.EsmFile("1.3.0",
+            EarthSciAST.Metadata("m"); domain=bad_origin.domain,
+            solver=EarthSciAST.Solver(time_span=EarthSciAST.SolverTimeSpan(
+                "2019-07-01T00:00:00Z", "2019-07-02T00:00:00Z")))))
         @test e isa EarthSciAST.ExpressionTemplateError &&
-              occursin("not an RFC 3339 UTC timestamp", e.message) &&
-              !occursin("/domain/temporal/reference_time", e.message)
+              e.code == EarthSciAST.ERROR_CODES.SOLVER_TIME_SPAN_INVALID
 
-        # A non-string timestamp is the same structured error, not a MethodError.
+        # A non-string timestamp is the structured error, not a MethodError.
         for bad in (0, nothing, :t)
-            e = try
-                EarthSciAST.timestamp_to_seconds(ref, bad)
-                nothing
-            catch err
-                err
-            end
+            e = caught(() -> EarthSciAST.timestamp_to_seconds(ref, bad))
             @test e isa EarthSciAST.ExpressionTemplateError &&
-                  e.code == EarthSciAST.ERROR_CODES.SOLVER_TIME_SPAN_INVALID &&
+                  e.code == EarthSciAST.ERROR_CODES.TIMESTAMP_MALFORMED &&
                   occursin("not an RFC 3339 UTC timestamp", e.message)
         end
+
+        # A raw `domain` that is not an object names `/domain`.
+        e = caught(() -> EarthSciAST.time_origin("2019-07-01T00:00:00Z"))
+        @test e isa EarthSciAST.ExpressionTemplateError &&
+              e.code == EarthSciAST.ERROR_CODES.TIME_ORIGIN_INVALID &&
+              occursin("/domain is", e.message)
 
         # Reconstructing a timestamp's POSIX time from the pair is correct only
         # to within rounding: `time_origin` and `timestamp_to_seconds` round
@@ -257,5 +241,43 @@ include("testutils.jl")   # TESTUTILS_REPO_ROOT
         @test EarthSciAST.time_origin(rounding) +
               EarthSciAST.timestamp_to_seconds(rounding, "2019-07-01T00:00:00.1Z") ===
               nextfloat(1561939200.1)
+    end
+
+    # The shared pin of the clock accessors: each case's domain as raw JSON
+    # (as the planner gets it off the wire, a `JSON3.Object`; as a
+    # `Dict{String,Any}`; Symbol-keyed), as a typed `Domain`, and inside a
+    # document built in memory.
+    _symbol_keyed(x::AbstractDict) = Dict{Symbol,Any}(Symbol(k) => _symbol_keyed(v) for (k, v) in x)
+    _symbol_keyed(x) = x
+    @testset "the clock accessors on a domain: $(c.id)" for c in manifest.clock.cases
+        @test "julia" in manifest.clock.bindings_required
+        wire = JSON3.read(JSON3.write(c.domain))
+        raw = wire isa JSON3.Object ? JSON3.read(JSON3.write(c.domain), Dict{String,Any}) : wire
+        forms = Any[wire]
+        if wire isa JSON3.Object
+            push!(forms, raw, _symbol_keyed(raw))
+        end
+        if c.typed
+            temporal = raw === nothing ? nothing : get(raw, "temporal", nothing)
+            typed = raw === nothing ? nothing : EarthSciAST.Domain(temporal=temporal)
+            typed === nothing || push!(forms, typed)
+            push!(forms, EarthSciAST.EsmFile("1.3.0", EarthSciAST.Metadata("m"); domain=typed))
+        end
+        attempt(f) = try
+            (:ok, f())
+        catch err
+            err isa EarthSciAST.ExpressionTemplateError || rethrow()
+            (:error, err.code)
+        end
+        expect(want) = haskey(want, :seconds) ? (:ok, Float64(want.seconds)) :
+                       (:error, String(want.error_code))
+        for form in forms
+            # `===`: binary64 equality, and the result is a Float64.
+            @test attempt(() -> EarthSciAST.time_origin(form)) === expect(c.origin)
+            for t in c.timestamps
+                @test attempt(() -> EarthSciAST.timestamp_to_seconds(form, t.timestamp)) ===
+                      expect(t)
+            end
+        end
     end
 end

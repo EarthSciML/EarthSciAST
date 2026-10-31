@@ -313,9 +313,9 @@ pub use template_imports::{
 // the §2.2.7 `solver.time_span` interval — the parts of the block that are NOT
 // advisory.
 pub use solver::{
-    reject_solver_external_pre_v13, reject_solver_pre_v11, reject_solver_time_span_pre_v13,
-    resolve_time_span, resolve_tolerances, solver_external_location, time_origin,
-    timestamp_to_seconds,
+    TimeOriginSource, reject_solver_external_pre_v13, reject_solver_pre_v11,
+    reject_solver_time_span_pre_v13, resolve_time_span, resolve_tolerances,
+    solver_external_location, time_origin, timestamp_to_seconds,
 };
 pub use types::{
     AffectEquation, AutoRecords, ContinuousEvent, Coordinate, CouplingEntry, CouplingRole,
