@@ -383,7 +383,9 @@ pub type PrepareProgressFn = Arc<dyn Fn(&PrepareProgress<'_>) -> Flow + Send + S
 /// [`crate::problem::ProblemOptions`].
 #[derive(Clone, Default)]
 pub(crate) struct PrepareOptions {
-    /// Select one model when the document holds several.
+    /// Select one model when the document holds several; it is then built
+    /// alone, its names model-local. `None` builds the only model, or a
+    /// document of several WHOLE (see `BuildState::whole_document`).
     pub model_name: Option<String>,
     /// Metaparameter bindings closed at load (esm-spec §9.7.6 site 4).
     pub metaparameters: BTreeMap<String, i64>,
@@ -1739,13 +1741,14 @@ impl<'o> BuildState<'o> {
             .models
             .as_ref()
             .ok_or_else(|| err("document has no models"))?;
-        let (model, model_name) = match &opts.model_name {
-            Some(n) => (Self::authored_model(models, n, &mut index_sets)?, Some(n.clone())),
-            None if models.len() == 1 => {
-                let n = models.keys().next().expect("len checked above");
-                (Self::authored_model(models, n, &mut index_sets)?, Some(n.clone()))
-            }
-            None => (Self::whole_document(&file, &mut index_sets)?, None),
+        let model_name = match &opts.model_name {
+            Some(n) => Some(n.clone()),
+            None if models.len() == 1 => models.keys().next().cloned(),
+            None => None,
+        };
+        let model = match &model_name {
+            Some(n) => Self::authored_model(models, n, &mut index_sets)?,
+            None => Self::whole_document(&file, &mut index_sets)?,
         };
 
         let (param_vals, param_names) =

@@ -196,8 +196,13 @@ fn same_named_data_parameters_in_two_models_keep_their_own_columns() {
 #[test]
 fn an_explicit_model_name_still_builds_that_model_alone() {
     let doc = document(json!({"Ingest": ingesting_model(), "Bystander": bystander(true)}));
-    let got = build_and_read(&doc, Some("Ingest"), &[("Ingest.p", &[3.0, 5.0])], &["total"])
-        .unwrap_or_else(|e| panic!("did not build: {e}"));
+    let got = build_and_read(
+        &doc,
+        Some("Ingest"),
+        &[("Ingest.p", &[3.0, 5.0])],
+        &["total"],
+    )
+    .unwrap_or_else(|e| panic!("did not build: {e}"));
     assert_eq!(got, vec![8.0]);
 }
 

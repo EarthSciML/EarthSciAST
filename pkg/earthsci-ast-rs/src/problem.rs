@@ -544,7 +544,9 @@ pub struct ProblemOptions {
     pub p: HashMap<String, f64>,
     /// Initial state bindings (canonical SciML `u0`). Exact or bare names.
     pub u0: HashMap<String, f64>,
-    /// Select one model when the document holds several.
+    /// Select one model when the document holds several. `None` builds the
+    /// whole document: one model as itself, several as one dot-namespaced
+    /// (`Model.var`) system, on the build pipeline as on the compile path.
     pub model_name: Option<String>,
     /// Metaparameter bindings closed at load (esm-spec §9.7.6 site 4).
     pub metaparameters: BTreeMap<String, i64>,
@@ -3641,9 +3643,9 @@ struct SuppliedData {
 impl SuppliedData {
     /// Capture what `opts` supplies. The shaped-parameter arrays are MOVED out
     /// of `opts.const_arrays` when they are the only reason the build pipeline
-    /// would run on a document of several models with none selected, which the
-    /// pipeline refuses: they need nothing from it there (stage 3d binds each
-    /// onto its parameter). Otherwise the pipeline keeps them — it evaluates a
+    /// would run on a document of several models with none selected: they
+    /// need nothing from it there (stage 3d binds each onto its parameter), so
+    /// the whole-document build it would make is skipped. Otherwise the pipeline keeps them — it evaluates a
     /// state-free document's observed graph with them — and they are copied
     /// here.
     fn capture(opts: &mut ProblemOptions, raw: Option<&JsonValue>, file: Option<&EsmFile>) -> Self {
