@@ -561,3 +561,42 @@ fn a_million_cell_transpose_builds_and_runs_in_one_pass() {
         );
     }
 }
+
+#[test]
+fn a_million_cell_non_shift_scatter_builds_through_the_tuple_list() {
+    // out[j] = Σ_{i : j = i / 2} u[i] (i/2 is an integer at even i only):
+    // not a unit shift, so the build-time scatter map, at a size whose dense
+    // box the dense lowering refuses.
+    let n: i64 = 1_000_000;
+    let rhs = faq(
+        &["j"],
+        &[("j", 1, n), ("i", 1, n)],
+        "+",
+        eq(json!("j"), op("/", vec![json!("i"), json!(2)])),
+        ix("u", vec![json!("i")]),
+    );
+    let d = doc(n, 0, vec![du(n, rhs)], Value::Null);
+    let native = program(&d, Compiler::Native);
+    let u: Vec<f64> = (0..n).map(|k| CANCEL[k as usize % 4]).collect();
+    let mut ws = native.new_workspace();
+    let p = native.parameter_vector(&HashMap::new()).expect("defaults");
+    let fs = native.default_forcing();
+    let mut out = vec![0.0; n as usize];
+    native
+        .eval_into(&u, &[], &p, 0.0, &fs, &mut out, &mut ws)
+        .expect("eval");
+    let before = allocs();
+    native
+        .eval_into(&u, &[], &p, 0.0, &fs, &mut out, &mut ws)
+        .expect("eval");
+    assert_eq!(allocs() - before, 0, "a warm call allocated");
+    for (k, x) in out.iter().enumerate() {
+        let j = k + 1;
+        let want = if 2 * j <= n as usize {
+            0.0 + u[2 * j - 1]
+        } else {
+            0.0
+        };
+        assert_eq!(x.to_bits(), want.to_bits(), "cell {j}");
+    }
+}
