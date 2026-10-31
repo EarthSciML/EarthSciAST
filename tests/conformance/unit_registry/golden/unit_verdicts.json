@@ -246,10 +246,10 @@
     },
     {
       "canonical": "m^2/s^2",
-      "scale_exact": "1",
-      "scale_to_canonical": 1.0,
+      "scale_exact": "1000000000000",
+      "scale_to_canonical": 1000000000000.0,
       "units": "MJ/kg/ppm",
-      "why": "A MOVES fuel-property sensitivity: energy content per ppm. The left-to-right solidus (4.8.2) reads it as (MJ/kg)/ppm, and the 1e6 of `MJ` and the 1e-6 of `ppm` must cancel EXACTLY to 1."
+      "why": "A MOVES fuel-property sensitivity: energy content per ppm. The left-to-right solidus (4.8.2) reads it as (MJ/kg)/ppm, so the scale is 1e6 / 1e-6 = 1e12 EXACTLY -- dividing by `ppm` multiplies by 1e6."
     },
     {
       "canonical": "1",
