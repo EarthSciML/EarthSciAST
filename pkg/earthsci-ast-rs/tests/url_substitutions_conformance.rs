@@ -232,7 +232,11 @@ mod ingest {
         // `data` is relative to the MOUNTING document (tmp/), so
         // `snapshots/b` is tmp/snapshots/b, not tmp/lib/snapshots/b.
         let a = mount(t, "a.esm", json!({"snapshot": "a", "data": "snapshots/b"}));
-        let b = mount(t, "b.esm", json!({"snapshot": "b", "data": "./snapshots/a"}));
+        let b = mount(
+            t,
+            "b.esm",
+            json!({"snapshot": "b", "data": "./snapshots/a"}),
+        );
         assert_eq!(
             emit(&a, &t.join("a.csv")),
             "i1,Snap.val,Snap.lead_val\n1,1,10\n2,2,20\n3,4,40\n4,8,80\n"

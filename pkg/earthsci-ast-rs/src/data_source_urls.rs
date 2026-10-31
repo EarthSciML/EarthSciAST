@@ -356,7 +356,10 @@ pub(crate) fn apply_mount_url_substitutions(
     for (site, v) in sites.iter_mut() {
         let Some(t) = v.as_str() else { continue };
         let found = placeholders(t);
-        if !found.iter().any(|(_, _, n)| values.iter().any(|(k, _)| k == n)) {
+        if !found
+            .iter()
+            .any(|(_, _, n)| values.iter().any(|(k, _)| k == n))
+        {
             continue;
         }
         let mut out = String::with_capacity(t.len() + 64);
@@ -531,8 +534,10 @@ mod tests {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let repo = remove_dot_segments(&absolute_base(&repo));
         let m: Value = serde_json::from_str(
-            &std::fs::read_to_string(repo.join("tests/conformance/url_substitutions/manifest.json"))
-                .expect("read the shared manifest"),
+            &std::fs::read_to_string(
+                repo.join("tests/conformance/url_substitutions/manifest.json"),
+            )
+            .expect("read the shared manifest"),
         )
         .expect("manifest is JSON");
         let declaring = repo.join(m["declaring_dir"].as_str().expect("declaring_dir"));
@@ -569,15 +574,26 @@ mod tests {
             if let Some(code) = expect.get("error_code").and_then(Value::as_str) {
                 let e = got.expect_err(id);
                 assert_eq!(e.code, code, "{id}: {}", e.message);
-                for n in expect["message_contains"].as_array().expect("message_contains") {
+                for n in expect["message_contains"]
+                    .as_array()
+                    .expect("message_contains")
+                {
                     let n = n.as_str().expect("str");
-                    assert!(e.message.contains(n), "{id}: message must name {n:?}: {}", e.message);
+                    assert!(
+                        e.message.contains(n),
+                        "{id}: message must name {n:?}: {}",
+                        e.message
+                    );
                 }
                 continue;
             }
             got.unwrap_or_else(|e| panic!("{id}: {e}"));
             let src = &doc["data_sources"]["s"]["source"];
-            assert_eq!(src["url_template"], Value::String(want(&expect["url_template"])), "{id}");
+            assert_eq!(
+                src["url_template"],
+                Value::String(want(&expect["url_template"])),
+                "{id}"
+            );
             if let Some(ms) = expect.get("mirrors").and_then(Value::as_array) {
                 let w: Vec<Value> = ms.iter().map(|p| Value::String(want(p))).collect();
                 assert_eq!(src["mirrors"], Value::Array(w), "{id}: mirrors");
@@ -598,7 +614,10 @@ mod tests {
     #[test]
     fn placeholders_are_bare_identifiers_only() {
         let names = |t: &str| -> Vec<String> {
-            placeholders(t).into_iter().map(|(_, _, n)| n.to_string()).collect()
+            placeholders(t)
+                .into_iter()
+                .map(|(_, _, n)| n.to_string())
+                .collect()
         };
         assert_eq!(names("{a}/{b_1}/{date:%Y}/{1x}/{}/{a"), vec!["a", "b_1"]);
         assert_eq!(names("x{snapshot}y"), vec!["snapshot"]);
