@@ -1812,7 +1812,7 @@ reading that as a gap.
 | `error_code_names` | function | `error_code_names` | – | – | `error_code_names` | – |
 | `evaluate_cellwise` | function | `evaluate_cellwise` | – | – | `evaluate_cellwise` | – |
 | `exact_scale` | type | – | – | – | `ExactScale` | `ExactScale` |
-| `expand` | type | – | `Expand` | `Expand` | – | – |
+| `expand` | function | – | – | `Expand` | – | `Expand` |
 | `expand_document` | function | – | `expandDocument` | `expand_document` | – | – |
 | `expr` | type | – | – | `Expr` | `Expr` | – |
 | `expr_node` | type | – | – | `ExprNode` | – | `ExprNode` |
@@ -1897,6 +1897,7 @@ reading that as a gap.
 | `validate_schema` | function | `validate_schema` | `validateSchema` | – | – | – |
 | `validate_structural` | function | `validate_structural` | – | – | – | `ValidateStructural` |
 | `validate_units` | function | – | `validateUnits` | `validate_units` | – | – |
+| `validation_error` | type | – | `ValidationError` | `ValidationError` | – | – |
 | `value_invention_error` | error | – | – | `ValueInventionError` | `ValueInventionError` | – |
 | `value_invention_result` | type | – | – | `ValueInventionResult` | `ValueInventionResult` | – |
 | `var_gridding` | type | `VarGridding` | – | – | `VarGridding` | – |
