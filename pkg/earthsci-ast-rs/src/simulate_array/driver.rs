@@ -255,8 +255,9 @@ pub(crate) struct FieldIcRecord {
 }
 
 /// The field initial conditions construction resolved, held for the first
-/// solve ([`ArrayCompiled::field_ic_records`] fills it, the first
-/// `build_initial_state` takes it).
+/// solve ([`ArrayCompiled::field_ic_records`] fills it, the first solve's
+/// `build_initial_state` takes it, and [`ArrayCompiled::initial_state`] reads it
+/// in place).
 ///
 /// Construction has to evaluate every field `ic` — a strict compiler refuses
 /// one it would walk per cell, and the report names the route of each — and
@@ -273,13 +274,21 @@ pub(crate) struct FieldIcRecord {
 ///   after `u0`). A host can write it in between through
 ///   [`ArrayCompiled::forcing_handle`], so the memo records the buffer's
 ///   handle generation, which every call to that accessor bumps, and answers
-///   only while it is unchanged. Taking the memo, rather than keeping it, is
-///   what holds the rest: only the first solve can read it, and every later
-///   one resolves from the buffer as it stands.
+///   only while it is unchanged.
+///
+/// The crate's discrete-cadence refresh writes the buffer through
+/// [`ArrayCompiled::forcing_buffer`], which leaves the generation alone, but
+/// the fields it writes are never in a field initial condition's scope
+/// ([`ArrayCompiled::resolve_field_ics`] reads the buffer without them), so a
+/// refresh cannot move what the memo holds. A write through `forcing_buffer`
+/// to any OTHER field after construction would, and is what the generation
+/// cannot see: the crate's drivers make none, and a new one has to take
+/// [`ArrayCompiled::forcing_handle`] instead. Every read but the first solve's
+/// leaves the memo in place; the first solve takes it, and every later one
+/// resolves from the buffer as it stands.
 ///
 /// Initial-condition overrides are applied over the result, not read by it.
 #[cfg(feature = "solve")]
-#[derive(Clone)]
 pub(crate) struct FieldIcMemo {
     params: Vec<u64>,
     forcing_generation: u64,
@@ -849,6 +858,7 @@ impl ArrayCompiled {
         &self,
         params: &HashMap<String, f64>,
         mut records: Option<&mut Vec<FieldIcRecord>>,
+        discrete_forcing: &HashSet<String>,
     ) -> Result<HashMap<usize, f64>, SimulateError> {
         let mut out: HashMap<usize, f64> = HashMap::new();
         if self.field_ics.is_empty() {
@@ -872,7 +882,23 @@ impl ArrayCompiled {
         // Built ONLY when the document has such definitions: with none (every
         // document before this), the resolver reads the forcing buffer straight
         // through and no provider field is copied.
-        let borrowed = self.forcing.borrow();
+        //
+        // A discrete-cadence field is read without: the solve's refresh writes
+        // it into this buffer from `tspan.0` on, after the initial state is
+        // built, so construction resolves without it, and a later resolution
+        // must not read the record the last solve left there.
+        let buffer = self.forcing.borrow();
+        let without_discrete: Option<HashMap<String, ArrayD<f64>>> = discrete_forcing
+            .iter()
+            .any(|name| buffer.contains_key(name))
+            .then(|| {
+                buffer
+                    .iter()
+                    .filter(|(name, _)| !discrete_forcing.contains(*name))
+                    .map(|(name, arr)| (name.clone(), arr.clone()))
+                    .collect()
+            });
+        let borrowed: &HashMap<String, ArrayD<f64>> = without_discrete.as_ref().unwrap_or(&buffer);
         let mut scope: Option<HashMap<String, ArrayD<f64>>> = None;
         // A scalar-valued scope definition (`dz = H/N`) binds where a
         // parameter does, for the definitions after it and for the targets.
@@ -965,7 +991,7 @@ impl ArrayCompiled {
             scope = Some(built);
             scope_params = Some(bound);
         }
-        let forcing: &HashMap<String, ArrayD<f64>> = scope.as_ref().unwrap_or(&borrowed);
+        let forcing: &HashMap<String, ArrayD<f64>> = scope.as_ref().unwrap_or(borrowed);
         let params: &HashMap<String, f64> = scope_params.as_ref().unwrap_or(params);
         for (target, rhs) in &self.field_ics {
             let vs = self.var_shapes.get(target).ok_or_else(|| {
@@ -1225,7 +1251,8 @@ impl ArrayCompiled {
         let _precision_guard = self.precision.enter();
         let mut records = Vec::new();
         let stop = strict.then(crate::simulate_array::StopAtFirstCell::arm);
-        let result = self.resolve_field_ics(&resolved, Some(&mut records));
+        // No discrete-cadence field is in the buffer before the first refresh.
+        let result = self.resolve_field_ics(&resolved, Some(&mut records), &HashSet::new());
         let stopped = stop.as_ref().is_some_and(|s| s.stopped());
         if let Ok(slots) = &result
             && !stopped
@@ -1407,8 +1434,9 @@ impl ArrayCompiled {
         &self,
         initial_conditions: &HashMap<String, f64>,
         param_vec: &[f64],
+        discrete_forcing: &HashSet<String>,
     ) -> Result<Vec<f64>, SimulateError> {
-        self.build_initial_state_with(initial_conditions, param_vec, true)
+        self.build_initial_state_with(initial_conditions, param_vec, discrete_forcing, true)
     }
 
     /// The initial state vector `u0` a solve under `params` and
@@ -1426,25 +1454,31 @@ impl ArrayCompiled {
         &self,
         params: &HashMap<String, f64>,
         initial_conditions: &HashMap<String, f64>,
+        discrete_forcing: &HashSet<String>,
     ) -> Result<Vec<f64>, SimulateError> {
         crate::simulate_array::take_const_array_oob();
-        let param_vec = self.build_param_vec(params)?;
-        let u0 = self.build_initial_state_with(initial_conditions, &param_vec, false)?;
-        if let Some(details) = crate::simulate_array::take_const_array_oob() {
-            return Err(
-                crate::compile_error::CompileError::InterpreterBuildError { details }.into(),
-            );
+        let u0 = self.build_param_vec(params).and_then(|param_vec| {
+            self.build_initial_state_with(initial_conditions, &param_vec, discrete_forcing, false)
+        });
+        // Drained at every exit, so no later call reads this one's gather. An
+        // error building the state is the answer over a gather it latched.
+        let oob = crate::simulate_array::take_const_array_oob();
+        match (u0, oob) {
+            (Ok(_), Some(details)) => {
+                Err(crate::compile_error::CompileError::InterpreterBuildError { details }.into())
+            }
+            (u0, _) => u0,
         }
-        Ok(u0)
     }
 
     /// [`Self::build_initial_state`], taking construction's memo
-    /// (`consume_memo`, what a solve does) or reading a copy of it.
+    /// (`consume_memo`, what a solve does) or reading it in place.
     #[cfg(feature = "solve")]
     fn build_initial_state_with(
         &self,
         initial_conditions: &HashMap<String, f64>,
         param_vec: &[f64],
+        discrete_forcing: &HashSet<String>,
         consume_memo: bool,
     ) -> Result<Vec<f64>, SimulateError> {
         // Same §6.6.2 canonicalization as `build_param_vec`, on the state side.
@@ -1457,15 +1491,19 @@ impl ArrayCompiled {
         .map_err(crate::simulate::ic_key_error)?;
         // What construction resolved, when it resolved it under these
         // parameters ([`FieldIcMemo`]).
-        let memo = if consume_memo {
-            self.field_ic_memo.borrow_mut().take()
-        } else {
-            self.field_ic_memo.borrow().clone()
+        let bits = param_bits(param_vec);
+        let fresh = |m: &FieldIcMemo| {
+            m.params == bits && m.forcing_generation == self.forcing_generation.get()
         };
-        let memo = memo.filter(|m| {
-            m.params == param_bits(param_vec)
-                && m.forcing_generation == self.forcing_generation.get()
-        });
+        let taken = consume_memo
+            .then(|| self.field_ic_memo.borrow_mut().take())
+            .flatten()
+            .filter(|m| fresh(m));
+        let kept = (!consume_memo).then(|| self.field_ic_memo.borrow());
+        let kept = kept
+            .as_deref()
+            .and_then(Option::as_ref)
+            .filter(|m| fresh(m));
         // Resolved scalar-parameter scope (load-time constants) for the ic
         // coordinate-expression path — a parameter-dependent grid-geometry
         // template (`x0 + (i − 1/2)·dx`) binds here — and for the
@@ -1476,9 +1514,14 @@ impl ArrayCompiled {
             .cloned()
             .zip(param_vec.iter().copied())
             .collect();
-        let field_ic_map = match memo {
-            Some(m) => m.slots,
-            None => self.resolve_field_ics(&resolved_params, None)?,
+        let field_ic_map: std::borrow::Cow<'_, HashMap<usize, f64>> = match (taken, kept) {
+            (Some(m), _) => std::borrow::Cow::Owned(m.slots),
+            (None, Some(m)) => std::borrow::Cow::Borrowed(&m.slots),
+            (None, None) => std::borrow::Cow::Owned(self.resolve_field_ics(
+                &resolved_params,
+                None,
+                discrete_forcing,
+            )?),
         };
         // Per slot, the first of: an explicit override, an initialization
         // equation, a field `ic`, the variable's default. Written lowest
@@ -1621,7 +1664,7 @@ impl ArrayCompiled {
         // carrying the `NaN` the gather substituted.
         crate::simulate_array::take_const_array_oob();
         let param_vec = self.build_param_vec(params_owned)?;
-        let ic_vec = self.build_initial_state(ics_owned, &param_vec)?;
+        let ic_vec = self.build_initial_state(ics_owned, &param_vec, discrete_forcing)?;
 
         // Seed the forcing buffer at t0 BEFORE the static hoist reads it — a
         // no-op for the CONST/single-segment path; for DISCRETE it primes the
@@ -4216,6 +4259,32 @@ mod field_ic_memo_tests {
             let second = solve(&prob, &SolveOptions::default()).expect("solves");
             assert_eq!(field_ic_resolutions() - before, 2, "[{compiler}]");
             assert_eq!(bits(&first), bits(&second), "[{compiler}]");
+        }
+    }
+
+    /// `initial_state` reads the memo in place: neither it nor the first solve
+    /// after it resolves the field initial conditions again.
+    #[test]
+    fn the_initial_state_accessor_leaves_the_memo_for_the_first_solve() {
+        let file = with_ic(3, scaled_index());
+        for compiler in [Compiler::Native, Compiler::Interpreter] {
+            let prob = esm_problem(&file, (0.0, 1.0), opts(compiler))
+                .unwrap_or_else(|e| panic!("[{compiler}] {e}"));
+            let before = field_ic_resolutions();
+            let u0 = crate::problem::initial_state(&prob).expect("an initial state");
+            assert_eq!(u0, [0.5, 1.0, 1.5], "[{compiler}]");
+            assert_eq!(crate::problem::initial_state(&prob).expect("again"), u0);
+            let sol = solve(&prob, &SolveOptions::default()).expect("solves");
+            assert_eq!(
+                field_ic_resolutions() - before,
+                0,
+                "[{compiler}] the accessor or the solve after it resolved the ics again"
+            );
+            assert_eq!(first_column(&sol), u0, "[{compiler}]");
+            // The solve spent the memo; the accessor now resolves, to the same
+            // values.
+            assert_eq!(crate::problem::initial_state(&prob).expect("after"), u0);
+            assert_eq!(field_ic_resolutions() - before, 1, "[{compiler}]");
         }
     }
 

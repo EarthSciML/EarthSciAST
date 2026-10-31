@@ -116,9 +116,9 @@ fn initial_state_matches_the_manifest() {
     }
 }
 
-/// The accessor leaves construction's resolved field initial conditions for
-/// the first solve (it reads the memo without taking it), and repeated calls
-/// agree.
+/// Repeated calls agree, with each other and with the solve after them.
+/// That the accessor leaves construction's resolved field initial conditions
+/// for that solve is counted in-crate (`field_ic_memo_tests`).
 #[test]
 fn accessor_then_solve_agree() {
     let manifest = read_json(&category_dir().join("manifest.json"));
@@ -169,4 +169,28 @@ fn a_static_problem_has_none() {
         initial_state(&prob),
         Err(SimulateError::NotDynamic { .. })
     ));
+}
+
+/// A Float32 document that integrates has no solve, so it has no initial
+/// state either: the accessor refuses it as `solve` does.
+#[test]
+fn a_float32_problem_that_integrates_has_none() {
+    let file = load_string(
+        r#"{"esm": "1.1.0", "metadata": {"name": "Narrow"},
+            "domain": {"element_type": "Float32"},
+            "models": {"M": {
+                "variables": {"u": {"type": "unknown", "units": "1", "default": 1.0}},
+                "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+                               "rhs": {"op": "-", "args": ["u"]}}]}}}"#,
+    )
+    .unwrap();
+    let prob = esm_problem(
+        ProblemInput::File(&file),
+        (0.0, 1.0),
+        ProblemOptions::default(),
+    )
+    .unwrap();
+    let refused = |e: SimulateError| e.to_string().contains("time integration");
+    assert!(solve(&prob, &SolveOptions::default()).is_err_and(refused));
+    assert!(initial_state(&prob).is_err_and(refused));
 }

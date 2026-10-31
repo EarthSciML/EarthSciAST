@@ -7390,13 +7390,15 @@ range; and a coordinate-expression `ic` under three values of its parameter.
 Each case gives the Problem's `p` and `u0` and the expected value of EVERY state
 element keyed by its flattened name (`M.u`, `F.u[2]`), so a binding checks the
 whole vector, not a sample. The expected values are the documents' own
-formulas, evaluated in binary64 in the documents' operation order; the
+formulas, evaluated in binary64 in the documents' operation order by
+`scripts/gen-initial-state-manifest.py`, which reads the expressions from the
+fixtures (`--check` reports a manifest a fixture edit left stale); the
 tolerance (`rtol` 1e-14, `atol` 1e-15) leaves room only for a `cos` that differs
 in its last bit.
 
 **Adapters.** Rust — `pkg/earthsci-ast-rs/tests/initial_state_conformance.rs`,
 which also checks each case against a zero-length solve bit for bit, and that a
-static Problem has no initial state. `bindings_required` is `["rust"]`: Julia
+static Problem and a Float32 Problem that integrates have no initial state. `bindings_required` is `["rust"]`: Julia
 holds the state in the `prob.u0` field and Python only as `init(prob).u`, and
 neither exports `initial_state` yet (`bindings_pending` in the manifest says so).
 Go and TypeScript do not simulate.

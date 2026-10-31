@@ -1,7 +1,7 @@
 {
   "category": "initial_state",
   "version": "1.0",
-  "description": "Cross-binding conformance for the public initial-state accessor (API_SPEC 5.8 `initial_state`, CONFORMANCE_SPEC 5.53): the state a Problem integrates from, one value per state element keyed by its flattened name, built as a solve builds it. Per element the first of: the Problem's `u0` entry, an initialization equation (esm-spec 6.2), an `ic` equation or field initial condition (11.4, 11.4.1), the declared `default`; the Problem's `p` (else the parameter defaults) bound in every initial condition's scope (6.6.5). Every fixture is REFERENCED from another category, where its inline tests pin the same values at t = 0 through a solve. The expected values are the documents' own formulas, evaluated in binary64 in the operation order the documents write.",
+  "description": "Cross-binding conformance for the public initial-state accessor (API_SPEC 5.8 `initial_state`, CONFORMANCE_SPEC 5.53): the state a Problem integrates from, one value per state element keyed by its flattened name, built as a solve builds it. Per element the first of: the Problem's `u0` entry, an initialization equation (esm-spec 6.2), an `ic` equation or field initial condition (11.4, 11.4.1), the declared `default`; the Problem's `p` (else the parameter defaults) bound in every initial condition's scope (6.6.5). Every fixture is REFERENCED from another category, where its inline tests pin the same values at t = 0 through a solve. The expected values are the documents' own formulas, evaluated in binary64 in the operation order the documents write, by scripts/gen-initial-state-manifest.py.",
   "bindings_required": [
     "rust"
   ],
