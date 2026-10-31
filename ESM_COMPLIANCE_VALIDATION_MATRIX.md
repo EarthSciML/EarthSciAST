@@ -1389,9 +1389,10 @@ every mount form they implement, gated by the shared fixtures in
 had dropped the field at load, so every per-variable override vanished on
 load → emit. Rust implements -020: the flattened equations are checked for
 `mixed_element_type` before either runtime builds (the per-model inference runs
-before flattening and never saw a coupling). Rust refuses a written `element_type` inside a
-`subsystems.<k>` component at problem build (`element_type_uncarried`), because
-its precision table and inference read top-level model variables only. **Julia**
+before flattening and never saw a coupling). Rust evaluates a written `element_type`
+inside a `subsystems.<k>` component, at any depth: its precision table records
+the variable under its model-local and its full path, and inference walks the
+subsystem's equations. **Julia**
 now refuses every binary32 variable at tree-walk build (`float32_unsupported`),
 and **Python** every binary32 variable except a recurrence's carried cell, rather
 than evaluate them in binary64.
