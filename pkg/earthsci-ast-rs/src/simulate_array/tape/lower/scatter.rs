@@ -1,0 +1,475 @@
+//! One-pass scatter for a `faq` whose filter pins an output index by
+//! equality (esm-spec §4.3.1, EarthSciAST#613).
+//!
+//! A filter that is a conjunction holding, for an output index `j`, a
+//! conjunct `j == e` (or `e == j`) where `e` reads no output index admits,
+//! at each point of the contracted box, at most one value of `j`: the value
+//! of `e` there. The naive evaluation walks the output box and, in every
+//! cell, the whole contracted box, testing the filter at each pair, so a
+//! transposed band product `out[j] = Σ_{i : i + 1 = j} a[i]·u[i]` costs
+//! `|j| × |i|`. Here the contracted box is walked ONCE, in the order the
+//! interpreter's per-cell walk visits it (the odometer over the contracted
+//! names, the last one fastest); `e` and every other conjunct the build can
+//! evaluate are evaluated at each point, and the point is appended to the run
+//! of output cell `e`. A stable bucketing by cell keeps each cell's run in
+//! that visit order, so each cell receives exactly the terms the naive walk
+//! admits, in the same order: the tuple-list form ([`TupleList`],
+//! [`Instr::SegReduce`]) then folds each run left to right from the
+//! semiring's identity, bit for bit the interpreter's fold for every ⊕.
+//! Output indices no conjunct pins are outer loops: the pass is repeated for
+//! each of their cells.
+//!
+//! The map from points to cells is computed here, at build time, so `e` must
+//! be build-time data: index names, literals, baked parameters, build-time
+//! scalars and gathers of build-time arrays, combined by arithmetic and
+//! comparisons ([`IxNode`]), each evaluated with the interpreter's own scalar
+//! kernels. An `e` that reads a run-time value (a state, a tunable parameter,
+//! the time) is declined, and the contraction keeps its dense lowering. A
+//! remaining conjunct the build cannot evaluate stays in the filter the tuple
+//! list lowers as a run-time mask, which skips a term exactly as the
+//! interpreter's `continue` does.
+
+use super::tuples::{TupleList, TupleSpec};
+use super::*;
+use crate::simulate_array::eval::{apply_binary, fold_scalar};
+use std::rc::Rc;
+
+/// A build-time integer-index expression over one point's loop symbols.
+enum IxNode {
+    Lit(f64),
+    /// A loop symbol: its position in the point's value vector.
+    Sym(usize),
+    Neg(Box<IxNode>),
+    /// An n-ary `+ - * / and or`, folded as `eval_arith` folds it.
+    Fold(&'static str, Vec<IxNode>),
+    /// A two-operand comparison, `eval_binary`'s kernel.
+    Cmp(&'static str, Box<IxNode>, Box<IxNode>),
+    /// `index(a, subs…)` of an array the build knows, row-major.
+    Index {
+        vals: Rc<Vec<f64>>,
+        shape: DimU,
+        subs: Vec<IxNode>,
+    },
+}
+
+/// Why an [`IxNode`] produced no value at a point: a gather the build cannot
+/// place (a subscript outside its array). The interpreter would read a
+/// ghost or fault there; the scatter declines instead of guessing which.
+struct NotStatic;
+
+impl IxNode {
+    fn eval(&self, pt: &[f64]) -> Result<f64, NotStatic> {
+        Ok(match self {
+            IxNode::Lit(x) => *x,
+            IxNode::Sym(k) => pt[*k],
+            IxNode::Neg(a) => -a.eval(pt)?,
+            IxNode::Fold(op, args) => {
+                let mut vs: SmallVec<[f64; 4]> = SmallVec::with_capacity(args.len());
+                for a in args {
+                    vs.push(a.eval(pt)?);
+                }
+                fold_scalar(op, &vs)
+            }
+            IxNode::Cmp(op, a, b) => apply_binary(op, a.eval(pt)?, b.eval(pt)?),
+            IxNode::Index { vals, shape, subs } => {
+                let mut flat = 0usize;
+                for (d, s) in subs.iter().enumerate() {
+                    // `eval_index_args`: the subscript rounded.
+                    let raw = s.eval(pt)?.round();
+                    if !(raw >= 1.0 && raw <= shape[d] as f64) {
+                        return Err(NotStatic);
+                    }
+                    flat = flat * shape[d] + (raw as usize - 1);
+                }
+                vals[flat]
+            }
+        })
+    }
+}
+
+/// The conjuncts of a filter: the arguments of a top-level `and`, else the
+/// filter itself.
+fn conjuncts(filter: &Expr) -> (&[Expr], bool) {
+    match filter {
+        Expr::Operator(n) if n.op == "and" && is_plain(n) && !n.args.is_empty() => {
+            (&n.args[..], true)
+        }
+        _ => (std::slice::from_ref(filter), false),
+    }
+}
+
+/// An operator node with no sidecar body, filter or ranges: a plain call.
+fn is_plain(n: &ExpressionNode) -> bool {
+    n.expr.is_none()
+        && n.filter.is_none()
+        && n.ranges.is_none()
+        && n.join.is_none()
+        && n.key.is_none()
+        && n.values.is_none()
+}
+
+/// Whether `e` mentions any of `names` as a variable (sidecars included).
+fn reads_any(e: &Expr, names: &[String]) -> bool {
+    let mut seen: HashSet<String> = HashSet::new();
+    standalone::collect_variable_names(e, &mut seen);
+    names.iter().any(|n| seen.contains(n))
+}
+
+/// The output index a conjunct pins, and the expression it pins it to:
+/// `j == e` or `e == j` with `j` an output index and `e` reading none.
+fn pin_of<'e>(c: &'e Expr, idx_names: &[String]) -> Option<(usize, &'e Expr)> {
+    let Expr::Operator(n) = c else {
+        return None;
+    };
+    if n.op != "==" || n.args.len() != 2 || !is_plain(n) {
+        return None;
+    }
+    for (a, b) in [(&n.args[0], &n.args[1]), (&n.args[1], &n.args[0])] {
+        if let Expr::Variable(v) = a
+            && let Some(d) = idx_names.iter().position(|s| s == v)
+            && !reads_any(b, idx_names)
+        {
+            return Some((d, b));
+        }
+    }
+    None
+}
+
+impl TapeBuilder<'_> {
+    /// Compile `e` as a build-time expression over the loop symbols `syms`;
+    /// `None` when it reads anything the build does not know.
+    fn ix_compile(&self, e: &Expr, syms: &[String]) -> Option<IxNode> {
+        Some(match e {
+            Expr::Integer(n) => IxNode::Lit(*n as f64),
+            Expr::Number(x) => IxNode::Lit(*x),
+            Expr::Variable(v) => {
+                if let Some(k) = syms.iter().position(|s| s == v) {
+                    IxNode::Sym(k)
+                } else if let Some(&x) = self.baked_params.get(v.as_str()) {
+                    IxNode::Lit(x)
+                } else {
+                    match self.known_named(v)? {
+                        (shape, vals) if shape.is_empty() && vals.len() == 1 => {
+                            IxNode::Lit(vals[0])
+                        }
+                        _ => return None,
+                    }
+                }
+            }
+            Expr::Operator(n) if is_plain(n) => {
+                let op: &'static str = match n.op.as_str() {
+                    "+" => "+",
+                    "-" => "-",
+                    "*" => "*",
+                    "/" => "/",
+                    "and" => "and",
+                    "or" => "or",
+                    "==" => "==",
+                    "!=" => "!=",
+                    "<" => "<",
+                    "<=" => "<=",
+                    ">" => ">",
+                    ">=" => ">=",
+                    "index" => return self.ix_compile_index(n, syms),
+                    _ => return None,
+                };
+                if n.args.is_empty() {
+                    return None;
+                }
+                let args = n
+                    .args
+                    .iter()
+                    .map(|a| self.ix_compile(a, syms))
+                    .collect::<Option<Vec<_>>>()?;
+                match op {
+                    "==" | "!=" | "<" | "<=" | ">" | ">=" => {
+                        let [a, b]: [IxNode; 2] = args.try_into().ok()?;
+                        IxNode::Cmp(op, Box::new(a), Box::new(b))
+                    }
+                    "-" if args.len() == 1 => {
+                        IxNode::Neg(Box::new(args.into_iter().next().expect("one operand")))
+                    }
+                    // The registry's arities; anything else is not folded here.
+                    "-" | "/" if args.len() != 2 => return None,
+                    _ => IxNode::Fold(op, args),
+                }
+            }
+            _ => return None,
+        })
+    }
+
+    fn ix_compile_index(&self, n: &ExpressionNode, syms: &[String]) -> Option<IxNode> {
+        let (Expr::Variable(base), subs) = n.args.split_first()? else {
+            return None;
+        };
+        if syms.contains(base) {
+            return None;
+        }
+        let (shape, vals) = self.known_named(base)?;
+        if shape.is_empty() || shape.len() != subs.len() || shape.contains(&0) {
+            return None;
+        }
+        let subs = subs
+            .iter()
+            .map(|s| self.ix_compile(s, syms))
+            .collect::<Option<Vec<_>>>()?;
+        Some(IxNode::Index { vals, shape, subs })
+    }
+
+    /// The one-pass equality scatter (module docs), or `None` when the
+    /// contraction is not one it serves — no conjunct pins an output index,
+    /// a pinned value is not build-time data, a contracted range is ragged —
+    /// or a point's value cannot be placed. Nothing is emitted before the
+    /// tuple list is lowered, so a `None` needs no rollback; an `Err` comes
+    /// from that lowering, and the caller rolls it back.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn lower_equality_scatter(
+        &mut self,
+        idx_names: &[String],
+        lo: &DimI,
+        shape: &DimU,
+        body: &Expr,
+        contract_names: &[String],
+        contract_dims: &[ContractDim],
+        reduce: ReduceKind,
+        filter: Option<&Expr>,
+    ) -> LResult<Option<LV>> {
+        let Some(filter) = filter else {
+            return Ok(None);
+        };
+        let nr = idx_names.len();
+        let nc = contract_names.len();
+        if nr == 0 || nc == 0 {
+            return Ok(None);
+        }
+        let (parts, is_and) = conjuncts(filter);
+        // The first conjunct to pin an index pins it; a later one that pins
+        // the same index is an ordinary remaining conjunct.
+        let mut pins: Vec<Option<&Expr>> = vec![None; nr];
+        let mut pinned_by: Vec<bool> = vec![false; parts.len()];
+        for (k, c) in parts.iter().enumerate() {
+            if let Some((d, e)) = pin_of(c, idx_names)
+                && pins[d].is_none()
+            {
+                pins[d] = Some(e);
+                pinned_by[k] = true;
+            }
+        }
+        if pins.iter().all(Option::is_none) {
+            return Ok(None);
+        }
+        // The contracted box: every dimension one extent for every cell.
+        let mut clo: SmallVec<[i64; 4]> = SmallVec::with_capacity(nc);
+        let mut cn: SmallVec<[usize; 4]> = SmallVec::with_capacity(nc);
+        for d in contract_dims {
+            let (l, h) = match d {
+                ContractDim::Static(l, h) => (*l, *h),
+                ContractDim::Derived { from_faq } => match self.ring_extent(from_faq) {
+                    Some(n) => (1, n),
+                    None => return Ok(None),
+                },
+                ContractDim::Ragged { .. } => return Ok(None),
+            };
+            clo.push(l);
+            cn.push((h - l + 1).max(0) as usize);
+        }
+        let Ok(combine_op) = self.array_combine_op(reduce, "contracted") else {
+            return Ok(None);
+        };
+        // A point's values: the output indices, then the contracted names
+        // (the tuple list's column order).
+        let mut syms: Vec<String> = idx_names.to_vec();
+        syms.extend(contract_names.iter().cloned());
+        let mut pin_nodes: Vec<Option<IxNode>> = Vec::with_capacity(nr);
+        for p in &pins {
+            pin_nodes.push(match p {
+                Some(e) => match self.ix_compile(e, &syms) {
+                    Some(n) => Some(n),
+                    // A run-time pin: no build-time map (module docs).
+                    None => return Ok(None),
+                },
+                None => None,
+            });
+        }
+        // The remaining conjuncts: evaluated here when the build can, else
+        // kept for the run-time mask.
+        let mut static_rest: Vec<IxNode> = Vec::new();
+        let mut runtime_rest: Vec<Expr> = Vec::new();
+        for (k, c) in parts.iter().enumerate() {
+            if pinned_by[k] {
+                continue;
+            }
+            match self.ix_compile(c, &syms) {
+                Some(n) => static_rest.push(n),
+                None => runtime_rest.push(c.clone()),
+            }
+        }
+
+        let n_box: usize = cn.iter().product();
+        let free: Vec<usize> = (0..nr).filter(|&d| pins[d].is_none()).collect();
+        let n_free: usize = free.iter().map(|&d| shape[d]).product();
+        let n_out: usize = shape.iter().product();
+        let Some(visits) = n_free.checked_mul(n_box) else {
+            return Ok(None);
+        };
+        if visits as u64 > u32::MAX as u64 || n_out >= u32::MAX as usize {
+            return Ok(None);
+        }
+        let mut strides = vec![1usize; nr];
+        for d in (0..nr.saturating_sub(1)).rev() {
+            strides[d] = strides[d + 1] * shape[d + 1];
+        }
+        let prec = crate::precision::active();
+        // The walk: the free cells row-major, and in each one the contracted
+        // box in the interpreter's odometer order (the last name fastest).
+        // Each admitted point is recorded as (cell, visit).
+        let mut cell_of: Vec<u32> = Vec::new();
+        let mut visit_of: Vec<u32> = Vec::new();
+        let mut pt: Vec<f64> = vec![0.0; nr + nc];
+        let mut fdig: SmallVec<[usize; 4]> = SmallVec::from_elem(0, free.len());
+        let mut cdig: SmallVec<[usize; 4]> = SmallVec::from_elem(0, nc);
+        if n_box > 0 {
+            for f in 0..n_free {
+                for (k, &d) in free.iter().enumerate() {
+                    pt[d] = (lo[d] + fdig[k] as i64) as f64;
+                }
+                cdig.iter_mut().for_each(|x| *x = 0);
+                for b in 0..n_box {
+                    for k in 0..nc {
+                        pt[nr + k] = (clo[k] + cdig[k] as i64) as f64;
+                    }
+                    let mut cell = 0usize;
+                    let mut keep = true;
+                    for d in 0..nr {
+                        if let Some(node) = &pin_nodes[d] {
+                            let Ok(v) = node.eval(&pt) else {
+                                return Ok(None);
+                            };
+                            let off = v - lo[d] as f64;
+                            if !(v.fract() == 0.0 && off >= 0.0 && off < shape[d] as f64) {
+                                keep = false;
+                                break;
+                            }
+                            pt[d] = v;
+                        }
+                        cell += (pt[d] as i64 - lo[d]) as usize * strides[d];
+                    }
+                    if keep {
+                        for n in &static_rest {
+                            let Ok(v) = n.eval(&pt) else {
+                                return Ok(None);
+                            };
+                            // `fold_scalar`'s `and`: nonzero at the working
+                            // precision; a bare conjunct, the filter's own
+                            // `== 0.0` test.
+                            let held = if is_and { prec.round(v) != 0.0 } else { v != 0.0 };
+                            if !held {
+                                keep = false;
+                                break;
+                            }
+                        }
+                    }
+                    if keep {
+                        if cell_of.len() >= MAX_PROMOTED_ELEMS {
+                            return Ok(None);
+                        }
+                        cell_of.push(cell as u32);
+                        visit_of.push((f * n_box + b) as u32);
+                    }
+                    // Next contracted point, the last name fastest.
+                    for k in (0..nc).rev() {
+                        cdig[k] += 1;
+                        if cdig[k] < cn[k] {
+                            break;
+                        }
+                        cdig[k] = 0;
+                    }
+                }
+                for k in (0..free.len()).rev() {
+                    fdig[k] += 1;
+                    if fdig[k] < shape[free[k]] {
+                        break;
+                    }
+                    fdig[k] = 0;
+                }
+            }
+        }
+
+        // Stable bucketing by cell: each cell's run in visit order.
+        let m = cell_of.len();
+        let mut rows: Vec<u32> = vec![0; n_out + 1];
+        for &c in &cell_of {
+            rows[c as usize + 1] += 1;
+        }
+        for c in 0..n_out {
+            rows[c + 1] += rows[c];
+        }
+        let mut next: Vec<u32> = rows[..n_out].to_vec();
+        let mut order: Vec<u32> = vec![0; m];
+        for (k, &c) in cell_of.iter().enumerate() {
+            order[next[c as usize] as usize] = k as u32;
+            next[c as usize] += 1;
+        }
+        drop(next);
+        let mut cols: Vec<Vec<f64>> = (0..nr + nc).map(|_| Vec::with_capacity(m)).collect();
+        let mut cstr = vec![1usize; nc];
+        for k in (0..nc.saturating_sub(1)).rev() {
+            cstr[k] = cstr[k + 1] * cn[k + 1];
+        }
+        for &k in &order {
+            let mut cell = cell_of[k as usize] as usize;
+            for d in 0..nr {
+                cols[d].push((lo[d] + (cell / strides[d]) as i64) as f64);
+                cell %= strides[d];
+            }
+            let mut b = visit_of[k as usize] as usize % n_box.max(1);
+            for c in 0..nc {
+                cols[nr + c].push((clo[c] + (b / cstr[c]) as i64) as f64);
+                b %= cstr[c];
+            }
+        }
+        drop(order);
+        drop(cell_of);
+        drop(visit_of);
+
+        // The filter left for run-time: the conjuncts the build could not
+        // evaluate, still under `and` so a kept term is the same flag test.
+        let residual: Option<Expr> = match runtime_rest.len() {
+            0 => None,
+            _ if !is_and => runtime_rest.pop(),
+            1 => {
+                runtime_rest.push(Expr::Integer(1));
+                Some(and_of(runtime_rest))
+            }
+            _ => Some(and_of(runtime_rest)),
+        };
+        let ranges: Vec<(i64, i64)> = lo
+            .iter()
+            .zip(shape)
+            .map(|(&l, &n)| (l, l + n as i64 - 1))
+            .collect();
+        let spec = TupleSpec {
+            idx_names,
+            ranges: &ranges,
+            body,
+            contract_names,
+            bounds: &[],
+            gates: &[],
+            reduce,
+            filter: residual.as_ref(),
+            init: reduce.identity(),
+        };
+        self.tuples_held = self.tuples_held.saturating_add(m as u64);
+        let list = TupleList { rows, cols };
+        self.lower_tuple_list(&spec, list, lo, shape, combine_op)
+            .map(Some)
+    }
+}
+
+fn and_of(args: Vec<Expr>) -> Expr {
+    Expr::operator(ExpressionNode {
+        op: "and".to_string(),
+        args,
+        ..Default::default()
+    })
+}

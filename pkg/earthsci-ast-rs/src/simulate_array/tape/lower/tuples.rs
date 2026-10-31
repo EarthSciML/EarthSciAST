@@ -55,7 +55,7 @@ pub(in crate::simulate_array::tape) struct TupleFrame {
 }
 
 /// One contracted dimension's bound, before an output cell is chosen.
-enum DimBound {
+pub(super) enum DimBound {
     Static(i64, i64),
     /// `[1, offsets[parent...]]`: the offsets factor's row-major values and
     /// shape (empty for a scalar), and the output-axis position of each parent.
@@ -78,7 +78,7 @@ struct EqCand<'a> {
 }
 
 /// A join gate resolved from build-time data.
-struct BuiltGate {
+pub(super) struct BuiltGate {
     sym_src: String,
     sym_tgt: String,
     index: OverlapIndex,
@@ -92,10 +92,10 @@ struct BuiltGate {
 }
 
 /// The admitted tuple list: per output cell a contiguous run.
-struct TupleList {
-    rows: Vec<u32>,
+pub(super) struct TupleList {
+    pub(super) rows: Vec<u32>,
     /// One column per loop symbol (output names, then contracted names).
-    cols: Vec<Vec<f64>>,
+    pub(super) cols: Vec<Vec<f64>>,
 }
 
 impl TupleList {
@@ -128,19 +128,19 @@ enum Src<'a> {
 /// [`TapeBuilder::lower_tuple_list`] lowers, and what
 /// [`TapeBuilder::fold_tuple_contraction`] folds a sub-box of at a time.
 #[derive(Clone, Copy)]
-struct TupleSpec<'a> {
-    idx_names: &'a [String],
-    ranges: &'a [(i64, i64)],
-    body: &'a Expr,
-    contract_names: &'a [String],
-    bounds: &'a [DimBound],
-    gates: &'a [BuiltGate],
-    reduce: ReduceKind,
-    filter: Option<&'a Expr>,
+pub(super) struct TupleSpec<'a> {
+    pub(super) idx_names: &'a [String],
+    pub(super) ranges: &'a [(i64, i64)],
+    pub(super) body: &'a Expr,
+    pub(super) contract_names: &'a [String],
+    pub(super) bounds: &'a [DimBound],
+    pub(super) gates: &'a [BuiltGate],
+    pub(super) reduce: ReduceKind,
+    pub(super) filter: Option<&'a Expr>,
     /// What each cell's fold starts from: the semiring's identity, or the
     /// accumulator the previous window of the same cell's run left
     /// ([`TapeBuilder::fold_cell_in_windows`]).
-    init: f64,
+    pub(super) init: f64,
 }
 
 /// The default [`tuple_list_budget`]: about a million tuples. A tuple list
@@ -277,7 +277,7 @@ impl TapeBuilder<'_> {
     /// The tuple-list form itself (module docs): lower the filter and the
     /// body once over the 1-D box of `list`, `spec`'s admitted tuples, and
     /// fold each cell's run with one [`Instr::SegReduce`].
-    fn lower_tuple_list(
+    pub(super) fn lower_tuple_list(
         &mut self,
         spec: &TupleSpec<'_>,
         list: TupleList,

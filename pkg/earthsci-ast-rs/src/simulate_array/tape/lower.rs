@@ -93,6 +93,7 @@ fn tape_index(n: usize, table: &str) -> LResult<u32> {
 
 type LResult<T> = Result<T, Bail>;
 
+mod scatter;
 mod standalone;
 mod tuples;
 
@@ -5120,6 +5121,27 @@ impl<'m> TapeBuilder<'m> {
                 body,
                 reduce,
             );
+        }
+        // A filter that pins an output index by equality: one pass over the
+        // contracted box, each admitted term scattered into its cell
+        // (esm-spec §4.3.1, [`scatter`]). A body the tuple-list form cannot
+        // lower keeps the dense lowering below.
+        if !contract_names.is_empty() && filter.is_some() {
+            let txn = self.sub_txn();
+            match self.lower_equality_scatter(
+                idx_names,
+                &lo,
+                &shape,
+                body,
+                contract_names,
+                contract_dims,
+                reduce,
+                filter,
+            ) {
+                Ok(Some(v)) => return Ok(v),
+                Ok(None) => {}
+                Err(_) => self.sub_rollback(txn),
+            }
         }
         self.push_scope();
         let v = if contract_names.is_empty() {
