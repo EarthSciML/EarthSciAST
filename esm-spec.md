@@ -1179,9 +1179,10 @@ evaluator that does not keep a running accumulator — a per-cell triangular fol
 still fold each cell's window in the variant's direction, so it reaches the same bits. No
 binding may use a reassociating scan (pairwise, blocked, or parallel-prefix) for an inexact ⊕
 in either direction. A reverse window folds from the top under **every** ⊕, `max` and `min`
-included: on numbers their order does not matter, but a fold step that keeps its accumulator
-unless a term beats it skips a NaN that arrives after a number and keeps one that arrives
-first, so with a NaN in the window the visiting order decides the result.
+included, though for those two the direction does not change the result's value: a NaN term
+makes the reduction NaN wherever it is in the window (§4.2), and on numbers the extremum is
+the same in either order. The direction matters for `+` and `*`, whose low bits depend on the
+association.
 
 **One-pass scatter for an equality filter — licensed.** Consider a `faq` node whose `filter` is a
 conjunction (an `and`, or a single conjunct) that contains, for one or more output indices
@@ -1204,7 +1205,8 @@ evaluate the node as follows, and a binding used for production SHOULD:
 The contracted set is unchanged: the pass runs over every non-output range key, whether or not
 the body reads it. Each output cell receives exactly the terms the naive evaluation admits, in
 the same order and the same association, so the result is **bit-identical** to the naive fold
-under every ⊕, `max` and `min` with a NaN in a window included. Folding the identity for a point
+under every ⊕, `max` and `min` included (a NaN term makes the cell NaN wherever it falls in
+the cell's terms, §4.2, and the scatter admits exactly the naive NaN terms). Folding the identity for a point
 the remaining conjuncts exclude, instead of skipping it, reaches the same bits, because folding
 the identity changes no accumulator: a `+` accumulator seeded with `+0.0` is never `-0.0`,
 `x * 1 == x`, and a `max` / `min` identity never beats the accumulator. A reassociating or

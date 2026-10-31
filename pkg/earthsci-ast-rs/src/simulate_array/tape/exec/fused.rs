@@ -626,8 +626,8 @@ macro_rules! dispatch_bin_kernel {
                 BinCode::Mul => $apply!(|x, y| x * y),
                 BinCode::Div => $apply!(|x, y| x / y),
                 BinCode::Pow => $apply!(|x: f64, y: f64| x.powf(y)),
-                BinCode::Min => $apply!(|x: f64, y: f64| x.min(y)),
-                BinCode::Max => $apply!(|x: f64, y: f64| x.max(y)),
+                BinCode::Min => $apply!(crate::faq::nan_min),
+                BinCode::Max => $apply!(crate::faq::nan_max),
                 BinCode::Eq => $apply!(|x, y| (x == y) as i32 as f64),
                 BinCode::Ne => $apply!(|x, y| (x != y) as i32 as f64),
                 BinCode::Lt => $apply!(|x, y| (x < y) as i32 as f64),
@@ -2149,8 +2149,8 @@ unsafe fn exec_fused_runs(
                         let sub = |x: f64, y: f64| x - y;
                         let mul = |x: f64, y: f64| x * y;
                         let div = |x: f64, y: f64| x / y;
-                        let min = |x: f64, y: f64| x.min(y);
-                        let max = |x: f64, y: f64| x.max(y);
+                        let min = crate::faq::nan_min;
+                        let max = crate::faq::nan_max;
                         let gt = |x: f64, y: f64| (x > y) as i32 as f64;
                         let ge = |x: f64, y: f64| (x >= y) as i32 as f64;
                         let lt = |x: f64, y: f64| (x < y) as i32 as f64;
