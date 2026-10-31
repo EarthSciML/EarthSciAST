@@ -623,6 +623,43 @@ fn an_ingested_parameter_of_a_mounted_subsystem_is_assertable() {
     assert_eq!(total_row(&out), (2, 0, 0), "in:\n{out}");
 }
 
+/// In an INTEGRATING document the ingested column must reach the right-hand
+/// side, not only the assertion. `D(x) = sum(annual)` from `x(0) = 0` is `180 t`;
+/// before this was fixed the build pipeline read the data, the solve read the
+/// parameter's `default` (0) and `x` stayed at 0 — so an assertion on `annual`
+/// answering 100 beside a trajectory computed from 0 would have been a value
+/// the run never used.
+#[cfg(feature = "esio")]
+#[test]
+fn an_integrating_document_reads_the_ingested_column_it_asserts() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let url = write_ff10_zip(tmp.path());
+    let mut doc = document_with_scalar_total(&url, Sizing::Literal, ANN_TOTAL);
+    let model = &mut doc["models"]["Ingest"];
+    model.as_object_mut().expect("model").remove("system_kind");
+    model["variables"]["x"] = json!({
+        "type": "unknown", "units": "kg", "default": 0.0,
+        "description": "Accumulates the column total."
+    });
+    model["equations"]
+        .as_array_mut()
+        .expect("equations")
+        .push(json!({"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": "annual_total"}));
+    model["tests"] = json!([{
+        "id": "integrates_the_ingested_total",
+        "description": "x(1) = sum(ANN_VALUE), and the column itself at the same time.",
+        "time_span": {"start": 0.0, "end": 1.0},
+        "assertions": [
+            {"variable": "x", "time": 1.0, "expected": ANN_TOTAL, "tolerance": {"rel": 1e-6}},
+            {"variable": "annual", "time": 1.0, "coords": {"records": 1}, "expected": ANN[0]}
+        ]
+    }]);
+    let path = write_doc(tmp.path(), "ingest_dynamic.esm", &doc);
+    let (ok, out) = esm(tmp.path(), &["test", path.to_str().expect("utf-8 path")]);
+    assert!(ok, "the solve must read the ingested column; got:\n{out}");
+    assert_eq!(total_row(&out), (2, 0, 0), "in:\n{out}");
+}
+
 /// `esm simulate --observed` reads the same values `esm test` asserts: a
 /// data-fed parameter named there is written, not refused as "not a
 /// build-time-evaluable observed".

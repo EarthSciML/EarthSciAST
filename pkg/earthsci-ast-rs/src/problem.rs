@@ -2156,7 +2156,7 @@ pub fn esm_problem<'a>(
     let (refresh, discrete_forcing, refresh_boundaries) =
         bind_providers(&backend, &mut opts, tspan)?;
     if let Backend::Array(c) = &backend {
-        supplied.refuse_missing_array(c, owned_file.as_ref(), &opts.p)?;
+        supplied.refuse_missing_array(c, owned_file.as_ref(), &opts.p, &build.data_fields)?;
     }
 
     // ---- (5c) Refuse a data-fed parameter nothing bound (§9.6.6). ---------
@@ -3772,6 +3772,7 @@ impl SuppliedData {
         c: &ArrayCompiled,
         file: Option<&EsmFile>,
         p: &HashMap<String, f64>,
+        ingested: &HashMap<String, ArrayD<f64>>,
     ) -> Result<(), SimulateError> {
         // The parameter as the caller addresses it: by full name (esm-spec
         // §6.6.2), which a single-model build compiles bare under its namespace.
@@ -3781,7 +3782,24 @@ impl SuppliedData {
         };
         let forcing = c.forcing_buffer();
         for name in c.forcing_names() {
-            if forcing.borrow().contains_key(name) || names_key(&self.provider_keys, name) {
+            if forcing.borrow().contains_key(name) {
+                continue;
+            }
+            // What the BUILD pipeline's providers ingested for this data-fed
+            // parameter (keyed model-locally, so a coupled build's
+            // `Model.param` is matched by its tail). A build provider is
+            // consumed by the pipeline and never reaches the run-time binding
+            // above, so without this an integrating document read the
+            // parameter's `default` in its right-hand side while its
+            // build-time observeds read the data (finding F43).
+            if let Some(arr) = ingested.get(name).or_else(|| {
+                name.split_once('.')
+                    .and_then(|(_, tail)| ingested.get(tail))
+            }) {
+                forcing.borrow_mut().insert(name.clone(), arr.clone());
+                continue;
+            }
+            if names_key(&self.provider_keys, name) {
                 continue;
             }
             #[cfg(not(target_arch = "wasm32"))]
