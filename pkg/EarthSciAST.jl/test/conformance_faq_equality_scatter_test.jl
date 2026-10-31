@@ -16,8 +16,6 @@ const _FES_DIR = joinpath(
 )
 
 function _fes_golden_value(v)
-    # The interpreters disagree on this element today: Julia's own entry.
-    v isa JSON3.Object && return _fes_golden_value(v[:julia])
     v isa AbstractString || return Float64(v)
     v == "NaN" && return NaN
     v == "Infinity" && return Inf
