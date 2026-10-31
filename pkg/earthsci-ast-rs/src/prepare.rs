@@ -1885,29 +1885,37 @@ impl<'o> BuildState<'o> {
     /// the generic dotted-key → unique-shallowest-bare-tail pass is the one
     /// that now always runs, and it never overwrites an existing key.
     fn alias_pushdown_names(&mut self, pd_coupling: &[(String, String)]) {
-        // A key under the SELECTED model also surfaces under its model-local
-        // path, the selected model's own name stripped: that is how the built
-        // model spells a parameter of a mounted subsystem (`Leaf.p` for the key
-        // `Parent.Leaf.p`, esm-spec §4.7). The bare-tail pass below cannot
-        // reach it -- it strips every prefix, not just the model's -- so
+        inject_aliases(&mut self.arrays, pd_coupling);
+        // A mounted subsystem's parameter is spelled model-locally in the
+        // built model (`Leaf.p`, esm-spec §4.7) while its provider key is the
+        // full path (`Parent.Leaf.p`). The bare-tail pass above cannot reach
+        // that spelling -- it strips every prefix, not just the model's -- so
         // without this a data-fed parameter inside a subsystem is unbound, and
         // a model that mounts a data-fed leaf to assert on it (§6.6: "declares
         // that test on a component the assembly document itself declares")
-        // cannot build. Exact rather than heuristic, and it never overwrites.
+        // cannot build.
+        //
+        // It runs AFTER the bare-tail pass so the model-local key never joins
+        // that pass's shallowest-depth tie (a top-level `Parent.p` beside a
+        // mounted `Parent.Leaf.p` keeps its bare `p`). It is exact: only a
+        // dotted name the built model actually declares (a mounted variable)
+        // is published, and in this build that name means the mounted
+        // variable, so it REPLACES a same-spelled key a top-level model `Leaf`
+        // with its own `p` provider would otherwise have supplied.
         let prefix = format!("{}.", self.model_name);
         let local: Vec<(String, String)> = self
             .arrays
             .keys()
-            .filter_map(|k| k.strip_prefix(&prefix).map(|l| (k.clone(), l.to_string())))
-            .filter(|(_, l)| l.contains('.'))
+            .filter_map(|k| {
+                let l = k.strip_prefix(&prefix)?;
+                (l.contains('.') && self.model.variables.contains_key(l))
+                    .then(|| (k.clone(), l.to_string()))
+            })
             .collect();
         for (k, l) in local {
-            if !self.arrays.contains_key(&l) {
-                let a = self.arrays[&k].clone();
-                self.arrays.insert(l, a);
-            }
+            let a = self.arrays[&k].clone();
+            self.arrays.insert(l, a);
         }
-        inject_aliases(&mut self.arrays, pd_coupling);
     }
 
     /// A shaped parameter whose data the document itself supplies (an inline

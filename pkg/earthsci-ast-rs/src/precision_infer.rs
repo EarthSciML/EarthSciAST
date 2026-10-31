@@ -95,6 +95,7 @@ use crate::compile_error::CompileError;
 
 use crate::precision::{Env, Precision, VarPrecisions};
 use crate::types::{Equation, Expr, ExpressionNode, Model};
+use serde::Deserialize;
 
 /// The engine-internal operator that marks a precision boundary.
 ///
@@ -200,7 +201,8 @@ type Inferred<'a> = Option<Source<'a>>;
 /// [`CompileError::MixedElementType`] for an operator or an equation whose
 /// operands carry different ones.
 pub fn annotate_model(model: &mut Model, document: Precision) -> Result<(), CompileError> {
-    annotate_model_with(model, document, &HashMap::new())
+    let subs = subsystem_declarations_of(model);
+    annotate_model_with(model, "", &subs, document, &HashMap::new())
 }
 
 /// The precision a variable carries: its declaration, or the document's.
@@ -229,11 +231,27 @@ pub fn annotate_models(
     models: &mut indexmap::IndexMap<String, Model>,
     document: Precision,
 ) -> Result<(), CompileError> {
-    if !models.values().any(model_declares_element_type) {
+    let subs: Vec<SubsystemDeclarations> = models.values().map(subsystem_declarations_of).collect();
+    annotate_models_with(models, &subs, document)
+}
+
+/// [`annotate_models`] with each model's [`subsystem_declarations_of`]
+/// already computed (`subs[i]` for the `i`th model), so the subsystem trees
+/// are walked once per build rather than once per question asked of them.
+fn annotate_models_with(
+    models: &mut indexmap::IndexMap<String, Model>,
+    subs: &[SubsystemDeclarations],
+    document: Precision,
+) -> Result<(), CompileError> {
+    if !models
+        .values()
+        .zip(subs)
+        .any(|(m, s)| declares_element_type(m, s))
+    {
         return Ok(());
     }
     let mut qualified: HashMap<String, Precision> = HashMap::new();
-    for (mname, model) in models.iter() {
+    for ((mname, model), model_subs) in models.iter().zip(subs) {
         for (vname, var) in &model.variables {
             qualified.insert(
                 format!("{mname}.{vname}"),
@@ -242,31 +260,34 @@ pub fn annotate_models(
         }
         // A subsystem's variables under their full `Model.Sub.var` spelling,
         // which is how a scoped reference reaches them from another model.
-        for (path, et) in subsystem_declarations_of(model) {
+        for (path, et) in model_subs {
             qualified.insert(
                 format!("{mname}.{path}"),
                 declared_precision(et.as_deref(), document)?,
             );
         }
     }
-    for (_, model) in models.iter_mut() {
-        annotate_model_with(model, document, &qualified)?;
+    for ((mname, model), model_subs) in models.iter_mut().zip(subs) {
+        annotate_model_with(model, mname, model_subs, document, &qualified)?;
     }
     Ok(())
 }
 
-/// Does `model` — or any subsystem it carries, at any depth — declare an
-/// `element_type` on some variable?
-fn model_declares_element_type(model: &Model) -> bool {
+/// `(Sub.path.var, declared element_type)` for every variable of a model's
+/// subsystems, at any depth.
+type SubsystemDeclarations = Vec<(String, Option<String>)>;
+
+/// Does `model` — or any subsystem it carries, at any depth (`subs`, its
+/// [`subsystem_declarations_of`]) — declare an `element_type` on some
+/// variable?
+fn declares_element_type(model: &Model, subs: &SubsystemDeclarations) -> bool {
     model.variables.values().any(|v| v.element_type.is_some())
-        || subsystem_declarations_of(model)
-            .iter()
-            .any(|(_, et)| et.is_some())
+        || subs.iter().any(|(_, et)| et.is_some())
 }
 
 /// Every variable of `model`'s subsystems, at any depth, as `(Sub.path.var,
 /// declared element_type)`.
-fn subsystem_declarations_of(model: &Model) -> Vec<(String, Option<String>)> {
+fn subsystem_declarations_of(model: &Model) -> SubsystemDeclarations {
     crate::precision::subsystem_declarations_in(model.subsystems.iter().flatten())
 }
 
@@ -278,24 +299,28 @@ fn declared_precision(et: Option<&str>, document: Precision) -> Result<Precision
     }
 }
 
+/// Annotate `model` (keyed `owner` in its document, `""` when it stands
+/// alone), whose subsystems declare `subs`.
 fn annotate_model_with(
     model: &mut Model,
+    owner: &str,
+    subs: &SubsystemDeclarations,
     document: Precision,
     qualified: &HashMap<String, Precision>,
 ) -> Result<(), CompileError> {
-    if !model_declares_element_type(model) && !qualified.values().any(|p| *p != document) {
+    if !declares_element_type(model, subs) && !qualified.values().any(|p| *p != document) {
         return Ok(());
     }
     let mut env: HashMap<String, Precision> = qualified.clone();
-    env.reserve(model.variables.len());
+    env.reserve(model.variables.len() + subs.len());
     for (name, var) in &model.variables {
         env.insert(name.clone(), variable_precision(var, document)?);
     }
     // A mounted subsystem's variables are in scope here under their
     // model-local `Sub.path.var` spelling (esm-spec §4.7), so an equation of
     // this model over one carries its precision rather than adopting context.
-    for (path, et) in subsystem_declarations_of(model) {
-        env.insert(path, declared_precision(et.as_deref(), document)?);
+    for (path, et) in subs {
+        env.insert(path.clone(), declared_precision(et.as_deref(), document)?);
     }
     // Clone the names out of the map so the equation walk can borrow `model`
     // mutably. The map is one entry per variable, built once per model.
@@ -305,50 +330,70 @@ fn annotate_model_with(
     let annotated_init = init.map(|eqs| annotate_equations(eqs, &env, document));
     model.equations = annotated?;
     model.initialization_equations = annotated_init.transpose()?;
-    if let Some(subs) = model.subsystems.as_mut() {
-        for (name, sub) in subs.iter_mut() {
-            annotate_subsystem(name, sub, document, &env)?;
+    if let Some(subsystems) = model.subsystems.as_mut() {
+        for (name, sub) in subsystems.iter_mut() {
+            let path = if owner.is_empty() {
+                name.clone()
+            } else {
+                format!("{owner}.{name}")
+            };
+            annotate_subsystem(&path, sub, document, &env)?;
         }
     }
     Ok(())
 }
 
 /// Annotate the equations of one `subsystems.<k>` component, and of its own
-/// subsystems at any depth, in place in its raw form.
+/// subsystems at any depth, in place in its raw form. `path` is the
+/// component's full dotted path (`Model.Sub`, `Model.Sub.Inner`), used only
+/// to name it in an error.
 ///
 /// A subsystem stays raw JSON on the typed model until a build mounts it
-/// (`crate::simulate_array::mount_subsystems`), which splices its equations
-/// into the model with every sibling name prefixed. The markers this pass
-/// writes are ordinary operator nodes, so they survive that splice, and the
-/// mounted rule `Sub.var` is armed at `precision::of_variable("Sub.var")`.
+/// (`crate::simulate_array::mount_subsystems`, and `flatten`'s subsystem
+/// lowering), which splices its equations into the model with every sibling
+/// name prefixed. The markers this pass writes are ordinary operator nodes, so
+/// they survive that splice, and the mounted rule `Sub.var` is armed at
+/// `precision::of_variable("Sub.var")`.
 ///
-/// `enclosing` is the environment of the component that mounts this one. A
-/// name an equation here does not declare resolves against it, exactly as the
-/// mount resolves it: the splice renames only this component's own names.
+/// Only the component's `equations` and `initialization_equations` are
+/// deserialized, and the variables' `element_type`s read off the raw JSON: a
+/// whole-file leaf (an MPAS mesh) is not cloned or parsed whole here.
+///
+/// `enclosing` is the environment of the component that mounts this one. The
+/// names this component's equations resolve locally are exactly the names the
+/// mount renames: its own variables and, already prefixed, its nested
+/// subsystems' (`Inner.x`). Anything else resolves against `enclosing`, as
+/// the mount leaves it unrenamed.
 ///
 /// # Errors
 ///
 /// As [`annotate_model`], and [`CompileError::ElementTypeUncarried`] for a
 /// component this pass cannot read whose variables declare a precision other
-/// than the document's — it is refused, never evaluated in the document's.
+/// than the document's — it is refused, never evaluated in the document's. A
+/// component that cannot be read and declares nothing is left for the mount to
+/// refuse, with its own message.
 fn annotate_subsystem(
-    name: &str,
+    path: &str,
     value: &mut serde_json::Value,
     document: Precision,
     enclosing: &HashMap<String, Precision>,
 ) -> Result<(), CompileError> {
-    let sub = match crate::simulate_array::parse_subsystem_model(name, value) {
-        Ok((sub, _)) => sub,
-        Err(e) => {
+    let comp = crate::precision::subsystem_component(value);
+    let parts = readable_component(comp);
+    let (equations, init) = match parts {
+        Ok(parts) => parts,
+        Err(why) => {
+            let name = path.rsplit('.').next().unwrap_or(path);
             let decls = crate::precision::subsystem_declarations_in([(&name.to_string(), &*value)]);
-            for (path, et) in decls {
+            let prefix = &path[..path.len() - name.len()];
+            for (p, et) in decls {
                 if declared_precision(et.as_deref(), document)? != document {
                     return Err(CompileError::ElementTypeUncarried {
-                        construct: format!("subsystem variable '{path}'"),
+                        construct: format!("subsystem variable '{prefix}{p}'"),
                         reason: format!(
                             "it declares `element_type: \"{}\"` and the document evaluates in \
                              {}, but its component could not be read for precision inference \
-                             ({e})",
+                             ({why})",
                             et.as_deref().unwrap_or_default(),
                             document.element_type()
                         ),
@@ -359,21 +404,26 @@ fn annotate_subsystem(
         }
     };
     let mut env = enclosing.clone();
-    for (v, var) in &sub.variables {
-        env.insert(v.clone(), variable_precision(var, document)?);
+    if let Some(vars) = comp.get("variables").and_then(serde_json::Value::as_object) {
+        for (v, d) in vars {
+            let et = d.get("element_type").and_then(serde_json::Value::as_str);
+            env.insert(v.clone(), declared_precision(et, document)?);
+        }
     }
-    for (path, et) in subsystem_declarations_of(&sub) {
-        env.insert(path, declared_precision(et.as_deref(), document)?);
+    let nested = comp
+        .get("subsystems")
+        .and_then(serde_json::Value::as_object);
+    for (p, et) in crate::precision::subsystem_declarations_in(nested.into_iter().flatten()) {
+        env.insert(p, declared_precision(et.as_deref(), document)?);
     }
-    let equations = annotate_equations(sub.equations, &env, document)?;
-    let init = sub
-        .initialization_equations
+    let equations = annotate_equations(equations, &env, document)?;
+    let init = init
         .map(|eqs| annotate_equations(eqs, &env, document))
         .transpose()?;
     let to_json = |eqs: &Vec<Equation>| {
         serde_json::to_value(eqs).map_err(|e| {
             CompileError::build_err(format!(
-                "subsystem '{name}': re-serializing its annotated equations: {e}"
+                "subsystem '{path}': re-serializing its annotated equations: {e}"
             ))
         })
     };
@@ -390,10 +440,35 @@ fn annotate_subsystem(
         .and_then(serde_json::Value::as_object_mut)
     {
         for (k, v) in nested.iter_mut() {
-            annotate_subsystem(k, v, document, &env)?;
+            annotate_subsystem(&format!("{path}.{k}"), v, document, &env)?;
         }
     }
     Ok(())
+}
+
+/// The equations and initialization equations of a subsystem component
+/// (`comp`, already [`crate::precision::subsystem_component`]), or why it
+/// cannot be read as one: not an object, an unresolved `{"ref": ...}`, a file
+/// that does not hold exactly one model, or equations that do not parse.
+fn readable_component(
+    comp: &serde_json::Value,
+) -> Result<(Vec<Equation>, Option<Vec<Equation>>), String> {
+    let obj = comp.as_object().ok_or("it is not a JSON object")?;
+    if obj.contains_key("ref") {
+        return Err("it is an unresolved {\"ref\": ...}".to_string());
+    }
+    if obj.contains_key("models") {
+        return Err("it is a file that does not hold exactly one model".to_string());
+    }
+    let parse = |key: &str| -> Result<Option<Vec<Equation>>, String> {
+        obj.get(key)
+            .map(|v| Vec::<Equation>::deserialize(v).map_err(|e| format!("its `{key}`: {e}")))
+            .transpose()
+    };
+    Ok((
+        parse("equations")?.unwrap_or_default(),
+        parse("initialization_equations")?,
+    ))
 }
 
 /// The precision environment `file` declares: its `domain.element_type`, and
@@ -452,18 +527,22 @@ pub fn model_declarations(
 pub fn annotated(
     file: &crate::types::EsmFile,
 ) -> Result<Option<crate::types::EsmFile>, CompileError> {
-    let declares = file
-        .models
-        .iter()
-        .flatten()
-        .any(|(_, m)| model_declares_element_type(m));
-    if !declares {
+    let Some(models) = file.models.as_ref() else {
+        return Ok(None);
+    };
+    let subs: Vec<SubsystemDeclarations> = models.values().map(subsystem_declarations_of).collect();
+    if !models
+        .values()
+        .zip(&subs)
+        .any(|(m, s)| declares_element_type(m, s))
+    {
         return Ok(None);
     }
-    let document = env_of_file(file)?.document;
+    let document =
+        Precision::from_element_type(file.domain.as_ref().and_then(|d| d.element_type.as_deref()))?;
     let mut out = file.clone();
     if let Some(models) = out.models.as_mut() {
-        annotate_models(models, document)?;
+        annotate_models_with(models, &subs, document)?;
     }
     Ok(Some(out))
 }

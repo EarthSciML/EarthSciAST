@@ -163,6 +163,10 @@ pub struct VarPrecisions {
     /// precision (see [`Self::from_declarations`]), and those are not
     /// overrides.
     declared: std::collections::BTreeSet<String>,
+    /// Model-local subsystem spellings (`Sub.var`) the models disagree on.
+    /// [`Self::get`] answers `None` for these rather than falling back to the
+    /// bare last segment, which would name some other, top-level variable.
+    disputed: std::collections::HashSet<String>,
 }
 
 /// One model's variables as [`VarPrecisions::from_declarations`] reads them:
@@ -199,7 +203,14 @@ impl VarPrecisions {
     /// name, which is what per-rule arming looks up). Without the latter a
     /// lookup of `Sub.var` would fall back to its last segment and find a
     /// top-level `var` of another precision, or the document's. The model-local
-    /// spelling follows the same selection rule as a bare name.
+    /// spelling follows the same selection rule as a bare name, with two
+    /// refinements. The SELECTED model's spelling replaces a full spelling it
+    /// collides with (a top-level model named `Sub` with its own `var`):
+    /// building `selected`, `Sub.var` names the mounted variable. Without a
+    /// selection the full spelling is kept, since a flattened build names the
+    /// mounted variable `Model.Sub.var`, and a spelling the models disagree on
+    /// is recorded as disputed, so [`Self::get`] does not answer it with an
+    /// unrelated top-level `var`.
     ///
     /// # Errors
     ///
@@ -259,11 +270,19 @@ impl VarPrecisions {
             }
         }
         for (v, p) in bare {
-            // A name the models disagree on is recorded under no bare
-            // spelling, as before. A model-local `Sub.var` never displaces a
-            // full spelling recorded above (a model named `Sub` with a `var`).
-            if let Some(p) = p {
-                out.by_name.entry(v.to_string()).or_insert(p);
+            match p {
+                Some(p) if bare_from.is_some() => {
+                    out.by_name.insert(v.to_string(), p);
+                }
+                Some(p) => {
+                    out.by_name.entry(v.to_string()).or_insert(p);
+                }
+                None if v.contains('.') && !out.by_name.contains_key(v) => {
+                    out.disputed.insert(v.to_string());
+                }
+                // A bare name the models disagree on is recorded under no
+                // spelling, as before.
+                None => {}
             }
         }
         Ok(out)
@@ -288,7 +307,7 @@ impl VarPrecisions {
         // A consumer may hold a namespaced spelling of a bare registration
         // (flattening prefixes) or the reverse.
         let tail = name.rsplit('.').next()?;
-        if tail == name {
+        if tail == name || self.disputed.contains(name) {
             return None;
         }
         self.by_name.get(tail).copied()

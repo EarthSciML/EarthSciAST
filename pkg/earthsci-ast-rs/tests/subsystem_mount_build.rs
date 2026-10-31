@@ -85,6 +85,17 @@ fn build_and_read(
     values: &[f64],
     var: &str,
 ) -> Result<f64, String> {
+    build_and_read_all(doc, model, &[(key, values)], &[var]).map(|v| v[0])
+}
+
+/// Build `model` of `doc` with one provider per `(key, values)`, and read
+/// each of `vars`.
+fn build_and_read_all(
+    doc: &Value,
+    model: &str,
+    providers: &[(&str, &[f64])],
+    vars: &[&str],
+) -> Result<Vec<f64>, String> {
     let file = load_string(&doc.to_string()).map_err(|e| e.to_string())?;
     let prob = esm_problem(
         &file,
@@ -92,19 +103,28 @@ fn build_and_read(
         ProblemOptions {
             compiler: Some(Compiler::Interpreter),
             model_name: Some(model.to_string()),
-            build_providers: vec![(
-                key.to_string(),
-                Box::new(MockConst(values.to_vec())) as Box<dyn PrepareProvider>,
-            )],
+            build_providers: providers
+                .iter()
+                .map(|(key, values)| {
+                    (
+                        (*key).to_string(),
+                        Box::new(MockConst(values.to_vec())) as Box<dyn PrepareProvider>,
+                    )
+                })
+                .collect(),
             ..Default::default()
         },
     )
     .map_err(|e| e.to_string())?;
-    let arr = observed_field(&prob, var).map_err(|e| e.to_string())?;
-    arr.iter()
-        .next()
-        .copied()
-        .ok_or_else(|| format!("{var} evaluated to an empty field"))
+    vars.iter()
+        .map(|var| {
+            let arr = observed_field(&prob, var).map_err(|e| e.to_string())?;
+            arr.iter()
+                .next()
+                .copied()
+                .ok_or_else(|| format!("{var} evaluated to an empty field"))
+        })
+        .collect()
 }
 
 // ---- a subsystem's data-fed parameter is bound ------------------------------
@@ -148,6 +168,72 @@ fn a_provider_under_another_models_path_does_not_bind_the_subsystem() {
     assert!(
         !matches!(got, Ok(v) if v == 8.0),
         "a provider for `Other.Leaf.p` fed `Parent.Leaf.p`: {got:?}"
+    );
+}
+
+/// The selected model's OWN data parameter shares its last segment with the
+/// subsystem's (`Parent.p` beside `Parent.Leaf.p`). The model-local alias
+/// `Leaf.p` must not tie with `Parent.p` for the bare `p`: the parent's
+/// equations still read its own column, and the leaf reads its own.
+#[test]
+fn a_parent_data_parameter_keeps_its_bare_name_beside_a_subsystem_one() {
+    let mut parent = json!({
+        "subsystems": {"Leaf": data_leaf(None)},
+        "variables": {
+            "p": {
+                "type": "parameter", "units": "1", "default": 0.0,
+                "shape": ["rows"],
+                "update": {"kind": "data", "source": "src", "from": {"file_variable": "q"}}
+            },
+            "own": {"type": "unknown", "units": "1"}
+        }
+    });
+    parent["equations"] = json!([{
+        "lhs": "own",
+        "rhs": {
+            "op": "faq", "args": [], "semiring": "sum_product", "output_idx": [],
+            "ranges": {"r": {"from": "rows"}},
+            "expr": {"op": "index", "args": ["p", "r"]}
+        }
+    }]);
+    let doc = data_document(json!({"Parent": parent}));
+    let got = build_and_read_all(
+        &doc,
+        "Parent",
+        &[
+            ("Parent.p", &[100.0, 200.0]),
+            ("Parent.Leaf.p", &[3.0, 5.0]),
+        ],
+        &["own", "Leaf.total"],
+    )
+    .unwrap_or_else(|e| panic!("did not build: {e}"));
+    assert_eq!(got, vec![300.0, 8.0]);
+}
+
+/// A top-level model with the subsystem's name, carrying its own provider for
+/// `p` (key `Leaf.p`). Building `Parent`, `Leaf.p` is the MOUNTED parameter,
+/// so its own provider `Parent.Leaf.p` feeds it, not the other model's.
+#[test]
+fn a_same_named_top_level_model_does_not_feed_the_mounted_parameter() {
+    let doc = data_document(json!({
+        "Leaf": data_leaf(None),
+        "Parent": {
+            "subsystems": {"Leaf": data_leaf(None)},
+            "variables": {},
+            "equations": []
+        }
+    }));
+    let got = build_and_read_all(
+        &doc,
+        "Parent",
+        &[("Leaf.p", &[100.0, 200.0]), ("Parent.Leaf.p", &[3.0, 5.0])],
+        &["Leaf.total"],
+    )
+    .unwrap_or_else(|e| panic!("did not build: {e}"));
+    assert_eq!(
+        got,
+        vec![8.0],
+        "the top-level `Leaf` model's provider fed the mount"
     );
 }
 
@@ -309,4 +395,80 @@ fn a_float32_data_fed_subsystem_parameter_binds_and_sums_in_binary32() {
     let want = f64::from(0.1_f32 + 0.2_f32);
     assert_eq!(got.to_bits(), want.to_bits(), "got {got:?}, want {want:?}");
     assert_ne!(got, 0.1 + 0.2, "summed in binary64");
+}
+
+/// A top-level model with the subsystem's name, at ANOTHER precision (§6.6:
+/// testing a component the document also declares). Building `Host`,
+/// `Leaf.x` is the mounted binary32 variable, so it is armed in binary32 —
+/// inference and arming agree — not at the top-level model's binary64.
+#[test]
+fn a_same_named_top_level_model_does_not_set_the_mounted_precision() {
+    let mut doc = host(precision_leaf(Some("Float32")), vec![], None);
+    doc["models"]["Leaf"] = precision_leaf(None);
+    let x = evaluate(&doc, "Leaf.x").unwrap_or_else(|e| panic!("did not build: {e}"));
+    assert_eq!(x.to_bits(), F32_WITNESS.to_bits(), "Leaf.x = {x:?}");
+    assert_eq!(evaluate(&doc, "Leaf.flag").unwrap(), 0.0);
+}
+
+/// With no model selected, two models whose mounted `Leaf.x` disagree leave
+/// that spelling unanswered. It must NOT fall back to the bare `x` of some
+/// other model, which is what the model-local spelling exists to prevent.
+#[test]
+fn a_disputed_subsystem_spelling_does_not_fall_back_to_a_bare_name() {
+    use earthsci_ast::precision::{ModelDeclarations, Precision, VarPrecisions};
+    let sub = |et: &str| vec![("Leaf.x".to_string(), Some(et.to_string()))];
+    let models = [
+        ModelDeclarations {
+            model: "A",
+            variables: vec![("x", None)],
+            subsystem_variables: sub("Float32"),
+        },
+        ModelDeclarations {
+            model: "B",
+            variables: vec![("x", None)],
+            subsystem_variables: sub("Float64"),
+        },
+    ];
+    let t = VarPrecisions::from_declarations(&models, Precision::Float64, None).unwrap();
+    assert_eq!(t.get("x"), Some(Precision::Float64), "the agreed bare name");
+    assert_eq!(
+        t.get("Leaf.x"),
+        None,
+        "a disputed spelling answered by the bare `x`"
+    );
+    // The full spellings are unaffected.
+    assert_eq!(t.get("A.Leaf.x"), Some(Precision::Float32));
+    assert_eq!(t.get("B.Leaf.x"), Some(Precision::Float64));
+    // Selecting a model resolves the dispute in its favour.
+    let t = VarPrecisions::from_declarations(&models, Precision::Float64, Some("A")).unwrap();
+    assert_eq!(t.get("Leaf.x"), Some(Precision::Float32));
+}
+
+/// A nested component inference cannot read, declaring a precision other than
+/// the document's, is refused under its FULL path, so an assembly with
+/// several `Inner`s says which mount it means.
+#[test]
+fn an_unreadable_nested_subsystem_is_refused_under_its_full_path() {
+    let model: earthsci_ast::Model = serde_json::from_value(json!({
+        "variables": {},
+        "equations": [],
+        "subsystems": {"Leaf": {
+            "variables": {},
+            "equations": [],
+            "subsystems": {"Inner": {
+                "variables": {"x": {"type": "unknown", "units": "1", "element_type": "Float32"}},
+                "equations": "not a list of equations"
+            }}
+        }}
+    }))
+    .unwrap();
+    let mut models = indexmap::IndexMap::new();
+    models.insert("Host".to_string(), model);
+    let e = earthsci_ast::precision_infer::annotate_models(
+        &mut models,
+        earthsci_ast::precision::Precision::Float64,
+    )
+    .expect_err("an unreadable binary32 component was annotated")
+    .to_string();
+    assert!(e.contains("Host.Leaf.Inner.x"), "{e}");
 }
