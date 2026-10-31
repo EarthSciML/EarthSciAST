@@ -129,7 +129,7 @@ func (s *structuralScan) checkOperandAxes(expr Expression, target string, declar
 				Message: fmt.Sprintf(
 					"Operand '%s' of the array-level expression for '%s' is declared over "+
 						"index set '%s', which '%s' is not shaped over",
-					quoteSafe(operand), quoteSafe(target), quoteSafe(axis), quoteSafe(target)),
+					operand, target, axis, target),
 				Details: map[string]any{
 					"variable":          target,
 					"operand":           operand,

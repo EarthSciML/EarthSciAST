@@ -816,14 +816,14 @@ func unevaluableOpError(node ExprNode) error {
 			Message: fmt.Sprintf("operator '%s' is an evaluable-core op with no evaluation rule in the "+
 				"scalar evaluator: an earlier pipeline stage (value invention, or a load-time lowering "+
 				"pass) must eliminate it, or the document belongs to a runtime that evaluates it "+
-				"(esm-spec §4.2 / §9.6.6).", quoteSafe(node.Op)),
+				"(esm-spec §4.2 / §9.6.6).", node.Op),
 		}
 	}
 	return &EvaluationError{
 		Code: CodeUnloweredOperator,
 		Message: fmt.Sprintf("unlowered rewrite-target operator '%s' reached evaluation: it is not in the "+
 			"closed evaluable core, so a rewrite rule must eliminate it before evaluation "+
-			"(esm-spec §4.2 / §9.6.8).", quoteSafe(node.Op)),
+			"(esm-spec §4.2 / §9.6.8).", node.Op),
 	}
 }
 

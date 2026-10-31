@@ -42,7 +42,7 @@ func mergeNamed(dst *orderedMap, name string, decl any, code, what, origin strin
 			return nil
 		}
 		return newETErr(code,
-			fmt.Sprintf("%s: %s '%s' collides with a non-deep-equal existing definition (esm-spec §9.7.4/§9.7.5)", origin, what, quoteSafe(name)))
+			fmt.Sprintf("%s: %s '%s' collides with a non-deep-equal existing definition (esm-spec §9.7.4/§9.7.5)", origin, what, name))
 	}
 	dst.set(name, decl)
 	return nil
@@ -205,7 +205,7 @@ func loadImportBytes(ref, baseDir, origin string) ([]byte, string, error) {
 	data, dir, err := loadRefBytes(ref, baseDir)
 	if err != nil {
 		return nil, "", newETErr(CodeTemplateImportUnresolved,
-			fmt.Sprintf("%s: could not load template-library ref '%s': %v", origin, quoteSafe(ref), err))
+			fmt.Sprintf("%s: could not load template-library ref '%s': %v", origin, ref, err))
 	}
 	return data, dir, nil
 }
@@ -261,7 +261,7 @@ func resolveImportEntry(entry any, baseDir string, stack []string, origin string
 	view, err := decodeJSONView(data)
 	if err != nil {
 		return nil, newETErr(CodeTemplateImportUnresolved,
-			fmt.Sprintf("%s: template-library ref '%s' is not valid JSON: %v", origin, quoteSafe(ref), err))
+			fmt.Sprintf("%s: template-library ref '%s' is not valid JSON: %v", origin, ref, err))
 	}
 	if err := RejectExpressionTemplatesPreV04(view); err != nil {
 		return nil, err
@@ -275,22 +275,22 @@ func resolveImportEntry(entry any, baseDir string, stack []string, origin string
 	// importable as a template library.
 	if isCouplingLibraryDoc(view) {
 		return nil, newETErr(CodeTemplateImportIsCouplingLibrary,
-			fmt.Sprintf("%s: import target '%s' is a coupling-library file (has `coupling_roles`), not a template library (esm-spec §10.9)", origin, quoteSafe(ref)))
+			fmt.Sprintf("%s: import target '%s' is a coupling-library file (has `coupling_roles`), not a template library (esm-spec §10.9)", origin, ref))
 	}
 	if !isTemplateLibraryDoc(view) {
 		return nil, newETErr(CodeTemplateImportNotLibrary,
-			fmt.Sprintf("%s: import target '%s' lacks top-level `expression_templates` — not a template-library file (esm-spec §9.7.1)", origin, quoteSafe(ref)))
+			fmt.Sprintf("%s: import target '%s' lacks top-level `expression_templates` — not a template-library file (esm-spec §9.7.1)", origin, ref))
 	}
 	for _, k := range libraryForbiddenKeys {
 		if _, has := view[k]; has {
 			return nil, newETErr(CodeTemplateImportNotLibrary,
-				fmt.Sprintf("%s: import target '%s' declares `%s` — not a pure template-library file (esm-spec §9.7.1)", origin, quoteSafe(ref), k))
+				fmt.Sprintf("%s: import target '%s' declares `%s` — not a pure template-library file (esm-spec §9.7.1)", origin, ref, k))
 		}
 	}
 	schemaRes, err := validateJSONSchema(string(data))
 	if err != nil {
 		return nil, newETErr(CodeTemplateImportUnresolved,
-			fmt.Sprintf("%s: import target '%s' failed schema validation: %v", origin, quoteSafe(ref), err))
+			fmt.Sprintf("%s: import target '%s' failed schema validation: %v", origin, ref, err))
 	}
 	if !schemaRes.IsValid {
 		msg := "schema invalid"
@@ -298,7 +298,7 @@ func resolveImportEntry(entry any, baseDir string, stack []string, origin string
 			msg = schemaRes.SchemaErrors[0].Message
 		}
 		return nil, newETErr(CodeTemplateImportUnresolved,
-			fmt.Sprintf("%s: import target '%s' failed schema validation: %s", origin, quoteSafe(ref), msg))
+			fmt.Sprintf("%s: import target '%s' failed schema validation: %s", origin, ref, msg))
 	}
 
 	scope, err := processLibrary(view, extractTemplateOrders(string(data)),
@@ -317,10 +317,10 @@ func resolveImportEntry(entry any, baseDir string, stack []string, origin string
 		for _, name := range sortedKeys(bindingsRaw) {
 			if !scope.metaparams.has(name) {
 				return nil, newETErr(CodeTemplateImportUnknownName,
-					fmt.Sprintf("%s: import of '%s' binds metaparameter '%s', which the target neither declares nor re-exports (esm-spec §9.7.6)", origin, quoteSafe(ref), quoteSafe(name)))
+					fmt.Sprintf("%s: import of '%s' binds metaparameter '%s', which the target neither declares nor re-exports (esm-spec §9.7.6)", origin, ref, name))
 			}
 			v, err := requireMetaExpr(bindingsRaw[name],
-				fmt.Sprintf("%s: import of '%s', binding '%s'", origin, quoteSafe(ref), quoteSafe(name)))
+				fmt.Sprintf("%s: import of '%s', binding '%s'", origin, ref, name))
 			if err != nil {
 				return nil, err
 			}
@@ -348,11 +348,11 @@ func resolveImportEntry(entry any, baseDir string, stack []string, origin string
 			n, ok := nRaw.(string)
 			if !ok {
 				return nil, newETErr(CodeTemplateImportUnknownName,
-					fmt.Sprintf("%s: import of '%s' has an `only` entry %#v that is not a template-name string (esm-spec §9.7.2)", origin, quoteSafe(ref), nRaw))
+					fmt.Sprintf("%s: import of '%s' has an `only` entry %#v that is not a template-name string (esm-spec §9.7.2)", origin, ref, nRaw))
 			}
 			if !scope.templates.has(n) {
 				return nil, newETErr(CodeTemplateImportUnknownName,
-					fmt.Sprintf("%s: `only` names template '%s', which '%s' does not declare (esm-spec §9.7.2)", origin, quoteSafe(n), quoteSafe(ref)))
+					fmt.Sprintf("%s: `only` names template '%s', which '%s' does not declare (esm-spec §9.7.2)", origin, n, ref))
 			}
 			keep[n] = true
 		}
@@ -906,7 +906,7 @@ func checkMetaparamLoopSymbols(names []string, origin string, trees ...any) erro
 	for _, name := range names {
 		if _, ok := bound[name]; ok {
 			return newETErr(CodeMetaparamNameConflict,
-				fmt.Sprintf("%s: metaparameter '%s' collides with a loop symbol (a `ranges` key or `output_idx` entry) (esm-spec §9.7.6)", origin, quoteSafe(name)))
+				fmt.Sprintf("%s: metaparameter '%s' collides with a loop symbol (a `ranges` key or `output_idx` entry) (esm-spec §9.7.6)", origin, name))
 		}
 	}
 	return nil
@@ -947,7 +947,7 @@ func checkMetaparamNameCollisions(view map[string]any, topTemplates, docMeta, do
 	for _, name := range docMeta.keys {
 		if visible[name] {
 			return newETErr(CodeMetaparamNameConflict,
-				fmt.Sprintf("metaparameter '%s' collides with a visible variable/parameter/species/index-set name (esm-spec §9.7.6)", quoteSafe(name)))
+				fmt.Sprintf("metaparameter '%s' collides with a visible variable/parameter/species/index-set name (esm-spec §9.7.6)", name))
 		}
 	}
 	// Components carry their imported templates by now; topTemplates is a root

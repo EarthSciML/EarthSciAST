@@ -214,7 +214,7 @@ func checkBroadcastFn(node ExprNode) *broadcastFnFinding {
 	if !ok {
 		return &broadcastFnFinding{
 			message: fmt.Sprintf(
-				"'broadcast' fn '%s' does not name a scalar operator (esm-spec §4.3.4)", quoteSafe(fnName)),
+				"'broadcast' fn '%s' does not name a scalar operator (esm-spec §4.3.4)", fnName),
 			details: map[string]any{"broadcast_fn": fnName},
 		}
 	}
@@ -222,7 +222,7 @@ func checkBroadcastFn(node ExprNode) *broadcastFnFinding {
 		return &broadcastFnFinding{
 			message: fmt.Sprintf(
 				"'broadcast' fn '%s' takes %s argument(s), got %d (esm-spec §4.3.4)",
-				quoteSafe(fnName), arityDesc(arity), len(node.Args)),
+				fnName, arityDesc(arity), len(node.Args)),
 			details: map[string]any{
 				"broadcast_fn": fnName,
 				"got":          len(node.Args),

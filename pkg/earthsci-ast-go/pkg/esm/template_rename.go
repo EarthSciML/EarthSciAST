@@ -448,7 +448,7 @@ func collectRefNames(out map[string]struct{}, x any, shadowed map[string]struct{
 // so dedup and conflict detection operate on post-rename names. Mutates scope in
 // place and returns it. Mirrors the Julia reference `_apply_edge_renames!`.
 func applyEdgeRenames(scope *templateScope, entry map[string]any, origin, ref string) (*templateScope, error) {
-	where := fmt.Sprintf("%s: import of '%s'", origin, quoteSafe(ref))
+	where := fmt.Sprintf("%s: import of '%s'", origin, ref)
 	rename, err := nameMap(entry["rename"], "rename", where)
 	if err != nil {
 		return nil, err
@@ -527,7 +527,7 @@ func applyEdgeRenames(scope *templateScope, entry map[string]any, origin, ref st
 			n := ns.m[o]
 			if prev, ok := seen[n]; ok {
 				return nil, newETErr(CodeTemplateImportRenameCollision,
-					fmt.Sprintf("%s: %s names '%s' and '%s' both map to '%s' after renaming (esm-spec §9.7.7)", where, ns.what, quoteSafe(prev), quoteSafe(o), quoteSafe(n)))
+					fmt.Sprintf("%s: %s names '%s' and '%s' both map to '%s' after renaming (esm-spec §9.7.7)", where, ns.what, prev, o, n))
 			}
 			seen[n] = o
 		}
@@ -693,7 +693,7 @@ func checkRenameFreshness(scope *templateScope, free, bound, paramsAll map[strin
 	for _, tk := range newnames {
 		if _, ok := taken[tk]; ok {
 			return newETErr(CodeTemplateImportRenameCollision,
-				fmt.Sprintf("%s: renamed/rebound name '%s' collides with a name still in use inside the imported declarations (a remaining free name, a bound index symbol, a template param, or another rename/rebind target; esm-spec §9.7.7)", where, quoteSafe(tk)))
+				fmt.Sprintf("%s: renamed/rebound name '%s' collides with a name still in use inside the imported declarations (a remaining free name, a bound index symbol, a template param, or another rename/rebind target; esm-spec §9.7.7)", where, tk))
 		}
 		taken[tk] = struct{}{}
 	}
@@ -859,7 +859,7 @@ func applyMountIndexSetRename(view map[string]any, renameRaw any, where string, 
 				listed = strings.Join(declared, ", ")
 			}
 			return newETErr(CodeSubsystemIndexSetRenameUnknownName,
-				fmt.Sprintf("%s: `index_set_rename` names index set '%s', which the resolved mounted document does not declare (it declares: %s). Keys speak the MOUNTED document's own post-resolution vocabulary (esm-spec §4.7 \"Mount-edge index-set renaming\")", where, quoteSafe(key), quoteSafe(listed)))
+				fmt.Sprintf("%s: `index_set_rename` names index set '%s', which the resolved mounted document does not declare (it declares: %s). Keys speak the MOUNTED document's own post-resolution vocabulary (esm-spec §4.7 \"Mount-edge index-set renaming\")", where, key, listed))
 		}
 	}
 
@@ -878,7 +878,7 @@ func applyMountIndexSetRename(view map[string]any, renameRaw any, where string, 
 		final := isetRenamed(name, changed)
 		if _, dup := seen[final]; dup {
 			return newETErr(CodeTemplateImportRenameCollision,
-				fmt.Sprintf("%s: `index_set_rename` maps two index sets onto '%s'; post-rename names must be distinct within one mount edge (esm-spec §4.7 / §9.7.7)", where, quoteSafe(final)))
+				fmt.Sprintf("%s: `index_set_rename` maps two index sets onto '%s'; post-rename names must be distinct within one mount edge (esm-spec §4.7 / §9.7.7)", where, final))
 		}
 		seen[final] = struct{}{}
 	}
@@ -908,7 +908,7 @@ func applyMountIndexSetRename(view map[string]any, renameRaw any, where string, 
 			// §4.7 merge rule's own `subsystem_index_set_conflict`.
 			if existing, dup := renamed[final]; dup && !rawIndexSetDeepEqual(existing, decl) {
 				return newETErr(CodeSubsystemIndexSetConflict,
-					fmt.Sprintf("%s: `index_set_rename` maps index set '%s' onto '%s', which a mount nested inside the referenced document already contributes with a non-deep-equal declaration (esm-spec §4.7)", where, quoteSafe(name), quoteSafe(final)))
+					fmt.Sprintf("%s: `index_set_rename` maps index set '%s' onto '%s', which a mount nested inside the referenced document already contributes with a non-deep-equal declaration (esm-spec §4.7)", where, name, final))
 			}
 			renamed[final] = decl
 		}
