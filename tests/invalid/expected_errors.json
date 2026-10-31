@@ -4374,5 +4374,21 @@
     ],
     "is_valid": false,
     "notes": "esm-spec \u00a74.8.3 'An angle meets a pure number': the [angle] axis is removed but the scale is kept, so `bad_ratio [1] = theta_deg [deg]` is a scale mismatch (1 vs pi/180). The rad control beside it is clean. Valid half: tests/valid/units_angle_meets_pure_number.esm."
+  },
+  "url_substitution_unknown_name.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "url_substitution_unknown_name",
+    "notes": "Resolver-level invalid (esm-spec \u00a74.7 'Binding a data source's location at the mount'). The document is SCHEMA-VALID \u2014 `url_substitutions` is a legal SubsystemRef field and its value is an identifier\u2192string object \u2014 so a binding that only checks the schema accepts it (is_valid: true); the invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code`. A `subsystems.<k>` edge binds `snapshto`, a misspelling of the mounted catalogue's `{snapshot}` placeholder; the edge never invents a placeholder."
+  },
+  "url_substitution_unknown_name_toplevel.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "url_substitution_unknown_name",
+    "notes": "Resolver-level invalid (esm-spec \u00a74.7 'Binding a data source's location at the mount'). The document is SCHEMA-VALID \u2014 `url_substitutions` is a legal SubsystemRef field and its value is an identifier\u2192string object \u2014 so a binding that only checks the schema accepts it (is_valid: true); the invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code`. A top-level `models.<k>` edge binds `snapshto`, a misspelling of the mounted catalogue's `{snapshot}` placeholder; the edge never invents a placeholder."
   }
 }

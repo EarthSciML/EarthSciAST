@@ -2072,6 +2072,17 @@
             "minLength": 1
           },
           "description": "Mount-edge index-set renaming (esm-spec §4.7 'Mount-edge index-set renaming'; docs/content/rfcs/mount-edge-index-set-renaming.md): a map from an index-set name AS THE RESOLVED MOUNTED DOCUMENT SPELLS IT to the name it takes in the mounting document. `index_sets` is a document-scoped registry, so two mounts that independently use one axis name at different lengths (a 59-layer atmospheric column and a 4-layer soil column both over `lev`) collide with subsystem_index_set_conflict; this field is the §9.7.7 renaming mechanism at a component-mount edge, restricted to index sets because they are the only declaration kind a mount contributes to document scope. Applied as ONE simultaneous substitution AFTER the referenced document resolves completely (its own imports, this edge's `bindings` and injection, its metaparameter close and the §9.6.3 fixpoint) and BEFORE its `index_sets` merge, transitively through every occurrence inside the mounted document — `index_sets` keys and ragged `of` lists, `{\"from\": …}` ranges, the `wrt`/`dim`/`var` axis scalars and bare-axis-name `integral` bounds, `where` `shape` constraints, variable/parameter `shape` lists, `Assertion.coords` keys, and `DataSourceSelectAxis.gated_by`. Keys must name an index set of the resolved mounted document (subsystem_index_set_rename_unknown_name); targets are dotted identifiers (template_import_rename_invalid) and must be distinct (template_import_rename_collision). The map need not be total: an unnamed axis passes through unrenamed, so a deliberately shared axis still merges deep-equal. Load-time only; consumed at the mount; does not survive parse→emit."
+        },
+        "url_substitutions": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[^{}]*$"
+          },
+          "description": "Mount-edge data-source location binding (esm-spec §4.7 'Binding a data source's location at the mount'): a map from a placeholder name to the text that replaces every bare `{name}` substitution in the `url_template` and `mirrors` entries of the REFERENCED document's `data_sources` (its own and those its mounts hoisted into it), so one shared catalogue can be pointed at a different data directory by each document that mounts it. A placeholder that LEADS a template supplies the whole location, so its value resolves against the MOUNTING document's directory (esm-spec §8.2.1 forms); a placeholder elsewhere is a segment of the referenced document's location, spliced as text and resolved against the referenced document's directory. A key naming no placeholder is url_substitution_unknown_name; a value may not carry `{` or `}`. An unbound placeholder is left as written (esm-spec §8.2 pass-through) and an enclosing edge may bind it. Load-time only; consumed at the mount; does not survive parse→emit."
         }
       }
     },

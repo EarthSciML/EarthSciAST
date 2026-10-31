@@ -1,0 +1,21 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "url_substitution_unknown_name",
+    "description": "INVALID — RESOLVER-LEVEL (esm-spec §4.7 'Binding a data source's location at the mount'). A `subsystems.<k>` edge binds `snapshto`, a misspelling of the catalogue's `{snapshot}` placeholder. A mount edge never invents a placeholder, so this MUST fail at load with url_substitution_unknown_name rather than leave `{snapshot}` for a read to trip over."
+  },
+  "models": {
+    "Outer": {
+      "variables": {},
+      "equations": [],
+      "subsystems": {
+        "Snap": {
+          "ref": "../conformance/url_substitutions/catalogue/catalogue.esm",
+          "url_substitutions": {
+            "snapshto": "a"
+          }
+        }
+      }
+    }
+  }
+}

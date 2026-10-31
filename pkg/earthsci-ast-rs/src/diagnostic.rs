@@ -420,6 +420,11 @@ diagnostic_code_registry! {
     /// into a source's location at all — or a resolved path carrying a `?`
     /// or `#`. The message names the offending data source and template.
     DATA_SOURCE_URL_UNRESOLVED = "data_source_url_unresolved";
+    /// A mount edge's `url_substitutions` key names no bare `{name}`
+    /// placeholder of any `url_template` / `mirrors` entry of the referenced
+    /// document's `data_sources` (esm-spec §4.7 "Binding a data source's
+    /// location at the mount"): an edge never invents a placeholder.
+    URL_SUBSTITUTION_UNKNOWN_NAME = "url_substitution_unknown_name";
     /// An expression ranges over a `kind: "derived"` index set whose producer
     /// could not be materialized at build (esm-spec §9.6.6).
     DERIVED_INDEX_SET_UNMATERIALIZED = "derived_index_set_unmaterialized";
@@ -817,6 +822,7 @@ mod error_code_tests {
             "unresolved_scoped_ref",
             "unresolved_subsystem_ref",
             "unsupported_construct",
+            "url_substitution_unknown_name",
         ];
         assert_eq!(error_code_names(), expected);
     }

@@ -270,6 +270,7 @@
       "SubsystemRef.model",
       "SubsystemRef.reaction_system",
       "SubsystemRef.ref",
+      "SubsystemRef.url_substitutions",
       "TemplateImport.only",
       "TemplateImport.prefix",
       "TemplateImport.rebind",
@@ -364,6 +365,7 @@
     "units",
     "unmapped",
     "url",
+    "url_substitutions",
     "var",
     "where",
     "wrt"
@@ -386,6 +388,7 @@
     "rename",
     "species",
     "subsystems",
+    "url_substitutions",
     "variables",
     "where"
   ]

@@ -1,0 +1,245 @@
+{
+  "spec": "esm-spec §4.7 'Binding a data source's location at the mount (`url_substitutions`)'; §8.2; §8.2.1",
+  "notes": "The SHARED pin for mount-edge `url_substitutions`. Every binding's own test suite reads THIS file (Rust tests/url_substitutions_conformance.rs, Python tests/test_url_substitutions_conformance.py, Julia test/url_substitutions_conformance_test.jl, TypeScript src/url-substitutions.test.ts, Go pkg/esm/url_substitutions_conformance_test.go).\n\n`cases` pin the edge rule itself, as a document normalization: build `{\"data_sources\": {\"s\": {\"kind\": \"static\", \"source\": {\"url_template\": <url_template>, \"mirrors\": <mirrors, if given>}}}}`, apply the edge (`url_substitutions`) with the MOUNTING document's directory = `binder_dir`, then run ordinary §8.2.1 resolution with the DECLARING document's directory = `declaring_dir`; both directories are repo-root-relative. Expectations use the data_source_url manifest's convention: `repo_path` means `'file://' + abspath(repo_root + '/' + repo_path)` with dot segments removed, `verbatim` is literal. An `error_code` case must be refused by the edge with that code, and the message must contain each `message_contains` string.\n\n`fixtures` pin it through a real load. `expect` (accepted / refused + `error_code`) applies to every binding. `hoisted_sources` — the locations the mounting document carries after load — is checked only by a binding that hoists a top-level `models.<k>` leaf's `data_sources` into the mounting document (Rust, Julia); a fixture with `requires_hoisting: true` reaches its edge only through such a hoist and is skipped elsewhere.",
+  "declaring_dir": "tests/conformance/url_substitutions/catalogue",
+  "binder_dir": "tests/conformance/url_substitutions",
+  "cases": [
+    {
+      "id": "a_segment_is_spliced_and_resolves_against_the_declaring_document",
+      "url_template": "../snapshots/{snapshot}/t.parquet",
+      "url_substitutions": {
+        "snapshot": "a"
+      },
+      "expect": {
+        "url_template": {
+          "repo_path": "tests/conformance/url_substitutions/snapshots/a/t.parquet"
+        }
+      }
+    },
+    {
+      "id": "a_spliced_dot_segment_is_removed_after_the_splice",
+      "url_template": "./{snapshot}/t.parquet",
+      "url_substitutions": {
+        "snapshot": "../snapshots/b"
+      },
+      "expect": {
+        "url_template": {
+          "repo_path": "tests/conformance/url_substitutions/snapshots/b/t.parquet"
+        }
+      }
+    },
+    {
+      "id": "a_leading_relative_value_anchors_on_the_mounting_document",
+      "url_template": "{data}/t.parquet",
+      "url_substitutions": {
+        "data": "snapshots/b"
+      },
+      "expect": {
+        "url_template": {
+          "repo_path": "tests/conformance/url_substitutions/snapshots/b/t.parquet"
+        }
+      }
+    },
+    {
+      "id": "a_leading_dot_relative_value_anchors_on_the_mounting_document",
+      "url_template": "{data}/t.parquet",
+      "url_substitutions": {
+        "data": "./snapshots/../snapshots/a"
+      },
+      "expect": {
+        "url_template": {
+          "repo_path": "tests/conformance/url_substitutions/snapshots/a/t.parquet"
+        }
+      }
+    },
+    {
+      "id": "a_leading_absolute_value_is_used_as_is",
+      "url_template": "{data}/t.parquet",
+      "url_substitutions": {
+        "data": "/data/run"
+      },
+      "expect": {
+        "url_template": {
+          "verbatim": "file:///data/run/t.parquet"
+        }
+      }
+    },
+    {
+      "id": "a_leading_url_value_is_used_as_is",
+      "url_template": "{data}/t.parquet",
+      "url_substitutions": {
+        "data": "https://example.org/run"
+      },
+      "expect": {
+        "url_template": {
+          "verbatim": "https://example.org/run/t.parquet"
+        }
+      }
+    },
+    {
+      "id": "every_occurrence_is_replaced_and_only_the_leading_one_anchors",
+      "url_template": "{snapshot}/{snapshot}.parquet",
+      "url_substitutions": {
+        "snapshot": "a"
+      },
+      "expect": {
+        "url_template": {
+          "repo_path": "tests/conformance/url_substitutions/a/a.parquet"
+        }
+      }
+    },
+    {
+      "id": "mirrors_are_substituted_too",
+      "url_template": "../snapshots/{snapshot}/t.parquet",
+      "mirrors": [
+        "https://example.org/{snapshot}/t.parquet"
+      ],
+      "url_substitutions": {
+        "snapshot": "b"
+      },
+      "expect": {
+        "url_template": {
+          "repo_path": "tests/conformance/url_substitutions/snapshots/b/t.parquet"
+        },
+        "mirrors": [
+          {
+            "verbatim": "https://example.org/b/t.parquet"
+          }
+        ]
+      }
+    },
+    {
+      "id": "an_unbound_placeholder_and_a_formatted_substitution_pass_through",
+      "url_template": "../snapshots/{snapshot}/{other}/{date:%Y}.parquet",
+      "url_substitutions": {
+        "snapshot": "a"
+      },
+      "expect": {
+        "url_template": {
+          "repo_path": "tests/conformance/url_substitutions/snapshots/a/{other}/{date:%Y}.parquet"
+        }
+      }
+    },
+    {
+      "id": "an_already_resolved_location_is_renormalized_after_the_splice",
+      "url_template": "file:///data/snapshots/{snapshot}/t.parquet",
+      "url_substitutions": {
+        "snapshot": "../b"
+      },
+      "expect": {
+        "url_template": {
+          "verbatim": "file:///data/snapshots/b/t.parquet"
+        }
+      }
+    },
+    {
+      "id": "a_key_naming_no_placeholder_is_refused",
+      "url_template": "../snapshots/{snapshot}/t.parquet",
+      "url_substitutions": {
+        "snapshto": "a"
+      },
+      "expect": {
+        "error_code": "url_substitution_unknown_name",
+        "message_contains": [
+          "snapshto"
+        ]
+      }
+    },
+    {
+      "id": "a_formatted_substitution_cannot_be_bound",
+      "url_template": "./{date:%Y}.parquet",
+      "url_substitutions": {
+        "date": "2020"
+      },
+      "expect": {
+        "error_code": "url_substitution_unknown_name",
+        "message_contains": [
+          "date"
+        ]
+      }
+    },
+    {
+      "id": "a_value_carrying_a_brace_is_refused",
+      "url_template": "../snapshots/{snapshot}/t.parquet",
+      "url_substitutions": {
+        "snapshot": "${HOME}"
+      },
+      "expect": {
+        "error_code": "data_source_url_unresolved",
+        "message_contains": [
+          "snapshot"
+        ]
+      }
+    }
+  ],
+  "fixtures": [
+    {
+      "id": "mount_toplevel",
+      "path": "mount_toplevel.esm",
+      "expect": "accepted",
+      "hoisted_sources": {
+        "segment": {
+          "url_template": {
+            "repo_path": "tests/conformance/url_substitutions/snapshots/a/t.parquet"
+          },
+          "mirrors": [
+            {
+              "verbatim": "https://example.org/a/t.parquet"
+            }
+          ]
+        },
+        "lead": {
+          "url_template": {
+            "repo_path": "tests/conformance/url_substitutions/snapshots/b/t.parquet"
+          }
+        },
+        "fixed": {
+          "url_template": {
+            "repo_path": "tests/conformance/url_substitutions/catalogue/fixed/{date:%Y}.parquet"
+          }
+        }
+      }
+    },
+    {
+      "id": "mount_subsystem",
+      "path": "mount_subsystem.esm",
+      "expect": "accepted"
+    },
+    {
+      "id": "mount_nested",
+      "path": "nested/mount_nested.esm",
+      "expect": "accepted",
+      "requires_hoisting": true,
+      "hoisted_sources": {
+        "segment": {
+          "url_template": {
+            "repo_path": "tests/conformance/url_substitutions/snapshots/a/t.parquet"
+          }
+        },
+        "lead": {
+          "url_template": {
+            "repo_path": "tests/conformance/url_substitutions/snapshots/b/t.parquet"
+          }
+        }
+      }
+    },
+    {
+      "id": "unknown_name_toplevel",
+      "path": "../../invalid/url_substitution_unknown_name_toplevel.esm",
+      "expect": "refused",
+      "error_code": "url_substitution_unknown_name",
+      "message_contains": [
+        "snapshto"
+      ]
+    },
+    {
+      "id": "unknown_name_subsystem",
+      "path": "../../invalid/url_substitution_unknown_name.esm",
+      "expect": "refused",
+      "error_code": "url_substitution_unknown_name",
+      "message_contains": [
+        "snapshto"
+      ]
+    }
+  ]
+}

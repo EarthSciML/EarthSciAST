@@ -1,0 +1,15 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "url_substitution_unknown_name_toplevel",
+    "description": "INVALID — RESOLVER-LEVEL (esm-spec §4.7 'Binding a data source's location at the mount'). The top-level `models.<k>` twin of url_substitution_unknown_name.esm: the two mount forms are one mechanism, so a misspelt placeholder (`snapshto`) is url_substitution_unknown_name at this form too."
+  },
+  "models": {
+    "Snap": {
+      "ref": "../conformance/url_substitutions/catalogue/catalogue.esm",
+      "url_substitutions": {
+        "snapshto": "a"
+      }
+    }
+  }
+}

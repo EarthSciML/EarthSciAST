@@ -878,6 +878,17 @@ fn inline_toplevel_model_refs(
         // Resolved here, before the merge below, because afterwards the entry is
         // indistinguishable from one the importer declared. A no-op when the leaf
         // declares no sources, which is almost every leaf.
+        //
+        // §4.7 "Binding a data source's location at the mount": this edge's
+        // `url_substitutions` bind the leaf's placeholders FIRST, so a spliced
+        // segment resolves with the leaf's own location and a leading value
+        // anchors on THIS (the mounting) document's directory.
+        crate::data_source_urls::apply_mount_url_substitutions(
+            &mut comp,
+            entry_obj,
+            base_path,
+            &mount_noun,
+        )?;
         crate::data_source_urls::resolve_data_source_urls(&mut comp, &leaf_dir)
             .map_err(|e| err(e.code, e.message))?;
         // esm-spec §4.7 "Index-set merge": a top-level `models.<k>` mount edge
@@ -1358,6 +1369,16 @@ fn resolve_value(
                 obj,
                 &format!("subsystem ref '{ref_str}'"),
                 &nested_contributed,
+            )?;
+            // §4.7 "Binding a data source's location at the mount", at this
+            // form too: the two mount forms are one mechanism, so an edge that
+            // names a placeholder the leaf does not spell fails here exactly as
+            // it does at a top-level `models.<k>` edge.
+            crate::data_source_urls::apply_mount_url_substitutions(
+                &mut parsed,
+                obj,
+                base_path,
+                &format!("subsystem ref '{ref_str}'"),
             )?;
             Ok(())
         })();

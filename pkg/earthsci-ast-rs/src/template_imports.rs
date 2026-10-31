@@ -128,7 +128,7 @@ const REGISTRY_KEYS: [&str; 9] = [
 /// metaparameter substitution ONLY. `of` and `on` keep their dedicated
 /// rename-walk branches. Mirrors the `:opaque` kind of `_STRUCTURAL_FIELDS` in
 /// the Julia reference.
-const OPAQUE_KEYS: [&str; 33] = [
+const OPAQUE_KEYS: [&str; 34] = [
     // Loop symbols and bound index names of a `faq` node. `metaparameter_name_conflict`
     // refuses a metaparameter spelled like a loop symbol, so a metaparameter reaches
     // these fields only as an `on` data-column name; they are names wherever they
@@ -150,6 +150,7 @@ const OPAQUE_KEYS: [&str; 33] = [
     "rename",
     "rebind",
     "index_set_rename",
+    "url_substitutions",
     "source",
     "file_variable",
     "path",
@@ -179,7 +180,7 @@ const OPAQUE_KEYS: [&str; 33] = [
 /// so it is never tested with [`is_meta_subst_skipped`]: a variable named
 /// `source` or a template param named `label` still has its value substituted.
 /// A key that is also skipped (`where`, `rename`, …) is skipped whole.
-const NAME_KEYED_MAP_KEYS: [&str; 19] = [
+const NAME_KEYED_MAP_KEYS: [&str; 20] = [
     "variables",
     "species",
     "parameters",
@@ -198,6 +199,7 @@ const NAME_KEYED_MAP_KEYS: [&str; 19] = [
     "rename",
     "rebind",
     "index_set_rename",
+    "url_substitutions",
     "where",
 ];
 
