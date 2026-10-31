@@ -287,6 +287,19 @@ impl TapeBuilder<'_> {
         let Ok(combine_op) = self.array_combine_op(reduce, "contracted") else {
             return Ok(None);
         };
+        if let Some(v) = self.lower_shift_scatter(
+            idx_names,
+            lo,
+            shape,
+            body,
+            contract_names,
+            &bounds,
+            reduce,
+            parts,
+            &pins,
+        )? {
+            return Ok(Some(v));
+        }
         // A point's values: the output indices, then the contracted names
         // (the tuple list's column order).
         let mut syms: Vec<String> = idx_names.to_vec();
@@ -490,6 +503,192 @@ impl TapeBuilder<'_> {
         let list = TupleList { rows, cols };
         self.lower_tuple_list(&spec, list, lo, shape, combine_op)
             .map(Some)
+    }
+}
+
+impl TapeBuilder<'_> {
+    /// The scatter whose one pin is a unit shift of the one contracted index,
+    /// `j == i + k` (or `i - k`, `i`, mirrored), with nothing else in the
+    /// filter: each cell `j` of the shifted range receives exactly one term,
+    /// the body at `i = j - k`, and every other cell none. That is a stencil
+    /// read, not a scatter: the body is lowered over the output box narrowed
+    /// to the cells that receive a term, with `i` replaced by `j - k`, and
+    /// combined once into the identity, `identity ⊕ term` — the fold of a
+    /// one-term run. No point is walked at build time.
+    ///
+    /// Only for `+` and `*`, whose one-term fold is the elementwise kernel
+    /// itself; `max` / `min` keep the tuple list, whose fold step is the
+    /// reduction's own.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_shift_scatter(
+        &mut self,
+        idx_names: &[String],
+        lo: &DimI,
+        shape: &DimU,
+        body: &Expr,
+        contract_names: &[String],
+        bounds: &[DimBound],
+        reduce: ReduceKind,
+        parts: &[Expr],
+        pins: &[Option<&Expr>],
+    ) -> LResult<Option<LV>> {
+        if !matches!(reduce, ReduceKind::Sum | ReduceKind::Product) || parts.len() != 1 {
+            return Ok(None);
+        }
+        let ([i_name], [DimBound::Static(ilo, ihi)]) = (contract_names, bounds) else {
+            return Ok(None);
+        };
+        let Some(d) = pins.iter().position(Option::is_some) else {
+            return Ok(None);
+        };
+        let Some(k) = pins[d].and_then(|e| unit_shift(e, i_name)) else {
+            return Ok(None);
+        };
+        if !is_plain_tree(body) {
+            return Ok(None);
+        }
+        let Some(jlo) = ilo.checked_add(k) else {
+            return Ok(None);
+        };
+        let Some(jhi) = ihi.checked_add(k) else {
+            return Ok(None);
+        };
+        // The cells that receive a term.
+        let out_hi = lo[d] + shape[d] as i64 - 1;
+        let (a, b) = (jlo.max(lo[d]), jhi.min(out_hi));
+        let identity = reduce.identity();
+        if a > b {
+            return Ok(Some(self.emit_fill(
+                &LV::Lit(identity),
+                shape,
+                lo,
+                Cadence::Const,
+            )));
+        }
+        // `i` read as `j - k`: the same integer, so every value the body
+        // computes from it is the same.
+        let j = Expr::Variable(idx_names[d].clone());
+        let i_as = match k {
+            0 => j,
+            k if k > 0 => Expr::operator(ExpressionNode {
+                op: "-".to_string(),
+                args: vec![j, Expr::Integer(k)],
+                ..Default::default()
+            }),
+            k => Expr::operator(ExpressionNode {
+                op: "+".to_string(),
+                args: vec![j, Expr::Integer(-k)],
+                ..Default::default()
+            }),
+        };
+        let body = substitute(body, i_name, &i_as);
+        let mut sub_lo = lo.clone();
+        let mut sub_shape = shape.clone();
+        sub_lo[d] = a;
+        sub_shape[d] = (b - a + 1) as usize;
+        self.push_scope();
+        let bx = LBox {
+            syms: idx_names,
+            lo: sub_lo.clone(),
+            shape: sub_shape.clone(),
+            cnames: &[],
+            cvals: SmallVec::new(),
+            tuple: 0,
+            visit: SmallVec::new(),
+        };
+        let term = self.lower_expr(&body, &bx);
+        self.pop_scope();
+        let term = term?;
+        if matches!(&term, LV::State(_)) && self.lv_box(&term).is_some() {
+            bail_tape!("scatter: term reduced to a bare whole-array view");
+        }
+        let term = match self.lv_box(&term) {
+            None => self.emit_fill(&term, &sub_shape, &sub_lo, Cadence::Const),
+            Some((s, o)) if s == sub_shape && o == sub_lo => term,
+            Some(_) => bail_tape!("scatter: term box does not match the shifted box"),
+        };
+        let combine_op = self.array_combine_op(reduce, "contracted")?;
+        let v = self.emit_bin(combine_op, LV::Lit(identity), term)?;
+        if sub_shape == *shape {
+            return Ok(Some(v));
+        }
+        let LV::Arr(src) = v else {
+            bail_tape!("scatter: the shifted term is not an array");
+        };
+        let base = self.emit_fill(&LV::Lit(identity), shape, lo, Cadence::Const);
+        let LV::Arr(base) = base else {
+            bail_tape!("scatter: the identity fill is not an array");
+        };
+        let region = tape_index(self.regions.len(), "regions")?;
+        let mut dest_lo: DimU = DimU::from_elem(0usize, shape.len());
+        dest_lo[d] = (a - lo[d]) as usize;
+        self.regions.push(RegionSpec {
+            dest_lo,
+            shape: sub_shape,
+        });
+        let sec = self.placement(self.slots[src as usize].cadence);
+        let out = self.new_slot(shape, lo, false, sec);
+        self.emit(
+            Instr::Region {
+                base,
+                src: Operand::Slot(src),
+                region,
+                out,
+            },
+            sec,
+        );
+        Ok(Some(LV::Arr(out)))
+    }
+}
+
+/// `k` when `e` is `i + k`, `k + i`, `i - k` (as `-k`) or `i` (`0`), with
+/// `k` an integer literal.
+fn unit_shift(e: &Expr, i_name: &str) -> Option<i64> {
+    let int = |e: &Expr| match e {
+        Expr::Integer(n) => Some(*n),
+        Expr::Number(x) if x.fract() == 0.0 && x.abs() < 1e15 => Some(*x as i64),
+        _ => None,
+    };
+    let is_i = |e: &Expr| matches!(e, Expr::Variable(v) if v == i_name);
+    match e {
+        Expr::Variable(v) if v == i_name => Some(0),
+        Expr::Operator(n) if is_plain(n) && n.args.len() == 2 => match n.op.as_str() {
+            "+" if is_i(&n.args[0]) => int(&n.args[1]),
+            "+" if is_i(&n.args[1]) => int(&n.args[0]),
+            "-" if is_i(&n.args[0]) => int(&n.args[1]).and_then(i64::checked_neg),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Whether every node of `e` is a plain call (no node binds a name of its
+/// own, so a substitution reaches every read).
+fn is_plain_tree(e: &Expr) -> bool {
+    match e {
+        Expr::Operator(n) => {
+            is_plain(n)
+                && n.lower.is_none()
+                && n.upper.is_none()
+                && n.int_var.is_none()
+                && n.output_idx.is_none()
+                && n.regions.is_none()
+                && n.args.iter().all(is_plain_tree)
+        }
+        _ => true,
+    }
+}
+
+/// `e` with every read of `name` replaced by `with`.
+fn substitute(e: &Expr, name: &str, with: &Expr) -> Expr {
+    match e {
+        Expr::Variable(v) if v == name => with.clone(),
+        Expr::Operator(n) => {
+            let mut node = (**n).clone();
+            node.args = n.args.iter().map(|a| substitute(a, name, with)).collect();
+            Expr::operator(node)
+        }
+        other => other.clone(),
     }
 }
 
