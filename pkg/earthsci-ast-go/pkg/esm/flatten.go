@@ -735,16 +735,22 @@ func exprHasVarPlaceholder(expr Expression) bool {
 // which case the reference is subsystem-LOCAL (`raw.fuel_model`) and must be
 // qualified with the owner (`LANDFIRE.raw.fuel_model`) to match the lowered
 // subsystem variable name. `leaveAlone` holds the names that are not variable
-// references at all: the independent variable `t`, the `_var` placeholder, and —
-// added per node — a `faq`'s own loop symbols, which are local to its
-// body (esm-spec §4.3.1).
+// references at all: the independent variable `t` and the `_var` placeholder.
 //
 // `locals` is the component's own declared names, and gates ONLY the plain-string
 // references a `join` clause carries (CONFORMANCE_SPEC §5.5.6) — see
 // namespaceJoinNames.
 func namespaceExprTree(expr Expression, prefix string, leaveAlone, subsystemKeys, locals map[string]bool) Expression {
+	return namespaceExprBound(expr, prefix, leaveAlone, subsystemKeys, locals, nil)
+}
+
+// namespaceExprBound is namespaceExprTree with `bound`, the loop symbols the
+// enclosing nodes bind (esm-spec §4.3, "Shadowing"). A bare bound name is the
+// loop index and is left alone; a dotted name is never a loop index, so its
+// head is still checked against `subsystemKeys`.
+func namespaceExprBound(expr Expression, prefix string, leaveAlone, subsystemKeys, locals, bound map[string]bool) Expression {
 	if s, ok := expr.(string); ok {
-		if leaveAlone[s] {
+		if leaveAlone[s] || bound[s] {
 			return s
 		}
 		if head, _, found := strings.Cut(s, "."); found {
@@ -760,30 +766,34 @@ func namespaceExprTree(expr Expression, prefix string, leaveAlone, subsystemKeys
 		return expr
 	}
 
-	// An aggregate's index symbols are local to its body and must not be
-	// namespaced. They are binder NAMES, not child expressions, so the only
-	// handling needed is adding them to `leaveAlone` for the children.
-	localLeave := leaveAlone
-	if node.Op == "faq" {
-		localLeave = make(map[string]bool, len(leaveAlone)+len(node.OutputIdx)+len(node.Ranges))
-		for k, v := range leaveAlone {
-			localLeave[k] = v
+	// A node's loop symbols — its `output_idx` entries, `ranges` keys and an
+	// `integral`'s `var`, whatever its `op` — are local to its children and
+	// must not be namespaced. They are binder NAMES, not child expressions, so
+	// the only handling needed is adding them to `bound` for the children.
+	childBound := bound
+	if len(node.OutputIdx) > 0 || len(node.Ranges) > 0 || node.Var != nil {
+		childBound = make(map[string]bool, len(bound)+len(node.OutputIdx)+len(node.Ranges)+1)
+		for k, v := range bound {
+			childBound[k] = v
 		}
 		for _, s := range node.OutputIdx {
 			if name, ok := s.(string); ok {
-				localLeave[name] = true
+				childBound[name] = true
 			}
 		}
 		for name := range node.Ranges {
-			localLeave[name] = true
+			childBound[name] = true
+		}
+		if node.Var != nil {
+			childBound[*node.Var] = true
 		}
 	}
 
 	out, _ := mapExprRefChildren(node, func(child Expression) (Expression, error) {
-		return namespaceExprTree(child, prefix, localLeave, subsystemKeys, locals), nil
+		return namespaceExprBound(child, prefix, leaveAlone, subsystemKeys, locals, childBound), nil
 	})
 	if len(out.Join) > 0 && len(locals) > 0 {
-		// THIS node's own loop symbols, not localLeave (which also holds
+		// THIS node's own loop symbols, not childBound (which also holds
 		// enclosing nodes'). A join column resolves against this node's
 		// `ranges`, so its own binders are the exact shadowing set.
 		binders := make(map[string]bool, len(out.OutputIdx)+len(out.Ranges))

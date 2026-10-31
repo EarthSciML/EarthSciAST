@@ -823,6 +823,7 @@ def _namespace_expr(
     leave_alone: set[str] | None = None,
     subsystem_keys: set[str] | None = None,
     locals_: set[str] | None = None,
+    bound: frozenset[str] = frozenset(),
 ) -> Expr:
     """Recursively prefix every variable reference in ``expr`` with ``prefix.``.
 
@@ -835,12 +836,17 @@ def _namespace_expr(
     (``LANDFIRE.raw.fuel_model``) so it matches the lowered LoaderField /
     subsystem variable name; the bare "contains a dot ⇒ leave alone" rule cannot
     tell a subsystem-local reference from an already-absolute one.
+
+    ``bound`` holds the loop symbols the enclosing nodes bind (esm-spec §4.3,
+    "Shadowing"). A bare bound name is the loop index and is left alone; a
+    dotted name is never a loop index, so its head is still checked against
+    ``subsystem_keys``.
     """
     leave_alone = leave_alone or set()
     if expr is None or _is_number(expr):
         return expr
     if isinstance(expr, str):
-        if expr in leave_alone:
+        if expr in leave_alone or expr in bound:
             return expr
         if "." in expr:
             head = expr.split(".", 1)[0]
@@ -849,28 +855,24 @@ def _namespace_expr(
             return expr  # already fully namespaced -> leave alone
         return f"{prefix}.{expr}"
     if isinstance(expr, ExprNode):
-        # For faq, index symbols (output_idx and ranges keys) are
-        # local to the expression body and must not be namespaced. They are
-        # binder NAMES, not child expressions — expr_walk never visits them —
-        # so the only special handling needed is adding them to ``leave_alone``
-        # for the children that may reference them.
-        # An ``argmin`` / ``argmax`` arg-witness binds its own ``ranges`` keys
-        # (and names one of them as ``arg``) exactly as a ``faq`` does.
-        local_leave = set(leave_alone)
-        if expr.op in ("faq", "argmin", "argmax"):
-            if expr.output_idx:
-                for sym in expr.output_idx:
-                    if isinstance(sym, str):
-                        local_leave.add(sym)
-            if expr.ranges:
-                for sym in expr.ranges.keys():
-                    local_leave.add(sym)
+        # A node's loop symbols — its ``output_idx`` entries, ``ranges`` keys
+        # and an ``integral``'s ``var``, whatever its ``op`` (``faq``,
+        # ``argmin`` / ``argmax`` arg-witnesses, ``integral``, …) — are local to
+        # its children and must not be namespaced. They are binder NAMES, not
+        # child expressions — expr_walk never visits them — so the only special
+        # handling needed is adding them to ``bound`` for the children that may
+        # reference them.
+        syms = [sym for sym in (expr.output_idx or ()) if isinstance(sym, str)]
+        syms.extend((expr.ranges or {}).keys())
+        if expr.var is not None:
+            syms.append(expr.var)
+        child_bound = bound.union(syms) if syms else bound
         # Aggregate filter / key sub-nodes reference the SAME model-local
         # variables the body does (a sliver ``filter rg_A[a,o] > rg_atol``, a
         # ``key`` skolem), so they must be namespaced identically — otherwise the
         # area matrix / bin key a downstream aggregate reads stays bare and
         # cannot be resolved after flatten (RFC §5.3). Range symbols stay local
-        # via ``local_leave``.
+        # via ``child_bound``.
         #
         # ``join`` carries its references as plain STRINGS (``on`` key columns,
         # an ``overlap``'s ``src_env`` / ``tgt_env``), so ``map_children`` never
@@ -890,10 +892,10 @@ def _namespace_expr(
         # before this fix (esm-6ka).
         out = map_children(
             expr,
-            lambda c: _namespace_expr(c, prefix, local_leave, subsystem_keys, locals_),
+            lambda c: _namespace_expr(c, prefix, leave_alone, subsystem_keys, locals_, child_bound),
         )
         if locals_ and getattr(expr, "join", None):
-            # THIS node's own loop symbols, not ``local_leave`` (which also holds
+            # THIS node's own loop symbols, not ``child_bound`` (which also holds
             # enclosing nodes'). A join column resolves against this node's
             # ``ranges``, so its own binders are the exact shadowing set — and a
             # node-local set is what lets every binding implement one rule.
@@ -3166,12 +3168,12 @@ def _scope_template_body(
         return f"{prefix}.{expr}" if expr in local_names else expr
     if isinstance(expr, ExprNode):
         local_bound = set(bound)
-        if expr.op == "faq":
-            for sym in expr.output_idx or ():
-                if isinstance(sym, str):
-                    local_bound.add(sym)
-            for sym in (expr.ranges or {}).keys():
+        for sym in expr.output_idx or ():
+            if isinstance(sym, str):
                 local_bound.add(sym)
+        local_bound.update((expr.ranges or {}).keys())
+        if expr.var is not None:
+            local_bound.add(expr.var)
         frozen = frozenset(local_bound)
         out = map_children(expr, lambda c: _scope_template_body(c, prefix, local_names, frozen))
         if getattr(expr, "join", None):

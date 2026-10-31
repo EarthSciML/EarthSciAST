@@ -1468,6 +1468,9 @@ fn scope_template_body(
             if let Some(ranges) = &node.ranges {
                 child_bound.extend(ranges.keys().cloned());
             }
+            if let Some(int_var) = &node.int_var {
+                child_bound.insert(int_var.clone());
+            }
             let mut out =
                 node.map_children(&mut |c| scope_template_body(c, prefix, locals, &child_bound));
             if let Some(join) = &node.join {
@@ -3016,10 +3019,9 @@ fn namespace_expr(
 /// * a name this node BINDS as a loop symbol (an `output_idx` entry or a
 ///   `ranges` key) is left alone — **even when a local variable of the same
 ///   name is declared**. Index symbols are local to the enclosing `faq`
-///   and shadow any coincident variable name (esm-spec §4.3.1: "a given string
+///   and shadow any coincident variable name (esm-spec §4.3: "a given string
 ///   can be a variable reference in most contexts but serves as an index symbol
-///   inside `aggregate.output_idx`, `aggregate.expr`, and `aggregate.ranges`
-///   keys"), and an `on` key column is resolved against THIS node's ranges
+///   inside `faq.output_idx`, `faq.expr`, and `faq.ranges` keys"), and an `on` key column is resolved against THIS node's ranges
 ///   ([`crate::value_invention`]'s `vi_join_index_sym`, the interpreter's
 ///   `join_sym_for_key`) — so prefixing a shadowed symbol makes it resolve to
 ///   nothing. This check comes FIRST for that reason;

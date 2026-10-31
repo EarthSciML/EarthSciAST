@@ -582,6 +582,8 @@ function namespaceJoin(
   })
 }
 
+const NO_BOUND: ReadonlySet<string> = new Set()
+
 /**
  * Recursively prefix every variable reference in `expr` with `prefix.`.
  *
@@ -591,6 +593,11 @@ function namespaceJoin(
  * segment names a subsystem mounted on the component being namespaced. Such a
  * reference is subsystem-LOCAL and must be qualified with the owner, because the
  * bare "contains a dot ⇒ leave alone" rule cannot tell it from an absolute one.
+ *
+ * `bound` holds the loop symbols the enclosing nodes bind (esm-spec §4.3,
+ * "Shadowing"). A bare bound name is the loop index and is left alone; a dotted
+ * name is never a loop index, so its head is still checked against
+ * `subsystemKeys`.
  */
 function namespaceExpr(
   expr: Expression,
@@ -598,11 +605,12 @@ function namespaceExpr(
   leaveAlone: ReadonlySet<string>,
   subsystemKeys?: ReadonlySet<string>,
   locals?: ReadonlySet<string>,
+  bound: ReadonlySet<string> = NO_BOUND,
 ): Expression {
   if (expr === null || expr === undefined || isNumberExpr(expr)) return expr
 
   if (typeof expr === 'string') {
-    if (leaveAlone.has(expr)) return expr
+    if (leaveAlone.has(expr) || bound.has(expr)) return expr
     if (expr.includes('.')) {
       const head = expr.slice(0, expr.indexOf('.'))
       if (!leaveAlone.has(head) && subsystemKeys?.has(head) === true) return `${prefix}.${expr}`
@@ -612,20 +620,20 @@ function namespaceExpr(
   }
 
   if (isNode(expr)) {
-    // A `faq`'s index symbols are local to its body and must not be
-    // namespaced. They are binder NAMES, not child expressions, so the only
-    // handling needed is adding them to `leaveAlone` for the children.
-    let localLeave = leaveAlone
-    if (expr.op === 'faq') {
-      const syms = binderSymbols(expr)
-      if (syms.length > 0) localLeave = new Set([...leaveAlone, ...syms])
-    }
+    // A node's loop symbols — its `output_idx` entries, `ranges` keys and an
+    // `integral`'s `var`, whatever its `op` — are local to its children and
+    // must not be namespaced. They are binder NAMES, not child expressions, so
+    // the only handling needed is adding them to `bound` for the children.
+    const syms = binderSymbols(expr)
+    const intVar = (expr as { var?: unknown }).var
+    if (typeof intVar === 'string') syms.push(intVar)
+    const childBound = syms.length > 0 ? new Set([...bound, ...syms]) : bound
     let out = mapChildren(expr, (child) =>
-      namespaceExpr(child as Expression, prefix, localLeave, subsystemKeys, locals),
+      namespaceExpr(child as Expression, prefix, leaveAlone, subsystemKeys, locals, childBound),
     )
     const join = (expr as { join?: unknown }).join
     if (locals !== undefined && Array.isArray(join) && join.length > 0) {
-      // THIS node's own binders, not `localLeave` (which also holds enclosing
+      // THIS node's own binders, not `childBound` (which also holds enclosing
       // nodes'): a join column resolves against this node's own `ranges`.
       out = {
         ...out,
