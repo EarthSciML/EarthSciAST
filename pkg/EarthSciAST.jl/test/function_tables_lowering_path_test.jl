@@ -194,7 +194,7 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
               _FTP.serialize_expression(rhs["n_tie_2_4_hand"])
         # Evaluated by both tree-walk compilers on a non-uniform axis: ties
         # low, clamped outside the axis, NaN -> NaN.
-        doc = Dict{String,Any}("esm" => "1.0.0",
+        doc = Dict{String,Any}("esm" => "1.1.0",
             "metadata" => Dict("name" => "N", "authors" => Any["a"]),
             "function_tables" => Dict("t" => Dict(
                 "axes" => Any[Dict("name" => "p", "values" => [1.0, 2.0, 4.0, 8.0])],
