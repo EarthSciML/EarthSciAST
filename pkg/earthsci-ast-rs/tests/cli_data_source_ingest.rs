@@ -532,8 +532,11 @@ fn document_asserting_the_ingested_parameter(url: &str, scale: f64) -> Value {
 #[cfg(feature = "esio")]
 fn write_doc(dir: &Path, name: &str, doc: &Value) -> PathBuf {
     let path = dir.join(name);
-    fs::write(&path, serde_json::to_string_pretty(doc).expect("doc renders"))
-        .expect("write document");
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(doc).expect("doc renders"),
+    )
+    .expect("write document");
     path
 }
 
@@ -552,7 +555,10 @@ fn an_ingested_parameter_is_assertable_where_it_arrives() {
         &document_asserting_the_ingested_parameter(&url, 1.0),
     );
     let (ok, out) = esm(tmp.path(), &["test", doc.to_str().expect("utf-8 path")]);
-    assert!(ok, "every assertion on the ingested column must pass; got:\n{out}");
+    assert!(
+        ok,
+        "every assertion on the ingested column must pass; got:\n{out}"
+    );
     assert_eq!(total_row(&out), (3, 0, 0), "in:\n{out}");
 }
 
@@ -619,7 +625,10 @@ fn an_ingested_parameter_of_a_mounted_subsystem_is_assertable() {
     });
     let doc = write_doc(tmp.path(), "host.esm", &host);
     let (ok, out) = esm(tmp.path(), &["test", doc.to_str().expect("utf-8 path")]);
-    assert!(ok, "the mounted data-fed parameter must be assertable; got:\n{out}");
+    assert!(
+        ok,
+        "the mounted data-fed parameter must be assertable; got:\n{out}"
+    );
     assert_eq!(total_row(&out), (2, 0, 0), "in:\n{out}");
 }
 
@@ -686,7 +695,10 @@ fn simulate_observed_emits_an_ingested_parameter() {
             out_csv.to_str().expect("utf-8 path"),
         ],
     );
-    assert!(ok, "--observed on a data-fed parameter must succeed:\n{out}");
+    assert!(
+        ok,
+        "--observed on a data-fed parameter must succeed:\n{out}"
+    );
     assert_eq!(
         fs::read_to_string(&out_csv).expect("read csv"),
         "i1,annual,annual_obs\n1,100,100\n2,50,50\n3,30,30\n",

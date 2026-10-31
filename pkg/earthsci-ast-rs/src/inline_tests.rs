@@ -2471,11 +2471,11 @@ fn asserted_data_fields(
 /// the provider's values (finding F43). Never a state, and never an ordinary
 /// parameter — a value the build did not materialize is not guessed at.
 fn is_build_field_variable(model: &crate::types::Model, variable: &str) -> bool {
-    model.variables.get(variable).is_some_and(|v| {
-        v.update
-            .as_ref()
-            .is_some_and(crate::data_fed::is_data_fed)
-    }) || crate::classification::Classification::of(model).is_observed(variable)
+    model
+        .variables
+        .get(variable)
+        .is_some_and(|v| v.update.as_ref().is_some_and(crate::data_fed::is_data_fed))
+        || crate::classification::Classification::of(model).is_observed(variable)
 }
 
 /// Run every inline test of one COMPONENT, appending per-assertion results.
