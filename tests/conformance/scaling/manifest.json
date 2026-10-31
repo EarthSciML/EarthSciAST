@@ -342,6 +342,21 @@
           "why": "the work per call is N^2, so 2000 states (N = 1000) is already a 10^6-term call"
         }
       }
+    },
+    "band_transpose": {
+      "description": "A tridiagonal transpose product D(u[j]) = -(L[j] + U[j] + c[j] u[j]), L[j] = sum_{i : i+1 == j} a[i] u[i], U[j] = sum_{i : j == i-1} b[i] u[i], with a, b, c non-uniform formulas of their index (an EarthSciASTDiff J^T lambda, issue #613). Each scatter is N^2 filter tests read literally and one pass over i under esm-spec 4.3.1's one-pass scatter license.",
+      "size_meaning": "cells",
+      "sizes": [
+        100,
+        1000,
+        10000,
+        100000,
+        1000000
+      ],
+      "pr_sizes": [
+        100,
+        1000
+      ]
     }
   },
   "gates": {
