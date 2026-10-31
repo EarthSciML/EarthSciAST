@@ -31,10 +31,26 @@ type Rat struct {
 }
 
 // newRat builds a Rat in lowest terms with a positive denominator. A zero
-// denominator is treated as 1 (see the Rat doc comment). A value outside the
-// int32 range yields the zero Rat; newRatChecked reports it instead.
+// denominator is treated as 1 (see the Rat doc comment). It panics with
+// errExponentOverflow on a value outside the int32 range; newRatChecked
+// reports it instead.
 func newRat(num, den int64) Rat {
-	r, _ := newRatChecked(num, den)
+	return mustRat(newRatChecked(num, den))
+}
+
+// errExponentOverflow is the panic value of the unchecked Rat, Dimension,
+// ExactScale and Unit arithmetic when an exponent leaves the int32 range. Those
+// operations serve the fixed unit registry; arithmetic on a document's units
+// goes through the *Checked variants, which report the overflow instead.
+var errExponentOverflow = errors.New("unit exponent overflows the int32 fraction it is held in")
+
+// mustRat unwraps a checked Rat result, panicking on overflow. Returning the
+// zero Rat instead would turn the exponent into 0 — dimensionless — and let a
+// dimensional quantity pass a dimensionless check.
+func mustRat(r Rat, ok bool) Rat {
+	if !ok {
+		panic(errExponentOverflow)
+	}
 	return r
 }
 
@@ -81,26 +97,23 @@ func (r Rat) fix() Rat {
 	return r
 }
 
-// ratInt is the exponent n/1.
-func ratInt(n int) Rat { return Rat{Num: int32(n), Den: 1} }
+// ratInt is the exponent n/1. It panics with errExponentOverflow outside the
+// int32 range.
+func ratInt(n int) Rat { return mustRat(ratIntChecked(n)) }
 
-// Add returns r + o.
-func (r Rat) Add(o Rat) Rat {
-	s, _ := r.AddChecked(o)
-	return s
+// ratIntChecked is ratInt that reports an out-of-range n instead.
+func ratIntChecked(n int) (Rat, bool) {
+	return newRatChecked(int64(n), 1)
 }
 
-// Sub returns r − o.
-func (r Rat) Sub(o Rat) Rat {
-	d, _ := r.SubChecked(o)
-	return d
-}
+// Add returns r + o. It panics with errExponentOverflow on overflow.
+func (r Rat) Add(o Rat) Rat { return mustRat(r.AddChecked(o)) }
 
-// Mul returns r × o.
-func (r Rat) Mul(o Rat) Rat {
-	p, _ := r.MulChecked(o)
-	return p
-}
+// Sub returns r − o. It panics with errExponentOverflow on overflow.
+func (r Rat) Sub(o Rat) Rat { return mustRat(r.SubChecked(o)) }
+
+// Mul returns r × o. It panics with errExponentOverflow on overflow.
+func (r Rat) Mul(o Rat) Rat { return mustRat(r.MulChecked(o)) }
 
 // AddChecked returns r + o and whether it fits the Rat representation.
 func (r Rat) AddChecked(o Rat) (Rat, bool) {
@@ -169,22 +182,48 @@ const (
 // Dimensionless is the zero vector.
 var Dimensionless = Dimension{}
 
-// Multiply adds component-wise exponents.
+// Multiply adds component-wise exponents. It panics with errExponentOverflow
+// on overflow; see MultiplyChecked.
 func (d Dimension) Multiply(other Dimension) Dimension {
-	var r Dimension
-	for i := range d {
-		r[i] = d[i].Add(other[i])
+	r, ok := d.MultiplyChecked(other)
+	if !ok {
+		panic(errExponentOverflow)
 	}
 	return r
 }
 
-// Divide subtracts component-wise exponents.
-func (d Dimension) Divide(other Dimension) Dimension {
+// MultiplyChecked is Multiply that reports an exponent overflow instead.
+func (d Dimension) MultiplyChecked(other Dimension) (Dimension, bool) {
 	var r Dimension
 	for i := range d {
-		r[i] = d[i].Sub(other[i])
+		var ok bool
+		if r[i], ok = d[i].AddChecked(other[i]); !ok {
+			return Dimension{}, false
+		}
+	}
+	return r, true
+}
+
+// Divide subtracts component-wise exponents. It panics with
+// errExponentOverflow on overflow; see DivideChecked.
+func (d Dimension) Divide(other Dimension) Dimension {
+	r, ok := d.DivideChecked(other)
+	if !ok {
+		panic(errExponentOverflow)
 	}
 	return r
+}
+
+// DivideChecked is Divide that reports an exponent overflow instead.
+func (d Dimension) DivideChecked(other Dimension) (Dimension, bool) {
+	var r Dimension
+	for i := range d {
+		var ok bool
+		if r[i], ok = d[i].SubChecked(other[i]); !ok {
+			return Dimension{}, false
+		}
+	}
+	return r, true
 }
 
 // Power scales each exponent by the integer n.
@@ -193,13 +232,26 @@ func (d Dimension) Power(n int) Dimension {
 }
 
 // PowerRat scales each exponent by the rational e — the operation `sqrt` and a
-// fractional literal exponent both need.
+// fractional literal exponent both need. It panics with errExponentOverflow on
+// overflow; see PowerRatChecked.
 func (d Dimension) PowerRat(e Rat) Dimension {
-	var r Dimension
-	for i := range d {
-		r[i] = d[i].Mul(e)
+	r, ok := d.PowerRatChecked(e)
+	if !ok {
+		panic(errExponentOverflow)
 	}
 	return r
+}
+
+// PowerRatChecked is PowerRat that reports an exponent overflow instead.
+func (d Dimension) PowerRatChecked(e Rat) (Dimension, bool) {
+	var r Dimension
+	for i := range d {
+		var ok bool
+		if r[i], ok = d[i].MulChecked(e); !ok {
+			return Dimension{}, false
+		}
+	}
+	return r, true
 }
 
 // Equal reports whether two dimensions denote the same exponent vector.
@@ -514,48 +566,110 @@ func exactDecimal(lit string) ExactScale {
 }
 
 // bump returns e with the exponent of prime p increased by by. It never mutates
-// e's map, which may be shared with the unit it was copied from.
+// e's map, which may be shared with the unit it was copied from. It panics with
+// errExponentOverflow on overflow.
 func (e ExactScale) bump(p uint64, by Rat) ExactScale {
+	out, ok := e.bumpChecked(p, by, Rat.AddChecked)
+	if !ok {
+		panic(errExponentOverflow)
+	}
+	return out
+}
+
+// bumpChecked returns e with the exponent of prime p replaced by op(exponent,
+// by), reporting an exponent overflow instead of panicking.
+func (e ExactScale) bumpChecked(p uint64, by Rat, op func(Rat, Rat) (Rat, bool)) (ExactScale, bool) {
+	next, ok := op(e.primes[p].fix(), by.fix())
+	if !ok {
+		return ExactScale{}, false
+	}
 	out := ExactScale{primes: make(map[uint64]Rat, len(e.primes)+1), pi: e.pi}
 	for k, v := range e.primes {
 		out.primes[k] = v
 	}
-	next := out.primes[p].fix().Add(by).fix()
 	if next.IsZero() {
 		delete(out.primes, p)
 	} else {
 		out.primes[p] = next
 	}
-	return out
+	return out, true
 }
 
-// Mul is the exact scale of a product of units.
+// Mul is the exact scale of a product of units. It panics with
+// errExponentOverflow on overflow; see MulChecked.
 func (e ExactScale) Mul(o ExactScale) ExactScale {
-	out := e
-	for p, v := range o.primes {
-		out = out.bump(p, v)
+	out, ok := e.MulChecked(o)
+	if !ok {
+		panic(errExponentOverflow)
 	}
-	out.pi = out.pi.fix().Add(o.pi.fix()).fix()
 	return out
 }
 
-// Div is the exact scale of a quotient of units.
+// MulChecked is Mul that reports an exponent overflow instead.
+func (e ExactScale) MulChecked(o ExactScale) (ExactScale, bool) {
+	return e.combineChecked(o, Rat.AddChecked)
+}
+
+// Div is the exact scale of a quotient of units. It panics with
+// errExponentOverflow on overflow; see DivChecked.
 func (e ExactScale) Div(o ExactScale) ExactScale {
-	out := e
-	for p, v := range o.primes {
-		out = out.bump(p, v.fix().Neg())
+	out, ok := e.DivChecked(o)
+	if !ok {
+		panic(errExponentOverflow)
 	}
-	out.pi = out.pi.fix().Sub(o.pi.fix()).fix()
 	return out
 }
 
-// Pow is the exact scale of a unit raised to a rational power.
+// DivChecked is Div that reports an exponent overflow instead.
+func (e ExactScale) DivChecked(o ExactScale) (ExactScale, bool) {
+	return e.combineChecked(o, Rat.SubChecked)
+}
+
+// combineChecked folds o's exponents into e's with op (add for a product,
+// subtract for a quotient).
+func (e ExactScale) combineChecked(o ExactScale, op func(Rat, Rat) (Rat, bool)) (ExactScale, bool) {
+	out := e
+	for p, v := range o.primes {
+		var ok bool
+		if out, ok = out.bumpChecked(p, v, op); !ok {
+			return ExactScale{}, false
+		}
+	}
+	pi, ok := op(out.pi.fix(), o.pi.fix())
+	if !ok {
+		return ExactScale{}, false
+	}
+	out.pi = pi
+	return out, true
+}
+
+// Pow is the exact scale of a unit raised to a rational power. It panics with
+// errExponentOverflow on overflow; see PowChecked.
 func (e ExactScale) Pow(r Rat) ExactScale {
-	out := ExactScale{pi: e.pi.fix().Mul(r.fix()).fix()}
-	for p, v := range e.primes {
-		out = out.bump(p, v.fix().Mul(r.fix()))
+	out, ok := e.PowChecked(r)
+	if !ok {
+		panic(errExponentOverflow)
 	}
 	return out
+}
+
+// PowChecked is Pow that reports an exponent overflow instead.
+func (e ExactScale) PowChecked(r Rat) (ExactScale, bool) {
+	pi, ok := e.pi.fix().MulChecked(r.fix())
+	if !ok {
+		return ExactScale{}, false
+	}
+	out := ExactScale{pi: pi}
+	for p, v := range e.primes {
+		scaled, ok := v.fix().MulChecked(r.fix())
+		if !ok {
+			return ExactScale{}, false
+		}
+		if out, ok = out.bumpChecked(p, scaled, Rat.AddChecked); !ok {
+			return ExactScale{}, false
+		}
+	}
+	return out, true
 }
 
 // Equal reports whether two exact scales are the same number.
@@ -656,13 +770,43 @@ type Unit struct {
 }
 
 // Multiply returns the product of two units (dimensions add, scales multiply).
+// It panics with errExponentOverflow on overflow; see MultiplyChecked.
 func (u Unit) Multiply(other Unit) Unit {
-	return Unit{Dim: u.Dim.Multiply(other.Dim), Scale: u.Scale * other.Scale, Exact: u.Exact.Mul(other.Exact)}
+	return mustUnit(u.MultiplyChecked(other))
 }
 
-// Divide returns the quotient of two units.
+// MultiplyChecked is Multiply that returns errExponentOverflow instead of
+// panicking.
+func (u Unit) MultiplyChecked(other Unit) (Unit, error) {
+	dim, ok := u.Dim.MultiplyChecked(other.Dim)
+	if !ok {
+		return Unit{}, errExponentOverflow
+	}
+	exact, ok := u.Exact.MulChecked(other.Exact)
+	if !ok {
+		return Unit{}, errExponentOverflow
+	}
+	return Unit{Dim: dim, Scale: u.Scale * other.Scale, Exact: exact}, nil
+}
+
+// Divide returns the quotient of two units. It panics with errExponentOverflow
+// on overflow; see DivideChecked.
 func (u Unit) Divide(other Unit) Unit {
-	return Unit{Dim: u.Dim.Divide(other.Dim), Scale: u.Scale / other.Scale, Exact: u.Exact.Div(other.Exact)}
+	return mustUnit(u.DivideChecked(other))
+}
+
+// DivideChecked is Divide that returns errExponentOverflow instead of
+// panicking.
+func (u Unit) DivideChecked(other Unit) (Unit, error) {
+	dim, ok := u.Dim.DivideChecked(other.Dim)
+	if !ok {
+		return Unit{}, errExponentOverflow
+	}
+	exact, ok := u.Exact.DivChecked(other.Exact)
+	if !ok {
+		return Unit{}, errExponentOverflow
+	}
+	return Unit{Dim: dim, Scale: u.Scale / other.Scale, Exact: exact}, nil
 }
 
 // Power raises a unit to an integer power.
@@ -670,9 +814,31 @@ func (u Unit) Power(n int) Unit {
 	return u.PowerRat(ratInt(n))
 }
 
-// PowerRat raises a unit to a RATIONAL power (`s^(-1/2)`, `sqrt(m^3)`).
+// PowerRat raises a unit to a RATIONAL power (`s^(-1/2)`, `sqrt(m^3)`). It
+// panics with errExponentOverflow on overflow; see PowerRatChecked.
 func (u Unit) PowerRat(e Rat) Unit {
-	return Unit{Dim: u.Dim.PowerRat(e), Scale: math.Pow(u.Scale, e.Float()), Exact: u.Exact.Pow(e)}
+	return mustUnit(u.PowerRatChecked(e))
+}
+
+// PowerRatChecked is PowerRat that returns errExponentOverflow instead of
+// panicking.
+func (u Unit) PowerRatChecked(e Rat) (Unit, error) {
+	dim, ok := u.Dim.PowerRatChecked(e)
+	if !ok {
+		return Unit{}, errExponentOverflow
+	}
+	exact, ok := u.Exact.PowChecked(e)
+	if !ok {
+		return Unit{}, errExponentOverflow
+	}
+	return Unit{Dim: dim, Scale: math.Pow(u.Scale, e.Float()), Exact: exact}, nil
+}
+
+func mustUnit(u Unit, err error) Unit {
+	if err != nil {
+		panic(err)
+	}
+	return u
 }
 
 // baseUnit constructs a single-dimension unit with an explicit scale.
@@ -1131,9 +1297,12 @@ func (p *unitParser) parseUnit() (Unit, error) {
 				return Unit{}, err
 			}
 			if c == '*' {
-				u = u.Multiply(next)
+				u, err = u.MultiplyChecked(next)
 			} else {
-				u = u.Divide(next)
+				u, err = u.DivideChecked(next)
+			}
+			if err != nil {
+				return Unit{}, err
 			}
 		case startsAtom(c):
 			// Juxtaposition is multiplication: "kg m^2 s^-2". peek() has
@@ -1145,7 +1314,9 @@ func (p *unitParser) parseUnit() (Unit, error) {
 			if err != nil {
 				return Unit{}, err
 			}
-			u = u.Multiply(next)
+			if u, err = u.MultiplyChecked(next); err != nil {
+				return Unit{}, err
+			}
 		default:
 			return u, nil
 		}
@@ -1220,7 +1391,7 @@ func (p *unitParser) parseTerm() (Unit, error) {
 	if err != nil {
 		return Unit{}, err
 	}
-	return u.PowerRat(exp), nil
+	return u.PowerRatChecked(exp)
 }
 
 func (p *unitParser) parseAtom() (Unit, error) {
@@ -1451,6 +1622,12 @@ func analysisErrf(format string, a ...any) error {
 	return &dimError{code: UnitFindingAnalysis, msg: fmt.Sprintf(format, a...)}
 }
 
+// exponentOverflowErr is the finding for a unit exponent that leaves the int32
+// range: the dimension is undeterminable, never silently dimensionless.
+func exponentOverflowErr(op string) error {
+	return analysisErrf("'%s': %v", op, errExponentOverflow)
+}
+
 // findingCode recovers the classification of a propagation error. An error from
 // anywhere else is treated conservatively as an analysis limit.
 func findingCode(err error) string {
@@ -1611,7 +1788,9 @@ func (ut unitTyper) propagateNode(node ExprNode, env map[string]Unit) (*Unit, er
 			if u == nil {
 				return nil, nil
 			}
-			result = result.Multiply(*u)
+			if result, err = result.MultiplyChecked(*u); err != nil {
+				return nil, exponentOverflowErr(node.Op)
+			}
 		}
 		return &result, nil
 
@@ -1630,7 +1809,10 @@ func (ut unitTyper) propagateNode(node ExprNode, env map[string]Unit) (*Unit, er
 		if num == nil || den == nil {
 			return nil, nil
 		}
-		r := num.Divide(*den)
+		r, err := num.DivideChecked(*den)
+		if err != nil {
+			return nil, exponentOverflowErr(node.Op)
+		}
 		return &r, nil
 
 	case "^", "**", "pow":
@@ -1657,7 +1839,10 @@ func (ut unitTyper) propagateNode(node ExprNode, env map[string]Unit) (*Unit, er
 			// is read by value: it folds to an exact rational and is used
 			// exactly as a literal exponent of that value (esm-spec §4.8.3).
 			if exp, folded := constantExponentValue(node.Args[1]); folded {
-				r := base.PowerRat(exp)
+				r, err := base.PowerRatChecked(exp)
+				if err != nil {
+					return nil, exponentOverflowErr(node.Op)
+				}
 				return &r, nil
 			}
 			// SYMBOLIC exponent (`x^alpha`, alpha a parameter): the result's
@@ -1674,7 +1859,10 @@ func (ut unitTyper) propagateNode(node ExprNode, env map[string]Unit) (*Unit, er
 		if err != nil {
 			return nil, analysisErrf("exponent %v in '%s' is not a representable rational: %v", expVal, node.Op, err)
 		}
-		r := base.PowerRat(exp)
+		r, err := base.PowerRatChecked(exp)
+		if err != nil {
+			return nil, exponentOverflowErr(node.Op)
+		}
 		return &r, nil
 
 	case "faq":
@@ -1783,7 +1971,12 @@ func (ut unitTyper) propagateNode(node ExprNode, env map[string]Unit) (*Unit, er
 		// defined: sqrt(m^2/s^2) is m/s (the ordinary spelling of a wave speed or
 		// an RMS) and sqrt(m^3) is m^(3/2). The old "non-square dimension"
 		// rejection was an artifact of the integer exponent vector.
-		return &Unit{Dim: base.Dim.PowerRat(newRat(1, 2)), Scale: math.Sqrt(base.Scale), Exact: base.Exact.Pow(newRat(1, 2))}, nil
+		r, err := base.PowerRatChecked(newRat(1, 2))
+		if err != nil {
+			return nil, exponentOverflowErr(node.Op)
+		}
+		r.Scale = math.Sqrt(base.Scale)
+		return &r, nil
 
 	case "sin", "cos", "tan":
 		// CIRCULAR functions take an ANGLE. With `rad` carried as a base axis, the
@@ -1928,7 +2121,10 @@ func (ut unitTyper) propagateNode(node ExprNode, env map[string]Unit) (*Unit, er
 			// could reconcile, which is what the invalid corpus actually pins.
 			return nil, nil
 		}
-		r := varDim.Divide(wrtUnit)
+		r, err := varDim.DivideChecked(wrtUnit)
+		if err != nil {
+			return nil, exponentOverflowErr(node.Op)
+		}
 		return &r, nil
 
 	case ">", "<", ">=", "<=", "==", "!=":
@@ -2183,7 +2379,7 @@ func buildModelUnitEnv(model *Model) (map[string]Unit, map[string]error) {
 // declared units of its species and parameters. See BuildUnitEnv for the
 // return-value contract.
 func buildSystemUnitEnv(system *ReactionSystem) (map[string]Unit, map[string]error) {
-	raw := make(map[string]string, len(system.Species))
+	raw := make(map[string]string, len(system.Species)+len(system.Parameters))
 	for name, sp := range system.Species {
 		if sp.Units != nil {
 			raw[name] = *sp.Units
@@ -2272,7 +2468,10 @@ func derivativeTimeMismatch(state, rhs *Unit) error {
 	if state == nil || rhs == nil {
 		return nil
 	}
-	ratio := state.Dim.Divide(rhs.Dim)
+	ratio, ok := state.Dim.DivideChecked(rhs.Dim)
+	if !ok {
+		return exponentOverflowErr("D")
+	}
 	for i := range ratio {
 		if i == dimTime || ratio[i].IsZero() {
 			continue
@@ -2851,9 +3050,21 @@ func validateReactionRateUnits(_ string, system *ReactionSystem, basePath string
 		// ΠCᵢ and rejects correct chemistry — it fired on the perfectly valid
 		// second-order Arrhenius law in tests/valid/expr_graphs_variable_deps.esm.
 		// A rate expression that REFERENCES its own substrates is a rate law.
-		expectedRateUnit := concUnit.Power(1 - totalOrder).Divide(timeUnit)
-		if rateIsExplicitLaw(rx) {
-			expectedRateUnit = concUnit.Divide(timeUnit)
+		// An order whose exponent overflows leaves the expected units
+		// undeterminable, so the reaction is skipped like an unresolvable one.
+		expectedBase := concUnit
+		if !rateIsExplicitLaw(rx) {
+			order, ok := ratIntChecked(1 - totalOrder)
+			if !ok {
+				continue
+			}
+			if expectedBase, err = concUnit.PowerRatChecked(order); err != nil {
+				continue
+			}
+		}
+		expectedRateUnit, err := expectedBase.DivideChecked(timeUnit)
+		if err != nil {
+			continue
 		}
 		if !rateUnit.Dim.Equal(expectedRateUnit.Dim) {
 			rateUnitsStr := ""

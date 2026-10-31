@@ -1,6 +1,7 @@
 package esm
 
 import (
+	"errors"
 	"math"
 	"path/filepath"
 	"testing"
@@ -159,6 +160,36 @@ func TestRatChecked(t *testing.T) {
 	if r, ok := constantExponentValue(ExprNode{Op: "/", Args: []any{3, -6}}); !ok || r != (Rat{Num: -1, Den: 2}) {
 		t.Errorf("3 / -6 = %v, %v", r, ok)
 	}
+}
+
+// An exponent that overflows int32 must never collapse to 0 (dimensionless):
+// a document's units report it, and the unchecked registry arithmetic panics.
+func TestUnitExponentOverflow(t *testing.T) {
+	if _, err := ParseUnit("(m^100000)^100000"); !errors.Is(err, errExponentOverflow) {
+		t.Errorf("ParseUnit overflow: err = %v", err)
+	}
+	env := map[string]Unit{"x": mustParseUnit(t, "m")}
+	inner := ExprNode{Op: "^", Args: []any{"x", 100000}}
+	u, err := PropagateDimension(ExprNode{Op: "^", Args: []any{inner, 100000}}, env)
+	if err == nil || findingCode(err) != UnitFindingAnalysis {
+		t.Errorf("PropagateDimension overflow = %v, %v; want an analysis finding", u, err)
+	}
+	defer func() {
+		if r := recover(); r != errExponentOverflow {
+			t.Errorf("unchecked Multiply recovered %v; want errExponentOverflow", r)
+		}
+	}()
+	big := Dimension{dimLength: Rat{Num: math.MaxInt32, Den: 1}}
+	big.Multiply(big)
+}
+
+func mustParseUnit(t *testing.T, s string) Unit {
+	t.Helper()
+	u, err := ParseUnit(s)
+	if err != nil {
+		t.Fatalf("ParseUnit(%q): %v", s, err)
+	}
+	return u
 }
 
 func TestUnitsReviewFixtures(t *testing.T) {
