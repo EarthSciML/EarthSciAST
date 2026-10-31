@@ -1885,6 +1885,28 @@ impl<'o> BuildState<'o> {
     /// the generic dotted-key → unique-shallowest-bare-tail pass is the one
     /// that now always runs, and it never overwrites an existing key.
     fn alias_pushdown_names(&mut self, pd_coupling: &[(String, String)]) {
+        // A key under the SELECTED model also surfaces under its model-local
+        // path, the selected model's own name stripped: that is how the built
+        // model spells a parameter of a mounted subsystem (`Leaf.p` for the key
+        // `Parent.Leaf.p`, esm-spec §4.7). The bare-tail pass below cannot
+        // reach it -- it strips every prefix, not just the model's -- so
+        // without this a data-fed parameter inside a subsystem is unbound, and
+        // a model that mounts a data-fed leaf to assert on it (§6.6: "declares
+        // that test on a component the assembly document itself declares")
+        // cannot build. Exact rather than heuristic, and it never overwrites.
+        let prefix = format!("{}.", self.model_name);
+        let local: Vec<(String, String)> = self
+            .arrays
+            .keys()
+            .filter_map(|k| k.strip_prefix(&prefix).map(|l| (k.clone(), l.to_string())))
+            .filter(|(_, l)| l.contains('.'))
+            .collect();
+        for (k, l) in local {
+            if !self.arrays.contains_key(&l) {
+                let a = self.arrays[&k].clone();
+                self.arrays.insert(l, a);
+            }
+        }
         inject_aliases(&mut self.arrays, pd_coupling);
     }
 
