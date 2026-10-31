@@ -45,9 +45,8 @@ at a root. A leaf that declares no precision adopts its mounter's.
 - `values`, `build_errors` — asserted by the bindings in `evaluated_by` (those
   that evaluate per-variable precision; today Rust). Values are compared bit for
   bit: `0.9999999403953552` is the binary32 witness, `2265007015` the key that
-  binary32 would turn into `2265007104`. `subsystems.esm`'s build error is a
-  Rust limitation (its precision inference reads top-level model variables
-  only), not a format rule.
+  binary32 would turn into `2265007104`. `subsystems.esm` and `deep.esm` pin
+  values inside a `subsystems.<k>` component (`Host.Leaf.x`, `Leaf.Inner.x`).
 
 ## What each binding asserts
 

@@ -163,6 +163,10 @@ pub struct VarPrecisions {
     /// precision (see [`Self::from_declarations`]), and those are not
     /// overrides.
     declared: std::collections::BTreeSet<String>,
+    /// Model-local subsystem spellings (`Sub.var`) the models disagree on.
+    /// [`Self::get`] answers `None` for these rather than falling back to the
+    /// bare last segment, which would name some other, top-level variable.
+    disputed: std::collections::HashSet<String>,
 }
 
 /// One model's variables as [`VarPrecisions::from_declarations`] reads them:
@@ -183,59 +187,55 @@ impl VarPrecisions {
     /// The per-variable table for a document (esm-spec §11.3.1).
     ///
     /// EMPTY — the inert fast path — when no variable declares an
-    /// `element_type`. Otherwise every model variable is recorded under its
-    /// `Model.name` spelling at its EFFECTIVE precision (its declaration, else
-    /// `document`), so a qualified lookup never falls through to a bare name
-    /// another model registered. Bare names are recorded for `selected` (the
-    /// model being built) when there is one, for the only model when there is
-    /// one, and otherwise only where every model that has the name agrees on
-    /// its precision: two models may both declare an `x`, and a mount makes that
-    /// the ordinary case (a Float32 leaf beside a Float64 assembly).
+    /// `element_type`, a subsystem's included. Otherwise every model variable
+    /// is recorded under its `Model.name` spelling at its EFFECTIVE precision
+    /// (its declaration, else `document`), so a qualified lookup never falls
+    /// through to a bare name another model registered. Bare names are recorded
+    /// for `selected` (the model being built) when there is one, for the only
+    /// model when there is one, and otherwise only where every model that has
+    /// the name agrees on its precision: two models may both declare an `x`,
+    /// and a mount makes that the ordinary case (a Float32 leaf beside a
+    /// Float64 assembly).
+    ///
+    /// A SUBSYSTEM variable is recorded the same way under the two spellings
+    /// the build uses for it: the full `Model.Sub.path.var` (a provider key, a
+    /// flattened name) and the model-local `Sub.path.var` (a mounted rule's
+    /// name, which is what per-rule arming looks up). Without the latter a
+    /// lookup of `Sub.var` would fall back to its last segment and find a
+    /// top-level `var` of another precision, or the document's. The model-local
+    /// spelling follows the same selection rule as a bare name, with two
+    /// refinements. The SELECTED model's spelling replaces a full spelling it
+    /// collides with (a top-level model named `Sub` with its own `var`):
+    /// building `selected`, `Sub.var` names the mounted variable. Without a
+    /// selection the full spelling is kept, since a flattened build names the
+    /// mounted variable `Model.Sub.var`, and a spelling the models disagree on
+    /// is recorded as disputed, so [`Self::get`] does not answer it with an
+    /// unrelated top-level `var`.
     ///
     /// # Errors
     ///
     /// [`CompileError::UnsupportedElementType`] for a spelling that is neither
-    /// `"Float64"` nor `"Float32"`, and [`CompileError::ElementTypeUncarried`]
-    /// for a SUBSYSTEM variable (of `selected`, when given) whose declared
-    /// precision differs from `document`: this binding's precision inference and its per-rule arming
-    /// read top-level model variables only, so such a declaration would be
-    /// evaluated in the document's precision silently.
+    /// `"Float64"` nor `"Float32"`.
     pub fn from_declarations(
         models: &[ModelDeclarations<'_>],
         document: Precision,
         selected: Option<&str>,
     ) -> Result<Self, CompileError> {
-        // Only the selected model's, when there is one: no other model's
-        // subsystems are evaluated by this build.
-        for m in models
-            .iter()
-            .filter(|m| selected.is_none_or(|s| s == m.model))
-        {
-            for (path, et) in &m.subsystem_variables {
-                if et.is_some() && Precision::from_element_type(et.as_deref())? != document {
-                    return Err(CompileError::ElementTypeUncarried {
-                        construct: format!("subsystem variable '{}.{path}'", m.model),
-                        reason: format!(
-                            "it declares `element_type: \"{}\"` and the document evaluates in \
-                             {}, but this evaluator carries a per-variable element type on \
-                             top-level model variables only (a mounted leaf's precision reaches \
-                             a `subsystems.<k>` mount this way, esm-spec §4.7)",
-                            et.as_deref().unwrap_or_default(),
-                            document.element_type()
-                        ),
-                    });
-                }
-            }
-        }
         let mut out = VarPrecisions::default();
         let mut any = false;
+        // `(model, model-local spelling, effective precision)`, top-level
+        // variables and subsystem variables alike.
         let mut effective: Vec<(&str, &str, Precision)> = Vec::new();
         for m in models {
-            for (v, et) in &m.variables {
+            let subs = m
+                .subsystem_variables
+                .iter()
+                .map(|(path, et)| (path.as_str(), et.as_deref()));
+            for (v, et) in m.variables.iter().copied().chain(subs) {
                 // Absent means the document's — NOT `from_element_type(None)`,
                 // which is the schema default Float64.
                 let p = match et {
-                    Some(_) => Precision::from_element_type(*et)?,
+                    Some(_) => Precision::from_element_type(et)?,
                     None => document,
                 };
                 if et.is_some() {
@@ -270,18 +270,19 @@ impl VarPrecisions {
             }
         }
         for (v, p) in bare {
-            if let Some(p) = p {
-                out.by_name.insert(v.to_string(), p);
-            }
-        }
-        // Subsystem variables are all at `document` (anything else was refused
-        // above). Recorded under their full and their model-relative spellings
-        // so a lookup of either finds them rather than falling back to a bare
-        // top-level name of the same spelling.
-        for m in models {
-            for (path, _) in &m.subsystem_variables {
-                out.by_name.insert(format!("{}.{path}", m.model), document);
-                out.by_name.entry(path.clone()).or_insert(document);
+            match p {
+                Some(p) if bare_from.is_some() => {
+                    out.by_name.insert(v.to_string(), p);
+                }
+                Some(p) => {
+                    out.by_name.entry(v.to_string()).or_insert(p);
+                }
+                None if v.contains('.') && !out.by_name.contains_key(v) => {
+                    out.disputed.insert(v.to_string());
+                }
+                // A bare name the models disagree on is recorded under no
+                // spelling, as before.
+                None => {}
             }
         }
         Ok(out)
@@ -306,7 +307,7 @@ impl VarPrecisions {
         // A consumer may hold a namespaced spelling of a bare registration
         // (flattening prefixes) or the reverse.
         let tail = name.rsplit('.').next()?;
-        if tail == name {
+        if tail == name || self.disputed.contains(name) {
             return None;
         }
         self.by_name.get(tail).copied()
@@ -331,21 +332,35 @@ impl VarPrecisions {
 
 /// Every variable of every subsystem under `subsystems` (a raw
 /// `Model.subsystems` map), at any depth, as `(Sub.path.variable, declared
-/// element_type)` — the input [`VarPrecisions::from_declarations`] checks.
+/// element_type)` — the input [`VarPrecisions::from_declarations`] reads.
 #[must_use]
 pub fn subsystem_declarations(
     subsystems: Option<&serde_json::Value>,
 ) -> Vec<(String, Option<String>)> {
-    fn walk(subs: &serde_json::Value, prefix: &str, out: &mut Vec<(String, Option<String>)>) {
-        let Some(subs) = subs.as_object() else {
-            return;
-        };
+    subsystems
+        .and_then(serde_json::Value::as_object)
+        .map(subsystem_declarations_in)
+        .unwrap_or_default()
+}
+
+/// [`subsystem_declarations`] over a typed `Model.subsystems` map, or any
+/// other `(name, component)` sequence.
+#[must_use]
+pub fn subsystem_declarations_in<'a>(
+    subsystems: impl IntoIterator<Item = (&'a String, &'a serde_json::Value)>,
+) -> Vec<(String, Option<String>)> {
+    fn walk<'a>(
+        subs: impl IntoIterator<Item = (&'a String, &'a serde_json::Value)>,
+        prefix: &str,
+        out: &mut Vec<(String, Option<String>)>,
+    ) {
         for (name, sub) in subs {
             let path = if prefix.is_empty() {
                 name.clone()
             } else {
                 format!("{prefix}.{name}")
             };
+            let sub = subsystem_component(sub);
             if let Some(vars) = sub.get("variables").and_then(serde_json::Value::as_object) {
                 for (v, d) in vars {
                     out.push((
@@ -356,16 +371,45 @@ pub fn subsystem_declarations(
                     ));
                 }
             }
-            if let Some(nested) = sub.get("subsystems") {
+            if let Some(nested) = sub.get("subsystems").and_then(serde_json::Value::as_object) {
                 walk(nested, &path, out);
             }
         }
     }
     let mut out = Vec::new();
-    if let Some(subs) = subsystems {
-        walk(subs, "", &mut out);
-    }
+    walk(subsystems, "", &mut out);
     out
+}
+
+/// The component a `subsystems.<k>` entry splices in: the entry itself in the
+/// inline model form, or the one model of a whole-file form (`{"models":
+/// {...}}`, which `crate::simulate_array::parse_subsystem_model` also mounts).
+#[must_use]
+pub fn subsystem_component(sub: &serde_json::Value) -> &serde_json::Value {
+    match sub
+        .get("models")
+        .and_then(serde_json::Value::as_object)
+        .filter(|m| m.len() == 1)
+    {
+        Some(models) => models.values().next().expect("len checked"),
+        None => sub,
+    }
+}
+
+/// [`subsystem_component`], mutably.
+pub fn subsystem_component_mut(sub: &mut serde_json::Value) -> &mut serde_json::Value {
+    let file_form = sub
+        .get("models")
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|m| m.len() == 1);
+    if file_form {
+        sub["models"]
+            .as_object_mut()
+            .and_then(|m| m.values_mut().next())
+            .expect("checked above")
+    } else {
+        sub
+    }
 }
 
 /// The precision the current thread is evaluating in.

@@ -1886,6 +1886,36 @@ impl<'o> BuildState<'o> {
     /// that now always runs, and it never overwrites an existing key.
     fn alias_pushdown_names(&mut self, pd_coupling: &[(String, String)]) {
         inject_aliases(&mut self.arrays, pd_coupling);
+        // A mounted subsystem's parameter is spelled model-locally in the
+        // built model (`Leaf.p`, esm-spec §4.7) while its provider key is the
+        // full path (`Parent.Leaf.p`). The bare-tail pass above cannot reach
+        // that spelling -- it strips every prefix, not just the model's -- so
+        // without this a data-fed parameter inside a subsystem is unbound, and
+        // a model that mounts a data-fed leaf to assert on it (§6.6: "declares
+        // that test on a component the assembly document itself declares")
+        // cannot build.
+        //
+        // It runs AFTER the bare-tail pass so the model-local key never joins
+        // that pass's shallowest-depth tie (a top-level `Parent.p` beside a
+        // mounted `Parent.Leaf.p` keeps its bare `p`). It is exact: only a
+        // dotted name the built model actually declares (a mounted variable)
+        // is published, and in this build that name means the mounted
+        // variable, so it REPLACES a same-spelled key a top-level model `Leaf`
+        // with its own `p` provider would otherwise have supplied.
+        let prefix = format!("{}.", self.model_name);
+        let local: Vec<(String, String)> = self
+            .arrays
+            .keys()
+            .filter_map(|k| {
+                let l = k.strip_prefix(&prefix)?;
+                (l.contains('.') && self.model.variables.contains_key(l))
+                    .then(|| (k.clone(), l.to_string()))
+            })
+            .collect();
+        for (k, l) in local {
+            let a = self.arrays[&k].clone();
+            self.arrays.insert(l, a);
+        }
     }
 
     /// A shaped parameter whose data the document itself supplies (an inline
