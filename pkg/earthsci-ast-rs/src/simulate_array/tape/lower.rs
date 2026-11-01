@@ -787,6 +787,8 @@ struct RuleTxn {
     stream_lens: [usize; 3],
     hoist_journal: usize,
     forcing_journal: usize,
+    /// [`TapeBuilder::tuples_held`]: a rolled-back rule's lists are not held.
+    tuples_held: u64,
 }
 
 /// Snapshot for undoing a failed ATTEMPT inside one rule (a looped form that
@@ -818,6 +820,9 @@ struct SubTxn {
     fault_seq: i64,
     faults: usize,
     lazy_faults: usize,
+    /// [`TapeBuilder::tuples_held`]: a list charged by a failed attempt is
+    /// not held.
+    tuples_held: u64,
 }
 
 impl<'m> TapeBuilder<'m> {
@@ -7230,6 +7235,7 @@ impl<'m> TapeBuilder<'m> {
             ],
             hoist_journal: self.hoist_journal.len(),
             forcing_journal: self.forcing_journal.len(),
+            tuples_held: self.tuples_held,
         }
     }
 
@@ -7269,6 +7275,7 @@ impl<'m> TapeBuilder<'m> {
             self.hoist.remove(&key);
         }
         self.rollback_forcing_loads(txn.forcing_journal);
+        self.tuples_held = txn.tuples_held;
         self.scope_frames.clear();
         self.branch_bufs.clear();
         self.fault_first = None;
@@ -7315,6 +7322,7 @@ impl<'m> TapeBuilder<'m> {
             fault_seq: self.fault_seq,
             faults: self.faults.len(),
             lazy_faults: self.lazy_faults.len(),
+            tuples_held: self.tuples_held,
         }
     }
 
@@ -7357,6 +7365,7 @@ impl<'m> TapeBuilder<'m> {
         self.fault_seq = txn.fault_seq;
         self.faults.truncate(txn.faults);
         self.lazy_faults.truncate(txn.lazy_faults);
+        self.tuples_held = txn.tuples_held;
     }
 
     /// Lower one observed rule; returns the recorded observed value.
