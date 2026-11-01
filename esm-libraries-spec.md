@@ -1555,7 +1555,7 @@ TypeScript `camelCase`, others verbatim).
 | `template_registry` | ordered map | The merged expression-template registry specified above. |
 | `field_ics` | list of (state, expr) | Deferred scoped-reference / array `ic` equations (esm-spec §11.4.1). |
 | `loader_fields` | list | Provider-served loaded fields the system consumes. |
-| `lifted_shapes` | ordered map | Post-lift grid shapes for arrayed states. |
+| `lifted_shapes` | ordered map | Post-lift grid extents of each pointwise-lifted state, keyed by the state. The state's `shape` names the index sets of those extents ("Pointwise lift: index sets" below). |
 
 - **The parameter subsets do not partition the struct; they partition `parameters`.**
   esm-spec §6.3.1 states that `brownian_parameters`, `discrete_parameters`,
@@ -1577,7 +1577,50 @@ TypeScript `camelCase`, others verbatim).
   language's map implementation is non-conforming.
 - **Full metadata, not names.** Each `name → variable` map carries the complete declared
   variable (units, `default`, `shape`, `update`, `distribution`), not a bare name list. A
-  consumer must be able to build a solver problem from the flattened form alone.
+  consumer must be able to build a solver problem from the flattened form alone. The one
+  field flatten changes is a pointwise-lifted state's `shape`, which becomes the lift's index
+  sets (below): after the lift the state is an array on those index sets.
+
+**Pointwise lift: index sets (normative).** The pointwise lift (esm-spec §10.5) promotes a
+scalar state onto the grid of the operator `makearray` its merged equation carries. The grid
+has rank `k`; the extent `n_d` of dimension `d` is the largest cell index the first such
+`makearray`'s `regions` address in that dimension; the loop symbol `ℓ_d` is read from a
+full-rank `index(<state>, ℓ_1, …, ℓ_k)` gather inside one of them. A binding MUST record which
+index set `X_d` each dimension lives on, chosen by the first rule that applies:
+
+1. **Named by an operand.** Inside the equation's operator `makearray`s, every
+   `index(v, a_1, …, a_m)` whose `v` is a flattened variable declaring a shape
+   `[s_1, …, s_m]` names, at each position `p` whose index expression's first bare name is
+   the loop symbol `ℓ_d`, the index set `s_p`. A name counts only when the document's
+   `index_sets` declares it with `size` `n_d`, which rejects a staggered face array (one
+   longer) gathered at the same loops, and a loop symbol that appears at more than one
+   dimension names nothing. When exactly one name counts for dimension `d`, `X_d` is that
+   name.
+2. **The only index set of that size.** Otherwise, when exactly one index set the document
+   declares has `size` `n_d`, `X_d` is that set.
+3. **A synthetic index set.** Otherwise `X_d` is `_liftdim<d>_<n_d>`, `d` counted from 1
+   (`_liftdim1_3`). The flattened `index_sets` gains the entry
+   `{"kind": "interval", "size": n_d}` under that name, after the declared entries, in order
+   of first use, unless the name is already there. A document that declares that name with a
+   different size MUST be refused with the binding's dimension-promotion error.
+
+"Declared" means the document's own `index_sets`: a synthetic set one lifted state added is
+never matched by size for the next. Then, for each lifted state `x`:
+
+- `state_variables[x].shape` MUST be `[X_1, …, X_k]`, every entry a key of the flattened
+  `index_sets`;
+- `lifted_shapes[x]` MUST be `[n_1, …, n_k]`, so `index_sets[X_d].size` equals
+  `lifted_shapes[x][d]`;
+- both `faq` wrappers the lift writes, the left-hand side over `D(index(x, ℓ_1, …, ℓ_k))` and
+  the right-hand side around the left-fold sum of the contributions, MUST range each
+  `ℓ_d` as `{"from": X_d}`, never as an interval.
+
+So a consumer reads a lifted state's shape from the state itself, like any declared shape,
+and every name in it resolves in the flattened `index_sets`; it never has to search other
+variables for one whose shape has the same extents, which finds nothing for a grid no
+variable declares and cannot choose between two index sets of one size. The cross-binding
+gate is the `pointwise_lift` tier of `tests/conformance/flatten/cases.json`, one fixture per
+rule (`tests/conformance/pointwise_lift/README.md`).
 
 **Per-term provenance (normative; issue #539).** Flatten sums `operator_compose` and `couple`
 contributions into one right-hand side. `equation_contributions` records where each summand came

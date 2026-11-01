@@ -350,6 +350,25 @@ CASES: list[tuple[str, str, str]] = [
         "advection_reaction_loaded_ic_bc",
         "valid/advection_reaction_loaded_ic_bc.esm",
     ),
+    # --- the pointwise lift's index sets (esm-libraries-spec §4.7.5) ---------
+    # A lifted state's `shape` names the index sets the lift chose, and the
+    # lifted `faq` ranges read `{"from": <index set>}`. One fixture per way a
+    # dimension gets its index set: the only declared set of the extent's size
+    # (a grid no variable declares), a shaped operand gathered at the lift's
+    # loops (two sets of one size), and the registered `_liftdim<d>_<extent>`
+    # when nothing declared decides. See tests/conformance/pointwise_lift.
+    *[
+        (
+            "pointwise_lift",
+            name,
+            f"conformance/pointwise_lift/fixtures/{name}.esm",
+        )
+        for name in (
+            "lift_onto_undeclared_grid",
+            "lift_same_size_index_sets",
+            "lift_synthetic_index_sets",
+        )
+    ],
     # --- per-term provenance (esm-libraries-spec §4.7.5, issue #539) ---------
     # Every case above records `contributions` too; these isolate one row of the
     # §4.7.5 provenance table each. The chained-compose row is the
@@ -410,6 +429,18 @@ CASES: list[tuple[str, str, str]] = [
 # one language's float repr.
 
 REFUSALS: list[dict[str, str]] = [
+    {
+        "fixture": "conformance/pointwise_lift/fixtures/lift_synthetic_name_clash.esm",
+        "error": "DimensionPromotionError",
+        "reason": (
+            "the pointwise lift needs the synthetic index set `_liftdim1_3` (two declared "
+            "index sets have size 3 and no shaped operand chooses between them), but the "
+            "document declares `_liftdim1_3` with size 4. esm-libraries-spec §4.7.5, "
+            '"Pointwise lift: index sets": every name in a lifted state\'s shape is an '
+            "index set of the dimension's extent, so flatten refuses rather than shadow the "
+            "declared set."
+        ),
+    },
     {
         "fixture": "valid/template_import_lib.esm",
         "error": "ValueError",
@@ -753,6 +784,10 @@ def main() -> int:
             '`{"component": <dotted path>}` or `{"coupling": <0-based index into '
             "the coupling sequence after coupling_import expansion>}`. Compared "
             "exactly and in order. "
+            "A pointwise-lifted state (a key of `lifted_shapes`) carries the "
+            "lift's index sets as its `shape`, and its lifted `faq` ranges read "
+            '`{"from": <index set>}`, rendered `i in <index set>` '
+            '(esm-libraries-spec §4.7.5, "Pointwise lift: index sets"). '
             "Entries in `refusals` must be rejected, with the named error type."
         ),
         "oracle": "earthsci_ast.flatten (pkg/earthsci-ast-py)",

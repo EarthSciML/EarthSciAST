@@ -454,7 +454,10 @@ export interface FlattenedSystem {
   domain: Domain | null
   /** Provenance metadata. */
   metadata: FlattenMetadata
-  /** Document-scoped index-set registry; required to interpret arrayed equations. */
+  /**
+   * Document-scoped index-set registry; required to interpret arrayed equations.
+   * Includes any `_liftdim<d>_<extent>` interval the pointwise lift adds.
+   */
   indexSets: Record<string, unknown>
   /** Merged function-table registry; resolves `table_lookup`. */
   functionTables: Record<string, unknown>
@@ -469,7 +472,11 @@ export interface FlattenedSystem {
   fieldIcs: FieldInitialCondition[]
   /** Provider-served loaded fields the system consumes. */
   loaderFields: LoaderField[]
-  /** Post-lift grid shapes for arrayed states, e.g. `{ "Chemistry.O3": [4, 2] }`. */
+  /**
+   * Post-lift grid shapes for arrayed states, e.g. `{ "Chemistry.O3": [4, 2] }`.
+   * The state's `shape` names the index sets of these extents, each a key of
+   * {@link indexSets} (esm-libraries-spec §4.7.5, "Pointwise lift: index sets").
+   */
   liftedShapes: Record<string, number[]>
   /**
    * The system kind DERIVED from the FLATTENED system (esm-spec §6.3.1),
@@ -2845,6 +2852,95 @@ function makearrayExtents(ma: ExpressionNode): number[] {
   return ext
 }
 
+/** The declared `size` of an index-set registry entry, if it has one. */
+function indexSetSize(entry: unknown): number | undefined {
+  const size = (entry as { size?: unknown } | null | undefined)?.size
+  return typeof size === 'number' && Number.isInteger(size) ? size : undefined
+}
+
+/**
+ * The index set each lift dimension is NAMED by, or `undefined` per dimension.
+ *
+ * Every operand an operator makearray gathers at the lift's own loops names an
+ * index set at each position it declares a shape for: `index(u, i, j)` with `u`
+ * on `[x, y]` says loop `i` runs over `x`. A name counts only when the registry
+ * declares it with the dimension's extent as its size, which rejects a
+ * staggered face array (`[x_nodes, y]`, one longer) gathered at the same loops.
+ * A dimension with no such name, or with two different ones, is `undefined`. A
+ * loop symbol repeated across dimensions (a diagonal gather) names nothing.
+ * esm-libraries-spec §4.7.5, "Pointwise lift: index sets".
+ */
+function liftAxisNames(
+  mas: ExpressionNode[],
+  loops: string[],
+  extents: number[],
+  varShapes: ReadonlyMap<string, string[]>,
+  indexSets: Record<string, unknown>,
+): (string | undefined)[] {
+  const evidence = loops.map(() => new Set<string>())
+  const dimOf = new Map<string, number | undefined>()
+  loops.forEach((l, d) => dimOf.set(l, dimOf.has(l) ? undefined : d))
+  for (const ma of mas) {
+    walkNodes(ma, (node) => {
+      if (node.op !== 'index' || node.args === undefined) return
+      const head = node.args[0]
+      if (typeof head !== 'string') return
+      const shape = varShapes.get(head)
+      if (shape === undefined || shape.length !== node.args.length - 1) return
+      shape.forEach((axis, p) => {
+        const loop = indexArgLoop(node.args![p + 1])
+        const d = loop === undefined ? undefined : dimOf.get(loop)
+        if (d === undefined) return
+        if (
+          Object.prototype.hasOwnProperty.call(indexSets, axis) &&
+          indexSetSize(indexSets[axis]) === extents[d]
+        ) {
+          evidence[d].add(axis)
+        }
+      })
+    })
+  }
+  return evidence.map((names) => (names.size === 1 ? [...names][0] : undefined))
+}
+
+/**
+ * The index set of every lift dimension (esm-libraries-spec §4.7.5, "Pointwise
+ * lift: index sets"), registering a synthetic one where needed.
+ *
+ * Dimension `d` (1-based in the name) is, in order: the index set its gathered
+ * operands name ({@link liftAxisNames}); else the only index set the document
+ * declares (`declared`) whose `size` is the extent; else `_liftdim<d>_<extent>`,
+ * added to `indexSets` as an interval of that size if it is not there yet.
+ */
+function liftIndexSets(
+  mas: ExpressionNode[],
+  loops: string[],
+  extents: number[],
+  varShapes: ReadonlyMap<string, string[]>,
+  declared: Record<string, unknown>,
+  indexSets: Record<string, unknown>,
+  species: string,
+): string[] {
+  const named = liftAxisNames(mas, loops, extents, varShapes, declared)
+  return extents.map((extent, d) => {
+    const name = named[d]
+    if (name !== undefined) return name
+    const candidates = Object.keys(declared).filter((k) => indexSetSize(declared[k]) === extent)
+    if (candidates.length === 1) return candidates[0]
+    const synthetic = `_liftdim${d + 1}_${extent}`
+    if (!Object.prototype.hasOwnProperty.call(indexSets, synthetic)) {
+      indexSets[synthetic] = { kind: 'interval', size: extent }
+    } else if (indexSetSize(indexSets[synthetic]) !== extent) {
+      throw new DimensionPromotionError(
+        `pointwise lift: species '${species}' needs the index set '${synthetic}' of size ` +
+          `${extent} for grid dimension ${d + 1}, but the document declares '${synthetic}' ` +
+          `with a different size`,
+      )
+    }
+    return synthetic
+  })
+}
+
 /**
  * Rewrite a scalar (merged reaction + operator) RHS into its per-cell form over
  * the spatial `loops`: a bare reference to an array variable becomes
@@ -2905,12 +3001,20 @@ function applyPointwiseLift(flat: FlattenedSystem, coupling: CouplingEntry[]): v
 
   // Operands to index per cell: the lifted species plus any already array-shaped
   // parameter / observed / state (e.g. a grid-shaped wind field from a loader).
+  // The same declared shapes name the lift's index sets (liftAxisNames).
   const arrayVars = new Set<string>(lifted)
+  const varShapes = new Map<string, string[]>()
   for (const table of [flat.parameters, flat.observedVariables, flat.stateVariables]) {
     for (const [name, v] of Object.entries(table)) {
-      if (v.shape !== undefined && v.shape.length > 0) arrayVars.add(name)
+      if (v.shape !== undefined && v.shape.length > 0) {
+        arrayVars.add(name)
+        if (!varShapes.has(name)) varShapes.set(name, [...v.shape])
+      }
     }
   }
+  // The registry as the document declares it, before the lift adds any
+  // `_liftdim<d>_<extent>` set: only a declared set is matched by size.
+  const declared = { ...flat.indexSets }
 
   const next: FlattenedEquation[] = []
   for (const eq of flat.equations) {
@@ -2940,9 +3044,14 @@ function applyPointwiseLift(flat: FlattenedSystem, coupling: CouplingEntry[]): v
     }
 
     const extents = makearrayExtents(mas[0])
-    const ranges: Record<string, [number, number]> = {}
-    for (let d = 0; d < rank; d++) ranges[loops[d]] = [1, extents[d]]
+    const axes = liftIndexSets(mas, loops, extents, varShapes, declared, flat.indexSets, target)
+    const ranges: Record<string, { from: string }> = {}
+    for (let d = 0; d < rank; d++) ranges[loops[d]] = { from: axes[d] }
+    // The lifted state lives on the lift's index sets: its `shape` names them
+    // and `liftedShapes` records their sizes (esm-libraries-spec §4.7.5).
     flat.liftedShapes[target] = extents
+    const state = flat.stateVariables[target]
+    if (state !== undefined) flat.stateVariables[target] = { ...state, shape: [...axes] }
 
     // Per-cell indexing applies inside each contribution; the `faq` wrapper goes
     // around their sum (§4.7.5 provenance table).

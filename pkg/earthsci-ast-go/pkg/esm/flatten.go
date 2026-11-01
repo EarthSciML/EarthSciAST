@@ -333,7 +333,9 @@ type FlattenedTemplate struct {
 }
 
 // LiftedShape is the concrete integer grid shape the pointwise spatial lift
-// (esm-spec §10.5) assigned to one lifted state variable.
+// (esm-spec §10.5) assigned to one lifted state variable. The state's Shape
+// names the index sets of these extents, each in IndexSets
+// (esm-libraries-spec §4.7.5, "Pointwise lift: index sets").
 type LiftedShape struct {
 	Name  string
 	Shape []int
@@ -472,7 +474,8 @@ type FlattenedSystem struct {
 	// applied.
 	Metadata FlattenMetadata
 	// IndexSets is the document-scoped index-set registry, required to interpret
-	// arrayed equations.
+	// arrayed equations, plus any `_liftdim<d>_<extent>` interval the pointwise
+	// lift adds.
 	IndexSets []FlattenedIndexSet
 	// FunctionTables is the merged function-table registry; it resolves a
 	// surviving `table_lookup`. Flattening deliberately does NOT lower those

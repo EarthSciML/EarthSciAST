@@ -32,12 +32,6 @@
 #     so a DECLARED empty shape (a valid scalar shape for a `schedule` / `data` /
 #     `remesh` parameter — see `ModelVariable`) is recorded as `null`. Julia keeps
 #     the empty vector, so `String[]` is normalized to `nothing` for comparison.
-#   * `state_variables[*].shape` of a LIFTED state — the §10.5 pointwise lift
-#     promotes the species to the grid shape in Julia (the scoped-ic fold,
-#     array-cell discovery and evaluator all need an array state), where the
-#     oracle leaves the declared shape and reports the grid only in
-#     `lifted_shapes`. `lifted_shapes` itself is compared exactly; a lifted
-#     state's `shape` is not.
 #   * surviving `apply_expression_template` references — Julia is
 #     reference-PRESERVING through flatten (esm-spec §9.6.4 Option B, the
 #     documented flatten invariant), the oracle expands at load (Option A). Rule 2
@@ -188,26 +182,28 @@ minus. esm-libraries-spec §4.6.2 now fixes the lowered tree exactly — a loss 
 1 is `-1 * rate`, with the integer `-1` — and `lower_reactions_to_equations`
 builds it, so every one of these cases is compared in full.
 `tests/conformance/reactions/lowering_form.json` pins the tree itself.)
-* `equations` on `advection_reaction_loaded_ic_bc` — three separate differences,
-  none of them about the field set: (i) the oracle NAMESPACES an aggregate's loop
+* `equations` on `advection_reaction_loaded_ic_bc` — one live difference, not
+  about the field set: (i) the oracle NAMESPACES an aggregate's loop
   variables (`Advection.i`) and index-set references, which esm-spec v0.8.0 makes
   wrong — index sets are a document-scoped registry with plain names, and a loop
-  variable is body-local, not a component variable; (ii) the oracle prints a range
-  as its extent (`1:4`) where Julia prints the index-set name (`lon`). A third,
-  the reaction-lowering coefficient rendering, is RESOLVED (esm-libraries-spec
-  §4.6.2, see above). A fourth used to sit here —
+  variable is body-local, not a component variable. A second, the oracle
+  printing the lift's range as its extent (`1:4`) where Julia printed the
+  index-set name (`lon`), is RESOLVED: every binding ranges a lifted loop over
+  its index set (esm-libraries-spec §4.7.5, "Pointwise lift: index sets"). A
+  third, the reaction-lowering coefficient rendering, is RESOLVED
+  (esm-libraries-spec §4.6.2, see above). A fourth used to sit here —
   `operator_compose` summing the matched RHSs in the opposite order — and is
   RESOLVED (2026-08-24): `Advection` writes `D(Chemistry.O3, t) = …` itself, so
   after namespacing its equations are indistinguishable from the reaction
   system's, and the merge was reading the A/B roles off the dependent variable's
   prefix and getting them backwards. Provenance is now recorded at collection
   (`_attribute_equations!`) and the sum is §4.7.1 step 4's `rhs_A + rhs_B`.
-* `equations` on `term_provenance_pointwise_lift` — differences (i) and (ii) of
+* `equations` on `term_provenance_pointwise_lift` — difference (i) of
   `advection_reaction_loaded_ic_bc` above, and nothing else: the oracle
-  namespaces the lift's loop variable (`Adv.i`) and prints its range as an
-  extent (`1:3`), where Julia prints `i` over the index set `x`. The lift
-  itself — indexing inside each contribution and one `faq` around their sum —
-  agrees, and the case's origins are compared like every other case's below.
+  namespaces the lift's loop variable (`Adv.i`) where Julia keeps `i`. The
+  lift itself — indexing inside each contribution, one `faq` around their sum,
+  ranged over the index set `x` — agrees, and the case's origins are compared
+  like every other case's below.
 (RESOLVED 2026-08-24: `equations` on `advanced_coupling`, a summand-order
 divergence. The document declares a `couple` (an additive deposition term onto
 `Chemistry.O3`), then a `variable_map`, then an `operator_compose` (advection).
@@ -420,9 +416,6 @@ function _fc_record(flat)
             k => collect(v)
                 for (k, v) in flat.lifted_shapes
         ),
-        # Not a corpus field: which states the lift promoted, so the comparison
-        # can skip exactly those states' `shape` (see the header).
-        "_lifted" => Set{String}(keys(flat.lifted_shapes)),
     )
 end
 
@@ -458,7 +451,7 @@ _fc_role(r) = r == "species" ? "state" : r
 _fc_rule_kind(s) = first(split(String(s), '('))
 
 """Compare one variable record field by field, so a failure names the field."""
-function _fc_check_variable(id, key, i, exp, act, lifted)
+function _fc_check_variable(id, key, i, exp, act)
     for f in ("name", "units", "update_kinds", "distribution_kind", "source_system")
         _fc_compare(id, "$(key).$(f)") || continue
         @test (id, key, i, f, act[f]) == (id, key, i, f, exp[f])
@@ -467,20 +460,20 @@ function _fc_check_variable(id, key, i, exp, act, lifted)
         (id, key, i, "role", _fc_role(exp["role"]))
     @test (id, key, i, "default", _fc_eq(act["default"], exp["default"])) ==
         (id, key, i, "default", true)
-    # A lifted state's shape is the post-lift grid in Julia, the declared shape in
-    # the oracle; `lifted_shapes` is what pins the grid, and it is compared exactly.
-    return act["name"] in lifted ||
-        @test (id, key, i, "shape", act["shape"]) == (id, key, i, "shape", exp["shape"])
+    # A lifted state's shape is the lift's index sets in every binding
+    # (esm-libraries-spec §4.7.5, "Pointwise lift: index sets").
+    @test (id, key, i, "shape", act["shape"]) == (id, key, i, "shape", exp["shape"])
+    return
 end
 
-function _fc_check_variable_list(id, key, exp, act, lifted)
+function _fc_check_variable_list(id, key, exp, act)
     # NAMES IN ORDER first: this is the document-order contract, and reporting it
     # as one comparison makes a reordering readable instead of N field failures.
     @test (id, key, [v["name"] for v in act]) ==
         (id, key, [v["name"] for v in exp])
     length(exp) == length(act) || return
     for (i, (e, a)) in enumerate(zip(exp, act))
-        _fc_check_variable(id, key, i, e, a, lifted)
+        _fc_check_variable(id, key, i, e, a)
     end
     return
 end
@@ -501,7 +494,6 @@ end
 
         exp = _fc_plain(case)
         act = _fc_record(flatten(load_path(path)))
-        lifted = act["_lifted"]
 
         @test (id, "system_kind", act["system_kind"]) ==
             (id, "system_kind", exp["system_kind"])
@@ -525,7 +517,7 @@ end
 
         for key in ("state_variables", "parameters", "observed_variables")
             _fc_compare(id, key) || continue
-            _fc_check_variable_list(id, key, exp[key], act[key], lifted)
+            _fc_check_variable_list(id, key, exp[key], act[key])
         end
         for key in (
                 "algebraic_variables", "brownian_parameters", "discrete_parameters",

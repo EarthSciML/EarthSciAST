@@ -105,6 +105,127 @@ func makearrayExtents(ma ExprNode) []int {
 	return ext
 }
 
+// liftAxisNames returns the index set each lift dimension is NAMED by, or ""
+// per dimension.
+//
+// Every operand an operator makearray gathers at the lift's own loops names an
+// index set at each position it declares a shape for: `index(u, i, j)` with `u`
+// on `[x, y]` says loop `i` runs over `x`. A name counts only when the registry
+// declares it with the dimension's extent as its size, which rejects a
+// staggered face array (`[x_nodes, y]`, one longer) gathered at the same loops.
+// A dimension with no such name, or with two different ones, is "". A loop
+// symbol repeated across dimensions (a diagonal gather) names nothing.
+// esm-libraries-spec §4.7.5, "Pointwise lift: index sets".
+func liftAxisNames(mas []ExprNode, loops []string, extents []int,
+	varShapes map[string][]string, sizes map[string]int) []string {
+	evidence := make([]map[string]bool, len(loops))
+	for d := range evidence {
+		evidence[d] = map[string]bool{}
+	}
+	dimOf := map[string]int{}
+	for d, l := range loops {
+		if _, seen := dimOf[l]; seen {
+			dimOf[l] = -1
+		} else {
+			dimOf[l] = d
+		}
+	}
+	for _, ma := range mas {
+		walkExprNodes(ma, func(n ExprNode) {
+			if n.Op != "index" || len(n.Args) == 0 {
+				return
+			}
+			head, ok := n.Args[0].(string)
+			if !ok {
+				return
+			}
+			shape, ok := varShapes[head]
+			if !ok || len(shape) != len(n.Args)-1 {
+				return
+			}
+			for p, axis := range shape {
+				loop := indexArgLoop(n.Args[p+1])
+				if loop == "" {
+					continue
+				}
+				d, ok := dimOf[loop]
+				if !ok || d < 0 {
+					continue
+				}
+				if size, ok := sizes[axis]; ok && size == extents[d] {
+					evidence[d][axis] = true
+				}
+			}
+		})
+	}
+	out := make([]string, len(loops))
+	for d, names := range evidence {
+		if len(names) == 1 {
+			for name := range names {
+				out[d] = name
+			}
+		}
+	}
+	return out
+}
+
+// liftIndexSets returns the index set of every lift dimension
+// (esm-libraries-spec §4.7.5, "Pointwise lift: index sets"), registering a
+// synthetic one where needed.
+//
+// Dimension d (1-based in the name) is, in order: the index set its gathered
+// operands name (liftAxisNames); else the only index set the document declares
+// (`declared`, in declaration order) whose size is the extent; else
+// `_liftdim<d>_<extent>`, appended to flat.IndexSets as an interval of that
+// size if it is not there yet.
+func liftIndexSets(flat *FlattenedSystem, declared []FlattenedIndexSet, mas []ExprNode,
+	loops []string, extents []int, varShapes map[string][]string, species string) ([]string, error) {
+	sizes := map[string]int{}
+	for _, is := range declared {
+		if is.Set.Size != nil {
+			sizes[is.Name] = *is.Set.Size
+		}
+	}
+	named := liftAxisNames(mas, loops, extents, varShapes, sizes)
+	axes := make([]string, len(extents))
+	for d, extent := range extents {
+		if named[d] != "" {
+			axes[d] = named[d]
+			continue
+		}
+		var candidates []string
+		for _, is := range declared {
+			if is.Set.Size != nil && *is.Set.Size == extent {
+				candidates = append(candidates, is.Name)
+			}
+		}
+		if len(candidates) == 1 {
+			axes[d] = candidates[0]
+			continue
+		}
+		synthetic := fmt.Sprintf("_liftdim%d_%d", d+1, extent)
+		found := false
+		for _, is := range flat.IndexSets {
+			if is.Name != synthetic {
+				continue
+			}
+			found = true
+			if is.Set.Size == nil || *is.Set.Size != extent {
+				return nil, &DimensionPromotionError{Message: fmt.Sprintf(
+					"flatten: pointwise lift: species %q needs the index set %q of size %d for grid dimension %d, but the document declares %q with a different size",
+					species, synthetic, extent, d+1, synthetic)}
+			}
+		}
+		if !found {
+			size := extent
+			flat.IndexSets = append(flat.IndexSets,
+				FlattenedIndexSet{Name: synthetic, Set: IndexSet{Kind: "interval", Size: &size}})
+		}
+		axes[d] = synthetic
+	}
+	return axes, nil
+}
+
 // liftRHSToCell rewrites a scalar (merged reaction + operator) RHS into its
 // per-cell form over the spatial `loops`: a bare reference to an array variable
 // becomes `index(var, loops…)`, and each spatial-operator `makearray` becomes
@@ -202,17 +323,25 @@ func applyPointwiseLift(flat *FlattenedSystem, coupling []CouplingEntry) error {
 	// Operands to index per cell: the lifted species plus any already
 	// array-shaped parameter / observed / state (a grid-shaped wind field bound
 	// from a loader, say).
+	// The same declared shapes name the lift's index sets (liftAxisNames).
 	arrayvars := map[string]bool{}
 	for name := range lifted {
 		arrayvars[name] = true
 	}
+	varShapes := map[string][]string{}
 	for _, table := range [][]FlattenedVariable{flat.Parameters, flat.ObservedVariables, flat.StateVariables} {
 		for _, v := range table {
 			if len(v.Shape) > 0 {
 				arrayvars[v.Name] = true
+				if _, seen := varShapes[v.Name]; !seen {
+					varShapes[v.Name] = append([]string(nil), v.Shape...)
+				}
 			}
 		}
 	}
+	// The registry as the document declares it, before the lift adds any
+	// `_liftdim<d>_<extent>` set: only a declared set is matched by size.
+	declared := append([]FlattenedIndexSet(nil), flat.IndexSets...)
 
 	var out []FlattenedEquation
 	for _, eq := range flat.Equations {
@@ -240,13 +369,24 @@ func applyPointwiseLift(flat *FlattenedSystem, coupling []CouplingEntry) error {
 		}
 
 		extents := makearrayExtents(mas[0])
+		axes, err := liftIndexSets(flat, declared, mas, loops, extents, varShapes, target)
+		if err != nil {
+			return err
+		}
 		ranges := make(map[string]any, rank)
 		outputIdx := make([]any, rank)
 		for d := 0; d < rank; d++ {
-			ranges[loops[d]] = []any{int64(1), int64(extents[d])}
+			ranges[loops[d]] = map[string]any{"from": axes[d]}
 			outputIdx[d] = loops[d]
 		}
+		// The lifted state lives on the lift's index sets: its Shape names them
+		// and LiftedShapes records their sizes (esm-libraries-spec §4.7.5).
 		flat.LiftedShapes = append(flat.LiftedShapes, LiftedShape{Name: target, Shape: extents})
+		for i := range flat.StateVariables {
+			if flat.StateVariables[i].Name == target {
+				flat.StateVariables[i].Shape = append([]string(nil), axes...)
+			}
+		}
 
 		// Per-cell indexing applies inside each contribution; the `faq` wrapper
 		// goes around their sum (§4.7.5 provenance table).
