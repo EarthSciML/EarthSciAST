@@ -4398,5 +4398,21 @@
     "resolver_only": true,
     "resolver_error_code": "template_import_unknown_name",
     "notes": "Resolver-level invalid (esm-spec \u00a79.7.6 'Binding an unknown name is an error', \u00a74.7). The document is SCHEMA-VALID, so a binding that only checks the schema accepts it (is_valid: true). A `subsystems.<k>` edge binds `n_rwos` through a catalogue that mounts the domain model declaring `n_rows`; reaching through an assembly to a mounted document's metaparameter is legal, but a name no document in the chain declares must fail at the edge."
+  },
+  "data_source_merge_conflict_location.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "data_source_merge_conflict",
+    "notes": "Resolver-level invalid (esm-spec \u00a74.7 'A mounted document's data sources'). The document is SCHEMA-VALID, so a binding that only checks the schema accepts it (is_valid: true). At load, one catalogue mounted at two sibling edges with different url_substitutions contributes `segment` at two different resolved locations; the mounting document does not declare it, and entries are compared structurally after substitution and location resolution, so the merge is refused rather than letting one silently win."
+  },
+  "data_source_merge_conflict_field.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "data_source_merge_conflict",
+    "notes": "Resolver-level invalid (esm-spec \u00a74.7 'A mounted document's data sources'). The document is SCHEMA-VALID, so a binding that only checks the schema accepts it (is_valid: true). At load, two sibling mounts contribute `segment` at the same resolved location but with a different `metadata.tags`; the mounting document does not declare it, and entries are compared structurally after substitution and location resolution, so the merge is refused rather than letting one silently win."
   }
 }

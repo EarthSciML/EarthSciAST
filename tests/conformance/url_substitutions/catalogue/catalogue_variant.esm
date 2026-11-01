@@ -1,0 +1,30 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "url_substitutions_catalogue_variant",
+    "description": "Declares `segment` at the SAME location as catalogue.esm (`../snapshots/{snapshot}/t.parquet`, from the same directory), differing only in a non-location field (`metadata.tags`). Mounted beside catalogue.esm at one binding, the two entries resolve to one location and still differ, which is data_source_merge_conflict (esm-spec §4.7 'A mounted document's data sources')."
+  },
+  "data_sources": {
+    "segment": {
+      "kind": "static",
+      "source": {
+        "url_template": "../snapshots/{snapshot}/t.parquet",
+        "mirrors": [
+          "https://example.org/{snapshot}/t.parquet"
+        ]
+      },
+      "metadata": {
+        "esio_format": "parquet",
+        "tags": [
+          "variant"
+        ]
+      }
+    }
+  },
+  "models": {
+    "Variant": {
+      "variables": {},
+      "equations": []
+    }
+  }
+}
