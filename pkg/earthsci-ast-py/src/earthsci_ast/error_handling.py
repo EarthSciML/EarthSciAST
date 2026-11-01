@@ -281,6 +281,10 @@ SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME = "subsystem_index_set_rename_unknown_na
 # source's location at the mount"): a `url_substitutions` key that names no bare
 # `{name}` placeholder of the referenced document's `data_sources`.
 URL_SUBSTITUTION_UNKNOWN_NAME = "url_substitution_unknown_name"
+# Two mounts contribute one `data_sources` name with entries that differ after
+# url_substitutions and §8.2.1 resolution, and the mounting document does not
+# declare the name itself (esm-spec §4.7 "A mounted document's data sources").
+DATA_SOURCE_MERGE_CONFLICT = "data_source_merge_conflict"
 
 # `index_set_rename` on a mount form that does not implement it (esm-spec §4.7
 # "Mount-edge index-set renaming", "Where it applies"). Python honours the field

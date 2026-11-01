@@ -219,3 +219,35 @@ def test_an_unreadable_nested_ref_is_a_read_error_not_an_unknown_name(
         earthsci_ast.load_path(path)
     assert excinfo.value.code == "unresolved_subsystem_ref", str(excinfo.value)
     assert "https://example.org/lib/missing.esm" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(("second", "accepted"), [("a", True), ("b", False)])
+def test_a_top_level_and_a_subsystem_mount_are_siblings(second: str, accepted: bool) -> None:
+    """esm-spec §4.7: the merge rule spans both mount forms of one document, so
+    a top-level mount and a subsystem mount contributing one name must agree."""
+    doc = {
+        "esm": "1.0.0",
+        "metadata": {"name": "siblings_across_forms"},
+        "models": {
+            "T": {"ref": "catalogue/catalogue.esm", "url_substitutions": {"snapshot": "a"}},
+            "O": {
+                "variables": {},
+                "equations": [],
+                "subsystems": {
+                    "S": {
+                        "ref": "catalogue/catalogue.esm",
+                        "url_substitutions": {"snapshot": second},
+                    }
+                },
+            },
+        },
+    }
+    if accepted:
+        loaded = earthsci_ast.load_string(json.dumps(doc), base_path=str(SUITE))
+        assert type(loaded.data_sources) is dict
+        assert sorted(loaded.data_sources) == ["fixed", "lead", "segment"]
+        return
+    with pytest.raises(ExpressionTemplateError) as excinfo:
+        earthsci_ast.load_string(json.dumps(doc), base_path=str(SUITE))
+    assert excinfo.value.code == "data_source_merge_conflict"
+    assert "models.T" in str(excinfo.value) and "subsystems.S" in str(excinfo.value)

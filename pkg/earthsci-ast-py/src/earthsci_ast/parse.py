@@ -39,6 +39,7 @@ from jsonschema import validate
 
 from .error_handling import (
     AMBIGUOUS_SUBSYSTEM_REF,
+    DATA_SOURCE_MERGE_CONFLICT,
     ELEMENT_TYPE_UNCARRIED,
     MOUNT_FORM_UNSUPPORTED,
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
@@ -105,7 +106,7 @@ from .esm_types import (
     VariableMapCoupling,
     _sum_entries,
 )
-from .json_walk import expand_ref_env, read_ref_text
+from .json_walk import ExpressionTemplateError, expand_ref_env, read_ref_text
 
 
 class SchemaValidationError(EarthSciAstError):
@@ -1936,8 +1937,41 @@ def _forward_edge_bindings(
     return forward, mount_declared
 
 
+class _MountedSources(dict):
+    """A document's ``data_sources`` while its mounts merge into it (esm-spec
+    §4.7 "A mounted document's data sources").
+
+    Remembers which names the document declares ITSELF (``own``: those win over
+    anything it mounts) and which edge first contributed each other name
+    (``edges``), so a second mount contributing that name with a different
+    entry is reported naming both edges. One per document, shared by its
+    top-level and subsystem mounts, which are siblings for this rule.
+    """
+
+    def __init__(self, own: dict[str, Any]) -> None:
+        super().__init__(own)
+        self.own = frozenset(own)
+        self.edges: dict[str, str] = {}
+
+
+def _mount_target(doc: Any) -> _MountedSources:
+    """``doc.data_sources`` as the merge target of its mounts, created on first
+    use, so its ``own`` names are the document's declared entries."""
+    target = doc.data_sources
+    if not isinstance(target, _MountedSources):
+        target = _MountedSources(target or {})
+        doc.data_sources = target
+    return target
+
+
 def _merge_mounted_data_sources(
-    leaf: Any, edge: Any, binder_dir: str, leaf_dir: str, where: str, target: dict
+    leaf: Any,
+    edge: Any,
+    binder_dir: str,
+    leaf_dir: str,
+    where: str,
+    target: _MountedSources,
+    label: str,
 ) -> None:
     """Carry a mounted document's ``data_sources`` across its mount edge
     (esm-spec §4.7 "A mounted document's data sources"), at either mount form.
@@ -1948,7 +1982,10 @@ def _merge_mounted_data_sources(
     document's directory); (2) every location still relative resolves by §8.2.1
     against ``leaf_dir``, the file that wrote it; (3) the entries merge into
     ``target``, the mounting document's ``data_sources``, whose own entry wins a
-    name clash. Entries thus travel up one edge at a time.
+    name clash. Two mounts contributing one name must contribute equal entries
+    (every field, compared structurally), which merge once; otherwise the load
+    fails with ``data_source_merge_conflict`` naming the source and both edges
+    (``label`` names this one). Entries thus travel up one edge at a time.
     """
     from ._data_source_urls import apply_mount_url_substitutions, resolve_data_source_urls
 
@@ -1964,7 +2001,22 @@ def _merge_mounted_data_sources(
     for n, ds in sources.items():
         loc = raw["data_sources"][n]["source"]
         ds.source = DataSourceLocation(url_template=loc["url_template"], mirrors=loc["mirrors"])
-        target.setdefault(n, ds)
+        if n in target.own:
+            continue
+        prev = target.get(n)
+        if prev is None:
+            target[n] = ds
+            target.edges[n] = label
+        elif prev != ds:
+            raise ExpressionTemplateError(
+                DATA_SOURCE_MERGE_CONFLICT,
+                f"data source '{n}' is contributed by two mounts with different "
+                f"entries — {target.edges.get(n, 'an earlier mount')} and {label} — "
+                "after url_substitutions and location resolution (esm-spec §4.7 "
+                '"A mounted document\'s data sources"). Give them different names, '
+                f"bind them alike, or declare '{n}' in the mounting document to "
+                "override both.",
+            )
 
 
 # Index-set declaration fields compared by the §4.7 / §9.7.5 deep-equal test
@@ -2130,7 +2182,7 @@ def _resolve_subsystems_generic(
     recurse_resolved: Callable[[Any, str, set, tuple[str, ...]], None],
     api_meta: dict[str, int] | None = None,
     forwarded: dict[str, int] | None = None,
-    sources: dict[str, Any] | None = None,
+    sources: _MountedSources | None = None,
 ) -> None:
     """Shared skeleton behind :func:`_resolve_model_subsystems` and
     :func:`_resolve_reaction_system_subsystems`.
@@ -2233,7 +2285,8 @@ def _resolve_subsystems_generic(
                     base_path,
                     new_base,
                     f"subsystem ref '{ref_str}'",
-                    {} if sources is None else sources,
+                    _MountedSources({}) if sources is None else sources,
+                    f"{kind}.{component.name}.subsystems.{sub_name} (ref '{ref_str}')",
                 )
             except SubsystemRefError as exc:
                 if not getattr(exc, "code", ""):
@@ -2265,7 +2318,7 @@ def _resolve_model_subsystems(
     forwarded: dict[str, int] | None = None,
     root_env: dict[str, int] | None = None,
     precision: str = _DEFAULT_ELEMENT_TYPE,
-    sources: dict[str, Any] | None = None,
+    sources: _MountedSources | None = None,
 ) -> None:
     """Recursively resolve subsystem refs within a Model.
 
@@ -2345,7 +2398,7 @@ def _resolve_model_subsystems(
                 forwarded=forward,
                 root_env=child_env,
                 precision=leaf_effective,
-                sources=parsed.data_sources,
+                sources=_mount_target(parsed),
             )
             _carry_mounted_element_type(
                 sub_model, leaf_precision, precision, f"subsystem ref '{ref_str}'"
@@ -2390,7 +2443,7 @@ def _resolve_reaction_system_subsystems(
     api_meta: dict[str, int] | None = None,
     forwarded: dict[str, int] | None = None,
     precision: str = _DEFAULT_ELEMENT_TYPE,
-    sources: dict[str, Any] | None = None,
+    sources: _MountedSources | None = None,
 ) -> None:
     """Recursively resolve subsystem refs within a ReactionSystem.
 
@@ -2417,7 +2470,7 @@ def _resolve_reaction_system_subsystems(
                 api_meta=api_meta,
                 forwarded=forward,
                 precision=leaf_precision or precision,
-                sources=parsed.data_sources,
+                sources=_mount_target(parsed),
             )
             _carry_mounted_element_type(
                 sub_rs, leaf_precision, precision, f"subsystem ref '{ref_str}'"
@@ -2506,7 +2559,7 @@ def resolve_subsystem_refs(
             api_meta=api_meta,
             root_env=root_env,
             precision=precision,
-            sources=esm_file.data_sources,
+            sources=_mount_target(esm_file),
         )
 
     for rs in esm_file.reaction_systems.values():
@@ -2516,7 +2569,7 @@ def resolve_subsystem_refs(
             seen,
             api_meta=api_meta,
             precision=precision,
-            sources=esm_file.data_sources,
+            sources=_mount_target(esm_file),
         )
 
 
@@ -2704,7 +2757,7 @@ def resolve_model_refs(
             forwarded=forward,
             root_env=child_env,
             precision=leaf_precision or precision,
-            sources=parsed.data_sources,
+            sources=_mount_target(parsed),
         )
         _carry_mounted_element_type(
             sub_model, leaf_precision, precision, f"top-level model ref '{ref_str}'"
@@ -2718,7 +2771,8 @@ def resolve_model_refs(
             base_path,
             new_base,
             f"top-level model ref '{ref_str}'",
-            esm_file.data_sources,
+            _mount_target(esm_file),
+            f"models.{model_name} (ref '{ref_str}')",
         )
         resolved_models[model_name] = sub_model
 
@@ -3218,6 +3272,8 @@ def _load_data(
         loader_metaparameters=metaparameters,
         parent_metaparameters=root_meta_env,
     )
+    # The mounts have merged; the merge bookkeeping does not outlive the load.
+    esm_file.data_sources = dict(esm_file.data_sources)
 
     # Lower `enum` op nodes to `const` integers using the file's `enums` block
     # (esm-spec §9.3). Runs after subsystem resolution so every expression
