@@ -2562,6 +2562,9 @@ fn run_simulate(
             compiler,
             model_name: model.clone(),
             build_pipeline: pipeline,
+            // A data-fed parameter named by `--observed` is written from its
+            // ingested values (finding F43); the rest are not kept.
+            retain_data_fields: observed.clone(),
             ..Default::default()
         };
         if let Some(make) = &providers {

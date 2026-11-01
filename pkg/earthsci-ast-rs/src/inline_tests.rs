@@ -2192,11 +2192,15 @@ fn declared_extents(
 /// Build one test's problem — the body that used to be inline in
 /// [`run_model_tests`]'s loop, lifted out so the loop can skip it on a
 /// [`BuildKey`] hit.
+// Eight parameters against clippy's seven: the test, the names its build keeps
+// readable, and the loop-invariant context `run_component_tests` holds.
+#[allow(clippy::too_many_arguments)]
 fn build_for_test(
     key: BuildKey,
     file: &EsmFile,
     model_name: &str,
     t: &crate::types::ModelTest,
+    retain_data_fields: Vec<String>,
     base_dir: Option<&Path>,
     build_providers: Option<&BuildProviderFactory<'_>>,
     seeds: &InlineTestSeeds,
@@ -2335,6 +2339,9 @@ fn build_for_test(
             Ok(provs) => {
                 popts.build_providers = provs;
                 popts.build_pipeline = true;
+                // Keep the ingested columns an assertion of a test sharing
+                // this build may name (finding F43), and only those.
+                popts.retain_data_fields = retain_data_fields;
                 // `Always` on a document with no differential equations
                 // compiles a right-hand side that has nothing to integrate.
                 // With the build pipeline bound, that document's whole
@@ -2539,11 +2546,22 @@ fn run_component_tests(
             // Drop the previous build BEFORE the next one is constructed, so
             // the slot never holds two documents' worth of materialized fields.
             drop(memo.take());
+            // Every name an assertion of a test that may share this build
+            // reads: the data-fed parameters among them are the ingested
+            // columns the build keeps (`ProblemOptions::retain_data_fields`).
+            let mut retain: Vec<String> = tests
+                .iter()
+                .filter(|u| BuildKey::of(u) == key)
+                .flat_map(|u| u.assertions.iter().map(|a| a.variable.clone()))
+                .collect();
+            retain.sort();
+            retain.dedup();
             memo = Some(build_for_test(
                 key,
                 file,
                 model_name,
                 t,
+                retain,
                 base_dir,
                 build_providers,
                 seeds,

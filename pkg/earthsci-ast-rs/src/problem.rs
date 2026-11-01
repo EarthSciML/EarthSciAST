@@ -608,6 +608,20 @@ pub struct ProblemOptions {
     /// `BuildInspection` through the run.
     pub inspect: bool,
 
+    /// The DATA-FED parameters (esm-spec §5.4 `update: {kind: "data"}`) whose
+    /// ingested values [`observed_field`] must be able to read back, spelled
+    /// as `observed_field` would be called (exact, component-qualified, or
+    /// bare). Empty by default.
+    ///
+    /// The build pipeline's ingested tables can be hundreds of MB, so the
+    /// Problem keeps only what something reads: a column the right-hand side
+    /// reads is MOVED into the forcing buffer, a column named here is kept
+    /// (and cloned only when the right-hand side reads it too), and every
+    /// other ingested column is dropped at construction. A bare name keeps
+    /// every column with that tail; `observed_field` still resolves it under
+    /// API_SPEC §5.8's rules.
+    pub retain_data_fields: Vec<String>,
+
     /// Time at which CONST providers are sampled. Defaults to `tspan.0`.
     pub sample_time: Option<f64>,
 
@@ -636,6 +650,7 @@ impl std::fmt::Debug for ProblemOptions {
             .field("rhs", &self.rhs)
             .field("compiler", &self.compiler)
             .field("inspect", &self.inspect)
+            .field("retain_data_fields", &self.retain_data_fields)
             .field("sample_time", &self.sample_time)
             .field("runtime_array_parameters", &self.runtime_array_parameters);
         #[cfg(not(target_arch = "wasm32"))]
@@ -691,11 +706,16 @@ pub(crate) struct BuildProducts {
     /// Observed name → build-time field (dependency-complete).
     pub fields: HashMap<String, ArrayD<f64>>,
     /// Data-fed parameter name → the values the build pipeline's provider
-    /// supplied ([`crate::prepare::PreparedBuild::data_fields`]). Kept apart
+    /// supplied ([`crate::prepare::PreparedBuild::data_fields`]), for the
+    /// parameters [`ProblemOptions::retain_data_fields`] names only. Kept apart
     /// from `fields` so the default `esm simulate` output (every observed) is
     /// unchanged, while [`observed_field`] and the inline-test runner can
     /// still answer for one by name.
     pub data_fields: HashMap<String, ArrayD<f64>>,
+    /// The ingested data-fed parameters construction did NOT keep (sorted), so
+    /// [`observed_field`] can say how to ask for one rather than call it
+    /// unknown.
+    pub dropped_data_fields: Vec<String>,
     /// Value-invention producer id (`from_faq`) → sorted-distinct member ids.
     pub members: HashMap<String, Vec<i64>>,
     /// Value-invention producer id → derived index-set extent.
@@ -991,7 +1011,8 @@ impl EsmProblem {
 
     /// The values the build pipeline ingested for each DATA-FED parameter
     /// (esm-spec §5.4 `update: {kind: "data"}`), keyed like
-    /// [`Self::observed_fields`]. Empty when no provider fed the build.
+    /// [`Self::observed_fields`]: those [`ProblemOptions::retain_data_fields`]
+    /// named. Empty when no provider fed the build or none was named.
     pub(crate) fn data_fields(&self) -> &HashMap<String, ArrayD<f64>> {
         &self.build.data_fields
     }
@@ -1175,6 +1196,30 @@ fn resolve_observed_key<'a>(
     }
 }
 
+/// The keys of `keys` (a build's ingested data-fed parameters, model-local)
+/// that the caller-spelled `names` may address under [`resolve_observed_key`]:
+/// an exact or component-qualified hit, or EVERY key with a bare name's tail
+/// (the component count that decides a bare name is not known yet, and keeping
+/// a superset only costs memory; [`observed_field`] still resolves the name).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+fn retained_data_keys_of<'a>(
+    keys: impl Iterator<Item = &'a String> + Clone,
+    model: &str,
+    names: &[String],
+) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    for name in names {
+        match resolve_observed_key(keys.clone(), model, false, name) {
+            NameResolution::Key(k) => {
+                out.insert(k);
+            }
+            NameResolution::Ambiguous(ks) => out.extend(ks),
+            NameResolution::Miss => {}
+        }
+    }
+    out
+}
+
 /// The build-time field named `name`, from `prob`'s construction.
 ///
 /// Resolution is the cross-binding rule of API_SPEC §5.8
@@ -1191,6 +1236,11 @@ fn resolve_observed_key<'a>(
 /// static evaluation's fields, and — when [`ProblemOptions::inspect`] was set —
 /// the array runtime's materialized setup arrays. One arity, `(prob, name)`,
 /// in every binding.
+///
+/// Also answers for a DATA-FED parameter (esm-spec §5.4) the build pipeline
+/// ingested, with the values its provider supplied, when the caller named it
+/// in [`ProblemOptions::retain_data_fields`]; an observed of the same spelling
+/// wins.
 pub fn observed_field(prob: &EsmProblem, name: &str) -> Result<ArrayD<f64>, SimulateError> {
     // Re-arm the document's working precision for the duration of this call
     // (`domain.element_type`, esm-spec §11.3); a no-op for a Float64 document.
@@ -1257,6 +1307,20 @@ pub fn observed_field(prob: &EsmProblem, name: &str) -> Result<ArrayD<f64>, Simu
                     .collect::<Vec<_>>()
                     .join(", "),
                 cands.join(", ")
+            )),
+        ));
+    }
+    // An ingested data-fed parameter construction dropped because nothing
+    // asked to read it back: say how to ask.
+    if !matches!(
+        resolve_observed_key(prob.build.dropped_data_fields.iter(), model, single, name),
+        NameResolution::Miss
+    ) {
+        return Err(SimulateError::Compile(
+            crate::compile_error::CompileError::build_err(format!(
+                "observed_field: '{name}' is a data-fed parameter whose ingested values \
+                 this EsmProblem did not keep; name it in \
+                 `ProblemOptions::retain_data_fields` to read it back"
             )),
         ));
     }
@@ -1883,6 +1947,14 @@ pub fn esm_problem<'a>(
         owned_file = None;
     }
 
+    // The build pipeline's ingested data-fed columns, and the keys of those
+    // `retain_data_fields` asks to keep; settled into `build` once the
+    // right-hand side has taken what it reads (step 5).
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+    let mut ingested: HashMap<String, ArrayD<f64>> = HashMap::new();
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+    let mut retained_data_keys: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(raw) = owned_json.as_mut().filter(|_| wants_build_pipeline(&opts)) {
         {
@@ -1942,7 +2014,12 @@ pub fn esm_problem<'a>(
             rewritten_by_pipeline = true;
             model_name = Some(prepared.model_name);
             build.fields = prepared.fields;
-            build.data_fields = prepared.data_fields;
+            retained_data_keys = retained_data_keys_of(
+                prepared.data_fields.keys(),
+                model_name.as_deref().unwrap_or(""),
+                &opts.retain_data_fields,
+            );
+            ingested = prepared.data_fields;
             build.members = prepared.members;
             build.extents = prepared.extents;
             build.gated_provider_keys = prepared.gated_provider_keys;
@@ -2155,9 +2232,28 @@ pub fn esm_problem<'a>(
     #[cfg(not(target_arch = "wasm32"))]
     let (refresh, discrete_forcing, refresh_boundaries) =
         bind_providers(&backend, &mut opts, tspan)?;
+    // Every ingested column construction does not keep for read-back —
+    // including the ones the right-hand side is about to take — so
+    // `observed_field` can name the option that would have kept it.
+    build.dropped_data_fields = ingested
+        .keys()
+        .filter(|k| !retained_data_keys.contains(*k))
+        .cloned()
+        .collect();
+    build.dropped_data_fields.sort();
     if let Backend::Array(c) = &backend {
-        supplied.refuse_missing_array(c, owned_file.as_ref(), &opts.p, &build.data_fields)?;
+        supplied.refuse_missing_array(
+            c,
+            owned_file.as_ref(),
+            &opts.p,
+            &mut ingested,
+            &retained_data_keys,
+        )?;
     }
+    // Keep only the ingested columns a caller asked to read back; the rest
+    // (those the right-hand side took were moved, not copied) are dropped.
+    ingested.retain(|k, _| retained_data_keys.contains(k));
+    build.data_fields = ingested;
 
     // ---- (5c) Refuse a data-fed parameter nothing bound (§9.6.6). ---------
     // After the providers are bound and BEFORE the compiler's gate below builds
@@ -3772,7 +3868,8 @@ impl SuppliedData {
         c: &ArrayCompiled,
         file: Option<&EsmFile>,
         p: &HashMap<String, f64>,
-        ingested: &HashMap<String, ArrayD<f64>>,
+        ingested: &mut HashMap<String, ArrayD<f64>>,
+        retained: &std::collections::HashSet<String>,
     ) -> Result<(), SimulateError> {
         // The parameter as the caller addresses it: by full name (esm-spec
         // §6.6.2), which a single-model build compiles bare under its namespace.
@@ -3786,17 +3883,31 @@ impl SuppliedData {
                 continue;
             }
             // What the BUILD pipeline's providers ingested for this data-fed
-            // parameter (keyed model-locally, so a coupled build's
-            // `Model.param` is matched by its tail). A build provider is
-            // consumed by the pipeline and never reaches the run-time binding
-            // above, so without this an integrating document read the
-            // parameter's `default` in its right-hand side while its
-            // build-time observeds read the data (finding F43).
-            if let Some(arr) = ingested.get(name).or_else(|| {
-                name.split_once('.')
-                    .and_then(|(_, tail)| ingested.get(tail))
-            }) {
-                forcing.borrow_mut().insert(name.clone(), arr.clone());
+            // parameter. A build provider is consumed by the pipeline and never
+            // reaches the run-time binding above, so without this an
+            // integrating document read the parameter's `default` in its
+            // right-hand side while its build-time observeds read the data
+            // (finding F43). The pipeline keys model-locally, so a name the
+            // compile spelled under its namespace is matched with THAT prefix
+            // removed — never any other leading segment, which would hand a
+            // mounted `Leaf.p` (or another component's `B.p`) this model's `p`.
+            // MOVED, not copied, unless the caller also reads it back.
+            let key = if ingested.contains_key(name) {
+                Some(name.clone())
+            } else {
+                c.namespace()
+                    .and_then(|ns| name.strip_prefix(ns))
+                    .and_then(|rest| rest.strip_prefix('.'))
+                    .filter(|local| ingested.contains_key(*local))
+                    .map(str::to_string)
+            };
+            if let Some(key) = key {
+                let arr = if retained.contains(&key) {
+                    ingested[&key].clone()
+                } else {
+                    ingested.remove(&key).expect("checked above")
+                };
+                forcing.borrow_mut().insert(name.clone(), arr);
                 continue;
             }
             if names_key(&self.provider_keys, name) {
