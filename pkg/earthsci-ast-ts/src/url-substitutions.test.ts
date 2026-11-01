@@ -146,6 +146,11 @@ describe('esm-spec §4.7 url_substitutions: through a real load (shared fixtures
       expect(err, `${f.id} must be refused`).not.toBeNull()
       expect(err?.code, err?.message).toBe(f.error_code)
       for (const n of f.message_contains ?? []) expect(err?.message).toContain(n)
+      // esm-spec §9.6.6: a merge conflict names BOTH contributing edges.
+      if (f.error_code === 'data_source_merge_conflict') {
+        expect(err?.message).toContain('subsystems.A')
+        expect(err?.message).toContain('subsystems.B')
+      }
       return
     }
     expect(err, err?.message).toBeNull()

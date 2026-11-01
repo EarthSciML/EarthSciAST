@@ -1024,7 +1024,7 @@ const HOISTED_SOURCES = Symbol('esm.mountedDataSources')
  * Resolve a mounted leaf's `data_sources` against its own directory (§8.2.1)
  * and attach them to the component(s) the edge is about to splice in.
  */
-function stashMountedDataSources(parsed: EsmFile, refBasePath: string): void {
+function stashMountedDataSources(parsed: EsmFile, refBasePath: string, edge: string): void {
   const resolved = (resolveDataSourceUrls(parsed, refBasePath) ?? parsed) as {
     data_sources?: unknown
   }
@@ -1036,7 +1036,7 @@ function stashMountedDataSources(parsed: EsmFile, refBasePath: string): void {
     if (comps === null || typeof comps !== 'object' || Array.isArray(comps)) continue
     for (const comp of Object.values(comps as Record<string, unknown>)) {
       if (comp !== null && typeof comp === 'object') {
-        ;(comp as Record<symbol, unknown>)[HOISTED_SOURCES] = sources
+        ;(comp as Record<symbol, unknown>)[HOISTED_SOURCES] = { edge, sources }
       }
     }
   }
@@ -1045,18 +1045,23 @@ function stashMountedDataSources(parsed: EsmFile, refBasePath: string): void {
 /**
  * Merge every mounted component's carried `data_sources` into `doc`, the
  * document that mounts it (esm-spec §4.7 "A mounted document's data sources"),
- * at either mount form and any depth of inline subsystems. The mounting
- * document's own entry wins a name clash, a shallower mount wins over a deeper
- * one, and an earlier mount over a later one.
+ * at either mount form and any depth of inline subsystems.
+ *
+ * The mounting document's OWN entry wins a name clash. Two mounts that
+ * contribute the same name must contribute IDENTICAL entries — structurally
+ * equal JSON, every field, after substitution and location resolution — and
+ * merge once (a diamond); otherwise the load fails with
+ * `data_source_merge_conflict` naming the source and both edges, since letting
+ * either win would make which bytes a model reads depend on mount order.
  */
 function hoistMountedDataSources(doc: EsmFile): void {
-  const found: Array<Record<string, unknown>> = []
+  const found: Array<{ edge: string; sources: Record<string, unknown> }> = []
   const collect = (system: unknown): void => {
     if (system === null || typeof system !== 'object') return
     const o = system as Record<string | symbol, unknown>
     const carried = o[HOISTED_SOURCES]
     if (carried !== undefined) {
-      found.push(carried as Record<string, unknown>)
+      found.push(carried as { edge: string; sources: Record<string, unknown> })
       delete o[HOISTED_SOURCES]
     }
     const subs = o['subsystems']
@@ -1076,9 +1081,21 @@ function hoistMountedDataSources(doc: EsmFile): void {
     existing !== null && typeof existing === 'object' && !Array.isArray(existing)
       ? { ...(existing as Record<string, unknown>) } // never mutate a caller-held block
       : {}
-  for (const m of found) {
-    for (const [k, v] of Object.entries(m)) {
-      if (!Object.prototype.hasOwnProperty.call(dst, k)) dst[k] = v
+  const own = new Set(Object.keys(dst))
+  const firstEdge = new Map<string, string>()
+  for (const { edge, sources } of found) {
+    for (const [k, v] of Object.entries(sources)) {
+      if (own.has(k)) continue
+      const prev = firstEdge.get(k)
+      if (prev === undefined) {
+        dst[k] = v
+        firstEdge.set(k, edge)
+      } else if (!deepEqual(dst[k], v)) {
+        throw new EsmDiagnosticError(
+          ERROR_CODES.DATA_SOURCE_MERGE_CONFLICT,
+          `data source '${k}' is contributed by two mounts with different entries — ${prev} and ${edge} — after url_substitutions and location resolution (esm-spec §4.7 "A mounted document's data sources"). Give them different names, bind them alike, or declare '${k}' in the mounting document to override both.`,
+        )
+      }
     }
   }
   holder['data_sources'] = dst
@@ -1162,7 +1179,11 @@ function resolveRefEdge(
     // it, with this edge's substitutions applied — resolve against the LEAF's
     // directory (§8.2.1), then ride on the component this edge splices in, to
     // be merged into the MOUNTING document by `hoistMountedDataSources`.
-    stashMountedDataSources(parsed, refBasePath)
+    stashMountedDataSources(
+      parsed,
+      refBasePath,
+      `${mountForm === 'subsystem' ? 'subsystems' : 'models'}.${subName} (ref '${ref}')`,
+    )
     inline(parsed, refBasePath)
   } finally {
     resolving.delete(chainKey)

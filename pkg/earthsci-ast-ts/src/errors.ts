@@ -417,6 +417,12 @@ export const ERROR_CODES = {
    */
   URL_SUBSTITUTION_UNKNOWN_NAME: 'url_substitution_unknown_name',
   /**
+   * Two mounts contribute one `data_sources` name with entries that differ
+   * after `url_substitutions` and §8.2.1 resolution, and the mounting document
+   * does not declare it (esm-spec §4.7 "A mounted document's data sources").
+   */
+  DATA_SOURCE_MERGE_CONFLICT: 'data_source_merge_conflict',
+  /**
    * A §4.7 `{ ref }` mount at a form this binding does not implement — a
    * top-level `reaction_systems.<k>` `{ ref }` (esm-spec §4.7 "Two mount forms,
    * one mechanism"). Refused at `/reaction_systems/<k>` rather than left as an
