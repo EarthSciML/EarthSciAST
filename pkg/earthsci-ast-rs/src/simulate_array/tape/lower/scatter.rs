@@ -96,15 +96,27 @@ impl IxNode {
     }
 }
 
-/// The conjuncts of a filter: the arguments of a top-level `and`, else the
-/// filter itself.
-fn conjuncts(filter: &Expr) -> (&[Expr], bool) {
-    match filter {
-        Expr::Operator(n) if n.op == "and" && is_plain(n) && !n.args.is_empty() => {
-            (&n.args[..], true)
+/// The conjuncts of a filter, left to right, nested `and`s flattened (as
+/// Julia's `_scatter_conjuncts!` flattens them), and whether the filter is
+/// an `and` at all. Flattening keeps the filter's value: an inner `and` is
+/// a strict flag that is nonzero exactly when each of its operands is
+/// nonzero at the working precision, the test the outer `and` applies to
+/// every operand.
+fn conjuncts(filter: &Expr) -> (Vec<&Expr>, bool) {
+    fn push<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
+        match e {
+            Expr::Operator(n) if is_and(n) => n.args.iter().for_each(|a| push(a, out)),
+            _ => out.push(e),
         }
-        _ => (std::slice::from_ref(filter), false),
     }
+    let mut out = Vec::new();
+    push(filter, &mut out);
+    let top_and = matches!(filter, Expr::Operator(n) if is_and(n));
+    (out, top_and)
+}
+
+fn is_and(n: &ExpressionNode) -> bool {
+    n.op == "and" && is_plain(n) && !n.args.is_empty()
 }
 
 /// An operator node with no sidecar body, filter or ranges: a plain call.
@@ -265,7 +277,7 @@ impl TapeBuilder<'_> {
         if nr == 0 || nc == 0 {
             return Ok(None);
         }
-        let (parts, is_and) = conjuncts(filter);
+        let (parts, top_and) = conjuncts(filter);
         // The first conjunct to pin an index pins it; a later one that pins
         // the same index is an ordinary remaining conjunct.
         let mut pins: Vec<Option<&Expr>> = vec![None; nr];
@@ -316,7 +328,7 @@ impl TapeBuilder<'_> {
             contract_names,
             &bounds,
             reduce,
-            parts,
+            &parts,
             &pins,
         )? {
             return Ok(Some(v));
@@ -346,7 +358,7 @@ impl TapeBuilder<'_> {
             }
             match self.ix_compile(c, &syms) {
                 Some(n) => static_rest.push(n),
-                None => runtime_rest.push(c.clone()),
+                None => runtime_rest.push((*c).clone()),
             }
         }
 
@@ -417,7 +429,7 @@ impl TapeBuilder<'_> {
                     // `fold_scalar`'s `and`: nonzero at the working
                     // precision; a bare conjunct, the filter's own
                     // `== 0.0` test.
-                    let held = if is_and {
+                    let held = if top_and {
                         prec.round(v) != 0.0
                     } else {
                         v != 0.0
@@ -482,7 +494,7 @@ impl TapeBuilder<'_> {
         // evaluate, still under `and` so a kept term is the same flag test.
         let residual: Option<Expr> = match runtime_rest.len() {
             0 => None,
-            _ if !is_and => runtime_rest.pop(),
+            _ if !top_and => runtime_rest.pop(),
             1 => {
                 runtime_rest.push(Expr::Integer(1));
                 Some(and_of(runtime_rest))
@@ -536,7 +548,7 @@ impl TapeBuilder<'_> {
         contract_names: &[String],
         bounds: &[DimBound],
         reduce: ReduceKind,
-        parts: &[Expr],
+        parts: &[&Expr],
         pins: &[Option<&Expr>],
     ) -> LResult<Option<LV>> {
         if !matches!(reduce, ReduceKind::Sum | ReduceKind::Product) || parts.len() != 1 {

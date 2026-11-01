@@ -60,6 +60,12 @@ fn a_non_shift_pin_lowers_to_one_segmented_reduction() {
         json!({"op": "and", "args": [
             {"op": "==", "args": ["j", {"op": "+", "args": ["i", 1]}]},
             {"op": ">", "args": [{"op": "index", "args": ["u", "i"]}, 0]}]}),
+        // The pin inside a nested `and`.
+        json!({"op": "and", "args": [
+            {"op": "and", "args": [
+                {"op": "==", "args": ["j", {"op": "+", "args": ["i", 1]}]},
+                {"op": ">", "args": [{"op": "index", "args": ["u", "i"]}, 0]}]},
+            {"op": "<", "args": ["i", 9]}]}),
     ] {
         let prog = ab_check(scatter_doc(12, filter.clone(), body.clone()), -2.0, 2.0);
         assert_eq!(count(&prog, "SegReduce"), 1, "{filter}");

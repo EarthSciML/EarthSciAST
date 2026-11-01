@@ -763,3 +763,49 @@ fn a_float32_document_pins_and_filters_at_binary32() {
         agree(&format!("Float32 {filt}"), &d);
     }
 }
+
+#[test]
+fn nested_ands_flatten_left_to_right() {
+    // and(and(j == i + 1, u[i] > 0), k < 3): the pin sits inside an inner
+    // `and`; a run-time conjunct beside it and a build-time one outside.
+    let filt = and(vec![
+        and(vec![
+            eq(json!("j"), plus(json!("i"), json!(1))),
+            op(">", vec![ix("u", vec![json!("i")]), json!(0)]),
+        ]),
+        op("<", vec![json!("k"), json!(3)]),
+    ]);
+    let rhs = faq(
+        &["j"],
+        &[("j", 1, 8), ("i", 1, 7), ("k", 1, 4)],
+        "+",
+        filt,
+        op(
+            "*",
+            vec![ix("u", vec![json!("i")]), ix("u", vec![json!("k")])],
+        ),
+    );
+    agree("nested and", &doc(8, 0, vec![du(8, rhs)], Value::Null));
+    // A second pin of `j` in a later, nested conjunct is an ordinary filter.
+    let filt = and(vec![
+        eq(json!("j"), json!("i")),
+        and(vec![
+            eq(json!("j"), op("-", vec![json!(7), json!("k")])),
+            op(">=", vec![json!("k"), json!(2)]),
+        ]),
+    ]);
+    let rhs = faq(
+        &["j"],
+        &[("j", 1, 6), ("i", 1, 6), ("k", 1, 6)],
+        "+",
+        filt,
+        op(
+            "*",
+            vec![ix("u", vec![json!("k")]), ix("u", vec![json!("i")])],
+        ),
+    );
+    agree(
+        "nested second pin",
+        &doc(6, 0, vec![du(6, rhs)], Value::Null),
+    );
+}
