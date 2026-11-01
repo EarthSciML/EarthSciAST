@@ -5,12 +5,10 @@ Reads ``tests/conformance/url_substitutions/manifest.json``, which every
 binding's suite reads. ``cases`` pin the edge rule as a document normalization
 (apply the edge with the MOUNTING document's directory, then ordinary §8.2.1
 resolution with the DECLARING document's); ``fixtures`` pin it through a real
-load at both mount forms.
-
-Python does not hoist a mounted document's ``data_sources`` into the mounting
-document at either mount form, so a fixture's ``hoisted_sources`` is not
-checked here and a ``requires_hoisting`` fixture is skipped: its outer edge
-binds a placeholder that only reaches the mounted document through a hoist.
+load at both mount forms: a mounted document's ``data_sources`` merge into the
+document that mounts it (esm-spec §4.7 "A mounted document's data sources"), so
+``hoisted_sources`` are read off the ROOT document after ``load_path``, and
+``index_set_sizes`` show an edge's ``bindings`` reaching through an assembly.
 """
 
 from __future__ import annotations
@@ -47,7 +45,7 @@ def test_edge_case_matches_the_shared_manifest(case: dict) -> None:
         source["mirrors"] = list(case["mirrors"])
     doc: dict = {"data_sources": {"s": {"kind": "static", "source": source}}}
     edge = {"ref": "x.esm", "url_substitutions": case["url_substitutions"]}
-    binder = str(REPO_ROOT / MANIFEST["binder_dir"])
+    binder = case.get("binder_url") or str(REPO_ROOT / MANIFEST["binder_dir"])
     declaring = str(REPO_ROOT / MANIFEST["declaring_dir"])
     expect = case["expect"]
 
@@ -70,11 +68,17 @@ def test_edge_case_matches_the_shared_manifest(case: dict) -> None:
 
 @pytest.mark.parametrize("fixture", MANIFEST["fixtures"], ids=lambda f: f["id"])
 def test_fixture_load_matches_the_shared_manifest(fixture: dict) -> None:
-    if fixture.get("requires_hoisting"):
-        pytest.skip("Python does not hoist a mounted document's data_sources (esm-spec §4.7)")
     path = str(SUITE / fixture["path"])
     if fixture["expect"] == "accepted":
-        earthsci_ast.load_path(path)
+        loaded = earthsci_ast.load_path(path)
+        for name, pin in fixture.get("hoisted_sources", {}).items():
+            assert name in loaded.data_sources, f"{name} did not reach the root"
+            src = loaded.data_sources[name].source
+            assert src.url_template == _expected(pin["url_template"]), name
+            if "mirrors" in pin:
+                assert list(src.mirrors) == [_expected(m) for m in pin["mirrors"]], name
+        for axis, size in fixture.get("index_set_sizes", {}).items():
+            assert loaded.index_sets[axis]["size"] == size, axis
         return
     with pytest.raises(ExpressionTemplateError) as excinfo:
         earthsci_ast.load_path(path)
@@ -119,3 +123,13 @@ def test_the_edge_is_consumed_at_load(fixture_id: str) -> None:
     fixture = next(f for f in MANIFEST["fixtures"] if f["id"] == fixture_id)
     loaded = earthsci_ast.load_path(str(SUITE / fixture["path"]))
     assert '"url_substitutions":' not in to_json(loaded)
+
+
+def test_a_url_loaded_leaf_resolves_its_relative_locations_against_its_url() -> None:
+    """A document mounted from a URL has a URL for a directory: its relative
+    locations join it by RFC 3986 §5.2 (esm-spec §4.7 "URL (remote) references"),
+    rather than being spliced after the working directory."""
+    from earthsci_ast._data_source_urls import resolve_source_url
+
+    assert resolve_source_url("../d/./t.nc", "https://h.org/a/b") == "https://h.org/a/d/t.nc"
+    assert resolve_source_url("/abs/t.nc", "https://h.org/a/b") == "file:///abs/t.nc"

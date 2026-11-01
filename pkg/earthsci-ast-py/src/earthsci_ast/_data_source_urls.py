@@ -87,6 +87,10 @@ def resolve_source_url(template: str, base_dir: str) -> str:
     if _SCHEME_RE.match(template):
         return template
 
+    if not template.startswith("/") and _SCHEME_RE.match(base_dir or ""):
+        # A document loaded from a URL: its relative locations join its URL
+        # directory by RFC 3986 §5.2, as its relative refs do (§4.7).
+        return _join_url_directory(base_dir, template)
     path = template if template.startswith("/") else posixpath.join(_abs_base(base_dir), template)
     resolved = _remove_dot_segments(path)
     if "?" in resolved or "#" in resolved:
@@ -97,6 +101,23 @@ def resolve_source_url(template: str, base_dir: str) -> str:
             "path (esm-spec §8.2.1). Rename or relocate the file.",
         )
     return "file://" + resolved
+
+
+def _join_url_directory(base: str, rel: str) -> str:
+    """RFC 3986 §5.2 resolution of the relative path ``rel`` against the
+    DIRECTORY URL ``base`` (``scheme://authority/path``, read as a directory
+    whether or not it ends in ``/``), with dot segments removed. A query or
+    fragment on ``base`` is dropped, as §5.2.2 drops them for a path reference.
+    """
+    base = re.split(r"[?#]", base, maxsplit=1)[0]
+    after_scheme = base.index("://") + 3
+    slash = base.find("/", after_scheme)
+    origin, directory = (base, "") if slash < 0 else (base[:slash], base[slash:])
+    joined = directory.rstrip("/") + "/" + rel
+    path = _remove_dot_segments(joined)
+    if joined.endswith(("/", "/.", "/..")) and not path.endswith("/"):
+        path += "/"
+    return origin + path
 
 
 def _abs_base(base_dir: str) -> str:
@@ -281,8 +302,13 @@ def apply_mount_url_substitutions(data: Any, edge: Any, binder_dir: str, where: 
     def lead(v: str) -> str:
         # The value a LEADING placeholder contributes: the mounting document's
         # location, per §8.2.1's own forms.
+        # A mounting document loaded from a URL has a URL for a directory; a
+        # relative value then joins onto it by RFC 3986 §5.2, as that
+        # document's own relative refs do (§4.7).
         if _SCHEME_RE.match(v) or v.startswith("/"):
             return v
+        if _SCHEME_RE.match(binder_dir or ""):
+            return _join_url_directory(binder_dir, v)
         return posixpath.join(_abs_base(binder_dir), v)
 
     def substitute(t: str, site: str) -> str:
