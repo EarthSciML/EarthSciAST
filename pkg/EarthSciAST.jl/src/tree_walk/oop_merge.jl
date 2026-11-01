@@ -1293,8 +1293,9 @@ function _merge_acc_kernel_classes(
     # boxes at every grid size, and two scatters of one document are the same
     # box at different shifts; merged, each would read through per-lane tables
     # built over all of its cells. They stay their own loop nests.
-    if !isempty(_SCATTER_KEEP)
-        extra = Int[j for j in eachindex(kernels) if haskey(_SCATTER_KEEP, kernels[j])]
+    keep = _scatter_keep_now()
+    if keep !== nothing && !isempty(keep)
+        extra = Int[j for j in eachindex(kernels) if haskey(keep, kernels[j])]
         isempty(extra) || (kept = sort!(unique!(vcat(kept, extra))))
     end
     if !isempty(kept)
