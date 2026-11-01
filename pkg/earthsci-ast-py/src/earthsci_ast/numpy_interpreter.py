@@ -2206,7 +2206,7 @@ def _eval_faq_contraction_broadcast(
     broadcast axis of the combined ``out × reduce`` box, the body is evaluated
     ONCE over that box, and the reduce axes are then ⊕-folded SEQUENTIALLY in
     ``_cartesian`` order (last symbol fastest). Per output cell the fold
-    performs exactly the term order and operation chain of :func:`_reduce_over`
+    performs exactly the term order and operation chain of :func:`_reduce_over_gated`
     (:func:`_reduce_step_box` reproduces :func:`_reduce_step` element-wise), so
     the result is bit-for-bit the scalar path's answer; only the per-cell
     Python walk is gone.
@@ -5379,8 +5379,8 @@ def _reduce_over_gated(
 ) -> float:
     """Reduce ``body`` over the contracted product, gated by join + filter.
 
-    Mirrors :func:`_reduce_over` but skips any contraction combination that
-    fails the inner equi-join (RFC §5.3) or the filter predicate (§7.2). Returns
+    Folds term by term in ``_cartesian`` order, skipping any contraction
+    combination that fails the inner equi-join (RFC §5.3) or the filter predicate (§7.2). Returns
     the semiring identity ``empty_zero`` (0̄) when no combination is admitted.
     """
     acc: float | None = None

@@ -6529,10 +6529,10 @@ function _compile_faq_equation!(
         # Every key a ±1 shift of its own contracted index: the equation splits
         # into pieces the cascade takes as ordinary equations (the shift form).
         pieces = sc === nothing ? nothing : _scatter_shift_pieces(
-            sc, eq, rhs_expr::OpExpr, lhs_body, idx_names, range_iters,
-            contract_names, contract_ranges, contract_const, rhs_body,
-            rhs_oplus, rhs_zerobar
-        )
+                sc, eq, rhs_expr::OpExpr, lhs_body, idx_names, range_iters,
+                contract_names, contract_ranges, contract_const, rhs_body,
+                rhs_oplus, rhs_zerobar
+            )
         if pieces !== nothing
             _tally_cascade!(:equality_scatter_shift)
             rec = _build_record()
