@@ -586,6 +586,97 @@ _sx_ragged_ics(uval) = Dict{String, Any}("u[$i]" => v for (i, v) in enumerate(uv
         @test _sx_bits(jd(a)) == _sx_bits(jd(b))
     end
 
+    @testset "a run-time pass called concurrently" begin
+        # Overlapping calls of one build (an ensemble's threads, a threaded
+        # Jacobian) each fold their own cells: Float64 and dual alike.
+        e = _sx_rt(_sxi(_sxk([1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3]), "i"))
+        rhs = _sx_faq(
+            outs = ["j"], osizes = [3], cr = Dict("i" => [1, 12]),
+            filt = _sx("==", "j", e), body = _sx("*", _sxi("u", "i"), _sxi("u", "i"))
+        )
+        doc = _sx_doc(rhs; outs = ["j"], osizes = [3], ushape = [12])
+        ics = _sx_ics([12], i -> (-1.0)^i * 10.0^(i - 6))
+        a = _sx_run(doc, ics)
+        @test get(a.tally, :equality_scatter_pass, 0) == 1
+        seed = Float64[isodd(k) ? 1.0 : -0.5 for k in 1:length(a.u0)]
+        jd() = ForwardDiff.derivative(
+            s -> (du = zeros(typeof(s), length(a.u0)); a.f!(du, a.u0 .+ s .* seed, a.p, 0.0); du), 0.0
+        )
+        fd() = (du = fill(NaN, length(a.u0)); a.f!(du, a.u0, a.p, 0.0); du)
+        ref_d = _sx_bits(jd())
+        ref_f = _sx_bits(fd())
+        n = 256
+        ok = fill(false, n)
+        Threads.@threads for k in 1:n
+            ok[k] = isodd(k) ? _sx_bits(jd()) == ref_d : _sx_bits(fd()) == ref_f
+        end
+        @test all(ok)
+        # A dual call allocates nothing once the pool holds a buffer.
+        ud = ForwardDiff.Dual{Nothing}.(a.u0, seed)
+        dud = similar(ud)
+        a.f!(dud, ud, a.p, 0.0)
+        a.f!(dud, ud, a.p, 0.0)
+        if VERSION >= v"1.12"
+            @test (@allocated a.f!(dud, ud, a.p, 0.0)) == 0
+        end
+    end
+
+    @testset "an observed a scatter fills takes its state consumer" begin
+        # `g[j]` filled by a scatter, read one to one by `D(w[j]) = g[j] - w[j]`:
+        # the scatter computes w's cell from the value it stores, as the dense
+        # nest does (`_ac_take_consumers`).
+        map8 = [2, 2, 1, 1, 3, 3, 4, 4]
+        for rt in (false, true)
+            e = _sxi(_sxk(map8), "i")
+            g = _sx_faq(
+                outs = ["j"], osizes = [4], cr = Dict("i" => [1, 8]),
+                filt = _sx("==", "j", rt ? _sx_rt(e) : e), body = _sxi("u", "i")
+            )
+            zero_c = _sx("faq"; output_idx = Any["j"], expr = 0.0, ranges = Dict("j" => Dict("from" => "O1")))
+            doc = _sx_doc(zero_c; outs = ["j"], osizes = [4], ushape = [8])
+            m = doc["models"]["M"]
+            m["variables"]["g"] = Dict("type" => "unknown", "shape" => ["O1"])
+            m["variables"]["w"] = Dict("type" => "unknown", "shape" => ["O1"], "default" => 0.5)
+            push!(m["equations"], Dict("lhs" => "g", "rhs" => g))
+            push!(
+                m["equations"], Dict(
+                    "lhs" => _sx_lhs("w", ["j"], ["O1"]),
+                    "rhs" => _sx(
+                        "faq"; output_idx = Any["j"], ranges = Dict("j" => Dict("from" => "O1")),
+                        expr = _sx("-", _sxi("g", "j"), _sxi("w", "j"))
+                    )
+                )
+            )
+            ics = _sx_ics([8], i -> _SX_CANCEL[mod1(i, 4)] * i)
+            ESX._reset_cascade_tally!()
+            f!, u0, p, _t, vm = ESX._build_evaluator(doc; initial_conditions = ics, compiler = :native)
+            tally = copy(ESX._CASCADE_TALLY)
+            fi, u0i, pi_, _ti, vmi = ESX._build_evaluator(doc; initial_conditions = ics, compiler = :interpreter)
+            @test get(tally, rt ? :equality_scatter_pass : :equality_scatter_table, 0) == 1
+            @test get(tally, :array_contraction_consumer, 0) == 1
+            du = fill(NaN, length(u0))
+            f!(du, u0, p, 0.0)
+            dui = fill(NaN, length(u0i))
+            fi(dui, u0i, pi_, 0.0)
+            @test all(_sx_bits(du[vm[k]]) == _sx_bits(dui[j]) for (k, j) in vmi)
+            seed = Float64[0.2 + 0.01 * cos(k) for k in eachindex(u0)]
+            seedi = similar(seed)
+            for (k, j) in vmi
+                seedi[j] = seed[vm[k]]
+            end
+            dd(f, u, pp, sd) = ForwardDiff.derivative(
+                s -> (d = zeros(typeof(s), length(u)); f(d, u .+ s .* sd, pp, 0.0); d), 0.0
+            )
+            gn = dd(f!, u0, p, seed)
+            gi = dd(fi, u0i, pi_, seedi)
+            @test all(_sx_bits(gn[vm[k]]) == _sx_bits(gi[j]) for (k, j) in vmi)
+            f!(du, u0, p, 0.0)
+            if VERSION >= v"1.12"
+                @test (@allocated f!(du, u0, p, 0.0)) == 0
+            end
+        end
+    end
+
     @testset "EarthSciASTDiff product documents" begin
         # Copied from EarthSciASTDiff's tests/goldens (68fe059): Jᵀλ and hvp
         # products spelled as whole-array sums of equality-filtered faqs over

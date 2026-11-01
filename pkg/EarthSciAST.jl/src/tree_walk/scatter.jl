@@ -490,13 +490,51 @@ function _scatter_layout!(
     return seg
 end
 
+# The per-call "cell already folded" flags of a run-time scatter pass whose `du`
+# is not `Float64`. Each call takes a buffer and gives it back when it is done,
+# so calls that overlap (an ensemble's threads, a threaded Jacobian, two
+# integrators on one build) never share one. A buffer is allocated only when
+# every one the pool holds is out, so after the first calls at a given level of
+# concurrency the pass allocates nothing. The pool is shared by every copy of
+# the right-hand side (a program's workspaces, rhs_program.jl), which the lock
+# makes safe.
+struct _ScatterSeen
+    lock::Threads.SpinLock
+    free::Vector{Vector{Bool}}
+    n::Int
+end
+_ScatterSeen(n::Int) = _ScatterSeen(Threads.SpinLock(), Vector{Bool}[], n)
+
+@inline function _scatter_seen_take!(s::_ScatterSeen)
+    lock(s.lock)
+    v = isempty(s.free) ? nothing : pop!(s.free)
+    unlock(s.lock)
+    return v === nothing ? Vector{Bool}(undef, s.n) : v
+end
+@inline function _scatter_seen_give!(s::_ScatterSeen, v::Vector{Bool})
+    lock(s.lock)
+    push!(s.free, v)
+    unlock(s.lock)
+    return nothing
+end
+
 # The RUN-TIME scatter: a generated pass that evaluates each key per point on
 # every call. Per combination of the free output indices (the chunked axis):
-# every pinned cell is set to 0̄ and marked unvisited, then the contracted box is
-# walked in visit order; a point whose keys all name a cell folds its term into
-# that cell. A cell's first term is folded onto the `Float64` 0̄ itself, as the
-# per-cell fold seeds it (`_cg_fold`), so a dual-valued term's partials pass
-# through untouched; later ones onto the value the cell holds.
+# every pinned cell is set to 0̄, then the contracted box is walked in visit
+# order; a point whose keys all name a cell folds its term into that cell.
+#
+# A cell's first term is folded onto the `Float64` 0̄ itself, as the per-cell
+# fold seeds it (`_cg_fold`); later ones onto the value the cell holds. With a
+# `Float64` `du` the cell holds that very 0̄ until its first term, so every term
+# folds onto the cell and no flag is kept. With any other value type the 0̄ the
+# cell holds is converted (a dual number with zero partials), and folding onto
+# it is not folding onto the `Float64` (`+0.0 + -0.0` is `+0.0` in a partial),
+# so the cell is marked unvisited and its first term folds onto the `Float64`
+# 0̄; the marks live in a buffer the call takes from a `_ScatterSeen` pool.
+#
+# With a state `consumer` (`_ac_take_consumers`), once the box has been walked
+# for a free combination each of its pinned cells computes the consumer's cell
+# from the value it holds, as the consumer would read it back from the buffer.
 function _try_codegen_scatter(
         out_refs::Vector{Base.RefValue{Int}},
         los::Vector{Int}, steps::Vector{Int}, lens::Vector{Int},
@@ -507,10 +545,17 @@ function _try_codegen_scatter(
         pinpos::Vector{Int}, op::Symbol, zerobar::Float64; nst::Int = 0,
         # A nest box's points (one column per contracted index, in visit
         # order), walked as one flat loop in place of the product's loops.
-        points::Union{Nothing, Vector{Vector{Int}}} = nothing
+        points::Union{Nothing, Vector{Vector{Int}}} = nothing,
+        consumer = nothing
     )
     _codegen_disabled() && return :codegen_disabled
     ctx = _CGCtx(_codegen_node_budget(); nst = nst)
+    cons = nothing
+    if consumer !== nothing
+        Kc, ix, delta = consumer
+        _cg_note_nest!(ctx, Kc)
+        cons = (K = Kc, ix = ix, delta = delta, store = true, invsyms = _cg_inv!(ctx, Kc))
+    end
     kc = _CGScalarCtx()
     nd = length(out_refs)
     free = Int[d for d in 1:nd if !(d in pinpos)]
@@ -582,8 +627,11 @@ function _try_codegen_scatter(
     end
     ov = _cg_name(ctx, "outs")
     sv = _cg_name(ctx, "seen")
-    seen = Vector{Bool}(undef, ncells)
+    dw = _cg_name(ctx, "dw")
     off = _cg_name(ctx, "off")
+    tv = _cg_name(ctx, "tv")
+    slv = _cg_name(ctx, "sl")
+    cord = _cg_name(ctx, "co")
     # Per point: each key, its cell along its axis, or the next point.
     pbody = Any[:(local $off = $base)]
     stmts = try
@@ -602,40 +650,51 @@ function _try_codegen_scatter(
             push!(pbody, :($off += $qv * $sd))
         end
         term = _cg_emit(ctx, kc, body)
-        tv = _cg_name(ctx, "tv")
-        slv = _cg_name(ctx, "sl")
-        cord = _cg_name(ctx, "co")
         push!(pbody, :(local $cord = $off + 1))
         push!(pbody, :(local $slv = $ov[$cord]))
         push!(pbody, :(local $tv = $term))
-        push!(
-            pbody, quote
-                if $sv[$cord]
-                    du[$slv] = $fnsym(du[$slv], $tv)
-                else
-                    du[$slv] = $fnsym($zerobar, $tv)
-                    $sv[$cord] = true
-                end
-            end
-        )
         pbody
     catch err
         err isa _CodegenDecline || rethrow()
         return err.reason
     end
-    loop = Expr(:block, stmts...)
+    # The fold into the cell: onto the value it holds (`Float64` `du`), or
+    # onto the `Float64` 0̄ when the cell is still unvisited.
+    fold_plain = :($dw[$slv] = $fnsym($dw[$slv], $tv))
+    fold_flag = quote
+        if $sv[$cord]
+            $dw[$slv] = $fnsym($dw[$slv], $tv)
+        else
+            $dw[$slv] = $fnsym($zerobar, $tv)
+            $sv[$cord] = true
+        end
+    end
+    olv = _cg_name(ctx, "oln")
+    cxv = _cg_name(ctx, "x")
+    cstmts = if cons === nothing
+        Any[]
+    else
+        try
+            _cg_scan_consumer_cell(ctx, cons, olv, cxv)
+        catch err
+            err isa _CodegenDecline || rethrow()
+            return err.reason
+        end
+    end
+    # The contracted loops' headers, the first contracted index innermost, or
+    # the nest's one loop over its points with each counter read from its
+    # column (bound once, ahead of the chunk loop).
     colsets = Any[]
+    heads = Tuple{Expr, Vector{Any}}[]
     if points === nothing
-        # The contracted loops, the first contracted index innermost.
         for j in eachindex(kvs)
             rg = contract_ranges[j]
             lo = _cg_geo!(ctx, first(rg), (contract_ranges, j, :lo))
             st = _cg_geo!(ctx, step(rg), (contract_ranges, j, :step), true)
             hi = _cg_geo!(ctx, last(rg), (contract_ranges, j, :hi))
-            loop = Expr(:for, :($(kvs[j]) = $lo:$st:$hi), Expr(:block, loop))
+            push!(heads, (:($(kvs[j]) = $lo:$st:$hi), Any[]))
         end
     else
-        # One loop over the nest's points, each counter read from its column.
         ppv = _cg_name(ctx, "pp")
         bind = Any[]
         for j in eachindex(kvs)
@@ -644,7 +703,15 @@ function _try_codegen_scatter(
             push!(bind, :(local $(kvs[j]) = $colv[$ppv]))
         end
         npv = _cg_geo!(ctx, length(points[1]))
-        loop = Expr(:for, :($ppv = 1:$npv), Expr(:block, bind..., loop))
+        push!(heads, (:($ppv = 1:$npv), bind))
+    end
+    # The walk over the contracted box with `fold` at each admitted point.
+    function mkloop(fold)
+        loop = Expr(:block, map(copy, stmts)..., copy(fold))
+        for (h, bind) in heads
+            loop = Expr(:for, copy(h), Expr(:block, map(copy, bind)..., loop))
+        end
+        return loop
     end
     # The pinned cells of this chunk's free coordinates: 0̄, unvisited.
     pc = _cg_name(ctx, "pc")
@@ -658,36 +725,65 @@ function _try_codegen_scatter(
         push!(pdec, :($pr = div($pr, $len)))
     end
     npinv = _cg_geo!(ctx, npin)
-    init = quote
+    init_plain = quote
         for $pc in 1:$npinv
             $(pdec...)
-            du[$ov[$po]] = $zerobar
+            $dw[$ov[$po]] = $zerobar
+        end
+    end
+    init_flag = quote
+        for $pc in 1:$npinv
+            $(map(copy, pdec)...)
+            $dw[$ov[$po]] = $zerobar
             $sv[$po] = false
         end
     end
+    # The consumer's cells of this chunk's free coordinates.
+    post = nothing
+    if !isempty(cstmts)
+        post = quote
+            for $pc in 1:$npinv
+                $(map(copy, pdec)...)
+                local $olv = $ov[$po]
+                local $cxv = $dw[$olv]
+                $(cstmts...)
+            end
+        end
+    end
     outsv = _cg_tab!(ctx, outs)
-    seenv = _cg_tab!(ctx, seen)
+    poolv = _cg_tab!(ctx, _ScatterSeen(ncells))
     av = _cg_name(ctx, "a")
     bv = _cg_name(ctx, "b")
-    tv = _cg_name(ctx, "ab")
+    abv = _cg_name(ctx, "ab")
     nfreev = _cg_geo!(ctx, nfree)
     oside = isempty(outs) ? :x : _cg_slot_side(nst, extrema(outs)...)
     dstore = oside === :x ? :du : :(_cg_dview(du, Val($(QuoteNode(oside)))))
     ln = LineNumberNode(0, Symbol("faq-equality-scatter"))
     whole = quote
         $(ctx.geosink...)
+        $(cons === nothing ? nothing : Expr(:block, ctx.prologue...))
         local $ov = $outsv
-        local $sv = $seenv
         $(colsets...)
-        local $tv = _chunk_ordinals($nfreev, _cgci, _cgnc)
-        local $av = $tv[1]
-        local $bv = $tv[2]
-        let du = $dstore
+        local $abv = _chunk_ordinals($nfreev, _cgci, _cgnc)
+        local $av = $abv[1]
+        local $bv = $abv[2]
+        local $dw = $dstore
+        if eltype($dw) === Float64
             for $fc in ($av + 1):$bv
                 $(dec...)
-                $init
-                $loop
+                $init_plain
+                $(mkloop(fold_plain))
+                $(post === nothing ? nothing : copy(post))
             end
+        else
+            local $sv = _scatter_seen_take!($poolv)
+            for $fc in ($av + 1):$bv
+                $(map(copy, dec)...)
+                $init_flag
+                $(mkloop(fold_flag))
+                $(post === nothing ? nothing : copy(post))
+            end
+            _scatter_seen_give!($poolv, $sv)
         end
     end
     ngrp = length(ctx.tab_types)
@@ -919,9 +1015,9 @@ function _try_compile_scatter(
             return nothing
         end
         outs = _ac_claim_all_outs!(covered, lhs_body, idx_names, range_iters, var_map)
-        gen = _try_codegen_array_contraction(
+        emit = cons -> _try_codegen_array_contraction(
             out_refs, los, stps, lens, outs, node;
-            fold = fold, nst = obs_nst
+            fold = fold, nst = obs_nst, consumer = cons
         )
         tier = :equality_scatter_table
     else
@@ -943,20 +1039,26 @@ function _try_compile_scatter(
             ).cols
         end
         outs = _ac_claim_all_outs!(covered, lhs_body, idx_names, range_iters, var_map)
-        gen = _try_codegen_scatter(
-            out_refs, los, stps, lens, outs, node, contract_refs, cranges,
-            Tuple{_Node, Vector{Base.RefValue{Int}}, Vector{Base.RefValue{Int}}}[
-                (g[3], g[2], g[1]) for g in kgots
-            ],
-            pinpos, Symbol(rhs_oplus), rhs_zerobar; nst = obs_nst, points = points
+        ktups = Tuple{_Node, Vector{Base.RefValue{Int}}, Vector{Base.RefValue{Int}}}[
+            (g[3], g[2], g[1]) for g in kgots
+        ]
+        emit = cons -> _try_codegen_scatter(
+            out_refs, los, stps, lens, outs, node, contract_refs, cranges, ktups,
+            pinpos, Symbol(rhs_oplus), rhs_zerobar; nst = obs_nst, points = points,
+            consumer = cons
         )
         tier = :equality_scatter_pass
     end
+    gen = emit(nothing)
     if gen isa Symbol
         _uncover!(covered, outs)
         _note_decline!(:array_contraction, gen)
         return nothing
     end
     _tally_cascade!(tier)
-    return gen
+    # On the two-buffer slot space an observed the scatter fills can take in
+    # the state kernel that consumes it (`_ac_take_consumers`), as the dense
+    # nest's can (`_try_compile_array_contraction`).
+    obs_nst > 0 || return gen
+    return _with_remit(gen, outs, emit)
 end

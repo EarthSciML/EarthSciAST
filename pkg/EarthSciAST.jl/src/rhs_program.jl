@@ -301,11 +301,13 @@ const _WsState = Union{
 # Mutable types a build constructs and never writes afterwards.
 const _WsReadOnly = Union{OpExpr}
 
-# Leaves that hold no reference to anything a workspace replaces.
+# Leaves that hold no reference to anything a workspace replaces. A run-time
+# equality scatter's flag pool (`_ScatterSeen`, scatter.jl) hands each call its
+# own buffer under a lock, so every workspace shares it.
 const _WsLeaf = Union{
     String, Symbol, Expr, Module, DataType, UnionAll, Union, Core.TypeName,
     Method, Core.MethodInstance, GlobalRef, Regex,
-    RuntimeGeneratedFunctions.RuntimeGeneratedFunction,
+    RuntimeGeneratedFunctions.RuntimeGeneratedFunction, _ScatterSeen,
 }
 
 struct _WsFactory
