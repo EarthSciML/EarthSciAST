@@ -711,6 +711,23 @@
       "note": "Each version gate judges the file that holds the gated construct against that file's own esm: an older document mounting a newer leaf is accepted, and a newer document does not legalize an older leaf's gated construct."
     },
     {
+      "id": "spec.4.7.mounted-data-sources-identical",
+      "section": "4.7",
+      "quote": "that contribute the same name MUST contribute **identical** entries, and those merge once",
+      "class": "semantic",
+      "phase": 5,
+      "area": "data_sources",
+      "note": "When two mounts contribute a data source of the same name that the mounting document does not declare, entries that are structurally equal after each edge's url_substitutions and relative-location resolution merge once; any other pair is rejected with data_source_merge_conflict."
+    },
+    {
+      "id": "spec.4.7.data-source-merge-conflict-message",
+      "section": "4.7",
+      "quote": "whose message MUST name the source and both contributing edges",
+      "class": "out_of_scope",
+      "area": "diagnostics",
+      "note": "Diagnostic message content; the model reports the data_source_merge_conflict code, not its text."
+    },
+    {
       "id": "spec.4.8.1.eight-axes-fixed",
       "section": "4.8.1",
       "quote": "A binding MUST NOT introduce a ninth axis, and MUST NOT map a registry symbol onto an axis the table below does not give it.",
