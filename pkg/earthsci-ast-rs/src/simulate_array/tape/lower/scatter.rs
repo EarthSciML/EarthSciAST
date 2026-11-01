@@ -32,9 +32,7 @@
 //! list lowers as a run-time mask, which skips a term exactly as the
 //! interpreter's `continue` does.
 
-use super::tuples::{
-    DimBound, Parent, TupleList, TupleSpec, parent_first_order, tuple_list_budget, walk_nest,
-};
+use super::tuples::{DimBound, Parent, TupleList, TupleSpec, parent_first_order, walk_nest};
 use super::*;
 use crate::simulate_array::eval::{apply_binary, apply_unary, fold_scalar};
 use std::rc::Rc;
@@ -171,17 +169,6 @@ fn pin_of<'e>(c: &'e Expr, idx_names: &[String]) -> Option<(usize, &'e Expr)> {
         }
     }
     None
-}
-
-/// What [`TapeBuilder::lower_equality_scatter`] made of a contraction.
-pub(super) enum Scatter {
-    Lowered(LV),
-    /// Not a contraction it serves (its docs): the dense lowering.
-    Declined,
-    /// Its list would take the program past [`tuple_list_budget`]: the
-    /// caller tries the dense lowering first, and asks again without the
-    /// budget only if that fails.
-    OverBudget,
 }
 
 /// Places one point of the contracted box: the pins and the build-time
@@ -341,15 +328,18 @@ impl TapeBuilder<'_> {
         Some(IxNode::Index { vals, shape, subs })
     }
 
-    /// The one-pass equality scatter (module docs). [`Scatter::Declined`]
-    /// when the contraction is not one it serves (no conjunct pins an output
-    /// index, a pinned value is not build-time data, a ragged bound reads a
-    /// pinned index) or a point's value cannot be placed;
-    /// [`Scatter::OverBudget`] when `respect_budget` and its list would take
-    /// the program past [`tuple_list_budget`]. Nothing is emitted before the
-    /// tuple list is lowered, so neither needs a rollback; an `Err` comes
-    /// from that lowering, after the list is charged to
-    /// [`TapeBuilder::tuples_held`], and the caller's rollback undoes both.
+    /// The one-pass equality scatter (module docs), or `None` when the
+    /// contraction is not one it serves (no conjunct pins an output index, a
+    /// pinned value is not build-time data, a ragged bound reads a pinned
+    /// index), a point's value cannot be placed, or its list would pass
+    /// [`MAX_PROMOTED_ELEMS`] tuples. The list is charged to
+    /// [`TapeBuilder::tuples_held`], so every later tuple list in the
+    /// program sees what is left of [`super::tuples::tuple_list_budget`], but
+    /// the scatter itself is not held to that budget: its list holds only
+    /// the admitted terms, and the dense lowering it would otherwise take
+    /// costs at least as much. Nothing is emitted before the tuple list is
+    /// lowered, so a `None` needs no rollback; an `Err` comes from that
+    /// lowering, after the charge, and the caller's rollback undoes both.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn lower_equality_scatter(
         &mut self,
@@ -361,15 +351,14 @@ impl TapeBuilder<'_> {
         contract_dims: &[ContractDim],
         reduce: ReduceKind,
         filter: Option<&Expr>,
-        respect_budget: bool,
-    ) -> LResult<Scatter> {
+    ) -> LResult<Option<LV>> {
         let Some(filter) = filter else {
-            return Ok(Scatter::Declined);
+            return Ok(None);
         };
         let nr = idx_names.len();
         let nc = contract_names.len();
         if nr == 0 || nc == 0 {
-            return Ok(Scatter::Declined);
+            return Ok(None);
         }
         let (parts, top_and) = conjuncts(filter);
         // The first conjunct to pin an index pins it; a later one that pins
@@ -385,7 +374,7 @@ impl TapeBuilder<'_> {
             }
         }
         if pins.iter().all(Option::is_none) {
-            return Ok(Scatter::Declined);
+            return Ok(None);
         }
         // The contracted ranges. A ragged bound may read a free output index
         // or a contracted one, never a pinned output index: a pinned cell is
@@ -395,24 +384,24 @@ impl TapeBuilder<'_> {
                 ContractDim::Ragged { of, .. } => {
                     for p in of {
                         match idx_names.iter().position(|n| n == p) {
-                            Some(k) if pins[k].is_some() => return Ok(Scatter::Declined),
+                            Some(k) if pins[k].is_some() => return Ok(None),
                             Some(_) => {}
                             None if contract_names.contains(p) => {}
-                            None => return Ok(Scatter::Declined),
+                            None => return Ok(None),
                         }
                     }
                 }
                 ContractDim::Derived { from_faq } if self.ring_extent(from_faq).is_none() => {
-                    return Ok(Scatter::Declined);
+                    return Ok(None);
                 }
                 _ => {}
             }
         }
         let Ok(bounds) = self.tuple_dim_bounds(idx_names, contract_names, contract_dims) else {
-            return Ok(Scatter::Declined);
+            return Ok(None);
         };
         let Ok(combine_op) = self.array_combine_op(reduce, "contracted") else {
-            return Ok(Scatter::Declined);
+            return Ok(None);
         };
         if let Some(v) = self.lower_shift_scatter(
             idx_names,
@@ -425,7 +414,7 @@ impl TapeBuilder<'_> {
             &parts,
             &pins,
         )? {
-            return Ok(Scatter::Lowered(v));
+            return Ok(Some(v));
         }
         // A point's values: the output indices, then the contracted names
         // (the tuple list's column order).
@@ -437,7 +426,7 @@ impl TapeBuilder<'_> {
                 Some(e) => match self.ix_compile(e, &syms) {
                     Some(n) => Some(n),
                     // A run-time pin: no build-time map (module docs).
-                    None => return Ok(Scatter::Declined),
+                    None => return Ok(None),
                 },
                 None => None,
             });
@@ -460,39 +449,12 @@ impl TapeBuilder<'_> {
         let n_free: usize = free.iter().map(|&d| shape[d]).product();
         let n_out: usize = shape.iter().product();
         if n_out >= u32::MAX as usize {
-            return Ok(Scatter::Declined);
+            return Ok(None);
         }
         let mut strides = vec![1usize; nr];
         for d in (0..nr.saturating_sub(1)).rev() {
             strides[d] = strides[d + 1] * shape[d + 1];
         }
-        // The most tuples this list may hold: what is left of the program's
-        // tuple-list budget ([`tuple_list_budget`]), as every tuple-list
-        // producer is held to — when there is a bounded form to fall back
-        // to. That is the dense lowering's promoted box, `n_out` cells by
-        // the contracted box; past [`MAX_PROMOTED_ELEMS`] the dense form
-        // unrolls a term per contracted point over the whole output box, a
-        // build quadratic in the size, so the list is kept over the budget,
-        // as a tuple-list contraction whose build-time fold declines keeps
-        // its list. Without `respect_budget` the caller found no other form.
-        let dense_box = bounds.iter().try_fold(n_out, |acc, b| match b {
-            DimBound::Static(l, h) => acc.checked_mul((h - l + 1).max(0) as usize),
-            DimBound::Ragged { .. } => None,
-        });
-        let room = if respect_budget && dense_box.is_some_and(|n| n <= MAX_PROMOTED_ELEMS) {
-            (tuple_list_budget() as u64)
-                .saturating_sub(self.tuples_held)
-                .min(MAX_PROMOTED_ELEMS as u64) as usize
-        } else {
-            MAX_PROMOTED_ELEMS
-        };
-        let full = || {
-            if room < MAX_PROMOTED_ELEMS {
-                Scatter::OverBudget
-            } else {
-                Scatter::Declined
-            }
-        };
         let place = Place {
             pins: &pin_nodes,
             lo,
@@ -549,7 +511,7 @@ impl TapeBuilder<'_> {
             }
             off
         };
-        let mut stop: Option<Scatter> = None;
+        let mut declined = false;
         let mut visits: u64 = 0;
         let mut walked_once = false;
         if !bound_reads_free {
@@ -560,7 +522,7 @@ impl TapeBuilder<'_> {
             let mut point = |c: &[i64]| -> bool {
                 visits += 1;
                 if visits > MAX_SCATTER_VISITS {
-                    stop = Some(Scatter::Declined);
+                    declined = true;
                     return false;
                 }
                 for k in 0..nc {
@@ -568,7 +530,7 @@ impl TapeBuilder<'_> {
                 }
                 match place.cell(&mut pt, &shared) {
                     Err(NotStatic) => {
-                        stop = Some(Scatter::Declined);
+                        declined = true;
                         false
                     }
                     Ok(None) => true,
@@ -584,23 +546,23 @@ impl TapeBuilder<'_> {
                 }
             };
             let done = walk_nest(&bounds, &order, 0, &cell_ix, &mut cur, &mut point);
-            if let Some(s) = stop {
-                return Ok(s);
+            if declined {
+                return Ok(None);
             }
             // Cut short with every point kept in every free cell: the list
             // is past its limit already.
             if !done && per_cell.is_empty() {
-                return Ok(full());
+                return Ok(None);
             }
             if done {
                 walked_once = true;
                 let nb = base.len();
                 let total = (nb as u64).saturating_mul(n_free as u64);
                 if visits.saturating_add(total) > MAX_SCATTER_VISITS {
-                    return Ok(Scatter::Declined);
+                    return Ok(None);
                 }
-                if per_cell.is_empty() && total > room as u64 {
-                    return Ok(full());
+                if per_cell.is_empty() && total > MAX_PROMOTED_ELEMS as u64 {
+                    return Ok(None);
                 }
                 for _ in 0..n_free {
                     let off = next_free(&mut cell_ix, &mut pt);
@@ -612,13 +574,13 @@ impl TapeBuilder<'_> {
                             }
                             place.restore_pinned(&mut pt, base[k] as usize);
                             match place.holds(&pt, &per_cell) {
-                                Err(NotStatic) => return Ok(Scatter::Declined),
+                                Err(NotStatic) => return Ok(None),
                                 Ok(false) => continue,
                                 Ok(true) => {}
                             }
                         }
-                        if cell_of.len() >= room {
-                            return Ok(full());
+                        if cell_of.len() >= MAX_PROMOTED_ELEMS {
+                            return Ok(None);
                         }
                         cell_of.push(base[k] + off as u32);
                         at.extend_from_slice(c);
@@ -636,7 +598,7 @@ impl TapeBuilder<'_> {
                 let mut point = |c: &[i64]| -> bool {
                     visits += 1;
                     if visits > MAX_SCATTER_VISITS {
-                        stop = Some(Scatter::Declined);
+                        declined = true;
                         return false;
                     }
                     for k in 0..nc {
@@ -644,12 +606,12 @@ impl TapeBuilder<'_> {
                     }
                     match place.cell(&mut pt, &all) {
                         Err(NotStatic) => {
-                            stop = Some(Scatter::Declined);
+                            declined = true;
                             false
                         }
                         Ok(None) => true,
-                        Ok(Some(_)) if cell_of.len() >= room => {
-                            stop = Some(full());
+                        Ok(Some(_)) if cell_of.len() >= MAX_PROMOTED_ELEMS => {
+                            declined = true;
                             false
                         }
                         Ok(Some(cell)) => {
@@ -660,8 +622,8 @@ impl TapeBuilder<'_> {
                     }
                 };
                 let done = walk_nest(&bounds, &order, 0, &cell_ix, &mut cur, &mut point);
-                if let Some(s) = stop {
-                    return Ok(s);
+                if declined {
+                    return Ok(None);
                 }
                 debug_assert!(done);
             }
@@ -730,7 +692,7 @@ impl TapeBuilder<'_> {
         let list = TupleList { rows, cols };
         let v = self.lower_tuple_list(&spec, list, lo, shape, combine_op);
         self.held_exprs.extend(residual);
-        v.map(Scatter::Lowered)
+        v.map(Some)
     }
 }
 

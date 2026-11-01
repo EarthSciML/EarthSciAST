@@ -88,22 +88,22 @@ fn a_run_time_pin_keeps_the_dense_lowering() {
     assert_eq!(count(&prog, "SegReduce"), 0);
 }
 
-/// A scatter list is held to the program's tuple-list budget: over it, a
-/// contraction whose dense box is promotable takes the dense lowering, with
-/// the same bits.
+/// A scatter keeps its list over the program's tuple-list budget: the list
+/// holds only the admitted terms, and the dense lowering costs at least as
+/// much. Its tuples are still charged, for the lists that follow.
 #[test]
-fn a_scatter_over_the_tuple_list_budget_takes_the_dense_lowering() {
+fn a_scatter_over_the_tuple_list_budget_keeps_its_list() {
     use super::lower::set_tuple_list_budget;
     let body = json!({"op": "index", "args": ["u", "i"]});
     // j == 13 - i: twelve tuples.
     let filter = json!({"op": "==", "args": ["j", {"op": "-", "args": [13, "i"]}]});
-    for (budget, lists) in [(12, 1), (11, 0)] {
+    for budget in [12, 11] {
         let prev = set_tuple_list_budget(budget);
         let prog = ab_check(scatter_doc(12, filter.clone(), body.clone()), -2.0, 2.0);
         set_tuple_list_budget(prev);
-        assert_eq!(count(&prog, "SegReduce"), lists, "budget {budget}");
+        assert_eq!(count(&prog, "SegReduce"), 1, "budget {budget}");
     }
-    // Two scatters in one program share the budget: room for one list.
+    // Two scatters in one program, room in the budget for one: both lists.
     let one = json!({"op": "faq", "args": [], "output_idx": ["j"], "reduce": "+",
         "ranges": {"j": {"from": "x"}, "i": {"from": "x"}},
         "filter": filter, "expr": body});
@@ -116,12 +116,11 @@ fn a_scatter_over_the_tuple_list_budget_takes_the_dense_lowering() {
     let prev = set_tuple_list_budget(20);
     let prog = ab_check(doc, -2.0, 2.0);
     set_tuple_list_budget(prev);
-    assert_eq!(count(&prog, "SegReduce"), 1);
+    assert_eq!(count(&prog, "SegReduce"), 2);
 }
 
-/// Over the budget, a scatter whose dense box is past the promotion limit
-/// keeps its list: the dense lowering would unroll a term per contracted
-/// point over the whole output box.
+/// Over the budget at a size whose dense box is past the promotion limit,
+/// the scatter keeps its list too.
 #[test]
 fn a_scatter_over_the_budget_without_a_promotable_box_keeps_its_list() {
     use super::lower::set_tuple_list_budget;

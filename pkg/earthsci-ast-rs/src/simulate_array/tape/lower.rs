@@ -94,7 +94,6 @@ fn tape_index(n: usize, table: &str) -> LResult<u32> {
 type LResult<T> = Result<T, Bail>;
 
 mod scatter;
-use scatter::Scatter;
 mod standalone;
 mod tuples;
 
@@ -5139,80 +5138,22 @@ impl<'m> TapeBuilder<'m> {
         // (esm-spec §4.3.1, [`scatter`]). A body the tuple-list form cannot
         // lower keeps the dense lowering below.
         if !contract_names.is_empty() && filter.is_some() {
-            let scatter = |b: &mut Self, respect_budget: bool| {
-                let txn = b.sub_txn();
-                let r = b.lower_equality_scatter(
-                    idx_names,
-                    &lo,
-                    &shape,
-                    body,
-                    contract_names,
-                    contract_dims,
-                    reduce,
-                    filter,
-                    respect_budget,
-                );
-                if r.is_err() {
-                    b.sub_rollback(txn);
-                }
-                r
-            };
-            match scatter(self, true) {
-                Ok(Scatter::Lowered(v)) => return Ok(v),
-                // A list past the program's tuple-list budget: the dense
-                // lowering, as every tuple-list producer falls back to a
-                // bounded form; the list after all only when that fails.
-                Ok(Scatter::OverBudget) => {
-                    let txn = self.sub_txn();
-                    let dense = self.lower_faq_dense(
-                        idx_names,
-                        &lo,
-                        &shape,
-                        body,
-                        contract_names,
-                        contract_dims,
-                        reduce,
-                        filter,
-                    );
-                    let Err(e) = dense else {
-                        return dense;
-                    };
-                    self.sub_rollback(txn);
-                    return match scatter(self, false) {
-                        Ok(Scatter::Lowered(v)) => Ok(v),
-                        _ => Err(e),
-                    };
-                }
-                Ok(Scatter::Declined) | Err(_) => {}
+            let txn = self.sub_txn();
+            match self.lower_equality_scatter(
+                idx_names,
+                &lo,
+                &shape,
+                body,
+                contract_names,
+                contract_dims,
+                reduce,
+                filter,
+            ) {
+                Ok(Some(v)) => return Ok(v),
+                Ok(None) => {}
+                Err(_) => self.sub_rollback(txn),
             }
         }
-        self.lower_faq_dense(
-            idx_names,
-            &lo,
-            &shape,
-            body,
-            contract_names,
-            contract_dims,
-            reduce,
-            filter,
-        )
-    }
-
-    /// [`Self::lower_faq`]'s dense lowering: the body over the output box,
-    /// or over that box extended by the contracted axes and folded away.
-    #[allow(clippy::too_many_arguments)]
-    fn lower_faq_dense(
-        &mut self,
-        idx_names: &[String],
-        lo: &DimI,
-        shape: &DimU,
-        body: &Expr,
-        contract_names: &[String],
-        contract_dims: &[ContractDim],
-        reduce: ReduceKind,
-        filter: Option<&Expr>,
-    ) -> LResult<LV> {
-        let (lo, shape) = (lo.clone(), shape.clone());
         self.push_scope();
         let v = if contract_names.is_empty() {
             let bx = LBox {
