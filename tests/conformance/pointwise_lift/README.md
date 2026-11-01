@@ -32,6 +32,7 @@ The other corpus cases with a lift (`advection_reaction_loaded_ic_bc`,
 |---|---|---|---|
 | `lift_onto_undeclared_grid.esm` | `[4]` | No variable declares the grid's shape; `cell` is the only index set of size 4. | `shape: ["cell"]` |
 | `lift_same_size_index_sets.esm` | `[3, 3]` | `y` and `x` both have size 3, and `y` is declared first. `Wind.u` is declared on `[x, y]` and gathered as `index(u, i, j)`, which names each dimension. | `shape: ["x", "y"]` |
+| `lift_placeholder_ic.esm` | `[4]` | The operator writes a field initial condition on its placeholder, `ic(_var) ~ Dep.c0 * 2`. It expands once per state of `Chem`, so `field_ics` holds `Chem.c` and `Chem.n`, never `_var`. | `shape: ["cell"]` for both states |
 | `lift_synthetic_index_sets.esm` | `[3, 5]` | Two index sets of size 3 (`a`, `b`) and no shaped operand; no index set of size 5. | `shape: ["_liftdim1_3", "_liftdim2_5"]`, and `index_sets` gains both |
 
 One fixture is a corpus **refusal** (the corpus's `refusals` array, error

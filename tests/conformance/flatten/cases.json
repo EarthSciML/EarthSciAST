@@ -6679,6 +6679,165 @@
       }
     },
     {
+      "id": "lift_placeholder_ic",
+      "tier": "pointwise_lift",
+      "fixture": "conformance/pointwise_lift/fixtures/lift_placeholder_ic.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "Chem.c",
+          "role": "state",
+          "units": "mol/mol",
+          "default": 1.0,
+          "shape": [
+            "cell"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Chem"
+        },
+        {
+          "name": "Chem.n",
+          "role": "state",
+          "units": "mol/mol",
+          "default": 2.0,
+          "shape": [
+            "cell"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Chem"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "Chem.k",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.1,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Chem"
+        },
+        {
+          "name": "Dep.kd",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.0002,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Dep"
+        },
+        {
+          "name": "Dep.c0",
+          "role": "parameter",
+          "units": "mol/mol",
+          "default": 0.5,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Dep"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 2,
+      "equations": [
+        {
+          "lhs": "sum[i] (D(Chem.c[i])/Dt) where {i in cell}",
+          "rhs": "sum[i] ((-Chem.k) * Chem.c[i] + (makearray([1:4] = sum[i] ((-Dep.kd) * Chem.c[i]) where {i in 1:4}))[i]) where {i in cell}",
+          "source_system": "Chem",
+          "contributions": [
+            {
+              "rhs": "(-Chem.k) * Chem.c[i]",
+              "origins": [
+                {
+                  "component": "Chem"
+                }
+              ]
+            },
+            {
+              "rhs": "(makearray([1:4] = sum[i] ((-Dep.kd) * Chem.c[i]) where {i in 1:4}))[i]",
+              "origins": [
+                {
+                  "component": "Dep"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "sum[i] (D(Chem.n[i])/Dt) where {i in cell}",
+          "rhs": "sum[i] ((-Chem.k) * Chem.n[i] + (makearray([1:4] = sum[i] ((-Dep.kd) * Chem.n[i]) where {i in 1:4}))[i]) where {i in cell}",
+          "source_system": "Chem",
+          "contributions": [
+            {
+              "rhs": "(-Chem.k) * Chem.n[i]",
+              "origins": [
+                {
+                  "component": "Chem"
+                }
+              ]
+            },
+            {
+              "rhs": "(makearray([1:4] = sum[i] ((-Dep.kd) * Chem.n[i]) where {i in 1:4}))[i]",
+              "origins": [
+                {
+                  "component": "Dep"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "Chem",
+          "Dep"
+        ],
+        "coupling_rules": [
+          "operator_compose(Chem + Dep)"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [
+        "cell",
+        "lev"
+      ],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [
+        {
+          "state": "Chem.c",
+          "expr": "Dep.c0 * 2"
+        },
+        {
+          "state": "Chem.n",
+          "expr": "Dep.c0 * 2"
+        }
+      ],
+      "loader_fields": [],
+      "lifted_shapes": {
+        "Chem.c": [
+          4
+        ],
+        "Chem.n": [
+          4
+        ]
+      }
+    },
+    {
       "id": "term_provenance_systems_order_ab",
       "tier": "term_provenance",
       "fixture": "conformance/term_provenance/fixtures/systems_order_ab.esm",

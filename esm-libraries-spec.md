@@ -1112,7 +1112,7 @@ order; the application sequence and the reporting sequence are separate.
 3. **Match equations.** For each equation in system A, find a matching equation in system B by comparing dependent variables:
    - **Direct match:** Both equations have `D(x, t)` on the LHS with the same variable name `x`.
    - **Translation match:** The translate map maps A's variable to B's variable.
-   - **Placeholder expansion:** If system B's equation uses the `_var` placeholder (e.g., `D(_var, t) = ...`), it matches _every_ state variable in system A. The placeholder equation is cloned once per matched variable, with `_var` substituted for the actual variable name.
+   - **Placeholder expansion:** If system B's equation uses the `_var` placeholder (e.g., `D(_var, t) = ...`), it matches _every_ state variable in system A. The placeholder equation is cloned once per matched variable, with `_var` substituted for the actual variable name. An initial-condition template `ic(_var) ~ e` in B is a placeholder equation too, and MUST be cloned the same way: one `ic(x) ~ e` per state `x` of A, `_var` in `e` substituted as well. These clones are classified out into `field_ics` at step 4, so `field_ics` holds one entry per state of A, keyed by that state, and never an entry for `_var`. A clone of a lifted state reaches `field_ics` as written; the pointwise lift does not rewrite it. Pinned by `tests/conformance/pointwise_lift/fixtures/lift_placeholder_ic.esm`.
    - **Bare-name fallback:** B's dependent variable `B.x` matches A's equation for any `A.x` with
      the same LOCAL name. This is a name-based translation, so a hit renames like one (step 4's
      "the merged-away name does not survive").

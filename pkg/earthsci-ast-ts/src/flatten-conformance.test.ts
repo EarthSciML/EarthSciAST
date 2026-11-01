@@ -176,10 +176,11 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     // also has a later bare algebraic equation), plus
     // `index_symbol_shadows_variable` and `loop_binder_shadowing_edges` — loop
     // symbols spelled like the model's own parameters, which must stay bare
-    // (esm-spec §4.3), plus the three `pointwise_lift` cases — the index sets
-    // a lifted state is given, by size, by a shaped operand, and synthesized
-    // (esm-libraries-spec §4.7.5).
-    expect(corpus.cases.length).toBe(48)
+    // (esm-spec §4.3), plus the four `pointwise_lift` cases — the index sets
+    // a lifted state is given, by size, by a shaped operand, and synthesized,
+    // and an operator `ic(_var)` that `field_ics` records once per lifted
+    // state (esm-libraries-spec §4.7.1 step 3, §4.7.5).
+    expect(corpus.cases.length).toBe(49)
     // 5 = template_import_lib, couple_multiplicative_no_tendency, the
     // nonterminating rewrite, `coupling_resolution_edge_cases`, whose EDGE
     // CASE 10 maps onto a target the document declares nowhere, and

@@ -356,7 +356,9 @@ CASES: list[tuple[str, str, str]] = [
     # dimension gets its index set: the only declared set of the extent's size
     # (a grid no variable declares), a shaped operand gathered at the lift's
     # loops (two sets of one size), and the registered `_liftdim<d>_<extent>`
-    # when nothing declared decides. See tests/conformance/pointwise_lift.
+    # when nothing declared decides; and an operator's `ic(_var)` template,
+    # which `field_ics` records once per lifted state. See
+    # tests/conformance/pointwise_lift.
     *[
         (
             "pointwise_lift",
@@ -367,6 +369,7 @@ CASES: list[tuple[str, str, str]] = [
             "lift_onto_undeclared_grid",
             "lift_same_size_index_sets",
             "lift_synthetic_index_sets",
+            "lift_placeholder_ic",
         )
     ],
     # --- per-term provenance (esm-libraries-spec §4.7.5, issue #539) ---------
