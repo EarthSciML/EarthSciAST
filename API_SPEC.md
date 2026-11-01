@@ -845,6 +845,18 @@ rebuild the problem on every lookup. The names it reports are
 `observed_field_names`, and each is resolved through `observed_field`, so the
 resolution rule below is the one a JS host gets.
 
+#### `observed_field` on a data-fed parameter (Rust)
+
+A DATA-FED parameter (`esm-spec.md` §5.4, `update: {kind: "data"}`) that the
+build pipeline ingested is as observable as an observed: `observed_field`
+returns the values its provider supplied, and an observed of the same spelling
+wins. Ingested tables can be hundreds of MB, so the Problem keeps one only when
+the caller names it in `ProblemOptions::retain_data_fields` (the right-hand
+side's own copy is moved into the forcing buffer, not kept for read-back); for
+an ingested parameter that was not named, `observed_field` fails with an error
+that names the option. Such a parameter is not listed by `observed_field_names`.
+Julia and Python do not answer for one yet.
+
 #### Reading an observed of a document that DOES integrate
 
 `observed_field` reports what the BUILD materialized, which is a constant. An

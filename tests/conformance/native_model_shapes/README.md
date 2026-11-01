@@ -40,12 +40,14 @@ The cases where a guarded subscript IS taken, which must fail with
 ## The build-time path: `ingest/`
 
 A document that ingests data has its rules evaluated by the build pipeline, a
-route of its own in Rust. `ingest/` holds the four shapes that only show up
+route of its own in Rust. `ingest/` holds the five shapes that only show up
 there, each reading a committed parquet table through its own `data_sources`:
 a join of an ingested column against a computed key (every moves fixture), a
 recurrence in an ingesting document (moves F24b), a gather through an ingested
-index column, and an overlap-gated binning over ingested cell envelopes (isrm).
-`ingest/manifest.json` lists them. The Rust test
+index column, an overlap-gated binning over ingested cell envelopes (isrm), and
+an inline assertion naming the data-fed parameter itself beside a state that
+integrates it (moves F43: the value asserted is the value the right-hand side
+reads). `ingest/manifest.json` lists them. The Rust test
 `pkg/earthsci-ast-rs/tests/native_model_shapes_conformance.rs` runs them under
 both compilers, and also runs every fixture of this tier with the build pipeline
 switched on; both must pass every assertion and native must equal the
