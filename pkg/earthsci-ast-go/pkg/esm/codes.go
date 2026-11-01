@@ -440,6 +440,14 @@ const (
 	// cross-binding contract is the STRING (pinned in
 	// tests/conformance/url_substitutions/manifest.json).
 	codeURLSubstitutionUnknownName = "url_substitution_unknown_name"
+
+	// codeDataSourceMergeConflict: two mounts contribute the same
+	// `data_sources` name to one mounting document with entries that are not
+	// identical after `url_substitutions` and §8.2.1 resolution, and the
+	// mounting document does not declare that name itself (esm-spec §4.7 "A
+	// mounted document's data sources"). Unexported for the same reason as the
+	// two codes above.
+	codeDataSourceMergeConflict = "data_source_merge_conflict"
 )
 
 // --- Diagnostic codes: §9.5 sampled function tables — the §9.5.5 table

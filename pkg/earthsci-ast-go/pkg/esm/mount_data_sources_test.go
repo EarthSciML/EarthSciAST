@@ -164,3 +164,47 @@ func TestRemoveSchemedURLPathDotSegments(t *testing.T) {
 		}
 	}
 }
+
+// esm-spec §4.7: two mounts' entries are identical when structurally equal
+// JSON — members regardless of order, numbers by value.
+func TestJSONValuesEqualIsStructural(t *testing.T) {
+	a := map[string]any{"kind": "static", "extent": []any{json.Number("1"), 2.5}, "m": map[string]any{"x": "y", "z": true}}
+	b := map[string]any{"m": map[string]any{"z": true, "x": "y"}, "extent": []any{1.0, json.Number("2.5")}, "kind": "static"}
+	if !jsonValuesEqual(a, b) {
+		t.Fatal("reordered members and int/float spellings of one value must be equal")
+	}
+	b["kind"] = "temporal"
+	if jsonValuesEqual(a, b) {
+		t.Fatal("a differing field must be unequal")
+	}
+	if jsonValuesEqual([]any{"a"}, []any{"a", "b"}) || jsonValuesEqual(map[string]any{"a": nil}, map[string]any{}) {
+		t.Fatal("length and membership must be compared")
+	}
+}
+
+// The mounting document's own name is never a conflict; two mounts differing
+// on a name it does not declare are, naming both edges.
+func TestMountedSourcesConflictRules(t *testing.T) {
+	m := newMountedSources(map[string]any{"mine": map[string]any{}})
+	if err := m.add("mine", map[string]any{"k": 1.0}, "e1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.add("mine", map[string]any{"k": 2.0}, "e2"); err != nil {
+		t.Fatalf("own name must override, not conflict: %v", err)
+	}
+	if err := m.add("s", map[string]any{"k": 1.0}, "e1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.add("s", map[string]any{"k": json.Number("1")}, "e2"); err != nil {
+		t.Fatalf("identical entries merge once: %v", err)
+	}
+	err := m.add("s", map[string]any{"k": 3.0}, "e3")
+	if err == nil {
+		t.Fatal("unequal entries must conflict")
+	}
+	for _, want := range []string{"[" + codeDataSourceMergeConflict + "]", "'s'", "e1", "e3"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("message must contain %q: %v", want, err)
+		}
+	}
+}

@@ -25,10 +25,114 @@ func resolveRawDataSourceURLs(doc map[string]any, baseDir string) error {
 	return nil
 }
 
+// mountedSources collects the `data_sources` a document's mounts contribute
+// to it (esm-spec §4.7 "A mounted document's data sources"), each entry
+// already substituted and located at the edge that carried it up.
+//
+// The mounting document's OWN entry wins over anything it mounts, so a name it
+// declares is never collected. Two mounts contributing the same name must
+// contribute IDENTICAL entries (structurally equal JSON, every field, numbers
+// by value): an identical one merges once (a diamond is legal), an unequal one
+// is `data_source_merge_conflict`, naming the source and both edges.
+type mountedSources struct {
+	own     map[string]bool
+	entries map[string]any
+	edges   map[string]string
+}
+
+// newMountedSources starts a collector for a mounting document whose own
+// `data_sources` declare the names in own (a raw `data_sources` object, a typed
+// map, or nil).
+func newMountedSources(own any) *mountedSources {
+	m := &mountedSources{own: map[string]bool{}, entries: map[string]any{}, edges: map[string]string{}}
+	switch o := own.(type) {
+	case map[string]any:
+		for k := range o {
+			m.own[k] = true
+		}
+	case map[string]DataSource:
+		for k := range o {
+			m.own[k] = true
+		}
+	}
+	return m
+}
+
+// add contributes one mount's entry, carried up through edge.
+func (m *mountedSources) add(name string, entry any, edge string) error {
+	if m == nil || m.own[name] {
+		return nil
+	}
+	prev, seen := m.entries[name]
+	if !seen {
+		m.entries[name] = entry
+		m.edges[name] = edge
+		return nil
+	}
+	if jsonValuesEqual(prev, entry) {
+		return nil
+	}
+	return newETErr(codeDataSourceMergeConflict, fmt.Sprintf(
+		"data source '%s' is contributed by two mounts with different entries — %s and %s — after url_substitutions and location resolution (esm-spec §4.7 \"A mounted document's data sources\"). Give them different names, bind them alike, or declare '%s' in the mounting document to override both",
+		name, m.edges[name], edge, name))
+}
+
+// jsonValuesEqual is structural JSON equality: objects member by member
+// regardless of order, arrays element by element, numbers by value (an
+// integer token equals the same value written as a float).
+func jsonValuesEqual(a, b any) bool {
+	if x, ok := jsonNumberValue(a); ok {
+		y, ok := jsonNumberValue(b)
+		return ok && x == y
+	}
+	switch x := a.(type) {
+	case map[string]any:
+		y, ok := b.(map[string]any)
+		if !ok || len(x) != len(y) {
+			return false
+		}
+		for k, xv := range x {
+			yv, ok := y[k]
+			if !ok || !jsonValuesEqual(xv, yv) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		y, ok := b.([]any)
+		if !ok || len(x) != len(y) {
+			return false
+		}
+		for i := range x {
+			if !jsonValuesEqual(x[i], y[i]) {
+				return false
+			}
+		}
+		return true
+	default:
+		return a == b
+	}
+}
+
+func jsonNumberValue(v any) (float64, bool) {
+	switch n := v.(type) {
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	}
+	return 0, false
+}
+
 // mergeMountedDataSources merges what a document's mounts contributed into its
 // raw `data_sources`; the document's own entry wins a name clash.
-func mergeMountedDataSources(view map[string]any, mounted map[string]any) {
-	if len(mounted) == 0 {
+func mergeMountedDataSources(view map[string]any, mounted *mountedSources) {
+	if mounted == nil || len(mounted.entries) == 0 {
 		return
 	}
 	own, ok := view["data_sources"].(map[string]any)
@@ -36,7 +140,7 @@ func mergeMountedDataSources(view map[string]any, mounted map[string]any) {
 		own = map[string]any{}
 		view["data_sources"] = own
 	}
-	for k, v := range mounted {
+	for k, v := range mounted.entries {
 		if _, taken := own[k]; !taken {
 			own[k] = v
 		}
@@ -45,18 +149,18 @@ func mergeMountedDataSources(view map[string]any, mounted map[string]any) {
 
 // mergeMountedDataSourcesTyped is mergeMountedDataSources onto a typed root
 // document (the post-decode resolver path a remote `{ref}` takes).
-func mergeMountedDataSourcesTyped(file *ESMFile, mounted map[string]any) error {
-	if len(mounted) == 0 {
+func mergeMountedDataSourcesTyped(file *ESMFile, mounted *mountedSources) error {
+	if mounted == nil || len(mounted.entries) == 0 {
 		return nil
 	}
 	if file.DataSources == nil {
 		file.DataSources = map[string]DataSource{}
 	}
-	for _, k := range sortedKeys(mounted) {
+	for _, k := range sortedKeys(mounted.entries) {
 		if _, taken := file.DataSources[k]; taken {
 			continue
 		}
-		b, err := json.Marshal(mounted[k])
+		b, err := json.Marshal(mounted.entries[k])
 		if err != nil {
 			return fmt.Errorf("mounted data_sources.%s: %w", k, err)
 		}

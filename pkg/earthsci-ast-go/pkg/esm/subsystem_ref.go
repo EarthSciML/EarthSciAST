@@ -66,7 +66,7 @@ func resolveSubsystemRefsWithMeta(file *ESMFile, basePath string, parentMeta, ap
 	// esm-spec §4.7 "A mounted document's data sources": what the mounts
 	// contribute collects here and merges into the root's own registry, the
 	// root's own entry winning a clash.
-	mounted := map[string]any{}
+	mounted := newMountedSources(file.DataSources)
 	if err := resolveSubsystemRefsInternal(file, basePath, visited, file.IndexSets, mounted, parentMeta, apiMeta, parentMeta, precision); err != nil {
 		return err
 	}
@@ -77,7 +77,7 @@ func resolveSubsystemRefsWithMeta(file *ESMFile, basePath string, parentMeta, ap
 // visited paths for circular reference detection and threads the importing
 // document's index_sets registry (esm-spec §4.7 index-set merge) and its closed
 // metaparameter environment (esm-spec §9.7.6 binding site 3).
-func resolveSubsystemRefsInternal(file *ESMFile, basePath string, visited map[string]bool, registry map[string]IndexSet, sources map[string]any, parentMeta, apiMeta, rootEnv map[string]int64, precision string) error {
+func resolveSubsystemRefsInternal(file *ESMFile, basePath string, visited map[string]bool, registry map[string]IndexSet, sources *mountedSources, parentMeta, apiMeta, rootEnv map[string]int64, precision string) error {
 	// Top-level `models.<k>` mount edges FIRST: the component each one splices in
 	// may itself carry `subsystems`, and the walk below is what resolves those.
 	if err := inlineTopLevelModelRefs(file, basePath, visited, registry, sources, parentMeta, apiMeta, rootEnv, precision); err != nil {
@@ -178,7 +178,7 @@ func extractTopLevelModelRefEdges(jsonStr string) map[string]map[string]any {
 // pipeline — merging a leaf's folded axis against an unfolded importer
 // declaration is the fold-before-merge collision issue #198 reported.
 func inlineTopLevelModelRefs(file *ESMFile, basePath string, visited map[string]bool,
-	registry map[string]IndexSet, sources map[string]any, parentMeta, apiMeta, rootEnv map[string]int64, precision string) error {
+	registry map[string]IndexSet, sources *mountedSources, parentMeta, apiMeta, rootEnv map[string]int64, precision string) error {
 	if len(file.topLevelModelRefs) == 0 {
 		return nil
 	}
@@ -255,7 +255,7 @@ func inlineTopLevelModelRefs(file *ESMFile, basePath string, visited map[string]
 // inliner drops them, so the leaf's assertions are never interpreted by a
 // document that may go on to couple it.
 func inlineNestedTopLevelModelRefs(view map[string]any, basePath string, visited map[string]bool,
-	registry map[string]IndexSet, sources map[string]any, parentMeta, apiMeta, forwarded, rootEnv map[string]int64, pathPrefix string, precision string) error {
+	registry map[string]IndexSet, sources *mountedSources, parentMeta, apiMeta, forwarded, rootEnv map[string]int64, pathPrefix string, precision string) error {
 	models, ok := view["models"].(map[string]any)
 	if !ok || len(models) == 0 {
 		return nil
@@ -502,7 +502,7 @@ var (
 // then the §9.6.3 rewrite fixpoint, then nested subsystem refs recursively.
 // Working on the raw view keeps full Expression fidelity (aggregate /
 // makearray fields the typed ExprNode does not model survive intact).
-func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map[string]bool, registry map[string]IndexSet, sources map[string]any, parentMeta, apiMeta, forwarded, rootEnv map[string]int64, pathPrefix string, form mountForm, precision string) (err error) {
+func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map[string]bool, registry map[string]IndexSet, sources *mountedSources, parentMeta, apiMeta, forwarded, rootEnv map[string]int64, pathPrefix string, form mountForm, precision string) (err error) {
 	if len(subsystems) == 0 {
 		return nil
 	}
@@ -700,7 +700,7 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// esm-spec §4.7 "A mounted document's data sources": the leaf's own
 		// nested mounts merge their (already located) `data_sources` into the
 		// LEAF, which then carries them up through this edge.
-		leafSources := map[string]any{}
+		leafSources := newMountedSources(view["data_sources"])
 		// esm-spec §4.7 "Bindings reach through an assembly": what this leaf's
 		// OWN mount edges receive as forwarded bindings — an edge binding naming
 		// a metaparameter the leaf does not declare but a document it mounts
@@ -761,7 +761,7 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// (the leaf's own winning a clash); the edge rewrites both in place.
 		if m, ok := value.(map[string]any); ok && m["url_substitutions"] != nil {
 			resolvedSources := map[string]any{}
-			for k, v := range leafSources {
+			for k, v := range leafSources.entries {
 				resolvedSources[k] = v
 			}
 			if own, ok := view["data_sources"].(map[string]any); ok {
@@ -879,12 +879,13 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 				return fmt.Errorf("%s ref %q: %w", form.noun, ref, err)
 			}
 			for k, v := range own {
-				leafSources[k] = v
+				leafSources.entries[k] = v
 			}
 		}
-		for _, k := range sortedKeys(leafSources) {
-			if _, taken := sources[k]; !taken && sources != nil {
-				sources[k] = leafSources[k]
+		edgeLabel := fmt.Sprintf("%s.%s (ref %q)", form.section, key, ref)
+		for _, k := range sortedKeys(leafSources.entries) {
+			if err := sources.add(k, leafSources.entries[k], edgeLabel); err != nil {
+				return err
 			}
 		}
 
@@ -1119,7 +1120,7 @@ func inlineRootRefsRaw(view map[string]any, basePath string, apiMeta map[string]
 	// esm-spec §4.7 "A mounted document's data sources": every mount's
 	// (already located) `data_sources` collect here and merge into the root's
 	// raw view below, the root's own entry winning a clash.
-	mounted := map[string]any{}
+	mounted := newMountedSources(view["data_sources"])
 	// `parentMeta` is the root's own closed environment, captured by the caller
 	// before the machinery consumes the `metaparameters` block; `rootEnv` is the
 	// same thing, and stays fixed as the walk narrows into nested scopes.
