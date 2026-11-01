@@ -198,6 +198,9 @@ function _scatter_table(
         acc *= lens[d]
     end
     npin = acc
+    # A point's pinned cell is held as an `Int32` (`_scatter_box!`); past that
+    # many pinned cells the table is not built and the next tier takes over.
+    npin - 1 <= typemax(Int32) || return nothing
     nfree = prod(Int[lens[d] for d in free]; init = 1)
     deps = _contracted_parent_deps(contract_names, contract_ranges)
     shared = _scatter_box_shared(contract_ranges, contract_const, idx_names)
@@ -881,6 +884,10 @@ function _try_compile_scatter(
             contract_refs, contract_names, contract_ranges, contract_const, keys, pinpos,
             idx_names, los, stps, lens, rhs_oplus, rhs_zerobar, const_registry
         )
+        if fold === nothing
+            _note_decline!(:array_contraction, :scatter_too_many_pinned_cells)
+            return nothing
+        end
         outs = _ac_claim_all_outs!(covered, lhs_body, idx_names, range_iters, var_map)
         gen = _try_codegen_array_contraction(
             out_refs, los, stps, lens, outs, node;
