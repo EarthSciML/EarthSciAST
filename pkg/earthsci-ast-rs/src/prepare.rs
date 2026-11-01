@@ -489,6 +489,13 @@ pub struct PreparedBuild {
     /// document: several models and none selected, built as one
     /// dot-namespaced system whose names (`Model.var`) are already qualified.
     pub model_name: Option<String>,
+    /// The whole-document build's flattened system, when the typed document
+    /// it was flattened from is exactly what loading [`Self::doc`] with no
+    /// loader-API metaparameters gives — the load the Problem makes next — so
+    /// the compile path may use it in place of flattening that document
+    /// again. `None` for a one-model build, and when the build bound
+    /// metaparameters at load.
+    pub(crate) flattened: Option<crate::flatten::FlattenedSystem>,
     /// Observed name → build-time field (dependency-complete).
     pub fields: HashMap<String, ArrayD<f64>>,
     /// Value-invention producer id (`from_faq`) → sorted-distinct member ids.
@@ -721,8 +728,102 @@ fn observed_defs(model: &Model) -> HashMap<String, Expr> {
         .collect()
 }
 
-/// Every declared 0-D parameter's default (overridden by `overrides`, exact or
-/// bare key) — the scalar evaluation scope, sorted by name.
+/// How the build spells the names of the model it builds, and so how a key
+/// from outside the document reaches one of them.
+///
+/// Provider keys, gate targets, supplied arrays and scalar overrides all come
+/// spelled `"<ModelPath>.<var>"` or bare, while the built model spells its
+/// names one of two ways. [`Spelling::resolve`] is the one rule that maps a
+/// key onto them.
+#[derive(Clone, Debug)]
+enum Spelling {
+    /// One model built alone, the selected or the only one: its names are
+    /// model-local (`x`, a mounted `Sub.x`).
+    ModelLocal(String),
+    /// The whole document, flattened: every name is `Model.var`.
+    Qualified,
+}
+
+/// How a key names a declared variable, strongest first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum KeyMatch {
+    /// The key is the declared name.
+    Exact,
+    /// The key is the declared name under the built model's own prefix
+    /// (`Model.x` for `x`, `Model.Sub.x` for `Sub.x`).
+    ModelPrefixed,
+    /// The key is bare and is the declared name's last segment.
+    BareTail,
+}
+
+impl Spelling {
+    /// The names among `declared` that `key` spells, each with how.
+    ///
+    /// Model-local, a bare key reaches every name it is the last segment of,
+    /// the model's own scope. In the whole-document build a bare key that is
+    /// the last segment of several names of different models is refused,
+    /// naming them, rather than applied to all of them: the caller has to say
+    /// which one it means.
+    fn resolve<'n>(
+        &self,
+        key: &str,
+        declared: impl IntoIterator<Item = &'n String>,
+    ) -> Result<Vec<(&'n str, KeyMatch)>, PrepareError> {
+        let prefix = match self {
+            Spelling::ModelLocal(m) => Some(format!("{m}.")),
+            Spelling::Qualified => None,
+        };
+        let local = prefix.as_deref().and_then(|p| key.strip_prefix(p));
+        let bare = !key.contains('.');
+        let mut out: Vec<(&'n str, KeyMatch)> = declared
+            .into_iter()
+            .filter_map(|n| {
+                if n == key {
+                    Some((n.as_str(), KeyMatch::Exact))
+                } else if local == Some(n.as_str()) {
+                    Some((n.as_str(), KeyMatch::ModelPrefixed))
+                } else if bare && n.rsplit('.').next() == Some(key) {
+                    Some((n.as_str(), KeyMatch::BareTail))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        // Strongest first, then by name.
+        out.sort_by(|a, b| (a.1, a.0).cmp(&(b.1, b.0)));
+        if matches!(self, Spelling::Qualified)
+            && out.len() > 1
+            && out.iter().all(|(_, m)| *m == KeyMatch::BareTail)
+        {
+            let names: Vec<&str> = out.iter().map(|(n, _)| *n).collect();
+            return Err(err(format!(
+                "'{key}' is a bare name and this document builds several models whose \
+                 variables it could mean; qualify it as one of: {}",
+                names.join(", ")
+            )));
+        }
+        Ok(out)
+    }
+
+    /// The one name among `declared` that `key` spells most strongly, or
+    /// `None` when it spells none, or several equally.
+    fn resolve_one<'n>(
+        &self,
+        key: &str,
+        declared: impl IntoIterator<Item = &'n String>,
+    ) -> Result<Option<&'n str>, PrepareError> {
+        let found = self.resolve(key, declared)?;
+        let Some(&(first, best)) = found.first() else {
+            return Ok(None);
+        };
+        let unique = found.iter().filter(|(_, m)| *m == best).count() == 1;
+        Ok(unique.then_some(first))
+    }
+}
+
+/// Every declared 0-D parameter's default (overridden by `overrides`, each key
+/// read through [`Spelling::resolve`]) — the scalar evaluation scope, sorted
+/// by name.
 ///
 /// **Selection and value resolution must agree.** They did not: the filter
 /// admitted every parameter with `default.is_some()`, while the value read
@@ -743,9 +844,9 @@ fn observed_defs(model: &Model) -> HashMap<String, Expr> {
 /// which must broadcast rather than be dropped — is issue #219.)
 fn scalar_params(
     model: &Model,
-    model_name: Option<&str>,
+    spelling: &Spelling,
     overrides: &HashMap<String, f64>,
-) -> (Vec<f64>, Vec<String>) {
+) -> Result<(Vec<f64>, Vec<String>), PrepareError> {
     let mut names: Vec<String> = model
         .variables
         .iter()
@@ -757,25 +858,31 @@ fn scalar_params(
         .map(|(k, _)| k.clone())
         .collect();
     names.sort();
+    // Each override reaches the names its key spells; a name reached by
+    // several keys takes the strongest one's value (the exact name over the
+    // model-prefixed one over the bare last segment).
+    let mut chosen: HashMap<&str, (KeyMatch, f64)> = HashMap::new();
+    for (key, &value) in overrides {
+        for (n, how) in spelling.resolve(key, &names)? {
+            match chosen.get(n) {
+                Some((held, _)) if *held <= how => {}
+                _ => {
+                    chosen.insert(n, (how, value));
+                }
+            }
+        }
+    }
     let vals = names
         .iter()
         .map(|n| {
-            // The caller may spell the key model-local, model-qualified (the
-            // spelling an inline test's `parameter_overrides` reach the build
-            // in), or by its bare tail.
-            overrides
-                .get(n)
-                .or_else(|| model_name.and_then(|m| overrides.get(&format!("{m}.{n}"))))
-                .or_else(|| overrides.get(n.rsplit('.').next().unwrap_or(n)))
-                .copied()
-                .unwrap_or_else(|| {
-                    model.variables[n]
-                        .default_scalar()
-                        .expect("selected on default_scalar().is_some()")
-                })
+            chosen.get(n.as_str()).map(|&(_, v)| v).unwrap_or_else(|| {
+                model.variables[n]
+                    .default_scalar()
+                    .expect("selected on default_scalar().is_some()")
+            })
         })
         .collect();
-    (vals, names)
+    Ok((vals, names))
 }
 
 // --------------------------------------------------------------------------- //
@@ -1104,16 +1211,6 @@ struct GatedFetchPlan {
     n_requests: usize,
 }
 
-/// The model variable a gated provider's slab is published under (see
-/// [`BuildState::fetch_gated_providers`]).
-fn gated_target(key: &str, gate: &ProviderGate, pd_coupling: &[(String, String)]) -> String {
-    pd_coupling
-        .iter()
-        .find(|(frm, to)| frm == key || to == key)
-        .map(|(_, to)| to.rsplit('.').next().unwrap_or(to).to_string())
-        .unwrap_or_else(|| gate.applies_to[0].clone())
-}
-
 /// Resolve a gate's per-axis `selection` from the materialised value-invention
 /// members (0-based native indices for the reader).
 fn gated_fetch_plan(
@@ -1405,7 +1502,7 @@ pub(crate) fn run_prepare(
     let mut st = BuildState::load_document(rw.rewritten.as_ref(), opts, metaparameters)?;
     let gated = st.inject_providers(const_arrays, providers, discovered, &rw.pd_gates)?;
     st.alias_pushdown_names(&rw.pd_coupling);
-    st.bind_inline_parameters(&gated);
+    st.bind_inline_parameters(&gated, &rw.pd_coupling)?;
     st.seal_const_registry();
     st.check_free_names()?;
     st.collect_observed_defs()?;
@@ -1584,7 +1681,7 @@ fn apply_pushdown_rewrite<'a>(
     provider_keys: &[String],
 ) -> Result<RewriteOutcome<'a>, PrepareError> {
     let rewritten = if opts.pushdown_rewrite {
-        desugar_pushdown(doc, opts.model_name.as_deref()).map_err(|e| err(e.0))?
+        desugar_pushdown_for_build(doc, opts.model_name.as_deref())?
     } else {
         std::borrow::Cow::Borrowed(doc)
     };
@@ -1611,6 +1708,47 @@ fn apply_pushdown_rewrite<'a>(
         pd_gates,
         pd_coupling,
     })
+}
+
+/// The pushdown rewrite of the model(s) this build builds.
+///
+/// One model, selected or the only one, is rewritten as [`desugar_pushdown`]
+/// rewrites it. A document of several models with none selected is built
+/// whole, so every model is offered to the rewrite: the one model whose
+/// pattern matches is rewritten in the document. The rewrite records ONE
+/// gate per document (`metadata.x_esd.pushdown`), so a document in which it
+/// matches several models is refused, naming them, rather than rewritten in
+/// one and silently left unrewritten in the rest.
+fn desugar_pushdown_for_build<'a>(
+    doc: &'a JsonValue,
+    model_name: Option<&str>,
+) -> Result<std::borrow::Cow<'a, JsonValue>, PrepareError> {
+    let models: Vec<&String> = match (model_name, doc.get("models").and_then(|m| m.as_object())) {
+        (None, Some(models)) if models.len() > 1 => {
+            let mut names: Vec<&String> = models.keys().collect();
+            names.sort();
+            names
+        }
+        _ => return desugar_pushdown(doc, model_name).map_err(|e| err(e.0)),
+    };
+    let mut fired: Vec<(&str, JsonValue)> = Vec::new();
+    for m in models {
+        if let std::borrow::Cow::Owned(d) = desugar_pushdown(doc, Some(m)).map_err(|e| err(e.0))? {
+            fired.push((m.as_str(), d));
+        }
+    }
+    match fired.len() {
+        0 => Ok(std::borrow::Cow::Borrowed(doc)),
+        1 => Ok(std::borrow::Cow::Owned(fired.pop().expect("one").1)),
+        _ => {
+            let names: Vec<&str> = fired.iter().map(|(m, _)| *m).collect();
+            Err(err(format!(
+                "the projection-pushdown rewrite matches models {}; a document records \
+                 one pushdown gate, so build each of them on its own (pass model_name)",
+                names.join(", ")
+            )))
+        }
+    }
 }
 
 /// A discovered extent and a record-derived gate are mutually exclusive: a
@@ -1642,8 +1780,11 @@ struct BuildState<'o> {
     /// The typed model under build: the selected (or only) model, or the
     /// whole document's flattened system.
     model: Model,
-    /// `None` for the whole-document build (see [`PreparedBuild::model_name`]).
-    model_name: Option<String>,
+    /// How the built model's names are spelled: model-local for one model,
+    /// `Model.var` for the whole document (see [`PreparedBuild::model_name`]).
+    spelling: Spelling,
+    /// See [`PreparedBuild::flattened`].
+    flattened: Option<crate::flatten::FlattenedSystem>,
     index_sets: HashMap<String, IndexSet>,
     /// The scalar evaluation scope (declared 0-D parameter defaults, overridden).
     param_vals: Vec<f64>,
@@ -1720,6 +1861,7 @@ impl<'o> BuildState<'o> {
                 .filter(|(k, _)| declared.is_some_and(|d| d.contains_key(k)))
                 .collect()
         };
+        let unbound_load = metaparameters.is_empty();
         let load_opts = LoadOptions {
             base_path: opts.base_path.clone(),
             metaparameters,
@@ -1741,23 +1883,29 @@ impl<'o> BuildState<'o> {
             .models
             .as_ref()
             .ok_or_else(|| err("document has no models"))?;
-        let model_name = match &opts.model_name {
-            Some(n) => Some(n.clone()),
-            None if models.len() == 1 => models.keys().next().cloned(),
-            None => None,
+        let spelling = match &opts.model_name {
+            Some(n) => Spelling::ModelLocal(n.clone()),
+            None if models.len() == 1 => {
+                Spelling::ModelLocal(models.keys().next().cloned().unwrap_or_default())
+            }
+            None => Spelling::Qualified,
         };
-        let model = match &model_name {
-            Some(n) => Self::authored_model(models, n, &mut index_sets)?,
-            None => Self::whole_document(&file, &mut index_sets)?,
+        let (model, flattened) = match &spelling {
+            Spelling::ModelLocal(n) => (Self::authored_model(models, n, &mut index_sets)?, None),
+            Spelling::Qualified => {
+                let flat = Self::whole_document(&file, &mut index_sets)?;
+                let model = crate::simulate_array::model_from_flattened(&flat);
+                (model, unbound_load.then_some(flat))
+            }
         };
 
-        let (param_vals, param_names) =
-            scalar_params(&model, model_name.as_deref(), &opts.parameters);
+        let (param_vals, param_names) = scalar_params(&model, &spelling, &opts.parameters)?;
 
         Ok(BuildState {
             opts,
             model,
-            model_name,
+            spelling,
+            flattened,
             index_sets,
             param_vals,
             param_names,
@@ -1824,7 +1972,7 @@ impl<'o> BuildState<'o> {
     fn whole_document(
         file: &crate::EsmFile,
         index_sets: &mut HashMap<String, IndexSet>,
-    ) -> Result<Model, PrepareError> {
+    ) -> Result<crate::flatten::FlattenedSystem, PrepareError> {
         let flat = crate::flatten::flatten(file)
             .map_err(|e| err(format!("flatten the document's models: {e}")))?;
         // The flattened registry carries every mounted subsystem's index sets
@@ -1832,7 +1980,7 @@ impl<'o> BuildState<'o> {
         for (k, v) in &flat.index_sets {
             index_sets.entry(k.clone()).or_insert_with(|| v.clone());
         }
-        Ok(crate::simulate_array::model_from_flattened(&flat))
+        Ok(flat)
     }
 
     /// Record one evaluation. Under [`PrepareOptions::refuse_per_cell`] a
@@ -1863,13 +2011,12 @@ impl<'o> BuildState<'o> {
         mut discovered: HashMap<String, ArrayD<f64>>,
         pd_gates: &HashMap<String, ProviderGate>,
     ) -> Result<Vec<GatedProvider>, PrepareError> {
-        self.arrays = const_arrays
-            .into_iter()
-            .map(|(k, a)| {
-                let rounded = round_external(&k, a);
-                (k, rounded)
-            })
-            .collect();
+        self.arrays = ArrMap::default();
+        for (k, a) in const_arrays {
+            let name = self.array_name(&k)?;
+            let rounded = round_external(&name, a);
+            self.arrays.insert(name, rounded);
+        }
         let mut gated: Vec<GatedProvider> = Vec::new();
         let n_providers = providers.len();
         for (i, (k, mut prov)) in providers.into_iter().enumerate() {
@@ -1882,7 +2029,8 @@ impl<'o> BuildState<'o> {
             if let Some(a) = discovered.remove(&k) {
                 // Already materialized by the extent-discovery pre-pass; never
                 // sampled twice.
-                self.arrays.insert(k.clone(), round_external(&k, a));
+                let name = self.array_name(&k)?;
+                self.arrays.insert(name.clone(), round_external(&name, a));
             } else if let Some(gate) = pd_gates.get(&k) {
                 // Record-derived gate (the rewrite's own metadata.x_esd.pushdown):
                 // defer — value-invention must derive the gating set's members
@@ -1904,7 +2052,8 @@ impl<'o> BuildState<'o> {
                     "  [prepare] const provider {k} -> {:?}",
                     a.shape()
                 ));
-                self.arrays.insert(k.clone(), round_external(&k, a));
+                let name = self.array_name(&k)?;
+                self.arrays.insert(name.clone(), round_external(&name, a));
             }
         }
         self.report(
@@ -1916,6 +2065,26 @@ impl<'o> BuildState<'o> {
         self.gated_keys = gated.iter().map(|(k, _, _)| k.clone()).collect();
         self.gated_keys.sort();
         Ok(gated)
+    }
+
+    /// The name the evaluation namespace holds an array supplied under `key`
+    /// (a caller's `const_arrays` entry or a provider's sample).
+    ///
+    /// In the whole-document build that is the declared `Model.var` the key
+    /// spells ([`Spelling::resolve`]), so a bare key reaches the one variable
+    /// it names. Model-locally the array is held under its key, and
+    /// [`Self::alias_pushdown_names`] publishes the model-local spellings
+    /// beside it. A key that names no declared variable (a whole source's
+    /// provider, a coupling's source side) is held as it is.
+    fn array_name(&self, key: &str) -> Result<String, PrepareError> {
+        Ok(match &self.spelling {
+            Spelling::Qualified => self
+                .spelling
+                .resolve_one(key, self.model.variables.keys())?
+                .unwrap_or(key)
+                .to_string(),
+            Spelling::ModelLocal(_) => key.to_string(),
+        })
     }
 
     /// Provider-key name aliasing.
@@ -1930,10 +2099,23 @@ impl<'o> BuildState<'o> {
     /// only for callers who also wanted the projection desugar, which is an
     /// unrelated question.
     ///
-    /// `pd_coupling` is empty off the pushdown path, so that half is unchanged;
-    /// the generic dotted-key → unique-shallowest-bare-tail pass is the one
-    /// that now always runs, and it never overwrites an existing key.
+    /// `pd_coupling` routes an array supplied under a coupling's source side
+    /// (`"<source>.<file_variable>"`) onto the variable it feeds. The
+    /// whole-document build needs nothing more: [`Self::array_name`] already
+    /// holds every array under the `Model.var` its expressions read.
     fn alias_pushdown_names(&mut self, pd_coupling: &[(String, String)]) {
+        if matches!(self.spelling, Spelling::Qualified) {
+            for (frm, to) in pd_coupling {
+                if self.arrays.contains_key(frm) && !self.arrays.contains_key(to) {
+                    let a = self.arrays[frm].clone();
+                    self.arrays.insert(to.clone(), a);
+                }
+            }
+            return;
+        }
+        // `pd_coupling` is empty off the pushdown path, so that half is
+        // unchanged; the generic dotted-key → unique-shallowest-bare-tail pass
+        // is the one that always runs, and it never overwrites an existing key.
         inject_aliases(&mut self.arrays, pd_coupling);
         // A mounted subsystem's parameter is spelled model-locally in the
         // built model (`Leaf.p`, esm-spec §4.7) while its provider key is the
@@ -1951,19 +2133,15 @@ impl<'o> BuildState<'o> {
         // is published, and in this build that name means the mounted
         // variable, so it REPLACES a same-spelled key a top-level model `Leaf`
         // with its own `p` provider would otherwise have supplied.
-        // The whole-document build spells a mounted parameter by its full
-        // path already, which is its provider key: there is nothing to alias.
-        let Some(model_name) = &self.model_name else {
-            return;
-        };
-        let prefix = format!("{model_name}.");
         let local: Vec<(String, String)> = self
             .arrays
             .keys()
             .filter_map(|k| {
-                let l = k.strip_prefix(&prefix)?;
-                (l.contains('.') && self.model.variables.contains_key(l))
-                    .then(|| (k.clone(), l.to_string()))
+                let found = self.spelling.resolve(k, self.model.variables.keys()).ok()?;
+                let (l, _) = found
+                    .into_iter()
+                    .find(|(l, how)| *how == KeyMatch::ModelPrefixed && l.contains('.'))?;
+                Some((k.clone(), l.to_string()))
             })
             .collect();
         for (k, l) in local {
@@ -1972,23 +2150,58 @@ impl<'o> BuildState<'o> {
         }
     }
 
+    /// The model variable a gated provider's slab is published under (see
+    /// [`Self::fetch_gated_providers`]): the variable the coupling routes the
+    /// provider onto, else the one its key names, else the gate's own target,
+    /// each read through [`Spelling::resolve`]. Model-locally a key the
+    /// built model does not declare falls back to its last segment, the
+    /// spelling the gate's `applies_to` carries.
+    fn gated_target(
+        &self,
+        key: &str,
+        gate: &ProviderGate,
+        pd_coupling: &[(String, String)],
+    ) -> Result<String, PrepareError> {
+        let routed = pd_coupling
+            .iter()
+            .find(|(frm, to)| frm == key || to == key)
+            .map(|(_, to)| to.as_str());
+        let candidates = routed
+            .into_iter()
+            .chain([key])
+            .chain(gate.applies_to.first().map(String::as_str));
+        for c in candidates {
+            if let Some(n) = self.spelling.resolve_one(c, self.model.variables.keys())? {
+                return Ok(n.to_string());
+            }
+        }
+        let last = routed.unwrap_or_else(|| gate.applies_to.first().map_or(key, String::as_str));
+        Ok(last.rsplit('.').next().unwrap_or(last).to_string())
+    }
+
     /// A shaped parameter whose data the document itself supplies (an inline
     /// array, or a scalar broadcast over its grid) is build-time factor data,
     /// bound as the compile path binds it. Runs after every provider and
     /// alias is in place, because a caller's or a provider's array of the
     /// same name stays authoritative, as it does there; a gated provider's
     /// slab, fetched later, does too.
-    fn bind_inline_parameters(&mut self, gated: &[GatedProvider]) {
+    fn bind_inline_parameters(
+        &mut self,
+        gated: &[GatedProvider],
+        pd_coupling: &[(String, String)],
+    ) -> Result<(), PrepareError> {
+        let targets: HashSet<String> = gated
+            .iter()
+            .map(|(k, _, g)| self.gated_target(k, g, pd_coupling))
+            .collect::<Result<_, _>>()?;
         for (name, a) in
             crate::simulate_array::inline_parameter_arrays(&self.model, &self.index_sets)
         {
-            let gated_here = gated.iter().any(|(k, _, g)| {
-                k.rsplit('.').next() == Some(name.as_str()) || g.applies_to.contains(&name)
-            });
-            if !gated_here && !self.arrays.contains_key(&name) {
+            if !targets.contains(&name) && !self.arrays.contains_key(&name) {
                 self.arrays.insert(name, a);
             }
         }
+        Ok(())
     }
 
     /// The CONST-ARRAY registry (CONFORMANCE_SPEC §5.5.5).
@@ -2295,7 +2508,10 @@ impl<'o> BuildState<'o> {
             ));
             let arr = ArrayD::from_shape_vec(IxDyn(&[v.len()]), v)
                 .map_err(|e| err(format!("member factor '{mf}': {e}")))?;
-            self.arrays.insert(mf.clone(), arr);
+            // The registry names the factor as its model declares it; the
+            // whole-document build reads it as `Model.<factor>`.
+            let name = self.array_name(mf)?;
+            self.arrays.insert(name, arr);
         }
         self.report(PreparePhase::MemberFactors, n_mf, Some(n_mf), "")?;
         Ok(())
@@ -2367,12 +2583,13 @@ impl<'o> BuildState<'o> {
                     plan.gated_extent
                 )));
             }
-            // Surface the compact slab under the MODEL variable this provider feeds
-            // (its local tail — the authored spelling the un-flattened expressions
-            // use). From esm 1.0.0 the key IS that variable's namespaced name, so it
+            // Surface the compact slab under the MODEL variable this provider feeds,
+            // spelled as the built model spells it (`Self::gated_target`): its
+            // model-local name for one model, `Model.var` for the whole document.
+            // From esm 1.0.0 the key IS that variable's namespaced name, so it
             // answers on the routing's `to` side; the `frm` side still answers for a
-            // provider registered under the SOURCE's spelling, and the gate's tail is
-            // the last resort.
+            // provider registered under the SOURCE's spelling, and the gate's own
+            // target is the last resort.
             //
             // ONE registry entry per slab, and it must be THIS provider's own: the SR
             // slabs are hundreds of MB so aliasing would deep-copy, and — load-bearing
@@ -2385,7 +2602,7 @@ impl<'o> BuildState<'o> {
             // is written last silently wins for all of them and every layer is
             // contracted against one arbitrary sibling's slab. Both arms below match
             // a key EXACTLY; never a name-tail expansion.
-            let target = gated_target(&key, &gate, pd_coupling);
+            let target = self.gated_target(&key, &gate, pd_coupling)?;
             self.log(&format!(
                 "  [prepare] gated fetch {key} -> {target} {:?}",
                 arr.shape()
@@ -2422,8 +2639,8 @@ impl<'o> BuildState<'o> {
         }
         let mut after: HashSet<String> = gated
             .iter()
-            .map(|(key, _, gate)| gated_target(key, gate, pd_coupling))
-            .collect();
+            .map(|(key, _, gate)| self.gated_target(key, gate, pd_coupling))
+            .collect::<Result<_, _>>()?;
         let seeds = after.clone();
         // `order` is dependency order, so one pass closes the set.
         for name in &self.order {
@@ -2534,7 +2751,11 @@ impl<'o> BuildState<'o> {
     fn finish(self, doc: JsonValue) -> PreparedBuild {
         PreparedBuild {
             doc,
-            model_name: self.model_name,
+            model_name: match self.spelling {
+                Spelling::ModelLocal(m) => Some(m),
+                Spelling::Qualified => None,
+            },
+            flattened: self.flattened,
             fields: self.fields,
             members: self.members,
             extents: self.extents,
@@ -3078,5 +3299,83 @@ mod mounted_subsystem_tests {
                 assert_eq!(at_t0(&prob, "w"), 2.0, "[{compiler}, pipeline {pipeline}]");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod whole_document_tests {
+    //! The whole-document build (several models, none selected): how its names
+    //! are spelled, and the flattened system it hands the compile path.
+
+    use super::{KeyMatch, PrepareOptions, Spelling, run_prepare};
+    use serde_json::{Value, json};
+    use std::collections::HashMap;
+
+    fn names(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_model_local_bare_key_reaches_every_name_it_ends() {
+        let declared = names(&["k", "Leaf.k", "Other.k", "m"]);
+        let s = Spelling::ModelLocal("M".into());
+        let got = s.resolve("k", &declared).unwrap();
+        assert_eq!(
+            got,
+            vec![
+                ("k", KeyMatch::Exact),
+                ("Leaf.k", KeyMatch::BareTail),
+                ("Other.k", KeyMatch::BareTail)
+            ]
+        );
+        assert_eq!(
+            s.resolve("M.Leaf.k", &declared).unwrap(),
+            vec![("Leaf.k", KeyMatch::ModelPrefixed)]
+        );
+        assert_eq!(s.resolve_one("k", &declared).unwrap(), Some("k"));
+    }
+
+    #[test]
+    fn a_qualified_bare_key_reaches_one_name_or_is_refused() {
+        let declared = names(&["A.k", "B.k", "A.m"]);
+        let s = Spelling::Qualified;
+        assert_eq!(s.resolve_one("m", &declared).unwrap(), Some("A.m"));
+        assert_eq!(s.resolve_one("A.k", &declared).unwrap(), Some("A.k"));
+        assert_eq!(s.resolve_one("nothing", &declared).unwrap(), None);
+        let e = s.resolve("k", &declared).unwrap_err().0;
+        assert!(e.contains("qualify it as one of: A.k, B.k"), "{e}");
+    }
+
+    fn model(rhs: f64) -> Value {
+        json!({
+            "variables": {"y": {"type": "unknown", "units": "1"}},
+            "equations": [{"lhs": "y", "rhs": rhs}]
+        })
+    }
+
+    fn doc(models: Value) -> Value {
+        json!({"esm": "1.2.0", "metadata": {"name": "w"}, "models": models})
+    }
+
+    #[test]
+    fn the_whole_document_build_hands_its_flattened_system_forward() {
+        let opts = PrepareOptions::default();
+        let two = doc(json!({"A": model(1.0), "B": model(2.0)}));
+        let prepared = run_prepare(&two, HashMap::new(), Vec::new(), &opts).unwrap();
+        assert_eq!(prepared.model_name, None);
+        let flat = prepared
+            .flattened
+            .expect("the whole-document build's flattened system");
+        let again =
+            crate::flatten::flatten(&crate::load_string(&two.to_string()).unwrap()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&flat).unwrap(),
+            serde_json::to_value(&again).unwrap()
+        );
+
+        let one = doc(json!({"A": model(1.0)}));
+        let prepared = run_prepare(&one, HashMap::new(), Vec::new(), &opts).unwrap();
+        assert_eq!(prepared.model_name.as_deref(), Some("A"));
+        assert!(prepared.flattened.is_none());
     }
 }
