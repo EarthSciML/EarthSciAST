@@ -5,10 +5,10 @@ package esm
 //
 // `cases` pin the edge rule as a document normalization: apply the edge with
 // the mounting document's directory, then §8.2.1 resolution with the declaring
-// document's. `fixtures` pin it through a real load. This binding does not
-// hoist a mounted document's `data_sources` at either mount form, so a
-// fixture's `hoisted_sources` is not checked here and a `requires_hoisting`
-// fixture (whose edge is reached only through a hoist) is skipped.
+// document's. `fixtures` pin it through a real load: a mounted document's
+// `data_sources` merge into the mounting document at both mount forms, so the
+// root's `hoisted_sources` are checked, and `index_set_sizes` pins an edge's
+// `bindings` reaching through an assembly.
 
 import (
 	"encoding/json"
@@ -21,6 +21,7 @@ import (
 
 type usCase struct {
 	ID               string         `json:"id"`
+	BinderURL        string         `json:"binder_url"`
 	URLTemplate      string         `json:"url_template"`
 	Mirrors          []string       `json:"mirrors"`
 	URLSubstitutions map[string]any `json:"url_substitutions"`
@@ -33,12 +34,13 @@ type usCase struct {
 }
 
 type usFixture struct {
-	ID               string   `json:"id"`
-	Path             string   `json:"path"`
-	Expect           string   `json:"expect"`
-	RequiresHoisting bool     `json:"requires_hoisting"`
-	ErrorCode        string   `json:"error_code"`
-	MessageContains  []string `json:"message_contains"`
+	ID              string               `json:"id"`
+	Path            string               `json:"path"`
+	Expect          string               `json:"expect"`
+	ErrorCode       string               `json:"error_code"`
+	MessageContains []string             `json:"message_contains"`
+	HoistedSources  map[string]dsuSource `json:"hoisted_sources"`
+	IndexSetSizes   map[string]int64     `json:"index_set_sizes"`
 }
 
 type usManifest struct {
@@ -119,7 +121,11 @@ func TestURLSubstitutionCasesMatchTheSharedManifest(t *testing.T) {
 			for k, v := range c.URLSubstitutions {
 				subs[k] = v
 			}
-			err := applyMountURLSubstitutions(doc, subs, binder, "case")
+			caseBinder := binder
+			if c.BinderURL != "" {
+				caseBinder = c.BinderURL
+			}
+			err := applyMountURLSubstitutions(doc, subs, caseBinder, "case")
 			// Then the declaring document's own §8.2.1 resolution.
 			var gotTemplate string
 			var gotMirrors []string
@@ -168,14 +174,47 @@ func TestURLSubstitutionFixturesMatchTheSharedManifest(t *testing.T) {
 	m := usLoadManifest(t)
 	for _, f := range m.Fixtures {
 		t.Run(f.ID, func(t *testing.T) {
-			if f.RequiresHoisting {
-				t.Skip("reaches its edge only through a data_sources hoist; Go hoists at neither mount form")
-			}
-			_, err := LoadPath(filepath.Join(usSuiteDir(t), f.Path))
+			file, err := LoadPath(filepath.Join(usSuiteDir(t), f.Path))
 			switch f.Expect {
 			case "accepted":
 				if err != nil {
 					t.Fatalf("%s must load: %v", f.ID, err)
+				}
+				if f.HoistedSources == nil {
+					t.Fatalf("%s: an accepted fixture pins hoisted_sources", f.ID)
+				}
+				for name, pin := range f.HoistedSources {
+					ds, ok := file.DataSources[name]
+					if !ok {
+						t.Errorf("data_sources.%s must be merged into the root", name)
+						continue
+					}
+					if got, want := ds.Source.URLTemplate, usExpected(t, pin.URLTemplate); got != want {
+						t.Errorf("data_sources.%s.source.url_template = %q, want %q", name, got, want)
+					}
+					if pin.Mirrors == nil {
+						continue
+					}
+					want := make([]string, len(pin.Mirrors))
+					for i, p := range pin.Mirrors {
+						want[i] = usExpected(t, p)
+					}
+					if !reflect.DeepEqual(ds.Source.Mirrors, want) {
+						t.Errorf("data_sources.%s.source.mirrors = %q, want %q", name, ds.Source.Mirrors, want)
+					}
+				}
+				for axis, size := range f.IndexSetSizes {
+					is, ok := file.IndexSets[axis]
+					if !ok {
+						t.Errorf("index_sets.%s must reach the root", axis)
+						continue
+					}
+					b, _ := json.Marshal(is)
+					var raw map[string]any
+					_ = json.Unmarshal(b, &raw)
+					if got, ok := raw["size"].(float64); !ok || int64(got) != size {
+						t.Errorf("index_sets.%s.size = %v, want %d", axis, raw["size"], size)
+					}
 				}
 			case "refused":
 				usAssertRefused(t, f.ID, err, f.ErrorCode, f.MessageContains)
@@ -232,5 +271,20 @@ func TestURLSubstitutionsMalformedValuesAreRefused(t *testing.T) {
 		}}
 		err := applyMountURLSubstitutions(doc, raw, "/a", "e")
 		usAssertRefused(t, "malformed", err, codeDataSourceURLUnresolved, nil)
+	}
+}
+
+// RFC 3986 §5.2 against a URL-valued mounting directory: read as a directory
+// with or without a trailing '/', dot segments removed, query/fragment dropped.
+func TestJoinURLDirectory(t *testing.T) {
+	for _, c := range []struct{ base, rel, want string }{
+		{"https://example.org/models/runs", "../data/./b", "https://example.org/models/data/b"},
+		{"https://example.org/models/runs/", "b", "https://example.org/models/runs/b"},
+		{"https://example.org", "a/b", "https://example.org/a/b"},
+		{"https://example.org/x?q=1#f", "../../y/", "https://example.org/y/"},
+	} {
+		if got := joinURLDirectory(c.base, c.rel); got != c.want {
+			t.Errorf("joinURLDirectory(%q, %q) = %q, want %q", c.base, c.rel, got, c.want)
+		}
 	}
 }

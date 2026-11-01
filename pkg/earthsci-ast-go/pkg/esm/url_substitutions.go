@@ -7,13 +7,9 @@ package esm
 // referenced document's `data_sources` locations, so one shared catalogue can
 // be pointed at a different data directory by each document that mounts it.
 //
-// This binding does not hoist a mounted document's `data_sources` into the
-// mounting document at either mount form (extractSingleSystemRaw keeps only the
-// single system), so the substituted locations go nowhere after the edge. The
-// edge is still applied in full at both forms: its verdicts -- an unknown key
-// is `url_substitution_unknown_name`, a non-text value is
-// `data_source_url_unresolved` -- are part of the cross-binding contract, and
-// a document this binding accepts must be one every other binding accepts.
+// The substituted locations then travel up with the rest of the leaf's
+// `data_sources`, which merge into the mounting document at both mount forms
+// (esm-spec §4.7 "A mounted document's data sources"; mount_data_sources.go).
 
 import (
 	"fmt"
@@ -176,12 +172,23 @@ func applyMountURLSubstitutions(doc map[string]any, raw any, binderDir, where st
 
 	// The value a LEADING placeholder contributes: the mounting document's
 	// location, per §8.2.1's own forms.
-	base := strings.TrimRight(absoluteURLBase(binderDir), "/")
+	// A mounting document loaded from a URL has a URL for a directory; a
+	// relative value then joins onto it by RFC 3986 §5.2, as that document's
+	// own relative refs do.
+	urlBase := urlTemplateSchemeRE.MatchString(binderDir)
+	base := ""
+	if !urlBase {
+		base = strings.TrimRight(absoluteURLBase(binderDir), "/")
+	}
 	lead := func(v string) string {
-		if urlTemplateSchemeRE.MatchString(v) || strings.HasPrefix(v, "/") {
+		switch {
+		case urlTemplateSchemeRE.MatchString(v) || strings.HasPrefix(v, "/"):
 			return v
+		case urlBase:
+			return joinURLDirectory(binderDir, v)
+		default:
+			return base + "/" + v
 		}
-		return base + "/" + v
 	}
 
 	for _, s := range sites {
@@ -217,4 +224,30 @@ func applyMountURLSubstitutions(doc map[string]any, raw any, binderDir, where st
 		s.set(out)
 	}
 	return nil
+}
+
+// joinURLDirectory resolves the relative path rel against the DIRECTORY URL
+// base (`scheme://authority/path`, read as a directory whether or not it ends
+// in '/') by RFC 3986 §5.2, dot segments removed. A query or fragment on base is
+// dropped, as §5.2.2 drops them for a path reference.
+func joinURLDirectory(base, rel string) string {
+	if i := strings.IndexAny(base, "?#"); i >= 0 {
+		base = base[:i]
+	}
+	afterScheme := 0
+	if i := strings.Index(base, "://"); i >= 0 {
+		afterScheme = i + 3
+	}
+	pathStart := len(base)
+	if i := strings.IndexByte(base[afterScheme:], '/'); i >= 0 {
+		pathStart = afterScheme + i
+	}
+	origin, dir := base[:pathStart], base[pathStart:]
+	joined := strings.TrimRight(dir, "/") + "/" + rel
+	trailing := strings.HasSuffix(joined, "/") || strings.HasSuffix(joined, "/.") || strings.HasSuffix(joined, "/..")
+	path := removeURLDotSegments(joined)
+	if trailing && !strings.HasSuffix(path, "/") {
+		path += "/"
+	}
+	return origin + path
 }
