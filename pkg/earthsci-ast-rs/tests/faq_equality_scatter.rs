@@ -809,3 +809,88 @@ fn nested_ands_flatten_left_to_right() {
         &doc(6, 0, vec![du(6, rhs)], Value::Null),
     );
 }
+
+#[test]
+fn a_free_index_read_by_a_conjunct_or_a_ragged_bound() {
+    let m = 4;
+    // `a` free, read by a build-time conjunct and by a run-time one: the
+    // points are placed once and each free cell re-tests those conjuncts.
+    for extra in [
+        op("<=", vec![json!("i"), json!("a")]),
+        op("!=", vec![json!("a"), json!(2)]),
+        op(">", vec![ix("w", vec![json!("a"), json!("i")]), json!(0)]),
+    ] {
+        let rhs = faq(
+            &["a", "b"],
+            &[("a", 1, m), ("b", 1, m), ("i", 1, m), ("k", 1, 2)],
+            "+",
+            and(vec![
+                eq(json!("b"), plus(json!("i"), json!(1))),
+                extra.clone(),
+            ]),
+            op(
+                "*",
+                vec![
+                    ix("w", vec![json!("a"), json!("i")]),
+                    ix("u", vec![plus(json!("k"), json!("i"))]),
+                ],
+            ),
+        );
+        agree(
+            &format!("free conjunct {extra}"),
+            &doc(8, m, vec![dw(m, rhs)], Value::Null),
+        );
+    }
+
+    // A ragged range under the free output index `a`: each free cell walks
+    // its own row. pm[a, b] = Σ_{k ∈ row a : b = k} s[mem[a, k]] (k + 1/2).
+    let rows: Vec<Vec<usize>> = vec![vec![2, 1, 2], vec![3], vec![1, 3, 3, 2], vec![]];
+    let max_len = 4;
+    let row_len: Vec<usize> = rows.iter().map(Vec::len).collect();
+    let row_mem: Vec<Vec<usize>> = rows
+        .iter()
+        .map(|r| {
+            (0..max_len)
+                .map(|k| r.get(k).copied().unwrap_or(1))
+                .collect()
+        })
+        .collect();
+    let mem = || ix("rowMem", vec![json!("a"), json!("k")]);
+    let rhs = json!({"op": "faq", "args": [], "output_idx": ["a", "b"], "reduce": "+",
+        "ranges": {"a": {"from": "rows"}, "b": {"from": "cols"},
+                   "k": {"from": "row_members", "of": ["a"]}},
+        "filter": eq(json!("b"), json!("k")),
+        "expr": op("*", vec![ix("s", vec![mem()]), plus(json!("k"), json!(0.5))])});
+    let d = json!({
+        "esm": "1.3.0",
+        "metadata": {"name": "ragged_free_scatter", "authors": ["test"]},
+        "index_sets": {
+            "rows": {"kind": "interval", "size": rows.len()},
+            "cols": {"kind": "interval", "size": 3},
+            "maxLen": {"kind": "interval", "size": max_len},
+            "row_members": {"kind": "ragged", "of": ["rows"], "offsets": "rowLen",
+                            "values": "rowMem"}
+        },
+        "models": {"M": {
+            "variables": {
+                "s": {"type": "unknown", "units": "1", "shape": ["cols"], "default": 1.0},
+                "pm": {"type": "unknown", "units": "1", "shape": ["rows", "cols"], "default": 0.0},
+                "rowLen": {"type": "unknown", "units": "1", "shape": ["rows"]},
+                "rowMem": {"type": "unknown", "units": "1", "shape": ["rows", "maxLen"]}
+            },
+            "equations": [
+                {"lhs": faq(&["q"], &[("q", 1, 3)], "+", Value::Null,
+                    json!({"op": "D", "args": [ix("s", vec![json!("q")])], "wrt": "t"})),
+                 "rhs": faq(&["q"], &[("q", 1, 3)], "+", Value::Null, json!(0.0))},
+                {"lhs": "rowLen", "rhs": {"op": "const", "args": [], "value": row_len}},
+                {"lhs": "rowMem", "rhs": {"op": "const", "args": [], "value": row_mem}},
+                {"lhs": faq(&["a", "b"], &[("a", 1, rows.len() as i64), ("b", 1, 3)], "+",
+                    Value::Null,
+                    json!({"op": "D", "args": [ix("pm", vec![json!("a"), json!("b")])],
+                           "wrt": "t"})),
+                 "rhs": rhs}
+            ]
+        }}
+    });
+    agree("ragged under a free index", &d);
+}

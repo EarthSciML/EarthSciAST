@@ -87,3 +87,101 @@ fn a_run_time_pin_keeps_the_dense_lowering() {
     );
     assert_eq!(count(&prog, "SegReduce"), 0);
 }
+
+/// A scatter list is held to the program's tuple-list budget: over it, a
+/// contraction whose dense box is promotable takes the dense lowering, with
+/// the same bits.
+#[test]
+fn a_scatter_over_the_tuple_list_budget_takes_the_dense_lowering() {
+    use super::lower::set_tuple_list_budget;
+    let body = json!({"op": "index", "args": ["u", "i"]});
+    // j == 13 - i: twelve tuples.
+    let filter = json!({"op": "==", "args": ["j", {"op": "-", "args": [13, "i"]}]});
+    for (budget, lists) in [(12, 1), (11, 0)] {
+        let prev = set_tuple_list_budget(budget);
+        let prog = ab_check(scatter_doc(12, filter.clone(), body.clone()), -2.0, 2.0);
+        set_tuple_list_budget(prev);
+        assert_eq!(count(&prog, "SegReduce"), lists, "budget {budget}");
+    }
+    // Two scatters in one program share the budget: room for one list.
+    let one = json!({"op": "faq", "args": [], "output_idx": ["j"], "reduce": "+",
+        "ranges": {"j": {"from": "x"}, "i": {"from": "x"}},
+        "filter": filter, "expr": body});
+    let mut doc = scatter_doc(12, filter.clone(), body.clone());
+    doc["models"]["M"]["equations"][0]["rhs"] = json!({"op": "+", "args": [one.clone(),
+        {"op": "*", "args": [2, {"op": "faq", "args": [], "output_idx": ["j"], "reduce": "+",
+            "ranges": {"j": {"from": "x"}, "i": {"from": "x"}},
+            "filter": {"op": "==", "args": ["j", {"op": "/", "args": ["i", 1]}]},
+            "expr": body}]}]});
+    let prev = set_tuple_list_budget(20);
+    let prog = ab_check(doc, -2.0, 2.0);
+    set_tuple_list_budget(prev);
+    assert_eq!(count(&prog, "SegReduce"), 1);
+}
+
+/// Over the budget, a scatter whose dense box is past the promotion limit
+/// keeps its list: the dense lowering would unroll a term per contracted
+/// point over the whole output box.
+#[test]
+fn a_scatter_over_the_budget_without_a_promotable_box_keeps_its_list() {
+    use super::lower::set_tuple_list_budget;
+    // 12000 × 12000 cells and points: past the 2^27 promotion limit.
+    let doc = scatter_doc(
+        12_000,
+        json!({"op": "==", "args": ["j", {"op": "/", "args": ["i", 2]}]}),
+        json!({"op": "index", "args": ["u", "i"]}),
+    );
+    let compiled = super::tests::compile(doc);
+    let prev = set_tuple_list_budget(16);
+    let (prog, _) = super::taped(compiled.build_tape_opts(&std::collections::HashSet::new(), None));
+    set_tuple_list_budget(prev);
+    assert_eq!(count(&prog, "SegReduce"), 1);
+    assert_eq!(count(&prog, "Reduce"), 0);
+}
+
+/// A ragged range under a free output index: each free cell walks its own
+/// row, still one segmented reduction.
+#[test]
+fn a_ragged_range_under_a_free_index_scatters_per_free_cell() {
+    let doc = json!({
+        "esm": "1.3.0",
+        "metadata": {"name": "ragged_free_scatter", "authors": ["tape tests"]},
+        "index_sets": {
+            "rows": {"kind": "interval", "size": 4},
+            "cols": {"kind": "interval", "size": 3},
+            "maxLen": {"kind": "interval", "size": 4},
+            "row_members": {"kind": "ragged", "of": ["rows"], "offsets": "rowLen",
+                            "values": "rowMem"}
+        },
+        "models": {"M": {
+            "variables": {
+                "s": {"type": "unknown", "units": "1", "shape": ["cols"], "default": 1.0},
+                "pm": {"type": "unknown", "units": "1", "shape": ["rows", "cols"], "default": 0.0},
+                "rowLen": {"type": "unknown", "units": "1", "shape": ["rows"]},
+                "rowMem": {"type": "unknown", "units": "1", "shape": ["rows", "maxLen"]}
+            },
+            "equations": [
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["q"], "ranges": {"q": {"from": "cols"}},
+                         "expr": {"op": "D", "args": [{"op": "index", "args": ["s", "q"]}], "wrt": "t"}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["q"], "ranges": {"q": {"from": "cols"}},
+                         "expr": {"op": "index", "args": ["s", "q"]}}},
+                {"lhs": "rowLen", "rhs": {"op": "const", "args": [], "value": [3, 1, 4, 2]}},
+                {"lhs": "rowMem", "rhs": {"op": "const", "args": [],
+                    "value": [[2, 1, 2, 1], [3, 1, 1, 1], [1, 3, 3, 2], [2, 2, 1, 1]]}},
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["a", "b"],
+                         "ranges": {"a": {"from": "rows"}, "b": {"from": "cols"}},
+                         "expr": {"op": "D", "args": [{"op": "index", "args": ["pm", "a", "b"]}], "wrt": "t"}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["a", "b"], "reduce": "+",
+                         "ranges": {"a": {"from": "rows"}, "b": {"from": "cols"},
+                                    "k": {"from": "row_members", "of": ["a"]}},
+                         "filter": {"op": "==", "args": ["b", "k"]},
+                         "expr": {"op": "index", "args": ["s", {"op": "index", "args": ["rowMem", "a", "k"]}]}}}
+            ]
+        }}
+    });
+    let prog = ab_check(doc, -2.0, 2.0);
+    assert_eq!(count(&prog, "SegReduce"), 1);
+    // The admitted points only, Σ_a min(|row a|, 3) = 3 + 1 + 3 + 2, not the
+    // 3 · (3 + 1 + 4 + 2) pairs the dense tuple list masks at run time.
+    assert_eq!(prog.seg_tables[0].rows.last(), Some(&9));
+}
