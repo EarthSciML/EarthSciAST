@@ -53,7 +53,7 @@ jobs:
                  prefix_scan, source_receptor, regrid, unstructured_gather, scalar_chemistry,
                  gather_index, column_search, column_sum, join_keyed, makearray_scan,
                  suffix_scan, ragged_contraction,
-                 makearray_nested_sum]
+                 makearray_nested_sum, band_transpose]
     env:
       CARGO_INCREMENTAL: '0'
     defaults:
@@ -133,7 +133,7 @@ jobs:
                  prefix_scan, source_receptor, regrid, unstructured_gather, scalar_chemistry,
                  gather_index, column_search, column_sum, join_keyed, makearray_scan,
                  suffix_scan, ragged_contraction,
-                 makearray_nested_sum]
+                 makearray_nested_sum, band_transpose]
     steps:
       - uses: actions/checkout@v7
 

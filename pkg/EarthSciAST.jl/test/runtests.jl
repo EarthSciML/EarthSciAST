@@ -205,6 +205,8 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("stencil_affine_const_fold_test.jl")     # ess-affine LANE_CONST fold is index-derived, not value-sampled
     include("stencil_subtree_tbl_test.jl")           # subterm-granular fallback: const-evaluable subtree → per-box table (interpreter oracle)
     include("scan_prefix_test.jl")                   # ess-scan O(N) prefix reduction ≡ per-cell
+    include("equality_scatter_test.jl")              # #613: one-pass scatter for an equality filter ≡ interpreter
+    include("conformance_faq_equality_scatter_test.jl")  # #613 equality-filter scatter: native ≡ interpreter ≡ naive golden
     include("makearray_scan_region_test.jl")         # #533: a scan makearray region / filtered operand under native
     include("hoist_region_split_test.jl")            # region-split operands combined elementwise, each lifted to an observed
     include("stencil_affine_cse_test.jl")            # ess-affine per-cell CSE ≡ per-cell

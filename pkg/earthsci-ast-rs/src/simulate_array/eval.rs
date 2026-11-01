@@ -917,8 +917,8 @@ pub(crate) fn apply_binary(op: &str, x: f64, y: f64) -> f64 {
         "/" => x / y,
         "^" | "pow" => x.powf(y),
         "atan2" => x.atan2(y),
-        "min" => x.min(y),
-        "max" => x.max(y),
+        "min" => crate::faq::nan_min(x, y),
+        "max" => crate::faq::nan_max(x, y),
         // Comparison + logical kernels, so the broadcast paths (`combine` /
         // `broadcast_binary`) carry array operands elementwise.
         "==" | "!=" | "<" | "<=" | ">" | ">=" => scalar_compare(op, x, y),
@@ -1035,8 +1035,8 @@ pub(crate) fn binary_kernel_of(op: BinCode) -> fn(f64, f64) -> f64 {
         BinCode::Div => |x, y| x / y,
         BinCode::Pow => |x: f64, y: f64| x.powf(y),
         BinCode::Atan2 => |x: f64, y: f64| x.atan2(y),
-        BinCode::Min => |x: f64, y: f64| x.min(y),
-        BinCode::Max => |x: f64, y: f64| x.max(y),
+        BinCode::Min => crate::faq::nan_min,
+        BinCode::Max => crate::faq::nan_max,
         BinCode::Eq => |x: f64, y: f64| (x == y) as i32 as f64,
         BinCode::Ne => |x: f64, y: f64| (x != y) as i32 as f64,
         BinCode::Lt => |x: f64, y: f64| (x < y) as i32 as f64,
@@ -1077,8 +1077,8 @@ pub(crate) fn binary_kernel_f32_of(op: BinCode) -> fn(f64, f64) -> f64 {
         BinCode::Div => |x: f64, y: f64| ((x as f32) / (y as f32)) as f64,
         BinCode::Pow => |x: f64, y: f64| (x as f32).powf(y as f32) as f64,
         BinCode::Atan2 => |x: f64, y: f64| (x as f32).atan2(y as f32) as f64,
-        BinCode::Min => |x: f64, y: f64| (x as f32).min(y as f32) as f64,
-        BinCode::Max => |x: f64, y: f64| (x as f32).max(y as f32) as f64,
+        BinCode::Min => |x: f64, y: f64| crate::faq::nan_min_f32(x as f32, y as f32) as f64,
+        BinCode::Max => |x: f64, y: f64| crate::faq::nan_max_f32(x as f32, y as f32) as f64,
         // Comparisons and the logical flags are exact on binary32 operands and
         // return the same 1.0 / 0.0 flags, but they still narrow: comparing the
         // f64 carriers of two values that round to the SAME f32 must say equal.
@@ -1498,8 +1498,8 @@ mod kernel_equivalence_tests {
                     ("/", (xf() / yf()) as f64),
                     ("^", xf().powf(yf()) as f64),
                     ("atan2", xf().atan2(yf()) as f64),
-                    ("min", xf().min(yf()) as f64),
-                    ("max", xf().max(yf()) as f64),
+                    ("min", crate::faq::nan_min_f32(xf(), yf()) as f64),
+                    ("max", crate::faq::nan_max_f32(xf(), yf()) as f64),
                     ("==", (xf() == yf()) as i32 as f64),
                     ("!=", (xf() != yf()) as i32 as f64),
                     ("<", (xf() < yf()) as i32 as f64),
@@ -1600,7 +1600,7 @@ mod kernel_equivalence_tests {
                 let cases: &[(&str, f64)] = &[
                     ("+", x + y), ("-", x - y), ("*", x * y), ("/", x / y),
                     ("^", x.powf(y)), ("atan2", x.atan2(y)),
-                    ("min", x.min(y)), ("max", x.max(y)),
+                    ("min", crate::faq::nan_min(x, y)), ("max", crate::faq::nan_max(x, y)),
                     ("==", (x == y) as i32 as f64), ("!=", (x != y) as i32 as f64),
                     ("<", (x < y) as i32 as f64), ("<=", (x <= y) as i32 as f64),
                     (">", (x > y) as i32 as f64), (">=", (x >= y) as i32 as f64),
@@ -3190,6 +3190,15 @@ pub(super) fn reduce_contraction(
         } else {
             eval(body, ctx).as_scalar().unwrap_or(f64::NAN)
         };
+    }
+    // A ragged dim whose parent is itself CONTRACTED (esm-spec §4.3.1 "Ragged
+    // ranges"): its bound is not known until the parent is bound, so the box is
+    // not a Cartesian product. Walk it as a nest, parent outer to child.
+    if static_ranges.is_none() && has_contracted_ragged_parent(contract_names, contract_dims) {
+        let order = parent_first_order(contract_names, contract_dims);
+        let mut acc = reduce.identity();
+        fold_dependent_nest(spec, contract_dims, &order, 0, &mut acc, ctx);
+        return acc;
     }
     // Resolve each contracted dim to a concrete (lo, hi). When every dim is
     // static (the common case) the caller passes the bounds it computed ONCE
@@ -4908,6 +4917,81 @@ pub(super) fn run_prefix_scan(
             let term = term_at(i, ctx);
             acc = reduce.combine(acc, term);
         }
+    }
+}
+
+/// Does any ragged contracted dim name another CONTRACTED index among its
+/// parents? Its bound then depends on that index's current value, which only a
+/// nested walk binds in time.
+pub(super) fn has_contracted_ragged_parent(
+    contract_names: &[String],
+    contract_dims: &[ContractDim],
+) -> bool {
+    contract_dims.iter().any(|d| match d {
+        ContractDim::Ragged { of, .. } => of.iter().any(|p| contract_names.contains(p)),
+        _ => false,
+    })
+}
+
+/// The contracted dims' visit order for a nest: the node's usual order (first
+/// listed outermost, as [`CartesianTuples`] walks it), except that a ragged dim
+/// is moved after every contracted parent it reads, stably. Its bound depends
+/// on the parent, so the parent must be outer (esm-spec §4.3.1).
+pub(super) fn parent_first_order(
+    contract_names: &[String],
+    contract_dims: &[ContractDim],
+) -> SmallVec<[usize; 4]> {
+    let n = contract_names.len();
+    let parents = |i: usize| -> SmallVec<[usize; 2]> {
+        match &contract_dims[i] {
+            ContractDim::Ragged { of, .. } => of
+                .iter()
+                .filter_map(|p| contract_names.iter().position(|c| c == p))
+                .filter(|&j| j != i)
+                .collect(),
+            _ => SmallVec::new(),
+        }
+    };
+    let mut order: SmallVec<[usize; 4]> = SmallVec::new();
+    let mut placed = vec![false; n];
+    while order.len() < n {
+        // The first unplaced dim whose contracted parents are all placed; a
+        // cycle (never valid) falls back to the first unplaced dim.
+        let next = (0..n)
+            .find(|&i| !placed[i] && parents(i).iter().all(|&j| placed[j]))
+            .or_else(|| (0..n).find(|&i| !placed[i]))
+            .expect("an unplaced dim remains");
+        placed[next] = true;
+        order.push(next);
+    }
+    order
+}
+
+/// Fold the contraction as a nest over `order[depth..]`, resolving each dim's
+/// bound only once every outer dim is bound, ascending at every level (the left
+/// fold of the terms in visit order). A filtered-out point is skipped, exactly
+/// as the Cartesian walk in [`reduce_contraction`] skips it.
+fn fold_dependent_nest(
+    spec: &ReduceSpec,
+    contract_dims: &[ContractDim],
+    order: &[usize],
+    depth: usize,
+    acc: &mut f64,
+    ctx: &mut EvalCtx,
+) {
+    if depth == order.len() {
+        if filter_excludes(spec.filter, spec.cell, ctx) {
+            return;
+        }
+        let term = eval(spec.body, ctx).as_scalar().unwrap_or(f64::NAN);
+        *acc = spec.reduce.combine(*acc, term);
+        return;
+    }
+    let d = order[depth];
+    let (lo, hi) = contract_dims[d].concrete(ctx);
+    for v in lo..=hi {
+        set_bind(&mut ctx.loop_binds, &spec.contract_names[d], v);
+        fold_dependent_nest(spec, contract_dims, order, depth + 1, acc, ctx);
     }
 }
 

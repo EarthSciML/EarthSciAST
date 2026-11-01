@@ -1147,7 +1147,9 @@ is classified by the comparison between the contracted index and the output inde
 operator's spelling: the mirrored spellings `i >= j` / `i > j` are forward scans and `i <= j` /
 `i < j` are reverse scans. The direction rule applies to a node whose `filter` is exactly one
 such comparison and which contracts that one index; every other contraction, a filtered one
-included, visits its contracted indices in increasing order. The output index must be the node's
+included, visits its contracted indices in increasing order. A conjunction is not exactly one
+comparison: a node whose filter pairs such a comparison with an equality conjunct on an output
+index (the one-pass scatter below) is not a scan, and it folds ascending. The output index must be the node's
 **own**: a rank-0 `faq` nested in an array body whose filter compares its contracted `j` with
 the *enclosing* body's index (`sum_{j ≥ i} …` inside a body over `i`) is not a reverse scan — it
 has no output index, so its window is fixed for each cell and is folded ascending — and neither
@@ -1177,9 +1179,78 @@ evaluator that does not keep a running accumulator — a per-cell triangular fol
 still fold each cell's window in the variant's direction, so it reaches the same bits. No
 binding may use a reassociating scan (pairwise, blocked, or parallel-prefix) for an inexact ⊕
 in either direction. A reverse window folds from the top under **every** ⊕, `max` and `min`
-included: on numbers their order does not matter, but a fold step that keeps its accumulator
-unless a term beats it skips a NaN that arrives after a number and keeps one that arrives
-first, so with a NaN in the window the visiting order decides the result.
+included, though for those two the direction does not change the result's value: a NaN term
+makes the reduction NaN wherever it is in the window (§4.2), and on numbers the extremum is
+the same in either order. The direction matters for `+` and `*`, whose low bits depend on the
+association.
+
+**One-pass scatter for an equality filter — licensed.** Consider a `faq` node whose `filter` is a
+conjunction (an `and`, or a single conjunct) that contains, for one or more output indices
+`j_d`, a conjunct `j_d == e_d` or `e_d == j_d` in which `e_d` reads none of the node's output
+indices. Evaluated as written, such a node tests its filter at every point of the output box
+times the box of the non-output range keys. But every point of the second box contributes to
+at most one output cell along the pinned indices, so one pass over it is enough. A binding MAY
+evaluate the node as follows, and a binding used for production SHOULD:
+
+1. Iterate the output indices that have no such conjunct as usual, as outer loops.
+2. Make **one pass** over the box of the non-output range keys, in exactly the order the
+   binding's naive evaluation visits it, each key increasing. A node with an equality conjunct
+   is never a scan (see below), so it folds ascending.
+3. At each point where the remaining conjuncts hold, evaluate each `e_d`. If any value is not an
+   integer inside `j_d`'s range, skip the point. Otherwise fold the body, with each `j_d` bound
+   to `e_d`, into output cell `(e_1, …)` with the node's ⊕.
+4. An output cell that receives no term takes the semiring's additive identity, as the naive
+   fold gives it (`+0.0` under `+`, the seed above).
+
+The contracted set is unchanged: the pass runs over every non-output range key, whether or not
+the body reads it. Each output cell receives exactly the terms the naive evaluation admits, in
+the same order and the same association, so the result is **bit-identical** to the naive fold
+under every ⊕, `max` and `min` included (a NaN term makes the cell NaN wherever it falls in
+the cell's terms, §4.2, and the scatter admits exactly the naive NaN terms). Folding the identity for a point
+the remaining conjuncts exclude, instead of skipping it, reaches the same bits, because folding
+the identity changes no accumulator: a `+` accumulator seeded with `+0.0` is never `-0.0`,
+`x * 1 == x`, and a `max` / `min` identity never beats the accumulator. A reassociating or
+parallel scatter (atomic updates, per-thread partial accumulators combined afterwards) is NOT
+licensed for an inexact ⊕. Threading over the unpinned output indices is licensed. Threading the
+pinned pass is licensed only when each thread owns a disjoint set of output cells and visits
+each cell's terms in the naive order, for example after partitioning the points by output cell
+with a build-time sort that is stable in visit order.
+
+When every `e_d` reads only index names, literals, folded metaparameters and `const` gathers, the
+map from points to cells is a function of the box alone, and a binding MAY compute it once at
+build time and reuse it on every call. When an `e_d` reads a run-time value (a state, a
+parameter, `t`), the rule still applies, but the map is evaluated on every call.
+
+The edge cases are fixed as follows:
+
+- **A scan comparison beside an equality conjunct.** The direction rule above applies only to a
+  filter that is exactly one comparison. A node whose filter also has an equality conjunct on an
+  output index, such as `and(j == e, r <= i)`, is not a scan, and it folds ascending even though
+  `r <= i` alone would make it a reverse scan in `r`.
+- **One output index pinned twice** (`j == e1` and `j == e2`). The first such conjunct in the
+  filter's argument order pins `j`. The second is an ordinary remaining conjunct, tested at each
+  point with `j` bound to `e1`. Two different output indices each pinned once are both pinned,
+  and the cell is `(e_1, e_2)`.
+- **A nested rank-0 `faq`.** A rank-0 node has no output index, so the rule never applies to it,
+  whatever its filter compares (an equality on the enclosing body's index included). The rule
+  applies only to an enclosing node that is itself such a `faq`. A nested node in the body of a
+  scattered node is evaluated at each point with the pinned indices bound to their `e_d`, as the
+  naive evaluation binds them.
+- **Ragged ranges.** A `{"from": <ragged set>, "of": [...]}` range among the non-output keys is
+  visited row by row over its own length (`k = 1 … offsets[parent]`), as the naive evaluation
+  visits it. An `e_d` may read the position symbol, or a member gathered at it, like any other
+  non-output symbol. When a ragged range's parent is an unpinned output index, the pass runs once
+  per value of that index. The rule does not apply to a node in which a non-output range's
+  bounds depend on a pinned output index, because the box of the non-output range keys would
+  then depend on the cell being filled.
+
+Julia's and Rust's `native` compilers take this path (issue #613). Their interpreters keep the
+naive evaluation and remain the oracle. The fixtures in `tests/conformance/faq_equality_scatter/`
+pin the bits, against goldens from an independent naive loop, under `+` with cancelling data,
+`max` and `min` with a NaN, two pinned indices, a free index, a non-integer and an out-of-range
+`e`, a scan comparison, a doubly pinned index, the nested and ragged cases and a run-time `e`.
+The scaling tier's `band_transpose` family (`tests/conformance/scaling/`), a tridiagonal `Jᵀλ`
+up to `N = 10⁶`, checks the cost.
 
 **A cumulative sum is not a cumulative integral.** The body is summed with no measure
 weighting — the format carries no measure concept (§6.6.5 convention 2). A Riemann-sum

@@ -106,6 +106,14 @@ pub enum HandLoop {
     /// `du[i] = -kd u[i]`, `dJ[i] = sum_j ((0.001 (i + 2 j)) u[j]) u[i]`
     /// (1-based `i`, `j`), the makearray's covering region.
     MakearrayNestedSum { n: usize, kd: f64 },
+    /// `du[j] = -((a[j-1] u[j-1] + b[j+1] u[j+1]) + c[j] u[j])` (0-based, a
+    /// missing neighbour's term 0): the two equality scatters read as the
+    /// gathers they are, one pass over the cells.
+    BandTranspose {
+        a: Vec<f64>,
+        b: Vec<f64>,
+        c: Vec<f64>,
+    },
 }
 
 impl HandLoop {
@@ -125,6 +133,7 @@ impl HandLoop {
             HandLoop::MakearrayScan { ncol, .. } | HandLoop::SuffixScan { ncol, .. } => *ncol,
             HandLoop::Ragged { start, .. } => start.len() - 1,
             HandLoop::MakearrayNestedSum { n, .. } => *n,
+            HandLoop::BandTranspose { c, .. } => c.len(),
         }
     }
 
@@ -348,6 +357,14 @@ impl HandLoop {
                         du.set(b0 + r, -kd * ui);
                     }
                     b0 = b1;
+                }
+            }
+            HandLoop::BandTranspose { a, b, c } => {
+                let n = c.len();
+                for j in lo..hi {
+                    let lower = if j > 0 { a[j - 1] * u[j - 1] } else { 0.0 };
+                    let upper = if j + 1 < n { b[j + 1] * u[j + 1] } else { 0.0 };
+                    du.set(j, -((lower + upper) + c[j] * u[j]));
                 }
             }
             HandLoop::ScalarChemistry { .. } => {

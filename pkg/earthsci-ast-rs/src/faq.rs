@@ -40,6 +40,50 @@ use thiserror::Error;
 use crate::compile_error::CompileError;
 use crate::types::{Expr, IndexSet, Model, RangeSpec};
 
+/// `max(x, y)` with NaN propagation: a NaN operand, in either position, makes
+/// the result NaN (esm-spec §4.2: IEEE 754-2019 `maximum`, not `maxNum`).
+/// `f64::max` returns the other operand instead, so it is never used as is for
+/// the `max` operator or a `max` reduction's ⊕. Every evaluator's `max` kernel
+/// goes through this function.
+#[inline(always)]
+pub(crate) fn nan_max(x: f64, y: f64) -> f64 {
+    if x.is_nan() || y.is_nan() {
+        f64::NAN
+    } else {
+        x.max(y)
+    }
+}
+
+/// `min(x, y)` with NaN propagation; see [`nan_max`].
+#[inline(always)]
+pub(crate) fn nan_min(x: f64, y: f64) -> f64 {
+    if x.is_nan() || y.is_nan() {
+        f64::NAN
+    } else {
+        x.min(y)
+    }
+}
+
+/// [`nan_max`] in binary32.
+#[inline(always)]
+pub(crate) fn nan_max_f32(x: f32, y: f32) -> f32 {
+    if x.is_nan() || y.is_nan() {
+        f32::NAN
+    } else {
+        x.max(y)
+    }
+}
+
+/// [`nan_min`] in binary32.
+#[inline(always)]
+pub(crate) fn nan_min_f32(x: f32, y: f32) -> f32 {
+    if x.is_nan() || y.is_nan() {
+        f32::NAN
+    } else {
+        x.min(y)
+    }
+}
+
 /// The ⊕/⊗ operators the evaluator can fold with, each carrying its normative
 /// identity (RFC §5.1). A single enum serves both the aggregation side (⊕) and
 /// the product side (⊗) so the empty-reduction identity 0̄ and empty-product
@@ -86,8 +130,8 @@ impl ReduceKind {
         match self {
             ReduceKind::Sum => acc + term,
             ReduceKind::Product => acc * term,
-            ReduceKind::Max => f64::max(acc, term),
-            ReduceKind::Min => f64::min(acc, term),
+            ReduceKind::Max => nan_max(acc, term),
+            ReduceKind::Min => nan_min(acc, term),
             ReduceKind::Or => {
                 if acc != 0.0 || term != 0.0 {
                     1.0
@@ -118,8 +162,8 @@ impl ReduceKind {
         match self {
             ReduceKind::Sum => (a + t) as f64,
             ReduceKind::Product => (a * t) as f64,
-            ReduceKind::Max => f32::max(a, t) as f64,
-            ReduceKind::Min => f32::min(a, t) as f64,
+            ReduceKind::Max => nan_max_f32(a, t) as f64,
+            ReduceKind::Min => nan_min_f32(a, t) as f64,
             ReduceKind::Or => {
                 if a != 0.0 || t != 0.0 {
                     1.0
@@ -1031,6 +1075,25 @@ mod tests {
 
     /// Under Float64 `combine` is bit-identical to the plain `f64` fold — the
     /// precision branch cannot have perturbed the default path.
+    /// esm-spec §4.2: a NaN operand makes `max` / `min` NaN in either
+    /// position, so a `max` / `min` fold is NaN once any admitted term is.
+    #[test]
+    fn max_and_min_propagate_nan_in_either_position() {
+        for &x in &[1.0_f64, -2.5, f64::INFINITY, f64::NEG_INFINITY, 0.0, -0.0] {
+            for k in [ReduceKind::Max, ReduceKind::Min] {
+                assert!(k.combine(x, f64::NAN).is_nan(), "{k:?}({x}, NaN)");
+                assert!(k.combine(f64::NAN, x).is_nan(), "{k:?}(NaN, {x})");
+            }
+            assert!(nan_max_f32(x as f32, f32::NAN).is_nan());
+            assert!(nan_min_f32(f32::NAN, x as f32).is_nan());
+        }
+        let fold =
+            |k: ReduceKind, xs: &[f64]| xs.iter().fold(k.identity(), |a, &t| k.combine(a, t));
+        assert!(fold(ReduceKind::Max, &[1.0, f64::NAN, 3.0]).is_nan());
+        assert!(fold(ReduceKind::Min, &[f64::NAN, 1.0, -3.0]).is_nan());
+        assert_eq!(fold(ReduceKind::Max, &[1.0, 3.0, 2.0]), 3.0);
+    }
+
     #[test]
     fn float64_reductions_are_bit_unchanged() {
         assert_eq!(
@@ -1047,11 +1110,11 @@ mod tests {
                 );
                 assert_eq!(
                     ReduceKind::Max.combine(a, b).to_bits(),
-                    f64::max(a, b).to_bits()
+                    nan_max(a, b).to_bits()
                 );
                 assert_eq!(
                     ReduceKind::Min.combine(a, b).to_bits(),
-                    f64::min(a, b).to_bits()
+                    nan_min(a, b).to_bits()
                 );
             }
         }

@@ -342,6 +342,21 @@
           "why": "the work per call is N^2, so 2000 states (N = 1000) is already a 10^6-term call"
         }
       }
+    },
+    "band_transpose": {
+      "description": "A tridiagonal transpose product D(u[j]) = -(L[j] + U[j] + c[j] u[j]), L[j] = sum_{i : i+1 == j} a[i] u[i], U[j] = sum_{i : j == i-1} b[i] u[i], with a, b, c non-uniform formulas of their index (an EarthSciASTDiff J^T lambda, issue #613). Each scatter is N^2 filter tests read literally and one pass over i under esm-spec 4.3.1's one-pass scatter license.",
+      "size_meaning": "cells",
+      "sizes": [
+        100,
+        1000,
+        10000,
+        100000,
+        1000000
+      ],
+      "pr_sizes": [
+        100,
+        1000
+      ]
     }
   },
   "gates": {
@@ -721,6 +736,26 @@
         "reason": "native builds the N x N term box in several elementwise passes and then reduces it, where the hand loop folds each row's terms in registers; fusing the elementwise chain into the reduction is executor work; issue #548",
         "phase": "native-models",
         "provisional": "adapter run 2026-10-23, native/i547 5b5069f0f, hand loop folding a block of rows in stack accumulators, built with -C llvm-args=-align-loops=64, local node core 8, load average 13-15 (other users), median of 5 interleaved runs (range 2.64-2.84)"
+      },
+      {
+        "family": "band_transpose",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 1.54,
+        "reason": "the unit-shift scatter reads the body as a shifted stencil over the output box; at 10^6 cells the working set leaves cache and the call trails the fused one-pass hand loop; runs range 1.52-1.55; issue #614",
+        "phase": "faq-scatter",
+        "provisional": "sweep 2026-10-31 at the #613 integration tip, local node, 6 pinned cores, load average about 16 from other users, median of 3 runs; adapter built with -C llvm-args=-align-loops=64"
+      },
+      {
+        "family": "band_transpose",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 1.33,
+        "reason": "same; runs range 1.23-1.36; issue #614",
+        "phase": "faq-scatter",
+        "provisional": "sweep 2026-10-31 at the #613 integration tip, local node, 6 pinned cores, load average about 16 from other users, median of 3 runs; adapter built with -C llvm-args=-align-loops=64"
       }
     ],
     "julia": [
@@ -831,6 +866,44 @@
         "reason": "the build sits at the 20 ns/state limit; the per-state cost left is generic build work (allocating the state-sized u0 and its seeded copy, the output-slot list, and the collection that triggers), not the region split or the nested loop, whose code is the same size at every N; runs range 18.8-25.7 serial and 16.7-18.8 with 2 threads; issue #548",
         "phase": "native-models",
         "provisional": "sweep 2026-10-24, native/i547 6d31c7c64 (origin/main 4ff2afeff merged), local node cores 16-19, load average 11-24 (other users, and this branch's Rust checks on other cores), highest of 3 runs serial and 3 with 2 threads"
+      },
+      {
+        "family": "band_transpose",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 1.81,
+        "reason": "the scatter's table fold trails the one-pass hand loop once the band leaves cache; runs range 1.63-1.97; issue #614",
+        "phase": "faq-scatter",
+        "provisional": "sweep 2026-10-31 at the #613 integration tip, local node, 6 pinned cores, load average about 16 from other users, median of 3 runs"
+      },
+      {
+        "family": "band_transpose",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 2.2,
+        "reason": "same; runs range 2.16-2.23; issue #614",
+        "phase": "faq-scatter",
+        "provisional": "sweep 2026-10-31 at the #613 integration tip, local node, 6 pinned cores, load average about 16 from other users, median of 3 runs"
+      },
+      {
+        "family": "band_transpose",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 2.01,
+        "reason": "same; one clean run of three (the other two hit thread-wake stalls in native and the hand loop alike); issue #614",
+        "phase": "faq-scatter",
+        "provisional": "sweep 2026-10-31 at the #613 integration tip, local node, 6 pinned cores, load average about 16 from other users, median of 3 runs"
+      },
+      {
+        "family": "band_transpose",
+        "gate": "build_slope",
+        "measured": 176,
+        "reason": "the lane-table class merge of the observeds a, b and c costs per state at build time (about 23 ns/state without it); serial 71-73, threaded 107-176; issue #614",
+        "phase": "faq-scatter",
+        "provisional": "sweep 2026-10-31 at the #613 integration tip, local node, 6 pinned cores, load average about 16 from other users, median of 3 runs"
       }
     ]
   }

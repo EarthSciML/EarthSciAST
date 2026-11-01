@@ -748,4 +748,86 @@ end
         @test get(tally, :array_contraction_codegen, 0) == 2
         @test !haskey(tiers, :percell_build)
     end
+
+    # A ragged range whose parent is itself contracted (esm-spec §4.3.1 "Ragged
+    # ranges"): `tot[d] = Σ_a Σ_{j ∈ mop(a)} x[mem[a, j]] · w[d]`, `a` outer to
+    # `j` although `a` sorts first, each row's members ascending. No filter.
+    @testset "a ragged range whose parent is contracted folds the parent outer" begin
+        sizes = [2, 0, 3, 1]
+        mem = [[4, 1, 0], [0, 0, 0], [2, 5, 3], [3, 0, 0]]
+        w = [1.0, -0.5]
+        idx(a...) = Dict("op" => "index", "args" => Any[a...])
+        cst(v) = Dict("op" => "const", "args" => Any[], "value" => v)
+        dlhs(v, i, set) = Dict(
+            "op" => "faq", "args" => Any[], "output_idx" => Any[i],
+            "ranges" => Dict(i => Dict("from" => set)),
+            "expr" => Dict("op" => "D", "args" => Any[idx(v, i)], "wrt" => "t")
+        )
+        doc = Dict{String, Any}(
+            "esm" => "1.1.0", "metadata" => Dict("name" => "act_ragged_contracted_parent"),
+            "index_sets" => Dict(
+                "parents" => Dict("kind" => "interval", "size" => 4),
+                "maxm" => Dict("kind" => "interval", "size" => 3),
+                "flat" => Dict("kind" => "interval", "size" => 5),
+                "dd" => Dict("kind" => "interval", "size" => 2),
+                "mop" => Dict(
+                    "kind" => "ragged", "of" => Any["parents"],
+                    "offsets" => "cnt", "values" => "mem"
+                )
+            ),
+            "models" => Dict(
+                "M" => Dict{String, Any}(
+                    "variables" => Dict(
+                        "cnt" => Dict("type" => "unknown", "shape" => Any["parents"]),
+                        "mem" => Dict("type" => "unknown", "shape" => Any["parents", "maxm"]),
+                        "w" => Dict("type" => "unknown", "shape" => Any["dd"]),
+                        "x" => Dict("type" => "unknown", "shape" => Any["flat"]),
+                        "tot" => Dict("type" => "unknown", "shape" => Any["dd"])
+                    ),
+                    "equations" => Any[
+                        Dict("lhs" => "cnt", "rhs" => cst(sizes)),
+                        Dict("lhs" => "mem", "rhs" => cst(mem)),
+                        Dict("lhs" => "w", "rhs" => cst(w)),
+                        Dict(
+                            "lhs" => dlhs("x", "k", "flat"),
+                            "rhs" => Dict(
+                                "op" => "faq", "args" => Any[], "output_idx" => Any["k"],
+                                "ranges" => Dict("k" => Dict("from" => "flat")),
+                                "expr" => Dict("op" => "*", "args" => Any[-0.1, idx("x", "k")])
+                            )
+                        ),
+                        Dict(
+                            "lhs" => dlhs("tot", "d", "dd"),
+                            "rhs" => Dict(
+                                "op" => "faq", "args" => Any[], "output_idx" => Any["d"],
+                                "ranges" => Dict(
+                                    "d" => Dict("from" => "dd"),
+                                    "a" => Dict("from" => "parents"),
+                                    "j" => Dict("from" => "mop", "of" => Any["a"])
+                                ),
+                                "expr" => Dict(
+                                    "op" => "*", "args" => Any[
+                                        idx("x", idx("mem", "a", "j")), idx("w", "d"),
+                                    ]
+                                )
+                            )
+                        ),
+                    ]
+                )
+            )
+        )
+        path = joinpath(mktempdir(), "act_ragged_contracted_parent.esm")
+        open(io -> JSON3.write(io, doc), path, "w")
+        same, _, _, (pn, u), _ = _act_agree(path)
+        @test same
+        du = _act_du(pn, u)
+        x = [u[pn.var_map["M.x[$m]"]] for m in 1:5]
+        for d in 1:2
+            acc = 0.0
+            for a in 1:4, j in 1:sizes[a]
+                acc += x[mem[a][j]] * w[d]
+            end
+            @test du[pn.var_map["M.tot[$d]"]] === acc
+        end
+    end
 end

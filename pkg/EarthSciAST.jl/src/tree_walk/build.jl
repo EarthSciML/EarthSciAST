@@ -5103,7 +5103,9 @@ function _build_evaluator_impl_pools(model::Model; kwargs...)
     _LANE_INTERN_POOL[] = _lane_intern_disabled() ? nothing :
         Dict{_LaneInternKey, Any}()
     try
-        return _build_evaluator_impl_inner(model; kwargs...)
+        # The shifted-scatter kernels this build holds out of the class merge
+        # (scatter.jl).
+        return _with_scatter_keep(() -> _build_evaluator_impl_inner(model; kwargs...))
     finally
         _LANE_INTERN_POOL[] = prev
     end
@@ -6513,6 +6515,70 @@ function _compile_faq_equation!(
     scan_fold = nothing
     affine_kernels = nothing
     affine_first_try = false
+    # ── One-pass equality scatter (scatter.jl) ──────────────────────────────
+    # A filter that pins an output index by equality (`j == i + 1`) admits each
+    # contracted point into one output cell. Every form below would test every
+    # point at every cell, O(cells × points); the scatter folds the points into
+    # their cells in one pass, in the naive visit order, so it is offered
+    # first. A decline leaves `covered` untouched and the cascade goes on.
+    if !rhs_list_compiled && !_stencil_disabled() && _array_contraction_enabled() &&
+            !empty_output && !isempty(range_iters)
+        sc = _detect_equality_scatter(
+            idx_names, contract_names, contract_ranges, contract_const,
+            agg_gates, agg_filter, rhs_oplus
+        )
+        # Every key a ±1 shift of its own contracted index: the equation splits
+        # into pieces the cascade takes as ordinary equations (the shift form).
+        pieces = sc === nothing ? nothing : _scatter_shift_pieces(
+                sc, eq, rhs_expr::OpExpr, lhs_body, idx_names, range_iters,
+                contract_names, contract_ranges, contract_const, rhs_body,
+                rhs_oplus, rhs_zerobar
+            )
+        if pieces !== nothing
+            _tally_cascade!(:equality_scatter_shift)
+            rec = _build_record()
+            declines = rec === nothing ? Pair{Symbol, Symbol}[] : copy(rec.declines)
+            for (w, plo, phi, peq) in pieces
+                where_ = join(
+                    (
+                        "$(idx_names[d])=$(plo[d])..$(phi[d])"
+                            for d in eachindex(idx_names)
+                    ), ", "
+                )
+                plabel = w == 0 ? "$(label), cells no point reaches ($(where_))" :
+                    "$(label), shifted scatter ($(where_))"
+                nk0 = length(acc_kernels)
+                keep = _scatter_keep_now()
+                _compile_faq_equation!(
+                    percell_scalar, acc_kernels, scan_folds,
+                    array_contractions, covered, peq, resolved_obs, array_var_info,
+                    var_map, const_registry, pgather, param_sym_set, reg_funcs;
+                    template_sites = template_sites, xeq = xeq, pooled_cells = pooled_cells,
+                    rhs_list_compiled = rhs_list_compiled, obs_nst = obs_nst,
+                    rule_label = plabel, rule_declines = declines
+                )
+                if keep !== nothing
+                    for k in (nk0 + 1):length(acc_kernels)
+                        keep[acc_kernels[k]] = nothing
+                    end
+                end
+            end
+            return nothing
+        end
+        if sc !== nothing
+            push!(offered, :equality_scatter)
+            ac = _try_compile_array_contraction(
+                lhs_body, rhs_body, covered; ac_kwargs...,
+                agg_gates = agg_gates, agg_filter = agg_filter,
+                contract_const = contract_const, scatter = sc
+            )
+            if ac !== nothing
+                _tally_cascade!(:array_contraction_codegen)
+                push!(array_contractions, ac)
+                return nothing
+            end
+        end
+    end
     # A contraction loop (out-of-place only) preempts this block when it is the
     # cheaper tier; otherwise it waits behind it as the fallback, which is the
     # `use_contraction_loop` read below.
@@ -7020,7 +7086,8 @@ function _faq_percell_license(
                 :affine_fold => "the affine tier's run-time fold",
                 :affine => "the affine tier",
                 :scan => "the prefix-scan tier",
-                :array_contraction => "the whole-array contraction tier"
+                :array_contraction => "the whole-array contraction tier",
+                :equality_scatter => "the one-pass equality scatter"
             )
             # Why the affine tier had nothing to try, when it had nothing.
             unoffered = if any(in((:affine_fold, :affine, :scan)), offered)
@@ -7125,13 +7192,16 @@ function _faq_diagnostic_cell(
             build(sub_rhs)
             return :cell
         end
-        iters = Vector{Int}[
-            contract_const[d] === nothing ?
-                _expand_contract_range(contract_ranges[d], idx_env, const_registry) :
-                contract_const[d] for d in eachindex(contract_names)
-        ]
-        whole = prod(length, iters) <= _REFUSAL_DIAGNOSTIC_TERMS
-        whole || (iters = Vector{Int}[unique!([first(c), last(c)]) for c in iters])
+        iters = _contract_iters_at(
+            contract_names, contract_ranges, idx_env, const_registry, contract_const
+        )
+        whole = (iters isa _ContractNest ? length(iters.tuples) : prod(length, iters)) <=
+            _REFUSAL_DIAGNOSTIC_TERMS
+        whole || (
+            iters = iters isa _ContractNest ?
+                _ContractNest(iters.tuples[1:_REFUSAL_DIAGNOSTIC_TERMS]) :
+                Vector{Int}[unique!([first(c), last(c)]) for c in iters]
+        )
         filt = agg_filter === nothing ? nothing : _sub_preserving(agg_filter, idx_exprs)
         n = 0
         capped = false
@@ -7179,7 +7249,20 @@ function _try_compile_array_contraction(
         # the admitted tuples become data (the TABLE form of `_ACFold`); a
         # filter is the per-cell expansion's `ifelse(filter, term, 0̄)` guard,
         # kept symbolic in the term.
-        agg_gates = nothing, agg_filter = nothing, contract_const = nothing, obs_nst::Int = 0
+        agg_gates = nothing, agg_filter = nothing, contract_const = nothing, obs_nst::Int = 0,
+        # A `_ScatterSpec` (scatter.jl): the filter pins output indices by
+        # equality, and the contraction is folded as a one-pass scatter.
+        scatter = nothing
+    )
+    scatter === nothing || return _try_compile_scatter(
+        lhs_body, rhs_body, covered, scatter; idx_names = idx_names,
+        ranges_dict = ranges_dict, range_iters = range_iters,
+        contract_names = contract_names, contract_ranges = contract_ranges,
+        contract_const = contract_const, rhs_oplus = rhs_oplus,
+        rhs_zerobar = rhs_zerobar, resolved_obs = resolved_obs,
+        array_var_info = array_var_info, var_map = var_map,
+        const_registry = const_registry, pgather = pgather,
+        param_sym_set = param_sym_set, reg_funcs = reg_funcs, obs_nst = obs_nst
     )
     # With no contracted index the equation is elementwise: the cell's value is
     # its term, written as it is with no fold and no seed (a pointwise filter is
@@ -7238,8 +7321,46 @@ function _try_compile_array_contraction(
                 for d in eachindex(contract_names)
             ]
         )
-    # The output cells, in `Iterators.product` order (dimension 1 fastest) — the
-    # order the emitted odometer reconstructs the loop counters in.
+    outs = _ac_claim_all_outs!(covered, lhs_body, idx_names, range_iters, var_map)
+    rngs = [_expand_int_range(ranges_dict[n]) for n in idx_names]
+    los = Int[first(r) for r in rngs]
+    stps = Int[step(r) for r in rngs]
+    lens = Int[length(r) for r in rngs]
+    # Emit the nest (array_contraction.jl). The whole equation is ONE body, so
+    # the emission is O(1) in both extents like the nest itself. A `Symbol` back
+    # is the emitter's decline reason: this tier has no interpreted form, so the
+    # equation goes back to the cascade, whose next and last form is the
+    # per-cell build (refused by a strict compiler, with this reason).
+    gen = _try_codegen_array_contraction(
+        out_refs, los, stps, lens, outs, node;
+        fold = fold, nst = obs_nst
+    )
+    if gen isa Symbol
+        # Hand the cells back untouched: every one was unclaimed on entry (the
+        # loop above throws on a second claim), so clearing restores `covered`.
+        _uncover!(covered, outs)
+        _note_decline!(:array_contraction, gen)
+        return nothing
+    end
+    # On the two-buffer slot space an observed's nest can take in the state
+    # kernel that consumes it (`_ac_take_consumers`), which needs it emitted again.
+    obs_nst > 0 || return gen
+    return _with_remit(
+        gen, outs,
+        cons -> _try_codegen_array_contraction(
+            out_refs, los, stps, lens, outs, node;
+            fold = fold, nst = obs_nst, consumer = cons
+        )
+    )
+end
+
+# The output cells' slots, in `Iterators.product` order (dimension 1 fastest)
+# — the order the emitted odometer reconstructs the loop counters in — each
+# claimed in `covered`.
+function _ac_claim_all_outs!(
+        covered::_Covered, lhs_body::OpExpr, idx_names::Vector{String},
+        range_iters, var_map::AbstractDict{String, Int}
+    )
     n_cells = prod(length(r) for r in range_iters)
     outs = Vector{Int}(undef, n_cells)
     c = 0
@@ -7297,36 +7418,7 @@ function _try_compile_array_contraction(
             outs[c] = idx
         end
     end
-    rngs = [_expand_int_range(ranges_dict[n]) for n in idx_names]
-    los = Int[first(r) for r in rngs]
-    stps = Int[step(r) for r in rngs]
-    lens = Int[length(r) for r in rngs]
-    # Emit the nest (array_contraction.jl). The whole equation is ONE body, so
-    # the emission is O(1) in both extents like the nest itself. A `Symbol` back
-    # is the emitter's decline reason: this tier has no interpreted form, so the
-    # equation goes back to the cascade, whose next and last form is the
-    # per-cell build (refused by a strict compiler, with this reason).
-    gen = _try_codegen_array_contraction(
-        out_refs, los, stps, lens, outs, node;
-        fold = fold, nst = obs_nst
-    )
-    if gen isa Symbol
-        # Hand the cells back untouched: every one was unclaimed on entry (the
-        # loop above throws on a second claim), so clearing restores `covered`.
-        _uncover!(covered, outs)
-        _note_decline!(:array_contraction, gen)
-        return nothing
-    end
-    # On the two-buffer slot space an observed's nest can take in the state
-    # kernel that consumes it (`_ac_take_consumers`), which needs it emitted again.
-    obs_nst > 0 || return gen
-    return _with_remit(
-        gen, outs,
-        cons -> _try_codegen_array_contraction(
-            out_refs, los, stps, lens, outs, node;
-            fold = fold, nst = obs_nst, consumer = cons
-        )
-    )
+    return outs
 end
 
 # The admitted contracted tuples of every output cell, as the TABLE form of
@@ -7369,6 +7461,8 @@ function _ac_table_fill!(
         zerobar, const_registry, reverse::Bool = false
     )
     nc = length(contract_names)
+    # A ragged range whose parent is contracted: each cell lists its nest.
+    deps = _contracted_parent_deps(contract_names, contract_ranges)
     c = 0
     for idx_tuple in cells
         c += 1
@@ -7376,6 +7470,7 @@ function _ac_table_fill!(
             idx_env[idx_names[d]] = idx_tuple[d]
         end
         for d in 1:nc
+            deps === nothing || break
             cc = contract_const === nothing ? nothing : contract_const[d]
             if cc !== nothing
                 iters[d] = cc
@@ -7384,7 +7479,9 @@ function _ac_table_fill!(
             end
         end
         # A reverse window's entries run from the top down (`_reverse_window`).
-        run = reverse ? [collect(Int, Iterators.reverse(iters[1]))] : iters
+        run = deps !== nothing ?
+            _contract_nest(contract_names, contract_ranges, deps, idx_env, const_registry) :
+            reverse ? [collect(Int, Iterators.reverse(iters[1]))] : iters
         _foreach_aggregate_term(
             nothing, contract_names, run, agg_gates, nothing,
             zerobar, idx_env
@@ -7538,16 +7635,12 @@ function _compile_faq_percell!(
                 # the current `idx_env` (variable-valence segment reduction —
                 # the per-cell bound is the cell's true valence, so absent
                 # neighbour slots are never iterated; no host-side padding).
-                cell_contract_iters = Vector{Vector{Int}}(undef, length(contract_names))
-                for d in 1:length(contract_names)
-                    cc = contract_const[d]
-                    cell_contract_iters[d] = cc === nothing ?
-                        _expand_contract_range(
-                            contract_ranges[d], idx_env,
-                            const_registry
-                        ) :
-                        cc
-                end
+                # A ragged range whose parent is contracted lists the cell's
+                # nest instead (`_contract_iters_at`).
+                cell_contract_iters = _contract_iters_at(
+                    contract_names, contract_ranges, idx_env,
+                    const_registry, contract_const
+                )
                 # M2 (§5.3 / §7.2) via the shared `_foreach_aggregate_term` core:
                 # a join-rejected combination is dropped (so a degenerate join
                 # keeps every term and is byte-identical); a filter-rejected one

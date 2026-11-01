@@ -193,6 +193,64 @@ def test_the_ragged_tier_folds_block_by_block_at_any_size(monkeypatch) -> None:
     assert _bitwise(got, want)
 
 
+def _hand_contracted_parent(vals: dict, out_d: int | None) -> np.ndarray | float:
+    """The naive nest for ``Σ_i Σ_{k ≤ nEdgesOnCell[i]} F[edgesOnCell[i,k]] (·w[i,d])``:
+    ``i`` outer, ``k`` ascending, one left fold."""
+    acc = None
+    for i in range(vals["nEdgesOnCell"].size):
+        for k in range(int(vals["nEdgesOnCell"][i])):
+            t = vals["F"][int(vals["edgesOnCell"][i, k]) - 1]
+            if out_d is not None:
+                t = t * vals["w"][i, out_d]
+            acc = t if acc is None else acc + t
+    return 0.0 if acc is None else acc
+
+
+@pytest.mark.parametrize("parent_first", [True, False])
+def test_a_ragged_range_whose_parent_is_contracted_folds_the_nest(parent_first) -> None:
+    """``Σ_i Σ_{k ∈ edges_of_cell(i)}`` with ``i`` contracted too (esm-spec §4.3.1
+    "Ragged ranges"): ``k``'s bound is read under each ``i``, ``i`` outer to
+    ``k`` even when ``k`` is declared first. Into a scalar, and into a free
+    output index."""
+    vals, n_edges = _mesh(50)
+    vals["w"] = np.random.default_rng(9).standard_normal((50, 3))
+    ctx = _ctx(vals, _mesh_sets(50, n_edges))
+    i_rng = {"i": {"from": "cells"}}
+    k_rng = {"k": {"from": "edges_of_cell", "of": ["i"]}}
+    ranges = {**i_rng, **k_rng} if parent_first else {**k_rng, **i_rng}
+    gather = _ix("F", _ix("edgesOnCell", "i", "k"))
+    scalar = ExprNode(op="faq", output_idx=[], expr=gather, ranges=dict(ranges))
+    free = ExprNode(
+        op="faq",
+        output_idx=["d"],
+        expr=_op("*", gather, _ix("w", "i", "d")),
+        ranges={"d": {"from": "dense"}, **ranges},
+    )
+    got, tiers = _native(scalar, ctx)
+    assert tiers.get("ragged-csr"), tiers
+    assert _bitwise(got, _oracle(scalar, ctx))
+    assert got == _hand_contracted_parent(vals, None)
+    got, tiers = _native(free, ctx)
+    assert tiers.get("ragged-csr"), tiers
+    assert _bitwise(got, _oracle(free, ctx))
+    want = np.array([_hand_contracted_parent(vals, d) for d in range(3)])
+    assert _bitwise(got, want)
+
+
+def test_a_filter_over_a_ragged_range_skips_the_excluded_terms() -> None:
+    """A ``filter`` over a ragged contraction drops the excluded terms before the
+    fold, under native's flat entries and the per-cell walk alike."""
+    vals, n_edges = _mesh(80)
+    ctx = _ctx(vals, _mesh_sets(80, n_edges))
+    node = _divergence()
+    node.filter = _op("<=", "k", 3)
+    got, tiers = _native(node, ctx)
+    assert tiers.get("ragged-csr"), tiers
+    assert _bitwise(got, _oracle(node, ctx))
+    capped = {**vals, "nEdgesOnCell": np.minimum(vals["nEdgesOnCell"], 3.0)}
+    assert _bitwise(got, _oracle(_divergence(), _ctx(capped, _mesh_sets(80, n_edges))))
+
+
 @pytest.mark.parametrize("reducer", ["+", "*", "max", "min", "or"])
 @pytest.mark.parametrize("shape", ["many-short", "few-long"])
 def test_segmented_fold_is_the_sequential_left_fold(reducer, shape) -> None:

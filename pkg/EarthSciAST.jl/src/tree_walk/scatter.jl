@@ -1,0 +1,1064 @@
+# One-pass scatter for an equality filter on an output index (esm-spec §4.3.1).
+#
+# A `faq` whose `filter` is a conjunction holding, for one or more output
+# indices `j_d`, a conjunct `j_d == e_d` (or `e_d == j_d`) where `e_d` reads
+# none of the node's output indices,
+#
+#     out[j] = ⊕_{i : i + 1 == j} a[i]·λ[i]
+#
+# admits each point of the contracted box into exactly one output cell, the
+# one `(e_1, …)` names. Folded as written, every output cell tests every point
+# of the contracted box, O(cells × points). Here the build makes ONE pass over
+# the contracted box per combination of the free (unpinned) output indices and
+# folds each point's term into the cell its keys name.
+#
+# THE ORDER IS THE NAIVE ONE. The pass visits the contracted box in the order
+# the per-cell expansion does (`_foreach_aggregate_term`: `Iterators.product`
+# over the contracted iterators, the first sorted name fastest), and a node
+# with an equality conjunct is never a scan, so it folds ascending. Each output
+# cell then receives exactly the terms the naive fold admits, in the same order
+# and the same association, so the result is the interpreter's bit for bit
+# under every ⊕, `max` and `min` with NaNs included. A point the naive fold
+# guards out contributes the identity there and nothing here, which is the
+# same value: a `+` accumulator seeded with +0.0 is never -0.0, `x * 1 == x`,
+# and a `max`/`min` identity never beats the accumulator.
+#
+# TWO FORMS.
+#   * STATIC keys (every `e_d` reads only index names, literals, folded
+#     metaparameters and `const` gathers): the scatter map is a function of the
+#     box alone. The build evaluates it once, sorts the admitted points by
+#     output cell stably (so each cell keeps them in visit order), and hands the
+#     whole-array nest the result as its TABLE fold (`_ACFold` with `seg` /
+#     `cols`, and a `row` map when one pinned cell's list serves it at every
+#     free coordinate). The nest then folds each cell over its own entries, so
+#     it can chunk over cells and stays bit-identical.
+#   * RUN-TIME keys (an `e_d` reads a state, a parameter, an observed or `t`):
+#     the generated pass (`_try_codegen_scatter`) evaluates each key per point
+#     on every call. It chunks only over the free output indices, each chunk
+#     owning the cells with its free coordinates, and keeps the pinned pass
+#     sequential in visit order.
+#
+# A RAGGED range whose parent is another contracted index (`{from: <ragged>,
+# of: [r]}`, `r` contracted) makes the box a nest, parent outer, not a product
+# (`_contract_nest`, resolve.jl). Both forms walk that nest in its own order:
+# the static form while it builds the table, the run-time form over a point
+# list the build walks once (only when no range reads an output index, so one
+# list serves every chunk).
+#
+# What it does not take falls through to the tiers below it unchanged: a join
+# gate, a ⊕ other than +, *, max, min, a run-time key over a ragged range whose
+# bound reads an output index, or a term or key that does not resolve with its
+# indices symbolic.
+
+# The kernels a shifted scatter's pieces compiled to, held out of the kernel
+# class merge (`_merge_acc_kernel_classes`). One set per build, in the
+# building task's local storage for the length of the build
+# (`_with_scatter_keep`), so the set dies with the build and two builds on two
+# tasks never see each other's. Outside a build there is no set and nothing is
+# held out.
+const _SCATTER_KEEP_KEY = :earthsci_scatter_keep
+
+_scatter_keep_now()::Union{Nothing, IdDict{Any, Nothing}} =
+    get(task_local_storage(), _SCATTER_KEEP_KEY, nothing)
+_with_scatter_keep(f) = task_local_storage(f, _SCATTER_KEEP_KEY, IdDict{Any, Nothing}())
+
+# The equality conjuncts that pin output indices, and the conjuncts left over.
+struct _ScatterSpec
+    pins::Vector{Tuple{Int, ASTExpr}}   # (position in the output indices, its key `e`)
+    rem::Union{Nothing, ASTExpr}        # the remaining conjuncts, in order, or `nothing`
+end
+
+# The conjuncts of `f`, nested `and`s flattened in order.
+function _scatter_conjuncts!(out::Vector{ASTExpr}, f::ASTExpr)
+    if f isa OpExpr && (f::OpExpr).op == "and" && (f::OpExpr).expr_body === nothing
+        for a in (f::OpExpr).args
+            _scatter_conjuncts!(out, a)
+        end
+    else
+        push!(out, f)
+    end
+    return out
+end
+
+# A `_ScatterSpec` when the faq qualifies (see the header), else `nothing`.
+function _detect_equality_scatter(
+        idx_names::Vector{String}, contract_names::Vector{String}, contract_ranges,
+        contract_const, agg_gates, agg_filter, oplus::String
+    )
+    agg_filter === nothing && return nothing
+    agg_gates === nothing || return nothing
+    isempty(contract_names) && return nothing
+    isempty(idx_names) && return nothing
+    (oplus == "+" || oplus == "*" || oplus == "max" || oplus == "min") || return nothing
+    conj = _scatter_conjuncts!(ASTExpr[], agg_filter)
+    pins = Tuple{Int, ASTExpr}[]
+    rest = ASTExpr[]
+    pinned(pos) = any(p -> p[1] == pos, pins)
+    reads_out(e) = any(n -> n in idx_names, _referenced_var_names(e))
+    function pin_of(x, e)
+        x isa VarExpr || return nothing
+        at = findfirst(==((x::VarExpr).name), idx_names)
+        (at === nothing || pinned(at) || reads_out(e)) && return nothing
+        return at
+    end
+    for c in conj
+        if c isa OpExpr && (c::OpExpr).op == "==" && length((c::OpExpr).args) == 2
+            a, b = (c::OpExpr).args
+            pos = pin_of(a, b)
+            if pos !== nothing
+                push!(pins, (pos, b))
+                continue
+            end
+            pos = pin_of(b, a)
+            if pos !== nothing
+                push!(pins, (pos, a))
+                continue
+            end
+        end
+        push!(rest, c)
+    end
+    isempty(pins) && return nothing
+    # A ragged contracted range is laid out per combination of the FREE output
+    # indices, so its bound must read no pinned one.
+    pinned_names = Set{String}(idx_names[p] for (p, _) in pins)
+    for (d, c) in enumerate(contract_const)
+        c === nothing || continue
+        for x in contract_ranges[d]
+            x isa ASTExpr || continue
+            any(n -> n in pinned_names, _referenced_var_names(x)) && return nothing
+        end
+    end
+    rem = isempty(rest) ? nothing :
+        length(rest) == 1 ? rest[1] : OpExpr("and", rest)
+    return _ScatterSpec(pins, rem)
+end
+
+# Whether a compiled key reads only build-time values: literals, loop counters
+# and `const` gathers of them, combined by plain operators.
+function _scatter_static_node(n::_Node)
+    k = n.kind
+    k === _NK_LITERAL && return true
+    k === _NK_LOOPVAR && return true
+    (k === _NK_CONST_GATHER || k === _NK_OP) || return false
+    return all(_scatter_static_node, n.children)
+end
+
+# A key's value as the `Float64` the naive filter compares the output index
+# with (`==` on a dual number compares its value).
+@inline _scatter_key(x::Float64) = x
+@inline function _scatter_key(x::Real)
+    v = _value(x)
+    return v === x ? Float64(x) : _scatter_key(v)
+end
+
+# The cell ordinal (0-based) along one pinned axis that key value `x` names,
+# or -1 when `x` is not an integer inside the axis's range.
+@inline function _scatter_axis_pos(x::Float64, lo::Int, st::Int, len::Int)
+    (isinteger(x) && -0x1p62 < x < 0x1p62) || return -1
+    w = Int(x) - lo
+    q = div(w, st)
+    (q * st == w && 0 <= q < len) || return -1
+    return q
+end
+
+# One pinned key at build: `aff` the `(pos, coef, c)` affine form over the
+# contracted indices when it has one (no tree walk), else the compiled node
+# and the counters its loop-var leaves read.
+struct _ScatterKey
+    aff::Union{Nothing, Tuple{Int, Int, Int}}
+    node::_Node
+    refs::Vector{Base.RefValue{Int}}
+end
+
+# The STATIC scatter map as a TABLE fold, or `nothing` when the pinned cells
+# outnumber what a point's cell ordinal is held in. One pass over the
+# contracted box in visit order computes each point's pinned cell, and a stable
+# counting sort groups the points by pinned cell, so each cell keeps them in
+# visit order. When no contracted range reads an output index the box is the
+# same for every combination of the free output indices, so one pass serves
+# them all, and each pinned cell's list is stored once: the fold's ROW map
+# sends every output cell to its pinned cell's list. A ragged range whose bound
+# reads free output indices gets one pass per combination, over its own box,
+# and the lists are laid out over the output cells in order.
+#
+# The box is the product of the contracted ranges, or, when a ragged range's
+# parent is another contracted index, the NEST `_contract_nest` lists (parent
+# outer, each level expanded once the outer levels are bound), walked by the
+# same `_walk_contract_nest` the per-cell expansion visits it through.
+function _scatter_table(
+        contract_refs::Vector{Base.RefValue{Int}}, contract_names::Vector{String},
+        contract_ranges, contract_const,
+        keys::Vector{_ScatterKey}, pinpos::Vector{Int}, idx_names::Vector{String},
+        los::Vector{Int}, stps::Vector{Int}, lens::Vector{Int},
+        oplus::String, zerobar::Float64, const_registry::AbstractDict
+    )
+    nd = length(lens)
+    nc = length(contract_refs)
+    free = Int[d for d in 1:nd if !(d in pinpos)]
+    pstride = Vector{Int}(undef, length(pinpos))
+    acc = 1
+    for (r, d) in enumerate(pinpos)
+        pstride[r] = acc
+        acc *= lens[d]
+    end
+    npin = acc
+    # A point's pinned cell is held as an `Int32` (`_scatter_box!`); past that
+    # many pinned cells the table is not built and the next tier takes over.
+    npin - 1 <= typemax(Int32) || return nothing
+    nfree = prod(Int[lens[d] for d in free]; init = 1)
+    deps = _contracted_parent_deps(contract_names, contract_ranges)
+    shared = _scatter_box_shared(contract_ranges, contract_const, idx_names)
+    gseg = Int[1]
+    gcols = Vector{Int}[Int[] for _ in 1:nc]
+    env = Dict{String, Int}()
+    lists = Vector{Vector{Int}}(undef, nc)
+    for d in 1:nc
+        contract_const[d] === nothing || (lists[d] = collect(Int, contract_const[d]))
+    end
+    box!() = begin
+        pts = if deps === nothing
+            for d in 1:nc
+                contract_const[d] === nothing &&
+                    (lists[d] = _expand_contract_range(contract_ranges[d], env, const_registry))
+            end
+            lists
+        else
+            _scatter_nest_points(contract_names, contract_ranges, deps, env, const_registry)
+        end
+        _scatter_box!(gseg, gcols, pts, keys, pinpos, pstride, npin, los, stps, lens)
+    end
+    if shared
+        box!()
+    else
+        # One box per combination of the free output indices (the first free
+        # index fastest), each over the ranges its bounds give there.
+        qf = zeros(Int, length(free))
+        for _ in 1:nfree
+            for (r, d) in enumerate(free)
+                env[idx_names[d]] = los[d] + qf[r] * stps[d]
+            end
+            box!()
+            for r in eachindex(qf)
+                qf[r] += 1
+                qf[r] < lens[free[r]] && break
+                qf[r] = 0
+            end
+        end
+    end
+    ncells = prod(lens; init = 1)
+    shared && return _ACFold(
+        contract_refs, Symbol(oplus), zerobar, gseg, gcols,
+        _scatter_rows(pinpos, pstride, lens, ncells)
+    )
+    seg = Vector{Int}(undef, ncells + 1)
+    cols = [Vector{Int}(undef, gseg[end] - 1) for _ in 1:nc]
+    _scatter_layout!(seg, cols, gseg, gcols, pinpos, pstride, free, lens, npin)
+    return _ACFold(contract_refs, Symbol(oplus), zerobar, seg, cols)
+end
+
+# Each output cell's pinned cell (1-based), dimension 1 fastest: the row of the
+# one shared box's table the cell folds.
+function _scatter_rows(pinpos::Vector{Int}, pstride::Vector{Int}, lens::Vector{Int}, ncells::Int)
+    nd = length(lens)
+    pst = zeros(Int, nd)
+    for (r, d) in enumerate(pinpos)
+        pst[d] = pstride[r]
+    end
+    row = Vector{Int}(undef, ncells)
+    qd = zeros(Int, nd)
+    @inbounds for c in 1:ncells
+        pq = 0
+        for d in 1:nd
+            pq += qd[d] * pst[d]
+        end
+        row[c] = pq + 1
+        for d in 1:nd
+            qd[d] += 1
+            qd[d] < lens[d] && break
+            qd[d] = 0
+        end
+    end
+    return row
+end
+
+# Whether the contracted box is the same at every output cell: no range that
+# is not constant reads an output index.
+function _scatter_box_shared(contract_ranges, contract_const, idx_names)
+    for (d, c) in enumerate(contract_const)
+        c === nothing || continue
+        for x in contract_ranges[d]
+            x isa ASTExpr || continue
+            any(n -> n in idx_names, _referenced_var_names(x)) && return false
+        end
+    end
+    return true
+end
+
+# The points of a nest box, as one column per contracted index (in
+# `contract_names` order), in visit order.
+struct _ScatterPoints
+    cols::Vector{Vector{Int}}
+end
+
+function _scatter_nest_points(contract_names, contract_ranges, deps, env, const_registry)
+    cols = Vector{Int}[Int[] for _ in contract_names]
+    _walk_contract_nest(contract_names, contract_ranges, deps, env, const_registry) do cur
+        @inbounds for a in eachindex(cols)
+            push!(cols[a], cur[a])
+        end
+    end
+    return _ScatterPoints(cols)
+end
+
+# A box's point count, and point `pt`'s value along contracted axis `a`
+# written into `gcols` (a product box: the first contracted index fastest).
+_scatter_npts(lists::Vector{Vector{Int}}) = prod(length, lists; init = 1)
+_scatter_npts(p::_ScatterPoints) = isempty(p.cols) ? 1 : length(p.cols[1])
+
+@inline function _scatter_put!(gcols, e::Int, lists::Vector{Vector{Int}}, pt::Int)
+    rest = pt - 1
+    @inbounds for a in eachindex(lists)
+        n = length(lists[a])
+        gcols[a][e] = lists[a][rest % n + 1]
+        rest = div(rest, n)
+    end
+    return nothing
+end
+@inline function _scatter_put!(gcols, e::Int, p::_ScatterPoints, pt::Int)
+    @inbounds for a in eachindex(p.cols)
+        gcols[a][e] = p.cols[a][pt]
+    end
+    return nothing
+end
+
+# One box: each point's pinned cell, then the admitted points grouped by cell
+# (stable), appended to `gseg` (one entry per pinned cell) and `gcols`.
+function _scatter_box!(
+        gseg::Vector{Int}, gcols::Vector{Vector{Int}}, pts,
+        keys::Vector{_ScatterKey}, pinpos::Vector{Int}, pstride::Vector{Int},
+        npin::Int, los::Vector{Int}, stps::Vector{Int}, lens::Vector{Int}
+    )
+    nc = length(gcols)
+    npts = _scatter_npts(pts)
+    pcell = Vector{Int32}(undef, npts)
+    _scatter_map!(pcell, pts, keys, pinpos, pstride, los, stps, lens)
+    cnt = zeros(Int, npin + 1)
+    @inbounds for q in pcell
+        q >= 0 && (cnt[q + 2] += 1)
+    end
+    base = gseg[end]
+    cnt[1] = base
+    @inbounds for c in 1:npin
+        cnt[c + 1] += cnt[c]
+    end
+    nadm = cnt[end] - base
+    start = length(gcols[1]) + 1
+    for d in 1:nc
+        resize!(gcols[d], start - 1 + nadm)
+    end
+    at = cnt[1:npin]
+    @inbounds for pt in 1:npts
+        q = pcell[pt]
+        q >= 0 || continue
+        e = at[q + 1]
+        at[q + 1] = e + 1
+        _scatter_put!(gcols, e, pts, pt)
+    end
+    append!(gseg, @view cnt[2:end])
+    return nothing
+end
+
+# The pinned cell (0-based sub-ordinal) the keys name for the contracted
+# values `vals`, or -1 when some key names no cell.
+@inline function _scatter_cell(
+        keys::Vector{_ScatterKey}, vals::Vector{Int}, pinpos::Vector{Int},
+        pstride::Vector{Int}, los::Vector{Int}, stps::Vector{Int}, lens::Vector{Int},
+        u0::Vector{Float64}
+    )
+    cell = 0
+    @inbounds for r in eachindex(keys)
+        key = keys[r]
+        d = pinpos[r]
+        pos = if key.aff !== nothing
+            kp, coef, c = key.aff
+            v = kp == 0 ? c : coef * vals[kp] + c
+            w = v - los[d]
+            qq = div(w, stps[d])
+            (qq * stps[d] == w && 0 <= qq < lens[d]) ? qq : -1
+        else
+            for a in eachindex(vals)
+                key.refs[a][] = vals[a]
+            end
+            x = _scatter_key(_eval_node(key.node, u0, nothing, 0.0, Float64))
+            _scatter_axis_pos(x, los[d], stps[d], lens[d])
+        end
+        pos < 0 && return -1
+        cell += pos * pstride[r]
+    end
+    return cell
+end
+
+# Each contracted point's pinned cell (0-based sub-ordinal), or -1 for a point
+# no cell admits. Points are numbered in visit order: a product box with the
+# first contracted index fastest, a nest box in its own listed order.
+function _scatter_map!(
+        pcell::Vector{Int32}, contract_lists::Vector{Vector{Int}},
+        keys::Vector{_ScatterKey}, pinpos::Vector{Int}, pstride::Vector{Int},
+        los::Vector{Int}, stps::Vector{Int}, lens::Vector{Int}
+    )
+    nc = length(contract_lists)
+    clens = Int[length(c) for c in contract_lists]
+    q = zeros(Int, nc)          # the odometer, 0-based per contracted axis
+    vals = Int[isempty(c) ? 0 : c[1] for c in contract_lists]
+    u0 = Float64[]
+    @inbounds for pt in eachindex(pcell)
+        pcell[pt] = Int32(_scatter_cell(keys, vals, pinpos, pstride, los, stps, lens, u0))
+        for a in 1:nc
+            q[a] += 1
+            if q[a] < clens[a]
+                vals[a] = contract_lists[a][q[a] + 1]
+                break
+            end
+            q[a] = 0
+            vals[a] = contract_lists[a][1]
+        end
+    end
+    return pcell
+end
+function _scatter_map!(
+        pcell::Vector{Int32}, p::_ScatterPoints,
+        keys::Vector{_ScatterKey}, pinpos::Vector{Int}, pstride::Vector{Int},
+        los::Vector{Int}, stps::Vector{Int}, lens::Vector{Int}
+    )
+    nc = length(p.cols)
+    vals = zeros(Int, nc)
+    u0 = Float64[]
+    @inbounds for pt in eachindex(pcell)
+        for a in 1:nc
+            vals[a] = p.cols[a][pt]
+        end
+        pcell[pt] = Int32(_scatter_cell(keys, vals, pinpos, pstride, los, stps, lens, u0))
+    end
+    return pcell
+end
+
+# The per-cell lists of a box per free combination laid out over every output
+# cell (dimension 1 fastest): cell `c` with free ordinal `fo` and pinned
+# ordinal `pq` takes the list `gseg[k]:gseg[k+1]-1` for `k = fo·npin + pq + 1`.
+function _scatter_layout!(
+        seg::Vector{Int}, cols::Vector{Vector{Int}}, gseg::Vector{Int},
+        gcols::Vector{Vector{Int}}, pinpos::Vector{Int}, pstride::Vector{Int},
+        free::Vector{Int}, lens::Vector{Int}, npin::Int
+    )
+    nd = length(lens)
+    nc = length(gcols)
+    fstride = zeros(Int, nd)
+    acc = 1
+    for d in free
+        fstride[d] = acc
+        acc *= lens[d]
+    end
+    pst = zeros(Int, nd)
+    for (r, d) in enumerate(pinpos)
+        pst[d] = pstride[r]
+    end
+    ncells = length(seg) - 1
+    seg[1] = 1
+    e = 0
+    qd = zeros(Int, nd)
+    @inbounds for c in 1:ncells
+        pq = 0
+        fo = 0
+        for d in 1:nd
+            pq += qd[d] * pst[d]
+            fo += qd[d] * fstride[d]
+        end
+        k = fo * npin + pq + 1
+        for g in gseg[k]:(gseg[k + 1] - 1)
+            e += 1
+            for a in 1:nc
+                cols[a][e] = gcols[a][g]
+            end
+        end
+        seg[c + 1] = e + 1
+        for d in 1:nd
+            qd[d] += 1
+            qd[d] < lens[d] && break
+            qd[d] = 0
+        end
+    end
+    return seg
+end
+
+# The per-call "cell already folded" flags of a run-time scatter pass whose `du`
+# is not `Float64`. Each call takes a buffer and gives it back when it is done,
+# so calls that overlap (an ensemble's threads, a threaded Jacobian, two
+# integrators on one build) never share one. A buffer is allocated only when
+# every one the pool holds is out, so after the first calls at a given level of
+# concurrency the pass allocates nothing. The pool is shared by every copy of
+# the right-hand side (a program's workspaces, rhs_program.jl), which the lock
+# makes safe.
+struct _ScatterSeen
+    lock::Threads.SpinLock
+    free::Vector{Vector{Bool}}
+    n::Int
+end
+_ScatterSeen(n::Int) = _ScatterSeen(Threads.SpinLock(), Vector{Bool}[], n)
+
+@inline function _scatter_seen_take!(s::_ScatterSeen)
+    lock(s.lock)
+    v = isempty(s.free) ? nothing : pop!(s.free)
+    unlock(s.lock)
+    return v === nothing ? Vector{Bool}(undef, s.n) : v
+end
+@inline function _scatter_seen_give!(s::_ScatterSeen, v::Vector{Bool})
+    lock(s.lock)
+    push!(s.free, v)
+    unlock(s.lock)
+    return nothing
+end
+
+# The RUN-TIME scatter: a generated pass that evaluates each key per point on
+# every call. Per combination of the free output indices (the chunked axis):
+# every pinned cell is set to 0̄, then the contracted box is walked in visit
+# order; a point whose keys all name a cell folds its term into that cell.
+#
+# A cell's first term is folded onto the `Float64` 0̄ itself, as the per-cell
+# fold seeds it (`_cg_fold`); later ones onto the value the cell holds. With a
+# `Float64` `du` the cell holds that very 0̄ until its first term, so every term
+# folds onto the cell and no flag is kept. With any other value type the 0̄ the
+# cell holds is converted (a dual number with zero partials), and folding onto
+# it is not folding onto the `Float64` (`+0.0 + -0.0` is `+0.0` in a partial),
+# so the cell is marked unvisited and its first term folds onto the `Float64`
+# 0̄; the marks live in a buffer the call takes from a `_ScatterSeen` pool.
+#
+# With a state `consumer` (`_ac_take_consumers`), once the box has been walked
+# for a free combination each of its pinned cells computes the consumer's cell
+# from the value it holds, as the consumer would read it back from the buffer.
+function _try_codegen_scatter(
+        out_refs::Vector{Base.RefValue{Int}},
+        los::Vector{Int}, steps::Vector{Int}, lens::Vector{Int},
+        outs::Vector{Int}, body::_Node,
+        contract_refs::Vector{Base.RefValue{Int}},
+        contract_ranges::Vector{StepRange{Int, Int}},
+        keys::Vector{Tuple{_Node, Vector{Base.RefValue{Int}}, Vector{Base.RefValue{Int}}}},
+        pinpos::Vector{Int}, op::Symbol, zerobar::Float64; nst::Int = 0,
+        # A nest box's points (one column per contracted index, in visit
+        # order), walked as one flat loop in place of the product's loops.
+        points::Union{Nothing, Vector{Vector{Int}}} = nothing,
+        consumer = nothing
+    )
+    _codegen_disabled() && return :codegen_disabled
+    ctx = _CGCtx(_codegen_node_budget(); nst = nst)
+    cons = nothing
+    if consumer !== nothing
+        Kc, ix, delta = consumer
+        _cg_note_nest!(ctx, Kc)
+        cons = (K = Kc, ix = ix, delta = delta, store = true, invsyms = _cg_inv!(ctx, Kc))
+    end
+    kc = _CGScalarCtx()
+    nd = length(out_refs)
+    free = Int[d for d in 1:nd if !(d in pinpos)]
+    stride = Vector{Int}(undef, nd)
+    acc = 1
+    for d in 1:nd
+        stride[d] = acc
+        acc *= lens[d]
+    end
+    ncells = acc
+    nfree = prod(Int[lens[d] for d in free]; init = 1)
+    npin = prod(Int[lens[d] for d in pinpos]; init = 1)
+    fnsym = try
+        _cg_oplus_fn(op)
+    catch err
+        err isa _CodegenDecline || rethrow()
+        return err.reason
+    end
+    fc = _cg_name(ctx, "fc")
+    rv = _cg_name(ctx, "r")
+    base = _cg_name(ctx, "base")
+    # The free output counters, decoded from the chunk ordinal.
+    dec = Any[:(local $rv = $fc - 1), :(local $base = 0)]
+    for d in free
+        iv = _cg_name(ctx, "oi")
+        kc.loops[out_refs[d]] = iv
+        qv = _cg_name(ctx, "q")
+        lo = _cg_geo!(ctx, los[d], (los, d))
+        len = _cg_geo!(ctx, lens[d], (lens, d))
+        st = _cg_geo!(ctx, steps[d], (steps, d), true)
+        sd = _cg_geo!(ctx, stride[d], (stride, d), true)
+        push!(dec, :(local $qv = $rv % $len))
+        push!(dec, :(local $iv = $lo + $qv * $st))
+        push!(dec, :($base += $qv * $sd))
+        push!(dec, :($rv = div($rv, $len)))
+    end
+    # The pinned counters, bound per point from the keys.
+    pinv = Symbol[]
+    for d in pinpos
+        iv = _cg_name(ctx, "oi")
+        kc.loops[out_refs[d]] = iv
+        push!(pinv, iv)
+    end
+    # The contracted counters: the term's and every key's loop-var leaves.
+    kvs = Symbol[]
+    # The span each contracted counter takes, or `nothing` for an empty one.
+    cspan(j) = if points === nothing
+        rg = contract_ranges[j]
+        isempty(rg) ? nothing : extrema((first(rg), last(rg)))
+    else
+        isempty(points[j]) ? nothing : extrema(points[j])
+    end
+    for (j, r) in enumerate(contract_refs)
+        kv = _cg_name(ctx, "kk")
+        kc.loops[r] = kv
+        push!(kvs, kv)
+        sp = cspan(j)
+        sp === nothing || (kc.spans[r] = sp)
+    end
+    for (_, crefs, orefs) in keys
+        for (j, r) in enumerate(crefs)
+            kc.loops[r] = kvs[j]
+            sp = cspan(j)
+            sp === nothing ? delete!(kc.spans, r) : (kc.spans[r] = sp)
+        end
+        for (d, r) in enumerate(orefs)
+            kc.loops[r] = kc.loops[out_refs[d]]
+        end
+    end
+    ov = _cg_name(ctx, "outs")
+    sv = _cg_name(ctx, "seen")
+    dw = _cg_name(ctx, "dw")
+    off = _cg_name(ctx, "off")
+    tv = _cg_name(ctx, "tv")
+    slv = _cg_name(ctx, "sl")
+    cord = _cg_name(ctx, "co")
+    # Per point: each key, its cell along its axis, or the next point.
+    pbody = Any[:(local $off = $base)]
+    stmts = try
+        for (r, d) in enumerate(pinpos)
+            ex = _cg_emit(ctx, kc, keys[r][1])
+            xv = _cg_name(ctx, "x")
+            qv = _cg_name(ctx, "q")
+            lo = _cg_geo!(ctx, los[d], (los, d))
+            len = _cg_geo!(ctx, lens[d], (lens, d))
+            st = _cg_geo!(ctx, steps[d], (steps, d), true)
+            sd = _cg_geo!(ctx, stride[d], (stride, d), true)
+            push!(pbody, :(local $xv = _scatter_key($ex)))
+            push!(pbody, :(local $qv = _scatter_axis_pos($xv, $lo, $st, $len)))
+            push!(pbody, :($qv < 0 && continue))
+            push!(pbody, :(local $(pinv[r]) = $lo + $qv * $st))
+            push!(pbody, :($off += $qv * $sd))
+        end
+        term = _cg_emit(ctx, kc, body)
+        push!(pbody, :(local $cord = $off + 1))
+        push!(pbody, :(local $slv = $ov[$cord]))
+        push!(pbody, :(local $tv = $term))
+        pbody
+    catch err
+        err isa _CodegenDecline || rethrow()
+        return err.reason
+    end
+    # The fold into the cell: onto the value it holds (`Float64` `du`), or
+    # onto the `Float64` 0̄ when the cell is still unvisited.
+    fold_plain = :($dw[$slv] = $fnsym($dw[$slv], $tv))
+    fold_flag = quote
+        if $sv[$cord]
+            $dw[$slv] = $fnsym($dw[$slv], $tv)
+        else
+            $dw[$slv] = $fnsym($zerobar, $tv)
+            $sv[$cord] = true
+        end
+    end
+    olv = _cg_name(ctx, "oln")
+    cxv = _cg_name(ctx, "x")
+    cstmts = if cons === nothing
+        Any[]
+    else
+        try
+            _cg_scan_consumer_cell(ctx, cons, olv, cxv)
+        catch err
+            err isa _CodegenDecline || rethrow()
+            return err.reason
+        end
+    end
+    # The contracted loops' headers, the first contracted index innermost, or
+    # the nest's one loop over its points with each counter read from its
+    # column (bound once, ahead of the chunk loop).
+    colsets = Any[]
+    heads = Tuple{Expr, Vector{Any}}[]
+    if points === nothing
+        for j in eachindex(kvs)
+            rg = contract_ranges[j]
+            lo = _cg_geo!(ctx, first(rg), (contract_ranges, j, :lo))
+            st = _cg_geo!(ctx, step(rg), (contract_ranges, j, :step), true)
+            hi = _cg_geo!(ctx, last(rg), (contract_ranges, j, :hi))
+            push!(heads, (:($(kvs[j]) = $lo:$st:$hi), Any[]))
+        end
+    else
+        ppv = _cg_name(ctx, "pp")
+        bind = Any[]
+        for j in eachindex(kvs)
+            colv = _cg_name(ctx, "col")
+            push!(colsets, :(local $colv = $(_cg_tab!(ctx, points[j]))))
+            push!(bind, :(local $(kvs[j]) = $colv[$ppv]))
+        end
+        npv = _cg_geo!(ctx, length(points[1]))
+        push!(heads, (:($ppv = 1:$npv), bind))
+    end
+    # The walk over the contracted box with `fold` at each admitted point.
+    function mkloop(fold)
+        loop = Expr(:block, map(copy, stmts)..., copy(fold))
+        for (h, bind) in heads
+            loop = Expr(:for, copy(h), Expr(:block, map(copy, bind)..., loop))
+        end
+        return loop
+    end
+    # The pinned cells of this chunk's free coordinates: 0̄, unvisited.
+    pc = _cg_name(ctx, "pc")
+    pr = _cg_name(ctx, "pr")
+    po = _cg_name(ctx, "po")
+    pdec = Any[:(local $pr = $pc - 1), :(local $po = $base + 1)]
+    for d in pinpos
+        len = _cg_geo!(ctx, lens[d], (lens, d))
+        sd = _cg_geo!(ctx, stride[d], (stride, d), true)
+        push!(pdec, :($po += ($pr % $len) * $sd))
+        push!(pdec, :($pr = div($pr, $len)))
+    end
+    npinv = _cg_geo!(ctx, npin)
+    init_plain = quote
+        for $pc in 1:$npinv
+            $(pdec...)
+            $dw[$ov[$po]] = $zerobar
+        end
+    end
+    init_flag = quote
+        for $pc in 1:$npinv
+            $(map(copy, pdec)...)
+            $dw[$ov[$po]] = $zerobar
+            $sv[$po] = false
+        end
+    end
+    # The consumer's cells of this chunk's free coordinates.
+    post = nothing
+    if !isempty(cstmts)
+        post = quote
+            for $pc in 1:$npinv
+                $(map(copy, pdec)...)
+                local $olv = $ov[$po]
+                local $cxv = $dw[$olv]
+                $(cstmts...)
+            end
+        end
+    end
+    outsv = _cg_tab!(ctx, outs)
+    poolv = _cg_tab!(ctx, _ScatterSeen(ncells))
+    av = _cg_name(ctx, "a")
+    bv = _cg_name(ctx, "b")
+    abv = _cg_name(ctx, "ab")
+    nfreev = _cg_geo!(ctx, nfree)
+    oside = isempty(outs) ? :x : _cg_slot_side(nst, extrema(outs)...)
+    dstore = oside === :x ? :du : :(_cg_dview(du, Val($(QuoteNode(oside)))))
+    ln = LineNumberNode(0, Symbol("faq-equality-scatter"))
+    whole = quote
+        $(ctx.geosink...)
+        $(cons === nothing ? nothing : Expr(:block, ctx.prologue...))
+        local $ov = $outsv
+        $(colsets...)
+        local $abv = _chunk_ordinals($nfreev, _cgci, _cgnc)
+        local $av = $abv[1]
+        local $bv = $abv[2]
+        local $dw = $dstore
+        if eltype($dw) === Float64
+            for $fc in ($av + 1):$bv
+                $(dec...)
+                $init_plain
+                $(mkloop(fold_plain))
+                $(post === nothing ? nothing : copy(post))
+            end
+        else
+            local $sv = _scatter_seen_take!($poolv)
+            for $fc in ($av + 1):$bv
+                $(map(copy, dec)...)
+                $init_flag
+                $(mkloop(fold_flag))
+                $(post === nothing ? nothing : copy(post))
+            end
+            _scatter_seen_give!($poolv, $sv)
+        end
+    end
+    ngrp = length(ctx.tab_types)
+    grpstmts = Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]
+    ex = Expr(
+        :function, Expr(:tuple, :du, :u, :p, :t, :tabs, :_cgci, :_cgnc),
+        Expr(
+            :block, grpstmts...,
+            :(local _cgT = _rhs_value_type(u, p, t)),
+            ctx.helpers...,
+            Expr(:macrocall, Symbol("@inbounds"), ln, whole),
+            :(return nothing)
+        )
+    )
+    f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
+        @__MODULE__, @__MODULE__, ex
+    )
+    tabpack = ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp)
+    npts = points === nothing ? prod(length, contract_ranges; init = 1) : length(points[1])
+    kw = _node_work(body)
+    for k in keys
+        kw = Base.Checked.checked_add(kw, _node_work(k[1]))
+    end
+    work = Base.Checked.checked_add(
+        ncells,
+        Base.Checked.checked_mul(Base.Checked.checked_mul(nfree, npts), kw)
+    )
+    # Each chunk owns the cells of its free coordinates, and the pass inside a
+    # chunk is sequential, so chunks never share a cell.
+    return _ArrayContraction(f, tabpack, _SecTCache(nfree, true, work))
+end
+
+# THE SHIFT FORM. When every pinned key is `±k + c` on its own contracted
+# index `k` (unit-step), each output cell names exactly one value of `k`, and
+# its terms are the points with `k` at that value, the other contracted indices
+# varying in their product order. That is an ordinary contraction over the
+# other contracted indices with `k := ±(j - c)` substituted, which needs no
+# scatter map at all: the equation is split along each pinned axis into the run
+# of cells that `k`'s range reaches, where it takes that contraction, and the
+# cells outside it, where it takes 0̄. The pieces go back through the cascade as
+# equations of their own, so a band transpose (`L[j] = Σ_{i+1=j} a[i] u[i]`)
+# becomes the affine stencil `L[j] = 0 + a[j-1] u[j-1]` on cells 2..N and 0 on
+# cell 1.
+#
+# The values are the naive fold's. A cell's admitted points are folded in the
+# same order from the same seed: with another contracted index left, the piece
+# is a contraction seeded from 0̄ and guarded by the remaining conjuncts; with
+# none, its one point is written `0̄ ⊕ ifelse(rem, term, 0̄)`, the seed kept as
+# an operand, since `0̄ ⊕ t` is not `t` (+0.0 + -0.0 is +0.0).
+#
+# Returns `(region, lo, hi, equation)` pieces (region 1 for a live piece, 0 for
+# a 0̄ one), or `nothing` when the shape does not qualify.
+function _scatter_shift_pieces(
+        sc::_ScatterSpec, eq::Equation, rhs_op::OpExpr, lhs_body::OpExpr,
+        idx_names::Vector{String}, range_iters, contract_names::Vector{String},
+        contract_ranges, contract_const, rhs_body::ASTExpr,
+        oplus::String, zerobar::Float64
+    )
+    all(r -> r isa UnitRange{Int} && !isempty(r), range_iters) || return nothing
+    nd = length(idx_names)
+    subs = Dict{String, ASTExpr}()
+    live = Dict{Int, Tuple{Int, Int}}()
+    for (pos, e) in sc.pins
+        aff = _lhs_index_affine(e, contract_names)
+        aff === nothing && return nothing
+        kp, coef, c = aff
+        (kp != 0 && (coef == 1 || coef == -1)) || return nothing
+        kname = contract_names[kp]
+        haskey(subs, kname) && return nothing
+        kc = contract_const[kp]
+        (kc !== nothing && !isempty(kc) && _is_unit_run(kc)) || return nothing
+        klo, khi = first(kc), last(kc)
+        jlo, jhi = first(range_iters[pos]), last(range_iters[pos])
+        a, b = coef == 1 ? (klo + c, khi + c) : (c - khi, c - klo)
+        live[pos] = (max(a, jlo), min(b, jhi))
+        jv = VarExpr(idx_names[pos])
+        subs[kname] = coef == 1 ?
+            (c == 0 ? jv : OpExpr("-", ASTExpr[jv, IntExpr(Int64(c))])) :
+            OpExpr("-", ASTExpr[IntExpr(Int64(c)), jv])
+    end
+    others = String[n for n in contract_names if !haskey(subs, n)]
+    # A remaining range bound read through a substituted index would change
+    # with the cell.
+    for n in others
+        d = findfirst(==(n), contract_names)
+        for x in contract_ranges[d]
+            x isa ASTExpr || continue
+            any(m -> haskey(subs, m), _referenced_var_names(x)) && return nothing
+        end
+    end
+    body = _sub_preserving(rhs_body, subs)
+    rem = sc.rem === nothing ? nothing : _sub_preserving(sc.rem, subs)
+    # Without its equality the piece's filter could read as a reverse window
+    # (`j <= i` alone), which folds descending; the node folds ascending.
+    !isempty(others) && _reverse_window(rem, others, idx_names) && return nothing
+    zero = NumExpr(zerobar)
+    live_rhs(ranges) = if isempty(others)
+        term = rem === nothing ? body : OpExpr("ifelse", ASTExpr[rem, body, zero])
+        OpExpr(
+            "faq", ASTExpr[]; output_idx = Any[n for n in idx_names], ranges = ranges,
+            expr_body = OpExpr(oplus, ASTExpr[zero, term])
+        )
+    else
+        for n in others
+            d = findfirst(==(n), contract_names)
+            ranges[n] = contract_ranges[d]
+        end
+        reconstruct(
+            rhs_op; output_idx = Any[n for n in idx_names], ranges = ranges,
+            expr_body = body, filter = rem
+        )
+    end
+    # Each pinned axis in up to three segments: below the live run, the run,
+    # above it. Every other output axis whole.
+    segs = Vector{Vector{Tuple{Int, Int, Bool}}}(undef, nd)
+    for d in 1:nd
+        jlo, jhi = first(range_iters[d]), last(range_iters[d])
+        if haskey(live, d)
+            a, b = live[d]
+            sd = Tuple{Int, Int, Bool}[]
+            if a > b
+                push!(sd, (jlo, jhi, false))
+            else
+                a > jlo && push!(sd, (jlo, a - 1, false))
+                push!(sd, (a, b, true))
+                b < jhi && push!(sd, (b + 1, jhi, false))
+            end
+            segs[d] = sd
+        else
+            segs[d] = [(jlo, jhi, true)]
+        end
+    end
+    out = Tuple{Int, Vector{Int}, Vector{Int}, Equation}[]
+    for I in Iterators.product(segs...)
+        plo = Int[I[d][1] for d in 1:nd]
+        phi = Int[I[d][2] for d in 1:nd]
+        alive = all(d -> I[d][3], 1:nd)
+        ranges = Dict{String, Any}(idx_names[d] => Any[plo[d], phi[d]] for d in 1:nd)
+        prhs = alive ? live_rhs(copy(ranges)) :
+            OpExpr(
+                "faq", ASTExpr[]; output_idx = Any[n for n in idx_names],
+                ranges = copy(ranges), expr_body = zero
+            )
+        peq = Equation(
+            OpExpr(
+                "faq", ASTExpr[]; output_idx = Any[n for n in idx_names],
+                ranges = ranges, expr_body = lhs_body
+            ),
+            prhs; _comment = eq._comment
+        )
+        push!(out, (alive ? 1 : 0, plo, phi, peq))
+    end
+    return out
+end
+
+# `e` resolved and compiled once with every index symbolic: `(output counters,
+# contracted counters, node)`, or `nothing` when it does not lower.
+function _scatter_symbolic(
+        e::ASTExpr, resolved_obs, idx_names, contract_names, array_var_info,
+        var_map, const_registry, pgather, param_sym_set, reg_funcs
+    )
+    b = isempty(resolved_obs) ? e : _sub_preserving(e, resolved_obs)
+    got = _resolve_array_contraction_term(
+        b, idx_names, contract_names,
+        array_var_info, var_map, const_registry, pgather; nest_scalar_loops = true
+    )
+    got === nothing && return nothing
+    nd = try
+        _compile(got[3], var_map, param_sym_set, reg_funcs)
+    catch err
+        _is_resource_error(err) && rethrow()
+        return nothing
+    end
+    return (got[1], got[2], nd)
+end
+
+# The whole-array nest's entry for a scatter (`_try_compile_array_contraction`
+# hands it a `_ScatterSpec`): the term guarded by the remaining conjuncts and
+# each key resolved once with every index symbolic, then the STATIC table or the
+# RUN-TIME pass. `nothing` with `covered` untouched for anything it cannot model.
+function _try_compile_scatter(
+        lhs_body::OpExpr, rhs_body::ASTExpr, covered::_Covered, sc::_ScatterSpec;
+        idx_names::Vector{String}, ranges_dict, range_iters,
+        contract_names::Vector{String}, contract_ranges, contract_const,
+        rhs_oplus::String, rhs_zerobar::Float64,
+        resolved_obs::Dict{String, ASTExpr}, array_var_info,
+        var_map::AbstractDict{String, Int}, const_registry::AbstractDict,
+        pgather::AbstractDict, param_sym_set, reg_funcs, obs_nst::Int = 0
+    )
+    term = sc.rem === nothing ? rhs_body :
+        OpExpr("ifelse", ASTExpr[sc.rem, rhs_body, NumExpr(rhs_zerobar)])
+    sym(e) = _scatter_symbolic(
+        e, resolved_obs, idx_names, contract_names, array_var_info,
+        var_map, const_registry, pgather, param_sym_set, reg_funcs
+    )
+    tgot = sym(term)
+    if tgot === nothing
+        _note_decline!(:array_contraction, :symbolic_body_did_not_lower)
+        return nothing
+    end
+    out_refs, contract_refs, node = tgot
+    kgots = Any[]
+    for (_, e) in sc.pins
+        g = sym(e)
+        if g === nothing
+            _note_decline!(:array_contraction, :symbolic_body_did_not_lower)
+            return nothing
+        end
+        push!(kgots, g)
+    end
+    pinpos = Int[p for (p, _) in sc.pins]
+    rngs = [_expand_int_range(ranges_dict[n]) for n in idx_names]
+    los = Int[first(r) for r in rngs]
+    stps = Int[step(r) for r in rngs]
+    lens = Int[length(r) for r in rngs]
+    static = all(g -> _scatter_static_node(g[3]), kgots)
+    if static
+        keys = _ScatterKey[]
+        for (r, (_, e)) in enumerate(sc.pins)
+            ee = isempty(resolved_obs) ? e : _sub_preserving(e, resolved_obs)
+            push!(keys, _ScatterKey(_lhs_index_affine(ee, contract_names), kgots[r][3], kgots[r][2]))
+        end
+        fold = _scatter_table(
+            contract_refs, contract_names, contract_ranges, contract_const, keys, pinpos,
+            idx_names, los, stps, lens, rhs_oplus, rhs_zerobar, const_registry
+        )
+        if fold === nothing
+            _note_decline!(:array_contraction, :scatter_too_many_pinned_cells)
+            return nothing
+        end
+        outs = _ac_claim_all_outs!(covered, lhs_body, idx_names, range_iters, var_map)
+        emit = cons -> _try_codegen_array_contraction(
+            out_refs, los, stps, lens, outs, node;
+            fold = fold, nst = obs_nst, consumer = cons
+        )
+        tier = :equality_scatter_table
+    else
+        cranges = StepRange{Int, Int}[]
+        deps = _contracted_parent_deps(contract_names, contract_ranges)
+        points = nothing
+        if deps === nothing
+            for c in contract_const
+                (c isa AbstractRange && !isempty(c)) || (_note_decline!(:array_contraction, :scatter_ragged_or_empty); return nothing)
+                push!(cranges, first(c):step(c):last(c))
+            end
+        else
+            # A nest box: walked once here into a point list the pass runs
+            # over, which must then be the same for every chunk.
+            _scatter_box_shared(contract_ranges, contract_const, idx_names) ||
+                (_note_decline!(:array_contraction, :scatter_ragged_reads_output); return nothing)
+            points = _scatter_nest_points(
+                contract_names, contract_ranges, deps, Dict{String, Int}(), const_registry
+            ).cols
+        end
+        outs = _ac_claim_all_outs!(covered, lhs_body, idx_names, range_iters, var_map)
+        ktups = Tuple{_Node, Vector{Base.RefValue{Int}}, Vector{Base.RefValue{Int}}}[
+            (g[3], g[2], g[1]) for g in kgots
+        ]
+        emit = cons -> _try_codegen_scatter(
+            out_refs, los, stps, lens, outs, node, contract_refs, cranges, ktups,
+            pinpos, Symbol(rhs_oplus), rhs_zerobar; nst = obs_nst, points = points,
+            consumer = cons
+        )
+        tier = :equality_scatter_pass
+    end
+    gen = emit(nothing)
+    if gen isa Symbol
+        _uncover!(covered, outs)
+        _note_decline!(:array_contraction, gen)
+        return nothing
+    end
+    _tally_cascade!(tier)
+    # On the two-buffer slot space an observed the scatter fills can take in
+    # the state kernel that consumes it (`_ac_take_consumers`), as the dense
+    # nest's can (`_try_compile_array_contraction`).
+    obs_nst > 0 || return gen
+    return _with_remit(gen, outs, emit)
+end
