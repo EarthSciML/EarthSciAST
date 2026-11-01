@@ -553,6 +553,39 @@ _sx_ragged_ics(uval) = Dict{String, Any}("u[$i]" => v for (i, v) in enumerate(uv
         end
     end
 
+    @testset "a free output index over a TABLE: one list per pinned cell" begin
+        # A static key that is no shift (a `const` gather), with a free output
+        # index: the table stores each pinned cell's list once and every free
+        # coordinate folds it.
+        map8 = [2, 2, 1, 1, 3, 3, 1, 4]
+        for rt in (false, true), red in ("+", "max")
+            e = _sxi(_sxk(map8), "i")
+            rhs = _sx_faq(
+                outs = ["j", "m"], osizes = [4, 3], cr = Dict("i" => [1, 8]), reduce = red,
+                filt = _sx("==", "j", rt ? _sx_rt(e) : e),
+                body = _sx("*", _sxi("u", "i", "m"), _sx("+", "m", 0.5))
+            )
+            doc = _sx_doc(rhs; outs = ["j", "m"], osizes = [4, 3], ushape = [8, 3])
+            _sx_check(doc, _sx_ics([8, 3], (i, m) -> _SX_CANCEL[mod1(i, 4)] * m); form = rt ? :pass : :table)
+        end
+        # The free index read by a remaining conjunct and by the term's
+        # gather, so neither is fixed per shared entry; free index first.
+        rhs = _sx_faq(
+            outs = ["m", "j"], osizes = [3, 4], cr = Dict("i" => [1, 8]),
+            filt = _sx("and", _sx("==", "j", _sxi(_sxk(map8), "i")), _sx("<=", "m", _sx("+", "i", -3))),
+            body = _sx("*", _sxi("u", "i", "m"), _sxi(_sxk([0.5, -1.0, 2.0]), "m"))
+        )
+        doc = _sx_doc(rhs; outs = ["m", "j"], osizes = [3, 4], ushape = [8, 3])
+        ics = _sx_ics([8, 3], (i, m) -> _SX_CANCEL[mod1(i + m, 4)])
+        a, b = _sx_check(doc, ics; form = :table)
+        seed = Float64[isodd(k) ? 1.0 : -0.5 for k in 1:length(a.u0)]
+        jd(r) = ForwardDiff.derivative(
+            s -> (du = zeros(typeof(s), length(r.u0)); r.f!(du, r.u0 .+ s .* seed, r.p, 0.0); du), 0.0
+        )
+        @test sort(collect(a.vm)) == sort(collect(b.vm))
+        @test _sx_bits(jd(a)) == _sx_bits(jd(b))
+    end
+
     @testset "EarthSciASTDiff product documents" begin
         # Copied from EarthSciASTDiff's tests/goldens (68fe059): Jᵀλ and hvp
         # products spelled as whole-array sums of equality-filtered faqs over

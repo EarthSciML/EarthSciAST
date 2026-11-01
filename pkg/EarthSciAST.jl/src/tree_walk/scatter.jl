@@ -29,8 +29,9 @@
 #     box alone. The build evaluates it once, sorts the admitted points by
 #     output cell stably (so each cell keeps them in visit order), and hands the
 #     whole-array nest the result as its TABLE fold (`_ACFold` with `seg` /
-#     `cols`). The nest then folds each cell over its own entries, so it can
-#     chunk over cells and stays bit-identical.
+#     `cols`, and a `row` map when one pinned cell's list serves it at every
+#     free coordinate). The nest then folds each cell over its own entries, so
+#     it can chunk over cells and stays bit-identical.
 #   * RUN-TIME keys (an `e_d` reads a state, a parameter, an observed or `t`):
 #     the generated pass (`_try_codegen_scatter`) evaluates each key per point
 #     on every call. It chunks only over the free output indices, each chunk
@@ -169,13 +170,16 @@ struct _ScatterKey
     refs::Vector{Base.RefValue{Int}}
 end
 
-# The STATIC scatter map as a TABLE fold. One pass over the contracted box in
-# visit order computes each point's pinned cell, and a stable counting sort
-# groups the points by pinned cell, so each cell keeps them in visit order. The
-# per-cell lists are then laid out over every output cell: when no contracted
-# range reads an output index the box is the same for every combination of the
-# free output indices, so one pass serves them all; a ragged range whose bound
-# reads free output indices gets one pass per combination, over its own box.
+# The STATIC scatter map as a TABLE fold, or `nothing` when the pinned cells
+# outnumber what a point's cell ordinal is held in. One pass over the
+# contracted box in visit order computes each point's pinned cell, and a stable
+# counting sort groups the points by pinned cell, so each cell keeps them in
+# visit order. When no contracted range reads an output index the box is the
+# same for every combination of the free output indices, so one pass serves
+# them all, and each pinned cell's list is stored once: the fold's ROW map
+# sends every output cell to its pinned cell's list. A ragged range whose bound
+# reads free output indices gets one pass per combination, over its own box,
+# and the lists are laid out over the output cells in order.
 #
 # The box is the product of the contracted ranges, or, when a ragged range's
 # parent is another contracted index, the NEST `_contract_nest` lists (parent
@@ -242,12 +246,39 @@ function _scatter_table(
         end
     end
     ncells = prod(lens; init = 1)
+    shared && return _ACFold(
+        contract_refs, Symbol(oplus), zerobar, gseg, gcols,
+        _scatter_rows(pinpos, pstride, lens, ncells)
+    )
     seg = Vector{Int}(undef, ncells + 1)
-    # The table's length: each pinned list once per free combination.
-    nent = shared ? Base.Checked.checked_mul(gseg[end] - 1, nfree) : gseg[end] - 1
-    cols = [Vector{Int}(undef, nent) for _ in 1:nc]
-    _scatter_layout!(seg, cols, gseg, gcols, pinpos, pstride, free, lens, npin, shared)
+    cols = [Vector{Int}(undef, gseg[end] - 1) for _ in 1:nc]
+    _scatter_layout!(seg, cols, gseg, gcols, pinpos, pstride, free, lens, npin)
     return _ACFold(contract_refs, Symbol(oplus), zerobar, seg, cols)
+end
+
+# Each output cell's pinned cell (1-based), dimension 1 fastest: the row of the
+# one shared box's table the cell folds.
+function _scatter_rows(pinpos::Vector{Int}, pstride::Vector{Int}, lens::Vector{Int}, ncells::Int)
+    nd = length(lens)
+    pst = zeros(Int, nd)
+    for (r, d) in enumerate(pinpos)
+        pst[d] = pstride[r]
+    end
+    row = Vector{Int}(undef, ncells)
+    qd = zeros(Int, nd)
+    @inbounds for c in 1:ncells
+        pq = 0
+        for d in 1:nd
+            pq += qd[d] * pst[d]
+        end
+        row[c] = pq + 1
+        for d in 1:nd
+            qd[d] += 1
+            qd[d] < lens[d] && break
+            qd[d] = 0
+        end
+    end
+    return row
 end
 
 # Whether the contracted box is the same at every output cell: no range that
@@ -411,14 +442,13 @@ function _scatter_map!(
     return pcell
 end
 
-# The per-cell lists laid out over every output cell (dimension 1 fastest):
-# cell `c` with free ordinal `fo` and pinned ordinal `pq` takes the list
-# `gseg[k]:gseg[k+1]-1` for `k = pq + 1` (one shared box) or `fo·npin + pq + 1` (a box
-# per free combination).
+# The per-cell lists of a box per free combination laid out over every output
+# cell (dimension 1 fastest): cell `c` with free ordinal `fo` and pinned
+# ordinal `pq` takes the list `gseg[k]:gseg[k+1]-1` for `k = fo·npin + pq + 1`.
 function _scatter_layout!(
         seg::Vector{Int}, cols::Vector{Vector{Int}}, gseg::Vector{Int},
         gcols::Vector{Vector{Int}}, pinpos::Vector{Int}, pstride::Vector{Int},
-        free::Vector{Int}, lens::Vector{Int}, npin::Int, shared::Bool
+        free::Vector{Int}, lens::Vector{Int}, npin::Int
     )
     nd = length(lens)
     nc = length(gcols)
@@ -443,7 +473,7 @@ function _scatter_layout!(
             pq += qd[d] * pst[d]
             fo += qd[d] * fstride[d]
         end
-        k = shared ? pq + 1 : fo * npin + pq + 1
+        k = fo * npin + pq + 1
         for g in gseg[k]:(gseg[k + 1] - 1)
             e += 1
             for a in 1:nc

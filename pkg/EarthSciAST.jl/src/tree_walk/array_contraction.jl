@@ -605,19 +605,25 @@ end
 #   * TABLE — a contraction whose admitted tuples differ per output cell (a join
 #     gate drops some, a ragged bound gives each cell its own length) cannot be
 #     a static loop, so the tuples are data: cell `c`'s are entries
-#     `seg[c]:seg[c+1]-1` of the per-dim value columns.
+#     `seg[c]:seg[c+1]-1` of the per-dim value columns. With a ROW map, cells
+#     share lists: cell `c`'s are entries `seg[k]:seg[k+1]-1` for
+#     `k = row[c]`, so a list several cells fold (an equality scatter's pinned
+#     cell, the same at every free coordinate) is stored once.
 struct _ACFold
     refs::Vector{Base.RefValue{Int}}   # the contracted indices' loop counters
     op::Symbol                         # ⊕
     zerobar::Float64                   # its 0̄
     ranges::Vector{StepRange{Int, Int}} # STATIC: each counter's range (empty for TABLE)
-    seg::Vector{Int}                   # TABLE: length ncells + 1
+    seg::Vector{Int}                   # TABLE: length nrows + 1 (ncells + 1 with no row map)
     cols::Vector{Vector{Int}}          # TABLE: per contracted dim, its value at each entry
+    row::Vector{Int}                   # TABLE: each cell's list, or empty for the cell's own
 end
 _ACFold(refs, op::Symbol, zerobar::Float64, ranges::Vector{StepRange{Int, Int}}) =
-    _ACFold(refs, op, zerobar, ranges, Int[], Vector{Int}[])
-_ACFold(refs, op::Symbol, zerobar::Float64, seg::Vector{Int}, cols::Vector{Vector{Int}}) =
-    _ACFold(refs, op, zerobar, StepRange{Int, Int}[], seg, cols)
+    _ACFold(refs, op, zerobar, ranges, Int[], Vector{Int}[], Int[])
+_ACFold(
+    refs, op::Symbol, zerobar::Float64, seg::Vector{Int}, cols::Vector{Vector{Int}},
+    row::Vector{Int} = Int[]
+) = _ACFold(refs, op, zerobar, StepRange{Int, Int}[], seg, cols, row)
 _acfold_is_table(f::_ACFold) = !isempty(f.seg)
 
 # A TABLE fold fixes every loop counter its term can read at each entry: the
@@ -641,6 +647,9 @@ struct _ACEntries
     compact::Base.RefValue{Bool}
     pairs::Vector{Tuple{Symbol, Symbol}}
 end
+# `_ACEntries.vals`'s mark for a counter the entries do not fix.
+const _AC_NOT_FIXED = Int[]
+
 _ACEntries(ev, fold, out_refs, los, steps, lens, vals) =
     _ACEntries(
     ev, fold, out_refs, los, steps, lens, vals, Ref(false),
@@ -649,7 +658,7 @@ _ACEntries(ev, fold, out_refs, los, steps, lens, vals) =
 
 function _ac_entry_vals!(en::_ACEntries, ref)
     got = get(en.vals, ref, nothing)
-    got === nothing || return got
+    got === nothing || return got === _AC_NOT_FIXED ? nothing : got
     f = en.fold
     r = findfirst(x -> x === ref, f.refs)
     if r !== nothing
@@ -657,12 +666,34 @@ function _ac_entry_vals!(en::_ACEntries, ref)
     end
     d = findfirst(x -> x === ref, en.out_refs)
     d === nothing && return nothing
-    v = Vector{Int}(undef, f.seg[end] - 1)
+    v = zeros(Int, f.seg[end] - 1)
     div_d = prod(@view en.lens[1:(d - 1)]; init = 1)
-    for c in 1:(length(f.seg) - 1)
-        x = en.los[d] + (div((c - 1), div_d) % en.lens[d]) * en.steps[d]
-        for e in f.seg[c]:(f.seg[c + 1] - 1)
-            v[e] = x
+    if isempty(f.row)
+        for c in 1:(length(f.seg) - 1)
+            x = en.los[d] + (div((c - 1), div_d) % en.lens[d]) * en.steps[d]
+            for e in f.seg[c]:(f.seg[c + 1] - 1)
+                v[e] = x
+            end
+        end
+    else
+        # A list several cells share fixes the counter only when every one of
+        # them has the same value of it.
+        at = fill(typemin(Int), length(f.seg) - 1)
+        for c in eachindex(f.row)
+            x = en.los[d] + (div((c - 1), div_d) % en.lens[d]) * en.steps[d]
+            k = f.row[c]
+            if at[k] == typemin(Int)
+                at[k] = x
+            elseif at[k] != x
+                en.vals[ref] = _AC_NOT_FIXED
+                return nothing
+            end
+        end
+        for k in eachindex(at)
+            at[k] == typemin(Int) && continue
+            for e in f.seg[k]:(f.seg[k + 1] - 1)
+                v[e] = at[k]
+            end
         end
     end
     return en.vals[ref] = v
@@ -957,8 +988,8 @@ end
 # build-constant arrays. `nothing` otherwise.
 function _ac_param_gate(body::_Node, fold::Union{Nothing, _ACFold})
     (
-        fold !== nothing && _acfold_is_table(fold) && fold.op === :+ &&
-            fold.zerobar === 0.0
+        fold !== nothing && _acfold_is_table(fold) && isempty(fold.row) &&
+            fold.op === :+ && fold.zerobar === 0.0
     ) || return nothing
     (body.kind === _NK_OP && body.op === :ifelse && length(body.children) == 3) ||
         return nothing
@@ -1050,7 +1081,15 @@ function _ac_work(ncells::Int, fold::Union{Nothing, _ACFold}, body::_Node)
     tw = _node_work(body)
     fold === nothing && return Base.Checked.checked_mul(ncells, 1 + tw)
     terms = if _acfold_is_table(fold)
-        fold.seg[end] - 1
+        if isempty(fold.row)
+            fold.seg[end] - 1
+        else
+            n = 0
+            for k in fold.row
+                n = Base.Checked.checked_add(n, fold.seg[k + 1] - fold.seg[k])
+            end
+            n
+        end
     else
         per = 1
         for r in fold.ranges
@@ -1081,8 +1120,11 @@ function _cg_fold(
             :(local $(kvs[r]) = $(_ac_entry_local(ctx, fold.cols[r]))[$ev])
                 for r in eachindex(kvs)
         ]
+        kv = _cg_name(ctx, "row")
+        rowx = isempty(fold.row) ? cv : :($(_ac_entry_local(ctx, fold.row))[$cv])
         quote
-            for $ev in $segv[$cv]:($segv[$cv + 1] - 1)
+            local $kv = $rowx
+            for $ev in $segv[$kv]:($segv[$kv + 1] - 1)
                 $(binds...)
                 $upd
             end
