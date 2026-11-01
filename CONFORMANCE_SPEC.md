@@ -7441,14 +7441,18 @@ two kinds of claim:
   the three refusals (an unknown key, a formatted substitution named as a key,
   a value carrying a brace). Expectations use §5.22.2's `repo_path` /
   `verbatim` convention, so no golden holds an absolute path.
-- **`fixtures`** pin it through a real load at both mount forms: accepted /
-  refused with the code, for every binding; and `hoisted_sources`, the
-  locations the mounting document carries after load, for a binding that
-  hoists a top-level `models.<k>` leaf's `data_sources` (Rust, Julia). The
-  nested fixture, whose outer edge binds a placeholder an inner edge left open,
-  reaches its edge only through such a hoist and is skipped elsewhere.
+- **`fixtures`** pin it through a real load at both mount forms, in every
+  binding: accepted / refused with the code; `hoisted_sources`, the locations
+  the ROOT document's `data_sources` carry after load (a mounted document's
+  sources merge into the mounting document at either form, esm-spec §4.7 "A
+  mounted document's data sources"); and `index_set_sizes`, which shows an
+  edge's `bindings` reaching, through a catalogue, the metaparameter of the
+  model the catalogue mounts (§4.7 "Bindings reach through an assembly"). The
+  nested fixtures bind at an outer edge a placeholder an inner edge left open.
+  Cases carrying `binder_url` mount from a URL-valued directory, where a
+  leading relative value joins by RFC 3986 §5.2.
 
-The two unknown-key fixtures also enter the §2.2.1 sweep as `resolver_only`
+The two unknown-key fixtures and `url_substitution_binding_through_unknown.esm` also enter the §2.2.1 sweep as `resolver_only`
 entries of `tests/invalid/expected_errors.json`.
 
 Each binding's own suite reads the manifest — Rust
