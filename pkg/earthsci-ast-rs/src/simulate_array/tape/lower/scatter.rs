@@ -89,7 +89,8 @@ impl IxNode {
                     }
                     flat = flat * shape[d] + (raw as usize - 1);
                 }
-                vals[flat]
+                // A read of a bound array rounds on entry, as a literal does.
+                crate::precision::active().round(vals[flat])
             }
         })
     }
@@ -145,21 +146,23 @@ fn pin_of<'e>(c: &'e Expr, idx_names: &[String]) -> Option<(usize, &'e Expr)> {
 
 impl TapeBuilder<'_> {
     /// Compile `e` as a build-time expression over the loop symbols `syms`;
-    /// `None` when it reads anything the build does not know.
+    /// `None` when it reads anything the build does not know. Every leaf
+    /// but a loop symbol is rounded to the working precision, as the
+    /// interpreter rounds literals and bindings on entry (`precision`
+    /// module docs); the operators' kernels already round per operation.
     fn ix_compile(&self, e: &Expr, syms: &[String]) -> Option<IxNode> {
+        let lit = |x: f64| IxNode::Lit(crate::precision::active().round(x));
         Some(match e {
-            Expr::Integer(n) => IxNode::Lit(*n as f64),
-            Expr::Number(x) => IxNode::Lit(*x),
+            Expr::Integer(n) => lit(*n as f64),
+            Expr::Number(x) => lit(*x),
             Expr::Variable(v) => {
                 if let Some(k) = syms.iter().position(|s| s == v) {
                     IxNode::Sym(k)
                 } else if let Some(&x) = self.baked_params.get(v.as_str()) {
-                    IxNode::Lit(x)
+                    lit(x)
                 } else {
                     match self.known_named(v)? {
-                        (shape, vals) if shape.is_empty() && vals.len() == 1 => {
-                            IxNode::Lit(vals[0])
-                        }
+                        (shape, vals) if shape.is_empty() && vals.len() == 1 => lit(vals[0]),
                         _ => return None,
                     }
                 }

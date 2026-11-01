@@ -724,3 +724,42 @@ fn a_ragged_range_under_a_contracted_parent_scatters_in_one_pass() {
         "build grew superlinearly: {builds:?}"
     );
 }
+
+#[test]
+fn a_float32_document_pins_and_filters_at_binary32() {
+    // Under `element_type: "Float32"` every literal is rounded on entry and
+    // every operation, `==` included, is binary32: the map from points to
+    // cells must be the interpreter's binary32 one.
+    let n = 40;
+    let cases = [
+        // i·0.1·10 is an integer at different `i` in binary32 and binary64.
+        eq(
+            json!("j"),
+            op("*", vec![op("*", vec![json!("i"), json!(0.1)]), json!(10)]),
+        ),
+        // A bare literal that is 2 only once rounded to binary32.
+        eq(json!("j"), json!(2.00000001)),
+        // The same through a negation, and through a build-time comparison.
+        eq(json!("j"), op("-", vec![json!(-3.00000001)])),
+        and(vec![
+            eq(json!("j"), json!("i")),
+            op("<=", vec![json!("i"), json!(3.00000001)]),
+        ]),
+        and(vec![
+            eq(json!("j"), json!("i")),
+            op("==", vec![json!("i"), json!(5.0000001)]),
+        ]),
+    ];
+    for filt in cases {
+        let rhs = faq(
+            &["j"],
+            &[("j", 1, n), ("i", 1, n)],
+            "+",
+            filt.clone(),
+            ix("u", vec![json!("i")]),
+        );
+        let mut d = doc(n, 0, vec![du(n, rhs)], Value::Null);
+        d["domain"] = json!({"element_type": "Float32"});
+        agree(&format!("Float32 {filt}"), &d);
+    }
+}
