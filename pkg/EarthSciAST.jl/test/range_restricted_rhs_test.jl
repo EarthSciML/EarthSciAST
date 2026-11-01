@@ -515,21 +515,28 @@ end
         # state and const subscript), a const read out of range under a
         # guard, and shaped parameters with an inline or a scalar default. A
         # tile reuses what its program's build worked out, so what its build
-        # allocates grows by less than one number per added cell.
+        # allocates grows by less than one number per added cell. A single
+        # `@allocated` sample varies by a few KB from run to run, so each size
+        # takes the smallest of several, and the sizes are far enough apart
+        # that a fixed difference cannot pass for per-cell growth.
         alloc = Int[]
-        for tx in (40, 1000)
+        for tx in (40, 4000)
             tprob = esm_problem(_rrt_paths_doc(tx), (0.0, 1.0))
             tprog = rhs_program(tprob)
             tx == 40 ? _rrt_tile_code(tprog, tprob.p, 11:14, 10:15) :
                 restrict(tprog, tdec; owned = ("x" => 11:14,), storage = ("x" => 10:15,))
             push!(
-                alloc, @allocated restrict(
-                    tprog, tdec; owned = ("x" => 11:14,),
-                    storage = ("x" => 10:15,)
+                alloc, minimum(
+                    @allocated(
+                        restrict(
+                            tprog, tdec; owned = ("x" => 11:14,),
+                            storage = ("x" => 10:15,)
+                        )
+                    ) for _ in 1:5
                 )
             )
         end
-        @test alloc[2] - alloc[1] < 8 * (1000 - 40)
+        @test alloc[2] - alloc[1] < 8 * (4000 - 40)
     end
 
     @testset "refusals" begin
