@@ -123,15 +123,19 @@ pub type BuildProviderFactory<'a> = dyn Fn() -> Result<(), String> + 'a;
 /// survives a document where a sibling component declares the same bare name.
 /// A seed supplied by an [`InlineTestOptions`] is merged onto the authored map
 /// before this runs, so it is keyed and scoped by the same rule.
+///
+/// `flat` holds `file` flattened, filled by the first call that needs it, so
+/// a test's parameter and initial-condition maps share one flatten.
 fn scope_to_component(
     overrides: Option<&HashMap<String, InlineValue>>,
     model_name: &str,
     file: &EsmFile,
+    flat: &OnceCell<Option<crate::flatten::FlattenedSystem>>,
 ) -> HashMap<String, InlineValue> {
     let Some(overrides) = overrides.filter(|m| !m.is_empty()) else {
         return HashMap::new();
     };
-    let Ok(flat) = crate::flatten::flatten(file) else {
+    let Some(flat) = flat.get_or_init(|| crate::flatten::flatten(file).ok()) else {
         return overrides.clone(); // let the build report the real failure
     };
     overrides
@@ -2248,8 +2252,9 @@ fn build_for_test(
 
     let seeded_params = seeds.lay_under(&seeds.parameter_overrides, t.parameter_overrides.as_ref());
     let seeded_ics = seeds.lay_under(&seeds.initial_conditions, t.initial_conditions.as_ref());
-    let params = scope_to_component(seeded_params.as_ref(), model_name, run_file);
-    let ics = scope_to_component(seeded_ics.as_ref(), model_name, run_file);
+    let run_flat = OnceCell::new();
+    let params = scope_to_component(seeded_params.as_ref(), model_name, run_file, &run_flat);
+    let ics = scope_to_component(seeded_ics.as_ref(), model_name, run_file, &run_flat);
     // Split each override map by the channel that can carry it (esm-spec
     // §6.6.2). A scalar goes on the canonical SciML `p` / `u0` channel
     // unchanged; a whole column needs one that can hold it:

@@ -143,6 +143,26 @@ fn assert_close(name: &str, got: &ArrayD<f64>, want: &[f64]) {
 
 #[test]
 fn prepare_pushdown_l1_matches_the_step0_oracle_with_presliced_gated_fetch() {
+    l1_against_the_oracle(false);
+}
+
+/// The same document beside a second model that has nothing to rewrite, with
+/// no model selected: the build is the whole document, and the rewrite still
+/// runs on the model whose pattern matches rather than being skipped. Every
+/// name is then spelled `Model.var`.
+#[test]
+fn prepare_pushdown_l1_rewrites_its_model_in_a_whole_document_build() {
+    l1_against_the_oracle(true);
+}
+
+fn l1_against_the_oracle(with_bystander: bool) {
+    let q = |n: &str| {
+        if with_bystander {
+            format!("ISRM.{n}")
+        } else {
+            n.to_string()
+        }
+    };
     const GRID: usize = 9;
     const N_RCV: usize = 4;
     const N_REC: usize = 5;
@@ -276,9 +296,15 @@ fn prepare_pushdown_l1_matches_the_step0_oracle_with_presliced_gated_fetch() {
     // ---- the committed fixture IS the authored document ---------------------
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/conformance/pushdown/fixtures/pushdown_l1.esm");
-    let doc: Value =
+    let mut doc: Value =
         serde_json::from_str(&std::fs::read_to_string(&fixture).expect("read pushdown_l1.esm"))
             .expect("parse pushdown_l1.esm");
+    if with_bystander {
+        doc["models"]["Bystander"] = serde_json::json!({
+            "variables": {"two": {"type": "unknown", "units": "1"}},
+            "equations": [{"lhs": "two", "rhs": {"op": "+", "args": [1.0, 1.0]}}]
+        });
+    }
 
     // ---- providers: mocks only, keyed by the document's loader variables ----
     let mut providers: Vec<(String, Box<dyn PrepareProvider>)> = vec![
@@ -329,7 +355,7 @@ fn prepare_pushdown_l1_matches_the_step0_oracle_with_presliced_gated_fetch() {
         // The pipeline's per-cell walk is refused by a strict native (#484), so
         // these semantics are checked on the reference evaluator.
         compiler: Some(earthsci_ast::Compiler::Interpreter),
-        model_name: Some("ISRM".to_string()),
+        model_name: (!with_bystander).then(|| "ISRM".to_string()),
         pushdown_rewrite: true,
         ..Default::default()
     };
@@ -378,32 +404,32 @@ fn prepare_pushdown_l1_matches_the_step0_oracle_with_presliced_gated_fetch() {
     // ---- results through the prepared document's own graph ------------------
     assert_close(
         "E_VOC",
-        &observed_field(&prep, "E_VOC").unwrap(),
+        &observed_field(&prep, &q("E_VOC")).unwrap(),
         &oracle_e(&is_voc),
     );
     assert_close(
         "E_PM25",
-        &observed_field(&prep, "E_PM25").unwrap(),
+        &observed_field(&prep, &q("E_PM25")).unwrap(),
         &oracle_e(&is_pm25),
     );
     assert_close(
         "conc_SOA",
-        &observed_field(&prep, "conc_SOA").unwrap(),
+        &observed_field(&prep, &q("conc_SOA")).unwrap(),
         &oracle_conc("SOA"),
     );
     assert_close(
         "TotalPM25",
-        &observed_field(&prep, "TotalPM25").unwrap(),
+        &observed_field(&prep, &q("TotalPM25")).unwrap(),
         &oracle_total,
     );
     assert_close(
         "deathsK",
-        &observed_field(&prep, "deathsK").unwrap(),
+        &observed_field(&prep, &q("deathsK")).unwrap(),
         &oracle_deaths(RR_K),
     );
     assert_close(
         "deathsL",
-        &observed_field(&prep, "deathsL").unwrap(),
+        &observed_field(&prep, &q("deathsL")).unwrap(),
         &oracle_deaths(RR_L),
     );
     assert!(observed_field(&prep, "no_such_observed").is_err());
@@ -853,4 +879,34 @@ fn a_native_refusal_unrelated_to_the_gated_data_comes_before_the_gated_fetch() {
     for calls in &logs {
         assert_eq!(calls.borrow().len(), 1);
     }
+}
+
+/// A document in which the pushdown pattern matches two models, built whole,
+/// is refused naming both: the rewrite records one gate per document, so it
+/// cannot rewrite both, and rewriting one would silently leave the other
+/// fetching whole.
+#[test]
+fn a_whole_document_build_whose_pushdown_matches_two_models_is_refused() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/conformance/pushdown/fixtures/pushdown_l1.esm");
+    let mut doc: Value =
+        serde_json::from_str(&std::fs::read_to_string(&fixture).expect("read pushdown_l1.esm"))
+            .expect("parse pushdown_l1.esm");
+    doc["models"]["ISRM2"] = doc["models"]["ISRM"].clone();
+    let msg = match esm_problem(
+        &doc,
+        (0.0, 0.0),
+        ProblemOptions {
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
+            pushdown_rewrite: true,
+            ..Default::default()
+        },
+    ) {
+        Ok(_) => panic!("built a document whose rewrite matches two models"),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        msg.contains("pushdown") && msg.contains("ISRM, ISRM2"),
+        "{msg}"
+    );
 }
