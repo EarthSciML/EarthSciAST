@@ -279,4 +279,61 @@ mod ingest {
             "i1,Snap.v,Snap.lead_v\n1,10,1\n2,20,2\n3,40,4\n4,80,8\n"
         );
     }
+
+    /// The shape a set of run fixtures takes: a SOURCES-ONLY catalogue mounted
+    /// as one top-level model (so its `data_sources` hoist), and a second model
+    /// that mounts the logic as a subsystem and carries the run's inline tests.
+    /// `esm test` must build the model the test belongs to rather than refuse
+    /// the two-model document.
+    #[test]
+    fn a_catalogue_beside_a_tested_model_runs_its_tests() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let t = tmp.path();
+        layout(t);
+        let mut cat: Value = serde_json::from_str(
+            &std::fs::read_to_string(t.join("lib/catalogue.esm")).expect("read"),
+        )
+        .expect("json");
+        let logic = cat["models"]["Catalogue"].take();
+        cat["models"] = json!({"Sources": {"variables": {}, "equations": []}});
+        write(&t.join("lib/sources.esm"), &cat);
+        write(
+            &t.join("lib/logic.esm"),
+            &json!({"esm": "1.2.0", "metadata": {"name": "logic"},
+                    "index_sets": {"rows": {"kind": "interval", "size": 4}},
+                    "models": {"Logic": logic}}),
+        );
+        for (snap, last) in [("a", 8.0), ("b", 80.0)] {
+            let doc = t.join(format!("run_{snap}.esm"));
+            write(
+                &doc,
+                &json!({
+                    "esm": "1.2.0",
+                    "metadata": {"name": "run"},
+                    "models": {
+                        "Sources": {"ref": "lib/sources.esm",
+                            "url_substitutions": {"snapshot": snap, "data": "snapshots/a"}},
+                        "Run": {
+                            "variables": {}, "equations": [],
+                            "subsystems": {"L": {"ref": "lib/logic.esm"}},
+                            "tests": [{"id": "reads_its_snapshot",
+                                "time_span": {"start": 0.0, "end": 0.0},
+                                "assertions": [{"variable": "L.v", "time": 0.0,
+                                    "expected": last, "coords": {"rows": 4}}]}]
+                        }
+                    }
+                }),
+            );
+            let o = Command::new(env!("CARGO_BIN_EXE_esm"))
+                .args(["test", doc.to_str().expect("utf-8")])
+                .output()
+                .expect("run esm");
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            );
+            assert!(o.status.success(), "esm test run_{snap}.esm:\n{text}");
+        }
+    }
 }
