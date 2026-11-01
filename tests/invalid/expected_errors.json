@@ -4390,5 +4390,13 @@
     "resolver_only": true,
     "resolver_error_code": "url_substitution_unknown_name",
     "notes": "Resolver-level invalid (esm-spec \u00a74.7 'Binding a data source's location at the mount'). The document is SCHEMA-VALID \u2014 `url_substitutions` is a legal SubsystemRef field and its value is an identifier\u2192string object \u2014 so a binding that only checks the schema accepts it (is_valid: true); the invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code`. A top-level `models.<k>` edge binds `snapshto`, a misspelling of the mounted catalogue's `{snapshot}` placeholder; the edge never invents a placeholder."
+  },
+  "url_substitution_binding_through_unknown.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "template_import_unknown_name",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.7.6 'Binding an unknown name is an error', \u00a74.7). The document is SCHEMA-VALID, so a binding that only checks the schema accepts it (is_valid: true). A `subsystems.<k>` edge binds `n_rwos` through a catalogue that mounts the domain model declaring `n_rows`; reaching through an assembly to a mounted document's metaparameter is legal, but a name no document in the chain declares must fail at the edge."
   }
 }
