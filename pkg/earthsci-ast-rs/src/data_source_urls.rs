@@ -220,6 +220,36 @@ fn placeholders(template: &str) -> Vec<(usize, usize, &str)> {
     out
 }
 
+/// RFC 3986 §5.2 resolution of the relative path `rel` against the DIRECTORY
+/// URL `base` (`scheme://authority/path`, read as a directory whether or not it
+/// ends in `/`), with dot segments removed. A query or fragment on `base` is
+/// dropped, as §5.2.2 drops them for a path reference.
+fn join_url_directory(base: &str, rel: &str) -> String {
+    let base = base.split(['?', '#']).next().unwrap_or(base);
+    let after_scheme = base.find("://").map_or(0, |i| i + 3);
+    let path_start = base[after_scheme..]
+        .find('/')
+        .map_or(base.len(), |i| after_scheme + i);
+    let (origin, dir) = base.split_at(path_start);
+    let mut out: Vec<&str> = Vec::new();
+    let joined = format!("{}/{rel}", dir.trim_end_matches('/'));
+    let trailing = joined.ends_with('/') || joined.ends_with("/.") || joined.ends_with("/..");
+    for seg in joined.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                out.pop();
+            }
+            s => out.push(s),
+        }
+    }
+    let mut path = format!("/{}", out.join("/"));
+    if trailing && !path.ends_with('/') {
+        path.push('/');
+    }
+    format!("{origin}{path}")
+}
+
 /// Every `url_template` and `mirrors` string of a document's `data_sources`,
 /// mutably, with the site each one is reported at.
 fn location_strings(doc: &mut Value) -> Vec<(String, &mut Value)> {
@@ -344,10 +374,16 @@ pub(crate) fn apply_mount_url_substitutions(
 
     // The value a LEADING placeholder contributes: the mounting document's
     // location, per §8.2.1's own forms. Computed once per name.
+    // A mounting document loaded from a URL has a URL for a directory; a
+    // relative value then joins onto it by RFC 3986 (§5.2), as that document's
+    // own relative refs do (§4.7).
+    let url_base = binder_dir.to_str().filter(|b| is_scheme_led(b));
     let base = absolute_base(binder_dir);
     let lead = |v: &str| -> String {
         if is_scheme_led(v) || v.starts_with('/') {
             v.to_string()
+        } else if let Some(b) = url_base {
+            join_url_directory(b, v)
         } else {
             base.join(v).to_string_lossy().into_owned()
         }
@@ -563,10 +599,16 @@ mod tests {
             }
             let mut doc = json!({"data_sources": {"s": {"kind": "static", "source": source}}});
             let edge = json!({"ref": "x.esm", "url_substitutions": c["url_substitutions"]});
+            // A case may mount from a URL-valued directory (`binder_url`).
+            let case_binder = c
+                .get("binder_url")
+                .and_then(Value::as_str)
+                .map(PathBuf::from)
+                .unwrap_or_else(|| binder.clone());
             let got = apply_mount_url_substitutions(
                 &mut doc,
                 edge.as_object().expect("edge"),
-                &binder,
+                &case_binder,
                 "case",
             )
             .and_then(|()| resolve_data_source_urls(&mut doc, &declaring));

@@ -65,13 +65,24 @@ fn every_fixture_loads_or_is_refused_as_the_shared_manifest_says() {
         match f["expect"].as_str().expect("expect") {
             "accepted" => {
                 let doc = loaded.unwrap_or_else(|e| panic!("{id} must load: {e}"));
-                // Rust hoists a top-level `models.<k>` leaf's `data_sources`
-                // into the mounting document, so the substituted locations are
+                let doc = serde_json::to_value(&doc).expect("serializable");
+                for (axis, size) in f
+                    .get("index_set_sizes")
+                    .and_then(Value::as_object)
+                    .into_iter()
+                    .flatten()
+                {
+                    assert_eq!(
+                        doc["index_sets"][axis]["size"], *size,
+                        "{id}: index_sets.{axis}.size"
+                    );
+                }
+                // A mounted document's `data_sources` merge into the mounting
+                // document at either form, so the substituted locations are
                 // observable here.
                 let Some(pins) = f.get("hoisted_sources").and_then(Value::as_object) else {
                     continue;
                 };
-                let doc = serde_json::to_value(&doc).expect("serializable");
                 for (name, pin) in pins {
                     let src = &doc["data_sources"][name]["source"];
                     assert_eq!(
