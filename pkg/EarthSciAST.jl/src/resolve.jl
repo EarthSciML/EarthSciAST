@@ -232,6 +232,7 @@ function _load_document(
     # and none of them needs a base directory. Idempotent (the output is
     # scheme-led), so parse -> emit -> parse is stable. Returns `nothing` when
     # there was nothing to resolve, which is the overwhelmingly common case.
+    doc isa AbstractDict && haskey(doc, _MOUNT_PROVENANCE_KEY) && _strip_mount_provenance!(doc)
     resolved_ds = _resolve_data_source_urls(doc, base_path)
     doc = resolved_ds === nothing ? doc : resolved_ds
     file = _load_parsed(
@@ -1223,6 +1224,9 @@ function _resolve_mount_edge_core(
         parent_meta = leaf_env, api_meta = api_meta, forwarded = child_forwarded,
         staged = leaf_staged, precision = leaf_effective
     )
+    # Every nested mount has merged into the leaf; to the MOUNTING document the
+    # leaf's whole `data_sources` now comes from this one edge.
+    _strip_mount_provenance!(comp)
 
     # §9.7.10 form A: the edge's `expression_template_imports` inject a
     # discretization into the LEAF's own scope BEFORE resolution, so the
@@ -1402,6 +1406,56 @@ function _forward_through_assembly(
     return out
 end
 
+# esm-spec §4.7 "A mounted document's data sources": which mount edge contributed
+# each `data_sources` entry a document received, held on the document only while
+# its mounts are being inlined (string values, so every walker passes it by) and
+# stripped by `_strip_mount_provenance!` before the document is processed
+# further. An entry with no provenance is the document's OWN.
+const _MOUNT_PROVENANCE_KEY = "__esm_mounted_data_sources"
+
+_strip_mount_provenance!(doc) = (doc isa AbstractDict && delete!(doc, _MOUNT_PROVENANCE_KEY); doc)
+
+_merge_conflict(name, first_edge, second_edge) = ExpressionTemplateError(
+    ERROR_CODES.DATA_SOURCE_MERGE_CONFLICT,
+    "data_sources.$(name): two mounts contribute different entries for this " *
+        "source — $(first_edge) and $(second_edge) — after `url_substitutions` and " *
+        "§8.2.1 resolution, and the mounting document does not declare it itself. " *
+        "Neither may silently win; give the sources different names, or declare " *
+        "'$(name)' in the mounting document to choose one (esm-spec §4.7 \"A mounted " *
+        "document's data sources\")"
+)
+
+"""
+    _hoist_mounted_sources!(native, comp, edge) -> native
+
+Merge the resolved leaf `comp`'s `data_sources` into the mounting document
+`native`, contributed by the mount edge `edge` (esm-spec §4.7 "A mounted
+document's data sources"): the mounting document's OWN entry wins; an entry two
+mounts contribute merges once when the two are structurally equal and is
+`data_source_merge_conflict` otherwise.
+"""
+function _hoist_mounted_sources!(native::AbstractDict, comp, edge::AbstractString)
+    src = get(comp, "data_sources", nothing)
+    (src isa AbstractDict && !isempty(src)) || return native
+    dst = get!(() -> OrderedDict{String, Any}(), native, "data_sources")
+    dst isa AbstractDict || return native
+    prov = get!(() -> OrderedDict{String, Any}(), native, _MOUNT_PROVENANCE_KEY)
+    for (k, v) in src
+        name = String(k)
+        if haskey(dst, name)
+            haskey(prov, name) || continue          # the document's own entry wins
+            # Structurally equal (esm-spec §4.7 "identical": members by name in
+            # any order, arrays element-wise, numbers by value; the shared
+            # `_json_equal`): a diamond merges once.
+            _json_equal(dst[name], v) && continue
+            throw(_merge_conflict(name, prov[name], edge))
+        end
+        dst[name] = v
+        prov[name] = String(edge)
+    end
+    return native
+end
+
 """
     _document_has_subsystem_refs(doc) -> Bool
 
@@ -1541,15 +1595,18 @@ function _inline_model_subsystems!(
                     # forms are one mechanism, esm-spec §4.7; a hoisted
                     # `data_sources` block is §8.2.1's case). The parent wins on a
                     # key clash.
-                    for blk in ("function_tables", "data_sources")
-                        src = get(comp, blk, nothing)
-                        (src isa AbstractDict && !isempty(src)) || continue
-                        dst = get!(() -> Dict{String, Any}(), native, blk)
-                        dst isa AbstractDict || continue
-                        for (k, v) in src
-                            haskey(dst, k) || (dst[k] = v)
+                    src = get(comp, "function_tables", nothing)
+                    if src isa AbstractDict && !isempty(src)
+                        dst = get!(() -> Dict{String, Any}(), native, "function_tables")
+                        if dst isa AbstractDict
+                            for (k, v) in src
+                                haskey(dst, k) || (dst[k] = v)
+                            end
                         end
                     end
+                    # esm-spec §4.7 "A mounted document's data sources": own entry wins; two
+                    # mounts must contribute identical entries (`data_source_merge_conflict`).
+                    _hoist_mounted_sources!(native, comp, "models.$(parent_name).subsystems.$(sub_name) (ref '$(ref)')")
                 finally
                     delete!(visited, canonical)
                 end
@@ -1726,15 +1783,18 @@ function _inline_toplevel_model_refs!(
             # on a key clash (its own definitions take precedence). `enums` is not
             # one of them: it is file-local (esm-spec §9.3), and the leaf's `enum`
             # ops were already lowered against it at the edge.
-            for blk in ("function_tables", "data_sources")
-                src = get(comp, blk, nothing)
-                (src isa AbstractDict && !isempty(src)) || continue
-                dst = get!(() -> Dict{String, Any}(), native, blk)
-                dst isa AbstractDict || continue
-                for (k, v) in src
-                    haskey(dst, k) || (dst[k] = v)
+            src = get(comp, "function_tables", nothing)
+            if src isa AbstractDict && !isempty(src)
+                dst = get!(() -> Dict{String, Any}(), native, "function_tables")
+                if dst isa AbstractDict
+                    for (k, v) in src
+                        haskey(dst, k) || (dst[k] = v)
+                    end
                 end
             end
+            # esm-spec §4.7 "A mounted document's data sources": own entry wins; two
+            # mounts must contribute identical entries (`data_source_merge_conflict`).
+            _hoist_mounted_sources!(native, comp, "models.$(name) (ref '$(ref)')")
         finally
             delete!(visited, refpath)
         end
@@ -1849,6 +1909,7 @@ function _inline_toplevel_reaction_system_refs!(
                 comp, compdir, visited;
                 precision = leaf_effective
             )
+            _strip_mount_provenance!(comp)
             # esm-spec §4.7 "Binding a data source's location at the mount" and
             # §8.2.1, as at every other mount edge: this edge's
             # `url_substitutions`, then the leaf's own locations against its
@@ -1913,15 +1974,18 @@ function _inline_toplevel_reaction_system_refs!(
             # Merge the by-name blocks the reaction system's AST references; the
             # parent wins on a key clash (its own definitions take precedence).
             # Not `enums`: it is file-local (esm-spec §9.3), lowered above.
-            for blk in ("function_tables", "data_sources")
-                src = get(comp, blk, nothing)
-                (src isa AbstractDict && !isempty(src)) || continue
-                dst = get!(() -> Dict{String, Any}(), native, blk)
-                dst isa AbstractDict || continue
-                for (k, v) in src
-                    haskey(dst, k) || (dst[k] = v)
+            src = get(comp, "function_tables", nothing)
+            if src isa AbstractDict && !isempty(src)
+                dst = get!(() -> Dict{String, Any}(), native, "function_tables")
+                if dst isa AbstractDict
+                    for (k, v) in src
+                        haskey(dst, k) || (dst[k] = v)
+                    end
                 end
             end
+            # esm-spec §4.7 "A mounted document's data sources": own entry wins; two
+            # mounts must contribute identical entries (`data_source_merge_conflict`).
+            _hoist_mounted_sources!(native, comp, "reaction_systems.$(name) (ref '$(ref)')")
         finally
             delete!(visited, refpath)
         end
@@ -2095,7 +2159,9 @@ function _resolve_refs_in_file!(
     effective = something(_declared_element_type(file), String(precision))
     # esm-spec §4.7 "A mounted document's data sources": every subsystem leaf's
     # `data_sources` (already substituted and located at its edge) collect here.
-    mounted = Dict{String, DataSource}()
+    mounted = _TypedMountedSources(
+        file.data_sources === nothing ? Set{String}() : Set{String}(keys(file.data_sources))
+    )
     # Resolve model subsystem refs. The document's own index-set registry is
     # threaded down the walk so every referenced subsystem file's top-level
     # `index_sets` merge into it (esm-spec §4.7, mirroring §9.7.5).
@@ -2123,12 +2189,38 @@ function _resolve_refs_in_file!(
     # `data_sources` registry to merge into — the caller rebuilds it with them
     # (`_adopt_mounted_sources`), since `EsmFile` is immutable.
     if file.data_sources !== nothing
-        for (k, v) in mounted
+        for (k, v) in mounted.entries
             haskey(file.data_sources, k) || (file.data_sources[k] = v)
         end
-        empty!(mounted)
+        return Dict{String, DataSource}()
     end
-    return mounted
+    return mounted.entries
+end
+
+"""
+    _TypedMountedSources(own)
+
+The typed walk's collector for esm-spec §4.7 "A mounted document's data
+sources": the entries a document's subsystem mounts contribute, with the edge
+each came from. `own` names the document's own entries, which win.
+"""
+struct _TypedMountedSources
+    own::Set{String}
+    entries::Dict{String, DataSource}
+    origin::Dict{String, String}
+    _TypedMountedSources(own) = new(own, Dict{String, DataSource}(), Dict{String, String}())
+end
+
+function _contribute!(m::_TypedMountedSources, name::AbstractString, ds::DataSource, edge)
+    name in m.own && return m                       # the document's own entry wins
+    if haskey(m.entries, name)
+        _json_equal(serialize_data_source(m.entries[name]), serialize_data_source(ds)) &&
+            return m                                # a diamond merges once
+        throw(_merge_conflict(name, m.origin[name], edge))
+    end
+    m.entries[name] = ds
+    m.origin[name] = String(edge)
+    return m
 end
 
 """
@@ -2158,7 +2250,7 @@ function _resolve_model_refs!(
         forwarded::AbstractDict{String, <:Integer} = Dict{String, Int}(),
         root_env::AbstractDict{String, <:Integer} = Dict{String, Int}(),
         precision::AbstractString = _DEFAULT_ELEMENT_TYPE,
-        sources::Union{Nothing, AbstractDict{String, DataSource}} = nothing
+        sources::Union{Nothing, _TypedMountedSources} = nothing
     )
     # Only Model values carry subsystems to walk; a SubsystemRef leaf has none.
     model isa Model || return
@@ -2176,7 +2268,8 @@ function _resolve_model_refs!(
                 _resolve_subsystem_ref(
                     sub_value, base_path, visited, registry;
                     api_meta = api_meta, forwarded = forwarded, root_env = root_env,
-                    precision = precision, sources = sources
+                    precision = precision, sources = sources,
+                    edge = "models.$(name).subsystems.$(sub_name) (ref '$(sub_value.ref)')"
                 )
             catch e
                 e isa SubsystemRefError || rethrow()
@@ -2289,7 +2382,8 @@ function _resolve_subsystem_ref(
         forwarded::AbstractDict{String, <:Integer} = Dict{String, Int}(),
         root_env::AbstractDict{String, <:Integer} = Dict{String, Int}(),
         precision::AbstractString = _DEFAULT_ELEMENT_TYPE,
-        sources::Union{Nothing, AbstractDict{String, DataSource}} = nothing
+        sources::Union{Nothing, _TypedMountedSources} = nothing,
+        edge::AbstractString = "subsystem ref '$(ref.ref)'"
     )
     # esm-spec §9.7.10 form A: the edge's `expression_template_imports` inject a
     # discretization into the referenced component's own scope, threaded into
@@ -2335,7 +2429,7 @@ function _resolve_subsystem_ref(
             loaded, ref.url_substitutions, ref.ref, base_path, where
         )
         for (k, v) in leaf_sources
-            haskey(sources, k) || (sources[k] = v)
+            _contribute!(sources, k, v, edge)
         end
     end
     # esm-spec §4.7 "Working precision crosses a mount".
@@ -2527,6 +2621,11 @@ function _load_ref(
         else
             throw(SubsystemRefError("Failed to resolve subsystem ref '$(ref)': $(e)"))
         end
+    finally
+        # PATH-scoped, as the native walk's set is: two sibling edges may mount
+        # the same file (a diamond, esm-spec §4.7); only a reference back onto
+        # the current resolution path is a cycle.
+        delete!(visited, canonical)
     end
 end
 
@@ -2789,6 +2888,7 @@ function _load_local_ref(
         parent_meta = _root_metaparameter_env(raw_ref_doc, effective),
         precision = leaf_effective
     )
+    inlined_ref === nothing || _strip_mount_provenance!(inlined_ref)
     file = _load_parsed(
         inlined_ref === nothing ? ref_doc : inlined_ref; base_path = ref_base,
         metaparameters = effective,

@@ -171,6 +171,8 @@ const _KNOWN_DIAGNOSTIC_CODES = (
     ERROR_CODES.SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM,
     # esm-spec §4.7 mount-edge `url_substitutions` (data_source_urls.jl).
     ERROR_CODES.URL_SUBSTITUTION_UNKNOWN_NAME,
+    # esm-spec §4.7 mounted `data_sources` merge (resolve.jl).
+    ERROR_CODES.DATA_SOURCE_MERGE_CONFLICT,
 )
 
 # ---------------------------------------------------------------------------
