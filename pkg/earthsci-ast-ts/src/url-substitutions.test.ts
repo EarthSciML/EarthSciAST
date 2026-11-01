@@ -5,19 +5,23 @@
  *
  * `cases` pin the edge rule as a document normalization: apply the edge with
  * the MOUNTING document's directory, then §8.2.1 resolution with the DECLARING
- * document's. `fixtures` pin it through a real load. This binding does not
- * hoist a mounted document's `data_sources` at either mount form, so
- * `hoisted_sources` is not checked and a `requires_hoisting` fixture is
- * skipped; the edge's verdict (accepted / refused + code) is.
+ * document's (a case with `binder_url` mounts from a URL-valued directory).
+ * `fixtures` pin it through a real load, at both mount forms: the verdict, the
+ * locations the ROOT document's `data_sources` carry once every mounted
+ * document's sources have merged up (esm-spec §4.7 "A mounted document's data
+ * sources"), and `index_set_sizes` — how an edge's `bindings` reach, through a
+ * catalogue, the model the catalogue mounts ("Bindings reach through an
+ * assembly").
  */
 
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { loadPath, toJson } from './index.js'
+import { loadPath, loadString, toJson } from './index.js'
 import { resolveSubsystemRefs } from './ref-loading.js'
 import {
   applyMountUrlSubstitutions,
+  joinUrlDirectory,
   placeholders,
   resolveDataSourceUrls,
 } from './data-source-urls.js'
@@ -30,6 +34,7 @@ const MANIFEST = JSON.parse(fs.readFileSync(path.join(SUITE, 'manifest.json'), '
   binder_dir: string
   cases: Array<{
     id: string
+    binder_url?: string
     url_template: string
     mirrors?: string[]
     url_substitutions: unknown
@@ -44,7 +49,8 @@ const MANIFEST = JSON.parse(fs.readFileSync(path.join(SUITE, 'manifest.json'), '
     id: string
     path: string
     expect: 'accepted' | 'refused'
-    requires_hoisting?: boolean
+    hoisted_sources?: Record<string, { url_template: Pin; mirrors?: Pin[] }>
+    index_set_sizes?: Record<string, number>
     error_code?: string
     message_contains?: string[]
   }>
@@ -88,7 +94,7 @@ describe('esm-spec §4.7 url_substitutions: the edge rule (shared cases)', () =>
     if (c.mirrors !== undefined) source.mirrors = [...c.mirrors]
     let doc: object = { data_sources: { s: { kind: 'static', source } } }
     const err = caught(() => {
-      applyMountUrlSubstitutions(doc, c.url_substitutions, binder, 'case')
+      applyMountUrlSubstitutions(doc, c.url_substitutions, c.binder_url ?? binder, 'case')
       doc = resolveDataSourceUrls(doc, declaring) ?? doc
     })
     if (c.expect.error_code !== undefined) {
@@ -130,7 +136,6 @@ describe('esm-spec §4.7 url_substitutions: the edge rule (shared cases)', () =>
 
 describe('esm-spec §4.7 url_substitutions: through a real load (shared fixtures)', () => {
   it.each(MANIFEST.fixtures.map((f) => [f.id, f] as const))('%s', async (_id, f) => {
-    if (f.requires_hoisting) return // TypeScript does not hoist a mounted document's data_sources
     const file = path.join(SUITE, f.path)
     let loaded: ReturnType<typeof loadPath> | undefined
     const err = await caughtAsync(async () => {
@@ -144,10 +149,39 @@ describe('esm-spec §4.7 url_substitutions: through a real load (shared fixtures
       return
     }
     expect(err, err?.message).toBeNull()
-    // Consumed at the mount: the edge field does not survive parse → emit, and
-    // the mounted catalogue's data_sources are not hoisted in this binding.
+    // Consumed at the mount: the edge field does not survive parse → emit.
     const text = toJson(loaded!)
     expect(text).not.toContain('"url_substitutions":')
-    expect(loaded!.data_sources).toBeUndefined()
+    const sources = (loaded!.data_sources ?? {}) as Record<
+      string,
+      { source?: { url_template?: string; mirrors?: string[] } }
+    >
+    for (const [name, pin] of Object.entries(f.hoisted_sources ?? {})) {
+      const src = sources[name]?.source
+      expect(src, `data_sources.${name} must reach the root`).toBeDefined()
+      expect(src?.url_template, `data_sources.${name}.source.url_template`).toBe(
+        expected(pin.url_template),
+      )
+      if (pin.mirrors !== undefined) {
+        expect(src?.mirrors, `data_sources.${name}.source.mirrors`).toEqual(
+          pin.mirrors.map(expected),
+        )
+      }
+    }
+    const isets = (loaded!.index_sets ?? {}) as Record<string, { size?: unknown }>
+    for (const [name, size] of Object.entries(f.index_set_sizes ?? {})) {
+      expect(isets[name]?.size, `index_sets.${name}.size`).toBe(size)
+    }
+    // The emitted root re-loads: what crossed the mount is an ordinary document.
+    expect(() => loadString(text)).not.toThrow()
+  })
+})
+
+describe('RFC 3986 join onto a URL-valued directory', () => {
+  it('reads the base as a directory and removes dot segments', () => {
+    expect(joinUrlDirectory('https://h/a/b', '../c/./d')).toBe('https://h/a/c/d')
+    expect(joinUrlDirectory('https://h/a/b/', 'c')).toBe('https://h/a/b/c')
+    expect(joinUrlDirectory('https://h', 'c/{date:%Y}.nc')).toBe('https://h/c/{date:%Y}.nc')
+    expect(joinUrlDirectory('https://h/a?q=1#f', 'c/')).toBe('https://h/a/c/')
   })
 })

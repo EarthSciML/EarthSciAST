@@ -48,7 +48,7 @@ import {
   readFileSyncNode,
 } from './path-utils.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
-import { applyMountUrlSubstitutions } from './data-source-urls.js'
+import { applyMountUrlSubstitutions, resolveDataSourceUrls } from './data-source-urls.js'
 import { loadString, validateSchema, ROOT_PATH } from './parse.js'
 import { toJson } from './serialize.js'
 import { prepareDocumentOps, raiseFaqVersionFloor, rejectVersionGatedConstructs } from './parse.js'
@@ -297,6 +297,11 @@ export function resolveSubsystemRefsSync(
       )
     }
   }
+
+  // esm-spec §4.7 "A mounted document's data sources": every mount above, of
+  // either form, carried its leaf's resolved sources up on the component it
+  // spliced in; they join the root's registry here.
+  hoistMountedDataSources(file)
 
   // esm-spec §9.7.10 / issue #311: re-run the §9.6.3 rewrite pass over each
   // root component that just had mounted content spliced into it.
@@ -600,6 +605,7 @@ function resolveRefDocument(
     leaf: EsmFile,
     leafRegistry: Record<string, unknown>,
     leafEnv: Readonly<Record<string, number>>,
+    forwardMeta: Readonly<Record<string, number>>,
   ) => void,
   enclosingEnv: Readonly<Record<string, number>> = {},
 ): EsmFile {
@@ -646,7 +652,22 @@ function resolveRefDocument(
   // the leaf declares (esm-spec §4.7 "Which environment a contribution folds
   // against"). See `childFoldEnv`.
   const leafEnv = childFoldEnv(enclosingEnv, leafClosedEnv(parsed, effectiveBindings))
-  if (resolveNestedMounts) resolveNestedMounts(parsed, leafRegistry, leafEnv)
+  // esm-spec §4.7 "Bindings reach through an assembly": an edge binding
+  // naming a metaparameter the leaf does not declare but a document it MOUNTS
+  // does (any depth) is forwarded down the leaf's own mount edges exactly as
+  // the loader-API bindings are — each nested edge backfills it for the names
+  // its own leaf declares, its explicit `bindings` winning. The
+  // declared-through-mounts set is read BEFORE the nested walk inlines those
+  // mounts (afterwards the refs are gone and the set would be empty).
+  const leafMountDeclaredPre = collectMountDeclaredMetaparameters(parsed, refBasePath)
+  const leafDeclared = (parsed as { metaparameters?: Record<string, unknown> }).metaparameters ?? {}
+  const forwardMeta: Record<string, number> = { ...apiMeta }
+  for (const [k, v] of Object.entries(bindings)) {
+    if (!Object.prototype.hasOwnProperty.call(leafDeclared, k) && leafMountDeclaredPre.has(k)) {
+      forwardMeta[k] = v
+    }
+  }
+  if (resolveNestedMounts) resolveNestedMounts(parsed, leafRegistry, leafEnv, forwardMeta)
   // esm-spec §9.7.10 form A: fold the subsystem-ref edge's injected imports
   // into the referenced component's scope before resolution — and, because the
   // nested mounts are already inlined above, the rewrite-targets of the
@@ -677,7 +698,10 @@ function resolveRefDocument(
   const resolved = resolveTemplateMachinery(machineryInput, refBasePath, {
     metaparameters: effectiveBindings,
     validateSchema,
-    mountDeclared: collectMountDeclaredMetaparameters(machineryInput, refBasePath),
+    mountDeclared: new Set([
+      ...collectMountDeclaredMetaparameters(machineryInput, refBasePath),
+      ...leafMountDeclaredPre,
+    ]),
     mountedLeaf: true,
   })
   // esm-spec §9.6.4 (Option B): lower to the reference-preserving form, then
@@ -932,6 +956,78 @@ function carryMountedElementType(
   }
 }
 
+/**
+ * The private key a mounted component carries its leaf's resolved
+ * `data_sources` under, from `resolveRefEdge` to the mounting document's
+ * `hoistMountedDataSources`. A symbol, so it is invisible to `Object.entries`
+ * and to `toJson` and can never survive a load.
+ */
+const HOISTED_SOURCES = Symbol('esm.mountedDataSources')
+
+/**
+ * Resolve a mounted leaf's `data_sources` against its own directory (§8.2.1)
+ * and attach them to the component(s) the edge is about to splice in.
+ */
+function stashMountedDataSources(parsed: EsmFile, refBasePath: string): void {
+  const resolved = (resolveDataSourceUrls(parsed, refBasePath) ?? parsed) as {
+    data_sources?: unknown
+  }
+  const sources = resolved.data_sources
+  if (sources === null || typeof sources !== 'object' || Array.isArray(sources)) return
+  if (Object.keys(sources).length === 0) return
+  for (const section of ['models', 'reaction_systems'] as const) {
+    const comps = (parsed as unknown as Record<string, unknown>)[section]
+    if (comps === null || typeof comps !== 'object' || Array.isArray(comps)) continue
+    for (const comp of Object.values(comps as Record<string, unknown>)) {
+      if (comp !== null && typeof comp === 'object') {
+        ;(comp as Record<symbol, unknown>)[HOISTED_SOURCES] = sources
+      }
+    }
+  }
+}
+
+/**
+ * Merge every mounted component's carried `data_sources` into `doc`, the
+ * document that mounts it (esm-spec §4.7 "A mounted document's data sources"),
+ * at either mount form and any depth of inline subsystems. The mounting
+ * document's own entry wins a name clash, a shallower mount wins over a deeper
+ * one, and an earlier mount over a later one.
+ */
+function hoistMountedDataSources(doc: EsmFile): void {
+  const found: Array<Record<string, unknown>> = []
+  const collect = (system: unknown): void => {
+    if (system === null || typeof system !== 'object') return
+    const o = system as Record<string | symbol, unknown>
+    const carried = o[HOISTED_SOURCES]
+    if (carried !== undefined) {
+      found.push(carried as Record<string, unknown>)
+      delete o[HOISTED_SOURCES]
+    }
+    const subs = o['subsystems']
+    if (subs !== null && typeof subs === 'object' && !Array.isArray(subs)) {
+      for (const sub of Object.values(subs as Record<string, unknown>)) collect(sub)
+    }
+  }
+  for (const section of ['models', 'reaction_systems'] as const) {
+    const comps = (doc as unknown as Record<string, unknown>)[section]
+    if (comps === null || typeof comps !== 'object' || Array.isArray(comps)) continue
+    for (const comp of Object.values(comps as Record<string, unknown>)) collect(comp)
+  }
+  if (found.length === 0) return
+  const holder = doc as unknown as Record<string, unknown>
+  const existing = holder['data_sources']
+  const dst: Record<string, unknown> =
+    existing !== null && typeof existing === 'object' && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) } // never mutate a caller-held block
+      : {}
+  for (const m of found) {
+    for (const [k, v] of Object.entries(m)) {
+      if (!Object.prototype.hasOwnProperty.call(dst, k)) dst[k] = v
+    }
+  }
+  holder['data_sources'] = dst
+}
+
 function resolveRefEdge(
   sub: RefEdge,
   ref: string,
@@ -950,6 +1046,7 @@ function resolveRefEdge(
     refBasePath: string,
     leafEnv: Readonly<Record<string, number>>,
     leafPrecision: string,
+    forwardMeta: Readonly<Record<string, number>>,
   ) => void,
   enclosingEnv: Readonly<Record<string, number>> = {},
   precision: string = DEFAULT_ELEMENT_TYPE,
@@ -992,8 +1089,15 @@ function resolveRefEdge(
       apiMeta,
       mountForm,
       resolveNestedMounts
-        ? (leaf, leafRegistry, leafEnv) =>
-            resolveNestedMounts(leaf, leafRegistry, refBasePath, leafEnv, leafEffective)
+        ? (leaf, leafRegistry, leafEnv, forwardMeta) =>
+            resolveNestedMounts(
+              leaf,
+              leafRegistry,
+              refBasePath,
+              leafEnv,
+              leafEffective,
+              forwardMeta,
+            )
         : undefined,
       enclosingEnv,
     )
@@ -1001,12 +1105,14 @@ function resolveRefEdge(
     // esm-spec §4.7 "Binding a data source's location at the mount", at BOTH
     // mount forms (this skeleton serves both): bind the leaf's `{name}`
     // placeholders on the document as resolved at this edge, a leading value
-    // anchoring on THIS (the mounting) document's directory. This binding does
-    // not hoist a mounted document's `data_sources` at either form, so the
-    // rewritten locations go no further — but the edge's keys are still checked
-    // here, so a misspelt key is `url_substitution_unknown_name` exactly as in
-    // the bindings that do hoist.
+    // anchoring on THIS (the mounting) document's directory.
     applyMountUrlSubstitutions(parsed, sub.url_substitutions, basePath, `${mountForm} ref '${ref}'`)
+    // esm-spec §4.7 "A mounted document's data sources": the leaf's
+    // `data_sources` — its own and those its nested mounts already merged into
+    // it, with this edge's substitutions applied — resolve against the LEAF's
+    // directory (§8.2.1), then ride on the component this edge splices in, to
+    // be merged into the MOUNTING document by `hoistMountedDataSources`.
+    stashMountedDataSources(parsed, refBasePath)
     inline(parsed, refBasePath)
   } finally {
     resolving.delete(chainKey)
@@ -1074,7 +1180,7 @@ function walkSubsystemRefs(
         // an UNRESOLVED `{ ref }` edge and splice it in as the component.
         // `leafEnv` is this leaf's fold environment — the enclosing one
         // overlaid with the leaf's closed one (see `childFoldEnv`).
-        (leaf, leafRegistry, leafBasePath, leafEnv, leafPrecision) =>
+        (leaf, leafRegistry, leafBasePath, leafEnv, leafPrecision, forwardMeta) =>
           resolveLeafNestedMounts(
             leaf,
             leafRegistry,
@@ -1083,7 +1189,7 @@ function walkSubsystemRefs(
             [...refChain, subName],
             read,
             subPointer,
-            apiMeta,
+            forwardMeta,
             leafEnv,
             leafPrecision,
           ),
@@ -1195,7 +1301,7 @@ function inlineTopLevelModelRef(
     apiMeta,
     'top-level model',
     // `leafEnv` is this leaf's fold environment, as for the subsystem form.
-    (leaf, leafRegistry, leafBasePath, leafEnv, leafPrecision) =>
+    (leaf, leafRegistry, leafBasePath, leafEnv, leafPrecision, forwardMeta) =>
       resolveLeafNestedMounts(
         leaf,
         leafRegistry,
@@ -1204,7 +1310,7 @@ function inlineTopLevelModelRef(
         [...refChain, name],
         read,
         pointer,
-        apiMeta,
+        forwardMeta,
         leafEnv,
         leafPrecision,
       ),
@@ -1414,6 +1520,7 @@ function resolveLeafNestedMounts(
       precision,
     )
   }
+  hoistMountedDataSources(leaf)
 }
 
 /**

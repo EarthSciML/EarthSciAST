@@ -94,6 +94,11 @@ export function resolveSourceUrl(template: string, baseDir: string): string {
   if (template.startsWith('{')) return template
   if (SCHEME_RE.test(template)) return template
 
+  // A document loaded from a URL has a URL for a directory: a relative
+  // location joins onto it by RFC 3986 §5.2, as its relative refs do (§4.7).
+  if (SCHEME_RE.test(baseDir) && !template.startsWith('/')) {
+    return joinUrlDirectory(baseDir, template)
+  }
   const joined = template.startsWith('/')
     ? template
     : stripTrailingSlashes(absoluteBase(baseDir)) + '/' + template
@@ -107,6 +112,27 @@ export function resolveSourceUrl(template: string, baseDir: string): string {
     )
   }
   return 'file://' + resolved
+}
+
+/**
+ * RFC 3986 §5.2 resolution of the relative path `rel` against the DIRECTORY
+ * URL `base` (`scheme://authority/path`, read as a directory whether or not it
+ * ends in `/`), with dot segments removed. A query or fragment on `base` is
+ * dropped, as §5.2.2 drops them for a path reference. Written out rather than
+ * `new URL(...)`, which would percent-encode a `{…}` substitution.
+ */
+export function joinUrlDirectory(base: string, rel: string): string {
+  const cut = base.search(/[?#]/)
+  const b = cut >= 0 ? base.slice(0, cut) : base
+  const afterScheme = b.indexOf('://') + 3
+  const slash = b.indexOf('/', afterScheme)
+  const pathStart = slash >= 0 ? slash : b.length
+  const origin = b.slice(0, pathStart)
+  const joined = stripTrailingSlashes(b.slice(pathStart)) + '/' + rel
+  const trailing = joined.endsWith('/') || joined.endsWith('/.') || joined.endsWith('/..')
+  let path = removeDotSegments(joined)
+  if (trailing && !path.endsWith('/')) path += '/'
+  return origin + path
 }
 
 /**
@@ -312,13 +338,16 @@ export function applyMountUrlSubstitutions(
 
   // The value a LEADING placeholder contributes: the mounting document's
   // location, per §8.2.1's own forms.
+  // A mounting document loaded from a URL has a URL for a directory; a
+  // relative value then joins onto it by RFC 3986 §5.2, as that document's own
+  // relative refs do (§4.7).
   const remoteBinder = SCHEME_RE.test(binderDir)
   const base = remoteBinder ? binderDir : stripTrailingSlashes(absoluteBase(binderDir))
   const lead = (v: string): string =>
     SCHEME_RE.test(v) || v.startsWith('/')
       ? v
       : remoteBinder
-        ? new URL(v, stripTrailingSlashes(base) + '/').href
+        ? joinUrlDirectory(base, v)
         : base + '/' + v
 
   for (const s of sites) {
