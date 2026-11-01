@@ -1,0 +1,38 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "url_substitutions_mount_own_overrides",
+    "description": "One catalogue mounted twice with DIFFERENT bindings, so its `segment` entries differ — but the mounting document declares `segment` itself, and its own entry wins over anything it mounts, so the load succeeds and `segment` is this document's (esm-spec §4.7 'A mounted document's data sources')."
+  },
+  "data_sources": {
+    "segment": {
+      "kind": "static",
+      "source": {
+        "url_template": "./snapshots/b/t.parquet"
+      },
+      "metadata": {
+        "esio_format": "parquet"
+      }
+    }
+  },
+  "models": {
+    "Outer": {
+      "variables": {},
+      "equations": [],
+      "subsystems": {
+        "A": {
+          "ref": "catalogue/catalogue.esm",
+          "url_substitutions": {
+            "snapshot": "a"
+          }
+        },
+        "B": {
+          "ref": "catalogue/catalogue.esm",
+          "url_substitutions": {
+            "snapshot": "b"
+          }
+        }
+      }
+    }
+  }
+}

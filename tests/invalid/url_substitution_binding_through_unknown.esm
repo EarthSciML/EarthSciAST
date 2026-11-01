@@ -1,0 +1,24 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "url_substitution_binding_through_unknown",
+    "description": "INVALID — RESOLVER-LEVEL (esm-spec §9.7.6 'Binding an unknown name is an error'). A `subsystems.<k>` edge mounts a catalogue that mounts the domain model, and binds `n_rwos` — a misspelling of the model's `n_rows`. A binding may reach through an assembly to a metaparameter a document it mounts declares, but a name NO document in the chain declares is template_import_unknown_name."
+  },
+  "models": {
+    "Run": {
+      "variables": {},
+      "equations": [],
+      "subsystems": {
+        "Snap": {
+          "ref": "../conformance/url_substitutions/catalogue/sized_catalogue.esm",
+          "url_substitutions": {
+            "snapshot": "a"
+          },
+          "bindings": {
+            "n_rwos": 4
+          }
+        }
+      }
+    }
+  }
+}

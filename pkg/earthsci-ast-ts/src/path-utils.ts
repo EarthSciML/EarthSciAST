@@ -14,6 +14,8 @@
  * form there.
  */
 
+import { joinUrlDirectory, removeUrlPathDotSegments } from './data-source-urls.js'
+
 /** True for `http://` / `https://` refs, which are resolved as opaque keys. */
 export function isRemoteRef(ref: string): boolean {
   return ref.startsWith('http://') || ref.startsWith('https://')
@@ -105,9 +107,17 @@ export function canonicalizePath(p: string): string {
   return isAbs ? `/${joined}` : joined || '.'
 }
 
+/** Index of the first `/` of a `scheme://authority/path` URL's path (its length if none). */
+function urlPathStart(url: string): number {
+  const afterScheme = url.indexOf('://') + 3
+  const slash = url.slice(afterScheme).search(/[/?#]/)
+  return slash >= 0 ? afterScheme + slash : url.length
+}
+
 /**
  * Canonical cycle-detection key for an import/subsystem ref (esm-spec §9.7.2 /
- * §4.7). Remote refs are returned verbatim; local refs are joined against
+ * §4.7). Remote refs are returned with their path's dot segments removed, and
+ * a ref relative to a URL directory joins onto it; local refs are joined against
  * `baseDir` and collapsed so that different spellings of the same file
  * (`a/../b`, `./b`) map to one key.
  *
@@ -122,7 +132,15 @@ export function canonicalizePath(p: string): string {
  * ref is canonicalized on its own with no base prefix.
  */
 export function normalizeRef(ref: string, baseDir?: string): string {
-  if (isRemoteRef(ref)) return ref
+  if (isRemoteRef(ref)) return removeUrlPathDotSegments(ref)
+  // esm-spec §4.7 "URL (remote) references": a document loaded from a URL is
+  // the base for its own relative refs, which join onto its URL directory by
+  // RFC 3986 §5.2 (an absolute-path ref keeps the URL's origin).
+  if (baseDir !== undefined && isRemoteRef(baseDir)) {
+    return ref.startsWith('/')
+      ? removeUrlPathDotSegments(baseDir.slice(0, urlPathStart(baseDir)) + ref)
+      : joinUrlDirectory(baseDir, ref)
+  }
   const base = baseDir ? baseDir.replace(/\\/g, '/') : ''
   return canonicalizePath(base ? joinPath(base, ref) : ref)
 }

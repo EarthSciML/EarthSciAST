@@ -1,0 +1,16 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "url_substitutions_mount_toplevel",
+    "description": "Mounts the shared catalogue at the top-level `models.<k>` form and points it at snapshot `a`, with `lead`'s location supplied from beside THIS document (`snapshots/b`)."
+  },
+  "models": {
+    "Snap": {
+      "ref": "catalogue/catalogue.esm",
+      "url_substitutions": {
+        "snapshot": "a",
+        "data": "snapshots/b"
+      }
+    }
+  }
+}

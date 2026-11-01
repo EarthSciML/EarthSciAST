@@ -39,6 +39,7 @@ from jsonschema import validate
 
 from .error_handling import (
     AMBIGUOUS_SUBSYSTEM_REF,
+    DATA_SOURCE_MERGE_CONFLICT,
     ELEMENT_TYPE_UNCARRIED,
     MOUNT_FORM_UNSUPPORTED,
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
@@ -105,7 +106,7 @@ from .esm_types import (
     VariableMapCoupling,
     _sum_entries,
 )
-from .json_walk import expand_ref_env, read_ref_text
+from .json_walk import ExpressionTemplateError, expand_ref_env, read_ref_text
 
 
 class SchemaValidationError(EarthSciAstError):
@@ -1538,6 +1539,34 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
     )
 
 
+def _is_url(ref: str) -> bool:
+    return ref.startswith(("http://", "https://"))
+
+
+def _ref_location(ref: str, base_path: str) -> str:
+    """Where a §4.7 ``ref`` points, from the directory ``base_path`` of the
+    document that wrote it: a URL as-is; a relative ref inside a document loaded
+    from a URL joined onto that URL directory by RFC 3986 §5.2 (esm-spec §4.7
+    "URL (remote) references"); otherwise the ``normpath``-joined local path.
+    Also the canonical key the circular-reference guards compare."""
+    if _is_url(ref):
+        return ref
+    base = str(base_path)
+    if _is_url(base) and not os.path.isabs(ref):
+        from ._data_source_urls import _join_url_directory
+
+        return _join_url_directory(base, ref)
+    return os.path.normpath(os.path.join(base, ref))
+
+
+def _ref_directory(location: str) -> str:
+    """The directory anchoring the nested refs of the document at
+    ``location`` (a :func:`_ref_location` result)."""
+    if _is_url(location):
+        return location.rsplit("/", 1)[0]
+    return os.path.dirname(location)
+
+
 def _fetch_ref_content(ref: str, base_path: str) -> str:
     """Fetch content from a subsystem ref (URL or file path).
 
@@ -1560,17 +1589,17 @@ def _fetch_ref_content(ref: str, base_path: str) -> str:
     # SubsystemRefError (no diagnostic code) messages. The resolved path is
     # unused here — the caller (`_load_ref_data`) derives its own base.
     text, _ = read_ref_text(
-        ref,
+        _ref_location(ref, base_path),
         base_path,
-        resolve_path=lambda base, r: os.path.normpath(os.path.join(base, r)),
+        resolve_path=lambda _base, location: location,
         path_exists=os.path.exists,
         encoding=None,
         url_error_types=(urllib.error.URLError, urllib.error.HTTPError),
         on_url_error=lambda r, e: SubsystemRefError(
             f"Failed to fetch subsystem ref URL '{r}': {e}"
         ),
-        on_missing=lambda r, p: SubsystemRefError(
-            f"Subsystem ref file not found: '{p}' (resolved from '{r}' relative to '{base_path}')"
+        on_missing=lambda _r, p: SubsystemRefError(
+            f"Subsystem ref file not found: '{p}' (resolved from '{ref}' relative to '{base_path}')"
         ),
     )
     return text
@@ -1657,13 +1686,16 @@ def _load_ref_data(
     parent_metaparameters: dict[str, int] | None = None,
     index_set_rename: Any = None,
     rename_where: str = "mount edge",
+    forwarded: dict[str, int] | None = None,
 ) -> tuple:
     """Fetch, gate, schema-validate, §9.7-resolve, and template-lower a
     referenced ESM document (esm-spec §4.7 / §9.7.6 binding site 3).
 
-    Returns ``(ref_data, new_base)`` where ``ref_data`` is the resolved,
-    lowered raw dict (ready for ``_parse_esm_data``) and ``new_base`` the
-    directory anchoring the referenced file's own nested refs. A ref that
+    Returns ``(ref_data, new_base, leaf_env, forward)`` where ``ref_data`` is
+    the resolved, lowered raw dict (ready for ``_parse_esm_data``), ``new_base``
+    the directory anchoring the referenced file's own nested refs, ``leaf_env``
+    the leaf's closed metaparameter environment, and ``forward`` the forwarded
+    edge bindings its OWN mount edges receive (see below). A ref that
     targets a template-library file is rejected with the stable
     ``subsystem_ref_is_template_library`` diagnostic (esm-spec §9.7.1): the
     two reference mechanisms are disjoint.
@@ -1685,6 +1717,15 @@ def _load_ref_data(
     single-root-resolve semantics; explicit edge ``bindings`` (site 3) win over
     them, and names the leaf does not declare are dropped (never forwarded, so
     they cannot raise ``template_import_unknown_name`` against the leaf).
+
+    ``forwarded`` are edge bindings forwarded from an edge ABOVE this one
+    (esm-spec §4.7 "Bindings reach through an assembly"). The leaf sees them as
+    it sees the loader-API bindings (filtered to the names it declares, a
+    forwarded binding winning over a loader-API one, its own edge ``bindings``
+    winning over both), but unlike the loader-API bindings, which reach every
+    depth (§9.7.6 site 4) and travel down separately, a forwarded binding stops
+    at the first document on each mount path that declares the name. See
+    :func:`_forward_edge_bindings` for what ``forward`` carries.
     """
     from .lower_expression_templates import (
         ExpressionTemplateError,
@@ -1705,12 +1746,9 @@ def _load_ref_data(
     # alias and `arrayop` both survive a `{ref}` all the way into `emit`.
     prepare_document_ops(ref_data)
 
-    # Determine the new base_path for nested refs (and template imports).
-    if ref_str.startswith("http://") or ref_str.startswith("https://"):
-        new_base = ref_str.rsplit("/", 1)[0] if "/" in ref_str else base_path
-    else:
-        resolved_path = os.path.normpath(os.path.join(base_path, ref_str))
-        new_base = os.path.dirname(resolved_path)
+    # Determine the new base_path for nested refs (and template imports): a
+    # relative ref inside a URL-loaded document joined onto its URL directory.
+    new_base = _ref_directory(_ref_location(ref_str, base_path))
 
     # Each file is held to its OWN declared `esm` (esm-spec §4.7), so a mounted
     # leaf runs the same file-level version gates as the root.
@@ -1766,7 +1804,9 @@ def _load_ref_data(
     # own defaults. Names the leaf does not declare are never forwarded.
     leaf_decls = set((ref_data.get("metaparameters") or {}).keys())
     effective_bindings: dict[str, int] = {
-        k: v for k, v in (loader_metaparameters or {}).items() if k in leaf_decls
+        k: v
+        for k, v in {**(loader_metaparameters or {}), **(forwarded or {})}.items()
+        if k in leaf_decls
     }
     # Fold each edge binding VALUE (a metaparameter expression, esm-spec §9.7.6)
     # to a concrete integer against the MOUNTING document's closed metaparameter
@@ -1810,13 +1850,15 @@ def _load_ref_data(
     # declares stays symbolic rather than failing here (§9.7.6 site 5).
     # `mount_declared` covers the leaf's OWN nested mounts, so the widening
     # composes down the reference DAG.
-    from .template_imports import collect_mount_declared_metaparameters
+    forward, mount_declared = _forward_edge_bindings(
+        ref_data, new_base, leaf_decls, bindings, effective_bindings, forwarded
+    )
 
     resolved = resolve_template_machinery(
         ref_data,
         new_base,
         metaparameters=effective_bindings,
-        mount_declared=collect_mount_declared_metaparameters(ref_data, new_base),
+        mount_declared=mount_declared,
         mounted_leaf=True,
     )
     if resolved is not None:
@@ -1856,7 +1898,125 @@ def _load_ref_data(
 
     apply_mount_index_set_rename(ref_data, index_set_rename, rename_where)
 
-    return ref_data, new_base, leaf_env
+    return ref_data, new_base, leaf_env, forward
+
+
+def _forward_edge_bindings(
+    ref_data: dict[str, Any],
+    new_base: str,
+    leaf_decls: set[str],
+    bindings: dict[str, Any] | None,
+    effective_bindings: dict[str, int],
+    forwarded: dict[str, int] | None,
+) -> tuple[dict[str, int], frozenset[str]]:
+    """The edge bindings a mounted leaf L hands its OWN mount edges (esm-spec
+    §4.7 "Bindings reach through an assembly"), shared by both mount forms.
+
+    Returns ``(forward, mount_declared)``. ``forward`` is the ``forwarded``
+    entries whose name L does not declare (a forwarded binding stops at the
+    first document on each mount path that declares the name), overridden by
+    L's edge ``bindings`` whose name L does not declare but a document in L's
+    mount tree does, already folded (``effective_bindings``). The loader-API
+    bindings are not part of it: they travel down separately.
+
+    ``mount_declared`` is the names L's mount tree declares, which widens the
+    unknown-name check for those edge bindings. The walk runs only when the
+    edge carries a binding L does not declare; it is strict, so an unreadable
+    nested ref reports its read failure rather than an unknown name.
+    """
+    forward = {k: v for k, v in (forwarded or {}).items() if k not in leaf_decls}
+    undeclared = [bk for bk in bindings or {} if bk not in leaf_decls]
+    if not undeclared:
+        return forward, frozenset()
+    from .template_imports import collect_mount_declared_metaparameters
+
+    mount_declared = collect_mount_declared_metaparameters(ref_data, new_base, strict=True)
+    for bk in undeclared:
+        if bk in mount_declared:
+            forward[bk] = effective_bindings[bk]
+    return forward, mount_declared
+
+
+class _MountedSources(dict):
+    """A document's ``data_sources`` while its mounts merge into it (esm-spec
+    §4.7 "A mounted document's data sources").
+
+    Remembers which names the document declares ITSELF (``own``: those win over
+    anything it mounts) and which edge first contributed each other name
+    (``edges``), so a second mount contributing that name with a different
+    entry is reported naming both edges. One per document, shared by its
+    top-level and subsystem mounts, which are siblings for this rule.
+    """
+
+    def __init__(self, own: dict[str, Any]) -> None:
+        super().__init__(own)
+        self.own = frozenset(own)
+        self.edges: dict[str, str] = {}
+
+
+def _mount_target(doc: Any) -> _MountedSources:
+    """``doc.data_sources`` as the merge target of its mounts, created on first
+    use, so its ``own`` names are the document's declared entries."""
+    target = doc.data_sources
+    if not isinstance(target, _MountedSources):
+        target = _MountedSources(target or {})
+        doc.data_sources = target
+    return target
+
+
+def _merge_mounted_data_sources(
+    leaf: Any,
+    edge: Any,
+    binder_dir: str,
+    leaf_dir: str,
+    where: str,
+    target: _MountedSources,
+    label: str,
+) -> None:
+    """Carry a mounted document's ``data_sources`` across its mount edge
+    (esm-spec §4.7 "A mounted document's data sources"), at either mount form.
+
+    ``leaf`` is the referenced document, already carrying what its OWN mounts
+    merged into it. In order: (1) the edge's ``url_substitutions`` bind its
+    placeholders, a leading value anchoring on ``binder_dir`` (the MOUNTING
+    document's directory); (2) every location still relative resolves by §8.2.1
+    against ``leaf_dir``, the file that wrote it; (3) the entries merge into
+    ``target``, the mounting document's ``data_sources``, whose own entry wins a
+    name clash. Two mounts contributing one name must contribute equal entries
+    (every field, compared structurally), which merge once; otherwise the load
+    fails with ``data_source_merge_conflict`` naming the source and both edges
+    (``label`` names this one). Entries thus travel up one edge at a time.
+    """
+    from ._data_source_urls import apply_mount_url_substitutions, resolve_data_source_urls
+
+    sources = leaf.data_sources
+    raw = {
+        "data_sources": {
+            n: {"source": {"url_template": ds.source.url_template, "mirrors": ds.source.mirrors}}
+            for n, ds in sources.items()
+        }
+    }
+    apply_mount_url_substitutions(raw, edge, binder_dir, where)
+    resolve_data_source_urls(raw, leaf_dir)
+    for n, ds in sources.items():
+        loc = raw["data_sources"][n]["source"]
+        ds.source = DataSourceLocation(url_template=loc["url_template"], mirrors=loc["mirrors"])
+        if n in target.own:
+            continue
+        prev = target.get(n)
+        if prev is None:
+            target[n] = ds
+            target.edges[n] = label
+        elif prev != ds:
+            raise ExpressionTemplateError(
+                DATA_SOURCE_MERGE_CONFLICT,
+                f"data source '{n}' is contributed by two mounts with different "
+                f"entries — {target.edges.get(n, 'an earlier mount')} and {label} — "
+                "after url_substitutions and location resolution (esm-spec §4.7 "
+                '"A mounted document\'s data sources"). Give them different names, '
+                f"bind them alike, or declare '{n}' in the mounting document to "
+                "override both.",
+            )
 
 
 # Index-set declaration fields compared by the §4.7 / §9.7.5 deep-equal test
@@ -2018,9 +2178,11 @@ def _resolve_subsystems_generic(
     seen_refs: set,
     chain: tuple[str, ...],
     *,
-    resolve_ref: Callable[[Any, str, str, set, tuple[str, ...], str, dict[str, int]], Any],
+    resolve_ref: Callable[..., Any],
     recurse_resolved: Callable[[Any, str, set, tuple[str, ...]], None],
     api_meta: dict[str, int] | None = None,
+    forwarded: dict[str, int] | None = None,
+    sources: _MountedSources | None = None,
 ) -> None:
     """Shared skeleton behind :func:`_resolve_model_subsystems` and
     :func:`_resolve_reaction_system_subsystems`.
@@ -2057,11 +2219,7 @@ def _resolve_subsystems_generic(
             ref_str = sub_value["ref"]
 
             # Circular reference detection
-            canonical = (
-                os.path.normpath(os.path.join(base_path, ref_str))
-                if not ref_str.startswith("http")
-                else ref_str
-            )
+            canonical = _ref_location(ref_str, base_path)
             if canonical in seen_refs:
                 raise CircularReferenceError(
                     f"Circular subsystem reference detected: '{ref_str}' "
@@ -2083,7 +2241,7 @@ def _resolve_subsystems_generic(
             kind = "reaction_systems" if isinstance(component, ReactionSystem) else "models"
             mount_pointer = f"/{kind}/{component.name}/subsystems/{sub_name}"
             try:
-                ref_data, new_base, leaf_env = _load_ref_data(
+                ref_data, new_base, leaf_env, forward = _load_ref_data(
                     ref_str,
                     base_path,
                     bindings,
@@ -2100,6 +2258,7 @@ def _resolve_subsystems_generic(
                     loader_metaparameters=api_meta,
                     index_set_rename=sub_value.get("index_set_rename"),
                     rename_where=f"subsystem ref '{ref_str}'",
+                    forwarded=forwarded,
                 )
 
                 parsed = _parse_esm_data(ref_data)
@@ -2115,7 +2274,19 @@ def _resolve_subsystems_generic(
                         path=mount_pointer,
                     )
                 resolved_subsystems[sub_name] = resolve_ref(
-                    parsed, sub_name, new_base, new_seen, new_chain, ref_str, leaf_env
+                    parsed, sub_name, new_base, new_seen, new_chain, ref_str, leaf_env, forward
+                )
+                # esm-spec §4.7 "A mounted document's data sources", at this
+                # form as at the top-level one: after the leaf's own mounts
+                # resolved (inside `resolve_ref`) and merged into it.
+                _merge_mounted_data_sources(
+                    parsed,
+                    sub_value,
+                    base_path,
+                    new_base,
+                    f"subsystem ref '{ref_str}'",
+                    _MountedSources({}) if sources is None else sources,
+                    f"{kind}.{component.name}.subsystems.{sub_name} (ref '{ref_str}')",
                 )
             except SubsystemRefError as exc:
                 if not getattr(exc, "code", ""):
@@ -2144,8 +2315,10 @@ def _resolve_model_subsystems(
     chain: tuple[str, ...] = (),
     *,
     api_meta: dict[str, int] | None = None,
+    forwarded: dict[str, int] | None = None,
     root_env: dict[str, int] | None = None,
     precision: str = _DEFAULT_ELEMENT_TYPE,
+    sources: _MountedSources | None = None,
 ) -> None:
     """Recursively resolve subsystem refs within a Model.
 
@@ -2160,9 +2333,16 @@ def _resolve_model_subsystems(
         chain: The already-seen refs in resolution order (parallel to
             ``seen_refs``, which is unordered); used only to print a
             deterministic chain in the circular-reference error.
+        api_meta: The loader-API bindings (esm-spec §9.7.6 site 4); they reach
+            every depth unchanged.
+        forwarded: The edge bindings forwarded through an assembly to this
+            document's mount edges (esm-spec §4.7 "Bindings reach through an
+            assembly"); see :func:`_forward_edge_bindings`.
+        sources: The ``data_sources`` of the document ``model`` belongs to;
+            every mounted leaf's sources merge into it (esm-spec §4.7).
     """
 
-    def resolve_ref(parsed, sub_name, new_base, new_seen, new_chain, ref_str, leaf_env):
+    def resolve_ref(parsed, sub_name, new_base, new_seen, new_chain, ref_str, leaf_env, forward):
         # The mounted file may itself be an ASSEMBLY, whose own `models.<k>`
         # entries are `{ref}` mount edges. Which attachment point mounted it
         # does not change what it IS, and esm-spec §4.7 "Two mount forms, one
@@ -2189,6 +2369,7 @@ def _resolve_model_subsystems(
             parent_metaparameters=child_env,
             _mount_chain=tuple(new_chain),
             _enclosing_precision=precision,
+            _forwarded=forward,
         )
 
         # esm-spec §4.7: the mounted file's document-scoped index sets
@@ -2214,8 +2395,10 @@ def _resolve_model_subsystems(
                 registry,
                 new_chain,
                 api_meta=api_meta,
+                forwarded=forward,
                 root_env=child_env,
                 precision=leaf_effective,
+                sources=_mount_target(parsed),
             )
             _carry_mounted_element_type(
                 sub_model, leaf_precision, precision, f"subsystem ref '{ref_str}'"
@@ -2232,8 +2415,10 @@ def _resolve_model_subsystems(
                 registry,
                 sub_chain,
                 api_meta=api_meta,
+                forwarded=forwarded,
                 root_env=root_env,
                 precision=precision,
+                sources=sources,
             )
 
     _resolve_subsystems_generic(
@@ -2244,6 +2429,8 @@ def _resolve_model_subsystems(
         resolve_ref=resolve_ref,
         recurse_resolved=recurse_resolved,
         api_meta=api_meta,
+        forwarded=forwarded,
+        sources=sources,
     )
 
 
@@ -2254,7 +2441,9 @@ def _resolve_reaction_system_subsystems(
     chain: tuple[str, ...] = (),
     *,
     api_meta: dict[str, int] | None = None,
+    forwarded: dict[str, int] | None = None,
     precision: str = _DEFAULT_ELEMENT_TYPE,
+    sources: _MountedSources | None = None,
 ) -> None:
     """Recursively resolve subsystem refs within a ReactionSystem.
 
@@ -2267,7 +2456,7 @@ def _resolve_reaction_system_subsystems(
             circular-reference error.
     """
 
-    def resolve_ref(parsed, sub_name, new_base, new_seen, new_chain, ref_str, leaf_env):
+    def resolve_ref(parsed, sub_name, new_base, new_seen, new_chain, ref_str, leaf_env, forward):
         # Extract the single top-level reaction system
         if parsed.reaction_systems:
             sub_rs = next(iter(parsed.reaction_systems.values()))
@@ -2279,7 +2468,9 @@ def _resolve_reaction_system_subsystems(
                 new_seen,
                 new_chain,
                 api_meta=api_meta,
+                forwarded=forward,
                 precision=leaf_precision or precision,
+                sources=_mount_target(parsed),
             )
             _carry_mounted_element_type(
                 sub_rs, leaf_precision, precision, f"subsystem ref '{ref_str}'"
@@ -2290,7 +2481,14 @@ def _resolve_reaction_system_subsystems(
     def recurse_resolved(sub_value, sub_base, sub_seen, sub_chain):
         if isinstance(sub_value, ReactionSystem):
             _resolve_reaction_system_subsystems(
-                sub_value, sub_base, sub_seen, sub_chain, api_meta=api_meta, precision=precision
+                sub_value,
+                sub_base,
+                sub_seen,
+                sub_chain,
+                api_meta=api_meta,
+                forwarded=forwarded,
+                precision=precision,
+                sources=sources,
             )
 
     _resolve_subsystems_generic(
@@ -2301,6 +2499,8 @@ def _resolve_reaction_system_subsystems(
         resolve_ref=resolve_ref,
         recurse_resolved=recurse_resolved,
         api_meta=api_meta,
+        forwarded=forwarded,
+        sources=sources,
     )
 
 
@@ -2359,11 +2559,17 @@ def resolve_subsystem_refs(
             api_meta=api_meta,
             root_env=root_env,
             precision=precision,
+            sources=_mount_target(esm_file),
         )
 
     for rs in esm_file.reaction_systems.values():
         _resolve_reaction_system_subsystems(
-            rs, base_path, seen, api_meta=api_meta, precision=precision
+            rs,
+            base_path,
+            seen,
+            api_meta=api_meta,
+            precision=precision,
+            sources=_mount_target(esm_file),
         )
 
 
@@ -2374,6 +2580,7 @@ def resolve_model_refs(
     parent_metaparameters: dict[str, int] | None = None,
     _mount_chain: tuple[str, ...] = (),
     _enclosing_precision: str = _DEFAULT_ELEMENT_TYPE,
+    _forwarded: dict[str, int] | None = None,
 ) -> None:
     """Resolve all top-level model references in an ESM file.
 
@@ -2416,6 +2623,10 @@ def resolve_model_refs(
             assembly that mounts back is a ``CircularReferenceError`` rather
             than unbounded recursion. Path-scoped, not visit-once: the same
             component file may be mounted by several keys.
+        _forwarded: Private. Edge bindings forwarded through an assembly to
+            this document's mount edges (esm-spec §4.7 "Bindings reach through
+            an assembly"), kept apart from ``loader_metaparameters``, which
+            reach every depth: see :func:`_forward_edge_bindings`.
 
     Raises:
         CircularReferenceError: If circular references are detected
@@ -2441,11 +2652,7 @@ def resolve_model_refs(
 
         # Circular reference detection. Seed the chain with this ref so a
         # subsystem inside the referenced file that points back is caught.
-        canonical = (
-            os.path.normpath(os.path.join(base_path, ref_str))
-            if not ref_str.startswith("http")
-            else ref_str
-        )
+        canonical = _ref_location(ref_str, base_path)
         seen = {canonical}
         # ... and the same check across the TOP-LEVEL mount chain, which the
         # per-mount `seen` above cannot see: `seen` is seeded fresh for each
@@ -2459,7 +2666,7 @@ def resolve_model_refs(
 
         bindings = _subsystem_ref_bindings(model_value, f"models.{model_name}")
         injected = _subsystem_ref_injected_imports(model_value)
-        ref_data, new_base, leaf_env = _load_ref_data(
+        ref_data, new_base, leaf_env, forward = _load_ref_data(
             ref_str,
             base_path,
             bindings,
@@ -2469,6 +2676,7 @@ def resolve_model_refs(
             parent_metaparameters=parent_metaparameters,
             index_set_rename=model_value.get("index_set_rename"),
             rename_where=f"top-level model ref '{ref_str}'",
+            forwarded=_forwarded,
         )
 
         parsed = _parse_esm_data(ref_data)
@@ -2503,6 +2711,7 @@ def resolve_model_refs(
             parent_metaparameters=child_env,
             _mount_chain=(*_mount_chain, canonical),
             _enclosing_precision=precision,
+            _forwarded=forward,
         )
 
         # esm-spec §4.7: the referenced file's document-scoped index sets — now
@@ -2545,11 +2754,25 @@ def resolve_model_refs(
             registry,
             (canonical,),
             api_meta=loader_metaparameters,
+            forwarded=forward,
             root_env=child_env,
             precision=leaf_precision or precision,
+            sources=_mount_target(parsed),
         )
         _carry_mounted_element_type(
             sub_model, leaf_precision, precision, f"top-level model ref '{ref_str}'"
+        )
+        # esm-spec §4.7 "A mounted document's data sources": the leaf's own
+        # sources, plus what its own mounts (both forms, resolved above) merged
+        # into it, cross this edge into THIS document.
+        _merge_mounted_data_sources(
+            parsed,
+            model_value,
+            base_path,
+            new_base,
+            f"top-level model ref '{ref_str}'",
+            _mount_target(esm_file),
+            f"models.{model_name} (ref '{ref_str}')",
         )
         resolved_models[model_name] = sub_model
 
@@ -3049,6 +3272,8 @@ def _load_data(
         loader_metaparameters=metaparameters,
         parent_metaparameters=root_meta_env,
     )
+    # The mounts have merged; the merge bookkeeping does not outlive the load.
+    esm_file.data_sources = dict(esm_file.data_sources)
 
     # Lower `enum` op nodes to `const` integers using the file's `enums` block
     # (esm-spec §9.3). Runs after subsystem resolution so every expression

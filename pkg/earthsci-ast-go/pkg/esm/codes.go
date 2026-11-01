@@ -429,6 +429,25 @@ const (
 	// StructuralError: the document is schema-valid and the failure is the
 	// resolver's. The message names the offending data source and template.
 	codeDataSourceURLUnresolved = "data_source_url_unresolved"
+
+	// codeURLSubstitutionUnknownName: a mount edge's `url_substitutions` key
+	// names no bare `{name}` placeholder of any `url_template` or `mirrors`
+	// entry of the referenced document's `data_sources` (esm-spec §4.7
+	// "Binding a data source's location at the mount") -- the data-source
+	// mirror of `subsystem_index_set_rename_unknown_name`: a mount edge never
+	// invents a name. Unexported for the reason codeDataSourceURLUnresolved
+	// is: it only ever appears in the text of a load error, and the
+	// cross-binding contract is the STRING (pinned in
+	// tests/conformance/url_substitutions/manifest.json).
+	codeURLSubstitutionUnknownName = "url_substitution_unknown_name"
+
+	// codeDataSourceMergeConflict: two mounts contribute the same
+	// `data_sources` name to one mounting document with entries that are not
+	// identical after `url_substitutions` and §8.2.1 resolution, and the
+	// mounting document does not declare that name itself (esm-spec §4.7 "A
+	// mounted document's data sources"). Unexported for the same reason as the
+	// two codes above.
+	codeDataSourceMergeConflict = "data_source_merge_conflict"
 )
 
 // --- Diagnostic codes: §9.5 sampled function tables — the §9.5.5 table

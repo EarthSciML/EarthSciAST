@@ -1,0 +1,45 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "url_substitutions_catalogue",
+    "description": "A shared data catalogue whose locations name their directory through placeholders (esm-spec §4.7 'Binding a data source's location at the mount'). `segment` spells `{snapshot}` in the middle of a location this file wrote, so a bound value is a path segment and the location resolves against THIS file's directory; `lead` spells `{data}` at the start, so a bound value supplies the whole location and resolves against the MOUNTING document's directory; `fixed` carries only the runtime's formatted `{date:...}`, which no mount edge can bind. Loaded standalone, every placeholder passes through unexpanded (esm-spec §8.2)."
+  },
+  "data_sources": {
+    "segment": {
+      "kind": "static",
+      "source": {
+        "url_template": "../snapshots/{snapshot}/t.parquet",
+        "mirrors": [
+          "https://example.org/{snapshot}/t.parquet"
+        ]
+      },
+      "metadata": {
+        "esio_format": "parquet"
+      }
+    },
+    "lead": {
+      "kind": "static",
+      "source": {
+        "url_template": "{data}/t.parquet"
+      },
+      "metadata": {
+        "esio_format": "parquet"
+      }
+    },
+    "fixed": {
+      "kind": "static",
+      "source": {
+        "url_template": "./fixed/{date:%Y}.parquet"
+      },
+      "metadata": {
+        "esio_format": "parquet"
+      }
+    }
+  },
+  "models": {
+    "Catalogue": {
+      "variables": {},
+      "equations": []
+    }
+  }
+}

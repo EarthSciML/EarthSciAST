@@ -1,0 +1,23 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "url_substitutions_sized_catalogue",
+    "description": "A catalogue that MOUNTS the domain model it feeds (`sized.esm`) and declares the sources that model reads, located through `{snapshot}`. A run document then mounts this one file: its edge's `url_substitutions` point the sources at a snapshot and its `bindings` reach through this document to `sized.esm`'s `n_rows` (esm-spec §4.7, §9.7.6 sites 2-3). It declares no metaparameters of its own."
+  },
+  "data_sources": {
+    "segment": {
+      "kind": "static",
+      "source": {
+        "url_template": "../snapshots/{snapshot}/t.parquet"
+      },
+      "metadata": {
+        "esio_format": "parquet"
+      }
+    }
+  },
+  "models": {
+    "Inner": {
+      "ref": "sized.esm"
+    }
+  }
+}

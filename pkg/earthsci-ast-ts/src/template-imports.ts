@@ -356,6 +356,7 @@ const OPAQUE_KEYS = [
   'rename',
   'rebind',
   'index_set_rename',
+  'url_substitutions',
   'source',
   'file_variable',
   'path',
@@ -428,6 +429,7 @@ export const NAME_KEYED_MAP_KEYS: ReadonlySet<string> = new Set<string>([
   'rename',
   'rebind',
   'index_set_rename',
+  'url_substitutions',
   'where',
 ])
 
@@ -874,7 +876,8 @@ function loadImportRaw(
   origin: string,
   opts: TemplateResolveOptions,
 ): { raw: unknown; dir: string } {
-  if (isRemoteRef(ref)) {
+  // A relative ref inside a URL-loaded document is a remote ref too (§4.7).
+  if (isRemoteRef(ref) || isRemoteRef(baseDir)) {
     // The synchronous §9.7 resolver cannot fetch over the network (mirrors
     // the Rust binding's remote-ref stance): download the library first and
     // import it by local path.
@@ -1840,6 +1843,16 @@ function lowerLibraryTemplateBody(
 // Root-document resolution (the load-time entry point)
 // ---------------------------------------------------------------------------
 
+/**
+ * Options for {@link collectMountDeclaredMetaparameters}: the template
+ * resolver's, plus the §4.7 ref loader's own reader for MOUNT refs. `readRef`
+ * returns the referenced document's text and the directory its own relative
+ * refs resolve against (a URL directory for a URL-loaded document).
+ */
+export type MountDeclaredOptions = TemplateResolveOptions & {
+  readRef?: ((ref: string, basePath: string) => { text: string; base: string }) | undefined
+}
+
 function hasImportMachinery(raw: unknown): boolean {
   if (!isObject(raw)) return false
   if (
@@ -1873,8 +1886,12 @@ function hasImportMachinery(raw: unknown): boolean {
  * Reads only each referenced file's top-level `metaparameters` keys. A ref that
  * cannot be read is IGNORED: this walk exists to WIDEN acceptance, and the
  * resolution error belongs to the ref resolver, which reports it with the proper
- * mount pointer. Remote refs are likewise skipped — the synchronous loader
- * cannot fetch them. Cycles terminate on `seen`.
+ * mount pointer. Without `options.readRef`, remote refs are likewise skipped —
+ * the plain synchronous file reader cannot fetch them. With it (the §4.7 ref
+ * loader passes its own reader), a MOUNT ref is read through the loader, so a
+ * remote one and a relative one inside a URL-loaded document are found where
+ * the load fetches them, and `readRef` supplies the directory the child's own
+ * refs resolve against. Cycles terminate on `seen`.
  *
  * Note this reads the top-level `models.<k>` / `reaction_systems.<k>` `{ref}`
  * mount shape as well as `subsystems.<k>`, even though THIS binding inlines only
@@ -1884,30 +1901,41 @@ function hasImportMachinery(raw: unknown): boolean {
 export function collectMountDeclaredMetaparameters(
   raw: unknown,
   basePath: string,
-  options: TemplateResolveOptions = {},
+  options: MountDeclaredOptions = {},
   seen: Set<string> = new Set<string>(),
   followImports = false,
 ): ReadonlySet<string> {
   const out = new Set<string>()
   if (!isObject(raw)) return out
 
-  const visitRef = (refValue: unknown): void => {
+  const visitRef = (refValue: unknown, isMount: boolean): void => {
     if (!isObject(refValue)) return
     const authoredRef = refValue.ref
     if (typeof authoredRef !== 'string') return
     // esm-spec §4.7: expand BEFORE the remote classification and the anchoring
-    // join, so a `${VAR}` that supplies an `http(s)://` prefix is skipped as the
-    // remote ref it expands to (and an unset one stays literal and simply fails
-    // the read below, which this widening walk ignores by design).
+    // join, so a `${VAR}` that supplies an `http(s)://` prefix is classified as
+    // the remote ref it expands to (and an unset one stays literal and simply
+    // fails the read below, which this widening walk ignores by design).
     const ref = expandRefEnv(authoredRef)
-    if (isRemoteRef(ref)) return
+    const viaLoader = isMount && options.readRef !== undefined
+    if (!viaLoader && (isRemoteRef(ref) || isRemoteRef(basePath))) return
     const path = normalizeRef(ref, basePath)
     if (seen.has(path)) return
     seen.add(path)
     let child: unknown
+    let childBase: string
     try {
-      child = JSON.parse((options.readFile ?? readFileSyncNode)(path))
+      if (viaLoader) {
+        const got = options.readRef!(ref, basePath)
+        child = JSON.parse(got.text)
+        childBase = got.base
+      } else {
+        child = JSON.parse((options.readFile ?? readFileSyncNode)(path))
+        childBase = dirName(path)
+      }
     } catch {
+      // Ignored by design (see above): the loader's own read of this mount
+      // runs before any check this walk widens, and reports the failure there.
       return
     }
     if (!isObject(child)) return
@@ -1915,7 +1943,7 @@ export function collectMountDeclaredMetaparameters(
     if (isObject(decls)) for (const n of Object.keys(decls)) out.add(n)
     for (const n of collectMountDeclaredMetaparameters(
       child,
-      dirName(path),
+      childBase,
       options,
       seen,
       followImports,
@@ -1929,7 +1957,7 @@ export function collectMountDeclaredMetaparameters(
     if (!followImports) return
     const entries = holder.expression_template_imports
     if (!Array.isArray(entries)) return
-    for (const entry of entries) visitRef(entry)
+    for (const entry of entries) visitRef(entry, false)
   }
 
   // A `subsystems` map to any depth: an INLINE entry may itself hold the
@@ -1939,7 +1967,7 @@ export function collectMountDeclaredMetaparameters(
     if (!isObject(subs)) return
     for (const sub of Object.values(subs)) {
       if (!isObject(sub)) continue
-      visitRef(sub) // a `subsystems.<k>` {ref}
+      visitRef(sub, true) // a `subsystems.<k>` {ref}
       visitImports(sub)
       visitSubsystems(sub)
     }
@@ -1951,7 +1979,7 @@ export function collectMountDeclaredMetaparameters(
     if (!isObject(comps)) continue
     for (const comp of Object.values(comps)) {
       if (!isObject(comp)) continue
-      visitRef(comp) // a top-level `models.<k>` / `reaction_systems.<k>` {ref}
+      visitRef(comp, true) // a top-level `models.<k>` / `reaction_systems.<k>` {ref}
       visitImports(comp)
       visitSubsystems(comp)
     }

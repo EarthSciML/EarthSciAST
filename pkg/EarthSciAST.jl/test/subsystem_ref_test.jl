@@ -14,7 +14,7 @@ using JSON3
         metadata = Metadata("no_subsystems")
         file = EsmFile("0.1.0", metadata)
         # Should not error on empty file
-        resolve_subsystem_refs!(file, tempdir())
+        file = resolve_subsystem_refs!(file, tempdir())
         @test true  # just verifies no error thrown
     end
 
@@ -27,7 +27,7 @@ using JSON3
         metadata = Metadata("model_no_refs")
         file = EsmFile("0.1.0", metadata, models = models)
 
-        resolve_subsystem_refs!(file, tempdir())
+        file = resolve_subsystem_refs!(file, tempdir())
         @test haskey(file.models, "Atm")
     end
 
@@ -38,7 +38,7 @@ using JSON3
         metadata = Metadata("rsys_no_refs")
         file = EsmFile("0.1.0", metadata, reaction_systems = rsys_dict)
 
-        resolve_subsystem_refs!(file, tempdir())
+        file = resolve_subsystem_refs!(file, tempdir())
         @test haskey(file.reaction_systems, "Chem")
     end
 
@@ -57,7 +57,7 @@ using JSON3
         metadata = Metadata("nested_no_refs")
         file = EsmFile("0.1.0", metadata, models = models)
 
-        resolve_subsystem_refs!(file, tempdir())
+        file = resolve_subsystem_refs!(file, tempdir())
         @test haskey(file.models["Outer"].subsystems, "Inner")
     end
 

@@ -198,3 +198,240 @@ function _resolve_data_source_urls(raw_data, base_path::AbstractString)
     end
     return doc
 end
+
+# ---------------------------------------------------------------------------
+# Mount-edge `url_substitutions` (esm-spec §4.7 "Binding a data source's
+# location at the mount").
+# ---------------------------------------------------------------------------
+
+_is_ident_start(c::UInt8) = (UInt8('A') <= c <= UInt8('Z')) ||
+    (UInt8('a') <= c <= UInt8('z')) || c == UInt8('_')
+_is_ident_char(c::UInt8) = _is_ident_start(c) || (UInt8('0') <= c <= UInt8('9'))
+
+"""
+    _url_placeholders(template) -> Vector{Tuple{Int,Int,String}}
+
+The bare `{name}` placeholders of a template, in order of appearance, as
+`(first, last, name)` with `first`/`last` the byte indices of the braces.
+
+Only a brace pair enclosing a C identifier is a placeholder a mount edge can
+bind (esm-spec §4.7); a formatted substitution such as `{date:%Y%m%d}` is not,
+so an edge can never rewrite the runtime's own date expansion.
+"""
+function _url_placeholders(template::AbstractString)
+    b = codeunits(String(template))
+    out = Tuple{Int, Int, String}[]
+    i = 1
+    n = length(b)
+    while i <= n
+        if b[i] == UInt8('{') && i < n && _is_ident_start(b[i + 1])
+            j = i + 2
+            while j <= n && _is_ident_char(b[j])
+                j += 1
+            end
+            if j <= n && b[j] == UInt8('}')
+                push!(out, (i, j, String(b[(i + 1):(j - 1)])))
+                i = j + 1
+                continue
+            end
+        end
+        i += 1
+    end
+    return out
+end
+
+"""
+    _each_source_location(f, doc)
+
+Call `f(site, get, set)` for every `url_template` and every string `mirrors`
+entry of `doc`'s `data_sources`, where `get()` reads the location and
+`set(v)` overwrites it. `doc` must be a mutable native tree.
+"""
+function _each_source_location(f, doc::AbstractDict)
+    sources = get(doc, "data_sources", nothing)
+    sources isa AbstractDict || return
+    for (name, entry) in sources
+        entry isa AbstractDict || continue
+        src = get(entry, "source", nothing)
+        src isa AbstractDict || continue
+        t = get(src, "url_template", nothing)
+        if t isa AbstractString
+            f("data_sources.$(name).source.url_template", t, v -> (src["url_template"] = v))
+        end
+        ms = get(src, "mirrors", nothing)
+        if ms isa AbstractVector
+            for i in eachindex(ms)
+                m = ms[i]
+                m isa AbstractString || continue
+                f("data_sources.$(name).source.mirrors[$(i - 1)]", m, v -> (ms[i] = v))
+            end
+        end
+    end
+    return
+end
+
+"""
+    apply_mount_url_substitutions!(doc, subs_raw, binder_dir, where) -> doc
+
+Apply a mount edge's `url_substitutions` (`subs_raw`; `nothing` when the edge
+carries none) to the REFERENCED document `doc` as resolved at that edge — its
+own `data_sources` and those its own mounts already hoisted into it (esm-spec
+§4.7 "Binding a data source's location at the mount"). `doc` is a mutable
+native tree and is rewritten in place. `binder_dir` is the directory of the
+MOUNTING document, the one that wrote the edge; `where` names the edge in a
+diagnostic.
+
+* A key names a bare `{key}` placeholder of some location in `doc`; one that
+  names none is `url_substitution_unknown_name`, so a misspelt key fails at the
+  edge rather than leaving the placeholder for a read to trip over.
+* A value is text: a string carrying no `{` or `}`, so a substitution never
+  introduces another one, and no `?` or `#`, since a value names a directory or
+  a path segment (`data_source_url_unresolved` otherwise; also for a map that
+  is not an object).
+* Who wrote the location decides what it anchors on (§8.2.1). A placeholder
+  that LEADS a template supplies the whole location: a URL or absolute path is
+  used as-is and a relative one joins onto `binder_dir`. A placeholder anywhere
+  else is a segment of the referenced document's location, spliced as text; the
+  result resolves against the referenced document's directory when its §8.2.1
+  pass runs next. A result that already carries a scheme is re-normalized here,
+  since §8.2.1 leaves a scheme-led location alone and a spliced `..` must not
+  survive: a `file:///...` one as §8.2.1 normalizes it, any other
+  `scheme://authority/...` (e.g. a catalogue loaded from an `https` URL) has the
+  dot segments of its PATH removed (RFC 3986 §5.2.4), query and fragment
+  untouched.
+
+A placeholder the edge does not bind is left as written, so it travels up with
+a hoisted entry and an enclosing edge may bind it.
+"""
+function apply_mount_url_substitutions!(
+        doc::AbstractDict, subs_raw, binder_dir::AbstractString,
+        where::AbstractString
+    )
+    subs_raw === nothing && return doc
+    _is_object(subs_raw) || throw(
+        ExpressionTemplateError(
+            ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
+            "$(where): `url_substitutions` must be an object mapping a placeholder " *
+                "name to a string (esm-spec §4.7)"
+        )
+    )
+    isempty(subs_raw) && return doc
+    bound = OrderedDict{String, String}()
+    for (k, v) in pairs(subs_raw)
+        key = string(k)
+        v isa AbstractString || throw(
+            ExpressionTemplateError(
+                ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
+                "$(where): `url_substitutions.$(key)` must be a string, got " *
+                    "$(repr(v)) (esm-spec §4.7)"
+            )
+        )
+        (occursin('{', v) || occursin('}', v)) && throw(
+            ExpressionTemplateError(
+                ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
+                "$(where): `url_substitutions.$(key)` = $(repr(String(v))) carries a " *
+                    "brace; a bound value is text and may not introduce another " *
+                    "substitution (esm-spec §4.7)"
+            )
+        )
+        # A value names a directory or a path segment; a query or fragment never
+        # names a file (and a `#` would be dropped when the location is read).
+        (occursin('?', v) || occursin('#', v)) && throw(
+            ExpressionTemplateError(
+                ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
+                "$(where): `url_substitutions.$(key)` = $(repr(String(v))) carries a " *
+                    "'?' or '#'; a bound value names a directory or a path segment, " *
+                    "never a query or fragment (esm-spec §4.7)"
+            )
+        )
+        bound[key] = String(v)
+    end
+
+    present = Set{String}()
+    _each_source_location(doc) do _, t, _
+        for (_, _, n) in _url_placeholders(t)
+            push!(present, n)
+        end
+    end
+    for k in keys(bound)
+        k in present && continue
+        throw(
+            ExpressionTemplateError(
+                ERROR_CODES.URL_SUBSTITUTION_UNKNOWN_NAME,
+                "$(where): `url_substitutions` binds '$(k)', which no `url_template` " *
+                    "or `mirrors` entry of the referenced document's data_sources " *
+                    "spells as a placeholder `{$(k)}` (available: " *
+                    "[$(join(sort!(collect(present)), ", "))]); a mount edge never " *
+                    "invents a placeholder (esm-spec §4.7)"
+            )
+        )
+    end
+
+    # The value a LEADING placeholder contributes: the mounting document's
+    # location, per §8.2.1's own forms.
+    lead(v) = if match(_URL_TEMPLATE_SCHEME_RE, v) !== nothing || startswith(v, "/")
+        v
+    elseif _is_url(binder_dir)
+        # A mounting document loaded from a URL: its directory is that URL's,
+        # and a relative value joins onto it by RFC 3986 §5.2, dot segments
+        # removed, exactly as its own relative refs do. `_url_join` reads the
+        # base as a directory with or without a trailing '/'.
+        _url_join(binder_dir, v)
+    elseif match(_URL_TEMPLATE_SCHEME_RE, String(binder_dir)) !== nothing
+        rstrip(String(binder_dir), '/') * "/" * v
+    else
+        _absolute_url_base(binder_dir) * "/" * v
+    end
+
+    _each_source_location(doc) do site, t, set
+        t = String(t)
+        found = _url_placeholders(t)
+        any(p -> haskey(bound, p[3]), found) || return
+        io = IOBuffer()
+        last = 1
+        for (s, e, n) in found
+            haskey(bound, n) || continue
+            write(io, SubString(t, last, prevind(t, s)))
+            write(io, s == 1 ? lead(bound[n]) : bound[n])
+            last = e + 1
+        end
+        write(io, SubString(t, last))
+        out = String(take!(io))
+        if startswith(out, "file:///")
+            p = _remove_url_dot_segments(out[8:end])
+            (occursin('?', p) || occursin('#', p)) && throw(
+                ExpressionTemplateError(
+                    ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
+                    "$(where): $(site): the substituted location $(repr(out)) carries " *
+                        "a '?' or '#' (esm-spec §8.2.1)"
+                )
+            )
+            out = "file://" * p
+        else
+            out = _renormalize_url_path(out)
+        end
+        set(out)
+    end
+    return doc
+end
+
+# `scheme://authority`, the path, and the `?query` / `#fragment` suffix.
+const _SCHEME_URL_PARTS_RE = r"^([A-Za-z][A-Za-z0-9+.\-]*://[^/?#]*)([^?#]*)([\s\S]*)$"
+
+"""
+    _renormalize_url_path(location) -> String
+
+A scheme-led (`scheme://authority/...`) location with RFC 3986 §5.2.4 dot
+segments removed from its PATH only, its query and fragment untouched; any
+other location unchanged. The post-splice step of
+[`apply_mount_url_substitutions!`](@ref) for a location in a scheme other than
+`file://` (esm-spec §4.7: a spliced `..` never survives into a location in one
+scheme and is removed in another).
+"""
+function _renormalize_url_path(location::AbstractString)
+    m = match(_SCHEME_URL_PARTS_RE, location)
+    m === nothing && return String(location)
+    sa, path, suffix = m.captures
+    isempty(path) && return String(location)
+    return String(sa) * _remove_dot_segments(path) * String(suffix)
+end

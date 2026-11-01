@@ -1,0 +1,21 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "url_substitutions_mount_subsystem",
+    "description": "The `subsystems.<k>` twin of mount_toplevel.esm, pointed at snapshot `b`. The two mount forms are one mechanism (esm-spec §4.7), so the edge is applied and checked here too."
+  },
+  "models": {
+    "Outer": {
+      "variables": {},
+      "equations": [],
+      "subsystems": {
+        "Snap": {
+          "ref": "catalogue/catalogue.esm",
+          "url_substitutions": {
+            "snapshot": "b"
+          }
+        }
+      }
+    }
+  }
+}

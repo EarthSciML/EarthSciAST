@@ -1651,27 +1651,43 @@ mounting document's vocabulary at load (esm-spec §4.7 "Mount-edge index-set
 renaming") — the §9.7.7 renaming mechanism at a component-mount edge, restricted
 to index sets. Like the two fields above it is consumed at the mount and does not
 survive `parse → emit`.
+`url_substitutions` binds the bare `{name}` placeholders of the mounted
+document's `data_sources` locations (esm-spec §4.7 "Binding a data source's
+location at the mount"). Kept RAW (`nothing` when absent) so its shape is
+checked at the edge, with the edge's diagnostics; consumed at the mount like the
+fields above.
 """
 struct SubsystemRef <: SubsystemNode
     ref::String
     bindings::Dict{String, Int}
     expression_template_imports::Vector{Any}
     index_set_rename::Union{Nothing, OrderedDict{String, String}}
+    url_substitutions::Any
 end
+
+SubsystemRef(
+    ref::AbstractString, bindings::AbstractDict, injected::AbstractVector,
+    index_set_rename::Union{Nothing, AbstractDict}
+) = SubsystemRef(
+    String(ref), Dict{String, Int}(string(k) => Int(v) for (k, v) in bindings),
+    Any[e for e in injected],
+    index_set_rename === nothing ? nothing : OrderedDict{String, String}(index_set_rename),
+    nothing
+)
 
 SubsystemRef(ref::AbstractString, bindings::AbstractDict, injected::AbstractVector) =
     SubsystemRef(
     String(ref),
     Dict{String, Int}(string(k) => Int(v) for (k, v) in bindings),
-    Any[e for e in injected], nothing
+    Any[e for e in injected], nothing, nothing
 )
 SubsystemRef(ref::AbstractString, bindings::AbstractDict) =
     SubsystemRef(
     String(ref),
-    Dict{String, Int}(string(k) => Int(v) for (k, v) in bindings), Any[], nothing
+    Dict{String, Int}(string(k) => Int(v) for (k, v) in bindings), Any[], nothing, nothing
 )
 SubsystemRef(ref::AbstractString) =
-    SubsystemRef(String(ref), Dict{String, Int}(), Any[], nothing)
+    SubsystemRef(String(ref), Dict{String, Int}(), Any[], nothing, nothing)
 
 """
     Model

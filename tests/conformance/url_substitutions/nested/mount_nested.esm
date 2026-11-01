@@ -1,0 +1,15 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "url_substitutions_mount_nested",
+    "description": "Mounts catalogue/assembly.esm, which bound `{snapshot}` and left `{data}` open. `{data}` travelled up with the hoisted entry and is bound HERE, so its relative value anchors on THIS document's directory (nested/), not on the catalogue's or the assembly's."
+  },
+  "models": {
+    "Snap": {
+      "ref": "../catalogue/assembly.esm",
+      "url_substitutions": {
+        "data": "../snapshots/b"
+      }
+    }
+  }
+}

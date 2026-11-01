@@ -94,6 +94,11 @@ export function resolveSourceUrl(template: string, baseDir: string): string {
   if (template.startsWith('{')) return template
   if (SCHEME_RE.test(template)) return template
 
+  // A document loaded from a URL has a URL for a directory: a relative
+  // location joins onto it by RFC 3986 §5.2, as its relative refs do (§4.7).
+  if (SCHEME_RE.test(baseDir) && !template.startsWith('/')) {
+    return joinUrlDirectory(baseDir, template)
+  }
   const joined = template.startsWith('/')
     ? template
     : stripTrailingSlashes(absoluteBase(baseDir)) + '/' + template
@@ -107,6 +112,47 @@ export function resolveSourceUrl(template: string, baseDir: string): string {
     )
   }
   return 'file://' + resolved
+}
+
+/**
+ * RFC 3986 §5.2 resolution of the relative path `rel` against the DIRECTORY
+ * URL `base` (`scheme://authority/path`, read as a directory whether or not it
+ * ends in `/`), with dot segments removed. A query or fragment on `base` is
+ * dropped, as §5.2.2 drops them for a path reference. Written out rather than
+ * `new URL(...)`, which would percent-encode a `{…}` substitution.
+ */
+export function joinUrlDirectory(base: string, rel: string): string {
+  const cut = base.search(/[?#]/)
+  const b = cut >= 0 ? base.slice(0, cut) : base
+  const afterScheme = b.indexOf('://') + 3
+  const slash = b.indexOf('/', afterScheme)
+  const pathStart = slash >= 0 ? slash : b.length
+  const origin = b.slice(0, pathStart)
+  const joined = stripTrailingSlashes(b.slice(pathStart)) + '/' + rel
+  const trailing = joined.endsWith('/') || joined.endsWith('/.') || joined.endsWith('/..')
+  let path = removeDotSegments(joined)
+  if (trailing && !path.endsWith('/')) path += '/'
+  return origin + path
+}
+
+/**
+ * RFC 3986 §5.2.4 dot-segment removal on the PATH of a scheme-led location
+ * (`scheme://authority/path?query#fragment`), its query and fragment left as
+ * written (esm-spec §4.7: a spliced `..` never survives into a location in one
+ * scheme and is removed in another). A trailing `/` (or a final `.`/`..`
+ * segment) keeps the result a directory, as in `joinUrlDirectory`.
+ */
+export function removeUrlPathDotSegments(url: string): string {
+  const afterScheme = url.indexOf('://') + 3
+  const tailAt = url.slice(afterScheme).search(/[?#]/)
+  const end = tailAt >= 0 ? afterScheme + tailAt : url.length
+  const slash = url.indexOf('/', afterScheme)
+  if (slash < 0 || slash >= end) return url // no path to normalize
+  const rawPath = url.slice(slash, end)
+  const trailing = rawPath.endsWith('/') || rawPath.endsWith('/.') || rawPath.endsWith('/..')
+  let path = removeDotSegments(rawPath)
+  if (trailing && !path.endsWith('/')) path += '/'
+  return url.slice(0, slash) + path + url.slice(end)
 }
 
 /**
@@ -184,4 +230,178 @@ export function resolveDataSourceUrls(doc: unknown, baseDir: string): object | n
 
   if (!changed) return null
   return { ...root, data_sources: rebuilt }
+}
+
+/**
+ * The bare `{name}` placeholders in a template, in order of appearance, as
+ * `[start, end, name]` (esm-spec §4.7 "Binding a data source's location at the
+ * mount").
+ *
+ * Only a brace pair enclosing a C identifier is a placeholder a mount edge can
+ * bind; a formatted substitution such as `{date:%Y%m%d}` is not, so an edge can
+ * never rewrite the runtime's own date expansion.
+ */
+export function placeholders(template: string): Array<[number, number, string]> {
+  const out: Array<[number, number, string]> = []
+  for (const m of template.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)) {
+    out.push([m.index, m.index + m[0].length, m[1]])
+  }
+  return out
+}
+
+/** Every `url_template` / `mirrors` string of `doc`'s `data_sources`, as get/set sites. */
+function locationSites(
+  doc: unknown,
+): Array<{ site: string; get: () => string; set: (v: string) => void }> {
+  const out: Array<{ site: string; get: () => string; set: (v: string) => void }> = []
+  if (doc === null || typeof doc !== 'object') return out
+  const sources = (doc as Record<string, unknown>)['data_sources']
+  if (sources === null || typeof sources !== 'object' || Array.isArray(sources)) return out
+  for (const [name, entry] of Object.entries(sources as Record<string, unknown>)) {
+    if (entry === null || typeof entry !== 'object') continue
+    const src = (entry as Record<string, unknown>)['source']
+    if (src === null || typeof src !== 'object' || Array.isArray(src)) continue
+    const loc = src as Record<string, unknown>
+    if (typeof loc['url_template'] === 'string') {
+      out.push({
+        site: `data_sources.${name}.source.url_template`,
+        get: () => loc['url_template'] as string,
+        set: (v) => {
+          loc['url_template'] = v
+        },
+      })
+    }
+    const mirrors = loc['mirrors']
+    if (Array.isArray(mirrors)) {
+      mirrors.forEach((m, i) => {
+        if (typeof m !== 'string') return
+        out.push({
+          site: `data_sources.${name}.source.mirrors[${i}]`,
+          get: () => mirrors[i] as string,
+          set: (v) => {
+            mirrors[i] = v
+          },
+        })
+      })
+    }
+  }
+  return out
+}
+
+/**
+ * Apply a mount edge's `url_substitutions` to the referenced document's
+ * `data_sources`, in place (esm-spec §4.7 "Binding a data source's location at
+ * the mount").
+ *
+ * `doc` is the referenced document as resolved at this edge and `binderDir` is
+ * the directory of the MOUNTING document, the one that wrote the edge. Three
+ * rules:
+ *
+ * - A key names a bare `{key}` placeholder of some location in `doc`; one that
+ *   names none is `url_substitution_unknown_name`, so a misspelt key fails at
+ *   the edge rather than leaving the placeholder for a read to trip over.
+ * - A value is text: a string carrying no `{` or `}`, so a substitution never
+ *   introduces another one, and no `?` or `#`, since a value names a directory
+ *   or a path segment (`data_source_url_unresolved` otherwise).
+ * - Who wrote the location decides what it anchors on (§8.2.1). A placeholder
+ *   that LEADS a template supplies the whole location, so the bound value is
+ *   the mounting document's location and a relative one joins onto
+ *   `binderDir`. A placeholder anywhere else is a segment of a location the
+ *   referenced document wrote, so the value is spliced in as text and the
+ *   result resolves against the referenced document's directory, as before.
+ *
+ * A placeholder the edge does not bind is left as written (§8.2 pass-through).
+ * A location scheme-led after the splice (`file:///…`, `https://…`, …) has the
+ * dot segments of its PATH removed here, its query and fragment untouched, since
+ * §8.2.1 leaves a scheme-led template alone and a spliced `..` must not survive.
+ */
+export function applyMountUrlSubstitutions(
+  doc: unknown,
+  substitutions: unknown,
+  binderDir: string,
+  where: string,
+): void {
+  if (substitutions === undefined) return
+  if (substitutions === null || typeof substitutions !== 'object' || Array.isArray(substitutions)) {
+    throw new EsmDiagnosticError(
+      ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
+      `${where}: \`url_substitutions\` must be an object mapping a placeholder name to a string (esm-spec §4.7)`,
+    )
+  }
+  const values = new Map<string, string>()
+  for (const [k, v] of Object.entries(substitutions as Record<string, unknown>)) {
+    if (typeof v !== 'string') {
+      throw new EsmDiagnosticError(
+        ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
+        `${where}: \`url_substitutions.${k}\` must be a string, got ${JSON.stringify(v)} (esm-spec §4.7)`,
+      )
+    }
+    if (v.includes('{') || v.includes('}')) {
+      throw new EsmDiagnosticError(
+        ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
+        `${where}: \`url_substitutions.${k}\` = ${JSON.stringify(v)} carries a brace; a bound value is text and may not introduce another substitution (esm-spec §4.7)`,
+      )
+    }
+    if (v.includes('?') || v.includes('#')) {
+      throw new EsmDiagnosticError(
+        ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
+        `${where}: \`url_substitutions.${k}\` = ${JSON.stringify(v)} carries a '?' or '#'; a bound value names a directory or a path segment, never a query or fragment (esm-spec §4.7)`,
+      )
+    }
+    values.set(k, v)
+  }
+  if (values.size === 0) return
+
+  const sites = locationSites(doc)
+  const present = new Set<string>()
+  for (const s of sites) for (const [, , n] of placeholders(s.get())) present.add(n)
+  for (const k of values.keys()) {
+    if (!present.has(k)) {
+      throw new EsmDiagnosticError(
+        ERROR_CODES.URL_SUBSTITUTION_UNKNOWN_NAME,
+        `${where}: \`url_substitutions\` binds '${k}', which no \`url_template\` or \`mirrors\` entry of the referenced document's data_sources spells as a placeholder \`{${k}}\` (available: [${[...present].sort().join(', ')}]); a mount edge never invents a placeholder (esm-spec §4.7)`,
+      )
+    }
+  }
+
+  // The value a LEADING placeholder contributes: the mounting document's
+  // location, per §8.2.1's own forms.
+  // A mounting document loaded from a URL has a URL for a directory; a
+  // relative value then joins onto it by RFC 3986 §5.2, as that document's own
+  // relative refs do (§4.7).
+  const remoteBinder = SCHEME_RE.test(binderDir)
+  const base = remoteBinder ? binderDir : stripTrailingSlashes(absoluteBase(binderDir))
+  const lead = (v: string): string =>
+    SCHEME_RE.test(v) || v.startsWith('/')
+      ? v
+      : remoteBinder
+        ? joinUrlDirectory(base, v)
+        : base + '/' + v
+
+  for (const s of sites) {
+    const t = s.get()
+    const found = placeholders(t).filter(([, , n]) => values.has(n))
+    if (found.length === 0) continue
+    let out = ''
+    let last = 0
+    for (const [start, end, n] of found) {
+      const val = values.get(n)!
+      out += t.slice(last, start) + (start === 0 ? lead(val) : val)
+      last = end
+    }
+    out += t.slice(last)
+    if (out.startsWith('file:///')) {
+      const p = removeDotSegments(out.slice('file://'.length))
+      if (p.includes('?') || p.includes('#')) {
+        throw new EsmDiagnosticError(
+          ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
+          `${where}: ${s.site}: the substituted location ${JSON.stringify(out)} carries a '?' or '#' (esm-spec §8.2.1)`,
+        )
+      }
+      out = 'file://' + p
+    } else if (SCHEME_RE.test(out)) {
+      out = removeUrlPathDotSegments(out)
+    }
+    s.set(out)
+  }
 }

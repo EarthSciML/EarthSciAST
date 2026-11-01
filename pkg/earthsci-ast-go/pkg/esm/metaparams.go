@@ -148,7 +148,7 @@ var opaqueKeys = []string{
 	// References to files, components, data sources, data columns and the
 	// import-edge rename vocabulary.
 	"ref", "model", "reaction_system", "prefix", "rename", "rebind",
-	"index_set_rename", "source", "file_variable", "path",
+	"index_set_rename", "url_substitutions", "source", "file_variable", "path",
 	// Closed enums.
 	"direction", "hook", "root_find", "system_kind", "element_type", "scale",
 	"format", "unmapped",
@@ -167,7 +167,7 @@ var nameKeyedMapKeys = keySet([]string{
 	"variables", "species", "parameters", "guesses", "subsystems",
 	"expression_templates", "ranges", "axes", "bindings", "config", "coords",
 	"initial_conditions", "parameter_overrides", "pinned_coords", "map",
-	"rename", "rebind", "index_set_rename", "where",
+	"rename", "rebind", "index_set_rename", "url_substitutions", "where",
 })
 
 // boundKeys: `integral` bound fields (esm-spec §4.2). Unlike `var` these are

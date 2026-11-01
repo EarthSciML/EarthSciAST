@@ -301,6 +301,7 @@ const _STRUCTURAL_FIELDS = (
     "rename" => :opaque,
     "rebind" => :opaque,
     "index_set_rename" => :opaque,
+    "url_substitutions" => :opaque,
     "source" => :opaque,
     "file_variable" => :opaque,
     "path" => :opaque,
@@ -355,7 +356,7 @@ const _NAME_KEYED_MAP_KEYS = Set{String}(
         "variables", "species", "parameters", "guesses", "subsystems",
         "expression_templates", "ranges", "axes", "bindings", "config", "coords",
         "initial_conditions", "parameter_overrides", "pinned_coords", "map",
-        "rename", "rebind", "index_set_rename", "where",
+        "rename", "rebind", "index_set_rename", "url_substitutions", "where",
     ]
 )
 

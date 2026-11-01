@@ -1,0 +1,24 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "url_substitutions_mount_subsystem_through",
+    "description": "The run-document shape: ONE model whose `subsystems.<k>` edge mounts a catalogue that itself mounts the domain model. The edge's `url_substitutions` bind the catalogue's placeholder, its `bindings` close `n_rows` in the model the catalogue mounts (4, not the default 2), and the catalogue's sources merge into THIS document."
+  },
+  "models": {
+    "Run": {
+      "variables": {},
+      "equations": [],
+      "subsystems": {
+        "Snap": {
+          "ref": "catalogue/sized_catalogue.esm",
+          "url_substitutions": {
+            "snapshot": "a"
+          },
+          "bindings": {
+            "n_rows": 4
+          }
+        }
+      }
+    }
+  }
+}

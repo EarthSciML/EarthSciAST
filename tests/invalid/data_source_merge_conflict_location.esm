@@ -1,0 +1,27 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "data_source_merge_conflict_location",
+    "description": "INVALID — RESOLVER-LEVEL (esm-spec §4.7 'A mounted document's data sources'). One catalogue mounted at two sibling edges with different url_substitutions (`a`, `b`): both contribute `segment`, at different resolved locations, and the mounting document does not declare it. Neither may silently win: data_source_merge_conflict, naming the source and both edges."
+  },
+  "models": {
+    "Outer": {
+      "variables": {},
+      "equations": [],
+      "subsystems": {
+        "A": {
+          "ref": "../conformance/url_substitutions/catalogue/catalogue.esm",
+          "url_substitutions": {
+            "snapshot": "a"
+          }
+        },
+        "B": {
+          "ref": "../conformance/url_substitutions/catalogue/catalogue.esm",
+          "url_substitutions": {
+            "snapshot": "b"
+          }
+        }
+      }
+    }
+  }
+}

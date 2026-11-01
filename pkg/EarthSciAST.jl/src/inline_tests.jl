@@ -2217,7 +2217,7 @@ function _ephemeral_injected_file(
         )
     )
     f = load_string(JSON3.write(raw); base_path = String(base_dir))
-    resolve_subsystem_refs!(f, String(base_dir))
+    f = resolve_subsystem_refs!(f, String(base_dir))
     # The ephemeral file is a BUILD input (and the file this test's §6.6.5
     # `reference` expressions evaluate against), and the raw base may have come
     # straight off disk — so it gets the same §9.5.3 lowering `run_inline_tests`

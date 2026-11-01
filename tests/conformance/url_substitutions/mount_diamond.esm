@@ -1,0 +1,27 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "url_substitutions_mount_diamond",
+    "description": "A diamond: one catalogue mounted twice, at two sibling edges with the SAME binding. Both contribute identical entries, which merge once (esm-spec §4.7 'A mounted document's data sources')."
+  },
+  "models": {
+    "Outer": {
+      "variables": {},
+      "equations": [],
+      "subsystems": {
+        "A": {
+          "ref": "catalogue/catalogue.esm",
+          "url_substitutions": {
+            "snapshot": "a"
+          }
+        },
+        "B": {
+          "ref": "catalogue/catalogue.esm",
+          "url_substitutions": {
+            "snapshot": "a"
+          }
+        }
+      }
+    }
+  }
+}

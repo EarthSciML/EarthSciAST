@@ -1,0 +1,12 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "url_substitutions_stop_catalogue",
+    "description": "A catalogue that declares no metaparameters and mounts `stop_outer.esm`, so a binding of `n_rows` at an edge mounting THIS document is forwarded through it (esm-spec §4.7 'Bindings reach through an assembly')."
+  },
+  "models": {
+    "Outer": {
+      "ref": "stop_outer.esm"
+    }
+  }
+}

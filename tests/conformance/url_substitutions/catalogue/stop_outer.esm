@@ -1,0 +1,39 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "url_substitutions_stop_outer",
+    "description": "The first document below the catalogue that declares `n_rows` (default 2, sizing `rows`): a forwarded binding closes it HERE. Its own `subsystems.Deep` edge to `stop_inner.esm` binds nothing, so the forwarded binding must not reach `stop_inner.esm`, which declares `n_rows` too (esm-spec §4.7 'Bindings reach through an assembly')."
+  },
+  "metaparameters": {
+    "n_rows": {
+      "type": "integer",
+      "default": 2
+    }
+  },
+  "index_sets": {
+    "rows": {
+      "kind": "interval",
+      "size": "n_rows"
+    }
+  },
+  "models": {
+    "Outer": {
+      "variables": {
+        "x": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [
+            "rows"
+          ],
+          "default": 0.0
+        }
+      },
+      "equations": [],
+      "subsystems": {
+        "Deep": {
+          "ref": "stop_inner.esm"
+        }
+      }
+    }
+  }
+}

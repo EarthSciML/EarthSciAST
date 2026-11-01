@@ -230,6 +230,8 @@ function _serialize_subsystem(v)::Dict{String, Any}
             out["index_set_rename"] =
                 Dict{String, Any}(k => n for (k, n) in v.index_set_rename)
         )
+        v.url_substitutions === nothing ||
+            (out["url_substitutions"] = _to_native_json(v.url_substitutions))
         return out
     else
         return serialize_model(v)

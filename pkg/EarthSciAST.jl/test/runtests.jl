@@ -278,6 +278,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # esm-spec §8.2.1: WHERE a data source points -- the shared
     # cross-binding pin in tests/conformance/data_source_url/manifest.json.
     include("data_source_url_conformance_test.jl")
+    # esm-spec §4.7 mount-edge `url_substitutions`: the cross-binding pin in
+    # tests/conformance/url_substitutions/manifest.json.
+    include("url_substitutions_conformance_test.jl")
     # esm-spec §2.2.6: WHERE `solver.external` points -- the shared
     # cross-binding pin in tests/conformance/solver_external/manifest.json.
     include("solver_external_conformance_test.jl")

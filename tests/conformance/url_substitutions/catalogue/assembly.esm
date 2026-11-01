@@ -1,0 +1,15 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "url_substitutions_assembly",
+    "description": "An assembly that mounts the catalogue and binds only `{snapshot}`. `{data}` is left unbound at this edge, so it survives into this document's hoisted `data_sources` and an enclosing edge may bind it (esm-spec §4.7, 'An unbound placeholder, and nesting')."
+  },
+  "models": {
+    "Inner": {
+      "ref": "catalogue.esm",
+      "url_substitutions": {
+        "snapshot": "a"
+      }
+    }
+  }
+}

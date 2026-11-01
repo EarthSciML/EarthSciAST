@@ -1070,10 +1070,15 @@ function _coerce_subsystem_entry(name::String, v)
                 )
             )
         end
+        # Optional `url_substitutions` binds the mounted document's data-source
+        # placeholders (esm-spec §4.7 "Binding a data source's location at the
+        # mount"). Kept raw; `apply_mount_url_substitutions!` checks its shape
+        # at the edge.
+        url_subs = _get_field(v, :url_substitutions, nothing)
         return SubsystemRef(
             string(v["ref"]),
             Dict{String, Int}(bindings), Any[e for e in injected],
-            iset_rename
+            iset_rename, url_subs === nothing ? nothing : _to_native_json(url_subs)
         )
     else
         return coerce_model(v)
