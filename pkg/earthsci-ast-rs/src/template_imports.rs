@@ -2563,8 +2563,15 @@ fn visit_mount_ref(
     // esm-spec §4.7 `${VAR}` expansion, before the remote classification below.
     let expanded = crate::ref_loading::expand_env_refs(ref_str);
     let ref_str: &str = &expanded;
-    // Remote refs are not fetched by this crate (the subsystem-ref loader
-    // rejects them outright); contributing nothing is the right widening.
+    // Remote refs are not fetched by this crate: the ref loader refuses them at
+    // BOTH mount forms (`load_ref_document`), so no document here is ever
+    // URL-loaded and no relative ref ever needs joining onto a URL directory.
+    // Contributing nothing is safe for the same reason an unreadable file is
+    // (below): every caller that widens a mount edge's site-4 check with this
+    // set runs it on a leaf whose nested refs the loader resolves FIRST
+    // (`walk_top_level` before the leaf's close), so the remote / unreadable /
+    // unparsable ref is reported with its own code before the forwarded
+    // binding's `template_import_unknown_name` check could fire.
     if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
         return;
     }

@@ -2089,6 +2089,7 @@ def collect_mount_declared_metaparameters(
     _seen: set[str] | None = None,
     *,
     follow_imports: bool = False,
+    strict: bool = False,
 ) -> frozenset[str]:
     """The metaparameter names declared by every document ``raw`` MOUNTS, at
     either §4.7 mount form, transitively through the mount DAG.
@@ -2100,10 +2101,18 @@ def collect_mount_declared_metaparameters(
     walk is what lets the site-4 check (and the §8.9.4 ``extent`` check) ask
     "does ANYONE in this assembly declare that name?" instead of "does the root".
 
-    Reads only each referenced file's top-level ``metaparameters`` keys. A ref
-    that cannot be read is ignored: this walk exists to WIDEN acceptance, and
-    the resolution error belongs to the ref resolver, which reports it with the
-    proper mount pointer. Cycles terminate on ``_seen``.
+    Reads only each referenced file's top-level ``metaparameters`` keys. Refs
+    are located and fetched exactly as the ref loader does
+    (:func:`earthsci_ast.parse._ref_location`): a URL ref is fetched, and a
+    relative ref inside a URL-loaded document joins that document's URL
+    directory. A ref that cannot be read is ignored: this walk exists to WIDEN
+    acceptance, and the resolution error belongs to the ref resolver, which
+    reports it with the proper mount pointer. ``strict`` instead propagates the
+    read (or JSON) error: a mount edge asks this walk whether to forward an edge
+    binding BEFORE its leaf's own mounts load, so ignoring an unreadable nested
+    ref there would report ``template_import_unknown_name`` for a name the
+    unread document may declare, rather than the read failure. Cycles
+    terminate on ``_seen``.
 
     ``follow_imports`` additionally follows ``expression_template_imports``
     refs (§9.7.2), at the document and the component level. That is a DIFFERENT
@@ -2116,7 +2125,7 @@ def collect_mount_declared_metaparameters(
     has to reach the same names by walking. It must NOT widen the site-4 check
     itself: a name an import edge BINDS is consumed rather than re-exported, and
     site 4 is right to refuse it."""
-    from .parse import _fetch_ref_content, expand_ref_env
+    from .parse import _fetch_ref_content, _ref_directory, _ref_location, expand_ref_env
 
     if not _is_object(raw):
         return frozenset()
@@ -2131,11 +2140,7 @@ def collect_mount_declared_metaparameters(
             return
         try:
             expanded = expand_ref_env(ref_str)
-            key = (
-                expanded
-                if expanded.startswith("http")
-                else os.path.normpath(os.path.join(str(base_path), expanded))
-            )
+            key = _ref_location(expanded, str(base_path))
             if key in seen:
                 return
             seen.add(key)
@@ -2143,20 +2148,17 @@ def collect_mount_declared_metaparameters(
 
             child = _json.loads(_fetch_ref_content(expanded, str(base_path)))
         except Exception:
+            if strict:
+                raise
             return
         if not _is_object(child):
             return
         decls = child.get("metaparameters")
         if _is_object(decls):
             out.update(str(n) for n in decls)
-        child_base = (
-            expanded.rsplit("/", 1)[0]
-            if expanded.startswith("http")
-            else os.path.dirname(os.path.join(str(base_path), expanded))
-        )
         out.update(
             collect_mount_declared_metaparameters(
-                child, child_base, seen, follow_imports=follow_imports
+                child, _ref_directory(key), seen, follow_imports=follow_imports, strict=strict
             )
         )
 

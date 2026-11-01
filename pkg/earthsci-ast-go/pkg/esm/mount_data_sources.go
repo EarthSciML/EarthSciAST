@@ -69,36 +69,74 @@ func mergeMountedDataSourcesTyped(file *ESMFile, mounted map[string]any) error {
 	return nil
 }
 
-// forwardBindingsThroughMounts returns the loader-API binding map the leaf's
-// OWN mount edges receive, and the metaparameters documents the leaf mounts
-// declare (at any depth).
+// seedEdgeBindings fills, into an edge's `bindings`, the values the leaf sees
+// from above for the names the leaf DECLARES (decls is its raw
+// `metaparameters` block): the loader-API bindings (§9.7.6 site 4) overlaid by
+// the bindings forwarded to this edge through an assembly (esm-spec §4.7
+// "Bindings reach through an assembly"), the forwarded value winning. An
+// explicit edge binding already in `bindings` wins over both. A name the leaf
+// does not declare is never handed to it.
+func seedEdgeBindings(bindings map[string]int64, decls any, apiMeta, forwarded map[string]int64) {
+	declared, ok := decls.(map[string]any)
+	if !ok {
+		return
+	}
+	for _, layer := range []map[string]int64{forwarded, apiMeta} {
+		for name, v := range layer {
+			if _, isDecl := declared[name]; !isDecl {
+				continue
+			}
+			if _, bound := bindings[name]; bound {
+				continue
+			}
+			bindings[name] = v
+		}
+	}
+}
+
+// forwardBindingsThroughMounts returns the forwarded bindings the leaf's OWN
+// mount edges receive (esm-spec §4.7 "Bindings reach through an assembly"),
+// and the metaparameters documents the leaf mounts declare (at any depth; nil
+// when the walk was not needed). Both mount forms call it, from
+// resolveSubsystemMap.
 //
-// An edge binding naming a metaparameter the leaf does not declare, but that a
-// document the leaf mounts does, is added to apiMeta, so each nested edge
-// closes it for the names its own leaf declares, its own explicit `bindings`
-// winning (§9.7.6 site 4). A name declared nowhere in the mount tree is not
-// forwarded and stays `template_import_unknown_name` at the edge that wrote it.
-// Read off the AUTHORED leaf, before its mounts are inlined.
-func forwardBindingsThroughMounts(view map[string]any, baseDir string, bindings, apiMeta map[string]int64) (map[string]int64, map[string]bool) {
+// explicit is the edge's own `bindings`; forwarded is what reached this edge
+// through an enclosing assembly. The result is
+//
+//	{forwarded entries whose name the leaf does NOT declare}
+//	∪ {explicit entries whose name the leaf does not declare but a document
+//	   in its mount tree does}   (these override)
+//
+// so a forwarded binding stops at the first document on each mount path that
+// declares its name: that document consumes it and does not pass it on, and a
+// document below it that declares the name again keeps its own edge's binding
+// or its default. The loader-API bindings are NOT part of this map: they reach
+// every depth (§9.7.6 site 4) and travel beside it unchanged. An explicit name
+// declared nowhere in the mount tree is not forwarded and stays
+// `template_import_unknown_name` at the edge that wrote it. Read off the
+// AUTHORED leaf, before its mounts are inlined.
+func forwardBindingsThroughMounts(view map[string]any, baseDir string, explicit, forwarded map[string]int64) (map[string]int64, map[string]bool) {
 	decls, _ := view["metaparameters"].(map[string]any)
+	out := map[string]int64{}
+	for k, v := range forwarded {
+		if _, ok := decls[k]; !ok {
+			out[k] = v
+		}
+	}
 	var undeclared []string
-	for _, k := range sortedKeys(bindings) {
+	for _, k := range sortedKeys(explicit) {
 		if _, ok := decls[k]; !ok {
 			undeclared = append(undeclared, k)
 		}
 	}
 	if len(undeclared) == 0 {
-		return apiMeta, nil
+		return out, nil
 	}
 	mountDeclared := collectMountDeclaredMetaparameters(view, baseDir)
-	forward := make(map[string]int64, len(apiMeta)+len(undeclared))
-	for k, v := range apiMeta {
-		forward[k] = v
-	}
 	for _, k := range undeclared {
 		if mountDeclared[k] {
-			forward[k] = bindings[k]
+			out[k] = explicit[k]
 		}
 	}
-	return forward, mountDeclared
+	return out, mountDeclared
 }

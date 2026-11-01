@@ -285,15 +285,20 @@ diagnostic.
   names none is `url_substitution_unknown_name`, so a misspelt key fails at the
   edge rather than leaving the placeholder for a read to trip over.
 * A value is text: a string carrying no `{` or `}`, so a substitution never
-  introduces another one (`data_source_url_unresolved` otherwise; also for a
-  map that is not an object).
+  introduces another one, and no `?` or `#`, since a value names a directory or
+  a path segment (`data_source_url_unresolved` otherwise; also for a map that
+  is not an object).
 * Who wrote the location decides what it anchors on (§8.2.1). A placeholder
   that LEADS a template supplies the whole location: a URL or absolute path is
   used as-is and a relative one joins onto `binder_dir`. A placeholder anywhere
   else is a segment of the referenced document's location, spliced as text; the
   result resolves against the referenced document's directory when its §8.2.1
-  pass runs next. A result already `file:///...` is re-normalized here, since
-  §8.2.1 leaves a scheme-led location alone and a spliced `..` must not survive.
+  pass runs next. A result that already carries a scheme is re-normalized here,
+  since §8.2.1 leaves a scheme-led location alone and a spliced `..` must not
+  survive: a `file:///...` one as §8.2.1 normalizes it, any other
+  `scheme://authority/...` (e.g. a catalogue loaded from an `https` URL) has the
+  dot segments of its PATH removed (RFC 3986 §5.2.4), query and fragment
+  untouched.
 
 A placeholder the edge does not bind is left as written, so it travels up with
 a hoisted entry and an enclosing edge may bind it.
@@ -327,6 +332,16 @@ function apply_mount_url_substitutions!(
                 "$(where): `url_substitutions.$(key)` = $(repr(String(v))) carries a " *
                     "brace; a bound value is text and may not introduce another " *
                     "substitution (esm-spec §4.7)"
+            )
+        )
+        # A value names a directory or a path segment; a query or fragment never
+        # names a file (and a `#` would be dropped when the location is read).
+        (occursin('?', v) || occursin('#', v)) && throw(
+            ExpressionTemplateError(
+                ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
+                "$(where): `url_substitutions.$(key)` = $(repr(String(v))) carries a " *
+                    "'?' or '#'; a bound value names a directory or a path segment, " *
+                    "never a query or fragment (esm-spec §4.7)"
             )
         )
         bound[key] = String(v)
@@ -392,8 +407,31 @@ function apply_mount_url_substitutions!(
                 )
             )
             out = "file://" * p
+        else
+            out = _renormalize_url_path(out)
         end
         set(out)
     end
     return doc
+end
+
+# `scheme://authority`, the path, and the `?query` / `#fragment` suffix.
+const _SCHEME_URL_PARTS_RE = r"^([A-Za-z][A-Za-z0-9+.\-]*://[^/?#]*)([^?#]*)([\s\S]*)$"
+
+"""
+    _renormalize_url_path(location) -> String
+
+A scheme-led (`scheme://authority/...`) location with RFC 3986 §5.2.4 dot
+segments removed from its PATH only, its query and fragment untouched; any
+other location unchanged. The post-splice step of
+[`apply_mount_url_substitutions!`](@ref) for a location in a scheme other than
+`file://` (esm-spec §4.7: a spliced `..` never survives into a location in one
+scheme and is removed in another).
+"""
+function _renormalize_url_path(location::AbstractString)
+    m = match(_SCHEME_URL_PARTS_RE, location)
+    m === nothing && return String(location)
+    sa, path, suffix = m.captures
+    isempty(path) && return String(location)
+    return String(sa) * _remove_dot_segments(path) * String(suffix)
 end

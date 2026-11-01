@@ -136,6 +136,26 @@ export function joinUrlDirectory(base: string, rel: string): string {
 }
 
 /**
+ * RFC 3986 §5.2.4 dot-segment removal on the PATH of a scheme-led location
+ * (`scheme://authority/path?query#fragment`), its query and fragment left as
+ * written (esm-spec §4.7: a spliced `..` never survives into a location in one
+ * scheme and is removed in another). A trailing `/` (or a final `.`/`..`
+ * segment) keeps the result a directory, as in `joinUrlDirectory`.
+ */
+export function removeUrlPathDotSegments(url: string): string {
+  const afterScheme = url.indexOf('://') + 3
+  const tailAt = url.slice(afterScheme).search(/[?#]/)
+  const end = tailAt >= 0 ? afterScheme + tailAt : url.length
+  const slash = url.indexOf('/', afterScheme)
+  if (slash < 0 || slash >= end) return url // no path to normalize
+  const rawPath = url.slice(slash, end)
+  const trailing = rawPath.endsWith('/') || rawPath.endsWith('/.') || rawPath.endsWith('/..')
+  let path = removeDotSegments(rawPath)
+  if (trailing && !path.endsWith('/')) path += '/'
+  return url.slice(0, slash) + path + url.slice(end)
+}
+
+/**
  * A resolution failure must name the entry AND the template: "io error at
  * /${SNAPSHOTS}/x.parquet" names neither, and a source whose location silently
  * fails to resolve is indistinguishable from one that read zeros.
@@ -281,7 +301,8 @@ function locationSites(
  *   names none is `url_substitution_unknown_name`, so a misspelt key fails at
  *   the edge rather than leaving the placeholder for a read to trip over.
  * - A value is text: a string carrying no `{` or `}`, so a substitution never
- *   introduces another one (`data_source_url_unresolved` otherwise).
+ *   introduces another one, and no `?` or `#`, since a value names a directory
+ *   or a path segment (`data_source_url_unresolved` otherwise).
  * - Who wrote the location decides what it anchors on (§8.2.1). A placeholder
  *   that LEADS a template supplies the whole location, so the bound value is
  *   the mounting document's location and a relative one joins onto
@@ -290,7 +311,8 @@ function locationSites(
  *   result resolves against the referenced document's directory, as before.
  *
  * A placeholder the edge does not bind is left as written (§8.2 pass-through).
- * A location already `file:///…` after the splice is re-normalized here, since
+ * A location scheme-led after the splice (`file:///…`, `https://…`, …) has the
+ * dot segments of its PATH removed here, its query and fragment untouched, since
  * §8.2.1 leaves a scheme-led template alone and a spliced `..` must not survive.
  */
 export function applyMountUrlSubstitutions(
@@ -318,6 +340,12 @@ export function applyMountUrlSubstitutions(
       throw new EsmDiagnosticError(
         ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
         `${where}: \`url_substitutions.${k}\` = ${JSON.stringify(v)} carries a brace; a bound value is text and may not introduce another substitution (esm-spec §4.7)`,
+      )
+    }
+    if (v.includes('?') || v.includes('#')) {
+      throw new EsmDiagnosticError(
+        ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
+        `${where}: \`url_substitutions.${k}\` = ${JSON.stringify(v)} carries a '?' or '#'; a bound value names a directory or a path segment, never a query or fragment (esm-spec §4.7)`,
       )
     }
     values.set(k, v)
@@ -371,6 +399,8 @@ export function applyMountUrlSubstitutions(
         )
       }
       out = 'file://' + p
+    } else if (SCHEME_RE.test(out)) {
+      out = removeUrlPathDotSegments(out)
     }
     s.set(out)
   }

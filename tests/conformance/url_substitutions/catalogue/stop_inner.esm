@@ -1,0 +1,34 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "url_substitutions_stop_inner",
+    "description": "A model that declares its own `n_rows` (default 10, sizing `inner_rows`), mounted with no bindings by `stop_outer.esm`. A binding forwarded from above `stop_outer.esm` stopped there, so `inner_rows` keeps 10."
+  },
+  "metaparameters": {
+    "n_rows": {
+      "type": "integer",
+      "default": 10
+    }
+  },
+  "index_sets": {
+    "inner_rows": {
+      "kind": "interval",
+      "size": "n_rows"
+    }
+  },
+  "models": {
+    "Inner": {
+      "variables": {
+        "y": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [
+            "inner_rows"
+          ],
+          "default": 0.0
+        }
+      },
+      "equations": []
+    }
+  }
+}

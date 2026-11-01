@@ -14,7 +14,7 @@
  * assembly").
  */
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { loadPath, loadString, toJson } from './index.js'
@@ -183,5 +183,65 @@ describe('RFC 3986 join onto a URL-valued directory', () => {
     expect(joinUrlDirectory('https://h/a/b/', 'c')).toBe('https://h/a/b/c')
     expect(joinUrlDirectory('https://h', 'c/{date:%Y}.nc')).toBe('https://h/c/{date:%Y}.nc')
     expect(joinUrlDirectory('https://h/a?q=1#f', 'c/')).toBe('https://h/a/c/')
+  })
+})
+
+describe('esm-spec §4.7 "Bindings reach through an assembly": a catalogue on the network', () => {
+  // A catalogue that declares no metaparameters and mounts a model that does,
+  // both served by a mocked `fetch`: the forwarding walk must reach the model
+  // through the loader's own reader, not skip the remote mount.
+  const sized = fs.readFileSync(path.join(SUITE, 'catalogue', 'sized.esm'), 'utf8')
+  const catalogue = (ref: string): string =>
+    JSON.stringify({
+      esm: '1.0.0',
+      metadata: { name: 'remote_catalogue' },
+      models: { Inner: { ref } },
+    })
+  const run = (ref: string): string =>
+    JSON.stringify({
+      esm: '1.0.0',
+      metadata: { name: 'remote_run' },
+      models: {
+        Run: {
+          variables: {},
+          equations: [],
+          subsystems: { Snap: { ref, bindings: { n_rows: 4 } } },
+        },
+      },
+    })
+  const serve = (files: Record<string, string>): void => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        url in files
+          ? new Response(files[url], { status: 200 })
+          : new Response('missing', { status: 404, statusText: 'Not Found' }),
+      ),
+    )
+  }
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it.each([
+    ['an absolute URL', 'https://example.test/lib/sized.esm'],
+    ['a relative ref joined onto its URL directory', 'sized.esm'],
+  ])('the catalogue mounts the model by %s', async (_label, innerRef) => {
+    serve({
+      'https://example.test/lib/catalogue.esm': catalogue(innerRef),
+      'https://example.test/lib/sized.esm': sized,
+    })
+    const doc = loadString(run('https://example.test/lib/catalogue.esm'))
+    await resolveSubsystemRefs(doc, SUITE)
+    const isets = (doc.index_sets ?? {}) as Record<string, { size?: unknown }>
+    expect(isets.rows?.size).toBe(4)
+  })
+
+  it('an unreadable nested mount reports the read, not an unknown name', async () => {
+    serve({ 'https://example.test/lib/catalogue.esm': catalogue('missing.esm') })
+    const doc = loadString(run('https://example.test/lib/catalogue.esm'))
+    const err = await caughtAsync(() => resolveSubsystemRefs(doc, SUITE))
+    expect(err).not.toBeNull()
+    expect(err?.code, err?.message).toBe('unresolved_subsystem_ref')
   })
 })

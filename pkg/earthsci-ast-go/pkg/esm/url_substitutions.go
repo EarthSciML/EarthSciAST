@@ -119,9 +119,13 @@ func urlLocationSites(doc map[string]any) []urlLocationSite {
 //     spliced in as text and the result resolves against the referenced
 //     document's directory, as an unsubstituted template would.
 //
-// A placeholder the edge does not bind is left as written. A result that is
-// already a `file:///` URL is renormalized here, since §8.2.1 leaves a
-// scheme-led template alone and a spliced `..` must not survive.
+// A placeholder the edge does not bind is left as written. A value carrying a
+// '?' or '#' is refused (`data_source_url_unresolved`): it names a directory or
+// a path segment, never a query or fragment. A result that already carries a
+// scheme is renormalized here, since §8.2.1 leaves a scheme-led template alone
+// and a spliced `..` must not survive: a `file:///` URL as §8.2.1 normalizes
+// one, any other `scheme://authority/path` by removing the dot segments of its
+// PATH only (RFC 3986 §5.2.4), its query and fragment untouched.
 func applyMountURLSubstitutions(doc map[string]any, raw any, binderDir, where string) error {
 	if raw == nil {
 		return nil
@@ -145,6 +149,10 @@ func applyMountURLSubstitutions(doc map[string]any, raw any, binderDir, where st
 		if strings.ContainsAny(s, "{}") {
 			return newETErr(codeDataSourceURLUnresolved,
 				fmt.Sprintf("%s: `url_substitutions.%s` = %q carries a brace; a bound value is text and may not introduce another substitution (esm-spec §4.7)", where, k, s))
+		}
+		if strings.ContainsAny(s, "?#") {
+			return newETErr(codeDataSourceURLUnresolved,
+				fmt.Sprintf("%s: `url_substitutions.%s` = %q carries a '?' or '#'; a bound value names a directory or a path segment, and a query or fragment never names a file (esm-spec §4.7)", where, k, s))
 		}
 		values[k] = s
 	}
@@ -220,6 +228,8 @@ func applyMountURLSubstitutions(doc map[string]any, raw any, binderDir, where st
 					fmt.Sprintf("%s: %s: the substituted location %q carries a '?' or '#' (esm-spec §8.2.1)", where, s.site, out))
 			}
 			out = "file://" + p
+		} else if urlTemplateSchemeRE.MatchString(out) {
+			out = removeSchemedURLPathDotSegments(out)
 		}
 		s.set(out)
 	}
@@ -250,4 +260,46 @@ func joinURLDirectory(base, rel string) string {
 		path += "/"
 	}
 	return origin + path
+}
+
+// removeSchemedURLPathDotSegments removes the dot segments (RFC 3986 §5.2.4)
+// from the PATH of an absolute `scheme://authority/path[?query][#fragment]`
+// URL, leaving the scheme, authority, query and fragment exactly as written.
+// Empty segments and a trailing '/' are kept, as §5.2.4 keeps them.
+func removeSchemedURLPathDotSegments(u string) string {
+	afterScheme := strings.Index(u, "://") + 3
+	pathStart := len(u)
+	if i := strings.IndexAny(u[afterScheme:], "/?#"); i >= 0 {
+		pathStart = afterScheme + i
+	}
+	pathEnd := len(u)
+	if i := strings.IndexAny(u[pathStart:], "?#"); i >= 0 {
+		pathEnd = pathStart + i
+	}
+	path := u[pathStart:pathEnd]
+	if path == "" {
+		return u
+	}
+	segs := strings.Split(path, "/")
+	out := make([]string, 0, len(segs))
+	for i, seg := range segs {
+		last := i == len(segs)-1
+		switch seg {
+		case ".":
+			if last {
+				out = append(out, "")
+			}
+		case "..":
+			// out[0] is the "" before the path's leading '/': never popped.
+			if len(out) > 1 {
+				out = out[:len(out)-1]
+			}
+			if last {
+				out = append(out, "")
+			}
+		default:
+			out = append(out, seg)
+		}
+	}
+	return u[:pathStart] + strings.Join(out, "/") + u[pathEnd:]
 }

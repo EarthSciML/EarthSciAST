@@ -180,8 +180,8 @@ func TestURLSubstitutionFixturesMatchTheSharedManifest(t *testing.T) {
 				if err != nil {
 					t.Fatalf("%s must load: %v", f.ID, err)
 				}
-				if f.HoistedSources == nil {
-					t.Fatalf("%s: an accepted fixture pins hoisted_sources", f.ID)
+				if f.HoistedSources == nil && f.IndexSetSizes == nil {
+					t.Fatalf("%s: an accepted fixture pins hoisted_sources or index_set_sizes", f.ID)
 				}
 				for name, pin := range f.HoistedSources {
 					ds, ok := file.DataSources[name]

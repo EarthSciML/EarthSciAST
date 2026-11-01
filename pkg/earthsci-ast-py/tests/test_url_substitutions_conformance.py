@@ -133,3 +133,89 @@ def test_a_url_loaded_leaf_resolves_its_relative_locations_against_its_url() -> 
 
     assert resolve_source_url("../d/./t.nc", "https://h.org/a/b") == "https://h.org/a/d/t.nc"
     assert resolve_source_url("/abs/t.nc", "https://h.org/a/b") == "file:///abs/t.nc"
+
+
+def _serve(monkeypatch, docs: dict[str, dict]) -> list[str]:
+    """Serve ``docs`` (URL -> document) in place of the network, recording
+    each URL fetched; an unknown URL fails as a download does."""
+    import io
+    import urllib.error
+    import urllib.request
+
+    fetched: list[str] = []
+
+    def urlopen(url, *a, **k):
+        fetched.append(url)
+        if url not in docs:
+            raise urllib.error.URLError(f"404 {url}")
+        return io.BytesIO(json.dumps(docs[url]).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    return fetched
+
+
+def _remote_assembly(tmp_path, catalogue_mounts: str) -> tuple[str, dict[str, dict]]:
+    stop = {
+        name: json.loads((SUITE / "catalogue" / f"stop_{name}.esm").read_text())
+        for name in ("outer", "inner")
+    }
+    catalogue = {
+        "esm": "1.0.0",
+        "metadata": {"name": "remote_catalogue"},
+        "models": {"Outer": {"ref": catalogue_mounts}},
+    }
+    root = {
+        "esm": "1.0.0",
+        "metadata": {"name": "remote_root"},
+        "models": {
+            "Run": {
+                "variables": {},
+                "equations": [],
+                "subsystems": {
+                    "Snap": {
+                        "ref": "https://example.org/lib/cat.esm",
+                        "bindings": {"n_rows": 4},
+                    }
+                },
+            }
+        },
+    }
+    path = tmp_path / "root.esm"
+    path.write_text(json.dumps(root))
+    docs = {
+        "https://example.org/lib/cat.esm": catalogue,
+        "https://example.org/lib/stop_outer.esm": stop["outer"],
+        "https://example.org/lib/stop_inner.esm": stop["inner"],
+    }
+    return str(path), docs
+
+
+def test_a_binding_reaches_through_a_url_loaded_assembly(monkeypatch, tmp_path) -> None:
+    """§4.7 "Bindings reach through an assembly", with the catalogue loaded
+    from a URL: the walk that decides whether `n_rows` is forwarded follows its
+    RELATIVE ref onto the catalogue's URL directory (§4.7 "URL (remote)
+    references"), as the load itself does, and the forwarded binding stops at
+    the first document that declares the name."""
+    path, docs = _remote_assembly(tmp_path, "stop_outer.esm")
+    fetched = _serve(monkeypatch, docs)
+    loaded = earthsci_ast.load_path(path)
+    assert loaded.index_sets["rows"]["size"] == 4
+    assert loaded.index_sets["inner_rows"]["size"] == 10
+    assert "https://example.org/lib/stop_outer.esm" in fetched
+    assert "https://example.org/lib/stop_inner.esm" in fetched
+
+
+def test_an_unreadable_nested_ref_is_a_read_error_not_an_unknown_name(
+    monkeypatch, tmp_path
+) -> None:
+    """The forwarding walk runs before the leaf's own mounts load, so it must
+    report a nested ref it cannot read rather than refuse the edge binding as
+    `template_import_unknown_name` (which the unread document might declare)."""
+    path, docs = _remote_assembly(tmp_path, "missing.esm")
+    _serve(monkeypatch, docs)
+    from earthsci_ast.parse import SubsystemRefError
+
+    with pytest.raises(SubsystemRefError) as excinfo:
+        earthsci_ast.load_path(path)
+    assert excinfo.value.code == "unresolved_subsystem_ref", str(excinfo.value)
+    assert "https://example.org/lib/missing.esm" in str(excinfo.value)

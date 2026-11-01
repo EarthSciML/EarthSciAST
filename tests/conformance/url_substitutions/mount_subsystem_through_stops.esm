@@ -1,0 +1,21 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "url_substitutions_mount_subsystem_through_stops",
+    "description": "A `subsystems.<k>` edge binds `n_rows: 4` on a catalogue that does not declare it. The binding is forwarded through the catalogue and closes `n_rows` in the first document below it that declares the name (`stop_outer.esm`, so `rows` is 4), and it stops there: `stop_inner.esm`, mounted by `stop_outer.esm` with no bindings, keeps its own default (`inner_rows` is 10), exactly as if this edge had mounted `stop_outer.esm` directly (esm-spec §4.7 'Bindings reach through an assembly')."
+  },
+  "models": {
+    "Run": {
+      "variables": {},
+      "equations": [],
+      "subsystems": {
+        "Snap": {
+          "ref": "catalogue/stop_catalogue.esm",
+          "bindings": {
+            "n_rows": 4
+          }
+        }
+      }
+    }
+  }
+}

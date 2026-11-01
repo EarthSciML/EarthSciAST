@@ -7438,8 +7438,9 @@ two kinds of claim:
   spliced segment, a spliced `..`, a leading relative / absolute / URL value,
   repeated occurrences, mirrors, an unbound placeholder and a formatted
   `{date:…}` passing through, an already-resolved location renormalized, and
-  the three refusals (an unknown key, a formatted substitution named as a key,
-  a value carrying a brace). Expectations use §5.22.2's `repo_path` /
+  a spliced `..` removed from a URL-valued location (its query untouched), and
+  the refusals (an unknown key, a formatted substitution named as a key, a value
+  carrying a brace, a `?` or a `#`). Expectations use §5.22.2's `repo_path` /
   `verbatim` convention, so no golden holds an absolute path.
 - **`fixtures`** pin it through a real load at both mount forms, in every
   binding: accepted / refused with the code; `hoisted_sources`, the locations
@@ -7447,7 +7448,9 @@ two kinds of claim:
   sources merge into the mounting document at either form, esm-spec §4.7 "A
   mounted document's data sources"); and `index_set_sizes`, which shows an
   edge's `bindings` reaching, through a catalogue, the metaparameter of the
-  model the catalogue mounts (§4.7 "Bindings reach through an assembly"). The
+  model the catalogue mounts (§4.7 "Bindings reach through an assembly"), and
+  `mount_subsystem_through_stops` shows a forwarded binding stopping at the
+  first document below the catalogue that declares the name. The
   nested fixtures bind at an outer edge a placeholder an inner edge left open.
   Cases carrying `binder_url` mount from a URL-valued directory, where a
   leading relative value joins by RFC 3986 §5.2.

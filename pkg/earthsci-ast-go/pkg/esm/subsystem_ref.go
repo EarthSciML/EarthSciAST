@@ -89,7 +89,7 @@ func resolveSubsystemRefsInternal(file *ESMFile, basePath string, visited map[st
 	// struct into file.Models is needed.
 	for modelName, model := range file.Models {
 		prefix := fmt.Sprintf("/models/%s/subsystems", modelName)
-		if err := resolveSubsystemMap(model.Subsystems, basePath, visited, registry, sources, parentMeta, apiMeta, rootEnv, prefix, subsystemMount, precision); err != nil {
+		if err := resolveSubsystemMap(model.Subsystems, basePath, visited, registry, sources, parentMeta, apiMeta, nil, rootEnv, prefix, subsystemMount, precision); err != nil {
 			return fmt.Errorf("model %q subsystems: %w", modelName, err)
 		}
 	}
@@ -98,7 +98,7 @@ func resolveSubsystemRefsInternal(file *ESMFile, basePath string, visited map[st
 	// in place).
 	for rsName, rs := range file.ReactionSystems {
 		prefix := fmt.Sprintf("/reaction_systems/%s/subsystems", rsName)
-		if err := resolveSubsystemMap(rs.Subsystems, basePath, visited, registry, sources, parentMeta, apiMeta, rootEnv, prefix, subsystemMount, precision); err != nil {
+		if err := resolveSubsystemMap(rs.Subsystems, basePath, visited, registry, sources, parentMeta, apiMeta, nil, rootEnv, prefix, subsystemMount, precision); err != nil {
 			return fmt.Errorf("reaction_system %q subsystems: %w", rsName, err)
 		}
 	}
@@ -189,7 +189,7 @@ func inlineTopLevelModelRefs(file *ESMFile, basePath string, visited map[string]
 		edge := file.topLevelModelRefs[name]
 		ref, _ := edge["ref"].(string)
 		holder := map[string]any{name: edge}
-		if err := resolveSubsystemMap(holder, basePath, visited, registry, sources, parentMeta, apiMeta,
+		if err := resolveSubsystemMap(holder, basePath, visited, registry, sources, parentMeta, apiMeta, nil,
 			rootEnv, "/models", topLevelModelMount, precision); err != nil {
 			return err
 		}
@@ -255,7 +255,7 @@ func inlineTopLevelModelRefs(file *ESMFile, basePath string, visited map[string]
 // inliner drops them, so the leaf's assertions are never interpreted by a
 // document that may go on to couple it.
 func inlineNestedTopLevelModelRefs(view map[string]any, basePath string, visited map[string]bool,
-	registry map[string]IndexSet, sources map[string]any, parentMeta, apiMeta, rootEnv map[string]int64, pathPrefix string, precision string) error {
+	registry map[string]IndexSet, sources map[string]any, parentMeta, apiMeta, forwarded, rootEnv map[string]int64, pathPrefix string, precision string) error {
 	models, ok := view["models"].(map[string]any)
 	if !ok || len(models) == 0 {
 		return nil
@@ -277,7 +277,7 @@ func inlineNestedTopLevelModelRefs(view map[string]any, basePath string, visited
 	if len(edges) == 0 {
 		return nil
 	}
-	if err := resolveSubsystemMap(edges, basePath, visited, registry, sources, parentMeta, apiMeta,
+	if err := resolveSubsystemMap(edges, basePath, visited, registry, sources, parentMeta, apiMeta, forwarded,
 		rootEnv, pathPrefix, topLevelModelMount, precision); err != nil {
 		return err
 	}
@@ -502,7 +502,7 @@ var (
 // then the §9.6.3 rewrite fixpoint, then nested subsystem refs recursively.
 // Working on the raw view keeps full Expression fidelity (aggregate /
 // makearray fields the typed ExprNode does not model survive intact).
-func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map[string]bool, registry map[string]IndexSet, sources map[string]any, parentMeta, apiMeta, rootEnv map[string]int64, pathPrefix string, form mountForm, precision string) (err error) {
+func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map[string]bool, registry map[string]IndexSet, sources map[string]any, parentMeta, apiMeta, forwarded, rootEnv map[string]int64, pathPrefix string, form mountForm, precision string) (err error) {
 	if len(subsystems) == 0 {
 		return nil
 	}
@@ -628,19 +628,18 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		//     would be `template_import_unknown_name` against a document that
 		//     never asked for it, and would let an assembler's unrelated
 		//     metaparameter resize a leaf axis this edge never bound.
-		if len(apiMeta) > 0 {
-			if leafDecls, ok := view["metaparameters"].(map[string]any); ok {
-				for name, v := range apiMeta {
-					if _, declared := leafDecls[name]; !declared {
-						continue
-					}
-					if _, bound := bindings[name]; bound {
-						continue
-					}
-					bindings[name] = v
-				}
-			}
+		//
+		// esm-spec §4.7 "Bindings reach through an assembly": a binding an
+		// enclosing edge forwarded through an assembly seeds the close the same
+		// way, and wins over the loader API (it is an edge's statement, the
+		// loader API a default beneath every edge). The two stay SEPARATE maps:
+		// the loader API reaches every depth, a forwarded binding stops at the
+		// first document that declares its name (forwardBindingsThroughMounts).
+		explicit := make(map[string]int64, len(bindings))
+		for k, v := range bindings {
+			explicit[k] = v
 		}
+		seedEdgeBindings(bindings, view["metaparameters"], apiMeta, forwarded)
 
 		// Capture the referenced (mounted) document's own closed metaparameter
 		// environment BEFORE resolveTemplateMachinery consumes its
@@ -702,12 +701,13 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// nested mounts merge their (already located) `data_sources` into the
 		// LEAF, which then carries them up through this edge.
 		leafSources := map[string]any{}
-		// esm-spec §4.7 "Bindings reach through an assembly": an edge binding
-		// naming a metaparameter the leaf does not declare but a document it
-		// mounts does travels down the leaf's own mount edges as a loader-API
-		// binding would (§9.7.6 site 4, filtered there to the names each nested
-		// leaf declares). Read off the AUTHORED leaf, before its mounts inline.
-		forward, leafMountDeclaredPre := forwardBindingsThroughMounts(view, refBasePath, bindings, apiMeta)
+		// esm-spec §4.7 "Bindings reach through an assembly": what this leaf's
+		// OWN mount edges receive as forwarded bindings — an edge binding naming
+		// a metaparameter the leaf does not declare but a document it mounts
+		// does, plus what was forwarded to this leaf and the leaf does not
+		// declare. The loader-API bindings go down unchanged beside it. Read off
+		// the AUTHORED leaf, before its mounts inline.
+		forward, leafMountDeclaredPre := forwardBindingsThroughMounts(view, refBasePath, explicit, forwarded)
 		for _, kind := range templateComponentKinds {
 			comps, ok := view[kind].(map[string]any)
 			if !ok {
@@ -723,7 +723,7 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 					// inlined at this entry's pointer — best-effort deeper prefix (not
 					// a corpus-pinned location).
 					nestedPrefix := fmt.Sprintf("%s/%s/subsystems", pathPrefix, key)
-					if err := resolveSubsystemMap(subs, refBasePath, visited, leafRegistry, leafSources, childMeta, forward, childFoldEnv, nestedPrefix, subsystemMount, leafEffective); err != nil {
+					if err := resolveSubsystemMap(subs, refBasePath, visited, leafRegistry, leafSources, childMeta, apiMeta, forward, childFoldEnv, nestedPrefix, subsystemMount, leafEffective); err != nil {
 						return fmt.Errorf("%s %q: resolving nested refs in %q: %w", form.noun, key, refKey, err)
 					}
 				}
@@ -746,7 +746,7 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// recursion runs through resolveSubsystemMap, so `visited` gives it the
 		// same path-scoped cycle detection every other edge gets. Matches the
 		// Rust reference, which composes at both forms.
-		if err := inlineNestedTopLevelModelRefs(view, refBasePath, visited, leafRegistry, leafSources, childMeta, forward,
+		if err := inlineNestedTopLevelModelRefs(view, refBasePath, visited, leafRegistry, leafSources, childMeta, apiMeta, forward,
 			childFoldEnv, fmt.Sprintf("%s/%s/models", pathPrefix, key), leafEffective); err != nil {
 			return fmt.Errorf("%s %q: resolving nested refs in %q: %w", form.noun, key, refKey, err)
 		}
@@ -1132,7 +1132,7 @@ func inlineRootRefsRaw(view map[string]any, basePath string, apiMeta map[string]
 	}
 	// Top-level `models.<k>` mount edges first: the component each one splices
 	// in may itself carry `subsystems`, and the walk below resolves those.
-	if err := inlineNestedTopLevelModelRefs(view, basePath, visited, staged, mounted, parentMeta, apiMeta,
+	if err := inlineNestedTopLevelModelRefs(view, basePath, visited, staged, mounted, parentMeta, apiMeta, nil,
 		parentMeta, "/models", precision); err != nil {
 		return nil, err
 	}
@@ -1151,7 +1151,7 @@ func inlineRootRefsRaw(view map[string]any, basePath string, apiMeta map[string]
 				continue
 			}
 			prefix := fmt.Sprintf("/%s/%s/subsystems", kind, cname)
-			if err := resolveSubsystemMap(subs, basePath, visited, staged, mounted, parentMeta, apiMeta,
+			if err := resolveSubsystemMap(subs, basePath, visited, staged, mounted, parentMeta, apiMeta, nil,
 				parentMeta, prefix, subsystemMount, precision); err != nil {
 				return nil, fmt.Errorf("%s %q subsystems: %w", kind, cname, err)
 			}

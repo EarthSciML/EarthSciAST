@@ -250,6 +250,46 @@ fn join_url_directory(base: &str, rel: &str) -> String {
     format!("{origin}{path}")
 }
 
+/// RFC 3986 §5.2.4 dot-segment removal on the PATH of the scheme-led URL `url`
+/// (`scheme://authority/path?query#fragment`), leaving its scheme, authority,
+/// query and fragment byte-for-byte as written. Empty segments are kept, as
+/// §5.2.4 keeps them; a `..` that would climb past the root is dropped.
+fn remove_url_path_dot_segments(url: &str) -> String {
+    let after_scheme = url.find("://").map_or(0, |i| i + 3);
+    let path_start = url[after_scheme..]
+        .find(['/', '?', '#'])
+        .map_or(url.len(), |i| after_scheme + i);
+    let path_end = url[path_start..]
+        .find(['?', '#'])
+        .map_or(url.len(), |i| path_start + i);
+    let path = &url[path_start..path_end];
+    let Some(rest) = path.strip_prefix('/') else {
+        return url.to_string();
+    };
+    let segs: Vec<&str> = rest.split('/').collect();
+    let last = segs.len() - 1;
+    let mut out: Vec<&str> = Vec::with_capacity(segs.len());
+    for (i, seg) in segs.into_iter().enumerate() {
+        match seg {
+            "." => {}
+            ".." => {
+                out.pop();
+            }
+            s => out.push(s),
+        }
+        // A path ending in `.` or `..` names a directory: keep the slash.
+        if i == last && (seg == "." || seg == "..") {
+            out.push("");
+        }
+    }
+    format!(
+        "{}/{}{}",
+        &url[..path_start],
+        out.join("/"),
+        &url[path_end..]
+    )
+}
+
 /// Every `url_template` and `mirrors` string of a document's `data_sources`,
 /// mutably, with the site each one is reported at.
 fn location_strings(doc: &mut Value) -> Vec<(String, &mut Value)> {
@@ -346,6 +386,19 @@ pub(crate) fn apply_mount_url_substitutions(
                 ),
             ));
         }
+        // A value names a directory or a path segment; a query or fragment
+        // never names a file (and a `#` would be dropped when the location is
+        // read), so neither may ride in on a substitution.
+        if s.contains('?') || s.contains('#') {
+            return Err(err(
+                codes::DATA_SOURCE_URL_UNRESOLVED,
+                format!(
+                    "{where_}: `url_substitutions.{k}` = {s:?} carries a '?' or '#'; a \
+                     bound value names a directory or a path segment, never a URL query \
+                     or fragment (esm-spec §4.7)"
+                ),
+            ));
+        }
         values.push((k.as_str(), s));
     }
 
@@ -415,8 +468,13 @@ pub(crate) fn apply_mount_url_substitutions(
         out.push_str(&t[last..]);
         // A location that was already resolved (hoisted from a nested mount, or
         // made absolute by a leading value) is renormalized here, since §8.2.1
-        // leaves a scheme-led template alone: a spliced `..` must not survive.
+        // leaves a scheme-led template alone: a spliced `..` must not survive,
+        // in ANY scheme. A `file://` location is a path (and a '?' / '#' in it
+        // is refused, as §8.2.1 refuses one); any other `scheme://authority`
+        // location has the dot segments of its PATH removed (RFC 3986 §5.2.4),
+        // its query and fragment untouched.
         let out = match out.strip_prefix("file://") {
+            None if is_scheme_led(&out) => remove_url_path_dot_segments(&out),
             Some(path) if path.starts_with('/') => {
                 let p = remove_dot_segments(Path::new(path));
                 let p = p.to_string_lossy();
@@ -651,6 +709,23 @@ mod tests {
         apply_mount_url_substitutions(&mut doc, edge.as_object().unwrap(), Path::new("/a"), "e")
             .expect("no-op");
         assert_eq!(doc, before);
+    }
+
+    #[test]
+    fn url_path_dot_segments_are_removed_and_query_kept() {
+        let f = remove_url_path_dot_segments;
+        assert_eq!(f("https://h/a/b/../c/./d"), "https://h/a/c/d");
+        assert_eq!(f("https://h/a/.."), "https://h/");
+        assert_eq!(f("https://h/a/b/."), "https://h/a/b/");
+        assert_eq!(f("https://h/../a"), "https://h/a");
+        assert_eq!(f("https://h/a//b/../c"), "https://h/a//c");
+        assert_eq!(
+            f("https://h/x/../y?q=./a/../b#f/../g"),
+            "https://h/y?q=./a/../b#f/../g"
+        );
+        assert_eq!(f("https://h"), "https://h");
+        assert_eq!(f("https://h?q=../a"), "https://h?q=../a");
+        assert_eq!(f("s3://bucket/{date:%Y}/../t.nc"), "s3://bucket/t.nc");
     }
 
     #[test]

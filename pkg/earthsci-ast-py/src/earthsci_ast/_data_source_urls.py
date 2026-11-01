@@ -120,6 +120,24 @@ def _join_url_directory(base: str, rel: str) -> str:
     return origin + path
 
 
+def _remove_url_path_dot_segments(url: str) -> str:
+    """RFC 3986 §5.2.4 dot-segment removal on the PATH of a scheme-led
+    ``scheme://authority/path?query#fragment`` location; the authority, query
+    and fragment are left as written. A path ending in a ``/`` (or a dot
+    segment) keeps its trailing ``/``, as in :func:`_join_url_directory`."""
+    after_scheme = url.index("://") + 3
+    qf = re.search(r"[?#]", url[after_scheme:])
+    end = len(url) if qf is None else after_scheme + qf.start()
+    slash = url.find("/", after_scheme, end)
+    if slash < 0:
+        return url
+    path = url[slash:end]
+    norm = _remove_dot_segments(path)
+    if path.endswith(("/", "/.", "/..")) and not norm.endswith("/"):
+        norm += "/"
+    return url[:slash] + norm + url[end:]
+
+
 def _abs_base(base_dir: str) -> str:
     """``base_dir`` as an absolute POSIX directory.
 
@@ -247,13 +265,16 @@ def apply_mount_url_substitutions(data: Any, edge: Any, binder_dir: str, where: 
       fails at the edge rather than leaving the placeholder for a read to trip
       over.
     * A value is text: a string carrying no ``{`` or ``}``, so a substitution
-      never introduces another one (``data_source_url_unresolved`` otherwise).
+      never introduces another one, and no ``?`` or ``#``, since a value names a
+      directory or path segment (``data_source_url_unresolved`` otherwise).
     * Who wrote the location decides what it anchors on (§8.2.1). A placeholder
       that LEADS a template supplies the whole location, so the bound value is
       the mounting document's location and a relative one joins onto
       ``binder_dir``. A placeholder anywhere else is a segment of a location the
       referenced document wrote, so the value is spliced in as text and the
       result resolves against the referenced document's directory, as before.
+      A spliced location that is already scheme-led has the dot segments of its
+      PATH removed (RFC 3986 §5.2.4), its query and fragment untouched.
 
     A placeholder the edge does not bind is left as written. Copy-on-write, like
     :func:`resolve_data_source_urls`: only ``data["data_sources"]`` is reassigned.
@@ -282,6 +303,13 @@ def apply_mount_url_substitutions(data: Any, edge: Any, binder_dir: str, where: 
                 f"{where}: `url_substitutions.{k}` = {v!r} carries a brace; a bound "
                 "value is text and may not introduce another substitution "
                 "(esm-spec §4.7)",
+            )
+        if "?" in v or "#" in v:
+            raise ExpressionTemplateError(
+                DATA_SOURCE_URL_UNRESOLVED,
+                f"{where}: `url_substitutions.{k}` = {v!r} carries a '?' or '#'; a "
+                "bound value names a directory or a path segment, and a query or "
+                "fragment never names a file (esm-spec §4.7)",
             )
 
     present = (
@@ -319,11 +347,15 @@ def apply_mount_url_substitutions(data: Any, edge: Any, binder_dir: str, where: 
             return lead(raw[n]) if m.start() == 0 else raw[n]
 
         out = _PLACEHOLDER_RE.sub(one, t)
-        if out == t or not out.startswith("file:///"):
+        if out == t or not _SCHEME_RE.match(out):
             return out
         # A location that was already resolved (hoisted from a nested mount, or
         # made absolute by a leading value) is renormalized here, since §8.2.1
-        # leaves a scheme-led template alone: a spliced `..` must not survive.
+        # leaves a scheme-led template alone: a spliced `..` must not survive,
+        # whatever the scheme (§4.7 "Which directory a bound value resolves
+        # against").
+        if not out.startswith("file:///"):
+            return _remove_url_path_dot_segments(out)
         p = _remove_dot_segments(out[len("file://") :])
         if "?" in p or "#" in p:
             raise ExpressionTemplateError(

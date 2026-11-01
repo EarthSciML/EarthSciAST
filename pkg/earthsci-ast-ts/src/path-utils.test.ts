@@ -76,8 +76,15 @@ describe('canonicalizePath', () => {
 })
 
 describe('normalizeRef (cycle-detection key)', () => {
-  it('returns remote refs verbatim, ignoring the base', () => {
+  it('returns remote refs as written up to dot segments, ignoring the base', () => {
     expect(normalizeRef('https://x/a.esm', '/base')).toBe('https://x/a.esm')
+    expect(normalizeRef('https://x/l/../a.esm?v=./q', '/base')).toBe('https://x/a.esm?v=./q')
+  })
+
+  it('joins a ref onto a URL-valued base (esm-spec §4.7, RFC 3986 §5.2)', () => {
+    expect(normalizeRef('b.esm', 'https://x/lib')).toBe('https://x/lib/b.esm')
+    expect(normalizeRef('../m/./b.esm', 'https://x/lib/cat')).toBe('https://x/lib/m/b.esm')
+    expect(normalizeRef('/root/b.esm', 'https://x/lib')).toBe('https://x/root/b.esm')
   })
 
   it('joins + collapses local refs against the base', () => {
