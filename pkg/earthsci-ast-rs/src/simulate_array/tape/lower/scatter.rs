@@ -16,8 +16,11 @@
 //! admits, in the same order: the tuple-list form ([`TupleList`],
 //! [`Instr::SegReduce`]) then folds each run left to right from the
 //! semiring's identity, bit for bit the interpreter's fold for every ⊕.
-//! Output indices no conjunct pins are outer loops: the pass is repeated for
-//! each of their cells.
+//! Output indices no conjunct pins are outer loops over the same points: a
+//! point's pinned cell reads no output index, so it is computed once, and
+//! each free cell re-tests only the conjuncts that read a free index. Only
+//! a ragged bound that reads a free index makes each free cell walk a box of
+//! its own.
 //!
 //! The map from points to cells is computed here, at build time, so `e` must
 //! be build-time data: index names, literals, baked parameters, build-time
@@ -29,7 +32,9 @@
 //! list lowers as a run-time mask, which skips a term exactly as the
 //! interpreter's `continue` does.
 
-use super::tuples::{DimBound, TupleList, TupleSpec, parent_first_order, walk_nest};
+use super::tuples::{
+    DimBound, Parent, TupleList, TupleSpec, parent_first_order, tuple_list_budget, walk_nest,
+};
 use super::*;
 use crate::simulate_array::eval::{apply_binary, apply_unary, fold_scalar};
 use std::rc::Rc;
@@ -65,6 +70,18 @@ enum IxNode {
 struct NotStatic;
 
 impl IxNode {
+    /// Whether the expression reads a loop symbol `reads(k)` holds for.
+    fn reads(&self, reads: &impl Fn(usize) -> bool) -> bool {
+        match self {
+            IxNode::Lit(_) => false,
+            IxNode::Sym(k) => reads(*k),
+            IxNode::Neg(a) | IxNode::Un(_, a) => a.reads(reads),
+            IxNode::Fold(_, args) => args.iter().any(|a| a.reads(reads)),
+            IxNode::Cmp(_, a, b) => a.reads(reads) || b.reads(reads),
+            IxNode::Index { subs, .. } => subs.iter().any(|a| a.reads(reads)),
+        }
+    }
+
     fn eval(&self, pt: &[f64]) -> Result<f64, NotStatic> {
         Ok(match self {
             IxNode::Lit(x) => *x,
@@ -89,21 +106,34 @@ impl IxNode {
                     }
                     flat = flat * shape[d] + (raw as usize - 1);
                 }
-                vals[flat]
+                // A read of a bound array rounds on entry, as a literal does.
+                crate::precision::active().round(vals[flat])
             }
         })
     }
 }
 
-/// The conjuncts of a filter: the arguments of a top-level `and`, else the
-/// filter itself.
-fn conjuncts(filter: &Expr) -> (&[Expr], bool) {
-    match filter {
-        Expr::Operator(n) if n.op == "and" && is_plain(n) && !n.args.is_empty() => {
-            (&n.args[..], true)
+/// The conjuncts of a filter, left to right, nested `and`s flattened (as
+/// Julia's `_scatter_conjuncts!` flattens them), and whether the filter is
+/// an `and` at all. Flattening keeps the filter's value: an inner `and` is
+/// a strict flag that is nonzero exactly when each of its operands is
+/// nonzero at the working precision, the test the outer `and` applies to
+/// every operand.
+fn conjuncts(filter: &Expr) -> (Vec<&Expr>, bool) {
+    fn push<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
+        match e {
+            Expr::Operator(n) if is_and(n) => n.args.iter().for_each(|a| push(a, out)),
+            _ => out.push(e),
         }
-        _ => (std::slice::from_ref(filter), false),
     }
+    let mut out = Vec::new();
+    push(filter, &mut out);
+    let top_and = matches!(filter, Expr::Operator(n) if is_and(n));
+    (out, top_and)
+}
+
+fn is_and(n: &ExpressionNode) -> bool {
+    n.op == "and" && is_plain(n) && !n.args.is_empty()
 }
 
 /// An operator node with no sidecar body, filter or ranges: a plain call.
@@ -143,23 +173,98 @@ fn pin_of<'e>(c: &'e Expr, idx_names: &[String]) -> Option<(usize, &'e Expr)> {
     None
 }
 
+/// What [`TapeBuilder::lower_equality_scatter`] made of a contraction.
+pub(super) enum Scatter {
+    Lowered(LV),
+    /// Not a contraction it serves (its docs): the dense lowering.
+    Declined,
+    /// Its list would take the program past [`tuple_list_budget`]: the
+    /// caller tries the dense lowering first, and asks again without the
+    /// budget only if that fails.
+    OverBudget,
+}
+
+/// Places one point of the contracted box: the pins and the build-time
+/// conjuncts, evaluated as the interpreter's filter evaluates them.
+struct Place<'a> {
+    pins: &'a [Option<IxNode>],
+    lo: &'a DimI,
+    shape: &'a DimU,
+    strides: &'a [usize],
+    top_and: bool,
+    prec: crate::precision::Precision,
+}
+
+impl Place<'_> {
+    /// The pinned part of the point's cell (each pinned value written into
+    /// `pt`), or `None` when a pinned value is not a cell of the box or a
+    /// conjunct of `rest` is false.
+    fn cell(&self, pt: &mut [f64], rest: &[&IxNode]) -> Result<Option<usize>, NotStatic> {
+        let mut cell = 0usize;
+        for (d, pin) in self.pins.iter().enumerate() {
+            let Some(node) = pin else {
+                continue;
+            };
+            let v = node.eval(pt)?;
+            let off = v - self.lo[d] as f64;
+            if !(v.fract() == 0.0 && off >= 0.0 && off < self.shape[d] as f64) {
+                return Ok(None);
+            }
+            pt[d] = v;
+            cell += off as usize * self.strides[d];
+        }
+        Ok(self.holds(pt, rest)?.then_some(cell))
+    }
+
+    /// Whether every conjunct of `rest` holds at `pt`. Each is evaluated,
+    /// as the interpreter's `and` evaluates every operand, so a gather the
+    /// build cannot place declines the scatter whatever the others say.
+    fn holds(&self, pt: &[f64], rest: &[&IxNode]) -> Result<bool, NotStatic> {
+        let mut all = true;
+        for n in rest {
+            let v = n.eval(pt)?;
+            // `fold_scalar`'s `and`: nonzero at the working precision; a
+            // bare conjunct, the filter's own `== 0.0` test.
+            all &= if self.top_and {
+                self.prec.round(v) != 0.0
+            } else {
+                v != 0.0
+            };
+        }
+        Ok(all)
+    }
+
+    /// Write the pinned values of `cell` (a cell whose free part is zero)
+    /// back into `pt`.
+    fn restore_pinned(&self, pt: &mut [f64], cell: usize) {
+        for (d, pin) in self.pins.iter().enumerate() {
+            if pin.is_some() {
+                let k = (cell / self.strides[d]) % self.shape[d];
+                pt[d] = (self.lo[d] + k as i64) as f64;
+            }
+        }
+    }
+}
+
 impl TapeBuilder<'_> {
     /// Compile `e` as a build-time expression over the loop symbols `syms`;
-    /// `None` when it reads anything the build does not know.
+    /// `None` when it reads anything the build does not know. Every leaf
+    /// but a loop symbol is rounded to the working precision, as the
+    /// interpreter rounds literals and bindings on entry (`precision`
+    /// module docs); the operators' kernels already round per operation.
     fn ix_compile(&self, e: &Expr, syms: &[String]) -> Option<IxNode> {
+        let lit = |x: f64| IxNode::Lit(crate::precision::active().round(x));
         Some(match e {
-            Expr::Integer(n) => IxNode::Lit(*n as f64),
-            Expr::Number(x) => IxNode::Lit(*x),
+            Expr::Integer(n) => lit(*n as f64),
+            Expr::Number(x) => lit(*x),
             Expr::Variable(v) => {
                 if let Some(k) = syms.iter().position(|s| s == v) {
                     IxNode::Sym(k)
                 } else if let Some(&x) = self.baked_params.get(v.as_str()) {
-                    IxNode::Lit(x)
+                    lit(x)
                 } else {
                     match self.known_named(v)? {
-                        (shape, vals) if shape.is_empty() && vals.len() == 1 => {
-                            IxNode::Lit(vals[0])
-                        }
+                        (shape, vals) if shape.is_empty() && vals.len() == 1 => lit(vals[0]),
                         _ => return None,
                     }
                 }
@@ -236,12 +341,15 @@ impl TapeBuilder<'_> {
         Some(IxNode::Index { vals, shape, subs })
     }
 
-    /// The one-pass equality scatter (module docs), or `None` when the
-    /// contraction is not one it serves — no conjunct pins an output index,
-    /// a pinned value is not build-time data, a ragged bound reads a pinned index —
-    /// or a point's value cannot be placed. Nothing is emitted before the
-    /// tuple list is lowered, so a `None` needs no rollback; an `Err` comes
-    /// from that lowering, and the caller rolls it back.
+    /// The one-pass equality scatter (module docs). [`Scatter::Declined`]
+    /// when the contraction is not one it serves (no conjunct pins an output
+    /// index, a pinned value is not build-time data, a ragged bound reads a
+    /// pinned index) or a point's value cannot be placed;
+    /// [`Scatter::OverBudget`] when `respect_budget` and its list would take
+    /// the program past [`tuple_list_budget`]. Nothing is emitted before the
+    /// tuple list is lowered, so neither needs a rollback; an `Err` comes
+    /// from that lowering, after the list is charged to
+    /// [`TapeBuilder::tuples_held`], and the caller's rollback undoes both.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn lower_equality_scatter(
         &mut self,
@@ -253,16 +361,17 @@ impl TapeBuilder<'_> {
         contract_dims: &[ContractDim],
         reduce: ReduceKind,
         filter: Option<&Expr>,
-    ) -> LResult<Option<LV>> {
+        respect_budget: bool,
+    ) -> LResult<Scatter> {
         let Some(filter) = filter else {
-            return Ok(None);
+            return Ok(Scatter::Declined);
         };
         let nr = idx_names.len();
         let nc = contract_names.len();
         if nr == 0 || nc == 0 {
-            return Ok(None);
+            return Ok(Scatter::Declined);
         }
-        let (parts, is_and) = conjuncts(filter);
+        let (parts, top_and) = conjuncts(filter);
         // The first conjunct to pin an index pins it; a later one that pins
         // the same index is an ordinary remaining conjunct.
         let mut pins: Vec<Option<&Expr>> = vec![None; nr];
@@ -276,7 +385,7 @@ impl TapeBuilder<'_> {
             }
         }
         if pins.iter().all(Option::is_none) {
-            return Ok(None);
+            return Ok(Scatter::Declined);
         }
         // The contracted ranges. A ragged bound may read a free output index
         // or a contracted one, never a pinned output index: a pinned cell is
@@ -286,24 +395,24 @@ impl TapeBuilder<'_> {
                 ContractDim::Ragged { of, .. } => {
                     for p in of {
                         match idx_names.iter().position(|n| n == p) {
-                            Some(k) if pins[k].is_some() => return Ok(None),
+                            Some(k) if pins[k].is_some() => return Ok(Scatter::Declined),
                             Some(_) => {}
                             None if contract_names.contains(p) => {}
-                            None => return Ok(None),
+                            None => return Ok(Scatter::Declined),
                         }
                     }
                 }
                 ContractDim::Derived { from_faq } if self.ring_extent(from_faq).is_none() => {
-                    return Ok(None);
+                    return Ok(Scatter::Declined);
                 }
                 _ => {}
             }
         }
         let Ok(bounds) = self.tuple_dim_bounds(idx_names, contract_names, contract_dims) else {
-            return Ok(None);
+            return Ok(Scatter::Declined);
         };
         let Ok(combine_op) = self.array_combine_op(reduce, "contracted") else {
-            return Ok(None);
+            return Ok(Scatter::Declined);
         };
         if let Some(v) = self.lower_shift_scatter(
             idx_names,
@@ -313,10 +422,10 @@ impl TapeBuilder<'_> {
             contract_names,
             &bounds,
             reduce,
-            parts,
+            &parts,
             &pins,
         )? {
-            return Ok(Some(v));
+            return Ok(Scatter::Lowered(v));
         }
         // A point's values: the output indices, then the contracted names
         // (the tuple list's column order).
@@ -328,7 +437,7 @@ impl TapeBuilder<'_> {
                 Some(e) => match self.ix_compile(e, &syms) {
                     Some(n) => Some(n),
                     // A run-time pin: no build-time map (module docs).
-                    None => return Ok(None),
+                    None => return Ok(Scatter::Declined),
                 },
                 None => None,
             });
@@ -343,7 +452,7 @@ impl TapeBuilder<'_> {
             }
             match self.ix_compile(c, &syms) {
                 Some(n) => static_rest.push(n),
-                None => runtime_rest.push(c.clone()),
+                None => runtime_rest.push((*c).clone()),
             }
         }
 
@@ -351,13 +460,47 @@ impl TapeBuilder<'_> {
         let n_free: usize = free.iter().map(|&d| shape[d]).product();
         let n_out: usize = shape.iter().product();
         if n_out >= u32::MAX as usize {
-            return Ok(None);
+            return Ok(Scatter::Declined);
         }
         let mut strides = vec![1usize; nr];
         for d in (0..nr.saturating_sub(1)).rev() {
             strides[d] = strides[d + 1] * shape[d + 1];
         }
-        let prec = crate::precision::active();
+        // The most tuples this list may hold: what is left of the program's
+        // tuple-list budget ([`tuple_list_budget`]), as every tuple-list
+        // producer is held to — when there is a bounded form to fall back
+        // to. That is the dense lowering's promoted box, `n_out` cells by
+        // the contracted box; past [`MAX_PROMOTED_ELEMS`] the dense form
+        // unrolls a term per contracted point over the whole output box, a
+        // build quadratic in the size, so the list is kept over the budget,
+        // as a tuple-list contraction whose build-time fold declines keeps
+        // its list. Without `respect_budget` the caller found no other form.
+        let dense_box = bounds.iter().try_fold(n_out, |acc, b| match b {
+            DimBound::Static(l, h) => acc.checked_mul((h - l + 1).max(0) as usize),
+            DimBound::Ragged { .. } => None,
+        });
+        let room = if respect_budget && dense_box.is_some_and(|n| n <= MAX_PROMOTED_ELEMS) {
+            (tuple_list_budget() as u64)
+                .saturating_sub(self.tuples_held)
+                .min(MAX_PROMOTED_ELEMS as u64) as usize
+        } else {
+            MAX_PROMOTED_ELEMS
+        };
+        let full = || {
+            if room < MAX_PROMOTED_ELEMS {
+                Scatter::OverBudget
+            } else {
+                Scatter::Declined
+            }
+        };
+        let place = Place {
+            pins: &pin_nodes,
+            lo,
+            shape,
+            strides: &strides,
+            top_and,
+            prec: crate::precision::active(),
+        };
         // The walk: the free cells row-major, and in each one the contracted
         // names in the interpreter's order — an odometer, the last name
         // fastest, or, when a ragged bound reads a contracted index, the
@@ -369,70 +512,33 @@ impl TapeBuilder<'_> {
         } else {
             (0..nc).collect()
         };
+        // The pins read no output index, so a point's pinned cell is the same
+        // in every free cell; only a bound or a conjunct that reads a free
+        // index differs between them. With no such bound the contracted box
+        // is walked once and its points placed once, and each free cell
+        // re-tests only the conjuncts that read a free index, over the same
+        // points in the same order.
+        let reads_free = |k: usize| k < nr && pins[k].is_none();
+        let (per_cell, shared): (Vec<&IxNode>, Vec<&IxNode>) =
+            static_rest.iter().partition(|n| n.reads(&reads_free));
+        let bound_reads_free = bounds.iter().any(|b| {
+            matches!(b, DimBound::Ragged { parents, .. }
+                if parents.iter().any(|p| matches!(p, Parent::Output(_))))
+        });
         let mut cell_of: Vec<u32> = Vec::new();
         let mut at: Vec<i64> = Vec::new();
-        let mut visits: u64 = 0;
-        let mut declined = false;
         let mut pt: Vec<f64> = vec![0.0; nr + nc];
-        let mut cell_ix: Vec<i64> = vec![0; nr];
+        let mut cell_ix: Vec<i64> = lo.to_vec();
         let mut cur: Vec<i64> = vec![0; nc];
         let mut fdig: SmallVec<[usize; 4]> = SmallVec::from_elem(0, free.len());
-        for _ in 0..n_free {
+        // The free cells in row-major order: sets `cell_ix` and `pt` at the
+        // free indices and returns the cell's offset, then advances.
+        let mut next_free = |cell_ix: &mut Vec<i64>, pt: &mut Vec<f64>| -> usize {
+            let mut off = 0usize;
             for (k, &d) in free.iter().enumerate() {
                 cell_ix[d] = lo[d] + fdig[k] as i64;
                 pt[d] = cell_ix[d] as f64;
-            }
-            let mut point = |c: &[i64]| -> bool {
-                visits += 1;
-                if visits > MAX_SCATTER_VISITS {
-                    declined = true;
-                    return false;
-                }
-                for k in 0..nc {
-                    pt[nr + k] = c[k] as f64;
-                }
-                let mut cell = 0usize;
-                for d in 0..nr {
-                    if let Some(node) = &pin_nodes[d] {
-                        let Ok(v) = node.eval(&pt) else {
-                            declined = true;
-                            return false;
-                        };
-                        let off = v - lo[d] as f64;
-                        if !(v.fract() == 0.0 && off >= 0.0 && off < shape[d] as f64) {
-                            return true;
-                        }
-                        pt[d] = v;
-                    }
-                    cell += (pt[d] as i64 - lo[d]) as usize * strides[d];
-                }
-                for n in &static_rest {
-                    let Ok(v) = n.eval(&pt) else {
-                        declined = true;
-                        return false;
-                    };
-                    // `fold_scalar`'s `and`: nonzero at the working
-                    // precision; a bare conjunct, the filter's own
-                    // `== 0.0` test.
-                    let held = if is_and {
-                        prec.round(v) != 0.0
-                    } else {
-                        v != 0.0
-                    };
-                    if !held {
-                        return true;
-                    }
-                }
-                if cell_of.len() >= MAX_PROMOTED_ELEMS {
-                    declined = true;
-                    return false;
-                }
-                cell_of.push(cell as u32);
-                at.extend_from_slice(c);
-                true
-            };
-            if !walk_nest(&bounds, &order, 0, &cell_ix, &mut cur, &mut point) || declined {
-                return Ok(None);
+                off += fdig[k] * strides[d];
             }
             for k in (0..free.len()).rev() {
                 fdig[k] += 1;
@@ -440,6 +546,124 @@ impl TapeBuilder<'_> {
                     break;
                 }
                 fdig[k] = 0;
+            }
+            off
+        };
+        let mut stop: Option<Scatter> = None;
+        let mut visits: u64 = 0;
+        let mut walked_once = false;
+        if !bound_reads_free {
+            // The shared pass: each admitted point's pinned cell and
+            // contracted values, in visit order.
+            let mut base: Vec<u32> = Vec::new();
+            let mut base_at: Vec<i64> = Vec::new();
+            let mut point = |c: &[i64]| -> bool {
+                visits += 1;
+                if visits > MAX_SCATTER_VISITS {
+                    stop = Some(Scatter::Declined);
+                    return false;
+                }
+                for k in 0..nc {
+                    pt[nr + k] = c[k] as f64;
+                }
+                match place.cell(&mut pt, &shared) {
+                    Err(NotStatic) => {
+                        stop = Some(Scatter::Declined);
+                        false
+                    }
+                    Ok(None) => true,
+                    // Past this many points the pass holds more than any
+                    // list may; only the per-cell walk, whose conjuncts on
+                    // a free index may admit fewer, can still serve.
+                    Ok(Some(_)) if base.len() >= MAX_PROMOTED_ELEMS => false,
+                    Ok(Some(cell)) => {
+                        base.push(cell as u32);
+                        base_at.extend_from_slice(c);
+                        true
+                    }
+                }
+            };
+            let done = walk_nest(&bounds, &order, 0, &cell_ix, &mut cur, &mut point);
+            if let Some(s) = stop {
+                return Ok(s);
+            }
+            // Cut short with every point kept in every free cell: the list
+            // is past its limit already.
+            if !done && per_cell.is_empty() {
+                return Ok(full());
+            }
+            if done {
+                walked_once = true;
+                let nb = base.len();
+                let total = (nb as u64).saturating_mul(n_free as u64);
+                if visits.saturating_add(total) > MAX_SCATTER_VISITS {
+                    return Ok(Scatter::Declined);
+                }
+                if per_cell.is_empty() && total > room as u64 {
+                    return Ok(full());
+                }
+                for _ in 0..n_free {
+                    let off = next_free(&mut cell_ix, &mut pt);
+                    for k in 0..nb {
+                        let c = &base_at[k * nc..(k + 1) * nc];
+                        if !per_cell.is_empty() {
+                            for (j, &v) in c.iter().enumerate() {
+                                pt[nr + j] = v as f64;
+                            }
+                            place.restore_pinned(&mut pt, base[k] as usize);
+                            match place.holds(&pt, &per_cell) {
+                                Err(NotStatic) => return Ok(Scatter::Declined),
+                                Ok(false) => continue,
+                                Ok(true) => {}
+                            }
+                        }
+                        if cell_of.len() >= room {
+                            return Ok(full());
+                        }
+                        cell_of.push(base[k] + off as u32);
+                        at.extend_from_slice(c);
+                    }
+                }
+            }
+        }
+        if !walked_once {
+            // The per-cell walk: a bound reads a free index, so each free
+            // cell walks its own contracted box.
+            let all: Vec<&IxNode> = static_rest.iter().collect();
+            visits = 0;
+            for _ in 0..n_free {
+                let off = next_free(&mut cell_ix, &mut pt);
+                let mut point = |c: &[i64]| -> bool {
+                    visits += 1;
+                    if visits > MAX_SCATTER_VISITS {
+                        stop = Some(Scatter::Declined);
+                        return false;
+                    }
+                    for k in 0..nc {
+                        pt[nr + k] = c[k] as f64;
+                    }
+                    match place.cell(&mut pt, &all) {
+                        Err(NotStatic) => {
+                            stop = Some(Scatter::Declined);
+                            false
+                        }
+                        Ok(None) => true,
+                        Ok(Some(_)) if cell_of.len() >= room => {
+                            stop = Some(full());
+                            false
+                        }
+                        Ok(Some(cell)) => {
+                            cell_of.push((cell + off) as u32);
+                            at.extend_from_slice(c);
+                            true
+                        }
+                    }
+                };
+                let done = walk_nest(&bounds, &order, 0, &cell_ix, &mut cur, &mut point);
+                if let Some(s) = stop {
+                    return Ok(s);
+                }
+                debug_assert!(done);
             }
         }
 
@@ -479,7 +703,7 @@ impl TapeBuilder<'_> {
         // evaluate, still under `and` so a kept term is the same flag test.
         let residual: Option<Expr> = match runtime_rest.len() {
             0 => None,
-            _ if !is_and => runtime_rest.pop(),
+            _ if !top_and => runtime_rest.pop(),
             1 => {
                 runtime_rest.push(Expr::Integer(1));
                 Some(and_of(runtime_rest))
@@ -506,7 +730,7 @@ impl TapeBuilder<'_> {
         let list = TupleList { rows, cols };
         let v = self.lower_tuple_list(&spec, list, lo, shape, combine_op);
         self.held_exprs.extend(residual);
-        v.map(Some)
+        v.map(Scatter::Lowered)
     }
 }
 
@@ -533,7 +757,7 @@ impl TapeBuilder<'_> {
         contract_names: &[String],
         bounds: &[DimBound],
         reduce: ReduceKind,
-        parts: &[Expr],
+        parts: &[&Expr],
         pins: &[Option<&Expr>],
     ) -> LResult<Option<LV>> {
         if !matches!(reduce, ReduceKind::Sum | ReduceKind::Product) || parts.len() != 1 {

@@ -94,6 +94,7 @@ fn tape_index(n: usize, table: &str) -> LResult<u32> {
 type LResult<T> = Result<T, Bail>;
 
 mod scatter;
+use scatter::Scatter;
 mod standalone;
 mod tuples;
 
@@ -787,6 +788,8 @@ struct RuleTxn {
     stream_lens: [usize; 3],
     hoist_journal: usize,
     forcing_journal: usize,
+    /// [`TapeBuilder::tuples_held`]: a rolled-back rule's lists are not held.
+    tuples_held: u64,
 }
 
 /// Snapshot for undoing a failed ATTEMPT inside one rule (a looped form that
@@ -818,6 +821,9 @@ struct SubTxn {
     fault_seq: i64,
     faults: usize,
     lazy_faults: usize,
+    /// [`TapeBuilder::tuples_held`]: a list charged by a failed attempt is
+    /// not held.
+    tuples_held: u64,
 }
 
 impl<'m> TapeBuilder<'m> {
@@ -5133,22 +5139,80 @@ impl<'m> TapeBuilder<'m> {
         // (esm-spec §4.3.1, [`scatter`]). A body the tuple-list form cannot
         // lower keeps the dense lowering below.
         if !contract_names.is_empty() && filter.is_some() {
-            let txn = self.sub_txn();
-            match self.lower_equality_scatter(
-                idx_names,
-                &lo,
-                &shape,
-                body,
-                contract_names,
-                contract_dims,
-                reduce,
-                filter,
-            ) {
-                Ok(Some(v)) => return Ok(v),
-                Ok(None) => {}
-                Err(_) => self.sub_rollback(txn),
+            let scatter = |b: &mut Self, respect_budget: bool| {
+                let txn = b.sub_txn();
+                let r = b.lower_equality_scatter(
+                    idx_names,
+                    &lo,
+                    &shape,
+                    body,
+                    contract_names,
+                    contract_dims,
+                    reduce,
+                    filter,
+                    respect_budget,
+                );
+                if r.is_err() {
+                    b.sub_rollback(txn);
+                }
+                r
+            };
+            match scatter(self, true) {
+                Ok(Scatter::Lowered(v)) => return Ok(v),
+                // A list past the program's tuple-list budget: the dense
+                // lowering, as every tuple-list producer falls back to a
+                // bounded form; the list after all only when that fails.
+                Ok(Scatter::OverBudget) => {
+                    let txn = self.sub_txn();
+                    let dense = self.lower_faq_dense(
+                        idx_names,
+                        &lo,
+                        &shape,
+                        body,
+                        contract_names,
+                        contract_dims,
+                        reduce,
+                        filter,
+                    );
+                    let Err(e) = dense else {
+                        return dense;
+                    };
+                    self.sub_rollback(txn);
+                    return match scatter(self, false) {
+                        Ok(Scatter::Lowered(v)) => Ok(v),
+                        _ => Err(e),
+                    };
+                }
+                Ok(Scatter::Declined) | Err(_) => {}
             }
         }
+        self.lower_faq_dense(
+            idx_names,
+            &lo,
+            &shape,
+            body,
+            contract_names,
+            contract_dims,
+            reduce,
+            filter,
+        )
+    }
+
+    /// [`Self::lower_faq`]'s dense lowering: the body over the output box,
+    /// or over that box extended by the contracted axes and folded away.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_faq_dense(
+        &mut self,
+        idx_names: &[String],
+        lo: &DimI,
+        shape: &DimU,
+        body: &Expr,
+        contract_names: &[String],
+        contract_dims: &[ContractDim],
+        reduce: ReduceKind,
+        filter: Option<&Expr>,
+    ) -> LResult<LV> {
+        let (lo, shape) = (lo.clone(), shape.clone());
         self.push_scope();
         let v = if contract_names.is_empty() {
             let bx = LBox {
@@ -7230,6 +7294,7 @@ impl<'m> TapeBuilder<'m> {
             ],
             hoist_journal: self.hoist_journal.len(),
             forcing_journal: self.forcing_journal.len(),
+            tuples_held: self.tuples_held,
         }
     }
 
@@ -7269,6 +7334,7 @@ impl<'m> TapeBuilder<'m> {
             self.hoist.remove(&key);
         }
         self.rollback_forcing_loads(txn.forcing_journal);
+        self.tuples_held = txn.tuples_held;
         self.scope_frames.clear();
         self.branch_bufs.clear();
         self.fault_first = None;
@@ -7315,6 +7381,7 @@ impl<'m> TapeBuilder<'m> {
             fault_seq: self.fault_seq,
             faults: self.faults.len(),
             lazy_faults: self.lazy_faults.len(),
+            tuples_held: self.tuples_held,
         }
     }
 
@@ -7357,6 +7424,7 @@ impl<'m> TapeBuilder<'m> {
         self.fault_seq = txn.fault_seq;
         self.faults.truncate(txn.faults);
         self.lazy_faults.truncate(txn.lazy_faults);
+        self.tuples_held = txn.tuples_held;
     }
 
     /// Lower one observed rule; returns the recorded observed value.
