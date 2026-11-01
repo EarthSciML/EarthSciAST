@@ -12,9 +12,9 @@ include("testutils.jl")   # TESTUTILS_REPO_ROOT
 # `cases` pin the edge rule as a document normalization: apply the edge with the
 # MOUNTING document's directory (`binder_dir`), then ordinary §8.2.1 resolution
 # with the DECLARING document's (`declaring_dir`). `fixtures` pin it through a
-# real load; this binding hoists a top-level `models.<k>` leaf's `data_sources`
-# into the mounting document, so `hoisted_sources` and the `requires_hoisting`
-# fixture are checked here too.
+# real load; this binding merges a mounted document's `data_sources` into the
+# mounting document at both mount forms (esm-spec §4.7 "A mounted document's
+# data sources"), so every fixture's `hoisted_sources` is checked.
 @testset "esm-spec §4.7 mount-edge url_substitutions" begin
     suite = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "url_substitutions")
     manifest = JSON3.read(read(joinpath(suite, "manifest.json"), String))
@@ -41,7 +41,10 @@ include("testutils.jl")   # TESTUTILS_REPO_ROOT
         )
         subs = EarthSciAST._to_native_json(c.url_substitutions)
         run() = begin
-            EarthSciAST.apply_mount_url_substitutions!(doc, subs, binder, "case")
+            # A `binder_url` case mounts from a URL-valued directory (a document
+            # loaded from a URL): a leading relative value joins by RFC 3986.
+            dir = haskey(c, :binder_url) ? String(c.binder_url) : binder
+            EarthSciAST.apply_mount_url_substitutions!(doc, subs, dir, "case")
             something(EarthSciAST._resolve_data_source_urls(doc, declaring), doc)
         end
         expect = c.expect
@@ -63,10 +66,20 @@ include("testutils.jl")   # TESTUTILS_REPO_ROOT
         end
     end
 
-    @testset "fixtures: $(f.id)" for f in manifest.fixtures
+    # Every fixture twice: through `load_path` (the native mount walk), and
+    # through the TYPED subsystem walk — the path URL refs take, forced here
+    # with `native_subsystem_refs = false` — so the rule holds on both.
+    _load_typed(path) = EarthSciAST._load_document(
+        EarthSciAST._read_json_document(read(path, String)), dirname(abspath(path));
+        native_subsystem_refs = false
+    )
+    @testset "fixtures ($(walk)): $(f.id)" for walk in ("native", "typed"),
+            f in manifest.fixtures
+
         path = normpath(joinpath(suite, String(f.path)))
+        load = walk == "native" ? EarthSciAST.load_path : _load_typed
         if String(f.expect) == "refused"
-            e = _caught(() -> EarthSciAST.load_path(path))
+            e = _caught(() -> load(path))
             @test e isa EarthSciAST.ExpressionTemplateError
             if e isa EarthSciAST.ExpressionTemplateError
                 @test e.code == String(f.error_code)
@@ -75,16 +88,24 @@ include("testutils.jl")   # TESTUTILS_REPO_ROOT
                 end
             end
         else
-            loaded = EarthSciAST.load_path(path)
+            loaded = load(path)
             @test loaded isa EarthSciAST.EsmFile
             pins = haskey(f, :hoisted_sources) ? pairs(f.hoisted_sources) : ()
             for (name, pin) in pins
+                have = loaded.data_sources !== nothing &&
+                    haskey(loaded.data_sources, String(name))
+                @test have
+                have || continue
                 ds = loaded.data_sources[String(name)]
                 @test ds.source.url_template == _expected(pin.url_template)
                 if haskey(pin, :mirrors)
                     @test collect(something(ds.source.mirrors, String[])) ==
                         [_expected(m) for m in pin.mirrors]
                 end
+            end
+            sizes = haskey(f, :index_set_sizes) ? pairs(f.index_set_sizes) : ()
+            for (axis, size) in sizes
+                @test loaded.index_sets[String(axis)].size == size
             end
         end
     end

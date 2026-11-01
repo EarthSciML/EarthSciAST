@@ -356,6 +356,12 @@ function apply_mount_url_substitutions!(
     # location, per §8.2.1's own forms.
     lead(v) = if match(_URL_TEMPLATE_SCHEME_RE, v) !== nothing || startswith(v, "/")
         v
+    elseif _is_url(binder_dir)
+        # A mounting document loaded from a URL: its directory is that URL's,
+        # and a relative value joins onto it by RFC 3986 §5.2, dot segments
+        # removed, exactly as its own relative refs do. `_url_join` reads the
+        # base as a directory with or without a trailing '/'.
+        _url_join(binder_dir, v)
     elseif match(_URL_TEMPLATE_SCHEME_RE, String(binder_dir)) !== nothing
         rstrip(String(binder_dir), '/') * "/" * v
     else

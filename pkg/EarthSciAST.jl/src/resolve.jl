@@ -252,9 +252,12 @@ function _load_document(
     # staged contribution folds against that same closed environment and then
     # merges deep-equal-or-`subsystem_index_set_conflict`.
     _merge_staged_index_sets!(file.index_sets, staged_isets, root_env; refs = staged_refs)
-    resolve_subsystem_refs!(
-        file, base_path; loader_metaparameters = metaparameters,
-        root_env = root_env, model_envs = model_envs
+    file = _adopt_mounted_sources(
+        file,
+        resolve_subsystem_refs!(
+            file, base_path; loader_metaparameters = metaparameters,
+            root_env = root_env, model_envs = model_envs
+        )
     )
     # esm-spec §10.10 / §4.7: relative `coupling_import` refs resolve against this
     # document's directory, which `flatten` would otherwise never learn. Only a
@@ -1203,14 +1206,20 @@ function _resolve_mount_edge_core(
         k in leaf_decls && (leaf_fold_env[k] = v)
     end
     leaf_staged = OrderedDict{String, Any}()
+    # esm-spec §4.7 "Bindings reach through an assembly": an edge binding naming
+    # a metaparameter the leaf does not declare but a document it MOUNTS does is
+    # forwarded down the leaf's own mount edges as the loader-API bindings are —
+    # each nested edge closes the names its own leaf declares, its own explicit
+    # `bindings` winning.
+    forward_meta = _forward_through_assembly(api_meta, bindings, leaf_decls, leaf_mount_declared)
     _inline_toplevel_model_refs!(
         comp, compdir, visited;
-        parent_meta = leaf_env, api_meta = api_meta, staged = leaf_staged,
+        parent_meta = leaf_env, api_meta = forward_meta, staged = leaf_staged,
         precision = leaf_effective
     )
     _inline_subsystem_refs!(
         comp, compdir, visited;
-        parent_meta = leaf_env, api_meta = api_meta, staged = leaf_staged,
+        parent_meta = leaf_env, api_meta = forward_meta, staged = leaf_staged,
         precision = leaf_effective
     )
 
@@ -1330,6 +1339,27 @@ function _resolve_mount_data_sources!(
     resolved = _resolve_data_source_urls(comp, compdir)
     resolved === nothing || (comp["data_sources"] = resolved["data_sources"])
     return comp
+end
+
+"""
+    _forward_through_assembly(api_meta, bindings, leaf_decls, mount_declared) -> Dict
+
+The loader-API-style bindings a mounted leaf hands its OWN mount edges (esm-spec
+§4.7 "Bindings reach through an assembly"): the caller's `api_meta`, plus every
+edge binding whose name the leaf does not declare (`leaf_decls`) but a document
+in its mount tree does (`mount_declared`, read before those mounts are inlined).
+A name nobody declares is not forwarded; the leaf's own close refuses it as
+`template_import_unknown_name`.
+"""
+function _forward_through_assembly(
+        api_meta::AbstractDict{String, <:Integer}, bindings::AbstractDict{String, <:Integer},
+        leaf_decls, mount_declared
+    )
+    forward = Dict{String, Int}(String(k) => Int(v) for (k, v) in api_meta)
+    for (k, v) in bindings
+        (!(k in leaf_decls) && k in mount_declared) && (forward[k] = Int(v))
+    end
+    return forward
 end
 
 """
@@ -2006,6 +2036,9 @@ function _resolve_refs_in_file!(
     # esm-spec §4.7 "Working precision crosses a mount": THIS document's effective
     # precision, which each of its edges compares its leaf against.
     effective = something(_declared_element_type(file), String(precision))
+    # esm-spec §4.7 "A mounted document's data sources": every subsystem leaf's
+    # `data_sources` (already substituted and located at its edge) collect here.
+    mounted = Dict{String, DataSource}()
     # Resolve model subsystem refs. The document's own index-set registry is
     # threaded down the walk so every referenced subsystem file's top-level
     # `index_sets` merge into it (esm-spec §4.7, mirroring §9.7.5).
@@ -2017,18 +2050,40 @@ function _resolve_refs_in_file!(
                 file.models, name, model, base_path, visited,
                 file.index_sets; api_meta = api_meta,
                 root_env = get(model_envs, String(name), root_env),
-                precision = effective
+                precision = effective, sources = mounted
             )
         end
     end
 
     # Resolve reaction system subsystem refs
-    return if file.reaction_systems !== nothing
+    if file.reaction_systems !== nothing
         for (name, rsys) in file.reaction_systems
             _resolve_reaction_system_refs!(file.reaction_systems, name, rsys, base_path, visited)
         end
     end
+    # Merge into THIS document; its own entry wins a name clash. Returned are the
+    # entries that could not be merged in place because `file` has no
+    # `data_sources` registry to merge into — the caller rebuilds it with them
+    # (`_adopt_mounted_sources`), since `EsmFile` is immutable.
+    if file.data_sources !== nothing
+        for (k, v) in mounted
+            haskey(file.data_sources, k) || (file.data_sources[k] = v)
+        end
+        empty!(mounted)
+    end
+    return mounted
 end
+
+"""
+    _adopt_mounted_sources(file, mounted) -> EsmFile
+
+`file` carrying the mounted `data_sources` `_resolve_refs_in_file!` could not
+merge in place (because `file` declared none): rebuilt with them as its
+registry, or `file` itself when there are none.
+"""
+_adopt_mounted_sources(file::EsmFile, mounted) =
+    (mounted === nothing || isempty(mounted)) ? file :
+    _rebuild(file; data_sources = Dict{String, DataSource}(mounted))
 
 """
     _resolve_model_refs!(models_dict, name, model, base_path, visited, registry)
@@ -2044,7 +2099,8 @@ function _resolve_model_refs!(
         registry::AbstractDict{String, IndexSet};
         api_meta::AbstractDict{String, <:Integer} = Dict{String, Int}(),
         root_env::AbstractDict{String, <:Integer} = Dict{String, Int}(),
-        precision::AbstractString = _DEFAULT_ELEMENT_TYPE
+        precision::AbstractString = _DEFAULT_ELEMENT_TYPE,
+        sources::Union{Nothing, AbstractDict{String, DataSource}} = nothing
     )
     # Only Model values carry subsystems to walk; a SubsystemRef leaf has none.
     model isa Model || return
@@ -2062,7 +2118,7 @@ function _resolve_model_refs!(
                 _resolve_subsystem_ref(
                     sub_value, base_path, visited, registry;
                     api_meta = api_meta, root_env = root_env,
-                    precision = precision
+                    precision = precision, sources = sources
                 )
             catch e
                 e isa SubsystemRefError || rethrow()
@@ -2073,7 +2129,7 @@ function _resolve_model_refs!(
             _resolve_model_refs!(
                 model.subsystems, sub_name, sub_value, base_path,
                 visited, registry; api_meta = api_meta, root_env = root_env,
-                precision = precision
+                precision = precision, sources = sources
             )
         end
     end
@@ -2173,7 +2229,8 @@ function _resolve_subsystem_ref(
         registry::AbstractDict{String, IndexSet};
         api_meta::AbstractDict{String, <:Integer} = Dict{String, Int}(),
         root_env::AbstractDict{String, <:Integer} = Dict{String, Int}(),
-        precision::AbstractString = _DEFAULT_ELEMENT_TYPE
+        precision::AbstractString = _DEFAULT_ELEMENT_TYPE,
+        sources::Union{Nothing, AbstractDict{String, DataSource}} = nothing
     )
     # esm-spec §9.7.10 form A: the edge's `expression_template_imports` inject a
     # discretization into the referenced component's own scope, threaded into
@@ -2186,7 +2243,6 @@ function _resolve_subsystem_ref(
         injected_imports = ref.expression_template_imports,
         index_set_rename = ref.index_set_rename,
         rename_where = "subsystem ref '$(ref.ref)'",
-        url_substitutions = ref.url_substitutions,
         precision = precision
     )
     n_models = loaded.models === nothing ? 0 : length(loaded.models)
@@ -2204,6 +2260,19 @@ function _resolve_subsystem_ref(
     # join the importing document's registry, so the importer's variables may
     # be shaped over the mesh file's axes and a disagreement fails loudly.
     _merge_subsystem_index_sets!(registry, loaded, ref.ref)
+    # esm-spec §4.7 "A mounted document's data sources", at the typed walk as on
+    # the native one: the leaf as loaded already carries what its own mounts
+    # merged into it; THIS edge's `url_substitutions` apply, its locations
+    # resolve against the leaf's directory (§8.2.1), and they merge up.
+    leaf_sources = _typed_mount_data_sources(
+        loaded, ref.url_substitutions, ref.ref, base_path,
+        "subsystem ref '$(ref.ref)'"
+    )
+    if sources !== nothing
+        for (k, v) in leaf_sources
+            haskey(sources, k) || (sources[k] = v)
+        end
+    end
     # esm-spec §4.7 "Working precision crosses a mount".
     return _carry_mounted_element_type!(
         first(values(loaded.models)),
@@ -2218,6 +2287,78 @@ _resolve_subsystem_ref(
     api_meta::AbstractDict{String, <:Integer} = Dict{String, Int}()
 ) =
     _resolve_subsystem_ref(SubsystemRef(ref), base_path, visited, registry; api_meta = api_meta)
+
+"""
+    _typed_mount_data_sources(loaded, subs, ref, base_path, where) -> Dict{String,DataSource}
+
+The typed walk's half of `_resolve_mount_data_sources!`: the mounted file
+`loaded`'s `data_sources` with the edge's `url_substitutions` applied (a
+leading value anchored on the MOUNTING document's directory `base_path`) and
+then located against the leaf's own directory (§8.2.1). A leaf loaded from a
+URL joins a still-relative location onto its URL directory (RFC 3986), as its
+own relative refs do.
+"""
+function _typed_mount_data_sources(
+        loaded::EsmFile, subs, ref::AbstractString, base_path::AbstractString,
+        where::AbstractString
+    )
+    out = Dict{String, DataSource}()
+    ds = loaded.data_sources
+    if ds === nothing || isempty(ds)
+        # Still validated: a key naming no placeholder is refused even when the
+        # leaf declares no sources at all.
+        subs === nothing || apply_mount_url_substitutions!(
+            OrderedDict{String, Any}(), subs, base_path, where
+        )
+        return out
+    end
+    native = OrderedDict{String, Any}(
+        "data_sources" => OrderedDict{String, Any}(
+            name => OrderedDict{String, Any}(
+                "source" => OrderedDict{String, Any}(
+                    "url_template" => d.source.url_template,
+                    "mirrors" => d.source.mirrors === nothing ? nothing :
+                        Any[m for m in d.source.mirrors]
+                )
+            ) for (name, d) in ds
+        )
+    )
+    apply_mount_url_substitutions!(native, subs, base_path, where)
+    r = _expand_ref_env(String(ref))
+    if _is_url(r) || _is_url(base_path)
+        leafdir = _url_dirname(_canonical_ref(r, base_path))
+        locate(t) = (
+                startswith(t, "{") || startswith(t, "/") ||
+                match(_URL_TEMPLATE_SCHEME_RE, t) !== nothing
+            ) ? t : _url_join(leafdir, t)
+        for (_, e) in native["data_sources"]
+            src = e["source"]
+            src["url_template"] = locate(src["url_template"])
+            ms = src["mirrors"]
+            ms === nothing || (src["mirrors"] = Any[locate(m) for m in ms])
+        end
+    else
+        native = something(
+            _resolve_data_source_urls(native, dirname(abspath(joinpath(base_path, r)))),
+            native
+        )
+    end
+    for (name, d) in ds
+        src = native["data_sources"][name]["source"]
+        ms = src["mirrors"]
+        loc = DataSourceLocation(
+            String(src["url_template"]);
+            mirrors = ms === nothing ? nothing : String[String(m) for m in ms]
+        )
+        out[name] = DataSource(
+            d.kind, loc; temporal = d.temporal, determinism = d.determinism,
+            reader_options = d.reader_options, select = d.select,
+            record_filter = d.record_filter, extent = d.extent,
+            reference = d.reference, metadata = d.metadata
+        )
+    end
+    return out
+end
 
 """
     _resolve_reaction_system_refs!(rsys_dict, name, rsys, base_path, visited)
@@ -2253,7 +2394,6 @@ function _load_ref(
         injected_imports::AbstractVector = Any[],
         index_set_rename = nothing,
         rename_where::AbstractString = "mount edge",
-        url_substitutions = nothing,
         precision::AbstractString = _DEFAULT_ELEMENT_TYPE
     )::EsmFile
     # esm-spec §4.7: expand `${VAR}` from the environment before resolving.
@@ -2277,8 +2417,6 @@ function _load_ref(
                 injected_imports = injected_imports,
                 index_set_rename = index_set_rename,
                 rename_where = rename_where,
-                url_substitutions = url_substitutions,
-                binder_dir = base_path,
                 precision = precision
             )
         else
@@ -2289,7 +2427,6 @@ function _load_ref(
                 injected_imports = injected_imports,
                 index_set_rename = index_set_rename,
                 rename_where = rename_where,
-                url_substitutions = url_substitutions,
                 precision = precision
             )
         end
@@ -2487,7 +2624,6 @@ function _load_local_ref(
         injected_imports::AbstractVector = Any[],
         index_set_rename = nothing,
         rename_where::AbstractString = "mount edge",
-        url_substitutions = nothing,
         precision::AbstractString = _DEFAULT_ELEMENT_TYPE
     )::EsmFile
     resolved_path = abspath(joinpath(base_path, ref))
@@ -2521,6 +2657,15 @@ function _load_local_ref(
     # (esm-spec §9.7.10 form A).
     ref_base = dirname(resolved_path)
     effective = _backfill_leaf_metaparameters(raw_ref_doc, metaparameters, api_meta)
+    # esm-spec §4.7 "Bindings reach through an assembly": what this leaf's OWN
+    # mount edges are handed as loader-API bindings — the caller's, plus each
+    # edge binding the leaf does not declare but a document it mounts does.
+    forward_meta = let md = _get_field(raw_ref_doc, :metaparameters, nothing)
+        decls = md isa AbstractDict ? Set(String[string(k) for k in keys(md)]) : Set{String}()
+        through = isempty(metaparameters) ? Set{String}() :
+            _collect_mount_declared_metaparameters(raw_ref_doc, ref_base)
+        _forward_through_assembly(api_meta, metaparameters, decls, through)
+    end
     # The mounted file may itself be an ASSEMBLY, whose own `models.<k>` entries
     # are `{ref}` mount edges. Which attachment point mounted it does not change
     # what it IS, and esm-spec §4.7 "Two mount forms, one mechanism" forbids
@@ -2545,23 +2690,11 @@ function _load_local_ref(
     leaf_effective = something(_declared_element_type(raw_ref_doc), String(precision))
     inlined_ref = _inline_toplevel_model_refs(
         ref_doc, ref_base; visited = visited,
-        metaparameters = api_meta,
+        metaparameters = forward_meta,
         precision = leaf_effective
     )
-    leaf_doc = inlined_ref === nothing ? ref_doc : inlined_ref
-    # esm-spec §4.7 "Binding a data source's location at the mount" / §8.2.1:
-    # this edge's `url_substitutions` on the leaf as resolved here (its own
-    # top-level mounts already hoisted), then the leaf's locations against its
-    # own directory — the same step `_resolve_mount_edge_core` runs.
-    if url_substitutions !== nothing
-        leaf_doc = _to_ordered(leaf_doc)
-        _resolve_mount_data_sources!(
-            leaf_doc, Dict{String, Any}("url_substitutions" => url_substitutions),
-            base_path, ref_base, rename_where
-        )
-    end
     file = _load_parsed(
-        leaf_doc; base_path = ref_base,
+        inlined_ref === nothing ? ref_doc : inlined_ref; base_path = ref_base,
         metaparameters = effective,
         injected_imports = injected_imports,
         index_set_rename = index_set_rename,
@@ -2581,13 +2714,16 @@ function _load_local_ref(
     # registry these nested mounts land in is THIS leaf's, so they fold against
     # the leaf's own closed environment — its declared defaults overlaid with the
     # loader-API bindings — not the root's.
-    _resolve_refs_in_file!(
-        file, ref_base, visited; api_meta = api_meta,
+    # esm-spec §4.7 "A mounted document's data sources": what the leaf's own
+    # subsystem mounts merged up lands in the leaf before THIS edge applies its
+    # `url_substitutions` to it (`_resolve_subsystem_ref`).
+    mounted = _resolve_refs_in_file!(
+        file, ref_base, visited; api_meta = forward_meta,
         root_env = _root_metaparameter_env(raw_ref_doc, effective),
         precision = leaf_effective
     )
 
-    return file
+    return _adopt_mounted_sources(file, mounted)
 end
 
 """
@@ -2606,8 +2742,6 @@ function _load_remote_ref(
         injected_imports::AbstractVector = Any[],
         index_set_rename = nothing,
         rename_where::AbstractString = "mount edge",
-        url_substitutions = nothing,
-        binder_dir::AbstractString = "",
         precision::AbstractString = _DEFAULT_ELEMENT_TYPE
     )::EsmFile
     local content::String
@@ -2651,16 +2785,14 @@ function _load_remote_ref(
     # subsystem-ref edge's injected discretization (esm-spec §9.7.10 form A)
     # folds into the single component's scope before resolution.
     url_base = _url_dirname(url)
-    # esm-spec §4.7 "Binding a data source's location at the mount": this edge's
-    # `url_substitutions`, a leading value anchored on the MOUNTING document's
-    # location. A remote leaf's own locations are not §8.2.1-resolved here.
-    if url_substitutions !== nothing
-        raw_data = _to_ordered(raw_data)
-        apply_mount_url_substitutions!(
-            raw_data, url_substitutions, binder_dir, rename_where
-        )
-    end
     effective = _backfill_leaf_metaparameters(raw_data, metaparameters, api_meta)
+    # esm-spec §4.7 "Bindings reach through an assembly", as in `_load_local_ref`.
+    forward_meta = let md = _get_field(raw_data, :metaparameters, nothing)
+        decls = md isa AbstractDict ? Set(String[string(k) for k in keys(md)]) : Set{String}()
+        through = isempty(metaparameters) ? Set{String}() :
+            _collect_mount_declared_metaparameters(raw_data, url_base)
+        _forward_through_assembly(api_meta, metaparameters, decls, through)
+    end
     file = _lower_and_coerce(
         raw_data, url_base; metaparameters = effective,
         injected_imports = injected_imports,
@@ -2678,12 +2810,12 @@ function _load_remote_ref(
     # shared `visited` set keep cycle detection canonical).
     # esm-spec §4.7 "Working precision crosses a mount": the leaf's own edges
     # compare against the leaf's effective precision.
-    _resolve_refs_in_file!(
-        file, url_base, visited; api_meta = api_meta,
+    mounted = _resolve_refs_in_file!(
+        file, url_base, visited; api_meta = forward_meta,
         precision = something(_declared_element_type(file), String(precision))
     )
 
-    return file
+    return _adopt_mounted_sources(file, mounted)
 end
 
 """
