@@ -463,8 +463,14 @@ pub(crate) fn is_array_file(file: &EsmFile) -> bool {
 /// `runtime_array_parameters` (API_SPEC §5.8): every shaped parameter that
 /// has a value and no `update` is read from the forcing buffer, seeded with
 /// that value, rather than folded in.
+///
+/// `flattened` is `flatten(file)` when the caller already holds it (the build
+/// pipeline's whole-document build); it is used in place of flattening `file`
+/// again, unless a per-variable element type makes the build work from an
+/// annotated copy, which is flattened afresh.
 pub(crate) fn build_array_compiled(
     file: &EsmFile,
+    flattened: Option<&crate::flatten::FlattenedSystem>,
     runtime_array_parameters: bool,
 ) -> Result<crate::simulate_array::ArrayCompiled, SimulateError> {
     // Arm the document's whole precision environment for the build
@@ -479,12 +485,20 @@ pub(crate) fn build_array_compiled(
     // boundaries marked before they are lowered, which means working from an
     // annotated COPY (`None`, and no copy at all, for every other document).
     let annotated = crate::precision_infer::annotated(file).map_err(SimulateError::Compile)?;
+    let flattened = flattened.filter(|_| annotated.is_none());
     let file = annotated.as_ref().unwrap_or(file);
     if !whole_document_is_one_model(file) {
         refuse_coupled_subsystem_event(file)?;
-        let flat = flatten(file).map_err(CompileError::from)?;
+        let owned;
+        let flat = match flattened {
+            Some(flat) => flat,
+            None => {
+                owned = flatten(file).map_err(CompileError::from)?;
+                &owned
+            }
+        };
         Ok(crate::simulate_array::ArrayCompiled::from_flattened_with(
-            &flat,
+            flat,
             runtime_array_parameters,
         )?)
     } else {

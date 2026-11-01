@@ -1814,6 +1814,12 @@ pub fn esm_problem<'a>(
     let mut build = BuildProducts::default();
     #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut model_name = opts.model_name.clone();
+    // The build pipeline's flattened system, while the typed document the
+    // compile path would flatten is still exactly the one it was flattened
+    // from (`PreparedBuild::flattened`): every stage below that changes that
+    // document drops it.
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+    let mut pipeline_flat: Option<FlattenedSystem> = None;
     let compiler = opts.compiler.unwrap_or_default();
     // A compiler this build or process cannot provide is refused before
     // anything is evaluated for it: that failure says nothing about the
@@ -1920,6 +1926,7 @@ pub fn esm_problem<'a>(
             // The whole-document build (several models, none selected) keeps
             // `None`: its names are qualified already, as on the compile path.
             model_name = prepared.model_name;
+            pipeline_flat = prepared.flattened;
             build.fields = prepared.fields;
             build.members = prepared.members;
             build.extents = prepared.extents;
@@ -2015,6 +2022,7 @@ pub fn esm_problem<'a>(
         && let Some(models) = f.models.as_mut()
     {
         crate::precision_infer::annotate_models(models, prec).map_err(SimulateError::Compile)?;
+        pipeline_flat = None;
     }
 
     // ---- (3c) Lower `table_lookup`, for a RAW-JSON input. ------------------
@@ -2033,8 +2041,15 @@ pub fn esm_problem<'a>(
     // evaluates the observed graph; without this the compiled right-hand side
     // never saw the array and ran on the declared default instead.
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(f) = owned_file.as_mut() {
-        supplied.bind_arrays(f, &opts.p, model_name.as_deref());
+    if let Some(f) = owned_file.as_mut()
+        && supplied.bind_arrays(f, &opts.p, model_name.as_deref())
+    {
+        pipeline_flat = None;
+    }
+    // A `p` entry may land on a declaration below (a value-invention or join
+    // key parameter's `default`, a data-fed parameter's dropped `update`).
+    if !opts.p.is_empty() {
+        pipeline_flat = None;
     }
     // A scalar parameter value invention reads (a skolem bin width) is
     // build-time data: the invented set's size depends on it, so the caller's
@@ -2079,6 +2094,7 @@ pub fn esm_problem<'a>(
     let backend = compile_backend(
         owned_file.as_ref(),
         flat_only,
+        pipeline_flat.as_ref(),
         model_name.as_deref(),
         opts.rhs,
         compiler,
@@ -2094,7 +2110,12 @@ pub fn esm_problem<'a>(
     if let Backend::Static(_) = &backend
         && let Some(f) = owned_file.as_ref()
     {
-        supplied.refuse_missing_static(f, &opts.p, model_name.as_deref())?;
+        supplied.refuse_missing_static(
+            f,
+            pipeline_flat.as_ref(),
+            &opts.p,
+            model_name.as_deref(),
+        )?;
     }
 
     // ---- (4b) State-free static evaluation. -------------------------------
@@ -2118,7 +2139,7 @@ pub fn esm_problem<'a>(
         let t0 = opts.sample_time.unwrap_or(tspan.0);
         let (fields, rows, eval_error) = static_observed_fields(
             owned_file.as_ref(),
-            flat_only,
+            flat_only.or(pipeline_flat.as_ref()),
             &opts.p,
             t0,
             model_name.as_deref(),
@@ -2991,6 +3012,7 @@ fn install_xla_program(
 fn compile_backend(
     file: Option<&EsmFile>,
     flat: Option<&FlattenedSystem>,
+    file_flattened: Option<&FlattenedSystem>,
     model_name: Option<&str>,
     mode: Rhs,
     compiler: Compiler,
@@ -3084,7 +3106,8 @@ fn compile_backend(
     // content: a scalar document and a gridded one are built by the same
     // machinery, so that what ran is a property of the name and not of the
     // input." So every document, scalar or gridded, builds the array runtime.
-    let mut compiled = crate::simulate::build_array_compiled(file, runtime_array_parameters)?;
+    let mut compiled =
+        crate::simulate::build_array_compiled(file, file_flattened, runtime_array_parameters)?;
     compiled.runtime_mode = runtime_mode;
     Ok(Backend::Array(Rc::new(compiled)))
 }
@@ -3643,11 +3666,10 @@ struct SuppliedData {
 impl SuppliedData {
     /// Capture what `opts` supplies. The shaped-parameter arrays are MOVED out
     /// of `opts.const_arrays` when they are the only reason the build pipeline
-    /// would run on a document of several models with none selected: they
-    /// need nothing from it there (stage 3d binds each onto its parameter), so
-    /// the whole-document build it would make is skipped. Otherwise the pipeline keeps them — it evaluates a
-    /// state-free document's observed graph with them — and they are copied
-    /// here.
+    /// would run on a document with a right-hand side to compile: they need
+    /// nothing from it there (stage 3d binds each onto its parameter).
+    /// Otherwise the pipeline keeps them — it evaluates a state-free
+    /// document's observed graph with them — and they are copied here.
     fn capture(opts: &mut ProblemOptions, raw: Option<&JsonValue>, file: Option<&EsmFile>) -> Self {
         #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
         let mut out = SuppliedData::default();
@@ -3659,9 +3681,7 @@ impl SuppliedData {
                 .extend(opts.build_providers.iter().map(|(k, _)| (k.clone(), ())));
             if !opts.const_arrays.is_empty() {
                 let shaped = shaped_parameter_keys(raw, file);
-                let several_models =
-                    opts.model_name.is_none() && model_count(raw, file).is_some_and(|n| n > 1);
-                let only_trigger = (several_models || raw.is_some_and(declares_derivative))
+                let only_trigger = raw.is_some_and(declares_derivative)
                     && !opts.build_pipeline
                     && !opts.pushdown_rewrite
                     && opts.build_providers.is_empty()
@@ -3688,14 +3708,21 @@ impl SuppliedData {
     /// for a parameter the document feeds from outside. Otherwise it becomes
     /// the parameter's inline `default`, or, for a parameter fed from outside,
     /// a constant snapshot in the forcing buffer (served by
-    /// [`Self::refuse_missing_array`]).
+    /// [`Self::refuse_missing_array`]). Answers whether it changed a
+    /// declaration of `file`.
     #[cfg(not(target_arch = "wasm32"))]
-    fn bind_arrays(&self, file: &mut EsmFile, p: &HashMap<String, f64>, selected: Option<&str>) {
+    fn bind_arrays(
+        &self,
+        file: &mut EsmFile,
+        p: &HashMap<String, f64>,
+        selected: Option<&str>,
+    ) -> bool {
+        let mut bound = false;
         if self.arrays.is_empty() {
-            return;
+            return bound;
         }
         let Some(models) = file.models.as_mut() else {
-            return;
+            return bound;
         };
         // With one model selected, a bare key names that model's parameter;
         // the other models are not built, so they cannot make it ambiguous.
@@ -3737,8 +3764,10 @@ impl SuppliedData {
                     continue;
                 }
                 var.default = Some(inline_value_of(arr));
+                bound = true;
             }
         }
+        bound
     }
 
     /// The missing-data gate for an array model: serve a forcing name no
@@ -3834,6 +3863,7 @@ impl SuppliedData {
     fn refuse_missing_static(
         &self,
         file: &EsmFile,
+        flattened: Option<&FlattenedSystem>,
         p: &HashMap<String, f64>,
         selected: Option<&str>,
     ) -> Result<(), SimulateError> {
@@ -3849,8 +3879,16 @@ impl SuppliedData {
         if !any {
             return Ok(());
         }
-        let Ok(flat) = crate::flatten::flatten(file) else {
-            return Ok(());
+        let owned;
+        let flat = match flattened {
+            Some(flat) => flat,
+            None => match crate::flatten::flatten(file) {
+                Ok(flat) => {
+                    owned = flat;
+                    &owned
+                }
+                Err(_) => return Ok(()),
+            },
         };
         for (name, var) in &flat.parameters {
             if !unvalued(var) || names_key(p, name) {
@@ -3982,18 +4020,6 @@ fn declares_derivative(raw: &JsonValue) -> bool {
                     .is_some_and(|eqs| eqs.iter().any(|e| e.get("lhs").is_some_and(has_d)))
             })
         })
-}
-
-/// How many `models` the document declares, off the raw JSON when there is one.
-#[cfg(not(target_arch = "wasm32"))]
-fn model_count(raw: Option<&JsonValue>, file: Option<&EsmFile>) -> Option<usize> {
-    match raw {
-        Some(r) => r
-            .get("models")
-            .and_then(JsonValue::as_object)
-            .map(|m| m.len()),
-        None => file.and_then(|f| f.models.as_ref()).map(|m| m.len()),
-    }
 }
 
 /// Every name a caller's `const_arrays` key may use for a shaped parameter of
