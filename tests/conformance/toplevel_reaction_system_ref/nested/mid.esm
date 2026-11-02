@@ -1,0 +1,13 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "mid",
+  "description": "An intermediate document in a subdirectory that itself mounts ../leaf.esm at a top-level reaction_systems.<k> {ref}, so the inner ref must resolve against this file's directory.",
+  "license": "MIT"
+ },
+ "reaction_systems": {
+  "Chem": {
+   "ref": "../leaf.esm"
+  }
+ }
+}

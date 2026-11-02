@@ -4000,12 +4000,13 @@ fn relative_to_cwd(path: &std::path::Path) -> String {
         .to_string()
 }
 
-/// The top-level `models.<k>` MOUNT EDGES a document declares in its SOURCE, as
-/// `"<k> ← <ref>"` lines in document order.
+/// The top-level `models.<k>` and `reaction_systems.<k>` MOUNT EDGES a document
+/// declares in its SOURCE, as `"<k> ← <ref>"` lines in document order (models
+/// first).
 ///
 /// Read from the raw file because a LOADED document no longer shows them: the
-/// mount splices the referenced leaf's model in under the same key (§4.7 /
-/// §9.7.10), leaving nothing to distinguish it from a model the document wrote
+/// mount splices the referenced leaf's component in under the same key (§4.7 /
+/// §9.7.10), leaving nothing to distinguish it from one the document wrote
 /// itself. `esm test` reports them so the §6.6 rule — a mount does not carry the
 /// mounted component's inline tests — is VISIBLE rather than silent: the reader
 /// is told which components were not asserted on here, and where their own
@@ -4020,17 +4021,23 @@ fn mounted_components(path: &std::path::Path) -> Vec<String> {
     let Ok(raw) = serde_json::from_str::<serde_json::Value>(&text) else {
         return Vec::new();
     };
-    let Some(models) = raw.get("models").and_then(|v| v.as_object()) else {
-        return Vec::new();
-    };
-    models
-        .iter()
-        // The mount-edge shape `inline_toplevel_model_refs` recognises: a `ref`
-        // and no inline `variables`.
-        .filter(|(_, m)| m.get("ref").is_some() && m.get("variables").is_none())
-        .map(|(k, m)| {
-            let target = m.get("ref").and_then(|v| v.as_str()).unwrap_or("<ref>");
-            format!("{k} ← {target}")
+    // The mount-edge shape `ref_loading::inline_toplevel_refs` recognises: a
+    // `ref` and no inline `variables` (a model) or `species` (a reaction system).
+    [("models", "variables"), ("reaction_systems", "species")]
+        .into_iter()
+        .filter_map(|(block, inline_key)| {
+            raw.get(block)
+                .and_then(|v| v.as_object())
+                .map(|systems| (systems, inline_key))
+        })
+        .flat_map(|(systems, inline_key)| {
+            systems
+                .iter()
+                .filter(move |(_, m)| m.get("ref").is_some() && m.get(inline_key).is_none())
+                .map(|(k, m)| {
+                    let target = m.get("ref").and_then(|v| v.as_str()).unwrap_or("<ref>");
+                    format!("{k} ← {target}")
+                })
         })
         .collect()
 }
@@ -4526,27 +4533,6 @@ fn collect_subsystem_ref_errors(
     let base = file_path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
-
-    // A top-level `reaction_systems.<k>` `{ref}` is a mount form this binding
-    // does not implement: `mount_form_unsupported` at the entry itself
-    // (`ref_loading::refuse_toplevel_reaction_system_refs`).
-    if let Some(rs) = json.get("reaction_systems").and_then(|v| v.as_object()) {
-        for (name, entry) in rs {
-            if let Some(ref_str) = entry.get("ref").and_then(|v| v.as_str())
-                && entry.get("species").is_none()
-            {
-                out.push(StructuralError {
-                    path: format!("/reaction_systems/{name}"),
-                    code: StructuralErrorCode::MountFormUnsupported,
-                    message: format!(
-                        "a top-level `reaction_systems.<k>` `{{ref}}` mount (ref '{ref_str}') is \
-                         not supported by this binding"
-                    ),
-                    details: serde_json::json!({ "ref": ref_str }),
-                });
-            }
-        }
-    }
 
     for container in ["models", "reaction_systems"] {
         let Some(systems) = json.get(container).and_then(|v| v.as_object()) else {

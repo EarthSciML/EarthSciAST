@@ -37,11 +37,11 @@ at a root. A leaf that declares no precision adopts its mounter's.
   precision is NOT written. All five bindings assert it, plus the load → emit →
   load fixed point.
 - `load_errors` — `{fixture: {code: [bindings]}}`. The bindings implement
-  complementary reaction-system mount forms (Rust, Python, TypeScript and Go
-  mount a reaction system under a reaction system's `subsystems.<k>` and refuse
-  the top-level form with `mount_form_unsupported`; Julia mounts the top-level
-  form and refuses the other at parse), so each fixture names who raises which
-  code. A binding listed under no code must still refuse the fixture.
+  different reaction-system mount forms (Python, TypeScript and Go mount a
+  reaction system under a reaction system's `subsystems.<k>` and refuse the
+  top-level form with `mount_form_unsupported`; Julia mounts the top-level form
+  and refuses the other at parse; Rust mounts both), so each fixture names who
+  raises which code. A binding listed under no code must still refuse the fixture.
 - `values`, `build_errors` — asserted by the bindings in `evaluated_by` (those
   that evaluate per-variable precision; today Rust). Values are compared bit for
   bit: `0.9999999403953552` is the binary32 witness, `2265007015` the key that

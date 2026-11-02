@@ -529,7 +529,7 @@ func TestReorderedLoadChecksExtentAgainstTheAuthoredTree(t *testing.T) {
 // `reaction_systems.<k>` `{ref}` mount form, so it REFUSES the entry —
 // `mount_form_unsupported` at `/reaction_systems/<k>` — rather than decoding the
 // stub as an empty reaction system and loading clean with nothing mounted.
-// (Julia is the one binding that implements the form.)
+// (Julia and Rust implement the form.)
 func TestTopLevelReactionSystemRefIsRefusedLoudly(t *testing.T) {
 	_, err := LoadPath(mrFixture(t, "fixtures", "mount_form_unsupported", "toplevel_reaction_system_ref.esm"))
 	if err == nil {
@@ -550,5 +550,53 @@ func TestTopLevelReactionSystemRefIsRefusedLoudly(t *testing.T) {
 	// mount — still loads.
 	if _, err := LoadPath(mrFixture(t, "fixtures", "mount_form_unsupported", "reaction_system_leaf.esm")); err != nil {
 		t.Errorf("an inline reaction system must still load: %v", err)
+	}
+}
+
+// tests/conformance/toplevel_reaction_system_ref/: this binding is not in
+// implemented_by, so every fixture there that mounts a top-level
+// reaction_systems.<k> {ref} is refused with mount_form_unsupported, and the
+// inline twins load.
+func TestTopLevelReactionSystemRefConformanceFixturesAreRefused(t *testing.T) {
+	dir := mrFixture(t, "conformance", "toplevel_reaction_system_ref")
+	raw, err := os.ReadFile(filepath.Join(dir, "expected.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var expected struct {
+		ImplementedBy []string                   `json:"implemented_by"`
+		Loads         map[string]string          `json:"loads"`
+		LoadErrors    map[string]json.RawMessage `json:"load_errors"`
+	}
+	if err := json.Unmarshal(raw, &expected); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range expected.ImplementedBy {
+		if b == "go" {
+			t.Fatal("expected.json lists go as implementing the form; this test asserts the refusal")
+		}
+	}
+	var mounts []string
+	for f := range expected.Loads {
+		mounts = append(mounts, f)
+	}
+	for f := range expected.LoadErrors {
+		mounts = append(mounts, f)
+	}
+	for _, f := range mounts {
+		_, err := LoadPath(filepath.Join(dir, f))
+		var et *ExpressionTemplateError
+		if !errors.As(err, &et) || et.Code != CodeMountFormUnsupported {
+			t.Errorf("%s: error %v; want %s", f, err, CodeMountFormUnsupported)
+			continue
+		}
+		if !strings.HasPrefix(et.Path, "/reaction_systems/") {
+			t.Errorf("%s: path = %q; want /reaction_systems/<k>", f, et.Path)
+		}
+	}
+	for _, inline := range expected.Loads {
+		if _, err := LoadPath(filepath.Join(dir, inline)); err != nil {
+			t.Errorf("%s must load: %v", inline, err)
+		}
 	}
 }

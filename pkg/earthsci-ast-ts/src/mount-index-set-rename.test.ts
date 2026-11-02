@@ -353,7 +353,7 @@ describe('a top-level reaction_systems.<k> {ref} is refused loudly (esm-spec §4
   // This binding does not implement the top-level `reaction_systems.<k>` `{ ref }`
   // mount form, so it refuses the entry — `mount_form_unsupported` at
   // `/reaction_systems/<k>` — rather than leaving an unresolved stub where a
-  // reaction system belongs. (Julia is the one binding that implements the form.)
+  // reaction system belongs. (Julia and Rust implement the form.)
   it('refuses the mount with mount_form_unsupported at the entry', () => {
     let err: unknown
     try {
@@ -372,4 +372,40 @@ describe('a top-level reaction_systems.<k> {ref} is refused loudly (esm-spec §4
       .reaction_systems
     expect(Object.keys(rs.Chem.species)).toEqual(['A', 'B'])
   })
+})
+
+describe('tests/conformance/toplevel_reaction_system_ref (esm-spec §4.7)', () => {
+  // This binding is not in `implemented_by`, so every fixture there that mounts a
+  // top-level `reaction_systems.<k>` `{ ref }` is refused with
+  // `mount_form_unsupported`, and the inline twins load.
+  const dir = 'conformance/toplevel_reaction_system_ref'
+  const expected = JSON.parse(readFileSync(path.join(TESTS, dir, 'expected.json'), 'utf8')) as {
+    implemented_by: string[]
+    loads: Record<string, string>
+    load_errors: Record<string, unknown>
+  }
+
+  it('does not list typescript as implementing the form', () => {
+    expect(expected.implemented_by).not.toContain('typescript')
+  })
+
+  for (const fixture of [...Object.keys(expected.loads), ...Object.keys(expected.load_errors)]) {
+    it(`refuses ${fixture} with mount_form_unsupported`, () => {
+      let err: unknown
+      try {
+        loadResolved(`${dir}/${fixture}`)
+      } catch (e) {
+        err = e
+      }
+      expect(err).toBeDefined()
+      expect((err as { code?: string }).code).toBe('mount_form_unsupported')
+      expect((err as { path?: string }).path).toMatch(/^\/reaction_systems\//)
+    })
+  }
+
+  for (const inline of new Set(Object.values(expected.loads))) {
+    it(`loads ${inline}`, () => {
+      expect(() => loadResolved(`${dir}/${inline}`)).not.toThrow()
+    })
+  }
 })

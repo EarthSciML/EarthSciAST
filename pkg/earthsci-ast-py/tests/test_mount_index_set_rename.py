@@ -287,7 +287,7 @@ def test_toplevel_reaction_system_ref_is_refused_loudly():
     ``reaction_systems.<k>`` ``{ref}`` mount form, so it REFUSES the entry —
     ``mount_form_unsupported`` at ``/reaction_systems/<k>`` — rather than coercing
     the stub into an empty reaction system and loading clean with nothing mounted.
-    (Julia is the one binding that implements the form.)"""
+    (Julia and Rust implement the form.)"""
     from earthsci_ast.parse import SubsystemRefError
 
     fixture = os.path.join(
@@ -307,3 +307,23 @@ def test_toplevel_reaction_system_ref_is_refused_loudly():
         set(s.name for s in leaf.reaction_systems["Chem"].species) == {"A", "B"}
         or len(leaf.reaction_systems["Chem"].species) == 2
     )
+
+
+def test_toplevel_reaction_system_ref_conformance_fixtures_are_refused():
+    """``tests/conformance/toplevel_reaction_system_ref/``: this binding is not in
+    ``implemented_by``, so every fixture there that mounts a top-level
+    ``reaction_systems.<k>`` ``{ref}`` is refused with ``mount_form_unsupported``,
+    and the inline twins load."""
+    from earthsci_ast.parse import SubsystemRefError
+
+    d = os.path.join(TESTS, "conformance", "toplevel_reaction_system_ref")
+    with open(os.path.join(d, "expected.json")) as f:
+        expected = json.load(f)
+    assert "python" not in expected["implemented_by"]
+    for fixture in [*expected["loads"], *expected["load_errors"]]:
+        with pytest.raises(SubsystemRefError) as info:
+            load_path(os.path.join(d, fixture))
+        assert info.value.code == "mount_form_unsupported", fixture
+        assert info.value.path.startswith("/reaction_systems/"), fixture
+    for inline in set(expected["loads"].values()):
+        load_path(os.path.join(d, inline))

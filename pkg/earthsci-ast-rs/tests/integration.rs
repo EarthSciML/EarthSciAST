@@ -369,6 +369,8 @@ mod term_provenance;
 mod tests_blocks_execution;
 #[path = "toplevel_mount_edge_pipeline.rs"]
 mod toplevel_mount_edge_pipeline;
+#[path = "toplevel_reaction_system_ref.rs"]
+mod toplevel_reaction_system_ref;
 #[path = "transcendental_scale_conformance.rs"]
 mod transcendental_scale_conformance;
 #[path = "undeclared_operand_gate.rs"]

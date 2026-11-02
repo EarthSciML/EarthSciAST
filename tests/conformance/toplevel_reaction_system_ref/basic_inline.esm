@@ -1,0 +1,78 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "basic_inline",
+  "description": "basic.esm with the mounted reaction system written inline.",
+  "license": "MIT"
+ },
+ "models": {
+  "Host": {
+   "variables": {
+    "y": {
+     "type": "unknown",
+     "units": "1",
+     "default": 1.0,
+     "description": "an inline model beside the mount"
+    }
+   },
+   "equations": [
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "y"
+      ],
+      "wrt": "t"
+     },
+     "rhs": {
+      "op": "-",
+      "args": [
+       "y"
+      ]
+     }
+    }
+   ]
+  }
+ },
+ "reaction_systems": {
+  "Chem": {
+   "species": {
+    "A": {
+     "units": "mol/m^3",
+     "default": 1.0,
+     "description": "reactant"
+    },
+    "B": {
+     "units": "mol/m^3",
+     "default": 0.0,
+     "description": "product"
+    }
+   },
+   "parameters": {
+    "k": {
+     "units": "1/s",
+     "default": 0.3,
+     "description": "rate constant"
+    }
+   },
+   "reactions": [
+    {
+     "id": "R1",
+     "substrates": [
+      {
+       "species": "A",
+       "stoichiometry": 1
+      }
+     ],
+     "products": [
+      {
+       "species": "B",
+       "stoichiometry": 1
+      }
+     ],
+     "rate": "k"
+    }
+   ]
+  }
+ }
+}

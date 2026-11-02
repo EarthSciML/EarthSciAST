@@ -1,0 +1,14 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "unknown_selector",
+  "description": "The reaction_system selector names a reaction system the leaf does not declare: refused.",
+  "license": "MIT"
+ },
+ "reaction_systems": {
+  "Chem": {
+   "ref": "./two_systems_leaf.esm",
+   "reaction_system": "Missing"
+  }
+ }
+}
