@@ -498,9 +498,14 @@ func TestFlattenConformance(t *testing.T) {
 				t.Fatalf("load %s: unexpected error %v (corpus expects a %s from flatten)",
 					refusal.Fixture, err, refusal.Error)
 			}
-			if _, err := Flatten(file); err == nil {
+			_, err = Flatten(file)
+			if err == nil {
 				t.Fatalf("%s: flatten accepted a document the corpus says it must refuse (%s)",
 					refusal.Fixture, refusal.Reason)
+			}
+			if !refusalErrorMatches(err, refusal.Error) {
+				t.Fatalf("%s: flatten refused with %T (%v), corpus expects a %s",
+					refusal.Fixture, err, err, refusal.Error)
 			}
 		})
 	}
@@ -589,6 +594,17 @@ func isSubsequence(sub, whole []string) bool {
 		}
 	}
 	return i == len(sub)
+}
+
+// refusalErrorMatches reports whether err is the Go counterpart of the oracle's
+// named error class: the Go type carries the same name (compared without case,
+// since some Go error types are unexported). Python's generic `ValueError` has
+// no single Go counterpart, so any refusal satisfies it.
+func refusalErrorMatches(err error, name string) bool {
+	if name == "ValueError" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(fmt.Sprintf("%T", err)), strings.ToLower(name))
 }
 
 func isExpressionTemplateError(err error) bool {

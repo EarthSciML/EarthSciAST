@@ -24,7 +24,13 @@
  * generator recorded with.
  */
 import { describe, expect, it } from 'vitest'
-import { flatten, type FlattenedVariable, type FlattenedVariableMap } from './flatten.js'
+import {
+  ConflictingDerivativeError,
+  DimensionPromotionError,
+  flatten,
+  type FlattenedVariable,
+  type FlattenedVariableMap,
+} from './flatten.js'
 import { updateRules } from './classification.js'
 import { toAscii } from './pretty-print.js'
 import { loadFixture, readFixture } from './test-helpers.js'
@@ -171,12 +177,19 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     // also has a later bare algebraic equation), plus
     // `index_symbol_shadows_variable` and `loop_binder_shadowing_edges` — loop
     // symbols spelled like the model's own parameters, which must stay bare
-    // (esm-spec §4.3).
-    expect(corpus.cases.length).toBe(45)
-    // 4 = template_import_lib, couple_multiplicative_no_tendency, the
-    // nonterminating rewrite, and `coupling_resolution_edge_cases`, whose EDGE
-    // CASE 10 maps onto a target the document declares nowhere.
-    expect(corpus.refusals.length).toBe(4)
+    // (esm-spec §4.3), plus the five `pointwise_lift` cases — the index sets
+    // a lifted state is given, by size, by a shaped operand, and synthesized,
+    // an operator `ic(_var)` that `field_ics` records once per lifted state,
+    // and a state that already declares a shape, which the lift leaves alone
+    // (esm-libraries-spec §4.7.1 step 3, §4.7.5).
+    expect(corpus.cases.length).toBe(50)
+    // 6 = template_import_lib, couple_multiplicative_no_tendency, the
+    // nonterminating rewrite, `coupling_resolution_edge_cases`, whose EDGE
+    // CASE 10 maps onto a target the document declares nowhere,
+    // `lift_synthetic_name_clash`, a declared index set that takes the
+    // synthetic lift axis's name with another size, and
+    // `lift_placeholder_ic_conflict`, a state given two `ic(x)` entries.
+    expect(corpus.refusals.length).toBe(6)
     expect(corpus.oracle).toContain('earthsci_ast.flatten')
   })
 
@@ -344,6 +357,36 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     // The oracle raises `ValueError`; TypeScript's equivalent is `FlattenError`
     // (both are "this document cannot be flattened", not a diagnostic finding).
     expect(() => flatten(load(entry!.fixture))).toThrow(/no models or reaction systems/)
+  })
+
+  it('refuses a declared index set that clashes with a synthetic lift axis', () => {
+    const entry = corpus.refusals.find((r) =>
+      r.fixture.endsWith('lift_synthetic_name_clash.esm'),
+    ) as Refusal
+    expect(entry.error).toBe('DimensionPromotionError')
+    // esm-libraries-spec §4.7.5, "Pointwise lift: index sets".
+    expect(() => flatten(load(entry.fixture))).toThrow(DimensionPromotionError)
+  })
+
+  it('refuses a state with two initial conditions (authored + operator ic(_var))', () => {
+    const entry = corpus.refusals.find((r) =>
+      r.fixture.endsWith('lift_placeholder_ic_conflict.esm'),
+    ) as Refusal
+    expect(entry.error).toBe('ConflictingDerivativeError')
+    // esm-libraries-spec §4.7.5 step 4: `field_ics` holds at most one entry per state.
+    expect(() => flatten(load(entry.fixture))).toThrow(ConflictingDerivativeError)
+    expect(() => flatten(load(entry.fixture))).toThrow(/more than one initial condition.*Chem\.c/)
+  })
+
+  it('leaves a state that already declares a shape unlifted', () => {
+    const expected = corpus.cases.find((c) => c.id === 'lift_skips_shaped_state')
+    expect(expected).toBeDefined()
+    const flat = flatten(load(expected!.fixture))
+    // `Chem.m` declares `shape: ["cell"]`: its equation stays un-lifted and its
+    // declared shape is not overwritten; only the scalar `Chem.c` is lifted.
+    expect(flat.stateVariables['Chem.m'].shape).toEqual(['cell'])
+    expect(flat.liftedShapes).toEqual({ 'Chem.c': [4] })
+    expect(flat.equations.filter((e) => e.lifted === true).length).toBe(1)
   })
 
   it('never reaches flatten for a non-terminating rewrite (rejected at LOAD)', () => {

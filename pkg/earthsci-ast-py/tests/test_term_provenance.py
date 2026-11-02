@@ -113,14 +113,15 @@ def _context(flat, names: set[str], loops: set[str], salt: int) -> EvalContext:
     )
 
 
-def _cells(eq: FlattenedEquation):
-    """The per-cell loop bindings of a lifted equation, or one empty binding."""
+def _cells(flat, eq: FlattenedEquation):
+    """The per-cell loop bindings of a lifted equation, or one empty binding.
+    The lift ranges each loop over an index set, ``{"from": <name>}``."""
     if not eq.lifted:
         yield {}
         return
     ranges = eq.rhs.ranges
     loops = list(eq.rhs.output_idx)
-    grid = [range(int(ranges[k][0]), int(ranges[k][1]) + 1) for k in loops]
+    grid = [range(1, int(flat.index_sets[ranges[k]["from"]]["size"]) + 1) for k in loops]
     for point in np.ndindex(*[len(r) for r in grid]):
         yield {k: grid[d][point[d]] for d, k in enumerate(loops)}
 
@@ -141,7 +142,7 @@ def _check_invariant(flat, eq: FlattenedEquation) -> tuple[bool, bool]:
     try:
         for salt in range(SAMPLES):
             ctx = _context(flat, names, loops, salt)
-            for cell in _cells(eq):
+            for cell in _cells(flat, eq):
                 ctx.locals = dict(cell)
                 body = float(eval_expr(eq.body, ctx))
                 parts = [float(eval_expr(c.expr, ctx)) for c in eq.contributions]

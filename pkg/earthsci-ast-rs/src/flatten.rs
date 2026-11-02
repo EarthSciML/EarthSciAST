@@ -64,13 +64,16 @@ use thiserror::Error;
 /// and Rust agents can report the same failure using the same error name.
 #[derive(Error, Debug)]
 pub enum FlattenError {
-    /// A species participates in a reaction AND has an explicit `D(X, t)`
-    /// equation — the two derivative sources would need to be merged by an
-    /// explicit `operator_compose`, and no such rule was supplied.
-    #[error(
-        "Conflicting derivative for species {species:?}: explicit D(X, t) equation and reaction participation both present without an operator_compose rule to merge them"
-    )]
-    ConflictingDerivative { species: Vec<String> },
+    /// Two sources define the same state and nothing says which one holds:
+    /// a species participates in a reaction AND has an explicit `D(X, t)`
+    /// equation with no `operator_compose` rule to merge them, or a state has
+    /// more than one initial condition `ic(x)` (esm-libraries-spec §4.7.5
+    /// step 4). `species` names the states; `message` says which conflict.
+    #[error("{message}")]
+    ConflictingDerivative {
+        species: Vec<String>,
+        message: String,
+    },
 
     /// Dimension promotion failed.
     ///
@@ -588,7 +591,8 @@ pub struct FlattenedSystem {
     /// The file's single shared domain, passed through (v0.8.0).
     pub domain: Option<Domain>,
     /// The document-scoped `index_sets` registry (esm-spec v0.8.0), passed
-    /// through verbatim from the source [`EsmFile`]. Carried so a coupled
+    /// through from the source [`EsmFile`], plus any `_liftdim<d>_<extent>`
+    /// interval the pointwise lift adds (esm-libraries-spec §4.7.5). Carried so a coupled
     /// (multi-model) array system reaching the array runtime via
     /// [`crate::simulate_array::ArrayCompiled::from_flattened`] can resolve
     /// `faq` `ranges` `{ "from": <set> }`, `join.on` gates, and
@@ -619,7 +623,10 @@ pub struct FlattenedSystem {
     pub loader_fields: Vec<LoaderField>,
     /// Concrete integer grid shapes assigned by the pointwise spatial lift
     /// (esm-spec §10.5) to each lifted state variable, e.g.
-    /// `{"Chemistry.O3": [4, 2]}`. Empty when no lift ran.
+    /// `{"Chemistry.O3": [4, 2]}`. The state's `shape` in
+    /// [`Self::state_variables`] names the index sets of these extents, each a
+    /// key of [`Self::index_sets`] (esm-libraries-spec §4.7.5, "Pointwise lift:
+    /// index sets"). Empty when no lift ran.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub lifted_shapes: IndexMap<String, Vec<i64>>,
     /// Provenance metadata.
@@ -967,8 +974,16 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         apply_variable_map_removals(file, &mut parts, &merged_variable_renames);
     loaded_producers.extend(source_fed_producers(&parts));
 
+    // The document-scoped index-set registry, which the pointwise lift extends
+    // with any `_liftdim<d>_<extent>` set it has to name.
+    let mut index_sets: IndexMap<String, IndexSet> = file
+        .index_sets
+        .as_ref()
+        .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        .unwrap_or_default();
+
     // Phase 5b: pointwise spatial lift (esm-spec §10.5).
-    maybe_apply_pointwise_lift(file, &mut parts, &loaded_producers)?;
+    maybe_apply_pointwise_lift(file, &mut parts, &loaded_producers, &mut index_sets)?;
 
     // Phase 5b′ (esm-libraries-spec §4.7.5 step 3a): resolve a right-hand-side
     // STRUCTURAL time derivative to the tendency this system defines for it
@@ -984,7 +999,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     // `field_ics` (esm-libraries-spec §4.7.5 step 4). After 5b′, so an
     // `ic(y) ~ D(x, t)` reaches `field_ics` as `x`'s resolved tendency (step
     // 3a), and before 5c, so classification never sees an `ic` equation.
-    extract_field_ics(&mut parts);
+    extract_field_ics(&mut parts)?;
 
     // Phase 5c: the §6.3.1 SUBSET maps, re-derived over the FINISHED system so
     // they see the equations coupling and the pointwise lift actually produced
@@ -1053,11 +1068,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         continuous_events,
         discrete_events,
         domain: file.domain.clone(),
-        index_sets: file
-            .index_sets
-            .as_ref()
-            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-            .unwrap_or_default(),
+        index_sets,
         function_tables: file
             .function_tables
             .as_ref()
@@ -1983,6 +1994,11 @@ fn detect_conflicts(file: &EsmFile, per_system: &[SystemBlock]) -> Result<(), Fl
         conflicting_species.sort();
         conflicting_species.dedup();
         return Err(FlattenError::ConflictingDerivative {
+            message: format!(
+                "Conflicting derivative for species {conflicting_species:?}: explicit \
+                 D(X, t) equation and reaction participation both present without an \
+                 operator_compose rule to merge them"
+            ),
             species: conflicting_species,
         });
     }
@@ -2042,7 +2058,7 @@ fn assemble_output(per_system: Vec<SystemBlock>) -> AssembledParts {
 /// (esm-spec §11.4.1) out of the ordinary equation list into `field_ics`, as
 /// `(target_state, rhs)` — the downstream simulator folds them into `u0` from
 /// the data-Provider seam rather than treating them as state ODEs.
-fn extract_field_ics(parts: &mut AssembledParts) {
+fn extract_field_ics(parts: &mut AssembledParts) -> Result<(), FlattenError> {
     // An `ic` equation's contribution list leaves with it: `field_ics` carries
     // none (esm-libraries-spec §4.7.5).
     let mut kept = Vec::with_capacity(parts.equations.len());
@@ -2054,6 +2070,28 @@ fn extract_field_ics(parts: &mut AssembledParts) {
         }
     }
     parts.equations = kept;
+    // One initial condition per state (esm-libraries-spec §4.7.5 step 4
+    // `field_ics`). Two — an authored `ic(x)` and an operator's `ic(_var)`
+    // expanded onto `x`, or two such templates — leave nothing to say which
+    // one holds, so the document is refused rather than one silently winning.
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut duplicated: Vec<String> = Vec::new();
+    for (target, _) in &parts.field_ics {
+        if !seen.insert(target.as_str()) && !duplicated.contains(target) {
+            duplicated.push(target.clone());
+        }
+    }
+    if !duplicated.is_empty() {
+        return Err(FlattenError::ConflictingDerivative {
+            message: format!(
+                "states have more than one initial condition `ic(x)` (an authored one \
+                 and an operator's `ic(_var)` expanded onto it, or two such templates): {}",
+                duplicated.join(", ")
+            ),
+            species: duplicated,
+        });
+    }
+    Ok(())
 }
 
 /// Phase 5a of [`flatten`]: apply post-collection `variable_map` parameter
@@ -2251,6 +2289,7 @@ fn maybe_apply_pointwise_lift(
     file: &EsmFile,
     parts: &mut AssembledParts,
     loaded_producers: &HashMap<String, usize>,
+    index_sets: &mut IndexMap<String, IndexSet>,
 ) -> Result<(), FlattenError> {
     let pointwise = file
         .coupling
@@ -2262,11 +2301,29 @@ fn maybe_apply_pointwise_lift(
         })
         .unwrap_or(false);
     if pointwise {
-        apply_pointwise_lift(
-            &mut parts.equations,
-            &mut parts.lifted_shapes,
+        // Every declared shape, for naming the lift's index sets.
+        let mut var_shapes: HashMap<String, Vec<String>> = HashMap::new();
+        for map in [
+            &parts.parameters,
+            &parts.observed_variables,
+            &parts.state_variables,
+        ] {
+            for (name, var) in map {
+                if let Some(shape) = var.shape.as_ref().filter(|s| !s.is_empty()) {
+                    var_shapes
+                        .entry(name.clone())
+                        .or_insert_with(|| shape.clone());
+                }
+            }
+        }
+        let lift = PointwiseLift {
+            lifted_shapes: &mut parts.lifted_shapes,
+            state_variables: &mut parts.state_variables,
+            var_shapes: &var_shapes,
+            index_sets,
             loaded_producers,
-        )?;
+        };
+        apply_pointwise_lift(&mut parts.equations, lift)?;
     }
     Ok(())
 }
@@ -5041,6 +5098,160 @@ fn makearray_extents(ma: &ExpressionNode) -> Vec<i64> {
     ext
 }
 
+/// The index set each lift dimension is NAMED by, or `None` per dimension.
+///
+/// Every operand an operator makearray gathers at the lift's own loops names an
+/// index set at each position it declares a shape for: `index(u, i, j)` with
+/// `u` on `[x, y]` says loop `i` runs over `x`. A name counts only when the
+/// registry declares it with the dimension's extent as its size, which rejects
+/// a staggered face array (`[x_nodes, y]`, one longer) gathered at the same
+/// loops. A dimension with no such name, or with two different ones, is
+/// `None`. A loop symbol repeated across dimensions (a diagonal gather) names
+/// nothing. esm-libraries-spec §4.7.5, "Pointwise lift: index sets".
+fn lift_axis_names(
+    mas: &[&ExpressionNode],
+    loops: &[String],
+    extents: &[i64],
+    var_shapes: &HashMap<String, Vec<String>>,
+    index_sets: &IndexMap<String, IndexSet>,
+) -> Vec<Option<String>> {
+    // Visits `node` and every expression-bearing child below it through
+    // [`ExpressionNode::for_each_child`], so a gather under `filter`,
+    // `lower`, `upper`, … names its dimension too.
+    fn walk(
+        node: &ExpressionNode,
+        dim_of: &HashMap<&str, Option<usize>>,
+        extents: &[i64],
+        var_shapes: &HashMap<String, Vec<String>>,
+        index_sets: &IndexMap<String, IndexSet>,
+        evidence: &mut [BTreeSet<String>],
+    ) {
+        if node.op == "index"
+            && let Some(Expr::Variable(name)) = node.args.first()
+            && let Some(shape) = var_shapes.get(name)
+            && shape.len() + 1 == node.args.len()
+        {
+            for (p, axis) in shape.iter().enumerate() {
+                let Some(loop_name) = index_arg_loop(&node.args[p + 1]) else {
+                    continue;
+                };
+                let Some(Some(d)) = dim_of.get(loop_name.as_str()) else {
+                    continue;
+                };
+                if index_sets.get(axis).and_then(|s| s.size) == Some(extents[*d]) {
+                    evidence[*d].insert(axis.clone());
+                }
+            }
+        }
+        node.for_each_child(&mut |c| {
+            if let Expr::Operator(child) = c {
+                walk(child, dim_of, extents, var_shapes, index_sets, evidence);
+            }
+        });
+    }
+    let mut dim_of: HashMap<&str, Option<usize>> = HashMap::new();
+    for (d, l) in loops.iter().enumerate() {
+        let repeated = dim_of.contains_key(l.as_str());
+        dim_of.insert(l.as_str(), if repeated { None } else { Some(d) });
+    }
+    let mut evidence: Vec<BTreeSet<String>> = vec![BTreeSet::new(); loops.len()];
+    for ma in mas {
+        walk(ma, &dim_of, extents, var_shapes, index_sets, &mut evidence);
+    }
+    evidence
+        .into_iter()
+        .map(|names| {
+            if names.len() == 1 {
+                names.into_iter().next()
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// The index-set registry as the document declares it, before the lift adds
+/// any `_liftdim<d>_<extent>` set, plus its names grouped by `size`. Built once
+/// per [`apply_pointwise_lift`] call.
+struct DeclaredIndexSets {
+    sets: IndexMap<String, IndexSet>,
+    by_size: HashMap<i64, Vec<String>>,
+}
+
+impl DeclaredIndexSets {
+    fn new(sets: IndexMap<String, IndexSet>) -> Self {
+        let mut by_size: HashMap<i64, Vec<String>> = HashMap::new();
+        for (name, set) in &sets {
+            if let Some(size) = set.size {
+                by_size.entry(size).or_default().push(name.clone());
+            }
+        }
+        Self { sets, by_size }
+    }
+}
+
+/// The index set of every lift dimension (esm-libraries-spec §4.7.5,
+/// "Pointwise lift: index sets"), registering a synthetic one where needed.
+///
+/// Dimension `d` (1-based in the name) is, in order: the index set its gathered
+/// operands name ([`lift_axis_names`]); else the only index set the document
+/// declares (`declared`, grouped by size) whose `size` is the extent; else
+/// `_liftdim<d>_<extent>`, added to `index_sets` as an interval of that size if
+/// it is not there yet.
+fn lift_index_sets(
+    mas: &[&ExpressionNode],
+    loops: &[String],
+    extents: &[i64],
+    var_shapes: &HashMap<String, Vec<String>>,
+    declared: &DeclaredIndexSets,
+    index_sets: &mut IndexMap<String, IndexSet>,
+    species: &str,
+) -> Result<Vec<String>, FlattenError> {
+    let named = lift_axis_names(mas, loops, extents, var_shapes, &declared.sets);
+    let mut axes = Vec::with_capacity(extents.len());
+    for (d, &extent) in extents.iter().enumerate() {
+        if let Some(Some(name)) = named.get(d) {
+            axes.push(name.clone());
+            continue;
+        }
+        if let Some([only]) = declared.by_size.get(&extent).map(Vec::as_slice) {
+            axes.push(only.clone());
+            continue;
+        }
+        let synthetic = format!("_liftdim{}_{extent}", d + 1);
+        match index_sets.get(&synthetic) {
+            None => {
+                index_sets.insert(
+                    synthetic.clone(),
+                    IndexSet {
+                        kind: "interval".to_string(),
+                        size: Some(extent),
+                        members: None,
+                        from_faq: None,
+                        member_factor: None,
+                        of: None,
+                        offsets: None,
+                        values: None,
+                    },
+                );
+            }
+            Some(s) if s.size == Some(extent) => {}
+            Some(_) => {
+                return Err(FlattenError::DimensionPromotion {
+                    message: format!(
+                        "pointwise lift: species '{species}' needs the index set \
+                         '{synthetic}' of size {extent} for grid dimension {}, but the \
+                         document declares '{synthetic}' with a different size",
+                        d + 1
+                    ),
+                });
+            }
+        }
+        axes.push(synthetic);
+    }
+    Ok(axes)
+}
+
 /// Rewrite a scalar (merged reaction + operator) RHS into its per-cell form over
 /// the spatial `loops`: a bare reference to an array variable becomes
 /// `index(var, loops…)`, and each spatial-operator `makearray` becomes
@@ -5097,6 +5308,20 @@ fn index_makearray(ma: &ExpressionNode, loops: &[String]) -> Expr {
     })
 }
 
+/// What [`apply_pointwise_lift`] reads and writes besides the equations.
+struct PointwiseLift<'a> {
+    /// Post-lift extents, keyed by lifted state.
+    lifted_shapes: &'a mut IndexMap<String, Vec<i64>>,
+    /// The flattened states; a lifted state's `shape` is set here.
+    state_variables: &'a mut IndexMap<String, ModelVariable>,
+    /// Every declared shape, by namespaced name.
+    var_shapes: &'a HashMap<String, Vec<String>>,
+    /// The flattened index-set registry.
+    index_sets: &'a mut IndexMap<String, IndexSet>,
+    /// Loaded field name → rank.
+    loaded_producers: &'a HashMap<String, usize>,
+}
+
 /// Pointwise spatial lift (esm-spec §10.5). Promotes every state ODE that
 /// `operator_compose` merged with a spatial operator (its merged RHS carries an
 /// operator `makearray`) from a 0-D scalar to the operator's grid shape, and
@@ -5106,18 +5331,41 @@ fn index_makearray(ma: &ExpressionNode, loops: &[String]) -> Expr {
 ///
 /// Per-cell indexing applies inside each contribution; the `faq` wrapper goes
 /// around their left-fold sum (esm-libraries-spec §4.7.5).
+///
+/// Each lifted state's `shape` becomes the lift's index sets
+/// ([`lift_index_sets`]), its extents go to `lifted_shapes`, and both `faq`
+/// wrappers range each loop `{"from": <index set>}`.
 fn apply_pointwise_lift(
     equations: &mut [FlatEq],
-    lifted_shapes: &mut IndexMap<String, Vec<i64>>,
-    loaded_producers: &HashMap<String, usize>,
+    lift: PointwiseLift<'_>,
 ) -> Result<(), FlattenError> {
+    let PointwiseLift {
+        lifted_shapes,
+        state_variables,
+        var_shapes,
+        index_sets,
+        loaded_producers,
+    } = lift;
+    // Only a set the document declares is matched by size; the lift's own
+    // `_liftdim<d>_<extent>` sets are not.
+    let declared = DeclaredIndexSets::new(index_sets.clone());
     // A species is lifted iff its state ODE's merged RHS carries a spatial-operator
-    // makearray (the advection contribution operator_compose added).
+    // makearray (the advection contribution operator_compose added) and it does
+    // not already declare a shape: a state that already lives on a grid has
+    // nothing to lift, and its declared shape stands (Julia
+    // `_pointwise_lifted_species`).
     let mut lifted: HashSet<String> = HashSet::new();
     for FlatEq { eq, .. } in equations.iter() {
         let Some(species) = extract_ddt_dependent(&eq.lhs) else {
             continue;
         };
+        if state_variables
+            .get(&species)
+            .and_then(|v| v.shape.as_ref())
+            .is_some_and(|s| !s.is_empty())
+        {
+            continue;
+        }
         let mut mas: Vec<&ExpressionNode> = Vec::new();
         collect_makearrays(&mut mas, &eq.rhs);
         if !mas.is_empty() {
@@ -5168,10 +5416,16 @@ fn apply_pointwise_lift(
         })?;
 
         let extents = makearray_extents(first_ma);
-        // The post-lift grid shape, recorded as a first-class flattened field
-        // (esm-libraries-spec §4.7.5 step 4 `lifted_shapes`) so a consumer need
-        // not re-infer it from the lifted equations' index use.
+        let axes = lift_index_sets(
+            &mas, &loops, &extents, var_shapes, &declared, index_sets, &species,
+        )?;
+        // The lifted state lives on the lift's index sets: its `shape` names
+        // them and `lifted_shapes` records their sizes (esm-libraries-spec
+        // §4.7.5), so a consumer need not re-infer either from the equations.
         lifted_shapes.insert(species.clone(), extents.clone());
+        if let Some(var) = state_variables.get_mut(&species) {
+            var.shape = Some(axes.clone());
+        }
 
         // Operands to index per cell: the lifted species plus any loaded producer
         // whose rank matches the grid rank (e.g. a grid-shaped wind field).
@@ -5182,19 +5436,17 @@ fn apply_pointwise_lift(
             }
         }
 
-        // Grid ranges: dense `[1, extent]` intervals keyed by the loop symbols.
+        // Grid ranges: each loop symbol over its dimension's index set.
         let mut ranges: HashMap<String, RangeSpec> = HashMap::new();
-        for (d, loop_name) in loops.iter().enumerate() {
-            ranges.insert(loop_name.clone(), RangeSpec::Interval([1, extents[d]]));
+        for (loop_name, axis) in loops.iter().zip(&axes) {
+            ranges.insert(
+                loop_name.clone(),
+                RangeSpec::IndexSetRef {
+                    from: axis.clone(),
+                    of: None,
+                },
+            );
         }
-
-        // The species' DECLARED shape is left alone. A synthetic `_lift_<loop>`
-        // axis used to be written here so downstream consumers saw an array
-        // state, but that fabricates a `shape` the document never declared —
-        // and step 4 requires each map to carry the DECLARED variable. The real
-        // post-lift grid shape now travels in `lifted_shapes` above, which is
-        // the field the spec provides for exactly this, and the array simulator
-        // infers the concrete extent from the lifted equations regardless.
 
         let idx_species = index_node(&species, &loops);
         let d_body = Expr::operator(ExpressionNode {
@@ -5527,14 +5779,175 @@ mod tests {
         let loaded_producers: HashMap<String, usize> = HashMap::new();
 
         let mut lifted_shapes: IndexMap<String, Vec<i64>> = IndexMap::new();
-        let err = apply_pointwise_lift(&mut equations, &mut lifted_shapes, &loaded_producers)
-            .unwrap_err();
+        let mut state_variables: IndexMap<String, ModelVariable> = IndexMap::new();
+        let mut index_sets: IndexMap<String, IndexSet> = IndexMap::new();
+        let lift = PointwiseLift {
+            lifted_shapes: &mut lifted_shapes,
+            state_variables: &mut state_variables,
+            var_shapes: &HashMap::new(),
+            index_sets: &mut index_sets,
+            loaded_producers: &loaded_producers,
+        };
+        let err = apply_pointwise_lift(&mut equations, lift).unwrap_err();
         match err {
             FlattenError::DimensionPromotion { message } => {
                 assert!(message.contains("pointwise lift"), "message: {message}");
                 assert!(message.contains("'C'"), "message: {message}");
             }
             other => panic!("expected DimensionPromotion, got {other:?}"),
+        }
+    }
+
+    fn interval(size: i64) -> IndexSet {
+        IndexSet {
+            kind: "interval".to_string(),
+            size: Some(size),
+            members: None,
+            from_faq: None,
+            member_factor: None,
+            of: None,
+            offsets: None,
+            values: None,
+        }
+    }
+
+    // `lift_axis_names` walks every expression-bearing child through
+    // `for_each_child`: a gather that sits only in an faq's `filter` (never
+    // in `args`/`expr`/`values`) still names the dimension's index set.
+    #[test]
+    fn lift_axis_names_reads_a_gather_in_a_filter() {
+        let gather = Expr::operator(ExpressionNode {
+            op: "index".to_string(),
+            args: vec![
+                Expr::Variable("u".to_string()),
+                Expr::Variable("i".to_string()),
+            ],
+            ..Default::default()
+        });
+        let filter = Expr::operator(ExpressionNode {
+            op: ">".to_string(),
+            args: vec![gather, Expr::Number(0.0)],
+            ..Default::default()
+        });
+        let faq = Expr::operator(ExpressionNode {
+            op: "faq".to_string(),
+            expr: Some(Box::new(Expr::Number(1.0))),
+            filter: Some(Box::new(filter)),
+            output_idx: Some(vec![]),
+            ..Default::default()
+        });
+        let ma = ExpressionNode {
+            op: "makearray".to_string(),
+            regions: Some(vec![vec![[
+                crate::types::RegionBound::Int(1),
+                crate::types::RegionBound::Int(3),
+            ]]]),
+            values: Some(vec![faq]),
+            ..Default::default()
+        };
+        let var_shapes: HashMap<String, Vec<String>> =
+            HashMap::from([("u".to_string(), vec!["x".to_string()])]);
+        let mut index_sets: IndexMap<String, IndexSet> = IndexMap::new();
+        index_sets.insert("x".to_string(), interval(3));
+        // A second size-3 set, so the size fallback could not pick `x` alone.
+        index_sets.insert("y".to_string(), interval(3));
+        let named = lift_axis_names(&[&ma], &["i".to_string()], &[3], &var_shapes, &index_sets);
+        assert_eq!(named, vec![Some("x".to_string())]);
+    }
+
+    // A state that already declares a non-empty `shape` is not lifted: its
+    // equation stays as written and its declared shape stands (Julia
+    // `_pointwise_lifted_species`).
+    #[test]
+    fn pointwise_lift_skips_a_state_with_a_declared_shape() {
+        let gather = Expr::operator(ExpressionNode {
+            op: "index".to_string(),
+            args: vec![
+                Expr::Variable("C".to_string()),
+                Expr::Variable("i".to_string()),
+            ],
+            ..Default::default()
+        });
+        let makearray = Expr::operator(ExpressionNode {
+            op: "makearray".to_string(),
+            regions: Some(vec![vec![[
+                crate::types::RegionBound::Int(1),
+                crate::types::RegionBound::Int(3),
+            ]]]),
+            values: Some(vec![gather]),
+            ..Default::default()
+        });
+        let original = ddt("C", makearray);
+        let mut equations = vec![FlatEq::authored(
+            original.clone(),
+            TermOrigin::Component {
+                component: "M".to_string(),
+            },
+        )];
+        let mut state_variables: IndexMap<String, ModelVariable> = IndexMap::new();
+        state_variables.insert(
+            "C".to_string(),
+            ModelVariable {
+                shape: Some(vec!["x".to_string()]),
+                ..var(VariableType::Unknown, None)
+            },
+        );
+        let mut lifted_shapes: IndexMap<String, Vec<i64>> = IndexMap::new();
+        let mut index_sets: IndexMap<String, IndexSet> = IndexMap::new();
+        index_sets.insert("x".to_string(), interval(3));
+        let lift = PointwiseLift {
+            lifted_shapes: &mut lifted_shapes,
+            state_variables: &mut state_variables,
+            var_shapes: &HashMap::new(),
+            index_sets: &mut index_sets,
+            loaded_producers: &HashMap::new(),
+        };
+        apply_pointwise_lift(&mut equations, lift).unwrap();
+        assert!(lifted_shapes.is_empty());
+        assert_eq!(
+            state_variables["C"].shape,
+            Some(vec!["x".to_string()]),
+            "declared shape must stand"
+        );
+        assert_eq!(
+            serde_json::to_value(&equations[0].eq).unwrap(),
+            serde_json::to_value(&original).unwrap(),
+            "the equation must not be lifted"
+        );
+    }
+
+    // Two `ic(x)` equations for the same state leave nothing to say which one
+    // holds, so `field_ics` classification refuses (esm-libraries-spec §4.7.5
+    // step 4).
+    #[test]
+    fn duplicate_field_ic_is_a_conflicting_derivative() {
+        let ic_eq = |rhs: f64| {
+            FlatEq::authored(
+                Equation {
+                    lhs: Expr::operator(ExpressionNode {
+                        op: "ic".to_string(),
+                        args: vec![Expr::Variable("Chem.c".to_string())],
+                        ..Default::default()
+                    }),
+                    rhs: Expr::Number(rhs),
+                    comment: None,
+                },
+                TermOrigin::Component {
+                    component: "Chem".to_string(),
+                },
+            )
+        };
+        let mut parts = assemble_output(Vec::new());
+        parts.equations = vec![ic_eq(1.0), ic_eq(2.0)];
+        match extract_field_ics(&mut parts).unwrap_err() {
+            FlattenError::ConflictingDerivative { species, message } => {
+                assert_eq!(species, vec!["Chem.c".to_string()]);
+                assert!(
+                    message.contains("more than one initial condition"),
+                    "message: {message}"
+                );
+            }
+            other => panic!("expected ConflictingDerivative, got {other:?}"),
         }
     }
 

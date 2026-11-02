@@ -34,7 +34,7 @@
 use earthsci_ast::SystemKind;
 use earthsci_ast::load_path;
 use earthsci_ast::to_ascii;
-use earthsci_ast::{FlattenedSystem, flatten};
+use earthsci_ast::{FlattenError, FlattenedSystem, flatten};
 use earthsci_ast::{ModelVariable, ParameterUpdateSpec};
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -500,6 +500,8 @@ fn flatten_matches_the_shared_corpus() {
 /// so what is pinned is the refusal itself and the STAGE it happens at — the
 /// nonterminating-rewrite fixture is rejected at LOAD (esm-spec §9.6.3), which
 /// is the corpus's own stated reason for recording it, and never reaches step 4.
+/// Where the two taxonomies share a name the variant is pinned too: a
+/// `ConflictingDerivativeError` refusal must be `FlattenError::ConflictingDerivative`.
 #[test]
 fn corpus_refusals_are_refused() {
     let corpus = corpus();
@@ -509,14 +511,22 @@ fn corpus_refusals_are_refused() {
         let path = tests_dir().join(rel);
         match load_path(&path) {
             Err(_) => {} // refused at load — never reaches step 4
-            Ok(file) => {
-                if flatten(&file).is_ok() {
-                    failures.push(format!(
-                        "{rel}: flattened, but the oracle refuses it with {}",
-                        entry["error"]
-                    ));
+            Ok(file) => match flatten(&file) {
+                Ok(_) => failures.push(format!(
+                    "{rel}: flattened, but the oracle refuses it with {}",
+                    entry["error"]
+                )),
+                Err(e) => {
+                    if entry["error"] == "ConflictingDerivativeError"
+                        && !matches!(e, FlattenError::ConflictingDerivative { .. })
+                    {
+                        failures.push(format!(
+                            "{rel}: the oracle refuses it with ConflictingDerivativeError, \
+                             Rust with {e:?}"
+                        ));
+                    }
                 }
-            }
+            },
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));

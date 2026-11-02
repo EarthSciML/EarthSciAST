@@ -30,6 +30,14 @@ function lhs_dependent_variable(expr::ASTExpr)::Union{String, Nothing}
     return nothing
 end
 
+# The variable an `ic(x)` left-hand side pins, or `nothing` for any other form.
+function _ic_lhs_variable(expr::ASTExpr)::Union{String, Nothing}
+    expr isa OpExpr || return nothing
+    expr.op == "ic" || return nothing
+    (length(expr.args) == 1 && expr.args[1] isa VarExpr) || return nothing
+    return (expr.args[1]::VarExpr).name
+end
+
 """
     differential_lhs_variable(expr) -> Union{String, Nothing}
 
@@ -413,7 +421,10 @@ function _apply_operator_compose!(
     new_owners = String[]
     for (i, eq) in enumerate(equations)
         owner = owners[i]
-        dep = lhs_dependent_variable(eq.lhs)
+        # A template `ic(_var) ~ e` (a field initial condition on the operator)
+        # expands with its equation, so every state gets its own entry
+        # (esm-libraries-spec §4.7.1 step 3, §4.7.5 step 4 `field_ics`).
+        dep = something(lhs_dependent_variable(eq.lhs), _ic_lhs_variable(eq.lhs), Some(nothing))
         if dep !== nothing && is_placeholder(dep) && owner in b_names
             for var in target_vars
                 cs = Contribution[

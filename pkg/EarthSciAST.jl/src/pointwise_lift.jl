@@ -183,7 +183,10 @@ function _apply_pointwise_lift!(
     lifted = _pointwise_lifted_species(equations, states)
     isempty(lifted) && return
     arrayvars = _pointwise_lift_operands(lifted, states, params, observeds)
-    size_to_names = _index_sets_by_size(index_sets)
+    # The registry as the document declares it, before the lift adds any
+    # `_liftdim<d>_<extent>` set: only a declared set names a lift dimension.
+    declared = OrderedDict{String, IndexSet}(index_sets)
+    size_to_names = _index_sets_by_size(declared)
     var_shapes = _declared_shapes(states, params, observeds)
 
     for (n, eq) in enumerate(equations)
@@ -199,17 +202,19 @@ function _apply_pointwise_lift!(
             mas[1], loops, size_to_names,
             species, rank;
             mas = mas, var_shapes = var_shapes,
-            index_sets = index_sets,
-            reg = template_registry
+            index_sets = declared,
+            reg = template_registry,
+            registry = index_sets
         )
 
         # Promote the species to the grid shape so the scoped-ic fold, array-cell
-        # discovery, and evaluator all see an array state.
+        # discovery, and evaluator all see an array state. esm-libraries-spec
+        # §4.7.5 ("Pointwise lift: index sets"): the shape names the lift's index
+        # sets, every one a key of `index_sets`.
         haskey(states, species) && (states[species] = _with_shape(states[species], gaxes))
         # esm-libraries-spec §4.7.5 step 4: report the post-lift grid EXTENTS on
-        # the flattened system, keyed by the lifted state's namespaced name. The
-        # promoted `shape` above names the axes; a consumer sizing a buffer needs
-        # the cell counts, which only this pass knows.
+        # the flattened system, keyed by the lifted state's namespaced name, so a
+        # consumer sizing a buffer need not look the shape's index sets up.
         lifted_shapes === nothing ||
             (lifted_shapes[species] = _makearray_extents(mas[1]))
         equations[n], contribs[n] = _pointwise_lift_equation(
@@ -402,17 +407,43 @@ function _lift_axis_names(
     ]
 end
 
+# Add the synthetic index set `axname` (`_liftdim<d>_<extent>`) to the flattened
+# registry as an interval of `extent`, so the lifted state's shape and its `faq`
+# ranges name only registered index sets (esm-libraries-spec §4.7.5, "Pointwise
+# lift: index sets"). The extent is part of the name, so a lift never registers
+# one name at two sizes; an existing entry of another size is one the document
+# declared, and is refused rather than shadowed.
+function _register_synthetic_index_set!(
+        registry::AbstractDict{String, IndexSet}, axname::String,
+        extent::Int, d::Int, species::String
+    )
+    if haskey(registry, axname)
+        registry[axname].size == extent && return registry
+        throw(
+            DimensionPromotionError(
+                "pointwise lift: species '$(species)' needs the index set " *
+                    "'$(axname)' of size $(extent) for grid dimension $(d), but " *
+                    "the document declares '$(axname)' with a different size"
+            )
+        )
+    end
+    registry[axname] = IndexSet("interval"; size = extent)
+    return registry
+end
+
 # Map each grid dimension to a declared index set — by NAME propagation from the
 # operand gathers where that is decisive (`_lift_axis_names`), else by matching
 # extents — producing the species' new shape axes (`gaxes`) and the aggregate
-# loop `ranges`.
+# loop `ranges`, each `{"from": <axis>}`. A synthetic axis is added to
+# `registry` (the flattened `index_sets`) when one is given.
 function _pointwise_lift_axes(
         ma::OpExpr, loops::Vector{String},
         size_to_names::Dict{Int, Vector{String}},
         species::String, rank::Int;
         mas::Union{Vector{OpExpr}, Nothing} = nothing,
         var_shapes::Union{Dict{String, Vector{String}}, Nothing} = nothing,
-        index_sets = nothing, reg = nothing
+        index_sets = nothing, reg = nothing,
+        registry::Union{AbstractDict{String, IndexSet}, Nothing} = nothing
     )
     extents = _makearray_extents(ma)
     named = (mas === nothing || var_shapes === nothing || index_sets === nothing) ?
@@ -432,23 +463,25 @@ function _pointwise_lift_axes(
             push!(gaxes, cands[1])
             ranges[loops[d]] = IndexSetRef(cands[1])
         else
-            # No unique index set of this size — fall back to a dense range and
-            # a synthetic shape axis (still a valid non-scalar shape).
+            # No unique index set of this size — fall back to a synthetic axis,
+            # registered in the flattened `index_sets`.
             if length(cands) > 1
                 @warn "pointwise lift: grid dimension $(d) of species " *
                     "'$(species)' (extent $(extents[d])) matches multiple " *
                     "declared index sets $(sort(cands)) by size, and no " *
                     "declared-shape operand gathered at loop " *
-                    "'$(loops[d])' names one of them unambiguously, so a " *
-                    "synthetic dense axis '_liftdim$(d)_$(extents[d])' is " *
-                    "used instead of an index-set reference."
+                    "'$(loops[d])' names one of them unambiguously, so the " *
+                    "synthetic index set '_liftdim$(d)_$(extents[d])' is " *
+                    "registered and used instead."
             end
-            # Synthetic-axis naming convention: `_liftdim<dim>_<extent>` — an
-            # underscore-prefixed name that cannot collide with a declared
-            # index set and stays self-describing in the promoted shape.
+            # Synthetic-axis naming convention: `_liftdim<dim>_<extent>`, a
+            # self-describing name the same in every binding
+            # (esm-libraries-spec §4.7.5, "Pointwise lift: index sets").
             axname = "_liftdim$(d)_$(extents[d])"
+            registry === nothing ||
+                _register_synthetic_index_set!(registry, axname, extents[d], d, species)
             push!(gaxes, axname)
-            ranges[loops[d]] = Any[1, extents[d]]
+            ranges[loops[d]] = IndexSetRef(axname)
         end
     end
     return gaxes, ranges

@@ -1112,7 +1112,7 @@ order; the application sequence and the reporting sequence are separate.
 3. **Match equations.** For each equation in system A, find a matching equation in system B by comparing dependent variables:
    - **Direct match:** Both equations have `D(x, t)` on the LHS with the same variable name `x`.
    - **Translation match:** The translate map maps A's variable to B's variable.
-   - **Placeholder expansion:** If system B's equation uses the `_var` placeholder (e.g., `D(_var, t) = ...`), it matches _every_ state variable in system A. The placeholder equation is cloned once per matched variable, with `_var` substituted for the actual variable name.
+   - **Placeholder expansion:** If system B's equation uses the `_var` placeholder (e.g., `D(_var, t) = ...`), it matches _every_ state variable in system A. The placeholder equation is cloned once per matched variable, with `_var` substituted for the actual variable name. An initial-condition template `ic(_var) ~ e` in B is a placeholder equation too, and MUST be cloned the same way: one `ic(x) ~ e` per state `x` of A, `_var` in `e` substituted as well. These clones are classified out into `field_ics` at step 4, so `field_ics` holds one entry per state of A, keyed by that state, and never an entry for `_var`. A clone is an initial condition like any authored one, so a state that already has its own `ic(x)`, or that a second `ic(_var)` template also reaches, has two; flatten MUST refuse that with `ConflictingDerivativeError` rather than keep both or let one win (step 4, `field_ics`; pinned by `tests/conformance/pointwise_lift/fixtures/lift_placeholder_ic_conflict.esm`). A clone of a lifted state reaches `field_ics` as written; the pointwise lift does not rewrite it. Pinned by `tests/conformance/pointwise_lift/fixtures/lift_placeholder_ic.esm`.
    - **Bare-name fallback:** B's dependent variable `B.x` matches A's equation for any `A.x` with
      the same LOCAL name. This is a name-based translation, so a hit renames like one (step 4's
      "the merged-away name does not survive").
@@ -1553,9 +1553,9 @@ TypeScript `camelCase`, others verbatim).
 | `index_sets` | ordered map | Document-scoped index-set registry; required to interpret arrayed equations. |
 | `function_tables` | ordered map | Merged function-table registry; resolves `table_lookup`. |
 | `template_registry` | ordered map | The merged expression-template registry specified above. |
-| `field_ics` | list of (state, expr) | Deferred scoped-reference / array `ic` equations (esm-spec §11.4.1). |
+| `field_ics` | list of (state, expr) | Deferred scoped-reference / array `ic` equations (esm-spec §11.4.1), at most one per state; two for one state are refused with `ConflictingDerivativeError`. |
 | `loader_fields` | list | Provider-served loaded fields the system consumes. |
-| `lifted_shapes` | ordered map | Post-lift grid shapes for arrayed states. |
+| `lifted_shapes` | ordered map | Post-lift grid extents of each pointwise-lifted state, keyed by the state. The state's `shape` names the index sets of those extents ("Pointwise lift: index sets" below). |
 
 - **The parameter subsets do not partition the struct; they partition `parameters`.**
   esm-spec §6.3.1 states that `brownian_parameters`, `discrete_parameters`,
@@ -1577,7 +1577,55 @@ TypeScript `camelCase`, others verbatim).
   language's map implementation is non-conforming.
 - **Full metadata, not names.** Each `name → variable` map carries the complete declared
   variable (units, `default`, `shape`, `update`, `distribution`), not a bare name list. A
-  consumer must be able to build a solver problem from the flattened form alone.
+  consumer must be able to build a solver problem from the flattened form alone. The one
+  field flatten changes is a pointwise-lifted state's `shape`, which becomes the lift's index
+  sets (below): after the lift the state is an array on those index sets.
+
+**Pointwise lift: index sets (normative).** The pointwise lift (esm-spec §10.5) promotes a
+scalar state onto the grid of the operator `makearray` its merged equation carries. A state that
+already declares a non-empty `shape` lives on a grid and is not lifted: its equation is left
+as merged, its declared `shape` stands, and it has no `lifted_shapes` entry (pinned by
+`tests/conformance/pointwise_lift/fixtures/lift_skips_shaped_state.esm`). The grid
+has rank `k`; the extent `n_d` of dimension `d` is the largest cell index the first such
+`makearray`'s `regions` address in that dimension; the loop symbol `ℓ_d` is read from a
+full-rank `index(<state>, ℓ_1, …, ℓ_k)` gather inside one of them. A binding MUST record which
+index set `X_d` each dimension lives on, chosen by the first rule that applies:
+
+1. **Named by an operand.** Inside the equation's operator `makearray`s, at any depth and in
+   any child field, and read on the expanded tree (esm-spec §9.6.4 rule 4: a surviving
+   `apply_expression_template` reference counts as its expansion), every
+   `index(v, a_1, …, a_m)` whose `v` is a flattened variable declaring a shape
+   `[s_1, …, s_m]` names, at each position `p` whose index expression's first bare name is
+   the loop symbol `ℓ_d`, the index set `s_p`. A name counts only when the document's
+   `index_sets` declares it with `size` `n_d`, which rejects a staggered face array (one
+   longer) gathered at the same loops, and a loop symbol that appears at more than one
+   dimension names nothing. When exactly one name counts for dimension `d`, `X_d` is that
+   name.
+2. **The only index set of that size.** Otherwise, when exactly one index set the document
+   declares has `size` `n_d`, `X_d` is that set.
+3. **A synthetic index set.** Otherwise `X_d` is `_liftdim<d>_<n_d>`, `d` counted from 1
+   (`_liftdim1_3`). The flattened `index_sets` gains the entry
+   `{"kind": "interval", "size": n_d}` under that name, after the declared entries, in order
+   of first use, unless the name is already there. A document that declares that name with a
+   different size MUST be refused with the binding's dimension-promotion error.
+
+"Declared" means the document's own `index_sets`: a synthetic set one lifted state added is
+never matched by size for the next. Then, for each lifted state `x`:
+
+- `state_variables[x].shape` MUST be `[X_1, …, X_k]`, every entry a key of the flattened
+  `index_sets`;
+- `lifted_shapes[x]` MUST be `[n_1, …, n_k]`, so `index_sets[X_d].size` equals
+  `lifted_shapes[x][d]`;
+- both `faq` wrappers the lift writes, the left-hand side over `D(index(x, ℓ_1, …, ℓ_k))` and
+  the right-hand side around the left-fold sum of the contributions, MUST range each
+  `ℓ_d` as `{"from": X_d}`, never as an interval.
+
+So a consumer reads a lifted state's shape from the state itself, like any declared shape,
+and every name in it resolves in the flattened `index_sets`; it never has to search other
+variables for one whose shape has the same extents, which finds nothing for a grid no
+variable declares and cannot choose between two index sets of one size. The cross-binding
+gate is the `pointwise_lift` tier of `tests/conformance/flatten/cases.json`, one fixture per
+rule (`tests/conformance/pointwise_lift/README.md`).
 
 **Per-term provenance (normative; issue #539).** Flatten sums `operator_compose` and `couple`
 contributions into one right-hand side. `equation_contributions` records where each summand came
@@ -1764,7 +1812,7 @@ The hybrid flattening path defines eight named errors that every implementation 
 
 | Error | Status | Trigger |
 |---|---|---|
-| `ConflictingDerivativeError` | **raised** | Two systems define non-additive equations for the same dependent variable — the same §4.7.5 flatten check (a species is both an explicit `D(X,t)` LHS and a reaction reactant/product). Not a dimension-mapping error. |
+| `ConflictingDerivativeError` | **raised** | Two systems define non-additive equations for the same dependent variable — the same §4.7.5 flatten check (a species is both an explicit `D(X,t)` LHS and a reaction reactant/product), or a state left with two initial conditions `ic(x)` after coupling (§4.7.1 step 3). Not a dimension-mapping error. |
 | `DimensionPromotionError` | **raised (repurposed)** | Not by Interface validation (which no longer exists), but by the §10.5 pointwise spatial lift / array shape-promotion: a species' operator makearrays yield no full-rank interior-stencil gather, or elementwise array-observed operands resolve to conflicting grid shapes. |
 | `DomainUnitMismatchError` | **raised (optional parity)** | An OPTIONAL preflight over `variable_map` couplings whose `transform == "identity"`, when the source and target variables carry non-empty, declared-**different** units. A units check on an identity `variable_map`, not tied to any Interface; `conversion_factor` and `param_to_var` transforms are exempt. Implemented in the Julia binding. |
 | `UnmappedDomainError` | *reserved / never raised* | Formerly: a cross-domain coupling with no `Interface` mapping rule. With Interfaces removed and 0D↔N-D handled by implicit broadcast, nothing raises it. |
