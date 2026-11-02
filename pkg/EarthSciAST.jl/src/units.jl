@@ -1311,12 +1311,19 @@ _minmax_rule(expr, var_units, findings) =
 # corpus multiplies by: `conc_ppb * 1.23` is a ppb→µg/m³ conversion, and
 # reporting its dimension as "ppb" manufactures a mismatch against the declared
 # µg/m³. See the conservatism corollary above.
+#
+# Every factor is still WALKED, even after an indeterminate one: an
+# indeterminate factor says nothing about the units of the others, and a
+# provable inconsistency inside a later factor is an error whatever the
+# product's unit. Stopping at the first indeterminate factor is what let
+# `1000 * exp(T [degC])` through (tests/invalid/
+# units_transcendental_argument_under_product.esm).
 function _product_rule(expr, var_units, findings)
     result = Unitful.NoUnits
     for arg in expr.args
         arg_dim = _expr_dimensions!(findings, arg, var_units)
-        arg_dim === nothing && return nothing
-        result = result * arg_dim
+        result = (result === nothing || arg_dim === nothing) ? nothing :
+            result * arg_dim
     end
     return result
 end

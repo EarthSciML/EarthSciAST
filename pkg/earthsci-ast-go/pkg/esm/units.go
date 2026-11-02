@@ -1780,18 +1780,29 @@ func (ut unitTyper) propagateNode(node ExprNode, env map[string]Unit) (*Unit, er
 		// constants the corpus multiplies by: `conc_ppb * 1.23` is a ppb→µg/m³
 		// conversion, and reporting its dimension as "dimensionless" manufactures
 		// a mismatch against the declared µg/m³.
+		//
+		// Every factor is still walked after an indeterminate one: it says
+		// nothing about the others, and a provable inconsistency inside a later
+		// factor (`1000 * exp(T)`) is an error whatever the product's unit.
 		result := Unit{Scale: 1}
+		known := true
 		for _, arg := range node.Args {
 			u, err := ut.propagate(arg, env)
 			if err != nil {
 				return nil, err
 			}
 			if u == nil {
-				return nil, nil
+				known = false
+			}
+			if !known {
+				continue
 			}
 			if result, err = result.MultiplyChecked(*u); err != nil {
 				return nil, exponentOverflowErr(node.Op)
 			}
+		}
+		if !known {
+			return nil, nil
 		}
 		return &result, nil
 
