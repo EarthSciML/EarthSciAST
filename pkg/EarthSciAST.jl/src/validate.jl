@@ -239,10 +239,169 @@ else
     _jsonschema_root_path() = ""
 end
 
-# Does instance `x` satisfy `subschema` in full? Delegated to JSONSchema.jl so
-# the branch-selection verdict is identical to the library's.
-_schema_matches(x, subschema) =
-    JSONSchema._validate(x, subschema, _jsonschema_root_path()) === nothing
+# Does instance `x` satisfy `subschema` in full? The verdict is JSONSchema.jl's:
+# `_schema_match` below walks the applicator keywords the way the library's
+# `_validate` does and hands every other keyword to the library's own method.
+#
+# It does not call the library's whole-subschema `_validate`, for two reasons
+# that both bite on a deep expression (a flattened advection stencil is 35
+# levels and 170 000 nodes). The library carries the instance path down the
+# tree and, from JSONSchema 1.6, renders it into a string for EVERY failed
+# check, and a valid document fails many along the way (every `oneOf` branch
+# of `Expression` but one, every `if` of `ExpressionNode` but one): a cost of
+# the depth per failed check. And it dispatches on `Val{Symbol(k)}` for every
+# keyword of every subschema at every node. Here no path is kept (the library
+# only sees an empty one, at leaf keywords), and each subschema is read once
+# into a `_CompiledSchema` that is reused at every node it applies to.
+_schema_matches(x, subschema) = _schema_match(x, subschema, _jsonschema_root_path())
+
+# What `_schema_match_keyword` does with a keyword.
+const _KW_LEAF = 0x00        # the library's method for it
+const _KW_PROPERTIES = 0x01
+const _KW_ITEMS = 0x02       # `items` holding one schema
+const _KW_ALLOF = 0x03
+const _KW_ANYOF = 0x04
+const _KW_ONEOF = 0x05
+const _KW_NOT = 0x06
+const _KW_IF = 0x07          # an `if` with a `then` or an `else`
+const _KW_IGNORED = 0x08     # judged with another keyword, or ignored
+const _KW_PATTERN = 0x09
+
+struct _SchemaKeyword
+    kind::UInt8
+    v::Any                   # the keyword's value
+    val::Val                 # `Val{Symbol(k)}()`, for the library's method
+    regex::Union{Nothing, Regex}
+    has_then::Bool           # `if`: whether its `then` and `else` are present
+    has_else::Bool
+end
+
+# A subschema with its `\$ref` resolved as the library resolves it: `true`,
+# `false`, an object's keywords, or anything else (left to the library).
+struct _CompiledSchema
+    kind::UInt8              # 0 object, 1 true, 2 false, 3 other
+    schema::Any
+    keywords::Vector{_SchemaKeyword}
+end
+
+# Keyed by the identity of the subschema object; the schema is a constant.
+const _SCHEMA_COMPILED = IdDict{Any, _CompiledSchema}()
+const _SCHEMA_COMPILED_LOCK = ReentrantLock()
+
+function _compiled_schema(schema)
+    return lock(_SCHEMA_COMPILED_LOCK) do
+        get!(() -> _compile_schema(schema), _SCHEMA_COMPILED, schema)
+    end
+end
+
+function _compile_schema(schema0)
+    schema = JSONSchema._resolve_refs(schema0)
+    schema === true && return _CompiledSchema(0x01, schema, _SchemaKeyword[])
+    schema === false && return _CompiledSchema(0x02, schema, _SchemaKeyword[])
+    schema isa AbstractDict || return _CompiledSchema(0x03, schema, _SchemaKeyword[])
+    kws = _SchemaKeyword[]
+    for (k0, v) in schema
+        k = String(k0)
+        kind = if k == "properties" && v isa AbstractDict
+            _KW_PROPERTIES
+        elseif k == "items" && v isa AbstractDict
+            _KW_ITEMS
+        elseif k == "allOf" && v isa AbstractVector
+            _KW_ALLOF
+        elseif k == "anyOf" && v isa AbstractVector
+            _KW_ANYOF
+        elseif k == "oneOf" && v isa AbstractVector
+            _KW_ONEOF
+        elseif k == "not"
+            _KW_NOT
+        elseif k == "if"
+            (haskey(schema, "then") || haskey(schema, "else")) ? _KW_IF : _KW_IGNORED
+        elseif k == "then" || k == "else"
+            # The library evaluates if/then/else again at these; with an `if`
+            # present that is the verdict of the `if` keyword, and without one
+            # `then`/`else` are ignored.
+            _KW_IGNORED
+        elseif k == "pattern" && v isa String
+            _KW_PATTERN
+        else
+            _KW_LEAF
+        end
+        push!(
+            kws, _SchemaKeyword(
+                kind, v, Val{Symbol(k)}(), kind == _KW_PATTERN ? Regex(v) : nothing,
+                haskey(schema, "then"), haskey(schema, "else")
+            )
+        )
+    end
+    return _CompiledSchema(0x00, schema, kws)
+end
+
+function _schema_match(x, schema0, root)
+    c = _compiled_schema(schema0)
+    c.kind == 0x01 && return true
+    c.kind == 0x02 && return false
+    # Anything else is the library's to judge (or to refuse), as before.
+    c.kind == 0x03 && return JSONSchema._validate(x, c.schema, root) === nothing
+    for kw in c.keywords
+        _schema_match_keyword(x, c.schema, kw, root) || return false
+    end
+    return true
+end
+
+# One keyword of `schema` on `x`, as the library's `_validate(x, schema,
+# Val(k), v, path)`. The applicators the ESM schema leans on are walked here,
+# each under the argument types the library's method takes; every other
+# keyword, including the applicators whose semantics differ between
+# JSONSchema releases (`items` as a tuple, `additionalItems`), is the library's.
+function _schema_match_keyword(x, schema, kw::_SchemaKeyword, root)
+    kind = kw.kind
+    v = kw.v
+    if kind == _KW_PROPERTIES
+        x isa AbstractDict || return true
+        for (xk, xv) in x
+            haskey(v, xk) && !_schema_match(xv, v[xk], root) && return false
+        end
+        return true
+    elseif kind == _KW_ITEMS
+        x isa AbstractVector || return true
+        for xi in x
+            _schema_match(xi, v, root) || return false
+        end
+        return true
+    elseif kind == _KW_ALLOF
+        for sub in v
+            _schema_match(x, sub, root) || return false
+        end
+        return true
+    elseif kind == _KW_ANYOF
+        for sub in v
+            _schema_match(x, sub, root) && return true
+        end
+        return false
+    elseif kind == _KW_ONEOF
+        found = false
+        for sub in v
+            _schema_match(x, sub, root) || continue
+            found && return false
+            found = true
+        end
+        return found
+    elseif kind == _KW_NOT
+        return !_schema_match(x, v, root)
+    elseif kind == _KW_IF
+        if _schema_match(x, v, root)
+            return !kw.has_then || _schema_match(x, schema["then"], root)
+        end
+        return !kw.has_else || _schema_match(x, schema["else"], root)
+    elseif kind == _KW_IGNORED
+        return true
+    elseif kind == _KW_PATTERN && x isa String
+        # The library's check, `occursin(Regex(v), x)`, with the pattern
+        # compiled once rather than per string.
+        return occursin(kw.regex::Regex, x)
+    end
+    return JSONSchema._validate(x, schema, kw.val, v, root) === nothing
+end
 
 function _schema_error_message(keyword::AbstractString)::String
     keyword == "required"             && return "missing required property"
