@@ -375,9 +375,17 @@ jobs:
           pip install build pytest pytest-cov
           pip install -e .[dev,test]
 
-      - name: Run Python tests (with coverage)
+      # Coverage only on the leg that uploads it: on 3.11 coverage.py falls
+      # back to its sys.settrace tracer, which doubled that leg's wall time for
+      # a report nobody read. `--durations` keeps the slowest tests visible in
+      # every log.
+      - name: Run Python tests
         run: |
-          pytest tests/ -v --cov=src/earthsci_ast --cov-report=xml
+          if [ "${{ matrix.python-version }}" = "3.x" ]; then
+            pytest tests/ -v --durations=30 --cov=src/earthsci_ast --cov-report=xml
+          else
+            pytest tests/ -v --durations=30
+          fi
 
       - name: Upload Python coverage to Codecov
         uses: codecov/codecov-action@v7
