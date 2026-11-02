@@ -271,40 +271,6 @@ func mountedContentVersionGates(view map[string]any) error {
 	return nil
 }
 
-// refuseTopLevelReactionSystemRefs returns `mount_form_unsupported`, pointing at
-// `/reaction_systems/<k>`, for the first top-level `reaction_systems.<k>` entry
-// that is a bare `{ref}` — a `ref` string and no `species`, the same
-// discriminator the Julia reference uses for this mount form. An inline reaction
-// system is a component, not a mount, and passes through untouched; so do
-// `models.<k>` and `subsystems.<k>` refs, which this binding does implement.
-func refuseTopLevelReactionSystemRefs(jsonStr string) error {
-	view, err := decodeJSONView([]byte(jsonStr))
-	if err != nil {
-		return nil
-	}
-	rs, ok := view["reaction_systems"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	for _, name := range sortedKeys(rs) {
-		entry, ok := rs[name].(map[string]any)
-		if !ok {
-			continue
-		}
-		ref, isRef := entry["ref"].(string)
-		if !isRef {
-			continue
-		}
-		if _, component := entry["species"]; component {
-			continue
-		}
-		return withETPath(newETErr(CodeMountFormUnsupported,
-			fmt.Sprintf("reaction_systems.%s: a top-level `reaction_systems.<k>` `{ref}` mount (ref %q) is not supported by this binding. Inline the reaction system, or mount it at a `subsystems.<k>` `{ref}` edge (esm-spec §4.7 \"Two mount forms, one mechanism\")", name, ref)),
-			"/reaction_systems/"+name)
-	}
-	return nil
-}
-
 // LoadDocument parses an ESM document that is ALREADY decoded into a Go map
 // — the same document a `.esm` file holds, just already unmarshalled. It runs
 // the identical pipeline LoadString runs.
@@ -411,15 +377,6 @@ func loadPrepared(jsonStr string, view map[string]any, o loadOptions) (*ESMFile,
 		return nil, fmt.Errorf("JSON schema validation failed: %s", strings.Join(errorStrs, "; "))
 	}
 
-	// esm-spec §4.7: a top-level `reaction_systems.<k>` entry that is a bare
-	// `{ref}` is a MOUNT EDGE at a form this binding does not implement.
-	// `ESMFile.ReactionSystems` is a `map[string]ReactionSystem`, so the decode
-	// below would turn the edge into an EMPTY reaction system and the document
-	// would load clean with nothing mounted. Refuse it here instead.
-	if err := refuseTopLevelReactionSystemRefs(jsonStr); err != nil {
-		return nil, err
-	}
-
 	// Resolve esm-spec §9.7 machinery — template-library imports (depth-first
 	// post-order, per-edge metaparameter instantiation), index_sets merge,
 	// metaparameter close+fold — then expand `apply_expression_template` ops
@@ -469,6 +426,11 @@ func loadPrepared(jsonStr string, view map[string]any, o loadOptions) (*ESMFile,
 	// happens where it did, after the root close, so both mount forms stay on
 	// one side of esm-spec §9.7.6 as before.
 	topLevelModelRefs := extractTopLevelModelRefEdges(jsonStr)
+	// The same for a top-level `reaction_systems.<k>` `{ref}` (a `ref` and no
+	// `species`), the other top-level attachment point: `ESMFile.ReactionSystems`
+	// is a `map[string]ReactionSystem`, so the decode would make it an EMPTY
+	// reaction system.
+	topLevelReactionSystemRefs := extractTopLevelRefEdges(jsonStr, topLevelReactionSystemMount)
 
 	expanded, componentTemplates, err := resolveAndLowerJSONCapturing(jsonStr, o.basePath, o.metaparameters,
 		authoredMountDeclared)
@@ -524,6 +486,7 @@ func loadPrepared(jsonStr string, view map[string]any, o loadOptions) (*ESMFile,
 	esmFile.Metaparameters = authoredMetaparams
 	esmFile.keyOrders = authoredOrders
 	esmFile.topLevelModelRefs = topLevelModelRefs
+	esmFile.topLevelReactionSystemRefs = topLevelReactionSystemRefs
 	// Replay the authored `species` key order onto each reaction system itself.
 	// DeriveODEs and StoichiometricMatrix take a bare *ReactionSystem and so
 	// cannot reach esmFile.keyOrders, but species declaration order is

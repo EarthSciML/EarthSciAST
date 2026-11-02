@@ -1367,6 +1367,12 @@ type ESMFile struct {
 	// is what keeps the two forms on one side of the root's §9.7.6 close.
 	// Empty for a document with no such mount, and for a struct built in code.
 	topLevelModelRefs map[string]map[string]any
+	// topLevelReactionSystemRefs is topLevelModelRefs for the other top-level
+	// attachment point: the raw edge of every top-level `reaction_systems.<k>`
+	// `{ref}` MOUNT EDGE (a `ref` and no `species`), which would otherwise
+	// decode to an EMPTY ReactionSystem. Consumed by
+	// inlineTopLevelReactionSystemRefs.
+	topLevelReactionSystemRefs map[string]map[string]any
 }
 
 // declarationOrder returns the authored key order recorded for `path`, or nil

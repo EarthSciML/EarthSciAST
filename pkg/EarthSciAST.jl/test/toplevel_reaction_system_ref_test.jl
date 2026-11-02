@@ -1,8 +1,8 @@
 # esm-spec §4.7 "Two mount forms, one mechanism": a top-level
 # `reaction_systems.<k>` `{ref}` mounts the referenced leaf's reaction system
 # under the key `<k>`. The fixtures are shared with the other bindings
-# (`tests/conformance/toplevel_reaction_system_ref/`); Julia and Rust mount the
-# form, Python, TypeScript and Go refuse it with `mount_form_unsupported`.
+# (`tests/conformance/toplevel_reaction_system_ref/`); all five bindings mount
+# the form.
 
 using Test
 using JSON3

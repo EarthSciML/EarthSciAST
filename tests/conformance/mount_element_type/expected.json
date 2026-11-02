@@ -130,12 +130,10 @@
     },
     "reaction_toplevel.esm": {
       "element_type_uncarried": [
-        "julia",
-        "rust"
-      ],
-      "mount_form_unsupported": [
         "go",
+        "julia",
         "python",
+        "rust",
         "typescript"
       ]
     }
@@ -191,7 +189,7 @@
   "notes": {
     "subsystems.esm": "A precision written into a subsystems.<k> component is evaluated at that precision, not refused or widened to the document's: Host.Leaf.x is the binary32 witness inside a binary64 document.",
     "values": "key_next = key + 5 with key = 2265007010 declared Float64 inside the Float32 leaf: 2265007015 exactly, where binary32 would give 2265007104.",
-    "load_errors": "The reaction-system refusal is reached through whichever reaction-system mount form a binding implements. Python, TypeScript and Go mount a reaction system at a reaction system's subsystems.<k> {ref} and refuse the top-level reaction_systems.<k> {ref} form (mount_form_unsupported, esm-spec §4.7); Julia is the reverse — it mounts the top-level form and refuses a reaction-system subsystems.<k> {ref} at parse. Rust mounts both forms, so it reaches element_type_uncarried at both.",
+    "load_errors": "The reaction-system refusal is reached through whichever reaction-system mount form a binding implements. All five mount the top-level reaction_systems.<k> {ref} form (esm-spec §4.7), so all five reach element_type_uncarried at reaction_toplevel.esm. Python, TypeScript, Go and Rust also mount a reaction system at a reaction system's subsystems.<k> {ref}; Julia refuses that form at parse.",
     "deep.esm": "Host evaluates in binary64 beside the Float32 leaf; building Leaf evaluates its subsystem Inner in the Float32 the mount wrote onto it."
   }
 }

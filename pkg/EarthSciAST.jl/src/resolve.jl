@@ -197,7 +197,12 @@ function _load_document(
         model_envs = model_envs
     )
     rs_src = inlined_m === nothing ? raw_data : inlined_m
-    inlined_r = _inline_toplevel_reaction_system_refs(rs_src, base_path)
+    inlined_r = _inline_toplevel_reaction_system_refs(
+        rs_src, base_path;
+        metaparameters = metaparameters,
+        staged = staged_isets,
+        staged_refs = staged_refs
+    )
     inlined = inlined_r !== nothing ? inlined_r : inlined_m
     # One carrier end to end: the inliners emit the same normalized native
     # tree the parse boundary produces, so there is no re-serialize
@@ -1219,6 +1224,11 @@ function _resolve_mount_edge_core(
         parent_meta = leaf_env, api_meta = api_meta, forwarded = child_forwarded,
         staged = leaf_staged, precision = leaf_effective
     )
+    _inline_toplevel_reaction_system_refs!(
+        comp, compdir, visited;
+        parent_meta = leaf_env, api_meta = api_meta, forwarded = child_forwarded,
+        staged = leaf_staged, precision = leaf_effective
+    )
     _inline_subsystem_refs!(
         comp, compdir, visited;
         parent_meta = leaf_env, api_meta = api_meta, forwarded = child_forwarded,
@@ -1803,20 +1813,26 @@ function _inline_toplevel_model_refs!(
 end
 
 """
-    _inline_toplevel_reaction_system_refs(raw_data, base_path) -> Union{Nothing,Dict{String,Any}}
+    _inline_toplevel_reaction_system_refs(raw_data, base_path; metaparameters, staged, staged_refs) -> Union{Nothing,Dict{String,Any}}
 
 Return a native ESM dict with every top-level reaction_system `{ref}` stub
-replaced by the referenced component's reaction system (and its
-`function_tables` / `data_sources` merged in), or `nothing` when
-`raw_data` has no such stub. The reaction-system analogue of
+replaced by the referenced component's reaction system (and its `index_sets`,
+`function_tables` / `data_sources` merged in), or `nothing` when `raw_data` has
+no such stub. The reaction-system analogue of
 [`_inline_toplevel_model_refs`](@ref) (schema §4.7: a `reaction_systems` entry is
 `oneOf [ReactionSystem, {ref}]`), so an assembly may mount an external
 reaction-system file — e.g. `superfast.esm` — by reference instead of inlining
 its whole `reaction_systems` block. Accepts the post-wire native document or
 the model-ref inliner's output, so the two top-level inliners compose on one
-document.
+document. `metaparameters`, `staged` and `staged_refs` mean what they mean for
+[`_inline_toplevel_model_refs`](@ref).
 """
-function _inline_toplevel_reaction_system_refs(raw_data, base_path::String)
+function _inline_toplevel_reaction_system_refs(
+        raw_data, base_path::String;
+        metaparameters::AbstractDict{String, <:Integer} = Dict{String, Int}(),
+        staged::Union{Nothing, AbstractDict{String, Any}} = nothing,
+        staged_refs::Union{Nothing, AbstractDict{String, String}} = nothing
+    )
     rsystems = _get_field(raw_data, :reaction_systems, nothing)
     rsystems === nothing && return nothing
     has_stub = any(values(rsystems)) do r
@@ -1824,24 +1840,49 @@ function _inline_toplevel_reaction_system_refs(raw_data, base_path::String)
     end
     has_stub || return nothing
     native = _to_ordered(raw_data)
-    _inline_toplevel_reaction_system_refs!(native, base_path, Set{String}())
+    _inline_toplevel_reaction_system_refs!(
+        native, base_path, Set{String}();
+        parent_meta = _root_metaparameter_env(raw_data, metaparameters),
+        api_meta = metaparameters,
+        staged = staged,
+        staged_refs = staged_refs
+    )
     return native
 end
 
 """
-    _inline_toplevel_reaction_system_refs!(native, base_path, visited)
+    _inline_toplevel_reaction_system_refs!(native, base_path, visited; parent_meta, api_meta, forwarded, staged, staged_refs, precision)
 
 In-place native-dict worker for [`_inline_toplevel_reaction_system_refs`](@ref).
-Mirrors [`_inline_toplevel_model_refs!`](@ref): loads each stub's referenced file,
-splices in its single top-level reaction system (or the one named by a
-`"reaction_system"` selector), and merges the `function_tables` / `data_sources`
-blocks the reaction system's AST references (parent wins on a clash).
-Cycle detection is PATH-scoped, so the same single-reaction-system file may be
-mounted under several assembly keys.
+
+esm-spec §4.7 "Two mount forms, one mechanism": a top-level
+`reaction_systems.<k>` `{ref}` is the same mount edge as a top-level
+`models.<k>` `{ref}` at the other attachment point, so it runs the SAME edge
+pipeline, [`_resolve_mount_edge_core`](@ref): the referenced document resolves in
+its own scope (version gates, library rejections, this edge's `bindings` with the
+loader-API backfill, its §9.7.10 injection, its metaparameter close and fold, the
+§9.6.3 fixpoint, its own `enums`), then this edge's `index_set_rename` applies,
+then the leaf's `index_sets` merge into THIS document's registry (staged, as at
+the model form, when `staged` is given). Only the extraction differs: the leaf's
+single top-level reaction system, or the one named by a `"reaction_system"`
+selector, is spliced in under the mount key. The by-name blocks the reaction
+system's AST references (`function_tables`, `data_sources`) merge up, the parent
+winning on a clash. Cycle detection is PATH-scoped, so the same
+single-reaction-system file may be mounted under several assembly keys.
+
+Before 2026-11-02 this form was a raw pre-pass that deferred the leaf's §9.7
+resolution to the root document: it ignored the edge's `bindings`, dropped the
+leaf's `index_sets` and refused `index_set_rename` with
+`subsystem_index_set_rename_unsupported_mount_form`.
 """
 function _inline_toplevel_reaction_system_refs!(
         native::AbstractDict{String, Any}, base_path::String,
         visited::Set{String};
+        parent_meta::AbstractDict{String, <:Integer} = Dict{String, Int}(),
+        api_meta::AbstractDict{String, <:Integer} = Dict{String, Int}(),
+        forwarded::AbstractDict{String, <:Integer} = Dict{String, Int}(),
+        staged::Union{Nothing, AbstractDict{String, Any}} = nothing,
+        staged_refs::Union{Nothing, AbstractDict{String, String}} = nothing,
         precision::AbstractString = _DEFAULT_ELEMENT_TYPE
     )
     rsystems = get(native, "reaction_systems", nothing)
@@ -1854,23 +1895,7 @@ function _inline_toplevel_reaction_system_refs!(
                 !haskey(entry, "species")
         ) || continue
         ref = _expand_ref_env(String(entry["ref"]))  # esm-spec §4.7 ${VAR} expansion
-        # Same refusal as `_inline_toplevel_model_refs!`, for the same reason:
-        # a top-level `{ref}` stub is spliced by a raw pre-pass with no resolved
-        # mounted document to rename (esm-spec §4.7 "Where it applies").
-        if haskey(entry, "index_set_rename") && entry["index_set_rename"] !== nothing
-            throw(
-                ExpressionTemplateError(
-                    ERROR_CODES.SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM,
-                    "reaction_systems.$(name): `index_set_rename` is not supported at " *
-                        "this mount form. This binding inlines a top-level `{ref}` with a " *
-                        "raw pre-pass that defers the leaf's §9.7 resolution to the root " *
-                        "document, so the edge has no resolved mounted document to rename " *
-                        "and the leaf would merge under its ORIGINAL axis names. Mount the " *
-                        "component at a `subsystems.<k>` `{ref}` edge instead, where the " *
-                        "rename applies (esm-spec §4.7 \"Mount-edge index-set renaming\")"
-                )
-            )
-        end
+        mount_noun = "top-level reaction system ref '$(ref)'"
         # Optional reaction-system selector: when the referenced file holds
         # several reaction systems, `reaction_system` names which one to splice.
         sel = haskey(entry, "reaction_system") && entry["reaction_system"] !== nothing ?
@@ -1881,42 +1906,11 @@ function _inline_toplevel_reaction_system_refs!(
         end
         push!(visited, refpath)
         try
-            isfile(refpath) || throw(
-                SubsystemRefError(
-                    "Referenced reaction system file not found: $(refpath) (from ref '$(ref)')"
-                )
-            )
-            comp = _read_json_document(read(refpath, String))
-            comp isa AbstractDict{String, Any} || throw(
-                SubsystemRefError(
-                    "Referenced reaction system file '$(ref)' did not parse as a JSON object"
-                )
-            )
-            # The mounted file's own version gates, against its own version
-            # (esm-spec §4.7), as at every other mount edge.
-            reject_expression_templates_pre_v04(comp)
-            reject_template_imports_pre_v08(comp)
-            reject_solver_pre_v11(comp)
-            reject_const_units_pre_v12(comp)
-            # A §4.7 subsystem ref MUST NOT target a template/coupling library.
-            _reject_library_ref(comp, ref, refpath)
-            compdir = dirname(refpath)
-            leaf_precision = _declared_element_type(comp)
-            leaf_effective = something(leaf_precision, effective)
-            # component-of-component: the referenced file may itself mount refs.
-            _inline_toplevel_model_refs!(comp, compdir, visited; precision = leaf_effective)
-            _inline_toplevel_reaction_system_refs!(
-                comp, compdir, visited;
-                precision = leaf_effective
-            )
-            _strip_mount_provenance!(comp)
-            # esm-spec §4.7 "Binding a data source's location at the mount" and
-            # §8.2.1, as at every other mount edge: this edge's
-            # `url_substitutions`, then the leaf's own locations against its
-            # own directory, before the merge below hoists them.
-            _resolve_mount_data_sources!(
-                comp, entry, base_path, compdir,
-                "top-level reaction system ref '$(ref)'"
+            comp, compdir, _, leaf_precision = _resolve_mount_edge_core(
+                entry, ref,
+                refpath, base_path, visited;
+                mount_noun = mount_noun, parent_meta = parent_meta, api_meta = api_meta,
+                forwarded = forwarded, precision = effective
             )
             crsystems = get(comp, "reaction_systems", nothing)
             crsystems isa AbstractDict || throw(
@@ -1947,33 +1941,17 @@ function _inline_toplevel_reaction_system_refs!(
             crsys isa AbstractDict && delete!(crsys, "tests")
             # esm-spec §4.7 "Working precision crosses a mount": a reaction system
             # cannot carry a differing leaf precision, so this refuses it.
-            _carry_mounted_element_type!(
-                crsys, leaf_precision, effective,
-                "top-level reaction system ref '$(ref)'"
-            )
-            # esm-spec §9.3: the reaction system's `enum` ops resolve against its
-            # OWN file's `enums` block, which does not merge into this document.
-            # Its §9.7 resolution is deferred to the root, so a template body keeps
-            # the ops its `params` spell for the call site.
-            crsys = _lower_mounted_enums_at_edge(
-                comp, crsys,
-                "top-level reaction system ref '$(ref)'"
-            )
+            _carry_mounted_element_type!(crsys, leaf_precision, effective, mount_noun)
+            # Any relative `{ref}` the resolution above did not consume anchors at
+            # the LEAF's directory, not at the parent it is about to land in.
             _absolutize_nested_refs!(crsys, compdir)
             rsystems[name] = crsys
-            # esm-spec §9.7.10 form A at a TOP-LEVEL reaction-system-ref edge:
-            # the edge's `expression_template_imports` inject into the referenced
-            # component's own scope, appended AFTER its own imports (§9.7.10 merge
-            # order), with refs anchored at THIS document's directory.
-            edge_imports = get(entry, "expression_template_imports", nothing)
-            if edge_imports isa AbstractVector && !isempty(edge_imports)
-                imports_native = _to_ordered(edge_imports)
-                _absolutize_nested_refs!(imports_native, base_path)
-                _append_component_imports!(crsys, imports_native)
-            end
+            # esm-spec §4.7 "Index-set merge", pipeline step (3), exactly as at the
+            # top-level model form.
+            _merge_native_index_sets!(native, comp, ref; staged = staged, staged_refs = staged_refs)
             # Merge the by-name blocks the reaction system's AST references; the
             # parent wins on a key clash (its own definitions take precedence).
-            # Not `enums`: it is file-local (esm-spec §9.3), lowered above.
+            # Not `enums`: it is file-local (esm-spec §9.3), lowered at the edge.
             src = get(comp, "function_tables", nothing)
             if src isa AbstractDict && !isempty(src)
                 dst = get!(() -> Dict{String, Any}(), native, "function_tables")

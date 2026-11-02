@@ -18,7 +18,8 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import { resolveSubsystemRefsSync } from './ref-loading.js'
-import { loadString, raiseFaqVersionFloor } from './parse.js'
+import { loadPath, loadString, raiseFaqVersionFloor } from './parse.js'
+import { toJson } from './serialize.js'
 import { expandDocument, lowerExpressionTemplates } from './lower-expression-templates.js'
 import type { EsmFile } from './types.js'
 
@@ -349,63 +350,120 @@ describe('issue #311 in this binding: the rewrite pass re-runs after resolveSubs
   })
 })
 
-describe('a top-level reaction_systems.<k> {ref} is refused loudly (esm-spec §4.7)', () => {
-  // This binding does not implement the top-level `reaction_systems.<k>` `{ ref }`
-  // mount form, so it refuses the entry — `mount_form_unsupported` at
-  // `/reaction_systems/<k>` — rather than leaving an unresolved stub where a
-  // reaction system belongs. (Julia and Rust implement the form.)
-  it('refuses the mount with mount_form_unsupported at the entry', () => {
-    let err: unknown
-    try {
-      loadResolved('fixtures/mount_form_unsupported/toplevel_reaction_system_ref.esm')
-    } catch (e) {
-      err = e
-    }
-    expect(err).toBeDefined()
-    expect((err as { code?: string }).code).toBe('mount_form_unsupported')
-    expect((err as { path?: string }).path).toBe('/reaction_systems/Chem')
-  })
-
-  it('still loads an inline reaction system, which is a component and not a mount', () => {
-    const { file } = loadResolved('fixtures/mount_form_unsupported/reaction_system_leaf.esm')
-    const rs = (file as unknown as { reaction_systems: Record<string, { species: object }> })
-      .reaction_systems
-    expect(Object.keys(rs.Chem.species)).toEqual(['A', 'B'])
+describe('a top-level reaction_systems.<k> {ref} mounts (esm-spec §4.7)', () => {
+  // esm-spec §4.7 "Two mount forms, one mechanism": a top-level
+  // `reaction_systems.<k>` `{ ref }` mounts the leaf's reaction system under the
+  // key, through the same edge pipeline as a top-level `models.<k>` `{ ref }`.
+  it('splices the leaf reaction system in under the key', () => {
+    const { file } = loadResolved(
+      'fixtures/mount_form_unsupported/toplevel_reaction_system_ref.esm',
+    )
+    const rs = (
+      file as unknown as {
+        reaction_systems: Record<string, { species: object; reactions: unknown[]; ref?: unknown }>
+      }
+    ).reaction_systems
+    expect(Object.keys(rs.Chem.species).sort()).toEqual(['A', 'B'])
+    expect(rs.Chem.reactions).toHaveLength(1)
+    expect(rs.Chem.ref).toBeUndefined()
   })
 })
 
 describe('tests/conformance/toplevel_reaction_system_ref (esm-spec §4.7)', () => {
-  // This binding is not in `implemented_by`, so every fixture there that mounts a
-  // top-level `reaction_systems.<k>` `{ ref }` is refused with
-  // `mount_form_unsupported`, and the inline twins load.
+  // Each mount loads to the same `models` and `reaction_systems` as its inline
+  // twin, and each bad mount is refused with the code `load_errors` names.
   const dir = 'conformance/toplevel_reaction_system_ref'
   const expected = JSON.parse(readFileSync(path.join(TESTS, dir, 'expected.json'), 'utf8')) as {
     implemented_by: string[]
     loads: Record<string, string>
-    load_errors: Record<string, unknown>
+    load_errors: Record<string, Record<string, string[]>>
   }
 
-  it('does not list typescript as implementing the form', () => {
-    expect(expected.implemented_by).not.toContain('typescript')
+  /** The `models` and `reaction_systems` blocks of `fixture` after load and emit. */
+  const components = (fixture: string): unknown[] => {
+    const full = path.join(TESTS, dir, fixture)
+    const file = loadPath(full)
+    resolveSubsystemRefsSync(file, path.dirname(full))
+    const doc = JSON.parse(toJson(file)) as { models?: unknown; reaction_systems?: unknown }
+    return [doc.models, doc.reaction_systems]
+  }
+
+  it('lists typescript as implementing the form', () => {
+    expect(expected.implemented_by).toContain('typescript')
   })
 
-  for (const fixture of [...Object.keys(expected.loads), ...Object.keys(expected.load_errors)]) {
-    it(`refuses ${fixture} with mount_form_unsupported`, () => {
+  for (const [fixture, inline] of Object.entries(expected.loads)) {
+    it(`${fixture} loads as ${inline}`, () => {
+      expect(components(fixture)).toEqual(components(inline))
+    })
+  }
+
+  for (const [fixture, want] of Object.entries(expected.load_errors)) {
+    // A binding listed under no code must still refuse the fixture.
+    const code = Object.entries(want).find(([, bindings]) => bindings.includes('typescript'))?.[0]
+    it(`refuses ${fixture}${code ? ` with ${code}` : ''}`, () => {
       let err: unknown
       try {
-        loadResolved(`${dir}/${fixture}`)
+        components(fixture)
       } catch (e) {
         err = e
       }
       expect(err).toBeDefined()
-      expect((err as { code?: string }).code).toBe('mount_form_unsupported')
-      expect((err as { path?: string }).path).toMatch(/^\/reaction_systems\//)
+      if (code) {
+        expect((err as { code?: string }).code).toBe(code)
+        expect((err as { path?: string }).path).toMatch(/^\/reaction_systems\//)
+      }
     })
+  }
+})
+
+describe('a top-level reaction_systems.<k> {ref} runs the edge pipeline (esm-spec §4.7)', () => {
+  // The edge's `bindings` close the leaf, its `index_sets` merge into the
+  // mounting document, and `index_set_rename` applies, as at `models.<k>`.
+  const dir = mkdtempSync(path.join(tmpdir(), 'rs-mount-'))
+  writeFileSync(
+    path.join(dir, 'leaf.esm'),
+    JSON.stringify({
+      esm: '1.0.0',
+      metadata: { name: 'rs_leaf', description: 'probe' },
+      metaparameters: { N: { type: 'integer', default: 2 } },
+      index_sets: { x: { kind: 'interval', size: 'N' } },
+      reaction_systems: {
+        Chem: {
+          species: { A: { units: '1', default: 1.0 } },
+          parameters: { k: { units: '1/s', default: 0.3 } },
+          reactions: [
+            {
+              id: 'R1',
+              substrates: [{ species: 'A', stoichiometry: 1 }],
+              products: null,
+              rate: 'k',
+            },
+          ],
+        },
+      },
+    }),
+  )
+  const load = (edge: Record<string, unknown>): Record<string, { size?: unknown }> => {
+    const file = loadString(
+      JSON.stringify({
+        esm: '1.0.0',
+        metadata: { name: 'rs_host', description: 'probe' },
+        reaction_systems: { Chem: { ref: './leaf.esm', ...edge } },
+      }),
+    )
+    resolveSubsystemRefsSync(file, dir)
+    return (file as unknown as { index_sets: Record<string, { size?: unknown }> }).index_sets
   }
 
-  for (const inline of new Set(Object.values(expected.loads))) {
-    it(`loads ${inline}`, () => {
-      expect(() => loadResolved(`${dir}/${inline}`)).not.toThrow()
-    })
-  }
+  it('merges the leaf axes, closed by the edge bindings', () => {
+    expect(load({}).x?.size).toBe(2)
+    expect(load({ bindings: { N: 5 } }).x?.size).toBe(5)
+  })
+
+  it('applies index_set_rename', () => {
+    const sets = load({ index_set_rename: { x: 'y' } })
+    expect(sets.x).toBeUndefined()
+    expect(sets.y?.size).toBe(2)
+  })
 })

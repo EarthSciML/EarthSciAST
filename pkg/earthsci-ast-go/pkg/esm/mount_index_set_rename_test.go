@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -525,78 +526,177 @@ func TestReorderedLoadChecksExtentAgainstTheAuthoredTree(t *testing.T) {
 	}
 }
 
-// esm-spec §4.7: this binding does not implement the top-level
-// `reaction_systems.<k>` `{ref}` mount form, so it REFUSES the entry —
-// `mount_form_unsupported` at `/reaction_systems/<k>` — rather than decoding the
-// stub as an empty reaction system and loading clean with nothing mounted.
-// (Julia and Rust implement the form.)
-func TestTopLevelReactionSystemRefIsRefusedLoudly(t *testing.T) {
-	_, err := LoadPath(mrFixture(t, "fixtures", "mount_form_unsupported", "toplevel_reaction_system_ref.esm"))
-	if err == nil {
-		t.Fatal("a top-level reaction_systems.<k> {ref} loaded; it must be refused")
+// esm-spec §4.7 "Two mount forms, one mechanism": a top-level
+// `reaction_systems.<k>` `{ref}` mounts the leaf's reaction system under the key,
+// through the same edge pipeline as a top-level `models.<k>` `{ref}`, whether
+// the document is read by LoadPath (which inlines on the raw view) or by
+// LoadString plus ResolveSubsystemRefs (which inlines on the typed file).
+func TestTopLevelReactionSystemRefIsMounted(t *testing.T) {
+	path := mrFixture(t, "fixtures", "mount_form_unsupported", "toplevel_reaction_system_ref.esm")
+	check := func(how string, f *ESMFile) {
+		t.Helper()
+		rs, ok := f.ReactionSystems["Chem"]
+		if !ok {
+			t.Fatalf("%s: no reaction system Chem", how)
+		}
+		if len(rs.Species) != 2 || len(rs.Reactions) != 1 {
+			t.Errorf("%s: Chem has %d species and %d reactions; want 2 and 1", how, len(rs.Species), len(rs.Reactions))
+		}
 	}
-	var et *ExpressionTemplateError
-	if !errors.As(err, &et) {
-		t.Fatalf("error %T %v; want an *ExpressionTemplateError", err, err)
+	f, err := LoadPath(path)
+	if err != nil {
+		t.Fatalf("LoadPath: %v", err)
 	}
-	if et.Code != CodeMountFormUnsupported {
-		t.Errorf("code = %q; want %q", et.Code, CodeMountFormUnsupported)
-	}
-	if et.Path != "/reaction_systems/Chem" {
-		t.Errorf("path = %q; want /reaction_systems/Chem", et.Path)
-	}
+	check("LoadPath", f)
 
-	// The leaf itself — an inline reaction system, a component rather than a
-	// mount — still loads.
-	if _, err := LoadPath(mrFixture(t, "fixtures", "mount_form_unsupported", "reaction_system_leaf.esm")); err != nil {
-		t.Errorf("an inline reaction system must still load: %v", err)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
 	}
+	g, err := LoadString(string(raw))
+	if err != nil {
+		t.Fatalf("LoadString: %v", err)
+	}
+	// Before resolution the edge survives emit as the edge it was authored as.
+	out, err := ToJSONCompact(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"ref":"./reaction_system_leaf.esm"`) {
+		t.Errorf("an unresolved reaction_systems.<k> {ref} must emit as authored; got %s", out)
+	}
+	if err := ResolveSubsystemRefs(g, filepath.Dir(path)); err != nil {
+		t.Fatalf("ResolveSubsystemRefs: %v", err)
+	}
+	check("LoadString+ResolveSubsystemRefs", g)
 }
 
-// tests/conformance/toplevel_reaction_system_ref/: this binding is not in
-// implemented_by, so every fixture there that mounts a top-level
-// reaction_systems.<k> {ref} is refused with mount_form_unsupported, and the
-// inline twins load.
-func TestTopLevelReactionSystemRefConformanceFixturesAreRefused(t *testing.T) {
+// tests/conformance/toplevel_reaction_system_ref/: each mount loads to the same
+// `models` and `reaction_systems` as its inline twin, and each bad mount is
+// refused with the code `load_errors` names.
+func TestTopLevelReactionSystemRefConformanceFixtures(t *testing.T) {
 	dir := mrFixture(t, "conformance", "toplevel_reaction_system_ref")
 	raw, err := os.ReadFile(filepath.Join(dir, "expected.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var expected struct {
-		ImplementedBy []string                   `json:"implemented_by"`
-		Loads         map[string]string          `json:"loads"`
-		LoadErrors    map[string]json.RawMessage `json:"load_errors"`
+		ImplementedBy []string                       `json:"implemented_by"`
+		Loads         map[string]string              `json:"loads"`
+		LoadErrors    map[string]map[string][]string `json:"load_errors"`
 	}
 	if err := json.Unmarshal(raw, &expected); err != nil {
 		t.Fatal(err)
 	}
+	listed := false
 	for _, b := range expected.ImplementedBy {
-		if b == "go" {
-			t.Fatal("expected.json lists go as implementing the form; this test asserts the refusal")
+		listed = listed || b == "go"
+	}
+	if !listed {
+		t.Fatal("expected.json must list go as implementing the form")
+	}
+	components := func(fixture string) (any, any) {
+		t.Helper()
+		f, err := LoadPath(filepath.Join(dir, fixture))
+		if err != nil {
+			t.Fatalf("%s: %v", fixture, err)
+		}
+		out, err := ToJSON(f)
+		if err != nil {
+			t.Fatalf("%s: emit: %v", fixture, err)
+		}
+		var doc map[string]any
+		if err := json.Unmarshal([]byte(out), &doc); err != nil {
+			t.Fatal(err)
+		}
+		return doc["models"], doc["reaction_systems"]
+	}
+	for _, fixture := range sortedKeys(expected.Loads) {
+		inline := expected.Loads[fixture]
+		gotModels, gotRS := components(fixture)
+		wantModels, wantRS := components(inline)
+		if !reflect.DeepEqual(gotRS, wantRS) {
+			t.Errorf("%s: reaction_systems differ from %s:\n got  %v\n want %v", fixture, inline, gotRS, wantRS)
+		}
+		if !reflect.DeepEqual(gotModels, wantModels) {
+			t.Errorf("%s: models differ from %s:\n got  %v\n want %v", fixture, inline, gotModels, wantModels)
 		}
 	}
-	var mounts []string
-	for f := range expected.Loads {
-		mounts = append(mounts, f)
-	}
-	for f := range expected.LoadErrors {
-		mounts = append(mounts, f)
-	}
-	for _, f := range mounts {
-		_, err := LoadPath(filepath.Join(dir, f))
+	for _, fixture := range sortedKeys(expected.LoadErrors) {
+		code := ""
+		for c, bindings := range expected.LoadErrors[fixture] {
+			for _, b := range bindings {
+				if b == "go" {
+					code = c
+				}
+			}
+		}
+		_, err := LoadPath(filepath.Join(dir, fixture))
+		if err == nil {
+			t.Errorf("%s loaded; it must be refused", fixture)
+			continue
+		}
+		if code == "" {
+			continue
+		}
 		var et *ExpressionTemplateError
-		if !errors.As(err, &et) || et.Code != CodeMountFormUnsupported {
-			t.Errorf("%s: error %v; want %s", f, err, CodeMountFormUnsupported)
+		if !errors.As(err, &et) || string(et.Code) != code {
+			t.Errorf("%s: error %v; want %s", fixture, err, code)
 			continue
 		}
 		if !strings.HasPrefix(et.Path, "/reaction_systems/") {
-			t.Errorf("%s: path = %q; want /reaction_systems/<k>", f, et.Path)
+			t.Errorf("%s: path = %q; want /reaction_systems/<k>", fixture, et.Path)
 		}
 	}
-	for _, inline := range expected.Loads {
-		if _, err := LoadPath(filepath.Join(dir, inline)); err != nil {
-			t.Errorf("%s must load: %v", inline, err)
+}
+
+// A top-level `reaction_systems.<k>` `{ref}` runs the whole edge pipeline
+// (esm-spec §4.7): the edge's `bindings` close the leaf, its `index_sets` merge
+// into the mounting document, and `index_set_rename` applies, as at `models.<k>`.
+func TestTopLevelReactionSystemRefRunsTheEdgePipeline(t *testing.T) {
+	dir := t.TempDir()
+	leaf := `{"esm":"1.0.0","metadata":{"name":"rs_leaf","description":"probe"},
+ "metaparameters":{"N":{"type":"integer","default":2}},
+ "index_sets":{"x":{"kind":"interval","size":"N"}},
+ "reaction_systems":{"Chem":{"species":{"A":{"units":"1","default":1.0}},
+  "parameters":{"k":{"units":"1/s","default":0.3}},
+  "reactions":[{"id":"R1","substrates":[{"species":"A","stoichiometry":1}],"products":null,"rate":"k"}]}}}`
+	if err := os.WriteFile(filepath.Join(dir, "leaf.esm"), []byte(leaf), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	load := func(edge string) map[string]IndexSet {
+		t.Helper()
+		host := `{"esm":"1.0.0","metadata":{"name":"rs_host","description":"probe"},
+ "reaction_systems":{"Chem":{"ref":"./leaf.esm"` + edge + `}}}`
+		path := filepath.Join(dir, "host.esm")
+		if err := os.WriteFile(path, []byte(host), 0o644); err != nil {
+			t.Fatal(err)
 		}
+		f, err := LoadPath(path)
+		if err != nil {
+			t.Fatalf("edge %q: %v", edge, err)
+		}
+		return f.IndexSets
+	}
+	size := func(sets map[string]IndexSet, name string) int64 {
+		t.Helper()
+		s, ok := sets[name]
+		if !ok || s.Size == nil {
+			t.Fatalf("index set %q missing or unsized: %v", name, sets)
+		}
+		return int64(*s.Size)
+	}
+	if got := size(load(""), "x"); got != 2 {
+		t.Errorf("x = %d; want the leaf's default 2", got)
+	}
+	if got := size(load(`,"bindings":{"N":5}`), "x"); got != 5 {
+		t.Errorf("x = %d; want 5, closed by the edge", got)
+	}
+	renamed := load(`,"index_set_rename":{"x":"y"}`)
+	if _, still := renamed["x"]; still {
+		t.Errorf("x survived the rename: %v", renamed)
+	}
+	if got := size(renamed, "y"); got != 2 {
+		t.Errorf("y = %d; want 2", got)
 	}
 }

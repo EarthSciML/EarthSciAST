@@ -7,9 +7,8 @@ system (or the one its `reaction_system` selector names) is spliced in under the
 key `<k>`, so a coupled document can name a reaction-system file the way it
 names a model file at `models.<k>`.
 
-Julia and Rust implement the form. Python, TypeScript and Go refuse it with
-`mount_form_unsupported` at `/reaction_systems/<k>`, and assert that refusal on
-every mounting fixture here.
+All five bindings implement the form, through the same edge pipeline each runs
+for a top-level `models.<k>` `{ref}`.
 
 ## The fixtures
 
@@ -27,23 +26,24 @@ every mounting fixture here.
 
 ## What `expected.json` pins
 
-- `implemented_by` — the bindings that mount the form. Every other binding must
-  refuse every fixture here that uses it, with `mount_form_unsupported`.
+- `implemented_by` — the bindings that mount the form (all five). A binding not
+  listed must refuse every fixture here that uses it, with
+  `mount_form_unsupported`.
 - `loads` — `{fixture: inline_fixture}`. After load and emit, the two documents'
   `models` and `reaction_systems` blocks are deep-equal.
 - `load_errors` — `{fixture: {code: [bindings]}}`, as in
   `tests/conformance/mount_element_type/`. A binding listed under no code must
   still refuse the fixture.
 
-None of the fixtures declares `metaparameters` or `index_sets`. Julia's mount of
-this form does not yet close a leaf's metaparameters or merge its `index_sets`
-at the edge (esm-spec §4.7), and Rust's does, so a fixture with either would not
-be one the two agree on.
+None of the fixtures declares `metaparameters` or `index_sets`; that half of the
+pipeline at this form (edge `bindings`, the `index_sets` merge,
+`index_set_rename`) is pinned by each binding's own mount-rename tests.
 
 ## What each binding asserts
 
 - `pkg/EarthSciAST.jl/test/toplevel_reaction_system_ref_test.jl`
 - `pkg/earthsci-ast-rs/tests/toplevel_reaction_system_ref.rs`
-- `pkg/earthsci-ast-py/tests/test_mount_index_set_rename.py::test_toplevel_reaction_system_ref_conformance_fixtures_are_refused`
-- `pkg/earthsci-ast-go/pkg/esm/mount_index_set_rename_test.go::TestTopLevelReactionSystemRefConformanceFixturesAreRefused`
+- `pkg/earthsci-ast-py/tests/test_mount_index_set_rename.py::test_toplevel_reaction_system_ref_loads_as_if_written_inline`
+  and `::test_toplevel_reaction_system_ref_bad_mount_is_refused`
+- `pkg/earthsci-ast-go/pkg/esm/mount_index_set_rename_test.go::TestTopLevelReactionSystemRefConformanceFixtures`
 - `pkg/earthsci-ast-ts/src/mount-index-set-rename.test.ts` ("tests/conformance/toplevel_reaction_system_ref")

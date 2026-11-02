@@ -83,6 +83,11 @@ func resolveSubsystemRefsInternal(file *ESMFile, basePath string, visited map[st
 	if err := inlineTopLevelModelRefs(file, basePath, visited, registry, sources, parentMeta, apiMeta, rootEnv, precision); err != nil {
 		return err
 	}
+	// ... and top-level `reaction_systems.<k>` mount edges, the same edge at the
+	// other top-level attachment point.
+	if err := inlineTopLevelReactionSystemRefs(file, basePath, visited, registry, sources, parentMeta, apiMeta, rootEnv, precision); err != nil {
+		return err
+	}
 
 	// Resolve subsystems in models. model.Subsystems is a map (reference type)
 	// that resolveSubsystemMap mutates in place, so no write-back of the Model
@@ -117,11 +122,18 @@ func resolveSubsystemRefsInternal(file *ESMFile, basePath string, visited map[st
 // Returns nil for the common document with no such mount, so the resolver's
 // fast path is a nil-map length check.
 func extractTopLevelModelRefEdges(jsonStr string) map[string]map[string]any {
+	return extractTopLevelRefEdges(jsonStr, topLevelModelMount)
+}
+
+// extractTopLevelRefEdges is extractTopLevelModelRefEdges for either top-level
+// attachment point: the `form.section` block's entries that carry a `ref`
+// string and no `form.inlineKey` (`variables` / `species`).
+func extractTopLevelRefEdges(jsonStr string, form mountForm) map[string]map[string]any {
 	view, err := decodeJSONView([]byte(jsonStr))
 	if err != nil {
 		return nil
 	}
-	models, ok := view["models"].(map[string]any)
+	models, ok := view[form.section].(map[string]any)
 	if !ok {
 		return nil
 	}
@@ -134,7 +146,7 @@ func extractTopLevelModelRefEdges(jsonStr string) map[string]map[string]any {
 		if _, isString := entry["ref"].(string); !isString {
 			continue
 		}
-		if _, inline := entry["variables"]; inline {
+		if _, inline := entry[form.inlineKey]; inline {
 			continue
 		}
 		if out == nil {
@@ -238,54 +250,106 @@ func inlineTopLevelModelRefs(file *ESMFile, basePath string, visited map[string]
 	return nil
 }
 
-// inlineNestedTopLevelModelRefs inlines every top-level `models.<k>` MOUNT EDGE
-// that a MOUNTED document carries of its own, in that document's own directory
-// (esm-spec §4.7 "Two mount forms, one mechanism": the top-level form composes
-// with itself, because the component it lands is a top-level system and a
-// top-level system is what the form mounts).
+// inlineTopLevelReactionSystemRefs is inlineTopLevelModelRefs at the other
+// top-level attachment point: every top-level `reaction_systems.<k>` MOUNT EDGE
+// LoadString captured (a `ref` and no `species`) goes through
+// resolveSubsystemMap under topLevelReactionSystemMount, and the leaf's
+// reaction system lands under the mount key with its inline `tests` dropped.
+// `ESMFile.ReactionSystems` is a `map[string]ReactionSystem`, so without this a
+// bare `{ref}` entry would be an EMPTY reaction system.
+func inlineTopLevelReactionSystemRefs(file *ESMFile, basePath string, visited map[string]bool,
+	registry map[string]IndexSet, sources *mountedSources, parentMeta, apiMeta, rootEnv map[string]int64, precision string) error {
+	if len(file.topLevelReactionSystemRefs) == 0 {
+		return nil
+	}
+	if file.ReactionSystems == nil {
+		file.ReactionSystems = map[string]ReactionSystem{}
+	}
+	for _, name := range sortedKeys(file.topLevelReactionSystemRefs) {
+		edge := file.topLevelReactionSystemRefs[name]
+		ref, _ := edge["ref"].(string)
+		holder := map[string]any{name: edge}
+		if err := resolveSubsystemMap(holder, basePath, visited, registry, sources, parentMeta, apiMeta, nil,
+			rootEnv, "/reaction_systems", topLevelReactionSystemMount, precision); err != nil {
+			return err
+		}
+		resolvedRaw, ok := holder[name].(map[string]any)
+		if !ok {
+			return withETPath(newETErr(CodeUnresolvedSubsystemRef, fmt.Sprintf(
+				"top-level reaction system %q: ref %q did not resolve to a component (esm-spec §4.7)",
+				name, ref)), "/reaction_systems/"+name)
+		}
+		// esm-spec §6.6: inline tests do NOT cross a mount edge.
+		delete(resolvedRaw, "tests")
+		b, err := json.Marshal(resolvedRaw)
+		if err != nil {
+			return fmt.Errorf("top-level reaction system %q: re-encoding resolved ref %q: %w", name, ref, err)
+		}
+		var rs ReactionSystem
+		if err := json.Unmarshal(b, &rs); err != nil {
+			return fmt.Errorf("top-level reaction system %q: decoding resolved ref %q: %w", name, ref, err)
+		}
+		normalizeReactionSystemLiterals(&rs)
+		file.ReactionSystems[name] = rs
+		// The edge is CONSUMED (see inlineTopLevelModelRefs).
+		delete(file.topLevelReactionSystemRefs, name)
+	}
+	return nil
+}
+
+// inlineNestedTopLevelRefs inlines every top-level `models.<k>` and
+// `reaction_systems.<k>` MOUNT EDGE that a MOUNTED document carries of its own,
+// in that document's own directory (esm-spec §4.7 "Two mount forms, one
+// mechanism": the top-level form composes with itself, because the component it
+// lands is a top-level system and a top-level system is what the form mounts).
 //
 // The edges go through resolveSubsystemMap — the one edge-pipeline
-// implementation in this binding — under the top-level mount form, so each
-// nested leaf gets the same normative order, the same diagnostics, and the same
-// `visited` path-scoped cycle set the root's edges get. That recursion re-enters
-// this function for ITS leaf, so a chain of any depth composes.
+// implementation in this binding — under the matching top-level mount form, so
+// each nested leaf gets the same normative order, the same diagnostics, and the
+// same `visited` path-scoped cycle set the root's edges get. That recursion
+// re-enters this function for ITS leaf, so a chain of any depth composes.
+//
+// `pathPrefix` is the pointer the edges' blocks hang under (`""` at the root,
+// so a root edge is reported at `/models/<k>` / `/reaction_systems/<k>`).
 //
 // esm-spec §6.6: a mounted component's inline `tests` do not cross a mount edge,
 // at any depth — dropped here on the raw map for the same reason the root's
 // inliner drops them, so the leaf's assertions are never interpreted by a
 // document that may go on to couple it.
-func inlineNestedTopLevelModelRefs(view map[string]any, basePath string, visited map[string]bool,
+func inlineNestedTopLevelRefs(view map[string]any, basePath string, visited map[string]bool,
 	registry map[string]IndexSet, sources *mountedSources, parentMeta, apiMeta, forwarded, rootEnv map[string]int64, pathPrefix string, precision string) error {
-	models, ok := view["models"].(map[string]any)
-	if !ok || len(models) == 0 {
-		return nil
-	}
-	edges := map[string]any{}
-	for _, name := range sortedKeys(models) {
-		entry, ok := models[name].(map[string]any)
-		if !ok {
+	for _, form := range topLevelMountForms {
+		comps, ok := view[form.section].(map[string]any)
+		if !ok || len(comps) == 0 {
 			continue
 		}
-		if _, isString := entry["ref"].(string); !isString {
+		edges := map[string]any{}
+		for _, name := range sortedKeys(comps) {
+			entry, ok := comps[name].(map[string]any)
+			if !ok {
+				continue
+			}
+			if _, isString := entry["ref"].(string); !isString {
+				continue
+			}
+			if _, inline := entry[form.inlineKey]; inline {
+				continue
+			}
+			edges[name] = entry
+		}
+		if len(edges) == 0 {
 			continue
 		}
-		if _, inline := entry["variables"]; inline {
-			continue
+		if err := resolveSubsystemMap(edges, basePath, visited, registry, sources, parentMeta, apiMeta, forwarded,
+			rootEnv, pathPrefix+"/"+form.section, form, precision); err != nil {
+			return err
 		}
-		edges[name] = entry
-	}
-	if len(edges) == 0 {
-		return nil
-	}
-	if err := resolveSubsystemMap(edges, basePath, visited, registry, sources, parentMeta, apiMeta, forwarded,
-		rootEnv, pathPrefix, topLevelModelMount, precision); err != nil {
-		return err
-	}
-	for name, resolved := range edges {
-		if m, ok := resolved.(map[string]any); ok {
-			delete(m, "tests")
+		for name, resolved := range edges {
+			if m, ok := resolved.(map[string]any); ok {
+				delete(m, "tests")
+			}
+			comps[name] = resolved
 		}
-		models[name] = resolved
 	}
 	return nil
 }
@@ -472,23 +536,36 @@ func foldNestedIndexSets(view map[string]any, leafRegistry map[string]IndexSet, 
 }
 
 // mountForm names which of esm-spec §4.7's two attachment points a `{ref}` mount
-// edge sits at: a `subsystems.<k>` entry, or a top-level `models.<k>` entry.
+// edge sits at: a `subsystems.<k>` entry, or a top-level `models.<k>` /
+// `reaction_systems.<k>` entry.
 //
 // "Two mount forms, one mechanism" — the forms differ ONLY in where the mounted
 // component lands, and a binding MUST NOT make them differ otherwise. So this
-// steers diagnostic wording and nothing else: both forms run resolveSubsystemMap,
-// which is the one implementation of the §4.7 edge pipeline in this binding.
+// steers diagnostic wording and which component the leaf yields, and nothing
+// else: every form runs resolveSubsystemMap, which is the one implementation of
+// the §4.7 edge pipeline in this binding.
 type mountForm struct {
 	// section is the document block the edge lives in, used to label the
 	// §9.7.6 binding scope (`subsystems.Soil` / `models.Soil`).
 	section string
 	// noun names the edge in prose diagnostics ("subsystem \"Soil\"").
 	noun string
+	// inlineKey marks an entry of a top-level block as an INLINE component
+	// rather than a bare `{ref}` stub: `variables` for a model, `species` for a
+	// reaction system. Empty for the `subsystems.<k>` form.
+	inlineKey string
 }
 
 var (
 	subsystemMount     = mountForm{section: "subsystems", noun: "subsystem"}
-	topLevelModelMount = mountForm{section: "models", noun: "top-level model"}
+	topLevelModelMount = mountForm{section: "models", noun: "top-level model", inlineKey: "variables"}
+	// topLevelReactionSystemMount is the other top-level attachment point. Its
+	// leaf yields the single reaction system it declares, or the one the edge's
+	// `reaction_system` selector names (extractTopLevelReactionSystemRaw).
+	topLevelReactionSystemMount = mountForm{section: "reaction_systems", noun: "top-level reaction system", inlineKey: "species"}
+	// topLevelMountForms is both top-level attachment points, models first, so
+	// the two forms' edges resolve in a fixed order.
+	topLevelMountForms = []mountForm{topLevelModelMount, topLevelReactionSystemMount}
 )
 
 // resolveSubsystemMap resolves references in a single subsystems map.
@@ -746,8 +823,8 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// recursion runs through resolveSubsystemMap, so `visited` gives it the
 		// same path-scoped cycle detection every other edge gets. Matches the
 		// Rust reference, which composes at both forms.
-		if err := inlineNestedTopLevelModelRefs(view, refBasePath, visited, leafRegistry, leafSources, childMeta, apiMeta, forward,
-			childFoldEnv, fmt.Sprintf("%s/%s/models", pathPrefix, key), leafEffective); err != nil {
+		if err := inlineNestedTopLevelRefs(view, refBasePath, visited, leafRegistry, leafSources, childMeta, apiMeta, forward,
+			childFoldEnv, fmt.Sprintf("%s/%s", pathPrefix, key), leafEffective); err != nil {
 			return fmt.Errorf("%s %q: resolving nested refs in %q: %w", form.noun, key, refKey, err)
 		}
 
@@ -889,8 +966,15 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 			}
 		}
 
-		// Extract the single top-level model or reaction system
-		resolved, err := extractSingleSystemRaw(view, refKey)
+		// Extract the single top-level model or reaction system (at the
+		// top-level `reaction_systems.<k>` form: the leaf's single reaction
+		// system, or the one the edge's selector names).
+		var resolved any
+		if form == topLevelReactionSystemMount {
+			resolved, err = extractTopLevelReactionSystemRaw(view, value, ref, refKey)
+		} else {
+			resolved, err = extractSingleSystemRaw(view, refKey)
+		}
 		if err != nil {
 			return fmt.Errorf("%s %q: %w", form.noun, key, err)
 		}
@@ -1024,6 +1108,37 @@ func extractRefWithBindings(value any) (string, map[string]any, bool) {
 // mounted as a subsystem (esm-spec §8, and the `subsystems` schema note), so a
 // referenced file whose only payload is a source catalogue has NO mountable
 // system — which is the correct rejection, not an oversight.
+// extractTopLevelReactionSystemRaw is the component a top-level
+// `reaction_systems.<k>` `{ref}` mount splices in: the referenced document's
+// single reaction system, or the one the edge's `reaction_system` selector
+// names. A leaf with none, a leaf with several and no selector, and a selector
+// naming a reaction system the leaf does not declare are all
+// `unresolved_subsystem_ref`, which is what Julia and Rust raise at this form.
+func extractTopLevelReactionSystemRaw(view map[string]any, edge any, ref, path string) (any, error) {
+	rss, _ := view["reaction_systems"].(map[string]any)
+	names := sortedKeys(rss)
+	if len(names) == 0 {
+		return nil, newETErr(CodeUnresolvedSubsystemRef,
+			fmt.Sprintf("ref %q: referenced file %q has no reaction_systems block (esm-spec §4.7)", ref, path))
+	}
+	available := strings.Join(names, ", ")
+	if m, ok := edge.(map[string]any); ok {
+		if sel, ok := m["reaction_system"].(string); ok {
+			rs, found := rss[sel]
+			if !found {
+				return nil, newETErr(CodeUnresolvedSubsystemRef,
+					fmt.Sprintf("ref %q has no reaction system %q (available: %s)", ref, sel, available))
+			}
+			return rs, nil
+		}
+	}
+	if len(names) > 1 {
+		return nil, newETErr(CodeUnresolvedSubsystemRef,
+			fmt.Sprintf("ref %q resolves to a file with several reaction_systems (%s); name one with the `reaction_system` selector (esm-spec §4.7)", ref, available))
+	}
+	return rss[names[0]], nil
+}
+
 func extractSingleSystemRaw(view map[string]any, path string) (any, error) {
 	models, _ := view["models"].(map[string]any)
 	rss, _ := view["reaction_systems"].(map[string]any)
@@ -1131,10 +1246,11 @@ func inlineRootRefsRaw(view map[string]any, basePath string, apiMeta map[string]
 	if p, ok := declaredElementTypeRaw(view); ok {
 		precision = p
 	}
-	// Top-level `models.<k>` mount edges first: the component each one splices
-	// in may itself carry `subsystems`, and the walk below resolves those.
-	if err := inlineNestedTopLevelModelRefs(view, basePath, visited, staged, mounted, parentMeta, apiMeta, nil,
-		parentMeta, "/models", precision); err != nil {
+	// Top-level `models.<k>` / `reaction_systems.<k>` mount edges first: the
+	// component each one splices in may itself carry `subsystems`, and the walk
+	// below resolves those.
+	if err := inlineNestedTopLevelRefs(view, basePath, visited, staged, mounted, parentMeta, apiMeta, nil,
+		parentMeta, "", precision); err != nil {
 		return nil, err
 	}
 	for _, kind := range templateComponentKinds {

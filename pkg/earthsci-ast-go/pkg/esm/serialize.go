@@ -44,28 +44,39 @@ func marshalCanonical(v any, indent bool) ([]byte, error) {
 //
 // Only edges the resolver has NOT consumed are still in the map, so this can
 // never overwrite a mount that did resolve.
+//
+// A top-level `reaction_systems.<k>` `{ref}` is the same edge at the other
+// top-level attachment point and is restored the same way.
 func restoreUnresolvedTopLevelMounts(canonical any, v any) (any, error) {
 	file, ok := v.(*ESMFile)
-	if !ok || len(file.topLevelModelRefs) == 0 {
+	if !ok {
 		return canonical, nil
 	}
 	root, ok := canonical.(map[string]any)
 	if !ok {
 		return canonical, nil
 	}
-	models, ok := root["models"].(map[string]any)
-	if !ok {
-		return canonical, nil
-	}
-	for _, name := range sortedKeys(file.topLevelModelRefs) {
-		if _, present := models[name]; !present {
+	for block, edges := range map[string]map[string]map[string]any{
+		"models":           file.topLevelModelRefs,
+		"reaction_systems": file.topLevelReactionSystemRefs,
+	} {
+		if len(edges) == 0 {
 			continue
 		}
-		edge, err := canonicalizeForJSON(file.topLevelModelRefs[name])
-		if err != nil {
-			return nil, err
+		comps, ok := root[block].(map[string]any)
+		if !ok {
+			continue
 		}
-		models[name] = edge
+		for _, name := range sortedKeys(edges) {
+			if _, present := comps[name]; !present {
+				continue
+			}
+			edge, err := canonicalizeForJSON(edges[name])
+			if err != nil {
+				return nil, err
+			}
+			comps[name] = edge
+		}
 	}
 	return canonical, nil
 }
