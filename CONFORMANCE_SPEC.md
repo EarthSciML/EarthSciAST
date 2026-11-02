@@ -6847,6 +6847,17 @@ binding per compiler, named `inline-tests <tier> <compiler> producer
 | Rust | `pkg/earthsci-ast-rs/src/bin/earthsci-inline-tests-adapter-rust.rs`, feature `conformance-adapters` |
 | Python | `pkg/earthsci-ast-py/src/earthsci_ast/cli/inline_tests_adapter.py` |
 
+**An adapter MAY take several tiers in one launch**: `--manifest <m> --output
+<o>` repeated, each `--output` belonging to the `--manifest` before it, all under
+the one `--compiler`. Each pair writes exactly the output a launch on that
+manifest alone would. The runner's `--adapter-output <o>` then grades such a
+file instead of launching the adapter, so the gate on every tier is unchanged:
+a tier whose output is missing or malformed fails as `no_output` /
+`invalid_output`, exactly as a single launch's would. The Julia stages use this,
+one launch per compiler over every tier, because nearly all of a Julia launch is
+compiling the build-and-solve path on first call. The Rust and Python adapters
+take one pair, and their stages still launch per tier.
+
 **Every stage NAMES its compiler**, on §5.44.5's terms and for §5.44.5's reason:
 `--compiler` is required by the runner and by every adapter, and a run that
 omits it is a configuration error rather than a run under whatever the library

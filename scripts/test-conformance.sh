@@ -1180,9 +1180,15 @@ _inline_tests_binding_dir() {
     esac
 }
 
+# Whether a tier's manifest scope-excludes a binding (it is then not run).
+_inline_tests_scope_excludes() {
+    python3 -c 'import json, sys; sys.exit(0 if sys.argv[2] in json.load(open(sys.argv[1])).get("scope_excluded", {}) else 1)' "$1" "$2"
+}
+
 _run_inline_tests_stage() {
     local binding="$1" compiler="$2"
-    local adapter dir tier manifest report rc=0 note
+    local adapter dir tier manifest report rc=0 note raw_dir
+    local -a batch_args=()
     adapter="$(_inline_tests_adapter_path "$binding")"
     dir="$(_inline_tests_binding_dir "$binding")"
     if [ -z "$adapter" ] || [ -z "$dir" ]; then
@@ -1197,20 +1203,46 @@ _run_inline_tests_stage() {
         error "inline-tests $compiler producer ($binding): the toolchain is missing — this gate cannot run, so it FAILS (it must never silently pass)"
         return 1
     fi
+    # Julia: ONE adapter process per compiler runs every tier, and each tier's
+    # stage below grades the output that launch wrote (`--adapter-output`).
+    # Nearly all of a Julia launch is compiling the build-and-solve path on
+    # first call; one process per tier paid it eight times over
+    # (CONFORMANCE_SPEC.md §5.45.5).
+    raw_dir="$OUTPUT_DIR/inline_tests/raw_${binding}_${compiler}"
+    if [ "$binding" = "julia" ]; then
+        rm -rf "$raw_dir" && mkdir -p "$raw_dir"
+        for tier in "${INLINE_TESTS_TIERS[@]}"; do
+            manifest="$TESTS_DIR/conformance/$tier/manifest.json"
+            if ! _inline_tests_scope_excludes "$manifest" "$binding"; then
+                batch_args+=(--manifest "$manifest" --output "$raw_dir/$tier.json")
+            fi
+        done
+        if [ ${#batch_args[@]} -gt 0 ]; then
+            log "Running the Julia inline-test adapter once over every tier ($compiler)..."
+            # A non-zero exit still leaves each tier's report (or its absence)
+            # for that tier's grading below, which is where it fails; the log
+            # is shown so the reason is not lost with the per-tier stderr.
+            if ! julia "$adapter" "${batch_args[@]}" --compiler "$compiler" \
+                > "$raw_dir/adapter.log" 2>&1; then
+                warning "Julia inline-test adapter ($compiler) exited non-zero; last lines of $raw_dir/adapter.log:"
+                tail -n 40 "$raw_dir/adapter.log"
+            fi
+        fi
+    fi
     for tier in "${INLINE_TESTS_TIERS[@]}"; do
         manifest="$TESTS_DIR/conformance/$tier/manifest.json"
         report="$OUTPUT_DIR/inline_tests/${tier}_${binding}_${compiler}_report.json"
         # A binding the tier's manifest scope-excludes is not run against it.
-        if python3 -c 'import json, sys; sys.exit(0 if sys.argv[2] in json.load(open(sys.argv[1])).get("scope_excluded", {}) else 1)' "$manifest" "$binding"; then
+        if _inline_tests_scope_excludes "$manifest" "$binding"; then
             log "Skipping inline-test conformance ($tier / $binding / $compiler): the tier scope-excludes $binding"
             continue
         fi
         log "Running inline-test conformance ($tier / $binding / $compiler)..."
         case "$binding" in
             julia)
-                env EARTHSCI_INLINE_TESTS_ADAPTER_JULIA="julia $adapter" \
-                    python3 "$INLINE_TESTS_RUNNER" --manifest "$manifest" \
-                        --bindings "$binding" --compiler "$compiler" --output "$report" || rc=$?
+                python3 "$INLINE_TESTS_RUNNER" --manifest "$manifest" \
+                    --bindings "$binding" --compiler "$compiler" --output "$report" \
+                    --adapter-output "$raw_dir/$tier.json" || rc=$?
                 ;;
             rust)
                 env EARTHSCI_INLINE_TESTS_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features conformance-adapters --bin earthsci-inline-tests-adapter-rust --" \

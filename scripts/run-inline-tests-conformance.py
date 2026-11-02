@@ -693,47 +693,57 @@ class InlineTestsHarness(AdapterHarness):
                 return self._broken(binding, "missing", str(e))
             except subprocess.TimeoutExpired:
                 return self._broken(binding, "timeout", f"adapter timed out after {timeout}s")
-            if not out_path.exists() or out_path.stat().st_size == 0:
-                return self._broken(
-                    binding,
-                    "no_output",
-                    "adapter wrote no output",
-                    exit_code=proc.returncode,
-                    stderr=(proc.stderr or "").strip()[-self.stderr_tail :],
-                )
-            try:
-                with out_path.open() as f:
-                    payload = json.load(f)
-            except json.JSONDecodeError as e:
-                return self._broken(
-                    binding,
-                    "invalid_output",
-                    f"adapter output not valid JSON: {e}",
-                    stderr=(proc.stderr or "").strip()[-self.stderr_tail :],
-                )
-            if not isinstance(payload, dict):
-                return self._broken(binding, "invalid_output", "adapter output is not an object")
-            if payload.get("status") == "unavailable":
-                payload.setdefault("binding", binding)
-                payload.setdefault("compiler", self.compiler)
-                payload.setdefault("fixtures", {})
-                payload["adapter_status"] = "unavailable"
-                return payload
-            if "fixtures" not in payload:
-                return self._broken(binding, "invalid_output", "adapter output missing 'fixtures'")
-            payload.setdefault("binding", binding)
-            payload.setdefault("compiler", self.compiler)
-            payload["adapter_status"] = "ok"
-            # A non-zero exit WITH a parsable report is read and gated anyway:
-            # the per-fixture entries say which fixture broke, and discarding
-            # them collapses "one fixture errored" into "the adapter fell over".
-            payload["exit_code"] = proc.returncode
-            return payload
+            return self.read_output(binding, out_path, proc.returncode, proc.stderr)
         finally:
             try:
                 out_path.unlink()
             except OSError:
                 pass
+
+    def read_output(
+        self, binding: str, out_path: Path, exit_code: int | None, stderr: str | None
+    ) -> dict:
+        """Classify one adapter output file. ``run`` calls it on the file it
+        just had the adapter write; ``--adapter-output`` calls it on a file an
+        earlier BATCHED launch wrote (CONFORMANCE_SPEC §5.45.5), for which
+        there is no per-manifest exit code or stderr."""
+        stderr_tail = (stderr or "").strip()[-self.stderr_tail :]
+        if not out_path.exists() or out_path.stat().st_size == 0:
+            return self._broken(
+                binding,
+                "no_output",
+                "adapter wrote no output",
+                exit_code=exit_code,
+                stderr=stderr_tail,
+            )
+        try:
+            with out_path.open() as f:
+                payload = json.load(f)
+        except json.JSONDecodeError as e:
+            return self._broken(
+                binding,
+                "invalid_output",
+                f"adapter output not valid JSON: {e}",
+                stderr=stderr_tail,
+            )
+        if not isinstance(payload, dict):
+            return self._broken(binding, "invalid_output", "adapter output is not an object")
+        if payload.get("status") == "unavailable":
+            payload.setdefault("binding", binding)
+            payload.setdefault("compiler", self.compiler)
+            payload.setdefault("fixtures", {})
+            payload["adapter_status"] = "unavailable"
+            return payload
+        if "fixtures" not in payload:
+            return self._broken(binding, "invalid_output", "adapter output missing 'fixtures'")
+        payload.setdefault("binding", binding)
+        payload.setdefault("compiler", self.compiler)
+        payload["adapter_status"] = "ok"
+        # A non-zero exit WITH a parsable report is read and gated anyway:
+        # the per-fixture entries say which fixture broke, and discarding
+        # them collapses "one fixture errored" into "the adapter fell over".
+        payload["exit_code"] = exit_code
+        return payload
 
     def _broken(self, binding: str, status: str, error: str, **extra: Any) -> dict:
         return {
@@ -755,6 +765,7 @@ def run_suite(
     output_path: Path,
     timeout: float | None,
     compiler: str,
+    adapter_output: Path | None = None,
 ) -> int:
     manifest = load_manifest(manifest_path)
     fixtures = manifest["fixtures"]
@@ -790,7 +801,14 @@ def run_suite(
         authored[fx["id"]] = authored_assertions(manifest_path, fx)
 
     harness = InlineTestsHarness(compiler)
-    adapters = harness.collect(bindings, manifest_path, timeout)
+    if adapter_output is not None:
+        # Grade what a batched launch already wrote; launch nothing.
+        if len(bindings) != 1:
+            _eprint("error: --adapter-output grades exactly ONE binding; name it with --bindings")
+            return 2
+        adapters = {bindings[0]: harness.read_output(bindings[0], adapter_output, None, None)}
+    else:
+        adapters = harness.collect(bindings, manifest_path, timeout)
 
     report: dict[str, Any] = {
         "manifest_path": str(manifest_path),
@@ -1640,6 +1658,16 @@ def parse_args(argv: list[str]) -> Any:
         ),
     )
     p.add_argument(
+        "--adapter-output",
+        type=Path,
+        default=None,
+        help=(
+            "Grade this already-written adapter output instead of launching the adapter. "
+            "For a BATCHED launch that ran several manifests in one process "
+            "(CONFORMANCE_SPEC §5.45.5); requires exactly one --bindings."
+        ),
+    )
+    p.add_argument(
         "--write-golden",
         action="store_true",
         help=(
@@ -1675,7 +1703,14 @@ def main(argv: list[str] | None = None) -> int:
         return rc
     bindings = [b.strip() for b in args.bindings.split(",") if b.strip()]
     try:
-        return run_suite(args.manifest, bindings, args.output, args.timeout, args.compiler)
+        return run_suite(
+            args.manifest,
+            bindings,
+            args.output,
+            args.timeout,
+            args.compiler,
+            args.adapter_output,
+        )
     except ManifestError as e:
         _eprint(f"manifest error: {e}")
         return 2
