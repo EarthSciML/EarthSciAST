@@ -171,27 +171,25 @@ _iset(n) = ESM.IndexSet("interval"; size = n)
         # `_liftdim<d>_<extent>` axis is added to the flattened registry as an
         # interval of its extent, so the lifted shape names only declared sets.
         bare = _mk_operator(ext, Pair[])
-        gaxes, ranges = ESM._pointwise_lift_axes(
+        reg = copy(index_sets)
+        lift_axes(registry) = ESM._pointwise_lift_axes(
             bare, loops, size_to_names, "sp", 3;
             mas = [bare], var_shapes = Dict{String, Vector{String}}(),
-            index_sets = index_sets, reg = nothing
+            index_sets = index_sets, reg = nothing, registry = registry
         )
+        gaxes, ranges = lift_axes(reg)
         for (d, l) in enumerate(loops)
             @test ranges[l] isa ESM.IndexSetRef
             @test (ranges[l]::ESM.IndexSetRef).from == gaxes[d]
         end
-        reg = copy(index_sets)
-        ESM._register_lift_index_sets!(reg, gaxes, ext, "sp")
         @test collect(keys(reg))[(end - 2):end] == ["_liftdim1_6", "_liftdim2_6", "_liftdim3_8"]
         @test [reg[a].size for a in gaxes] == ext
-        # Registering again (a second species on the same grid) adds nothing.
-        ESM._register_lift_index_sets!(reg, gaxes, ext, "sp2")
+        # Lifting again (a second species on the same grid) adds nothing.
+        lift_axes(reg)
         @test length(reg) == length(index_sets) + 3
         # A declared set of the synthetic name with another size is refused.
         clash = copy(index_sets)
         clash["_liftdim1_6"] = _iset(5)
-        @test_throws ESM.DimensionPromotionError ESM._register_lift_index_sets!(
-            clash, gaxes, ext, "sp"
-        )
+        @test_throws ESM.DimensionPromotionError lift_axes(clash)
     end
 end

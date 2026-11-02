@@ -3135,6 +3135,22 @@ def _collect_field_ics(flat: FlattenedSystem) -> None:
             ics.append((target, eq.rhs))
         else:
             remaining.append(eq)
+    # One initial condition per state (esm-libraries-spec §4.7.5 step 4
+    # `field_ics`). Two -- an authored `ic(x)` and an operator's `ic(_var)`
+    # expanded onto `x`, or two such templates -- leave nothing to say which
+    # one holds, so the document is refused rather than one silently winning.
+    seen: set[str] = set()
+    duplicated: list[str] = []
+    for target, _ in ics:
+        if target in seen and target not in duplicated:
+            duplicated.append(target)
+        seen.add(target)
+    if duplicated:
+        raise ConflictingDerivativeError(
+            "states have more than one initial condition `ic(x)` "
+            "(an authored one and an operator's `ic(_var)` expanded onto it, "
+            f"or two such templates): {', '.join(duplicated)}"
+        )
     flat.field_ics = ics
     flat.equations = remaining
 
@@ -3975,6 +3991,7 @@ def _lift_index_sets(
     extents: list[int],
     var_shapes: dict[str, list[str]],
     declared: dict[str, Any],
+    declared_by_size: dict[int, list[str]],
     index_sets: dict[str, Any],
     species: str,
 ) -> list[str]:
@@ -3983,22 +4000,18 @@ def _lift_index_sets(
 
     Dimension ``d`` (1-based in the name) is, in order: the index set its
     gathered operands name (:func:`_lift_axis_names`); else the only index set
-    the document declares (``declared``) whose ``size`` is the extent; else
+    the document declares (``declared``, grouped by size in
+    ``declared_by_size``) whose ``size`` is the extent; else
     ``_liftdim<d>_<extent>``, added to ``index_sets`` as an interval of that
     size if it is not there yet.
     """
     named = _lift_axis_names(mas, loops, extents, var_shapes, declared)
-    by_size: dict[int, list[str]] = {}
-    for name, entry in declared.items():
-        size = entry.get("size") if isinstance(entry, dict) else None
-        if isinstance(size, int):
-            by_size.setdefault(size, []).append(name)
     axes: list[str] = []
     for d, extent in enumerate(extents):
         if named[d] is not None:
             axes.append(named[d])
             continue
-        candidates = by_size.get(extent, [])
+        candidates = declared_by_size.get(extent, [])
         if len(candidates) == 1:
             axes.append(candidates[0])
             continue
@@ -4065,11 +4078,16 @@ def _apply_pointwise_lift(flat: FlattenedSystem, coupling: list[CouplingEntry]) 
         return None
 
     # A species is lifted iff its state ODE's merged RHS carries a spatial-operator
-    # makearray (the advection contribution operator_compose added).
+    # makearray (the advection contribution operator_compose added) and it does
+    # not already declare a shape: a state that already lives on a grid has
+    # nothing to lift, and its declared shape stands.
     lifted: set[str] = set()
     for eq in flat.equations:
         target = _d_target(eq.lhs)
         if target is None:
+            continue
+        declared_state = flat.state_variables.get(target)
+        if declared_state is not None and getattr(declared_state, "shape", None):
             continue
         if _collect_makearrays(eq.rhs, []):
             lifted.add(target)
@@ -4090,6 +4108,11 @@ def _apply_pointwise_lift(flat: FlattenedSystem, coupling: list[CouplingEntry]) 
     # The registry as the document declares it, before the lift adds any
     # `_liftdim<d>_<extent>` set: only a declared set is matched by size.
     declared = dict(flat.index_sets)
+    declared_by_size: dict[int, list[str]] = {}
+    for name, entry in declared.items():
+        size = entry.get("size") if isinstance(entry, dict) else None
+        if isinstance(size, int):
+            declared_by_size.setdefault(size, []).append(name)
 
     new_equations: list[FlattenedEquation] = []
     for eq in flat.equations:
@@ -4115,7 +4138,9 @@ def _apply_pointwise_lift(flat: FlattenedSystem, coupling: list[CouplingEntry]) 
             )
 
         extents = _makearray_extents(mas[0])
-        axes = _lift_index_sets(mas, loops, extents, var_shapes, declared, flat.index_sets, target)
+        axes = _lift_index_sets(
+            mas, loops, extents, var_shapes, declared, declared_by_size, flat.index_sets, target
+        )
         ranges: dict[str, Any] = {loops[d]: {"from": axes[d]} for d in range(rank)}
         output_idx: list[Any] = list(loops)
 

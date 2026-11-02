@@ -6838,6 +6838,143 @@
       }
     },
     {
+      "id": "lift_skips_shaped_state",
+      "tier": "pointwise_lift",
+      "fixture": "conformance/pointwise_lift/fixtures/lift_skips_shaped_state.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "Chem.c",
+          "role": "state",
+          "units": "mol/mol",
+          "default": 1.0,
+          "shape": [
+            "cell"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Chem"
+        },
+        {
+          "name": "Chem.m",
+          "role": "state",
+          "units": "mol/mol",
+          "default": 1.0,
+          "shape": [
+            "cell"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Chem"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "Chem.k",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.1,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Chem"
+        },
+        {
+          "name": "Dep.kd",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.0002,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Dep"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 2,
+      "equations": [
+        {
+          "lhs": "sum[i] (D(Chem.c[i])/Dt) where {i in cell}",
+          "rhs": "sum[i] ((-Chem.k) * Chem.c[i] + (makearray([1:4] = sum[i] ((-Dep.kd) * Chem.c[i]) where {i in 1:4}))[i]) where {i in cell}",
+          "source_system": "Chem",
+          "contributions": [
+            {
+              "rhs": "(-Chem.k) * Chem.c[i]",
+              "origins": [
+                {
+                  "component": "Chem"
+                }
+              ]
+            },
+            {
+              "rhs": "(makearray([1:4] = sum[i] ((-Dep.kd) * Chem.c[i]) where {i in 1:4}))[i]",
+              "origins": [
+                {
+                  "component": "Dep"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "D(Chem.m)/Dt",
+          "rhs": "(-Chem.k) * Chem.m + makearray([1:4] = sum[i] ((-Dep.kd) * Chem.m[i]) where {i in 1:4})",
+          "source_system": "Chem",
+          "contributions": [
+            {
+              "rhs": "(-Chem.k) * Chem.m",
+              "origins": [
+                {
+                  "component": "Chem"
+                }
+              ]
+            },
+            {
+              "rhs": "makearray([1:4] = sum[i] ((-Dep.kd) * Chem.m[i]) where {i in 1:4})",
+              "origins": [
+                {
+                  "component": "Dep"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "Chem",
+          "Dep"
+        ],
+        "coupling_rules": [
+          "operator_compose(Chem + Dep)"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [
+        "cell",
+        "lev"
+      ],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {
+        "Chem.c": [
+          4
+        ]
+      }
+    },
+    {
       "id": "term_provenance_systems_order_ab",
       "tier": "term_provenance",
       "fixture": "conformance/term_provenance/fixtures/systems_order_ab.esm",
@@ -8364,6 +8501,11 @@
     }
   ],
   "refusals": [
+    {
+      "fixture": "conformance/pointwise_lift/fixtures/lift_placeholder_ic_conflict.esm",
+      "error": "ConflictingDerivativeError",
+      "reason": "Chem declares its own `ic(c)` and the operator's `ic(_var)` template expands onto `Chem.c` as well, so `Chem.c` has two initial conditions. esm-libraries-spec §4.7.5 step 4: `field_ics` holds at most one entry per state, so flatten refuses rather than let one silently win."
+    },
     {
       "fixture": "conformance/pointwise_lift/fixtures/lift_synthetic_name_clash.esm",
       "error": "DimensionPromotionError",

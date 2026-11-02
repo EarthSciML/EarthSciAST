@@ -1040,6 +1040,22 @@ function _extract_field_ics!(
             push!(ics, target => eq.rhs)
         end
     end
+    # One initial condition per state (esm-libraries-spec §4.7.5 step 4
+    # `field_ics`). Two leave nothing to say which one holds, so the document is
+    # refused rather than one silently winning.
+    seen = Set{String}()
+    duplicated = String[]
+    for (target, _) in ics
+        target in seen && !(target in duplicated) && push!(duplicated, target)
+        push!(seen, target)
+    end
+    isempty(duplicated) || throw(
+        ConflictingDerivativeError(
+            duplicated,
+            "states have more than one initial condition `ic(x)` (an authored " *
+                "one and an operator's `ic(_var)` expanded onto it, or two such templates)"
+        )
+    )
     if length(remaining) != length(equations)
         empty!(equations)
         append!(equations, remaining)

@@ -33,9 +33,14 @@ The other corpus cases with a lift (`advection_reaction_loaded_ic_bc`,
 | `lift_onto_undeclared_grid.esm` | `[4]` | No variable declares the grid's shape; `cell` is the only index set of size 4. | `shape: ["cell"]` |
 | `lift_same_size_index_sets.esm` | `[3, 3]` | `y` and `x` both have size 3, and `y` is declared first. `Wind.u` is declared on `[x, y]` and gathered as `index(u, i, j)`, which names each dimension. | `shape: ["x", "y"]` |
 | `lift_placeholder_ic.esm` | `[4]` | The operator writes a field initial condition on its placeholder, `ic(_var) ~ Dep.c0 * 2`. It expands once per state of `Chem`, so `field_ics` holds `Chem.c` and `Chem.n`, never `_var`. | `shape: ["cell"]` for both states |
+| `lift_skips_shaped_state.esm` | `[4]` | `Chem.m` already declares `shape: ["cell"]`; the operator's `D(_var)` reaches it as well as the scalar `Chem.c`. Only `Chem.c` is lifted: `Chem.m` keeps its shape, gets no `lifted_shapes` entry, and its equation is not wrapped in a lifted `faq`. | `shape: ["cell"]` |
 | `lift_synthetic_index_sets.esm` | `[3, 5]` | Two index sets of size 3 (`a`, `b`) and no shaped operand; no index set of size 5. | `shape: ["_liftdim1_3", "_liftdim2_5"]`, and `index_sets` gains both |
 
-One fixture is a corpus **refusal** (the corpus's `refusals` array, error
-`DimensionPromotionError`): `lift_synthetic_name_clash.esm` needs the synthetic index set
-`_liftdim1_3`, but the document declares an index set of that name with size 4, so flatten
-refuses it rather than shadow the declared set.
+Two fixtures are corpus **refusals** (the corpus's `refusals` array):
+
+- `lift_synthetic_name_clash.esm` (`DimensionPromotionError`) needs the synthetic index set
+  `_liftdim1_3`, but the document declares an index set of that name with size 4, so flatten
+  refuses it rather than shadow the declared set.
+- `lift_placeholder_ic_conflict.esm` (`ConflictingDerivativeError`) declares `ic(c)` on `Chem`
+  while the operator's `ic(_var)` also expands onto `Chem.c`, leaving it two initial
+  conditions; flatten refuses rather than let one win.

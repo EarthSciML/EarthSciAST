@@ -455,7 +455,7 @@ fn flatten_conflicting_derivative_raises_error() {
 
     let err = flatten(&file).unwrap_err();
     match err {
-        FlattenError::ConflictingDerivative { species } => {
+        FlattenError::ConflictingDerivative { species, .. } => {
             assert!(
                 species.iter().any(|s| s == "sys.X"),
                 "expected conflict for sys.X, got {species:?}"

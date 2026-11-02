@@ -356,8 +356,9 @@ CASES: list[tuple[str, str, str]] = [
     # dimension gets its index set: the only declared set of the extent's size
     # (a grid no variable declares), a shaped operand gathered at the lift's
     # loops (two sets of one size), and the registered `_liftdim<d>_<extent>`
-    # when nothing declared decides; and an operator's `ic(_var)` template,
-    # which `field_ics` records once per lifted state. See
+    # when nothing declared decides; an operator's `ic(_var)` template, which
+    # `field_ics` records once per lifted state; and a state that already
+    # declares a shape, which the lift leaves alone. See
     # tests/conformance/pointwise_lift.
     *[
         (
@@ -370,6 +371,7 @@ CASES: list[tuple[str, str, str]] = [
             "lift_same_size_index_sets",
             "lift_synthetic_index_sets",
             "lift_placeholder_ic",
+            "lift_skips_shaped_state",
         )
     ],
     # --- per-term provenance (esm-libraries-spec §4.7.5, issue #539) ---------
@@ -432,6 +434,16 @@ CASES: list[tuple[str, str, str]] = [
 # one language's float repr.
 
 REFUSALS: list[dict[str, str]] = [
+    {
+        "fixture": "conformance/pointwise_lift/fixtures/lift_placeholder_ic_conflict.esm",
+        "error": "ConflictingDerivativeError",
+        "reason": (
+            "Chem declares its own `ic(c)` and the operator's `ic(_var)` template expands onto "
+            "`Chem.c` as well, so `Chem.c` has two initial conditions. esm-libraries-spec "
+            "§4.7.5 step 4: `field_ics` holds at most one entry per state, so flatten refuses "
+            "rather than let one silently win."
+        ),
+    },
     {
         "fixture": "conformance/pointwise_lift/fixtures/lift_synthetic_name_clash.esm",
         "error": "DimensionPromotionError",

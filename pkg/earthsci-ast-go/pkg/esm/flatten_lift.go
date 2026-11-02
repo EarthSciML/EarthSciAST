@@ -175,17 +175,12 @@ func liftAxisNames(mas []ExprNode, loops []string, extents []int,
 //
 // Dimension d (1-based in the name) is, in order: the index set its gathered
 // operands name (liftAxisNames); else the only index set the document declares
-// (`declared`, in declaration order) whose size is the extent; else
+// (`sizes` maps each declared set to its size; `bySize` groups the declared
+// names by size, in declaration order) whose size is the extent; else
 // `_liftdim<d>_<extent>`, appended to flat.IndexSets as an interval of that
-// size if it is not there yet.
-func liftIndexSets(flat *FlattenedSystem, declared []FlattenedIndexSet, mas []ExprNode,
+// size if it is not there yet. Both tables are built once per lift pass.
+func liftIndexSets(flat *FlattenedSystem, sizes map[string]int, bySize map[int][]string, mas []ExprNode,
 	loops []string, extents []int, varShapes map[string][]string, species string) ([]string, error) {
-	sizes := map[string]int{}
-	for _, is := range declared {
-		if is.Set.Size != nil {
-			sizes[is.Name] = *is.Set.Size
-		}
-	}
 	named := liftAxisNames(mas, loops, extents, varShapes, sizes)
 	axes := make([]string, len(extents))
 	for d, extent := range extents {
@@ -193,13 +188,7 @@ func liftIndexSets(flat *FlattenedSystem, declared []FlattenedIndexSet, mas []Ex
 			axes[d] = named[d]
 			continue
 		}
-		var candidates []string
-		for _, is := range declared {
-			if is.Set.Size != nil && *is.Set.Size == extent {
-				candidates = append(candidates, is.Name)
-			}
-		}
-		if len(candidates) == 1 {
+		if candidates := bySize[extent]; len(candidates) == 1 {
 			axes[d] = candidates[0]
 			continue
 		}
@@ -305,11 +294,18 @@ func applyPointwiseLift(flat *FlattenedSystem, coupling []CouplingEntry) error {
 
 	// A species is lifted iff its state ODE's merged RHS carries a
 	// spatial-operator makearray (the advection contribution operator_compose
-	// added).
+	// added) and it does not already declare a shape: a state that already
+	// lives on a grid has nothing to lift, and its declared shape stands.
+	shaped := map[string]bool{}
+	for _, v := range flat.StateVariables {
+		if len(v.Shape) > 0 {
+			shaped[v.Name] = true
+		}
+	}
 	lifted := map[string]bool{}
 	for _, eq := range flat.Equations {
 		target := dTarget(eq.LHS)
-		if target == "" {
+		if target == "" || shaped[target] {
 			continue
 		}
 		if len(collectMakearrays(eq.RHS)) > 0 {
@@ -341,7 +337,14 @@ func applyPointwiseLift(flat *FlattenedSystem, coupling []CouplingEntry) error {
 	}
 	// The registry as the document declares it, before the lift adds any
 	// `_liftdim<d>_<extent>` set: only a declared set is matched by size.
-	declared := append([]FlattenedIndexSet(nil), flat.IndexSets...)
+	sizes := map[string]int{}
+	bySize := map[int][]string{}
+	for _, is := range flat.IndexSets {
+		if is.Set.Size != nil {
+			sizes[is.Name] = *is.Set.Size
+			bySize[*is.Set.Size] = append(bySize[*is.Set.Size], is.Name)
+		}
+	}
 
 	var out []FlattenedEquation
 	for _, eq := range flat.Equations {
@@ -369,7 +372,7 @@ func applyPointwiseLift(flat *FlattenedSystem, coupling []CouplingEntry) error {
 		}
 
 		extents := makearrayExtents(mas[0])
-		axes, err := liftIndexSets(flat, declared, mas, loops, extents, varShapes, target)
+		axes, err := liftIndexSets(flat, sizes, bySize, mas, loops, extents, varShapes, target)
 		if err != nil {
 			return err
 		}

@@ -2775,6 +2775,23 @@ function collectFieldIcs(flat: FlattenedSystem): void {
     if (typeof target === 'string') ics.push({ state: target, expr: eq.rhs })
     else remaining.push(eq)
   }
+  // One initial condition per state (esm-libraries-spec §4.7.5 step 4
+  // `field_ics`). Two -- an authored `ic(x)` and an operator's `ic(_var)`
+  // expanded onto `x`, or two such templates -- leave nothing to say which one
+  // holds, so the document is refused rather than one silently winning.
+  const seen = new Set<string>()
+  const duplicated: string[] = []
+  for (const { state } of ics) {
+    if (seen.has(state) && !duplicated.includes(state)) duplicated.push(state)
+    seen.add(state)
+  }
+  if (duplicated.length > 0) {
+    throw new ConflictingDerivativeError(
+      'states have more than one initial condition `ic(x)` ' +
+        "(an authored one and an operator's `ic(_var)` expanded onto it, " +
+        `or two such templates): ${duplicated.join(', ')}`,
+    )
+  }
   flat.fieldIcs = ics
   flat.equations = remaining
 }
@@ -2909,8 +2926,9 @@ function liftAxisNames(
  *
  * Dimension `d` (1-based in the name) is, in order: the index set its gathered
  * operands name ({@link liftAxisNames}); else the only index set the document
- * declares (`declared`) whose `size` is the extent; else `_liftdim<d>_<extent>`,
- * added to `indexSets` as an interval of that size if it is not there yet.
+ * declares (`declared`, grouped by size in `declaredBySize`) whose `size` is the
+ * extent; else `_liftdim<d>_<extent>`, added to `indexSets` as an interval of
+ * that size if it is not there yet.
  */
 function liftIndexSets(
   mas: ExpressionNode[],
@@ -2918,6 +2936,7 @@ function liftIndexSets(
   extents: number[],
   varShapes: ReadonlyMap<string, string[]>,
   declared: Record<string, unknown>,
+  declaredBySize: ReadonlyMap<number, string[]>,
   indexSets: Record<string, unknown>,
   species: string,
 ): string[] {
@@ -2925,7 +2944,7 @@ function liftIndexSets(
   return extents.map((extent, d) => {
     const name = named[d]
     if (name !== undefined) return name
-    const candidates = Object.keys(declared).filter((k) => indexSetSize(declared[k]) === extent)
+    const candidates = declaredBySize.get(extent) ?? []
     if (candidates.length === 1) return candidates[0]
     const synthetic = `_liftdim${d + 1}_${extent}`
     if (!Object.prototype.hasOwnProperty.call(indexSets, synthetic)) {
@@ -2991,11 +3010,16 @@ function applyPointwiseLift(flat: FlattenedSystem, coupling: CouplingEntry[]): v
   }
 
   // A species is lifted iff its state ODE's merged RHS carries a spatial-operator
-  // makearray (the advection contribution operator_compose added).
+  // makearray (the advection contribution operator_compose added) and it does
+  // not already declare a shape: a state that already lives on a grid has
+  // nothing to lift, and its declared shape stands.
   const lifted = new Set<string>()
   for (const eq of flat.equations) {
     const target = dTarget(eq.lhs)
-    if (target !== undefined && collectMakearrays(eq.rhs).length > 0) lifted.add(target)
+    if (target === undefined) continue
+    const shape = flat.stateVariables[target]?.shape
+    if (shape !== undefined && shape.length > 0) continue
+    if (collectMakearrays(eq.rhs).length > 0) lifted.add(target)
   }
   if (lifted.size === 0) return
 
@@ -3015,6 +3039,14 @@ function applyPointwiseLift(flat: FlattenedSystem, coupling: CouplingEntry[]): v
   // The registry as the document declares it, before the lift adds any
   // `_liftdim<d>_<extent>` set: only a declared set is matched by size.
   const declared = { ...flat.indexSets }
+  const declaredBySize = new Map<number, string[]>()
+  for (const [name, entry] of Object.entries(declared)) {
+    const size = indexSetSize(entry)
+    if (size === undefined) continue
+    const names = declaredBySize.get(size)
+    if (names === undefined) declaredBySize.set(size, [name])
+    else names.push(name)
+  }
 
   const next: FlattenedEquation[] = []
   for (const eq of flat.equations) {
@@ -3044,7 +3076,16 @@ function applyPointwiseLift(flat: FlattenedSystem, coupling: CouplingEntry[]): v
     }
 
     const extents = makearrayExtents(mas[0])
-    const axes = liftIndexSets(mas, loops, extents, varShapes, declared, flat.indexSets, target)
+    const axes = liftIndexSets(
+      mas,
+      loops,
+      extents,
+      varShapes,
+      declared,
+      declaredBySize,
+      flat.indexSets,
+      target,
+    )
     const ranges: Record<string, { from: string }> = {}
     for (let d = 0; d < rank; d++) ranges[loops[d]] = { from: axes[d] }
     // The lifted state lives on the lift's index sets: its `shape` names them
