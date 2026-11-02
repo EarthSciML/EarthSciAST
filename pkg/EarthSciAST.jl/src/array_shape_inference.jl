@@ -109,7 +109,7 @@ end
 # resolved by the evaluator) — skip it for static shape analysis.
 _range_bounds(::IndexSetRef) = (nothing, nothing)
 function _range_bounds(r::AbstractVector)
-    all(x -> x isa Integer, r) || return nothing, nothing  # expression-valued stop — skip for static analysis
+    _allof(x -> x isa Integer, r) || return nothing, nothing  # expression-valued stop — skip for static analysis
     if length(r) == 2
         return Int(r[1]), Int(r[2])
     elseif length(r) == 3

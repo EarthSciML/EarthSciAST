@@ -954,7 +954,7 @@ function _inline_toplevel_model_refs(
     )
     models = _get_field(raw_data, :models, nothing)
     models === nothing && return nothing
-    has_stub = any(values(models)) do m
+    has_stub = _anyof(values(models)) do m
         _is_json_object(m) && _has_field(m, :ref) && !_has_field(m, :variables)
     end
     has_stub || return nothing
@@ -1819,7 +1819,7 @@ document.
 function _inline_toplevel_reaction_system_refs(raw_data, base_path::String)
     rsystems = _get_field(raw_data, :reaction_systems, nothing)
     rsystems === nothing && return nothing
-    has_stub = any(values(rsystems)) do r
+    has_stub = _anyof(values(rsystems)) do r
         _is_json_object(r) && _has_field(r, :ref) && !_has_field(r, :species)
     end
     has_stub || return nothing
@@ -3127,7 +3127,7 @@ Path of the first node carrying `"op" => op`, or `nothing`.
 """
 _find_op_path(node, op::AbstractString, at::AbstractString = "") =
     _find_json_path(
-    n -> any(k -> haskey(n, k) && get(n, k, nothing) == op, (:op, "op")),
+    n -> _anyof(k -> haskey(n, k) && get(n, k, nothing) == op, (:op, "op")),
     node, at
 )
 
@@ -3140,7 +3140,7 @@ function _declared_below_v11(doc)::Bool
     doc isa AbstractDict || return false
     esm = _get_field(doc, :esm, nothing)
     esm isa AbstractString || return false
-    parts = split(String(esm), '.')
+    parts = split(String(esm)::String, '.')
     length(parts) >= 2 || return false
     major = tryparse(Int, parts[1]); minor = tryparse(Int, parts[2])
     (major === nothing || minor === nothing) && return false

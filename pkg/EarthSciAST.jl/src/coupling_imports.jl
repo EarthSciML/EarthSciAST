@@ -224,7 +224,7 @@ so an unreachable document's entry is collected with it.
 const _COUPLING_IMPORT_BASE = WeakKeyDict{Vector{CouplingEntry}, String}()
 
 function _record_coupling_import_base!(file::EsmFile, base_path::AbstractString)
-    any(e -> e isa CouplingImport, file.coupling) || return file
+    _anyof(e -> e isa CouplingImport, file.coupling) || return file
     _COUPLING_IMPORT_BASE[file.coupling] = String(base_path)
     return file
 end
@@ -534,7 +534,7 @@ function expand_coupling_imports(
         load_ref = nothing
     )::Vector{CouplingEntry}
     coupling = file.coupling
-    any(e -> e isa CouplingImport, coupling) || return coupling
+    _anyof(e -> e isa CouplingImport, coupling) || return coupling
     loader = load_ref === nothing ? _default_coupling_load_ref : load_ref
     out = CouplingEntry[]
     for entry in coupling

@@ -482,12 +482,26 @@ mutable struct OpExpr <: ASTExpr
         handler_id = nothing
     ) =
         new(
-        op, args, wrt, dim, int_var, lower, upper, output_idx, expr_body, reduce,
-        semiring, ranges,
-        regions, values, shape, perm, axis, fn, name, value, units,
-        table, table_axes, output, join, filter, join_gates,
-        id, manifold, distinct, key, arg, bindings, label,
-        expect_cadence, attrs
+        op, args,
+        # Each keyword through `_opexpr_field`: see there for why `new` is not
+        # left to convert them.
+        _opexpr_field(:wrt, wrt), _opexpr_field(:dim, dim),
+        _opexpr_field(:int_var, int_var), _opexpr_field(:lower, lower),
+        _opexpr_field(:upper, upper), _opexpr_field(:output_idx, output_idx),
+        _opexpr_field(:expr_body, expr_body), _opexpr_field(:reduce, reduce),
+        _opexpr_field(:semiring, semiring), _opexpr_field(:ranges, ranges),
+        _opexpr_field(:regions, regions), _opexpr_field(:values, values),
+        _opexpr_field(:shape, shape), _opexpr_field(:perm, perm),
+        _opexpr_field(:axis, axis), _opexpr_field(:fn, fn),
+        _opexpr_field(:name, name), _opexpr_field(:value, value),
+        _opexpr_field(:units, units), _opexpr_field(:table, table),
+        _opexpr_field(:table_axes, table_axes), _opexpr_field(:output, output),
+        _opexpr_field(:join, join), _opexpr_field(:filter, filter),
+        _opexpr_field(:join_gates, join_gates), _opexpr_field(:id, id),
+        _opexpr_field(:manifold, manifold), _opexpr_field(:distinct, distinct),
+        _opexpr_field(:key, key), _opexpr_field(:arg, arg),
+        _opexpr_field(:bindings, bindings), _opexpr_field(:label, label),
+        _opexpr_field(:expect_cadence, expect_cadence), _opexpr_field(:attrs, attrs)
     )
 
     # Fully-positional inner constructor — the ALLOCATION-FREE reconstruction
@@ -509,6 +523,14 @@ mutable struct OpExpr <: ASTExpr
         new(fields...)
     )
 end
+
+# A keyword value of the `OpExpr` constructor as the type of the field `f` it
+# fills. The parsers pass values read out of `Dict{String, Any}` JSON, so the
+# constructor is usually inferred with `Any` arguments; left to `new`, each one
+# would be compiled as `convert(fieldtype, ::Any)`, and a package that later
+# adds an array type invalidates the constructor and every caller that builds
+# an `OpExpr` (see `_as_type`).
+@inline _opexpr_field(f::Symbol, x) = _field(OpExpr, f, x)
 
 """
     OPEXPR_FIELD_TABLE
@@ -771,6 +793,7 @@ Trigger that fires at preset times.
 """
 struct PresetTimesTrigger <: DiscreteEventTrigger
     times::Vector{Float64}
+    PresetTimesTrigger(times) = new(_field(PresetTimesTrigger, :times, times))
 end
 
 # ========================================
@@ -903,7 +926,11 @@ struct Distribution
         kind::AbstractString; location = nothing, scale = nothing,
         cov = nothing, low = nothing, high = nothing
     ) =
-        new(String(kind), location, scale, cov, low, high)
+        new(
+        String(kind), _field(Distribution, :location, location),
+        _field(Distribution, :scale, scale), _field(Distribution, :cov, cov),
+        _field(Distribution, :low, low), _field(Distribution, :high, high)
+    )
 end
 
 """
@@ -1010,8 +1037,8 @@ struct ParameterUpdate
         from = nothing, handler = nothing
     ) =
         new(
-        String(kind), times, interval, initial_offset, when, direction,
-        source, hook, expression, from, handler
+        String(kind), _field(ParameterUpdate, :times, times), interval, initial_offset,
+        when, direction, source, hook, expression, from, handler
     )
 end
 
@@ -1545,7 +1572,7 @@ struct InlineTest
                     for (k, v) in parameter_overrides
             ),
             time_span, tolerance, assertions,
-            Vector{Any}(expression_template_imports)
+            _dynamic(Vector{Any}, expression_template_imports)::Vector{Any}
         )
     end
 end
@@ -1596,8 +1623,9 @@ struct IndexSet
         member_factor = nothing
     ) =
         new(
-        String(kind), size, members, of, offsets, values, from_faq, members_raw,
-        member_factor
+        String(kind), size, _field(IndexSet, :members, members),
+        _field(IndexSet, :of, of), offsets, values, from_faq,
+        _field(IndexSet, :members_raw, members_raw), member_factor
     )
 end
 
@@ -1740,7 +1768,7 @@ struct Model <: SubsystemNode
         new(
         OrderedDict{String, ModelVariable}(variables), equations,
         discrete_events, continuous_events, OrderedDict{String, SubsystemNode}(subsystems),
-        tolerance, tests, Vector{Any}(analyses),
+        tolerance, tests, _dynamic(Vector{Any}, analyses)::Vector{Any},
         initialization_equations, guesses, system_kind, reference
     )
 
@@ -1761,7 +1789,7 @@ struct Model <: SubsystemNode
         new(
         OrderedDict{String, ModelVariable}(variables), equations,
         discrete_events, continuous_events, OrderedDict{String, SubsystemNode}(subsystems),
-        tolerance, tests, Vector{Any}(analyses),
+        tolerance, tests, _dynamic(Vector{Any}, analyses)::Vector{Any},
         initialization_equations, guesses, system_kind, reference
     )
 end
@@ -2270,7 +2298,7 @@ struct ReactionSystem
         species, reactions, parameters, constraint_equations,
         discrete_events, continuous_events,
         OrderedDict{String, ReactionSystem}(subsystems), tolerance, tests,
-        Vector{Any}(analyses), reference
+        _dynamic(Vector{Any}, analyses)::Vector{Any}, reference
     )
 end
 
@@ -2340,7 +2368,7 @@ struct FunctionTableAxis
         name::AbstractString, values::AbstractVector;
         units = nothing
     ) =
-        new(String(name), Vector{Float64}(values), units)
+        new(String(name), _dynamic(Vector{Float64}, values)::Vector{Float64}, units)
 end
 
 """

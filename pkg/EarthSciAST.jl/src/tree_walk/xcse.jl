@@ -525,7 +525,7 @@ function _share_kernel_invariants!(
     for K in acc_kernels
         addk(K)
     end
-    any(K -> _has_inv(K.cse), kernels) || return _XCSE_NONE_DIAG
+    _anyof(K -> _has_inv(K.cse), kernels) || return _XCSE_NONE_DIAG
 
     ctx = _XShareCtx(cache)
 

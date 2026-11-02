@@ -105,7 +105,7 @@ mutable struct _HoistCtx
 end
 
 _hoist_scalar_reduction(e::OpExpr) = _is_faq_op(e.op) &&
-    (e.output_idx === nothing || !any(x -> x isa AbstractString, e.output_idx))
+    (e.output_idx === nothing || !_anyof(x -> x isa AbstractString, e.output_idx))
 
 _hoist_plain(e::OpExpr) = e.op != "index" && e.op != "fn" && !_is_faq_op(e.op) &&
     e.op != "makearray" && e.ranges === nothing && e.output_idx === nothing &&
@@ -166,7 +166,7 @@ function _hoist_try(
             return nothing
     end
     free = _hoist_free_names!(Set{String}(), g, Set{String}())
-    any(n -> n in contracted, free) && return nothing
+    _anyof(n -> n in contracted, free) && return nothing
     S = String[s for s in out_idx if s in free]
     length(S) == length(out_idx) && !(!gather && _hoist_pins_outer(g, S)) && return nothing
     # A scalar reduction whose filter bounds its index from below by an outer
@@ -227,7 +227,7 @@ function _hoist_pins_outer(g::OpExpr, S::Vector{String})
         for (x, e) in ((a, b), (b, a))
             (x isa VarExpr && (x::VarExpr).name in S) || continue
             haskey(g.ranges, (x::VarExpr).name) && continue
-            any(n -> n in S, _hoist_free_names!(Set{String}(), e, Set{String}())) && continue
+            _anyof(n -> n in S, _hoist_free_names!(Set{String}(), e, Set{String}())) && continue
             return true
         end
     end
@@ -254,8 +254,8 @@ end
 _hoist_filtered_producer(e::OpExpr) = _is_faq_op(e.op) && e.filter !== nothing &&
     e.join === nothing && e.join_gates === nothing && e.expr_body !== nothing &&
     e.ranges !== nothing && _is_array_producer(e) &&
-    all(x -> x isa AbstractString, e.output_idx) &&
-    all(
+    _allof(x -> x isa AbstractString, e.output_idx) &&
+    _allof(
     x -> (r = get(e.ranges, String(x), nothing); r isa IndexSetRef && isempty(r.of)),
     e.output_idx
 )
@@ -271,7 +271,7 @@ function _hoist_filtered_producer_on(e::OpExpr, od)
     (
         _is_faq_op(e.op) && e.filter !== nothing && e.join === nothing &&
             e.join_gates === nothing && e.expr_body !== nothing && e.ranges !== nothing &&
-            _is_array_producer(e) && all(x -> x isa AbstractString, e.output_idx)
+            _is_array_producer(e) && _allof(x -> x isa AbstractString, e.output_idx)
     ) || return false
     shape, dims = od
     length(e.output_idx) == length(dims) || return false
@@ -366,7 +366,7 @@ function _hoist_regions_cover(regs, dims::Vector{Int})
         starts[d] = sort!(collect(s))
     end
     for corner in Iterators.product(starts...)
-        any(reg -> all(d -> reg[d][1] <= corner[d] <= reg[d][2], 1:nd), regs) ||
+        _anyof(reg -> _allof(d -> reg[d][1] <= corner[d] <= reg[d][2], 1:nd), regs) ||
             return false
     end
     return true
@@ -547,7 +547,7 @@ function _hoist_nested_reductions(model::Model, index_sets::AbstractDict)
         guesses = model.guesses, system_kind = model.system_kind, reference = model.reference
     )
     isets = index_sets
-    if any(v -> v.shape == [_HOIST_ONE_SET], values(hc.vars))
+    if _anyof(v -> v.shape == [_HOIST_ONE_SET], values(hc.vars))
         isets = copy(index_sets)
         isets[_HOIST_ONE_SET] = IndexSet("interval"; size = 1)
     end

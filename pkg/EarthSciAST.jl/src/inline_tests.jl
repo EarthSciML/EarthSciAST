@@ -139,7 +139,7 @@ end
 function _blas_out_syms(agg::OpExpr)
     oi = agg.output_idx
     oi === nothing && return nothing
-    all(s -> s isa AbstractString, oi) || return nothing
+    _allof(s -> s isa AbstractString, oi) || return nothing
     return String[String(s) for s in oi]
 end
 
@@ -182,8 +182,9 @@ function _blas_matvec(
         A::AbstractArray, E::AbstractArray,
         crange::AbstractUnitRange, out_sizes::Tuple
     )
-    Af = A isa Array{Float64} ? A : Array{Float64}(A)   # dense Float64 ⇒ no copy
-    Ef = E isa Vector{Float64} ? E : Vector{Float64}(E)
+    # dense Float64 ⇒ no copy; anything else converted through `_dynamic`.
+    Af = A isa Array{Float64} ? A : _dynamic(Array{Float64}, A)::Array{Float64}
+    Ef = E isa Vector{Float64} ? E : _dynamic(Vector{Float64}, E)::Vector{Float64}
     N_c = size(Af, 1)
     K = prod(out_sizes; init = 1)
     Amat = reshape(Af, N_c, K)                          # shares Af's buffer
@@ -231,7 +232,7 @@ function _evaluate_cellwise_blas(
         t::Float64 = 0.0
     )
     nidx = length(first(cells))
-    (nidx >= 1 && all(c -> length(c) == nidx, cells)) || return nothing
+    (nidx >= 1 && _allof(c -> length(c) == nidx, cells)) || return nothing
 
     # Exactly one reduction anywhere in the (otherwise elementwise) tree.
     aggs = _blas_collect_aggregates!(OpExpr[], expr)
@@ -420,7 +421,7 @@ function _evaluate_cellwise_gated(
         t::Float64 = 0.0
     )
     nidx = length(first(cells))
-    (nidx >= 1 && all(c -> length(c) == nidx, cells)) || return nothing
+    (nidx >= 1 && _allof(c -> length(c) == nidx, cells)) || return nothing
 
     # Exactly one reduction anywhere in the (otherwise elementwise) tree, and it
     # must be the gated one — an ungated aggregate is Phase C's business and has
@@ -606,7 +607,7 @@ function evaluate_cellwise(
     # sent every scalar observed of every document to the per-cell walk and so to
     # the strict compiler's refusal.
     nidx = length(first(cells))
-    if all(c -> length(c) == nidx, cells)
+    if _allof(c -> length(c) == nidx, cells)
         ce = _cellwise_compile_once(
             expr, nidx, const_arrays, registered_functions,
             params; t = t
@@ -867,7 +868,7 @@ function _state_scope(var_map::StateLayout, state::AbstractVector)
         i <= length(state) && (scalars[s] = Float64(state[i]))
     end
     for b in _layout_blocks(var_map)
-        (all(==(1), b.lo) && b.base + b.len - 1 <= length(state)) || continue
+        (_allof(==(1), b.lo) && b.base + b.len - 1 <= length(state)) || continue
         ext = Tuple(b.hi[d] - b.lo[d] + 1 for d in eachindex(b.lo))
         arrays[b.name] = Array{Float64}(
             reshape(
@@ -896,9 +897,9 @@ function _state_scope(var_map::AbstractDict, state::AbstractVector)
     end
     for (stem, entries) in cells
         nd = length(first(entries)[1])
-        all(e -> length(e[1]) == nd, entries) || continue
+        _allof(e -> length(e[1]) == nd, entries) || continue
         exts = Int[maximum(e[1][d] for e in entries) for d in 1:nd]
-        (prod(exts) == length(entries) && all(>(0), exts)) || continue
+        (prod(exts) == length(entries) && _allof(>(0), exts)) || continue
         arr = Array{Float64}(undef, exts...)
         for (cell, slot) in entries
             arr[cell...] = Float64(state[slot])
@@ -960,7 +961,7 @@ function _const_array_key(
     haskey(insp.const_arrays, qual) && return qual
     haskey(insp.const_arrays, String(name)) || return nothing
     suffix = "." * String(name)
-    any(k -> endswith(String(k), suffix), keys(insp.const_arrays)) && return nothing
+    _anyof(k -> endswith(String(k), suffix), keys(insp.const_arrays)) && return nothing
     return String(name)
 end
 
@@ -1593,7 +1594,7 @@ function _authored_via_programs!(
         subs[n] = OpExpr("index", ASTExpr[VarExpr(n), (VarExpr(x) for x in syms)...])
     end
     if !isempty(subs)
-        body = any(n -> n in targets, keys(subs)) ? _align_bare_reads(body, subs) :
+        body = _anyof(n -> n in targets, keys(subs)) ? _align_bare_reads(body, subs) :
             _sub_preserving(body, subs)
     end
     ce = _cellwise_compile_once(body, nidx, ca, Dict{String, Any}(), params; t = t)
@@ -1789,7 +1790,7 @@ function _materialized_obs_scope(
         haskey(ca, n) && continue              # already supplied by the caller
         lookup(n) === nothing && continue
         ex = extents(n); ex === nothing && continue
-        any(<=(0), ex) && continue
+        _anyof(<=(0), ex) && continue
         cells = _row_major_cells(ex)
         # Try the un-inlined body first — it reads the buffers already filled, so
         # it is the cheap one — and fall back to the fully substituted body when
@@ -1892,7 +1893,7 @@ _mentions_free(::ASTExpr, ::AbstractString) = false
 _mentions_free(expr::VarExpr, name::AbstractString) = expr.name == name
 function _mentions_free(expr::OpExpr, name::AbstractString)::Bool
     String(name) in _bound_symbols(expr) && return false
-    return any(c -> _mentions_free(c, name), child_exprs(expr))
+    return _anyof(c -> _mentions_free(c, name), child_exprs(expr))
 end
 
 # The ARRAY half of the §6.6.5 build-time clash scope: every name the build's

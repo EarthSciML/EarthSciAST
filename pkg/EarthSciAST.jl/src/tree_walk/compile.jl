@@ -328,6 +328,11 @@ struct _ConstGatherArray
     dims::Vector{Int}       # size(A): each subscript is checked against its own axis
     boundary::Vector{Symbol}  # per-axis policy (`_const_dim_boundary`) for an out-of-range subscript
     name::String            # the array's registry name, for `E_TREEWALK_CONSTARRAY_OOB`
+    _ConstGatherArray(flat, strides, dims, boundary, name) = new(
+        _field(_ConstGatherArray, :flat, flat), _field(_ConstGatherArray, :strides, strides),
+        _field(_ConstGatherArray, :dims, dims), _field(_ConstGatherArray, :boundary, boundary),
+        _field(_ConstGatherArray, :name, name)
+    )
 end
 
 # Build-time constructor for a `_NK_CONST_GATHER` node (wall2 Phase B). Flattens `A`
@@ -2014,7 +2019,7 @@ end
         cell[d] = q + 1
     end
     inframe = length(subs) == length(rg.dims) &&
-        all(d -> 1 <= subs[d] <= rg.dims[d], eachindex(subs))
+        _allof(d -> 1 <= subs[d] <= rg.dims[d], eachindex(subs))
     throw(
         TreeWalkError(
             "E_TREEWALK_RECUR_UNAVAILABLE",

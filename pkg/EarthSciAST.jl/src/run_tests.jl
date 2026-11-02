@@ -880,7 +880,7 @@ function run_file_tests!(
     models = esm_file.models
     rsystems = esm_file.reaction_systems
     has_model_tests = models !== nothing &&
-        any(m -> !isempty(m.tests), values(models))
+        _anyof(m -> !isempty(m.tests), values(models))
     # A mechanism that shares its document with a model may read that model —
     # RADM2's 156 reaction rates are scoped references to the component that
     # evaluates its rate coefficients — and its tests may override that model's
@@ -895,7 +895,7 @@ function run_file_tests!(
     # is the build the corpus's large mechanisms have always taken.
     mixed = models !== nothing && !isempty(models)
     has_mixed_rs_tests = mixed && rsystems !== nothing &&
-        any(rs -> !isempty(rs.tests), values(rsystems))
+        _anyof(rs -> !isempty(rs.tests), values(rsystems))
 
     doc_flat = nothing
     doc_flat_err = nothing
@@ -1024,7 +1024,7 @@ function run_esm_tests(
     verbose && _print_summary(io, files, results, String(root))
     junit_xml !== nothing && write_junit_xml(results, String(junit_xml))
 
-    n_fail = count(r -> r.status == FAIL || r.status == ERROR, results)
+    n_fail = _countof(r -> r.status == FAIL || r.status == ERROR, results)
     exit_code = n_fail == 0 ? 0 : 1
     return results, exit_code
 end
@@ -1122,16 +1122,16 @@ function _print_summary(
     println(io, "  ", repeat("-", namepad + 25))
     for f in sort!(collect(keys(by_file)))
         rows = by_file[f]
-        np = count(r -> r.status == PASS, rows)
-        nf = count(r -> r.status == FAIL, rows)
-        ne = count(r -> r.status == ERROR, rows)
+        np = _countof(r -> r.status == PASS, rows)
+        nf = _countof(r -> r.status == FAIL, rows)
+        ne = _countof(r -> r.status == ERROR, rows)
         @printf(io, "  %-*s  %5d  %5d  %5d\n", namepad, rel(f), np, nf, ne)
     end
     println(io, "  ", repeat("-", namepad + 25))
 
-    total_pass = count(r -> r.status == PASS, results)
-    total_fail = count(r -> r.status == FAIL, results)
-    total_err = count(r -> r.status == ERROR, results)
+    total_pass = _countof(r -> r.status == PASS, results)
+    total_fail = _countof(r -> r.status == FAIL, results)
+    total_err = _countof(r -> r.status == ERROR, results)
     @printf(
         io, "  %-*s  %5d  %5d  %5d\n", namepad, "TOTAL", total_pass,
         total_fail, total_err
@@ -1210,8 +1210,8 @@ function write_junit_xml(
     end
 
     n_tests = length(order)
-    n_fail = sum(any(r -> r.status == FAIL, rs) for rs in values(by_test); init = 0)
-    n_err = sum(any(r -> r.status == ERROR, rs) for rs in values(by_test); init = 0)
+    n_fail = sum(_anyof(r -> r.status == FAIL, rs) for rs in values(by_test); init = 0)
+    n_err = sum(_anyof(r -> r.status == ERROR, rs) for rs in values(by_test); init = 0)
 
     open(path, "w") do io
         println(io, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>")

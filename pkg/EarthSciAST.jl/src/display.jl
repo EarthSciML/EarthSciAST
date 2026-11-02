@@ -351,7 +351,7 @@ function format_chemical_latex(variable::AbstractString)
     # Underscore-separated variable with mixed chemical / non-chemical segments.
     if occursin("_", v)
         parts = split(v, "_")
-        if any(has_element_pattern, parts)
+        if _anyof(has_element_pattern, parts)
             base = parts[1]
             result = (length(base) == 1 && occursin(r"[A-Za-z]", base)) ? String(base) :
                 has_element_pattern(base) ? format_chemical_latex(base) : "\\mathrm{$base}"
@@ -419,7 +419,7 @@ function format_chemical_unicode(variable::AbstractString)
         end
         if occursin("_", v)
             parts = split(v, "_")
-            if any(has_element_pattern, parts)
+            if _anyof(has_element_pattern, parts)
                 return join(
                     (
                         has_element_pattern(p) ? format_chemical_unicode(String(p)) : String(p)
@@ -781,7 +781,8 @@ function format_const_value(value, format::Symbol)
     elseif value isa Bool
         return string(value)
     elseif value isa Integer
-        s = string(value)
+        # An abstract `Integer` prints through `promote_rule`; see `_dynamic`.
+        s = _dynamic(string, value)::String
         return (format == :unicode && startswith(s, "-")) ? "−" * s[2:end] : s
     elseif value isa AbstractFloat
         return format_number(value, format)
@@ -794,7 +795,7 @@ end
 # symbolic dimension string, or a metaparameter Expression node.
 function format_bound(value, format::Symbol)
     if value isa Integer
-        return string(value)
+        return _dynamic(string, value)::String
     elseif value isa AbstractString
         return String(value)
     elseif value isa ASTExpr
@@ -1090,7 +1091,7 @@ _infix_separator(op::String, format::Symbol) =
 # space), while a product of plain symbols uses ` \cdot ` to stay unambiguous
 # (`a \cdot b`) — mirrors pretty-print.ts `*` renderer.
 _latex_product_sep(args) =
-    any(a -> a isa VarExpr && occursin("\\", a.name), args) ? " " : " \\cdot "
+    _anyof(a -> a isa VarExpr && occursin("\\", a.name), args) ? " " : " \\cdot "
 
 """Format one operand of `op`, parenthesizing per [`needs_parentheses`](@ref)."""
 function _format_operand(

@@ -722,7 +722,7 @@ function _stencilize_bound_site(
     sub_body = nothing
     for (ka, sb) in entries
         if length(ka) == length(kargs) &&
-                all(i -> ka[i] === kargs[i], eachindex(kargs))
+                _allof(i -> ka[i] === kargs[i], eachindex(kargs))
             sub_body = sb
             break
         end
@@ -765,7 +765,7 @@ function _stencilize_index(e::OpExpr, ctx::_StencilCtx)
     # producer, a parameter, a state) is no lane: a const read whose whole
     # subtree is build-time data becomes a value-table lane, and anything else
     # declines the equation to the tiers that gather at run time.
-    if !all(a -> _lane_subscript_static(a, ctx.idxset, ctx.const_arrays), idx_args)
+    if !_allof(a -> _lane_subscript_static(a, ctx.idxset, ctx.const_arrays), idx_args)
         if first_arg isa OpExpr && (first_arg::OpExpr).op == "const" ||
                 first_arg isa VarExpr && haskey(ctx.const_arrays, first_arg.name)
             lane = _try_exprtbl_lane(e, ctx)
@@ -859,7 +859,7 @@ function _stencilize_index(e::OpExpr, ctx::_StencilCtx)
         )
         _amemo = IdDict{OpExpr, Bool}()
         _arrayish(a) = _index_pushdown_arrayish(a, _leaf_is_array, _amemo)
-        if any(_arrayish, fa.args)
+        if _anyof(_arrayish, fa.args)
             pushed = ASTExpr[
                 _arrayish(a) ? OpExpr("index", ASTExpr[a, idx_args...]) : a
                     for a in fa.args
@@ -918,7 +918,7 @@ function _lane_subscript_static(
     elseif o.op == "const"
         return o.value isa Real && !(o.value isa Bool)
     elseif o.op in _LANE_SUBSCRIPT_OPS
-        return all(a -> _lane_subscript_static(a, idxset, const_arrays), o.args)
+        return _allof(a -> _lane_subscript_static(a, idxset, const_arrays), o.args)
     end
     return false
 end
@@ -939,7 +939,7 @@ function _stencilize_indexed(producer::OpExpr, kargs::Vector{ASTExpr}, ctx::_Ste
             re = sel::OpExpr
             rank = re.op == "makearray" ?
                 ((re.regions === nothing || isempty(re.regions)) ? 0 : length(re.regions[1])) :
-                count(s -> s isa AbstractString, re.output_idx)
+                _countof(s -> s isa AbstractString, re.output_idx)
             rank == length(kargs) && return _stencilize_indexed(re, kargs, ctx)
             # §9.6.8 REDUCED-RANK region value: the value array covers the
             # region's NON-SINGLETON axes (a face/strip region pins the others
@@ -1187,7 +1187,7 @@ end
 function _reaches_indexable_producer(e::OpExpr)
     (e.op == "makearray" || _is_array_producer(e)) && return true
     _is_scalar_op(e.op) || return false
-    return any(a -> a isa OpExpr && _reaches_indexable_producer(a::OpExpr), e.args)
+    return _anyof(a -> a isa OpExpr && _reaches_indexable_producer(a::OpExpr), e.args)
 end
 
 # The key of `index(fa, kargs…)` for an elementwise `fa`: each producer operand
@@ -1237,7 +1237,7 @@ function _branch_key_indexed!(
             ka = kargs
             rank = re.op == "makearray" ?
                 ((re.regions === nothing || isempty(re.regions)) ? 0 : length(re.regions[1])) :
-                count(s -> s isa AbstractString, re.output_idx)
+                _countof(s -> s isa AbstractString, re.output_idx)
             if rank != length(kargs)
                 region === nothing && return
                 ns = Int[d for d in 1:length(kargs) if region[d][1] != region[d][2]]
@@ -1575,9 +1575,14 @@ function _ix_compile(e::ASTExpr, idx_names::Vector{String}, const_arrays::Abstra
                 x === nothing && return nothing
                 push!(xs, x)
             end
-            return _IdxNode(_IX_GATHER, 0, xs, vec(data), collect(Int, size(data)))
+            return _IdxNode(
+                _IX_GATHER, 0, xs, vec(data)::Vector{Float64},
+                collect(Int, size(data))::Vector{Int}
+            )
         end
-        xs = sub()
+        # `sub` recurses into `_ix_compile`, so inference cannot work out what
+        # it returns on its own.
+        xs = sub()::Union{Nothing, Vector{_IdxNode}}
         xs === nothing && return nothing
         n = length(xs)
         if op == "+" && n >= 1

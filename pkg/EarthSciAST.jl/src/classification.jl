@@ -292,7 +292,7 @@ _update_rules(v::ModelVariable)::Vector{ParameterUpdate} =
 schema forbids `wiener` inside an array, so in practice an array update is
 never Brownian — but the test reads through the vector rather than assuming
 it, so a schema relaxation cannot silently change the answer."""
-_is_wiener(v::ModelVariable)::Bool = any(r -> r.kind == "wiener", _update_rules(v))
+_is_wiener(v::ModelVariable)::Bool = _anyof(r -> r.kind == "wiener", _update_rules(v))
 
 """
     brownian_parameters(model::Model) -> Vector{String}
@@ -378,7 +378,7 @@ LHS or RHS — a `D` whose `wrt` is present and is not `"t"`, or a `grad` / `div
 / `laplacian` sugar op (esm-spec §6.3.1).
 """
 has_spatial_derivative(model::Model)::Bool =
-    any(eq -> _equation_has(_is_spatial_derivative, eq), model.equations)
+    _anyof(eq -> _equation_has(_is_spatial_derivative, eq), model.equations)
 
 """
     has_time_derivative(model::Model) -> Bool
@@ -387,7 +387,7 @@ True iff some equation of `model` contains a structural time derivative
 (`D` with `wrt` `"t"` or absent) anywhere in its LHS or RHS.
 """
 has_time_derivative(model::Model)::Bool =
-    any(eq -> _equation_has(_is_time_derivative, eq), model.equations)
+    _anyof(eq -> _equation_has(_is_time_derivative, eq), model.equations)
 
 """
     system_kind(model::Model) -> String

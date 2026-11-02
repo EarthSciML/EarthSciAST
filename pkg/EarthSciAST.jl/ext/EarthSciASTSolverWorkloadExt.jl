@@ -2,28 +2,28 @@
     EarthSciASTSolverWorkloadExt
 
 A precompile workload, and nothing else: it builds, solves and runs the inline
-tests of two small documents so that the build, solve and inline-test path is
-compiled into a package image instead of on the first call of every session
-that loads a solver.
+tests of two small documents so that the solve and inline-test path is compiled
+into a package image instead of on the first call of every session that loads a
+solver.
 
-Why this lives in an extension rather than in the core's own workload
-(`src/precompile_workload.jl`): loading the solver stack invalidates most of
-that path. SciMLBase, the OrdinaryDiffEq packages and ForwardDiff each add
-methods (to `show`, `can_setindex`, `promote_rule`, the SparseArrays array
-traits, and EarthSciAST's own `_value` through `EarthSciASTForwardDiffExt`) that
-the core's less precisely inferred code has backedges to, so code the core image
-cached is thrown away the moment a solver is loaded and is compiled again on
-first use. An extension is precompiled with its triggers loaded, so what it
-caches is compiled against the methods a solving session actually has.
+The core's own workload (`src/precompile_workload.jl`) already loads and builds
+these documents. What it cannot reach is everything downstream of the problem:
+`solve`, the integrator specialized on EarthSciAST's right-hand-side wrappers,
+and `run_inline_tests`, all of which need the solver packages. It also cannot
+protect the part of the build path that the solver stack still invalidates:
+SciMLBase, the OrdinaryDiffEq packages and ForwardDiff add methods to Base
+generics (`==` and `vcat` on arrays, `promote_rule`, the array traits) that
+some of the core's abstractly typed build code is inferred through. An
+extension is precompiled with its triggers loaded, so what it caches is
+compiled against the methods a solving session actually has.
 
-The triggers are the packages whose methods have to be present for the cached
-code to survive loading, which is also the shared solver environment the
-conformance adapters use (`scripts/compiler_agreement_env`). ForwardDiff is a
-dependency of OrdinaryDiffEqRosenbrock, so naming it adds no requirement; it is
-named so that `EarthSciASTForwardDiffExt`, whose `_value` method invalidates
-much of the build path, is loaded while this extension precompiles. A session
-that loads further packages that invalidate the same code (ModelingToolkit,
-Reactant) pays the first-call cost again for whatever they invalidate.
+The triggers are the shared solver environment the conformance adapters use
+(`scripts/compiler_agreement_env`). ForwardDiff is a dependency of
+OrdinaryDiffEqRosenbrock, so naming it adds no requirement; it is named so that
+`EarthSciASTForwardDiffExt` is loaded while this extension precompiles. A
+session that loads further packages that invalidate the same code
+(ModelingToolkit, Reactant) pays the first-call cost again for whatever they
+invalidate.
 
 The model right-hand sides are `RuntimeGeneratedFunction`s created per document
 at build time, so their bodies are never cached; what is cached is the builder,

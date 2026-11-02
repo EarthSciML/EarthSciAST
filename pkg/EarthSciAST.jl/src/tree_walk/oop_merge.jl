@@ -235,13 +235,13 @@ end
 function _oop_inv_nodes_identical(nodes::Vector{_Node}, Kof, m::Int)
     r = nodes[1]; k = r.kind
     if k === _NK_LITERAL
-        return all(i -> isequal(nodes[i].literal, r.literal), 1:m)
+        return _allof(i -> isequal(nodes[i].literal, r.literal), 1:m)
     elseif k === _NK_PARAM || k === _NK_TIME
         return true
     elseif k === _NK_CACHED
         # An inv recipe may only read other inv slots (same idx across members
         # by the signature); a cell-tier read here would not be lane-invariant.
-        return all(i -> nodes[i].payload === Kof(i).cse.inv_scratch, 1:m)
+        return _allof(i -> nodes[i].payload === Kof(i).cse.inv_scratch, 1:m)
     elseif k === _NK_OP || k === _NK_CONTRACTION
         if k === _NK_OP && r.op === :fn && r.payload isa Tuple
             fn1, spec1 = (r.payload)::Tuple{String, Any}
@@ -362,7 +362,7 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
     m = length(js); Ls = Int[length(plans[j].out_slots) for j in js]; L = sum(Ls)
     rep = kernels[js[1]]
     nsubs = length(rep.subs)
-    @assert all(j -> length(kernels[j].subs) == nsubs, js)
+    @assert _allof(j -> length(kernels[j].subs) == nsubs, js)
     merged_subs = Vector{_AccKernel}(undef, nsubs)
 
     # Merge one aligned tree-family (parent trees or sub-si trees). Kof(i) /
@@ -377,12 +377,12 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
     function merge_trees(Kof, Pof, keep_inv::Bool)
         accvec = _AccDesc[]
         n_inv = length(Kof(1).cse.inv_recipes); n_cell = length(Kof(1).cse.recipes)
-        @assert all(
+        @assert _allof(
             i -> length(Kof(i).cse.inv_recipes) == n_inv &&
                 length(Kof(i).cse.recipes) == n_cell, 1:m
         )
         keep = keep_inv && n_inv > 0 &&
-            all(
+            _allof(
             i2 -> _oop_inv_nodes_identical(
                 _Node[Kof(i).cse.inv_recipes[i2] for i in 1:m], Kof, m
             ),
@@ -394,7 +394,7 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
             r = nodes[1]; k = r.kind
             if k === _NK_LITERAL
                 vals = Float64[n.literal for n in nodes]
-                if all(==(vals[1]), vals)
+                if _allof(==(vals[1]), vals)
                     return _Node(k, r.op, r.literal, r.idx, r.sym, nothing, _Node[])
                 end
                 tbl = Vector{Float64}(undef, L); q = 0
@@ -411,7 +411,7 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
                 # recompute per lane (values identical; the lanes ARE the
                 # vectorization).
                 tier_cell = r.payload === Kof(1).cse.scratch
-                @assert all(i -> (nodes[i].payload === Kof(i).cse.scratch) == tier_cell, 1:m)
+                @assert _allof(i -> (nodes[i].payload === Kof(i).cse.scratch) == tier_cell, 1:m)
                 if tier_cell
                     nidx = keep ? r.idx : n_inv + r.idx
                     return _Node(k, r.op, r.literal, nidx, r.sym, newscr, _Node[])
@@ -423,7 +423,7 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
             elseif k === _NK_SUBCALL
                 pos = findfirst(s -> s === r.payload, kernels[js[1]].subs)
                 @assert pos !== nothing
-                @assert all(i -> kernels[js[i]].subs[pos] === nodes[i].payload, 1:m)
+                @assert _allof(i -> kernels[js[i]].subs[pos] === nodes[i].payload, 1:m)
                 @assert isassigned(merged_subs, pos) "nested-first order violated"
                 return _Node(k, r.op, r.literal, r.idx, r.sym, merged_subs[pos], _Node[])
             elseif k === _NK_ACCESS
@@ -906,7 +906,7 @@ function _oop_x_apply_cse(root::_Node)
     end
     isrec(n) = (n.kind === _NK_OP || n.kind === _NK_CONTRACTION) &&
         get(refcnt, n, 0) >= 2 && n !== root
-    nrec = count(isrec, order)
+    nrec = _countof(isrec, order)
     nrec == 0 && return (root, _Node[], _AccScratch(0))
     scr = _AccScratch(nrec)
     recipes = Vector{_Node}(undef, nrec)
@@ -954,7 +954,7 @@ function _oop_x_merge_group(kernels, plans, js::Vector{Int})
     m = length(js); Ls = Int[length(plans[j].out_slots) for j in js]; L = sum(Ls)
     rep = kernels[js[1]]
     nsubs = length(rep.subs)
-    @assert all(j -> length(kernels[j].subs) == nsubs, js)
+    @assert _allof(j -> length(kernels[j].subs) == nsubs, js)
     merged_subs = Vector{_AccKernel}(undef, nsubs)
     budget = Ref(2_000_000)              # cloned-node budget (throw ⇒ fallback)
 
@@ -970,7 +970,7 @@ function _oop_x_merge_group(kernels, plans, js::Vector{Int})
             r = nodes[1]; k = r.kind
             isacc(i) = nodes[i].kind === _NK_ACCESS
             akind(i) = Kof(i).acc[nodes[i].idx].kind
-            out = if all(i -> isacc(i) && _oop_x_statefam(akind(i)), 1:m)
+            out = if _allof(i -> isacc(i) && _oop_x_statefam(akind(i)), 1:m)
                 tbl = Vector{Int}(undef, L); q = 0
                 for i in 1:m
                     lk = Ls[i]; idx = nodes[i].idx
@@ -993,9 +993,9 @@ function _oop_x_merge_group(kernels, plans, js::Vector{Int})
                 end
                 push!(accvec, _AccStateTblBox(tbl, 1, 0, 0, 1))
                 _Node(_NK_ACCESS, :acc, 0.0, length(accvec), Symbol(""), nothing, _Node[])
-            elseif all(i -> isacc(i) && _oop_x_forcfam(akind(i)), 1:m)
+            elseif _allof(i -> isacc(i) && _oop_x_forcfam(akind(i)), 1:m)
                 arr = Kof(1).acc[r.idx].arr
-                all(i -> Kof(i).acc[nodes[i].idx].arr === arr, 1:m) ||
+                _allof(i -> Kof(i).acc[nodes[i].idx].arr === arr, 1:m) ||
                     error("round-2: forcing buffer mismatch in a class")
                 tbl = Vector{Int}(undef, L); q = 0
                 for i in 1:m
@@ -1010,7 +1010,7 @@ function _oop_x_merge_group(kernels, plans, js::Vector{Int})
                 end
                 push!(accvec, _AccArrTblBox(arr, tbl, 1, 0, 0, 1))
                 _Node(_NK_ACCESS, :acc, 0.0, length(accvec), Symbol(""), nothing, _Node[])
-            elseif all(
+            elseif _allof(
                     i -> nodes[i].kind === _NK_LITERAL ||
                         (isacc(i) && _oop_x_constfam(akind(i))), 1:m
                 )
@@ -1033,20 +1033,20 @@ function _oop_x_merge_group(kernels, plans, js::Vector{Int})
                     end
                     q += lk
                 end
-                if all(==(tbl[1]), tbl)
+                if _allof(==(tbl[1]), tbl)
                     _Node(_NK_LITERAL, :lit, tbl[1], 0, Symbol(""), nothing, _Node[])
                 else
                     push!(accvec, _AccConstBox(tbl, 1, 0, 0, 1))
                     _Node(_NK_ACCESS, :acc, 0.0, length(accvec), Symbol(""), nothing, _Node[])
                 end
             elseif k === _NK_PARAM || k === _NK_TIME
-                all(i -> nodes[i].kind === k && nodes[i].sym === r.sym, 1:m) ||
+                _allof(i -> nodes[i].kind === k && nodes[i].sym === r.sym, 1:m) ||
                     error("round-2: param/time mismatch in a class")
                 _Node(k, r.op, r.literal, r.idx, r.sym, r.payload, _Node[])
             elseif k === _NK_SUBCALL
                 pos = findfirst(s -> s === r.payload, kernels[js[1]].subs)
                 pos !== nothing &&
-                    all(
+                    _allof(
                     i -> nodes[i].kind === _NK_SUBCALL &&
                         kernels[js[i]].subs[pos] === nodes[i].payload, 1:m
                 ) ||
@@ -1055,7 +1055,7 @@ function _oop_x_merge_group(kernels, plans, js::Vector{Int})
                 _Node(k, r.op, r.literal, r.idx, r.sym, merged_subs[pos], _Node[])
             elseif k === _NK_OP || k === _NK_CONTRACTION
                 nch = length(r.children)
-                all(
+                _allof(
                     i -> nodes[i].kind === k && nodes[i].op === r.op &&
                         length(nodes[i].children) == nch &&
                         (
@@ -1067,7 +1067,7 @@ function _oop_x_merge_group(kernels, plans, js::Vector{Int})
                 pay = if k === _NK_OP && r.op === :fn && r.payload isa Tuple
                     _oop_merge_fn_payload(nodes, Ls, L)
                 else
-                    all(i -> nodes[i].payload === r.payload, 1:m) ||
+                    _allof(i -> nodes[i].payload === r.payload, 1:m) ||
                         error("round-2: op payload mismatch in a class")
                     r.payload
                 end
@@ -1210,18 +1210,18 @@ _affine_keep_kind(k) =
 # A template sub-kernel is inlined into its parent's nest, so its descriptors
 # count as the parent's.
 _affine_keep_reads(K::_AccKernel) =
-    all(a -> _affine_keep_kind(a.kind), K.acc) && all(_affine_keep_reads, K.subs)
+    _allof(a -> _affine_keep_kind(a.kind), K.acc) && _allof(_affine_keep_reads, K.subs)
 function _affine_keep_has_fn(n::_Node, seen::IdDict{_Node, Nothing})
     haskey(seen, n) && return false
     seen[n] = nothing
     (n.kind === _NK_OP && n.op === :fn) && return true
-    return any(c -> _affine_keep_has_fn(c, seen), n.children)
+    return _anyof(c -> _affine_keep_has_fn(c, seen), n.children)
 end
 function _affine_keep_has_fn(K::_AccKernel, seen = IdDict{_Node, Nothing}())
     _affine_keep_has_fn(K.spine, seen) && return true
-    any(r -> _affine_keep_has_fn(r, seen), K.cse.recipes) && return true
-    any(r -> _affine_keep_has_fn(r, seen), K.cse.inv_recipes) && return true
-    return any(S -> _affine_keep_has_fn(S, seen), K.subs)
+    _anyof(r -> _affine_keep_has_fn(r, seen), K.cse.recipes) && return true
+    _anyof(r -> _affine_keep_has_fn(r, seen), K.cse.inv_recipes) && return true
+    return _anyof(S -> _affine_keep_has_fn(S, seen), K.subs)
 end
 function _affine_box_rank(K::_AccKernel)
     cs = K.cells
@@ -1229,7 +1229,7 @@ function _affine_box_rank(K::_AccKernel)
         _is_outs(cs) || length(cs.strides) < 2 || !_affine_keep_reads(K) ||
             _affine_keep_has_fn(K)
     ) && return 0
-    return count(d -> !_cellset_slab(cs, d), eachindex(cs.strides))
+    return _countof(d -> !_cellset_slab(cs, d), eachindex(cs.strides))
 end
 
 # Sorted indices of the kernels `keep_affine` holds back (see above).
@@ -1237,8 +1237,8 @@ function _affine_boxes_to_keep(kernels::AbstractVector{_AccKernel})
     (_codegen_disabled() || _codegen_node_budget() <= 0) && return Int[]
     cap = _affine_keep_max()
     cap <= 0 && return Int[]
-    rk = [_affine_box_rank(K) for K in kernels]
-    cand = [j for j in eachindex(kernels) if rk[j] > 0]
+    rk = Int[_affine_box_rank(K) for K in kernels]
+    cand = Int[j for j in eachindex(kernels) if rk[j] > 0]
     sort!(cand; by = j -> (-rk[j], j))
     length(cand) > cap && resize!(cand, cap)
     return sort!(cand)
@@ -1284,11 +1284,11 @@ function _merge_acc_kernel_classes(
     # box's cells, and a class of such boxes would have no cell
     # to list, which no merged kernel represents.
     kept = _range_shared_code(_range_spec_now()) ?
-        [
+        Int[
             j for j in eachindex(kernels)
             if !_is_outs(kernels[j].cells) && !isempty(kernels[j].cells.strides)
         ] :
-        keep_affine ? _affine_boxes_to_keep(kernels) : Int[]
+        keep_affine ? _affine_boxes_to_keep(kernels)::Vector{Int} : Int[]
     # A shifted equality scatter's pieces (scatter.jl) are a fixed number of
     # boxes at every grid size, and two scatters of one document are the same
     # box at different shifts; merged, each would read through per-lane tables
@@ -1296,7 +1296,7 @@ function _merge_acc_kernel_classes(
     keep = _scatter_keep_now()
     if keep !== nothing && !isempty(keep)
         extra = Int[j for j in eachindex(kernels) if haskey(keep, kernels[j])]
-        isempty(extra) || (kept = sort!(unique!(vcat(kept, extra))))
+        isempty(extra) || (kept = sort!(unique!(append!(copy(kept), extra))))
     end
     if !isempty(kept)
         rest = _AccKernel[kernels[j] for j in eachindex(kernels) if !insorted(j, kept)]

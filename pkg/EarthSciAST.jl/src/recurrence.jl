@@ -309,7 +309,7 @@ function _check_recurrence_equation!(
         )
         return errors
     end
-    if any(r -> r.unsequenceable, reads)
+    if _anyof(r -> r.unsequenceable, reads)
         push_err!(
             ERROR_CODES.RECURRENCE_UNSUPPORTED_FORM,
             "a causal self-read of '$var' is reached only through a construct that " *
@@ -340,7 +340,7 @@ function _check_recurrence_equation!(
         return errors
     end
     idx_names = String[string(s) for s in raw_idx]
-    if isempty(idx_names) || any(n -> tryparse(Int, n) !== nothing, idx_names)
+    if isempty(idx_names) || _anyof(n -> tryparse(Int, n) !== nothing, idx_names)
         push_err!(
             ERROR_CODES.RECURRENCE_UNSUPPORTED_FORM,
             "the recurrence definition of '$var' has no symbolic output index to fold " *

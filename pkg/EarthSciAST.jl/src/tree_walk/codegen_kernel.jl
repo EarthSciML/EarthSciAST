@@ -561,7 +561,7 @@ _cg_conn_mode(conn::UnitRange{Int}) =
 function _cg_conn_mode(conn::Vector{Int})
     c0 = _cg_affine_conn(conn)
     c0 > 0 && return c0 - 1
-    return any(iszero, conn) ? -1 : -2
+    return _anyof(iszero, conn) ? -1 : -2
 end
 
 # What a fixed read of value `v` under geometry key `key` reads, for the
@@ -634,7 +634,7 @@ _cg_slab_literal(cs::_CellSet, d::Int) =
 
 # The output-slot extent of a kernel's cells (`(1, 0)` for none).
 function _cg_oln_extent(cs::_CellSet)
-    any(isempty, cs.ranges) && return (1, 0)
+    _anyof(isempty, cs.ranges) && return (1, 0)
     _is_outs(cs) && return extrema(cs.outs)
     _is_contig(cs) && return (first(cs.ranges[1]), last(cs.ranges[1]))
     lo = hi = cs.base
@@ -1677,7 +1677,7 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
     end
     # (A tile that shares its code counts every box at run time: it runs no
     # cell of a box it does not own.)
-    corner = !isempty(cs.strides) && all(d -> _cellset_slab(cs, d), eachindex(cs.strides)) &&
+    corner = !isempty(cs.strides) && _allof(d -> _cellset_slab(cs, d), eachindex(cs.strides)) &&
         !_range_shared_code(_range_spec_now())
     hdr = if sm === nothing
         Any[
@@ -2010,7 +2010,7 @@ function _cg_rowfuse_groups(kernels::AbstractVector{_AccKernel})
     for js in values(byrow)
         length(js) >= 2 || continue
         ord = sort(js; by = j -> first(kernels[j].cells.ranges[1]))
-        ok = all(
+        ok = _allof(
             m -> last(kernels[ord[m - 1]].cells.ranges[1]) <
                 first(kernels[ord[m]].cells.ranges[1]), 2:length(ord)
         )
@@ -2275,7 +2275,7 @@ function _cg_row_fission(ctx::_CGCtx, Ks::Vector{_AccKernel}, parts)
     # The split is chosen from the members' geometry, which differs from tile
     # to tile, so a tile that shares its code keeps the one-pass form.
     _range_shared_code(_range_spec_now()) && return nothing
-    all(q -> isempty(q.rec), parts) || return nothing
+    _allof(q -> isempty(q.rec), parts) || return nothing
     for m in 2:length(Ks)
         last(Ks[m - 1].cells.ranges[1]) + 1 == first(Ks[m].cells.ranges[1]) || return nothing
     end
@@ -2294,21 +2294,21 @@ function _cg_row_fission(ctx::_CGCtx, Ks::Vector{_AccKernel}, parts)
         e isa Expr ? Expr(e.head, Any[canon(a, q) for a in e.args]...) : e
     lazy(e) = e isa Expr && (
         e.head in (:if, :&&, :||, :let, :block) ||
-            any(lazy, e.args)
+            _anyof(lazy, e.args)
     )
-    any(q -> lazy(q.val), parts) && return nothing
+    _anyof(q -> lazy(q.val), parts) && return nothing
     cs = Any[canon(q.val, q) for q in parts]
     # The hole: descend while the members differ in exactly one child.
     function walk(es, at)
         e1 = es[1]
-        all(e -> isequal(e, e1), es) && return nothing
-        if e1 isa Expr && all(
+        _allof(e -> isequal(e, e1), es) && return nothing
+        if e1 isa Expr && _allof(
                 e -> e isa Expr && e.head === e1.head &&
                     length(e.args) == length(e1.args), es
             )
             diffs = [
                 i for i in eachindex(e1.args)
-                    if !all(e -> isequal(e.args[i], e1.args[i]), es)
+                    if !_allof(e -> isequal(e.args[i], e1.args[i]), es)
             ]
             length(diffs) == 1 &&
                 return walk(Any[e.args[diffs[1]] for e in es], (at..., diffs[1]))
@@ -2318,10 +2318,10 @@ function _cg_row_fission(ctx::_CGCtx, Ks::Vector{_AccKernel}, parts)
     path = walk(cs, ())
     (path === nothing || isempty(path)) && return nothing
     sub(e, pth) = isempty(pth) ? e : sub(e.args[pth[1]], pth[2:end])
-    reads_u(e) = e isa Expr && (_cg_is_uread(e) || any(reads_u, e.args))
+    reads_u(e) = e isa Expr && (_cg_is_uread(e) || _anyof(reads_u, e.args))
     holes = Any[sub(q.val, path) for q in parts]
-    all(reads_u, holes) || return nothing
-    any(h -> h isa Expr && _cg_expr_size(h) >= 4, holes) || return nothing
+    _allof(reads_u, holes) || return nothing
+    _anyof(h -> h isa Expr && _cg_expr_size(h) >= 4, holes) || return nothing
     iF = _cg_name(ctx, "i")
     oF = _cg_name(ctx, "o")
     q1 = parts[1]

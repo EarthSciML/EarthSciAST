@@ -62,7 +62,7 @@ module Cadence
 
 import JSON3
 using ..EarthSciAST: EarthSciASTError, ReferenceGraph, ReferenceVertex, detect_cycle,
-    _ensure_vertex!, _add_edge!
+    _ensure_vertex!, _add_edge!, _anyof
 
 export CadenceError, classify,
     assert_no_continuous_relational, assert_acyclic_index_sets,
@@ -296,7 +296,7 @@ _update_rules(update) = isa(update, AbstractVector) ? update :
 forbids `wiener` inside an array, so in practice an array update is never
 Brownian — but the test reads through the rules rather than assuming it."""
 _update_has_wiener(update) =
-    any(
+    _anyof(
     r -> isa(r, AbstractDict) && get(r, "kind", nothing) == "wiener",
     _update_rules(update)
 )

@@ -155,7 +155,9 @@ const _AK_NO_CONN = Int[]
 # A box-addressed descriptor's per-dim strides, any rank: the first three go to
 # s1..s3 (zero-padded) and the rest to `sx`.
 @inline _box_s(s::AbstractVector{Int}, d::Int) = d <= length(s) ? s[d] : 0
-_box_sx(s::AbstractVector{Int}) = length(s) > 3 ? Vector{Int}(s[4:end]) : _AK_NO_CONN
+# `s` reaches here as an abstract vector from several builders; see `_dynamic`.
+_box_sx(s::AbstractVector{Int}) = _dynamic(_box_sx_typed, s)::Vector{Int}
+_box_sx_typed(s::AbstractVector{Int}) = length(s) > 3 ? Vector{Int}(s[4:end]) : _AK_NO_CONN
 
 # Named constructors — the descriptor call sites (stencil_affine.jl, tests) use
 # these and are unchanged by the tagged-struct storage.
@@ -969,7 +971,7 @@ for (LS, seed) in (
     @eval _acc_fn_spec_eq(a::$LS, b::$LS) =
         a.s1 == b.s1 && a.s2 == b.s2 && a.s3 == b.s3 && a.off == b.off &&
         length(a.specs) == length(b.specs) &&
-        all(i -> _fn_spec_content_equal(a.specs[i], b.specs[i]), eachindex(a.specs))
+        _allof(i -> _fn_spec_content_equal(a.specs[i], b.specs[i]), eachindex(a.specs))
 end
 
 # The closed set of spec types `_acc_fn_pay_key` content-keys. Anything else —
@@ -1106,7 +1108,7 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
             inv = k === _NK_LITERAL || k === _NK_PARAM || k === _NK_TIME ? true :
                 k === _NK_ACCESS ? _acc_desc_invariant(acc[n.idx].kind) :
                 k === _NK_OP ? (
-                    all(v -> is_inv[v], childvns) &&
+                    _allof(v -> is_inv[v], childvns) &&
                     !_acc_fn_pay_lane_varying(n.payload)
                 ) :
                 false                       # _NK_REDUCE excluded upstream; be safe
@@ -1303,7 +1305,7 @@ function _cellsets_outs_unique(css)
         elseif _is_contig(cs)
             isempty(cs.ranges[1]) || push!(boxes, (0, Int[1], UnitRange{Int}[cs.ranges[1]]))
         else
-            any(isempty, cs.ranges) || push!(boxes, (cs.base, cs.strides, cs.ranges))
+            _anyof(isempty, cs.ranges) || push!(boxes, (cs.base, cs.strides, cs.ranges))
         end
     end
     if isempty(lists)
@@ -1330,7 +1332,7 @@ end
 # can reach (a mixed radix). `false` means "not shown", not "collides".
 function _affine_injective_on(strides::Vector{Int}, ranges)
     dims = [d for d in eachindex(strides) if length(ranges[d]) > 1]
-    any(d -> strides[d] == 0, dims) && return false
+    _anyof(d -> strides[d] == 0, dims) && return false
     sort!(dims; by = d -> abs(strides[d]))
     reach = 0
     for d in dims
@@ -1361,7 +1363,7 @@ function _boxes_outs_unique(boxes)
         _affine_injective_on(st, hull) || return nothing
         for x in 1:length(ks), y in (x + 1):length(ks)
             rx = boxes[ks[x]][3]; ry = boxes[ks[y]][3]
-            all(d -> first(rx[d]) <= last(ry[d]) && first(ry[d]) <= last(rx[d]), 1:nd) &&
+            _allof(d -> first(rx[d]) <= last(ry[d]) && first(ry[d]) <= last(rx[d]), 1:nd) &&
                 return false
         end
         push!(hulls, _box_slot_hull(b, st, hull))

@@ -418,7 +418,7 @@ function _coerce_ranges(data)
         sv = string(k)
         if v isa AbstractVector
             # Dense integer tuple [lo, hi] / [lo, step, hi] (as today).
-            if all(x -> x isa Number, v)
+            if _allof(x -> x isa Number, v)
                 result[sv] = Any[Int(x) for x in v]
             else
                 result[sv] = Any[x isa Number ? Int(x) : expression_from_json(x) for x in v]
@@ -646,7 +646,7 @@ function coerce_trigger(data)::DiscreteEventTrigger
         if times_val === nothing
             throw(ParseError("Preset times trigger requires 'times' field"))
         end
-        times = [Float64(t) for t in times_val]
+        times = Float64[Float64(t) for t in times_val]
         return PresetTimesTrigger(times)
     else
         throw(ParseError("Invalid DiscreteEventTrigger: unknown type '$(trigger_type_str)' and no recognized discriminator field"))
@@ -881,7 +881,7 @@ function coerce_solver(data)
     # block with nothing set — which is what keeps the five bindings from
     # disagreeing about whether `{}` survives `parse -> emit`. A block holding
     # only `external`, or only `time_span`, is not empty.
-    all(
+    _allof(
         isnothing, (
             s.stiffness, s.abstol, s.reltol, s.splitting, s.external,
             s.time_span,
@@ -1442,7 +1442,7 @@ _coerce_index_set_members(v) = String[string(x) for x in v]
 # member is not a string, so the join-key validator can reject float / null
 # keys (RFC §5.3). A string-only set keeps `members_raw === nothing`.
 _coerce_index_set_members_raw(v) =
-    any(x -> !(x isa AbstractString), v) ? Any[x for x in v] : nothing
+    _anyof(x -> !(x isa AbstractString), v) ? Any[x for x in v] : nothing
 
 
 # Parse-side value conversion for one table row: returns the expression

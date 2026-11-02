@@ -448,8 +448,8 @@ end
 # key column to a string key column is a key-type error (they can never compare
 # equal — §5.3).
 function _encode_join_keys(vals_l::Vector{Any}, vals_r::Vector{Any})
-    l_str = any(v -> v isa AbstractString, vals_l)
-    r_str = any(v -> v isa AbstractString, vals_r)
+    l_str = _anyof(v -> v isa AbstractString, vals_l)
+    r_str = _anyof(v -> v isa AbstractString, vals_r)
     if l_str != r_str
         throw(
             TreeWalkError(
@@ -478,7 +478,9 @@ function _encode_join_keys(vals_l::Vector{Any}, vals_r::Vector{Any})
 end
 
 function _encode_join_keys_typed(vals_l::Vector{T}, vals_r::Vector{T}) where {T}
-    table = sort!(unique(vcat(vals_l, vals_r)))
+    # `append!` to a copy rather than `vcat`, whose numeric-array methods
+    # SparseArrays extends.
+    table = sort!(unique(append!(copy(vals_l), vals_r)))
     code_of = Dict{T, Int}(v => i for (i, v) in enumerate(table))
     return (Int[code_of[v] for v in vals_l], Int[code_of[v] for v in vals_r])
 end
@@ -625,7 +627,7 @@ function _join_key_column_values(
         if defn isa OpExpr && (defn::OpExpr).op == "const"
             arr = _const_op_to_array((defn::OpExpr).value)
         elseif defn isa OpExpr && (defn::OpExpr).op == "makearray" &&
-                all(
+                _allof(
                 p -> _join_literal_cell(defn::OpExpr, p, const_arrays) !== nothing,
                 positions
             )
@@ -752,7 +754,7 @@ function _cc_values(
         isempty(subs) && break
         e = _sub_preserving(e, subs)
     end
-    any(n -> haskey(obs_defs, n) && !haskey(ca, n), _referenced_var_names(e)) &&
+    _anyof(n -> haskey(obs_defs, n) && !haskey(ca, n), _referenced_var_names(e)) &&
         return nothing
     # A materialized observed named bare reads its own cell (§4.3.4, the
     # name-aligned elementwise case): it becomes the producer that reads it
@@ -892,7 +894,7 @@ function _join_key_sym_pos_vals(
         pick = :left,
         order::Union{Nothing, Vector{String}} = nothing
     )
-    if haskey(ranges, key) || any(==(key), values(sym_to_set))
+    if haskey(ranges, key) || _anyof(==(key), values(sym_to_set))
         sym = _join_sym_for_key(key, ranges, sym_to_set, pick, order)
         positions = _join_key_positions(sym, ranges, index_sets)
         return (sym, positions, _key_member_values(sym, ranges, positions, index_sets))
@@ -1190,6 +1192,6 @@ function _resolve_join_gates(
         var_shapes::AbstractDict = Dict{String, Vector{String}}(),
         obs_defs::AbstractDict = Dict{String, ASTExpr}()
     )
-    any(_eq_has_join, eqs) || return eqs
+    _anyof(_eq_has_join, eqs) || return eqs
     return Equation[_resolve_join_in_eq(eq, index_sets, vi_maps, const_arrays, var_shapes, obs_defs) for eq in eqs]
 end

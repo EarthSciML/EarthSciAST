@@ -76,12 +76,12 @@ function _override_key_matches(key::AbstractString, names::Set{String}, namespac
     key in names && return true
     parts = split(key, '.')
     for i in 2:length(parts)
-        if join(parts[i:end], '.') in names && all(p -> String(p) in namespaces, parts[1:(i - 1)])
+        if join(parts[i:end], '.') in names && _allof(p -> String(p) in namespaces, parts[1:(i - 1)])
             return true
         end
     end
     tail = "." * key
-    return any(n -> endswith(n, tail), names)
+    return _anyof(n -> endswith(n, tail), names)
 end
 
 function _check_inline_tests!(

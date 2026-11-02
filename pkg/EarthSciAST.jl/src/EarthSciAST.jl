@@ -52,6 +52,8 @@ include("error_codes.jl")
 # it raises (`SimulateError`, `TreeWalkError`) are resolved at call time, so it
 # sits here, ahead of every tier that reads a plan.
 include("compiler.jl")
+# Loops and conversions written so cached code survives other packages loading.
+include("invalidation_barriers.jl")
 # Core data model + validation
 include("types.jl")
 # Derived variable classification (esm-spec §6.3.1). Must follow types.jl (it

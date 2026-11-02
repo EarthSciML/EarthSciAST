@@ -932,7 +932,7 @@ function _component_shape_env(comp)::Dict{String, Vector{String}}
         _is_object(vd) || continue
         shp = _raw_get(vd, "shape")
         (shp !== nothing && _is_array(shp)) || continue
-        all(s -> s isa AbstractString, shp) || continue
+        _allof(s -> s isa AbstractString, shp) || continue
         env[string(vn)] = String[string(s) for s in shp]
     end
     return env
@@ -1630,7 +1630,7 @@ function reject_expression_templates_pre_v04(raw_data)
     !_is_object(raw_data) && return
     esm_raw = _raw_get(raw_data, "esm")
     esm_raw === nothing && return
-    m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(esm_raw))
+    m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(esm_raw)::String)
     m === nothing && return
     major = parse(Int, m.captures[1])
     minor = parse(Int, m.captures[2])
@@ -2514,7 +2514,7 @@ function _registry_collision_names(byname::AbstractDict)::Set{String}
     collide = Set{String}()
     refs = Dict{String, Set{String}}()
     for (name, occ) in byname
-        all(o -> _json_equal(occ[1][2], o[2]), occ) || push!(collide, name)
+        _allof(o -> _json_equal(occ[1][2], o[2]), occ) || push!(collide, name)
         s = Set{String}()
         for (_, decl) in occ
             union!(s, _collect_apply_names!(String[], decl))
@@ -2527,7 +2527,7 @@ function _registry_collision_names(byname::AbstractDict)::Set{String}
         changed = false
         for (name, _) in byname
             name in collide && continue
-            if any(r -> r in collide, refs[name])
+            if _anyof(r -> r in collide, refs[name])
                 push!(collide, name)
                 changed = true
             end

@@ -226,7 +226,7 @@ function _partition_identity(args::Vector{ASTExpr}, identity::Int)
     return others, had_int, had_float
 end
 
-_all_float_literals(args::Vector{ASTExpr}) = !isempty(args) && all(a -> a isa NumExpr, args)
+_all_float_literals(args::Vector{ASTExpr}) = !isempty(args) && _allof(a -> a isa NumExpr, args)
 
 _is_zero_any(e) = (e isa IntExpr && e.value == 0) || (e isa NumExpr && e.value == 0.0)
 _is_one_any(e) = (e isa IntExpr && e.value == 1) || (e isa NumExpr && e.value == 1.0)
@@ -445,7 +445,8 @@ function _emit_canonical_value(v)::String
     if v isa Bool
         return v ? "true" : "false"
     elseif v isa Integer
-        return string(v)
+        # An abstract `Integer` prints through `promote_rule`; see `_dynamic`.
+        return _dynamic(string, v)::String
     elseif v isa AbstractFloat
         f = Float64(v)
         if isfinite(f) && isinteger(f) && _int64_exactly_representable(f)

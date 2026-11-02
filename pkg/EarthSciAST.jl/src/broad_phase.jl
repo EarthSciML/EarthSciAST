@@ -69,7 +69,10 @@ argument to `broad_phase_candidates`, which must be called with the SAME `eps`.
 function build_spatial_index end
 
 # Coerce any 4-element indexable envelope to `(xmin, ymin, xmax, ymax)::NTuple{4,Float64}`.
-@inline _env4(e) = (Float64(e[1]), Float64(e[2]), Float64(e[3]), Float64(e[4]))
+@inline _env4(e) = (
+    Float64(e[1])::Float64, Float64(e[2])::Float64,
+    Float64(e[3])::Float64, Float64(e[4])::Float64,
+)
 
 # CORE brute-force method: the reference oracle. O(nq·nc) exact envelope test.
 function broad_phase_candidates(
@@ -145,7 +148,7 @@ function _broad_phase_grid(query_envs::AbstractVector, cell_envs::AbstractVector
     for j in 1:nc
         a, b, c, d = _env4(cell_envs[j])
         a -= e; b -= e; c += e; d += e
-        all(isfinite, (a, b, c, d)) || return nothing
+        _allof(isfinite, (a, b, c, d)) || return nothing
         cells[j] = (a, b, c, d)
         xlo = min(xlo, a); ylo = min(ylo, b); xhi = max(xhi, c); yhi = max(yhi, d)
     end
@@ -160,8 +163,11 @@ function _broad_phase_grid(query_envs::AbstractVector, cell_envs::AbstractVector
     gy = _bin_count(fy / shrink, max(1, div(4 * nc, gx)))
     wx = sx > 0 ? sx / gx : 1.0
     wy = sy > 0 ? sy / gy : 1.0
-    bx(x) = clamp(floor(Int, (clamp(x, xlo, xhi) - xlo) / wx) + 1, 1, gx)
-    by(y) = clamp(floor(Int, (clamp(y, ylo, yhi) - ylo) / wy) + 1, 1, gy)
+    # The loop above reassigns the bounds, so the closures capture fresh
+    # bindings; capturing a reassigned variable boxes it as `Any`.
+    x0, x1, y0, y1 = xlo, xhi, ylo, yhi
+    bx(x) = clamp(floor(Int, (clamp(x, x0, x1) - x0) / wx) + 1, 1, gx)
+    by(y) = clamp(floor(Int, (clamp(y, y0, y1) - y0) / wy) + 1, 1, gy)
     g = gx
     bins = [Int[] for _ in 1:(gx * gy)]
     wide = Int[]
@@ -181,7 +187,7 @@ function _broad_phase_grid(query_envs::AbstractVector, cell_envs::AbstractVector
     for qi in eachindex(query_envs)
         qxmin, qymin, qxmax, qymax = _env4(query_envs[qi])
         qxmin -= e; qymin -= e; qxmax += e; qymax += e
-        all(isfinite, (qxmin, qymin, qxmax, qymax)) || return nothing
+        _allof(isfinite, (qxmin, qymin, qxmax, qymax)) || return nothing
         empty!(cand)
         append!(cand, wide)
         if qxmax >= xlo && qxmin <= xhi && qymax >= ylo && qymin <= yhi
@@ -491,8 +497,8 @@ _eq_match_key(v::Real) = isnan(v) ? _EQ_KEY_NEVER : (iszero(v) ? 0.0 : Float64(v
 _eq_match_key(v::AbstractString) = String(v)
 function _eq_match_key(v::Tuple)
     ks = map(_eq_match_key, v)
-    any(k -> k === _EQ_KEY_DECLINE, ks) && return _EQ_KEY_DECLINE
-    any(k -> k === _EQ_KEY_NEVER, ks) && return _EQ_KEY_NEVER
+    _anyof(k -> k === _EQ_KEY_DECLINE, ks) && return _EQ_KEY_DECLINE
+    _anyof(k -> k === _EQ_KEY_NEVER, ks) && return _EQ_KEY_NEVER
     return ks
 end
 _eq_match_key(v) = _EQ_KEY_DECLINE

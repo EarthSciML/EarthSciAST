@@ -195,7 +195,7 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
             ctx.defs[name], v.shape, ctx.index_sets,
             ctx.parts.derived_extents
         )
-        (d === nothing || isempty(d) || any(<=(0), d)) && return nothing
+        (d === nothing || isempty(d) || _anyof(<=(0), d)) && return nothing
         length(v.shape) == length(d) || return nothing
         dims = d
     end
@@ -380,7 +380,7 @@ function _program_materialized_set(ctx::_ObsProgramCtx, name::String, shaped::Bo
             ctx.parts.derived_extents
         )
         (
-            d === nothing || isempty(d) || any(<=(0), d) ||
+            d === nothing || isempty(d) || _anyof(<=(0), d) ||
                 length(rv.shape) != length(d)
         ) && continue
         push!(out, r)

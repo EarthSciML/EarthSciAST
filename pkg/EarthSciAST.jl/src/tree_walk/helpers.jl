@@ -538,7 +538,7 @@ function _resolve_observed(obs::Dict{String, ASTExpr})
             # The `n in names` guard means only observed-named references trigger a
             # rewrite, so the extra bound loop indices it surfaces are inert.
             fv = _referenced_var_names(v)
-            if any(n -> n in names, fv)
+            if _anyof(n -> n in names, fv)
                 resolved[k] = _sub_preserving(v, resolved)
                 any_change = true
             end
@@ -776,8 +776,10 @@ end
 # Format an array-cell key like "u[3]" (1D) or "u[2,3]" (2D).
 function _cell_key(var_name::String, indices)
     # The one- and two-index keys (every grid cell of a 1-D or 2-D variable)
-    # are spelled without `join`'s IOBuffer; the string is the same.
-    if indices isa Union{AbstractVector{<:Integer}, Tuple{Vararg{Integer}}}
+    # are spelled without `join`'s IOBuffer; the string is the same. Only for
+    # `Int` indices: printing an abstract `Integer` is inferred through
+    # `promote_rule`, which ForwardDiff extends.
+    if indices isa Union{AbstractVector{Int}, Tuple{Vararg{Int}}}
         length(indices) == 1 && return string(var_name, "[", indices[1], "]")
         length(indices) == 2 &&
             return string(var_name, "[", indices[1], ",", indices[2], "]")
@@ -799,7 +801,7 @@ any `AbstractString`. Shared with simulate.jl / inline_tests.jl — keep the
 signature stable.
 """
 function _parse_cell_key(key::AbstractString)
-    m = match(_CELL_KEY_RE, key)
+    m = match(_CELL_KEY_RE, String(key)::String)
     m === nothing && return nothing
     name = String(m.captures[1])
     indices = Int[parse(Int, s) for s in split(m.captures[2], ",")]
@@ -1086,13 +1088,13 @@ function _try_field_ic_fastpath(
     body = rhs.expr_body
     body === nothing && return nothing
     oi_raw = rhs.output_idx === nothing ? Any[] : rhs.output_idx
-    all(s -> s isa AbstractString, oi_raw) || return nothing
+    _allof(s -> s isa AbstractString, oi_raw) || return nothing
     oi = String[String(s) for s in oi_raw]
     isempty(oi) && return nothing
     # Non-contracting: every declared range index is an output index (a contracted
     # index would need reduction, not a single per-cell value).
     ranges = rhs.ranges === nothing ? Dict{String, Any}() : rhs.ranges
-    all(n -> n in oi, keys(ranges)) || return nothing
+    _allof(n -> n in oi, keys(ranges)) || return nothing
     # A loop index must not collide with a scalar-param name or the time symbol.
     for nm in oi
         (nm == "t" || haskey(params, nm)) && return nothing
@@ -1359,9 +1361,13 @@ end
 # Expand a ranges entry to the concrete list of integer values.
 # `r` is [lo, hi] or [lo, step, hi] (elements may be Int or Any, but must all
 # be concrete integers — expression-valued bounds are not supported by the
-# tree-walk evaluator).
-function _expand_int_range(r::AbstractVector)
-    all(x -> x isa Integer, r) || throw(
+# tree-walk evaluator). Range specs come straight out of the document, so most
+# callers cannot infer their type and the work is entered through `_dynamic`.
+_expand_int_range(r::AbstractVector) =
+    _dynamic(_expand_int_range_typed, r)::Union{UnitRange{Int}, StepRange{Int, Int}}
+
+function _expand_int_range_typed(r::AbstractVector)
+    _allof(x -> x isa Integer, r) || throw(
         TreeWalkError(
             "E_TREEWALK_DYNAMIC_RANGE",
             "expression-valued range bounds are not supported in the tree-walk " *
@@ -1430,7 +1436,7 @@ _contract_lists(cc) = Union{Vector{Int}, Nothing}[
 # materialized), the expanded value lists otherwise.
 function _output_range_iters(ranges_dict, idx_names)
     rs = [_expand_int_range(ranges_dict[n]) for n in idx_names]
-    all(r -> r isa UnitRange{Int}, rs) && return UnitRange{Int}[r for r in rs]
+    _allof(r -> r isa UnitRange{Int}, rs) && return UnitRange{Int}[r for r in rs]
     return Vector{Int}[collect(r) for r in rs]
 end
 
@@ -1438,7 +1444,8 @@ end
 # the range can be expanded once, globally, with `_expand_int_range` (the
 # constant-bound fast path used by structured grids and the Route-B padded
 # unstructured form).
-_is_const_int_range(r::AbstractVector) = all(x -> x isa Integer, r)
+_is_const_int_range(r::AbstractVector) = _dynamic(_allof, _is_integer, r)::Bool
+_is_integer(x) = x isa Integer
 
 # Expand a ranges entry whose bounds may be *expression-valued* (e.g. a
 # per-cell reduction bound `index(n_edges_on_cell, i) - 1`).  Each non-Integer
@@ -1491,7 +1498,7 @@ end
 function _eval_const_int(
         expr::OpExpr, idx_env::Dict{String, Int},
         const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS
-    )
+    )::Int
     op = expr.op
     c = expr.args
     if op == "+"
@@ -1607,7 +1614,7 @@ function _eval_const_int(
                 "const array '$(name)' is $(ndims(arr))D but got $(length(idx_args)) indices"
             )
         )
-        int_indices = [_eval_const_int(a, idx_env, const_arrays) for a in idx_args]
+        int_indices = Int[_eval_const_int(a, idx_env, const_arrays) for a in idx_args]
         for d in 1:ndims(arr)
             int_indices[d] = _resolve_const_index(arr, name, d, int_indices[d], size(arr, d))
         end

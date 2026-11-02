@@ -47,7 +47,7 @@ end
 function _declared_minor(raw_data)
     esm_raw = _raw_get(raw_data, "esm")
     esm_raw === nothing && return nothing
-    m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(esm_raw))
+    m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(esm_raw)::String)
     m === nothing && return nothing
     return (parse(Int, m.captures[1]), parse(Int, m.captures[2]))
 end
@@ -256,7 +256,7 @@ end
 # offset subtracted, and the fraction in [0, 1). `nothing` when `s` is not of
 # the form `re` describes or names no calendar instant.
 function _datetime_parts(s::AbstractString, re::Regex)
-    m = match(re, s)
+    m = match(re, String(s)::String)
     m === nothing && return nothing
     y, mo, d, h, mi, sec = (parse(Int, m.captures[i]) for i in 1:6)
     (
@@ -352,7 +352,7 @@ end
 
 # `(start, end)` in seconds, or the fault that makes it no interval.
 function _time_span_interval(start, stop, domain)
-    origin = any(b -> b isa AbstractString, (start, stop)) ? _time_origin(domain) : (0, 0.0)
+    origin = _anyof(b -> b isa AbstractString, (start, stop)) ? _time_origin(domain) : (0, 0.0)
     s = _time_span_seconds(start, "start", origin)
     s isa _TimeSpanFault && return s
     e = _time_span_seconds(stop, "end", origin)

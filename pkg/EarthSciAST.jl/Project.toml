@@ -46,7 +46,7 @@ EarthSciASTGeometryOpsExt = ["GeometryOps", "GeoInterface", "SortTileRecursiveTr
 EarthSciASTMTKExt = ["DomainSets", "ModelingToolkit", "Symbolics"]
 EarthSciASTReactantExt = "Reactant"
 EarthSciASTSimulateExt = "SciMLBase"
-# Carries only a precompile workload for the build/solve/inline-test path; see
+# Carries only a precompile workload for the solve and inline-test path; see
 # its docstring for why that cannot live in the core package.
 EarthSciASTSolverWorkloadExt = ["SciMLBase", "ForwardDiff", "OrdinaryDiffEqTsit5", "OrdinaryDiffEqRosenbrock"]
 

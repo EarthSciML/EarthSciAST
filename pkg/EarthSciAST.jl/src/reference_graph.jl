@@ -237,7 +237,7 @@ function topological_order(g::ReferenceGraph)
         progressed = false
         next_remaining = String[]
         for k in remaining
-            if all(d -> d in done, get(g.out, k, String[]))
+            if _allof(d -> d in done, get(g.out, k, String[]))
                 push!(emitted, k)
                 push!(done, k)
                 progressed = true

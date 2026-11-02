@@ -263,27 +263,27 @@ function _oop_batch_lower(nodes::Vector{_Node})::Union{Nothing, _OopBatchNode}
         nodes[l].kind === k || return nothing
     end
     if k === _NK_LITERAL
-        all(nd -> isequal(nd.literal, n1.literal), nodes) &&
+        _allof(nd -> isequal(nd.literal, n1.literal), nodes) &&
             return _mkbatch(kind = k, literal = n1.literal)
         return _mkbatch(kind = k, lanes_f = Float64[nd.literal for nd in nodes])
     elseif k === _NK_STATE
-        all(nd -> nd.idx == n1.idx, nodes) && return _mkbatch(kind = k, idx = n1.idx)
+        _allof(nd -> nd.idx == n1.idx, nodes) && return _mkbatch(kind = k, idx = n1.idx)
         return _mkbatch(kind = k, slots = Int[nd.idx for nd in nodes])
     elseif k === _NK_PARAM
         # `idx` rides along with `sym` (the read seam wants both). It is not part
         # of the congruence test because it is a FUNCTION of `sym` — one build's
         # parameter order — so equal syms already imply equal indices.
-        all(nd -> nd.sym === n1.sym, nodes) || return nothing
+        _allof(nd -> nd.sym === n1.sym, nodes) || return nothing
         return _mkbatch(kind = k, sym = n1.sym, idx = n1.idx)
     elseif k === _NK_TIME
         return _mkbatch(kind = k)
     elseif k === _NK_CACHED
-        all(nd -> nd.idx == n1.idx && nd.payload === n1.payload, nodes) || return nothing
+        _allof(nd -> nd.idx == n1.idx && nd.payload === n1.payload, nodes) || return nothing
         return _mkbatch(kind = k, idx = n1.idx, payload = n1.payload)
     elseif k === _NK_PARAM_GATHER
         arr = n1.payload::Vector{Float64}
-        all(nd -> nd.payload === arr, nodes) || return nothing
-        all(nd -> nd.idx == n1.idx, nodes) &&
+        _allof(nd -> nd.payload === arr, nodes) || return nothing
+        _allof(nd -> nd.idx == n1.idx, nodes) &&
             return _mkbatch(kind = k, idx = n1.idx, payload = arr)
         return _mkbatch(kind = k, payload = arr, slots = Int[nd.idx for nd in nodes])
     elseif k === _NK_CONST_GATHER || k === _NK_STATE_GATHER
@@ -323,7 +323,7 @@ function _oop_batch_lower(nodes::Vector{_Node})::Union{Nothing, _OopBatchNode}
         if k === _NK_OP && n1.op === :fn
             pl = n1.payload
             ok = if pl isa Tuple{String, _FnTypedCoreSpec}
-                all(
+                _allof(
                     nd -> (
                         q = nd.payload;
                         q isa Tuple{String, _FnTypedCoreSpec} &&
@@ -331,7 +331,7 @@ function _oop_batch_lower(nodes::Vector{_Node})::Union{Nothing, _OopBatchNode}
                     ), nodes
                 )
             elseif pl isa Tuple{String, Nothing}
-                all(
+                _allof(
                     nd -> (
                         q = nd.payload;
                         q isa Tuple{String, Nothing} && q[1] == pl[1]
@@ -340,7 +340,7 @@ function _oop_batch_lower(nodes::Vector{_Node})::Union{Nothing, _OopBatchNode}
             elseif pl isa Tuple{String, _InterpLinearSpec} ||
                     pl isa Tuple{String, _InterpBilinearSpec} ||
                     pl isa Tuple{String, _InterpSearchsortedSpec}
-                all(
+                _allof(
                     nd -> nd.payload isa Tuple && length(nd.payload) == 2 &&
                         nd.payload[2] === pl[2], nodes
                 )
@@ -554,8 +554,8 @@ function _oop_acc_vecable(n::_Node, K::_AccKernel, in_reduce::Bool)
         # planned at the parent, so this check and the plan build agree.
         S = n.payload::_AccKernel
         return _oop_acc_vecable(S.spine, S) &&
-            all(r -> _oop_acc_vecable(r, S), S.cse.recipes) &&
-            all(r -> _oop_acc_vecable(r, S), S.cse.inv_recipes)
+            _allof(r -> _oop_acc_vecable(r, S), S.cse.recipes) &&
+            _allof(r -> _oop_acc_vecable(r, S), S.cse.inv_recipes)
     end
     if k === _NK_ACCESS
         a = K.acc[n.idx]
@@ -580,7 +580,7 @@ function _oop_acc_vecable(n::_Node, K::_AccKernel, in_reduce::Bool)
     elseif k === _NK_CACHED
         (n.payload === K.cse.scratch || n.payload === K.cse.inv_scratch) || return false
     end
-    return all(c -> _oop_acc_vecable(c, K, in_reduce), n.children)
+    return _allof(c -> _oop_acc_vecable(c, K, in_reduce), n.children)
 end
 
 # Resolve one descriptor table's per-lane host data against a GIVEN lane
@@ -609,7 +609,7 @@ function _build_oop_desc_vectors(
             # and masked: the eval selects 0.0 on those lanes, so the trace still
             # sees ONE whole-array gather plus a select against a constant mask.
             raw = Int[@inbounds a.conn[_oop_boxaddr(a, mis, l)] for l in 1:L]
-            if any(==(0), raw)
+            if _anyof(==(0), raw)
                 ghost[i] = Bool[s == 0 for s in raw]
                 gathers[i] = Int[s == 0 ? 1 : s for s in raw]
             else
@@ -708,8 +708,8 @@ end
 # `_OOP_ACC_FALLBACK`): a structural test, with no lane built.
 _oop_plan_vecable(K::_AccKernel) =
     _oop_acc_vecable(K.spine, K) &&
-    all(r -> _oop_acc_vecable(r, K), K.cse.recipes) &&
-    all(r -> _oop_acc_vecable(r, K), K.cse.inv_recipes)
+    _allof(r -> _oop_acc_vecable(r, K), K.cse.recipes) &&
+    _allof(r -> _oop_acc_vecable(r, K), K.cse.inv_recipes)
 
 function _build_oop_acc_plan_inner(K::_AccKernel)
     _oop_plan_vecable(K) || return _OOP_ACC_FALLBACK

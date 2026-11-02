@@ -71,7 +71,8 @@ struct _RecurrenceSweep{F, TB}
 end
 
 # The sweep order: the recurrence axis, then the others in `output_idx` order.
-_recurrence_order(axis::Int, rank::Int) = vcat(axis, [d for d in 1:rank if d != axis])
+# (Built without `vcat`, whose numeric-array methods SparseArrays extends.)
+_recurrence_order(axis::Int, rank::Int) = pushfirst!(Int[d for d in 1:rank if d != axis], axis)
 
 # Weight of each axis in the sweep position (0-based), the last of `order` fastest.
 function _recurrence_sweep_weights(order::Vector{Int}, dims::Vector{Int})
@@ -306,13 +307,13 @@ function _compile_recurrence_sweep(
     body = _compile(resolved, var_map, param_sym_set, reg_funcs)
     fold = nothing
     if !isempty(contract_names)
-        contract_ranges = Vector{Any}[collect(ranges[n]) for n in contract_names]
+        contract_ranges = Vector{Any}[_as_type(Vector{Any}, collect(ranges[n])) for n in contract_names]
         contract_const = Union{Vector{Int}, Nothing}[
             _is_const_int_range(r) ? collect(_expand_int_range(r)) : nothing
                 for r in contract_ranges
         ]
         rev = _reverse_window(dop.filter, contract_names, idx_names)
-        fold = if dop.join_gates !== nothing || rev || any(c -> c === nothing, contract_const)
+        fold = if dop.join_gates !== nothing || rev || _anyof(c -> c === nothing, contract_const)
             # Per-cell admitted tuples, indexed by the cell's position in
             # `Iterators.product` order over the output ranges — dimension 1
             # fastest, which for a dense `1…dims` frame is the buffer offset.

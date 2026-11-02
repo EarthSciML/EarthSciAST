@@ -45,8 +45,8 @@ function _ragged_factor_scope(index_sets::AbstractDict, variables::AbstractDict)
             (haskey(factor_scope, fname) || haskey(variables, fname)) && continue
             cands = String[n for n in keys(variables) if endswith(n, "." * fname)]
             isempty(cands) && continue
-            mindepth = minimum(count(==('.'), c) for c in cands)
-            best = String[c for c in cands if count(==('.'), c) == mindepth]
+            mindepth = minimum(_countof(==('.'), c) for c in cands)
+            best = String[c for c in cands if _countof(==('.'), c) == mindepth]
             length(best) == 1 && (factor_scope[fname] = best[1])
         end
     end
@@ -205,7 +205,7 @@ function _resolve_isr(
     new_lower = expr.lower === nothing ? nothing : res(expr.lower)
     new_upper = expr.upper === nothing ? nothing : res(expr.upper)
     new_ranges = expr.ranges
-    if expr.ranges !== nothing && any(v -> v isa IndexSetRef, values(expr.ranges))
+    if expr.ranges !== nothing && _anyof(v -> v isa IndexSetRef, values(expr.ranges))
         changed = true
         new_ranges = Dict{String, Any}()
         for (k, v) in expr.ranges
@@ -250,7 +250,7 @@ function _resolve_index_set_ranges(
         derived_extents::AbstractDict = _EMPTY_DERIVED_EXTENTS,
         factor_scope::AbstractDict = _EMPTY_FACTOR_SCOPE
     )
-    any(_has_index_set_ref, eqs) || return eqs
+    _anyof(_has_index_set_ref, eqs) || return eqs
     memo = IdDict{OpExpr, ASTExpr}()
     return Equation[
         _resolve_isr(eq, index_sets, derived_extents, factor_scope, memo)
@@ -524,7 +524,7 @@ _contracted_index_names(ranges_dict, output_idx) =
 
 _ast_reads(e, name::AbstractString) =
     e isa VarExpr ? (e::VarExpr).name == name :
-    e isa OpExpr ? any(a -> _ast_reads(a, name), (e::OpExpr).args) : false
+    e isa OpExpr ? _anyof(a -> _ast_reads(a, name), (e::OpExpr).args) : false
 
 # For each contracted index, the other contracted indices its range reads, or
 # `nothing` when no range reads one (the common case: a product).
@@ -566,7 +566,7 @@ function _contract_nest_order(deps)
     while length(order) < nc
         nxt = 0
         for d in nc:-1:1
-            if !placed[d] && all(j -> placed[j], deps[d])
+            if !placed[d] && _allof(j -> placed[j], deps[d])
                 nxt = d
                 break
             end
@@ -618,7 +618,7 @@ end
 function _contract_iters_at(
         contract_names, rspecs, idx_env::Dict{String, Int},
         const_arrays::AbstractDict, consts = nothing
-    )
+    )::Union{_ContractNest, Vector{Vector{Int}}}
     deps = _contracted_parent_deps(contract_names, rspecs)
     deps === nothing ||
         return _contract_nest(contract_names, rspecs, deps, idx_env, const_arrays)
@@ -712,7 +712,7 @@ function _resolve_index_of_faq(
     # A ragged bound over a symbolic output index becomes a run-time loop
     # (`_NK_RAGGED_LOOP`), which reads the bound at the cell the call is at.
     if any_symbolic && !isempty(bound_syms) &&
-            any(n -> !_is_const_int_range(ranges_dict[n]), contract_names)
+            _anyof(n -> !_is_const_int_range(ranges_dict[n]), contract_names)
         return _resolve_ragged_faq_loop(
             faq_expr, sub_body, ranges_dict, idx_exprs,
             contract_names, oplus, zerobar, array_var_info,
@@ -844,9 +844,11 @@ function _ragged_reach(rspec, const_arrays::AbstractDict)
     ) || return 1
     arr = get(const_arrays, ((hi::OpExpr).args[1]::VarExpr).name, nothing)
     (arr isa AbstractArray{<:Real} && !isempty(arr)) || return 1
-    m = sum(Float64, arr) / length(arr)
+    # `arr` is whatever the document's const array holds; see `_dynamic`.
+    m = _dynamic(_mean_f64, arr)::Float64
     return isfinite(m) ? max(1, round(Int, m)) : 1
 end
+_mean_f64(a) = sum(Float64, a) / length(a)
 
 # Resolve index(makearray(regions=[...], values=[...]), k1, k2, ...) by
 # selecting the value expression whose region covers (k1, k2, ...).
@@ -989,7 +991,7 @@ function _remap_operand_shape(
     e isa OpExpr || return nothing
     o = e::OpExpr
     if o.op == "reshape"
-        (o.shape === nothing || !all(s -> s isa Integer, o.shape)) && return nothing
+        (o.shape === nothing || !_allof(s -> s isa Integer, o.shape)) && return nothing
         ext = Int[Int(s) for s in o.shape]
         return (ones(Int, length(ext)), ext)
     elseif o.op == "transpose"
@@ -1000,7 +1002,7 @@ function _remap_operand_shape(
         return (ones(Int, length(perm)), s[2][perm .+ 1])
     elseif o.op == "concat"
         parts = [_remap_operand_shape(a, array_var_info, const_arrays, pgather) for a in o.args]
-        (isempty(parts) || any(p -> p === nothing, parts)) && return nothing
+        (isempty(parts) || _anyof(p -> p === nothing, parts)) && return nothing
         ax = something(o.axis, 0) + 1
         exts = [isempty(p[2]) ? [1] : p[2] for p in parts]
         ext = copy(exts[1])
@@ -1009,7 +1011,7 @@ function _remap_operand_shape(
         return (ones(Int, length(ext)), ext)
     elseif _is_scalar_op(o.op)
         shapes = [_remap_operand_shape(a, array_var_info, const_arrays, pgather) for a in o.args]
-        any(s -> s === nothing, shapes) && return nothing
+        _anyof(s -> s === nothing, shapes) && return nothing
         ext = _positional_broadcast_extent([s[2] for s in shapes], o)
         return (ones(Int, length(ext)), ext)
     end
@@ -1104,7 +1106,7 @@ function _index_through_shape_op(
             o, "shape $(ext) holds $(prod(ext)) elements but the " *
                 "operand holds $(prod(xext))"
         )
-        if all(k -> k !== nothing, ks)
+        if _allof(k -> k !== nothing, ks)
             lin = 0; stride = 1
             for d in eachindex(ext)
                 lin += (ks[d] - 1) * stride; stride *= ext[d]
@@ -1157,7 +1159,7 @@ end
 # True iff a shape op is an operand of `e`, looking through elementwise ops.
 _mentions_shape_op(e::ASTExpr) = e isa OpExpr && (
     (e::OpExpr).op in _SHAPE_REMAP_OPS ||
-        (_is_scalar_op((e::OpExpr).op) && any(_mentions_shape_op, (e::OpExpr).args))
+        (_is_scalar_op((e::OpExpr).op) && _anyof(_mentions_shape_op, (e::OpExpr).args))
 )
 
 # The subscripts one operand of an elementwise combination is gathered at, under
@@ -1458,10 +1460,10 @@ function _resolve_scalar_faq(
     if _contraction_loop_enabled() && _ARRAY_CELL_DEPTH[] == 0 &&
             isempty(bound_syms) && gates === nothing && filt0 === nothing &&
             (oplus == "+" || oplus == "*" || oplus == "max" || oplus == "min") &&
-            all(n -> _is_const_int_range(ranges_dict[n]), contract_names)
+            _allof(n -> _is_const_int_range(ranges_dict[n]), contract_names)
         ranges = [_expand_int_range(ranges_dict[n]) for n in contract_names]
         total = isempty(ranges) ? 0 : prod(length(r) for r in ranges)
-        if total >= _contraction_loop_min() && all(!isempty, ranges)
+        if total >= _contraction_loop_min() && _allof(!isempty, ranges)
             looped = _try_build_contraction_loop(
                 body, contract_names, ranges,
                 oplus, zerobar, array_var_info, var_map, const_arrays, pgather
@@ -1539,6 +1541,8 @@ const _EMPTY_PARAMS = Dict{String, Float64}()
 struct _PGatherArray
     flat::Vector{Float64}   # aliased flat view of the caller's buffer (live, by-ref)
     dims::Vector{Int}       # original shape — bounds-check + linearize at build time
+    _PGatherArray(flat, dims) =
+        new(_field(_PGatherArray, :flat, flat), _field(_PGatherArray, :dims, dims))
 end
 # Read-only sentinel — see the `_EMPTY_*` invariant block next to
 # `_EMPTY_DERIVED_EXTENTS`.
@@ -1562,7 +1566,7 @@ const _EMPTY_BOUND_SYMS = Set{String}()
 # every non-fast-path call.
 _refs_bound_sym(e::VarExpr, bound_syms::Set{String}) = e.name in bound_syms
 _refs_bound_sym(e::OpExpr, bound_syms::Set{String}) =
-    any(a -> _refs_bound_sym(a, bound_syms), e.args)
+    _anyof(a -> _refs_bound_sym(a, bound_syms), e.args)
 _refs_bound_sym(::ASTExpr, ::Set{String}) = false
 
 # True iff a subscript's value is known only at run time: it references a name
@@ -1694,7 +1698,7 @@ function _resolve_guarded_op(
     finally
         resize!(guards, depth)
     end
-    all(i -> new_args[i] === args[i], eachindex(args)) && return expr
+    _allof(i -> new_args[i] === args[i], eachindex(args)) && return expr
     return reconstruct(expr; args = new_args)
 end
 
@@ -1724,7 +1728,7 @@ function _resolve_const_array_gather(
                 "but got $(length(idx_args_expr)) indices"
         )
     )
-    if any(a -> _subscript_is_runtime(a, const_arrays), idx_args_expr)
+    if _anyof(a -> _subscript_is_runtime(a, const_arrays), idx_args_expr)
         sub_nodes = Vector{ASTExpr}(undef, length(idx_args_expr))
         for d in 1:ndims(vals)
             a = idx_args_expr[d]
@@ -1742,13 +1746,13 @@ function _resolve_const_array_gather(
         return OpExpr("index", sub_nodes; value = _ConstGatherRef(vals, name))
     end
     # Fully-constant subscripts: inline the value as a NumExpr literal.
-    int_indices = [
+    int_indices = Int[
         _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
             for a in idx_args_expr
     ]
     guards = _resolve_guards()
     if !isempty(guards) &&
-            any(
+            _anyof(
             d -> !(1 <= int_indices[d] <= size(vals, d)) &&
                 _const_dim_boundary(vals, d) === :error, 1:ndims(vals)
         ) &&
@@ -1780,7 +1784,8 @@ const _INLINE_CONST_PREFIX = "__inline_const#"
 function _intern_inline_const(cexpr::OpExpr, const_arrays::AbstractDict)
     vals = _const_op_to_array(cexpr.value)
     for (k, v) in const_arrays
-        (startswith(k, _INLINE_CONST_PREFIX) && size(v) == size(vals) && v == vals) &&
+        # The registry holds arrays of any type; see `_dynamic`.
+        (startswith(k, _INLINE_CONST_PREFIX) && size(v) == size(vals) && _dynamic(==, v, vals)::Bool) &&
             return v, k
     end
     name = string(_INLINE_CONST_PREFIX, hash(vals))
@@ -1796,7 +1801,7 @@ end
 # compile-once cellwise path (whose bound symbols use different names). Distinct
 # from `_refs_bound_sym`, which fires for ANY symbol in a caller-supplied set.
 _refs_loopvar(e::VarExpr) = startswith(e.name, _LOOPVAR_PREFIX)
-_refs_loopvar(e::OpExpr) = any(_refs_loopvar, e.args)
+_refs_loopvar(e::OpExpr) = _anyof(_refs_loopvar, e.args)
 _refs_loopvar(::ASTExpr) = false
 
 # Lower a STATE-array read whose subscripts depend on a contraction loop variable
@@ -2090,7 +2095,7 @@ function _resolve_indices_op(
             )
             _amemo = IdDict{OpExpr, Bool}()
             _arrayish(a) = _index_pushdown_arrayish(a, _leaf_is_array, _amemo)
-            if any(_arrayish, fa.args)
+            if _anyof(_arrayish, fa.args)
                 # A combination with a shape-op operand is anonymous, and its
                 # operands broadcast positionally (§4.3.4): each reads the
                 # subscripts its own shape admits. A combination of variables
@@ -2154,7 +2159,7 @@ function _resolve_indices_op(
             # A subscript computed at run time from a parameter, a state or an
             # observed (bound symbols keep their own path) reads its slot the
             # same way.
-            if any(
+            if _anyof(
                     a -> _refs_loopvar(a) || _subscript_is_runtime(a, bound_syms, const_arrays),
                     idx_args
                 )
@@ -2531,7 +2536,7 @@ function _scan_lhs_cells!(cells, lhs::ASTExpr, array_var_names::Set{String})
         range_iters = [_expand_int_range(ranges_dict[n]) for n in idx_names]
 
         cs = get!(_DiscoveredCells, cells, vname)
-        any(isempty, range_iters) && return
+        _anyof(isempty, range_iters) && return
         idx_args = inner.args[2:end]
         box = _lhs_cells_box(idx_args, idx_names, range_iters)
         if box !== nothing

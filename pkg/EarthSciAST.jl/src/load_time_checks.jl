@@ -137,9 +137,9 @@ function _raw_mentions_interp(x)
         op = get(x, "op", nothing)
         op == "fn" && n isa AbstractString && n in _INTERP_FN_NAMES && return true
         op == _TABLE_LOOKUP_OP && return true
-        return any(_raw_mentions_interp, values(x))
+        return _anyof(_raw_mentions_interp, values(x))
     elseif x isa AbstractVector
-        return any(_raw_mentions_interp, x)
+        return _anyof(_raw_mentions_interp, x)
     end
     return false
 end

@@ -1,11 +1,18 @@
-# Precompile workload: a few small native builds, run while the package
-# precompiles, so the native build pipeline's own methods (the join-gate
-# builder, a construction-time fill, the affine kernel tier and its code
-# generation, a const-array gather) are compiled into the package image instead
-# of on a session's first build. Every document is built in memory; nothing
-# reads the network or a file. The builds are single-threaded (precompilation
-# runs one thread), so neither the threaded dispatch nor any extension is
-# exercised.
+# Precompile workload, run while the package precompiles, so that what every
+# session does first is compiled into the package image instead of on first
+# call: loading a document from JSON text, building it under both the
+# interpreter and the native compiler, and evaluating its right-hand side once;
+# plus a few native builds that reach the rest of the native pipeline (the
+# join-gate builder, a construction-time fill, the affine kernel tier and its
+# code generation, a const-array gather). Every document is built in memory;
+# nothing reads the network or a file. The builds are single-threaded
+# (precompilation runs one thread), so the threaded dispatch is not exercised.
+#
+# What is cached here survives loading other packages only where the code it
+# calls is concretely inferred; `invalidation_barriers.jl` has the helpers that
+# keep the less precisely typed parts of the build path that way. Solving and
+# the inline tests need the solver packages, so their workload is
+# `EarthSciASTSolverWorkloadExt`.
 
 using PrecompileTools: @setup_workload, @compile_workload
 
@@ -129,7 +136,67 @@ using PrecompileTools: @setup_workload, @compile_workload
             ),
         ]
     )
+    # An array model: `faq` equations with and without a `filter`, an array
+    # observed read through `index`, and inline assertions at coordinates.
+    array_doc = """
+    {"esm": "1.2.0", "metadata": {"name": "workload_array"},
+     "index_sets": {"x": {"kind": "interval", "size": 5}},
+     "models": {"M": {
+       "variables": {
+         "a": {"type": "unknown", "units": "1", "shape": ["x"], "default": 0.0},
+         "b": {"type": "unknown", "units": "1", "shape": ["x"], "default": 0.0},
+         "w": {"type": "unknown", "units": "1", "shape": ["x"]}
+       },
+       "equations": [
+         {"lhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": {"from": "x"}},
+                  "expr": {"op": "D", "args": [{"op": "index", "args": ["a", "i"]}], "wrt": "t"}},
+          "rhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": {"from": "x"}},
+                  "expr": {"op": "+", "args": [{"op": "*", "args": [2, "i"]}, 1]},
+                  "filter": {"op": ">=", "args": ["i", 3]}}},
+         {"lhs": "w", "rhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": {"from": "x"}},
+                  "expr": {"op": "*", "args": [10, "i"]}, "filter": {"op": "<=", "args": ["i", 2]}}},
+         {"lhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": {"from": "x"}},
+                  "expr": {"op": "D", "args": [{"op": "index", "args": ["b", "i"]}], "wrt": "t"}},
+          "rhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": {"from": "x"}},
+                  "expr": {"op": "index", "args": ["w", "i"]}}}
+       ],
+       "tests": [{"id": "t1", "time_span": {"start": 0.0, "end": 1.0},
+                  "assertions": [{"variable": "a", "time": 1.0, "expected": 7.0, "coords": {"x": 3}},
+                                 {"variable": "w", "time": 1.0, "expected": 10.0, "coords": {"x": 1}}]}]
+     }}}
+    """
+    # A scalar model: a parameter, a state, an observed, and an inline test
+    # that overrides the parameter.
+    scalar_doc = """
+    {"esm": "1.2.0", "metadata": {"name": "workload_scalar"},
+     "models": {"M": {
+       "variables": {
+         "k": {"type": "parameter", "units": "1/s", "default": 0.5},
+         "y": {"type": "unknown", "units": "1", "default": 1.0},
+         "z": {"type": "unknown", "units": "1"}
+       },
+       "equations": [
+         {"lhs": {"op": "D", "args": ["y"], "wrt": "t"},
+          "rhs": {"op": "-", "args": [{"op": "*", "args": ["k", "y"]}]}},
+         {"lhs": "z", "rhs": {"op": "*", "args": [2, "y"]}}
+       ],
+       "tests": [{"id": "t1", "time_span": {"start": 0.0, "end": 1.0},
+                  "parameter_overrides": {"k": 1.0},
+                  "assertions": [{"variable": "y", "time": 1.0, "expected": 0.36787944117144233},
+                                 {"variable": "z", "time": 1.0, "expected": 0.7357588823428847}]}]
+     }}}
+    """
     @compile_workload begin
+        # The load and build path every session takes: parse a document from
+        # JSON text, build it under both compilers, and evaluate its RHS once.
+        for json in (array_doc, scalar_doc)
+            file = load_string(json)
+            for compiler in (:interpreter, :native)
+                prob = esm_problem(file, (0.0, 1.0); compiler)
+                du = similar(prob.u0)
+                isempty(du) || prob.f!(du, prob.u0, prob.p, 0.0)
+            end
+        end
         for doc in (stencil, keyed)
             prob = esm_problem(doc, (0.0, 1.0); compiler = :native)
             du = similar(prob.u0)

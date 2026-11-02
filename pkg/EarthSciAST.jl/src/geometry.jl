@@ -103,7 +103,7 @@ function _to_matrix(poly)::Matrix{Float64}
                     "polygon vertex $i has $(length(row)) coordinates, expected 2 (lon, lat)"
                 )
             )
-            m[i, 1] = Float64(row[1]); m[i, 2] = Float64(row[2])
+            m[i, 1] = Float64(row[1])::Float64; m[i, 2] = Float64(row[2])::Float64
         end
         return m
     end
@@ -456,7 +456,17 @@ modular arithmetic in the AST.
 """
 function close_ring(ring::AbstractMatrix)::Matrix{Float64}
     size(ring, 1) == 0 && return Matrix{Float64}(ring)
-    return vcat(Matrix{Float64}(ring), reshape(Float64.(ring[1, :]), 1, 2))
+    # Filled in place rather than with `vcat`, whose numeric-array methods
+    # SparseArrays extends.
+    n = size(ring, 1)
+    size(ring, 2) == 2 ||
+        throw(DimensionMismatch("a ring has 2 columns (lon, lat), got $(size(ring, 2))"))
+    out = Matrix{Float64}(undef, n + 1, 2)
+    for i in 1:n, j in 1:2
+        out[i, j] = Float64(ring[i, j])::Float64
+    end
+    out[n + 1, 1] = out[1, 1]; out[n + 1, 2] = out[1, 2]
+    return out
 end
 
 # --------------------------------------------------------------------------- #

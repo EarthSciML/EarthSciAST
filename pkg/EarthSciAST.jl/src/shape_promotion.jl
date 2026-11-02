@@ -319,7 +319,7 @@ function _is_array_producer(expr::ASTExpr)::Bool
     # non-empty `output_idx` — a scalar reduction has an empty one.
     expr.op in _ARRAY_PRODUCER_OPS || return false
     expr.output_idx === nothing && return false
-    return any(s -> s isa AbstractString, expr.output_idx)
+    return _anyof(s -> s isa AbstractString, expr.output_idx)
 end
 
 # Wrap a (formerly scalar) defining expression in a faq producing `shape`.
@@ -455,7 +455,7 @@ function inline_elementwise_array_observeds(flat::FlattenedSystem)::FlattenedSys
         progressed = false
         for (nm, rhs) in targets
             nm in done && continue
-            if all(d -> d in done, intersect(free_variables(rhs), keys(targets)))
+            if _allof(d -> d in done, intersect(free_variables(rhs), keys(targets)))
                 push!(order, nm)
                 push!(done, nm)
                 progressed = true
@@ -672,7 +672,7 @@ function _inline_producer_axes(rhs::ASTExpr)
     for x in o.output_idx
         x isa AbstractString || return nothing
         r = get(o.ranges, String(x), nothing)
-        (r isa AbstractVector && length(r) == 2 && all(v -> v isa Integer, r)) || return nothing
+        (r isa AbstractVector && length(r) == 2 && _allof(v -> v isa Integer, r)) || return nothing
         (r[1] == 1 && r[2] >= 1) || return nothing
         push!(axes, (String(x), Int(r[2])))
     end
@@ -859,7 +859,7 @@ function _index_promoted_opexpr(
         # CLEARS it rather than letting an outer scope's loops leak in.
         pos2 = (
                 oi !== nothing && !isempty(oi) &&
-                all(x -> x isa AbstractString, oi)
+                _allof(x -> x isa AbstractString, oi)
             ) ?
             String[String(x) for x in oi] : nothing
         memo2 = IdDict{OpExpr, ASTExpr}()      # new loop scope ⇒ new memo

@@ -109,7 +109,9 @@ to right — the left fold the invariant names.
 function _fold_contributions(contributions::AbstractVector{Contribution})::ASTExpr
     isempty(contributions) && throw(ArgumentError("an equation has at least one contribution"))
     length(contributions) == 1 && return contributions[1].expr
-    return OpExpr("+", ASTExpr[c.expr for c in contributions])
+    # Indexed rather than iterated: callers hold the list as an abstract vector,
+    # and iterating one is inferred through methods other packages add.
+    return OpExpr("+", ASTExpr[contributions[i].expr for i in 1:length(contributions)])
 end
 
 """
@@ -169,7 +171,7 @@ function _rewrite_contributions(
     )
     if !lifted
         out = Contribution[Contribution(f(c.expr), c.origins) for c in contributions]
-        all(i -> out[i].expr === contributions[i].expr, eachindex(out)) &&
+        _allof(i -> out[i].expr === contributions[i].expr, eachindex(out)) &&
             return eq, contributions
         return _equation_from(eq, out), out
     end
@@ -220,7 +222,7 @@ _same_expr(a::ASTExpr, b::ASTExpr)::Bool =
 function _folds_to(contributions::AbstractVector{Contribution}, body::ASTExpr)::Bool
     length(contributions) == 1 && return _same_expr(contributions[1].expr, body)
     if body isa OpExpr && body.op == "+" && length(body.args) == length(contributions)
-        all(i -> body.args[i] === contributions[i].expr, eachindex(contributions)) && return true
+        _allof(i -> body.args[i] === contributions[i].expr, eachindex(contributions)) && return true
     end
     return _same_expr(_fold_contributions(contributions), body)
 end

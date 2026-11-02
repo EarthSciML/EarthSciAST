@@ -129,7 +129,7 @@ end
 # state array laid out as one column-major block, whose slot is then its first
 # slot plus the offset, with no table load.
 _cg_slot_run(tbl::AbstractVector{Int}) =
-    !isempty(tbl) && all(k -> @inbounds(tbl[k]) == @inbounds(tbl[1]) + k - 1, eachindex(tbl))
+    !isempty(tbl) && _allof(k -> @inbounds(tbl[k]) == @inbounds(tbl[1]) + k - 1, eachindex(tbl))
 
 # ---- Scalar spine node → expression (mirrors `_eval_node`) ------------------
 function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
@@ -292,14 +292,14 @@ function _reads_ref(nd::_Node, ref, memo::IdDict{_Node, Bool})
     got === nothing || return got
     r = (nd.kind === _NK_LOOPVAR && nd.payload === ref) ||
         (nd.kind === _NK_RAGGED_LOOP && (nd.payload::_RaggedLoop).ref === ref) ||
-        any(c -> _reads_ref(c, ref, memo), nd.children)
+        _anyof(c -> _reads_ref(c, ref, memo), nd.children)
     memo[nd] = r
     return r
 end
 function _ragged_hoists!(out::Vector{_Node}, nd::_Node, ref, memo::IdDict{_Node, Bool})
     if !_reads_ref(nd, ref, memo)
         (nd.kind === _NK_LITERAL || nd.kind === _NK_LOOPVAR || nd.kind === _NK_TIME) ||
-            any(x -> x === nd, out) || push!(out, nd)
+            _anyof(x -> x === nd, out) || push!(out, nd)
         return out
     end
     lazy = nd.kind === _NK_OP && nd.op in (:ifelse, :and, :or)
@@ -316,13 +316,16 @@ end
 # fold's term, when a bound reads anything but the cell's output counters and
 # build constants, or when a bound does not evaluate at some cell (the call
 # then evaluates it, and raises its error, only where it is reached).
+_prod_from_one(xs) = prod(xs; init = 1)
+
 function _ac_ragged_entries(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
     (kc.nest === nothing || kc.entry !== nothing) && return nothing
     nest = kc.nest
     spec = nd.payload::_RaggedLoop
     lo_n, hi_n = nd.children[2], nd.children[3]
     (_ac_cell_only(lo_n, nest.refs) && _ac_cell_only(hi_n, nest.refs)) || return nothing
-    ncells = prod(nest.lens; init = 1)
+    # `kc.nest` is held untyped; see `_dynamic`.
+    ncells = _dynamic(_prod_from_one, nest.lens)::Int
     seg = Vector{Int}(undef, ncells + 1)
     kcol = Int[]
     seg[1] = 1
@@ -363,13 +366,13 @@ end
 function _ac_cell_only(nd::_Node, refs)
     k = nd.kind
     if k === _NK_LOOPVAR
-        return any(r -> r === nd.payload, refs)
+        return _anyof(r -> r === nd.payload, refs)
     end
     (
         k === _NK_LITERAL || k === _NK_CONST_GATHER ||
             (k === _NK_OP && nd.op !== :fn)
     ) || return false
-    return all(c -> _ac_cell_only(c, refs), nd.children)
+    return _allof(c -> _ac_cell_only(c, refs), nd.children)
 end
 
 _cg_oplus_fn(op::Symbol) =
@@ -523,7 +526,7 @@ function _cg_state_gather(ctx::_CGCtx, kc, nd::_Node)
             col = _ac_entry_local(ctx, pre, kc.entry)
             ev = (kc.entry::_ACEntries).ev
             side = _cg_slot_side(ctx.nst, _cg_table_extent(ctx, pre)...)
-            all(!=(0), pre) && return _cg_uread(side, :($col[$ev]))
+            _allof(!=(0), pre) && return _cg_uread(side, :($col[$ev]))
             sv = _cg_name(ctx, "esl")
             return :(
                 let $sv = $col[$ev]
@@ -716,7 +719,7 @@ function _ac_entry_cols(kc::_CGScalarCtx, children)
         elseif ch.kind === _NK_CONST_GATHER
             vals = _ac_const_gather_entries(kc, ch.payload::_ConstGatherArray, ch.children)
             vals === nothing && return nothing
-            all(x -> isfinite(x) && abs(x) < 2.0^62, vals) ||
+            _allof(x -> isfinite(x) && abs(x) < 2.0^62, vals) ||
                 return nothing
             cols[d] = Int[round(Int, x) for x in vals]
         else
@@ -1005,7 +1008,7 @@ function _ac_param_only(nd::_Node)
         k === _NK_LITERAL || k === _NK_PARAM || k === _NK_LOOPVAR ||
             k === _NK_CONST_GATHER || k === _NK_OP
     ) || return false
-    return all(_ac_param_only, nd.children)
+    return _allof(_ac_param_only, nd.children)
 end
 
 # The gated TABLE fold: the cell folds its compacted entries `segc[c]:segc[c+1]-1`
@@ -1165,7 +1168,7 @@ end
 # The section is what the right-hand side keeps, so the re-emission closures
 # (`remit`), which only the build's consumer pass reads, are dropped here.
 _make_contraction_section(acs::AbstractVector) =
-    _ContractionSection(Tuple(map(_ac_drop_remit, acs)))
+    _ContractionSection(Tuple(_dynamic(map, _ac_drop_remit, acs)))
 
 Base.isempty(s::_ContractionSection) = isempty(s.gens)
 

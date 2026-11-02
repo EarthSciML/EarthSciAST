@@ -65,10 +65,10 @@ _scan_fusable(K::_AccKernel, S::_ScanFold) =
 function _cellset_is_shifted(cs::_CellSet, slots::Vector{Int}, delta::Int)
     _cellset_ncells(cs) == length(slots) || return false
     if _is_outs(cs)
-        return all(k -> cs.outs[k] + delta == slots[k], eachindex(slots))
+        return _allof(k -> cs.outs[k] + delta == slots[k], eachindex(slots))
     elseif _is_contig(cs)
         r = cs.ranges[1]
-        return all(k -> r[k] + delta == slots[k], eachindex(slots))
+        return _allof(k -> r[k] + delta == slots[k], eachindex(slots))
     end
     return _box_is_shifted(cs.base, Tuple(cs.strides), Tuple(cs.ranges), slots, delta)
 end
@@ -114,10 +114,10 @@ function _scan_consumer_node_ok(nd::_Node)
         )
         return false
     end
-    return all(_scan_consumer_node_ok, nd.children)
+    return _allof(_scan_consumer_node_ok, nd.children)
 end
 _scan_node_reads(nd::_Node, ix::Int) =
-    (nd.kind === _NK_ACCESS && nd.idx == ix) || any(c -> _scan_node_reads(c, ix), nd.children)
+    (nd.kind === _NK_ACCESS && nd.idx == ix) || _anyof(c -> _scan_node_reads(c, ix), nd.children)
 
 # The slot extent a state-reading descriptor of a kernel whose cells span
 # `olnext` can read; `nothing` for one that reads no state, `(typemin, typemax)`
@@ -154,7 +154,7 @@ function _scan_kernel_reads(
         _scan_overlaps(_scan_desc_extent(a, olnext), lo, hi) && return true
     end
     # A sub-kernel runs at its parent's `oln`, which its own cells do not give.
-    return any(S -> _scan_kernel_reads(S, lo, hi, 0, nothing), K.subs)
+    return _anyof(S -> _scan_kernel_reads(S, lo, hi, 0, nothing), K.subs)
 end
 
 # The consumer of fold `S` among the state kernels `Ks`, or `nothing`: the one
@@ -175,7 +175,7 @@ function _scan_consumer(slots::Vector{Int}, Ks::AbstractVector{_AccKernel}, nst:
     found === nothing && return nothing
     K = found
     isempty(K.subs) || return nothing
-    all(a -> a.kind in _SCAN_CONSUMER_KINDS, K.acc) || return nothing
+    _allof(a -> a.kind in _SCAN_CONSUMER_KINDS, K.acc) || return nothing
     olnext = _cg_oln_extent(K.cells)
     # Its other reads are of the state: the consumer runs at the scan's level,
     # before any other observed is certain to be filled.
@@ -195,10 +195,10 @@ function _scan_consumer(slots::Vector{Int}, Ks::AbstractVector{_AccKernel}, nst:
     _scan_node_reads(K.spine, ix) || return nothing
     (
         _scan_consumer_node_ok(K.spine) &&
-            all(_scan_consumer_node_ok, K.cse.recipes) &&
-            all(_scan_consumer_node_ok, K.cse.inv_recipes)
+            _allof(_scan_consumer_node_ok, K.cse.recipes) &&
+            _allof(_scan_consumer_node_ok, K.cse.inv_recipes)
     ) || return nothing
-    any(r -> _scan_node_reads(r, ix), K.cse.inv_recipes) && return nothing
+    _anyof(r -> _scan_node_reads(r, ix), K.cse.inv_recipes) && return nothing
     delta = K.acc[ix].delta
     _cellset_is_shifted(K.cells, slots, delta) || return nothing
     return (K, ix, delta)
@@ -227,7 +227,7 @@ function _scan_consumer_plan(
         for S in scans
             length(S.terms) == 1 || continue
             Kt = S.terms[1]
-            (Kt isa _AccKernel && any(k -> k === Kt, kernels)) || continue
+            (Kt isa _AccKernel && _anyof(k -> k === Kt, kernels)) || continue
             sh = _scan_fusable(Kt, S) ? nothing : _colscan_shape(S, Kt)
             c = if sh !== nothing
                 _colscan_consumer(S, Kt, sh, Ks, nst, levels, li)
@@ -240,9 +240,9 @@ function _scan_consumer_plan(
             name = get(owner, S, nothing)
             store = !(
                 name !== nothing && isempty(percell) && isempty(contractions) &&
-                    !any(e -> name in _referenced_var_names(e[2]), scalar_entries) &&
-                    !any(
-                    d -> any(ex -> name in _referenced_var_names(ex), values(d)),
+                    !_anyof(e -> name in _referenced_var_names(e[2]), scalar_entries) &&
+                    !_anyof(
+                    d -> _anyof(ex -> name in _referenced_var_names(ex), values(d)),
                     defsets
                 )
             )
@@ -386,7 +386,7 @@ function _detach_fused_scans(
         g = nothing
         if length(S.terms) == 1
             K = S.terms[1]
-            if K isa _AccKernel && any(k -> k === K, kernels) && _scan_fusable(K, S)
+            if K isa _AccKernel && _anyof(k -> k === K, kernels) && _scan_fusable(K, S)
                 cons = get(consumers, S, nothing)
                 g = _build_fused_scan(S, K; nst = nst, consumer = cons)
                 if g === nothing && cons !== nothing
@@ -395,7 +395,7 @@ function _detach_fused_scans(
                     consumed[cons[1]] = true
                 end
                 g === nothing || (drop[K] = true)
-            elseif K isa _AccKernel && any(k -> k === K, kernels) &&
+            elseif K isa _AccKernel && _anyof(k -> k === K, kernels) &&
                     (sh = _colscan_shape(S, K)) !== nothing
                 cons = get(consumers, S, nothing)
                 g = _build_colscan(S, K, sh; nst = nst, consumer = cons)
@@ -561,18 +561,18 @@ function _colscan_consumer(
                 # Outside the scan's levels: only the value before the first
                 # level's fold, read from what the level wrote there already.
                 (jj == j1 && off == po) || return nothing
-                all(i -> (K.cells.base + i + (jj + off) * S2) in before, sh.r1) ||
+                _allof(i -> (K.cells.base + i + (jj + off) * S2) in before, sh.r1) ||
                     return nothing
             end
             reads[j] = off
         else
             (1 <= e[1] && e[2] <= nst) ||
-                (!opaque && e[1] > nst && !any(x -> _scan_overlaps(e, x[1], x[2]), later)) ||
+                (!opaque && e[1] > nst && !_anyof(x -> _scan_overlaps(e, x[1], x[2]), later)) ||
                 return nothing
         end
     end
     isempty(reads) && return nothing
-    any(r -> any(ix -> _scan_node_reads(r, ix), keys(reads)), Kc.cse.inv_recipes) &&
+    _anyof(r -> _anyof(ix -> _scan_node_reads(r, ix), keys(reads)), Kc.cse.inv_recipes) &&
         return nothing
     return (K = Kc, reads = reads)
 end

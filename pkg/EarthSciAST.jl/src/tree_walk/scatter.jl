@@ -93,8 +93,8 @@ function _detect_equality_scatter(
     conj = _scatter_conjuncts!(ASTExpr[], agg_filter)
     pins = Tuple{Int, ASTExpr}[]
     rest = ASTExpr[]
-    pinned(pos) = any(p -> p[1] == pos, pins)
-    reads_out(e) = any(n -> n in idx_names, _referenced_var_names(e))
+    pinned(pos) = _anyof(p -> p[1] == pos, pins)
+    reads_out(e) = _anyof(n -> n in idx_names, _referenced_var_names(e))
     function pin_of(x, e)
         x isa VarExpr || return nothing
         at = findfirst(==((x::VarExpr).name), idx_names)
@@ -125,7 +125,7 @@ function _detect_equality_scatter(
         c === nothing || continue
         for x in contract_ranges[d]
             x isa ASTExpr || continue
-            any(n -> n in pinned_names, _referenced_var_names(x)) && return nothing
+            _anyof(n -> n in pinned_names, _referenced_var_names(x)) && return nothing
         end
     end
     rem = isempty(rest) ? nothing :
@@ -140,7 +140,7 @@ function _scatter_static_node(n::_Node)
     k === _NK_LITERAL && return true
     k === _NK_LOOPVAR && return true
     (k === _NK_CONST_GATHER || k === _NK_OP) || return false
-    return all(_scatter_static_node, n.children)
+    return _allof(_scatter_static_node, n.children)
 end
 
 # A key's value as the `Float64` the naive filter compares the output index
@@ -288,7 +288,7 @@ function _scatter_box_shared(contract_ranges, contract_const, idx_names)
         c === nothing || continue
         for x in contract_ranges[d]
             x isa ASTExpr || continue
-            any(n -> n in idx_names, _referenced_var_names(x)) && return false
+            _anyof(n -> n in idx_names, _referenced_var_names(x)) && return false
         end
     end
     return true
@@ -842,7 +842,7 @@ function _scatter_shift_pieces(
         contract_ranges, contract_const, rhs_body::ASTExpr,
         oplus::String, zerobar::Float64
     )
-    all(r -> r isa UnitRange{Int} && !isempty(r), range_iters) || return nothing
+    _allof(r -> r isa UnitRange{Int} && !isempty(r), range_iters) || return nothing
     nd = length(idx_names)
     subs = Dict{String, ASTExpr}()
     live = Dict{Int, Tuple{Int, Int}}()
@@ -871,7 +871,7 @@ function _scatter_shift_pieces(
         d = findfirst(==(n), contract_names)
         for x in contract_ranges[d]
             x isa ASTExpr || continue
-            any(m -> haskey(subs, m), _referenced_var_names(x)) && return nothing
+            _anyof(m -> haskey(subs, m), _referenced_var_names(x)) && return nothing
         end
     end
     body = _sub_preserving(rhs_body, subs)
@@ -920,7 +920,7 @@ function _scatter_shift_pieces(
     for I in Iterators.product(segs...)
         plo = Int[I[d][1] for d in 1:nd]
         phi = Int[I[d][2] for d in 1:nd]
-        alive = all(d -> I[d][3], 1:nd)
+        alive = _allof(d -> I[d][3], 1:nd)
         ranges = Dict{String, Any}(idx_names[d] => Any[plo[d], phi[d]] for d in 1:nd)
         prhs = alive ? live_rhs(copy(ranges)) :
             OpExpr(
@@ -999,7 +999,7 @@ function _try_compile_scatter(
     los = Int[first(r) for r in rngs]
     stps = Int[step(r) for r in rngs]
     lens = Int[length(r) for r in rngs]
-    static = all(g -> _scatter_static_node(g[3]), kgots)
+    static = _allof(g -> _scatter_static_node(g[3]), kgots)
     if static
         keys = _ScatterKey[]
         for (r, (_, e)) in enumerate(sc.pins)

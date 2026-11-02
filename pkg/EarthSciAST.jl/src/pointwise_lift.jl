@@ -175,7 +175,7 @@ function _apply_pointwise_lift!(
         template_registry = nothing,
         lifted_shapes = nothing
     )
-    any(
+    _anyof(
         c -> c isa CouplingOperatorCompose &&
             (c.lifting !== nothing && c.lifting == "pointwise"), coupling
     ) || return

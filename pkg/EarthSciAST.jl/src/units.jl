@@ -264,7 +264,7 @@ function _normalize_unit_string(s::AbstractString)::String
         occursin(from, out) && (out = replace(out, from => to))
     end
 
-    any(c -> haskey(_SUPERSCRIPTS, c), out) || return out
+    _anyof(c -> haskey(_SUPERSCRIPTS, c), out) || return out
 
     # Rewrite each maximal run of superscript characters as `^<digits>`.
     io = IOBuffer()
@@ -350,14 +350,14 @@ function _up_run!(p::_UnitParser)
         p.pos += 1
     end
     run = p.src[start:(p.pos - 1)]
-    all(_up_digit, run) || return (String(run), false)
+    _allof(_up_digit, run) || return (String(run), false)
     if p.pos + 1 <= length(p.src) && p.src[p.pos] == '.' && _up_digit(p.src[p.pos + 1])
         p.pos += 1
         frac = p.pos
         while !_up_eof(p) && _up_ident(p.src[p.pos])
             p.pos += 1
         end
-        return (String(p.src[start:(p.pos - 1)]), all(_up_digit, p.src[frac:(p.pos - 1)]))
+        return (String(p.src[start:(p.pos - 1)]), _allof(_up_digit, p.src[frac:(p.pos - 1)]))
     end
     return (String(run), true)
 end
@@ -964,7 +964,9 @@ function Base.:/(a::ExactScale, b::ExactScale)
 end
 
 function Base.:^(a::ExactScale, r::Real)
-    q = r isa Rational ? Rational{Int}(r) : Rational{Int}(rationalize(Int, float(r); tol = 1.0e-9))
+    # `r` is often an abstract `Real`; `float` goes through `_dynamic`.
+    q = r isa Rational ? Rational{Int}(r) :
+        Rational{Int}(rationalize(Int, _dynamic(float, r)::AbstractFloat; tol = 1.0e-9))
     return _exact_normalize(ExactScale(Dict(p => x * q for (p, x) in a.primes), a.pi * q))
 end
 
@@ -1249,8 +1251,10 @@ function _same_dimensions_over(
         args, var_units, findings, describe;
         angle_meets_number::Bool = false
     )
-    arg_dims = [_expr_dimensions!(findings, arg, var_units) for arg in args]
-    valid_dims = filter(d -> d !== nothing, arg_dims)
+    arg_dims = Union{Unitful.Units, Nothing}[
+        _expr_dimensions!(findings, arg, var_units) for arg in args
+    ]
+    valid_dims = Unitful.Units[d for d in arg_dims if d !== nothing]
     isempty(valid_dims) && return nothing
 
     first_dim = valid_dims[1]
@@ -1274,7 +1278,7 @@ function _same_dimensions_over(
             end
         end
     end
-    if angle_meets_number && any(_is_pure_angle, valid_dims)
+    if angle_meets_number && _anyof(_is_pure_angle, valid_dims)
         number = findfirst(_is_angle_free_number, valid_dims)
         number === nothing || return valid_dims[number]
     end
@@ -1993,7 +1997,7 @@ end
 # True when `d` is a pure power of the TIME dimension (including 𝐓⁰ = NoDims).
 # `Unitful.Dimensions{D}` carries its exponents in the type parameter `D`, a
 # tuple of `Unitful.Dimension{:Time}(p)`-style values.
-_is_time_power(d) = all(x -> x isa Unitful.Dimension{:Time}, typeof(d).parameters[1])
+_is_time_power(d) = _allof(x -> x isa Unitful.Dimension{:Time}, typeof(d).parameters[1])
 
 """
     equation_unit_findings(eq::Equation, var_units::AbstractDict) -> Vector{String}
@@ -2615,7 +2619,7 @@ function reject_const_units_pre_v12(raw_data)
     _is_object(raw_data) || return
     esm_raw = _raw_get(raw_data, "esm")
     esm_raw === nothing && return
-    m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(esm_raw))
+    m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(esm_raw)::String)
     m === nothing && return
     (parse(Int, m.captures[1]), parse(Int, m.captures[2])) >= (1, 2) && return
     path = _find_units_bearing_node(raw_data, "")

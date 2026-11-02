@@ -386,7 +386,7 @@ function apply_mount_url_substitutions!(
     _each_source_location(doc) do site, t, set
         t = String(t)
         found = _url_placeholders(t)
-        any(p -> haskey(bound, p[3]), found) || return
+        _anyof(p -> haskey(bound, p[3]), found) || return
         io = IOBuffer()
         last = 1
         for (s, e, n) in found

@@ -259,7 +259,7 @@ function _affine_int_coeffs(e::ASTExpr, idx_names::Vector{String})
         # product of the constant ones scales it.
         k = 1; var = nothing
         for (c0, c) in parts
-            if any(!iszero, c)
+            if _anyof(!iszero, c)
                 var === nothing || return nothing
                 var = (c0, c)
             else
@@ -279,7 +279,7 @@ function _fast_key_model(sig, body, branch, id::Int, idx_names, idxset)
     get(sig.bkey_sites, body, true) && return false
     _tmpl, recipes, state_ks, _subcalls = branch
     for rec in recipes
-        all(a -> _affine_idx_expr(a, idxset), rec.idx_args) || return false
+        _allof(a -> _affine_idx_expr(a, idxset), rec.idx_args) || return false
         rec.kind == LANE_CONST && rec.arr isa BoundedConstArray && return false
     end
     los = Vector{Int}[]; his = Vector{Int}[]; c0s = Vector{Int}[]
@@ -454,7 +454,7 @@ function _affine_idx_expr(e::ASTExpr, idxset)::Bool
             o.filter === nothing && o.key === nothing && o.values === nothing
     ) || return false
     if o.op == "+" || o.op == "-"
-        return all(a -> _affine_idx_expr(a, idxset), o.args)
+        return _allof(a -> _affine_idx_expr(a, idxset), o.args)
     elseif o.op == "neg"
         return length(o.args) == 1 && _affine_idx_expr(o.args[1], idxset)
     elseif o.op == "*"
@@ -473,7 +473,7 @@ function _const_idx_expr(e::ASTExpr, idxset)::Bool
     e isa NumExpr && return true
     e isa VarExpr && return !((e::VarExpr).name in idxset)
     e isa OpExpr || return false
-    return all(a -> _const_idx_expr(a, idxset), (e::OpExpr).args)
+    return _allof(a -> _const_idx_expr(a, idxset), (e::OpExpr).args)
 end
 
 # Classify (and cache) one branch's lane subscripts: `true` for an argument that
@@ -923,7 +923,7 @@ function _region_cut_candidates(body, idx_names::Vector{String})
                             (ve.regions === nothing || isempty(ve.regions)) ? 0 :
                             length(ve.regions[1])
                         ) :
-                        count(s -> s isa AbstractString, ve.output_idx)
+                        _countof(s -> s isa AbstractString, ve.output_idx)
                     vs = subs
                     if rank != length(subs) && r <= length(regions)
                         reg = regions[r]
@@ -1450,7 +1450,7 @@ function _materialize_const_box_inner(
     vals, s, off = _box_table(Float64, rec, idx_names, box, run, D, var_map, const_arrays)
     if !_range_shared_code(_range_spec_now())
         v1 = vals[1]
-        all(==(v1), vals) && return _LitRepl(v1)   # exhaustively verified invariant
+        _allof(==(v1), vals) && return _LitRepl(v1)   # exhaustively verified invariant
     end
     return _AccRepl(_AccConstBox(vals, s, off))
 end
@@ -1482,7 +1482,7 @@ function _derive_lane_repl(
         oln_rep, base, strides, D, var_map, const_arrays,
         flat_cache, box,
         structural::Bool =
-            all(a -> _affine_idx_expr(a, idx_names), rec.idx_args);
+            _allof(a -> _affine_idx_expr(a, idx_names), rec.idx_args);
         le::Union{Nothing, _LaneEval} = nothing, run = box
     )
     env = Dict{String, Int}()
@@ -1670,10 +1670,9 @@ function _derive_lane_repl(
         # and folds to a literal. `flat[_recipe_const_lin(...)] ==
         # _eval_recipe(...)` (see `_recipe_const_lin`), so `val_rep` is that
         # element and the fold is bit-identical.
-        all(iszero, s) && return _LitRepl(Float64(val_rep))
-        arr_flat = get!(flat_cache, rec.arr) do;
-            _const_flat(rec.arr)
-        end
+        _allof(iszero, s) && return _LitRepl(Float64(val_rep))
+        # `rec.arr` is held untyped; see `_dynamic`.
+        arr_flat = _dynamic(_cached_const_flat, flat_cache, rec.arr)::Vector{Float64}
         return _AccRepl(_AccConstBox(arr_flat, s, off))
     else  # LANE_PGATHER — LIVE forcing gather
         # `_eval_recipe` returns the flat LINEAR INDEX into the forcing buffer (its
@@ -1789,9 +1788,9 @@ function _lane_guard_paths(tmpl::_Node, nlanes::Int)
             r = -n.idx
             if r < _SUBCALL_SENT_BASE && r <= nlanes
                 p = copy(stack)
-                any(
+                _anyof(
                     q -> length(q) == length(p) &&
-                        all(i -> q[i][1] === p[i][1] && q[i][2] == p[i][2], eachindex(p)),
+                        _allof(i -> q[i][1] === p[i][1] && q[i][2] == p[i][2], eachindex(p)),
                     paths[r]
                 ) || push!(paths[r], p)
             end
@@ -1941,10 +1940,14 @@ function _guarded_lane_repl(
     # `_materialize_const_box` does.)
     if !_range_shared_code(_range_spec_now())
         v1 = tbl[1]
-        all(x -> isequal(x, v1), tbl) && return _LitRepl(v1)
+        _allof(x -> isequal(x, v1), tbl) && return _LitRepl(v1)
     end
     return _AccRepl(_AccConstBox(tbl, s, off))
 end
+
+# `arr`'s flat copy, made once per `cache`.
+_cached_const_flat(cache::AbstractDict, arr) =
+    get!(() -> _const_flat(arr), cache, arr)
 
 # A const array's flat Float64 copy, which a box read addresses. Each `faq`
 # equation's lowering makes its own; a re-lowering of a program reuses its
@@ -2478,7 +2481,7 @@ function _try_affine_stencil(
                 lhs_var, lhs_idx_args, sig, reduce;
                 out_ranges = ranges, cbox = cbox, view = view
             )
-            all(d -> !isempty(cbox[d]), 1:D) && push!(boxes, cbox[1:D])
+            _allof(d -> !isempty(cbox[d]), 1:D) && push!(boxes, cbox[1:D])
         end
         # Only after every box is verified: mark covered (untouched on fallback).
         for box in boxes

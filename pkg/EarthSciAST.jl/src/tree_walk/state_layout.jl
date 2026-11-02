@@ -386,7 +386,7 @@ function _foreach_cell_lex(f, cs::_DiscoveredCells)
     isempty(cs) && return nothing
     r = cs.rank
     lo, hi = _cellset_bbox(cs)
-    full = any(b -> b[1] == lo && b[2] == hi, cs.boxes)
+    full = _anyof(b -> b[1] == lo && b[2] == hi, cs.boxes)
     mask = nothing
     if !full
         dims = ntuple(d -> hi[d] - lo[d] + 1, r)
@@ -552,7 +552,7 @@ end
 # holds only whole-variable keys.
 _ics_may_name_cells(ics::_InlineICs) = true
 _ics_may_name_cells(ics::AbstractDict) =
-    any(k -> (s = String(k); !isempty(s) && last(s) == ']'), keys(ics))
+    _anyof(k -> (s = String(k); !isempty(s) && last(s) == ']'), keys(ics))
 
 """
     _apply_ics_by_slot!(set, L::StateLayout, ics)
@@ -608,7 +608,7 @@ function Base.getindex(o::_VarMapOverlay, key)
 end
 Base.haskey(o::_VarMapOverlay, key) = haskey(o.extra, key) || haskey(o.base, key)
 Base.length(o::_VarMapOverlay) =
-    length(o.base) + count(k -> !haskey(o.base, k), keys(o.extra))
+    length(o.base) + _countof(k -> !haskey(o.base, k), keys(o.extra))
 function Base.iterate(o::_VarMapOverlay, state = (true, nothing))
     first_phase, it = state
     if first_phase

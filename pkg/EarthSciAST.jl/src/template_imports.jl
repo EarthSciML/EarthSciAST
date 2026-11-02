@@ -67,7 +67,7 @@ function reject_template_imports_pre_v08(raw_data)
     _is_object(raw_data) || return
     esm_raw = _raw_get(raw_data, "esm")
     esm_raw === nothing && return
-    m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(esm_raw))
+    m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(esm_raw)::String)
     m === nothing && return
     major = parse(Int, m.captures[1])
     minor = parse(Int, m.captures[2])
@@ -438,7 +438,7 @@ function _substitute_metaparams_decl(decl, values::AbstractDict{String})
     params = _raw_get(decl, "params")
     shadowed = values
     if params !== nothing && _is_array(params) &&
-            any(p -> haskey(values, string(p)), params)
+            _anyof(p -> haskey(values, string(p)), params)
         v2 = Dict(values)
         for p in params
             delete!(v2, string(p))
@@ -486,7 +486,7 @@ function _try_fold(x, ctx::String)::Union{Int64, Nothing}
         )
     )
     vals = Union{Int64, Nothing}[_try_fold(a, ctx) for a in args]
-    any(v -> v === nothing, vals) && return nothing
+    _anyof(v -> v === nothing, vals) && return nothing
     ivals = Int64[v for v in vals]
     op = string(op_raw)
     op in ("+", "-", "*", "/") || throw(
@@ -725,7 +725,7 @@ function _has_open_index_set_size(raw)
     _is_object(raw) || return false
     isets = get(raw, "index_sets", nothing)
     _is_object(isets) || return false
-    return any(values(isets)) do decl
+    return _anyof(values(isets)) do decl
         _is_object(decl) || return false
         sz = get(decl, "size", nothing)
         sz !== nothing && !(sz isa Integer && !(sz isa Bool))
@@ -775,7 +775,7 @@ function _compose_template_bodies!(templates::AbstractDict{String, Any}, scope::
         body = _raw_get(decl, "body")
         refs[name] = _collect_apply_names!(String[], body)
     end
-    any(!isempty, values(refs)) || return
+    _anyof(!isempty, values(refs)) || return
 
     for name in sort(collect(keys(refs)))
         for r in refs[name]
@@ -862,7 +862,7 @@ one or more `[A-Za-z_][A-Za-z0-9_]*` segments joined by single dots — the
 whatever the target actually exports (or whatever occurs free).
 """
 _is_valid_dotted_name(s::AbstractString) =
-    !isempty(s) && all(seg -> occursin(_NAME_SEGMENT_RE, seg), split(s, '.'))
+    !isempty(s) && _allof(seg -> occursin(_NAME_SEGMENT_RE, seg), split(s, '.'))
 
 function _name_map(raw, field::String, ctx::String)::OrderedDict{String, String}
     out = OrderedDict{String, String}()
@@ -933,7 +933,7 @@ combinator would only ever handle arrays.
 # (esm-spec §4.9.5)? `on` occurs in exactly one place in the schema, a `join`
 # clause, and its shape is unambiguous, so the key plus this test is a sound
 # positional guard.
-_is_join_on_pairs(v) = _is_array(v) && all(p -> _is_array(p) && length(p) == 2, v)
+_is_join_on_pairs(v) = _is_array(v) && _allof(p -> _is_array(p) && length(p) == 2, v)
 
 """
     _rename_join_on(v, isetmap, fallback)
@@ -1062,10 +1062,10 @@ function _rename_decl(
     v2, i2 = varmap, isetmap
     if params !== nothing && _is_array(params) && !isempty(params)
         pset = Set{String}(string(p) for p in params if p isa AbstractString)
-        if any(p -> haskey(varmap, p), pset)
+        if _anyof(p -> haskey(varmap, p), pset)
             v2 = OrderedDict{String, String}(k => v for (k, v) in varmap if !(k in pset))
         end
-        if any(p -> haskey(isetmap, p), pset)
+        if _anyof(p -> haskey(isetmap, p), pset)
             i2 = OrderedDict{String, String}(k => v for (k, v) in isetmap if !(k in pset))
         end
     end
@@ -1781,7 +1781,7 @@ function _expand_library_enum_calls!(
         decl = get(named, n, nothing)
         (decl !== nothing && _is_object(decl) && _raw_haskey(decl, "body")) || continue
         body = _raw_get(decl, "body")
-        any(r -> get(bearing, r, false), _collect_apply_names!(String[], body)) || continue
+        _anyof(r -> get(bearing, r, false), _collect_apply_names!(String[], body)) || continue
         expanded = _expand_refs_walk(body, named, origin, calls_bearing, IdDict{Any, Any}())
         bodies[n] = _lower_library_template_body(library, n, decl, expanded, origin)
     end

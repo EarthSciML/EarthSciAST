@@ -1095,7 +1095,7 @@ checkpoint configuration contributes no just-in-time trigger. Predicates compose
 freely with a fixed interval; a user on PBS / Kubernetes / a bespoke scheduler
 passes their own `() -> Bool` with no library change.
 """
-any_of(predicates...) = () -> any(p -> p()::Bool, predicates)
+any_of(predicates...) = () -> _anyof(p -> p()::Bool, predicates)
 
 # Default Unix-seconds wall clock, kept a tiny injectable seam so
 # `slurm_walltime_predicate` is deterministically testable without touching the

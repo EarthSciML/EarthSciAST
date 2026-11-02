@@ -257,7 +257,7 @@ function _dependency_order(names, deps::F; on_cycle::G) where {F, G}
         progressed = false
         for n in names
             n in done && continue
-            if all(d -> d in done, deps(n))
+            if _allof(d -> d in done, deps(n))
                 push!(order, n)
                 push!(done, n)
                 progressed = true
@@ -634,11 +634,11 @@ function _rewrite_indexed_observed_lhs(
     ranges = shell.ranges
     ranges === nothing && return nothing
     length(ranges) == length(syms) || return nothing
-    all(s -> haskey(ranges, s), syms) || return nothing
+    _allof(s -> haskey(ranges, s), syms) || return nothing
 
     rhs = eq.rhs
     rhs_free = free_variables(rhs)
-    if any(s -> s in rhs_free, syms)
+    if _anyof(s -> s in rhs_free, syms)
         rhs = OpExpr(
             "faq", ASTExpr[];
             output_idx = Any[s for s in syms],
@@ -711,7 +711,7 @@ function _rewrite_bare_index_observed_lhs(
     end
     binds = head isa VarExpr &&
         frame !== nothing && !isempty(subs) && length(frame) == length(subs) &&
-        all(zip(subs, frame)) do (s, b)
+        _allof(zip(subs, frame)) do (s, b)
         s isa VarExpr && b isa AbstractString &&
             ((s::VarExpr).name == b || (s::VarExpr).name == prefix * b)
     end
@@ -750,7 +750,7 @@ function _lift_wholearray_deriv_equations(
         length((lhs::OpExpr).args) == 1 &&
         (lhs::OpExpr).args[1] isa VarExpr &&
         ((lhs::OpExpr).args[1]::VarExpr).name in arrayvars
-    any(eq -> is_wholearray_D(eq.lhs), eqs) || return eqs
+    _anyof(eq -> is_wholearray_D(eq.lhs), eqs) || return eqs
     out = Equation[]
     for eq in eqs
         lhs = eq.lhs
@@ -925,7 +925,7 @@ function _index_pushdown_arrayish(
         r = _is_array_producer(o) || o.op in _SHAPE_REMAP_OPS ||
             (
             _is_scalar_op(o.op) &&
-                any(a -> _index_pushdown_arrayish(a, is_array_leaf, memo), o.args)
+                _anyof(a -> _index_pushdown_arrayish(a, is_array_leaf, memo), o.args)
         )
         memo[o] = r
         return r

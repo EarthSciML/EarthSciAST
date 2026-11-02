@@ -328,7 +328,7 @@ Warns about dependent reactions but does not automatically update them.
 Throws [`EditError`](@ref) if the species does not exist.
 """
 function remove_species(system::ReactionSystem, name::String)::ReactionSystem
-    if !any(s -> s.name == name, system.species)
+    if !_anyof(s -> s.name == name, system.species)
         throw(EditError("Species '$name' not found"))
     end
 

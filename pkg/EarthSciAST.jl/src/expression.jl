@@ -720,10 +720,10 @@ function simplify(expr::OpExpr)::ASTExpr
     # Folding is delegated to the official tree-walk evaluator
     # (`evaluate_expr`) so the simplifier shares the runner's dispatch
     # table and there is no parallel operator switch in this module.
-    if all(is_literal, simplified_args)
+    if _allof(is_literal, simplified_args)
         try
             result_value = evaluate_expr(recursed, Dict{String, Float64}())
-            all_int = all(arg -> isa(arg, IntExpr), simplified_args)
+            all_int = _allof(arg -> isa(arg, IntExpr), simplified_args)
             if all_int && isfinite(result_value) && result_value == trunc(result_value) &&
                     _int64_maybe_representable(result_value)
                 return IntExpr(Int64(result_value))

@@ -65,7 +65,7 @@ import JSON3
 
 # The package-wide exception root (`src/errors.jl`); `FloatKeyError` below
 # subtypes it so a caller can catch every EarthSciAST failure with one clause.
-using ..EarthSciAST: EarthSciASTError
+using ..EarthSciAST: EarthSciASTError, _anyof
 
 export FloatKeyError,
     skolem, skolem_edge,
@@ -99,7 +99,7 @@ Base.showerror(io::IO, e::FloatKeyError) = print(io, "FloatKeyError: ", e.msg)
 @inline _has_float(::AbstractString) = false
 @inline _has_float(::Symbol) = false
 @inline _has_float(::AbstractChar) = false
-_has_float(t::Tuple) = any(_has_float, t)
+_has_float(t::Tuple) = _anyof(_has_float, t)
 _has_float(_) = false                         # other exact/categorical scalars
 
 @inline function _assert_key(k)

@@ -265,7 +265,7 @@ function _select_flat(
         end
     end
     keep(c::Contribution) = terms === :all ||
-        any(o -> any(t -> _origin_eq(o, t), terms), c.origins)
+        _anyof(o -> _anyof(t -> _origin_eq(o, t), terms), c.origins)
     eqs = Equation[]
     contribs = Vector{Contribution}[]
     for (eq, cs) in zip(flat.equations, flat.equation_contributions)
@@ -370,7 +370,7 @@ function _select_init(init::Vector{Equation}, live_states)
     out = Equation[]
     for eq in init
         refs = _referenced_var_names(eq.lhs)
-        any(r -> r in live_states, refs) && push!(out, eq)
+        _anyof(r -> r in live_states, refs) && push!(out, eq)
     end
     return out
 end
@@ -826,7 +826,7 @@ _same_layout(a::TileLayout, b::TileLayout) =
     a.n_u == b.n_u && a.n_aux == b.n_aux && _same_blocks(a.u, b.u) && _same_blocks(a.aux, b.aux)
 _same_blocks(a, b) =
     length(a) == length(b) &&
-    all(
+    _allof(
     ((x, y),) -> x.name == y.name && x.sets == y.sets && x.storage == y.storage &&
         x.owned == y.owned && x.base == y.base && x.strides == y.strides,
     zip(a, b)
@@ -1190,7 +1190,7 @@ function _bind_sub(
     )
     cut = dimset === nothing ? nothing : get(ctx.axes.cut, dimset, nothing)
     vars, runtime = _sub_names(ctx, s, env)
-    if !isempty(runtime) || any(v -> env[v].runtime, vars)
+    if !isempty(runtime) || _anyof(v -> env[v].runtime, vars)
         cut === nothing || throw(
             _global_locality(
                 rule, dimset,
@@ -1302,7 +1302,7 @@ function _is_arrayish(ctx::_NeedCtx, e::ASTExpr)
     ) && return true
     o.op == "const" && return o.value isa AbstractVector
     o.op == "index" && return false
-    return any(a -> _is_arrayish(ctx, a), o.args)
+    return _anyof(a -> _is_arrayish(ctx, a), o.args)
 end
 
 # Walk an expression evaluated at the cells `env` binds.
@@ -1407,7 +1407,7 @@ function _box_subtract(boxes::Vector{Vector{UnitRange{Int}}}, cut::Vector{UnitRa
     out = Vector{UnitRange{Int}}[]
     for b in boxes
         inter = [max(first(b[d]), first(cut[d])):min(last(b[d]), last(cut[d])) for d in eachindex(b)]
-        if any(isempty, inter)
+        if _anyof(isempty, inter)
             push!(out, b)
             continue
         end
@@ -1506,7 +1506,7 @@ function _need_index!(
             k in outs && continue
             env2[String(k)] = _Bind(_range_cells(ctx, r), "", 1, 0, true, false)
         end
-        any(x -> haskey(env2, x) && !env2[x].runtime && isempty(env2[x].cells), outs) &&
+        _anyof(x -> haskey(env2, x) && !env2[x].runtime && isempty(env2[x].cells), outs) &&
             return nothing
         _need_walk!(ctx, o.expr_body, env2, anchors2, rule)
         o.filter === nothing || _need_walk!(ctx, o.filter, env2, anchors2, rule)
@@ -1528,7 +1528,7 @@ function _need_index!(
             push!(boxes, box)
         end
         outs = o.output_idx === nothing ? String[] : _output_idx_strings(o)
-        if !ok || any(b -> length(b) != length(subs), boxes)
+        if !ok || _anyof(b -> length(b) != length(subs), boxes)
             for v in values
                 _need_walk!(ctx, v, env, anchors, rule)
             end
@@ -1675,7 +1675,7 @@ function _need_observed!(ctx::_NeedCtx, n::String, binds::Vector{_Bind}, rule::S
     end
     cur = get(ctx.obs_need, n, nothing)
     merged = cur === nothing ? nb : _Bind[_bind_merge(cur[d], nb[d]) for d in eachindex(nb)]
-    grew = cur === nothing || any(
+    grew = cur === nothing || _anyof(
         d -> merged[d].cells != cur[d].cells ||
             merged[d].dlo != cur[d].dlo ||
             merged[d].dhi != cur[d].dhi, eachindex(merged)
@@ -1693,7 +1693,7 @@ function _need_drain!(ctx::_NeedCtx)
     while !isempty(ctx.work)
         n = popfirst!(ctx.work)
         binds = ctx.obs_need[n]
-        any(b -> isempty(b.cells) && !b.runtime, binds) && continue
+        _anyof(b -> isempty(b.cells) && !b.runtime, binds) && continue
         # Evaluated on each side of each seam it crosses separately, so every
         # read in its definition is told which side it serves.
         sdims = [d for d in eachindex(binds) if _dim_seam(ctx, n, d) !== nothing]
@@ -1703,7 +1703,7 @@ function _need_drain!(ctx::_NeedCtx)
                 s = _dim_seam(ctx, n, d)::_Seam
                 bs[d] = _with_cells(bs[d], _seam_side_cells(s, bs[d].cells, sides[k]))
             end
-            any(b -> isempty(b.cells) && !b.runtime, bs) && continue
+            _anyof(b -> isempty(b.cells) && !b.runtime, bs) && continue
             env = Dict{String, _Bind}()
             anchors = Dict{String, String}()
             subs = ASTExpr[]
@@ -2109,7 +2109,7 @@ function _need_root!(ctx::_NeedCtx, eq::Equation, rule::String)
         end
         # A constant subscript off the owned box runs no cell through an empty
         # loop variable.
-        if none && !any(x -> isempty(_range_cells(ctx, newr[x])), loops)
+        if none && !_anyof(x -> isempty(_range_cells(ctx, newr[x])), loops)
             (!isempty(loops) && _range_none!(ctx, newr, rd, first(loops))) || return nothing
         end
         rhs = eq.rhs
@@ -2245,9 +2245,9 @@ function _seam_map(f, o::OpExpr)
     vals = o.values === nothing ? nothing : ASTExpr[f(v) for v in o.values]
     lo = o.lower === nothing ? nothing : f(o.lower)
     hi = o.upper === nothing ? nothing : f(o.upper)
-    same = all(k -> args[k] === o.args[k], eachindex(args)) && body === o.expr_body &&
+    same = _allof(k -> args[k] === o.args[k], eachindex(args)) && body === o.expr_body &&
         filt === o.filter && lo === o.lower && hi === o.upper &&
-        (vals === nothing || all(k -> vals[k] === o.values[k], eachindex(vals)))
+        (vals === nothing || _allof(k -> vals[k] === o.values[k], eachindex(vals)))
     same && return o
     return reconstruct(
         o; args = args, expr_body = body, filter = filt, values = vals,
@@ -2263,7 +2263,7 @@ function _seam_rewrite(rw::_SeamRewrite, e::ASTExpr, tag)
         for a in Iterators.drop(o.args, 1)
             push!(args, _seam_rewrite(rw, a, tag))
         end
-        all(k -> args[k] === o.args[k], eachindex(args)) && return o
+        _allof(k -> args[k] === o.args[k], eachindex(args)) && return o
         return reconstruct(o; args = args)
     end
     return _seam_map(x -> _seam_rewrite(rw, x, tag), o)
@@ -2429,7 +2429,7 @@ function _range_fill_equations(spec::_TileSpec, name, def, dims, box)
         # A tile that shares its code keeps every region, over the one run of
         # cells it needs there or none, so its fills are lowered as every
         # other tile's are.
-        if _tile_shares_code(spec) && all(p -> length(last(p)) <= 1, pieces)
+        if _tile_shares_code(spec) && _allof(p -> length(last(p)) <= 1, pieces)
             r2 = copy(rd)
             for (x, ivs) in pieces
                 lo = Int(rd[x][1])
@@ -2446,7 +2446,7 @@ function _range_fill_equations(spec::_TileSpec, name, def, dims, box)
             push!(out, neq)
             continue
         end
-        any(p -> isempty(last(p)), pieces) && continue
+        _anyof(p -> isempty(last(p)), pieces) && continue
         for combo in Iterators.product((last(p) for p in pieces)...)
             r2 = copy(rd)
             for (k, p) in enumerate(pieces)
@@ -2934,7 +2934,7 @@ function _range_restrict_parts(
         haskey(dep, n) && return dep[n]
         n in seen && return false
         push!(seen, n)
-        r = any(
+        r = _anyof(
             x -> x in states || (haskey(defs, x) && statedep(x, seen)),
             _referenced_var_names(defs[n])
         )
@@ -2948,12 +2948,12 @@ function _range_restrict_parts(
         v = get(model.variables, n, nothing)
         if v !== nothing && _is_array_shape(v.shape)
             sh = String[string(s) for s in v.shape]
-            any(s -> s in sh, spec.sets) || continue
+            _anyof(s -> s in sh, spec.sets) || continue
             spec.obs_shapes[n] = sh
             push!(spec.laned, n)
         elseif statedep(n)
             # A 0-d observed of the state reads cells of other lanes.
-            any(x -> x in spec.laned || x in keys(spec.shapes), _referenced_var_names(defs[n])) &&
+            _anyof(x -> x in spec.laned || x in keys(spec.shapes), _referenced_var_names(defs[n])) &&
                 _lane_refuse(n, "the 0-d observed '$n' reads lane arrays")
         end
     end

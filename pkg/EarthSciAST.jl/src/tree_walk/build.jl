@@ -353,7 +353,7 @@ function _discover_geometry_vars(
             for (name, rhs) in defs
                 name in geom_derived && continue
                 refs = _referenced_var_names(rhs)
-                if any(r -> r in setup_vars || r in ring_vars || r in geom_derived, refs)
+                if _anyof(r -> r in setup_vars || r in ring_vars || r in geom_derived, refs)
                     push!(geom_derived, name); changed = true
                 end
             end
@@ -576,7 +576,7 @@ function _state_time_observeds(
         push!(stack, n)
         d = defs[n]
         st, tm = _def_state_time_refs(d, state_names)
-        r = st || tm || any(m -> m != n && dyn(m, stack), _referenced_var_names(d))
+        r = st || tm || _anyof(m -> m != n && dyn(m, stack), _referenced_var_names(d))
         delete!(stack, n)
         memo[n] = r
         return r
@@ -834,7 +834,7 @@ function _collect_const_obs_arrays(
                     !(name in pia_operand_vars) && !(name in geom_ring_vars) &&
                     !_is_const_op(defn)
             ) || continue
-            const_obs_arrays[name] = Array{Float64}(const_arrays[name])
+            const_obs_arrays[name] = _dynamic(Array{Float64}, const_arrays[name])::Array{Float64}
             push!(const_obs_vars, name)
         end
     end
@@ -885,7 +885,7 @@ function _register_bare_alias_arrays!(
             if haskey(const_obs_arrays, tgt)
                 arr = const_obs_arrays[tgt]
             elseif haskey(const_arrays, tgt)
-                arr = Array{Float64}(const_arrays[tgt])
+                arr = _dynamic(Array{Float64}, const_arrays[tgt])::Array{Float64}
             elseif get(obs_defs, tgt, nothing) !== nothing &&
                     _is_const_op(obs_defs[tgt])
                 arr = _const_op_to_array((obs_defs[tgt]::OpExpr).value)
@@ -1868,7 +1868,7 @@ function _enumerate_declared_array_cells!(
         exts = _declared_shape_extents(v.shape, index_sets, derived_extents)
         exts === nothing && continue
         cs = _DiscoveredCells()
-        if all(>(0), exts)
+        if _allof(>(0), exts)
             _cellset_push_box!(cs, ones(Int, length(exts)), exts, n)
         end
         array_cells[n] = cs
@@ -2029,7 +2029,7 @@ function _build_u0(
     deferred = _ArrayBlock[]
     for b in _layout_blocks(layout)
         rng = (b.base):(b.base + b.len - 1)
-        if !haskey(model.variables, b.name) || any(<(0), b.lo)
+        if !haskey(model.variables, b.name) || _anyof(<(0), b.lo)
             push!(deferred, b)
             continue
         end
@@ -2039,7 +2039,7 @@ function _build_u0(
             valued[rng] .= false
         elseif is_inline_array(d)
             inside = eltype(d) <: Real && ndims(d) == length(b.lo) &&
-                all(dd -> b.lo[dd] >= 1 && b.hi[dd] <= size(d, dd), eachindex(b.lo))
+                _allof(dd -> b.lo[dd] >= 1 && b.hi[dd] <= size(d, dd), eachindex(b.lo))
             if inside
                 k = b.base
                 for I in CartesianIndices(_block_ranges(b))
@@ -2069,7 +2069,7 @@ function _build_u0(
             covered[s] && continue
             cell = _block_cell!(idxs, b, s)
             u0[s] = _cell_default(model, b.name, cell)
-            valued[s] = any(<(0), cell) || !haskey(model.variables, b.name) ||
+            valued[s] = _anyof(<(0), cell) || !haskey(model.variables, b.name) ||
                 model.variables[b.name].default !== nothing
         end
     end
@@ -2097,7 +2097,7 @@ end
 # when the cell's key names no variable (`_parse_cell_key` reads no name out of
 # a negative index).
 function _cell_default(model::Model, name::String, idxs::Vector{Int})
-    (any(<(0), idxs) || !haskey(model.variables, name)) && return 0.0
+    (_anyof(<(0), idxs) || !haskey(model.variables, name)) && return 0.0
     d = model.variables[name].default
     d === nothing && return 0.0
     if is_inline_array(d)
@@ -2490,7 +2490,8 @@ function _apply_caller_u0!(u0::Vector{Float64}, var_map, init_equations)
     cu === nothing && return Set{Int}()
     if cu isa AbstractVector
         length(cu) == length(u0) || return Set{Int}()
-        u0 .= cu
+        # `cu` comes out of task-local storage untyped; see `_dynamic`.
+        _dynamic(copyto!, u0, cu)
         return Set{Int}(eachindex(u0))
     end
     cu isa AbstractDict || return Set{Int}()
@@ -2673,7 +2674,7 @@ function _has_param_indexed_gather(e::ASTExpr, scalar_params::Set{String})
         found && return nothing
         n isa OpExpr && n.op == "index" && length(n.args) >= 2 || return nothing
         for k in 2:length(n.args)
-            if any(r -> r in scalar_params, _referenced_var_names(n.args[k]))
+            if _anyof(r -> r in scalar_params, _referenced_var_names(n.args[k]))
                 found = true
                 return nothing
             end
@@ -2727,7 +2728,7 @@ function _discrete_materialize_split(
             for (n, rhs) in defs
                 n in reached && continue
                 refs = _referenced_var_names(rhs)
-                if any(r -> (r in seed_set) || (r in reached), refs)
+                if _anyof(r -> (r in seed_set) || (r in reached), refs)
                     push!(reached, n); changed = true
                 end
             end
@@ -2902,7 +2903,7 @@ function _build_discrete_materializer!(
             )
         end
         dims = isempty(rngs) ? Int[1] : Int[length(r) for r in rngs]
-        cache = zeros(Float64, dims...)
+        cache = zeros(Float64, dims...)::Array{Float64}
         caches[name] = cache
         pgather[name] = _PGatherArray(vec(cache), collect(size(cache)))
         cells_of[name] = (idx_names, rngs)
@@ -3503,7 +3504,7 @@ function _makearray_region_fills(name::String, def::ASTExpr, dims::Vector{Int})
     (ma.regions === nothing || ma.values === nothing) && return nothing
     regions, values = ma.regions, ma.values
     (isempty(regions) || length(regions) != length(values)) && return nothing
-    any(_is_gated_aggregate, values) || return nothing
+    _anyof(_is_gated_aggregate, values) || return nothing
     nd = length(dims)
     boxes = Vector{Vector{Tuple{Int, Int}}}()
     for region in regions
@@ -3701,7 +3702,7 @@ function _const_cadence_mat_obs(
             haskey(const_registry, n)
         push!(visiting, n)
         b = bound_names(def)
-        c = all(r -> r in b || name_const(r), _referenced_var_names(def))
+        c = _allof(r -> r in b || name_const(r), _referenced_var_names(def))
         delete!(visiting, n)
         memo[n] = c
         return c
@@ -3966,7 +3967,7 @@ function _recurrence_readers(equations::Vector{Equation}, recur_vars::Set{String
         changed = false
         for (n, rhs) in defs
             n in reach && continue
-            if any(r -> r in reach, _referenced_var_names(rhs))
+            if _anyof(r -> r in reach, _referenced_var_names(rhs))
                 push!(reach, n); changed = true
             end
         end
@@ -4324,7 +4325,7 @@ function _build_state_layout(
                 mat_defs_raw[name], v.shape,
                 index_sets, parts.derived_extents
             )
-            (dims === nothing || isempty(dims) || any(d -> d <= 0, dims)) && continue
+            (dims === nothing || isempty(dims) || _anyof(d -> d <= 0, dims)) && continue
             # A declared shape of a different rank than the producer's output
             # would make the cell keys ambiguous — leave it inlined.
             (v.shape !== nothing && length(v.shape) != length(dims)) && continue
@@ -4412,7 +4413,7 @@ function _build_compile_evaluator(
     if inspect !== nothing
         for (k, arr) in parts.geom_setup_arrays
             # Published by reference, as the const arrays below are.
-            inspect.setup_arrays[String(k)] = arr isa Array{Float64} ? arr : Array{Float64}(arr)
+            inspect.setup_arrays[String(k)] = arr isa Array{Float64} ? arr : _dynamic(Array{Float64}, arr)::Array{Float64}
         end
         for (k, arr) in const_registry
             inspect.const_arrays[String(k)] = arr
@@ -4814,6 +4815,9 @@ function _build_compile_evaluator(
         acc_kernels_pre;
         keep_affine = form === :inplace
     )
+    # The merge's result type is not inferred; everything downstream (the kernel
+    # section, the out-of-place RHS) is compiled for the concrete vector.
+    acc_kernels = _as_type(Vector{_AccKernel}, acc_kernels)
 
     # ---- Common-subexpression elimination on the scalar/indexed-D RHS (ess-r7h) ----
     # Batched compile of every scalar resolved-RHS expr: subexpressions sharing a
@@ -5744,7 +5748,8 @@ function _detect_prefix_scan(
     axis = findfirst(isequal(i_name), idx_names)
     axis === nothing && return nothing
     # A reverse scan takes the same-range shape only.
-    term_iters = reverse ? (range_iters[axis] == citer ? nothing : :decline) :
+    # `citer` is held as an abstract vector; see `_dynamic`.
+    term_iters = reverse ? (_dynamic(==, range_iters[axis], citer)::Bool ? nothing : :decline) :
         _scan_term_iters(range_iters, axis, citer, inclusive)
     term_iters === :decline && return nothing
     # `_referenced_var_names` routes through the generated field walk, so a
@@ -5850,7 +5855,7 @@ function _unwrap_identity_gather(
     # name colliding with one of the producer's CONTRACTED symbols would capture
     # it, so decline rather than rename into a capture.
     contracted = _contracted_index_names(aranges, aout)
-    any(n -> n in contracted, idx_names) && return rhs
+    _anyof(n -> n in contracted, idx_names) && return rhs
     ren = Dict{String, ASTExpr}()
     renmap = Dict{String, String}()
     for d in 1:nd
@@ -5893,7 +5898,7 @@ function _unwrap_identity_gather(
     # inside a gather, and the bare form puts on the body as its `ifelse` guard
     # (`_compile_faq_equation!`), the value the gather form's resolve computes.
     isempty(cnames) && bare.filter === nothing && return rhs
-    all(n -> haskey(ranges_dict, n), idx_names) || return rhs
+    _allof(n -> haskey(ranges_dict, n), idx_names) || return rhs
     # A forward prefix scan, a constant-bound contraction, a join-gated or a
     # ragged one: each is a tier's in the bare form (the scan tier, the affine
     # tier, the nest's static or table form) and hidden from all of them in the
@@ -5904,10 +5909,11 @@ end
 # Returns `nothing` (same-range), a term range vector (staggered), or `:decline`.
 function _scan_term_iters(range_iters, axis::Int, citer, inclusive::Bool)
     out = range_iters[axis]
-    out == citer && return nothing
+    # `citer` is held as an abstract vector; see `_dynamic`.
+    _dynamic(==, out, citer)::Bool && return nothing
     (
         !inclusive && length(citer) == length(out) - 1 &&
-            @views(out[1:(end - 1)]) == citer
+            _dynamic(==, @views(out[1:(end - 1)]), citer)::Bool
     ) || return :decline
     term_iters = AbstractVector{Int}[r for r in range_iters]
     term_iters[axis] = citer
@@ -6347,7 +6353,7 @@ function _compile_faq_equation!(
         rhs_ranges = _ranges_dict(rhs_op)
         contract_names = _contracted_index_names(rhs_ranges, idx_names)
         for n in contract_names
-            rspec = collect(rhs_ranges[n])
+            rspec = _as_type(Vector{Any}, collect(rhs_ranges[n]))
             push!(contract_ranges, rspec)
             push!(
                 contract_const,
@@ -6389,7 +6395,7 @@ function _compile_faq_equation!(
     # never refuses an equation over no cells for what its body would cost.
     # (A tile's equation over none of its cells still offers the affine tier
     # its whole-domain boxes, which run no cell; below that it has none.)
-    empty_output = !isempty(range_iters) && any(isempty, range_iters)
+    empty_output = !isempty(range_iters) && _anyof(isempty, range_iters)
     if empty_output && rview === nothing
         _tally_cascade!(:empty_output)
         return nothing
@@ -6426,7 +6432,7 @@ function _compile_faq_equation!(
         isempty(contract_names) && return "it has no contracted index"
         agg_gates === nothing || return "it has a join gate"
         agg_filter === nothing || return "it has a filter"
-        all(c -> c !== nothing, contract_const) || return "a contracted bound is not constant"
+        _allof(c -> c !== nothing, contract_const) || return "a contracted bound is not constant"
         (rhs_oplus == "+" || rhs_oplus == "*" || rhs_oplus == "max" || rhs_oplus == "min") ||
             return "its ⊕ is `$(rhs_oplus)`, and the loop folds only +, *, max or min"
         isempty(range_iters) && return "it has no output index"
@@ -6476,7 +6482,7 @@ function _compile_faq_equation!(
     # it to an unroll (the affine tier's, or the per-cell build's, which
     # unrolls it into every output cell).
     long_contraction = !rhs_list_compiled && !_stencil_disabled() &&
-        !isempty(contract_names) && all(c -> c !== nothing, contract_const) &&
+        !isempty(contract_names) && _allof(c -> c !== nothing, contract_const) &&
         prod(length(c) for c in contract_const) >= _contraction_loop_min()
 
     # Affine polyhedral build (ess-affine, stencil_affine.jl): O(#structural
@@ -6637,7 +6643,7 @@ function _compile_faq_equation!(
                 Dict{String, ASTExpr}(scan[3] => VarExpr(idx_names[scan[1]]))
             ) :
             (
-                agg_gates === nothing && all(c -> c !== nothing, contract_const) &&
+                agg_gates === nothing && _allof(c -> c !== nothing, contract_const) &&
                 !long_contraction
             ) ?
             _unrolled_contraction_body(
@@ -6775,7 +6781,7 @@ function _compile_faq_equation!(
                 contract_const = contract_const
             )
         elseif !isempty(contract_names) && agg_gates === nothing && agg_filter === nothing &&
-                all(c -> c !== nothing, contract_const) &&
+                _allof(c -> c !== nothing, contract_const) &&
                 (rhs_oplus == "+" || rhs_oplus == "*" || rhs_oplus == "max" || rhs_oplus == "min") &&
                 prod(length(c) for c in contract_const) >= _array_contraction_min()
             ac = _try_compile_array_contraction(lhs_body, rhs_body, covered; ac_kwargs...)
@@ -6898,7 +6904,7 @@ function _makearray_region_equations(
     (ma.regions === nothing || ma.values === nothing) && return nothing
     regions, values = ma.regions, ma.values
     (isempty(regions) || length(regions) != length(values)) && return nothing
-    all(r -> r isa UnitRange{Int} && !isempty(r), range_iters) || return nothing
+    _allof(r -> r isa UnitRange{Int} && !isempty(r), range_iters) || return nothing
     elo = Int[first(r) for r in range_iters]
     ehi = Int[last(r) for r in range_iters]
     boxes = Vector{Vector{Tuple{Int, Int}}}()
@@ -6934,7 +6940,7 @@ function _makearray_region_equations(
         phi = Int[cuts[d][I[d] + 1] - 1 for d in 1:nd]
         w = 0
         for (r, b) in enumerate(boxes)
-            all(d -> b[d][1] <= plo[d] && phi[d] <= b[d][2], 1:nd) && (w = r)
+            _allof(d -> b[d][1] <= plo[d] && phi[d] <= b[d][2], 1:nd) && (w = r)
         end
         push!(get!(owner, w, NTuple{2, Vector{Int}}[]), (plo, phi))
     end
@@ -7090,11 +7096,11 @@ function _faq_percell_license(
                 :equality_scatter => "the one-pass equality scatter"
             )
             # Why the affine tier had nothing to try, when it had nothing.
-            unoffered = if any(in((:affine_fold, :affine, :scan)), offered)
+            unoffered = if _anyof(in((:affine_fold, :affine, :scan)), offered)
                 ""
             elseif agg_gates !== nothing
                 " (the affine tier takes no join-gated contraction, whose terms vary per output cell)"
-            elseif any(c -> c === nothing, contract_const)
+            elseif _anyof(c -> c === nothing, contract_const)
                 " (the affine tier takes no ragged contraction, whose terms vary per output cell)"
             elseif long_contraction && !has_fold_form
                 " (the affine tier does not unroll a contraction this long, and its " *
@@ -7116,7 +7122,7 @@ function _faq_percell_license(
             ncells = prod(length(r) for r in range_iters; init = 1)
             unroll = if isempty(contract_names)
                 ""
-            elseif all(c -> c !== nothing, contract_const)
+            elseif _allof(c -> c !== nothing, contract_const)
                 ", unrolling its contraction of $(prod(length(c) for c in contract_const)) " *
                     "terms into each"
             else
@@ -7273,7 +7279,7 @@ function _try_compile_array_contraction(
     rev = !elementwise && _reverse_window(agg_filter, contract_names, idx_names)
     table_form = !elementwise && (
         agg_gates !== nothing || rev ||
-            (contract_const !== nothing && any(c -> c === nothing, contract_const))
+            (contract_const !== nothing && _anyof(c -> c === nothing, contract_const))
     )
     term = (elementwise || agg_filter === nothing) ? rhs_body :
         OpExpr("ifelse", ASTExpr[agg_filter, rhs_body, NumExpr(rhs_zerobar)])
@@ -8216,7 +8222,7 @@ function _fetch_gated_providers(gated::AbstractDict, index_sets, vi, t0::Float64
         )
 
         # position of the compact gated axis AFTER dropping the fixed axes.
-        gated_pos_out = gated_pos - count(<(gated_pos), drop_axes)
+        gated_pos_out = gated_pos - _countof(<(gated_pos), drop_axes)
         drop_tuple = Tuple(drop_axes)
 
         supports = provider_supports_selection(prov)

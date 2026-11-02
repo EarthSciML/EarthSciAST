@@ -104,7 +104,7 @@ function _compile_setup_fill(
         reg_funcs::AbstractDict = Dict{String, Any}()
     )
     nd = length(lo)
-    (nd >= 1 && length(hi) == nd && all(d -> lo[d] <= hi[d], 1:nd)) || return nothing
+    (nd >= 1 && length(hi) == nd && _allof(d -> lo[d] <= hi[d], 1:nd)) || return nothing
     loops = _setup_fill_loops(def, nd)
     ranges = Dict{String, Any}(loops[d] => Any[lo[d], hi[d]] for d in 1:nd)
     target = OpExpr(
@@ -225,7 +225,7 @@ function _setup_fill_array(
         reg_funcs::AbstractDict
     )
     _setup_compile_once_enabled() || return nothing
-    (!isempty(exts) && all(>(0), exts)) || return nothing
+    (!isempty(exts) && _allof(>(0), exts)) || return nothing
     p, psyms = _setup_fill_params(params)
     sf = _compile_setup_fill(
         def, ones(Int, length(exts)), copy(exts);
@@ -256,8 +256,8 @@ function _field_ic_fill(
     (rhs isa OpExpr && _setup_compile_once_enabled() && !isempty(cells)) || return nothing
     _has_array_producer(rhs) || return nothing
     lo, hi = _cellset_bbox(cells)
-    all(>=(1), lo) || return nothing
-    any(b -> b[1] == lo && b[2] == hi, cells.boxes) || return nothing
+    _allof(>=(1), lo) || return nothing
+    _anyof(b -> b[1] == lo && b[2] == hi, cells.boxes) || return nothing
     p, psyms = _setup_fill_params(param_scope)
     sf = _compile_setup_fill(
         rhs, lo, hi; const_arrays = const_arrays, p = p,
@@ -292,12 +292,12 @@ function _init_equation_fill(
         target::AbstractString = ""
     )
     _setup_compile_once_enabled() || return nothing
-    all(r -> !isempty(r) && step(r) == 1, range_iters) || return nothing
+    _allof(r -> !isempty(r) && step(r) == 1, range_iters) || return nothing
     # A pure map, as the per-cell reference reads it: that reference substitutes
     # the output indices into the body and nothing else.
     (agg.join_gates === nothing && agg.filter === nothing) || return nothing
     outs = Set{String}(_output_idx_strings(agg))
-    all(k -> String(k) in outs, keys(_ranges_dict(agg))) || return nothing
+    _allof(k -> String(k) in outs, keys(_ranges_dict(agg))) || return nothing
     snap = nothing
     subs = Dict{String, ASTExpr}()
     for name in _referenced_var_names(agg)
@@ -305,7 +305,7 @@ function _init_equation_fill(
         (haskey(var_map, name) || blk !== nothing) || continue
         (u0 === nothing || name == target) && return nothing
         if blk !== nothing
-            (all(==(1), blk.lo) && blk.strides == _colmajor_strides(blk.hi)) || return nothing
+            (_allof(==(1), blk.lo) && blk.strides == _colmajor_strides(blk.hi)) || return nothing
             snap === nothing && (snap = copy(const_arrays))
             snap[name] = reshape(u0[blk.base:(blk.base + blk.len - 1)], Tuple(blk.hi))
         else

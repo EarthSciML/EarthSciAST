@@ -51,7 +51,7 @@ function _expr_has_intersect_polygon(e::OpExpr, seen::IdDict{OpExpr, Nothing})
 end
 _expr_has_intersect_polygon(::ASTExpr) = false
 _equations_have_intersect_polygon(eqs) =
-    any(eq -> _expr_has_intersect_polygon(eq.lhs) || _expr_has_intersect_polygon(eq.rhs), eqs)
+    _anyof(eq -> _expr_has_intersect_polygon(eq.lhs) || _expr_has_intersect_polygon(eq.rhs), eqs)
 
 # From esm 1.0.0 an intersect_polygon lives in an equation LHS/RHS and nowhere
 # else: an observed unknown's defining body IS its equation, so the shared
@@ -249,7 +249,7 @@ end
 # element goes straight to its column-major offset. Returns `false` on any
 # other shape, and the caller redoes the fill with `_fill_const_array!`.
 function _fill_const_dense!(A::Array{Float64}, val, dims::Vector{Int})
-    (isempty(dims) || any(==(0), dims)) && return false
+    (isempty(dims) || _anyof(==(0), dims)) && return false
     strides = Vector{Int}(undef, length(dims))
     s = 1
     for d in eachindex(dims)
@@ -1310,11 +1310,11 @@ const _GEO_EVAL_OPS = _ops_with(:geo_eval)
 # needs the general build-time cell evaluator instead.
 function _body_needs_general_eval(e::OpExpr)
     e.op in _GEO_EVAL_OPS || return true
-    any(a -> a isa OpExpr && _body_needs_general_eval(a), e.args) && return true
+    _anyof(a -> a isa OpExpr && _body_needs_general_eval(a), e.args) && return true
     e.expr_body isa OpExpr && _body_needs_general_eval(e.expr_body::OpExpr) && return true
     e.filter isa OpExpr && _body_needs_general_eval(e.filter::OpExpr) && return true
     if e.values !== nothing
-        any(v -> v isa OpExpr && _body_needs_general_eval(v), e.values) && return true
+        _anyof(v -> v isa OpExpr && _body_needs_general_eval(v), e.values) && return true
     end
     return false
 end
@@ -1331,12 +1331,12 @@ end
 # stays on the compiled geometry path (`_materialize_geom_array`), byte-identical.
 function _is_setup_general_map(rhs)
     (rhs isa OpExpr && _is_faq_op(rhs.op)) || return false
-    (rhs.output_idx !== nothing && any(s -> s isa AbstractString, rhs.output_idx)) || return false
+    (rhs.output_idx !== nothing && _anyof(s -> s isa AbstractString, rhs.output_idx)) || return false
     rhs.expr_body === nothing && return false
     (rhs.join === nothing && rhs.join_gates === nothing && rhs.filter === nothing) || return false
     out = Set{String}(String(s) for s in rhs.output_idx if s isa AbstractString)
     ranges = rhs.ranges === nothing ? Dict{String, Any}() : rhs.ranges
-    all(k -> String(k) in out, keys(ranges)) || return false   # pure MAP: no contraction
+    _allof(k -> String(k) in out, keys(ranges)) || return false   # pure MAP: no contraction
     return _body_needs_general_eval(rhs::OpExpr)
 end
 
@@ -1512,7 +1512,7 @@ function _materialize_setup_general_map(
     lic = _percell_evaluation_license(
         _current_rule_label(),
         "the setup MAP materializer", prod(exts); one_cell = true,
-        probe = pr -> all(>(0), exts) &&
+        probe = pr -> _allof(>(0), exts) &&
             _eval_cellwise(
             pr, rhs, something(failed_at[], ones(Int, length(exts)));
             const_arrays = ca, registered_functions = registered_functions,
@@ -1634,7 +1634,7 @@ function _setup_env_split(env::AbstractDict)
         if v isa AbstractArray{Float64}
             ca[ks] = v
         elseif v isa AbstractArray && eltype(v) <: Real
-            ca[ks] = Array{Float64}(v)
+            ca[ks] = _dynamic(Array{Float64}, v)::Array{Float64}
         elseif v isa Real
             params[ks] = Float64(v)
         end
@@ -1686,7 +1686,7 @@ function _materialize_setup_wholearray(
                 "reshape source has $(length(src)) elements but target shape needs $(prod(exts))"
             )
         )
-        return reshape(Array{Float64}(src), exts...)   # column-major, numpy-parity
+        return reshape(_dynamic(Array{Float64}, src)::Array{Float64}, exts...)   # column-major, numpy-parity
     end
     ca, params = _setup_env_split(env)
     # The compiled form: the stencil filled through the right-hand-side cascade
@@ -1708,7 +1708,7 @@ function _materialize_setup_wholearray(
     lic = _percell_evaluation_license(
         _current_rule_label(),
         "the whole-array setup materializer", prod(exts); one_cell = true,
-        probe = pr -> all(>(0), exts) &&
+        probe = pr -> _allof(>(0), exts) &&
             _eval_cellwise(
             pr, rhs, ones(Int, length(exts)); const_arrays = ca,
             registered_functions = registered_functions, params = params
@@ -1828,7 +1828,7 @@ function _geometry_setup_vars(
         for (n, rhs) in defs
             n in tainted && continue
             refs = _referenced_var_names(rhs)
-            if any(r -> (r in live_params) || (r in tainted), refs)
+            if _anyof(r -> (r in live_params) || (r in tainted), refs)
                 push!(tainted, n); changed = true
             end
         end
@@ -1881,7 +1881,7 @@ function _geometry_setup_vars(
         for (n, rhs) in defs
             (is_arr_obs(n) && !(n in blocked)) || continue
             refs = intersect(_referenced_var_names(rhs), mvars)
-            if any(_is_scalar_computed_obs, refs) || any(f -> f in blocked, refs)
+            if _anyof(_is_scalar_computed_obs, refs) || _anyof(f -> f in blocked, refs)
                 push!(blocked, n); changed = true
             end
         end
@@ -1895,8 +1895,8 @@ function _geometry_setup_vars(
                     !(n in tainted) && !(n in blocked)
             ) || continue
             refs = intersect(_referenced_var_names(rhs), mvars)
-            if any(f -> (f in setup) || (f in geom_ring_vars), refs) &&
-                    !any(f -> f in state_var_names, refs)
+            if _anyof(f -> (f in setup) || (f in geom_ring_vars), refs) &&
+                    !_anyof(f -> f in state_var_names, refs)
                 push!(setup, n); changed = true
             end
         end
@@ -1926,7 +1926,7 @@ function _geometry_setup_vars(
                         !_is_const_op(defs[r]) && !(defs[r] isa VarExpr)
                 ) || continue
                 rrefs = intersect(_referenced_var_names(defs[r]), mvars)
-                any(f -> f in state_var_names, rrefs) && continue
+                _anyof(f -> f in state_var_names, rrefs) && continue
                 push!(setup, r); changed = true
             end
         end
@@ -1942,7 +1942,7 @@ function _geom_setup_order(setup, defs)
         progressed = false
         for n in setup
             n in done && continue
-            if all(d -> d in done, intersect(_referenced_var_names(defs[n]), setup))
+            if _allof(d -> d in done, intersect(_referenced_var_names(defs[n]), setup))
                 push!(order, n); push!(done, n); progressed = true
             end
         end
@@ -2025,7 +2025,7 @@ function _build_setup_env(
     )
     env = Dict{String, Any}()
     for (k, v) in const_arrays_kw
-        env[String(k)] = v isa AbstractArray ? Array{Float64}(v) : v
+        env[String(k)] = v isa AbstractArray ? _dynamic(Array{Float64}, v)::Array{Float64} : v
     end
     for (n, defn) in observed_definitions(model)
         v = model.variables[n]
@@ -2047,7 +2047,7 @@ function _build_setup_env(
         # esm-spec §6.6.2: a SHAPED parameter's override is INLINE ARRAY DATA —
         # build-time data the setup evaluator gathers, exactly like a `const`-op
         # array observed above, not a scalar to coerce.
-        env[String(k)] = v isa AbstractArray ? Array{Float64}(v) : Float64(v)
+        env[String(k)] = v isa AbstractArray ? _dynamic(Array{Float64}, v)::Array{Float64} : Float64(v)
     end
     if vi_maps !== nothing
         for (name, buf) in vi_maps
@@ -2413,7 +2413,7 @@ function _derive_overlap_env_factors(
                 registered_functions
             )
             env[n] = arr
-            out[n] = vec(Array{Float64}(arr))
+            out[n] = vec(_dynamic(Array{Float64}, arr)::Array{Float64})
             changed = true
         end
         changed

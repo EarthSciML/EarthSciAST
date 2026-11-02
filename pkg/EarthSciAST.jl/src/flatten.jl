@@ -266,7 +266,7 @@ struct FlattenedSystem
                     "$(length(eqs)) equations; the two are parallel"
             )
         )
-        any(isempty, contribs) && throw(
+        _anyof(isempty, contribs) && throw(
             ArgumentError(
                 "every flattened equation has at least one contribution"
             )
@@ -909,7 +909,7 @@ function _difference_expr(a::ASTExpr, b::ASTExpr)::ASTExpr
 end
 
 function _product_expr(factors::Vector{ASTExpr})::ASTExpr
-    any(_is_zero_expr, factors) && return _zero_expr()
+    _anyof(_is_zero_expr, factors) && return _zero_expr()
     kept = ASTExpr[f for f in factors if !_is_one_expr(f)]
     isempty(kept) && return NumExpr(1.0)
     length(kept) == 1 && return kept[1]

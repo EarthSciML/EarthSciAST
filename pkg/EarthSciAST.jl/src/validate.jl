@@ -305,7 +305,7 @@ function _collect_schema_keyword!(errors::Vector{SchemaError}, x, schema, k::Str
                 (props isa AbstractDict && haskey(props, String(key))) ||
                 (
                 patterns isa AbstractDict &&
-                    any(p -> occursin(Regex(String(p)), String(key)), keys(patterns))
+                    _anyof(p -> occursin(Regex(String(p)), String(key)), keys(patterns))
             )
             if v isa Bool
                 v || for (xk, _) in x
@@ -340,7 +340,7 @@ function _collect_schema_keyword!(errors::Vector{SchemaError}, x, schema, k::Str
         end
 
     elseif k == "anyOf"
-        if v isa AbstractVector && !any(sub -> _schema_matches(x, sub), v)
+        if v isa AbstractVector && !_anyof(sub -> _schema_matches(x, sub), v)
             _push_schema_error!(errors, path, "anyOf")
             for sub in v
                 _collect_schema_errors!(errors, x, sub, path)
@@ -349,7 +349,7 @@ function _collect_schema_keyword!(errors::Vector{SchemaError}, x, schema, k::Str
 
     elseif k == "oneOf"
         if v isa AbstractVector
-            nmatch = count(sub -> _schema_matches(x, sub), v)
+            nmatch = _countof(sub -> _schema_matches(x, sub), v)
             if nmatch != 1
                 _push_schema_error!(errors, path, "oneOf")
                 # ZERO matches ⇒ every branch failed, so descend them all for the
@@ -1049,7 +1049,7 @@ function validate_model_balance(
 
     # An `ic` equation prescribes an initial value, not a determining equation,
     # so it does not count toward the balance.
-    n_eqs = count(eq -> !(eq.lhs isa OpExpr && eq.lhs.op == "ic"), model.equations)
+    n_eqs = _countof(eq -> !(eq.lhs isa OpExpr && eq.lhs.op == "ic"), model.equations)
 
     # Names credited by the model's own equation left-hand sides.
     equation_vars = Set{String}()
@@ -1612,7 +1612,7 @@ function _check_ragged_values_gathered!(
     (agg.ranges === nothing || isempty(file.index_sets)) && return errors
     _is_value_invention_faq(agg) && return errors
     body = ASTExpr[b for b in (agg.expr_body, agg.filter) if b !== nothing]
-    any(_contains_template_reference, body) && return errors
+    _anyof(_contains_template_reference, body) && return errors
     refs = Set{String}()
     for b in body
         _referenced_var_names(b, refs)
@@ -1623,7 +1623,7 @@ function _check_ragged_values_gathered!(
         iset = get(file.index_sets, rv.from, nothing)
         (iset isa IndexSet && iset.kind == "ragged" && iset.values !== nothing) || continue
         values = iset.values::String
-        any(r -> r == values || endswith(r, "." * values), refs) && continue
+        _anyof(r -> r == values || endswith(r, "." * values), refs) && continue
         parent = isempty(rv.of) ? "<parent>" : join(rv.of, ", ")
         push!(
             errors, StructuralError(
@@ -1787,7 +1787,7 @@ end
 function _index_set_has_nonportable_key(iset::IndexSet)::Bool
     iset.kind == "categorical" || return false
     iset.members_raw === nothing && return false
-    return any(
+    return _anyof(
         m -> (m isa AbstractFloat) || (m === nothing) || (m === missing),
         iset.members_raw
     )

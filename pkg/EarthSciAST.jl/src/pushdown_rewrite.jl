@@ -200,7 +200,7 @@ cannot recognise unchanged, and the surviving reference is then reported by
 function _pd_detection_defs(model::Model, reg)
     defs = observed_definitions(model)
     reg === nothing && return defs
-    any(_pd_has_apply, values(defs)) || return defs
+    _anyof(_pd_has_apply, values(defs)) || return defs
     out = Dict{String, ASTExpr}(defs)
     # Shared expansion memo: two sites with the same (template, bindings) reuse
     # one expansion. Rule 2 requires exactly that they be structurally identical
@@ -344,7 +344,7 @@ function _pd_matvec_factors(
     (body isa OpExpr && body.op == "*" && length(body.args) == 2) || return nothing
     isempty(out_syms) && return nothing
     parts = Any[_pd_index_syms(a) for a in body.args]
-    any(p -> p === nothing, parts) && return nothing
+    _anyof(p -> p === nothing, parts) && return nothing
     A_syms = String[String(c_sym)]
     append!(A_syms, (String(s) for s in out_syms))
     E_syms = String[String(c_sym)]
@@ -442,7 +442,7 @@ function _pd_parse_containment(pred, c_sym::AbstractString, r_sym::AbstractStrin
         bounds[Fp][kind] = Fc
     end
     nbound(P) = length(bounds[P])
-    if length(rec_order) == 2 && all(P -> nbound(P) == 2, rec_order)
+    if length(rec_order) == 2 && _allof(P -> nbound(P) == 2, rec_order)
         Px, Py = rec_order[1], rec_order[2]
         return (
             src_env = String[Px, Py],
@@ -451,7 +451,7 @@ function _pd_parse_containment(pred, c_sym::AbstractString, r_sym::AbstractStrin
                 bounds[Px][:max], bounds[Py][:max],
             ],
         )
-    elseif length(rec_order) == 4 && all(P -> nbound(P) == 1, rec_order)
+    elseif length(rec_order) == 4 && _allof(P -> nbound(P) == 1, rec_order)
         # A record factor carrying a LOWER cell bound (`cmin ≤ r`) is that
         # axis's record MAXIMUM, and vice versa — the AABB test compares each
         # side's min against the other side's max.
@@ -766,7 +766,7 @@ function _pd_detect(model::Model, obs_defs::AbstractDict, index_sets::AbstractDi
         end
         push!(conc_specs, (cname, s_sym))
         Aname in A_names || push!(A_names, Aname)
-        if !any(e -> e[1] == Ename, E_specs)
+        if !_anyof(e -> e[1] == Ename, E_specs)
             push!(E_specs, (Ename, bind.c_sym, bind.src_env, bind.tgt_env))
             # Collected on the DETECTION view, like every other pattern read: a
             # body factored through a template must yield the same gather set as

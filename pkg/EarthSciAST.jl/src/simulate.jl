@@ -693,7 +693,7 @@ end
 # a `_CellEval` whose "cell" is the vector of coordinate values, or `nothing`
 # when a name collides with the time symbol or the expression does not compile.
 function _seed_expression_compile(expr::ASTExpr, dims::Vector{String})
-    any(==("t"), dims) && return nothing
+    _anyof(==("t"), dims) && return nothing
     allunique(dims) || return nothing
     psyms = Symbol[Symbol(d) for d in dims]
     node = try
@@ -1921,7 +1921,7 @@ function _observed_field_memo(
         # record describes (a problem built earlier with the same record reads
         # through it, but files nothing into another build's report).
         if insp.observed_build === prob.run_file &&
-                !any(
+                !_anyof(
                 r -> r.kind === :observed && r.rule == name && r.tier in _OUTPUT_TIERS,
                 insp.compiler_report.rules
             )
@@ -2016,7 +2016,7 @@ function _observed_field_impl(
         # holds every array-valued PARAMETER, and quietly returning one of those
         # from `observed_field` would turn a wrong name into a plausible answer.
         obs = Set{String}(observed_unknowns(model))
-        is_obs = any(
+        is_obs = _anyof(
             k -> (
                 String(k) == v ||
                     (single && String(split(String(k), '.')[end]) == v)
@@ -2217,10 +2217,10 @@ end
 function _distinct_sinks(sinks, ck_sinks)
     out = Any[]
     for s in sinks
-        any(x -> x === s, out) || push!(out, s)
+        _anyof(x -> x === s, out) || push!(out, s)
     end
     for s in ck_sinks
-        any(x -> x === s, out) || push!(out, s)
+        _anyof(x -> x === s, out) || push!(out, s)
     end
     return out
 end

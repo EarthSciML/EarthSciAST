@@ -90,6 +90,11 @@ using Dates
 # cannot exist in a session that has not loaded ForwardDiff — so the identity
 # method below is COMPLETE whenever the extension is not loaded, and the
 # extension is guaranteed to be loaded before any `Dual` can be constructed.
+#
+# Because the extension adds a method here, a call inferred with an argument of
+# unknown type (`args[1]` of a `Vector{Any}`) would be invalidated when
+# ForwardDiff loads; those calls go through `_dynamic(_value, x)`. Calls with a
+# concrete argument type are unaffected, since `Dual` methods cannot match them.
 @inline _value(x) = x
 
 """
@@ -279,42 +284,42 @@ function evaluate_closed_function(name::String, args::AbstractVector)
 
     if name == "datetime.year"
         _expect_arity(name, args, 1)
-        return _cal_i32(name, _cal_year(_cal_t(name, _value(args[1]))))
+        return _cal_i32(name, _cal_year(_cal_t(name, _dynamic(_value, args[1]))))
     elseif name == "datetime.month"
         _expect_arity(name, args, 1)
-        return _cal_i32(name, _cal_month(_cal_t(name, _value(args[1]))))
+        return _cal_i32(name, _cal_month(_cal_t(name, _dynamic(_value, args[1]))))
     elseif name == "datetime.day"
         _expect_arity(name, args, 1)
-        return _cal_i32(name, _cal_day(_cal_t(name, _value(args[1]))))
+        return _cal_i32(name, _cal_day(_cal_t(name, _dynamic(_value, args[1]))))
     elseif name == "datetime.hour"
         _expect_arity(name, args, 1)
-        return _cal_i32(name, _cal_hour(_cal_t(name, _value(args[1]))))
+        return _cal_i32(name, _cal_hour(_cal_t(name, _dynamic(_value, args[1]))))
     elseif name == "datetime.minute"
         _expect_arity(name, args, 1)
-        return _cal_i32(name, _cal_minute(_cal_t(name, _value(args[1]))))
+        return _cal_i32(name, _cal_minute(_cal_t(name, _dynamic(_value, args[1]))))
     elseif name == "datetime.second"
         _expect_arity(name, args, 1)
-        return _cal_i32(name, _cal_second(_cal_t(name, _value(args[1]))))
+        return _cal_i32(name, _cal_second(_cal_t(name, _dynamic(_value, args[1]))))
     elseif name == "datetime.day_of_year"
         _expect_arity(name, args, 1)
-        return _cal_i32(name, _cal_day_of_year(_cal_t(name, _value(args[1]))))
+        return _cal_i32(name, _cal_day_of_year(_cal_t(name, _dynamic(_value, args[1]))))
     elseif name == "datetime.julian_day"
         _expect_arity(name, args, 1)
-        return _datetime_julian_day(_cal_t(name, Float64(args[1])))::Float64
+        return _datetime_julian_day(_cal_t(name, Float64(args[1])::Float64))::Float64
     elseif name == "datetime.is_leap_year"
         _expect_arity(name, args, 1)
-        return _cal_i32(name, _cal_is_leap_year(_cal_t(name, _value(args[1]))))
+        return _cal_i32(name, _cal_is_leap_year(_cal_t(name, _dynamic(_value, args[1]))))
     elseif name == "interp.searchsorted"
         _expect_arity(name, args, 2)
-        return _interp_searchsorted(name, args[1], args[2])
+        return _dynamic(_interp_searchsorted, name, args[1], args[2])::Int32
     elseif name == "interp.linear"
         _expect_arity(name, args, 3)
-        return _interp_linear(name, args[1], args[2], Float64(args[3]))::Float64
+        return _interp_linear(name, args[1], args[2], Float64(args[3])::Float64)::Float64
     elseif name == "interp.bilinear"
         _expect_arity(name, args, 5)
         return _interp_bilinear(
             name, args[1], args[2], args[3],
-            Float64(args[4]), Float64(args[5])
+            Float64(args[4])::Float64, Float64(args[5])::Float64
         )::Float64
     end
     # Should be unreachable — `name in _CLOSED_FUNCTION_NAMES` covered above.
@@ -358,14 +363,14 @@ index is a build-time table position, not a value the traced program computes.
 function evaluate_closed_function_ad(name::String, args::AbstractVector)
     if name == "datetime.julian_day"
         _expect_arity(name, args, 1)
-        _cal_t(name, _value(args[1]))
-        return _datetime_julian_day(args[1])
+        _cal_t(name, _dynamic(_value, args[1]))
+        return _dynamic(_datetime_julian_day, args[1])
     elseif name == "interp.linear"
         _expect_arity(name, args, 3)
-        return _interp_linear(name, args[1], args[2], args[3])
+        return _dynamic(_interp_linear, name, args[1], args[2], args[3])
     elseif name == "interp.bilinear"
         _expect_arity(name, args, 5)
-        return _interp_bilinear(name, args[1], args[2], args[3], args[4], args[5])
+        return _dynamic(_interp_bilinear, name, args[1], args[2], args[3], args[4], args[5])
         # ---- Calendar fields ----
         # These used to fall through to the pinned registry, which was correct for
         # a `Dual` (whose primal `_value` recovers) and a wall for anything a host
@@ -381,21 +386,21 @@ function evaluate_closed_function_ad(name::String, args::AbstractVector)
         # these are piecewise constant) rather than partials leaking through the
         # floor divisions.
     elseif name == "datetime.year"
-        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_year(_cal_t(name, _value(args[1]))))
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_year(_cal_t(name, _dynamic(_value, args[1]))))
     elseif name == "datetime.month"
-        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_month(_cal_t(name, _value(args[1]))))
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_month(_cal_t(name, _dynamic(_value, args[1]))))
     elseif name == "datetime.day"
-        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_day(_cal_t(name, _value(args[1]))))
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_day(_cal_t(name, _dynamic(_value, args[1]))))
     elseif name == "datetime.hour"
-        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_hour(_cal_t(name, _value(args[1]))))
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_hour(_cal_t(name, _dynamic(_value, args[1]))))
     elseif name == "datetime.minute"
-        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_minute(_cal_t(name, _value(args[1]))))
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_minute(_cal_t(name, _dynamic(_value, args[1]))))
     elseif name == "datetime.second"
-        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_second(_cal_t(name, _value(args[1]))))
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_second(_cal_t(name, _dynamic(_value, args[1]))))
     elseif name == "datetime.day_of_year"
-        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_day_of_year(_cal_t(name, _value(args[1]))))
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_day_of_year(_cal_t(name, _dynamic(_value, args[1]))))
     elseif name == "datetime.is_leap_year"
-        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_is_leap_year(_cal_t(name, _value(args[1]))))
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_is_leap_year(_cal_t(name, _dynamic(_value, args[1]))))
     end
     # Discrete-valued or already-generic: the pinned registry handles duals.
     return evaluate_closed_function(name, args)
@@ -809,7 +814,7 @@ end
 # that reads an `xs` — this registry, the tree-walk build's const-arg protocol,
 # the MTK lowering — runs it.
 function _validate_searchsorted_table(name::String, xs)::Nothing
-    if !(xs isa AbstractVector && all(x -> x isa Real && !(x isa Bool), xs))
+    if !(xs isa AbstractVector && _allof(x -> x isa Real && !(x isa Bool), xs))
         throw(
             ClosedFunctionError(
                 ERROR_CODES.INTERP_AXIS_NOT_CONST,
@@ -897,11 +902,12 @@ end
 # `interp_axis_length_mismatch`). `[]` is rank 1 and never rank 2 (ruling Q-111):
 # as `interp.bilinear`'s table it is `interp_table_not_const`.
 _interp_number(x) = x isa Real && !(x isa Bool)
-_interp_rank1(v) = v isa AbstractVector && all(_interp_number, v)
-_interp_rank2(v) = v isa AbstractVector && !isempty(v) && all(_interp_rank1, v)
+_interp_rank1(v) = v isa AbstractVector && _allof(_interp_number, v)
+_interp_rank2(v) = v isa AbstractVector && !isempty(v) && _allof(_interp_rank1, v)
 
 function _require_interp_rank(name::String, v, rank::Int, code::String, label::String)
-    (rank == 1 ? _interp_rank1(v) : _interp_rank2(v)) && return nothing
+    # `v` is document content of any type; see `_dynamic`.
+    _dynamic(rank == 1 ? _interp_rank1 : _interp_rank2, v)::Bool && return nothing
     got = v isa AbstractVector ? "an array that is not rank $(rank)" : "a $(typeof(v))"
     throw(
         ClosedFunctionError(
@@ -957,7 +963,9 @@ function _interp_axis_increasing(name::String, axis::Vector{Float64}, label::Str
     return nothing
 end
 
-_interp_axis_f64(axis_raw)::Vector{Float64} = Float64[Float64(v) for v in axis_raw]
+# `axis_raw` is document content of any type; see `_dynamic`.
+_interp_axis_f64(axis_raw) = _dynamic(_f64_vector, axis_raw)::Vector{Float64}
+_f64_vector(xs) = Float64[Float64(v) for v in xs]
 
 function _validate_interp_linear_args(name::String, table_raw, axis_raw)::Vector{Float64}
     _require_interp_rank(name, table_raw, 1, ERROR_CODES.INTERP_TABLE_NOT_CONST, "table")
@@ -1184,7 +1192,7 @@ _InterpSearchsortedSpec(xs) = _InterpSearchsortedSpec(xs, "")
     return nothing
 end
 @noinline function _throw_table_oob(strict::String, which::Int, axis::Vector{Float64}, x)
-    xv = x isa AbstractFloat ? x : float(x)
+    xv = x isa AbstractFloat ? x : _dynamic(float, x)
     throw(
         TableLookupError(
             ERROR_CODES.TABLE_LOOKUP_OUT_OF_BOUNDS,
@@ -1238,11 +1246,8 @@ function _coerce_f64_vec(name::String, v, label::String)::Vector{Float64}
             )
         )
     end
-    out = Vector{Float64}(undef, length(v))
-    @inbounds for i in eachindex(v)
-        out[i] = Float64(v[i])
-    end
-    return out
+    # `v` is document content of any type; see `_dynamic`.
+    return _dynamic(_f64_vector, v)::Vector{Float64}
 end
 
 function _build_interp_linear_spec(
@@ -1481,8 +1486,8 @@ function _lower_raw_enum_ops(node, enums, open_names::AbstractSet{String})
             args = _raw_get(node, "args")
             (
                 args !== nothing && _is_array(args) && length(args) == 2 &&
-                    all(a -> a isa AbstractString, args) &&
-                    !any(a -> String(a) in open_names, args)
+                    _allof(a -> a isa AbstractString, args) &&
+                    !_anyof(a -> String(a) in open_names, args)
             ) || return node
             enum_name, symbol = String(args[1]), String(args[2])
             mapping = enums !== nothing && _is_object(enums) ?

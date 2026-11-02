@@ -178,7 +178,7 @@ function _vi_is_derived(node::OpExpr, vi_var_names)
     length(oi) == 1 || return false
     gsym = String(oi[1])
     node.join === nothing || return false
-    all(==(gsym), keys(_vi_ranges(node))) || return false
+    _allof(==(gsym), keys(_vi_ranges(node))) || return false
     return !isempty(
         intersect(
             _vi_index_targets!(Set{String}(), node.expr_body),
@@ -484,7 +484,7 @@ function _vi_order_syms(ranges)
         progressed = false
         for s in copy(remaining)
             of = _vi_range_of(ranges[s])
-            if all(p -> p in ordered || !(p in syms), of)
+            if _allof(p -> p in ordered || !(p in syms), of)
                 push!(ordered, s)
                 deleteat!(remaining, findfirst(==(s), remaining))
                 progressed = true
@@ -675,8 +675,8 @@ function _vi_equality_candidates(ls, ml, rs, mr, ranges, ctx::_ViCtx)
     n_l = _vi_position_extent(get(ranges, ls, nothing), ctx)
     n_r = _vi_position_extent(get(ranges, rs, nothing), ctx)
     (n_l === nothing || n_r === nothing) && return nothing
-    all(p -> haskey(ml, p), 1:n_l) || return nothing
-    all(p -> haskey(mr, p), 1:n_r) || return nothing
+    _allof(p -> haskey(ml, p), 1:n_l) || return nothing
+    _allof(p -> haskey(mr, p), 1:n_r) || return nothing
     return _equality_match_index(1:n_l, p -> ml[p], 1:n_r, p -> mr[p])
 end
 
