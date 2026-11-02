@@ -333,7 +333,9 @@ type FlattenedTemplate struct {
 }
 
 // LiftedShape is the concrete integer grid shape the pointwise spatial lift
-// (esm-spec §10.5) assigned to one lifted state variable.
+// (esm-spec §10.5) assigned to one lifted state variable. The state's Shape
+// names the index sets of these extents, each in IndexSets
+// (esm-libraries-spec §4.7.5, "Pointwise lift: index sets").
 type LiftedShape struct {
 	Name  string
 	Shape []int
@@ -472,7 +474,8 @@ type FlattenedSystem struct {
 	// applied.
 	Metadata FlattenMetadata
 	// IndexSets is the document-scoped index-set registry, required to interpret
-	// arrayed equations.
+	// arrayed equations, plus any `_liftdim<d>_<extent>` interval the pointwise
+	// lift adds.
 	IndexSets []FlattenedIndexSet
 	// FunctionTables is the merged function-table registry; it resolves a
 	// surviving `table_lookup`. Flattening deliberately does NOT lower those
@@ -2789,7 +2792,9 @@ func FlattenWithOptions(file *ESMFile, opts CouplingImportOptions) (*FlattenedSy
 	// The remaining canonical step-4 fields, all derived LAST over the finished
 	// system so they see the equations coupling and the lift actually produced.
 	classifyFlattened(flat)
-	collectFieldICs(flat)
+	if err := collectFieldICs(flat); err != nil {
+		return nil, err
+	}
 	flat.TemplateRegistry = mergedTemplateRegistry(file)
 	// ...and the ONE place a coupling-rewritten name is REFUSED rather than
 	// resolved. See checkRegistryCouplingRewrites.
@@ -3339,8 +3344,9 @@ func classifyFlattened(flat *FlattenedSystem) {
 // `equations` makes that list unusable for building a right-hand side without
 // filtering it first, and makes equation counts incomparable across bindings.
 // Runs LAST, after the lift and the independent-variable derivation, so every
-// intermediate pass still sees the same equation list it always did.
-func collectFieldICs(flat *FlattenedSystem) {
+// intermediate pass still sees the same equation list it always did. Returns a
+// ConflictingDerivativeError when two `ic(x)` entries name the same state.
+func collectFieldICs(flat *FlattenedSystem) error {
 	var ics []FieldIC
 	var remaining []FlattenedEquation
 	for _, eq := range flat.Equations {
@@ -3353,6 +3359,26 @@ func collectFieldICs(flat *FlattenedSystem) {
 		}
 		remaining = append(remaining, eq)
 	}
+	// One initial condition per state (esm-libraries-spec §4.7.5 step 4
+	// `field_ics`). Two -- an authored `ic(x)` and an operator's `ic(_var)`
+	// expanded onto `x`, or two such templates -- leave nothing to say which
+	// one holds, so the document is refused rather than one silently winning.
+	seen := map[string]bool{}
+	dupSeen := map[string]bool{}
+	var duplicated []string
+	for _, ic := range ics {
+		if seen[ic.State] && !dupSeen[ic.State] {
+			dupSeen[ic.State] = true
+			duplicated = append(duplicated, ic.State)
+		}
+		seen[ic.State] = true
+	}
+	if len(duplicated) > 0 {
+		return &ConflictingDerivativeError{Message: "flatten: states have more than one initial condition `ic(x)` " +
+			"(an authored one and an operator's `ic(_var)` expanded onto it, or two such templates): " +
+			strings.Join(duplicated, ", ")}
+	}
 	flat.FieldICs = ics
 	flat.Equations = remaining
+	return nil
 }

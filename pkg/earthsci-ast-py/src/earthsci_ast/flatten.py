@@ -553,7 +553,8 @@ class FlattenedSystem:
     domain: Domain | None = None
     metadata: FlattenMetadata = field(default_factory=FlattenMetadata)
     # Document-scoped index-set registry (RFC semiring-faq-unified-ir §5.2),
-    # copied from the top-level document registry. Threaded to the evaluator so
+    # copied from the top-level document registry, plus any
+    # ``_liftdim<d>_<extent>`` interval the pointwise lift adds. Threaded to the evaluator so
     # it can resolve aggregate range references of the form {"from": <name>}.
     index_sets: dict[str, Any] = field(default_factory=dict)
     # Data-loader variables lowered to observed arrays (RFC pure-io-data-loaders
@@ -564,7 +565,9 @@ class FlattenedSystem:
     loader_fields: list[LoaderField] = field(default_factory=list)
     # Concrete integer grid shapes assigned by the pointwise spatial lift
     # (esm-spec §10.5) to each lifted state variable, e.g.
-    # ``{"Chemistry.O3": (4, 2)}``. The simulator's shape resolution prefers
+    # ``{"Chemistry.O3": (4, 2)}``. The state's ``shape`` names the index sets
+    # of these extents, each a key of ``index_sets`` (esm-libraries-spec
+    # §4.7.5, "Pointwise lift: index sets"). The simulator's shape resolution prefers
     # these over index-use inference (a lifted species' own operator makearray
     # reads offset cells like ``index(sp, i+1, j)`` that would otherwise widen
     # the inferred extent). Empty ⇒ no lift ran.
@@ -3132,6 +3135,22 @@ def _collect_field_ics(flat: FlattenedSystem) -> None:
             ics.append((target, eq.rhs))
         else:
             remaining.append(eq)
+    # One initial condition per state (esm-libraries-spec §4.7.5 step 4
+    # `field_ics`). Two -- an authored `ic(x)` and an operator's `ic(_var)`
+    # expanded onto `x`, or two such templates -- leave nothing to say which
+    # one holds, so the document is refused rather than one silently winning.
+    seen: set[str] = set()
+    duplicated: list[str] = []
+    for target, _ in ics:
+        if target in seen and target not in duplicated:
+            duplicated.append(target)
+        seen.add(target)
+    if duplicated:
+        raise ConflictingDerivativeError(
+            "states have more than one initial condition `ic(x)` "
+            "(an authored one and an operator's `ic(_var)` expanded onto it, "
+            f"or two such templates): {', '.join(duplicated)}"
+        )
     flat.field_ics = ics
     flat.equations = remaining
 
@@ -3919,6 +3938,97 @@ def _makearray_extents(ma: ExprNode) -> list[int]:
     return ext
 
 
+def _lift_axis_names(
+    mas: list[ExprNode],
+    loops: list[str],
+    extents: list[int],
+    var_shapes: dict[str, list[str]],
+    index_sets: dict[str, Any],
+) -> list[str | None]:
+    """The index set each lift dimension is NAMED by, or ``None`` per dimension.
+
+    Every operand an operator makearray gathers at the lift's own loops names an
+    index set at each position it declares a shape for: ``index(u, i, j)`` with
+    ``u`` on ``[x, y]`` says loop ``i`` runs over ``x``. A name counts only when
+    the registry declares it with the dimension's extent as its size, which
+    rejects a staggered face array (``[x_nodes, y]``, one longer) gathered at
+    the same loops. A dimension with no such name, or with two different ones,
+    is ``None``. A loop symbol repeated across dimensions (a diagonal gather)
+    names nothing. esm-libraries-spec §4.7.5, "Pointwise lift: index sets".
+    """
+    rank = len(loops)
+    evidence: list[set[str]] = [set() for _ in range(rank)]
+    dim_of: dict[str, int | None] = {}
+    for d, loop in enumerate(loops):
+        dim_of[loop] = None if loop in dim_of else d
+    for ma in mas:
+        for e in walk(ma):
+            if not (
+                isinstance(e, ExprNode)
+                and e.op == "index"
+                and e.args
+                and isinstance(e.args[0], str)
+            ):
+                continue
+            shape = var_shapes.get(e.args[0])
+            if shape is None or len(shape) != len(e.args) - 1:
+                continue
+            for p, axis in enumerate(shape):
+                loop = _index_arg_loop(e.args[p + 1])
+                d = dim_of.get(loop) if loop is not None else None
+                if d is None:
+                    continue
+                entry = index_sets.get(axis)
+                size = entry.get("size") if isinstance(entry, dict) else None
+                if isinstance(size, int) and size == extents[d]:
+                    evidence[d].add(axis)
+    return [next(iter(names)) if len(names) == 1 else None for names in evidence]
+
+
+def _lift_index_sets(
+    mas: list[ExprNode],
+    loops: list[str],
+    extents: list[int],
+    var_shapes: dict[str, list[str]],
+    declared: dict[str, Any],
+    declared_by_size: dict[int, list[str]],
+    index_sets: dict[str, Any],
+    species: str,
+) -> list[str]:
+    """The index set of every lift dimension (esm-libraries-spec §4.7.5,
+    "Pointwise lift: index sets"), registering a synthetic one where needed.
+
+    Dimension ``d`` (1-based in the name) is, in order: the index set its
+    gathered operands name (:func:`_lift_axis_names`); else the only index set
+    the document declares (``declared``, grouped by size in
+    ``declared_by_size``) whose ``size`` is the extent; else
+    ``_liftdim<d>_<extent>``, added to ``index_sets`` as an interval of that
+    size if it is not there yet.
+    """
+    named = _lift_axis_names(mas, loops, extents, var_shapes, declared)
+    axes: list[str] = []
+    for d, extent in enumerate(extents):
+        if named[d] is not None:
+            axes.append(named[d])
+            continue
+        candidates = declared_by_size.get(extent, [])
+        if len(candidates) == 1:
+            axes.append(candidates[0])
+            continue
+        synthetic = f"_liftdim{d + 1}_{extent}"
+        entry = index_sets.get(synthetic)
+        if entry is None:
+            index_sets[synthetic] = {"kind": "interval", "size": extent}
+        elif not (isinstance(entry, dict) and entry.get("size") == extent):
+            raise DimensionPromotionError(
+                f"pointwise lift: species {species!r} needs the index set "
+                f"{synthetic!r} of size {extent} for grid dimension {d + 1}, but "
+                f"the document declares {synthetic!r} with a different size"
+            )
+        axes.append(synthetic)
+    return axes
+
+
 def _lift_rhs_to_cell(expr: Expr, arrayvars: set[str], loops: list[str]) -> Expr:
     """Rewrite a scalar (merged reaction + operator) RHS into its per-cell form
     over the spatial ``loops``: a bare reference to an array variable becomes
@@ -3968,11 +4078,16 @@ def _apply_pointwise_lift(flat: FlattenedSystem, coupling: list[CouplingEntry]) 
         return None
 
     # A species is lifted iff its state ODE's merged RHS carries a spatial-operator
-    # makearray (the advection contribution operator_compose added).
+    # makearray (the advection contribution operator_compose added) and it does
+    # not already declare a shape: a state that already lives on a grid has
+    # nothing to lift, and its declared shape stands.
     lifted: set[str] = set()
     for eq in flat.equations:
         target = _d_target(eq.lhs)
         if target is None:
+            continue
+        declared_state = flat.state_variables.get(target)
+        if declared_state is not None and getattr(declared_state, "shape", None):
             continue
         if _collect_makearrays(eq.rhs, []):
             lifted.add(target)
@@ -3981,11 +4096,23 @@ def _apply_pointwise_lift(flat: FlattenedSystem, coupling: list[CouplingEntry]) 
 
     # Operands to index per cell: the lifted species plus any already array-shaped
     # parameter/observed/state (e.g. a grid-shaped wind field bound from a loader).
+    # The same declared shapes name the lift's index sets (_lift_axis_names).
     arrayvars: set[str] = set(lifted)
+    var_shapes: dict[str, list[str]] = {}
     for table in (flat.parameters, flat.observed_variables, flat.state_variables):
         for name, var in table.items():
             if getattr(var, "shape", None):
                 arrayvars.add(name)
+                var_shapes.setdefault(name, list(var.shape))
+
+    # The registry as the document declares it, before the lift adds any
+    # `_liftdim<d>_<extent>` set: only a declared set is matched by size.
+    declared = dict(flat.index_sets)
+    declared_by_size: dict[int, list[str]] = {}
+    for name, entry in declared.items():
+        size = entry.get("size") if isinstance(entry, dict) else None
+        if isinstance(size, int):
+            declared_by_size.setdefault(size, []).append(name)
 
     new_equations: list[FlattenedEquation] = []
     for eq in flat.equations:
@@ -4011,10 +4138,17 @@ def _apply_pointwise_lift(flat: FlattenedSystem, coupling: list[CouplingEntry]) 
             )
 
         extents = _makearray_extents(mas[0])
-        ranges: dict[str, Any] = {loops[d]: [1, extents[d]] for d in range(rank)}
+        axes = _lift_index_sets(
+            mas, loops, extents, var_shapes, declared, declared_by_size, flat.index_sets, target
+        )
+        ranges: dict[str, Any] = {loops[d]: {"from": axes[d]} for d in range(rank)}
         output_idx: list[Any] = list(loops)
 
+        # The lifted state lives on the lift's index sets: its `shape` names them
+        # and `lifted_shapes` records their sizes (esm-libraries-spec §4.7.5).
         flat.lifted_shapes[target] = tuple(extents)
+        if target in flat.state_variables:
+            flat.state_variables[target] = replace(flat.state_variables[target], shape=list(axes))
 
         idx_species = ExprNode(op="index", args=[target, *loops])
         new_lhs = ExprNode(

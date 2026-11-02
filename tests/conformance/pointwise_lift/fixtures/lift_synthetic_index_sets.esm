@@ -1,0 +1,145 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "LiftSyntheticIndexSets",
+    "description": "Pointwise lift onto a 3 x 5 grid that no declared index set determines: dimension 1 has two index sets of size 3 (a, b) and no shaped operand to choose between them, and no index set has size 5. The lift names each such dimension _liftdim<d>_<extent> and adds it to the flattened index_sets as an interval of that size, so Chem.c is lifted onto [_liftdim1_3, _liftdim2_5] (esm-libraries-spec 4.7.5, 'Pointwise lift: index sets').",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-11-01T00:00:00Z"
+  },
+  "index_sets": {
+    "a": {
+      "kind": "interval",
+      "size": 3
+    },
+    "b": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Chem": {
+      "variables": {
+        "c": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 1.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "c"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "c"
+            ]
+          }
+        }
+      ]
+    },
+    "Mix": {
+      "variables": {
+        "kd": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0002
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "_var"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "makearray",
+            "args": [],
+            "regions": [
+              [
+                [
+                  1,
+                  3
+                ],
+                [
+                  1,
+                  5
+                ]
+              ]
+            ],
+            "values": [
+              {
+                "op": "faq",
+                "args": [],
+                "output_idx": [
+                  "i",
+                  "j"
+                ],
+                "ranges": {
+                  "i": [
+                    1,
+                    3
+                  ],
+                  "j": [
+                    1,
+                    5
+                  ]
+                },
+                "expr": {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "-",
+                      "args": [
+                        "kd"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "_var",
+                        "i",
+                        "j"
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "Mix"
+      ],
+      "lifting": "pointwise"
+    }
+  ]
+}

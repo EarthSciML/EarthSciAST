@@ -15,20 +15,28 @@ differential equation (`D(X, t) = ...`) and as a substrate or product of any
 reaction in the same flattened file. Such a system is over-determined: the
 reaction contribution to `d[X]/dt` would silently shadow the user's equation.
 
+Also raised when a state has more than one initial condition `ic(x)` after
+coupling (an authored one and an operator's `ic(_var)` expanded onto it, or two
+such templates): `field_ics` holds at most one entry per state
+(esm-libraries-spec §4.7.5 step 4).
+
 Fields:
 - `species::Vector{String}`: fully-qualified (dot-namespaced) names of every
   offending species.
+- `reason::String`: what conflicts; the reaction-contribution wording when
+  constructed with the species alone.
 """
 struct ConflictingDerivativeError <: EarthSciASTError
     species::Vector{String}
+    reason::String
 end
 
+ConflictingDerivativeError(species::Vector{String}) = ConflictingDerivativeError(
+    species, "species have both an explicit derivative equation and a reaction contribution"
+)
+
 function Base.showerror(io::IO, e::ConflictingDerivativeError)
-    names = join(e.species, ", ")
-    return print(
-        io, "ConflictingDerivativeError: species have both an explicit ",
-        "derivative equation and a reaction contribution: ", names
-    )
+    return print(io, "ConflictingDerivativeError: ", e.reason, ": ", join(e.species, ", "))
 end
 
 """
