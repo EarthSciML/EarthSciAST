@@ -24,7 +24,7 @@
 use earthsci_ast::{AssertionResult, SolveOptions, flatten, load_string, run_inline_tests};
 use serde_json::json;
 
-mod common;
+use crate::common;
 
 fn opts() -> SolveOptions {
     SolveOptions {

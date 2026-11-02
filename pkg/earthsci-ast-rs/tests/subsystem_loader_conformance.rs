@@ -31,7 +31,7 @@ use ndarray::{ArrayD, IxDyn};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-mod common;
+use crate::common;
 
 /// Manifest trajectory band (`manifest.json` `tolerances`).
 const TRAJ_RTOL: f64 = 1e-4;

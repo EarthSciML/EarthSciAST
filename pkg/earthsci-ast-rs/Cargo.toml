@@ -16,6 +16,11 @@ readme = "README.md"
 # should be auto-discovered as one: `esm.rs` is a thin native-only shim over
 # `esm_impl.rs`, and an auto-discovered `esm_impl` bin would have no `main`.
 autobins = false
+# Integration tests are declared explicitly too (the `[[test]]` targets below):
+# almost every `tests/*.rs` file is a module of the single `integration`
+# binary, because linking ~200 separate test executables cost CI far more
+# than running them. See the header of `tests/integration.rs`.
+autotests = false
 
 # Support both library and CLI binary
 [[bin]]
@@ -246,6 +251,41 @@ zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 # via `wasm-pack test`.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
+
+# ONE binary for the integration suite; `tests/integration.rs` lists its files.
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+
+# These need a process to themselves: each of the next four installs a counting
+# `#[global_allocator]` (a binary may have only one) ...
+[[test]]
+name = "faq_equality_scatter"
+path = "tests/faq_equality_scatter.rs"
+
+[[test]]
+name = "pde_zero_alloc"
+path = "tests/pde_zero_alloc.rs"
+
+[[test]]
+name = "public_rhs_program"
+path = "tests/public_rhs_program.rs"
+
+[[test]]
+name = "range_restricted_rhs"
+path = "tests/range_restricted_rhs.rs"
+
+# ... this one calls `std::env::set_var`, which races any concurrent
+# environment read elsewhere in the process ...
+[[test]]
+name = "env_var_refs"
+path = "tests/env_var_refs.rs"
+
+# ... and this one only builds for wasm32 (`cargo test --target
+# wasm32-unknown-unknown --test wasm_suite`).
+[[test]]
+name = "wasm_suite"
+path = "tests/wasm_suite.rs"
 
 [[bench]]
 name = "benchmarks"

@@ -16,7 +16,7 @@ use ndarray::ArrayD;
 use std::collections::HashMap;
 use std::fs;
 
-mod common;
+use crate::common;
 
 #[test]
 fn const_array_key_binds_the_shaped_parameter() {

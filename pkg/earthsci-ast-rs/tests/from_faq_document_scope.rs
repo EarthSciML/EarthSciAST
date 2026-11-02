@@ -12,7 +12,7 @@
 use earthsci_ast::{EdgeKind, ReferenceResolutionError, resolve_references};
 use serde_json::{Value, json};
 
-mod common;
+use crate::common;
 
 fn fixture_json(rel: &str) -> Value {
     let path = common::repo_fixture(rel);

@@ -26,7 +26,7 @@ use earthsci_ast::{Alg, Solution, SolveOptions, check_assertion};
 use ndarray::{ArrayD, IxDyn};
 use std::collections::HashMap;
 
-mod common;
+use crate::common;
 
 /// A `[lon, lat]` grid field from a slice of `[lat0, lat1]` rows (row=lon).
 fn grid(rows: &[[f64; 2]]) -> ArrayD<f64> {

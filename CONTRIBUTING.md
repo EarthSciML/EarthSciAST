@@ -344,7 +344,7 @@ cargo build --release --features conformance-adapters,xla
 eval "$(scripts/setup-xla-gpu-libs.sh --prefix "$HOME/xla-gpu-libs" --quiet)"
 
 export TMPDIR=<real-disk scratch>      # XLA's compilation scratch; never a RAM-backed /tmp
-cargo test --release --features conformance-adapters,xla --test xla_compiled_rhs \
+cargo test --release --features conformance-adapters,xla --test integration xla_compiled_rhs:: \
   -- --nocapture --test-threads=1      # the GPU arm runs; on CPU it skips with a message
 ```
 

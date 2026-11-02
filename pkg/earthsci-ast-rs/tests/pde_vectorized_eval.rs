@@ -21,7 +21,7 @@ use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-mod common;
+use crate::common;
 
 fn fixture(name: &str) -> PathBuf {
     common::repo_fixture("fixtures/faq").join(name)

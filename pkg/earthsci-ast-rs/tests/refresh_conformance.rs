@@ -34,7 +34,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-mod common;
+use crate::common;
 const FIELD_RTOL: f64 = 1e-9;
 const FIELD_ATOL: f64 = 1e-11;
 const TRAJ_RTOL: f64 = 1e-4;

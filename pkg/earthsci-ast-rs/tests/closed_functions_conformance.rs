@@ -18,7 +18,7 @@ use earthsci_ast::{
 };
 use serde_json::Value;
 
-mod common;
+use crate::common;
 
 fn fixtures_root() -> PathBuf {
     common::repo_fixture("closed_functions")

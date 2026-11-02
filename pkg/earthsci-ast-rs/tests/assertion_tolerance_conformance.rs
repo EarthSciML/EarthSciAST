@@ -20,7 +20,7 @@ use earthsci_ast::check_assertion;
 use serde_json::Value;
 use std::path::PathBuf;
 
-mod common;
+use crate::common;
 
 fn category_dir() -> PathBuf {
     common::repo_fixture("conformance/assertion_tolerance")

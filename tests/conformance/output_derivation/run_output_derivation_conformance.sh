@@ -62,7 +62,7 @@ fi
 
 if command -v "$CARGO" >/dev/null 2>&1; then
   echo "--- rust ---"
-  if (cd pkg/earthsci-ast-rs && "$CARGO" test --test output_derivation_conformance); then
+  if (cd pkg/earthsci-ast-rs && "$CARGO" test --test integration output_derivation_conformance::); then
     ran=$((ran + 1))
   else
     echo "FAIL: rust runner"

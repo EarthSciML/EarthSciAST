@@ -22,7 +22,7 @@
 
 use earthsci_ast::{Expr, SolveOptions, flatten, load_string, run_inline_tests, validate};
 
-mod common;
+use crate::common;
 
 /// Every `sin`/`cos`/`tan` node in a flattened expression, with its single
 /// argument.

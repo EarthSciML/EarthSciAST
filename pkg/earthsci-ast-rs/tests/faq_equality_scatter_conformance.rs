@@ -16,7 +16,7 @@ use earthsci_ast::simulate_array::RhsStats;
 use earthsci_ast::{Compiler, EsmProblem, ProblemOptions, Rhs, esm_problem, initial_state};
 use serde_json::Value;
 
-mod common;
+use crate::common;
 
 const TIER: &str = "conformance/faq_equality_scatter";
 

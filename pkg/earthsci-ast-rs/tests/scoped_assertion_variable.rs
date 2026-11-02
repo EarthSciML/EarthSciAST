@@ -15,7 +15,7 @@
 
 use earthsci_ast::{AssertionResult, SolveOptions, load_path, run_inline_tests_with_base_dir};
 
-mod common;
+use crate::common;
 
 fn run(name: &str) -> Vec<AssertionResult> {
     let path = common::repo_fixture("conformance/scoped_assertion_variable/fixtures").join(name);

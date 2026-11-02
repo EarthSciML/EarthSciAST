@@ -13,7 +13,7 @@ use earthsci_ast::{load_path, to_json};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-mod common;
+use crate::common;
 
 fn conf(parts: &[&str]) -> PathBuf {
     let mut p = common::repo_fixture("conformance/expression_templates");

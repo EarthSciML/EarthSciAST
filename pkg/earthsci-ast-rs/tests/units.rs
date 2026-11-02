@@ -8,7 +8,7 @@ use earthsci_ast::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-mod common;
+use crate::common;
 
 fn fixture_path(name: &str) -> PathBuf {
     common::repo_fixture(&format!("valid/{name}"))

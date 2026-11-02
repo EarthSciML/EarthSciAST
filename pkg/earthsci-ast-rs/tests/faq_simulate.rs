@@ -20,7 +20,7 @@ use earthsci_ast::extension::aggregate::resolve_aggregate_ranges;
 use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::collections::HashMap;
 
-mod common;
+use crate::common;
 
 /// Build a one-variable contraction model. `agg` is the RHS aggregation
 /// attribute(s) with a trailing comma (e.g. `"reduce": "+",` or

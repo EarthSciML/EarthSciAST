@@ -434,7 +434,7 @@ fn rank_2_output_scans_axis_zero() {
     }
 }
 
-mod common;
+use crate::common;
 
 /// Drive the two shared cumulative-reduction fixtures end-to-end and assert
 /// their inline `tests` assertions.

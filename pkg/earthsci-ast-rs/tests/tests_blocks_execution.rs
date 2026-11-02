@@ -30,7 +30,7 @@ use earthsci_ast::{EsmFile, Metadata};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-mod common;
+use crate::common;
 
 fn simulation_dir() -> PathBuf {
     common::repo_fixture("simulation")

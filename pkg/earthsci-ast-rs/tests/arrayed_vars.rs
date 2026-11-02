@@ -2,7 +2,7 @@
 
 use earthsci_ast::*;
 
-mod common;
+use crate::common;
 
 fn load_fixture(name: &str) -> EsmFile {
     common::load_repo_fixture(&format!("fixtures/arrayed_vars/{name}"))

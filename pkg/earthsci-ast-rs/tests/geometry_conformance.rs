@@ -22,7 +22,7 @@ use earthsci_ast::extension::geometry::spherical_area;
 use earthsci_ast::load_string;
 use earthsci_ast::{Manifold, intersect_polygon, shoelace_area};
 
-mod common;
+use crate::common;
 
 fn geometry_fixture_dir(kind: &str) -> PathBuf {
     common::repo_fixture(kind).join("geometry")

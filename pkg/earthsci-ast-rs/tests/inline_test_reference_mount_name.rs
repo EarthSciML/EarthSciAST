@@ -28,7 +28,7 @@
 use earthsci_ast::{Alg, SolveOptions, load_string, run_inline_tests};
 use std::fs;
 
-mod common;
+use crate::common;
 
 const FIXTURE: &str = "valid/inline_test_reference_mount_name.esm";
 

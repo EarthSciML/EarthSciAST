@@ -30,7 +30,7 @@
 
 use earthsci_ast::{SolveOptions, load_path};
 
-mod common;
+use crate::common;
 
 /// Both `table_lookup` assertions pass, and the interpolating one agrees with
 /// its hand-lowered twin bit for bit — the §9.5 bit-equivalence promise, which

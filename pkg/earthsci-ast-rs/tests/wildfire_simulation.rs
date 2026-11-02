@@ -29,7 +29,7 @@ use earthsci_ast::{
 };
 use std::collections::HashMap;
 
-mod common;
+use crate::common;
 
 fn model<'a>(file: &'a EsmFile, name: &str) -> &'a Model {
     file.models

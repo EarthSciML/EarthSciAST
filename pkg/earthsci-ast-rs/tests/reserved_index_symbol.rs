@@ -35,7 +35,7 @@
 use earthsci_ast::{SolveOptions, load_path, load_string};
 use serde_json::{Value, json};
 
-mod common;
+use crate::common;
 
 fn fixture(name: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

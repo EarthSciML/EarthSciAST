@@ -20,7 +20,7 @@ use earthsci_ast::{StructuralErrorCode, validate};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-mod common;
+use crate::common;
 
 fn opts() -> SolveOptions {
     SolveOptions {

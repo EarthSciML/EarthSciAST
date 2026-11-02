@@ -5,7 +5,7 @@
 
 #![cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
 
-mod portable;
+use crate::portable;
 
 macro_rules! scaling_family {
     ($name:ident) => {

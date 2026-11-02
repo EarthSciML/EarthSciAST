@@ -19,7 +19,7 @@ fn obs_def<'a>(model: &'a serde_json::Value, name: &str) -> &'a serde_json::Valu
         .unwrap_or_else(|| panic!("{name} has no defining equation"))
 }
 
-mod common;
+use crate::common;
 
 fn conf(dir: &str) -> PathBuf {
     common::repo_fixture("conformance/expression_templates").join(dir)
