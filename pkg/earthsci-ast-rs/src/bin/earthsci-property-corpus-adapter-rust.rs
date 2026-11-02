@@ -4,7 +4,13 @@
 //! re-serializes it, and emits a JSON object
 //! `{fixture_name: {"ok": bool, "value"|"error": ...}}` to stdout.
 //!
-//! Usage: `cargo run --example roundtrip_expression -- <fixture.json> ...`
+//! Usage: `cargo run --features conformance-adapters --bin
+//! earthsci-property-corpus-adapter-rust -- <fixture.json> ...`
+//!
+//! A `conformance-adapters` bin rather than an example: an example also builds
+//! the dev-dependencies, whose feature unification changes the library's
+//! dependency graph, so `cargo run --example` recompiled the whole crate over
+//! the conformance job's prebuild -- and the next adapter recompiled it back.
 
 use std::collections::BTreeMap;
 use std::env;

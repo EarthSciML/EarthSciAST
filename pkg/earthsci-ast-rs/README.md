@@ -119,8 +119,7 @@ Run `esm --help` for the full command list.
 ## Examples
 
 Runnable examples live in `examples/` (`cargo run --example <name>`):
-`roundtrip_expression` (also driven by the property-corpus conformance
-script), `pde_conformance`, `canonical_expand`, `segmented_refresh_solve`,
+`pde_conformance`, `canonical_expand`, `segmented_refresh_solve`,
 and `unit_validation`.
 
 ## Building
@@ -364,7 +363,7 @@ above — generically:
 export TMPDIR=<a real-disk directory>        # XLA writes compilation scratch here;
                                              # a RAM-backed /tmp is an OOM kill
 source <the exports printed by setup-xla-gpu-libs.sh>
-cargo test --release --features conformance-adapters,xla --test xla_compiled_rhs \
+cargo test --release --features conformance-adapters,xla --test integration xla_compiled_rhs:: \
   -- --nocapture --test-threads=1
 ```
 
