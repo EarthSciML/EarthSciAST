@@ -28,7 +28,7 @@ use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::fs;
 use std::path::PathBuf;
 
-mod common;
+use crate::common;
 
 fn category_dir() -> PathBuf {
     common::repo_fixture("conformance/pde_inline_dead_observed")

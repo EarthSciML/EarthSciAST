@@ -24,7 +24,7 @@ use earthsci_ast::{
 };
 use serde_json::Value;
 
-mod common;
+use crate::common;
 
 fn tier_dir() -> PathBuf {
     common::repo_fixture("conformance/native_model_shapes")

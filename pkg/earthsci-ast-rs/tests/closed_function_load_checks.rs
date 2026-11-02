@@ -11,7 +11,7 @@
 use earthsci_ast::{EsmFile, load_path, validate, validate_text};
 use serde_json::Value;
 
-mod common;
+use crate::common;
 
 /// Every `closed_fn_*` / `function_table_*` fixture is refused at load with
 /// exactly its pinned code, `validate_text` reports it invalid, and the typed

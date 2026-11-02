@@ -36,7 +36,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-mod common;
+use crate::common;
 
 fn geometry_dir() -> PathBuf {
     common::repo_fixture("valid/geometry")

@@ -21,7 +21,7 @@ use earthsci_ast::{
 use indexmap::IndexMap;
 use std::collections::HashMap;
 
-mod common;
+use crate::common;
 
 // ============================================================================
 // Test helpers

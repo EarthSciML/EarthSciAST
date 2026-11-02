@@ -271,7 +271,7 @@ and Rust suites run (`test_reaction_system_inline_tests.py`,
 `rhs_time_derivative.rs`).
 
 ```bash
-cd pkg/earthsci-ast-rs && cargo test --test round_trip test_mathematical_correctness_round_trip
+cd pkg/earthsci-ast-rs && cargo test --test integration round_trip::test_mathematical_correctness_round_trip
 ```
 
 ## Extending the Test Suite

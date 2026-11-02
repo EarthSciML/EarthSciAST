@@ -3,7 +3,7 @@
 //! arm deliberately runs the full `O(N·M)` product once.
 //!
 //! ```text
-//! cargo test --test join_on_equality_gate_bench -- --ignored --nocapture
+//! cargo test --test integration join_on_equality_gate_bench:: -- --ignored --nocapture
 //! ```
 //!
 //! Three arms over the identical two-table equi-join, so the only thing that

@@ -16,7 +16,7 @@ use ndarray::{ArrayD, IxDyn};
 use std::collections::HashMap;
 use std::path::Path;
 
-mod common;
+use crate::common;
 
 /// A provider feeding one variable a deterministic field: once, for a CONST
 /// provider (no anchors), or at each anchor, for a DISCRETE one.

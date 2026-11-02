@@ -21,7 +21,7 @@ use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::fs;
 use std::path::PathBuf;
 
-mod common;
+use crate::common;
 
 fn category_dir() -> PathBuf {
     common::repo_fixture("conformance/shaped_observed_scalar_broadcast")

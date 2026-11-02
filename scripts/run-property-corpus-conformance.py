@@ -136,7 +136,9 @@ def detect_bindings() -> List[Binding]:
         )
     )
 
-    # Rust via cargo example (prebuild so per-fixture invocation is fast).
+    # Rust via its conformance-adapter bin, at the SAME feature set as the CI
+    # prebuild and every other Rust adapter: an `--example` (or any other
+    # feature set) recompiles the crate over that build.
     cargo = shutil.which("cargo")
     rust_dir = PROJECT_ROOT / "pkg" / "earthsci-ast-rs"
     bindings.append(
@@ -146,8 +148,10 @@ def detect_bindings() -> List[Binding]:
                 cargo or "cargo",
                 "run",
                 "--quiet",
-                "--example",
-                "roundtrip_expression",
+                "--features",
+                "conformance-adapters",
+                "--bin",
+                "earthsci-property-corpus-adapter-rust",
                 "--",
             ],
             cwd=rust_dir,

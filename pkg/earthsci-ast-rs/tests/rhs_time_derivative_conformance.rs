@@ -39,7 +39,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
-mod common;
+use crate::common;
 
 fn category_dir() -> PathBuf {
     common::repo_fixture("conformance/rhs_time_derivative")

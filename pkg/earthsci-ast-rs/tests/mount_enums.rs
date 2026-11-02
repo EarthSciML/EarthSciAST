@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use earthsci_ast::{load_path, to_json};
 use serde_json::Value;
 
-mod common;
+use crate::common;
 
 fn dir() -> PathBuf {
     common::repo_fixture("conformance/mount_enums")

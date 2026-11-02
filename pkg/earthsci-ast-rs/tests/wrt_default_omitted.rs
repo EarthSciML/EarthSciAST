@@ -20,7 +20,7 @@
 
 use earthsci_ast::{Alg, SolveOptions, load_path, run_inline_tests};
 
-mod common;
+use crate::common;
 
 /// Every inline-test assertion of one model of the shared fixture, as
 /// `(variable, time, actual)`. Panics if any assertion did not pass.

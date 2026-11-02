@@ -13,7 +13,7 @@ use earthsci_ast::extension::aggregate::resolve_aggregate_ranges;
 use earthsci_ast::{EsmFile, load_string};
 use std::collections::HashMap;
 
-mod common;
+use crate::common;
 
 fn fixture(rel: &str) -> String {
     let path = common::repo_fixture(rel);

@@ -27,7 +27,7 @@ use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::fs;
 use std::path::PathBuf;
 
-mod common;
+use crate::common;
 
 /// The issue #432 regression fixture: a `min` reduction over a shaped,
 /// state-free document (repo-root `tests/` relative).

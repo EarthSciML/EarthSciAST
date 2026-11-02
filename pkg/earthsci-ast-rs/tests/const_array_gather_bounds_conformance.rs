@@ -13,7 +13,7 @@
 use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::fs;
 
-mod common;
+use crate::common;
 
 #[test]
 fn const_array_gathers_out_of_range_fail_with_the_spec_code() {

@@ -18,7 +18,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 
-mod common;
+use crate::common;
 
 fn manifest() -> (std::path::PathBuf, Value) {
     let dir = common::repo_fixture("conformance/missing_data");

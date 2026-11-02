@@ -4,7 +4,7 @@
 //! rejection of `arrayop`. See CONFORMANCE_SPEC §7 and
 //! `docs/content/rfcs/faq-node-rename.md`.
 
-mod common;
+use crate::common;
 
 use earthsci_ast::{load_string, to_json};
 

@@ -12,7 +12,8 @@
 # §5.45.
 #
 #   julia pkg/EarthSciAST.jl/scripts/inline_tests_adapter.jl \
-#         --manifest <manifest.json> --output <out.json> --compiler <value>
+#         --manifest <manifest.json> --output <out.json> [--manifest ... --output ...] \
+#         --compiler <value>
 #
 # ONE ADAPTER, EVERY COMPILER. `--compiler` is required and takes one member of
 # API_SPEC §5.8's closed vocabulary. Its value is passed STRAIGHT to
@@ -95,31 +96,41 @@ const REFUSAL_CODES = (
     "unsupported_construct", "float32_unsupported",
 )
 
+# `--manifest <m> --output <o>` may repeat: each `--output` belongs to the
+# `--manifest` before it, and every pair is run in this ONE process under the
+# one `--compiler`. Most of a launch is compiling the build-and-solve path on
+# first call, which a second process pays all over again, so
+# `scripts/test-conformance.sh` hands every tier to one launch per compiler
+# (CONFORMANCE_SPEC.md §5.45.5).
 function parse_args(args)
-    manifest = nothing
-    output = nothing
+    pairs = Vector{Vector{Union{Nothing, String}}}()
     compiler = nothing
     i = 1
     while i <= length(args)
         if args[i] == "--manifest"
-            manifest = args[i + 1]; i += 2
+            push!(pairs, [args[i + 1], nothing]); i += 2
         elseif args[i] == "--output"
-            output = args[i + 1]; i += 2
+            isempty(pairs) && error("--output must follow the --manifest it belongs to")
+            pairs[end][2] === nothing ||
+                error("--manifest $(pairs[end][1]) was given two --output paths")
+            pairs[end][2] = args[i + 1]; i += 2
         elseif args[i] == "--compiler"
             compiler = args[i + 1]; i += 2
         else
             i += 1
         end
     end
-    manifest === nothing && error("--manifest is required")
-    output === nothing && error("--output is required")
+    isempty(pairs) && error("--manifest is required")
+    for (m, o) in pairs
+        o === nothing && error("--output is required (for --manifest $m)")
+    end
     compiler === nothing && error("--compiler is required")
     compiler in COMPILER_VOCABULARY ||
         error(
         "--compiler must be one of " * join(COMPILER_VOCABULARY, ", ") *
             ", got '$compiler'"
     )
-    return (manifest, output, compiler)
+    return ([(String(m), String(o)) for (m, o) in pairs], compiler)
 end
 
 # Manifest `path` resolves against the manifest's OWN directory first (a
@@ -255,7 +266,24 @@ function write_payload(output_path, payload)
 end
 
 function main(argv)
-    manifest_path, output_path, compiler = parse_args(argv)
+    pairs, compiler = parse_args(argv)
+    rc = 0
+    for (manifest_path, output_path) in pairs
+        # One tier's failure to even start (an unreadable manifest) must not
+        # cost the others their reports: it writes none, which the runner
+        # grades as `no_output` for THAT tier.
+        this_rc = try
+            run_manifest(manifest_path, output_path, compiler)
+        catch err
+            println(stderr, "inline_tests_adapter: $manifest_path: ", sprint(showerror, err))
+            1
+        end
+        rc = max(rc, this_rc)
+    end
+    return rc
+end
+
+function run_manifest(manifest_path, output_path, compiler)
     manifest = JSON3.read(read(manifest_path, String))
 
     reason = compiler_unavailable_reason(compiler)

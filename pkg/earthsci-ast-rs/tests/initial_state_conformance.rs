@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-mod common;
+use crate::common;
 
 fn category_dir() -> PathBuf {
     common::repo_fixture("conformance/initial_state")

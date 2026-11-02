@@ -19,7 +19,7 @@
 use earthsci_ast::{Alg, ProblemOptions, SolveOptions, esm_problem, load_path, solve};
 use std::collections::HashMap;
 
-mod common;
+use crate::common;
 
 #[test]
 fn reservoir_reactant_held_fixed() {

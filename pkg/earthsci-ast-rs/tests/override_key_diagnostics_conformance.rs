@@ -26,7 +26,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-mod common;
+use crate::common;
 
 fn category_dir() -> PathBuf {
     common::repo_fixture("conformance/override_key_diagnostics")

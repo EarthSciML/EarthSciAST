@@ -18,7 +18,7 @@ use std::path::PathBuf;
 
 use earthsci_ast::{AssertionResult, SolveOptions, load_path, run_inline_tests_with_base_dir};
 
-mod common;
+use crate::common;
 
 fn fixture(name: &str) -> PathBuf {
     common::repo_fixture("conformance/mounted_component_tests/fixtures").join(name)

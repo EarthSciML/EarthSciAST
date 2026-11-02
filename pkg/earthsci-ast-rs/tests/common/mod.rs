@@ -6,8 +6,9 @@
 //! (`fixture_dir`, `fixture_path`, `fixtures_root`, `fixtures_dir`, ...);
 //! use these instead.
 //!
-//! Each integration-test binary compiles its own copy of this module, so
-//! helpers a given binary does not use are expected — hence the allow.
+//! The `integration` binary and the few standalone `[[test]]` targets each
+//! compile their own copy of this module, so helpers a given binary does not
+//! use are expected — hence the allow.
 #![allow(dead_code)]
 
 use std::path::PathBuf;

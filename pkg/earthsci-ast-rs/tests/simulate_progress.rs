@@ -13,8 +13,6 @@ use earthsci_ast::{Alg, Flow, Progress, ProgressFn, ReturnCode, SolveOptions, lo
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-mod common;
-
 /// `D(y)/dt = k*y` with `k = -1`: exponential decay, a real (non-polynomial)
 /// trajectory so the solver takes a useful number of adaptive steps. `k` is
 /// negative by default rather than negated in the expression, which keeps the

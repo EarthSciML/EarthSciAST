@@ -17,7 +17,7 @@ use earthsci_ast::{Compiler, EsmProblem, ProblemOptions, Rhs, esm_problem, obser
 use ndarray::{ArrayD, IxDyn};
 use std::collections::HashMap;
 
-mod common;
+use crate::common;
 
 fn arr(shape: &[usize], v: &[f64]) -> ArrayD<f64> {
     ArrayD::from_shape_vec(IxDyn(shape), v.to_vec()).unwrap()
