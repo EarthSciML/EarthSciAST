@@ -1,0 +1,134 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "UnitsSeveralErrorsInOneFile",
+    "description": "Invalid: four observed variables, each a transcendental function of a dimensional argument, in one file. One argument is a bare variable (exp(T), T in K); the other three are compound expressions whose unit is still known: exp(-Ts_c - 4) with Ts_c in degC, log10(p_a + p_b) in Pa, and tanh(x / tau) in m/s (esm-spec §4.8.3, §4.8.4). A checker must report all four. Python's load-time unit check sees only the bare-variable argument, and its rejection used to stop validate() before the unit pass that computes the dimension of a compound argument, so it reported only the first.",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-11-02T00:00:00Z"
+  },
+  "models": {
+    "BadUnitsModel": {
+      "variables": {
+        "T": {
+          "type": "parameter",
+          "units": "K",
+          "default": 298.15,
+          "description": "A temperature in kelvin"
+        },
+        "Ts_c": {
+          "type": "parameter",
+          "units": "degC",
+          "default": 25.0,
+          "description": "A surface temperature in degrees Celsius"
+        },
+        "p_a": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 101325.0,
+          "description": "A pressure"
+        },
+        "p_b": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 2000.0,
+          "description": "Another pressure"
+        },
+        "x": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1.0,
+          "description": "A length"
+        },
+        "tau": {
+          "type": "parameter",
+          "units": "s",
+          "default": 1.0,
+          "description": "A time"
+        },
+        "exp_of_bare_temperature": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Invalid: exp(T), a bare variable in K."
+        },
+        "exp_of_degC_sum": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Invalid: exp(-Ts_c - 4), a sum whose unit is degC."
+        },
+        "log10_of_pressure_sum": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Invalid: log10(p_a + p_b), a sum whose unit is Pa."
+        },
+        "tanh_of_speed": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Invalid: tanh(x / tau), a quotient whose unit is m/s."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "exp_of_bare_temperature",
+          "rhs": {
+            "op": "exp",
+            "args": [
+              "T"
+            ]
+          }
+        },
+        {
+          "lhs": "exp_of_degC_sum",
+          "rhs": {
+            "op": "exp",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      "Ts_c"
+                    ]
+                  },
+                  4
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "log10_of_pressure_sum",
+          "rhs": {
+            "op": "log10",
+            "args": [
+              {
+                "op": "+",
+                "args": [
+                  "p_a",
+                  "p_b"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "tanh_of_speed",
+          "rhs": {
+            "op": "tanh",
+            "args": [
+              {
+                "op": "/",
+                "args": [
+                  "x",
+                  "tau"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

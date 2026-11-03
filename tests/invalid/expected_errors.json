@@ -4414,5 +4414,28 @@
     "resolver_only": true,
     "resolver_error_code": "data_source_merge_conflict",
     "notes": "Resolver-level invalid (esm-spec \u00a74.7 'A mounted document's data sources'). The document is SCHEMA-VALID, so a binding that only checks the schema accepts it (is_valid: true). At load, two sibling mounts contribute `segment` at the same resolved location but with a different `metadata.tags`; the mounting document does not declare it, and entries are compared structurally after substitution and location resolution, so the merge is refused rather than letting one silently win."
-  }
+  },
+    "units_several_errors_in_one_file.esm": {
+      "schema_errors": [],
+      "structural_errors": [
+        {
+          "path": "/models/BadUnitsModel/variables/exp_of_bare_temperature",
+          "code": "unit_inconsistency"
+        },
+        {
+          "path": "/models/BadUnitsModel/variables/exp_of_degC_sum",
+          "code": "unit_inconsistency"
+        },
+        {
+          "path": "/models/BadUnitsModel/variables/log10_of_pressure_sum",
+          "code": "unit_inconsistency"
+        },
+        {
+          "path": "/models/BadUnitsModel/variables/tanh_of_speed",
+          "code": "unit_inconsistency"
+        }
+      ],
+      "is_valid": false,
+      "notes": "esm-spec \u00a74.8.3, \u00a74.8.4: every transcendental of a dimensional argument in the file is reported, the bare-variable one and the three compound ones alike. Python's loader checks only a bare-variable argument, and when that check rejected the file, validate() never ran the unit pass that computes a compound argument's dimension, so Python reported only exp_of_bare_temperature."
+    }
 }

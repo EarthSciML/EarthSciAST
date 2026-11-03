@@ -41,6 +41,7 @@ module-import graph acyclic.
 
 from __future__ import annotations
 
+import contextvars
 import itertools
 import re
 from collections.abc import Iterator
@@ -3742,6 +3743,23 @@ def _check_registered_function_calls(data: dict[str, Any], errors: list[str]) ->
     walk(data, "")
 
 
+#: The two codes the unit checks below report under (esm-spec §4.8.4).
+UNIT_FINDING_CODES = frozenset({"unit_inconsistency", "unit_parse_error"})
+
+#: When set to a list, :func:`_validate_structural` does not raise for a
+#: document whose only findings are unit findings: it appends their records to
+#: the list and lets the load go on, so that ``validate()`` can run its own
+#: unit pass on the loaded document. That pass computes the dimension of a
+#: compound expression, which the raw-dict checks here cannot (they look only
+#: at a bare variable), so without it a file with one bare-variable unit error
+#: hid every compound one. Set only by ``validation._validate_loaded``; the
+#: first structural check to see it takes it, so the documents a load mounts
+#: are gated as before.
+_DEFERRED_UNIT_RECORDS: contextvars.ContextVar[list[dict] | None] = contextvars.ContextVar(
+    "_DEFERRED_UNIT_RECORDS", default=None
+)
+
+
 def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     """
     Perform post-schema structural validation.
@@ -3902,6 +3920,13 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
         "missing_registered_function",
         lambda sub: _check_registered_function_calls(data, sub),
     )
+
+    deferred = _DEFERRED_UNIT_RECORDS.get()
+    if deferred is not None:
+        _DEFERRED_UNIT_RECORDS.set(None)
+        if records and all(r["code"] in UNIT_FINDING_CODES for r in records):
+            deferred.extend(records)
+            return
 
     if findings:
         blob = "Structural validation failed:\n" + "\n".join(

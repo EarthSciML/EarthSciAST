@@ -543,6 +543,31 @@ class TestValidationWithFixtures:
             "reaction_order": 2,
         }
 
+    def test_every_unit_error_in_one_file_is_reported(self, fixtures_dir):
+        """A load-time unit finding does not stop validate()'s unit pass.
+
+        The loader's unit check sees only a bare-variable argument (``exp(T)``),
+        so when it rejected the file, the compound arguments validate()
+        computes (``exp(-Ts_c - 4)`` with Ts_c in degC, ``log10(p_a + p_b)``,
+        ``tanh(x / tau)``) went unreported. Every pin must be reported, and
+        ``load_string`` itself still refuses the file."""
+        name = "units_several_errors_in_one_file.esm"
+        content = (fixtures_dir / "invalid" / name).read_text()
+        pins = json.loads((fixtures_dir / "invalid" / "expected_errors.json").read_text())
+        want = {(p["code"], p["path"]) for p in pins[name]["structural_errors"]}
+        assert len(want) == 4
+
+        result = validate_text(content)
+        assert not result.is_valid
+        assert result.schema_errors == []
+        got = {(e.code, e.path) for e in result.structural_errors}
+        assert want <= got, f"missing {sorted(want - got)}"
+        assert {code for code, _ in got} == {"unit_inconsistency"}
+        assert len(got) == len(result.structural_errors), "a finding is reported twice"
+
+        with pytest.raises(SchemaValidationError):
+            load_string(content)
+
     def test_ic_in_reaction_system_fixture_rejected(self, fixtures_dir):
         """spec §11.4.1: an `ic`-op equation inside a reaction system's
         `constraint_equations` is SCHEMA-VALID but MUST be rejected structurally

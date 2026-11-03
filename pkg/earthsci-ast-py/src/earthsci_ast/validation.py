@@ -45,6 +45,7 @@ from .esm_types import EsmFile
 from .lower_table_lookup import TableLookupError
 from .parse import SchemaValidationError, SubsystemRefError, load_path, load_string
 from .registered_functions import ClosedFunctionError
+from .structural_checks import _DEFERRED_UNIT_RECORDS
 from .units import UNIT_FINDING_ANALYSIS
 
 
@@ -316,7 +317,17 @@ def _validate_loaded(loader, base_path: str | None) -> ValidationResult:
     raises are converted into the corresponding records here. Shared verbatim by
     :func:`validate_path` and :func:`validate_text` so the two agree on every
     conversion.
+
+    A document whose only load-time findings are unit findings still loads
+    here, and ``validate()`` runs on it: the load-time unit checks look only at
+    a bare variable, while ``validate()`` computes the dimension of any
+    expression, so stopping at the first would leave a compound-argument error
+    in the same file unreported. The result carries the load-time findings and
+    then every ``validate()`` finding that is not already among them, as the
+    other bindings, whose ``validate()`` runs every unit check, report it.
     """
+    deferred_unit_records: list[dict] = []
+    token = _DEFERRED_UNIT_RECORDS.set(deferred_unit_records)
     try:
         esm_file = loader()
     except SchemaValidationError as e:
@@ -409,7 +420,25 @@ def _validate_loaded(loader, base_path: str | None) -> ValidationResult:
             schema_errors=[ValidationError(path="", message=str(e), code=ErrorCode.PARSE.value)],
             structural_errors=[],
         )
-    return validate(esm_file, base_path=base_path)
+    finally:
+        _DEFERRED_UNIT_RECORDS.reset(token)
+    result = validate(esm_file, base_path=base_path)
+    if deferred_unit_records:
+        loaded = [
+            ValidationError(
+                path=r.get("path", ""),
+                message=r.get("message", ""),
+                code=r.get("code", ""),
+                details=r.get("details", {}),
+            )
+            for r in deferred_unit_records
+        ]
+        seen = {(e.code, e.path) for e in loaded}
+        result.structural_errors = loaded + [
+            e for e in result.structural_errors if (e.code, e.path) not in seen
+        ]
+        result.is_valid = False
+    return result
 
 
 def validate_path(path: str, *, base_path: str | None = None) -> ValidationResult:
