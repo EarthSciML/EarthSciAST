@@ -117,9 +117,37 @@ function declaredShape(esmFile: EsmFile, scoped: string): string[] | undefined {
   return variable.shape ?? []
 }
 
-/** Does `shape` start with an index set of exactly two members? */
-function hasPairAxis(esmFile: EsmFile, shape: readonly string[]): boolean {
-  return shape.length > 0 && indexSetHasTwoMembers(esmFile, shape[0])
+/**
+ * Does the document still hold a `{ref}` mount, as a top-level model or as a
+ * subsystem at any depth of a model or reaction system? Mounting one merges
+ * its `index_sets` into the document's (esm-spec §4.7).
+ */
+export function hasUnmountedRefs(esmFile: EsmFile): boolean {
+  const walk = (component: unknown): boolean => {
+    if (component === null || typeof component !== 'object') return false
+    if ('ref' in component) return true
+    const subsystems = (component as { subsystems?: Record<string, unknown> }).subsystems
+    return Object.values(subsystems ?? {}).some(walk)
+  }
+  return (
+    Object.values(esmFile.models ?? {}).some(walk) ||
+    Object.values(esmFile.reaction_systems ?? {}).some(walk)
+  )
+}
+
+/**
+ * Does `shape` start with an index set of exactly two members? `undefined`
+ * when that cannot be decided yet: the first entry names an index set the
+ * document does not declare while `{ref}` mounts that may declare it remain.
+ */
+function hasPairAxis(
+  esmFile: EsmFile,
+  shape: readonly string[],
+  unmountedRefs: boolean,
+): boolean | undefined {
+  if (shape.length === 0) return false
+  if (unmountedRefs && (esmFile.index_sets ?? {})[shape[0]] === undefined) return undefined
+  return indexSetHasTwoMembers(esmFile, shape[0])
 }
 
 /** A record shape that fails rule 3, and the `param_to_var` target it came from. */
@@ -136,15 +164,17 @@ export interface RecordShapeFailure {
  * passes, or what remains cannot be decided here.
  *
  * A target whose declaration cannot be reached is not decidable and is
- * skipped. An empty record shape (own `shape` empty and no target at all) is a
- * failure unless `targetsMayArriveLater`, which validation sets when the
- * document has a `coupling_import` entry that `flatten` will expand.
+ * skipped, and so is a record shape whose first index set is undeclared while
+ * `unmountedRefs` (a mount may still declare it). An empty record shape (own
+ * `shape` empty and no target at all) is a failure unless
+ * `targetsMayArriveLater`, which validation sets when the document has a
+ * `coupling_import` entry that `flatten` will expand.
  */
 export function recordShapeFailure(
   esmFile: EsmFile,
   site: ParameterUpdateSite,
   targets: ReadonlyMap<string, readonly string[]>,
-  targetsMayArriveLater: boolean,
+  options: { targetsMayArriveLater: boolean; unmountedRefs: boolean },
 ): RecordShapeFailure | undefined {
   const { rule, variable, scopedName } = site
   if (rule.kind !== 'data') return undefined
@@ -159,14 +189,18 @@ export function recordShapeFailure(
   if (effectiveRecordsPerSample(binding, source) !== 2) return undefined
 
   const own = variable.shape ?? []
-  if (own.length > 0) return hasPairAxis(esmFile, own) ? undefined : { shape: [...own] }
+  if (own.length > 0) {
+    return hasPairAxis(esmFile, own, options.unmountedRefs) === false
+      ? { shape: [...own] }
+      : undefined
+  }
 
   const mapped = targets.get(scopedName) ?? []
-  if (mapped.length === 0) return targetsMayArriveLater ? undefined : { shape: [] }
+  if (mapped.length === 0) return options.targetsMayArriveLater ? undefined : { shape: [] }
   for (const target of mapped) {
     const shape = declaredShape(esmFile, target)
     if (shape === undefined) continue
-    if (!hasPairAxis(esmFile, shape)) return { shape, target }
+    if (hasPairAxis(esmFile, shape, options.unmountedRefs) === false) return { shape, target }
   }
   return undefined
 }

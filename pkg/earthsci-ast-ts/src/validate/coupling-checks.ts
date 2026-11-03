@@ -29,6 +29,7 @@ import { collectRoleSegments, expandCouplingImports } from '../coupling-imports.
 import { effectiveRecordsPerSample } from '../types.js'
 import {
   forEachParameterUpdate,
+  hasUnmountedRefs,
   paramToVarTargets,
   recordShapeFailure,
   recordShapeMessage,
@@ -498,6 +499,7 @@ export function validateRecordsPerSample(esmFile: EsmFile): StructuralError[] {
   const coupling = (esmFile.coupling ?? []) as Array<Record<string, unknown>>
   const targets = paramToVarTargets(coupling)
   const hasImport = coupling.some((entry) => entry?.type === 'coupling_import')
+  const unmountedRefs = hasUnmountedRefs(esmFile)
   for (const site of forEachParameterUpdate(esmFile)) {
     const { variableName, rule, path } = site
     const binding = (rule as { from?: { records_per_sample?: number } }).from
@@ -526,7 +528,10 @@ export function validateRecordsPerSample(esmFile: EsmFile): StructuralError[] {
       })
       continue
     }
-    const failure = recordShapeFailure(esmFile, site, targets, hasImport)
+    const failure = recordShapeFailure(esmFile, site, targets, {
+      targetsMayArriveLater: hasImport,
+      unmountedRefs,
+    })
     if (failure === undefined) continue
     errors.push({
       path,

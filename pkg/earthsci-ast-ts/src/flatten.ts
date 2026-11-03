@@ -70,6 +70,7 @@ import { mapChildren } from './expression.js'
 import { effectiveRecordsPerSample } from './types.js'
 import {
   forEachParameterUpdate,
+  hasUnmountedRefs,
   paramToVarTargets,
   recordShapeFailure,
   recordShapeMessage,
@@ -3253,8 +3254,12 @@ export function flatten(file: EsmFile, options: FlattenOptions = {}): FlattenedS
  */
 function checkRecordShapes(file: EsmFile, couplingEntries: readonly unknown[]): void {
   const targets = paramToVarTargets(couplingEntries)
+  const unmountedRefs = hasUnmountedRefs(file)
   for (const site of forEachParameterUpdate(file)) {
-    const failure = recordShapeFailure(file, site, targets, false)
+    const failure = recordShapeFailure(file, site, targets, {
+      targetsMayArriveLater: false,
+      unmountedRefs,
+    })
     if (failure === undefined) continue
     throw new FlattenError(
       `${site.path}: ${recordShapeMessage(site.variableName, failure)}`,
