@@ -1,7 +1,7 @@
 {
   "category": "records_per_sample",
   "version": "1.0",
-  "description": "Cross-binding conformance for a data-fed parameter's `from.records_per_sample` (esm-spec \u00a78.5.1) and the source default `temporal.records_per_sample` (\u00a78.3). The valid fixture pins, for every data-fed parameter, (a) the EFFECTIVE value each binding's `loader_fields` entry reports (the parameter's own value, else the source's, else 1) and (b) that `flatten` carries `update.from.records_per_sample` exactly as written (`null` means absent). Each invalid fixture is schema-valid and must be refused by structural validation with `records_per_sample_invalid` at the parameter's `/update` pointer. `metadata.esio_format` is carried on every source and changes nothing.",
+  "description": "Cross-binding conformance for a data-fed parameter's `from.records_per_sample` (esm-spec \u00a78.5.1) and the source default `temporal.records_per_sample` (\u00a78.3). The valid fixtures pin, for every data-fed parameter, (a) the EFFECTIVE value each binding's `loader_fields` entry reports (the parameter's own value, else the source's, else 1) and (b) that `flatten` carries `update.from.records_per_sample` exactly as written (`null` means absent). Each `invalid` fixture is schema-valid and must be refused by structural validation with exactly one `records_per_sample_invalid` at `pointer` (the rule's: `/update`, or `/update/<i>` for an array-form update). Each `flatten_invalid` fixture must pass structural validation with no `records_per_sample_invalid` and then be refused by `flatten` with that code, the message or details naming `pointer`. Each `refused` fixture must be refused with that code by validation or by flatten, whichever first sees the record shape (\u00a78.5.1 'When rule 3 is checked'). Files under `fixtures/components/` are mounted or imported by the cases and are not cases themselves. `metadata.esio_format` is carried on every source and changes nothing.",
   "bindings": [
     "julia",
     "python",
@@ -83,6 +83,36 @@
       "note": "Checks validation and `loader_fields` only. Whether flatten keeps `Met.K`'s `update` through the `param_to_var` (and with it `from.records_per_sample`) is the variable_map_data_fed tier's to pin, not this one's."
     },
     {
+      "id": "records_per_sample_coupling_import",
+      "path": "fixtures/records_per_sample_coupling_import.esm",
+      "expect": "valid",
+      "loader_fields": [
+        {
+          "name": "Met.K",
+          "source": "met_source",
+          "file_variable": "K",
+          "cadence": "discrete",
+          "records_per_sample": 2
+        }
+      ],
+      "note": "The param_to_var edge arrives through a coupling_import, so validation must defer Met.K's empty shape to flatten, and flatten finds the target [rec, x]."
+    },
+    {
+      "id": "records_per_sample_ref_target",
+      "path": "fixtures/records_per_sample_ref_target.esm",
+      "expect": "valid",
+      "loader_fields": [
+        {
+          "name": "Met.K",
+          "source": "met_source",
+          "file_variable": "K",
+          "cadence": "discrete",
+          "records_per_sample": 2
+        }
+      ],
+      "note": "The param_to_var target sits in a model mounted by ref; validation must not treat an unreachable target as an empty record shape."
+    },
+    {
       "id": "pair_from_static_source",
       "path": "fixtures/pair_from_static_source.esm",
       "expect": "invalid",
@@ -135,6 +165,51 @@
       "pointer": "/models/Met/variables/K/update",
       "variable": "K",
       "cause": "param_to_var target whose first dimension has 4 members"
+    },
+    {
+      "id": "pair_in_subsystem_without_record_axis",
+      "path": "fixtures/pair_in_subsystem_without_record_axis.esm",
+      "expect": "invalid",
+      "code": "records_per_sample_invalid",
+      "pointer": "/models/Outer/subsystems/Inner/variables/F_k/update",
+      "variable": "F_k",
+      "cause": "subsystem parameter, first dimension of size 4"
+    },
+    {
+      "id": "pair_in_update_array_without_record_axis",
+      "path": "fixtures/pair_in_update_array_without_record_axis.esm",
+      "expect": "invalid",
+      "code": "records_per_sample_invalid",
+      "pointer": "/models/Box/variables/F_k/update/1",
+      "variable": "F_k",
+      "cause": "second rule of an array-form update, first dimension of size 4"
+    },
+    {
+      "id": "pair_param_to_var_second_target_without_record_axis",
+      "path": "fixtures/pair_param_to_var_second_target_without_record_axis.esm",
+      "expect": "invalid",
+      "code": "records_per_sample_invalid",
+      "pointer": "/models/Met/variables/K/update",
+      "variable": "K",
+      "cause": "second param_to_var target whose first dimension has 4 members"
+    },
+    {
+      "id": "pair_coupling_import_without_record_axis",
+      "path": "fixtures/pair_coupling_import_without_record_axis.esm",
+      "expect": "flatten_invalid",
+      "code": "records_per_sample_invalid",
+      "pointer": "/models/Met/variables/K/update",
+      "variable": "K",
+      "cause": "imported param_to_var target whose first dimension has 4 members"
+    },
+    {
+      "id": "pair_ref_target_without_record_axis",
+      "path": "fixtures/pair_ref_target_without_record_axis.esm",
+      "expect": "refused",
+      "code": "records_per_sample_invalid",
+      "pointer": "/models/Met/variables/K/update",
+      "variable": "K",
+      "cause": "ref-mounted param_to_var target whose first dimension has 4 members"
     }
   ]
 }

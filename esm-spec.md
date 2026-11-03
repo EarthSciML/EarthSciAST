@@ -4060,8 +4060,11 @@ choice, so two parameters may read one source differently, which is why the
 field lives on `from` and the source's is only a default, as for `select`
 (§8.9.2).
 
-**Validation.** A document is invalid, `records_per_sample_invalid` at the
-parameter's `/update` pointer, when:
+**Validation.** A document is invalid, `records_per_sample_invalid`, when any
+`update` rule of a parameter at any depth (a top-level model's or a subsystem's)
+satisfies one of the conditions below. The pointer is the rule's: the
+parameter's `/update` when `update` is a single rule, and `/update/<i>` (the
+rule's 0-based position) when it is an array of rules.
 
 1. a rule whose `kind` is not `data` carries `from.records_per_sample` (only a
    `data` rule names a source to read records from);
@@ -4077,7 +4080,9 @@ The record shape is the parameter's declared `shape` when that is not empty.
 A parameter that declares an empty `shape` and is the `from` of a
 `variable_map` entry with `transform: "param_to_var"` takes, in the flattened
 system, the shape of the parameter it replaces (esm-libraries-spec §4.7.3), and
-its record shape is that target's declared `shape`. This is how a data
+its record shape is that target's declared `shape`. When it is the `from` of
+several such entries, **every** target's declared `shape` is a record shape of
+the parameter and each must satisfy rule 3. This is how a data
 component declares a field once, as a scalar, and a consumer gives it the
 record axis and the grid:
 
@@ -4091,6 +4096,23 @@ with `GEOSFP.PBLH` declared `"shape": []` and
 `"from": {"file_variable": "PBLH", "records_per_sample": 2}`, and
 `Transport3D.F_PBLH` declared `"shape": ["gf_t", "gf_lat", "gf_lon"]` with
 `gf_t` of size 2.
+
+**When rule 3 is checked.** Structural validation checks rule 3 against every
+record shape it can see in the loaded document: the parameter's own non-empty
+`shape`, and the declared `shape` of each `param_to_var` target named by an
+inline `variable_map` whose declaration resolves in the loaded document (a
+target inside a subsystem mounted by `ref` resolves once the ref is mounted,
+§4.7; a binding that validates before mounting refs treats a target it cannot
+yet reach as not decidable, never as empty). It refuses an empty record shape
+only when none can arrive later, that is, when the parameter is the `from` of
+no inline `param_to_var` entry and the document's `coupling` holds no
+`coupling_import` entry. Otherwise a record shape validation could not decide
+is checked by `flatten`, after `coupling_import` expansion (§10.10), against
+the `param_to_var` edges of the expanded coupling sequence, and refused there
+with the same `records_per_sample_invalid` code and pointer. A record shape
+that is still empty after expansion is refused there too. This is the same
+split as for a mis-bound import (§10.10.3): a bad edge is caught by
+validating it where it first exists.
 
 `flatten` carries `from.records_per_sample` as written on the flattened
 parameter's `update`, and every binding's `loader_fields` entry reports the

@@ -14,11 +14,23 @@ TypeScript, Go):
   and `flattened_from_records_per_sample` pins that the flattened parameter's
   `update.from` keeps the field exactly as written (`null` = absent). The field
   must also survive emit then load.
-- **Invalid cases** are schema-valid and must be refused by structural
-  validation with exactly one `records_per_sample_invalid` at `pointer`: a
-  non-`data` rule carrying the field, a pair from a source with no `temporal`,
-  and a pair whose record shape's first dimension is not an index set of two
-  members, whether the 2 is written on `from` or inherited from the source, and
-  whether the record shape is declared or comes from a `param_to_var` target.
+- **Invalid cases** (`expect: "invalid"`) are schema-valid and must be refused
+  by structural validation with exactly one `records_per_sample_invalid` at
+  `pointer`: a non-`data` rule carrying the field, a pair from a source with no
+  `temporal`, and a pair whose record shape's first dimension is not an index
+  set of two members, whether the 2 is written on `from` or inherited from the
+  source, whether the parameter sits in a top-level model or a subsystem,
+  whether `update` is one rule or an array (the pointer then ends in the rule's
+  index), and whether the record shape is declared or comes from a
+  `param_to_var` target (every target is checked, not just the first).
+- **Flatten-invalid cases** (`expect: "flatten_invalid"`) pass structural
+  validation and are refused by `flatten` with the same code: the target
+  arrives through a `coupling_import`, which expands only at flatten.
+- **Refused cases** (`expect: "refused"`) are refused with the code by
+  validation or by `flatten`, whichever first sees the record shape: the target
+  sits in a model mounted by `ref`.
+
+The files under `fixtures/components/` (a coupling library and two mounted
+components) are referenced by the cases and are not cases themselves.
 
 Every source carries `metadata.esio_format` (§8.1.1), which changes nothing.
