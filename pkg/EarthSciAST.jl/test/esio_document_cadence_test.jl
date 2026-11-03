@@ -93,3 +93,75 @@ end
         end
     end
 end
+
+# `_cadence_doc` with three parameters reading NEI: `pair` sets
+# `from.records_per_sample = 2` and declares the record axis `rec` (an interval
+# of size 2) first, `single` sets 1, and `inherited` sets nothing, so it takes
+# the source's `temporal.records_per_sample`.
+function _two_record_doc(dir; source_rps = nothing)
+    doc = _cadence_doc(dir)
+    doc["index_sets"] = Dict{String, Any}(
+        "rec" => Dict{String, Any}("kind" => "interval", "size" => 2),
+        "row" => Dict{String, Any}("kind" => "interval", "size" => 2),
+    )
+    source_rps === nothing ||
+        (doc["data_sources"]["NEI"]["temporal"]["records_per_sample"] = source_rps)
+    function param(shape, rps)
+        from = Dict{String, Any}("file_variable" => "NOX")
+        rps === nothing || (from["records_per_sample"] = rps)
+        return Dict{String, Any}(
+            "type" => "parameter", "units" => "mol/s", "shape" => shape,
+            "update" => Dict{String, Any}("kind" => "data", "source" => "NEI", "from" => from),
+        )
+    end
+    doc["models"]["Emis"]["variables"] = Dict{String, Any}(
+        "pair" => param(["rec", "row"], 2),
+        "single" => param(["row"], 1),
+        "inherited" => param(source_rps == 2 ? ["rec", "row"] : ["row"], nothing),
+    )
+    return doc
+end
+
+@testset "providers_from_document — from.records_per_sample reaches the provider" begin
+    if !_ESIO_HAS_ESM
+        @info "skipped: this EarthSciIO predates provider_from_esm"
+    else
+        mktempdir() do dir
+            u(y, m, d = 1, h = 0) = datetime2unix(DateTime(y, m, d, h))
+            window = (u(2016, 1), u(2016, 4))
+            subs = Dict("NEI" => Dict("sector" => "agr"))
+            provs = providers_from_document(
+                _two_record_doc(dir); cache_root = joinpath(dir, "c1"),
+                substitutions = subs, window = window
+            )
+            # February's record (at or before t) and March's, stacked along the
+            # first declared dimension.
+            @test EarthSciAST.provider_sample(provs["Emis.pair"], u(2016, 2, 15)) ==
+                [20.0 21.0; 30.0 31.0]
+            @test vec(EarthSciAST.provider_sample(provs["Emis.single"], u(2016, 2, 15))) ==
+                [20.0, 21.0]
+            @test vec(EarthSciAST.provider_sample(provs["Emis.inherited"], u(2016, 2, 15))) ==
+                [20.0, 21.0]
+
+            # The source's temporal.records_per_sample is the default; a
+            # parameter's own value overrides it.
+            inh = providers_from_document(
+                _two_record_doc(dir; source_rps = 2); cache_root = joinpath(dir, "c2"),
+                substitutions = subs, window = window
+            )
+            @test EarthSciAST.provider_sample(inh["Emis.inherited"], u(2016, 1)) ==
+                [10.0 11.0; 20.0 21.0]
+            @test vec(EarthSciAST.provider_sample(inh["Emis.single"], u(2016, 1))) ==
+                [10.0, 11.0]
+
+            # The run-time option overrides the document.
+            over = providers_from_document(
+                _two_record_doc(dir); cache_root = joinpath(dir, "c3"),
+                substitutions = subs, window = window,
+                records_per_sample = Dict("Emis.pair" => 1)
+            )
+            @test vec(EarthSciAST.provider_sample(over["Emis.pair"], u(2016, 2, 15))) ==
+                [20.0, 21.0]
+        end
+    end
+end

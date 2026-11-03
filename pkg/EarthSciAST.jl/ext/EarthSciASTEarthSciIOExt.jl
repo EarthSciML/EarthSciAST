@@ -656,6 +656,17 @@ function _data_update_rule(vd)
     return nothing
 end
 
+# The EFFECTIVE `records_per_sample` of a raw `data` rule's `from` (esm-spec
+# §8.5.1): its own value, else the source's `temporal.records_per_sample`,
+# else 1. The raw-dict mirror of `EarthSciAST._effective_records_per_sample`.
+function _raw_effective_records_per_sample(from, source)::Int
+    own = from isa AbstractDict ? get(from, "records_per_sample", nothing) : nothing
+    own === nothing || return Int(own)
+    t = source isa AbstractDict ? get(source, "temporal", nothing) : nothing
+    inherited = t isa AbstractDict ? get(t, "records_per_sample", nothing) : nothing
+    return inherited === nothing ? 1 : Int(inherited)
+end
+
 function providers_from_document(
         doc;
         cache_root::AbstractString,
@@ -791,7 +802,11 @@ function providers_from_document(
             key = b.key
             sel = _parse_declared_select(raw, "$(key).update.from", b.from)
             sel === nothing && (sel = loader_select)
-            inner = make_provider([spec.file_variable], get(records_per_sample, key, nothing))
+            # The parameter's effective value from the document; an entry in
+            # the run-time `records_per_sample` overrides it.
+            rps = get(records_per_sample, key, nothing)
+            rps === nothing && (rps = _raw_effective_records_per_sample(b.from, ld))
+            inner = make_provider([spec.file_variable], rps)
             # A declared select goes to the reader when it can fetch pre-sliced
             # AND no rows are filtered in front of it; otherwise engine-side.
             # Where it is applied is an optimization, never a semantic.

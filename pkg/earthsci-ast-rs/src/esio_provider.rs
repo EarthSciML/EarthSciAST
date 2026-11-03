@@ -756,7 +756,14 @@ pub struct DocumentProviderOptions {
     pub substitutions: HashMap<String, std::collections::BTreeMap<String, String>>,
     /// The run window (UTC) bounding each time-varying provider.
     pub window: Option<earthsciio::Window>,
-    /// Consuming parameter key ⇒ records per sample (1, or 2 for the bracket).
+    /// Consuming parameter key ⇒ records per sample (1, or 2 for the bracket),
+    /// a run-time override. Without an entry a parameter receives its
+    /// EFFECTIVE value from the document (esm-spec §8.5.1): its own
+    /// `update.from.records_per_sample`, else the source's
+    /// `temporal.records_per_sample`, else 1. With 2 the provider returns the
+    /// record at or before `t` and the next one, stacked along the first
+    /// dimension. Each consuming parameter has its own provider, so two
+    /// parameters may read one source with different values.
     pub records_per_sample: HashMap<String, u32>,
 }
 
@@ -1107,6 +1114,25 @@ mod prepare_impl {
         )
     }
 
+    /// The EFFECTIVE `records_per_sample` of a raw `data` rule's `from`
+    /// (esm-spec §8.5.1): its own value, else the source's
+    /// `temporal.records_per_sample`, else 1. The raw-JSON mirror of
+    /// `flatten::effective_records_per_sample`.
+    fn raw_effective_records_per_sample(
+        from: &serde_json::Value,
+        source: &serde_json::Value,
+    ) -> u32 {
+        from.get("records_per_sample")
+            .and_then(serde_json::Value::as_u64)
+            .or_else(|| {
+                source
+                    .get("temporal")
+                    .and_then(|t| t.get("records_per_sample"))
+                    .and_then(serde_json::Value::as_u64)
+            })
+            .map_or(1, |n| n as u32)
+    }
+
     /// [`providers_from_document`] with every run-time option: the custom
     /// substitutions per source, the run window (UTC) bounding each
     /// time-varying provider's refresh times, and the two-record bracket per
@@ -1240,10 +1266,14 @@ mod prepare_impl {
 
             for (spec, b) in columns.iter().zip(consumers) {
                 let key = &b.key;
-                let loader = make_loader(
-                    vec![spec.file_variable.clone()],
-                    opts.records_per_sample.get(key.as_str()).copied(),
-                )?;
+                // The parameter's effective value from the document; an entry
+                // in the run-time `records_per_sample` overrides it.
+                let rps = opts
+                    .records_per_sample
+                    .get(key.as_str())
+                    .copied()
+                    .unwrap_or_else(|| raw_effective_records_per_sample(b.from, ld));
+                let loader = make_loader(vec![spec.file_variable.clone()], Some(rps))?;
                 let mut builder = EsioProvider::builder(loader, cache.clone())
                     .var(spec.file_variable.clone(), key.clone());
                 if let Some(w) = opts.window {

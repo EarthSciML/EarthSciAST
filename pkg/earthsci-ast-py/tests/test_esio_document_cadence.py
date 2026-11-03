@@ -114,3 +114,78 @@ def test_the_two_record_bracket_is_the_consumers_choice(tmp_path):
     )
     got = provs["Emis.nox"].sample(_ts(2016, 2, 15))
     np.testing.assert_array_equal(got, [[40.0, 42.0], [60.0, 62.0]])
+
+
+def _two_record_doc(tmp_path, *, source_rps=None):
+    """`_doc` with three parameters reading NEI, declared with the record axis
+    `rec` (an interval of size 2) first: `pair` sets
+    `from.records_per_sample: 2`, `single` sets 1, and `inherited` sets
+    nothing, so it takes the source's `temporal.records_per_sample`."""
+    doc = _doc(tmp_path)
+    doc["index_sets"] = {
+        "rec": {"kind": "interval", "size": 2},
+        "row": {"kind": "interval", "size": 2},
+    }
+    if source_rps is not None:
+        doc["data_sources"]["NEI"]["temporal"]["records_per_sample"] = source_rps
+
+    def param(shape, rps):
+        frm = {"file_variable": "NOX"}
+        if rps is not None:
+            frm["records_per_sample"] = rps
+        return {
+            "type": "parameter",
+            "units": "mol/s",
+            "shape": shape,
+            "update": {"kind": "data", "source": "NEI", "from": frm},
+        }
+
+    doc["models"]["Emis"]["variables"] = {
+        "pair": param(["rec", "row"], 2),
+        "single": param(["row"], 1),
+        "inherited": param(["rec", "row"] if source_rps == 2 else ["row"], None),
+    }
+    return doc
+
+
+def _two_record_providers(tmp_path, **kw):
+    window = (_dt.datetime(2016, 1, 1, tzinfo=UTC), _dt.datetime(2016, 4, 1, tzinfo=UTC))
+    return providers_from_document(
+        _two_record_doc(tmp_path, **kw),
+        cache_root=str(tmp_path / "cache"),
+        substitutions={"NEI": {"sector": "agr"}},
+        window=window,
+    )
+
+
+def test_a_two_record_parameter_gets_the_records_before_and_after_t(tmp_path):
+    provs = _two_record_providers(tmp_path)
+    # from.records_per_sample = 2: February's record (at or before t) and
+    # March's, stacked along the first declared dimension.
+    np.testing.assert_array_equal(
+        provs["Emis.pair"].sample(_ts(2016, 2, 15)), [[20.0, 21.0], [30.0, 31.0]]
+    )
+    # The same source read with 1 record, by an explicit 1 and by default.
+    np.testing.assert_array_equal(provs["Emis.single"].sample(_ts(2016, 2, 15)), [20.0, 21.0])
+    np.testing.assert_array_equal(provs["Emis.inherited"].sample(_ts(2016, 2, 15)), [20.0, 21.0])
+
+
+def test_the_sources_records_per_sample_is_the_default(tmp_path):
+    provs = _two_record_providers(tmp_path, source_rps=2)
+    np.testing.assert_array_equal(
+        provs["Emis.inherited"].sample(_ts(2016, 1, 1)), [[10.0, 11.0], [20.0, 21.0]]
+    )
+    # A parameter's own value overrides the source's.
+    np.testing.assert_array_equal(provs["Emis.single"].sample(_ts(2016, 1, 1)), [10.0, 11.0])
+
+
+def test_the_run_time_option_overrides_the_document(tmp_path):
+    window = (_dt.datetime(2016, 1, 1, tzinfo=UTC), _dt.datetime(2016, 4, 1, tzinfo=UTC))
+    provs = providers_from_document(
+        _two_record_doc(tmp_path),
+        cache_root=str(tmp_path / "cache"),
+        substitutions={"NEI": {"sector": "agr"}},
+        window=window,
+        records_per_sample={"Emis.pair": 1},
+    )
+    np.testing.assert_array_equal(provs["Emis.pair"].sample(_ts(2016, 2, 15)), [20.0, 21.0])

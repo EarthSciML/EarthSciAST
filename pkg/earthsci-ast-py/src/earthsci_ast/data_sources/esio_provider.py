@@ -916,13 +916,23 @@ def providers_from_document(
     ``substitutions[source]`` binds the custom ``{name}`` placeholders a mount's
     ``url_substitutions`` left (reseact's NEI 2016 ``{sector}``). ``window`` is
     the run's ``(start, end)`` in UTC datetimes, bounding ``refresh_times``.
-    ``records_per_sample`` maps a consuming parameter's key to 1 or 2 (the
-    two-record bracket); the default is 1.
+
+    How many records each parameter receives at a query time is the
+    parameter's EFFECTIVE ``records_per_sample`` (esm-spec §8.5.1): its own
+    ``update.from.records_per_sample``, else the source's
+    ``temporal.records_per_sample``, else 1. With 2 the provider returns the
+    record at or before ``t`` and the next one, stacked along the first axis.
+    Each consuming parameter has its own provider, so two parameters may read
+    one source with different values. The ``records_per_sample`` argument
+    (consuming parameter key -> 1 or 2) is a run-time override: an entry in it
+    replaces the document's effective value for that parameter.
     """
     import json
     import os as _os
 
     import earthsciio as esio
+
+    from ..structural_checks import _effective_records_per_sample
 
     if isinstance(doc, (str, bytes)):
         with open(doc) as fh:
@@ -1045,6 +1055,8 @@ def providers_from_document(
             # the declared decode options against the bound reader at Provider
             # construction (spec/registries.md §2.1, FORMAT-08-A-006).
             rps = (records_per_sample or {}).get(key)
+            if rps is None:
+                rps = _effective_records_per_sample(binding, ld)
             inner = esio.Provider(_loader([spec.file_variable], rps), cache, window)
             out[key] = EsioDocumentProvider(
                 key,

@@ -194,8 +194,15 @@ Keywords:
     NEI 2016 `{sector}`). An unbound one is an error, not a fetch.
   * `window` — the run's `(start, stop)` in UTC (`DateTime`s or Unix seconds),
     bounding each time-varying provider's `provider_refresh_times`.
-  * `records_per_sample` — consuming parameter key ⇒ 1 or 2 (the two-record
-    bracket a model interpolates between); default 1.
+  * `records_per_sample` — consuming parameter key ⇒ 1 or 2, a run-time
+    override. Without an entry, a parameter receives its EFFECTIVE
+    `records_per_sample` from the document (esm-spec §8.5.1): its own
+    `update.from.records_per_sample`, else the source's
+    `temporal.records_per_sample`, else 1. With 2 the provider returns the
+    record at or before `t` and the next one, stacked along the first
+    dimension (the two-record bracket a model interpolates between). Each
+    consuming parameter has its own provider, so two parameters may read one
+    source with different values.
 
 Implemented by the EarthSciIO extension — load `EarthSciIO` alongside
 EarthSciAST so the `EarthSciASTEarthSciIOExt` extension defines the method

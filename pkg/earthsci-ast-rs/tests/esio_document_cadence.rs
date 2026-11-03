@@ -155,3 +155,106 @@ fn the_two_record_bracket_is_the_consumers_choice() {
     // 2016-02-15: [Feb, Mar] along the record axis, first
     assert_eq!(values(p, 1455494400.0), vec![40.0, 42.0, 60.0, 62.0]);
 }
+
+/// `doc` with three parameters reading NEI: `pair` sets
+/// `from.records_per_sample: 2` and declares the record axis `rec` (an interval
+/// of size 2) first, `single` sets 1, and `inherited` sets nothing, so it takes
+/// the source's `temporal.records_per_sample`.
+fn two_record_doc(dir: &Path, source_rps: Option<u32>) -> Value {
+    let mut d = doc(dir);
+    d["index_sets"] = json!({
+        "rec": {"kind": "interval", "size": 2},
+        "row": {"kind": "interval", "size": 2}
+    });
+    if let Some(n) = source_rps {
+        d["data_sources"]["NEI"]["temporal"]["records_per_sample"] = json!(n);
+    }
+    let param = |shape: Value, rps: Option<u32>| {
+        let mut from = json!({"file_variable": "NOX"});
+        if let Some(n) = rps {
+            from["records_per_sample"] = json!(n);
+        }
+        json!({"type": "parameter", "units": "mol/s", "shape": shape,
+               "update": {"kind": "data", "source": "NEI", "from": from}})
+    };
+    let inherited_shape = if source_rps == Some(2) {
+        json!(["rec", "row"])
+    } else {
+        json!(["row"])
+    };
+    d["models"]["Emis"]["variables"] = json!({
+        "pair": param(json!(["rec", "row"]), Some(2)),
+        "single": param(json!(["row"]), Some(1)),
+        "inherited": param(inherited_shape, None),
+    });
+    d
+}
+
+/// The values and the shape of the one field `p` returns at `t`.
+fn field(p: &mut dyn CadenceProvider, t: f64) -> (Vec<f64>, Vec<usize>) {
+    let fields = p.refresh(t).unwrap().expect("a sample");
+    let f = fields.values().next().unwrap();
+    (f.array.iter().copied().collect(), f.array.shape().to_vec())
+}
+
+fn by_key(provs: &[(String, earthsci_ast::esio_provider::EsioProvider)], key: &str) -> usize {
+    provs.iter().position(|(k, _)| k == key).expect(key)
+}
+
+#[test]
+fn a_two_record_parameter_gets_the_records_before_and_after_t() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut provs = providers_from_document_with(
+        &two_record_doc(dir.path(), None),
+        &dir.path().join("cache"),
+        &options(None),
+    )
+    .unwrap();
+    let feb15 = 1455494400.0;
+    // February's record (at or before t) and March's, stacked along the first
+    // declared dimension.
+    let i = by_key(&provs, "Emis.pair");
+    assert_eq!(
+        field(&mut provs[i].1, feb15),
+        (vec![20.0, 21.0, 30.0, 31.0], vec![2, 2])
+    );
+    for key in ["Emis.single", "Emis.inherited"] {
+        let i = by_key(&provs, key);
+        assert_eq!(field(&mut provs[i].1, feb15).0, vec![20.0, 21.0], "{key}");
+    }
+}
+
+#[test]
+fn the_sources_records_per_sample_is_the_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut provs = providers_from_document_with(
+        &two_record_doc(dir.path(), Some(2)),
+        &dir.path().join("cache"),
+        &options(None),
+    )
+    .unwrap();
+    let jan1 = 1451606400.0;
+    let i = by_key(&provs, "Emis.inherited");
+    assert_eq!(
+        field(&mut provs[i].1, jan1),
+        (vec![10.0, 11.0, 20.0, 21.0], vec![2, 2])
+    );
+    // A parameter's own value overrides the source's.
+    let i = by_key(&provs, "Emis.single");
+    assert_eq!(field(&mut provs[i].1, jan1).0, vec![10.0, 11.0]);
+}
+
+#[test]
+fn the_run_time_option_overrides_the_document() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut opts = options(None);
+    opts.records_per_sample.insert("Emis.pair".to_string(), 1);
+    let mut provs = providers_from_document_with(
+        &two_record_doc(dir.path(), None),
+        &dir.path().join("cache"),
+        &opts,
+    )
+    .unwrap();
+    let i = by_key(&provs, "Emis.pair");
+    assert_eq!(field(&mut provs[i].1, 1455494400.0).0, vec![20.0, 21.0]);
+}
