@@ -8,14 +8,12 @@ import { ERROR_CODES } from '../errors.js'
 import type {
   EsmFile,
   Model,
-  ModelVariable,
   ReactionSystem,
   Expression,
   CouplingOperatorCompose,
   CouplingCouple,
   CouplingVariableMap,
   SubsystemRef,
-  ParameterUpdate,
   CouplingEntry,
   CouplingImport,
 } from '../types.js'
@@ -28,6 +26,13 @@ import {
 } from './expr-utils.js'
 import { isExpressionLike } from '../traverse.js'
 import { collectRoleSegments, expandCouplingImports } from '../coupling-imports.js'
+import { effectiveRecordsPerSample } from '../types.js'
+import {
+  forEachParameterUpdate,
+  paramToVarTargets,
+  recordShapeFailure,
+  recordShapeMessage,
+} from '../records-per-sample.js'
 
 /**
  * Flag any `{ref}` (unresolved SubsystemRef) entries in one component's
@@ -441,55 +446,6 @@ export function validateCircularReferences(esmFile: EsmFile): StructuralError[] 
 }
 
 /**
- * Every `(variableName, update-rule, jsonPointer)` in the document, including
- * subsystems. A parameter's `update` is either ONE rule object or an ordered
- * array of two or more, and the pointer reflects which: the object form points
- * at `update` itself, the array form at `update/<i>`.
- */
-interface ParameterUpdateSite {
-  variableName: string
-  /** The parameter's scoped name, `Model[.Sub…].var`. */
-  scopedName: string
-  variable: ModelVariable
-  rule: ParameterUpdate
-  path: string
-}
-
-function* forEachParameterUpdate(esmFile: EsmFile): Generator<ParameterUpdateSite> {
-  function* walkModel(
-    model: Model,
-    modelPath: string,
-    scope: string,
-  ): Generator<ParameterUpdateSite> {
-    for (const [variableName, variable] of Object.entries(model.variables ?? {})) {
-      if (variable?.type !== 'parameter' || variable.update === undefined) continue
-      const base = `${modelPath}/variables/${variableName}/update`
-      const scopedName = `${scope}.${variableName}`
-      if (Array.isArray(variable.update)) {
-        for (const [i, rule] of variable.update.entries()) {
-          yield { variableName, scopedName, variable, rule, path: `${base}/${i}` }
-        }
-      } else {
-        yield { variableName, scopedName, variable, rule: variable.update, path: base }
-      }
-    }
-    for (const [childName, child] of Object.entries(model.subsystems ?? {})) {
-      if (child === null || typeof child !== 'object' || 'ref' in child) continue
-      yield* walkModel(
-        child as Model,
-        `${modelPath}/subsystems/${childName}`,
-        `${scope}.${childName}`,
-      )
-    }
-  }
-
-  for (const [modelName, model] of Object.entries(esmFile.models ?? {})) {
-    if (model === null || typeof model !== 'object' || 'ref' in model) continue
-    yield* walkModel(model as Model, `/models/${modelName}`, modelName)
-  }
-}
-
-/**
  * `data_source_undefined` - a parameter's `update.source` names no entry in the
  * document's top-level `data_sources` (esm-spec 5.5).
  *
@@ -523,53 +479,15 @@ export function validateDataSourceReferences(esmFile: EsmFile): StructuralError[
 }
 
 /**
- * The EFFECTIVE `records_per_sample` of a `data` rule (esm-spec §8.5.1): the
- * binding's `from.records_per_sample`, else the source's
- * `temporal.records_per_sample`, else 1.
- */
-export function effectiveRecordsPerSample(
-  binding: { records_per_sample?: number } | undefined,
-  source: { temporal?: { records_per_sample?: number } } | undefined,
-): 1 | 2 {
-  const value = binding?.records_per_sample ?? source?.temporal?.records_per_sample ?? 1
-  return value === 2 ? 2 : 1
-}
-
-/** Is index set `name` an `interval` of size 2 or a `categorical` of two members? */
-function indexSetHasTwoMembers(esmFile: EsmFile, name: string | undefined): boolean {
-  if (name === undefined) return false
-  const set = (esmFile.index_sets ?? {})[name] as
-    { kind?: string; size?: unknown; members?: unknown[] } | undefined
-  if (set === undefined) return false
-  if (set.kind === 'interval') return set.size === 2
-  if (set.kind === 'categorical') return Array.isArray(set.members) && set.members.length === 2
-  return false
-}
-
-/** The declared `shape` of the model variable a scoped name names, if any. */
-function declaredShape(esmFile: EsmFile, scoped: string): string[] | undefined {
-  const parts = scoped.split('.')
-  if (parts.length < 2) return undefined
-  const [head, ...tail] = parts
-  const model = esmFile.models?.[head]
-  if (!model || 'ref' in model) return undefined
-  let current: Model = model as Model
-  for (const segment of tail.slice(0, -1)) {
-    const sub = current.subsystems?.[segment]
-    if (!sub || 'ref' in sub || 'kind' in sub) return undefined
-    current = sub as Model
-  }
-  return current.variables?.[tail[tail.length - 1]]?.shape ?? undefined
-}
-
-/**
- * `records_per_sample_invalid` (esm-spec §8.5.1): `from.records_per_sample` on
- * a rule that is not `data`; or an EFFECTIVE value of 2 on a parameter whose
- * source declares no `temporal` block, or whose record shape's first dimension
- * is not an index set of exactly two members. The record shape is the declared
- * `shape`, or, for a parameter declaring an empty one that a `param_to_var`
- * `variable_map` entry maps onto another parameter, that target's declared
- * `shape`.
+ * `records_per_sample_invalid` (esm-spec §8.5.1), checked on every `update`
+ * rule at any depth: `from.records_per_sample` on a rule that is not `data`; or
+ * an EFFECTIVE value of 2 on a parameter whose source declares no `temporal`
+ * block, or whose record shape's first dimension is not an index set of exactly
+ * two members. The record shape is the declared `shape`, or, for a parameter
+ * declaring an empty one, the declared `shape` of EVERY inline `param_to_var`
+ * target it is the `from` of. A target this document cannot reach is left to
+ * `flatten`, and so is an empty record shape when a `coupling_import` may
+ * supply the edge (see {@link recordShapeFailure}).
  */
 export function validateRecordsPerSample(esmFile: EsmFile): StructuralError[] {
   const errors: StructuralError[] = []
@@ -577,21 +495,11 @@ export function validateRecordsPerSample(esmFile: EsmFile): StructuralError[] {
     string,
     { temporal?: { records_per_sample?: number } }
   >
-  const p2vTarget = new Map<string, string>()
-  for (const entry of (esmFile.coupling ?? []) as Array<Record<string, unknown>>) {
-    if (
-      entry?.type === 'variable_map' &&
-      entry.transform === 'param_to_var' &&
-      typeof entry.from === 'string' &&
-      typeof entry.to === 'string' &&
-      !p2vTarget.has(entry.from)
-    ) {
-      p2vTarget.set(entry.from, entry.to)
-    }
-  }
-  for (const { variableName, scopedName, variable, rule, path } of forEachParameterUpdate(
-    esmFile,
-  )) {
+  const coupling = (esmFile.coupling ?? []) as Array<Record<string, unknown>>
+  const targets = paramToVarTargets(coupling)
+  const hasImport = coupling.some((entry) => entry?.type === 'coupling_import')
+  for (const site of forEachParameterUpdate(esmFile)) {
+    const { variableName, rule, path } = site
     const binding = (rule as { from?: { records_per_sample?: number } }).from
     if (binding === undefined) continue
     if (rule.kind !== 'data') {
@@ -618,17 +526,17 @@ export function validateRecordsPerSample(esmFile: EsmFile): StructuralError[] {
       })
       continue
     }
-    let shape: string[] = variable.shape ?? []
-    if (shape.length === 0) {
-      const target = p2vTarget.get(scopedName)
-      if (target !== undefined) shape = declaredShape(esmFile, target) ?? []
-    }
-    if (shape.length > 0 && indexSetHasTwoMembers(esmFile, shape[0])) continue
+    const failure = recordShapeFailure(esmFile, site, targets, hasImport)
+    if (failure === undefined) continue
     errors.push({
       path,
       code: ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
-      message: `Parameter '${variableName}' asks for two records per sample, so its first dimension must be an index set of exactly two members; its record shape is ${JSON.stringify(shape)}`,
-      details: { variable: variableName, shape },
+      message: recordShapeMessage(variableName, failure),
+      details: {
+        variable: variableName,
+        shape: failure.shape,
+        ...(failure.target === undefined ? {} : { target: failure.target }),
+      },
     })
   }
   return errors

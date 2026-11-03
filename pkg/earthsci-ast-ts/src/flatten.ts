@@ -67,7 +67,13 @@ import type { Distribution, ParameterUpdateSpec } from './types.js'
 import { numericValue } from './numeric-literal.js'
 import { expandCouplingImports, type CouplingImportOptions } from './coupling-imports.js'
 import { mapChildren } from './expression.js'
-import { effectiveRecordsPerSample } from './validate/coupling-checks.js'
+import { effectiveRecordsPerSample } from './types.js'
+import {
+  forEachParameterUpdate,
+  paramToVarTargets,
+  recordShapeFailure,
+  recordShapeMessage,
+} from './records-per-sample.js'
 import {
   angleNormalizationFactor,
   checkElementDimensions,
@@ -115,8 +121,12 @@ export type FlattenOptions = CouplingImportOptions
  * parity.
  */
 export class FlattenError extends EsmDiagnosticError {
-  constructor(message: string, code: string = ERROR_CODES.FLATTEN_ERROR) {
-    super(code, message)
+  constructor(
+    message: string,
+    code: string = ERROR_CODES.FLATTEN_ERROR,
+    details?: Record<string, unknown>,
+  ) {
+    super(code, message, details)
     this.name = 'FlattenError'
   }
 }
@@ -3173,6 +3183,11 @@ export function flatten(file: EsmFile, options: FlattenOptions = {}): FlattenedS
   // `coupling` array verbatim and needs no options.
   const couplingEntries = expandCouplingImports(file, options) ?? []
 
+  // esm-spec §8.5.1 "When rule 3 is checked": a record shape validation could
+  // not see (an imported `param_to_var` edge) is judged against the expanded
+  // sequence.
+  checkRecordShapes(file, couplingEntries)
+
   // Preflight: reject an `identity` variable_map bridging different declared
   // units (§4.7.6). Runs over the expanded list so imported edges are checked.
   checkVariableMapUnits(file, couplingEntries)
@@ -3226,6 +3241,32 @@ export function flatten(file: EsmFile, options: FlattenOptions = {}): FlattenedS
   normalizeFlattenedAngleArguments(flat)
 
   return flat
+}
+
+/**
+ * `records_per_sample_invalid` at flatten (esm-spec §8.5.1): every data-fed
+ * parameter with an effective 2 must have a record shape whose first dimension
+ * is an index set of two members, judged against `couplingEntries`, the
+ * `coupling_import`-expanded sequence. An empty record shape is refused here,
+ * since no edge can arrive later. Throws a {@link FlattenError} carrying the
+ * code and the rule's pointer.
+ */
+function checkRecordShapes(file: EsmFile, couplingEntries: readonly unknown[]): void {
+  const targets = paramToVarTargets(couplingEntries)
+  for (const site of forEachParameterUpdate(file)) {
+    const failure = recordShapeFailure(file, site, targets, false)
+    if (failure === undefined) continue
+    throw new FlattenError(
+      `${site.path}: ${recordShapeMessage(site.variableName, failure)}`,
+      ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
+      {
+        path: site.path,
+        variable: site.variableName,
+        shape: failure.shape,
+        ...(failure.target === undefined ? {} : { target: failure.target }),
+      },
+    )
+  }
 }
 
 /**

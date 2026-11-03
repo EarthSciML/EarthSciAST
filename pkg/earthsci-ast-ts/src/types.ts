@@ -315,6 +315,19 @@ export interface DataSourceBinding {
 }
 
 /**
+ * The EFFECTIVE `records_per_sample` of a `data` rule (esm-spec §8.5.1): the
+ * binding's `from.records_per_sample`, else the source's
+ * `temporal.records_per_sample`, else 1.
+ */
+export function effectiveRecordsPerSample(
+  binding: { records_per_sample?: number } | undefined,
+  source: { temporal?: { records_per_sample?: number } } | undefined,
+): 1 | 2 {
+  const value = binding?.records_per_sample ?? source?.temporal?.records_per_sample ?? 1
+  return value === 2 ? 2 : 1
+}
+
+/**
  * The value form every non-`wiener` update kind takes EXACTLY ONE of: computed
  * symbolically (`expression`), read from a data source (`from`), or produced by
  * a registered handler (`handler`).
