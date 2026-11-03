@@ -1301,6 +1301,13 @@ def _build_symbol_tables(data: dict[str, Any]) -> dict[str, Any]:
 
     reaction_systems = {}
     for rsname, rs in data.get("reaction_systems", {}).items():
+        # A top-level reaction system mounted by reference (§4.7 "Two mount
+        # forms, one mechanism"): its species live in another file, so it is a
+        # known system whose symbols are checked after resolution, as above.
+        if isinstance(rs, dict) and "ref" in rs and "species" not in rs:
+            ref_systems.add(rsname)
+            reaction_systems[rsname] = {}
+            continue
         sym_info = {}
         for sname, sdef in rs.get("species", {}).items():
             sym_info[sname] = {"type": "species", **sdef}

@@ -428,10 +428,10 @@ export const ERROR_CODES = {
    */
   DATA_SOURCE_MERGE_CONFLICT: 'data_source_merge_conflict',
   /**
-   * A §4.7 `{ ref }` mount at a form this binding does not implement — a
-   * top-level `reaction_systems.<k>` `{ ref }` (esm-spec §4.7 "Two mount forms,
-   * one mechanism"). Refused at `/reaction_systems/<k>` rather than left as an
-   * unresolved stub.
+   * A §4.7 `{ ref }` mount at a form a binding does not implement. Every
+   * binding mounts both top-level forms, `models.<k>` and `reaction_systems.<k>`
+   * (esm-spec §4.7 "Two mount forms, one mechanism"), so this binding never
+   * raises it; the code stays because the table is cross-language uniform.
    */
   MOUNT_FORM_UNSUPPORTED: 'mount_form_unsupported',
   /**

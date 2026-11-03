@@ -1,6 +1,9 @@
 package esm
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 // ---------------------------------------------------------------------------
 // Ordered-map helper (Go maps are unordered; declaration order is normative)
@@ -88,12 +91,13 @@ func sortedKeys[V any](m map[string]V) []string {
 // back to the file — can iterate species in declaration order (API_SPEC.md
 // §5.10).
 //
-// Only top-level `/reaction_systems/<name>` systems are reached. A system
-// mounted as a SUBSYSTEM is held as `any` and decoded on demand by
-// decodeSubsystemAs, so there is no persistent struct to attach an order to;
-// those fall back to sorted-name order, exactly as ESMFile.declarationOrder
-// already documents for a `{"ref": ...}` mount. Flatten is unaffected either
-// way: it walks subsystems with the file in hand and reads keyOrders directly.
+// Only top-level `/reaction_systems/<name>` systems are reached (a top-level
+// `{ref}` mount resolved after load gets its order from
+// landTopLevelReactionSystem instead). A system mounted as a SUBSYSTEM is held
+// as `any` and decoded on demand by decodeSubsystemAs, so there is no persistent
+// struct to attach an order to, and DeriveODEs on such a decode falls back to
+// sorted-name order. Flatten is unaffected either way: it walks subsystems with
+// the file in hand and reads keyOrders directly.
 func attachSpeciesOrders(file *ESMFile) {
 	if file == nil || file.keyOrders == nil {
 		return
@@ -105,5 +109,38 @@ func attachSpeciesOrders(file *ESMFile) {
 		}
 		rs.speciesOrder = order
 		file.ReactionSystems[name] = rs
+	}
+}
+
+// subtreeOrders returns the entries of a key-order table (ESMFile.keyOrders,
+// extractTemplateOrders) at or under the pointer `at`, keyed relative to it:
+// "" for `at` itself, "/species" for `at`+"/species", and so on.
+func subtreeOrders(orders map[string][]string, at string) map[string][]string {
+	out := map[string][]string{}
+	for p, keys := range orders {
+		if p == at {
+			out[""] = keys
+		} else if strings.HasPrefix(p, at+"/") {
+			out[p[len(at):]] = keys
+		}
+	}
+	return out
+}
+
+// graftOrders replaces the entries of `orders` at or under the pointer `at`
+// with `sub` (a subtreeOrders result) re-keyed under `at`. A mount puts a
+// component from ANOTHER document at `at`; this carries that document's
+// declaration order to the new position. A nil `orders` is left alone.
+func graftOrders(orders map[string][]string, at string, sub map[string][]string) {
+	if orders == nil {
+		return
+	}
+	for p := range orders {
+		if p == at || strings.HasPrefix(p, at+"/") {
+			delete(orders, p)
+		}
+	}
+	for rel, keys := range sub {
+		orders[at+rel] = keys
 	}
 }

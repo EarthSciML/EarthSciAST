@@ -4000,12 +4000,13 @@ fn relative_to_cwd(path: &std::path::Path) -> String {
         .to_string()
 }
 
-/// The top-level `models.<k>` MOUNT EDGES a document declares in its SOURCE, as
-/// `"<k> ← <ref>"` lines in document order.
+/// The top-level `models.<k>` and `reaction_systems.<k>` MOUNT EDGES a document
+/// declares in its SOURCE, as `"<k> ← <ref>"` lines in document order (models
+/// first).
 ///
 /// Read from the raw file because a LOADED document no longer shows them: the
-/// mount splices the referenced leaf's model in under the same key (§4.7 /
-/// §9.7.10), leaving nothing to distinguish it from a model the document wrote
+/// mount splices the referenced leaf's component in under the same key (§4.7 /
+/// §9.7.10), leaving nothing to distinguish it from one the document wrote
 /// itself. `esm test` reports them so the §6.6 rule — a mount does not carry the
 /// mounted component's inline tests — is VISIBLE rather than silent: the reader
 /// is told which components were not asserted on here, and where their own
@@ -4020,17 +4021,27 @@ fn mounted_components(path: &std::path::Path) -> Vec<String> {
     let Ok(raw) = serde_json::from_str::<serde_json::Value>(&text) else {
         return Vec::new();
     };
-    let Some(models) = raw.get("models").and_then(|v| v.as_object()) else {
-        return Vec::new();
-    };
-    models
-        .iter()
-        // The mount-edge shape `inline_toplevel_model_refs` recognises: a `ref`
-        // and no inline `variables`.
-        .filter(|(_, m)| m.get("ref").is_some() && m.get("variables").is_none())
-        .map(|(k, m)| {
-            let target = m.get("ref").and_then(|v| v.as_str()).unwrap_or("<ref>");
-            format!("{k} ← {target}")
+    // The mount-edge shape `ref_loading::inline_toplevel_refs` recognises: a
+    // string `ref` and no inline `variables` (a model) or `species` (a reaction
+    // system).
+    [("models", "variables"), ("reaction_systems", "species")]
+        .into_iter()
+        .filter_map(|(block, inline_key)| {
+            raw.get(block)
+                .and_then(|v| v.as_object())
+                .map(|systems| (systems, inline_key))
+        })
+        .flat_map(|(systems, inline_key)| {
+            systems
+                .iter()
+                .filter(move |(_, m)| {
+                    m.get("ref").is_some_and(serde_json::Value::is_string)
+                        && m.get(inline_key).is_none()
+                })
+                .map(|(k, m)| {
+                    let target = m.get("ref").and_then(|v| v.as_str()).unwrap_or("<ref>");
+                    format!("{k} ← {target}")
+                })
         })
         .collect()
 }
@@ -4499,6 +4510,113 @@ fn structural_error_json(e: &earthsci_ast::StructuralError) -> serde_json::Value
     })
 }
 
+/// Recover a failed top-level `models.<k>` / `reaction_systems.<k>` `{ref}`
+/// mount (esm-spec §4.7 "Two mount forms, one mechanism") as a structured
+/// `(code, path)` finding at the entry, `/<block>/<k>`, when the load aborted.
+///
+/// The library's load error carries the diagnostic code but not the entry it
+/// failed at, so the producer re-reads each mount edge against the file's own
+/// directory. An edge is an entry whose `ref` is a string and which carries no
+/// inline body (`variables` for a model, `species` for a reaction system) —
+/// the edge test `ref_loading::inline_toplevel_refs` applies. It is a finding
+/// when the referenced file is remote, missing, unreadable or not JSON, has no
+/// component of the form's kind, has several and no selector, or has none
+/// under the name the selector (`model` / `reaction_system`) gives. Each is
+/// `unresolved_subsystem_ref`, the code the library raises at both forms. An
+/// edge that resolves contributes nothing; the load failed for another reason.
+fn collect_toplevel_mount_errors(
+    content: &str,
+    file_path: &std::path::Path,
+) -> Vec<earthsci_ast::StructuralError> {
+    use earthsci_ast::{StructuralError, StructuralErrorCode};
+    let mut out = Vec::new();
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(content) else {
+        return out;
+    };
+    let base = file_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+
+    let forms = [
+        ("models", "variables", "model", "model"),
+        (
+            "reaction_systems",
+            "species",
+            "reaction_system",
+            "reaction system",
+        ),
+    ];
+    for (block, inline_key, selector, noun) in forms {
+        let Some(entries) = json.get(block).and_then(|v| v.as_object()) else {
+            continue;
+        };
+        for (name, entry) in entries {
+            let Some(ref_str) = entry.get("ref").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            if entry.get(inline_key).is_some() {
+                continue;
+            }
+            let sel = entry.get(selector).and_then(|v| v.as_str());
+            let Some(reason) = toplevel_mount_failure(ref_str, base, block, sel, noun) else {
+                continue;
+            };
+            let mut details = serde_json::json!({ "ref": ref_str });
+            if let Some(sel) = sel {
+                details[selector] = serde_json::json!(sel);
+            }
+            out.push(StructuralError {
+                path: format!("/{block}/{name}"),
+                code: StructuralErrorCode::UnresolvedSubsystemRef,
+                message: format!("top-level {noun} ref '{ref_str}' at {block}.{name} {reason}"),
+                details,
+            });
+        }
+    }
+    out
+}
+
+/// Why a top-level `{ref}` mount edge of `block`'s form does not resolve, or
+/// `None` when it does (see [`collect_toplevel_mount_errors`]).
+fn toplevel_mount_failure(
+    ref_str: &str,
+    base: &std::path::Path,
+    block: &str,
+    sel: Option<&str>,
+    noun: &str,
+) -> Option<String> {
+    if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
+        return Some("is a remote URL and could not be resolved".to_string());
+    }
+    let Ok(canonical) = base.join(ref_str).canonicalize() else {
+        return Some("could not be resolved: the file does not exist".to_string());
+    };
+    let Some(leaf) = fs::read_to_string(&canonical)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+    else {
+        return Some("could not be read or parsed".to_string());
+    };
+    let systems = leaf.get(block).and_then(|v| v.as_object());
+    let mut available: Vec<&str> = systems
+        .map(|m| m.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+    available.sort_unstable();
+    let available = available.join(", ");
+    match (systems, sel) {
+        (None, _) => Some(format!("resolves to a file with no {block} block")),
+        (Some(systems), Some(name)) if !systems.contains_key(name) => {
+            Some(format!("has no {noun} '{name}' (available: {available})"))
+        }
+        (Some(_), Some(_)) => None,
+        (Some(systems), None) if systems.len() != 1 => Some(format!(
+            "resolves to {} {noun}s and has no selector to choose one (available: {available})",
+            systems.len()
+        )),
+        (Some(_), None) => None,
+    }
+}
+
 /// Recover subsystem-`ref` resolution errors (esm-spec §4.7) as structured
 /// `(code, path)` findings when the load aborted before the typed validator
 /// could run.
@@ -4526,27 +4644,6 @@ fn collect_subsystem_ref_errors(
     let base = file_path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
-
-    // A top-level `reaction_systems.<k>` `{ref}` is a mount form this binding
-    // does not implement: `mount_form_unsupported` at the entry itself
-    // (`ref_loading::refuse_toplevel_reaction_system_refs`).
-    if let Some(rs) = json.get("reaction_systems").and_then(|v| v.as_object()) {
-        for (name, entry) in rs {
-            if let Some(ref_str) = entry.get("ref").and_then(|v| v.as_str())
-                && entry.get("species").is_none()
-            {
-                out.push(StructuralError {
-                    path: format!("/reaction_systems/{name}"),
-                    code: StructuralErrorCode::MountFormUnsupported,
-                    message: format!(
-                        "a top-level `reaction_systems.<k>` `{{ref}}` mount (ref '{ref_str}') is \
-                         not supported by this binding"
-                    ),
-                    details: serde_json::json!({ "ref": ref_str }),
-                });
-            }
-        }
-    }
 
     for container in ["models", "reaction_systems"] {
         let Some(systems) = json.get(container).and_then(|v| v.as_object()) else {
@@ -4766,6 +4863,9 @@ fn conformance_validation_record(
             // deserialize the document, so those findings are recovered here
             // directly from the raw document against the file's own directory.
             structural_errors.extend(collect_subsystem_ref_errors(&content, path));
+            // Likewise a top-level `models.<k>` / `reaction_systems.<k>`
+            // `{ref}` mount that does not resolve, at the entry's pointer.
+            structural_errors.extend(collect_toplevel_mount_errors(&content, path));
 
             record.insert(
                 "schema_errors".into(),
@@ -4891,6 +4991,91 @@ fn conformance_substitution_results(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `(code, path)` of every structural finding in a validation record.
+    fn structural_findings(
+        record: &serde_json::Map<String, serde_json::Value>,
+    ) -> Vec<(String, String)> {
+        record["structural_errors"]
+            .as_array()
+            .expect("structural_errors")
+            .iter()
+            .map(|e| {
+                (
+                    e["code"].as_str().unwrap_or_default().to_string(),
+                    e["path"].as_str().unwrap_or_default().to_string(),
+                )
+            })
+            .collect()
+    }
+
+    /// A top-level `reaction_systems.<k>` `{ref}` mount that fails at load is
+    /// reported as `unresolved_subsystem_ref` at `/reaction_systems/<k>`
+    /// (esm-spec §4.7), not only as a load-error string.
+    #[test]
+    fn a_failed_toplevel_reaction_system_mount_is_a_structural_finding() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/conformance/toplevel_reaction_system_ref");
+        for fixture in ["ambiguous.esm", "unknown_selector.esm", "missing_file.esm"] {
+            let record = conformance_validation_record(&dir.join(fixture));
+            assert_eq!(record["is_valid"], serde_json::json!(false), "{fixture}");
+            assert_eq!(
+                structural_findings(&record),
+                vec![(
+                    "unresolved_subsystem_ref".to_string(),
+                    "/reaction_systems/Chem".to_string()
+                )],
+                "{fixture}"
+            );
+        }
+        // A mount that resolves contributes no finding.
+        let record = conformance_validation_record(&dir.join("basic.esm"));
+        assert_eq!(record["is_valid"], serde_json::json!(true));
+        assert!(structural_findings(&record).is_empty());
+    }
+
+    /// The `models.<k>` form is treated the same way, with the same code, and
+    /// a leaf with no component of the form's kind is a finding at either form.
+    #[test]
+    fn a_failed_toplevel_model_mount_is_a_structural_finding() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let leaf = serde_json::json!({
+            "esm": "1.0.0",
+            "metadata": {"name": "leaf"},
+            "models": {
+                "A": {"variables": {}, "equations": []},
+                "B": {"variables": {}, "equations": []},
+            },
+        });
+        std::fs::write(tmp.path().join("leaf.esm"), leaf.to_string()).expect("write leaf");
+        let cases = [
+            ("models", serde_json::json!({"ref": "./missing.esm"})),
+            ("models", serde_json::json!({"ref": "./leaf.esm"})),
+            (
+                "models",
+                serde_json::json!({"ref": "./leaf.esm", "model": "C"}),
+            ),
+            ("reaction_systems", serde_json::json!({"ref": "./leaf.esm"})),
+        ];
+        for (block, entry) in cases {
+            let doc = serde_json::json!({
+                "esm": "1.0.0",
+                "metadata": {"name": "mounter"},
+                block: {"K": entry},
+            });
+            let path = tmp.path().join("mounter.esm");
+            std::fs::write(&path, doc.to_string()).expect("write mounter");
+            let record = conformance_validation_record(&path);
+            assert_eq!(
+                structural_findings(&record),
+                vec![(
+                    "unresolved_subsystem_ref".to_string(),
+                    format!("/{block}/K")
+                )],
+                "{block}: {entry}"
+            );
+        }
+    }
 
     /// Every `esm init` template must load cleanly — the CLI must never
     /// scaffold a project its own `validate` rejects.

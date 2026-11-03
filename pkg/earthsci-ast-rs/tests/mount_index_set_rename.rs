@@ -426,28 +426,22 @@ fn a_merge_folds_against_the_environment_of_the_registry_it_lands_in() {
     );
 }
 
-/// esm-spec §4.7: this binding does not implement the top-level
-/// `reaction_systems.<k>` `{ref}` mount form, so it REFUSES the entry with
-/// `mount_form_unsupported`, rather than failing on the incidental typed-parse
-/// error `missing field species` it used to give. The conformance producer
-/// reports the finding at `/reaction_systems/<k>`. (Julia is the one binding
-/// that implements the form.)
+/// esm-spec §4.7 "Two mount forms, one mechanism": this binding mounts a
+/// top-level `reaction_systems.<k>` `{ref}`, splicing the leaf's reaction
+/// system in under the key, as all five bindings now do.
+/// The shared contract for the form is `tests/conformance/toplevel_reaction_system_ref/`.
 #[test]
-fn a_toplevel_reaction_system_ref_is_refused_loudly() {
+fn a_toplevel_reaction_system_ref_is_mounted() {
     let path = fixture("fixtures/mount_form_unsupported/toplevel_reaction_system_ref.esm");
-    let err = load_path(&path).expect_err("a top-level reaction_systems.<k> {ref} must be refused");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("mount_form_unsupported"),
-        "want mount_form_unsupported, got: {msg}"
-    );
-    assert!(
-        msg.contains("reaction_systems.Chem"),
-        "the diagnostic must name the entry: {msg}"
-    );
-
-    // The leaf itself — an inline reaction system, a component rather than a
-    // mount — still loads.
-    let leaf = fixture("fixtures/mount_form_unsupported/reaction_system_leaf.esm");
-    load_path(&leaf).unwrap_or_else(|e| panic!("an inline reaction system must still load: {e}"));
+    let file = load_path(&path)
+        .unwrap_or_else(|e| panic!("a top-level reaction_systems.<k> {{ref}} must mount: {e}"));
+    let rs = file
+        .reaction_systems
+        .as_ref()
+        .and_then(|m| m.get("Chem"))
+        .expect("the mounted reaction system lands under its key");
+    let mut species: Vec<&str> = rs.species.keys().map(String::as_str).collect();
+    species.sort_unstable();
+    assert_eq!(species, ["A", "B"]);
+    assert_eq!(rs.reactions.len(), 1);
 }

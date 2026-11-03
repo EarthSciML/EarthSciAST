@@ -12,6 +12,7 @@ import json
 import os
 import re
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -41,7 +42,6 @@ from .error_handling import (
     AMBIGUOUS_SUBSYSTEM_REF,
     DATA_SOURCE_MERGE_CONFLICT,
     ELEMENT_TYPE_UNCARRIED,
-    MOUNT_FORM_UNSUPPORTED,
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
     SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
     UNRESOLVED_SUBSYSTEM_REF,
@@ -1365,6 +1365,13 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
     reaction_systems = {}
     if "reaction_systems" in data:
         for rs_name, rs_data in data["reaction_systems"].items():
+            # A top-level reaction system included by reference (a `ref` and no
+            # `species`, esm-spec §4.7 "Two mount forms, one mechanism") is
+            # carried verbatim, like a top-level model ref above, and spliced
+            # by resolve_model_refs.
+            if isinstance(rs_data, dict) and "ref" in rs_data and "species" not in rs_data:
+                reaction_systems[rs_name] = rs_data
+                continue
             rs = _parse_reaction_system(rs_data)
             rs.name = rs_name
             reaction_systems[rs_name] = rs
@@ -1517,7 +1524,8 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
     events = []
     for component in list(models.values()) + list(reaction_systems.values()):
         if isinstance(component, dict):
-            # Unresolved {"ref": ...} entry (resolve_model_refs runs later).
+            # Unresolved {"ref": ...} entry; resolve_model_refs adds its
+            # events once the mount resolves (_reaggregate_component_events).
             continue
         events.extend(component.discrete_events)
         events.extend(component.continuous_events)
@@ -1689,6 +1697,7 @@ def _load_ref_data(
     index_set_rename: Any = None,
     rename_where: str = "mount edge",
     forwarded: dict[str, int] | None = None,
+    mount_pointer: str | None = None,
 ) -> tuple:
     """Fetch, gate, schema-validate, §9.7-resolve, and template-lower a
     referenced ESM document (esm-spec §4.7 / §9.7.6 binding site 3).
@@ -1728,6 +1737,11 @@ def _load_ref_data(
     depth (§9.7.6 site 4) and travel down separately, a forwarded binding stops
     at the first document on each mount path that declares the name. See
     :func:`_forward_edge_bindings` for what ``forward`` carries.
+
+    ``mount_pointer``, given by a mount edge of either form, is that edge's JSON
+    Pointer: a leaf file that cannot be found, fetched or parsed as JSON is
+    then ``unresolved_subsystem_ref`` there. Without it those failures stay
+    codeless for the caller to label.
     """
     from .lower_expression_templates import (
         ExpressionTemplateError,
@@ -1741,8 +1755,24 @@ def _load_ref_data(
     )
 
     ref_str = expand_ref_env(ref_str)  # esm-spec §4.7 ${VAR} expansion
-    content = _fetch_ref_content(ref_str, base_path)
-    ref_data = json.loads(content)
+    if mount_pointer is None:
+        ref_data = json.loads(_fetch_ref_content(ref_str, base_path))
+    else:
+        # A leaf file that cannot be found, fetched or parsed is a failure of
+        # THIS edge, so it carries the edge's code and pointer. Everything
+        # raised further down (the leaf's schema, its own mounts) keeps its own.
+        try:
+            ref_data = json.loads(_fetch_ref_content(ref_str, base_path))
+        except SubsystemRefError as exc:
+            exc.code = exc.code or UNRESOLVED_SUBSYSTEM_REF
+            exc.path = exc.path or mount_pointer
+            raise
+        except json.JSONDecodeError as exc:
+            raise SubsystemRefError(
+                f"{kind} ref '{ref_str}' did not parse as JSON: {exc}",
+                code=UNRESOLVED_SUBSYSTEM_REF,
+                path=mount_pointer,
+            ) from exc
     # A REFERENCED document is a document: same wire boundary as the root
     # (docs/content/rfcs/faq-node-rename.md §5.2). Without this the `aggregate`
     # alias and `arrayop` both survive a `{ref}` all the way into `emit`.
@@ -2236,10 +2266,10 @@ def _resolve_subsystems_generic(
             # into the referenced component's scope (esm-spec §9.7.10 form A).
             bindings = _subsystem_ref_bindings(sub_value, f"subsystems.{sub_name}")
             injected = _subsystem_ref_injected_imports(sub_value)
-            # The JSON Pointer of THIS mount. Only this frame knows both the
-            # owning component and the subsystem key, so it is where a
-            # SubsystemRefError raised anywhere below gets its `path` (and, for
-            # the errors raised out of the generic ref loader, its `code`).
+            # The JSON Pointer of THIS mount. This edge's own failures (a leaf
+            # file that cannot be found, fetched or parsed, and an ambiguous
+            # leaf) carry it with their code; an error raised deeper inside the
+            # leaf keeps its own code and pointer.
             kind = "reaction_systems" if isinstance(component, ReactionSystem) else "models"
             mount_pointer = f"/{kind}/{component.name}/subsystems/{sub_name}"
             try:
@@ -2261,6 +2291,7 @@ def _resolve_subsystems_generic(
                     index_set_rename=sub_value.get("index_set_rename"),
                     rename_where=f"subsystem ref '{ref_str}'",
                     forwarded=forwarded,
+                    mount_pointer=mount_pointer,
                 )
 
                 parsed = _parse_esm_data(ref_data)
@@ -2291,15 +2322,12 @@ def _resolve_subsystems_generic(
                     f"{kind}.{component.name}.subsystems.{sub_name} (ref '{ref_str}')",
                 )
             except SubsystemRefError as exc:
-                if not getattr(exc, "code", ""):
-                    exc.code = UNRESOLVED_SUBSYSTEM_REF
-                if not getattr(exc, "path", ""):
-                    exc.path = mount_pointer
-                exc.details = {
-                    "ref": ref_str,
-                    "subsystem": sub_name,
-                    "parent_model": component.name,
-                }
+                if getattr(exc, "path", "") == mount_pointer:
+                    exc.details = {
+                        "ref": ref_str,
+                        "subsystem": sub_name,
+                        "parent_model": component.name,
+                    }
                 raise
         else:
             # Already a component object, just recurse into it.
@@ -2584,7 +2612,7 @@ def resolve_model_refs(
     _enclosing_precision: str = _DEFAULT_ELEMENT_TYPE,
     _forwarded: dict[str, int] | None = None,
 ) -> None:
-    """Resolve all top-level model references in an ESM file.
+    """Resolve all top-level model and reaction-system references in an ESM file.
 
     The top-level analog of :func:`resolve_subsystem_refs`. Walks
     ``esm_file.models``; any entry whose value is an unresolved
@@ -2592,7 +2620,11 @@ def resolve_model_refs(
     and permitted by the schema's top-level ``models``
     ``oneOf[Model, SubsystemRef]`` — is fetched, schema-validated, and its
     single top-level model is spliced into ``models[X]`` under the SAME key
-    ``X`` with ``name = X``.
+    ``X`` with ``name = X``. A top-level ``reaction_systems.<k>`` ``{ref}`` (a
+    ``ref`` and no ``species``) is the same edge at the other attachment point
+    (esm-spec §4.7 "Two mount forms, one mechanism") and runs the same
+    pipeline, :func:`_resolve_toplevel_mount`; its leaf yields its single
+    reaction system or the one the edge's ``reaction_system`` selector names.
 
     Because flatten collects the spliced model with prefix ``X``, its flat
     variable names ``X.<var>`` already equal the coupling-edge endpoint names —
@@ -2643,114 +2675,256 @@ def resolve_model_refs(
     # effective precision — its own declaration, else its mounter's (the root
     # default at depth zero). Every edge below compares its leaf against it.
     precision = _declared_element_type(esm_file) or _enclosing_precision
-    resolved_models: dict[str, Any] = {}
-    for model_name, model_value in esm_file.models.items():
-        # An already-parsed Model (inline definition) passes through unchanged.
-        if not (isinstance(model_value, dict) and "ref" in model_value):
-            resolved_models[model_name] = model_value
-            continue
-
-        ref_str = model_value["ref"]
-
-        # Circular reference detection. Seed the chain with this ref so a
-        # subsystem inside the referenced file that points back is caught.
-        canonical = _ref_location(ref_str, base_path)
-        seen = {canonical}
-        # ... and the same check across the TOP-LEVEL mount chain, which the
-        # per-mount `seen` above cannot see: `seen` is seeded fresh for each
-        # entry of this loop, so an assembly that mounts an assembly that mounts
-        # back would recurse forever without this.
-        if canonical in _mount_chain:
-            raise CircularReferenceError(
-                f"Circular top-level model reference detected: '{ref_str}' "
-                f"(chain: {' -> '.join((*_mount_chain, canonical))})"
+    mounted = False
+    for form in (_MODEL_MOUNT, _REACTION_SYSTEM_MOUNT):
+        resolved: dict[str, Any] = {}
+        for name, value in getattr(esm_file, form.block).items():
+            # An already-parsed component (inline definition) passes through
+            # unchanged; only a `{ref}` stub carried verbatim by
+            # `_parse_esm_data` is a mount edge.
+            if not (isinstance(value, dict) and "ref" in value):
+                resolved[name] = value
+                continue
+            resolved[name] = _resolve_toplevel_mount(
+                form,
+                esm_file,
+                name,
+                value,
+                base_path,
+                registry,
+                precision,
+                loader_metaparameters=loader_metaparameters,
+                parent_metaparameters=parent_metaparameters,
+                mount_chain=_mount_chain,
+                forwarded=_forwarded,
             )
+            mounted = True
+        setattr(esm_file, form.block, resolved)
+    if mounted:
+        _reaggregate_component_events(esm_file)
 
-        bindings = _subsystem_ref_bindings(model_value, f"models.{model_name}")
-        injected = _subsystem_ref_injected_imports(model_value)
-        ref_data, new_base, leaf_env, forward = _load_ref_data(
-            ref_str,
-            base_path,
-            bindings,
-            "model",
-            injected,
-            loader_metaparameters=loader_metaparameters,
-            parent_metaparameters=parent_metaparameters,
-            index_set_rename=model_value.get("index_set_rename"),
-            rename_where=f"top-level model ref '{ref_str}'",
-            forwarded=_forwarded,
+
+def _reaggregate_component_events(esm_file: EsmFile) -> None:
+    """Rebuild the flat ``EsmFile.events`` view once top-level mounts resolve.
+
+    ``_parse_esm_data`` aggregates component-owned events while a ``{ref}``
+    entry is still a raw dict, so a mounted component's events are missing
+    from that view. Rebuild it in the same order ``_parse_esm_data`` uses
+    (``models`` then ``reaction_systems``, each component's discrete events
+    before its continuous ones), keeping the SAME event objects, and keep any
+    event no component owns after them.
+    """
+    owned: list[Any] = []
+    for component in list(esm_file.models.values()) + list(esm_file.reaction_systems.values()):
+        if isinstance(component, dict):
+            continue
+        owned.extend(component.discrete_events)
+        owned.extend(component.continuous_events)
+    owned_ids = {id(ev) for ev in owned}
+    orphans = [ev for ev in esm_file.events if id(ev) not in owned_ids]
+    esm_file.events = owned + orphans
+
+
+@dataclass(frozen=True)
+class _TopLevelMountForm:
+    """One of the two top-level attachment points of a §4.7 ``{ref}`` mount.
+
+    esm-spec §4.7 "Two mount forms, one mechanism": a ``models.<k>`` and a
+    ``reaction_systems.<k>`` ``{ref}`` run the SAME edge pipeline and differ only
+    in which block the leaf's component is taken from and spliced into, so
+    :func:`_resolve_toplevel_mount` is written once over this descriptor.
+    """
+
+    #: The top-level block the entry lives in, and the leaf block the
+    #: component is extracted from (also the ``EsmFile`` attribute).
+    block: str
+    #: The edge's optional selector key naming one component of a leaf that
+    #: declares several.
+    selector: str
+    #: ``"model"`` / ``"reaction system"``, for diagnostics.
+    noun: str
+
+
+_MODEL_MOUNT = _TopLevelMountForm(block="models", selector="model", noun="model")
+_REACTION_SYSTEM_MOUNT = _TopLevelMountForm(
+    block="reaction_systems", selector="reaction_system", noun="reaction system"
+)
+
+
+def _extract_toplevel_component(
+    form: _TopLevelMountForm, parsed: EsmFile, edge: dict[str, Any], ref_str: str, pointer: str
+) -> Any:
+    """The component a top-level ``{ref}`` mount splices in: the leaf's single
+    component of ``form``'s kind, or the one the edge's selector names.
+
+    Both forms apply the same rule (esm-spec §4.7 "Two mount forms, one
+    mechanism"): a leaf with no component of the form's kind, a leaf with
+    several and no selector, and a selector naming one the leaf does not
+    declare are each ``unresolved_subsystem_ref`` at ``pointer``
+    (``/<block>/<k>``), which is the code the Julia reference raises there.
+    """
+    systems = getattr(parsed, form.block)
+
+    def refuse(message: str) -> SubsystemRefError:
+        return SubsystemRefError(message, code=UNRESOLVED_SUBSYSTEM_REF, path=pointer)
+
+    if not systems:
+        raise refuse(
+            f"top-level {form.noun} ref '{ref_str}' resolves to a file with no {form.block} block"
+        )
+    available = ", ".join(sorted(systems))
+    sel = edge.get(form.selector)
+    if sel is not None:
+        if sel not in systems:
+            raise refuse(
+                f"top-level {form.noun} ref '{ref_str}' has no {form.noun} '{sel}' "
+                f"(available: {available})"
+            )
+        return systems[sel]
+    if len(systems) > 1:
+        raise refuse(
+            f"top-level {form.noun} ref '{ref_str}' resolves to a file with several "
+            f"{form.block} ({available}); name one with the `{form.selector}` selector"
+        )
+    return next(iter(systems.values()))
+
+
+def _resolve_toplevel_mount(
+    form: _TopLevelMountForm,
+    esm_file: EsmFile,
+    name: str,
+    edge: dict[str, Any],
+    base_path: str,
+    registry: dict[str, Any],
+    precision: str,
+    *,
+    loader_metaparameters: dict[str, int] | None,
+    parent_metaparameters: dict[str, int] | None,
+    mount_chain: tuple[str, ...],
+    forwarded: dict[str, int] | None,
+) -> Any:
+    """Resolve one top-level ``<form.block>.<name>`` ``{ref}`` mount edge and
+    return the component to splice in under ``name`` (see
+    :func:`resolve_model_refs`).
+
+    The failures that belong to THIS edge — a leaf file that cannot be found or
+    read, and a leaf that does not yield exactly one component of the form's
+    kind — are ``unresolved_subsystem_ref`` at ``/<form.block>/<name>``. Errors
+    raised from inside the leaf's own resolution (its schema validation, its own
+    nested mounts) keep their own code and path.
+    """
+    ref_str = edge["ref"]
+    where = f"top-level {form.noun} ref '{ref_str}'"
+    pointer = f"/{form.block}/{name}"
+
+    # Circular reference detection. Seed the chain with this ref so a
+    # subsystem inside the referenced file that points back is caught.
+    canonical = _ref_location(ref_str, base_path)
+    seen = {canonical}
+    # ... and the same check across the TOP-LEVEL mount chain, which the
+    # per-mount `seen` above cannot see: `seen` is seeded fresh for each
+    # entry, so an assembly that mounts an assembly that mounts back would
+    # recurse forever without this.
+    if canonical in mount_chain:
+        raise CircularReferenceError(
+            f"Circular top-level {form.noun} reference detected: '{ref_str}' "
+            f"(chain: {' -> '.join((*mount_chain, canonical))})"
         )
 
-        parsed = _parse_esm_data(ref_data)
-        leaf_precision = _declared_element_type(parsed)
+    bindings = _subsystem_ref_bindings(edge, f"{form.block}.{name}")
+    injected = _subsystem_ref_injected_imports(edge)
+    ref_data, new_base, leaf_env, forward = _load_ref_data(
+        ref_str,
+        base_path,
+        bindings,
+        form.noun,
+        injected,
+        loader_metaparameters=loader_metaparameters,
+        parent_metaparameters=parent_metaparameters,
+        index_set_rename=edge.get("index_set_rename"),
+        rename_where=where,
+        forwarded=forwarded,
+        mount_pointer=pointer,
+    )
 
-        # The referenced document may itself be an ASSEMBLY — one whose own
-        # `models.<k>` entries are `{ref}` mount edges. esm-spec §4.7's
-        # top-level form lands its component as a top-level system precisely so
-        # an assembly can be named by file and mounted onward, so the form has
-        # to compose with itself.
-        #
-        # Resolved HERE, in the leaf's own directory and against the LEAF's
-        # registry — edge-pipeline step (1) is "the leaf resolves in its OWN
-        # scope" — and BEFORE the merge below, so what the leaf's own mounts
-        # brought in is part of what merges up. The leaf's own close and fold
-        # happened inside `_load_ref_data` above, so its nested edge binding
-        # EXPRESSIONS arrive already concrete (esm-spec §9.7.6: refs resolve
-        # post-close) — but the axes its mounts contribute still fold against the
-        # leaf's CLOSED environment, so that is forwarded (esm-spec §4.7 "Which
-        # environment a contribution folds against"). Mirrors the Julia reference's
-        # `_inline_toplevel_model_refs!(comp, compdir, visited)` and Rust.
-        #
-        # Without it, `next(iter(parsed.models.values()))` below picks the leaf's
-        # UNRESOLVED `{ref}` dict and the next line raises
-        # `AttributeError: 'dict' object has no attribute 'name'` — a raw
-        # language-level error where a diagnostic belongs.
-        child_env = _child_fold_env(parent_metaparameters, leaf_env)
-        resolve_model_refs(
-            parsed,
+    parsed = _parse_esm_data(ref_data)
+    leaf_precision = _declared_element_type(parsed)
+
+    # The referenced document may itself be an ASSEMBLY — one whose own
+    # top-level `models.<k>` / `reaction_systems.<k>` entries are `{ref}` mount
+    # edges. esm-spec §4.7's top-level form lands its component as a top-level
+    # system precisely so an assembly can be named by file and mounted onward,
+    # so the form has to compose with itself.
+    #
+    # Resolved HERE, in the leaf's own directory and against the LEAF's
+    # registry — edge-pipeline step (1) is "the leaf resolves in its OWN
+    # scope" — and BEFORE the merge below, so what the leaf's own mounts
+    # brought in is part of what merges up. The leaf's own close and fold
+    # happened inside `_load_ref_data` above, so its nested edge binding
+    # EXPRESSIONS arrive already concrete (esm-spec §9.7.6: refs resolve
+    # post-close) — but the axes its mounts contribute still fold against the
+    # leaf's CLOSED environment, so that is forwarded (esm-spec §4.7 "Which
+    # environment a contribution folds against"). Mirrors the Julia reference's
+    # `_inline_toplevel_refs!(comp, compdir, visited)` and Rust.
+    #
+    # Without it, the extraction below picks the leaf's UNRESOLVED `{ref}`
+    # dict and the next line raises `AttributeError: 'dict' object has no
+    # attribute 'name'` — a raw language-level error where a diagnostic belongs.
+    child_env = _child_fold_env(parent_metaparameters, leaf_env)
+    resolve_model_refs(
+        parsed,
+        new_base,
+        loader_metaparameters=loader_metaparameters,
+        parent_metaparameters=child_env,
+        _mount_chain=(*mount_chain, canonical),
+        _enclosing_precision=precision,
+        _forwarded=forward,
+    )
+
+    # esm-spec §4.7: the referenced file's document-scoped index sets — now
+    # metaparameter-folded and, for a §9.7.10 form-A mount edge, carrying the
+    # grid axes SYNTHESIZED by the injected discretization's grid contract
+    # (e.g. `x`/`y` intervals of size NX/NY imported transitively via the
+    # rules' `grid.esm`) — join the importing document's registry. Without
+    # this the leaf's array states (psi shaped `[x, y]`) and any aggregate
+    # `ic` ranging `from x` have no index sets to resolve against and the
+    # flattened system is grid-less. Mirrors the subsystem-ref path's merge
+    # (`_resolve_model_subsystems`) and the Julia/Rust single-root resolve,
+    # which keep these axes in the flattened system.
+    _merge_subsystem_index_sets(
+        registry, parsed.index_sets, ref_str, dict(parent_metaparameters or {})
+    )
+
+    # A top-level ref must resolve to exactly one component of its form's kind
+    # (or the one its selector names). Unlike a subsystem ref, a component of
+    # the other kind is not a valid stand-in.
+    component = _extract_toplevel_component(form, parsed, edge, ref_str, pointer)
+    component.name = name
+    # esm-spec §6.6: inline tests do NOT cross a mount edge. They are
+    # assertions about the leaf under the leaf's OWN standalone conditions,
+    # and this document may couple it — replacing a parameter, reshaping it,
+    # feeding it another component's state — so re-running them here would
+    # check a claim the leaf's author never made. They run when the leaf's
+    # own file is the test target, which a directory-wide `esm test` reaches
+    # anyway.
+    component.tests = []
+    # Recursively resolve the spliced component's own subsystem refs, relative
+    # to the referenced file's directory; nested model-subsystem index sets
+    # merge into the importing document's registry (esm-spec §4.7).
+    if isinstance(component, ReactionSystem):
+        _resolve_reaction_system_subsystems(
+            component,
             new_base,
-            loader_metaparameters=loader_metaparameters,
-            parent_metaparameters=child_env,
-            _mount_chain=(*_mount_chain, canonical),
-            _enclosing_precision=precision,
-            _forwarded=forward,
+            seen,
+            (canonical,),
+            api_meta=loader_metaparameters,
+            forwarded=forward,
+            precision=leaf_precision or precision,
+            sources=_mount_target(parsed),
         )
-
-        # esm-spec §4.7: the referenced file's document-scoped index sets — now
-        # metaparameter-folded and, for a §9.7.10 form-A mount edge, carrying the
-        # grid axes SYNTHESIZED by the injected discretization's grid contract
-        # (e.g. `x`/`y` intervals of size NX/NY imported transitively via the
-        # rules' `grid.esm`) — join the importing document's registry. Without
-        # this the leaf's array states (psi shaped `[x, y]`) and any aggregate
-        # `ic` ranging `from x` have no index sets to resolve against and the
-        # flattened system is grid-less. Mirrors the subsystem-ref path's merge
-        # (`_resolve_model_subsystems`) and the Julia/Rust single-root resolve,
-        # which keep these axes in the flattened system.
-        _merge_subsystem_index_sets(
-            registry, parsed.index_sets, ref_str, dict(parent_metaparameters or {})
-        )
-
-        # A top-level model ref must resolve to exactly one model. Unlike a
-        # subsystem ref, a data loader or reaction system is not a valid
-        # top-level model component.
-        if not parsed.models:
-            raise SubsystemRefError(f"Model ref '{ref_str}' does not contain a top-level model")
-
-        sub_model = next(iter(parsed.models.values()))
-        sub_model.name = model_name
-        # esm-spec §6.6: inline tests do NOT cross a mount edge. They are
-        # assertions about the leaf under the leaf's OWN standalone conditions,
-        # and this document may couple it — replacing a parameter, reshaping it,
-        # feeding it another component's state — so re-running them here would
-        # check a claim the leaf's author never made. They run when the leaf's
-        # own file is the test target, which a directory-wide `esm test` reaches
-        # anyway.
-        sub_model.tests = []
-        # Recursively resolve the spliced model's own subsystem refs, relative
-        # to the referenced file's directory; nested subsystem index sets merge
-        # into the importing document's registry (esm-spec §4.7).
+    else:
         _resolve_model_subsystems(
-            sub_model,
+            component,
             new_base,
             seen,
             registry,
@@ -2761,24 +2935,20 @@ def resolve_model_refs(
             precision=leaf_precision or precision,
             sources=_mount_target(parsed),
         )
-        _carry_mounted_element_type(
-            sub_model, leaf_precision, precision, f"top-level model ref '{ref_str}'"
-        )
-        # esm-spec §4.7 "A mounted document's data sources": the leaf's own
-        # sources, plus what its own mounts (both forms, resolved above) merged
-        # into it, cross this edge into THIS document.
-        _merge_mounted_data_sources(
-            parsed,
-            model_value,
-            base_path,
-            new_base,
-            f"top-level model ref '{ref_str}'",
-            _mount_target(esm_file),
-            f"models.{model_name} (ref '{ref_str}')",
-        )
-        resolved_models[model_name] = sub_model
-
-    esm_file.models = resolved_models
+    _carry_mounted_element_type(component, leaf_precision, precision, where)
+    # esm-spec §4.7 "A mounted document's data sources": the leaf's own
+    # sources, plus what its own mounts (both forms, resolved above) merged
+    # into it, cross this edge into THIS document.
+    _merge_mounted_data_sources(
+        parsed,
+        edge,
+        base_path,
+        new_base,
+        where,
+        _mount_target(esm_file),
+        f"{form.block}.{name} (ref '{ref_str}')",
+    )
+    return component
 
 
 # Operator arity requirements: (min_args, max_args). None = unlimited.
@@ -2943,31 +3113,6 @@ load_string.__doc__ = (load_string.__doc__ or "") + _LOAD_ARGS_DOC
 load_document.__doc__ = (load_document.__doc__ or "") + _LOAD_ARGS_DOC
 
 
-def _refuse_toplevel_reaction_system_refs(data: Any) -> None:
-    """Refuse a top-level ``reaction_systems.<k>`` ``{ref}`` mount.
-
-    Raises :class:`SubsystemRefError` with ``mount_form_unsupported`` at
-    ``/reaction_systems/<k>`` for the first entry that is a bare ``{ref}`` — a
-    ``ref`` string and no ``species``, the Julia reference's discriminator for
-    this form. An inline reaction system is a component, not a mount, and passes
-    untouched; ``models.<k>`` and ``subsystems.<k>`` refs are unaffected.
-    """
-    rs = data.get("reaction_systems") if isinstance(data, dict) else None
-    if not isinstance(rs, dict):
-        return
-    for name in sorted(rs):
-        entry = rs[name]
-        if isinstance(entry, dict) and isinstance(entry.get("ref"), str) and "species" not in entry:
-            raise SubsystemRefError(
-                f"reaction_systems.{name}: a top-level `reaction_systems.<k>` `{{ref}}` mount "
-                f"(ref '{entry['ref']}') is not supported by this binding. Inline the reaction "
-                "system, or mount it at a `subsystems.<k>` `{ref}` edge (esm-spec §4.7 "
-                '"Two mount forms, one mechanism")',
-                code=MOUNT_FORM_UNSUPPORTED,
-                path=f"/reaction_systems/{name}",
-            )
-
-
 def _reject_file_version_gates(data: object) -> None:
     """Run every file-level ``esm`` version gate on one document.
 
@@ -3091,12 +3236,6 @@ def _load_data(
 
     # Check version compatibility
     _check_version_compatibility(data.get("esm", ""))
-
-    # esm-spec §4.7: a top-level `reaction_systems.<k>` entry that is a bare
-    # `{ref}` is a mount edge at a form this binding does not implement. Coercing
-    # it would build an EMPTY reaction system and the document would load clean
-    # with nothing mounted, so refuse it here, at the entry.
-    _refuse_toplevel_reaction_system_refs(data)
 
     # esm-spec §9.7.10 form B: fold any coupling-entry injection map into the
     # named target components' own `expression_template_imports` BEFORE
