@@ -111,7 +111,8 @@ ZipFile = "0.10"
 # honoured only when this Project is the active/develop env (i.e. under
 # `Pkg.test()` / the test target), so a downstream `add EarthSciAST` ignores it.
 [sources]
-EarthSciIO = {url = "https://github.com/EarthSciML/EarthSciIO.git", subdir = "julia"}
+# DRAFT: the branch adding `provider_from_esm`; back to main once it merges.
+EarthSciIO = {url = "https://github.com/EarthSciML/EarthSciIO.git", subdir = "julia", rev = "feat/esm-source-constructor"}
 
 [extras]
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"

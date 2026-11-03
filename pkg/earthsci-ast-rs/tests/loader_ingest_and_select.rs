@@ -816,8 +816,10 @@ fn an_unparseable_cadence_is_refused_rather_than_demoted_to_const() {
         Err(e) => e.0,
         Ok(_) => panic!("a mis-typed frequency must not build a provider"),
     };
-    assert!(e.contains("invalid ISO-8601 duration"), "{e}");
-    assert!(e.contains("data_sources.Grid.temporal.frequency"), "{e}");
+    // EarthSciIO's reading of the cadence (spec/esm-sources.md §3.3) names the
+    // source and the field.
+    assert!(e.contains("esm_period_invalid"), "{e}");
+    assert!(e.contains("\"Grid\"") && e.contains("temporal.frequency"), "{e}");
 
     // Anchored, but declining to say how it varies.
     let mut doc = document(tmp.path());

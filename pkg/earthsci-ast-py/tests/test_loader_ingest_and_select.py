@@ -38,6 +38,11 @@ import pytest
 
 esio = pytest.importorskip("earthsciio")
 
+if not hasattr(esio, "DataSource"):
+    # earthsciio before 0.2 spells it DataLoader and lacks the API these tests
+    # exercise; a stale install would otherwise fail every test here.
+    pytest.skip("earthsciio is older than 0.2", allow_module_level=True)
+
 
 def _requires_zarr_store() -> None:
     """Skip a test that READS the Zarr grid source.

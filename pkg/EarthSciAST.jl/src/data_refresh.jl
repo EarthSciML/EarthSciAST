@@ -160,11 +160,17 @@ function provider_extent_metaparameter end
 provider_extent_metaparameter(::Any) = nothing
 
 """
-    providers_from_document(doc; cache_root, loaders=nothing, url_overrides=Dict()) -> Dict{String,Any}
+    providers_from_document(doc; cache_root, loaders=nothing, url_overrides=Dict(),
+                            substitutions=Dict(), window=nothing,
+                            records_per_sample=Dict()) -> Dict{String,Any}
 
-Construct the data providers a document DECLARES: one CONST provider per
-data-fed PARAMETER, drawn from a `data_sources.<name>` entry carrying a
-`metadata.esio_format` ("zarr", "ff10", …).
+Construct the data providers a document DECLARES: one provider per data-fed
+PARAMETER, drawn from a `data_sources.<name>` entry carrying a
+`metadata.esio_format` ("zarr", "ff10", …). Each source is read by EarthSciIO's
+`provider_from_esm` (EarthSciIO spec/esm-sources.md §3): its `url_template` and
+`mirrors` are esm templates expanded at each file anchor, and a source with a
+`temporal` block is time-varying on a calendar cadence (`P1M` is a calendar
+month), its ticks in Unix seconds (UTC), as in the Rust binding.
 
 Keyed `"<ModelPath>.<param>"` — the CONSUMING parameter's flattened name, not
 `"<Loader>.<var>"`. esm 1.0.0 moved the binding from the source to the consumer:
@@ -181,16 +187,22 @@ Keywords:
     an `esio_format`). Lets a runner exclude a loader whose format the reader
     stack cannot construct yet (the FF10-in-zip EGU case until Phase 2) and
     slot it in later without an API change.
-  * `url_overrides` — loader name ⇒ URL, replacing `source.url_template`
-    (e.g. a local mirror of a live store).
+  * `url_overrides` — loader name ⇒ URL template, replacing `source.url_template`
+    and its mirrors (e.g. a local mirror of a live store).
+  * `substitutions` — loader name ⇒ `Dict(placeholder => value)`, binding the
+    custom `{name}` placeholders a mount's `url_substitutions` left (reseact's
+    NEI 2016 `{sector}`). An unbound one is an error, not a fetch.
+  * `window` — the run's `(start, stop)` in UTC (`DateTime`s or Unix seconds),
+    bounding each time-varying provider's `provider_refresh_times`.
+  * `records_per_sample` — consuming parameter key ⇒ 1 or 2 (the two-record
+    bracket a model interpolates between); default 1.
 
 Implemented by the EarthSciIO extension — load `EarthSciIO` alongside
 EarthSciAST so the `EarthSciASTEarthSciIOExt` extension defines the method
 (without it the call is a `MethodError`; this generic deliberately carries no
 fallback so the extension's method is an addition, not an overwrite). The
-construction is format-agnostic: `esio_format` goes straight to
-`EarthSciIO.const_provider(...; format=...)`, whose registry decides what is
-readable. Selection capability (projection pushdown) is the provider's own
+construction is format-agnostic: `esio_format` goes straight to EarthSciIO,
+whose format registry decides what is readable. Selection capability (projection pushdown) is the provider's own
 (`provider_supports_selection`), so a zarr-store loader produced here is
 directly compatible with the gated-deferral path.
 """

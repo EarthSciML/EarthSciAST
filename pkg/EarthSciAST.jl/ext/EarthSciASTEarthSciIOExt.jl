@@ -660,7 +660,10 @@ function providers_from_document(
         doc;
         cache_root::AbstractString,
         loaders = nothing,
-        url_overrides::AbstractDict = Dict{String, String}()
+        url_overrides::AbstractDict = Dict{String, String}(),
+        substitutions::AbstractDict = Dict{String, Any}(),
+        window = nothing,
+        records_per_sample::AbstractDict = Dict{String, Int}()
     )
     raw = _doc_raw(doc)
     dss = get(raw, "data_sources", nothing)
@@ -711,10 +714,9 @@ function providers_from_document(
             )
         end
         src = get(ld, "source", nothing)
-        url = get(
-            url_overrides, lname,
-            src isa AbstractDict ? get(src, "url_template", nothing) : nothing
-        )
+        url_override = get(url_overrides, lname, nothing)
+        url = url_override !== nothing ? url_override :
+            (src isa AbstractDict ? get(src, "url_template", nothing) : nothing)
         url isa AbstractString || throw(
             RefreshError(
                 "providers_from_document: data_sources.$lname has no source.url_template " *
@@ -722,15 +724,26 @@ function providers_from_document(
             )
         )
         cache = EarthSciIO.Cache(; root = joinpath(String(cache_root), lname))
+        source_subs = Dict{String, String}(
+            String(k) => string(v) for (k, v) in get(substitutions, lname, Dict{String, String}())
+        )
+        # The source's location and cadence are read by EarthSciIO itself
+        # (EarthSciIO spec/esm-sources.md §3): `url_template` and `mirrors` are
+        # esm templates expanded at each file anchor (`substitutions[lname]`
+        # binds the custom placeholders a mount left), and `temporal` is a
+        # calendar cadence, so a time-varying source refreshes in Unix seconds
+        # (UTC) over `window` instead of being read once as a constant.
+        make_provider(vars, rps = nothing) = EarthSciIO.provider_from_esm(
+            lname, ld, cache;
+            variables = vars, substitutions = source_subs,
+            url_override = url_override === nothing ? nothing : String(url_override),
+            records_per_sample = rps, window = window
+        )
 
         # ---- the source's DECLARED ingest (esm-spec §8.9) -------------------
-        # `reader_options` is the document's spelling of EarthSciIO's
-        # `reader_kwargs`; handing it over verbatim is the whole point, and an
-        # unrecognised key fails at Provider construction rather than decoding
-        # something else silently (spec/registries.md §2.1).
-        ropts = get(ld, "reader_options", nothing)
-        reader_kwargs = ropts isa AbstractDict ?
-            Dict{Symbol, Any}(Symbol(k) => v for (k, v) in ropts) : Dict{Symbol, Any}()
+        # `reader_options` reach the reader through `provider_from_esm`, which
+        # refuses an unrecognised key at construction (EarthSciIO
+        # spec/registries.md §2.1) rather than decoding something else silently.
         loader_select = _parse_declared_select(raw, "data_sources.$lname", ld)
         ext = get(ld, "extent", nothing)
         extent_mp = ext isa AbstractDict && get(ext, "metaparameter", nothing) isa AbstractString ?
@@ -771,26 +784,14 @@ function providers_from_document(
                     )
                 )
             )
-            table = RecordTable(
-                lname,
-                EarthSciIO.const_provider(
-                    cache, String(url); format = String(fmt),
-                    variables = file_vars, source_loader = lname,
-                    reader_kwargs = reader_kwargs
-                ),
-                columns, require_finite, nothing
-            )
+            table = RecordTable(lname, make_provider(file_vars), columns, require_finite, nothing)
         end
 
         for (b, spec) in zip(binds, columns)
             key = b.key
             sel = _parse_declared_select(raw, "$(key).update.from", b.from)
             sel === nothing && (sel = loader_select)
-            inner = EarthSciIO.const_provider(
-                cache, String(url); format = String(fmt),
-                variables = [spec.file_variable], source_loader = lname,
-                reader_kwargs = reader_kwargs
-            )
+            inner = make_provider([spec.file_variable], get(records_per_sample, key, nothing))
             # A declared select goes to the reader when it can fetch pre-sliced
             # AND no rows are filtered in front of it; otherwise engine-side.
             # Where it is applied is an optimization, never a semantic.

@@ -134,9 +134,15 @@ def _to_esio_temporal(temporal: TemporalLike | Mapping | None) -> Any:
         return None  # no anchor ⇒ treat as CONST
 
     def _dur(spec):
-        return (
-            _dt.timedelta(seconds=parse_iso_duration(spec).approximate_seconds()) if spec else None
-        )
+        if not spec:
+            return None
+        # An EarthSciIO with calendar cadences takes the ISO period itself, so a
+        # `P1M` source steps by calendar months (EarthSciIO
+        # spec/esm-sources.md §2); an older one gets the mean-length seconds.
+        if hasattr(esio, "CalendarPeriod"):
+            parse_iso_duration(spec)  # the same grammar check as before
+            return esio.CalendarPeriod.parse(spec)
+        return _dt.timedelta(seconds=parse_iso_duration(spec).approximate_seconds())
 
     freq = _dur(_temporal_field(temporal, "frequency"))
     file_period = _dur(_temporal_field(temporal, "file_period")) or freq
@@ -708,14 +714,18 @@ class EsioDocumentProvider:
             return self._convert_units(_single_field(self.key, nds))
         if self._table is not None:
             arr = self._table.column(str(self._column))
+        elif not self._inner.is_const:
+            # A time-varying source: `t` is Unix seconds (UTC), the scale its
+            # `refresh_times` are reported on by the Rust peer too.
+            when = _dt.datetime.fromtimestamp(float(t), tz=_dt.timezone.utc)
+            arr = _single_field(self.key, self._inner.refresh(when, select=self._reader_select))
         else:
             arr = _single_field(self.key, self._inner.materialize(select=self._reader_select))
         return self._convert_units(self._apply_declared(arr))
 
     def refresh(self, when: Any) -> np.ndarray:
         """The DISCRETE cadence entry (delegated), under the same declared
-        select. ``providers_from_document`` builds CONST loaders today, so this
-        exists for shape rather than for a live caller."""
+        select; ``when`` is a UTC datetime."""
         if self._table is not None:
             raise ValueError(
                 f"provider {self.key!r} serves a filtered record table, which has "
@@ -874,6 +884,9 @@ def providers_from_document(
     cache_root: str,
     loaders: Any = None,
     url_overrides: dict[str, str] | None = None,
+    substitutions: dict[str, dict[str, str]] | None = None,
+    window: Any = None,
+    records_per_sample: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Document-declared provider construction (Phase 3 clean consolidation) —
     the Python mirror of the Julia EarthSciIO extension's
@@ -893,8 +906,18 @@ def providers_from_document(
     ``doc`` is a raw document dict or a path to one. ``loaders`` restricts to the
     named sources (each MUST be constructible — a missing ``metadata.esio_format``
     raises); an unrestricted sweep skips format-less sources. ``url_overrides``
-    maps a source name to a replacement URL (e.g. a local ``file://`` mirror of
-    the canonical source).
+    maps a source name to a replacement URL template (e.g. a local ``file://``
+    mirror of the canonical source; its mirrors are then dropped).
+
+    Each source is read by EarthSciIO's ``source_from_esm`` (EarthSciIO
+    spec/esm-sources.md §3): its ``url_template`` and ``mirrors`` are esm
+    templates expanded at each file anchor, its ``temporal`` is a calendar
+    cadence (``P1M`` is a calendar month, not a mean one), and
+    ``substitutions[source]`` binds the custom ``{name}`` placeholders a mount's
+    ``url_substitutions`` left (reseact's NEI 2016 ``{sector}``). ``window`` is
+    the run's ``(start, end)`` in UTC datetimes, bounding ``refresh_times``.
+    ``records_per_sample`` maps a consuming parameter's key to 1 or 2 (the
+    two-record bracket); the default is 1.
     """
     import json
     import os as _os
@@ -930,12 +953,14 @@ def providers_from_document(
                 f"metadata.esio_format — cannot construct a provider for it"
             )
         src = ld.get("source")
-        url = overrides.get(lname, src.get("url_template") if isinstance(src, dict) else None)
+        url_override = overrides.get(lname)
+        url = url_override or (src.get("url_template") if isinstance(src, dict) else None)
         if not isinstance(url, str):
             raise ValueError(
                 f"providers_from_document: data_sources.{lname} has no "
                 f"source.url_template (and no url_overrides entry)"
             )
+        source_subs = dict((substitutions or {}).get(lname) or {})
         consumers = bindings.get(lname) or []
         if not consumers:
             continue
@@ -975,31 +1000,26 @@ def providers_from_document(
             for key, vname, binding in consumers
         ]
 
-        # The source's declared cadence, converted once. Without this the loader
-        # was built with no `temporal` at all, so EarthSciIO saw CONST for every
-        # source no matter what the document said: an hourly source read its
-        # first file once and served it forever, with no warning (esm-spec §8.9).
-        # It is also load-bearing for caching — EarthSciIO treats an absent
-        # `temporal` as IMMUTABLE and will never revalidate it, so silently
-        # dropping a declared cadence here does not merely ignore it, it pins
-        # stale bytes in the cache permanently.
-        declared_temporal = _to_esio_temporal(ld.get("temporal"))
-
+        # The source's location and cadence, read by EarthSciIO itself
+        # (spec/esm-sources.md §3): esm templates expanded at each file anchor,
+        # calendar months and years exact. It is load-bearing for caching too —
+        # EarthSciIO treats an absent `temporal` as IMMUTABLE and never
+        # revalidates it, so a dropped cadence would pin stale bytes for ever.
         def _loader(
             vars_: list[str],
+            rps: int | None = None,
             _l=lname,
-            _f=fmt,
-            _u=url,
-            _o=reader_options,
-            _t=declared_temporal,
+            _ld=ld,
+            _u=url_override,
+            _s=source_subs,
         ):
-            return esio.DataSource(
-                name=_l,
-                format=str(_f),
-                url=_u,
+            return esio.source_from_esm(
+                _l,
+                _ld,
                 variables=vars_,
-                reader_kwargs=dict(_o),
-                temporal=_t,
+                substitutions=_s,
+                url_override=_u,
+                records_per_sample=rps,
             )
 
         # A record filter or a code map makes the source a TABLE: one decode,
@@ -1024,7 +1044,8 @@ def providers_from_document(
             # rejects an unrecognised `reader_options` key: EarthSciIO checks
             # the declared decode options against the bound reader at Provider
             # construction (spec/registries.md §2.1, FORMAT-08-A-006).
-            inner = esio.Provider(_loader([spec.file_variable]), cache)
+            rps = (records_per_sample or {}).get(key)
+            inner = esio.Provider(_loader([spec.file_variable], rps), cache, window)
             out[key] = EsioDocumentProvider(
                 key,
                 inner,

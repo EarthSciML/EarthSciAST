@@ -20,6 +20,11 @@ import pytest
 
 esio = pytest.importorskip("earthsciio", reason="EarthSciIO not installed")
 
+if not hasattr(esio, "DataSource"):
+    # earthsciio before 0.2 spells it DataLoader and lacks the API these tests
+    # exercise; a stale install would otherwise fail every test here.
+    pytest.skip("earthsciio is older than 0.2", allow_module_level=True)
+
 from earthsci_ast.data_sources.esio_provider import (  # noqa: E402
     providers_from_document,
 )
