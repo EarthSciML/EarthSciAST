@@ -61,8 +61,9 @@ jobs:
       release_validation: true
     secrets: inherit
 
-  # The `mtk` leg of the compiler-agreement tier, which lives in its own
-  # workflow and so has to be called here to stay part of release validation.
+  # The `mtk` leg of the compiler-agreement tier and the package's
+  # ModelingToolkit / Catalyst test suite, which live in their own workflow and
+  # so have to be called here to stay part of release validation.
   run-mtk-compiler-agreement:
     needs: release-analysis
     if: needs.release-analysis.outputs.needs_release == 'true'

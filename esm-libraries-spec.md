@@ -2161,7 +2161,8 @@ that a non-mock object is returned) are insufficient: they cannot catch
 silent bugs such as non-numeric `Expr` nodes, missing initial conditions, unit
 mismatches, or singular Jacobians — all of which surface only inside `solve`.
 
-The test file `test/simulate_e2e_test.jl` is part of `runtests.jl` and MUST
+The test file `test/mtk/simulate_e2e_test.jl` is part of the ModelingToolkit
+suite (`test/mtk/runtests.jl`) and MUST
 cover at minimum:
 
 1. **Exponential decay** — `D(x, t) = −k·x`, `x(0) = 1`, `k = 0.1`. Build via

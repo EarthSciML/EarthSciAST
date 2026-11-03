@@ -20,11 +20,12 @@
 #     `mtkcompile` DID — integrated, residual, or eliminated into an observed),
 #     `var_map`, `observed_field`, `remake`, and `show`.
 #
-# Needs ModelingToolkit loaded, which the test target carries. The `:mtk`
-# UNAVAILABLE arm — `compiler_unavailable` naming what to load — cannot be
-# asserted from here for the same reason: this session has MTK, so `:mtk` is
-# available in it. It is stated in `compiler_selection_test.jl`, where the
-# vocabulary lives, as the arm an MTK-free session takes.
+# Needs ModelingToolkit loaded, which this suite's environment
+# (test/mtk/Project.toml) carries. The `:mtk` UNAVAILABLE arm —
+# `compiler_unavailable` naming what to load — cannot be asserted from here for
+# the same reason: this session has MTK, so `:mtk` is available in it. It is
+# asserted in test/compiler_selection_test.jl, where the vocabulary lives,
+# because the regular suite IS the MTK-free session.
 using Test
 using EarthSciAST
 using JSON3
@@ -39,7 +40,7 @@ import OrdinaryDiffEqNonlinearSolve
 import ModelingToolkit
 
 const _MTKC = EarthSciAST
-const _MTKC_ROOT = normpath(joinpath(@__DIR__, "..", "..", ".."))
+const _MTKC_ROOT = normpath(joinpath(@__DIR__, "..", "..", "..", ".."))
 _mtkc_fixture(parts...) = joinpath(_MTKC_ROOT, "tests", parts...)
 _mtkc_uc(name) = _mtkc_fixture(
     "conformance", "unsupported_construct",
@@ -263,6 +264,22 @@ function _mtkc_raise(f, args...; kwargs...)
 end
 
 @testset "compiler = :mtk (§5.8)" begin
+
+    # ── The plan this session takes: the AVAILABLE arm ──────────────────────
+    #
+    # Strict, and every right-hand-side tier off: this compiler emits none of
+    # this package's own kernels, and it refuses what it cannot express rather
+    # than building part of a document. The construction-time compile-once
+    # forms stay on — the initial-state seed is still this package's
+    # evaluation. (The unavailable arm is test/compiler_selection_test.jl's.)
+    @testset "the plan: strict, every right-hand-side tier off" begin
+        @test Base.get_extension(EarthSciAST, :EarthSciASTMTKExt) !== nothing
+        @test _MTKC._compiler_plan(:mtk).name === :mtk
+        @test _MTKC._compiler_plan(:mtk).strict
+        @test !_MTKC._compiler_plan(:mtk).codegen
+        @test !_MTKC._compiler_plan(:mtk).stencil
+        @test _MTKC._compiler_plan(:mtk).setup_map_compile_once
+    end
 
     # ── The three constructs §5.39 has every other evaluator refuse ─────────
     #

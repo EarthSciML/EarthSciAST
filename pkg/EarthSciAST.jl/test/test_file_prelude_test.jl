@@ -28,8 +28,10 @@
 # Project.toml's `[deps]` / `[weakdeps]` / `[extras]` plus the package's own
 # `name` — so a new helper or a new test dependency is covered the day it lands.
 #
-# SCOPE is every `test/*.jl` except `runtests.jl` itself, which is the driver
-# that establishes the preamble rather than a file that needs one. There is no
+# SCOPE is every `test/*.jl` and every `test/mtk/*.jl` (the separate
+# ModelingToolkit / Catalyst suite, whose files reach the prelude as
+# `include("../testutils.jl")`) except the two `runtests.jl` drivers, which
+# establish the preamble rather than need one. There is no
 # skip list: an included FRAGMENT (testutils.jl, zero_alloc_harness.jl, the two
 # Reactant files) is held to the same bar as an entry point, because a fragment
 # that imports what it uses costs nothing and a fragment that does not is one
@@ -59,6 +61,13 @@ using Test
 
 const _PRELUDE_TEST_DIR = @__DIR__
 const _PRELUDE_PKG_DIR = normpath(joinpath(_PRELUDE_TEST_DIR, ".."))
+# The ModelingToolkit / Catalyst suite: its own driver and environment, the same
+# two invariants (see test/mtk/runtests.jl).
+const _PRELUDE_MTK_DIR = joinpath(_PRELUDE_TEST_DIR, "mtk")
+
+# The spellings of the prelude include: `testutils.jl` from this directory,
+# `../testutils.jl` from test/mtk/.
+const _PRELUDE_TESTUTILS_INCLUDES = ("testutils.jl", "../testutils.jl")
 
 # ---------------------------------------------------------------------------
 # AST walk. `Meta.parseall` reads a file without running it, so the scan sees
@@ -196,14 +205,25 @@ end
     _declared_packages() -> Set{Symbol}
 
 Every package name this project declares — `[deps]`, `[weakdeps]` and
-`[extras]` of Project.toml, plus the package's own `name`. A `Mod.` reference to
-anything outside this set is some local alias or a submodule, not an import this
-check has an opinion about.
+`[extras]` of Project.toml, plus the package's own `name` — and every `[deps]`
+entry of the ModelingToolkit suite's test/mtk/Project.toml. A `Mod.` reference
+to anything outside this set is some local alias or a submodule, not an import
+this check has an opinion about.
 """
 function _declared_packages()
     out = Set{Symbol}()
+    for project in (
+            joinpath(_PRELUDE_PKG_DIR, "Project.toml"),
+            joinpath(_PRELUDE_MTK_DIR, "Project.toml"),
+        )
+        _declared_packages!(out, project)
+    end
+    return out
+end
+
+function _declared_packages!(out::Set{Symbol}, project::AbstractString)
     section = ""
-    for line in eachline(joinpath(_PRELUDE_PKG_DIR, "Project.toml"))
+    for line in eachline(project)
         s = strip(line)
         if startswith(s, "[")
             section = s
@@ -249,7 +269,8 @@ function _prelude_lines(path::AbstractString)
     for (i, line) in enumerate(eachline(path))
         startswith(lstrip(line), "#") && continue
         using_test === nothing && occursin(r"^\s*using\s+Test\b", line) && (using_test = i)
-        include_tu === nothing && occursin("include(\"testutils.jl\")", line) && (include_tu = i)
+        include_tu === nothing && occursin(r"include\(\"(\.\./)?testutils\.jl\"\)", line) &&
+            (include_tu = i)
     end
     return (using_test, include_tu)
 end
@@ -264,7 +285,7 @@ function _missing_prelude(
         tu_gives::Set{Symbol}, pkgs::Set{Symbol}
     )
     f = _prelude_facts(path)
-    has_tu = "testutils.jl" in f.includes
+    has_tu = any(in(f.includes), _PRELUDE_TESTUTILS_INCLUDES)
     missing_lines = String[]
 
     # (1) a Test macro of its own, or (2) the prelude include, which expands one.
@@ -285,7 +306,8 @@ function _missing_prelude(
     isempty(borrowed) || has_tu ||
         push!(
         missing_lines,
-        "include(\"testutils.jl\")   # uses " * join(borrowed, ", ")
+        "include(\"$(dirname(path) == _PRELUDE_MTK_DIR ? "../" : "")testutils.jl\")" *
+            "   # uses " * join(borrowed, ", ")
     )
 
     # (4) `SomeModule.something` for a package this project declares, unless the
@@ -305,22 +327,23 @@ end
     @test :JSON3 in tu_gives && :Test ∉ tu_gives
     @test :Test in pkgs && :EarthSciAST in pkgs   # Project.toml was really read
 
-    files = sort!(
-        filter(
-            f -> endswith(f, ".jl") && f != "runtests.jl",
-            readdir(_PRELUDE_TEST_DIR)
-        )
-    )
-    @test length(files) > 100                      # the sweep is not vacuous
+    sweep(dir) = [
+        joinpath(dir, f) for f in sort!(readdir(dir))
+            if endswith(f, ".jl") && f != "runtests.jl"
+    ]
+    files = vcat(sweep(_PRELUDE_TEST_DIR), sweep(_PRELUDE_MTK_DIR))
+    @test count(f -> dirname(f) == _PRELUDE_TEST_DIR, files) > 100   # the sweep is not vacuous
+    @test count(f -> dirname(f) == _PRELUDE_MTK_DIR, files) > 10     # …in either suite
 
     offenders = String[]
     for f in files
-        lines = _missing_prelude(
-            joinpath(_PRELUDE_TEST_DIR, f),
-            tu_names, tu_gives, pkgs
-        )
+        lines = _missing_prelude(f, tu_names, tu_gives, pkgs)
         isempty(lines) && continue
-        push!(offenders, "  $(f)\n" * join(("      add: " * l for l in lines), "\n"))
+        push!(
+            offenders,
+            "  $(relpath(f, _PRELUDE_TEST_DIR))\n" *
+                join(("      add: " * l for l in lines), "\n")
+        )
     end
 
     @test isempty(offenders) || error(
@@ -344,16 +367,23 @@ end
 # (`ESM_TEST_REACTANT=1`) still NAMES its file, which is the property being
 # pinned — that the driver knows the file exists — and whether a given run takes
 # that branch is the guard's business, documented where the guard is.
-@testset "runtests.jl includes every test file" begin
-    driver = read(joinpath(_PRELUDE_TEST_DIR, "runtests.jl"), String)
+#
+# Both suites, each against its own driver: test/runtests.jl (`Pkg.test()`) for
+# this directory, test/mtk/runtests.jl (the ModelingToolkit CI workflow) for
+# test/mtk/.
+@testset "runtests.jl includes every test file: $(suite)" for (suite, dir, prelude, at_least) in (
+        ("test/", _PRELUDE_TEST_DIR, "testutils.jl", 100),
+        ("test/mtk/", _PRELUDE_MTK_DIR, "../testutils.jl", 10),
+    )
+    driver = read(joinpath(dir, "runtests.jl"), String)
     named = Set{String}(m.captures[1] for m in eachmatch(r"include\(\"([^\"]+)\"\)", driver))
-    @test "testutils.jl" in named                  # the driver was really read
-    files = sort!(filter(f -> endswith(f, "_test.jl"), readdir(_PRELUDE_TEST_DIR)))
-    @test length(files) > 100                      # the sweep is not vacuous
+    @test prelude in named                         # the driver was really read
+    files = sort!(filter(f -> endswith(f, "_test.jl"), readdir(dir)))
+    @test length(files) > at_least                 # the sweep is not vacuous
     orphans = [f for f in files if !(f in named)]
     @test isempty(orphans) || error(
-        "$(length(orphans)) test file(s) are never included by runtests.jl, so " *
-            "`Pkg.test()` — and therefore CI — never runs them:\n" *
+        "$(length(orphans)) test file(s) are never included by $(suite)runtests.jl, " *
+            "so CI never runs them:\n" *
             join(("  " * f for f in orphans), "\n")
     )
 end
