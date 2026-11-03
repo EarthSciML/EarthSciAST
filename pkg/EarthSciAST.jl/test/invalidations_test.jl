@@ -7,7 +7,7 @@
 using Test
 using EarthSciAST
 using OrdinaryDiffEqTsit5: Tsit5
-using SciMLBase: SciMLBase, solve
+using SciMLBase
 
 const _INVALIDATION_LIMITS = Dict(v"1.12" => 2500, v"1.13" => 2450)
 
