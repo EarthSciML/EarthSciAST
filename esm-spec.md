@@ -4103,7 +4103,9 @@ record shape it can see in the loaded document: the parameter's own non-empty
 inline `variable_map` whose declaration resolves in the loaded document (a
 target inside a subsystem mounted by `ref` resolves once the ref is mounted,
 §4.7; a binding that validates before mounting refs treats a target it cannot
-yet reach as not decidable, never as empty). It refuses an empty record shape
+yet reach as not decidable, never as empty, and likewise a record shape whose
+first dimension names an index set that only a not-yet-mounted file can
+declare). It refuses an empty record shape
 only when none can arrive later, that is, when the parameter is the `from` of
 no inline `param_to_var` entry and the document's `coupling` holds no
 `coupling_import` entry. Otherwise a record shape validation could not decide
