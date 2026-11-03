@@ -1318,7 +1318,8 @@ _minmax_rule(expr, var_units, findings) =
 # provable inconsistency inside a later factor is an error whatever the
 # product's unit. Stopping at the first indeterminate factor is what let
 # `1000 * exp(T [degC])` through (tests/invalid/
-# units_transcendental_argument_under_product.esm).
+# units_transcendental_argument_degC_under_product.esm; the other places such a
+# product can sit are in units_transcendental_argument_under_product.esm).
 function _product_rule(expr, var_units, findings)
     result = Unitful.NoUnits
     for arg in expr.args
@@ -1590,8 +1591,15 @@ function _ifelse_rule(expr, var_units, findings)
     )
 end
 
-# "sign": strips dimensions — the result is a dimensionless -1/0/+1.
-_dimensionless_result_rule(expr, var_units, findings) = Unitful.NoUnits
+# "sign": the result is a dimensionless -1/0/+1 whatever the argument's unit,
+# but the argument is walked so a finding inside it (`sign(exp(T [K]))`) is
+# reported (esm-spec §4.8.3).
+function _dimensionless_result_rule(expr, var_units, findings)
+    for arg in expr.args
+        _expr_dimensions!(findings, arg, var_units)
+    end
+    return Unitful.NoUnits
+end
 
 # "and" / "or" / "not": the result is a dimensionless boolean. The operands carry
 # no unit requirement of their own, but they are walked so a mismatch inside one

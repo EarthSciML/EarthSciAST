@@ -4449,10 +4449,14 @@
       {
         "path": "/models/BadUnitsModel/variables/atan_in_product_in_exponent",
         "code": "unit_inconsistency"
+      },
+      {
+        "path": "/models/BadUnitsModel/variables/exp_in_product_under_sign",
+        "code": "unit_inconsistency"
       }
     ],
     "is_valid": false,
-    "notes": "esm-spec \u00a74.8.3, \u00a74.8.4: an undeterminable factor makes a product's unit undeterminable, but the checker must still walk every factor, since a provable inconsistency inside one (here a transcendental function of a dimensional argument) is an error whatever the product's unit. Julia's checker used to stop at the first undeterminable factor and never looked at the rest, so it accepted every one of these."
+    "notes": "esm-spec \u00a74.8.3, \u00a74.8.4: an undeterminable factor makes a product's unit undeterminable, but the checker must still walk every factor, since a provable inconsistency inside one (here a transcendental function of a dimensional argument) is an error whatever the product's unit. Julia's and Go's checkers used to stop at the first undeterminable factor and never looked at the rest, so they accepted every one of these except the last. The last, exp_in_product_under_sign, pins that sign's argument is checked: Julia's sign rule used to return dimensionless without walking it."
   },
   "units_transcendental_argument_degC_under_product.esm": {
     "schema_errors": [],
@@ -4463,6 +4467,6 @@
       }
     ],
     "is_valid": false,
-    "notes": "esm-spec \u00a74.8.3, \u00a74.8.4: a temperature in degC is not dimensionless, so exp(-Ts_c - 4) is a provable inconsistency, and the undeterminable literal factor in front of it does not hide that. Julia's checker used to stop walking a product at its first undeterminable factor and accepted this."
+    "notes": "esm-spec \u00a74.8.3, \u00a74.8.4: a temperature in degC is not dimensionless, so exp(-Ts_c - 4) is a provable inconsistency, and the undeterminable literal factor in front of it does not hide that. Julia's and Go's checkers used to stop walking a product at its first undeterminable factor and accepted this. It is its own file because Python stops at its load-time transcendental check, which only looks at bare-variable arguments, so a compound argument in a file that also fails that check goes unreported (issue #644)."
   }
 }

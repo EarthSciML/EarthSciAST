@@ -2,7 +2,7 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "UnitsTranscendentalArgumentUnderProduct",
-    "description": "Invalid: each observed variable applies a transcendental function (exp, log, log10, sin, tanh, atan) to a dimensional argument, under a product with an undeterminable literal factor, and that product sits in a different place in each: alone, in a sum, a quotient, a nested product, the base of a power and a symbolic exponent. tests/invalid/units_transcendental_argument_degC_under_product.esm pins the case this was found in, with the argument in degC. The literal factor makes the product's own unit undeterminable, but the argument's unit is still known, so each is a provable inconsistency (esm-spec §4.8.3, §4.8.4).",
+    "description": "Invalid: each observed variable applies a transcendental function (exp, log, log10, sin, tanh, atan) to a dimensional argument, under a product with an undeterminable literal factor, and that product sits in a different place in each: alone, in a sum, a quotient, a nested product, the base of a power, a symbolic exponent and the argument of sign. tests/invalid/units_transcendental_argument_degC_under_product.esm pins the case this was found in, with the argument in degC. The literal factor makes the product's own unit undeterminable, but the argument's unit is still known, so each is a provable inconsistency (esm-spec §4.8.3, §4.8.4).",
     "authors": [
       "Chris Tessum with Claude"
     ],
@@ -68,6 +68,11 @@
           "type": "unknown",
           "units": "1",
           "description": "Invalid: x^(2 * atan(T)): the scaled atan is a symbolic exponent."
+        },
+        "exp_in_product_under_sign": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Invalid: sign(1000 * exp(T)): sign is dimensionless whatever its argument, but the argument is still checked."
         }
       },
       "equations": [
@@ -213,6 +218,26 @@
                   2,
                   {
                     "op": "atan",
+                    "args": [
+                      "T"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "exp_in_product_under_sign",
+          "rhs": {
+            "op": "sign",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  1000,
+                  {
+                    "op": "exp",
                     "args": [
                       "T"
                     ]

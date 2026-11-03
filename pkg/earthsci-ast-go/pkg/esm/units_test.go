@@ -403,6 +403,8 @@ func TestPropagateDimensionProductWalksEveryFactor(t *testing.T) {
 		{Op: "/", Args: []any{scaled(expT), 3.0}},
 		{Op: "^", Args: []any{scaled(expT), 2.0}},
 		{Op: "^", Args: []any{"x", scaled(expT)}},
+		{Op: "sign", Args: []any{expT}},
+		{Op: "sign", Args: []any{scaled(expT)}},
 	} {
 		if _, err := PropagateDimension(expr, env); err == nil {
 			t.Errorf("%v must be a mismatch", expr)
@@ -416,6 +418,24 @@ func TestPropagateDimensionProductWalksEveryFactor(t *testing.T) {
 	}
 	if u != nil {
 		t.Errorf("1000 * exp(x) must be indeterminate, got %v", u.Dim)
+	}
+}
+
+// sign's result is a dimensionless -1/0/+1 whatever its argument's unit, so
+// sign(L) * L is a length, not an area (esm-spec §4.8.3).
+func TestPropagateDimensionSignIsDimensionless(t *testing.T) {
+	env := mkEnv(t, map[string]string{"L": "m"})
+	u, err := PropagateDimension(ExprNode{Op: "sign", Args: []any{"L"}}, env)
+	if err != nil || u == nil || !u.Dim.IsDimensionless() {
+		t.Fatalf("sign(L) must be dimensionless, got %v, %v", u, err)
+	}
+	u, err = PropagateDimension(ExprNode{Op: "*", Args: []any{ExprNode{Op: "sign", Args: []any{"L"}}, "L"}}, env)
+	if err != nil || u == nil {
+		t.Fatalf("sign(L) * L must be determinable: %v, %v", u, err)
+	}
+	m, _ := ParseUnit("m")
+	if !u.Dim.Equal(m.Dim) {
+		t.Errorf("sign(L) * L must be m, got %v", u.Dim)
 	}
 }
 

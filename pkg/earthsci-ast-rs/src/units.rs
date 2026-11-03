@@ -896,9 +896,9 @@ fn propagate_operator_dim(
             propagate_transcendental_dim(op, env, findings)
         }
         "sqrt" => propagate_sqrt_dim(op, env, findings),
-        // abs/sign/floor/ceil preserve dimensions; `Pre` is an initial-value
+        // abs/floor/ceil preserve dimensions; `Pre` is an initial-value
         // marker — same dimensions as its argument.
-        "abs" | "floor" | "ceil" | "round" | "sign" | "Pre" => {
+        "abs" | "floor" | "ceil" | "round" | "Pre" => {
             if !require_arity(op, 1, findings) {
                 return Dim::Unknown;
             }
@@ -922,6 +922,15 @@ fn propagate_operator_dim(
             }
             // Operands must be comparable; the flag itself is dimensionless.
             propagate_matching_dim(op, env, findings, AngleRule::Applies);
+            Dim::Known(Unit::dimensionless())
+        }
+        "sign" => {
+            // A dimensionless -1/0/+1 whatever the argument's unit, but the
+            // argument is walked so a finding inside it (`sign(exp(T [K]))`)
+            // is reported (esm-spec §4.8.3).
+            if require_arity(op, 1, findings) {
+                propagate_dim(&op.args[0], env, findings);
+            }
             Dim::Known(Unit::dimensionless())
         }
         "and" | "or" | "not" => {
@@ -4867,6 +4876,33 @@ mod tests {
             Unit::propagate(&literal_branches, &env),
             Err(UnitError::UnknownUnit(_))
         ));
+    }
+
+    /// `sign` is a dimensionless -1/0/+1 whatever its argument's unit, so
+    /// `sign(x) * x` is a length, not an area; a mismatch inside its argument
+    /// is still reported (esm-spec §4.8.3).
+    #[test]
+    fn sign_is_dimensionless_and_walks_its_argument() {
+        let env = env_of(&[("x", "m"), ("z", "kg")]);
+        let sign_x = op("sign", vec![Expr::Variable("x".into())]);
+        let u = Unit::propagate(&sign_x, &env).unwrap();
+        assert!(u.is_dimensionless(), "{u:?}");
+        let product = op("*", vec![sign_x, Expr::Variable("x".into())]);
+        let u = Unit::propagate(&product, &env).unwrap();
+        assert_eq!(
+            u.dimensions.get(&Dimension::Length),
+            Some(&Rational::int(1))
+        );
+        let exp_z = op("exp", vec![Expr::Variable("z".into())]);
+        for expr in [
+            op("sign", vec![exp_z.clone()]),
+            op("sign", vec![op("*", vec![Expr::Integer(1000), exp_z])]),
+        ] {
+            assert!(
+                !check_expression_dimensions(&expr, None, &env).is_empty(),
+                "{expr:?}"
+            );
+        }
     }
 
     /// A boolean connective places no requirement on its operands' units, but a

@@ -1,0 +1,55 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "UnitsSignDimensionless",
+    "description": "Pins esm-spec §4.8.3: sign is a dimensionless -1/0/+1 whatever its argument's unit, so sign(v) * L with v in m/s and L in m has unit m. A binding that gave sign its argument's unit would infer m^2/s and reject this file.",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-11-03T00:00:00Z",
+    "tags": [
+      "units",
+      "dimensional_analysis"
+    ]
+  },
+  "models": {
+    "SignTimesLength": {
+      "variables": {
+        "v": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": -2.0,
+          "description": "A signed velocity"
+        },
+        "L": {
+          "type": "parameter",
+          "units": "m",
+          "default": 3.0,
+          "description": "A length"
+        },
+        "displacement": {
+          "type": "unknown",
+          "units": "m",
+          "description": "L in the direction of v"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "displacement",
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "sign",
+                "args": [
+                  "v"
+                ]
+              },
+              "L"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
