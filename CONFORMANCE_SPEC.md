@@ -7491,8 +7491,10 @@ right-hand side reads the provider's data, never the declared default, and
 `rhs_program`'s default forcing set (API_SPEC §5.8, "Default") holds the same
 data. That holds for a discrete provider (one with refresh times) as for a
 const one: construction samples every provider at `sample_time`
-(esm-libraries-spec §2.5.2), so neither the Problem nor the default forcing set
-holds a discrete provider's declared default until a solve starts.
+(esm-libraries-spec §2.5.2), so the Problem and the default forcing set hold a
+discrete provider's record in effect there, not its declared default, before
+any solve. Only a provider with no record at `sample_time` leaves the declared
+default in place.
 
 **Shape.** `tests/conformance/provider_forcing/manifest.json` builds one
 document (`fixtures/provider_forcing.esm`: a gridded and a scalar data-fed

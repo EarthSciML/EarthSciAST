@@ -750,13 +750,7 @@ function _provider_routing(flat_rec, keys_; model_name = nothing)
     flat_rec === nothing && return targets, shadowed
     flat = flat_rec.flat::FlattenedSystem
     params = Set{String}(keys(flat.parameters))
-    asked = Dict{String, String}()
-    for rawk in keys_
-        k = String(rawk)
-        k in params || !(haskey(flat.state_variables, k) || haskey(flat.observed_variables, k)) ||
-            continue
-        asked[k] = k
-    end
+    asked = _routable_keys(flat, keys_)
     isempty(asked) && return targets, shadowed
     namespaces = _override_namespaces(params; model_name = model_name)
     normalized, unknown, ambiguous, collisions =
@@ -778,29 +772,60 @@ function _provider_routing(flat_rec, keys_; model_name = nothing)
     return targets, shadowed
 end
 
+# The keys of `keys_` the parameter resolver considers, each mapped to itself:
+# every key but one that names a state or observed exactly.
+function _routable_keys(flat::FlattenedSystem, keys_)
+    asked = Dict{String, String}()
+    for rawk in keys_
+        k = String(rawk)
+        k in keys(flat.parameters) ||
+            !(haskey(flat.state_variables, k) || haskey(flat.observed_variables, k)) ||
+            continue
+        asked[k] = k
+    end
+    return asked
+end
+
 # Refuse a provider routed onto a parameter the caller's own `const_arrays` or
 # `param_arrays` also supply, under any spelling of it: two sources for one
 # value, where writing the provider's would silently replace the caller's array
-# (or, for a live buffer, the very object the caller holds).
+# (or, for a live buffer, the very object the caller holds). A registry key is
+# resolved onto the parameters by the same resolver the provider keys went
+# through (`_canonicalize_override_keys`, via `_routable_keys`), so the two
+# surfaces agree on what a key designates. A registry key carried by several
+# parameters, one of them provider-fed, is refused as ambiguous (esm-spec
+# §6.6.2); one that names a state, observed or loader field is not a
+# parameter's and never overlaps.
 function _refuse_provider_registry_overlap(
         targets::AbstractDict, flat_rec, registries::Pair...;
         model_name = nothing
     )
     (isempty(targets) || flat_rec === nothing) && return nothing
     flat = flat_rec.flat::FlattenedSystem
-    namespaces = _override_namespaces(Set{String}(keys(flat.parameters)); model_name = model_name)
-    designates(k, name) = k == name || endswith(name, "." * k) ||
-        _dotted_suffix_hit(Set((name,)), namespaces, k) == name
-    for (pk, name) in sort!(collect(targets), by = first), (label, reg) in registries
+    params = Set{String}(keys(flat.parameters))
+    namespaces = _override_namespaces(params; model_name = model_name)
+    fed = Dict{String, String}(name => pk for (pk, name) in targets)
+    overlap(label, pk, rk, name) = throw(
+        ArgumentError(
+            "providers['$(pk)'] and $(label)['$(rk)'] both supply the parameter " *
+                "'$(name)'; pass one of them (esm-spec §6.6.2)"
+        )
+    )
+    for (label, reg) in registries
         reg === nothing && continue
-        for rk in keys(reg)
-            designates(String(rk), name) || continue
-            throw(
-                ArgumentError(
-                    "providers['$(pk)'] and $(label)['$(rk)'] both supply the parameter " *
-                        "'$(name)'; pass one of them (esm-spec §6.6.2)"
-                )
-            )
+        asked = _routable_keys(flat, keys(reg))
+        isempty(asked) && continue
+        normalized, _, ambiguous, collisions =
+            _canonicalize_override_keys(Any, params, namespaces, asked)
+        for (k, cands) in sort!(collect(ambiguous), by = first)
+            any(c -> haskey(fed, c), cands) &&
+                throw(ArgumentError(_override_ambiguous_message(label, k, cands)))
+        end
+        for (name, rk) in sort!(collect(normalized), by = first)
+            haskey(fed, name) && overlap(label, fed[name], rk, name)
+        end
+        for (name, rks) in sort!(collect(collisions), by = first)
+            haskey(fed, name) && overlap(label, fed[name], first(rks), name)
         end
     end
     return nothing

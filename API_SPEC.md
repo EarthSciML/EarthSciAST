@@ -1160,7 +1160,9 @@ gather failed, or that were never gathered, are `NotGathered`. Build-time calls 
   `ArrayParameter` slot the parameter's value. Provider data means const and
   discrete providers alike: construction samples every provider at
   `sample_time` (esm-libraries-spec §2.5.2), so a discrete provider's slot
-  holds its sample there, not the declared default, before any solve. It is a
+  holds its record in effect there, not the declared default, before any
+  solve. A provider that has no record at `sample_time` leaves the declared
+  default in its slot until it first delivers. It is a
   copy taken at program build; later changes to the Problem's own buffers are
   not seen. Every call returns the same set (same buffers, same epoch).
 - **Compatibility.** A set is valid for the program it was built against and for

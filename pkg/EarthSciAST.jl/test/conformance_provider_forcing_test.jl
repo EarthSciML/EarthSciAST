@@ -204,6 +204,48 @@ end
         )
         @test err isa ArgumentError && occursin("both supply the parameter 'M.s'", err.msg)
     end
+    # The override replaces the data under every key that holds it: the
+    # caller's spelling (`s`) beside the build's name (`M.s`), so a consumer
+    # that reads the caller's spelling sees the override too.
+    model = PFC.coerce_esm_file(JSON3.read(JSON3.write(doc))).models["M"]
+    data = [3.0]
+    out = PFC._scalar_overrides_over_supplied(
+        model, Dict{String, Any}("s" => data, "M.s" => data), Dict{String, Any}(),
+        Dict("s" => 5.0)
+    )
+    @test out["s"] == [5.0] && out["M.s"] == [5.0]
+    # With two models carrying `s`, a bare `s` in `const_arrays` beside a
+    # provider for `Fed.s` is ambiguous (esm-spec §6.6.2), the shared
+    # resolver's diagnostic, not a claim that both supply `Fed.s`.
+    two = deepcopy(doc)
+    two["models"]["Fed"] = two["models"]["M"]
+    two["models"]["Other"] = Dict(
+        "variables" => Dict(
+            "y" => Dict("type" => "unknown", "units" => "1", "default" => 1.0),
+            "s" => Dict("type" => "parameter", "units" => "1/s", "default" => 1.0)
+        ),
+        "equations" => [
+            Dict(
+                "lhs" => Dict("op" => "D", "args" => ["y"], "wrt" => "t"),
+                "rhs" => Dict("op" => "*", "args" => ["s", "y"])
+            ),
+        ]
+    )
+    delete!(two["models"], "M")
+    pr = _PFCProvider("Fed.s", Float64[], Int[], 3.0, 0.0)
+    err = _pfc_err(
+        () -> PFC.esm_problem(
+            two, (0.0, 1.0); compiler = :native,
+            providers = Dict{String, Any}("Fed.s" => pr), const_arrays = Dict("s" => [9.0])
+        )
+    )
+    @test err isa ArgumentError && occursin("const_arrays: ambiguous parameter name 's'", err.msg)
+    # The other model's own `s`, named in full, is no overlap.
+    prob = PFC.esm_problem(
+        two, (0.0, 1.0); compiler = :native,
+        providers = Dict{String, Any}("Fed.s" => pr), const_arrays = Dict("Other.s" => [9.0])
+    )
+    @test prob !== nothing
     # The re-keying wrapper answers every optional provider capability as the
     # provider it wraps does.
     w = PFC._RekeyedProvider(_PFCSelectable(), Pair{String, String}[])

@@ -1704,10 +1704,11 @@ impl ArrayCompiled {
             Alg::Erk => "Erk",
         };
 
-        // CONST / single-segment (or no output grid to align segment samples on):
-        // the original un-segmented run — byte-identical to the pre-segmentation
-        // driver (one `run_one_segment` over the whole span with `opts` verbatim).
-        if boundaries.is_empty() || opts.saveat.is_none() {
+        // CONST / single-segment: the original un-segmented run — byte-identical
+        // to the pre-segmentation driver (one `run_one_segment` over the whole
+        // span with `opts` verbatim). A refresh boundary segments the run
+        // whether or not the caller gave an output grid.
+        if boundaries.is_empty() {
             let (time, state, stats, retcode) = self
                 .run_one_segment(
                     t0,
@@ -2055,7 +2056,10 @@ impl ArrayCompiled {
             endpoints.push(t_end);
         }
 
-        let global_out = opts.saveat.clone().expect("output grid checked Some");
+        // `None`: no output grid, so each segment reports the solver's own
+        // steps (its start only for the first segment, since every later
+        // segment starts where the one before it ended).
+        let global_out = opts.saveat.clone();
         let mut u0 = ic_vec.to_vec();
         let mut time: Vec<f64> = Vec::new();
         let mut state: Vec<Vec<f64>> = vec![Vec::new(); n_states];
@@ -2077,15 +2081,17 @@ impl ArrayCompiled {
             // Requested outputs falling in this segment: (a, b] — or [a, b] for
             // the first. Always run the solver's grid up to `b` (append if
             // absent) so the state at `b` seeds the next segment.
-            let requested: Vec<f64> = global_out
-                .iter()
-                .copied()
-                .filter(|&g| (if a == t0 { g >= a } else { g > a }) && g <= b)
-                .collect();
-            let mut grid = requested.clone();
-            if grid.last() != Some(&b) {
-                grid.push(b);
-            }
+            let in_segment = |g: f64| (if a == t0 { g >= a } else { g > a }) && g <= b;
+            let requested: Option<Vec<f64>> = global_out
+                .as_ref()
+                .map(|out| out.iter().copied().filter(|&g| in_segment(g)).collect());
+            let grid = requested.as_ref().map(|requested| {
+                let mut grid = requested.clone();
+                if grid.last() != Some(&b) {
+                    grid.push(b);
+                }
+                grid
+            });
             // Report progress against the GLOBAL interval, not the segment's.
             // Each segment runs a fresh solver over [a, b] with its own step
             // counter, so handing the caller's observer through unwrapped would
@@ -2106,7 +2112,7 @@ impl ArrayCompiled {
                 wrapped
             });
             let seg_opts = SolveOptions {
-                saveat: Some(grid),
+                saveat: grid,
                 progress: seg_progress,
                 ..opts.clone()
             };
@@ -2131,13 +2137,18 @@ impl ArrayCompiled {
             if !seg_retcode.is_success() {
                 retcode = seg_retcode;
             }
-            // `run_solver` pushes the REQUESTED grid time verbatim, so a float
-            // equality against `requested`/`b` is exact.
+            // `run_solver` pushes the REQUESTED grid time verbatim, and stops
+            // its own step grid exactly at `b`, so a float equality against
+            // `requested`/`b` is exact.
             for (i, &t) in seg_time.iter().enumerate() {
                 if t == b {
                     u0 = (0..n_states).map(|r| seg_state[r][i]).collect();
                 }
-                if requested.contains(&t) {
+                let keep = match &requested {
+                    Some(requested) => requested.contains(&t),
+                    None => in_segment(t),
+                };
+                if keep {
                     time.push(t);
                     for r in 0..n_states {
                         state[r].push(seg_state[r][i]);

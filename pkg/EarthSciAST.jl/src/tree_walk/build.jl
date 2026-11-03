@@ -1029,7 +1029,8 @@ end
 # one-cell array the build folds. A live buffer: the run rewrites it at every
 # refresh, so the override could hold only until the first one; refused rather
 # than half-applied. Without this the parameter has no `p` slot, so the override
-# was never read and the run silently used the provider's value.
+# was never read and the run silently used the provider's value. Every alias of
+# the data (the caller's spelling of a provider key) is replaced with it.
 function _scalar_overrides_over_supplied(
         model::Model, const_arrays::AbstractDict, param_arrays::AbstractDict,
         overrides::AbstractDict
@@ -1051,7 +1052,14 @@ function _scalar_overrides_over_supplied(
             )
         )
         out === nothing && (out = Dict{String, Any}(String(k) => x for (k, x) in const_arrays))
-        out[name] = fill(Float64(ov), size(a))
+        # Every key holding this very array: the data may sit under the
+        # caller's spelling beside the build's name (`_put_provider_const!`),
+        # and a consumer reading that spelling must see the override too.
+        replaced = fill(Float64(ov), size(a))
+        for (k, x) in out
+            x === a && (out[k] = replaced)
+        end
+        out[name] = replaced
     end
     return out === nothing ? const_arrays : out
 end

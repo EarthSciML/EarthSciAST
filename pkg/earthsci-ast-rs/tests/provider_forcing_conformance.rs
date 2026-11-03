@@ -216,3 +216,127 @@ fn two_providers_for_one_parameter_are_refused() {
         "the refusal names both providers: {msg}"
     );
 }
+
+/// A scalar provider for `Fed.s` that answers only at its own refresh times
+/// (the `CadenceProvider` contract allows `None` anywhere else), logging
+/// every time it is asked.
+struct Scheduled {
+    schedule: Vec<(f64, f64)>,
+    log: std::rc::Rc<std::cell::RefCell<Vec<f64>>>,
+}
+
+impl CadenceProvider for Scheduled {
+    fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
+        unreachable!("a discrete provider is never materialized")
+    }
+    fn refresh(&mut self, t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
+        self.log.borrow_mut().push(t);
+        Ok(self.schedule.iter().find(|(a, _)| *a == t).map(|&(_, v)| {
+            let a = ArrayD::from_shape_vec(IxDyn(&[]), vec![v]).expect("0-d field");
+            HashMap::from([("Fed.s".to_string(), NativeField::new(a))])
+        }))
+    }
+    fn refresh_times(&self) -> Vec<f64> {
+        self.schedule.iter().map(|&(t, _)| t).collect()
+    }
+}
+
+/// The problem over `provider_forcing.esm` with `Fed.s` fed by `schedule`,
+/// and the log of the times its provider was asked.
+fn scheduled_problem(
+    schedule: &[(f64, f64)],
+    tspan: (f64, f64),
+    sample_time: Option<f64>,
+) -> (
+    Result<earthsci_ast::EsmProblem, earthsci_ast::SimulateError>,
+    std::rc::Rc<std::cell::RefCell<Vec<f64>>>,
+) {
+    let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let provider = Scheduled {
+        schedule: schedule.to_vec(),
+        log: log.clone(),
+    };
+    let providers = HashMap::from([(
+        "Fed.s".to_string(),
+        Box::new(provider) as Box<dyn CadenceProvider>,
+    )]);
+    let prob = esm_problem(
+        suite_dir().join("fixtures/provider_forcing.esm").as_path(),
+        tspan,
+        ProblemOptions {
+            compiler: Some(Compiler::Native),
+            providers,
+            sample_time,
+            ..Default::default()
+        },
+    );
+    (prob, log)
+}
+
+/// The default forcing set's value of the scalar `s`.
+fn default_s(prob: &earthsci_ast::EsmProblem) -> f64 {
+    let prog = rhs_program(prob).expect("program");
+    let k = prog
+        .forcing_slots()
+        .iter()
+        .position(|s| s.name == "Fed.s" || s.name == "s")
+        .expect("a slot for s");
+    prog.default_forcing().buffer(k)[0]
+}
+
+/// Construction samples the record IN EFFECT at `sample_time`: a provider
+/// that answers only at its own refresh times gives the latest one at or
+/// before it.
+#[test]
+fn construction_samples_the_record_in_effect() {
+    let (prob, log) = scheduled_problem(&[(0.25, 4.0), (0.75, 8.0)], (0.0, 1.0), Some(0.5));
+    let prob = prob.expect("builds");
+    assert_eq!(default_s(&prob), 4.0, "the 0.25 record holds at 0.5");
+    assert_eq!(*log.borrow(), vec![0.5, 0.25]);
+}
+
+/// A provider that delivers nothing at `sample_time` (its first refresh time
+/// is later) leaves the declared default, 2.0, in the slot.
+#[test]
+fn nothing_delivered_at_construction_keeps_the_declared_default() {
+    let (prob, _) = scheduled_problem(&[(0.5, 4.0)], (0.0, 1.0), None);
+    assert_eq!(default_s(&prob.expect("builds")), 2.0);
+}
+
+/// Every refresh time inside the span is a boundary, including one before an
+/// explicit `sample_time`, and a solve refreshes at each one whether or not
+/// it has an output grid. A Problem remade over a wider span refreshes at
+/// that span's refresh times too.
+#[test]
+fn solve_refreshes_at_every_refresh_time() {
+    let schedule = [(0.0, 1.0), (0.1, 2.0), (0.5, 4.0), (1.5, 8.0)];
+    let (prob, log) = scheduled_problem(&schedule, (0.0, 1.0), Some(0.25));
+    let prob = prob.expect("builds");
+    let asked_after = |n: usize| log.borrow()[n..].to_vec();
+
+    for saveat in [None, Some(vec![1.0])] {
+        let n = log.borrow().len();
+        let sol = earthsci_ast::solve(
+            &prob,
+            &earthsci_ast::SolveOptions {
+                saveat: saveat.clone(),
+                ..Default::default()
+            },
+        )
+        .expect("solves");
+        assert_eq!(asked_after(n), vec![0.0, 0.1, 0.5], "saveat {saveat:?}");
+        assert_eq!(*sol.time.last().unwrap(), 1.0);
+    }
+
+    let remade = earthsci_ast::remake(
+        &prob,
+        &earthsci_ast::Remake {
+            tspan: Some((0.0, 2.0)),
+            ..Default::default()
+        },
+    )
+    .expect("remakes");
+    let n = log.borrow().len();
+    earthsci_ast::solve(&remade, &Default::default()).expect("solves");
+    assert_eq!(asked_after(n), vec![0.0, 0.1, 0.5, 1.5]);
+}
