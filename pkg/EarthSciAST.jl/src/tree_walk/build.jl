@@ -977,7 +977,7 @@ function _partition_variables(
                 # parameter, so it is NOT added to param_names.
                 haskey(const_arrays, name) || haskey(param_arrays, name) ||
                     throw(_missing_data_error(name, v))
-            else
+            elseif !_scalar_supplied(name, const_arrays, param_arrays)
                 push!(param_names, name)
             end
         elseif name in observed_here
@@ -994,6 +994,40 @@ function _partition_variables(
     end
     sort!(param_names)
     return param_names, observed_names, state_var_names
+end
+
+# A SCALAR parameter whose value arrives as data under its exact name: a
+# one-cell `const_arrays` entry (a const provider's field, folded to a literal
+# by `_resolve_indices`) or a one-cell `param_arrays` buffer (a discrete
+# provider's, read live through a gather). The right-hand side reads the data,
+# never a `p` slot, so the partition gives it none: a `p` slot holding the
+# declared default would be a value nothing reads, and `remake(prob; p = …)` on
+# it would change nothing. It is classed `:const_folded` / `:forcing` instead,
+# like a shaped parameter backed by the same registries.
+function _scalar_supplied(name, const_arrays::AbstractDict, param_arrays::AbstractDict)
+    for reg in (param_arrays, const_arrays)
+        a = get(reg, name, nothing)
+        a isa AbstractArray && length(a) == 1 && return true
+    end
+    return false
+end
+
+# The build-time value of each scalar parameter `_scalar_supplied` keeps out of
+# `p`: the data it was given, so a build-time consumer (an `ic` fold, a
+# cellwise observed evaluation) reads what the right-hand side reads at the
+# start of the run, not the declared default.
+function _supplied_scalar_scope!(
+        param_scope::Dict{String, Float64}, model::Model,
+        const_arrays::AbstractDict, param_arrays::AbstractDict
+    )
+    for (name, v) in model.variables
+        v.type == ParameterVariable && !_is_array_shape(v.shape) || continue
+        _scalar_supplied(name, const_arrays, param_arrays) || continue
+        a = get(param_arrays, name, nothing)
+        a isa AbstractArray && length(a) == 1 || (a = const_arrays[name])
+        param_scope[name] = Float64(first(a))
+    end
+    return param_scope
 end
 
 # A shaped parameter that reached the partition with no value: no `default`,
@@ -4012,6 +4046,7 @@ function _build_partition_and_materialize(
         model, param_names, parameter_overrides;
         supplied = const_arrays, supplied_live = param_arrays
     )
+    _supplied_scalar_scope!(param_scope, model, const_arrays, param_arrays)
 
     # ---- M4: materialize intersect_polygon clip rings at setup time ----
     # Each clip is evaluated now (operands are const_arrays) into a CLOSED ring,

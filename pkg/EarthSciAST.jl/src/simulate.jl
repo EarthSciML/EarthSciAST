@@ -723,6 +723,98 @@ _provider_const_field(sample, var::AbstractString) =
     Array{Float64}(_sample_field(sample, String(var)))
 
 # --------------------------------------------------------------------------- #
+# Provider keys → the names the build reads (esm-spec §6.6.2).
+#
+# A `providers` key may spell a data-fed parameter the way a caller spells a
+# `parameter_overrides` key: bare (`s`) or partly qualified, where the
+# flattened system names it `Fed.s`. The build reads only the flattened name,
+# so data written under the caller's spelling was never read: the parameter
+# silently kept its declared default. Each key that is not itself a flattened
+# name and is a dotted suffix of exactly one externally fed parameter is
+# mapped onto that parameter. A key that is a flattened name (a loader field,
+# say), or a suffix of none, is kept as it is. A suffix of two or more is
+# ambiguous, and two keys that land on one parameter collide; both are errors
+# naming the keys, as they are for `parameter_overrides`.
+# --------------------------------------------------------------------------- #
+function _provider_targets(flat_rec, provider_keys)
+    out = Dict{String, String}()
+    flat_rec === nothing && return out
+    flat = flat_rec.flat::FlattenedSystem
+    fed = String[n for (n, v) in flat.parameters if _externally_fed(v)]
+    exact(k) = haskey(flat.parameters, k) || haskey(flat.state_variables, k) ||
+        haskey(flat.observed_variables, k)
+    claims = Dict{String, Vector{String}}()
+    for rawk in provider_keys
+        k = String(rawk)
+        exact(k) && continue
+        hits = String[n for n in fed if endswith(n, "." * k)]
+        isempty(hits) && continue
+        length(hits) == 1 || throw(
+            ArgumentError(
+                "providers: ambiguous parameter name '$(k)' — it is carried as a " *
+                    "suffix by $(length(hits)) data-fed parameters " *
+                    "($(join(sort!(hits), ", "))). Qualify it further with its owning " *
+                    "component (esm-spec §6.6.2)."
+            )
+        )
+        out[k] = hits[1]
+        push!(get!(claims, hits[1], String[]), k)
+    end
+    for k in provider_keys
+        k = String(k)
+        exact(k) && haskey(claims, k) && push!(claims[k], k)
+    end
+    for name in sort!(collect(keys(claims)))
+        ks = claims[name]
+        length(ks) == 1 || throw(
+            ArgumentError(
+                "providers: $(length(ks)) keys ($(join(sort!(ks), ", "))) all designate " *
+                    "the parameter '$(name)'; pass one provider for it"
+            )
+        )
+    end
+    return out
+end
+
+# A discrete provider delivering its field under the caller's key, re-exposed
+# under the name the build reads, so the refresh callback and the re-seed at a
+# run's start find it under the buffer's own name. One wrapper per provider
+# object, so a provider serving several fields is still sampled once per
+# refresh.
+struct _RekeyedProvider
+    inner::Any
+    fields::Vector{Pair{String, String}}   # name the build reads => caller's key
+end
+provider_refresh_times(p::_RekeyedProvider) = provider_refresh_times(p.inner)
+provider_is_const(p::_RekeyedProvider) = provider_is_const(p.inner)
+function provider_sample(p::_RekeyedProvider, t::Real; selection = nothing)
+    s = selection === nothing ? provider_sample(p.inner, t) :
+        provider_sample(p.inner, t; selection = selection)
+    return Dict{String, Any}(to => _sample_field(s, from) for (to, from) in p.fields)
+end
+
+function _rekey_discrete_providers!(discrete::Dict{String, Any}, targets::Dict{String, String})
+    isempty(targets) && return discrete
+    from = Dict{String, String}(v => k for (k, v) in targets)
+    renamed = [k for k in keys(discrete) if haskey(from, k)]
+    isempty(renamed) && return discrete
+    wrap = IdDict{Any, _RekeyedProvider}()
+    for k in keys(discrete)
+        # Every field of a provider any of whose keys was renamed rides one
+        # wrapper; its other fields keep their own names.
+        any(r -> discrete[r] === discrete[k], renamed) || continue
+        w = get!(wrap, discrete[k]) do
+            _RekeyedProvider(discrete[k], Pair{String, String}[])
+        end
+        push!(w.fields, k => get(from, k, k))
+    end
+    for k in collect(keys(discrete))
+        haskey(wrap, discrete[k]) && (discrete[k] = wrap[discrete[k]])
+    end
+    return discrete
+end
+
+# --------------------------------------------------------------------------- #
 # Callback composition seam — the `CallbackSet` constructor lives in
 # EarthSciASTSimulateExt (SciMLBase), exactly like the callback CONSTRUCTORS
 # live in the DiffEqCallbacks extensions. A problem with zero or one callback
@@ -1060,6 +1152,7 @@ function _program_seed(prob)
         # routed them; the live forcing buffers are the Problem's own.
         merged_const = Dict{String, Any}(String(k) => v for (k, v) in r.const_arrays)
         if r.providers !== nothing
+            targets = _provider_targets(flat[], keys(r.providers))
             for (rawk, prov) in r.providers
                 k = String(rawk)
                 if k in r.discovered
@@ -1070,7 +1163,7 @@ function _program_seed(prob)
                     )
                 elseif !(k in r.pd_gated) && !provider_is_gated(prov) &&
                         provider_is_const(prov)
-                    merged_const[k] = _provider_const_field(
+                    merged_const[get(targets, k, k)] = _provider_const_field(
                         provider_sample(prov, r.sample_time), k
                     )
                 end
@@ -1183,7 +1276,12 @@ Stable keyword arguments (API_SPEC §5.8 — the bindings that fix a DOCUMENT):
   scoped-reference `ic(Sys.sp) ~ Model.param` folds the seeded field into `u0`
   and a loader→consumer `variable_map` binding resolves the consumer gather from
   it. DISCRETE providers get a live buffer plus a [`build_refresh_callback`](@ref)
-  on the problem, so their forcing refreshes in place at its cadence.
+  on the problem, so their forcing refreshes in place at its cadence. A key
+  that names a data-fed parameter may spell it as a `parameter_overrides` key
+  may (esm-spec §6.6.2): `Fed.s` or `s` both feed the flattened `Fed.s`. A
+  scalar parameter given data this way has no slot in `p`; the right-hand side
+  reads the data (`parameter_classes(prob)` reports it `:const_folded` or
+  `:forcing`).
 * `model_name` — select one model when the document holds several.
 * `metaparameters::AbstractDict` — binds the document's open metaparameters at
   the loader API (esm-spec §9.7.6 binding site 3), exactly as
@@ -1453,10 +1551,16 @@ function esm_problem(
         string(k) for d in (const_arrays, param_arrays, providers)
             if d !== nothing for k in keys(d)
     )
+    run_flat = Ref{Any}(nothing)
     doc = _prepare_run_doc(
         input; metaparameters = metaparams, base_path = base_path,
-        renames_out = merged_renames, supplied_names = supplied
+        renames_out = merged_renames, supplied_names = supplied,
+        flat_out = run_flat
     )
+    # The parameter each provider feeds, under the name the build reads
+    # (`_provider_targets`): a bare `s` lands on `Fed.s`.
+    provider_targets = providers === nothing ? Dict{String, String}() :
+        _provider_targets(run_flat[], keys(providers))
 
     # esm-spec §6.6.2: a `p` binding is a scalar, or — for a SHAPED parameter —
     # INLINE ARRAY DATA (a row-major nested array supplying the whole column).
@@ -1505,7 +1609,8 @@ function esm_problem(
                 # build resolves the selection without re-consulting the provider.
                 gated_providers[k] = (prov = prov, gate = provider_gate_spec(prov))
             elseif provider_is_const(prov)
-                merged_const[k] = _provider_const_field(provider_sample(prov, t_sample), k)
+                merged_const[get(provider_targets, k, k)] =
+                    _provider_const_field(provider_sample(prov, t_sample), k)
             else
                 # DISCRETE: allocate a LIVE forcing buffer seeded at the initial tick
                 # and register it in `param_arrays`. That makes the loader field a
@@ -1515,10 +1620,12 @@ function esm_problem(
                 # materialized cache, instead of a build-once setup const where the
                 # (still-unbound) live `F_src` would fail. The refresh callback then
                 # rewrites this SAME buffer in place at each cadence tick.
-                merged_param[k] = _provider_const_field(provider_sample(prov, t_sample), k)
-                discrete_providers[k] = prov
+                tk = get(provider_targets, k, k)
+                merged_param[tk] = _provider_const_field(provider_sample(prov, t_sample), k)
+                discrete_providers[tk] = prov
             end
         end
+        _rekey_discrete_providers!(discrete_providers, provider_targets)
     end
 
     # Phase 1: pushdown-path name aliasing. The build-front-door consumers that

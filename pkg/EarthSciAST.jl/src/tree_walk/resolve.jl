@@ -1942,6 +1942,20 @@ function _resolve_indices(
     # already resolves `index(name, …)`. A live state slot always wins (never a
     # loader field), and a multi-element array left bare is not scalarisable, so it
     # passes through unchanged for the array machinery / normal error path.
+    # The live sibling: a bare reference to a ONE-CELL forcing buffer — the
+    # buffer a discrete provider rewrites for a 0-d data-fed parameter — reads
+    # the buffer, never a literal, exactly as `index(name, 1)` does below. The
+    # partition gives such a parameter no `p` slot (`_partition_variables`), so
+    # this is the only place its value comes from.
+    if !haskey(var_map, expr.name) && haskey(pgather, expr.name)
+        pg = pgather[expr.name]::_PGatherArray
+        if length(pg.flat) == 1
+            return OpExpr(
+                "index", ASTExpr[];
+                value = _PGatherRef(pg.flat, 1, expr.name)
+            )
+        end
+    end
     if !haskey(var_map, expr.name) && haskey(const_arrays, expr.name)
         arr = const_arrays[expr.name]
         if arr isa AbstractArray && length(arr) == 1

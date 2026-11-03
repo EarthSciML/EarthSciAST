@@ -8,6 +8,7 @@ using JSON3
 using EarthSciAST
 using DiffEqCallbacks            # the refresh callback of a discrete provider
 using SciMLBase
+using OrdinaryDiffEqTsit5
 
 const PFC = EarthSciAST
 
@@ -80,11 +81,98 @@ end
             @test _pfc_bits(du) == _pfc_bits(c.du_default)
             dp = fill(NaN, length(prob.u0))
             prob.f!(dp, prob.u0, prob.p, tspan[1])
-            if "julia" in get(c, :problem_du_broken, String[])
-                @test_broken _pfc_bits(dp) == _pfc_bits(c.du_default)
-            else
-                @test _pfc_bits(dp) == _pfc_bits(c.du_default)
+            @test _pfc_bits(dp) == _pfc_bits(c.du_default)
+            # Not a manifest check: a solve integrates what the providers
+            # deliver. A run samples them at its own start, t0 = tspan[1]
+            # (whatever `sample_time` the Problem was built at), and nothing
+            # changes before the first refresh time (0.5), so up to then
+            # D(u[i]) = a[i] - k u[i], a[i] = s E[i, 2], and with u(t0) = 1,
+            # u(t) = a/k + (1 - a/k) e^(-k (t - t0)).
+            k, T = 0.25, 0.25
+            field(key, default) = begin
+                i = findfirst(p -> String(p.key) in (key, "Fed." * key), c.providers)
+                i === nothing && return default
+                pr = c.providers[i]
+                return _pfc_value(
+                    _PFCProvider(
+                        "", Float64[], Int[x for x in pr.shape], copy(pr.base),
+                        Float64(pr.slope)
+                    ), tspan[1]
+                )
             end
+            sv = only(field("s", [2.0]))
+            Ev = field("E", fill(0.5, 3, 2))
+            a = sv .* Ev[:, 2]
+            sol = SciMLBase.solve(prob, Tsit5(); saveat = [T], abstol = 1.0e-12, reltol = 1.0e-12)
+            uT = sol.u[findfirst(==(T), sol.t)]
+            @test uT ≈ a ./ k .+ (1 .- a ./ k) .* exp(-k * (T - tspan[1])) rtol = 1.0e-9
+            # A 0-d data-fed parameter given data takes no slot of `p`, which
+            # nothing would read: it is const data or a live buffer.
+            want = isempty(c.providers) ? :numeric :
+                all(p -> isempty(p.refresh_times), c.providers) ? :const_folded : :forcing
+            @test PFC.parameter_classes(prob)["Fed.s"] == want
+            @test haskey(prob.p, Symbol("Fed.s")) == (want == :numeric)
         end
     end
+end
+
+# Binding-local checks beside the suite: a 0-d data-fed parameter read by a
+# scalar (unindexed) equation, and two keys for one parameter.
+@testset "provider_forcing: scalar equation, key collisions" begin
+    doc = Dict{String, Any}(
+        "esm" => "1.2.0",
+        "metadata" => Dict("name" => "scalar_fed", "authors" => ["test"]),
+        "data_sources" => Dict(
+            "met" => Dict(
+                "kind" => "grid",
+                "source" => Dict("url_template" => "file:///data/met/fields.nc")
+            )
+        ),
+        "models" => Dict(
+            "M" => Dict(
+                "variables" => Dict(
+                    "x" => Dict("type" => "unknown", "units" => "1", "default" => 1.0),
+                    "s" => Dict(
+                        "type" => "parameter", "units" => "1/s", "default" => 2.0,
+                        "shape" => Any[],
+                        "update" => Dict(
+                            "kind" => "data", "source" => "met",
+                            "from" => Dict("file_variable" => "s")
+                        )
+                    ),
+                    "k" => Dict("type" => "parameter", "units" => "1/s", "default" => 0.25)
+                ),
+                "equations" => [
+                    Dict(
+                        "lhs" => Dict("op" => "D", "args" => ["x"], "wrt" => "t"),
+                        "rhs" => Dict(
+                            "op" => "-",
+                            "args" => ["s", Dict("op" => "*", "args" => ["k", "x"])]
+                        )
+                    ),
+                ]
+            )
+        )
+    )
+    for (key, times) in (("s", Float64[]), ("M.s", Float64[]), ("s", [0.5]), ("M.s", [0.5]))
+        prov = _PFCProvider(key, times, Int[], 3.0, 0.0)
+        prob = PFC.esm_problem(
+            doc, (0.0, 1.0); compiler = :native, providers = Dict{String, Any}(key => prov)
+        )
+        du = fill(NaN, 1)
+        prob.f!(du, prob.u0, prob.p, 0.0)
+        @test du == [2.75]
+    end
+    p1 = _PFCProvider("s", Float64[], Int[], 3.0, 0.0)
+    p2 = _PFCProvider("M.s", Float64[], Int[], 4.0, 0.0)
+    err = try
+        PFC.esm_problem(
+            doc, (0.0, 1.0); compiler = :native,
+            providers = Dict{String, Any}("s" => p1, "M.s" => p2)
+        )
+        nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError && occursin("all designate the parameter 'M.s'", err.msg)
 end
