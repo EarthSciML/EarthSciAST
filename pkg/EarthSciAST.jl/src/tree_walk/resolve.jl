@@ -524,7 +524,7 @@ _contracted_index_names(ranges_dict, output_idx) =
 
 _ast_reads(e, name::AbstractString) =
     e isa VarExpr ? (e::VarExpr).name == name :
-    e isa OpExpr ? any(a -> _ast_reads(a, name), (e::OpExpr).args) : false
+    e isa OpExpr ? _anyof(a -> _ast_reads(a, name), (e::OpExpr).args) : false
 
 # For each contracted index, the other contracted indices its range reads, or
 # `nothing` when no range reads one (the common case: a product).
@@ -844,7 +844,7 @@ function _ragged_reach(rspec, const_arrays::AbstractDict)
     ) || return 1
     arr = get(const_arrays, ((hi::OpExpr).args[1]::VarExpr).name, nothing)
     (arr isa AbstractArray{<:Real} && !isempty(arr)) || return 1
-    m = sum(Float64, arr) / length(arr)
+    m = _dynamic(a -> sum(Float64, a) / length(a), arr)::Float64
     return isfinite(m) ? max(1, round(Int, m)) : 1
 end
 
@@ -1157,7 +1157,7 @@ end
 # True iff a shape op is an operand of `e`, looking through elementwise ops.
 _mentions_shape_op(e::ASTExpr) = e isa OpExpr && (
     (e::OpExpr).op in _SHAPE_REMAP_OPS ||
-        (_is_scalar_op((e::OpExpr).op) && any(_mentions_shape_op, (e::OpExpr).args))
+        (_is_scalar_op((e::OpExpr).op) && _anyof(_mentions_shape_op, (e::OpExpr).args))
 )
 
 # The subscripts one operand of an elementwise combination is gathered at, under
@@ -1539,7 +1539,9 @@ const _EMPTY_PARAMS = Dict{String, Float64}()
 struct _PGatherArray
     flat::Vector{Float64}   # aliased flat view of the caller's buffer (live, by-ref)
     dims::Vector{Int}       # original shape — bounds-check + linearize at build time
+    _PGatherArray(flat, dims) = _new_typed(_PGatherArray, flat, dims)
 end
+_def_new_typed(_PGatherArray)
 # Read-only sentinel — see the `_EMPTY_*` invariant block next to
 # `_EMPTY_DERIVED_EXTENTS`.
 const _EMPTY_PGATHER = Dict{String, _PGatherArray}()
@@ -1562,7 +1564,7 @@ const _EMPTY_BOUND_SYMS = Set{String}()
 # every non-fast-path call.
 _refs_bound_sym(e::VarExpr, bound_syms::Set{String}) = e.name in bound_syms
 _refs_bound_sym(e::OpExpr, bound_syms::Set{String}) =
-    any(a -> _refs_bound_sym(a, bound_syms), e.args)
+    _anyof(a -> _refs_bound_sym(a, bound_syms), e.args)
 _refs_bound_sym(::ASTExpr, ::Set{String}) = false
 
 # True iff a subscript's value is known only at run time: it references a name
@@ -1724,7 +1726,7 @@ function _resolve_const_array_gather(
                 "but got $(length(idx_args_expr)) indices"
         )
     )
-    if any(a -> _subscript_is_runtime(a, const_arrays), idx_args_expr)
+    if _anyof(a -> _subscript_is_runtime(a, const_arrays), idx_args_expr)
         sub_nodes = Vector{ASTExpr}(undef, length(idx_args_expr))
         for d in 1:ndims(vals)
             a = idx_args_expr[d]
@@ -1748,7 +1750,7 @@ function _resolve_const_array_gather(
     ]
     guards = _resolve_guards()
     if !isempty(guards) &&
-            any(
+            _anyof(
             d -> !(1 <= int_indices[d] <= size(vals, d)) &&
                 _const_dim_boundary(vals, d) === :error, 1:ndims(vals)
         ) &&
@@ -1780,7 +1782,7 @@ const _INLINE_CONST_PREFIX = "__inline_const#"
 function _intern_inline_const(cexpr::OpExpr, const_arrays::AbstractDict)
     vals = _const_op_to_array(cexpr.value)
     for (k, v) in const_arrays
-        (startswith(k, _INLINE_CONST_PREFIX) && size(v) == size(vals) && v == vals) &&
+        (startswith(k, _INLINE_CONST_PREFIX) && _dynamic((a, b) -> size(a) == size(b) && a == b, v, vals)::Bool) &&
             return v, k
     end
     name = string(_INLINE_CONST_PREFIX, hash(vals))
@@ -1796,7 +1798,7 @@ end
 # compile-once cellwise path (whose bound symbols use different names). Distinct
 # from `_refs_bound_sym`, which fires for ANY symbol in a caller-supplied set.
 _refs_loopvar(e::VarExpr) = startswith(e.name, _LOOPVAR_PREFIX)
-_refs_loopvar(e::OpExpr) = any(_refs_loopvar, e.args)
+_refs_loopvar(e::OpExpr) = _anyof(_refs_loopvar, e.args)
 _refs_loopvar(::ASTExpr) = false
 
 # Lower a STATE-array read whose subscripts depend on a contraction loop variable
@@ -2090,7 +2092,7 @@ function _resolve_indices_op(
             )
             _amemo = IdDict{OpExpr, Bool}()
             _arrayish(a) = _index_pushdown_arrayish(a, _leaf_is_array, _amemo)
-            if any(_arrayish, fa.args)
+            if _anyof(_arrayish, fa.args)
                 # A combination with a shape-op operand is anonymous, and its
                 # operands broadcast positionally (§4.3.4): each reads the
                 # subscripts its own shape admits. A combination of variables

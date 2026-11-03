@@ -17,6 +17,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # First, deliberately: if the export block and the manifest have diverged,
     # that is the failure you want to read before 200 other tests scroll past.
     include("api_surface_test.jl")
+    include("invalidations_test.jl")  # loading the solvers keeps the cached code valid
 
     # ---- Exception hierarchy + diagnostic-code registry (src/errors.jl,
     #      src/error_codes.jl) ----

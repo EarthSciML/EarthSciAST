@@ -475,7 +475,7 @@ _schema_matches(x, node::_SchemaNode, root) = _schema_walk!(nothing, x, node, ""
 
 # Is a property name outside both `properties` and `patternProperties`?
 _is_additional(kw::_SchemaKeyword, k) =
-    !haskey(kw.props, k) && !any(r -> occursin(r, k), _keyword_regexes(kw))
+    !haskey(kw.props, k) && !_anyof(r -> occursin(r, k), _keyword_regexes(kw))
 
 # One keyword of `node` on `x`, with the semantics of the library's
 # `_validate(x, schema, Val(k), v, path)` under the argument types its
@@ -517,12 +517,12 @@ function _schema_walk_keyword!(sink::_SchemaSink, x, node::_SchemaNode, kw::_Sch
         return ok
     elseif kind == _KW_NO_ADDITIONAL_PROPERTIES
         x isa AbstractDict || return true
-        any(xk -> _is_additional(kw, xk), keys(x)) || return true
+        _anyof(xk -> _is_additional(kw, xk), keys(x)) || return true
         return _walk_fail!(sink, path, "additionalProperties")
     elseif kind == _KW_PROPERTY_NAMES
         x isa AbstractDict || return true
         sub = kw.sub::_SchemaNode
-        all(xk -> _schema_matches(xk, sub, root), keys(x)) && return true
+        _allof(xk -> _schema_matches(xk, sub, root), keys(x)) && return true
         return _walk_fail!(sink, path, "propertyNames")
     elseif kind == _KW_ITEMS
         x isa AbstractVector || return true
@@ -537,7 +537,7 @@ function _schema_walk_keyword!(sink::_SchemaSink, x, node::_SchemaNode, kw::_Sch
     elseif kind == _KW_CONTAINS
         x isa AbstractVector || return true
         sub = kw.sub::_SchemaNode
-        any(xi -> _schema_matches(xi, sub, root), x) && return true
+        _anyof(xi -> _schema_matches(xi, sub, root), x) && return true
         return _walk_fail!(sink, path, "contains")
     elseif kind == _KW_ALLOF
         ok = true
@@ -548,7 +548,7 @@ function _schema_walk_keyword!(sink::_SchemaSink, x, node::_SchemaNode, kw::_Sch
         end
         return ok
     elseif kind == _KW_ANYOF
-        any(sub -> _schema_matches(x, sub::_SchemaNode, root), kw.subs) && return true
+        _anyof(sub -> _schema_matches(x, sub::_SchemaNode, root), kw.subs) && return true
         _walk_fail!(sink, path, "anyOf")
         # Every branch failed: descend them all for the underlying leaf errors.
         sink === nothing || for sub in kw.subs

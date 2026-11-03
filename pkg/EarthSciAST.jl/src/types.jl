@@ -11,6 +11,35 @@ matching the JSON schema definitions for language-agnostic model interchange.
 # guard: `_maybe(string, get(data, key, nothing))`).
 _maybe(f, x) = x === nothing ? nothing : f(x)
 
+# `f(args...)` through a dynamic call, which leaves the caller no backedge into
+# `f` for a later-loaded package's methods to invalidate. Assert the result type.
+_dynamic(f::F, args...) where {F} = Base.inferencebarrier(f)(args...)
+_as_type(::Type{T}, x::T) where {T} = x
+_as_type(::Type{T}, x) where {T} = _dynamic(convert, T, x)::T
+
+# Defines `_new_typed(T, fields...)`, `new` with each field through `_as_type`: a
+# constructor inferred with `Any` arguments then keeps no backedge into `convert`.
+function _def_new_typed(T::DataType)
+    xs = [Symbol(:x, i) for i in 1:fieldcount(T)]
+    new = Expr(:new, T, (:(_as_type($(fieldtype(T, i)), $(xs[i]))) for i in eachindex(xs))...)
+    return @eval _new_typed(::Type{$T}, $(xs...)) = $new
+end
+
+# `any(f, xs)` / `all(f, xs)` as loops: Base's are inferred through `mapreduce`
+# code that later-loaded array types invalidate.
+function _anyof(f::F, xs) where {F}
+    for x in xs
+        f(x) && return true
+    end
+    return false
+end
+function _allof(f::F, xs) where {F}
+    for x in xs
+        f(x) || return false
+    end
+    return true
+end
+
 """
     SCHEMA_VERSION
 
@@ -481,34 +510,24 @@ mutable struct OpExpr <: ASTExpr
         # mid-migration; the field is no longer stored or serialized.
         handler_id = nothing
     ) =
-        new(
-        op, args, wrt, dim, int_var, lower, upper, output_idx, expr_body, reduce,
+        _new_typed(
+        OpExpr, op, args, wrt, dim, int_var, lower, upper, output_idx, expr_body, reduce,
         semiring, ranges,
         regions, values, shape, perm, axis, fn, name, value, units,
         table, table_axes, output, join, filter, join_gates,
         id, manifold, distinct, key, arg, bindings, label,
         expect_cadence, attrs
     )
-
-    # Fully-positional inner constructor — the ALLOCATION-FREE reconstruction
-    # path. The keyword constructor above builds a ~30-entry `NamedTuple` for its
-    # kwargs on every call, and `reconstruct` (the one canonical copy-with-changes
-    # site, invoked once per rewritten node in `_sub_preserving`/`_resolve_*`)
-    # would pay that on every substitution. Routing `reconstruct` through this
-    # positional form drops the per-node NamedTuple allocation entirely. The
-    # arguments MUST be all fields in exact struct-field order — enforced by the
-    # arity check (compile-time-constant after specialization, so it costs
-    # nothing at runtime). `Vararg{Any,N} where N` (not bare `fields...`) forces
-    # Julia to SPECIALIZE per call-site arity/type instead of applying its
-    # "pass-through varargs" despecialization heuristic — the generated
-    # `reconstruct` below is the hot caller and must stay allocation-free.
-    global _reconstruct_opexpr(fields::Vararg{Any, N}) where {N} =
-        (
-        N === fieldcount(OpExpr) ||
-            throw(ArgumentError("_reconstruct_opexpr requires all $(fieldcount(OpExpr)) OpExpr fields in struct order"));
-        new(fields...)
-    )
 end
+
+# Fully-positional constructor — the ALLOCATION-FREE reconstruction
+# path. The keyword constructor above builds a ~30-entry `NamedTuple` for its
+# kwargs on every call, and `reconstruct` (the one canonical copy-with-changes
+# site, invoked once per rewritten node in `_sub_preserving`/`_resolve_*`)
+# would pay that on every substitution. Routing `reconstruct` through this
+# positional form drops the per-node NamedTuple allocation entirely. The
+# arguments are all fields in struct-field order.
+_def_new_typed(OpExpr)
 
 """
     OPEXPR_FIELD_TABLE
@@ -639,7 +658,7 @@ end
 
 # GENERATED from `fieldnames(OpExpr)` (see OPEXPR_FIELD_TABLE): one kwarg per
 # struct field, each defaulting to the corresponding field of `e`, forwarded
-# positionally (NamedTuple-free on the hot path) to `_reconstruct_opexpr` in
+# positionally (NamedTuple-free on the hot path) to `_new_typed` in
 # struct-field order — so a newly added field is copied by default and can
 # never be silently dropped.
 @eval function reconstruct(
@@ -659,8 +678,8 @@ end
     # acceptance of any `AbstractVector` of `ASTExpr` (matching the keyword ctor's
     # `OpExpr(op, args::AbstractVector)` widening overload).
     argv = args isa Vector{ASTExpr} ? args : Vector{ASTExpr}(args)
-    return _reconstruct_opexpr(
-        op, argv,
+    return _new_typed(
+        OpExpr, op, argv,
         $((f for f in fieldnames(OpExpr) if f !== :op && f !== :args)...)
     )
 end
@@ -771,6 +790,7 @@ Trigger that fires at preset times.
 """
 struct PresetTimesTrigger <: DiscreteEventTrigger
     times::Vector{Float64}
+    PresetTimesTrigger(times) = new(_as_type(Vector{Float64}, times))
 end
 
 # ========================================
@@ -903,8 +923,9 @@ struct Distribution
         kind::AbstractString; location = nothing, scale = nothing,
         cov = nothing, low = nothing, high = nothing
     ) =
-        new(String(kind), location, scale, cov, low, high)
+        _new_typed(Distribution, String(kind), location, scale, cov, low, high)
 end
+_def_new_typed(Distribution)
 
 """
     FunctionalUpdate
@@ -1009,11 +1030,12 @@ struct ParameterUpdate
         source = nothing, hook = nothing, expression = nothing,
         from = nothing, handler = nothing
     ) =
-        new(
-        String(kind), times, interval, initial_offset, when, direction,
-        source, hook, expression, from, handler
+        _new_typed(
+        ParameterUpdate, String(kind), times, interval, initial_offset, when,
+        direction, source, hook, expression, from, handler
     )
 end
+_def_new_typed(ParameterUpdate)
 
 """
     @enum ModelVariableType
@@ -1545,7 +1567,7 @@ struct InlineTest
                     for (k, v) in parameter_overrides
             ),
             time_span, tolerance, assertions,
-            Vector{Any}(expression_template_imports)
+            _dynamic(Vector{Any}, expression_template_imports)::Vector{Any}
         )
     end
 end
@@ -1595,11 +1617,12 @@ struct IndexSet
         offsets = nothing, values = nothing, from_faq = nothing, members_raw = nothing,
         member_factor = nothing
     ) =
-        new(
-        String(kind), size, members, of, offsets, values, from_faq, members_raw,
-        member_factor
+        _new_typed(
+        IndexSet, String(kind), size, members, of, offsets, values, from_faq,
+        members_raw, member_factor
     )
 end
+_def_new_typed(IndexSet)
 
 """
     IndexSetRef(from; of)
@@ -1740,7 +1763,7 @@ struct Model <: SubsystemNode
         new(
         OrderedDict{String, ModelVariable}(variables), equations,
         discrete_events, continuous_events, OrderedDict{String, SubsystemNode}(subsystems),
-        tolerance, tests, Vector{Any}(analyses),
+        tolerance, tests, _dynamic(Vector{Any}, analyses)::Vector{Any},
         initialization_equations, guesses, system_kind, reference
     )
 
@@ -1761,7 +1784,7 @@ struct Model <: SubsystemNode
         new(
         OrderedDict{String, ModelVariable}(variables), equations,
         discrete_events, continuous_events, OrderedDict{String, SubsystemNode}(subsystems),
-        tolerance, tests, Vector{Any}(analyses),
+        tolerance, tests, _dynamic(Vector{Any}, analyses)::Vector{Any},
         initialization_equations, guesses, system_kind, reference
     )
 end
@@ -2270,7 +2293,7 @@ struct ReactionSystem
         species, reactions, parameters, constraint_equations,
         discrete_events, continuous_events,
         OrderedDict{String, ReactionSystem}(subsystems), tolerance, tests,
-        Vector{Any}(analyses), reference
+        _dynamic(Vector{Any}, analyses)::Vector{Any}, reference
     )
 end
 
@@ -2340,7 +2363,7 @@ struct FunctionTableAxis
         name::AbstractString, values::AbstractVector;
         units = nothing
     ) =
-        new(String(name), Vector{Float64}(values), units)
+        new(String(name), _dynamic(Vector{Float64}, values)::Vector{Float64}, units)
 end
 
 """
