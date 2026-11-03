@@ -4246,10 +4246,30 @@ fn bind_providers(
         });
     };
 
+    // Each provider writes its field under the name the compiled model reads
+    // (see `provider_target`), so the Problem and `rhs_program` see its data
+    // rather than the declared default beside it.
+    let mut providers: HashMap<String, Box<dyn crate::provider::CadenceProvider>> = HashMap::new();
+    let mut keys: Vec<String> = opts.providers.keys().cloned().collect();
+    keys.sort();
+    let mut given: HashMap<String, String> = HashMap::new();
+    for key in keys {
+        let provider = opts.providers.remove(&key).expect("a key of the map");
+        let target = provider_target(compiled, &key);
+        if let Some(other) = given.insert(target.clone(), key.clone()) {
+            return Err(SimulateError::ProviderError {
+                details: format!(
+                    "providers `{other}` and `{key}` both feed parameter `{target}`; pass one"
+                ),
+                name: key,
+            });
+        }
+        providers.insert(target, provider);
+    }
+
     // One RefreshExecutor, classifying each provider by its `refresh_times()`.
     // CONST forcings are materialized ONCE, HERE — at construction, which is
     // where §2.5.2 puts the gated fetch — and never again.
-    let providers = std::mem::take(&mut opts.providers);
     let mut exec = crate::provider::RefreshExecutor::from_providers(providers);
     let forcing = compiled.forcing_buffer();
     exec.materialize_const(&forcing)
@@ -4269,6 +4289,32 @@ fn bind_providers(
     boundaries.retain(|&b| b > sample_time && b < tspan.1);
 
     Ok((Some(std::cell::RefCell::new(exec)), discrete, boundaries))
+}
+
+/// The forcing-buffer name a run-time provider keyed `key` writes.
+///
+/// A single-model build compiles its parameters under their bare names (`s`)
+/// with the model's name as its namespace, while a caller may key a provider
+/// by the parameter's full name (`M.s`, esm-spec §6.6.2), as `const_arrays`
+/// and the other bindings accept. Such a key is re-spelled to the compiled
+/// name. Without this the provider's field landed under `M.s`, which the
+/// model never reads, while the missing-data gate wrote the declared default
+/// under `s`: the Problem integrated the default, and `rhs_program`'s default
+/// forcing held whichever of the two its map iteration met last. Any other
+/// key (a compiled name already, or a loader field a coupling reads) is used
+/// as given.
+#[cfg(not(target_arch = "wasm32"))]
+fn provider_target(compiled: &ArrayCompiled, key: &str) -> String {
+    let serves = |name: &str| compiled.forcing_names().any(|n| n == name);
+    if serves(key) {
+        return key.to_string();
+    }
+    compiled
+        .namespace()
+        .and_then(|ns| key.strip_prefix(ns))
+        .and_then(|rest| rest.strip_prefix('.'))
+        .filter(|local| serves(local))
+        .map_or_else(|| key.to_string(), str::to_string)
 }
 
 // =============================================================================

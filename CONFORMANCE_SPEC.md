@@ -7479,6 +7479,29 @@ one catalogue mounted twice), Python
 `pkg/earthsci-ast-go/pkg/esm/url_substitutions_conformance_test.go` — and
 `./scripts/test-conformance.sh` already runs all five suites.
 
+### 5.55 Run-Time Providers and the Default Forcing (normative)
+
+**Decision pinned.** A run-time provider passed to `esm_problem` under a
+data-fed parameter's full name (`Model.param`, esm-spec §6.6.2) feeds that
+parameter in every binding that simulates, including on a document with one
+model, whose build compiles the parameter under its bare name. The Problem's own
+right-hand side reads the provider's data, never the declared default, and
+`rhs_program`'s default forcing set (API_SPEC §5.8, "Default") holds the same
+data.
+
+**Shape.** `tests/conformance/provider_forcing/manifest.json` builds one
+document (`fixtures/provider_forcing.esm`: a gridded and a scalar data-fed
+parameter, each with a scalar default) with each case's providers, whose fields
+are dyadic rationals so the right-hand side is exact. Each case pins the
+program's forcing slots, its default forcing set (column-major), the program's
+right-hand side at the default state with that set, and the Problem's own
+right-hand side at its initial state, all bitwise. `no_providers` is the
+control.
+
+**Adapters.** Julia `pkg/EarthSciAST.jl/test/conformance_provider_forcing_test.jl`
+and Rust `pkg/earthsci-ast-rs/tests/provider_forcing_conformance.rs`. Python's
+`rhs_program` raises `compiler_unavailable`; Go and TypeScript do not simulate.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow

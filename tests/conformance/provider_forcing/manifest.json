@@ -1,0 +1,64 @@
+{
+  "category": "provider_forcing",
+  "version": "1.0",
+  "description": "Run-time data providers and the forcing they give a Problem and its rhs_program (API_SPEC §5.8, \"Forcing sets\"; esm-libraries-spec §2.5.2). Each case builds the fixture with a set of providers and checks the program's forcing slots, its default forcing set, the program's right-hand side at the default state with that set, and the Problem's own right-hand side at its initial state. Every comparison is bitwise against the values below.",
+  "spec": [
+    "API_SPEC.md §5.8 (Forcing sets: Default)",
+    "esm-libraries-spec.md §2.5.2 (providers are sampled at construction)"
+  ],
+  "compiler": "native",
+  "bindings_required": [
+    "julia",
+    "rust"
+  ],
+  "scope_excluded": {
+    "python": "No native program (API_SPEC §5.8): rhs_program raises compiler_unavailable.",
+    "typescript": "No simulator (API_SPEC §3, capability profiles).",
+    "go": "No simulator (API_SPEC §3, capability profiles)."
+  },
+  "provider": "A provider entry is passed under `key` in the construction option `providers`. It delivers one field, keyed by `key`, whose value at time t is base + slope * t elementwise; `base` is nested row-major (outer list = first index) over `shape`, and a 0-d field is one number. `refresh_times` empty makes it a const provider; otherwise it is discrete with those refresh times. Julia: `provider_sample(p, t)` returns that field (a 0-d one as a one-element vector) and `provider_refresh_times(p)` the times. Rust: a `CadenceProvider` whose `materialize()` returns the field at `slope = 0` (const providers only), whose `refresh(t)` returns `Some` of the field at t, and whose `refresh_times()` returns the times.",
+  "checks": {
+    "forcing_slots": "forcing_slots(prog) equals forcing_slots: name, shape and kind, in this order",
+    "default_forcing": "each buffer of default_forcing_set(prog) / prog.default_forcing() equals default_forcing[slot], column-major, bitwise",
+    "du_default": "the program's right-hand side at default_state(prog), the default parameter vector, t = tspan[0] and the default forcing set equals du_default bitwise",
+    "problem_du": "the Problem's own right-hand side (Julia: prob.f!; Rust: debug_eval_rhs_into on the Problem's compiled model) at its initial state, its parameters and t = tspan[0] equals du_default bitwise"
+  },
+  "document": "fixtures/provider_forcing.esm",
+  "tspan": [
+    0.0,
+    1.0
+  ],
+  "cases": [
+    {
+      "id": "no_providers",
+      "providers": [],
+      "forcing_slots": [
+        {"name": "Fed.E", "shape": [3, 2], "kind": "forcing"},
+        {"name": "Fed.s", "shape": [], "kind": "forcing"}
+      ],
+      "default_forcing": {
+        "Fed.E": [0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+        "Fed.s": [2.0]
+      },
+      "du_default": [0.75, 0.75, 0.75],
+      "note": "The control: no data is supplied, so each declared default is the parameter's value."
+    },
+    {
+      "id": "const_qualified_keys",
+      "providers": [
+        {"key": "Fed.E", "refresh_times": [], "shape": [3, 2], "base": [[0.125, 0.25], [0.375, 0.5], [0.625, 0.75]], "slope": 0.0},
+        {"key": "Fed.s", "refresh_times": [], "shape": [], "base": 3.0, "slope": 0.0}
+      ],
+      "forcing_slots": [
+        {"name": "Fed.E", "shape": [3, 2], "kind": "forcing"},
+        {"name": "Fed.s", "shape": [], "kind": "forcing"}
+      ],
+      "default_forcing": {
+        "Fed.E": [0.125, 0.375, 0.625, 0.25, 0.5, 0.75],
+        "Fed.s": [3.0]
+      },
+      "du_default": [0.5, 1.25, 2.0],
+      "note": "Providers keyed by the parameters' qualified names, on a document with one model. Rust used to write their data under `Fed.s` next to the declared default under the bare compiled name `s`, so the Problem read the default and rhs_program's default set held either one, depending on map iteration order."
+    }
+  ]
+}
