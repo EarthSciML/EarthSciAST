@@ -1736,7 +1736,7 @@ def _load_ref_data(
     at the first document on each mount path that declares the name. See
     :func:`_forward_edge_bindings` for what ``forward`` carries.
 
-    ``mount_pointer``, given by a top-level mount edge, is that edge's JSON
+    ``mount_pointer``, given by a mount edge of either form, is that edge's JSON
     Pointer: a leaf file that cannot be found, fetched or parsed as JSON is
     then ``unresolved_subsystem_ref`` there. Without it those failures stay
     codeless for the caller to label.
@@ -2264,10 +2264,10 @@ def _resolve_subsystems_generic(
             # into the referenced component's scope (esm-spec §9.7.10 form A).
             bindings = _subsystem_ref_bindings(sub_value, f"subsystems.{sub_name}")
             injected = _subsystem_ref_injected_imports(sub_value)
-            # The JSON Pointer of THIS mount. Only this frame knows both the
-            # owning component and the subsystem key, so it is where a
-            # SubsystemRefError raised anywhere below gets its `path` (and, for
-            # the errors raised out of the generic ref loader, its `code`).
+            # The JSON Pointer of THIS mount. This edge's own failures (a leaf
+            # file that cannot be found, fetched or parsed, and an ambiguous
+            # leaf) carry it with their code; an error raised deeper inside the
+            # leaf keeps its own code and pointer.
             kind = "reaction_systems" if isinstance(component, ReactionSystem) else "models"
             mount_pointer = f"/{kind}/{component.name}/subsystems/{sub_name}"
             try:
@@ -2289,6 +2289,7 @@ def _resolve_subsystems_generic(
                     index_set_rename=sub_value.get("index_set_rename"),
                     rename_where=f"subsystem ref '{ref_str}'",
                     forwarded=forwarded,
+                    mount_pointer=mount_pointer,
                 )
 
                 parsed = _parse_esm_data(ref_data)
@@ -2319,15 +2320,12 @@ def _resolve_subsystems_generic(
                     f"{kind}.{component.name}.subsystems.{sub_name} (ref '{ref_str}')",
                 )
             except SubsystemRefError as exc:
-                if not getattr(exc, "code", ""):
-                    exc.code = UNRESOLVED_SUBSYSTEM_REF
-                if not getattr(exc, "path", ""):
-                    exc.path = mount_pointer
-                exc.details = {
-                    "ref": ref_str,
-                    "subsystem": sub_name,
-                    "parent_model": component.name,
-                }
+                if getattr(exc, "path", "") == mount_pointer:
+                    exc.details = {
+                        "ref": ref_str,
+                        "subsystem": sub_name,
+                        "parent_model": component.name,
+                    }
                 raise
         else:
             # Already a component object, just recurse into it.

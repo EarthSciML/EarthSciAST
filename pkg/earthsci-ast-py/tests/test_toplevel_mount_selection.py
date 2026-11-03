@@ -145,3 +145,49 @@ def test_reaction_system_leaf_nested_failure_keeps_its_own_pointer(tmp_path):
         tmp_path / "root.esm", _doc("root", reaction_systems={"Outer": {"ref": "./mid.esm"}})
     )
     _refused(root, "/reaction_systems/Inner")
+
+
+# The `subsystems.<k>` form labels its own failures the same way: the edge's own
+# code and pointer for a leaf it cannot load, the leaf's own label for anything
+# wrong inside the leaf.
+
+
+def _mount_subsystem(tmp_path, ref: str) -> str:
+    host = _model("y")
+    host["subsystems"] = {"Inner": {"ref": ref}}
+    return _write(tmp_path / "host.esm", _doc("host", models={"Host": host}))
+
+
+def test_missing_subsystem_leaf_file_is_refused_at_the_edge(tmp_path):
+    path = _mount_subsystem(tmp_path, "./absent.esm")
+    err = _refused(path, "/models/Host/subsystems/Inner")
+    assert err.details["subsystem"] == "Inner"
+
+
+def test_unparseable_subsystem_leaf_is_refused_at_the_edge(tmp_path):
+    (tmp_path / "broken.esm").write_text("{ not json")
+    _refused(_mount_subsystem(tmp_path, "./broken.esm"), "/models/Host/subsystems/Inner")
+
+
+def test_subsystem_leaf_schema_error_is_not_an_edge_failure(tmp_path):
+    rs = _reaction_system()
+    rs["reactions"] = "not a list"
+    _write(tmp_path / "bad.esm", _doc("bad", reaction_systems={"Chem": rs}))
+    path = _mount_subsystem(tmp_path, "./bad.esm")
+    with pytest.raises(SubsystemRefError) as excinfo:
+        load_path(path)
+    assert "Schema validation failed" in str(excinfo.value)
+    assert excinfo.value.code != "unresolved_subsystem_ref"
+    assert excinfo.value.path != "/models/Host/subsystems/Inner"
+
+
+def test_subsystem_leaf_nested_failure_keeps_its_own_pointer(tmp_path):
+    inner = _model("z")
+    inner["subsystems"] = {"Deep": {"ref": "./absent.esm"}}
+    _write(tmp_path / "mid.esm", _doc("mid", models={"Mid": inner}))
+    with pytest.raises(SubsystemRefError) as excinfo:
+        load_path(_mount_subsystem(tmp_path, "./mid.esm"))
+    assert excinfo.value.code == "unresolved_subsystem_ref"
+    # The mounted model is named by its mount key, so the inner edge sits under `Inner`.
+    assert excinfo.value.path == "/models/Inner/subsystems/Deep"
+    assert excinfo.value.details["subsystem"] == "Deep"
