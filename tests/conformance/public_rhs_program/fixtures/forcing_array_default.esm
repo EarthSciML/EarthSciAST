@@ -1,0 +1,177 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "forcing_array_default",
+    "description": "Data-fed parameters whose default is inline array data (esm-spec §6.3, §6.6.2). emis[x, y] is fed by the data source met and declares a nested-array default; wind[y] is fed by the same source and declares one scalar default broadcast over its shape. Both are forcing slots of rhs_program, each with its default as the default forcing: data fed from outside takes the place of a default, so the default is never baked into the program as a constant. D(c[i, j]) = emis[i, j] + wind[j] - k c[i, j].",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-11-02T00:00:00Z",
+    "tags": [
+      "conformance",
+      "public_rhs_program"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 3
+    },
+    "y": {
+      "kind": "interval",
+      "size": 2
+    }
+  },
+  "data_sources": {
+    "met": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file:///data/met/fields.nc"
+      }
+    }
+  },
+  "models": {
+    "ArrayDefault": {
+      "variables": {
+        "c": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x",
+            "y"
+          ],
+          "default": 1.0
+        },
+        "emis": {
+          "type": "parameter",
+          "units": "1/s",
+          "shape": [
+            "x",
+            "y"
+          ],
+          "default": [
+            [0.125, 0.25],
+            [0.375, 0.5],
+            [0.625, 0.75]
+          ],
+          "update": {
+            "kind": "data",
+            "source": "met",
+            "from": {
+              "file_variable": "EMIS"
+            }
+          }
+        },
+        "wind": {
+          "type": "parameter",
+          "units": "1/s",
+          "shape": [
+            "y"
+          ],
+          "default": 2.0,
+          "update": {
+            "kind": "data",
+            "source": "met",
+            "from": {
+              "file_variable": "WIND"
+            }
+          }
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              },
+              "j": {
+                "from": "y"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "c",
+                    "i",
+                    "j"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              },
+              "j": {
+                "from": "y"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "emis",
+                    "i",
+                    "j"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "wind",
+                    "j"
+                  ]
+                },
+                {
+                  "op": "-",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        "k",
+                        {
+                          "op": "index",
+                          "args": [
+                            "c",
+                            "i",
+                            "j"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

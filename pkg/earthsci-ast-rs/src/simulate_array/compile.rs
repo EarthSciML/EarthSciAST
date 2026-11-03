@@ -1846,6 +1846,16 @@ fn lower_inline_array_parameters(
         let Some(default) = var.default.as_ref() else {
             continue;
         };
+        // A parameter fed from outside the model (a data source or a handler)
+        // is read from the forcing buffer, which serves its default when no
+        // data is supplied (`forcing_default_values`). That holds for an
+        // inline-array default as much as for a scalar one: lowering it here
+        // would bake the default in as a constant, so the parameter would be
+        // no forcing slot of `rhs_program` and supplied data could never
+        // replace it.
+        if externally_refreshed(var) {
+            continue;
+        }
         // `runtime_array_parameters`: a shaped parameter with a value and no
         // `update` stays a parameter, read at run time from the forcing buffer
         // (its value seeds the buffer), instead of becoming build-time data.
