@@ -46,6 +46,8 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # the schema-$id pin that keeps the first from hand-drifting.
     include("version_constants_test.jl")
     include("validate_test.jl")
+    # `validate_schema`'s own schema walk ≡ JSONSchema.jl's verdict.
+    include("schema_match_parity_test.jl")
     include("structural_validation_test.jl")
     # Causal self-reference well-foundedness (esm-spec §4.3.1.1). A VALIDATION
     # category (CONFORMANCE_SPEC §5.19.5), so it sits with the other structural
