@@ -2,7 +2,7 @@
  "esm": "1.0.0",
  "metadata": {
   "name": "toplevel_reaction_system_ref",
-  "description": "A top-level reaction_systems.<k> {ref} mount (esm-spec 4.7). Julia and Rust implement this mount form (see tests/conformance/toplevel_reaction_system_ref/). TypeScript, Go and Python refuse it with mount_form_unsupported at /reaction_systems/Chem rather than silently producing an empty reaction system or an unresolved stub. Lives under tests/fixtures, not tests/invalid, because Julia and Rust load it.",
+  "description": "A top-level reaction_systems.<k> {ref} mount (esm-spec 4.7). All five bindings mount it (see tests/conformance/toplevel_reaction_system_ref/); each asserts that Chem lands with the leaf's two species and one reaction. Before 2026-11-02 TypeScript, Go and Python refused it with mount_form_unsupported, which is where this directory's name comes from.",
   "license": "MIT"
  },
  "reaction_systems": {"Chem": {"ref": "./reaction_system_leaf.esm"}}

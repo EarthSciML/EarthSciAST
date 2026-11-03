@@ -2365,6 +2365,19 @@ func (s *structuralScan) validateSubsystemRefs() {
 	if s.file == nil {
 		return
 	}
+	// A top-level `models.<k>` / `reaction_systems.<k>` `{ref}` mount edge that
+	// was never resolved decoded to an EMPTY component; it is the same
+	// unresolved ref at the other attachment point.
+	for _, modelName := range sortedKeys(s.file.Models) {
+		if ref := s.file.Models[modelName].unresolvedMountRef; ref != "" {
+			s.flagUnresolvedTopLevelMount("models", modelName, ref)
+		}
+	}
+	for _, systemName := range sortedKeys(s.file.ReactionSystems) {
+		if ref := s.file.ReactionSystems[systemName].unresolvedMountRef; ref != "" {
+			s.flagUnresolvedTopLevelMount("reaction_systems", systemName, ref)
+		}
+	}
 	for _, modelName := range sortedKeys(s.file.Models) {
 		s.flagRefSubsystems(s.file.Models[modelName].Subsystems,
 			fmt.Sprintf("/models/%s/subsystems", modelName), modelName)
@@ -2373,6 +2386,20 @@ func (s *structuralScan) validateSubsystemRefs() {
 		s.flagRefSubsystems(s.file.ReactionSystems[systemName].Subsystems,
 			fmt.Sprintf("/reaction_systems/%s/subsystems", systemName), systemName)
 	}
+}
+
+func (s *structuralScan) flagUnresolvedTopLevelMount(section, name, ref string) {
+	s.addErr(StructuralError{
+		Path: fmt.Sprintf("/%s/%s", section, name),
+		Code: CodeUnresolvedSubsystemRef,
+		Message: fmt.Sprintf("Top-level mount reference '%s' could not be resolved — "+
+			"resolve subsystem refs (Load, or ResolveSubsystemRefs) before validating", ref),
+		Details: map[string]any{
+			"ref":   ref,
+			"mount": name,
+			"block": section,
+		},
+	})
 }
 
 func (s *structuralScan) flagRefSubsystems(subsystems map[string]any, pathPrefix, parent string) {

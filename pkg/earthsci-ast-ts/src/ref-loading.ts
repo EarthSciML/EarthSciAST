@@ -87,8 +87,8 @@ export class RefLoadError extends EsmDiagnosticError {
   /** The reference path or URL that failed to load */
   public readonly ref: string
   /**
-   * Canonical code: `unresolved_subsystem_ref`, `ambiguous_subsystem_ref`, or
-   * `mount_form_unsupported` for a mount form this binding does not implement.
+   * Canonical code: `unresolved_subsystem_ref` or `ambiguous_subsystem_ref`
+   * (or, for a load that fails at a mounted leaf, that failure's own code).
    */
   declare readonly code: string
   /**
@@ -227,7 +227,8 @@ export function resolveSubsystemRefsSync(
     for (const [name, model] of Object.entries(file.models)) {
       const pointer = `/models/${name}`
       if (isTopLevelMountEdge(model)) {
-        inlineTopLevelModelRef(
+        inlineTopLevelRef(
+          MODEL_MOUNT,
           file,
           name,
           model,
@@ -258,33 +259,35 @@ export function resolveSubsystemRefsSync(
     }
   }
 
-  // Attach the registry only if the merge actually contributed axes to a
-  // previously index-set-less document (no empty `index_sets: {}` otherwise).
-  if (!file.index_sets && Object.keys(registry).length > 0) {
-    ;(file as { index_sets?: unknown }).index_sets = registry
-  }
-
   // Process all reaction systems. Per esm-spec §4.7 the index-set merge is a
-  // model-mount mechanism; reaction-system subsystem refs do not merge index
-  // sets (mirrors the Julia reference, which threads the registry only into the
-  // model walk).
+  // model-mount mechanism at the `subsystems.<k>` form; reaction-system
+  // subsystem refs do not merge index sets (mirrors the Julia reference, which
+  // threads the registry only into the model walk). A top-level
+  // `reaction_systems.<k>` mount does merge, as a top-level `models.<k>` mount
+  // does ("Two mount forms, one mechanism").
   if (file.reaction_systems) {
     for (const [name, rs] of Object.entries(file.reaction_systems)) {
-      // esm-spec §4.7: a top-level `reaction_systems.<k>` entry that is a bare
-      // `{ ref }` — a `ref` string and no `species`, the Julia reference's
-      // discriminator for this form — is a mount edge at a form this binding
-      // does not implement. Refuse it at the entry rather than leave an
-      // unresolved stub where a reaction system belongs. An inline reaction
-      // system is a component, not a mount, and is walked as before.
-      const entry = rs as { ref?: unknown; species?: unknown }
-      if (typeof entry.ref === 'string' && entry.species === undefined) {
-        throw new RefLoadError(
-          entry.ref,
-          undefined,
-          ERROR_CODES.MOUNT_FORM_UNSUPPORTED,
-          `reaction_systems.${name}: a top-level \`reaction_systems.<k>\` \`{ref}\` mount (ref '${entry.ref}') is not supported by this binding. Inline the reaction system, or mount it at a \`subsystems.<k>\` \`{ref}\` edge (esm-spec §4.7 "Two mount forms, one mechanism")`,
+      // esm-spec §4.7 "Two mount forms, one mechanism": a top-level
+      // `reaction_systems.<k>` entry that is a bare `{ ref }` — a `ref` string
+      // and no `species` — is a mount edge at the other top-level attachment
+      // point, inlined through the same pipeline as a `models.<k>` edge.
+      if (isTopLevelReactionSystemMountEdge(rs)) {
+        inlineTopLevelRef(
+          REACTION_SYSTEM_MOUNT,
+          file,
+          name,
+          rs,
+          basePath,
+          resolving,
+          registry,
+          read,
           `/reaction_systems/${name}`,
+          meta,
+          rootEnv,
+          [],
+          precision,
         )
+        continue
       }
       resolveReactionSystemRefs(
         rs,
@@ -298,6 +301,12 @@ export function resolveSubsystemRefsSync(
         precision,
       )
     }
+  }
+
+  // Attach the registry only if the merge actually contributed axes to a
+  // previously index-set-less document (no empty `index_sets: {}` otherwise).
+  if (!file.index_sets && Object.keys(registry).length > 0) {
+    ;(file as { index_sets?: unknown }).index_sets = registry
   }
 
   // esm-spec §4.7 "A mounted document's data sources": every mount above, of
@@ -368,15 +377,24 @@ async function prefetchRefs(
   cache: Map<string, string>,
   seen: Set<string>,
 ): Promise<void> {
-  const walk = async (subsystems: unknown, currentBase: string): Promise<void> => {
+  // `isEdge` is the SAME classifier the sync core applies to the map being
+  // walked, so an entry is fetched here exactly when the sync pass will treat it
+  // as a mount edge, and walked as a component exactly when the sync pass will
+  // walk its `subsystems`. A mismatch either fetches a ref nothing reads or
+  // leaves a nested ref the sync pass needs out of the cache.
+  const walk = async (
+    subsystems: unknown,
+    currentBase: string,
+    isEdge: (entry: unknown) => boolean = isSubsystemMountEdge,
+  ): Promise<void> => {
     if (typeof subsystems !== 'object' || subsystems === null) return
     for (const sub of Object.values(subsystems as Record<string, unknown>)) {
-      const authoredRef = (sub as RefEdge | null)?.ref
-      if (typeof authoredRef !== 'string') {
+      if (!isEdge(sub)) {
         walkComponent(sub, currentBase)
         await walkNested(sub, currentBase)
         continue
       }
+      const authoredRef = (sub as RefEdge).ref as string
       // esm-spec §4.7 `${VAR}` expansion, ONCE, where the ref leaves the
       // document — ahead of the `isRemoteRef` classification below and ahead of
       // the cache key. The sync core expands at its own read of `sub.ref` with
@@ -425,15 +443,12 @@ async function prefetchRefs(
 
   const walkDocument = async (parsed: unknown, base: string): Promise<void> => {
     const root = parsed as { models?: object; reaction_systems?: object } | null
-    // A top-level `models.<k>` map is ref-bearing at exactly the shape a
-    // `subsystems` map is (esm-spec §4.7 "Two mount forms, one mechanism"), so
-    // `walk` covers both: an entry with a `ref` is fetched and recursed into, an
-    // entry without one has its own `subsystems` walked. A top-level
-    // `reaction_systems.<k>` `{ref}` is NOT a mount form this binding inlines
-    // (nor do Python or Rust), so that map is only walked for nested edges.
-    await walk(root?.models ?? {}, base)
-    for (const component of Object.values(root?.reaction_systems ?? {}))
-      await walkNested(component, base)
+    // The two top-level attachment points (esm-spec §4.7 "Two mount forms, one
+    // mechanism") are walked like a `subsystems` map — a mount edge is fetched
+    // and recursed into, a component has its own `subsystems` walked — but each
+    // tells an edge from a component with its own top-level discriminator.
+    await walk(root?.models ?? {}, base, (m) => isTopLevelMountEdge(m as Model | SubsystemRef))
+    await walk(root?.reaction_systems ?? {}, base, isTopLevelReactionSystemMountEdge)
   }
 
   await walkDocument(doc, basePath)
@@ -615,7 +630,9 @@ function resolveRefDocument(
   read: SyncRefReader = loadRefSync,
 ): EsmFile {
   const mountLabel =
-    mountForm === 'subsystem' ? `Subsystem ref '${ref}'` : `Top-level model ref '${ref}'`
+    mountForm === 'subsystem'
+      ? `Subsystem ref '${ref}'`
+      : `${mountForm.charAt(0).toUpperCase()}${mountForm.slice(1)} ref '${ref}'`
   if (isTemplateLibraryDoc(parsed)) {
     throw new EsmMachineryError(
       ERROR_CODES.SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
@@ -916,7 +933,19 @@ function foldNestedIndexSets(
  * steers diagnostic wording and nothing else: both forms run the one edge
  * pipeline in `resolveRefEdge` / `resolveRefDocument`.
  */
-type MountForm = 'subsystem' | 'top-level model'
+type MountForm = 'subsystem' | 'top-level model' | 'top-level reaction system'
+
+/** The block a mount edge of `mountForm` sits in, for diagnostics and labels. */
+function mountFormBlock(mountForm: MountForm): string {
+  switch (mountForm) {
+    case 'subsystem':
+      return 'subsystems'
+    case 'top-level model':
+      return 'models'
+    case 'top-level reaction system':
+      return 'reaction_systems'
+  }
+}
 
 /**
  * Ref-edge fields a `{ ref, ... }` subsystem entry may carry.
@@ -1156,7 +1185,7 @@ function resolveRefEdge(
       refDoc,
       ref,
       refBasePath,
-      readEdgeBindings(sub, `${mountForm === 'subsystem' ? 'subsystems' : 'models'}.${subName}`),
+      readEdgeBindings(sub, `${mountFormBlock(mountForm)}.${subName}`),
       readEdgeInjectedImports(sub),
       sub.index_set_rename,
       meta,
@@ -1182,7 +1211,7 @@ function resolveRefEdge(
     stashMountedDataSources(
       parsed,
       refBasePath,
-      `${mountForm === 'subsystem' ? 'subsystems' : 'models'}.${subName} (ref '${ref}')`,
+      `${mountFormBlock(mountForm)}.${subName} (ref '${ref}')`,
     )
     inline(parsed, refBasePath)
   } finally {
@@ -1275,6 +1304,14 @@ function walkSubsystemRefs(
 }
 
 /**
+ * Is this `subsystems.<k>` entry a `{ ref }` MOUNT EDGE? Any `ref` string: the
+ * async prefetch's classifier for a `subsystems` map.
+ */
+function isSubsystemMountEdge(sub: unknown): boolean {
+  return typeof (sub as RefEdge | null)?.ref === 'string'
+}
+
+/**
  * Is this top-level `models.<k>` entry a bare `{ ref }` MOUNT EDGE rather than
  * an inline component?
  *
@@ -1284,13 +1321,88 @@ function walkSubsystemRefs(
  * field is not a mount.
  */
 function isTopLevelMountEdge(model: Model | SubsystemRef): model is SubsystemRef & RefEdge {
-  const m = model as RefEdge & { variables?: unknown }
-  return typeof m.ref === 'string' && m.variables === undefined
+  const m = model as (RefEdge & { variables?: unknown }) | null
+  return (
+    m !== null && typeof m === 'object' && typeof m.ref === 'string' && m.variables === undefined
+  )
 }
 
 /**
- * Inline one top-level `models.<k>` `{ ref }` mount edge (esm-spec §4.7 "Two
- * mount forms, one mechanism").
+ * Is this top-level `reaction_systems.<k>` entry a bare `{ ref }` MOUNT EDGE
+ * rather than an inline reaction system? A `ref` string and no `species`, the
+ * discriminator Julia and Rust use for this form.
+ */
+function isTopLevelReactionSystemMountEdge(rs: unknown): rs is SubsystemRef & RefEdge {
+  const r = rs as (RefEdge & { species?: unknown }) | null
+  return r !== null && typeof r === 'object' && typeof r.ref === 'string' && r.species === undefined
+}
+
+/**
+ * One of esm-spec §4.7's two top-level attachment points: a `models.<k>` or a
+ * `reaction_systems.<k>` entry. "Two mount forms, one mechanism": both run the
+ * same edge pipeline and differ only in which block the leaf's component comes
+ * from and lands in, and in the selector key naming one of several.
+ */
+interface TopLevelMountForm {
+  block: 'models' | 'reaction_systems'
+  selector: 'model' | 'reaction_system'
+  mountForm: MountForm
+}
+
+const MODEL_MOUNT: TopLevelMountForm = {
+  block: 'models',
+  selector: 'model',
+  mountForm: 'top-level model',
+}
+
+const REACTION_SYSTEM_MOUNT: TopLevelMountForm = {
+  block: 'reaction_systems',
+  selector: 'reaction_system',
+  mountForm: 'top-level reaction system',
+}
+
+/**
+ * The component a top-level `reaction_systems.<k>` mount splices in: the
+ * leaf's single reaction system, or the one the edge's `reaction_system`
+ * selector names. A leaf with none, an ambiguous leaf and an unknown selector
+ * are `unresolved_subsystem_ref`, which is what Julia and Rust raise there.
+ */
+function extractTopLevelReactionSystem(
+  parsed: EsmFile,
+  edge: RefEdge & { reaction_system?: unknown },
+  ref: string,
+  pointer: string,
+): unknown {
+  const systems = (parsed.reaction_systems ?? {}) as Record<string, unknown>
+  const names = Object.keys(systems)
+  const available = [...names].sort().join(', ')
+  const fail = (message: string): never => {
+    throw new RefLoadError(ref, undefined, ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF, message, pointer)
+  }
+  if (names.length === 0) {
+    fail(`top-level reaction system ref '${ref}' resolves to a file with no reaction_systems block`)
+  }
+  const sel = edge.reaction_system
+  if (typeof sel === 'string') {
+    if (!(sel in systems)) {
+      fail(
+        `top-level reaction system ref '${ref}' has no reaction system '${sel}' (available: ${available})`,
+      )
+    }
+    return systems[sel]
+  }
+  if (names.length > 1) {
+    fail(
+      `top-level reaction system ref '${ref}' resolves to a file with several reaction_systems ` +
+        `(${available}); name one with the \`reaction_system\` selector`,
+    )
+  }
+  return systems[names[0] as string]
+}
+
+/**
+ * Inline one top-level `models.<k>` or `reaction_systems.<k>` `{ ref }` mount
+ * edge (esm-spec §4.7 "Two mount forms, one mechanism"); `form` says which.
  *
  * A top-level mount and a `subsystems.<k>` mount "differ only in where the
  * mounted component lands", and a binding MUST NOT make them differ otherwise —
@@ -1313,7 +1425,8 @@ function isTopLevelMountEdge(model: Model | SubsystemRef): model is SubsystemRef
  * LEAF's directory, so the index-set merge composes transitively — and so do
  * the leaf's OWN top-level mounts, through `inlineNestedTopLevelMounts` below.
  */
-function inlineTopLevelModelRef(
+function inlineTopLevelRef(
+  form: TopLevelMountForm,
   file: EsmFile,
   name: string,
   edge: SubsystemRef & RefEdge,
@@ -1351,26 +1464,34 @@ function inlineTopLevelModelRef(
       // assembly may shape its coupling over them without redeclaring them.
       mergeSubsystemIndexSets(registry, parsed, ref, rootEnv)
 
-      // §4.7 invariant: exactly ONE top-level system per referenced file.
-      assertSingleTopLevelSystem(parsed, ref, pointer)
-      const firstEntry = Object.entries(parsed.models ?? {})[0]
-      if (!firstEntry) {
-        throw new RefLoadError(
-          ref,
-          undefined,
-          ERROR_CODES.AMBIGUOUS_SUBSYSTEM_REF,
-          `Top-level model ref '${ref}' resolves to a file with no top-level model; a ` +
-            `models.<k> mount requires exactly one (esm-spec §4.7)`,
-          pointer,
-        )
+      let resolved: unknown
+      if (form === REACTION_SYSTEM_MOUNT) {
+        resolved = extractTopLevelReactionSystem(parsed, edge, ref, pointer)
+      } else {
+        // §4.7 invariant: exactly ONE top-level system per referenced file.
+        assertSingleTopLevelSystem(parsed, ref, pointer)
+        const firstEntry = Object.entries(parsed.models ?? {})[0]
+        if (!firstEntry) {
+          throw new RefLoadError(
+            ref,
+            undefined,
+            ERROR_CODES.AMBIGUOUS_SUBSYSTEM_REF,
+            `Top-level model ref '${ref}' resolves to a file with no top-level model; a ` +
+              `models.<k> mount requires exactly one (esm-spec §4.7)`,
+            pointer,
+          )
+        }
+        resolved = firstEntry[1]
       }
-      const resolvedModel = firstEntry[1]
       // esm-spec §6.6: inline tests do NOT cross a mount edge.
-      delete (resolvedModel as { tests?: unknown }).tests
-      if (file.models) file.models[name] = resolvedModel
+      delete (resolved as { tests?: unknown }).tests
+      const block = (file as unknown as Record<string, Record<string, unknown> | undefined>)[
+        form.block
+      ]
+      if (block) block[name] = resolved
     },
     meta,
-    'top-level model',
+    form.mountForm,
     // `leafEnv` is this leaf's fold environment, as for the subsystem form.
     (leaf, leafRegistry, leafBasePath, leafEnv, leafPrecision, leafMeta) =>
       resolveLeafNestedMounts(
@@ -1482,9 +1603,9 @@ function relowerThroughInlinedMounts(file: EsmFile, mountingComponents: Set<stri
 }
 
 /**
- * Inline every top-level `models.<k>` `{ ref }` mount edge a REFERENCED
- * document carries of its own (esm-spec §4.7 "Two mount forms, one
- * mechanism": the form composes with itself).
+ * Inline every top-level `models.<k>` / `reaction_systems.<k>` `{ ref }` mount
+ * edge a REFERENCED document carries of its own (esm-spec §4.7 "Two mount
+ * forms, one mechanism": the form composes with itself).
  *
  * The leaf's mounts merge their axes into the LEAF's registry, not into the
  * mounting document's — step (1) of the edge pipeline is "the leaf resolves in
@@ -1509,13 +1630,31 @@ function inlineNestedTopLevelMounts(
   registry: Record<string, unknown>,
   precision: string,
 ): void {
-  if (!leaf.models) return
-  for (const [name, model] of Object.entries(leaf.models)) {
+  for (const [name, model] of Object.entries(leaf.models ?? {})) {
     if (!isTopLevelMountEdge(model)) continue
-    inlineTopLevelModelRef(
+    inlineTopLevelRef(
+      MODEL_MOUNT,
       leaf,
       name,
       model,
+      basePath,
+      resolving,
+      registry,
+      read,
+      pointer,
+      meta,
+      rootEnv,
+      refChain,
+      precision,
+    )
+  }
+  for (const [name, rs] of Object.entries(leaf.reaction_systems ?? {})) {
+    if (!isTopLevelReactionSystemMountEdge(rs)) continue
+    inlineTopLevelRef(
+      REACTION_SYSTEM_MOUNT,
+      leaf,
+      name,
+      rs,
       basePath,
       resolving,
       registry,

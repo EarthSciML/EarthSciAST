@@ -282,48 +282,92 @@ def test_a_mount_cycle_across_the_chain_is_reported(tmp_path):
     assert "ircular" in str(excinfo.value)
 
 
-def test_toplevel_reaction_system_ref_is_refused_loudly():
-    """esm-spec §4.7: this binding does not implement the top-level
-    ``reaction_systems.<k>`` ``{ref}`` mount form, so it REFUSES the entry —
-    ``mount_form_unsupported`` at ``/reaction_systems/<k>`` — rather than coercing
-    the stub into an empty reaction system and loading clean with nothing mounted.
-    (Julia and Rust implement the form.)"""
-    from earthsci_ast.parse import SubsystemRefError
-
+def test_toplevel_reaction_system_ref_is_mounted():
+    """esm-spec §4.7 "Two mount forms, one mechanism": a top-level
+    ``reaction_systems.<k>`` ``{ref}`` mounts the leaf's reaction system under the
+    key, through the same edge pipeline as a top-level ``models.<k>`` ``{ref}``.
+    The shared contract for the form is
+    ``tests/conformance/toplevel_reaction_system_ref/``."""
     fixture = os.path.join(
         TESTS, "fixtures", "mount_form_unsupported", "toplevel_reaction_system_ref.esm"
     )
-    with pytest.raises(SubsystemRefError) as info:
-        load_path(fixture)
-    assert info.value.code == "mount_form_unsupported"
-    assert info.value.path == "/reaction_systems/Chem"
-
-    # The leaf itself — an inline reaction system, a component rather than a
-    # mount — still loads.
-    leaf = load_path(
-        os.path.join(TESTS, "fixtures", "mount_form_unsupported", "reaction_system_leaf.esm")
-    )
-    assert (
-        set(s.name for s in leaf.reaction_systems["Chem"].species) == {"A", "B"}
-        or len(leaf.reaction_systems["Chem"].species) == 2
-    )
+    rs = load_path(fixture).reaction_systems["Chem"]
+    assert sorted(s.name for s in rs.species) == ["A", "B"]
+    assert len(rs.reactions) == 1
 
 
-def test_toplevel_reaction_system_ref_conformance_fixtures_are_refused():
-    """``tests/conformance/toplevel_reaction_system_ref/``: this binding is not in
-    ``implemented_by``, so every fixture there that mounts a top-level
-    ``reaction_systems.<k>`` ``{ref}`` is refused with ``mount_form_unsupported``,
-    and the inline twins load."""
-    from earthsci_ast.parse import SubsystemRefError
+def _toplevel_rs_components(path: str) -> tuple:
+    """The ``models`` and ``reaction_systems`` blocks of ``path`` after load and emit."""
+    from earthsci_ast.serialize import to_json
 
-    d = os.path.join(TESTS, "conformance", "toplevel_reaction_system_ref")
-    with open(os.path.join(d, "expected.json")) as f:
-        expected = json.load(f)
-    assert "python" not in expected["implemented_by"]
-    for fixture in [*expected["loads"], *expected["load_errors"]]:
-        with pytest.raises(SubsystemRefError) as info:
-            load_path(os.path.join(d, fixture))
-        assert info.value.code == "mount_form_unsupported", fixture
-        assert info.value.path.startswith("/reaction_systems/"), fixture
-    for inline in set(expected["loads"].values()):
-        load_path(os.path.join(d, inline))
+    doc = json.loads(to_json(load_path(path)))
+    return doc.get("models"), doc.get("reaction_systems")
+
+
+TOPLEVEL_RS_DIR = os.path.join(TESTS, "conformance", "toplevel_reaction_system_ref")
+with open(os.path.join(TOPLEVEL_RS_DIR, "expected.json")) as _f:
+    TOPLEVEL_RS_EXPECTED = json.load(_f)
+
+
+@pytest.mark.parametrize("fixture", sorted(TOPLEVEL_RS_EXPECTED["loads"]))
+def test_toplevel_reaction_system_ref_loads_as_if_written_inline(fixture):
+    """``tests/conformance/toplevel_reaction_system_ref/`` ``loads``: each mount
+    loads to the same ``models`` and ``reaction_systems`` as its inline twin."""
+    assert "python" in TOPLEVEL_RS_EXPECTED["implemented_by"]
+    inline = TOPLEVEL_RS_EXPECTED["loads"][fixture]
+    got = _toplevel_rs_components(os.path.join(TOPLEVEL_RS_DIR, fixture))
+    want = _toplevel_rs_components(os.path.join(TOPLEVEL_RS_DIR, inline))
+    assert got == want
+
+
+@pytest.mark.parametrize("fixture", sorted(TOPLEVEL_RS_EXPECTED["load_errors"]))
+def test_toplevel_reaction_system_ref_bad_mount_is_refused(fixture):
+    """``load_errors``: each listed binding refuses the fixture with that code."""
+    want = TOPLEVEL_RS_EXPECTED["load_errors"][fixture]
+    code = next((c for c, bindings in want.items() if "python" in bindings), None)
+    with pytest.raises(Exception) as info:
+        load_path(os.path.join(TOPLEVEL_RS_DIR, fixture))
+    if code is not None:
+        assert getattr(info.value, "code", None) == code, info.value
+        assert info.value.path.startswith("/reaction_systems/"), info.value.path
+
+
+def test_toplevel_reaction_system_ref_runs_the_edge_pipeline(tmp_path):
+    """The reaction-system form runs the whole edge pipeline (esm-spec §4.7): the
+    edge's ``bindings`` close the leaf, its ``index_sets`` merge into the mounting
+    document, and ``index_set_rename`` applies."""
+    leaf = {
+        "esm": "1.0.0",
+        "metadata": {"name": "rs_leaf", "description": "probe"},
+        "metaparameters": {"N": {"type": "integer", "default": 2}},
+        "index_sets": {"x": {"kind": "interval", "size": "N"}},
+        "reaction_systems": {
+            "Chem": {
+                "species": {"A": {"units": "1", "default": 1.0}},
+                "parameters": {"k": {"units": "1/s", "default": 0.3}},
+                "reactions": [
+                    {
+                        "id": "R1",
+                        "substrates": [{"species": "A", "stoichiometry": 1}],
+                        "products": None,
+                        "rate": "k",
+                    }
+                ],
+            }
+        },
+    }
+    (tmp_path / "leaf.esm").write_text(json.dumps(leaf))
+
+    def load(edge):
+        host = {
+            "esm": "1.0.0",
+            "metadata": {"name": "rs_host", "description": "probe"},
+            "reaction_systems": {"Chem": {"ref": "./leaf.esm", **edge}},
+        }
+        (tmp_path / "host.esm").write_text(json.dumps(host))
+        return load_path(str(tmp_path / "host.esm"))
+
+    assert load({}).index_sets["x"]["size"] == 2
+    assert load({"bindings": {"N": 5}}).index_sets["x"]["size"] == 5
+    renamed = load({"index_set_rename": {"x": "y"}}).index_sets
+    assert "x" not in renamed and renamed["y"]["size"] == 2

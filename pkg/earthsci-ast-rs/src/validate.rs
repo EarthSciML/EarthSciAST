@@ -173,8 +173,9 @@ pub enum StructuralErrorCode {
     /// A subsystem `ref` that resolved to a file NOT containing exactly one
     /// top-level system (zero or several), so which system to mount is ambiguous.
     AmbiguousSubsystemRef,
-    /// A §4.7 `{ref}` mount at a form this binding does not implement — a
-    /// top-level `reaction_systems.<k>` `{ref}`.
+    /// A §4.7 `{ref}` mount at a form a binding does not implement. Never
+    /// raised: this binding mounts both top-level forms (see
+    /// [`codes::MOUNT_FORM_UNSUPPORTED`]).
     MountFormUnsupported,
     /// A `variable_map` `identity` coupling whose `from`/`to` variables carry
     /// declared, non-empty, and DIFFERING units (esm-spec §4.7.6). Static mirror

@@ -4,8 +4,8 @@
 //! `models.<k>` `{ref}`.
 //!
 //! The fixtures are shared with the other bindings
-//! (`tests/conformance/toplevel_reaction_system_ref/`). Julia and Rust mount the
-//! form; Python, TypeScript and Go refuse it with `mount_form_unsupported`.
+//! (`tests/conformance/toplevel_reaction_system_ref/`); all five bindings mount
+//! the form.
 
 #![cfg(not(target_arch = "wasm32"))]
 

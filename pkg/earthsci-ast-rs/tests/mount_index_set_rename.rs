@@ -428,8 +428,7 @@ fn a_merge_folds_against_the_environment_of_the_registry_it_lands_in() {
 
 /// esm-spec §4.7 "Two mount forms, one mechanism": this binding mounts a
 /// top-level `reaction_systems.<k>` `{ref}`, splicing the leaf's reaction
-/// system in under the key. (Python, TypeScript and Go still refuse the form
-/// with `mount_form_unsupported`, which is what this fixture pins for them.)
+/// system in under the key, as all five bindings now do.
 /// The shared contract for the form is `tests/conformance/toplevel_reaction_system_ref/`.
 #[test]
 fn a_toplevel_reaction_system_ref_is_mounted() {
