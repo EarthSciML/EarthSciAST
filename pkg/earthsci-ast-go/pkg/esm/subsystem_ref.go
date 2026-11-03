@@ -147,7 +147,16 @@ func extractTopLevelRefEdges(jsonStr string) map[string]map[string]map[string]an
 	}
 	var out map[string]map[string]map[string]any
 	for _, mount := range topLevelMounts {
-		edges := topLevelRefEntries(view, mount.form)
+		block, _ := view[mount.form.section].(map[string]any)
+		var edges map[string]map[string]any
+		for name, raw := range block {
+			if entry, ok := topLevelRefEdge(raw, mount.form); ok {
+				if edges == nil {
+					edges = map[string]map[string]any{}
+				}
+				edges[name] = entry
+			}
+		}
 		if len(edges) == 0 {
 			continue
 		}
@@ -159,32 +168,38 @@ func extractTopLevelRefEdges(jsonStr string) map[string]map[string]map[string]an
 	return out
 }
 
-// topLevelRefEntries returns the entries of the raw view's `form.section` block
-// that are bare `{ref}` mount edges: a `ref` string and no `form.inlineKey`.
-// Nil when there are none.
-func topLevelRefEntries(view map[string]any, form mountForm) map[string]map[string]any {
-	comps, ok := view[form.section].(map[string]any)
+// topLevelRefEdge reports whether `raw`, one entry of a top-level
+// `form.section` block, is a bare `{ref}` mount edge — an object with a `ref`
+// string and no `form.inlineKey` — and returns it as an object if so.
+func topLevelRefEdge(raw any, form mountForm) (map[string]any, bool) {
+	entry, ok := raw.(map[string]any)
 	if !ok {
-		return nil
+		return nil, false
 	}
-	var out map[string]map[string]any
-	for name, raw := range comps {
-		entry, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		if _, isString := entry["ref"].(string); !isString {
-			continue
-		}
-		if _, inline := entry[form.inlineKey]; inline {
-			continue
-		}
-		if out == nil {
-			out = map[string]map[string]any{}
-		}
-		out[name] = entry
+	if _, isString := entry["ref"].(string); !isString {
+		return nil, false
 	}
-	return out
+	if _, inline := entry[form.inlineKey]; inline {
+		return nil, false
+	}
+	return entry, true
+}
+
+// topLevelRefEntries returns the raw view's `form.section` block and the
+// entries of it that are bare `{ref}` mount edges (topLevelRefEdge), keyed by
+// name. `edges` is nil when there are none; `block` is nil when the view has
+// no such block.
+func topLevelRefEntries(view map[string]any, form mountForm) (block, edges map[string]any) {
+	block, _ = view[form.section].(map[string]any)
+	for name, raw := range block {
+		if entry, ok := topLevelRefEdge(raw, form); ok {
+			if edges == nil {
+				edges = map[string]any{}
+			}
+			edges[name] = entry
+		}
+	}
+	return block, edges
 }
 
 // markUnresolvedTopLevelMounts marks the EMPTY component each still-unresolved
@@ -384,14 +399,9 @@ func inlineNestedTopLevelRefs(view map[string]any, basePath string, visited map[
 	pathPrefix string, precision string, orders map[string][]string) error {
 	for _, mount := range topLevelMounts {
 		form := mount.form
-		entries := topLevelRefEntries(view, form)
-		if len(entries) == 0 {
+		comps, edges := topLevelRefEntries(view, form)
+		if len(edges) == 0 {
 			continue
-		}
-		comps := view[form.section].(map[string]any)
-		edges := make(map[string]any, len(entries))
-		for name, entry := range entries {
-			edges[name] = entry
 		}
 		landed := map[string]map[string][]string{}
 		if err := resolveSubsystemMap(edges, basePath, visited, registry, sources, parentMeta, apiMeta, forwarded,
@@ -609,15 +619,23 @@ type mountForm struct {
 	// rather than a bare `{ref}` stub: `variables` for a model, `species` for a
 	// reaction system. Empty for the `subsystems.<k>` form.
 	inlineKey string
+	// selector is the edge key naming one component of a leaf that declares
+	// several of the form's kind: `model` / `reaction_system`. Empty for the
+	// `subsystems.<k>` form, whose leaf must hold exactly one system.
+	selector string
+	// kindNoun names one component of the form's kind in diagnostics.
+	kindNoun string
 }
 
 var (
-	subsystemMount     = mountForm{section: "subsystems", noun: "subsystem"}
-	topLevelModelMount = mountForm{section: "models", noun: "top-level model", inlineKey: "variables"}
-	// topLevelReactionSystemMount is the other top-level attachment point. Its
-	// leaf yields the single reaction system it declares, or the one the edge's
-	// `reaction_system` selector names (extractTopLevelReactionSystemRaw).
-	topLevelReactionSystemMount = mountForm{section: "reaction_systems", noun: "top-level reaction system", inlineKey: "species"}
+	subsystemMount = mountForm{section: "subsystems", noun: "subsystem"}
+	// The two top-level attachment points. Each one's leaf yields the single
+	// component of the form's kind it declares, or the one the edge's selector
+	// names (extractTopLevelComponentRaw).
+	topLevelModelMount = mountForm{section: "models", noun: "top-level model", inlineKey: "variables",
+		selector: "model", kindNoun: "model"}
+	topLevelReactionSystemMount = mountForm{section: "reaction_systems", noun: "top-level reaction system", inlineKey: "species",
+		selector: "reaction_system", kindNoun: "reaction system"}
 )
 
 // resolveSubsystemMap resolves references in a single subsystems map.
@@ -1033,13 +1051,13 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 			}
 		}
 
-		// Extract the single top-level model or reaction system (at the
-		// top-level `reaction_systems.<k>` form: the leaf's single reaction
-		// system, or the one the edge's selector names).
+		// Extract the single top-level model or reaction system (at a
+		// top-level form: the leaf's single component of that form's kind, or
+		// the one the edge's selector names).
 		var resolved any
 		var leafAt string
-		if form == topLevelReactionSystemMount {
-			resolved, leafAt, err = extractTopLevelReactionSystemRaw(view, value, ref, refKey)
+		if form.selector != "" {
+			resolved, leafAt, err = extractTopLevelComponentRaw(form, view, value, ref, refKey)
 		} else {
 			resolved, leafAt, err = extractSingleSystemRaw(view, refKey)
 		}
@@ -1184,36 +1202,38 @@ func extractRefWithBindings(value any) (string, map[string]any, bool) {
 	return refStr, bindings, true
 }
 
-// extractTopLevelReactionSystemRaw is the component a top-level
+// extractTopLevelComponentRaw is the component a top-level `models.<k>` or
 // `reaction_systems.<k>` `{ref}` mount splices in: the referenced document's
-// single reaction system, or the one the edge's `reaction_system` selector
-// names, with its pointer in that document. A leaf with none, a leaf with
-// several and no selector, and a selector naming a reaction system the leaf
-// does not declare are all `unresolved_subsystem_ref`, which is what Julia and
-// Rust raise at this form.
-func extractTopLevelReactionSystemRaw(view map[string]any, edge any, ref, path string) (any, string, error) {
-	rss, _ := view["reaction_systems"].(map[string]any)
-	names := sortedKeys(rss)
+// single component of the form's kind, or the one the edge's selector (`model`
+// / `reaction_system`) names, with its pointer in that document. A leaf with
+// several and no selector, and a selector naming a component the leaf does not
+// declare, are `unresolved_subsystem_ref`, as is a leaf with none of the
+// form's kind (a reaction-system-only leaf under `models.<k>`, say), at both
+// forms, as Julia raises them.
+func extractTopLevelComponentRaw(form mountForm, view map[string]any, edge any, ref, path string) (any, string, error) {
+	comps, _ := view[form.section].(map[string]any)
+	names := sortedKeys(comps)
 	if len(names) == 0 {
 		return nil, "", newETErr(CodeUnresolvedSubsystemRef,
-			fmt.Sprintf("ref %q: referenced file %q has no reaction_systems block (esm-spec §4.7)", ref, path))
+			fmt.Sprintf("ref %q: referenced file %q has no %s block (esm-spec §4.7)", ref, path, form.section))
 	}
 	available := strings.Join(names, ", ")
 	if m, ok := edge.(map[string]any); ok {
-		if sel, ok := m["reaction_system"].(string); ok {
-			rs, found := rss[sel]
+		if sel, ok := m[form.selector].(string); ok {
+			comp, found := comps[sel]
 			if !found {
 				return nil, "", newETErr(CodeUnresolvedSubsystemRef,
-					fmt.Sprintf("ref %q has no reaction system %q (available: %s)", ref, sel, available))
+					fmt.Sprintf("ref %q has no %s %q (available: %s)", ref, form.kindNoun, sel, available))
 			}
-			return rs, "/reaction_systems/" + sel, nil
+			return comp, "/" + form.section + "/" + sel, nil
 		}
 	}
 	if len(names) > 1 {
 		return nil, "", newETErr(CodeUnresolvedSubsystemRef,
-			fmt.Sprintf("ref %q resolves to a file with several reaction_systems (%s); name one with the `reaction_system` selector (esm-spec §4.7)", ref, available))
+			fmt.Sprintf("ref %q resolves to a file with several %s (%s); name one with the `%s` selector (esm-spec §4.7)",
+				ref, form.section, available, form.selector))
 	}
-	return rss[names[0]], "/reaction_systems/" + names[0], nil
+	return comps[names[0]], "/" + form.section + "/" + names[0], nil
 }
 
 // extractSingleSystemRaw extracts the single top-level model or reaction system
@@ -1264,7 +1284,7 @@ func extractSingleSystemRaw(view map[string]any, path string) (any, string, erro
 // overwhelmingly common document that mounts nothing.
 func documentHasSubsystemRefs(view map[string]any) bool {
 	for _, mount := range topLevelMounts {
-		if len(topLevelRefEntries(view, mount.form)) > 0 {
+		if _, edges := topLevelRefEntries(view, mount.form); len(edges) > 0 {
 			return true
 		}
 	}

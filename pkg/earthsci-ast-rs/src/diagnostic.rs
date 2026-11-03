@@ -349,7 +349,10 @@ diagnostic_code_registry! {
     /// ambiguous. Only the resolver can raise this — it is the only layer that
     /// reads the referenced file.
     AMBIGUOUS_SUBSYSTEM_REF = "ambiguous_subsystem_ref";
-    /// A top-level `models.<k>` mount edge that does not resolve.
+    /// A top-level `models.<k>` mount edge that does not resolve. This binding
+    /// raises `unresolved_subsystem_ref` there instead, as at the
+    /// `reaction_systems.<k>` form; the code stays because the table is
+    /// cross-language uniform.
     TOPLEVEL_MODEL_REF_UNRESOLVED = "toplevel_model_ref_unresolved";
     /// A referenced subsystem file's top-level `index_sets` entry collides with
     /// a non-deep-equal declaration in the importing document (§4.7).

@@ -1346,58 +1346,70 @@ function isTopLevelReactionSystemMountEdge(rs: unknown): rs is SubsystemRef & Re
 interface TopLevelMountForm {
   block: 'models' | 'reaction_systems'
   selector: 'model' | 'reaction_system'
+  /** What the form mounts, as diagnostics name it. */
+  noun: 'model' | 'reaction system'
   mountForm: MountForm
 }
 
 const MODEL_MOUNT: TopLevelMountForm = {
   block: 'models',
   selector: 'model',
+  noun: 'model',
   mountForm: 'top-level model',
 }
 
 const REACTION_SYSTEM_MOUNT: TopLevelMountForm = {
   block: 'reaction_systems',
   selector: 'reaction_system',
+  noun: 'reaction system',
   mountForm: 'top-level reaction system',
 }
 
 /**
- * The component a top-level `reaction_systems.<k>` mount splices in: the
- * leaf's single reaction system, or the one the edge's `reaction_system`
- * selector names. A leaf with none, an ambiguous leaf and an unknown selector
- * are `unresolved_subsystem_ref`, which is what Julia and Rust raise there.
+ * The component a top-level mount of `form` splices in: the leaf's single
+ * component of the form's kind (`models` or `reaction_systems`), or the one the
+ * edge's selector (`model` / `reaction_system`) names. Only the form's own
+ * block is consulted, so a leaf carrying one model beside a reaction system
+ * mounts that model at `models.<k>`. A leaf with none, an ambiguous leaf and an
+ * unknown selector are `unresolved_subsystem_ref` at the mount pointer at both
+ * forms, which is what Julia raises there.
  */
-function extractTopLevelReactionSystem(
+function extractTopLevelComponent(
+  form: TopLevelMountForm,
   parsed: EsmFile,
-  edge: RefEdge & { reaction_system?: unknown },
+  edge: RefEdge,
   ref: string,
   pointer: string,
 ): unknown {
-  const systems = (parsed.reaction_systems ?? {}) as Record<string, unknown>
-  const names = Object.keys(systems)
+  const noun = form.noun
+  const components = ((parsed as unknown as Record<string, unknown>)[form.block] ?? {}) as Record<
+    string,
+    unknown
+  >
+  const names = Object.keys(components)
   const available = [...names].sort().join(', ')
   const fail = (message: string): never => {
     throw new RefLoadError(ref, undefined, ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF, message, pointer)
   }
   if (names.length === 0) {
-    fail(`top-level reaction system ref '${ref}' resolves to a file with no reaction_systems block`)
+    fail(`top-level ${noun} ref '${ref}' resolves to a file with no ${form.block} block`)
   }
-  const sel = edge.reaction_system
+  const sel = (edge as Record<string, unknown>)[form.selector]
   if (typeof sel === 'string') {
-    if (!(sel in systems)) {
-      fail(
-        `top-level reaction system ref '${ref}' has no reaction system '${sel}' (available: ${available})`,
-      )
+    // An own-property test: the leaf's block is a plain JSON object, so `in`
+    // would also accept `Object.prototype` keys such as 'constructor'.
+    if (!Object.hasOwn(components, sel)) {
+      fail(`top-level ${noun} ref '${ref}' has no ${noun} '${sel}' (available: ${available})`)
     }
-    return systems[sel]
+    return components[sel]
   }
   if (names.length > 1) {
     fail(
-      `top-level reaction system ref '${ref}' resolves to a file with several reaction_systems ` +
-        `(${available}); name one with the \`reaction_system\` selector`,
+      `top-level ${noun} ref '${ref}' resolves to a file with several ${form.block} ` +
+        `(${available}); name one with the \`${form.selector}\` selector`,
     )
   }
-  return systems[names[0] as string]
+  return components[names[0] as string]
 }
 
 /**
@@ -1464,25 +1476,7 @@ function inlineTopLevelRef(
       // assembly may shape its coupling over them without redeclaring them.
       mergeSubsystemIndexSets(registry, parsed, ref, rootEnv)
 
-      let resolved: unknown
-      if (form === REACTION_SYSTEM_MOUNT) {
-        resolved = extractTopLevelReactionSystem(parsed, edge, ref, pointer)
-      } else {
-        // §4.7 invariant: exactly ONE top-level system per referenced file.
-        assertSingleTopLevelSystem(parsed, ref, pointer)
-        const firstEntry = Object.entries(parsed.models ?? {})[0]
-        if (!firstEntry) {
-          throw new RefLoadError(
-            ref,
-            undefined,
-            ERROR_CODES.AMBIGUOUS_SUBSYSTEM_REF,
-            `Top-level model ref '${ref}' resolves to a file with no top-level model; a ` +
-              `models.<k> mount requires exactly one (esm-spec §4.7)`,
-            pointer,
-          )
-        }
-        resolved = firstEntry[1]
-      }
+      const resolved = extractTopLevelComponent(form, parsed, edge, ref, pointer)
       // esm-spec §6.6: inline tests do NOT cross a mount edge.
       delete (resolved as { tests?: unknown }).tests
       const block = (file as unknown as Record<string, Record<string, unknown> | undefined>)[

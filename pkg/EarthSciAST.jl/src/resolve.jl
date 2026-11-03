@@ -1704,7 +1704,7 @@ the mounting document's OWN declared defaults, and forwarding those would let an
 assembler's unrelated `NLEV` silently override the leaf's own default for a name
 the edge never bound — a different answer from the one the SAME leaf gets at a
 `subsystems.<k>` mount, which is exactly what §4.7 forbids. Mirrors the Python
-`_load_ref_data` backfill and the Rust `inline_toplevel_model_refs`.
+`_load_ref_data` backfill and the Rust `inline_toplevel_refs`.
 
 `model_envs`, when given, records each spliced MODEL's closed leaf environment
 under its mount key: the typed walk (`_resolve_refs_in_file!`) resolves that

@@ -853,3 +853,129 @@ func TestUnresolvedTopLevelRefIsNotAnEmptySystem(t *testing.T) {
 		}
 	}
 }
+
+// esm-spec §4.7 "Two mount forms, one mechanism": the `model` selector applies
+// at a top-level `models.<k>` `{ref}` exactly as `reaction_system` does at
+// `reaction_systems.<k>`. A leaf declaring models A and B mounts the one the
+// selector names; with no selector, or a selector the leaf does not declare,
+// the mount is `unresolved_subsystem_ref` at `/models/<k>`, as Julia raises it.
+// A leaf with one model and one reaction system mounts its model, and a leaf
+// whose only system is a reaction system has no model to mount, which is
+// `unresolved_subsystem_ref` at `/models/<k>` too. Each
+// case is checked on both reach paths: LoadPath, and LoadString plus
+// ResolveSubsystemRefs.
+func TestTopLevelModelRefHonoursTheModelSelector(t *testing.T) {
+	dir := t.TempDir()
+	model := func(v string) string {
+		return `{"variables":{"` + v + `":{"type":"parameter","units":"1","default":1.0}},"equations":[]}`
+	}
+	rs := `{"species":{"S":{"units":"1","default":1.0}},"parameters":{"k":{"units":"1/s","default":0.3}},
+  "reactions":[{"id":"R1","substrates":[{"species":"S","stoichiometry":1}],"products":null,"rate":"k"}]}`
+	leaves := map[string]string{
+		"two_models.esm":   `"models":{"A":` + model("a") + `,"B":` + model("b") + `}`,
+		"model_and_rs.esm": `"models":{"A":` + model("a") + `},"reaction_systems":{"Chem":` + rs + `}`,
+		"rs_only.esm":      `"reaction_systems":{"Chem":` + rs + `}`,
+	}
+	for name, body := range leaves {
+		doc := `{"esm":"1.0.0","metadata":{"name":"leaf","description":"probe"},` + body + `}`
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(doc), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// load reads a host mounting `edge` at models.Atm on both reach paths and
+	// returns each path's mounted model variables, or its error.
+	load := func(edge string) (map[string][]string, map[string]error) {
+		t.Helper()
+		host := `{"esm":"1.0.0","metadata":{"name":"host","description":"probe"},"models":{"Atm":` + edge + `}}`
+		path := filepath.Join(dir, "host.esm")
+		if err := os.WriteFile(path, []byte(host), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		vars := map[string][]string{}
+		errs := map[string]error{}
+		record := func(how string, f *ESMFile, err error) {
+			if err != nil {
+				errs[how] = err
+				return
+			}
+			vars[how] = sortedKeys(f.Models["Atm"].Variables)
+		}
+		f, err := LoadPath(path)
+		record("LoadPath", f, err)
+		g, err := LoadString(host)
+		if err != nil {
+			t.Fatalf("LoadString(%s): %v", edge, err)
+		}
+		err = ResolveSubsystemRefs(g, dir)
+		record("LoadString+ResolveSubsystemRefs", g, err)
+		return vars, errs
+	}
+	mounts := []struct{ edge, want string }{
+		{`{"ref":"./two_models.esm","model":"B"}`, "b"},
+		{`{"ref":"./two_models.esm","model":"A"}`, "a"},
+		{`{"ref":"./model_and_rs.esm"}`, "a"},
+	}
+	for _, m := range mounts {
+		vars, errs := load(m.edge)
+		for how, err := range errs {
+			t.Errorf("%s: %s: %v", m.edge, how, err)
+		}
+		for how, got := range vars {
+			if !reflect.DeepEqual(got, []string{m.want}) {
+				t.Errorf("%s: %s: Atm variables = %v; want [%s]", m.edge, how, got, m.want)
+			}
+		}
+	}
+	refusals := []struct {
+		edge string
+		code string
+	}{
+		{`{"ref":"./two_models.esm"}`, CodeUnresolvedSubsystemRef},
+		{`{"ref":"./two_models.esm","model":"C"}`, CodeUnresolvedSubsystemRef},
+		{`{"ref":"./rs_only.esm"}`, CodeUnresolvedSubsystemRef},
+	}
+	for _, r := range refusals {
+		vars, errs := load(r.edge)
+		for how := range vars {
+			t.Errorf("%s: %s loaded; it must be refused", r.edge, how)
+		}
+		for how, err := range errs {
+			var et *ExpressionTemplateError
+			if !errors.As(err, &et) || et.Code != r.code {
+				t.Errorf("%s: %s: error %v; want %s", r.edge, how, err, r.code)
+				continue
+			}
+			if et.Path != "/models/Atm" {
+				t.Errorf("%s: %s: path = %q; want /models/Atm", r.edge, how, et.Path)
+			}
+		}
+	}
+}
+
+// topLevelRefEntries hands back the block it read and only the bare `{ref}`
+// entries of it: an inline component that happens to carry a `ref` field, and
+// a non-object entry, are not mount edges.
+func TestTopLevelRefEntriesReturnsTheBlockAndItsEdges(t *testing.T) {
+	view, err := decodeJSONView([]byte(`{"models":{
+  "Edge":{"ref":"./leaf.esm","model":"B"},
+  "Inline":{"ref":"./x.esm","variables":{}},
+  "Odd":3}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, edges := topLevelRefEntries(view, topLevelModelMount)
+	if len(block) != 3 {
+		t.Errorf("block = %v; want all three entries", block)
+	}
+	if got := sortedKeys(edges); !reflect.DeepEqual(got, []string{"Edge"}) {
+		t.Errorf("edges = %v; want [Edge]", got)
+	}
+	// The edge is the block's own entry, so resolving it in place rewrites the
+	// view the caller holds.
+	if e, _ := edges["Edge"].(map[string]any); e == nil || e["model"] != "B" {
+		t.Errorf("edge = %v; want the authored entry", edges["Edge"])
+	}
+	if b, e := topLevelRefEntries(view, topLevelReactionSystemMount); b != nil || e != nil {
+		t.Errorf("no reaction_systems block: got %v, %v; want nil, nil", b, e)
+	}
+}

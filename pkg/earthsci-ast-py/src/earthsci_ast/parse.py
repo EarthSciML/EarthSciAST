@@ -1695,6 +1695,7 @@ def _load_ref_data(
     index_set_rename: Any = None,
     rename_where: str = "mount edge",
     forwarded: dict[str, int] | None = None,
+    mount_pointer: str | None = None,
 ) -> tuple:
     """Fetch, gate, schema-validate, §9.7-resolve, and template-lower a
     referenced ESM document (esm-spec §4.7 / §9.7.6 binding site 3).
@@ -1734,6 +1735,11 @@ def _load_ref_data(
     depth (§9.7.6 site 4) and travel down separately, a forwarded binding stops
     at the first document on each mount path that declares the name. See
     :func:`_forward_edge_bindings` for what ``forward`` carries.
+
+    ``mount_pointer``, given by a top-level mount edge, is that edge's JSON
+    Pointer: a leaf file that cannot be found, fetched or parsed as JSON is
+    then ``unresolved_subsystem_ref`` there. Without it those failures stay
+    codeless for the caller to label.
     """
     from .lower_expression_templates import (
         ExpressionTemplateError,
@@ -1747,8 +1753,24 @@ def _load_ref_data(
     )
 
     ref_str = expand_ref_env(ref_str)  # esm-spec §4.7 ${VAR} expansion
-    content = _fetch_ref_content(ref_str, base_path)
-    ref_data = json.loads(content)
+    if mount_pointer is None:
+        ref_data = json.loads(_fetch_ref_content(ref_str, base_path))
+    else:
+        # A leaf file that cannot be found, fetched or parsed is a failure of
+        # THIS edge, so it carries the edge's code and pointer. Everything
+        # raised further down (the leaf's schema, its own mounts) keeps its own.
+        try:
+            ref_data = json.loads(_fetch_ref_content(ref_str, base_path))
+        except SubsystemRefError as exc:
+            exc.code = exc.code or UNRESOLVED_SUBSYSTEM_REF
+            exc.path = exc.path or mount_pointer
+            raise
+        except json.JSONDecodeError as exc:
+            raise SubsystemRefError(
+                f"{kind} ref '{ref_str}' did not parse as JSON: {exc}",
+                code=UNRESOLVED_SUBSYSTEM_REF,
+                path=mount_pointer,
+            ) from exc
     # A REFERENCED document is a document: same wire boundary as the root
     # (docs/content/rfcs/faq-node-rename.md §5.2). Without this the `aggregate`
     # alias and `arrayop` both survive a `{ref}` all the way into `emit`.
@@ -2729,6 +2751,44 @@ _REACTION_SYSTEM_MOUNT = _TopLevelMountForm(
 )
 
 
+def _extract_toplevel_component(
+    form: _TopLevelMountForm, parsed: EsmFile, edge: dict[str, Any], ref_str: str, pointer: str
+) -> Any:
+    """The component a top-level ``{ref}`` mount splices in: the leaf's single
+    component of ``form``'s kind, or the one the edge's selector names.
+
+    Both forms apply the same rule (esm-spec §4.7 "Two mount forms, one
+    mechanism"): a leaf with no component of the form's kind, a leaf with
+    several and no selector, and a selector naming one the leaf does not
+    declare are each ``unresolved_subsystem_ref`` at ``pointer``
+    (``/<block>/<k>``), which is the code the Julia reference raises there.
+    """
+    systems = getattr(parsed, form.block)
+
+    def refuse(message: str) -> SubsystemRefError:
+        return SubsystemRefError(message, code=UNRESOLVED_SUBSYSTEM_REF, path=pointer)
+
+    if not systems:
+        raise refuse(
+            f"top-level {form.noun} ref '{ref_str}' resolves to a file with no {form.block} block"
+        )
+    available = ", ".join(sorted(systems))
+    sel = edge.get(form.selector)
+    if sel is not None:
+        if sel not in systems:
+            raise refuse(
+                f"top-level {form.noun} ref '{ref_str}' has no {form.noun} '{sel}' "
+                f"(available: {available})"
+            )
+        return systems[sel]
+    if len(systems) > 1:
+        raise refuse(
+            f"top-level {form.noun} ref '{ref_str}' resolves to a file with several "
+            f"{form.block} ({available}); name one with the `{form.selector}` selector"
+        )
+    return next(iter(systems.values()))
+
+
 def _resolve_toplevel_mount(
     form: _TopLevelMountForm,
     esm_file: EsmFile,
@@ -2747,83 +2807,15 @@ def _resolve_toplevel_mount(
     return the component to splice in under ``name`` (see
     :func:`resolve_model_refs`).
 
-    At the ``reaction_systems.<k>`` form, a ``SubsystemRefError`` that carries no
-    code of its own (a file that cannot be read, a leaf with no reaction system,
-    an ambiguous leaf or an unknown selector) is ``unresolved_subsystem_ref`` at
-    ``/reaction_systems/<k>``, which is what the Julia reference and Rust raise
-    there. The ``models.<k>`` form keeps its historical diagnostics.
+    The failures that belong to THIS edge — a leaf file that cannot be found or
+    read, and a leaf that does not yield exactly one component of the form's
+    kind — are ``unresolved_subsystem_ref`` at ``/<form.block>/<name>``. Errors
+    raised from inside the leaf's own resolution (its schema validation, its own
+    nested mounts) keep their own code and path.
     """
-    try:
-        return _resolve_toplevel_mount_inner(
-            form,
-            esm_file,
-            name,
-            edge,
-            base_path,
-            registry,
-            precision,
-            loader_metaparameters=loader_metaparameters,
-            parent_metaparameters=parent_metaparameters,
-            mount_chain=mount_chain,
-            forwarded=forwarded,
-        )
-    except SubsystemRefError as exc:
-        if form is _REACTION_SYSTEM_MOUNT:
-            if not getattr(exc, "code", ""):
-                exc.code = UNRESOLVED_SUBSYSTEM_REF
-            if not getattr(exc, "path", ""):
-                exc.path = f"/{form.block}/{name}"
-        raise
-
-
-def _extract_toplevel_component(
-    form: _TopLevelMountForm, parsed: EsmFile, edge: dict[str, Any], ref_str: str
-) -> Any:
-    """The component a top-level ``{ref}`` mount splices in: the leaf's single
-    component of ``form``'s kind, or the one the edge's selector names."""
-    systems = getattr(parsed, form.block)
-    if form is _MODEL_MOUNT:
-        # Historical behaviour of the `models.<k>` form, kept as is.
-        if not systems:
-            raise SubsystemRefError(f"Model ref '{ref_str}' does not contain a top-level model")
-        return next(iter(systems.values()))
-    if not systems:
-        raise SubsystemRefError(
-            f"top-level {form.noun} ref '{ref_str}' resolves to a file with no {form.block} block"
-        )
-    available = ", ".join(sorted(systems))
-    sel = edge.get(form.selector)
-    if sel is not None:
-        if sel not in systems:
-            raise SubsystemRefError(
-                f"top-level {form.noun} ref '{ref_str}' has no {form.noun} '{sel}' "
-                f"(available: {available})"
-            )
-        return systems[sel]
-    if len(systems) > 1:
-        raise SubsystemRefError(
-            f"top-level {form.noun} ref '{ref_str}' resolves to a file with several "
-            f"{form.block} ({available}); name one with the `{form.selector}` selector"
-        )
-    return next(iter(systems.values()))
-
-
-def _resolve_toplevel_mount_inner(
-    form: _TopLevelMountForm,
-    esm_file: EsmFile,
-    name: str,
-    edge: dict[str, Any],
-    base_path: str,
-    registry: dict[str, Any],
-    precision: str,
-    *,
-    loader_metaparameters: dict[str, int] | None,
-    parent_metaparameters: dict[str, int] | None,
-    mount_chain: tuple[str, ...],
-    forwarded: dict[str, int] | None,
-) -> Any:
     ref_str = edge["ref"]
     where = f"top-level {form.noun} ref '{ref_str}'"
+    pointer = f"/{form.block}/{name}"
 
     # Circular reference detection. Seed the chain with this ref so a
     # subsystem inside the referenced file that points back is caught.
@@ -2852,6 +2844,7 @@ def _resolve_toplevel_mount_inner(
         index_set_rename=edge.get("index_set_rename"),
         rename_where=where,
         forwarded=forwarded,
+        mount_pointer=pointer,
     )
 
     parsed = _parse_esm_data(ref_data)
@@ -2905,7 +2898,7 @@ def _resolve_toplevel_mount_inner(
     # A top-level ref must resolve to exactly one component of its form's kind
     # (or the one its selector names). Unlike a subsystem ref, a component of
     # the other kind is not a valid stand-in.
-    component = _extract_toplevel_component(form, parsed, edge, ref_str)
+    component = _extract_toplevel_component(form, parsed, edge, ref_str, pointer)
     component.name = name
     # esm-spec §6.6: inline tests do NOT cross a mount edge. They are
     # assertions about the leaf under the leaf's OWN standalone conditions,

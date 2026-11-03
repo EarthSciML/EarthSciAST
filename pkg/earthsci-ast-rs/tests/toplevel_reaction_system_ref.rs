@@ -75,3 +75,81 @@ fn a_bad_reaction_system_mount_is_refused() {
         }
     }
 }
+
+/// Only a STRING `ref` makes a top-level entry a mount edge, at both forms, as
+/// in the other bindings. `{ref: 5}` is not an edge: it is left to the schema,
+/// which refuses it at the entry, rather than to the mount pipeline.
+#[test]
+fn a_non_string_ref_is_not_a_mount_edge() {
+    for block in ["reaction_systems", "models"] {
+        let doc = serde_json::json!({
+            "esm": "1.0.0",
+            "metadata": {"name": "non_string_ref"},
+            block: {"Chem": {"ref": 5}},
+        });
+        let err = earthsci_ast::load_string(&doc.to_string())
+            .expect_err("a non-string ref must be refused");
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("ref must be a string") && !msg.contains("unresolved_subsystem_ref"),
+            "{block}: a non-string ref reached the mount pipeline: {msg}"
+        );
+        assert!(
+            matches!(err, earthsci_ast::EsmError::SchemaValidation(_)),
+            "{block}: expected a schema refusal, got {msg}"
+        );
+    }
+}
+
+/// The two top-level mount forms raise the same code for the same failure
+/// (esm-spec §4.7 "Two mount forms, one mechanism"): at `models.<k>`, a leaf
+/// with no model, several and no `model` selector, a selector naming a model
+/// the leaf does not declare, and a missing file are each
+/// `unresolved_subsystem_ref`, as at `reaction_systems.<k>`.
+#[test]
+fn a_bad_model_mount_raises_the_reaction_system_forms_code() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let write = |name: &str, doc: Value| {
+        std::fs::write(tmp.path().join(name), doc.to_string()).expect("write");
+    };
+    write(
+        "two_models.esm",
+        serde_json::json!({
+            "esm": "1.0.0",
+            "metadata": {"name": "two_models"},
+            "models": {
+                "A": {"variables": {}, "equations": []},
+                "B": {"variables": {}, "equations": []},
+            },
+        }),
+    );
+    std::fs::copy(dir().join("leaf.esm"), tmp.path().join("rs_leaf.esm")).expect("copy leaf");
+    let cases = [
+        ("no model", serde_json::json!({"ref": "./rs_leaf.esm"})),
+        ("ambiguous", serde_json::json!({"ref": "./two_models.esm"})),
+        (
+            "unknown selector",
+            serde_json::json!({"ref": "./two_models.esm", "model": "C"}),
+        ),
+        (
+            "missing file",
+            serde_json::json!({"ref": "./no_such_leaf.esm"}),
+        ),
+    ];
+    for (case, entry) in cases {
+        write(
+            "mounter.esm",
+            serde_json::json!({
+                "esm": "1.0.0",
+                "metadata": {"name": "mounter"},
+                "models": {"M": entry},
+            }),
+        );
+        let err = load_path(tmp.path().join("mounter.esm"))
+            .expect_err("a bad models.<k> mount must be refused");
+        assert!(
+            err.to_string().contains("[unresolved_subsystem_ref]"),
+            "{case}: expected unresolved_subsystem_ref, got {err}"
+        );
+    }
+}

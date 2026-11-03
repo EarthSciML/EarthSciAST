@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { resolveSubsystemRefs, CircularReferenceError, RefLoadError } from './ref-loading.js'
+import {
+  resolveSubsystemRefs,
+  resolveSubsystemRefsSync,
+  CircularReferenceError,
+  RefLoadError,
+} from './ref-loading.js'
 import type { EsmFile, Model, ReactionSystem } from './types.js'
 import { loadPath } from './parse.js'
 import { validate } from './validate.js'
@@ -325,6 +330,106 @@ describe('a mounted leaf runs every version gate on its own esm', () => {
       }
     } finally {
       await fs.rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// esm-spec §4.7 "Two mount forms, one mechanism": the `model` selector picks one
+// of several models at a top-level `models.<k>` mount exactly as
+// `reaction_system` does at `reaction_systems.<k>`, and the single-component
+// rule reads only the block the form mounts from.
+describe('the selector at a top-level mount', () => {
+  let dir: string
+  const model = (v: string) => ({ variables: { [v]: { type: 'state' } }, equations: [] })
+  const reactionSystem = { species: { A: {} }, reactions: [] }
+  const leaf = (parts: Record<string, unknown>) =>
+    JSON.stringify({ esm: '0.1.0', metadata: { name: 'leaf' }, ...parts })
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'esm-selector-'))
+    await fs.writeFile(
+      path.join(dir, 'two_models.esm'),
+      leaf({ models: { A: model('a'), B: model('b') } }),
+    )
+    await fs.writeFile(
+      path.join(dir, 'model_and_rs.esm'),
+      leaf({ models: { M: model('m') }, reaction_systems: { R: reactionSystem } }),
+    )
+    await fs.writeFile(
+      path.join(dir, 'two_rs.esm'),
+      leaf({ reaction_systems: { R: reactionSystem, S: reactionSystem } }),
+    )
+  })
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true })
+  })
+
+  // Run the sync core and the async (prefetching) entry point on copies of one
+  // document; both must give the same answer.
+  const resolveBoth = async (
+    parts: Parameters<typeof esmFile>[0],
+  ): Promise<Array<EsmFile | { code?: string; path?: string }>> => {
+    const results: Array<EsmFile | { code?: string; path?: string }> = []
+    const runs: Array<(f: EsmFile) => Promise<void> | void> = [
+      (f) => resolveSubsystemRefsSync(f, dir),
+      (f) => resolveSubsystemRefs(f, dir),
+    ]
+    for (const run of runs) {
+      const file = esmFile(structuredClone(parts))
+      try {
+        await run(file)
+        results.push(file)
+      } catch (e) {
+        results.push(e as { code?: string; path?: string })
+      }
+    }
+    return results
+  }
+
+  const expectRefused = async (parts: Parameters<typeof esmFile>[0], pointer: string) => {
+    for (const err of await resolveBoth(parts)) {
+      expect(err).toBeInstanceOf(RefLoadError)
+      expect((err as RefLoadError).code).toBe('unresolved_subsystem_ref')
+      expect((err as RefLoadError).path).toBe(pointer)
+    }
+  }
+
+  it('mounts the model the `model` selector names', async () => {
+    for (const file of await resolveBoth({
+      models: { Atm: { ref: './two_models.esm', model: 'B' } },
+    })) {
+      const atm = (file as EsmFile).models!.Atm as Model
+      expect(Object.keys(atm.variables)).toEqual(['b'])
+    }
+  })
+
+  it('refuses several models and no selector', async () => {
+    await expectRefused({ models: { Atm: { ref: './two_models.esm' } } }, '/models/Atm')
+  })
+
+  it('refuses a selector naming a model the leaf does not declare', async () => {
+    await expectRefused({ models: { Atm: { ref: './two_models.esm', model: 'C' } } }, '/models/Atm')
+  })
+
+  it('refuses a selector naming an Object.prototype key', async () => {
+    await expectRefused(
+      { models: { Atm: { ref: './two_models.esm', model: 'constructor' } } },
+      '/models/Atm',
+    )
+    await expectRefused(
+      { reaction_systems: { Chem: { ref: './two_rs.esm', reaction_system: 'constructor' } } },
+      '/reaction_systems/Chem',
+    )
+  })
+
+  it('refuses a leaf with no model', async () => {
+    await expectRefused({ models: { Atm: { ref: './two_rs.esm' } } }, '/models/Atm')
+  })
+
+  it('mounts the one model of a leaf that also declares a reaction system', async () => {
+    for (const file of await resolveBoth({ models: { Atm: { ref: './model_and_rs.esm' } } })) {
+      expect(Object.keys(((file as EsmFile).models!.Atm as Model).variables)).toEqual(['m'])
     }
   })
 })

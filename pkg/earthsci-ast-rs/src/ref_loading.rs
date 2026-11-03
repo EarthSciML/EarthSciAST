@@ -277,11 +277,15 @@ const SUBSYSTEM_REF: RefNoun = RefNoun {
 const AMBIGUOUS_SUBSYSTEM_REF: &str = codes::AMBIGUOUS_SUBSYSTEM_REF;
 
 /// A top-level `models.<k>` mount edge (used by [`inline_toplevel_refs`]).
+/// Its unresolved code is the generic `unresolved_subsystem_ref`, as at the
+/// `reaction_systems.<k>` form: the Julia reference raises its
+/// `SubsystemRefError` at both forms (esm-spec §4.7 "Two mount forms, one
+/// mechanism").
 const TOPLEVEL_MODEL_REF: RefNoun = RefNoun {
     remote_plural: "top-level model refs",
     cycle_singular: "top-level model reference",
     item: "top-level model ref",
-    code: codes::TOPLEVEL_MODEL_REF_UNRESOLVED,
+    code: codes::UNRESOLVED_SUBSYSTEM_REF,
 };
 
 /// A top-level `reaction_systems.<k>` mount edge. Its unresolved code is the
@@ -502,7 +506,7 @@ fn walk_top_level(
     };
 
     // esm-spec §4.7 / §9.7.10: a top-level `models.<k>` that is a bare `{ref}`
-    // (has `ref`, no inline `variables`) is a model-ref MOUNT EDGE — splice in
+    // (a string `ref`, no inline `variables`) is a model-ref MOUNT EDGE — splice in
     // the referenced leaf's single model, carrying the edge's
     // `expression_template_imports` into that model's own scope, BEFORE the
     // ordinary subsystem walk (the spliced model may itself carry subsystems).
@@ -521,7 +525,7 @@ fn walk_top_level(
     // `parse::load_value` to merge after the close; nested scopes have already
     // closed by the time they get here and merge in place.
     //
-    // A top-level `reaction_systems.<k>` `{ref}` (a `ref` and no `species`) is
+    // A top-level `reaction_systems.<k>` `{ref}` (a string `ref` and no `species`) is
     // the same edge at the other attachment point, and runs the same pipeline
     // (§4.7 "Two mount forms, one mechanism"). Models first, then reaction
     // systems, so the two forms' contributions stage in a fixed order.
@@ -747,11 +751,17 @@ fn inline_toplevel_refs(
     merge_env: &BTreeMap<String, i64>,
     precision: &str,
 ) -> Result<(), DiagnosticError> {
+    // An entry is a mount edge only when its `ref` is a STRING (and it carries
+    // no inline body). Any other `ref` value leaves the entry to the typed
+    // parse and the schema, which report it at the entry, as in the other
+    // bindings.
     let edge_names: Vec<String> = match obj.get(form.block).and_then(|v| v.as_object()) {
         Some(systems) => systems
             .iter()
             .filter(|(_, m)| {
-                m.is_object() && m.get("ref").is_some() && m.get(form.inline_key).is_none()
+                m.is_object()
+                    && m.get("ref").is_some_and(Value::is_string)
+                    && m.get(form.inline_key).is_none()
             })
             .map(|(k, _)| k.clone())
             .collect(),
@@ -771,12 +781,7 @@ fn inline_toplevel_refs(
         let ref_str = entry_obj
             .get("ref")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                err(
-                    form.ref_noun.code,
-                    format!("top-level {} ref must be a string", form.noun),
-                )
-            })?;
+            .expect("edge filter admits only a string ref");
         // `read_edge_bindings` is shared with the `subsystems.<k>` edge, so it
         // is told which mount form it is reporting for.
         let mount_noun = format!("top-level {} ref '{ref_str}'", form.noun);

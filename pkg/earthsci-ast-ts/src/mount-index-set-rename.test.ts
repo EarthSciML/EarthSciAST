@@ -467,3 +467,46 @@ describe('a top-level reaction_systems.<k> {ref} runs the edge pipeline (esm-spe
     expect(sets.y?.size).toBe(2)
   })
 })
+
+describe('index_set_rename leaves an axis spelled like an Object.prototype key alone', () => {
+  // The rename map is consulted by key; an axis named 'constructor' that the
+  // edge does not rename keeps its name in the registry and in every `shape`.
+  it('renames only the axes the edge names', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'rename-proto-'))
+    writeFileSync(
+      path.join(dir, 'leaf.esm'),
+      JSON.stringify({
+        esm: '1.0.0',
+        metadata: { name: 'proto_leaf', description: 'probe' },
+        index_sets: {
+          lev: { kind: 'interval', size: 3 },
+          constructor: { kind: 'interval', size: 2 },
+        },
+        models: {
+          Col: {
+            variables: {
+              u: { type: 'state', units: '1', default: 0.0, shape: ['lev'] },
+              w: { type: 'state', units: '1', default: 0.0, shape: ['constructor'] },
+            },
+            equations: [],
+          },
+        },
+      }),
+    )
+    const file = loadString(
+      JSON.stringify({
+        esm: '1.0.0',
+        metadata: { name: 'proto_host', description: 'probe' },
+        models: { Col: { ref: './leaf.esm', index_set_rename: { lev: 'soil_lev' } } },
+      }),
+    )
+    resolveSubsystemRefsSync(file, dir)
+    const doc = file as unknown as {
+      index_sets: Record<string, unknown>
+      models: { Col: { variables: Record<string, { shape: unknown[] }> } }
+    }
+    expect(Object.keys(doc.index_sets).sort()).toEqual(['constructor', 'soil_lev'])
+    expect(doc.models.Col.variables.u.shape).toEqual(['soil_lev'])
+    expect(doc.models.Col.variables.w.shape).toEqual(['constructor'])
+  })
+})
