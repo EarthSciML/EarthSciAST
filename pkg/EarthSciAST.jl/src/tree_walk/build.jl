@@ -924,6 +924,9 @@ function _partition_variables(
     param_names = String[]
     observed_names = String[]
     state_var_names = Set{String}()
+    # Scalar parameters whose value arrives as data (`_scalar_supplied_data`),
+    # with their build-time value; they take no `p` slot.
+    supplied_scalars = Dict{String, Float64}()
     # The unknown split is DERIVED (esm-spec §6.3.1). An ODE state or an
     # algebraic unknown occupies a partition slot the solver integrates or
     # solves; an observed unknown is eliminable and gets the observed bucket.
@@ -978,7 +981,12 @@ function _partition_variables(
                 haskey(const_arrays, name) || haskey(param_arrays, name) ||
                     throw(_missing_data_error(name, v))
             else
-                push!(param_names, name)
+                a = _scalar_supplied_data(name, const_arrays, param_arrays)
+                if a === nothing
+                    push!(param_names, name)
+                else
+                    supplied_scalars[name] = Float64(first(a))
+                end
             end
         elseif name in observed_here
             if _is_array_shape(v.shape)
@@ -993,7 +1001,67 @@ function _partition_variables(
         end
     end
     sort!(param_names)
-    return param_names, observed_names, state_var_names
+    return param_names, observed_names, state_var_names, supplied_scalars
+end
+
+# A SCALAR parameter whose value arrives as data under its exact name: a
+# one-cell `param_arrays` buffer (a discrete provider's, read live through a
+# gather) or a one-cell `const_arrays` entry (a const provider's field, folded to
+# a literal by `_resolve_indices`). Returns that one-cell array, the live buffer
+# first, or `nothing`. The right-hand side reads the data, never a `p` slot, so
+# the partition gives the parameter none: a `p` slot holding the declared
+# default would be a value nothing reads, and `remake(prob; p = …)` on it would
+# change nothing. It is classed `:const_folded` / `:forcing` instead, like a
+# shaped parameter backed by the same registries, and its build-time value (an
+# `ic` fold, `inspect.params`) is the data's.
+function _scalar_supplied_data(name, const_arrays::AbstractDict, param_arrays::AbstractDict)
+    for reg in (param_arrays, const_arrays)
+        a = get(reg, name, nothing)
+        a isa AbstractArray && length(a) == 1 && return a
+    end
+    return nothing
+end
+
+# An explicit `parameter_overrides` value for a SCALAR parameter that is also
+# given data (`_scalar_supplied_data`). Const data: the override is the caller
+# speaking for this run and outranks it, exactly as it outranks const data for a
+# shaped parameter (`_register_inline_array_parameters`), so it replaces the
+# one-cell array the build folds. A live buffer: the run rewrites it at every
+# refresh, so the override could hold only until the first one; refused rather
+# than half-applied. Without this the parameter has no `p` slot, so the override
+# was never read and the run silently used the provider's value. Every alias of
+# the data (the caller's spelling of a provider key) is replaced with it.
+function _scalar_overrides_over_supplied(
+        model::Model, const_arrays::AbstractDict, param_arrays::AbstractDict,
+        overrides::AbstractDict
+    )
+    out = nothing
+    for (rawname, ov) in overrides
+        ov isa Number || continue
+        name = String(rawname)
+        v = get(model.variables, name, nothing)
+        v !== nothing && v.type == ParameterVariable && !_is_array_shape(v.shape) || continue
+        a = _scalar_supplied_data(name, const_arrays, param_arrays)
+        a === nothing && continue
+        a === get(param_arrays, name, nothing) && throw(
+            ArgumentError(
+                "parameter_overrides: '$(name)' is fed by a live forcing buffer (a " *
+                    "discrete provider or a `param_arrays` entry) that the run rewrites at " *
+                    "each refresh, so an override of it cannot hold; pass one or the other " *
+                    "(esm-spec §6.6.2)"
+            )
+        )
+        out === nothing && (out = Dict{String, Any}(String(k) => x for (k, x) in const_arrays))
+        # Every key holding this very array: the data may sit under the
+        # caller's spelling beside the build's name (`_put_provider_const!`),
+        # and a consumer reading that spelling must see the override too.
+        replaced = fill(Float64(ov), size(a))
+        for (k, x) in out
+            x === a && (out[k] = replaced)
+        end
+        out[name] = replaced
+    end
+    return out === nothing ? const_arrays : out
 end
 
 # A shaped parameter that reached the partition with no value: no `default`,
@@ -1291,13 +1359,7 @@ function _normalize_param_override_keys(
         _canonicalize_override_keys(Any, param_names, namespaces, overrides)
     if !isempty(ambiguous)
         k, cands = first(sort!(collect(ambiguous), by = first))
-        throw(
-            ArgumentError(
-                "parameter_overrides: ambiguous parameter name '$(k)' — it is carried " *
-                    "as a suffix by $(length(cands)) parameters ($(join(sort(cands), ", "))). " *
-                    "Qualify it further with its owning component (esm-spec §6.6.2)."
-            )
-        )
+        throw(ArgumentError(_override_ambiguous_message("parameter_overrides", k, cands)))
     end
     if !isempty(collisions)
         name, keys_ = first(sort!(collect(collisions), by = first))
@@ -1500,6 +1562,15 @@ _override_collision_message(
     "$(surface): $(length(keys_)) keys designate the $(kind) '$(name)' " *
     "($(join(keys_, ", "))). Supply exactly one override key per name " *
     "(esm-spec §6.6.2)."
+
+# The esm-spec §6.6.2 "a key two parameters carry" diagnostic, shared by every
+# surface whose keys `_canonicalize_override_keys` resolves onto parameters.
+_override_ambiguous_message(
+    surface::AbstractString, k::AbstractString, cands::AbstractVector{String}
+) =
+    "$(surface): ambiguous parameter name '$(k)' — it is carried " *
+    "as a suffix by $(length(cands)) parameters ($(join(sort(cands), ", "))). " *
+    "Qualify it further with its owning component (esm-spec §6.6.2)."
 
 # The COMPONENT / SUBSYSTEM names a rule-2 override key may spell in its LEADING
 # segments (esm-spec §6.6.2 rule 2, §4.6).
@@ -2904,7 +2975,7 @@ function _build_discrete_materializer!(
         dims = isempty(rngs) ? Int[1] : Int[length(r) for r in rngs]
         cache = zeros(Float64, dims...)
         caches[name] = cache
-        pgather[name] = _PGatherArray(vec(cache), collect(size(cache)))
+        pgather[name] = _PGatherArray(vec(cache), collect(size(cache)), true)
         cells_of[name] = (idx_names, rngs)
     end
     uz = zeros(Float64, n_states)
@@ -3995,7 +4066,7 @@ function _build_partition_and_materialize(
         param_reads::Union{Nothing, Set{String}} = nothing
     )
     # ---- Partition variables ----
-    param_names, observed_names, state_var_names = _partition_variables(
+    param_names, observed_names, state_var_names, supplied_scalars = _partition_variables(
         model;
         vi_vars = vi_vars, geom_setup_vars = cls.geom_setup_vars,
         geom_inline_vars = cls.geom_inline_vars,
@@ -4012,6 +4083,7 @@ function _build_partition_and_materialize(
         model, param_names, parameter_overrides;
         supplied = const_arrays, supplied_live = param_arrays
     )
+    merge!(param_scope, supplied_scalars)
 
     # ---- M4: materialize intersect_polygon clip rings at setup time ----
     # Each clip is evaluated now (operands are const_arrays) into a CLOSED ring,
@@ -5377,6 +5449,9 @@ function _build_evaluator_impl_inner(
         derived_extents = vi_set_extents,
         runtime = _runtime_array_parameters,
         live_fed = _live_fed_parameters
+    )
+    const_arrays = _scalar_overrides_over_supplied(
+        model, const_arrays, param_arrays, parameter_overrides
     )
     initial_conditions = _expand_inline_array_ics(model, initial_conditions, index_sets)
     # ---- Phase 1: equation pre-lowering + build-owned variable classification ----

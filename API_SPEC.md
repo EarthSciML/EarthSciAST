@@ -1157,9 +1157,14 @@ gather failed, or that were never gathered, are `NotGathered`. Build-time calls 
 - **Default.** `default_forcing_set(x)` / `default_forcing()` is the Problem's
   forcing when `rhs_program(prob)` ran: provider data, a caller's array, or the
   declared default broadcast over the slot's shape, and for an
-  `ArrayParameter` slot the parameter's value. It is a copy taken at program
-  build; later changes to the Problem's own buffers are not seen. Every call
-  returns the same set (same buffers, same epoch).
+  `ArrayParameter` slot the parameter's value. Provider data means const and
+  discrete providers alike: construction samples every provider at
+  `sample_time` (esm-libraries-spec §2.5.2), so a discrete provider's slot
+  holds its record in effect there, not the declared default, before any
+  solve. A provider that has no record at `sample_time` leaves the declared
+  default in its slot until it first delivers. It is a
+  copy taken at program build; later changes to the Problem's own buffers are
+  not seen. Every call returns the same set (same buffers, same epoch).
 - **Compatibility.** A set is valid for the program it was built against and for
   every program derived from it or cloned from it (same slots). A set whose
   slot signature differs is `RhsError::ForcingSignature`.

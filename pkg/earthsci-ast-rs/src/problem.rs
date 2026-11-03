@@ -572,8 +572,16 @@ pub struct ProblemOptions {
     /// Run-time data providers, keyed by the forcing VARIABLE name they feed.
     ///
     /// CONST providers are materialized ONCE, here, at construction — the
-    /// "gated fetch" §2.5.2 puts in the build half. DISCRETE providers
-    /// contribute the refresh anchors [`solve`] segments the integration on.
+    /// "gated fetch" §2.5.2 puts in the build half. DISCRETE providers are
+    /// sampled once at construction too, after every construction check, at
+    /// [`Self::sample_time`] (the record in effect there, see
+    /// [`crate::provider::RefreshExecutor::sample_at`]), so the Problem's
+    /// forcing, and the default forcing set of [`crate::rhs_program`], hold
+    /// their data before any solve. A parameter whose provider delivers
+    /// nothing there holds its declared default until the provider first
+    /// delivers. Their refresh times inside `tspan` are the boundaries
+    /// [`solve`] segments the integration on: a solve samples them at its own
+    /// start and refreshes them at each boundary, with or without `saveat`.
     #[cfg(not(target_arch = "wasm32"))]
     pub providers: HashMap<String, Box<dyn crate::provider::CadenceProvider>>,
     /// Build-time array providers consumed by the pushdown / gated-fetch
@@ -624,7 +632,11 @@ pub struct ProblemOptions {
     /// API_SPEC §5.8's rules.
     pub retain_data_fields: Vec<String>,
 
-    /// Time at which CONST providers are sampled. Defaults to `tspan.0`.
+    /// Time at which providers are sampled at construction: a DISCRETE
+    /// provider gives its record in effect there (a CONST one is
+    /// time-invariant). Defaults to `tspan.0`. It moves only the construction
+    /// sample: a solve still starts from the record in effect at `tspan.0`
+    /// and refreshes at every refresh time inside `tspan`.
     pub sample_time: Option<f64>,
 
     /// Leave every shaped parameter that has a value and is not fed from
@@ -820,7 +832,7 @@ pub struct EsmProblem {
     pub(crate) solver: Option<crate::types::Solver>,
     /// Bound run-time providers, already CONST-materialized.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) refresh: Option<std::cell::RefCell<crate::provider::RefreshExecutor>>,
+    pub(crate) refresh: Option<SharedRefresh>,
     /// Forcing variables fed by a DISCRETE provider.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) discrete_forcing: std::collections::HashSet<String>,
@@ -1609,13 +1621,18 @@ pub fn remake(prob: &EsmProblem, changes: &Remake) -> Result<EsmProblem, Simulat
     u0.extend(changes.u0.iter().map(|(k, v)| (k.clone(), *v)));
     let tspan = changes.tspan.unwrap_or(prob.tspan);
 
+    // The remade span's own boundaries, from every refresh time (the
+    // original's were cut to its span, which a remake may widen).
     #[cfg(not(target_arch = "wasm32"))]
-    let boundaries: Vec<f64> = prob
-        .refresh_boundaries
-        .iter()
-        .copied()
-        .filter(|&b| b > tspan.0 && b < tspan.1)
-        .collect();
+    let boundaries: Vec<f64> = match &prob.refresh {
+        Some(exec) => exec
+            .borrow()
+            .refresh_times()
+            .into_iter()
+            .filter(|&b| b > tspan.0 && b < tspan.1)
+            .collect(),
+        None => Vec::new(),
+    };
 
     Ok(EsmProblem {
         doc: Rc::clone(&prob.doc),
@@ -1640,14 +1657,14 @@ pub fn remake(prob: &EsmProblem, changes: &Remake) -> Result<EsmProblem, Simulat
             .callbacks
             .clone()
             .unwrap_or_else(|| prob.callbacks.clone()),
-        // The materialized provider data is shared by moving the executor's
-        // ownership question out of `remake`'s way: a remade EsmProblem reads the
-        // SAME forcing buffer, because the provider fetch is exactly the work
-        // §2.5.5 forbids redoing. A EsmProblem with providers therefore cannot be
-        // remade into two live copies; the derivative borrows nothing and
-        // carries no executor of its own.
+        // The bound providers are SHARED: a remade EsmProblem reads the SAME
+        // forcing buffer (the backend is shared), and refetching what
+        // construction fetched is exactly the work §2.5.5 forbids redoing. A
+        // solve of either Problem samples the providers at its own start and
+        // refreshes them at its own boundaries, so the two never integrate
+        // each other's records.
         #[cfg(not(target_arch = "wasm32"))]
-        refresh: None,
+        refresh: prob.refresh.clone(),
         #[cfg(not(target_arch = "wasm32"))]
         discrete_forcing: prob.discrete_forcing.clone(),
         #[cfg(not(target_arch = "wasm32"))]
@@ -2255,7 +2272,7 @@ pub fn esm_problem<'a>(
 
     // ---- (5) Bind and CONST-materialize the run-time providers. -----------
     #[cfg(not(target_arch = "wasm32"))]
-    let (refresh, discrete_forcing, refresh_boundaries) =
+    let (refresh, discrete_forcing, refresh_boundaries, provider_names) =
         bind_providers(&backend, &mut opts, tspan)?;
     // Every ingested column construction does not keep for read-back —
     // including the ones the right-hand side is about to take — so
@@ -2341,6 +2358,18 @@ pub fn esm_problem<'a>(
     // compilation is the expensive step: a Problem pays it once, and every
     // segment and every Jacobian call reuses the one executable.
     install_xla_program(&backend, model_name.as_deref(), compiler)?;
+
+    // ---- (5d) Sample the DISCRETE providers, after every gate above. ------
+    #[cfg(not(target_arch = "wasm32"))]
+    if let (Backend::Array(compiled), Some(exec)) = (&backend, &refresh) {
+        sample_discrete_providers(
+            compiled,
+            exec,
+            &discrete_forcing,
+            opts.sample_time.unwrap_or(tspan.0),
+            &provider_names,
+        )?;
+    }
 
     let program_source = match (&backend, owned_file, flat_only) {
         (Backend::Array(_), Some(file), _) => Some(Rc::new(ProgramSource::File(Box::new(file)))),
@@ -3953,7 +3982,7 @@ impl SuppliedData {
             }
             // No data is supplied: a declared default is the value (esm-spec
             // §6.3), and with none the parameter is missing data (§10.10).
-            let mut value = match c.forcing_default(name) {
+            let value = match declared_default_forcing(c, name) {
                 None => {
                     return Err(missing_data_error(
                         &full(name),
@@ -3965,10 +3994,6 @@ impl SuppliedData {
                 Some(None) => continue,
                 Some(Some(value)) => value,
             };
-            let prec = precision::of_variable(name);
-            if prec.is_f32() {
-                value.mapv_inplace(|x| prec.round(x));
-            }
             forcing.borrow_mut().insert(name.clone(), value);
         }
         for name in c.unvalued_shaped_params() {
@@ -4226,14 +4251,15 @@ fn bind_providers(
     tspan: (f64, f64),
 ) -> Result<
     (
-        Option<std::cell::RefCell<crate::provider::RefreshExecutor>>,
+        Option<SharedRefresh>,
         std::collections::HashSet<String>,
         Vec<f64>,
+        HashMap<String, String>,
     ),
     SimulateError,
 > {
     if opts.providers.is_empty() {
-        return Ok((None, Default::default(), Vec::new()));
+        return Ok((None, Default::default(), Vec::new(), HashMap::new()));
     }
     let Backend::Array(compiled) = backend else {
         // Providers feed loader fields, which only exist on the array/spatial
@@ -4272,11 +4298,8 @@ fn bind_providers(
     // where §2.5.2 puts the gated fetch — and never again.
     let mut exec = crate::provider::RefreshExecutor::from_providers(providers);
     let forcing = compiled.forcing_buffer();
-    exec.materialize_const(&forcing)
-        .map_err(|e| SimulateError::ProviderError {
-            name: "<const-loader>".into(),
-            details: e.to_string(),
-        })?;
+    exec.materialize_const_named(&forcing)
+        .map_err(|e| loader_error(&given, e))?;
 
     let discrete: std::collections::HashSet<String> = exec
         .bindings()
@@ -4284,11 +4307,103 @@ fn bind_providers(
         .flat_map(|b| b.variables.iter().cloned())
         .collect();
 
-    let sample_time = opts.sample_time.unwrap_or(tspan.0);
+    // Every refresh time inside the span is a segment boundary, including one
+    // at or before an explicit `sample_time`: the construction sample is the
+    // Problem's starting forcing, not where a solve starts refreshing.
     let mut boundaries: Vec<f64> = exec.refresh_times();
-    boundaries.retain(|&b| b > sample_time && b < tspan.1);
+    boundaries.retain(|&b| b > tspan.0 && b < tspan.1);
 
-    Ok((Some(std::cell::RefCell::new(exec)), discrete, boundaries))
+    Ok((
+        Some(Rc::new(std::cell::RefCell::new(exec))),
+        discrete,
+        boundaries,
+        given,
+    ))
+}
+
+/// The bound run-time providers of a Problem, shared by the Problems
+/// [`remake`] derives from it: they read the same forcing buffer, and the
+/// providers are not fetched again (§2.5.5).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type SharedRefresh = Rc<std::cell::RefCell<crate::provider::RefreshExecutor>>;
+
+/// A provider failure as a [`SimulateError::ProviderError`] naming the
+/// provider by the key the caller passed it under (`given` maps the forcing
+/// name it feeds back to that key).
+#[cfg(not(target_arch = "wasm32"))]
+fn loader_error(given: &HashMap<String, String>, e: crate::provider::LoaderError) -> SimulateError {
+    SimulateError::ProviderError {
+        name: given.get(&e.loader).cloned().unwrap_or(e.loader),
+        details: e.error.to_string(),
+    }
+}
+
+/// Sample the DISCRETE providers at construction, at `sample_time`
+/// (esm-libraries-spec §2.5.2: providers are sampled at construction), so the
+/// Problem's forcing holds their data from the start, as Julia's does, and
+/// `rhs_program`'s default forcing set (a copy of that forcing) holds it too.
+///
+/// Runs after every construction gate, so a Problem refused for another reason
+/// fetches nothing. Each provider gives the record in effect at
+/// `sample_time` ([`crate::provider::RefreshExecutor::sample_at`]). A
+/// parameter whose provider delivers nothing there holds its declared default
+/// (esm-spec §6.3) until the provider first delivers, and with no default it
+/// is missing data (§10.10).
+#[cfg(not(target_arch = "wasm32"))]
+fn sample_discrete_providers(
+    compiled: &ArrayCompiled,
+    exec: &SharedRefresh,
+    discrete: &std::collections::HashSet<String>,
+    sample_time: f64,
+    given: &HashMap<String, String>,
+) -> Result<(), SimulateError> {
+    if discrete.is_empty() {
+        return Ok(());
+    }
+    let forcing = compiled.forcing_buffer();
+    exec.borrow_mut()
+        .refresh_named(sample_time, &forcing, true)
+        .map_err(|e| loader_error(given, e))?;
+    let mut names: Vec<&String> = discrete.iter().collect();
+    names.sort();
+    for name in names {
+        if forcing.borrow().contains_key(name) {
+            continue;
+        }
+        match declared_default_forcing(compiled, name) {
+            Some(Some(value)) => {
+                forcing.borrow_mut().insert(name.clone(), value);
+            }
+            // A default over a shape that does not resolve yet has no field
+            // to fill here, as in the missing-data gate.
+            Some(None) => {}
+            None => {
+                let key = given.get(name).map_or(name.as_str(), String::as_str);
+                return Err(SimulateError::ProviderError {
+                    name: key.to_string(),
+                    details: format!(
+                        "the provider delivered no data at sample_time {sample_time} (nor at a \
+                         refresh time before it), and the parameter declares no default"
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The declared default of forcing slot `name` broadcast over its shape and
+/// rounded to the slot's precision: `None` with no default, `Some(None)` for a
+/// shape that does not resolve yet.
+fn declared_default_forcing(c: &ArrayCompiled, name: &str) -> Option<Option<ArrayD<f64>>> {
+    let mut value = c.forcing_default(name)?;
+    if let Some(value) = value.as_mut() {
+        let prec = precision::of_variable(name);
+        if prec.is_f32() {
+            value.mapv_inplace(|x| prec.round(x));
+        }
+    }
+    Some(value)
 }
 
 /// The forcing-buffer name a run-time provider keyed `key` writes.
@@ -4358,13 +4473,19 @@ pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, Simulat
                     (Some(exec), false) => {
                         let forcing = compiled.forcing_buffer();
                         let mut exec = exec.borrow_mut();
+                        // The first call is the solve's start, `tspan.0`: the
+                        // record in effect there, whatever an earlier solve
+                        // of this Problem (or of one remade from it) left in
+                        // the buffer. Every later call is a refresh time.
+                        let mut started = false;
                         let refresh_fn = |t: f64| -> Result<(), SimulateError> {
-                            exec.refresh_at(t, &forcing).map(|_| ()).map_err(|e| {
-                                SimulateError::ProviderError {
-                                    name: "<discrete-loader>".into(),
-                                    details: e.to_string(),
-                                }
-                            })
+                            let in_effect = !std::mem::replace(&mut started, true);
+                            exec.refresh_named(t, &forcing, in_effect)
+                                .map(|_| ())
+                                .map_err(|e| SimulateError::ProviderError {
+                                    name: e.loader,
+                                    details: e.error.to_string(),
+                                })
                         };
                         compiled.solve_with_refresh_inspect(
                             prob.tspan,
@@ -4443,7 +4564,7 @@ pub fn initial_state(prob: &EsmProblem) -> Result<Vec<f64>, SimulateError> {
     let _precision_guard = prob.precision.enter();
     reject_f32_integration(prob)?;
     // The discrete-cadence fields the solve's own refresh would write: none
-    // when the Problem holds no executor (a `remake`), as in `solve`.
+    // when the Problem holds no executor, as in `solve`.
     let none = std::collections::HashSet::new();
     #[cfg(not(target_arch = "wasm32"))]
     let discrete_forcing = if prob.refresh.is_some() {

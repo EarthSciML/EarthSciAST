@@ -409,14 +409,27 @@ impl RefreshExecutor {
         &mut self,
         forcing: &ForcingBuffer,
     ) -> Result<Vec<String>, ProviderError> {
+        self.materialize_const_named(forcing).map_err(|e| e.error)
+    }
+
+    /// [`Self::materialize_const`], with a failure naming the loader that
+    /// raised it.
+    pub(crate) fn materialize_const_named(
+        &mut self,
+        forcing: &ForcingBuffer,
+    ) -> Result<Vec<String>, LoaderError> {
         let RefreshExecutor { loaders } = self;
         let mut written = Vec::new();
         for lp in loaders.iter_mut() {
             if lp.binding.cadence != Cadence::Const {
                 continue;
             }
-            let fields = lp.provider.materialize()?;
-            write_fields(&fields, forcing, &mut written)?;
+            let named = |error| LoaderError {
+                loader: lp.binding.loader.clone(),
+                error,
+            };
+            let fields = lp.provider.materialize().map_err(named)?;
+            write_fields(&fields, forcing, &mut written).map_err(named)?;
         }
         written.sort();
         written.dedup();
@@ -453,22 +466,80 @@ impl RefreshExecutor {
         t: f64,
         forcing: &ForcingBuffer,
     ) -> Result<Vec<String>, ProviderError> {
+        self.refresh_named(t, forcing, false).map_err(|e| e.error)
+    }
+
+    /// Sample every DISCRETE provider at `t`, an arbitrary time rather than
+    /// a cadence anchor: the record in effect there. Each provider is asked
+    /// for `refresh(t)`; one that answers `None` (the trait lets a provider
+    /// answer only at its own anchors) is asked again at its latest refresh
+    /// time at or before `t`, the anchor whose record holds over `t`. A
+    /// provider with no such anchor, or that answers `None` there too, writes
+    /// nothing. Returns the variable names written (sorted).
+    ///
+    /// This is the sample a Problem takes at construction (`sample_time`,
+    /// esm-libraries-spec §2.5.2) and a solve takes at its start, the
+    /// counterpart of Julia's `provider_sample(provider, t)`, which answers
+    /// at any `t`. A boundary refresh inside a solve uses
+    /// [`Self::refresh_at`], where `None` means the record did not change.
+    pub fn sample_at(
+        &mut self,
+        t: f64,
+        forcing: &ForcingBuffer,
+    ) -> Result<Vec<String>, ProviderError> {
+        self.refresh_named(t, forcing, true).map_err(|e| e.error)
+    }
+
+    /// [`Self::refresh_at`] (`in_effect = false`) or [`Self::sample_at`]
+    /// (`in_effect = true`), with a failure naming the loader that raised it.
+    pub(crate) fn refresh_named(
+        &mut self,
+        t: f64,
+        forcing: &ForcingBuffer,
+        in_effect: bool,
+    ) -> Result<Vec<String>, LoaderError> {
         let RefreshExecutor { loaders } = self;
         let mut written = Vec::new();
         for lp in loaders.iter_mut() {
             if lp.binding.cadence != Cadence::Discrete {
                 continue;
             }
+            let named = |error| LoaderError {
+                loader: lp.binding.loader.clone(),
+                error,
+            };
             // `None` (record unchanged, or `t` not this provider's anchor) → skip
             // the buffer write (None-skip); the previously-loaded field stays put.
-            if let Some(fields) = lp.provider.refresh(t)? {
-                write_fields(&fields, forcing, &mut written)?;
+            let mut fields = lp.provider.refresh(t).map_err(named)?;
+            if fields.is_none() && in_effect {
+                let anchor = lp
+                    .provider
+                    .refresh_times()
+                    .into_iter()
+                    .filter(|&a| a < t)
+                    .fold(None, |best: Option<f64>, a| {
+                        Some(best.map_or(a, |b| b.max(a)))
+                    });
+                if let Some(anchor) = anchor {
+                    fields = lp.provider.refresh(anchor).map_err(named)?;
+                }
+            }
+            if let Some(fields) = fields {
+                write_fields(&fields, forcing, &mut written).map_err(named)?;
             }
         }
         written.sort();
         written.dedup();
         Ok(written)
     }
+}
+
+/// A provider failure, with the loader (for a run-time provider, the
+/// forcing variable it feeds) that raised it.
+#[derive(Debug)]
+pub(crate) struct LoaderError {
+    pub(crate) loader: String,
+    pub(crate) error: ProviderError,
 }
 
 /// Write each freshly sampled native field straight into the forcing buffer,

@@ -59,3 +59,7 @@ with `sample_time` when a case gives one.
 |---|---|
 | `no_providers` | the control: each declared default is the value |
 | `const_qualified_keys` | const providers keyed by the qualified names `Fed.E`, `Fed.s` on a document with one model |
+| `const_bare_keys` | the same const providers keyed by the bare names `E`, `s` |
+| `discrete_at_tspan_start` | discrete providers are sampled at construction, at `sample_time`, which defaults to `tspan[0]` |
+| `discrete_at_sample_time` | the same providers sampled at an explicit `sample_time = 0.25` |
+| `discrete_bare_keys` | the discrete providers of `discrete_at_tspan_start` keyed by the bare names `E`, `s` |

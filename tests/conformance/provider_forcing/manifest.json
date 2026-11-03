@@ -59,6 +59,75 @@
       },
       "du_default": [0.5, 1.25, 2.0],
       "note": "Providers keyed by the parameters' qualified names, on a document with one model. Rust used to write their data under `Fed.s` next to the declared default under the bare compiled name `s`, so the Problem read the default and rhs_program's default set held either one, depending on map iteration order."
+    },
+    {
+      "id": "const_bare_keys",
+      "providers": [
+        {"key": "E", "refresh_times": [], "shape": [3, 2], "base": [[0.125, 0.25], [0.375, 0.5], [0.625, 0.75]], "slope": 0.0},
+        {"key": "s", "refresh_times": [], "shape": [], "base": 3.0, "slope": 0.0}
+      ],
+      "forcing_slots": [
+        {"name": "Fed.E", "shape": [3, 2], "kind": "forcing"},
+        {"name": "Fed.s", "shape": [], "kind": "forcing"}
+      ],
+      "default_forcing": {
+        "Fed.E": [0.125, 0.375, 0.625, 0.25, 0.5, 0.75],
+        "Fed.s": [3.0]
+      },
+      "du_default": [0.5, 1.25, 2.0],
+      "note": "The same const providers keyed by the bare parameter names `E` and `s` (esm-spec §6.6.2). Julia's Problem used to read the declared default for the 0-d `s`: its build matched a bare const key to a shaped parameter only."
+    },
+    {
+      "id": "discrete_at_tspan_start",
+      "providers": [
+        {"key": "Fed.E", "refresh_times": [0.5], "shape": [3, 2], "base": [[0.125, 0.25], [0.375, 0.5], [0.625, 0.75]], "slope": 1.0},
+        {"key": "Fed.s", "refresh_times": [0.5], "shape": [], "base": 3.0, "slope": 4.0}
+      ],
+      "forcing_slots": [
+        {"name": "Fed.E", "shape": [3, 2], "kind": "forcing"},
+        {"name": "Fed.s", "shape": [], "kind": "forcing"}
+      ],
+      "default_forcing": {
+        "Fed.E": [0.125, 0.375, 0.625, 0.25, 0.5, 0.75],
+        "Fed.s": [3.0]
+      },
+      "du_default": [0.5, 1.25, 2.0],
+      "note": "Discrete providers (a refresh time inside tspan) are sampled at construction, at sample_time, which defaults to tspan[0] = 0. Rust used to sample them first when a solve started, so the Problem's forcing and rhs_program's default set held the declared defaults. Julia's Problem used to read the 0-d `s` from its parameter vector, which held the declared default, rather than from the live buffer."
+    },
+    {
+      "id": "discrete_at_sample_time",
+      "sample_time": 0.25,
+      "providers": [
+        {"key": "Fed.E", "refresh_times": [0.5], "shape": [3, 2], "base": [[0.125, 0.25], [0.375, 0.5], [0.625, 0.75]], "slope": 1.0},
+        {"key": "Fed.s", "refresh_times": [0.5], "shape": [], "base": 3.0, "slope": 4.0}
+      ],
+      "forcing_slots": [
+        {"name": "Fed.E", "shape": [3, 2], "kind": "forcing"},
+        {"name": "Fed.s", "shape": [], "kind": "forcing"}
+      ],
+      "default_forcing": {
+        "Fed.E": [0.375, 0.625, 0.875, 0.5, 0.75, 1.0],
+        "Fed.s": [4.0]
+      },
+      "du_default": [1.75, 2.75, 3.75],
+      "note": "The same discrete providers sampled at an explicit sample_time = 0.25: each field is base + slope * 0.25."
+    },
+    {
+      "id": "discrete_bare_keys",
+      "providers": [
+        {"key": "E", "refresh_times": [0.5], "shape": [3, 2], "base": [[0.125, 0.25], [0.375, 0.5], [0.625, 0.75]], "slope": 1.0},
+        {"key": "s", "refresh_times": [0.5], "shape": [], "base": 3.0, "slope": 4.0}
+      ],
+      "forcing_slots": [
+        {"name": "Fed.E", "shape": [3, 2], "kind": "forcing"},
+        {"name": "Fed.s", "shape": [], "kind": "forcing"}
+      ],
+      "default_forcing": {
+        "Fed.E": [0.125, 0.375, 0.625, 0.25, 0.5, 0.75],
+        "Fed.s": [3.0]
+      },
+      "du_default": [0.5, 1.25, 2.0],
+      "note": "The discrete providers of discrete_at_tspan_start keyed by the bare names `E` and `s`. Julia used to keep each live buffer under the caller's key, which the build never reads: both parameters kept their declared defaults in the Problem, and rhs_program's default set gained two extra slots, `E` and `s`."
     }
   ]
 }
