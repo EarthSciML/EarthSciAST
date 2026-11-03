@@ -1,0 +1,228 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "UnitsTranscendentalArgumentUnderProduct",
+    "description": "Invalid: each observed variable applies a transcendental function (exp, log, log10, sin, tanh, atan) to a dimensional argument, under a product with an undeterminable literal factor, and that product sits in a different place in each: alone, in a sum, a quotient, a nested product, the base of a power and a symbolic exponent. tests/invalid/units_transcendental_argument_degC_under_product.esm pins the case this was found in, with the argument in degC. The literal factor makes the product's own unit undeterminable, but the argument's unit is still known, so each is a provable inconsistency (esm-spec §4.8.3, §4.8.4).",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-11-02T00:00:00Z"
+  },
+  "models": {
+    "BadUnitsModel": {
+      "variables": {
+        "T": {
+          "type": "parameter",
+          "units": "K",
+          "default": 298.15,
+          "description": "A temperature"
+        },
+        "L": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1.0,
+          "description": "A length"
+        },
+        "x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "A pure number"
+        },
+        "exp_scaled_by_literal": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Invalid: 1000 * exp(T): a literal factor in front of the exp."
+        },
+        "log_in_multi_factor_product": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Invalid: 2 * x * log(T): an undeterminable literal factor before x and the log."
+        },
+        "sin_scaled_by_literal": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Invalid: 0.5 * sin(L) with L in m."
+        },
+        "tanh_in_nested_product": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Invalid: 2 * (3 * tanh(T)): a product nested in a product."
+        },
+        "exp_in_product_in_sum": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Invalid: x + 2 * exp(T): the scaled exp is one operand of a sum."
+        },
+        "log10_in_quotient": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Invalid: 2 * log10(T) / 3: the scaled log10 is a numerator."
+        },
+        "exp_in_product_under_power": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Invalid: (2 * exp(T))^2: the scaled exp is the base of a power."
+        },
+        "atan_in_product_in_exponent": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Invalid: x^(2 * atan(T)): the scaled atan is a symbolic exponent."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "exp_scaled_by_literal",
+          "rhs": {
+            "op": "*",
+            "args": [
+              1000,
+              {
+                "op": "exp",
+                "args": [
+                  "T"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "log_in_multi_factor_product",
+          "rhs": {
+            "op": "*",
+            "args": [
+              2,
+              "x",
+              {
+                "op": "log",
+                "args": [
+                  "T"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "sin_scaled_by_literal",
+          "rhs": {
+            "op": "*",
+            "args": [
+              0.5,
+              {
+                "op": "sin",
+                "args": [
+                  "L"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "tanh_in_nested_product",
+          "rhs": {
+            "op": "*",
+            "args": [
+              2,
+              {
+                "op": "*",
+                "args": [
+                  3,
+                  {
+                    "op": "tanh",
+                    "args": [
+                      "T"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "exp_in_product_in_sum",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "x",
+              {
+                "op": "*",
+                "args": [
+                  2,
+                  {
+                    "op": "exp",
+                    "args": [
+                      "T"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "log10_in_quotient",
+          "rhs": {
+            "op": "/",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  2,
+                  {
+                    "op": "log10",
+                    "args": [
+                      "T"
+                    ]
+                  }
+                ]
+              },
+              3
+            ]
+          }
+        },
+        {
+          "lhs": "exp_in_product_under_power",
+          "rhs": {
+            "op": "^",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  2,
+                  {
+                    "op": "exp",
+                    "args": [
+                      "T"
+                    ]
+                  }
+                ]
+              },
+              2
+            ]
+          }
+        },
+        {
+          "lhs": "atan_in_product_in_exponent",
+          "rhs": {
+            "op": "^",
+            "args": [
+              "x",
+              {
+                "op": "*",
+                "args": [
+                  2,
+                  {
+                    "op": "atan",
+                    "args": [
+                      "T"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
