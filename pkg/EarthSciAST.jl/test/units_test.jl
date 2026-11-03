@@ -523,6 +523,8 @@ using Unitful
                 OpExpr("/", E[scaled(exp_z), NumExpr(3.0)]),
                 OpExpr("^", E[scaled(exp_z), NumExpr(2.0)]),
                 OpExpr("^", E[VarExpr("x"), scaled(exp_z)]),
+                OpExpr("sign", E[exp_z]),
+                OpExpr("sign", E[scaled(exp_z)]),
             )
             @test !isempty(F(wrapped, var_units))
         end
@@ -619,6 +621,12 @@ using Unitful
             OpExpr("sign", E[VarExpr("x")]), var_units
         )
         @test sg == Unitful.NoUnits
+        # sign(x) * x is a length, not an area
+        sgx = EarthSciAST.get_expression_dimensions(
+            OpExpr("*", E[OpExpr("sign", E[VarExpr("x")]), VarExpr("x")]), var_units
+        )
+        @test sgx !== nothing
+        @test dimension(sgx) == Unitful.𝐋
 
         # abs preserves dimensions
         ab = EarthSciAST.get_expression_dimensions(
@@ -788,6 +796,7 @@ using Unitful
             "units_sum_undeterminable_operands.esm",
             "units_ifelse_undeterminable_branch.esm",
             "units_comparisons_and_connectives.esm",
+            "units_sign_dimensionless.esm",
         ]
         fixtures_root = joinpath(@__DIR__, "..", "..", "..", "tests", "valid")
 
@@ -1268,6 +1277,7 @@ using Unitful
                             "sin_scaled_by_literal", "tanh_in_nested_product",
                             "exp_in_product_in_sum", "log10_in_quotient",
                             "exp_in_product_under_power", "atan_in_product_in_exponent",
+                            "exp_in_product_under_sign",
                         )
                 ],
             )
