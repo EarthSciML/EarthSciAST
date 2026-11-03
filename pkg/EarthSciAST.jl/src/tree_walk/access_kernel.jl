@@ -156,7 +156,7 @@ const _AK_NO_CONN = Int[]
 # s1..s3 (zero-padded) and the rest to `sx`.
 @inline _box_s(s::AbstractVector{Int}, d::Int) = d <= length(s) ? s[d] : 0
 _box_sx(s::AbstractVector{Int}) =
-    length(s) > 3 ? _dynamic(x -> Vector{Int}(x[4:end]), s)::Vector{Int} : _AK_NO_CONN
+    length(s) > 3 ? _as_type(Vector{Int}, _dynamic(getindex, s, 4:length(s))) : _AK_NO_CONN
 
 # Named constructors — the descriptor call sites (stencil_affine.jl, tests) use
 # these and are unchanged by the tagged-struct storage.

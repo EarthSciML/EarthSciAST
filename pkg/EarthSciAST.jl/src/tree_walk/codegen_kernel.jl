@@ -2321,7 +2321,7 @@ function _cg_row_fission(ctx::_CGCtx, Ks::Vector{_AccKernel}, parts)
     reads_u(e) = e isa Expr && (_cg_is_uread(e) || _anyof(reads_u, e.args))
     holes = Any[sub(q.val, path) for q in parts]
     _allof(reads_u, holes) || return nothing
-    any(h -> h isa Expr && _cg_expr_size(h) >= 4, holes) || return nothing
+    _anyof(h -> h isa Expr && _cg_expr_size(h) >= 4, holes) || return nothing
     iF = _cg_name(ctx, "i")
     oF = _cg_name(ctx, "o")
     q1 = parts[1]

@@ -241,8 +241,8 @@ function _scan_consumer_plan(
             store = !(
                 name !== nothing && isempty(percell) && isempty(contractions) &&
                     !_anyof(e -> name in _referenced_var_names(e[2]), scalar_entries) &&
-                    !any(
-                    d -> any(ex -> name in _referenced_var_names(ex), values(d)),
+                    !_anyof(
+                    d -> _anyof(ex -> name in _referenced_var_names(ex), values(d)),
                     defsets
                 )
             )

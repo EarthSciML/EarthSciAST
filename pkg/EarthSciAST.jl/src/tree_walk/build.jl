@@ -1221,8 +1221,6 @@ function _check_inline_shape(
     return nothing
 end
 
-const _EMPTY_DERIVED_EXTENTS = Dict{String, Int}()
-
 # ---- Stage: canonicalize the caller's `parameter_overrides` keys ----
 # esm-spec §6.6 pins `parameter_overrides` as "keyed by LOCAL parameter name"
 # (`pert_amp`), but every document front-door reaches the build through
