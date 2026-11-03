@@ -988,6 +988,12 @@ pub struct DataSourceBinding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub select: Option<serde_json::Value>,
 
+    /// How many records of the source the parameter receives per query time,
+    /// 1 or 2 (esm-spec §8.5.1); overrides the source's
+    /// `temporal.records_per_sample`. `None` when not written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub records_per_sample: Option<u8>,
+
     /// Brief description.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,

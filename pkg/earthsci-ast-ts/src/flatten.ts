@@ -67,6 +67,7 @@ import type { Distribution, ParameterUpdateSpec } from './types.js'
 import { numericValue } from './numeric-literal.js'
 import { expandCouplingImports, type CouplingImportOptions } from './coupling-imports.js'
 import { mapChildren } from './expression.js'
+import { effectiveRecordsPerSample } from './validate/coupling-checks.js'
 import {
   angleNormalizationFactor,
   checkElementDimensions,
@@ -321,6 +322,13 @@ export interface LoaderField {
   cadence: 'const' | 'discrete'
   /** The binding's declared `unit_conversion` (§8.5), when the document has one. */
   unitConversion?: Expression
+  /**
+   * The EFFECTIVE records per query time (esm-spec §8.5.1): the binding's
+   * `from.records_per_sample`, else the source's `temporal.records_per_sample`,
+   * else 1. With 2 the field holds the record at or before the query time and
+   * its successor, stacked along the parameter's first dimension.
+   */
+  recordsPerSample: 1 | 2
 }
 
 /**
@@ -1105,8 +1113,11 @@ function dataSourceFields(
     if (variable.type !== 'parameter' || variable.update === undefined) continue
     for (const rule of updateRules(variable.update)) {
       if (rule.kind !== 'data') continue
-      const binding = (rule as { from?: { file_variable: string; unit_conversion?: Expression } })
-        .from
+      const binding = (
+        rule as {
+          from?: { file_variable: string; unit_conversion?: Expression; records_per_sample?: 1 | 2 }
+        }
+      ).from
       if (binding === undefined) continue
       const sourceKey = (rule as { source: string }).source
       const source = dataSources[sourceKey]
@@ -1118,6 +1129,7 @@ function dataSourceFields(
         var: binding.file_variable,
         dataSource: source,
         cadence: (source as { temporal?: unknown }).temporal !== undefined ? 'discrete' : 'const',
+        recordsPerSample: effectiveRecordsPerSample(binding, source),
       }
       if (binding.unit_conversion !== undefined) field.unitConversion = binding.unit_conversion
       fields.push(field)

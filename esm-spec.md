@@ -3870,7 +3870,7 @@ Authentication, credential management, and per-variable temporal availability co
 | `record_filter` | | Which records of a `points` source survive (see §8.9.3). |
 | `extent` | | Binds the delivered record count to a metaparameter (see §8.9.4). |
 | `reference` | | Data source citation. |
-| `metadata` | | Free-form metadata. The `tags` array is conventional for scientific role. |
+| `metadata` | | Free-form metadata. The `tags` array is conventional for scientific role; `esio_format` names the reader (§8.1.1). |
 
 #### Why the shared spec stays here
 
@@ -3885,6 +3885,30 @@ stated per-parameter:
 
 A per-parameter spelling of either would let two columns of the same table
 disagree about which rows are real.
+
+#### 8.1.1 `metadata.esio_format` — the reader format
+
+`metadata` is free-form, with two conventional keys: `tags` (scientific role)
+and `esio_format`, the name of the format reader that decodes the source's
+files, as EarthSciIO's format registry spells it: `"netcdf"`, `"zarr"`,
+`"ff10"`, `"csv"`, `"geotiff"`, `"parquet"`, … The set of names is the reader's,
+not this format's, so the schema checks only that the value is a non-empty
+string.
+
+```json
+"metadata": { "tags": ["meteorology"], "esio_format": "netcdf" }
+```
+
+The key is OPTIONAL in the document and changes nothing in it: load, validation,
+`flatten` and the flattened system read it nowhere, and a source without it is
+valid. It is what a runtime that reads the source needs. A binding's
+document-driven provider construction (`providers_from_document`) reads the
+reader from `esio_format`; it MUST refuse, naming the source, to build a
+provider for a source it was asked to build that has no `esio_format` and
+whose reader it cannot otherwise determine, and it MUST NOT guess a reader
+for a source whose `esio_format` is present. A binding MAY infer a reader
+for a source without one (Python infers `netcdf` from a `.nc` URL); a
+document meant to run in every binding declares it.
 
 ### 8.2 `source` — file discovery
 
@@ -3944,9 +3968,15 @@ temporal:
   frequency:   ISO8601 duration   # spacing between samples within a file
   records_per_file: integer | "auto"
   time_variable: string        # name of the time coord inside the file
+  records_per_sample: 1 | 2    # default for every parameter drawing from the source (§8.5.1)
 ```
 
 Both **static declaration** (`records_per_file` + `frequency`) and **runtime discovery** (`time_variable`) are allowed. If both are present, the static declaration wins and `time_variable` acts as a fallback. `records_per_file: "auto"` explicitly defers to runtime discovery.
+
+`records_per_sample` is how many records a parameter drawing from the source
+receives at each query time, the source-wide default of the parameter's own
+`from.records_per_sample` (§8.5.1). It is a different count from
+`records_per_file`, which counts the records stored in one file.
 
 ### 8.4 (Reserved)
 
@@ -3971,6 +4001,7 @@ consumer, and the units are declared once — on the parameter — instead of tw
       unit_conversion: number | Expression   # optional
       codes: DataSourceCodes       # optional; text column -> numbers (§8.9.1)
       select: DataSourceSelect     # optional; overrides the source default (§8.9.2)
+      records_per_sample: 1 | 2    # optional; overrides the source default (§8.5.1)
       description: string
       reference: Reference
 ```
@@ -3986,6 +4017,85 @@ declared, rather than one of them being sliced by the caller after the fact.
 
 `update.source` MUST resolve to a `data_sources` key (`data_source_undefined`
 otherwise).
+
+#### 8.5.1 `records_per_sample` — one record, or the two that bracket the time
+
+A time-varying source holds records at discrete times. `records_per_sample`
+says which of them the parameter receives at a query time $t$:
+
+| Value | The parameter receives |
+|---|---|
+| `1` | the record at or before $t$: the latest record whose time is $\le t$. The parameter's declared shape is the file variable's shape without its record axis. |
+| `2` | the record at or before $t$ and the record after it, in that order, stacked along the parameter's **first** declared dimension, which holds exactly two members. The rest of the declared shape is the file variable's shape without its record axis. |
+
+```json
+{
+  "index_sets": { "rec": { "kind": "interval", "size": 2 }, "cells": { "kind": "interval", "size": 100 } },
+  "variables": {
+    "F_PBLH": { "type": "parameter", "units": "m", "shape": ["rec", "cells"],
+                "update": { "kind": "data", "source": "GEOSFP_A1",
+                            "from": { "file_variable": "PBLH", "records_per_sample": 2 } } }
+  }
+}
+```
+
+(`index_sets` is document-scoped and `variables` sits in a model; they are shown
+together for brevity.) `F_PBLH[1, c]` is the record at or before $t$ and
+`F_PBLH[2, c]` the next one.
+
+The source does not interpolate, at either value. With `2` the model blends the
+two records itself, in an ordinary expression, with a weight it computes from
+`t` and the record spacing (for example $w = \mathrm{frac}((t - t_0)/\Delta t)$ and
+$(1 - w)\,F[1, \ldots] + w\,F[2, \ldots]$). That keeps the blend in the model,
+where it is visible, differentiable and the same in every binding, and keeps the
+source pure I/O. The value of a parameter with `2` changes when the source
+advances a record, exactly as with `1`: the pair is refreshed together, so a
+model that blends reads a value continuous in $t$ while its inputs stay
+piecewise constant.
+
+**Where the value comes from.** The parameter's `from.records_per_sample`
+when given; otherwise the source's `temporal.records_per_sample` (§8.3);
+otherwise `1`. This is the **effective** value. Records are the consumer's
+choice, so two parameters may read one source differently, which is why the
+field lives on `from` and the source's is only a default, as for `select`
+(§8.9.2).
+
+**Validation.** A document is invalid, `records_per_sample_invalid` at the
+parameter's `/update` pointer, when:
+
+1. a rule whose `kind` is not `data` carries `from.records_per_sample` (only a
+   `data` rule names a source to read records from);
+2. a parameter's effective value is `2` and its source declares no `temporal`
+   block (a source without one has a single record and no successor, so there
+   is no pair to deliver);
+3. a parameter's effective value is `2` and its **record shape** is empty, or
+   its first entry names an index set that does not have exactly two members:
+   an `interval` whose `size` is not 2, a `categorical` whose `members` are not
+   two, or any `derived` or `ragged` set (whose size is not known at load).
+
+The record shape is the parameter's declared `shape` when that is not empty.
+A parameter that declares an empty `shape` and is the `from` of a
+`variable_map` entry with `transform: "param_to_var"` takes, in the flattened
+system, the shape of the parameter it replaces (esm-libraries-spec §4.7.3), and
+its record shape is that target's declared `shape`. This is how a data
+component declares a field once, as a scalar, and a consumer gives it the
+record axis and the grid:
+
+```json
+"coupling": [
+  { "type": "variable_map", "from": "GEOSFP.PBLH", "to": "Transport3D.F_PBLH", "transform": "param_to_var" }
+]
+```
+
+with `GEOSFP.PBLH` declared `"shape": []` and
+`"from": {"file_variable": "PBLH", "records_per_sample": 2}`, and
+`Transport3D.F_PBLH` declared `"shape": ["gf_t", "gf_lat", "gf_lon"]` with
+`gf_t` of size 2.
+
+`flatten` carries `from.records_per_sample` as written on the flattened
+parameter's `update`, and every binding's `loader_fields` entry reports the
+parameter's effective value (esm-libraries-spec §4.7.5,
+`tests/conformance/records_per_sample/`).
 
 ### 8.6 Regridding — a coupling expression
 

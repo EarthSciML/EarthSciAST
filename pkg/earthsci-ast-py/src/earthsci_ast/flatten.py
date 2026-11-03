@@ -54,6 +54,7 @@ from .expr_walk import any_child, iter_children, map_children, walk
 from .index_ranges import expand_range as _expand_range
 from .json_walk import ExpressionTemplateError
 from .reactions import derive_odes
+from .structural_checks import _effective_records_per_sample
 from .substitute import has_var_placeholder, substitute
 
 #: The operator-model placeholder (esm-spec §6.4). A GLOBAL sentinel: it is
@@ -314,6 +315,12 @@ class LoaderField:
     # path when producing values in the parameter's declared units. None when the
     # document declares none, which must cost nothing.
     unit_conversion: Expr | None = None
+    # The EFFECTIVE records per sample (esm-spec §8.5.1): the binding's
+    # ``from.records_per_sample``, else the source's
+    # ``temporal.records_per_sample``, else 1. With 2 the field holds the
+    # record at or before the query time and its successor, stacked along the
+    # parameter's first dimension.
+    records_per_sample: int = 1
 
 
 @dataclass(frozen=True)
@@ -1297,6 +1304,7 @@ def _data_source_fields(
                     data_source=source,
                     cadence="discrete" if source.temporal is not None else "const",
                     unit_conversion=rule.from_source.unit_conversion,
+                    records_per_sample=_effective_records_per_sample(rule.from_source, source),
                 )
             )
     return fields

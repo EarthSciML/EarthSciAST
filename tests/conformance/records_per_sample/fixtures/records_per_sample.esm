@@ -1,0 +1,208 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "RecordsPerSample",
+    "description": "Every way a data-fed parameter's records_per_sample is set (esm-spec 8.5.1): on `from`, inherited from the source's `temporal.records_per_sample`, overridden back to 1, absent everywhere (1), and on a static source at 1. The record axis is the first declared dimension, an interval of size 2 or a categorical of two members."
+  },
+  "index_sets": {
+    "rec": {
+      "kind": "interval",
+      "size": 2
+    },
+    "x": {
+      "kind": "interval",
+      "size": 3
+    },
+    "pair": {
+      "kind": "categorical",
+      "members": [
+        "before",
+        "after"
+      ]
+    }
+  },
+  "data_sources": {
+    "Met": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file:///data/met/{date:%Y%m%d}.nc"
+      },
+      "temporal": {
+        "start": "2024-05-01T00:00:00Z",
+        "end": "2024-05-31T21:00:00Z",
+        "file_period": "P1D",
+        "frequency": "PT3H",
+        "records_per_file": 8
+      },
+      "metadata": {
+        "esio_format": "netcdf"
+      }
+    },
+    "MetPair": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file:///data/met/{date:%Y%m%d}.nc"
+      },
+      "temporal": {
+        "start": "2024-05-01T00:00:00Z",
+        "end": "2024-05-31T21:00:00Z",
+        "file_period": "P1D",
+        "frequency": "PT3H",
+        "records_per_file": 8,
+        "records_per_sample": 2
+      },
+      "metadata": {
+        "esio_format": "netcdf"
+      }
+    },
+    "Static": {
+      "kind": "static",
+      "source": {
+        "url_template": "file:///data/met/{date:%Y%m%d}.nc"
+      },
+      "metadata": {
+        "esio_format": "netcdf"
+      }
+    }
+  },
+  "models": {
+    "Box": {
+      "variables": {
+        "c": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        },
+        "F_pair": {
+          "type": "parameter",
+          "units": "m",
+          "shape": [
+            "rec",
+            "x"
+          ],
+          "default": 500.0,
+          "update": {
+            "kind": "data",
+            "source": "Met",
+            "from": {
+              "file_variable": "PBLH",
+              "records_per_sample": 2
+            }
+          },
+          "description": "from.records_per_sample 2: the records at or before t and after it, along rec."
+        },
+        "F_one": {
+          "type": "parameter",
+          "units": "K",
+          "shape": [
+            "x"
+          ],
+          "default": 290.0,
+          "update": {
+            "kind": "data",
+            "source": "Met",
+            "from": {
+              "file_variable": "T2M"
+            }
+          },
+          "description": "Nothing set anywhere: 1."
+        },
+        "F_cat": {
+          "type": "parameter",
+          "units": "m/s",
+          "shape": [
+            "pair",
+            "x"
+          ],
+          "default": 1.0,
+          "update": {
+            "kind": "data",
+            "source": "Met",
+            "from": {
+              "file_variable": "U10M",
+              "records_per_sample": 2
+            }
+          },
+          "description": "2 with a categorical record axis of two members."
+        },
+        "F_inherit": {
+          "type": "parameter",
+          "units": "m/s",
+          "shape": [
+            "rec",
+            "x"
+          ],
+          "default": 1.0,
+          "update": {
+            "kind": "data",
+            "source": "MetPair",
+            "from": {
+              "file_variable": "V10M"
+            }
+          },
+          "description": "Inherits 2 from the source's temporal.records_per_sample."
+        },
+        "F_override": {
+          "type": "parameter",
+          "units": "kg/kg",
+          "shape": [
+            "x"
+          ],
+          "default": 0.01,
+          "update": {
+            "kind": "data",
+            "source": "MetPair",
+            "from": {
+              "file_variable": "QV2M",
+              "records_per_sample": 1
+            }
+          },
+          "description": "Overrides the source's 2 with 1."
+        },
+        "K_static": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [],
+          "default": 0.5,
+          "update": {
+            "kind": "data",
+            "source": "Static",
+            "from": {
+              "file_variable": "FRLAND",
+              "records_per_sample": 1
+            }
+          },
+          "description": "A static source at an explicit 1."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "c"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "c"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

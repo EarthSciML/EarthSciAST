@@ -562,6 +562,16 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
         end
     end
 
+    # 3c'. `from.records_per_sample` (esm-spec §8.5.1, `records_per_sample_invalid`).
+    if file.models !== nothing
+        for model_name in sort!(collect(keys(file.models)))
+            _check_records_per_sample!(
+                errors, file, file.models[model_name], model_name,
+                "/models/$model_name"
+            )
+        end
+    end
+
     # 3d. A present `system_kind` field must agree with the derivation
     # (esm-spec §6.3.1, `system_kind_mismatch`).
     if file.models !== nothing
@@ -1181,6 +1191,126 @@ function _check_update_sources!(
     end
     for (subsys_name, subsys) in model_subsystems(model)
         _check_update_sources!(errors, subsys, "$path/subsystems/$subsys_name", available)
+    end
+    return errors
+end
+
+"""
+    _index_set_has_two_members(file, name) -> Bool
+
+esm-spec §8.5.1 rule 3: an `interval` of size 2 or a `categorical` of two
+members. A `derived` or `ragged` set has no size known at load.
+"""
+function _index_set_has_two_members(file::EsmFile, name)::Bool
+    name isa AbstractString || return false
+    iset = get(file.index_sets, String(name), nothing)
+    iset === nothing && return false
+    iset.kind == "interval" && return iset.size == 2
+    iset.kind == "categorical" && return iset.members !== nothing && length(iset.members) == 2
+    return false
+end
+
+"""
+    _declared_variable(file, scoped) -> Union{ModelVariable, Nothing}
+
+The declaration a scoped name `Model[.Sub…].var` names, or `nothing`.
+"""
+function _declared_variable(file::EsmFile, scoped)
+    scoped isa AbstractString || return nothing
+    parts = split(scoped, '.')
+    length(parts) < 2 && return nothing
+    file.models === nothing && return nothing
+    node = get(file.models, String(parts[1]), nothing)
+    for seg in parts[2:(end - 1)]
+        node isa Model || return nothing
+        node = get(node.subsystems, String(seg), nothing)
+    end
+    node isa Model || return nothing
+    return get(node.variables, String(parts[end]), nothing)
+end
+
+"""
+    _check_records_per_sample!(errors, file, model, scope, path)
+
+esm-spec §8.5.1, `records_per_sample_invalid`: `from.records_per_sample` on a
+rule that is not `data`; or an EFFECTIVE value of 2 on a parameter whose source
+declares no `temporal` block, or whose record shape's first dimension is not an
+index set of exactly two members. The record shape is the declared `shape`, or,
+for a parameter declaring an empty one that a `param_to_var` `variable_map`
+entry maps onto another parameter, that target's declared `shape`.
+"""
+function _check_records_per_sample!(
+        errors::Vector{StructuralError}, file::EsmFile, model::Model,
+        scope::String, path::String
+    )
+    for name in sort!(collect(keys(model.variables)))
+        var = model.variables[name]
+        rules = var.update
+        rules === nothing && continue
+        for rule in rules
+            rule.from === nothing && continue
+            at = "$path/variables/$name/update"
+            if rule.kind != "data"
+                rule.from.records_per_sample === nothing && continue
+                push!(
+                    errors, StructuralError(
+                        at,
+                        "Parameter '$name' sets from.records_per_sample on a " *
+                            "'$(rule.kind)' rule; only a 'data' rule names a source " *
+                            "to read records from",
+                        ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
+                        Dict{String, Any}("variable" => name, "kind" => rule.kind)
+                    )
+                )
+                continue
+            end
+            src = (rule.source === nothing || file.data_sources === nothing) ? nothing :
+                get(file.data_sources, rule.source, nothing)
+            src === nothing && continue  # data_source_undefined reports it
+            _effective_records_per_sample(rule.from, src) == 2 || continue
+            if src.temporal === nothing
+                push!(
+                    errors, StructuralError(
+                        at,
+                        "Parameter '$name' asks for two records per sample from " *
+                            "data source '$(rule.source)', which declares no temporal " *
+                            "block and so has no successor record",
+                        ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
+                        Dict{String, Any}("variable" => name, "source" => rule.source)
+                    )
+                )
+                continue
+            end
+            shape = var.shape === nothing ? String[] : collect(var.shape)
+            if isempty(shape)
+                me = "$scope.$name"
+                for entry in file.coupling
+                    entry isa CouplingVariableMap || continue
+                    (entry.from == me && entry.transform == "param_to_var") || continue
+                    target = _declared_variable(file, entry.to)
+                    if target !== nothing && target.shape !== nothing
+                        shape = collect(target.shape)
+                    end
+                    break
+                end
+            end
+            (!isempty(shape) && _index_set_has_two_members(file, shape[1])) && continue
+            push!(
+                errors, StructuralError(
+                    at,
+                    "Parameter '$name' asks for two records per sample, so its " *
+                        "first dimension must be an index set of exactly two " *
+                        "members; its record shape is $(shape)",
+                    ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
+                    Dict{String, Any}("variable" => name, "shape" => shape)
+                )
+            )
+        end
+    end
+    for (subsys_name, subsys) in model_subsystems(model)
+        _check_records_per_sample!(
+            errors, file, subsys, "$scope.$subsys_name", "$path/subsystems/$subsys_name"
+        )
     end
     return errors
 end

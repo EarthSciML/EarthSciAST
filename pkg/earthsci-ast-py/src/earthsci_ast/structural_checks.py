@@ -2235,6 +2235,151 @@ def _check_data_source_references(data: dict[str, Any], errors: list[str]) -> No
                 )
 
 
+def _effective_records_per_sample(binding: Any, source: Any) -> int:
+    """The EFFECTIVE ``records_per_sample`` of a data rule (esm-spec §8.5.1):
+    the rule's ``from.records_per_sample``, else the source's
+    ``temporal.records_per_sample``, else 1.
+
+    ``binding`` and ``source`` are either raw JSON dicts or the typed
+    :class:`~earthsci_ast.esm_types.DataSourceBinding` /
+    :class:`~earthsci_ast.esm_types.DataSource`; ``source`` may be None.
+    """
+
+    def get(obj: Any, key: str) -> Any:
+        if obj is None:
+            return None
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
+
+    own = get(binding, "records_per_sample")
+    if own is not None:
+        return int(own)
+    inherited = get(get(source, "temporal"), "records_per_sample")
+    return int(inherited) if inherited is not None else 1
+
+
+def _index_set_has_two_members(index_sets: dict[str, Any], name: Any) -> bool:
+    """True iff index set ``name`` is an ``interval`` of size 2 or a
+    ``categorical`` of two members (esm-spec §8.5.1 rule 3)."""
+    iset = index_sets.get(name) if isinstance(name, str) else None
+    if not isinstance(iset, dict):
+        return False
+    kind = iset.get("kind")
+    if kind == "interval":
+        size = iset.get("size")
+        return isinstance(size, int) and not isinstance(size, bool) and size == 2
+    if kind == "categorical":
+        members = iset.get("members")
+        return isinstance(members, list) and len(members) == 2
+    return False
+
+
+def _declared_variable(data: dict[str, Any], scoped: Any) -> dict[str, Any] | None:
+    """The raw declaration of a scoped variable ``Model[.Sub…].var``, or None."""
+    if not isinstance(scoped, str) or "." not in scoped:
+        return None
+    *path, vname = scoped.split(".")
+    node: Any = (data.get("models") or {}).get(path[0])
+    for seg in path[1:]:
+        if not isinstance(node, dict):
+            return None
+        node = (node.get("subsystems") or {}).get(seg)
+    if not isinstance(node, dict):
+        return None
+    var = (node.get("variables") or {}).get(vname)
+    return var if isinstance(var, dict) else None
+
+
+def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
+    """``records_per_sample_invalid`` (esm-spec §8.5.1): ``from.records_per_sample``
+    on a rule that is not ``data``; or an effective value of 2 on a parameter
+    whose source declares no ``temporal`` block, or whose record shape's first
+    dimension is not an index set of exactly two members. The record shape is
+    the declared ``shape``, or, for a parameter declaring an empty one that a
+    ``param_to_var`` ``variable_map`` entry maps onto another parameter, that
+    target's declared ``shape``."""
+    sources = data.get("data_sources") or {}
+    if not isinstance(sources, dict):
+        sources = {}
+    index_sets = data.get("index_sets") or {}
+    if not isinstance(index_sets, dict):
+        index_sets = {}
+    p2v_targets: dict[str, Any] = {}
+    for entry in data.get("coupling") or []:
+        if (
+            isinstance(entry, dict)
+            and entry.get("type") == "variable_map"
+            and entry.get("transform") == "param_to_var"
+            and isinstance(entry.get("from"), str)
+        ):
+            p2v_targets.setdefault(entry["from"], entry.get("to"))
+
+    def walk(comp: dict[str, Any], scope: str, pointer: str) -> None:
+        for vname, vdef in (comp.get("variables") or {}).items():
+            if not isinstance(vdef, dict):
+                continue
+            for suffix, rule in _update_rules_with_paths(vdef.get("update")):
+                if not isinstance(rule, dict):
+                    continue
+                binding = rule.get("from")
+                if not isinstance(binding, dict):
+                    continue
+                at = (
+                    f"{pointer}/variables/{vname}/update{suffix.replace('[', '/').replace(']', '')}"
+                )
+                if rule.get("kind") != "data":
+                    if "records_per_sample" in binding:
+                        errors.append(
+                            (
+                                at,
+                                f"Parameter '{vname}' sets from.records_per_sample on a "
+                                f"'{rule.get('kind')}' rule; only a 'data' rule names a source "
+                                f"to read records from",
+                                {"variable": vname, "kind": rule.get("kind")},
+                            )
+                        )
+                    continue
+                source = sources.get(rule.get("source"))
+                if not isinstance(source, dict):
+                    continue  # data_source_undefined reports it
+                if _effective_records_per_sample(binding, source) != 2:
+                    continue
+                if not isinstance(source.get("temporal"), dict):
+                    errors.append(
+                        (
+                            at,
+                            f"Parameter '{vname}' asks for two records per sample from "
+                            f"data source '{rule.get('source')}', which declares no temporal "
+                            f"block and so has no successor record",
+                            {"variable": vname, "source": rule.get("source")},
+                        )
+                    )
+                    continue
+                shape = vdef.get("shape") or []
+                if not shape:
+                    target = _declared_variable(data, p2v_targets.get(f"{scope}.{vname}"))
+                    if target is not None:
+                        shape = target.get("shape") or []
+                if not shape or not _index_set_has_two_members(index_sets, shape[0]):
+                    errors.append(
+                        (
+                            at,
+                            f"Parameter '{vname}' asks for two records per sample, so its "
+                            f"first dimension must be an index set of exactly two members; "
+                            f"its record shape is {list(shape)}",
+                            {"variable": vname, "shape": list(shape)},
+                        )
+                    )
+        for sname, sub in (comp.get("subsystems") or {}).items():
+            if isinstance(sub, dict):
+                walk(sub, f"{scope}.{sname}", f"{pointer}/subsystems/{sname}")
+
+    for mname, m in (data.get("models") or {}).items():
+        if isinstance(m, dict):
+            walk(m, mname, f"/models/{mname}")
+
+
 def _check_system_kind(data: dict[str, Any], errors: list[str]) -> None:
     """``system_kind_mismatch``: a model whose declared ``system_kind`` FIELD
     contradicts the derivation (esm-spec §6.3.1).
@@ -3851,6 +3996,7 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     collect("undefined_system", lambda sub: _check_coupling_systems(data, tables, sub))
     collect("circular_dependency", lambda sub: _check_circular_references(data, tables, sub))
     collect("data_source_undefined", lambda sub: _check_data_source_references(data, sub))
+    collect("records_per_sample_invalid", lambda sub: _check_records_per_sample(data, sub))
     collect("event_affects_parameter", lambda sub: _check_event_affects_parameter(data, sub))
     # esm-spec §6.3.1: an equation never defines a parameter, and an index symbol
     # on its left-hand side is bound by a faq. Each finding names its own code.
