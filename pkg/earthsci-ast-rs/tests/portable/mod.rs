@@ -189,6 +189,12 @@ pub const INLINE_TIER_DOCS: &[(&str, &str, &str)] = &[
         "TrueOp"
     ),
     tier_doc!(
+        "scalar_operator_semantics",
+        "pre_passthrough",
+        "conformance/scalar_operator_semantics/fixtures/pre_passthrough.esm",
+        "PrePassthrough"
+    ),
+    tier_doc!(
         "pde_inline_array_overrides",
         "column_array_overrides",
         "conformance/pde_inline_array_overrides/fixtures/column_array_overrides.esm",
