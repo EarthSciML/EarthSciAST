@@ -572,8 +572,12 @@ pub struct ProblemOptions {
     /// Run-time data providers, keyed by the forcing VARIABLE name they feed.
     ///
     /// CONST providers are materialized ONCE, here, at construction — the
-    /// "gated fetch" §2.5.2 puts in the build half. DISCRETE providers
-    /// contribute the refresh anchors [`solve`] segments the integration on.
+    /// "gated fetch" §2.5.2 puts in the build half. DISCRETE providers are
+    /// sampled once at construction too (`refresh` at
+    /// [`Self::sample_time`]), so the Problem's forcing, and the default
+    /// forcing set of [`crate::rhs_program`], hold their data before any
+    /// solve; they also contribute the refresh anchors [`solve`] segments the
+    /// integration on, and a solve refreshes them at its own start.
     #[cfg(not(target_arch = "wasm32"))]
     pub providers: HashMap<String, Box<dyn crate::provider::CadenceProvider>>,
     /// Build-time array providers consumed by the pushdown / gated-fetch
@@ -624,7 +628,9 @@ pub struct ProblemOptions {
     /// API_SPEC §5.8's rules.
     pub retain_data_fields: Vec<String>,
 
-    /// Time at which CONST providers are sampled. Defaults to `tspan.0`.
+    /// Time at which providers are sampled at construction: a DISCRETE
+    /// provider is refreshed at it (a CONST one is time-invariant). Defaults
+    /// to `tspan.0`.
     pub sample_time: Option<f64>,
 
     /// Leave every shaped parameter that has a value and is not fed from
@@ -4284,7 +4290,22 @@ fn bind_providers(
         .flat_map(|b| b.variables.iter().cloned())
         .collect();
 
+    // DISCRETE providers are sampled at construction too, at `sample_time`
+    // (esm-libraries-spec §2.5.2: providers are sampled at construction), so
+    // the Problem's forcing holds their data from the start, as Julia's does,
+    // and `rhs_program`'s default forcing set (a copy of that forcing) holds
+    // it too. A solve still refreshes them at its own start and at each
+    // refresh time. A provider whose `refresh` answers `None` at
+    // `sample_time` leaves the declared default in place until it first
+    // delivers.
     let sample_time = opts.sample_time.unwrap_or(tspan.0);
+    if !discrete.is_empty() {
+        exec.refresh_at(sample_time, &forcing)
+            .map_err(|e| SimulateError::ProviderError {
+                name: "<discrete-loader>".into(),
+                details: e.to_string(),
+            })?;
+    }
     let mut boundaries: Vec<f64> = exec.refresh_times();
     boundaries.retain(|&b| b > sample_time && b < tspan.1);
 

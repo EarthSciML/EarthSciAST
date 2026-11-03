@@ -6,6 +6,8 @@
 using Test
 using JSON3
 using EarthSciAST
+using DiffEqCallbacks            # the refresh callback of a discrete provider
+using SciMLBase
 
 const PFC = EarthSciAST
 
@@ -78,7 +80,11 @@ end
             @test _pfc_bits(du) == _pfc_bits(c.du_default)
             dp = fill(NaN, length(prob.u0))
             prob.f!(dp, prob.u0, prob.p, tspan[1])
-            @test _pfc_bits(dp) == _pfc_bits(c.du_default)
+            if "julia" in get(c, :problem_du_broken, String[])
+                @test_broken _pfc_bits(dp) == _pfc_bits(c.du_default)
+            else
+                @test _pfc_bits(dp) == _pfc_bits(c.du_default)
+            end
         end
     end
 end

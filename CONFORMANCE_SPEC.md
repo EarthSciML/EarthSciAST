@@ -7487,7 +7487,10 @@ parameter in every binding that simulates, including on a document with one
 model, whose build compiles the parameter under its bare name. The Problem's own
 right-hand side reads the provider's data, never the declared default, and
 `rhs_program`'s default forcing set (API_SPEC §5.8, "Default") holds the same
-data.
+data. That holds for a discrete provider (one with refresh times) as for a
+const one: construction samples every provider at `sample_time`
+(esm-libraries-spec §2.5.2), so neither the Problem nor the default forcing set
+holds a discrete provider's declared default until a solve starts.
 
 **Shape.** `tests/conformance/provider_forcing/manifest.json` builds one
 document (`fixtures/provider_forcing.esm`: a gridded and a scalar data-fed
@@ -7496,7 +7499,8 @@ are dyadic rationals so the right-hand side is exact. Each case pins the
 program's forcing slots, its default forcing set (column-major), the program's
 right-hand side at the default state with that set, and the Problem's own
 right-hand side at its initial state, all bitwise. `no_providers` is the
-control.
+control; the discrete cases deliver `base + slope * t`, so they also pin the
+time each is sampled at (`tspan[0]`, or an explicit `sample_time`).
 
 **Adapters.** Julia `pkg/EarthSciAST.jl/test/conformance_provider_forcing_test.jl`
 and Rust `pkg/earthsci-ast-rs/tests/provider_forcing_conformance.rs`. Python's
