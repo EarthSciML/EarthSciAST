@@ -1003,6 +1003,16 @@ pub struct DataSourceBinding {
     pub reference: Option<Reference>,
 }
 
+impl DataSourceBinding {
+    /// The EFFECTIVE `records_per_sample` of this binding (esm-spec §8.5.1):
+    /// its own value, else `source`'s `temporal.records_per_sample`, else 1.
+    pub(crate) fn effective_records_per_sample(&self, source: Option<&DataSource>) -> u8 {
+        self.records_per_sample
+            .or_else(|| source.and_then(|s| s.temporal.as_ref()?.records_per_sample))
+            .unwrap_or(1)
+    }
+}
+
 /// Type of model variable (esm-spec §6.3). There are **two** declared types
 /// and no third: everything else a solver needs — which unknowns are ODE
 /// states, which parameters are Brownian — is DERIVED by
