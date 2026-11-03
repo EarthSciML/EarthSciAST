@@ -435,6 +435,7 @@ def _parse_data_source_binding(binding_data: dict[str, Any]) -> DataSourceBindin
         unit_conversion=unit_conversion,
         codes=binding_data.get("codes"),
         select=binding_data.get("select"),
+        records_per_sample=binding_data.get("records_per_sample"),
         description=binding_data.get("description"),
         reference=reference,
     )
@@ -1034,6 +1035,7 @@ def _parse_data_source_temporal(tmp_data: dict[str, Any]) -> DataSourceTemporal:
         frequency=tmp_data.get("frequency"),
         records_per_file=tmp_data.get("records_per_file"),
         time_variable=tmp_data.get("time_variable"),
+        records_per_sample=tmp_data.get("records_per_sample"),
     )
 
 

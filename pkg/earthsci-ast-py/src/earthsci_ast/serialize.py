@@ -235,6 +235,7 @@ _DATA_SOURCE_BINDING_SPEC = (
     ("unit_conversion", "unit_conversion", _OMIT_NONE, _serialize_expression),
     ("codes", "codes", _OMIT_NONE, None),
     ("select", "select", _OMIT_NONE, None),
+    ("records_per_sample", "records_per_sample", _OMIT_NONE, None),
     ("description", "description", _OMIT_NONE, None),
     ("reference", "reference", _OMIT_NONE, None),  # codec patched in below
 )
@@ -870,6 +871,7 @@ _DATA_SOURCE_TEMPORAL_SPEC = (
     ("frequency", "frequency", _OMIT_NONE, None),
     ("records_per_file", "records_per_file", _OMIT_NONE, None),
     ("time_variable", "time_variable", _OMIT_NONE, None),
+    ("records_per_sample", "records_per_sample", _OMIT_NONE, None),
 )
 
 

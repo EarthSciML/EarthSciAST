@@ -287,6 +287,8 @@ mod reaction_lowering_form;
 mod reaction_species_order;
 #[path = "reaction_system_inline_tests.rs"]
 mod reaction_system_inline_tests;
+#[path = "records_per_sample_conformance.rs"]
+mod records_per_sample_conformance;
 #[path = "recurrence_causal_self_reference.rs"]
 mod recurrence_causal_self_reference;
 #[path = "recurrence_native_agreement.rs"]

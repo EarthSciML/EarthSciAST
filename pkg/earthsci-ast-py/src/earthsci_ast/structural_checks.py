@@ -54,6 +54,7 @@ from .classification import (
     system_kind,
 )
 from .error_handling import COUPLING_EDGE_UNKNOWN_ROLE, OBSERVED_CYCLE, RAGGED_VALUES_NOT_GATHERED
+from .esm_types import effective_records_per_sample
 from .json_walk import iter_child_values, walk_dict_exprs
 
 # StructuralValidationError is built lazily (and cached) so that its base class,
@@ -2235,6 +2236,196 @@ def _check_data_source_references(data: dict[str, Any], errors: list[str]) -> No
                 )
 
 
+def record_shape_holds_a_pair(index_sets: dict[str, Any], shape: Any) -> bool:
+    """True iff ``shape`` can carry two records (esm-spec §8.5.1 rule 3): it is
+    not empty and its first entry names an ``interval`` of size 2 or a
+    ``categorical`` of two members. Shared by structural validation and by the
+    ``flatten`` re-check after ``coupling_import`` expansion."""
+    if not shape:
+        return False
+    return _index_set_has_two_members(index_sets, shape[0])
+
+
+def records_per_sample_shape_message(vname: str, shape: Any) -> str:
+    """The ``records_per_sample_invalid`` message for a record shape that cannot
+    carry two records (esm-spec §8.5.1 rule 3)."""
+    return (
+        f"Parameter '{vname}' asks for two records per sample, so its first dimension "
+        f"must be an index set of exactly two members; its record shape is {list(shape)}"
+    )
+
+
+def _index_set_has_two_members(index_sets: dict[str, Any], name: Any) -> bool:
+    """True iff index set ``name`` is an ``interval`` of size 2 or a
+    ``categorical`` of two members (esm-spec §8.5.1 rule 3)."""
+    iset = index_sets.get(name) if isinstance(name, str) else None
+    if not isinstance(iset, dict):
+        return False
+    kind = iset.get("kind")
+    if kind == "interval":
+        size = iset.get("size")
+        return isinstance(size, int) and not isinstance(size, bool) and size == 2
+    if kind == "categorical":
+        members = iset.get("members")
+        return isinstance(members, list) and len(members) == 2
+    return False
+
+
+def _declared_variable(data: dict[str, Any], scoped: Any) -> dict[str, Any] | None:
+    """The raw declaration of a scoped variable ``Model[.Sub…].var``, or None
+    when the loaded document cannot reach it: not declared, or behind a
+    ``{"ref"}`` mount that structural validation runs ahead of."""
+    if not isinstance(scoped, str) or "." not in scoped:
+        return None
+    *path, vname = scoped.split(".")
+    node: Any = (data.get("models") or {}).get(path[0])
+    for seg in path[1:]:
+        if not isinstance(node, dict):
+            return None
+        node = (node.get("subsystems") or {}).get(seg)
+    if not isinstance(node, dict):
+        return None
+    var = (node.get("variables") or {}).get(vname)
+    return var if isinstance(var, dict) else None
+
+
+def _has_unmounted_refs(data: dict[str, Any]) -> bool:
+    """True when a model or a subsystem at any depth is still a ``{"ref"}``
+    mount edge, as it is when structural validation runs ahead of mounting."""
+
+    def pending(comp: Any) -> bool:
+        if not isinstance(comp, dict):
+            return False
+        if "ref" in comp:
+            return True
+        return any(pending(sub) for sub in (comp.get("subsystems") or {}).values())
+
+    return any(pending(m) for m in (data.get("models") or {}).values())
+
+
+def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
+    """``records_per_sample_invalid`` (esm-spec §8.5.1): ``from.records_per_sample``
+    on a rule that is not ``data``; or an effective value of 2 on a parameter
+    whose source declares no ``temporal`` block, or whose record shape's first
+    dimension is not an index set of exactly two members.
+
+    The record shape is the declared ``shape`` when not empty; otherwise the
+    declared ``shape`` of EVERY inline ``param_to_var`` target of the parameter,
+    one finding per rule at the first that fails. A target this validation
+    cannot reach (behind a ref not yet mounted, or not declared) is not
+    decidable and is skipped, never read as empty. An empty record shape is
+    refused here only when nothing can supply one later: no inline
+    ``param_to_var`` entry names the parameter and the coupling holds no
+    ``coupling_import``. While a ref is unmounted, a record shape whose first
+    dimension names an index set the document does not declare is not
+    decidable either. ``flatten`` re-checks the rest after expansion."""
+    sources = data.get("data_sources") or {}
+    if not isinstance(sources, dict):
+        sources = {}
+    index_sets = data.get("index_sets") or {}
+    if not isinstance(index_sets, dict):
+        index_sets = {}
+    p2v_targets: dict[str, list[Any]] = {}
+    has_coupling_import = False
+    for entry in data.get("coupling") or []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("type") == "coupling_import":
+            has_coupling_import = True
+        elif (
+            entry.get("type") == "variable_map"
+            and entry.get("transform") == "param_to_var"
+            and isinstance(entry.get("from"), str)
+        ):
+            p2v_targets.setdefault(entry["from"], []).append(entry.get("to"))
+
+    # A mounted file may declare index sets of its own, which reach the
+    # document only when the mount resolves. Until then a first dimension
+    # naming a set the root does not declare is not decidable.
+    refs_pending = _has_unmounted_refs(data)
+
+    def fails(shape: list[Any]) -> bool:
+        if refs_pending and shape and shape[0] not in index_sets:
+            return False
+        return not record_shape_holds_a_pair(index_sets, shape)
+
+    def failing_record_shape(vdef: dict[str, Any], scoped: str) -> list[Any] | None:
+        """The first record shape that cannot carry two records, or None when
+        every shape validation can decide holds a pair."""
+        shape = vdef.get("shape") or []
+        if shape:
+            return list(shape) if fails(shape) else None
+        targets = p2v_targets.get(scoped, [])
+        if not targets:
+            return None if has_coupling_import else []
+        for to in targets:
+            target = _declared_variable(data, to)
+            if target is None:
+                continue
+            tshape = target.get("shape") or []
+            if fails(tshape):
+                return list(tshape)
+        return None
+
+    def walk(comp: dict[str, Any], scope: str, pointer: str) -> None:
+        for vname, vdef in (comp.get("variables") or {}).items():
+            if not isinstance(vdef, dict):
+                continue
+            for suffix, rule in _update_rules_with_paths(vdef.get("update")):
+                if not isinstance(rule, dict):
+                    continue
+                binding = rule.get("from")
+                if not isinstance(binding, dict):
+                    continue
+                at = (
+                    f"{pointer}/variables/{vname}/update{suffix.replace('[', '/').replace(']', '')}"
+                )
+                if rule.get("kind") != "data":
+                    if "records_per_sample" in binding:
+                        errors.append(
+                            (
+                                at,
+                                f"Parameter '{vname}' sets from.records_per_sample on a "
+                                f"'{rule.get('kind')}' rule; only a 'data' rule names a source "
+                                f"to read records from",
+                                {"variable": vname, "kind": rule.get("kind")},
+                            )
+                        )
+                    continue
+                source = sources.get(rule.get("source"))
+                if not isinstance(source, dict):
+                    continue  # data_source_undefined reports it
+                if effective_records_per_sample(binding, source) != 2:
+                    continue
+                if not isinstance(source.get("temporal"), dict):
+                    errors.append(
+                        (
+                            at,
+                            f"Parameter '{vname}' asks for two records per sample from "
+                            f"data source '{rule.get('source')}', which declares no temporal "
+                            f"block and so has no successor record",
+                            {"variable": vname, "source": rule.get("source")},
+                        )
+                    )
+                    continue
+                shape = failing_record_shape(vdef, f"{scope}.{vname}")
+                if shape is not None:
+                    errors.append(
+                        (
+                            at,
+                            records_per_sample_shape_message(vname, shape),
+                            {"variable": vname, "shape": shape},
+                        )
+                    )
+        for sname, sub in (comp.get("subsystems") or {}).items():
+            if isinstance(sub, dict):
+                walk(sub, f"{scope}.{sname}", f"{pointer}/subsystems/{sname}")
+
+    for mname, m in (data.get("models") or {}).items():
+        if isinstance(m, dict):
+            walk(m, mname, f"/models/{mname}")
+
+
 def _check_system_kind(data: dict[str, Any], errors: list[str]) -> None:
     """``system_kind_mismatch``: a model whose declared ``system_kind`` FIELD
     contradicts the derivation (esm-spec §6.3.1).
@@ -3851,6 +4042,7 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     collect("undefined_system", lambda sub: _check_coupling_systems(data, tables, sub))
     collect("circular_dependency", lambda sub: _check_circular_references(data, tables, sub))
     collect("data_source_undefined", lambda sub: _check_data_source_references(data, sub))
+    collect("records_per_sample_invalid", lambda sub: _check_records_per_sample(data, sub))
     collect("event_affects_parameter", lambda sub: _check_event_affects_parameter(data, sub))
     # esm-spec §6.3.1: an equation never defines a parameter, and an index symbol
     # on its left-hand side is bound by a faq. Each finding names its own code.

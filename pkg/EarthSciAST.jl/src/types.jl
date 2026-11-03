@@ -954,24 +954,46 @@ end
 Binds a parameter to one file variable of a `data_sources` entry (esm-spec
 §8.5) — the `from` value form of a `data` update. It carries no `units`: the
 units are the parameter's own, declared once on the consumer.
+
+`records_per_sample` (1 or 2, `nothing` when not written) is how many records
+of the source the parameter receives per query time, overriding the source's
+`temporal.records_per_sample` (esm-spec §8.5.1). A `LoaderField` reports the
+effective value.
 """
 struct DataSourceBinding
     file_variable::String
     unit_conversion::Union{Float64, ASTExpr, Nothing}
     codes::Union{Dict{String, Any}, Nothing}
     select::Union{Dict{String, Any}, Nothing}
+    records_per_sample::Union{Int, Nothing}
     description::Union{String, Nothing}
     reference::Union{Reference, Nothing}
 
     DataSourceBinding(
         file_variable::AbstractString; unit_conversion = nothing,
-        codes = nothing, select = nothing, description = nothing,
-        reference = nothing
+        codes = nothing, select = nothing, records_per_sample = nothing,
+        description = nothing, reference = nothing
     ) =
         new(
-        String(file_variable), unit_conversion, codes, select, description,
-        reference
+        String(file_variable), unit_conversion, codes, select,
+        records_per_sample, description, reference
     )
+end
+
+"""
+    _effective_records_per_sample(binding::DataSourceBinding, source) -> Int
+
+The EFFECTIVE `records_per_sample` of a `data` rule (esm-spec §8.5.1): the
+binding's own `from.records_per_sample`, else the source's
+`temporal.records_per_sample`, else 1. `source` is the `DataSource` the rule
+names, or `nothing`.
+"""
+function _effective_records_per_sample(binding::DataSourceBinding, source)::Int
+    binding.records_per_sample === nothing || return binding.records_per_sample
+    source === nothing && return 1
+    t = source.temporal
+    (t === nothing || t.records_per_sample === nothing) && return 1
+    return t.records_per_sample
 end
 
 """
@@ -3287,6 +3309,7 @@ const RECORD_FIELD_TABLES = (
             (f = :unit_conversion, wire = "unit_conversion", kind = :number_or_expr, mode = :opt, emit = :nonnothing),
             (f = :codes, wire = "codes", kind = :str_keyed_copy, mode = :opt, emit = :nonnothing),
             (f = :select, wire = "select", kind = :str_keyed_copy, mode = :opt, emit = :nonnothing),
+            (f = :records_per_sample, wire = "records_per_sample", kind = :int, mode = :opt, emit = :nonnothing),
             (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
             (f = :reference, wire = "reference", kind = :record, of = :reference, mode = :opt, emit = :nonnothing),
         ),

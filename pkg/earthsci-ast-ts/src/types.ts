@@ -305,8 +305,26 @@ export interface DataSourceBinding {
   unit_conversion?: GeneratedExpression
   codes?: DataSourceCodes
   select?: DataSourceSelect
+  /**
+   * How many records the parameter receives per query time (esm-spec §8.5.1):
+   * 1 or 2, overriding the source's `temporal.records_per_sample`.
+   */
+  records_per_sample?: 1 | 2
   description?: string
   reference?: SchemaReference
+}
+
+/**
+ * The EFFECTIVE `records_per_sample` of a `data` rule (esm-spec §8.5.1): the
+ * binding's `from.records_per_sample`, else the source's
+ * `temporal.records_per_sample`, else 1.
+ */
+export function effectiveRecordsPerSample(
+  binding: { records_per_sample?: number } | undefined,
+  source: { temporal?: { records_per_sample?: number } } | undefined,
+): 1 | 2 {
+  const value = binding?.records_per_sample ?? source?.temporal?.records_per_sample ?? 1
+  return value === 2 ? 2 : 1
 }
 
 /**

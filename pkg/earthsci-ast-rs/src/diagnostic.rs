@@ -404,6 +404,11 @@ diagnostic_code_registry! {
     CIRCULAR_DEPENDENCY = "circular_dependency";
     /// A parameter `update` naming no declared data source.
     DATA_SOURCE_UNDEFINED = "data_source_undefined";
+    /// `from.records_per_sample` on a rule that is not `data`, or an
+    /// effective value of 2 on a source without `temporal` or on a parameter
+    /// whose record shape's first dimension is not an index set of exactly
+    /// two members (esm-spec §8.5.1).
+    RECORDS_PER_SAMPLE_INVALID = "records_per_sample_invalid";
     /// A data-fed parameter (`update` of `kind: "data"`, esm-spec §5.4/§8.5)
     /// reached a build with NOTHING bound to it — no provider, no loaded
     /// array, no caller-supplied `p` value. Raised at CONSTRUCTION, before any
@@ -752,6 +757,7 @@ mod error_code_tests {
             "range_global_locality",
             "range_halo_insufficient",
             "range_selection_writes_incomplete",
+            "records_per_sample_invalid",
             "recurrence_not_wellfounded",
             "recurrence_unsupported_form",
             "relational_node_in_continuous",
