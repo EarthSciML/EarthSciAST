@@ -211,6 +211,58 @@ describe('resolveSubsystemRefs', () => {
     expect(sub.ref).toBeUndefined()
     expect(sub.species.O3).toBeDefined()
   })
+
+  // The async prefetch must classify a top-level entry as a mount edge exactly
+  // when the sync pass does: an inline component that also carries a stray
+  // `ref` (a reaction system with `species`, a model with `variables`) is a
+  // component, so its nested subsystem refs must be prefetched.
+  it('walks the subsystems of an inline top-level component that carries a stray ref', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'subchem.esm.json'),
+      JSON.stringify({
+        esm: '0.1.0',
+        metadata: { name: 'sub' },
+        reaction_systems: { SubChem: { species: { O3: {} }, parameters: {}, reactions: [] } },
+      }),
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'inner.esm.json'),
+      JSON.stringify({
+        esm: '0.1.0',
+        metadata: { name: 'inner' },
+        models: { Inner: { variables: { x: { type: 'state' } }, equations: [] } },
+      }),
+    )
+
+    const file = esmFile({
+      name: 'main',
+      models: {
+        Outer: {
+          ref: './stray.esm.json',
+          variables: {},
+          equations: [],
+          subsystems: { Inner: { ref: './inner.esm.json' } },
+        },
+      },
+      reaction_systems: {
+        Chem: {
+          ref: './stray.esm.json',
+          species: {},
+          parameters: {},
+          reactions: [],
+          subsystems: { Sub: { ref: './subchem.esm.json' } },
+        },
+      },
+    })
+
+    await resolveSubsystemRefs(file, tmpDir)
+    const inner = (file.models!.Outer as Model).subsystems!.Inner as any
+    expect(inner.ref).toBeUndefined()
+    expect(inner.variables.x).toBeDefined()
+    const sub = (file.reaction_systems!.Chem as ReactionSystem).subsystems!.Sub as any
+    expect(sub.ref).toBeUndefined()
+    expect(sub.species.O3).toBeDefined()
+  })
 })
 
 // esm-spec §4.7: each file is held to its OWN declared `esm`, by every

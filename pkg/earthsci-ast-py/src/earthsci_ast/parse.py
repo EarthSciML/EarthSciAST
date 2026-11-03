@@ -1522,7 +1522,8 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
     events = []
     for component in list(models.values()) + list(reaction_systems.values()):
         if isinstance(component, dict):
-            # Unresolved {"ref": ...} entry (resolve_model_refs runs later).
+            # Unresolved {"ref": ...} entry; resolve_model_refs adds its
+            # events once the mount resolves (_reaggregate_component_events).
             continue
         events.extend(component.discrete_events)
         events.extend(component.continuous_events)
@@ -2652,6 +2653,7 @@ def resolve_model_refs(
     # effective precision — its own declaration, else its mounter's (the root
     # default at depth zero). Every edge below compares its leaf against it.
     precision = _declared_element_type(esm_file) or _enclosing_precision
+    mounted = False
     for form in (_MODEL_MOUNT, _REACTION_SYSTEM_MOUNT):
         resolved: dict[str, Any] = {}
         for name, value in getattr(esm_file, form.block).items():
@@ -2674,7 +2676,31 @@ def resolve_model_refs(
                 mount_chain=_mount_chain,
                 forwarded=_forwarded,
             )
+            mounted = True
         setattr(esm_file, form.block, resolved)
+    if mounted:
+        _reaggregate_component_events(esm_file)
+
+
+def _reaggregate_component_events(esm_file: EsmFile) -> None:
+    """Rebuild the flat ``EsmFile.events`` view once top-level mounts resolve.
+
+    ``_parse_esm_data`` aggregates component-owned events while a ``{ref}``
+    entry is still a raw dict, so a mounted component's events are missing
+    from that view. Rebuild it in the same order ``_parse_esm_data`` uses
+    (``models`` then ``reaction_systems``, each component's discrete events
+    before its continuous ones), keeping the SAME event objects, and keep any
+    event no component owns after them.
+    """
+    owned: list[Any] = []
+    for component in list(esm_file.models.values()) + list(esm_file.reaction_systems.values()):
+        if isinstance(component, dict):
+            continue
+        owned.extend(component.discrete_events)
+        owned.extend(component.continuous_events)
+    owned_ids = {id(ev) for ev in owned}
+    orphans = [ev for ev in esm_file.events if id(ev) not in owned_ids]
+    esm_file.events = owned + orphans
 
 
 @dataclass(frozen=True)
@@ -2846,7 +2872,7 @@ def _resolve_toplevel_mount_inner(
     # post-close) — but the axes its mounts contribute still fold against the
     # leaf's CLOSED environment, so that is forwarded (esm-spec §4.7 "Which
     # environment a contribution folds against"). Mirrors the Julia reference's
-    # `_inline_toplevel_model_refs!(comp, compdir, visited)` and Rust.
+    # `_inline_toplevel_refs!(comp, compdir, visited)` and Rust.
     #
     # Without it, the extraction below picks the leaf's UNRESOLVED `{ref}`
     # dict and the next line raises `AttributeError: 'dict' object has no

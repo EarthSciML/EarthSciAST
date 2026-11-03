@@ -2949,6 +2949,9 @@ func collectComponents(file *ESMFile) (map[string]*componentSystem, []string, er
 	sources := file.DataSources
 	for _, name := range orderedKeys(file.Models, file.declarationOrder("/models")) {
 		model := file.Models[name]
+		if model.unresolvedMountRef != "" {
+			return nil, nil, unresolvedTopLevelMountError("models", name, model.unresolvedMountRef)
+		}
 		comp, err := collectModel(file, &model, name, "/models/"+name, sources)
 		if err != nil {
 			return nil, nil, err
@@ -2958,6 +2961,9 @@ func collectComponents(file *ESMFile) (map[string]*componentSystem, []string, er
 	}
 	for _, name := range orderedKeys(file.ReactionSystems, file.declarationOrder("/reaction_systems")) {
 		rs := file.ReactionSystems[name]
+		if rs.unresolvedMountRef != "" {
+			return nil, nil, unresolvedTopLevelMountError("reaction_systems", name, rs.unresolvedMountRef)
+		}
 		comp, err := collectReactionSystem(file, &rs, name, "/reaction_systems/"+name)
 		if err != nil {
 			return nil, nil, err

@@ -164,3 +164,85 @@ end
     # Every listed document is still in the corpus the scan finds.
     @test seen_expected == Set(keys(_NTA_EXPECTED))
 end
+
+# A leaf mounted at `subsystems.<k>` may itself mount a reaction system at its own
+# top-level `reaction_systems.<k>` `{ref}` (esm-spec §4.7 "Two mount forms, one
+# mechanism"). Both paths must inline that nested mount before the leaf loads, so
+# the axis the nested reaction-system file declares reaches the root either way.
+# Built in a temporary directory because the corpus scan above only finds
+# `subsystems.<k>` mounts, and this one sits one document down.
+@testset "a subsystem leaf's own top-level reaction-system mount: paths agree" begin
+    dir = mktempdir()
+    chem = Dict{String, Any}(
+        "esm" => "1.0.0", "metadata" => Dict("name" => "chem"),
+        "index_sets" => Dict("rs_ax" => Dict("kind" => "interval", "size" => 4)),
+        "reaction_systems" => Dict(
+            "Chem" => Dict(
+                "species" => Dict(
+                    "A" => Dict("units" => "mol/m^3", "default" => 1.0),
+                    "B" => Dict("units" => "mol/m^3", "default" => 0.0)
+                ),
+                "parameters" => Dict("k" => Dict("units" => "1/s", "default" => 0.3)),
+                "reactions" => [
+                    Dict(
+                        "id" => "R1",
+                        "substrates" => [Dict("species" => "A", "stoichiometry" => 1)],
+                        "products" => [Dict("species" => "B", "stoichiometry" => 1)],
+                        "rate" => "k"
+                    ),
+                ]
+            )
+        )
+    )
+    mid = Dict{String, Any}(
+        "esm" => "1.0.0", "metadata" => Dict("name" => "mid"),
+        "models" => Dict(
+            "Mid" => Dict(
+                "variables" => Dict(
+                    "x" => Dict("type" => "unknown", "units" => "1", "default" => 1.0)
+                ),
+                "equations" => [
+                    Dict(
+                        "lhs" => Dict("op" => "D", "args" => ["x"], "wrt" => "t"),
+                        "rhs" => Dict("op" => "-", "args" => ["x"])
+                    ),
+                ]
+            )
+        ),
+        # Relative to mid's own directory, not the root's.
+        "reaction_systems" => Dict("R" => Dict("ref" => "../chem.esm"))
+    )
+    root = Dict{String, Any}(
+        "esm" => "1.0.0", "metadata" => Dict("name" => "root"),
+        "models" => Dict(
+            "Host" => Dict(
+                "variables" => Dict(
+                    "y" => Dict("type" => "unknown", "units" => "1", "default" => 1.0)
+                ),
+                "equations" => [
+                    Dict(
+                        "lhs" => Dict("op" => "D", "args" => ["y"], "wrt" => "t"),
+                        "rhs" => Dict("op" => "-", "args" => ["y"])
+                    ),
+                ],
+                "subsystems" => Dict("S" => Dict("ref" => "./sub/mid.esm"))
+            )
+        )
+    )
+    mkpath(joinpath(dir, "sub"))
+    write(joinpath(dir, "chem.esm"), JSON3.write(chem))
+    write(joinpath(dir, "sub", "mid.esm"), JSON3.write(mid))
+    path = joinpath(dir, "root.esm")
+    write(path, JSON3.write(root))
+
+    native = _nta_resolve(path, true)
+    typed = _nta_resolve(path, false)
+    @test native[1] === :ok
+    @test typed[1] === :ok
+    @test native == typed
+    for (kind, doc) in (native, typed)
+        kind === :ok || continue
+        @test haskey(get(doc, "index_sets", Dict()), "rs_ax")
+        @test haskey(doc["models"]["Host"]["subsystems"], "S")
+    end
+end

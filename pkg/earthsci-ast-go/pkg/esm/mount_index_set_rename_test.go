@@ -700,3 +700,156 @@ func TestTopLevelReactionSystemRefRunsTheEdgePipeline(t *testing.T) {
 		t.Errorf("y = %d; want 2", got)
 	}
 }
+
+// A top-level `reaction_systems.<k>` `{ref}` lands the leaf's reaction system
+// with the leaf's AUTHORED species order (API_SPEC.md §5.10,
+// esm-libraries-spec §4.7.5 step 4), exactly as the inline copy has it — on both
+// reach paths. Species are declared O3, NO, NO2, so sorted-name order would
+// differ. The host's own model is declared z, a, and keeps that order too when
+// LoadPath re-encodes the document to splice the mount in.
+func TestTopLevelReactionSystemRefKeepsAuthoredSpeciesOrder(t *testing.T) {
+	dir := t.TempDir()
+	rs := `{"species":{"O3":{"units":"1","default":1.0},"NO":{"units":"1","default":1.0},"NO2":{"units":"1","default":1.0}},
+  "parameters":{"k":{"units":"1/s","default":0.3}},
+  "reactions":[{"id":"R1","substrates":[{"species":"NO","stoichiometry":1},{"species":"O3","stoichiometry":1}],"products":[{"species":"NO2","stoichiometry":1}],"rate":"k"}]}`
+	model := `"models":{"M":{"variables":{"z":{"type":"parameter","units":"1","default":1.0},"a":{"type":"parameter","units":"1","default":2.0}},"equations":[]}}`
+	leaf := `{"esm":"1.0.0","metadata":{"name":"leaf","description":"probe"},"reaction_systems":{"Chem":` + rs + `}}`
+	mounted := `{"esm":"1.0.0","metadata":{"name":"host","description":"probe"},` + model + `,
+ "reaction_systems":{"Chem":{"ref":"./leaf.esm"}}}`
+	inline := `{"esm":"1.0.0","metadata":{"name":"host","description":"probe"},` + model + `,
+ "reaction_systems":{"Chem":` + rs + `}}`
+	for name, text := range map[string]string{"leaf.esm": leaf, "mounted.esm": mounted, "inline.esm": inline} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	type observed struct {
+		odes   string
+		matrix [][]float64
+		params []string
+		states []string
+	}
+	observe := func(how string, f *ESMFile) observed {
+		t.Helper()
+		chem := f.ReactionSystems["Chem"]
+		model, err := DeriveODEs(&chem)
+		if err != nil {
+			t.Fatalf("%s: DeriveODEs: %v", how, err)
+		}
+		odes, err := json.Marshal(model.Equations)
+		if err != nil {
+			t.Fatal(err)
+		}
+		flat, err := Flatten(f)
+		if err != nil {
+			t.Fatalf("%s: Flatten: %v", how, err)
+		}
+		var o observed
+		o.odes = string(odes)
+		o.matrix = StoichiometricMatrix(&chem)
+		for _, v := range flat.StateVariables {
+			o.states = append(o.states, v.Name)
+		}
+		for _, v := range flat.Parameters {
+			o.params = append(o.params, v.Name)
+		}
+		return o
+	}
+
+	want, err := LoadPath(filepath.Join(dir, "inline.esm"))
+	if err != nil {
+		t.Fatalf("inline: %v", err)
+	}
+	wantObs := observe("inline", want)
+	if got := []string{"Chem.O3", "Chem.NO", "Chem.NO2"}; !reflect.DeepEqual(wantObs.states, got) {
+		t.Fatalf("inline copy flattens its species as %v; want %v", wantObs.states, got)
+	}
+
+	viaPath, err := LoadPath(filepath.Join(dir, "mounted.esm"))
+	if err != nil {
+		t.Fatalf("LoadPath: %v", err)
+	}
+	viaString, err := LoadString(mounted)
+	if err != nil {
+		t.Fatalf("LoadString: %v", err)
+	}
+	if err := ResolveSubsystemRefs(viaString, dir); err != nil {
+		t.Fatalf("ResolveSubsystemRefs: %v", err)
+	}
+	for how, f := range map[string]*ESMFile{"LoadPath": viaPath, "LoadString+ResolveSubsystemRefs": viaString} {
+		got := observe(how, f)
+		if got.odes != wantObs.odes {
+			t.Errorf("%s: DeriveODEs equations differ from the inline copy:\n got  %s\n want %s", how, got.odes, wantObs.odes)
+		}
+		if !reflect.DeepEqual(got.matrix, wantObs.matrix) {
+			t.Errorf("%s: StoichiometricMatrix = %v; the inline copy gives %v", how, got.matrix, wantObs.matrix)
+		}
+		if !reflect.DeepEqual(got.states, wantObs.states) {
+			t.Errorf("%s: Flatten state order = %v; the inline copy gives %v", how, got.states, wantObs.states)
+		}
+		if !reflect.DeepEqual(got.params, wantObs.params) {
+			t.Errorf("%s: Flatten parameter order = %v; the inline copy gives %v", how, got.params, wantObs.params)
+		}
+	}
+}
+
+// esm-spec §9.6.6: a top-level `{ref}` mount edge that LoadString decoded but
+// nothing resolved is NOT an empty component. Flatten, Validate and DeriveODEs
+// report `unresolved_subsystem_ref` at the entry, at both top-level forms;
+// once ResolveSubsystemRefs runs, the same file works.
+func TestUnresolvedTopLevelRefIsNotAnEmptySystem(t *testing.T) {
+	dir := mrFixture(t, "fixtures", "mount_form_unsupported")
+	leafModel := t.TempDir()
+	if err := os.WriteFile(filepath.Join(leafModel, "leaf.esm"), []byte(`{"esm":"1.0.0","metadata":{"name":"leaf","description":"probe"},
+ "models":{"M":{"variables":{"x":{"type":"parameter","units":"1","default":1.0}},"equations":[]}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		section, name, host, base string
+	}{
+		{"models", "M", `{"esm":"1.0.0","metadata":{"name":"host","description":"probe"},"models":{"M":{"ref":"./leaf.esm"}}}`, leafModel},
+		{"reaction_systems", "Chem", `{"esm":"1.0.0","metadata":{"name":"host","description":"probe"},"reaction_systems":{"Chem":{"ref":"./reaction_system_leaf.esm"}}}`, dir},
+	}
+	for _, c := range cases {
+		pointer := "/" + c.section + "/" + c.name
+		f, err := LoadString(c.host)
+		if err != nil {
+			t.Fatalf("%s: LoadString: %v", c.section, err)
+		}
+
+		_, err = Flatten(f)
+		var et *ExpressionTemplateError
+		if !errors.As(err, &et) || et.Code != CodeUnresolvedSubsystemRef || et.Path != pointer {
+			t.Errorf("%s: Flatten of an unresolved mount = %v; want %s at %s", c.section, err, CodeUnresolvedSubsystemRef, pointer)
+		}
+
+		found := false
+		for _, e := range Validate(f).StructuralErrors {
+			found = found || (e.Code == CodeUnresolvedSubsystemRef && e.Path == pointer)
+		}
+		if !found {
+			t.Errorf("%s: Validate does not report %s at %s", c.section, CodeUnresolvedSubsystemRef, pointer)
+		}
+
+		if c.section == "reaction_systems" {
+			chem := f.ReactionSystems[c.name]
+			if _, err := DeriveODEs(&chem); !errors.As(err, &et) || et.Code != CodeUnresolvedSubsystemRef {
+				t.Errorf("DeriveODEs of an unresolved mount = %v; want %s", err, CodeUnresolvedSubsystemRef)
+			}
+		}
+
+		if err := ResolveSubsystemRefs(f, c.base); err != nil {
+			t.Fatalf("%s: ResolveSubsystemRefs: %v", c.section, err)
+		}
+		if _, err := Flatten(f); err != nil {
+			t.Errorf("%s: Flatten after resolution: %v", c.section, err)
+		}
+		if c.section == "reaction_systems" {
+			chem := f.ReactionSystems[c.name]
+			if _, err := DeriveODEs(&chem); err != nil {
+				t.Errorf("DeriveODEs after resolution: %v", err)
+			}
+		}
+	}
+}

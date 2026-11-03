@@ -3308,8 +3308,8 @@ func collectScopedSubsystemUnits(prefix string, subsystems map[string]any, out m
 // scopedUnitIndex holds the units of every scoped name an expression in a
 // component can make (esm-spec §4.8.4, §4.9.2). A mounted component is, after
 // resolution, identical to an inline one (§4.7), so a variable reached across a
-// `subsystems.<k>` or top-level `models.<k>` {ref} mount carries the units its
-// declaration states, exactly as a local one does. Two kinds of path are
+// `subsystems.<k>` or top-level `models.<k>` / `reaction_systems.<k>` {ref}
+// mount carries the units its declaration states, exactly as a local one does. Two kinds of path are
 // covered, with the precedence the reference-integrity check uses:
 // `<System>.<member>` rooted at a top-level model or reaction system (and down
 // through its subsystems), which is the same for every component and so is

@@ -44,4 +44,16 @@ using EarthSciAST
                 @test hasproperty(err, :code) && err.code == code
         end
     end
+
+    # The diagnostic names the form the edge mounts, not the model form's noun.
+    @testset "a missing reaction-system file is named as one" begin
+        err = try
+            EarthSciAST.load_path(joinpath(dir, "missing_file.esm"))
+            nothing
+        catch e
+            e
+        end
+        @test err isa EarthSciAST.SubsystemRefError
+        @test occursin("Referenced reaction system file not found", sprint(showerror, err))
+    end
 end

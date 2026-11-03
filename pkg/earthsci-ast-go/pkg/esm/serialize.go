@@ -28,41 +28,34 @@ func marshalCanonical(v any, indent bool) ([]byte, error) {
 }
 
 // restoreUnresolvedTopLevelMounts writes an UNRESOLVED top-level `models.<k>`
-// `{ref}` MOUNT EDGE back out as the edge it was authored as.
+// or `reaction_systems.<k>` `{ref}` MOUNT EDGE back out as the edge it was
+// authored as.
 //
-// `ESMFile.Models` is a `map[string]Model`, so a bare `{ref}` entry decodes to
-// an EMPTY Model. LoadString snapshots the edges off the text before that
-// decode and the ref resolver consumes them — but LoadString and LoadDocument
-// do NOT resolve refs (only LoadPath does), so a document that came in through
-// either and goes out again would otherwise emit `{"variables": null}` where
-// the mount was: the `ref`, its `bindings` and its `index_set_rename` gone,
-// with no error anywhere.
+// `ESMFile.Models` and `ESMFile.ReactionSystems` are maps of the component
+// type, so a bare `{ref}` entry decodes to an EMPTY component. LoadString
+// snapshots the edges off the text before that decode and the ref resolver
+// consumes them — but LoadString and LoadDocument do NOT resolve refs (only
+// LoadPath does), so a document that came in through either and goes out again
+// would otherwise emit an empty component where the mount was: the `ref`, its
+// `bindings` and its `index_set_rename` gone, with no error anywhere.
 //
 // The `subsystems.<k>` form never had this problem, because that map is
 // `map[string]any` and keeps the edge verbatim. esm-spec §4.7 "Two mount forms,
-// one mechanism" is what says the two must not differ here either.
+// one mechanism" is what says the forms must not differ here either.
 //
 // Only edges the resolver has NOT consumed are still in the map, so this can
 // never overwrite a mount that did resolve.
-//
-// A top-level `reaction_systems.<k>` `{ref}` is the same edge at the other
-// top-level attachment point and is restored the same way.
 func restoreUnresolvedTopLevelMounts(canonical any, v any) (any, error) {
 	file, ok := v.(*ESMFile)
-	if !ok {
+	if !ok || len(file.topLevelRefs) == 0 {
 		return canonical, nil
 	}
 	root, ok := canonical.(map[string]any)
 	if !ok {
 		return canonical, nil
 	}
-	for block, edges := range map[string]map[string]map[string]any{
-		"models":           file.topLevelModelRefs,
-		"reaction_systems": file.topLevelReactionSystemRefs,
-	} {
-		if len(edges) == 0 {
-			continue
-		}
+	for _, block := range sortedKeys(file.topLevelRefs) {
+		edges := file.topLevelRefs[block]
 		comps, ok := root[block].(map[string]any)
 		if !ok {
 			continue

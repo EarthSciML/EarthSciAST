@@ -119,11 +119,8 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
     @testset "the field applies at a top-level reaction-system `{ref}` too" begin
         # esm-spec §4.7 "Two mount forms, one mechanism": a top-level
         # `reaction_systems.<k>` `{ref}` runs the same edge pipeline as a
-        # `models.<k>` one. It used to be a raw pre-pass that refused the field
-        # with `subsystem_index_set_rename_unsupported_mount_form`, dropped the
-        # leaf's `index_sets` and ignored the edge's `bindings`. Now the leaf
-        # closes under the edge's `bindings`, its axes merge, and the rename
-        # applies.
+        # `models.<k>` one: the leaf closes under the edge's `bindings`, its axes
+        # merge, and the rename applies.
         dir = mktempdir()
         leaf = Dict{String, Any}(
             "esm" => "1.0.0", "metadata" => Dict("name" => "rs_leaf"),
@@ -159,8 +156,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
         f = load(Dict{String, Any}())
         @test f.index_sets["ax"].size == 2                # the leaf's own default
-        @test Set(keys(f.reaction_systems["R"].species)) == Set(["A", "B"]) ||
-            length(f.reaction_systems["R"].species) == 2
+        @test Set(s.name for s in f.reaction_systems["R"].species) == Set(["A", "B"])
 
         f = load(Dict{String, Any}("bindings" => Dict("N" => 5)))
         @test f.index_sets["ax"].size == 5                # closed by the edge

@@ -377,15 +377,24 @@ async function prefetchRefs(
   cache: Map<string, string>,
   seen: Set<string>,
 ): Promise<void> {
-  const walk = async (subsystems: unknown, currentBase: string): Promise<void> => {
+  // `isEdge` is the SAME classifier the sync core applies to the map being
+  // walked, so an entry is fetched here exactly when the sync pass will treat it
+  // as a mount edge, and walked as a component exactly when the sync pass will
+  // walk its `subsystems`. A mismatch either fetches a ref nothing reads or
+  // leaves a nested ref the sync pass needs out of the cache.
+  const walk = async (
+    subsystems: unknown,
+    currentBase: string,
+    isEdge: (entry: unknown) => boolean = isSubsystemMountEdge,
+  ): Promise<void> => {
     if (typeof subsystems !== 'object' || subsystems === null) return
     for (const sub of Object.values(subsystems as Record<string, unknown>)) {
-      const authoredRef = (sub as RefEdge | null)?.ref
-      if (typeof authoredRef !== 'string') {
+      if (!isEdge(sub)) {
         walkComponent(sub, currentBase)
         await walkNested(sub, currentBase)
         continue
       }
+      const authoredRef = (sub as RefEdge).ref as string
       // esm-spec §4.7 `${VAR}` expansion, ONCE, where the ref leaves the
       // document — ahead of the `isRemoteRef` classification below and ahead of
       // the cache key. The sync core expands at its own read of `sub.ref` with
@@ -434,14 +443,12 @@ async function prefetchRefs(
 
   const walkDocument = async (parsed: unknown, base: string): Promise<void> => {
     const root = parsed as { models?: object; reaction_systems?: object } | null
-    // A top-level `models.<k>` map is ref-bearing at exactly the shape a
-    // `subsystems` map is (esm-spec §4.7 "Two mount forms, one mechanism"), so
-    // `walk` covers both: an entry with a `ref` is fetched and recursed into, an
-    // entry without one has its own `subsystems` walked. A top-level
-    // `reaction_systems.<k>` map is the other top-level attachment point and is
-    // walked the same way.
-    await walk(root?.models ?? {}, base)
-    await walk(root?.reaction_systems ?? {}, base)
+    // The two top-level attachment points (esm-spec §4.7 "Two mount forms, one
+    // mechanism") are walked like a `subsystems` map — a mount edge is fetched
+    // and recursed into, a component has its own `subsystems` walked — but each
+    // tells an edge from a component with its own top-level discriminator.
+    await walk(root?.models ?? {}, base, (m) => isTopLevelMountEdge(m as Model | SubsystemRef))
+    await walk(root?.reaction_systems ?? {}, base, isTopLevelReactionSystemMountEdge)
   }
 
   await walkDocument(doc, basePath)
@@ -1297,6 +1304,14 @@ function walkSubsystemRefs(
 }
 
 /**
+ * Is this `subsystems.<k>` entry a `{ ref }` MOUNT EDGE? Any `ref` string: the
+ * async prefetch's classifier for a `subsystems` map.
+ */
+function isSubsystemMountEdge(sub: unknown): boolean {
+  return typeof (sub as RefEdge | null)?.ref === 'string'
+}
+
+/**
  * Is this top-level `models.<k>` entry a bare `{ ref }` MOUNT EDGE rather than
  * an inline component?
  *
@@ -1306,8 +1321,10 @@ function walkSubsystemRefs(
  * field is not a mount.
  */
 function isTopLevelMountEdge(model: Model | SubsystemRef): model is SubsystemRef & RefEdge {
-  const m = model as RefEdge & { variables?: unknown }
-  return typeof m.ref === 'string' && m.variables === undefined
+  const m = model as (RefEdge & { variables?: unknown }) | null
+  return (
+    m !== null && typeof m === 'object' && typeof m.ref === 'string' && m.variables === undefined
+  )
 }
 
 /**
