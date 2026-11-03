@@ -2,6 +2,9 @@
 //! sets, the parameter and state layouts, and [`RhsError`].
 
 use super::RhsProgram;
+use crate::provider::{NativeField, ProviderError};
+use ndarray::ArrayD;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -264,6 +267,74 @@ impl ForcingSet {
         };
         RhsError::ForcingSignature { detail }
     }
+}
+
+/// The buffer of `slot` built from one provider sample: the conversion
+/// [`crate::esm_problem`] applies to every provider sample it binds, so a
+/// runtime that builds its own [`ForcingSet`]s from provider samples gets, bit
+/// for bit, the buffer [`RhsProgram::default_forcing`] holds for the same
+/// sample (API_SPEC §5.8, "Forcing sets").
+///
+/// `sample` is what a [`crate::provider::CadenceProvider`] returned
+/// (`materialize()` for a const provider, `refresh(t)` for a discrete one),
+/// keyed by variable name: the `slot.name` entry is taken, or, when the sample
+/// holds exactly one field, that field, which is how `esm_problem` binds a
+/// provider in `ProblemOptions::providers` whatever its field is called. Its
+/// array's dimensions, in the order the provider delivered them (a source's
+/// file order, the record dimension first when two records are delivered),
+/// must be `slot.shape`, axis by axis; a 0-d slot takes an array of one value.
+/// The buffer is the array's values column-major over those dimensions (first
+/// index fastest), the order a forcing set reads a slot's buffer in.
+///
+/// A declared `unit_conversion` (esm-spec §8.5) is NOT applied here: a
+/// provider from `esio_provider::providers_from_document` (feature `esio`) applies
+/// it when it delivers the sample, so the sample is already in the
+/// parameter's declared units, and applying it again would apply it twice.
+///
+/// # Errors
+///
+/// A sample with no `slot.name` entry, or whose array does not have the
+/// slot's shape.
+pub fn forcing_buffer(
+    sample: &HashMap<String, NativeField>,
+    slot: &ForcingSlot,
+) -> Result<Arc<[f64]>, ProviderError> {
+    let only = || (sample.len() == 1).then(|| sample.values().next()).flatten();
+    let Some(field) = sample.get(&slot.name).or_else(only) else {
+        let mut present: Vec<&String> = sample.keys().collect();
+        present.sort();
+        return Err(crate::error::MessageError(format!(
+            "forcing_buffer: the provider sample has no variable `{}` (present: {present:?})",
+            slot.name
+        )));
+    };
+    let got = field.array.shape();
+    let fits = if slot.shape.is_empty() {
+        field.array.len() == 1
+    } else {
+        got == &slot.shape[..]
+    };
+    if !fits {
+        return Err(crate::error::MessageError(format!(
+            "forcing_buffer: the sample's `{}` has shape {got:?}; the parameter's declared \
+             shape is {:?}{}",
+            slot.name,
+            slot.shape,
+            if slot.shape.is_empty() {
+                ", one value"
+            } else {
+                ""
+            }
+        )));
+    }
+    Ok(column_major(&field.array))
+}
+
+/// A row-major array's elements in column-major order (first index fastest):
+/// a slot's buffer from the Problem's forcing array, for
+/// [`RhsProgram::default_forcing`] and [`forcing_buffer`] alike.
+pub(super) fn column_major(a: &ArrayD<f64>) -> Arc<[f64]> {
+    a.view().reversed_axes().iter().copied().collect()
 }
 
 fn check_len(slot: &ForcingSlot, buf: &[f64]) -> Result<(), RhsError> {
