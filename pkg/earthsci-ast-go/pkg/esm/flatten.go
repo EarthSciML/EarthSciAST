@@ -2765,6 +2765,11 @@ func FlattenWithOptions(file *ESMFile, opts CouplingImportOptions) (*FlattenedSy
 	if err != nil {
 		return nil, fmt.Errorf("flatten: %w", err)
 	}
+	// esm-spec §8.5.1: a record shape that arrives through an imported
+	// `param_to_var` edge is first decidable here.
+	if err := checkRecordsPerSampleAfterImports(file, coupling); err != nil {
+		return nil, err
+	}
 
 	components, order, err := collectComponents(file)
 	if err != nil {

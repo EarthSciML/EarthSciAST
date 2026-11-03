@@ -6,11 +6,15 @@ package esm
 // must validate, round-trip the field, and flatten with each data-fed
 // parameter's LoaderField reporting the EFFECTIVE value (the binding's own,
 // else the source's `temporal.records_per_sample`, else 1) and the flattened
-// parameter's `update.from` carrying the field as written. An invalid case
-// must be refused with `records_per_sample_invalid` at the pinned pointer.
+// parameter's `update.from` carrying the field as written. An `invalid` case
+// must be refused by structural validation with exactly one
+// `records_per_sample_invalid` at the pinned pointer. A `flatten_invalid` case
+// must pass validation with none and then be refused by Flatten with that code
+// at that pointer. A `refused` case may be refused by either stage.
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -48,6 +52,20 @@ func sameRecords(a, b *int) bool {
 	return *a == *b
 }
 
+// requireFlattenRefusal asserts Flatten refuses file with c.Code, attributed
+// to c.Pointer.
+func requireFlattenRefusal(t *testing.T, file *ESMFile, c recordsPerSampleCase) {
+	t.Helper()
+	_, err := Flatten(file)
+	if err == nil {
+		t.Fatalf("flatten accepted the document; want %s at %s", c.Code, c.Pointer)
+	}
+	var coded *ExpressionTemplateError
+	if !errors.As(err, &coded) || coded.DiagnosticCode() != c.Code || coded.DiagnosticPath() != c.Pointer {
+		t.Fatalf("flatten: want %s at %s, got %v", c.Code, c.Pointer, err)
+	}
+}
+
 func TestRecordsPerSampleConformance(t *testing.T) {
 	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
 	if err != nil {
@@ -77,10 +95,26 @@ func TestRecordsPerSampleConformance(t *testing.T) {
 					found = append(found, e.Path)
 				}
 			}
-			if c.Expect == "invalid" {
+			switch c.Expect {
+			case "invalid":
 				if len(found) != 1 || found[0] != c.Pointer {
 					t.Fatalf("want one %s at %s, got %v", c.Code, c.Pointer, found)
 				}
+				return
+			case "refused":
+				if len(found) > 0 {
+					if len(found) != 1 || found[0] != c.Pointer {
+						t.Fatalf("want one %s at %s, got %v", c.Code, c.Pointer, found)
+					}
+					return
+				}
+				requireFlattenRefusal(t, file, c)
+				return
+			case "flatten_invalid":
+				if len(found) != 0 {
+					t.Fatalf("validation reported %s at %v; the record shape is decidable only at flatten", c.Code, found)
+				}
+				requireFlattenRefusal(t, file, c)
 				return
 			}
 			if len(found) != 0 || len(result.SchemaErrors) != 0 {
