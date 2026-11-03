@@ -712,17 +712,6 @@ end
     _eval_node(ce.node, _NO_STATE_U, NamedTuple{syms}(ntuple(d -> @inbounds(vals[d]), Val(N))), 0.0)
 
 # --------------------------------------------------------------------------- #
-# CONST-provider materialization: pull one forcing variable's field out of a
-# `provider_sample` result and coerce to a dense Float64 array, preserving the
-# native (e.g. [lon,lat]) shape so a scoped-`ic` fold reads it per cell and the
-# array-gather indexes it. Reuses the same sample-extraction seam as the refresh
-# callback's forcing write (`_sample_field`: AbstractDict var=>field, or a
-# bare AbstractArray for a single-variable sample).
-# --------------------------------------------------------------------------- #
-_provider_const_field(sample, var::AbstractString) =
-    Array{Float64}(_sample_field(sample, String(var)))
-
-# --------------------------------------------------------------------------- #
 # Callback composition seam — the `CallbackSet` constructor lives in
 # EarthSciASTSimulateExt (SciMLBase), exactly like the callback CONSTRUCTORS
 # live in the DiffEqCallbacks extensions. A problem with zero or one callback
@@ -1063,16 +1052,10 @@ function _program_seed(prob)
             for (rawk, prov) in r.providers
                 k = String(rawk)
                 if k in r.discovered
-                    merged_const[k] = Array{Float64}(
-                        _sample_field(
-                            provider_sample(prov, r.sample_time), k
-                        )
-                    )
+                    merged_const[k] = forcing_buffer(provider_sample(prov, r.sample_time), k)
                 elseif !(k in r.pd_gated) && !provider_is_gated(prov) &&
                         provider_is_const(prov)
-                    merged_const[k] = _provider_const_field(
-                        provider_sample(prov, r.sample_time), k
-                    )
+                    merged_const[k] = forcing_buffer(provider_sample(prov, r.sample_time), k)
                 end
             end
         end
@@ -1115,8 +1098,7 @@ function _discover_loader_extents(providers, metaparameters::AbstractDict, t0::F
                     "not a discovered one"
             )
         )
-        sample = provider_sample(prov, t0)
-        field = _sample_field(sample, rawk)
+        field = forcing_buffer(provider_sample(prov, t0), rawk)
         n = ndims(field) == 0 ? 1 : size(field, 1)
         if haskey(by, mp)
             prev, prevk = by[mp]
@@ -1505,7 +1487,7 @@ function esm_problem(
                 # build resolves the selection without re-consulting the provider.
                 gated_providers[k] = (prov = prov, gate = provider_gate_spec(prov))
             elseif provider_is_const(prov)
-                merged_const[k] = _provider_const_field(provider_sample(prov, t_sample), k)
+                merged_const[k] = forcing_buffer(provider_sample(prov, t_sample), k)
             else
                 # DISCRETE: allocate a LIVE forcing buffer seeded at the initial tick
                 # and register it in `param_arrays`. That makes the loader field a
@@ -1515,7 +1497,7 @@ function esm_problem(
                 # materialized cache, instead of a build-once setup const where the
                 # (still-unbound) live `F_src` would fail. The refresh callback then
                 # rewrites this SAME buffer in place at each cadence tick.
-                merged_param[k] = _provider_const_field(provider_sample(prov, t_sample), k)
+                merged_param[k] = forcing_buffer(provider_sample(prov, t_sample), k)
                 discrete_providers[k] = prov
             end
         end

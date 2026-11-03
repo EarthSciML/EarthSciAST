@@ -241,7 +241,7 @@ export
     # Public right-hand side (API_SPEC §5.8, issue #541)
     ForcingSet, ForcingSlot, ParamSlot, StateBlock, forcing_slots, forcing_set,
     default_forcing_set, replace_forcing, forcing_epoch, parameter_vector, n_states,
-    state_layout,
+    state_layout, forcing_buffer,
     # Flatten error taxonomy (spec §4.7.6.10, 8 types for cross-language parity)
     ConflictingDerivativeError, DimensionPromotionError, UnmappedDomainError,
     UnsupportedMappingError, DomainUnitMismatchError,

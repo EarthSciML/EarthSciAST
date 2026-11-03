@@ -210,7 +210,7 @@ function _pipeline_evaluator(path, providers, t0, compiler)
     merged_const = Dict{String, Any}()
     for (rawk, prov) in providers
         k = String(rawk)
-        merged_const[k] = ESS._provider_const_field(ESS.provider_sample(prov, t0), k)
+        merged_const[k] = ESS.forcing_buffer(ESS.provider_sample(prov, t0), k)
     end
     return EarthSciAST._build_evaluator(
         doc; const_arrays = merged_const,

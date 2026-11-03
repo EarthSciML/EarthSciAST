@@ -268,6 +268,56 @@ _sample_field(sample, var::AbstractString) = throw(
 )
 
 """
+    forcing_buffer(sample, name::AbstractString; shape = nothing) -> Array{Float64}
+    forcing_buffer(sample, slot::ForcingSlot) -> Vector{Float64}
+
+The buffer of the data-fed parameter `name` built from one
+[`provider_sample`](@ref) result: the conversion [`esm_problem`](@ref) applies
+to every provider sample it binds (API_SPEC §5.8, "Forcing sets"). A runtime
+that builds its own [`ForcingSet`](@ref)s from provider samples calls this to
+get, bit for bit, the buffer `esm_problem` builds from the same sample.
+
+`sample` is what `provider_sample` returned: an `AbstractDict` keyed by
+flattened parameter name, from which the `name` entry is taken, or a bare
+`AbstractArray` (a single-variable sample, which is the field itself). The
+result is a fresh dense `Array{Float64}` with the field's dimensions, in the
+order the provider delivered them (a source's file order, the record dimension
+first when two records are delivered), so its linear order is column-major
+over those dimensions: the order a forcing set reads a slot's buffer in.
+
+With `shape` (the parameter's declared shape resolved, as a
+[`ForcingSlot`](@ref) carries it) the field's size must equal it, axis by
+axis, and a 0-d shape takes a field of one value; any other field is a
+`DimensionMismatch`. The `ForcingSlot` method checks against `slot.shape` and
+returns the buffer as a `Vector{Float64}`, ready for [`forcing_set`](@ref) or
+[`replace_forcing`](@ref).
+
+A declared `unit_conversion` (esm-spec §8.5) is NOT applied here: a provider
+from [`providers_from_document`](@ref) applies it when it delivers the sample,
+so the sample is already in the parameter's declared units, and applying it
+again would apply it twice. A sample with no `name` entry is a `RefreshError`.
+"""
+function forcing_buffer(sample, name::AbstractString; shape = nothing)
+    field = _sample_field(sample, String(name))
+    shape === nothing || _check_forcing_shape(field, name, shape)
+    return Array{Float64}(field)
+end
+
+function _check_forcing_shape(field, name::AbstractString, shape::AbstractVector{<:Integer})
+    ok = isempty(shape) ? length(field) == 1 :
+        ndims(field) == length(shape) &&
+        all(size(field, d) == shape[d] for d in eachindex(shape))
+    ok || throw(
+        DimensionMismatch(
+            "forcing_buffer: the sample's '$name' has size $(size(field)); the " *
+                "parameter's declared shape is $(Tuple(shape))" *
+                (isempty(shape) ? ", one value" : "")
+        )
+    )
+    return nothing
+end
+
+"""
     _write_forcing!(buffer::Array{Float64}, var::AbstractString, sample) -> buffer
 
 Write the freshly sampled `var` field (from a [`provider_sample`](@ref) result)
