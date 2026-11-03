@@ -484,7 +484,7 @@ def _expr_to_sympy(
             op, treated identically with no privilege — raise
             :class:`UnreachableSpatialOperatorError` (they must have been
             consumed structurally or rewritten to a stencil before the lambdify
-            path) and ``Pre`` is unsupported. When True (the public
+            path) and ``Pre(x)`` lowers to ``x``. When True (the public
             :func:`to_sympy` contract, used for symbolic analysis such as
             :func:`symbolic_jacobian`), ``D`` becomes a genuine
             :class:`sympy.Derivative`, while every non-core op (the sugar ops and
@@ -715,6 +715,16 @@ def _expr_to_sympy(
                     f"{display} requires exactly 2 arguments, got {len(sympy_args)}"
                 )
             return sympy_fn(sympy_args[0], sympy_args[1])
+        if not structural_ops and expr.op == "Pre":
+            # On a right-hand side `Pre(x)` is `x`: it is the value just before
+            # an event (esm-spec §5.1), and with no event firing that is the
+            # current value. The NumPy interpreter and the Julia and Rust
+            # evaluators read it the same way.
+            if len(sympy_args) != 1:
+                raise SimulationError(
+                    f"Pre operator requires exactly 1 argument, got {len(sympy_args)}"
+                )
+            return sympy_args[0]
         if structural_ops and expr.op == "Pre":
             # Previous value operator - represent as an opaque function
             # (public ``to_sympy`` contract only; the simulation path handles
