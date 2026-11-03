@@ -173,6 +173,9 @@ const _KNOWN_DIAGNOSTIC_CODES = (
     ERROR_CODES.URL_SUBSTITUTION_UNKNOWN_NAME,
     # esm-spec §4.7 mounted `data_sources` merge (resolve.jl).
     ERROR_CODES.DATA_SOURCE_MERGE_CONFLICT,
+    # esm-spec §8.5.1 rule 3 re-checked by `flatten` after `coupling_import`
+    # expansion (flatten.jl).
+    ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
 )
 
 # ---------------------------------------------------------------------------

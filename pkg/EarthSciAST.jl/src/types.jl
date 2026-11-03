@@ -960,6 +960,22 @@ struct DataSourceBinding
 end
 
 """
+    _effective_records_per_sample(binding::DataSourceBinding, source) -> Int
+
+The EFFECTIVE `records_per_sample` of a `data` rule (esm-spec §8.5.1): the
+binding's own `from.records_per_sample`, else the source's
+`temporal.records_per_sample`, else 1. `source` is the `DataSource` the rule
+names, or `nothing`.
+"""
+function _effective_records_per_sample(binding::DataSourceBinding, source)::Int
+    binding.records_per_sample === nothing || return binding.records_per_sample
+    source === nothing && return 1
+    t = source.temporal
+    (t === nothing || t.records_per_sample === nothing) && return 1
+    return t.records_per_sample
+end
+
+"""
     PARAMETER_UPDATE_KINDS
 
 The closed set of `update.kind` values (esm-spec §5.4). `wiener` takes no value
