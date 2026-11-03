@@ -2010,7 +2010,7 @@ function _cg_rowfuse_groups(kernels::AbstractVector{_AccKernel})
     for js in values(byrow)
         length(js) >= 2 || continue
         ord = sort(js; by = j -> first(kernels[j].cells.ranges[1]))
-        ok = all(
+        ok = _allof(
             m -> last(kernels[ord[m - 1]].cells.ranges[1]) <
                 first(kernels[ord[m]].cells.ranges[1]), 2:length(ord)
         )
@@ -2294,9 +2294,9 @@ function _cg_row_fission(ctx::_CGCtx, Ks::Vector{_AccKernel}, parts)
         e isa Expr ? Expr(e.head, Any[canon(a, q) for a in e.args]...) : e
     lazy(e) = e isa Expr && (
         e.head in (:if, :&&, :||, :let, :block) ||
-            any(lazy, e.args)
+            _anyof(lazy, e.args)
     )
-    any(q -> lazy(q.val), parts) && return nothing
+    _anyof(q -> lazy(q.val), parts) && return nothing
     cs = Any[canon(q.val, q) for q in parts]
     # The hole: descend while the members differ in exactly one child.
     function walk(es, at)
@@ -2318,9 +2318,9 @@ function _cg_row_fission(ctx::_CGCtx, Ks::Vector{_AccKernel}, parts)
     path = walk(cs, ())
     (path === nothing || isempty(path)) && return nothing
     sub(e, pth) = isempty(pth) ? e : sub(e.args[pth[1]], pth[2:end])
-    reads_u(e) = e isa Expr && (_cg_is_uread(e) || any(reads_u, e.args))
+    reads_u(e) = e isa Expr && (_cg_is_uread(e) || _anyof(reads_u, e.args))
     holes = Any[sub(q.val, path) for q in parts]
-    all(reads_u, holes) || return nothing
+    _allof(reads_u, holes) || return nothing
     any(h -> h isa Expr && _cg_expr_size(h) >= 4, holes) || return nothing
     iF = _cg_name(ctx, "i")
     oF = _cg_name(ctx, "o")

@@ -140,7 +140,7 @@ function _scatter_static_node(n::_Node)
     k === _NK_LITERAL && return true
     k === _NK_LOOPVAR && return true
     (k === _NK_CONST_GATHER || k === _NK_OP) || return false
-    return all(_scatter_static_node, n.children)
+    return _allof(_scatter_static_node, n.children)
 end
 
 # A key's value as the `Float64` the naive filter compares the output index
@@ -842,7 +842,7 @@ function _scatter_shift_pieces(
         contract_ranges, contract_const, rhs_body::ASTExpr,
         oplus::String, zerobar::Float64
     )
-    all(r -> r isa UnitRange{Int} && !isempty(r), range_iters) || return nothing
+    _allof(r -> r isa UnitRange{Int} && !isempty(r), range_iters) || return nothing
     nd = length(idx_names)
     subs = Dict{String, ASTExpr}()
     live = Dict{Int, Tuple{Int, Int}}()
@@ -920,7 +920,7 @@ function _scatter_shift_pieces(
     for I in Iterators.product(segs...)
         plo = Int[I[d][1] for d in 1:nd]
         phi = Int[I[d][2] for d in 1:nd]
-        alive = all(d -> I[d][3], 1:nd)
+        alive = _allof(d -> I[d][3], 1:nd)
         ranges = Dict{String, Any}(idx_names[d] => Any[plo[d], phi[d]] for d in 1:nd)
         prhs = alive ? live_rhs(copy(ranges)) :
             OpExpr(

@@ -328,7 +328,10 @@ struct _ConstGatherArray
     dims::Vector{Int}       # size(A): each subscript is checked against its own axis
     boundary::Vector{Symbol}  # per-axis policy (`_const_dim_boundary`) for an out-of-range subscript
     name::String            # the array's registry name, for `E_TREEWALK_CONSTARRAY_OOB`
+    _ConstGatherArray(flat, strides, dims, boundary, name) =
+        _new_typed(_ConstGatherArray, flat, strides, dims, boundary, name)
 end
+_def_new_typed(_ConstGatherArray)
 
 # Build-time constructor for a `_NK_CONST_GATHER` node (wall2 Phase B). Flattens `A`
 # column-major into a fresh `Vector{Float64}`, derives its column-major strides from

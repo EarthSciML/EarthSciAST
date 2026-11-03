@@ -36,7 +36,7 @@
 # Does this spine carry an op whose scalar evaluation is lazy?
 _acc_node_has_lazy(n::_Node) =
     (n.kind === _NK_OP && (n.op === :ifelse || n.op === :and || n.op === :or)) ||
-    any(_acc_node_has_lazy, n.children)
+    _anyof(_acc_node_has_lazy, n.children)
 
 # ---- DIRECT CLASS EMISSION (per-cell scalarizer → lane-batched class kernels)
 #
@@ -176,7 +176,7 @@ function _acc_spine_has_lanespec(n::_Node)
         pl = n.payload
         pl isa Tuple && length(pl) >= 2 && _direct_is_lanespec(pl[2]) && return true
     end
-    return any(_acc_spine_has_lanespec, n.children)
+    return _anyof(_acc_spine_has_lanespec, n.children)
 end
 
 # Merged payload for one aligned per-cell `:fn` group under direct emission

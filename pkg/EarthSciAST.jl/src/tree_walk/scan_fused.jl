@@ -114,10 +114,10 @@ function _scan_consumer_node_ok(nd::_Node)
         )
         return false
     end
-    return all(_scan_consumer_node_ok, nd.children)
+    return _allof(_scan_consumer_node_ok, nd.children)
 end
 _scan_node_reads(nd::_Node, ix::Int) =
-    (nd.kind === _NK_ACCESS && nd.idx == ix) || any(c -> _scan_node_reads(c, ix), nd.children)
+    (nd.kind === _NK_ACCESS && nd.idx == ix) || _anyof(c -> _scan_node_reads(c, ix), nd.children)
 
 # The slot extent a state-reading descriptor of a kernel whose cells span
 # `olnext` can read; `nothing` for one that reads no state, `(typemin, typemax)`
@@ -154,7 +154,7 @@ function _scan_kernel_reads(
         _scan_overlaps(_scan_desc_extent(a, olnext), lo, hi) && return true
     end
     # A sub-kernel runs at its parent's `oln`, which its own cells do not give.
-    return any(S -> _scan_kernel_reads(S, lo, hi, 0, nothing), K.subs)
+    return _anyof(S -> _scan_kernel_reads(S, lo, hi, 0, nothing), K.subs)
 end
 
 # The consumer of fold `S` among the state kernels `Ks`, or `nothing`: the one
@@ -227,7 +227,7 @@ function _scan_consumer_plan(
         for S in scans
             length(S.terms) == 1 || continue
             Kt = S.terms[1]
-            (Kt isa _AccKernel && any(k -> k === Kt, kernels)) || continue
+            (Kt isa _AccKernel && _anyof(k -> k === Kt, kernels)) || continue
             sh = _scan_fusable(Kt, S) ? nothing : _colscan_shape(S, Kt)
             c = if sh !== nothing
                 _colscan_consumer(S, Kt, sh, Ks, nst, levels, li)
@@ -240,7 +240,7 @@ function _scan_consumer_plan(
             name = get(owner, S, nothing)
             store = !(
                 name !== nothing && isempty(percell) && isempty(contractions) &&
-                    !any(e -> name in _referenced_var_names(e[2]), scalar_entries) &&
+                    !_anyof(e -> name in _referenced_var_names(e[2]), scalar_entries) &&
                     !any(
                     d -> any(ex -> name in _referenced_var_names(ex), values(d)),
                     defsets

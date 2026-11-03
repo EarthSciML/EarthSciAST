@@ -235,13 +235,13 @@ end
 function _oop_inv_nodes_identical(nodes::Vector{_Node}, Kof, m::Int)
     r = nodes[1]; k = r.kind
     if k === _NK_LITERAL
-        return all(i -> isequal(nodes[i].literal, r.literal), 1:m)
+        return _allof(i -> isequal(nodes[i].literal, r.literal), 1:m)
     elseif k === _NK_PARAM || k === _NK_TIME
         return true
     elseif k === _NK_CACHED
         # An inv recipe may only read other inv slots (same idx across members
         # by the signature); a cell-tier read here would not be lane-invariant.
-        return all(i -> nodes[i].payload === Kof(i).cse.inv_scratch, 1:m)
+        return _allof(i -> nodes[i].payload === Kof(i).cse.inv_scratch, 1:m)
     elseif k === _NK_OP || k === _NK_CONTRACTION
         if k === _NK_OP && r.op === :fn && r.payload isa Tuple
             fn1, spec1 = (r.payload)::Tuple{String, Any}
@@ -362,7 +362,7 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
     m = length(js); Ls = Int[length(plans[j].out_slots) for j in js]; L = sum(Ls)
     rep = kernels[js[1]]
     nsubs = length(rep.subs)
-    @assert all(j -> length(kernels[j].subs) == nsubs, js)
+    @assert _allof(j -> length(kernels[j].subs) == nsubs, js)
     merged_subs = Vector{_AccKernel}(undef, nsubs)
 
     # Merge one aligned tree-family (parent trees or sub-si trees). Kof(i) /
@@ -377,12 +377,12 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
     function merge_trees(Kof, Pof, keep_inv::Bool)
         accvec = _AccDesc[]
         n_inv = length(Kof(1).cse.inv_recipes); n_cell = length(Kof(1).cse.recipes)
-        @assert all(
+        @assert _allof(
             i -> length(Kof(i).cse.inv_recipes) == n_inv &&
                 length(Kof(i).cse.recipes) == n_cell, 1:m
         )
         keep = keep_inv && n_inv > 0 &&
-            all(
+            _allof(
             i2 -> _oop_inv_nodes_identical(
                 _Node[Kof(i).cse.inv_recipes[i2] for i in 1:m], Kof, m
             ),
@@ -954,7 +954,7 @@ function _oop_x_merge_group(kernels, plans, js::Vector{Int})
     m = length(js); Ls = Int[length(plans[j].out_slots) for j in js]; L = sum(Ls)
     rep = kernels[js[1]]
     nsubs = length(rep.subs)
-    @assert all(j -> length(kernels[j].subs) == nsubs, js)
+    @assert _allof(j -> length(kernels[j].subs) == nsubs, js)
     merged_subs = Vector{_AccKernel}(undef, nsubs)
     budget = Ref(2_000_000)              # cloned-node budget (throw ⇒ fallback)
 
@@ -1210,18 +1210,18 @@ _affine_keep_kind(k) =
 # A template sub-kernel is inlined into its parent's nest, so its descriptors
 # count as the parent's.
 _affine_keep_reads(K::_AccKernel) =
-    all(a -> _affine_keep_kind(a.kind), K.acc) && all(_affine_keep_reads, K.subs)
+    _allof(a -> _affine_keep_kind(a.kind), K.acc) && _allof(_affine_keep_reads, K.subs)
 function _affine_keep_has_fn(n::_Node, seen::IdDict{_Node, Nothing})
     haskey(seen, n) && return false
     seen[n] = nothing
     (n.kind === _NK_OP && n.op === :fn) && return true
-    return any(c -> _affine_keep_has_fn(c, seen), n.children)
+    return _anyof(c -> _affine_keep_has_fn(c, seen), n.children)
 end
 function _affine_keep_has_fn(K::_AccKernel, seen = IdDict{_Node, Nothing}())
     _affine_keep_has_fn(K.spine, seen) && return true
-    any(r -> _affine_keep_has_fn(r, seen), K.cse.recipes) && return true
-    any(r -> _affine_keep_has_fn(r, seen), K.cse.inv_recipes) && return true
-    return any(S -> _affine_keep_has_fn(S, seen), K.subs)
+    _anyof(r -> _affine_keep_has_fn(r, seen), K.cse.recipes) && return true
+    _anyof(r -> _affine_keep_has_fn(r, seen), K.cse.inv_recipes) && return true
+    return _anyof(S -> _affine_keep_has_fn(S, seen), K.subs)
 end
 function _affine_box_rank(K::_AccKernel)
     cs = K.cells
@@ -1296,7 +1296,7 @@ function _merge_acc_kernel_classes(
     keep = _scatter_keep_now()
     if keep !== nothing && !isempty(keep)
         extra = Int[j for j in eachindex(kernels) if haskey(keep, kernels[j])]
-        isempty(extra) || (kept = sort!(unique!(vcat(kept, extra))))
+        isempty(extra) || sort!(unique!(append!(kept, extra)))
     end
     if !isempty(kept)
         rest = _AccKernel[kernels[j] for j in eachindex(kernels) if !insorted(j, kept)]

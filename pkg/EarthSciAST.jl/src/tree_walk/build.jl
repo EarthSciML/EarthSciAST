@@ -576,7 +576,7 @@ function _state_time_observeds(
         push!(stack, n)
         d = defs[n]
         st, tm = _def_state_time_refs(d, state_names)
-        r = st || tm || any(m -> m != n && dyn(m, stack), _referenced_var_names(d))
+        r = st || tm || _anyof(m -> m != n && dyn(m, stack), _referenced_var_names(d))
         delete!(stack, n)
         memo[n] = r
         return r
@@ -3701,7 +3701,7 @@ function _const_cadence_mat_obs(
             haskey(const_registry, n)
         push!(visiting, n)
         b = bound_names(def)
-        c = all(r -> r in b || name_const(r), _referenced_var_names(def))
+        c = _allof(r -> r in b || name_const(r), _referenced_var_names(def))
         delete!(visiting, n)
         memo[n] = c
         return c
@@ -6348,7 +6348,7 @@ function _compile_faq_equation!(
         contract_names = _contracted_index_names(rhs_ranges, idx_names)
         for n in contract_names
             rspec = collect(rhs_ranges[n])
-            push!(contract_ranges, rspec)
+            push!(contract_ranges, _as_type(Vector{Any}, rspec))
             push!(
                 contract_const,
                 _is_const_int_range(rspec) ?
@@ -7195,12 +7195,12 @@ function _faq_diagnostic_cell(
         iters = _contract_iters_at(
             contract_names, contract_ranges, idx_env, const_registry, contract_const
         )
-        whole = (iters isa _ContractNest ? length(iters.tuples) : prod(length, iters)) <=
+        whole = (iters isa _ContractNest ? length(iters.tuples) : _dynamic(prod, length, iters)::Int) <=
             _REFUSAL_DIAGNOSTIC_TERMS
         whole || (
             iters = iters isa _ContractNest ?
                 _ContractNest(iters.tuples[1:_REFUSAL_DIAGNOSTIC_TERMS]) :
-                Vector{Int}[unique!([first(c), last(c)]) for c in iters]
+                Vector{Int}[unique!(Int[first(c), last(c)]) for c in iters]
         )
         filt = agg_filter === nothing ? nothing : _sub_preserving(agg_filter, idx_exprs)
         n = 0
