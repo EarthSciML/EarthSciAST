@@ -6975,6 +6975,196 @@
       }
     },
     {
+      "id": "variable_map_data_fed_scalar_feed_onto_shaped_target",
+      "tier": "variable_map_data_fed",
+      "fixture": "conformance/variable_map_data_fed/fixtures/scalar_feed_onto_shaped_target.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "Box.c",
+          "role": "state",
+          "units": "mol/mol",
+          "default": 1.0,
+          "shape": [
+            "x"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Box"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "Met.K",
+          "role": "parameter",
+          "units": "1/s",
+          "default": null,
+          "shape": [
+            "rec",
+            "x"
+          ],
+          "update_kinds": [
+            "data"
+          ],
+          "distribution_kind": null,
+          "source_system": "Met"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [
+        "Met.K"
+      ],
+      "equation_count": 1,
+      "equations": [
+        {
+          "lhs": "sum[i] (D(Box.c[i])/Dt) where {i in x}",
+          "rhs": "sum[i] (-Met.K[1, i] * Box.c[i]) where {i in x}",
+          "source_system": "Box",
+          "contributions": [
+            {
+              "rhs": "sum[i] (-Met.K[1, i] * Box.c[i]) where {i in x}",
+              "origins": [
+                {
+                  "component": "Box"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "Met",
+          "Box"
+        ],
+        "coupling_rules": [
+          "variable_map(Met.K -> Box.F_k, transform=param_to_var)"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [
+        "rec",
+        "x"
+      ],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [
+        {
+          "name": "Met.K",
+          "owner": "Met",
+          "source": "met_source",
+          "file_variable": "K",
+          "cadence": "discrete"
+        }
+      ],
+      "lifted_shapes": {}
+    },
+    {
+      "id": "variable_map_data_fed_source_named_like_owner",
+      "tier": "variable_map_data_fed",
+      "fixture": "conformance/variable_map_data_fed/fixtures/source_named_like_owner.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "Box.c",
+          "role": "state",
+          "units": "mol/mol",
+          "default": 1.0,
+          "shape": [
+            "x"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Box"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "Met.K",
+          "role": "parameter",
+          "units": "1/s",
+          "default": null,
+          "shape": [
+            "rec",
+            "x"
+          ],
+          "update_kinds": [
+            "data"
+          ],
+          "distribution_kind": null,
+          "source_system": "Met"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [
+        "Met.K"
+      ],
+      "equation_count": 1,
+      "equations": [
+        {
+          "lhs": "sum[i] (D(Box.c[i])/Dt) where {i in x}",
+          "rhs": "sum[i] (-Met.K[1, i] * Box.c[i]) where {i in x}",
+          "source_system": "Box",
+          "contributions": [
+            {
+              "rhs": "sum[i] (-Met.K[1, i] * Box.c[i]) where {i in x}",
+              "origins": [
+                {
+                  "component": "Box"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "Met",
+          "Box"
+        ],
+        "coupling_rules": [
+          "variable_map(Met.K -> Box.F_k, transform=param_to_var)"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [
+        "rec",
+        "x"
+      ],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [
+        {
+          "name": "Met.K",
+          "owner": "Met",
+          "source": "Met",
+          "file_variable": "K",
+          "cadence": "discrete"
+        }
+      ],
+      "lifted_shapes": {}
+    },
+    {
       "id": "term_provenance_systems_order_ab",
       "tier": "term_provenance",
       "fixture": "conformance/term_provenance/fixtures/systems_order_ab.esm",

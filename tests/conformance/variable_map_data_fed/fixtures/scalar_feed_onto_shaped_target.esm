@@ -1,0 +1,79 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "variable_map_data_fed_scalar_onto_shaped_target",
+    "description": "A `param_to_var` coupling maps a data-fed parameter onto a shaped parameter of another component. `Met.K` is declared 0-d with a `data` update reading file variable `K` from `met_source`; `Box.F_k` is a plain parameter shaped [rec, x] (two bracketing records by four cells). Flattening removes `Box.F_k` and rewrites every reference to `Met.K` (esm-libraries-spec 4.7.3). The surviving parameter `Met.K` takes the target's shape and keeps its own `data` update, so it stays in `discrete_parameters` and agrees with `loader_fields`. This is the pattern of reseact's GEOSFP.PBLH -> Transport3D.F_PBLH.",
+    "tags": ["variable_map", "param_to_var", "data-source", "shape", "conformance"]
+  },
+  "index_sets": {
+    "rec": { "kind": "interval", "size": 2 },
+    "x": { "kind": "interval", "size": 4 }
+  },
+  "data_sources": {
+    "met_source": {
+      "kind": "grid",
+      "source": { "url_template": "file:///data/met/met_{date:%Y%m%d}.nc" },
+      "temporal": { "frequency": "PT1H", "file_period": "P1D", "records_per_file": 24 }
+    }
+  },
+  "models": {
+    "Met": {
+      "variables": {
+        "K": {
+          "type": "parameter",
+          "units": "1/s",
+          "shape": [],
+          "description": "Data-fed rate field, read from met_source file variable K.",
+          "update": { "kind": "data", "source": "met_source", "from": { "file_variable": "K" } }
+        }
+      },
+      "equations": []
+    },
+    "Box": {
+      "variables": {
+        "c": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "shape": ["x"],
+          "default": 1.0,
+          "description": "Tracer concentration per cell."
+        },
+        "F_k": {
+          "type": "parameter",
+          "units": "1/s",
+          "shape": ["rec", "x"],
+          "default": 0.0,
+          "description": "Rate field, two bracketing records per cell. Coupled from Met.K."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq", "args": [], "output_idx": ["i"],
+            "ranges": { "i": { "from": "x" } },
+            "expr": { "op": "D", "args": [ { "op": "index", "args": ["c", "i"] } ], "wrt": "t" }
+          },
+          "rhs": {
+            "op": "faq", "args": [], "output_idx": ["i"],
+            "ranges": { "i": { "from": "x" } },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    { "op": "index", "args": ["F_k", 1, "i"] },
+                    { "op": "index", "args": ["c", "i"] }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    { "type": "variable_map", "from": "Met.K", "to": "Box.F_k", "transform": "param_to_var" }
+  ]
+}

@@ -1517,7 +1517,10 @@ function _rename_join_clauses(expr::OpExpr, renames::AbstractDict{String, String
 end
 
 # For param_to_var / conversion_factor, remove the target param from the
-# parameter list — it is now driven by `from`.
+# parameter list — it is now driven by `from`. A declared data-fed source keeps
+# its own declaration (`update` included) and, when it declares no shape, takes
+# the removed target's (esm-libraries-spec §4.7.3): the rewritten equations
+# index it the way the target was declared.
 function _promote_variable_map_param!(
         params::OrderedDict{String, ModelVariable},
         entry::CouplingVariableMap
@@ -1525,9 +1528,19 @@ function _promote_variable_map_param!(
     (entry.transform == "param_to_var" || entry.transform == "conversion_factor") ||
         return
     haskey(params, entry.to) || return
+    target = params[entry.to]
     delete!(params, entry.to)
+    source = get(params, entry.from, nothing)
+    if source !== nothing && target.shape !== nothing && !isempty(target.shape) &&
+            (source.shape === nothing || isempty(source.shape)) && _is_data_fed(source)
+        params[entry.from] = _with_shape(source, target.shape)
+    end
     return
 end
+
+# True iff `v` carries a `kind: "data"` update (esm-spec §5.4).
+_is_data_fed(v::ModelVariable) =
+    v.update !== nothing && any(rule -> rule.kind == "data", v.update)
 
 # ========================================
 # Coupling entry descriptions (unchanged from prior implementation)

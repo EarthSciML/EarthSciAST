@@ -2552,6 +2552,13 @@ def _apply_variable_map(
             to_var = comp.parameters.pop(entry.to_var, None)
             if to_var is None:
                 continue
+            # A DECLARED data-fed source parameter survives as itself — its own
+            # units, default and `update` — and, when it declares no shape,
+            # takes the removed target's (esm-libraries-spec §4.7.3). Building a
+            # fresh variable here instead drops the `update`, so the parameter
+            # leaves `discrete_parameters` while `loader_fields` still lists it.
+            if _adopt_target_shape(components, entry.from_var, to_var):
+                continue
             # Carry a grid shape from the (deleted) consumer parameter onto the
             # loader-qualified producer name so the pointwise lift indexes the
             # loaded field per cell. Only when ``from_var`` is a data-loader
@@ -2571,6 +2578,36 @@ def _apply_variable_map(
                     source_system=from_owner,
                     shape=list(to_var.shape),
                 )
+
+
+def _adopt_target_shape(
+    components: OrderedDict[str, _ComponentSystem],
+    from_var: str,
+    target: FlattenedVariable,
+) -> bool:
+    """Give a data-fed source parameter the shape of the target it replaces.
+
+    Returns True when ``from_var`` is a declared parameter of some component,
+    in which case that declaration is the surviving parameter and nothing more
+    is to be built. Only a parameter whose ``update`` is ``kind: "data"`` and
+    which declares no shape of its own takes ``target``'s shape; every other
+    field — ``update`` included — stays the source's (esm-libraries-spec
+    §4.7.3, ``param_to_var``).
+    """
+    for comp in components.values():
+        source = comp.parameters.get(from_var)
+        if source is None:
+            continue
+        if target.shape and not source.shape and _is_data_fed(source):
+            comp.parameters[from_var] = replace(source, shape=list(target.shape))
+        return True
+    return False
+
+
+def _is_data_fed(var: FlattenedVariable) -> bool:
+    """True iff ``var`` carries a ``kind: "data"`` update (esm-spec §5.4)."""
+    updates = var.update if isinstance(var.update, list) else [var.update]
+    return any(getattr(u, "kind", None) == "data" for u in updates if u is not None)
 
 
 def _expr_references_var(expr: Expr, name: str) -> bool:

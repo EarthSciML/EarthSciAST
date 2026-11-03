@@ -181,8 +181,11 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     // a lifted state is given, by size, by a shaped operand, and synthesized,
     // an operator `ic(_var)` that `field_ics` records once per lifted state,
     // and a state that already declares a shape, which the lift leaves alone
-    // (esm-libraries-spec §4.7.1 step 3, §4.7.5).
-    expect(corpus.cases.length).toBe(50)
+    // (esm-libraries-spec §4.7.1 step 3, §4.7.5), plus the two
+    // `variable_map_data_fed` cases — a data-fed parameter mapped by
+    // `param_to_var` onto a shaped target keeps its `update` and takes the
+    // target's shape (esm-libraries-spec §4.7.3).
+    expect(corpus.cases.length).toBe(52)
     // 6 = template_import_lib, couple_multiplicative_no_tendency, the
     // nonterminating rewrite, `coupling_resolution_edge_cases`, whose EDGE
     // CASE 10 maps onto a target the document declares nowhere,

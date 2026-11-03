@@ -1569,7 +1569,12 @@ fn build_symbol_tables(obj: &serde_json::Map<String, Value>) -> SymbolTables {
     if let Some(loaders) = obj.get("data_sources").and_then(|v| v.as_object()) {
         for (name, d) in loaders {
             all_systems.insert(name.clone());
-            per_system.insert(name.clone(), variable_keys(d));
+            // A data source keyed like a model or reaction system must not
+            // replace that system's variables: a data source is not a coupling
+            // endpoint (esm-spec §8), so `Met.K` still names the model's `K`.
+            per_system
+                .entry(name.clone())
+                .or_insert_with(|| variable_keys(d));
         }
     }
 

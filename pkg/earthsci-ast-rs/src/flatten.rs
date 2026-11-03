@@ -2207,13 +2207,28 @@ fn apply_variable_map_removals(
                 VariableMapTransform::Named(name)
                     if matches!(name.as_str(), "param_to_var" | "conversion_factor") =>
                 {
-                    let consumer_shape_rank = parts
+                    let consumer_shape = parts
                         .parameters
                         .get(to)
-                        .and_then(|v| v.shape.as_ref())
-                        .map(|s| s.len())
-                        .filter(|r| *r > 0);
+                        .and_then(|v| v.shape.clone())
+                        .filter(|s| !s.is_empty());
+                    let consumer_shape_rank = consumer_shape.as_ref().map(Vec::len);
                     parts.parameters.shift_remove(to);
+                    // A DECLARED data-fed source parameter survives as itself —
+                    // its own units, default and `update` — and, when it
+                    // declares no shape, takes the removed target's
+                    // (esm-libraries-spec §4.7.3). `source_fed_producers` then
+                    // reads it as a grid-shaped external field for the lift.
+                    if let (Some(shape), Some(source)) =
+                        (consumer_shape, parts.parameters.get_mut(from))
+                        && source.shape.as_ref().is_none_or(Vec::is_empty)
+                        && source
+                            .update
+                            .as_ref()
+                            .is_some_and(crate::data_fed::is_data_fed)
+                    {
+                        source.shape = Some(shape);
+                    }
                     let from_owner = from.split('.').next().unwrap_or("");
                     if let Some(rank) = consumer_shape_rank
                         && loader_names.contains(from_owner)

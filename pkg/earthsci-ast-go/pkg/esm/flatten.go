@@ -2507,6 +2507,15 @@ func applyVariableMap(components map[string]*componentSystem, order []string, en
 		if !ok {
 			continue
 		}
+		// A DECLARED source parameter survives as itself — its own units,
+		// default and `update` — and, when it is data-fed and declares no
+		// shape, takes the removed target's (esm-libraries-spec §4.7.3).
+		// Building a fresh variable below instead drops the `update`, so the
+		// parameter leaves `discrete_parameters` while `loader_fields` still
+		// lists it.
+		if adoptTargetShape(components, order, entry.From, toVar) {
+			continue
+		}
 		fromOwner, _, _ := strings.Cut(entry.From, ".")
 		if len(toVar.Shape) > 0 && loaderNames[fromOwner] && !comp.parameters.has(entry.From) {
 			comp.parameters.set(FlattenedVariable{
@@ -2520,6 +2529,38 @@ func applyVariableMap(components map[string]*componentSystem, order []string, en
 		}
 	}
 	return nil
+}
+
+// adoptTargetShape gives a data-fed source parameter the shape of the
+// `param_to_var` target it replaces. It reports true when from is a declared
+// parameter of some component: that declaration is then the surviving
+// parameter. Only a parameter with a `kind: "data"` update and no declared
+// shape of its own takes the target's shape; every other field, `update`
+// included, stays the source's.
+func adoptTargetShape(components map[string]*componentSystem, order []string, from string, target FlattenedVariable) bool {
+	for _, sysName := range order {
+		comp := components[sysName]
+		source, ok := comp.parameters.m[from]
+		if !ok {
+			continue
+		}
+		if len(target.Shape) > 0 && len(source.Shape) == 0 && isDataFed(source) {
+			source.Shape = append([]string(nil), target.Shape...)
+			comp.parameters.set(source)
+		}
+		return true
+	}
+	return false
+}
+
+// isDataFed reports whether v carries a `kind: "data"` update (esm-spec §5.4).
+func isDataFed(v FlattenedVariable) bool {
+	for _, rule := range v.UpdateRules() {
+		if rule.Kind == UpdateKindData {
+			return true
+		}
+	}
+	return false
 }
 
 // applyVariableMapExpression resolves a `variable_map` whose `transform` is an

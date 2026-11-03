@@ -374,6 +374,21 @@ CASES: list[tuple[str, str, str]] = [
             "lift_skips_shaped_state",
         )
     ],
+    # --- a data-fed parameter mapped onto a shaped target (§4.7.3) ----------
+    # `param_to_var` from a 0-d data-fed `Met.K` onto `Box.F_k[rec, x]`: the
+    # survivor is `Met.K` with the target's shape and its own `data` update, so
+    # `discrete_parameters` and `loader_fields` agree. The second document keys
+    # the data source by the owner's name, which is what tripped a pre-1.0
+    # loader rule into rebuilding the parameter without its update. See
+    # tests/conformance/variable_map_data_fed.
+    *[
+        (
+            "variable_map_data_fed",
+            f"variable_map_data_fed_{name}",
+            f"conformance/variable_map_data_fed/fixtures/{name}.esm",
+        )
+        for name in ("scalar_feed_onto_shaped_target", "source_named_like_owner")
+    ],
     # --- per-term provenance (esm-libraries-spec §4.7.5, issue #539) ---------
     # Every case above records `contributions` too; these isolate one row of the
     # §4.7.5 provenance table each. The chained-compose row is the

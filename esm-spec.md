@@ -5562,7 +5562,7 @@ For `variable_map` coupling entries, `transform` specifies how the source variab
 
 | Transform | Description |
 |---|---|
-| `param_to_var` | Replace a constant parameter with a time-varying variable from another system. Takes no `factor`. |
+| `param_to_var` | Replace a constant parameter with a time-varying variable from another system. Takes no `factor`. The source keeps its own declaration, `update` included; a data-fed source declaring no shape takes the target's (Library Specification §4.7.3). |
 | `identity` | Replacement with no change of type: `target := source`. Takes no `factor`. |
 | `additive` | Scaled replacement: `target := factor · source`. (To *add* a source/sink term to an existing tendency, use a `couple` `additive` equation — §10.3.) |
 | `multiplicative` | Scaled replacement: `target := factor · source`. (To *scale* an existing tendency by a source, use a `couple` `multiplicative` equation — §10.3.) |

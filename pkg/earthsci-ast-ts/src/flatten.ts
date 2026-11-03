@@ -2179,6 +2179,12 @@ function applyVariableMap(
     const target = comp.parameters[toVar]
     if (target === undefined) continue
     delete comp.parameters[toVar]
+    // A DECLARED source parameter survives as itself — its own units, default
+    // and `update` — and, when it is data-fed and declares no shape, takes the
+    // removed target's (esm-libraries-spec §4.7.3). Building a fresh variable
+    // below instead drops the `update`, so the parameter leaves
+    // `discrete_parameters` while `loader_fields` still lists it.
+    if (adoptTargetShape(components, fromVar, target)) continue
     // Carry a grid shape from the (deleted) consumer parameter onto the
     // loader-qualified producer name so the pointwise lift indexes the loaded
     // field per cell. Only when `from` is a data-source-fed field (which guards
@@ -2201,6 +2207,41 @@ function applyVariableMap(
       comp.parameters[fromVar] = promoted
     }
   }
+}
+
+/**
+ * Give a data-fed source parameter the shape of the `param_to_var` target it
+ * replaces. Returns true when `fromVar` is a declared parameter of some
+ * component: that declaration is then the surviving parameter. Only a parameter
+ * with a `kind: "data"` update and no declared shape of its own takes the
+ * target's shape; every other field, `update` included, stays the source's.
+ */
+function adoptTargetShape(
+  components: Record<string, ComponentSystem>,
+  fromVar: string,
+  target: FlattenedVariable,
+): boolean {
+  for (const comp of Object.values(components)) {
+    const source = comp.parameters[fromVar]
+    if (source === undefined) continue
+    if (
+      target.shape !== undefined &&
+      target.shape.length > 0 &&
+      (source.shape === undefined || source.shape.length === 0) &&
+      isDataFed(source)
+    ) {
+      comp.parameters[fromVar] = { ...source, shape: [...target.shape] }
+    }
+    return true
+  }
+  return false
+}
+
+/** True iff `v` carries a `kind: "data"` update (esm-spec §5.4). */
+function isDataFed(v: FlattenedVariable): boolean {
+  if (v.update === undefined) return false
+  const rules = Array.isArray(v.update) ? v.update : [v.update]
+  return rules.some((u) => (u as { kind?: string } | undefined)?.kind === 'data')
 }
 
 // ---------------------------------------------------------------------------
