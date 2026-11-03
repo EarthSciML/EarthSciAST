@@ -28,6 +28,7 @@ GeoInterface = "cf35fbd7-0cd7-5166-be24-54bfbe79505f"
 GeometryOps = "3251bfac-6a57-4b6d-aa61-ac1fef2975ab"
 ModelingToolkit = "961ee093-0014-501f-94e3-6117800e7a78"
 ModelingToolkitBase = "7771a370-6774-4173-bd38-47e70ca0b839"
+OrdinaryDiffEqTsit5 = "b1df2697-797e-41e3-8120-5422d3b24e4a"
 Reactant = "3c362404-f566-11ee-1572-e11a4b42c853"
 SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
 SortTileRecursiveTree = "746ee33f-1797-42c2-866d-db2fce69d14d"
@@ -44,6 +45,7 @@ EarthSciASTGeometryOpsExt = ["GeometryOps", "GeoInterface", "SortTileRecursiveTr
 EarthSciASTMTKExt = ["DomainSets", "ModelingToolkit", "Symbolics"]
 EarthSciASTReactantExt = "Reactant"
 EarthSciASTSimulateExt = "SciMLBase"
+EarthSciASTSolverWorkloadExt = ["OrdinaryDiffEqTsit5", "SciMLBase"]
 
 [compat]
 BenchmarkTools = "1"
