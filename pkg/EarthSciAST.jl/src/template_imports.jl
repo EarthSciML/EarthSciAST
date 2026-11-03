@@ -933,7 +933,7 @@ combinator would only ever handle arrays.
 # (esm-spec §4.9.5)? `on` occurs in exactly one place in the schema, a `join`
 # clause, and its shape is unambiguous, so the key plus this test is a sound
 # positional guard.
-_is_join_on_pairs(v) = _is_array(v) && all(p -> _is_array(p) && length(p) == 2, v)
+_is_join_on_pairs(v) = _is_array(v) && _allof(p -> _is_array(p) && length(p) == 2, v)
 
 """
     _rename_join_on(v, isetmap, fallback)

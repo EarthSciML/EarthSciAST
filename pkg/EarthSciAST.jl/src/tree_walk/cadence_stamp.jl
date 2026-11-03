@@ -58,7 +58,7 @@ end
 
 _pstamp_comparable(x, n::Base.RefValue{Int}) = isbits(x)
 _pstamp_comparable(x::Union{Tuple, NamedTuple}, n::Base.RefValue{Int}) =
-    all(y -> _pstamp_comparable(y, n), values(x))
+    _allof(y -> _pstamp_comparable(y, n), values(x))
 function _pstamp_comparable(x::AbstractArray, n::Base.RefValue{Int})
     n[] += length(x)
     n[] <= _PSTAMP_MAX_ELEMS || return false

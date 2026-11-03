@@ -454,7 +454,7 @@ function _affine_idx_expr(e::ASTExpr, idxset)::Bool
             o.filter === nothing && o.key === nothing && o.values === nothing
     ) || return false
     if o.op == "+" || o.op == "-"
-        return all(a -> _affine_idx_expr(a, idxset), o.args)
+        return _allof(a -> _affine_idx_expr(a, idxset), o.args)
     elseif o.op == "neg"
         return length(o.args) == 1 && _affine_idx_expr(o.args[1], idxset)
     elseif o.op == "*"
@@ -473,7 +473,7 @@ function _const_idx_expr(e::ASTExpr, idxset)::Bool
     e isa NumExpr && return true
     e isa VarExpr && return !((e::VarExpr).name in idxset)
     e isa OpExpr || return false
-    return all(a -> _const_idx_expr(a, idxset), (e::OpExpr).args)
+    return _allof(a -> _const_idx_expr(a, idxset), (e::OpExpr).args)
 end
 
 # Classify (and cache) one branch's lane subscripts: `true` for an argument that

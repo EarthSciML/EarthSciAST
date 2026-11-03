@@ -349,7 +349,7 @@ function _collect_schema_keyword!(errors::Vector{SchemaError}, x, schema, k::Str
 
     elseif k == "oneOf"
         if v isa AbstractVector
-            nmatch = count(sub -> _schema_matches(x, sub), v)
+            nmatch = count(_schema_matches(x, sub) for sub in v)
             if nmatch != 1
                 _push_schema_error!(errors, path, "oneOf")
                 # ZERO matches ⇒ every branch failed, so descend them all for the

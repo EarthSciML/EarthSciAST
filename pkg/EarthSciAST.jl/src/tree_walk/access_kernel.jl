@@ -155,7 +155,8 @@ const _AK_NO_CONN = Int[]
 # A box-addressed descriptor's per-dim strides, any rank: the first three go to
 # s1..s3 (zero-padded) and the rest to `sx`.
 @inline _box_s(s::AbstractVector{Int}, d::Int) = d <= length(s) ? s[d] : 0
-_box_sx(s::AbstractVector{Int}) = length(s) > 3 ? Vector{Int}(s[4:end]) : _AK_NO_CONN
+_box_sx(s::AbstractVector{Int}) =
+    length(s) > 3 ? _as_type(Vector{Int}, _dynamic(getindex, s, 4:length(s))) : _AK_NO_CONN
 
 # Named constructors — the descriptor call sites (stencil_affine.jl, tests) use
 # these and are unchanged by the tagged-struct storage.

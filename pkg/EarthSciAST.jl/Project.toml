@@ -28,6 +28,7 @@ GeoInterface = "cf35fbd7-0cd7-5166-be24-54bfbe79505f"
 GeometryOps = "3251bfac-6a57-4b6d-aa61-ac1fef2975ab"
 ModelingToolkit = "961ee093-0014-501f-94e3-6117800e7a78"
 ModelingToolkitBase = "7771a370-6774-4173-bd38-47e70ca0b839"
+OrdinaryDiffEqTsit5 = "b1df2697-797e-41e3-8120-5422d3b24e4a"
 Reactant = "3c362404-f566-11ee-1572-e11a4b42c853"
 SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
 SortTileRecursiveTree = "746ee33f-1797-42c2-866d-db2fce69d14d"
@@ -44,6 +45,7 @@ EarthSciASTGeometryOpsExt = ["GeometryOps", "GeoInterface", "SortTileRecursiveTr
 EarthSciASTMTKExt = ["DomainSets", "ModelingToolkit", "Symbolics"]
 EarthSciASTReactantExt = "Reactant"
 EarthSciASTSimulateExt = "SciMLBase"
+EarthSciASTSolverWorkloadExt = ["OrdinaryDiffEqTsit5", "SciMLBase"]
 
 [compat]
 BenchmarkTools = "1"
@@ -104,6 +106,7 @@ Blosc = "0.7"
 EarthSciIO = "0.1.4, 0.2"
 JSON = "1"
 SHA = "0.7, 1"
+SnoopCompileCore = "3"
 ZipFile = "0.10"
 
 # Track EarthSciIO (unregistered) from GitHub for the extension tests WITHOUT
@@ -120,6 +123,7 @@ EarthSciIO = "180e2c70-dda6-501b-9997-3c819c50e0c3"
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
 SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
+SnoopCompileCore = "e2b509da-e806-4183-be48-004708413034"
 ZipFile = "a5390f91-8eb1-5f08-bee0-b1d1ffed6cea"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 Catalyst = "479239e8-5488-4da2-87a7-35f2df7eef83"
@@ -143,4 +147,4 @@ SymbolicUtils = "d1185830-fcd6-423d-90d6-eec64667417b"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test", "Logging", "BenchmarkTools", "ComponentArrays", "ForwardDiff", "DiffEqCallbacks", "DomainSets", "Extents", "GeoInterface", "GeometryOps", "ModelingToolkit", "Catalyst", "OrdinaryDiffEqNonlinearSolve", "OrdinaryDiffEqRosenbrock", "OrdinaryDiffEqTsit5", "Pkg", "Random", "Reactant", "SciMLBase", "SortTileRecursiveTree", "Symbolics", "SymbolicUtils", "EarthSciIO", "Blosc", "JSON", "SHA", "ZipFile"]
+test = ["Test", "Logging", "BenchmarkTools", "ComponentArrays", "ForwardDiff", "DiffEqCallbacks", "DomainSets", "Extents", "GeoInterface", "GeometryOps", "ModelingToolkit", "Catalyst", "OrdinaryDiffEqNonlinearSolve", "OrdinaryDiffEqRosenbrock", "OrdinaryDiffEqTsit5", "Pkg", "Random", "Reactant", "SciMLBase", "SortTileRecursiveTree", "Symbolics", "SymbolicUtils", "EarthSciIO", "Blosc", "JSON", "SHA", "SnoopCompileCore", "ZipFile"]
