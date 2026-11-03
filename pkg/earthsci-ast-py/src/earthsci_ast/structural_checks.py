@@ -2289,6 +2289,20 @@ def _declared_variable(data: dict[str, Any], scoped: Any) -> dict[str, Any] | No
     return var if isinstance(var, dict) else None
 
 
+def _has_unmounted_refs(data: dict[str, Any]) -> bool:
+    """True when a model or a subsystem at any depth is still a ``{"ref"}``
+    mount edge, as it is when structural validation runs ahead of mounting."""
+
+    def pending(comp: Any) -> bool:
+        if not isinstance(comp, dict):
+            return False
+        if "ref" in comp:
+            return True
+        return any(pending(sub) for sub in (comp.get("subsystems") or {}).values())
+
+    return any(pending(m) for m in (data.get("models") or {}).values())
+
+
 def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
     """``records_per_sample_invalid`` (esm-spec §8.5.1): ``from.records_per_sample``
     on a rule that is not ``data``; or an effective value of 2 on a parameter
@@ -2302,7 +2316,9 @@ def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
     decidable and is skipped, never read as empty. An empty record shape is
     refused here only when nothing can supply one later: no inline
     ``param_to_var`` entry names the parameter and the coupling holds no
-    ``coupling_import``. ``flatten`` re-checks the rest after expansion."""
+    ``coupling_import``. While a ref is unmounted, a record shape whose first
+    dimension names an index set the document does not declare is not
+    decidable either. ``flatten`` re-checks the rest after expansion."""
     sources = data.get("data_sources") or {}
     if not isinstance(sources, dict):
         sources = {}
@@ -2323,12 +2339,22 @@ def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
         ):
             p2v_targets.setdefault(entry["from"], []).append(entry.get("to"))
 
+    # A mounted file may declare index sets of its own, which reach the
+    # document only when the mount resolves. Until then a first dimension
+    # naming a set the root does not declare is not decidable.
+    refs_pending = _has_unmounted_refs(data)
+
+    def fails(shape: list[Any]) -> bool:
+        if refs_pending and shape and shape[0] not in index_sets:
+            return False
+        return not record_shape_holds_a_pair(index_sets, shape)
+
     def failing_record_shape(vdef: dict[str, Any], scoped: str) -> list[Any] | None:
         """The first record shape that cannot carry two records, or None when
         every shape validation can decide holds a pair."""
         shape = vdef.get("shape") or []
         if shape:
-            return None if record_shape_holds_a_pair(index_sets, shape) else list(shape)
+            return list(shape) if fails(shape) else None
         targets = p2v_targets.get(scoped, [])
         if not targets:
             return None if has_coupling_import else []
@@ -2337,7 +2363,7 @@ def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
             if target is None:
                 continue
             tshape = target.get("shape") or []
-            if not record_shape_holds_a_pair(index_sets, tshape):
+            if fails(tshape):
                 return list(tshape)
         return None
 

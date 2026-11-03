@@ -104,3 +104,114 @@ def test_refused_case_is_refused_by_validation_or_flatten(case):
         flatten(doc)
     assert err.value.code == case["code"]
     assert err.value.pointer == case["pointer"]
+
+
+def _write_index_sets_from_mount(tmp_path, f_k_shape, mount=True):
+    """A root whose param_to_var target is inline but whose index sets
+    ``rec`` and ``x`` are declared only by a component mounted by ref."""
+    component = {
+        "esm": "1.3.0",
+        "metadata": {"name": "Grid"},
+        "index_sets": {
+            "rec": {"kind": "interval", "size": 2},
+            "x": {"kind": "interval", "size": 4},
+        },
+        "models": {
+            "Grid": {
+                "variables": {"g": {"type": "unknown", "units": "1", "default": 1.0}},
+                "equations": [
+                    {
+                        "lhs": {"op": "D", "args": ["g"], "wrt": "t"},
+                        "rhs": {"op": "-", "args": ["g"]},
+                    }
+                ],
+            }
+        },
+    }
+    root = {
+        "esm": "1.3.0",
+        "metadata": {"name": "IndexSetsFromMount"},
+        "data_sources": {
+            "met_source": {
+                "kind": "grid",
+                "source": {"url_template": "file:///data/met/met_{date:%Y%m%d}.nc"},
+                "temporal": {
+                    "start": "2024-05-01T00:00:00Z",
+                    "frequency": "PT1H",
+                    "file_period": "P1D",
+                    "records_per_file": 24,
+                },
+            }
+        },
+        "models": {
+            "Met": {
+                "variables": {
+                    "K": {
+                        "type": "parameter",
+                        "units": "1/s",
+                        "shape": [],
+                        "default": 0.1,
+                        "update": {
+                            "kind": "data",
+                            "source": "met_source",
+                            "from": {"file_variable": "K", "records_per_sample": 2},
+                        },
+                    }
+                },
+                "equations": [],
+            },
+            "Box": {
+                "variables": {
+                    "c": {"type": "unknown", "units": "1", "default": 1.0},
+                    "F_k": {
+                        "type": "parameter",
+                        "units": "1/s",
+                        "shape": f_k_shape,
+                        "default": 0.1,
+                    },
+                },
+                "equations": [
+                    {
+                        "lhs": {"op": "D", "args": ["c"], "wrt": "t"},
+                        "rhs": {
+                            "op": "*",
+                            "args": [
+                                {"op": "-", "args": [{"op": "index", "args": ["F_k", 1, 1]}]},
+                                "c",
+                            ],
+                        },
+                    }
+                ],
+            },
+        },
+        "coupling": [
+            {"type": "variable_map", "from": "Met.K", "to": "Box.F_k", "transform": "param_to_var"}
+        ],
+    }
+    if mount:
+        (tmp_path / "grid.esm").write_text(json.dumps(component))
+        root["models"]["Grid"] = {"ref": "./grid.esm"}
+    else:
+        root["index_sets"] = {"x": {"kind": "interval", "size": 4}}
+    path = tmp_path / "root.esm"
+    path.write_text(json.dumps(root))
+    return str(path)
+
+
+def test_index_set_declared_only_by_a_mount_is_valid(tmp_path):
+    flat = flatten(load_path(_write_index_sets_from_mount(tmp_path, ["rec", "x"])))
+    assert {lf.name: lf.records_per_sample for lf in flat.loader_fields} == {"Met.K": 2}
+
+
+def test_index_set_declared_only_by_a_mount_is_refused_at_flatten(tmp_path):
+    doc = load_path(_write_index_sets_from_mount(tmp_path, ["x", "rec"]))
+    with pytest.raises(RecordsPerSampleInvalidError) as err:
+        flatten(doc)
+    assert err.value.pointer == "/models/Met/variables/K/update"
+
+
+def test_undeclared_index_set_without_a_mount_is_refused_at_validation(tmp_path):
+    with pytest.raises(StructuralValidationError) as err:
+        load_path(_write_index_sets_from_mount(tmp_path, ["rec", "x"], mount=False))
+    records = [r for r in err.value.records if r["code"] == "records_per_sample_invalid"]
+    assert [r["path"] for r in records] == ["/models/Met/variables/K/update"]

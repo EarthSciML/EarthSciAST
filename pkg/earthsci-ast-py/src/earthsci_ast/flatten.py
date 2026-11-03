@@ -3428,16 +3428,16 @@ def flatten(esm_file: EsmFile, base_path: str = ".", load_ref=None) -> Flattened
 
 
 def _check_records_per_sample_shapes(esm_file: EsmFile, coupling_entries: list[Any]) -> None:
-    """Refuse a data-fed parameter whose effective ``records_per_sample`` is 2,
-    whose own ``shape`` is empty, and one of whose record shapes cannot carry
-    two records (esm-spec §8.5.1 rule 3), with every ``coupling_import``
-    expanded and every ref mounted.
+    """Refuse a data-fed parameter whose effective ``records_per_sample`` is 2
+    and one of whose record shapes cannot carry two records (esm-spec §8.5.1
+    rule 3), with every ``coupling_import`` expanded and every ref mounted, so
+    with the index sets of mounted files in view.
 
-    The record shapes are the declared shapes of the ``param_to_var`` targets
-    of the EXPANDED coupling sequence; with none, the record shape is empty and
-    refused. A parameter that declares its own shape was decided at
-    validation. A target that names no declaration is the coupling walk's to
-    report (:class:`VariableMapUnresolvedEndpointError`), not this check's.
+    The record shape is the parameter's own ``shape`` when not empty; else the
+    declared shapes of the ``param_to_var`` targets of the EXPANDED coupling
+    sequence; with none, the record shape is empty and refused. A target that
+    names no declaration is the coupling walk's to report
+    (:class:`VariableMapUnresolvedEndpointError`), not this check's.
     """
     targets: dict[str, list[str]] = {}
     for entry in coupling_entries:
@@ -3465,7 +3465,7 @@ def _check_records_per_sample_shapes(esm_file: EsmFile, coupling_entries: list[A
 
     def walk(model: Model, scope: str, pointer: str) -> None:
         for vname, var in model.variables.items():
-            if var.update is None or var.shape:
+            if var.update is None:
                 continue
             rules = (
                 [(f"/{i}", r) for i, r in enumerate(var.update)]
@@ -3480,10 +3480,13 @@ def _check_records_per_sample_shapes(esm_file: EsmFile, coupling_entries: list[A
                     continue  # validation reports both
                 if effective_records_per_sample(rule.from_source, source) != 2:
                     continue
-                shapes = [declared_shape(to) for to in targets.get(f"{scope}.{vname}", [])]
-                decided = [shape for shape in shapes if shape is not None]
-                if not shapes:
-                    decided = [[]]
+                if var.shape:
+                    decided = [list(var.shape)]
+                else:
+                    shapes = [declared_shape(to) for to in targets.get(f"{scope}.{vname}", [])]
+                    decided = [shape for shape in shapes if shape is not None]
+                    if not shapes:
+                        decided = [[]]
                 for shape in decided:
                     if not record_shape_holds_a_pair(index_sets, shape):
                         raise RecordsPerSampleInvalidError(
