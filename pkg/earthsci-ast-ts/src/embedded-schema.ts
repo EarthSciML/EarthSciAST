@@ -1735,6 +1735,14 @@ export const schema: AnySchemaObject = {
         "select": {
           "$ref": "#/$defs/DataSourceSelect"
         },
+        "records_per_sample": {
+          "type": "integer",
+          "enum": [
+            1,
+            2
+          ],
+          "description": "How many records of the source this parameter receives per query time (esm-spec §8.5.1). Overrides the source's `temporal.records_per_sample` for this parameter only; absent: the source's value, else 1. 1: the record at or before the query time. 2: that record and its successor, stacked along the parameter's FIRST declared dimension, which must have exactly two members; the source does not interpolate, the model blends the two. Valid only on a `data` rule, and 2 only for a source with a `temporal` block (`records_per_sample_invalid`)."
+        },
         "description": {
           "type": "string"
         },
@@ -3405,7 +3413,7 @@ export const schema: AnySchemaObject = {
             1,
             2
           ],
-          "description": "How many time records the source returns per query time — pure I/O; the source does NOT interpolate. Absent or 1 (default): the single at-or-before record, time axis dropped (piecewise-constant between ticks). 2: the two records bracketing the current time (floor + successor), returned with the time axis kept at length 2 so a downstream model can interpolate in time (e.g. linearly). Only 1 and 2 are supported; higher-order temporal stencils are future work. Contrast records_per_file (records IN one file)."
+          "description": "How many time records the source returns per query time — pure I/O; the source does NOT interpolate. The source-wide default of each consuming parameter's `from.records_per_sample`, which overrides it (esm-spec §8.3, §8.5.1). Absent or 1 (default): the single at-or-before record, time axis dropped (piecewise-constant between ticks). 2: the two records bracketing the current time (floor + successor), stacked along the consuming parameter's FIRST declared dimension, which must have exactly two members, so a downstream model can interpolate in time (e.g. linearly). Only 1 and 2 are supported; higher-order temporal stencils are future work. Contrast records_per_file (records IN one file)."
         }
       }
     },
@@ -3677,7 +3685,7 @@ export const schema: AnySchemaObject = {
         },
         "metadata": {
           "type": "object",
-          "description": "Free-form metadata about the data source. The \"tags\" field (array of strings) is conventional for expressing scientific role (e.g. \"emissions\", \"reanalysis\") and is not schema-validated.",
+          "description": "Free-form metadata about the data source. Two keys are conventional: \"tags\" (array of strings) expresses scientific role (e.g. \"emissions\", \"reanalysis\"); \"esio_format\" names the format reader that decodes the source's files, as EarthSciIO's format registry spells it (\"netcdf\", \"zarr\", \"ff10\", …; esm-spec §8.1.1). Neither changes the document; a runtime building providers from the document reads \"esio_format\".",
           "additionalProperties": true,
           "properties": {
             "tags": {
@@ -3685,6 +3693,11 @@ export const schema: AnySchemaObject = {
               "items": {
                 "type": "string"
               }
+            },
+            "esio_format": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The EarthSciIO format-registry name of the reader for this source's files (\"netcdf\", \"zarr\", \"ff10\", \"csv\", …; esm-spec §8.1.1). Optional; read by document-driven provider construction, nowhere else."
             }
           }
         }

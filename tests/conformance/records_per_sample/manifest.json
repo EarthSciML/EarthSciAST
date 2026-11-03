@@ -1,0 +1,140 @@
+{
+  "category": "records_per_sample",
+  "version": "1.0",
+  "description": "Cross-binding conformance for a data-fed parameter's `from.records_per_sample` (esm-spec \u00a78.5.1) and the source default `temporal.records_per_sample` (\u00a78.3). The valid fixture pins, for every data-fed parameter, (a) the EFFECTIVE value each binding's `loader_fields` entry reports (the parameter's own value, else the source's, else 1) and (b) that `flatten` carries `update.from.records_per_sample` exactly as written (`null` means absent). Each invalid fixture is schema-valid and must be refused by structural validation with `records_per_sample_invalid` at the parameter's `/update` pointer. `metadata.esio_format` is carried on every source and changes nothing.",
+  "bindings": [
+    "julia",
+    "python",
+    "rust",
+    "typescript",
+    "go"
+  ],
+  "cases": [
+    {
+      "id": "records_per_sample",
+      "path": "fixtures/records_per_sample.esm",
+      "expect": "valid",
+      "loader_fields": [
+        {
+          "name": "Box.F_pair",
+          "source": "Met",
+          "file_variable": "PBLH",
+          "cadence": "discrete",
+          "records_per_sample": 2
+        },
+        {
+          "name": "Box.F_one",
+          "source": "Met",
+          "file_variable": "T2M",
+          "cadence": "discrete",
+          "records_per_sample": 1
+        },
+        {
+          "name": "Box.F_cat",
+          "source": "Met",
+          "file_variable": "U10M",
+          "cadence": "discrete",
+          "records_per_sample": 2
+        },
+        {
+          "name": "Box.F_inherit",
+          "source": "MetPair",
+          "file_variable": "V10M",
+          "cadence": "discrete",
+          "records_per_sample": 2
+        },
+        {
+          "name": "Box.F_override",
+          "source": "MetPair",
+          "file_variable": "QV2M",
+          "cadence": "discrete",
+          "records_per_sample": 1
+        },
+        {
+          "name": "Box.K_static",
+          "source": "Static",
+          "file_variable": "FRLAND",
+          "cadence": "const",
+          "records_per_sample": 1
+        }
+      ],
+      "flattened_from_records_per_sample": {
+        "Box.F_pair": 2,
+        "Box.F_one": null,
+        "Box.F_cat": 2,
+        "Box.F_inherit": null,
+        "Box.F_override": 1,
+        "Box.K_static": 1
+      }
+    },
+    {
+      "id": "records_per_sample_param_to_var",
+      "path": "fixtures/records_per_sample_param_to_var.esm",
+      "expect": "valid",
+      "loader_fields": [
+        {
+          "name": "Met.K",
+          "source": "met_source",
+          "file_variable": "K",
+          "cadence": "discrete",
+          "records_per_sample": 2
+        }
+      ],
+      "note": "Checks validation and `loader_fields` only. Whether flatten keeps `Met.K`'s `update` through the `param_to_var` (and with it `from.records_per_sample`) is the variable_map_data_fed tier's to pin, not this one's."
+    },
+    {
+      "id": "pair_from_static_source",
+      "path": "fixtures/pair_from_static_source.esm",
+      "expect": "invalid",
+      "code": "records_per_sample_invalid",
+      "pointer": "/models/Box/variables/F/update",
+      "variable": "F",
+      "cause": "static source"
+    },
+    {
+      "id": "pair_without_record_axis",
+      "path": "fixtures/pair_without_record_axis.esm",
+      "expect": "invalid",
+      "code": "records_per_sample_invalid",
+      "pointer": "/models/Box/variables/F/update",
+      "variable": "F",
+      "cause": "first dimension of size 3"
+    },
+    {
+      "id": "pair_scalar",
+      "path": "fixtures/pair_scalar.esm",
+      "expect": "invalid",
+      "code": "records_per_sample_invalid",
+      "pointer": "/models/Box/variables/F/update",
+      "variable": "F",
+      "cause": "scalar"
+    },
+    {
+      "id": "pair_inherited_without_record_axis",
+      "path": "fixtures/pair_inherited_without_record_axis.esm",
+      "expect": "invalid",
+      "code": "records_per_sample_invalid",
+      "pointer": "/models/Box/variables/F/update",
+      "variable": "F",
+      "cause": "inherited 2, first dimension of size 3"
+    },
+    {
+      "id": "records_on_non_data_rule",
+      "path": "fixtures/records_on_non_data_rule.esm",
+      "expect": "invalid",
+      "code": "records_per_sample_invalid",
+      "pointer": "/models/Box/variables/G/update",
+      "variable": "G",
+      "cause": "non-data rule"
+    },
+    {
+      "id": "pair_param_to_var_without_record_axis",
+      "path": "fixtures/pair_param_to_var_without_record_axis.esm",
+      "expect": "invalid",
+      "code": "records_per_sample_invalid",
+      "pointer": "/models/Met/variables/K/update",
+      "variable": "K",
+      "cause": "param_to_var target whose first dimension has 4 members"
+    }
+  ]
+}
