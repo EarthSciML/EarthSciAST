@@ -51,12 +51,7 @@ with `sample_time` when a case gives one.
 4. The Problem's own right-hand side (Julia `prob.f!`; Rust
    `debug_eval_rhs_into` on the Problem's compiled model with a taped scratch)
    at its initial state, its parameters and `t = tspan[0]` equals `du_default`
-   bitwise. A binding a case lists in `problem_du_broken` is known to fail this
-   check and records it as broken (Julia `@test_broken`), so a fix shows up as
-   an unexpected pass. Today that is Julia on the discrete cases: its `prob.f!`
-   reads the 0-d `Fed.s` from `prob.p`, which holds the declared default,
-   rather than from the discrete provider's live buffer, though
-   `default_forcing_set` holds the sample.
+   bitwise.
 
 ## Cases
 
@@ -64,5 +59,7 @@ with `sample_time` when a case gives one.
 |---|---|
 | `no_providers` | the control: each declared default is the value |
 | `const_qualified_keys` | const providers keyed by the qualified names `Fed.E`, `Fed.s` on a document with one model |
+| `const_bare_keys` | the same const providers keyed by the bare names `E`, `s` |
 | `discrete_at_tspan_start` | discrete providers are sampled at construction, at `sample_time`, which defaults to `tspan[0]` |
 | `discrete_at_sample_time` | the same providers sampled at an explicit `sample_time = 0.25` |
+| `discrete_bare_keys` | the discrete providers of `discrete_at_tspan_start` keyed by the bare names `E`, `s` |
