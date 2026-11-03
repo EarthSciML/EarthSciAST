@@ -845,6 +845,24 @@ pub struct LoaderField {
     /// integration) or `"discrete"` (time-varying — refreshed at its cadence).
     /// The source-seeded cadence refinement of CONFORMANCE_SPEC §5.7.2.
     pub cadence: String,
+    /// The EFFECTIVE number of records the parameter receives per query time,
+    /// 1 or 2 (esm-spec §8.5.1): the binding's `from.records_per_sample`, else
+    /// the source's `temporal.records_per_sample`, else 1. With 2 the field
+    /// holds the record at or before the query time and its successor,
+    /// stacked along the parameter's first dimension.
+    pub records_per_sample: u8,
+}
+
+/// The EFFECTIVE `records_per_sample` of a `data` rule (esm-spec §8.5.1): the
+/// binding's own value, else the source's `temporal.records_per_sample`, else 1.
+pub(crate) fn effective_records_per_sample(
+    binding: &crate::types::DataSourceBinding,
+    source: Option<&crate::types::DataSource>,
+) -> u8 {
+    binding
+        .records_per_sample
+        .or_else(|| source.and_then(|s| s.temporal.as_ref()?.records_per_sample))
+        .unwrap_or(1)
 }
 
 // ============================================================================
@@ -1711,11 +1729,8 @@ fn collect_loader_fields(
             let Some(binding) = rule.value().and_then(|v| v.from.as_ref()) else {
                 continue;
             };
-            let has_temporal = file
-                .data_sources
-                .as_ref()
-                .and_then(|ds| ds.get(source))
-                .is_some_and(|ds| ds.temporal.is_some());
+            let declared = file.data_sources.as_ref().and_then(|ds| ds.get(source));
+            let has_temporal = declared.is_some_and(|ds| ds.temporal.is_some());
             out.push(LoaderField {
                 name: name.clone(),
                 owner: name
@@ -1725,6 +1740,7 @@ fn collect_loader_fields(
                 source: source.to_string(),
                 file_variable: binding.file_variable.clone(),
                 cadence: if has_temporal { "discrete" } else { "const" }.to_string(),
+                records_per_sample: effective_records_per_sample(binding, declared),
             });
             break; // one parameter is fed by one source
         }

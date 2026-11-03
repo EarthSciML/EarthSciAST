@@ -942,6 +942,164 @@ pub(crate) fn validate_data_source_references(
     }
 }
 
+/// Is index set `name` an `interval` of size 2 or a `categorical` of two
+/// members (esm-spec §8.5.1 rule 3)? A `derived` or `ragged` set has no size
+/// known at load.
+fn index_set_has_two_members(esm_file: &EsmFile, name: &str) -> bool {
+    let Some(set) = esm_file.index_sets.as_ref().and_then(|s| s.get(name)) else {
+        return false;
+    };
+    match set.kind.as_str() {
+        "interval" => set.size == Some(2),
+        "categorical" => set.members.as_ref().is_some_and(|m| m.len() == 2),
+        _ => false,
+    }
+}
+
+/// The declared `shape` of the variable a scoped name `Model[.Sub…].var`
+/// names, or `None` when it names none.
+fn declared_shape(esm_file: &EsmFile, scoped: &str) -> Option<Vec<String>> {
+    let mut parts: Vec<&str> = scoped.split('.').collect();
+    let var = parts.pop()?;
+    let (first, rest) = parts.split_first()?;
+    let mut model = esm_file.models.as_ref()?.get(*first)?.clone();
+    for seg in rest {
+        let sub = model.subsystems.as_ref()?.get(*seg)?.clone();
+        model = serde_json::from_value(sub).ok()?;
+    }
+    model.variables.get(var)?.shape.clone()
+}
+
+/// `records_per_sample_invalid` (esm-spec §8.5.1): `from.records_per_sample`
+/// on a rule that is not `data`; or an EFFECTIVE value of 2 on a parameter
+/// whose source declares no `temporal` block, or whose record shape's first
+/// dimension is not an index set of exactly two members. The record shape is
+/// the declared `shape`, or, for a parameter declaring an empty one that a
+/// `param_to_var` `variable_map` entry maps onto another parameter, that
+/// target's declared `shape`.
+pub(crate) fn validate_records_per_sample(esm_file: &EsmFile, errors: &mut Vec<StructuralError>) {
+    fn walk(
+        esm_file: &EsmFile,
+        model: &crate::Model,
+        scope: &str,
+        path: &str,
+        errors: &mut Vec<StructuralError>,
+    ) {
+        let mut var_names: Vec<&String> = model
+            .variables
+            .iter()
+            .filter(|(_, v)| v.update.is_some())
+            .map(|(n, _)| n)
+            .collect();
+        var_names.sort();
+        for var_name in var_names {
+            let var = &model.variables[var_name];
+            let at = format!("{path}/variables/{var_name}/update");
+            for rule in var.update.iter().flat_map(|spec| spec.rules()) {
+                let Some(binding) = rule.value().and_then(|v| v.from.as_ref()) else {
+                    continue;
+                };
+                let Some(source_name) = rule.data_source() else {
+                    if binding.records_per_sample.is_some() {
+                        errors.push(StructuralError {
+                            path: at.clone(),
+                            code: StructuralErrorCode::RecordsPerSampleInvalid,
+                            message: format!(
+                                "Parameter '{var_name}' sets from.records_per_sample on a '{}' \
+                                 rule; only a 'data' rule names a source to read records from",
+                                rule.kind()
+                            ),
+                            details: serde_json::json!({"variable": var_name, "kind": rule.kind()}),
+                        });
+                    }
+                    continue;
+                };
+                // An undeclared source is `data_source_undefined`'s finding.
+                let Some(source) = esm_file
+                    .data_sources
+                    .as_ref()
+                    .and_then(|d| d.get(source_name))
+                else {
+                    continue;
+                };
+                if crate::flatten::effective_records_per_sample(binding, Some(source)) != 2 {
+                    continue;
+                }
+                if source.temporal.is_none() {
+                    errors.push(StructuralError {
+                        path: at.clone(),
+                        code: StructuralErrorCode::RecordsPerSampleInvalid,
+                        message: format!(
+                            "Parameter '{var_name}' asks for two records per sample from data \
+                             source '{source_name}', which declares no temporal block and so has \
+                             no successor record"
+                        ),
+                        details: serde_json::json!({"variable": var_name, "source": source_name}),
+                    });
+                    continue;
+                }
+                let mut shape = var.shape.clone().unwrap_or_default();
+                if shape.is_empty() {
+                    let me = format!("{scope}.{var_name}");
+                    let target = esm_file
+                        .coupling
+                        .iter()
+                        .flatten()
+                        .find_map(|entry| match entry {
+                            crate::CouplingEntry::VariableMap {
+                                from,
+                                to,
+                                transform: crate::VariableMapTransform::Named(t),
+                                ..
+                            } if *from == me && t == "param_to_var" => Some(to.clone()),
+                            _ => None,
+                        });
+                    if let Some(to) = target {
+                        shape = declared_shape(esm_file, &to).unwrap_or_default();
+                    }
+                }
+                if shape
+                    .first()
+                    .is_some_and(|d| index_set_has_two_members(esm_file, d))
+                {
+                    continue;
+                }
+                errors.push(StructuralError {
+                    path: at.clone(),
+                    code: StructuralErrorCode::RecordsPerSampleInvalid,
+                    message: format!(
+                        "Parameter '{var_name}' asks for two records per sample, so its first \
+                         dimension must be an index set of exactly two members; its record shape \
+                         is {shape:?}"
+                    ),
+                    details: serde_json::json!({"variable": var_name, "shape": shape}),
+                });
+            }
+        }
+        for (sub_name, sub) in model.subsystems.iter().flatten() {
+            let Ok(sub_model) = serde_json::from_value::<crate::Model>(sub.clone()) else {
+                continue;
+            };
+            walk(
+                esm_file,
+                &sub_model,
+                &format!("{scope}.{sub_name}"),
+                &format!("{path}/subsystems/{sub_name}"),
+                errors,
+            );
+        }
+    }
+    for (model_name, model) in esm_file.models.iter().flatten() {
+        walk(
+            esm_file,
+            model,
+            model_name,
+            &format!("/models/{model_name}"),
+            errors,
+        );
+    }
+}
+
 /// Every name DECLARED anywhere in the document: each model's `variables` and
 /// each reaction system's `species` and `parameters`.
 ///

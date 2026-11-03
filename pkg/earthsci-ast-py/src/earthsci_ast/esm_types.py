@@ -376,6 +376,10 @@ class DataSourceBinding:
     unit_conversion: Expr | None = None
     codes: dict[str, Any] | None = None
     select: dict[str, Any] | None = None
+    # How many records the parameter receives per query time (esm-spec §8.5.1):
+    # 1 or 2, overriding the source's ``temporal.records_per_sample``. None when
+    # the document does not set it on this binding.
+    records_per_sample: int | None = None
     description: str | None = None
     reference: Reference | None = None
 
@@ -953,6 +957,9 @@ class DataSourceTemporal:
     frequency: str | None = None
     records_per_file: int | str | None = None
     time_variable: str | None = None
+    # Source-wide default of each consuming parameter's
+    # ``from.records_per_sample`` (esm-spec §8.3, §8.5.1).
+    records_per_sample: int | None = None
 
 
 @dataclass

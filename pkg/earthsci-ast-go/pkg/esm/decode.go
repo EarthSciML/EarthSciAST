@@ -573,12 +573,13 @@ func (ec *EventCoupling) UnmarshalJSON(data []byte) error {
 // become an ExprNode when it is a full AST.
 func (v *DataSourceBinding) UnmarshalJSON(data []byte) error {
 	type TempDataSourceBinding struct {
-		FileVariable   string          `json:"file_variable"`
-		UnitConversion json.RawMessage `json:"unit_conversion,omitempty"`
-		Codes          any             `json:"codes,omitempty"`
-		Select         any             `json:"select,omitempty"`
-		Description    *string         `json:"description,omitempty"`
-		Reference      *Reference      `json:"reference,omitempty"`
+		FileVariable     string          `json:"file_variable"`
+		UnitConversion   json.RawMessage `json:"unit_conversion,omitempty"`
+		Codes            any             `json:"codes,omitempty"`
+		Select           any             `json:"select,omitempty"`
+		RecordsPerSample *int            `json:"records_per_sample,omitempty"`
+		Description      *string         `json:"description,omitempty"`
+		Reference        *Reference      `json:"reference,omitempty"`
 	}
 	var temp TempDataSourceBinding
 	if err := json.Unmarshal(data, &temp); err != nil {
@@ -587,6 +588,7 @@ func (v *DataSourceBinding) UnmarshalJSON(data []byte) error {
 	v.FileVariable = temp.FileVariable
 	v.Codes = temp.Codes
 	v.Select = temp.Select
+	v.RecordsPerSample = temp.RecordsPerSample
 	v.Description = temp.Description
 	v.Reference = temp.Reference
 	conv, err := unmarshalOptionalExpression(temp.UnitConversion)

@@ -358,6 +358,11 @@ const (
 	// ErrorDataSourceUndefined is raised when a parameter's `update.source` names
 	// no declared `data_sources` entry (esm-spec §8.5).
 	ErrorDataSourceUndefined = "data_source_undefined"
+	// ErrorRecordsPerSampleInvalid is raised for `from.records_per_sample` on a
+	// rule that is not `data`, or an effective value of 2 on a source with no
+	// `temporal` block or on a parameter whose record shape's first dimension
+	// is not an index set of exactly two members (esm-spec 8.5.1).
+	ErrorRecordsPerSampleInvalid = "records_per_sample_invalid"
 	// ErrorSystemKindMismatch is raised when a model's declared `system_kind`
 	// contradicts the esm-spec §6.3.1 derivation.
 	ErrorSystemKindMismatch = "system_kind_mismatch"

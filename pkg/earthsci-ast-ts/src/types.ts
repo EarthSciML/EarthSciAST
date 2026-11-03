@@ -305,6 +305,11 @@ export interface DataSourceBinding {
   unit_conversion?: GeneratedExpression
   codes?: DataSourceCodes
   select?: DataSourceSelect
+  /**
+   * How many records the parameter receives per query time (esm-spec §8.5.1):
+   * 1 or 2, overriding the source's `temporal.records_per_sample`.
+   */
+  records_per_sample?: 1 | 2
   description?: string
   reference?: SchemaReference
 }

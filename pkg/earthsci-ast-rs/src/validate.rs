@@ -151,6 +151,8 @@ pub enum StructuralErrorCode {
     /// A parameter `update` of kind `data` names a `data_sources` entry the
     /// document does not declare (esm-spec §8.5).
     DataSourceUndefined,
+    /// `from.records_per_sample` used where it cannot hold (esm-spec §8.5.1).
+    RecordsPerSampleInvalid,
     /// System referenced but not declared
     UndefinedSystem,
 
@@ -347,6 +349,7 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::EventVarUndeclared => codes::EVENT_VAR_UNDECLARED,
             Self::UndefinedOperator => codes::UNDEFINED_OPERATOR,
             Self::DataSourceUndefined => codes::DATA_SOURCE_UNDEFINED,
+            Self::RecordsPerSampleInvalid => codes::RECORDS_PER_SAMPLE_INVALID,
             Self::UndefinedSystem => codes::UNDEFINED_SYSTEM,
             Self::OperatorVariableMissing => codes::OPERATOR_VARIABLE_MISSING,
             Self::CircularDependency => codes::CIRCULAR_DEPENDENCY,
@@ -583,6 +586,8 @@ pub(crate) fn validate_scoped(esm_file: &EsmFile, scope: ValidationScope) -> Val
     // source is not a component, so an `update.source` is the only place a
     // source name can appear — and the only place it can be wrong.
     crate::structural::validate_data_source_references(esm_file, &mut structural_errors);
+    // `from.records_per_sample` (esm-spec §8.5.1, `records_per_sample_invalid`).
+    crate::structural::validate_records_per_sample(esm_file, &mut structural_errors);
 
     // Validate coupling
     if let Some(ref coupling) = esm_file.coupling {

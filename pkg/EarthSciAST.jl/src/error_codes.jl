@@ -51,6 +51,10 @@ const ERROR_CODES = (
     CIRCULAR_DEPENDENCY = "circular_dependency",
     CONFLICTING_DERIVATIVE = "conflicting_derivative",
     DATA_SOURCE_UNDEFINED = "data_source_undefined",
+    # esm-spec §8.5.1: `from.records_per_sample` on a non-`data` rule, or an
+    # effective 2 on a source with no `temporal` block or on a parameter whose
+    # record shape's first dimension is not an index set of two members.
+    RECORDS_PER_SAMPLE_INVALID = "records_per_sample_invalid",
     # esm-spec §9.6.6 / CONFORMANCE_SPEC §5.46: a data-fed parameter (an `update`
     # of `kind: "data"`) reached a build with NOTHING bound to it -- no provider,
     # no loaded array, no caller-supplied `p` value. Raised at CONSTRUCTION,

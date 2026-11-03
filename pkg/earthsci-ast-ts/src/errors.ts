@@ -267,6 +267,11 @@ export const ERROR_CODES = {
   //   error. Replaces `undefined_data_loader_variable`, whose coupling-to-a-
   //   loader-variable shape no longer exists.
   DATA_SOURCE_UNDEFINED: 'data_source_undefined',
+  // `records_per_sample_invalid` — `from.records_per_sample` on a rule that is
+  //   not `data`, or an effective 2 on a source with no `temporal` block or on
+  //   a parameter whose record shape's first dimension is not an index set of
+  //   exactly two members (esm-spec §8.5.1).
+  RECORDS_PER_SAMPLE_INVALID: 'records_per_sample_invalid',
   // `data_source_url_unresolved` — a `data_sources[*].source.url_template` (or
   //   a `mirrors` entry) cannot be resolved to a URL at load time (esm-spec
   //   §8.2.1). Raised for an unexpanded `${VAR}` — §8.2 does not expand

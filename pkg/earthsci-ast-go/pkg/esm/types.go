@@ -844,12 +844,29 @@ type DataSourceExtent struct {
 // a bare number, so a plain factor is written as one. Its free names are subject to reference
 // integrity (esm-spec 4.9.5).
 type DataSourceBinding struct {
-	FileVariable   string     `json:"file_variable"`
-	UnitConversion any        `json:"unit_conversion,omitempty"`
-	Codes          any        `json:"codes,omitempty"`
-	Select         any        `json:"select,omitempty"`
-	Description    *string    `json:"description,omitempty"`
-	Reference      *Reference `json:"reference,omitempty"`
+	FileVariable   string `json:"file_variable"`
+	UnitConversion any    `json:"unit_conversion,omitempty"`
+	Codes          any    `json:"codes,omitempty"`
+	Select         any    `json:"select,omitempty"`
+	// RecordsPerSample is how many records the parameter receives per query
+	// time, 1 or 2, overriding the source's `temporal.records_per_sample`
+	// (esm-spec 8.5.1). Nil when not written.
+	RecordsPerSample *int       `json:"records_per_sample,omitempty"`
+	Description      *string    `json:"description,omitempty"`
+	Reference        *Reference `json:"reference,omitempty"`
+}
+
+// effectiveRecordsPerSample is the EFFECTIVE `records_per_sample` of a `data`
+// rule (esm-spec 8.5.1): the binding's own value, else the source's
+// `temporal.records_per_sample`, else 1. source may be nil.
+func effectiveRecordsPerSample(binding *DataSourceBinding, source *DataSource) int {
+	if binding != nil && binding.RecordsPerSample != nil {
+		return *binding.RecordsPerSample
+	}
+	if source != nil && source.Temporal != nil && source.Temporal.RecordsPerSample != nil {
+		return *source.Temporal.RecordsPerSample
+	}
+	return 1
 }
 
 // The top-level `operators` and `registered_functions` blocks (and the `call`

@@ -299,6 +299,13 @@ type LoaderField struct {
 	DataSource DataSource
 	// UnitConversion is the binding's declared `unit_conversion` (§8.5), or nil.
 	UnitConversion Expression
+	// RecordsPerSample is the EFFECTIVE number of records the parameter
+	// receives per query time, 1 or 2 (esm-spec §8.5.1): the binding's
+	// `from.records_per_sample`, else the source's
+	// `temporal.records_per_sample`, else 1. With 2 the field holds the record
+	// at or before the query time and its successor, stacked along the
+	// parameter's first dimension.
+	RecordsPerSample int
 }
 
 // FieldIC is one deferred `ic` equation (esm-spec §11.4.1) as a
@@ -1185,13 +1192,14 @@ func dataSourceFields(model *Model, fullPrefix string, varOrder []string, source
 				cadence = CadenceDiscrete
 			}
 			out = append(out, LoaderField{
-				Name:           fullPrefix + "." + varName,
-				Owner:          fullPrefix,
-				Source:         rule.Source,
-				FileVariable:   rule.From.FileVariable,
-				Cadence:        cadence.String(),
-				DataSource:     source,
-				UnitConversion: rule.From.UnitConversion,
+				Name:             fullPrefix + "." + varName,
+				Owner:            fullPrefix,
+				Source:           rule.Source,
+				FileVariable:     rule.From.FileVariable,
+				Cadence:          cadence.String(),
+				DataSource:       source,
+				UnitConversion:   rule.From.UnitConversion,
+				RecordsPerSample: effectiveRecordsPerSample(rule.From, &source),
 			})
 		}
 	}

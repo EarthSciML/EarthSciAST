@@ -93,6 +93,11 @@ Fields:
   before integration) — the source-seeded refinement of CONFORMANCE_SPEC §5.7.2.
 - `unit_conversion`: the binding's declared `unit_conversion` (§8.5), `nothing`
   when the document declares none.
+- `records_per_sample`: the EFFECTIVE number of records the parameter receives
+  per query time (esm-spec §8.5.1), 1 or 2: the binding's
+  `from.records_per_sample`, else the source's `temporal.records_per_sample`,
+  else 1. With 2 the field holds the record at or before the query time and its
+  successor, stacked along the parameter's first dimension.
 """
 struct LoaderField
     name::String
@@ -101,16 +106,34 @@ struct LoaderField
     var::String
     cadence::String
     unit_conversion::Union{Float64, ASTExpr, Nothing}
+    records_per_sample::Int
 
     LoaderField(
         name::AbstractString, owner::AbstractString,
         subkey::AbstractString, var::AbstractString,
-        cadence::AbstractString; unit_conversion = nothing
+        cadence::AbstractString; unit_conversion = nothing,
+        records_per_sample::Integer = 1
     ) =
         new(
         String(name), String(owner), String(subkey), String(var),
-        String(cadence), unit_conversion
+        String(cadence), unit_conversion, Int(records_per_sample)
     )
+end
+
+"""
+    _effective_records_per_sample(binding::DataSourceBinding, source) -> Int
+
+The EFFECTIVE `records_per_sample` of a `data` rule (esm-spec §8.5.1): the
+binding's own `from.records_per_sample`, else the source's
+`temporal.records_per_sample`, else 1. `source` is the `DataSource` the rule
+names, or `nothing`.
+"""
+function _effective_records_per_sample(binding::DataSourceBinding, source)::Int
+    binding.records_per_sample === nothing || return binding.records_per_sample
+    source === nothing && return 1
+    t = source.temporal
+    (t === nothing || t.records_per_sample === nothing) && return 1
+    return t.records_per_sample
 end
 
 """
@@ -1094,7 +1117,8 @@ function _collect_loader_fields!(
                     "$(prefix).$(var_name)", prefix, rule.source,
                     rule.from.file_variable,
                     src.temporal === nothing ? "const" : "discrete";
-                    unit_conversion = rule.from.unit_conversion
+                    unit_conversion = rule.from.unit_conversion,
+                    records_per_sample = _effective_records_per_sample(rule.from, src)
                 )
             )
         end
