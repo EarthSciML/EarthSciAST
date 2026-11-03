@@ -1,13 +1,31 @@
-# Precompile workload: a few small native builds, run while the package
-# precompiles, so the native build pipeline's own methods (the join-gate
-# builder, a construction-time fill, the affine kernel tier and its code
-# generation, a const-array gather) are compiled into the package image instead
-# of on a session's first build. Every document is built in memory; nothing
+# Precompile workload: documents loaded from JSON text and built under both
+# compilers, and a few small native builds, run while the package precompiles,
+# so the native build pipeline's own methods (the join-gate builder, a
+# construction-time fill, the affine kernel tier and its code generation, a
+# const-array gather) are compiled into the package image instead of on a
+# session's first build. Every document is built in memory; nothing
 # reads the network or a file. The builds are single-threaded (precompilation
 # runs one thread), so neither the threaded dispatch nor any extension is
 # exercised.
 
 using PrecompileTools: @setup_workload, @compile_workload
+
+# Two documents, loaded from JSON text here and in `EarthSciASTSolverWorkloadExt`:
+# an array model (`faq` with and without a `filter`, an observed read through
+# `index`) and a scalar model (a parameter, an observed), each with an inline test.
+const _WORKLOAD_DOCS = (
+    """{"esm": "1.2.0", "metadata": {"name": "array"}, "index_sets": {"x": {"kind": "interval", "size": 5}},
+    "models": {"M": {"variables": {"a": {"type": "unknown", "units": "1", "shape": ["x"], "default": 0.0},
+      "w": {"type": "unknown", "units": "1", "shape": ["x"]}}, "equations": [
+      {"lhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": {"from": "x"}}, "expr": {"op": "D", "args": [{"op": "index", "args": ["a", "i"]}], "wrt": "t"}},
+       "rhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": {"from": "x"}}, "expr": {"op": "+", "args": [{"op": "index", "args": ["w", "i"]}, 1]}, "filter": {"op": ">=", "args": ["i", 3]}}},
+      {"lhs": "w", "rhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": {"from": "x"}}, "expr": {"op": "*", "args": [10, "i"]}}}],
+     "tests": [{"id": "t", "time_span": {"start": 0.0, "end": 1.0}, "assertions": [{"variable": "a", "time": 1.0, "expected": 31.0, "coords": {"x": 3}}]}]}}}""",
+    """{"esm": "1.2.0", "metadata": {"name": "scalar"}, "models": {"M": {"variables": {"k": {"type": "parameter", "units": "1/s", "default": 0.5},
+     "y": {"type": "unknown", "units": "1", "default": 1.0}, "z": {"type": "unknown", "units": "1"}}, "equations": [
+     {"lhs": {"op": "D", "args": ["y"], "wrt": "t"}, "rhs": {"op": "-", "args": [{"op": "*", "args": ["k", "y"]}]}}, {"lhs": "z", "rhs": {"op": "*", "args": [2, "y"]}}],
+    "tests": [{"id": "t", "time_span": {"start": 0.0, "end": 1.0}, "parameter_overrides": {"k": 1.0}, "assertions": [{"variable": "z", "time": 1.0, "expected": 0.7357588823428847}]}]}}}""",
+)
 
 @setup_workload begin
     _pw_faq(oi, ranges, expr, extra::Pair...) = Dict{String, Any}(
@@ -130,6 +148,10 @@ using PrecompileTools: @setup_workload, @compile_workload
         ]
     )
     @compile_workload begin
+        for json in _WORKLOAD_DOCS, compiler in (:interpreter, :native)
+            prob = esm_problem(load_string(json), (0.0, 1.0); compiler)
+            prob.f!(similar(prob.u0), prob.u0, prob.p, 0.0)
+        end
         for doc in (stencil, keyed)
             prob = esm_problem(doc, (0.0, 1.0); compiler = :native)
             du = similar(prob.u0)
