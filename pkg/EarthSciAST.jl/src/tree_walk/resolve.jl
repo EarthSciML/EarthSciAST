@@ -1539,7 +1539,11 @@ const _EMPTY_PARAMS = Dict{String, Float64}()
 struct _PGatherArray
     flat::Vector{Float64}   # aliased flat view of the caller's buffer (live, by-ref)
     dims::Vector{Int}       # original shape — bounds-check + linearize at build time
+    # A cache the build owns (a discrete-cadence var's, `_build_discrete_materializer!`)
+    # rather than a forcing buffer the caller or a provider supplied.
+    cache::Bool
 end
+_PGatherArray(flat::Vector{Float64}, dims::Vector{Int}) = _PGatherArray(flat, dims, false)
 # Read-only sentinel — see the `_EMPTY_*` invariant block next to
 # `_EMPTY_DERIVED_EXTENTS`.
 const _EMPTY_PGATHER = Dict{String, _PGatherArray}()
@@ -1946,10 +1950,13 @@ function _resolve_indices(
     # buffer a discrete provider rewrites for a 0-d data-fed parameter — reads
     # the buffer, never a literal, exactly as `index(name, 1)` does below. The
     # partition gives such a parameter no `p` slot (`_partition_variables`), so
-    # this is the only place its value comes from.
-    if !haskey(var_map, expr.name) && haskey(pgather, expr.name)
+    # this is the only place its value comes from. A name a faq body binds
+    # shadows the buffer (`bound_syms`), and a discrete-cadence cache the build
+    # registered beside the buffers is not one.
+    if !haskey(var_map, expr.name) && !(expr.name in bound_syms) &&
+            haskey(pgather, expr.name)
         pg = pgather[expr.name]::_PGatherArray
-        if length(pg.flat) == 1
+        if !pg.cache && length(pg.flat) == 1
             return OpExpr(
                 "index", ASTExpr[];
                 value = _PGatherRef(pg.flat, 1, expr.name)

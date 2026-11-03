@@ -44,6 +44,12 @@ PFC.provider_refresh_times(p::_PFCProvider) = p.times
 PFC.provider_sample(p::_PFCProvider, t::Real; selection = nothing) =
     Dict{String, Any}(p.key => _pfc_value(p, t))
 
+# A provider with every optional capability, for the re-keying wrapper's check.
+struct _PFCSelectable end
+PFC.provider_supports_selection(::_PFCSelectable) = true
+PFC.provider_gate_spec(::_PFCSelectable) = Dict("axes" => Any["all"])
+PFC.provider_extent_metaparameter(::_PFCSelectable) = "n"
+
 function _pfc_problem(M, c)
     provs = Dict{String, Any}(
         String(p.key) => _PFCProvider(
@@ -163,16 +169,45 @@ end
         prob.f!(du, prob.u0, prob.p, 0.0)
         @test du == [2.75]
     end
-    p1 = _PFCProvider("s", Float64[], Int[], 3.0, 0.0)
-    p2 = _PFCProvider("M.s", Float64[], Int[], 4.0, 0.0)
-    err = try
-        PFC.esm_problem(
-            doc, (0.0, 1.0); compiler = :native,
-            providers = Dict{String, Any}("s" => p1, "M.s" => p2)
-        )
+    _pfc_err(f) = try
+        f()
         nothing
     catch e
         e
     end
-    @test err isa ArgumentError && occursin("all designate the parameter 'M.s'", err.msg)
+    run_du(prob) = (du = fill(NaN, 1); prob.f!(du, prob.u0, prob.p, 0.0); du)
+    mk(; kw...) = PFC.esm_problem(doc, (0.0, 1.0); compiler = :native, kw...)
+    # An exact key wins over a bare key for the same parameter, as it does for
+    # `parameter_overrides` (esm-spec §6.6.2); the bare key's data is not read.
+    p1 = _PFCProvider("s", Float64[], Int[], 3.0, 0.0)
+    p2 = _PFCProvider("M.s", Float64[], Int[], 4.0, 0.0)
+    @test run_du(mk(providers = Dict{String, Any}("s" => p1, "M.s" => p2))) == [3.75]
+    # A provider keyed by the bare name of an ORDINARY scalar parameter feeds it.
+    pk = _PFCProvider("k", Float64[], Int[], 0.5, 0.0)
+    @test run_du(mk(providers = Dict{String, Any}("k" => pk))) == [1.5]
+    # An explicit override outranks const data for a scalar, as for a shaped
+    # parameter, and is refused beside a live buffer the run rewrites.
+    for key in ("s", "M.s")
+        cp = _PFCProvider(key, Float64[], Int[], 3.0, 0.0)
+        prob = mk(p = Dict("s" => 5.0), providers = Dict{String, Any}(key => cp))
+        @test run_du(prob) == [4.75]
+        live = _PFCProvider(key, [0.5], Int[], 3.0, 0.0)
+        err = _pfc_err(() -> mk(p = Dict("s" => 5.0), providers = Dict{String, Any}(key => live)))
+        @test err isa ArgumentError && occursin("live forcing buffer", err.msg)
+    end
+    # A provider and the caller's own array for one parameter, under any
+    # spellings: refused rather than one silently replacing the other.
+    for (pk_, ck) in (("s", "M.s"), ("M.s", "s"), ("M.s", "M.s"))
+        pr = _PFCProvider(pk_, Float64[], Int[], 3.0, 0.0)
+        err = _pfc_err(
+            () -> mk(providers = Dict{String, Any}(pk_ => pr), const_arrays = Dict(ck => [9.0]))
+        )
+        @test err isa ArgumentError && occursin("both supply the parameter 'M.s'", err.msg)
+    end
+    # The re-keying wrapper answers every optional provider capability as the
+    # provider it wraps does.
+    w = PFC._RekeyedProvider(_PFCSelectable(), Pair{String, String}[])
+    @test PFC.provider_supports_selection(w)
+    @test PFC.provider_gate_spec(w) == Dict("axes" => Any["all"])
+    @test PFC.provider_extent_metaparameter(w) == "n"
 end
