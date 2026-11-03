@@ -54,6 +54,7 @@ from .classification import (
     system_kind,
 )
 from .error_handling import COUPLING_EDGE_UNKNOWN_ROLE, OBSERVED_CYCLE, RAGGED_VALUES_NOT_GATHERED
+from .esm_types import effective_records_per_sample
 from .json_walk import iter_child_values, walk_dict_exprs
 
 # StructuralValidationError is built lazily (and cached) so that its base class,
@@ -2235,28 +2236,23 @@ def _check_data_source_references(data: dict[str, Any], errors: list[str]) -> No
                 )
 
 
-def _effective_records_per_sample(binding: Any, source: Any) -> int:
-    """The EFFECTIVE ``records_per_sample`` of a data rule (esm-spec §8.5.1):
-    the rule's ``from.records_per_sample``, else the source's
-    ``temporal.records_per_sample``, else 1.
+def record_shape_holds_a_pair(index_sets: dict[str, Any], shape: Any) -> bool:
+    """True iff ``shape`` can carry two records (esm-spec §8.5.1 rule 3): it is
+    not empty and its first entry names an ``interval`` of size 2 or a
+    ``categorical`` of two members. Shared by structural validation and by the
+    ``flatten`` re-check after ``coupling_import`` expansion."""
+    if not shape:
+        return False
+    return _index_set_has_two_members(index_sets, shape[0])
 
-    ``binding`` and ``source`` are either raw JSON dicts or the typed
-    :class:`~earthsci_ast.esm_types.DataSourceBinding` /
-    :class:`~earthsci_ast.esm_types.DataSource`; ``source`` may be None.
-    """
 
-    def get(obj: Any, key: str) -> Any:
-        if obj is None:
-            return None
-        if isinstance(obj, dict):
-            return obj.get(key)
-        return getattr(obj, key, None)
-
-    own = get(binding, "records_per_sample")
-    if own is not None:
-        return int(own)
-    inherited = get(get(source, "temporal"), "records_per_sample")
-    return int(inherited) if inherited is not None else 1
+def records_per_sample_shape_message(vname: str, shape: Any) -> str:
+    """The ``records_per_sample_invalid`` message for a record shape that cannot
+    carry two records (esm-spec §8.5.1 rule 3)."""
+    return (
+        f"Parameter '{vname}' asks for two records per sample, so its first dimension "
+        f"must be an index set of exactly two members; its record shape is {list(shape)}"
+    )
 
 
 def _index_set_has_two_members(index_sets: dict[str, Any], name: Any) -> bool:
@@ -2276,7 +2272,9 @@ def _index_set_has_two_members(index_sets: dict[str, Any], name: Any) -> bool:
 
 
 def _declared_variable(data: dict[str, Any], scoped: Any) -> dict[str, Any] | None:
-    """The raw declaration of a scoped variable ``Model[.Sub…].var``, or None."""
+    """The raw declaration of a scoped variable ``Model[.Sub…].var``, or None
+    when the loaded document cannot reach it: not declared, or behind a
+    ``{"ref"}`` mount that structural validation runs ahead of."""
     if not isinstance(scoped, str) or "." not in scoped:
         return None
     *path, vname = scoped.split(".")
@@ -2295,25 +2293,53 @@ def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
     """``records_per_sample_invalid`` (esm-spec §8.5.1): ``from.records_per_sample``
     on a rule that is not ``data``; or an effective value of 2 on a parameter
     whose source declares no ``temporal`` block, or whose record shape's first
-    dimension is not an index set of exactly two members. The record shape is
-    the declared ``shape``, or, for a parameter declaring an empty one that a
-    ``param_to_var`` ``variable_map`` entry maps onto another parameter, that
-    target's declared ``shape``."""
+    dimension is not an index set of exactly two members.
+
+    The record shape is the declared ``shape`` when not empty; otherwise the
+    declared ``shape`` of EVERY inline ``param_to_var`` target of the parameter,
+    one finding per rule at the first that fails. A target this validation
+    cannot reach (behind a ref not yet mounted, or not declared) is not
+    decidable and is skipped, never read as empty. An empty record shape is
+    refused here only when nothing can supply one later: no inline
+    ``param_to_var`` entry names the parameter and the coupling holds no
+    ``coupling_import``. ``flatten`` re-checks the rest after expansion."""
     sources = data.get("data_sources") or {}
     if not isinstance(sources, dict):
         sources = {}
     index_sets = data.get("index_sets") or {}
     if not isinstance(index_sets, dict):
         index_sets = {}
-    p2v_targets: dict[str, Any] = {}
+    p2v_targets: dict[str, list[Any]] = {}
+    has_coupling_import = False
     for entry in data.get("coupling") or []:
-        if (
-            isinstance(entry, dict)
-            and entry.get("type") == "variable_map"
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("type") == "coupling_import":
+            has_coupling_import = True
+        elif (
+            entry.get("type") == "variable_map"
             and entry.get("transform") == "param_to_var"
             and isinstance(entry.get("from"), str)
         ):
-            p2v_targets.setdefault(entry["from"], entry.get("to"))
+            p2v_targets.setdefault(entry["from"], []).append(entry.get("to"))
+
+    def failing_record_shape(vdef: dict[str, Any], scoped: str) -> list[Any] | None:
+        """The first record shape that cannot carry two records, or None when
+        every shape validation can decide holds a pair."""
+        shape = vdef.get("shape") or []
+        if shape:
+            return None if record_shape_holds_a_pair(index_sets, shape) else list(shape)
+        targets = p2v_targets.get(scoped, [])
+        if not targets:
+            return None if has_coupling_import else []
+        for to in targets:
+            target = _declared_variable(data, to)
+            if target is None:
+                continue
+            tshape = target.get("shape") or []
+            if not record_shape_holds_a_pair(index_sets, tshape):
+                return list(tshape)
+        return None
 
     def walk(comp: dict[str, Any], scope: str, pointer: str) -> None:
         for vname, vdef in (comp.get("variables") or {}).items():
@@ -2343,7 +2369,7 @@ def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
                 source = sources.get(rule.get("source"))
                 if not isinstance(source, dict):
                     continue  # data_source_undefined reports it
-                if _effective_records_per_sample(binding, source) != 2:
+                if effective_records_per_sample(binding, source) != 2:
                     continue
                 if not isinstance(source.get("temporal"), dict):
                     errors.append(
@@ -2356,19 +2382,13 @@ def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
                         )
                     )
                     continue
-                shape = vdef.get("shape") or []
-                if not shape:
-                    target = _declared_variable(data, p2v_targets.get(f"{scope}.{vname}"))
-                    if target is not None:
-                        shape = target.get("shape") or []
-                if not shape or not _index_set_has_two_members(index_sets, shape[0]):
+                shape = failing_record_shape(vdef, f"{scope}.{vname}")
+                if shape is not None:
                     errors.append(
                         (
                             at,
-                            f"Parameter '{vname}' asks for two records per sample, so its "
-                            f"first dimension must be an index set of exactly two members; "
-                            f"its record shape is {list(shape)}",
-                            {"variable": vname, "shape": list(shape)},
+                            records_per_sample_shape_message(vname, shape),
+                            {"variable": vname, "shape": shape},
                         )
                     )
         for sname, sub in (comp.get("subsystems") or {}).items():

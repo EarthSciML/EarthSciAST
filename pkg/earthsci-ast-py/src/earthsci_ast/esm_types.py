@@ -993,6 +993,29 @@ class DataSource:
     extent: dict[str, Any] | None = None
 
 
+def effective_records_per_sample(binding: Any, source: Any) -> int:
+    """The EFFECTIVE ``records_per_sample`` of a data rule (esm-spec §8.5.1):
+    the rule's ``from.records_per_sample``, else the source's
+    ``temporal.records_per_sample``, else 1.
+
+    ``binding`` and ``source`` are either raw JSON dicts or the typed
+    :class:`DataSourceBinding` / :class:`DataSource`; ``source`` may be None.
+    """
+
+    def get(obj: Any, key: str) -> Any:
+        if obj is None:
+            return None
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
+
+    own = get(binding, "records_per_sample")
+    if own is not None:
+        return int(own)
+    inherited = get(get(source, "temporal"), "records_per_sample")
+    return int(inherited) if inherited is not None else 1
+
+
 @dataclass
 class Operator:
     """A registered runtime operator (e.g., dry deposition, wet scavenging)."""
