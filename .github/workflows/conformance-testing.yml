@@ -129,8 +129,11 @@ jobs:
       # `Pkg.test()` builds a separate environment (the `[targets] test` set)
       # and precompiles it under its own `Base.CacheFlags` configuration
       # (`--check-bounds=yes` before 1.13, `--code-coverage` when coverage is
-      # on), ~240 packages that the install step below does not build. Warm
-      # that costs well under a minute; cold it costs 7-16 min of every leg.
+      # on), ~210 packages that the install step below does not build. Warm
+      # that costs well under a minute; cold it costs minutes of every leg.
+      # (That set no longer includes ModelingToolkit or Catalyst: their tests
+      # run in mtk-compiler.yml's `mtk-tests` job, in an environment of their
+      # own, test/mtk/Project.toml.)
       #
       # Saving only from `main` keeps the repo under GitHub's 10 GB cache
       # budget: caches are scoped per ref, and a per-run key on every PR leg

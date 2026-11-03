@@ -84,27 +84,19 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("conformance_round_trip_test.jl")
     include("conformance_pushdown_test.jl")
 
-    # ---- MTK / Catalyst integration (ext/EarthSciASTMTKExt.jl,
-    #      ext/EarthSciASTCatalystExt.jl) ----
-    include("real_mtk_integration_test.jl")
-    include("mtk_metadata_test.jl")
-    include("simulate_e2e_test.jl")
-    include("tests_blocks_execution_test.jl")
+    # ---- run_esm_tests discovery, the `wrt` default, unit fixtures, array-op nodes ----
+    # Every ModelingToolkit / Catalyst test (ext/EarthSciASTMTKExt.jl,
+    # ext/EarthSciASTCatalystExt.jl, `compiler = :mtk`, the `run_esm_tests`
+    # runs that compile through MTK) lives in test/mtk/, a separate suite with
+    # its own environment (test/mtk/Project.toml) that the ModelingToolkit CI
+    # workflow runs. THIS suite's environment does not carry ModelingToolkit or
+    # Catalyst at all; see test/mtk/runtests.jl for why.
+    include("run_esm_tests_test.jl")   # discovery + JUnit arithmetic; compiled runs are test/mtk/
     # esm-spec §4.2's `wrt` default — an absent `wrt` on `D` MEANS `t` — on the
     # tree-walk runner exactly as in `classification.jl` (issue #407).
     include("wrt_default_omitted_test.jl")
-    # The ModelingToolkit export honours a continuous event's `affect_neg` and
-    # `root_find` (esm-spec §5.2, issue #356).
-    include("mtk_continuous_event_options_test.jl")
-    # `esm_problem(...; compiler = :mtk)` — the specialty compiler that RUNS the
-    # three constructs CONFORMANCE_SPEC §5.39 has every other evaluator refuse,
-    # and refuses by name the document content it cannot express (API_SPEC §5.8).
-    include("compiler_mtk_test.jl")
-    include("run_esm_tests_test.jl")
-    include("container_in_document_test.jl")
     include("units_fixture_consumption_test.jl")
-    include("array_ops_test.jl")
-    include("catalyst_extension_test.jl")
+    include("array_ops_test.jl")       # parse round trips + shape inference; the runtime is test/mtk/
 
     # ---- References, codegen, flatten, editing (reference helpers in
     #      src/types.jl; codegen.jl; flatten.jl and its split passes
@@ -158,14 +150,13 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("canonicalize_test.jl")
     include("relational_test.jl")
 
-    # ---- End-to-end simulation runs + MTK export ----
+    # ---- End-to-end simulation runs ----
     include("simulate_run_test.jl")
     include("esm_problem_test.jl")
     include("loaded_ic_bc_simulation_test.jl")
     include("subsystem_loader_conformance_test.jl")
     include("build_once_spatial_field_conformance_test.jl")
     include("wildfire_simulation_test.jl")
-    include("mtk_export_test.jl")
 
     # ---- Choosing the compiler (API_SPEC §5.8, esm-libraries-spec §2.5.10) ----
     # The closed vocabulary, the strict `native` tier report, and the agreement
@@ -418,8 +409,6 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("closed_functions_autodiff_test.jl")
     include("datetime_arithmetic_test.jl")
     include("datetime_typed_core_test.jl")     # registry-declared typed cores (ess-dtcore)
-    include("closed_functions_mtk_test.jl")
-    include("const_array_index_mtk_test.jl")    # #286: a bare const array as an index base
     include("function_tables_test.jl")
     include("function_tables_lowering_test.jl")
     include("function_tables_load_errors_test.jl")  # §9.5.5 the pinned order of the table checks

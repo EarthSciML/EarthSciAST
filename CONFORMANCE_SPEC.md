@@ -5936,7 +5936,7 @@ well, naming the noise parameter: the lowering builds the ODE
 `ModelingToolkit.System` and has no SDE form, so it would read the noise as a
 constant, and no compiler in any binding integrates an SDE. All
 seventeen are driven from this category's own manifest by
-`pkg/EarthSciAST.jl/test/compiler_mtk_test.jl`, so a case added here is covered
+`pkg/EarthSciAST.jl/test/mtk/compiler_mtk_test.jl`, so a case added here is covered
 there the day it lands. The refusals this category
 gates are therefore refusals BY THE DEFAULT COMPILER: `:native` and
 `:interpreter` share the tree-walk evaluator and raise `unsupported_construct`
