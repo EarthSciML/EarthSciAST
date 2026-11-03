@@ -370,7 +370,7 @@ function _geo_index_extent(ref, index_sets, derived_extents)
         e === nothing || return Int(e)
     end
     sz = s === nothing ? nothing :
-        hasproperty(s, :size) ? getproperty(s, :size) :
+        _dynamic(hasproperty, s, :size)::Bool ? getproperty(s, :size) :
         (s isa AbstractDict ? get(s, "size", get(s, :size, nothing)) : nothing)
     sz === nothing && throw(
         TreeWalkError(
@@ -1310,11 +1310,11 @@ const _GEO_EVAL_OPS = _ops_with(:geo_eval)
 # needs the general build-time cell evaluator instead.
 function _body_needs_general_eval(e::OpExpr)
     e.op in _GEO_EVAL_OPS || return true
-    any(a -> a isa OpExpr && _body_needs_general_eval(a), e.args) && return true
+    _anyof(a -> a isa OpExpr && _body_needs_general_eval(a), e.args) && return true
     e.expr_body isa OpExpr && _body_needs_general_eval(e.expr_body::OpExpr) && return true
     e.filter isa OpExpr && _body_needs_general_eval(e.filter::OpExpr) && return true
     if e.values !== nothing
-        any(v -> v isa OpExpr && _body_needs_general_eval(v), e.values) && return true
+        _anyof(v -> v isa OpExpr && _body_needs_general_eval(v), e.values) && return true
     end
     return false
 end
@@ -1881,7 +1881,7 @@ function _geometry_setup_vars(
         for (n, rhs) in defs
             (is_arr_obs(n) && !(n in blocked)) || continue
             refs = intersect(_referenced_var_names(rhs), mvars)
-            if any(_is_scalar_computed_obs, refs) || any(f -> f in blocked, refs)
+            if _anyof(_is_scalar_computed_obs, refs) || _anyof(f -> f in blocked, refs)
                 push!(blocked, n); changed = true
             end
         end
@@ -2025,7 +2025,7 @@ function _build_setup_env(
     )
     env = Dict{String, Any}()
     for (k, v) in const_arrays_kw
-        env[String(k)] = v isa AbstractArray ? Array{Float64}(v) : v
+        env[String(k)] = v isa AbstractArray ? _dynamic(Array{Float64}, v)::Array{Float64} : v
     end
     for (n, defn) in observed_definitions(model)
         v = model.variables[n]
@@ -2047,7 +2047,7 @@ function _build_setup_env(
         # esm-spec §6.6.2: a SHAPED parameter's override is INLINE ARRAY DATA —
         # build-time data the setup evaluator gathers, exactly like a `const`-op
         # array observed above, not a scalar to coerce.
-        env[String(k)] = v isa AbstractArray ? Array{Float64}(v) : Float64(v)
+        env[String(k)] = v isa AbstractArray ? _dynamic(Array{Float64}, v)::Array{Float64} : Float64(v)
     end
     if vi_maps !== nothing
         for (name, buf) in vi_maps

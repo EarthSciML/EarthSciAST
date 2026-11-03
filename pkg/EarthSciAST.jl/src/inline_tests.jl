@@ -1892,7 +1892,7 @@ _mentions_free(::ASTExpr, ::AbstractString) = false
 _mentions_free(expr::VarExpr, name::AbstractString) = expr.name == name
 function _mentions_free(expr::OpExpr, name::AbstractString)::Bool
     String(name) in _bound_symbols(expr) && return false
-    return any(c -> _mentions_free(c, name), child_exprs(expr))
+    return _anyof(c -> _mentions_free(c, name), child_exprs(expr))
 end
 
 # The ARRAY half of the §6.6.5 build-time clash scope: every name the build's

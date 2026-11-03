@@ -809,7 +809,7 @@ end
 # that reads an `xs` — this registry, the tree-walk build's const-arg protocol,
 # the MTK lowering — runs it.
 function _validate_searchsorted_table(name::String, xs)::Nothing
-    if !(xs isa AbstractVector && all(x -> x isa Real && !(x isa Bool), xs))
+    if !(xs isa AbstractVector && _allof(x -> x isa Real && !(x isa Bool), xs))
         throw(
             ClosedFunctionError(
                 ERROR_CODES.INTERP_AXIS_NOT_CONST,
@@ -897,8 +897,8 @@ end
 # `interp_axis_length_mismatch`). `[]` is rank 1 and never rank 2 (ruling Q-111):
 # as `interp.bilinear`'s table it is `interp_table_not_const`.
 _interp_number(x) = x isa Real && !(x isa Bool)
-_interp_rank1(v) = v isa AbstractVector && all(_interp_number, v)
-_interp_rank2(v) = v isa AbstractVector && !isempty(v) && all(_interp_rank1, v)
+_interp_rank1(v) = v isa AbstractVector && _allof(_interp_number, v)
+_interp_rank2(v) = v isa AbstractVector && !isempty(v) && _allof(_interp_rank1, v)
 
 function _require_interp_rank(name::String, v, rank::Int, code::String, label::String)
     (rank == 1 ? _interp_rank1(v) : _interp_rank2(v)) && return nothing
@@ -957,7 +957,7 @@ function _interp_axis_increasing(name::String, axis::Vector{Float64}, label::Str
     return nothing
 end
 
-_interp_axis_f64(axis_raw)::Vector{Float64} = Float64[Float64(v) for v in axis_raw]
+_interp_axis_f64(axis_raw) = _dynamic(a -> Float64[Float64(v) for v in a], axis_raw)::Vector{Float64}
 
 function _validate_interp_linear_args(name::String, table_raw, axis_raw)::Vector{Float64}
     _require_interp_rank(name, table_raw, 1, ERROR_CODES.INTERP_TABLE_NOT_CONST, "table")
@@ -1481,8 +1481,8 @@ function _lower_raw_enum_ops(node, enums, open_names::AbstractSet{String})
             args = _raw_get(node, "args")
             (
                 args !== nothing && _is_array(args) && length(args) == 2 &&
-                    all(a -> a isa AbstractString, args) &&
-                    !any(a -> String(a) in open_names, args)
+                    _allof(a -> a isa AbstractString, args) &&
+                    !_anyof(a -> String(a) in open_names, args)
             ) || return node
             enum_name, symbol = String(args[1]), String(args[2])
             mapping = enums !== nothing && _is_object(enums) ?

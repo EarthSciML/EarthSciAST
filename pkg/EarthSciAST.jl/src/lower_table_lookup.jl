@@ -617,11 +617,11 @@ _table_leaf(x) = x isa Real && !(x isa Bool)
 function _table_has_shape(x, shape::Vector{Int}, d::Int)::Bool
     d > length(shape) && return _table_leaf(x)
     (x isa AbstractVector && length(x) == shape[d]) || return false
-    return all(c -> _table_has_shape(c, shape, d + 1), x)
+    return _allof(c -> _table_has_shape(c, shape, d + 1), x)
 end
 
 # Every leaf finite (run after `_table_has_shape`, so every leaf is a number).
-_table_all_finite(x) = x isa AbstractVector ? all(_table_all_finite, x) : isfinite(x)
+_table_all_finite(x) = x isa AbstractVector ? _allof(_table_all_finite, x) : isfinite(x)
 
 # The esm-spec §9.5.3 `nearest` composition, op for op and operand for operand
 # (every binding builds this same tree so ties are decided on the same two
@@ -766,5 +766,5 @@ _table_const(slice) = OpExpr("const", ASTExpr[]; value = _table_data_value(slice
 # `_validate_function_table` has already checked the nesting and that every
 # leaf is a number.
 _table_data_value(slice::AbstractVector) =
-    all(_table_leaf, slice) ? Float64[Float64(x) for x in slice] :
+    _allof(_table_leaf, slice) ? Float64[Float64(x) for x in slice] :
     Vector{Float64}[_table_data_value(row) for row in slice]

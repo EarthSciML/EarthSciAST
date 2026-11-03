@@ -292,7 +292,7 @@ function _reads_ref(nd::_Node, ref, memo::IdDict{_Node, Bool})
     got === nothing || return got
     r = (nd.kind === _NK_LOOPVAR && nd.payload === ref) ||
         (nd.kind === _NK_RAGGED_LOOP && (nd.payload::_RaggedLoop).ref === ref) ||
-        any(c -> _reads_ref(c, ref, memo), nd.children)
+        _anyof(c -> _reads_ref(c, ref, memo), nd.children)
     memo[nd] = r
     return r
 end
@@ -322,7 +322,7 @@ function _ac_ragged_entries(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
     spec = nd.payload::_RaggedLoop
     lo_n, hi_n = nd.children[2], nd.children[3]
     (_ac_cell_only(lo_n, nest.refs) && _ac_cell_only(hi_n, nest.refs)) || return nothing
-    ncells = prod(nest.lens; init = 1)
+    ncells = _dynamic(l -> prod(l; init = 1), nest.lens)::Int
     seg = Vector{Int}(undef, ncells + 1)
     kcol = Int[]
     seg[1] = 1
@@ -369,7 +369,7 @@ function _ac_cell_only(nd::_Node, refs)
         k === _NK_LITERAL || k === _NK_CONST_GATHER ||
             (k === _NK_OP && nd.op !== :fn)
     ) || return false
-    return all(c -> _ac_cell_only(c, refs), nd.children)
+    return _allof(c -> _ac_cell_only(c, refs), nd.children)
 end
 
 _cg_oplus_fn(op::Symbol) =
@@ -1005,7 +1005,7 @@ function _ac_param_only(nd::_Node)
         k === _NK_LITERAL || k === _NK_PARAM || k === _NK_LOOPVAR ||
             k === _NK_CONST_GATHER || k === _NK_OP
     ) || return false
-    return all(_ac_param_only, nd.children)
+    return _allof(_ac_param_only, nd.children)
 end
 
 # The gated TABLE fold: the cell folds its compacted entries `segc[c]:segc[c+1]-1`

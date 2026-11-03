@@ -859,7 +859,7 @@ function _stencilize_index(e::OpExpr, ctx::_StencilCtx)
         )
         _amemo = IdDict{OpExpr, Bool}()
         _arrayish(a) = _index_pushdown_arrayish(a, _leaf_is_array, _amemo)
-        if any(_arrayish, fa.args)
+        if _anyof(_arrayish, fa.args)
             pushed = ASTExpr[
                 _arrayish(a) ? OpExpr("index", ASTExpr[a, idx_args...]) : a
                     for a in fa.args
@@ -918,7 +918,7 @@ function _lane_subscript_static(
     elseif o.op == "const"
         return o.value isa Real && !(o.value isa Bool)
     elseif o.op in _LANE_SUBSCRIPT_OPS
-        return all(a -> _lane_subscript_static(a, idxset, const_arrays), o.args)
+        return _allof(a -> _lane_subscript_static(a, idxset, const_arrays), o.args)
     end
     return false
 end
@@ -1187,7 +1187,7 @@ end
 function _reaches_indexable_producer(e::OpExpr)
     (e.op == "makearray" || _is_array_producer(e)) && return true
     _is_scalar_op(e.op) || return false
-    return any(a -> a isa OpExpr && _reaches_indexable_producer(a::OpExpr), e.args)
+    return _anyof(a -> a isa OpExpr && _reaches_indexable_producer(a::OpExpr), e.args)
 end
 
 # The key of `index(fa, kargs…)` for an elementwise `fa`: each producer operand
@@ -1533,7 +1533,9 @@ struct _IdxNode
     args::Vector{_IdxNode}
     flat::Vector{Float64}       # gather: the const array's data, column-major
     dims::Vector{Int}
+    _IdxNode(kind, val, args, flat, dims) = _new_typed(_IdxNode, kind, val, args, flat, dims)
 end
+_def_new_typed(_IdxNode)
 _IdxNode(kind::Int8, val::Int, args::Vector{_IdxNode} = _IdxNode[]) =
     _IdxNode(kind, val, args, Float64[], Int[])
 

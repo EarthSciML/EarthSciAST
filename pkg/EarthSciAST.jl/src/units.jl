@@ -964,7 +964,8 @@ function Base.:/(a::ExactScale, b::ExactScale)
 end
 
 function Base.:^(a::ExactScale, r::Real)
-    q = r isa Rational ? Rational{Int}(r) : Rational{Int}(rationalize(Int, float(r); tol = 1.0e-9))
+    q = r isa Rational ? Rational{Int}(r) :
+        _dynamic(x -> Rational{Int}(rationalize(Int, float(x); tol = 1.0e-9)), r)::Rational{Int}
     return _exact_normalize(ExactScale(Dict(p => x * q for (p, x) in a.primes), a.pi * q))
 end
 
@@ -1249,7 +1250,7 @@ function _same_dimensions_over(
         args, var_units, findings, describe;
         angle_meets_number::Bool = false
     )
-    arg_dims = [_expr_dimensions!(findings, arg, var_units) for arg in args]
+    arg_dims = Any[_expr_dimensions!(findings, arg, var_units) for arg in args]
     valid_dims = filter(d -> d !== nothing, arg_dims)
     isempty(valid_dims) && return nothing
 
