@@ -1,0 +1,196 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "variable_map_data_fed_state_source_named_like_data_source",
+    "description": "The `param_to_var` source `Met.T` is an UNKNOWN (a state, shaped [x]) of a model whose name is also a `data_sources` key; the target `Box.F_T` is a parameter shaped [x]. Python, TypeScript and Go used to take the source for a pre-1.0 loaded field because its owner matched a data source, and built a parameter `Met.T` beside the state `Met.T`. Flattening must leave `Met.T` a state only: no parameter of that name, and nothing in `loader_fields` or `discrete_parameters` for it.",
+    "tags": [
+      "variable_map",
+      "param_to_var",
+      "data-source",
+      "shape",
+      "conformance"
+    ]
+  },
+  "index_sets": {
+    "rec": {
+      "kind": "interval",
+      "size": 2
+    },
+    "x": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "data_sources": {
+    "Met": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file:///data/met/met_{date:%Y%m%d}.nc"
+      },
+      "temporal": {
+        "frequency": "PT1H",
+        "file_period": "P1D",
+        "records_per_file": 24
+      }
+    }
+  },
+  "models": {
+    "Met": {
+      "variables": {
+        "T": {
+          "type": "unknown",
+          "units": "K",
+          "shape": [
+            "x"
+          ],
+          "default": 300.0,
+          "description": "Temperature per cell."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "T",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": 0.0
+          }
+        }
+      ]
+    },
+    "Box": {
+      "variables": {
+        "c": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "shape": [
+            "x"
+          ],
+          "default": 1.0,
+          "description": "Tracer concentration per cell."
+        },
+        "F_T": {
+          "type": "parameter",
+          "units": "K",
+          "shape": [
+            "x"
+          ],
+          "default": 300.0,
+          "description": "Temperature per cell. Coupled from Met.T."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/(s*K)",
+          "default": 1e-05,
+          "description": "Temperature sensitivity of the loss rate."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "c",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    "k",
+                    {
+                      "op": "index",
+                      "args": [
+                        "F_T",
+                        "i"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "c",
+                        "i"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "Met.T",
+      "to": "Box.F_T",
+      "transform": "param_to_var"
+    }
+  ]
+}

@@ -6975,9 +6975,9 @@
       }
     },
     {
-      "id": "variable_map_data_fed_scalar_feed_onto_shaped_target",
+      "id": "variable_map_data_fed_data_fed_source_keeps_declaration",
       "tier": "variable_map_data_fed",
-      "fixture": "conformance/variable_map_data_fed/fixtures/scalar_feed_onto_shaped_target.esm",
+      "fixture": "conformance/variable_map_data_fed/fixtures/data_fed_source_keeps_declaration.esm",
       "system_kind": "ode",
       "independent_variables": [
         "t"
@@ -7162,6 +7162,113 @@
           "cadence": "discrete"
         }
       ],
+      "lifted_shapes": {}
+    },
+    {
+      "id": "variable_map_data_fed_state_source_named_like_data_source",
+      "tier": "variable_map_data_fed",
+      "fixture": "conformance/variable_map_data_fed/fixtures/state_source_named_like_data_source.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "Met.T",
+          "role": "state",
+          "units": "K",
+          "default": 300.0,
+          "shape": [
+            "x"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Met"
+        },
+        {
+          "name": "Box.c",
+          "role": "state",
+          "units": "mol/mol",
+          "default": 1.0,
+          "shape": [
+            "x"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Box"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "Box.k",
+          "role": "parameter",
+          "units": "1/(s*K)",
+          "default": 1e-05,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Box"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 2,
+      "equations": [
+        {
+          "lhs": "sum[i] (D(Met.T[i])/Dt) where {i in x}",
+          "rhs": "sum[i] (0) where {i in x}",
+          "source_system": "Met",
+          "contributions": [
+            {
+              "rhs": "sum[i] (0) where {i in x}",
+              "origins": [
+                {
+                  "component": "Met"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "sum[i] (D(Box.c[i])/Dt) where {i in x}",
+          "rhs": "sum[i] (-Box.k * Met.T[i] * Box.c[i]) where {i in x}",
+          "source_system": "Box",
+          "contributions": [
+            {
+              "rhs": "sum[i] (-Box.k * Met.T[i] * Box.c[i]) where {i in x}",
+              "origins": [
+                {
+                  "component": "Box"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "Met",
+          "Box"
+        ],
+        "coupling_rules": [
+          "variable_map(Met.T -> Box.F_T, transform=param_to_var)"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [
+        "rec",
+        "x"
+      ],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
       "lifted_shapes": {}
     },
     {
@@ -8715,6 +8822,16 @@
       "fixture": "coupling/coupling_resolution_edge_cases.esm",
       "error": "VariableMapUnresolvedEndpointError",
       "reason": "EDGE CASE 10 of this catalogue maps `SingleVariableSystem.x` onto `EmptySystem.nonexistent_param`, which the document declares nowhere. Every binding used to flatten it CLEANLY with the entry silently dropped: the substitution runs over a name nothing references and the promotion pops a key that is not there, so the flattened system is indistinguishable from one where the coupling applied and happened to have no effect. That is the failure mode issue #198 item 1 reports from the other end -- a target that keeps its declared default, and (when it is the SOURCE that resolves to nothing) consumers rewritten to a name no table binds, which reads NaN at run time rather than raising. Same placement rule as `couple_multiplicative_no_tendency`: schema-valid and structurally valid, refused at FLATTEN, so it lives in tests/coupling/ and not tests/invalid/."
+    },
+    {
+      "fixture": "conformance/variable_map_data_fed/fixtures/scalar_source_onto_shaped_target.esm",
+      "error": "VariableMapShapeConflictError",
+      "reason": "the data-fed `Met.K` declares `shape: []` and the `param_to_var` target `Box.F_k` is shaped [rec, x], so the rewritten equation reads `Met.K[1, i]`. esm-libraries-spec §4.7.3: the source survives with its own declaration, and `[]` declares a scalar buffer rather than asking for a shape, so flatten refuses instead of reshaping it."
+    },
+    {
+      "fixture": "conformance/variable_map_data_fed/fixtures/one_source_two_target_shapes.esm",
+      "error": "VariableMapShapeConflictError",
+      "reason": "one data-fed source `Met.K[rec, x]` feeds `Box.F_k[rec, x]` and `Box.G_k[x]`. Every edge is checked against the source's DECLARED shape (esm-libraries-spec §4.7.3), so the second edge is refused whichever coupling entry comes first; letting the first edge win made the result depend on coupling order."
     },
     {
       "fixture": "conformance/expression_templates/nonterminating_rewrite/fixture.esm",

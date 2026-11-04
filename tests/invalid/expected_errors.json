@@ -563,6 +563,22 @@
     ],
     "is_valid": false
   },
+  "variable_map_from_data_source.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/coupling/0/from",
+        "code": "unresolved_scoped_ref",
+        "message": "Scoped reference 'Met.K' cannot be resolved: 'Met' is a data_sources key, not a model or reaction system",
+        "details": {
+          "reference": "Met.K",
+          "coupling_type": "variable_map",
+          "missing_component": "Met"
+        }
+      }
+    ],
+    "is_valid": false
+  },
   "unresolved_scoped_ref_missing_variable.esm": {
     "schema_errors": [],
     "structural_errors": [

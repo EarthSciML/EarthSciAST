@@ -375,19 +375,26 @@ CASES: list[tuple[str, str, str]] = [
         )
     ],
     # --- a data-fed parameter mapped onto a shaped target (§4.7.3) ----------
-    # `param_to_var` from a 0-d data-fed `Met.K` onto `Box.F_k[rec, x]`: the
-    # survivor is `Met.K` with the target's shape and its own `data` update, so
+    # `param_to_var` from a data-fed `Met.K[rec, x]` onto `Box.F_k[rec, x]`: the
+    # survivor is `Met.K` exactly as declared, its `data` update included, so
     # `discrete_parameters` and `loader_fields` agree. The second document keys
     # the data source by the owner's name, which is what tripped a pre-1.0
-    # loader rule into rebuilding the parameter without its update. See
-    # tests/conformance/variable_map_data_fed.
+    # loader rule into rebuilding the parameter without its update; the third
+    # does the same to a STATE source, which that rule shadowed with a parameter
+    # of the same name. The two shape conflicts are REFUSALS below; a `from` that
+    # names a data source's field is tests/invalid/variable_map_from_data_source.esm.
+    # See tests/conformance/variable_map_data_fed.
     *[
         (
             "variable_map_data_fed",
             f"variable_map_data_fed_{name}",
             f"conformance/variable_map_data_fed/fixtures/{name}.esm",
         )
-        for name in ("scalar_feed_onto_shaped_target", "source_named_like_owner")
+        for name in (
+            "data_fed_source_keeps_declaration",
+            "source_named_like_owner",
+            "state_source_named_like_data_source",
+        )
     ],
     # --- per-term provenance (esm-libraries-spec §4.7.5, issue #539) ---------
     # Every case above records `contributions` too; these isolate one row of the
@@ -513,6 +520,26 @@ REFUSALS: list[dict[str, str]] = [
             "reads NaN at run time rather than raising. Same placement rule as "
             "`couple_multiplicative_no_tendency`: schema-valid and structurally valid, refused at "
             "FLATTEN, so it lives in tests/coupling/ and not tests/invalid/."
+        ),
+    },
+    {
+        "fixture": "conformance/variable_map_data_fed/fixtures/scalar_source_onto_shaped_target.esm",
+        "error": "VariableMapShapeConflictError",
+        "reason": (
+            "the data-fed `Met.K` declares `shape: []` and the `param_to_var` target `Box.F_k` "
+            "is shaped [rec, x], so the rewritten equation reads `Met.K[1, i]`. esm-libraries-spec "
+            "§4.7.3: the source survives with its own declaration, and `[]` declares a scalar "
+            "buffer rather than asking for a shape, so flatten refuses instead of reshaping it."
+        ),
+    },
+    {
+        "fixture": "conformance/variable_map_data_fed/fixtures/one_source_two_target_shapes.esm",
+        "error": "VariableMapShapeConflictError",
+        "reason": (
+            "one data-fed source `Met.K[rec, x]` feeds `Box.F_k[rec, x]` and `Box.G_k[x]`. "
+            "Every edge is checked against the source's DECLARED shape (esm-libraries-spec "
+            "§4.7.3), so the second edge is refused whichever coupling entry comes first; "
+            "letting the first edge win made the result depend on coupling order."
         ),
     },
     {
