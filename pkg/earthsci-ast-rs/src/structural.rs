@@ -1077,8 +1077,9 @@ fn is_record_pair_shape(esm_file: &EsmFile, shape: &[String]) -> bool {
 
 /// The first record shape of the parameter scoped `me` that fails rule 3 of
 /// esm-spec §8.5.1, or `None` when every record shape that can be decided
-/// passes. The record shape is `own_shape` when that is not empty; otherwise
-/// the declared shape of EVERY `param_to_var` target of `me` in `coupling`. A
+/// passes. The record shape is `own_shape` whenever the parameter declares
+/// one (`[]`, a scalar buffer, included — and refused); only an ABSENT shape
+/// takes the declared shape of EVERY `param_to_var` target of `me` in `coupling`. A
 /// target whose declaration the document does not reach is not decidable and
 /// is skipped. With no `param_to_var` entry at all the record shape is empty,
 /// which fails unless `defer_empty` (an edge may still arrive by
@@ -1087,10 +1088,10 @@ fn failing_record_shape(
     esm_file: &EsmFile,
     coupling: &[crate::CouplingEntry],
     me: &str,
-    own_shape: &[String],
+    own_shape: Option<&[String]>,
     defer_empty: bool,
 ) -> Option<Vec<String>> {
-    if !own_shape.is_empty() {
+    if let Some(own_shape) = own_shape {
         return (!is_record_pair_shape(esm_file, own_shape)).then(|| own_shape.to_vec());
     }
     let mut targets = coupling
@@ -1124,9 +1125,11 @@ fn record_shape_message(var_name: &str, shape: &[String]) -> String {
 /// `from.records_per_sample` on a rule that is not `data`; or an EFFECTIVE
 /// value of 2 on a parameter whose source declares no `temporal` block, or
 /// whose record shape's first dimension is not an index set of exactly two
-/// members. Checks every record shape the loaded document shows; an empty
-/// one is refused only when the parameter has no inline `param_to_var` entry
-/// and the coupling holds no `coupling_import`, and otherwise is left to
+/// members. The record shape is the declared `shape` whenever one is declared
+/// (`[]` included); only an absent one takes its `param_to_var` targets'.
+/// Checks every record shape the loaded document shows; an absent shape with
+/// no target is refused only when the parameter has no inline `param_to_var`
+/// entry and the coupling holds no `coupling_import`, and otherwise is left to
 /// [`check_records_per_sample_at_flatten`].
 pub(crate) fn validate_records_per_sample(esm_file: &EsmFile, errors: &mut Vec<StructuralError>) {
     let coupling = esm_file.coupling.as_deref().unwrap_or_default();
@@ -1181,7 +1184,7 @@ pub(crate) fn validate_records_per_sample(esm_file: &EsmFile, errors: &mut Vec<S
                 });
                 continue;
             }
-            let own_shape = var.shape.as_deref().unwrap_or_default();
+            let own_shape = var.shape.as_deref();
             let me = format!("{scope}.{var_name}");
             if let Some(shape) =
                 failing_record_shape(esm_file, coupling, &me, own_shape, defer_empty)
@@ -1198,11 +1201,11 @@ pub(crate) fn validate_records_per_sample(esm_file: &EsmFile, errors: &mut Vec<S
 }
 
 /// `records_per_sample_invalid` (esm-spec §8.5.1), at flatten: for each
-/// data-fed parameter declaring an empty `shape` whose effective
-/// `records_per_sample` is 2, checks rule 3 against the `param_to_var` edges
-/// of `esm_file`'s coupling, which flatten has already expanded past every
-/// `coupling_import` and whose refs are mounted. A record shape still empty
-/// here is refused. Rules 1 and 2 and a declared non-empty shape are
+/// data-fed parameter whose effective `records_per_sample` is 2, checks rule
+/// 3 against its declared `shape` when it declares one (`[]` included), and
+/// otherwise against the `param_to_var` edges of `esm_file`'s coupling, which
+/// flatten has already expanded past every `coupling_import` and whose refs
+/// are mounted. A record shape still empty here is refused. Rules 1 and 2 are
 /// structural validation's, which sees them in full.
 pub(crate) fn check_records_per_sample_at_flatten(
     esm_file: &EsmFile,
@@ -1210,7 +1213,7 @@ pub(crate) fn check_records_per_sample_at_flatten(
     let coupling = esm_file.coupling.as_deref().unwrap_or_default();
     let mut first_error = None;
     for_each_updated_variable(esm_file, &mut |scope, path, var_name, var| {
-        if first_error.is_some() || var.shape.as_ref().is_some_and(|s| !s.is_empty()) {
+        if first_error.is_some() {
             return;
         }
         let Some(spec) = var.update.as_ref() else {
@@ -1231,7 +1234,9 @@ pub(crate) fn check_records_per_sample_at_flatten(
                 continue;
             }
             let me = format!("{scope}.{var_name}");
-            if let Some(shape) = failing_record_shape(esm_file, coupling, &me, &[], false) {
+            if let Some(shape) =
+                failing_record_shape(esm_file, coupling, &me, var.shape.as_deref(), false)
+            {
                 let at = update_rule_pointer(path, var_name, spec, i);
                 first_error = Some(crate::diagnostic::err(
                     crate::diagnostic::codes::RECORDS_PER_SAMPLE_INVALID,

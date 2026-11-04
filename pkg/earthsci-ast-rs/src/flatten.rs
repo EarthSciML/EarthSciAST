@@ -234,24 +234,22 @@ pub enum FlattenError {
     /// `VariableMapShapeConflictError`.
     ///
     /// The parameter that survives a `param_to_var` / `conversion_factor` edge
-    /// is the SOURCE's own declaration, `shape` included, and the rewritten
-    /// equations index it the way the target was declared. Taking either shape
-    /// silently would leave equations indexing a parameter of the wrong rank,
-    /// or — with one source feeding two targets — make the result depend on
-    /// coupling order, so the two must be equal. Absent and `[]` both declare
-    /// a scalar.
-    #[error(
-        "variable_map({from} -> {to}): the data-fed source '{from}' declares shape \
-         {source_shape:?}, but the target it replaces declares {target_shape:?}. The source \
-         survives with its own declaration, and the rewritten equations index it the way the \
-         target was declared, so the two shapes must be equal (esm-libraries-spec §4.7.3). \
-         Declare '{from}' with shape {target_shape:?}."
-    )]
+    /// is the SOURCE's own declaration, and the rewritten equations index it
+    /// the way the target was declared. A source that declares a `shape` —
+    /// `[]`, a scalar buffer, included — must declare the target's; a source
+    /// that declares none takes the first shaped target's, so every further
+    /// target must declare that same one (`took_shape` is then `true` and
+    /// `source_shape` is the shape it took). Taking either shape silently
+    /// would leave equations indexing a parameter of the wrong rank, or — with
+    /// one source feeding two targets — make the result depend on coupling
+    /// order.
+    #[error("{}", shape_conflict_message(.from, .to, .source_shape, .target_shape, *.took_shape))]
     VariableMapShapeConflict {
         from: String,
         to: String,
         source_shape: Vec<String>,
         target_shape: Vec<String>,
+        took_shape: bool,
     },
 
     /// Wrapped reaction-lowering failure.
@@ -2221,15 +2219,18 @@ fn in_document_order(
 
 /// Phase 5a of [`flatten`]: apply post-collection `variable_map` parameter
 /// removals. A promoting transform (`param_to_var`, `conversion_factor`)
-/// removes the target parameter; the source survives exactly as declared
-/// (esm-libraries-spec §4.7.3), and a data-fed source whose shape differs from
-/// a shaped target's is refused ([`FlattenError::VariableMapShapeConflict`]).
+/// removes the target parameter; the source survives as declared, a data-fed
+/// source that declares no shape takes a shaped target's, and one whose shape
+/// differs from a shaped target's is refused
+/// ([`FlattenError::VariableMapShapeConflict`], esm-libraries-spec §4.7.3).
 /// An expression transform replaces the target with an observed.
 fn apply_variable_map_removals(
     file: &EsmFile,
     parts: &mut AssembledParts,
     merged_renames: &IndexMap<String, String>,
 ) -> Result<(), FlattenError> {
+    // Shapeless data-fed sources that took a shape from an earlier edge.
+    let mut took: HashSet<String> = HashSet::new();
     if let Some(entries) = &file.coupling {
         for (index, entry) in entries.iter().enumerate() {
             let CouplingEntry::VariableMap {
@@ -2245,13 +2246,14 @@ fn apply_variable_map_removals(
                 VariableMapTransform::Named(name)
                     if matches!(name.as_str(), "param_to_var" | "conversion_factor") =>
                 {
-                    // The source survives exactly as declared — units, default,
-                    // `update`, `shape` (esm-libraries-spec §4.7.3) — and no
+                    // The source survives as its own declaration — units,
+                    // default, `update` — taking the target's shape only when
+                    // it declares none (esm-libraries-spec §4.7.3), and no
                     // parameter is ever built for a `from`: a data source is not
                     // a coupling endpoint (esm-spec §8). `source_fed_producers`
                     // reads a shaped data-fed source as a grid field for the lift.
                     if let Some(target) = parts.parameters.shift_remove(to) {
-                        check_data_fed_source_shape(parts, from, to, &target)?;
+                        carry_data_fed_source_shape(parts, &mut took, from, to, &target)?;
                     }
                 }
                 // Expression transform (esm-spec §10.4): the entry binds the
@@ -2311,18 +2313,25 @@ fn apply_variable_map_removals(
     Ok(())
 }
 
-/// Refuse a data-fed `variable_map` source whose declared shape is not the
-/// shape of the shaped `target` it replaces
-/// ([`FlattenError::VariableMapShapeConflict`]).
+/// Give a shapeless data-fed `variable_map` source the shape of the shaped
+/// `target` it replaces, or refuse a source whose shape is not the target's
+/// ([`FlattenError::VariableMapShapeConflict`], esm-libraries-spec §4.7.3).
 ///
-/// Nothing is changed here: the source survives the edge as declared
-/// (esm-libraries-spec §4.7.3). Because no edge ever modifies the source,
-/// checking each edge against the source's DECLARATION keeps the verdict
-/// independent of coupling order — one source feeding two targets of different
-/// shapes is refused whichever edge comes first. "Data-fed" is
-/// [`crate::data_fed::is_data_fed`], the rule the loader-field lowering uses.
-fn check_data_fed_source_shape(
-    parts: &AssembledParts,
+/// The source survives the edge as its own declaration — units, default,
+/// `update`. When `target` is shaped and the source is data-fed
+/// ([`crate::data_fed::is_data_fed`], the rule the loader-field lowering
+/// uses), the rewritten equations index the source with the target's indices:
+///
+/// * a source that DECLARES NO `shape` (`None` in the flattened table, which
+///   keeps absent apart from `[]`) takes the target's, and is recorded in
+///   `took` so every further edge from it must name a target of that same
+///   shape — one shapeless source feeding two targets of different shapes is
+///   refused whichever entry comes first;
+/// * a source that declares a `shape` — `[]`, a scalar buffer, included —
+///   keeps it, and it must equal the target's.
+fn carry_data_fed_source_shape(
+    parts: &mut AssembledParts,
+    took: &mut HashSet<String>,
     from: &str,
     to: &str,
     target: &ModelVariable,
@@ -2330,23 +2339,59 @@ fn check_data_fed_source_shape(
     let Some(target_shape) = target.shape.as_ref().filter(|s| !s.is_empty()) else {
         return Ok(());
     };
-    let Some(source) = parts.parameters.get(from) else {
+    let Some(source) = parts.parameters.get_mut(from) else {
         return Ok(());
     };
-    let source_shape = source.shape.clone().unwrap_or_default();
-    let data_fed = source
+    if !source
         .update
         .as_ref()
-        .is_some_and(crate::data_fed::is_data_fed);
-    if data_fed && source_shape != *target_shape {
-        return Err(FlattenError::VariableMapShapeConflict {
-            from: from.to_string(),
-            to: to.to_string(),
-            source_shape,
-            target_shape: target_shape.clone(),
-        });
+        .is_some_and(crate::data_fed::is_data_fed)
+    {
+        return Ok(());
     }
-    Ok(())
+    let Some(source_shape) = source.shape.as_ref() else {
+        source.shape = Some(target_shape.clone());
+        took.insert(from.to_string());
+        return Ok(());
+    };
+    if source_shape == target_shape {
+        return Ok(());
+    }
+    Err(FlattenError::VariableMapShapeConflict {
+        from: from.to_string(),
+        to: to.to_string(),
+        source_shape: source_shape.clone(),
+        target_shape: target_shape.clone(),
+        took_shape: took.contains(from),
+    })
+}
+
+/// The message of [`FlattenError::VariableMapShapeConflict`].
+fn shape_conflict_message(
+    from: &str,
+    to: &str,
+    source_shape: &[String],
+    target_shape: &[String],
+    took_shape: bool,
+) -> String {
+    let why = if took_shape {
+        format!(
+            "declares no shape and took {source_shape:?} from an earlier param_to_var target, \
+             but this target declares {target_shape:?}. A shapeless data-fed source takes its \
+             shape from the targets it replaces, so they must all declare the same one"
+        )
+    } else {
+        format!(
+            "declares shape {source_shape:?}, but the target it replaces declares \
+             {target_shape:?}. The source survives with its own declaration and the rewritten \
+             equations index it the way the target was declared, so the two must be equal; \
+             declare '{from}' with shape {target_shape:?}, or with no shape to take the target's"
+        )
+    };
+    format!(
+        "variable_map({from} -> {to}): the data-fed source '{from}' {why} \
+         (esm-libraries-spec §4.7.3)."
+    )
 }
 
 /// Phase 5b of [`flatten`]: pointwise spatial lift trigger (esm-spec §10.5).
