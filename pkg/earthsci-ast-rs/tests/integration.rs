@@ -275,6 +275,8 @@ mod pretty_print;
 mod problem_surface;
 #[path = "property_expression.rs"]
 mod property_expression;
+#[path = "provider_forcing_conformance.rs"]
+mod provider_forcing_conformance;
 #[path = "public_rhs_program_conformance.rs"]
 mod public_rhs_program_conformance;
 #[path = "pushdown_cell_geometry.rs"]

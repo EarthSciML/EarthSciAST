@@ -339,12 +339,12 @@ fn a_discrete_refresh_sample_is_the_const_buffer() {
     assert_eq!(bits(&buf), bits(prog.default_forcing().buffer(k)));
 }
 
-/// A discrete provider whose refresh delivers the transposed field: the build
-/// does not sample it, and `solve` refuses it at the first refresh.
+/// A discrete provider whose sample is the transposed field: `esm_problem`
+/// samples it at construction (esm-libraries-spec §2.5.2) and refuses it there,
+/// naming its key.
 #[cfg(feature = "solve")]
 #[test]
-fn solve_refuses_a_discrete_sample_of_the_wrong_shape() {
-    use earthsci_ast::{SolveOptions, solve};
+fn esm_problem_refuses_a_discrete_sample_of_the_wrong_shape() {
     let (nx, ny) = (3, 4);
     let mut providers = fed_providers(nx, ny);
     providers.remove(0);
@@ -356,11 +356,10 @@ fn solve_refuses_a_discrete_sample_of_the_wrong_shape() {
             array: field(&[ny, nx], 0.1),
         })),
     );
-    let prob = fed_problem(nx, ny, by_key).expect("builds");
-    let Err(err) = solve(&prob, &SolveOptions::default()) else {
-        panic!("a transposed refresh solves");
-    };
-    let err = err.to_string();
+    let err = fed_problem(nx, ny, by_key)
+        .err()
+        .expect("a transposed discrete sample builds")
+        .to_string();
     assert!(
         err.contains("\"E\"")
             && err.contains("shape [4, 3]; the parameter's declared shape is [3, 4]"),

@@ -65,6 +65,7 @@
 mod compile;
 mod cse;
 mod driver;
+pub(crate) use driver::ParameterKeyResolver;
 mod eval;
 mod layout;
 pub(crate) mod range;

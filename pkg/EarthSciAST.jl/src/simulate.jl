@@ -280,6 +280,10 @@ function _prepare_run_doc(
     # the run doc's model below, where the tree-walk build seeds `u0` from them
     # (`_seed_faq_init_u0!`).
     run_init = Equation[]
+    # The names a `variable_map` coupling reads (its `from` endpoints), which
+    # flatten resolves away: a provider keyed by one keeps its own name
+    # (`_routable_keys`).
+    coupling_reads = Set{String}()
     if input isa EsmFile
         _refuse_unsupported_major_version(input.esm)
         _refuse_reserved_declaration_names(input)
@@ -287,6 +291,9 @@ function _prepare_run_doc(
         _refuse_reference_integrity_errors(input; supplied_names = supplied_names)
         run_coordinates = input.coordinates
         run_solver = input.solver
+        for c in input.coupling
+            c isa CouplingVariableMap && push!(coupling_reads, c.from)
+        end
         for (mname, model) in something(input.models, ())
             _collect_initialization_faqs!(run_init, model, String(mname))
         end
@@ -319,6 +326,7 @@ function _prepare_run_doc(
             flat_out[] = (
                 flat = input, coordinates = run_coordinates,
                 solver = run_solver, init = run_init,
+                coupling_reads = coupling_reads,
             )
         )
         return _flat_run_doc(input, run_coordinates, run_solver, run_init)
@@ -712,6 +720,179 @@ end
     _eval_node(ce.node, _NO_STATE_U, NamedTuple{syms}(ntuple(d -> @inbounds(vals[d]), Val(N))), 0.0)
 
 # --------------------------------------------------------------------------- #
+# Provider keys → the names the build reads (esm-spec §6.6.2).
+#
+# A `providers` key may spell the parameter it feeds the way a caller spells a
+# `parameter_overrides` key: exactly (`Fed.s`), bare (`s`), partly qualified,
+# or with a longer qualification whose leading segments name real components.
+# The build reads only the flattened name, so data written under any other
+# spelling was never read and the parameter silently kept its default. Keys are
+# resolved onto the flattened PARAMETERS by the resolver `parameter_overrides`
+# uses (`_canonicalize_override_keys`), so the two surfaces cannot disagree: an
+# exact key wins outright over a non-exact key for the same parameter, two
+# non-exact keys for one parameter collide, and a key two parameters carry is
+# ambiguous; the last two are errors.
+#
+# `keys_` are the keys routed by name: a gated provider is routed by its gate
+# spec instead, so callers leave those out. Returns `(targets, shadowed)`:
+# `targets` maps each key that designates a parameter to that parameter's
+# flattened name (an exact key to itself), and `shadowed` holds the keys that
+# lost to an exact key for the same parameter, which are not read. A key that
+# names a state or observed exactly (a loader field, say), or designates no
+# parameter, is in neither and is used as given.
+# --------------------------------------------------------------------------- #
+function _provider_routing(flat_rec, keys_; model_name = nothing)
+    targets = Dict{String, String}()
+    shadowed = Set{String}()
+    flat_rec === nothing && return targets, shadowed
+    flat = flat_rec.flat::FlattenedSystem
+    params = Set{String}(keys(flat.parameters))
+    asked = _routable_keys(flat_rec, keys_)
+    isempty(asked) && return targets, shadowed
+    namespaces = _override_namespaces(params; model_name = model_name)
+    normalized, unknown, ambiguous, collisions =
+        _canonicalize_override_keys(Any, params, namespaces, asked)
+    if !isempty(ambiguous)
+        k, cands = first(sort!(collect(ambiguous), by = first))
+        throw(ArgumentError(_override_ambiguous_message("providers", k, cands)))
+    end
+    if !isempty(collisions)
+        name, ks = first(sort!(collect(collisions), by = first))
+        throw(ArgumentError(_override_collision_message("providers", "parameter", name, ks)))
+    end
+    for (name, k) in normalized
+        targets[k::String] = name
+    end
+    for k in keys(asked)
+        haskey(targets, k) || k in unknown || push!(shadowed, k)
+    end
+    return targets, shadowed
+end
+
+# The keys of `keys_` the parameter resolver considers, each mapped to itself.
+# A key that is not a parameter's exact name is left out when it names a state
+# or observed exactly, or a name a `variable_map` coupling reads
+# (`coupling_reads`): the build reads it under that very name, so it is used as
+# given rather than routed onto a parameter it is a suffix of, as Rust's
+# `ParameterKeyResolver` does.
+function _routable_keys(flat_rec, keys_)
+    flat = flat_rec.flat::FlattenedSystem
+    reads = hasproperty(flat_rec, :coupling_reads) ? flat_rec.coupling_reads : ()
+    asked = Dict{String, String}()
+    for rawk in keys_
+        k = String(rawk)
+        elsewhere = k in reads || haskey(flat.state_variables, k) ||
+            haskey(flat.observed_variables, k)
+        k in keys(flat.parameters) || !elsewhere || continue
+        asked[k] = k
+    end
+    return asked
+end
+
+# Refuse a provider routed onto a parameter the caller's own `const_arrays` or
+# `param_arrays` also supply, under any spelling of it: two sources for one
+# value, where writing the provider's would silently replace the caller's array
+# (or, for a live buffer, the very object the caller holds). A registry key is
+# resolved onto the parameters by the same resolver the provider keys went
+# through (`_canonicalize_override_keys`, via `_routable_keys`), so the two
+# surfaces agree on what a key designates. A registry key carried by several
+# parameters, one of them provider-fed, is refused as ambiguous (esm-spec
+# §6.6.2); one that names a state, observed or loader field is not a
+# parameter's and never overlaps.
+function _refuse_provider_registry_overlap(
+        targets::AbstractDict, flat_rec, registries::Pair...;
+        model_name = nothing
+    )
+    (isempty(targets) || flat_rec === nothing) && return nothing
+    flat = flat_rec.flat::FlattenedSystem
+    params = Set{String}(keys(flat.parameters))
+    namespaces = _override_namespaces(params; model_name = model_name)
+    fed = Dict{String, String}(name => pk for (pk, name) in targets)
+    overlap(label, pk, rk, name) = throw(
+        ArgumentError(
+            "providers['$(pk)'] and $(label)['$(rk)'] both supply the parameter " *
+                "'$(name)'; pass one of them (esm-spec §6.6.2)"
+        )
+    )
+    for (label, reg) in registries
+        reg === nothing && continue
+        asked = _routable_keys(flat_rec, keys(reg))
+        isempty(asked) && continue
+        normalized, _, ambiguous, collisions =
+            _canonicalize_override_keys(Any, params, namespaces, asked)
+        for (k, cands) in sort!(collect(ambiguous), by = first)
+            any(c -> haskey(fed, c), cands) &&
+                throw(ArgumentError(_override_ambiguous_message(label, k, cands)))
+        end
+        for (name, rk) in sort!(collect(normalized), by = first)
+            haskey(fed, name) && overlap(label, fed[name], rk, name)
+        end
+        for (name, rks) in sort!(collect(collisions), by = first)
+            haskey(fed, name) && overlap(label, fed[name], first(rks), name)
+        end
+    end
+    return nothing
+end
+
+# A discrete provider delivering its field under the caller's key, re-exposed
+# under the name the build reads, so the refresh callback and the re-seed at a
+# run's start find it under the buffer's own name. One wrapper per provider
+# object, so a provider serving several fields is still sampled once per
+# refresh. Every optional capability of the provider interface is forwarded, so
+# the wrapper answers each one as the provider it wraps does.
+struct _RekeyedProvider
+    inner::Any
+    fields::Vector{Pair{String, String}}   # name the build reads => caller's key
+end
+provider_refresh_times(p::_RekeyedProvider) = provider_refresh_times(p.inner)
+provider_is_const(p::_RekeyedProvider) = provider_is_const(p.inner)
+provider_supports_selection(p::_RekeyedProvider) = provider_supports_selection(p.inner)
+provider_gate_spec(p::_RekeyedProvider) = provider_gate_spec(p.inner)
+provider_extent_metaparameter(p::_RekeyedProvider) = provider_extent_metaparameter(p.inner)
+function provider_sample(p::_RekeyedProvider, t::Real; selection = nothing)
+    s = selection === nothing ? provider_sample(p.inner, t) :
+        provider_sample(p.inner, t; selection = selection)
+    return Dict{String, Any}(to => _sample_field(s, from) for (to, from) in p.fields)
+end
+
+# `renamed` maps each caller key whose buffer now lives under another name to
+# that name; `discrete` is keyed by the names the build reads.
+function _rekey_discrete_providers!(discrete::Dict{String, Any}, renamed::AbstractDict)
+    isempty(renamed) && return discrete
+    from = Dict{String, String}(v => k for (k, v) in renamed)
+    moved = Base.IdSet{Any}(discrete[n] for n in keys(from) if haskey(discrete, n))
+    isempty(moved) && return discrete
+    wrap = IdDict{Any, _RekeyedProvider}()
+    for (k, prov) in discrete
+        # Every field of a provider any of whose keys was renamed rides one
+        # wrapper; its other fields keep their own names.
+        prov in moved || continue
+        w = get!(() -> _RekeyedProvider(prov, Pair{String, String}[]), wrap, prov)
+        push!(w.fields, k => get(from, k, k))
+    end
+    for k in collect(keys(discrete))
+        haskey(wrap, discrete[k]) && (discrete[k] = wrap[discrete[k]])
+    end
+    return discrete
+end
+
+# The provider keys routed by name: every key but a gated provider's, whose
+# fields are placed by its gate spec.
+_routable_provider_keys(providers, pd_gated) = String[
+    String(k) for (k, prov) in providers
+        if !(String(k) in pd_gated) && !provider_is_gated(prov)
+]
+
+# Const provider data under the name the build reads, and under the caller's
+# key beside it (as `_normalize_const_array_keys` keeps a caller's const key),
+# so a consumer that reads the caller's spelling (a pushdown alias) finds it.
+function _put_provider_const!(merged_const, key::String, target::String, data)
+    merged_const[target] = data
+    target == key || (merged_const[key] = data)
+    return merged_const
+end
+
+# --------------------------------------------------------------------------- #
 # Callback composition seam — the `CallbackSet` constructor lives in
 # EarthSciASTSimulateExt (SciMLBase), exactly like the callback CONSTRUCTORS
 # live in the DiffEqCallbacks extensions. A problem with zero or one callback
@@ -1050,8 +1231,15 @@ function _program_seed(prob)
         # routed them; the live forcing buffers are the Problem's own.
         merged_const = Dict{String, Any}(String(k) => v for (k, v) in r.const_arrays)
         if r.providers !== nothing
+            targets, shadowed = _provider_routing(
+                flat[], _routable_provider_keys(r.providers, r.pd_gated);
+                model_name = r.model_name
+            )
             for (rawk, prov) in r.providers
                 k = String(rawk)
+                # A key that lost to an exact key for the same parameter is
+                # not read (esm-spec §6.6.2).
+                k in shadowed && continue
                 # The const fields `esm_problem` bound whole, sampled again: the
                 # recipe holds no provider data, so a Problem no program is
                 # made from keeps none alive.
@@ -1060,9 +1248,13 @@ function _program_seed(prob)
                         provider_is_const(prov)
                 )
                 whole_const || continue
-                merged_const[k] = forcing_from_sample(
-                    provider_sample(prov, r.sample_time), k;
-                    shape = get(r.provider_shapes, k, nothing)
+                tk = get(targets, k, k)
+                _put_provider_const!(
+                    merged_const, k, tk,
+                    forcing_from_sample(
+                        provider_sample(prov, r.sample_time), k;
+                        shape = get(r.provider_shapes, tk, nothing)
+                    )
                 )
             end
         end
@@ -1195,7 +1387,12 @@ Stable keyword arguments (API_SPEC §5.8 — the bindings that fix a DOCUMENT):
   scoped-reference `ic(Sys.sp) ~ Model.param` folds the seeded field into `u0`
   and a loader→consumer `variable_map` binding resolves the consumer gather from
   it. DISCRETE providers get a live buffer plus a [`build_refresh_callback`](@ref)
-  on the problem, so their forcing refreshes in place at its cadence.
+  on the problem, so their forcing refreshes in place at its cadence. A key
+  that names a data-fed parameter may spell it as a `parameter_overrides` key
+  may (esm-spec §6.6.2): `Fed.s` or `s` both feed the flattened `Fed.s`. A
+  scalar parameter given data this way has no slot in `p`; the right-hand side
+  reads the data (`parameter_classes(prob)` reports it `:const_folded` or
+  `:forcing`).
 * `model_name` — select one model when the document holds several.
 * `metaparameters::AbstractDict` — binds the document's open metaparameters at
   the loader API (esm-spec §9.7.6 binding site 3), exactly as
@@ -1470,11 +1667,27 @@ function esm_problem(
         input; metaparameters = metaparams, base_path = base_path,
         renames_out = merged_renames, supplied_names = supplied, flat_out = run_flat
     )
+    # The parameter each provider feeds, under the name the build reads
+    # (`_provider_routing`): a bare `s` lands on `Fed.s`.
+    provider_targets, provider_shadowed = providers === nothing ?
+        (Dict{String, String}(), Set{String}()) :
+        _provider_routing(
+            run_flat[], _routable_provider_keys(providers, keys(pd_gates));
+            model_name = model_name
+        )
+    _refuse_provider_registry_overlap(
+        provider_targets, run_flat[],
+        "const_arrays" => const_arrays, "param_arrays" => param_arrays;
+        model_name = model_name
+    )
     # The declared shape every whole-bound provider sample is checked against
     # (`forcing_from_sample`), resolved now that discovery has closed the
     # loader extents.
     provider_shapes = providers === nothing ? Dict{String, Vector{Int}}() :
-        _provider_declared_shapes(run_flat[].flat, (String(k) for k in keys(providers)))
+        _provider_declared_shapes(
+            run_flat[].flat,
+            (get(provider_targets, String(k), String(k)) for k in keys(providers))
+        )
 
     # esm-spec §6.6.2: a `p` binding is a scalar, or — for a SHAPED parameter —
     # INLINE ARRAY DATA (a row-major nested array supplying the whole column).
@@ -1506,12 +1719,19 @@ function esm_problem(
     if providers !== nothing
         for (rawk, prov) in providers
             k = String(rawk)
+            # A key that lost to an exact key for the same parameter is not
+            # read (esm-spec §6.6.2, as for `parameter_overrides`).
+            k in provider_shadowed && continue
             pd_gate = get(pd_gates, k, nothing)
             if haskey(discovered, k)
                 # Already materialized by the extent-discovery pre-pass; never
                 # sampled twice.
-                merged_const[k] = forcing_from_sample(
-                    discovered[k], k; shape = get(provider_shapes, k, nothing)
+                _put_provider_const!(
+                    merged_const, k, get(provider_targets, k, k),
+                    forcing_from_sample(
+                        discovered[k], k;
+                        shape = get(provider_shapes, get(provider_targets, k, k), nothing)
+                    )
                 )
             elseif pd_gate !== nothing
                 # Phase 1: RECORD-DERIVED gate — the rewrite's own
@@ -1525,8 +1745,12 @@ function esm_problem(
                 # build resolves the selection without re-consulting the provider.
                 gated_providers[k] = (prov = prov, gate = provider_gate_spec(prov))
             elseif provider_is_const(prov)
-                merged_const[k] = forcing_from_sample(
-                    provider_sample(prov, t_sample), k; shape = get(provider_shapes, k, nothing)
+                _put_provider_const!(
+                    merged_const, k, get(provider_targets, k, k),
+                    forcing_from_sample(
+                        provider_sample(prov, t_sample), k;
+                        shape = get(provider_shapes, get(provider_targets, k, k), nothing)
+                    )
                 )
             else
                 # DISCRETE: allocate a LIVE forcing buffer seeded at the initial tick
@@ -1537,12 +1761,16 @@ function esm_problem(
                 # materialized cache, instead of a build-once setup const where the
                 # (still-unbound) live `F_src` would fail. The refresh callback then
                 # rewrites this SAME buffer in place at each cadence tick.
-                merged_param[k] = forcing_from_sample(
-                    provider_sample(prov, t_sample), k; shape = get(provider_shapes, k, nothing)
+                tk = get(provider_targets, k, k)
+                merged_param[tk] = forcing_from_sample(
+                    provider_sample(prov, t_sample), k; shape = get(provider_shapes, tk, nothing)
                 )
-                discrete_providers[k] = prov
+                discrete_providers[tk] = prov
             end
         end
+        _rekey_discrete_providers!(
+            discrete_providers, filter(((k, n),) -> k != n, provider_targets)
+        )
     end
 
     # Phase 1: pushdown-path name aliasing. The build-front-door consumers that

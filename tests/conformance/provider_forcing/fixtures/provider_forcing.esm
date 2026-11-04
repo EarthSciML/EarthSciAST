@@ -1,0 +1,154 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "provider_forcing",
+    "description": "One model, Fed, with two parameters fed by the data source met: a gridded E[x, y] and a scalar s, each with a scalar default that supplied data replaces. D(u[i]) = s E[i, 2] - k u[i]. Every value the suite's providers deliver is a dyadic rational, so the right-hand side at u = 1 is exact.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-11-02T00:00:00Z",
+    "tags": [
+      "conformance",
+      "provider_forcing"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 3
+    },
+    "y": {
+      "kind": "interval",
+      "size": 2
+    }
+  },
+  "data_sources": {
+    "met": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file:///data/met/fields.nc"
+      }
+    }
+  },
+  "models": {
+    "Fed": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "default": 1.0
+        },
+        "E": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [
+            "x",
+            "y"
+          ],
+          "default": 0.5,
+          "update": {
+            "kind": "data",
+            "source": "met",
+            "from": {
+              "file_variable": "E"
+            }
+          }
+        },
+        "s": {
+          "type": "parameter",
+          "units": "1/s",
+          "shape": [],
+          "default": 2.0,
+          "update": {
+            "kind": "data",
+            "source": "met",
+            "from": {
+              "file_variable": "s"
+            }
+          }
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.25
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    "s",
+                    {
+                      "op": "index",
+                      "args": [
+                        "E",
+                        "i",
+                        2
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    "k",
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "i"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

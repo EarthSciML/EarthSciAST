@@ -254,6 +254,142 @@ fn dotted_suffix_hit<'k, K: KnownNames + ?Sized>(
     None
 }
 
+/// A set of names indexed by every proper dotted suffix, so both
+/// [`KnownNames`] questions are one hash lookup.
+pub(crate) struct SuffixIndex {
+    names: HashSet<String>,
+    owners: HashMap<String, Vec<String>>,
+}
+
+impl SuffixIndex {
+    pub(crate) fn new<'a>(names: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut out = SuffixIndex {
+            names: HashSet::new(),
+            owners: HashMap::new(),
+        };
+        for n in names {
+            if !out.names.insert(n.to_string()) {
+                continue;
+            }
+            for s in dotted_suffixes(n) {
+                out.owners
+                    .entry(s.to_string())
+                    .or_default()
+                    .push(n.to_string());
+            }
+        }
+        out
+    }
+}
+
+impl KnownNames for SuffixIndex {
+    fn contains(&self, key: &str) -> bool {
+        self.names.contains(key)
+    }
+
+    fn suffix_owners(&self, key: &str) -> Vec<String> {
+        self.owners.get(key).cloned().unwrap_or_default()
+    }
+}
+
+/// What ONE key designates under the [`canonicalize_override_keys`] rules,
+/// before keys are compared with each other.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum KeyHit {
+    /// Rule 1: the key is a name.
+    Exact(String),
+    /// Rules 2 and 3: the key designates this one name.
+    Alias(String),
+    /// Rule 4: the key is a dotted suffix of these names (sorted).
+    Ambiguous(Vec<String>),
+    /// Rule 5.
+    Unknown,
+}
+
+/// The name `k` designates (esm-spec §6.6.2), by the rules
+/// [`canonicalize_override_keys`] applies to one key.
+pub(crate) fn resolve_key<K: KnownNames + ?Sized>(
+    known: &K,
+    namespaces: &HashSet<String>,
+    k: &str,
+) -> KeyHit {
+    if known.contains(k) {
+        return KeyHit::Exact(k.to_string());
+    }
+    if let Some(suffix) = dotted_suffix_hit(known, namespaces, k) {
+        return KeyHit::Alias(suffix.to_string());
+    }
+    let mut cands = known.suffix_owners(k);
+    match cands.len() {
+        0 => KeyHit::Unknown,
+        1 => KeyHit::Alias(cands.pop().expect("one candidate")),
+        _ => {
+            cands.sort();
+            KeyHit::Ambiguous(cands)
+        }
+    }
+}
+
+/// Where each of a set of keys routes, by the [`canonicalize_override_keys`]
+/// rules, for a surface (run-time `providers`) whose keys may also name
+/// something other than a known name and are then used as given.
+#[derive(Debug, Default)]
+pub(crate) struct KeyRouting {
+    /// Each key that designates a known name, mapped to that name (an exact
+    /// key to itself).
+    pub(crate) targets: HashMap<String, String>,
+    /// The keys that lost to an exact key for the same name; not read.
+    pub(crate) shadowed: HashSet<String>,
+}
+
+/// Route `keys` onto `known`: an exact key wins over every non-exact key for
+/// the same name (those are shadowed), two non-exact keys for one name are a
+/// `Collision`, and a key two names carry is `Ambiguous`. A key that
+/// designates nothing is in neither map. Errors name the lexicographically
+/// first offending key.
+pub(crate) fn route_keys<'a, K: KnownNames + ?Sized>(
+    known: &K,
+    namespaces: &HashSet<String>,
+    keys: impl IntoIterator<Item = &'a str>,
+) -> Result<KeyRouting, OverrideKeyError> {
+    let mut out = KeyRouting::default();
+    let mut exact: HashSet<String> = HashSet::new();
+    let mut claims: HashMap<String, Vec<&str>> = HashMap::new();
+    let mut failures: Vec<OverrideKeyError> = Vec::new();
+    for k in keys {
+        match resolve_key(known, namespaces, k) {
+            KeyHit::Exact(name) => {
+                exact.insert(name.clone());
+                out.targets.insert(k.to_string(), name);
+            }
+            KeyHit::Alias(name) => claims.entry(name).or_default().push(k),
+            KeyHit::Ambiguous(candidates) => failures.push(OverrideKeyError::Ambiguous {
+                key: k.to_string(),
+                candidates,
+            }),
+            KeyHit::Unknown => {}
+        }
+    }
+    for (name, ks) in claims {
+        if exact.contains(&name) {
+            out.shadowed.extend(ks.iter().map(|k| (*k).to_string()));
+            continue;
+        }
+        if ks.len() > 1 {
+            let mut keys: Vec<String> = ks.iter().map(|k| (*k).to_string()).collect();
+            keys.sort();
+            failures.push(OverrideKeyError::Collision { name, keys });
+            continue;
+        }
+        out.targets.insert(ks[0].to_string(), name);
+    }
+    if !failures.is_empty() {
+        failures.sort_by(|a, b| override_key_of(a).cmp(override_key_of(b)));
+        return Err(failures.swap_remove(0));
+    }
+    Ok(out)
+}
+
 /// Rewrite each override key that names a merged-away state onto its survivor.
 ///
 /// Separate from [`canonicalize_override_keys`] so the same resolution is
@@ -517,5 +653,36 @@ mod tests {
             canonicalize_override_keys(&two, &ns2, &over, &no_renames()).expect("both resolve");
         assert_eq!(out.get("Left.solo"), Some(&2.0));
         assert_eq!(out.get("Right.gain"), Some(&3.0));
+    }
+
+    /// `route_keys`: an exact key shadows every alias for its name, two
+    /// aliases for one name collide, a shared suffix is ambiguous, and a key
+    /// that designates nothing is left out.
+    #[test]
+    fn route_keys_exact_wins_aliases_collide() {
+        let known = SuffixIndex::new(["Fed.s", "Fed.E", "Other.q"]);
+        let ns = namespace_scope(["Fed.s", "Other.q"], []);
+        let r = route_keys(&known, &ns, ["Fed.s", "s", "E", "Zed"]).expect("routes");
+        assert_eq!(r.targets.get("Fed.s").map(String::as_str), Some("Fed.s"));
+        assert_eq!(r.targets.get("E").map(String::as_str), Some("Fed.E"));
+        assert!(!r.targets.contains_key("s") && r.shadowed.contains("s"));
+        assert!(!r.targets.contains_key("Zed") && !r.shadowed.contains("Zed"));
+
+        let ns_doc = namespace_scope(["Fed.s", "Other.q"], ["Doc"]);
+        match route_keys(&known, &ns_doc, ["s", "Doc.Fed.s"]) {
+            Err(OverrideKeyError::Collision { name, keys }) => {
+                assert_eq!(name, "Fed.s");
+                assert_eq!(keys, vec!["Doc.Fed.s".to_string(), "s".to_string()]);
+            }
+            other => panic!("two aliases collide: {other:?}"),
+        }
+        let shared = SuffixIndex::new(["Fed.s", "Other.s"]);
+        match route_keys(&shared, &ns, ["s"]) {
+            Err(OverrideKeyError::Ambiguous { key, candidates }) => {
+                assert_eq!(key, "s");
+                assert_eq!(candidates, vec!["Fed.s".to_string(), "Other.s".to_string()]);
+            }
+            other => panic!("a shared suffix is ambiguous: {other:?}"),
+        }
     }
 }

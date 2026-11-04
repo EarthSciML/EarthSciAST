@@ -258,6 +258,33 @@ pub fn classify_loader_bindings(
 struct LoaderProvider {
     binding: LoaderBinding,
     provider: Box<dyn CadenceProvider>,
+    /// The provider's `refresh_times()`, sorted and deduplicated, read once
+    /// when the loader is bound.
+    anchors: Vec<f64>,
+}
+
+impl LoaderProvider {
+    fn new(binding: LoaderBinding, provider: Box<dyn CadenceProvider>) -> Self {
+        let mut anchors = provider.refresh_times();
+        anchors.sort_by(f64::total_cmp);
+        anchors.dedup();
+        LoaderProvider {
+            binding,
+            provider,
+            anchors,
+        }
+    }
+
+    /// Whether `t` is one of the provider's own refresh times.
+    fn is_anchor(&self, t: f64) -> bool {
+        self.anchors.binary_search_by(|a| a.total_cmp(&t)).is_ok()
+    }
+
+    /// The provider's latest refresh time strictly before `t`.
+    fn anchor_before(&self, t: f64) -> Option<f64> {
+        let n = self.anchors.partition_point(|&a| a < t);
+        n.checked_sub(1).map(|i| self.anchors[i])
+    }
 }
 
 /// The message refusing an array of shape `got` for a variable declared with
@@ -331,6 +358,9 @@ pub(crate) fn single_provider_field<'a>(
 /// declared shape when one is known.
 struct RemapProvider {
     target: String,
+    /// What a refused sample's message calls the provider: the caller's key,
+    /// which may spell `target` differently (esm-spec §6.6.2).
+    label: String,
     /// The target parameter's declared shape, resolved against the index-set
     /// registry; `None` when it is not known, and then no shape is checked.
     declared: Option<Vec<usize>>,
@@ -342,7 +372,7 @@ impl RemapProvider {
         &self,
         fields: HashMap<String, NativeField>,
     ) -> Result<HashMap<String, NativeField>, ProviderError> {
-        single_provider_field(&self.target, &fields, self.declared.as_deref())?;
+        single_provider_field(&self.label, &fields, self.declared.as_deref())?;
         let (_fed_name, field) = fields.into_iter().next().expect("checked: one field");
         let mut out = HashMap::with_capacity(1);
         out.insert(self.target.clone(), field);
@@ -407,7 +437,7 @@ impl RefreshExecutor {
                     binding.loader, binding.variables
                 ))
             })?;
-            loaders.push(LoaderProvider { binding, provider });
+            loaders.push(LoaderProvider::new(binding, provider));
         }
         Ok(Self { loaders })
     }
@@ -425,16 +455,19 @@ impl RefreshExecutor {
     ///
     /// [`new`]: RefreshExecutor::new
     pub fn from_providers(providers: HashMap<String, Box<dyn CadenceProvider>>) -> Self {
-        Self::from_providers_with_shapes(providers, &HashMap::new())
+        Self::from_providers_with_shapes(providers, &HashMap::new(), &HashMap::new())
     }
 
     /// [`Self::from_providers`], refusing every sample a provider delivers
     /// (`materialize()` and each `refresh(t)`) whose field does not have the
     /// shape `declared` holds under that provider's key. A key `declared` does
-    /// not hold is not shape-checked.
+    /// not hold is not shape-checked. A refused sample is reported under the
+    /// name `labels` holds for its key (the caller's spelling of it), else
+    /// under the key itself.
     pub(crate) fn from_providers_with_shapes(
         providers: HashMap<String, Box<dyn CadenceProvider>>,
         declared: &HashMap<String, Vec<usize>>,
+        labels: &HashMap<String, String>,
     ) -> Self {
         let mut loaders = Vec::with_capacity(providers.len());
         for (var, provider) in providers {
@@ -448,17 +481,18 @@ impl RefreshExecutor {
             // own loader field name, which `write_fields` would otherwise use.
             let remapped: Box<dyn CadenceProvider> = Box::new(RemapProvider {
                 target: var.clone(),
+                label: labels.get(&var).cloned().unwrap_or_else(|| var.clone()),
                 declared: declared.get(&var).cloned(),
                 inner: provider,
             });
-            loaders.push(LoaderProvider {
-                binding: LoaderBinding {
+            loaders.push(LoaderProvider::new(
+                LoaderBinding {
                     loader: var.clone(),
                     cadence,
                     variables: vec![var],
                 },
-                provider: remapped,
-            });
+                remapped,
+            ));
         }
         Self { loaders }
     }
@@ -479,14 +513,27 @@ impl RefreshExecutor {
         &mut self,
         forcing: &ForcingBuffer,
     ) -> Result<Vec<String>, ProviderError> {
+        self.materialize_const_named(forcing).map_err(|e| e.error)
+    }
+
+    /// [`Self::materialize_const`], with a failure naming the loader that
+    /// raised it.
+    pub(crate) fn materialize_const_named(
+        &mut self,
+        forcing: &ForcingBuffer,
+    ) -> Result<Vec<String>, LoaderError> {
         let RefreshExecutor { loaders } = self;
         let mut written = Vec::new();
         for lp in loaders.iter_mut() {
             if lp.binding.cadence != Cadence::Const {
                 continue;
             }
-            let fields = lp.provider.materialize()?;
-            write_fields(&fields, forcing, &mut written)?;
+            let named = |error| LoaderError {
+                loader: lp.binding.loader.clone(),
+                error,
+            };
+            let fields = lp.provider.materialize().map_err(named)?;
+            write_fields(&fields, forcing, &mut written).map_err(named)?;
         }
         written.sort();
         written.dedup();
@@ -501,7 +548,7 @@ impl RefreshExecutor {
             .loaders
             .iter()
             .filter(|lp| lp.binding.cadence == Cadence::Discrete)
-            .flat_map(|lp| lp.provider.refresh_times())
+            .flat_map(|lp| lp.anchors.iter().copied())
             .collect();
         times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         times.dedup();
@@ -523,22 +570,110 @@ impl RefreshExecutor {
         t: f64,
         forcing: &ForcingBuffer,
     ) -> Result<Vec<String>, ProviderError> {
+        self.refresh_named(t, forcing).map_err(|e| e.error)
+    }
+
+    /// Sample every DISCRETE provider at `t`, an arbitrary time rather than
+    /// a cadence anchor: the record in effect there. Returns the variable
+    /// names written (sorted).
+    ///
+    /// For each provider: when `t` is one of its own refresh times it is asked
+    /// for `refresh(t)`, and `None` means its record did not change, so
+    /// nothing is written. Otherwise it is asked for `refresh(t)` first (a
+    /// provider may answer at any time, as Julia's `provider_sample` does),
+    /// and on `None` for `refresh(a)` at `a`, its latest refresh time before
+    /// `t`, whose record holds over `t`. A provider with no refresh time at
+    /// or before `t` that does not answer at `t` has no record in effect and
+    /// writes nothing.
+    ///
+    /// This is the sample a Problem takes at construction (`sample_time`,
+    /// esm-libraries-spec §2.5.2) and a solve takes at its start. A boundary
+    /// refresh inside a solve uses [`Self::refresh_at`].
+    pub fn sample_at(
+        &mut self,
+        t: f64,
+        forcing: &ForcingBuffer,
+    ) -> Result<Vec<String>, ProviderError> {
+        let mut written = Vec::new();
+        self.sample_in_effect(t, forcing, &mut written)
+            .map_err(|e| e.error)?;
+        written.sort();
+        written.dedup();
+        Ok(written)
+    }
+
+    /// [`Self::refresh_at`], with a failure naming the loader that raised it.
+    pub(crate) fn refresh_named(
+        &mut self,
+        t: f64,
+        forcing: &ForcingBuffer,
+    ) -> Result<Vec<String>, LoaderError> {
         let RefreshExecutor { loaders } = self;
         let mut written = Vec::new();
         for lp in loaders.iter_mut() {
             if lp.binding.cadence != Cadence::Discrete {
                 continue;
             }
+            let named = |error| LoaderError {
+                loader: lp.binding.loader.clone(),
+                error,
+            };
             // `None` (record unchanged, or `t` not this provider's anchor) → skip
             // the buffer write (None-skip); the previously-loaded field stays put.
-            if let Some(fields) = lp.provider.refresh(t)? {
-                write_fields(&fields, forcing, &mut written)?;
+            if let Some(fields) = lp.provider.refresh(t).map_err(named)? {
+                write_fields(&fields, forcing, &mut written).map_err(named)?;
             }
         }
         written.sort();
         written.dedup();
         Ok(written)
     }
+
+    /// [`Self::sample_at`], with a failure naming the loader that raised it.
+    /// Appends the variables written to `written`, and returns the variables
+    /// of every DISCRETE provider with no record in effect at `t` (sorted).
+    pub(crate) fn sample_in_effect(
+        &mut self,
+        t: f64,
+        forcing: &ForcingBuffer,
+        written: &mut Vec<String>,
+    ) -> Result<Vec<String>, LoaderError> {
+        let RefreshExecutor { loaders } = self;
+        let mut vacant = Vec::new();
+        for lp in loaders.iter_mut() {
+            if lp.binding.cadence != Cadence::Discrete {
+                continue;
+            }
+            let named = |error| LoaderError {
+                loader: lp.binding.loader.clone(),
+                error,
+            };
+            let mut fields = lp.provider.refresh(t).map_err(named)?;
+            if fields.is_none() && !lp.is_anchor(t) {
+                match lp.anchor_before(t) {
+                    Some(a) => fields = lp.provider.refresh(a).map_err(named)?,
+                    None => {
+                        vacant.extend(lp.binding.variables.iter().cloned());
+                        continue;
+                    }
+                }
+            }
+            if let Some(fields) = fields {
+                write_fields(&fields, forcing, written).map_err(named)?;
+            }
+        }
+        vacant.sort();
+        vacant.dedup();
+        Ok(vacant)
+    }
+}
+
+/// A provider failure, with the loader (for a run-time provider, the
+/// forcing variable it feeds) that raised it.
+#[derive(Debug)]
+pub(crate) struct LoaderError {
+    pub(crate) loader: String,
+    pub(crate) error: ProviderError,
 }
 
 /// Write each freshly sampled native field straight into the forcing buffer,
