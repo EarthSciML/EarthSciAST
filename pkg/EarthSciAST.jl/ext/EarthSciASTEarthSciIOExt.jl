@@ -15,7 +15,7 @@ DELIBERATELY THIN. EarthSciAST is agnostic to dimension order: the provider samp
 handed straight to the forcing-write / const-array fold, which
 linearizes it column-major against the CONSUMER's declared shape and never
 inspects the data's named dims or coordinates (`_write_forcing!`,
-`_provider_const_field`, the `LinearIndices(pg.dims)` gather). So this adapter
+`forcing_from_sample`, the `LinearIndices(pg.dims)` gather). So this adapter
 does NOT reproject, transpose, or reorder — it returns the provider's array in
 its native file order. Any grid/orientation reconciliation is the model's job
 (declare the loader field in the source's native dim order, then regrid/reindex
@@ -105,7 +105,7 @@ _neutral_selection_to_native(selection) = throw(
 # variable, so a sample carries exactly one data variable; a multi-variable blob
 # is a binding error the caller must split (EarthSciAST can't know which field a bare
 # array means). Returns the bare `AbstractArray` that `_write_forcing!` /
-# `_provider_const_field` expect for a single-variable sample.
+# `forcing_from_sample` expect for a single-variable sample.
 #
 # `selection===nothing` (default) samples the whole array — byte-identical to the
 # pre-pushdown path. A non-nothing `selection` is translated to the native zarr

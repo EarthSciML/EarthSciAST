@@ -8224,7 +8224,9 @@ function _fetch_gated_providers(gated::AbstractDict, index_sets, vi, t0::Float64
                 nm = String(name)
                 field = _sample_field(sample, nm)
                 isempty(drop_tuple) || (field = dropdims(field; dims = drop_tuple))
-                arr = Array{Float64}(field)
+                # The slab, a bare-array sample, takes the conversion a whole
+                # sample does (`forcing_from_sample`).
+                arr = forcing_from_sample(field, nm)
                 size(arr, gated_pos_out) == gated_extent || throw(
                     RefreshError(
                         "gated provider '$key' variable '$nm': fetched compact axis is " *
@@ -8248,7 +8250,7 @@ function _fetch_gated_providers(gated::AbstractDict, index_sets, vi, t0::Float64
                 nm = String(name)
                 full = _sample_field(sample, nm)
                 field = full[idx...]
-                arr = Array{Float64}(field)
+                arr = forcing_from_sample(field, nm)
                 size(arr, gated_pos_out) == gated_extent || throw(
                     RefreshError(
                         "gated provider '$key' variable '$nm' (fallback slice): compact axis " *

@@ -25,7 +25,10 @@ mod select;
 mod tile;
 mod walk;
 
-pub use forcing::{ForcingSet, ForcingSlot, ParamSlot, RhsError, SlotKind, StateBlock};
+use forcing::column_major;
+pub use forcing::{
+    ForcingSet, ForcingSlot, ParamSlot, RhsError, SlotKind, StateBlock, forcing_from_sample,
+};
 pub use lanes::{LaneInputs, LaneProgram};
 use model::ProgramModel;
 pub use tile::TileProgram;
@@ -577,11 +580,6 @@ fn flat_layout_order(names: &mut [String], model: &ProgramModel) {
         let rank = |n: &String| !model.var_shapes[n].shape.is_empty();
         (rank(a), a).cmp(&(rank(b), b))
     });
-}
-
-/// A row-major array's elements in column-major order (first index fastest).
-fn column_major(a: &ArrayD<f64>) -> Arc<[f64]> {
-    a.view().reversed_axes().iter().copied().collect()
 }
 
 /// The forcing slots of `model`: every name its forcing buffer serves that

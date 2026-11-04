@@ -2036,6 +2036,7 @@ impl<'o> BuildState<'o> {
                 // Already materialized by the extent-discovery pre-pass; never
                 // sampled twice.
                 let name = self.array_name(&k)?;
+                self.check_provider_shape(&k, &name, &a)?;
                 self.arrays.insert(name.clone(), round_external(&name, a));
             } else if let Some(gate) = pd_gates.get(&k) {
                 // Record-derived gate (the rewrite's own metadata.x_esd.pushdown):
@@ -2059,6 +2060,7 @@ impl<'o> BuildState<'o> {
                     a.shape()
                 ));
                 let name = self.array_name(&k)?;
+                self.check_provider_shape(&k, &name, &a)?;
                 self.arrays.insert(name.clone(), round_external(&name, a));
             }
         }
@@ -2071,6 +2073,45 @@ impl<'o> BuildState<'o> {
         self.gated_keys = gated.iter().map(|(k, _, _)| k.clone()).collect();
         self.gated_keys.sort();
         Ok(gated)
+    }
+
+    /// Refuse a whole-field provider sample `a` (supplied under `key`, held
+    /// as `name`) whose shape is not the declared shape of the parameter
+    /// `name` spells, with the wording the `providers=` path uses
+    /// ([`crate::provider::declared_shape_mismatch`]). `name` is looked up as
+    /// it is spelled, then, when dotted, by the part after its first `.` (a
+    /// mounted subsystem's parameter under its model-local spelling). A
+    /// parameter declared without `shape` takes one value. Nothing is checked
+    /// when `name` spells no parameter or its shape names an index set the
+    /// registry cannot size here.
+    fn check_provider_shape(
+        &self,
+        key: &str,
+        name: &str,
+        a: &ArrayD<f64>,
+    ) -> Result<(), PrepareError> {
+        let vars = &self.model.variables;
+        let Some(var) = vars
+            .get(name)
+            .or_else(|| name.split_once('.').and_then(|(_, rest)| vars.get(rest)))
+            .filter(|v| v.var_type == VariableType::Parameter)
+        else {
+            return Ok(());
+        };
+        let declared = match var.shape.as_deref() {
+            None => Some(Vec::new()),
+            Some(decl) => crate::simulate_array::resolve_declared_shape(decl, &self.index_sets),
+        };
+        match declared.and_then(|d| {
+            crate::provider::declared_shape_mismatch(
+                &format!("provider for {key:?}"),
+                a.shape(),
+                &d,
+            )
+        }) {
+            Some(msg) => Err(err(msg)),
+            None => Ok(()),
+        }
     }
 
     /// The name the evaluation namespace holds an array supplied under `key`

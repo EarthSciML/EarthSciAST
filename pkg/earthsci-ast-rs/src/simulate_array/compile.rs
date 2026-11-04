@@ -893,6 +893,7 @@ impl ArrayCompiled {
         let (
             observed_names,
             forcing_decls,
+            declared_forcing_shapes,
             eliminated,
             held_at_ic,
             slots,
@@ -998,11 +999,16 @@ impl ArrayCompiled {
                     ((*name).clone(), shape)
                 })
                 .collect();
+            // The shapes as declared, before inference sizes the unsized
+            // ones from how the equations index them: what a provider's
+            // sample is checked against.
+            let declared_forcing_shapes = forcing_decls.clone();
             infer_unsized_forcing_shapes(&mut forcing_decls, &model.equations);
             let forcing_defaults = forcing_default_values(&observed_vars, &forcing_decls)?;
             (
                 observed_names,
                 forcing_decls,
+                declared_forcing_shapes,
                 eliminated,
                 held_at_ic,
                 slots,
@@ -1089,6 +1095,7 @@ impl ArrayCompiled {
             field_ic_memo: RefCell::new(None),
             inline_param_arrays,
             forcing_decls,
+            declared_forcing_shapes,
             forcing_defaults,
             unvalued_shaped_params,
             held_at_ic: held_at_ic_names,
@@ -4856,7 +4863,7 @@ fn materialize_vi_outputs_to_data(
 /// the document registry: an `interval` set contributes its `size`, a
 /// `categorical` set its member count. Returns `None` if any entry is a set the
 /// registry cannot densely size (derived / ragged / unknown).
-pub(super) fn resolve_declared_shape(
+pub(crate) fn resolve_declared_shape(
     decl: &[String],
     index_sets: &HashMap<String, IndexSet>,
 ) -> Option<Vec<usize>> {

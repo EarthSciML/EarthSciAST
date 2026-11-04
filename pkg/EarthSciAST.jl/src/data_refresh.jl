@@ -260,12 +260,79 @@ _sample_field(sample::AbstractDict, var::AbstractString) = begin
     sample[var]
 end
 _sample_field(sample::AbstractArray, ::AbstractString) = sample
+_sample_field(sample::Real, ::AbstractString) = sample
 _sample_field(sample, var::AbstractString) = throw(
     RefreshError(
         "cannot extract '$var' from a provider sample of type $(typeof(sample)); " *
-            "supply an AbstractDict (var => field) or a bare AbstractArray"
+            "supply an AbstractDict (var => field), a bare AbstractArray or a number"
     )
 )
+
+"""
+    forcing_from_sample(sample, name::AbstractString; shape = nothing) -> Array{Float64}
+    forcing_from_sample(sample, slot::ForcingSlot) -> Vector{Float64}
+
+The buffer of the data-fed parameter `name` built from one
+[`provider_sample`](@ref) result: the check and conversion
+[`esm_problem`](@ref) applies to the sample of every provider it binds whole
+(a const provider, a discrete provider at each refresh, and a provider that
+discovers a loader extent; API_SPEC §5.8, "Forcing sets"). A runtime that
+builds its own [`ForcingSet`](@ref)s from provider samples calls this to get,
+bit for bit, the buffer `esm_problem` builds from the same sample. A GATED
+provider is not bound whole: `esm_problem` fetches only the rows its gating set
+selects, so its buffer is that slab, not this function of a whole sample.
+
+`sample` is what `provider_sample` returned: an `AbstractDict` keyed by
+flattened parameter name, from which the `name` entry is taken, or a bare
+`AbstractArray` or `Real` (a single-variable sample, which is the field
+itself; a `Real` is a 0-d field). The result is a fresh dense
+`Array{Float64}` with the field's dimensions, in the order the provider
+delivered them (a source's file order, the record dimension first when two
+records are delivered), so its linear order is column-major over those
+dimensions: the order a forcing set reads a slot's buffer in.
+
+With `shape` (the parameter's declared shape resolved, as a
+[`ForcingSlot`](@ref) carries it: any collection of integers, a `Vector` or a
+`Tuple`) the field's size must equal it, axis by axis, and an empty shape takes
+a field of one value; any other field is a `DimensionMismatch`. `esm_problem`
+applies the same check against each parameter's declared shape, wherever that
+shape resolves before the build, so a sample it accepts passes here. The
+`ForcingSlot` method checks against `slot.shape` and returns the buffer as a
+`Vector{Float64}`, ready for [`forcing_set`](@ref) or
+[`replace_forcing`](@ref).
+
+A declared `unit_conversion` (esm-spec §8.5) is NOT applied here: a provider
+from [`providers_from_document`](@ref) applies it when it delivers the sample,
+so the sample is already in the parameter's declared units, and applying it
+again would apply it twice. A sample with no `name` entry is a `RefreshError`.
+"""
+function forcing_from_sample(sample, name::AbstractString; shape = nothing)
+    field = _sample_field(sample, String(name))
+    shape === nothing || _check_forcing_shape(field, name, shape)
+    return _dense_field(field)
+end
+
+# A provider field as a fresh dense `Array{Float64}` of its own dimensions; a
+# bare number is a 0-d field.
+_dense_field(field::Real) = fill(Float64(field))
+_dense_field(field) = Array{Float64}(field)
+
+# Refuse a provider field whose size is not the parameter's declared `shape`,
+# axis by axis; an empty `shape` takes a field of one value.
+function _check_forcing_shape(field, name::AbstractString, shape)
+    dims = Int[Int(d) for d in shape]
+    ok = isempty(dims) ? length(field) == 1 :
+        ndims(field) == length(dims) &&
+        all(size(field, d) == dims[d] for d in eachindex(dims))
+    ok || throw(
+        DimensionMismatch(
+            "forcing '$name': the provider sample has size $(size(field)); the " *
+                "parameter's declared shape is $(Tuple(dims))" *
+                (isempty(dims) ? ", one value" : "")
+        )
+    )
+    return nothing
+end
 
 """
     _write_forcing!(buffer::Array{Float64}, var::AbstractString, sample) -> buffer
@@ -280,14 +347,18 @@ storage the RHS gathers live.
 """
 function _write_forcing!(buffer::Array{Float64}, var::AbstractString, sample)
     field = _sample_field(sample, var)
-    length(field) == length(buffer) || throw(
+    # A one-value buffer (a scalar parameter's) takes a field of one value
+    # whatever its rank, as `forcing_from_sample` does for an empty shape.
+    fits = length(buffer) == 1 ? length(field) == 1 : size(field) == size(buffer)
+    fits || throw(
         RefreshError(
-            "forcing '$var': provider field has $(length(field)) elements but the buffer " *
-                "has $(length(buffer)); the provider must deliver the native forcing on the " *
-                "buffer's grid (regridding is an in-model coupling, not a refresh-time transform)"
+            "forcing '$var': the provider field has size $(size(field)) but the buffer " *
+                "has size $(size(buffer)); the provider must deliver the native forcing on the " *
+                "buffer's grid, in the same dimension order (regridding is an in-model " *
+                "coupling, not a refresh-time transform)"
         )
     )
-    copyto!(buffer, field)
+    field isa Real ? (buffer[] = Float64(field)) : copyto!(buffer, field)
     # The buffer just changed in place under the RHS's live gathers — invalidate the
     # memoized time-cadence prelude slots (B3, tree_walk/const_tier.jl). A refresh
     # callback fires AT its tstop, so the next RHS call may be at a `t` the t-tier

@@ -968,6 +968,7 @@ here except where that section says otherwise.
 | forcing slots | `forcing_slots(x) -> Vector{ForcingSlot}` | `forcing_slots(&self) -> &[ForcingSlot]` on each program type | — |
 | forcing set | `forcing_set(x, bufs) -> ForcingSet` | `ForcingSet::new(&RhsProgram, Vec<Arc<[f64]>>) -> Result<ForcingSet, RhsError>` | raises `compiler_unavailable` |
 | default forcing | `default_forcing_set(x) -> ForcingSet` | `RhsProgram::default_forcing(&self) -> ForcingSet` | raises `compiler_unavailable` |
+| from a provider sample | `forcing_from_sample(sample, slot::ForcingSlot) -> Vector{Float64}`, `forcing_from_sample(sample, name; shape = nothing) -> Array{Float64}` | `forcing_from_sample(&HashMap<String, NativeField>, &ForcingSlot) -> Result<Arc<[f64]>, ProviderError>` | — |
 | refresh | `replace_forcing(fs, slot, buf) -> ForcingSet` | `ForcingSet::replace(&self, slot: usize, Arc<[f64]>) -> Result<ForcingSet, RhsError>` | — |
 | epoch | `forcing_epoch(fs) -> UInt64` | `ForcingSet::epoch(&self) -> u64` | — |
 | evaluate | `rhs!(du, x, ws, u, aux, p, t, fs) -> du` | `eval_into(&self, u, aux, p, t, forcing: &ForcingSet, du, ws) -> Result<(), RhsError>` on `RhsProgram` and `TileProgram` | — |
@@ -1140,6 +1141,37 @@ gather failed, or that were never gathered, are `NotGathered`. Build-time calls 
   Rust enforces it, and in Julia mutating a buffer after building a set is
   undefined behaviour (the epoch would not change). Any transpose into the
   compiled kernels' layout happens in the load, never per call.
+- **From a provider sample.** `forcing_from_sample(sample, slot)` is the
+  check and conversion `esm_problem` applies to the sample of every provider
+  it binds whole (a const provider, a discrete provider at each refresh, and,
+  in Julia, a provider that discovers a loader extent), so a caller that
+  builds its own sets from provider samples (Julia `provider_sample(p, t)`;
+  Rust `CadenceProvider::materialize()` or `refresh(t)`) gets, bit for bit,
+  the buffer the Problem holds for the same sample. Which field of the sample
+  is taken follows each binding's provider contract: Julia samples are keyed
+  by flattened parameter name and the slot's entry is taken (a bare array or
+  number is a single-variable sample, the field itself; a missing entry is a
+  `RefreshError`); a Rust `providers=` provider feeds under its own field name,
+  so the sample must hold exactly one field, which is taken whatever it is
+  called, and a sample of any other size is a `ProviderError`.
+  That field's dimensions, in the order the provider delivered them (a
+  source's file order, the record dimension first when two records are
+  delivered), must be the slot's shape, axis by axis, and a 0-d slot takes one
+  value; anything else is an error (Julia `DimensionMismatch`; Rust
+  `ProviderError`). `esm_problem` refuses such a sample the same way, checking
+  it against the parameter's declared shape wherever that shape resolves
+  before the build (a shape naming a derived index set is not checked there),
+  and a refresh is checked against the buffer it rewrites. The buffer is the
+  field's values column-major over that shape. A declared `unit_conversion`
+  (esm-spec §8.5) is not applied by `forcing_from_sample`: a provider from
+  `providers_from_document` applies it when it delivers the sample, so the
+  sample is already in the parameter's declared units. A gated provider is
+  not bound whole: the Problem holds the slab its gating set selects, which
+  is not a function of a whole sample. Julia's name method, without `shape`,
+  is the array `esm_problem` binds for a provider (the delivered dimensions, a
+  fresh copy); the slot method checks the shape and returns that array's
+  linear view. In Rust a discrete provider is first sampled when a solve
+  starts, so `default_forcing` holds provider data for const providers only.
 - **Construction.** `forcing_set(x, bufs)` / `ForcingSet::new` checks the slot
   count and each buffer's length (`RhsError::Shape { what: "forcing", .. }`;
   Julia `DimensionMismatch`) and stamps the set with a fresh epoch.
@@ -1834,6 +1866,7 @@ reading that as a gap.
 | `flatten_template_registries` | function | – | `flattenTemplateRegistries` | `flatten_template_registries` | – | – |
 | `flatten_with_options` | function | – | – | – | `flatten_with_options` | `FlattenWithOptions` |
 | `float_key_error` | error | – | – | `FloatKeyError` | `FloatKeyError` | – |
+| `forcing_from_sample` | function | `forcing_from_sample` | – | – | `forcing_from_sample` | – |
 | `forcing_set` | function | `forcing_set` | – | `forcing_set` | – | – |
 | `forcing_set` | type | `ForcingSet` | – | – | `ForcingSet` | – |
 | `forcing_slot` | type | `ForcingSlot` | – | – | `ForcingSlot` | – |
