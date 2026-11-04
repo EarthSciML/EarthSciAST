@@ -668,7 +668,7 @@ export function validateEventConsistency(
  * verified against a canonical form. Conservative on purpose — names chosen
  * to minimize collision with common non-constant uses (e.g., no `c` for
  * speed of light, which conflicts with concentration). Mirrors Python's
- * `_KNOWN_PHYSICAL_CONSTANTS` (gt-j91l / gt-3tgv).
+ * `units.KNOWN_PHYSICAL_CONSTANTS` (gt-j91l / gt-3tgv).
  */
 const KNOWN_PHYSICAL_CONSTANTS: Array<{
   name: string
@@ -686,7 +686,7 @@ const KNOWN_PHYSICAL_CONSTANTS: Array<{
  * `R` declared as `kcal/mol` — missing temperature — instead of `J/(mol*K)`).
  * Reports at the first observed-variable usage site in the same model;
  * otherwise at the declaration. Mirrors Python's
- * `parse._check_physical_constant_units`.
+ * `units.UnitValidator._check_physical_constants`.
  */
 export function validatePhysicalConstantUnits(model: Model, modelPath: string): StructuralError[] {
   const errors: StructuralError[] = []
@@ -738,7 +738,7 @@ export function validatePhysicalConstantUnits(model: Model, modelPath: string): 
  * (or `<var> * <numeric>`) when the declared output units and the source
  * variable's units are dimensionally compatible but the numeric literal
  * disagrees with the correct linear scale factor. Mirrors Python's
- * parse._check_conversion_factor_consistency (gt-nvdv) and Go's
+ * units.UnitValidator._check_conversion_factor (gt-nvdv) and Go's
  * checkConversionFactorConsistency (gt-abh1). Affine conversions
  * (e.g., degC→K) are excluded.
  */

@@ -2754,7 +2754,7 @@ type knownPhysicalConstant struct {
 // knownPhysicalConstants lists well-known physical constants whose declared
 // units can be dimensionally verified. Conservative on purpose — names chosen
 // to minimize collision with common non-constant uses. Mirrors Python's
-// _KNOWN_PHYSICAL_CONSTANTS.
+// units.KNOWN_PHYSICAL_CONSTANTS.
 var knownPhysicalConstants = map[string]knownPhysicalConstant{
 	"R":   {"J/(mol*K)", "ideal gas constant"},
 	"k_B": {"J/K", "Boltzmann constant"},
@@ -2767,7 +2767,7 @@ var knownPhysicalConstants = map[string]knownPhysicalConstant{
 // — instead of 'J/(mol*K)'). Reports at the first observed-variable usage
 // site in the same model; otherwise at the declaration.
 //
-// Mirrors Python's parse._check_physical_constant_units (gt-3tgv).
+// Mirrors Python's units.UnitValidator._check_physical_constants (gt-3tgv).
 func checkPhysicalConstantUnits(modelName string, model *Model, result *StructuralValidationResult) {
 	for vname, vdef := range model.Variables {
 		if vdef.Type != VarTypeParameter {
@@ -2853,7 +2853,7 @@ func exprReferencesName(e Expression, name string) bool {
 // in atm. Dimensions match (both are pressure) but the numeric factor should
 // be 101325 Pa/atm.
 //
-// Mirrors Python's parse._check_conversion_factor_consistency (gt-nvdv).
+// Mirrors Python's units.UnitValidator._check_conversion_factor (gt-nvdv).
 // Affine conversions (e.g., degC→K) are skipped; compound expressions,
 // matching units, and unparseable units are silently ignored.
 func checkConversionFactorConsistency(modelName string, model *Model, result *StructuralValidationResult) {

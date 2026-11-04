@@ -336,7 +336,7 @@ describe('Structural validation', () => {
   // with units 'kcal/mol' — missing the temperature dimension (canonical is
   // 'J/(mol*K)'). Must be rejected as a structural unit_inconsistency error
   // at the usage site `gas_law_calculation` (mirrors Python's
-  // parse._check_physical_constant_units, gt-3tgv).
+  // units.UnitValidator._check_physical_constants, gt-3tgv).
   it('should reject units_dimensional_constant_error.esm with unit_inconsistency at usage site', () => {
     const content = readFixture('invalid', 'units_dimensional_constant_error.esm')
     const result = validateText(content)

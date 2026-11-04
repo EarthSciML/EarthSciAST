@@ -3463,7 +3463,7 @@ fn record_unit_findings(
 /// verified against a canonical form. Conservative on purpose — names chosen
 /// to minimize collision with common non-constant uses (e.g., no `c` for
 /// speed of light, which conflicts with concentration). Mirrors Python's
-/// `_KNOWN_PHYSICAL_CONSTANTS`.
+/// `units.KNOWN_PHYSICAL_CONSTANTS`.
 fn known_physical_constants() -> &'static [(&'static str, &'static str, &'static str)] {
     &[
         ("R", "J/(mol*K)", "ideal gas constant"),
@@ -3483,7 +3483,7 @@ const PHYSICAL_CONSTANT_UNIT_MESSAGE: &str =
 /// (e.g., `R` declared as `kcal/mol` — missing temperature — instead of
 /// `J/(mol*K)`). Reports at the first observed-variable usage site in the
 /// same model; otherwise at the declaration. Mirrors Python's
-/// `parse._check_physical_constant_units` (gt-j91l / gt-3tgv).
+/// `units.UnitValidator._check_physical_constants` (gt-j91l / gt-3tgv).
 fn check_physical_constant_units(
     model_name: &str,
     model: &crate::Model,

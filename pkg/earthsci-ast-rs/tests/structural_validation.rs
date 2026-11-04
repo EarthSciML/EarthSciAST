@@ -826,7 +826,7 @@ fn test_reaction_rate_units_mismatch_fixture_rejected() {
 /// with units `kcal/mol` — missing the temperature dimension (canonical is
 /// `J/(mol*K)`). Must be rejected as a structural unit_inconsistency error
 /// across all bindings, reported at the usage site `gas_law_calculation`
-/// (mirrors Python's `_check_physical_constant_units`, gt-3tgv).
+/// (mirrors Python's `units.UnitValidator._check_physical_constants`, gt-3tgv).
 #[test]
 fn test_physical_constant_dimensional_error_fixture_rejected() {
     let fixture = include_str!("../../../tests/invalid/units_dimensional_constant_error.esm");

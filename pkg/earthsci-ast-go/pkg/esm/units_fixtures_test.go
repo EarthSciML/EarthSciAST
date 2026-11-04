@@ -274,7 +274,7 @@ func TestReactionSystemNonICConstraintOK(t *testing.T) {
 // tests/invalid/units_conversion_factor_error.esm (observed variable in Pa
 // assigned `50000 * p_atm` where p_atm is in atm — expected factor 101325) is
 // rejected as a structural error with code "unit_inconsistency". Mirrors
-// Python's parse._check_conversion_factor_consistency (gt-nvdv / gt-abh1).
+// Python's units.UnitValidator._check_conversion_factor (gt-nvdv / gt-abh1).
 func TestConversionFactorErrorFixtureRejected(t *testing.T) {
 	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
 	if err != nil {
@@ -331,7 +331,7 @@ func TestConversionFactorErrorFixtureRejected(t *testing.T) {
 // tests/invalid/units_dimensional_constant_error.esm (ideal gas constant 'R'
 // declared with units 'kcal/mol' — missing temperature dimension) is rejected
 // as a structural unit_inconsistency error at the usage site. Mirrors Python's
-// parse._check_physical_constant_units (gt-j91l / gt-3tgv).
+// units.UnitValidator._check_physical_constants (gt-j91l / gt-3tgv).
 func TestPhysicalConstantDimensionalErrorFixtureRejected(t *testing.T) {
 	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
 	if err != nil {
