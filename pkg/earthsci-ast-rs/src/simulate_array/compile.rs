@@ -993,7 +993,19 @@ impl ArrayCompiled {
                 .map(|(name, var)| {
                     let shape = match var.shape.as_deref() {
                         None => Some(Vec::new()),
-                        Some(decl) => resolve_declared_shape(decl, index_sets),
+                        // A declared shape the registry cannot size takes the
+                        // extents of the parameter's inline array data, when it
+                        // has some (its rank was checked against the
+                        // declaration by `lower_inline_array_parameters`), so
+                        // the default is never checked against a guessed shape.
+                        Some(decl) => resolve_declared_shape(decl, index_sets).or_else(|| {
+                            var.default
+                                .as_ref()
+                                .filter(|d| d.is_array())
+                                .and_then(|d| d.to_dense().ok())
+                                .map(|(shape, _)| shape)
+                                .filter(|shape| shape.len() == decl.len())
+                        }),
                     };
                     ((*name).clone(), shape)
                 })
@@ -1817,18 +1829,22 @@ fn capture_ic_scope(
 /// UNKNOWN's rule — [`build_slot_tables`] already writes one scalar `default`
 /// into every per-cell slot — applied to the parameter side.
 ///
-/// A 0-D parameter is untouched, and so is one whose value comes from OUTSIDE
-/// the document — an `update` binding (the loader / handler forcing seam) or a
-/// caller-supplied `vi_arrays` entry — because that channel owns the buffer and
-/// its data beats a declared default (the precedence the Julia reference's
-/// `_register_inline_array_parameters` takes). So this is a no-op for every
-/// document that does not declare a shaped parameter's value inline.
+/// A 0-D parameter is untouched, and so is one with an `update` — fed from
+/// OUTSIDE the document (the loader / handler forcing seam, whose data beats a
+/// declared default) or recomputed from an `expression` (which
+/// `classify_variables` refuses) — and one with a caller-supplied `vi_arrays`
+/// entry, which is authoritative over a declared default (the precedence the
+/// Julia reference's `_register_inline_array_parameters` takes). So this is a
+/// no-op for every document that does not declare a shaped parameter's value
+/// inline.
 ///
 /// # Errors
 ///
-/// [`CompileError::InterpreterBuildError`] when the authored array is ragged or
-/// its extents do not match the declared `shape` resolved against the index-set
-/// registry — the load-time shape check esm-spec §6.6.2 requires.
+/// [`CompileError::InterpreterBuildError`] when an authored array is ragged, is
+/// on a parameter that declares no `shape`, or has extents that do not match
+/// the declared `shape` resolved against the index-set registry — the
+/// load-time shape check esm-spec §6.6.2 requires. Every parameter's inline
+/// array is checked, including one this pass leaves untouched.
 #[allow(clippy::type_complexity)]
 fn lower_inline_array_parameters(
     model: &mut Model,
@@ -1846,38 +1862,38 @@ fn lower_inline_array_parameters(
         let Some(default) = var.default.as_ref() else {
             continue;
         };
-        // A parameter fed from outside the model (a data source or a handler)
-        // is read from the forcing buffer, which serves its default when no
-        // data is supplied (`forcing_default_values`). That holds for an
-        // inline-array default as much as for a scalar one: lowering it here
-        // would bake the default in as a constant, so the parameter would be
-        // no forcing slot of `rhs_program` and supplied data could never
-        // replace it.
-        if externally_refreshed(var) {
+        // A parameter with an `update` takes its value from that update, never
+        // from this lowering: one fed from outside the model (a data source or
+        // a handler) is a forcing slot whose default the forcing buffer serves
+        // when no data is supplied (`forcing_default_values`), and one that
+        // recomputes itself from an `expression` is refused by
+        // `classify_variables`. Lowering either to a `const` observed would
+        // freeze it at its default, out of reach of both. Inline array data
+        // is still checked against the declared shape first, so a malformed
+        // default is reported here as it is for any other parameter.
+        if var.update.is_some() {
+            if default.is_array() {
+                inline_array_default(name, var, default, index_sets)?;
+            }
             continue;
         }
         // `runtime_array_parameters`: a shaped parameter with a value and no
         // `update` stays a parameter, read at run time from the forcing buffer
         // (its value seeds the buffer), instead of becoming build-time data.
         // A caller's array counts: `esm_problem` binds it onto `default`.
-        if keep_at_runtime
-            && var.shape.as_deref().is_some_and(|s| !s.is_empty())
-            && var.update.is_none()
-        {
+        if keep_at_runtime && var.shape.as_deref().is_some_and(|s| !s.is_empty()) {
             kept.insert(name.clone());
             continue;
         }
+        // A caller `vi_arrays` entry is authoritative over any declared
+        // default, whatever its form.
+        let caller_supplied = external.is_some_and(|a| a.contains_key(name));
         if !default.is_array() {
             // esm-spec §6.3 broadcast: one scalar over the whole declared grid.
             // Only for a parameter this document is the sole source of — a 0-D
-            // one has no grid to broadcast over, an externally refreshed one is
-            // filled by the forcing buffer, and a caller `vi_arrays` entry is
-            // authoritative over any declared default.
+            // one has no grid to broadcast over.
             let declared = var.shape.as_deref().unwrap_or(&[]);
-            if declared.is_empty()
-                || var.update.is_some()
-                || external.is_some_and(|a| a.contains_key(name))
-            {
+            if declared.is_empty() || caller_supplied {
                 continue;
             }
             // A shape that does not resolve (an unmaterialized derived set) has
@@ -1896,24 +1912,9 @@ fn lower_inline_array_parameters(
             dense.insert(name.clone(), (want, values));
             continue;
         }
-        let (shape, values) = default.to_dense().map_err(|e| {
-            CompileError::build_err(format!("parameter '{name}': {e} (esm-spec §6.3)"))
-        })?;
-        let declared = var.shape.as_deref().unwrap_or(&[]);
-        if declared.is_empty() {
-            return Err(CompileError::build_err(format!(
-                "parameter '{name}' carries inline array data but declares no `shape`; only a \
-                 SHAPED variable takes a nested array (esm-spec §6.3)"
-            )));
-        }
-        if let Some(want) = resolve_declared_shape(declared, index_sets)
-            && want != shape
-        {
-            return Err(CompileError::build_err(format!(
-                "parameter '{name}': inline array data has shape {shape:?}, which does not match \
-                 the declared shape {want:?} (esm-spec §6.6.2 — the array MUST match the \
-                 variable's declared shape after metaparameter folding)"
-            )));
+        let (shape, values) = inline_array_default(name, var, default, index_sets)?;
+        if caller_supplied {
+            continue;
         }
         var.var_type = VariableType::Unknown;
         var.default = None;
@@ -1938,6 +1939,51 @@ fn lower_inline_array_parameters(
     Ok((dense, kept))
 }
 
+/// Parameter `name`'s inline array `default` as a dense array, checked
+/// against its declared `shape`: the declaration must exist (only a SHAPED
+/// variable takes a nested array, esm-spec §6.3) and, where it resolves
+/// against the index-set registry, match the data's extents (esm-spec §6.6.2).
+///
+/// # Errors
+///
+/// [`CompileError::InterpreterBuildError`] when the data is ragged, the
+/// parameter declares no `shape`, or the extents disagree with it.
+fn inline_array_default(
+    name: &str,
+    var: &ModelVariable,
+    default: &crate::types::InlineValue,
+    index_sets: &HashMap<String, IndexSet>,
+) -> Result<(Vec<usize>, Vec<f64>), CompileError> {
+    let (shape, values) = default
+        .to_dense()
+        .map_err(|e| CompileError::build_err(format!("parameter '{name}': {e} (esm-spec §6.3)")))?;
+    let declared = var.shape.as_deref().unwrap_or(&[]);
+    if declared.is_empty() {
+        return Err(CompileError::build_err(format!(
+            "parameter '{name}' carries inline array data but declares no `shape`; only a \
+             SHAPED variable takes a nested array (esm-spec §6.3)"
+        )));
+    }
+    if declared.len() != shape.len() {
+        return Err(CompileError::build_err(format!(
+            "parameter '{name}': inline array data has shape {shape:?}, but the declared shape \
+             {declared:?} has {} axes (esm-spec §6.6.2 — the array MUST match the variable's \
+             declared shape after metaparameter folding)",
+            declared.len()
+        )));
+    }
+    if let Some(want) = resolve_declared_shape(declared, index_sets)
+        && want != shape
+    {
+        return Err(CompileError::build_err(format!(
+            "parameter '{name}': inline array data has shape {shape:?}, which does not match \
+             the declared shape {want:?} (esm-spec §6.6.2 — the array MUST match the \
+             variable's declared shape after metaparameter folding)"
+        )));
+    }
+    Ok((shape, values))
+}
+
 /// The values [`lower_inline_array_parameters`] gives each shaped parameter
 /// the document supplies — inline array data, or one scalar broadcast over
 /// its declared grid — as dense arrays, without rewriting the model. The
@@ -1957,8 +2003,10 @@ pub(crate) fn inline_parameter_arrays(
         let Some(default) = var.default.as_ref() else {
             continue;
         };
+        // A parameter with an `update` takes its value from that update, as
+        // on the compile path: it is no build-time data.
         let declared = var.shape.as_deref().unwrap_or(&[]);
-        if declared.is_empty() {
+        if declared.is_empty() || var.update.is_some() {
             continue;
         }
         let want = resolve_declared_shape(declared, index_sets);
@@ -1968,9 +2016,6 @@ pub(crate) fn inline_parameter_arrays(
                 _ => continue,
             }
         } else {
-            if var.update.is_some() {
-                continue;
-            }
             let (Some(want), Some(scalar)) = (want, default.as_scalar()) else {
                 continue;
             };
@@ -4165,15 +4210,6 @@ fn model_contains_arg_witness(model: &Model) -> bool {
         })
 }
 
-/// Is this parameter refreshed from OUTSIDE the model — every update rule
-/// reading either a data source (`from`) or a registered handler?
-///
-/// Both are the FORCING seam: the value arrives from the runtime between
-/// segments rather than being computed by the model, which is what lets this
-/// backend serve it out of the forcing buffer with no event machinery of its
-/// own (CONFORMANCE_SPEC §5.10.1, §5.13.2). A rule with an `expression` value
-/// form is the opposite case — the model computes it, and something has to run
-/// that computation on each refresh.
 /// The declared `default` of every parameter the forcing buffer serves that
 /// declares one, as the dense field it denotes over the parameter's resolved
 /// shape: a scalar broadcast over the whole grid (esm-spec §6.3), or its inline
@@ -4232,6 +4268,15 @@ pub(crate) fn data_feed_source(spec: &crate::types::ParameterUpdateSpec) -> Opti
     })
 }
 
+/// Is this parameter refreshed from OUTSIDE the model — every update rule
+/// reading either a data source (`from`) or a registered handler?
+///
+/// Both are the FORCING seam: the value arrives from the runtime between
+/// segments rather than being computed by the model, which is what lets this
+/// backend serve it out of the forcing buffer with no event machinery of its
+/// own (CONFORMANCE_SPEC §5.10.1, §5.13.2). A rule with an `expression` value
+/// form is the opposite case — the model computes it, and something has to run
+/// that computation on each refresh.
 fn externally_refreshed(var: &ModelVariable) -> bool {
     let Some(spec) = &var.update else {
         return false;
@@ -6663,5 +6708,199 @@ mod event_driven_update_refusal_tests {
             text.contains("parameter 'k'") && text.contains("`schedule`, `crossing`"),
             "{text}"
         );
+    }
+}
+
+#[cfg(test)]
+mod updated_array_default_tests {
+    //! A shaped parameter whose `default` is inline array data and which has
+    //! an `update`, or a caller-supplied array, takes its value from there and
+    //! is never lowered to a `const` observed; its inline data is still checked
+    //! against the declared shape.
+    use super::*;
+    use serde_json::{Value, json};
+
+    fn model_of(vars: Value, equations: Value) -> (Model, HashMap<String, IndexSet>) {
+        let file: EsmFile = serde_json::from_value(json!({
+            "esm": "1.2.0",
+            "metadata": {"name": "updated_array_default"},
+            "index_sets": {"x": {"kind": "interval", "size": 3}},
+            "data_sources": {"met": {"kind": "grid", "source": {"url_template": "file:///m.nc"}}},
+            "models": {"M": {"variables": vars, "equations": equations}}
+        }))
+        .expect("test document deserializes");
+        let index_sets = file
+            .index_sets
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        let model = file.models.unwrap().shift_remove("M").unwrap();
+        (model, index_sets)
+    }
+
+    /// `D(c[i]) = p[i]` over `x`, with `p` declared by `p`.
+    fn reads_p(p: Value) -> (Model, HashMap<String, IndexSet>) {
+        let faq = |e: Value| {
+            json!({"op": "faq", "args": [], "output_idx": ["i"],
+            "ranges": {"i": {"from": "x"}}, "expr": e})
+        };
+        model_of(
+            json!({
+                "c": {"type": "unknown", "shape": ["x"], "default": 0.0},
+                "p": p
+            }),
+            json!([{
+                "lhs": faq(json!({"op": "D", "args": [{"op": "index", "args": ["c", "i"]}], "wrt": "t"})),
+                "rhs": faq(json!({"op": "index", "args": ["p", "i"]}))
+            }]),
+        )
+    }
+
+    fn data_fed() -> Value {
+        json!({"kind": "data", "source": "met", "from": {"file_variable": "P"}})
+    }
+
+    fn build_err(model: &Model, index_sets: &HashMap<String, IndexSet>) -> String {
+        match ArrayCompiled::from_model(model, index_sets) {
+            Ok(_) => panic!("the build must fail"),
+            Err(e) => format!("{e:?}"),
+        }
+    }
+
+    /// An `expression` update recomputes the parameter, which this backend
+    /// refuses; an array default must not turn it into a frozen constant.
+    #[test]
+    fn an_expression_update_on_an_array_default_is_refused() {
+        let (model, sets) = reads_p(json!({
+            "type": "parameter", "shape": ["x"], "default": [1.0, 2.0, 3.0],
+            "update": {"kind": "schedule", "interval": 1.0, "expression": 2.0}
+        }));
+        let err = build_err(&model, &sets);
+        assert!(
+            err.contains("UnsupportedFeatureError") && err.contains("'p'"),
+            "expected the refusal of the expression update on `p`, got: {err}"
+        );
+    }
+
+    /// Mixed rules (one fed from outside, one recomputed) are refused too.
+    #[test]
+    fn a_mixed_update_on_an_array_default_is_refused() {
+        let (model, sets) = reads_p(json!({
+            "type": "parameter", "shape": ["x"], "default": [1.0, 2.0, 3.0],
+            "update": [data_fed(), {"kind": "schedule", "interval": 1.0, "expression": 2.0}]
+        }));
+        let err = build_err(&model, &sets);
+        assert!(err.contains("UnsupportedFeatureError"), "got: {err}");
+    }
+
+    /// A data-fed array default is a forcing slot serving that default.
+    #[test]
+    fn a_data_fed_array_default_is_a_forcing_default() {
+        let (model, sets) = reads_p(json!({
+            "type": "parameter", "shape": ["x"], "default": [1.0, 2.0, 3.0],
+            "update": data_fed()
+        }));
+        let c = ArrayCompiled::from_model(&model, &sets).expect("builds");
+        assert!(c.forcing_names().any(|n| n == "p"));
+        let d = c.forcing_default("p").flatten().expect("a default field");
+        assert_eq!(d.iter().copied().collect::<Vec<_>>(), vec![1.0, 2.0, 3.0]);
+    }
+
+    /// The build pipeline's binding agrees: a parameter with an `update` is
+    /// no build-time data, whatever the form of its default.
+    #[test]
+    fn inline_parameter_arrays_leaves_updated_parameters_out() {
+        let (model, sets) = model_of(
+            json!({
+                "fed": {"type": "parameter", "shape": ["x"], "default": [1.0, 2.0, 3.0],
+                        "update": data_fed()},
+                "recomputed": {"type": "parameter", "shape": ["x"], "default": [1.0, 2.0, 3.0],
+                               "update": {"kind": "schedule", "interval": 1.0, "expression": 2.0}},
+                "fed_scalar": {"type": "parameter", "shape": ["x"], "default": 2.0,
+                               "update": data_fed()},
+                "inline": {"type": "parameter", "shape": ["x"], "default": [1.0, 2.0, 3.0]}
+            }),
+            json!([]),
+        );
+        let names: Vec<String> = inline_parameter_arrays(&model, &sets)
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert_eq!(names, vec!["inline".to_string()]);
+    }
+
+    /// A caller-supplied array of the same name leaves the parameter as it
+    /// is, as it does for a scalar default.
+    #[test]
+    fn a_caller_array_is_not_shadowed_by_an_array_default() {
+        let (mut model, sets) = reads_p(json!({
+            "type": "parameter", "shape": ["x"], "default": [1.0, 2.0, 3.0]
+        }));
+        let external: HashMap<String, ArrayD<f64>> = [(
+            "p".to_string(),
+            ArrayD::from_shape_vec(IxDyn(&[3]), vec![7.0, 8.0, 9.0]).unwrap(),
+        )]
+        .into_iter()
+        .collect();
+        let (dense, _) =
+            lower_inline_array_parameters(&mut model, &sets, Some(&external), false).unwrap();
+        assert!(dense.is_empty());
+        assert_eq!(model.variables["p"].var_type, VariableType::Parameter);
+        assert!(model.variables["p"].default.is_some());
+        assert!(
+            !model
+                .equations
+                .iter()
+                .any(|e| e.lhs == Expr::Variable("p".into()))
+        );
+
+        // Without the caller's array the default is lowered.
+        let (dense, _) = lower_inline_array_parameters(&mut model, &sets, None, false).unwrap();
+        assert!(dense.contains_key("p"));
+    }
+
+    /// A data-fed array default on a parameter that declares no `shape` gets
+    /// the same diagnostic as any other parameter.
+    #[test]
+    fn a_data_fed_array_default_without_a_shape_names_the_missing_shape() {
+        let (model, sets) = reads_p(json!({
+            "type": "parameter", "default": [1.0, 2.0, 3.0], "update": data_fed()
+        }));
+        let err = build_err(&model, &sets);
+        assert!(err.contains("declares no `shape`"), "got: {err}");
+    }
+
+    /// Extents that disagree with the resolved declaration are reported
+    /// against that declaration.
+    #[test]
+    fn a_data_fed_array_default_of_the_wrong_extent_names_the_declared_shape() {
+        let (model, sets) = reads_p(json!({
+            "type": "parameter", "shape": ["x"], "default": [1.0, 2.0], "update": data_fed()
+        }));
+        let err = build_err(&model, &sets);
+        assert!(
+            err.contains("has shape [2]") && err.contains("declared shape [3]"),
+            "got: {err}"
+        );
+    }
+
+    /// A declared shape the registry cannot size is sized by the inline
+    /// data, not by a guess from the equations; a rank that disagrees with
+    /// the declaration is refused.
+    #[test]
+    fn an_unsized_declaration_takes_the_inline_extents() {
+        let (mut model, sets) = reads_p(json!({
+            "type": "parameter", "shape": ["z"], "default": [1.0, 2.0, 3.0, 4.0],
+            "update": data_fed()
+        }));
+        let c = ArrayCompiled::from_model(&model, &sets).expect("builds");
+        let d = c.forcing_default("p").flatten().expect("a default field");
+        assert_eq!(d.shape(), &[4]);
+
+        model.variables.get_mut("p").unwrap().default =
+            Some(serde_json::from_value(json!([[1.0, 2.0], [3.0, 4.0]])).unwrap());
+        let err = build_err(&model, &sets);
+        assert!(err.contains("has 1 axes"), "got: {err}");
     }
 }
