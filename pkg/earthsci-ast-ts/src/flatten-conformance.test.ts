@@ -4,8 +4,8 @@
  *
  * The corpus is generated from the PYTHON oracle
  * (`scripts/generate-flatten-corpus.py`) and pins the canonical
- * `FlattenedSystem` field set of esm-libraries-spec §4.7.5 step 4 for 19 shared
- * fixtures, plus 2 refusals. TypeScript is a CONSUMER of it, not its oracle, so
+ * `FlattenedSystem` field set of esm-libraries-spec §4.7.5 step 4 for every
+ * case, plus the documents it refuses (counts pinned below). TypeScript is a CONSUMER of it, not its oracle, so
  * this suite is where the corpus does its real work: every field is compared as
  * an ORDERED sequence, never as a set.
  *
