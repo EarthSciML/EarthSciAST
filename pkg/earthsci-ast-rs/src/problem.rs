@@ -570,6 +570,14 @@ pub struct ProblemOptions {
     #[cfg(not(target_arch = "wasm32"))]
     pub pushdown_rewrite: bool,
     /// Run-time data providers, keyed by the forcing VARIABLE name they feed.
+    /// A key spells the parameter as a `p` key may (esm-spec §6.6.2): its full
+    /// name (`Fed.s`), its bare name (`s`) or a partial qualification. An
+    /// exact key wins over the others for the same parameter, whose providers
+    /// are not read; two non-exact keys for one parameter, an ambiguous key,
+    /// and a provider beside a [`Self::const_arrays`] entry for the same
+    /// parameter are refused. A key that designates no parameter, names a
+    /// state or observed variable, or is read by a `variable_map` coupling is
+    /// used as given.
     ///
     /// CONST providers are materialized ONCE, here, at construction — the
     /// "gated fetch" §2.5.2 puts in the build half. DISCRETE providers are
@@ -839,6 +847,11 @@ pub struct EsmProblem {
     /// Refresh anchors strictly inside `tspan`.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) refresh_boundaries: Vec<f64>,
+    /// The key the caller passed each run-time provider under, keyed by the
+    /// forcing name it feeds, so an error names the provider as the caller
+    /// did whenever it fails.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) provider_keys: HashMap<String, String>,
     /// The typed input the right-hand side was compiled from, kept so
     /// [`crate::range_rhs::rhs_program`] can flatten it once and select terms
     /// by provenance (API_SPEC §5.8). `None` for a problem with no array
@@ -1669,6 +1682,8 @@ pub fn remake(prob: &EsmProblem, changes: &Remake) -> Result<EsmProblem, Simulat
         discrete_forcing: prob.discrete_forcing.clone(),
         #[cfg(not(target_arch = "wasm32"))]
         refresh_boundaries: boundaries,
+        #[cfg(not(target_arch = "wasm32"))]
+        provider_keys: prob.provider_keys.clone(),
         program_source: prob.program_source.clone(),
         runtime_array_parameters: prob.runtime_array_parameters,
     })
@@ -2272,8 +2287,15 @@ pub fn esm_problem<'a>(
 
     // ---- (5) Bind and CONST-materialize the run-time providers. -----------
     #[cfg(not(target_arch = "wasm32"))]
-    let (refresh, discrete_forcing, refresh_boundaries, provider_names) =
-        bind_providers(&backend, &mut opts, tspan)?;
+    let (refresh, discrete_forcing, refresh_boundaries, provider_keys) = bind_providers(
+        &backend,
+        &mut opts,
+        tspan,
+        &supplied.const_keys,
+        &coupling_reads(owned_file.as_ref()),
+    )?;
+    #[cfg(target_arch = "wasm32")]
+    let provider_keys: HashMap<String, String> = HashMap::new();
     // Every ingested column construction does not keep for read-back —
     // including the ones the right-hand side is about to take — so
     // `observed_field` can name the option that would have kept it.
@@ -2288,6 +2310,7 @@ pub fn esm_problem<'a>(
             c,
             owned_file.as_ref(),
             &opts.p,
+            &provider_keys,
             &mut ingested,
             &retained_data_keys,
         )?;
@@ -2367,7 +2390,7 @@ pub fn esm_problem<'a>(
             exec,
             &discrete_forcing,
             opts.sample_time.unwrap_or(tspan.0),
-            &provider_names,
+            &provider_keys,
         )?;
     }
 
@@ -2402,6 +2425,8 @@ pub fn esm_problem<'a>(
         discrete_forcing,
         #[cfg(not(target_arch = "wasm32"))]
         refresh_boundaries,
+        #[cfg(not(target_arch = "wasm32"))]
+        provider_keys,
         program_source,
         runtime_array_parameters: opts.runtime_array_parameters,
     };
@@ -3806,6 +3831,12 @@ struct SuppliedData {
     arrays: HashMap<String, ArrayD<f64>>,
     /// The keys of the run-time providers and of the build-time providers.
     provider_keys: HashMap<String, ()>,
+    /// The keys of the build-time providers alone.
+    build_provider_keys: HashMap<String, ()>,
+    /// Every `const_arrays` key, sorted, which a run-time provider may not
+    /// also feed.
+    #[cfg(not(target_arch = "wasm32"))]
+    const_keys: Vec<String>,
     /// The captured arrays for parameters the document feeds from outside
     /// (a data source or a handler) and no provider serves, keyed
     /// `Model.param`: [`Self::bind_arrays`] routes them to the forcing buffer,
@@ -3830,6 +3861,10 @@ impl SuppliedData {
                 .extend(opts.providers.keys().map(|k| (k.clone(), ())));
             out.provider_keys
                 .extend(opts.build_providers.iter().map(|(k, _)| (k.clone(), ())));
+            out.build_provider_keys
+                .extend(opts.build_providers.iter().map(|(k, _)| (k.clone(), ())));
+            out.const_keys = opts.const_arrays.keys().cloned().collect();
+            out.const_keys.sort();
             if !opts.const_arrays.is_empty() {
                 let shaped = shaped_parameter_keys(raw, file);
                 let only_trigger = raw.is_some_and(declares_derivative)
@@ -3930,6 +3965,7 @@ impl SuppliedData {
         c: &ArrayCompiled,
         file: Option<&EsmFile>,
         p: &HashMap<String, f64>,
+        routed: &HashMap<String, String>,
         ingested: &mut HashMap<String, ArrayD<f64>>,
         retained: &std::collections::HashSet<String>,
     ) -> Result<(), SimulateError> {
@@ -3972,7 +4008,9 @@ impl SuppliedData {
                 forcing.borrow_mut().insert(name.clone(), arr);
                 continue;
             }
-            if names_key(&self.provider_keys, name) {
+            // A run-time provider feeds it (`routed` is keyed by the compiled
+            // name each one writes), or a build-time provider does.
+            if routed.contains_key(name) || names_key(&self.build_provider_keys, name) {
                 continue;
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -4243,12 +4281,29 @@ fn shaped_parameter_keys(
     out
 }
 
+/// The names a `variable_map` coupling of `file` reads (its `from`
+/// endpoints): a run-time provider keyed by one of them keeps its own name
+/// rather than being routed onto a parameter it is a suffix of.
+#[cfg(not(target_arch = "wasm32"))]
+fn coupling_reads(file: Option<&EsmFile>) -> std::collections::HashSet<String> {
+    file.and_then(|f| f.coupling.as_ref())
+        .into_iter()
+        .flatten()
+        .filter_map(|c| match c {
+            crate::types::CouplingEntry::VariableMap { from, .. } => Some(from.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::type_complexity)]
 fn bind_providers(
     backend: &Backend,
     opts: &mut ProblemOptions,
     tspan: (f64, f64),
+    const_keys: &[String],
+    keep: &std::collections::HashSet<String>,
 ) -> Result<
     (
         Option<SharedRefresh>,
@@ -4272,21 +4327,34 @@ fn bind_providers(
         });
     };
 
-    // Each provider writes its field under the name the compiled model reads
-    // (see `provider_target`), so the Problem and `rhs_program` see its data
-    // rather than the declared default beside it.
-    let mut providers: HashMap<String, Box<dyn crate::provider::CadenceProvider>> = HashMap::new();
+    // Each provider writes its field under the compiled name of the
+    // parameter its key designates (esm-spec §6.6.2), so the Problem and
+    // `rhs_program` see its data rather than the declared default beside it.
+    // An exact key wins over an alias for the same parameter, whose provider
+    // is not read; any other key is used as given.
+    let resolver = compiled.parameter_key_resolver();
     let mut keys: Vec<String> = opts.providers.keys().cloned().collect();
     keys.sort();
+    let routing = resolver
+        .route(keys.iter().map(String::as_str), keep)
+        .map_err(provider_key_error)?;
+    refuse_provider_const_overlap(&resolver, &routing.targets, const_keys, keep)?;
+    let mut providers: HashMap<String, Box<dyn crate::provider::CadenceProvider>> = HashMap::new();
     let mut given: HashMap<String, String> = HashMap::new();
     for key in keys {
         let provider = opts.providers.remove(&key).expect("a key of the map");
-        let target = provider_target(compiled, &key);
+        if routing.shadowed.contains(&key) {
+            continue;
+        }
+        let target = routing
+            .targets
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| key.clone());
         if let Some(other) = given.insert(target.clone(), key.clone()) {
+            // An unrouted key that is spelled as another key's target.
             return Err(SimulateError::ProviderError {
-                details: format!(
-                    "providers `{other}` and `{key}` both feed parameter `{target}`; pass one"
-                ),
+                details: format!("providers `{other}` and `{key}` both feed `{target}`; pass one"),
                 name: key,
             });
         }
@@ -4338,6 +4406,92 @@ fn loader_error(given: &HashMap<String, String>, e: crate::provider::LoaderError
     }
 }
 
+/// A provider key the §6.6.2 rules cannot route, as a
+/// [`SimulateError::ProviderError`].
+#[cfg(not(target_arch = "wasm32"))]
+fn provider_key_error(e: crate::simulate::OverrideKeyError) -> SimulateError {
+    use crate::simulate::OverrideKeyError;
+    match e {
+        OverrideKeyError::Ambiguous { key, candidates } => SimulateError::ProviderError {
+            details: format!(
+                "ambiguous parameter name: it is carried as a suffix by {} parameters ({}); \
+                 qualify it further with its owning component (esm-spec §6.6.2)",
+                candidates.len(),
+                candidates.join(", ")
+            ),
+            name: key,
+        },
+        OverrideKeyError::Collision { name, keys } => SimulateError::ProviderError {
+            details: format!(
+                "providers {} all designate the parameter `{name}`; pass exactly one \
+                 (esm-spec §6.6.2)",
+                keys.iter()
+                    .map(|k| format!("`{k}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            name: keys.into_iter().next().unwrap_or_default(),
+        },
+        OverrideKeyError::Unknown(name) => SimulateError::ProviderError {
+            details: "designates no parameter".to_string(),
+            name,
+        },
+    }
+}
+
+/// Refuse a provider routed onto a parameter a `const_arrays` entry also
+/// supplies, under any spelling of it (esm-spec §6.6.2): two sources for one
+/// value. A `const_arrays` key two parameters carry, one of them provider-fed,
+/// is refused as ambiguous. The counterpart of Julia's
+/// `_refuse_provider_registry_overlap`.
+#[cfg(not(target_arch = "wasm32"))]
+fn refuse_provider_const_overlap(
+    resolver: &crate::simulate_array::ParameterKeyResolver,
+    targets: &HashMap<String, String>,
+    const_keys: &[String],
+    keep: &std::collections::HashSet<String>,
+) -> Result<(), SimulateError> {
+    use crate::simulate::KeyHit;
+    if targets.is_empty() || const_keys.is_empty() {
+        return Ok(());
+    }
+    let mut fed: HashMap<&str, &str> = HashMap::new();
+    for (key, target) in targets {
+        fed.insert(target.as_str(), key.as_str());
+    }
+    for rk in const_keys {
+        match resolver.resolve(rk, keep) {
+            KeyHit::Exact(name) | KeyHit::Alias(name) => {
+                if let Some(pk) = fed.get(name.as_str()) {
+                    return Err(SimulateError::ProviderError {
+                        name: (*pk).to_string(),
+                        details: format!(
+                            "providers[`{pk}`] and const_arrays[`{rk}`] both supply the \
+                             parameter `{name}`; pass one of them (esm-spec §6.6.2)"
+                        ),
+                    });
+                }
+            }
+            KeyHit::Ambiguous(cands) => {
+                if let Some(pk) = cands.iter().find_map(|c| fed.get(c.as_str())) {
+                    return Err(SimulateError::ProviderError {
+                        name: pk.to_string(),
+                        details: format!(
+                            "const_arrays[`{rk}`] is ambiguous: it is carried as a suffix by \
+                             {} parameters ({}), one of them fed by this provider; qualify it \
+                             further with its owning component (esm-spec §6.6.2)",
+                            cands.len(),
+                            cands.join(", ")
+                        ),
+                    });
+                }
+            }
+            KeyHit::Unknown => {}
+        }
+    }
+    Ok(())
+}
+
 /// Sample the DISCRETE providers at construction, at `sample_time`
 /// (esm-libraries-spec §2.5.2: providers are sampled at construction), so the
 /// Problem's forcing holds their data from the start, as Julia's does, and
@@ -4347,8 +4501,8 @@ fn loader_error(given: &HashMap<String, String>, e: crate::provider::LoaderError
 /// fetches nothing. Each provider gives the record in effect at
 /// `sample_time` ([`crate::provider::RefreshExecutor::sample_at`]). A
 /// parameter whose provider delivers nothing there holds its declared default
-/// (esm-spec §6.3) until the provider first delivers, and with no default it
-/// is missing data (§10.10).
+/// (esm-spec §6.3) until the provider first delivers; see
+/// [`seed_vacant_discrete`].
 #[cfg(not(target_arch = "wasm32"))]
 fn sample_discrete_providers(
     compiled: &ArrayCompiled,
@@ -4361,13 +4515,40 @@ fn sample_discrete_providers(
         return Ok(());
     }
     let forcing = compiled.forcing_buffer();
-    exec.borrow_mut()
-        .refresh_named(sample_time, &forcing, true)
+    let mut written = Vec::new();
+    let mut vacant = exec
+        .borrow_mut()
+        .sample_in_effect(sample_time, &forcing, &mut written)
         .map_err(|e| loader_error(given, e))?;
-    let mut names: Vec<&String> = discrete.iter().collect();
-    names.sort();
-    for name in names {
-        if forcing.borrow().contains_key(name) {
+    // A provider that answered "unchanged" at its own refresh time has
+    // delivered nothing yet at construction either.
+    let mut empty: Vec<String> = discrete
+        .iter()
+        .filter(|n| !forcing.borrow().contains_key(*n))
+        .cloned()
+        .collect();
+    vacant.append(&mut empty);
+    vacant.sort();
+    vacant.dedup();
+    seed_vacant_discrete(compiled, &vacant, given, "sample_time", sample_time)
+}
+
+/// Give each DISCRETE-fed name in `vacant` (no record in effect at `t`) its
+/// declared default (esm-spec §6.3). Only a parameter the model reads from
+/// the forcing buffer is required to have a value: one that declares no
+/// default is refused (§10.10), naming the provider by the caller's key. A
+/// name the model does not read as a forcing parameter is left as it is.
+#[cfg(not(target_arch = "wasm32"))]
+fn seed_vacant_discrete(
+    compiled: &ArrayCompiled,
+    vacant: &[String],
+    given: &HashMap<String, String>,
+    at: &str,
+    t: f64,
+) -> Result<(), SimulateError> {
+    let forcing = compiled.forcing_buffer();
+    for name in vacant {
+        if !compiled.serves_forcing(name) {
             continue;
         }
         match declared_default_forcing(compiled, name) {
@@ -4382,8 +4563,9 @@ fn sample_discrete_providers(
                 return Err(SimulateError::ProviderError {
                     name: key.to_string(),
                     details: format!(
-                        "the provider delivered no data at sample_time {sample_time} (nor at a \
-                         refresh time before it), and the parameter declares no default"
+                        "the provider has no record in effect at {at} {t} (it delivered \
+                         nothing there, nor at a refresh time before it), and the parameter \
+                         `{name}` it feeds declares no default"
                     ),
                 });
             }
@@ -4404,32 +4586,6 @@ fn declared_default_forcing(c: &ArrayCompiled, name: &str) -> Option<Option<Arra
         }
     }
     Some(value)
-}
-
-/// The forcing-buffer name a run-time provider keyed `key` writes.
-///
-/// A single-model build compiles its parameters under their bare names (`s`)
-/// with the model's name as its namespace, while a caller may key a provider
-/// by the parameter's full name (`M.s`, esm-spec §6.6.2), as `const_arrays`
-/// and the other bindings accept. Such a key is re-spelled to the compiled
-/// name. Without this the provider's field landed under `M.s`, which the
-/// model never reads, while the missing-data gate wrote the declared default
-/// under `s`: the Problem integrated the default, and `rhs_program`'s default
-/// forcing held whichever of the two its map iteration met last. Any other
-/// key (a compiled name already, or a loader field a coupling reads) is used
-/// as given.
-#[cfg(not(target_arch = "wasm32"))]
-fn provider_target(compiled: &ArrayCompiled, key: &str) -> String {
-    let serves = |name: &str| compiled.forcing_names().any(|n| n == name);
-    if serves(key) {
-        return key.to_string();
-    }
-    compiled
-        .namespace()
-        .and_then(|ns| key.strip_prefix(ns))
-        .and_then(|rest| rest.strip_prefix('.'))
-        .filter(|local| serves(local))
-        .map_or_else(|| key.to_string(), str::to_string)
 }
 
 // =============================================================================
@@ -4476,16 +4632,22 @@ pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, Simulat
                         // The first call is the solve's start, `tspan.0`: the
                         // record in effect there, whatever an earlier solve
                         // of this Problem (or of one remade from it) left in
-                        // the buffer. Every later call is a refresh time.
+                        // the buffer, and the declared default where no
+                        // record is in effect yet. Every later call is a
+                        // refresh time.
                         let mut started = false;
                         let refresh_fn = |t: f64| -> Result<(), SimulateError> {
-                            let in_effect = !std::mem::replace(&mut started, true);
-                            exec.refresh_named(t, &forcing, in_effect)
-                                .map(|_| ())
-                                .map_err(|e| SimulateError::ProviderError {
-                                    name: e.loader,
-                                    details: e.error.to_string(),
-                                })
+                            let given = &prob.provider_keys;
+                            if std::mem::replace(&mut started, true) {
+                                return exec
+                                    .refresh_named(t, &forcing)
+                                    .map(|_| ())
+                                    .map_err(|e| loader_error(given, e));
+                            }
+                            let vacant = exec
+                                .sample_in_effect(t, &forcing, &mut Vec::new())
+                                .map_err(|e| loader_error(given, e))?;
+                            seed_vacant_discrete(compiled, &vacant, given, "the solve's start", t)
                         };
                         compiled.solve_with_refresh_inspect(
                             prob.tspan,

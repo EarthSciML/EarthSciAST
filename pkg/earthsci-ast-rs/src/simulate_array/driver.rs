@@ -411,6 +411,40 @@ impl ArrayCompiled {
         self.forcing_decls.keys()
     }
 
+    /// Whether the forcing buffer serves `name` (a compiled name).
+    pub(crate) fn serves_forcing(&self, name: &str) -> bool {
+        self.forcing_decls.contains_key(name)
+    }
+
+    /// The resolver that routes run-time provider keys (and the
+    /// `const_arrays` keys checked against them) onto this build's parameters;
+    /// see [`ParameterKeyResolver`].
+    pub(crate) fn parameter_key_resolver(&self) -> ParameterKeyResolver {
+        let full = |n: &str| match self.namespace.as_deref() {
+            Some(ns) => format!("{ns}.{n}"),
+            None => n.to_string(),
+        };
+        let mut compiled_of: HashMap<String, String> = HashMap::new();
+        for n in self.forcing_decls.keys().chain(self.param_names.iter()) {
+            compiled_of.insert(full(n), n.clone());
+        }
+        let known = crate::simulate::SuffixIndex::new(compiled_of.keys().map(String::as_str));
+        let others: HashSet<String> = self
+            .var_shapes
+            .keys()
+            .cloned()
+            .chain(self.observed_variable_names())
+            .map(|n| full(&n))
+            .filter(|n| !compiled_of.contains_key(n))
+            .collect();
+        ParameterKeyResolver {
+            compiled_of,
+            known,
+            others,
+            namespaces: self.override_namespaces(),
+        }
+    }
+
     /// The declared default of forcing parameter `name`: `None` when it
     /// declares none, `Some(None)` when its shape does not resolve yet, and
     /// otherwise the dense field it denotes over that shape.
@@ -4435,5 +4469,100 @@ mod field_ic_memo_tests {
             assert_eq!(field_ic_resolutions() - before, 1, "[{compiler}]");
             assert_eq!(first_column(&sol), [1.0, 2.0, 3.0], "[{compiler}]");
         }
+    }
+}
+
+/// Routes caller keys onto a build's parameters (esm-spec §6.6.2) by the rules
+/// a `parameter_overrides` key follows, applied to the parameters' FULL names
+/// (`Fed.s`, which a single-model build compiles as `s`): `Fed.s` is exact,
+/// and a bare `s` or a partial qualification is an alias that an exact key for
+/// the same parameter shadows. Answers in compiled names.
+///
+/// A key that is not a parameter's full name is not routed when it exactly
+/// names a state or observed variable, or is one the caller asks to keep (a
+/// name a coupling reads): such a key, and one that designates no parameter,
+/// is used as given.
+pub(crate) struct ParameterKeyResolver {
+    /// Full name → compiled name, for every forcing and table parameter.
+    compiled_of: HashMap<String, String>,
+    known: crate::simulate::SuffixIndex,
+    /// Full names of the states and observed variables that are not
+    /// parameters.
+    others: HashSet<String>,
+    namespaces: HashSet<String>,
+}
+
+impl ParameterKeyResolver {
+    fn routable(&self, key: &str, keep: &HashSet<String>) -> bool {
+        self.compiled_of.contains_key(key) || !(keep.contains(key) || self.others.contains(key))
+    }
+
+    /// What one key designates, in compiled names (an ambiguous key's
+    /// candidates too).
+    pub(crate) fn resolve(&self, key: &str, keep: &HashSet<String>) -> crate::simulate::KeyHit {
+        use crate::simulate::KeyHit;
+        if !self.routable(key, keep) {
+            return KeyHit::Unknown;
+        }
+        match crate::simulate::resolve_key(&self.known, &self.namespaces, key) {
+            KeyHit::Exact(n) => KeyHit::Exact(self.compiled_of[&n].clone()),
+            KeyHit::Alias(n) => KeyHit::Alias(self.compiled_of[&n].clone()),
+            KeyHit::Ambiguous(c) => {
+                KeyHit::Ambiguous(c.iter().map(|n| self.compiled_of[n].clone()).collect())
+            }
+            KeyHit::Unknown => KeyHit::Unknown,
+        }
+    }
+
+    /// Route `keys` together ([`crate::simulate::route_keys`]), with targets
+    /// in compiled names.
+    pub(crate) fn route<'a>(
+        &self,
+        keys: impl IntoIterator<Item = &'a str>,
+        keep: &HashSet<String>,
+    ) -> Result<crate::simulate::KeyRouting, crate::simulate::OverrideKeyError> {
+        let routable = keys.into_iter().filter(|k| self.routable(k, keep));
+        let mut routing = crate::simulate::route_keys(&self.known, &self.namespaces, routable)?;
+        for target in routing.targets.values_mut() {
+            *target = self.compiled_of[target.as_str()].clone();
+        }
+        Ok(routing)
+    }
+}
+
+#[cfg(test)]
+mod parameter_key_resolver_tests {
+    use super::*;
+    use crate::simulate::KeyHit;
+
+    /// A single-model build: compiled names are bare, full names carry `Fed`.
+    fn resolver() -> ParameterKeyResolver {
+        let compiled_of: HashMap<String, String> = [("Fed.s", "s"), ("Fed.T", "T")]
+            .into_iter()
+            .map(|(f, c)| (f.to_string(), c.to_string()))
+            .collect();
+        ParameterKeyResolver {
+            known: crate::simulate::SuffixIndex::new(compiled_of.keys().map(String::as_str)),
+            compiled_of,
+            others: HashSet::from(["Fed.u".to_string()]),
+            namespaces: HashSet::from(["Fed".to_string()]),
+        }
+    }
+
+    /// Answers are compiled names; a key a coupling reads, or one naming a
+    /// state, is used as given unless it is a parameter's full name.
+    #[test]
+    fn routes_in_compiled_names_and_keeps_coupling_reads() {
+        let r = resolver();
+        let none = HashSet::new();
+        assert_eq!(r.resolve("Fed.s", &none), KeyHit::Exact("s".into()));
+        assert_eq!(r.resolve("s", &none), KeyHit::Alias("s".into()));
+        assert_eq!(r.resolve("Fed.u", &none), KeyHit::Unknown);
+        let keep = HashSet::from(["T".to_string(), "Fed.T".to_string()]);
+        assert_eq!(r.resolve("T", &keep), KeyHit::Unknown);
+        assert_eq!(r.resolve("Fed.T", &keep), KeyHit::Exact("T".into()));
+        let routing = r.route(["T", "s"], &keep).expect("routes");
+        assert!(!routing.targets.contains_key("T"));
+        assert_eq!(routing.targets.get("s").map(String::as_str), Some("s"));
     }
 }
