@@ -7494,7 +7494,18 @@ const one: construction samples every provider at `sample_time`
 (esm-libraries-spec §2.5.2), so the Problem and the default forcing set hold a
 discrete provider's record in effect there, not its declared default, before
 any solve. Only a provider with no record at `sample_time` leaves the declared
-default in place.
+default in place, and a solve that starts where its provider has no record yet
+starts from that default too, whatever an earlier solve left in the buffer.
+
+**Key routing.** A provider key is routed onto a parameter by the rules a
+`parameter_overrides` key follows (esm-spec §6.6.2), applied to the
+parameters' full names. An exact key wins over a bare or partly qualified key
+for the same parameter, whose provider is then not read; two non-exact keys
+for one parameter, or a key two parameters carry, are refused. A key that is
+not a parameter's full name and names a state or observed variable exactly,
+or that a `variable_map` coupling reads, is used as given, as is a key that
+designates no parameter. A provider and a `const_arrays` entry that designate
+the same parameter, under any spellings, are refused.
 
 **Shape.** `tests/conformance/provider_forcing/manifest.json` builds one
 document (`fixtures/provider_forcing.esm`: a gridded and a scalar data-fed
@@ -7504,7 +7515,8 @@ program's forcing slots, its default forcing set (column-major), the program's
 right-hand side at the default state with that set, and the Problem's own
 right-hand side at its initial state, all bitwise. `no_providers` is the
 control; the const and discrete providers are each keyed both ways (full and
-bare names); the discrete cases deliver `base + slope * t`, so they also pin
+bare names), and `exact_key_shadows_bare_key` passes both spellings at once;
+the discrete cases deliver `base + slope * t`, so they also pin
 the time each is sampled at (`tspan[0]`, or an explicit `sample_time`).
 
 **Adapters.** Julia `pkg/EarthSciAST.jl/test/conformance_provider_forcing_test.jl`

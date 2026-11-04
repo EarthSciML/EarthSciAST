@@ -63,3 +63,4 @@ with `sample_time` when a case gives one.
 | `discrete_at_tspan_start` | discrete providers are sampled at construction, at `sample_time`, which defaults to `tspan[0]` |
 | `discrete_at_sample_time` | the same providers sampled at an explicit `sample_time = 0.25` |
 | `discrete_bare_keys` | the discrete providers of `discrete_at_tspan_start` keyed by the bare names `E`, `s` |
+| `exact_key_shadows_bare_key` | providers keyed `Fed.s` and `s`: the exact key wins and the bare key's provider is not read |

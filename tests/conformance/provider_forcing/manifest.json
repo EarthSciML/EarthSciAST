@@ -128,6 +128,23 @@
       },
       "du_default": [0.5, 1.25, 2.0],
       "note": "The discrete providers of discrete_at_tspan_start keyed by the bare names `E` and `s`. Julia used to keep each live buffer under the caller's key, which the build never reads: both parameters kept their declared defaults in the Problem, and rhs_program's default set gained two extra slots, `E` and `s`."
+    },
+    {
+      "id": "exact_key_shadows_bare_key",
+      "providers": [
+        {"key": "Fed.s", "refresh_times": [], "shape": [], "base": 3.0, "slope": 0.0},
+        {"key": "s", "refresh_times": [], "shape": [], "base": 5.0, "slope": 0.0}
+      ],
+      "forcing_slots": [
+        {"name": "Fed.E", "shape": [3, 2], "kind": "forcing"},
+        {"name": "Fed.s", "shape": [], "kind": "forcing"}
+      ],
+      "default_forcing": {
+        "Fed.E": [0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+        "Fed.s": [3.0]
+      },
+      "du_default": [1.25, 1.25, 1.25],
+      "note": "Two providers for `Fed.s`, under its full name and its bare name. The exact key wins and the bare key's provider is not read, as for a `parameter_overrides` key (esm-spec §6.6.2). Rust used to refuse the pair."
     }
   ]
 }
