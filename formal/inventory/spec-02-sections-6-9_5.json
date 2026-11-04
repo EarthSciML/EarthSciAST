@@ -416,6 +416,22 @@
       "note": "Binary byte-layout handling of data files is file I/O, not format semantics."
     },
     {
+      "id": "spec.8.1.1.esio-format-missing-refused",
+      "section": "8.1.1",
+      "quote": "it MUST refuse, naming the source, to build a provider for a source it was asked to build that has no `esio_format` and whose reader it cannot otherwise determine",
+      "class": "out_of_scope",
+      "area": "data_sources",
+      "note": "Choosing an EarthSciIO reader in providers_from_document is runtime provider construction; the document itself is unaffected (esio_format is read nowhere by load, validation or flatten)."
+    },
+    {
+      "id": "spec.8.1.1.esio-format-no-guess",
+      "section": "8.1.1",
+      "quote": "it MUST NOT guess a reader for a source whose `esio_format` is present",
+      "class": "out_of_scope",
+      "area": "data_sources",
+      "note": "Choosing an EarthSciIO reader in providers_from_document is runtime provider construction; the document itself is unaffected (esio_format is read nowhere by load, validation or flatten)."
+    },
+    {
       "id": "spec.8.2.1.env-var-template-message",
       "section": "8.2.1",
       "quote": "is a load-time error, `data_source_url_unresolved`, whose message MUST name the offending data source and template.",
