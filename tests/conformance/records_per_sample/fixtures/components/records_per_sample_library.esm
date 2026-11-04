@@ -1,0 +1,23 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "RecordsPerSampleLibrary",
+    "description": "Coupling library for the records_per_sample coupling_import cases: maps a data component's field onto its consumer's parameter with param_to_var."
+  },
+  "coupling_roles": {
+    "Data": {
+      "description": "The data component."
+    },
+    "Consumer": {
+      "description": "The component whose F_k the field replaces."
+    }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "Data.K",
+      "to": "Consumer.F_k",
+      "transform": "param_to_var"
+    }
+  ]
+}

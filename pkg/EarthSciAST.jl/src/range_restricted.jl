@@ -1302,7 +1302,7 @@ function _is_arrayish(ctx::_NeedCtx, e::ASTExpr)
     ) && return true
     o.op == "const" && return o.value isa AbstractVector
     o.op == "index" && return false
-    return any(a -> _is_arrayish(ctx, a), o.args)
+    return _anyof(a -> _is_arrayish(ctx, a), o.args)
 end
 
 # Walk an expression evaluated at the cells `env` binds.
@@ -2934,7 +2934,7 @@ function _range_restrict_parts(
         haskey(dep, n) && return dep[n]
         n in seen && return false
         push!(seen, n)
-        r = any(
+        r = _anyof(
             x -> x in states || (haskey(defs, x) && statedep(x, seen)),
             _referenced_var_names(defs[n])
         )

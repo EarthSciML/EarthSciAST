@@ -1422,10 +1422,14 @@ export interface DataSource {
   extent?: DataSourceExtent;
   reference?: Reference;
   /**
-   * Free-form metadata about the data source. The "tags" field (array of strings) is conventional for expressing scientific role (e.g. "emissions", "reanalysis") and is not schema-validated.
+   * Free-form metadata about the data source. Two keys are conventional: "tags" (array of strings) expresses scientific role (e.g. "emissions", "reanalysis"); "esio_format" names the format reader that decodes the source's files, as EarthSciIO's format registry spells it ("netcdf", "zarr", "ff10", …; esm-spec §8.1.1). Neither changes the document; a runtime building providers from the document reads "esio_format".
    */
   metadata?: {
     tags?: string[];
+    /**
+     * The EarthSciIO format-registry name of the reader for this source's files ("netcdf", "zarr", "ff10", "csv", …; esm-spec §8.1.1). Optional; read by document-driven provider construction, nowhere else.
+     */
+    esio_format?: string;
     [k: string]: unknown;
   };
 }
@@ -1471,7 +1475,7 @@ export interface DataSourceTemporal {
    */
   time_variable?: string;
   /**
-   * How many time records the source returns per query time — pure I/O; the source does NOT interpolate. Absent or 1 (default): the single at-or-before record, time axis dropped (piecewise-constant between ticks). 2: the two records bracketing the current time (floor + successor), returned with the time axis kept at length 2 so a downstream model can interpolate in time (e.g. linearly). Only 1 and 2 are supported; higher-order temporal stencils are future work. Contrast records_per_file (records IN one file).
+   * How many time records the source returns per query time — pure I/O; the source does NOT interpolate. The source-wide default of each consuming parameter's `from.records_per_sample`, which overrides it (esm-spec §8.3, §8.5.1). Absent or 1 (default): the single at-or-before record, time axis dropped (piecewise-constant between ticks). 2: the two records bracketing the current time (floor + successor), stacked along the consuming parameter's FIRST declared dimension, which must have exactly two members, so a downstream model can interpolate in time (e.g. linearly). Only 1 and 2 are supported; higher-order temporal stencils are future work. Contrast records_per_file (records IN one file).
    */
   records_per_sample?: 1 | 2;
 }

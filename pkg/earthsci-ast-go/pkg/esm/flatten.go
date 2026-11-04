@@ -339,6 +339,13 @@ type LoaderField struct {
 	DataSource DataSource
 	// UnitConversion is the binding's declared `unit_conversion` (§8.5), or nil.
 	UnitConversion Expression
+	// RecordsPerSample is the EFFECTIVE number of records the parameter
+	// receives per query time, 1 or 2 (esm-spec §8.5.1): the binding's
+	// `from.records_per_sample`, else the source's
+	// `temporal.records_per_sample`, else 1. With 2 the field holds the record
+	// at or before the query time and its successor, stacked along the
+	// parameter's first dimension.
+	RecordsPerSample int
 }
 
 // FieldIC is one deferred `ic` equation (esm-spec §11.4.1) as a
@@ -1225,13 +1232,14 @@ func dataSourceFields(model *Model, fullPrefix string, varOrder []string, source
 				cadence = CadenceDiscrete
 			}
 			out = append(out, LoaderField{
-				Name:           fullPrefix + "." + varName,
-				Owner:          fullPrefix,
-				Source:         rule.Source,
-				FileVariable:   rule.From.FileVariable,
-				Cadence:        cadence.String(),
-				DataSource:     source,
-				UnitConversion: rule.From.UnitConversion,
+				Name:             fullPrefix + "." + varName,
+				Owner:            fullPrefix,
+				Source:           rule.Source,
+				FileVariable:     rule.From.FileVariable,
+				Cadence:          cadence.String(),
+				DataSource:       source,
+				UnitConversion:   rule.From.UnitConversion,
+				RecordsPerSample: effectiveRecordsPerSample(rule.From, &source),
 			})
 		}
 	}
@@ -2827,6 +2835,11 @@ func FlattenWithOptions(file *ESMFile, opts CouplingImportOptions) (*FlattenedSy
 	if err != nil {
 		return nil, fmt.Errorf("flatten: %w", err)
 	}
+	// esm-spec §8.5.1: a record shape that arrives through an imported
+	// `param_to_var` edge is first decidable here.
+	if err := checkRecordsPerSampleAfterImports(file, coupling); err != nil {
+		return nil, err
+	}
 
 	components, order, err := collectComponents(file)
 	if err != nil {
@@ -3019,6 +3032,9 @@ func collectComponents(file *ESMFile) (map[string]*componentSystem, []string, er
 	sources := file.DataSources
 	for _, name := range orderedKeys(file.Models, file.declarationOrder("/models")) {
 		model := file.Models[name]
+		if model.unresolvedMountRef != "" {
+			return nil, nil, unresolvedTopLevelMountError("models", name, model.unresolvedMountRef)
+		}
 		comp, err := collectModel(file, &model, name, "/models/"+name, sources)
 		if err != nil {
 			return nil, nil, err
@@ -3028,6 +3044,9 @@ func collectComponents(file *ESMFile) (map[string]*componentSystem, []string, er
 	}
 	for _, name := range orderedKeys(file.ReactionSystems, file.declarationOrder("/reaction_systems")) {
 		rs := file.ReactionSystems[name]
+		if rs.unresolvedMountRef != "" {
+			return nil, nil, unresolvedTopLevelMountError("reaction_systems", name, rs.unresolvedMountRef)
+		}
 		comp, err := collectReactionSystem(file, &rs, name, "/reaction_systems/"+name)
 		if err != nil {
 			return nil, nil, err

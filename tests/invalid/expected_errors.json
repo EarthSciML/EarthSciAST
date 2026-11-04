@@ -4430,5 +4430,59 @@
     "resolver_only": true,
     "resolver_error_code": "data_source_merge_conflict",
     "notes": "Resolver-level invalid (esm-spec \u00a74.7 'A mounted document's data sources'). The document is SCHEMA-VALID, so a binding that only checks the schema accepts it (is_valid: true). At load, two sibling mounts contribute `segment` at the same resolved location but with a different `metadata.tags`; the mounting document does not declare it, and entries are compared structurally after substitution and location resolution, so the merge is refused rather than letting one silently win."
+  },
+  "units_transcendental_argument_under_product.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/exp_scaled_by_literal",
+        "code": "unit_inconsistency"
+      },
+      {
+        "path": "/models/BadUnitsModel/variables/log_in_multi_factor_product",
+        "code": "unit_inconsistency"
+      },
+      {
+        "path": "/models/BadUnitsModel/variables/sin_scaled_by_literal",
+        "code": "unit_inconsistency"
+      },
+      {
+        "path": "/models/BadUnitsModel/variables/tanh_in_nested_product",
+        "code": "unit_inconsistency"
+      },
+      {
+        "path": "/models/BadUnitsModel/variables/exp_in_product_in_sum",
+        "code": "unit_inconsistency"
+      },
+      {
+        "path": "/models/BadUnitsModel/variables/log10_in_quotient",
+        "code": "unit_inconsistency"
+      },
+      {
+        "path": "/models/BadUnitsModel/variables/exp_in_product_under_power",
+        "code": "unit_inconsistency"
+      },
+      {
+        "path": "/models/BadUnitsModel/variables/atan_in_product_in_exponent",
+        "code": "unit_inconsistency"
+      },
+      {
+        "path": "/models/BadUnitsModel/variables/exp_in_product_under_sign",
+        "code": "unit_inconsistency"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3, \u00a74.8.4: an undeterminable factor makes a product's unit undeterminable, but the checker must still walk every factor, since a provable inconsistency inside one (here a transcendental function of a dimensional argument) is an error whatever the product's unit. Julia's and Go's checkers used to stop at the first undeterminable factor and never looked at the rest, so they accepted every one of these except the last. The last, exp_in_product_under_sign, pins that sign's argument is checked: Julia's sign rule used to return dimensionless without walking it."
+  },
+  "units_transcendental_argument_degC_under_product.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/deposition_factor",
+        "code": "unit_inconsistency"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3, \u00a74.8.4: a temperature in degC is not dimensionless, so exp(-Ts_c - 4) is a provable inconsistency, and the undeterminable literal factor in front of it does not hide that. Julia's and Go's checkers used to stop walking a product at its first undeterminable factor and accepted this. It is its own file because Python stops at its load-time transcendental check, which only looks at bare-variable arguments, so a compound argument in a file that also fails that check goes unreported (issue #644)."
   }
 }

@@ -366,7 +366,7 @@ function _hoist_regions_cover(regs, dims::Vector{Int})
         starts[d] = sort!(collect(s))
     end
     for corner in Iterators.product(starts...)
-        any(reg -> all(d -> reg[d][1] <= corner[d] <= reg[d][2], 1:nd), regs) ||
+        _anyof(reg -> _allof(d -> reg[d][1] <= corner[d] <= reg[d][2], 1:nd), regs) ||
             return false
     end
     return true

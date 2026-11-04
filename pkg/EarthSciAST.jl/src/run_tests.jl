@@ -1046,7 +1046,7 @@ itself. The summary reports them so the §6.6 rule — a mount does not carry th
 mounted component's inline tests — is VISIBLE rather than silent.
 
 Both sections are scanned because both drop the leaf's tests
-(`_inline_toplevel_model_refs!` and `_inline_toplevel_reaction_system_refs!`),
+(`_inline_toplevel_refs!` runs both forms),
 and this runner runs a reaction system's tests as well as a model's — so a
 reaction-system mount that went unnamed here would be exactly the silent
 omission the §6.6 reporting SHOULD exists to prevent.

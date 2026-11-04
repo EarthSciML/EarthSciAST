@@ -32,9 +32,9 @@ using EarthSciAST
     end
 
     @testset "Equation Types" begin
-        # Test Equation. Qualify ESM.Equation: under MTK 11 + Pkg.test
-        # extras the test session has both ESS and MTK loaded into Main,
-        # which makes the bare `Equation` reference ambiguous.
+        # Test Equation. Qualify ESM.Equation: in a session that also loads
+        # ModelingToolkit 11 (the test/mtk/ suite), both export `Equation`
+        # into Main, which makes the bare reference ambiguous.
         lhs = OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt = "t")
         rhs = OpExpr("*", EarthSciAST.ASTExpr[NumExpr(2.0), VarExpr("x")])
         eq = EarthSciAST.Equation(lhs, rhs)

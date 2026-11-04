@@ -216,6 +216,7 @@
       "/models/UnitsScaleConversion/equations/2"
     ],
     "tests/valid/units_scoped_reference_unitless_shadow.esm": [],
+    "tests/valid/units_sign_dimensionless.esm": [],
     "tests/valid/units_sum_undeterminable_operands.esm": [
       "/models/SumUnitRules/equations/0",
       "/models/SumUnitRules/equations/1",

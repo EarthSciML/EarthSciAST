@@ -20,14 +20,14 @@
 # what the system contains. These fixtures are the two symptoms and a control.
 using Test
 using EarthSciAST
-include("testutils.jl")  # shared prelude: TESTUTILS_REPO_ROOT
+include("../testutils.jl")  # shared prelude: TESTUTILS_REPO_ROOT
 import ModelingToolkit
 import Catalyst
 import OrdinaryDiffEqTsit5
 import OrdinaryDiffEqRosenbrock
 import OrdinaryDiffEqNonlinearSolve
 
-const _cid_dir = joinpath(@__DIR__, "fixtures", "container_in_document")
+const _cid_dir = joinpath(@__DIR__, "..", "fixtures", "container_in_document")
 
 @testset "a container builds over its document" begin
     results, exit_code = run_esm_tests([_cid_dir]; root = _cid_dir, verbose = false)

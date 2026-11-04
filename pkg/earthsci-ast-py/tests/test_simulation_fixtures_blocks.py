@@ -1,7 +1,7 @@
 """Execution runner for inline ``tests`` blocks on tests/simulation/*.esm (gt-l1fk).
 
 Mirrors the Julia reference at
-``pkg/EarthSciAST.jl/test/tests_blocks_execution_test.jl``.
+``pkg/EarthSciAST.jl/test/mtk/tests_blocks_execution_test.jl``.
 
 For each model that carries an inline ``tests`` block the runner builds a
 single-model subset :class:`EsmFile`, drives it through

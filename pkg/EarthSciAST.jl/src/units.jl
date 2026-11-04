@@ -964,7 +964,8 @@ function Base.:/(a::ExactScale, b::ExactScale)
 end
 
 function Base.:^(a::ExactScale, r::Real)
-    q = r isa Rational ? Rational{Int}(r) : Rational{Int}(rationalize(Int, float(r); tol = 1.0e-9))
+    q = r isa Rational ? Rational{Int}(r) :
+        _dynamic(x -> Rational{Int}(rationalize(Int, float(x); tol = 1.0e-9)), r)::Rational{Int}
     return _exact_normalize(ExactScale(Dict(p => x * q for (p, x) in a.primes), a.pi * q))
 end
 
@@ -1249,7 +1250,7 @@ function _same_dimensions_over(
         args, var_units, findings, describe;
         angle_meets_number::Bool = false
     )
-    arg_dims = [_expr_dimensions!(findings, arg, var_units) for arg in args]
+    arg_dims = Any[_expr_dimensions!(findings, arg, var_units) for arg in args]
     valid_dims = filter(d -> d !== nothing, arg_dims)
     isempty(valid_dims) && return nothing
 
@@ -1311,12 +1312,20 @@ _minmax_rule(expr, var_units, findings) =
 # corpus multiplies by: `conc_ppb * 1.23` is a ppb→µg/m³ conversion, and
 # reporting its dimension as "ppb" manufactures a mismatch against the declared
 # µg/m³. See the conservatism corollary above.
+#
+# Every factor is still WALKED, even after an indeterminate one: an
+# indeterminate factor says nothing about the units of the others, and a
+# provable inconsistency inside a later factor is an error whatever the
+# product's unit. Stopping at the first indeterminate factor is what let
+# `1000 * exp(T [degC])` through (tests/invalid/
+# units_transcendental_argument_degC_under_product.esm; the other places such a
+# product can sit are in units_transcendental_argument_under_product.esm).
 function _product_rule(expr, var_units, findings)
     result = Unitful.NoUnits
     for arg in expr.args
         arg_dim = _expr_dimensions!(findings, arg, var_units)
-        arg_dim === nothing && return nothing
-        result = result * arg_dim
+        result = (result === nothing || arg_dim === nothing) ? nothing :
+            result * arg_dim
     end
     return result
 end
@@ -1582,8 +1591,15 @@ function _ifelse_rule(expr, var_units, findings)
     )
 end
 
-# "sign": strips dimensions — the result is a dimensionless -1/0/+1.
-_dimensionless_result_rule(expr, var_units, findings) = Unitful.NoUnits
+# "sign": the result is a dimensionless -1/0/+1 whatever the argument's unit,
+# but the argument is walked so a finding inside it (`sign(exp(T [K]))`) is
+# reported (esm-spec §4.8.3).
+function _dimensionless_result_rule(expr, var_units, findings)
+    for arg in expr.args
+        _expr_dimensions!(findings, arg, var_units)
+    end
+    return Unitful.NoUnits
+end
 
 # "and" / "or" / "not": the result is a dimensionless boolean. The operands carry
 # no unit requirement of their own, but they are walked so a mismatch inside one

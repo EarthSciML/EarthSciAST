@@ -535,6 +535,7 @@ UNITS_FIXTURE_NAMES = [
     "units_sum_undeterminable_operands.esm",
     "units_ifelse_undeterminable_branch.esm",
     "units_comparisons_and_connectives.esm",
+    "units_sign_dimensionless.esm",
 ]
 
 

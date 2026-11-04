@@ -1,0 +1,56 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "UnitsTranscendentalArgumentDegCUnderProduct",
+    "description": "Invalid: deposition_factor = 1000 * exp(-Ts_c - 4) with Ts_c in degC, the shape EarthSciModels' DryDepositionGas once had. The literal 1000 makes the product's unit undeterminable, but the exp's argument is a temperature, so the expression is a provable inconsistency (esm-spec §4.8.3, §4.8.4). tests/invalid/units_transcendental_argument_under_product.esm pins the other places the product can sit.",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-11-02T00:00:00Z"
+  },
+  "models": {
+    "BadUnitsModel": {
+      "variables": {
+        "Ts_c": {
+          "type": "parameter",
+          "units": "degC",
+          "default": 25.0,
+          "description": "Surface temperature in degrees Celsius"
+        },
+        "deposition_factor": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Invalid: the exp of a temperature"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "deposition_factor",
+          "rhs": {
+            "op": "*",
+            "args": [
+              1000,
+              {
+                "op": "exp",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          "Ts_c"
+                        ]
+                      },
+                      4
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

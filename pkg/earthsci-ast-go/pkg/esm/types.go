@@ -408,6 +408,15 @@ type Model struct {
 	// SystemKind discriminates the MTK system type this model maps to.
 	// One of "ode" (default), "nonlinear", "sde", "pde".
 	SystemKind *string `json:"system_kind,omitempty"`
+
+	// unresolvedMountRef is the `ref` of a top-level `models.<k>` `{ref}` MOUNT
+	// EDGE this entry stands in for until ResolveSubsystemRefs splices the leaf
+	// in (esm-spec §4.7). `Models` is a `map[string]Model`, so the edge decodes
+	// as an EMPTY Model; this marks it so Flatten and Validate report
+	// `unresolved_subsystem_ref` instead of consuming a system with nothing in
+	// it (esm-spec §9.6.6). Empty for every real model. Unexported, so it never
+	// reaches the wire.
+	unresolvedMountRef string
 }
 
 // ========================================
@@ -562,6 +571,13 @@ type ReactionSystem struct {
 	// It is unexported and carries no JSON tag, so it neither widens the API
 	// surface nor appears on the wire.
 	speciesOrder []string
+
+	// unresolvedMountRef is Model.unresolvedMountRef for a top-level
+	// `reaction_systems.<k>` `{ref}` MOUNT EDGE: set while the entry is the
+	// EMPTY ReactionSystem the edge decodes to, so Flatten, Validate and
+	// DeriveODEs report `unresolved_subsystem_ref` instead of treating it as a
+	// system with no species and no reactions.
+	unresolvedMountRef string
 }
 
 // ========================================
@@ -844,12 +860,29 @@ type DataSourceExtent struct {
 // a bare number, so a plain factor is written as one. Its free names are subject to reference
 // integrity (esm-spec 4.9.5).
 type DataSourceBinding struct {
-	FileVariable   string     `json:"file_variable"`
-	UnitConversion any        `json:"unit_conversion,omitempty"`
-	Codes          any        `json:"codes,omitempty"`
-	Select         any        `json:"select,omitempty"`
-	Description    *string    `json:"description,omitempty"`
-	Reference      *Reference `json:"reference,omitempty"`
+	FileVariable   string `json:"file_variable"`
+	UnitConversion any    `json:"unit_conversion,omitempty"`
+	Codes          any    `json:"codes,omitempty"`
+	Select         any    `json:"select,omitempty"`
+	// RecordsPerSample is how many records the parameter receives per query
+	// time, 1 or 2, overriding the source's `temporal.records_per_sample`
+	// (esm-spec 8.5.1). Nil when not written.
+	RecordsPerSample *int       `json:"records_per_sample,omitempty"`
+	Description      *string    `json:"description,omitempty"`
+	Reference        *Reference `json:"reference,omitempty"`
+}
+
+// effectiveRecordsPerSample is the EFFECTIVE `records_per_sample` of a `data`
+// rule (esm-spec 8.5.1): the binding's own value, else the source's
+// `temporal.records_per_sample`, else 1. source may be nil.
+func effectiveRecordsPerSample(binding *DataSourceBinding, source *DataSource) int {
+	if binding != nil && binding.RecordsPerSample != nil {
+		return *binding.RecordsPerSample
+	}
+	if source != nil && source.Temporal != nil && source.Temporal.RecordsPerSample != nil {
+		return *source.Temporal.RecordsPerSample
+	}
+	return 1
 }
 
 // The top-level `operators` and `registered_functions` blocks (and the `call`
@@ -1356,17 +1389,20 @@ type ESMFile struct {
 	// cannot be merged from a document that has already thrown its inputs
 	// away.
 	componentTemplates map[string]*orderedMap
-	// topLevelModelRefs holds the raw `{ref, bindings, index_set_rename,
-	// expression_template_imports}` edge of every top-level `models.<k>` MOUNT
-	// EDGE, keyed by mount name (esm-spec §4.7 "Two mount forms, one
-	// mechanism"). The schema gives `models.<k>` `oneOf [Model, SubsystemRef]`,
-	// but `Models` is a `map[string]Model`, so decoding a bare `{ref}` entry
-	// yields an EMPTY Model and loses the mount. LoadString snapshots the edges
-	// off the text before that decode; inlineTopLevelModelRefs consumes them at
-	// the same point in the pipeline the `subsystems.<k>` form resolves, which
-	// is what keeps the two forms on one side of the root's §9.7.6 close.
+	// topLevelRefs holds the raw `{ref, bindings, index_set_rename,
+	// expression_template_imports, ...}` edge of every top-level `models.<k>` and
+	// `reaction_systems.<k>` MOUNT EDGE, keyed by block (`models` /
+	// `reaction_systems`) and then by mount name (esm-spec §4.7 "Two mount forms,
+	// one mechanism"). The schema gives each entry `oneOf [component,
+	// SubsystemRef]`, but `Models` and `ReactionSystems` are maps of the
+	// component type, so decoding a bare `{ref}` entry yields an EMPTY component
+	// and loses the mount. LoadString snapshots the edges off the text before
+	// that decode; inlineTopLevelRefs consumes them at the same point in the
+	// pipeline the `subsystems.<k>` form resolves, which is what keeps the forms
+	// on one side of the root's §9.7.6 close. What remains is the set of mounts
+	// nobody has resolved yet, which the serializer writes back out as authored.
 	// Empty for a document with no such mount, and for a struct built in code.
-	topLevelModelRefs map[string]map[string]any
+	topLevelRefs map[string]map[string]map[string]any
 }
 
 // declarationOrder returns the authored key order recorded for `path`, or nil
@@ -1374,11 +1410,10 @@ type ESMFile struct {
 // the result to orderedKeysOf, which falls back to sorted-name order for any
 // key the recorded order does not mention.
 //
-// Two paths deliberately fall back to sorted order: a struct built directly in
-// code (there is no authored text to read an order from), and a subsystem
-// mounted by `{"ref": ...}`, whose variables come from ANOTHER file that
-// LoadPath splices in after LoadString has already recorded this document's
-// orders.
+// A struct built directly in code falls back to sorted order: there is no
+// authored text to read an order from. A component mounted by `{"ref": ...}`
+// carries the orders of the file it came from, grafted in at its pointer when
+// the mount resolves (graftOrders).
 func (esm *ESMFile) declarationOrder(path string) []string {
 	if esm == nil || esm.keyOrders == nil {
 		return nil

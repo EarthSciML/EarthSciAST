@@ -122,7 +122,7 @@ Every binding's test does the same five things:
    its emitted flattened JSON.
 
 The advisory-gate fixture needs no test of its own: `tests/simulation/` is
-already swept by `test/tests_blocks_execution_test.jl` (Julia),
+already swept by `test/mtk/tests_blocks_execution_test.jl` (Julia),
 `tests/test_simulation_fixtures_blocks.py` (Python) and
 `tests/tests_blocks_execution.rs` (Rust). It MUST NOT be added to any of their
 skip lists.

@@ -1780,20 +1780,27 @@ func (ut unitTyper) propagateNode(node ExprNode, env map[string]Unit) (*Unit, er
 		// constants the corpus multiplies by: `conc_ppb * 1.23` is a ppb→µg/m³
 		// conversion, and reporting its dimension as "dimensionless" manufactures
 		// a mismatch against the declared µg/m³.
-		result := Unit{Scale: 1}
+		//
+		// Every factor is still walked after an indeterminate one: it says
+		// nothing about the others, and a provable inconsistency inside a later
+		// factor (`1000 * exp(T)`) is an error whatever the product's unit.
+		result := &Unit{Scale: 1}
 		for _, arg := range node.Args {
 			u, err := ut.propagate(arg, env)
 			if err != nil {
 				return nil, err
 			}
-			if u == nil {
-				return nil, nil
+			if result == nil || u == nil {
+				result = nil
+				continue
 			}
-			if result, err = result.MultiplyChecked(*u); err != nil {
+			product, err := result.MultiplyChecked(*u)
+			if err != nil {
 				return nil, exponentOverflowErr(node.Op)
 			}
+			result = &product
 		}
-		return &result, nil
+		return result, nil
 
 	case "/":
 		if len(node.Args) != 2 {
@@ -2081,13 +2088,25 @@ func (ut unitTyper) propagateNode(node ExprNode, env map[string]Unit) (*Unit, er
 		}
 		return &Unit{Scale: 1}, nil
 
-	case "abs", "sign", OpIC:
+	case "abs", OpIC:
 		// `ic(x)` names x's initial value, so it carries x's unit, dimension
 		// and scale (esm-spec §4.8.3).
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
 		}
 		return ut.propagate(node.Args[0], env)
+
+	case "sign":
+		// The result is a dimensionless -1/0/+1 whatever the argument's unit;
+		// the argument is still walked so a finding inside it is reported
+		// (esm-spec §4.8.3).
+		if len(node.Args) != 1 {
+			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
+		}
+		if _, err := ut.propagate(node.Args[0], env); err != nil {
+			return nil, err
+		}
+		return &Unit{Scale: 1}, nil
 
 	case OpDerivative:
 		// A REWRITE-TARGET `D` may carry trailing auxiliary boundary operands
@@ -3308,8 +3327,8 @@ func collectScopedSubsystemUnits(prefix string, subsystems map[string]any, out m
 // scopedUnitIndex holds the units of every scoped name an expression in a
 // component can make (esm-spec §4.8.4, §4.9.2). A mounted component is, after
 // resolution, identical to an inline one (§4.7), so a variable reached across a
-// `subsystems.<k>` or top-level `models.<k>` {ref} mount carries the units its
-// declaration states, exactly as a local one does. Two kinds of path are
+// `subsystems.<k>` or top-level `models.<k>` / `reaction_systems.<k>` {ref}
+// mount carries the units its declaration states, exactly as a local one does. Two kinds of path are
 // covered, with the precedence the reference-integrity check uses:
 // `<System>.<member>` rooted at a top-level model or reaction system (and down
 // through its subsystems), which is the same for every component and so is

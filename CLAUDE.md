@@ -9,7 +9,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full setup and [CONFORMANCE_SPEC.md](
 ./scripts/test-conformance.sh
 
 # Individual language tests
-julia --project=. -e 'using Pkg; Pkg.test()'                       # Julia
+julia --project=. -e 'using Pkg; Pkg.test()'                       # Julia (no ModelingToolkit/Catalyst)
+julia --project=pkg/EarthSciAST.jl/test/mtk pkg/EarthSciAST.jl/test/mtk/runtests.jl  # Julia MTK/Catalyst suite (Pkg.develop the package into that env first; see CONTRIBUTING.md)
 cd pkg/earthsci-ast-ts && npm test                            # TypeScript
 cd pkg/earthsci-ast-py && python3 -m pytest tests/ -v         # Python
 cd pkg/earthsci-ast-rs && cargo test                       # Rust

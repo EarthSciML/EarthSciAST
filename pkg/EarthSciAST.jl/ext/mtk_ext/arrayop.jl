@@ -355,7 +355,7 @@ function _build_arrayop_sym(
         # scan.jl, pinned by test/scan_prefix_test.jl), not this MTK export
         # path. Callers who need the normative low bits must use it.
         # Pinned by "Cumulative prefix reductions (MTK lowering)" in
-        # test/array_ops_test.jl, where the cancellation case is `@test_broken`.
+        # test/mtk/array_ops_mtk_test.jl, where the cancellation case is `@test_broken`.
         if expr.filter !== nothing
             pred = _esm_to_symbolic(expr.filter, var_dict, t_sym, dim_dict)
             b = _gate_by_filter(pred, b, _reduce_identity(expr.reduce))

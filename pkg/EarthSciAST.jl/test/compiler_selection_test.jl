@@ -174,35 +174,22 @@ end
         # what makes the answer `compiler_unavailable` (in the vocabulary, not
         # reachable here) rather than `compiler_unknown` (no such value).
         #
-        # The test target carries ModelingToolkit, so THIS session takes the
-        # available arm and `:mtk` builds — which is `compiler_mtk_test.jl`'s
-        # subject. What is asserted here is the arm an MTK-FREE session takes:
-        # the plan is where the two diverge, and the message it raises names
-        # what to load. Asserting it end-to-end would need a second process with
-        # a different environment, which this suite has no way to spawn.
+        # This suite's environment has no ModelingToolkit (it moved, with every
+        # test that needs it, to the ModelingToolkit suite in test/mtk/), so
+        # THIS session is the MTK-free one and takes the unavailable arm. The
+        # available arm — `:mtk` builds, and its plan is strict with every
+        # right-hand-side tier off — is compiler_mtk_test.jl's subject there.
         @test :mtk in CSEL.COMPILER_VOCABULARY
-        if Base.get_extension(EarthSciAST, :EarthSciASTMTKExt) === nothing
-            e = try
-                esm_problem(doc, (0.0, 1.0); compiler = :mtk)
-                nothing
-            catch err
-                err
-            end
-            @test e isa SimulateError
-            @test e.code == CSEL.ERROR_CODES.COMPILER_UNAVAILABLE
-            @test occursin("ModelingToolkit", e.msg)
-        else
-            @test CSEL._compiler_plan(:mtk).name === :mtk
-            # Strict, and every right-hand-side tier off: this compiler emits
-            # none of this package's own kernels, and it refuses what it cannot
-            # express rather than building part of a document. The
-            # construction-time compile-once forms stay on — the initial-state
-            # seed is still this package's evaluation.
-            @test CSEL._compiler_plan(:mtk).strict
-            @test !CSEL._compiler_plan(:mtk).codegen
-            @test !CSEL._compiler_plan(:mtk).stencil
-            @test CSEL._compiler_plan(:mtk).setup_map_compile_once
+        @test Base.get_extension(EarthSciAST, :EarthSciASTMTKExt) === nothing
+        e_mtk = try
+            esm_problem(doc, (0.0, 1.0); compiler = :mtk)
+            nothing
+        catch err
+            err
         end
+        @test e_mtk isa SimulateError
+        @test e_mtk.code == CSEL.ERROR_CODES.COMPILER_UNAVAILABLE
+        @test occursin("ModelingToolkit", e_mtk.msg)
     end
 
     @testset "the default and a named :native are the same strict build" begin

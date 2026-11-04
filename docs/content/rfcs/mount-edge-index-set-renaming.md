@@ -380,8 +380,9 @@ Stated plainly, because the change touches the load pipeline:
    not resolve the leaf as a complete document in Julia or Rust, so the field was refused
    there. Every binding now runs one edge pipeline at both attachment points, so the leaf is
    a resolved document at either, and the refusal is gone at both `models` forms. What the
-   entry was really about survives one form further out: the top-level
-   `reaction_systems.<k>` inliner, which only Julia has and which is still that raw pre-pass.
+   entry was really about survived one form further out, in Julia's top-level
+   `reaction_systems.<k>` inliner, until 2026-11-02, when that inliner moved onto the same
+   pipeline.
 4. **Interaction with an inline test's ephemeral build (§9.7.10 timing regime 2).** A test's
    injection rebuilds the enclosing component per test; a mount rename belongs to the
    composed document and should be invisible to a leaf's own tests run standalone. Believed
@@ -404,20 +405,22 @@ binding inlines that form:
 | TypeScript | implemented | **implemented** — `inlineTopLevelModelRef` calls the same `resolveRefEdge` / `resolveRefDocument` the subsystem walk calls; previously a bare `{ref}` stub was left in place and the edge silently ignored |
 | Go | implemented | **implemented** — `inlineTopLevelModelRefs` hands the edge to `resolveSubsystemMap`, the one edge-pipeline implementation in that binding, through a one-entry holder map. `ESMFile.Models` is a `map[string]Model`, so previously the mount decoded to an EMPTY model and the `ref`, `bindings` and `index_set_rename` were all discarded with no diagnostic |
 
-One attachment point still refuses: Julia's top-level `reaction_systems.<k>` inliner, which no
-other binding mounts at all. It is still a raw pre-pass that defers the leaf's §9.7 resolution
-to the root, so there is no resolved mounted document to rename and the edge raises
-`subsystem_index_set_rename_unsupported_mount_form`.
+The top-level `reaction_systems.<k>` `{ref}` form was the last attachment point to refuse.
+Julia's inliner for it was a raw pre-pass that deferred the leaf's §9.7 resolution to the root,
+so there was no resolved mounted document to rename and the edge raised
+`subsystem_index_set_rename_unsupported_mount_form`. Since 2026-11-02 all five bindings mount
+that form through the same edge pipeline as `models.<k>`, so the field applies there too.
 
 Refusing rather than ignoring is the load-bearing part, and it became load-bearing when #198
 item 3 landed: that change makes the top-level form MERGE the leaf's `index_sets`. An ignored
 `index_set_rename` there would merge the leaf under its **pre-rename** axis names — silently, in
 the one place the field exists to make loud. That is what the refusal was holding shut, and
-applying the field at both forms is what opened it properly. The four bindings that do not mount
-a top-level `reaction_systems.<k>` `{ref}` at all — Rust, TypeScript, Go and Python — refuse the
+applying the field at both forms is what opened it properly. The four bindings that did not mount
+a top-level `reaction_systems.<k>` `{ref}` at all — Rust, TypeScript, Go and Python — refused the
 whole entry with `mount_form_unsupported` at `/reaction_systems/<k>` (esm-spec §4.7 "Two mount
-forms, one mechanism", §9.6.6), so the field is not silently ignored there either. Implementing
-that form in those four is follow-up work.
+forms, one mechanism", §9.6.6), so the field is not silently ignored there either. Rust, then
+Python, TypeScript and Go, have since implemented that form through their shared edge
+pipelines, where the field applies.
 
 ### 4.12 Mounting an assembly — the mount form composes with itself
 

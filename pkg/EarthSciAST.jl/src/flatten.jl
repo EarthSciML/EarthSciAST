@@ -93,6 +93,11 @@ Fields:
   before integration) — the source-seeded refinement of CONFORMANCE_SPEC §5.7.2.
 - `unit_conversion`: the binding's declared `unit_conversion` (§8.5), `nothing`
   when the document declares none.
+- `records_per_sample`: the EFFECTIVE number of records the parameter receives
+  per query time (esm-spec §8.5.1), 1 or 2: the binding's
+  `from.records_per_sample`, else the source's `temporal.records_per_sample`,
+  else 1. With 2 the field holds the record at or before the query time and its
+  successor, stacked along the parameter's first dimension.
 """
 struct LoaderField
     name::String
@@ -101,15 +106,17 @@ struct LoaderField
     var::String
     cadence::String
     unit_conversion::Union{Float64, ASTExpr, Nothing}
+    records_per_sample::Int
 
     LoaderField(
         name::AbstractString, owner::AbstractString,
         subkey::AbstractString, var::AbstractString,
-        cadence::AbstractString; unit_conversion = nothing
+        cadence::AbstractString; unit_conversion = nothing,
+        records_per_sample::Integer = 1
     ) =
         new(
         String(name), String(owner), String(subkey), String(var),
-        String(cadence), unit_conversion
+        String(cadence), unit_conversion, Int(records_per_sample)
     )
 end
 
@@ -1094,7 +1101,8 @@ function _collect_loader_fields!(
                     "$(prefix).$(var_name)", prefix, rule.source,
                     rule.from.file_variable,
                     src.temporal === nothing ? "const" : "discrete";
-                    unit_conversion = rule.from.unit_conversion
+                    unit_conversion = rule.from.unit_conversion,
+                    records_per_sample = _effective_records_per_sample(rule.from, src)
                 )
             )
         end
@@ -1163,6 +1171,62 @@ _with_coupling(file::EsmFile, coupling::Vector{CouplingEntry})::EsmFile =
 )
 
 """
+    _check_flattened_records_per_sample(file::EsmFile)
+
+esm-spec §8.5.1 rule 3 at `flatten`, on the document with refs mounted and
+`file.coupling` already the expanded coupling sequence: each data-fed
+parameter, at any depth, whose effective `records_per_sample` is 2 and whose
+own `shape` is empty takes its record shapes from the `param_to_var` edges of
+that sequence, and one still empty after expansion is refused. Throws
+`ExpressionTemplateError` with `records_per_sample_invalid`, naming the rule's
+pointer.
+"""
+function _check_flattened_records_per_sample(file::EsmFile)
+    file.models === nothing && return nothing
+    file.data_sources === nothing && return nothing
+    for model_name in sort!(collect(keys(file.models)))
+        _check_flattened_records_per_sample(
+            file, file.models[model_name], model_name, "/models/$model_name"
+        )
+    end
+    return nothing
+end
+
+function _check_flattened_records_per_sample(
+        file::EsmFile, model::Model, scope::String, path::String
+    )
+    for name in sort!(collect(keys(model.variables)))
+        var = model.variables[name]
+        rules = var.update
+        rules === nothing && continue
+        (var.shape === nothing || isempty(var.shape)) || continue
+        for (ri, rule) in enumerate(rules)
+            (rule.kind == "data" && rule.from !== nothing && rule.source !== nothing) || continue
+            src = get(file.data_sources, rule.source, nothing)
+            src === nothing && continue
+            _effective_records_per_sample(rule.from, src) == 2 || continue
+            shape = _record_shape_failure(
+                file, file.coupling, "$scope.$name", String[]; defer_empty = false
+            )
+            shape === nothing && continue
+            at = _update_rule_path("$path/variables/$name", rules, ri)
+            throw(
+                ExpressionTemplateError(
+                    ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
+                    _records_per_sample_shape_error(at, name, shape)
+                )
+            )
+        end
+    end
+    for (subsys_name, subsys) in model_subsystems(model)
+        _check_flattened_records_per_sample(
+            file, subsys, "$scope.$subsys_name", "$path/subsystems/$subsys_name"
+        )
+    end
+    return nothing
+end
+
+"""
     flatten(file::EsmFile; base_path=".", load_ref=nothing) -> FlattenedSystem
 
 Flatten the coupled systems in `file` into a single symbolic representation
@@ -1198,6 +1262,10 @@ function flatten(
     if expanded !== file.coupling
         file = _with_coupling(file, expanded)
     end
+    # esm-spec §8.5.1 "When rule 3 is checked": a record shape validation could
+    # not decide arrives with the expanded coupling sequence, so rule 3 is
+    # re-checked here against its `param_to_var` edges.
+    _check_flattened_records_per_sample(file)
 
     # Step 0-: there must be something to flatten. A document whose only payload
     # is an `expression_templates` registry is a template LIBRARY, not a system:

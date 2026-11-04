@@ -1,0 +1,31 @@
+{
+  "fixture": "pre_passthrough",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "pre_passthrough_value",
+      "assertion_idx": 1,
+      "variable": "pre_param",
+      "actual": 2.0
+    },
+    {
+      "test_id": "pre_passthrough_value",
+      "assertion_idx": 2,
+      "variable": "pre_compound",
+      "actual": 12.0
+    },
+    {
+      "test_id": "pre_passthrough_value",
+      "assertion_idx": 3,
+      "variable": "pre_state",
+      "actual": 1.9999999999999998
+    },
+    {
+      "test_id": "pre_passthrough_value",
+      "assertion_idx": 4,
+      "variable": "probe",
+      "actual": 1.9999999999999998
+    }
+  ]
+}

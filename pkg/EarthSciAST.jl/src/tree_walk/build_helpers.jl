@@ -638,7 +638,7 @@ function _rewrite_indexed_observed_lhs(
 
     rhs = eq.rhs
     rhs_free = free_variables(rhs)
-    if any(s -> s in rhs_free, syms)
+    if _anyof(s -> s in rhs_free, syms)
         rhs = OpExpr(
             "faq", ASTExpr[];
             output_idx = Any[s for s in syms],
@@ -925,7 +925,7 @@ function _index_pushdown_arrayish(
         r = _is_array_producer(o) || o.op in _SHAPE_REMAP_OPS ||
             (
             _is_scalar_op(o.op) &&
-                any(a -> _index_pushdown_arrayish(a, is_array_leaf, memo), o.args)
+                _anyof(a -> _index_pushdown_arrayish(a, is_array_leaf, memo), o.args)
         )
         memo[o] = r
         return r

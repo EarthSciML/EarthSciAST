@@ -415,6 +415,14 @@ pub enum FlattenError {
     #[error("{0}")]
     ExpressionTemplate(crate::diagnostic::DiagnosticError),
 
+    /// A data-fed parameter with an effective `records_per_sample` of 2 whose
+    /// record shape, decided only once `coupling_import` edges are expanded,
+    /// does not begin with an index set of exactly two members (esm-spec
+    /// §8.5.1). Carries the `records_per_sample_invalid` code; the message
+    /// leads with the JSON pointer of the parameter's `update` rule.
+    #[error("{0}")]
+    RecordsPerSample(crate::diagnostic::DiagnosticError),
+
     /// The file contains no models or reaction systems to flatten.
     #[error("No models or reaction systems to flatten")]
     Empty,
@@ -870,6 +878,18 @@ pub struct LoaderField {
     /// integration) or `"discrete"` (time-varying — refreshed at its cadence).
     /// The source-seeded cadence refinement of CONFORMANCE_SPEC §5.7.2.
     pub cadence: String,
+    /// The EFFECTIVE number of records the parameter receives per query time,
+    /// 1 or 2 (esm-spec §8.5.1): the binding's `from.records_per_sample`, else
+    /// the source's `temporal.records_per_sample`, else 1. With 2 the field
+    /// holds the record at or before the query time and its successor,
+    /// stacked along the parameter's first dimension. Absent from a serialized
+    /// entry means 1.
+    #[serde(default = "one_record_per_sample")]
+    pub records_per_sample: u8,
+}
+
+fn one_record_per_sample() -> u8 {
+    1
 }
 
 // ============================================================================
@@ -951,6 +971,12 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     // Mirrors Julia's `_check_variable_map_units` (coupling_apply.jl), run before
     // collection so an incoherent identity map fails fast.
     check_variable_map_units(file)?;
+
+    // esm-spec §8.5.1: a record shape structural validation could not decide
+    // (a `param_to_var` target behind a `coupling_import`) is checked here,
+    // against the expanded coupling sequence.
+    crate::structural::check_records_per_sample_at_flatten(file)
+        .map_err(FlattenError::RecordsPerSample)?;
 
     // Phase 1: collect per-system lowered equations and namespaced variables.
     let (source_systems, mut per_system) = collect_component_systems(file)?;
@@ -1735,11 +1761,8 @@ fn collect_loader_fields(
             let Some(binding) = rule.value().and_then(|v| v.from.as_ref()) else {
                 continue;
             };
-            let has_temporal = file
-                .data_sources
-                .as_ref()
-                .and_then(|ds| ds.get(source))
-                .is_some_and(|ds| ds.temporal.is_some());
+            let declared = file.data_sources.as_ref().and_then(|ds| ds.get(source));
+            let has_temporal = declared.is_some_and(|ds| ds.temporal.is_some());
             out.push(LoaderField {
                 name: name.clone(),
                 owner: name
@@ -1749,6 +1772,7 @@ fn collect_loader_fields(
                 source: source.to_string(),
                 file_variable: binding.file_variable.clone(),
                 cadence: if has_temporal { "discrete" } else { "const" }.to_string(),
+                records_per_sample: binding.effective_records_per_sample(declared),
             });
             break; // one parameter is fed by one source
         }

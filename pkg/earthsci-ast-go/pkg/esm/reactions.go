@@ -24,6 +24,8 @@ package esm
 // a system built in code or reached through a subsystem mount, so the previous
 // behaviour survives exactly where no authored order exists to prefer.
 
+import "fmt"
+
 // DeriveODEs converts a reaction network into a Model whose equations are the
 // species' ODEs under mass-action kinetics (esm-spec §7.4).
 //
@@ -45,6 +47,12 @@ package esm
 func DeriveODEs(system *ReactionSystem) (*Model, error) {
 	if system == nil {
 		return nil, nil
+	}
+	if system.unresolvedMountRef != "" {
+		return nil, newETErr(CodeUnresolvedSubsystemRef, fmt.Sprintf(
+			"the reaction system is a top-level `{ref}` mount (ref %q) that has not been resolved: "+
+				"load the document with LoadPath, or call ResolveSubsystemRefs, first (esm-spec §4.7)",
+			system.unresolvedMountRef))
 	}
 
 	speciesOrder := orderedKeys(system.Species, system.speciesOrder)
