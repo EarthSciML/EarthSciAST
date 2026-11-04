@@ -1,0 +1,57 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "PairRefTargetWithoutRecordAxis",
+    "description": "As records_per_sample_ref_target, but the mounted target is shaped [x, rec]. A binding refuses it at validation once the ref is mounted, or at flatten (esm-spec 8.5.1 'When rule 3 is checked')."
+  },
+  "data_sources": {
+    "met_source": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file:///data/met/met_{date:%Y%m%d}.nc"
+      },
+      "temporal": {
+        "start": "2024-05-01T00:00:00Z",
+        "frequency": "PT1H",
+        "file_period": "P1D",
+        "records_per_file": 24
+      },
+      "metadata": {
+        "esio_format": "netcdf"
+      }
+    }
+  },
+  "models": {
+    "Met": {
+      "variables": {
+        "K": {
+          "type": "parameter",
+          "units": "1/s",
+          "shape": [],
+          "default": 0.1,
+          "description": "Declared once, as a scalar; the consumer gives it the record axis and the grid.",
+          "update": {
+            "kind": "data",
+            "source": "met_source",
+            "from": {
+              "file_variable": "K",
+              "records_per_sample": 2
+            }
+          }
+        }
+      },
+      "equations": []
+    },
+    "Box": {
+      "ref": "./components/transport_rec_second.esm"
+    }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "Met.K",
+      "to": "Box.F_k",
+      "transform": "param_to_var"
+    }
+  ]
+}

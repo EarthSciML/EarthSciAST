@@ -1361,7 +1361,7 @@ end
 # be concrete integers — expression-valued bounds are not supported by the
 # tree-walk evaluator).
 function _expand_int_range(r::AbstractVector)
-    all(x -> x isa Integer, r) || throw(
+    _allof(x -> x isa Integer, r) || throw(
         TreeWalkError(
             "E_TREEWALK_DYNAMIC_RANGE",
             "expression-valued range bounds are not supported in the tree-walk " *
@@ -1438,7 +1438,7 @@ end
 # the range can be expanded once, globally, with `_expand_int_range` (the
 # constant-bound fast path used by structured grids and the Route-B padded
 # unstructured form).
-_is_const_int_range(r::AbstractVector) = all(x -> x isa Integer, r)
+_is_const_int_range(r::AbstractVector) = _allof(x -> x isa Integer, r)
 
 # Expand a ranges entry whose bounds may be *expression-valued* (e.g. a
 # per-cell reduction bound `index(n_edges_on_cell, i) - 1`).  Each non-Integer

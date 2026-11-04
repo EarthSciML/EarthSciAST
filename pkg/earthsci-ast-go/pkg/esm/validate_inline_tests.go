@@ -73,7 +73,7 @@ func (d *declaredOverrideNames) addRaw(prefix string, raw any) {
 
 func collectDeclaredOverrideNames(file *ESMFile) *declaredOverrideNames {
 	d := &declaredOverrideNames{names: map[string]bool{}, namespaces: map[string]bool{}, complete: true}
-	if len(file.topLevelModelRefs) > 0 {
+	if len(file.topLevelRefs) > 0 {
 		d.complete = false
 	}
 	for name, model := range file.Models {

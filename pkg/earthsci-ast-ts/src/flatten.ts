@@ -67,6 +67,14 @@ import type { Distribution, ParameterUpdateSpec } from './types.js'
 import { numericValue } from './numeric-literal.js'
 import { expandCouplingImports, type CouplingImportOptions } from './coupling-imports.js'
 import { mapChildren } from './expression.js'
+import { effectiveRecordsPerSample } from './types.js'
+import {
+  forEachParameterUpdate,
+  hasUnmountedRefs,
+  paramToVarTargets,
+  recordShapeFailure,
+  recordShapeMessage,
+} from './records-per-sample.js'
 import {
   angleNormalizationFactor,
   checkElementDimensions,
@@ -114,8 +122,12 @@ export type FlattenOptions = CouplingImportOptions
  * parity.
  */
 export class FlattenError extends EsmDiagnosticError {
-  constructor(message: string, code: string = ERROR_CODES.FLATTEN_ERROR) {
-    super(code, message)
+  constructor(
+    message: string,
+    code: string = ERROR_CODES.FLATTEN_ERROR,
+    details?: Record<string, unknown>,
+  ) {
+    super(code, message, details)
     this.name = 'FlattenError'
   }
 }
@@ -321,6 +333,13 @@ export interface LoaderField {
   cadence: 'const' | 'discrete'
   /** The binding's declared `unit_conversion` (§8.5), when the document has one. */
   unitConversion?: Expression
+  /**
+   * The EFFECTIVE records per query time (esm-spec §8.5.1): the binding's
+   * `from.records_per_sample`, else the source's `temporal.records_per_sample`,
+   * else 1. With 2 the field holds the record at or before the query time and
+   * its successor, stacked along the parameter's first dimension.
+   */
+  recordsPerSample: 1 | 2
 }
 
 /**
@@ -1105,8 +1124,11 @@ function dataSourceFields(
     if (variable.type !== 'parameter' || variable.update === undefined) continue
     for (const rule of updateRules(variable.update)) {
       if (rule.kind !== 'data') continue
-      const binding = (rule as { from?: { file_variable: string; unit_conversion?: Expression } })
-        .from
+      const binding = (
+        rule as {
+          from?: { file_variable: string; unit_conversion?: Expression; records_per_sample?: 1 | 2 }
+        }
+      ).from
       if (binding === undefined) continue
       const sourceKey = (rule as { source: string }).source
       const source = dataSources[sourceKey]
@@ -1118,6 +1140,7 @@ function dataSourceFields(
         var: binding.file_variable,
         dataSource: source,
         cadence: (source as { temporal?: unknown }).temporal !== undefined ? 'discrete' : 'const',
+        recordsPerSample: effectiveRecordsPerSample(binding, source),
       }
       if (binding.unit_conversion !== undefined) field.unitConversion = binding.unit_conversion
       fields.push(field)
@@ -3161,6 +3184,11 @@ export function flatten(file: EsmFile, options: FlattenOptions = {}): FlattenedS
   // `coupling` array verbatim and needs no options.
   const couplingEntries = expandCouplingImports(file, options) ?? []
 
+  // esm-spec §8.5.1 "When rule 3 is checked": a record shape validation could
+  // not see (an imported `param_to_var` edge) is judged against the expanded
+  // sequence.
+  checkRecordShapes(file, couplingEntries)
+
   // Preflight: reject an `identity` variable_map bridging different declared
   // units (§4.7.6). Runs over the expanded list so imported edges are checked.
   checkVariableMapUnits(file, couplingEntries)
@@ -3214,6 +3242,36 @@ export function flatten(file: EsmFile, options: FlattenOptions = {}): FlattenedS
   normalizeFlattenedAngleArguments(flat)
 
   return flat
+}
+
+/**
+ * `records_per_sample_invalid` at flatten (esm-spec §8.5.1): every data-fed
+ * parameter with an effective 2 must have a record shape whose first dimension
+ * is an index set of two members, judged against `couplingEntries`, the
+ * `coupling_import`-expanded sequence. An empty record shape is refused here,
+ * since no edge can arrive later. Throws a {@link FlattenError} carrying the
+ * code and the rule's pointer.
+ */
+function checkRecordShapes(file: EsmFile, couplingEntries: readonly unknown[]): void {
+  const targets = paramToVarTargets(couplingEntries)
+  const unmountedRefs = hasUnmountedRefs(file)
+  for (const site of forEachParameterUpdate(file)) {
+    const failure = recordShapeFailure(file, site, targets, {
+      targetsMayArriveLater: false,
+      unmountedRefs,
+    })
+    if (failure === undefined) continue
+    throw new FlattenError(
+      `${site.path}: ${recordShapeMessage(site.variableName, failure)}`,
+      ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
+      {
+        path: site.path,
+        variable: site.variableName,
+        shape: failure.shape,
+        ...(failure.target === undefined ? {} : { target: failure.target }),
+      },
+    )
+  }
 }
 
 /**

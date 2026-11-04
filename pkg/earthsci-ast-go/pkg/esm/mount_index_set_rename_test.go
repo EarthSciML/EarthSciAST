@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -525,30 +526,456 @@ func TestReorderedLoadChecksExtentAgainstTheAuthoredTree(t *testing.T) {
 	}
 }
 
-// esm-spec §4.7: this binding does not implement the top-level
-// `reaction_systems.<k>` `{ref}` mount form, so it REFUSES the entry —
-// `mount_form_unsupported` at `/reaction_systems/<k>` — rather than decoding the
-// stub as an empty reaction system and loading clean with nothing mounted.
-// (Julia is the one binding that implements the form.)
-func TestTopLevelReactionSystemRefIsRefusedLoudly(t *testing.T) {
-	_, err := LoadPath(mrFixture(t, "fixtures", "mount_form_unsupported", "toplevel_reaction_system_ref.esm"))
-	if err == nil {
-		t.Fatal("a top-level reaction_systems.<k> {ref} loaded; it must be refused")
+// esm-spec §4.7 "Two mount forms, one mechanism": a top-level
+// `reaction_systems.<k>` `{ref}` mounts the leaf's reaction system under the key,
+// through the same edge pipeline as a top-level `models.<k>` `{ref}`, whether
+// the document is read by LoadPath (which inlines on the raw view) or by
+// LoadString plus ResolveSubsystemRefs (which inlines on the typed file).
+func TestTopLevelReactionSystemRefIsMounted(t *testing.T) {
+	path := mrFixture(t, "fixtures", "mount_form_unsupported", "toplevel_reaction_system_ref.esm")
+	check := func(how string, f *ESMFile) {
+		t.Helper()
+		rs, ok := f.ReactionSystems["Chem"]
+		if !ok {
+			t.Fatalf("%s: no reaction system Chem", how)
+		}
+		if len(rs.Species) != 2 || len(rs.Reactions) != 1 {
+			t.Errorf("%s: Chem has %d species and %d reactions; want 2 and 1", how, len(rs.Species), len(rs.Reactions))
+		}
 	}
-	var et *ExpressionTemplateError
-	if !errors.As(err, &et) {
-		t.Fatalf("error %T %v; want an *ExpressionTemplateError", err, err)
+	f, err := LoadPath(path)
+	if err != nil {
+		t.Fatalf("LoadPath: %v", err)
 	}
-	if et.Code != CodeMountFormUnsupported {
-		t.Errorf("code = %q; want %q", et.Code, CodeMountFormUnsupported)
+	check("LoadPath", f)
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if et.Path != "/reaction_systems/Chem" {
-		t.Errorf("path = %q; want /reaction_systems/Chem", et.Path)
+	g, err := LoadString(string(raw))
+	if err != nil {
+		t.Fatalf("LoadString: %v", err)
+	}
+	// Before resolution the edge survives emit as the edge it was authored as.
+	out, err := ToJSONCompact(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"ref":"./reaction_system_leaf.esm"`) {
+		t.Errorf("an unresolved reaction_systems.<k> {ref} must emit as authored; got %s", out)
+	}
+	if err := ResolveSubsystemRefs(g, filepath.Dir(path)); err != nil {
+		t.Fatalf("ResolveSubsystemRefs: %v", err)
+	}
+	check("LoadString+ResolveSubsystemRefs", g)
+}
+
+// tests/conformance/toplevel_reaction_system_ref/: each mount loads to the same
+// `models` and `reaction_systems` as its inline twin, and each bad mount is
+// refused with the code `load_errors` names.
+func TestTopLevelReactionSystemRefConformanceFixtures(t *testing.T) {
+	dir := mrFixture(t, "conformance", "toplevel_reaction_system_ref")
+	raw, err := os.ReadFile(filepath.Join(dir, "expected.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var expected struct {
+		ImplementedBy []string                       `json:"implemented_by"`
+		Loads         map[string]string              `json:"loads"`
+		LoadErrors    map[string]map[string][]string `json:"load_errors"`
+	}
+	if err := json.Unmarshal(raw, &expected); err != nil {
+		t.Fatal(err)
+	}
+	listed := false
+	for _, b := range expected.ImplementedBy {
+		listed = listed || b == "go"
+	}
+	if !listed {
+		t.Fatal("expected.json must list go as implementing the form")
+	}
+	components := func(fixture string) (any, any) {
+		t.Helper()
+		f, err := LoadPath(filepath.Join(dir, fixture))
+		if err != nil {
+			t.Fatalf("%s: %v", fixture, err)
+		}
+		out, err := ToJSON(f)
+		if err != nil {
+			t.Fatalf("%s: emit: %v", fixture, err)
+		}
+		var doc map[string]any
+		if err := json.Unmarshal([]byte(out), &doc); err != nil {
+			t.Fatal(err)
+		}
+		return doc["models"], doc["reaction_systems"]
+	}
+	for _, fixture := range sortedKeys(expected.Loads) {
+		inline := expected.Loads[fixture]
+		gotModels, gotRS := components(fixture)
+		wantModels, wantRS := components(inline)
+		if !reflect.DeepEqual(gotRS, wantRS) {
+			t.Errorf("%s: reaction_systems differ from %s:\n got  %v\n want %v", fixture, inline, gotRS, wantRS)
+		}
+		if !reflect.DeepEqual(gotModels, wantModels) {
+			t.Errorf("%s: models differ from %s:\n got  %v\n want %v", fixture, inline, gotModels, wantModels)
+		}
+	}
+	for _, fixture := range sortedKeys(expected.LoadErrors) {
+		code := ""
+		for c, bindings := range expected.LoadErrors[fixture] {
+			for _, b := range bindings {
+				if b == "go" {
+					code = c
+				}
+			}
+		}
+		_, err := LoadPath(filepath.Join(dir, fixture))
+		if err == nil {
+			t.Errorf("%s loaded; it must be refused", fixture)
+			continue
+		}
+		if code == "" {
+			continue
+		}
+		var et *ExpressionTemplateError
+		if !errors.As(err, &et) || string(et.Code) != code {
+			t.Errorf("%s: error %v; want %s", fixture, err, code)
+			continue
+		}
+		if !strings.HasPrefix(et.Path, "/reaction_systems/") {
+			t.Errorf("%s: path = %q; want /reaction_systems/<k>", fixture, et.Path)
+		}
+	}
+}
+
+// A top-level `reaction_systems.<k>` `{ref}` runs the whole edge pipeline
+// (esm-spec §4.7): the edge's `bindings` close the leaf, its `index_sets` merge
+// into the mounting document, and `index_set_rename` applies, as at `models.<k>`.
+func TestTopLevelReactionSystemRefRunsTheEdgePipeline(t *testing.T) {
+	dir := t.TempDir()
+	leaf := `{"esm":"1.0.0","metadata":{"name":"rs_leaf","description":"probe"},
+ "metaparameters":{"N":{"type":"integer","default":2}},
+ "index_sets":{"x":{"kind":"interval","size":"N"}},
+ "reaction_systems":{"Chem":{"species":{"A":{"units":"1","default":1.0}},
+  "parameters":{"k":{"units":"1/s","default":0.3}},
+  "reactions":[{"id":"R1","substrates":[{"species":"A","stoichiometry":1}],"products":null,"rate":"k"}]}}}`
+	if err := os.WriteFile(filepath.Join(dir, "leaf.esm"), []byte(leaf), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	load := func(edge string) map[string]IndexSet {
+		t.Helper()
+		host := `{"esm":"1.0.0","metadata":{"name":"rs_host","description":"probe"},
+ "reaction_systems":{"Chem":{"ref":"./leaf.esm"` + edge + `}}}`
+		path := filepath.Join(dir, "host.esm")
+		if err := os.WriteFile(path, []byte(host), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		f, err := LoadPath(path)
+		if err != nil {
+			t.Fatalf("edge %q: %v", edge, err)
+		}
+		return f.IndexSets
+	}
+	size := func(sets map[string]IndexSet, name string) int64 {
+		t.Helper()
+		s, ok := sets[name]
+		if !ok || s.Size == nil {
+			t.Fatalf("index set %q missing or unsized: %v", name, sets)
+		}
+		return int64(*s.Size)
+	}
+	if got := size(load(""), "x"); got != 2 {
+		t.Errorf("x = %d; want the leaf's default 2", got)
+	}
+	if got := size(load(`,"bindings":{"N":5}`), "x"); got != 5 {
+		t.Errorf("x = %d; want 5, closed by the edge", got)
+	}
+	renamed := load(`,"index_set_rename":{"x":"y"}`)
+	if _, still := renamed["x"]; still {
+		t.Errorf("x survived the rename: %v", renamed)
+	}
+	if got := size(renamed, "y"); got != 2 {
+		t.Errorf("y = %d; want 2", got)
+	}
+}
+
+// A top-level `reaction_systems.<k>` `{ref}` lands the leaf's reaction system
+// with the leaf's AUTHORED species order (API_SPEC.md §5.10,
+// esm-libraries-spec §4.7.5 step 4), exactly as the inline copy has it — on both
+// reach paths. Species are declared O3, NO, NO2, so sorted-name order would
+// differ. The host's own model is declared z, a, and keeps that order too when
+// LoadPath re-encodes the document to splice the mount in.
+func TestTopLevelReactionSystemRefKeepsAuthoredSpeciesOrder(t *testing.T) {
+	dir := t.TempDir()
+	rs := `{"species":{"O3":{"units":"1","default":1.0},"NO":{"units":"1","default":1.0},"NO2":{"units":"1","default":1.0}},
+  "parameters":{"k":{"units":"1/s","default":0.3}},
+  "reactions":[{"id":"R1","substrates":[{"species":"NO","stoichiometry":1},{"species":"O3","stoichiometry":1}],"products":[{"species":"NO2","stoichiometry":1}],"rate":"k"}]}`
+	model := `"models":{"M":{"variables":{"z":{"type":"parameter","units":"1","default":1.0},"a":{"type":"parameter","units":"1","default":2.0}},"equations":[]}}`
+	leaf := `{"esm":"1.0.0","metadata":{"name":"leaf","description":"probe"},"reaction_systems":{"Chem":` + rs + `}}`
+	mounted := `{"esm":"1.0.0","metadata":{"name":"host","description":"probe"},` + model + `,
+ "reaction_systems":{"Chem":{"ref":"./leaf.esm"}}}`
+	inline := `{"esm":"1.0.0","metadata":{"name":"host","description":"probe"},` + model + `,
+ "reaction_systems":{"Chem":` + rs + `}}`
+	for name, text := range map[string]string{"leaf.esm": leaf, "mounted.esm": mounted, "inline.esm": inline} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	// The leaf itself — an inline reaction system, a component rather than a
-	// mount — still loads.
-	if _, err := LoadPath(mrFixture(t, "fixtures", "mount_form_unsupported", "reaction_system_leaf.esm")); err != nil {
-		t.Errorf("an inline reaction system must still load: %v", err)
+	type observed struct {
+		odes   string
+		matrix [][]float64
+		params []string
+		states []string
+	}
+	observe := func(how string, f *ESMFile) observed {
+		t.Helper()
+		chem := f.ReactionSystems["Chem"]
+		model, err := DeriveODEs(&chem)
+		if err != nil {
+			t.Fatalf("%s: DeriveODEs: %v", how, err)
+		}
+		odes, err := json.Marshal(model.Equations)
+		if err != nil {
+			t.Fatal(err)
+		}
+		flat, err := Flatten(f)
+		if err != nil {
+			t.Fatalf("%s: Flatten: %v", how, err)
+		}
+		var o observed
+		o.odes = string(odes)
+		o.matrix = StoichiometricMatrix(&chem)
+		for _, v := range flat.StateVariables {
+			o.states = append(o.states, v.Name)
+		}
+		for _, v := range flat.Parameters {
+			o.params = append(o.params, v.Name)
+		}
+		return o
+	}
+
+	want, err := LoadPath(filepath.Join(dir, "inline.esm"))
+	if err != nil {
+		t.Fatalf("inline: %v", err)
+	}
+	wantObs := observe("inline", want)
+	if got := []string{"Chem.O3", "Chem.NO", "Chem.NO2"}; !reflect.DeepEqual(wantObs.states, got) {
+		t.Fatalf("inline copy flattens its species as %v; want %v", wantObs.states, got)
+	}
+
+	viaPath, err := LoadPath(filepath.Join(dir, "mounted.esm"))
+	if err != nil {
+		t.Fatalf("LoadPath: %v", err)
+	}
+	viaString, err := LoadString(mounted)
+	if err != nil {
+		t.Fatalf("LoadString: %v", err)
+	}
+	if err := ResolveSubsystemRefs(viaString, dir); err != nil {
+		t.Fatalf("ResolveSubsystemRefs: %v", err)
+	}
+	for how, f := range map[string]*ESMFile{"LoadPath": viaPath, "LoadString+ResolveSubsystemRefs": viaString} {
+		got := observe(how, f)
+		if got.odes != wantObs.odes {
+			t.Errorf("%s: DeriveODEs equations differ from the inline copy:\n got  %s\n want %s", how, got.odes, wantObs.odes)
+		}
+		if !reflect.DeepEqual(got.matrix, wantObs.matrix) {
+			t.Errorf("%s: StoichiometricMatrix = %v; the inline copy gives %v", how, got.matrix, wantObs.matrix)
+		}
+		if !reflect.DeepEqual(got.states, wantObs.states) {
+			t.Errorf("%s: Flatten state order = %v; the inline copy gives %v", how, got.states, wantObs.states)
+		}
+		if !reflect.DeepEqual(got.params, wantObs.params) {
+			t.Errorf("%s: Flatten parameter order = %v; the inline copy gives %v", how, got.params, wantObs.params)
+		}
+	}
+}
+
+// esm-spec §9.6.6: a top-level `{ref}` mount edge that LoadString decoded but
+// nothing resolved is NOT an empty component. Flatten, Validate and DeriveODEs
+// report `unresolved_subsystem_ref` at the entry, at both top-level forms;
+// once ResolveSubsystemRefs runs, the same file works.
+func TestUnresolvedTopLevelRefIsNotAnEmptySystem(t *testing.T) {
+	dir := mrFixture(t, "fixtures", "mount_form_unsupported")
+	leafModel := t.TempDir()
+	if err := os.WriteFile(filepath.Join(leafModel, "leaf.esm"), []byte(`{"esm":"1.0.0","metadata":{"name":"leaf","description":"probe"},
+ "models":{"M":{"variables":{"x":{"type":"parameter","units":"1","default":1.0}},"equations":[]}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		section, name, host, base string
+	}{
+		{"models", "M", `{"esm":"1.0.0","metadata":{"name":"host","description":"probe"},"models":{"M":{"ref":"./leaf.esm"}}}`, leafModel},
+		{"reaction_systems", "Chem", `{"esm":"1.0.0","metadata":{"name":"host","description":"probe"},"reaction_systems":{"Chem":{"ref":"./reaction_system_leaf.esm"}}}`, dir},
+	}
+	for _, c := range cases {
+		pointer := "/" + c.section + "/" + c.name
+		f, err := LoadString(c.host)
+		if err != nil {
+			t.Fatalf("%s: LoadString: %v", c.section, err)
+		}
+
+		_, err = Flatten(f)
+		var et *ExpressionTemplateError
+		if !errors.As(err, &et) || et.Code != CodeUnresolvedSubsystemRef || et.Path != pointer {
+			t.Errorf("%s: Flatten of an unresolved mount = %v; want %s at %s", c.section, err, CodeUnresolvedSubsystemRef, pointer)
+		}
+
+		found := false
+		for _, e := range Validate(f).StructuralErrors {
+			found = found || (e.Code == CodeUnresolvedSubsystemRef && e.Path == pointer)
+		}
+		if !found {
+			t.Errorf("%s: Validate does not report %s at %s", c.section, CodeUnresolvedSubsystemRef, pointer)
+		}
+
+		if c.section == "reaction_systems" {
+			chem := f.ReactionSystems[c.name]
+			if _, err := DeriveODEs(&chem); !errors.As(err, &et) || et.Code != CodeUnresolvedSubsystemRef {
+				t.Errorf("DeriveODEs of an unresolved mount = %v; want %s", err, CodeUnresolvedSubsystemRef)
+			}
+		}
+
+		if err := ResolveSubsystemRefs(f, c.base); err != nil {
+			t.Fatalf("%s: ResolveSubsystemRefs: %v", c.section, err)
+		}
+		if _, err := Flatten(f); err != nil {
+			t.Errorf("%s: Flatten after resolution: %v", c.section, err)
+		}
+		if c.section == "reaction_systems" {
+			chem := f.ReactionSystems[c.name]
+			if _, err := DeriveODEs(&chem); err != nil {
+				t.Errorf("DeriveODEs after resolution: %v", err)
+			}
+		}
+	}
+}
+
+// esm-spec §4.7 "Two mount forms, one mechanism": the `model` selector applies
+// at a top-level `models.<k>` `{ref}` exactly as `reaction_system` does at
+// `reaction_systems.<k>`. A leaf declaring models A and B mounts the one the
+// selector names; with no selector, or a selector the leaf does not declare,
+// the mount is `unresolved_subsystem_ref` at `/models/<k>`, as Julia raises it.
+// A leaf with one model and one reaction system mounts its model, and a leaf
+// whose only system is a reaction system has no model to mount, which is
+// `unresolved_subsystem_ref` at `/models/<k>` too. Each
+// case is checked on both reach paths: LoadPath, and LoadString plus
+// ResolveSubsystemRefs.
+func TestTopLevelModelRefHonoursTheModelSelector(t *testing.T) {
+	dir := t.TempDir()
+	model := func(v string) string {
+		return `{"variables":{"` + v + `":{"type":"parameter","units":"1","default":1.0}},"equations":[]}`
+	}
+	rs := `{"species":{"S":{"units":"1","default":1.0}},"parameters":{"k":{"units":"1/s","default":0.3}},
+  "reactions":[{"id":"R1","substrates":[{"species":"S","stoichiometry":1}],"products":null,"rate":"k"}]}`
+	leaves := map[string]string{
+		"two_models.esm":   `"models":{"A":` + model("a") + `,"B":` + model("b") + `}`,
+		"model_and_rs.esm": `"models":{"A":` + model("a") + `},"reaction_systems":{"Chem":` + rs + `}`,
+		"rs_only.esm":      `"reaction_systems":{"Chem":` + rs + `}`,
+	}
+	for name, body := range leaves {
+		doc := `{"esm":"1.0.0","metadata":{"name":"leaf","description":"probe"},` + body + `}`
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(doc), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// load reads a host mounting `edge` at models.Atm on both reach paths and
+	// returns each path's mounted model variables, or its error.
+	load := func(edge string) (map[string][]string, map[string]error) {
+		t.Helper()
+		host := `{"esm":"1.0.0","metadata":{"name":"host","description":"probe"},"models":{"Atm":` + edge + `}}`
+		path := filepath.Join(dir, "host.esm")
+		if err := os.WriteFile(path, []byte(host), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		vars := map[string][]string{}
+		errs := map[string]error{}
+		record := func(how string, f *ESMFile, err error) {
+			if err != nil {
+				errs[how] = err
+				return
+			}
+			vars[how] = sortedKeys(f.Models["Atm"].Variables)
+		}
+		f, err := LoadPath(path)
+		record("LoadPath", f, err)
+		g, err := LoadString(host)
+		if err != nil {
+			t.Fatalf("LoadString(%s): %v", edge, err)
+		}
+		err = ResolveSubsystemRefs(g, dir)
+		record("LoadString+ResolveSubsystemRefs", g, err)
+		return vars, errs
+	}
+	mounts := []struct{ edge, want string }{
+		{`{"ref":"./two_models.esm","model":"B"}`, "b"},
+		{`{"ref":"./two_models.esm","model":"A"}`, "a"},
+		{`{"ref":"./model_and_rs.esm"}`, "a"},
+	}
+	for _, m := range mounts {
+		vars, errs := load(m.edge)
+		for how, err := range errs {
+			t.Errorf("%s: %s: %v", m.edge, how, err)
+		}
+		for how, got := range vars {
+			if !reflect.DeepEqual(got, []string{m.want}) {
+				t.Errorf("%s: %s: Atm variables = %v; want [%s]", m.edge, how, got, m.want)
+			}
+		}
+	}
+	refusals := []struct {
+		edge string
+		code string
+	}{
+		{`{"ref":"./two_models.esm"}`, CodeUnresolvedSubsystemRef},
+		{`{"ref":"./two_models.esm","model":"C"}`, CodeUnresolvedSubsystemRef},
+		{`{"ref":"./rs_only.esm"}`, CodeUnresolvedSubsystemRef},
+	}
+	for _, r := range refusals {
+		vars, errs := load(r.edge)
+		for how := range vars {
+			t.Errorf("%s: %s loaded; it must be refused", r.edge, how)
+		}
+		for how, err := range errs {
+			var et *ExpressionTemplateError
+			if !errors.As(err, &et) || et.Code != r.code {
+				t.Errorf("%s: %s: error %v; want %s", r.edge, how, err, r.code)
+				continue
+			}
+			if et.Path != "/models/Atm" {
+				t.Errorf("%s: %s: path = %q; want /models/Atm", r.edge, how, et.Path)
+			}
+		}
+	}
+}
+
+// topLevelRefEntries hands back the block it read and only the bare `{ref}`
+// entries of it: an inline component that happens to carry a `ref` field, and
+// a non-object entry, are not mount edges.
+func TestTopLevelRefEntriesReturnsTheBlockAndItsEdges(t *testing.T) {
+	view, err := decodeJSONView([]byte(`{"models":{
+  "Edge":{"ref":"./leaf.esm","model":"B"},
+  "Inline":{"ref":"./x.esm","variables":{}},
+  "Odd":3}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, edges := topLevelRefEntries(view, topLevelModelMount)
+	if len(block) != 3 {
+		t.Errorf("block = %v; want all three entries", block)
+	}
+	if got := sortedKeys(edges); !reflect.DeepEqual(got, []string{"Edge"}) {
+		t.Errorf("edges = %v; want [Edge]", got)
+	}
+	// The edge is the block's own entry, so resolving it in place rewrites the
+	// view the caller holds.
+	if e, _ := edges["Edge"].(map[string]any); e == nil || e["model"] != "B" {
+		t.Errorf("edge = %v; want the authored entry", edges["Edge"])
+	}
+	if b, e := topLevelRefEntries(view, topLevelReactionSystemMount); b != nil || e != nil {
+		t.Errorf("no reaction_systems block: got %v, %v; want nil, nil", b, e)
 	}
 }

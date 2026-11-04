@@ -988,6 +988,12 @@ pub struct DataSourceBinding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub select: Option<serde_json::Value>,
 
+    /// How many records of the source the parameter receives per query time,
+    /// 1 or 2 (esm-spec §8.5.1); overrides the source's
+    /// `temporal.records_per_sample`. `None` when not written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub records_per_sample: Option<u8>,
+
     /// Brief description.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -995,6 +1001,16 @@ pub struct DataSourceBinding {
     /// Academic citation or data source reference.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference: Option<Reference>,
+}
+
+impl DataSourceBinding {
+    /// The EFFECTIVE `records_per_sample` of this binding (esm-spec §8.5.1):
+    /// its own value, else `source`'s `temporal.records_per_sample`, else 1.
+    pub(crate) fn effective_records_per_sample(&self, source: Option<&DataSource>) -> u8 {
+        self.records_per_sample
+            .or_else(|| source.and_then(|s| s.temporal.as_ref()?.records_per_sample))
+            .unwrap_or(1)
+    }
 }
 
 /// Type of model variable (esm-spec §6.3). There are **two** declared types

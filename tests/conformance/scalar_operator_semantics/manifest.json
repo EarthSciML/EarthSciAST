@@ -209,6 +209,34 @@
         ]
       },
       "named_exclusions": []
+    },
+    {
+      "id": "pre_passthrough",
+      "path": "fixtures/pre_passthrough.esm",
+      "model": "PrePassthrough",
+      "golden": "golden/pre_passthrough.json",
+      "tags": [
+        "scalar",
+        "operators",
+        "esm-spec-5.1",
+        "pre-passthrough"
+      ],
+      "note": "Authored here, as its own fixture because Python's interpreter refused `Pre` on a right-hand side (`unevaluable_operator`) that Julia and Rust evaluate as its operand; all three now evaluate it.",
+      "required": {
+        "julia": [
+          "interpreter",
+          "native"
+        ],
+        "python": [
+          "interpreter",
+          "native"
+        ],
+        "rust": [
+          "interpreter",
+          "native"
+        ]
+      },
+      "named_exclusions": []
     }
   ]
 }

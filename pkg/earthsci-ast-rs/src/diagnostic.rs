@@ -349,7 +349,10 @@ diagnostic_code_registry! {
     /// ambiguous. Only the resolver can raise this — it is the only layer that
     /// reads the referenced file.
     AMBIGUOUS_SUBSYSTEM_REF = "ambiguous_subsystem_ref";
-    /// A top-level `models.<k>` mount edge that does not resolve.
+    /// A top-level `models.<k>` mount edge that does not resolve. This binding
+    /// raises `unresolved_subsystem_ref` there instead, as at the
+    /// `reaction_systems.<k>` form; the code stays because the table is
+    /// cross-language uniform.
     TOPLEVEL_MODEL_REF_UNRESOLVED = "toplevel_model_ref_unresolved";
     /// A referenced subsystem file's top-level `index_sets` entry collides with
     /// a non-deep-equal declaration in the importing document (§4.7).
@@ -366,10 +369,11 @@ diagnostic_code_registry! {
     /// rather than merge the leaf under its pre-rename axis names.
     SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM =
         "subsystem_index_set_rename_unsupported_mount_form";
-    /// A §4.7 `{ref}` mount at a form this binding does not implement — a
-    /// top-level `reaction_systems.<k>` `{ref}` (§4.7 "Two mount forms, one
-    /// mechanism"). Refused at the entry rather than failing later on an
-    /// incidental typed-parse error.
+    /// A §4.7 `{ref}` mount at a form a binding does not implement. Every
+    /// binding mounts both top-level forms, `models.<k>` and
+    /// `reaction_systems.<k>` (§4.7 "Two mount forms, one mechanism"), so this
+    /// binding never raises it; the code stays because the table is
+    /// cross-language uniform.
     MOUNT_FORM_UNSUPPORTED = "mount_form_unsupported";
     /// A declared working precision reaches a construct that cannot carry it
     /// (esm-spec §11.3.1, §4.7 "Working precision crosses a mount"): a mounted
@@ -404,6 +408,11 @@ diagnostic_code_registry! {
     CIRCULAR_DEPENDENCY = "circular_dependency";
     /// A parameter `update` naming no declared data source.
     DATA_SOURCE_UNDEFINED = "data_source_undefined";
+    /// `from.records_per_sample` on a rule that is not `data`, or an
+    /// effective value of 2 on a source without `temporal` or on a parameter
+    /// whose record shape's first dimension is not an index set of exactly
+    /// two members (esm-spec §8.5.1).
+    RECORDS_PER_SAMPLE_INVALID = "records_per_sample_invalid";
     /// A data-fed parameter (`update` of `kind: "data"`, esm-spec §5.4/§8.5)
     /// reached a build with NOTHING bound to it — no provider, no loaded
     /// array, no caller-supplied `p` value. Raised at CONSTRUCTION, before any
@@ -752,6 +761,7 @@ mod error_code_tests {
             "range_global_locality",
             "range_halo_insufficient",
             "range_selection_writes_incomplete",
+            "records_per_sample_invalid",
             "recurrence_not_wellfounded",
             "recurrence_unsupported_form",
             "relational_node_in_continuous",

@@ -11,6 +11,7 @@ when evaluation reaches the node) does not satisfy it.
 from __future__ import annotations
 
 import json
+import math
 
 import pytest
 from conftest import CONFORMANCE_DIR
@@ -25,7 +26,7 @@ from earthsci_ast.numpy_interpreter import (
     evaluate,
 )
 from earthsci_ast.parse import load_path
-from earthsci_ast.problem import esm_problem
+from earthsci_ast.problem import esm_problem, solve
 
 _FIXTURE = json.loads((CONFORMANCE_DIR / "unevaluable_operator" / "cases.json").read_text())
 
@@ -74,7 +75,6 @@ def test_shared_fixture_control_still_evaluates() -> None:
         ("apply_expression_template", []),
         ("table_lookup", ["x"]),
         ("ic", ["x"]),
-        ("Pre", ["x"]),
         ("enum", ["colors", "red"]),
     ],
 )
@@ -82,6 +82,33 @@ def test_core_op_without_rule_is_coded(op, args) -> None:
     err = _refusal(lambda: evaluate(ExprNode(op=op, args=args), {"x": 1.0}))
     assert getattr(err, "code", None) == "unevaluable_operator", repr(err)
     assert f"'{op}'" in str(err)
+
+
+def test_pre_is_its_operand() -> None:
+    """`Pre(x)` is the value of x just before an event (esm-spec §5.1); on a
+    right-hand side there is no event, so it is x, as in Julia and Rust. It used
+    to be refused as an op with no rule."""
+    assert evaluate(ExprNode(op="Pre", args=["x"]), {"x": 1.5}) == 1.5
+    inner = ExprNode(op="*", args=["x", 4.0])
+    assert evaluate(ExprNode(op="Pre", args=[inner]), {"x": 1.5}) == 6.0
+    # Not refused before evaluation either: a `Pre` in an untaken branch is fine.
+    guarded = ExprNode(
+        op="ifelse",
+        args=[ExprNode(op=">", args=["x", 100.0]), ExprNode(op="Pre", args=["x"]), 1.0],
+    )
+    assert evaluate(guarded, {"x": 1.5}) == 1.0
+    with pytest.raises(NumpyInterpreterError, match="Pre expects 1 arg"):
+        evaluate(ExprNode(op="Pre", args=["x", "x"]), {"x": 1.5})
+
+
+def test_model_with_pre_on_the_rhs_solves(tmp_path) -> None:
+    """`D(u) = -Pre(u)` is `D(u) = -u` through both Python evaluators: the NumPy
+    interpreter, and the SymPy lowering the `sympy` compiler runs."""
+    file = _scalar_probe(tmp_path, {"op": "-", "args": [{"op": "Pre", "args": ["u"]}]})
+    for compiler in ("interpreter", "native", "sympy"):
+        prob = esm_problem(file, (0.0, 1.0), compiler=compiler)
+        sol = solve(prob, reltol=1e-10, abstol=1e-12)
+        assert sol["u"][-1] == pytest.approx(math.exp(-1.0), rel=1e-7), compiler
 
 
 def test_open_tier_op_stays_unlowered() -> None:

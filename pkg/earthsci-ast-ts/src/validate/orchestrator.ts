@@ -70,6 +70,7 @@ import {
   validateCouplingIntegrity,
   validateCircularReferences,
   validateDataSourceReferences,
+  validateRecordsPerSample,
   validateDataSourceExpressions,
   validateCouplingExpressions,
   validateCouplingDomainUnits,
@@ -366,6 +367,8 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
 
   // Every parameter `update.source` names a declared data source.
   errors.push(...validateDataSourceReferences(esmFile))
+  // `from.records_per_sample` (esm-spec §8.5.1, `records_per_sample_invalid`).
+  errors.push(...validateRecordsPerSample(esmFile))
 
   // (h) sites 9-11: the expression positions outside any component — a
   // parameter's `update.from.unit_conversion`, a coupling `transform`, a

@@ -40,6 +40,10 @@ const UNITS_FIXTURES: &[(&str, &str)] = &[
         "units_comparisons_and_connectives.esm",
         include_str!("../../../tests/valid/units_comparisons_and_connectives.esm"),
     ),
+    (
+        "units_sign_dimensionless.esm",
+        include_str!("../../../tests/valid/units_sign_dimensionless.esm"),
+    ),
 ];
 
 #[test]

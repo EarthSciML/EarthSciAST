@@ -21,11 +21,14 @@
 #      the clamp answer and raises `table_lookup_out_of_bounds` for one outside
 #      its axis (§9.5.1), under both tree-walk compilers; `:mtk` refuses it by
 #      name (§9.5.3a) rather than clamp.
+#
+# The parts of 3 and 4 that go through ModelingToolkit — the inline-test runner
+# and the `:mtk` refusal — are test/mtk/function_tables_lowering_path_mtk_test.jl,
+# in the ModelingToolkit suite; everything else is here.
 
 using Test
 using EarthSciAST
 using JSON3
-import ModelingToolkit             # activates the MTK ext `run_esm_tests` compiles through
 import SciMLBase: solve
 import OrdinaryDiffEqTsit5: Tsit5
 
@@ -265,50 +268,6 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
         end
     end
 
-    # ---- The regression itself: the shared end-to-end fixture, run through the
-    #      inline-test runner (§6.6, Julia's `esm test`). `y` is a table_lookup,
-    #      `z` its hand-lowered twin, `w` a lookup above the last knot that the
-    #      default `out_of_bounds: "clamp"` holds at the last table value.
-    #      Before the fix `y` and `w` could not even compile ("Unsupported
-    #      operator: table_lookup") while `z` answered 25.
-    @testset "inline_test fixture: all three assertions pass (#188)" begin
-        dir = joinpath(FT_PATH_FIXTURES_ROOT, "inline_test")
-        results, exit_code = _FTP.run_esm_tests([dir]; root = dir, verbose = false)
-        @test length(results) == 3
-        by = Dict(r.variable => r for r in results)
-        for (name, expected) in ("y" => 25.0, "z" => 25.0, "w" => 40.0)
-            r = get(by, name, nothing)
-            @test r !== nothing
-            r === nothing && continue
-            @test r.status == _FTP.PASS
-            @test r.actual ≈ expected rtol = 1.0e-12
-        end
-        # §9.5's central promise: the lowered lookup and the hand-written
-        # inline-const one are the SAME computation, not merely close.
-        @test by["y"].actual == by["z"].actual
-        @test exit_code == 0
-    end
-
-    # The §9.5.3 `nearest` composition and the §9.5.2 / §9.5.3 defaults, through
-    # the same runner. Each fixture's assertions carry their expected values.
-    for name in ("nearest", "lookup_defaults")
-        @testset "$(name) fixture through the inline-test runner" begin
-            dir = joinpath(FT_PATH_FIXTURES_ROOT, name)
-            doc = JSON3.read(read(_ft_path_fixture(name), String))
-            want = Dict(
-                String(a.variable) => Float64(a.expected)
-                    for m in values(doc.models) for t in m.tests for a in t.assertions
-            )
-            results, exit_code = _FTP.run_esm_tests([dir]; root = dir, verbose = false)
-            @test length(results) == length(want)
-            for r in results
-                @test r.status == _FTP.PASS
-                @test r.actual == want[r.variable]
-            end
-            @test exit_code == 0
-        end
-    end
-
     @testset "the tree-walk build evaluates a lowered lookup" begin
         # `linear`: D(k_O3) ~ table_lookup(sigma_O3_298, lambda_idx = lambda),
         # lambda = 4.5 ⇒ the midpoint of the [4, 5] knots. A constant tendency,
@@ -448,13 +407,9 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
         # The fixture itself: its in-range query answers 25.0, the clamp value.
         fx = _FTP.esm_problem(path, (0.0, 1.0); compiler = :native)
         @test only(_FTP.observed_field(fx, "M.y")) == 25.0
-
-        # The ModelingToolkit lowering has no raising form, so it refuses the
-        # table by name rather than clamp.
-        e3 = raised(() -> _FTP.esm_problem(path, (0.0, 1.0); compiler = :mtk))
-        @test e3 isa _FTP.TableLookupError
-        @test e3 isa _FTP.TableLookupError &&
-            e3.code == ERROR_CODES.TABLE_OUT_OF_BOUNDS_UNSUPPORTED
+        # `compiler = :mtk` refuses this table by name rather than clamp; that
+        # needs ModelingToolkit, so it is pinned in
+        # test/mtk/function_tables_lowering_path_mtk_test.jl.
     end
 
     @testset "out_of_bounds: \"error\" on a nearest table (§9.5.3)" begin
@@ -499,8 +454,6 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
                     e.code == ERROR_CODES.TABLE_LOOKUP_OUT_OF_BOUNDS
             end
         end
-        e3 = raised(() -> _FTP.esm_problem(doc, (0.0, 1.0); compiler = :mtk))
-        @test e3 isa _FTP.TableLookupError &&
-            e3.code == ERROR_CODES.TABLE_OUT_OF_BOUNDS_UNSUPPORTED
+        # …and `compiler = :mtk` refuses it: test/mtk/function_tables_lowering_path_mtk_test.jl.
     end
 end

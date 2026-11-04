@@ -19,7 +19,7 @@ _rr_uses_var(::EarthSciAST.ASTExpr, ::String) = false
 # A top-level `reaction_systems` entry may be a `{ref}` stub — the reaction-system
 # analogue of a top-level model `{ref}` stub (schema: each block's entry is
 # `oneOf [component, {ref}]`). The stub is inlined at load, before the typed
-# pipeline, by `_inline_toplevel_reaction_system_refs!`, so after `load` the
+# pipeline, by `_inline_toplevel_refs!`, so after `load` the
 # in-memory form is identical to a file with the reaction system inlined.
 @testset "Top-level reaction_system {ref} import (esm-spec §4.7)" begin
 

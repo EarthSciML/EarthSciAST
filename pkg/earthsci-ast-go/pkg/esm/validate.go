@@ -881,6 +881,8 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 	// source is not a coupling endpoint any more — so it is the whole of
 	// `data_source_undefined`.
 	s.validateUpdateSources(modelName, model, basePath)
+	// esm-spec §8.5.1: `from.records_per_sample`.
+	s.validateRecordsPerSample(modelName, model, basePath)
 
 	// `initialization_equations` hold at t=0 but are ordinary equations, and
 	// `guesses` seed a nonlinear solve. Both name variables; neither was reached.
@@ -1716,6 +1718,295 @@ func (s *structuralScan) validateUpdateSources(modelName string, model *Model, b
 	}
 }
 
+// indexSetHasTwoMembers: an `interval` of size 2 or a `categorical` of two
+// members (esm-spec §8.5.1 rule 3).
+func indexSetHasTwoMembers(file *ESMFile, name string) bool {
+	set, ok := file.IndexSets[name]
+	if !ok {
+		return false
+	}
+	switch set.Kind {
+	case "interval":
+		return set.Size != nil && *set.Size == 2
+	case "categorical":
+		return len(set.Members) == 2
+	}
+	return false
+}
+
+// declaredShapeOf is the declared shape of the model variable a scoped name
+// `Model[.Sub…].var` names (empty for a scalar). found is false when the
+// declaration cannot be reached: no such model, subsystem or variable, or a
+// path that runs through a subsystem still held as an unresolved `ref`. Such a
+// target is not decidable (esm-spec §8.5.1), which is not the same as empty.
+func declaredShapeOf(file *ESMFile, scoped string) (shape []string, found bool) {
+	parts := strings.Split(scoped, ".")
+	if len(parts) < 2 {
+		return nil, false
+	}
+	model, ok := file.Models[parts[0]]
+	if !ok {
+		return nil, false
+	}
+	cur := &model
+	for _, seg := range parts[1 : len(parts)-1] {
+		raw, ok := cur.Subsystems[seg]
+		if !ok {
+			return nil, false
+		}
+		if _, _, isRef := extractRefWithBindings(raw); isRef {
+			return nil, false
+		}
+		sub, ok := decodeSubsystemAs[Model](raw)
+		if !ok {
+			return nil, false
+		}
+		cur = &sub
+	}
+	v, ok := cur.Variables[parts[len(parts)-1]]
+	if !ok {
+		return nil, false
+	}
+	return v.Dims(), true
+}
+
+// isRecordShape reports whether shape can carry two records per sample: its
+// first entry names an index set of exactly two members (esm-spec §8.5.1
+// rule 3). An empty shape cannot.
+func isRecordShape(file *ESMFile, shape []string) bool {
+	return len(shape) > 0 && indexSetHasTwoMembers(file, shape[0])
+}
+
+// paramToVarTargets lists, in coupling order, the `to` of every `variable_map`
+// entry in coupling whose transform is `param_to_var` and whose `from` is the
+// scoped name from.
+func paramToVarTargets(coupling []CouplingEntry, from string) []string {
+	var out []string
+	for _, entry := range coupling {
+		var vm VariableMapCoupling
+		switch e := entry.(type) {
+		case VariableMapCoupling:
+			vm = e
+		case *VariableMapCoupling:
+			if e == nil {
+				continue
+			}
+			vm = *e
+		default:
+			continue
+		}
+		if vm.From == from && vm.TransformKind() == "param_to_var" {
+			out = append(out, vm.To)
+		}
+	}
+	return out
+}
+
+// hasCouplingImport reports whether coupling holds a `coupling_import` entry,
+// whose edges exist only once flatten expands it (esm-spec §10.10).
+func hasCouplingImport(coupling []CouplingEntry) bool {
+	for _, entry := range coupling {
+		if entry != nil && entry.CouplingType() == "coupling_import" {
+			return true
+		}
+	}
+	return false
+}
+
+// recordsPerSampleSite is one `update` rule carrying a `from` binding, on a
+// variable of a top-level model or of an inline subsystem at any depth.
+type recordsPerSampleSite struct {
+	// scoped is the variable's scoped name, `Model[.Sub…].var`.
+	scoped  string
+	varName string
+	// shape is the variable's declared shape, empty for a scalar.
+	shape []string
+	rule  ParameterUpdate
+	// path is the rule's JSON Pointer: the variable's `/update`, or
+	// `/update/<i>` when `update` is an array of rules.
+	path string
+}
+
+// walkRecordsPerSampleSites visits every site of model and of its inline
+// subsystems, recursively, in sorted order. A subsystem still held as an
+// unresolved `ref` has no declarations to visit.
+func walkRecordsPerSampleSites(model *Model, scope, basePath string, visit func(recordsPerSampleSite)) {
+	for _, varName := range sortedKeys(model.Variables) {
+		v := model.Variables[varName]
+		_, isArray := v.Update.([]ParameterUpdate)
+		for i, rule := range v.UpdateRules() {
+			if rule.From == nil {
+				continue
+			}
+			path := fmt.Sprintf("%s/variables/%s/update", basePath, varName)
+			if isArray {
+				path = fmt.Sprintf("%s/%d", path, i)
+			}
+			visit(recordsPerSampleSite{
+				scoped:  scope + "." + varName,
+				varName: varName,
+				shape:   v.Dims(),
+				rule:    rule,
+				path:    path,
+			})
+		}
+	}
+	for _, name := range sortedKeys(model.Subsystems) {
+		raw := model.Subsystems[name]
+		if _, _, isRef := extractRefWithBindings(raw); isRef {
+			continue
+		}
+		sub, ok := decodeSubsystemAs[Model](raw)
+		if !ok {
+			continue
+		}
+		walkRecordsPerSampleSites(&sub, scope+"."+name, basePath+"/subsystems/"+name, visit)
+	}
+}
+
+// pairRecordShapeMessage is the `records_per_sample_invalid` message for a
+// record shape that cannot hold two records. target is the `param_to_var`
+// target the shape was read from, or "" for the parameter's own shape.
+func pairRecordShapeMessage(varName string, shape []string, target string) string {
+	from := "its record shape"
+	if target != "" {
+		from = fmt.Sprintf("its record shape, from param_to_var target '%s',", target)
+	}
+	return fmt.Sprintf(
+		"Parameter '%s' asks for two records per sample, so its first dimension must be an index set of exactly two members; %s is %v",
+		varName, from, shape)
+}
+
+// validateRecordsPerSample reports `records_per_sample_invalid` (esm-spec
+// §8.5.1) for every `update` rule of model and of its inline subsystems at any
+// depth: `from.records_per_sample` on a rule that is not `data`; or an
+// EFFECTIVE value of 2 on a parameter whose source declares no `temporal`
+// block, or whose record shape's first dimension is not an index set of
+// exactly two members.
+//
+// The record shape is the declared `shape` when not empty. Otherwise it is the
+// declared `shape` of every inline `param_to_var` target of the parameter; a
+// target whose declaration cannot be reached is not decidable here and is left
+// to flatten (checkRecordsPerSampleAfterImports), and only the first failing
+// target is reported. A parameter with no inline target is refused for its
+// empty shape only when the document has no `coupling_import`, whose expanded
+// edges could still supply one.
+func (s *structuralScan) validateRecordsPerSample(modelName string, model *Model, basePath string) {
+	walkRecordsPerSampleSites(model, modelName, basePath, func(site recordsPerSampleSite) {
+		rule := site.rule
+		if rule.Kind != UpdateKindData {
+			if rule.From.RecordsPerSample != nil {
+				s.addErr(StructuralError{
+					Path: site.path,
+					Code: ErrorRecordsPerSampleInvalid,
+					Message: fmt.Sprintf(
+						"Parameter '%s' sets from.records_per_sample on a '%s' rule; only a 'data' rule names a source to read records from",
+						site.varName, rule.Kind),
+					Details: map[string]any{"variable": site.varName, "kind": rule.Kind},
+				})
+			}
+			return
+		}
+		source, ok := s.file.DataSources[rule.Source]
+		if !ok {
+			return // data_source_undefined reports it
+		}
+		if effectiveRecordsPerSample(rule.From, &source) != 2 {
+			return
+		}
+		if source.Temporal == nil {
+			s.addErr(StructuralError{
+				Path: site.path,
+				Code: ErrorRecordsPerSampleInvalid,
+				Message: fmt.Sprintf(
+					"Parameter '%s' asks for two records per sample from data source '%s', which declares no temporal block and so has no successor record",
+					site.varName, rule.Source),
+				Details: map[string]any{"variable": site.varName, "source": rule.Source},
+			})
+			return
+		}
+		badShape := func(shape []string, target string) {
+			details := map[string]any{"variable": site.varName, "shape": shape}
+			if target != "" {
+				details["target"] = target
+			}
+			s.addErr(StructuralError{
+				Path:    site.path,
+				Code:    ErrorRecordsPerSampleInvalid,
+				Message: pairRecordShapeMessage(site.varName, shape, target),
+				Details: details,
+			})
+		}
+		if len(site.shape) > 0 {
+			if !isRecordShape(s.file, site.shape) {
+				badShape(site.shape, "")
+			}
+			return
+		}
+		targets := paramToVarTargets(s.file.Coupling, site.scoped)
+		if len(targets) == 0 {
+			if !hasCouplingImport(s.file.Coupling) {
+				badShape(site.shape, "")
+			}
+			return
+		}
+		for _, to := range targets {
+			shape, found := declaredShapeOf(s.file, to)
+			if found && !isRecordShape(s.file, shape) {
+				badShape(shape, to)
+				return
+			}
+		}
+	})
+}
+
+// checkRecordsPerSampleAfterImports re-checks esm-spec §8.5.1 rule 3 at
+// flatten, against coupling, the sequence after `coupling_import` expansion:
+// every data-fed parameter, at any depth, whose EFFECTIVE `records_per_sample`
+// is 2 and whose own shape is empty takes its record shape from each
+// `param_to_var` target there, and is refused when it has none or when a
+// target's first dimension is not an index set of exactly two members.
+// Structural validation could not see an imported edge, so this is where such a
+// record shape is first decidable.
+func checkRecordsPerSampleAfterImports(file *ESMFile, coupling []CouplingEntry) error {
+	var refusal error
+	for _, modelName := range sortedKeys(file.Models) {
+		model := file.Models[modelName]
+		walkRecordsPerSampleSites(&model, modelName, "/models/"+modelName, func(site recordsPerSampleSite) {
+			if refusal != nil || site.rule.Kind != UpdateKindData || len(site.shape) > 0 {
+				return
+			}
+			source, ok := file.DataSources[site.rule.Source]
+			if !ok || source.Temporal == nil || effectiveRecordsPerSample(site.rule.From, &source) != 2 {
+				return
+			}
+			refuse := func(shape []string, target string) {
+				refusal = &ExpressionTemplateError{
+					Code:    ErrorRecordsPerSampleInvalid,
+					Message: fmt.Sprintf("%s: %s", site.path, pairRecordShapeMessage(site.varName, shape, target)),
+					Path:    site.path,
+				}
+			}
+			targets := paramToVarTargets(coupling, site.scoped)
+			if len(targets) == 0 {
+				refuse(site.shape, "")
+				return
+			}
+			for _, to := range targets {
+				shape, found := declaredShapeOf(file, to)
+				if found && !isRecordShape(file, shape) {
+					refuse(shape, to)
+					return
+				}
+			}
+		})
+		if refusal != nil {
+			return refusal
+		}
+	}
+	return nil
+}
+
 // reservedDeclarationNames maps every name a declaration map may NOT spell to
 // the reason it is reserved (esm-spec §4.9.1.1).
 //
@@ -2365,6 +2656,19 @@ func (s *structuralScan) validateSubsystemRefs() {
 	if s.file == nil {
 		return
 	}
+	// A top-level `models.<k>` / `reaction_systems.<k>` `{ref}` mount edge that
+	// was never resolved decoded to an EMPTY component; it is the same
+	// unresolved ref at the other attachment point.
+	for _, modelName := range sortedKeys(s.file.Models) {
+		if ref := s.file.Models[modelName].unresolvedMountRef; ref != "" {
+			s.flagUnresolvedTopLevelMount("models", modelName, ref)
+		}
+	}
+	for _, systemName := range sortedKeys(s.file.ReactionSystems) {
+		if ref := s.file.ReactionSystems[systemName].unresolvedMountRef; ref != "" {
+			s.flagUnresolvedTopLevelMount("reaction_systems", systemName, ref)
+		}
+	}
 	for _, modelName := range sortedKeys(s.file.Models) {
 		s.flagRefSubsystems(s.file.Models[modelName].Subsystems,
 			fmt.Sprintf("/models/%s/subsystems", modelName), modelName)
@@ -2373,6 +2677,20 @@ func (s *structuralScan) validateSubsystemRefs() {
 		s.flagRefSubsystems(s.file.ReactionSystems[systemName].Subsystems,
 			fmt.Sprintf("/reaction_systems/%s/subsystems", systemName), systemName)
 	}
+}
+
+func (s *structuralScan) flagUnresolvedTopLevelMount(section, name, ref string) {
+	s.addErr(StructuralError{
+		Path: fmt.Sprintf("/%s/%s", section, name),
+		Code: CodeUnresolvedSubsystemRef,
+		Message: fmt.Sprintf("Top-level mount reference '%s' could not be resolved — "+
+			"resolve subsystem refs (Load, or ResolveSubsystemRefs) before validating", ref),
+		Details: map[string]any{
+			"ref":   ref,
+			"mount": name,
+			"block": section,
+		},
+	})
 }
 
 func (s *structuralScan) flagRefSubsystems(subsystems map[string]any, pathPrefix, parent string) {

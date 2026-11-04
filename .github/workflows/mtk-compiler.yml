@@ -1,5 +1,17 @@
 name: ModelingToolkit Compiler
 
+# Two jobs, both about the ModelingToolkit / Catalyst side of EarthSciAST.jl:
+#
+#   * `mtk-tests` runs the package's ModelingToolkit / Catalyst test suite
+#     (pkg/EarthSciAST.jl/test/mtk/), which used to run inside the regular
+#     `Pkg.test()` of conformance-testing.yml's `julia-tests` job. It moved out
+#     so that job never loads ModelingToolkit or Catalyst — those tests cost it
+#     several minutes of MTK builds plus the precompile of both extensions on
+#     every leg, and having MTK in the `[targets] test` list forced the
+#     ModelingToolkitBase / SymbolicUtils holdback caps onto the whole regular
+#     test environment. See test/mtk/runtests.jl.
+#   * `mtk-compiler-agreement`, described next.
+#
 # The `mtk` leg of the compiler-agreement tier (CONFORMANCE_SPEC §5.44), kept
 # OUT of `conformance-testing.yml` but gated JUST AS OFTEN: the trigger set
 # below is the same one that workflow carries, so every push and every pull
@@ -79,6 +91,60 @@ env:
   JULIA_VERSION: 'lts'
 
 jobs:
+  # The ModelingToolkit / Catalyst test suite (pkg/EarthSciAST.jl/test/mtk/).
+  # A matrix over the same two Julia versions as conformance-testing.yml's
+  # `julia-tests`, because that is where these tests ran before they moved.
+  mtk-tests:
+    name: ModelingToolkit test suite (julia ${{ matrix.julia-version }})
+    runs-on: ubuntu-latest
+    # Cold, dominated by resolving and precompiling the SciML symbolic stack
+    # twice over (ModelingToolkit and Catalyst); warm, by the suite's
+    # `mtkcompile` builds and solves. A budget, not a measurement.
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ['lts', '1']
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Julia
+        id: setup-julia
+        uses: julia-actions/setup-julia@v3
+        with:
+          version: ${{ matrix.julia-version }}
+
+      # This job's OWN depot cache, the same approach as the job below: keyed
+      # on the environment it instantiates (test/mtk/Project.toml) plus the
+      # package's Project.toml, and on a prefix neither the conformance
+      # workflow's depot nor the compiler-agreement job's shares, so the three
+      # never evict each other's work.
+      - name: Cache the Julia depot
+        uses: actions/cache@v6
+        with:
+          path: ~/.julia
+          key: ${{ runner.os }}-mtk-tests-${{ steps.setup-julia.outputs.julia-version }}-${{ hashFiles('pkg/EarthSciAST.jl/Project.toml', 'pkg/EarthSciAST.jl/test/mtk/Project.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-mtk-tests-${{ steps.setup-julia.outputs.julia-version }}-
+
+      # Manifest.toml is gitignored repo-wide, so `Pkg.develop` is what points
+      # the suite's environment at THIS checkout rather than at a registered
+      # EarthSciAST. `--check-bounds=yes` here and below because that is what
+      # `Pkg.test()` runs a suite under, and the precompile has to happen under
+      # the same flag as the run or the run recompiles everything again.
+      - name: Instantiate the ModelingToolkit test environment
+        run: |
+          julia --check-bounds=yes --project=pkg/EarthSciAST.jl/test/mtk -e '
+            using Pkg
+            Pkg.develop(path="pkg/EarthSciAST.jl")
+            Pkg.instantiate()
+            Pkg.precompile()
+          '
+
+      - name: Run the ModelingToolkit test suite
+        run: |
+          julia --check-bounds=yes --project=pkg/EarthSciAST.jl/test/mtk pkg/EarthSciAST.jl/test/mtk/runtests.jl
+
   mtk-compiler-agreement:
     name: ModelingToolkit compiler agreement (julia)
     runs-on: ubuntu-latest

@@ -349,7 +349,7 @@ function _collect_schema_keyword!(errors::Vector{SchemaError}, x, schema, k::Str
 
     elseif k == "oneOf"
         if v isa AbstractVector
-            nmatch = count(sub -> _schema_matches(x, sub), v)
+            nmatch = count(_schema_matches(x, sub) for sub in v)
             if nmatch != 1
                 _push_schema_error!(errors, path, "oneOf")
                 # ZERO matches ⇒ every branch failed, so descend them all for the
@@ -558,6 +558,16 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
             _check_update_sources!(
                 errors, file.models[model_name],
                 "/models/$model_name", available
+            )
+        end
+    end
+
+    # 3c'. `from.records_per_sample` (esm-spec §8.5.1, `records_per_sample_invalid`).
+    if file.models !== nothing
+        for model_name in sort!(collect(keys(file.models)))
+            _check_records_per_sample!(
+                errors, file, file.models[model_name], model_name,
+                "/models/$model_name"
             )
         end
     end
@@ -1181,6 +1191,165 @@ function _check_update_sources!(
     end
     for (subsys_name, subsys) in model_subsystems(model)
         _check_update_sources!(errors, subsys, "$path/subsystems/$subsys_name", available)
+    end
+    return errors
+end
+
+"""
+    _index_set_has_two_members(file, name) -> Bool
+
+esm-spec §8.5.1 rule 3: an `interval` of size 2 or a `categorical` of two
+members. A `derived` or `ragged` set has no size known at load.
+"""
+function _index_set_has_two_members(file::EsmFile, name)::Bool
+    name isa AbstractString || return false
+    iset = get(file.index_sets, String(name), nothing)
+    iset === nothing && return false
+    iset.kind == "interval" && return iset.size == 2
+    iset.kind == "categorical" && return iset.members !== nothing && length(iset.members) == 2
+    return false
+end
+
+"""
+    _declared_variable(file, scoped) -> Union{ModelVariable, Nothing}
+
+The declaration a scoped name `Model[.Sub…].var` names, or `nothing`.
+"""
+function _declared_variable(file::EsmFile, scoped)
+    scoped isa AbstractString || return nothing
+    parts = split(scoped, '.')
+    length(parts) < 2 && return nothing
+    file.models === nothing && return nothing
+    node = get(file.models, String(parts[1]), nothing)
+    for seg in parts[2:(end - 1)]
+        node isa Model || return nothing
+        node = get(node.subsystems, String(seg), nothing)
+    end
+    node isa Model || return nothing
+    return get(node.variables, String(parts[end]), nothing)
+end
+
+"""
+    _record_shape_failure(file, coupling, scoped, own_shape; defer_empty) -> Union{Vector{String}, Nothing}
+
+esm-spec §8.5.1 rule 3 for a parameter `scoped` (`Model[.Sub…].var`) whose
+effective `records_per_sample` is 2: the first record shape that fails, or
+`nothing` when every record shape this pass can see passes.
+
+The record shape is `own_shape` when that is not empty. Otherwise it is the
+declared `shape` of EVERY target of a `param_to_var` `variable_map` entry in
+`coupling` whose `from` is `scoped`, and each must pass. A target whose
+declaration [`_declared_variable`](@ref) cannot reach (not found, or behind a
+`ref` not yet mounted) is not decidable here and is skipped, never read as
+empty. With no such entry at all the record shape is empty, which fails unless
+`defer_empty` says one may still arrive (a `coupling_import` expands at
+`flatten`).
+"""
+function _record_shape_failure(
+        file::EsmFile, coupling, scoped::AbstractString,
+        own_shape::AbstractVector; defer_empty::Bool
+    )
+    if !isempty(own_shape)
+        return _index_set_has_two_members(file, own_shape[1]) ? nothing :
+            collect(String, own_shape)
+    end
+    mapped = false
+    for entry in coupling
+        entry isa CouplingVariableMap || continue
+        (entry.from == scoped && entry.transform == "param_to_var") || continue
+        mapped = true
+        target = _declared_variable(file, entry.to)
+        target === nothing && continue
+        shape = target.shape === nothing ? String[] : collect(String, target.shape)
+        (!isempty(shape) && _index_set_has_two_members(file, shape[1])) || return shape
+    end
+    return (mapped || defer_empty) ? nothing : String[]
+end
+
+"""
+    _records_per_sample_shape_error(at, name, shape) -> String
+
+The `records_per_sample_invalid` message for a record shape that fails rule 3
+(esm-spec §8.5.1), shared by validation and `flatten`.
+"""
+_records_per_sample_shape_error(at::AbstractString, name::AbstractString, shape) =
+    "Parameter '$name' (at $at) asks for two records per sample, so its record " *
+    "shape's first dimension must be an index set of exactly two members; its " *
+    "record shape is $(shape)"
+
+"""
+    _check_records_per_sample!(errors, file, model, scope, path)
+
+esm-spec §8.5.1, `records_per_sample_invalid`, at every depth of `model`:
+`from.records_per_sample` on a rule that is not `data`; or an EFFECTIVE value
+of 2 on a parameter whose source declares no `temporal` block, or whose record
+shape fails rule 3 (see [`_record_shape_failure`](@ref)). An empty record shape
+is refused here only when no `param_to_var` entry names the parameter and the
+document's `coupling` holds no `coupling_import`; otherwise `flatten` checks
+what arrives after expansion. The pointer is the rule's: `…/update` for the
+object form, `…/update/<i>` for the array form.
+"""
+function _check_records_per_sample!(
+        errors::Vector{StructuralError}, file::EsmFile, model::Model,
+        scope::String, path::String
+    )
+    defer_empty = any(e -> e isa CouplingImport, file.coupling)
+    for name in sort!(collect(keys(model.variables)))
+        var = model.variables[name]
+        rules = var.update
+        rules === nothing && continue
+        for (ri, rule) in enumerate(rules)
+            rule.from === nothing && continue
+            at = _update_rule_path("$path/variables/$name", rules, ri)
+            if rule.kind != "data"
+                rule.from.records_per_sample === nothing && continue
+                push!(
+                    errors, StructuralError(
+                        at,
+                        "Parameter '$name' sets from.records_per_sample on a " *
+                            "'$(rule.kind)' rule; only a 'data' rule names a source " *
+                            "to read records from",
+                        ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
+                        Dict{String, Any}("variable" => name, "kind" => rule.kind)
+                    )
+                )
+                continue
+            end
+            src = (rule.source === nothing || file.data_sources === nothing) ? nothing :
+                get(file.data_sources, rule.source, nothing)
+            src === nothing && continue  # data_source_undefined reports it
+            _effective_records_per_sample(rule.from, src) == 2 || continue
+            if src.temporal === nothing
+                push!(
+                    errors, StructuralError(
+                        at,
+                        "Parameter '$name' asks for two records per sample from " *
+                            "data source '$(rule.source)', which declares no temporal " *
+                            "block and so has no successor record",
+                        ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
+                        Dict{String, Any}("variable" => name, "source" => rule.source)
+                    )
+                )
+                continue
+            end
+            own = var.shape === nothing ? String[] : var.shape
+            shape = _record_shape_failure(
+                file, file.coupling, "$scope.$name", own; defer_empty = defer_empty
+            )
+            shape === nothing && continue
+            push!(
+                errors, StructuralError(
+                    at, _records_per_sample_shape_error(at, name, shape),
+                    ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
+                    Dict{String, Any}("variable" => name, "shape" => shape)
+                )
+            )
+        end
+    end
+    for (subsys_name, subsys) in model_subsystems(model)
+        _check_records_per_sample!(
+            errors, file, subsys, "$scope.$subsys_name", "$path/subsystems/$subsys_name"
+        )
     end
     return errors
 end

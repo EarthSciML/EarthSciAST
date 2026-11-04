@@ -2,7 +2,7 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "UnitsSeveralErrorsInOneFile",
-    "description": "Invalid: four observed variables, each a transcendental function of a dimensional argument, in one file. One argument is a bare variable (exp(T), T in K); the other three are compound expressions whose unit is still known: exp(-Ts_c - 4) with Ts_c in degC, log10(p_a + p_b) in Pa, and tanh(x / tau) in m/s (esm-spec §4.8.3, §4.8.4). A checker must report all four. Python's load-time unit check sees only the bare-variable argument, and its rejection used to stop validate() before the unit pass that computes the dimension of a compound argument, so it reported only the first.",
+    "description": "Invalid: four observed variables, each a transcendental function of a dimensional argument, in one file. One argument is a bare variable (exp(T), T in K); the other three are compound expressions whose unit is still known: exp(-Ts_c - 4) with Ts_c in degC, log10(p_a + p_b) in Pa, and tanh(x / tau) in m/s (esm-spec §4.8.3, §4.8.4). A checker must report all four.",
     "authors": [
       "Chris Tessum with Claude"
     ],

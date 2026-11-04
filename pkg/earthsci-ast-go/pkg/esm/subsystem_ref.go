@@ -78,86 +78,229 @@ func resolveSubsystemRefsWithMeta(file *ESMFile, basePath string, parentMeta, ap
 // document's index_sets registry (esm-spec §4.7 index-set merge) and its closed
 // metaparameter environment (esm-spec §9.7.6 binding site 3).
 func resolveSubsystemRefsInternal(file *ESMFile, basePath string, visited map[string]bool, registry map[string]IndexSet, sources *mountedSources, parentMeta, apiMeta, rootEnv map[string]int64, precision string) error {
-	// Top-level `models.<k>` mount edges FIRST: the component each one splices in
-	// may itself carry `subsystems`, and the walk below is what resolves those.
-	if err := inlineTopLevelModelRefs(file, basePath, visited, registry, sources, parentMeta, apiMeta, rootEnv, precision); err != nil {
+	// Top-level `models.<k>` / `reaction_systems.<k>` mount edges FIRST: the
+	// component each one splices in may itself carry `subsystems`, and the walk
+	// below is what resolves those.
+	if err := inlineTopLevelRefs(file, basePath, visited, registry, sources, parentMeta, apiMeta, rootEnv, precision); err != nil {
 		return err
 	}
 
 	// Resolve subsystems in models. model.Subsystems is a map (reference type)
 	// that resolveSubsystemMap mutates in place, so no write-back of the Model
-	// struct into file.Models is needed.
+	// struct into file.Models is needed. Each mounted component's authored key
+	// orders land in file.keyOrders at the entry's pointer, as an inline
+	// subsystem's do.
 	for modelName, model := range file.Models {
 		prefix := fmt.Sprintf("/models/%s/subsystems", modelName)
-		if err := resolveSubsystemMap(model.Subsystems, basePath, visited, registry, sources, parentMeta, apiMeta, nil, rootEnv, prefix, subsystemMount, precision); err != nil {
+		landed := map[string]map[string][]string{}
+		if err := resolveSubsystemMap(model.Subsystems, basePath, visited, registry, sources, parentMeta, apiMeta, nil, rootEnv, prefix, subsystemMount, precision, landed); err != nil {
 			return fmt.Errorf("model %q subsystems: %w", modelName, err)
 		}
+		file.graftMountedOrders(prefix, landed)
 	}
 
 	// Resolve subsystems in reaction systems (rs.Subsystems is likewise mutated
 	// in place).
 	for rsName, rs := range file.ReactionSystems {
 		prefix := fmt.Sprintf("/reaction_systems/%s/subsystems", rsName)
-		if err := resolveSubsystemMap(rs.Subsystems, basePath, visited, registry, sources, parentMeta, apiMeta, nil, rootEnv, prefix, subsystemMount, precision); err != nil {
+		landed := map[string]map[string][]string{}
+		if err := resolveSubsystemMap(rs.Subsystems, basePath, visited, registry, sources, parentMeta, apiMeta, nil, rootEnv, prefix, subsystemMount, precision, landed); err != nil {
 			return fmt.Errorf("reaction_system %q subsystems: %w", rsName, err)
 		}
+		file.graftMountedOrders(prefix, landed)
 	}
 
 	return nil
 }
 
-// extractTopLevelModelRefEdges snapshots every top-level `models.<k>` MOUNT
-// EDGE out of a document's JSON text, keyed by mount name.
+// graftMountedOrders records, for each component resolveSubsystemMap mounted
+// into the map at `holder`, that component's authored key orders under
+// `holder/<key>` (see graftOrders). `landed` is resolveSubsystemMap's report.
+func (esm *ESMFile) graftMountedOrders(holder string, landed map[string]map[string][]string) {
+	if len(landed) == 0 {
+		return
+	}
+	if esm.keyOrders == nil {
+		esm.keyOrders = map[string][]string{}
+	}
+	for key, rel := range landed {
+		graftOrders(esm.keyOrders, holder+"/"+key, rel)
+	}
+}
+
+// extractTopLevelRefEdges snapshots every top-level `models.<k>` and
+// `reaction_systems.<k>` MOUNT EDGE out of a document's JSON text, keyed by
+// block and then by mount name.
 //
 // An entry is a mount edge when it carries a `ref` STRING and no inline
-// `variables` — the same test Rust and Python apply to the `oneOf [Model,
-// SubsystemRef]` union the schema gives `models.<k>`. A component that merely
-// happens to carry a `ref`-named field is not a mount.
+// `variables` (a model) or `species` (a reaction system) — the same test Rust
+// and Python apply to the `oneOf [component, SubsystemRef]` union the schema
+// gives each entry. A component that merely happens to carry a `ref`-named
+// field is not a mount.
 //
 // Returns nil for the common document with no such mount, so the resolver's
 // fast path is a nil-map length check.
-func extractTopLevelModelRefEdges(jsonStr string) map[string]map[string]any {
+func extractTopLevelRefEdges(jsonStr string) map[string]map[string]map[string]any {
 	view, err := decodeJSONView([]byte(jsonStr))
 	if err != nil {
 		return nil
 	}
-	models, ok := view["models"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	var out map[string]map[string]any
-	for name, raw := range models {
-		entry, ok := raw.(map[string]any)
-		if !ok {
-			continue
+	var out map[string]map[string]map[string]any
+	for _, mount := range topLevelMounts {
+		block, _ := view[mount.form.section].(map[string]any)
+		var edges map[string]map[string]any
+		for name, raw := range block {
+			if entry, ok := topLevelRefEdge(raw, mount.form); ok {
+				if edges == nil {
+					edges = map[string]map[string]any{}
+				}
+				edges[name] = entry
+			}
 		}
-		if _, isString := entry["ref"].(string); !isString {
-			continue
-		}
-		if _, inline := entry["variables"]; inline {
+		if len(edges) == 0 {
 			continue
 		}
 		if out == nil {
-			out = map[string]map[string]any{}
+			out = map[string]map[string]map[string]any{}
 		}
-		out[name] = entry
+		out[mount.form.section] = edges
 	}
 	return out
 }
 
-// inlineTopLevelModelRefs inlines every top-level `models.<k>` MOUNT EDGE — a
-// bare `{ref}` entry — by resolving the referenced leaf IN ITS OWN SCOPE and
-// splicing in its single model under the mount key.
+// topLevelRefEdge reports whether `raw`, one entry of a top-level
+// `form.section` block, is a bare `{ref}` mount edge — an object with a `ref`
+// string and no `form.inlineKey` — and returns it as an object if so.
+func topLevelRefEdge(raw any, form mountForm) (map[string]any, bool) {
+	entry, ok := raw.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	if _, isString := entry["ref"].(string); !isString {
+		return nil, false
+	}
+	if _, inline := entry[form.inlineKey]; inline {
+		return nil, false
+	}
+	return entry, true
+}
+
+// topLevelRefEntries returns the raw view's `form.section` block and the
+// entries of it that are bare `{ref}` mount edges (topLevelRefEdge), keyed by
+// name. `edges` is nil when there are none; `block` is nil when the view has
+// no such block.
+func topLevelRefEntries(view map[string]any, form mountForm) (block, edges map[string]any) {
+	block, _ = view[form.section].(map[string]any)
+	for name, raw := range block {
+		if entry, ok := topLevelRefEdge(raw, form); ok {
+			if edges == nil {
+				edges = map[string]any{}
+			}
+			edges[name] = entry
+		}
+	}
+	return block, edges
+}
+
+// markUnresolvedTopLevelMounts marks the EMPTY component each still-unresolved
+// top-level `{ref}` mount edge decoded to (Model.unresolvedMountRef,
+// ReactionSystem.unresolvedMountRef). esm-spec §9.6.6: loading such an entry as
+// an empty component would be silently wrong, so Flatten, Validate and
+// DeriveODEs read the mark and report `unresolved_subsystem_ref`
+// (unresolvedTopLevelMountError). Resolution replaces the entry outright, which
+// clears the mark.
+func markUnresolvedTopLevelMounts(file *ESMFile) {
+	for name, edge := range file.topLevelRefs[topLevelModelMount.section] {
+		if m, ok := file.Models[name]; ok {
+			m.unresolvedMountRef, _ = edge["ref"].(string)
+			file.Models[name] = m
+		}
+	}
+	for name, edge := range file.topLevelRefs[topLevelReactionSystemMount.section] {
+		if rs, ok := file.ReactionSystems[name]; ok {
+			rs.unresolvedMountRef, _ = edge["ref"].(string)
+			file.ReactionSystems[name] = rs
+		}
+	}
+}
+
+// unresolvedTopLevelMountError is the `unresolved_subsystem_ref` a consumer
+// raises on reaching a top-level `<section>.<name>` entry that is still an
+// unresolved `{ref}` mount edge (see markUnresolvedTopLevelMounts).
+func unresolvedTopLevelMountError(section, name, ref string) error {
+	return withETPath(newETErr(CodeUnresolvedSubsystemRef, fmt.Sprintf(
+		"%s.%s is a `{ref}` mount (ref %q) that has not been resolved: load the document with LoadPath, "+
+			"or call ResolveSubsystemRefs, before using it (esm-spec §4.7)", section, name, ref)),
+		"/"+section+"/"+name)
+}
+
+// topLevelMount is one of esm-spec §4.7's two top-level attachment points: the
+// mount form, and how the component a leaf resolves to lands in the typed file.
+type topLevelMount struct {
+	form mountForm
+	// land decodes `raw` — the resolved leaf component, its inline `tests`
+	// already dropped — and stores it under `name`. `orders` is the component's
+	// authored key orders, relative to the component itself.
+	land func(file *ESMFile, name string, raw []byte, orders map[string][]string) error
+}
+
+// topLevelMounts is both top-level attachment points, models first, so the two
+// forms' edges resolve in a fixed order.
+var topLevelMounts = []topLevelMount{
+	{form: topLevelModelMount, land: landTopLevelModel},
+	{form: topLevelReactionSystemMount, land: landTopLevelReactionSystem},
+}
+
+// landTopLevelModel is the `models.<k>` form's topLevelMount.land.
+func landTopLevelModel(file *ESMFile, name string, raw []byte, _ map[string][]string) error {
+	var model Model
+	if err := json.Unmarshal(raw, &model); err != nil {
+		return err
+	}
+	// The decode above leaves json.Number tokens in every Expression slot,
+	// exactly as the document-level decode does; LoadString's own
+	// normalizeNumericLiterals has already run by the time refs resolve, so
+	// this component needs its own pass (RFC §5.4.6 int/float round-trip).
+	normalizeModelLiterals(&model)
+	if file.Models == nil {
+		file.Models = map[string]Model{}
+	}
+	file.Models[name] = model
+	return nil
+}
+
+// landTopLevelReactionSystem is the `reaction_systems.<k>` form's
+// topLevelMount.land. The leaf's authored `species` order goes onto the system
+// itself, as attachSpeciesOrders does for an inline one, so DeriveODEs and
+// StoichiometricMatrix see the order the leaf declared.
+func landTopLevelReactionSystem(file *ESMFile, name string, raw []byte, orders map[string][]string) error {
+	var rs ReactionSystem
+	if err := json.Unmarshal(raw, &rs); err != nil {
+		return err
+	}
+	normalizeReactionSystemLiterals(&rs)
+	rs.speciesOrder = orders["/species"]
+	if file.ReactionSystems == nil {
+		file.ReactionSystems = map[string]ReactionSystem{}
+	}
+	file.ReactionSystems[name] = rs
+	return nil
+}
+
+// inlineTopLevelRefs inlines every top-level `models.<k>` and
+// `reaction_systems.<k>` MOUNT EDGE — a bare `{ref}` entry — by resolving the
+// referenced leaf IN ITS OWN SCOPE and splicing in its component under the
+// mount key.
 //
-// esm-spec §4.7 "Two mount forms, one mechanism": a top-level `models.<k>`
-// `{ref}` and a `subsystems.<k>` `{ref}` "differ only in where the mounted
-// component lands", and a binding MUST NOT make them differ otherwise. So there
-// is no second edge pipeline here. Each edge goes to resolveSubsystemMap — the
-// one implementation in this binding — through a one-entry holder map, which
-// runs the normative order: the leaf resolves in its own scope (library gates,
-// this edge's `bindings` and §9.7.10 injection, its metaparameter close and
-// fold, the §9.6.3 fixpoint), then this edge's `index_set_rename` applies to the
-// resolved leaf, then the renamed `index_sets` merge into `registry`
+// esm-spec §4.7 "Two mount forms, one mechanism": a top-level `{ref}` and a
+// `subsystems.<k>` `{ref}` "differ only in where the mounted component lands",
+// and a binding MUST NOT make them differ otherwise. So there is no second edge
+// pipeline here. Each edge goes to resolveSubsystemMap — the one implementation
+// in this binding — through a one-entry holder map, which runs the normative
+// order: the leaf resolves in its own scope (library gates, this edge's
+// `bindings` and §9.7.10 injection, its metaparameter close and fold, the
+// §9.6.3 fixpoint), then this edge's `index_set_rename` applies to the resolved
+// leaf, then the renamed `index_sets` merge into `registry`
 // deep-equal-or-`subsystem_index_set_conflict`, then the leaf's own nested
 // mounts resolve in the leaf's directory so the merge composes transitively.
 //
@@ -166,126 +309,112 @@ func extractTopLevelModelRefEdges(jsonStr string) map[string]map[string]any {
 // what lets a coupled document name its components by file and have
 // `<key>.<var>` coupling endpoints resolve with no rewriting — and its inline
 // `tests` are dropped, because a test asserts something about the leaf under the
-// leaf's OWN standalone conditions and this document may couple it (§6.6).
+// leaf's OWN standalone conditions and this document may couple it (§6.6). The
+// leaf's authored key orders land in file.keyOrders at the mount's pointer, so
+// declaration order is the leaf's, exactly as for an inline copy.
 //
-// The edges arrive as the raw JSON LoadString captured before the typed decode:
-// `ESMFile.Models` is a `map[string]Model`, so a bare `{ref}` entry decodes to an
-// EMPTY Model and the mount would otherwise be lost outright. Resolving them
-// HERE rather than on that raw text is what keeps this form on the same side of
-// the root document's §9.7.6 close as the `subsystems.<k>` form: both merge into
-// `file.IndexSets`, whose sizes the root close has already folded to integers.
-// That is "MUST NOT make them differ" applied to merge ORDER, not just to the
-// pipeline — merging a leaf's folded axis against an unfolded importer
-// declaration is the fold-before-merge collision issue #198 reported.
-func inlineTopLevelModelRefs(file *ESMFile, basePath string, visited map[string]bool,
+// The edges arrive as the raw JSON LoadString captured before the typed decode
+// (ESMFile.topLevelRefs), because the decode turns a bare `{ref}` entry into an
+// EMPTY component. Resolving them HERE rather than on that raw text is what keeps
+// this form on the same side of the root document's §9.7.6 close as the
+// `subsystems.<k>` form: both merge into `file.IndexSets`, whose sizes the root
+// close has already folded to integers. That is "MUST NOT make them differ"
+// applied to merge ORDER, not just to the pipeline — merging a leaf's folded axis
+// against an unfolded importer declaration is the fold-before-merge collision
+// issue #198 reported.
+func inlineTopLevelRefs(file *ESMFile, basePath string, visited map[string]bool,
 	registry map[string]IndexSet, sources *mountedSources, parentMeta, apiMeta, rootEnv map[string]int64, precision string) error {
-	if len(file.topLevelModelRefs) == 0 {
-		return nil
-	}
-	if file.Models == nil {
-		file.Models = map[string]Model{}
-	}
-	for _, name := range sortedKeys(file.topLevelModelRefs) {
-		edge := file.topLevelModelRefs[name]
-		ref, _ := edge["ref"].(string)
-		holder := map[string]any{name: edge}
-		if err := resolveSubsystemMap(holder, basePath, visited, registry, sources, parentMeta, apiMeta, nil,
-			rootEnv, "/models", topLevelModelMount, precision); err != nil {
-			return err
+	for _, mount := range topLevelMounts {
+		form := mount.form
+		edges := file.topLevelRefs[form.section]
+		for _, name := range sortedKeys(edges) {
+			edge := edges[name]
+			ref, _ := edge["ref"].(string)
+			at := "/" + form.section + "/" + name
+			holder := map[string]any{name: edge}
+			landed := map[string]map[string][]string{}
+			if err := resolveSubsystemMap(holder, basePath, visited, registry, sources, parentMeta, apiMeta, nil,
+				rootEnv, "/"+form.section, form, precision, landed); err != nil {
+				return err
+			}
+			resolvedRaw, ok := holder[name].(map[string]any)
+			if !ok {
+				return withETPath(newETErr(CodeUnresolvedSubsystemRef, fmt.Sprintf(
+					"%s %q: ref %q did not resolve to a component (esm-spec §4.7)",
+					form.noun, name, ref)), at)
+			}
+			// esm-spec §6.6: inline tests do NOT cross a mount edge. Dropped on
+			// the RAW map, before the typed decode, so a leaf's tests are not
+			// merely discarded but never interpreted — this document is not the
+			// one that gets to say whether they are well-formed.
+			delete(resolvedRaw, "tests")
+			b, err := json.Marshal(resolvedRaw)
+			if err != nil {
+				return fmt.Errorf("%s %q: re-encoding resolved ref %q: %w", form.noun, name, ref, err)
+			}
+			if err := mount.land(file, name, b, landed[name]); err != nil {
+				return fmt.Errorf("%s %q: decoding resolved ref %q: %w", form.noun, name, ref, err)
+			}
+			file.graftMountedOrders("/"+form.section, landed)
+			// The edge is CONSUMED. What remains in topLevelRefs is the set of
+			// mounts nobody has resolved yet, which is what the serializer writes
+			// back out (restoreUnresolvedTopLevelMounts) and what makes a second
+			// ResolveSubsystemRefs call a no-op instead of a redundant
+			// re-resolve.
+			delete(edges, name)
 		}
-		resolvedRaw, ok := holder[name].(map[string]any)
-		if !ok {
-			return newETErr(CodeUnresolvedSubsystemRef, fmt.Sprintf(
-				"top-level model %q: ref %q did not resolve to a component (esm-spec §4.7)",
-				name, ref))
+		if len(edges) == 0 {
+			delete(file.topLevelRefs, form.section)
 		}
-		// A top-level `models.<k>` mount must land a MODEL. A reaction system is
-		// a component, and a `subsystems.<k>` edge may mount one, but splicing one
-		// under `models` would make that block hold two different component kinds
-		// under one key space. `variables` is the positive test: the schema makes
-		// it required of a Model and absent from a ReactionSystem.
-		if _, isModel := resolvedRaw["variables"]; !isModel {
-			return newETErr(CodeAmbiguousSubsystemRef, fmt.Sprintf(
-				"top-level model %q: ref %q resolves to a component that is not a model; "+
-					"a models.<k> mount requires exactly one top-level model (esm-spec §4.7)",
-				name, ref))
-		}
-		// esm-spec §6.6: inline tests do NOT cross a mount edge. Dropped on the
-		// RAW map, before the typed decode below, so a leaf's tests are not
-		// merely discarded but never interpreted — this document is not the one
-		// that gets to say whether they are well-formed.
-		delete(resolvedRaw, "tests")
-		b, err := json.Marshal(resolvedRaw)
-		if err != nil {
-			return fmt.Errorf("top-level model %q: re-encoding resolved ref %q: %w", name, ref, err)
-		}
-		var model Model
-		if err := json.Unmarshal(b, &model); err != nil {
-			return fmt.Errorf("top-level model %q: decoding resolved ref %q: %w", name, ref, err)
-		}
-		// The decode above leaves json.Number tokens in every Expression slot,
-		// exactly as the document-level decode does; LoadString's own
-		// normalizeNumericLiterals has already run by the time refs resolve, so
-		// this component needs its own pass (RFC §5.4.6 int/float round-trip).
-		normalizeModelLiterals(&model)
-		file.Models[name] = model
-		// The edge is CONSUMED. What remains in topLevelModelRefs is the set of
-		// mounts nobody has resolved yet, which is what the serializer writes
-		// back out (restoreUnresolvedTopLevelMounts) and what makes a second
-		// ResolveSubsystemRefs call a no-op instead of a redundant re-resolve.
-		delete(file.topLevelModelRefs, name)
 	}
 	return nil
 }
 
-// inlineNestedTopLevelModelRefs inlines every top-level `models.<k>` MOUNT EDGE
-// that a MOUNTED document carries of its own, in that document's own directory
-// (esm-spec §4.7 "Two mount forms, one mechanism": the top-level form composes
-// with itself, because the component it lands is a top-level system and a
-// top-level system is what the form mounts).
+// inlineNestedTopLevelRefs inlines every top-level `models.<k>` and
+// `reaction_systems.<k>` MOUNT EDGE that a raw document view carries, in that
+// document's own directory: the root's, from inlineRootRefsRaw, or a MOUNTED
+// document's (esm-spec §4.7 "Two mount forms, one mechanism": the top-level form
+// composes with itself, because the component it lands is a top-level system
+// and a top-level system is what the form mounts).
 //
 // The edges go through resolveSubsystemMap — the one edge-pipeline
-// implementation in this binding — under the top-level mount form, so each
-// nested leaf gets the same normative order, the same diagnostics, and the same
-// `visited` path-scoped cycle set the root's edges get. That recursion re-enters
-// this function for ITS leaf, so a chain of any depth composes.
+// implementation in this binding — under the matching top-level mount form, so
+// each nested leaf gets the same normative order, the same diagnostics, and the
+// same `visited` path-scoped cycle set the root's edges get. That recursion
+// re-enters this function for ITS leaf, so a chain of any depth composes.
+//
+// `pathPrefix` is the pointer the edges' blocks hang under (`""` at the root,
+// so a root edge is reported at `/models/<k>` / `/reaction_systems/<k>`).
+// `orders` is the view's own key-order table (extractTemplateOrders); each
+// landed component's authored orders are grafted into it at
+// `/<block>/<k>`, so the view carries the leaf's declaration order rather than
+// whatever order the re-encoded view falls back to.
 //
 // esm-spec §6.6: a mounted component's inline `tests` do not cross a mount edge,
 // at any depth — dropped here on the raw map for the same reason the root's
 // inliner drops them, so the leaf's assertions are never interpreted by a
 // document that may go on to couple it.
-func inlineNestedTopLevelModelRefs(view map[string]any, basePath string, visited map[string]bool,
-	registry map[string]IndexSet, sources *mountedSources, parentMeta, apiMeta, forwarded, rootEnv map[string]int64, pathPrefix string, precision string) error {
-	models, ok := view["models"].(map[string]any)
-	if !ok || len(models) == 0 {
-		return nil
-	}
-	edges := map[string]any{}
-	for _, name := range sortedKeys(models) {
-		entry, ok := models[name].(map[string]any)
-		if !ok {
+func inlineNestedTopLevelRefs(view map[string]any, basePath string, visited map[string]bool,
+	registry map[string]IndexSet, sources *mountedSources, parentMeta, apiMeta, forwarded, rootEnv map[string]int64,
+	pathPrefix string, precision string, orders map[string][]string) error {
+	for _, mount := range topLevelMounts {
+		form := mount.form
+		comps, edges := topLevelRefEntries(view, form)
+		if len(edges) == 0 {
 			continue
 		}
-		if _, isString := entry["ref"].(string); !isString {
-			continue
+		landed := map[string]map[string][]string{}
+		if err := resolveSubsystemMap(edges, basePath, visited, registry, sources, parentMeta, apiMeta, forwarded,
+			rootEnv, pathPrefix+"/"+form.section, form, precision, landed); err != nil {
+			return err
 		}
-		if _, inline := entry["variables"]; inline {
-			continue
+		for name, resolved := range edges {
+			if m, ok := resolved.(map[string]any); ok {
+				delete(m, "tests")
+			}
+			comps[name] = resolved
+			graftOrders(orders, "/"+form.section+"/"+name, landed[name])
 		}
-		edges[name] = entry
-	}
-	if len(edges) == 0 {
-		return nil
-	}
-	if err := resolveSubsystemMap(edges, basePath, visited, registry, sources, parentMeta, apiMeta, forwarded,
-		rootEnv, pathPrefix, topLevelModelMount, precision); err != nil {
-		return err
-	}
-	for name, resolved := range edges {
-		if m, ok := resolved.(map[string]any); ok {
-			delete(m, "tests")
-		}
-		models[name] = resolved
 	}
 	return nil
 }
@@ -472,23 +601,41 @@ func foldNestedIndexSets(view map[string]any, leafRegistry map[string]IndexSet, 
 }
 
 // mountForm names which of esm-spec §4.7's two attachment points a `{ref}` mount
-// edge sits at: a `subsystems.<k>` entry, or a top-level `models.<k>` entry.
+// edge sits at: a `subsystems.<k>` entry, or a top-level `models.<k>` /
+// `reaction_systems.<k>` entry.
 //
 // "Two mount forms, one mechanism" — the forms differ ONLY in where the mounted
 // component lands, and a binding MUST NOT make them differ otherwise. So this
-// steers diagnostic wording and nothing else: both forms run resolveSubsystemMap,
-// which is the one implementation of the §4.7 edge pipeline in this binding.
+// steers diagnostic wording and which component the leaf yields, and nothing
+// else: every form runs resolveSubsystemMap, which is the one implementation of
+// the §4.7 edge pipeline in this binding.
 type mountForm struct {
 	// section is the document block the edge lives in, used to label the
 	// §9.7.6 binding scope (`subsystems.Soil` / `models.Soil`).
 	section string
 	// noun names the edge in prose diagnostics ("subsystem \"Soil\"").
 	noun string
+	// inlineKey marks an entry of a top-level block as an INLINE component
+	// rather than a bare `{ref}` stub: `variables` for a model, `species` for a
+	// reaction system. Empty for the `subsystems.<k>` form.
+	inlineKey string
+	// selector is the edge key naming one component of a leaf that declares
+	// several of the form's kind: `model` / `reaction_system`. Empty for the
+	// `subsystems.<k>` form, whose leaf must hold exactly one system.
+	selector string
+	// kindNoun names one component of the form's kind in diagnostics.
+	kindNoun string
 }
 
 var (
-	subsystemMount     = mountForm{section: "subsystems", noun: "subsystem"}
-	topLevelModelMount = mountForm{section: "models", noun: "top-level model"}
+	subsystemMount = mountForm{section: "subsystems", noun: "subsystem"}
+	// The two top-level attachment points. Each one's leaf yields the single
+	// component of the form's kind it declares, or the one the edge's selector
+	// names (extractTopLevelComponentRaw).
+	topLevelModelMount = mountForm{section: "models", noun: "top-level model", inlineKey: "variables",
+		selector: "model", kindNoun: "model"}
+	topLevelReactionSystemMount = mountForm{section: "reaction_systems", noun: "top-level reaction system", inlineKey: "species",
+		selector: "reaction_system", kindNoun: "reaction system"}
 )
 
 // resolveSubsystemMap resolves references in a single subsystems map.
@@ -502,7 +649,15 @@ var (
 // then the §9.6.3 rewrite fixpoint, then nested subsystem refs recursively.
 // Working on the raw view keeps full Expression fidelity (aggregate /
 // makearray fields the typed ExprNode does not model survive intact).
-func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map[string]bool, registry map[string]IndexSet, sources *mountedSources, parentMeta, apiMeta, forwarded, rootEnv map[string]int64, pathPrefix string, form mountForm, precision string) (err error) {
+//
+// A decoded map has lost the leaf's declaration order, which is normative
+// (esm-libraries-spec §4.7.5 step 4). So when `landed` is non-nil, each entry
+// this call mounts records there the mounted component's AUTHORED key orders,
+// keyed relative to the component ("" is the component's own key list,
+// "/species" its species, ...), for the caller to graft in at wherever it puts
+// the component (graftOrders). Nested mounts inside the leaf are grafted into
+// the leaf's table first, so the record covers the whole resolved component.
+func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map[string]bool, registry map[string]IndexSet, sources *mountedSources, parentMeta, apiMeta, forwarded, rootEnv map[string]int64, pathPrefix string, form mountForm, precision string, landed map[string]map[string][]string) (err error) {
 	if len(subsystems) == 0 {
 		return nil
 	}
@@ -578,6 +733,10 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		if err != nil {
 			return fmt.Errorf("%s %q: failed to parse referenced file %q: %w", form.noun, key, refKey, err)
 		}
+		// The leaf's authored key orders, read off its text before anything
+		// re-encodes it. Its own nested mounts graft their components' orders
+		// in below, so by extraction this covers the whole resolved leaf.
+		orders := extractTemplateOrders(string(data))
 		// esm-spec §4.7 "Working precision crosses a mount": read before
 		// resolution can consume the leaf's `domain`. The leaf's own edges
 		// compare against ITS effective precision; this edge against `precision`,
@@ -723,22 +882,26 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 					// inlined at this entry's pointer — best-effort deeper prefix (not
 					// a corpus-pinned location).
 					nestedPrefix := fmt.Sprintf("%s/%s/subsystems", pathPrefix, key)
-					if err := resolveSubsystemMap(subs, refBasePath, visited, leafRegistry, leafSources, childMeta, apiMeta, forward, childFoldEnv, nestedPrefix, subsystemMount, leafEffective); err != nil {
+					nestedLanded := map[string]map[string][]string{}
+					if err := resolveSubsystemMap(subs, refBasePath, visited, leafRegistry, leafSources, childMeta, apiMeta, forward, childFoldEnv, nestedPrefix, subsystemMount, leafEffective, nestedLanded); err != nil {
 						return fmt.Errorf("%s %q: resolving nested refs in %q: %w", form.noun, key, refKey, err)
+					}
+					for sub, rel := range nestedLanded {
+						graftOrders(orders, fmt.Sprintf("/%s/%s/subsystems/%s", kind, cname, sub), rel)
 					}
 				}
 			}
 		}
 
 		// The mounted document may itself be an ASSEMBLY — a document whose own
-		// `models.<k>` entries are `{ref}` mount edges. esm-spec §4.7's top-level
+		// `models.<k>` / `reaction_systems.<k>` entries are `{ref}` mount edges. esm-spec §4.7's top-level
 		// form lands its component as a top-level system precisely so that an
 		// assembly can be named by file and mounted onward, so the form has to
 		// compose with itself. Inline those edges HERE, with the rest of the
 		// leaf's nested mounts, or `extractSingleSystemRaw` picks the leaf's
 		// UNRESOLVED `{ref}` edge and splices it in as though it were the
 		// component: the document loads clean and carries a bare mount edge
-		// where a model belongs.
+		// where a system belongs.
 		//
 		// Not gated on `form`: it is the MOUNTED DOCUMENT's shape that decides,
 		// not which attachment point mounted it, and "two mount forms, one
@@ -746,8 +909,8 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// recursion runs through resolveSubsystemMap, so `visited` gives it the
 		// same path-scoped cycle detection every other edge gets. Matches the
 		// Rust reference, which composes at both forms.
-		if err := inlineNestedTopLevelModelRefs(view, refBasePath, visited, leafRegistry, leafSources, childMeta, apiMeta, forward,
-			childFoldEnv, fmt.Sprintf("%s/%s/models", pathPrefix, key), leafEffective); err != nil {
+		if err := inlineNestedTopLevelRefs(view, refBasePath, visited, leafRegistry, leafSources, childMeta, apiMeta, forward,
+			childFoldEnv, fmt.Sprintf("%s/%s", pathPrefix, key), leafEffective, orders); err != nil {
 			return fmt.Errorf("%s %q: resolving nested refs in %q: %w", form.noun, key, refKey, err)
 		}
 
@@ -785,7 +948,6 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// Resolve the referenced document's §9.7 machinery with this edge's
 		// bindings, then run the §9.6.3 rewrite fixpoint so the inlined
 		// component carries only normal Expression ASTs (Option A).
-		orders := extractTemplateOrders(string(data))
 		// This IS a §4.7 mount edge. `mountedLeaf` keeps an axis this leaf cannot
 		// size symbolic so it merges into the MOUNTING registry and closes there
 		// (§9.7.6 site 5), and `mountDeclared` covers the leaf's OWN nested
@@ -889,10 +1051,36 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 			}
 		}
 
-		// Extract the single top-level model or reaction system
-		resolved, err := extractSingleSystemRaw(view, refKey)
+		// Extract the single top-level model or reaction system (at a
+		// top-level form: the leaf's single component of that form's kind, or
+		// the one the edge's selector names).
+		var resolved any
+		var leafAt string
+		if form.selector != "" {
+			resolved, leafAt, err = extractTopLevelComponentRaw(form, view, value, ref, refKey)
+		} else {
+			resolved, leafAt, err = extractSingleSystemRaw(view, refKey)
+		}
 		if err != nil {
 			return fmt.Errorf("%s %q: %w", form.noun, key, err)
+		}
+		// A top-level mount lands its component in the block of that kind, so
+		// the leaf's component must BE of that kind: splicing a reaction system
+		// under `models` would make that block hold two different component
+		// kinds under one key space. `form.inlineKey` is the positive test (the
+		// schema makes `variables` required of a Model and absent from a
+		// ReactionSystem). A `subsystems.<k>` edge may mount either kind.
+		if form.inlineKey != "" {
+			comp, _ := resolved.(map[string]any)
+			if _, ofKind := comp[form.inlineKey]; !ofKind {
+				return newETErr(CodeAmbiguousSubsystemRef, fmt.Sprintf(
+					"%s %q: ref %q resolves to a component with no `%s`, which is not the kind of "+
+						"system a %s.<k> mount lands (esm-spec §4.7)",
+					form.noun, key, ref, form.inlineKey, form.section))
+			}
+		}
+		if landed != nil {
+			landed[key] = subtreeOrders(orders, leafAt)
 		}
 		if leafDeclares {
 			if err := carryMountedElementType(resolved, leafPrecision, precision,
@@ -1014,23 +1202,57 @@ func extractRefWithBindings(value any) (string, map[string]any, bool) {
 	return refStr, bindings, true
 }
 
+// extractTopLevelComponentRaw is the component a top-level `models.<k>` or
+// `reaction_systems.<k>` `{ref}` mount splices in: the referenced document's
+// single component of the form's kind, or the one the edge's selector (`model`
+// / `reaction_system`) names, with its pointer in that document. A leaf with
+// several and no selector, and a selector naming a component the leaf does not
+// declare, are `unresolved_subsystem_ref`, as is a leaf with none of the
+// form's kind (a reaction-system-only leaf under `models.<k>`, say), at both
+// forms, as Julia raises them.
+func extractTopLevelComponentRaw(form mountForm, view map[string]any, edge any, ref, path string) (any, string, error) {
+	comps, _ := view[form.section].(map[string]any)
+	names := sortedKeys(comps)
+	if len(names) == 0 {
+		return nil, "", newETErr(CodeUnresolvedSubsystemRef,
+			fmt.Sprintf("ref %q: referenced file %q has no %s block (esm-spec §4.7)", ref, path, form.section))
+	}
+	available := strings.Join(names, ", ")
+	if m, ok := edge.(map[string]any); ok {
+		if sel, ok := m[form.selector].(string); ok {
+			comp, found := comps[sel]
+			if !found {
+				return nil, "", newETErr(CodeUnresolvedSubsystemRef,
+					fmt.Sprintf("ref %q has no %s %q (available: %s)", ref, form.kindNoun, sel, available))
+			}
+			return comp, "/" + form.section + "/" + sel, nil
+		}
+	}
+	if len(names) > 1 {
+		return nil, "", newETErr(CodeUnresolvedSubsystemRef,
+			fmt.Sprintf("ref %q resolves to a file with several %s (%s); name one with the `%s` selector (esm-spec §4.7)",
+				ref, form.section, available, form.selector))
+	}
+	return comps[names[0]], "/" + form.section + "/" + names[0], nil
+}
+
 // extractSingleSystemRaw extracts the single top-level model or reaction system
-// from a referenced ESM document's RAW view. If the file contains exactly one
-// such component it is returned as-is (a generic map, preserving every
-// Expression field verbatim). If there are multiple systems or none, an error is
-// returned.
+// from a referenced ESM document's RAW view, with its pointer in that document.
+// If the file contains exactly one such component it is returned as-is (a
+// generic map, preserving every Expression field verbatim). If there are
+// multiple systems or none, an error is returned.
 //
 // A `data_sources` entry is NOT a component from esm 1.0.0 and cannot be
 // mounted as a subsystem (esm-spec §8, and the `subsystems` schema note), so a
 // referenced file whose only payload is a source catalogue has NO mountable
 // system — which is the correct rejection, not an oversight.
-func extractSingleSystemRaw(view map[string]any, path string) (any, error) {
+func extractSingleSystemRaw(view map[string]any, path string) (any, string, error) {
 	models, _ := view["models"].(map[string]any)
 	rss, _ := view["reaction_systems"].(map[string]any)
 	total := len(models) + len(rss)
 
 	if total == 0 {
-		return nil, newETErr(CodeAmbiguousSubsystemRef,
+		return nil, "", newETErr(CodeAmbiguousSubsystemRef,
 			fmt.Sprintf("referenced file %q contains no models or reaction systems; exactly one is required (esm-spec §4.7)", path))
 	}
 
@@ -1039,21 +1261,21 @@ func extractSingleSystemRaw(view map[string]any, path string) (any, error) {
 		// system — with several, the mount is ambiguous. `ref_ambiguous_system`
 		// is the code the shared corpus pins
 		// (tests/invalid/subsystem_ref_ambiguous.esm).
-		return nil, newETErr(CodeAmbiguousSubsystemRef,
+		return nil, "", newETErr(CodeAmbiguousSubsystemRef,
 			fmt.Sprintf("referenced file %q contains %d systems (expected exactly 1); "+
 				"models=%d, reaction_systems=%d", path, total, len(models), len(rss)))
 	}
 
 	// Extract the single system. Precedence: models -> reaction_systems.
-	for _, m := range models {
-		return m, nil
+	for name, m := range models {
+		return m, "/models/" + name, nil
 	}
-	for _, rs := range rss {
-		return rs, nil
+	for name, rs := range rss {
+		return rs, "/reaction_systems/" + name, nil
 	}
 
 	// Unreachable, but satisfies the compiler
-	return nil, fmt.Errorf("unexpected state extracting system from %q", path)
+	return nil, "", fmt.Errorf("unexpected state extracting system from %q", path)
 }
 
 // documentHasSubsystemRefs reports whether any component in the raw view mounts
@@ -1061,6 +1283,11 @@ func extractSingleSystemRaw(view map[string]any, path string) (any, error) {
 // the document, which sorts map keys, so it must be skipped outright for the
 // overwhelmingly common document that mounts nothing.
 func documentHasSubsystemRefs(view map[string]any) bool {
+	for _, mount := range topLevelMounts {
+		if _, edges := topLevelRefEntries(view, mount.form); len(edges) > 0 {
+			return true
+		}
+	}
 	for _, kind := range templateComponentKinds {
 		comps, ok := view[kind].(map[string]any)
 		if !ok {
@@ -1070,11 +1297,6 @@ func documentHasSubsystemRefs(view map[string]any) bool {
 			comp, ok := compRaw.(map[string]any)
 			if !ok {
 				continue
-			}
-			if _, isRef := comp["ref"].(string); isRef {
-				if _, inline := comp["variables"]; !inline {
-					return true
-				}
 			}
 			if subs, ok := comp["subsystems"].(map[string]any); ok {
 				for _, sub := range subs {
@@ -1111,10 +1333,17 @@ func documentHasSubsystemRefs(view map[string]any) bool {
 // Merging them here would put them back before the close and reverse that rule;
 // `tests/fixtures/data_source_extent_scope/mount_merge_order_*.esm` is the
 // guard that catches it.
-func inlineRootRefsRaw(view map[string]any, basePath string, apiMeta map[string]int64) (map[string]IndexSet, error) {
+//
+// The caller re-encodes the inlined view, which sorts every object's keys, so
+// it also gets back the document's key-order table: the root's own, read off
+// `authored` (the text `view` was decoded from), with each mounted component's
+// authored orders grafted in at its pointer. Both results are nil for a
+// document that mounts nothing.
+func inlineRootRefsRaw(view map[string]any, authored string, basePath string, apiMeta map[string]int64) (map[string]IndexSet, map[string][]string, error) {
 	if !documentHasSubsystemRefs(view) {
-		return nil, nil
+		return nil, nil, nil
 	}
+	orders := extractTemplateOrders(authored)
 	visited := make(map[string]bool)
 	staged := map[string]IndexSet{}
 	// esm-spec §4.7 "A mounted document's data sources": every mount's
@@ -1131,11 +1360,12 @@ func inlineRootRefsRaw(view map[string]any, basePath string, apiMeta map[string]
 	if p, ok := declaredElementTypeRaw(view); ok {
 		precision = p
 	}
-	// Top-level `models.<k>` mount edges first: the component each one splices
-	// in may itself carry `subsystems`, and the walk below resolves those.
-	if err := inlineNestedTopLevelModelRefs(view, basePath, visited, staged, mounted, parentMeta, apiMeta, nil,
-		parentMeta, "/models", precision); err != nil {
-		return nil, err
+	// Top-level `models.<k>` / `reaction_systems.<k>` mount edges first: the
+	// component each one splices in may itself carry `subsystems`, and the walk
+	// below resolves those.
+	if err := inlineNestedTopLevelRefs(view, basePath, visited, staged, mounted, parentMeta, apiMeta, nil,
+		parentMeta, "", precision, orders); err != nil {
+		return nil, nil, err
 	}
 	for _, kind := range templateComponentKinds {
 		comps, ok := view[kind].(map[string]any)
@@ -1152,14 +1382,18 @@ func inlineRootRefsRaw(view map[string]any, basePath string, apiMeta map[string]
 				continue
 			}
 			prefix := fmt.Sprintf("/%s/%s/subsystems", kind, cname)
+			landed := map[string]map[string][]string{}
 			if err := resolveSubsystemMap(subs, basePath, visited, staged, mounted, parentMeta, apiMeta, nil,
-				parentMeta, prefix, subsystemMount, precision); err != nil {
-				return nil, fmt.Errorf("%s %q subsystems: %w", kind, cname, err)
+				parentMeta, prefix, subsystemMount, precision, landed); err != nil {
+				return nil, nil, fmt.Errorf("%s %q subsystems: %w", kind, cname, err)
+			}
+			for sub, rel := range landed {
+				graftOrders(orders, prefix+"/"+sub, rel)
 			}
 		}
 	}
 	mergeMountedDataSources(view, mounted)
-	return staged, nil
+	return staged, orders, nil
 }
 
 // applyStagedIndexSets merges the §4.7 contributions inlineRootRefsRaw staged

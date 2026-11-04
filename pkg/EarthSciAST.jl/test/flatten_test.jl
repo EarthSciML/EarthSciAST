@@ -1,7 +1,6 @@
 using EarthSciAST
 using EarthSciAST: ASTExpr as ESMExpr
 using Test
-import ModelingToolkit
 
 include("testutils.jl")  # _op builder + TESTUTILS_REPO_ROOT
 

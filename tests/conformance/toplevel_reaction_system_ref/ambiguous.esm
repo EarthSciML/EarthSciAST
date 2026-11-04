@@ -1,0 +1,13 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "ambiguous",
+  "description": "Mounts a two-system leaf with no reaction_system selector: refused, since which reaction system to mount is ambiguous.",
+  "license": "MIT"
+ },
+ "reaction_systems": {
+  "Chem": {
+   "ref": "./two_systems_leaf.esm"
+  }
+ }
+}

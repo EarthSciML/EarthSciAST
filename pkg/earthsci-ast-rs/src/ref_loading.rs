@@ -70,7 +70,7 @@ pub(crate) fn root_metaparameter_env(
 /// mesh file whose axis size disagrees with the importer must fail at load
 /// rather than the importer silently winning) — and it applies to BOTH model
 /// mount forms: a `subsystems.<k>` ref and a top-level `models.<k>` ref
-/// ([`inline_toplevel_model_refs`]) merge identically.
+/// ([`inline_toplevel_refs`]) merge identically.
 ///
 /// # Arguments
 ///
@@ -276,12 +276,67 @@ const SUBSYSTEM_REF: RefNoun = RefNoun {
 /// to mount is ambiguous. Distinct from a ref that could not be resolved at all.
 const AMBIGUOUS_SUBSYSTEM_REF: &str = codes::AMBIGUOUS_SUBSYSTEM_REF;
 
-/// A top-level `models.<k>` mount edge (used by [`inline_toplevel_model_refs`]).
+/// A top-level `models.<k>` mount edge (used by [`inline_toplevel_refs`]).
+/// Its unresolved code is the generic `unresolved_subsystem_ref`, as at the
+/// `reaction_systems.<k>` form: the Julia reference raises its
+/// `SubsystemRefError` at both forms (esm-spec §4.7 "Two mount forms, one
+/// mechanism").
 const TOPLEVEL_MODEL_REF: RefNoun = RefNoun {
     remote_plural: "top-level model refs",
     cycle_singular: "top-level model reference",
     item: "top-level model ref",
-    code: codes::TOPLEVEL_MODEL_REF_UNRESOLVED,
+    code: codes::UNRESOLVED_SUBSYSTEM_REF,
+};
+
+/// A top-level `reaction_systems.<k>` mount edge. Its unresolved code is the
+/// generic `unresolved_subsystem_ref`, which is what the Julia reference raises
+/// at this form (its `SubsystemRefError`).
+const TOPLEVEL_REACTION_SYSTEM_REF: RefNoun = RefNoun {
+    remote_plural: "top-level reaction system refs",
+    cycle_singular: "top-level reaction system reference",
+    item: "top-level reaction system ref",
+    code: codes::UNRESOLVED_SUBSYSTEM_REF,
+};
+
+/// One of the two top-level attachment points of a §4.7 `{ref}` mount: a
+/// `models.<k>` or a `reaction_systems.<k>` entry. esm-spec §4.7 "Two mount
+/// forms, one mechanism": the two run the SAME edge pipeline and differ only in
+/// which block the leaf's component is taken from and spliced into, so
+/// [`inline_toplevel_refs`] is written once over this descriptor.
+struct TopLevelMountForm {
+    /// The top-level block the entry lives in, and the leaf's block the
+    /// component is extracted from.
+    block: &'static str,
+    /// The key whose presence marks an entry as an INLINE component rather
+    /// than a bare `{ref}` stub (Julia's discriminator: `variables` for a
+    /// model, `species` for a reaction system).
+    inline_key: &'static str,
+    /// The edge's optional selector naming one component of a multi-component
+    /// leaf.
+    selector: &'static str,
+    /// `"model"` / `"reaction system"`, for diagnostics.
+    noun: &'static str,
+    /// The capitalized noun, for diagnostics that start a sentence.
+    noun_cap: &'static str,
+    ref_noun: &'static RefNoun,
+}
+
+const MODEL_MOUNT: TopLevelMountForm = TopLevelMountForm {
+    block: "models",
+    inline_key: "variables",
+    selector: "model",
+    noun: "model",
+    noun_cap: "Model",
+    ref_noun: &TOPLEVEL_MODEL_REF,
+};
+
+const REACTION_SYSTEM_MOUNT: TopLevelMountForm = TopLevelMountForm {
+    block: "reaction_systems",
+    inline_key: "species",
+    selector: "reaction_system",
+    noun: "reaction system",
+    noun_cap: "Reaction system",
+    ref_noun: &TOPLEVEL_REACTION_SYSTEM_REF,
 };
 
 /// The shared "load a referenced .esm document" sequence both ref-resolvers run:
@@ -398,34 +453,6 @@ fn index_set_names(value: &Value) -> std::collections::BTreeSet<String> {
         .unwrap_or_default()
 }
 
-/// Refuse a top-level `reaction_systems.<k>` `{ref}` mount with
-/// `mount_form_unsupported`, naming the entry. The conformance producer
-/// reports it at `/reaction_systems/<k>` (see `collect_subsystem_ref_errors`).
-fn refuse_toplevel_reaction_system_refs(obj: &Map<String, Value>) -> Result<(), DiagnosticError> {
-    let Some(rs) = obj.get("reaction_systems").and_then(|v| v.as_object()) else {
-        return Ok(());
-    };
-    for (name, entry) in rs {
-        let Some(entry) = entry.as_object() else {
-            continue;
-        };
-        if let Some(ref_str) = entry.get("ref").and_then(|v| v.as_str())
-            && !entry.contains_key("species")
-        {
-            return Err(err(
-                codes::MOUNT_FORM_UNSUPPORTED,
-                format!(
-                    "reaction_systems.{name}: a top-level `reaction_systems.<k>` `{{ref}}` mount \
-                     (ref '{ref_str}') is not supported by this binding. Inline the reaction \
-                     system, or mount it at a `subsystems.<k>` `{{ref}}` edge (esm-spec §4.7 \
-                     \"Two mount forms, one mechanism\")"
-                ),
-            ));
-        }
-    }
-    Ok(())
-}
-
 #[allow(clippy::too_many_arguments)]
 fn walk_top_level(
     value: &mut Value,
@@ -478,16 +505,8 @@ fn walk_top_level(
         None => return Ok(Map::new()),
     };
 
-    // esm-spec §4.7: a top-level `reaction_systems.<k>` entry that is a bare
-    // `{ref}` — a `ref` string and no `species`, the Julia reference's
-    // discriminator for this form — is a mount edge at a form this binding does
-    // not implement. Refuse it here, before the typed parse would reject the
-    // stub with an incidental `missing field species`. An inline reaction system
-    // is a component, not a mount, and passes untouched.
-    refuse_toplevel_reaction_system_refs(obj)?;
-
     // esm-spec §4.7 / §9.7.10: a top-level `models.<k>` that is a bare `{ref}`
-    // (has `ref`, no inline `variables`) is a model-ref MOUNT EDGE — splice in
+    // (a string `ref`, no inline `variables`) is a model-ref MOUNT EDGE — splice in
     // the referenced leaf's single model, carrying the edge's
     // `expression_template_imports` into that model's own scope, BEFORE the
     // ordinary subsystem walk (the spliced model may itself carry subsystems).
@@ -496,7 +515,7 @@ fn walk_top_level(
     // threaded in, and they are NOT interchangeable: edge `bindings` fold
     // against `parent_meta` (the mounting document's full closed environment),
     // while only `api_meta` — the loader-API bindings, §9.7.6 site 4 —
-    // backfills the leaf's own close. See `inline_toplevel_model_refs`.
+    // backfills the leaf's own close. See `inline_toplevel_refs`.
     // `defer` splits INLINING from MERGING (esm-spec §4.7). The content must be
     // spliced in HERE, before the root's own §9.7 machinery, so a rewrite target
     // inside a mounted component lowers at all; but the `index_sets` it
@@ -505,18 +524,26 @@ fn walk_top_level(
     // the contributions are therefore collected and handed back for
     // `parse::load_value` to merge after the close; nested scopes have already
     // closed by the time they get here and merge in place.
+    //
+    // A top-level `reaction_systems.<k>` `{ref}` (a string `ref` and no `species`) is
+    // the same edge at the other attachment point, and runs the same pipeline
+    // (§4.7 "Two mount forms, one mechanism"). Models first, then reaction
+    // systems, so the two forms' contributions stage in a fixed order.
     let mut staged: Map<String, Value> = Map::new();
-    inline_toplevel_model_refs(
-        obj,
-        base_path,
-        visited,
-        parent_meta,
-        api_meta,
-        forwarded,
-        if defer { Some(&mut staged) } else { None },
-        &merge_env,
-        &precision,
-    )?;
+    for form in [&MODEL_MOUNT, &REACTION_SYSTEM_MOUNT] {
+        inline_toplevel_refs(
+            form,
+            obj,
+            base_path,
+            visited,
+            parent_meta,
+            api_meta,
+            forwarded,
+            if defer { Some(&mut staged) } else { None },
+            &merge_env,
+            &precision,
+        )?;
+    }
 
     // The importing document's index-set registry starts from its own
     // top-level `index_sets` — already carrying whatever the top-level model
@@ -707,8 +734,13 @@ fn hoist_subsystem_data_sources(obj: &mut Map<String, Value>) -> Result<(), Diag
 /// falling back to its own defaults. Explicit edge `bindings` win; names the
 /// leaf does not declare are never forwarded, so they cannot raise
 /// `template_import_unknown_name` against the leaf.
+///
+/// The same function serves a top-level `reaction_systems.<k>` `{ref}`, through
+/// `form` ([`TopLevelMountForm`]): only the block the component comes from and
+/// lands in, the inline discriminator and the selector key differ.
 #[allow(clippy::too_many_arguments)]
-fn inline_toplevel_model_refs(
+fn inline_toplevel_refs(
+    form: &TopLevelMountForm,
     obj: &mut Map<String, Value>,
     base_path: &Path,
     visited: &mut HashSet<PathBuf>,
@@ -719,11 +751,17 @@ fn inline_toplevel_model_refs(
     merge_env: &BTreeMap<String, i64>,
     precision: &str,
 ) -> Result<(), DiagnosticError> {
-    let edge_names: Vec<String> = match obj.get("models").and_then(|v| v.as_object()) {
-        Some(models) => models
+    // An entry is a mount edge only when its `ref` is a STRING (and it carries
+    // no inline body). Any other `ref` value leaves the entry to the typed
+    // parse and the schema, which report it at the entry, as in the other
+    // bindings.
+    let edge_names: Vec<String> = match obj.get(form.block).and_then(|v| v.as_object()) {
+        Some(systems) => systems
             .iter()
             .filter(|(_, m)| {
-                m.is_object() && m.get("ref").is_some() && m.get("variables").is_none()
+                m.is_object()
+                    && m.get("ref").is_some_and(Value::is_string)
+                    && m.get(form.inline_key).is_none()
             })
             .map(|(k, _)| k.clone())
             .collect(),
@@ -735,7 +773,7 @@ fn inline_toplevel_model_refs(
 
     for name in edge_names {
         let entry = obj
-            .get_mut("models")
+            .get_mut(form.block)
             .and_then(|v| v.as_object_mut())
             .and_then(|m| m.remove(&name))
             .expect("edge entry present");
@@ -743,17 +781,11 @@ fn inline_toplevel_model_refs(
         let ref_str = entry_obj
             .get("ref")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                err(
-                    TOPLEVEL_MODEL_REF.code,
-                    "top-level model ref must be a string",
-                )
-            })?;
+            .expect("edge filter admits only a string ref");
         // `read_edge_bindings` is shared with the `subsystems.<k>` edge, so it
         // is told which mount form it is reporting for.
-        let mount_noun = format!("top-level model ref '{ref_str}'");
-        let (canonical, mut comp) =
-            load_ref_document(ref_str, base_path, visited, &TOPLEVEL_MODEL_REF)?;
+        let mount_noun = format!("top-level {} ref '{ref_str}'", form.noun);
+        let (canonical, mut comp) = load_ref_document(ref_str, base_path, visited, form.ref_noun)?;
         // Read before anything below can consume the leaf's `domain`.
         let leaf_precision = declared_element_type(&comp);
         let leaf_dir = canonical.parent().unwrap_or(base_path).to_path_buf();
@@ -772,9 +804,10 @@ fn inline_toplevel_model_refs(
                 return Err(err(
                     codes::SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
                     format!(
-                        "Model ref '{ref_str}' targets a template-library file ({}); \
+                        "{} ref '{ref_str}' targets a template-library file ({}); \
                          libraries are imported via expression_template_imports \
                          (esm-spec 9.7.1)",
+                        form.noun_cap,
                         canonical.display()
                     ),
                 ));
@@ -783,9 +816,10 @@ fn inline_toplevel_model_refs(
                 return Err(err(
                     codes::SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
                     format!(
-                        "Model ref '{ref_str}' targets a coupling-library file ({}); \
+                        "{} ref '{ref_str}' targets a coupling-library file ({}); \
                          libraries are imported via a coupling_import coupling entry \
                          (esm-spec 10.9)",
+                        form.noun_cap,
                         canonical.display()
                     ),
                 ));
@@ -942,12 +976,12 @@ fn inline_toplevel_model_refs(
             crate::template_imports::apply_mount_index_set_rename(
                 &mut comp,
                 entry_obj,
-                &format!("top-level model ref '{ref_str}'"),
+                &mount_noun,
                 &nested_contributed,
             )?;
 
-            let sel = entry_obj.get("model").and_then(|v| v.as_str());
-            let mut model = extract_toplevel_model(&comp, sel, ref_str, &canonical)?;
+            let sel = entry_obj.get(form.selector).and_then(|v| v.as_str());
+            let mut model = extract_toplevel_component(form, &comp, sel, ref_str, &canonical)?;
             // esm-spec §6.6: inline tests do NOT cross a mount edge. They are
             // assertions about the leaf under the leaf's OWN standalone
             // conditions, and the mounting document may couple it — replacing a
@@ -975,11 +1009,11 @@ fn inline_toplevel_model_refs(
         visited.remove(&canonical);
         let model = build?;
 
-        // Splice the resolved model back under the same key, then merge the
+        // Splice the resolved component back under the same key, then merge the
         // leaf's by-name blocks (parent wins on a clash).
-        obj.get_mut("models")
+        obj.get_mut(form.block)
             .and_then(|v| v.as_object_mut())
-            .expect("models map present")
+            .expect("mount block present")
             .insert(name.clone(), model);
         // esm-spec §8.2.1: a hoisted `data_sources` block's locations anchor on
         // the directory of the file they were READ from, not on the importer's.
@@ -1052,14 +1086,17 @@ fn inline_toplevel_model_refs(
             .and_then(|o| o.remove("data_sources"))
             .filter(|v| v.as_object().is_some_and(|m| !m.is_empty()))
             && let Some(model) = obj
-                .get_mut("models")
+                .get_mut(form.block)
                 .and_then(|v| v.as_object_mut())
                 .and_then(|m| m.get_mut(&name))
                 .and_then(Value::as_object_mut)
         {
             model.insert(
                 HOISTED_SOURCES_KEY.to_string(),
-                serde_json::json!({"edge": format!("models.{name} ({mount_noun})"), "sources": src}),
+                serde_json::json!({
+                    "edge": format!("{}.{name} ({mount_noun})", form.block),
+                    "sources": src,
+                }),
             );
         }
         for blk in ["function_tables"] {
@@ -1098,60 +1135,59 @@ fn lower_mounted_enums_at_edge(doc: &mut Value, mount_noun: &str) -> Result<(), 
     })
 }
 
-/// Extract the single top-level model from a referenced component file (or the
-/// `sel`-named one when the file holds several), for a top-level model-ref mount.
-fn extract_toplevel_model(
+/// Extract the single top-level component of `form`'s kind from a referenced
+/// file (or the `sel`-named one when the file holds several), for a top-level
+/// `models.<k>` / `reaction_systems.<k>` ref mount.
+fn extract_toplevel_component(
+    form: &TopLevelMountForm,
     comp: &Value,
     sel: Option<&str>,
     ref_str: &str,
     source: &Path,
 ) -> Result<Value, DiagnosticError> {
-    let models = comp
+    let noun = form.noun;
+    let code = form.ref_noun.code;
+    let systems = comp
         .as_object()
-        .and_then(|o| o.get("models"))
+        .and_then(|o| o.get(form.block))
         .and_then(|v| v.as_object())
         .ok_or_else(|| {
             err(
-                TOPLEVEL_MODEL_REF.code,
+                code,
                 format!(
-                    "top-level model ref '{ref_str}' resolves to a file with no models block ({})",
+                    "top-level {noun} ref '{ref_str}' resolves to a file with no {} block ({})",
+                    form.block,
                     source.display()
                 ),
             )
         })?;
+    let available = || {
+        let mut avail: Vec<&str> = systems.keys().map(String::as_str).collect();
+        avail.sort_unstable();
+        avail.join(", ")
+    };
     match sel {
-        Some(name) => models.get(name).cloned().ok_or_else(|| {
-            let mut avail: Vec<&String> = models.keys().collect();
-            avail.sort();
+        Some(name) => systems.get(name).cloned().ok_or_else(|| {
             err(
-                TOPLEVEL_MODEL_REF.code,
+                code,
                 format!(
-                    "top-level model ref '{ref_str}' has no model '{name}' (available: {})",
-                    avail
-                        .iter()
-                        .map(|s| s.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    "top-level {noun} ref '{ref_str}' has no {noun} '{name}' (available: {})",
+                    available()
                 ),
             )
         }),
         None => {
-            if models.len() == 1 {
-                Ok(models.values().next().cloned().expect("one model"))
+            if systems.len() == 1 {
+                Ok(systems.values().next().cloned().expect("one component"))
             } else {
-                let mut avail: Vec<&String> = models.keys().collect();
-                avail.sort();
                 Err(err(
-                    TOPLEVEL_MODEL_REF.code,
+                    code,
                     format!(
-                        "top-level model ref '{ref_str}' resolves to {} models; add a \"model\" \
+                        "top-level {noun} ref '{ref_str}' resolves to {} {noun}s; add a \"{}\" \
                          selector to choose one (available: {})",
-                        models.len(),
-                        avail
-                            .iter()
-                            .map(|s| s.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
+                        systems.len(),
+                        form.selector,
+                        available()
                     ),
                 ))
             }
@@ -1309,7 +1345,7 @@ struct EdgeClose {
 }
 
 /// The binding half of a §4.7 mount edge, shared by both mount forms
-/// ([`inline_toplevel_model_refs`] and [`resolve_value`]): "Two mount forms,
+/// ([`inline_toplevel_refs`] and [`resolve_value`]): "Two mount forms,
 /// one mechanism".
 ///
 /// Two maps reach an edge from above and they are kept APART:

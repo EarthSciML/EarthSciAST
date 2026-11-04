@@ -559,7 +559,7 @@
     {
       "id": "spec.4.7.mount-form-unsupported-refused",
       "section": "4.7",
-      "quote": "a binding that does not implement a mount form MUST refuse the entry with `mount_form_unsupported` (§9.6.6) at its pointer",
+      "quote": "A binding that does not implement a mount form MUST refuse the entry with `mount_form_unsupported` (§9.6.6) at its pointer",
       "class": "out_of_scope",
       "area": "diagnostics",
       "note": "Refusal for a capability a binding lacks; the model implements every mount form."
