@@ -170,7 +170,28 @@ PARAMETER, drawn from a `data_sources.<name>` entry carrying a
 `provider_from_esm` (EarthSciIO spec/esm-sources.md §3): its `url_template` and
 `mirrors` are esm templates expanded at each file anchor, and a source with a
 `temporal` block is time-varying on a calendar cadence (`P1M` is a calendar
-month), its ticks in Unix seconds (UTC), as in the Rust binding.
+month).
+
+Every provider runs on the MODEL clock (esm-spec §2.2.7). Its time origin — the
+UTC instant of model time 0 — is, first match wins, the document's
+`domain.temporal.reference_time`, else its `domain.temporal.start` (each when a
+non-empty string; one that cannot be read raises `time_origin_invalid`, as
+[`time_origin`](@ref) does), else the start of `window`, else the POSIX epoch.
+A sample at model time `t` reads the instant `origin + t`, and
+[`provider_refresh_times`](@ref) reports the source's anchors in model seconds
+(`unix - origin`). With no `window`, the document's `solver.time_span`
+(converted as [`resolve_time_span`](@ref) does, counted from that origin)
+supplies one; with neither, a time-varying provider is bounded only by its own
+`temporal.end`.
+
+A source declaring a `record_filter` or `codes` is a record table decoded once
+per record anchor and shared by its parameters. A declared `select` names the
+source's native per-record axes; with `records_per_sample = 2` the delivered
+array carries an extra leading record axis of length 2, which the select takes
+whole. A time-varying source never pushes its select to the reader (the file's
+record axis is not one the select names): it reports
+`provider_supports_selection == false`, and the select is applied after the
+record is sliced.
 
 Keyed `"<ModelPath>.<param>"` — the CONSUMING parameter's flattened name, not
 `"<Loader>.<var>"`. esm 1.0.0 moved the binding from the source to the consumer:
@@ -188,23 +209,28 @@ Keywords:
     stack cannot construct yet (the FF10-in-zip EGU case until Phase 2) and
     slot it in later without an API change.
   * `url_overrides` — loader name ⇒ URL template, replacing `source.url_template`
-    and its mirrors (e.g. a local mirror of a live store).
+    and its mirrors (e.g. a local mirror of a live store). An entry is honoured
+    whatever its value, so an empty one is an error.
   * `substitutions` — loader name ⇒ `Dict(placeholder => value)`, binding the
     custom `{name}` placeholders a mount's `url_substitutions` left (reseact's
     NEI 2016 `{sector}`). An unbound one is an error, not a fetch.
-  * `window` — the run's `(start, stop)` in UTC (`DateTime`s or Unix seconds),
-    bounding each time-varying provider's `provider_refresh_times`.
+  * `window` — the run's `(start, stop)`: a 2-tuple whose entries are each a
+    `DateTime` (read as UTC) or a real number of Unix seconds, bounding each
+    time-varying provider's `provider_refresh_times`. Anything else is an
+    `ArgumentError`.
   * `records_per_sample` — consuming parameter key ⇒ 1 or 2 (the two-record
-    bracket a model interpolates between); default 1.
+    bracket a model interpolates between); default 1. A record-table source
+    refuses 2.
 
 Implemented by the EarthSciIO extension — load `EarthSciIO` alongside
 EarthSciAST so the `EarthSciASTEarthSciIOExt` extension defines the method
 (without it the call is a `MethodError`; this generic deliberately carries no
 fallback so the extension's method is an addition, not an overwrite). The
 construction is format-agnostic: `esio_format` goes straight to EarthSciIO,
-whose format registry decides what is readable. Selection capability (projection pushdown) is the provider's own
-(`provider_supports_selection`), so a zarr-store loader produced here is
-directly compatible with the gated-deferral path.
+whose format registry decides what is readable. Selection capability
+(projection pushdown) is the provider's own (`provider_supports_selection`), so
+a const zarr-store loader produced here is directly compatible with the
+gated-deferral path.
 """
 function providers_from_document end
 

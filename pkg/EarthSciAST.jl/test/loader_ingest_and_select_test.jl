@@ -332,7 +332,7 @@ end
             engine = EXT.DeclaredProvider(
                 src.key, src.varname, src.inner, src.table,
                 src.column, src.select, false, src.extent_mp,
-                src.unit_conversion
+                src.unit_conversion, src.origin
             )
             @test Float64.(EA_LIS.provider_sample(engine, 0.0)) == pushed
         end
