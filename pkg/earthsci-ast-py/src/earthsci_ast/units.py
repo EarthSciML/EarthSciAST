@@ -21,7 +21,7 @@ from typing import Any, NamedTuple
 from . import op_registry
 from .classification import observed_definitions
 from .esm_types import EsmFile, Expr, ExprNode, Model, ReactionSystem
-from .expr_walk import map_children
+from .expr_walk import iter_children, map_children
 
 # ---------------------------------------------------------------------------
 # The shared ESM unit contract (esm-spec §4.8 / docs/content/units-standard.md).
@@ -882,25 +882,20 @@ def reject_const_units_pre_v12(view: Any) -> None:
 
 
 def unresolvable_const_units(expr: Any) -> list[str]:
-    """Every declared ``const`` unit string in ``expr`` (a raw JSON expression
-    or an ``ExprNode``) that does not resolve (esm-spec §4.8.5 item 2)."""
+    """Every declared ``const`` unit string in the expression ``expr`` that
+    does not resolve (esm-spec §4.8.5 item 2), in walk order."""
     out: list[str] = []
 
     def walk(node: Any) -> None:
-        if isinstance(node, ExprNode):
-            node = {"op": node.op, "units": node.units, "args": node.args}
-        if isinstance(node, dict):
-            units = node.get("units")
-            if node.get("op") == "const" and isinstance(units, str):
-                try:
-                    parse_unit(units)
-                except UnparseableUnitError:
-                    out.append(units)
-            for child in node.values():
-                walk(child)
-        elif isinstance(node, list):
-            for child in node:
-                walk(child)
+        if not isinstance(node, ExprNode):
+            return
+        if node.op == "const" and isinstance(node.units, str):
+            try:
+                parse_unit(node.units)
+            except UnparseableUnitError:
+                out.append(node.units)
+        for child in iter_children(node):
+            walk(child)
 
     walk(expr)
     return out
@@ -1130,6 +1125,21 @@ class UnitFinding:
     message: str
     lhs_units: str = ""
     rhs_units: str = ""
+    #: JSON Pointer to the declaration, equation or expression field the
+    #: finding is about (``/models/M/variables/v``, ``/models/M/equations/0``),
+    #: ``""`` when the raise site has none.
+    path: str = ""
+    #: Diagnostic context carried into the structural error a defect finding
+    #: becomes (see ``validation._validate_units``).
+    details: dict[str, Any] = field(default_factory=dict)
+    #: ``message`` as raised, without the component prefixes ``message`` gains
+    #: as results are folded together; the structural error carries this one,
+    #: since its path already names the component.
+    raw_message: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.raw_message:
+            self.raw_message = self.message
 
 
 @dataclass
@@ -1146,19 +1156,48 @@ class UnitValidationResult:
     #: byte-identical to what they always held, so nothing reading them changes.
     findings: list[UnitFinding] = field(default_factory=list)
 
-    def add_error(self, code: str, message: str, lhs_units: str = "", rhs_units: str = "") -> None:
+    def add_error(
+        self,
+        code: str,
+        message: str,
+        lhs_units: str = "",
+        rhs_units: str = "",
+        *,
+        path: str = "",
+        details: dict[str, Any] | None = None,
+    ) -> None:
         """Record a hard finding: the prose in ``errors``, the code in
         ``findings``."""
         self.errors.append(message)
-        self.findings.append(UnitFinding(code, message, lhs_units, rhs_units))
+        self.findings.append(
+            UnitFinding(code, message, lhs_units, rhs_units, path, dict(details or {}))
+        )
 
     def add_warning(
-        self, code: str, message: str, lhs_units: str = "", rhs_units: str = ""
+        self,
+        code: str,
+        message: str,
+        lhs_units: str = "",
+        rhs_units: str = "",
+        *,
+        path: str = "",
+        details: dict[str, Any] | None = None,
     ) -> None:
         """Record an advisory finding: the prose in ``warnings``, the code in
         ``findings``."""
         self.warnings.append(message)
-        self.findings.append(UnitFinding(code, message, lhs_units, rhs_units))
+        self.findings.append(
+            UnitFinding(code, message, lhs_units, rhs_units, path, dict(details or {}))
+        )
+
+    def extend(self, other: UnitValidationResult, *, path: str = "", prefix: str = "") -> None:
+        """Fold ``other``'s findings into this result, prefixing each message
+        with ``prefix`` and giving every finding that has no path ``path``."""
+        self.errors.extend(prefix + e for e in other.errors)
+        self.warnings.extend(prefix + w for w in other.warnings)
+        self.findings.extend(
+            replace(f, message=prefix + f.message, path=f.path or path) for f in other.findings
+        )
 
 
 @dataclass
@@ -1335,6 +1374,96 @@ def constant_exponent_value(expr: Any) -> Fraction | None:
     return None
 
 
+def _format_expected_rate_units(species_units: str, total_order: int) -> str:
+    """Compose the canonical rate-unit string from the reference species unit
+    and total reaction order, matching the contract in
+    ``tests/invalid/expected_errors.json``. Ports the Go/Rust implementations.
+
+    Examples:
+        ("mol/L", 2) -> "L/(mol*s)"
+        ("mol/L", 1) -> "1/s"
+        ("mol/L", 0) -> "mol/(L*s)"
+        ("mol/m^3", 2) -> "m^3/(mol*s)"
+    """
+    exp = 1 - total_order
+    if exp == 0:
+        return "1/s"
+    num, den = _split_unit_num_den(species_units)
+    exp_abs = exp
+    if exp < 0:
+        num, den = den, num
+        exp_abs = -exp
+    num_str = _power_factor(num, exp_abs)
+    den_factors = []
+    df = _power_factor(den, exp_abs)
+    if df:
+        den_factors.append(df)
+    den_factors.append("s")
+    if not num_str:
+        num_str = "1"
+    if len(den_factors) == 1:
+        return f"{num_str}/{den_factors[0]}"
+    return f"{num_str}/({'*'.join(den_factors)})"
+
+
+def _split_unit_num_den(s: str):
+    """Split a unit string on its first top-level '/'. ``"mol/L"`` → ``("mol",
+    "L")``; ``"mol/(L*s)"`` → ``("mol", "L*s")``. If no top-level '/' appears,
+    the whole string is the numerator."""
+    s = s.strip()
+    if not s:
+        return "", ""
+    depth = 0
+    for i, c in enumerate(s):
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        elif c == "/" and depth == 0:
+            num = s[:i].strip()
+            den = s[i + 1 :].strip()
+            if den.startswith("(") and den.endswith(")"):
+                den = den[1:-1]
+            return num, den
+    return s, ""
+
+
+def _power_factor(s: str, n: int) -> str:
+    """Raise a unit factor to an integer power, rendering as a string.
+    Parenthesises compound factors when the power is not 1."""
+    s = s.strip()
+    if not s:
+        return ""
+    if n == 1:
+        return s
+    if "*" in s or "/" in s:
+        return f"({s})^{n}"
+    return f"{s}^{n}"
+
+
+#: Well-known physical constants, by the parameter name that denotes them:
+#: name -> (canonical units, description). A parameter of that name whose
+#: declared unit has a different DIMENSION is an error (see
+#: :meth:`UnitValidator._check_physical_constants`). The names are chosen to
+#: avoid common non-constant uses (no ``c`` for the speed of light, which is
+#: also a concentration; no ``e`` for the elementary charge, which is also
+#: Euler's number). The same table is in every binding.
+KNOWN_PHYSICAL_CONSTANTS: dict[str, tuple[str, str]] = {
+    "R": ("J/(mol*K)", "ideal gas constant"),
+    "k_B": ("J/K", "Boltzmann constant"),
+    "N_A": ("1/mol", "Avogadro constant"),
+}
+
+
+def _references_name(expr: Any, name: str) -> bool:
+    """Whether ``expr`` has the bare name ``name`` as a leaf anywhere."""
+    if isinstance(expr, str):
+        return expr == name
+    if isinstance(expr, ExprNode):
+        return any(_references_name(c, name) for c in iter_children(expr))
+    return False
+
+
 class UnitValidator:
     """Validator for dimensional consistency in ESM format structures."""
 
@@ -1354,6 +1483,8 @@ class UnitValidator:
         # Targets of the current component's scoped references (`Leaf.p`,
         # `sub.v`), consulted after `known_units` (see ScopedUnits).
         self.scoped_units: Mapping[str, ScopedUnit] = {}
+        # The current component's declared unit strings, as written.
+        self._declared_spelling: dict[str, str] = {}
 
     def validate_esm_file(self, esm_file: EsmFile) -> UnitValidationResult:
         """
@@ -1392,19 +1523,7 @@ class UnitValidator:
         ``result``, prefixing every message with ``"{prefix} {name}: "``."""
         for component in components:
             sub = validator(component)
-            result.errors.extend(f"{prefix} {component.name}: {e}" for e in sub.errors)
-            result.warnings.extend(f"{prefix} {component.name}: {w}" for w in sub.warnings)
-            # Findings carry the same prose, prefixed identically, plus the code
-            # decided at the raise site.
-            result.findings.extend(
-                UnitFinding(
-                    f.code,
-                    f"{prefix} {component.name}: {f.message}",
-                    f.lhs_units,
-                    f.rhs_units,
-                )
-                for f in sub.findings
-            )
+            result.extend(sub, prefix=f"{prefix} {component.name}: ")
             result.unit_registry.update(sub.unit_registry)
 
     def validate_model(
@@ -1412,6 +1531,23 @@ class UnitValidator:
     ) -> UnitValidationResult:
         """
         Validate unit consistency within a model.
+
+        This is the whole unit check for a model, and the only one: every
+        finding carries the JSON Pointer it is reported at, and
+        ``validation.validate()`` turns the ones that state a defect in the
+        file into ``unit_inconsistency`` / ``unit_parse_error`` errors.
+
+        * each declared ``units`` / ``default_units`` string must parse
+          (``/models/M/variables/v``), and ``default_units`` must be the
+          declared unit (esm-spec §4.8.1);
+        * each ``const`` unit string in an equation must parse
+          (``/models/M/equations/i/lhs`` or ``/rhs``, esm-spec §4.8.5);
+        * each equation must type, and its sides agree
+          (``/models/M/equations/i``);
+        * each observed unknown's defining expression must type and agree with
+          the variable's declared unit (``/models/M/variables/v``), including a
+          literal conversion factor and a well-known physical constant used
+          with the wrong dimension.
 
         Args:
             model: The model to validate
@@ -1421,7 +1557,10 @@ class UnitValidator:
         Returns:
             UnitValidationResult for the model
         """
+        from .structural_checks import _pointer_token
+
         result = UnitValidationResult(is_valid=True)
+        pointer = f"/models/{_pointer_token(str(model.name))}"
 
         # Scope the known-units registry to this component so that a variable
         # name reused in another model/reaction system cannot collide during
@@ -1430,6 +1569,9 @@ class UnitValidator:
 
         if not model.variables:
             return result
+
+        def variable_path(name: str) -> str:
+            return f"{pointer}/variables/{_pointer_token(str(name))}"
 
         # Build unit registry for this model. An unparseable unit is a HARD
         # ERROR: a string that does not denote a real unit is a defect in the
@@ -1444,47 +1586,285 @@ class UnitValidator:
             result.add_error(
                 UNIT_FINDING_UNPARSEABLE,
                 f"Invalid unit '{spelled}' for variable '{var_name}': {e}",
+                path=variable_path(var_name),
+                details={"variable": var_name, "units": spelled},
+            )
+        for var_name, var_info in model.variables.items():
+            self._check_default_units(
+                result, variable_path(var_name), var_name, var_info.units, var_info
             )
 
         # Validate equations. An observed unknown's DEFINING equation is
         # skipped here and typed below instead, under the VARIABLE's name --
-        # where 0.x reported it, and where an author looks. Typing it in both
-        # places reported one defect twice.
+        # where an author looks. Typing it in both places reported one defect
+        # twice.
         definitions = observed_definitions(model)
-        if model.equations:
-            for i, equation in enumerate(model.equations):
-                lhs = getattr(equation, "lhs", None)
-                if isinstance(lhs, str) and lhs in definitions:
-                    continue
-                eq_result = self.validate_equation(equation, f"eq_{i}")
-                result.errors.extend(eq_result.errors)
-                result.warnings.extend(eq_result.warnings)
-                result.findings.extend(eq_result.findings)
-
-        # Validate each observed unknown's DEFINING EXPRESSION -- its
-        # bare-variable-LHS equation's RHS (esm-spec §6.3.1). Before 1.0.0 this
-        # was `variables[v].expression`; the equations are the only place it can
-        # live now. (The equation loop above already types both sides, so this
-        # reports the finding against the VARIABLE name, as it always did.)
-        for var_name, definition in definitions.items():
-            expr_result = self.validate_expression(definition, var_name)
-            if expr_result.errors:
-                result.errors.extend([f"Variable {var_name}: {e}" for e in expr_result.errors])
-                result.findings.extend(
-                    UnitFinding(
-                        f.code, f"Variable {var_name}: {f.message}", f.lhs_units, f.rhs_units
+        for i, equation in enumerate(model.equations or []):
+            eq_path = f"{pointer}/equations/{i}"
+            # A `const` unit string that does not resolve is reported at the
+            # expression field that holds it (esm-spec §4.8.5 item 2); the
+            # typer reads such a `const` as undeterminable.
+            for side in ("lhs", "rhs"):
+                for units in unresolvable_const_units(getattr(equation, side, None)):
+                    result.add_error(
+                        UNIT_FINDING_UNPARSEABLE,
+                        f"Unit string '{units}' is not a recognised unit",
+                        path=f"{eq_path}/{side}",
+                        details={"units": units},
                     )
-                    for f in expr_result.findings
-                )
+            lhs = getattr(equation, "lhs", None)
+            if isinstance(lhs, str) and lhs in definitions:
+                continue
+            result.extend(self.validate_equation(equation, f"eq_{i}"), path=eq_path)
+
+        # A misdeclared physical constant is reported at the observed unknown
+        # that uses it; that unknown's declared-versus-computed comparison
+        # would report the same defect a second time, so it is not made.
+        blamed = self._check_physical_constants(result, model, definitions, variable_path)
+
+        # Each observed unknown's DEFINING EXPRESSION -- its bare-variable-LHS
+        # equation's RHS (esm-spec §6.3.1) -- against the variable's declared
+        # unit, reported at the variable.
+        for var_name, definition in definitions.items():
+            self._check_observed(
+                result,
+                variable_path(var_name),
+                var_name,
+                model.variables[var_name],
+                definition,
+                compare_declared=var_name not in blamed,
+            )
 
         result.is_valid = len(result.errors) == 0
         return result
+
+    def _check_default_units(
+        self, result: UnitValidationResult, path: str, name: str, units: str | None, decl: Any
+    ) -> None:
+        """A declaration's ``default_units`` must parse, and must be the
+        declared unit: a default in ``degC`` for a variable in ``K`` is a
+        different number (esm-spec §4.8.1). Absent ``default_units`` means the
+        default is in the declared unit."""
+        default_units = getattr(decl, "default_units", None)
+        if not isinstance(default_units, str) or not default_units.strip():
+            return
+        try:
+            provided = parse_unit(default_units)
+        except UnparseableUnitError:
+            result.add_error(
+                UNIT_FINDING_UNPARSEABLE,
+                f"Unit string '{default_units}' is not a recognised unit",
+                path=path,
+                details={"variable": name, "units": default_units},
+            )
+            return
+        if not units or name not in self.known_units:
+            return  # nothing declared, or the declared string is reported already
+        if self.known_units[name] == provided:
+            return
+        default_value = getattr(decl, "default", getattr(decl, "value", None))
+        result.add_error(
+            UNIT_FINDING_DIMENSIONAL_MISMATCH,
+            "Parameter default value units do not match declared units "
+            f"(declared='{units}', default={default_value}, default_units='{default_units}')",
+            lhs_units=units,
+            rhs_units=default_units,
+            path=path,
+            details={
+                "variable": name,
+                "declared_units": units,
+                "default_value": default_value,
+                "inferred_default_units": default_units,
+            },
+        )
+
+    def _check_observed(
+        self,
+        result: UnitValidationResult,
+        path: str,
+        name: str,
+        var: Any,
+        definition: Expr,
+        *,
+        compare_declared: bool = True,
+    ) -> None:
+        """An observed unknown's defining expression must type, and (when
+        ``compare_declared``) its unit must be the one the variable declares
+        (esm-spec §4.8.4). An undeterminable unit skips the comparison; it is
+        never read as dimensionless."""
+        try:
+            typed = self._type(definition)
+        except DimensionalMismatchError as exc:
+            # A provable inconsistency INSIDE the expression (adding metres to
+            # kilograms, a transcendental with a dimensional argument).
+            result.add_error(
+                UNIT_FINDING_DIMENSIONAL_MISMATCH,
+                f"Observed variable '{name}' has a dimensionally inconsistent expression: {exc}",
+                path=path,
+                details={"variable": name, "declared_units": var.units},
+            )
+            return
+        except pint.PintError as exc:
+            result.add_warning(
+                UNIT_FINDING_ANALYSIS,
+                f"Could not validate dimensions for {name}: {exc}",
+                path=path,
+            )
+            return
+
+        declared_unit = self.known_units.get(name) if var.units else None
+        if declared_unit is None or not compare_declared:
+            return  # no declared unit, or an unparseable one (reported already)
+        declared = _Typed(declared_unit.dimensionality, exact_scale_of(declared_unit))
+        if typed is None:
+            self._check_conversion_factor(result, path, name, var.units, declared, definition)
+            return
+        # An angle meets a pure number (esm-spec §4.8.3): the angle axis
+        # cancels and the scales are compared. The comparison reads the
+        # stripped pair; the diagnostic reports the units as written.
+        declared_cmp, typed_cmp = _angle_meets_number(declared, typed)
+        if declared_cmp == typed_cmp:
+            return
+        if declared_cmp.dim == typed_cmp.dim:
+            # Same dimension, different unit (esm-spec §4.8.3): the number the
+            # expression produces is not in the unit the variable declares.
+            result.add_error(
+                UNIT_FINDING_DIMENSIONAL_MISMATCH,
+                f"Observed variable '{name}' is declared as '{var.units}' "
+                f"({declared.dim} at scale {declared.scale}) but its expression "
+                f"has {self._describe_side(definition, typed)}",
+                lhs_units=var.units,
+                rhs_units=str(typed.dim),
+                path=path,
+                details={
+                    "variable": name,
+                    "declared_units": var.units,
+                    "declared_scale": str(declared.scale),
+                    "expression_dimension": str(typed.dim),
+                    "expression_scale": str(typed.scale),
+                },
+            )
+            return
+        result.add_error(
+            UNIT_FINDING_DIMENSIONAL_MISMATCH,
+            f"Observed variable '{name}' is declared as '{var.units}' "
+            f"({declared.dim}) but its expression has dimension {typed.dim}",
+            lhs_units=var.units,
+            rhs_units=str(typed.dim),
+            path=path,
+            details={
+                "variable": name,
+                "declared_units": var.units,
+                "declared_dimension": str(declared.dim),
+                "expression_dimension": str(typed.dim),
+            },
+        )
+
+    def _check_conversion_factor(
+        self,
+        result: UnitValidationResult,
+        path: str,
+        name: str,
+        units: str,
+        declared: _Typed,
+        definition: Expr,
+    ) -> None:
+        """``<literal> * <var>`` (either order) defining an observed unknown
+        whose declared unit has the same dimension as ``<var>``'s but a
+        different scale: the literal is a conversion factor, so it must be the
+        ratio of the two exact scales (esm-spec §4.8.1), within the tolerance
+        of its decimal spelling. The literal makes the product's unit
+        undeterminable, so this is the one shape the comparison above cannot
+        see. An affine unit (degC) has no single factor and is skipped."""
+        if not isinstance(definition, ExprNode) or definition.op != "*":
+            return
+        args = list(definition.args or [])
+        if len(args) != 2:
+            return
+        numeric = next(
+            (a for a in args if isinstance(a, (int, float)) and not isinstance(a, bool)), None
+        )
+        source = next((a for a in args if isinstance(a, str)), None)
+        if numeric is None or source is None or source not in self.known_units:
+            return
+        source_units = self._declared_spelling.get(source)
+        if has_affine_unit(source_units) or has_affine_unit(units):
+            return
+        source_unit = self.known_units[source]
+        if source_unit.dimensionality != declared.dim:
+            return  # a dimensional mismatch, not a conversion
+        source_scale = exact_scale_of(source_unit)
+        if source_scale == declared.scale:
+            return  # no conversion, so the coefficient is free
+        factor = float(source_scale / declared.scale)
+        if abs(float(numeric) - factor) <= 1e-9 * max(abs(factor), 1.0):
+            return
+        result.add_error(
+            UNIT_FINDING_DIMENSIONAL_MISMATCH,
+            "Unit conversion factor is incorrect for specified unit transformation "
+            f"(declared_factor={float(numeric)}, expected_factor={factor}, "
+            f"source_units='{source_units}', declared_units='{units}')",
+            lhs_units=units,
+            rhs_units=source_units or "",
+            path=path,
+            details={
+                "variable": name,
+                "declared_units": units,
+                "source_units": source_units,
+                "declared_factor": float(numeric),
+                "expected_factor": factor,
+            },
+        )
+
+    def _check_physical_constants(
+        self, result: UnitValidationResult, model: Model, definitions: dict, variable_path
+    ) -> set[str]:
+        """A parameter named after a well-known physical constant
+        (:data:`KNOWN_PHYSICAL_CONSTANTS`) must carry that constant's
+        dimension. Reported at the first observed unknown (in name order) whose
+        definition uses it, else at the parameter. Only the dimension is
+        compared: ``kcal/(mol*K)`` for ``R`` passes. Returns the observed
+        unknowns a finding was reported at."""
+        blamed: set[str] = set()
+        for name, var in model.variables.items():
+            if var.type != "parameter" or name not in KNOWN_PHYSICAL_CONSTANTS:
+                continue
+            declared = self.known_units.get(name) if var.units else None
+            if declared is None:
+                continue
+            canonical, description = KNOWN_PHYSICAL_CONSTANTS[name]
+            if declared.dimensionality == unit_dimensionality(canonical):
+                continue
+            usage = next(
+                (v for v in sorted(definitions) if _references_name(definitions[v], name)), None
+            )
+            if usage is not None:
+                blamed.add(usage)
+            result.add_error(
+                UNIT_FINDING_DIMENSIONAL_MISMATCH,
+                "Physical constant used with incorrect dimensional analysis "
+                f"(constant '{name}' ({description}) declared with units '{var.units}', "
+                f"expected dimensions compatible with '{canonical}')",
+                lhs_units=var.units,
+                rhs_units=canonical,
+                path=variable_path(usage or name),
+                details={
+                    "constant_name": name,
+                    "constant_description": description,
+                    "declared_units": var.units,
+                    "canonical_units": canonical,
+                },
+            )
+        return blamed
 
     def validate_reaction_system(
         self, rs: ReactionSystem, scoped: ScopedUnits | None = None
     ) -> UnitValidationResult:
         """
-        Validate unit consistency within a reaction system.
+        Validate unit consistency within a reaction system: its declared
+        species and parameter units (``/reaction_systems/R/species/s``,
+        ``/parameters/p``) and each reaction's rate expression
+        (``/reaction_systems/R/reactions/i``).
 
         Args:
             rs: The reaction system to validate
@@ -1494,7 +1874,10 @@ class UnitValidator:
         Returns:
             UnitValidationResult for the reaction system
         """
+        from .structural_checks import _pointer_token
+
         result = UnitValidationResult(is_valid=True)
+        pointer = f"/reaction_systems/{_pointer_token(str(rs.name))}"
 
         # Scope the known-units registry to this component (see validate_model).
         unparseable = self._enter_component(rs, scoped)
@@ -1503,6 +1886,11 @@ class UnitValidator:
         # ERROR (see validate_model); the name is still omitted from
         # known_units, so it is treated as unknown downstream.
         species_names = {sp.name for sp in rs.species or []}
+
+        def member_path(name: str) -> str:
+            member = "species" if name in species_names else "parameters"
+            return f"{pointer}/{member}/{_pointer_token(str(name))}"
+
         for name, spelled in _declared_units(rs).items():
             if name in self.known_units:
                 result.unit_registry[name] = spelled
@@ -1511,18 +1899,97 @@ class UnitValidator:
             result.add_error(
                 UNIT_FINDING_UNPARSEABLE,
                 f"Invalid unit '{spelled}' for {kind} '{name}': {e}",
+                path=member_path(name),
+                details={"variable": name, "units": spelled},
             )
+        for decl in [*(rs.species or []), *(rs.parameters or [])]:
+            self._check_default_units(result, member_path(decl.name), decl.name, decl.units, decl)
 
-        # Validate reactions
-        if rs.reactions:
-            for reaction in rs.reactions:
-                reaction_result = self._validate_reaction(reaction)
-                result.errors.extend(reaction_result.errors)
-                result.warnings.extend(reaction_result.warnings)
-                result.findings.extend(reaction_result.findings)
+        for i, reaction in enumerate(rs.reactions or []):
+            path = f"{pointer}/reactions/{i}"
+            result.extend(self._validate_reaction(reaction), path=path)
+            self._check_mass_action_rate(result, path, rs, reaction)
 
         result.is_valid = len(result.errors) == 0
         return result
+
+    def _check_mass_action_rate(
+        self, result: UnitValidationResult, path: str, rs, reaction
+    ) -> None:
+        """Mass-action dimensional check for a reaction rate (esm-spec §7.4).
+
+        For a rate that is a bare reference to a declared unit, with substrates
+        that all declare units and integer stoichiometries, ``rate *
+        prod(substrate^stoich)`` must have the dimension of the first
+        substrate per time. A dimensionless first substrate (a mole-fraction
+        family) is skipped, as in Julia. Compound rate expressions are not
+        checked: they carry implicit unit constants.
+        """
+        from .structural_checks import _BUILTIN_SYMBOLS
+
+        def dim(units: str | None):
+            if not units:
+                return None
+            try:
+                return unit_dimensionality(units)
+            except UnparseableUnitError:
+                return None  # reported at its declaration
+
+        rate = reaction.rate_constant
+        if not isinstance(rate, str) or rate in _BUILTIN_SYMBOLS:
+            return
+        species_units = {sp.name: sp.units for sp in rs.species or []}
+        param_units = {p.name: p.units for p in rs.parameters or []}
+        if rate in param_units:
+            rate_units = param_units[rate]
+        elif rate in species_units:
+            rate_units = species_units[rate]
+        elif rate in self.scoped_units:
+            # A scoped reference has the units its target declares (esm-spec
+            # §4.8.4); one that declares none is skipped.
+            rate_units = self.scoped_units[rate].units
+        else:
+            return  # an undefined reference is reported elsewhere
+        rate_dim = dim(rate_units)
+        if rate_dim is None or not reaction.reactants:
+            return
+        # reactants preserves the document's substrate order.
+        first = next(iter(reaction.reactants))
+        first_units = species_units.get(first)
+        first_dim = dim(first_units)
+        dimensionless = unit_dimensionality("")
+        if first_dim is None or first_dim == dimensionless:
+            return
+        substrate_dim = dimensionless
+        total_order = 0
+        for name, stoich in reaction.reactants.items():
+            try:
+                order = int(stoich)
+            except (TypeError, ValueError):
+                return
+            sp_dim = dim(species_units.get(name))
+            if order != stoich or sp_dim is None:
+                return
+            substrate_dim = substrate_dim * sp_dim**order
+            total_order += order
+        # rate * prod(substrate^stoich) == first / time, which is
+        # rate == first^(1-order) / time without pint's [x]^0 quirk.
+        if rate_dim * substrate_dim == first_dim / unit_dimensionality("s"):
+            return
+        expected = _format_expected_rate_units(first_units or "", total_order)
+        result.add_error(
+            UNIT_FINDING_DIMENSIONAL_MISMATCH,
+            "Reaction rate expression has incompatible units for reaction stoichiometry",
+            lhs_units=rate_units or "",
+            rhs_units=expected,
+            path=path,
+            details={
+                "reaction_id": reaction.id if reaction.id is not None else reaction.name,
+                "rate_units": rate_units or "",
+                "expected_rate_units": expected,
+                "reaction_order": total_order,
+            },
+        )
 
     def _enter_component(
         self, component: Any, scoped: ScopedUnits | None = None
@@ -1534,8 +2001,9 @@ class UnitValidator:
         undeterminable."""
         self.known_units = {}
         self.scoped_units = (scoped or ScopedUnits(None)).for_component(component)
+        self._declared_spelling = _declared_units(component)
         unparseable = []
-        for name, spelled in _declared_units(component).items():
+        for name, spelled in self._declared_spelling.items():
             try:
                 self.known_units[name] = parse_unit(spelled)
             except UnparseableUnitError as e:
@@ -2142,9 +2610,8 @@ class UnitValidator:
         which the handler then swallowed, so the function returned ``True`` for
         every input pair and the whole dimensional check was dead code.
 
-        Comparing the containers directly is both correct and total (it is the
-        same test ``structural_checks._units_compatible`` already uses), so
-        there is no exception path left to swallow a logic error.
+        Comparing the containers directly is both correct and total, so there
+        is no exception path left to swallow a logic error.
         """
         return dim1 == dim2
 

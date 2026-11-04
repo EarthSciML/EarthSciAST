@@ -4550,7 +4550,7 @@ Well-known physical constants whose declared units can be dimensionally
 verified against a canonical form. Conservative on purpose — names chosen
 to minimize collision with common non-constant uses (e.g., no `c` for
 speed of light, which conflicts with concentration). Mirrors Python's
-`_KNOWN_PHYSICAL_CONSTANTS` (gt-j91l / gt-3tgv).
+`units.KNOWN_PHYSICAL_CONSTANTS` (gt-j91l / gt-3tgv).
 
 Each tuple is (name, canonical_units, description).
 """
@@ -4582,7 +4582,7 @@ declared units are dimensionally incompatible with the canonical form (e.g.,
 `R` declared as `kcal/mol` — missing temperature — instead of `J/(mol*K)`).
 Reports at the first observed-variable usage site in the same model;
 otherwise at the declaration. Mirrors Python's
-`parse._check_physical_constant_units` (gt-3tgv). Recurses into subsystems.
+`units.UnitValidator._check_physical_constants` (gt-3tgv). Recurses into subsystems.
 """
 function validate_physical_constant_units(model::Model, path::String)::Vector{StructuralError}
     errors = StructuralError[]
@@ -4660,7 +4660,7 @@ Flag observed variables whose defining expression is `<numeric> * <var>`
 (or `<var> * <numeric>`) where the declared units and the source variable's
 units are dimensionally compatible but the numeric literal disagrees with the
 correct linear conversion factor. Only linear (non-affine) conversions are
-checked. Mirrors Python's `parse._check_conversion_factor_consistency`
+checked. Mirrors Python's `units.UnitValidator._check_conversion_factor`
 (gt-nvdv). Recurses into subsystems.
 """
 function validate_conversion_factor_consistency(model::Model, path::String)::Vector{StructuralError}

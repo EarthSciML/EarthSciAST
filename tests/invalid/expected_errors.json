@@ -2220,7 +2220,7 @@
       }
     ],
     "is_valid": false,
-    "notes": "Observed variable declared in Pa is assigned '50000 * p_atm' where p_atm is in atm; dimensions match but the numeric scale factor should be 101325 Pa/atm. Python's validator (parse._check_conversion_factor_consistency) detects linear-scale conversion errors by comparing the numeric literal in a '*' expression against pint's computed conversion factor. Affine conversions (e.g., degC\u2192K) are excluded. Julia/Rust/TS/Go currently accept the file without this error \u2014 follow-up beads required for full cross-language support."
+    "notes": "Observed variable declared in Pa is assigned '50000 * p_atm' where p_atm is in atm; dimensions match but the numeric scale factor should be 101325 Pa/atm. Python's validate() (units.UnitValidator._check_conversion_factor) detects linear-scale conversion errors by comparing the numeric literal in a '*' expression against pint's computed conversion factor. Affine conversions (e.g., degC\u2192K) are excluded. Julia/Rust/TS/Go currently accept the file without this error \u2014 follow-up beads required for full cross-language support."
   },
   "units_dimensional_constant_error.esm": {
     "schema_errors": [],
@@ -4483,6 +4483,29 @@
       }
     ],
     "is_valid": false,
-    "notes": "esm-spec \u00a74.8.3, \u00a74.8.4: a temperature in degC is not dimensionless, so exp(-Ts_c - 4) is a provable inconsistency, and the undeterminable literal factor in front of it does not hide that. Julia's and Go's checkers used to stop walking a product at its first undeterminable factor and accepted this. It is its own file because Python stops at its load-time transcendental check, which only looks at bare-variable arguments, so a compound argument in a file that also fails that check goes unreported (issue #644)."
+    "notes": "esm-spec \u00a74.8.3, \u00a74.8.4: a temperature in degC is not dimensionless, so exp(-Ts_c - 4) is a provable inconsistency, and the undeterminable literal factor in front of it does not hide that. Julia's and Go's checkers used to stop walking a product at its first undeterminable factor and accepted this."
+  },
+  "units_several_errors_in_one_file.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/exp_of_bare_temperature",
+        "code": "unit_inconsistency"
+      },
+      {
+        "path": "/models/BadUnitsModel/variables/exp_of_degC_sum",
+        "code": "unit_inconsistency"
+      },
+      {
+        "path": "/models/BadUnitsModel/variables/log10_of_pressure_sum",
+        "code": "unit_inconsistency"
+      },
+      {
+        "path": "/models/BadUnitsModel/variables/tanh_of_speed",
+        "code": "unit_inconsistency"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3, \u00a74.8.4: every transcendental of a dimensional argument in the file is reported, the bare-variable one and the three compound ones alike. A checker that looks only at a bare-variable argument finds just exp_of_bare_temperature; the other three need the dimension of a compound argument."
   }
 }
