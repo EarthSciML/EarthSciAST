@@ -711,6 +711,19 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
                 end
             end
         end
+        # esm-spec §8 (esm 1.0.0): a data source is not a coupling endpoint or a
+        # scoped-name root, so a `variable_map` whose `from` is owned by a
+        # `data_sources` key resolves to nothing.
+        @testset "variable_map from a data source is unresolved" begin
+            fixture = "variable_map_from_data_source.esm"
+            fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", fixture)
+            if _require_fixture(fixture_path)
+                result = EarthSciAST.validate(EarthSciAST.load_path(fixture_path))
+                @test !result.is_valid
+                expected = [(String(e.code), String(e.path)) for e in pins[fixture].structural_errors]
+                @test [(e.error_type, e.path) for e in result.structural_errors] == expected
+            end
+        end
         @testset "Inline-test static check: every accepted spelling validates clean" begin
             fixture_path = joinpath(
                 TESTUTILS_REPO_ROOT, "tests", "valid",

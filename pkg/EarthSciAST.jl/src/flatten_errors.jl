@@ -155,6 +155,45 @@ Base.showerror(io::IO, e::VariableMapUnresolvedEndpointError) =
 )
 
 """
+    VariableMapShapeConflictError
+
+Raised when a data-fed `variable_map` source's declared shape differs from the
+shape of the shaped target it replaces (esm-libraries-spec §4.7.3).
+
+The parameter that survives a `param_to_var` or `conversion_factor` edge is the
+SOURCE's own declaration, `shape` included. A data-fed parameter must declare
+its shape (the schema requires it; `[]` declares a scalar buffer), so when the
+removed target is shaped the rewritten equations index the source the way the
+target was declared, and the two shapes have to be the same. Taking either one
+silently would leave equations indexing a parameter of the wrong rank, or —
+with one source feeding two targets — make the result depend on coupling order.
+
+Same export policy as [`VariableMapUnresolvedEndpointError`](@ref).
+
+Fields:
+- `from`, `to`: the entry's two endpoints.
+- `source_shape`: the source's declared shape (`[]` when absent).
+- `target_shape`: the removed target's declared shape.
+"""
+struct VariableMapShapeConflictError <: EarthSciASTError
+    from::String
+    to::String
+    source_shape::Vector{String}
+    target_shape::Vector{String}
+end
+
+Base.showerror(io::IO, e::VariableMapShapeConflictError) =
+    print(
+    io, "VariableMapShapeConflictError: variable_map(", e.from, " -> ", e.to,
+    "): the data-fed source '", e.from, "' declares shape ", e.source_shape,
+    ", but the target it replaces declares ", e.target_shape, ". The source ",
+    "survives with its own declaration, and the rewritten equations index it the ",
+    "way the target was declared, so the two shapes must be equal ",
+    "(esm-libraries-spec §4.7.3). Declare '", e.from, "' with shape ",
+    e.target_shape, "."
+)
+
+"""
     DimensionPromotionError
 
 Raised during flatten when a variable or equation cannot be promoted from

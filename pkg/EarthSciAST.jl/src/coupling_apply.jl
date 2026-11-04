@@ -179,9 +179,9 @@ Runs on the PRE-coupling tables: an `operator_compose` `translate` merge (§10.2
 legitimately consumes one of two spellings of a quantity, so checking after it
 ran would flag a well-formed endpoint.
 
-EXEMPTION: a `from` whose owning system is a top-level `data_sources` key. Such
-a producer is served through the runtime forcing seam rather than as a declared
-variable, so it is legitimately absent from the tables.
+No exemption for a `from` whose owner is a `data_sources` key: a data source
+is not a coupling endpoint (esm-spec §8), so a field it serves is reached
+through the data-fed parameter that names it in `update.from`.
 
 Deliberately NOT checked: whether a promoting transform's `to` is a PARAMETER
 rather than an unknown. `tests/valid/scoped_refs_coupling.esm` maps
@@ -201,16 +201,10 @@ function _check_variable_map_endpoints(
             push!(declared, name)
         end
     end
-    loader_names = file.data_sources === nothing ? Set{String}() :
-        Set{String}(keys(file.data_sources))
     for entry in file.coupling
         entry isa CouplingVariableMap || continue
-        dot = findfirst('.', entry.from)
-        from_owner = dot === nothing ? entry.from : String(SubString(entry.from, 1, prevind(entry.from, dot)))
-        from_is_loaded = from_owner in loader_names
         for (side, endpoint) in (("from", entry.from), ("to", entry.to))
             (isempty(endpoint) || endpoint in declared) && continue
-            (side == "from" && from_is_loaded) && continue
             throw(VariableMapUnresolvedEndpointError(entry.from, entry.to, side, endpoint))
         end
     end
@@ -1517,10 +1511,14 @@ function _rename_join_clauses(expr::OpExpr, renames::AbstractDict{String, String
 end
 
 # For param_to_var / conversion_factor, remove the target param from the
-# parameter list — it is now driven by `from`. A declared data-fed source keeps
-# its own declaration (`update` included) and, when it declares no shape, takes
-# the removed target's (esm-libraries-spec §4.7.3): the rewritten equations
-# index it the way the target was declared.
+# parameter list — it is now driven by `from`. The source survives exactly as
+# declared — units, default, `update`, `shape` (esm-libraries-spec §4.7.3) — so
+# nothing here changes it. When the removed target is shaped and the source is
+# a data-fed parameter, the rewritten equations index the source with the
+# target's indices, so its declared shape (absent and `[]` both scalar) must
+# equal the target's; otherwise `VariableMapShapeConflictError`. Each edge is
+# checked against the source's DECLARATION, never a shape an earlier edge gave
+# it, so the verdict does not depend on coupling order.
 function _promote_variable_map_param!(
         params::OrderedDict{String, ModelVariable},
         entry::CouplingVariableMap
@@ -1530,17 +1528,26 @@ function _promote_variable_map_param!(
     haskey(params, entry.to) || return
     target = params[entry.to]
     delete!(params, entry.to)
+    target_shape = target.shape === nothing ? String[] : target.shape
+    isempty(target_shape) && return
     source = get(params, entry.from, nothing)
-    if source !== nothing && target.shape !== nothing && !isempty(target.shape) &&
-            (source.shape === nothing || isempty(source.shape)) && _is_data_fed(source)
-        params[entry.from] = _with_shape(source, target.shape)
+    source === nothing && return
+    source_shape = source.shape === nothing ? String[] : source.shape
+    if _is_data_fed(source) && source_shape != target_shape
+        throw(
+            VariableMapShapeConflictError(
+                entry.from, entry.to, copy(source_shape), copy(target_shape)
+            )
+        )
     end
     return
 end
 
-# True iff `v` carries a `kind: "data"` update (esm-spec §5.4).
+# True iff `v` carries a `kind: "data"` update WITH a `from` binding (esm-spec
+# §5.4/§8.5) — the predicate `_collect_loader_fields!` and `_collect_data_feeds!`
+# apply, so all three agree on which parameters are data-fed.
 _is_data_fed(v::ModelVariable) =
-    v.update !== nothing && any(rule -> rule.kind == "data", v.update)
+    v.update !== nothing && any(rule -> rule.kind == "data" && rule.from !== nothing, v.update)
 
 # ========================================
 # Coupling entry descriptions (unchanged from prior implementation)
