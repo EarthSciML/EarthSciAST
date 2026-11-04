@@ -9,8 +9,11 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
-use earthsci_ast::esio_provider::{DocumentProviderOptions, providers_from_document_with};
+use earthsci_ast::esio_provider::{
+    DocumentProviderOptions, EsioProvider, providers_from_document_with,
+};
 use earthsci_ast::provider::CadenceProvider;
+use earthsci_ast::{AxisSel, PrepareProvider};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 
@@ -120,15 +123,15 @@ fn a_monthly_source_with_a_bound_sector_reads_each_month() {
             .unwrap();
     let (key, p) = &mut provs[0];
     assert_eq!(key, "Emis.nox");
-    // calendar months, not a mean month of 30.436875 days
-    assert_eq!(
-        p.refresh_times(),
-        vec![1451606400.0, 1454284800.0, 1456790400.0]
-    );
+    // The document declares no time origin, so model time 0 is the window's
+    // start (2016-01-01), and the anchors are model seconds from it:
+    // calendar months, not a mean month of 30.436875 days.
+    assert_eq!(p.time_origin(), JAN);
+    assert_eq!(p.refresh_times(), vec![0.0, FEB - JAN, MAR - JAN]);
     // the primary location is missing: each month comes from its mirror,
     // converted by the declared unit_conversion
-    assert_eq!(values(p, 1456786800.0), vec![40.0, 42.0]); // 2016-02-29T23:00Z
-    assert_eq!(values(p, 1456790400.0), vec![60.0, 62.0]); // 2016-03-01
+    assert_eq!(values(p, MAR - JAN - 3600.0), vec![40.0, 42.0]); // 2016-02-29T23:00Z
+    assert_eq!(values(p, MAR - JAN), vec![60.0, 62.0]); // 2016-03-01
 }
 
 #[test]
@@ -153,5 +156,158 @@ fn the_two_record_bracket_is_the_consumers_choice() {
     .unwrap();
     let (_, p) = &mut provs[0];
     // 2016-02-15: [Feb, Mar] along the record axis, first
-    assert_eq!(values(p, 1455494400.0), vec![40.0, 42.0, 60.0, 62.0]);
+    assert_eq!(values(p, 1455494400.0 - JAN), vec![40.0, 42.0, 60.0, 62.0]);
+}
+
+const JAN: f64 = 1451606400.0; // 2016-01-01T00:00:00Z
+const FEB: f64 = 1454284800.0; // 2016-02-01T00:00:00Z
+const MAR: f64 = 1456790400.0; // 2016-03-01T00:00:00Z
+
+fn build(doc: &Value, dir: &Path, opts: &DocumentProviderOptions) -> EsioProvider {
+    let mut provs = providers_from_document_with(doc, &dir.join("cache"), opts).unwrap();
+    assert_eq!(provs.len(), 1);
+    provs.pop().unwrap().1
+}
+
+fn build_err(doc: &Value, dir: &Path, opts: &DocumentProviderOptions) -> String {
+    providers_from_document_with(doc, &dir.join("cache"), opts)
+        .err()
+        .expect("refused")
+        .to_string()
+}
+
+/// The `Emis.nox` binding's `from` object, to add a `select` to.
+fn from_mut(d: &mut Value) -> &mut serde_json::Map<String, Value> {
+    d["models"]["Emis"]["variables"]["nox"]["update"]["from"]
+        .as_object_mut()
+        .unwrap()
+}
+
+#[test]
+fn the_time_origin_is_reference_time_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = doc(dir.path());
+    d["domain"] = json!({"temporal": {
+        "reference_time": "2016-02-01T00:00:00Z", "start": "2016-03-01T00:00:00Z"
+    }});
+    let mut p = build(&d, dir.path(), &options(None));
+    assert_eq!(p.time_origin(), FEB);
+    assert_eq!(p.refresh_times(), vec![JAN - FEB, 0.0, MAR - FEB]);
+    // model time 0 reads February, not 1970
+    assert_eq!(values(&mut p, 0.0), vec![40.0, 42.0]);
+}
+
+#[test]
+fn an_empty_reference_time_falls_to_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = doc(dir.path());
+    d["domain"] = json!({"temporal": {"reference_time": "", "start": "2016-03-01T00:00:00Z"}});
+    let mut p = build(&d, dir.path(), &options(None));
+    assert_eq!(p.time_origin(), MAR);
+    assert_eq!(values(&mut p, 0.0), vec![60.0, 62.0]);
+}
+
+#[test]
+fn an_unreadable_time_origin_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = doc(dir.path());
+    d["domain"] = json!({"temporal": {"reference_time": "Feb 2016"}});
+    let e = build_err(&d, dir.path(), &options(None));
+    assert!(e.contains("time_origin_invalid"), "{e}");
+    assert!(e.contains("/domain/temporal/reference_time"), "{e}");
+}
+
+#[test]
+fn without_any_origin_model_time_is_unix_seconds() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut opts = options(None);
+    opts.window = None;
+    let mut p = build(&doc(dir.path()), dir.path(), &opts);
+    assert_eq!(p.time_origin(), 0.0);
+    // unbounded by a window: the source's own declared end bounds it
+    let times = p.refresh_times();
+    assert_eq!(times.len(), 12);
+    assert_eq!(&times[..3], &[JAN, FEB, MAR]);
+    assert_eq!(values(&mut p, MAR), vec![60.0, 62.0]);
+}
+
+#[test]
+fn the_default_window_is_the_documents_time_span() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = doc(dir.path());
+    d["esm"] = json!("1.3.0");
+    d["domain"] = json!({"temporal": {"start": "2016-01-01T00:00:00Z"}});
+    // a number counts from the origin, a timestamp is an instant
+    d["solver"] = json!({"time_span": {"start": FEB - JAN, "end": "2016-04-01T00:00:00Z"}});
+    let mut opts = options(None);
+    opts.window = None;
+    let p = build(&d, dir.path(), &opts);
+    assert_eq!(p.time_origin(), JAN);
+    assert_eq!(p.refresh_times(), vec![FEB - JAN, MAR - JAN]);
+}
+
+#[test]
+fn a_monthly_record_table_follows_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = doc(dir.path());
+    // a record filter makes the source a shared record table
+    d["data_sources"]["NEI"]["record_filter"] = json!({"require_finite": ["NOX"]});
+    let mut p = build(&d, dir.path(), &options(None));
+    // materialize primes at the window's start: January
+    let jan = CadenceProvider::materialize(&mut p).unwrap();
+    let jan: Vec<f64> = jan.values().next().unwrap().array.iter().copied().collect();
+    assert_eq!(jan, vec![20.0, 22.0]);
+    // the record has not advanced
+    assert!(p.refresh(3600.0).unwrap().is_none());
+    // a later t reads ITS month, through the table's filter and conversion
+    assert_eq!(values(&mut p, MAR - JAN + 3600.0), vec![60.0, 62.0]);
+    assert!(p.refresh(MAR - JAN + 7200.0).unwrap().is_none());
+    assert_eq!(values(&mut p, FEB - JAN), vec![40.0, 42.0]);
+}
+
+#[test]
+fn a_record_table_refuses_the_two_record_bracket() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = doc(dir.path());
+    d["data_sources"]["NEI"]["record_filter"] = json!({"require_finite": ["NOX"]});
+    let e = build_err(&d, dir.path(), &options(Some(2)));
+    assert!(e.contains("records_per_sample = 2"), "{e}");
+    assert!(e.contains("record table"), "{e}");
+}
+
+#[test]
+fn a_fixed_select_addresses_the_record_axes_not_the_bracket() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = doc(dir.path());
+    from_mut(&mut d).insert("select".into(), json!({"axes": [{"fixed": 1}]}));
+    // one record: ROW 1 of March
+    let mut p = build(&d, dir.path(), &options(None));
+    assert_eq!(values(&mut p, MAR - JAN), vec![62.0]);
+    // the bracket: ROW 1 of [Feb, Mar], the leading record axis taken whole
+    let mut p = build(&d, dir.path(), &options(Some(2)));
+    assert_eq!(values(&mut p, 1455494400.0 - JAN), vec![42.0, 62.0]);
+}
+
+#[test]
+fn a_time_varying_source_selects_engine_side() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut p = build(&doc(dir.path()), dir.path(), &options(None));
+    // a reader-side select would address the file's record axis too
+    assert!(!PrepareProvider::supports_selection(&p));
+    // reached anyway: the record a time-less sample reads (the window's
+    // start), sliced here, every requested axis kept
+    let a = p
+        .sample_with_selection(&[AxisSel::Indices(vec![1])])
+        .unwrap();
+    assert_eq!(a.shape(), &[1]);
+    assert_eq!(a.iter().copied().collect::<Vec<_>>(), vec![22.0]);
+}
+
+#[test]
+fn an_empty_url_override_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut opts = options(None);
+    opts.url_overrides.insert("NEI".to_string(), String::new());
+    let e = build_err(&doc(dir.path()), dir.path(), &opts);
+    assert!(e.contains(r#"url_overrides["NEI"] is empty"#), "{e}");
 }

@@ -184,23 +184,44 @@ fn to_ess_field(
 /// one decode per variable, which also means the 69 MB FF10 zip is unzipped and
 /// parsed once for all eight of its variables instead of eight times.
 ///
-/// Lazily materialized on first use and then held: the providers are sampled
-/// one after another by `prepare`, and the second one must not re-read.
+/// The decode is keyed by the source's RECORD ANCHOR: the cadence anchor at or
+/// before the requested instant for a time-varying source, and one key for a
+/// const source. Only the most recent decode is held, so memory stays bounded
+/// by one record however long the run; the providers are sampled one after
+/// another at the same instant, and the second one must not re-read. Every
+/// column served for an instant comes from that instant's decode, so the
+/// columns stay aligned across a refresh too.
 struct RecordTable {
     loader_name: String,
-    loader: DataSource,
-    cache: Arc<Cache>,
+    /// The table source's own provider, sampled statelessly
+    /// ([`Provider::sample_at`]) at each new anchor.
+    provider: Provider,
+    /// The source's cadence, `None` for a const source.
+    temporal: Option<earthsciio::SourceTemporal>,
     columns: Vec<ColumnSpec>,
     /// Loader variables whose non-finite cells drop the record.
     require_finite: Vec<String>,
-    /// name → filtered column, once decoded.
-    state: Mutex<Option<RecordColumns>>,
+    /// The most recent decode: its record anchor (`None` for a const source)
+    /// and its name → filtered column map.
+    state: Mutex<Option<(Option<OffsetDateTime>, RecordColumns)>>,
 }
 
 impl RecordTable {
-    /// The filtered column for loader variable `name`.
-    fn column(&self, name: &str) -> Result<ArrayD<f64>, ProviderError> {
-        let cols = self.materialize()?;
+    /// The record anchor an instant reads: the cadence anchor at or before it,
+    /// or `None` for a const source (one record for the whole run).
+    fn anchor(&self, at: OffsetDateTime) -> Option<OffsetDateTime> {
+        self.temporal.as_ref().map(|t| t.record_anchor(at))
+    }
+
+    /// The filtered column for loader variable `name` at instant `at`, and the
+    /// record anchor it was decoded at.
+    fn column_at(
+        &self,
+        name: &str,
+        at: OffsetDateTime,
+    ) -> Result<(Option<OffsetDateTime>, ArrayD<f64>), ProviderError> {
+        let anchor = self.anchor(at);
+        let cols = self.materialize(anchor, at)?;
         let v = cols.get(name).ok_or_else(|| {
             err(format!(
                 "loader '{}' has no column '{name}' (declared: {:?})",
@@ -208,30 +229,44 @@ impl RecordTable {
                 cols.keys().collect::<Vec<_>>()
             ))
         })?;
-        Ok(ArrayD::from_shape_vec(IxDyn(&[v.len()]), v.clone())
-            .expect("a 1-D shape always matches its own length"))
+        let arr = ArrayD::from_shape_vec(IxDyn(&[v.len()]), v.clone())
+            .expect("a 1-D shape always matches its own length");
+        Ok((anchor, arr))
     }
 
-    /// Decode + filter once; subsequent calls reuse the columns.
-    fn materialize(&self) -> Result<RecordColumns, ProviderError> {
+    /// Decode + filter once per anchor; later calls at the same anchor reuse
+    /// the columns, and a new anchor replaces them.
+    fn materialize(
+        &self,
+        anchor: Option<OffsetDateTime>,
+        at: OffsetDateTime,
+    ) -> Result<RecordColumns, ProviderError> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| err("record table lock poisoned by an earlier decode failure"))?;
-        if let Some(cols) = state.as_ref() {
+        if let Some((held, cols)) = state.as_ref()
+            && *held == anchor
+        {
             return Ok(cols.clone());
         }
-        let cols = Arc::new(self.decode()?);
-        *state = Some(cols.clone());
+        // Drop the old decode BEFORE the new one, so two records are never
+        // held at once.
+        *state = None;
+        let cols = Arc::new(self.decode(at)?);
+        *state = Some((anchor, cols.clone()));
         Ok(cols)
     }
 
-    fn decode(&self) -> Result<HashMap<String, Vec<f64>>, ProviderError> {
-        let mut provider = Provider::new(self.loader.clone(), self.cache.clone(), None)
-            .map_err(|e| err(format!("loader '{}': {e}", self.loader_name)))?;
-        let fields = provider
-            .materialize()
-            .map_err(|e| err(format!("loader '{}' decode failed: {e}", self.loader_name)))?;
+    fn decode(&self, at: OffsetDateTime) -> Result<HashMap<String, Vec<f64>>, ProviderError> {
+        // The stateless sampler: the record in effect at `at` for a
+        // time-varying source (its time axis dropped), the whole file for a
+        // const one.
+        let fields = self
+            .provider
+            .sample_at(at)
+            .map_err(|e| err(format!("loader '{}' decode failed: {e}", self.loader_name)))?
+            .variables;
 
         // Raw columns (unfiltered), plus the per-record keep mask the `codes`
         // drops and the finite requirement build up.
@@ -543,6 +578,7 @@ pub struct EsioProviderBuilder {
     table: Option<(Arc<RecordTable>, String)>,
     extent_mp: Option<String>,
     unit_conversion: Option<UnitConversion>,
+    time_origin: f64,
 }
 
 impl EsioProviderBuilder {
@@ -570,6 +606,19 @@ impl EsioProviderBuilder {
     /// The run window bounding `refresh_times` / priming a DISCRETE materialize.
     pub fn window(mut self, window: Window) -> Self {
         self.window = Some(window);
+        self
+    }
+
+    /// The UTC instant model time `0` stands for, in Unix seconds (esm-spec
+    /// §2.2.7's time origin). A refresh at model time `t` reads the instant
+    /// `time_origin + t`, and [`CadenceProvider::refresh_times`] reports
+    /// anchors on the model clock (`unix - time_origin`).
+    ///
+    /// Defaults to `0.0`, the POSIX epoch, so model time IS Unix seconds for a
+    /// caller that sets none. [`providers_from_document_with`] sets it from
+    /// the document.
+    pub fn time_origin(mut self, unix_seconds: f64) -> Self {
+        self.time_origin = unix_seconds;
         self
     }
 
@@ -621,6 +670,34 @@ impl EsioProviderBuilder {
     /// fails here rather than mid-solve.
     pub fn build(self) -> Result<EsioProvider, ProviderError> {
         let table = self.table;
+        if !self.time_origin.is_finite() {
+            return Err(err(format!(
+                "time origin {} is not a finite number of Unix seconds",
+                self.time_origin
+            )));
+        }
+        let temporal = self.loader.temporal.clone();
+        let bracket = temporal
+            .as_ref()
+            .is_some_and(|t| t.records_per_sample == Some(2));
+        if bracket && let Some((t, _)) = &table {
+            return Err(err(format!(
+                "loader '{}' is a record table (it declares a record_filter or codes), \
+                 whose columns are 1-D records; records_per_sample = 2 (a bracket of \
+                 two records) is not defined for it",
+                t.loader_name
+            )));
+        }
+        // A declared select names the source's native PER-RECORD axes (esm-spec
+        // §8.9.2), never the bracket: a two-record sample carries an extra
+        // LEADING record axis of length 2, taken whole.
+        let declared = self.declared.map(|axes| {
+            if bracket {
+                std::iter::once(GateAxis::All).chain(axes).collect()
+            } else {
+                axes
+            }
+        });
         let inner = Provider::new(self.loader, self.cache, self.window)
             .map_err(|e| err(format!("EarthSciIO provider construction failed: {e}")))?;
         // A declared select goes to the reader when it can fetch pre-sliced,
@@ -631,14 +708,20 @@ impl EsioProviderBuilder {
         // through to the engine arm — where `gate_spec()` reports it and
         // `prepare` fetches it pre-sliced to the support set once
         // value-invention has derived the members.
-        let (select, applied) = match self.declared {
+        //
+        // A time-varying source never pushes: a reader-side select addresses
+        // the FILE's on-disk axes, which include the record axis the declared
+        // select does not name. Its select is applied after the record is
+        // sliced instead.
+        let (select, applied) = match declared {
             None => (self.select, SelectApplication::None),
             Some(axes) => {
-                let pushable = if inner.supports_selection() && table.is_none() {
-                    ReaderAxis::from_declared(&axes)
-                } else {
-                    None
-                };
+                let pushable =
+                    if inner.supports_selection() && table.is_none() && temporal.is_none() {
+                        ReaderAxis::from_declared(&axes)
+                    } else {
+                        None
+                    };
                 match pushable {
                     Some(reader) => {
                         let drop_axes = reader
@@ -663,6 +746,10 @@ impl EsioProviderBuilder {
             table,
             extent_mp: self.extent_mp,
             unit_conversion: self.unit_conversion,
+            time_origin: self.time_origin,
+            prime: prime_instant(temporal.as_ref(), self.window),
+            time_varying: temporal.is_some(),
+            table_anchor: None,
         })
     }
 }
@@ -680,6 +767,40 @@ pub struct EsioProvider {
     extent_mp: Option<String>,
     /// The variable's declared `unit_conversion` (esm-spec §8.5), if any.
     unit_conversion: Option<UnitConversion>,
+    /// The instant model time 0 stands for, in Unix seconds.
+    time_origin: f64,
+    /// The instant a time-less sample reads (see [`prime_instant`]).
+    prime: OffsetDateTime,
+    /// The source declares a cadence (it is not const).
+    time_varying: bool,
+    /// The record anchor a record-table column was last served at, for the
+    /// `refresh` None-skip.
+    table_anchor: Option<OffsetDateTime>,
+}
+
+/// The UTC instant `unix` Unix seconds name, rounded to the microsecond (see
+/// [`EsioProvider::instant`]).
+fn unix_instant(unix: f64) -> Result<OffsetDateTime, String> {
+    if !unix.is_finite() {
+        return Err(format!("{unix} is not a finite time"));
+    }
+    let micros = (unix * 1e6).round() as i128;
+    OffsetDateTime::from_unix_timestamp_nanos(micros * 1000)
+        .map_err(|e| format!("{unix} s is not a valid instant: {e}"))
+}
+
+/// The instant a time-less sample reads — EarthSciIO's own priming rule for a
+/// DISCRETE `materialize`: the later of the run window's start and the
+/// source's start. A const source has one record; its instant is immaterial.
+fn prime_instant(
+    temporal: Option<&earthsciio::SourceTemporal>,
+    window: Option<Window>,
+) -> OffsetDateTime {
+    match (temporal, window) {
+        (None, _) => OffsetDateTime::UNIX_EPOCH,
+        (Some(t), Some((a, _))) if a > t.start => a,
+        (Some(t), _) => t.start,
+    }
 }
 
 impl EsioProvider {
@@ -695,6 +816,7 @@ impl EsioProvider {
             table: None,
             extent_mp: None,
             unit_conversion: None,
+            time_origin: 0.0,
         }
     }
 
@@ -702,9 +824,55 @@ impl EsioProvider {
     ///
     /// A record-table column never can: its rows are chosen by the loader's
     /// declared filter AFTER the decode, so an index pushed to the reader would
-    /// address raw rows rather than the delivered ones.
+    /// address raw rows rather than the delivered ones. Nor can a time-varying
+    /// source: a reader-side select addresses the file's on-disk axes, record
+    /// axis included, so the record is fetched whole and sliced engine-side.
     pub fn supports_selection(&self) -> bool {
-        self.table.is_none() && self.inner.supports_selection()
+        self.table.is_none() && !self.time_varying && self.inner.supports_selection()
+    }
+
+    /// The instant model time 0 stands for, in Unix seconds (see
+    /// [`EsioProviderBuilder::time_origin`]).
+    pub fn time_origin(&self) -> f64 {
+        self.time_origin
+    }
+
+    /// The UTC instant model time `t` reads: `time_origin + t`, rounded to the
+    /// microsecond so an anchor reported by `refresh_times` (`unix - origin`)
+    /// and handed back lands on that anchor exactly, not a binary64 rounding
+    /// error below it — which would snap to the previous record.
+    fn instant(&self, t: f64) -> Result<OffsetDateTime, ProviderError> {
+        unix_instant(self.time_origin + t).map_err(|why| {
+            err(format!(
+                "model time {t} (origin {}): {why}",
+                self.time_origin
+            ))
+        })
+    }
+
+    /// A record-table column at instant `at`, keyed by the model variable it
+    /// feeds, with the record anchor it was decoded at. Before the declared
+    /// select and unit conversion.
+    fn table_fields(
+        &self,
+        at: OffsetDateTime,
+    ) -> Result<(Option<OffsetDateTime>, HashMap<String, NativeField>), ProviderError> {
+        let (table, column) = self
+            .table
+            .as_ref()
+            .expect("table_fields is only called on a record-table column");
+        let model_name = self
+            .var_map
+            .values()
+            .next()
+            .cloned()
+            .unwrap_or_else(|| column.clone());
+        let (anchor, array) = table.column_at(column, at)?;
+        let field = NativeField {
+            array,
+            coords: IndexMap::new(),
+        };
+        Ok((anchor, HashMap::from([(model_name, field)])))
     }
 
     /// The full native shape of on-disk array `var` without reading any chunk —
@@ -720,7 +888,16 @@ impl EsioProvider {
         &self,
         fields: HashMap<String, EsioField>,
     ) -> Result<HashMap<String, NativeField>, ProviderError> {
-        let coords = self.inner.coords();
+        self.convert_with(fields, self.inner.coords())
+    }
+
+    /// [`convert`](Self::convert) against an explicit coordinate set (a
+    /// stateless sample's own, rather than the provider buffer's).
+    fn convert_with(
+        &self,
+        fields: HashMap<String, EsioField>,
+        coords: &HashMap<String, earthsciio::format::Coord>,
+    ) -> Result<HashMap<String, NativeField>, ProviderError> {
         let mut out = HashMap::with_capacity(fields.len());
         for (disk_name, f) in fields {
             let model_name = self
@@ -903,6 +1080,81 @@ mod prepare_impl {
         )
     }
 
+    /// Take each axis's selection of an already-read array, keeping every
+    /// axis (a fixed axis comes back length 1, as a reader would return it).
+    fn slice_selection(
+        key: &str,
+        arr: ArrayD<f64>,
+        selection: &[AxisSel],
+    ) -> Result<ArrayD<f64>, PrepareError> {
+        if selection.len() != arr.ndim() {
+            return Err(perr(format!(
+                "provider '{key}': the selection has {} axes but the array is rank {} ({:?})",
+                selection.len(),
+                arr.ndim(),
+                arr.shape()
+            )));
+        }
+        let mut out = arr;
+        for (i, ax) in selection.iter().enumerate() {
+            let idx: Vec<usize> = match ax {
+                AxisSel::All => continue,
+                AxisSel::Indices(idx) => idx.clone(),
+                AxisSel::Range { start, stop, step } => {
+                    (*start..*stop).step_by((*step).max(1)).collect()
+                }
+            };
+            let dim = out.shape()[i];
+            if let Some(&bad) = idx.iter().find(|&&g| g >= dim) {
+                return Err(perr(format!(
+                    "provider '{key}': the selection reaches index {bad} on axis {i}, \
+                     whose native length is {dim}"
+                )));
+            }
+            out = out.select(Axis(i), &idx);
+        }
+        Ok(out)
+    }
+
+    impl EsioProvider {
+        /// [`PrepareProvider::sample_with_selection`] for a provider that
+        /// cannot push a selection down: the record a time-less sample reads
+        /// (`prime`), sampled statelessly and whole, then sliced here — never
+        /// a reader-side select, which would address the file's record axis.
+        fn sample_then_select(
+            &mut self,
+            selection: &[AxisSel],
+        ) -> Result<ArrayD<f64>, PrepareError> {
+            let pe = |e: ProviderError| perr(e.to_string());
+            let fields = if self.table.is_some() {
+                self.table_fields(self.prime).map_err(pe)?.1
+            } else if let Some(sel) = &self.select {
+                // A caller's explicit reader select stays a per-call peek.
+                let fields = self
+                    .inner
+                    .refresh_with_select(self.prime, Some(sel))
+                    .map_err(|e| perr(format!("EarthSciIO sample failed: {e}")))?
+                    .unwrap_or_default();
+                self.convert(fields).map_err(pe)?
+            } else {
+                let ds = self
+                    .inner
+                    .sample_at(self.prime)
+                    .map_err(|e| perr(format!("EarthSciIO sample failed: {e}")))?;
+                self.convert_with(ds.variables, &ds.coords).map_err(pe)?
+            };
+            let mut sliced = HashMap::with_capacity(fields.len());
+            for (key, mut f) in fields {
+                f.array = slice_selection(&key, f.array, selection)?;
+                f.coords.clear(); // the native coordinates index the FULL axes
+                sliced.insert(key, f);
+            }
+            // As on the pushed path, the gate IS the whole selection; only the
+            // declared unit_conversion still applies.
+            single_field(self.convert_units(sliced).map_err(pe)?)
+        }
+    }
+
     impl PrepareProvider for EsioProvider {
         fn sample(&mut self) -> Result<ArrayD<f64>, PrepareError> {
             let fields = CadenceProvider::materialize(self).map_err(|e| perr(e.to_string()))?;
@@ -917,6 +1169,11 @@ mod prepare_impl {
             &mut self,
             selection: &[AxisSel],
         ) -> Result<ArrayD<f64>, PrepareError> {
+            if self.table.is_some() || self.time_varying {
+                // Never pushed (see `supports_selection`): read the record a
+                // time-less sample primes at whole, and select engine-side.
+                return self.sample_then_select(selection);
+            }
             let sel = to_selection(selection);
             let fields = self
                 .inner
@@ -1071,6 +1328,45 @@ mod prepare_impl {
         out
     }
 
+    /// The time origin of the providers a document builds, in Unix seconds:
+    /// the instant model time 0 stands for. First match wins:
+    ///
+    /// 1. `domain.temporal.reference_time`, when it is a non-empty string;
+    /// 2. else `domain.temporal.start`, when it is a non-empty string;
+    /// 3. else the start of the run `window`, when one was given;
+    /// 4. else the POSIX epoch (model time is then Unix seconds).
+    ///
+    /// An empty string is skipped, as esm-spec §2.2.7 says loaders do; any
+    /// other present value that is not an RFC 3339 date-time is an error,
+    /// read by the §2.2.7 clock accessor [`crate::solver::time_origin`] so the
+    /// message is that accessor's.
+    fn document_time_origin(
+        doc: &serde_json::Value,
+        window: Option<Window>,
+    ) -> Result<f64, PrepareError> {
+        if let Some(temporal) = doc
+            .pointer("/domain/temporal")
+            .and_then(serde_json::Value::as_object)
+        {
+            for key in ["reference_time", "start"] {
+                match temporal.get(key) {
+                    None => {}
+                    Some(serde_json::Value::String(s)) if s.is_empty() => {}
+                    Some(v) => {
+                        // The accessor reads `reference_time` first, so hand it
+                        // the one field that applies here.
+                        let domain = serde_json::json!({ "temporal": { key: v } });
+                        return crate::solver::time_origin(&domain)
+                            .map_err(|e| perr(format!("providers_from_document: {e}")));
+                    }
+                }
+            }
+        }
+        Ok(window.map_or(0.0, |(start, _)| {
+            start.unix_timestamp() as f64 + f64::from(start.nanosecond()) * 1e-9
+        }))
+    }
+
     /// Document-declared provider construction — the Rust mirror of the Python
     /// `earthsci_ast.data_sources.esio_provider.providers_from_document` (and
     /// the Julia EarthSciIO extension's namesake). The document's
@@ -1111,12 +1407,49 @@ mod prepare_impl {
     /// substitutions per source, the run window (UTC) bounding each
     /// time-varying provider's refresh times, and the two-record bracket per
     /// consuming parameter.
+    ///
+    /// **Clock.** Every provider runs on the document's model clock: its time
+    /// origin is `domain.temporal.reference_time`, else `domain.temporal.start`
+    /// (each when a non-empty string), else the start of `opts.window`, else
+    /// the POSIX epoch. A refresh at model time `t` reads the instant
+    /// `origin + t`, and `refresh_times` are model seconds (`unix - origin`).
+    ///
+    /// **Window.** Without `opts.window`, a document with a `solver.time_span`
+    /// bounds the providers by `(origin + start, origin + end)`, its bounds in
+    /// seconds on the §2.2.7 clock. With neither, the providers are unbounded:
+    /// a time-varying source reports refresh times only up to its own declared
+    /// `temporal.end`, and none when it declares no end.
+    ///
+    /// A record-table source (`record_filter` or `codes`) with
+    /// `records_per_sample = 2` is refused, and an empty `url_overrides` entry
+    /// is refused before EarthSciIO is called.
     pub fn providers_from_document_with(
         doc: &serde_json::Value,
         cache_root: &std::path::Path,
         opts: &DocumentProviderOptions,
     ) -> Result<Vec<(String, EsioProvider)>, PrepareError> {
         let loaders = opts.loaders.as_deref();
+        // esm-spec §2.2.7 / §8.3: the instant model time 0 stands for, and the
+        // run window — the caller's, else the document's `solver.time_span`
+        // placed on that clock.
+        let time_origin = document_time_origin(doc, opts.window)?;
+        let window = match opts.window {
+            Some(w) => Some(w),
+            None => crate::solver::raw_time_span_seconds(doc)
+                .map_err(|e| perr(format!("providers_from_document: {e}")))?
+                .map(|(start, end)| -> Result<Window, PrepareError> {
+                    let at = |s: f64| {
+                        unix_instant(time_origin + s).map_err(|why| {
+                            perr(format!(
+                                "providers_from_document: solver.time_span bound {s} s \
+                                 from the time origin: {why}"
+                            ))
+                        })
+                    };
+                    Ok((at(start)?, at(end)?))
+                })
+                .transpose()?,
+        };
         let dls = doc
             .get("data_sources")
             .and_then(|v| v.as_object())
@@ -1131,6 +1464,16 @@ mod prepare_impl {
             {
                 continue;
             }
+            // An override present is honoured whatever its value, so an empty
+            // one is a caller error, not a reason to fall back to the template.
+            let url_override = match opts.url_overrides.get(lname) {
+                Some(u) if u.is_empty() => {
+                    return Err(perr(format!(
+                        "providers_from_document: url_overrides[\"{lname}\"] is empty"
+                    )));
+                }
+                other => other.cloned(),
+            };
             let has_format = ld
                 .get("metadata")
                 .and_then(|m| m.get("esio_format"))
@@ -1176,7 +1519,7 @@ mod prepare_impl {
                     &earthsciio::EsmSourceOptions {
                         variables: vars,
                         substitutions: source_subs.clone(),
-                        url_override: opts.url_overrides.get(lname).cloned(),
+                        url_override: url_override.clone(),
                         records_per_sample: rps,
                     },
                 )
@@ -1226,10 +1569,14 @@ mod prepare_impl {
                     .collect();
                 file_vars.sort();
                 file_vars.dedup();
+                let loader = make_loader(file_vars, None)?;
+                let temporal = loader.temporal.clone();
+                let provider = Provider::new(loader, cache.clone(), window)
+                    .map_err(|e| perr(format!("providers_from_document: loader '{lname}': {e}")))?;
                 Some(Arc::new(RecordTable {
                     loader_name: lname.clone(),
-                    loader: make_loader(file_vars, None)?,
-                    cache: cache.clone(),
+                    provider,
+                    temporal,
                     columns: columns.clone(),
                     require_finite: require_finite.clone(),
                     state: Mutex::new(None),
@@ -1245,8 +1592,9 @@ mod prepare_impl {
                     opts.records_per_sample.get(key.as_str()).copied(),
                 )?;
                 let mut builder = EsioProvider::builder(loader, cache.clone())
-                    .var(spec.file_variable.clone(), key.clone());
-                if let Some(w) = opts.window {
+                    .var(spec.file_variable.clone(), key.clone())
+                    .time_origin(time_origin);
+                if let Some(w) = window {
                     builder = builder.window(w);
                 }
                 let select = parse_declared_select(doc, &format!("{key}.update.from"), b.from)?
@@ -1377,19 +1725,12 @@ impl EsioProvider {
 
 impl CadenceProvider for EsioProvider {
     fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
-        // A record-table loader serves its columns from ONE shared decode.
-        if let Some((table, column)) = &self.table {
-            let model_name = self
-                .var_map
-                .values()
-                .next()
-                .cloned()
-                .unwrap_or_else(|| column.clone());
-            let field = NativeField {
-                array: table.column(column)?,
-                coords: IndexMap::new(),
-            };
-            return self.deliver(HashMap::from([(model_name, field)]));
+        // A record-table loader serves its columns from ONE shared decode,
+        // here the record a time-less sample primes at.
+        if self.table.is_some() {
+            let (anchor, fields) = self.table_fields(self.prime)?;
+            self.table_anchor = anchor;
+            return self.deliver(fields);
         }
         let fields = self
             .inner
@@ -1400,16 +1741,22 @@ impl CadenceProvider for EsioProvider {
     }
 
     fn refresh(&mut self, t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
-        // `refresh_times` below emits UNIX timestamps, so the anchors ESS hands
-        // back arrive on the same scale; convert straight back.
-        if !t.is_finite() {
-            return Err(err(format!("refresh anchor {t} is not a finite time")));
+        // `t` is MODEL time; the data is read at the instant `origin + t`.
+        let at = self.instant(t)?;
+        if let Some((table, _)) = &self.table {
+            // A const table never refreshes; a time-varying one serves the
+            // column decoded at `t`'s record anchor, and nothing (None-skip)
+            // when that anchor has not advanced since the last call.
+            if !self.time_varying || table.anchor(at) == self.table_anchor {
+                return Ok(None);
+            }
+            let (anchor, fields) = self.table_fields(at)?;
+            self.table_anchor = anchor;
+            return self.deliver(fields).map(Some);
         }
-        let anchor = OffsetDateTime::from_unix_timestamp(t as i64)
-            .map_err(|e| err(format!("refresh anchor {t} is not a valid instant: {e}")))?;
         let fields = self
             .inner
-            .refresh_with_select(anchor, self.select.as_ref())
+            .refresh_with_select(at, self.select.as_ref())
             .map_err(|e| err(format!("EarthSciIO refresh failed: {e}")))?;
         // None means the record did not advance — the executor's None-skip leaves
         // the previously-loaded field in place, so propagate it rather than
@@ -1420,7 +1767,12 @@ impl CadenceProvider for EsioProvider {
         }
     }
 
+    /// EarthSciIO's anchors (Unix seconds) moved onto the model clock.
     fn refresh_times(&self) -> Vec<f64> {
-        self.inner.refresh_times()
+        self.inner
+            .refresh_times()
+            .into_iter()
+            .map(|unix| unix - self.time_origin)
+            .collect()
     }
 }
