@@ -184,9 +184,12 @@ type ModelVariable struct {
 	// means the key is absent (scalar); a pointer to an EMPTY slice is the
 	// authored `"shape": []`, which is also scalar but must survive the
 	// round-trip verbatim -- esm 1.0.0 REQUIRES the key on a parameter whose
-	// update is `schedule` / `data` / `remesh` (esm-spec 5.4), so silently
-	// dropping an empty shape re-emits a schema-INVALID document. Use Dims() to
-	// read the axes without caring which spelling arrived.
+	// update is `schedule` / `remesh` (esm-spec 5.4), so silently dropping an
+	// empty shape re-emits a schema-INVALID document. On a `data`-fed parameter
+	// the two spellings MEAN different things: `[]` is a scalar buffer, while an
+	// absent shape takes that of its `param_to_var` target (esm-libraries-spec
+	// 4.7.3, esm-spec 8.5.1). Use Dims() to read the axes without caring which
+	// spelling arrived.
 	Shape *[]string `json:"shape,omitempty"`
 	// Location tags the variable's staggered-grid location
 	// (e.g., "cell_center", "edge_normal", "vertex"). Empty means
@@ -460,11 +463,11 @@ type Parameter struct {
 	// slice rather than a plain one. `omitempty` on a `*[]string` omits only the
 	// NIL pointer (the key was absent); a pointer to an EMPTY slice still emits
 	// `"shape": []`. That distinction is load-bearing here: esm-schema.json
-	// REQUIRES `shape` on a parameter whose `update` kind is `schedule`, `data`,
-	// or `remesh` (esm-spec §5.4), and every such parameter in the corpus is a
-	// scalar authored as `"shape": []`. A plain `[]string` would collapse the
-	// authored empty array into an omitted key and re-emit a schema-INVALID
-	// document. Read it through Dims().
+	// REQUIRES `shape` on a parameter whose `update` kind is `schedule` or
+	// `remesh` (esm-spec §5.4), and on a `data`-fed parameter `[]` is a scalar
+	// buffer while an absent shape takes its `param_to_var` target's
+	// (esm-libraries-spec §4.7.3). A plain `[]string` would collapse the two.
+	// Read it through Dims().
 	Shape *[]string `json:"shape,omitempty"`
 	// Distribution draws the parameter's value from a closed-set distribution
 	// instead of fixing it at `default` (mutually exclusive with it).

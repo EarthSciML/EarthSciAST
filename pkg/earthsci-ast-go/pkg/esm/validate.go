@@ -1821,7 +1821,11 @@ type recordsPerSampleSite struct {
 	varName string
 	// shape is the variable's declared shape, empty for a scalar.
 	shape []string
-	rule  ParameterUpdate
+	// shapeDeclared is true when the variable declares a `shape` at all — `[]`
+	// included, which is a scalar buffer. Only an ABSENT shape takes its
+	// `param_to_var` targets' (esm-spec §8.5.1).
+	shapeDeclared bool
+	rule          ParameterUpdate
 	// path is the rule's JSON Pointer: the variable's `/update`, or
 	// `/update/<i>` when `update` is an array of rules.
 	path string
@@ -1843,11 +1847,12 @@ func walkRecordsPerSampleSites(model *Model, scope, basePath string, visit func(
 				path = fmt.Sprintf("%s/%d", path, i)
 			}
 			visit(recordsPerSampleSite{
-				scoped:  scope + "." + varName,
-				varName: varName,
-				shape:   v.Dims(),
-				rule:    rule,
-				path:    path,
+				scoped:        scope + "." + varName,
+				varName:       varName,
+				shape:         v.Dims(),
+				shapeDeclared: v.Shape != nil,
+				rule:          rule,
+				path:          path,
 			})
 		}
 	}
@@ -1884,8 +1889,9 @@ func pairRecordShapeMessage(varName string, shape []string, target string) strin
 // block, or whose record shape's first dimension is not an index set of
 // exactly two members.
 //
-// The record shape is the declared `shape` when not empty. Otherwise it is the
-// declared `shape` of every inline `param_to_var` target of the parameter; a
+// The record shape is the declared `shape` whenever one is declared, `[]`
+// included. When `shape` is absent it is the declared `shape` of every inline
+// `param_to_var` target of the parameter; a
 // target whose declaration cannot be reached is not decidable here and is left
 // to flatten (checkRecordsPerSampleAfterImports), and only the first failing
 // target is reported. A parameter with no inline target is refused for its
@@ -1937,7 +1943,7 @@ func (s *structuralScan) validateRecordsPerSample(modelName string, model *Model
 				Details: details,
 			})
 		}
-		if len(site.shape) > 0 {
+		if site.shapeDeclared {
 			if !isRecordShape(s.file, site.shape) {
 				badShape(site.shape, "")
 			}
@@ -1963,9 +1969,10 @@ func (s *structuralScan) validateRecordsPerSample(modelName string, model *Model
 // checkRecordsPerSampleAfterImports re-checks esm-spec §8.5.1 rule 3 at
 // flatten, against coupling, the sequence after `coupling_import` expansion:
 // every data-fed parameter, at any depth, whose EFFECTIVE `records_per_sample`
-// is 2 and whose own shape is empty takes its record shape from each
-// `param_to_var` target there, and is refused when it has none or when a
-// target's first dimension is not an index set of exactly two members.
+// is 2 is refused when its record shape's first dimension is not an index set
+// of exactly two members. The record shape is the declared `shape` whenever
+// one is declared, `[]` included; a parameter that declares none takes it from
+// each `param_to_var` target there, and is refused when it has none.
 // Structural validation could not see an imported edge, so this is where such a
 // record shape is first decidable.
 func checkRecordsPerSampleAfterImports(file *ESMFile, coupling []CouplingEntry) error {
@@ -1973,7 +1980,7 @@ func checkRecordsPerSampleAfterImports(file *ESMFile, coupling []CouplingEntry) 
 	for _, modelName := range sortedKeys(file.Models) {
 		model := file.Models[modelName]
 		walkRecordsPerSampleSites(&model, modelName, "/models/"+modelName, func(site recordsPerSampleSite) {
-			if refusal != nil || site.rule.Kind != UpdateKindData || len(site.shape) > 0 {
+			if refusal != nil || site.rule.Kind != UpdateKindData {
 				return
 			}
 			source, ok := file.DataSources[site.rule.Source]
@@ -1986,6 +1993,12 @@ func checkRecordsPerSampleAfterImports(file *ESMFile, coupling []CouplingEntry) 
 					Message: fmt.Sprintf("%s: %s", site.path, pairRecordShapeMessage(site.varName, shape, target)),
 					Path:    site.path,
 				}
+			}
+			if site.shapeDeclared {
+				if !isRecordShape(file, site.shape) {
+					refuse(site.shape, "")
+				}
+				return
 			}
 			targets := paramToVarTargets(coupling, site.scoped)
 			if len(targets) == 0 {

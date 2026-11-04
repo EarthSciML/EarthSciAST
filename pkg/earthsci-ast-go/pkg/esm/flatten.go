@@ -226,13 +226,13 @@ func (e *variableMapUnresolvedEndpointError) Error() string {
 // (esm-libraries-spec §4.7.3).
 //
 // The parameter that survives a `param_to_var` or `conversion_factor` edge is
-// the SOURCE's own declaration, `shape` included. A data-fed parameter must
-// declare its shape (the schema requires it; `[]` declares a scalar buffer),
-// so when the removed target is shaped the rewritten equations index the
-// source the way the target was declared, and the two shapes have to be the
-// same. Taking either one silently would leave equations indexing a parameter
-// of the wrong rank, or — with one source feeding two targets — make the result
-// depend on coupling order.
+// the SOURCE's own declaration. When the removed target is shaped, the
+// rewritten equations index the source the way the target was declared, so a
+// source that declares a `shape` (`[]`, a scalar buffer, included) must declare
+// the target's, and a source that declares none takes it — which requires every
+// target it replaces to declare the same one. Taking either shape silently
+// would leave equations indexing a parameter of the wrong rank, or — with one
+// source feeding two targets — make the result depend on coupling order.
 //
 // Unexported and without a stable diagnostic code, for the same reason as
 // variableMapUnresolvedEndpointError.
@@ -240,16 +240,29 @@ type variableMapShapeConflictError struct {
 	From, To    string
 	SourceShape []string
 	TargetShape []string
+	// Shapeless is true when the source declares no `shape` and SourceShape is
+	// the one it took from an earlier `param_to_var` target.
+	Shapeless bool
 }
 
 func (e *variableMapShapeConflictError) Error() string {
-	return fmt.Sprintf(
-		"flatten: variable_map(%s -> %s): the data-fed source %q declares shape %s, but the "+
-			"target it replaces declares %s. The source survives with its own declaration, and "+
-			"the rewritten equations index it the way the target was declared, so the two shapes "+
-			"must be equal (esm-libraries-spec §4.7.3). Declare %q with shape %s.",
-		e.From, e.To, e.From, shapeString(e.SourceShape), shapeString(e.TargetShape),
-		e.From, shapeString(e.TargetShape))
+	var why string
+	if e.Shapeless {
+		why = fmt.Sprintf(
+			"declares no shape and took %s from an earlier param_to_var target, but this target "+
+				"declares %s. A shapeless data-fed source takes its shape from the targets it "+
+				"replaces, so they must all declare the same one",
+			shapeString(e.SourceShape), shapeString(e.TargetShape))
+	} else {
+		why = fmt.Sprintf(
+			"declares shape %s, but the target it replaces declares %s. The source survives with "+
+				"its own declaration and the rewritten equations index it the way the target was "+
+				"declared, so the two must be equal; declare %q with shape %s, or with no shape to "+
+				"take the target's",
+			shapeString(e.SourceShape), shapeString(e.TargetShape), e.From, shapeString(e.TargetShape))
+	}
+	return fmt.Sprintf("flatten: variable_map(%s -> %s): the data-fed source %q %s (esm-libraries-spec §4.7.3).",
+		e.From, e.To, e.From, why)
 }
 
 func shapeString(shape []string) string {
@@ -2512,7 +2525,10 @@ func checkVariableMapEndpoints(components map[string]*componentSystem,
 // flattening leaves as declared (esm-libraries-spec §4.7.3). A data source is
 // not a coupling endpoint (esm-spec §8), so no parameter is ever built here for
 // a `from` that names one.
-func applyVariableMap(components map[string]*componentSystem, order []string, entry VariableMapCoupling, index int) error {
+//
+// shapeless is dataFedWithoutShape of the document: the data-fed parameters
+// that take a shaped target's shape rather than keep their own.
+func applyVariableMap(components map[string]*componentSystem, order []string, entry VariableMapCoupling, index int, shapeless map[string]bool) error {
 	if entry.From == "" || entry.To == "" {
 		return nil
 	}
@@ -2549,43 +2565,107 @@ func applyVariableMap(components map[string]*componentSystem, order []string, en
 		if !ok {
 			continue
 		}
-		if err := checkDataFedSourceShape(components, order, entry, toVar); err != nil {
+		if err := carryDataFedSourceShape(components, order, entry, toVar, shapeless); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// checkDataFedSourceShape refuses a data-fed source whose declared shape is not
-// its shaped target's.
+// carryDataFedSourceShape gives a shapeless data-fed source its shaped
+// target's shape, or refuses a source whose shape is not the target's
+// (esm-libraries-spec §4.7.3).
 //
-// The source survives the edge as declared — units, default, `update`, `shape`
-// (esm-libraries-spec §4.7.3) — so nothing is changed here. When the removed
-// target is shaped and the source is a data-fed parameter, the rewritten
-// equations index the source with the target's indices, so its declared shape
-// (absent and `[]` both scalar) must equal the target's. Checking each edge
-// against the source's DECLARATION, never against a shape an earlier edge gave
-// it, keeps the verdict independent of coupling order.
-func checkDataFedSourceShape(components map[string]*componentSystem, order []string, entry VariableMapCoupling, target FlattenedVariable) error {
+// The source survives the edge as its own declaration — units, default,
+// `update`. When the removed target is shaped and the source is a data-fed
+// parameter, the rewritten equations index the source with the target's
+// indices:
+//
+//   - a source that DECLARES NO `shape` (shapeless holds its scoped name) takes
+//     the target's. Every further edge from it must name a target of that same
+//     shape, so one shapeless source feeding two targets of different shapes is
+//     refused whichever entry comes first;
+//   - a source that declares a `shape` — `[]`, a scalar buffer, included —
+//     keeps it, and it must equal the target's.
+func carryDataFedSourceShape(components map[string]*componentSystem, order []string,
+	entry VariableMapCoupling, target FlattenedVariable, shapeless map[string]bool) error {
 	if len(target.Shape) == 0 {
 		return nil
 	}
 	for _, sysName := range order {
-		source, ok := components[sysName].parameters.m[entry.From]
+		comp := components[sysName]
+		source, ok := comp.parameters.m[entry.From]
 		if !ok {
 			continue
 		}
-		if isDataFed(source) && !slices.Equal(source.Shape, target.Shape) {
-			return &variableMapShapeConflictError{
-				From:        entry.From,
-				To:          entry.To,
-				SourceShape: append([]string{}, source.Shape...),
-				TargetShape: append([]string{}, target.Shape...),
-			}
+		if !isDataFed(source) {
+			return nil
 		}
-		return nil
+		if shapeless[entry.From] && len(source.Shape) == 0 {
+			source.Shape = append([]string(nil), target.Shape...)
+			comp.parameters.set(source)
+			return nil
+		}
+		if slices.Equal(source.Shape, target.Shape) {
+			return nil
+		}
+		return &variableMapShapeConflictError{
+			From:        entry.From,
+			To:          entry.To,
+			SourceShape: append([]string{}, source.Shape...),
+			TargetShape: append([]string{}, target.Shape...),
+			Shapeless:   shapeless[entry.From],
+		}
 	}
 	return nil
+}
+
+// dataFedWithoutShape returns the scoped names of every data-fed parameter
+// that declares no `shape`.
+//
+// Absent and `[]` differ here, and only here: `[]` declares a scalar buffer,
+// while an absent `shape` takes that of the `param_to_var` target the
+// parameter replaces (esm-libraries-spec §4.7.3, esm-spec §8.5.1). The
+// flattened tables do not keep the difference, so it is read off the
+// declarations.
+func dataFedWithoutShape(file *ESMFile) map[string]bool {
+	names := map[string]bool{}
+	dataFed := func(rules []ParameterUpdate) bool {
+		for _, rule := range rules {
+			if rule.Kind == UpdateKindData && rule.From != nil {
+				return true
+			}
+		}
+		return false
+	}
+	var walk func(model *Model, scope string)
+	walk = func(model *Model, scope string) {
+		for name, v := range model.Variables {
+			if v.Type == VarTypeParameter && v.Shape == nil && dataFed(v.UpdateRules()) {
+				names[scope+"."+name] = true
+			}
+		}
+		for name, raw := range model.Subsystems {
+			if _, _, isRef := extractRefWithBindings(raw); isRef {
+				continue
+			}
+			if sub, ok := decodeSubsystemAs[Model](raw); ok {
+				walk(&sub, scope+"."+name)
+			}
+		}
+	}
+	for name := range file.Models {
+		model := file.Models[name]
+		walk(&model, name)
+	}
+	for rsName, rs := range file.ReactionSystems {
+		for pName, p := range rs.Parameters {
+			if p.Shape == nil && dataFed(p.UpdateRules()) {
+				names[rsName+"."+pName] = true
+			}
+		}
+	}
+	return names
 }
 
 // isDataFed reports whether v carries a `kind: "data"` update with a `from`
@@ -3131,9 +3211,10 @@ func applyCouplings(file *ESMFile, components map[string]*componentSystem, order
 			return err
 		}
 	}
+	shapeless := dataFedWithoutShape(file)
 	for _, vm := range varMaps {
 		resolved := retargetPendingVariableMap(vm.entry, mergedRenames)
-		if err := applyVariableMap(components, order, resolved, vm.index); err != nil {
+		if err := applyVariableMap(components, order, resolved, vm.index, shapeless); err != nil {
 			return err
 		}
 		// A NAMED transform substitutes `to` away entirely; an EXPRESSION
