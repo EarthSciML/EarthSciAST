@@ -157,41 +157,59 @@ Base.showerror(io::IO, e::VariableMapUnresolvedEndpointError) =
 """
     VariableMapShapeConflictError
 
-Raised when a data-fed `variable_map` source's declared shape differs from the
-shape of the shaped target it replaces (esm-libraries-spec §4.7.3).
+Raised when a data-fed `variable_map` source's shape differs from the shape of
+the shaped target it replaces (esm-libraries-spec §4.7.3).
 
 The parameter that survives a `param_to_var` or `conversion_factor` edge is the
-SOURCE's own declaration, `shape` included. A data-fed parameter must declare
-its shape (the schema requires it; `[]` declares a scalar buffer), so when the
-removed target is shaped the rewritten equations index the source the way the
-target was declared, and the two shapes have to be the same. Taking either one
-silently would leave equations indexing a parameter of the wrong rank, or —
-with one source feeding two targets — make the result depend on coupling order.
+SOURCE's own declaration. When the removed target is shaped, the rewritten
+equations index the source the way the target was declared, so a source that
+declares a `shape` (`[]`, a scalar buffer, included) must declare the target's,
+and a source that declares none takes it — which requires every target it
+replaces to declare the same one. Taking either shape silently would leave
+equations indexing a parameter of the wrong rank, or — with one source feeding
+two targets — make the result depend on coupling order.
 
 Same export policy as [`VariableMapUnresolvedEndpointError`](@ref).
 
 Fields:
 - `from`, `to`: the entry's two endpoints.
-- `source_shape`: the source's declared shape (`[]` when absent).
+- `source_shape`: the source's shape — its declared one, or the one it took
+  from an earlier target when `took_shape`.
 - `target_shape`: the removed target's declared shape.
+- `took_shape`: the source declares no `shape` and took `source_shape` from an
+  earlier `param_to_var` target.
 """
 struct VariableMapShapeConflictError <: EarthSciASTError
     from::String
     to::String
     source_shape::Vector{String}
     target_shape::Vector{String}
+    took_shape::Bool
 end
 
-Base.showerror(io::IO, e::VariableMapShapeConflictError) =
+function Base.showerror(io::IO, e::VariableMapShapeConflictError)
     print(
-    io, "VariableMapShapeConflictError: variable_map(", e.from, " -> ", e.to,
-    "): the data-fed source '", e.from, "' declares shape ", e.source_shape,
-    ", but the target it replaces declares ", e.target_shape, ". The source ",
-    "survives with its own declaration, and the rewritten equations index it the ",
-    "way the target was declared, so the two shapes must be equal ",
-    "(esm-libraries-spec §4.7.3). Declare '", e.from, "' with shape ",
-    e.target_shape, "."
-)
+        io, "VariableMapShapeConflictError: variable_map(", e.from, " -> ", e.to,
+        "): the data-fed source '", e.from, "' "
+    )
+    if e.took_shape
+        print(
+            io, "declares no shape and took ", e.source_shape, " from an earlier ",
+            "param_to_var target, but this target declares ", e.target_shape,
+            ". A shapeless data-fed source takes its shape from the targets it ",
+            "replaces, so they must all declare the same one"
+        )
+    else
+        print(
+            io, "declares shape ", e.source_shape, ", but the target it replaces ",
+            "declares ", e.target_shape, ". The source survives with its own ",
+            "declaration and the rewritten equations index it the way the target ",
+            "was declared, so the two must be equal; declare '", e.from,
+            "' with shape ", e.target_shape, ", or with no shape to take the target's"
+        )
+    end
+    return print(io, " (esm-libraries-spec §4.7.3).")
+end
 
 """
     DimensionPromotionError
