@@ -948,27 +948,50 @@ class TestDerivativeTimeUnitIsNotFabricated:
     free, the NON-time dimensions are not.
     """
 
-    def test_undeclared_t_leaves_the_time_exponent_free(self):
-        from earthsci_ast.structural_checks import _is_derivative_compatible
+    @staticmethod
+    def _compatible(state_units, rhs_units, wrt_units=None) -> bool:
+        """Whether validate() accepts ``D(x) = v`` with ``x`` in ``state_units``
+        and ``v`` in ``rhs_units``. With ``wrt_units`` the derivative is taken
+        with respect to a declared ``tau`` in those units, since ``t`` itself
+        cannot be declared (it is the document's independent variable)."""
+        variables = {
+            "x": {"type": "unknown", "units": state_units, "default": 1.0},
+            "v": {"type": "parameter", "units": rhs_units, "default": 1.0},
+        }
+        wrt = "t"
+        if wrt_units is not None:
+            wrt = "tau"
+            variables["tau"] = {"type": "parameter", "units": wrt_units, "default": 1.0}
+        doc = {
+            "esm": "1.0.0",
+            "metadata": {"name": "T"},
+            "models": {
+                "M": {
+                    "variables": variables,
+                    "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": wrt}, "rhs": "v"}],
+                }
+            },
+        }
+        result = validate_text(json.dumps(doc))
+        unit_errors = [e for e in result.structural_errors if e.code == "unit_inconsistency"]
+        assert all(e.path == "/models/M/equations/0" for e in unit_errors)
+        return not unit_errors
 
+    def test_undeclared_t_leaves_the_time_exponent_free(self):
         # Accepted: some time unit reconciles these (the ratio is a power of time).
-        assert _is_derivative_compatible("m", "m/s") is True
-        assert _is_derivative_compatible("m", "m/s^2") is True  # was falsely rejected
-        assert _is_derivative_compatible("1", "1/s") is True
+        assert self._compatible("m", "m/s") is True
+        assert self._compatible("m", "m/s^2") is True  # was falsely rejected
+        assert self._compatible("1", "1/s") is True
 
     def test_non_time_dimensions_still_cannot_move(self):
-        from earthsci_ast.structural_checks import _is_derivative_compatible
-
         # Rejected: no choice of time unit turns a length into a mass.
-        assert _is_derivative_compatible("m", "kg") is False
-        assert _is_derivative_compatible("m/s", "kg") is False
+        assert self._compatible("m", "kg") is False
+        assert self._compatible("m/s", "kg") is False
 
-    def test_declared_t_makes_the_comparison_exact(self):
-        from earthsci_ast.structural_checks import _is_derivative_compatible
-
-        assert _is_derivative_compatible("m", "m/s", "s") is True
-        # With t declared, the time exponent is pinned too.
-        assert _is_derivative_compatible("m", "m/s^2", "s") is False
+    def test_declared_wrt_makes_the_comparison_exact(self):
+        assert self._compatible("m", "m/s", "s") is True
+        # With the independent variable declared, the time exponent is pinned too.
+        assert self._compatible("m", "m/s^2", "s") is False
 
 
 class TestTranscendentalArgumentMustBeDimensionless:

@@ -1,0 +1,192 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "variable_map_data_fed_shapeless_source_two_target_shapes",
+    "description": "REFUSED AT FLATTEN (VariableMapShapeConflictError). The data-fed `Met.K` declares no `shape` and feeds two `param_to_var` targets, `Box.F_k` shaped [rec, x] and `Box.G_k` shaped [x]. A shapeless source takes its targets' shape, so they must all declare the same one; which it would take otherwise depends on coupling order.",
+    "tags": [
+      "variable_map",
+      "param_to_var",
+      "data-source",
+      "shape",
+      "conformance"
+    ]
+  },
+  "index_sets": {
+    "rec": {
+      "kind": "interval",
+      "size": 2
+    },
+    "x": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "data_sources": {
+    "met_source": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file:///data/met/met_{date:%Y%m%d}.nc"
+      },
+      "temporal": {
+        "frequency": "PT1H",
+        "file_period": "P1D",
+        "records_per_file": 24
+      }
+    }
+  },
+  "models": {
+    "Met": {
+      "variables": {
+        "K": {
+          "type": "parameter",
+          "units": "1/s",
+          "description": "Data-fed rate field, read from met_source file variable K.",
+          "update": {
+            "kind": "data",
+            "source": "met_source",
+            "from": {
+              "file_variable": "K"
+            }
+          }
+        }
+      },
+      "equations": []
+    },
+    "Box": {
+      "variables": {
+        "c": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "shape": [
+            "x"
+          ],
+          "default": 1.0,
+          "description": "Tracer concentration per cell."
+        },
+        "F_k": {
+          "type": "parameter",
+          "units": "1/s",
+          "shape": [
+            "rec",
+            "x"
+          ],
+          "default": 0.0,
+          "description": "Rate field, two bracketing records per cell. Coupled from Met.K."
+        },
+        "G_k": {
+          "type": "parameter",
+          "units": "1/s",
+          "shape": [
+            "x"
+          ],
+          "default": 0.0,
+          "description": "Second rate field, one value per cell. Coupled from Met.K."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "c",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "F_k",
+                            1,
+                            "i"
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "c",
+                            "i"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "G_k",
+                            "i"
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "c",
+                            "i"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "Met.K",
+      "to": "Box.F_k",
+      "transform": "param_to_var"
+    },
+    {
+      "type": "variable_map",
+      "from": "Met.K",
+      "to": "Box.G_k",
+      "transform": "param_to_var"
+    }
+  ]
+}

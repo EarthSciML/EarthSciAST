@@ -582,6 +582,32 @@ pub(crate) fn reject_solver_time_span_invalid(view: &Value) -> Result<(), Diagno
     time_span_seconds(start, end, view.pointer("/domain/temporal")).map(|_| ())
 }
 
+/// The raw ROOT document's `solver.time_span` in binary64 seconds on the
+/// document's clock (esm-spec §2.2.7), or `Ok(None)` when it carries none —
+/// the raw-JSON twin of [`resolve_time_span`]'s second rule, for a caller
+/// (the EarthSciIO provider builder) that holds a document it has not loaded.
+/// A bound in neither schema form is refused with `solver_time_span_invalid`
+/// rather than skipped, since here no schema pass follows to report it.
+#[cfg_attr(any(not(feature = "esio"), target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn raw_time_span_seconds(view: &Value) -> Result<Option<(f64, f64)>, DiagnosticError> {
+    let Some(span) = view.pointer("/solver/time_span") else {
+        return Ok(None);
+    };
+    let bound = |name: &str| {
+        span.get(name).and_then(raw_bound).ok_or_else(|| {
+            time_span_invalid(format_args!(
+                "{name} is not a number of seconds or an RFC 3339 UTC timestamp"
+            ))
+        })
+    };
+    time_span_seconds(
+        bound("start")?,
+        bound("end")?,
+        view.pointer("/domain/temporal"),
+    )
+    .map(Some)
+}
+
 /// The run interval, most specific first (esm-spec §2.2.7, by the §2.2.2
 /// order):
 ///

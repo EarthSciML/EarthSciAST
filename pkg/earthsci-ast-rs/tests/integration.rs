@@ -107,6 +107,8 @@ mod doubly_defined_state_conformance;
 mod earthscidata_loader_coverage;
 #[path = "elementwise_observed_gather_conformance.rs"]
 mod elementwise_observed_gather_conformance;
+#[path = "esio_document_cadence.rs"]
+mod esio_document_cadence;
 #[path = "esio_provider_bridge.rs"]
 mod esio_provider_bridge;
 #[path = "esm_problem_front_door.rs"]
@@ -133,6 +135,8 @@ mod field_ic_unlowered_operator;
 mod flatten;
 #[path = "flatten_conformance.rs"]
 mod flatten_conformance;
+#[path = "forcing_from_sample.rs"]
+mod forcing_from_sample;
 #[path = "forcing_native_agreement.rs"]
 mod forcing_native_agreement;
 #[path = "from_faq_document_scope.rs"]
@@ -271,6 +275,8 @@ mod pretty_print;
 mod problem_surface;
 #[path = "property_expression.rs"]
 mod property_expression;
+#[path = "provider_forcing_conformance.rs"]
+mod provider_forcing_conformance;
 #[path = "public_rhs_program_conformance.rs"]
 mod public_rhs_program_conformance;
 #[path = "pushdown_cell_geometry.rs"]

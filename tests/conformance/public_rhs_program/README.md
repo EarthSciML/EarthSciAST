@@ -160,6 +160,7 @@ here), plus:
 |---|---|---|
 | `../missing_data/fixtures/loaded_field_default_served.esm` | `forcing_1d_data_source` | 2, 4, 5: a 1-D field fed by a data source, its scalar default broadcast as the default forcing, read straight into `du` |
 | `fixtures/forcing_2d_gridded.esm` | `forcing_2d_gridded` | 2, 3, 4, 5: a 2-D gridded field read through two state-free observeds (a contraction over `x` and a quotient), a 1-D field times state, two scalar parameters, `t`, and an out-of-domain zero ghost |
+| `fixtures/forcing_array_default.esm` | `forcing_array_default` | 2, 5: a 2-D field fed by a data source whose default is inline array data, and a 1-D one with a scalar default; both are forcing slots with the declared default as the default forcing, never baked constants |
 | `../shaped_parameter_broadcast/fixtures/shaped_parameter_scalar_default.esm` | `runtime_array_parameters` | decision 7: two shaped parameters, one with a scalar default and one with an array default, as `ArrayParameter` slots and baked |
 | `fixtures/fault_state_gather.esm` | `fault_state_gather` | 6: a const-array read at a subscript computed from a state, in range or past the end depending on `u` |
 

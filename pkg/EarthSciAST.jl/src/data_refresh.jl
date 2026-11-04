@@ -160,11 +160,38 @@ function provider_extent_metaparameter end
 provider_extent_metaparameter(::Any) = nothing
 
 """
-    providers_from_document(doc; cache_root, loaders=nothing, url_overrides=Dict()) -> Dict{String,Any}
+    providers_from_document(doc; cache_root, loaders=nothing, url_overrides=Dict(),
+                            substitutions=Dict(), window=nothing,
+                            records_per_sample=Dict()) -> Dict{String,Any}
 
-Construct the data providers a document DECLARES: one CONST provider per
-data-fed PARAMETER, drawn from a `data_sources.<name>` entry carrying a
-`metadata.esio_format` ("zarr", "ff10", …).
+Construct the data providers a document DECLARES: one provider per data-fed
+PARAMETER, drawn from a `data_sources.<name>` entry carrying a
+`metadata.esio_format` ("zarr", "ff10", …). Each source is read by EarthSciIO's
+`provider_from_esm` (EarthSciIO spec/esm-sources.md §3): its `url_template` and
+`mirrors` are esm templates expanded at each file anchor, and a source with a
+`temporal` block is time-varying on a calendar cadence (`P1M` is a calendar
+month).
+
+Every provider runs on the MODEL clock (esm-spec §2.2.7). Its time origin — the
+UTC instant of model time 0 — is, first match wins, the document's
+`domain.temporal.reference_time`, else its `domain.temporal.start` (each when a
+non-empty string; one that cannot be read raises `time_origin_invalid`, as
+[`time_origin`](@ref) does), else the start of `window`, else the POSIX epoch.
+A sample at model time `t` reads the instant `origin + t`, and
+[`provider_refresh_times`](@ref) reports the source's anchors in model seconds
+(`unix - origin`). With no `window`, the document's `solver.time_span`
+(converted as [`resolve_time_span`](@ref) does, counted from that origin)
+supplies one; with neither, a time-varying provider is bounded only by its own
+`temporal.end`.
+
+A source declaring a `record_filter` or `codes` is a record table decoded once
+per record anchor and shared by its parameters. A declared `select` names the
+source's native per-record axes; with `records_per_sample = 2` the delivered
+array carries an extra leading record axis of length 2, which the select takes
+whole. A time-varying source never pushes its select to the reader (the file's
+record axis is not one the select names): it reports
+`provider_supports_selection == false`, and the select is applied after the
+record is sliced.
 
 Keyed `"<ModelPath>.<param>"` — the CONSUMING parameter's flattened name, not
 `"<Loader>.<var>"`. esm 1.0.0 moved the binding from the source to the consumer:
@@ -181,18 +208,41 @@ Keywords:
     an `esio_format`). Lets a runner exclude a loader whose format the reader
     stack cannot construct yet (the FF10-in-zip EGU case until Phase 2) and
     slot it in later without an API change.
-  * `url_overrides` — loader name ⇒ URL, replacing `source.url_template`
-    (e.g. a local mirror of a live store).
+  * `url_overrides` — loader name ⇒ URL template, replacing `source.url_template`
+    and its mirrors (e.g. a local mirror of a live store). An entry is honoured
+    whatever its value, so an empty one is an error.
+  * `substitutions` — loader name ⇒ `Dict(placeholder => value)`, binding the
+    custom `{name}` placeholders a mount's `url_substitutions` left (reseact's
+    NEI 2016 `{sector}`). An unbound one is an error, not a fetch.
+  * `window` — the run's `(start, stop)`: a 2-tuple whose entries are each a
+    `DateTime` (read as UTC) or a real number of Unix seconds, bounding each
+    time-varying provider's `provider_refresh_times`. Anything else is an
+    `ArgumentError`.
+  * `records_per_sample` — consuming parameter key ⇒ 1 or 2, a run-time
+    restatement of the document, not an override. A parameter receives its
+    EFFECTIVE `records_per_sample` from the document (esm-spec §8.5.1): its own
+    `update.from.records_per_sample`, else the source's
+    `temporal.records_per_sample`, else 1. An entry equal to that value is
+    accepted; a different one is refused, because it would change the rank of
+    the delivered array away from the declared shape validation approved — set
+    `update.from.records_per_sample` in the document instead. Every value, in
+    the document or here, must be the number 1 or 2 (`2.0` is 2; `1.5`, `"2"`
+    and `true` are refused). With 2 the provider returns the record at or
+    before `t` and the next one, stacked along the first dimension (the
+    two-record bracket a model interpolates between); 2 is refused on a source
+    with no `temporal.start` (it is time-invariant) and on one served as a
+    filtered or coded record table. Each consuming parameter has its own
+    provider, so two parameters may read one source with different values.
 
 Implemented by the EarthSciIO extension — load `EarthSciIO` alongside
 EarthSciAST so the `EarthSciASTEarthSciIOExt` extension defines the method
 (without it the call is a `MethodError`; this generic deliberately carries no
 fallback so the extension's method is an addition, not an overwrite). The
-construction is format-agnostic: `esio_format` goes straight to
-`EarthSciIO.const_provider(...; format=...)`, whose registry decides what is
-readable. Selection capability (projection pushdown) is the provider's own
-(`provider_supports_selection`), so a zarr-store loader produced here is
-directly compatible with the gated-deferral path.
+construction is format-agnostic: `esio_format` goes straight to EarthSciIO,
+whose format registry decides what is readable. Selection capability
+(projection pushdown) is the provider's own (`provider_supports_selection`), so
+a const zarr-store loader produced here is directly compatible with the
+gated-deferral path.
 """
 function providers_from_document end
 
@@ -260,12 +310,79 @@ _sample_field(sample::AbstractDict, var::AbstractString) = begin
     sample[var]
 end
 _sample_field(sample::AbstractArray, ::AbstractString) = sample
+_sample_field(sample::Real, ::AbstractString) = sample
 _sample_field(sample, var::AbstractString) = throw(
     RefreshError(
         "cannot extract '$var' from a provider sample of type $(typeof(sample)); " *
-            "supply an AbstractDict (var => field) or a bare AbstractArray"
+            "supply an AbstractDict (var => field), a bare AbstractArray or a number"
     )
 )
+
+"""
+    forcing_from_sample(sample, name::AbstractString; shape = nothing) -> Array{Float64}
+    forcing_from_sample(sample, slot::ForcingSlot) -> Vector{Float64}
+
+The buffer of the data-fed parameter `name` built from one
+[`provider_sample`](@ref) result: the check and conversion
+[`esm_problem`](@ref) applies to the sample of every provider it binds whole
+(a const provider, a discrete provider at each refresh, and a provider that
+discovers a loader extent; API_SPEC §5.8, "Forcing sets"). A runtime that
+builds its own [`ForcingSet`](@ref)s from provider samples calls this to get,
+bit for bit, the buffer `esm_problem` builds from the same sample. A GATED
+provider is not bound whole: `esm_problem` fetches only the rows its gating set
+selects, so its buffer is that slab, not this function of a whole sample.
+
+`sample` is what `provider_sample` returned: an `AbstractDict` keyed by
+flattened parameter name, from which the `name` entry is taken, or a bare
+`AbstractArray` or `Real` (a single-variable sample, which is the field
+itself; a `Real` is a 0-d field). The result is a fresh dense
+`Array{Float64}` with the field's dimensions, in the order the provider
+delivered them (a source's file order, the record dimension first when two
+records are delivered), so its linear order is column-major over those
+dimensions: the order a forcing set reads a slot's buffer in.
+
+With `shape` (the parameter's declared shape resolved, as a
+[`ForcingSlot`](@ref) carries it: any collection of integers, a `Vector` or a
+`Tuple`) the field's size must equal it, axis by axis, and an empty shape takes
+a field of one value; any other field is a `DimensionMismatch`. `esm_problem`
+applies the same check against each parameter's declared shape, wherever that
+shape resolves before the build, so a sample it accepts passes here. The
+`ForcingSlot` method checks against `slot.shape` and returns the buffer as a
+`Vector{Float64}`, ready for [`forcing_set`](@ref) or
+[`replace_forcing`](@ref).
+
+A declared `unit_conversion` (esm-spec §8.5) is NOT applied here: a provider
+from [`providers_from_document`](@ref) applies it when it delivers the sample,
+so the sample is already in the parameter's declared units, and applying it
+again would apply it twice. A sample with no `name` entry is a `RefreshError`.
+"""
+function forcing_from_sample(sample, name::AbstractString; shape = nothing)
+    field = _sample_field(sample, String(name))
+    shape === nothing || _check_forcing_shape(field, name, shape)
+    return _dense_field(field)
+end
+
+# A provider field as a fresh dense `Array{Float64}` of its own dimensions; a
+# bare number is a 0-d field.
+_dense_field(field::Real) = fill(Float64(field))
+_dense_field(field) = Array{Float64}(field)
+
+# Refuse a provider field whose size is not the parameter's declared `shape`,
+# axis by axis; an empty `shape` takes a field of one value.
+function _check_forcing_shape(field, name::AbstractString, shape)
+    dims = Int[Int(d) for d in shape]
+    ok = isempty(dims) ? length(field) == 1 :
+        ndims(field) == length(dims) &&
+        all(size(field, d) == dims[d] for d in eachindex(dims))
+    ok || throw(
+        DimensionMismatch(
+            "forcing '$name': the provider sample has size $(size(field)); the " *
+                "parameter's declared shape is $(Tuple(dims))" *
+                (isempty(dims) ? ", one value" : "")
+        )
+    )
+    return nothing
+end
 
 """
     _write_forcing!(buffer::Array{Float64}, var::AbstractString, sample) -> buffer
@@ -280,14 +397,18 @@ storage the RHS gathers live.
 """
 function _write_forcing!(buffer::Array{Float64}, var::AbstractString, sample)
     field = _sample_field(sample, var)
-    length(field) == length(buffer) || throw(
+    # A one-value buffer (a scalar parameter's) takes a field of one value
+    # whatever its rank, as `forcing_from_sample` does for an empty shape.
+    fits = length(buffer) == 1 ? length(field) == 1 : size(field) == size(buffer)
+    fits || throw(
         RefreshError(
-            "forcing '$var': provider field has $(length(field)) elements but the buffer " *
-                "has $(length(buffer)); the provider must deliver the native forcing on the " *
-                "buffer's grid (regridding is an in-model coupling, not a refresh-time transform)"
+            "forcing '$var': the provider field has size $(size(field)) but the buffer " *
+                "has size $(size(buffer)); the provider must deliver the native forcing on the " *
+                "buffer's grid, in the same dimension order (regridding is an in-model " *
+                "coupling, not a refresh-time transform)"
         )
     )
-    copyto!(buffer, field)
+    field isa Real ? (buffer[] = Float64(field)) : copyto!(buffer, field)
     # The buffer just changed in place under the RHS's live gathers — invalidate the
     # memoized time-cadence prelude slots (B3, tree_walk/const_tier.jl). A refresh
     # callback fires AT its tstop, so the next RHS call may be at a `t` the t-tier

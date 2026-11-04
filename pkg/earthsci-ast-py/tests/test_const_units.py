@@ -1,8 +1,8 @@
 """Declared units on a ``const`` node (esm-spec §4.8.5).
 
 A ``const`` that declares its units has that unit, a ``const`` without units
-stays undeterminable, an unresolvable declared unit is listed for the structural
-layer, the field survives parse and emit, and it is gated at esm 1.2.0.
+stays undeterminable, an unresolvable declared unit is a ``unit_parse_error``
+from ``validate()``, the field survives parse and emit, and it is gated at esm 1.2.0.
 """
 
 from __future__ import annotations
@@ -49,13 +49,11 @@ def test_a_const_without_units_stays_undeterminable():
 
 
 def test_unresolvable_const_units_are_listed():
-    raw = {
-        "op": "*",
-        "args": ["speed_mph", {"op": "const", "args": [], "value": 1.0, "units": "mph"}],
-    }
-    assert unresolvable_const_units(raw) == ["mph"]
-    raw["args"][1]["units"] = "m*h/(mi*s)"
-    assert unresolvable_const_units(raw) == []
+    konst = ExprNode(op="const", args=[], value=1.0, units="mph")
+    expr = ExprNode(op="*", args=["speed_mph", konst])
+    assert unresolvable_const_units(expr) == ["mph"]
+    konst.units = "m*h/(mi*s)"
+    assert unresolvable_const_units(expr) == []
 
 
 def test_unresolvable_const_units_in_a_called_template_body_are_reported():
@@ -97,13 +95,11 @@ def test_unresolvable_const_units_in_a_called_template_body_are_reported():
             }
         },
     }
-    with pytest.raises(earthsci_ast.SchemaValidationError) as excinfo:
-        earthsci_ast.load_string(json.dumps(doc))
-    records = getattr(excinfo.value, "records", [])
-    assert any(
-        r.get("code") == "unit_parse_error" and r.get("path") == "/models/M/equations/0/rhs"
-        for r in records
-    ), records
+    # Units are checked by validate(), not by the loader.
+    result = earthsci_ast.validate(earthsci_ast.load_string(json.dumps(doc)))
+    assert not result.is_valid
+    found = [(e.code, e.path) for e in result.structural_errors]
+    assert ("unit_parse_error", "/models/M/equations/0/rhs") in found, found
 
 
 def _doc(esm: str) -> dict:

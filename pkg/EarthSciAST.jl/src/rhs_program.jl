@@ -51,6 +51,11 @@ end
 Base.:(==)(a::ForcingSlot, b::ForcingSlot) =
     a.name == b.name && a.shape == b.shape && a.kind === b.kind
 
+# The slot's buffer from a provider sample; documented with the name method
+# (data_refresh.jl).
+forcing_from_sample(sample, slot::ForcingSlot) =
+    vec(forcing_from_sample(sample, slot.name; shape = slot.shape))
+
 """
     StateBlock
 

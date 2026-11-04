@@ -4,7 +4,8 @@
  *
  * A parameter whose effective `records_per_sample` is 2 needs a record shape
  * whose first entry is an index set of exactly two members. The record shape is
- * the parameter's own non-empty `shape`, or else the declared `shape` of every
+ * the parameter's own `shape` whenever it declares one (`[]` included), or else,
+ * when `shape` is absent, the declared `shape` of every
  * `param_to_var` target it is the `from` of. Validation sees only the inline
  * `coupling` and the document as loaded (this binding's `load*` does not mount
  * `{ref}` components); `flatten` sees the `coupling_import`-expanded sequence.
@@ -159,14 +160,14 @@ export interface RecordShapeFailure {
 /**
  * Judge one `update` rule's record shape (esm-spec §8.5.1 rule 3). Returns the
  * first failing record shape, or `undefined` when there is none to report: the
- * rule is not a `data` rule with an effective 2 from a source with a `temporal`
- * block (rules 1 and 2 are the validator's), every record shape it can see
+ * rule is not a `data` rule with an effective 2 from a time-varying source (one
+ * whose `temporal` declares a `start`; rules 1 and 2 are the validator's), every record shape it can see
  * passes, or what remains cannot be decided here.
  *
  * A target whose declaration cannot be reached is not decidable and is
  * skipped, and so is a record shape whose first index set is undeclared while
- * `unmountedRefs` (a mount may still declare it). An empty record shape (own
- * `shape` empty and no target at all) is a failure unless
+ * `unmountedRefs` (a mount may still declare it). A declared `shape: []` is
+ * always a failure; no `shape` and no target at all is a failure unless
  * `targetsMayArriveLater`, which validation sets when the document has a
  * `coupling_import` entry that `flatten` will expand.
  */
@@ -182,14 +183,16 @@ export function recordShapeFailure(
   if (binding === undefined) return undefined
   const sources = (esmFile.data_sources ?? {}) as Record<
     string,
-    { temporal?: { records_per_sample?: number } }
+    { temporal?: { start?: string; records_per_sample?: number } }
   >
   const source = sources[(rule as { source: string }).source]
-  if (source?.temporal === undefined) return undefined
+  if (!source?.temporal?.start) return undefined
   if (effectiveRecordsPerSample(binding, source) !== 2) return undefined
 
-  const own = variable.shape ?? []
-  if (own.length > 0) {
+  // The declared `shape` is the record shape whenever one is declared, `[]`
+  // (a scalar buffer) included; only an ABSENT `shape` takes its targets'.
+  const own = variable.shape
+  if (own !== undefined && own !== null) {
     return hasPairAxis(esmFile, own, options.unmountedRefs) === false
       ? { shape: [...own] }
       : undefined

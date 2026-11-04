@@ -203,14 +203,26 @@ end
 # Pointer of the offending node (0-based array indices, root ""), matching
 # TypeScript's AJV `allErrors` output.
 #
-# `_collect_schema_errors!` re-walks the (ref-resolved) schema alongside the
-# instance and accumulates every leaf failure. It REUSES JSONSchema.jl's own
-# `_validate`: as a whole-subschema pass/fail ORACLE at combinator decision
-# points (so the verdict on which branch matched is byte-for-byte the library's)
-# and to evaluate the leaf assertion keywords (`type`, `required`, `enum`, …)
-# exactly as the library does. Only the applicator keywords
-# (`properties`/`items`/`oneOf`/`if`…) are descended here, so a VALID document —
-# every combinator satisfied — yields ZERO errors, identical to the library.
+# `_schema_walk!` walks the schema alongside the instance in one of two modes.
+# MATCH mode (no error sink) answers "does `x` satisfy this subschema?" and
+# stops at the first failure; it decides every combinator branch. COLLECT mode
+# (an error sink) accumulates every leaf failure with its pointer. Both modes
+# descend the applicator keywords (`properties`, `items`, `oneOf`, `if`,
+# `additionalProperties`, …) here, with the library's semantics for each, and
+# hand every leaf assertion keyword (`type`, `required`, `enum`, …) to
+# JSONSchema.jl's own `_validate`. A VALID document — every combinator
+# satisfied — yields ZERO errors, identical to the library;
+# `test/schema_match_parity_test.jl` pins the match verdict to the library's.
+#
+# The library's whole-subschema `_validate` is not used, because on a deep
+# expression its cost grows with depth on every failed check: it carries the
+# instance path down the tree and renders it into a string for each failure,
+# and a valid expression fails several checks per node (every `oneOf` branch
+# of `Expression` but one, every `if` of `ExpressionNode` but one). It also
+# dispatches on `Val{Symbol(k)}` for every keyword at every node. Here no
+# path is kept in match mode, and the schema is compiled once into a linked
+# graph of `_SchemaNode`s, so the walk does no `$ref` resolution, lookup or
+# locking per node.
 
 # RFC-6901 JSON Pointer builder. Each segment is prefixed with "/"; the special
 # characters `~` and `/` are escaped per §4 of the RFC.
@@ -230,19 +242,15 @@ const _SCHEMA_ANNOTATION_KEYS = Set{String}(
 
 # A fresh, empty instance path for JSONSchema.jl's private `_validate`. Before
 # v1.6 the path is a `String`; from v1.6 it is an `_InstancePath` segment vector
-# that the library pushes to and pops from while it descends, so each call gets
-# its own. Only the pass/fail verdict is read here, never the path, so the root
-# path is all either version needs.
+# that the library pushes to and pops from while it descends, so each
+# validation gets its own; the walk below hands it only to leaf keywords, which
+# leave it as they found it. Only the pass/fail verdict is read here, never the
+# path, so the root path is all either version needs.
 @static if isdefined(JSONSchema, :_InstancePath)
     _jsonschema_root_path() = JSONSchema._InstancePath()
 else
     _jsonschema_root_path() = ""
 end
-
-# Does instance `x` satisfy `subschema` in full? Delegated to JSONSchema.jl so
-# the branch-selection verdict is identical to the library's.
-_schema_matches(x, subschema) =
-    JSONSchema._validate(x, subschema, _jsonschema_root_path()) === nothing
 
 function _schema_error_message(keyword::AbstractString)::String
     keyword == "required"             && return "missing required property"
@@ -259,130 +267,327 @@ end
 _push_schema_error!(errors::Vector{SchemaError}, path::AbstractString, keyword::AbstractString) =
     push!(errors, SchemaError(String(path), _schema_error_message(keyword), String(keyword)))
 
-function _collect_schema_errors!(errors::Vector{SchemaError}, x, schema, path::String)
-    schema = JSONSchema._resolve_refs(schema)
-    if schema isa Bool
-        schema || _push_schema_error!(errors, path, "schema")
-        return errors
-    end
-    schema isa AbstractDict || return errors
-    for (k, v) in schema
-        _collect_schema_keyword!(errors, x, schema, String(k), v, path)
-    end
-    return errors
+# ── Compiled schema ─────────────────────────────────────────────────────────
+
+# What a compiled subschema is, once its `\$ref` is resolved as the library
+# resolves it.
+const _NODE_OBJECT = 0x00    # an object of keywords
+const _NODE_TRUE = 0x01
+const _NODE_FALSE = 0x02
+const _NODE_OTHER = 0x03     # anything else, left to the library
+
+# What `_schema_walk_keyword!` does with a keyword. Keywords that assert
+# nothing on their own (annotations, `then`/`else`, an `if` with neither,
+# `additionalProperties: true`) are dropped at compile time.
+const _KW_LEAF = 0x00                 # the library's method for it
+const _KW_PROPERTIES = 0x01
+const _KW_PATTERN_PROPERTIES = 0x02
+const _KW_ADDITIONAL_PROPERTIES = 0x03  # holding a schema
+const _KW_NO_ADDITIONAL_PROPERTIES = 0x04  # `additionalProperties: false`
+const _KW_PROPERTY_NAMES = 0x05
+const _KW_ITEMS = 0x06                # `items` holding one schema
+const _KW_CONTAINS = 0x07
+const _KW_ALLOF = 0x08
+const _KW_ANYOF = 0x09
+const _KW_ONEOF = 0x0a
+const _KW_NOT = 0x0b
+const _KW_IF = 0x0c
+const _KW_PATTERN = 0x0d
+
+# One keyword of a compiled object schema. Which payload fields are set
+# depends on `kind`:
+#   `sub`        the one subschema of `items`, `contains`, `propertyNames`,
+#                `not`, `additionalProperties` and `if`;
+#   `subs`       the branches of `allOf`/`anyOf`/`oneOf`; for `if`, its
+#                `then` and `else` (either may be `nothing`);
+#   `props`      `properties` by name; for `additionalProperties`, the
+#                sibling `properties` it does not apply to;
+#   `patterns`   the regex sources of `pattern`, of `patternProperties` (in
+#                `subs` order), or of the sibling `patternProperties` that
+#                `additionalProperties` does not apply to. Compiled on first
+#                use, as the library compiles them only when it evaluates them.
+#
+# `N` is always `_SchemaNode`; the parameter only breaks the two types' cycle.
+mutable struct _SchemaKeyword{N}
+    const kind::UInt8
+    const name::String
+    const v::Any             # the keyword's value, for the library's method
+    const val::Val           # `Val{Symbol(name)}()`, likewise
+    const sub::Union{Nothing, N}
+    const subs::Vector{Union{Nothing, N}}
+    const props::Dict{String, N}
+    const patterns::Vector{String}
+    @atomic regexes::Union{Nothing, Vector{Regex}}
 end
 
-function _collect_schema_keyword!(errors::Vector{SchemaError}, x, schema, k::String, v, path::String)
-    if k in _SCHEMA_ANNOTATION_KEYS || k == "then" || k == "else"
-        # `then`/`else` are evaluated together with `if` (below).
-        return errors
+struct _SchemaNode
+    kind::UInt8
+    schema::Any              # the ref-resolved subschema, for the library's methods
+    keywords::Vector{_SchemaKeyword{_SchemaNode}}  # filled after the node is linked
+end
 
-    elseif k == "properties"
-        if x isa AbstractDict && v isa AbstractDict
-            for (pk, sub) in v
-                skey = String(pk)
-                haskey(x, skey) || continue
-                _collect_schema_errors!(errors, x[skey], sub, _ptr_child(path, skey))
-            end
-        end
+function _SchemaKeyword(
+        kind, name, v;
+        sub = nothing, subs = Union{Nothing, _SchemaNode}[],
+        props = Dict{String, _SchemaNode}(), patterns = String[]
+    )
+    return _SchemaKeyword{_SchemaNode}(
+        kind, name, v, Val{Symbol(name)}(), sub, subs, props, patterns, nothing
+    )
+end
 
-    elseif k == "patternProperties"
-        if x isa AbstractDict && v isa AbstractDict
-            for (pat, sub) in v
-                r = Regex(String(pat))
-                for (xk, xv) in x
-                    occursin(r, String(xk)) &&
-                        _collect_schema_errors!(errors, xv, sub, _ptr_child(path, xk))
-                end
-            end
-        end
+function _keyword_regexes(kw::_SchemaKeyword)::Vector{Regex}
+    r = @atomic :acquire kw.regexes
+    r === nothing || return r
+    r = Regex[Regex(p) for p in kw.patterns]
+    @atomic :release kw.regexes = r
+    return r
+end
 
-    elseif k == "additionalProperties"
-        if x isa AbstractDict
-            props = get(schema, "properties", nothing)
-            patterns = get(schema, "patternProperties", nothing)
-            _covered(key) =
-                (props isa AbstractDict && haskey(props, String(key))) ||
-                (
-                patterns isa AbstractDict &&
-                    any(p -> occursin(Regex(String(p)), String(key)), keys(patterns))
-            )
-            if v isa Bool
-                v || for (xk, _) in x
-                    _covered(xk) || _push_schema_error!(errors, path, "additionalProperties")
-                end
-            else
-                for (xk, xv) in x
-                    _covered(xk) ||
-                        _collect_schema_errors!(errors, xv, v, _ptr_child(path, xk))
-                end
-            end
-        end
-
-    elseif k == "items"
-        if x isa AbstractVector
-            if v isa AbstractVector
-                # Tuple validation: element i against subschema i (1-based Julia).
-                for (i, xi) in enumerate(x)
-                    i <= length(v) || break
-                    _collect_schema_errors!(errors, xi, v[i], _ptr_child(path, i - 1))
-                end
-            else
-                for (i, xi) in enumerate(x)
-                    _collect_schema_errors!(errors, xi, v, _ptr_child(path, i - 1))
-                end
-            end
-        end
-
-    elseif k == "allOf"
-        v isa AbstractVector && for sub in v
-            _collect_schema_errors!(errors, x, sub, path)
-        end
-
-    elseif k == "anyOf"
-        if v isa AbstractVector && !any(sub -> _schema_matches(x, sub), v)
-            _push_schema_error!(errors, path, "anyOf")
-            for sub in v
-                _collect_schema_errors!(errors, x, sub, path)
-            end
-        end
-
-    elseif k == "oneOf"
-        if v isa AbstractVector
-            nmatch = count(_schema_matches(x, sub) for sub in v)
-            if nmatch != 1
-                _push_schema_error!(errors, path, "oneOf")
-                # ZERO matches ⇒ every branch failed, so descend them all for the
-                # underlying leaf errors. ≥2 matches ⇒ the branches PASS (no leaf
-                # error to find); the `oneOf` itself is the finding.
-                nmatch == 0 && for sub in v
-                    _collect_schema_errors!(errors, x, sub, path)
-                end
-            end
-        end
-
-    elseif k == "not"
-        _schema_matches(x, v) && _push_schema_error!(errors, path, "not")
-
-    elseif k == "if"
-        if haskey(schema, "then") || haskey(schema, "else")
-            if _schema_matches(x, v)
-                haskey(schema, "then") &&
-                    _collect_schema_errors!(errors, x, schema["then"], path)
-            elseif haskey(schema, "else")
-                _collect_schema_errors!(errors, x, schema["else"], path)
-            end
-        end
-
-    else
-        # Leaf assertion keyword (`type`, `required`, `enum`, `minItems`,
-        # `pattern`, `exclusiveMinimum`, …): evaluated by JSONSchema.jl exactly
-        # as in a normal validation. A non-`nothing` return means it failed at
-        # THIS node; the standard keyword name is `k`.
-        JSONSchema._validate(x, schema, Val{Symbol(k)}(), v, _jsonschema_root_path()) === nothing ||
-            _push_schema_error!(errors, path, k)
+# Compile `schema` and everything reachable from it. `seen` maps each
+# ref-resolved subschema (by identity) to its node, which both shares nodes
+# between the places a definition is referenced from and closes the
+# recursive references (`Expression` → `ExpressionNode` → `Expression`).
+function _compile_schema(schema0, seen::IdDict{Any, _SchemaNode})
+    schema = JSONSchema._resolve_refs(schema0)
+    node = get(seen, schema, nothing)
+    node === nothing || return node
+    kind = schema === true ? _NODE_TRUE :
+        schema === false ? _NODE_FALSE :
+        schema isa AbstractDict ? _NODE_OBJECT : _NODE_OTHER
+    node = _SchemaNode(kind, schema, _SchemaKeyword{_SchemaNode}[])
+    seen[schema] = node
+    kind == _NODE_OBJECT || return node
+    for (k0, v) in schema
+        kw = _compile_keyword(schema, String(k0), v, seen)
+        kw === nothing || push!(node.keywords, kw)
     end
-    return errors
+    return node
+end
+
+function _compile_keyword(schema, k::String, v, seen)
+    sub(s) = _compile_schema(s, seen)
+    (k in _SCHEMA_ANNOTATION_KEYS || k == "then" || k == "else") && return nothing
+    if k == "properties" && v isa AbstractDict
+        return _SchemaKeyword(
+            _KW_PROPERTIES, k, v;
+            props = Dict{String, _SchemaNode}(String(p) => sub(s) for (p, s) in v)
+        )
+    elseif k == "patternProperties" && v isa AbstractDict
+        pats = collect(pairs(v))
+        return _SchemaKeyword(
+            _KW_PATTERN_PROPERTIES, k, v;
+            subs = Union{Nothing, _SchemaNode}[sub(s) for (_, s) in pats],
+            patterns = String[String(p) for (p, _) in pats]
+        )
+    elseif k == "additionalProperties" && (v isa AbstractDict || v isa Bool)
+        v === true && return nothing
+        props = get(schema, "properties", nothing)
+        pprops = get(schema, "patternProperties", nothing)
+        return _SchemaKeyword(
+            v === false ? _KW_NO_ADDITIONAL_PROPERTIES : _KW_ADDITIONAL_PROPERTIES, k, v;
+            sub = v isa AbstractDict ? sub(v) : nothing,
+            # Only the names matter here; the nodes are those of `properties`.
+            props = props isa AbstractDict ?
+                Dict{String, _SchemaNode}(String(p) => sub(s) for (p, s) in props) :
+                Dict{String, _SchemaNode}(),
+            patterns = pprops isa AbstractDict ? String[String(p) for p in keys(pprops)] : String[]
+        )
+    elseif k == "propertyNames"
+        return _SchemaKeyword(_KW_PROPERTY_NAMES, k, v; sub = sub(v))
+    elseif k == "items" && v isa AbstractDict
+        # `items` as a tuple or a Bool, and `additionalItems`, stay leaves:
+        # their semantics differ between JSONSchema releases.
+        return _SchemaKeyword(_KW_ITEMS, k, v; sub = sub(v))
+    elseif k == "contains"
+        return _SchemaKeyword(_KW_CONTAINS, k, v; sub = sub(v))
+    elseif k in ("allOf", "anyOf", "oneOf") && v isa AbstractVector
+        kind = k == "allOf" ? _KW_ALLOF : k == "anyOf" ? _KW_ANYOF : _KW_ONEOF
+        return _SchemaKeyword(kind, k, v; subs = Union{Nothing, _SchemaNode}[sub(s) for s in v])
+    elseif k == "not"
+        return _SchemaKeyword(_KW_NOT, k, v; sub = sub(v))
+    elseif k == "if"
+        # An `if` with neither `then` nor `else` is ignored, as by the library.
+        (haskey(schema, "then") || haskey(schema, "else")) || return nothing
+        return _SchemaKeyword(
+            _KW_IF, k, v; sub = sub(v),
+            subs = Union{Nothing, _SchemaNode}[
+                haskey(schema, "then") ? sub(schema["then"]) : nothing,
+                haskey(schema, "else") ? sub(schema["else"]) : nothing,
+            ]
+        )
+    elseif k == "pattern" && v isa String
+        return _SchemaKeyword(_KW_PATTERN, k, v; patterns = [v])
+    end
+    return _SchemaKeyword(_KW_LEAF, k, v)
+end
+
+# The compiled form of the root schema, built on first use and kept for as
+# long as the same root object is asked for (the ESM schema is a constant).
+const _SCHEMA_COMPILED = Ref{Any}(nothing)
+const _SCHEMA_COMPILED_LOCK = ReentrantLock()
+
+function _compiled_schema(root)::_SchemaNode
+    return lock(_SCHEMA_COMPILED_LOCK) do
+        cached = _SCHEMA_COMPILED[]
+        cached !== nothing && cached[1] === root && return cached[2]::_SchemaNode
+        node = _compile_schema(root, IdDict{Any, _SchemaNode}())
+        _SCHEMA_COMPILED[] = (root, node)
+        return node
+    end
+end
+
+# ── The walk ────────────────────────────────────────────────────────────────
+
+# `sink` is `nothing` in match mode, or the error vector in collect mode.
+const _SchemaSink = Union{Nothing, Vector{SchemaError}}
+
+# A child's pointer, built only when there is somewhere to report it.
+_walk_path(::Nothing, path::String, seg) = path
+_walk_path(::Vector{SchemaError}, path::String, seg) = _ptr_child(path, seg)
+
+# Record a failure of `keyword` at `path` (collect mode) and return `false`.
+_walk_fail!(::Nothing, path, keyword) = false
+_walk_fail!(errors::Vector{SchemaError}, path, keyword) =
+    (_push_schema_error!(errors, path, keyword); false)
+
+# Does `x` satisfy `node`? In collect mode every failure beneath is recorded
+# and the walk goes on; in match mode it stops at the first. `root` is the
+# library's empty instance path, passed to its leaf methods.
+function _schema_walk!(sink::_SchemaSink, x, node::_SchemaNode, path::String, root)::Bool
+    kind = node.kind
+    kind == _NODE_TRUE && return true
+    kind == _NODE_FALSE && return _walk_fail!(sink, path, "schema")
+    if kind == _NODE_OTHER
+        # Not a schema: the library's to judge (or to refuse); nothing to report.
+        return sink !== nothing || JSONSchema._validate(x, node.schema, root) === nothing
+    end
+    ok = true
+    for kw in node.keywords
+        _schema_walk_keyword!(sink, x, node, kw, path, root) && continue
+        sink === nothing && return false
+        ok = false
+    end
+    return ok
+end
+
+_schema_matches(x, node::_SchemaNode, root) = _schema_walk!(nothing, x, node, "", root)
+
+# Is a property name outside both `properties` and `patternProperties`?
+_is_additional(kw::_SchemaKeyword, k) =
+    !haskey(kw.props, k) && !_anyof(r -> occursin(r, k), _keyword_regexes(kw))
+
+# One keyword of `node` on `x`, with the semantics of the library's
+# `_validate(x, schema, Val(k), v, path)` under the argument types its
+# method takes.
+function _schema_walk_keyword!(sink::_SchemaSink, x, node::_SchemaNode, kw::_SchemaKeyword, path::String, root)::Bool
+    kind = kw.kind
+    if kind == _KW_PROPERTIES
+        x isa AbstractDict || return true
+        ok = true
+        for (xk, xv) in x
+            sub = get(kw.props, xk, nothing)
+            sub === nothing && continue
+            _schema_walk!(sink, xv, sub, _walk_path(sink, path, xk), root) && continue
+            sink === nothing && return false
+            ok = false
+        end
+        return ok
+    elseif kind == _KW_PATTERN_PROPERTIES
+        x isa AbstractDict || return true
+        ok = true
+        for (r, sub) in zip(_keyword_regexes(kw), kw.subs)
+            for (xk, xv) in x
+                occursin(r, xk) || continue
+                _schema_walk!(sink, xv, sub::_SchemaNode, _walk_path(sink, path, xk), root) && continue
+                sink === nothing && return false
+                ok = false
+            end
+        end
+        return ok
+    elseif kind == _KW_ADDITIONAL_PROPERTIES
+        x isa AbstractDict || return true
+        ok = true
+        for (xk, xv) in x
+            _is_additional(kw, xk) || continue
+            _schema_walk!(sink, xv, kw.sub::_SchemaNode, _walk_path(sink, path, xk), root) && continue
+            sink === nothing && return false
+            ok = false
+        end
+        return ok
+    elseif kind == _KW_NO_ADDITIONAL_PROPERTIES
+        x isa AbstractDict || return true
+        _anyof(xk -> _is_additional(kw, xk), keys(x)) || return true
+        return _walk_fail!(sink, path, "additionalProperties")
+    elseif kind == _KW_PROPERTY_NAMES
+        x isa AbstractDict || return true
+        sub = kw.sub::_SchemaNode
+        _allof(xk -> _schema_matches(xk, sub, root), keys(x)) && return true
+        return _walk_fail!(sink, path, "propertyNames")
+    elseif kind == _KW_ITEMS
+        x isa AbstractVector || return true
+        sub = kw.sub::_SchemaNode
+        ok = true
+        for (i, xi) in enumerate(x)
+            _schema_walk!(sink, xi, sub, _walk_path(sink, path, i - 1), root) && continue
+            sink === nothing && return false
+            ok = false
+        end
+        return ok
+    elseif kind == _KW_CONTAINS
+        x isa AbstractVector || return true
+        sub = kw.sub::_SchemaNode
+        _anyof(xi -> _schema_matches(xi, sub, root), x) && return true
+        return _walk_fail!(sink, path, "contains")
+    elseif kind == _KW_ALLOF
+        ok = true
+        for sub in kw.subs
+            _schema_walk!(sink, x, sub::_SchemaNode, path, root) && continue
+            sink === nothing && return false
+            ok = false
+        end
+        return ok
+    elseif kind == _KW_ANYOF
+        _anyof(sub -> _schema_matches(x, sub::_SchemaNode, root), kw.subs) && return true
+        _walk_fail!(sink, path, "anyOf")
+        # Every branch failed: descend them all for the underlying leaf errors.
+        sink === nothing || for sub in kw.subs
+            _schema_walk!(sink, x, sub::_SchemaNode, path, root)
+        end
+        return false
+    elseif kind == _KW_ONEOF
+        nmatch = 0
+        for sub in kw.subs
+            _schema_matches(x, sub::_SchemaNode, root) || continue
+            nmatch += 1
+            nmatch > 1 && break
+        end
+        nmatch == 1 && return true
+        _walk_fail!(sink, path, "oneOf")
+        # ZERO matches ⇒ every branch failed, so descend them all for the
+        # underlying leaf errors. ≥2 matches ⇒ the branches PASS (no leaf error
+        # to find); the `oneOf` itself is the finding.
+        nmatch == 0 && sink !== nothing && for sub in kw.subs
+            _schema_walk!(sink, x, sub::_SchemaNode, path, root)
+        end
+        return false
+    elseif kind == _KW_NOT
+        _schema_matches(x, kw.sub::_SchemaNode, root) || return true
+        return _walk_fail!(sink, path, "not")
+    elseif kind == _KW_IF
+        branch = _schema_matches(x, kw.sub::_SchemaNode, root) ? kw.subs[1] : kw.subs[2]
+        return branch === nothing || _schema_walk!(sink, x, branch, path, root)
+    elseif kind == _KW_PATTERN && x isa String
+        # The library's check, `occursin(Regex(v), x)`, with the pattern
+        # compiled once rather than per string.
+        occursin(only(_keyword_regexes(kw)), x) && return true
+        return _walk_fail!(sink, path, "pattern")
+    end
+    # A leaf assertion keyword (`type`, `required`, `enum`, `minItems`, …), or
+    # an applicator in a form left to the library: evaluated by JSONSchema.jl
+    # exactly as in a normal validation, failing at THIS node.
+    JSONSchema._validate(x, node.schema, kw.val, kw.v, root) === nothing && return true
+    return _walk_fail!(sink, path, kw.name)
 end
 
 # Collapse identical (path, keyword) findings (a `oneOf` branch descent or a
@@ -415,7 +620,7 @@ schema violation (CONFORMANCE_SPEC §7.1.2), each carrying:
 
 Unlike JSONSchema.jl's single-issue `validate`, this enumerates leaf failures
 INSIDE failed `oneOf`/`anyOf`/`allOf`/`if` branches (see
-`_collect_schema_errors!`), matching TypeScript's AJV `allErrors` output.
+`_schema_walk!`), matching TypeScript's AJV `allErrors` output.
 """
 function validate_schema(data::Any)::Vector{SchemaError}
     if ESM_SCHEMA === nothing
@@ -432,7 +637,7 @@ function validate_schema(data::Any)::Vector{SchemaError}
         # `oneOf` branch that depends on it) misfires on the JSON3 carrier.
         # Coercing to native containers makes the walk carrier-independent.
         native = _to_native_json(data)
-        _collect_schema_errors!(errors, native, ESM_SCHEMA.data, "")
+        _schema_walk!(errors, native, _compiled_schema(ESM_SCHEMA.data), "", _jsonschema_root_path())
     catch e
         return [SchemaError("", "Schema validation error: $(e)", "error")]
     end
@@ -1236,7 +1441,8 @@ esm-spec §8.5.1 rule 3 for a parameter `scoped` (`Model[.Sub…].var`) whose
 effective `records_per_sample` is 2: the first record shape that fails, or
 `nothing` when every record shape this pass can see passes.
 
-The record shape is `own_shape` when that is not empty. Otherwise it is the
+The record shape is `own_shape` whenever the parameter declares one (`[]`
+included: a scalar buffer, which fails). When `own_shape` is `nothing` it is the
 declared `shape` of EVERY target of a `param_to_var` `variable_map` entry in
 `coupling` whose `from` is `scoped`, and each must pass. A target whose
 declaration [`_declared_variable`](@ref) cannot reach (not found, or behind a
@@ -1247,11 +1453,13 @@ empty. With no such entry at all the record shape is empty, which fails unless
 """
 function _record_shape_failure(
         file::EsmFile, coupling, scoped::AbstractString,
-        own_shape::AbstractVector; defer_empty::Bool
+        own_shape::Union{AbstractVector, Nothing}; defer_empty::Bool
     )
-    if !isempty(own_shape)
-        return _index_set_has_two_members(file, own_shape[1]) ? nothing :
-            collect(String, own_shape)
+    if own_shape !== nothing
+        # A declared shape is the record shape, `[]` included: it declares a
+        # scalar buffer. Only an ABSENT shape takes its targets'.
+        return (!isempty(own_shape) && _index_set_has_two_members(file, own_shape[1])) ?
+            nothing : collect(String, own_shape)
     end
     mapped = false
     for entry in coupling
@@ -1282,9 +1490,9 @@ _records_per_sample_shape_error(at::AbstractString, name::AbstractString, shape)
 
 esm-spec §8.5.1, `records_per_sample_invalid`, at every depth of `model`:
 `from.records_per_sample` on a rule that is not `data`; or an EFFECTIVE value
-of 2 on a parameter whose source declares no `temporal` block, or whose record
-shape fails rule 3 (see [`_record_shape_failure`](@ref)). An empty record shape
-is refused here only when no `param_to_var` entry names the parameter and the
+of 2 on a parameter whose source is time-invariant (it declares no `temporal`
+block, or its `temporal` declares no `start`), or whose record shape fails rule 3 (see [`_record_shape_failure`](@ref)). A parameter that
+declares no `shape` is refused here only when no `param_to_var` entry names it and the
 document's `coupling` holds no `coupling_import`; otherwise `flatten` checks
 what arrives after expansion. The pointer is the rule's: `…/update` for the
 object form, `…/update/<i>` for the array form.
@@ -1319,22 +1527,24 @@ function _check_records_per_sample!(
                 get(file.data_sources, rule.source, nothing)
             src === nothing && continue  # data_source_undefined reports it
             _effective_records_per_sample(rule.from, src) == 2 || continue
-            if src.temporal === nothing
+            if src.temporal === nothing || src.temporal.start === nothing ||
+                    isempty(src.temporal.start)
+                what = src.temporal === nothing ? "no temporal block" :
+                    "no temporal start"
                 push!(
                     errors, StructuralError(
                         at,
                         "Parameter '$name' asks for two records per sample from " *
-                            "data source '$(rule.source)', which declares no temporal " *
-                            "block and so has no successor record",
+                            "data source '$(rule.source)', which declares $what, " *
+                            "so it is time-invariant and has no successor record",
                         ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
                         Dict{String, Any}("variable" => name, "source" => rule.source)
                     )
                 )
                 continue
             end
-            own = var.shape === nothing ? String[] : var.shape
             shape = _record_shape_failure(
-                file, file.coupling, "$scope.$name", own; defer_empty = defer_empty
+                file, file.coupling, "$scope.$name", var.shape; defer_empty = defer_empty
             )
             shape === nothing && continue
             push!(
@@ -4343,7 +4553,7 @@ Well-known physical constants whose declared units can be dimensionally
 verified against a canonical form. Conservative on purpose — names chosen
 to minimize collision with common non-constant uses (e.g., no `c` for
 speed of light, which conflicts with concentration). Mirrors Python's
-`_KNOWN_PHYSICAL_CONSTANTS` (gt-j91l / gt-3tgv).
+`units.KNOWN_PHYSICAL_CONSTANTS` (gt-j91l / gt-3tgv).
 
 Each tuple is (name, canonical_units, description).
 """
@@ -4375,7 +4585,7 @@ declared units are dimensionally incompatible with the canonical form (e.g.,
 `R` declared as `kcal/mol` — missing temperature — instead of `J/(mol*K)`).
 Reports at the first observed-variable usage site in the same model;
 otherwise at the declaration. Mirrors Python's
-`parse._check_physical_constant_units` (gt-3tgv). Recurses into subsystems.
+`units.UnitValidator._check_physical_constants` (gt-3tgv). Recurses into subsystems.
 """
 function validate_physical_constant_units(model::Model, path::String)::Vector{StructuralError}
     errors = StructuralError[]
@@ -4453,7 +4663,7 @@ Flag observed variables whose defining expression is `<numeric> * <var>`
 (or `<var> * <numeric>`) where the declared units and the source variable's
 units are dimensionally compatible but the numeric literal disagrees with the
 correct linear conversion factor. Only linear (non-affine) conversions are
-checked. Mirrors Python's `parse._check_conversion_factor_consistency`
+checked. Mirrors Python's `units.UnitValidator._check_conversion_factor`
 (gt-nvdv). Recurses into subsystems.
 """
 function validate_conversion_factor_consistency(model::Model, path::String)::Vector{StructuralError}

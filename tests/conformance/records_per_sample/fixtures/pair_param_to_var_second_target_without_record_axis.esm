@@ -2,7 +2,7 @@
   "esm": "1.3.0",
   "metadata": {
     "name": "PairParamToVarSecondTargetWithoutRecordAxis",
-    "description": "Met.K (scalar, records_per_sample 2) is mapped by param_to_var onto Box.F_k [rec, x], which is fine, and onto Col.F_k [x, rec], whose first dimension has 4 members. Every target is a record shape and each must satisfy rule 3 (esm-spec 8.5.1)."
+    "description": "Met.K (no shape, records_per_sample 2) is mapped by param_to_var onto Box.F_k [rec, x], which is fine, and onto Col.F_k [x, rec], whose first dimension has 4 members. Every target is a record shape and each must satisfy rule 3 (esm-spec 8.5.1)."
   },
   "index_sets": {
     "rec": {
@@ -37,9 +37,8 @@
         "K": {
           "type": "parameter",
           "units": "1/s",
-          "shape": [],
           "default": 0.1,
-          "description": "Declared once, as a scalar; the consumer gives it the record axis and the grid.",
+          "description": "Declared once, with no shape; the consumer gives it the record axis and the grid.",
           "update": {
             "kind": "data",
             "source": "met_source",

@@ -376,7 +376,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         # with units 'kcal/mol' — missing the temperature dimension (canonical is
         # 'J/(mol*K)'). Must be rejected as a structural unit_inconsistency error
         # at the usage site `gas_law_calculation` (mirrors Python's
-        # parse._check_physical_constant_units, gt-3tgv).
+        # units.UnitValidator._check_physical_constants, gt-3tgv).
         @testset "Invalid fixture units_dimensional_constant_error.esm is rejected" begin
             fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "units_dimensional_constant_error.esm")
             if _require_fixture(fixture_path)
@@ -402,7 +402,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         # Scale-aware conversion factor check (gt-l76y). Observed variable
         # declared in Pa is assigned '50000 * p_atm' where p_atm is in atm;
         # dimensions match but the numeric scale factor should be 101325 Pa/atm.
-        # Mirrors Python's parse._check_conversion_factor_consistency.
+        # Mirrors Python's units.UnitValidator._check_conversion_factor.
         @testset "Conversion factor mismatch flagged" begin
             variables = Dict{String, EarthSciAST.ModelVariable}(
                 "p_atm" => EarthSciAST.ModelVariable(
@@ -709,6 +709,19 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
                     expected = [(String(e.code), String(e.path)) for e in pins[fixture].structural_errors]
                     @test [(e.error_type, e.path) for e in result.structural_errors] == expected
                 end
+            end
+        end
+        # esm-spec §8 (esm 1.0.0): a data source is not a coupling endpoint or a
+        # scoped-name root, so a `variable_map` whose `from` is owned by a
+        # `data_sources` key resolves to nothing.
+        @testset "variable_map from a data source is unresolved" begin
+            fixture = "variable_map_from_data_source.esm"
+            fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", fixture)
+            if _require_fixture(fixture_path)
+                result = EarthSciAST.validate(EarthSciAST.load_path(fixture_path))
+                @test !result.is_valid
+                expected = [(String(e.code), String(e.path)) for e in pins[fixture].structural_errors]
+                @test [(e.error_type, e.path) for e in result.structural_errors] == expected
             end
         end
         @testset "Inline-test static check: every accepted spelling validates clean" begin

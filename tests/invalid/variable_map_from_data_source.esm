@@ -1,0 +1,136 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "variable_map_from_data_source",
+    "description": "INVALID (unresolved_scoped_ref at /coupling/0/from). The `param_to_var` source `Met.K` names a field of the data source keyed `Met`, and no component declares it: there is no model `Met`. A data source is not a coupling endpoint or a scoped-name root since esm 1.0.0 (esm-spec 8); a field it serves is reached through a data-fed parameter that names it in `update.from`. Rust used to resolve the reference against the data source's own variable table, and Python, TypeScript and Go flatten kept a pre-1.0 rule that built an unfed parameter `Met.K` with the target's shape.",
+    "tags": [
+      "variable_map",
+      "param_to_var",
+      "data-source",
+      "shape",
+      "conformance"
+    ]
+  },
+  "index_sets": {
+    "rec": {
+      "kind": "interval",
+      "size": 2
+    },
+    "x": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "data_sources": {
+    "Met": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file:///data/met/met_{date:%Y%m%d}.nc"
+      },
+      "temporal": {
+        "frequency": "PT1H",
+        "file_period": "P1D",
+        "records_per_file": 24
+      }
+    }
+  },
+  "models": {
+    "Box": {
+      "variables": {
+        "c": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "shape": [
+            "x"
+          ],
+          "default": 1.0,
+          "description": "Tracer concentration per cell."
+        },
+        "F_k": {
+          "type": "parameter",
+          "units": "1/s",
+          "shape": [
+            "rec",
+            "x"
+          ],
+          "default": 0.0,
+          "description": "Rate field, two bracketing records per cell. Coupled from Met.K."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "c",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "F_k",
+                        1,
+                        "i"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "c",
+                        "i"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "Met.K",
+      "to": "Box.F_k",
+      "transform": "param_to_var"
+    }
+  ]
+}

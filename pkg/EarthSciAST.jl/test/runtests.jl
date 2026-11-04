@@ -47,6 +47,8 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # the schema-$id pin that keeps the first from hand-drifting.
     include("version_constants_test.jl")
     include("validate_test.jl")
+    # `validate_schema`'s own schema walk ≡ JSONSchema.jl's verdict.
+    include("schema_match_parity_test.jl")
     include("structural_validation_test.jl")
     # Causal self-reference well-foundedness (esm-spec §4.3.1.1). A VALIDATION
     # category (CONFORMANCE_SPEC §5.19.5), so it sits with the other structural
@@ -167,6 +169,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("conformance_range_restricted_rhs_test.jl")   # CONFORMANCE_SPEC §5.50
     include("public_rhs_program_test.jl")                 # reentrant rhs! (API_SPEC §5.8, #541)
     include("conformance_public_rhs_program_test.jl")     # CONFORMANCE_SPEC §5.51
+    include("conformance_provider_forcing_test.jl")      # providers and the default forcing (API_SPEC §5.8)
     # Every per-cell route under a strict `native`: refused by name, or compiled
     # once and reported under a tier that says so.
     include("percell_route_refusal_test.jl")
@@ -264,6 +267,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # EarthSciIO (+ Blosc/JSON/SHA) from the test target (Project.toml
     # [targets].test), which activates the EarthSciASTEarthSciIOExt extension.
     include("provider_selection_test.jl")
+    include("esio_document_cadence_test.jl")
     # esm-spec §8.5 `unit_conversion` at the unit level (parse + apply).
     include("unit_conversion_test.jl")
     # The loader-ingest surface of esm-spec §8.9 (reader_options / codes /
@@ -285,6 +289,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # esm-spec §8.5 `unit_conversion` on the ESIO provider path — the
     # manifest-driven cross-binding conformance adapter.
     include("loader_unit_conversion_conformance_test.jl")
+    # The public sample-to-buffer conversion `esm_problem` uses (API_SPEC §5.8,
+    # "Forcing sets"), against the Problem's own buffers.
+    include("forcing_from_sample_test.jl")
     include("unit_registry_conformance_test.jl")
     # Streaming output sinks (Wave 2): end-to-end ZarrSink write → ZarrReader
     # read-back round-trip through the EarthSciIO write boundary (RFC §16).

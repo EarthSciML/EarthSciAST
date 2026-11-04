@@ -10,7 +10,6 @@ import pytest
 
 from earthsci_ast import validate_text
 from earthsci_ast.esm_types import ExprNode
-from earthsci_ast.structural_checks import _pure_angle_scale_is_one
 from earthsci_ast.units import DimensionalMismatchError, UnitValidator, parse_unit
 
 
@@ -75,15 +74,30 @@ def test_structural_sum_pairs_every_operand():
         [{"lhs": "psi", "rhs": {"op": "+", "args": ["n", "theta", "omega"]}}],
     )
     result = validate_text(json.dumps(doc))
-    assert any("'rad' + 'sr'" in e.message for e in result.structural_errors)
+    assert [(e.code, e.path) for e in result.structural_errors] == [
+        ("unit_inconsistency", "/models/M/variables/psi")
+    ]
+    assert "+" in result.structural_errors[0].message
 
 
 @pytest.mark.parametrize(
-    ("unit", "scale_is_one"),
-    [("rad", True), ("deg", False), ("degree", False), (" deg", False), ("radians", None)],
+    ("unit", "codes"),
+    [
+        ("rad", set()),
+        ("deg", {"unit_inconsistency"}),
+        ("degree", {"unit_inconsistency"}),
+        (" deg", {"unit_inconsistency"}),
+        ("radians", {"unit_parse_error"}),
+    ],
 )
-def test_the_pure_angle_helper_never_raises(unit, scale_is_one):
-    assert _pure_angle_scale_is_one(unit) is scale_is_one
+def test_an_angle_meeting_a_pure_number_is_judged_by_its_scale(unit, codes):
+    """`exp(x)` with `x` an angle: `rad` is a pure number at scale 1, any other
+    angle scale is refused, and a spelling that is not a unit is a parse error
+    -- a finding in every case, never a crash."""
+    doc = _doc({"x": unit, "y": "1"}, [{"lhs": "y", "rhs": {"op": "exp", "args": ["x"]}}])
+    result = validate_text(json.dumps(doc))
+    assert {e.code for e in result.structural_errors} == codes
+    assert result.is_valid == (not codes)
 
 
 @pytest.mark.parametrize("unit", ["degree", "degrees", " deg", "radians"])

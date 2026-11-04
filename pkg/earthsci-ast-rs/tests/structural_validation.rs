@@ -323,6 +323,31 @@ fn test_unresolved_scoped_reference() {
             "variable 'nonexistent_variable' not provided by 'ModelB'",
         ],
     );
+    // A `data_sources` key is not a coupling endpoint or a scoped-name root
+    // (esm-spec §8), so `Met.K` with `Met` a data source names nothing.
+    assert_fixture_load_rejected(
+        "variable_map_from_data_source",
+        include_str!("../../../tests/invalid/variable_map_from_data_source.esm"),
+        &["coupling[0]/from", "undefined system 'Met'"],
+    );
+    // …and the validator recovers the pinned `(code, path)` record from it.
+    let result = validate_text(
+        include_str!("../../../tests/invalid/variable_map_from_data_source.esm"),
+        None,
+    );
+    assert!(!result.is_valid);
+    assert!(
+        result.structural_errors.iter().any(|e| {
+            matches!(e.code, StructuralErrorCode::UnresolvedScopedRef)
+                && e.path == "/coupling/0/from"
+        }),
+        "variable_map_from_data_source: expected unresolved_scoped_ref at /coupling/0/from, got {:?}",
+        result
+            .structural_errors
+            .iter()
+            .map(|e| (e.code.to_string(), e.path.clone()))
+            .collect::<Vec<_>>()
+    );
 }
 
 /// A coupling-library file's coupling edges name ROLES, not systems (esm-spec
@@ -826,7 +851,7 @@ fn test_reaction_rate_units_mismatch_fixture_rejected() {
 /// with units `kcal/mol` — missing the temperature dimension (canonical is
 /// `J/(mol*K)`). Must be rejected as a structural unit_inconsistency error
 /// across all bindings, reported at the usage site `gas_law_calculation`
-/// (mirrors Python's `_check_physical_constant_units`, gt-3tgv).
+/// (mirrors Python's `units.UnitValidator._check_physical_constants`, gt-3tgv).
 #[test]
 fn test_physical_constant_dimensional_error_fixture_rejected() {
     let fixture = include_str!("../../../tests/invalid/units_dimensional_constant_error.esm");

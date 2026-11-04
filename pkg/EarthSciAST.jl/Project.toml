@@ -104,20 +104,13 @@ Unitful = "1.28.0"
 julia = "1.10"
 # Test-only deps for the EarthSciIO-extension pushdown tests (test/provider_selection_test.jl).
 Blosc = "0.7"
-# 0.1.4 is the first release that rechecks a warm file:// cache entry against
-# the file it came from (EarthSciML/EarthSciAST#293); older ones serve stale data.
-EarthSciIO = "0.1.4, 0.2"
+# 0.3 is the first release with `provider_from_esm` (EarthSciML/EarthSciIO#30),
+# which `providers_from_document` builds every source with.
+EarthSciIO = "0.3"
 JSON = "1"
 SHA = "0.7, 1"
 SnoopCompileCore = "3"
 ZipFile = "0.10"
-
-# Track EarthSciIO (unregistered) from GitHub for the extension tests WITHOUT
-# adding it to the package's own [deps] (it stays a weakdep). `[sources]` is
-# honoured only when this Project is the active/develop env (i.e. under
-# `Pkg.test()` / the test target), so a downstream `add EarthSciAST` ignores it.
-[sources]
-EarthSciIO = {url = "https://github.com/EarthSciML/EarthSciIO.git", subdir = "julia"}
 
 [extras]
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"

@@ -179,9 +179,9 @@ Runs on the PRE-coupling tables: an `operator_compose` `translate` merge (§10.2
 legitimately consumes one of two spellings of a quantity, so checking after it
 ran would flag a well-formed endpoint.
 
-EXEMPTION: a `from` whose owning system is a top-level `data_sources` key. Such
-a producer is served through the runtime forcing seam rather than as a declared
-variable, so it is legitimately absent from the tables.
+No exemption for a `from` whose owner is a `data_sources` key: a data source
+is not a coupling endpoint (esm-spec §8), so a field it serves is reached
+through the data-fed parameter that names it in `update.from`.
 
 Deliberately NOT checked: whether a promoting transform's `to` is a PARAMETER
 rather than an unknown. `tests/valid/scoped_refs_coupling.esm` maps
@@ -201,16 +201,10 @@ function _check_variable_map_endpoints(
             push!(declared, name)
         end
     end
-    loader_names = file.data_sources === nothing ? Set{String}() :
-        Set{String}(keys(file.data_sources))
     for entry in file.coupling
         entry isa CouplingVariableMap || continue
-        dot = findfirst('.', entry.from)
-        from_owner = dot === nothing ? entry.from : String(SubString(entry.from, 1, prevind(entry.from, dot)))
-        from_is_loaded = from_owner in loader_names
         for (side, endpoint) in (("from", entry.from), ("to", entry.to))
             (isempty(endpoint) || endpoint in declared) && continue
-            (side == "from" && from_is_loaded) && continue
             throw(VariableMapUnresolvedEndpointError(entry.from, entry.to, side, endpoint))
         end
     end
@@ -1372,14 +1366,15 @@ function _apply_variable_map!(
         params::OrderedDict{String, ModelVariable},
         entry::CouplingVariableMap;
         observeds::Union{OrderedDict{String, ModelVariable}, Nothing} = nothing,
-        index::Int
+        index::Int,
+        shapeless::AbstractSet{String} = Set{String}()
     )
     if entry.transform isa ASTExpr
         _apply_expression_transform!(equations, contribs, params, observeds, entry, index)
         return
     end
     _substitute_variable_map!(equations, contribs, entry)
-    _promote_variable_map_param!(params, entry)
+    _promote_variable_map_param!(params, entry, shapeless)
     return
 end
 
@@ -1517,17 +1512,94 @@ function _rename_join_clauses(expr::OpExpr, renames::AbstractDict{String, String
 end
 
 # For param_to_var / conversion_factor, remove the target param from the
-# parameter list — it is now driven by `from`.
+# parameter list — it is now driven by `from`. The source survives as its own
+# declaration — units, default, `update` (esm-libraries-spec §4.7.3). When the
+# removed target is shaped and the source is a data-fed parameter, the
+# rewritten equations index the source with the target's indices:
+#
+# * a source that DECLARES NO `shape` (`shapeless` holds its scoped name, see
+#   `_data_fed_without_shape`) takes the target's. Every further edge from it
+#   must name a target of that same shape, so one shapeless source feeding two
+#   targets of different shapes is refused whichever entry comes first;
+# * a source that declares a `shape` — `[]`, a scalar buffer, included — keeps
+#   it, and it must equal the target's.
+#
+# Either mismatch is a `VariableMapShapeConflictError`.
 function _promote_variable_map_param!(
         params::OrderedDict{String, ModelVariable},
-        entry::CouplingVariableMap
+        entry::CouplingVariableMap,
+        shapeless::AbstractSet{String} = Set{String}()
     )
     (entry.transform == "param_to_var" || entry.transform == "conversion_factor") ||
         return
     haskey(params, entry.to) || return
+    target = params[entry.to]
     delete!(params, entry.to)
-    return
+    target_shape = target.shape === nothing ? String[] : target.shape
+    isempty(target_shape) && return
+    source = get(params, entry.from, nothing)
+    (source === nothing || !_is_data_fed(source)) && return
+    source_shape = source.shape === nothing ? String[] : source.shape
+    took_shape = entry.from in shapeless
+    if took_shape && isempty(source_shape)
+        params[entry.from] = _with_shape(source, copy(target_shape))
+        return
+    end
+    source_shape == target_shape && return
+    throw(
+        VariableMapShapeConflictError(
+            entry.from, entry.to, copy(source_shape), copy(target_shape), took_shape
+        )
+    )
 end
+
+"""
+    _data_fed_without_shape(file::EsmFile) -> Set{String}
+
+The scoped names of every data-fed parameter (a `kind: "data"` rule with a
+`from` binding) that declares no `shape`, in models at any subsystem depth and
+in reaction systems.
+
+Absent and `[]` differ here, and only here: `[]` declares a scalar buffer,
+while an absent `shape` takes that of the `param_to_var` target the parameter
+replaces (esm-libraries-spec §4.7.3, esm-spec §8.5.1). The difference is read
+off the declarations rather than the collected tables, which other passes are
+free to reshape.
+"""
+function _data_fed_without_shape(file::EsmFile)
+    names = Set{String}()
+    fed(update) = update !== nothing &&
+        any(r -> r.kind == "data" && r.from !== nothing, update)
+    function walk(model::Model, scope::String)
+        for (vname, var) in model.variables
+            (var.type == ParameterVariable && var.shape === nothing && fed(var.update)) &&
+                push!(names, "$scope.$vname")
+        end
+        for (sname, sub) in model.subsystems
+            sub isa Model && walk(sub, "$scope.$sname")
+        end
+        return
+    end
+    if file.models !== nothing
+        for (mname, model) in file.models
+            model isa Model && walk(model, String(mname))
+        end
+    end
+    if file.reaction_systems !== nothing
+        for (rname, rs) in file.reaction_systems
+            for p in rs.parameters
+                (p.shape === nothing && fed(p.update)) && push!(names, "$rname.$(p.name)")
+            end
+        end
+    end
+    return names
+end
+
+# True iff `v` carries a `kind: "data"` update WITH a `from` binding (esm-spec
+# §5.4/§8.5) — the predicate `_collect_loader_fields!` and `_collect_data_feeds!`
+# apply, so all three agree on which parameters are data-fed.
+_is_data_fed(v::ModelVariable) =
+    v.update !== nothing && any(rule -> rule.kind == "data" && rule.from !== nothing, v.update)
 
 # ========================================
 # Coupling entry descriptions (unchanged from prior implementation)

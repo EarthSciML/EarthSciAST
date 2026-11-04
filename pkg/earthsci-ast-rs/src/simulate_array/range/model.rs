@@ -35,6 +35,7 @@ pub(in crate::simulate_array) struct ProgramModel {
     pub(in crate::simulate_array) declared_names: HashSet<String>,
     pub(in crate::simulate_array) inline_param_arrays: HashMap<String, (Vec<usize>, Vec<f64>)>,
     pub(in crate::simulate_array) forcing_decls: IndexMap<String, Option<Vec<usize>>>,
+    pub(in crate::simulate_array) declared_forcing_shapes: IndexMap<String, Option<Vec<usize>>>,
     pub(in crate::simulate_array) forcing_defaults: HashMap<String, Option<(Vec<usize>, Vec<f64>)>>,
     pub(in crate::simulate_array) unvalued_shaped_params: Vec<String>,
 }
@@ -62,6 +63,7 @@ impl ProgramModel {
             declared_names: c.declared_names,
             inline_param_arrays: c.inline_param_arrays,
             forcing_decls: c.forcing_decls,
+            declared_forcing_shapes: c.declared_forcing_shapes,
             forcing_defaults: c.forcing_defaults,
             unvalued_shaped_params: c.unvalued_shaped_params,
         }
@@ -112,6 +114,7 @@ impl ProgramModel {
             field_ic_memo: std::cell::RefCell::new(None),
             inline_param_arrays: self.inline_param_arrays.clone(),
             forcing_decls: self.forcing_decls.clone(),
+            declared_forcing_shapes: self.declared_forcing_shapes.clone(),
             forcing_defaults: self.forcing_defaults.clone(),
             unvalued_shaped_params: self.unvalued_shaped_params.clone(),
             held_at_ic: held,

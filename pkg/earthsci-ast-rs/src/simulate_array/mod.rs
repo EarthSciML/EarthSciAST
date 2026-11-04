@@ -65,6 +65,7 @@
 mod compile;
 mod cse;
 mod driver;
+pub(crate) use driver::ParameterKeyResolver;
 mod eval;
 mod layout;
 pub(crate) mod range;
@@ -90,6 +91,7 @@ pub(crate) use compile::check_free_variables;
 pub(crate) use compile::data_feed_source;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::inline_parameter_arrays;
+pub(crate) use compile::resolve_declared_shape;
 pub(crate) use compile::{model_tree_any, parse_subsystem_model};
 // The build pipeline reads the authored model, as the single-model route does,
 // so it applies the same stand-ins for `flatten`'s rewrites.
@@ -807,6 +809,11 @@ pub struct ArrayCompiled {
     /// registry cannot size. The tape compiles a read of one of these into a
     /// forcing load (`tape::Instr::LoadForcing`) rather than declining it.
     forcing_decls: IndexMap<String, Option<Vec<usize>>>,
+    /// [`Self::forcing_decls`] as declared: the same names, with `None` for
+    /// every shape the registry cannot size, before the build sizes some of
+    /// those from how the equations index them. A provider's sample is checked
+    /// against these, never against an inferred size.
+    declared_forcing_shapes: IndexMap<String, Option<Vec<usize>>>,
     /// The declared `default` of each [`Self::forcing_decls`] entry that has
     /// one, as the dense row-major field it denotes over the resolved shape
     /// (`None` while that shape does not resolve). Construction serves it from

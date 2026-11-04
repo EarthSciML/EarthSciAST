@@ -4070,21 +4070,24 @@ rule's 0-based position) when it is an array of rules.
 1. a rule whose `kind` is not `data` carries `from.records_per_sample` (only a
    `data` rule names a source to read records from);
 2. a parameter's effective value is `2` and its source declares no `temporal`
-   block (a source without one has a single record and no successor, so there
+   block, or a `temporal` block with no `start` (a source without a temporal
+   start is time-invariant: it has a single record and no successor, so there
    is no pair to deliver);
 3. a parameter's effective value is `2` and its **record shape** is empty, or
    its first entry names an index set that does not have exactly two members:
    an `interval` whose `size` is not 2, a `categorical` whose `members` are not
    two, or any `derived` or `ragged` set (whose size is not known at load).
 
-The record shape is the parameter's declared `shape` when that is not empty.
-A parameter that declares an empty `shape` and is the `from` of a
+The record shape is the parameter's declared `shape` when it declares one, an
+empty `shape` (a scalar buffer) included.
+A parameter that declares no `shape` and is the `from` of a
 `variable_map` entry with `transform: "param_to_var"` takes, in the flattened
 system, the shape of the parameter it replaces (esm-libraries-spec §4.7.3), and
 its record shape is that target's declared `shape`. When it is the `from` of
 several such entries, **every** target's declared `shape` is a record shape of
-the parameter and each must satisfy rule 3. This is how a data
-component declares a field once, as a scalar, and a consumer gives it the
+the parameter and each must satisfy rule 3 (flattening further requires them
+to be the same shape, esm-libraries-spec §4.7.3). This is how a data
+component declares a field once, with no shape, and a consumer gives it the
 record axis and the grid:
 
 ```json
@@ -4093,7 +4096,8 @@ record axis and the grid:
 ]
 ```
 
-with `GEOSFP.PBLH` declared `"shape": []` and
+with `GEOSFP.PBLH` declared with no `shape` (an explicit `"shape": []` would
+declare a scalar, whose record shape is empty) and
 `"from": {"file_variable": "PBLH", "records_per_sample": 2}`, and
 `Transport3D.F_PBLH` declared `"shape": ["gf_t", "gf_lat", "gf_lon"]` with
 `gf_t` of size 2.
@@ -4435,7 +4439,11 @@ binding (overriding it).
 
 The selection is over the axis the source **delivers**, so it follows
 `record_filter`: `range 0..200` on a filtered table is the first 200 *surviving*
-records. Whether a binding pushes the selection down to the reader (fetching only
+records. On a time-varying source (a `temporal` block with a `start`) the
+entries cover the file variable's native dimensions other than its time
+dimension, in native order; with an effective `records_per_sample` of `2`
+(§8.5.1) the leading record axis the parameter receives is not selected.
+Whether a binding pushes the selection down to the reader (fetching only
 what it keeps) or applies it after the read is an optimization — the two **MUST**
 agree exactly.
 
@@ -5697,7 +5705,7 @@ For `variable_map` coupling entries, `transform` specifies how the source variab
 
 | Transform | Description |
 |---|---|
-| `param_to_var` | Replace a constant parameter with a time-varying variable from another system. Takes no `factor`. |
+| `param_to_var` | Replace a constant parameter with a time-varying variable from another system. Takes no `factor`. The source keeps its own declaration, `update` included; a data-fed source that declares no `shape` takes a shaped target's, and one that declares a `shape` must declare the target's (Library Specification §4.7.3). |
 | `identity` | Replacement with no change of type: `target := source`. Takes no `factor`. |
 | `additive` | Scaled replacement: `target := factor · source`. (To *add* a source/sink term to an existing tendency, use a `couple` `additive` equation — §10.3.) |
 | `multiplicative` | Scaled replacement: `target := factor · source`. (To *scale* an existing tendency by a source, use a `couple` `multiplicative` equation — §10.3.) |

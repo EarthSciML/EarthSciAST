@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from conftest import CORPUS_UNIT_DEFECTS, FIXTURES_ROOT
 
-from earthsci_ast import load_path, load_string
+from earthsci_ast import load_path, load_string, validate
 from earthsci_ast.serialize import to_json
 from earthsci_ast.validation import validate_text, SchemaValidationError
 
@@ -501,14 +501,20 @@ class TestValidationWithFixtures:
         with open(fixture) as f:
             content = f.read()
 
-        with pytest.raises(SchemaValidationError) as exc_info:
-            load_string(content)
-
-        msg = str(exc_info.value)
-        assert "models/ConstantUnitsModel/variables/gas_law_calculation" in msg
+        # Units are checked by validate(), not by the loader.
+        result = validate(load_string(content))
+        assert not result.is_valid
+        errors = [e for e in result.structural_errors if e.code == "unit_inconsistency"]
+        # One finding: the misdeclared constant, at the observed unknown that
+        # uses it (not also a declared-versus-computed mismatch there).
+        assert [e.path for e in errors] == [
+            "/models/ConstantUnitsModel/variables/gas_law_calculation"
+        ]
+        msg = errors[0].message
         assert "Physical constant used with incorrect dimensional analysis" in msg
         assert "'R'" in msg
         assert "ideal gas constant" in msg
+        assert errors[0].details["constant_name"] == "R"
 
     def test_reaction_rate_units_mismatch_fixture(self, fixtures_dir):
         """gt-siq3: a 2nd-order reaction whose rate parameter is declared with
@@ -542,6 +548,34 @@ class TestValidationWithFixtures:
             "expected_rate_units": "L/(mol*s)",
             "reaction_order": 2,
         }
+
+    def test_every_unit_error_in_one_file_is_reported(self, fixtures_dir):
+        """Every unit error in a file is reported, once each, by validate().
+
+        One transcendental has a bare-variable argument (``exp(T)``) and three
+        have compound ones (``exp(-Ts_c - 4)`` with Ts_c in degC,
+        ``log10(p_a + p_b)``, ``tanh(x / tau)``). ``load_string`` does not
+        check units, so it accepts the file; ``validate()`` reports all four
+        at the pinned paths, and no defect twice."""
+        from earthsci_ast import validate
+
+        name = "units_several_errors_in_one_file.esm"
+        content = (fixtures_dir / "invalid" / name).read_text()
+        pins = json.loads((fixtures_dir / "invalid" / "expected_errors.json").read_text())
+        want = {(p["code"], p["path"]) for p in pins[name]["structural_errors"]}
+        assert len(want) == 4
+
+        loaded = validate(load_string(content))
+        for result in (validate_text(content), loaded):
+            assert not result.is_valid
+            assert result.schema_errors == []
+            errors = result.structural_errors
+            got = [(e.code, e.path) for e in errors]
+            assert set(got) == want
+            # Reported once: no two findings share a path, or a message.
+            assert len(set(got)) == len(errors), f"a path is reported twice: {got}"
+            messages = [(e.code, e.message) for e in errors]
+            assert len(set(messages)) == len(errors), f"a message is reported twice: {messages}"
 
     def test_ic_in_reaction_system_fixture_rejected(self, fixtures_dir):
         """spec §11.4.1: an `ic`-op equation inside a reaction system's
@@ -798,7 +832,8 @@ class TestSpecSanctionedConstructsAreNotRejected:
             "variables": {
                 "H": {"type": "unknown", "units": "M", "default": 1e-7},
                 "SO4": {"type": "unknown", "units": "M", "default": 1e-5},
-                "Ksp": {"type": "parameter", "units": "1", "default": 1.0},
+                # H*H*SO4 = Ksp: the solubility product carries M^3.
+                "Ksp": {"type": "parameter", "units": "M^3", "default": 1.0},
             },
             "system_kind": "nonlinear",
         }

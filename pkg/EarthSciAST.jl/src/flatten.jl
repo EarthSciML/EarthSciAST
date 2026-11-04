@@ -1175,9 +1175,10 @@ _with_coupling(file::EsmFile, coupling::Vector{CouplingEntry})::EsmFile =
 
 esm-spec §8.5.1 rule 3 at `flatten`, on the document with refs mounted and
 `file.coupling` already the expanded coupling sequence: each data-fed
-parameter, at any depth, whose effective `records_per_sample` is 2 and whose
-own `shape` is empty takes its record shapes from the `param_to_var` edges of
-that sequence, and one still empty after expansion is refused. Throws
+parameter, at any depth, whose effective `records_per_sample` is 2 and which
+declares no `shape` takes its record shapes from the `param_to_var` edges of
+that sequence, and one still empty after expansion is refused. A declared
+`shape`, `[]` included, is the record shape. Throws
 `ExpressionTemplateError` with `records_per_sample_invalid`, naming the rule's
 pointer.
 """
@@ -1199,14 +1200,13 @@ function _check_flattened_records_per_sample(
         var = model.variables[name]
         rules = var.update
         rules === nothing && continue
-        (var.shape === nothing || isempty(var.shape)) || continue
         for (ri, rule) in enumerate(rules)
             (rule.kind == "data" && rule.from !== nothing && rule.source !== nothing) || continue
             src = get(file.data_sources, rule.source, nothing)
             src === nothing && continue
             _effective_records_per_sample(rule.from, src) == 2 || continue
             shape = _record_shape_failure(
-                file, file.coupling, "$scope.$name", String[]; defer_empty = false
+                file, file.coupling, "$scope.$name", var.shape; defer_empty = false
             )
             shape === nothing && continue
             at = _update_rule_path("$path/variables/$name", rules, ri)
@@ -1478,12 +1478,13 @@ function flatten(
         )
     end
 
+    shapeless = _data_fed_without_shape(file)
     for (k, entry) in enumerate(file.coupling)
         entry isa CouplingVariableMap || continue
         resolved = _retarget_pending_entry(entry, merged_renames)
         _apply_variable_map!(
             equations, contribs, params, resolved;
-            observeds = observeds, index = k - 1
+            observeds = observeds, index = k - 1, shapeless = shapeless
         )
         resolved.transform isa ASTExpr || push!(map_rewritten_names, resolved.to)
     end

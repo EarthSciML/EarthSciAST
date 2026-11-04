@@ -17,11 +17,11 @@ TypeScript, Go):
 - **Invalid cases** (`expect: "invalid"`) are schema-valid and must be refused
   by structural validation with exactly one `records_per_sample_invalid` at
   `pointer`: a non-`data` rule carrying the field, a pair from a source with no
-  `temporal`, and a pair whose record shape's first dimension is not an index
-  set of two members, whether the 2 is written on `from` or inherited from the
-  source, whether the parameter sits in a top-level model or a subsystem,
-  whether `update` is one rule or an array (the pointer then ends in the rule's
-  index), and whether the record shape is declared or comes from a
+  `temporal` or a `temporal` with no `start` (a time-invariant source), and a
+  pair whose record shape's first dimension is not an index set of two members,
+  whether the 2 is written on `from` or inherited from the source, whether the
+  parameter sits in a top-level model or a subsystem, whether `update` is one
+  rule or an array (the pointer then ends in the rule's index), and whether the record shape is declared or comes from a
   `param_to_var` target (every target is checked, not just the first).
 - **Flatten-invalid cases** (`expect: "flatten_invalid"`) pass structural
   validation and are refused by `flatten` with the same code: the target

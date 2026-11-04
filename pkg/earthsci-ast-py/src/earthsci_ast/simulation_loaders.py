@@ -774,6 +774,10 @@ def _provider_refresh_field(provider: Any, when: _dt.datetime) -> np.ndarray:
     binding error (mirrors :func:`_provider_sample_field`).
     """
     nds = provider.refresh(when)
+    if isinstance(nds, np.ndarray):
+        # A provider that delivers its array itself (EsioDocumentProvider: its
+        # declared select and unit conversion already applied).
+        return np.asarray(nds, dtype=float)
     return _single_var_array(nds)
 
 
@@ -796,14 +800,22 @@ def _single_var_array(nds: Any) -> np.ndarray:
 
 
 def _provider_epoch(provider: Any, t0: float) -> _dt.datetime | None:
-    """Absolute instant of simulation-clock ``t0`` for a DISCRETE provider.
+    """Absolute instant of simulation-clock 0 for a DISCRETE provider.
 
-    Sim-clock 0 is the run start; the runner anchors the provider ``window`` start
-    at that instant (the ignition hour), so the epoch that maps a refresh anchor
+    A provider that carries a ``time_origin`` (a document-built
+    :class:`~earthsci_ast.data_sources.esio_provider.EsioDocumentProvider`) names
+    that instant itself (esm-spec §2.2.7), so it is the epoch. Otherwise sim-clock
+    ``t0`` is the run start; the runner anchors the provider ``window`` start at
+    that instant (the ignition hour), so the epoch that maps a refresh anchor
     onto the sim clock is ``window[0] - t0``. Falls back to the first refresh
     anchor when the provider carries no window. Normalised to naive UTC so it
     compares cleanly with the (naive) cadence anchors.
     """
+    origin = getattr(provider, "time_origin", None)
+    if isinstance(origin, _dt.datetime):
+        if origin.tzinfo is not None:
+            origin = origin.astimezone(_dt.timezone.utc).replace(tzinfo=None)
+        return origin
     win = getattr(provider, "window", None)
     anchor = win[0] if (win is not None and win[0] is not None) else None
     if anchor is None:

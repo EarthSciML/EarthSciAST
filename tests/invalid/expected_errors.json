@@ -166,7 +166,7 @@
     "is_valid": false,
     "notes": "`source` is an object (url_template and friends), not a bare path string."
   },
-  "data_source_update_missing_shape.esm": {
+  "schedule_update_missing_shape.esm": {
     "schema_errors": [
       {
         "path": "/models/TestModel/variables/T",
@@ -176,7 +176,7 @@
     ],
     "structural_errors": [],
     "is_valid": false,
-    "notes": "A parameter whose `update.kind` is `schedule`, `data` or `remesh` MUST declare `shape` (esm-schema.json ModelVariable allOf; esm-spec 5.4): the runtime has to size the buffer it refreshes into before the first refresh happens. Repurposed from data_loader_provides_missing_units.esm -- units now live on the parameter, where they are already required of every variable, so that fixture's diagnostic no longer has a home of its own."
+    "notes": "A parameter whose `update.kind` is `schedule` or `remesh` MUST declare `shape` (esm-schema.json ModelVariable allOf; esm-spec 5.4): the runtime has to size the buffer it refreshes into before the first refresh happens. A `data` update may omit it -- the parameter then takes its param_to_var target's shape, or is a scalar (esm-libraries-spec 4.7.3) -- which is why this fixture, formerly data_source_update_missing_shape.esm, now uses a `schedule` update."
   },
   "data_source_binding_missing_file_variable.esm": {
     "schema_errors": [
@@ -558,6 +558,22 @@
           "reference": "NonExistentModel.MissingSubsystem.temperature",
           "coupling_type": "variable_map",
           "missing_component": "NonExistentModel"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "variable_map_from_data_source.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/coupling/0/from",
+        "code": "unresolved_scoped_ref",
+        "message": "Scoped reference 'Met.K' cannot be resolved: 'Met' is a data_sources key, not a model or reaction system",
+        "details": {
+          "reference": "Met.K",
+          "coupling_type": "variable_map",
+          "missing_component": "Met"
         }
       }
     ],
@@ -2204,7 +2220,7 @@
       }
     ],
     "is_valid": false,
-    "notes": "Observed variable declared in Pa is assigned '50000 * p_atm' where p_atm is in atm; dimensions match but the numeric scale factor should be 101325 Pa/atm. Python's validator (parse._check_conversion_factor_consistency) detects linear-scale conversion errors by comparing the numeric literal in a '*' expression against pint's computed conversion factor. Affine conversions (e.g., degC\u2192K) are excluded. Julia/Rust/TS/Go currently accept the file without this error \u2014 follow-up beads required for full cross-language support."
+    "notes": "Observed variable declared in Pa is assigned '50000 * p_atm' where p_atm is in atm; dimensions match but the numeric scale factor should be 101325 Pa/atm. Python's validate() (units.UnitValidator._check_conversion_factor) detects linear-scale conversion errors by comparing the numeric literal in a '*' expression against pint's computed conversion factor. Affine conversions (e.g., degC\u2192K) are excluded. Julia/Rust/TS/Go currently accept the file without this error \u2014 follow-up beads required for full cross-language support."
   },
   "units_dimensional_constant_error.esm": {
     "schema_errors": [],
@@ -4467,6 +4483,29 @@
       }
     ],
     "is_valid": false,
-    "notes": "esm-spec \u00a74.8.3, \u00a74.8.4: a temperature in degC is not dimensionless, so exp(-Ts_c - 4) is a provable inconsistency, and the undeterminable literal factor in front of it does not hide that. Julia's and Go's checkers used to stop walking a product at its first undeterminable factor and accepted this. It is its own file because Python stops at its load-time transcendental check, which only looks at bare-variable arguments, so a compound argument in a file that also fails that check goes unreported (issue #644)."
+    "notes": "esm-spec \u00a74.8.3, \u00a74.8.4: a temperature in degC is not dimensionless, so exp(-Ts_c - 4) is a provable inconsistency, and the undeterminable literal factor in front of it does not hide that. Julia's and Go's checkers used to stop walking a product at its first undeterminable factor and accepted this."
+  },
+  "units_several_errors_in_one_file.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/exp_of_bare_temperature",
+        "code": "unit_inconsistency"
+      },
+      {
+        "path": "/models/BadUnitsModel/variables/exp_of_degC_sum",
+        "code": "unit_inconsistency"
+      },
+      {
+        "path": "/models/BadUnitsModel/variables/log10_of_pressure_sum",
+        "code": "unit_inconsistency"
+      },
+      {
+        "path": "/models/BadUnitsModel/variables/tanh_of_speed",
+        "code": "unit_inconsistency"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3, \u00a74.8.4: every transcendental of a dimensional argument in the file is reported, the bare-variable one and the three compound ones alike. A checker that looks only at a bare-variable argument finds just exp_of_bare_temperature; the other three need the dimension of a compound argument."
   }
 }
