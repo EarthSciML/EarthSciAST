@@ -5,24 +5,27 @@ Fixtures for esm-libraries-spec §4.7.3, "The survivor is the source's declarati
 A `param_to_var` edge maps a data-fed parameter `Met.K` (an `update` of
 `kind: "data"` with a `from` binding) onto a parameter `Box.F_k` shaped `[rec, x]`.
 Flattening removes `Box.F_k` and rewrites every reference to `Met.K`. The surviving
-`Met.K` is its own declaration, unchanged:
+`Met.K` is its own declaration:
 
 - it keeps its `update`, so it is in `discrete_parameters`;
-- it keeps its `shape`, which must equal the target's `[rec, x]`, because the
-  rewritten equations index it as `Met.K[1, i]`;
-- it is the parameter its `loader_fields` entry names.
+- it is the parameter its `loader_fields` entry names;
+- its shape is what the rewritten equations index, `Met.K[1, i]`. If `Met.K`
+  declares no `shape` it takes the target's `[rec, x]`; if it declares one, `[]`
+  included, that shape must be `[rec, x]`.
 
 This is the pattern `reseact.esm` uses for every GEOS-FP field
-(`GEOSFP.PBLH` -> `Transport3D.F_PBLH[gf_t, gf_lat, gf_lon]`), which therefore needs
-`GEOSFP.PBLH` declared with shape `[gf_t, gf_lat, gf_lon]`.
+(`GEOSFP.PBLH` -> `Transport3D.F_PBLH[gf_t, gf_lat, gf_lon]`), with `GEOSFP.PBLH`
+declared with no `shape`.
 
 | Fixture | Outcome | What it pins |
 |---|---|---|
 | `data_fed_source_keeps_declaration` | flattens | The data source key (`met_source`) differs from the owning model's name. `Met.K` survives with its own `update` and shape. |
 | `source_named_like_owner` | flattens | The data source is keyed `Met`, the owning model's name. Python, TypeScript and Go took this for a pre-1.0 loaded field and rebuilt `Met.K` with the target's shape and no `update`. Rust refused the document at load, because its coupling-reference check let the data source's variables replace the model's. |
 | `state_source_named_like_data_source` | flattens | The source `Met.T` is a state of a model whose name is also a `data_sources` key. Python, TypeScript and Go built a parameter `Met.T` beside the state. It must stay a state only. |
+| `shapeless_source_takes_target_shape` | flattens | `Met.K` declares no `shape`, so it takes the target's `[rec, x]`. |
 | `scalar_source_onto_shaped_target` | refused (`VariableMapShapeConflictError`) | `Met.K` declares `shape: []`, which is a scalar buffer, not a request for the target's shape. |
-| `one_source_two_target_shapes` | refused (`VariableMapShapeConflictError`) | One source feeds targets shaped `[rec, x]` and `[x]`. Each edge is checked against the source's declaration, so the verdict does not depend on coupling order. |
+| `one_source_two_target_shapes` | refused (`VariableMapShapeConflictError`) | A source declared `[rec, x]` feeds targets shaped `[rec, x]` and `[x]`. It keeps its declared shape, so the second edge is refused whichever entry comes first. |
+| `shapeless_source_two_target_shapes` | refused (`VariableMapShapeConflictError`) | The same, with `Met.K` declaring no shape. It takes its targets' shape, so they must all declare the same one. |
 
 A `from` that names a field of a data source no component declares is
 `tests/invalid/variable_map_from_data_source.esm` (`unresolved_scoped_ref`): a data
@@ -30,8 +33,8 @@ source is not a coupling endpoint (esm-spec §8).
 
 ## How the fixtures are run
 
-There is no separate runner. The three flattening fixtures are cases of the flatten
+There is no separate runner. The four flattening fixtures are cases of the flatten
 corpus, `tests/conformance/flatten/cases.json`, under the tier `variable_map_data_fed`
-with the id `variable_map_data_fed_<fixture name>`; the two refused ones are entries
+with the id `variable_map_data_fed_<fixture name>`; the three refused ones are entries
 of its `refusals` list. Every binding's flatten-corpus test covers both. Regenerate
 the corpus with `python3 scripts/generate-flatten-corpus.py`.

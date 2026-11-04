@@ -656,14 +656,15 @@ class TestConditionalValidation:
         )
 
     def test_buffer_updates_require_a_shape(self):
-        """`schedule` / `data` / `remesh` refill a buffer whose extent is fixed
-        at setup, so each REQUIRES `shape` (schema `if/then`). An empty array is
-        a valid scalar shape."""
+        """`schedule` / `remesh` refill a buffer whose extent is fixed at setup,
+        so each REQUIRES `shape` (schema `if/then`). An empty array is a valid
+        scalar shape. A `data` update MAY omit it: the parameter then takes the
+        shape of the `param_to_var` target it replaces, or is a scalar
+        (esm-libraries-spec §4.7.3)."""
         schema = _get_schema()
 
         for update in (
             {"kind": "schedule", "interval": 3600.0, "expression": 1.0},
-            {"kind": "data", "source": "src", "from": {"file_variable": "U"}},
             {"kind": "remesh", "expression": 1.0},
         ):
             _assert_rejected_with(
@@ -674,6 +675,26 @@ class TestConditionalValidation:
             jsonschema.validate(
                 self._doc({"p": {"type": "parameter", "shape": [], "update": update}}), schema
             )
+
+        data = {"kind": "data", "source": "src", "from": {"file_variable": "U"}}
+        for doc in (
+            self._doc({"p": {"type": "parameter", "update": data}}),
+            self._doc({"p": {"type": "parameter", "shape": [], "update": data}}),
+        ):
+            jsonschema.validate(doc, schema)
+        # A `data` rule alongside a `schedule` one still needs the shape.
+        _assert_rejected_with(
+            schema,
+            self._doc(
+                {
+                    "p": {
+                        "type": "parameter",
+                        "update": [data, {"kind": "schedule", "interval": 60.0, "expression": 1.0}],
+                    }
+                }
+            ),
+            "'shape' is a required property",
+        )
 
     def test_default_and_distribution_are_mutually_exclusive(self):
         """A parameter's value comes from ONE of `default` or `distribution`."""

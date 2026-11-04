@@ -381,7 +381,8 @@ CASES: list[tuple[str, str, str]] = [
     # the data source by the owner's name, which is what tripped a pre-1.0
     # loader rule into rebuilding the parameter without its update; the third
     # does the same to a STATE source, which that rule shadowed with a parameter
-    # of the same name. The two shape conflicts are REFUSALS below; a `from` that
+    # of the same name; the fourth declares NO shape, and so takes the target's
+    # (`[]` would declare a scalar). The three shape conflicts are REFUSALS below; a `from` that
     # names a data source's field is tests/invalid/variable_map_from_data_source.esm.
     # See tests/conformance/variable_map_data_fed.
     *[
@@ -394,6 +395,7 @@ CASES: list[tuple[str, str, str]] = [
             "data_fed_source_keeps_declaration",
             "source_named_like_owner",
             "state_source_named_like_data_source",
+            "shapeless_source_takes_target_shape",
         )
     ],
     # --- per-term provenance (esm-libraries-spec §4.7.5, issue #539) ---------
@@ -529,17 +531,27 @@ REFUSALS: list[dict[str, str]] = [
             "the data-fed `Met.K` declares `shape: []` and the `param_to_var` target `Box.F_k` "
             "is shaped [rec, x], so the rewritten equation reads `Met.K[1, i]`. esm-libraries-spec "
             "§4.7.3: the source survives with its own declaration, and `[]` declares a scalar "
-            "buffer rather than asking for a shape, so flatten refuses instead of reshaping it."
+            "buffer; only a source that declares NO shape takes the target's, so flatten refuses "
+            "instead of reshaping it."
         ),
     },
     {
         "fixture": "conformance/variable_map_data_fed/fixtures/one_source_two_target_shapes.esm",
         "error": "VariableMapShapeConflictError",
         "reason": (
-            "one data-fed source `Met.K[rec, x]` feeds `Box.F_k[rec, x]` and `Box.G_k[x]`. "
-            "Every edge is checked against the source's DECLARED shape (esm-libraries-spec "
-            "§4.7.3), so the second edge is refused whichever coupling entry comes first; "
-            "letting the first edge win made the result depend on coupling order."
+            "one data-fed source `Met.K[rec, x]` feeds `Box.F_k[rec, x]` and `Box.G_k[x]`. A "
+            "source that declares a shape keeps it (esm-libraries-spec §4.7.3), so the edge "
+            "onto `Box.G_k` is refused whichever coupling entry comes first."
+        ),
+    },
+    {
+        "fixture": "conformance/variable_map_data_fed/fixtures/shapeless_source_two_target_shapes.esm",
+        "error": "VariableMapShapeConflictError",
+        "reason": (
+            "the data-fed `Met.K` declares no shape and feeds `Box.F_k[rec, x]` and `Box.G_k[x]`. "
+            "A shapeless source takes the shape of the targets it replaces (esm-libraries-spec "
+            "§4.7.3), so they must all declare the same one; otherwise the shape it gets would "
+            "depend on coupling order."
         ),
     },
     {

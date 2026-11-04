@@ -7272,6 +7272,101 @@
       "lifted_shapes": {}
     },
     {
+      "id": "variable_map_data_fed_shapeless_source_takes_target_shape",
+      "tier": "variable_map_data_fed",
+      "fixture": "conformance/variable_map_data_fed/fixtures/shapeless_source_takes_target_shape.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "Box.c",
+          "role": "state",
+          "units": "mol/mol",
+          "default": 1.0,
+          "shape": [
+            "x"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Box"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "Met.K",
+          "role": "parameter",
+          "units": "1/s",
+          "default": null,
+          "shape": [
+            "rec",
+            "x"
+          ],
+          "update_kinds": [
+            "data"
+          ],
+          "distribution_kind": null,
+          "source_system": "Met"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [
+        "Met.K"
+      ],
+      "equation_count": 1,
+      "equations": [
+        {
+          "lhs": "sum[i] (D(Box.c[i])/Dt) where {i in x}",
+          "rhs": "sum[i] (-Met.K[1, i] * Box.c[i]) where {i in x}",
+          "source_system": "Box",
+          "contributions": [
+            {
+              "rhs": "sum[i] (-Met.K[1, i] * Box.c[i]) where {i in x}",
+              "origins": [
+                {
+                  "component": "Box"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "Met",
+          "Box"
+        ],
+        "coupling_rules": [
+          "variable_map(Met.K -> Box.F_k, transform=param_to_var)"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [
+        "rec",
+        "x"
+      ],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [
+        {
+          "name": "Met.K",
+          "owner": "Met",
+          "source": "met_source",
+          "file_variable": "K",
+          "cadence": "discrete"
+        }
+      ],
+      "lifted_shapes": {}
+    },
+    {
       "id": "term_provenance_systems_order_ab",
       "tier": "term_provenance",
       "fixture": "conformance/term_provenance/fixtures/systems_order_ab.esm",
@@ -8826,12 +8921,17 @@
     {
       "fixture": "conformance/variable_map_data_fed/fixtures/scalar_source_onto_shaped_target.esm",
       "error": "VariableMapShapeConflictError",
-      "reason": "the data-fed `Met.K` declares `shape: []` and the `param_to_var` target `Box.F_k` is shaped [rec, x], so the rewritten equation reads `Met.K[1, i]`. esm-libraries-spec §4.7.3: the source survives with its own declaration, and `[]` declares a scalar buffer rather than asking for a shape, so flatten refuses instead of reshaping it."
+      "reason": "the data-fed `Met.K` declares `shape: []` and the `param_to_var` target `Box.F_k` is shaped [rec, x], so the rewritten equation reads `Met.K[1, i]`. esm-libraries-spec §4.7.3: the source survives with its own declaration, and `[]` declares a scalar buffer; only a source that declares NO shape takes the target's, so flatten refuses instead of reshaping it."
     },
     {
       "fixture": "conformance/variable_map_data_fed/fixtures/one_source_two_target_shapes.esm",
       "error": "VariableMapShapeConflictError",
-      "reason": "one data-fed source `Met.K[rec, x]` feeds `Box.F_k[rec, x]` and `Box.G_k[x]`. Every edge is checked against the source's DECLARED shape (esm-libraries-spec §4.7.3), so the second edge is refused whichever coupling entry comes first; letting the first edge win made the result depend on coupling order."
+      "reason": "one data-fed source `Met.K[rec, x]` feeds `Box.F_k[rec, x]` and `Box.G_k[x]`. A source that declares a shape keeps it (esm-libraries-spec §4.7.3), so the edge onto `Box.G_k` is refused whichever coupling entry comes first."
+    },
+    {
+      "fixture": "conformance/variable_map_data_fed/fixtures/shapeless_source_two_target_shapes.esm",
+      "error": "VariableMapShapeConflictError",
+      "reason": "the data-fed `Met.K` declares no shape and feeds `Box.F_k[rec, x]` and `Box.G_k[x]`. A shapeless source takes the shape of the targets it replaces (esm-libraries-spec §4.7.3), so they must all declare the same one; otherwise the shape it gets would depend on coupling order."
     },
     {
       "fixture": "conformance/expression_templates/nonterminating_rewrite/fixture.esm",

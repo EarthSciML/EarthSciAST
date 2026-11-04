@@ -2,7 +2,7 @@
   "esm": "1.3.0",
   "metadata": {
     "name": "RecordsPerSampleParamToVar",
-    "description": "A scalar data-fed parameter with records_per_sample 2, mapped by param_to_var onto a parameter shaped [rec, x], rec of size 2: its record shape is the target's (esm-spec 8.5.1 rule 3), so the document is valid. This is reseact's GEOSFP.PBLH -> Transport3D.F_PBLH."
+    "description": "A data-fed parameter declaring no shape, with records_per_sample 2, mapped by param_to_var onto a parameter shaped [rec, x], rec of size 2: its record shape is the target's (esm-spec 8.5.1 rule 3), so the document is valid. This is reseact's GEOSFP.PBLH -> Transport3D.F_PBLH."
   },
   "index_sets": {
     "rec": {
@@ -37,9 +37,8 @@
         "K": {
           "type": "parameter",
           "units": "1/s",
-          "shape": [],
           "default": 0.1,
-          "description": "Declared once, as a scalar; the consumer gives it the record axis and the grid.",
+          "description": "Declared once, with no shape; the consumer gives it the record axis and the grid.",
           "update": {
             "kind": "data",
             "source": "met_source",

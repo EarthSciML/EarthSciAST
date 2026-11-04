@@ -185,13 +185,14 @@ class VariableMapShapeConflictError(FlattenError):
     """A data-fed ``variable_map`` source's shape differs from its shaped target's.
 
     esm-libraries-spec §4.7.3: the parameter that survives a ``param_to_var``
-    or ``conversion_factor`` edge is the SOURCE's own declaration, ``shape``
-    included. A data-fed parameter must declare its shape (the schema requires
-    it; ``[]`` declares a scalar buffer), so when the removed target is shaped
-    the rewritten equations index the source the way the target was declared,
-    and the two shapes have to be the same. Taking either one silently would
-    leave equations indexing a parameter of the wrong rank, or -- with one
-    source feeding two targets -- make the result depend on coupling order.
+    or ``conversion_factor`` edge is the SOURCE's own declaration. When the
+    removed target is shaped, the rewritten equations index the source the way
+    the target was declared, so a source that declares a ``shape`` (``[]``, a
+    scalar buffer, included) must declare the target's, and a source that
+    declares none takes it -- which requires every target it replaces to
+    declare the same one. Taking either shape silently would leave equations
+    indexing a parameter of the wrong rank, or -- with one source feeding two
+    targets -- make the result depend on coupling order.
 
     Same export policy as :class:`VariableMapUnresolvedEndpointError`.
     """
@@ -202,7 +203,7 @@ class RecordsPerSampleInvalidError(FlattenError):
     that structural validation could not see cannot carry them (esm-spec §8.5.1
     "When rule 3 is checked").
 
-    A parameter that declares an empty ``shape`` takes its record shape from
+    A parameter that declares no ``shape`` takes its record shape from
     its ``param_to_var`` targets. An edge imported from a coupling library
     exists only once ``flatten`` expands it, and a target inside a model
     mounted by ref is reachable only after the mount, while validation runs on
@@ -2542,6 +2543,7 @@ def _apply_variable_map(
     components: OrderedDict[str, _ComponentSystem],
     entry: VariableMapCoupling,
     index: int = 0,
+    shapeless: frozenset[str] = frozenset(),
 ) -> None:
     """Substitute the target parameter with the source variable.
 
@@ -2590,42 +2592,103 @@ def _apply_variable_map(
             to_var = comp.parameters.pop(entry.to_var, None)
             if to_var is None:
                 continue
-            _check_data_fed_source_shape(components, entry, to_var)
+            _carry_data_fed_source_shape(components, entry, to_var, shapeless)
 
 
-def _check_data_fed_source_shape(
+def _carry_data_fed_source_shape(
     components: OrderedDict[str, _ComponentSystem],
     entry: VariableMapCoupling,
     target: FlattenedVariable,
+    shapeless: frozenset[str],
 ) -> None:
-    """Refuse a data-fed source whose declared shape is not its shaped target's.
+    """Give a shapeless data-fed source its shaped target's shape, or refuse
+    a source whose shape is not the target's (esm-libraries-spec §4.7.3).
 
-    The source survives the edge as declared -- units, default, ``update``,
-    ``shape`` (esm-libraries-spec §4.7.3) -- so nothing is changed here. When
-    the removed ``target`` is shaped and the source is a data-fed parameter, the
-    rewritten equations index the source with the target's indices, so its
-    declared shape (absent and ``[]`` both scalar) must equal the target's.
-    Checking each edge against the source's DECLARATION, never against a shape
-    an earlier edge gave it, keeps the verdict independent of coupling order.
+    The source survives the edge as its own declaration -- units, default,
+    ``update``. When the removed ``target`` is shaped and the source is a
+    data-fed parameter, the rewritten equations index the source with the
+    target's indices:
+
+    * a source that DECLARES NO ``shape`` (``shapeless`` holds its scoped name)
+      takes the target's. Every further edge from it must name a target of
+      that same shape, so one shapeless source feeding two targets of different
+      shapes is refused whichever entry comes first;
+    * a source that declares a ``shape`` -- ``[]``, a scalar buffer, included --
+      keeps it, and it must equal the target's.
     """
     if not target.shape:
         return
+    target_shape = list(target.shape)
     for comp in components.values():
         source = comp.parameters.get(entry.from_var)
         if source is None:
             continue
+        if not _is_data_fed(source):
+            return
         source_shape = list(source.shape or [])
-        if _is_data_fed(source) and source_shape != list(target.shape):
-            raise VariableMapShapeConflictError(
-                f"variable_map({entry.from_var} -> {entry.to_var}): the data-fed "
-                f"source '{entry.from_var}' declares shape {source_shape}, but the "
-                f"target it replaces declares {list(target.shape)}. The source "
-                f"survives with its own declaration, and the rewritten equations "
-                f"index it the way the target was declared, so the two shapes "
-                f"must be equal (esm-libraries-spec §4.7.3). Declare "
-                f"'{entry.from_var}' with shape {list(target.shape)}."
+        if entry.from_var in shapeless and not source_shape:
+            comp.parameters[entry.from_var] = replace(source, shape=target_shape)
+            return
+        if source_shape == target_shape:
+            return
+        if entry.from_var in shapeless:
+            why = (
+                f"declares no shape and took {source_shape} from an earlier "
+                f"param_to_var target, but this target declares {target_shape}. "
+                f"A shapeless data-fed source takes its shape from the targets "
+                f"it replaces, so they must all declare the same one"
             )
-        return
+        else:
+            why = (
+                f"declares shape {source_shape}, but the target it replaces "
+                f"declares {target_shape}. The source survives with its own "
+                f"declaration and the rewritten equations index it the way the "
+                f"target was declared, so the two must be equal; declare "
+                f"'{entry.from_var}' with shape {target_shape}, or with no "
+                f"shape to take the target's"
+            )
+        raise VariableMapShapeConflictError(
+            f"variable_map({entry.from_var} -> {entry.to_var}): the data-fed source "
+            f"'{entry.from_var}' {why} (esm-libraries-spec §4.7.3)."
+        )
+    return
+
+
+def _data_fed_without_shape(esm_file: EsmFile) -> frozenset[str]:
+    """The scoped names of every data-fed parameter that declares no ``shape``.
+
+    Absent and ``[]`` differ here, and only here: ``[]`` declares a scalar
+    buffer, while an absent ``shape`` takes that of the ``param_to_var`` target
+    the parameter replaces (esm-libraries-spec §4.7.3, esm-spec §8.5.1). The
+    flattened tables do not keep the difference, so it is read off the
+    declarations, with every ref mounted.
+    """
+    names: set[str] = set()
+
+    def data_fed(update: Any) -> bool:
+        rules = update if isinstance(update, list) else [update]
+        return any(
+            getattr(r, "kind", None) == "data" and getattr(r, "from_source", None) is not None
+            for r in rules
+            if r is not None
+        )
+
+    def walk(model: Model, scope: str) -> None:
+        for vname, var in model.variables.items():
+            if var.type == "parameter" and var.shape is None and data_fed(var.update):
+                names.add(f"{scope}.{vname}")
+        for sname, sub in model.subsystems.items():
+            if isinstance(sub, Model):
+                walk(sub, f"{scope}.{sname}")
+
+    for mname, model in esm_file.models.items():
+        if isinstance(model, Model):
+            walk(model, mname)
+    for rname, rs in esm_file.reaction_systems.items():
+        for param in getattr(rs, "parameters", None) or []:
+            if param.shape is None and data_fed(param.update):
+                names.add(f"{rname}.{param.name}")
+    return frozenset(names)
 
 
 def _is_data_fed(var: FlattenedVariable) -> bool:
@@ -2875,9 +2938,10 @@ def _apply_couplings(
     for index, cp in couple_entries:
         _apply_couple(components, _retarget_pending_entry(cp, merged_renames), index)
 
+    shapeless = _data_fed_without_shape(esm_file)
     for index, vm in var_map_entries:
         resolved = _retarget_pending_entry(vm, merged_renames)
-        _apply_variable_map(components, resolved, index)
+        _apply_variable_map(components, resolved, index, shapeless)
         # A NAMED transform substitutes `to` away entirely; an EXPRESSION
         # transform leaves it standing as the observed the transform defines.
         # Only the first deletes a name, so only the first joins the set the
@@ -3392,7 +3456,7 @@ def flatten(esm_file: EsmFile, base_path: str = ".", load_ref=None) -> Flattened
 
     coupling_entries = expand_coupling_imports(esm_file, base_path=base_path, load_ref=load_ref)
 
-    # Step 0a: a data-fed parameter with an empty `shape` and two records per
+    # Step 0a: a data-fed parameter with no `shape` and two records per
     # sample takes its record shape from its `param_to_var` targets, and only
     # the expanded coupling list holds them all (esm-spec §8.5.1).
     _check_records_per_sample_shapes(esm_file, coupling_entries)
@@ -3462,8 +3526,8 @@ def _check_records_per_sample_shapes(esm_file: EsmFile, coupling_entries: list[A
     rule 3), with every ``coupling_import`` expanded and every ref mounted, so
     with the index sets of mounted files in view.
 
-    The record shape is the parameter's own ``shape`` when not empty; else the
-    declared shapes of the ``param_to_var`` targets of the EXPANDED coupling
+    The record shape is the parameter's own ``shape`` when it declares one
+    (``[]`` included: a scalar buffer); else the declared shapes of the ``param_to_var`` targets of the EXPANDED coupling
     sequence; with none, the record shape is empty and refused. A target that
     names no declaration is the coupling walk's to report
     (:class:`VariableMapUnresolvedEndpointError`), not this check's.
@@ -3509,7 +3573,7 @@ def _check_records_per_sample_shapes(esm_file: EsmFile, coupling_entries: list[A
                     continue  # validation reports both
                 if effective_records_per_sample(rule.from_source, source) != 2:
                     continue
-                if var.shape:
+                if var.shape is not None:
                     decided = [list(var.shape)]
                 else:
                     shapes = [declared_shape(to) for to in targets.get(f"{scope}.{vname}", [])]

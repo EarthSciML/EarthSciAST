@@ -149,7 +149,6 @@ def _write_index_sets_from_mount(tmp_path, f_k_shape, mount=True):
                     "K": {
                         "type": "parameter",
                         "units": "1/s",
-                        "shape": [],
                         "default": 0.1,
                         "update": {
                             "kind": "data",
