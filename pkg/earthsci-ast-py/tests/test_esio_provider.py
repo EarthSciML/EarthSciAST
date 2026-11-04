@@ -11,6 +11,12 @@ import pytest
 
 esio = pytest.importorskip("earthsciio")
 
+if not hasattr(esio, "source_from_esm"):
+    # The esm source constructor providers_from_document builds through arrives
+    # in EarthSciIO 0.3.0; an older install (0.1 spells DataSource DataLoader)
+    # lacks the API these tests exercise and would fail every test here.
+    pytest.skip("earthsciio predates source_from_esm (0.3)", allow_module_level=True)
+
 from earthsci_ast.data_sources.esio_provider import (  # noqa: E402
     esio_provider_factory,
     to_esio_loader,
@@ -94,9 +100,14 @@ def test_to_esio_loader_maps_url_vars_and_temporal():
     assert list(edl.variables) == ["t"]
     # url is a per-anchor resolver expanding the ESS template
     assert edl.url(_dt.datetime(2018, 11, 8)).endswith("era5_2018_11.nc")
-    # temporal converted to naive-UTC start + timedelta cadence
+    # temporal converted to naive-UTC start + a cadence: a calendar period
+    # where EarthSciIO has them (P1M a calendar month), else a timedelta
     assert edl.temporal is not None
-    assert edl.temporal.frequency == _dt.timedelta(hours=1)
+    if hasattr(esio, "CalendarPeriod"):
+        assert edl.temporal.frequency == esio.CalendarPeriod(0, 3600)
+        assert edl.temporal.file_period == esio.CalendarPeriod(1, 0)
+    else:
+        assert edl.temporal.frequency == _dt.timedelta(hours=1)
     assert edl.temporal.start.tzinfo is None
 
 

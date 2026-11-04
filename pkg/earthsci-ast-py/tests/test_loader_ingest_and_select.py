@@ -38,6 +38,12 @@ import pytest
 
 esio = pytest.importorskip("earthsciio")
 
+if not hasattr(esio, "source_from_esm"):
+    # The esm source constructor providers_from_document builds through arrives
+    # in EarthSciIO 0.3.0; an older install (0.1 spells DataSource DataLoader)
+    # lacks the API these tests exercise and would fail every test here.
+    pytest.skip("earthsciio predates source_from_esm (0.3)", allow_module_level=True)
+
 
 def _requires_zarr_store() -> None:
     """Skip a test that READS the Zarr grid source.

@@ -34,6 +34,10 @@ using EarthSciAST: RefreshError, OutputError, StateSnapshot, VarGridding,
 # at delivery (see `_convert_units`).
 using EarthSciAST: parse_unit_conversion, apply_unit_conversion
 using EarthSciAST: load_path, serialize_esm_file
+# The §2.2.7 clock: the time origin and the `solver.time_span` conversion.
+using EarthSciAST: time_origin
+import EarthSciAST
+import Dates
 
 # Explicit imports so we can add the extension methods to these generics.
 import EarthSciAST: provider_refresh_times, provider_sample, provider_supports_selection
@@ -226,13 +230,34 @@ and parsed once for all eight of its columns instead of eight times.
 Materialized lazily on first use and then held: `esm_problem` samples the providers
 one after another (single-threaded, which is why the memo needs no lock), and
 the second must not re-read.
+
+On a time-varying source the decode follows time: it is keyed by the source's
+RECORD ANCHOR (the last refresh anchor at or before the requested instant, in
+Unix seconds; a const source has the one key `nothing`), decoded with
+EarthSciIO's stateless `sample_at` at that instant, and only the most recent
+decode is held. Every column served for an instant comes from the decode for
+that instant's anchor, so the columns stay aligned across a refresh.
 """
 mutable struct RecordTable
     loader::String
     provider::EarthSciIO.Provider
     columns::Vector{ColumnSpec}
     require_finite::Vector{String}      # FILE variable names (esm-spec §8.9)
+    anchor::Union{Nothing, Float64}     # the anchor `cache` was decoded at
     cache::Union{Nothing, Dict{String, Vector{Float64}}}
+end
+
+RecordTable(loader, provider, columns, require_finite) =
+    RecordTable(loader, provider, columns, require_finite, nothing, nothing)
+
+# The record anchor (Unix seconds) the source is in at instant `u`: the last
+# refresh anchor at or before it, `nothing` for a const source. An instant
+# before the first anchor maps to itself, so the decode then raises
+# EarthSciIO's own "precedes the first refresh time" error.
+function _record_anchor(p::EarthSciIO.Provider, u::Float64)
+    EarthSciIO.is_const(p) && return nothing
+    i = searchsortedlast(p.times, u)
+    return i >= 1 ? p.times[i] : u
 end
 
 # One numeric EarthSciIO column widened to Float64. A TEXT column with no
@@ -248,10 +273,14 @@ function _widen_column(name::AbstractString, data)
     )
 end
 
-"""Decode + filter once; every later column read is free."""
-function _table_columns(t::RecordTable)
+"""Decode + filter once per record anchor; every later column read at that anchor
+is free. `u` is the instant in Unix seconds (ignored for a const source)."""
+function _table_columns(t::RecordTable, u::Float64)
+    anchor = _record_anchor(t.provider, u)
+    t.cache === nothing || isequal(t.anchor, anchor) || (t.cache = nothing)
     t.cache === nothing || return t.cache
-    nds = EarthSciIO.materialize(t.provider)
+    nds = anchor === nothing ? EarthSciIO.sample_at(t.provider) :
+        EarthSciIO.sample_at(t.provider, anchor)
 
     # Raw columns (unfiltered), plus the per-record keep mask that the `codes`
     # drops and the finite requirement build up together.
@@ -354,12 +383,13 @@ function _table_columns(t::RecordTable)
         "  [esio] loader '$(t.loader)': $nrec records read, ",
         "$kept kept by its declared record filter"
     )
+    t.anchor = anchor
     t.cache = out
     return out
 end
 
-function _table_column(t::RecordTable, name::AbstractString)
-    cols = _table_columns(t)
+function _table_column(t::RecordTable, name::AbstractString, u::Float64)
+    cols = _table_columns(t, u)
     haskey(cols, name) || throw(
         RefreshError(
             "loader '$(t.loader)' has no column '$name' (declared: $(sort!(collect(keys(cols)))))"
@@ -545,6 +575,11 @@ One loader VARIABLE, served with the ingest its document declares (§8.9): the
 format's decode options, an optional shared [`RecordTable`], the per-axis
 `select`, and the metaparameter its extent binds. A loader with none of those
 degenerates to a bare EarthSciIO provider read whole — the pre-§8.9 behaviour.
+
+It runs on the MODEL clock (esm-spec §2.2.7): `origin` is the instant of model
+time 0 in Unix seconds, a sample at model time `t` reads the instant
+`origin + t`, and [`provider_refresh_times`](@ref) reports the source's anchors
+as `unix - origin`.
 """
 struct DeclaredProvider
     key::String                                   # "<ModelPath>.<param>"
@@ -552,28 +587,40 @@ struct DeclaredProvider
     inner::EarthSciIO.Provider
     table::Union{Nothing, RecordTable}
     column::String
+    # The EFFECTIVE axes of the delivered array: the declared select, with a
+    # leading "all" for the record axis when `records_per_sample = 2`.
     select::Union{Nothing, Vector{Any}}
     push_to_reader::Bool                          # where `select` is honoured
     extent_mp::Union{Nothing, String}
     unit_conversion::Any                          # the declared §8.5 conversion
+    origin::Float64                               # model time 0, in Unix seconds
 end
 
-provider_refresh_times(p::DeclaredProvider) = EarthSciIO.refresh_times(p.inner)
+_is_const(p::DeclaredProvider) = EarthSciIO.is_const(p.inner)
+
+# The source's anchors are Unix seconds; the runtime's clock is model seconds.
+provider_refresh_times(p::DeclaredProvider) =
+    Float64[u - p.origin for u in EarthSciIO.refresh_times(p.inner)]
 
 # A record-table column never supports a pushed-down selection: its rows are
 # chosen by the loader's declared filter AFTER the decode, so an index pushed to
-# the reader would address raw rows rather than delivered ones.
+# the reader would address raw rows rather than delivered ones. Nor does a
+# time-varying source: a reader-side select addresses the FILE's axes, which
+# include the record axis no selection names, so its record is fetched whole
+# and sliced here.
 provider_supports_selection(p::DeclaredProvider) =
-    p.table === nothing && EarthSciIO.supports_selection(p.inner)
+    p.table === nothing && _is_const(p) && EarthSciIO.supports_selection(p.inner)
 
 provider_extent_metaparameter(p::DeclaredProvider) = p.extent_mp
+
+_has_gated_axis(axes) = any(ax isa AbstractDict && haskey(ax, "gated_by") for ax in axes)
 
 # A declared select carrying a `gated_by` axis IS a provider-declared gate:
 # `prepare` defers it past value-invention and fetches it pre-sliced to the
 # materialised members, through the machinery the record-derived gate uses.
 function provider_gate_spec(p::DeclaredProvider)
     p.select === nothing && return nothing
-    any(ax isa AbstractDict && haskey(ax, "gated_by") for ax in p.select) || return nothing
+    _has_gated_axis(p.select) || return nothing
     return Dict{String, Any}("axes" => p.select, "applies_to" => Any[p.varname])
 end
 
@@ -592,37 +639,86 @@ function _convert_units(p::DeclaredProvider, arr)
     return apply_unit_conversion(arr, p.unit_conversion; variable_name = p.key)
 end
 
+# The single data variable of a sample, as a bare array.
+function _only_variable(key::AbstractString, nds)
+    vars = EarthSciIO.variable_names(nds)
+    length(vars) == 1 || throw(
+        RefreshError(
+            "provider '$key': the reader returned $(length(vars)) variables $vars"
+        )
+    )
+    return nds[vars[1]].data
+end
+
+# The whole record at model time `t` (the const source's one array), read with
+# EarthSciIO's stateless sampler at `origin + t`. `select` is a native reader
+# select, handed over only for a const source (see `provider_supports_selection`).
+function _sample_inner(p::DeclaredProvider, t::Real; select = nothing)
+    nds = if _is_const(p)
+        EarthSciIO.materialize(p.inner; select = select)
+    else
+        select === nothing || throw(
+            RefreshError(
+                "provider '$(p.key)': a reader-side select on a time-varying source " *
+                    "would address the file's record axis"
+            )
+        )
+        EarthSciIO.sample_at(p.inner, p.origin + Float64(t))
+    end
+    return _only_variable(p.key, nds)
+end
+
+# Apply a provider-neutral, 1-based per-axis `selection` engine-side, with the
+# shape a reader-pushed one has: an Integer keeps its axis at length 1.
+function _apply_neutral_selection(key::AbstractString, arr::AbstractArray, selection)
+    _neutral_selection_to_native(selection)       # the same validation
+    length(selection) == ndims(arr) || throw(
+        RefreshError(
+            "provider '$key': the selection has $(length(selection)) axes but the array " *
+                "is rank $(ndims(arr)) $(size(arr))"
+        )
+    )
+    idx = Any[ax isa Colon ? Colon() : ax isa Integer ? (Int(ax):Int(ax)) : collect(Int, ax) for ax in selection]
+    return arr[idx...]
+end
+
 function provider_sample(p::DeclaredProvider, t::Real; selection = nothing)
     if selection !== nothing
         # The GATED path: `prepare` resolved the members and is asking for that
         # slab. It supersedes the declared select it was derived from — but NOT
         # the declared unit_conversion, which is a property of the VALUES rather
-        # than of which of them were fetched.
-        return _convert_units(p, provider_sample(p.inner, t; selection = selection))
+        # than of which of them were fetched. A provider that cannot push it
+        # down (a time-varying source) reads the record at `t` whole and slices.
+        arr = if provider_supports_selection(p)
+            _sample_inner(p, t; select = _neutral_selection_to_native(selection))
+        else
+            _apply_neutral_selection(p.key, _record_at(p, t), selection)
+        end
+        return _convert_units(p, arr)
     end
-    arr = if p.table !== nothing
-        _table_column(p.table, p.column)
-    elseif p.select !== nothing && p.push_to_reader
-        nds = EarthSciIO.refresh(p.inner, Float64(t); select = _declared_to_native(p.select))
-        vars = EarthSciIO.variable_names(nds)
-        length(vars) == 1 || throw(
-            RefreshError(
-                "provider '$(p.key)': the reader returned $(length(vars)) variables $vars"
-            )
-        )
-        nds[vars[1]].data
-    else
-        provider_sample(p.inner, Float64(t))
-    end
+    arr = _record_at(p, t)
+    p.select === nothing && return _convert_units(p, arr)
+    # A gated select is resolved by the engine (`provider_gate_spec`): its
+    # fallback for a provider that cannot push a selection down samples the
+    # record whole here and slices it to the materialised members itself.
+    _has_gated_axis(p.select) && return _convert_units(p, arr)
     # Pushed to the reader, only the `fixed` axes still need dropping; applied
     # engine-side, the whole select does. Both produce the same array.
-    p.select === nothing && return _convert_units(p, arr)
     axes = p.push_to_reader ?
         Any[
             ax isa AbstractDict && haskey(ax, "fixed") ?
             Dict{String, Any}("fixed" => 0) : "all" for ax in p.select
         ] : p.select
     return _convert_units(p, _apply_declared_select(p.key, arr, axes))
+end
+
+# The record at model time `t` before the declared select's engine-side part:
+# the table column, the reader-pushed select, or the whole record.
+function _record_at(p::DeclaredProvider, t::Real)
+    p.table !== nothing && return _table_column(p.table, p.column, p.origin + Float64(t))
+    p.select !== nothing && p.push_to_reader &&
+        return _sample_inner(p, t; select = _declared_to_native(p.select))
+    return _sample_inner(p, t)
 end
 
 # Every (flattened-name, variable-dict) pair of a raw model tree, recursing
@@ -656,11 +752,76 @@ function _data_update_rule(vd)
     return nothing
 end
 
+# --- the model clock (esm-spec §2.2.7) ----------------------------------------- #
+
+# The run window as Unix seconds: a 2-tuple (or 2-vector) whose entries are each
+# a `DateTime` (read as UTC) or a real number of Unix seconds.
+_window_seconds(::Nothing) = nothing
+function _window_seconds(window)
+    (window isa Tuple || window isa AbstractVector) && length(window) == 2 || throw(
+        ArgumentError(
+            "providers_from_document: window must be a 2-tuple (start, stop) of " *
+                "DateTimes (UTC) or Unix seconds, got $(repr(window))"
+        )
+    )
+    return (_window_entry("start", window[1]), _window_entry("stop", window[2]))
+end
+_window_entry(::String, v::Dates.DateTime) = Dates.datetime2unix(v)
+function _window_entry(which::String, v)
+    (v isa Real && !(v isa Bool) && isfinite(v)) || throw(
+        ArgumentError(
+            "providers_from_document: window $which must be a DateTime (UTC) or a " *
+                "finite number of Unix seconds, got $(repr(v))::$(typeof(v))"
+        )
+    )
+    return Float64(v)
+end
+
+# The `domain` reduced to the one origin field a loader honours: a
+# `reference_time`, else a `start`, that is present and not empty (§2.2.7: the
+# loaders skip an empty one). `nothing` when neither applies.
+function _origin_domain(raw)
+    domain = get(raw, "domain", nothing)
+    domain isa AbstractDict || return nothing
+    temporal = get(domain, "temporal", nothing)
+    temporal isa AbstractDict || return nothing
+    for key in ("reference_time", "start")
+        v = get(temporal, key, nothing)
+        (v === nothing || v == "") && continue
+        return Dict{String, Any}("temporal" => Dict{String, Any}(key => v))
+    end
+    return nothing
+end
+
+# The UTC instant of model time 0, in Unix seconds, and the run window (Unix
+# seconds, or `nothing` for an unbounded provider). The origin is, first match
+# wins, the document's `domain.temporal.reference_time`, its `start`, the start
+# of the run `window`, the POSIX epoch. With no `window`, the document's
+# `solver.time_span` (counted from that origin) supplies one.
+function _model_clock(raw, window)
+    win = _window_seconds(window)
+    odomain = _origin_domain(raw)
+    # `time_origin` reads the field exactly as the clock accessors do, so an
+    # unreadable one raises their `time_origin_invalid`.
+    origin = odomain !== nothing ? time_origin(odomain) :
+        win !== nothing ? win[1] : 0.0
+    win === nothing || return origin, win
+    solver = get(raw, "solver", nothing)
+    span = solver isa AbstractDict ? get(solver, "time_span", nothing) : nothing
+    span isa AbstractDict || return origin, nothing
+    r = EarthSciAST._time_span_interval(get(span, "start", nothing), get(span, "end", nothing), odomain)
+    r isa EarthSciAST._TimeSpanFault && throw(EarthSciAST._solver_time_span_invalid_error(r))
+    return origin, (origin + r[1], origin + r[2])
+end
+
 function providers_from_document(
         doc;
         cache_root::AbstractString,
         loaders = nothing,
-        url_overrides::AbstractDict = Dict{String, String}()
+        url_overrides::AbstractDict = Dict{String, String}(),
+        substitutions::AbstractDict = Dict{String, Any}(),
+        window = nothing,
+        records_per_sample::AbstractDict = Dict{String, Int}()
     )
     raw = _doc_raw(doc)
     dss = get(raw, "data_sources", nothing)
@@ -670,6 +831,7 @@ function providers_from_document(
         )
     )
     want = loaders === nothing ? nothing : Set(String(l) for l in loaders)
+    origin, run_window = _model_clock(raw, window)
 
     # Group the consuming parameters by the source they name, so one source's
     # Cache and RecordTable are built once and shared.
@@ -710,27 +872,42 @@ function providers_from_document(
                 )
             )
         end
-        src = get(ld, "source", nothing)
-        url = get(
-            url_overrides, lname,
-            src isa AbstractDict ? get(src, "url_template", nothing) : nothing
-        )
-        url isa AbstractString || throw(
-            RefreshError(
-                "providers_from_document: data_sources.$lname has no source.url_template " *
-                    "(and no url_overrides entry)"
+        # An override is honoured whatever its value, so an empty one is
+        # refused here rather than silently falling back to the document's URL.
+        # A source with neither is EarthSciIO's to refuse (`esm_source_url`).
+        url_override = nothing
+        if haskey(url_overrides, lname)
+            url_override = url_overrides[lname]
+            (url_override isa AbstractString && !isempty(url_override)) || throw(
+                RefreshError(
+                    "providers_from_document: url_overrides[$(repr(lname))] is " *
+                        (url_override isa AbstractString ? "empty" : "not a string: $(repr(url_override))")
+                )
             )
-        )
+            url_override = String(url_override)
+        end
         cache = EarthSciIO.Cache(; root = joinpath(String(cache_root), lname))
+        source_subs = Dict{String, String}(
+            String(k) => string(v) for (k, v) in get(substitutions, lname, Dict{String, String}())
+        )
+        # The source's location and cadence are read by EarthSciIO itself
+        # (EarthSciIO spec/esm-sources.md §3): `url_template` and `mirrors` are
+        # esm templates expanded at each file anchor (`substitutions[lname]`
+        # binds the custom placeholders a mount left), and `temporal` is a
+        # calendar cadence, so a time-varying source refreshes on its anchors
+        # (Unix seconds, UTC) over the run window instead of being read once as
+        # a constant. `DeclaredProvider` puts those on the model clock.
+        make_provider(vars, rps = nothing) = EarthSciIO.provider_from_esm(
+            lname, ld, cache;
+            variables = vars, substitutions = source_subs,
+            url_override = url_override,
+            records_per_sample = rps, window = run_window
+        )
 
         # ---- the source's DECLARED ingest (esm-spec §8.9) -------------------
-        # `reader_options` is the document's spelling of EarthSciIO's
-        # `reader_kwargs`; handing it over verbatim is the whole point, and an
-        # unrecognised key fails at Provider construction rather than decoding
-        # something else silently (spec/registries.md §2.1).
-        ropts = get(ld, "reader_options", nothing)
-        reader_kwargs = ropts isa AbstractDict ?
-            Dict{Symbol, Any}(Symbol(k) => v for (k, v) in ropts) : Dict{Symbol, Any}()
+        # `reader_options` reach the reader through `provider_from_esm`, which
+        # refuses an unrecognised key at construction (EarthSciIO
+        # spec/registries.md §2.1) rather than decoding something else silently.
         loader_select = _parse_declared_select(raw, "data_sources.$lname", ld)
         ext = get(ld, "extent", nothing)
         extent_mp = ext isa AbstractDict && get(ext, "metaparameter", nothing) isa AbstractString ?
@@ -771,39 +948,46 @@ function providers_from_document(
                     )
                 )
             )
-            table = RecordTable(
-                lname,
-                EarthSciIO.const_provider(
-                    cache, String(url); format = String(fmt),
-                    variables = file_vars, source_loader = lname,
-                    reader_kwargs = reader_kwargs
-                ),
-                columns, require_finite, nothing
-            )
+            # A table column is a 1-D record; a bracket of two of them is not
+            # defined, so a two-record sample of one is refused up front.
+            for b in binds
+                get(records_per_sample, b.key, 1) == 2 && throw(
+                    RefreshError(
+                        "providers_from_document: records_per_sample[$(repr(b.key))] = 2, " *
+                            "but data_sources.$lname is a record table (it declares a " *
+                            "record_filter or codes), whose columns are 1-D records; a " *
+                            "two-record bracket of them is not defined"
+                    )
+                )
+            end
+            table = RecordTable(lname, make_provider(file_vars), columns, require_finite)
         end
 
         for (b, spec) in zip(binds, columns)
             key = b.key
             sel = _parse_declared_select(raw, "$(key).update.from", b.from)
             sel === nothing && (sel = loader_select)
-            inner = EarthSciIO.const_provider(
-                cache, String(url); format = String(fmt),
-                variables = [spec.file_variable], source_loader = lname,
-                reader_kwargs = reader_kwargs
-            )
-            # A declared select goes to the reader when it can fetch pre-sliced
-            # AND no rows are filtered in front of it; otherwise engine-side.
-            # Where it is applied is an optimization, never a semantic.
+            rps = get(records_per_sample, key, nothing)
+            inner = make_provider([spec.file_variable], rps)
+            # A declared select names the source's native per-record axes
+            # (§8.9.2), never the bracket: a two-record sample carries an extra
+            # LEADING record axis, which it takes whole.
+            sel !== nothing && rps == 2 && (sel = Any["all"; sel])
+            # A declared select goes to the reader when it can fetch pre-sliced,
+            # no rows are filtered in front of it, and the source is const (a
+            # time-varying source's file has a record axis the select does not
+            # name); otherwise engine-side. Where it is applied is an
+            # optimization, never a semantic.
             push_down = sel !== nothing && table === nothing &&
-                EarthSciIO.supports_selection(inner) &&
-                !any(ax isa AbstractDict && haskey(ax, "gated_by") for ax in sel)
+                EarthSciIO.is_const(inner) && EarthSciIO.supports_selection(inner) &&
+                !_has_gated_axis(sel)
             # `varname` is the LOCAL name — it is what the gate's `applies_to`
             # names, i.e. the model array. `column` is the flattened name, which
             # is how the shared decode indexes this parameter's column.
             out[key] = DeclaredProvider(
                 key, b.local_name, inner, table, spec.name,
                 sel, push_down, extent_mp,
-                spec.unit_conversion
+                spec.unit_conversion, origin
             )
         end
     end

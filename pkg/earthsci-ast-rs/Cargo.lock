@@ -982,8 +982,7 @@ dependencies = [
 [[package]]
 name = "earthsciio"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "651dbf57a148e9db5082ac446b081b2ae9d27dabbe2aab85bfe143a41ce2f8b3"
+source = "git+https://github.com/EarthSciML/EarthSciIO?branch=feat%2Fesm-source-constructor#a93811341a5a08a528b6251bbca8764fc3caa883"
 dependencies = [
  "arrow-array",
  "arrow-schema",

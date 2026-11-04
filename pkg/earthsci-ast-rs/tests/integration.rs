@@ -107,6 +107,8 @@ mod doubly_defined_state_conformance;
 mod earthscidata_loader_coverage;
 #[path = "elementwise_observed_gather_conformance.rs"]
 mod elementwise_observed_gather_conformance;
+#[path = "esio_document_cadence.rs"]
+mod esio_document_cadence;
 #[path = "esio_provider_bridge.rs"]
 mod esio_provider_bridge;
 #[path = "esm_problem_front_door.rs"]

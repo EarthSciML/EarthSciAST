@@ -266,6 +266,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # EarthSciIO (+ Blosc/JSON/SHA) from the test target (Project.toml
     # [targets].test), which activates the EarthSciASTEarthSciIOExt extension.
     include("provider_selection_test.jl")
+    include("esio_document_cadence_test.jl")
     # esm-spec §8.5 `unit_conversion` at the unit level (parse + apply).
     include("unit_conversion_test.jl")
     # The loader-ingest surface of esm-spec §8.9 (reader_options / codes /
