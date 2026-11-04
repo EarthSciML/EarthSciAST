@@ -246,6 +246,15 @@ end
         providers = Dict{String, Any}("Fed.s" => pr), const_arrays = Dict("Other.s" => [9.0])
     )
     @test prob !== nothing
+    # A key a `variable_map` coupling reads keeps its own name rather than
+    # being routed onto the parameter it is a bare suffix of, as in Rust; the
+    # parameter's exact name is still routed.
+    flat = PFC.flatten(PFC.coerce_esm_file(JSON3.read(JSON3.write(doc))))
+    @test first(PFC._provider_routing((flat = flat,), ["s"]))["s"] == "M.s"
+    kept = (flat = flat, coupling_reads = Set(["s", "M.s"]))
+    targets, _ = PFC._provider_routing(kept, ["s"])
+    @test !haskey(targets, "s")
+    @test first(PFC._provider_routing(kept, ["M.s"]))["M.s"] == "M.s"
     # The re-keying wrapper answers every optional provider capability as the
     # provider it wraps does.
     w = PFC._RekeyedProvider(_PFCSelectable(), Pair{String, String}[])

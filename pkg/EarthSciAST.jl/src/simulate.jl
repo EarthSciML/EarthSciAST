@@ -280,6 +280,10 @@ function _prepare_run_doc(
     # the run doc's model below, where the tree-walk build seeds `u0` from them
     # (`_seed_faq_init_u0!`).
     run_init = Equation[]
+    # The names a `variable_map` coupling reads (its `from` endpoints), which
+    # flatten resolves away: a provider keyed by one keeps its own name
+    # (`_routable_keys`).
+    coupling_reads = Set{String}()
     if input isa EsmFile
         _refuse_unsupported_major_version(input.esm)
         _refuse_reserved_declaration_names(input)
@@ -287,6 +291,9 @@ function _prepare_run_doc(
         _refuse_reference_integrity_errors(input; supplied_names = supplied_names)
         run_coordinates = input.coordinates
         run_solver = input.solver
+        for c in input.coupling
+            c isa CouplingVariableMap && push!(coupling_reads, c.from)
+        end
         for (mname, model) in something(input.models, ())
             _collect_initialization_faqs!(run_init, model, String(mname))
         end
@@ -319,6 +326,7 @@ function _prepare_run_doc(
             flat_out[] = (
                 flat = input, coordinates = run_coordinates,
                 solver = run_solver, init = run_init,
+                coupling_reads = coupling_reads,
             )
         )
         return _flat_run_doc(input, run_coordinates, run_solver, run_init)
@@ -750,7 +758,7 @@ function _provider_routing(flat_rec, keys_; model_name = nothing)
     flat_rec === nothing && return targets, shadowed
     flat = flat_rec.flat::FlattenedSystem
     params = Set{String}(keys(flat.parameters))
-    asked = _routable_keys(flat, keys_)
+    asked = _routable_keys(flat_rec, keys_)
     isempty(asked) && return targets, shadowed
     namespaces = _override_namespaces(params; model_name = model_name)
     normalized, unknown, ambiguous, collisions =
@@ -772,15 +780,21 @@ function _provider_routing(flat_rec, keys_; model_name = nothing)
     return targets, shadowed
 end
 
-# The keys of `keys_` the parameter resolver considers, each mapped to itself:
-# every key but one that names a state or observed exactly.
-function _routable_keys(flat::FlattenedSystem, keys_)
+# The keys of `keys_` the parameter resolver considers, each mapped to itself.
+# A key that is not a parameter's exact name is left out when it names a state
+# or observed exactly, or a name a `variable_map` coupling reads
+# (`coupling_reads`): the build reads it under that very name, so it is used as
+# given rather than routed onto a parameter it is a suffix of, as Rust's
+# `ParameterKeyResolver` does.
+function _routable_keys(flat_rec, keys_)
+    flat = flat_rec.flat::FlattenedSystem
+    reads = hasproperty(flat_rec, :coupling_reads) ? flat_rec.coupling_reads : ()
     asked = Dict{String, String}()
     for rawk in keys_
         k = String(rawk)
-        k in keys(flat.parameters) ||
-            !(haskey(flat.state_variables, k) || haskey(flat.observed_variables, k)) ||
-            continue
+        elsewhere = k in reads || haskey(flat.state_variables, k) ||
+            haskey(flat.observed_variables, k)
+        k in keys(flat.parameters) || !elsewhere || continue
         asked[k] = k
     end
     return asked
@@ -813,7 +827,7 @@ function _refuse_provider_registry_overlap(
     )
     for (label, reg) in registries
         reg === nothing && continue
-        asked = _routable_keys(flat, keys(reg))
+        asked = _routable_keys(flat_rec, keys(reg))
         isempty(asked) && continue
         normalized, _, ambiguous, collisions =
             _canonicalize_override_keys(Any, params, namespaces, asked)
