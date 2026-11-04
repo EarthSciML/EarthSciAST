@@ -183,21 +183,23 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     // a lifted state is given, by size, by a shaped operand, and synthesized,
     // an operator `ic(_var)` that `field_ics` records once per lifted state,
     // and a state that already declares a shape, which the lift leaves alone
-    // (esm-libraries-spec §4.7.1 step 3, §4.7.5), plus the three
+    // (esm-libraries-spec §4.7.1 step 3, §4.7.5), plus the four
     // `variable_map_data_fed` cases — a data-fed parameter mapped by
     // `param_to_var` onto a shaped target survives exactly as declared, `update`
     // and `shape` included, whatever its data source is keyed, and a state
-    // source keyed like a data source stays a state (esm-libraries-spec §4.7.3).
-    expect(corpus.cases.length).toBe(53)
-    // 8 = template_import_lib, couple_multiplicative_no_tendency, the
+    // source keyed like a data source stays a state, and a source that declares
+    // no shape takes its target's (esm-libraries-spec §4.7.3).
+    expect(corpus.cases.length).toBe(54)
+    // 9 = template_import_lib, couple_multiplicative_no_tendency, the
     // nonterminating rewrite, `coupling_resolution_edge_cases`, whose EDGE
     // CASE 10 maps onto a target the document declares nowhere,
     // `lift_synthetic_name_clash`, a declared index set that takes the
     // synthetic lift axis's name with another size,
     // `lift_placeholder_ic_conflict`, a state given two `ic(x)` entries, and
-    // the two `variable_map_data_fed` shape conflicts
-    // (`scalar_source_onto_shaped_target`, `one_source_two_target_shapes`).
-    expect(corpus.refusals.length).toBe(8)
+    // the three `variable_map_data_fed` shape conflicts
+    // (`scalar_source_onto_shaped_target`, `one_source_two_target_shapes`,
+    // `shapeless_source_two_target_shapes`).
+    expect(corpus.refusals.length).toBe(9)
     expect(corpus.oracle).toContain('earthsci_ast.flatten')
   })
 
@@ -389,6 +391,10 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
   it.each([
     ['scalar_source_onto_shaped_target', /Met\.K -> Box\.F_k.*declares shape \[\].*\["rec","x"\]/s],
     ['one_source_two_target_shapes', /Met\.K -> Box\.G_k.*\["rec","x"\].*\["x"\]/s],
+    [
+      'shapeless_source_two_target_shapes',
+      /Met\.K -> Box\.G_k.*declares no shape and took \["rec","x"\].*\["x"\]/s,
+    ],
   ])("refuses a data-fed source whose declared shape is not its target's: %s", (name, msg) => {
     const entry = corpus.refusals.find((r) =>
       r.fixture.endsWith(`variable_map_data_fed/fixtures/${name}.esm`),

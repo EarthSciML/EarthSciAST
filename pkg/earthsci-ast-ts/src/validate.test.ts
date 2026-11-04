@@ -1545,8 +1545,8 @@ describe('(h) reference integrity covers the non-model expression sites', () => 
             v: {
               type: 'parameter',
               units: '1',
-              // A `data` update makes the parameter a buffer, so `shape` is
-              // required; an empty shape is the scalar case.
+              // An explicit empty shape declares a scalar buffer (a `data`
+              // update may also omit `shape`, esm-libraries-spec §4.7.3).
               shape: [],
               update: {
                 kind: 'data',

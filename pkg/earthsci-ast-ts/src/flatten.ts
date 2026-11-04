@@ -240,13 +240,14 @@ export class DomainUnitMismatchError extends FlattenError {
 /**
  * A data-fed `variable_map` source's declared shape differs from its shaped
  * target's (esm-libraries-spec §4.7.3). The parameter that survives a
- * `param_to_var` or `conversion_factor` edge is the SOURCE's own declaration,
- * `shape` included, and a data-fed parameter must declare its shape (`[]`
- * declares a scalar buffer). When the removed target is shaped, the rewritten
- * equations index the source the way the target was declared, so the two
- * shapes have to be the same; taking either one silently would leave equations
- * indexing a parameter of the wrong rank or, with one source feeding two
- * targets, make the result depend on coupling order.
+ * `param_to_var` or `conversion_factor` edge is the SOURCE's own declaration.
+ * When the removed target is shaped, the rewritten equations index the source
+ * the way the target was declared, so a source that declares a `shape` (`[]`, a
+ * scalar buffer, included) must declare the target's, and a source that
+ * declares none takes it, which requires every target it replaces to declare
+ * the same one. Taking either shape silently would leave equations indexing a
+ * parameter of the wrong rank or, with one source feeding two targets, make the
+ * result depend on coupling order.
  *
  * Deliberately NOT re-exported from the package root (same policy as Python's
  * `VariableMapShapeConflictError`): `api-surface.json` is the cross-binding
@@ -2177,8 +2178,9 @@ function applyVariableMapExpression(
  * parameter; the substitution still runs so the equation set references the
  * canonical name.
  *
- * The promoted target's replacement is the source's own declaration, which
- * flattening leaves as declared (esm-libraries-spec §4.7.3). A data source is
+ * The promoted target's replacement is the source's own declaration; only a
+ * data-fed source that declares no `shape` takes the target's
+ * (esm-libraries-spec §4.7.3, see {@link carryDataFedSourceShape}). A data source is
  * not a coupling endpoint (esm-spec §8), so no parameter is ever built here for
  * a `from` that names one.
  */
@@ -2186,6 +2188,7 @@ function applyVariableMap(
   components: Record<string, ComponentSystem>,
   entry: CouplingEntry,
   index: number,
+  shapeless: ReadonlySet<string>,
 ): void {
   const e = entry as unknown as {
     from?: string
@@ -2223,47 +2226,104 @@ function applyVariableMap(
     const target = comp.parameters[toVar]
     if (target === undefined) continue
     delete comp.parameters[toVar]
-    checkDataFedSourceShape(components, fromVar, toVar, target)
+    carryDataFedSourceShape(components, fromVar, toVar, target, shapeless)
   }
 }
 
 /**
- * Refuse a data-fed source whose declared shape is not its shaped target's.
+ * Give a shapeless data-fed source its shaped target's shape, or refuse a source
+ * whose shape is not the target's (esm-libraries-spec §4.7.3).
  *
- * The source survives the edge as declared — units, default, `update`, `shape`
- * (esm-libraries-spec §4.7.3) — so nothing is changed here. When the removed
- * `target` is shaped and the source is a data-fed parameter, the rewritten
- * equations index the source with the target's indices, so its declared shape
- * (absent and `[]` both scalar) must equal the target's. Checking each edge
- * against the source's DECLARATION, never against a shape an earlier edge gave
- * it, keeps the verdict independent of coupling order.
+ * The source survives the edge as its own declaration — units, default,
+ * `update`. When the removed `target` is shaped and the source is a data-fed
+ * parameter, the rewritten equations index the source with the target's
+ * indices:
+ *
+ *  - a source that DECLARES NO `shape` (`shapeless` holds its scoped name) takes
+ *    the target's. Every further edge from it must name a target of that same
+ *    shape, so one shapeless source feeding two targets of different shapes is
+ *    refused whichever entry comes first;
+ *  - a source that declares a `shape` — `[]`, a scalar buffer, included — keeps
+ *    it, and it must equal the target's.
  */
-function checkDataFedSourceShape(
+function carryDataFedSourceShape(
   components: Record<string, ComponentSystem>,
   fromVar: string,
   toVar: string,
   target: FlattenedVariable,
+  shapeless: ReadonlySet<string>,
 ): void {
   const targetShape = target.shape ?? []
   if (targetShape.length === 0) return
   for (const comp of Object.values(components)) {
     const source = comp.parameters[fromVar]
     if (source === undefined) continue
+    if (!isDataFed(source)) return
     const sourceShape = source.shape ?? []
+    if (shapeless.has(fromVar) && sourceShape.length === 0) {
+      comp.parameters[fromVar] = { ...source, shape: [...targetShape] }
+      return
+    }
     const same =
       sourceShape.length === targetShape.length && sourceShape.every((d, i) => d === targetShape[i])
-    if (isDataFed(source) && !same) {
-      const fmt = (shape: readonly unknown[]): string => JSON.stringify(shape)
-      throw new VariableMapShapeConflictError(
-        `variable_map(${fromVar} -> ${toVar}): the data-fed source '${fromVar}' declares ` +
-          `shape ${fmt(sourceShape)}, but the target it replaces declares ${fmt(targetShape)}. ` +
-          'The source survives with its own declaration, and the rewritten equations index it ' +
-          'the way the target was declared, so the two shapes must be equal ' +
-          `(esm-libraries-spec §4.7.3). Declare '${fromVar}' with shape ${fmt(targetShape)}.`,
-      )
-    }
-    return
+    if (same) return
+    const fmt = (shape: readonly unknown[]): string => JSON.stringify(shape)
+    const why = shapeless.has(fromVar)
+      ? `declares no shape and took ${fmt(sourceShape)} from an earlier param_to_var target, ` +
+        `but this target declares ${fmt(targetShape)}. A shapeless data-fed source takes its ` +
+        'shape from the targets it replaces, so they must all declare the same one'
+      : `declares shape ${fmt(sourceShape)}, but the target it replaces declares ` +
+        `${fmt(targetShape)}. The source survives with its own declaration and the rewritten ` +
+        'equations index it the way the target was declared, so the two must be equal; ' +
+        `declare '${fromVar}' with shape ${fmt(targetShape)}, or with no shape to take the target's`
+    throw new VariableMapShapeConflictError(
+      `variable_map(${fromVar} -> ${toVar}): the data-fed source '${fromVar}' ${why} ` +
+        '(esm-libraries-spec §4.7.3).',
+    )
   }
+}
+
+/**
+ * The scoped names of every data-fed parameter that declares no `shape`.
+ *
+ * Absent and `[]` differ here, and only here: `[]` declares a scalar buffer,
+ * while an absent `shape` takes that of the `param_to_var` target the parameter
+ * replaces (esm-libraries-spec §4.7.3, esm-spec §8.5.1). The flattened tables
+ * do not keep the difference, so it is read off the declarations.
+ */
+function dataFedWithoutShape(file: EsmFile): Set<string> {
+  const names = new Set<string>()
+  const consider = (scoped: string, v: { shape?: unknown; update?: unknown }): void => {
+    if (v.shape !== undefined && v.shape !== null) return
+    const rules = updateRules(v.update as ModelVariable['update'])
+    if (rules.some((r) => r.kind === 'data' && (r as { from?: unknown }).from !== undefined)) {
+      names.add(scoped)
+    }
+  }
+  const walkModel = (model: Model, scope: string): void => {
+    for (const [name, v] of Object.entries(model.variables ?? {})) {
+      if (v?.type === 'parameter') consider(`${scope}.${name}`, v)
+    }
+    for (const [name, sub] of Object.entries(model.subsystems ?? {})) {
+      if (sub === null || typeof sub !== 'object' || isSubsystemRef(sub)) continue
+      walkModel(sub as Model, `${scope}.${name}`)
+    }
+  }
+  const walkReactions = (rs: ReactionSystem, scope: string): void => {
+    for (const [name, p] of Object.entries(rs.parameters ?? {})) {
+      consider(`${scope}.${name}`, p as { shape?: unknown; update?: unknown })
+    }
+    for (const [name, sub] of Object.entries(reactionSubsystems(rs))) {
+      walkReactions(sub, `${scope}.${name}`)
+    }
+  }
+  for (const [name, model] of Object.entries(file.models ?? {})) {
+    if (!isSubsystemRef(model)) walkModel(model as Model, name)
+  }
+  for (const [name, rs] of Object.entries(file.reaction_systems ?? {})) {
+    if (!isSubsystemRef(rs)) walkReactions(rs as ReactionSystem, name)
+  }
+  return names
 }
 
 /**
@@ -2375,9 +2435,10 @@ function applyCouplings(
     applyCouple(components, retargetPendingEntry(cp, mergedRenames), index)
   }
 
+  const shapeless = dataFedWithoutShape(file)
   for (const [index, vm] of varMaps) {
     const resolved = retargetPendingEntry(vm, mergedRenames)
-    applyVariableMap(components, resolved, index)
+    applyVariableMap(components, resolved, index, shapeless)
     // A NAMED transform substitutes `to` away entirely; an EXPRESSION transform
     // leaves it standing as the observed the transform defines. Only the first
     // deletes a name, so only the first joins the set the registry guard
