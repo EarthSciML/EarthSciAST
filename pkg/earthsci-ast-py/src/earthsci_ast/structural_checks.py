@@ -2235,10 +2235,12 @@ def _check_data_source_references(data: dict[str, Any], errors: list[str]) -> No
                 )
 
 
-def _effective_records_per_sample(binding: Any, source: Any) -> int:
-    """The EFFECTIVE ``records_per_sample`` of a data rule (esm-spec §8.5.1):
-    the rule's ``from.records_per_sample``, else the source's
-    ``temporal.records_per_sample``, else 1.
+def _records_per_sample_origin(binding: Any, source: Any) -> tuple[Any, str | None]:
+    """Where a data rule's EFFECTIVE ``records_per_sample`` comes from (esm-spec
+    §8.5.1): ``(value, "from")`` for the rule's ``from.records_per_sample``,
+    else ``(value, "temporal")`` for the source's
+    ``temporal.records_per_sample``, else ``(1, None)``. The value is returned
+    as written, unchecked.
 
     ``binding`` and ``source`` are either raw JSON dicts or the typed
     :class:`~earthsci_ast.esm_types.DataSourceBinding` /
@@ -2254,9 +2256,24 @@ def _effective_records_per_sample(binding: Any, source: Any) -> int:
 
     own = get(binding, "records_per_sample")
     if own is not None:
-        return int(own)
+        return own, "from"
     inherited = get(get(source, "temporal"), "records_per_sample")
-    return int(inherited) if inherited is not None else 1
+    if inherited is not None:
+        return inherited, "temporal"
+    return 1, None
+
+
+def _effective_records_per_sample(binding: Any, source: Any) -> int:
+    """The EFFECTIVE ``records_per_sample`` of a data rule (esm-spec §8.5.1):
+    the rule's ``from.records_per_sample``, else the source's
+    ``temporal.records_per_sample``, else 1.
+
+    Non-raising, for validation and ``loader_fields``: the schema has already
+    constrained the value to 1 or 2. ``providers_from_document`` reads the raw
+    value through :func:`_records_per_sample_origin` and checks it strictly.
+    """
+    value, _ = _records_per_sample_origin(binding, source)
+    return int(value)
 
 
 def _index_set_has_two_members(index_sets: dict[str, Any], name: Any) -> bool:
@@ -2294,7 +2311,8 @@ def _declared_variable(data: dict[str, Any], scoped: Any) -> dict[str, Any] | No
 def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
     """``records_per_sample_invalid`` (esm-spec §8.5.1): ``from.records_per_sample``
     on a rule that is not ``data``; or an effective value of 2 on a parameter
-    whose source declares no ``temporal`` block, or whose record shape's first
+    whose source declares no ``temporal`` block or a ``temporal`` with no
+    ``start`` (a time-invariant source), or whose record shape's first
     dimension is not an index set of exactly two members. The record shape is
     the declared ``shape``, or, for a parameter declaring an empty one that a
     ``param_to_var`` ``variable_map`` entry maps onto another parameter, that
@@ -2345,13 +2363,14 @@ def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
                     continue  # data_source_undefined reports it
                 if _effective_records_per_sample(binding, source) != 2:
                     continue
-                if not isinstance(source.get("temporal"), dict):
+                temporal = source.get("temporal")
+                if not isinstance(temporal, dict) or not temporal.get("start"):
                     errors.append(
                         (
                             at,
                             f"Parameter '{vname}' asks for two records per sample from "
-                            f"data source '{rule.get('source')}', which declares no temporal "
-                            f"block and so has no successor record",
+                            f"data source '{rule.get('source')}', which is time-invariant "
+                            f"(it declares no temporal start) and so has no successor record",
                             {"variable": vname, "source": rule.get("source")},
                         )
                     )

@@ -1234,7 +1234,8 @@ end
 
 esm-spec §8.5.1, `records_per_sample_invalid`: `from.records_per_sample` on a
 rule that is not `data`; or an EFFECTIVE value of 2 on a parameter whose source
-declares no `temporal` block, or whose record shape's first dimension is not an
+is time-invariant (it declares no `temporal` block, or its `temporal` declares
+no `start`), or whose record shape's first dimension is not an
 index set of exactly two members. The record shape is the declared `shape`, or,
 for a parameter declaring an empty one that a `param_to_var` `variable_map`
 entry maps onto another parameter, that target's declared `shape`.
@@ -1268,13 +1269,16 @@ function _check_records_per_sample!(
                 get(file.data_sources, rule.source, nothing)
             src === nothing && continue  # data_source_undefined reports it
             _effective_records_per_sample(rule.from, src) == 2 || continue
-            if src.temporal === nothing
+            if src.temporal === nothing || src.temporal.start === nothing ||
+                    isempty(src.temporal.start)
+                what = src.temporal === nothing ? "no temporal block" :
+                    "no temporal start"
                 push!(
                     errors, StructuralError(
                         at,
                         "Parameter '$name' asks for two records per sample from " *
-                            "data source '$(rule.source)', which declares no temporal " *
-                            "block and so has no successor record",
+                            "data source '$(rule.source)', which declares $what, " *
+                            "so it is time-invariant and has no successor record",
                         ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
                         Dict{String, Any}("variable" => name, "source" => rule.source)
                     )

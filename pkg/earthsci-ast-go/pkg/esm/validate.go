@@ -1763,7 +1763,8 @@ func declaredShapeOf(file *ESMFile, scoped string) []string {
 // validateRecordsPerSample reports `records_per_sample_invalid` (esm-spec
 // §8.5.1): `from.records_per_sample` on a rule that is not `data`; or an
 // EFFECTIVE value of 2 on a parameter whose source declares no `temporal`
-// block, or whose record shape's first dimension is not an index set of
+// block or a `temporal` with no `start` (a time-invariant source), or whose
+// record shape's first dimension is not an index set of
 // exactly two members. The record shape is the declared `shape`, or, for a
 // parameter declaring an empty one that a `param_to_var` `variable_map` entry
 // maps onto another parameter, that target's declared `shape`.
@@ -1801,12 +1802,12 @@ func (s *structuralScan) validateRecordsPerSample(model *Model, basePath string)
 			if effectiveRecordsPerSample(rule.From, &source) != 2 {
 				continue
 			}
-			if source.Temporal == nil {
+			if source.Temporal == nil || source.Temporal.Start == nil || *source.Temporal.Start == "" {
 				s.addErr(StructuralError{
 					Path: path,
 					Code: ErrorRecordsPerSampleInvalid,
 					Message: fmt.Sprintf(
-						"Parameter '%s' asks for two records per sample from data source '%s', which declares no temporal block and so has no successor record",
+						"Parameter '%s' asks for two records per sample from data source '%s', which is time-invariant (it declares no temporal start) and so has no successor record",
 						varName, rule.Source),
 					Details: map[string]any{"variable": varName, "source": rule.Source},
 				})

@@ -972,7 +972,8 @@ fn declared_shape(esm_file: &EsmFile, scoped: &str) -> Option<Vec<String>> {
 
 /// `records_per_sample_invalid` (esm-spec §8.5.1): `from.records_per_sample`
 /// on a rule that is not `data`; or an EFFECTIVE value of 2 on a parameter
-/// whose source declares no `temporal` block, or whose record shape's first
+/// whose source declares no `temporal` block or a `temporal` block with no
+/// `start` (a time-invariant source), or whose record shape's first
 /// dimension is not an index set of exactly two members. The record shape is
 /// the declared `shape`, or, for a parameter declaring an empty one that a
 /// `param_to_var` `variable_map` entry maps onto another parameter, that
@@ -1025,14 +1026,24 @@ pub(crate) fn validate_records_per_sample(esm_file: &EsmFile, errors: &mut Vec<S
                 if crate::flatten::effective_records_per_sample(binding, Some(source)) != 2 {
                     continue;
                 }
-                if source.temporal.is_none() {
+                // A source is time-varying only when its `temporal` block
+                // anchors at a `start`; without one it is time-invariant and
+                // has no successor record.
+                let why = match &source.temporal {
+                    None => Some("declares no temporal block"),
+                    Some(t) if t.start.as_deref().is_none_or(str::is_empty) => {
+                        Some("declares no temporal start")
+                    }
+                    Some(_) => None,
+                };
+                if let Some(why) = why {
                     errors.push(StructuralError {
                         path: at.clone(),
                         code: StructuralErrorCode::RecordsPerSampleInvalid,
                         message: format!(
                             "Parameter '{var_name}' asks for two records per sample from data \
-                             source '{source_name}', which declares no temporal block and so has \
-                             no successor record"
+                             source '{source_name}', which {why}, so it is time-invariant and \
+                             has no successor record"
                         ),
                         details: serde_json::json!({"variable": var_name, "source": source_name}),
                     });

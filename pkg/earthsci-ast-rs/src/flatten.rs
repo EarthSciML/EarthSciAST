@@ -853,16 +853,27 @@ pub struct LoaderField {
     pub records_per_sample: u8,
 }
 
-/// The EFFECTIVE `records_per_sample` of a `data` rule (esm-spec §8.5.1): the
-/// binding's own value, else the source's `temporal.records_per_sample`, else 1.
+/// The esm-spec §8.5.1 rule for a parameter's EFFECTIVE `records_per_sample`,
+/// over the two values a document may write: the parameter's own
+/// `update.from.records_per_sample`, else the source's
+/// `temporal.records_per_sample`, else 1. The one statement of the rule; the
+/// typed path ([`effective_records_per_sample`]) and the raw-JSON provider path
+/// (`esio_provider::providers_from_document_with`, which first checks each
+/// written value) both call it.
+pub(crate) fn records_per_sample_rule<T: From<u8>>(own: Option<T>, source: Option<T>) -> T {
+    own.or(source).unwrap_or_else(|| T::from(1))
+}
+
+/// The EFFECTIVE `records_per_sample` of a typed `data` rule (esm-spec §8.5.1;
+/// see [`records_per_sample_rule`]).
 pub(crate) fn effective_records_per_sample(
     binding: &crate::types::DataSourceBinding,
     source: Option<&crate::types::DataSource>,
 ) -> u8 {
-    binding
-        .records_per_sample
-        .or_else(|| source.and_then(|s| s.temporal.as_ref()?.records_per_sample))
-        .unwrap_or(1)
+    records_per_sample_rule(
+        binding.records_per_sample,
+        source.and_then(|s| s.temporal.as_ref()?.records_per_sample),
+    )
 }
 
 // ============================================================================

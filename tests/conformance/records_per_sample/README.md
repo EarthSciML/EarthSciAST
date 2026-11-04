@@ -16,7 +16,8 @@ TypeScript, Go):
   must also survive emit then load.
 - **Invalid cases** are schema-valid and must be refused by structural
   validation with exactly one `records_per_sample_invalid` at `pointer`: a
-  non-`data` rule carrying the field, a pair from a source with no `temporal`,
+  non-`data` rule carrying the field, a pair from a source with no `temporal`
+  or a `temporal` with no `start` (a time-invariant source),
   and a pair whose record shape's first dimension is not an index set of two
   members, whether the 2 is written on `from` or inherited from the source, and
   whether the record shape is declared or comes from a `param_to_var` target.

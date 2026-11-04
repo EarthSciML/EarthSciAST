@@ -19,7 +19,9 @@ inspects the data's named dims or coordinates (`_write_forcing!`,
 does NOT reproject, transpose, or reorder — it returns the provider's array in
 its native file order. Any grid/orientation reconciliation is the model's job
 (declare the loader field in the source's native dim order, then regrid/reindex
-in a coupling expression), exactly as it would be for any other provider.
+in a coupling expression), exactly as it would be for any other provider. The
+one exception is the record axis of a two-record parameter (esm-spec §8.5.1),
+which the providers `providers_from_document` builds move to the first axis.
 
 Kept a `weakdep` extension (mirroring `MTKExt` / `DataRefreshExt`) so the base
 package carries no EarthSciIO dependency; without it loaded, the core seam throws
@@ -34,6 +36,8 @@ using EarthSciAST: RefreshError, OutputError, StateSnapshot, VarGridding,
 # at delivery (see `_convert_units`).
 using EarthSciAST: parse_unit_conversion, apply_unit_conversion
 using EarthSciAST: load_path, serialize_esm_file
+# The §8.5.1 effective-value rule, shared with flatten and validation.
+using EarthSciAST: _effective_records_per_sample
 
 # Explicit imports so we can add the extension methods to these generics.
 import EarthSciAST: provider_refresh_times, provider_sample, provider_supports_selection
@@ -556,15 +560,29 @@ struct DeclaredProvider
     push_to_reader::Bool                          # where `select` is honoured
     extent_mp::Union{Nothing, String}
     unit_conversion::Any                          # the declared §8.5 conversion
+    # A source whose `temporal` declares a `start` is TIME-VARYING: it is read
+    # at `t`, its declared select covers the file variable's dims other than
+    # `time_dim` (§8.9.2), and with `records = 2` the delivered array carries
+    # the two bracketing records along a leading record axis (§8.5.1).
+    time_varying::Bool
+    time_dim::String                              # `temporal.time_variable`
+    records::Int                                  # effective records_per_sample
 end
+
+# A constant source's provider: no time dim, one record per sample.
+DeclaredProvider(key, varname, inner, table, column, select, push, extent_mp, uc) =
+    DeclaredProvider(
+    key, varname, inner, table, column, select, push, extent_mp, uc, false, "time", 1
+)
 
 provider_refresh_times(p::DeclaredProvider) = EarthSciIO.refresh_times(p.inner)
 
 # A record-table column never supports a pushed-down selection: its rows are
 # chosen by the loader's declared filter AFTER the decode, so an index pushed to
-# the reader would address raw rows rather than delivered ones.
+# the reader would address raw rows rather than delivered ones. A time-varying
+# provider always takes one: it gathers it from the array it read at `t`.
 provider_supports_selection(p::DeclaredProvider) =
-    p.table === nothing && EarthSciIO.supports_selection(p.inner)
+    p.table === nothing && (p.time_varying || EarthSciIO.supports_selection(p.inner))
 
 provider_extent_metaparameter(p::DeclaredProvider) = p.extent_mp
 
@@ -574,7 +592,63 @@ provider_extent_metaparameter(p::DeclaredProvider) = p.extent_mp
 function provider_gate_spec(p::DeclaredProvider)
     p.select === nothing && return nothing
     any(ax isa AbstractDict && haskey(ax, "gated_by") for ax in p.select) || return nothing
-    return Dict{String, Any}("axes" => p.select, "applies_to" => Any[p.varname])
+    return Dict{String, Any}("axes" => _delivered_axes(p), "applies_to" => Any[p.varname])
+end
+
+# The declared select over the DELIVERED axes: on a two-record parameter the
+# leading record axis is not selected, so it is taken whole.
+_delivered_axes(p::DeclaredProvider) =
+    p.time_varying && p.records == 2 ? Any["all"; p.select] : p.select
+
+# A time-varying parameter's array at `t`, record axis first. EarthSciIO drops
+# the time dim for one record per sample and keeps it IN PLACE for two (its
+# position in the file's dims), so a two-record field has `time_dim` moved to
+# axis 1 here, before any select is applied (esm-spec §8.5.1).
+function _sample_at(p::DeclaredProvider, t::Real)
+    nds = EarthSciIO.refresh(p.inner, Float64(t))
+    vars = EarthSciIO.variable_names(nds)
+    length(vars) == 1 || throw(
+        RefreshError(
+            "provider '$(p.key)': the reader returned $(length(vars)) variables $vars"
+        )
+    )
+    f = nds[vars[1]]
+    p.records == 2 || return f.data
+    pos = findfirst(==(p.time_dim), f.dims)
+    pos === nothing && throw(
+        RefreshError(
+            "provider '$(p.key)': two records per sample are stacked along the time " *
+                "dimension '$(p.time_dim)', which the field does not carry (dims: $(f.dims))"
+        )
+    )
+    pos == 1 && return f.data
+    n = ndims(f.data)
+    return permutedims(f.data, (pos, (d for d in 1:n if d != pos)...))
+end
+
+# The engine's resolved per-axis `selection` (1-based, one entry per delivered
+# axis; see `provider_sample`) applied to an in-memory array as an index
+# gather. An `Integer` keeps its axis at length 1, exactly as the reader's
+# `indices` pushdown does, so the build's `dropdims` sees the same shape.
+function _gather_selection(key::AbstractString, arr::AbstractArray, selection)
+    _neutral_selection_to_native(selection)   # validates every entry
+    length(selection) == ndims(arr) || throw(
+        RefreshError(
+            "provider '$key': the selection has $(length(selection)) axes but the " *
+                "array is rank $(ndims(arr)) $(size(arr))"
+        )
+    )
+    idx = Any[]
+    for (d, ax) in enumerate(selection)
+        ix = ax isa Colon ? Colon() : ax isa Integer ? (Int(ax):Int(ax)) : collect(Int, ax)
+        ix isa Colon || all(<=(size(arr, d)), ix) || throw(
+            RefreshError(
+                "provider '$key': selection axis $d reaches past its length $(size(arr, d))"
+            )
+        )
+        push!(idx, ix)
+    end
+    return arr[idx...]
 end
 
 # Produce the values in the variable's DECLARED `units` (esm-spec §8.5).
@@ -593,6 +667,16 @@ function _convert_units(p::DeclaredProvider, arr)
 end
 
 function provider_sample(p::DeclaredProvider, t::Real; selection = nothing)
+    if p.time_varying && p.table === nothing
+        # Read at `t` (the bracket included, record axis first); a declared or
+        # gated selection is applied here, never pushed to the reader, whose
+        # select is positional over every file dim including time (§8.9.2).
+        arr = _sample_at(p, t)
+        selection === nothing ||
+            return _convert_units(p, _gather_selection(p.key, arr, selection))
+        p.select === nothing && return _convert_units(p, arr)
+        return _convert_units(p, _apply_declared_select(p.key, arr, _delivered_axes(p)))
+    end
     if selection !== nothing
         # The GATED path: `prepare` resolved the members and is asking for that
         # slab. It supersedes the declared select it was derived from — but NOT
@@ -656,15 +740,26 @@ function _data_update_rule(vd)
     return nothing
 end
 
-# The EFFECTIVE `records_per_sample` of a raw `data` rule's `from` (esm-spec
-# §8.5.1): its own value, else the source's `temporal.records_per_sample`,
-# else 1. The raw-dict mirror of `EarthSciAST._effective_records_per_sample`.
-function _raw_effective_records_per_sample(from, source)::Int
-    own = from isa AbstractDict ? get(from, "records_per_sample", nothing) : nothing
-    own === nothing || return Int(own)
-    t = source isa AbstractDict ? get(source, "temporal", nothing) : nothing
-    inherited = t isa AbstractDict ? get(t, "records_per_sample", nothing) : nothing
-    return inherited === nothing ? 1 : Int(inherited)
+# A `records_per_sample` value as read from the raw document or the run-time
+# option (esm-spec §8.5.1): a JSON number whose value is the integer 1 or 2.
+# `2.0` is 2; `1.5`, `3`, `"2"` and `true` are refused, never rounded.
+function _strict_records_per_sample(key::AbstractString, where::AbstractString, v)::Int
+    v isa Real && !(v isa Bool) && (v == 1 || v == 2) && return v == 1 ? 1 : 2
+    throw(
+        RefreshError(
+            "parameter '$key': records_per_sample from $where is $(repr(v)); it must " *
+                "be the number 1 or 2"
+        )
+    )
+end
+
+# Whether a raw `data_sources` entry is time-varying: its `temporal` declares a
+# non-empty `start` (EarthSciIO reads anything else as time-invariant).
+function _has_temporal_start(ld)
+    t = get(ld, "temporal", nothing)
+    t isa AbstractDict || return false
+    st = get(t, "start", nothing)
+    return st !== nothing && st != ""
 end
 
 function providers_from_document(
@@ -765,6 +860,10 @@ function providers_from_document(
             require_finite = String[String(v) for v in rf["require_finite"]]
         end
 
+        time_varying = _has_temporal_start(ld)
+        tv = time_varying ? get(ld["temporal"], "time_variable", nothing) : nothing
+        time_dim = (tv isa AbstractString && !isempty(tv)) ? String(tv) : "time"
+
         sort!(binds; by = b -> b.key)
         columns = ColumnSpec[]
         for b in binds
@@ -802,15 +901,51 @@ function providers_from_document(
             key = b.key
             sel = _parse_declared_select(raw, "$(key).update.from", b.from)
             sel === nothing && (sel = loader_select)
-            # The parameter's effective value from the document; an entry in
-            # the run-time `records_per_sample` overrides it.
-            rps = get(records_per_sample, key, nothing)
-            rps === nothing && (rps = _raw_effective_records_per_sample(b.from, ld))
+            # The parameter's effective value from the document (§8.5.1).
+            rps = _effective_records_per_sample(b.from, ld) do v, origin
+                _strict_records_per_sample(
+                    key, origin === :from ? "update.from" : "data_sources.$lname.temporal", v
+                )
+            end
+            # A run-time entry may only restate it: any other value changes the
+            # rank of the delivered array away from the shape validation approved.
+            if haskey(records_per_sample, key)
+                asked = _strict_records_per_sample(
+                    key, "the run-time records_per_sample option",
+                    records_per_sample[key]
+                )
+                asked == rps || throw(
+                    RefreshError(
+                        "parameter '$key': the run-time records_per_sample option asks for " *
+                            "$asked but the document gives $rps; set " *
+                            "update.from.records_per_sample in the document instead"
+                    )
+                )
+            end
+            if rps == 2
+                table === nothing || throw(
+                    RefreshError(
+                        "parameter '$key' asks for two records per sample from " *
+                            "data_sources.$lname, which is served as one filtered or " *
+                            "coded record table; two records per sample is not " *
+                            "supported on a filtered or coded source"
+                    )
+                )
+                time_varying || throw(
+                    RefreshError(
+                        "parameter '$key' asks for two records per sample from " *
+                            "data_sources.$lname, which declares no temporal start and " *
+                            "so is time-invariant"
+                    )
+                )
+            end
             inner = make_provider([spec.file_variable], rps)
-            # A declared select goes to the reader when it can fetch pre-sliced
-            # AND no rows are filtered in front of it; otherwise engine-side.
-            # Where it is applied is an optimization, never a semantic.
-            push_down = sel !== nothing && table === nothing &&
+            # A declared select goes to the reader when it can fetch pre-sliced,
+            # no rows are filtered in front of it, and the source is constant: on
+            # a time-varying source the select covers the dims OTHER than time,
+            # while the reader's is positional over all of them, so it is applied
+            # engine-side. Where it is applied is an optimization, never a semantic.
+            push_down = sel !== nothing && table === nothing && !time_varying &&
                 EarthSciIO.supports_selection(inner) &&
                 !any(ax isa AbstractDict && haskey(ax, "gated_by") for ax in sel)
             # `varname` is the LOCAL name — it is what the gate's `applies_to`
@@ -819,7 +954,7 @@ function providers_from_document(
             out[key] = DeclaredProvider(
                 key, b.local_name, inner, table, spec.name,
                 sel, push_down, extent_mp,
-                spec.unit_conversion
+                spec.unit_conversion, time_varying, time_dim, rps
             )
         end
     end

@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
+use earthsci_ast::AxisSel;
 use earthsci_ast::esio_provider::{DocumentProviderOptions, providers_from_document_with};
 use earthsci_ast::provider::CadenceProvider;
 use serde_json::{Value, json};
@@ -19,7 +20,7 @@ fn write_month(path: &Path, values: [f32; 2]) {
     fn name(out: &mut Vec<u8>, s: &str) {
         out.extend((s.len() as u32).to_be_bytes());
         out.extend(s.as_bytes());
-        while out.len() % 4 != 0 {
+        while !out.len().is_multiple_of(4) {
             out.push(0);
         }
     }
@@ -145,12 +146,11 @@ fn an_unbound_sector_is_refused() {
 #[test]
 fn the_two_record_bracket_is_the_consumers_choice() {
     let dir = tempfile::tempdir().unwrap();
-    let mut provs = providers_from_document_with(
-        &doc(dir.path()),
-        &dir.path().join("cache"),
-        &options(Some(2)),
-    )
-    .unwrap();
+    let mut d = doc(dir.path());
+    d["models"]["Emis"]["variables"]["nox"]["update"]["from"]["records_per_sample"] = json!(2);
+    // A run-time entry equal to the document's value is accepted.
+    let mut provs =
+        providers_from_document_with(&d, &dir.path().join("cache"), &options(Some(2))).unwrap();
     let (_, p) = &mut provs[0];
     // 2016-02-15: [Feb, Mar] along the record axis, first
     assert_eq!(values(p, 1455494400.0), vec![40.0, 42.0, 60.0, 62.0]);
@@ -245,10 +245,44 @@ fn the_sources_records_per_sample_is_the_default() {
 }
 
 #[test]
-fn the_run_time_option_overrides_the_document() {
+fn the_run_time_option_may_not_contradict_the_document() {
+    let dir = tempfile::tempdir().unwrap();
+    for (key, n) in [("Emis.pair", 1), ("Emis.single", 2), ("Emis.inherited", 2)] {
+        let mut opts = options(None);
+        opts.records_per_sample.insert(key.to_string(), n);
+        let e = providers_from_document_with(
+            &two_record_doc(dir.path(), None),
+            &dir.path().join("cache"),
+            &opts,
+        )
+        .err()
+        .expect("a contradicting entry is refused")
+        .to_string();
+        assert!(e.contains(key), "{e}");
+        assert!(e.contains("update.from.records_per_sample"), "{e}");
+    }
+    // An entry outside 1 and 2 is refused as a value.
+    let mut opts = options(None);
+    opts.records_per_sample.insert("Emis.pair".to_string(), 3);
+    let e = providers_from_document_with(
+        &two_record_doc(dir.path(), None),
+        &dir.path().join("cache"),
+        &opts,
+    )
+    .err()
+    .expect("3 is refused")
+    .to_string();
+    assert!(e.contains("Emis.pair") && e.contains("got 3"), "{e}");
+}
+
+#[test]
+fn a_run_time_entry_equal_to_the_document_is_accepted() {
     let dir = tempfile::tempdir().unwrap();
     let mut opts = options(None);
-    opts.records_per_sample.insert("Emis.pair".to_string(), 1);
+    opts.records_per_sample.insert("Emis.pair".to_string(), 2);
+    opts.records_per_sample.insert("Emis.single".to_string(), 1);
+    opts.records_per_sample
+        .insert("Emis.inherited".to_string(), 1);
     let mut provs = providers_from_document_with(
         &two_record_doc(dir.path(), None),
         &dir.path().join("cache"),
@@ -256,5 +290,143 @@ fn the_run_time_option_overrides_the_document() {
     )
     .unwrap();
     let i = by_key(&provs, "Emis.pair");
-    assert_eq!(field(&mut provs[i].1, 1455494400.0).0, vec![20.0, 21.0]);
+    assert_eq!(
+        field(&mut provs[i].1, FEB15),
+        (vec![20.0, 21.0, 30.0, 31.0], vec![2, 2])
+    );
+}
+
+const FEB15: f64 = 1455494400.0;
+
+/// The error `providers_from_document_with` gives for `d`.
+fn refusal(d: &Value, dir: &Path) -> String {
+    providers_from_document_with(d, &dir.join("cache"), &options(None))
+        .err()
+        .expect("refused")
+        .to_string()
+}
+
+#[test]
+fn an_integral_float_is_accepted() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = two_record_doc(dir.path(), None);
+    d["models"]["Emis"]["variables"]["pair"]["update"]["from"]["records_per_sample"] = json!(2.0);
+    let mut provs =
+        providers_from_document_with(&d, &dir.path().join("cache"), &options(None)).unwrap();
+    let i = by_key(&provs, "Emis.pair");
+    assert_eq!(
+        field(&mut provs[i].1, FEB15),
+        (vec![20.0, 21.0, 30.0, 31.0], vec![2, 2])
+    );
+}
+
+#[test]
+fn a_value_other_than_one_or_two_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    // 4294967298 is 2 once truncated to 32 bits.
+    for bad in [
+        json!(1.5),
+        json!("2"),
+        json!(true),
+        json!(-1),
+        json!(3),
+        json!(4294967298u64),
+    ] {
+        let mut d = two_record_doc(dir.path(), None);
+        d["models"]["Emis"]["variables"]["pair"]["update"]["from"]["records_per_sample"] =
+            bad.clone();
+        let e = refusal(&d, dir.path());
+        assert!(
+            e.contains("Emis.pair") && e.contains("update.from") && e.contains(&bad.to_string()),
+            "{bad}: {e}"
+        );
+    }
+    // The source's value is held to the same rule, for the parameter that
+    // inherits it.
+    let mut d = two_record_doc(dir.path(), None);
+    d["data_sources"]["NEI"]["temporal"]["records_per_sample"] = json!("2");
+    let e = refusal(&d, dir.path());
+    assert!(
+        e.contains("data_sources.NEI.temporal") && e.contains("\"2\""),
+        "{e}"
+    );
+}
+
+#[test]
+fn two_records_from_a_record_table_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = two_record_doc(dir.path(), None);
+    d["data_sources"]["NEI"]["record_filter"] = json!({"require_finite": ["NOX"]});
+    let e = refusal(&d, dir.path());
+    assert!(e.contains("Emis.pair") && e.contains("'NEI'"), "{e}");
+}
+
+#[test]
+fn two_records_from_a_source_without_a_temporal_start_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = two_record_doc(dir.path(), None);
+    d["data_sources"]["NEI"]["temporal"]
+        .as_object_mut()
+        .unwrap()
+        .remove("start");
+    let e = refusal(&d, dir.path());
+    assert!(e.contains("Emis.pair") && e.contains("'NEI'"), "{e}");
+
+    // Validation reports the same document as records_per_sample_invalid.
+    d["metadata"] = json!({"name": "startless"});
+    d["models"]["Emis"]["equations"] = json!([]);
+    let file = earthsci_ast::load_string(&d.to_string()).unwrap();
+    let found: Vec<String> = earthsci_ast::validate(&file)
+        .structural_errors
+        .iter()
+        .filter(|e| e.code.to_string() == "records_per_sample_invalid")
+        .map(|e| e.path.clone())
+        .collect();
+    assert_eq!(
+        found,
+        vec!["/models/Emis/variables/pair/update".to_string()]
+    );
+}
+
+#[test]
+fn a_declared_select_on_a_time_varying_source_skips_the_record_axis() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = two_record_doc(dir.path(), None);
+    for key in ["pair", "single"] {
+        d["models"]["Emis"]["variables"][key]["update"]["from"]["select"] =
+            json!({"axes": [{"fixed": 1}]});
+    }
+    let mut provs =
+        providers_from_document_with(&d, &dir.path().join("cache"), &options(None)).unwrap();
+    // Row 1 of February's record and of March's, record axis first.
+    let i = by_key(&provs, "Emis.pair");
+    assert_eq!(field(&mut provs[i].1, FEB15), (vec![21.0, 31.0], vec![2]));
+    // Row 1 of February's record alone.
+    let i = by_key(&provs, "Emis.single");
+    assert_eq!(field(&mut provs[i].1, FEB15), (vec![21.0], vec![]));
+}
+
+#[test]
+fn a_selection_at_t_reads_the_records_of_t() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut provs = providers_from_document_with(
+        &two_record_doc(dir.path(), None),
+        &dir.path().join("cache"),
+        &options(None),
+    )
+    .unwrap();
+    let i = by_key(&provs, "Emis.pair");
+    let a = provs[i]
+        .1
+        .sample_with_selection_at(FEB15, &[AxisSel::All, AxisSel::Indices(vec![1])])
+        .unwrap();
+    // February's and March's row 1; every selected axis is kept.
+    assert_eq!(a.shape(), &[2, 1]);
+    assert_eq!(a.iter().copied().collect::<Vec<_>>(), vec![21.0, 31.0]);
+    let i = by_key(&provs, "Emis.single");
+    let a = provs[i]
+        .1
+        .sample_with_selection_at(FEB15, &[AxisSel::Indices(vec![1])])
+        .unwrap();
+    assert_eq!(a.iter().copied().collect::<Vec<_>>(), vec![21.0]);
 }

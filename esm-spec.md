@@ -4066,7 +4066,8 @@ parameter's `/update` pointer, when:
 1. a rule whose `kind` is not `data` carries `from.records_per_sample` (only a
    `data` rule names a source to read records from);
 2. a parameter's effective value is `2` and its source declares no `temporal`
-   block (a source without one has a single record and no successor, so there
+   block, or a `temporal` block with no `start` (a source without a temporal
+   start is time-invariant: it has a single record and no successor, so there
    is no pair to deliver);
 3. a parameter's effective value is `2` and its **record shape** is empty, or
    its first entry names an index set that does not have exactly two members:
@@ -4410,7 +4411,11 @@ binding (overriding it).
 
 The selection is over the axis the source **delivers**, so it follows
 `record_filter`: `range 0..200` on a filtered table is the first 200 *surviving*
-records. Whether a binding pushes the selection down to the reader (fetching only
+records. On a time-varying source (a `temporal` block with a `start`) the
+entries cover the file variable's native dimensions other than its time
+dimension, in native order; with an effective `records_per_sample` of `2`
+(§8.5.1) the leading record axis the parameter receives is not selected.
+Whether a binding pushes the selection down to the reader (fetching only
 what it keeps) or applies it after the read is an optimization — the two **MUST**
 agree exactly.
 

@@ -96,7 +96,8 @@ class ErrorCode(Enum):
     # way a document can name one -- and it MUST resolve.
     DATA_SOURCE_UNDEFINED = "data_source_undefined"
     # esm-spec §8.5.1: `from.records_per_sample` on a non-`data` rule, or an
-    # effective 2 on a static source or without a first dimension of two members.
+    # effective 2 on a time-invariant source (no temporal start) or without a
+    # first dimension of two members.
     RECORDS_PER_SAMPLE_INVALID = "records_per_sample_invalid"
     # A declared `system_kind` that contradicts the §6.3.1 derivation. The field
     # is optional and the derivation authoritative, so disagreement is always an

@@ -565,7 +565,8 @@ function declaredShape(esmFile: EsmFile, scoped: string): string[] | undefined {
 /**
  * `records_per_sample_invalid` (esm-spec §8.5.1): `from.records_per_sample` on
  * a rule that is not `data`; or an EFFECTIVE value of 2 on a parameter whose
- * source declares no `temporal` block, or whose record shape's first dimension
+ * source declares no `temporal` block or a `temporal` with no `start` (a
+ * time-invariant source), or whose record shape's first dimension
  * is not an index set of exactly two members. The record shape is the declared
  * `shape`, or, for a parameter declaring an empty one that a `param_to_var`
  * `variable_map` entry maps onto another parameter, that target's declared
@@ -575,7 +576,7 @@ export function validateRecordsPerSample(esmFile: EsmFile): StructuralError[] {
   const errors: StructuralError[] = []
   const sources = (esmFile.data_sources ?? {}) as Record<
     string,
-    { temporal?: { records_per_sample?: number } }
+    { temporal?: { start?: string; records_per_sample?: number } }
   >
   const p2vTarget = new Map<string, string>()
   for (const entry of (esmFile.coupling ?? []) as Array<Record<string, unknown>>) {
@@ -609,11 +610,11 @@ export function validateRecordsPerSample(esmFile: EsmFile): StructuralError[] {
     const source = sources[sourceName]
     if (source === undefined) continue // data_source_undefined reports it
     if (effectiveRecordsPerSample(binding, source) !== 2) continue
-    if (source.temporal === undefined) {
+    if (!source.temporal?.start) {
       errors.push({
         path,
         code: ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
-        message: `Parameter '${variableName}' asks for two records per sample from data source '${sourceName}', which declares no temporal block and so has no successor record`,
+        message: `Parameter '${variableName}' asks for two records per sample from data source '${sourceName}', which is time-invariant (it declares no temporal start) and so has no successor record`,
         details: { variable: variableName, source: sourceName },
       })
       continue

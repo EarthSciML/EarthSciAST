@@ -126,11 +126,38 @@ struct ColumnSpec {
 /// a string field is a hard error rather than a silent drop, because a loader
 /// wired to feed a model variable from a text column is a modelling mistake that
 /// should surface at the boundary, not as an absent forcing later.
+///
+/// `record_dim` is the time dimension of a two-record (`records_per_sample: 2`)
+/// sample: esm-spec §8.5.1 stacks the two records along the parameter's FIRST
+/// dimension, while the reader keeps the time dimension where the file has
+/// it, so it is moved to axis 0 here, before any declared select or gathered
+/// selection addresses the axes.
 fn to_ess_field(
     name: &str,
     f: EsioField,
     coords: &HashMap<String, earthsciio::format::Coord>,
+    record_dim: Option<&str>,
 ) -> Result<NativeField, ProviderError> {
+    let record_pos = match record_dim {
+        None => None,
+        Some(td) => {
+            let pos = f.dims.iter().position(|d| d == td).ok_or_else(|| {
+                err(format!(
+                    "loader variable '{name}': two records per sample are taken along its \
+                     time dimension '{td}', but the delivered field has dims {:?}",
+                    f.dims
+                ))
+            })?;
+            if f.shape.get(pos) != Some(&2) {
+                return Err(err(format!(
+                    "loader variable '{name}': two records per sample should give length 2 \
+                     along '{td}', but the delivered field has shape {:?} over dims {:?}",
+                    f.shape, f.dims
+                )));
+            }
+            Some(pos)
+        }
+    };
     // Takes the field by value so an already-f64 slab MOVES into the model
     // array — a gated SR slab is ~0.6 GB, and a clone here doubles the
     // transient footprint of every fetch.
@@ -153,11 +180,22 @@ fn to_ess_field(
             f.shape,
         ))
     })?;
+    let (array, dims) = match record_pos {
+        Some(pos) if pos > 0 => {
+            let mut order: Vec<usize> = (0..array.ndim()).collect();
+            order.remove(pos);
+            order.insert(0, pos);
+            let dims: Vec<String> = order.iter().map(|&i| f.dims[i].clone()).collect();
+            let moved = array.permuted_axes(IxDyn(&order));
+            (moved.as_standard_layout().into_owned(), dims)
+        }
+        _ => (array, f.dims),
+    };
 
     // Carry only the coordinate axes this field actually spans, in dims order, so
     // an in-model regrid coupling sees the axes it indexes and nothing else.
     let mut out_coords: IndexMap<String, Vec<f64>> = IndexMap::new();
-    for dim in &f.dims {
+    for dim in &dims {
         let Some(coord) = coords.get(dim) else {
             continue;
         };
@@ -579,10 +617,17 @@ impl EsioProviderBuilder {
     ///
     /// Where it is applied is an optimization, not a semantic: `build` pushes
     /// it down to the reader when the reader can fetch pre-sliced AND no rows
-    /// are filtered first, and otherwise applies it engine-side after decode.
-    /// Both produce the same array. The selection is defined over the axis the
-    /// loader DELIVERS, so for a record-table loader it follows the record
-    /// filter — `[0:200]` means the first 200 surviving records, never the
+    /// are filtered first AND the loader is time-invariant, and otherwise
+    /// applies it engine-side after decode. Both produce the same array.
+    ///
+    /// On a TIME-VARYING loader (one with a `temporal` cadence) the entries
+    /// cover the delivered field's axes other than the time dimension (esm-spec
+    /// §8.9.2), while a reader select is positional over every file dimension,
+    /// time included; so it is never pushed there. With two records per sample
+    /// an `"all"` entry is prepended for the leading record axis.
+    ///
+    /// The selection is defined over the axis the loader DELIVERS, so for a
+    /// record-table loader it follows the record filter — `[0:200]` means the first 200 surviving records, never the
     /// first 200 raw rows of which some are dropped.
     ///
     /// A `gated_by` axis (esm-spec §8.9.2) is the one exception, and it is NOT
@@ -621,6 +666,13 @@ impl EsioProviderBuilder {
     /// fails here rather than mid-solve.
     pub fn build(self) -> Result<EsioProvider, ProviderError> {
         let table = self.table;
+        let time_varying = self.loader.temporal.is_some();
+        let record_dim = self
+            .loader
+            .temporal
+            .as_ref()
+            .filter(|t| t.records_per_sample == Some(2))
+            .map(|t| t.time_dim.clone());
         let inner = Provider::new(self.loader, self.cache, self.window)
             .map_err(|e| err(format!("EarthSciIO provider construction failed: {e}")))?;
         // A declared select goes to the reader when it can fetch pre-sliced,
@@ -633,8 +685,11 @@ impl EsioProviderBuilder {
         // value-invention has derived the members.
         let (select, applied) = match self.declared {
             None => (self.select, SelectApplication::None),
-            Some(axes) => {
-                let pushable = if inner.supports_selection() && table.is_none() {
+            Some(mut axes) => {
+                if record_dim.is_some() {
+                    axes.insert(0, GateAxis::All);
+                }
+                let pushable = if inner.supports_selection() && table.is_none() && !time_varying {
                     ReaderAxis::from_declared(&axes)
                 } else {
                     None
@@ -663,6 +718,8 @@ impl EsioProviderBuilder {
             table,
             extent_mp: self.extent_mp,
             unit_conversion: self.unit_conversion,
+            time_varying,
+            record_dim,
         })
     }
 }
@@ -680,6 +737,11 @@ pub struct EsioProvider {
     extent_mp: Option<String>,
     /// The variable's declared `unit_conversion` (esm-spec §8.5), if any.
     unit_conversion: Option<UnitConversion>,
+    /// The loader has a `temporal` cadence (each sample is one time's records).
+    time_varying: bool,
+    /// The time dimension a two-record (`records_per_sample: 2`) sample is
+    /// stacked along, moved to axis 0 on delivery; `None` for one record.
+    record_dim: Option<String>,
 }
 
 impl EsioProvider {
@@ -698,13 +760,16 @@ impl EsioProvider {
         }
     }
 
-    /// True when the bound reader can honour a pushed-down `select`.
+    /// True when a per-axis selection can be honoured without a whole-field
+    /// sample: pushed to a reader that fetches pre-sliced, or, on a
+    /// time-varying provider, gathered engine-side from the sample at `t`
+    /// (whatever the reader).
     ///
     /// A record-table column never can: its rows are chosen by the loader's
     /// declared filter AFTER the decode, so an index pushed to the reader would
     /// address raw rows rather than the delivered ones.
     pub fn supports_selection(&self) -> bool {
-        self.table.is_none() && self.inner.supports_selection()
+        self.table.is_none() && (self.time_varying || self.inner.supports_selection())
     }
 
     /// The full native shape of on-disk array `var` without reading any chunk —
@@ -728,7 +793,10 @@ impl EsioProvider {
                 .get(&disk_name)
                 .cloned()
                 .unwrap_or_else(|| disk_name.clone());
-            out.insert(model_name, to_ess_field(&disk_name, f, coords)?);
+            out.insert(
+                model_name,
+                to_ess_field(&disk_name, f, coords, self.record_dim.as_deref())?,
+            );
         }
         Ok(out)
     }
@@ -757,13 +825,17 @@ pub struct DocumentProviderOptions {
     /// The run window (UTC) bounding each time-varying provider.
     pub window: Option<earthsciio::Window>,
     /// Consuming parameter key ⇒ records per sample (1, or 2 for the bracket),
-    /// a run-time override. Without an entry a parameter receives its
-    /// EFFECTIVE value from the document (esm-spec §8.5.1): its own
-    /// `update.from.records_per_sample`, else the source's
+    /// a run-time restatement of the document's value, never a change to it.
+    /// Each parameter receives its EFFECTIVE value from the document (esm-spec
+    /// §8.5.1): its own `update.from.records_per_sample`, else the source's
     /// `temporal.records_per_sample`, else 1. With 2 the provider returns the
     /// record at or before `t` and the next one, stacked along the first
-    /// dimension. Each consuming parameter has its own provider, so two
-    /// parameters may read one source with different values.
+    /// dimension. An entry for a consuming parameter must equal that value: a
+    /// different one would change the rank of the delivered array away from
+    /// the declared shape validation approved, so it is refused (set
+    /// `update.from.records_per_sample` in the document instead). Each
+    /// consuming parameter has its own provider, so two parameters may read
+    /// one source with different values.
     pub records_per_sample: HashMap<String, u32>,
 }
 
@@ -924,6 +996,18 @@ mod prepare_impl {
             &mut self,
             selection: &[AxisSel],
         ) -> Result<ArrayD<f64>, PrepareError> {
+            if self.time_varying {
+                // The selection addresses the DELIVERED axes (record axis
+                // first for two records), so it is gathered engine-side from
+                // the sample `sample` reads, the window's first record.
+                let fields = self
+                    .inner
+                    .materialize_with_select(self.select.as_ref())
+                    .map_err(|e| perr(format!("EarthSciIO materialize failed: {e}")))?;
+                return self
+                    .gathered(fields, selection)
+                    .map_err(|e| perr(e.to_string()));
+            }
             let sel = to_selection(selection);
             let fields = self
                 .inner
@@ -965,6 +1049,99 @@ mod prepare_impl {
 
         fn extent_metaparameter(&self) -> Option<String> {
             self.extent_mp.clone()
+        }
+    }
+
+    /// Take `selection`'s indices along each axis of `arr`, keeping every axis
+    /// (a one-index axis comes back length 1, as a reader pushdown returns it).
+    fn gather_axes(
+        key: &str,
+        arr: ArrayD<f64>,
+        selection: &[AxisSel],
+    ) -> Result<ArrayD<f64>, ProviderError> {
+        if selection.len() != arr.ndim() {
+            return Err(err(format!(
+                "provider '{key}': the selection has {} axes but the delivered array is rank \
+                 {} ({:?})",
+                selection.len(),
+                arr.ndim(),
+                arr.shape()
+            )));
+        }
+        let mut out = arr;
+        for (i, ax) in selection.iter().enumerate() {
+            let idx: Vec<usize> = match ax {
+                AxisSel::All => continue,
+                AxisSel::Indices(v) => v.clone(),
+                AxisSel::Range { start, stop, step } => {
+                    (*start..*stop).step_by((*step).max(1)).collect()
+                }
+            };
+            let dim = out.shape()[i];
+            if let Some(&bad) = idx.iter().find(|&&g| g >= dim) {
+                return Err(err(format!(
+                    "provider '{key}': the selection reaches index {bad} on axis {i}, whose \
+                     delivered length is {dim}"
+                )));
+            }
+            out = out.select(Axis(i), &idx);
+        }
+        Ok(out)
+    }
+
+    impl EsioProvider {
+        /// The sample at `t` (UNIX seconds, the scale of
+        /// [`refresh_times`](CadenceProvider::refresh_times)) with a resolved
+        /// per-axis `selection` over the parameter's DELIVERED axes (for two
+        /// records per sample the first entry addresses the record axis).
+        ///
+        /// A time-varying provider reads the sample at `t` without touching its
+        /// refresh buffer and gathers the selection engine-side, since a reader
+        /// select is positional over the file's dimensions, time included. A
+        /// time-invariant provider has one sample, so `t` is not consulted and
+        /// the selection is pushed to the reader as
+        /// [`PrepareProvider::sample_with_selection`] does.
+        pub fn sample_with_selection_at(
+            &mut self,
+            t: f64,
+            selection: &[AxisSel],
+        ) -> Result<ArrayD<f64>, ProviderError> {
+            if !self.time_varying {
+                return PrepareProvider::sample_with_selection(self, selection)
+                    .map_err(|e| err(e.0));
+            }
+            if self.select.is_some() {
+                return Err(err(
+                    "a provider built with a caller select cannot also take a selection at t",
+                ));
+            }
+            if !t.is_finite() {
+                return Err(err(format!("sample time {t} is not a finite time")));
+            }
+            let at = OffsetDateTime::from_unix_timestamp(t as i64)
+                .map_err(|e| err(format!("sample time {t} is not a valid instant: {e}")))?;
+            let ds = self
+                .inner
+                .sample_at(at)
+                .map_err(|e| err(format!("EarthSciIO sample failed: {e}")))?;
+            self.gathered(ds.variables, selection)
+        }
+
+        /// Convert `fields`, gather `selection` from the one field and apply
+        /// the declared `unit_conversion`. The selection IS the whole
+        /// selection for this fetch, so the declared select is not applied.
+        fn gathered(
+            &self,
+            fields: HashMap<String, EsioField>,
+            selection: &[AxisSel],
+        ) -> Result<ArrayD<f64>, ProviderError> {
+            let mut fields = self.convert(fields)?;
+            for (key, f) in fields.iter_mut() {
+                let arr = std::mem::replace(&mut f.array, ArrayD::zeros(IxDyn(&[0])));
+                f.array = gather_axes(key, arr, selection)?;
+                f.coords.clear();
+            }
+            single_field(self.convert_units(fields)?).map_err(|e| err(e.0))
         }
     }
 
@@ -1114,23 +1291,35 @@ mod prepare_impl {
         )
     }
 
-    /// The EFFECTIVE `records_per_sample` of a raw `data` rule's `from`
-    /// (esm-spec §8.5.1): its own value, else the source's
-    /// `temporal.records_per_sample`, else 1. The raw-JSON mirror of
-    /// `flatten::effective_records_per_sample`.
-    fn raw_effective_records_per_sample(
-        from: &serde_json::Value,
-        source: &serde_json::Value,
-    ) -> u32 {
-        from.get("records_per_sample")
-            .and_then(serde_json::Value::as_u64)
-            .or_else(|| {
-                source
-                    .get("temporal")
-                    .and_then(|t| t.get("records_per_sample"))
-                    .and_then(serde_json::Value::as_u64)
-            })
-            .map_or(1, |n| n as u32)
+    /// A written `records_per_sample` value read for consuming parameter `key`
+    /// from `origin`: absent (or `null`) is `None`; otherwise it must be a JSON
+    /// number whose value is exactly 1 or 2 (`2.0` is 2). Anything else is
+    /// refused, naming the parameter, where the value came from and the value.
+    fn written_records_per_sample(
+        key: &str,
+        origin: &str,
+        value: Option<&serde_json::Value>,
+    ) -> Result<Option<u32>, PrepareError> {
+        let Some(v) = value.filter(|v| !v.is_null()) else {
+            return Ok(None);
+        };
+        match v.as_f64() {
+            Some(1.0) => Ok(Some(1)),
+            Some(2.0) => Ok(Some(2)),
+            _ => Err(perr(format!(
+                "providers_from_document: parameter '{key}': records_per_sample in {origin} \
+                 must be the number 1 or 2, got {v}"
+            ))),
+        }
+    }
+
+    /// Whether esm source `ld` is time-varying: its `temporal` block anchors at
+    /// a non-empty `start`. EarthSciIO reads a source without one as
+    /// time-invariant (EarthSciIO `spec/esm-sources.md` §3).
+    fn is_time_varying(ld: &serde_json::Value) -> bool {
+        ld.get("temporal")
+            .and_then(|t| t.get("start"))
+            .is_some_and(|s| !s.is_null() && s.as_str() != Some(""))
     }
 
     /// [`providers_from_document`] with every run-time option: the custom
@@ -1266,13 +1455,52 @@ mod prepare_impl {
 
             for (spec, b) in columns.iter().zip(consumers) {
                 let key = &b.key;
-                // The parameter's effective value from the document; an entry
-                // in the run-time `records_per_sample` overrides it.
-                let rps = opts
-                    .records_per_sample
-                    .get(key.as_str())
-                    .copied()
-                    .unwrap_or_else(|| raw_effective_records_per_sample(b.from, ld));
+                // The parameter's effective value from the document (esm-spec
+                // §8.5.1).
+                let own = written_records_per_sample(
+                    key,
+                    "update.from",
+                    b.from.get("records_per_sample"),
+                )?;
+                let inherited = written_records_per_sample(
+                    key,
+                    &format!("data_sources.{lname}.temporal"),
+                    ld.get("temporal").and_then(|t| t.get("records_per_sample")),
+                )?;
+                let rps = crate::flatten::records_per_sample_rule(own, inherited);
+                // A run-time entry may restate the value, never change it.
+                if let Some(&n) = opts.records_per_sample.get(key.as_str()) {
+                    if n != 1 && n != 2 {
+                        return Err(perr(format!(
+                            "providers_from_document: parameter '{key}': the run-time \
+                             records_per_sample option must be 1 or 2, got {n}"
+                        )));
+                    }
+                    if n != rps {
+                        return Err(perr(format!(
+                            "providers_from_document: parameter '{key}': the run-time \
+                             records_per_sample option asks for {n}, but the document gives \
+                             {rps}; a different value would change the rank of the delivered \
+                             array away from the declared shape, so set \
+                             update.from.records_per_sample in the document instead"
+                        )));
+                    }
+                }
+                if rps == 2 && !is_time_varying(ld) {
+                    return Err(perr(format!(
+                        "providers_from_document: parameter '{key}' asks for two records per \
+                         sample, but data source '{lname}' declares no temporal start, so it \
+                         is time-invariant and has no successor record"
+                    )));
+                }
+                if rps == 2 && table.is_some() {
+                    return Err(perr(format!(
+                        "providers_from_document: parameter '{key}' asks for two records per \
+                         sample from data source '{lname}', which is read as one filtered or \
+                         coded record table (a record_filter or a codes map); two records per \
+                         sample is not supported on such a source"
+                    )));
+                }
                 let loader = make_loader(vec![spec.file_variable.clone()], Some(rps))?;
                 let mut builder = EsioProvider::builder(loader, cache.clone())
                     .var(spec.file_variable.clone(), key.clone());
