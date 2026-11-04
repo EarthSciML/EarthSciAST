@@ -323,6 +323,31 @@ fn test_unresolved_scoped_reference() {
             "variable 'nonexistent_variable' not provided by 'ModelB'",
         ],
     );
+    // A `data_sources` key is not a coupling endpoint or a scoped-name root
+    // (esm-spec §8), so `Met.K` with `Met` a data source names nothing.
+    assert_fixture_load_rejected(
+        "variable_map_from_data_source",
+        include_str!("../../../tests/invalid/variable_map_from_data_source.esm"),
+        &["coupling[0]/from", "undefined system 'Met'"],
+    );
+    // …and the validator recovers the pinned `(code, path)` record from it.
+    let result = validate_text(
+        include_str!("../../../tests/invalid/variable_map_from_data_source.esm"),
+        None,
+    );
+    assert!(!result.is_valid);
+    assert!(
+        result.structural_errors.iter().any(|e| {
+            matches!(e.code, StructuralErrorCode::UnresolvedScopedRef)
+                && e.path == "/coupling/0/from"
+        }),
+        "variable_map_from_data_source: expected unresolved_scoped_ref at /coupling/0/from, got {:?}",
+        result
+            .structural_errors
+            .iter()
+            .map(|e| (e.code.to_string(), e.path.clone()))
+            .collect::<Vec<_>>()
+    );
 }
 
 /// A coupling-library file's coupling edges name ROLES, not systems (esm-spec

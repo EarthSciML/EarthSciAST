@@ -501,7 +501,8 @@ fn flatten_matches_the_shared_corpus() {
 /// nonterminating-rewrite fixture is rejected at LOAD (esm-spec §9.6.3), which
 /// is the corpus's own stated reason for recording it, and never reaches step 4.
 /// Where the two taxonomies share a name the variant is pinned too: a
-/// `ConflictingDerivativeError` refusal must be `FlattenError::ConflictingDerivative`.
+/// `ConflictingDerivativeError` refusal must be `FlattenError::ConflictingDerivative`,
+/// and a `VariableMapShapeConflictError` one `FlattenError::VariableMapShapeConflict`.
 #[test]
 fn corpus_refusals_are_refused() {
     let corpus = corpus();
@@ -517,12 +518,19 @@ fn corpus_refusals_are_refused() {
                     entry["error"]
                 )),
                 Err(e) => {
-                    if entry["error"] == "ConflictingDerivativeError"
-                        && !matches!(e, FlattenError::ConflictingDerivative { .. })
-                    {
+                    let same_class = match entry["error"].as_str() {
+                        Some("ConflictingDerivativeError") => {
+                            matches!(e, FlattenError::ConflictingDerivative { .. })
+                        }
+                        Some("VariableMapShapeConflictError") => {
+                            matches!(e, FlattenError::VariableMapShapeConflict { .. })
+                        }
+                        _ => true,
+                    };
+                    if !same_class {
                         failures.push(format!(
-                            "{rel}: the oracle refuses it with ConflictingDerivativeError, \
-                             Rust with {e:?}"
+                            "{rel}: the oracle refuses it with {}, Rust with {e:?}",
+                            entry["error"]
                         ));
                     }
                 }

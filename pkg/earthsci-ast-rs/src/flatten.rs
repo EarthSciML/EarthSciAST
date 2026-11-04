@@ -213,9 +213,9 @@ pub enum FlattenError {
     /// coupling mis-specification must not have the one outcome that looks
     /// like success.
     ///
-    /// A `from` whose owning system is a top-level `data_sources` key is
-    /// exempt — such a producer is served through the forcing seam rather than
-    /// as a declared variable (see [`apply_variable_map_removals`]).
+    /// A `from` whose owner is a `data_sources` key is NOT exempt: a data
+    /// source is not a coupling endpoint (esm-spec §8), so a field it serves is
+    /// reached through the data-fed parameter that names it in `update.from`.
     #[error(
         "variable_map({from} -> {to}): the '{side}' endpoint '{endpoint}' resolves to no variable, \
          parameter or observed in the flattened system (esm-spec §4.6, §10.4). A scoped reference \
@@ -227,6 +227,31 @@ pub enum FlattenError {
         to: String,
         side: String,
         endpoint: String,
+    },
+
+    /// A data-fed `variable_map` source's declared shape differs from the
+    /// shaped target it replaces (esm-libraries-spec §4.7.3). Python's
+    /// `VariableMapShapeConflictError`.
+    ///
+    /// The parameter that survives a `param_to_var` / `conversion_factor` edge
+    /// is the SOURCE's own declaration, `shape` included, and the rewritten
+    /// equations index it the way the target was declared. Taking either shape
+    /// silently would leave equations indexing a parameter of the wrong rank,
+    /// or — with one source feeding two targets — make the result depend on
+    /// coupling order, so the two must be equal. Absent and `[]` both declare
+    /// a scalar.
+    #[error(
+        "variable_map({from} -> {to}): the data-fed source '{from}' declares shape \
+         {source_shape:?}, but the target it replaces declares {target_shape:?}. The source \
+         survives with its own declaration, and the rewritten equations index it the way the \
+         target was declared, so the two shapes must be equal (esm-libraries-spec §4.7.3). \
+         Declare '{from}' with shape {target_shape:?}."
+    )]
+    VariableMapShapeConflict {
+        from: String,
+        to: String,
+        source_shape: Vec<String>,
+        target_shape: Vec<String>,
     },
 
     /// Wrapped reaction-lowering failure.
@@ -970,9 +995,8 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
 
     // Phase 5a: post-collection variable_map parameter removals, plus the
     // source-fed array parameters that replace them from esm 1.0.0.
-    let mut loaded_producers =
-        apply_variable_map_removals(file, &mut parts, &merged_variable_renames);
-    loaded_producers.extend(source_fed_producers(&parts));
+    apply_variable_map_removals(file, &mut parts, &merged_variable_renames)?;
+    let loaded_producers = source_fed_producers(&parts);
 
     // The document-scoped index-set registry, which the pointwise lift extends
     // with any `_liftdim<d>_<extent>` set it has to name.
@@ -2094,22 +2118,12 @@ fn extract_field_ics(parts: &mut AssembledParts) -> Result<(), FlattenError> {
     Ok(())
 }
 
-/// Phase 5a of [`flatten`]: apply post-collection `variable_map` parameter
-/// removals. A `param_to_var` that binds a LOADED field (its producer's
-/// owning system is a top-level `data_sources` entry) onto a grid-shaped
-/// consumer parameter records the producer name + rank so the pointwise lift
-/// indexes the loaded field per grid cell (esm-spec §11.5 "BCs from data").
-/// The loaded producer is NOT added to `parameters`: it is served at runtime
-/// through the data-Provider forcing seam, not as a scalar parameter (which
-/// the array evaluator would otherwise resolve ahead of the forcing buffer).
-/// Returns the loaded-producer name → rank map consumed by
-/// [`maybe_apply_pointwise_lift`].
 /// The grid-shaped fields fed from OUTSIDE the model — every discrete
 /// parameter with a non-empty declared `shape`, keyed by its flattened name and
 /// mapped to its rank.
 ///
-/// This is the esm 1.0.0 successor of [`apply_variable_map_removals`]'s
-/// `param_to_var` result. Before 1.0.0 a loaded field arrived as a coupling
+/// This is the esm 1.0.0 successor of the pre-1.0 "loaded producer" rule in
+/// [`apply_variable_map_removals`], now retired. Before 1.0.0 a loaded field arrived as a coupling
 /// edge from a loader component to a model parameter, and that EDGE is what
 /// told the pointwise lift which operands were grid-shaped external fields.
 /// The edge is gone: the loaded field IS a parameter carrying an `update` that
@@ -2181,17 +2195,17 @@ fn in_document_order(
     out
 }
 
+/// Phase 5a of [`flatten`]: apply post-collection `variable_map` parameter
+/// removals. A promoting transform (`param_to_var`, `conversion_factor`)
+/// removes the target parameter; the source survives exactly as declared
+/// (esm-libraries-spec §4.7.3), and a data-fed source whose shape differs from
+/// a shaped target's is refused ([`FlattenError::VariableMapShapeConflict`]).
+/// An expression transform replaces the target with an observed.
 fn apply_variable_map_removals(
     file: &EsmFile,
     parts: &mut AssembledParts,
     merged_renames: &IndexMap<String, String>,
-) -> HashMap<String, usize> {
-    let loader_names: HashSet<String> = file
-        .data_sources
-        .as_ref()
-        .map(|dl| dl.keys().cloned().collect())
-        .unwrap_or_default();
-    let mut loaded_producers: HashMap<String, usize> = HashMap::new();
+) -> Result<(), FlattenError> {
     if let Some(entries) = &file.coupling {
         for (index, entry) in entries.iter().enumerate() {
             let CouplingEntry::VariableMap {
@@ -2207,34 +2221,13 @@ fn apply_variable_map_removals(
                 VariableMapTransform::Named(name)
                     if matches!(name.as_str(), "param_to_var" | "conversion_factor") =>
                 {
-                    let consumer_shape = parts
-                        .parameters
-                        .get(to)
-                        .and_then(|v| v.shape.clone())
-                        .filter(|s| !s.is_empty());
-                    let consumer_shape_rank = consumer_shape.as_ref().map(Vec::len);
-                    parts.parameters.shift_remove(to);
-                    // A DECLARED data-fed source parameter survives as itself —
-                    // its own units, default and `update` — and, when it
-                    // declares no shape, takes the removed target's
-                    // (esm-libraries-spec §4.7.3). `source_fed_producers` then
-                    // reads it as a grid-shaped external field for the lift.
-                    if let (Some(shape), Some(source)) =
-                        (consumer_shape, parts.parameters.get_mut(from))
-                        && source.shape.as_ref().is_none_or(Vec::is_empty)
-                        && source
-                            .update
-                            .as_ref()
-                            .is_some_and(crate::data_fed::is_data_fed)
-                    {
-                        source.shape = Some(shape);
-                    }
-                    let from_owner = from.split('.').next().unwrap_or("");
-                    if let Some(rank) = consumer_shape_rank
-                        && loader_names.contains(from_owner)
-                        && !parts.parameters.contains_key(from)
-                    {
-                        loaded_producers.insert(from.clone(), rank);
+                    // The source survives exactly as declared — units, default,
+                    // `update`, `shape` (esm-libraries-spec §4.7.3) — and no
+                    // parameter is ever built for a `from`: a data source is not
+                    // a coupling endpoint (esm-spec §8). `source_fed_producers`
+                    // reads a shaped data-fed source as a grid field for the lift.
+                    if let Some(target) = parts.parameters.shift_remove(to) {
+                        check_data_fed_source_shape(parts, from, to, &target)?;
                     }
                 }
                 // Expression transform (esm-spec §10.4): the entry binds the
@@ -2291,7 +2284,45 @@ fn apply_variable_map_removals(
             }
         }
     }
-    loaded_producers
+    Ok(())
+}
+
+/// Refuse a data-fed `variable_map` source whose declared shape is not the
+/// shape of the shaped `target` it replaces
+/// ([`FlattenError::VariableMapShapeConflict`]).
+///
+/// Nothing is changed here: the source survives the edge as declared
+/// (esm-libraries-spec §4.7.3). Because no edge ever modifies the source,
+/// checking each edge against the source's DECLARATION keeps the verdict
+/// independent of coupling order — one source feeding two targets of different
+/// shapes is refused whichever edge comes first. "Data-fed" is
+/// [`crate::data_fed::is_data_fed`], the rule the loader-field lowering uses.
+fn check_data_fed_source_shape(
+    parts: &AssembledParts,
+    from: &str,
+    to: &str,
+    target: &ModelVariable,
+) -> Result<(), FlattenError> {
+    let Some(target_shape) = target.shape.as_ref().filter(|s| !s.is_empty()) else {
+        return Ok(());
+    };
+    let Some(source) = parts.parameters.get(from) else {
+        return Ok(());
+    };
+    let source_shape = source.shape.clone().unwrap_or_default();
+    let data_fed = source
+        .update
+        .as_ref()
+        .is_some_and(crate::data_fed::is_data_fed);
+    if data_fed && source_shape != *target_shape {
+        return Err(FlattenError::VariableMapShapeConflict {
+            from: from.to_string(),
+            to: to.to_string(),
+            source_shape,
+            target_shape: target_shape.clone(),
+        });
+    }
+    Ok(())
 }
 
 /// Phase 5b of [`flatten`]: pointwise spatial lift trigger (esm-spec §10.5).
@@ -4797,11 +4828,9 @@ fn rename_join_names_in(expr: &Expr, renames: &IndexMap<String, String>) -> Expr
 /// declared default, and a source that leaves every rewritten consumer reading
 /// a name no table binds (NaN at run time, not a diagnostic).
 ///
-/// EXEMPTION: a `from` whose owning system is a top-level `data_sources` key.
-/// Such a producer is served through the runtime forcing seam rather than as a
-/// declared variable, so it is legitimately absent from the collected tables
-/// (see [`apply_variable_map_removals`], which records it as a loaded
-/// producer).
+/// No exemption for a `from` whose owner is a `data_sources` key: a data source
+/// is not a coupling endpoint (esm-spec §8), so a field it serves is reached
+/// through the data-fed parameter that names it in `update.from`.
 ///
 /// Deliberately NOT checked: whether a promoting transform's `to` is a
 /// PARAMETER rather than an unknown. `tests/valid/scoped_refs_coupling.esm`
@@ -4820,28 +4849,12 @@ fn check_variable_map_endpoints(
         known.extend(block.parameters.keys().map(String::as_str));
         known.extend(block.observed_vars.keys().map(String::as_str));
     }
-    let loader_names: HashSet<&str> = file
-        .data_sources
-        .as_ref()
-        .map(|ds| ds.keys().map(String::as_str).collect())
-        .unwrap_or_default();
     for entry in entries {
         let CouplingEntry::VariableMap { from, to, .. } = entry else {
             continue;
         };
-        // A `from` served by a data source never lands in the collected tables.
-        // The owner is the segment BEFORE the first dot, and a dotless `from`
-        // is its own owner — matching the other four bindings, which all take
-        // the whole string when there is no dot.
-        let from_owner = from
-            .split_once('.')
-            .map_or(from.as_str(), |(owner, _)| owner);
-        let from_is_loaded = loader_names.contains(from_owner);
         for (side, endpoint) in [("from", from), ("to", to)] {
-            if endpoint.is_empty()
-                || known.contains(endpoint.as_str())
-                || (side == "from" && from_is_loaded)
-            {
+            if endpoint.is_empty() || known.contains(endpoint.as_str()) {
                 continue;
             }
             return Err(FlattenError::VariableMapUnresolvedEndpoint {
