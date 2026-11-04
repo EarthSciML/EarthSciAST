@@ -112,13 +112,6 @@ SHA = "0.7, 1"
 SnoopCompileCore = "3"
 ZipFile = "0.10"
 
-# Track EarthSciIO (unregistered) from GitHub for the extension tests WITHOUT
-# adding it to the package's own [deps] (it stays a weakdep). `[sources]` is
-# honoured only when this Project is the active/develop env (i.e. under
-# `Pkg.test()` / the test target), so a downstream `add EarthSciAST` ignores it.
-[sources]
-EarthSciIO = {url = "https://github.com/EarthSciML/EarthSciIO.git", subdir = "julia"}
-
 [extras]
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 Blosc = "a74b3585-a348-5f62-a45c-50e91977d574"
