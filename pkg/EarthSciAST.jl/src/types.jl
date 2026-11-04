@@ -982,19 +982,38 @@ end
 
 """
     _effective_records_per_sample(binding::DataSourceBinding, source) -> Int
+    _effective_records_per_sample(coerce, from::AbstractDict, source) -> Int
 
 The EFFECTIVE `records_per_sample` of a `data` rule (esm-spec §8.5.1): the
 binding's own `from.records_per_sample`, else the source's
-`temporal.records_per_sample`, else 1. `source` is the `DataSource` the rule
-names, or `nothing`.
+`temporal.records_per_sample`, else 1.
+
+The typed form takes the rule's `DataSourceBinding` and the `DataSource` it
+names (or `nothing`). The raw form takes the rule's `from` object and the
+source's `data_sources` entry (or `nothing`) as parsed JSON, and passes each
+value present through `coerce(value, origin)` before the rule picks one;
+`origin` is `:from` or `:temporal`. `coerce` returns the value as an `Int` or
+throws, so the caller decides how strictly a raw value is read.
 """
 function _effective_records_per_sample(binding::DataSourceBinding, source)::Int
-    binding.records_per_sample === nothing || return binding.records_per_sample
-    source === nothing && return 1
-    t = source.temporal
-    (t === nothing || t.records_per_sample === nothing) && return 1
-    return t.records_per_sample
+    t = source === nothing ? nothing : source.temporal
+    return _records_per_sample_rule(
+        binding.records_per_sample, t === nothing ? nothing : t.records_per_sample
+    )
 end
+
+function _effective_records_per_sample(coerce, from::AbstractDict, source)::Int
+    own = get(from, "records_per_sample", nothing)
+    t = source isa AbstractDict ? get(source, "temporal", nothing) : nothing
+    inherited = t isa AbstractDict ? get(t, "records_per_sample", nothing) : nothing
+    own === nothing || (own = coerce(own, :from)::Int)
+    inherited === nothing || (inherited = coerce(inherited, :temporal)::Int)
+    return _records_per_sample_rule(own, inherited)
+end
+
+# The precedence itself: the parameter's own value, else the source's, else 1.
+_records_per_sample_rule(own, inherited)::Int =
+    own !== nothing ? own : inherited !== nothing ? inherited : 1
 
 """
     PARAMETER_UPDATE_KINDS

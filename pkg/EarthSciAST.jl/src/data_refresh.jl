@@ -218,9 +218,21 @@ Keywords:
     `DateTime` (read as UTC) or a real number of Unix seconds, bounding each
     time-varying provider's `provider_refresh_times`. Anything else is an
     `ArgumentError`.
-  * `records_per_sample` — consuming parameter key ⇒ 1 or 2 (the two-record
-    bracket a model interpolates between); default 1. A record-table source
-    refuses 2.
+  * `records_per_sample` — consuming parameter key ⇒ 1 or 2, a run-time
+    restatement of the document, not an override. A parameter receives its
+    EFFECTIVE `records_per_sample` from the document (esm-spec §8.5.1): its own
+    `update.from.records_per_sample`, else the source's
+    `temporal.records_per_sample`, else 1. An entry equal to that value is
+    accepted; a different one is refused, because it would change the rank of
+    the delivered array away from the declared shape validation approved — set
+    `update.from.records_per_sample` in the document instead. Every value, in
+    the document or here, must be the number 1 or 2 (`2.0` is 2; `1.5`, `"2"`
+    and `true` are refused). With 2 the provider returns the record at or
+    before `t` and the next one, stacked along the first dimension (the
+    two-record bracket a model interpolates between); 2 is refused on a source
+    with no `temporal.start` (it is time-invariant) and on one served as a
+    filtered or coded record table. Each consuming parameter has its own
+    provider, so two parameters may read one source with different values.
 
 Implemented by the EarthSciIO extension — load `EarthSciIO` alongside
 EarthSciAST so the `EarthSciASTEarthSciIOExt` extension defines the method

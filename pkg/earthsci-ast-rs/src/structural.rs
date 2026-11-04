@@ -1121,11 +1121,19 @@ fn record_shape_message(var_name: &str, shape: &[String]) -> String {
     )
 }
 
+/// Is a source with this `temporal` block time-varying: does the block anchor
+/// at a non-empty `start` (esm-spec §8.5.1 rule 2)? Without one the source is
+/// time-invariant and has no successor record.
+fn source_has_temporal_start(temporal: &crate::types::DataSourceTemporal) -> bool {
+    temporal.start.as_deref().is_some_and(|s| !s.is_empty())
+}
+
 /// `records_per_sample_invalid` (esm-spec §8.5.1), at structural validation:
 /// `from.records_per_sample` on a rule that is not `data`; or an EFFECTIVE
-/// value of 2 on a parameter whose source declares no `temporal` block, or
-/// whose record shape's first dimension is not an index set of exactly two
-/// members. The record shape is the declared `shape` whenever one is declared
+/// value of 2 on a parameter whose source is time-invariant (it declares no
+/// `temporal` block, or its `temporal` declares no `start`), or whose record
+/// shape's first dimension is not an index set of exactly two members. The
+/// record shape is the declared `shape` whenever one is declared
 /// (`[]` included); only an absent one takes its `param_to_var` targets'.
 /// Checks every record shape the loaded document shows; an absent shape with
 /// no target is refused only when the parameter has no inline `param_to_var`
@@ -1171,13 +1179,18 @@ pub(crate) fn validate_records_per_sample(esm_file: &EsmFile, errors: &mut Vec<S
             if binding.effective_records_per_sample(Some(source)) != 2 {
                 continue;
             }
-            if source.temporal.is_none() {
+            let why = match &source.temporal {
+                None => Some("declares no temporal block"),
+                Some(t) if !source_has_temporal_start(t) => Some("declares no temporal start"),
+                Some(_) => None,
+            };
+            if let Some(why) = why {
                 errors.push(StructuralError {
                     path: at,
                     code: StructuralErrorCode::RecordsPerSampleInvalid,
                     message: format!(
                         "Parameter '{var_name}' asks for two records per sample from data \
-                         source '{source_name}', which declares no temporal block and so has \
+                         source '{source_name}', which {why}, so it is time-invariant and has \
                          no successor record"
                     ),
                     details: serde_json::json!({"variable": var_name, "source": source_name}),
@@ -1229,7 +1242,12 @@ pub(crate) fn check_records_per_sample_at_flatten(
             else {
                 continue;
             };
-            if source.temporal.is_none() || binding.effective_records_per_sample(Some(source)) != 2
+            // A time-invariant source is rule 2's, reported by validation.
+            if !source
+                .temporal
+                .as_ref()
+                .is_some_and(source_has_temporal_start)
+                || binding.effective_records_per_sample(Some(source)) != 2
             {
                 continue;
             }

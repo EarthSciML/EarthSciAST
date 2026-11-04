@@ -2174,6 +2174,36 @@ def records_per_sample_shape_message(vname: str, shape: Any) -> str:
     )
 
 
+def _records_per_sample_origin(binding: Any, source: Any) -> tuple[Any, str | None]:
+    """Where a data rule's EFFECTIVE ``records_per_sample`` comes from (esm-spec
+    §8.5.1): ``(value, "from")`` for the rule's ``from.records_per_sample``,
+    else ``(value, "temporal")`` for the source's
+    ``temporal.records_per_sample``, else ``(1, None)``. The value is returned
+    as written, unchecked: ``providers_from_document`` checks it strictly, while
+    validation and ``flatten`` read it through
+    :func:`~earthsci_ast.esm_types.effective_records_per_sample`.
+
+    ``binding`` and ``source`` are either raw JSON dicts or the typed
+    :class:`~earthsci_ast.esm_types.DataSourceBinding` /
+    :class:`~earthsci_ast.esm_types.DataSource`; ``source`` may be None.
+    """
+
+    def get(obj: Any, key: str) -> Any:
+        if obj is None:
+            return None
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
+
+    own = get(binding, "records_per_sample")
+    if own is not None:
+        return own, "from"
+    inherited = get(get(source, "temporal"), "records_per_sample")
+    if inherited is not None:
+        return inherited, "temporal"
+    return 1, None
+
+
 def _index_set_has_two_members(index_sets: dict[str, Any], name: Any) -> bool:
     """True iff index set ``name`` is an ``interval`` of size 2 or a
     ``categorical`` of two members (esm-spec §8.5.1 rule 3)."""
@@ -2225,7 +2255,8 @@ def _has_unmounted_refs(data: dict[str, Any]) -> bool:
 def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
     """``records_per_sample_invalid`` (esm-spec §8.5.1): ``from.records_per_sample``
     on a rule that is not ``data``; or an effective value of 2 on a parameter
-    whose source declares no ``temporal`` block, or whose record shape's first
+    whose source declares no ``temporal`` block or a ``temporal`` with no
+    ``start`` (a time-invariant source), or whose record shape's first
     dimension is not an index set of exactly two members.
 
     The record shape is the declared ``shape`` when there is one (``[]``
@@ -2320,13 +2351,14 @@ def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
                     continue  # data_source_undefined reports it
                 if effective_records_per_sample(binding, source) != 2:
                     continue
-                if not isinstance(source.get("temporal"), dict):
+                temporal = source.get("temporal")
+                if not isinstance(temporal, dict) or not temporal.get("start"):
                     errors.append(
                         (
                             at,
                             f"Parameter '{vname}' asks for two records per sample from "
-                            f"data source '{rule.get('source')}', which declares no temporal "
-                            f"block and so has no successor record",
+                            f"data source '{rule.get('source')}', which is time-invariant "
+                            f"(it declares no temporal start) and so has no successor record",
                             {"variable": vname, "source": rule.get("source")},
                         )
                     )

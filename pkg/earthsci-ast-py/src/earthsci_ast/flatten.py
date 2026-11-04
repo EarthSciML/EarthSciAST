@@ -3569,8 +3569,8 @@ def _check_records_per_sample_shapes(esm_file: EsmFile, coupling_entries: list[A
                 if rule.kind != "data" or rule.from_source is None:
                     continue
                 source = sources.get(rule.source)
-                if source is None or source.temporal is None:
-                    continue  # validation reports both
+                if source is None or source.temporal is None or not source.temporal.start:
+                    continue  # validation reports each (a startless temporal is time-invariant)
                 if effective_records_per_sample(rule.from_source, source) != 2:
                     continue
                 if var.shape is not None:

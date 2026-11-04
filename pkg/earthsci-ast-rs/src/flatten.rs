@@ -890,6 +890,17 @@ fn one_record_per_sample() -> u8 {
     1
 }
 
+/// The esm-spec §8.5.1 rule for a parameter's EFFECTIVE `records_per_sample`,
+/// over the two values a document may write: the parameter's own
+/// `update.from.records_per_sample`, else the source's
+/// `temporal.records_per_sample`, else 1. The one statement of the rule; the
+/// typed path (`DataSourceBinding::effective_records_per_sample`) and the
+/// raw-JSON provider path (`esio_provider::providers_from_document_with`,
+/// which first checks each written value) both call it.
+pub(crate) fn records_per_sample_rule<T: From<u8>>(own: Option<T>, source: Option<T>) -> T {
+    own.or(source).unwrap_or_else(|| T::from(1))
+}
+
 // ============================================================================
 // Public entry points
 // ============================================================================

@@ -1005,11 +1005,13 @@ pub struct DataSourceBinding {
 
 impl DataSourceBinding {
     /// The EFFECTIVE `records_per_sample` of this binding (esm-spec §8.5.1):
-    /// its own value, else `source`'s `temporal.records_per_sample`, else 1.
+    /// its own value, else `source`'s `temporal.records_per_sample`, else 1
+    /// ([`crate::flatten::records_per_sample_rule`]).
     pub(crate) fn effective_records_per_sample(&self, source: Option<&DataSource>) -> u8 {
-        self.records_per_sample
-            .or_else(|| source.and_then(|s| s.temporal.as_ref()?.records_per_sample))
-            .unwrap_or(1)
+        crate::flatten::records_per_sample_rule(
+            self.records_per_sample,
+            source.and_then(|s| s.temporal.as_ref()?.records_per_sample),
+        )
     }
 }
 

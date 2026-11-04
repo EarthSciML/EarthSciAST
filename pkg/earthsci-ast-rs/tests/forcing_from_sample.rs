@@ -358,7 +358,7 @@ fn esm_problem_refuses_a_discrete_sample_of_the_wrong_shape() {
     );
     let err = fed_problem(nx, ny, by_key)
         .err()
-        .expect("a transposed discrete sample builds")
+        .unwrap_or_else(|| panic!("a transposed discrete sample builds"))
         .to_string();
     assert!(
         err.contains("\"E\"")

@@ -1770,6 +1770,13 @@ func declaredShapeOf(file *ESMFile, scoped string) (shape []string, found bool) 
 	return v.Dims(), true
 }
 
+// sourceIsTimeVarying reports whether source declares a `temporal` block with
+// a non-empty `start` (esm-spec §8.5.1 rule 2): one without is time-invariant
+// and has no successor record.
+func sourceIsTimeVarying(source *DataSource) bool {
+	return source.Temporal != nil && source.Temporal.Start != nil && *source.Temporal.Start != ""
+}
+
 // isRecordShape reports whether shape can carry two records per sample: its
 // first entry names an index set of exactly two members (esm-spec §8.5.1
 // rule 3). An empty shape cannot.
@@ -1885,9 +1892,10 @@ func pairRecordShapeMessage(varName string, shape []string, target string) strin
 // validateRecordsPerSample reports `records_per_sample_invalid` (esm-spec
 // §8.5.1) for every `update` rule of model and of its inline subsystems at any
 // depth: `from.records_per_sample` on a rule that is not `data`; or an
-// EFFECTIVE value of 2 on a parameter whose source declares no `temporal`
-// block, or whose record shape's first dimension is not an index set of
-// exactly two members.
+// EFFECTIVE value of 2 on a parameter whose source is time-invariant (it
+// declares no `temporal` block, or its `temporal` declares no `start`), or
+// whose record shape's first dimension is not an index set of exactly two
+// members.
 //
 // The record shape is the declared `shape` whenever one is declared, `[]`
 // included. When `shape` is absent it is the declared `shape` of every inline
@@ -1920,12 +1928,12 @@ func (s *structuralScan) validateRecordsPerSample(modelName string, model *Model
 		if effectiveRecordsPerSample(rule.From, &source) != 2 {
 			return
 		}
-		if source.Temporal == nil {
+		if !sourceIsTimeVarying(&source) {
 			s.addErr(StructuralError{
 				Path: site.path,
 				Code: ErrorRecordsPerSampleInvalid,
 				Message: fmt.Sprintf(
-					"Parameter '%s' asks for two records per sample from data source '%s', which declares no temporal block and so has no successor record",
+					"Parameter '%s' asks for two records per sample from data source '%s', which is time-invariant (it declares no temporal start) and so has no successor record",
 					site.varName, rule.Source),
 				Details: map[string]any{"variable": site.varName, "source": rule.Source},
 			})
@@ -1984,7 +1992,7 @@ func checkRecordsPerSampleAfterImports(file *ESMFile, coupling []CouplingEntry) 
 				return
 			}
 			source, ok := file.DataSources[site.rule.Source]
-			if !ok || source.Temporal == nil || effectiveRecordsPerSample(site.rule.From, &source) != 2 {
+			if !ok || !sourceIsTimeVarying(&source) || effectiveRecordsPerSample(site.rule.From, &source) != 2 {
 				return
 			}
 			refuse := func(shape []string, target string) {

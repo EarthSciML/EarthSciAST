@@ -122,6 +122,15 @@
       "cause": "static source"
     },
     {
+      "id": "pair_from_startless_source",
+      "path": "fixtures/pair_from_startless_source.esm",
+      "expect": "invalid",
+      "code": "records_per_sample_invalid",
+      "pointer": "/models/Box/variables/F/update",
+      "variable": "F",
+      "cause": "temporal block without start"
+    },
+    {
       "id": "pair_without_record_axis",
       "path": "fixtures/pair_without_record_axis.esm",
       "expect": "invalid",

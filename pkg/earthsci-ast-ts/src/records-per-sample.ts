@@ -160,8 +160,8 @@ export interface RecordShapeFailure {
 /**
  * Judge one `update` rule's record shape (esm-spec §8.5.1 rule 3). Returns the
  * first failing record shape, or `undefined` when there is none to report: the
- * rule is not a `data` rule with an effective 2 from a source with a `temporal`
- * block (rules 1 and 2 are the validator's), every record shape it can see
+ * rule is not a `data` rule with an effective 2 from a time-varying source (one
+ * whose `temporal` declares a `start`; rules 1 and 2 are the validator's), every record shape it can see
  * passes, or what remains cannot be decided here.
  *
  * A target whose declaration cannot be reached is not decidable and is
@@ -183,10 +183,10 @@ export function recordShapeFailure(
   if (binding === undefined) return undefined
   const sources = (esmFile.data_sources ?? {}) as Record<
     string,
-    { temporal?: { records_per_sample?: number } }
+    { temporal?: { start?: string; records_per_sample?: number } }
   >
   const source = sources[(rule as { source: string }).source]
-  if (source?.temporal === undefined) return undefined
+  if (!source?.temporal?.start) return undefined
   if (effectiveRecordsPerSample(binding, source) !== 2) return undefined
 
   // The declared `shape` is the record shape whenever one is declared, `[]`

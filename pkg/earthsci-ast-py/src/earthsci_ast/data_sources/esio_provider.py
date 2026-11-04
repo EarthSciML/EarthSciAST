@@ -640,15 +640,62 @@ def _neutral_to_native(selection: list[Any]) -> dict[str, Any]:
     }
 
 
-def _single_field(key: str, nds: Any) -> np.ndarray:
-    """The single data variable of a sample (one provider per fed variable)."""
+def _single_native(key: str, nds: Any) -> tuple[str, Any]:
+    """The name and ``NativeField`` of a sample's single data variable (one
+    provider per fed variable)."""
     names = sorted(nds.variables)
     if len(names) != 1:
         raise ValueError(
             f"provider {key!r} expects exactly one field per provider, got {names}; "
             f"construct one provider per variable (providers_from_document does)"
         )
-    return _widen(names[0], nds.variables[names[0]].data)
+    return names[0], nds.variables[names[0]]
+
+
+def _single_field(key: str, nds: Any) -> np.ndarray:
+    """The single data variable of a sample, widened to float64."""
+    name, field = _single_native(key, nds)
+    return _widen(name, field.data)
+
+
+def _gather(key: str, arr: np.ndarray, selection: list[Any]) -> np.ndarray:
+    """Apply the engine's neutral per-axis selection (``"all"`` | 0-based index
+    list) to a delivered array, keeping every axis."""
+    if len(selection) != arr.ndim:
+        raise ValueError(
+            f"provider {key!r}: the selection has {len(selection)} axes but the "
+            f"delivered array is rank {arr.ndim} ({list(arr.shape)})"
+        )
+    out = arr
+    for i, ax in enumerate(selection):
+        if ax == "all":
+            continue
+        idx = [int(g) for g in ax]
+        over = [g for g in idx if g < 0 or g >= out.shape[i]]
+        if over:
+            raise ValueError(
+                f"provider {key!r}: the selection reaches index {over[0]} on axis "
+                f"{i}, whose delivered length is {out.shape[i]}"
+            )
+        out = np.take(out, idx, axis=i)
+    return out
+
+
+def _strict_records_per_sample(key: str, where: str, value: Any) -> int:
+    """A ``records_per_sample`` value read by :func:`providers_from_document`,
+    checked strictly: a JSON number with an integral value of 1 or 2 (so ``2``
+    and ``2.0`` are accepted, ``1.5``, ``3``, ``"2"`` and ``true`` are not)."""
+    ok = (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and float(value) in (1.0, 2.0)
+    )
+    if not ok:
+        raise ValueError(
+            f"providers_from_document: parameter {key!r} has records_per_sample "
+            f"{value!r} from {where}; it must be the number 1 or 2 (esm-spec §8.5.1)"
+        )
+    return int(value)
 
 
 _POSIX_EPOCH = _dt.datetime(1970, 1, 1, tzinfo=_dt.timezone.utc)
@@ -659,23 +706,6 @@ def _as_utc(when: _dt.datetime) -> _dt.datetime:
     if when.tzinfo is None:
         return when.replace(tzinfo=_dt.timezone.utc)
     return when.astimezone(_dt.timezone.utc)
-
-
-def _take_selection(key: str, arr: np.ndarray, selection: list[Any]) -> np.ndarray:
-    """Apply the engine's neutral per-axis selection (``"all"`` | 0-based index
-    list) to a whole array, keeping EVERY axis — the shape a reader-pushed
-    selection returns (a ``fixed`` axis comes back length 1; the caller drops it)."""
-    if len(selection) != arr.ndim:
-        raise ValueError(
-            f"provider {key!r}: the selection has {len(selection)} axes but the "
-            f"array is rank {arr.ndim} ({list(arr.shape)})"
-        )
-    out = arr
-    for i, ax in enumerate(selection):
-        if ax == "all":
-            continue
-        out = np.take(out, [int(j) for j in ax], axis=i)
-    return out
 
 
 class EsioDocumentProvider:
@@ -711,7 +741,8 @@ class EsioDocumentProvider:
         extent_metaparameter: str | None = None,
         unit_conversion: Any = None,
         time_origin: _dt.datetime = _POSIX_EPOCH,
-        records_per_sample: int | None = None,
+        time_dim: str | None = None,
+        records_per_sample: int = 1,
     ) -> None:
         self.key = key
         self._inner = inner
@@ -719,6 +750,12 @@ class EsioDocumentProvider:
         self._column = column
         #: The UTC instant at which model time is 0 (esm-spec §2.2.7).
         self.time_origin = _as_utc(time_origin)
+        #: The source's time dimension when it is time-varying (a ``temporal``
+        #: block with a ``start``); ``None`` for a time-invariant source.
+        self._time_dim = time_dim
+        #: The parameter's effective ``records_per_sample`` (esm-spec §8.5.1).
+        #: With 2 the delivered array's FIRST axis is the record axis.
+        self.records_per_sample = int(records_per_sample)
         #: The variable's declared ``unit_conversion`` (esm-spec §8.5), parsed.
         #: ``None`` for a variable that declares none — in which case delivery
         #: is bit-for-bit what it was before this existed.
@@ -730,7 +767,7 @@ class EsioDocumentProvider:
         self._engine_axes: list[Any] | None = None
         if declared is not None:
             declared = list(declared)
-            if records_per_sample == 2 and not self.is_const:
+            if self.records_per_sample == 2 and not self.is_const:
                 # A declared select names the source's native per-record axes
                 # (esm-spec §8.9.2), never the bracket: the two-record sample
                 # has an extra LEADING record axis, which the select keeps whole.
@@ -802,7 +839,7 @@ class EsioDocumentProvider:
         if self._table is not None:
             return self._table.column(str(self._column), when)
         if not self.is_const:
-            return _single_field(self.key, self._inner.refresh(when))
+            return self._record_axis_first(self._inner.refresh(when))
         return _single_field(self.key, self._inner.materialize(select=self._reader_select))
 
     def _deliver(self, arr: np.ndarray) -> np.ndarray:
@@ -817,15 +854,16 @@ class EsioDocumentProvider:
 
         ``selection`` is the engine's resolved gated selection (pushdown hook 2);
         it IS the whole selection for this fetch, so the declared select is not
-        applied a second time on top of it. It is pushed to the reader only for a
-        const, non-table source; otherwise the record at ``t`` is read whole and
-        sliced here.
+        applied a second time on top of it. It is over the delivered axes, so
+        with two records its first entry addresses the record axis. It is pushed
+        to the reader only for a const, non-table source; otherwise the record at
+        ``t`` is read whole and the selection gathered from it here.
         """
         if selection is not None:
             if self._table is None and self.is_const:
                 nds = self._inner.materialize(select=_neutral_to_native(selection))
                 return self._convert_units(_single_field(self.key, nds))
-            arr = _take_selection(self.key, self._whole(self._instant(t)), selection)
+            arr = _gather(self.key, self._whole(self._instant(t)), list(selection))
             return self._convert_units(arr)
         return self._deliver(self._whole(self._instant(t)))
 
@@ -833,6 +871,24 @@ class EsioDocumentProvider:
         """The DISCRETE cadence entry, under the same declared select; ``when``
         is an absolute datetime (naive is read as UTC)."""
         return self._deliver(self._whole(_as_utc(when)))
+
+    def _record_axis_first(self, nds: Any) -> np.ndarray:
+        """The sample's array with, for two records, the time dimension moved
+        to axis 0: esm-spec §8.5.1 stacks the pair along the parameter's first
+        dimension, while EarthSciIO keeps the time dimension where the file
+        has it. With one record EarthSciIO has already dropped it."""
+        name, field = _single_native(self.key, nds)
+        arr = _widen(name, field.data)
+        if self.records_per_sample != 2:
+            return arr
+        dims = list(field.dims)
+        if self._time_dim not in dims:
+            raise ValueError(
+                f"provider {self.key!r}: two records per sample were read, but the "
+                f"field's dims {dims} hold no time dimension {self._time_dim!r} "
+                f"(the source's temporal.time_variable)"
+            )
+        return np.moveaxis(arr, dims.index(self._time_dim), 0)
 
     def _convert_units(self, arr: np.ndarray) -> np.ndarray:
         """Produce the values in the variable's DECLARED ``units``.
@@ -1088,16 +1144,31 @@ def providers_from_document(
     one is skipped), else the start of ``window`` when one was given, else the
     POSIX epoch. ``sample(t)`` on a time-varying source reads ``time_origin + t``.
 
-    ``records_per_sample`` maps a consuming parameter's key to 1 or 2 (the
-    two-record bracket); the default is 1. With 2, the sample has an extra
-    leading record axis of length 2, which a declared ``select`` (naming the
-    per-record axes) leaves whole. A record-table source (``record_filter`` or
-    ``codes``) refuses 2.
+    How many records each parameter receives at a query time is the
+    parameter's EFFECTIVE ``records_per_sample`` (esm-spec §8.5.1): its own
+    ``update.from.records_per_sample``, else the source's
+    ``temporal.records_per_sample``, else 1. With 2 the provider returns the
+    record at or before ``t`` and the next one, stacked along a leading record
+    axis of length 2, which a declared ``select`` (naming the per-record axes)
+    leaves whole. Each consuming parameter has its own provider, so two
+    parameters may read one source with different values. Every value read is
+    checked: it must be the number 1 or 2. A 2 is refused on a time-invariant
+    source (no ``temporal.start``) and on a source served as a record table
+    (``record_filter`` or ``codes``).
+
+    The ``records_per_sample`` argument (consuming parameter key -> 1 or 2) may
+    only restate the document: an entry that differs from the parameter's
+    effective value is refused, because the value fixes the rank of the
+    delivered array, and validation approved the declared shape for the
+    document's value. Set ``update.from.records_per_sample`` in the document
+    instead. Entries for keys that are not consuming parameters are ignored.
     """
     import json
     import os as _os
 
     import earthsciio as esio
+
+    from ..structural_checks import _records_per_sample_origin
 
     if isinstance(doc, (str, bytes)):
         with open(doc) as fh:
@@ -1154,6 +1225,9 @@ def providers_from_document(
         extent = ld.get("extent")
         extent_mp = extent.get("metaparameter") if isinstance(extent, dict) else None
         extent_mp = str(extent_mp) if isinstance(extent_mp, str) else None
+        temporal = ld.get("temporal")
+        time_varying = isinstance(temporal, dict) and bool(temporal.get("start"))
+        time_dim = str(temporal.get("time_variable") or "time") if time_varying else None
         rfilter = ld.get("record_filter")
         require_finite = (
             [str(v) for v in (rfilter.get("require_finite") or [])]
@@ -1224,6 +1298,46 @@ def providers_from_document(
                     f"{', '.join(bracketed)})"
                 )
 
+        # Every consuming parameter's records_per_sample is checked before any
+        # provider is constructed, so a refusal names the parameter rather than
+        # whatever EarthSciIO says about the source on an earlier one.
+        rps_of: dict[str, int] = {}
+        for key, _vname, binding in consumers:
+            raw, rps_from = _records_per_sample_origin(binding, ld)
+            where = {
+                "from": "update.from",
+                "temporal": f"data_sources.{lname}.temporal",
+                None: "the default",
+            }[rps_from]
+            rps = _strict_records_per_sample(key, where, raw)
+            runtime_rps = records_per_sample or {}
+            if key in runtime_rps:
+                given = _strict_records_per_sample(
+                    key, "the run-time records_per_sample option", runtime_rps[key]
+                )
+                if given != rps:
+                    raise ValueError(
+                        f"providers_from_document: the run-time records_per_sample "
+                        f"option gives parameter {key!r} {given}, but the document's "
+                        f"effective value is {rps} (from {where}); the value fixes the "
+                        f"rank of the delivered array, so set "
+                        f"update.from.records_per_sample in the document instead"
+                    )
+            if rps == 2 and table is not None:
+                raise ValueError(
+                    f"providers_from_document: parameter {key!r} asks for two records "
+                    f"per sample from data source {lname!r}, which is served as a "
+                    f"record table (it declares a record_filter or a codes map); two "
+                    f"records per sample is not supported on a filtered or coded source"
+                )
+            if rps == 2 and not time_varying:
+                raise ValueError(
+                    f"providers_from_document: parameter {key!r} asks for two records "
+                    f"per sample from data source {lname!r}, which is time-invariant "
+                    f"(it declares no temporal start), so it has no successor record"
+                )
+            rps_of[key] = rps
+
         for spec, (key, _vname, binding) in zip(specs, consumers):
             declared = _parse_declared_select(doc, f"{key}.update.from", binding)
             if declared is None and source_select is not None:
@@ -1232,7 +1346,7 @@ def providers_from_document(
             # rejects an unrecognised `reader_options` key: EarthSciIO checks
             # the declared decode options against the bound reader at Provider
             # construction (spec/registries.md §2.1, FORMAT-08-A-006).
-            rps = (records_per_sample or {}).get(key)
+            rps = rps_of[key]
             inner = esio.Provider(_loader([spec.file_variable], rps), cache, window)
             out[key] = EsioDocumentProvider(
                 key,
@@ -1243,6 +1357,7 @@ def providers_from_document(
                 extent_metaparameter=extent_mp,
                 unit_conversion=spec.unit_conversion,
                 time_origin=origin,
+                time_dim=time_dim,
                 records_per_sample=rps,
             )
     return out

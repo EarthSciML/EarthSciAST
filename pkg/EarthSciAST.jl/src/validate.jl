@@ -1490,8 +1490,8 @@ _records_per_sample_shape_error(at::AbstractString, name::AbstractString, shape)
 
 esm-spec §8.5.1, `records_per_sample_invalid`, at every depth of `model`:
 `from.records_per_sample` on a rule that is not `data`; or an EFFECTIVE value
-of 2 on a parameter whose source declares no `temporal` block, or whose record
-shape fails rule 3 (see [`_record_shape_failure`](@ref)). A parameter that
+of 2 on a parameter whose source is time-invariant (it declares no `temporal`
+block, or its `temporal` declares no `start`), or whose record shape fails rule 3 (see [`_record_shape_failure`](@ref)). A parameter that
 declares no `shape` is refused here only when no `param_to_var` entry names it and the
 document's `coupling` holds no `coupling_import`; otherwise `flatten` checks
 what arrives after expansion. The pointer is the rule's: `…/update` for the
@@ -1527,13 +1527,16 @@ function _check_records_per_sample!(
                 get(file.data_sources, rule.source, nothing)
             src === nothing && continue  # data_source_undefined reports it
             _effective_records_per_sample(rule.from, src) == 2 || continue
-            if src.temporal === nothing
+            if src.temporal === nothing || src.temporal.start === nothing ||
+                    isempty(src.temporal.start)
+                what = src.temporal === nothing ? "no temporal block" :
+                    "no temporal start"
                 push!(
                     errors, StructuralError(
                         at,
                         "Parameter '$name' asks for two records per sample from " *
-                            "data source '$(rule.source)', which declares no temporal " *
-                            "block and so has no successor record",
+                            "data source '$(rule.source)', which declares $what, " *
+                            "so it is time-invariant and has no successor record",
                         ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
                         Dict{String, Any}("variable" => name, "source" => rule.source)
                     )
