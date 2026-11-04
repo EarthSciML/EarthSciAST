@@ -133,8 +133,8 @@ mod field_ic_unlowered_operator;
 mod flatten;
 #[path = "flatten_conformance.rs"]
 mod flatten_conformance;
-#[path = "forcing_buffer.rs"]
-mod forcing_buffer;
+#[path = "forcing_from_sample.rs"]
+mod forcing_from_sample;
 #[path = "forcing_native_agreement.rs"]
 mod forcing_native_agreement;
 #[path = "from_faq_document_scope.rs"]

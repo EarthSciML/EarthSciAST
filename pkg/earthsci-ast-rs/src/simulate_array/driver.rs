@@ -411,6 +411,14 @@ impl ArrayCompiled {
         self.forcing_decls.keys()
     }
 
+    /// Each forcing parameter's declared shape resolved against the index-set
+    /// registry, `None` where the registry cannot size it (see the field).
+    pub(crate) fn declared_forcing_shapes(
+        &self,
+    ) -> &indexmap::IndexMap<String, Option<Vec<usize>>> {
+        &self.declared_forcing_shapes
+    }
+
     /// The declared default of forcing parameter `name`: `None` when it
     /// declares none, `Some(None)` when its shape does not resolve yet, and
     /// otherwise the dense field it denotes over that shape.

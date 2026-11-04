@@ -4218,6 +4218,28 @@ fn shaped_parameter_keys(
     out
 }
 
+/// The declared shape of the forcing parameter each provider key feeds, for
+/// the keys whose shape is known. A key is looked up as it is spelled, and
+/// when that names no forcing parameter and it is dotted, by the part after
+/// its first `.`: a single-model build compiles its parameters under their
+/// bare names while a provider may be keyed `Model.param`. A key naming no
+/// forcing parameter, or one whose declared shape names an index set the
+/// registry cannot size, is left out and its samples are not shape-checked.
+#[cfg(not(target_arch = "wasm32"))]
+fn provider_declared_shapes<'a>(
+    compiled: &crate::simulate_array::ArrayCompiled,
+    keys: impl Iterator<Item = &'a String>,
+) -> std::collections::HashMap<String, Vec<usize>> {
+    let decls = compiled.declared_forcing_shapes();
+    keys.filter_map(|key| {
+        let decl = decls
+            .get(key.as_str())
+            .or_else(|| key.split_once('.').and_then(|(_, rest)| decls.get(rest)))?;
+        Some((key.clone(), decl.clone()?))
+    })
+    .collect()
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::type_complexity)]
 fn bind_providers(
@@ -4250,7 +4272,9 @@ fn bind_providers(
     // CONST forcings are materialized ONCE, HERE — at construction, which is
     // where §2.5.2 puts the gated fetch — and never again.
     let providers = std::mem::take(&mut opts.providers);
-    let mut exec = crate::provider::RefreshExecutor::from_providers(providers);
+    let declared = provider_declared_shapes(compiled, providers.keys());
+    let mut exec =
+        crate::provider::RefreshExecutor::from_providers_with_shapes(providers, &declared);
     let forcing = compiled.forcing_buffer();
     exec.materialize_const(&forcing)
         .map_err(|e| SimulateError::ProviderError {

@@ -27,7 +27,7 @@ mod walk;
 
 use forcing::column_major;
 pub use forcing::{
-    ForcingSet, ForcingSlot, ParamSlot, RhsError, SlotKind, StateBlock, forcing_buffer,
+    ForcingSet, ForcingSlot, ParamSlot, RhsError, SlotKind, StateBlock, forcing_from_sample,
 };
 pub use lanes::{LaneInputs, LaneProgram};
 use model::ProgramModel;

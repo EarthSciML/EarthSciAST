@@ -260,6 +260,64 @@ struct LoaderProvider {
     provider: Box<dyn CadenceProvider>,
 }
 
+/// The message refusing an array of shape `got` for a variable declared with
+/// shape `declared`, or `None` when it fits: equal axis by axis, and a 0-d
+/// declaration (`[]`) takes an array of exactly one element. `who` names what
+/// delivered it.
+pub(crate) fn declared_shape_mismatch(
+    who: &str,
+    got: &[usize],
+    declared: &[usize],
+) -> Option<String> {
+    let fits = if declared.is_empty() {
+        got.iter().product::<usize>() == 1
+    } else {
+        got == declared
+    };
+    (!fits).then(|| {
+        format!(
+            "{who} delivered an array of shape {got:?}; the parameter's declared shape is \
+             {declared:?}{}",
+            if declared.is_empty() {
+                ", one value"
+            } else {
+                ""
+            }
+        )
+    })
+}
+
+/// The one field of a `providers=` sample bound to `target`: the sample must
+/// hold exactly one field, whatever it is called, and when `declared` is known
+/// that field's array must have that shape ([`declared_shape_mismatch`]).
+///
+/// The check [`RemapProvider`] applies to every `materialize()` and
+/// `refresh(t)` sample, and the one [`crate::forcing_from_sample`] applies, so
+/// the two accept and refuse the same samples.
+pub(crate) fn single_provider_field<'a>(
+    target: &str,
+    sample: &'a HashMap<String, NativeField>,
+    declared: Option<&[usize]>,
+) -> Result<&'a NativeField, ProviderError> {
+    let mut fields = sample.values();
+    let (Some(field), None) = (fields.next(), fields.next()) else {
+        return Err(err(format!(
+            "provider for {target:?} fed {} fields; a `providers=` forcing binds exactly one",
+            sample.len()
+        )));
+    };
+    if let Some(declared) = declared
+        && let Some(msg) = declared_shape_mismatch(
+            &format!("provider for {target:?}"),
+            field.array.shape(),
+            declared,
+        )
+    {
+        return Err(err(msg));
+    }
+    Ok(field)
+}
+
 /// A [`RefreshExecutor::from_providers`] adapter that re-keys a runtime provider's
 /// single fed field to the coupling TARGET variable name — the `providers=` dict
 /// key the model's RHS gathers. Providers on that seam feed under their own loader
@@ -268,8 +326,14 @@ struct LoaderProvider {
 /// would otherwise bind the forcing where nothing reads it. The model-declared
 /// [`RefreshExecutor::new`] seam needs no remap: there the provider feeds under the
 /// model variable name already.
+///
+/// Every sample goes through [`single_provider_field`], against the target's
+/// declared shape when one is known.
 struct RemapProvider {
     target: String,
+    /// The target parameter's declared shape, resolved against the index-set
+    /// registry; `None` when it is not known, and then no shape is checked.
+    declared: Option<Vec<usize>>,
     inner: Box<dyn CadenceProvider>,
 }
 
@@ -278,14 +342,8 @@ impl RemapProvider {
         &self,
         fields: HashMap<String, NativeField>,
     ) -> Result<HashMap<String, NativeField>, ProviderError> {
-        if fields.len() != 1 {
-            return Err(err(format!(
-                "provider for {:?} fed {} fields; a `providers=` forcing binds exactly one",
-                self.target,
-                fields.len()
-            )));
-        }
-        let (_fed_name, field) = fields.into_iter().next().expect("checked len == 1");
+        single_provider_field(&self.target, &fields, self.declared.as_deref())?;
+        let (_fed_name, field) = fields.into_iter().next().expect("checked: one field");
         let mut out = HashMap::with_capacity(1);
         out.insert(self.target.clone(), field);
         Ok(out)
@@ -367,6 +425,17 @@ impl RefreshExecutor {
     ///
     /// [`new`]: RefreshExecutor::new
     pub fn from_providers(providers: HashMap<String, Box<dyn CadenceProvider>>) -> Self {
+        Self::from_providers_with_shapes(providers, &HashMap::new())
+    }
+
+    /// [`Self::from_providers`], refusing every sample a provider delivers
+    /// (`materialize()` and each `refresh(t)`) whose field does not have the
+    /// shape `declared` holds under that provider's key. A key `declared` does
+    /// not hold is not shape-checked.
+    pub(crate) fn from_providers_with_shapes(
+        providers: HashMap<String, Box<dyn CadenceProvider>>,
+        declared: &HashMap<String, Vec<usize>>,
+    ) -> Self {
         let mut loaders = Vec::with_capacity(providers.len());
         for (var, provider) in providers {
             let cadence = if provider.refresh_times().is_empty() {
@@ -379,6 +448,7 @@ impl RefreshExecutor {
             // own loader field name, which `write_fields` would otherwise use.
             let remapped: Box<dyn CadenceProvider> = Box::new(RemapProvider {
                 target: var.clone(),
+                declared: declared.get(&var).cloned(),
                 inner: provider,
             });
             loaders.push(LoaderProvider {
