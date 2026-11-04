@@ -211,6 +211,21 @@ describe('Unit parsing and dimensional analysis', () => {
       expect(unknownVarResult.warnings).toEqual(['Unknown variable: unknown'])
     })
 
+    it('types sign as dimensionless and walks its argument', () => {
+      const bindings = createUnitBindings({ x: 'm', T: 'K' })
+      const sign = { op: 'sign', args: ['x'] }
+      expect(dimsOf(checkDimensions(sign, bindings))).toEqual({})
+      // sign(x) * x is a length, not an area.
+      expect(dimsOf(checkDimensions({ op: '*', args: [sign, 'x'] }, bindings))).toEqual({ m: 1 })
+      const expT = { op: 'exp', args: ['T'] }
+      for (const expr of [
+        { op: 'sign', args: [expT] },
+        { op: 'sign', args: [{ op: '*', args: [1000, expT] }] },
+      ]) {
+        expect(checkDimensions(expr, bindings).warnings).not.toEqual([])
+      }
+    })
+
     // The literal rules, stated as tests because they are the loadString-bearing part
     // of "a literal is indeterminate".
     describe('numeric literals', () => {
@@ -1039,6 +1054,7 @@ describe('Unit parsing and dimensional analysis', () => {
       'units_sum_undeterminable_operands.esm',
       'units_ifelse_undeterminable_branch.esm',
       'units_comparisons_and_connectives.esm',
+      'units_sign_dimensionless.esm',
     ]
 
     // CORPUS CONTRADICTION — units_dimensional_analysis.esm is deliberately NOT

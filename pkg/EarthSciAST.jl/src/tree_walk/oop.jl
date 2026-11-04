@@ -554,8 +554,8 @@ function _oop_acc_vecable(n::_Node, K::_AccKernel, in_reduce::Bool)
         # planned at the parent, so this check and the plan build agree.
         S = n.payload::_AccKernel
         return _oop_acc_vecable(S.spine, S) &&
-            all(r -> _oop_acc_vecable(r, S), S.cse.recipes) &&
-            all(r -> _oop_acc_vecable(r, S), S.cse.inv_recipes)
+            _allof(r -> _oop_acc_vecable(r, S), S.cse.recipes) &&
+            _allof(r -> _oop_acc_vecable(r, S), S.cse.inv_recipes)
     end
     if k === _NK_ACCESS
         a = K.acc[n.idx]
@@ -580,7 +580,7 @@ function _oop_acc_vecable(n::_Node, K::_AccKernel, in_reduce::Bool)
     elseif k === _NK_CACHED
         (n.payload === K.cse.scratch || n.payload === K.cse.inv_scratch) || return false
     end
-    return all(c -> _oop_acc_vecable(c, K, in_reduce), n.children)
+    return _allof(c -> _oop_acc_vecable(c, K, in_reduce), n.children)
 end
 
 # Resolve one descriptor table's per-lane host data against a GIVEN lane

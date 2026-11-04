@@ -942,6 +942,308 @@ pub(crate) fn validate_data_source_references(
     }
 }
 
+/// Is index set `name` an `interval` of size 2 or a `categorical` of two
+/// members (esm-spec §8.5.1 rule 3)? A `derived` or `ragged` set has no size
+/// known at load.
+fn index_set_has_two_members(esm_file: &EsmFile, name: &str) -> bool {
+    let Some(set) = esm_file.index_sets.as_ref().and_then(|s| s.get(name)) else {
+        return false;
+    };
+    match set.kind.as_str() {
+        "interval" => set.size == Some(2),
+        "categorical" => set.members.as_ref().is_some_and(|m| m.len() == 2),
+        _ => false,
+    }
+}
+
+/// The declared `shape` of the variable a scoped name `Model[.Sub…].var`
+/// names (an absent `shape` is the scalar `[]`), or `None` when the document
+/// does not reach that declaration: no such model, subsystem or variable, or
+/// one still behind an unmounted `ref`. Walks the document by reference.
+fn declared_shape(esm_file: &EsmFile, scoped: &str) -> Option<Vec<String>> {
+    let mut parts: Vec<&str> = scoped.split('.').collect();
+    let var = parts.pop()?;
+    let (first, rest) = parts.split_first()?;
+    let model = esm_file.models.as_ref()?.get(*first)?;
+    let Some((sub, deeper)) = rest.split_first() else {
+        return Some(model.variables.get(var)?.shape.clone().unwrap_or_default());
+    };
+    let mut node = model.subsystems.as_ref()?.get(*sub)?;
+    for seg in deeper {
+        node = node.get("subsystems")?.get(*seg)?;
+    }
+    match node.get("variables")?.get(var)?.get("shape") {
+        None | Some(serde_json::Value::Null) => Some(Vec::new()),
+        Some(shape) => shape
+            .as_array()?
+            .iter()
+            .map(|d| d.as_str().map(str::to_string))
+            .collect(),
+    }
+}
+
+/// Calls `f(scope, pointer, name, variable)` for every variable carrying an
+/// `update`, in every top-level model and every subsystem at any depth, in
+/// sorted name order within each model. `scope` is the dotted `Model[.Sub…]`
+/// path and `pointer` the JSON pointer of that model or subsystem. Subsystems
+/// are read in place; a subsystem variable that does not deserialize is the
+/// schema's finding and is skipped.
+fn for_each_updated_variable(
+    esm_file: &EsmFile,
+    f: &mut impl FnMut(&str, &str, &str, &crate::ModelVariable),
+) {
+    fn subsystem(
+        sub: &serde_json::Value,
+        scope: &str,
+        path: &str,
+        f: &mut impl FnMut(&str, &str, &str, &crate::ModelVariable),
+    ) {
+        if let Some(vars) = sub.get("variables").and_then(|v| v.as_object()) {
+            let mut names: Vec<&String> = vars
+                .iter()
+                .filter(|(_, v)| v.get("update").is_some())
+                .map(|(n, _)| n)
+                .collect();
+            names.sort();
+            for name in names {
+                if let Ok(var) =
+                    <crate::ModelVariable as serde::Deserialize>::deserialize(&vars[name])
+                {
+                    f(scope, path, name, &var);
+                }
+            }
+        }
+        for (name, inner) in sub
+            .get("subsystems")
+            .and_then(|s| s.as_object())
+            .into_iter()
+            .flatten()
+        {
+            subsystem(
+                inner,
+                &format!("{scope}.{name}"),
+                &format!("{path}/subsystems/{name}"),
+                f,
+            );
+        }
+    }
+    for (model_name, model) in esm_file.models.iter().flatten() {
+        let path = format!("/models/{model_name}");
+        let mut names: Vec<&String> = model
+            .variables
+            .iter()
+            .filter(|(_, v)| v.update.is_some())
+            .map(|(n, _)| n)
+            .collect();
+        names.sort();
+        for name in names {
+            f(model_name, &path, name, &model.variables[name]);
+        }
+        for (name, sub) in model.subsystems.iter().flatten() {
+            subsystem(
+                sub,
+                &format!("{model_name}.{name}"),
+                &format!("{path}/subsystems/{name}"),
+                f,
+            );
+        }
+    }
+}
+
+/// The JSON pointer of rule `i` of `var_name`'s `update` under the model or
+/// subsystem at `path`: `/update` for the single-rule form, `/update/<i>` for
+/// the array form (esm-spec §8.5.1).
+fn update_rule_pointer(
+    path: &str,
+    var_name: &str,
+    spec: &crate::ParameterUpdateSpec,
+    i: usize,
+) -> String {
+    match spec {
+        crate::ParameterUpdateSpec::Single(_) => format!("{path}/variables/{var_name}/update"),
+        crate::ParameterUpdateSpec::Several(_) => {
+            format!("{path}/variables/{var_name}/update/{i}")
+        }
+    }
+}
+
+/// Does `shape` satisfy rule 3 of esm-spec §8.5.1: a first entry naming an
+/// index set of exactly two members?
+fn is_record_pair_shape(esm_file: &EsmFile, shape: &[String]) -> bool {
+    shape
+        .first()
+        .is_some_and(|d| index_set_has_two_members(esm_file, d))
+}
+
+/// The first record shape of the parameter scoped `me` that fails rule 3 of
+/// esm-spec §8.5.1, or `None` when every record shape that can be decided
+/// passes. The record shape is `own_shape` when that is not empty; otherwise
+/// the declared shape of EVERY `param_to_var` target of `me` in `coupling`. A
+/// target whose declaration the document does not reach is not decidable and
+/// is skipped. With no `param_to_var` entry at all the record shape is empty,
+/// which fails unless `defer_empty` (an edge may still arrive by
+/// `coupling_import`).
+fn failing_record_shape(
+    esm_file: &EsmFile,
+    coupling: &[crate::CouplingEntry],
+    me: &str,
+    own_shape: &[String],
+    defer_empty: bool,
+) -> Option<Vec<String>> {
+    if !own_shape.is_empty() {
+        return (!is_record_pair_shape(esm_file, own_shape)).then(|| own_shape.to_vec());
+    }
+    let mut targets = coupling
+        .iter()
+        .filter_map(|entry| match entry {
+            crate::CouplingEntry::VariableMap {
+                from,
+                to,
+                transform: crate::VariableMapTransform::Named(t),
+                ..
+            } if from == me && t == "param_to_var" => Some(to.as_str()),
+            _ => None,
+        })
+        .peekable();
+    if targets.peek().is_none() {
+        return (!defer_empty).then(Vec::new);
+    }
+    targets
+        .filter_map(|to| declared_shape(esm_file, to))
+        .find(|shape| !is_record_pair_shape(esm_file, shape))
+}
+
+fn record_shape_message(var_name: &str, shape: &[String]) -> String {
+    format!(
+        "Parameter '{var_name}' asks for two records per sample, so its first dimension must be \
+         an index set of exactly two members; its record shape is {shape:?}"
+    )
+}
+
+/// `records_per_sample_invalid` (esm-spec §8.5.1), at structural validation:
+/// `from.records_per_sample` on a rule that is not `data`; or an EFFECTIVE
+/// value of 2 on a parameter whose source declares no `temporal` block, or
+/// whose record shape's first dimension is not an index set of exactly two
+/// members. Checks every record shape the loaded document shows; an empty
+/// one is refused only when the parameter has no inline `param_to_var` entry
+/// and the coupling holds no `coupling_import`, and otherwise is left to
+/// [`check_records_per_sample_at_flatten`].
+pub(crate) fn validate_records_per_sample(esm_file: &EsmFile, errors: &mut Vec<StructuralError>) {
+    let coupling = esm_file.coupling.as_deref().unwrap_or_default();
+    let defer_empty = coupling
+        .iter()
+        .any(|e| matches!(e, crate::CouplingEntry::CouplingImport { .. }));
+    for_each_updated_variable(esm_file, &mut |scope, path, var_name, var| {
+        let Some(spec) = var.update.as_ref() else {
+            return;
+        };
+        for (i, rule) in spec.rules().iter().enumerate() {
+            let Some(binding) = rule.value().and_then(|v| v.from.as_ref()) else {
+                continue;
+            };
+            let at = update_rule_pointer(path, var_name, spec, i);
+            let Some(source_name) = rule.data_source() else {
+                if binding.records_per_sample.is_some() {
+                    errors.push(StructuralError {
+                        path: at,
+                        code: StructuralErrorCode::RecordsPerSampleInvalid,
+                        message: format!(
+                            "Parameter '{var_name}' sets from.records_per_sample on a '{}' \
+                             rule; only a 'data' rule names a source to read records from",
+                            rule.kind()
+                        ),
+                        details: serde_json::json!({"variable": var_name, "kind": rule.kind()}),
+                    });
+                }
+                continue;
+            };
+            // An undeclared source is `data_source_undefined`'s finding.
+            let Some(source) = esm_file
+                .data_sources
+                .as_ref()
+                .and_then(|d| d.get(source_name))
+            else {
+                continue;
+            };
+            if binding.effective_records_per_sample(Some(source)) != 2 {
+                continue;
+            }
+            if source.temporal.is_none() {
+                errors.push(StructuralError {
+                    path: at,
+                    code: StructuralErrorCode::RecordsPerSampleInvalid,
+                    message: format!(
+                        "Parameter '{var_name}' asks for two records per sample from data \
+                         source '{source_name}', which declares no temporal block and so has \
+                         no successor record"
+                    ),
+                    details: serde_json::json!({"variable": var_name, "source": source_name}),
+                });
+                continue;
+            }
+            let own_shape = var.shape.as_deref().unwrap_or_default();
+            let me = format!("{scope}.{var_name}");
+            if let Some(shape) =
+                failing_record_shape(esm_file, coupling, &me, own_shape, defer_empty)
+            {
+                errors.push(StructuralError {
+                    path: at,
+                    code: StructuralErrorCode::RecordsPerSampleInvalid,
+                    message: record_shape_message(var_name, &shape),
+                    details: serde_json::json!({"variable": var_name, "shape": shape}),
+                });
+            }
+        }
+    });
+}
+
+/// `records_per_sample_invalid` (esm-spec §8.5.1), at flatten: for each
+/// data-fed parameter declaring an empty `shape` whose effective
+/// `records_per_sample` is 2, checks rule 3 against the `param_to_var` edges
+/// of `esm_file`'s coupling, which flatten has already expanded past every
+/// `coupling_import` and whose refs are mounted. A record shape still empty
+/// here is refused. Rules 1 and 2 and a declared non-empty shape are
+/// structural validation's, which sees them in full.
+pub(crate) fn check_records_per_sample_at_flatten(
+    esm_file: &EsmFile,
+) -> Result<(), crate::diagnostic::DiagnosticError> {
+    let coupling = esm_file.coupling.as_deref().unwrap_or_default();
+    let mut first_error = None;
+    for_each_updated_variable(esm_file, &mut |scope, path, var_name, var| {
+        if first_error.is_some() || var.shape.as_ref().is_some_and(|s| !s.is_empty()) {
+            return;
+        }
+        let Some(spec) = var.update.as_ref() else {
+            return;
+        };
+        for (i, rule) in spec.rules().iter().enumerate() {
+            let Some(binding) = rule.value().and_then(|v| v.from.as_ref()) else {
+                continue;
+            };
+            let Some(source) = rule
+                .data_source()
+                .and_then(|name| esm_file.data_sources.as_ref()?.get(name))
+            else {
+                continue;
+            };
+            if source.temporal.is_none() || binding.effective_records_per_sample(Some(source)) != 2
+            {
+                continue;
+            }
+            let me = format!("{scope}.{var_name}");
+            if let Some(shape) = failing_record_shape(esm_file, coupling, &me, &[], false) {
+                let at = update_rule_pointer(path, var_name, spec, i);
+                first_error = Some(crate::diagnostic::err(
+                    crate::diagnostic::codes::RECORDS_PER_SAMPLE_INVALID,
+                    format!("{at}: {}", record_shape_message(var_name, &shape)),
+                ));
+                return;
+            }
+        }
+    });
+    first_error.map_or(Ok(()), Err)
+}
+
 /// Every name DECLARED anywhere in the document: each model's `variables` and
 /// each reaction system's `species` and `parameters`.
 ///

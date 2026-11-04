@@ -1,0 +1,49 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "selector_inline",
+  "description": "selector.esm with the selected reaction system written inline.",
+  "license": "MIT"
+ },
+ "reaction_systems": {
+  "Chem2": {
+   "species": {
+    "C": {
+     "units": "mol/m^3",
+     "default": 2.0,
+     "description": "reactant"
+    },
+    "D": {
+     "units": "mol/m^3",
+     "default": 0.0,
+     "description": "product"
+    }
+   },
+   "parameters": {
+    "j": {
+     "units": "1/s",
+     "default": 0.01,
+     "description": "slow rate constant"
+    }
+   },
+   "reactions": [
+    {
+     "id": "R2",
+     "substrates": [
+      {
+       "species": "C",
+       "stoichiometry": 1
+      }
+     ],
+     "products": [
+      {
+       "species": "D",
+       "stoichiometry": 1
+      }
+     ],
+     "rate": "j"
+    }
+   ]
+  }
+ }
+}

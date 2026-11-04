@@ -95,6 +95,9 @@ class ErrorCode(Enum):
     # esm 1.0.0. A data source is not a component, so `update.source` is the only
     # way a document can name one -- and it MUST resolve.
     DATA_SOURCE_UNDEFINED = "data_source_undefined"
+    # esm-spec §8.5.1: `from.records_per_sample` on a non-`data` rule, or an
+    # effective 2 on a static source or without a first dimension of two members.
+    RECORDS_PER_SAMPLE_INVALID = "records_per_sample_invalid"
     # A declared `system_kind` that contradicts the §6.3.1 derivation. The field
     # is optional and the derivation authoritative, so disagreement is always an
     # author error, never an override.
@@ -294,10 +297,10 @@ DATA_SOURCE_MERGE_CONFLICT = "data_source_merge_conflict"
 SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM = (
     "subsystem_index_set_rename_unsupported_mount_form"
 )
-# A §4.7 `{ref}` mount at a form this binding does not implement — a top-level
-# `reaction_systems.<k>` `{ref}` (esm-spec §4.7 "Two mount forms, one
-# mechanism"). Refused at `/reaction_systems/<k>` rather than coerced into an
-# empty reaction system.
+# A §4.7 `{ref}` mount at a form a binding does not implement. Every binding
+# mounts both top-level forms, `models.<k>` and `reaction_systems.<k>`
+# (esm-spec §4.7 "Two mount forms, one mechanism"), so this binding never raises
+# it; the constant exists because the code table is cross-language uniform.
 MOUNT_FORM_UNSUPPORTED = "mount_form_unsupported"
 # A declared working precision reaches a construct that cannot carry it
 # (esm-spec §4.7 "Working precision crosses a mount", §11.3.1): a mounted leaf's

@@ -51,6 +51,10 @@ const ERROR_CODES = (
     CIRCULAR_DEPENDENCY = "circular_dependency",
     CONFLICTING_DERIVATIVE = "conflicting_derivative",
     DATA_SOURCE_UNDEFINED = "data_source_undefined",
+    # esm-spec §8.5.1: `from.records_per_sample` on a non-`data` rule, or an
+    # effective 2 on a source with no `temporal` block or on a parameter whose
+    # record shape's first dimension is not an index set of two members.
+    RECORDS_PER_SAMPLE_INVALID = "records_per_sample_invalid",
     # esm-spec §9.6.6 / CONFORMANCE_SPEC §5.46: a data-fed parameter (an `update`
     # of `kind: "data"`) reached a build with NOTHING bound to it -- no provider,
     # no loaded array, no caller-supplied `p` value. Raised at CONSTRUCTION,
@@ -274,16 +278,16 @@ const ERROR_CODES = (
 
     # `index_set_rename` on a mount form that does not implement it (esm-spec
     # §4.7 "Mount-edge index-set renaming", "Where it applies"). The field is a
-    # legal `SubsystemRef` property at either mount form, but a binding whose
-    # top-level `models.<k>` `{ref}` inliner cannot apply it MUST say so rather
-    # than merge the leaf under its pre-rename axis names.
-    SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM =
-        "subsystem_index_set_rename_unsupported_mount_form",
-    # A §4.7 `{ref}` mount at a form a binding does not implement — the
-    # top-level `reaction_systems.<k>` `{ref}`, which Rust, TypeScript, Go and
-    # Python refuse with this code. This binding implements that form, so it never
+    # legal `SubsystemRef` property at every mount form, and a binding that
+    # cannot apply it at one MUST say so rather than merge the leaf under its
+    # pre-rename axis names. This binding applies it at every form, so it never
     # raises it; the constant exists because the code table is cross-language
     # uniform.
+    SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM =
+        "subsystem_index_set_rename_unsupported_mount_form",
+    # A §4.7 `{ref}` mount at a form a binding does not implement. This binding
+    # implements every form, so it never raises it; the constant exists because
+    # the code table is cross-language uniform.
     MOUNT_FORM_UNSUPPORTED = "mount_form_unsupported",
     # A declared working precision reaches a construct that cannot carry it
     # (esm-spec §4.7 "Working precision crosses a mount", §11.3.1): a mounted

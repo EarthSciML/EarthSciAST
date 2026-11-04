@@ -289,6 +289,8 @@ mod reaction_lowering_form;
 mod reaction_species_order;
 #[path = "reaction_system_inline_tests.rs"]
 mod reaction_system_inline_tests;
+#[path = "records_per_sample_conformance.rs"]
+mod records_per_sample_conformance;
 #[path = "recurrence_causal_self_reference.rs"]
 mod recurrence_causal_self_reference;
 #[path = "recurrence_native_agreement.rs"]
@@ -371,6 +373,8 @@ mod term_provenance;
 mod tests_blocks_execution;
 #[path = "toplevel_mount_edge_pipeline.rs"]
 mod toplevel_mount_edge_pipeline;
+#[path = "toplevel_reaction_system_ref.rs"]
+mod toplevel_reaction_system_ref;
 #[path = "transcendental_scale_conformance.rs"]
 mod transcendental_scale_conformance;
 #[path = "undeclared_operand_gate.rs"]

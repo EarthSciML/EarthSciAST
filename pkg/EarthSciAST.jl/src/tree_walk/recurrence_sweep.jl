@@ -306,7 +306,7 @@ function _compile_recurrence_sweep(
     body = _compile(resolved, var_map, param_sym_set, reg_funcs)
     fold = nothing
     if !isempty(contract_names)
-        contract_ranges = Vector{Any}[collect(ranges[n]) for n in contract_names]
+        contract_ranges = Vector{Any}[_as_type(Vector{Any}, collect(ranges[n])) for n in contract_names]
         contract_const = Union{Vector{Int}, Nothing}[
             _is_const_int_range(r) ? collect(_expand_int_range(r)) : nothing
                 for r in contract_ranges

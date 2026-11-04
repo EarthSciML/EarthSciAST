@@ -135,7 +135,7 @@ end
 
 @testset "Inline tests-block execution runner" begin
     fixture_path = joinpath(
-        @__DIR__, "..", "..", "..",
+        @__DIR__, "..", "..", "..", "..",
         "tests", "valid",
         "tests_analyses_comprehensive.esm"
     )
@@ -172,7 +172,7 @@ end
         "spatial_limitation.esm" => "PDE (no ODE runner path)",
     )
     simulation_dir = joinpath(
-        @__DIR__, "..", "..", "..",
+        @__DIR__, "..", "..", "..", "..",
         "tests", "simulation"
     )
     if isdir(simulation_dir)
@@ -226,7 +226,7 @@ end
 # ---------------------------------------------------------------------------
 @testset "continuous events fire (audit J2)" begin
     fpath = joinpath(
-        @__DIR__, "..", "..", "..",
+        @__DIR__, "..", "..", "..", "..",
         "tests", "simulation", "bouncing_ball.esm"
     )
     @test isfile(fpath)

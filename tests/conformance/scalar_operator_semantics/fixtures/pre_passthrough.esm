@@ -1,0 +1,151 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "PrePassthrough",
+    "description": "`Pre` on a right-hand side, on its own. esm-spec \u00a75.1 defines `Pre(x)` as the value of x immediately before an event fires; outside an event affect there is no event, so a right-hand side evaluates `Pre(x)` as `x`, as Julia and Rust always have. Python's interpreter used to have no rule for it and refused it (`unevaluable_operator`).",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "conformance",
+      "scalar_operator_semantics",
+      "inline-test",
+      "pre-passthrough"
+    ],
+    "license": "MIT"
+  },
+  "models": {
+    "PrePassthrough": {
+      "variables": {
+        "pre_param": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Pre of a parameter: the parameter's value."
+        },
+        "pre_compound": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Pre of a compound expression, scaled: 2 * Pre(two * three)."
+        },
+        "pre_state": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Pre of a state: the state's current value, here probe(t) = 2t."
+        },
+        "probe": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0,
+          "description": "Integrates pre_param, so the value is read as well as computed."
+        },
+        "two": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "2"
+        },
+        "three": {
+          "type": "parameter",
+          "units": "1",
+          "default": 3.0,
+          "description": "3"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "pre_param",
+          "rhs": {
+            "op": "Pre",
+            "args": [
+              "two"
+            ]
+          }
+        },
+        {
+          "lhs": "pre_compound",
+          "rhs": {
+            "op": "*",
+            "args": [
+              2,
+              {
+                "op": "Pre",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      "two",
+                      "three"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "pre_state",
+          "rhs": {
+            "op": "Pre",
+            "args": [
+              "probe"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "probe"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "pre_param"
+        }
+      ],
+      "tests": [
+        {
+          "id": "pre_passthrough_value",
+          "description": "`Pre` on a right-hand side, on its own. esm-spec \u00a75.1 defines `Pre(x)` as the value of x immediately before an event fires; outside an event affect there is no event, so a right-hand side evaluates `Pre(x)` as `x`, as Julia and Rust always have. Python's interpreter used to have no rule for it and refused it (`unevaluable_operator`).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "tolerance": {
+            "rel": 0.0,
+            "abs": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "pre_param",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "pre_compound",
+              "time": 0.0,
+              "expected": 12.0
+            },
+            {
+              "variable": "pre_state",
+              "time": 1.0,
+              "expected": 2.0,
+              "tolerance": {
+                "rel": 1e-09,
+                "abs": 1e-11
+              }
+            },
+            {
+              "variable": "probe",
+              "time": 1.0,
+              "expected": 2.0,
+              "tolerance": {
+                "rel": 1e-09,
+                "abs": 1e-11
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

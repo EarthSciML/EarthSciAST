@@ -14,7 +14,6 @@ import type {
   CouplingCouple,
   CouplingVariableMap,
   SubsystemRef,
-  ParameterUpdate,
   CouplingEntry,
   CouplingImport,
 } from '../types.js'
@@ -27,6 +26,14 @@ import {
 } from './expr-utils.js'
 import { isExpressionLike } from '../traverse.js'
 import { collectRoleSegments, expandCouplingImports } from '../coupling-imports.js'
+import { effectiveRecordsPerSample } from '../types.js'
+import {
+  forEachParameterUpdate,
+  hasUnmountedRefs,
+  paramToVarTargets,
+  recordShapeFailure,
+  recordShapeMessage,
+} from '../records-per-sample.js'
 
 /**
  * Flag any `{ref}` (unresolved SubsystemRef) entries in one component's
@@ -440,44 +447,6 @@ export function validateCircularReferences(esmFile: EsmFile): StructuralError[] 
 }
 
 /**
- * Every `(variableName, update-rule, jsonPointer)` in the document, including
- * subsystems. A parameter's `update` is either ONE rule object or an ordered
- * array of two or more, and the pointer reflects which: the object form points
- * at `update` itself, the array form at `update/<i>`.
- */
-function* forEachParameterUpdate(esmFile: EsmFile): Generator<{
-  variableName: string
-  rule: ParameterUpdate
-  path: string
-}> {
-  function* walkModel(
-    model: Model,
-    modelPath: string,
-  ): Generator<{ variableName: string; rule: ParameterUpdate; path: string }> {
-    for (const [variableName, variable] of Object.entries(model.variables ?? {})) {
-      if (variable?.type !== 'parameter' || variable.update === undefined) continue
-      const base = `${modelPath}/variables/${variableName}/update`
-      if (Array.isArray(variable.update)) {
-        for (const [i, rule] of variable.update.entries()) {
-          yield { variableName, rule, path: `${base}/${i}` }
-        }
-      } else {
-        yield { variableName, rule: variable.update, path: base }
-      }
-    }
-    for (const [childName, child] of Object.entries(model.subsystems ?? {})) {
-      if (child === null || typeof child !== 'object' || 'ref' in child) continue
-      yield* walkModel(child as Model, `${modelPath}/subsystems/${childName}`)
-    }
-  }
-
-  for (const [modelName, model] of Object.entries(esmFile.models ?? {})) {
-    if (model === null || typeof model !== 'object' || 'ref' in model) continue
-    yield* walkModel(model as Model, `/models/${modelName}`)
-  }
-}
-
-/**
  * `data_source_undefined` - a parameter's `update.source` names no entry in the
  * document's top-level `data_sources` (esm-spec 5.5).
  *
@@ -504,6 +473,74 @@ export function validateDataSourceReferences(esmFile: EsmFile): StructuralError[
         variable: variableName,
         source: rule.source,
         available_sources: available,
+      },
+    })
+  }
+  return errors
+}
+
+/**
+ * `records_per_sample_invalid` (esm-spec §8.5.1), checked on every `update`
+ * rule at any depth: `from.records_per_sample` on a rule that is not `data`; or
+ * an EFFECTIVE value of 2 on a parameter whose source declares no `temporal`
+ * block, or whose record shape's first dimension is not an index set of exactly
+ * two members. The record shape is the declared `shape`, or, for a parameter
+ * declaring an empty one, the declared `shape` of EVERY inline `param_to_var`
+ * target it is the `from` of. A target this document cannot reach is left to
+ * `flatten`, and so is an empty record shape when a `coupling_import` may
+ * supply the edge (see {@link recordShapeFailure}).
+ */
+export function validateRecordsPerSample(esmFile: EsmFile): StructuralError[] {
+  const errors: StructuralError[] = []
+  const sources = (esmFile.data_sources ?? {}) as Record<
+    string,
+    { temporal?: { records_per_sample?: number } }
+  >
+  const coupling = (esmFile.coupling ?? []) as Array<Record<string, unknown>>
+  const targets = paramToVarTargets(coupling)
+  const hasImport = coupling.some((entry) => entry?.type === 'coupling_import')
+  const unmountedRefs = hasUnmountedRefs(esmFile)
+  for (const site of forEachParameterUpdate(esmFile)) {
+    const { variableName, rule, path } = site
+    const binding = (rule as { from?: { records_per_sample?: number } }).from
+    if (binding === undefined) continue
+    if (rule.kind !== 'data') {
+      if (binding.records_per_sample !== undefined) {
+        errors.push({
+          path,
+          code: ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
+          message: `Parameter '${variableName}' sets from.records_per_sample on a '${rule.kind}' rule; only a 'data' rule names a source to read records from`,
+          details: { variable: variableName, kind: rule.kind },
+        })
+      }
+      continue
+    }
+    const sourceName = (rule as { source: string }).source
+    const source = sources[sourceName]
+    if (source === undefined) continue // data_source_undefined reports it
+    if (effectiveRecordsPerSample(binding, source) !== 2) continue
+    if (source.temporal === undefined) {
+      errors.push({
+        path,
+        code: ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
+        message: `Parameter '${variableName}' asks for two records per sample from data source '${sourceName}', which declares no temporal block and so has no successor record`,
+        details: { variable: variableName, source: sourceName },
+      })
+      continue
+    }
+    const failure = recordShapeFailure(esmFile, site, targets, {
+      targetsMayArriveLater: hasImport,
+      unmountedRefs,
+    })
+    if (failure === undefined) continue
+    errors.push({
+      path,
+      code: ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
+      message: recordShapeMessage(variableName, failure),
+      details: {
+        variable: variableName,
+        shape: failure.shape,
+        ...(failure.target === undefined ? {} : { target: failure.target }),
       },
     })
   }

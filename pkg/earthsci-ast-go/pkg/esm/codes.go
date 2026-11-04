@@ -299,15 +299,16 @@ const (
 	// index-set renaming", "Where it applies"). The field is a legal
 	// `SubsystemRef` property at either mount form, but a binding whose
 	// top-level `models.<k>` `{ref}` inliner cannot apply it MUST say so rather
-	// than merge the leaf under its pre-rename axis names. Go does not inline a
-	// top-level `{ref}` at all, so it never raises this; the constant exists
-	// because the code table is cross-language uniform.
+	// than merge the leaf under its pre-rename axis names. Go applies
+	// `index_set_rename` at every mount form, so it never raises this; the
+	// constant exists because the code table is cross-language uniform.
 	CodeSubsystemIndexSetRenameUnsupportedMountForm = "subsystem_index_set_rename_unsupported_mount_form"
 
-	// CodeMountFormUnsupported: a §4.7 `{ref}` mount at a form this binding does
-	// not implement — here, a top-level `reaction_systems.<k>` `{ref}` (esm-spec
-	// §4.7 "Two mount forms, one mechanism"). Refused at load, pointing at the
-	// entry, rather than decoded as an empty reaction system.
+	// CodeMountFormUnsupported: a §4.7 `{ref}` mount at a form a binding does
+	// not implement (esm-spec §4.7 "Two mount forms, one mechanism"), refused at
+	// load and pointing at the entry rather than decoded as an empty component.
+	// Every binding implements both mount forms, so none raises it now; the
+	// constant exists because the code table is cross-language uniform.
 	CodeMountFormUnsupported = "mount_form_unsupported"
 	// CodeElementTypeUncarried: a declared working precision reaches a construct
 	// that cannot carry it (esm-spec §4.7 "Working precision crosses a mount",
@@ -358,6 +359,11 @@ const (
 	// ErrorDataSourceUndefined is raised when a parameter's `update.source` names
 	// no declared `data_sources` entry (esm-spec §8.5).
 	ErrorDataSourceUndefined = "data_source_undefined"
+	// ErrorRecordsPerSampleInvalid is raised for `from.records_per_sample` on a
+	// rule that is not `data`, or an effective value of 2 on a source with no
+	// `temporal` block or on a parameter whose record shape's first dimension
+	// is not an index set of exactly two members (esm-spec 8.5.1).
+	ErrorRecordsPerSampleInvalid = "records_per_sample_invalid"
 	// ErrorSystemKindMismatch is raised when a model's declared `system_kind`
 	// contradicts the esm-spec §6.3.1 derivation.
 	ErrorSystemKindMismatch = "system_kind_mismatch"

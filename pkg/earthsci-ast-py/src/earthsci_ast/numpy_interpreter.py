@@ -473,12 +473,13 @@ _EVALUABLE_CORE_OPS: frozenset[str] = op_registry.by_tier("core")
 
 #: The evaluable-core ops :func:`eval_expr` has NO rule for (esm-spec §9.6.6
 #: ``unevaluable_operator``): value-invention producers materialized at build,
-#: the load-time-lowered forms, and the structural ``Pre``/``=``/``ic``/``join``.
-#: Pinned against the dispatch by tests/test_unevaluable_operator.py.
+#: the load-time-lowered forms, and the structural ``=``/``ic``/``join``.
+#: (``Pre`` is NOT here: on a right-hand side it is its operand, see
+#: :func:`eval_expr`.) Pinned against the dispatch by
+#: tests/test_unevaluable_operator.py.
 _NO_RULE_OPS: frozenset[str] = frozenset(
     {
         "=",
-        "Pre",
         "apply_expression_template",
         "argmax",
         "argmin",
@@ -1095,6 +1096,15 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> float | np.ndarray:
         a = eval_expr(expr.args[0], ctx)
         b = eval_expr(expr.args[1], ctx)
         return _apply_cmp(a, b, _CMP_UFUNCS[op])
+    if op == "Pre":
+        # `Pre(x)` is the value of x immediately before an event fires (esm-spec
+        # §5.1). Evaluated anywhere else there is no event, so the value just
+        # before is the current one and `Pre(x)` is `x`, as the Julia and Rust
+        # evaluators have it (tests/conformance/scalar_operator_semantics/
+        # fixtures/pre_passthrough.esm).
+        if len(expr.args) != 1:
+            raise NumpyInterpreterError("Pre expects 1 arg")
+        return eval_expr(expr.args[0], ctx)
     if op == "D":
         # esm-spec §4.2 / §9.6.8 (open-op-namespace RFC, Change B): `D` is an
         # evaluable-core op only in its STRUCTURAL equation-LHS role (consumed by

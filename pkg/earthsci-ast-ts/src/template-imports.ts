@@ -2870,6 +2870,8 @@ export function applyScopeInjections(
  * this walk touches ONLY positions that are index-set names BY POSITION and
  * never rewrites a bare string on its own account — a name it does not
  * recognise is left exactly as spelled.
+ *
+ * `m` is a null-prototype map, which is what makes its `in` tests own-key tests.
  */
 function mountRenameWalk(x: unknown, m: Record<string, string>): void {
   if (Array.isArray(x)) {
@@ -2977,7 +2979,10 @@ export function applyMountIndexSetRename(
   }
 
   // Identity entries are no-ops; everything else must land on a distinct name.
-  const changed: Record<string, string> = {}
+  // A null-prototype map, so the `name in changed` lookups here and in
+  // `mountRenameWalk` see only the edge's own keys: an axis spelled like an
+  // `Object.prototype` member ('constructor', 'toString') is not a rename.
+  const changed: Record<string, string> = Object.create(null) as Record<string, string>
   for (const [o, n] of Object.entries(requested)) if (o !== n) changed[o] = n
   if (Object.keys(changed).length === 0) return
   const finals = new Set<string>()

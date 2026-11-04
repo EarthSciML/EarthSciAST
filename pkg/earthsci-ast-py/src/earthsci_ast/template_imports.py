@@ -2083,6 +2083,24 @@ def _finalize_document(
     return root
 
 
+def _unreadable_nested_ref(ref_str: str, exc: Exception) -> Exception:
+    """``exc``, raised reading a nested mount's file, as the
+    ``unresolved_subsystem_ref`` it is (see
+    :func:`collect_mount_declared_metaparameters` ``strict``)."""
+    from .error_handling import UNRESOLVED_SUBSYSTEM_REF
+    from .parse import SubsystemRefError
+
+    if isinstance(exc, SubsystemRefError):
+        exc.code = exc.code or UNRESOLVED_SUBSYSTEM_REF
+        return exc
+    if isinstance(exc, ValueError):  # json.JSONDecodeError
+        return SubsystemRefError(
+            f"nested ref '{ref_str}' did not parse as JSON: {exc}",
+            code=UNRESOLVED_SUBSYSTEM_REF,
+        )
+    return exc
+
+
 def collect_mount_declared_metaparameters(
     raw: Any,
     base_path: str,
@@ -2147,9 +2165,12 @@ def collect_mount_declared_metaparameters(
             import json as _json
 
             child = _json.loads(_fetch_ref_content(expanded, str(base_path)))
-        except Exception:
+        except Exception as exc:
             if strict:
-                raise
+                # A nested mount this walk cannot read is an unresolvable ref.
+                # The pointer stays empty: only the resolver walking the nested
+                # document knows where that edge sits.
+                raise _unreadable_nested_ref(ref_str, exc) from exc
             return
         if not _is_object(child):
             return

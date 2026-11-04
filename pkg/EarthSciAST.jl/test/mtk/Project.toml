@@ -1,0 +1,46 @@
+# Environment for the ModelingToolkit / Catalyst test suite (test/mtk/runtests.jl).
+#
+# These packages used to be in pkg/EarthSciAST.jl/Project.toml's `[targets]
+# test`, which made the package's regular `Pkg.test()` resolve, precompile and
+# load the SciML symbolic stack for every run. They live here instead, and only
+# the ModelingToolkit CI workflow (.github/workflows/mtk-compiler.yml)
+# instantiates this environment; its depot cache is keyed on this file.
+#
+# Manifest.toml is gitignored repo-wide, so EarthSciAST is not pinned to a path
+# here: `Pkg.develop(path = "pkg/EarthSciAST.jl")` points the environment at the
+# checkout before the first run (see test/mtk/runtests.jl). A `[sources]` entry
+# would do the same, but Julia 1.10 (the lts this suite runs at) ignores it.
+[deps]
+Catalyst = "479239e8-5488-4da2-87a7-35f2df7eef83"
+DomainSets = "5b8099bc-c8ec-5219-889f-1d9e522a28bf"
+EarthSciAST = "c7bf5e87-b31b-4281-bdce-ffb8a46ec87c"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+ModelingToolkit = "961ee093-0014-501f-94e3-6117800e7a78"
+OrderedCollections = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
+OrdinaryDiffEqNonlinearSolve = "127b3ac7-2247-4354-8eb6-78cf4e7c58e8"
+OrdinaryDiffEqRosenbrock = "43230ef6-c299-4910-a778-202eb28ce4ce"
+OrdinaryDiffEqTsit5 = "b1df2697-797e-41e3-8120-5422d3b24e4a"
+SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
+SymbolicUtils = "d1185830-fcd6-423d-90d6-eec64667417b"
+Symbolics = "0c5d862f-8b57-4792-8d23-62f2024744c7"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[compat]
+Catalyst = "16, 17.0"
+DomainSets = "0.7, 0.8"
+JSON3 = "1"
+ModelingToolkit = "11"
+OrderedCollections = "1, 2"
+OrdinaryDiffEqNonlinearSolve = "1, 2"
+OrdinaryDiffEqRosenbrock = "1, 2"
+OrdinaryDiffEqTsit5 = "1, 2"
+SciMLBase = "2, 3"
+# HELD BACK DELIBERATELY, for the reason pkg/EarthSciAST.jl/Project.toml's
+# [compat] gives: SymbolicUtils 4.46.0 makes ModelingToolkit fail to precompile.
+# A compat entry only binds the environment that lists the package, so the cap
+# has to be stated here, where ModelingToolkit is installed. (The
+# ModelingToolkitBase cap needs no copy: it is a weak dependency of EarthSciAST,
+# so EarthSciAST's own [compat] applies wherever it is installed.)
+SymbolicUtils = "4 - 4.45"
+Symbolics = "7"
+julia = "1.10"

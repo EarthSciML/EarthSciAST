@@ -1,0 +1,14 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "selector",
+  "description": "Mounts the Slow reaction system of a two-system leaf under the key Chem2, chosen by the reaction_system selector.",
+  "license": "MIT"
+ },
+ "reaction_systems": {
+  "Chem2": {
+   "ref": "./two_systems_leaf.esm",
+   "reaction_system": "Slow"
+  }
+ }
+}

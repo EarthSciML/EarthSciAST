@@ -505,6 +505,32 @@ using Unitful
         )
         @test !isempty(F(OpExpr("exp", E[VarExpr("z")]), var_units))
 
+        # ...and it stays one under a product whose OTHER factor is
+        # undeterminable (a bare literal, an undeclared name). The product's
+        # unit is unknown, but every factor is still walked: `1000 * exp(z)`
+        # was accepted because the walk stopped at the literal. The same holds
+        # for every transcendental and every place the product can sit.
+        scaled(f) = OpExpr("*", E[NumExpr(1000.0), f])
+        for op in ("exp", "log", "log10", "sin", "cos", "tanh", "asin", "atan")
+            @test !isempty(F(scaled(OpExpr(op, E[VarExpr("z")])), var_units))
+        end
+        exp_z = OpExpr("exp", E[VarExpr("z")])
+        for wrapped in (
+                OpExpr("*", E[NumExpr(2.0), VarExpr("x"), exp_z]),
+                OpExpr("*", E[VarExpr("undeclared"), exp_z]),
+                OpExpr("*", E[NumExpr(2.0), scaled(exp_z)]),
+                OpExpr("+", E[VarExpr("x"), scaled(exp_z)]),
+                OpExpr("/", E[scaled(exp_z), NumExpr(3.0)]),
+                OpExpr("^", E[scaled(exp_z), NumExpr(2.0)]),
+                OpExpr("^", E[VarExpr("x"), scaled(exp_z)]),
+                OpExpr("sign", E[exp_z]),
+                OpExpr("sign", E[scaled(exp_z)]),
+            )
+            @test !isempty(F(wrapped, var_units))
+        end
+        # A dimensionless argument under the same product is still fine.
+        @test isempty(F(scaled(OpExpr("log", E[OpExpr("/", E[VarExpr("V"), VarExpr("V0")])])), var_units))
+
         # Adding metres to kilograms; a dimensional exponent.
         @test !isempty(F(OpExpr("+", E[VarExpr("x"), VarExpr("z")]), var_units))
         @test !isempty(F(OpExpr("^", E[VarExpr("x"), VarExpr("z")]), var_units))
@@ -595,6 +621,12 @@ using Unitful
             OpExpr("sign", E[VarExpr("x")]), var_units
         )
         @test sg == Unitful.NoUnits
+        # sign(x) * x is a length, not an area
+        sgx = EarthSciAST.get_expression_dimensions(
+            OpExpr("*", E[OpExpr("sign", E[VarExpr("x")]), VarExpr("x")]), var_units
+        )
+        @test sgx !== nothing
+        @test dimension(sgx) == Unitful.𝐋
 
         # abs preserves dimensions
         ab = EarthSciAST.get_expression_dimensions(
@@ -764,6 +796,7 @@ using Unitful
             "units_sum_undeterminable_operands.esm",
             "units_ifelse_undeterminable_branch.esm",
             "units_comparisons_and_connectives.esm",
+            "units_sign_dimensionless.esm",
         ]
         fixtures_root = joinpath(@__DIR__, "..", "..", "..", "tests", "valid")
 
@@ -1235,6 +1268,18 @@ using Unitful
                 "units_array_reshape_mismatch.esm" => ["/models/Probe/variables/out"],
                 "units_array_transpose_mismatch.esm" => ["/models/Probe/variables/out"],
                 "units_array_broadcast_mismatch.esm" => ["/models/Probe/variables/out"],
+                "units_transcendental_argument_degC_under_product.esm" => [
+                    "/models/BadUnitsModel/variables/deposition_factor",
+                ],
+                "units_transcendental_argument_under_product.esm" => [
+                    "/models/BadUnitsModel/variables/$v" for v in (
+                            "exp_scaled_by_literal", "log_in_multi_factor_product",
+                            "sin_scaled_by_literal", "tanh_in_nested_product",
+                            "exp_in_product_in_sum", "log10_in_quotient",
+                            "exp_in_product_under_power", "atan_in_product_in_exponent",
+                            "exp_in_product_under_sign",
+                        )
+                ],
             )
             @testset "invalid: $f" begin
                 r = EarthSciAST.validate(EarthSciAST.load_path(joinpath(tests_root, "invalid", f)))

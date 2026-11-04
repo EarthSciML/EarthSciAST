@@ -1,0 +1,68 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "Transport",
+    "description": "A consumer whose F_k is shaped ['x', 'rec'], mounted by ref from the records_per_sample cases."
+  },
+  "index_sets": {
+    "rec": {
+      "kind": "interval",
+      "size": 2
+    },
+    "x": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "Transport": {
+      "variables": {
+        "c": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "F_k": {
+          "type": "parameter",
+          "units": "1/s",
+          "shape": [
+            "x",
+            "rec"
+          ],
+          "default": 0.1,
+          "description": "Replaced by Met.K."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "c"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      "F_k",
+                      1,
+                      1
+                    ]
+                  }
+                ]
+              },
+              "c"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

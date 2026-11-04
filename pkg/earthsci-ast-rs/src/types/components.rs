@@ -326,6 +326,12 @@ pub struct DataSourceTemporal {
     /// `records_per_file` is absent or `"auto"`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub time_variable: Option<String>,
+
+    /// How many records a consuming parameter receives per query time, 1 or
+    /// 2: the source-wide default of each parameter's
+    /// `from.records_per_sample` (esm-spec §8.3, §8.5.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub records_per_sample: Option<u8>,
 }
 
 /// Number of records per file — an integer, or the literal `"auto"`.

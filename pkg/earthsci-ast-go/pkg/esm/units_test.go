@@ -381,6 +381,64 @@ func TestPropagateDimensionLiteralNeutrality(t *testing.T) {
 	}
 }
 
+// A product with an indeterminate factor is indeterminate, but every factor is
+// still walked: a provable inconsistency in a later factor (`1000 * exp(T)`,
+// T in K) is a mismatch wherever the product sits. The walk used to stop at
+// the first indeterminate factor and accepted all of these.
+func TestPropagateDimensionProductWalksEveryFactor(t *testing.T) {
+	env := mkEnv(t, map[string]string{"T": "K", "L": "m", "x": "1"})
+	scaled := func(f ExprNode) ExprNode { return ExprNode{Op: "*", Args: []any{1000.0, f}} }
+	for _, op := range []string{"exp", "log", "log10", "sin", "cos", "tanh", "asin", "atan"} {
+		expr := scaled(ExprNode{Op: op, Args: []any{"T"}})
+		if _, err := PropagateDimension(expr, env); err == nil {
+			t.Errorf("1000 * %s(T) must be a mismatch", op)
+		}
+	}
+	expT := ExprNode{Op: "exp", Args: []any{"T"}}
+	for _, expr := range []ExprNode{
+		{Op: "*", Args: []any{2.0, "x", expT}},
+		{Op: "*", Args: []any{"undeclared", expT}},
+		{Op: "*", Args: []any{2.0, scaled(expT)}},
+		{Op: "+", Args: []any{"x", scaled(expT)}},
+		{Op: "/", Args: []any{scaled(expT), 3.0}},
+		{Op: "^", Args: []any{scaled(expT), 2.0}},
+		{Op: "^", Args: []any{"x", scaled(expT)}},
+		{Op: "sign", Args: []any{expT}},
+		{Op: "sign", Args: []any{scaled(expT)}},
+	} {
+		if _, err := PropagateDimension(expr, env); err == nil {
+			t.Errorf("%v must be a mismatch", expr)
+		}
+	}
+	// A dimensionless argument under the same product is fine, and the product
+	// itself stays indeterminate.
+	u, err := PropagateDimension(scaled(ExprNode{Op: "exp", Args: []any{"x"}}), env)
+	if err != nil {
+		t.Fatalf("1000 * exp(x) must not be a mismatch: %v", err)
+	}
+	if u != nil {
+		t.Errorf("1000 * exp(x) must be indeterminate, got %v", u.Dim)
+	}
+}
+
+// sign's result is a dimensionless -1/0/+1 whatever its argument's unit, so
+// sign(L) * L is a length, not an area (esm-spec §4.8.3).
+func TestPropagateDimensionSignIsDimensionless(t *testing.T) {
+	env := mkEnv(t, map[string]string{"L": "m"})
+	u, err := PropagateDimension(ExprNode{Op: "sign", Args: []any{"L"}}, env)
+	if err != nil || u == nil || !u.Dim.IsDimensionless() {
+		t.Fatalf("sign(L) must be dimensionless, got %v, %v", u, err)
+	}
+	u, err = PropagateDimension(ExprNode{Op: "*", Args: []any{ExprNode{Op: "sign", Args: []any{"L"}}, "L"}}, env)
+	if err != nil || u == nil {
+		t.Fatalf("sign(L) * L must be determinable: %v, %v", u, err)
+	}
+	m, _ := ParseUnit("m")
+	if !u.Dim.Equal(m.Dim) {
+		t.Errorf("sign(L) * L must be m, got %v", u.Dim)
+	}
+}
+
 // ifelse takes the unit of its determinable branch, whichever branch that is,
 // is indeterminate with no determinable branch, still rejects two known branches
 // that disagree, and reports a mismatch inside its condition (esm-spec §4.8.3).

@@ -1734,7 +1734,7 @@ A ref MAY contain `${VAR}` tokens (e.g. `"${ESD_ROOT}/grids/cartesian_uniform_1d
 - A file whose sole top-level component is `data_sources` is a valid ESM document — a **source-catalog file** — but it is NOT referenceable as a subsystem: a data source is ingest configuration, not a component. Sharing one across documents is a matter of the catalog file being read, not of it being mounted.
 - The subsystem key in the parent file determines the subsystem's name, not any name in the referenced file.
 
-**Two mount forms, one mechanism.** A `ref` object is admissible at two attachment points: a `subsystems.<k>` entry (above), and a **top-level `models.<k>` / `reaction_systems.<k>` entry** — the schema gives each of those blocks `oneOf [<component>, SubsystemRef]`. The second form mounts the referenced component as a *top-level system* of the assembling document, under the map key, which is what lets a coupled document name its components by file and have its `coupling` endpoints (`<key>.<var>`) resolve with no rewriting. **The two forms differ only in where the mounted component lands.** Everything else this section states applies to both identically: the reference formats and `${VAR}` expansion, the single-component requirement and the `model` / `reaction_system` selector, `bindings` (§9.7.6 site 3), the §9.7.10 edge injection, the resolution-timing rule — **and the index-set merge below**. Two mount forms that merged different things would make an assembly's meaning depend on which attachment point the author happened to pick; a binding MUST NOT make them differ. Current bindings: all five mount a top-level `models.<k>` ref, and all five run the edge pipeline below at both forms, closing and folding the leaf at the mount. One gap remains, at the top-level `reaction_systems.<k>` form, which only **Julia** mounts at all: that inliner is still a raw pre-pass that defers all of §9.7 to the root document's resolution, so a mounted reaction system's own `metaparameters` are neither closed by the edge's `bindings` nor folded at the mount. **Rust**, **TypeScript**, **Go** and **Python** do not implement that form, and a binding that does not implement a mount form MUST refuse the entry with `mount_form_unsupported` (§9.6.6) at its pointer — `/reaction_systems/<k>` — rather than load it as an empty or unresolved reaction system; all four do. Implementing the form in those four is follow-up work, not a current requirement. A `size` naming something the leaf does not declare **merges symbolically** and is closed by the mounting document's own §9.7.6 close. A mount edge is not the last scope that could close the name: the leaf's `index_sets` merge into the mounting registry immediately afterwards, so an axis this leaf cannot size travels up rather than failing at the edge — §9.7.6 site 5's "a metaparameter an edge leaves unbound ... is closed at some enclosing document's close", applied to the axis the name sizes. This holds whatever §9.7 machinery the leaf carries. It MUST NOT depend on whether the leaf happens to declare `metaparameters`, or to import a template library: a component's shape is not allowed to stop resolving because a shared expression was factored into a library it imports and never calls. A ROOT document has no enclosing scope, so there a still-open `size` is `metaparameter_unbound` as before. One binding cannot yet carry the symbolic half: **Julia** at a `subsystems.<k>` mount merges on its TYPED registry, whose `IndexSet.size` is `Union{Int,Nothing}`, so a still-symbolic axis aborts that mount with a raw language-level error rather than a diagnostic (**Go**'s typed registry, which had the same defect at both forms, now carries an unfolded `size` verbatim through parse → emit). WHERE the merge sits relative to the mounting document's own §9.7.6 close is a second, verdict-bearing disagreement among the bindings that do carry it: **Rust** and **Julia** merge before that close, so an assembly that also declares the metaparameter may restate the leaf's symbolic axis verbatim and still be deep-equal, while **Python**, **TypeScript** and **Go** merge after it and see the restatement already folded to a number, which is `subsystem_index_set_conflict`. Whether the edge close SHOULD be strict about a name only the assembler can bind, and which side of that merge order is right, are both open — see `docs/content/rfcs/mount-edge-index-set-renaming.md` §6.
+**Two mount forms, one mechanism.** A `ref` object is admissible at two attachment points: a `subsystems.<k>` entry (above), and a **top-level `models.<k>` / `reaction_systems.<k>` entry** — the schema gives each of those blocks `oneOf [<component>, SubsystemRef]`. The second form mounts the referenced component as a *top-level system* of the assembling document, under the map key, which is what lets a coupled document name its components by file and have its `coupling` endpoints (`<key>.<var>`) resolve with no rewriting. **The two forms differ only in where the mounted component lands.** Everything else this section states applies to both identically: the reference formats and `${VAR}` expansion, the single-component requirement and the `model` / `reaction_system` selector, `bindings` (§9.7.6 site 3), the §9.7.10 edge injection, the resolution-timing rule — **and the index-set merge below**. Two mount forms that merged different things would make an assembly's meaning depend on which attachment point the author happened to pick; a binding MUST NOT make them differ. Current bindings: all five mount a top-level `models.<k>` ref, and all five run the edge pipeline below at both forms, closing and folding the leaf at the mount. All five also mount the top-level `reaction_systems.<k>` form. Its entry is a `{ref}` stub when it carries a `ref` and no `species`, and its selector, for a leaf declaring several reaction systems, is `reaction_system`. It runs the same edge pipeline as `models.<k>`, closing and folding the leaf at the mount, merging its `index_sets` and applying `index_set_rename`. A leaf with no reaction system, a leaf with several and no selector, and a selector naming a reaction system the leaf does not declare are each `unresolved_subsystem_ref` at `/reaction_systems/<k>`. `tests/conformance/toplevel_reaction_system_ref/` pins the form. A binding that does not implement a mount form MUST refuse the entry with `mount_form_unsupported` (§9.6.6) at its pointer rather than load it as an empty or unresolved component; no current binding leaves a form unimplemented. A `size` naming something the leaf does not declare **merges symbolically** and is closed by the mounting document's own §9.7.6 close. A mount edge is not the last scope that could close the name: the leaf's `index_sets` merge into the mounting registry immediately afterwards, so an axis this leaf cannot size travels up rather than failing at the edge — §9.7.6 site 5's "a metaparameter an edge leaves unbound ... is closed at some enclosing document's close", applied to the axis the name sizes. This holds whatever §9.7 machinery the leaf carries. It MUST NOT depend on whether the leaf happens to declare `metaparameters`, or to import a template library: a component's shape is not allowed to stop resolving because a shared expression was factored into a library it imports and never calls. A ROOT document has no enclosing scope, so there a still-open `size` is `metaparameter_unbound` as before. One binding cannot yet carry the symbolic half: **Julia** at a `subsystems.<k>` mount merges on its TYPED registry, whose `IndexSet.size` is `Union{Int,Nothing}`, so a still-symbolic axis aborts that mount with a raw language-level error rather than a diagnostic (**Go**'s typed registry, which had the same defect at both forms, now carries an unfolded `size` verbatim through parse → emit). WHERE the merge sits relative to the mounting document's own §9.7.6 close is a second, verdict-bearing disagreement among the bindings that do carry it: **Rust** and **Julia** merge before that close, so an assembly that also declares the metaparameter may restate the leaf's symbolic axis verbatim and still be deep-equal, while **Python**, **TypeScript** and **Go** merge after it and see the restatement already folded to a number, which is `subsystem_index_set_conflict`. Whether the edge close SHOULD be strict about a name only the assembler can bind, and which side of that merge order is right, are both open — see `docs/content/rfcs/mount-edge-index-set-renaming.md` §6.
 
 **The loader-API bindings reach the leaf at BOTH mount forms.** As part of closing the referenced document (§9.7.6 site 3), a mount edge seeds the leaf's close with the loader-API bindings (site 4) **filtered to the names the leaf DECLARES**; explicit edge `bindings` win over that backfill. The filter is load-bearing in both directions. Forwarding a name the leaf does not declare would raise `template_import_unknown_name` against a leaf that never asked for it; forwarding the mounting document's own declared **defaults** — which are its site-5 close, not a binding on anything it mounts — would let an assembler's unrelated metaparameter silently resize a leaf axis the edge never bound, and would give a different answer from the one the same leaf gets at the other mount form. A binding that applies the backfill at one attachment point and not the other makes a discovered `extent` (§8.9.4) size a top-level-mounted leaf from the data and a subsystem-mounted leaf from its placeholder default, which is a silent wrong answer rather than a diagnostic, and is exactly what "a binding MUST NOT make them differ" forbids. The backfill travels with the whole mount walk, so a leaf mounted several edges down, at either form, gets the same site-4 seeding — filtered to what IT declares — that the first edge got.
 
@@ -1763,7 +1763,7 @@ The two cases are told apart by name, not by position: a name in both the refere
 
 *Checks.* A key MUST name an index set of the resolved mounted document, else `subsystem_index_set_rename_unknown_name` — renames never invent names, matching §9.7.7. Targets MUST be dotted identifiers (§9.7.7 grammar), else `template_import_rename_invalid`; post-rename names MUST be distinct within the edge, else `template_import_rename_collision`. Identity entries are no-ops; an absent or empty map leaves resolution exactly as it was. The map need not be total — an axis the mount does not name passes through unrenamed, which is what keeps a *deliberately shared* axis (a common mesh, a common vertical coordinate) merging deep-equal across two mounts.
 
-*Where it applies (normative at both mount forms).* `index_set_rename` is a `SubsystemRef` property, so by "Two mount forms, one mechanism" above it is normative at BOTH attachment points — the `subsystems.<k>` edge and a top-level `models.<k>` / `reaction_systems.<k>` `{ref}` — with the same meaning and the same pipeline. That section's rule that a binding MUST NOT make the two forms differ is what makes silence unacceptable here: a binding that cannot yet APPLY the field at a form MUST REFUSE that edge with `subsystem_index_set_rename_unsupported_mount_form` (§9.6.6) rather than mount the leaf under its pre-rename axis names, which is the exact failure this field exists to prevent and would surface later as an unrelated shape or `undefined_index_set` error. Status: every binding applies it at both the `subsystems.<k>` edge and the top-level `models.<k>` `{ref}` — each runs one edge pipeline at both forms, closing and folding the leaf at the mount, so there is a resolved mounted document to rename. The one place the refusal still fires is the top-level `reaction_systems.<k>` form, which only **Julia** mounts and which is still the raw pre-pass "Two mount forms" names as the remaining gap — no resolved mounted document to rename, so the edge is refused with the code above. That refusal is scoped to this field and closes when that gap does. **Python**, **Rust**, **TypeScript** and **Go** do not mount that form at all and refuse the whole entry with `mount_form_unsupported` ("Two mount forms, one mechanism" above), so an `index_set_rename` on it is not silently ignored there either. Every binding defines the code, because the code table is cross-language uniform.
+*Where it applies (normative at both mount forms).* `index_set_rename` is a `SubsystemRef` property, so by "Two mount forms, one mechanism" above it is normative at BOTH attachment points — the `subsystems.<k>` edge and a top-level `models.<k>` / `reaction_systems.<k>` `{ref}` — with the same meaning and the same pipeline. That section's rule that a binding MUST NOT make the two forms differ is what makes silence unacceptable here: a binding that cannot yet APPLY the field at a form MUST REFUSE that edge with `subsystem_index_set_rename_unsupported_mount_form` (§9.6.6) rather than mount the leaf under its pre-rename axis names, which is the exact failure this field exists to prevent and would surface later as an unrelated shape or `undefined_index_set` error. Status: every binding applies it at both the `subsystems.<k>` edge and the top-level `models.<k>` `{ref}` — each runs one edge pipeline at both forms, closing and folding the leaf at the mount, so there is a resolved mounted document to rename. Every binding also applies it at the top-level `reaction_systems.<k>` `{ref}`, through the same edge pipeline, so no binding currently raises the refusal code. Every binding defines the code, because the code table is cross-language uniform.
 
 *Round trip.* `index_set_rename` rides on a mount edge, and a mount edge is consumed at load ("after resolution, the in-memory representation is identical to a file with all subsystems defined inline"). Like `bindings` and the §9.7.10 injection on the same edge, it does **not** survive `parse → emit`: the emitted document carries the inlined component with its axes already spelled under the post-rename names, and `emit ∘ load` stays a byte-wise fixed point because the second load has no edge left to rename.
 
@@ -1965,6 +1965,7 @@ A conforming parser MUST resolve exactly the strings this grammar and these toke
 | `ic` | CARRIES its operand's unit: `ic(X)` has the dimension and scale of `X`, so the initial-condition equation `ic(T [K]) = p0 [Pa]` is a mismatch, and `ic(T [K]) = 288.0` is a check like `T = 288.0`. |
 | `min` `max` `abs` `ifelse` `Pre` | PRESERVE the operand unit (all value operands must agree in dimension and scale); they are not dimensionless. `min` and `max` treat undeterminable operands exactly as `+` `-` do: `min(x [m], 0.5 * y [m])` has unit `m`, and `min(1, 2)` is undeterminable. `ifelse(cond, a, b)` applies the same rule to its two branches: when both are determinable they must agree, when only one is the result is its unit (`ifelse(c > 0, x [m], 0.5 * y [m])` has unit `m`, whichever branch is the determinable one), and when neither is (`ifelse(c > 0, 1, 2)`) the result is undeterminable. The condition is not part of the result unit and need not be dimensionless, but it is still checked: `ifelse(x [m] > z [kg], a, b)` is an ERROR. |
 | comparisons `>` `<` `>=` `<=` `==` `!=` | The operands whose unit is determinable MUST share a dimension and a scale, and an undeterminable operand is skipped exactly as in `+` `-`: `x [m] > z [kg]` is an ERROR, while `x [m] > 0` and `x [m] > 0.5 * y [m]` have nothing that can disagree. The result is dimensionless (a boolean) whatever the operands are, including when none of them is determinable (`1 > 2`). |
+| `sign` | The result is dimensionless (`-1`, `0` or `+1`) whatever its argument's unit, so `sign(x [m]) * L [m]` has unit `m`, not `m^2`. The argument carries no unit requirement of its own, but it is checked for the findings inside it, so `sign(exp(T [K]))` is an ERROR. |
 | `and` `or` `not` | The result is dimensionless (a boolean). The operands carry no unit requirement of their own — `and(x [m], z [kg])` is not an error — but each operand is checked for the findings inside it, so `not(x [m] > z [kg])` and `and(x [m] > z [kg], c > 0)` are ERRORS. |
 | `index` `reshape` `transpose` | The unit of the source array `args[0]` — an array's `units` are the unit of every element (§6). The subscripts of `index`, the `shape` of `reshape` and the `perm` of `transpose` are not part of the unit. With no operand the result is UNDETERMINABLE. |
 | `concat` | Its operands follow the `+` rule: every determinable operand MUST share a dimension and a scale (`concat(a [m], b [kg])` is an ERROR), an undeterminable operand is skipped, the result is the shared unit, and with no determinable operand it is UNDETERMINABLE. |
@@ -3870,7 +3871,7 @@ Authentication, credential management, and per-variable temporal availability co
 | `record_filter` | | Which records of a `points` source survive (see §8.9.3). |
 | `extent` | | Binds the delivered record count to a metaparameter (see §8.9.4). |
 | `reference` | | Data source citation. |
-| `metadata` | | Free-form metadata. The `tags` array is conventional for scientific role. |
+| `metadata` | | Free-form metadata. The `tags` array is conventional for scientific role; `esio_format` names the reader (§8.1.1). |
 
 #### Why the shared spec stays here
 
@@ -3885,6 +3886,30 @@ stated per-parameter:
 
 A per-parameter spelling of either would let two columns of the same table
 disagree about which rows are real.
+
+#### 8.1.1 `metadata.esio_format` — the reader format
+
+`metadata` is free-form, with two conventional keys: `tags` (scientific role)
+and `esio_format`, the name of the format reader that decodes the source's
+files, as EarthSciIO's format registry spells it: `"netcdf"`, `"zarr"`,
+`"ff10"`, `"csv"`, `"geotiff"`, `"parquet"`, … The set of names is the reader's,
+not this format's, so the schema checks only that the value is a non-empty
+string.
+
+```json
+"metadata": { "tags": ["meteorology"], "esio_format": "netcdf" }
+```
+
+The key is OPTIONAL in the document and changes nothing in it: load, validation,
+`flatten` and the flattened system read it nowhere, and a source without it is
+valid. It is what a runtime that reads the source needs. A binding's
+document-driven provider construction (`providers_from_document`) reads the
+reader from `esio_format`; it MUST refuse, naming the source, to build a
+provider for a source it was asked to build that has no `esio_format` and
+whose reader it cannot otherwise determine, and it MUST NOT guess a reader
+for a source whose `esio_format` is present. A binding MAY infer a reader
+for a source without one (Python infers `netcdf` from a `.nc` URL); a
+document meant to run in every binding declares it.
 
 ### 8.2 `source` — file discovery
 
@@ -3944,9 +3969,15 @@ temporal:
   frequency:   ISO8601 duration   # spacing between samples within a file
   records_per_file: integer | "auto"
   time_variable: string        # name of the time coord inside the file
+  records_per_sample: 1 | 2    # default for every parameter drawing from the source (§8.5.1)
 ```
 
 Both **static declaration** (`records_per_file` + `frequency`) and **runtime discovery** (`time_variable`) are allowed. If both are present, the static declaration wins and `time_variable` acts as a fallback. `records_per_file: "auto"` explicitly defers to runtime discovery.
+
+`records_per_sample` is how many records a parameter drawing from the source
+receives at each query time, the source-wide default of the parameter's own
+`from.records_per_sample` (§8.5.1). It is a different count from
+`records_per_file`, which counts the records stored in one file.
 
 ### 8.4 (Reserved)
 
@@ -3971,6 +4002,7 @@ consumer, and the units are declared once — on the parameter — instead of tw
       unit_conversion: number | Expression   # optional
       codes: DataSourceCodes       # optional; text column -> numbers (§8.9.1)
       select: DataSourceSelect     # optional; overrides the source default (§8.9.2)
+      records_per_sample: 1 | 2    # optional; overrides the source default (§8.5.1)
       description: string
       reference: Reference
 ```
@@ -3986,6 +4018,109 @@ declared, rather than one of them being sliced by the caller after the fact.
 
 `update.source` MUST resolve to a `data_sources` key (`data_source_undefined`
 otherwise).
+
+#### 8.5.1 `records_per_sample` — one record, or the two that bracket the time
+
+A time-varying source holds records at discrete times. `records_per_sample`
+says which of them the parameter receives at a query time $t$:
+
+| Value | The parameter receives |
+|---|---|
+| `1` | the record at or before $t$: the latest record whose time is $\le t$. The parameter's declared shape is the file variable's shape without its record axis. |
+| `2` | the record at or before $t$ and the record after it, in that order, stacked along the parameter's **first** declared dimension, which holds exactly two members. The rest of the declared shape is the file variable's shape without its record axis. |
+
+```json
+{
+  "index_sets": { "rec": { "kind": "interval", "size": 2 }, "cells": { "kind": "interval", "size": 100 } },
+  "variables": {
+    "F_PBLH": { "type": "parameter", "units": "m", "shape": ["rec", "cells"],
+                "update": { "kind": "data", "source": "GEOSFP_A1",
+                            "from": { "file_variable": "PBLH", "records_per_sample": 2 } } }
+  }
+}
+```
+
+(`index_sets` is document-scoped and `variables` sits in a model; they are shown
+together for brevity.) `F_PBLH[1, c]` is the record at or before $t$ and
+`F_PBLH[2, c]` the next one.
+
+The source does not interpolate, at either value. With `2` the model blends the
+two records itself, in an ordinary expression, with a weight it computes from
+`t` and the record spacing (for example $w = \mathrm{frac}((t - t_0)/\Delta t)$ and
+$(1 - w)\,F[1, \ldots] + w\,F[2, \ldots]$). That keeps the blend in the model,
+where it is visible, differentiable and the same in every binding, and keeps the
+source pure I/O. The value of a parameter with `2` changes when the source
+advances a record, exactly as with `1`: the pair is refreshed together, so a
+model that blends reads a value continuous in $t$ while its inputs stay
+piecewise constant.
+
+**Where the value comes from.** The parameter's `from.records_per_sample`
+when given; otherwise the source's `temporal.records_per_sample` (§8.3);
+otherwise `1`. This is the **effective** value. Records are the consumer's
+choice, so two parameters may read one source differently, which is why the
+field lives on `from` and the source's is only a default, as for `select`
+(§8.9.2).
+
+**Validation.** A document is invalid, `records_per_sample_invalid`, when any
+`update` rule of a parameter at any depth (a top-level model's or a subsystem's)
+satisfies one of the conditions below. The pointer is the rule's: the
+parameter's `/update` when `update` is a single rule, and `/update/<i>` (the
+rule's 0-based position) when it is an array of rules.
+
+1. a rule whose `kind` is not `data` carries `from.records_per_sample` (only a
+   `data` rule names a source to read records from);
+2. a parameter's effective value is `2` and its source declares no `temporal`
+   block (a source without one has a single record and no successor, so there
+   is no pair to deliver);
+3. a parameter's effective value is `2` and its **record shape** is empty, or
+   its first entry names an index set that does not have exactly two members:
+   an `interval` whose `size` is not 2, a `categorical` whose `members` are not
+   two, or any `derived` or `ragged` set (whose size is not known at load).
+
+The record shape is the parameter's declared `shape` when that is not empty.
+A parameter that declares an empty `shape` and is the `from` of a
+`variable_map` entry with `transform: "param_to_var"` takes, in the flattened
+system, the shape of the parameter it replaces (esm-libraries-spec §4.7.3), and
+its record shape is that target's declared `shape`. When it is the `from` of
+several such entries, **every** target's declared `shape` is a record shape of
+the parameter and each must satisfy rule 3. This is how a data
+component declares a field once, as a scalar, and a consumer gives it the
+record axis and the grid:
+
+```json
+"coupling": [
+  { "type": "variable_map", "from": "GEOSFP.PBLH", "to": "Transport3D.F_PBLH", "transform": "param_to_var" }
+]
+```
+
+with `GEOSFP.PBLH` declared `"shape": []` and
+`"from": {"file_variable": "PBLH", "records_per_sample": 2}`, and
+`Transport3D.F_PBLH` declared `"shape": ["gf_t", "gf_lat", "gf_lon"]` with
+`gf_t` of size 2.
+
+**When rule 3 is checked.** Structural validation checks rule 3 against every
+record shape it can see in the loaded document: the parameter's own non-empty
+`shape`, and the declared `shape` of each `param_to_var` target named by an
+inline `variable_map` whose declaration resolves in the loaded document (a
+target inside a subsystem mounted by `ref` resolves once the ref is mounted,
+§4.7; a binding that validates before mounting refs treats a target it cannot
+yet reach as not decidable, never as empty, and likewise a record shape whose
+first dimension names an index set that only a not-yet-mounted file can
+declare). It refuses an empty record shape
+only when none can arrive later, that is, when the parameter is the `from` of
+no inline `param_to_var` entry and the document's `coupling` holds no
+`coupling_import` entry. Otherwise a record shape validation could not decide
+is checked by `flatten`, after `coupling_import` expansion (§10.10), against
+the `param_to_var` edges of the expanded coupling sequence, and refused there
+with the same `records_per_sample_invalid` code and pointer. A record shape
+that is still empty after expansion is refused there too. This is the same
+split as for a mis-bound import (§10.10.3): a bad edge is caught by
+validating it where it first exists.
+
+`flatten` carries `from.records_per_sample` as written on the flattened
+parameter's `update`, and every binding's `loader_fields` entry reports the
+parameter's effective value (esm-libraries-spec §4.7.5,
+`tests/conformance/records_per_sample/`).
 
 ### 8.6 Regridding — a coupling expression
 
@@ -5112,7 +5247,7 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `url_substitution_unknown_name` | A mount edge's `url_substitutions` key names no bare `{name}` placeholder of any `url_template` or `mirrors` entry of the referenced document's `data_sources` (§4.7 "Binding a data source's location at the mount"). |
 | `data_source_merge_conflict` | Two mounts contribute the same `data_sources` name to one mounting document with entries that are not identical after `url_substitutions` and §8.2.1 resolution, and the mounting document does not declare that name itself (§4.7 "A mounted document's data sources"). The message names the source and both edges. |
 | `element_type_uncarried` | A declared working precision reaches a construct that cannot carry it (§4.7 "Working precision crosses a mount", §11.3.1). At load: a mounted document whose `domain.element_type` must be written onto its component (it differs from the mounting document's effective precision) where the component is, or carries, a reaction system, whose species and parameters have no per-variable `element_type`. At build: an evaluator that cannot carry a declared `element_type` at some construct. MUST name the edge or construct. Refusing is REQUIRED: evaluating the construct in another precision is the silent change of precision §11.3.1 forbids. |
-| `mount_form_unsupported` | A §4.7 `{ref}` mount appears at a mount form this binding does not implement — currently a top-level `reaction_systems.<k>` `{ref}`, which only Julia implements (§4.7 "Two mount forms, one mechanism"). Refusing is REQUIRED, at the entry's pointer (`/reaction_systems/<k>`): loading the entry as an empty or unresolved component would be silently wrong. Distinct from `subsystem_index_set_rename_unsupported_mount_form`, which refuses one field at a form the binding does mount. |
+| `mount_form_unsupported` | A §4.7 `{ref}` mount appears at a mount form this binding does not implement — no current binding leaves a §4.7 mount form unimplemented, so none raises it today (§4.7 "Two mount forms, one mechanism"). Refusing is REQUIRED, at the entry's pointer (for example `/reaction_systems/<k>`): loading the entry as an empty or unresolved component would be silently wrong. Distinct from `subsystem_index_set_rename_unsupported_mount_form`, which refuses one field at a form the binding does mount. |
 | `template_import_cycle` | Import-graph cycle over canonical paths (§9.7.2). |
 | `template_import_name_conflict` | Same template or metaparameter name reaches one scope with non-deep-equal definitions (§9.7.4). |
 | `template_import_unknown_name` | `only` names a template the target does not declare (§9.7.2); or a metaparameter binding — at an import edge, a subsystem edge, or the loader API — names a metaparameter the target document neither declares nor re-exports (§9.7.6). At the **loader API** the declared set also includes the names the target's MOUNTED documents declare (§4.7, either mount form, transitively), since the mount edge forwards such a name into the leaf's own close; a name no document in the assembly declares is still refused. Also raised, at LOAD, for a `data_sources.<k>.extent.metaparameter` (§8.9.4) no document in the assembly declares — the same condition, decided off the documents instead of deferred to the sample. |

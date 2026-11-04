@@ -78,8 +78,10 @@ Ensure you have the following installed:
 
 4. **Run the full test suite:**
    ```bash
-   # Julia tests (primary testing framework)
+   # Julia tests (primary testing framework), from pkg/EarthSciAST.jl
    julia --project=. -e 'using Pkg; Pkg.test()'
+   # ...plus the ModelingToolkit / Catalyst suite, which has its own
+   # environment (see "Julia (EarthSciAST.jl)" below)
 
    # Cross-language conformance tests
    ./scripts/test-conformance.sh
@@ -248,6 +250,26 @@ test(conformance): add mathematical correctness fixtures
 cd pkg/EarthSciAST.jl
 julia --project=. -e 'using Pkg; Pkg.activate("."); Pkg.test()'
 ```
+
+`Pkg.test()` runs everything EXCEPT the ModelingToolkit / Catalyst tests:
+ModelingToolkit and Catalyst are not in the package's `[targets] test`, so that
+suite never loads them. Their tests live in `test/mtk/`, a separate suite with
+its own environment (`test/mtk/Project.toml`), which CI runs in the `mtk-tests`
+job of `.github/workflows/mtk-compiler.yml`. Run it after a change to the MTK or
+Catalyst extensions (`ext/EarthSciASTMTKExt.jl`, `ext/mtk_ext/`,
+`ext/EarthSciASTCatalystExt.jl`), `compiler = :mtk`, or `run_esm_tests`:
+
+```bash
+# From the repository root. Manifest.toml is gitignored, so develop the
+# checkout into the environment once:
+julia --project=pkg/EarthSciAST.jl/test/mtk -e 'using Pkg; Pkg.develop(path="pkg/EarthSciAST.jl"); Pkg.instantiate()'
+julia --project=pkg/EarthSciAST.jl/test/mtk pkg/EarthSciAST.jl/test/mtk/runtests.jl
+# or one file:
+julia --project=pkg/EarthSciAST.jl/test/mtk pkg/EarthSciAST.jl/test/mtk/mtk_export_test.jl
+```
+
+A new test that needs ModelingToolkit, Catalyst or Symbolics goes in
+`test/mtk/` (and in `test/mtk/runtests.jl`), not in `test/`.
 
 ### TypeScript (@earthsciml/ast)
 
@@ -435,6 +457,12 @@ standalone from the adapter's Reactant environment (its own header documents
 the invocation above). Everything runs from the repository root.
 
 #### The third workflow: `mtk-compiler.yml`
+
+That workflow has two jobs. `mtk-tests` runs the Julia package's
+ModelingToolkit / Catalyst test suite (`pkg/EarthSciAST.jl/test/mtk/`, see
+"Julia (EarthSciAST.jl)" above) at the same two Julia versions as the regular
+`julia-tests` job, with its own depot cache keyed on `test/mtk/Project.toml`.
+The second job, described next, is the compiler-agreement tier's `mtk` leg.
 
 The compiler-agreement tier's `mtk` compiler (Julia only) is gated in
 `.github/workflows/mtk-compiler.yml` rather than in the conformance run, for the

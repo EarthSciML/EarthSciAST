@@ -866,6 +866,7 @@ text.
 | `event_affects_parameter` | An event `affects` LHS names a parameter; parameter mutation belongs in the parameter's own `update` (esm-spec §5.4) |
 | `null_reaction` | Reaction has both `substrates: null` and `products: null` |
 | `data_source_undefined` | A parameter's `update.source` names no declared `data_sources` entry |
+| `records_per_sample_invalid` | A non-`data` rule carries `from.records_per_sample`, or a data-fed parameter's effective `records_per_sample` is 2 while its source declares no `temporal` block or its record shape's first dimension is not an index set of exactly two members (esm-spec §8.5.1) |
 | `event_var_undeclared` | Variable in event affects/conditions is not declared |
 | `unresolved_subsystem_ref` | Subsystem reference points to a local file that does not exist (canonical; RETIRES `ref_not_found` — CONFORMANCE_SPEC §7.1.3f) |
 | `ref_unreachable` | Subsystem reference URL is unreachable or returned a non-200 status |
@@ -1554,7 +1555,7 @@ TypeScript `camelCase`, others verbatim).
 | `function_tables` | ordered map | Merged function-table registry; resolves `table_lookup`. |
 | `template_registry` | ordered map | The merged expression-template registry specified above. |
 | `field_ics` | list of (state, expr) | Deferred scoped-reference / array `ic` equations (esm-spec §11.4.1), at most one per state; two for one state are refused with `ConflictingDerivativeError`. |
-| `loader_fields` | list | Provider-served loaded fields the system consumes. |
+| `loader_fields` | list | Provider-served loaded fields the system consumes, one per data-fed parameter ("Loader fields" below). |
 | `lifted_shapes` | ordered map | Post-lift grid extents of each pointwise-lifted state, keyed by the state. The state's `shape` names the index sets of those extents ("Pointwise lift: index sets" below). |
 
 - **The parameter subsets do not partition the struct; they partition `parameters`.**
@@ -1580,6 +1581,23 @@ TypeScript `camelCase`, others verbatim).
   consumer must be able to build a solver problem from the flattened form alone. The one
   field flatten changes is a pointwise-lifted state's `shape`, which becomes the lift's index
   sets (below): after the lift the state is an array on those index sets.
+
+**Loader fields (normative).** `loader_fields` holds one entry per data-fed
+parameter, a parameter with a `data` rule whose `source` names a declared
+`data_sources` entry (esm-spec §8.5), in the document order of the other maps.
+Each entry carries: the parameter's flattened name; its owning component's
+prefix; the `data_sources` key; the `file_variable`; the cadence, `discrete`
+when the source declares `temporal` and `const` otherwise (CONFORMANCE_SPEC
+§5.7.2); the binding's `unit_conversion`, when declared; and
+`records_per_sample`, the **effective** value of esm-spec §8.5.1 (the rule's
+`from.records_per_sample`, else the source's `temporal.records_per_sample`,
+else 1), always present, so a consumer does not re-read the source to learn
+whether the field holds one record or the pair that brackets the query time.
+The field names are each binding's (Julia, Python and TypeScript spell the source key and
+file variable `subkey` and `var`, Rust and Go `source` and `file_variable`);
+the contents are pinned by `tests/conformance/records_per_sample/`. The
+flattened parameter's own `update` keeps `from.records_per_sample` as written,
+not resolved.
 
 **Pointwise lift: index sets (normative).** The pointwise lift (esm-spec §10.5) promotes a
 scalar state onto the grid of the operator `makearray` its merged equation carries. A state that
@@ -2161,7 +2179,8 @@ that a non-mock object is returned) are insufficient: they cannot catch
 silent bugs such as non-numeric `Expr` nodes, missing initial conditions, unit
 mismatches, or singular Jacobians — all of which surface only inside `solve`.
 
-The test file `test/simulate_e2e_test.jl` is part of `runtests.jl` and MUST
+The test file `test/mtk/simulate_e2e_test.jl` is part of the ModelingToolkit
+suite (`test/mtk/runtests.jl`) and MUST
 cover at minimum:
 
 1. **Exponential decay** — `D(x, t) = −k·x`, `x(0) = 1`, `k = 0.1`. Build via

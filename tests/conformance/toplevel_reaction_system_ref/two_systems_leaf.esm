@@ -1,0 +1,88 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "two_systems_leaf",
+  "description": "A leaf declaring two reaction systems, so a mount must name one with a reaction_system selector.",
+  "license": "MIT"
+ },
+ "reaction_systems": {
+  "Chem": {
+   "species": {
+    "A": {
+     "units": "mol/m^3",
+     "default": 1.0,
+     "description": "reactant"
+    },
+    "B": {
+     "units": "mol/m^3",
+     "default": 0.0,
+     "description": "product"
+    }
+   },
+   "parameters": {
+    "k": {
+     "units": "1/s",
+     "default": 0.3,
+     "description": "rate constant"
+    }
+   },
+   "reactions": [
+    {
+     "id": "R1",
+     "substrates": [
+      {
+       "species": "A",
+       "stoichiometry": 1
+      }
+     ],
+     "products": [
+      {
+       "species": "B",
+       "stoichiometry": 1
+      }
+     ],
+     "rate": "k"
+    }
+   ]
+  },
+  "Slow": {
+   "species": {
+    "C": {
+     "units": "mol/m^3",
+     "default": 2.0,
+     "description": "reactant"
+    },
+    "D": {
+     "units": "mol/m^3",
+     "default": 0.0,
+     "description": "product"
+    }
+   },
+   "parameters": {
+    "j": {
+     "units": "1/s",
+     "default": 0.01,
+     "description": "slow rate constant"
+    }
+   },
+   "reactions": [
+    {
+     "id": "R2",
+     "substrates": [
+      {
+       "species": "C",
+       "stoichiometry": 1
+      }
+     ],
+     "products": [
+      {
+       "species": "D",
+       "stoichiometry": 1
+      }
+     ],
+     "rate": "j"
+    }
+   ]
+  }
+ }
+}

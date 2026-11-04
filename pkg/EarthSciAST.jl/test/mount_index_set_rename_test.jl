@@ -116,53 +116,64 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         @test err.code == ERROR_CODES.SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME
     end
 
-    @testset "the twin refusal survives at a top-level reaction-system `{ref}`" begin
-        # OUT of the model form's scope and deliberately unchanged: Julia is the
-        # only binding with a top-level `reaction_systems.<k>` `{ref}` mount, and
-        # that inliner is still the raw pre-pass the model form used to be — no
-        # resolved mounted document, so nothing for the rename to speak about.
-        # Refusing rather than ignoring keeps it loud (esm-spec §4.7 "Where it
-        # applies"); the refusal closes when THAT gap does.
+    @testset "the field applies at a top-level reaction-system `{ref}` too" begin
+        # esm-spec §4.7 "Two mount forms, one mechanism": a top-level
+        # `reaction_systems.<k>` `{ref}` runs the same edge pipeline as a
+        # `models.<k>` one: the leaf closes under the edge's `bindings`, its axes
+        # merge, and the rename applies.
         dir = mktempdir()
         leaf = Dict{String, Any}(
             "esm" => "1.0.0", "metadata" => Dict("name" => "rs_leaf"),
+            "metaparameters" => Dict("N" => Dict("type" => "integer", "default" => 2)),
+            "index_sets" => Dict("ax" => Dict("kind" => "interval", "size" => "N")),
             "reaction_systems" => Dict(
                 "RS" => Dict(
                     "species" => Dict(
                         "A" => Dict("units" => "mol/m^3", "default" => 1.0),
                         "B" => Dict("units" => "mol/m^3", "default" => 0.0)
                     ),
+                    "parameters" => Dict("k" => Dict("units" => "1/s", "default" => 0.5)),
                     "reactions" => [
                         Dict(
-                            "reactants" => Dict("A" => 1),
-                            "products" => Dict("B" => 1),
-                            "rate" => 0.5
+                            "id" => "R1",
+                            "substrates" => [Dict("species" => "A", "stoichiometry" => 1)],
+                            "products" => [Dict("species" => "B", "stoichiometry" => 1)],
+                            "rate" => "k"
                         ),
                     ]
                 )
             )
         )
         write(joinpath(dir, "rs_leaf.esm"), JSON3.write(leaf))
-        host = Dict{String, Any}(
+        host(edge) = Dict{String, Any}(
             "esm" => "1.0.0", "metadata" => Dict("name" => "rs_host"),
-            "reaction_systems" => Dict(
-                "R" => Dict(
-                    "ref" => "./rs_leaf.esm",
-                    "index_set_rename" => Dict("ax" => "renamed_ax")
-                )
-            )
+            "reaction_systems" => Dict("R" => merge(Dict{String, Any}("ref" => "./rs_leaf.esm"), edge))
         )
-        write(joinpath(dir, "rs_host.esm"), JSON3.write(host))
-        err = try
+        load(edge) = begin
+            write(joinpath(dir, "rs_host.esm"), JSON3.write(host(edge)))
             EarthSciAST.load_path(joinpath(dir, "rs_host.esm"))
+        end
+
+        f = load(Dict{String, Any}())
+        @test f.index_sets["ax"].size == 2                # the leaf's own default
+        @test Set(s.name for s in f.reaction_systems["R"].species) == Set(["A", "B"])
+
+        f = load(Dict{String, Any}("bindings" => Dict("N" => 5)))
+        @test f.index_sets["ax"].size == 5                # closed by the edge
+
+        f = load(Dict{String, Any}("index_set_rename" => Dict("ax" => "renamed_ax")))
+        @test haskey(f.index_sets, "renamed_ax")
+        @test !haskey(f.index_sets, "ax")
+        @test f.index_sets["renamed_ax"].size == 2
+
+        err = try
+            load(Dict{String, Any}("index_set_rename" => Dict("nope" => "renamed_ax")))
             nothing
         catch e
             e
         end
         @test err isa ExpressionTemplateError
-        @test err.code == ERROR_CODES.SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM
-        @test occursin("not supported at this mount form", err.message)
-        @test occursin("subsystems", err.message)   # names the form that works
+        @test err.code == ERROR_CODES.SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME
     end
 
     @testset "a rename key the mounted document does not declare is loud" begin

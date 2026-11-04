@@ -1,0 +1,47 @@
+{
+  "description": "A top-level reaction_systems.<k> {ref} mount (esm-spec §4.7 'Two mount forms, one mechanism'). `implemented_by` lists the bindings that mount this form (all five); a binding not listed MUST refuse every fixture that uses it with `mount_form_unsupported`, at /reaction_systems/<k>. `loads` maps a fixture to the fixture it must load to: after load and emit, the two documents' `models` and `reaction_systems` blocks MUST be deep-equal (in particular the mounted reaction system carries the leaf's species, parameters and reactions, under the mount key, and no `ref`). `load_errors` maps a fixture to {code: [bindings]}: each listed binding MUST refuse the fixture at load with that code, and a binding listed under none MUST still refuse it.",
+  "implemented_by": [
+    "go",
+    "julia",
+    "python",
+    "rust",
+    "typescript"
+  ],
+  "loads": {
+    "basic.esm": "basic_inline.esm",
+    "selector.esm": "selector_inline.esm",
+    "nested.esm": "basic_inline.esm"
+  },
+  "load_errors": {
+    "ambiguous.esm": {
+      "unresolved_subsystem_ref": [
+        "go",
+        "julia",
+        "python",
+        "rust",
+        "typescript"
+      ]
+    },
+    "unknown_selector.esm": {
+      "unresolved_subsystem_ref": [
+        "go",
+        "julia",
+        "python",
+        "rust",
+        "typescript"
+      ]
+    },
+    "missing_file.esm": {
+      "unresolved_subsystem_ref": [
+        "go",
+        "julia",
+        "python",
+        "rust",
+        "typescript"
+      ]
+    }
+  },
+  "notes": {
+    "implemented_by": "All five bindings mount this form through the edge pipeline each runs for a top-level models.<k> {ref} (esm-spec §4.7 'Two mount forms, one mechanism'). Julia's mount of it was a raw pre-pass that did not close the leaf's metaparameters or merge its index_sets until 2026-11-02; none of these fixtures has either."
+  }
+}

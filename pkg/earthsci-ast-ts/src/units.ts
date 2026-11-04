@@ -942,7 +942,6 @@ function computeDimensions(
     }
 
     case 'abs':
-    case 'sign':
     case 'floor':
     case 'ceil':
       return finish(get(0))
@@ -1031,6 +1030,12 @@ function computeDimensions(
       }
       return finish(dimensionless())
     }
+
+    case 'sign':
+      // A dimensionless -1/0/+1 whatever the argument's unit (esm-spec
+      // §4.8.3): `sign(x [m]) * L [m]` is m, not m^2. The argument is walked
+      // above, so a mismatch inside it (`sign(exp(T [K]))`) is still reported.
+      return finish(dimensionless())
 
     case 'and':
     case 'or':

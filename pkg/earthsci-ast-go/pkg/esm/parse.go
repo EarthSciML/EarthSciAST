@@ -34,6 +34,24 @@ type loadOptions struct {
 	// withAuthoredMountDeclared. Unexported, with no exported way to set it.
 	authoredMountDeclared    map[string]bool
 	authoredMountDeclaredSet bool
+	// authoredKeyOrders is the document's key-order table (ESMFile.keyOrders)
+	// from a caller that inlined §4.7 refs and re-encoded the result, which
+	// sorts every object's keys; see withAuthoredKeyOrders. Nil means read the
+	// orders off the text LoadString is given.
+	authoredKeyOrders map[string][]string
+}
+
+// withAuthoredKeyOrders hands LoadString the key-order table a caller already
+// recovered from the AUTHORED document and the documents it mounts. LoadPath
+// splices the root's mounts into a decoded view and re-encodes it, and Go's
+// encoder writes map keys sorted, so the text LoadString then receives has lost
+// the declaration order esm-libraries-spec §4.7.5 step 4 makes normative — the
+// root's own and every mounted leaf's alike. Unexported, with no exported way
+// to set it.
+func withAuthoredKeyOrders(orders map[string][]string) LoadOption {
+	return func(o *loadOptions) {
+		o.authoredKeyOrders = orders
+	}
 }
 
 // withAuthoredMountDeclared hands LoadString the §8.9.4 mount-declared
@@ -153,10 +171,11 @@ func LoadPath(path string, opts ...LoadOption) (*ESMFile, error) {
 		// guards against.
 		//
 		// Returns nil for a document that mounts nothing — nearly all of them —
-		// and only then is the authored text handed on untouched: the re-encode
-		// below sorts map keys, and the document's own declaration order is
-		// recovered by `extractTemplateOrders` inside LoadString.
-		st, ierr := inlineRootRefsRaw(rootView, basePath, apiMeta)
+		// and only then is the authored text handed on untouched. Otherwise the
+		// re-encode below sorts map keys, so the declaration order — the root's
+		// own and each mounted leaf's — travels down beside the text as the
+		// key-order table the inlining recovered.
+		st, orders, ierr := inlineRootRefsRaw(rootView, prepared, basePath, apiMeta)
 		if ierr != nil {
 			return nil, fmt.Errorf("failed to resolve subsystem references: %w", ierr)
 		}
@@ -176,6 +195,7 @@ func LoadPath(path string, opts ...LoadOption) (*ESMFile, error) {
 			// The view no longer matches the text; loadPrepared decodes the text.
 			rootView = nil
 			staged = st
+			mountOpts = append(mountOpts, withAuthoredKeyOrders(orders))
 		}
 	}
 
@@ -267,40 +287,6 @@ func mountedContentVersionGates(view map[string]any) error {
 		if err := gate(view); err != nil {
 			return err
 		}
-	}
-	return nil
-}
-
-// refuseTopLevelReactionSystemRefs returns `mount_form_unsupported`, pointing at
-// `/reaction_systems/<k>`, for the first top-level `reaction_systems.<k>` entry
-// that is a bare `{ref}` — a `ref` string and no `species`, the same
-// discriminator the Julia reference uses for this mount form. An inline reaction
-// system is a component, not a mount, and passes through untouched; so do
-// `models.<k>` and `subsystems.<k>` refs, which this binding does implement.
-func refuseTopLevelReactionSystemRefs(jsonStr string) error {
-	view, err := decodeJSONView([]byte(jsonStr))
-	if err != nil {
-		return nil
-	}
-	rs, ok := view["reaction_systems"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	for _, name := range sortedKeys(rs) {
-		entry, ok := rs[name].(map[string]any)
-		if !ok {
-			continue
-		}
-		ref, isRef := entry["ref"].(string)
-		if !isRef {
-			continue
-		}
-		if _, component := entry["species"]; component {
-			continue
-		}
-		return withETPath(newETErr(CodeMountFormUnsupported,
-			fmt.Sprintf("reaction_systems.%s: a top-level `reaction_systems.<k>` `{ref}` mount (ref %q) is not supported by this binding. Inline the reaction system, or mount it at a `subsystems.<k>` `{ref}` edge (esm-spec §4.7 \"Two mount forms, one mechanism\")", name, ref)),
-			"/reaction_systems/"+name)
 	}
 	return nil
 }
@@ -411,15 +397,6 @@ func loadPrepared(jsonStr string, view map[string]any, o loadOptions) (*ESMFile,
 		return nil, fmt.Errorf("JSON schema validation failed: %s", strings.Join(errorStrs, "; "))
 	}
 
-	// esm-spec §4.7: a top-level `reaction_systems.<k>` entry that is a bare
-	// `{ref}` is a MOUNT EDGE at a form this binding does not implement.
-	// `ESMFile.ReactionSystems` is a `map[string]ReactionSystem`, so the decode
-	// below would turn the edge into an EMPTY reaction system and the document
-	// would load clean with nothing mounted. Refuse it here instead.
-	if err := refuseTopLevelReactionSystemRefs(jsonStr); err != nil {
-		return nil, err
-	}
-
 	// Resolve esm-spec §9.7 machinery — template-library imports (depth-first
 	// post-order, per-edge metaparameter instantiation), index_sets merge,
 	// metaparameter close+fold — then expand `apply_expression_template` ops
@@ -445,18 +422,22 @@ func loadPrepared(jsonStr string, view map[string]any, o loadOptions) (*ESMFile,
 	// encoder writes map keys sorted, so the expanded text no longer carries
 	// declaration order). esm-libraries-spec §4.7.5 step 4 makes document
 	// order normative for every map a FlattenedSystem carries.
-	authoredOrders := extractTemplateOrders(jsonStr)
+	authoredOrders := o.authoredKeyOrders
+	if authoredOrders == nil {
+		authoredOrders = extractTemplateOrders(jsonStr)
+	}
 
 	// esm-spec §4.7 "Two mount forms, one mechanism": a top-level `models.<k>`
-	// that is a bare `{ref}` is a MOUNT EDGE, not a component. `ESMFile.Models`
-	// is a `map[string]Model`, so the decode below turns such an entry into an
-	// EMPTY Model and the edge — its `ref`, its `bindings`, its
+	// or `reaction_systems.<k>` that is a bare `{ref}` is a MOUNT EDGE, not a
+	// component. `ESMFile.Models` and `ESMFile.ReactionSystems` are maps of the
+	// component type, so the decode below turns such an entry into an EMPTY
+	// component and the edge — its `ref`, its `bindings`, its
 	// `index_set_rename`, its §9.7.10 form-A `expression_template_imports` — is
 	// gone. Snapshot the edges off the text so the ref resolver can run the
 	// §4.7 edge pipeline on them.
 	//
 	// Taken from the AUTHORED text, BEFORE the machinery pass below. That pass
-	// walks `models.<k>` as COMPONENTS and ends each one with
+	// walks each top-level entry as a COMPONENT and ends each one with
 	// `delete(comp, "expression_template_imports")` — it cannot tell a mount
 	// edge from a component — so a snapshot taken after it carried the edge's
 	// `ref` but had silently lost the edge's injection, and a §9.7.10 form-A
@@ -468,7 +449,7 @@ func loadPrepared(jsonStr string, view map[string]any, o loadOptions) (*ESMFile,
 	// that reason. The merge of the leaf's axes into `file.IndexSets` still
 	// happens where it did, after the root close, so both mount forms stay on
 	// one side of esm-spec §9.7.6 as before.
-	topLevelModelRefs := extractTopLevelModelRefEdges(jsonStr)
+	topLevelRefs := extractTopLevelRefEdges(jsonStr)
 
 	expanded, componentTemplates, err := resolveAndLowerJSONCapturing(jsonStr, o.basePath, o.metaparameters,
 		authoredMountDeclared)
@@ -523,7 +504,10 @@ func loadPrepared(jsonStr string, view map[string]any, o loadOptions) (*ESMFile,
 	esmFile.ExpressionTemplates = authoredTemplates
 	esmFile.Metaparameters = authoredMetaparams
 	esmFile.keyOrders = authoredOrders
-	esmFile.topLevelModelRefs = topLevelModelRefs
+	esmFile.topLevelRefs = topLevelRefs
+	// Mark the EMPTY component each unresolved edge decoded to, so nothing
+	// consumes it as a system until ResolveSubsystemRefs splices the leaf in.
+	markUnresolvedTopLevelMounts(&esmFile)
 	// Replay the authored `species` key order onto each reaction system itself.
 	// DeriveODEs and StoichiometricMatrix take a bare *ReactionSystem and so
 	// cannot reach esmFile.keyOrders, but species declaration order is
