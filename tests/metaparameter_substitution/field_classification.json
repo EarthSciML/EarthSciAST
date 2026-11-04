@@ -254,6 +254,7 @@
       "CouplingImport.bind",
       "CouplingImport.ref",
       "CouplingOperatorCompose.systems",
+      "DataSource.metadata.esio_format",
       "DataSourceBinding.file_variable",
       "DataSourceExtent.metaparameter",
       "DataSourceLocation.mirrors",
