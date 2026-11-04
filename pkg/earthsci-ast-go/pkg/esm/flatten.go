@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -218,6 +219,45 @@ func (e *variableMapUnresolvedEndpointError) Error() string {
 			"EVERY dot-separated segment, so a subsystem endpoint is spelled "+
 			"'<Model>.<Subsystem>.<name>'.",
 		e.From, e.To, e.Side, e.Endpoint)
+}
+
+// variableMapShapeConflictError reports that a data-fed `variable_map` source's
+// declared shape differs from the shape of the shaped target it replaces
+// (esm-libraries-spec §4.7.3).
+//
+// The parameter that survives a `param_to_var` or `conversion_factor` edge is
+// the SOURCE's own declaration, `shape` included. A data-fed parameter must
+// declare its shape (the schema requires it; `[]` declares a scalar buffer),
+// so when the removed target is shaped the rewritten equations index the
+// source the way the target was declared, and the two shapes have to be the
+// same. Taking either one silently would leave equations indexing a parameter
+// of the wrong rank, or — with one source feeding two targets — make the result
+// depend on coupling order.
+//
+// Unexported and without a stable diagnostic code, for the same reason as
+// variableMapUnresolvedEndpointError.
+type variableMapShapeConflictError struct {
+	From, To    string
+	SourceShape []string
+	TargetShape []string
+}
+
+func (e *variableMapShapeConflictError) Error() string {
+	return fmt.Sprintf(
+		"flatten: variable_map(%s -> %s): the data-fed source %q declares shape %s, but the "+
+			"target it replaces declares %s. The source survives with its own declaration, and "+
+			"the rewritten equations index it the way the target was declared, so the two shapes "+
+			"must be equal (esm-libraries-spec §4.7.3). Declare %q with shape %s.",
+		e.From, e.To, e.From, shapeString(e.SourceShape), shapeString(e.TargetShape),
+		e.From, shapeString(e.TargetShape))
+}
+
+func shapeString(shape []string) string {
+	quoted := make([]string, len(shape))
+	for i, s := range shape {
+		quoted[i] = strconv.Quote(s)
+	}
+	return "[" + strings.Join(quoted, ", ") + "]"
 }
 
 // DimensionPromotionError reports that a variable or equation cannot be
@@ -2414,16 +2454,15 @@ func applyCouple(components map[string]*componentSystem, order []string, entry C
 // indistinguishable from one where the coupling had been applied and had
 // simply had no effect.
 //
-// EXEMPTION: a `from` whose owning system is a top-level `data_sources` key.
-// Such a producer is served through the runtime forcing seam rather than as a
-// declared variable, so it is legitimately absent from the tables (see
-// applyVariableMap, which records it as a loaded producer).
+// No exemption for a `from` whose owner is a `data_sources` key: a data source
+// is not a coupling endpoint (esm-spec §8), so a field it serves is reached
+// through the data-fed parameter that names it in `update.from`.
 //
 // Deliberately NOT checked: whether a promoting transform's `to` is a
 // PARAMETER rather than an unknown. tests/valid/scoped_refs_coupling.esm maps
 // `param_to_var` onto a declared unknown, and tightening that is a separate
 // question from whether the endpoint resolves at all.
-func checkVariableMapEndpoints(file *ESMFile, components map[string]*componentSystem,
+func checkVariableMapEndpoints(components map[string]*componentSystem,
 	order []string, coupling []CouplingEntry) error {
 	declared := map[string]bool{}
 	for _, sysName := range order {
@@ -2439,15 +2478,10 @@ func checkVariableMapEndpoints(file *ESMFile, components map[string]*componentSy
 		if !ok {
 			continue
 		}
-		fromOwner, _, _ := strings.Cut(vm.From, ".")
-		_, fromIsLoaded := file.DataSources[fromOwner]
 		for _, side := range []struct{ name, endpoint string }{
 			{"from", vm.From}, {"to", vm.To},
 		} {
 			if side.endpoint == "" || declared[side.endpoint] {
-				continue
-			}
-			if side.name == "from" && fromIsLoaded {
 				continue
 			}
 			return &variableMapUnresolvedEndpointError{
@@ -2466,11 +2500,11 @@ func checkVariableMapEndpoints(file *ESMFile, components map[string]*componentSy
 // `additive`, `multiplicative`) the target stays a parameter; the substitution
 // still runs so the equation set references the canonical name.
 //
-// `loaderNames` is the set of top-level `data_sources` keys. When a
-// `param_to_var` binds a LOADED field onto a GRID-SHAPED consumer parameter, the
-// shape transfers to the source name so the pointwise lift recognizes it as an
-// array operand to index per grid cell (esm-spec §11.5 + §10.4).
-func applyVariableMap(components map[string]*componentSystem, order []string, entry VariableMapCoupling, loaderNames map[string]bool, index int) error {
+// The promoted target's replacement is the source's own declaration, which
+// flattening leaves as declared (esm-libraries-spec §4.7.3). A data source is
+// not a coupling endpoint (esm-spec §8), so no parameter is ever built here for
+// a `from` that names one.
+func applyVariableMap(components map[string]*componentSystem, order []string, entry VariableMapCoupling, index int) error {
 	if entry.From == "" || entry.To == "" {
 		return nil
 	}
@@ -2507,56 +2541,51 @@ func applyVariableMap(components map[string]*componentSystem, order []string, en
 		if !ok {
 			continue
 		}
-		// A DECLARED source parameter survives as itself — its own units,
-		// default and `update` — and, when it is data-fed and declares no
-		// shape, takes the removed target's (esm-libraries-spec §4.7.3).
-		// Building a fresh variable below instead drops the `update`, so the
-		// parameter leaves `discrete_parameters` while `loader_fields` still
-		// lists it.
-		if adoptTargetShape(components, order, entry.From, toVar) {
-			continue
-		}
-		fromOwner, _, _ := strings.Cut(entry.From, ".")
-		if len(toVar.Shape) > 0 && loaderNames[fromOwner] && !comp.parameters.has(entry.From) {
-			comp.parameters.set(FlattenedVariable{
-				Name:         entry.From,
-				Role:         "parameter",
-				SourceSystem: fromOwner,
-				Units:        toVar.Units,
-				Description:  toVar.Description,
-				Shape:        append([]string(nil), toVar.Shape...),
-			})
+		if err := checkDataFedSourceShape(components, order, entry, toVar); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-// adoptTargetShape gives a data-fed source parameter the shape of the
-// `param_to_var` target it replaces. It reports true when from is a declared
-// parameter of some component: that declaration is then the surviving
-// parameter. Only a parameter with a `kind: "data"` update and no declared
-// shape of its own takes the target's shape; every other field, `update`
-// included, stays the source's.
-func adoptTargetShape(components map[string]*componentSystem, order []string, from string, target FlattenedVariable) bool {
+// checkDataFedSourceShape refuses a data-fed source whose declared shape is not
+// its shaped target's.
+//
+// The source survives the edge as declared — units, default, `update`, `shape`
+// (esm-libraries-spec §4.7.3) — so nothing is changed here. When the removed
+// target is shaped and the source is a data-fed parameter, the rewritten
+// equations index the source with the target's indices, so its declared shape
+// (absent and `[]` both scalar) must equal the target's. Checking each edge
+// against the source's DECLARATION, never against a shape an earlier edge gave
+// it, keeps the verdict independent of coupling order.
+func checkDataFedSourceShape(components map[string]*componentSystem, order []string, entry VariableMapCoupling, target FlattenedVariable) error {
+	if len(target.Shape) == 0 {
+		return nil
+	}
 	for _, sysName := range order {
-		comp := components[sysName]
-		source, ok := comp.parameters.m[from]
+		source, ok := components[sysName].parameters.m[entry.From]
 		if !ok {
 			continue
 		}
-		if len(target.Shape) > 0 && len(source.Shape) == 0 && isDataFed(source) {
-			source.Shape = append([]string(nil), target.Shape...)
-			comp.parameters.set(source)
+		if isDataFed(source) && !slices.Equal(source.Shape, target.Shape) {
+			return &variableMapShapeConflictError{
+				From:        entry.From,
+				To:          entry.To,
+				SourceShape: append([]string{}, source.Shape...),
+				TargetShape: append([]string{}, target.Shape...),
+			}
 		}
-		return true
+		return nil
 	}
-	return false
+	return nil
 }
 
-// isDataFed reports whether v carries a `kind: "data"` update (esm-spec §5.4).
+// isDataFed reports whether v carries a `kind: "data"` update with a `from`
+// binding (esm-spec §5.4) — the rule dataSourceFields lowers to a LoaderField,
+// so the two agree on which parameters are data-fed.
 func isDataFed(v FlattenedVariable) bool {
 	for _, rule := range v.UpdateRules() {
-		if rule.Kind == UpdateKindData {
+		if rule.Kind == UpdateKindData && rule.From != nil {
 			return true
 		}
 	}
@@ -3019,7 +3048,7 @@ func applyCouplings(file *ESMFile, components map[string]*componentSystem, order
 	// Endpoint preflight, against the PRE-coupling tables: an `operator_compose`
 	// `translate` merge (§10.2) legitimately consumes one of two spellings of a
 	// quantity, so checking after it ran would flag a well-formed endpoint.
-	if err := checkVariableMapEndpoints(file, components, order, coupling); err != nil {
+	if err := checkVariableMapEndpoints(components, order, coupling); err != nil {
 		return err
 	}
 
@@ -3083,13 +3112,9 @@ func applyCouplings(file *ESMFile, components map[string]*componentSystem, order
 			return err
 		}
 	}
-	loaderNames := map[string]bool{}
-	for k := range file.DataSources {
-		loaderNames[k] = true
-	}
 	for _, vm := range varMaps {
 		resolved := retargetPendingVariableMap(vm.entry, mergedRenames)
-		if err := applyVariableMap(components, order, resolved, loaderNames, vm.index); err != nil {
+		if err := applyVariableMap(components, order, resolved, vm.index); err != nil {
 			return err
 		}
 		// A NAMED transform substitutes `to` away entirely; an EXPRESSION
