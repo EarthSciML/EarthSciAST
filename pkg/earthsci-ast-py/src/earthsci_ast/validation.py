@@ -11,12 +11,21 @@ Layer boundary (what lives where):
   explicitly through :func:`validate` (``load()`` does NOT call it), and it
   COLLECTS problems as structured records rather than raising: semantic errors
   become :class:`~earthsci_ast.error_handling.ErrorCode`-coded
-  ``ValidationError`` entries and unit problems become ``UnitWarning`` entries,
-  all returned in a :class:`ValidationResult`. It owns the *semantic* rules:
-  equation-unknown balance (:func:`_validate_equation_balance_enhanced`),
-  reaction consistency (:func:`_validate_reaction_consistency`), reaction
-  rate dimensions, reaction-system ``ic`` rejection, event consistency, and
-  unit warnings. New semantic rules belong HERE, in the coded channel.
+  ``ValidationError`` entries, all returned in a :class:`ValidationResult`.
+  It owns the *semantic* rules: equation-unknown balance
+  (:func:`_validate_equation_balance_enhanced`), reaction consistency
+  (:func:`_validate_reaction_consistency`), reaction-system ``ic`` rejection,
+  event consistency, and units. New semantic rules belong HERE, in the coded
+  channel.
+
+* Units are checked here and nowhere else (:func:`_validate_units`). One
+  checker, :class:`earthsci_ast.units.UnitValidator`, types every equation,
+  observed definition, declared unit string and reaction rate. Each finding
+  is a ``UnitWarning``; the ones that state a defect in the file (a unit
+  string that denotes no unit, a provable dimensional mismatch) are also hard
+  ``unit_parse_error`` / ``unit_inconsistency`` structural errors, so
+  ``is_valid`` is false. ``load()`` does not check units, so a document whose
+  only defect is a unit one loads, and ``validate()`` reports it.
 
 * :mod:`earthsci_ast.structural_checks` is Layer 1: raw-``dict`` structural
   validation that ``load()`` runs BEFORE parsing to dataclasses. It is a
@@ -25,9 +34,7 @@ Layer boundary (what lives where):
   ``SchemaValidationError`` subclass) collapsing its findings into a prose
   blob (also exposed structurally on ``.findings``). Rules that need only the
   raw document shape belong there. See that module's docstring for the
-  reciprocal note. A few rules historically existed in both layers; where a
-  semantic rule is owned here, the raw-dict twin over there carries a
-  cross-reference back to this module.
+  reciprocal note.
 """
 
 from __future__ import annotations
@@ -39,14 +46,17 @@ from typing import Any
 
 from jsonschema import ValidationError as JsonSchemaValidationError
 
-from .classification import observed_definitions, observed_unknowns, ode_states
+from .classification import observed_unknowns, ode_states
 from .error_handling import ErrorCode
 from .esm_types import EsmFile
 from .lower_table_lookup import TableLookupError
 from .parse import SchemaValidationError, SubsystemRefError, load_path, load_string
 from .registered_functions import ClosedFunctionError
-from .structural_checks import _DEFERRED_UNIT_RECORDS
-from .units import UNIT_FINDING_ANALYSIS
+from .units import (
+    UNIT_FINDING_ANALYSIS,
+    UNIT_FINDING_DIMENSIONAL_MISMATCH,
+    UNIT_FINDING_UNPARSEABLE,
+)
 
 
 @dataclass
@@ -195,6 +205,9 @@ def validate(esm_file: EsmFile, *, base_path: str | None = None) -> ValidationRe
     2. Reference integrity (variable refs, scoped refs, event affects, coupling refs, operator refs)
     3. Reaction consistency (species declared, positive stoichiometries, no null-null, rate refs)
     4. Event consistency (condition types, affect vars, functional affect refs)
+    5. Units: every unit string, equation, observed definition and reaction
+       rate (``unit_parse_error`` / ``unit_inconsistency``). ``load()`` does
+       not check units, so this is the only place a unit defect is reported.
 
     Args:
         esm_file: The parsed :class:`EsmFile` to validate.
@@ -242,9 +255,6 @@ def validate(esm_file: EsmFile, *, base_path: str | None = None) -> ValidationRe
         # 2. Reaction Consistency validation
         _validate_reaction_consistency(esm_file, structural_errors)
 
-        # 3b. Reaction rate/stoichiometry dimensional check (mass-action contract)
-        _validate_reaction_rate_dimensions(esm_file, structural_errors)
-
         # 3c. Reject `ic`-op equations inside a reaction system's
         # constraint_equations (spec §11.4.1).
         _validate_reaction_system_ics(esm_file, structural_errors)
@@ -257,10 +267,6 @@ def validate(esm_file: EsmFile, *, base_path: str | None = None) -> ValidationRe
         # statically from this one document and mirrored into validate().
         _validate_coupling_units(esm_file, structural_errors)
 
-        # 4b. An observed variable's DECLARED units must equal the dimension its
-        # expression computes (esm-spec §4.8.4) — a HARD error, not a warning.
-        _validate_observed_dimensions(esm_file, structural_errors)
-
         # 4c. The edges each `coupling_import` expands to (esm-spec §10.10.3) —
         # a mis-bound import is a bad edge, and the scoped-reference check MUST
         # see the expanded edges, not the opaque import entry.
@@ -271,8 +277,10 @@ def validate(esm_file: EsmFile, *, base_path: str | None = None) -> ValidationRe
         # (ruling Q-106), repeated for a document built or edited in memory.
         _validate_closed_functions_and_tables(esm_file, structural_errors)
 
-        # 5. Unit validation (warnings only)
-        _validate_units(esm_file, unit_warnings)
+        # 5. The unit check (esm-spec §4.8): every finding is a unit_warning,
+        # and each one that states a defect in the file is also a hard
+        # unit_inconsistency / unit_parse_error structural error.
+        _validate_units(esm_file, structural_errors, unit_warnings)
 
         # 5b. Bare numeric literals read as dimensionless (esm-spec §4.8.6):
         # warnings only at this stage, so validity is untouched.
@@ -280,14 +288,7 @@ def validate(esm_file: EsmFile, *, base_path: str | None = None) -> ValidationRe
 
     except Exception as e:
         # Catch-all for unexpected errors
-        structural_errors.append(
-            ValidationError(
-                path="",
-                message=f"Validation failed with unexpected error: {str(e)}",
-                code=ErrorCode.VALIDATION_ERROR.value,
-                details={"exception_type": type(e).__name__, "traceback": traceback.format_exc()},
-            )
-        )
+        structural_errors.append(_unexpected_error(e))
 
     is_valid = len(schema_errors) == 0 and len(structural_errors) == 0
 
@@ -296,6 +297,17 @@ def validate(esm_file: EsmFile, *, base_path: str | None = None) -> ValidationRe
         schema_errors=schema_errors,
         structural_errors=structural_errors,
         unit_warnings=unit_warnings,
+    )
+
+
+def _unexpected_error(e: Exception) -> ValidationError:
+    """The ``validation_error`` record for an exception validation did not
+    expect: a bug in the checker, reported rather than raised."""
+    return ValidationError(
+        path="",
+        message=f"Validation failed with unexpected error: {str(e)}",
+        code=ErrorCode.VALIDATION_ERROR.value,
+        details={"exception_type": type(e).__name__, "traceback": traceback.format_exc()},
     )
 
 
@@ -317,17 +329,7 @@ def _validate_loaded(loader, base_path: str | None) -> ValidationResult:
     raises are converted into the corresponding records here. Shared verbatim by
     :func:`validate_path` and :func:`validate_text` so the two agree on every
     conversion.
-
-    A document whose only load-time findings are unit findings still loads
-    here, and ``validate()`` runs on it: the load-time unit checks look only at
-    a bare variable, while ``validate()`` computes the dimension of any
-    expression, so stopping at the first would leave a compound-argument error
-    in the same file unreported. The result carries the load-time findings and
-    then every ``validate()`` finding that is not already among them, as the
-    other bindings, whose ``validate()`` runs every unit check, report it.
     """
-    deferred_unit_records: list[dict] = []
-    token = _DEFERRED_UNIT_RECORDS.set(deferred_unit_records)
     try:
         esm_file = loader()
     except SchemaValidationError as e:
@@ -338,8 +340,8 @@ def _validate_loaded(loader, base_path: str | None) -> ValidationResult:
         # opaque `$` prose blob filed under schema_errors: the shared
         # contract in tests/invalid/expected_errors.json pins these fixtures
         # as `"schema_errors": []` plus a coded structural error at a
-        # specific path (e.g. `unit_inconsistency` @
-        # `/models/BadUnitsModel/equations/0`).
+        # specific path (e.g. `undefined_variable` @
+        # `/models/TestModel/equations/0/rhs`).
         records = getattr(e, "records", None)
         if records:
             return ValidationResult(
@@ -420,25 +422,17 @@ def _validate_loaded(loader, base_path: str | None) -> ValidationResult:
             schema_errors=[ValidationError(path="", message=str(e), code=ErrorCode.PARSE.value)],
             structural_errors=[],
         )
-    finally:
-        _DEFERRED_UNIT_RECORDS.reset(token)
-    result = validate(esm_file, base_path=base_path)
-    if deferred_unit_records:
-        loaded = [
-            ValidationError(
-                path=r.get("path", ""),
-                message=r.get("message", ""),
-                code=r.get("code", ""),
-                details=r.get("details", {}),
-            )
-            for r in deferred_unit_records
-        ]
-        seen = {(e.code, e.path) for e in loaded}
-        result.structural_errors = loaded + [
-            e for e in result.structural_errors if (e.code, e.path) not in seen
-        ]
-        result.is_valid = False
-    return result
+    try:
+        return validate(esm_file, base_path=base_path)
+    except Exception as e:
+        # validate() reports what it finds rather than raising; this keeps a
+        # failure outside its own guard (a loader that returned something other
+        # than an EsmFile) a result too, so these entry points never raise.
+        return ValidationResult(
+            is_valid=False,
+            schema_errors=[],
+            structural_errors=[_unexpected_error(e)],
+        )
 
 
 def validate_path(path: str, *, base_path: str | None = None) -> ValidationResult:
@@ -740,7 +734,8 @@ def _validate_reaction_consistency(
     """
     for rs_name, rs in esm_file.reaction_systems.items():
         # Name-keyed JSON pointer, matching the sibling reaction checks
-        # (_validate_reaction_system_ics / _validate_reaction_rate_dimensions).
+        # (_validate_reaction_system_ics, and the mass-action rate check in
+        # units.UnitValidator).
         # reaction_systems is a name-keyed map, so a numeric enumerate() index
         # here would be a meaningless pointer.
         rs_path = f"/reaction_systems/{rs_name}"
@@ -930,355 +925,6 @@ def _validate_rate_expression(
                         "reaction_system": reaction_system_name,
                         "rate_expression": str(rate_expr),
                         "parse_error": str(e),
-                    },
-                )
-            )
-
-
-def _validate_reaction_rate_dimensions(
-    esm_file: EsmFile, structural_errors: list[ValidationError]
-) -> None:
-    """
-    Mass-action dimensional check for reaction rates (spec §7.4).
-
-    For each reaction with a declared-unit rate and declared-unit substrates,
-    compare the rate expression's dimensions to conc_unit^(1-total_order)/time,
-    where conc_unit is the first substrate's species units. Emit
-    ``unit_inconsistency`` when they disagree. Dimensionless-concentration
-    systems (mole-fraction families) are skipped for Julia parity.
-
-    Mirrors Julia's ``validate_reaction_system_dimensions`` and the Go/Rust
-    ``validate_reaction_rate_units`` ports; the error payload matches the
-    contract in ``tests/invalid/expected_errors.json``.
-    """
-    try:
-        # The SHARED ESM registry, not a bare `pint.UnitRegistry()`. A vanilla
-        # pint registry does not define `ppb`/`ppbv`/`Dobson`/… and gives `molec`
-        # a [substance] dimension, so this check used to run against a registry
-        # that disagreed with every other unit check in the package — silently
-        # skipping (parse_dim -> None) exactly the atmospheric-chemistry rates it
-        # exists to verify.
-        from .units import PINT_AVAILABLE, ScopedUnits, unit_dimensionality
-
-        if not PINT_AVAILABLE:
-            return
-    except ImportError:
-        return
-    from .structural_checks import _BUILTIN_SYMBOLS, _normalize_unit
-
-    # Spell these with TABLE symbols. The ESM registry is the closed §4.8.1
-    # table, so pint's long-form names (`second`, `meter`, `celsius`, …) are no
-    # longer defined — `ureg("second")` used to work only because the registry
-    # was vanilla pint, and it now raises UndefinedUnitError.
-    time_dim = unit_dimensionality("s")
-    dimensionless_dim = unit_dimensionality("")
-
-    def parse_dim(unit_str):
-        if not unit_str:
-            return None
-        try:
-            return unit_dimensionality(_normalize_unit(unit_str))
-        except Exception:
-            return None
-
-    scoped = ScopedUnits(esm_file)
-    for rs_name, rs in esm_file.reaction_systems.items():
-        species_units = {sp.name: sp.units for sp in rs.species}
-        param_units = {p.name: p.units for p in rs.parameters}
-        scoped_units = scoped.for_component(rs)
-
-        for r_idx, reaction in enumerate(rs.reactions):
-            reaction_path = f"/reaction_systems/{rs_name}/reactions/{r_idx}"
-            rate = reaction.rate_constant
-            # Only bare-string rate refs are dimensionally checkable here;
-            # compound rate expressions carry implicit unit constants that
-            # defeat literal dimensional analysis.
-            if not isinstance(rate, str):
-                continue
-            if rate in _BUILTIN_SYMBOLS:
-                continue
-            if rate in param_units:
-                rate_units_str = param_units[rate]
-            elif rate in species_units:
-                rate_units_str = species_units[rate]
-            elif rate in scoped_units:
-                # A scoped reference has the units its target declares
-                # (esm-spec §4.8.4); one that declares none is skipped.
-                rate_units_str = scoped_units[rate].units
-            else:
-                continue  # undefined refs flagged elsewhere
-            rate_dim = parse_dim(rate_units_str)
-            if rate_dim is None:
-                continue
-
-            # reactants dict preserves insertion order from _parse_reaction
-            if not reaction.reactants:
-                continue
-            substrate_names = list(reaction.reactants.keys())
-            first_sp = substrate_names[0]
-            first_sp_units = species_units.get(first_sp)
-            first_sp_dim = parse_dim(first_sp_units)
-            if first_sp_dim is None:
-                continue
-            if first_sp_dim == dimensionless_dim:
-                # Julia parity: skip mole-fraction families.
-                continue
-
-            substrate_dim = dimensionless_dim
-            total_order = 0
-            resolvable = True
-            for sp_name, stoich in reaction.reactants.items():
-                try:
-                    stoich_i = int(stoich)
-                except (TypeError, ValueError):
-                    resolvable = False
-                    break
-                if stoich_i != stoich:
-                    resolvable = False
-                    break
-                sp_dim = parse_dim(species_units.get(sp_name))
-                if sp_dim is None:
-                    resolvable = False
-                    break
-                substrate_dim = substrate_dim * (sp_dim**stoich_i)
-                total_order += stoich_i
-            if not resolvable:
-                continue
-
-            # Equivalent to rate_dim == first_sp_dim^(1-order) / time but
-            # avoids pint's [substance]^0 * [length]^0 ≠ dimensionless quirk
-            # by checking rate * prod(substrate^stoich) == first_species/time.
-            expected_dim = first_sp_dim / time_dim
-            full_dim = rate_dim * substrate_dim
-            if full_dim != expected_dim:
-                rxn_label = reaction.id if reaction.id is not None else reaction.name
-                structural_errors.append(
-                    ValidationError(
-                        path=reaction_path,
-                        message="Reaction rate expression has incompatible units for reaction stoichiometry",
-                        code=ErrorCode.UNIT_INCONSISTENCY.value,
-                        details={
-                            "reaction_id": rxn_label,
-                            "rate_units": rate_units_str or "",
-                            "expected_rate_units": _format_expected_rate_units(
-                                first_sp_units or "", total_order
-                            ),
-                            "reaction_order": total_order,
-                        },
-                    )
-                )
-
-
-def _format_expected_rate_units(species_units: str, total_order: int) -> str:
-    """Compose the canonical rate-unit string from the reference species unit
-    and total reaction order, matching the contract in
-    ``tests/invalid/expected_errors.json``. Ports the Go/Rust implementations.
-
-    Examples:
-        ("mol/L", 2) -> "L/(mol*s)"
-        ("mol/L", 1) -> "1/s"
-        ("mol/L", 0) -> "mol/(L*s)"
-        ("mol/m^3", 2) -> "m^3/(mol*s)"
-    """
-    exp = 1 - total_order
-    if exp == 0:
-        return "1/s"
-    num, den = _split_unit_num_den(species_units)
-    exp_abs = exp
-    if exp < 0:
-        num, den = den, num
-        exp_abs = -exp
-    num_str = _power_factor(num, exp_abs)
-    den_factors = []
-    df = _power_factor(den, exp_abs)
-    if df:
-        den_factors.append(df)
-    den_factors.append("s")
-    if not num_str:
-        num_str = "1"
-    if len(den_factors) == 1:
-        return f"{num_str}/{den_factors[0]}"
-    return f"{num_str}/({'*'.join(den_factors)})"
-
-
-def _split_unit_num_den(s: str):
-    """Split a unit string on its first top-level '/'. ``"mol/L"`` → ``("mol",
-    "L")``; ``"mol/(L*s)"`` → ``("mol", "L*s")``. If no top-level '/' appears,
-    the whole string is the numerator."""
-    s = s.strip()
-    if not s:
-        return "", ""
-    depth = 0
-    for i, c in enumerate(s):
-        if c == "(":
-            depth += 1
-        elif c == ")":
-            depth -= 1
-        elif c == "/" and depth == 0:
-            num = s[:i].strip()
-            den = s[i + 1 :].strip()
-            if den.startswith("(") and den.endswith(")"):
-                den = den[1:-1]
-            return num, den
-    return s, ""
-
-
-def _power_factor(s: str, n: int) -> str:
-    """Raise a unit factor to an integer power, rendering as a string.
-    Parenthesises compound factors when the power is not 1."""
-    s = s.strip()
-    if not s:
-        return ""
-    if n == 1:
-        return s
-    if "*" in s or "/" in s:
-        return f"({s})^{n}"
-    return f"{s}^{n}"
-
-
-def _validate_observed_dimensions(
-    esm_file: EsmFile, structural_errors: list[ValidationError]
-) -> None:
-    """esm-spec §4.8.4: an observed unknown whose DECLARED units disagree with
-    the dimension its DEFINING EQUATION's RHS computes is a *provable*
-    dimensional mismatch, and therefore a hard error (``unit_inconsistency``).
-
-    This is the check the whole §4.8 dimensional apparatus exists to make, and
-    it was missing: ``units.UnitValidator`` could type an expression (each op
-    carries a dimensional rule), and ``structural_checks`` could reject an
-    unreal unit STRING — but nothing ever compared the two, so
-    ``{"units": "N", "expression": charge * efield}`` was accepted no matter
-    what dimension the right-hand side actually had. Every discriminator in
-    ``tests/valid/units_registry_grammar.esm`` passed *vacuously* until this
-    landed.
-
-    The §4.8.4 severity contract is honoured exactly:
-
-    * an UNDETERMINABLE dimension (``None`` — a symbolic exponent, an op with no
-      dimensional rule, an undeclared operand) SKIPS the check; it is never
-      treated as dimensionless;
-    * an unparseable declared unit is skipped here — it is reported once, on its
-      own, by ``structural_checks._check_unparseable_units``;
-    * only a mismatch between two KNOWN dimensions is reported.
-    """
-    try:
-        from .units import (
-            PINT_AVAILABLE,
-            DimensionalMismatchError,
-            ScopedUnits,
-            UnitValidator,
-            UnparseableUnitError,
-            _angle_meets_number,
-            _Typed,
-            exact_scale_of,
-            parse_unit,
-        )
-
-        if not PINT_AVAILABLE:
-            return
-    except ImportError:
-        return
-
-    # A scoped reference -- into a subsystem or a top-level component, mounted
-    # by {ref} or written inline -- has the units its target declares
-    # (esm-spec §4.8.4, EarthSciAST#414). Treating it as undeterminable
-    # skipped every check across a mount edge.
-    scoped = ScopedUnits(esm_file)
-    for model in esm_file.models.values():
-        # Seed the typer with every declared unit in THIS model, so bare-name
-        # operands resolve (and a name reused in another model cannot collide).
-        known = {}
-        for name, var in model.variables.items():
-            if not var.units:
-                continue
-            try:
-                known[name] = parse_unit(var.units)
-            except UnparseableUnitError:
-                continue  # reported by _check_unparseable_units; not our finding
-
-        validator = UnitValidator()
-        validator.known_units = known
-        validator.scoped_units = scoped.for_component(model)
-
-        # An observed unknown's DEFINING EXPRESSION now lives in the equations,
-        # as the RHS of its bare-variable-LHS equation (esm-spec §6.3.1). The
-        # check is otherwise unchanged: it compares the declared units of the
-        # variable against the dimension that expression computes.
-        definitions = observed_definitions(model)
-        for vname, definition in definitions.items():
-            var = model.variables[vname]
-            if not var.units:
-                continue
-            if vname not in known:
-                continue  # its own declared unit is unparseable — already reported
-
-            declared = known[vname].dimensionality
-            declared_scale = exact_scale_of(known[vname])
-            path = f"/models/{model.name}/variables/{vname}"
-            try:
-                typed = validator._type(definition)
-            except DimensionalMismatchError as exc:
-                # A provable inconsistency INSIDE the expression (adding metres
-                # to kilograms, a transcendental with a dimensional argument).
-                structural_errors.append(
-                    ValidationError(
-                        path=path,
-                        message=(
-                            f"Observed variable '{vname}' has a dimensionally "
-                            f"inconsistent expression: {exc}"
-                        ),
-                        code=ErrorCode.UNIT_INCONSISTENCY.value,
-                        details={"variable": vname, "declared_units": var.units},
-                    )
-                )
-                continue
-
-            if typed is None:
-                continue  # undeterminable (§4.8.4) — skip, never assume dimensionless
-            computed = typed.dim
-            # An angle meets a pure number (esm-spec §4.8.3): the angle axis
-            # cancels and the scales are compared. The comparison reads the
-            # stripped pair; the diagnostic reports the units as written.
-            declared_cmp, typed_cmp = _angle_meets_number(_Typed(declared, declared_scale), typed)
-            if declared_cmp == typed_cmp:
-                continue
-            if declared_cmp.dim == typed_cmp.dim:
-                # Same dimension, different unit (esm-spec §4.8.3): the number the
-                # expression produces is not in the unit the variable declares.
-                written = validator._describe_side(definition, typed)
-                structural_errors.append(
-                    ValidationError(
-                        path=path,
-                        message=(
-                            f"Observed variable '{vname}' is declared as '{var.units}' "
-                            f"({declared} at scale {declared_scale}) but its expression "
-                            f"has {written}"
-                        ),
-                        code=ErrorCode.UNIT_INCONSISTENCY.value,
-                        details={
-                            "variable": vname,
-                            "declared_units": var.units,
-                            "declared_scale": str(declared_scale),
-                            "expression_dimension": str(computed),
-                            "expression_scale": str(typed.scale),
-                        },
-                    )
-                )
-                continue
-
-            structural_errors.append(
-                ValidationError(
-                    path=path,
-                    message=(
-                        f"Observed variable '{vname}' is declared as '{var.units}' "
-                        f"({declared}) but its expression has dimension {computed}"
-                    ),
-                    code=ErrorCode.UNIT_INCONSISTENCY.value,
-                    details={
-                        "variable": vname,
-                        "declared_units": var.units,
-                        "declared_dimension": str(declared),
-                        "expression_dimension": str(computed),
                     },
                 )
             )
@@ -1548,42 +1194,35 @@ def _validate_dimensionless_literals(esm_file: EsmFile, unit_warnings: list[Unit
         )
 
 
-def _validate_units(esm_file: EsmFile, unit_warnings: list[UnitWarning]) -> None:
-    """
-    Validate dimensional consistency (warnings only).
+#: The unit-finding codes that state a defect in the FILE, and the structural
+#: error code each becomes (esm-spec §4.8.4). An ``analysis`` finding says what
+#: the checker could not determine and stays a warning.
+_PROMOTED_UNIT_FINDINGS = {
+    UNIT_FINDING_DIMENSIONAL_MISMATCH: ErrorCode.UNIT_INCONSISTENCY.value,
+    UNIT_FINDING_UNPARSEABLE: ErrorCode.UNIT_PARSE_ERROR.value,
+}
 
-    Uses the UnitValidator from units.py to perform comprehensive dimensional analysis
-    and unit validation across models and reaction systems.
+
+def _validate_units(
+    esm_file: EsmFile,
+    structural_errors: list[ValidationError],
+    unit_warnings: list[UnitWarning],
+) -> None:
+    """The unit check: :class:`~earthsci_ast.units.UnitValidator` over every
+    model and reaction system.
+
+    Every finding becomes a :class:`UnitWarning` at the pointer it was raised
+    at. A finding that states a defect in the file -- a provable dimensional
+    mismatch, or a unit string that denotes no unit -- is also a hard
+    structural error, ``unit_inconsistency`` or ``unit_parse_error``, at the
+    same pointer, which makes the document invalid. The code is decided where
+    the finding is raised, never read back from its prose.
     """
     try:
         from .units import UnitValidator
 
-        # Create unit validator instance
-        validator = UnitValidator()
-
-        # Validate the entire ESM file
-        unit_result = validator.validate_esm_file(esm_file)
-
-        # Emit one UnitWarning per CODED finding. The code comes from the raise
-        # site inside units.py -- `UnparseableUnitError` -> unparseable_unit, a
-        # `DimensionalMismatchError` or a failed dimension comparison ->
-        # dimensional_mismatch, a pint failure or an undeterminable dimension ->
-        # analysis -- and is never recovered from the message text, so rewording
-        # a message cannot silently reclassify its severity.
-        for finding in unit_result.findings:
-            unit_warnings.append(
-                UnitWarning(
-                    path="",
-                    message=finding.message,
-                    code=finding.code,
-                    lhs_units=finding.lhs_units,
-                    rhs_units=finding.rhs_units,
-                    details={"validation_type": "dimensional_analysis"},
-                )
-            )
-
+        unit_result = UnitValidator().validate_esm_file(esm_file)
     except ImportError:
-        # If pint is not available, add a warning about missing unit validation
         unit_warnings.append(
             UnitWarning(
                 path="",
@@ -1597,8 +1236,8 @@ def _validate_units(esm_file: EsmFile, unit_warnings: list[UnitWarning]) -> None
                 details={"validation_type": "dependency_missing"},
             )
         )
+        return
     except Exception as e:
-        # If unit validation fails for any reason, add a warning but don't break validation
         unit_warnings.append(
             UnitWarning(
                 path="",
@@ -1608,3 +1247,34 @@ def _validate_units(esm_file: EsmFile, unit_warnings: list[UnitWarning]) -> None
                 details={"validation_type": "validation_error", "exception": str(e)},
             )
         )
+        return
+
+    for finding in unit_result.findings:
+        unit_warnings.append(
+            UnitWarning(
+                path=finding.path,
+                message=finding.message,
+                code=finding.code,
+                lhs_units=finding.lhs_units,
+                rhs_units=finding.rhs_units,
+                details={"validation_type": "dimensional_analysis"},
+            )
+        )
+        code = _PROMOTED_UNIT_FINDINGS.get(finding.code)
+        if code is not None:
+            structural_errors.append(
+                ValidationError(
+                    path=finding.path,
+                    message=finding.raw_message,
+                    code=code,
+                    # The raise site's own details when it gave some (the
+                    # shape the corpus pins for that finding), else the
+                    # finding kind and the units of each side, as Go reports.
+                    details=dict(finding.details)
+                    or {
+                        "finding": finding.code,
+                        "lhs_units": finding.lhs_units,
+                        "rhs_units": finding.rhs_units,
+                    },
+                )
+            )
