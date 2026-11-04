@@ -2330,7 +2330,7 @@ fn apply_variable_map_removals(
 ///
 /// The source survives the edge as its own declaration — units, default,
 /// `update`. When `target` is shaped and the source is data-fed
-/// ([`crate::data_fed::is_data_fed`], the rule the loader-field lowering
+/// ([`crate::simulate_array::data_feed_source`], the rule the loader-field lowering
 /// uses), the rewritten equations index the source with the target's indices:
 ///
 /// * a source that DECLARES NO `shape` (`None` in the flattened table, which
@@ -2356,7 +2356,7 @@ fn carry_data_fed_source_shape(
     if !source
         .update
         .as_ref()
-        .is_some_and(crate::data_fed::is_data_fed)
+        .is_some_and(|s| crate::simulate_array::data_feed_source(s).is_some())
     {
         return Ok(());
     }
