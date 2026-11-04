@@ -1,0 +1,50 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ScheduleUpdateMissingShape",
+    "description": "Test case: a parameter whose `update.kind` is \"schedule\" does not declare `shape`. A schedule / remesh parameter is a buffer whose extent is fixed at setup and refilled on a discrete cadence, so ModelVariable requires `shape` for it (esm-spec 5.4; an empty array is a valid scalar shape). A `data` update no longer requires it: a data-fed parameter with no `shape` takes the shape of the param_to_var target it replaces, or is a scalar (esm-libraries-spec 4.7.3). Formerly data_source_update_missing_shape.esm.",
+    "authors": [
+      "Test Suite"
+    ]
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "T": {
+          "type": "parameter",
+          "units": "K",
+          "default": 0.0,
+          "update": {
+            "kind": "schedule",
+            "interval": 3600.0,
+            "expression": 300.0
+          },
+          "description": "Schedule-updated parameter with no `shape` -- the defect."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -0.1,
+              "x"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
