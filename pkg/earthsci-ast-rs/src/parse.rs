@@ -1566,12 +1566,10 @@ fn build_symbol_tables(obj: &serde_json::Map<String, Value>) -> SymbolTables {
         }
     }
 
-    if let Some(loaders) = obj.get("data_sources").and_then(|v| v.as_object()) {
-        for (name, d) in loaders {
-            all_systems.insert(name.clone());
-            per_system.insert(name.clone(), variable_keys(d));
-        }
-    }
+    // `data_sources` keys are deliberately absent: from esm 1.0.0 a data source
+    // is not a coupling endpoint or a scoped-name root (esm-spec §8). A field it
+    // serves is reached through the data-fed parameter that names it in
+    // `update.from`, so `Met.K` with `Met` a data source resolves to nothing.
 
     // Operators are also addressable by name (scoped refs may point into
     // their config.subsystems) so they count as top-level systems for

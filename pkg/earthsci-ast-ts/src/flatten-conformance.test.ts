@@ -4,8 +4,8 @@
  *
  * The corpus is generated from the PYTHON oracle
  * (`scripts/generate-flatten-corpus.py`) and pins the canonical
- * `FlattenedSystem` field set of esm-libraries-spec §4.7.5 step 4 for 19 shared
- * fixtures, plus 2 refusals. TypeScript is a CONSUMER of it, not its oracle, so
+ * `FlattenedSystem` field set of esm-libraries-spec §4.7.5 step 4 for every
+ * case, plus the documents it refuses (counts pinned below). TypeScript is a CONSUMER of it, not its oracle, so
  * this suite is where the corpus does its real work: every field is compared as
  * an ORDERED sequence, never as a set.
  *
@@ -28,8 +28,10 @@ import {
   ConflictingDerivativeError,
   DimensionPromotionError,
   flatten,
+  FlattenError,
   type FlattenedVariable,
   type FlattenedVariableMap,
+  VariableMapShapeConflictError,
 } from './flatten.js'
 import { updateRules } from './classification.js'
 import { toAscii } from './pretty-print.js'
@@ -181,15 +183,23 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     // a lifted state is given, by size, by a shaped operand, and synthesized,
     // an operator `ic(_var)` that `field_ics` records once per lifted state,
     // and a state that already declares a shape, which the lift leaves alone
-    // (esm-libraries-spec §4.7.1 step 3, §4.7.5).
-    expect(corpus.cases.length).toBe(50)
-    // 6 = template_import_lib, couple_multiplicative_no_tendency, the
+    // (esm-libraries-spec §4.7.1 step 3, §4.7.5), plus the four
+    // `variable_map_data_fed` cases — a data-fed parameter mapped by
+    // `param_to_var` onto a shaped target survives exactly as declared, `update`
+    // and `shape` included, whatever its data source is keyed, and a state
+    // source keyed like a data source stays a state, and a source that declares
+    // no shape takes its target's (esm-libraries-spec §4.7.3).
+    expect(corpus.cases.length).toBe(54)
+    // 9 = template_import_lib, couple_multiplicative_no_tendency, the
     // nonterminating rewrite, `coupling_resolution_edge_cases`, whose EDGE
     // CASE 10 maps onto a target the document declares nowhere,
     // `lift_synthetic_name_clash`, a declared index set that takes the
-    // synthetic lift axis's name with another size, and
-    // `lift_placeholder_ic_conflict`, a state given two `ic(x)` entries.
-    expect(corpus.refusals.length).toBe(6)
+    // synthetic lift axis's name with another size,
+    // `lift_placeholder_ic_conflict`, a state given two `ic(x)` entries, and
+    // the three `variable_map_data_fed` shape conflicts
+    // (`scalar_source_onto_shaped_target`, `one_source_two_target_shapes`,
+    // `shapeless_source_two_target_shapes`).
+    expect(corpus.refusals.length).toBe(9)
     expect(corpus.oracle).toContain('earthsci_ast.flatten')
   })
 
@@ -376,6 +386,26 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     // esm-libraries-spec §4.7.5 step 4: `field_ics` holds at most one entry per state.
     expect(() => flatten(load(entry.fixture))).toThrow(ConflictingDerivativeError)
     expect(() => flatten(load(entry.fixture))).toThrow(/more than one initial condition.*Chem\.c/)
+  })
+
+  it.each([
+    ['scalar_source_onto_shaped_target', /Met\.K -> Box\.F_k.*declares shape \[\].*\["rec","x"\]/s],
+    ['one_source_two_target_shapes', /Met\.K -> Box\.G_k.*\["rec","x"\].*\["x"\]/s],
+    [
+      'shapeless_source_two_target_shapes',
+      /Met\.K -> Box\.G_k.*declares no shape and took \["rec","x"\].*\["x"\]/s,
+    ],
+  ])("refuses a data-fed source whose declared shape is not its target's: %s", (name, msg) => {
+    const entry = corpus.refusals.find((r) =>
+      r.fixture.endsWith(`variable_map_data_fed/fixtures/${name}.esm`),
+    ) as Refusal
+    expect(entry.error).toBe('VariableMapShapeConflictError')
+    // esm-libraries-spec §4.7.3: the source survives as declared, so a shape
+    // that differs from the shaped target's is refused, never adopted.
+    const run = (): unknown => flatten(load(entry.fixture))
+    expect(run).toThrow(VariableMapShapeConflictError)
+    expect(run).toThrow(FlattenError)
+    expect(run).toThrow(msg)
   })
 
   it('leaves a state that already declares a shape unlifted', () => {

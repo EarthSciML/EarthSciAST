@@ -2316,7 +2316,8 @@ def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
     whose source declares no ``temporal`` block, or whose record shape's first
     dimension is not an index set of exactly two members.
 
-    The record shape is the declared ``shape`` when not empty; otherwise the
+    The record shape is the declared ``shape`` when there is one (``[]``
+    included); when ``shape`` is absent, the
     declared ``shape`` of EVERY inline ``param_to_var`` target of the parameter,
     one finding per rule at the first that fails. A target this validation
     cannot reach (behind a ref not yet mounted, or not declared) is not
@@ -2359,9 +2360,12 @@ def _check_records_per_sample(data: dict[str, Any], errors: list) -> None:
     def failing_record_shape(vdef: dict[str, Any], scoped: str) -> list[Any] | None:
         """The first record shape that cannot carry two records, or None when
         every shape validation can decide holds a pair."""
-        shape = vdef.get("shape") or []
-        if shape:
-            return list(shape) if fails(shape) else None
+        shape = vdef.get("shape")
+        if shape is not None:
+            # A declared shape is the record shape, `[]` included: it declares
+            # a scalar buffer. Only an ABSENT shape takes its targets'.
+            shape = list(shape) if isinstance(shape, list) else []
+            return shape if fails(shape) else None
         targets = p2v_targets.get(scoped, [])
         if not targets:
             return None if has_coupling_import else []

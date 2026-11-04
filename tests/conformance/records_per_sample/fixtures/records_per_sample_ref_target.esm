@@ -27,9 +27,8 @@
         "K": {
           "type": "parameter",
           "units": "1/s",
-          "shape": [],
           "default": 0.1,
-          "description": "Declared once, as a scalar; the consumer gives it the record axis and the grid.",
+          "description": "Declared once, with no shape; the consumer gives it the record axis and the grid.",
           "update": {
             "kind": "data",
             "source": "met_source",

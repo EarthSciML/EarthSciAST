@@ -35,7 +35,7 @@ export type ModelVariable = ModelVariable1 & {
   element_type?: "Float32" | "Float64";
   description?: string;
   /**
-   * Arrayed-variable shape: ordered list of index-set names drawn from the document-scoped `index_sets` registry. Omitted or null indicates a scalar. REQUIRED for a parameter whose `update` is `schedule`, `data`, or `remesh` — such a parameter is a buffer whose extent is fixed at setup and refilled on a discrete cadence, so its extent must be known ahead of time (RFC semiring-faq-unified-ir §6.1); an empty array is a valid (scalar) shape.
+   * Arrayed-variable shape: ordered list of index-set names drawn from the document-scoped `index_sets` registry. Omitted or null indicates a scalar. REQUIRED for a parameter whose `update` is `schedule` or `remesh` — such a parameter is a buffer whose extent is fixed at setup and refilled on a discrete cadence, so its extent must be known ahead of time (RFC semiring-faq-unified-ir §6.1); an empty array is a valid (scalar) shape. A `data`-fed parameter MAY omit it: one that is the `from` of a `param_to_var` coupling onto a shaped parameter then takes that target's shape, and otherwise it is a scalar (esm-libraries-spec §4.7.3, esm-spec §8.5.1). An explicit empty array always declares a scalar buffer.
    */
   shape?: string[];
   /**
@@ -441,7 +441,7 @@ export type Parameter = Parameter1 & {
   default_units?: string;
   description?: string;
   /**
-   * Arrayed-variable shape: ordered list of index-set names drawn from the document-scoped `index_sets` registry. Omitted or null indicates a scalar. REQUIRED for a parameter whose `update` is `schedule`, `data`, or `remesh` — such a parameter is a buffer whose extent is fixed at setup and refilled on a discrete cadence, so its extent must be known ahead of time (RFC semiring-faq-unified-ir §6.1); an empty array is a valid (scalar) shape.
+   * Arrayed-variable shape: ordered list of index-set names drawn from the document-scoped `index_sets` registry. Omitted or null indicates a scalar. REQUIRED for a parameter whose `update` is `schedule` or `remesh` — such a parameter is a buffer whose extent is fixed at setup and refilled on a discrete cadence, so its extent must be known ahead of time (RFC semiring-faq-unified-ir §6.1); an empty array is a valid (scalar) shape. A `data`-fed parameter MAY omit it: one that is the `from` of a `param_to_var` coupling onto a shaped parameter then takes that target's shape, and otherwise it is a scalar (esm-libraries-spec §4.7.3, esm-spec §8.5.1). An explicit empty array always declares a scalar buffer.
    */
   shape?: string[];
   /**

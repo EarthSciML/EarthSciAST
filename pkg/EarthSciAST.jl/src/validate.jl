@@ -1441,7 +1441,8 @@ esm-spec §8.5.1 rule 3 for a parameter `scoped` (`Model[.Sub…].var`) whose
 effective `records_per_sample` is 2: the first record shape that fails, or
 `nothing` when every record shape this pass can see passes.
 
-The record shape is `own_shape` when that is not empty. Otherwise it is the
+The record shape is `own_shape` whenever the parameter declares one (`[]`
+included: a scalar buffer, which fails). When `own_shape` is `nothing` it is the
 declared `shape` of EVERY target of a `param_to_var` `variable_map` entry in
 `coupling` whose `from` is `scoped`, and each must pass. A target whose
 declaration [`_declared_variable`](@ref) cannot reach (not found, or behind a
@@ -1452,11 +1453,13 @@ empty. With no such entry at all the record shape is empty, which fails unless
 """
 function _record_shape_failure(
         file::EsmFile, coupling, scoped::AbstractString,
-        own_shape::AbstractVector; defer_empty::Bool
+        own_shape::Union{AbstractVector, Nothing}; defer_empty::Bool
     )
-    if !isempty(own_shape)
-        return _index_set_has_two_members(file, own_shape[1]) ? nothing :
-            collect(String, own_shape)
+    if own_shape !== nothing
+        # A declared shape is the record shape, `[]` included: it declares a
+        # scalar buffer. Only an ABSENT shape takes its targets'.
+        return (!isempty(own_shape) && _index_set_has_two_members(file, own_shape[1])) ?
+            nothing : collect(String, own_shape)
     end
     mapped = false
     for entry in coupling
@@ -1488,8 +1491,8 @@ _records_per_sample_shape_error(at::AbstractString, name::AbstractString, shape)
 esm-spec §8.5.1, `records_per_sample_invalid`, at every depth of `model`:
 `from.records_per_sample` on a rule that is not `data`; or an EFFECTIVE value
 of 2 on a parameter whose source declares no `temporal` block, or whose record
-shape fails rule 3 (see [`_record_shape_failure`](@ref)). An empty record shape
-is refused here only when no `param_to_var` entry names the parameter and the
+shape fails rule 3 (see [`_record_shape_failure`](@ref)). A parameter that
+declares no `shape` is refused here only when no `param_to_var` entry names it and the
 document's `coupling` holds no `coupling_import`; otherwise `flatten` checks
 what arrives after expansion. The pointer is the rule's: `…/update` for the
 object form, `…/update/<i>` for the array form.
@@ -1537,9 +1540,8 @@ function _check_records_per_sample!(
                 )
                 continue
             end
-            own = var.shape === nothing ? String[] : var.shape
             shape = _record_shape_failure(
-                file, file.coupling, "$scope.$name", own; defer_empty = defer_empty
+                file, file.coupling, "$scope.$name", var.shape; defer_empty = defer_empty
             )
             shape === nothing && continue
             push!(

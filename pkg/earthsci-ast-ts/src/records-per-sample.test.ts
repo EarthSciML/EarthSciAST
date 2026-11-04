@@ -50,7 +50,9 @@ function doc(options: { component?: string; ownShape?: string[]; mapToBox: boole
           K: {
             type: 'parameter',
             units: '1/s',
-            shape: options.ownShape ?? [],
+            // No own shape: the record shape is the param_to_var target's
+            // (esm-spec §8.5.1). An explicit `[]` would be a scalar buffer.
+            ...(options.ownShape === undefined ? {} : { shape: options.ownShape }),
             default: 0.1,
             update: {
               kind: 'data',

@@ -166,7 +166,7 @@
     "is_valid": false,
     "notes": "`source` is an object (url_template and friends), not a bare path string."
   },
-  "data_source_update_missing_shape.esm": {
+  "schedule_update_missing_shape.esm": {
     "schema_errors": [
       {
         "path": "/models/TestModel/variables/T",
@@ -176,7 +176,7 @@
     ],
     "structural_errors": [],
     "is_valid": false,
-    "notes": "A parameter whose `update.kind` is `schedule`, `data` or `remesh` MUST declare `shape` (esm-schema.json ModelVariable allOf; esm-spec 5.4): the runtime has to size the buffer it refreshes into before the first refresh happens. Repurposed from data_loader_provides_missing_units.esm -- units now live on the parameter, where they are already required of every variable, so that fixture's diagnostic no longer has a home of its own."
+    "notes": "A parameter whose `update.kind` is `schedule` or `remesh` MUST declare `shape` (esm-schema.json ModelVariable allOf; esm-spec 5.4): the runtime has to size the buffer it refreshes into before the first refresh happens. A `data` update may omit it -- the parameter then takes its param_to_var target's shape, or is a scalar (esm-libraries-spec 4.7.3) -- which is why this fixture, formerly data_source_update_missing_shape.esm, now uses a `schedule` update."
   },
   "data_source_binding_missing_file_variable.esm": {
     "schema_errors": [
@@ -558,6 +558,22 @@
           "reference": "NonExistentModel.MissingSubsystem.temperature",
           "coupling_type": "variable_map",
           "missing_component": "NonExistentModel"
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "variable_map_from_data_source.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/coupling/0/from",
+        "code": "unresolved_scoped_ref",
+        "message": "Scoped reference 'Met.K' cannot be resolved: 'Met' is a data_sources key, not a model or reaction system",
+        "details": {
+          "reference": "Met.K",
+          "coupling_type": "variable_map",
+          "missing_component": "Met"
         }
       }
     ],

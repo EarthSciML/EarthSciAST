@@ -161,9 +161,11 @@ fn test_data_source_validation_errors() {
             "config_schema_violation",
             include_str!("../../../tests/invalid/data_source_config_schema_violation.esm"),
         ),
+        // A `schedule` update still requires `shape`; a `data` one may omit it
+        // (esm-libraries-spec §4.7.3), so this is the schedule fixture.
         (
-            "update_missing_shape",
-            include_str!("../../../tests/invalid/data_source_update_missing_shape.esm"),
+            "schedule_update_missing_shape",
+            include_str!("../../../tests/invalid/schedule_update_missing_shape.esm"),
         ),
         (
             "binding_missing_file_variable",

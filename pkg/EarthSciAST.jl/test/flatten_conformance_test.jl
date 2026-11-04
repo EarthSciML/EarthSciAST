@@ -270,6 +270,13 @@ const _FC_DIVERGENCES = Dict{String, Vector{String}}(
 # corpus case is now compared field by field. A case the oracle itself refuses
 # belongs in the corpus's own `refusals` array, which the last testset drives.
 
+# Oracle refusal class ⇒ the Julia error type that carries the same name. A
+# class missing here is asserted only as "refused at all" (see the testset).
+const _FC_REFUSAL_TYPES = Dict{String, Type}(
+    "VariableMapUnresolvedEndpointError" => EarthSciAST.VariableMapUnresolvedEndpointError,
+    "VariableMapShapeConflictError" => EarthSciAST.VariableMapShapeConflictError,
+)
+
 _fc_skips(id) = get(_FC_DIVERGENCES, id, String[])
 # An entry is either a whole corpus key (`"equations"`) or ONE field of a
 # variable-list key (`"parameters.update_kinds"`). The second form exists so a
@@ -1226,11 +1233,14 @@ end
     # The corpus's `error` is the ORACLE's exception class name; Julia spells its
     # own taxonomy differently, so what is asserted is that flatten (or the load
     # that precedes it) REFUSES the document at all — the property the refusal
-    # list exists to pin.
+    # list exists to pin. Where Julia carries the oracle's class name-for-name
+    # (`_FC_REFUSAL_TYPES`), the refusal must be THAT type, so a document refused
+    # for some other reason does not pass for the one the corpus names.
     @testset "refusal: $(String(entry.fixture))" for entry in corpus.refusals
         path = joinpath(_FLATTEN_TESTS_DIR, String(entry.fixture))
         @test isfile(path)
         isfile(path) || continue
-        @test_throws Exception flatten(load_path(path))
+        T = get(_FC_REFUSAL_TYPES, String(entry.error), Exception)
+        @test_throws T flatten(load_path(path))
     end
 end
