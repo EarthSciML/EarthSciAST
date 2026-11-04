@@ -1021,6 +1021,7 @@ struct _ProgramSeedRecipe
     const_arrays::AbstractDict        # the caller's, not the merged registry
     providers::Any
     discovered::Set{String}           # providers the extent pre-pass sampled
+    provider_shapes::Dict{String, Vector{Int}}  # what each sample is checked against
     pd_gated::Set{String}             # providers the pushdown record gates
     pd_coupling::Vector{Pair{String, String}}
     gated_providers::Dict{String, Any}
@@ -1051,12 +1052,18 @@ function _program_seed(prob)
         if r.providers !== nothing
             for (rawk, prov) in r.providers
                 k = String(rawk)
-                if k in r.discovered
-                    merged_const[k] = forcing_buffer(provider_sample(prov, r.sample_time), k)
-                elseif !(k in r.pd_gated) && !provider_is_gated(prov) &&
+                # The const fields `esm_problem` bound whole, sampled again: the
+                # recipe holds no provider data, so a Problem no program is
+                # made from keeps none alive.
+                whole_const = k in r.discovered || (
+                    !(k in r.pd_gated) && !provider_is_gated(prov) &&
                         provider_is_const(prov)
-                    merged_const[k] = forcing_buffer(provider_sample(prov, r.sample_time), k)
-                end
+                )
+                whole_const || continue
+                merged_const[k] = forcing_from_sample(
+                    provider_sample(prov, r.sample_time), k;
+                    shape = get(r.provider_shapes, k, nothing)
+                )
             end
         end
         r.pushdown && _inject_pushdown_aliases!(merged_const, prob.run_doc, r.pd_coupling)
@@ -1098,7 +1105,9 @@ function _discover_loader_extents(providers, metaparameters::AbstractDict, t0::F
                     "not a discovered one"
             )
         )
-        field = forcing_buffer(provider_sample(prov, t0), rawk)
+        # Only the record count is read here; the field is checked and
+        # converted once, where `esm_problem` binds it.
+        field = _sample_field(provider_sample(prov, t0), rawk)
         n = ndims(field) == 0 ? 1 : size(field, 1)
         if haskey(by, mp)
             prev, prevk = by[mp]
@@ -1122,6 +1131,27 @@ function _discover_loader_extents(providers, metaparameters::AbstractDict, t0::F
         discovered[rawk] = field
     end
     return out, discovered
+end
+
+# The declared shape of each provider-fed parameter in `keys`, resolved
+# against the flattened system's index sets: what `esm_problem` checks each
+# whole-bound provider sample against (`forcing_from_sample`). A parameter
+# declared without a shape takes one value. A key no parameter declares (a
+# loader field a coupling routes), and a shape naming a set the registry does
+# not size before the build (a derived set), are not checked.
+function _provider_declared_shapes(flat::FlattenedSystem, keys)
+    out = Dict{String, Vector{Int}}()
+    for k in keys
+        v = get(flat.parameters, k, nothing)
+        v === nothing && continue
+        if !_is_array_shape(v.shape)
+            out[k] = Int[]
+        else
+            exts = _declared_shape_extents(v.shape, flat.index_sets, _EMPTY_DERIVED_EXTENTS)
+            exts === nothing || (out[k] = exts)
+        end
+    end
+    return out
 end
 
 """
@@ -1435,10 +1465,16 @@ function esm_problem(
         string(k) for d in (const_arrays, param_arrays, providers)
             if d !== nothing for k in keys(d)
     )
+    run_flat = Ref{Any}(nothing)
     doc = _prepare_run_doc(
         input; metaparameters = metaparams, base_path = base_path,
-        renames_out = merged_renames, supplied_names = supplied
+        renames_out = merged_renames, supplied_names = supplied, flat_out = run_flat
     )
+    # The declared shape every whole-bound provider sample is checked against
+    # (`forcing_from_sample`), resolved now that discovery has closed the
+    # loader extents.
+    provider_shapes = providers === nothing ? Dict{String, Vector{Int}}() :
+        _provider_declared_shapes(run_flat[].flat, (String(k) for k in keys(providers)))
 
     # esm-spec §6.6.2: a `p` binding is a scalar, or — for a SHAPED parameter —
     # INLINE ARRAY DATA (a row-major nested array supplying the whole column).
@@ -1474,7 +1510,9 @@ function esm_problem(
             if haskey(discovered, k)
                 # Already materialized by the extent-discovery pre-pass; never
                 # sampled twice.
-                merged_const[k] = Array{Float64}(discovered[k])
+                merged_const[k] = forcing_from_sample(
+                    discovered[k], k; shape = get(provider_shapes, k, nothing)
+                )
             elseif pd_gate !== nothing
                 # Phase 1: RECORD-DERIVED gate — the rewrite's own
                 # `metadata.x_esd.pushdown.gated_select`, mapped onto this
@@ -1487,7 +1525,9 @@ function esm_problem(
                 # build resolves the selection without re-consulting the provider.
                 gated_providers[k] = (prov = prov, gate = provider_gate_spec(prov))
             elseif provider_is_const(prov)
-                merged_const[k] = forcing_buffer(provider_sample(prov, t_sample), k)
+                merged_const[k] = forcing_from_sample(
+                    provider_sample(prov, t_sample), k; shape = get(provider_shapes, k, nothing)
+                )
             else
                 # DISCRETE: allocate a LIVE forcing buffer seeded at the initial tick
                 # and register it in `param_arrays`. That makes the loader field a
@@ -1497,7 +1537,9 @@ function esm_problem(
                 # materialized cache, instead of a build-once setup const where the
                 # (still-unbound) live `F_src` would fail. The refresh callback then
                 # rewrites this SAME buffer in place at each cadence tick.
-                merged_param[k] = forcing_buffer(provider_sample(prov, t_sample), k)
+                merged_param[k] = forcing_from_sample(
+                    provider_sample(prov, t_sample), k; shape = get(provider_shapes, k, nothing)
+                )
                 discrete_providers[k] = prov
             end
         end
@@ -1574,7 +1616,8 @@ function esm_problem(
         authored_input, pushdown_rewrite, metaparams,
         String(base_path), supplied, model_name === nothing ? nothing : String(model_name),
         compiler, overrides, const_arrays, providers,
-        Set{String}(keys(discovered)), Set{String}(keys(pd_gates)), pd_coupling,
+        Set{String}(keys(discovered)), provider_shapes, Set{String}(keys(pd_gates)),
+        pd_coupling,
         gated_providers, t_sample, runtime_array_parameters,
         Ref{Any}(nothing), ReentrantLock()
     )

@@ -4394,15 +4394,6 @@
       }
     },
     {
-      "name": "forcing_buffer",
-      "kind": "function",
-      "tier": "stable",
-      "bindings": {
-        "julia": "forcing_buffer",
-        "rust": "forcing_buffer"
-      }
-    },
-    {
       "name": "forcing_buffer_index",
       "kind": "function",
       "tier": "extension",
@@ -4424,6 +4415,15 @@
       "tier": "extension",
       "bindings": {
         "julia": "forcing_epoch"
+      }
+    },
+    {
+      "name": "forcing_from_sample",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "forcing_from_sample",
+        "rust": "forcing_from_sample"
       }
     },
     {

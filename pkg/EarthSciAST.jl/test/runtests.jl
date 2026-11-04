@@ -292,7 +292,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("loader_unit_conversion_conformance_test.jl")
     # The public sample-to-buffer conversion `esm_problem` uses (API_SPEC §5.8,
     # "Forcing sets"), against the Problem's own buffers.
-    include("forcing_buffer_test.jl")
+    include("forcing_from_sample_test.jl")
     include("unit_registry_conformance_test.jl")
     # Streaming output sinks (Wave 2): end-to-end ZarrSink write → ZarrReader
     # read-back round-trip through the EarthSciIO write boundary (RFC §16).

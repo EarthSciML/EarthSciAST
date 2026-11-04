@@ -1,11 +1,11 @@
-# `forcing_buffer` (API_SPEC §5.8, "Forcing sets"): a slot's buffer built from
+# `forcing_from_sample` (API_SPEC §5.8, "Forcing sets"): a slot's buffer built from
 # a provider sample is, bit for bit, the buffer `esm_problem` builds from the
 # same sample.
 #
 # Each case builds a Problem with providers, takes its program's default
 # forcing set (the Problem's forcing when the program was built) and, for a
 # discrete provider, the Problem's own live buffer, and compares them with
-# `forcing_buffer` of a second sample on the f64 bits: a gridded parameter, a
+# `forcing_from_sample` of a second sample on the f64 bits: a gridded parameter, a
 # scalar one, a parameter whose first dimension is a two-record axis, and
 # parameters whose source declares a `unit_conversion`.
 
@@ -42,7 +42,7 @@ function _fb_doc(nx::Int, ny::Int)
     fed(fv) = Dict("kind" => "data", "source" => "met", "from" => Dict("file_variable" => fv))
     return Dict{String, Any}(
         "esm" => "1.2.0",
-        "metadata" => Dict("name" => "forcing_buffer"),
+        "metadata" => Dict("name" => "forcing_from_sample"),
         "index_sets" => Dict(
             "x" => Dict("kind" => "interval", "size" => nx),
             "y" => Dict("kind" => "interval", "size" => ny),
@@ -107,14 +107,14 @@ _fb_samples(nx, ny) = Dict(
 function _fb_check_default(prog, samples)
     D = default_forcing_set(prog)
     for (k, slot) in enumerate(forcing_slots(prog))
-        got = forcing_buffer(samples[slot.name], slot)
+        got = forcing_from_sample(samples[slot.name], slot)
         @test got isa Vector{Float64}
         @test _fb_bits(got) == _fb_bits(D.bufs[k])
     end
     return nothing
 end
 
-@testset "forcing_buffer (API_SPEC §5.8)" begin
+@testset "forcing_from_sample (API_SPEC §5.8)" begin
     nx, ny = 3, 4
 
     @testset "const providers: the program's default forcing" begin
@@ -128,7 +128,7 @@ end
         ]
         _fb_check_default(prog, _fb_samples(nx, ny))
         # Column-major over the declared shape: E[i, j] is element i + nx(j - 1).
-        e = forcing_buffer(samples["M.E"], forcing_slots(prog)[1])
+        e = forcing_from_sample(samples["M.E"], forcing_slots(prog)[1])
         @test _fb_bits(e) == _fb_bits(vec(samples["M.E"]["M.E"]))
     end
 
@@ -142,13 +142,13 @@ end
         idx = forcing_buffer_index(prob)
         for slot in forcing_slots(prog)
             haskey(idx, slot.name) || continue
-            @test _fb_bits(forcing_buffer(samples[slot.name], slot)) ==
+            @test _fb_bits(forcing_from_sample(samples[slot.name], slot)) ==
                 _fb_bits(vec(bufs[idx[slot.name]]))
         end
         @test haskey(idx, "M.E")
         # The name method is the array `esm_problem` binds: the delivered
         # dimensions, a fresh copy.
-        a = forcing_buffer(samples["M.R"], "M.R")
+        a = forcing_from_sample(samples["M.R"], "M.R")
         @test size(a) == (2, nx)
         @test a !== samples["M.R"]["M.R"]
         @test _fb_bits(a) == _fb_bits(samples["M.R"]["M.R"])
@@ -156,14 +156,48 @@ end
 
     @testset "a sample that does not fit the slot is refused" begin
         slot = ForcingSlot("M.E", [3, 4], :forcing)
-        @test_throws DimensionMismatch forcing_buffer(Dict("M.E" => zeros(4, 3)), slot)
-        @test_throws DimensionMismatch forcing_buffer(Dict("M.E" => zeros(12)), slot)
-        @test_throws RefreshError forcing_buffer(Dict("M.F" => zeros(3, 4)), slot)
+        @test_throws DimensionMismatch forcing_from_sample(Dict("M.E" => zeros(4, 3)), slot)
+        @test_throws DimensionMismatch forcing_from_sample(Dict("M.E" => zeros(12)), slot)
+        @test_throws RefreshError forcing_from_sample(Dict("M.F" => zeros(3, 4)), slot)
         scalar = ForcingSlot("M.s", Int[], :forcing)
-        @test forcing_buffer(Dict("M.s" => [4.0]), scalar) == [4.0]
-        @test_throws DimensionMismatch forcing_buffer(Dict("M.s" => [4.0, 5.0]), scalar)
-        # A bare array is a single-variable sample: the field itself.
-        @test forcing_buffer(zeros(3, 4), slot) == zeros(12)
+        @test forcing_from_sample(Dict("M.s" => [4.0]), scalar) == [4.0]
+        @test_throws DimensionMismatch forcing_from_sample(Dict("M.s" => [4.0, 5.0]), scalar)
+        # A bare array is a single-variable sample: the field itself, and a
+        # bare number is a 0-d one.
+        @test forcing_from_sample(zeros(3, 4), slot) == zeros(12)
+        @test forcing_from_sample(Dict("M.s" => 3.0), scalar) == [3.0]
+        @test forcing_from_sample(3.0, "M.s"; shape = Int[]) == fill(3.0)
+        # `shape` takes any collection of integers.
+        @test size(forcing_from_sample(zeros(3, 4), "M.E"; shape = (3, 4))) == (3, 4)
+        @test forcing_from_sample([4.0], "M.s"; shape = []) == [4.0]
+        @test_throws DimensionMismatch forcing_from_sample(zeros(4, 3), "M.E"; shape = (3, 4))
+    end
+
+    @testset "esm_problem refuses what forcing_from_sample refuses" begin
+        doc = _fb_doc(nx, ny)
+        fed(e) = merge(
+            Dict{String, Any}(k => _FBProvider(Float64[], s) for (k, s) in _fb_samples(nx, ny)),
+            Dict{String, Any}("M.E" => _FBProvider(Float64[], Dict{String, Any}("M.E" => e)))
+        )
+        for wrong in (zeros(ny, nx), zeros(nx * ny), zeros(nx, ny, 1))
+            @test_throws DimensionMismatch esm_problem(doc, (0.0, 1.0); providers = fed(wrong))
+        end
+        # A discrete provider is checked at its first sample too.
+        discrete = Dict{String, Any}(
+            "M.E" => _FBProvider([0.5], Dict{String, Any}("M.E" => zeros(ny, nx))),
+            "M.s" => _FBProvider(Float64[], _fb_samples(nx, ny)["M.s"]),
+            "M.R" => _FBProvider(Float64[], _fb_samples(nx, ny)["M.R"]),
+        )
+        @test_throws DimensionMismatch esm_problem(doc, (0.0, 1.0); providers = discrete)
+        # And at each refresh, against the buffer it bound.
+        buf = zeros(nx, ny)
+        @test_throws RefreshError FB._write_forcing!(buf, "M.E", Dict("M.E" => zeros(ny, nx)))
+        @test_throws RefreshError FB._write_forcing!(buf, "M.E", Dict("M.E" => zeros(nx * ny)))
+        FB._write_forcing!(buf, "M.E", Dict("M.E" => _fb_field((nx, ny), 0.1)))
+        @test _fb_bits(buf) == _fb_bits(_fb_field((nx, ny), 0.1))
+        one = zeros(1)
+        FB._write_forcing!(one, "M.s", Dict("M.s" => 5.0))
+        @test one == [5.0]
     end
 
     @testset "a source declaring unit_conversion" begin
