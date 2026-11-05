@@ -5535,9 +5535,15 @@ fn apply_pointwise_lift(
             var.shape = Some(axes.clone());
         }
 
-        // Operands to index per cell: the lifted species plus any loaded producer
-        // whose rank matches the grid rank (e.g. a grid-shaped wind field).
+        // Operands to index per cell: the lifted species, every variable that
+        // declares a shape (a state, parameter or observed already on the
+        // grid, e.g. a mass field the merged RHS divides by), and any loaded
+        // producer whose rank matches the grid rank (e.g. a grid-shaped wind
+        // field). Julia `_pointwise_lift_operands` indexes the same set; a
+        // shaped operand left bare would be a whole-array read inside the
+        // per-cell `faq` body.
         let mut arrayvars: HashSet<String> = lifted.clone();
+        arrayvars.extend(var_shapes.keys().cloned());
         for (name, r) in loaded_producers {
             if *r == rank {
                 arrayvars.insert(name.clone());
@@ -6021,6 +6027,67 @@ mod tests {
             serde_json::to_value(&equations[0].eq).unwrap(),
             serde_json::to_value(&original).unwrap(),
             "the equation must not be lifted"
+        );
+    }
+
+    // A variable that already declares a grid shape (here a mass field `m`
+    // the merged right-hand side divides by) is indexed per cell inside the
+    // lifted body, as Julia `_pointwise_lift_operands` does: left bare it
+    // would be a whole-array read inside the per-cell `faq`.
+    #[test]
+    fn pointwise_lift_indexes_a_shaped_operand() {
+        let idx = |name: &str| {
+            Expr::operator(ExpressionNode {
+                op: "index".to_string(),
+                args: vec![
+                    Expr::Variable(name.to_string()),
+                    Expr::Variable("i".to_string()),
+                ],
+                ..Default::default()
+            })
+        };
+        let makearray = Expr::operator(ExpressionNode {
+            op: "makearray".to_string(),
+            regions: Some(vec![vec![[
+                crate::types::RegionBound::Int(1),
+                crate::types::RegionBound::Int(3),
+            ]]]),
+            values: Some(vec![idx("C")]),
+            ..Default::default()
+        });
+        let rhs = Expr::operator(ExpressionNode {
+            op: "/".to_string(),
+            args: vec![makearray, Expr::Variable("m".to_string())],
+            ..Default::default()
+        });
+        let mut equations = vec![FlatEq::authored(
+            ddt("C", rhs),
+            TermOrigin::Component {
+                component: "M".to_string(),
+            },
+        )];
+        let mut state_variables: IndexMap<String, ModelVariable> = IndexMap::new();
+        state_variables.insert("C".to_string(), var(VariableType::Unknown, None));
+        let var_shapes: HashMap<String, Vec<String>> =
+            HashMap::from([("m".to_string(), vec!["x".to_string()])]);
+        let mut lifted_shapes: IndexMap<String, Vec<i64>> = IndexMap::new();
+        let mut index_sets: IndexMap<String, IndexSet> = IndexMap::new();
+        index_sets.insert("x".to_string(), interval(3));
+        let lift = PointwiseLift {
+            lifted_shapes: &mut lifted_shapes,
+            state_variables: &mut state_variables,
+            var_shapes: &var_shapes,
+            index_sets: &mut index_sets,
+            loaded_producers: &HashMap::new(),
+        };
+        apply_pointwise_lift(&mut equations, lift).unwrap();
+        assert_eq!(lifted_shapes["C"], vec![3]);
+        let rhs = serde_json::to_value(&equations[0].eq.rhs).unwrap();
+        assert_eq!(rhs["op"], "faq");
+        assert_eq!(
+            rhs["expr"]["args"][1],
+            serde_json::to_value(idx("m")).unwrap(),
+            "the shaped operand must be indexed per cell: {rhs}"
         );
     }
 
