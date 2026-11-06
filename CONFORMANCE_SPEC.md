@@ -943,9 +943,12 @@ factor arrays. The narrow phase (exact rectangle / polygon test) stays as the
   * **2 names** → points `[x, y]` → the degenerate envelope `(x, y, x, y)`;
   * **1 name** → a `[pos, verts, coord]` 3-D ring factor → its axis-aligned bbox,
     remapped to `(xmin, ymin, xmax, ymax)`.
-* Each side's factors share a 1-D shape index set, which names the join range
-  (like an `on` key column): `src_env` → the source loop symbol, `tgt_env` → the
-  target loop symbol.
+* A factor's FIRST axis is its position axis, and each side's factors share that
+  axis's index set, which names the join range (like an `on` key column):
+  `src_env` → the source loop symbol, `tgt_env` → the target loop symbol. For the
+  2- and 4-name forms each factor is 1-D, so this is its only axis; for the
+  1-name form it is the ring stack's `pos` axis. A factor whose rank does not
+  match its list's arity (1-D for 2 or 4 names, 3-D for 1 name) is an error.
 * `eps ≥ 0` (default `0.0`) inflates BOTH envelopes of a pair OUTWARD by `eps`
   (`xmin−=eps, ymin−=eps, xmax+=eps, ymax+=eps`) before the intersection test.
 
@@ -994,7 +997,7 @@ the property that distinguishes them from the loop symbols in `output_idx` /
 `ranges` keys / an `integral`'s `int_var`, which a binding MUST NOT namespace
 because the array interpreter resolves those positionally against the loop
 bindings. Concretely, a materializer looks an envelope factor up as a variable
-(to read the 1-D shape index set that names its join range) and as a const array
+(to read the first-axis shape index set that names its join range) and as a const array
 (to read the envelope values); a name left bare against a namespaced registry
 resolves to nothing, and a bare name in a coupled system holding two components
 that each declare `W` would be ambiguous even if it did. Note too that the same

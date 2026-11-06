@@ -559,10 +559,10 @@ const _EMPTY_VI_MAPS = (maps = Dict{String, Any}(), map_sets = Dict{String, Stri
 # §5.5.8 case 2): the column's single declared shape index set names one of the
 # node's ranges. `vi_maps.map_sets` records the same fact for a materialised
 # value-invention buffer, which has no `variables` entry to read a shape from.
-# `_overlap_env_sym` below spells the identical rule for an envelope factor;
-# the two are kept apart only because their error contracts differ (an
-# unresolvable envelope factor is an OVERLAP diagnostic, an unresolvable key
-# column an UNKNOWN_KEY one).
+# `_overlap_env_sym` below is NOT the same rule: an envelope factor may also be
+# a 3-D `[pos, verts, coord]` ring stack (`_overlap_env_rank`), read by its first
+# axis, and an unresolvable one is an OVERLAP diagnostic rather than an
+# UNKNOWN_KEY one. Do not merge the two.
 function _join_key_column_sym(
         col::String, ranges::AbstractDict,
         sym_to_set::AbstractDict, var_shapes::AbstractDict,
@@ -928,9 +928,13 @@ _computed_keys(vals) = _ComputedKeys(
 )
 
 # Map an OVERLAP-gate env-factor list to the aggregate range symbol its axis
-# runs over (Phase 2a): the env factors are 1-D const-array buffers, so — exactly
-# like an `on` key column — the first factor's 1-D shape index set names the
-# range. `var_shapes` maps a factor name to its declared shape (index-set names).
+# runs over (Phase 2a). The list's length fixes every factor's rank
+# (`_overlap_env_rank`, CONFORMANCE_SPEC §5.5.6): 2 or 4 names are 1-D columns,
+# 1 name a `[pos, verts, coord]` RING stack. In both forms a factor's FIRST axis
+# is its position axis, so the first factor's first shape index set names the
+# range — the rule the setup path's `_geo_overlap_gate` also uses. Unlike that
+# path, which declines to the ungated sweep on a mismatch, this throws.
+# `var_shapes` maps a factor name to its declared shape (index-set names).
 function _overlap_env_sym(
         env_names::AbstractVector, ranges::AbstractDict,
         sym_to_set::AbstractDict, var_shapes::AbstractDict,
@@ -943,19 +947,55 @@ function _overlap_env_sym(
             "overlap join gate has an empty env-factor list"
         )
     )
-    fname = String(env_names[1])
-    shape = get(var_shapes, fname, nothing)
-    (shape === nothing || length(shape) != 1) && throw(
+    rank = _overlap_env_rank(length(env_names))
+    rank === nothing && throw(
         TreeWalkError(
             "E_TREEWALK_JOIN_OVERLAP",
-            "overlap join env factor '$fname' must be a 1-D buffer whose shape index " *
-                "set names the join range; shape=$(shape === nothing ? "<unknown>" : shape)"
+            "overlap join env must name 1 (a [pos, verts, coord] ring stack), " *
+                "2 (point [x, y]) or 4 (rect [xmin, ymin, xmax, ymax]) factors; " *
+                "got $(length(env_names)): $(String[String(n) for n in env_names]) " *
+                "(CONFORMANCE_SPEC §5.5.6)"
         )
     )
+    for f in env_names
+        fname = String(f)
+        shape = get(var_shapes, fname, nothing)
+        (shape === nothing || length(shape) != rank) && throw(
+            TreeWalkError(
+                "E_TREEWALK_JOIN_OVERLAP",
+                "overlap join env factor '$fname' must be " *
+                    (rank == 1 ? "a 1-D buffer" : "a [pos, verts, coord] 3-D ring stack") *
+                    " whose first shape index set names the join range; " *
+                    "shape=$(shape === nothing ? "<unknown>" : shape)"
+            )
+        )
+    end
+    shape = var_shapes[String(env_names[1])]
     return _join_sym_for_key(
         String(shape[1]), ranges, sym_to_set, pick, order,
         :column_axis
     )
+end
+
+# An overlap gate's envelope factors MUST be build-time data (CONFORMANCE_SPEC
+# §5.5.6): the candidate set is built once, here, and never rebuilt. A factor
+# missing from `arrays` (the build-time storage `_resolve_join_gates_for` is
+# handed) is most often a live forcing array, so say that instead of letting
+# `_envelope_vectors` raise a bare `KeyError`.
+function _require_build_time_env(env_names::AbstractVector, arrays::AbstractDict)
+    for f in env_names
+        fname = String(f)
+        haskey(arrays, fname) || throw(
+            TreeWalkError(
+                "E_TREEWALK_JOIN_OVERLAP",
+                "overlap join env factor '$fname' is not build-time data: an " *
+                    "envelope factor must be a const array, a const observed or " *
+                    "setup geometry, not a live forcing / data-loader array or a " *
+                    "state (CONFORMANCE_SPEC §5.5.6)"
+            )
+        )
+    end
+    return nothing
 end
 
 # Resolve every join clause of an aggregate node into `_JoinGate`s (RFC §5.3 /
@@ -996,6 +1036,8 @@ function _resolve_join_gates_for(
                 clause.tgt_env, ranges, sym_to_set, var_shapes,
                 :right, order
             )
+            _require_build_time_env(clause.src_env, const_arrays)
+            _require_build_time_env(clause.tgt_env, const_arrays)
             cands = _overlap_candidate_set(
                 clause.src_env, clause.tgt_env, const_arrays;
                 eps = clause.eps

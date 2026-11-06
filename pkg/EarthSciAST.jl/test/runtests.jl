@@ -366,6 +366,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("geom_on_drive_test.jl")          # setup bin-equality broad phase: key matches DRIVE the sweep
     include("broad_phase_conformance_test.jl")   # projection-pushdown Phase 3a
     include("overlap_gate_conformance_test.jl")   # projection-pushdown Phase 2a
+    include("overlap_gate_live_forcing_test.jl")  # §5.5.6 ring envelope factors when the gated apply stays in the RHS
     include("join_namespacing_test.jl")           # §5.5.6 join names under flattening
     include("join_on_equality_gate_test.jl")      # §5.5.8 value-equality gate: data columns + DRIVING
     include("join_on_self_join_test.jl")          # §5.5.8 a relation joined to ITSELF: two ranges, one index set

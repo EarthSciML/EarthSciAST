@@ -2431,6 +2431,46 @@ function _plan_observed_slots(
     return (; defs, inline, n_inlined = n_total - length(defs))
 end
 
+# Layer the build-materialized arrays over the caller's const arrays in `dest`.
+# This is the ONE precedence rule for every reader of build-time storage: the
+# const-array registry the right-hand side reads (`_register_const_arrays`) and
+# the join-gate resolver's lookup table (`_build_partition_and_materialize`)
+# both go through it, so a gate and the body it gates can never read two
+# different arrays under one name.
+#
+#   * clip rings, setup geometry and fused-leaf operand rings OVERWRITE a caller
+#     const array of the same name (the document's definition wins);
+#   * const-op array observeds only FILL names no other storage holds.
+function _overlay_build_time_arrays!(
+        dest::AbstractDict, geom_rings, geom_setup_arrays,
+        pia_operand_arrays, const_obs_arrays
+    )
+    # M4 (RFC §8.1): each materialized intersect_polygon clip ring, as a 2D const
+    # array under its observed-variable name, so the polygon_area FAQ body reads
+    # its vertices via `index(clip, v, c)`. The CLOSED ring (n+1 rows) makes the
+    # wrap edge an ordinary `v+1` lookup.
+    for (k, ring) in geom_rings
+        dest[k] = ring
+    end
+    # M4+: each setup-materialized geometry array (per-pair area, A_ij, ring
+    # stacks built from parameters, …), read via `index(area, p)` / `index(A_ij, i, j)`.
+    for (k, arr) in geom_setup_arrays
+        dest[k] = arr
+    end
+    # polygon_intersection_area operands: the const polygon vertex rings the fused
+    # leaf clips + areas, so `_resolve_indices` folds
+    # `polygon_intersection_area(src, tgt)` to its scalar overlap area (§8.6.1).
+    for (k, ring) in pia_operand_arrays
+        dest[k] = ring
+    end
+    # const-op array observeds (in-file ring stacks / source fields): an ODE reads
+    # `index(F_src, i)` and a setup aggregate gathers `index(src_poly, i)`.
+    for (k, arr) in const_obs_arrays
+        haskey(dest, k) || (dest[k] = arr)
+    end
+    return dest
+end
+
 # ---- Stage: const-array registry ----
 # Pre-computed constant arrays (Fornberg weights, mesh connectivity, etc.).
 # Supports both 1D (Fornberg weights) and ND (connectivity matrices for
@@ -2458,29 +2498,10 @@ function _register_const_arrays(
         bnd = get(const_boundaries, k_str, nothing)
         registry[k_str] = bnd === nothing ? arr : _wrap_bounded_const(arr, bnd, k_str)
     end
-    # M4 (RFC §8.1): register each materialized intersect_polygon clip ring as a
-    # 2D const_array under its observed-variable name, so the polygon_area FAQ body
-    # reads its vertices via `index(clip, v, c)` through the existing const-array
-    # path. The CLOSED ring (n+1 rows) makes the wrap edge an ordinary `v+1` lookup.
-    for (k, ring) in geom_rings
-        registry[k] = ring
-    end
-    # M4+: register each setup-materialized geometry array (per-pair area, A_ij, …)
-    # so the ODE body reads it via `index(area, p)` / `index(A_ij, i, j)`.
-    for (k, arr) in geom_setup_arrays
-        registry[k] = arr
-    end
-    # polygon_intersection_area operands: the const polygon vertex rings the fused
-    # leaf clips + areas. Registered as 2D const_arrays so `_resolve_indices` folds
-    # `polygon_intersection_area(src, tgt)` to its scalar overlap area (§8.6.1).
-    for (k, ring) in pia_operand_arrays
-        registry[k] = ring
-    end
-    # const-op array observeds (in-file ring stacks / source fields): registered so
-    # an ODE reads `index(F_src, i)` and a setup aggregate gathers `index(src_poly, i)`.
-    for (k, arr) in const_obs_arrays
-        haskey(registry, k) || (registry[k] = arr)
-    end
+    _overlay_build_time_arrays!(
+        registry, geom_rings, geom_setup_arrays,
+        pia_operand_arrays, const_obs_arrays
+    )
     return registry
 end
 
@@ -4160,17 +4181,19 @@ function _build_partition_and_materialize(
         String(n) => (v.shape === nothing ? String[] : Vector{String}(v.shape))
             for (n, v) in model.variables
     )
-    # A §5.5.8 `on` key column is a declared 1-D VARIABLE, so the resolver also
-    # needs its build-time data. Three storages reach it: the const arrays
-    # (host-supplied / front-door-derived) merged with the const-op array
-    # observeds this build already materialized (`cls.const_obs_arrays`, whose
-    # equations were dropped from the ODE partition above), and — for a
-    # document-literal column that is still an equation — the observed
-    # definitions, which `_join_key_column_values` materializes on demand.
-    join_key_arrays = Dict{String, Any}(const_arrays)
-    for (n, a) in cls.const_obs_arrays
-        haskey(join_key_arrays, n) || (join_key_arrays[n] = a)
-    end
+    # A §5.5.8 `on` key column and a §5.5.6 overlap envelope factor are both
+    # build-time data, so the resolver gets the same storage the right-hand side
+    # will read: the caller's const arrays overlaid with everything this build
+    # materialized (clip rings, setup geometry such as a `[pos, verts, coord]`
+    # ring stack built from parameters, fused-leaf operand rings, const-op array
+    # observeds), by the one precedence rule in `_overlay_build_time_arrays!`.
+    # The equations of all of these were dropped from the ODE partition above.
+    # A document-literal key column that is still an equation is materialized on
+    # demand from the observed definitions by `_join_key_column_values`.
+    join_key_arrays = _overlay_build_time_arrays!(
+        Dict{String, Any}(const_arrays), geom_rings, geom_setup_arrays,
+        cls.pia_operand_arrays, cls.const_obs_arrays
+    )
     join_obs_defs = observed_definitions(model)
     # A key column computed from scalar parameters folds their values into the
     # match set, so each one it reads is recorded as read at build

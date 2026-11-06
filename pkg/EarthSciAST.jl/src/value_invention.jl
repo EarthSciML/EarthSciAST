@@ -578,9 +578,8 @@ end
 
 # ---- Materialisation -------------------------------------------------------
 
-# The index range symbol of a join-key variable within the producer's ranges:
-# the producer range whose `from` equals the variable's (1-D) shape index set.
-function _vi_join_index_sym(vname, producer_ranges, ctx::_ViCtx)
+# The declared shape of a join-referenced variable (index-set names).
+function _vi_join_var_shape(vname, ctx::_ViCtx)
     v = get(ctx.variables, vname, nothing)
     v === nothing && throw(
         TreeWalkError(
@@ -588,14 +587,64 @@ function _vi_join_index_sym(vname, producer_ranges, ctx::_ViCtx)
             "join references unknown variable '$(vname)'"
         )
     )
-    shape = v.shape === nothing ? String[] : v.shape
+    return v.shape === nothing ? String[] : v.shape
+end
+
+# The index range symbol of a join-key variable within the producer's ranges:
+# the producer range whose `from` equals the variable's (1-D) shape index set.
+function _vi_join_index_sym(vname, producer_ranges, ctx::_ViCtx)
+    shape = _vi_join_var_shape(vname, ctx)
     length(shape) == 1 || throw(
         TreeWalkError(
             "E_TREEWALK_VI_JOIN",
             "value-invention join key '$(vname)' must be a 1-D buffer; shape=$(shape)"
         )
     )
-    target = shape[1]
+    return _vi_range_sym_for_set(shape[1], vname, producer_ranges)
+end
+
+# The range symbol an OVERLAP gate's env-factor list runs over. The list's
+# length fixes every factor's rank (`_overlap_env_rank`, CONFORMANCE_SPEC
+# §5.5.6): 2 or 4 names are 1-D columns, 1 name a `[pos, verts, coord]` ring
+# stack. A factor's first axis is its position axis in every form, so the first
+# factor's first shape index set names the range, as in the tree-walk's
+# `_overlap_env_sym`.
+function _vi_overlap_env_sym(env_names::AbstractVector, producer_ranges, ctx::_ViCtx)
+    rank = _overlap_env_rank(length(env_names))
+    rank === nothing && throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_JOIN",
+            "value-invention overlap env must name 1 (a [pos, verts, coord] ring " *
+                "stack), 2 (point [x, y]) or 4 (rect [xmin, ymin, xmax, ymax]) " *
+                "factors; got $(length(env_names)) (CONFORMANCE_SPEC §5.5.6)"
+        )
+    )
+    for f in env_names
+        fname = String(f)
+        shape = _vi_join_var_shape(fname, ctx)
+        length(shape) == rank || throw(
+            TreeWalkError(
+                "E_TREEWALK_VI_JOIN",
+                "value-invention overlap env factor '$(fname)' must be " *
+                    (rank == 1 ? "a 1-D buffer" : "a [pos, verts, coord] 3-D ring stack") *
+                    "; shape=$(shape)"
+            )
+        )
+        haskey(ctx.const_arrays, fname) || throw(
+            TreeWalkError(
+                "E_TREEWALK_VI_JOIN",
+                "value-invention overlap env factor '$(fname)' is not a const array: " *
+                    "an envelope factor must be build-time const-array data when " *
+                    "value invention runs (CONFORMANCE_SPEC §5.5.6)"
+            )
+        )
+    end
+    fname = String(env_names[1])
+    return _vi_range_sym_for_set(_vi_join_var_shape(fname, ctx)[1], fname, producer_ranges)
+end
+
+# The producer range whose `from` is index set `target`.
+function _vi_range_sym_for_set(target, vname, producer_ranges)
     for (sym, spec) in producer_ranges
         spec isa IndexSetRef && spec.from == target && return sym
     end
@@ -634,14 +683,15 @@ end
 # Resolve an aggregate's `join` clauses into `_ViJoinGate`s ONCE (the candidate
 # set / buffer bindings are shared across every contracted tuple). A
 # `_OverlapJoinSpec` clause maps `src_env`→sym_l and `tgt_env`→sym_r via each
-# factor's 1-D shape index set (`_vi_join_index_sym`, exactly like an `on` key
-# column) and builds its candidate set from the const-array envelope factors.
+# first factor's first shape index set (`_vi_overlap_env_sym`; a 1-D column or
+# a `[pos, verts, coord]` ring stack) and builds its candidate set from the
+# const-array envelope factors.
 function _vi_resolve_join(join, producer_ranges, ctx::_ViCtx)
     gates = _ViJoinGate[]
     for clause in join
         if clause isa _OverlapJoinSpec
-            sym_l = _vi_join_index_sym(clause.src_env[1], producer_ranges, ctx)
-            sym_r = _vi_join_index_sym(clause.tgt_env[1], producer_ranges, ctx)
+            sym_l = _vi_overlap_env_sym(clause.src_env, producer_ranges, ctx)
+            sym_r = _vi_overlap_env_sym(clause.tgt_env, producer_ranges, ctx)
             cands = _overlap_candidate_set(
                 _vi_env_vectors(clause.src_env, ctx),
                 _vi_env_vectors(clause.tgt_env, ctx);
