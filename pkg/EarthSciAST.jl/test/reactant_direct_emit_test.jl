@@ -655,6 +655,48 @@ end
         @test occursin("direct_rhs_with_buffers", de.detail)
     end
 
+    @testset "a live forcing read at a contraction loop's counter" begin
+        # `D(s) = Σ_{k=1}^{12} F[k]·k`: long enough for the run-time contraction
+        # loop, whose term reads the live buffer at the counter (a
+        # `_NK_LIVE_GATHER`). Emission unrolls the loop and reads each term
+        # from the `buffers` argument, so a refresh is seen.
+        n = 12
+        doc = _de_doc(
+            "LG", Dict{String, Any}(
+                "s" => _de_state(default = 0.0),
+                "F" => Dict{String, Any}("type" => "parameter", "shape" => Any["k"])
+            ),
+            Any[
+                Dict{String, Any}(
+                    "lhs" => _de_Dt("s"),
+                    "rhs" => Dict{String, Any}(
+                        "op" => "faq", "args" => Any[], "output_idx" => Any[],
+                        "ranges" => Dict("k" => Any[1, n]),
+                        "expr" => _de_o("*", _de_ix("F", "k"), "k")
+                    )
+                ),
+            ]
+        )
+        F = collect(1.0:n) ./ 7
+        pa = Dict("F" => F)
+        fi!, _, p, _, _ = EarthSciAST._build_evaluator(doc; param_arrays = pa)
+        fo, _, _, _, _ = EarthSciAST._build_evaluator(doc; form = :oop, param_arrays = pa)
+        host = ESM_DE.forcing_buffers(fo)
+        dev = map(RX_DE.ConcreteRArray, host)
+        db = EXT_DE.direct_rhs_with_buffers(fo)
+        pr = _de_dev(p)
+        u = [0.3]
+        ur = RX_DE.ConcreteRArray(copy(u)); tr = RX_DE.ConcreteRNumber(0.0)
+        xla = RX_DE.@compile sync = true db(ur, pr, tr, dev)
+        before = _de_ip(fi!, u, p, 0.0)
+        @test isapprox(Array(xla(ur, pr, tr, dev)), before; rtol = 1.0e-12)
+        F .= reverse(F)
+        ESM_DE.sync_forcing!(dev, host)
+        fresh = _de_ip(fi!, u, p, 0.0)
+        @test fresh != before
+        @test isapprox(Array(xla(ur, pr, tr, dev)), fresh; rtol = 1.0e-12)
+    end
+
     @testset "template sub-kernels (`_NK_SUBCALL`)" begin
         fix = fullrank_per_cell_fixture()
         @test isfile(fix)
