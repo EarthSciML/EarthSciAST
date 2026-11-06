@@ -1060,12 +1060,12 @@
           ],
           "coupling_chain": [
             {
-              "from": "ModelA.x",
-              "references": "ModelB.y"
+              "from": "ModelA.a",
+              "references": "ModelB.b"
             },
             {
-              "from": "ModelB.y",
-              "references": "ModelA.x"
+              "from": "ModelB.b",
+              "references": "ModelA.a"
             }
           ]
         }
