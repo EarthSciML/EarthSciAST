@@ -5012,6 +5012,10 @@ pub(crate) fn check_circular_dependencies_in_models(
     errors: &mut Vec<StructuralError>,
 ) {
     let mut dependencies: HashMap<String, HashSet<String>> = HashMap::new();
+    // Only a read of an observed or algebraic unknown is an edge (esm-spec
+    // §4.9.7): a state's or a parameter's value is known at every
+    // right-hand-side evaluation, so reading it orders nothing.
+    let observed = cross_model_observed_names(models);
 
     // Build dependency graph by analyzing scoped references in equations
     for (model_name, model) in models {
@@ -5019,10 +5023,10 @@ pub(crate) fn check_circular_dependencies_in_models(
 
         for equation in &model.equations {
             // Check RHS for scoped references
-            extract_model_dependencies(&equation.rhs, &mut model_deps, model_name, models);
+            extract_model_dependencies(&equation.rhs, &mut model_deps, model_name, &observed);
 
             // Check LHS for scoped references (though less common)
-            extract_model_dependencies(&equation.lhs, &mut model_deps, model_name, models);
+            extract_model_dependencies(&equation.lhs, &mut model_deps, model_name, &observed);
         }
 
         // ...and the Expressions a VARIABLE still carries: a parameter
@@ -5030,7 +5034,7 @@ pub(crate) fn check_circular_dependencies_in_models(
         // unknown's defining expression is an equation, walked above.
         for variable in model.variables.values() {
             variable.for_each_expression(&mut |expr| {
-                extract_model_dependencies(expr, &mut model_deps, model_name, models)
+                extract_model_dependencies(expr, &mut model_deps, model_name, &observed)
             });
         }
 
@@ -5064,12 +5068,77 @@ pub(crate) fn check_circular_dependencies_in_models(
     }
 }
 
+/// The names under a time derivative `D(·, t)` (`wrt` "t" or absent) in an
+/// equation's left-hand side: a bare `D(v)`, an `index(v, …)` gather inside
+/// it, or a `faq` whose body is such a derivative (esm-spec §4.9.7).
+fn time_derivative_operand_names(e: &crate::Expr, under_d: bool, out: &mut HashSet<String>) {
+    match e {
+        crate::Expr::Variable(n) if under_d => {
+            out.insert(n.clone());
+        }
+        crate::Expr::Operator(node) => {
+            let d = under_d
+                || (node.op == "D" && matches!(node.wrt.as_deref(), None | Some("t")));
+            node.for_each_child(&mut |c| time_derivative_operand_names(c, d, out));
+        }
+        _ => {}
+    }
+}
+
+/// The scoped names (`Model.v`, `Model.Sub.v`) of every unknown of `models`
+/// that is NOT an ODE state: an unknown no equation of the document puts under
+/// `D(·, t)` (esm-spec §4.9.7). A `D` left-hand side names its variable bare in
+/// the variable's own (sub)model, or by its scoped name from anywhere. Inline
+/// subsystems are read from their JSON; a subsystem that does not type as a
+/// model (an unresolved ref) contributes nothing.
+fn cross_model_observed_names(
+    models: &indexmap::IndexMap<String, crate::Model>,
+) -> HashSet<String> {
+    fn walk(
+        path: &str,
+        m: &crate::Model,
+        unknowns: &mut HashSet<String>,
+        states: &mut HashSet<String>,
+    ) {
+        for (v, var) in &m.variables {
+            if matches!(var.var_type, crate::VariableType::Unknown) {
+                unknowns.insert(format!("{path}.{v}"));
+            }
+        }
+        for eq in &m.equations {
+            let mut names = HashSet::new();
+            time_derivative_operand_names(&eq.lhs, false, &mut names);
+            for x in names {
+                states.insert(if x.contains('.') {
+                    x
+                } else {
+                    format!("{path}.{x}")
+                });
+            }
+        }
+        for (sub, value) in m.subsystems.iter().flatten() {
+            if let Ok(child) = serde_json::from_value::<crate::Model>(value.clone()) {
+                walk(&format!("{path}.{sub}"), &child, unknowns, states);
+            }
+        }
+    }
+    let mut unknowns = HashSet::new();
+    let mut states = HashSet::new();
+    for (name, model) in models {
+        walk(name, model, &mut unknowns, &mut states);
+    }
+    unknowns.retain(|n| !states.contains(n));
+    unknowns
+}
+
 /// Extract model dependencies from an expression by finding scoped references
+/// to observed or algebraic unknowns of other models (`observed`, from
+/// [`cross_model_observed_names`]).
 fn extract_model_dependencies(
     expr: &crate::Expr,
     deps: &mut HashSet<String>,
     self_name: &str,
-    models: &indexmap::IndexMap<String, crate::Model>,
+    observed: &HashSet<String>,
 ) {
     match expr {
         crate::Expr::Variable(var_name) => {
@@ -5087,9 +5156,11 @@ fn extract_model_dependencies(
                 if model_name == self_name {
                     return;
                 }
-                // Only a real model can be depended ON: a dotted ref into a data
-                // loader or a reaction system is not a model edge.
-                if models.contains_key(model_name) {
+                // Only an observed or algebraic unknown of a real model can be
+                // depended ON: a dotted ref to a state or a parameter, into a
+                // data loader, or into a reaction system (which declares only
+                // species and parameters) is not a model edge.
+                if observed.contains(var_name.as_str()) {
                     deps.insert(model_name.to_string());
                 }
             }
@@ -5101,7 +5172,7 @@ fn extract_model_dependencies(
             // dotted `System.var` refs matter here, so the node's bound index
             // symbols (bare names) are naturally ignored.
             op_node.for_each_child(&mut |arg| {
-                extract_model_dependencies(arg, deps, self_name, models)
+                extract_model_dependencies(arg, deps, self_name, observed)
             });
         }
         crate::Expr::Number(_) | crate::Expr::Integer(_) => {

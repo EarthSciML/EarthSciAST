@@ -1492,6 +1492,27 @@ func TestCheckerB_F_CouplingAndSubsystemRefPins(t *testing.T) {
 		}
 	})
 
+	// Reads of another model's STATES are not cycle edges (esm-spec §4.9.7).
+	for _, name := range []string{"cross_model_state_reads.esm", "cross_model_mixing_observed_state_cycle.esm"} {
+		t.Run(name, func(t *testing.T) {
+			repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
+			if err != nil {
+				t.Fatalf("resolve repo root: %v", err)
+			}
+			content, err := os.ReadFile(filepath.Join(repoRoot, "tests", "valid", name))
+			if err != nil {
+				t.Fatalf("read %s: %v", name, err)
+			}
+			file, err := LoadString(string(content))
+			if err != nil {
+				t.Fatalf("load %s: %v", name, err)
+			}
+			if result := Validate(file); hasCode(result, ErrorCircularDependency) {
+				t.Errorf("a cycle through state reads is not circular_dependency: %+v", result.StructuralErrors)
+			}
+		})
+	}
+
 	t.Run("subsystem_ref_not_found", func(t *testing.T) {
 		_, _, err := loadInvalidFixtureByPath(t, "subsystem_ref_not_found.esm")
 		if err == nil {

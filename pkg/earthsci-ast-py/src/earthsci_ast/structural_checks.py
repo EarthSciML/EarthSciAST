@@ -2067,10 +2067,60 @@ def _check_coupling_references(
             )
 
 
+def _time_derivative_operand_names(e: Any, under_d: bool) -> set[str]:
+    """The names under a time derivative ``D(·, t)`` (``wrt`` "t" or absent) in
+    an equation's left-hand side: a bare ``D(v)``, an ``index(v, …)`` gather
+    inside it, or a ``faq`` whose body is such a derivative (esm-spec §4.9.7)."""
+    if isinstance(e, str):
+        return {e} if under_d else set()
+    if not isinstance(e, dict):
+        return set()
+    d = under_d or (e.get("op") == "D" and e.get("wrt") in (None, "t"))
+    out: set[str] = set()
+    for a in e.get("args") or []:
+        out |= _time_derivative_operand_names(a, d)
+    if "expr" in e:
+        out |= _time_derivative_operand_names(e["expr"], d)
+    return out
+
+
+def _cross_model_observed_names(data: dict[str, Any]) -> set[str]:
+    """The scoped names (``Model.v``, ``Model.Sub.v``) of every unknown of the
+    document's models that is NOT an ODE state: an unknown no equation of the
+    document puts under ``D(·, t)`` (esm-spec §4.9.7). A ``D`` left-hand side
+    names its variable bare in the variable's own (sub)model, or by its scoped
+    name from anywhere."""
+    unknowns: set[str] = set()
+    states: set[str] = set()
+
+    def walk(path: str, m: Any) -> None:
+        if not isinstance(m, dict):
+            return
+        for v, vdef in (m.get("variables") or {}).items():
+            if isinstance(vdef, dict) and vdef.get("type") == "unknown":
+                unknowns.add(f"{path}.{v}")
+        for eq in m.get("equations") or []:
+            lhs = eq.get("lhs") if isinstance(eq, dict) else None
+            for x in _time_derivative_operand_names(lhs, False):
+                states.add(x if "." in x else f"{path}.{x}")
+        for sub, node in (m.get("subsystems") or {}).items():
+            walk(f"{path}.{sub}", node)
+
+    for name, model in (data.get("models") or {}).items():
+        walk(name, model)
+    return unknowns - states
+
+
 def _check_circular_references(
     data: dict[str, Any], tables: dict[str, Any], errors: list[str]
 ) -> None:
-    """Detect cycles in cross-system dependencies introduced by equation references."""
+    """Detect cycles in cross-system dependencies introduced by equation references.
+
+    Only a read of an observed or algebraic unknown of another model is an edge
+    (esm-spec §4.9.7): a state's or a parameter's value is known at every
+    right-hand-side evaluation, so reading it orders nothing.
+    """
+    observed = _cross_model_observed_names(data)
     # Build system -> set of systems it depends on
     deps = {name: set() for name in data.get("models", {})}
     for mname, m in data.get("models", {}).items():
@@ -2079,7 +2129,7 @@ def _check_circular_references(
                 if side not in eq:
                     continue
                 for ref in _walk_expression_strings(eq[side]):
-                    if "." in ref:
+                    if "." in ref and ref in observed:
                         target_system = ref.split(".")[0]
                         if target_system != mname and target_system in deps:
                             deps[mname].add(target_system)

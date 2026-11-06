@@ -369,11 +369,68 @@ function validateImportedCouplingEdges(esmFile: EsmFile): StructuralError[] {
 }
 
 /**
- * Check for circular cross-model variable references (without explicit coupling)
+ * The names under a time derivative `D(·, t)` (`wrt` "t" or absent) in an
+ * equation's left-hand side: a bare `D(v)`, an `index(v, …)` gather inside it,
+ * or a `faq` whose body is such a derivative (esm-spec §4.9.7).
+ */
+function timeDerivativeOperandNames(e: unknown, underD: boolean): Set<string> {
+  const out = new Set<string>()
+  if (typeof e === 'string') {
+    if (underD) out.add(e)
+    return out
+  }
+  if (!e || typeof e !== 'object') return out
+  const node = e as { op?: string; args?: unknown[]; wrt?: string | null; expr?: unknown }
+  const d = underD || (node.op === 'D' && (node.wrt === undefined || node.wrt === null || node.wrt === 't'))
+  for (const a of node.args ?? []) for (const n of timeDerivativeOperandNames(a, d)) out.add(n)
+  if (node.expr !== undefined) for (const n of timeDerivativeOperandNames(node.expr, d)) out.add(n)
+  return out
+}
+
+/**
+ * The scoped names (`Model.v`, `Model.Sub.v`) of every unknown of the
+ * document's models that is NOT an ODE state: an unknown no equation of the
+ * document puts under `D(·, t)` (esm-spec §4.9.7). A `D` left-hand side names
+ * its variable bare in the variable's own (sub)model, or by its scoped name
+ * from anywhere.
+ */
+function crossModelObservedNames(esmFile: EsmFile): Set<string> {
+  const unknowns = new Set<string>()
+  const states = new Set<string>()
+  const walk = (path: string, m: unknown): void => {
+    if (!m || typeof m !== 'object' || 'ref' in (m as object)) return
+    const model = m as {
+      variables?: Record<string, { type?: string }>
+      equations?: Array<{ lhs?: unknown }>
+      subsystems?: Record<string, unknown>
+    }
+    for (const [v, def] of Object.entries(model.variables ?? {})) {
+      if (def && def.type === 'unknown') unknowns.add(`${path}.${v}`)
+    }
+    for (const eq of model.equations ?? []) {
+      for (const x of timeDerivativeOperandNames(eq?.lhs, false)) {
+        states.add(x.includes('.') ? x : `${path}.${x}`)
+      }
+    }
+    for (const [sub, node] of Object.entries(model.subsystems ?? {})) {
+      walk(`${path}.${sub}`, node)
+    }
+  }
+  for (const [name, model] of Object.entries(esmFile.models ?? {})) walk(name, model)
+  for (const s of states) unknowns.delete(s)
+  return unknowns
+}
+
+/**
+ * Check for circular cross-model variable references (without explicit coupling).
+ * Only a read of an observed or algebraic unknown of another model is an edge
+ * (esm-spec §4.9.7): a state's or a parameter's value is known at every
+ * right-hand-side evaluation, so reading it orders nothing.
  */
 export function validateCircularReferences(esmFile: EsmFile): StructuralError[] {
   const errors: StructuralError[] = []
   if (!esmFile.models) return errors
+  const observed = crossModelObservedNames(esmFile)
 
   // Build dependency graph: which models reference which other models
   const modelDeps = new Map<string, Set<string>>()
@@ -389,7 +446,7 @@ export function validateCircularReferences(esmFile: EsmFile): StructuralError[] 
         ...extractVariableReferences(equation.rhs),
       ]
       for (const ref of refs) {
-        if (ref.includes('.')) {
+        if (ref.includes('.') && observed.has(ref)) {
           const targetModel = ref.split('.')[0]
           if (targetModel !== modelName && esmFile.models[targetModel]) {
             deps.add(targetModel)

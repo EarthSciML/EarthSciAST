@@ -653,6 +653,36 @@ fn test_event_error_conditions() {
     );
 }
 
+/// Reads of another model's STATES are not `circular_dependency` edges
+/// (esm-spec §4.9.7): both documents load, and `validate()` reports no cycle.
+/// The second is the shape of a boundary-layer mixing term written per
+/// component, whose model graph closes only through a state read.
+#[test]
+fn test_state_reads_are_not_a_circular_dependency() {
+    for (name, fixture) in [
+        (
+            "cross_model_state_reads",
+            include_str!("../../../tests/valid/cross_model_state_reads.esm"),
+        ),
+        (
+            "cross_model_mixing_observed_state_cycle",
+            include_str!("../../../tests/valid/cross_model_mixing_observed_state_cycle.esm"),
+        ),
+    ] {
+        let esm_file = load_string(fixture)
+            .unwrap_or_else(|e| panic!("{name} must load (state reads order nothing): {e}"));
+        let result = validate(&esm_file);
+        assert!(
+            !result
+                .structural_errors
+                .iter()
+                .any(|err| matches!(err.code, StructuralErrorCode::CircularDependency)),
+            "{name}: a cycle through state reads is not a circular_dependency: {:?}",
+            result.structural_errors
+        );
+    }
+}
+
 /// Test circular dependency detection.
 ///
 /// Accepts either outcome: `load_string()` may reject the fixture at parse time

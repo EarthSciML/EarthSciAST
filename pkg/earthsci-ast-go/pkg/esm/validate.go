@@ -2737,24 +2737,27 @@ func (s *structuralScan) flagRefSubsystems(subsystems map[string]any, pathPrefix
 // validateCircularReferences reports a cycle in the cross-model reference graph.
 //
 // A model DEPENDS on another when one of its equations reads a scoped reference
-// into it (`ModelA.x ~ … ModelB.y …`). Two models that read each other cannot be
-// ordered — neither can be evaluated first — so the composition is unrealizable
-// (tests/invalid/circular_coupling.esm). Mirrors TS
+// to an observed or algebraic unknown of it (`ModelA.a ~ … ModelB.b …`; esm-spec
+// §4.9.7). Two models whose observeds read each other cannot be ordered —
+// neither can be evaluated first — so the composition is unrealizable
+// (tests/invalid/circular_coupling.esm). Reads of states and parameters are not
+// edges (tests/valid/cross_model_state_reads.esm). Mirrors TS
 // validate/coupling-checks.ts `validateCircularReferences`.
 func (s *structuralScan) validateCircularReferences() {
 	if s.file == nil || len(s.file.Models) == 0 {
 		return
 	}
 	deps := map[string]map[string]bool{}
+	observed := crossModelObservedNames(s.file)
 	for _, modelName := range sortedKeys(s.file.Models) {
 		model := s.file.Models[modelName]
 		d := map[string]bool{}
 		for _, eq := range model.Equations {
 			for name := range FreeVariables(eq.LHS) {
-				addModelDep(d, name, modelName, s.file)
+				addModelDep(d, name, modelName, observed)
 			}
 			for name := range FreeVariables(eq.RHS) {
-				addModelDep(d, name, modelName, s.file)
+				addModelDep(d, name, modelName, observed)
 			}
 		}
 		deps[modelName] = d
@@ -2811,14 +2814,63 @@ func (s *structuralScan) validateCircularReferences() {
 
 // addModelDep records a dependency on the model a scoped reference names, if it
 // names one other than the referring model itself.
-func addModelDep(deps map[string]bool, ref, self string, file *ESMFile) {
+//
+// Only a read of an observed or algebraic unknown of another model is an edge
+// (esm-spec §4.9.7): a state's or a parameter's value is known at every
+// right-hand-side evaluation, so reading it orders nothing. `observed` is
+// crossModelObservedNames of the document.
+func addModelDep(deps map[string]bool, ref, self string, observed map[string]bool) {
 	root, _, dotted := strings.Cut(ref, ".")
 	if !dotted || root == self {
 		return
 	}
-	if _, isModel := file.Models[root]; isModel {
+	if observed[ref] {
 		deps[root] = true
 	}
+}
+
+// crossModelObservedNames returns the scoped names (`Model.v`, `Model.Sub.v`)
+// of every unknown of the document's models that is NOT an ODE state: an
+// unknown no equation of the document puts under `D(·, t)` (esm-spec §4.9.7).
+// A `D` left-hand side names its variable bare in the variable's own
+// (sub)model, or by its scoped name from anywhere. A subsystem still held as a
+// ref contributes nothing.
+func crossModelObservedNames(file *ESMFile) map[string]bool {
+	unknowns := map[string]bool{}
+	states := map[string]bool{}
+	var walk func(path string, m *Model)
+	walk = func(path string, m *Model) {
+		for v, def := range m.Variables {
+			if def.Type == VarTypeUnknown {
+				unknowns[path+"."+v] = true
+			}
+		}
+		for _, eq := range m.Equations {
+			for x := range derivativeTargets(eq.LHS) {
+				if strings.Contains(x, ".") {
+					states[x] = true
+				} else {
+					states[path+"."+x] = true
+				}
+			}
+		}
+		for name, raw := range m.Subsystems {
+			if _, _, isRef := extractRefWithBindings(raw); isRef {
+				continue
+			}
+			if sub, ok := decodeSubsystemAs[Model](raw); ok {
+				walk(path+"."+name, &sub)
+			}
+		}
+	}
+	for name := range file.Models {
+		m := file.Models[name]
+		walk(name, &m)
+	}
+	for s := range states {
+		delete(unknowns, s)
+	}
+	return unknowns
 }
 
 // sortedKeysOfSet returns the members of a string set in deterministic order.

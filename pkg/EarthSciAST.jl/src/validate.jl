@@ -2476,10 +2476,13 @@ Detect a dependency cycle among the document's top-level systems.
 
 An edge `M → N` exists when a model `M`'s own equations name `N` directly, via a
 qualified reference `N.v` (searched over the full expression child set, sidecar
-fields included). A cycle in that graph means the systems' definitions are
-mutually recursive with no evaluation order — see
-`tests/invalid/circular_coupling.esm`, which validated clean because NO
-coupling-cycle check of any kind existed.
+fields included) to an observed or algebraic unknown `v` of `N` — one no
+equation puts under `D(·, t)` (esm-spec §4.9.7). A read of a state or a
+parameter is not an edge: its value is known at every right-hand-side
+evaluation. A cycle in that graph means the models' observeds are defined in
+terms of each other, with no evaluation order — see
+`tests/invalid/circular_coupling.esm`; two models reading each other's states
+(`tests/valid/cross_model_state_reads.esm`) are valid.
 
 **`coupling` entries are deliberately NOT edges.** A `variable_map` is a
 declared data flow that the flattener resolves by aliasing, and mutual physical
@@ -2507,15 +2510,20 @@ function validate_coupling_cycles(file::EsmFile)::Vector{StructuralError}
 
     adj = Dict{String, Set{String}}(name => Set{String}() for name in keys(prefix))
 
-    # Edges from qualified references inside a model's equations.
+    # Edges from qualified references inside a model's equations, to an
+    # observed or algebraic unknown of another model (esm-spec §4.9.7). A read
+    # of a state or a parameter is known at every right-hand-side evaluation,
+    # so it orders nothing and is not an edge.
     if file.models !== nothing
+        observed = _cross_model_observed_names(file)
         for (model_name, model) in file.models
             for eq in model.equations
                 for side in (eq.lhs, eq.rhs)
                     for ref in _referenced_var_names(side)
                         head = _qualified_head(ref)
                         (head === nothing || head == model_name) && continue
-                        haskey(prefix, head) && push!(adj[model_name], head)
+                        (haskey(prefix, head) && ref in observed) || continue
+                        push!(adj[model_name], head)
                     end
                 end
             end
@@ -2564,6 +2572,53 @@ function validate_coupling_cycles(file::EsmFile)::Vector{StructuralError}
     end
 
     return errors
+end
+
+# The names under a time derivative `D(·, t)` (`wrt` "t" or absent) in an
+# equation's left-hand side: a bare `D(v)`, an `index(v, …)` gather inside it,
+# or a `faq` whose body is such a derivative (esm-spec §4.9.7).
+function _time_derivative_operand_names(e, acc = Set{String}())
+    e isa OpExpr || return acc
+    if e.op == "D" && (e.wrt === nothing || e.wrt == "t")
+        for a in e.args
+            union!(acc, _referenced_var_names(a))
+        end
+        return acc
+    end
+    for a in e.args
+        _time_derivative_operand_names(a, acc)
+    end
+    e.expr_body === nothing || _time_derivative_operand_names(e.expr_body, acc)
+    return acc
+end
+
+# The scoped names (`Model.v`, `Model.Sub.v`) of every unknown of the
+# document's models that is NOT an ODE state: an unknown no equation of the
+# document puts under `D(·, t)` (esm-spec §4.9.7). A `D` left-hand side names
+# its variable bare in the variable's own (sub)model, or by its scoped name from
+# anywhere.
+function _cross_model_observed_names(file::EsmFile)::Set{String}
+    unknowns = Set{String}()
+    states = Set{String}()
+    function walk(path::String, m)
+        m isa Model || return
+        for (v, var) in m.variables
+            var.type == UnknownVariable && push!(unknowns, path * "." * v)
+        end
+        for eq in m.equations
+            for x in _time_derivative_operand_names(eq.lhs)
+                push!(states, occursin('.', x) ? x : path * "." * x)
+            end
+        end
+        for (sub, node) in m.subsystems
+            walk(path * "." * sub, node)
+        end
+        return
+    end
+    for (name, model) in file.models
+        walk(String(name), model)
+    end
+    return setdiff(unknowns, states)
 end
 
 # The system part of a qualified reference `System.var` (or `A.B.var`), or

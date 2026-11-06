@@ -38,6 +38,20 @@ class TestStructuralValidation:
             error = exc_info.value
             assert "circular" in str(error).lower() or "cycle" in str(error).lower()
 
+    def test_state_reads_are_not_a_circular_dependency(self, fixtures_dir):
+        """Reads of another model's STATES are not cycle edges (esm-spec
+        §4.9.7): both fixtures load, and ``validate`` reports no cycle. The
+        second is the shape of a boundary-layer mixing term written per
+        component, whose model graph closes only through a state read."""
+        from earthsci_ast import validate
+
+        for name in ("cross_model_state_reads", "cross_model_mixing_observed_state_cycle"):
+            content = (fixtures_dir / "valid" / f"{name}.esm").read_text()
+            esm = load_string(content)
+            result = validate(esm)
+            codes = [getattr(e, "code", None) for e in result.structural_errors]
+            assert "circular_dependency" not in codes, (name, result.structural_errors)
+
     def test_undefined_variable_references(self, fixtures_dir):
         """Test detection of undefined variable references."""
         # Create a test case with undefined variable reference
