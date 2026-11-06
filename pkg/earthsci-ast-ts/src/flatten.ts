@@ -82,6 +82,7 @@ import {
   type ParsedUnit,
 } from './units.js'
 import { substitute } from './substitute.js'
+import { isElementwiseNode } from './op-registry.js'
 // The reaction lowering is the one `deriveOdes` uses (esm-libraries-spec §4.6.2).
 import { lowerReactionsToEquations } from './reactions.js'
 import {
@@ -3090,35 +3091,155 @@ function liftIndexSets(
 }
 
 /**
+ * The ops that restructure a WHOLE array (esm-spec §4.3.5). Inside a lifted
+ * right-hand side there is no per-cell reading of their operands, so an array
+ * operand beneath one is refused rather than gathered per cell.
+ */
+const LIFT_WHOLE_ARRAY_OPS: ReadonlySet<string> = new Set(['reshape', 'transpose', 'concat'])
+
+/**
+ * The grid a lifted equation is rewritten over: its loop variables, the index
+ * set each loop runs over (positionally parallel to `loops`), and the species
+ * being lifted (for diagnostics).
+ */
+interface LiftGrid {
+  loops: readonly string[]
+  axes: readonly string[]
+  species: string
+}
+
+/**
  * Rewrite a scalar (merged reaction + operator) RHS into its per-cell form over
- * the spatial `loops`: a bare reference to an array variable becomes
- * `index(var, loops…)`, and each spatial-operator `makearray` becomes
- * `index(makearray, loops…)`. Self-contained nodes are left untouched.
+ * the lift grid. Each spatial-operator `makearray` becomes
+ * `index(makearray, loops…)` (its region values already index per cell);
+ * `index` and `faq` nodes carry their own indexing and are left untouched.
+ *
+ * A bare reference to a lifted species becomes `index(species, loops…)`. A bare
+ * reference to a variable with a declared shape is gathered per cell by
+ * index-set NAME (esm-spec §4.3.4), never by position ({@link liftGatherShaped}):
+ * each of its axes is read at the loop that runs over that index set, so a
+ * `[lev]` profile in a `[lon, lat, lev]` lift is `index(p, k)` and a
+ * `[lev, lat, lon]` field is `index(m, k, j, i)`.
+ *
+ * Where the variable sits decides what happens when it shares NO index set with
+ * the grid. Under an elementwise operator it must be read per cell, so that is
+ * an error. As an argument of any other op (a closed `fn`, say, whose lookup
+ * table is a shaped parameter) it is consumed whole under that op's contract and
+ * stays bare. The whole-array shape ops (`reshape`, `transpose`, `concat`) have
+ * no per-cell reading at all, so any array operand beneath one is an error.
  */
 function liftRhsToCell(
   expr: Expression,
   arrayVars: ReadonlySet<string>,
-  loops: string[],
+  varShapes: ReadonlyMap<string, string[]>,
+  grid: LiftGrid,
+  elementwise: boolean,
 ): Expression {
   if (typeof expr === 'string') {
-    return arrayVars.has(expr) ? { op: 'index', args: [expr, ...loops] } : expr
+    if (!arrayVars.has(expr)) return expr
+    const shape = varShapes.get(expr)
+    return shape === undefined
+      ? { op: 'index', args: [expr, ...grid.loops] }
+      : liftGatherShaped(expr, shape, grid, elementwise)
   }
   if (!isNode(expr)) return expr
   if (expr.op === 'makearray') {
     // Tag the makearray with its loop symbols so the evaluator binds each
     // region's own arange when materializing the field; otherwise a per-cell
     // gather would read the stencil out of bounds.
-    const ma = { ...expr, output_idx: [...loops] } as ExpressionNode
-    return { op: 'index', args: [ma, ...loops] }
+    const ma = { ...expr, output_idx: [...grid.loops] } as ExpressionNode
+    return { op: 'index', args: [ma, ...grid.loops] }
   }
-  if (expr.op === 'index' || expr.op === 'faq' || expr.op === 'faq') return expr
+  if (expr.op === 'index' || expr.op === 'faq') return expr
+  if (LIFT_WHOLE_ARRAY_OPS.has(expr.op)) {
+    const name = firstArrayOperand(expr, arrayVars)
+    if (name !== undefined) {
+      throw new DimensionPromotionError(
+        `pointwise lift: '${name}' is an operand of '${expr.op}' in the right-hand side ` +
+          `of species '${grid.species}'; '${expr.op}' consumes a whole array, so it has no ` +
+          `per-cell reading on the lifted grid`,
+      )
+    }
+    return expr
+  }
+  const inner = isElementwiseNode(expr)
   return {
     ...expr,
-    args: (expr.args ?? []).map((a) => liftRhsToCell(a, arrayVars, loops)),
+    args: (expr.args ?? []).map((a) => liftRhsToCell(a, arrayVars, varShapes, grid, inner)),
   } as ExpressionNode
 }
 
-function applyPointwiseLift(flat: FlattenedSystem, coupling: CouplingEntry[]): void {
+/** The first bare variable reference in `expr` (through `args`) that names an array operand. */
+function firstArrayOperand(expr: Expression, arrayVars: ReadonlySet<string>): string | undefined {
+  if (typeof expr === 'string') return arrayVars.has(expr) ? expr : undefined
+  if (!isNode(expr)) return undefined
+  for (const a of expr.args ?? []) {
+    const found = firstArrayOperand(a, arrayVars)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+
+/**
+ * Gather the shaped variable `name` at the current cell of the lift grid, by
+ * index-set name (esm-spec §4.3.4).
+ *
+ * Each declared axis is read at the loop whose index set it names, so a SUBSET
+ * of the grid's index sets replicates along the others and a permuted shape
+ * transposes. A shape identical to the grid's is the positional gather.
+ *
+ * Refused, because no per-cell read would be right:
+ * - an axis the grid is not shaped over, alongside axes it is (a staggered
+ *   `[lon, lat, lev_edge]` field), or in elementwise position at all;
+ * - a shape that repeats an index set, or a grid that does, where the
+ *   variable's shape is not the grid's own: there is then no single loop for
+ *   the repeated name.
+ *
+ * A variable sharing no index set with the grid, outside elementwise position,
+ * stays bare: it is a whole-array argument of the enclosing op.
+ */
+function liftGatherShaped(
+  name: string,
+  shape: readonly string[],
+  grid: LiftGrid,
+  elementwise: boolean,
+): Expression {
+  if (shape.length === grid.axes.length && shape.every((a, d) => a === grid.axes[d])) {
+    return { op: 'index', args: [name, ...grid.loops] }
+  }
+  const foreign = shape.filter((a) => !grid.axes.includes(a))
+  if (foreign.length === shape.length && !elementwise) return name
+  const mismatch = (why: string): DimensionPromotionError =>
+    new DimensionPromotionError(
+      `pointwise lift: '${name}' (shape ${JSON.stringify(shape)}) cannot be read per cell ` +
+        `on the grid ${JSON.stringify(grid.axes)} that species '${grid.species}' is lifted ` +
+        `to: ${why} (esm-spec §4.3.4)`,
+    )
+  if (foreign.length > 0) {
+    throw mismatch(`the grid is not shaped over index set '${foreign[0]}'`)
+  }
+  const args: Expression[] = [name]
+  shape.forEach((axis, d) => {
+    if (shape.slice(0, d).includes(axis)) {
+      throw mismatch(`index set '${axis}' appears twice in its shape`)
+    }
+    const p = grid.axes.indexOf(axis)
+    if (grid.axes.lastIndexOf(axis) !== p) {
+      throw mismatch(`the grid runs over index set '${axis}' on more than one axis`)
+    }
+    args.push(grid.loops[p])
+  })
+  return { op: 'index', args }
+}
+
+/**
+ * The pointwise lift (esm-libraries-spec §4.7.5): rewrite each lifted species'
+ * scalar merged RHS into a per-cell `faq` over the lift grid.
+ *
+ * @internal Exported only so the unit tests can drive the lift directly; not
+ * part of the package's public API (`index.ts` does not re-export it).
+ */
+export function applyPointwiseLift(flat: FlattenedSystem, coupling: CouplingEntry[]): void {
   const wanted = coupling.some(
     (c) =>
       c.type === 'operator_compose' &&
@@ -3152,9 +3273,10 @@ function applyPointwiseLift(flat: FlattenedSystem, coupling: CouplingEntry[]): v
   }
   if (lifted.size === 0) return
 
-  // Operands to index per cell: the lifted species plus any already array-shaped
-  // parameter / observed / state (e.g. a grid-shaped wind field from a loader).
-  // The same declared shapes name the lift's index sets (liftAxisNames).
+  // Operands to read per cell: the lifted species (at every loop) plus every
+  // parameter / observed / state with a declared shape, gathered by index-set
+  // name (liftGatherShaped). The same declared shapes also name the lift's
+  // index sets (liftAxisNames).
   const arrayVars = new Set<string>(lifted)
   const varShapes = new Map<string, string[]>()
   for (const table of [flat.parameters, flat.observedVariables, flat.stateVariables]) {
@@ -3225,8 +3347,9 @@ function applyPointwiseLift(flat: FlattenedSystem, coupling: CouplingEntry[]): v
 
     // Per-cell indexing applies inside each contribution; the `faq` wrapper goes
     // around their sum (§4.7.5 provenance table).
+    const grid: LiftGrid = { loops, axes, species: target }
     const contributions: Contribution[] = contributionsOf(eq).map((c) => ({
-      expr: liftRhsToCell(c.expr, arrayVars, loops),
+      expr: liftRhsToCell(c.expr, arrayVars, varShapes, grid, true),
       origins: c.origins,
     }))
     // `args: []` is not decoration: a `faq` carries its body in `expr`,

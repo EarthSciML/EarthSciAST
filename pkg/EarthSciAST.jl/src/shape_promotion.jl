@@ -172,9 +172,10 @@ end
 # WHOLE (checked before `stop_node`); an `OpExpr` for which `stop_node` is true
 # is returned untouched (it is self-contained / carries its own indexing);
 # every other `OpExpr` recurses into `args` only (elementwise position) and is
-# rebuilt field-preservingly. The two typed callers share this leaf test and
-# wrap but differ in their wrap/stop predicate sets: `_index_array_leaves`
-# (below) and `_lift_rhs_to_cell` (pointwise_lift.jl). The raw-JSON dict twin
+# rebuilt field-preservingly. Its typed caller is `_index_array_leaves`
+# (below); the pointwise lift's `_lift_rhs_to_cell` (pointwise_lift.jl) is a
+# separate walk, because it aligns by name in every position rather than only
+# under element-wise operators. The raw-JSON dict twin
 # of this rewrite is `_index_bare` (below), which walks a discretized native
 # document instead of typed Exprs.
 # IDENTITY-MEMOIZED (ESS-0hh): the rewrite is a pure function of the node —

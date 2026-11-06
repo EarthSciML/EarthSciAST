@@ -17,6 +17,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from . import compiler as _compiler
+from . import op_registry
 from .classification import inlined_unknowns, observed_unknowns, ode_states
 from .error_handling import (
     TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE,
@@ -52,6 +53,7 @@ from .expr_walk import any_child, iter_children, map_children, walk
 # function-local imports that dodged an import cycle). Re-exported here under its
 # original name for backward compatibility — ``simulation_array`` and callers in
 # this module still import ``_expand_range`` from :mod:`.flatten`.
+from .index_alignment import ELEMENTWISE_OPS
 from .index_ranges import expand_range as _expand_range
 from .json_walk import ExpressionTemplateError
 from .reactions import derive_odes
@@ -4232,29 +4234,134 @@ def _lift_index_sets(
     return axes
 
 
-def _lift_rhs_to_cell(expr: Expr, arrayvars: set[str], loops: list[str]) -> Expr:
+#: The ops that restructure a WHOLE array (esm-spec §4.3.5). Inside a lifted
+#: right-hand side there is no per-cell reading of their operands, so an array
+#: operand beneath one is refused rather than gathered per cell.
+_LIFT_WHOLE_ARRAY_OPS: frozenset[str] = frozenset({"reshape", "transpose", "concat"})
+
+
+@dataclass(frozen=True)
+class _LiftGrid:
+    """The grid a lifted equation is rewritten over: its loop variables, the
+    index set each loop runs over (positionally parallel to ``loops``), and the
+    species being lifted (for diagnostics)."""
+
+    loops: list[str]
+    axes: list[str]
+    species: str
+
+
+def _lift_is_elementwise(node: ExprNode) -> bool:
+    """Whether ``node`` combines its operands cell-wise (esm-spec §4.3.4): a
+    scalar operator, or a ``broadcast`` whose ``fn`` (default ``+``) is one.
+    Rust counterpart: ``op_registry::is_elementwise_node``."""
+    if node.op == "broadcast":
+        return (node.fn or "+") in op_registry.scalar_fn_names()
+    return node.op in ELEMENTWISE_OPS
+
+
+def _lift_rhs_to_cell(
+    expr: Expr,
+    arrayvars: set[str],
+    var_shapes: dict[str, list[str]],
+    grid: _LiftGrid,
+    elementwise: bool = True,
+) -> Expr:
     """Rewrite a scalar (merged reaction + operator) RHS into its per-cell form
-    over the spatial ``loops``: a bare reference to an array variable becomes
-    ``index(var, loops…)``, and each spatial-operator ``makearray`` becomes
-    ``index(makearray, loops…)`` (its region values already index per cell).
-    Self-contained nodes (index / aggregate) are left untouched; elementwise ops
-    recurse."""
+    over the lift grid. Each spatial-operator ``makearray`` becomes
+    ``index(makearray, loops…)`` (its region values already index per cell);
+    ``index`` and ``faq`` nodes carry their own indexing and are left untouched.
+
+    A bare reference to a lifted species becomes ``index(species, loops…)``. A
+    bare reference to a variable with a declared shape is gathered per cell by
+    index-set NAME (esm-spec §4.3.4), never by position
+    (:func:`_lift_gather_shaped`): each of its axes is read at the loop that
+    runs over that index set, so a ``[lev]`` profile in a ``[lon, lat, lev]``
+    lift is ``index(p, k)`` and a ``[lev, lat, lon]`` field is
+    ``index(m, k, j, i)``.
+
+    Where the variable sits decides what happens when it shares NO index set
+    with the grid. Under an elementwise operator it must be read per cell, so
+    that is an error. As an argument of any other op (a closed ``fn``, say,
+    whose lookup table is a shaped parameter) it is consumed whole under that
+    op's contract and stays bare. The whole-array shape ops (``reshape``,
+    ``transpose``, ``concat``) have no per-cell reading at all, so any array
+    operand beneath one is an error."""
     if isinstance(expr, str):
-        if expr in arrayvars:
-            return ExprNode(op="index", args=[expr, *loops])
-        return expr
+        if expr not in arrayvars:
+            return expr
+        shape = var_shapes.get(expr)
+        if shape is None:
+            return ExprNode(op="index", args=[expr, *grid.loops])
+        return _lift_gather_shaped(expr, shape, grid, elementwise)
     if isinstance(expr, ExprNode):
         if expr.op == "makearray":
             # Tag the makearray with its loop symbols so the evaluator binds each
             # region's own arange when materializing the field (esm-spec §10.5);
             # otherwise a per-cell gather would read the stencil out of bounds.
-            ma = replace(expr, output_idx=list(loops))
-            return ExprNode(op="index", args=[ma, *loops])
+            ma = replace(expr, output_idx=list(grid.loops))
+            return ExprNode(op="index", args=[ma, *grid.loops])
         if expr.op in ("index", "faq"):
             return expr
-        new_args = [_lift_rhs_to_cell(a, arrayvars, loops) for a in expr.args]
+        if expr.op in _LIFT_WHOLE_ARRAY_OPS:
+            name = next((n for n in walk(expr) if isinstance(n, str) and n in arrayvars), None)
+            if name is not None:
+                raise DimensionPromotionError(
+                    f"pointwise lift: {name!r} is an operand of {expr.op!r} in the "
+                    f"right-hand side of species {grid.species!r}; {expr.op!r} "
+                    f"consumes a whole array, so it has no per-cell reading on the "
+                    f"lifted grid"
+                )
+            return expr
+        inner = _lift_is_elementwise(expr)
+        new_args = [_lift_rhs_to_cell(a, arrayvars, var_shapes, grid, inner) for a in expr.args]
         return replace(expr, args=new_args)
     return expr
+
+
+def _lift_gather_shaped(name: str, shape: list[str], grid: _LiftGrid, elementwise: bool) -> Expr:
+    """Gather the shaped variable ``name`` at the current cell of the lift grid,
+    by index-set name (esm-spec §4.3.4).
+
+    Each declared axis is read at the loop whose index set it names, so a
+    SUBSET of the grid's index sets replicates along the others and a permuted
+    shape transposes. A shape identical to the grid's is the positional gather.
+
+    Refused, because no per-cell read would be right:
+
+    * an axis the grid is not shaped over, alongside axes it is (a staggered
+      ``[lon, lat, lev_edge]`` field), or in elementwise position at all;
+    * a shape that repeats an index set, or a grid that does, where the
+      variable's shape is not the grid's own: there is then no single loop for
+      the repeated name.
+
+    A variable sharing no index set with the grid, outside elementwise position,
+    stays bare: it is a whole-array argument of the enclosing op.
+    """
+    if list(shape) == list(grid.axes):
+        return ExprNode(op="index", args=[name, *grid.loops])
+    foreign = [a for a in shape if a not in grid.axes]
+    if len(foreign) == len(shape) and not elementwise:
+        return name
+
+    def mismatch(why: str) -> DimensionPromotionError:
+        return DimensionPromotionError(
+            f"pointwise lift: {name!r} (shape {list(shape)!r}) cannot be read per "
+            f"cell on the grid {list(grid.axes)!r} that species {grid.species!r} is "
+            f"lifted to: {why} (esm-spec §4.3.4)"
+        )
+
+    if foreign:
+        raise mismatch(f"the grid is not shaped over index set {foreign[0]!r}")
+    args: list[Expr] = [name]
+    for d, axis in enumerate(shape):
+        if axis in shape[:d]:
+            raise mismatch(f"index set {axis!r} appears twice in its shape")
+        positions = [p for p, a in enumerate(grid.axes) if a == axis]
+        if len(positions) > 1:
+            raise mismatch(f"the grid runs over index set {axis!r} on more than one axis")
+        args.append(grid.loops[positions[0]])
+    return ExprNode(op="index", args=args)
 
 
 def _apply_pointwise_lift(flat: FlattenedSystem, coupling: list[CouplingEntry]) -> None:
@@ -4297,9 +4404,10 @@ def _apply_pointwise_lift(flat: FlattenedSystem, coupling: list[CouplingEntry]) 
     if not lifted:
         return
 
-    # Operands to index per cell: the lifted species plus any already array-shaped
-    # parameter/observed/state (e.g. a grid-shaped wind field bound from a loader).
-    # The same declared shapes name the lift's index sets (_lift_axis_names).
+    # Operands read per cell: the lifted species (at every loop) plus any already
+    # array-shaped parameter/observed/state (e.g. a grid-shaped wind field bound
+    # from a loader), gathered by index-set name (_lift_gather_shaped). The same
+    # declared shapes also name the lift's index sets (_lift_axis_names).
     arrayvars: set[str] = set(lifted)
     var_shapes: dict[str, list[str]] = {}
     for table in (flat.parameters, flat.observed_variables, flat.state_variables):
@@ -4362,8 +4470,9 @@ def _apply_pointwise_lift(flat: FlattenedSystem, coupling: list[CouplingEntry]) 
         )
         # Per-cell indexing applies inside each contribution; the `faq` wrapper
         # goes around their sum (esm-libraries-spec §4.7.5 provenance table).
+        grid = _LiftGrid(loops=list(loops), axes=list(axes), species=target)
         contributions = [
-            Contribution(_lift_rhs_to_cell(c.expr, arrayvars, loops), c.origins)
+            Contribution(_lift_rhs_to_cell(c.expr, arrayvars, var_shapes, grid), c.origins)
             for c in eq.contributions
         ]
         new_rhs = ExprNode(

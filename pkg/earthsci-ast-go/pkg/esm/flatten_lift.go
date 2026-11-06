@@ -2,6 +2,7 @@ package esm
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -215,22 +216,54 @@ func liftIndexSets(flat *FlattenedSystem, sizes map[string]int, bySize map[int][
 	return axes, nil
 }
 
+// liftWholeArrayOps are the ops that restructure a WHOLE array (esm-spec
+// §4.3.5). Inside a lifted right-hand side there is no per-cell reading of
+// their operands, so an array operand beneath one is refused rather than
+// gathered per cell.
+var liftWholeArrayOps = map[string]bool{"reshape": true, "transpose": true, "concat": true}
+
+// liftGrid is the grid a lifted equation is rewritten over: its loop
+// variables, the index set each loop runs over (positionally parallel to
+// loops), and the species being lifted (for diagnostics).
+type liftGrid struct {
+	loops   []string
+	axes    []string
+	species string
+}
+
 // liftRHSToCell rewrites a scalar (merged reaction + operator) RHS into its
-// per-cell form over the spatial `loops`: a bare reference to an array variable
-// becomes `index(var, loops…)`, and each spatial-operator `makearray` becomes
-// `index(makearray, loops…)` (its region values already index per cell).
-// Self-contained nodes (index / faq) are left untouched;
-// elementwise ops recurse.
-func liftRHSToCell(expr Expression, arrayvars map[string]bool, loops []string) Expression {
+// per-cell form over the lift grid. Each spatial-operator `makearray` becomes
+// `index(makearray, loops…)` (its region values already index per cell);
+// `index` and `faq` nodes carry their own indexing and are left untouched.
+//
+// A bare reference to a lifted species becomes `index(species, loops…)`. A
+// bare reference to a variable with a declared shape is gathered per cell by
+// index-set NAME (esm-spec §4.3.4), never by position (liftGatherShaped): each
+// of its axes is read at the loop that runs over that index set, so a `[lev]`
+// profile in a `[lon, lat, lev]` lift is `index(p, k)` and a `[lev, lat, lon]`
+// field is `index(m, k, j, i)`.
+//
+// Where the variable sits decides what happens when it shares NO index set
+// with the grid. Under an elementwise operator (isElementwiseNode) it must be
+// read per cell, so that is an error. As an argument of any other op (a closed
+// `fn`, say, whose lookup table is a shaped parameter) it is consumed whole
+// under that op's contract and stays bare. The whole-array shape ops
+// (`reshape`, `transpose`, `concat`) have no per-cell reading at all, so any
+// array operand beneath one is an error.
+func liftRHSToCell(expr Expression, arrayvars map[string]bool, varShapes map[string][]string,
+	grid liftGrid, elementwise bool) (Expression, error) {
 	if s, ok := expr.(string); ok {
-		if arrayvars[s] {
-			return ExprNode{Op: "index", Args: indexArgs(s, loops)}
+		if !arrayvars[s] {
+			return s, nil
 		}
-		return s
+		if shape, shaped := varShapes[s]; shaped {
+			return liftGatherShaped(s, shape, grid, elementwise)
+		}
+		return ExprNode{Op: "index", Args: indexArgs(s, grid.loops)}, nil
 	}
 	node, ok := asExprNode(expr)
 	if !ok {
-		return expr
+		return expr, nil
 	}
 	switch node.Op {
 	case "makearray":
@@ -238,21 +271,109 @@ func liftRHSToCell(expr Expression, arrayvars map[string]bool, loops []string) E
 		// region's own arange when materializing the field (esm-spec §10.5);
 		// otherwise a per-cell gather would read the stencil out of bounds.
 		ma := node
-		ma.OutputIdx = make([]any, len(loops))
-		for i, l := range loops {
+		ma.OutputIdx = make([]any, len(grid.loops))
+		for i, l := range grid.loops {
 			ma.OutputIdx[i] = l
 		}
-		return ExprNode{Op: "index", Args: indexArgs(ma, loops)}
+		return ExprNode{Op: "index", Args: indexArgs(ma, grid.loops)}, nil
 	case "index", "faq":
-		return node
+		return node, nil
 	}
+	if liftWholeArrayOps[node.Op] {
+		if name := firstArrayOperand(node, arrayvars); name != "" {
+			return nil, &DimensionPromotionError{Message: fmt.Sprintf(
+				"flatten: pointwise lift: '%s' is an operand of '%s' in the right-hand side "+
+					"of species '%s'; '%s' consumes a whole array, so it has no per-cell "+
+					"reading on the lifted grid", name, node.Op, grid.species, node.Op)}
+		}
+		return node, nil
+	}
+	inner := isElementwiseNode(node)
 	out := node
 	args := make([]any, len(node.Args))
 	for i, a := range node.Args {
-		args[i] = liftRHSToCell(a, arrayvars, loops)
+		lifted, err := liftRHSToCell(a, arrayvars, varShapes, grid, inner)
+		if err != nil {
+			return nil, err
+		}
+		args[i] = lifted
 	}
 	out.Args = args
-	return out
+	return out, nil
+}
+
+// firstArrayOperand is the first bare variable reference in expr (through
+// `args`) that names an array operand, or "".
+func firstArrayOperand(expr Expression, arrayvars map[string]bool) string {
+	if s, ok := expr.(string); ok {
+		if arrayvars[s] {
+			return s
+		}
+		return ""
+	}
+	node, ok := asExprNode(expr)
+	if !ok {
+		return ""
+	}
+	for _, a := range node.Args {
+		if name := firstArrayOperand(a, arrayvars); name != "" {
+			return name
+		}
+	}
+	return ""
+}
+
+// liftGatherShaped gathers the shaped variable name at the current cell of
+// the lift grid, by index-set name (esm-spec §4.3.4).
+//
+// Each declared axis is read at the loop whose index set it names, so a SUBSET
+// of the grid's index sets replicates along the others and a permuted shape
+// transposes. A shape identical to the grid's is the positional gather.
+//
+// Refused, because no per-cell read would be right:
+//   - an axis the grid is not shaped over, alongside axes it is (a staggered
+//     `[lon, lat, lev_edge]` field), or in elementwise position at all;
+//   - a shape that repeats an index set, or a grid that does, where the
+//     variable's shape is not the grid's own: there is then no single loop for
+//     the repeated name.
+//
+// A variable sharing no index set with the grid, outside elementwise position,
+// stays bare: it is a whole-array argument of the enclosing op.
+func liftGatherShaped(name string, shape []string, grid liftGrid, elementwise bool) (Expression, error) {
+	if slices.Equal(shape, grid.axes) {
+		return ExprNode{Op: "index", Args: indexArgs(name, grid.loops)}, nil
+	}
+	var foreign []string
+	for _, a := range shape {
+		if !slices.Contains(grid.axes, a) {
+			foreign = append(foreign, a)
+		}
+	}
+	if len(foreign) == len(shape) && !elementwise {
+		return name, nil
+	}
+	mismatch := func(why string) error {
+		return &DimensionPromotionError{Message: fmt.Sprintf(
+			"flatten: pointwise lift: '%s' (shape %v) cannot be read per cell on the grid %v "+
+				"that species '%s' is lifted to: %s (esm-spec §4.3.4)",
+			name, shape, grid.axes, grid.species, why)}
+	}
+	if len(foreign) > 0 {
+		return nil, mismatch(fmt.Sprintf("the grid is not shaped over index set '%s'", foreign[0]))
+	}
+	args := make([]any, 0, len(shape)+1)
+	args = append(args, name)
+	for d, axis := range shape {
+		if slices.Contains(shape[:d], axis) {
+			return nil, mismatch(fmt.Sprintf("index set '%s' appears twice in its shape", axis))
+		}
+		p := slices.Index(grid.axes, axis)
+		if slices.Contains(grid.axes[p+1:], axis) {
+			return nil, mismatch(fmt.Sprintf("the grid runs over index set '%s' on more than one axis", axis))
+		}
+		args = append(args, grid.loops[p])
+	}
+	return ExprNode{Op: "index", Args: args}, nil
 }
 
 // indexArgs builds the `index` argument list: the gathered operand followed by
@@ -316,10 +437,11 @@ func applyPointwiseLift(flat *FlattenedSystem, coupling []CouplingEntry) error {
 		return nil
 	}
 
-	// Operands to index per cell: the lifted species plus any already
-	// array-shaped parameter / observed / state (a grid-shaped wind field bound
-	// from a loader, say).
-	// The same declared shapes name the lift's index sets (liftAxisNames).
+	// Operands to read per cell: the lifted species plus every parameter /
+	// observed / state with a declared shape (a grid-shaped wind field bound
+	// from a loader, say). A shaped operand is gathered by index-set name
+	// through varShapes (liftGatherShaped); the same declared shapes also name
+	// the lift's index sets (liftAxisNames).
 	arrayvars := map[string]bool{}
 	for name := range lifted {
 		arrayvars[name] = true
@@ -395,8 +517,13 @@ func applyPointwiseLift(flat *FlattenedSystem, coupling []CouplingEntry) error {
 		// goes around their sum (§4.7.5 provenance table).
 		in := eq.contributionList()
 		contributions := make([]Contribution, len(in))
+		grid := liftGrid{loops: loops, axes: axes, species: target}
 		for k, c := range in {
-			contributions[k] = Contribution{Expr: liftRHSToCell(c.Expr, arrayvars, loops), Origins: c.Origins}
+			lifted, err := liftRHSToCell(c.Expr, arrayvars, varShapes, grid, true)
+			if err != nil {
+				return err
+			}
+			contributions[k] = Contribution{Expr: lifted, Origins: c.Origins}
 		}
 		wrt := DefaultIndepVar
 		idxSpecies := ExprNode{Op: "index", Args: indexArgs(target, loops)}

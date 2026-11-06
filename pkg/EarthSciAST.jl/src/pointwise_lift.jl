@@ -134,24 +134,146 @@ function _makearray_extents(ma::OpExpr)::Vector{Int}
     return ext
 end
 
+# The ops that restructure a WHOLE array (esm-spec §4.3.5). Inside a lifted
+# right-hand side there is no per-cell reading of their operands, so an array
+# operand beneath one is refused rather than gathered per cell.
+const _LIFT_WHOLE_ARRAY_OPS = ("reshape", "transpose", "concat")
+
+# The grid a lifted equation is rewritten over: its loop variables, the index
+# set each loop runs over (positionally parallel to `loops`), every declared
+# array shape, and the species being lifted (for diagnostics).
+struct _LiftGrid
+    loops::Vector{String}
+    axes::Vector{String}
+    var_shapes::Dict{String, Vector{String}}
+    species::String
+end
+
 # Rewrite a scalar (merged reaction + operator) RHS into its per-cell form over
-# the spatial `loops`: a bare reference to an array variable becomes
-# `index(var, loops…)`, and each spatial-operator `makearray` becomes
-# `index(makearray, loops…)` (its region values already index per cell).
-# Self-contained nodes (index / aggregate / faq) are left untouched;
-# elementwise ops recurse. Expressed via the shared `_wrap_bare_array_refs`
-# rewrite (shape_promotion.jl); its typed twin with a different wrap/stop set
-# is `_index_array_leaves`. The stop set here deliberately omits `makearray` —
-# the wrap predicate claims every makearray first.
+# the lift grid. Each spatial-operator `makearray` becomes
+# `index(makearray, loops…)` (its region values already index per cell);
+# `index` and `faq` nodes carry their own indexing and are left untouched.
+#
+# A bare reference to a lifted species becomes `index(species, loops…)`. A bare
+# reference to a variable with a declared shape is gathered per cell by
+# index-set NAME (esm-spec §4.3.4), never by position
+# (`_lift_gather_shaped`): each of its axes is read at the loop that runs over
+# that index set, so a `[lev]` profile in a `[lon, lat, lev]` lift is
+# `index(p, k)` and a `[lev, lat, lon]` field is `index(m, k, j, i)`.
+#
+# Where the variable sits decides what happens when it shares NO index set with
+# the grid. Under an element-wise operator (`_is_elementwise_node`) it must be
+# read per cell, so that is an error. As an argument of any other op (a closed
+# `fn`, say, whose lookup table is a shaped parameter) it is consumed whole
+# under that op's contract and stays bare. The whole-array shape ops
+# (`reshape`, `transpose`, `concat`) have no per-cell reading at all, so any
+# array operand beneath one is an error.
+#
+# This is its own walk rather than a `_wrap_bare_array_refs` caller: that
+# rewrite gathers positionally outside element-wise position, where the lift
+# must still align by name (or leave a whole-array argument bare). Like it, the
+# walk is identity-memoized per call and split by the element-wise flag (the
+# rewrite of a shared node depends on it), so a structurally-shared input DAG
+# rewrites to a shared output rather than an exponentially large tree
+# (`_WrapMemo`).
 function _lift_rhs_to_cell(
-        expr::ASTExpr, arrayvars::Set{String},
-        loops::Vector{String}
+        expr::ASTExpr, arrayvars::Set{String}, grid::_LiftGrid
     )::ASTExpr
-    return _wrap_bare_array_refs(
-        expr, arrayvars, loops;
-        wrap_node = e -> e.op == "makearray",
-        stop_node = e -> e.op == "index" || e.op == "faq"
+    return _lift_rhs_to_cell(expr, arrayvars, grid, true, _WrapMemo())
+end
+function _lift_rhs_to_cell(
+        expr::ASTExpr, arrayvars::Set{String}, grid::_LiftGrid,
+        elementwise::Bool, memo  # ::_WrapMemo (shape_promotion.jl, included later)
+    )::ASTExpr
+    if expr isa VarExpr
+        expr.name in arrayvars || return expr
+        shape = get(grid.var_shapes, expr.name, nothing)
+        shape === nothing && return _index_wrap(expr, grid.loops)
+        return _lift_gather_shaped(expr, shape, grid, elementwise)
+    end
+    expr isa OpExpr || return expr
+    tbl = elementwise ? memo.aligned : memo.plain
+    cached = get(tbl, expr, nothing)
+    cached === nothing || return cached
+    result = if expr.op == "makearray"
+        _index_wrap(expr, grid.loops)
+    elseif expr.op == "index" || expr.op == "faq"
+        expr
+    elseif expr.op in _LIFT_WHOLE_ARRAY_OPS
+        name = _first_array_operand(expr, arrayvars)
+        name === nothing || throw(
+            DimensionPromotionError(
+                "pointwise lift: '$(name)' is an operand of '$(expr.op)' in the " *
+                    "right-hand side of species '$(grid.species)'; '$(expr.op)' " *
+                    "consumes a whole array, so it has no per-cell reading on the " *
+                    "lifted grid"
+            )
+        )
+        expr
+    else
+        inner = _is_elementwise_node(expr)
+        reconstruct(
+            expr; args = ASTExpr[
+                _lift_rhs_to_cell(a, arrayvars, grid, inner, memo) for a in expr.args
+            ]
+        )
+    end
+    tbl[expr] = result
+    return result
+end
+
+# The first bare variable reference beneath `expr` (through `args`) that names
+# an array operand, or `nothing`.
+function _first_array_operand(expr::ASTExpr, arrayvars::Set{String})::Union{String, Nothing}
+    expr isa VarExpr && return expr.name in arrayvars ? expr.name : nothing
+    expr isa OpExpr || return nothing
+    for a in expr.args
+        n = _first_array_operand(a, arrayvars)
+        n === nothing || return n
+    end
+    return nothing
+end
+
+# Gather the shaped variable `v` at the current cell of the lift grid, by
+# index-set name (esm-spec §4.3.4).
+#
+# Each declared axis is read at the loop whose index set it names, so a SUBSET
+# of the grid's index sets replicates along the others and a permuted shape
+# transposes. A shape identical to the grid's is the positional gather.
+#
+# Refused, because no per-cell read would be right:
+# * an axis the grid is not shaped over, alongside axes it is (a staggered
+#   `[lon, lat, lev_edge]` field), or in element-wise position at all;
+# * a shape that repeats an index set, or a grid that does, where the
+#   variable's shape is not the grid's own: there is then no single loop for
+#   the repeated name.
+#
+# A variable sharing no index set with the grid, outside element-wise position,
+# stays bare: it is a whole-array argument of the enclosing op.
+function _lift_gather_shaped(
+        v::VarExpr, shape::Vector{String}, grid::_LiftGrid, elementwise::Bool
+    )::ASTExpr
+    shape == grid.axes && return _index_wrap(v, grid.loops)
+    foreign = filter(a -> !(a in grid.axes), shape)
+    (length(foreign) == length(shape) && !elementwise) && return v
+    mismatch(why) = DimensionPromotionError(
+        "pointwise lift: '$(v.name)' (shape $(shape)) cannot be read per cell on " *
+            "the grid $(grid.axes) that species '$(grid.species)' is lifted to: " *
+            "$(why) (esm-spec §4.3.4)"
     )
+    isempty(foreign) ||
+        throw(mismatch("the grid is not shaped over index set '$(first(foreign))'"))
+    subs = Vector{ASTExpr}(undef, length(shape) + 1)
+    subs[1] = v
+    for (d, axis) in enumerate(shape)
+        axis in view(shape, 1:(d - 1)) &&
+            throw(mismatch("index set '$(axis)' appears twice in its shape"))
+        count(isequal(axis), grid.axes) == 1 || throw(
+            mismatch("the grid runs over index set '$(axis)' on more than one axis")
+        )
+        subs[d + 1] = VarExpr(grid.loops[findfirst(isequal(axis), grid.axes)])
+    end
+    return OpExpr("index", subs)
 end
 
 """
@@ -218,8 +340,8 @@ function _apply_pointwise_lift!(
         lifted_shapes === nothing ||
             (lifted_shapes[species] = _makearray_extents(mas[1]))
         equations[n], contribs[n] = _pointwise_lift_equation(
-            eq, contribs[n], species,
-            arrayvars, loops, ranges
+            eq, contribs[n], arrayvars,
+            _LiftGrid(loops, gaxes, var_shapes, species), ranges
         )
     end
     return
@@ -263,8 +385,11 @@ function _pointwise_lifted_species(
     return lifted
 end
 
-# Operands to index per cell: the lifted species plus any already array-shaped
-# parameter/observed (e.g. a grid-shaped wind field bound from a loader).
+# Operands to index per cell: the lifted species plus every state, parameter and
+# observed with a declared non-empty shape (e.g. a grid-shaped wind field bound
+# from a loader, or a `[lev]` profile). The lifted species are gathered at all
+# the lift loops; a declared-shape operand is gathered by index-set NAME
+# (`_lift_gather_shaped`).
 function _pointwise_lift_operands(
         lifted::Set{String},
         states::OrderedDict{String, ModelVariable},
@@ -312,7 +437,9 @@ function _pointwise_lift_loops(
     )
 end
 
-# Every declared array shape in one lookup, for the axis-NAME propagation below.
+# Every declared array shape in one lookup: for the axis-NAME propagation below,
+# and for gathering each declared-shape operand per cell by name
+# (`_lift_gather_shaped`).
 function _declared_shapes(ds::OrderedDict{String, ModelVariable}...)::Dict{String, Vector{String}}
     out = Dict{String, Vector{String}}()
     for d in ds, (k, v) in d
@@ -495,11 +622,11 @@ end
 # sum to. Returns the equation and its lifted contributions.
 function _pointwise_lift_equation(
         eq::Equation, contributions::Vector{Contribution},
-        species::String,
         arrayvars::Set{String},
-        loops::Vector{String},
+        grid::_LiftGrid,
         ranges::Dict{String, Any}
     )
+    species, loops = grid.species, grid.loops
     oidx = Any[l for l in loops]
     idx_species = OpExpr(
         "index", ASTExpr[
@@ -513,7 +640,7 @@ function _pointwise_lift_equation(
         expr_body = OpExpr("D", ASTExpr[idx_species], wrt = "t")
     )
     lifted = Contribution[
-        Contribution(_lift_rhs_to_cell(c.expr, arrayvars, loops), c.origins)
+        Contribution(_lift_rhs_to_cell(c.expr, arrayvars, grid), c.origins)
             for c in contributions
     ]
     new_rhs = OpExpr(

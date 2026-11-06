@@ -850,6 +850,26 @@ impl FlatEq {
             .collect();
         self.set_contributions(mapped);
     }
+
+    /// [`Self::map_contributions`] for a fallible `f`: the first error is
+    /// returned and the equation is left unchanged.
+    fn try_map_contributions<E>(
+        &mut self,
+        mut f: impl FnMut(&Expr) -> Result<Expr, E>,
+    ) -> Result<(), E> {
+        let mapped = self
+            .contributions
+            .iter()
+            .map(|c| {
+                Ok(Contribution {
+                    expr: f(&c.expr)?,
+                    origins: c.origins.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>, E>>()?;
+        self.set_contributions(mapped);
+        Ok(())
+    }
 }
 
 /// One provider-served loaded field the flattened system consumes
@@ -1031,7 +1051,6 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     // Phase 5a: post-collection variable_map parameter removals, plus the
     // source-fed array parameters that replace them from esm 1.0.0.
     apply_variable_map_removals(file, &mut parts, &merged_variable_renames)?;
-    let loaded_producers = source_fed_producers(&parts);
 
     // The document-scoped index-set registry, which the pointwise lift extends
     // with any `_liftdim<d>_<extent>` set it has to name.
@@ -1042,7 +1061,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         .unwrap_or_default();
 
     // Phase 5b: pointwise spatial lift (esm-spec §10.5).
-    maybe_apply_pointwise_lift(file, &mut parts, &loaded_producers, &mut index_sets)?;
+    maybe_apply_pointwise_lift(file, &mut parts, &mut index_sets)?;
 
     // Phase 5b′ (esm-libraries-spec §4.7.5 step 3a): resolve a right-hand-side
     // STRUCTURAL time derivative to the tendency this system defines for it
@@ -2151,35 +2170,6 @@ fn extract_field_ics(parts: &mut AssembledParts) -> Result<(), FlattenError> {
     Ok(())
 }
 
-/// The grid-shaped fields fed from OUTSIDE the model — every discrete
-/// parameter with a non-empty declared `shape`, keyed by its flattened name and
-/// mapped to its rank.
-///
-/// This is the esm 1.0.0 successor of the pre-1.0 "loaded producer" rule in
-/// [`apply_variable_map_removals`], now retired. Before 1.0.0 a loaded field arrived as a coupling
-/// edge from a loader component to a model parameter, and that EDGE is what
-/// told the pointwise lift which operands were grid-shaped external fields.
-/// The edge is gone: the loaded field IS a parameter carrying an `update` that
-/// names its source (esm-spec §8.5). The same fact is therefore read off the
-/// declaration — a discrete parameter with a shape — instead of off a coupling
-/// entry, and the lift indexes it per cell exactly as before. Without this a
-/// grid-shaped wind field stays a whole ARRAY inside a per-cell expression and
-/// the tendency evaluates to `NaN`.
-fn source_fed_producers(parts: &AssembledParts) -> HashMap<String, usize> {
-    let class = flattened_classification(parts);
-    parts
-        .parameters
-        .iter()
-        .filter(|(name, _)| class.is_discrete_parameter(name))
-        .filter_map(|(name, var)| {
-            var.shape
-                .as_ref()
-                .filter(|s| !s.is_empty())
-                .map(|s| (name.clone(), s.len()))
-        })
-        .collect()
-}
-
 /// The esm-spec §6.3.1 classification of the FLATTENED system.
 ///
 /// Re-derived over the flattened maps and equations rather than lifted from the
@@ -2414,7 +2404,6 @@ fn shape_conflict_message(
 fn maybe_apply_pointwise_lift(
     file: &EsmFile,
     parts: &mut AssembledParts,
-    loaded_producers: &HashMap<String, usize>,
     index_sets: &mut IndexMap<String, IndexSet>,
 ) -> Result<(), FlattenError> {
     let pointwise = file
@@ -2427,7 +2416,11 @@ fn maybe_apply_pointwise_lift(
         })
         .unwrap_or(false);
     if pointwise {
-        // Every declared shape, for naming the lift's index sets.
+        // Every declared shape. It does two jobs in the lift: it names the
+        // lift's index sets ([`lift_index_sets`]), and it decides which
+        // operands are read per cell and at which loop each of their axes is
+        // gathered ([`lift_rhs_to_cell`]). A loaded field is a discrete
+        // parameter with a shape (esm-spec §8.5), so it is in here too.
         let mut var_shapes: HashMap<String, Vec<String>> = HashMap::new();
         for map in [
             &parts.parameters,
@@ -2447,7 +2440,6 @@ fn maybe_apply_pointwise_lift(
             state_variables: &mut parts.state_variables,
             var_shapes: &var_shapes,
             index_sets,
-            loaded_producers,
         };
         apply_pointwise_lift(&mut parts.equations, lift)?;
     }
@@ -5360,32 +5352,159 @@ fn lift_index_sets(
     Ok(axes)
 }
 
+/// The ops that restructure a WHOLE array (esm-spec §4.3.5). Inside a lifted
+/// right-hand side there is no per-cell reading of their operands, so an
+/// array operand beneath one is refused rather than gathered per cell.
+const LIFT_WHOLE_ARRAY_OPS: [&str; 3] = ["reshape", "transpose", "concat"];
+
+/// The grid a lifted equation is rewritten over: its loop variables, the index
+/// set each loop runs over (positionally parallel to `loops`), and the species
+/// being lifted (for diagnostics).
+struct LiftGrid<'a> {
+    loops: &'a [String],
+    axes: &'a [String],
+    species: &'a str,
+}
+
 /// Rewrite a scalar (merged reaction + operator) RHS into its per-cell form over
-/// the spatial `loops`: a bare reference to an array variable becomes
-/// `index(var, loops…)`, and each spatial-operator `makearray` becomes
-/// `index(makearray, loops…)` (its region values already index per cell).
-/// Self-contained nodes (`index`/`faq`) are left untouched;
-/// elementwise ops recurse.
-fn lift_rhs_to_cell(expr: &Expr, arrayvars: &HashSet<String>, loops: &[String]) -> Expr {
+/// the lift grid. Each spatial-operator `makearray` becomes
+/// `index(makearray, loops…)` (its region values already index per cell);
+/// `index` and `faq` nodes carry their own indexing and are left untouched.
+///
+/// A bare reference to a lifted species becomes `index(species, loops…)`. A
+/// bare reference to a variable with a declared shape is gathered per cell by
+/// index-set NAME (esm-spec §4.3.4), never by position
+/// ([`lift_gather_shaped`]): each of its axes is read at the loop that runs
+/// over that index set, so a `[lev]` profile in a `[lon, lat, lev]` lift is
+/// `index(p, k)` and a `[lev, lat, lon]` field is `index(m, k, j, i)`.
+///
+/// Where the variable sits decides what happens when it shares NO index set
+/// with the grid. Under an elementwise operator it must be read per cell, so
+/// that is an error. As an argument of any other op (a closed `fn`, say, whose
+/// lookup table is a shaped parameter) it is consumed whole under that op's
+/// contract and stays bare. The whole-array shape ops (`reshape`,
+/// `transpose`, `concat`) have no per-cell reading at all, so any array
+/// operand beneath one is an error.
+fn lift_rhs_to_cell(
+    expr: &Expr,
+    arrayvars: &HashSet<String>,
+    var_shapes: &HashMap<String, Vec<String>>,
+    grid: &LiftGrid<'_>,
+    elementwise: bool,
+) -> Result<Expr, FlattenError> {
     match expr {
-        Expr::Variable(name) if arrayvars.contains(name) => index_node(name, loops),
-        Expr::Variable(_) | Expr::Number(_) | Expr::Integer(_) => expr.clone(),
+        Expr::Variable(name) if arrayvars.contains(name) => match var_shapes.get(name) {
+            Some(shape) => lift_gather_shaped(name, shape, grid, elementwise),
+            None => Ok(index_node(name, grid.loops)),
+        },
+        Expr::Variable(_) | Expr::Number(_) | Expr::Integer(_) => Ok(expr.clone()),
         Expr::Operator(node) => {
             if node.op == "makearray" {
-                return index_makearray(node, loops);
+                return Ok(index_makearray(node, grid.loops));
             }
             if matches!(node.op.as_str(), "index" | "faq") {
-                return expr.clone();
+                return Ok(expr.clone());
             }
+            if LIFT_WHOLE_ARRAY_OPS.contains(&node.op.as_str()) {
+                if let Some(name) = first_array_operand(expr, arrayvars) {
+                    return Err(FlattenError::DimensionPromotion {
+                        message: format!(
+                            "pointwise lift: '{name}' is an operand of '{}' in the \
+                             right-hand side of species '{}'; '{}' consumes a whole \
+                             array, so it has no per-cell reading on the lifted grid",
+                            node.op, grid.species, node.op
+                        ),
+                    });
+                }
+                return Ok(expr.clone());
+            }
+            let inner = crate::op_registry::is_elementwise_node(node);
             let mut out = ExpressionNode::clone(node);
             out.args = node
                 .args
                 .iter()
-                .map(|a| lift_rhs_to_cell(a, arrayvars, loops))
-                .collect();
-            Expr::operator(out)
+                .map(|a| lift_rhs_to_cell(a, arrayvars, var_shapes, grid, inner))
+                .collect::<Result<_, _>>()?;
+            Ok(Expr::operator(out))
         }
     }
+}
+
+/// The first bare variable reference in `expr` that names an array operand.
+fn first_array_operand<'e>(expr: &'e Expr, arrayvars: &HashSet<String>) -> Option<&'e str> {
+    match expr {
+        Expr::Variable(name) if arrayvars.contains(name) => Some(name),
+        Expr::Variable(_) | Expr::Number(_) | Expr::Integer(_) => None,
+        Expr::Operator(node) => node
+            .args
+            .iter()
+            .find_map(|a| first_array_operand(a, arrayvars)),
+    }
+}
+
+/// Gather the shaped variable `name` at the current cell of the lift grid, by
+/// index-set name (esm-spec §4.3.4).
+///
+/// Each declared axis is read at the loop whose index set it names, so a
+/// SUBSET of the grid's index sets replicates along the others and a permuted
+/// shape transposes. A shape identical to the grid's is the positional gather.
+///
+/// Refused, because no per-cell read would be right:
+/// * an axis the grid is not shaped over, alongside axes it is (a staggered
+///   `[lon, lat, lev_edge]` field), or in elementwise position at all;
+/// * a shape that repeats an index set, or a grid that does, where the
+///   variable's shape is not the grid's own: there is then no single loop for
+///   the repeated name.
+///
+/// A variable sharing no index set with the grid, outside elementwise position,
+/// stays bare: it is a whole-array argument of the enclosing op.
+fn lift_gather_shaped(
+    name: &str,
+    shape: &[String],
+    grid: &LiftGrid<'_>,
+    elementwise: bool,
+) -> Result<Expr, FlattenError> {
+    if shape == grid.axes {
+        return Ok(index_node(name, grid.loops));
+    }
+    let foreign: Vec<&String> = shape.iter().filter(|a| !grid.axes.contains(a)).collect();
+    if foreign.len() == shape.len() && !elementwise {
+        return Ok(Expr::Variable(name.to_string()));
+    }
+    let mismatch = |why: String| FlattenError::DimensionPromotion {
+        message: format!(
+            "pointwise lift: '{name}' (shape {shape:?}) cannot be read per cell on the \
+             grid {:?} that species '{}' is lifted to: {why} (esm-spec §4.3.4)",
+            grid.axes, grid.species
+        ),
+    };
+    if let Some(axis) = foreign.first() {
+        return Err(mismatch(format!(
+            "the grid is not shaped over index set '{axis}'"
+        )));
+    }
+    let mut args = Vec::with_capacity(shape.len() + 1);
+    args.push(Expr::Variable(name.to_string()));
+    for (d, axis) in shape.iter().enumerate() {
+        if shape[..d].contains(axis) {
+            return Err(mismatch(format!(
+                "index set '{axis}' appears twice in its shape"
+            )));
+        }
+        let mut at = grid.axes.iter().enumerate().filter(|(_, a)| *a == axis);
+        let (p, _) = at.next().expect("a non-foreign axis is on the grid");
+        if at.next().is_some() {
+            return Err(mismatch(format!(
+                "the grid runs over index set '{axis}' on more than one axis"
+            )));
+        }
+        args.push(Expr::Variable(grid.loops[p].clone()));
+    }
+    Ok(Expr::operator(ExpressionNode {
+        op: "index".to_string(),
+        args,
+        ..Default::default()
+    }))
 }
 
 /// Build `index(name, loops…)`.
@@ -5426,16 +5545,15 @@ struct PointwiseLift<'a> {
     var_shapes: &'a HashMap<String, Vec<String>>,
     /// The flattened index-set registry.
     index_sets: &'a mut IndexMap<String, IndexSet>,
-    /// Loaded field name → rank.
-    loaded_producers: &'a HashMap<String, usize>,
 }
 
 /// Pointwise spatial lift (esm-spec §10.5). Promotes every state ODE that
 /// `operator_compose` merged with a spatial operator (its merged RHS carries an
 /// operator `makearray`) from a 0-D scalar to the operator's grid shape, and
-/// rewrites the equation into a `faq` over the grid. `loaded_producers`
-/// maps loaded field name → rank; a producer whose rank equals the grid rank is
-/// indexed per cell alongside the lifted species.
+/// rewrites the equation into a `faq` over the grid. Inside it the lifted
+/// species and every variable with a declared shape (a state, parameter —
+/// including a loaded field — or observed already on the grid) are read per
+/// cell, a shaped one by index-set name ([`lift_rhs_to_cell`]).
 ///
 /// Per-cell indexing applies inside each contribution; the `faq` wrapper goes
 /// around their left-fold sum (esm-libraries-spec §4.7.5).
@@ -5452,7 +5570,6 @@ fn apply_pointwise_lift(
         state_variables,
         var_shapes,
         index_sets,
-        loaded_producers,
     } = lift;
     // Only a set the document declares is matched by size; the lift's own
     // `_liftdim<d>_<extent>` sets are not.
@@ -5483,6 +5600,9 @@ fn apply_pointwise_lift(
     if lifted.is_empty() {
         return Ok(());
     }
+    // Operands read per cell: the lifted species and every shaped variable.
+    let mut arrayvars: HashSet<String> = lifted.clone();
+    arrayvars.extend(var_shapes.keys().cloned());
 
     for fe in equations.iter_mut() {
         let eq = &fe.eq;
@@ -5535,21 +5655,6 @@ fn apply_pointwise_lift(
             var.shape = Some(axes.clone());
         }
 
-        // Operands to index per cell: the lifted species, every variable that
-        // declares a shape (a state, parameter or observed already on the
-        // grid, e.g. a mass field the merged RHS divides by), and any loaded
-        // producer whose rank matches the grid rank (e.g. a grid-shaped wind
-        // field). Julia `_pointwise_lift_operands` indexes the same set; a
-        // shaped operand left bare would be a whole-array read inside the
-        // per-cell `faq` body.
-        let mut arrayvars: HashSet<String> = lifted.clone();
-        arrayvars.extend(var_shapes.keys().cloned());
-        for (name, r) in loaded_producers {
-            if *r == rank {
-                arrayvars.insert(name.clone());
-            }
-        }
-
         // Grid ranges: each loop symbol over its dimension's index set.
         let mut ranges: HashMap<String, RangeSpec> = HashMap::new();
         for (loop_name, axis) in loops.iter().zip(&axes) {
@@ -5585,7 +5690,12 @@ fn apply_pointwise_lift(
         fe.eq.lhs = new_lhs;
         fe.eq.rhs = Expr::operator(wrapper);
         fe.lifted = true;
-        fe.map_contributions(|e| lift_rhs_to_cell(e, &arrayvars, &loops));
+        let grid = LiftGrid {
+            loops: &loops,
+            axes: &axes,
+            species: &species,
+        };
+        fe.try_map_contributions(|e| lift_rhs_to_cell(e, &arrayvars, var_shapes, &grid, true))?;
     }
     Ok(())
 }
@@ -5890,8 +6000,6 @@ mod tests {
                 component: "M".to_string(),
             },
         )];
-        let loaded_producers: HashMap<String, usize> = HashMap::new();
-
         let mut lifted_shapes: IndexMap<String, Vec<i64>> = IndexMap::new();
         let mut state_variables: IndexMap<String, ModelVariable> = IndexMap::new();
         let mut index_sets: IndexMap<String, IndexSet> = IndexMap::new();
@@ -5900,7 +6008,6 @@ mod tests {
             state_variables: &mut state_variables,
             var_shapes: &HashMap::new(),
             index_sets: &mut index_sets,
-            loaded_producers: &loaded_producers,
         };
         let err = apply_pointwise_lift(&mut equations, lift).unwrap_err();
         match err {
@@ -6014,7 +6121,6 @@ mod tests {
             state_variables: &mut state_variables,
             var_shapes: &HashMap::new(),
             index_sets: &mut index_sets,
-            loaded_producers: &HashMap::new(),
         };
         apply_pointwise_lift(&mut equations, lift).unwrap();
         assert!(lifted_shapes.is_empty());
@@ -6030,64 +6136,158 @@ mod tests {
         );
     }
 
-    // A variable that already declares a grid shape (here a mass field `m`
-    // the merged right-hand side divides by) is indexed per cell inside the
-    // lifted body, as Julia `_pointwise_lift_operands` does: left bare it
-    // would be a whole-array read inside the per-cell `faq`.
-    #[test]
-    fn pointwise_lift_indexes_a_shaped_operand() {
-        let idx = |name: &str| {
-            Expr::operator(ExpressionNode {
-                op: "index".to_string(),
-                args: vec![
-                    Expr::Variable(name.to_string()),
-                    Expr::Variable("i".to_string()),
-                ],
-                ..Default::default()
-            })
-        };
+    /// Lift `D(C) = wrap(<2-D operator makearray over x × y>)`, with the
+    /// declared index sets x (2), y (3) and z (4) and the given shaped
+    /// variables, and return the lifted right-hand side's `faq` body.
+    fn lift_2d(
+        wrap: impl Fn(Expr) -> Expr,
+        shapes: &[(&str, &[&str])],
+    ) -> Result<serde_json::Value, FlattenError> {
+        let v = |n: &str| Expr::Variable(n.to_string());
         let makearray = Expr::operator(ExpressionNode {
             op: "makearray".to_string(),
-            regions: Some(vec![vec![[
-                crate::types::RegionBound::Int(1),
-                crate::types::RegionBound::Int(3),
-            ]]]),
-            values: Some(vec![idx("C")]),
-            ..Default::default()
-        });
-        let rhs = Expr::operator(ExpressionNode {
-            op: "/".to_string(),
-            args: vec![makearray, Expr::Variable("m".to_string())],
+            regions: Some(vec![vec![
+                [
+                    crate::types::RegionBound::Int(1),
+                    crate::types::RegionBound::Int(2),
+                ],
+                [
+                    crate::types::RegionBound::Int(1),
+                    crate::types::RegionBound::Int(3),
+                ],
+            ]]),
+            values: Some(vec![Expr::operator(ExpressionNode {
+                op: "index".to_string(),
+                args: vec![v("C"), v("i"), v("j")],
+                ..Default::default()
+            })]),
             ..Default::default()
         });
         let mut equations = vec![FlatEq::authored(
-            ddt("C", rhs),
+            ddt("C", wrap(makearray)),
             TermOrigin::Component {
                 component: "M".to_string(),
             },
         )];
         let mut state_variables: IndexMap<String, ModelVariable> = IndexMap::new();
         state_variables.insert("C".to_string(), var(VariableType::Unknown, None));
-        let var_shapes: HashMap<String, Vec<String>> =
-            HashMap::from([("m".to_string(), vec!["x".to_string()])]);
+        let var_shapes: HashMap<String, Vec<String>> = shapes
+            .iter()
+            .map(|(n, sh)| (n.to_string(), sh.iter().map(|a| a.to_string()).collect()))
+            .collect();
         let mut lifted_shapes: IndexMap<String, Vec<i64>> = IndexMap::new();
         let mut index_sets: IndexMap<String, IndexSet> = IndexMap::new();
-        index_sets.insert("x".to_string(), interval(3));
+        index_sets.insert("x".to_string(), interval(2));
+        index_sets.insert("y".to_string(), interval(3));
+        index_sets.insert("z".to_string(), interval(4));
         let lift = PointwiseLift {
             lifted_shapes: &mut lifted_shapes,
             state_variables: &mut state_variables,
             var_shapes: &var_shapes,
             index_sets: &mut index_sets,
-            loaded_producers: &HashMap::new(),
         };
-        apply_pointwise_lift(&mut equations, lift).unwrap();
-        assert_eq!(lifted_shapes["C"], vec![3]);
+        apply_pointwise_lift(&mut equations, lift)?;
+        assert_eq!(lifted_shapes["C"], vec![2, 3]);
+        assert_eq!(
+            state_variables["C"].shape,
+            Some(vec!["x".into(), "y".into()])
+        );
         let rhs = serde_json::to_value(&equations[0].eq.rhs).unwrap();
         assert_eq!(rhs["op"], "faq");
-        assert_eq!(
-            rhs["expr"]["args"][1],
-            serde_json::to_value(idx("m")).unwrap(),
-            "the shaped operand must be indexed per cell: {rhs}"
+        Ok(rhs["expr"].clone())
+    }
+
+    /// `makearray / <operand>`.
+    fn over(operand: Expr) -> impl Fn(Expr) -> Expr {
+        move |ma| {
+            Expr::operator(ExpressionNode {
+                op: "/".to_string(),
+                args: vec![ma, operand.clone()],
+                ..Default::default()
+            })
+        }
+    }
+
+    fn gather(args: &[&str]) -> serde_json::Value {
+        serde_json::json!({"op": "index", "args": args})
+    }
+
+    fn lift_message(err: FlattenError) -> String {
+        match err {
+            FlattenError::DimensionPromotion { message } => message,
+            other => panic!("expected DimensionPromotion, got {other:?}"),
+        }
+    }
+
+    // A variable that already lives on the lift grid (here an air mass `m` the
+    // merged right-hand side divides by) is read per cell inside the lifted
+    // body. Left bare it would be a whole-array read inside the per-cell `faq`.
+    #[test]
+    fn pointwise_lift_indexes_a_shaped_operand() {
+        let body = lift_2d(over(Expr::Variable("m".into())), &[("m", &["x", "y"])]).unwrap();
+        assert_eq!(body["args"][1], gather(&["m", "i", "j"]), "{body}");
+    }
+
+    // Operands align by index-set NAME (esm-spec §4.3.4): a lower-rank operand
+    // is read at the loops of the index sets it declares and replicates along
+    // the rest, rather than taking every loop positionally.
+    #[test]
+    fn pointwise_lift_gathers_a_lower_rank_operand_by_name() {
+        let body = lift_2d(over(Expr::Variable("p".into())), &[("p", &["y"])]).unwrap();
+        assert_eq!(body["args"][1], gather(&["p", "j"]), "{body}");
+    }
+
+    // A permuted shape transposes: `[y, x]` is read at `(j, i)`, not `(i, j)`.
+    #[test]
+    fn pointwise_lift_gathers_a_permuted_operand_by_name() {
+        let body = lift_2d(over(Expr::Variable("m".into())), &[("m", &["y", "x"])]).unwrap();
+        assert_eq!(body["args"][1], gather(&["m", "j", "i"]), "{body}");
+    }
+
+    // An axis the grid is not shaped over (a staggered or differently sized
+    // index set) has no loop to read it at, so the lift refuses rather than
+    // reading the wrong cell.
+    #[test]
+    fn pointwise_lift_refuses_an_operand_on_a_foreign_index_set() {
+        for shape in [&["x", "z"][..], &["z"][..]] {
+            let err = lift_2d(over(Expr::Variable("f".into())), &[("f", shape)]).unwrap_err();
+            let message = lift_message(err);
+            assert!(message.contains("'f'"), "{message}");
+            assert!(message.contains("index set 'z'"), "{message}");
+        }
+    }
+
+    // A shaped variable sharing no index set with the grid, passed to a closed
+    // function, is that function's whole-array argument (a lookup table, say)
+    // and stays bare. A grid operand beside it is still read per cell.
+    #[test]
+    fn pointwise_lift_leaves_a_whole_array_fn_argument_bare() {
+        let call = Expr::operator(ExpressionNode {
+            op: "fn".to_string(),
+            name: Some("interp.searchsorted".to_string()),
+            args: vec![Expr::Variable("p".into()), Expr::Variable("table".into())],
+            ..Default::default()
+        });
+        let body = lift_2d(over(call), &[("p", &["x"]), ("table", &["z"])]).unwrap();
+        assert_eq!(body["args"][1]["args"][0], gather(&["p", "i"]), "{body}");
+        assert_eq!(body["args"][1]["args"][1], "table", "{body}");
+    }
+
+    // A whole-array shape op has no per-cell reading of its operand, so the
+    // lift refuses instead of gathering one cell into it.
+    #[test]
+    fn pointwise_lift_refuses_an_operand_of_a_whole_array_op() {
+        let reshaped = Expr::operator(ExpressionNode {
+            op: "reshape".to_string(),
+            args: vec![Expr::Variable("m".into())],
+            shape: Some(vec![6]),
+            ..Default::default()
+        });
+        let err = lift_2d(over(reshaped), &[("m", &["x", "y"])]).unwrap_err();
+        let message = lift_message(err);
+        assert!(
+            message.contains("'m'") && message.contains("'reshape'"),
+            "{message}"
         );
     }
 
