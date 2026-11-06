@@ -928,9 +928,13 @@ _computed_keys(vals) = _ComputedKeys(
 )
 
 # Map an OVERLAP-gate env-factor list to the aggregate range symbol its axis
-# runs over (Phase 2a): the env factors are 1-D const-array buffers, so — exactly
-# like an `on` key column — the first factor's 1-D shape index set names the
-# range. `var_shapes` maps a factor name to its declared shape (index-set names).
+# runs over (Phase 2a). 2- or 4-name lists are 1-D const-array buffers, so —
+# exactly like an `on` key column — the first factor's 1-D shape index set names
+# the range. A 1-name list is a `[pos, verts, coord]` RING stack (CONFORMANCE_SPEC
+# §5.5.6; `_envelope_vectors_from_cols` reads it as one envelope per position), so
+# its FIRST (position) axis names the range — the same rank-agnostic rule the
+# setup path's `_geo_overlap_gate` uses. `var_shapes` maps a factor name to its
+# declared shape (index-set names).
 function _overlap_env_sym(
         env_names::AbstractVector, ranges::AbstractDict,
         sym_to_set::AbstractDict, var_shapes::AbstractDict,
@@ -945,11 +949,14 @@ function _overlap_env_sym(
     )
     fname = String(env_names[1])
     shape = get(var_shapes, fname, nothing)
-    (shape === nothing || length(shape) != 1) && throw(
+    rank = length(env_names) == 1 ? 3 : 1
+    (shape === nothing || length(shape) != rank) && throw(
         TreeWalkError(
             "E_TREEWALK_JOIN_OVERLAP",
-            "overlap join env factor '$fname' must be a 1-D buffer whose shape index " *
-                "set names the join range; shape=$(shape === nothing ? "<unknown>" : shape)"
+            "overlap join env factor '$fname' must be " *
+                (rank == 1 ? "a 1-D buffer" : "a [pos, verts, coord] 3-D ring stack") *
+                " whose (first) shape index set names the join range; " *
+                "shape=$(shape === nothing ? "<unknown>" : shape)"
         )
     )
     return _join_sym_for_key(

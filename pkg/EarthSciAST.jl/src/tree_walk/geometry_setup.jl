@@ -869,9 +869,9 @@ end
 # axis names the range. That is deliberately rank-agnostic, matching
 # `_envelope_vectors_from_cols`, which reads a single 1-name env factor as a
 # `[pos, verts, coord]` RING stack — i.e. a 3-D array whose first axis is the
-# position axis. (`_overlap_env_sym` in tree_walk/semiring.jl insists on a 1-D
-# factor and so cannot resolve that ring form; the two disagree, and the ring
-# form is the one every shipped `conservative_overlap_*_gated` template uses.)
+# position axis — the ring form every shipped `conservative_overlap_*_gated`
+# template uses. (`_overlap_env_sym` in tree_walk/semiring.jl, the right-hand
+# side's resolver, reads the same ring form by its first axis.)
 function _geo_overlap_gate(faq, ctx::_GeoCtx, setof, scope, cache)
     faq.join === nothing && return nothing
     _geom_overlap_gate_disabled() && return nothing

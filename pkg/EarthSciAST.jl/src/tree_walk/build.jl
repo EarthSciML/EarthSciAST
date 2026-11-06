@@ -4171,6 +4171,16 @@ function _build_partition_and_materialize(
     for (n, a) in cls.const_obs_arrays
         haskey(join_key_arrays, n) || (join_key_arrays[n] = a)
     end
+    # An overlap gate's envelope factors MUST be build-time data (§5.5.6), and the
+    # shipped `conservative_overlap_*_gated` templates name a geometry-setup RING
+    # stack (`src_poly` / `tgt_poly`, a `[pos, verts, coord]` faq over parameters)
+    # as their single-name env. Its equation was dropped from the ODE partition
+    # above because it was materialized at setup (`geom_setup_arrays`), so an
+    # aggregate that stays in the right-hand side — a gated apply whose `F_src`
+    # is a live forcing array — must read the ring from there.
+    for (n, a) in geom_setup_arrays
+        haskey(join_key_arrays, n) || (join_key_arrays[n] = a)
+    end
     join_obs_defs = observed_definitions(model)
     # A key column computed from scalar parameters folds their values into the
     # match set, so each one it reads is recorded as read at build
