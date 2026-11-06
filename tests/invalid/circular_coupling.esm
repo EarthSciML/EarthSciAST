@@ -2,7 +2,7 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "CircularCouplingTest",
-    "description": "Test file with circular coupling A→B→A",
+    "description": "Two models whose OBSERVEDS read each other: ModelA.a ~ 0.1 * ModelB.b and ModelB.b ~ 0.1 * ModelA.a. Neither observed can be computed first, so the models have no evaluation order (circular_dependency). Reads of states would not form this cycle; see tests/valid/cross_model_state_reads.esm.",
     "authors": ["Test"],
     "created": "2026-02-14T00:00:00Z"
   },
@@ -13,12 +13,20 @@
           "type": "unknown",
           "units": "mol/mol",
           "default": 0.0
+        },
+        "a": {
+          "type": "unknown",
+          "units": "mol/mol"
         }
       },
       "equations": [
         {
           "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
-          "rhs": { "op": "*", "args": [0.1, "ModelB.y"] }
+          "rhs": { "op": "-", "args": ["a"] }
+        },
+        {
+          "lhs": "a",
+          "rhs": { "op": "*", "args": [0.1, "ModelB.b"] }
         }
       ]
     },
@@ -28,12 +36,20 @@
           "type": "unknown",
           "units": "mol/mol",
           "default": 0.0
+        },
+        "b": {
+          "type": "unknown",
+          "units": "mol/mol"
         }
       },
       "equations": [
         {
           "lhs": { "op": "D", "args": ["y"], "wrt": "t" },
-          "rhs": { "op": "*", "args": [0.1, "ModelA.x"] }
+          "rhs": { "op": "-", "args": ["b"] }
+        },
+        {
+          "lhs": "b",
+          "rhs": { "op": "*", "args": [0.1, "ModelA.a"] }
         }
       ]
     }

@@ -1,0 +1,128 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "CrossModelObservedReadsNoLoop",
+    "description": "Each model has an observed that reads an observed of the other, so the models depend on each other in both directions, but no chain of definitions closes (esm-spec §4.9.7). ModelM.c reads ModelN.d, which reads only a parameter; ModelN.b reads ModelM.a, which reads only the state ModelM.x. A graph over whole models would report a cycle; the graph over observeds has none.",
+    "authors": [
+      "Test"
+    ],
+    "created": "2026-11-06T00:00:00Z"
+  },
+  "models": {
+    "ModelM": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 0.0
+        },
+        "a": {
+          "type": "unknown",
+          "units": "mol/mol"
+        },
+        "c": {
+          "type": "unknown",
+          "units": "mol/mol"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -1.0,
+              "ModelN.b"
+            ]
+          }
+        },
+        {
+          "lhs": "a",
+          "rhs": {
+            "op": "*",
+            "args": [
+              2.0,
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": "c",
+          "rhs": {
+            "op": "*",
+            "args": [
+              0.5,
+              "ModelN.d"
+            ]
+          }
+        }
+      ]
+    },
+    "ModelN": {
+      "variables": {
+        "k": {
+          "type": "parameter",
+          "units": "mol/mol",
+          "default": 1.0
+        },
+        "y": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 0.0
+        },
+        "b": {
+          "type": "unknown",
+          "units": "mol/mol"
+        },
+        "d": {
+          "type": "unknown",
+          "units": "mol/mol"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -1.0,
+              "ModelM.c"
+            ]
+          }
+        },
+        {
+          "lhs": "b",
+          "rhs": {
+            "op": "*",
+            "args": [
+              0.1,
+              "ModelM.a"
+            ]
+          }
+        },
+        {
+          "lhs": "d",
+          "rhs": {
+            "op": "*",
+            "args": [
+              0.1,
+              "k"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

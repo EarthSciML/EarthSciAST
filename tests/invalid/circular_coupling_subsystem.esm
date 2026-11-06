@@ -1,0 +1,97 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "CircularCouplingSubsystemTest",
+    "description": "A model's observed and its subsystem's observed read each other: ModelN.a ~ 0.1 * ModelN.Sub.c and ModelN.Sub.c ~ 0.1 * ModelN.a. The cycle crosses a scope boundary, so it is circular_dependency, not observed_cycle (esm-spec §4.9.7).",
+    "authors": [
+      "Test"
+    ],
+    "created": "2026-11-06T00:00:00Z"
+  },
+  "models": {
+    "ModelN": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 0.0
+        },
+        "a": {
+          "type": "unknown",
+          "units": "mol/mol"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -1.0,
+              "a"
+            ]
+          }
+        },
+        {
+          "lhs": "a",
+          "rhs": {
+            "op": "*",
+            "args": [
+              0.1,
+              "ModelN.Sub.c"
+            ]
+          }
+        }
+      ],
+      "subsystems": {
+        "Sub": {
+          "variables": {
+            "z": {
+              "type": "unknown",
+              "units": "mol/mol",
+              "default": 0.0
+            },
+            "c": {
+              "type": "unknown",
+              "units": "mol/mol"
+            }
+          },
+          "equations": [
+            {
+              "lhs": {
+                "op": "D",
+                "args": [
+                  "z"
+                ],
+                "wrt": "t"
+              },
+              "rhs": {
+                "op": "*",
+                "args": [
+                  -1.0,
+                  "c"
+                ]
+              }
+            },
+            {
+              "lhs": "c",
+              "rhs": {
+                "op": "*",
+                "args": [
+                  0.1,
+                  "ModelN.a"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

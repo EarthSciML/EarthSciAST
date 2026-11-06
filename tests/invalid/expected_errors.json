@@ -1051,22 +1051,30 @@
       {
         "path": "/models",
         "code": "circular_dependency",
-        "message": "Circular coupling detected: ModelA \u2192 ModelB \u2192 ModelA",
+        "message": "Circular dependency among observeds: ModelA.a \u2192 ModelB.b \u2192 ModelA.a",
         "details": {
           "cycle": [
-            "ModelA",
-            "ModelB",
-            "ModelA"
-          ],
-          "coupling_chain": [
-            {
-              "from": "ModelA.x",
-              "references": "ModelB.y"
-            },
-            {
-              "from": "ModelB.y",
-              "references": "ModelA.x"
-            }
+            "ModelA.a",
+            "ModelB.b",
+            "ModelA.a"
+          ]
+        }
+      }
+    ],
+    "is_valid": false
+  },
+  "circular_coupling_subsystem.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models",
+        "code": "circular_dependency",
+        "message": "Circular dependency among observeds: ModelN.Sub.c \u2192 ModelN.a \u2192 ModelN.Sub.c",
+        "details": {
+          "cycle": [
+            "ModelN.Sub.c",
+            "ModelN.a",
+            "ModelN.Sub.c"
           ]
         }
       }

@@ -32,6 +32,52 @@ import type { StructuralError } from './types.js'
 import { extractVariableReferences, collectIndexSymbols } from './expr-utils.js'
 
 /**
+ * The free references each observed's defining RHS makes, keyed by observed
+ * name: the §4.9.6 edge walk before it is narrowed to any one graph. A
+ * reference here is exactly as written (bare or dotted); the caller decides
+ * which ones resolve to a node. Both the per-model graph below and the
+ * document-wide `circular_dependency` graph (esm-spec §4.9.7, which is "the
+ * same graph, built over the whole document") are built from this one walk, so
+ * the two cannot disagree about what a definition reads.
+ *
+ * Binder-introduced symbols are subtracted, exactly as
+ * {@link validateReferenceIntegrity} subtracts them: a `faq` range key, an
+ * `index` position, an `argmin` witness is a scoped iteration symbol, not a
+ * reference, so one that happens to share a name with an observed must not
+ * manufacture an edge.
+ *
+ * The bare recurrence self-read is dropped here too. esm-spec §4.3.1.1: a causal
+ * self-read is an ORDERING WITHIN one variable, not a dependency between two —
+ * the sweep publishes cell `k-1` before it evaluates cell `k` — so the
+ * self-edge `V -> V` is dropped for a recurrence CANDIDATE, and only for one.
+ *
+ * Candidacy, never the well-foundedness verdict (CONFORMANCE_SPEC §5.19.5).
+ * Gating on the verdict would make an ILL-founded self-read non-exempt, so
+ * this check would fire first and the `recurrence_not_wellfounded` /
+ * `recurrence_unsupported_form` diagnosis — which is the cross-binding
+ * contract for exactly those documents — would never be reached. Gating
+ * instead on "is this a self-edge at all" is the mirror-image mistake: a
+ * scalar `x ~ x + 1`, or a bare `s ~ s + 1` over an array, has no axis to
+ * fold along, can never be a recurrence, and IS a cycle of length one that
+ * this check must keep reporting. `isRecurrenceCandidate` is the same
+ * predicate the cadence seeder drops its self-edge on, so the two cannot
+ * disagree about which equations the construct covers.
+ */
+export function observedDefinitionReads(
+  model: Model,
+  esmFile: EsmFile | undefined,
+): Map<string, Set<string>> {
+  const reads = new Map<string, Set<string>>()
+  for (const [name, rhs] of observedDefinitions(model)) {
+    const bound = collectIndexSymbols(rhs)
+    const refs = new Set(extractVariableReferences(rhs).filter((ref) => !bound.has(ref)))
+    if (refs.has(name) && isRecurrenceCandidate(model, name, esmFile)) refs.delete(name)
+    reads.set(name, refs)
+  }
+  return reads
+}
+
+/**
  * The observed-definition dependency graph of one model, as a SORTED adjacency
  * map: every observed name, mapped to the observeds its own defining RHS names,
  * in sorted order.
@@ -41,49 +87,16 @@ import { extractVariableReferences, collectIndexSymbols } from './expr-utils.js'
  * order. `gamfac -> hpbl -> wscale -> gamfac` and `hpbl -> wscale -> gamfac ->
  * hpbl` describe the same defect, and a graph walked in insertion or hash order
  * would hand a different one of them to two runs over the same document.
- *
- * Binder-introduced symbols are subtracted before the intersection, exactly as
- * {@link validateReferenceIntegrity} subtracts them: a `faq` range key,
- * an `index` position, an `argmin` witness is a scoped iteration symbol, not a
- * reference, so one that happens to share a name with an observed must not
- * manufacture an edge.
  */
 function observedDependencyGraph(
   model: Model,
   esmFile: EsmFile | undefined,
 ): Map<string, string[]> {
-  const definitions = observedDefinitions(model)
+  const reads = observedDefinitionReads(model, esmFile)
   const graph = new Map<string, string[]>()
-
-  for (const [name, rhs] of definitions) {
-    const bound = collectIndexSymbols(rhs)
-    const successors = new Set(
-      extractVariableReferences(rhs).filter((ref) => !bound.has(ref) && definitions.has(ref)),
-    )
-
-    // esm-spec §4.3.1.1: a causal self-read is an ORDERING WITHIN one variable,
-    // not a dependency between two — the sweep publishes cell `k-1` before it
-    // evaluates cell `k` — so the self-edge `V -> V` is dropped for a recurrence
-    // CANDIDATE, and only for one.
-    //
-    // Candidacy, never the well-foundedness verdict (CONFORMANCE_SPEC §5.19.5).
-    // Gating on the verdict would make an ILL-founded self-read non-exempt, so
-    // this check would fire first and the `recurrence_not_wellfounded` /
-    // `recurrence_unsupported_form` diagnosis — which is the cross-binding
-    // contract for exactly those documents — would never be reached. Gating
-    // instead on "is this a self-edge at all" is the mirror-image mistake: a
-    // scalar `x ~ x + 1`, or a bare `s ~ s + 1` over an array, has no axis to
-    // fold along, can never be a recurrence, and IS a cycle of length one that
-    // this check must keep reporting. `isRecurrenceCandidate` is the same
-    // predicate the cadence seeder drops its self-edge on, so the two cannot
-    // disagree about which equations the construct covers.
-    if (successors.has(name) && isRecurrenceCandidate(model, name, esmFile)) {
-      successors.delete(name)
-    }
-
-    graph.set(name, [...successors].sort())
+  for (const [name, refs] of reads) {
+    graph.set(name, [...refs].filter((ref) => reads.has(ref)).sort())
   }
-
   return graph
 }
 

@@ -252,6 +252,11 @@ def validate(esm_file: EsmFile, *, base_path: str | None = None) -> ValidationRe
         # 1. Equation-Unknown Balance validation
         _validate_equation_balance_enhanced(esm_file, structural_errors)
 
+        # 1b. A cycle among observeds across a model or subsystem boundary
+        # (esm-spec §4.9.7), on the parsed tree, so a subsystem mounted by
+        # reference is part of the graph.
+        _validate_circular_dependency(esm_file, structural_errors)
+
         # 2. Reaction Consistency validation
         _validate_reaction_consistency(esm_file, structural_errors)
 
@@ -298,6 +303,21 @@ def validate(esm_file: EsmFile, *, base_path: str | None = None) -> ValidationRe
         structural_errors=structural_errors,
         unit_warnings=unit_warnings,
     )
+
+
+def _validate_circular_dependency(
+    esm_file: EsmFile, structural_errors: list[ValidationError]
+) -> None:
+    """``circular_dependency`` (esm-spec §4.9.7). ``load`` refuses such a
+    document already; this catches one built or edited in memory."""
+    from .structural_checks import circular_dependency_cycle, circular_dependency_record
+
+    cycle = circular_dependency_cycle(esm_file)
+    if cycle is not None:
+        code, path, message, details = circular_dependency_record(cycle)
+        structural_errors.append(
+            ValidationError(path=path, message=message, code=code, details=details)
+        )
 
 
 def _unexpected_error(e: Exception) -> ValidationError:

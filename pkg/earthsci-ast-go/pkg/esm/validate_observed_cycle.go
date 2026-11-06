@@ -34,10 +34,11 @@ import (
 //
 // Relation to the two neighbouring cycle diagnostics:
 //
-//   - `circular_dependency` (validate.go validateCircularReferences) is a cycle
-//     among MODELS reached through scoped references, pinned at `/models`. This
-//     one is a cycle among the observeds INSIDE one model, pinned at
-//     `/models/<M>`.
+//   - `circular_dependency` (validate.go validateCircularReferences) is the
+//     same graph built over the whole document (esm-spec §4.9.7), reporting a
+//     cycle that crosses a model or subsystem boundary, pinned at `/models`.
+//     This one is a cycle among the observeds INSIDE one model, pinned at
+//     `/models/<M>`. Both draw their edges from observedDefinitionReads.
 //   - `cadence_observed_cycle` (cadence.go) walks the very same graph with the
 //     very same self-edge exemption, but it is a *CadenceError raised from the
 //     cadence partition — a pass `Validate` never calls. The two are deliberate
@@ -83,7 +84,7 @@ const codeObservedCycle = "observed_cycle"
 // unknowns this model both DECLARES and DEFINES, so a coupled model's borrowed
 // scope cannot manufacture one.
 func (s *structuralScan) validateObservedCycles(modelName string, model *Model, basePath string) {
-	graph := observedDependencyGraph(model, s.file)
+	graph := observedDependencyGraph(model, s.file, modelName, s.scopedNameIndex())
 	cycle := firstObservedCycle(graph)
 	if len(cycle) == 0 {
 		return
@@ -98,19 +99,54 @@ func (s *structuralScan) validateObservedCycles(modelName string, model *Model, 
 		// `cycle` is a PATH — ordered semantically, entry node repeated to close
 		// it — not one of the §7.1.0 lexicographically-ordered name lists.
 		// `dependency_type` distinguishes this payload from
-		// `circular_dependency`'s, which carries a cycle among MODELS; the other
-		// four bindings emit the same pair.
+		// `circular_dependency`'s, which carries a cycle crossing a scope
+		// boundary; the other four bindings emit the same pair.
 		Details: map[string]any{"cycle": cycle, "dependency_type": "observed_definitions"},
 	})
 }
 
 // observedDependencyGraph builds the §4.9.6 graph: one node per observed unknown
-// of model, one edge `V → W` per observed `W` occurring free in `V`'s defining
-// RHS. Successor lists are SORTED, which together with sorted DFS roots is what
-// makes the reported cycle the same on every run — Go's map iteration is
-// randomized, so without both this diagnostic would name a different cycle from
-// run to run on a document carrying more than one.
-func observedDependencyGraph(model *Model, file *ESMFile) map[string][]string {
+// of model, one edge `V → W` per observed `W` of the same model that `V`'s
+// defining RHS reads — bare, or through a dotted name that resolves back into
+// this model (`M.a` read inside `M`). prefix is the model's scoped name. Successor
+// lists are SORTED, which together with sorted DFS roots is what makes the
+// reported cycle the same on every run — Go's map iteration is randomized, so
+// without both this diagnostic would name a different cycle from run to run on
+// a document carrying more than one.
+func observedDependencyGraph(model *Model, file *ESMFile, prefix string, ix *scopedNameIndex) map[string][]string {
+	reads := observedDefinitionReads(model, file, prefix, ix)
+	if len(reads) == 0 {
+		return nil
+	}
+	graph := make(map[string][]string, len(reads))
+	for name, refs := range reads {
+		successors := map[string]bool{}
+		for ref := range refs {
+			local, inScope := strings.CutPrefix(ref, prefix+".")
+			if !inScope {
+				continue
+			}
+			if _, isObserved := reads[local]; isObserved {
+				successors[local] = true
+			}
+		}
+		graph[name] = sortedKeysOfSet(successors)
+	}
+	return graph
+}
+
+// observedDefinitionReads maps each observed unknown of model (§6.3.1) to the
+// FULL scoped names its defining RHS reads, each resolved from the scope prefix
+// by ix (scopedNameIndex.resolve): binder-introduced symbols removed, and a
+// §4.3.1.1 recurrence candidate's read of itself dropped. Every observed has an
+// entry, even one whose RHS reads nothing.
+//
+// It is the edge walk of BOTH observed-cycle checks: §4.9.6 keeps the reads that
+// land on an observed of the same model (observedDependencyGraph), and §4.9.7's
+// cross-scope `circular_dependency` (validate.go validateCircularReferences)
+// keeps those that land on an observed anywhere in the document. Sharing it is
+// what keeps the two graphs the same graph.
+func observedDefinitionReads(model *Model, file *ESMFile, prefix string, ix *scopedNameIndex) map[string]map[string]bool {
 	defs := observedDefinitions(model)
 	if len(defs) == 0 {
 		return nil
@@ -140,13 +176,12 @@ func observedDependencyGraph(model *Model, file *ESMFile) map[string][]string {
 
 	// Binder-introduced symbols (an aggregate's `output_idx` / `ranges` keys, an
 	// `index` element position, an integral's integration variable, …) are NOT
-	// references to a model variable, so they must be subtracted before
-	// intersecting with the observed names: a range key that happens to be spelled
-	// like an observed would otherwise manufacture an edge out of thin air. They
-	// are collected across the WHOLE equation, both sides, because the
-	// indexed-definition form binds on the LHS and uses the symbol on the RHS
-	// (`y[i] ~ 2*x[i]` binds `i` at the LHS `index` node) — the same scoping rule
-	// validateEquationRefs applies via equationBoundSymbols.
+	// references to a model variable, so they must be subtracted: a range key
+	// that happens to be spelled like an observed would otherwise manufacture an
+	// edge out of thin air. They are collected across the WHOLE equation, both
+	// sides, because the indexed-definition form binds on the LHS and uses the
+	// symbol on the RHS (`y[i] ~ 2*x[i]` binds `i` at the LHS `index` node) — the
+	// same scoping rule validateEquationRefs applies via equationBoundSymbols.
 	lhsBound := make(map[string]map[string]bool, len(observed))
 	for _, eq := range model.Equations {
 		name := definedVariableName(eq.LHS)
@@ -161,26 +196,28 @@ func observedDependencyGraph(model *Model, file *ESMFile) map[string][]string {
 		collectBoundSymbols(eq.LHS, bound)
 	}
 
-	graph := make(map[string][]string, len(observed))
+	reads := make(map[string]map[string]bool, len(observed))
 	for name := range observed {
 		rhs := defs[name]
 		bound := expressionBoundSymbols(rhs)
 		for sym := range lhsBound[name] {
 			bound[sym] = true
 		}
-		successors := map[string]bool{}
+		self := prefix + "." + name
+		refs := map[string]bool{}
 		for ref := range FreeVariables(rhs) {
-			if !observed[ref] || bound[ref] {
+			if bound[ref] {
 				continue
 			}
-			if ref == name && selfEdgeExempt[name] {
+			full := ix.resolve(prefix, ref)
+			if full == self && selfEdgeExempt[name] {
 				continue
 			}
-			successors[ref] = true
+			refs[full] = true
 		}
-		graph[name] = sortedKeysOfSet(successors)
+		reads[name] = refs
 	}
-	return graph
+	return reads
 }
 
 // firstObservedCycle returns the first cycle a deterministic depth-first search
@@ -239,4 +276,95 @@ func firstObservedCycle(graph map[string][]string) []string {
 		}
 	}
 	return nil
+}
+
+// scopedNameIndex resolves a name read inside a model or subsystem to the full
+// scoped name of its target, with the precedence of the reference-integrity
+// walk (esm-spec §4.8.4, "A scoped reference carries its target's units"; used
+// by §4.9.6 and §4.9.7): the reading component's own names, then a path
+// relative to its own subsystems, then a top-level system path (§4.6).
+type scopedNameIndex struct {
+	// declared holds the full scoped name of every variable, species and
+	// reaction parameter of every model and reaction system, subsystems at
+	// every depth included.
+	declared map[string]bool
+}
+
+func newScopedNameIndex(file *ESMFile) *scopedNameIndex {
+	ix := &scopedNameIndex{declared: map[string]bool{}}
+	if file == nil {
+		return ix
+	}
+	for _, name := range sortedKeys(file.Models) {
+		m := file.Models[name]
+		ix.addModel(name, &m)
+	}
+	for _, name := range sortedKeys(file.ReactionSystems) {
+		rs := file.ReactionSystems[name]
+		ix.addReactionSystem(name, &rs)
+	}
+	return ix
+}
+
+func (ix *scopedNameIndex) addModel(prefix string, m *Model) {
+	for v := range m.Variables {
+		ix.declared[prefix+"."+v] = true
+	}
+	ix.addSubsystems(prefix, m.Subsystems)
+}
+
+func (ix *scopedNameIndex) addReactionSystem(prefix string, rs *ReactionSystem) {
+	for v := range rs.Species {
+		ix.declared[prefix+"."+v] = true
+	}
+	for v := range rs.Parameters {
+		ix.declared[prefix+"."+v] = true
+	}
+	ix.addSubsystems(prefix, rs.Subsystems)
+}
+
+// addSubsystems indexes inline subsystems. One still held as a `{"ref": …}` is
+// unresolved (validateSubsystemRefs reports it) and declares nothing here.
+func (ix *scopedNameIndex) addSubsystems(prefix string, subsystems map[string]any) {
+	for name, raw := range subsystems {
+		if _, _, isRef := extractRefWithBindings(raw); isRef {
+			continue
+		}
+		if raw, ok := raw.(map[string]any); ok {
+			if _, isRS := raw["reactions"]; isRS {
+				if rs, ok := decodeSubsystemAs[ReactionSystem](raw); ok {
+					ix.addReactionSystem(prefix+"."+name, &rs)
+				}
+				continue
+			}
+		}
+		if m, ok := decodeSubsystemAs[Model](raw); ok {
+			ix.addModel(prefix+"."+name, &m)
+		}
+	}
+}
+
+// resolve returns the full scoped name ref denotes when read inside the
+// component whose scoped name is prefix. A bare name is the component's own;
+// a dotted name is first tried relative to the component's own subsystems
+// and otherwise read as a top-level path. A name that resolves to nothing
+// comes back in the spelling of its last attempt, which names no declared
+// variable. A nil index resolves bare names only, leaving dotted ones as
+// written.
+func (ix *scopedNameIndex) resolve(prefix, ref string) string {
+	if !strings.Contains(ref, ".") {
+		return prefix + "." + ref
+	}
+	if ix != nil && ix.declared[prefix+"."+ref] {
+		return prefix + "." + ref
+	}
+	return ref
+}
+
+// scopedNameIndex returns the document's index, built on first use.
+func (s *structuralScan) scopedNameIndex() *scopedNameIndex {
+	if s.scopedNames == nil {
+		s.scopedNames = newScopedNameIndex(s.file)
+	}
+	return s.scopedNames
 }

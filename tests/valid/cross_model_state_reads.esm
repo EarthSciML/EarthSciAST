@@ -1,0 +1,41 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "CrossModelStateReads",
+    "description": "Two models whose equations read each other's STATES (dx/dt = 0.1*ModelB.y, dy/dt = 0.1*ModelA.x). States are known whenever the right-hand side is evaluated, so this is not a circular_dependency (esm-spec §4.9.7). Before esm-spec §4.9.7 this document was the invalid circular_coupling.esm.",
+    "authors": ["Test"],
+    "created": "2026-11-06T00:00:00Z"
+  },
+  "models": {
+    "ModelA": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [0.1, "ModelB.y"] }
+        }
+      ]
+    },
+    "ModelB": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 2.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["y"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [-0.1, "ModelA.x"] }
+        }
+      ]
+    }
+  }
+}

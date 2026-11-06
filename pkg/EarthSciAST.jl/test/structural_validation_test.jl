@@ -1126,4 +1126,80 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         end
     end
 
+    # esm-spec §4.9.7: the graph is over OBSERVED unknowns by full scoped name,
+    # not over models. A cycle crossing a model or subsystem boundary is
+    # `circular_dependency`; reads of states, parameters and undefined unknowns
+    # are never edges, so models that read each other need not cycle.
+    @testset "circular_dependency is a cycle among observeds" begin
+        _cycle(r) = [e for e in r.structural_errors if e.error_type == "circular_dependency"]
+        for (name, want) in (
+                "circular_coupling.esm" => ["ModelA.a", "ModelB.b", "ModelA.a"],
+                "circular_coupling_subsystem.esm" => ["ModelN.Sub.c", "ModelN.a", "ModelN.Sub.c"],
+            )
+            p = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", name)
+            _require_fixture(p) || continue
+            errs = _cycle(EarthSciAST.validate(EarthSciAST.load_path(p)))
+            @test length(errs) == 1
+            @test errs[1].path == "/models"
+            @test errs[1].details["cycle"] == want
+        end
+        for name in (
+                "cross_model_state_reads.esm",
+                "cross_model_mixing_observed_state_cycle.esm",
+                "cross_model_observed_reads_no_loop.esm",
+            )
+            p = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", name)
+            _require_fixture(p) || continue
+            @test isempty(_cycle(EarthSciAST.validate(EarthSciAST.load_path(p))))
+        end
+
+        # A derivative of an EXPRESSION credits no variable as a state
+        # (esm-spec §6.3.1), so `D(a + b) ~ 3` leaves `a` the observed its
+        # `a ~ 0.1 * N.c` makes it, and the cross-model loop through it is found.
+        doc = """
+        {"esm": "1.0.0", "metadata": {"name": "DOfSum", "authors": ["Test"]},
+         "models": {
+          "M": {"variables": {"a": {"type": "unknown"}, "b": {"type": "unknown"}},
+                "equations": [
+                  {"lhs": {"op": "D", "args": [{"op": "+", "args": ["a", "b"]}], "wrt": "t"}, "rhs": 3.0},
+                  {"lhs": "a", "rhs": {"op": "*", "args": [0.1, "N.c"]}}]},
+          "N": {"variables": {"c": {"type": "unknown"}},
+                "equations": [{"lhs": "c", "rhs": {"op": "*", "args": [0.1, "M.a"]}}]}}}
+        """
+        errs = _cycle(EarthSciAST.validate(EarthSciAST.load_string(doc)))
+        @test length(errs) == 1
+        @test errs[1].details["cycle"] == ["M.a", "N.c", "M.a"]
+
+        # An unknown no equation defines (here supplied by nothing at all, as a
+        # `variable_map` alias would supply it) is not a node: no cycle.
+        doc2 = """
+        {"esm": "1.0.0", "metadata": {"name": "NoDef", "authors": ["Test"]},
+         "models": {
+          "M": {"variables": {"a": {"type": "unknown"}, "u": {"type": "unknown"}},
+                "equations": [{"lhs": "a", "rhs": {"op": "*", "args": [0.1, "N.c"]}}]},
+          "N": {"variables": {"c": {"type": "unknown"}},
+                "equations": [{"lhs": "c", "rhs": {"op": "*", "args": [0.1, "M.u"]}}]}}}
+        """
+        @test isempty(_cycle(EarthSciAST.validate(EarthSciAST.load_string(doc2))))
+
+        # A dotted reference resolves relative to the reading scope's own
+        # subsystems before the top level (esm-spec §4.8.4 precedence): `N.a`
+        # reads `Sub.Inner.v`, which is `N.Sub.Inner.v`. Inside `N.Sub`,
+        # `D(Inner.v)` makes that variable a state, so the loop is gone.
+        nested(sub_eqs) = """
+        {"esm": "1.0.0", "metadata": {"name": "Nested", "authors": ["Test"]},
+         "models": {
+          "N": {"variables": {"a": {"type": "unknown"}},
+                "equations": [{"lhs": "a", "rhs": {"op": "*", "args": [0.1, "Sub.Inner.v"]}}],
+                "subsystems": {"Sub": {"variables": {}, "equations": [$sub_eqs],
+                  "subsystems": {"Inner": {"variables": {"v": {"type": "unknown"}},
+                    "equations": [{"lhs": "v", "rhs": {"op": "*", "args": [0.1, "N.a"]}}]}}}}}}}
+        """
+        errs = _cycle(EarthSciAST.validate(EarthSciAST.load_string(nested(""))))
+        @test length(errs) == 1
+        @test errs[1].details["cycle"] == ["N.Sub.Inner.v", "N.a", "N.Sub.Inner.v"]
+        d_inner = """{"lhs": {"op": "D", "args": ["Inner.v"], "wrt": "t"}, "rhs": 1.0}"""
+        @test isempty(_cycle(EarthSciAST.validate(EarthSciAST.load_string(nested(d_inner)))))
+    end
+
 end

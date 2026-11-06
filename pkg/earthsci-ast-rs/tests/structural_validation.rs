@@ -653,62 +653,180 @@ fn test_event_error_conditions() {
     );
 }
 
-/// Test circular dependency detection.
-///
-/// Accepts either outcome: `load_string()` may reject the fixture at parse time
-/// (the current behavior after cross-language conformance tightening in
-/// gt-sac), or `load_string()` may succeed and the `validate()` pass must find a
-/// `CircularDependency` structural error. Both paths are valid realizations
-/// of the spec §3.2 rule; the stricter parse-time rejection matches Julia
-/// and Python.
+/// The `circular_dependency` records `validate()` reports for a typed document.
+fn circular_dependency_errors(esm_file: &EsmFile) -> Vec<StructuralError> {
+    validate(esm_file)
+        .structural_errors
+        .into_iter()
+        .filter(|err| matches!(err.code, StructuralErrorCode::CircularDependency))
+        .collect()
+}
+
+/// The `circular_dependency` graph is over OBSERVEDS, not whole models
+/// (esm-spec §4.9.7): reads of another model's states order nothing, and two
+/// models whose observeds read each other in both directions are fine when no
+/// chain of definitions closes. Each document loads, and `validate()` reports
+/// no cycle.
+#[test]
+fn test_observed_graph_without_a_cycle_is_not_a_circular_dependency() {
+    for (name, fixture) in [
+        (
+            "cross_model_state_reads",
+            include_str!("../../../tests/valid/cross_model_state_reads.esm"),
+        ),
+        (
+            "cross_model_mixing_observed_state_cycle",
+            include_str!("../../../tests/valid/cross_model_mixing_observed_state_cycle.esm"),
+        ),
+        (
+            "cross_model_observed_reads_no_loop",
+            include_str!("../../../tests/valid/cross_model_observed_reads_no_loop.esm"),
+        ),
+    ] {
+        let esm_file = load_string(fixture)
+            .unwrap_or_else(|e| panic!("{name} must load (no observed chain closes): {e}"));
+        let found = circular_dependency_errors(&esm_file);
+        assert!(
+            found.is_empty(),
+            "{name}: no circular_dependency expected: {found:?}"
+        );
+    }
+}
+
+/// A cycle among observeds that crosses a scope boundary — two top-level
+/// models, or a model and its subsystem — is refused at load, and `validate()`
+/// on the typed document reports exactly one `circular_dependency` at `/models`
+/// whose `details` is the pinned cycle (esm-spec §4.9.7).
 #[test]
 fn test_circular_dependency_detection() {
-    let fixture = include_str!("../../../tests/invalid/circular_coupling.esm");
+    for (name, fixture, cycle) in [
+        (
+            "circular_coupling",
+            include_str!("../../../tests/invalid/circular_coupling.esm"),
+            serde_json::json!(["ModelA.a", "ModelB.b", "ModelA.a"]),
+        ),
+        (
+            "circular_coupling_subsystem",
+            include_str!("../../../tests/invalid/circular_coupling_subsystem.esm"),
+            serde_json::json!(["ModelN.Sub.c", "ModelN.a", "ModelN.Sub.c"]),
+        ),
+    ] {
+        let msg = load_string(fixture)
+            .err()
+            .unwrap_or_else(|| panic!("{name} must be refused at load"))
+            .to_string();
+        assert!(
+            msg.contains("cycle") && msg.contains(cycle[0].as_str().unwrap()),
+            "{name}: the load refusal must name the cycle, got: {msg}"
+        );
 
-    match load_string(fixture) {
-        Ok(esm_file) => {
-            let validation_result = validate(&esm_file);
-            assert!(
-                validation_result.has_errors(),
-                "Expected circular coupling to have validation errors"
-            );
-
-            let has_circular_dependency_error = validation_result
+        // The load gate refuses it, so read the typed document directly.
+        let esm_file: EsmFile = serde_json::from_str(fixture).expect("fixture types");
+        let found = circular_dependency_errors(&esm_file);
+        assert_eq!(found.len(), 1, "{name}: one circular_dependency: {found:?}");
+        assert_eq!(found[0].path, "/models", "{name}");
+        assert_eq!(
+            found[0].details,
+            serde_json::json!({ "cycle": cycle }),
+            "{name}"
+        );
+        assert!(
+            !validate(&esm_file)
                 .structural_errors
-                .clone()
                 .iter()
-                .any(|err| matches!(err.code, StructuralErrorCode::CircularDependency));
-            assert!(
-                has_circular_dependency_error,
-                "Expected CircularDependency error"
-            );
-
-            let errors = validation_result.structural_errors.clone();
-            let circular_error = errors
-                .iter()
-                .find(|err| matches!(err.code, StructuralErrorCode::CircularDependency))
-                .expect("CircularDependency error should exist");
-
-            assert!(
-                circular_error
-                    .message
-                    .contains("Circular dependency detected")
-            );
-            assert!(circular_error.message.contains("ModelA"));
-            assert!(circular_error.message.contains("ModelB"));
-        }
-        Err(e) => {
-            let msg = e.to_string();
-            assert!(
-                msg.contains("cycle") || msg.contains("circular"),
-                "Expected load_string() failure to mention a cycle, got: {msg}"
-            );
-            assert!(
-                msg.contains("ModelA") && msg.contains("ModelB"),
-                "Expected load_string() failure to name both models, got: {msg}"
-            );
-        }
+                .any(|err| matches!(err.code, StructuralErrorCode::ObservedCycle)),
+            "{name}: a cross-scope cycle is not an observed_cycle"
+        );
     }
+}
+
+/// `D(a + b) ~ …` differentiates an expression, which credits no variable
+/// (esm-spec §6.3.1), so it does not make `ModelA.a` or `ModelA.b` a state for
+/// this check: the observeds `a` and `ModelB.c` still read each other.
+#[test]
+fn test_derivative_of_an_expression_does_not_make_states() {
+    let json = r#"{
+      "esm": "1.0.0",
+      "metadata": {"name": "DerivOfSum"},
+      "models": {
+        "ModelA": {
+          "variables": {
+            "a": {"type": "unknown", "units": "1"},
+            "b": {"type": "unknown", "units": "1"}
+          },
+          "equations": [
+            {"lhs": "a", "rhs": "ModelB.c"},
+            {"lhs": {"op": "D", "args": [{"op": "+", "args": ["a", "b"]}], "wrt": "t"}, "rhs": 3.0}
+          ]
+        },
+        "ModelB": {
+          "variables": {"c": {"type": "unknown", "units": "1"}},
+          "equations": [
+            {"lhs": "c", "rhs": "ModelA.a"},
+            {"lhs": {"op": "D", "args": [{"op": "+", "args": ["ModelA.a", "ModelA.b"]}], "wrt": "t"}, "rhs": 0.0}
+          ]
+        }
+      }
+    }"#;
+    let esm_file: EsmFile = serde_json::from_str(json).expect("document types");
+    let found = circular_dependency_errors(&esm_file);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(
+        found[0].details,
+        serde_json::json!({ "cycle": ["ModelA.a", "ModelB.c", "ModelA.a"] })
+    );
+}
+
+/// A dotted reference resolves relative to the reading node's own subsystems
+/// before it is read as a top-level path (esm-spec §4.9.7, the §4.8.4
+/// precedence), on a `D(·, t)` left-hand side too. Inside `N.Sub`, `w ~ Inner.v`
+/// reads `N.Sub.Inner.v`, which closes `N.Sub.Inner.v → N.a → N.Sub.w`; adding
+/// `D(Inner.v)` to `N.Sub` makes `N.Sub.Inner.v` a state, and the cycle is gone.
+#[test]
+fn test_dotted_refs_resolve_relative_to_own_subsystems() {
+    let doc = |sub_equations: &str| {
+        format!(
+            r#"{{
+      "esm": "1.0.0",
+      "metadata": {{"name": "RelativeRefs"}},
+      "models": {{
+        "N": {{
+          "variables": {{"a": {{"type": "unknown", "units": "1"}}}},
+          "equations": [{{"lhs": "a", "rhs": "N.Sub.w"}}],
+          "subsystems": {{
+            "Sub": {{
+              "variables": {{"w": {{"type": "unknown", "units": "1"}}}},
+              "equations": [{sub_equations}],
+              "subsystems": {{
+                "Inner": {{
+                  "variables": {{"v": {{"type": "unknown", "units": "1"}}}},
+                  "equations": [{{"lhs": "v", "rhs": "N.a"}}]
+                }}
+              }}
+            }}
+          }}
+        }}
+      }}
+    }}"#
+        )
+    };
+    let read = r#"{"lhs": "w", "rhs": "Inner.v"}"#;
+    let cyclic: EsmFile = serde_json::from_str(&doc(read)).expect("document types");
+    let found = circular_dependency_errors(&cyclic);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(
+        found[0].details,
+        serde_json::json!({ "cycle": ["N.Sub.Inner.v", "N.a", "N.Sub.w", "N.Sub.Inner.v"] })
+    );
+
+    let with_state =
+        format!(r#"{read}, {{"lhs": {{"op": "D", "args": ["Inner.v"], "wrt": "t"}}, "rhs": 0.0}}"#);
+    let acyclic: EsmFile = serde_json::from_str(&doc(&with_state)).expect("document types");
+    let found = circular_dependency_errors(&acyclic);
+    assert!(
+        found.is_empty(),
+        "D(Inner.v) makes N.Sub.Inner.v a state: {found:?}"
+    );
 }
 
 /// Test that valid cross-model references (non-circular) pass validation

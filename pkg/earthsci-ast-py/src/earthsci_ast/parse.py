@@ -2958,6 +2958,8 @@ def _resolve_toplevel_mount(
 # and the other _check_* passes) lives in structural_checks.py.
 # ---------------------------------------------------------------------------
 from .structural_checks import (  # noqa: E402
+    _has_unmounted_refs,
+    _refuse_circular_dependency,
     _validate_structural,  # used by load(); re-exported for compatibility
 )
 
@@ -3415,6 +3417,11 @@ def _load_data(
     )
     # The mounts have merged; the merge bookkeeping does not outlive the load.
     esm_file.data_sources = dict(esm_file.data_sources)
+    # esm-spec §4.9.7 over the RESOLVED tree. The structural pass above ran on
+    # the authored dict, where a `{"ref"}` mount is not yet a model node, so a
+    # cycle through a mounted model or subsystem is only visible now.
+    if _has_unmounted_refs(data):
+        _refuse_circular_dependency(esm_file)
 
     # Lower `enum` op nodes to `const` integers using the file's `enums` block
     # (esm-spec §9.3). Runs after subsystem resolution so every expression

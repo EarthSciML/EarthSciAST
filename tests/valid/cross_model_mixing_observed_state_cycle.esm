@@ -1,0 +1,67 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "CrossModelMixingObservedStateCycle",
+    "description": "The shape of a boundary-layer mixing term written per component: Chem's state equation reads Mix's observeds (f, qbar) and parameter (tau), and Mix's observed qsum reads Chem's state q. The model graph closes only through a STATE read (Mix.qsum -> Chem.q), which imposes no evaluation order: evaluate Mix's observeds from the current q, then Chem's derivative. Not a circular_dependency (esm-spec §4.9.7).",
+    "authors": ["Test"],
+    "created": "2026-11-06T00:00:00Z"
+  },
+  "models": {
+    "Chem": {
+      "variables": {
+        "q": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["q"], "wrt": "t" },
+          "rhs": {
+            "op": "/",
+            "args": [
+              { "op": "*", "args": ["Mix.f", { "op": "-", "args": ["Mix.qbar", "q"] }] },
+              "Mix.tau"
+            ]
+          }
+        }
+      ]
+    },
+    "Mix": {
+      "variables": {
+        "tau": {
+          "type": "parameter",
+          "units": "s",
+          "default": 3600.0
+        },
+        "f": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "qsum": {
+          "type": "unknown",
+          "units": "mol/mol"
+        },
+        "qbar": {
+          "type": "unknown",
+          "units": "mol/mol"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "f",
+          "rhs": 0.5
+        },
+        {
+          "lhs": "qsum",
+          "rhs": { "op": "*", "args": [2.0, "Chem.q"] }
+        },
+        {
+          "lhs": "qbar",
+          "rhs": { "op": "/", "args": ["qsum", 2.0] }
+        }
+      ]
+    }
+  }
+}

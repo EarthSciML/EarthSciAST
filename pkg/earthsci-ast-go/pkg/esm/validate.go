@@ -460,7 +460,10 @@ type structuralScan struct {
 	// being walked, recorded in the `equation_index` detail of the findings that
 	// carry one (invalid_broadcast_fn). It is 0 outside an equation walk.
 	eqIndex int
-	errors  []StructuralError
+	// scopedNames resolves names read inside a component to full scoped names
+	// (see scopedNameIndex); built on first use.
+	scopedNames *scopedNameIndex
+	errors      []StructuralError
 }
 
 // undefinedNameCode is the code for an undeclared bare name in the current
@@ -2734,91 +2737,183 @@ func (s *structuralScan) flagRefSubsystems(subsystems map[string]any, pathPrefix
 	}
 }
 
-// validateCircularReferences reports a cycle in the cross-model reference graph.
+// validateCircularReferences reports ONE cycle among observed unknowns that
+// crosses a scope boundary (esm-spec §4.9.7).
 //
-// A model DEPENDS on another when one of its equations reads a scoped reference
-// into it (`ModelA.x ~ … ModelB.y …`). Two models that read each other cannot be
-// ordered — neither can be evaluated first — so the composition is unrealizable
-// (tests/invalid/circular_coupling.esm). Mirrors TS
-// validate/coupling-checks.ts `validateCircularReferences`.
+// It is §4.9.6's observed graph built over the whole document. The nodes are the
+// observed unknowns (§6.3.1) of every model, top-level and subsystems at every
+// depth, by full scoped name (`ModelA.a`, `ModelN.Sub.c`). `V → W` when `W`
+// occurs free in `V`'s defining RHS — the walk observedDefinitionReads shares
+// with `observed_cycle` — and resolves to a node by the reference-integrity
+// precedence (scopedNameIndex): `V`'s own (sub)model's names, then a path
+// relative to its own subsystems, then a top-level path (§4.6). Only
+// an observed is computed during an evaluation, so only a read of one orders
+// anything: states, parameters, reaction-system species, algebraic unknowns,
+// unknowns with no defining equation (a `variable_map` alias target among
+// them) and unresolved names are not nodes. A two-model state-read loop
+// (tests/valid/cross_model_state_reads.esm) and two models that read each
+// other's observeds without any chain of definitions closing
+// (tests/valid/cross_model_observed_reads_no_loop.esm) are therefore valid.
+//
+// A cycle whose nodes all lie in one scope is that scope's `observed_cycle`,
+// reported elsewhere, so it is skipped. The traversal is pinned: roots and
+// successors in lexicographic order of scoped name, the first back edge
+// `V → W` closing the cycle `W … V W` along the search path. A dependency
+// cycle is carried by no single model, so the pointer is the `/models`
+// container (§7.1.2).
+//
+// The check runs over the RESOLVED document. A subsystem still held as a
+// `{"ref": …}` here has already been reported by validateSubsystemRefs
+// (`unresolved_subsystem_ref`); its observeds are unknown, so it contributes
+// no nodes and a cycle through it cannot be seen until it is resolved.
 func (s *structuralScan) validateCircularReferences() {
 	if s.file == nil || len(s.file.Models) == 0 {
 		return
 	}
-	deps := map[string]map[string]bool{}
-	for _, modelName := range sortedKeys(s.file.Models) {
-		model := s.file.Models[modelName]
-		d := map[string]bool{}
-		for _, eq := range model.Equations {
-			for name := range FreeVariables(eq.LHS) {
-				addModelDep(d, name, modelName, s.file)
-			}
-			for name := range FreeVariables(eq.RHS) {
-				addModelDep(d, name, modelName, s.file)
-			}
-		}
-		deps[modelName] = d
+	graph := crossScopeObservedGraph(s.file, s.scopedNameIndex())
+	cycle := firstCrossScopeCycle(graph)
+	if len(cycle) == 0 {
+		return
 	}
+	s.addErr(StructuralError{
+		Path: "/models",
+		Code: ErrorCircularDependency,
+		Message: fmt.Sprintf("Circular dependency among observeds: %s. Each is defined "+
+			"by an equation whose right-hand side reads the next, across a model or "+
+			"subsystem boundary, so no evaluation order computes them (esm-spec §4.9.7).",
+			strings.Join(cycle, " → ")),
+		Details: map[string]any{"cycle": cycle},
+	})
+}
 
-	visited := map[string]bool{}
-	inStack := map[string]bool{}
-	reported := map[string]bool{}
+// crossScopeObservedGraph builds the §4.9.7 graph: scoped observed name → its
+// sorted successors.
+func crossScopeObservedGraph(file *ESMFile, ix *scopedNameIndex) map[string][]string {
+	type scope struct {
+		prefix string
+		reads  map[string]map[string]bool
+	}
+	var scopes []scope
+	// Unknowns an equation puts under `D(·, t)` through a dotted name: ODE
+	// states of the component that name resolves into (resolved from the
+	// differentiating equation's own scope, as any read is), whichever
+	// component's equation differentiates them. A bare derivative target is
+	// already excluded by its own model's classification
+	// (observedDefinitionReads).
+	externalStates := map[string]bool{}
 
-	var dfs func(node string, path []string)
-	dfs = func(node string, path []string) {
-		if inStack[node] {
-			// Close the cycle at its first occurrence in the current path.
-			start := 0
-			for i, p := range path {
-				if p == node {
-					start = i
-					break
+	var walk func(prefix string, m *Model)
+	walk = func(prefix string, m *Model) {
+		scopes = append(scopes, scope{prefix, observedDefinitionReads(m, file, prefix, ix)})
+		for _, eq := range m.Equations {
+			for name := range derivativeTargets(eq.LHS) {
+				if strings.Contains(name, ".") {
+					externalStates[ix.resolve(prefix, name)] = true
 				}
 			}
-			cycle := append(append([]string{}, path[start:]...), node)
-			key := strings.Join(cycle, "→")
-			if reported[key] {
-				return
+		}
+		for _, subName := range sortedKeys(m.Subsystems) {
+			raw := m.Subsystems[subName]
+			if _, _, isRef := extractRefWithBindings(raw); isRef {
+				continue // reported as unresolved_subsystem_ref; see validateCircularReferences
 			}
-			reported[key] = true
-			s.addErr(StructuralError{
-				// A dependency cycle is carried by NO single model — it is a
-				// property of the model set — so the pointer is the `/models`
-				// container, not any one participant (§7.1.2; circular_coupling.esm
-				// pins `/models`, matching TypeScript).
-				Path:    "/models",
-				Code:    ErrorCircularDependency,
-				Message: fmt.Sprintf("Circular coupling detected: %s", strings.Join(cycle, " → ")),
-				Details: map[string]any{"cycle": cycle},
-			})
-			return
+			if sub, ok := decodeSubsystemAs[Model](raw); ok {
+				walk(prefix+"."+subName, &sub)
+			}
 		}
-		if visited[node] {
-			return
+	}
+	for _, name := range sortedKeys(file.Models) {
+		m := file.Models[name]
+		walk(name, &m)
+	}
+
+	nodes := map[string]bool{}
+	for _, sc := range scopes {
+		for v := range sc.reads {
+			if full := sc.prefix + "." + v; !externalStates[full] {
+				nodes[full] = true
+			}
 		}
+	}
+	graph := make(map[string][]string, len(nodes))
+	for _, sc := range scopes {
+		for v, refs := range sc.reads {
+			from := sc.prefix + "." + v
+			if !nodes[from] {
+				continue
+			}
+			successors := map[string]bool{}
+			for to := range refs {
+				if nodes[to] {
+					successors[to] = true
+				}
+			}
+			graph[from] = sortedKeysOfSet(successors)
+		}
+	}
+	return graph
+}
+
+// firstCrossScopeCycle runs the pinned §4.9.7 search: depth-first, roots and
+// successors in lexicographic order. The first back edge `V → W` whose cycle
+// `W … V W` spans more than one scope is the answer; a back edge whose cycle
+// lies in one scope is that scope's `observed_cycle` and is passed over.
+func firstCrossScopeCycle(graph map[string][]string) []string {
+	visited := map[string]bool{}
+	inStack := map[string]bool{}
+	var cycle []string
+
+	var dfs func(node string, path []string) bool
+	dfs = func(node string, path []string) bool {
 		visited[node] = true
 		inStack[node] = true
 		path = append(path, node)
-		for _, dep := range sortedKeysOfSet(deps[node]) {
-			dfs(dep, path)
+		for _, succ := range graph[node] {
+			if inStack[succ] {
+				start := 0
+				for i, p := range path {
+					if p == succ {
+						start = i
+						break
+					}
+				}
+				candidate := append(append([]string{}, path[start:]...), succ)
+				if spansScopes(candidate) {
+					cycle = candidate
+					return true
+				}
+				continue
+			}
+			if !visited[succ] && dfs(succ, path) {
+				return true
+			}
 		}
 		inStack[node] = false
+		return false
 	}
-	for _, modelName := range sortedKeys(s.file.Models) {
-		dfs(modelName, nil)
+	for _, root := range sortedKeys(graph) {
+		if !visited[root] && dfs(root, nil) {
+			return cycle
+		}
 	}
+	return nil
 }
 
-// addModelDep records a dependency on the model a scoped reference names, if it
-// names one other than the referring model itself.
-func addModelDep(deps map[string]bool, ref, self string, file *ESMFile) {
-	root, _, dotted := strings.Cut(ref, ".")
-	if !dotted || root == self {
-		return
+// spansScopes reports whether the scoped names lie in more than one model or
+// subsystem (the scope is a name with its last segment removed).
+func spansScopes(names []string) bool {
+	scopeOf := func(n string) string {
+		if i := strings.LastIndex(n, "."); i >= 0 {
+			return n[:i]
+		}
+		return ""
 	}
-	if _, isModel := file.Models[root]; isModel {
-		deps[root] = true
+	for _, n := range names[1:] {
+		if scopeOf(n) != scopeOf(names[0]) {
+			return true
+		}
 	}
+	return false
 }
 
 // sortedKeysOfSet returns the members of a string set in deterministic order.

@@ -1264,17 +1264,17 @@ fn check_coupling_references(obj: &serde_json::Map<String, Value>, errors: &mut 
     }
 }
 
-/// Detect cycles in model-to-model dependency edges by delegating WHOLE-RULE to
-/// the typed `crate::structural::check_circular_dependencies_in_models` — the
-/// SAME edge-building + shared-DFS the typed `validate()` pass runs — instead of
-/// re-deriving the edge set over raw JSON (deferred knot #2, completing the
-/// prior wave that already delegated only the cycle SEARCH).
+/// Detect a cross-scope cycle among observeds (esm-spec §4.9.7) by delegating
+/// WHOLE-RULE to the typed `crate::structural::check_circular_dependencies_in_models`
+/// — the SAME graph and traversal the typed `validate()` pass runs — instead of
+/// re-deriving it over raw JSON.
 ///
 /// The load-time gate needs only the binary reject decision; the pinned
 /// `(circular_dependency, /models)` record is recovered from `validate()` in the
 /// conformance runner, so this is verdict-invariant: no currently-loading
 /// document carries a model cycle (else `validate()` would already class it
-/// invalid), and the one rejected fixture (`circular_coupling.esm`) is caught
+/// invalid), and the rejected fixtures (`circular_coupling.esm`,
+/// `circular_coupling_subsystem.esm`) are caught
 /// identically. Deserializing to `EsmFile` here is safe — schema validation has
 /// already passed at this point; a document that fails to type (e.g. an
 /// unlowered template node) carries no model cycle in the corpus, so skipping it
@@ -1289,14 +1289,14 @@ fn check_coupling_references(obj: &serde_json::Map<String, Value>, errors: &mut 
 /// expanded AST.
 fn check_circular_model_dependencies_typed(json_value: &Value, errors: &mut Vec<String>) {
     use serde::Deserialize as _;
-    // An edge joins two DIFFERENT models (a model's reference into itself or
-    // its own subsystems is not one), so with fewer than two there is no
-    // cycle to find, and no reason to deserialize the whole document for it.
-    let n_models = json_value
-        .get("models")
-        .and_then(|m| m.as_object())
-        .map_or(0, |m| m.len());
-    if n_models < 2 {
+    // The cycle must cross a scope boundary (esm-spec §4.9.7): two top-level
+    // models, or a model and one of its subsystems. A document with neither
+    // has no such cycle to find, and no reason to deserialize the whole
+    // document for it.
+    let Some(models) = json_value.get("models").and_then(|m| m.as_object()) else {
+        return;
+    };
+    if models.len() < 2 && !models.values().any(|m| m.get("subsystems").is_some()) {
         return;
     }
     let Ok(esm_file) = EsmFile::deserialize(json_value) else {

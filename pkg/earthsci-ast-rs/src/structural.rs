@@ -2765,14 +2765,23 @@ fn check_recurrence_equation(
 /// `x ~ x + 1` and a bare `s ~ s + 1`, which have no axis to fold along and can
 /// never be recurrences, and drop the cycle error they must keep getting.
 fn recurrence_candidate_vars(model: &crate::Model) -> HashSet<String> {
-    let array_shaped: HashSet<&str> = model
-        .variables
+    recurrence_candidate_vars_of_parts(&model.variables, &model.equations)
+}
+
+/// [`recurrence_candidate_vars`] over a model node's raw parts, for the
+/// document-wide `circular_dependency` graph, which holds a subsystem as its
+/// `variables` and `equations` rather than as a whole [`crate::Model`].
+fn recurrence_candidate_vars_of_parts(
+    variables: &indexmap::IndexMap<String, crate::ModelVariable>,
+    equations: &[crate::Equation],
+) -> HashSet<String> {
+    let array_shaped: HashSet<&str> = variables
         .iter()
         .filter(|(_, v)| v.shape.as_ref().is_some_and(|s| !s.is_empty()))
         .map(|(n, _)| n.as_str())
         .collect();
     let mut out = HashSet::new();
-    for equation in &model.equations {
+    for equation in equations {
         let Some((var, _)) = recurrence_lhs_target(&equation.lhs) else {
             continue;
         };
@@ -5006,184 +5015,309 @@ fn validate_event_ref_expression<D: DeclaredLookup + ?Sized>(
     }
 }
 
-/// Check for circular dependencies between models
+// ---------------------------------------------------------------------------
+// Cross-scope observed dependency cycles — esm-spec §4.9.7
+// ---------------------------------------------------------------------------
+
+/// One model node of the document — a top-level model or a subsystem at any
+/// depth — as the `circular_dependency` graph needs it: its §6.3.1
+/// classification (the observeds and their defining right-hand sides), its
+/// §4.3.1.1 recurrence candidates, the names it declares, and the dotted names
+/// its equations put under `D(·, t)`.
+struct ObservedScope {
+    /// The node's full scoped name: `ModelA`, `ModelN.Sub`.
+    path: String,
+    class: crate::classification::Classification,
+    candidates: HashSet<String>,
+    /// Every variable the node declares, whatever its kind: a reference
+    /// resolves by DECLARATION (a state found first shadows an observed found
+    /// later), and only then asks whether its target is an observed.
+    declared: HashSet<String>,
+    /// The dotted names on a `D(·, t)` left-hand side, read the §6.3.1 way
+    /// ([`crate::classification::lhs_form_ref`]: `D(a + b)` credits no
+    /// variable). A bare one is this node's own state, which `class` counts.
+    differentiated_refs: Vec<String>,
+}
+
+impl ObservedScope {
+    fn new(
+        path: String,
+        variables: &indexmap::IndexMap<String, crate::ModelVariable>,
+        equations: &[crate::Equation],
+    ) -> Self {
+        let differentiated_refs = equations
+            .iter()
+            .filter_map(|eq| match crate::classification::lhs_form_ref(&eq.lhs) {
+                crate::classification::LhsFormRef::Derivative(name) if name.contains('.') => {
+                    Some(name.to_string())
+                }
+                _ => None,
+            })
+            .collect();
+        ObservedScope {
+            path,
+            class: crate::classification::Classification::from_parts(variables, equations),
+            candidates: recurrence_candidate_vars_of_parts(variables, equations),
+            declared: variables.keys().cloned().collect(),
+            differentiated_refs,
+        }
+    }
+}
+
+/// A node of the `circular_dependency` graph: the scope that declares the
+/// observed, and the observeds its defining RHS reads, by full scoped name.
+struct ObservedNode<'a> {
+    scope: &'a str,
+    successors: std::collections::BTreeSet<String>,
+}
+
+/// Every model node of `models`, top-level and subsystems at every depth.
+///
+/// A top-level model is read from its typed form. A subsystem is held as raw
+/// JSON (`Model::subsystems` is untyped because an entry may be an unresolved
+/// `{"ref": …}` mount), so its `variables` and `equations` are deserialized
+/// THROUGH a borrow of that JSON — no clone of the subtree, and nothing else of
+/// it is read. The loader resolves every `{"ref": …}` mount before a document
+/// reaches this check, so a ref still standing here can only come from a
+/// caller that built the `EsmFile` by hand without resolving it; such a mount
+/// declares nothing, so it contributes no observeds. An equation that does not
+/// type is skipped, exactly as
+/// [`crate::classification::Classification::from_json`] skips it.
+fn observed_scopes(models: &indexmap::IndexMap<String, crate::Model>) -> Vec<ObservedScope> {
+    fn subsystems(
+        prefix: &str,
+        entries: &mut dyn Iterator<Item = (&String, &serde_json::Value)>,
+        out: &mut Vec<ObservedScope>,
+    ) {
+        use serde::Deserialize as _;
+        for (name, value) in entries {
+            let path = format!("{prefix}.{name}");
+            let variables = value
+                .get("variables")
+                .and_then(|v| {
+                    indexmap::IndexMap::<String, crate::ModelVariable>::deserialize(v).ok()
+                })
+                .unwrap_or_default();
+            let equations: Vec<crate::Equation> = value
+                .get("equations")
+                .and_then(serde_json::Value::as_array)
+                .map(|eqs| {
+                    eqs.iter()
+                        .filter_map(|eq| crate::Equation::deserialize(eq).ok())
+                        .collect()
+                })
+                .unwrap_or_default();
+            out.push(ObservedScope::new(path.clone(), &variables, &equations));
+            if let Some(nested) = value.get("subsystems").and_then(|s| s.as_object()) {
+                subsystems(&path, &mut nested.iter(), out);
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    for (name, model) in models {
+        out.push(ObservedScope::new(
+            name.clone(),
+            &model.variables,
+            &model.equations,
+        ));
+        if let Some(subs) = &model.subsystems {
+            subsystems(name, &mut subs.iter(), &mut out);
+        }
+    }
+    out
+}
+
+/// The full scoped name a reference read from the model node `from` names,
+/// by the reference-integrity walk's precedence (esm-spec §4.8.4, "A scoped
+/// reference carries its target's units"; §4.9.7): `from`'s own declared
+/// names, then a dotted path relative to `from`'s own subsystems, then a
+/// top-level system path. `None` when no model node declares it (an
+/// unresolved reference, or one into a reaction system or a data loader,
+/// none of which declares an observed).
+fn resolve_observed_ref(
+    scopes: &HashMap<&str, &ObservedScope>,
+    from: &str,
+    name: &str,
+) -> Option<String> {
+    if scopes.get(from).is_some_and(|s| s.declared.contains(name)) {
+        return Some(format!("{from}.{name}"));
+    }
+    if !name.contains('.') {
+        return None;
+    }
+    [format!("{from}.{name}"), name.to_string()]
+        .into_iter()
+        .find(|full| {
+            full.rsplit_once('.').is_some_and(|(system, var)| {
+                scopes.get(system).is_some_and(|s| s.declared.contains(var))
+            })
+        })
+}
+
+/// Every name in `expr` that a reference may resolve through: the free bare
+/// symbols ([`collect_free_symbols`], the §4.9.6 walk, minus the binders
+/// [`collect_bound_symbols`] finds) and every dotted reference, descending
+/// every Expression child.
+fn referenced_names(expr: &crate::Expr) -> HashSet<String> {
+    fn dotted(expr: &crate::Expr, out: &mut HashSet<String>) {
+        match expr {
+            crate::Expr::Variable(name) if name.contains('.') => {
+                out.insert(name.clone());
+            }
+            crate::Expr::Operator(op) => op.for_each_child(&mut |c| dotted(c, out)),
+            _ => {}
+        }
+    }
+    let mut names = HashSet::new();
+    collect_free_symbols(expr, &mut names);
+    let mut bound = HashSet::new();
+    collect_bound_symbols(expr, &mut bound);
+    names.retain(|n| !bound.contains(n));
+    dotted(expr, &mut names);
+    names
+}
+
+/// The document-wide observed dependency graph of esm-spec §4.9.7, keyed by
+/// full scoped name: §4.9.6's graph with its edges extended across scope
+/// boundaries. Every reference resolves by [`resolve_observed_ref`]; one that
+/// resolves to anything but an observed (a state, a parameter, a species, an
+/// algebraic or an undefined unknown, an undeclared name) is no edge. An
+/// observed another node differentiates through a scoped name is a state, so
+/// it is no node. The recurrence self-edge is dropped for a candidate exactly
+/// as in [`observed_dependency_graph`].
+fn document_observed_graph(
+    scopes: &[ObservedScope],
+) -> std::collections::BTreeMap<String, ObservedNode<'_>> {
+    let by_path: HashMap<&str, &ObservedScope> =
+        scopes.iter().map(|s| (s.path.as_str(), s)).collect();
+    let states: HashSet<String> = scopes
+        .iter()
+        .flat_map(|s| {
+            s.differentiated_refs
+                .iter()
+                .filter_map(|r| resolve_observed_ref(&by_path, &s.path, r))
+        })
+        .collect();
+    let observed: HashSet<String> = scopes
+        .iter()
+        .flat_map(|s| {
+            s.class
+                .observed_definitions
+                .keys()
+                .map(move |v| format!("{}.{v}", s.path))
+        })
+        .filter(|n| !states.contains(n))
+        .collect();
+    let mut nodes = std::collections::BTreeMap::new();
+    for scope in scopes {
+        for (name, rhs) in &scope.class.observed_definitions {
+            let node = format!("{}.{name}", scope.path);
+            if !observed.contains(&node) {
+                continue;
+            }
+            let mut successors: std::collections::BTreeSet<String> = referenced_names(rhs)
+                .iter()
+                .filter_map(|r| resolve_observed_ref(&by_path, &scope.path, r))
+                .filter(|full| observed.contains(full))
+                .collect();
+            if scope.candidates.contains(name) {
+                successors.remove(&node);
+            }
+            nodes.insert(
+                node,
+                ObservedNode {
+                    scope: scope.path.as_str(),
+                    successors,
+                },
+            );
+        }
+    }
+    nodes
+}
+
+/// The first cycle of the pinned §4.9.7 traversal that crosses a scope
+/// boundary: a depth-first search with roots and successors in lexicographic
+/// order, where the first back edge `V → W` closes the cycle from `W` along the
+/// search path to `V` and back to `W`. A back edge whose cycle lies in one
+/// scope is `observed_cycle`'s (§4.9.6), so it is skipped and the search goes
+/// on. Iterative for the reason [`crate::classification::first_observed_cycle`]
+/// is: the depth is the length of the longest observed chain, which the
+/// document, not the schema, bounds.
+fn first_cross_scope_cycle(
+    graph: &std::collections::BTreeMap<String, ObservedNode<'_>>,
+) -> Option<Vec<String>> {
+    const ON_CHAIN: u8 = 1;
+    const FINISHED: u8 = 2;
+    let mut state: HashMap<&str, u8> = HashMap::new();
+    for root in graph.keys() {
+        if state.contains_key(root.as_str()) {
+            continue;
+        }
+        state.insert(root.as_str(), ON_CHAIN);
+        let mut chain: Vec<&str> = vec![root.as_str()];
+        let mut cursors = vec![graph[root].successors.iter()];
+        while let Some(&name) = chain.last() {
+            let Some(successor) = cursors.last_mut().and_then(Iterator::next) else {
+                state.insert(name, FINISHED);
+                chain.pop();
+                cursors.pop();
+                continue;
+            };
+            match state.get(successor.as_str()).copied() {
+                Some(ON_CHAIN) => {
+                    let start = chain
+                        .iter()
+                        .position(|c| *c == successor.as_str())
+                        .unwrap_or(0);
+                    let on_cycle = &chain[start..];
+                    let scope = graph[successor].scope;
+                    if on_cycle.iter().all(|n| graph[*n].scope == scope) {
+                        continue;
+                    }
+                    let mut cycle: Vec<String> =
+                        on_cycle.iter().map(|s| (*s).to_string()).collect();
+                    cycle.push(successor.clone());
+                    return Some(cycle);
+                }
+                Some(_) => {}
+                None => {
+                    state.insert(successor.as_str(), ON_CHAIN);
+                    chain.push(successor.as_str());
+                    cursors.push(graph[successor].successors.iter());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Reject a dependency cycle among observeds that crosses a scope boundary —
+/// two top-level models, or a model and one of its subsystems
+/// (`circular_dependency`, esm-spec §4.9.7).
+///
+/// Only an observed is computed during an evaluation, so only a read inside an
+/// observed's definition orders two computations: reading a state or a
+/// parameter never closes a loop, and neither does a model-level "M reads N
+/// and N reads M" whose variable-level chains do not close
+/// (`tests/valid/cross_model_observed_reads_no_loop.esm`). One cycle is
+/// reported per document, at `/models`, with `details.cycle` the scoped names
+/// on it and the entry node repeated.
 pub(crate) fn check_circular_dependencies_in_models(
     models: &indexmap::IndexMap<String, crate::Model>,
     errors: &mut Vec<StructuralError>,
 ) {
-    let mut dependencies: HashMap<String, HashSet<String>> = HashMap::new();
-
-    // Build dependency graph by analyzing scoped references in equations
-    for (model_name, model) in models {
-        let mut model_deps = HashSet::new();
-
-        for equation in &model.equations {
-            // Check RHS for scoped references
-            extract_model_dependencies(&equation.rhs, &mut model_deps, model_name, models);
-
-            // Check LHS for scoped references (though less common)
-            extract_model_dependencies(&equation.lhs, &mut model_deps, model_name, models);
-        }
-
-        // ...and the Expressions a VARIABLE still carries: a parameter
-        // `update`'s trigger / value / unit conversion (§5.4). An observed
-        // unknown's defining expression is an equation, walked above.
-        for variable in model.variables.values() {
-            variable.for_each_expression(&mut |expr| {
-                extract_model_dependencies(expr, &mut model_deps, model_name, models)
-            });
-        }
-
-        dependencies.insert(model_name.clone(), model_deps);
+    let scopes = observed_scopes(models);
+    let graph = document_observed_graph(&scopes);
+    if let Some(cycle) = first_cross_scope_cycle(&graph) {
+        errors.push(StructuralError {
+            path: "/models".to_string(),
+            code: StructuralErrorCode::CircularDependency,
+            message: format!(
+                "Circular dependency among observeds: {}",
+                cycle.join(" \u{2192} ")
+            ),
+            details: serde_json::json!({ "cycle": cycle }),
+        });
     }
-
-    // Detect cycles using DFS
-    let mut visited = HashSet::new();
-    let mut rec_stack = HashSet::new();
-
-    for model_name in models.keys() {
-        if !visited.contains(model_name)
-            && has_cycle_dfs(model_name, &dependencies, &mut visited, &mut rec_stack)
-        {
-            // Find the actual cycle for error reporting
-            let cycle = find_cycle(&dependencies, model_name);
-            errors.push(StructuralError {
-                path: "/models".to_string(),
-                code: StructuralErrorCode::CircularDependency,
-                message: format!(
-                    "Circular dependency detected in model dependencies: {}",
-                    cycle.join(" -> ")
-                ),
-                details: serde_json::json!({
-                    "cycle": cycle,
-                    "dependency_type": "model_references"
-                }),
-            });
-            break; // Report only the first cycle found
-        }
-    }
-}
-
-/// Extract model dependencies from an expression by finding scoped references
-fn extract_model_dependencies(
-    expr: &crate::Expr,
-    deps: &mut HashSet<String>,
-    self_name: &str,
-    models: &indexmap::IndexMap<String, crate::Model>,
-) {
-    match expr {
-        crate::Expr::Variable(var_name) => {
-            // Check if it's a scoped reference (e.g., "ModelA.x")
-            if let Some(dot_pos) = var_name.find('.') {
-                let model_name = &var_name[..dot_pos];
-                // A model reading into its OWN mounted subsystem
-                // (`EarthSystem.Atmosphere.temp` from inside `EarthSystem`) is
-                // NOT a dependency on itself — it is a reference DOWNWARD into
-                // its own contents. Counting it produced the self-edge
-                // `EarthSystem -> EarthSystem`, which the cycle detector then
-                // reported as a circular dependency, rejecting the valid
-                // scoped_refs_nested.esm. Mirrors Go `addModelDep`'s
-                // `root == self` guard.
-                if model_name == self_name {
-                    return;
-                }
-                // Only a real model can be depended ON: a dotted ref into a data
-                // loader or a reaction system is not a model edge.
-                if models.contains_key(model_name) {
-                    deps.insert(model_name.to_string());
-                }
-            }
-        }
-        crate::Expr::Operator(op_node) => {
-            // Walk every expression-bearing child (args plus the sidecar
-            // fields) so cross-model scoped refs hidden in aggregate bodies,
-            // filter predicates, integral bounds, etc. are picked up. Only
-            // dotted `System.var` refs matter here, so the node's bound index
-            // symbols (bare names) are naturally ignored.
-            op_node.for_each_child(&mut |arg| {
-                extract_model_dependencies(arg, deps, self_name, models)
-            });
-        }
-        crate::Expr::Number(_) | crate::Expr::Integer(_) => {
-            // Numbers don't reference models
-        }
-    }
-}
-
-/// Check for cycles using depth-first search.
-///
-/// Shared with the load-time gate in [`crate::parse`], which builds the same
-/// model-dependency graph over raw JSON and must reject circular documents at
-/// load — so the ONE DFS lives here and both stacks call it.
-pub(crate) fn has_cycle_dfs(
-    node: &str,
-    graph: &HashMap<String, HashSet<String>>,
-    visited: &mut HashSet<String>,
-    rec_stack: &mut HashSet<String>,
-) -> bool {
-    visited.insert(node.to_string());
-    rec_stack.insert(node.to_string());
-
-    if let Some(neighbors) = graph.get(node) {
-        for neighbor in neighbors {
-            if !visited.contains(neighbor) {
-                if has_cycle_dfs(neighbor, graph, visited, rec_stack) {
-                    return true;
-                }
-            } else if rec_stack.contains(neighbor) {
-                return true;
-            }
-        }
-    }
-
-    rec_stack.remove(node);
-    false
-}
-
-/// Find the actual cycle path for error reporting. Shared with [`crate::parse`]'s
-/// load-time cycle gate (see [`has_cycle_dfs`]).
-pub(crate) fn find_cycle(graph: &HashMap<String, HashSet<String>>, start: &str) -> Vec<String> {
-    let mut path = vec![];
-    let mut visited = HashSet::new();
-
-    if find_cycle_path(start, graph, &mut path, &mut visited) {
-        path
-    } else {
-        vec![start.to_string()] // Fallback
-    }
-}
-
-/// Helper function to find the actual cycle path
-fn find_cycle_path(
-    current: &str,
-    graph: &HashMap<String, HashSet<String>>,
-    path: &mut Vec<String>,
-    visited: &mut HashSet<String>,
-) -> bool {
-    if let Some(start) = path.iter().position(|n| n.as_str() == current) {
-        // Found cycle. Drop the acyclic prefix that led INTO the cycle so the
-        // reported path names only nodes actually on the cycle, then repeat the
-        // start node to close it (e.g. `B -> C -> B`, not `A -> B -> C -> B`).
-        path.drain(..start);
-        path.push(current.to_string());
-        return true;
-    }
-
-    if visited.contains(current) {
-        return false;
-    }
-
-    visited.insert(current.to_string());
-    path.push(current.to_string());
-
-    if let Some(neighbors) = graph.get(current) {
-        for neighbor in neighbors {
-            if find_cycle_path(neighbor, graph, path, visited) {
-                return true;
-            }
-        }
-    }
-
-    path.pop();
-    false
 }

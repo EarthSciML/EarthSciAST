@@ -272,9 +272,27 @@ export function resolveScopedReference(
   esmFile: EsmFile,
   enclosing?: Model | ReactionSystem,
 ): boolean {
+  return resolveScopedTarget(reference, esmFile, enclosing) !== undefined
+}
+
+/**
+ * Where a scoped reference resolves, for a caller that needs the target and not
+ * just whether there is one. `base` says which lookup succeeded, with the
+ * precedence of {@link resolveScopedReference}: `'enclosing'` when the head
+ * segment is one of the enclosing component's own subsystems (so the target's
+ * full scoped name is the enclosing component's scoped name, a dot, then the
+ * reference), otherwise `'models'` or `'reaction_systems'` when it is a path
+ * from the file root (the reference IS the target's full scoped name).
+ * `undefined` for a bare name or a reference that resolves to nothing.
+ */
+export function resolveScopedTarget(
+  reference: string,
+  esmFile: EsmFile,
+  enclosing?: Model | ReactionSystem,
+): { base: 'enclosing' | 'models' | 'reaction_systems' } | undefined {
   const parts = reference.split('.')
   if (parts.length < 2) {
-    return false // Not a scoped reference
+    return undefined // Not a scoped reference
   }
 
   const [systemName, ...pathParts] = parts
@@ -285,7 +303,7 @@ export function resolveScopedReference(
   const ownSubsystem =
     enclosing && 'subsystems' in enclosing ? enclosing.subsystems?.[systemName] : undefined
   if (ownSubsystem && declaresName(ownSubsystem, pathParts, variableName)) {
-    return true
+    return { base: 'enclosing' }
   }
 
   // Try to find in models
@@ -298,13 +316,15 @@ export function resolveScopedReference(
       const subsystems: Model['subsystems'] =
         'subsystems' in current ? current.subsystems : undefined
       if (!subsystems || !subsystems[pathPart]) {
-        return false
+        return undefined
       }
       current = subsystems[pathPart]
     }
 
     // Check if variable exists
     return 'variables' in current && !!current.variables && variableName in current.variables
+      ? { base: 'models' }
+      : undefined
   }
 
   // Try to find in reaction systems
@@ -317,16 +337,16 @@ export function resolveScopedReference(
       const subsystems: ReactionSystem['subsystems'] =
         'subsystems' in current ? current.subsystems : undefined
       if (!subsystems || !subsystems[pathPart]) {
-        return false
+        return undefined
       }
       current = subsystems[pathPart]
     }
 
     // Check if species or parameter exists
-    return (
-      ('species' in current && !!current.species && variableName in current.species) ||
+    return ('species' in current && !!current.species && variableName in current.species) ||
       ('parameters' in current && !!current.parameters && variableName in current.parameters)
-    )
+      ? { base: 'reaction_systems' }
+      : undefined
   }
 
   // NOTE: there is no data-source branch. A loader-scoped reference like
@@ -334,7 +354,7 @@ export function resolveScopedReference(
   // variables it exposed; from 1.0.0 a source declares none and is not a
   // scoped-name path root, so such a reference resolves to nothing and is
   // correctly reported unresolved (esm-spec 5.5).
-  return false
+  return undefined
 }
 
 /**

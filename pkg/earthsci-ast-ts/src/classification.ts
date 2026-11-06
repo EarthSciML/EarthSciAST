@@ -67,7 +67,7 @@ function equationsOf(model: Model): Equation[] {
  *   - `D(u[i])`, i.e. `D(index(u,i))` → `u`
  *   - a `faq` whose `expr` is a `D(...)`
  */
-function derivativeTarget(expr: Expression): string | undefined {
+export function derivativeTarget(expr: Expression): string | undefined {
   if (!isExpressionNode(expr)) return undefined
 
   if (expr.op === 'D') {
