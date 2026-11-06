@@ -4006,10 +4006,37 @@ axis enumerates the **intersection** of their partner lists.
   still emitted. A binding MUST test this explicitly; it is the easiest thing to
   break here, and it breaks quietly.
 * Gates whose two symbols are **both contracted** (§5.5.8's fourth shape) cannot
-  be intersected this way, because neither side is bound. One of them MAY still
-  drive the partner-restricted walk — the most selective, per §5.24.1 — and it
-  MUST intersect its partner list with whatever the bound gates already admitted
-  for that axis. The rest remain per-leaf `filter` tests.
+  be intersected against a bound index, because neither side is bound. A
+  binding SHOULD still let EVERY such gate restrict the walk, in two ways:
+  1. **Semi-join propagation, before the walk.** For a both-contracted gate
+     between axes `p` and `q`, when the gates above already restricted `p`,
+     restrict `q` to the union of the partners of every admitted `p` position
+     (intersected with whatever `q` already admitted), and likewise from `q` to
+     `p`; repeat over all such gates until nothing narrows (on an acyclic chain
+     that takes at most one pass per gate, and stopping earlier is still
+     correct). The union of ascending partner lists, merged and deduplicated,
+     is ascending, so each axis still enumerates an order-preserving
+     subsequence of its range. An axis left with nothing admits no leaf: the
+     output position takes `0̄`. This is what carries a pin on one contracted
+     axis — from a gate to a bound output index — across a chain of
+     both-contracted gates to the axes beyond it.
+  2. **Every gate restricts during the walk.** When the walk reaches axis `d`,
+     `d` enumerates the INTERSECTION of the partner lists of every
+     both-contracted gate linking `d` to an axis bound earlier in the
+     odometer, each taken at that axis's current position — not one driving
+     gate's list with the rest tested per leaf. This is what closes a STAR
+     join (several axes each joined to one contracted hub).
+
+  Both only drop tuples some gate rejects, keep the odometer order (first axis
+  outermost, last fastest), and leave every axis an ascending, duplicate-free
+  subsequence of its range, so (a) and (b) of §5.24.1 still make the result
+  bit-identical; many-to-many partners all survive the union and the
+  intersection, by the argument of the previous bullet. A binding that does
+  neither MAY instead let one of these gates drive the partner-restricted walk
+  — the most selective, per §5.24.1 — and it MUST then intersect that gate's
+  partner list with whatever the bound gates already admitted for that axis;
+  the rest remain per-leaf `filter` tests. That is correct, and on the joins
+  measured below it is the difference between seconds and hours.
 * Gates with **both** symbols already bound reduce to a membership test; if any
   of them rejects, the output position takes `0̄` and no leaf is enumerated.
 

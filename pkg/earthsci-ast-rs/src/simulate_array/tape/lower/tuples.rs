@@ -291,6 +291,7 @@ impl TapeBuilder<'_> {
             Some(list) => list,
             None => {
                 if let Some(v) = self.fold_tuple_contraction(&spec, &lo, &shape, combine_op)? {
+                    log_tuple_walk(&spec, "folded", None);
                     return Ok(v);
                 }
                 enumerate_tuples(&spec, MAX_PROMOTED_ELEMS)?.ok_or_else(|| Bail {
@@ -300,6 +301,7 @@ impl TapeBuilder<'_> {
                 })?
             }
         };
+        log_tuple_walk(&spec, "listed", Some(list.len()));
         // Charged whether or not the list fit: a list the fold declined is
         // held all the same.
         self.tuples_held = self.tuples_held.saturating_add(list.len() as u64);
@@ -1264,6 +1266,31 @@ impl TapeBuilder<'_> {
             self.known.insert(out, Known::Vals(Rc::new(v)));
         }
         Ok(LV::Arr(out))
+    }
+}
+
+/// The tape builder's counterpart of the interpreter's per-node `[join-gate]`
+/// stderr line: which gates drove a tuple-list contraction, over how many
+/// output cells, and how many tuples it listed (or that it was folded in
+/// chunks instead). Only for a gated node, as in the interpreter.
+fn log_tuple_walk(spec: &TupleSpec<'_>, how: &str, tuples: Option<usize>) {
+    if spec.gates.is_empty() {
+        return;
+    }
+    let desc = spec
+        .gates
+        .iter()
+        .map(|g| format!("{}~{}:{}", g.sym_src, g.sym_tgt, g.index.len()))
+        .collect::<Vec<_>>()
+        .join(",");
+    let cells: usize = spec
+        .ranges
+        .iter()
+        .map(|(l, h)| (h - l + 1).max(0) as usize)
+        .product();
+    match tuples {
+        Some(n) => eprintln!("[join-gate] tape gates={desc} cells={cells} {how} tuples={n}"),
+        None => eprintln!("[join-gate] tape gates={desc} cells={cells} {how}"),
     }
 }
 
