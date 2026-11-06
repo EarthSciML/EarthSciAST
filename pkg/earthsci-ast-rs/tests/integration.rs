@@ -237,6 +237,8 @@ mod output_derivation_conformance;
 mod overlap_gate_conformance;
 #[path = "overlap_gate_dense_scaling.rs"]
 mod overlap_gate_dense_scaling;
+#[path = "overlap_gate_live_forcing.rs"]
+mod overlap_gate_live_forcing;
 #[path = "override_key_diagnostics_conformance.rs"]
 mod override_key_diagnostics_conformance;
 #[path = "pde_const_hoist.rs"]
