@@ -1126,4 +1126,23 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         end
     end
 
+    # esm-spec §4.9.7: only a read of an observed or algebraic unknown links two
+    # models. Observeds reading each other across models are a cycle; reads of
+    # states (mutual, or closing a mixing term's graph) are not.
+    @testset "circular_dependency counts only observed reads" begin
+        _cycle(r) = [e for e in r.structural_errors if e.error_type == "circular_dependency"]
+        inv = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "circular_coupling.esm")
+        if _require_fixture(inv)
+            errs = _cycle(EarthSciAST.validate(EarthSciAST.load_path(inv)))
+            @test length(errs) == 1
+            @test errs[1].path == "/models"
+        end
+        for name in ("cross_model_state_reads.esm", "cross_model_mixing_observed_state_cycle.esm")
+            p = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", name)
+            if _require_fixture(p)
+                @test isempty(_cycle(EarthSciAST.validate(EarthSciAST.load_path(p))))
+            end
+        end
+    end
+
 end
