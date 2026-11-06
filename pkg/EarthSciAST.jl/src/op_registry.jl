@@ -589,6 +589,18 @@ function _is_scalar_op(name::AbstractString)::Bool
 end
 
 """
+    _is_elementwise_node(e::OpExpr) -> Bool
+
+[`_is_scalar_op`](@ref) lifted to a node: true iff `e` applies element-wise
+over array operands. A `broadcast` is element-wise iff its `fn` (default `+`)
+is a scalar operator; every other node iff its own `op` is one.
+"""
+function _is_elementwise_node(e::OpExpr)::Bool
+    e.op == "broadcast" && return _is_scalar_op(something(e.fn, "+"))
+    return _is_scalar_op(e.op)
+end
+
+"""
     _broadcast_fn_problem(fn, nargs::Int) -> Union{Nothing,NamedTuple}
 
 The `broadcast.fn` contract of esm-spec §4.3.4, as pure data: `nothing` when

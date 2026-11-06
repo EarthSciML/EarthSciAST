@@ -193,3 +193,92 @@ _iset(n) = ESM.IndexSet("interval"; size = n)
         @test_throws ESM.DimensionPromotionError lift_axes(clash)
     end
 end
+
+# Lift `D(C) = wrap(<2-D operator makearray over x × y>)` through
+# `_apply_pointwise_lift!`, with declared index sets x (2), y (3), z (4) and
+# the parameters `shapes` (name => declared shape); return the lifted RHS body.
+function _lift_2d(wrap, shapes::Vector{<:Pair})
+    ma = _op(
+        "makearray";
+        regions = [[[1, 2], [1, 3]]],
+        values = ESM.ASTExpr[_op("index", _v("C"), _v("i"), _v("j"))]
+    )
+    rhs = wrap(ma)
+    equations = ESM.Equation[ESM.Equation(_D("C"), rhs)]
+    contribs = [ESM.Contribution[ESM.Contribution(rhs, ESM.TermOrigin[])]]
+    states = OrderedDict{String, ESM.ModelVariable}(
+        "C" => ESM.ModelVariable(ESM.UnknownVariable)
+    )
+    params = OrderedDict{String, ESM.ModelVariable}(
+        n => ESM.ModelVariable(ESM.ParameterVariable; shape = sh) for (n, sh) in shapes
+    )
+    observeds = OrderedDict{String, ESM.ModelVariable}()
+    index_sets = OrderedDict{String, ESM.IndexSet}(
+        "x" => _iset(2), "y" => _iset(3), "z" => _iset(4)
+    )
+    coupling = [ESM.CouplingOperatorCompose(["M", "Op"]; lifting = "pointwise")]
+    ESM._apply_pointwise_lift!(
+        equations, contribs, states, params, observeds, index_sets, coupling
+    )
+    @test states["C"].shape == ["x", "y"]
+    new_rhs = equations[1].rhs
+    @test new_rhs isa ESM.OpExpr && new_rhs.op == "faq"
+    return new_rhs.expr_body
+end
+
+# `makearray / <operand>`.
+_over(operand) = ma -> _op("/", ma, operand)
+# `index(v, loops...)` as a comparable value (OpExpr has no structural `==`).
+_gather(v, loops...) = ("index", [v, loops...])
+_as_gather(e) = e isa ESM.OpExpr && all(a -> a isa ESM.VarExpr, e.args) ?
+    (e.op, [a.name for a in e.args]) : e
+
+function _lift_error(wrap, shapes)
+    err = try
+        _lift_2d(wrap, shapes)
+        nothing
+    catch e
+        e
+    end
+    @test err isa ESM.DimensionPromotionError
+    return err isa ESM.DimensionPromotionError ? err.details : ""
+end
+
+@testset "pointwise lift gathers shaped operands by index-set name (§4.3.4)" begin
+    @testset "an operand on the grid's own index sets" begin
+        body = _lift_2d(_over(_v("m")), ["m" => ["x", "y"]])
+        @test _as_gather(body.args[2]) == _gather("m", "i", "j")
+    end
+
+    @testset "a lower-rank operand replicates along the rest" begin
+        body = _lift_2d(_over(_v("p")), ["p" => ["y"]])
+        @test _as_gather(body.args[2]) == _gather("p", "j")
+    end
+
+    @testset "a permuted operand transposes" begin
+        body = _lift_2d(_over(_v("m")), ["m" => ["y", "x"]])
+        @test _as_gather(body.args[2]) == _gather("m", "j", "i")
+    end
+
+    @testset "an operand on a foreign index set is refused" begin
+        for shape in (["x", "z"], ["z"])
+            msg = _lift_error(_over(_v("f")), ["f" => shape])
+            @test occursin("'f'", msg)
+            @test occursin("index set 'z'", msg)
+        end
+    end
+
+    @testset "a whole-array fn argument stays bare" begin
+        call = _op("fn", _v("p"), _v("table"); name = "interp.searchsorted")
+        body = _lift_2d(_over(call), ["p" => ["x"], "table" => ["z"]])
+        @test _as_gather(body.args[2].args[1]) == _gather("p", "i")
+        @test body.args[2].args[2] isa ESM.VarExpr && body.args[2].args[2].name == "table"
+    end
+
+    @testset "an operand of a whole-array op is refused" begin
+        reshaped = _op("reshape", _v("m"); shape = [6])
+        msg = _lift_error(_over(reshaped), ["m" => ["x", "y"]])
+        @test occursin("'m'", msg)
+        @test occursin("'reshape'", msg)
+    end
+end

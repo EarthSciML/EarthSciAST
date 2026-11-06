@@ -567,3 +567,94 @@ def test_flatten_empty_file_still_raises():
     file = _empty_file()
     with pytest.raises(ValueError):
         flatten(file)
+
+
+# ----------------------------------------------------------------------------
+# Pointwise lift: shaped operands are gathered per cell by index-set NAME
+# (esm-spec §4.3.4, §10.5). Mirrors the Rust `pointwise_lift_*` unit tests.
+# ----------------------------------------------------------------------------
+
+
+def _lift_2d(operand, shapes: dict[str, list[str]]):
+    """Lift ``D(C) = makearray / operand`` over a 2-D operator makearray on
+    ``x`` (2) by ``y`` (3), with ``z`` (4) also declared and the given shaped
+    variables, and return the lifted right-hand side's ``faq`` body."""
+    from earthsci_ast.flatten import (
+        FlattenedEquation,
+        FlattenedSystem,
+        FlattenedVariable,
+        _apply_pointwise_lift,
+    )
+
+    makearray = ExprNode(
+        op="makearray",
+        regions=[[[1, 2], [1, 3]]],
+        values=[ExprNode(op="index", args=["C", "i", "j"])],
+    )
+    flat = FlattenedSystem()
+    flat.state_variables["C"] = FlattenedVariable(name="C", type="state")
+    for name, shape in shapes.items():
+        flat.parameters[name] = FlattenedVariable(name=name, type="parameter", shape=list(shape))
+    flat.index_sets = {
+        "x": {"kind": "interval", "size": 2},
+        "y": {"kind": "interval", "size": 3},
+        "z": {"kind": "interval", "size": 4},
+    }
+    flat.equations = [
+        FlattenedEquation(
+            lhs=ExprNode(op="D", args=["C"], wrt="t"),
+            rhs=ExprNode(op="/", args=[makearray, operand]),
+            source_system="M",
+        )
+    ]
+    _apply_pointwise_lift(flat, [OperatorComposeCoupling(systems=["M", "A"], lifting="pointwise")])
+    assert flat.lifted_shapes["C"] == (2, 3)
+    assert flat.state_variables["C"].shape == ["x", "y"]
+    rhs = flat.equations[0].rhs
+    assert rhs.op == "faq"
+    return rhs.expr
+
+
+def _gather(*args):
+    return ExprNode(op="index", args=list(args))
+
+
+def test_pointwise_lift_indexes_a_shaped_operand():
+    body = _lift_2d("m", {"m": ["x", "y"]})
+    assert body.args[1] == _gather("m", "i", "j")
+
+
+def test_pointwise_lift_gathers_a_lower_rank_operand_by_name():
+    body = _lift_2d("p", {"p": ["y"]})
+    assert body.args[1] == _gather("p", "j")
+
+
+def test_pointwise_lift_gathers_a_permuted_operand_by_name():
+    body = _lift_2d("m", {"m": ["y", "x"]})
+    assert body.args[1] == _gather("m", "j", "i")
+
+
+@pytest.mark.parametrize("shape", [["x", "z"], ["z"]])
+def test_pointwise_lift_refuses_an_operand_on_a_foreign_index_set(shape):
+    from earthsci_ast.flatten import DimensionPromotionError
+
+    with pytest.raises(DimensionPromotionError) as exc:
+        _lift_2d("f", {"f": shape})
+    assert "'f'" in str(exc.value)
+    assert "index set 'z'" in str(exc.value)
+
+
+def test_pointwise_lift_leaves_a_whole_array_fn_argument_bare():
+    call = ExprNode(op="fn", name="interp.searchsorted", args=["p", "table"])
+    body = _lift_2d(call, {"p": ["x"], "table": ["z"]})
+    assert body.args[1].args[0] == _gather("p", "i")
+    assert body.args[1].args[1] == "table"
+
+
+def test_pointwise_lift_refuses_an_operand_of_a_whole_array_op():
+    from earthsci_ast.flatten import DimensionPromotionError
+
+    reshaped = ExprNode(op="reshape", args=["m"], shape=[6])
+    with pytest.raises(DimensionPromotionError) as exc:
+        _lift_2d(reshaped, {"m": ["x", "y"]})
+    assert "'m'" in str(exc.value) and "'reshape'" in str(exc.value)
