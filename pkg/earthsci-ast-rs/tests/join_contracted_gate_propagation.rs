@@ -86,7 +86,11 @@ impl Lcg {
         (0..n)
             .map(|_| {
                 let m = (self.next() % 1000) as f64 / 7.0 + 0.1;
-                if self.next() % 3 == 0 { m * 1e9 } else { m }
+                if self.next().is_multiple_of(3) {
+                    m * 1e9
+                } else {
+                    m
+                }
             })
             .collect()
     }
