@@ -107,7 +107,7 @@ function _cf_build(doc, ics, compiler)
         EarthSciAST._build_evaluator(doc; initial_conditions = ics, compiler = compiler) :
         _CF._with_compiler_plan(compiler) do
             _CF._build_evaluator_dict(doc; initial_conditions = ics, compiler = compiler)
-        end
+    end
     return (f!, u0, p, vm, copy(_CF._CASCADE_TALLY))
 end
 
@@ -197,9 +197,9 @@ end
         vars = Dict{String, Any}("s$j" => Dict("type" => "unknown") for j in 1:6)
         eqs = Any[
             Dict(
-                    "lhs" => Dict("op" => "D", "args" => Any["s$j"], "wrt" => "t"),
-                    "rhs" => _cf_count(N, _cf_le(_cf_idx(_cf_const(ax), "k"), "s$j"))
-                ) for j in 1:6
+                "lhs" => Dict("op" => "D", "args" => Any["s$j"], "wrt" => "t"),
+                "rhs" => _cf_count(N, _cf_le(_cf_idx(_cf_const(ax), "k"), "s$j"))
+            ) for j in 1:6
         ]
         doc = Dict{String, Any}(
             "esm" => "1.1.0", "metadata" => Dict("name" => "count_fold_scalar"),

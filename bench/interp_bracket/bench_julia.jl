@@ -59,8 +59,10 @@ function solve_once(f!, u0, p)
 end
 
 # The states by name, so spellings compare whatever their slot order.
-states(sol, vm) = Dict(k => [u[v] for u in sol.u] for (k, v) in vm if !startswith(k, "xq") &&
-    !startswith(k, "ilo") && (startswith(k, "u[") || startswith(k, "v[") || startswith(k, "th[")))
+states(sol, vm) = Dict(
+    k => [u[v] for u in sol.u] for (k, v) in vm if !startswith(k, "xq") &&
+        !startswith(k, "ilo") && (startswith(k, "u[") || startswith(k, "v[") || startswith(k, "th["))
+)
 
 for N in (isempty(ARGS) ? [59, 200] : parse.(Int, ARGS))
     spell = [
@@ -74,8 +76,10 @@ for N in (isempty(ARGS) ? [59, 200] : parse.(Int, ARGS))
     for (lab, file, c) in spell
         t0 = time()
         b = build(load(file), c)
-        @printf("N=%d %-10s build %.2fs  count tally: search=%d linear=%d\n", N, lab,
-            time() - t0, get(b[5], :count_fold_search, 0), get(b[5], :count_fold_linear, 0))
+        @printf(
+            "N=%d %-10s build %.2fs  count tally: search=%d linear=%d\n", N, lab,
+            time() - t0, get(b[5], :count_fold_search, 0), get(b[5], :count_fold_linear, 0)
+        )
         built[lab] = b
         solve_once(b[1], b[2], b[3])    # compile the solve outside the timed runs
     end
@@ -93,14 +97,18 @@ for N in (isempty(ARGS) ? [59, 200] : parse.(Int, ARGS))
                 ref = st
             else
                 same = keys(st) == keys(ref) && all(all(st[k] .=== ref[k]) for k in keys(ref))
-                @printf("N=%d %-10s trajectory bit-identical to fn: %s (%d rhs calls)\n",
-                    N, lab, same, sol.stats.nf)
+                @printf(
+                    "N=%d %-10s trajectory bit-identical to fn: %s (%d rhs calls)\n",
+                    N, lab, same, sol.stats.nf
+                )
             end
         end
     end
     for (lab, _, _) in spell
-        @printf("N=%d %-10s rhs median %8.2f us   solve median %8.4f s   (solve runs: %s)\n",
+        @printf(
+            "N=%d %-10s rhs median %8.2f us   solve median %8.4f s   (solve runs: %s)\n",
             N, lab, median(rhs[lab]) / 1.0e3, median(slv[lab]),
-            join((@sprintf("%.4f", x) for x in slv[lab]), " "))
+            join((@sprintf("%.4f", x) for x in slv[lab]), " ")
+        )
     end
 end
