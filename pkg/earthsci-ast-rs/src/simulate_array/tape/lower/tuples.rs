@@ -37,12 +37,9 @@
 //! as in `u[cols[i, k]]`), exactly as `index_into` resolves them.
 
 use super::*;
-use crate::broad_phase::{OverlapIndex, Side};
+use crate::broad_phase::OverlapIndex;
 use crate::simulate_array::eval::{EqSides, narrow_reach, reach_of};
-use crate::simulate_array::gate_walk::{
-    DimSrc, Link, Restriction, TupleSink, intersect_restriction, links_into, propagate_links,
-    walk_linked,
-};
+use crate::simulate_array::gate_walk::{GatePlan, TupleSink};
 use crate::types::JoinClause;
 use std::rc::Rc;
 
@@ -1272,8 +1269,13 @@ impl TapeBuilder<'_> {
 /// The tape builder's counterpart of the interpreter's per-node `[join-gate]`
 /// stderr line: which gates drove a tuple-list contraction, over how many
 /// output cells, and how many tuples it listed (or that it was folded in
-/// chunks instead). Only for a gated node, as in the interpreter.
+/// chunks instead). Only for a gated node, as in the interpreter, and only
+/// when `ESS_JOIN_GATE_LOG` asks for it
+/// ([`crate::broad_phase::join_gate_log_enabled`]).
 fn log_tuple_walk(spec: &TupleSpec<'_>, how: &str, tuples: Option<usize>) {
+    if !crate::broad_phase::join_gate_log_enabled() {
+        return;
+    }
     if spec.gates.is_empty() {
         return;
     }
@@ -1283,11 +1285,12 @@ fn log_tuple_walk(spec: &TupleSpec<'_>, how: &str, tuples: Option<usize>) {
         .map(|g| format!("{}~{}:{}", g.sym_src, g.sym_tgt, g.index.len()))
         .collect::<Vec<_>>()
         .join(",");
-    let cells: usize = spec
+    // Saturating: a large output box must not overflow a diagnostic.
+    let cells: u128 = spec
         .ranges
         .iter()
-        .map(|(l, h)| (h - l + 1).max(0) as usize)
-        .product();
+        .map(|(l, h)| (h - l + 1).max(0) as u128)
+        .fold(1u128, u128::saturating_mul);
     match tuples {
         Some(n) => eprintln!("[join-gate] tape gates={desc} cells={cells} {how} tuples={n}"),
         None => eprintln!("[join-gate] tape gates={desc} cells={cells} {how}"),
@@ -1363,16 +1366,24 @@ fn visit_tuples(
         ..
     } = spec;
     let nc = contract_names.len();
-    let placed: Vec<(GateAxis, GateAxis)> = gates
-        .iter()
-        .map(|g| {
+    // The cell-independent plan (built once, not per cell), and each gate's
+    // output position for the symbols a cell binds.
+    let plan = GatePlan::new(
+        nc,
+        gates.iter().map(|g| {
             (
+                &g.index,
                 gate_axis(&g.sym_src, idx_names, contract_names),
                 gate_axis(&g.sym_tgt, idx_names, contract_names),
             )
-        })
-        .collect();
+        }),
+    );
     let out_pos = |name: &str| idx_names.iter().position(|n| n == name);
+    let bound_at: Vec<(Option<usize>, Option<usize>)> = gates
+        .iter()
+        .map(|g| (out_pos(&g.sym_src), out_pos(&g.sym_tgt)))
+        .collect();
+    let mut bufs = plan.bufs();
 
     let mut cell: Vec<i64> = ranges.iter().map(|(l, _)| *l).collect();
     let n_cells: usize = ranges
@@ -1381,7 +1392,6 @@ fn visit_tuples(
         .product::<usize>()
         .max(1);
     let mut cur: Vec<i64> = vec![0; nc];
-    let mut scratch: Vec<Vec<i64>> = vec![Vec::new(); nc];
     // A ragged dim whose parent is contracted has no bound until that parent
     // is bound: the cell's tuples are then a nest, not a box (no gates here;
     // `lower_tuple_contraction` refuses the pair).
@@ -1401,79 +1411,25 @@ fn visit_tuples(
         }
         // This cell's contraction bounds.
         let cell_ranges: Vec<(i64, i64)> = bounds.iter().map(|b| b.at(&cell, &cur)).collect();
-        // The gates' conjunction for this cell (`reduce_contraction_gated`,
-        // phase 1).
-        let mut restrict: Vec<Option<Restriction<'_>>> = vec![None; nc];
-        let mut links: Vec<Link<'_>> = Vec::new();
-        let mut reject = false;
-        for (g, &(ps, pt)) in gates.iter().zip(&placed) {
-            match (ps, pt) {
-                (GateAxis::Output, GateAxis::Output) => {
-                    let (Some(a), Some(b)) = (out_pos(&g.sym_src), out_pos(&g.sym_tgt)) else {
-                        continue;
-                    };
-                    if !g.index.contains(cell[a], cell[b]) {
-                        reject = true;
-                    }
-                }
-                (GateAxis::Contracted(d), GateAxis::Output) => {
-                    let Some(b) = out_pos(&g.sym_tgt) else {
-                        continue;
-                    };
-                    let (lo, hi) = cell_ranges[d];
-                    let parts = g.index.partners_in(Side::Tgt, cell[b], lo, hi);
-                    if !intersect_restriction(&mut restrict[d], parts.into()) {
-                        reject = true;
-                    }
-                }
-                (GateAxis::Output, GateAxis::Contracted(d)) => {
-                    let Some(a) = out_pos(&g.sym_src) else {
-                        continue;
-                    };
-                    let (lo, hi) = cell_ranges[d];
-                    let parts = g.index.partners_in(Side::Src, cell[a], lo, hi);
-                    if !intersect_restriction(&mut restrict[d], parts.into()) {
-                        reject = true;
-                    }
-                }
-                // Every both-contracted gate restricts the walk
-                // (`crate::simulate_array::gate_walk`).
-                (GateAxis::Contracted(a), GateAxis::Contracted(b)) if a != b => {
-                    links.push(Link::new(a, b, &g.index));
-                }
-                _ => {}
-            }
-            if reject {
-                break;
-            }
-        }
-        // Semi-join propagation across the both-contracted gates, as the
-        // interpreter does it: only with a link, and only over non-empty dims.
-        if !reject
-            && !links.is_empty()
-            && cell_ranges.iter().all(|&(lo, hi)| hi >= lo)
-            && !propagate_links(&links, &cell_ranges, &mut restrict)
-        {
-            reject = true;
-        }
-        if !reject && nc > 0 {
-            let srcs: Vec<DimSrc> = (0..nc)
-                .map(|d| match &restrict[d] {
-                    Some(v) => DimSrc::List(v),
-                    None => DimSrc::Range(cell_ranges[d].0, cell_ranges[d].1),
-                })
-                .collect();
-            let into = links_into(&links, nc);
+        // The gates' conjunction, the empty-range guard and the propagation,
+        // then the walk: all shared with the interpreter
+        // (`crate::simulate_array::gate_walk`).
+        let admitted = plan.restrict_cell(
+            &cell_ranges,
+            |g, src| {
+                let (a, b) = bound_at[g];
+                (if src { a } else { b }).map(|p| cell[p])
+            },
+            &mut bufs,
+        );
+        if admitted {
             let mut sink = PushSink {
                 cell: &cell,
                 tuple: &mut *tuple,
             };
-            if !walk_linked(&srcs, &into, 0, &mut cur, &mut scratch, &mut sink) {
+            if !plan.walk_cell(&cell_ranges, &mut bufs, &mut sink) {
                 return Ok(false);
             }
-        } else if !reject && !tuple(&cell, &[]) {
-            // No contracted index: the pointwise term, once.
-            return Ok(false);
         }
         cell_done()?;
         next_cell(&mut cell, ranges);

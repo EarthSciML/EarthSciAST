@@ -3,14 +3,21 @@
 //! (`tape::lower::tuples::visit_tuples`), so the two enumerate the SAME tuples
 //! in the SAME order (CONFORMANCE_SPEC.md §5.24.1(b), §5.24.2).
 //!
+//! Everything the two callers do per output cell lives here, in one
+//! [`GatePlan`] built once per node: the conjunction of the gates with a bound
+//! side ([`GatePlan::restrict_cell`]), the empty-range guard, the propagation
+//! below, and the walk ([`GatePlan::walk_cell`]). A caller only supplies the
+//! cell's bounds, its bound output values, and a [`TupleSink`].
+//!
 //! The gates that pair two CONTRACTED dims (§5.5.8's fourth shape) are carried
-//! here as [`Link`]s. Two things use them:
+//! as [`Link`]s. Two things use them:
 //!
 //! 1. **Semi-join propagation** ([`propagate_links`]), before the walk. A dim
-//!    that Phase 1 restricted (through a gate to a bound output index) narrows
-//!    every dim it is linked to, to the union of its admitted values' partners;
-//!    and so on to a fixpoint. This is what lets a pin on one contracted dim
-//!    reach the dims a chain of contracted–contracted gates hangs off it.
+//!    that a gate to a bound output index restricted narrows every dim it is
+//!    linked to, to the union of its admitted values' partners, in both
+//!    directions, to a true fixpoint over any gate graph, cyclic or not. This
+//!    is what lets a pin on one contracted dim reach the dims a chain of
+//!    contracted–contracted gates hangs off it.
 //! 2. **Multi-link restriction** ([`walk_linked`]), during the walk. At depth
 //!    `d` the dim enumerates the INTERSECTION of the partner lists of every
 //!    link from `d` to an earlier (already bound) dim, not one of them. This is
@@ -28,6 +35,7 @@ use std::borrow::Cow;
 
 use smallvec::SmallVec;
 
+use super::eval::GateAxis;
 use crate::broad_phase::{OverlapIndex, Side};
 
 /// One contracted dimension's enumeration source: its own ascending interval,
@@ -59,22 +67,46 @@ impl DimSrc<'_> {
 /// (the common case, no allocation), owned once two lists were intersected.
 pub(super) type Restriction<'a> = Cow<'a, [i64]>;
 
+// ---- Sorted-list primitives ------------------------------------------------
+//
+// Every list here is ascending and duplicate-free. The one merge step is
+// `seek`; intersection, in-place intersection and the subset test are all
+// built on it, so there is a single merge loop to get right.
+
+/// Advance `j` along ascending `b` to the first element `>= x`; is it `x`?
+#[inline]
+fn seek(b: &[i64], j: &mut usize, x: i64) -> bool {
+    while *j < b.len() && b[*j] < x {
+        *j += 1;
+    }
+    *j < b.len() && b[*j] == x
+}
+
+/// Keep only the elements of `buf` that also occur in `keep`, in place.
+fn retain_sorted_in(buf: &mut Vec<i64>, keep: &[i64]) {
+    let mut j = 0usize;
+    buf.retain(|&x| seek(keep, &mut j, x));
+}
+
+/// Append the intersection of `a` and `b` to `out` (which is cleared first).
+fn intersect_into(out: &mut Vec<i64>, a: &[i64], b: &[i64]) {
+    let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    out.clear();
+    out.extend_from_slice(short);
+    retain_sorted_in(out, long);
+}
+
 /// The ascending intersection of two ascending, duplicate-free lists.
 pub(super) fn intersect_sorted(a: &[i64], b: &[i64]) -> Vec<i64> {
-    let mut out: Vec<i64> = Vec::with_capacity(a.len().min(b.len()));
-    let (mut i, mut j) = (0usize, 0usize);
-    while i < a.len() && j < b.len() {
-        match a[i].cmp(&b[j]) {
-            std::cmp::Ordering::Less => i += 1,
-            std::cmp::Ordering::Greater => j += 1,
-            std::cmp::Ordering::Equal => {
-                out.push(a[i]);
-                i += 1;
-                j += 1;
-            }
-        }
-    }
+    let mut out = Vec::new();
+    intersect_into(&mut out, a, b);
     out
+}
+
+/// Is every element of `a` also in `b`?
+fn is_subset_sorted(a: &[i64], b: &[i64]) -> bool {
+    let mut j = 0usize;
+    a.iter().all(|&x| seek(b, &mut j, x))
 }
 
 /// Intersect `slot` with one more ascending list.
@@ -85,14 +117,49 @@ pub(super) fn intersect_restriction<'a>(
     slot: &mut Option<Restriction<'a>>,
     parts: Restriction<'a>,
 ) -> bool {
-    let next = match slot.take() {
-        None => parts,
-        Some(cur) => Cow::Owned(intersect_sorted(&cur, &parts)),
-    };
-    let ok = !next.is_empty();
-    *slot = Some(next);
-    ok
+    narrow(slot, parts) != Narrowed::Empty
 }
+
+/// What [`narrow`] did to a dim's admitted set.
+#[derive(PartialEq, Eq)]
+enum Narrowed {
+    /// It was already within the new list: no change, nothing allocated.
+    Same,
+    /// It shrank (or was unrestricted and is now restricted).
+    Changed,
+    /// Nothing is left: the cell admits no leaf.
+    Empty,
+}
+
+/// Intersect `slot` with `parts`, reporting whether that narrowed it.
+fn narrow<'a>(slot: &mut Option<Restriction<'a>>, parts: Restriction<'a>) -> Narrowed {
+    if parts.is_empty() {
+        *slot = Some(parts);
+        return Narrowed::Empty;
+    }
+    match slot.take() {
+        None => {
+            *slot = Some(parts);
+            Narrowed::Changed
+        }
+        Some(cur) if is_subset_sorted(&cur, &parts) => {
+            *slot = Some(cur);
+            Narrowed::Same
+        }
+        Some(cur) => {
+            let next = intersect_sorted(&cur, &parts);
+            let empty = next.is_empty();
+            *slot = Some(Cow::Owned(next));
+            if empty {
+                Narrowed::Empty
+            } else {
+                Narrowed::Changed
+            }
+        }
+    }
+}
+
+// ---- Links and propagation -------------------------------------------------
 
 /// A gate whose two symbols are both contracted, on two DIFFERENT dims.
 #[derive(Clone, Copy)]
@@ -146,6 +213,16 @@ impl<'a> Link<'a> {
             Side::Src
         }
     }
+
+    /// Does the gate admit early value `e` with late value `l`?
+    #[inline]
+    fn admits(&self, e: i64, l: i64) -> bool {
+        if self.early_is_src {
+            self.index.contains(e, l)
+        } else {
+            self.index.contains(l, e)
+        }
+    }
 }
 
 /// The ascending, duplicate-free union of the partners (within `[lo, hi]`) of
@@ -171,46 +248,58 @@ fn partner_union<'a>(
 }
 
 /// Semi-join propagation across contracted–contracted gates (module docs,
-/// item 1): for each link whose one end is restricted, restrict the other end
-/// to the union of the restricted values' partners, in both directions,
-/// repeating until nothing narrows (at most one pass per link plus the one
-/// that sees no change; stopping earlier would still be sound, since every
-/// restriction here only drops tuples some gate rejects).
+/// item 1), to a TRUE fixpoint over any gate graph, cyclic or not.
+///
+/// A worklist of dims whose admitted set changed: for each such dim `from`,
+/// every link touching it restricts its other end to the union of `from`'s
+/// admitted values' partners. A dim is queued again only when that narrowed
+/// it, so a link is re-examined only from an end that changed since it was
+/// last read. It terminates because a dim's set only ever shrinks (or goes
+/// from unrestricted to restricted, once), and every queue entry follows a
+/// change. A restriction that is already within the partner union is left
+/// as is, with nothing allocated.
 ///
 /// `ranges` is the cell's contraction bounds. Returns `false` when some dim's
 /// admitted set becomes empty: the cell is the identity.
 ///
-/// The cost is bounded by the walk it replaces: the union over a restricted
-/// end touches each of its pairs once, and the pre-propagation walk visited
-/// at least those pairs (driving the link) or the full product (filtering it).
+/// The cost is bounded by the walk it replaces: each union over a restricted
+/// end touches each of its pairs once per change of that end, and the walk
+/// without propagation visited at least those pairs (driving the link) or the
+/// full product (filtering it).
 pub(super) fn propagate_links<'a>(
     links: &[Link<'a>],
     ranges: &[(i64, i64)],
     restrict: &mut [Option<Restriction<'a>>],
 ) -> bool {
-    for _ in 0..=links.len() {
-        let mut changed = false;
+    let mut queued: SmallVec<[bool; 4]> = restrict.iter().map(Option::is_some).collect();
+    let mut work: SmallVec<[usize; 4]> = (0..restrict.len()).filter(|&d| queued[d]).collect();
+    while let Some(from) = work.pop() {
+        queued[from] = false;
         for l in links {
-            for (from, to, side) in [
-                (l.early, l.late, l.early_side()),
-                (l.late, l.early, l.late_side()),
-            ] {
-                let Some(have) = restrict[from].as_deref() else {
-                    continue;
-                };
-                let (lo, hi) = ranges[to];
-                let reach = partner_union(l.index, side, have, lo, hi);
-                let before = restrict[to].as_ref().map(|r| r.len());
-                if !intersect_restriction(&mut restrict[to], reach) {
-                    return false;
-                }
-                if before != restrict[to].as_ref().map(|r| r.len()) {
-                    changed = true;
+            let (to, side) = if l.early == from {
+                (l.late, l.early_side())
+            } else if l.late == from {
+                (l.early, l.late_side())
+            } else {
+                continue;
+            };
+            let (lo, hi) = ranges[to];
+            let reach = {
+                let have = restrict[from]
+                    .as_deref()
+                    .expect("a queued dim is restricted");
+                partner_union(l.index, side, have, lo, hi)
+            };
+            match narrow(&mut restrict[to], reach) {
+                Narrowed::Empty => return false,
+                Narrowed::Same => {}
+                Narrowed::Changed => {
+                    if !queued[to] {
+                        queued[to] = true;
+                        work.push(to);
+                    }
                 }
             }
-        }
-        if !changed {
-            break;
         }
     }
     true
@@ -227,6 +316,207 @@ pub(super) fn links_into<'a>(links: &[Link<'a>], n: usize) -> LinksInto<'a> {
         by[l.late].push((l.early, l.index, l.early_side()));
     }
     by
+}
+
+// ---- The per-node plan -----------------------------------------------------
+
+/// What one gate does for a node, decided once from where its two symbols sit.
+#[derive(Clone, Copy)]
+enum Place {
+    /// Both symbols are bound output indices: a membership test per cell.
+    Test,
+    /// `src` is contracted dim `d` and `tgt` is bound: `d` enumerates the
+    /// bound value's partners.
+    PinSrc(usize),
+    /// `tgt` is contracted dim `d` and `src` is bound.
+    PinTgt(usize),
+    /// Both contracted, on different dims: one of the plan's [`Link`]s.
+    Linked,
+    /// Both on one contracted dim, or a symbol this node does not bind:
+    /// nothing a pair list can drive (the lowered `filter` still applies it).
+    Inert,
+}
+
+/// The cell-independent part of a gated walk over one node: every gate's
+/// [`Place`], the links between contracted dims, and the links grouped by
+/// their late end. Built once per node by both callers.
+pub(super) struct GatePlan<'a> {
+    gates: SmallVec<[(&'a OverlapIndex, Place); 4]>,
+    links: SmallVec<[Link<'a>; 4]>,
+    into: LinksInto<'a>,
+    nc: usize,
+}
+
+/// The per-cell buffers of a [`GatePlan`] walk, reused across cells.
+pub(super) struct CellBufs<'a> {
+    restrict: SmallVec<[Option<Restriction<'a>>; 4]>,
+    cur: SmallVec<[i64; 4]>,
+    scratch: SmallVec<[Vec<i64>; 4]>,
+    pairs: Vec<(i64, i64)>,
+}
+
+impl<'a> GatePlan<'a> {
+    /// The plan for `gates` (each gate's index with where its `src` and `tgt`
+    /// symbols sit), in selectivity order, over `nc` contracted dims.
+    pub(super) fn new(
+        nc: usize,
+        gates: impl IntoIterator<Item = (&'a OverlapIndex, GateAxis, GateAxis)>,
+    ) -> Self {
+        let mut placed: SmallVec<[(&'a OverlapIndex, Place); 4]> = SmallVec::new();
+        let mut links: SmallVec<[Link<'a>; 4]> = SmallVec::new();
+        for (index, src, tgt) in gates {
+            let place = match (src, tgt) {
+                (GateAxis::Output, GateAxis::Output) => Place::Test,
+                (GateAxis::Contracted(d), GateAxis::Output) => Place::PinSrc(d),
+                (GateAxis::Output, GateAxis::Contracted(d)) => Place::PinTgt(d),
+                (GateAxis::Contracted(a), GateAxis::Contracted(b)) if a != b => {
+                    links.push(Link::new(a, b, index));
+                    Place::Linked
+                }
+                _ => Place::Inert,
+            };
+            placed.push((index, place));
+        }
+        let into = links_into(&links, nc);
+        GatePlan {
+            gates: placed,
+            links,
+            into,
+            nc,
+        }
+    }
+
+    /// Fresh per-cell buffers for this plan.
+    pub(super) fn bufs(&self) -> CellBufs<'a> {
+        CellBufs {
+            restrict: (0..self.nc).map(|_| None).collect(),
+            cur: SmallVec::from_elem(0, self.nc),
+            scratch: (0..self.nc).map(|_| Vec::new()).collect(),
+            pairs: Vec::new(),
+        }
+    }
+
+    /// Phase 1 for one output cell: the conjunction of every gate with a bound
+    /// side, then the empty-range guard, then the propagation across links.
+    /// `bound(g, src)` is the cell's value of gate `g`'s `src` (or `tgt`)
+    /// symbol, `None` when the cell does not bind it (the gate is then
+    /// skipped). Leaves the per-dim restriction in `bufs`.
+    ///
+    /// `false` when the cell admits no leaf: it is the semiring identity.
+    pub(super) fn restrict_cell(
+        &self,
+        ranges: &[(i64, i64)],
+        bound: impl Fn(usize, bool) -> Option<i64>,
+        bufs: &mut CellBufs<'a>,
+    ) -> bool {
+        let restrict = &mut bufs.restrict;
+        restrict.iter_mut().for_each(|r| *r = None);
+        for (g, &(index, place)) in self.gates.iter().enumerate() {
+            match place {
+                Place::Test => {
+                    let (Some(l), Some(r)) = (bound(g, true), bound(g, false)) else {
+                        continue;
+                    };
+                    if !index.contains(l, r) {
+                        return false;
+                    }
+                }
+                Place::PinSrc(d) => {
+                    let (Some(r), Some(&(lo, hi))) = (bound(g, false), ranges.get(d)) else {
+                        continue;
+                    };
+                    let parts = index.partners_in(Side::Tgt, r, lo, hi);
+                    if !intersect_restriction(&mut restrict[d], parts.into()) {
+                        return false;
+                    }
+                }
+                Place::PinTgt(d) => {
+                    let (Some(l), Some(&(lo, hi))) = (bound(g, true), ranges.get(d)) else {
+                        continue;
+                    };
+                    let parts = index.partners_in(Side::Src, l, lo, hi);
+                    if !intersect_restriction(&mut restrict[d], parts.into()) {
+                        return false;
+                    }
+                }
+                Place::Linked | Place::Inert => {}
+            }
+        }
+        // An empty dim admits nothing, before any propagation work.
+        if ranges.iter().any(|&(lo, hi)| hi < lo) {
+            return false;
+        }
+        self.links.is_empty() || propagate_links(&self.links, ranges, restrict)
+    }
+
+    /// Walk the cell's admitted tuples into `sink`, after a
+    /// [`Self::restrict_cell`] that returned `true`: the odometer over each
+    /// dim's restricted (or full) range, each dim enumerating only what every
+    /// link to an earlier dim admits. With no contracted dim the sink sees one
+    /// empty tuple (the pointwise term). `false` once the sink asks to stop.
+    pub(super) fn walk_cell(
+        &self,
+        ranges: &[(i64, i64)],
+        bufs: &mut CellBufs<'a>,
+        sink: &mut impl TupleSink,
+    ) -> bool {
+        let CellBufs {
+            restrict,
+            cur,
+            scratch,
+            pairs,
+        } = bufs;
+        // The PAIRS shape: two contracted dims, both unrestricted, and every
+        // link between them. The most selective link's pair list then binds
+        // the whole tuple, so the walk goes straight to the matches instead of
+        // probing partners per value of dim 0. Same tuples, same order.
+        if self.nc == 2 && !self.links.is_empty() && restrict.iter().all(Option::is_none) {
+            return walk_pairs(&self.links, ranges, pairs, cur, sink);
+        }
+        let srcs: SmallVec<[DimSrc<'_>; 4]> = (0..self.nc)
+            .map(|d| match &restrict[d] {
+                Some(v) => DimSrc::List(v),
+                None => DimSrc::Range(ranges[d].0, ranges[d].1),
+            })
+            .collect();
+        walk_linked(&srcs, &self.into, 0, cur, scratch, sink)
+    }
+}
+
+/// [`GatePlan::walk_cell`]'s PAIRS shape. The odometer varies dim 1 fastest,
+/// so the product order over the surviving tuples is the pair list sorted by
+/// (dim 0, dim 1).
+fn walk_pairs(
+    links: &[Link<'_>],
+    ranges: &[(i64, i64)],
+    pairs: &mut Vec<(i64, i64)>,
+    cur: &mut [i64],
+    sink: &mut impl TupleSink,
+) -> bool {
+    let (lead, rest) = links.split_first().expect("a PAIRS walk has a link");
+    let (lo0, hi0) = ranges[0];
+    let (lo1, hi1) = ranges[1];
+    pairs.clear();
+    pairs.extend(
+        lead.index
+            .pairs()
+            .map(|(s, t)| if lead.early_is_src { (s, t) } else { (t, s) })
+            .filter(|&(a, b)| a >= lo0 && a <= hi0 && b >= lo1 && b <= hi1)
+            .filter(|&(a, b)| rest.iter().all(|l| l.admits(a, b))),
+    );
+    if !lead.early_is_src {
+        pairs.sort_unstable();
+    }
+    for &(a, b) in pairs.iter() {
+        cur[0] = a;
+        sink.bind(0, a);
+        cur[1] = b;
+        sink.bind(1, b);
+        if !sink.leaf(cur) {
+            return false;
+        }
+    }
+    true
 }
 
 /// What a [`walk_linked`] visit does with each binding and each tuple.
@@ -266,7 +556,7 @@ pub(super) fn walk_linked(
         return true;
     }
     // One link over an unrestricted dim: its partner slice IS the source, so
-    // borrow it rather than copy it (the pre-multi-link path exactly).
+    // borrow it rather than copy it.
     if let ([(e, index, side)], DimSrc::Range(lo, hi)) = (&links[..], &srcs[d]) {
         let parts = index.partners_in(*side, cur[*e], *lo, *hi);
         for &v in parts {
@@ -281,50 +571,19 @@ pub(super) fn walk_linked(
     // Otherwise intersect the source with every link's partner list, in a
     // buffer reused across visits of this depth.
     let mut buf = std::mem::take(&mut scratch[d]);
-    buf.clear();
-    {
-        let (e0, ix0, side0) = links[0];
-        match &srcs[d] {
-            DimSrc::Range(lo, hi) => {
-                buf.extend_from_slice(ix0.partners_in(side0, cur[e0], *lo, *hi));
-            }
-            DimSrc::List(vals) => {
-                let parts = ix0.partners(side0, cur[e0]);
-                let (mut i, mut j) = (0usize, 0usize);
-                while i < vals.len() && j < parts.len() {
-                    match vals[i].cmp(&parts[j]) {
-                        std::cmp::Ordering::Less => i += 1,
-                        std::cmp::Ordering::Greater => j += 1,
-                        std::cmp::Ordering::Equal => {
-                            buf.push(vals[i]);
-                            i += 1;
-                            j += 1;
-                        }
-                    }
-                }
-            }
+    let (e0, ix0, side0) = links[0];
+    match &srcs[d] {
+        DimSrc::Range(lo, hi) => {
+            buf.clear();
+            buf.extend_from_slice(ix0.partners_in(side0, cur[e0], *lo, *hi));
         }
-        for &(e, ix, side) in &links[1..] {
-            if buf.is_empty() {
-                break;
-            }
-            let parts = ix.partners(side, cur[e]);
-            // In-place ascending intersection: `w` trails `i`.
-            let (mut i, mut j, mut w) = (0usize, 0usize, 0usize);
-            while i < buf.len() && j < parts.len() {
-                match buf[i].cmp(&parts[j]) {
-                    std::cmp::Ordering::Less => i += 1,
-                    std::cmp::Ordering::Greater => j += 1,
-                    std::cmp::Ordering::Equal => {
-                        buf[w] = buf[i];
-                        w += 1;
-                        i += 1;
-                        j += 1;
-                    }
-                }
-            }
-            buf.truncate(w);
+        DimSrc::List(vals) => intersect_into(&mut buf, vals, ix0.partners(side0, cur[e0])),
+    }
+    for &(e, ix, side) in &links[1..] {
+        if buf.is_empty() {
+            break;
         }
+        retain_sorted_in(&mut buf, ix.partners(side, cur[e]));
     }
     let mut ok = true;
     for &v in &buf {
@@ -417,5 +676,126 @@ mod tests {
         let mut restrict: Vec<Option<Restriction>> =
             vec![None, None, Some(Cow::Borrowed(&none[..]))];
         assert!(!propagate_links(&links, &ranges, &mut restrict));
+    }
+
+    /// Every value left in a restricted dim has a partner in every restricted
+    /// dim it is linked to: the arc-consistency a true fixpoint guarantees.
+    fn assert_fixpoint(links: &[Link], restrict: &[Option<Restriction>]) {
+        for l in links {
+            for (from, to, side) in [
+                (l.early, l.late, l.early_side()),
+                (l.late, l.early, l.late_side()),
+            ] {
+                let (Some(have), Some(other)) =
+                    (restrict[from].as_deref(), restrict[to].as_deref())
+                else {
+                    continue;
+                };
+                for &v in have {
+                    let parts = l.index.partners(side, v);
+                    assert!(
+                        other.iter().any(|o| parts.contains(o)),
+                        "dim {from} value {v} has no partner left in dim {to}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A CYCLIC gate graph (all three pairwise) narrows to a true fixpoint,
+    /// however many passes that takes, and a narrowing that changes nothing
+    /// leaves the restriction borrowed.
+    #[test]
+    fn propagation_reaches_a_fixpoint_on_a_cycle() {
+        // A long ladder around the triangle: each step of narrowing removes
+        // one value, so a pass-capped loop would stop short.
+        let n = 12i64;
+        let ab: Vec<(i64, i64)> = (1..=n).map(|v| (v, v)).collect();
+        let bc: Vec<(i64, i64)> = (1..=n).map(|v| (v, v)).collect();
+        let ca: Vec<(i64, i64)> = (2..=n).map(|v| (v, v - 1)).chain([(1, n)]).collect();
+        let (ab, bc, ca) = (
+            OverlapIndex::from_pairs(&ab),
+            OverlapIndex::from_pairs(&bc),
+            OverlapIndex::from_pairs(&ca),
+        );
+        let links = [
+            Link::new(0, 1, &ab),
+            Link::new(1, 2, &bc),
+            Link::new(2, 0, &ca),
+        ];
+        let ranges = [(1, n), (1, n), (1, n)];
+        // Dim 0 pinned to everything but `n`: the cycle shifts by one each
+        // round, so the admitted set erodes one value at a time to nothing.
+        let pin: Vec<i64> = (1..n).collect();
+        let mut restrict: Vec<Option<Restriction>> =
+            vec![Some(Cow::Borrowed(&pin[..])), None, None];
+        assert!(!propagate_links(&links, &ranges, &mut restrict));
+
+        // A consistent cycle: the identity on all three links.
+        let id = OverlapIndex::from_pairs(&(1..=n).map(|v| (v, v)).collect::<Vec<_>>());
+        let links = [
+            Link::new(0, 1, &id),
+            Link::new(1, 2, &id),
+            Link::new(2, 0, &id),
+        ];
+        let pin = [3i64, 5, 7];
+        let mut restrict: Vec<Option<Restriction>> =
+            vec![Some(Cow::Borrowed(&pin[..])), None, None];
+        assert!(propagate_links(&links, &ranges, &mut restrict));
+        for r in &restrict {
+            assert_eq!(r.as_deref(), Some(&pin[..]));
+        }
+        assert!(matches!(restrict[0], Some(Cow::Borrowed(_))));
+        assert_fixpoint(&links, &restrict);
+    }
+
+    /// Several links between the same two dims take the PAIRS walk, which is
+    /// the full product filtered by every link, in odometer order.
+    #[test]
+    fn the_pairs_walk_takes_every_link_between_two_dims() {
+        let a = OverlapIndex::from_pairs(&[(1, 1), (1, 2), (2, 2), (3, 1), (3, 3)]);
+        // The same two dims the other way round (src is the late dim).
+        let b = OverlapIndex::from_pairs(&[(1, 1), (2, 3), (3, 3), (2, 1)]);
+        let plan = GatePlan::new(
+            2,
+            [
+                (&a, GateAxis::Contracted(0), GateAxis::Contracted(1)),
+                (&b, GateAxis::Contracted(1), GateAxis::Contracted(0)),
+            ],
+        );
+        let ranges = [(1, 3), (1, 3)];
+        let mut bufs = plan.bufs();
+        assert!(plan.restrict_cell(&ranges, |_, _| None, &mut bufs));
+        let mut sink = Collect(Vec::new());
+        assert!(plan.walk_cell(&ranges, &mut bufs, &mut sink));
+        let mut want = Vec::new();
+        for x in 1..=3 {
+            for y in 1..=3 {
+                if a.contains(x, y) && b.contains(y, x) {
+                    want.push(vec![x, y]);
+                }
+            }
+        }
+        assert_eq!(sink.0, want);
+        assert_eq!(want, vec![vec![1, 1], vec![1, 2], vec![3, 3]]);
+    }
+
+    #[test]
+    fn sorted_list_primitives() {
+        assert_eq!(
+            intersect_sorted(&[1, 3, 5, 7], &[2, 3, 4, 7, 9]),
+            vec![3, 7]
+        );
+        assert_eq!(intersect_sorted(&[], &[1]), Vec::<i64>::new());
+        let mut buf = vec![1, 2, 4, 8];
+        retain_sorted_in(&mut buf, &[2, 3, 8]);
+        assert_eq!(buf, vec![2, 8]);
+        assert!(is_subset_sorted(&[2, 8], &[1, 2, 4, 8]));
+        assert!(!is_subset_sorted(&[2, 9], &[1, 2, 4, 8]));
+        let mut slot: Option<Restriction> = Some(Cow::Borrowed(&[2, 4][..]));
+        assert!(narrow(&mut slot, Cow::Borrowed(&[1, 2, 4][..])) == Narrowed::Same);
+        assert!(matches!(slot, Some(Cow::Borrowed(_))));
+        assert!(narrow(&mut slot, Cow::Borrowed(&[4][..])) == Narrowed::Changed);
+        assert!(narrow(&mut slot, Cow::Borrowed(&[5][..])) == Narrowed::Empty);
     }
 }

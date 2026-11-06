@@ -4012,11 +4012,19 @@ axis enumerates the **intersection** of their partner lists.
      between axes `p` and `q`, when the gates above already restricted `p`,
      restrict `q` to the union of the partners of every admitted `p` position
      (intersected with whatever `q` already admitted), and likewise from `q` to
-     `p`; repeat over all such gates until nothing narrows (on an acyclic chain
-     that takes at most one pass per gate, and stopping earlier is still
-     correct). The union of ascending partner lists, merged and deduplicated,
-     is ascending, so each axis still enumerates an order-preserving
-     subsequence of its range. An axis left with nothing admits no leaf: the
+     `p`; repeat until nothing narrows. This is a fixpoint over the gate GRAPH,
+     which may be cyclic (three axes joined pairwise is a cycle): a binding
+     SHOULD iterate to the true fixpoint, not stop after a fixed number of
+     passes, since on a cycle each pass can remove as little as one position.
+     It terminates because an axis's admitted set only ever shrinks. Stopping
+     earlier is still correct, since every step only drops tuples some gate
+     rejects; it costs leaves, never values. A worklist that re-reads a gate
+     only from an axis that changed since it was last read reaches the same
+     fixpoint, because the fixpoint (every admitted position on each axis has a
+     partner among the admitted positions of every axis it is linked to) does
+     not depend on the order the gates are read in. The union of ascending
+     partner lists, merged and deduplicated, is ascending, so each axis still
+     enumerates an order-preserving subsequence of its range. An axis left with nothing admits no leaf: the
      output position takes `0̄`. This is what carries a pin on one contracted
      axis — from a gate to a bound output index — across a chain of
      both-contracted gates to the axes beyond it.

@@ -453,6 +453,19 @@ pub fn gate_cache_pair_budget() -> usize {
 /// owns is priced against it by [`OverlapIndex::resident_pairs`].
 pub const GATE_PAIR_BYTES: usize = 2 * size_of::<i64>();
 
+/// Is the per-node `[join-gate]` stderr diagnostic on? Off unless the
+/// environment sets `ESS_JOIN_GATE_LOG` to something other than empty or `0`.
+/// The interpreter's line (one per gated `faq`: its gates, cells and leaves
+/// enumerated) and the tape builder's (gates, cells, and whether the tuple
+/// list was listed or folded) both read this, so library code prints nothing
+/// unless asked.
+pub(crate) fn join_gate_log_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("ESS_JOIN_GATE_LOG").is_ok_and(|v| !v.trim().is_empty() && v.trim() != "0")
+    })
+}
+
 /// The default resident-pair budget: 64 MB of [`OverlapIndex`] per cache,
 /// comfortably above every gate in the corpus and far below the multi-gigabyte
 /// match sets a relational port resolves.
