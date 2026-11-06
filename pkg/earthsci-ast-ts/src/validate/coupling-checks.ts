@@ -21,11 +21,15 @@ import type { StructuralError } from './types.js'
 import {
   collectIndexSymbols,
   extractVariableReferences,
+  isInlineModel,
   resolveScopedReference,
+  resolveScopedTarget,
   splitScopedRef,
 } from './expr-utils.js'
 import { isExpressionLike } from '../traverse.js'
 import { collectRoleSegments, expandCouplingImports } from '../coupling-imports.js'
+import { derivativeTarget } from '../classification.js'
+import { observedDefinitionReads } from './observed-checks.js'
 import { effectiveRecordsPerSample } from '../types.js'
 import {
   forEachParameterUpdate,
@@ -369,138 +373,148 @@ function validateImportedCouplingEdges(esmFile: EsmFile): StructuralError[] {
 }
 
 /**
- * The names under a time derivative `D(·, t)` (`wrt` "t" or absent) in an
- * equation's left-hand side: a bare `D(v)`, an `index(v, …)` gather inside it,
- * or a `faq` whose body is such a derivative (esm-spec §4.9.7).
+ * The document-wide observed dependency graph of esm-spec §4.9.7, as a SORTED
+ * adjacency map keyed by full scoped name (`ModelA.a`, `ModelN.Sub.c`).
+ *
+ * Nodes are the OBSERVED unknowns (§6.3.1, `observedUnknowns`) of every
+ * inline model and subsystem at every depth, minus any unknown some equation
+ * of the document puts under `D(·, t)` through its scoped name (that makes it
+ * a state of the coupled system). States, parameters, algebraic unknowns,
+ * unknowns with no equation and unresolved names are not nodes, so a read of
+ * one is not an edge.
+ *
+ * Edges come from {@link observedDefinitionReads}, the same walk the
+ * per-model `observed_cycle` graph uses. A reference, in an observed's
+ * definition or under a `D`, resolves with the reference-integrity precedence
+ * (esm-spec §4.8.4, "A scoped reference carries its target's units"): the
+ * reading component's own names, then a path relative to its own subsystems,
+ * then a top-level system path (§4.6). That is {@link resolveScopedTarget}.
+ *
+ * A `{ref}` subsystem that reaches `validate` is unresolved (the synchronous
+ * validator does no file I/O); it carries no equations, contributes no nodes,
+ * and is reported on its own as `unresolved_subsystem_ref`.
  */
-function timeDerivativeOperandNames(e: unknown, underD: boolean): Set<string> {
-  const out = new Set<string>()
-  if (typeof e === 'string') {
-    if (underD) out.add(e)
-    return out
-  }
-  if (!e || typeof e !== 'object') return out
-  const node = e as { op?: string; args?: unknown[]; wrt?: string | null; expr?: unknown }
-  const d = underD || (node.op === 'D' && (node.wrt === undefined || node.wrt === null || node.wrt === 't'))
-  for (const a of node.args ?? []) for (const n of timeDerivativeOperandNames(a, d)) out.add(n)
-  if (node.expr !== undefined) for (const n of timeDerivativeOperandNames(node.expr, d)) out.add(n)
-  return out
-}
+function crossScopeObservedGraph(esmFile: EsmFile): Map<string, string[]> {
+  const reads = new Map<string, { scope: string; model: Model; refs: Set<string> }>()
+  const derivativeStates = new Set<string>()
 
-/**
- * The scoped names (`Model.v`, `Model.Sub.v`) of every unknown of the
- * document's models that is NOT an ODE state: an unknown no equation of the
- * document puts under `D(·, t)` (esm-spec §4.9.7). A `D` left-hand side names
- * its variable bare in the variable's own (sub)model, or by its scoped name
- * from anywhere.
- */
-function crossModelObservedNames(esmFile: EsmFile): Set<string> {
-  const unknowns = new Set<string>()
-  const states = new Set<string>()
-  const walk = (path: string, m: unknown): void => {
-    if (!m || typeof m !== 'object' || 'ref' in (m as object)) return
-    const model = m as {
-      variables?: Record<string, { type?: string }>
-      equations?: Array<{ lhs?: unknown }>
-      subsystems?: Record<string, unknown>
-    }
-    for (const [v, def] of Object.entries(model.variables ?? {})) {
-      if (def && def.type === 'unknown') unknowns.add(`${path}.${v}`)
-    }
+  // The full scoped name a reference written in `model` (scoped name `scope`)
+  // names, or `undefined` when it names nothing a model declares.
+  const resolve = (ref: string, scope: string, model: Model): string | undefined => {
+    if (!ref.includes('.')) return `${scope}.${ref}`
+    const target = resolveScopedTarget(ref, esmFile, model)
+    if (target?.base === 'enclosing') return `${scope}.${ref}`
+    if (target?.base === 'models') return ref
+    return undefined
+  }
+
+  const walk = (scope: string, model: Model): void => {
     for (const eq of model.equations ?? []) {
-      for (const x of timeDerivativeOperandNames(eq?.lhs, false)) {
-        states.add(x.includes('.') ? x : `${path}.${x}`)
-      }
+      const target = derivativeTarget(eq.lhs)
+      if (target === undefined || !target.includes('.')) continue
+      const state = resolve(target, scope, model)
+      if (state !== undefined) derivativeStates.add(state)
     }
-    for (const [sub, node] of Object.entries(model.subsystems ?? {})) {
-      walk(`${path}.${sub}`, node)
+    for (const [name, refs] of observedDefinitionReads(model, esmFile)) {
+      reads.set(`${scope}.${name}`, { scope, model, refs })
+    }
+    for (const [subName, sub] of Object.entries(model.subsystems ?? {})) {
+      if (isInlineModel(sub)) walk(`${scope}.${subName}`, sub)
     }
   }
-  for (const [name, model] of Object.entries(esmFile.models ?? {})) walk(name, model)
-  for (const s of states) unknowns.delete(s)
-  return unknowns
+  for (const [name, model] of Object.entries(esmFile.models ?? {})) {
+    if (isInlineModel(model)) walk(name, model)
+  }
+
+  for (const state of derivativeStates) reads.delete(state)
+
+  const graph = new Map<string, string[]>()
+  for (const [node, { scope, model, refs }] of reads) {
+    const successors = new Set<string>()
+    for (const ref of refs) {
+      const target = resolve(ref, scope, model)
+      if (target !== undefined && reads.has(target)) successors.add(target)
+    }
+    graph.set(node, [...successors].sort())
+  }
+  return graph
+}
+
+/** The model or subsystem a scoped name lives in: everything before its last dot. */
+function scopeOf(scopedName: string): string {
+  return scopedName.slice(0, scopedName.lastIndexOf('.'))
 }
 
 /**
- * Check for circular cross-model variable references (without explicit coupling).
- * Only a read of an observed or algebraic unknown of another model is an edge
- * (esm-spec §4.9.7): a state's or a parameter's value is known at every
- * right-hand-side evaluation, so reading it orders nothing.
+ * `circular_dependency` (esm-spec §4.9.7): a cycle among OBSERVED unknowns that
+ * crosses a scope boundary (two top-level models, or a model and one of its
+ * subsystems). A state's or a parameter's value is known at every
+ * right-hand-side evaluation, so reading it orders nothing; only an observed's
+ * definition can.
+ *
+ * The traversal is pinned so every binding names the same cycle: a DFS with
+ * roots in lexicographic order of scoped name and successors in lexicographic
+ * order; the first back edge `V -> W` closes the cycle `W ... V W` along the
+ * search path. A back edge whose cycle lies in one scope is that scope's
+ * `observed_cycle` (reported by {@link validateObservedCycles}), so it is
+ * skipped and the search continues. One finding per document, at `/models`
+ * (the smallest node containing the whole cycle).
+ *
+ * Iterative for the same reason `validateObservedCycles` is: the depth is the
+ * length of the longest observed chain, a property of the document.
  */
 export function validateCircularReferences(esmFile: EsmFile): StructuralError[] {
-  const errors: StructuralError[] = []
-  if (!esmFile.models) return errors
-  const observed = crossModelObservedNames(esmFile)
+  if (!esmFile.models) return []
+  const graph = crossScopeObservedGraph(esmFile)
 
-  // Build dependency graph: which models reference which other models
-  const modelDeps = new Map<string, Set<string>>()
+  const ON_CHAIN = 1
+  const FINISHED = 2
+  const state = new Map<string, number>()
 
-  for (const [modelName, model] of Object.entries(esmFile.models)) {
-    const deps = new Set<string>()
-    // Check all equations for cross-model references (unresolved
-    // SubsystemRef entries carry no equations)
-    const equations = 'ref' in model ? [] : model.equations || []
-    for (const equation of equations) {
-      const refs = [
-        ...extractVariableReferences(equation.lhs),
-        ...extractVariableReferences(equation.rhs),
-      ]
-      for (const ref of refs) {
-        if (ref.includes('.') && observed.has(ref)) {
-          const targetModel = ref.split('.')[0]
-          if (targetModel !== modelName && esmFile.models[targetModel]) {
-            deps.add(targetModel)
-          }
-        }
+  const firstCycleFrom = (root: string): string[] | undefined => {
+    const chain: string[] = [root]
+    const cursor: number[] = [0]
+    state.set(root, ON_CHAIN)
+    while (chain.length > 0) {
+      const name = chain[chain.length - 1]
+      const successors = graph.get(name) ?? []
+      const i = cursor[cursor.length - 1]++
+      if (i >= successors.length) {
+        state.set(name, FINISHED)
+        chain.pop()
+        cursor.pop()
+        continue
       }
+      const successor = successors[i]
+      const seen = state.get(successor)
+      if (seen === ON_CHAIN) {
+        const cycle = [...chain.slice(chain.indexOf(successor)), successor]
+        const scope = scopeOf(cycle[0])
+        if (cycle.some((n) => scopeOf(n) !== scope)) return cycle
+        continue
+      }
+      if (seen === FINISHED) continue
+      state.set(successor, ON_CHAIN)
+      chain.push(successor)
+      cursor.push(0)
     }
-    modelDeps.set(modelName, deps)
+    return undefined
   }
 
-  // Detect cycles using DFS
-  const visited = new Set<string>()
-  const inStack = new Set<string>()
-
-  // Returns void: the boolean was never read by any caller (cycles are
-  // reported by pushing to `errors`, and recursion ignores the result).
-  function dfs(node: string, path: string[]): void {
-    if (inStack.has(node)) {
-      const cycleStart = path.indexOf(node)
-      const cycle = path.slice(cycleStart).concat(node)
-      errors.push({
-        // A dependency cycle is carried by no single model, so it is pinned at
-        // the smallest node that CONTAINS the whole cycle — the `/models`
-        // container — rather than at any one member model
-        // (CONFORMANCE_SPEC §7.1.2; `circular_coupling.esm` → `/models`). The
-        // concrete cycle is still surfaced in the message and `details.cycle`
-        // for whoever has to fix it.
+  for (const root of [...graph.keys()].sort()) {
+    if (state.get(root) !== undefined) continue
+    const cycle = firstCycleFrom(root)
+    if (cycle === undefined) continue
+    return [
+      {
         path: '/models',
-        message: `Circular dependency detected: ${cycle.join(' → ')}`,
+        message: `Circular dependency among observeds: ${cycle.join(' → ')}`,
         code: ERROR_CODES.CIRCULAR_DEPENDENCY,
         details: { cycle },
-      })
-      return
-    }
-    if (visited.has(node)) return
-
-    visited.add(node)
-    inStack.add(node)
-    path.push(node)
-
-    for (const dep of modelDeps.get(node) || []) {
-      dfs(dep, [...path])
-    }
-
-    inStack.delete(node)
+      },
+    ]
   }
-
-  for (const modelName of modelDeps.keys()) {
-    if (!visited.has(modelName)) {
-      dfs(modelName, [])
-    }
-  }
-
-  return errors
+  return []
 }
 
 /**

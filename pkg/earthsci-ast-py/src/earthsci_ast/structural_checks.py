@@ -48,17 +48,27 @@ module-import graph acyclic.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
 from . import index_alignment, op_registry, recurrence
 from .classification import (
+    _derivative_targets,
+    _equations,
+    _field,
+    _variables,
     algebraic_unknowns,
+    model_nodes,
     observed_definitions,
     ode_states,
     system_kind,
 )
-from .error_handling import COUPLING_EDGE_UNKNOWN_ROLE, OBSERVED_CYCLE, RAGGED_VALUES_NOT_GATHERED
+from .error_handling import (
+    CIRCULAR_DEPENDENCY,
+    COUPLING_EDGE_UNKNOWN_ROLE,
+    OBSERVED_CYCLE,
+    RAGGED_VALUES_NOT_GATHERED,
+)
 from .esm_types import effective_records_per_sample
 from .json_walk import iter_child_values, walk_dict_exprs
 
@@ -851,14 +861,64 @@ def _is_observed_cycle_self_edge_exempt(var: str, rhs: Any, *, array_shaped: boo
     )
 
 
-def _first_observed_cycle(successors: dict[str, list[str]]) -> list[str] | None:
+def _observed_definition_reads(var: str, rhs: Any, variables: dict[str, Any]) -> set[str]:
+    """The names ``var``'s defining RHS reads: the out-edges of ``var`` in the
+    observed-dependency graph before they are intersected with a node set.
+
+    ONE walk for both graphs that use it, §4.9.6 ``observed_cycle`` (one
+    model) and §4.9.7 ``circular_dependency`` (the whole document), so the two
+    cannot disagree about what a definition reads.
+
+    Free names of the RHS: every string leaf the reference walker reaches, minus
+    the index/integration symbols the expression itself binds. Subtracting the
+    binders BEFORE intersecting with a node set is what stops a loop symbol that
+    happens to share a name with an observed from manufacturing an edge. A
+    top-level bare string RHS (``a ~ b``, the alias form) is a reference in its
+    own right, and :func:`_walk_expression_strings` only descends op-nodes, so
+    it is added here.
+
+    The SELF-EDGE of a §4.3.1.1 causal self-reference is dropped: a causal
+    self-read is an ORDERING WITHIN one variable — the sweep publishes each cell
+    before the axis advances — rather than a dependency between two.
+
+    Gated on CANDIDACY, never on the well-foundedness verdict (CONFORMANCE_SPEC
+    §5.19.5). Verdict-gating would leave the exemption off for an ILL-founded
+    self-read, so the cycle check would fire first and collapse the document to
+    one cycle error, and the ``recurrence_not_wellfounded`` /
+    ``recurrence_unsupported_form`` diagnosis would never be reached — the
+    masking defect the construct exists to remove, moved from the legal case to
+    the illegal one.
+
+    Candidacy is also narrower than "is this a self-edge at all": a scalar
+    ``x ~ x + 1``, or a bare ``s ~ s + 1`` over an array, has no axis to fold
+    along, can never be a recurrence, and IS a cycle of length one that
+    ``observed_cycle`` must report."""
+    names = set(_walk_expression_strings(rhs))
+    if isinstance(rhs, str):
+        names.add(rhs)
+    names -= _expression_bound_symbols(rhs)
+    if var in names and _is_observed_cycle_self_edge_exempt(
+        var, rhs, array_shaped=bool(_field(variables.get(var), "shape"))
+    ):
+        names.discard(var)
+    return names
+
+
+def _first_observed_cycle(
+    successors: dict[str, list[str]],
+    keep: Callable[[list[str]], bool] | None = None,
+) -> list[str] | None:
     """The first cycle a deterministic DFS closes over ``successors``, or ``None``.
+
+    ``keep`` filters the back edges that count: a cycle it rejects is skipped
+    and the search continues past that edge, which is how §4.9.7 passes over a
+    cycle that lies in one scope (that cycle is §4.9.6's) without losing a
+    cross-scope one the same search reaches later.
 
     Roots are visited in sorted name order and each node's successors are already
     sorted by the caller, so the SAME cycle is named on every run — the
     determinism esm-spec §4.9.6 requires of a diagnostic that reports one cycle
-    per model out of possibly several. WHITE/GRAY/BLACK colouring, as
-    :func:`_check_circular_references` uses on the model graph: a GRAY successor
+    per model out of possibly several. WHITE/GRAY/BLACK colouring: a GRAY successor
     is on the current stack, so the cycle is the tail of the path from it
     onwards, closed by repeating it.
 
@@ -891,7 +951,10 @@ def _first_observed_cycle(successors: dict[str, list[str]]) -> list[str] | None:
                 continue
             state = color.get(nxt)
             if state == GRAY:
-                return path[path.index(nxt) :] + [nxt]
+                cycle = path[path.index(nxt) :] + [nxt]
+                if keep is None or keep(cycle):
+                    return cycle
+                continue
             if state == WHITE:
                 color[nxt] = GRAY
                 path.append(nxt)
@@ -924,8 +987,8 @@ def _check_observed_cycles(data: dict[str, Any], errors: list) -> None:
     the path in traversal order with the entry node repeated to close it — a
     PATH, so it is ordered semantically, not lexicographically.
 
-    One cycle is reported per model (the first the sorted DFS closes), which is
-    the same policy ``_check_circular_references`` applies to the model graph."""
+    One cycle is reported per model (the first the sorted DFS closes), the same
+    search :func:`circular_dependency_cycle` runs over the whole document."""
     for mname, m in (data.get("models") or {}).items():
         if not isinstance(m, dict):
             continue
@@ -941,50 +1004,12 @@ def _check_observed_cycles(data: dict[str, Any], errors: list) -> None:
             continue
         nodes = set(definitions)
 
-        successors: dict[str, list[str]] = {}
-        for var, rhs in definitions.items():
-            # Free names of the defining RHS: every string leaf the reference
-            # walker reaches, minus the index/integration symbols the expression
-            # itself binds. Subtracting the binders BEFORE intersecting with the
-            # node set is what stops a loop symbol that happens to share a name
-            # with an observed from manufacturing an edge. A top-level bare
-            # string RHS (`a ~ b`, the alias form) is a reference in its own
-            # right, and `_walk_expression_strings` only descends op-nodes, so it
-            # is added here.
-            names = set(_walk_expression_strings(rhs))
-            if isinstance(rhs, str):
-                names.add(rhs)
-            names -= _expression_bound_symbols(rhs)
-            edges = names & nodes
-            if var in edges and _is_observed_cycle_self_edge_exempt(
-                var,
-                rhs,
-                array_shaped=bool(
-                    isinstance(variables.get(var), dict) and variables[var].get("shape")
-                ),
-            ):
-                # The SELF-EDGE of a §4.3.1.1 causal self-reference is dropped: a
-                # causal self-read is an ORDERING WITHIN one variable — the sweep
-                # publishes each cell before the axis advances — rather than a
-                # dependency between two.
-                #
-                # Gated on CANDIDACY, never on the well-foundedness verdict
-                # (CONFORMANCE_SPEC §5.19.5). Verdict-gating would leave the
-                # exemption off for an ILL-founded self-read, so this check would
-                # fire first and collapse the document to one cycle error, and
-                # the `recurrence_not_wellfounded` / `recurrence_unsupported_form`
-                # diagnosis would never be reached — the masking defect the
-                # construct exists to remove, moved from the legal case to the
-                # illegal one.
-                #
-                # Candidacy is also narrower than "is this a self-edge at all": a
-                # scalar `x ~ x + 1`, or a bare `s ~ s + 1` over an array, has no
-                # axis to fold along, can never be a recurrence, and IS a cycle
-                # of length one that this check must report.
-                edges.discard(var)
-            # Sorted successors (and sorted roots in the traversal): the walk must
-            # be deterministic so the binding names the SAME cycle on every run.
-            successors[var] = sorted(edges)
+        # Sorted successors (and sorted roots in the traversal): the walk must be
+        # deterministic so the binding names the SAME cycle on every run.
+        successors = {
+            var: sorted(_observed_definition_reads(var, rhs, variables) & nodes)
+            for var, rhs in definitions.items()
+        }
 
         found = _first_observed_cycle(successors)
         if found is not None:
@@ -997,8 +1022,8 @@ def _check_observed_cycles(data: dict[str, Any], errors: list) -> None:
                     f"observeds is defined in terms of the next, so no evaluation order "
                     f"satisfies every definition",
                     # `dependency_type` distinguishes this payload from
-                    # `circular_dependency`'s, which carries a cycle among
-                    # MODELS; the other four bindings emit the same pair.
+                    # `circular_dependency`'s, whose cycle crosses a scope
+                    # boundary; the other four bindings emit the same pair.
                     {"cycle": found, "dependency_type": "observed_definitions"},
                 )
             )
@@ -2067,105 +2092,164 @@ def _check_coupling_references(
             )
 
 
-def _time_derivative_operand_names(e: Any, under_d: bool) -> set[str]:
-    """The names under a time derivative ``D(·, t)`` (``wrt`` "t" or absent) in
-    an equation's left-hand side: a bare ``D(v)``, an ``index(v, …)`` gather
-    inside it, or a ``faq`` whose body is such a derivative (esm-spec §4.9.7)."""
-    if isinstance(e, str):
-        return {e} if under_d else set()
-    if not isinstance(e, dict):
-        return set()
-    d = under_d or (e.get("op") == "D" and e.get("wrt") in (None, "t"))
+def _wire_expression(expr: Any) -> Any:
+    """``expr`` in its wire (dict) spelling: the reference walkers here read
+    dicts, and :func:`circular_dependency_cycle` also runs on a parsed
+    :class:`~earthsci_ast.esm_types.EsmFile` whose expressions are ExprNodes."""
+    if isinstance(expr, (dict, str, int, float)) or expr is None:
+        return expr
+    from .serialize import _serialize_expression
+
+    return _serialize_expression(expr)
+
+
+def _member_names(component: Any) -> list[str]:
+    """The names a component declares: a model's ``variables``, a reaction
+    system's ``species`` and ``parameters`` (a mapping, or a list of named
+    entries), in either the dict or the dataclass spelling."""
+    names = list(_variables(component))
+    for attr in ("species", "parameters"):
+        members = _field(component, attr)
+        if isinstance(members, Mapping):
+            names.extend(members)
+        elif isinstance(members, (list, tuple)):
+            names.extend(n for n in (_field(m, "name") for m in members) if isinstance(n, str))
+    return names
+
+
+def _declared_scoped_names(document: Any) -> set[str]:
+    """The full scoped name of every member of every top-level model and
+    reaction system and of their subsystems at every depth: what a dotted
+    reference can resolve to (esm-spec §4.6). A ``{"ref"}`` mount edge not yet
+    resolved contributes nothing."""
     out: set[str] = set()
-    for a in e.get("args") or []:
-        out |= _time_derivative_operand_names(a, d)
-    if "expr" in e:
-        out |= _time_derivative_operand_names(e["expr"], d)
+
+    def walk(prefix: str, component: Any) -> None:
+        if isinstance(component, Mapping) and "ref" in component:
+            return
+        out.update(f"{prefix}.{name}" for name in _member_names(component))
+        subsystems = _field(component, "subsystems") or {}
+        if isinstance(subsystems, Mapping):
+            for name, sub in subsystems.items():
+                walk(f"{prefix}.{name}", sub)
+
+    for section in ("models", "reaction_systems"):
+        components = _field(document, section) or {}
+        if isinstance(components, Mapping):
+            for name, component in components.items():
+                walk(name, component)
     return out
 
 
-def _cross_model_observed_names(data: dict[str, Any]) -> set[str]:
-    """The scoped names (``Model.v``, ``Model.Sub.v``) of every unknown of the
-    document's models that is NOT an ODE state: an unknown no equation of the
-    document puts under ``D(·, t)`` (esm-spec §4.9.7). A ``D`` left-hand side
-    names its variable bare in the variable's own (sub)model, or by its scoped
-    name from anywhere."""
-    unknowns: set[str] = set()
-    states: set[str] = set()
-
-    def walk(path: str, m: Any) -> None:
-        if not isinstance(m, dict):
-            return
-        for v, vdef in (m.get("variables") or {}).items():
-            if isinstance(vdef, dict) and vdef.get("type") == "unknown":
-                unknowns.add(f"{path}.{v}")
-        for eq in m.get("equations") or []:
-            lhs = eq.get("lhs") if isinstance(eq, dict) else None
-            for x in _time_derivative_operand_names(lhs, False):
-                states.add(x if "." in x else f"{path}.{x}")
-        for sub, node in (m.get("subsystems") or {}).items():
-            walk(f"{path}.{sub}", node)
-
-    for name, model in (data.get("models") or {}).items():
-        walk(name, model)
-    return unknowns - states
+def _resolve_scoped_name(scope: str, name: str, declared: set[str]) -> str:
+    """The full scoped name ``name`` resolves to when read in the model node
+    at ``scope``, with the reference-integrity precedence (esm-spec §4.8.4, "A
+    scoped reference carries its target's units"; §4.9.7): the node's own
+    names for a bare name; for a dotted one, a path relative to the node's own
+    subsystems when it names a declared member — winning even when that member
+    is not an observed — and otherwise a top-level system path."""
+    if "." not in name:
+        return f"{scope}.{name}"
+    relative = f"{scope}.{name}"
+    return relative if relative in declared else name
 
 
-def _check_circular_references(
-    data: dict[str, Any], tables: dict[str, Any], errors: list[str]
-) -> None:
-    """Detect cycles in cross-system dependencies introduced by equation references.
+def circular_dependency_cycle(document: Any) -> list[str] | None:
+    """The §4.9.7 ``circular_dependency`` cycle of ``document``, or ``None``.
 
-    Only a read of an observed or algebraic unknown of another model is an edge
-    (esm-spec §4.9.7): a state's or a parameter's value is known at every
-    right-hand-side evaluation, so reading it orders nothing.
-    """
-    observed = _cross_model_observed_names(data)
-    # Build system -> set of systems it depends on
-    deps = {name: set() for name in data.get("models", {})}
-    for mname, m in data.get("models", {}).items():
-        for eq in m.get("equations", []):
-            for side in ("lhs", "rhs"):
-                if side not in eq:
-                    continue
-                for ref in _walk_expression_strings(eq[side]):
-                    if "." in ref and ref in observed:
-                        target_system = ref.split(".")[0]
-                        if target_system != mname and target_system in deps:
-                            deps[mname].add(target_system)
+    ``document`` is either the raw dict (the load-time pass) or a parsed
+    :class:`~earthsci_ast.esm_types.EsmFile` (``validate``); both are walked
+    through :func:`earthsci_ast.classification.model_nodes`, the binding's one
+    walk over top-level models and their subsystems at every depth. A
+    subsystem still held as a ``{"ref": ...}`` mount edge is not a model node
+    until it is resolved, so the raw-dict pass cannot see into it; the parsed
+    document has it resolved, which is why ``load`` re-runs this after mounting
+    a document that has refs and why ``validate`` runs it on the parsed tree.
 
-    # DFS cycle detection
-    WHITE, GRAY, BLACK = 0, 1, 2
-    color = dict.fromkeys(deps, WHITE)
+    The graph is §4.9.6's built over the whole document. Its nodes are the
+    OBSERVED unknowns of every model node by full scoped name: the keys of
+    :func:`~earthsci_ast.classification.observed_definitions`, the same
+    classification ``observed_cycle`` uses, so ODE states, algebraic unknowns,
+    parameters and unknowns with no defining equation are not nodes. An
+    unknown another model puts under ``D(·, t)`` through its scoped name is an
+    ODE state too and is removed. ``V -> W`` when ``W`` is in
+    :func:`_observed_definition_reads` of ``V`` (the §4.9.6 walk, with its
+    recurrence self-edge exemption), resolved by :func:`_resolve_scoped_name`
+    from ``V``'s model node, and only a name that resolves to a node is an
+    edge. The scoped name under a ``D`` resolves the same way.
 
-    def dfs(node, path):
-        color[node] = GRAY
-        for nxt in deps.get(node, ()):
-            if color.get(nxt) == GRAY:
-                cycle_start = path.index(nxt) if nxt in path else 0
-                cycle = path[cycle_start:] + [nxt]
-                # A dependency cycle is carried by NO single model — it is a
-                # property of the `/models` graph — so the pointer is `/models`
-                # and the code is `circular_dependency` (CONFORMANCE_SPEC §7.1;
-                # TypeScript reference).
-                errors.append(
-                    (
-                        "/models",
-                        f"Circular dependency detected: {' → '.join(cycle)}",
-                        {"cycle": cycle},
-                    )
-                )
-                return True
-            if color.get(nxt) == WHITE:
-                if dfs(nxt, path + [nxt]):
-                    return True
-        color[node] = BLACK
-        return False
+    The search is the pinned one: roots and successors in lexicographic order,
+    and the first back edge whose cycle crosses a scope boundary is reported. A
+    cycle whose nodes all share one model node is that node's
+    ``observed_cycle``, so it is skipped and the search continues."""
+    definitions: dict[str, tuple[str, Any, dict[str, Any]]] = {}
+    scoped_derivatives: list[tuple[str, str]] = []
+    for path, model in model_nodes(document):
+        variables = _variables(model)
+        for var, rhs in observed_definitions(model).items():
+            definitions[f"{path}.{var}"] = (var, _wire_expression(rhs), variables)
+        for equation in _equations(model):
+            scoped_derivatives.extend(
+                (path, name) for name in _derivative_targets(_field(equation, "lhs")) if "." in name
+            )
+    if not definitions:
+        return None
+    declared = _declared_scoped_names(document)
+    nodes = set(definitions) - {
+        _resolve_scoped_name(scope, name, declared) for scope, name in scoped_derivatives
+    }
+    if not nodes:
+        return None
 
-    for n in deps:
-        if color[n] == WHITE:
-            if dfs(n, [n]):
-                break
+    successors: dict[str, list[str]] = {}
+    for scoped in nodes:
+        var, rhs, variables = definitions[scoped]
+        scope = scoped.rsplit(".", 1)[0]
+        resolved = {
+            _resolve_scoped_name(scope, name, declared)
+            for name in _observed_definition_reads(var, rhs, variables)
+        }
+        successors[scoped] = sorted(resolved & nodes)
+
+    def crosses_scopes(cycle: list[str]) -> bool:
+        return len({name.rsplit(".", 1)[0] for name in cycle}) > 1
+
+    return _first_observed_cycle(successors, keep=crosses_scopes)
+
+
+def circular_dependency_record(cycle: list[str]) -> tuple[str, str, str, dict[str, Any]]:
+    """The pinned ``(code, path, message, details)`` of a §4.9.7 cycle. A cycle
+    belongs to no single model, so it pins at ``/models``."""
+    return (
+        CIRCULAR_DEPENDENCY,
+        "/models",
+        f"Circular dependency among observeds: {' → '.join(cycle)}",
+        {"cycle": cycle},
+    )
+
+
+def _refuse_circular_dependency(esm_file: Any) -> None:
+    """Raise :class:`StructuralValidationError` when the parsed, mounted
+    ``esm_file`` has a §4.9.7 cycle: ``load``'s refusal for a cycle that runs
+    through a ``{"ref"}`` mount the raw-dict pass could not see into."""
+    cycle = circular_dependency_cycle(esm_file)
+    if cycle is None:
+        return
+    code, path, message, details = circular_dependency_record(cycle)
+    raise _structural_validation_error_cls()(
+        f"Structural validation failed:\n  - {message}",
+        findings=[(code, message)],
+        records=[{"code": code, "path": path, "message": message, "details": details}],
+    )
+
+
+def _check_circular_references(data: dict[str, Any], errors: list) -> None:
+    """``circular_dependency`` (esm-spec §4.9.7): a cycle among OBSERVED
+    unknowns that crosses a model or subsystem boundary. See
+    :func:`circular_dependency_cycle`."""
+    cycle = circular_dependency_cycle(data)
+    if cycle is not None:
+        errors.append(circular_dependency_record(cycle))
 
 
 def _check_data_source_references(data: dict[str, Any], errors: list[str]) -> None:
@@ -3151,7 +3235,7 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     # §4.9.6: a cycle among ONE model's observed definitions. Ordered AFTER the
     # recurrence pass so that a document carrying both gets the recurrence
     # diagnosis listed first, and BEFORE `circular_dependency`, which is the
-    # unrelated cycle among MODELS. The self-edge of a recurrence CANDIDATE is
+    # same graph's cycle across a scope boundary. The self-edge of a recurrence CANDIDATE is
     # not one of these edges — see `_check_observed_cycles` for why the gate is
     # candidacy and never the well-foundedness verdict.
     collect(OBSERVED_CYCLE, lambda sub: _check_observed_cycles(data, sub))
@@ -3165,7 +3249,7 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     # coupling edge's connector/transform expressions still live outside models.
     collect("unresolved_scoped_ref", lambda sub: _check_coupling_expressions(data, tables, sub))
     collect("undefined_system", lambda sub: _check_coupling_systems(data, tables, sub))
-    collect("circular_dependency", lambda sub: _check_circular_references(data, tables, sub))
+    collect(CIRCULAR_DEPENDENCY, lambda sub: _check_circular_references(data, sub))
     collect("data_source_undefined", lambda sub: _check_data_source_references(data, sub))
     collect("records_per_sample_invalid", lambda sub: _check_records_per_sample(data, sub))
     collect("event_affects_parameter", lambda sub: _check_event_affects_parameter(data, sub))

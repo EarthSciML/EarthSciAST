@@ -12,7 +12,7 @@ from conftest import CORPUS_UNIT_DEFECTS, FIXTURES_ROOT
 
 from earthsci_ast import load_path, load_string, validate
 from earthsci_ast.serialize import to_json
-from earthsci_ast.validation import validate_text, SchemaValidationError
+from earthsci_ast.validation import validate_path, validate_text, SchemaValidationError
 
 
 class TestStructuralValidation:
@@ -38,19 +38,164 @@ class TestStructuralValidation:
             error = exc_info.value
             assert "circular" in str(error).lower() or "cycle" in str(error).lower()
 
-    def test_state_reads_are_not_a_circular_dependency(self, fixtures_dir):
-        """Reads of another model's STATES are not cycle edges (esm-spec
-        §4.9.7): both fixtures load, and ``validate`` reports no cycle. The
-        second is the shape of a boundary-layer mixing term written per
-        component, whose model graph closes only through a state read."""
-        from earthsci_ast import validate
+    @pytest.mark.parametrize(
+        ("name", "cycle"),
+        [
+            ("circular_coupling", ["ModelA.a", "ModelB.b", "ModelA.a"]),
+            ("circular_coupling_subsystem", ["ModelN.Sub.c", "ModelN.a", "ModelN.Sub.c"]),
+        ],
+    )
+    def test_circular_dependency_names_the_observed_cycle(self, fixtures_dir, name, cycle):
+        """The graph is over OBSERVEDS by full scoped name (esm-spec §4.9.7):
+        exactly one ``circular_dependency`` at ``/models`` whose ``details``
+        carry only the pinned cycle, including a cycle between a model and its
+        own subsystem."""
+        result = validate_text((fixtures_dir / "invalid" / f"{name}.esm").read_text())
+        errors = [(e.code, e.path, e.details) for e in result.structural_errors]
+        assert errors == [("circular_dependency", "/models", {"cycle": cycle})]
 
-        for name in ("cross_model_state_reads", "cross_model_mixing_observed_state_cycle"):
-            content = (fixtures_dir / "valid" / f"{name}.esm").read_text()
-            esm = load_string(content)
-            result = validate(esm)
-            codes = [getattr(e, "code", None) for e in result.structural_errors]
-            assert "circular_dependency" not in codes, (name, result.structural_errors)
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "cross_model_state_reads",
+            "cross_model_mixing_observed_state_cycle",
+            "cross_model_observed_reads_no_loop",
+        ],
+    )
+    def test_no_circular_dependency_without_an_observed_cycle(self, fixtures_dir, name):
+        """Reads of STATES are not edges, and two models that read each other's
+        observeds are not a cycle unless a chain of definitions closes (esm-spec
+        §4.9.7): each fixture loads, and ``validate`` reports no cycle."""
+        esm = load_string((fixtures_dir / "valid" / f"{name}.esm").read_text())
+        codes = [e.code for e in validate(esm).structural_errors]
+        assert "circular_dependency" not in codes
+
+    @staticmethod
+    def _two_model_doc(lhs_m: object) -> dict:
+        """``ModelM``'s observed ``a`` reads ``ModelN.b`` and ``ModelN.b`` reads
+        ``ModelM.a``, unless ``lhs_m`` (the left-hand side of ``ModelM``'s first
+        equation) makes ``a`` something other than an observed."""
+        unknown = {"type": "unknown", "units": "1"}
+        return {
+            "esm": "1.0.0",
+            "metadata": {"name": "t", "authors": ["t"]},
+            "models": {
+                "ModelM": {
+                    "variables": {"a": unknown, "e": unknown},
+                    "equations": [
+                        {"lhs": lhs_m, "rhs": 3.0},
+                        {"lhs": "e", "rhs": {"op": "*", "args": [2.0, "ModelN.b"]}},
+                    ],
+                },
+                "ModelN": {
+                    "variables": {"b": unknown},
+                    "equations": [{"lhs": "b", "rhs": {"op": "*", "args": [0.1, "ModelM.e"]}}],
+                },
+            },
+        }
+
+    def test_derivative_of_an_expression_makes_no_state(self):
+        """``D(e + a) ~ 3`` credits no variable as an ODE state (esm-spec
+        §6.3.1), so it leaves ``e`` an observed and the cycle
+        ``ModelM.e -> ModelN.b -> ModelM.e`` stands; ``D(e) ~ 3`` makes ``e``
+        a state, which breaks it."""
+        from earthsci_ast.structural_checks import circular_dependency_cycle
+
+        d_expr = {"op": "D", "args": [{"op": "+", "args": ["e", "a"]}], "wrt": "t"}
+        assert circular_dependency_cycle(self._two_model_doc(d_expr)) == [
+            "ModelM.e",
+            "ModelN.b",
+            "ModelM.e",
+        ]
+        d_e = {"op": "D", "args": ["e"], "wrt": "t"}
+        doc = self._two_model_doc(d_e)
+        doc["models"]["ModelM"]["equations"][1]["lhs"] = "a"
+        assert circular_dependency_cycle(doc) is None
+
+    def test_scoped_derivative_from_another_model_makes_a_state(self):
+        """An unknown another model puts under ``D(·, t)`` through its scoped
+        name is an ODE state, not a node (esm-spec §4.9.7)."""
+        from earthsci_ast.structural_checks import circular_dependency_cycle
+
+        doc = self._two_model_doc("a")
+        assert circular_dependency_cycle(doc) is not None
+        doc["models"]["ModelN"]["equations"].append(
+            {"lhs": {"op": "D", "args": ["ModelM.e"], "wrt": "t"}, "rhs": 1.0}
+        )
+        assert circular_dependency_cycle(doc) is None
+
+    def test_dotted_names_resolve_relative_to_own_subsystems_first(self):
+        """A dotted name resolves first relative to the reading node's own
+        subsystems, then from the top level (esm-spec §4.9.7, with §4.8.4's
+        precedence), and that holds under ``D`` too: inside ``ModelN.Sub``,
+        ``D(Inner.v)`` makes ``ModelN.Sub.Inner.v`` a state, which breaks the
+        cycle ``ModelN.Sub.Inner.v -> ModelN.a -> ModelN.Sub.Inner.v``."""
+        from earthsci_ast.structural_checks import circular_dependency_cycle
+
+        unknown = {"type": "unknown", "units": "1"}
+        doc = {
+            "models": {
+                "ModelN": {
+                    "variables": {"a": unknown},
+                    "equations": [{"lhs": "a", "rhs": "ModelN.Sub.Inner.v"}],
+                    "subsystems": {
+                        "Sub": {
+                            "variables": {"w": unknown},
+                            "equations": [],
+                            "subsystems": {
+                                "Inner": {
+                                    "variables": {"v": unknown},
+                                    "equations": [{"lhs": "v", "rhs": "ModelN.a"}],
+                                }
+                            },
+                        }
+                    },
+                }
+            }
+        }
+        cycle = ["ModelN.Sub.Inner.v", "ModelN.a", "ModelN.Sub.Inner.v"]
+        assert circular_dependency_cycle(doc) == cycle
+        # The same read spelled relative to ModelN's own subsystems.
+        doc["models"]["ModelN"]["equations"][0]["rhs"] = "Sub.Inner.v"
+        assert circular_dependency_cycle(doc) == cycle
+        sub = doc["models"]["ModelN"]["subsystems"]["Sub"]
+        sub["equations"].append({"lhs": {"op": "D", "args": ["Inner.v"], "wrt": "t"}, "rhs": 1.0})
+        assert circular_dependency_cycle(doc) is None
+
+    def test_cycle_inside_one_model_is_not_circular_dependency(self):
+        """A cycle among one model's observeds is ``observed_cycle`` (§4.9.6),
+        not ``circular_dependency``; the search skips it and still finds a
+        cross-model cycle it reaches later."""
+        from earthsci_ast.structural_checks import circular_dependency_cycle
+
+        doc = self._two_model_doc("a")
+        m = doc["models"]["ModelM"]
+        m["equations"][0]["rhs"] = {"op": "+", "args": ["e", 1.0]}
+        m["equations"][1]["rhs"] = {"op": "+", "args": ["a", "ModelN.b"]}
+        # ModelM.a -> ModelM.e -> ModelM.a lies in one model and is skipped;
+        # ModelM.e -> ModelN.b -> ModelM.e crosses models and is reported.
+        assert circular_dependency_cycle(doc) == ["ModelM.e", "ModelN.b", "ModelM.e"]
+        m["equations"][1]["rhs"] = "a"
+        assert circular_dependency_cycle(doc) is None
+
+    def test_cycle_through_a_ref_mounted_subsystem(self, fixtures_dir, tmp_path):
+        """A subsystem mounted by ``{"ref"}`` is part of the graph once resolved
+        (esm-spec §4.9.7): ``load`` refuses the cycle after mounting it."""
+        doc = json.loads((fixtures_dir / "invalid" / "circular_coupling_subsystem.esm").read_text())
+        sub = doc["models"]["ModelN"]["subsystems"].pop("Sub")
+        leaf = {"esm": "1.0.0", "metadata": doc["metadata"], "models": {"Sub": sub}}
+        (tmp_path / "sub.esm").write_text(json.dumps(leaf))
+        doc["models"]["ModelN"]["subsystems"]["Sub"] = {"ref": "./sub.esm"}
+        (tmp_path / "root.esm").write_text(json.dumps(doc))
+        result = validate_path(str(tmp_path / "root.esm"))
+        errors = [(e.code, e.path, e.details) for e in result.structural_errors]
+        assert errors == [
+            (
+                "circular_dependency",
+                "/models",
+                {"cycle": ["ModelN.Sub.c", "ModelN.a", "ModelN.Sub.c"]},
+            )
+        ]
 
     def test_undefined_variable_references(self, fixtures_dir):
         """Test detection of undefined variable references."""

@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -1481,19 +1482,49 @@ func TestCheckerB_F_CouplingAndSubsystemRefPins(t *testing.T) {
 		}
 	})
 
-	t.Run("circular_coupling", func(t *testing.T) {
-		file, _ := loadInvalidFixture(t, "circular_coupling.esm")
-		result := Validate(file)
-		if !hasCode(result, ErrorCircularDependency) {
-			t.Errorf("want circular_dependency: %+v", result.StructuralErrors)
-		}
-		if result.IsValid {
-			t.Error("fixture is pinned invalid")
-		}
-	})
+	// The §4.9.7 graph is over OBSERVED unknowns by scoped name, so each invalid
+	// fixture pins exactly one (code, path, details.cycle).
+	for _, tc := range []struct {
+		name  string
+		cycle []string
+	}{
+		{"circular_coupling.esm", []string{"ModelA.a", "ModelB.b", "ModelA.a"}},
+		{"circular_coupling_subsystem.esm", []string{"ModelN.Sub.c", "ModelN.a", "ModelN.Sub.c"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			file, _ := loadInvalidFixture(t, tc.name)
+			result := Validate(file)
+			var got []StructuralError
+			for _, e := range result.StructuralErrors {
+				if e.Code == ErrorCircularDependency {
+					got = append(got, e)
+				}
+			}
+			if len(got) != 1 {
+				t.Fatalf("want exactly one circular_dependency, got %d: %+v", len(got), result.StructuralErrors)
+			}
+			if got[0].Path != "/models" {
+				t.Errorf("path = %q, want /models", got[0].Path)
+			}
+			if cycle, _ := got[0].Details["cycle"].([]string); !reflect.DeepEqual(cycle, tc.cycle) {
+				t.Errorf("details.cycle = %v, want %v", got[0].Details["cycle"], tc.cycle)
+			}
+			if _, stale := got[0].Details["coupling_chain"]; stale {
+				t.Error("details.coupling_chain is retired")
+			}
+			if result.IsValid {
+				t.Error("fixture is pinned invalid")
+			}
+		})
+	}
 
-	// Reads of another model's STATES are not cycle edges (esm-spec §4.9.7).
-	for _, name := range []string{"cross_model_state_reads.esm", "cross_model_mixing_observed_state_cycle.esm"} {
+	// Reads of states, and observed reads that close no chain of definitions,
+	// are not cycles (esm-spec §4.9.7).
+	for _, name := range []string{
+		"cross_model_state_reads.esm",
+		"cross_model_mixing_observed_state_cycle.esm",
+		"cross_model_observed_reads_no_loop.esm",
+	} {
 		t.Run(name, func(t *testing.T) {
 			repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
 			if err != nil {
@@ -1508,10 +1539,90 @@ func TestCheckerB_F_CouplingAndSubsystemRefPins(t *testing.T) {
 				t.Fatalf("load %s: %v", name, err)
 			}
 			if result := Validate(file); hasCode(result, ErrorCircularDependency) {
-				t.Errorf("a cycle through state reads is not circular_dependency: %+v", result.StructuralErrors)
+				t.Errorf("no cycle among observeds, so no circular_dependency: %+v", result.StructuralErrors)
 			}
 		})
 	}
+
+	// A cycle within one model is observed_cycle, never circular_dependency —
+	// also when a definition reads the model's own observed through its own
+	// dotted name, which resolves back into the model (§4.9.6, §4.8.4 precedence).
+	for _, read := range []string{`"a"`, `"M.a"`} {
+		t.Run("single_model_cycle_is_not_cross_scope/"+read, func(t *testing.T) {
+			result := validateSrc(t, `{"esm":"1.0.0","metadata":{"name":"m"},"models":{"M":{
+			    "variables":{"a":{"type":"unknown"},"b":{"type":"unknown"}},
+			    "equations":[{"lhs":"a","rhs":"b"},{"lhs":"b","rhs":`+read+`}]}}}`)
+			if hasCode(result, ErrorCircularDependency) {
+				t.Errorf("a one-model cycle is observed_cycle: %+v", result.StructuralErrors)
+			}
+			if !hasCode(result, codeObservedCycle) {
+				t.Errorf("want observed_cycle: %+v", result.StructuralErrors)
+			}
+		})
+	}
+
+	// firstCircular returns the cycle of the one circular_dependency, or nil.
+	firstCircular := func(t *testing.T, result *ValidationResult) []string {
+		t.Helper()
+		var cycles [][]string
+		for _, e := range result.StructuralErrors {
+			if e.Code == ErrorCircularDependency {
+				c, _ := e.Details["cycle"].([]string)
+				cycles = append(cycles, c)
+			}
+		}
+		if len(cycles) > 1 {
+			t.Fatalf("want at most one circular_dependency: %+v", result.StructuralErrors)
+		}
+		if len(cycles) == 0 {
+			return nil
+		}
+		return cycles[0]
+	}
+
+	// `D(a + b) ~ 3` is a time derivative of an EXPRESSION: it credits no ODE
+	// state (§6.3.1, classification), so `a`, defined by `a ~ N.c`, stays an
+	// observed and the cross-model loop through it is a cycle.
+	t.Run("derivative_of_expression_makes_no_state", func(t *testing.T) {
+		result := validateSrc(t, `{"esm":"1.0.0","metadata":{"name":"m"},"models":{
+		  "M":{"variables":{"a":{"type":"unknown"},"b":{"type":"unknown"}},
+		       "equations":[
+		         {"lhs":{"op":"D","args":[{"op":"+","args":["a","b"]}],"wrt":"t"},"rhs":3},
+		         {"lhs":"a","rhs":"N.c"}]},
+		  "N":{"variables":{"c":{"type":"unknown"}},
+		       "equations":[{"lhs":"c","rhs":"M.a"}]}}}`)
+		if got, want := firstCircular(t, result), []string{"M.a", "N.c", "M.a"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("cycle = %v, want %v: %+v", got, want, result.StructuralErrors)
+		}
+	})
+
+	// A dotted name under D(·, t) resolves like any read: inside N.Sub,
+	// `D(Inner.v)` names N.Sub.Inner.v (relative to Sub's own subsystems) before
+	// the top-level model `Inner`, so N.Sub.Inner.v is a state and the loop
+	// N.Sub.Inner.v → N.w → N.Sub.Inner.v is no cycle. The control drops the
+	// derivative and the cycle appears.
+	nested := func(withD bool) string {
+		subEqs := `[]`
+		if withD {
+			subEqs = `[{"lhs":{"op":"D","args":["Inner.v"],"wrt":"t"},"rhs":0}]`
+		}
+		return `{"esm":"1.0.0","metadata":{"name":"m"},"models":{
+		  "Inner":{"variables":{"v":{"type":"parameter","default":1.0}},"equations":[]},
+		  "N":{"variables":{"w":{"type":"unknown"}},
+		       "equations":[{"lhs":"w","rhs":"N.Sub.Inner.v"}],
+		       "subsystems":{"Sub":{"variables":{},"equations":` + subEqs + `,
+		         "subsystems":{"Inner":{"variables":{"v":{"type":"unknown"}},
+		           "equations":[{"lhs":"v","rhs":"N.w"}]}}}}}}}`
+	}
+	t.Run("dotted_derivative_target_resolves_relative_first", func(t *testing.T) {
+		if got := firstCircular(t, validateSrc(t, nested(true))); got != nil {
+			t.Errorf("N.Sub.Inner.v is an ODE state, so no cycle; got %v", got)
+		}
+		want := []string{"N.Sub.Inner.v", "N.w", "N.Sub.Inner.v"}
+		if got := firstCircular(t, validateSrc(t, nested(false))); !reflect.DeepEqual(got, want) {
+			t.Errorf("control: cycle = %v, want %v", got, want)
+		}
+	})
 
 	t.Run("subsystem_ref_not_found", func(t *testing.T) {
 		_, _, err := loadInvalidFixtureByPath(t, "subsystem_ref_not_found.esm")

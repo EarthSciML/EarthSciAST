@@ -314,15 +314,16 @@ func definedVariableName(lhs Expression) string {
 	return ""
 }
 
-// derivativeTargets collects the base variable names differentiated with respect
-// to the STRUCTURAL time axis (esm-spec §4.2's literal `t`) anywhere inside an
-// equation LHS.
-//
-// A `D` node's argument may be the bare name, an `index(u, i…)` gather, or any
-// other wrapper; the base name is the first free symbol reachable through it. An
-// `faq` whose `expr` is a derivative is the whole-array spelling of the
-// same thing and credits the same variable, which is why the walk descends
-// `expr` as well as `args`.
+// derivativeTargets collects the base variables one equation LHS credits as
+// ODE states: the LHS is a time derivative `D(·, t)` (esm-spec §4.2's literal
+// `t`) or an `faq` whose `expr` is one (the whole-array spelling of an
+// elementwise derivative), and the derivative's operand names a single
+// variable — bare `u`, an `index(u, i…)` gather, or an `faq` over an `index` —
+// read by definedVariableName. A time derivative of an EXPRESSION
+// (`D(a + b) ~ 3`) credits no variable: it is an implicit equation spelled as
+// a derivative, not a derivative of any one unknown (CONFORMANCE_SPEC, the
+// unsupported_construct category). Mirrors Python
+// classification._derivative_targets.
 func derivativeTargets(expr Expression) map[string]bool {
 	out := map[string]bool{}
 	collectDerivativeTargets(expr, out)
@@ -336,14 +337,14 @@ func collectDerivativeTargets(expr Expression, out map[string]bool) {
 	}
 	if derivativeIsTemporal(node) {
 		for _, a := range node.Args {
-			for _, n := range leafNames(a) {
-				out[n] = true
+			if name := definedVariableName(a); name != "" {
+				out[name] = true
 			}
 		}
 		return
 	}
-	for _, child := range exprRefChildren(node) {
-		collectDerivativeTargets(child.Child, out)
+	if node.Op == "faq" && node.Expr != nil {
+		collectDerivativeTargets(node.Expr, out)
 	}
 }
 
@@ -365,25 +366,6 @@ func collectDerivativeTargets(expr Expression, out map[string]bool) {
 // (EarthSciAST#407).
 func derivativeIsTemporal(node ExprNode) bool {
 	return node.Op == OpDerivative && !isRewriteTargetDerivative(node)
-}
-
-// leafNames returns the free symbol names reachable inside an expression: the
-// bare string itself, or every string leaf of a wrapper node. It stops at the
-// first level that yields names so `index(u, i)` credits `u` and `i` alike —
-// harmless, since only declared unknowns are kept by the caller.
-func leafNames(expr Expression) []string {
-	if name, ok := expr.(string); ok {
-		return []string{name}
-	}
-	node, ok := asExprNode(expr)
-	if !ok {
-		return nil
-	}
-	var out []string
-	for _, child := range exprRefChildren(node) {
-		out = append(out, leafNames(child.Child)...)
-	}
-	return out
 }
 
 // hasTimeDerivative reports whether ANY equation LHS carries a time derivative,

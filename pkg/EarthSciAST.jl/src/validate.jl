@@ -851,7 +851,7 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
 
     # 5b. Coupling-cycle detection (§3.2). A dependency cycle among top-level
     # systems means no evaluation order exists.
-    append!(errors, validate_coupling_cycles(file))
+    append!(errors, validate_coupling_cycles(file; toplevel = scoped_toplevel))
 
     # 5c. Aggregate/relational semantic checks (F-6). Three defects that are
     # statically decidable from the SINGLE document yet slip past both the schema
@@ -2470,147 +2470,76 @@ function validate_model_unit_consistency(
 end
 
 """
-    validate_coupling_cycles(file::EsmFile) -> Vector{StructuralError}
+    validate_coupling_cycles(file::EsmFile; toplevel=nothing) -> Vector{StructuralError}
 
-Detect a dependency cycle among the document's top-level systems.
+Detect a dependency cycle among observeds that crosses a scope boundary
+(`circular_dependency`, esm-spec §4.9.7).
 
-An edge `M → N` exists when a model `M`'s own equations name `N` directly, via a
-qualified reference `N.v` (searched over the full expression child set, sidecar
-fields included) to an observed or algebraic unknown `v` of `N` — one no
-equation puts under `D(·, t)` (esm-spec §4.9.7). A read of a state or a
-parameter is not an edge: its value is known at every right-hand-side
-evaluation. A cycle in that graph means the models' observeds are defined in
-terms of each other, with no evaluation order — see
-`tests/invalid/circular_coupling.esm`; two models reading each other's states
-(`tests/valid/cross_model_state_reads.esm`) are valid.
+This is [`validate_observed_cycles`](@ref)'s graph (§4.9.6) built over the whole
+document instead of one model. The nodes are the observed unknowns
+([`observed_definitions`](@ref)) of every model and subsystem at every depth,
+named by full scoped name (`ModelA.a`, `ModelN.Sub.c`). `V → W` when `W` occurs
+free in `V`'s defining RHS (the same walk, [`_observed_dependency_names`](@ref))
+and resolves to an observed. A reference resolves with the reference-integrity
+walk's precedence (§4.8.4, "A scoped reference carries its target's units"):
+`V`'s own model or subsystem's names, then a path relative to its own
+subsystems, then a top-level path — the member set is the units check's
+document-wide scoped map, passed in as `toplevel` when `validate` has built it.
+The scoped name under a `D(·, t)` resolves the same way, and the unknown it
+names is a state, not a node, whichever model's equation wrote it.
 
-**`coupling` entries are deliberately NOT edges.** A `variable_map` is a
-declared data flow that the flattener resolves by aliasing, and mutual physical
-coupling between systems is the whole point of the format: `tests/valid/`
-`wildfire_atmosphere_ocean.esm` couples wind → fire spread → heat release → wind,
-a legitimate three-system feedback loop. Treating those as dependency edges
-rejects it.
+Only an observed is computed during an evaluation, so only a read inside an
+observed's definition orders two computations. A read of a state, a
+parameter, a reaction-system species, an algebraic unknown, or an unknown no
+equation defines (one a coupling `variable_map` alias supplies, say) is not an
+edge. **`coupling` entries are not edges either**: a `variable_map` is a
+declared data flow the flattener resolves by aliasing, and mutual physical
+coupling is the point of the format (`tests/valid/wildfire_atmosphere_ocean.esm`).
 
-Reported once per cycle, as `circular_dependency` at the pointer of the cycle's
-entry system, with the cycle rendered in the message (`ModelA → ModelB → ModelA`).
+A cycle inside one model or one subsystem is that model's `observed_cycle`,
+reported by [`validate_observed_cycles`](@ref), so a back edge closing such a
+cycle is skipped and the search continues. The traversal is the pinned one:
+roots and successors in lexicographic order of scoped name, the first accepted
+back edge closes the reported cycle. ONE `circular_dependency` per document, at
+`/models`, with `details.cycle` the scoped names with the entry repeated
+(`tests/invalid/circular_coupling.esm`,
+`tests/invalid/circular_coupling_subsystem.esm`).
 
-The traversal is deterministic (systems and successors are visited in sorted
-order) so the reported cycle and its entry point do not depend on Dict hashing.
+A subsystem still held as an unresolved [`SubsystemRef`](@ref) (a document
+loaded from a string without a base path) has no equations to read, so it
+contributes no nodes; `load_path` always resolves references, and the check
+runs over that resolved tree.
 """
-function validate_coupling_cycles(file::EsmFile)::Vector{StructuralError}
-    # System name → its kind's pointer prefix, for the error path.
-    prefix = Dict{String, String}()
-    file.models !== nothing && for name in keys(file.models)
-        prefix[name] = "/models/$name"
+function validate_coupling_cycles(file::EsmFile; toplevel = nothing)::Vector{StructuralError}
+    file.models === nothing && return StructuralError[]
+    # Every declared member (variable, species, reaction-system parameter) of
+    # every component at every depth, by full scoped name.
+    members = toplevel === nothing ? _toplevel_scoped_units(file) : toplevel
+    function resolve(path::String, ref::String)
+        inner = path * "." * ref   # own name, or relative to own subsystems
+        haskey(members, inner) && return inner
+        return occursin('.', ref) && haskey(members, ref) ? ref : nothing
     end
-    file.reaction_systems !== nothing && for name in keys(file.reaction_systems)
-        prefix[name] = "/reaction_systems/$name"
-    end
-    isempty(prefix) && return StructuralError[]
-
-    adj = Dict{String, Set{String}}(name => Set{String}() for name in keys(prefix))
-
-    # Edges from qualified references inside a model's equations, to an
-    # observed or algebraic unknown of another model (esm-spec §4.9.7). A read
-    # of a state or a parameter is known at every right-hand-side evaluation,
-    # so it orders nothing and is not an edge.
-    if file.models !== nothing
-        observed = _cross_model_observed_names(file)
-        for (model_name, model) in file.models
-            for eq in model.equations
-                for side in (eq.lhs, eq.rhs)
-                    for ref in _referenced_var_names(side)
-                        head = _qualified_head(ref)
-                        (head === nothing || head == model_name) && continue
-                        (haskey(prefix, head) && ref in observed) || continue
-                        push!(adj[model_name], head)
-                    end
-                end
-            end
-        end
-    end
-
-    # DFS with an explicit path stack; the first back-edge found in sorted order
-    # is reported.
-    WHITE, GREY, BLACK = 0, 1, 2
-    color = Dict{String, Int}(name => WHITE for name in keys(prefix))
-    path_stack = String[]
-    errors = StructuralError[]
-
-    function dfs(u::String)::Bool
-        color[u] = GREY
-        push!(path_stack, u)
-        for v in sort!(collect(adj[u]))
-            if color[v] == GREY
-                # Back edge: the cycle is path_stack[from v ..] + v.
-                start = findfirst(==(v), path_stack)
-                cycle = vcat(path_stack[start:end], v)
-                # A dependency cycle is carried by NO single model — it is a
-                # property of the model set — so it attaches at `/models`, not at
-                # any one member's pointer (the corpus pin; TS emits the same).
-                push!(
-                    errors, StructuralError(
-                        "/models",
-                        "Circular coupling detected: " * join(cycle, " → "),
-                        ERROR_CODES.CIRCULAR_DEPENDENCY,
-                        Dict{String, Any}("cycle" => cycle)
-                    )
-                )
-                return true
-            elseif color[v] == WHITE && dfs(v)
-                return true
-            end
-        end
-        pop!(path_stack)
-        color[u] = BLACK
-        return false
-    end
-
-    for u in sort!(collect(keys(prefix)))
-        color[u] == WHITE || continue
-        dfs(u) && break   # one cycle report is enough; the model is unorderable
-    end
-
-    return errors
-end
-
-# The names under a time derivative `D(·, t)` (`wrt` "t" or absent) in an
-# equation's left-hand side: a bare `D(v)`, an `index(v, …)` gather inside it,
-# or a `faq` whose body is such a derivative (esm-spec §4.9.7).
-function _time_derivative_operand_names(e, acc = Set{String}())
-    e isa OpExpr || return acc
-    if e.op == "D" && (e.wrt === nothing || e.wrt == "t")
-        for a in e.args
-            union!(acc, _referenced_var_names(a))
-        end
-        return acc
-    end
-    for a in e.args
-        _time_derivative_operand_names(a, acc)
-    end
-    e.expr_body === nothing || _time_derivative_operand_names(e.expr_body, acc)
-    return acc
-end
-
-# The scoped names (`Model.v`, `Model.Sub.v`) of every unknown of the
-# document's models that is NOT an ODE state: an unknown no equation of the
-# document puts under `D(·, t)` (esm-spec §4.9.7). A `D` left-hand side names
-# its variable bare in the variable's own (sub)model, or by its scoped name from
-# anywhere.
-function _cross_model_observed_names(file::EsmFile)::Set{String}
-    unknowns = Set{String}()
-    states = Set{String}()
-    function walk(path::String, m)
-        m isa Model || return
-        for (v, var) in m.variables
-            var.type == UnknownVariable && push!(unknowns, path * "." * v)
+    defs = Dict{String, ASTExpr}()            # scoped name → defining RHS
+    scope = Dict{String, String}()           # scoped name → its model path
+    self_exempt = Set{String}()              # §4.3.1.1 recurrence candidates
+    states = Set{String}()                   # `D(·, t)` targets, scoped
+    function walk(path::String, m::Model)
+        local_defs = observed_definitions(m)
+        candidates = _recurrence_candidate_names(m, local_defs)
+        for (name, rhs) in local_defs
+            scoped = path * "." * name
+            defs[scoped] = rhs
+            scope[scoped] = path
+            name in candidates && push!(self_exempt, scoped)
         end
         for eq in m.equations
-            for x in _time_derivative_operand_names(eq.lhs)
-                push!(states, occursin('.', x) ? x : path * "." * x)
-            end
+            role, name = _lhs_role(eq.lhs)
+            role === :derivative || continue
+            target = resolve(path, name)
+            target === nothing || push!(states, target)
         end
-        for (sub, node) in m.subsystems
+        for (sub, node) in model_subsystems(m)
             walk(path * "." * sub, node)
         end
         return
@@ -2618,14 +2547,33 @@ function _cross_model_observed_names(file::EsmFile)::Set{String}
     for (name, model) in file.models
         walk(String(name), model)
     end
-    return setdiff(unknowns, states)
-end
+    for s in states
+        delete!(defs, s)
+    end
 
-# The system part of a qualified reference `System.var` (or `A.B.var`), or
-# `nothing` for a bare local name.
-function _qualified_head(ref::AbstractString)::Union{String, Nothing}
-    idx = findfirst('.', ref)
-    return idx === nothing ? nothing : String(ref[1:prevind(ref, idx)])
+    adj = Dict{String, Vector{String}}()
+    for (v, rhs) in defs
+        deps = Set{String}()
+        for ref in _observed_dependency_names(rhs)
+            w = resolve(scope[v], ref)
+            w !== nothing && haskey(defs, w) && push!(deps, w)
+        end
+        v in self_exempt && delete!(deps, v)
+        adj[v] = sort!(collect(deps))
+    end
+
+    # A cycle whose nodes all share one scope is `observed_cycle`, not this.
+    crosses_scope(cycle) = any(n -> scope[n] != scope[cycle[1]], cycle)
+    cycle = _first_observed_cycle(adj; accept = crosses_scope)
+    cycle === nothing && return StructuralError[]
+    return [
+        StructuralError(
+            "/models",
+            "Circular dependency among observeds: " * join(cycle, " → "),
+            ERROR_CODES.CIRCULAR_DEPENDENCY,
+            Dict{String, Any}("cycle" => cycle)
+        ),
+    ]
 end
 
 """
@@ -2651,8 +2599,8 @@ happened to try first after the cycle stalled (issue #181). A report against an
 innocent bystander, from a stage that had already lost the information needed to
 say what was actually wrong, is what this replaces.
 
-This is distinct from [`validate_coupling_cycles`](@ref), which finds cycles
-among top-level SYSTEMS reached through qualified references; that one attaches
+This is distinct from [`validate_coupling_cycles`](@ref), which finds the same
+kind of cycle when it crosses a model or subsystem boundary; that one attaches
 at `/models`, this one at `/models/<M>` (a cycle belongs to no single equation,
 so it pins at the model exactly as `equation_count_mismatch` does).
 
@@ -2790,14 +2738,18 @@ end
 
 # The first cycle a DFS over `adj` closes, as the path in traversal order with
 # the entry node repeated to close it (`["gamfac", "hpbl", "wscale", "gamfac"]`),
-# or `nothing` when the graph is acyclic.
+# or `nothing` when the graph has no cycle `accept` takes.
 #
-# WHITE/GREY/BLACK with an explicit path stack, the same shape
-# `validate_coupling_cycles` uses. Roots AND successors are visited in sorted
-# order so the cycle that gets named — and which of its members is the entry —
-# does not depend on `Dict` hashing; §4.9.6 requires that determinism explicitly,
-# because a binding that names a different member on each run cannot be pinned.
-# ONE cycle is reported per model: a second is usually the same defect seen from
+# `accept(cycle)` filters back edges: one whose cycle it rejects is skipped and
+# the search continues. `validate_coupling_cycles` uses it to pass over a cycle
+# that lies in one scope, which is `observed_cycle`'s (esm-spec §4.9.7);
+# `validate_observed_cycles` takes every cycle.
+#
+# WHITE/GREY/BLACK with an explicit path stack. Roots AND successors are visited
+# in sorted order so the cycle that gets named — and which of its members is the
+# entry — does not depend on `Dict` hashing; §4.9.6 and §4.9.7 require that
+# determinism explicitly, because a binding that names a different member on
+# each run cannot be pinned. ONE cycle is reported per model: a second is usually the same defect seen from
 # another entry point, and the author fixes them one at a time regardless.
 #
 # ITERATIVE, and that is not a style choice. The depth of this walk is the
@@ -2808,7 +2760,9 @@ end
 # validate CLEAN into a crash. `cursor[i]` is how far into `adj[path_stack[i]]`
 # that frame has got, so resuming a parent after a child finishes picks up
 # exactly where it left off.
-function _first_observed_cycle(adj::Dict{String, Vector{String}})::Union{Vector{String}, Nothing}
+function _first_observed_cycle(
+        adj::Dict{String, Vector{String}}; accept = Returns(true)
+    )::Union{Vector{String}, Nothing}
     WHITE, GREY, BLACK = 0, 1, 2
     color = Dict{String, Int}(n => WHITE for n in keys(adj))
     path_stack = String[]
@@ -2832,7 +2786,8 @@ function _first_observed_cycle(adj::Dict{String, Vector{String}})::Union{Vector{
             cursor[end] += 1
             if color[v] == GREY
                 start = findfirst(==(v), path_stack)
-                return vcat(path_stack[start:end], v)
+                cycle = vcat(path_stack[start:end], v)
+                accept(cycle) && return cycle
             elseif color[v] == WHITE
                 color[v] = GREY
                 push!(path_stack, v)
