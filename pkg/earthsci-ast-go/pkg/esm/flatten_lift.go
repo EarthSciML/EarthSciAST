@@ -282,8 +282,8 @@ func liftRHSToCell(expr Expression, arrayvars map[string]bool, varShapes map[str
 	if liftWholeArrayOps[node.Op] {
 		if name := firstArrayOperand(node, arrayvars); name != "" {
 			return nil, &DimensionPromotionError{Message: fmt.Sprintf(
-				"flatten: pointwise lift: '%s' is an operand of '%s' in the right-hand side "+
-					"of species '%s'; '%s' consumes a whole array, so it has no per-cell "+
+				"flatten: pointwise lift: %q is an operand of %q in the right-hand side "+
+					"of species %q; %q consumes a whole array, so it has no per-cell "+
 					"reading on the lifted grid", name, node.Op, grid.species, node.Op)}
 		}
 		return node, nil
@@ -354,22 +354,22 @@ func liftGatherShaped(name string, shape []string, grid liftGrid, elementwise bo
 	}
 	mismatch := func(why string) error {
 		return &DimensionPromotionError{Message: fmt.Sprintf(
-			"flatten: pointwise lift: '%s' (shape %v) cannot be read per cell on the grid %v "+
-				"that species '%s' is lifted to: %s (esm-spec §4.3.4)",
+			"flatten: pointwise lift: %q (shape %v) cannot be read per cell on the grid %v "+
+				"that species %q is lifted to: %s (esm-spec §4.3.4)",
 			name, shape, grid.axes, grid.species, why)}
 	}
 	if len(foreign) > 0 {
-		return nil, mismatch(fmt.Sprintf("the grid is not shaped over index set '%s'", foreign[0]))
+		return nil, mismatch(fmt.Sprintf("the grid is not shaped over index set %q", foreign[0]))
 	}
 	args := make([]any, 0, len(shape)+1)
 	args = append(args, name)
 	for d, axis := range shape {
 		if slices.Contains(shape[:d], axis) {
-			return nil, mismatch(fmt.Sprintf("index set '%s' appears twice in its shape", axis))
+			return nil, mismatch(fmt.Sprintf("index set %q appears twice in its shape", axis))
 		}
 		p := slices.Index(grid.axes, axis)
 		if slices.Contains(grid.axes[p+1:], axis) {
-			return nil, mismatch(fmt.Sprintf("the grid runs over index set '%s' on more than one axis", axis))
+			return nil, mismatch(fmt.Sprintf("the grid runs over index set %q on more than one axis", axis))
 		}
 		args = append(args, grid.loops[p])
 	}

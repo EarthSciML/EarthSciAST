@@ -135,7 +135,7 @@ func TestPointwiseLiftRefusesAnOperandOnAForeignIndexSet(t *testing.T) {
 	for _, shape := range [][]string{{"x", "z"}, {"z"}} {
 		_, err := lift2D(t, liftOver("f"), []liftShaped{{"f", shape}})
 		msg := liftErrorMessage(t, err)
-		if !strings.Contains(msg, "'f'") || !strings.Contains(msg, "index set 'z'") {
+		if !strings.Contains(msg, `"f"`) || !strings.Contains(msg, `index set "z"`) {
 			t.Fatalf("shape %v: message %q", shape, msg)
 		}
 	}
@@ -169,7 +169,7 @@ func TestPointwiseLiftRefusesAnOperandOfAWholeArrayOp(t *testing.T) {
 	reshaped := ExprNode{Op: "reshape", Args: []any{"m"}, Shape: []any{6}}
 	_, err := lift2D(t, liftOver(reshaped), []liftShaped{{"m", []string{"x", "y"}}})
 	msg := liftErrorMessage(t, err)
-	if !strings.Contains(msg, "'m'") || !strings.Contains(msg, "'reshape'") {
+	if !strings.Contains(msg, `"m"`) || !strings.Contains(msg, `"reshape"`) {
 		t.Fatalf("message %q", msg)
 	}
 }
