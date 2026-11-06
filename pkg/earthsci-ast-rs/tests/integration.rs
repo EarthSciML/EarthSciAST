@@ -169,6 +169,8 @@ mod inline_test_reference_mount_name;
 mod interpreter_compiler_no_tape;
 #[path = "inverse_trig_conformance.rs"]
 mod inverse_trig_conformance;
+#[path = "join_contracted_gate_propagation.rs"]
+mod join_contracted_gate_propagation;
 #[path = "join_gate_cache_budget.rs"]
 mod join_gate_cache_budget;
 #[path = "join_namespacing.rs"]
