@@ -200,8 +200,29 @@ function _broad_phase_grid(query_envs::AbstractVector, cell_envs::AbstractVector
     return out
 end
 
+# The array rank each envelope factor of an overlap-join env list must have,
+# fixed by the list's length (CONFORMANCE_SPEC §5.5.6): 1 name is a
+# `[pos, verts, coord]` RING stack (rank 3), 2 names are point `[x, y]` columns
+# and 4 names rect `[xmin, ymin, xmax, ymax]` columns (rank 1 each). Any other
+# length has no reading, so this returns `nothing`. Every overlap-gate resolver
+# (the right-hand side's `_overlap_env_sym`, the setup path's `_geo_overlap_gate`,
+# value invention's `_vi_overlap_env_sym`) and `_envelope_vectors_from_cols`
+# read the rule from here. In every form the factor's FIRST axis is the position
+# axis, so its first shape index set names the join range.
+function _overlap_env_rank(n::Integer)
+    n == 1 && return 3
+    (n == 2 || n == 4) && return 1
+    return nothing
+end
+
 function _envelope_vectors_from_cols(env_names::AbstractVector, cols::AbstractVector)
     k = length(env_names)
+    _overlap_env_rank(k) === nothing && throw(
+        ArgumentError(
+            "overlap-join env must name 1 (rings), 2 (point [x,y]), or 4 " *
+                "(rect [xmin,ymin,xmax,ymax]) const-array factors; got $k"
+        )
+    )
     if k == 4
         a, b, c, d = cols
         n = length(a)
@@ -214,15 +235,8 @@ function _envelope_vectors_from_cols(env_names::AbstractVector, cols::AbstractVe
         return NTuple{4, Float64}[
             (Float64(x[p]), Float64(y[p]), Float64(x[p]), Float64(y[p])) for p in 1:n
         ]
-    elseif k == 1
+    else                               # k == 1, by `_overlap_env_rank`
         return _ring_envelopes(cols[1])
-    else
-        throw(
-            ArgumentError(
-                "overlap-join env must name 1 (rings), 2 (point [x,y]), or 4 " *
-                    "(rect [xmin,ymin,xmax,ymax]) const-array factors; got $k"
-            )
-        )
     end
 end
 

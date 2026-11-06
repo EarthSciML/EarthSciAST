@@ -866,12 +866,12 @@ end
 #
 # The env-factor → loop-var rule is the setup path's own `_geo_loopvar_for`
 # (the same one the bin-equality `on` keys use): the FIRST factor's FIRST shape
-# axis names the range. That is deliberately rank-agnostic, matching
-# `_envelope_vectors_from_cols`, which reads a single 1-name env factor as a
-# `[pos, verts, coord]` RING stack — i.e. a 3-D array whose first axis is the
-# position axis — the ring form every shipped `conservative_overlap_*_gated`
-# template uses. (`_overlap_env_sym` in tree_walk/semiring.jl, the right-hand
-# side's resolver, reads the same ring form by its first axis.)
+# axis names the range, which holds for every env form because a factor's first
+# axis is always its position axis (`_overlap_env_rank`). The factor ranks are
+# checked below against `_overlap_env_rank`, the rule `_overlap_env_sym` in
+# tree_walk/semiring.jl (the right-hand side's resolver) also checks. The two
+# differ in what a mismatch does: here it DECLINES to the ungated sweep, which
+# still gives the old values; the right-hand side throws `E_TREEWALK_JOIN_OVERLAP`.
 function _geo_overlap_gate(faq, ctx::_GeoCtx, setof, scope, cache)
     faq.join === nothing && return nothing
     _geom_overlap_gate_disabled() && return nothing
@@ -893,9 +893,8 @@ function _geo_overlap_gate(faq, ctx::_GeoCtx, setof, scope, cache)
         # Phase-3a primitive throw DECLINES to the historic ungated sweep
         # instead of failing a build that used to succeed.
         _geo_env_ok(names) = begin
-            n = length(names)
-            (n == 1 || n == 2 || n == 4) || return false
-            want = n == 1 ? 3 : 1
+            want = _overlap_env_rank(length(names))
+            want === nothing && return false
             for f in names
                 a = get(ctx.env, String(f), nothing)
                 (a isa AbstractArray && ndims(a) == want) || return false

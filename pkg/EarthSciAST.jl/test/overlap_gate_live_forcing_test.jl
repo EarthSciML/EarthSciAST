@@ -135,12 +135,47 @@ expected(F) = [(F[1] + 0.5 * F[2]) / 1.5, F[3]]
 
     # The native compiler's whole-array contraction tier does not yet lower a
     # gather from a live forcing buffer at a loop-variable subscript, which a
-    # join-gated contraction needs, so it refuses the gated apply by name.
-    @test_broken try
+    # join-gated contraction needs, so it refuses the gated apply by name. Only
+    # that refusal counts as the known break; any other error fails the test.
+    native_ok = try
         rhs(EA.esm_problem(document(), (0.0, 1.0); param_arrays = Dict{String, Any}("M.F" => copy(F)))) ≈ expected(F)
-    catch
+    catch err
+        (err isa EA.TreeWalkError && err.code == EA.ERROR_CODES.COMPILER_REFUSED_RULE) || rethrow()
         false
     end
+    @test_broken native_ok
+end
+
+# The same regrid with the SOURCE RING itself fed by a data source. An envelope
+# factor must be build-time data (§5.5.6), so this is refused with the gate's
+# own diagnostic rather than a bare `KeyError` from the broad phase.
+@testset "overlap gate: a live envelope factor is refused by name" begin
+    doc = document()
+    vars = doc["models"]["M"]["variables"]
+    vars["src_poly"] = Dict(
+        "type" => "parameter", "units" => "1", "default" => 0.0,
+        "shape" => ["src_cells", "verts", "coord"],
+        "update" => Dict("kind" => "data", "source" => "Src", "from" => Dict("file_variable" => "src_poly"))
+    )
+    eqs = doc["models"]["M"]["equations"]
+    deleteat!(eqs, findfirst(e -> e["lhs"] == "src_poly", eqs))
+    rings = zeros(3, 4, 2)
+    for c in 1:3, v in 1:4
+        rings[c, v, 1] = (c - 1) * 1.5 + (v == 2 || v == 3 ? 1.0 : 0.0)
+        rings[c, v, 2] = v >= 3 ? 1.0 : 0.0
+    end
+    err = try
+        EA.esm_problem(
+            doc, (0.0, 1.0); compiler = :interpreter,
+            param_arrays = Dict{String, Any}("M.F" => [1.0, 2.0, 3.0], "M.src_poly" => rings)
+        )
+        nothing
+    catch e
+        e
+    end
+    @test err isa EA.TreeWalkError
+    @test err.code == "E_TREEWALK_JOIN_OVERLAP"
+    @test occursin("not build-time data", err.detail)
 end
 
 @testset "_overlap_env_sym: the single-name ring form" begin
@@ -156,6 +191,112 @@ end
     # A single name that is a 1-D column has no envelope to read (the broad
     # phase reads one name as a ring stack).
     @test_throws EA.TreeWalkError EA._overlap_env_sym(["W"], ranges, s2s, shapes, :right)
+    # A list length with no envelope reading is the gate's own error, not the
+    # broad phase's `ArgumentError`.
+    for names in (["W", "S", "E"], ["W", "S", "E", "N", "W"])
+        err = try
+            EA._overlap_env_sym(names, ranges, s2s, shapes, :right)
+        catch e
+            e
+        end
+        @test err isa EA.TreeWalkError && err.code == "E_TREEWALK_JOIN_OVERLAP"
+    end
+    # Every factor is checked, not only the first.
+    @test_throws EA.TreeWalkError EA._overlap_env_sym(["W", "ring"], ranges, s2s, shapes, :right)
+    # A factor absent from build-time storage is refused by name.
+    err = try
+        EA._require_build_time_env(["ring"], Dict{String, Any}())
+    catch e
+        e
+    end
+    @test err isa EA.TreeWalkError && err.code == "E_TREEWALK_JOIN_OVERLAP"
+end
+
+# The overlap-gate rank rule every resolver reads.
+@testset "_overlap_env_rank" begin
+    @test EA._overlap_env_rank(1) == 3
+    @test EA._overlap_env_rank(2) == 1
+    @test EA._overlap_env_rank(4) == 1
+    for n in (0, 3, 5)
+        @test EA._overlap_env_rank(n) === nothing
+    end
+end
+
+# A value-invention producer gated by the single-name ring form, which its
+# resolver used to refuse as "must be a 1-D buffer". Source rings are the unit
+# squares at x ∈ [0,1], [1.5,2.5], [3,4]; target cells are [0,2] and [5,6]
+# (× [0,1]). Only cell 1 overlaps a source, and with no narrow phase the gate
+# alone decides, so the producer's members are exactly [1].
+@testset "value invention: overlap gate with a ring envelope factor" begin
+    doc = Dict{String, Any}(
+        "esm" => "1.2.0",
+        "metadata" => Dict("name" => "vi_overlap_ring"),
+        "index_sets" => Dict(
+            "src_cells" => Dict("kind" => "interval", "size" => 3),
+            "verts" => Dict("kind" => "interval", "size" => 4),
+            "coord" => Dict("kind" => "interval", "size" => 2),
+            "cells" => Dict("kind" => "interval", "size" => 2),
+            "present_cells" => Dict("kind" => "derived", "from_faq" => "ring_producer")
+        ),
+        "models" => Dict(
+            "V" => Dict(
+                "variables" => Dict(
+                    "ring" => Dict("type" => "parameter", "shape" => ["src_cells", "verts", "coord"]),
+                    "W" => Dict("type" => "parameter", "shape" => ["cells"]),
+                    "S" => Dict("type" => "parameter", "shape" => ["cells"]),
+                    "E" => Dict("type" => "parameter", "shape" => ["cells"]),
+                    "N" => Dict("type" => "parameter", "shape" => ["cells"]),
+                    "cell_present" => Dict("type" => "unknown", "shape" => ["present_cells"])
+                ),
+                "equations" => Any[
+                    Dict(
+                        "lhs" => _ix("cell_present", "m"),
+                        "rhs" => Dict(
+                            "op" => "faq", "id" => "ring_producer",
+                            "semiring" => "bool_and_or", "distinct" => true,
+                            "output_idx" => ["m"],
+                            "ranges" => Dict("i" => Dict("from" => "src_cells"), "j" => Dict("from" => "cells")),
+                            "join" => Any[
+                                Dict(
+                                    "overlap" => Dict(
+                                        "src_env" => ["ring"], "tgt_env" => ["W", "S", "E", "N"], "eps" => 0.0
+                                    )
+                                ),
+                            ],
+                            "args" => ["ring", "W", "S", "E", "N"],
+                            "key" => Dict("op" => "skolem", "label" => "cell", "args" => ["j"]),
+                            "expr" => Dict("op" => "true", "args" => [])
+                        )
+                    ),
+                ]
+            )
+        )
+    )
+    rings = zeros(3, 4, 2)
+    for c in 1:3, v in 1:4
+        rings[c, v, 1] = (c - 1) * 1.5 + (v == 2 || v == 3 ? 1.0 : 0.0)
+        rings[c, v, 2] = v >= 3 ? 1.0 : 0.0
+    end
+    consts = Dict{String, Any}(
+        "ring" => rings, "W" => [0.0, 5.0], "S" => [0.0, 0.0], "E" => [2.0, 6.0], "N" => [1.0, 1.0]
+    )
+    file = EA.coerce_esm_file(EA.JSON3.read(EA.JSON3.write(doc)))
+    model = EA._select_model(file, "V")
+    vi = EA.materialize_value_invention(model, file.index_sets, consts, Dict{String, Any}())
+    @test sort(collect(vi.members["ring_producer"])) == [1]
+    @test vi.extents["ring_producer"] == 1
+    # Without the ring in the const arrays the producer is refused by name (the
+    # gate's error, wrapped by the derived index set it was sizing).
+    delete!(consts, "ring")
+    err = try
+        EA.materialize_value_invention(model, file.index_sets, consts, Dict{String, Any}())
+        nothing
+    catch e
+        e
+    end
+    @test err !== nothing
+    @test occursin("E_TREEWALK_VI_JOIN", sprint(showerror, err))
+    @test occursin("'ring' is not a const array", sprint(showerror, err))
 end
 
 end # module
