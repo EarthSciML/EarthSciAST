@@ -4053,6 +4053,20 @@ the gap, and §5.24.1 alone captures under 5% of it on the second join. Whole
 document, release build: 515.88 s → 11.42 s → 3.71 s for the first, and
 298 s → 24.82 s → 4.85 s for the second, byte-identical output throughout.
 
+**What the both-contracted bullet is worth.** Measured on moves.esm's
+`rates-venting` RunSpec (Rust, release build), where a single driving
+both-contracted gate left three joins close to the full product:
+
+| join | shape | one gate drives, rest per leaf | every gate restricts |
+|---|---|---:|---:|
+| `run_startModeAgeVariation` | star: `k`, `m`, `s`, `a` each joined to contracted hub `x` | 235,782,144 leaves, 277 s | 755,712 leaves, about 1 s |
+| `tvh_soakTies` | chain: `w~v` pins `v`, then `i~v` (both contracted) | more than 25 min in the tape builder, never finished | about 20 s |
+| `rpd_ratePerDistance` | `x~o` pins `o`, then `o~b`, `o~k`, `o~g`, `o~m` | 133 s in the tape builder | 2 s |
+
+The whole document went from not finishing to 6 min 29 s, and a hand-tuned
+variant of it, with authoring workarounds for the chain, from 7 min 54 s to
+6 min 23 s (440 s to 345 s of CPU); the two now write byte-identical output.
+
 **This is a SHOULD and not a MUST** for the same reason §5.5.8's fourth shape
 is: a binding that declines is slower and not wrong, because the lowered
 `filter` still decides every leaf. But a binding that declines cannot host a
