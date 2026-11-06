@@ -53,6 +53,9 @@ struct CompilerPlan
     cg_foreign_scratch::Bool
     cg_helper_dedup::Bool
     scalar_codegen::Bool          # the scalar equations and the prelude (scalar_codegen.jl)
+    # The emitted contraction loop's algebraic rewrites (array_contraction.jl):
+    # the indicator sum emitted as a count. Off, the loop is the plain fold.
+    count_fold::Bool
     # ---- the array cascade ----
     stencil::Bool                 # the affine stencil tier
     array_contraction::Bool
@@ -94,7 +97,7 @@ end
 _plan_all(name::Symbol, strict::Bool, on::Bool) =
     CompilerPlan(
     name, strict,
-    on, on, on, on, on, on, on,
+    on, on, on, on, on, on, on, on,
     on, on, on, on, on, on, on, on, on,
     on, on, on, on, on, on, on,
     on, on,
