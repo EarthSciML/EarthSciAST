@@ -4060,7 +4060,7 @@ both-contracted gate left three joins close to the full product:
 | join | shape | one gate drives, rest per leaf | every gate restricts |
 |---|---|---:|---:|
 | `run_startModeAgeVariation` | star: `k`, `m`, `s`, `a` each joined to contracted hub `x` | 235,782,144 leaves, 277 s | 755,712 leaves, about 1 s |
-| `tvh_soakTies` | chain: `w~v` pins `v`, then `i~v` (both contracted) | more than 25 min in the tape builder, never finished | about 20 s |
+| `tvh_soakTies` | chain: `w~v` pins `v`, then `i~v` (both contracted) | over 50 min in the tape builder, killed unfinished | about 20 s |
 | `rpd_ratePerDistance` | `x~o` pins `o`, then `o~b`, `o~k`, `o~g`, `o~m` | 133 s in the tape builder | 2 s |
 
 The whole document went from not finishing to 6 min 29 s, and a hand-tuned
