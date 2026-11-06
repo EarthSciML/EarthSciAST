@@ -15,6 +15,10 @@
 #     the scalar prelude (the shared-scratch read the fill section's emitter
 #     does not take, `:foreign_scratch`): the state kernels read the shared
 #     slot, and the fill level keeps its own copy in its own invariant tier;
+#   * interp_array_query — a scalar `interp.*` component coupled
+#     (`param_to_var`) to gridded states, so its unshaped observeds take an
+#     array-valued query and are evaluated elementwise, one lookup per cell
+#     (issue #660, FastJX's actinic-flux lookups in reseact);
 #   * native_inline_const_subscript — inline `const` tables as index
 #     subscripts: an enum-resolved (scalar `const`) subscript and a permutation
 #     table inside a state subscript. It lives under test/fixtures/ rather than
@@ -82,6 +86,7 @@ end
     @testset "$(f)" for f in (
             "rank5_stencil.esm", "rank4_contraction.esm",
             "fill_shared_invariant.esm",
+            "interp_array_query.esm",
             "native_inline_const_subscript.esm",
             "native_neg_weight_gather.esm",
         )

@@ -340,10 +340,10 @@ fn native_runs_per_variable_element_types_bit_for_bit() {
 /// The probe fixtures for constructs the tape used to refuse and the corpus
 /// does not reach: more than four contracted indices, a periodic wrap that is
 /// not a full roll, a derivative left-hand side that is not a constant shift,
-/// `datetime.*` for Float32 variables, and an array observed whose ranges
-/// start past 1. Each builds under `native` with every rule on the tape, with
-/// the routing decided (`Rhs::Auto`) and forced, and lands where the
-/// interpreter does.
+/// `datetime.*` for Float32 variables, an array observed whose ranges start
+/// past 1, and `interp.*` on an array-valued query (#660). Each builds under
+/// `native` with every rule on the tape, with the routing decided
+/// (`Rhs::Auto`) and forced, and lands where the interpreter does.
 #[test]
 fn native_runs_the_lowering_limit_probes_bit_for_bit() {
     for f in [
@@ -352,6 +352,7 @@ fn native_runs_the_lowering_limit_probes_bit_for_bit() {
         "permuted_derivative_lhs.esm",
         "datetime_float32.esm",
         "offset_origin_observed.esm",
+        "interp_array_query.esm",
     ] {
         let rel = format!("tests/fixtures/native_probes/{f}");
         for rhs in [Rhs::Auto, Rhs::Always] {
