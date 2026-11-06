@@ -325,6 +325,14 @@ end
         pol === :periodic && return mod1(i, n)
         pol === :clamp && return clamp(i, 1, n)
     end
+    # A live forcing buffer read at a run-time subscript (`_live_gather_node`):
+    # the error its build-time read raises at a constant subscript.
+    pol === :live && throw(
+        TreeWalkError(
+            "E_TREEWALK_PGATHER_OOB",
+            "forcing array '$(name)' index $(i) out of range [1, $(n)] on dim $(d)"
+        )
+    )
     throw(
         TreeWalkError(
             "E_TREEWALK_CONSTARRAY_OOB",

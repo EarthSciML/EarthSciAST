@@ -155,7 +155,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
         # is concrete without the walker's type assert.
         buf = _cg_tab!(ctx, nd.payload::Vector{Float64})
         return :($buf[$(_cg_geo!(ctx, nd.idx, (nd, :idx)))])
-    elseif k === _NK_CONST_GATHER
+    elseif k === _NK_CONST_GATHER || k === _NK_LIVE_GATHER
         return _cg_const_gather(ctx, kc, nd)
     elseif k === _NK_STATE_GATHER
         return _cg_state_gather(ctx, kc, nd)
@@ -433,13 +433,23 @@ end
 # out-of-range subscript takes the array's declared boundary policy, including
 # its throw), linearize with the build-time strides, read the flat buffer. The
 # `let` bindings are sequential, which is the walker's subscript order.
+# `_NK_LIVE_GATHER` is the same read of a live buffer; under a TABLE fold its
+# per-entry column holds the OFFSETS (fixed per entry), never the values, which
+# the buffer supplies at each call.
 function _cg_const_gather(ctx::_CGCtx, kc, nd::_Node)
     cg = nd.payload::_ConstGatherArray
     children = nd.children
     if kc isa _CGScalarCtx
-        pre = _ac_const_gather_entries(kc, cg, children)
-        pre === nothing ||
-            return :($(_ac_entry_local(ctx, pre, kc.entry))[$((kc.entry::_ACEntries).ev)])
+        if nd.kind === _NK_LIVE_GATHER
+            offs = _ac_live_gather_entries(kc, cg, children)
+            offs === nothing || return :(
+                $(_cg_tab!(ctx, cg.flat))[$(_ac_entry_local(ctx, offs, kc.entry))[$((kc.entry::_ACEntries).ev)]]
+            )
+        else
+            pre = _ac_const_gather_entries(kc, cg, children)
+            pre === nothing ||
+                return :($(_ac_entry_local(ctx, pre, kc.entry))[$((kc.entry::_ACEntries).ev)])
+        end
     end
     cgv = _cg_name(ctx, "cga")
     binds = Any[:($cgv = $(_cg_tab!(ctx, cg)))]
@@ -485,6 +495,26 @@ function _ac_const_gather_entries(kc::_CGScalarCtx, cg::_ConstGatherArray, child
         vals[e] = cg.flat[lin]
     end
     return vals
+end
+
+# The linear offset a live gather reads at each TABLE entry; `nothing` when the
+# gather is not resolvable per entry or some entry's subscript is out of range,
+# which stays the call's error (raised only if that entry's term is evaluated).
+function _ac_live_gather_entries(kc::_CGScalarCtx, cg::_ConstGatherArray, children)
+    cols = _ac_entry_cols(kc, children)
+    cols === nothing && return nothing
+    nent = length(cols[1])
+    offs = Vector{Int}(undef, nent)
+    for e in 1:nent
+        lin = 1
+        for d in eachindex(cols)
+            x = cols[d][e]
+            1 <= x <= cg.dims[d] || return nothing
+            lin += (x - 1) * cg.strides[d]
+        end
+        offs[e] = lin
+    end
+    return offs
 end
 
 # The slot a state gather reads at each TABLE entry, 0 where a subscript is out

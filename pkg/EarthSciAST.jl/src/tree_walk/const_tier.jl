@@ -122,7 +122,9 @@ function _def_tier(n::_Node, tier::Vector{Int8}, slot::Int, cache::_CSECache)::I
     k = n.kind
     if k === _NK_STATE
         return _TIER_DYNAMIC
-    elseif k === _NK_TIME || k === _NK_PARAM_GATHER
+    elseif k === _NK_TIME || k === _NK_PARAM_GATHER || k === _NK_LIVE_GATHER
+        # A live forcing buffer is refreshed at time boundaries, whatever offset
+        # it is read at; its subscripts (literals, loop counters) cannot lower it.
         return _TIER_TIME
     elseif k === _NK_CACHED
         # THE TRAP (clause 2): a cache ref has no leaves of its own, so its cadence is
