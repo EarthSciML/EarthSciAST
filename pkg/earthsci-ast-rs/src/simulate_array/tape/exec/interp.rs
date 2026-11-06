@@ -656,6 +656,41 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
                 }
             }
         }
+        Instr::Count {
+            rel,
+            axis,
+            lo,
+            n,
+            sorted,
+            x,
+            out,
+        } => {
+            let av = resolve_src(axis, env, slab_ptr, slot_off);
+            debug_assert_eq!(av.shape.len(), 1, "Count axis rank");
+            debug_assert!((*lo + *n) as usize <= av.shape[0], "Count window");
+            // Rank 1, row-major: the window is contiguous. `out` never shares
+            // storage with the axis (the slab coloring keeps them apart).
+            let win = unsafe { std::slice::from_raw_parts(av.ptr.add(*lo as usize), *n as usize) };
+            let at = |j: usize| win[j];
+            // A window the lowering could not see is checked here, once per
+            // execution: O(n) against the O(n) per element it can save.
+            let sorted = *sorted || non_decreasing(win.len(), at);
+            let rel = *rel;
+            let desc = &prog.slots[*out as usize];
+            let off = slot_off[*out as usize];
+            if desc.scalar {
+                let xv = resolve_scalar(x, env, slab_ptr, slot_off);
+                unsafe { *slab_ptr.add(off) = count_rel(rel, win.len(), at, sorted, xv) };
+            } else {
+                let xv = resolve_rv(x, &desc.shape, env, slab_ptr, slot_off);
+                let dst = unsafe { slab_ptr.add(off) };
+                unsafe {
+                    ew1(dst, &desc.shape, &xv, |q| {
+                        count_rel(rel, win.len(), at, sorted, q)
+                    })
+                };
+            }
+        }
         Instr::Calendar { func, a, out } => {
             let desc = &prog.slots[*out as usize];
             let off = slot_off[*out as usize];

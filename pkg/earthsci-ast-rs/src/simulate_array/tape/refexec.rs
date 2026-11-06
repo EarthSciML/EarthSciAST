@@ -307,6 +307,39 @@ pub(super) fn run_reference(
                 };
                 slots[*out as usize] = Some(v);
             }
+            // The reference counts every entry, whatever the window holds.
+            Instr::Count {
+                rel,
+                axis,
+                lo,
+                n,
+                sorted: _,
+                x,
+                out,
+            } => {
+                let av = resolve_src(prog, &slots, &state_arrays, axis);
+                assert_eq!(av.ndim(), 1, "Count axis rank");
+                let win: Vec<f64> = av
+                    .iter()
+                    .skip(*lo as usize)
+                    .take(*n as usize)
+                    .copied()
+                    .collect();
+                assert_eq!(win.len(), *n as usize, "Count window");
+                let count = |q: f64| win.iter().filter(|&&a| rel.holds(a, q)).count() as f64;
+                let xv = resolve(prog, &slots, &state_arrays, params, t, x);
+                let desc = &prog.slots[*out as usize];
+                let v = if desc.scalar {
+                    let RefVal::Scalar(q) = xv else {
+                        panic!("scalar Count with an array query");
+                    };
+                    RefVal::Scalar(count(q))
+                } else {
+                    let shape: Vec<usize> = desc.shape.to_vec();
+                    RefVal::Arr(to_shape(&xv, &shape).mapv(count))
+                };
+                slots[*out as usize] = Some(v);
+            }
             Instr::Calendar { func, a, out } => {
                 let av = resolve(prog, &slots, &state_arrays, params, t, a);
                 let desc = &prog.slots[*out as usize];

@@ -1254,6 +1254,54 @@ impl<'a> Emitter<'a> {
                 let v = self.emit_interp(tbl, &dims, &xv, yv.as_ref())?;
                 self.define(*out, v);
             }
+            // The count is a sum of 0/1 integers, exact in any order, so XLA's
+            // unpinned reduction gives the interpreter's value bit for bit.
+            Instr::Count {
+                rel,
+                axis,
+                lo,
+                n,
+                sorted: _,
+                x,
+                out,
+            } => {
+                let a = self.src(axis)?;
+                let have = self.dims(&a)?;
+                let (lo, n) = (*lo as usize, *n as usize);
+                if have.len() != 1 || lo + n > have[0] {
+                    return Err(self.err(format!(
+                        "count axis has shape {have:?}, which does not hold the window \
+                         {lo}..{}",
+                        lo + n
+                    )));
+                }
+                let dims = self.out_dims(*out);
+                let q = self.operand(x)?;
+                let q = self.to_shape(&q, &dims)?;
+                let win = self.wrap(
+                    a.slice_in_dim(lo as i64, (lo + n) as i64, 1, 0),
+                    "count: axis window",
+                )?;
+                let mut wide: Vec<i64> = dims.iter().map(|&d| d as i64).collect();
+                wide.push(n as i64);
+                let keep: Vec<i64> = (0..dims.len() as i64).collect();
+                let qb = self.wrap(q.broadcast_in_dim(&wide, &keep), "count: broadcast query")?;
+                let ab = self.wrap(
+                    win.broadcast_in_dim(&wide, &[dims.len() as i64]),
+                    "count: broadcast axis",
+                )?;
+                let pred = match rel {
+                    CountRel::Le => ab.le(&qb),
+                    CountRel::Lt => ab.lt(&qb),
+                    CountRel::Ge => ab.ge(&qb),
+                    CountRel::Gt => ab.gt(&qb),
+                };
+                let pred = self.wrap(pred, "count: compare")?;
+                let ones = self.wrap(pred.convert(PrimitiveType::S32), "count: pred -> s32")?;
+                let c = self.wrap(ones.reduce_sum(&[dims.len() as i64], false), "count: sum")?;
+                let v = self.wrap(c.convert(PrimitiveType::F64), "count: s32 -> f64")?;
+                self.define(*out, v);
+            }
             Instr::PolyArea { a, b, geom, out } => {
                 let v = self.emit_poly_area(a, b, *geom, *out)?;
                 self.define(*out, v);

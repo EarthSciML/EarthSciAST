@@ -93,6 +93,135 @@ fn tape_index(n: usize, table: &str) -> LResult<u32> {
 
 type LResult<T> = Result<T, Bail>;
 
+thread_local! {
+    /// A per-thread override of [`count_rewrite_enabled`] ([`with_count_rewrite`]).
+    static COUNT_REWRITE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Whether a build recognises the counted bracket
+/// ([`TapeBuilder::try_lower_indicator_count`]). On unless
+/// `ESS_TAPE_COUNT_DISABLE=1`, or a [`with_count_rewrite`] on this thread
+/// says otherwise: a switch for the A/B against the general lowering, which
+/// shapes the program a compiler builds and never selects another evaluator.
+pub(crate) fn count_rewrite_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENV: OnceLock<bool> = OnceLock::new();
+    COUNT_REWRITE.with(std::cell::Cell::get).unwrap_or_else(|| {
+        *ENV.get_or_init(|| {
+            !std::env::var("ESS_TAPE_COUNT_DISABLE")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false)
+        })
+    })
+}
+
+/// Run `f` with the counted-bracket recognition on or off for every tape
+/// this thread builds meanwhile (a benchmark's and a test's A/B seam; the
+/// tape cache keeps whatever a build inside `f` produced).
+#[doc(hidden)]
+pub fn with_count_rewrite<R>(enabled: bool, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<bool>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            COUNT_REWRITE.with(|c| c.set(self.0));
+        }
+    }
+    let _restore = Restore(COUNT_REWRITE.with(|c| c.replace(Some(enabled))));
+    f()
+}
+
+/// The parts of a counted bracket ([`detect_indicator_count`]).
+struct IndicatorCount<'e> {
+    rel: CountRel,
+    /// The array the comparison reads at the contracted index: a variable
+    /// or an inline `const`.
+    axis: &'e Expr,
+    x: &'e Expr,
+    lo: i64,
+    hi: i64,
+}
+
+/// The rank-0 `faq` `sum_{k=lo..hi} ifelse(axis[k] REL x, 1, 0)`, REL one of
+/// `<= < >= >` with the indexed axis on either side, or `None`.
+///
+/// The guard is the algebraic shape and nothing else: one statically ranged
+/// contracted index, a `+` reduction, no `filter` or `join`, a body that is
+/// exactly the indicator (the literals 1 and 0, in that order), an axis read
+/// `index(A, k)` whose base `A` is a variable or an inline `const` and does
+/// not mention `k`, and a query that does not mention `k`. Every other shape
+/// is the general reduction's.
+fn detect_indicator_count<'e>(spec: &ArrayOpSpec<'e>) -> Option<IndicatorCount<'e>> {
+    use super::super::vectorized::expr_mentions;
+    if spec.reduce != ReduceKind::Sum
+        || spec.filter.is_some()
+        || spec.join.is_some_and(|j| !j.is_empty())
+        || !spec.idx_names.is_empty()
+        || !spec.ranges.is_empty()
+        || spec.contract_names.len() != 1
+    {
+        return None;
+    }
+    let ContractDim::Static(lo, hi) = spec.contract_dims[0] else {
+        return None;
+    };
+    let k = spec.contract_names[0].as_str();
+    let Expr::Operator(ite) = spec.body else {
+        return None;
+    };
+    if ite.op != "ifelse" || ite.args.len() != 3 {
+        return None;
+    }
+    let lit = |e: &Expr, want: f64| match e {
+        Expr::Number(v) => *v == want,
+        Expr::Integer(v) => *v as f64 == want,
+        _ => false,
+    };
+    if !lit(&ite.args[1], 1.0) || !lit(&ite.args[2], 0.0) {
+        return None;
+    }
+    let Expr::Operator(cmp) = &ite.args[0] else {
+        return None;
+    };
+    let rel = CountRel::from_op(&cmp.op)?;
+    if cmp.args.len() != 2 {
+        return None;
+    }
+    // The axis read `index(A, k)`, on either side of the comparison.
+    let axis_read = |e: &'e Expr| -> Option<&'e Expr> {
+        let Expr::Operator(ix) = e else {
+            return None;
+        };
+        if ix.op != "index" || ix.args.len() != 2 {
+            return None;
+        }
+        if !matches!(&ix.args[1], Expr::Variable(v) if v == k) {
+            return None;
+        }
+        let base = &ix.args[0];
+        let ok = match base {
+            Expr::Variable(v) => v != k,
+            Expr::Operator(c) => c.op == "const" && !expr_mentions(base, k),
+            _ => false,
+        };
+        ok.then_some(base)
+    };
+    let (axis, x, rel) = match (axis_read(&cmp.args[0]), axis_read(&cmp.args[1])) {
+        (Some(a), None) => (a, &cmp.args[1], rel),
+        (None, Some(a)) => (a, &cmp.args[0], rel.mirror()),
+        _ => return None,
+    };
+    if expr_mentions(x, k) {
+        return None;
+    }
+    Some(IndicatorCount {
+        rel,
+        axis,
+        x,
+        lo,
+        hi,
+    })
+}
+
 mod scatter;
 mod standalone;
 mod tuples;
@@ -1095,6 +1224,7 @@ impl<'m> TapeBuilder<'m> {
                 | Instr::Assemble { .. }
                 | Instr::ConstArray { .. }
                 | Instr::Interp { .. }
+                | Instr::Count { .. }
                 | Instr::Reduce { .. }
                 | Instr::Scan { .. }
                 | Instr::PolyArea { .. }
@@ -4878,6 +5008,9 @@ impl<'m> TapeBuilder<'m> {
         if read.len() < bx.syms.len() {
             return self.lower_nested_scalar_reduction_on(node, spec, bx, &read);
         }
+        if let Some(v) = self.try_lower_indicator_count(spec, bx, true)? {
+            return Ok(v);
+        }
         let nc = spec.contract_names.len();
         if nc == 0 {
             bail_tape!("aggregate: a rank-0 output with no contracted index reads its box");
@@ -6422,6 +6555,18 @@ impl<'m> TapeBuilder<'m> {
             tuple: 0,
             visit: SmallVec::new(),
         };
+        let counted = self.try_lower_indicator_count(spec, &bx, false);
+        match counted {
+            Ok(Some(v)) => {
+                self.pop_scope();
+                return Ok(v);
+            }
+            Ok(None) => {}
+            Err(e) => {
+                self.pop_scope();
+                return Err(e);
+            }
+        }
         let lowered = (|| -> LResult<Option<LV>> {
             let keep = match spec.filter {
                 None => None,
@@ -6499,6 +6644,129 @@ impl<'m> TapeBuilder<'m> {
             sec,
         );
         Ok(LV::Scalar(out))
+    }
+
+    /// A rank-0 `faq` that counts the entries of a rank-1 axis standing in one
+    /// comparison to a query ([`detect_indicator_count`]), lowered to one
+    /// [`Instr::Count`]; `Ok(None)` for every other shape, which the caller
+    /// lowers as before.
+    ///
+    /// The oracle folds `ifelse(axis[k] REL x, 1, 0)` over the window from
+    /// `+0.0`: every term is `0.0` or `1.0`, so the fold is the count of
+    /// entries that satisfy the comparison, exactly, and the instruction's
+    /// count is that number whatever the axis holds. An axis whose window is
+    /// a build-time literal the lowering finds non-decreasing is marked
+    /// `sorted`, so the instruction bisects it without checking it first.
+    ///
+    /// `nested` is the per-cell form: `bx` is the enclosing box the query
+    /// reads, and the count is an array over it. Otherwise `bx` is the
+    /// contraction box of a standalone reduction, which the query does not
+    /// read, and the count is one scalar.
+    ///
+    /// A query that would note a fail-closed fault in the per-cell form is
+    /// refused, as the promoted-box lowering refuses it: the oracle meets it
+    /// inside the nested reduction, which the count does not place.
+    fn try_lower_indicator_count(
+        &mut self,
+        spec: &ArrayOpSpec,
+        bx: &LBox,
+        nested: bool,
+    ) -> LResult<Option<LV>> {
+        if !count_rewrite_enabled() || bx.tuple != 0 || self.sweep.is_some() {
+            return Ok(None);
+        }
+        let Some(ic) = detect_indicator_count(spec) else {
+            return Ok(None);
+        };
+        // The axis, read whole. A name an enclosing box binds is not an
+        // array; anything the resolver would refuse is left to the general
+        // path, which reports it.
+        let axis = match ic.axis {
+            Expr::Variable(name) => {
+                if bx.syms.iter().chain(bx.cnames.iter()).any(|s| s == name) {
+                    return Ok(None);
+                }
+                if let Some(&ix) = self.state_ix.get(name.as_str()) {
+                    LV::State(tape_index(ix, "state variables")?)
+                } else if let Some(ObsVal::Taped(lv)) = self.obs_defined.get(name.as_str()) {
+                    lv.clone()
+                } else if self.obs_defined.contains_key(name.as_str())
+                    || self.param_ix.contains_key(name.as_str())
+                {
+                    return Ok(None);
+                } else if let Some(lv) = self.forcing_read(name)? {
+                    lv
+                } else {
+                    return Ok(None);
+                }
+            }
+            Expr::Operator(lit) => match eval_const(lit) {
+                Value::Array(a) if a.ndim() == 1 && !a.is_empty() => self.emit_const_array(&a)?,
+                _ => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+        let Some((ashape, aorigin)) = self.lv_box(&axis) else {
+            return Ok(None);
+        };
+        if ashape.len() != 1 {
+            return Ok(None);
+        }
+        // The window, inside the axis: no ghost read, no out-of-range fault.
+        let start = ic.lo - aorigin[0];
+        let n = ic.hi - ic.lo + 1;
+        if start < 0 || n < 1 || start + n > ashape[0] as i64 {
+            return Ok(None);
+        }
+        if self.tile.is_some() && self.tile_source(&axis).is_some() {
+            return Ok(None);
+        }
+        let (Ok(start), Ok(n)) = (u32::try_from(start), u32::try_from(n)) else {
+            return Ok(None);
+        };
+        // The query, as the oracle evaluates it at each cell.
+        let notes = self.fault_notes;
+        let x = self.lower_expr(ic.x, bx)?;
+        if nested && self.fault_notes != notes {
+            bail_tape!(
+                "fault: a fail-closed fault inside a rank-0 output that reads its enclosing box"
+            );
+        }
+        let (shape, origin, scalar) = if nested {
+            (bx.shape.clone(), bx.lo.clone(), false)
+        } else {
+            (DimU::new(), DimI::new(), true)
+        };
+        match self.lv_box(&x) {
+            None => {}
+            Some((s, o)) if !scalar && s == shape && o == origin => {}
+            Some(_) => bail_tape!("aggregate: a counted query's box does not match its box"),
+        }
+        let sorted = match &axis {
+            LV::Arr(s) => self.known_values(*s).is_some_and(|v| {
+                let w = &v[start as usize..(start + n) as usize];
+                non_decreasing(w.len(), |j| w[j])
+            }),
+            _ => false,
+        };
+        let sec = self.placement(self.lv_cadence(&axis).max(self.lv_cadence(&x)));
+        let axis_src = self.src_of(&axis);
+        let out = self.new_slot(&shape, &origin, scalar, sec);
+        let instr = Instr::Count {
+            rel: ic.rel,
+            axis: axis_src,
+            lo: start,
+            n,
+            sorted,
+            x: self.op_of(&x),
+            out,
+        };
+        self.emit(instr, sec);
+        Ok(Some(if scalar {
+            LV::Scalar(out)
+        } else {
+            LV::Arr(out)
+        }))
     }
 
     /// `eval_makearray` mirror (wholesale): the bounding-box assembly around
@@ -8127,6 +8395,7 @@ fn color_slab(prog: &mut TapeProgram) {
                 | Instr::Fused { .. }
                 | Instr::Lanes { .. }
                 | Instr::Reduce { .. }
+                | Instr::Count { .. }
                 | Instr::Scan { .. }
                 | Instr::Assemble { .. }
                 | Instr::PolyArea { .. }

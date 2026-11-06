@@ -39,6 +39,10 @@
 //!   compile-time-constant table, elementwise in the query. Its element
 //!   semantics are the registry functions themselves, which is what the
 //!   per-cell oracle's `eval_fn` calls, so the agreement is by shared code.
+//! * [`Instr::Count`] counts the entries of a rank-1 array window that stand
+//!   in one comparison to the query, elementwise in the query: the rank-0
+//!   indicator sum of an interpolation bracket, whose fold of `0.0`/`1.0`
+//!   terms is that count exactly, however it is computed.
 //! * [`Instr::Calendar`] evaluates one esm-spec §9.2 `datetime.*` entry
 //!   elementwise through the registry, on the binary64 argument, and keeps the
 //!   binary64 result: `eval_fn`'s arithmetic, by sharing its code. Only a
@@ -239,6 +243,34 @@ pub(crate) enum Instr {
         table: u32,
         x: Operand,
         y: Option<Operand>,
+        out: SlotId,
+    },
+    /// `out[k] = #{ j in 0..n : rel(axis[lo + j], x[k]) }`, as an `f64`: how
+    /// many entries of the window `lo .. lo + n` of the rank-1 array `axis`
+    /// stand in relation `rel` to the query, per element of `out`'s box (a
+    /// scalar `x` broadcasts as [`Instr::Bin`]'s operands do).
+    ///
+    /// This is the rank-0 `faq` `sum_j ifelse(axis[j] REL x, 1, 0)`, the
+    /// bracket of an interpolation, which the per-cell oracle folds term by
+    /// term: every term is exactly `0.0` or `1.0`, so its fold from `+0.0`
+    /// is the count, exact in binary64 (and binary32) far beyond any axis
+    /// length. ANY way of computing the count is therefore bit-identical to
+    /// the fold, for any axis content, which is what lets [`count_rel`] use a
+    /// binary search on a window it finds non-decreasing and a plain linear
+    /// count otherwise.
+    ///
+    /// `axis` is an array operand, not a const-pool index: the window is read
+    /// at run time, so a computed or state-dependent axis is counted as
+    /// readily as a literal one. `sorted` says the lowering found the window
+    /// non-decreasing in a build-time literal, so the per-execution check is
+    /// skipped.
+    Count {
+        rel: CountRel,
+        axis: SrcRef,
+        lo: u32,
+        n: u32,
+        sorted: bool,
+        x: Operand,
         out: SlotId,
     },
     /// `out[k] = f(a[k])` for the §9.2 calendar entry `f =
@@ -513,6 +545,7 @@ impl Instr {
             | Instr::ConstArray { out, .. }
             | Instr::LoadForcing { out, .. }
             | Instr::Interp { out, .. }
+            | Instr::Count { out, .. }
             | Instr::Calendar { out, .. }
             | Instr::Reduce { out, .. }
             | Instr::Scan { out, .. }
@@ -645,6 +678,12 @@ impl Instr {
                     op(y);
                 }
             }
+            Instr::Count { axis, x, .. } => {
+                if let SrcRef::Slot(s) = axis {
+                    op(&Operand::Slot(*s));
+                }
+                op(x);
+            }
             Instr::Fill { v, .. } => op(v),
             Instr::Copy { a, .. } => op(a),
             Instr::Region { base, src, .. } => {
@@ -735,6 +774,7 @@ impl Instr {
             Instr::ConstArray { .. } => "ConstArray",
             Instr::LoadForcing { .. } => "LoadForcing",
             Instr::Interp { .. } => "Interp",
+            Instr::Count { .. } => "Count",
             Instr::Calendar { .. } => "Calendar",
             Instr::Reduce { .. } => "Reduce",
             Instr::Scan { .. } => "Scan",
@@ -2090,6 +2130,94 @@ pub(crate) fn calendar_at(func: u8, t_utc: f64) -> f64 {
     evaluate_closed_function(CALENDAR_FNS[func as usize], &[ClosedArg::Scalar(t_utc)])
         .map(|v| v.as_f64())
         .unwrap_or(f64::NAN)
+}
+
+/// The comparison an [`Instr::Count`] counts: `axis[j] REL x`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CountRel {
+    Le,
+    Lt,
+    Ge,
+    Gt,
+}
+
+impl CountRel {
+    /// `a REL x`, IEEE-754: false whenever either side is NaN.
+    #[inline(always)]
+    pub(crate) fn holds(self, a: f64, x: f64) -> bool {
+        match self {
+            CountRel::Le => a <= x,
+            CountRel::Lt => a < x,
+            CountRel::Ge => a >= x,
+            CountRel::Gt => a > x,
+        }
+    }
+
+    /// The relation with its two sides exchanged: `x REL a` is
+    /// `a REL.mirror() x`.
+    pub(crate) fn mirror(self) -> CountRel {
+        match self {
+            CountRel::Le => CountRel::Ge,
+            CountRel::Lt => CountRel::Gt,
+            CountRel::Ge => CountRel::Le,
+            CountRel::Gt => CountRel::Lt,
+        }
+    }
+
+    /// The relation a comparison operator names, if it is one of the four.
+    pub(crate) fn from_op(op: &str) -> Option<CountRel> {
+        match op {
+            "<=" => Some(CountRel::Le),
+            "<" => Some(CountRel::Lt),
+            ">=" => Some(CountRel::Ge),
+            ">" => Some(CountRel::Gt),
+            _ => None,
+        }
+    }
+}
+
+/// Whether `at(0) <= at(1) <= … <= at(n - 1)`: false when any entry is NaN.
+pub(crate) fn non_decreasing(n: usize, at: impl Fn(usize) -> f64) -> bool {
+    (1..n).all(|j| at(j - 1) <= at(j))
+}
+
+/// [`Instr::Count`]'s element: `#{ j in 0..n : rel(at(j), x) }` as an `f64`.
+///
+/// On a non-decreasing window (`sorted`, every entry ordered by `<=`, so no
+/// NaN) the entries that satisfy `a <= x` or `a < x` are a prefix and those
+/// that satisfy `a >= x` or `a > x` a suffix, whatever `x` is (a NaN `x`
+/// satisfies none, an empty prefix or suffix): its length is found by
+/// bisection. Otherwise every entry is tested. Both are the exact count.
+#[inline]
+pub(crate) fn count_rel(
+    rel: CountRel,
+    n: usize,
+    at: impl Fn(usize) -> f64,
+    sorted: bool,
+    x: f64,
+) -> f64 {
+    if !sorted {
+        return (0..n).filter(|&j| rel.holds(at(j), x)).count() as f64;
+    }
+    // The first position where `in_prefix` turns false (it is true on a
+    // prefix of the window).
+    let split = |in_prefix: &dyn Fn(f64) -> bool| {
+        let (mut lo, mut hi) = (0usize, n);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if in_prefix(at(mid)) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        lo
+    };
+    let c = match rel {
+        CountRel::Le | CountRel::Lt => split(&|a| rel.holds(a, x)),
+        CountRel::Ge | CountRel::Gt => n - split(&|a| !rel.holds(a, x)),
+    };
+    c as f64
 }
 
 /// Which esm-spec §9.2 `interp.*` entry an [`Instr::Interp`] evaluates.
