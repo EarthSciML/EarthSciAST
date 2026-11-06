@@ -296,7 +296,12 @@ impl Fixture {
 
 /// Materialize `E` under `compiler`, returning `(values row-major, leaves the
 /// interpreter's gate-driven walk visited)`.
-fn run(doc: &Value, consts: HashMap<String, ArrayD<f64>>, driver: bool, compiler: Compiler) -> (Vec<f64>, u64) {
+fn run(
+    doc: &Value,
+    consts: HashMap<String, ArrayD<f64>>,
+    driver: bool,
+    compiler: Compiler,
+) -> (Vec<f64>, u64) {
     let prev = set_join_gate_enabled(driver);
     reset_overlap_enum_visits();
     let prep = esm_problem(
@@ -335,10 +340,21 @@ fn assert_bits(what: &str, got: &[f64], want: &[f64]) {
 fn check(f: &Fixture, old_leaves: u64) {
     let (oracle, admitted) = f.oracle();
     assert!(admitted > 0, "the fixture admits nothing");
-    assert!(admitted < old_leaves, "the fixture must separate the two walks");
+    assert!(
+        admitted < old_leaves,
+        "the fixture must separate the two walks"
+    );
 
-    let (filtered, filter_visits) = run(&f.doc(&[], false), f.const_arrays(), true, Compiler::Interpreter);
-    assert_eq!(filter_visits, 0, "the un-gated arm must not run the driven walk");
+    let (filtered, filter_visits) = run(
+        &f.doc(&[], false),
+        f.const_arrays(),
+        true,
+        Compiler::Interpreter,
+    );
+    assert_eq!(
+        filter_visits, 0,
+        "the un-gated arm must not run the driven walk"
+    );
     assert_bits("hand-written filter", &filtered, &oracle);
 
     for perm in permutations(f.clauses.len()) {
@@ -370,9 +386,24 @@ fn a_star_join_intersects_every_spoke() {
         vec![("n", 2)],
         vec![("k", 6), ("m", 5), ("s", 4), ("x", 30)],
         vec![
-            Clause { lcol: "kk", lsym: "k", rcol: "xk", rsym: "x" },
-            Clause { lcol: "mk", lsym: "m", rcol: "xm", rsym: "x" },
-            Clause { lcol: "sk", lsym: "s", rcol: "xs", rsym: "x" },
+            Clause {
+                lcol: "kk",
+                lsym: "k",
+                rcol: "xk",
+                rsym: "x",
+            },
+            Clause {
+                lcol: "mk",
+                lsym: "m",
+                rcol: "xm",
+                rsym: "x",
+            },
+            Clause {
+                lcol: "sk",
+                lsym: "s",
+                rcol: "xs",
+                rsym: "x",
+            },
         ],
         3,
         11,
@@ -390,9 +421,24 @@ fn a_chain_join_carries_a_pin_across_contracted_gates() {
         vec![("w", 4)],
         vec![("a", 12), ("b", 10), ("c", 8)],
         vec![
-            Clause { lcol: "wc", lsym: "w", rcol: "cw", rsym: "c" },
-            Clause { lcol: "bc", lsym: "b", rcol: "cb", rsym: "c" },
-            Clause { lcol: "ab", lsym: "a", rcol: "ba", rsym: "b" },
+            Clause {
+                lcol: "wc",
+                lsym: "w",
+                rcol: "cw",
+                rsym: "c",
+            },
+            Clause {
+                lcol: "bc",
+                lsym: "b",
+                rcol: "cb",
+                rsym: "c",
+            },
+            Clause {
+                lcol: "ab",
+                lsym: "a",
+                rcol: "ba",
+                rsym: "b",
+            },
         ],
         4,
         23,
@@ -413,9 +459,24 @@ fn many_to_many_emits_every_term() {
         vec![("o", 2)],
         vec![("h", 4), ("p", 3), ("q", 3)],
         vec![
-            Clause { lcol: "oh", lsym: "o", rcol: "ho", rsym: "h" },
-            Clause { lcol: "pk", lsym: "p", rcol: "hp", rsym: "h" },
-            Clause { lcol: "qk", lsym: "q", rcol: "hq", rsym: "h" },
+            Clause {
+                lcol: "oh",
+                lsym: "o",
+                rcol: "ho",
+                rsym: "h",
+            },
+            Clause {
+                lcol: "pk",
+                lsym: "p",
+                rcol: "hp",
+                rsym: "h",
+            },
+            Clause {
+                lcol: "qk",
+                lsym: "q",
+                rcol: "hq",
+                rsym: "h",
+            },
         ],
         2,
         5,
@@ -439,6 +500,6 @@ fn many_to_many_emits_every_term() {
 // Leaves the interpreter visited on the parent commit (origin/main 1f4c2a928)
 // for the same fixtures, under the default clause order — the driven walk with
 // one both-contracted gate driving and the rest tested per leaf.
-const OLD_STAR_LEAVES: u64 = u64::MAX;
-const OLD_CHAIN_LEAVES: u64 = u64::MAX;
-const OLD_M2M_LEAVES: u64 = u64::MAX;
+const OLD_STAR_LEAVES: u64 = 2_280;
+const OLD_CHAIN_LEAVES: u64 = 288;
+const OLD_M2M_LEAVES: u64 = 12;

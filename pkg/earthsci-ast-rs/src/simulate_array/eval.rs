@@ -4,14 +4,14 @@
 //! standalone [`eval_expression`] entry point. This path is the correctness
 //! reference the vectorized overlay is verified against.
 
-use super::*;
-use crate::compile_error::CompileError;
-use crate::faq::effective_reduce_kind;
-use crate::types::{ExpressionNode, JoinClause};
 use super::gate_walk::{
     DimSrc, Link, Restriction, TupleSink, intersect_restriction, links_into, propagate_links,
     walk_linked,
 };
+use super::*;
+use crate::compile_error::CompileError;
+use crate::faq::effective_reduce_kind;
+use crate::types::{ExpressionNode, JoinClause};
 
 /// Stack-inlined per-axis `(lo, hi)` range list, the same rank≤4 argument
 /// [`DimI`]/[`DimU`] rest on. Used where a range list is rebuilt on every RHS

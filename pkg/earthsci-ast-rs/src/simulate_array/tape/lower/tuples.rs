@@ -1824,11 +1824,29 @@ mod tests {
             // Star into `c`.
             vec![gate("a", "c", &ac, 0), gate("b", "c", &bc, 1)],
             // Star into `c` with `c` pinned by the output.
-            vec![gate("a", "c", &ac, 0), gate("c", "b", &bc.iter().map(|&(x, y)| (y, x)).collect::<Vec<_>>(), 1), gate("w", "c", &wc, 2)],
+            vec![
+                gate("a", "c", &ac, 0),
+                gate(
+                    "c",
+                    "b",
+                    &bc.iter().map(|&(x, y)| (y, x)).collect::<Vec<_>>(),
+                    1,
+                ),
+                gate("w", "c", &wc, 2),
+            ],
             // Chain `w~c`, `b~c`, `a~b`: the pin crosses two gates.
-            vec![gate("w", "c", &wc, 0), gate("b", "c", &bc, 1), gate("a", "b", &ab, 2)],
+            vec![
+                gate("w", "c", &wc, 0),
+                gate("b", "c", &bc, 1),
+                gate("a", "b", &ab, 2),
+            ],
             // All three pairwise, plus the pin.
-            vec![gate("a", "b", &ab, 0), gate("a", "c", &ac, 1), gate("b", "c", &bc, 2), gate("w", "c", &wc, 3)],
+            vec![
+                gate("a", "b", &ab, 0),
+                gate("a", "c", &ac, 1),
+                gate("b", "c", &bc, 2),
+                gate("w", "c", &wc, 3),
+            ],
         ];
         let body = Expr::Number(0.0);
         for gates in &gate_sets {
@@ -1861,10 +1879,10 @@ mod tests {
                     for b in 1..=4 {
                         for c in 1..=4 {
                             let t = [a, b, c];
-                            if gates
-                                .iter()
-                                .all(|g| g.index.contains(sym(&g.sym_src, w, &t), sym(&g.sym_tgt, w, &t)))
-                            {
+                            if gates.iter().all(|g| {
+                                g.index
+                                    .contains(sym(&g.sym_src, w, &t), sym(&g.sym_tgt, w, &t))
+                            }) {
                                 for (k, v) in [w, a, b, c].into_iter().enumerate() {
                                     want[k].push(v as f64);
                                 }

@@ -361,9 +361,14 @@ mod tests {
         let a = OverlapIndex::from_pairs(&[(1, 2), (1, 3), (2, 3), (3, 1), (3, 3)]);
         let b = OverlapIndex::from_pairs(&[(1, 3), (2, 2), (2, 3), (3, 3)]);
         let c = OverlapIndex::from_pairs(&[(2, 1), (3, 1), (3, 2), (1, 3), (2, 3)]);
-        let links = [Link::new(0, 2, &a), Link::new(1, 2, &b), Link::new(1, 0, &c)];
+        let links = [
+            Link::new(0, 2, &a),
+            Link::new(1, 2, &b),
+            Link::new(1, 0, &c),
+        ];
         let ranges = [(1, 3), (1, 3), (1, 3)];
-        let admits = |t: &[i64]| a.contains(t[0], t[2]) && b.contains(t[1], t[2]) && c.contains(t[1], t[0]);
+        let admits =
+            |t: &[i64]| a.contains(t[0], t[2]) && b.contains(t[1], t[2]) && c.contains(t[1], t[0]);
         let mut want = Vec::new();
         for x in 1..=3 {
             for y in 1..=3 {
@@ -380,7 +385,14 @@ mod tests {
         let mut sink = Collect(Vec::new());
         let mut cur = vec![0; 3];
         let mut scratch = vec![Vec::new(); 3];
-        assert!(walk_linked(&srcs, &into, 0, &mut cur, &mut scratch, &mut sink));
+        assert!(walk_linked(
+            &srcs,
+            &into,
+            0,
+            &mut cur,
+            &mut scratch,
+            &mut sink
+        ));
         assert_eq!(sink.0, want);
     }
 
@@ -394,14 +406,16 @@ mod tests {
         let links = [Link::new(0, 1, &a), Link::new(1, 2, &b)];
         let ranges = [(1, 3), (1, 3), (1, 5)];
         let pin = [2i64];
-        let mut restrict: Vec<Option<Restriction>> = vec![Some(Cow::Borrowed(&pin[..])), None, None];
+        let mut restrict: Vec<Option<Restriction>> =
+            vec![Some(Cow::Borrowed(&pin[..])), None, None];
         assert!(propagate_links(&links, &ranges, &mut restrict));
         assert_eq!(restrict[1].as_deref(), Some(&[1i64, 3][..]));
         assert_eq!(restrict[2].as_deref(), Some(&[2i64, 4, 5][..]));
         assert_eq!(restrict[0].as_deref(), Some(&[2i64][..]));
         // A pin with no partner empties the cell.
         let none = [9i64];
-        let mut restrict: Vec<Option<Restriction>> = vec![None, None, Some(Cow::Borrowed(&none[..]))];
+        let mut restrict: Vec<Option<Restriction>> =
+            vec![None, None, Some(Cow::Borrowed(&none[..]))];
         assert!(!propagate_links(&links, &ranges, &mut restrict));
     }
 }
