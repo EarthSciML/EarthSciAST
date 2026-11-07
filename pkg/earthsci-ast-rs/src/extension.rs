@@ -166,6 +166,12 @@ pub mod simulate {
     pub use crate::simulate::algebraic_state_names;
 }
 
+/// The bundled standard library behind `esm:std/<file>.esm` refs (esm-spec
+/// §4.7). The `esm` CLI's validator resolves mount refs with `resolve`.
+pub mod stdlib {
+    pub use crate::stdlib::{bundled_file, bundled_names, resolve};
+}
+
 /// Event-level substitution. The model-level entry points are the stable tier
 /// (`substitute`, `substitute_in_model`, ...); these reach one event, trigger
 /// or affect at a time and are Rust-only.

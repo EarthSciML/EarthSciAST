@@ -4604,7 +4604,7 @@ fn toplevel_mount_failure(
     noun: &str,
 ) -> Option<String> {
     // esm-spec §4.7: an `esm:` ref names the crate's bundled standard library.
-    let text = match earthsci_ast::stdlib::resolve(ref_str, base) {
+    let text = match earthsci_ast::extension::stdlib::resolve(ref_str, base) {
         Some(Ok((_, text))) => Some(text.to_string()),
         Some(Err(why)) => return Some(format!("could not be resolved: {why}")),
         None => {
@@ -4689,7 +4689,7 @@ fn collect_subsystem_ref_errors(
 
                 // esm-spec §4.7: an `esm:` ref names the crate's bundled
                 // standard library, never a path.
-                let bundled = earthsci_ast::stdlib::resolve(ref_str, base);
+                let bundled = earthsci_ast::extension::stdlib::resolve(ref_str, base);
                 if let Some(Err(why)) = &bundled {
                     out.push(StructuralError {
                         path,

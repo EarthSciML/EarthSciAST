@@ -128,5 +128,5 @@ fn bundle_names_the_repo_lib_files() {
         .filter(|n| n.ends_with(".esm"))
         .collect();
     names.sort();
-    assert_eq!(earthsci_ast::stdlib::bundled_names(), names);
+    assert_eq!(earthsci_ast::extension::stdlib::bundled_names(), names);
 }
