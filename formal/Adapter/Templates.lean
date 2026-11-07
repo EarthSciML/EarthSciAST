@@ -10,8 +10,9 @@ expression evaluator (`Esm.Expr.evalApply`) at `Float`.
 Reads only what those documents use: one model (the one named, or the
 document's sole model when none is); its `expression_template_imports`
 (each `ref` a library file relative to the document, `only` honoured); its
-`parameter` variables' numeric `default`s, which form the environment; and each
-equation `lhs ~ apply_expression_template(...)`. Prints
+`parameter` variables' `default`s (a number, or a nested array of numbers up
+to rank 3) and the variables defined by an equation `x ~ const(...)`, which
+form the environment; and each equation `lhs ~ apply_expression_template(...)`. Prints
 
 ```json
 {"results": [{"name": "r_x", "value": 15.0, "bits": "4624633867356078080"},
@@ -112,15 +113,26 @@ def main (args : List String) : IO UInt32 := do
         for (name, tj) in ts.toArray.toList do
           if only.all (·.contains name) then
             tpls := (name, ← liftExcept (templateOf tj)) :: tpls
-      -- parameter defaults form the environment
+      -- parameter defaults (numbers or nested arrays of numbers) and variables
+      -- defined by a `const` equation (§4.3.3) form the environment
       let vars ← liftExcept ((← liftExcept (m.getObjVal? "variables")).getObj?)
       let mut env : Env Float := []
       for (name, v) in vars.toArray.toList do
         if (v.getObjValAs? String "type").toOption == some "parameter" then
-          if let .ok (.num n) := v.getObjVal? "default" then
-            env := (name, .num (Lits.ofDec n.mantissa n.exponent)) :: env
-      -- every lhs ~ apply_expression_template(...) equation
+          match v.getObjVal? "default" with
+          | .ok (.num n) => env := (name, .num (Lits.ofDec n.mantissa n.exponent)) :: env
+          | .ok (.arr a) =>
+            if let .ok c := constOf (.arr a) then
+              if let .ok val := constVal (α := Float) c then env := (name, val) :: env
+          | _ => pure ()
       let eqs := (m.getObjValD "equations").getArr?.toOption.getD #[]
+      for e in eqs do
+        if let .ok lhs := e.getObjValAs? String "lhs" then
+          let rhs := e.getObjValD "rhs"
+          if (rhs.getObjValAs? String "op").toOption == some "const" then
+            if let .ok c := (rhs.getObjVal? "value").bind constOf then
+              if let .ok val := constVal (α := Float) c then env := (lhs, val) :: env
+      -- every lhs ~ apply_expression_template(...) equation
       let mut out : Array Json := #[]
       for e in eqs do
         let rhs := e.getObjValD "rhs"
