@@ -682,6 +682,14 @@ pub(crate) struct TapeBuilder<'m> {
     /// build-time data — a gather's subscripts, a join's key columns, a
     /// ragged bound — never to fold a value the program computes.
     known: FxHashMap<SlotId, Known>,
+    /// Slots every element of which is known to lie in `[lo, hi]` (never
+    /// NaN): a count, and what clamps and integer shifts make of one. Read
+    /// only to prove a const-array gather's subscripts in range
+    /// ([`Self::emit_data_gather`]), never to change a value.
+    ranges: FxHashMap<SlotId, (f64, f64)>,
+    /// Slots an instruction has defined: a second definition (a branch
+    /// join's phi) drops the slot from `ranges` for good.
+    range_defs: HashSet<SlotId>,
     /// Open tuple-list boxes, innermost last (`tuples`).
     tuple_frames: Vec<tuples::TupleFrame>,
     /// The id the next tuple-list box gets (0 means "not a tuple box").
@@ -1002,6 +1010,8 @@ impl<'m> TapeBuilder<'m> {
             gather_tables: Vec::new(),
             seg_tables: Vec::new(),
             known: FxHashMap::default(),
+            ranges: FxHashMap::default(),
+            range_defs: HashSet::new(),
             tuple_frames: Vec::new(),
             next_tuple: 1,
             tuples_held: 0,
@@ -1092,6 +1102,7 @@ impl<'m> TapeBuilder<'m> {
     /// work, since what is hoisted is a pure map that cannot fault.
     fn emit_tagged(&mut self, instr: Instr, prec: Precision, section: Cadence) {
         self.track_known(&instr);
+        self.track_range(&instr);
         if self.sweep.is_some() {
             if self.reads_body(&instr) || (self.in_branch() && !Self::hoistable(&instr)) {
                 self.mark_body_defs(&instr);
@@ -1123,6 +1134,72 @@ impl<'m> TapeBuilder<'m> {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Record the bounds an instruction's value is known to lie in (see
+    /// `ranges`). Interval arithmetic on `+` and `-` is kept to integer
+    /// endpoints below 2^24, where every endpoint is exact at either working
+    /// precision and rounding, being monotone, keeps each element inside.
+    fn track_range(&mut self, instr: &Instr) {
+        let Some(out) = instr.out() else {
+            return;
+        };
+        if !self.range_defs.insert(out) {
+            self.ranges.remove(&out);
+            return;
+        }
+        let exact = |v: f64| v.fract() == 0.0 && v.abs() < 16_777_216.0;
+        let r = match instr {
+            Instr::Count { n, .. } => Some((0.0, *n as f64)),
+            Instr::Copy { a, .. } | Instr::Fill { v: a, .. } => self.operand_range(a),
+            Instr::Bin { op, a, b, .. } => match (self.operand_range(a), self.operand_range(b)) {
+                (Some(x), Some(y)) => match op {
+                    BinCode::Max => Some((x.0.max(y.0), x.1.max(y.1))),
+                    BinCode::Min => Some((x.0.min(y.0), x.1.min(y.1))),
+                    BinCode::Add if [x.0, x.1, y.0, y.1].into_iter().all(exact) => {
+                        Some((x.0 + y.0, x.1 + y.1)).filter(|r| exact(r.0) && exact(r.1))
+                    }
+                    BinCode::Sub if [x.0, x.1, y.0, y.1].into_iter().all(exact) => {
+                        Some((x.0 - y.1, x.1 - y.0)).filter(|r| exact(r.0) && exact(r.1))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            },
+            // A gather that covers its whole box reads only source elements
+            // (no zero ghost).
+            Instr::Gather {
+                src: SrcRef::Slot(s),
+                plan,
+                ..
+            } => {
+                let p = &self.plans[*plan as usize];
+                let covered = p
+                    .segs
+                    .iter()
+                    .zip(&p.shape)
+                    .all(|(segs, &n)| segs.iter().map(|&(_, len, _)| len).sum::<usize>() == n);
+                if covered {
+                    self.ranges.get(s).copied()
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        if let Some(r) = r {
+            self.ranges.insert(out, r);
+        }
+    }
+
+    /// The bounds of an operand's value, when known: a finite literal, or a
+    /// slot in `ranges`.
+    fn operand_range(&self, o: &Operand) -> Option<(f64, f64)> {
+        match o {
+            Operand::Lit(v) if v.is_finite() => Some((*v, *v)),
+            Operand::Slot(s) => self.ranges.get(s).copied(),
+            _ => None,
         }
     }
 
@@ -3206,6 +3283,24 @@ impl<'m> TapeBuilder<'m> {
             && out_ndim == 1
             && (0..n).any(|d| classify_axis_role(&node.args[1 + d], &vb).is_none())
         {
+            // A rank-1 const array at one computed subscript whose bounds
+            // keep it inside the array (a clamped bracket) has no
+            // out-of-range read for a policy to resolve: it is read as any
+            // array is, by one indexed gather.
+            if n == 1 && src_origin[0] == 1 && self.tile.is_none() {
+                let sub = self.lower_expr(&node.args[1], bx)?;
+                let inside = self
+                    .operand_range(&self.op_of(&sub))
+                    .is_some_and(|(lo, hi)| {
+                        subscript_of(lo) >= 1 && subscript_of(hi) <= src_shape[0] as i64
+                    });
+                if inside
+                    && let Some(v) =
+                        self.lower_index_gather(node, bx, &arg0, 0, &[None], &[], false)?
+                {
+                    return Ok(v);
+                }
+            }
             if let Some(v) =
                 self.lower_const_data_gather(node, bx, &arg0, &src_shape, &src_origin)?
             {
@@ -3633,7 +3728,14 @@ impl<'m> TapeBuilder<'m> {
             want = want.max(self.lv_cadence(s));
         }
         let kind = self.gather_kind(base, &src_shape);
-        let faults = matches!(&kind, ScalarReadKind::ConstArray { policy, .. }
+        // Subscripts whose bounds put every element inside the source (a
+        // clamped bracket, `table[i_lo]` and `table[i_lo + 1]`) cannot fault.
+        let in_range = subs.iter().zip(src_shape.iter()).all(|(s, &n)| {
+            self.operand_range(&self.op_of(s))
+                .is_some_and(|(lo, hi)| subscript_of(lo) >= 1 && subscript_of(hi) <= n as i64)
+        });
+        let faults = !in_range
+            && matches!(&kind, ScalarReadKind::ConstArray { policy, .. }
             if policy.iter().any(|p| matches!(p, BoundaryKind::Error)));
         let lazy = faults && self.lazy_depth > 0;
         let order = if lazy {

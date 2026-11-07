@@ -834,6 +834,11 @@ fn counted_bracket_benchmark_documents() {
     let fn_doc = read("interp_bracket_const_fn_N59.esm");
     let (prog, _) = oracle_ab(const_compose.clone());
     assert_eq!(counts(&prog), vec![(CountRel::Le, true)]);
+    assert_eq!(
+        faulting_gathers(&prog),
+        0,
+        "a clamped bracket's table reads cannot fault"
+    );
     let (prog, _) = oracle_ab(runtime.clone());
     assert_eq!(counts(&prog), vec![(CountRel::Le, false)]);
     // The three spellings integrate the same ODE: the same derivative, bit for bit.
@@ -922,4 +927,44 @@ fn count_rel_is_the_indicator_fold() {
             }
         }
     }
+}
+
+/// Const-array gathers that can fault, and conditional fault scans.
+fn faulting_gathers(prog: &TapeProgram) -> usize {
+    prog.instrs
+        .iter()
+        .filter(|i| {
+            matches!(
+                i,
+                Instr::DataGather { faults: true, .. } | Instr::FaultScan { .. }
+            )
+        })
+        .count()
+}
+
+/// A const-array read at a count clamped into the array's extent cannot
+/// fault, so it compiles without the fault machinery; at the bare count
+/// (which can be 0) it keeps it. Both agree with the oracle bit for bit.
+#[test]
+fn const_gather_at_a_clamped_count() {
+    let n = 9i64;
+    let count = || {
+        json!({"op": "faq", "args": [], "output_idx": [], "ranges": {"k": [1, n]},
+               "expr": indicator(op("<=", vec![axis_at("zc"), query()]))})
+    };
+    let read = |sub: Value| {
+        let mut d = count_doc(n, indicator(op("<=", vec![axis_at("zc"), query()])));
+        d["models"]["M"]["equations"][2]["rhs"]["expr"] = ix("zc", vec![sub]);
+        d
+    };
+    let clamped = op(
+        "min",
+        vec![op("max", vec![count(), json!(1)]), json!(n - 1)],
+    );
+    let prog = oracle_ab(read(clamped.clone())).0;
+    assert_eq!(faulting_gathers(&prog), 0, "zc[clamp(count)]");
+    let prog = oracle_ab(read(op("+", vec![clamped, json!(1)]))).0;
+    assert_eq!(faulting_gathers(&prog), 0, "zc[clamp(count) + 1]");
+    let prog = oracle_ab(read(count())).0;
+    assert!(faulting_gathers(&prog) > 0, "zc[count] can read zc[0]");
 }
