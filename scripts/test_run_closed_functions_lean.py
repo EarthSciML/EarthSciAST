@@ -58,7 +58,32 @@ class TemplateDocs(unittest.TestCase):
         fx = {"id": "f", "path": "doc.esm"}
         if fx_model is not None:
             fx["model"] = next(iter(models)) if fx_model == "__name__" else fx_model
-        return lean.check_template_doc(self.manifest, fx)
+        passed, failed, _, msgs = lean.check_template_doc(self.manifest, fx)
+        return passed, failed, msgs
+
+    def test_array_entries_match_by_coords_and_skips_count(self):
+        tests = [
+            {
+                "id": "t",
+                "assertions": [
+                    {"variable": "A", "expected": 0.5, "coords": {"s": 1, "u": 2}},
+                    {"variable": "A", "expected": 1.0, "coords": {"s": 2, "u": 1}},
+                    {"variable": "G", "expected": 7.0, "coords": {"s": 1, "u": 1}},
+                ],
+            }
+        ]
+        (self.dir / "doc.esm").write_text(json.dumps({"models": {"m": model(tests, {"rel": 0, "abs": 0})}}))
+        res = [
+            {**result("A", 0.5), "coords": {"s": 1, "u": 2}},
+            {**result("A", 9.0), "coords": {"s": 2, "u": 1}},
+            {"name": "G", "skipped": "faq with join"},
+        ]
+        (self.dir / "results.json").write_text(json.dumps({"results": res}))
+        passed, failed, skipped, msgs = lean.check_template_doc(
+            self.manifest, {"id": "f", "path": "doc.esm", "model": "m"}
+        )
+        self.assertEqual((passed, failed, skipped), (1, 1, 1), msgs)
+        self.assertIn("A{'s': 2, 'u': 1}", msgs[0])
 
     def argv(self):
         return json.loads((self.dir / "argv.json").read_text())

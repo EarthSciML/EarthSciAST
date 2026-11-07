@@ -12,14 +12,21 @@ document's sole model when none is); its `expression_template_imports`
 (each `ref` a library file relative to the document, `only` honoured); its
 `parameter` variables' `default`s (a number, or a nested array of numbers up
 to rank 3) and the variables defined by an equation `x ~ const(...)`, which
-form the environment; and each equation `lhs ~ apply_expression_template(...)`. Prints
+form the environment; each equation `lhs ~ apply_expression_template(...)`; and
+each array equation `lhs ~ faq(...)` whose output indices are all its range
+symbols, each over a whole interval index set (`{"from": set}`, extent from
+`index_sets`), with no `join` or `filter` — its body evaluated at every index
+tuple. Each result is bound for the equations after it. Prints
 
 ```json
 {"results": [{"name": "r_x", "value": 15.0, "bits": "4624633867356078080"},
-             {"name": "r_y", "error": "..."}]}
+             {"name": "A", "coords": {"src_cells": 1, "tgt_cells": 2}, "value": 0.5, ...},
+             {"name": "r_y", "error": "..."},
+             {"name": "B", "skipped": "faq with join"}]}
 ```
 
-with one entry per such equation, in document order. Anything else in the
+with one entry per scalar equation and per array entry, in document order; an
+array equation outside that slice is reported `skipped`, not evaluated. Anything else in the
 document (an equation of another form, a state, a test block) is ignored: this
 mode evaluates expressions, it does not simulate. Exit status 0 on a
 well-formed document, 2 on a usage or parse error. -/
@@ -93,6 +100,58 @@ def errorString : ApplyError → String
   | .eval .outOfRange => "E_TREEWALK_CONSTARRAY_OOB"
   | .eval .nonIntegral => "index not integral"
 
+/-- Every index tuple of the given extents, 1-based, in row-major order. -/
+def tuples : List Nat → List (List Nat)
+  | [] => [[]]
+  | n :: ns => (List.range n).flatMap (fun i => (tuples ns).map (fun t => (i + 1) :: t))
+
+/-- Consecutive runs of `n` elements. -/
+def chunk {β : Type} (n : Nat) (l : List β) : List (List β) :=
+  (List.range (l.length / n)).map (fun i => (l.drop (i * n)).take n)
+
+/-- An array of rank 1 to 3 from its row-major entries. -/
+def shapeVal (sizes : List Nat) (vals : List Float) : Option (Val Float) :=
+  match sizes with
+  | [_] => some (.arr1 vals)
+  | [_, n2] => some (.arr2 (chunk n2 vals))
+  | [_, n2, n3] => some (.arr3 (chunk n2 (chunk n3 vals)))
+  | _ => none
+
+/-- A `faq` body at one index tuple, references expanded through `scope`. -/
+def evalAt (scope : List (String × Template)) (env : Env Float) (body : Ast)
+    (syms : List String) (t : List Nat) : Except String Float := do
+  let a ← match expandRefs scope 32 body with
+    | .ok a => pure a
+    | .error e => throw (errorString (.expand e))
+  let env' := (syms.zip t).foldl (fun e (sk : String × Nat) =>
+    (sk.1, Val.num (Float.ofNat sk.2)) :: e) env
+  match eval a env' with
+  | .ok (.num x) => pure x
+  | .ok _ => throw "not a scalar"
+  | .error e => throw (errorString (.eval e))
+
+/-- A `faq` whose output indices are all its range symbols, each ranging over a
+whole interval index set (`{"from": set}`), with no `join` or `filter`: its
+index-set names and extents in `output_idx` order, or why it is not one. -/
+def mapFaq (sets : Json) (rhs : Json) : Except String (List String × List String × List Nat) := do
+  for f in ["join", "filter", "distinct", "key", "semiring"] do
+    if (rhs.getObjVal? f).toOption.isSome then throw s!"faq with {f}"
+  let out ← (← rhs.getObjVal? "output_idx").getArr?
+  let syms ← out.toList.mapM (·.getStr?)
+  let ranges ← (← rhs.getObjVal? "ranges").getObj?
+  unless ranges.toArray.size == syms.length do throw "faq contracts an index"
+  let mut names : List String := []
+  let mut sizes : List Nat := []
+  for k in syms do
+    let r ← match ranges.get? k with
+      | some r => pure r
+      | none => throw s!"output index {k} has no range"
+    let set ← r.getObjValAs? String "from"
+    let size ← (← sets.getObjVal? set).getObjValAs? Nat "size"
+    names := names ++ [set]
+    sizes := sizes ++ [size]
+  return (syms, names, sizes)
+
 def main (args : List String) : IO UInt32 := do
   match args with
   | path :: rest =>
@@ -145,22 +204,46 @@ def main (args : List String) : IO UInt32 := do
           if (rhs.getObjValAs? String "op").toOption == some "const" then
             if let .ok c := (rhs.getObjVal? "value").bind constOf then
               if let .ok val := constVal (α := Float) c then env := (lhs, val) :: env
-      -- every lhs ~ apply_expression_template(...) equation
+      -- every lhs ~ apply_expression_template(...) equation, and every array
+      -- equation lhs ~ faq(...) that maps such a template (or any expression
+      -- the evaluator covers) over whole index sets; each result is bound for
+      -- the equations after it
+      let sets := match doc.getObjVal? "index_sets" with
+        | .ok j => j
+        | .error _ => m.getObjValD "index_sets"
       let mut out : Array Json := #[]
       for e in eqs do
         let rhs := e.getObjValD "rhs"
-        unless (rhs.getObjValAs? String "op").toOption == some "apply_expression_template" do
-          continue
-        let lhs ← liftExcept (e.getObjValAs? String "lhs")
-        let name ← liftExcept (rhs.getObjValAs? String "name")
-        let some t := tpls.lookup name | throw s!"{lhs}: template {name} is not imported"
-        let bs ← liftExcept ((← liftExcept (rhs.getObjVal? "bindings")).getObj?)
-        let σ ← liftExcept (bs.toArray.toList.mapM (fun (k, v) => do return (k, ← astOf v)))
-        match evalApplyIn scope 32 t σ env with
-        | .ok (.num x) => out := out.push ((Adapter.Interp.floatJson x).mergeObj
-            (Json.mkObj [("name", lhs)]))
-        | .ok _ => out := out.push (Json.mkObj [("name", lhs), ("error", "not a scalar")])
-        | .error err => out := out.push (Json.mkObj [("name", lhs), ("error", errorString err)])
+        let op := (rhs.getObjValAs? String "op").toOption
+        let some lhs := (e.getObjValAs? String "lhs").toOption | continue
+        if op == some "apply_expression_template" then
+          let name ← liftExcept (rhs.getObjValAs? String "name")
+          let some t := tpls.lookup name | throw s!"{lhs}: template {name} is not imported"
+          let bs ← liftExcept ((← liftExcept (rhs.getObjVal? "bindings")).getObj?)
+          let σ ← liftExcept (bs.toArray.toList.mapM (fun (k, v) => do return (k, ← astOf v)))
+          match evalApplyIn scope 32 t σ env with
+          | .ok (.num x) =>
+            out := out.push ((Adapter.Interp.floatJson x).mergeObj (Json.mkObj [("name", lhs)]))
+            env := (lhs, .num x) :: env
+          | .ok _ => out := out.push (Json.mkObj [("name", lhs), ("error", "not a scalar")])
+          | .error err =>
+            out := out.push (Json.mkObj [("name", lhs), ("error", errorString err)])
+        else if op == some "faq" && (rhs.getObjVal? "output_idx").toOption.isSome then
+          match mapFaq sets rhs with
+          | .error why => out := out.push (Json.mkObj [("name", lhs), ("skipped", why)])
+          | .ok (syms, names, sizes) =>
+            match astOf (rhs.getObjValD "expr") with
+            | .error why => out := out.push (Json.mkObj [("name", lhs), ("skipped", why)])
+            | .ok body =>
+              let ts := tuples sizes
+              match ts.mapM (evalAt scope env body syms) with
+              | .error why => out := out.push (Json.mkObj [("name", lhs), ("skipped", why)])
+              | .ok vals =>
+                for (t, x) in ts.zip vals do
+                  let coords := Json.mkObj ((names.zip t).map (fun (n, k) => (n, toJson k)))
+                  out := out.push ((Adapter.Interp.floatJson x).mergeObj
+                    (Json.mkObj [("name", lhs), ("coords", coords)]))
+                if let some v := shapeVal sizes vals then env := (lhs, v) :: env
       return Json.mkObj [("results", Json.arr out)]
     match ← run.run with
     | .ok j => IO.println j.compress; return 0

@@ -20,9 +20,11 @@ in memory, NaN / Inf / -Inf included, ruling Q-109) and checks each case's code
 in `TEMPLATE_TIERS` (`interp_templates`, `datetime_templates`,
 `relational_templates`, `geometry_templates`, each scored when its manifest
 exists), checking each test assertion of the manifest's model against the
-evaluated `apply_expression_template` equation it names. A fixture the adapter
-cannot run (one that needs a simulation) is listed in its tier with the reason,
-and counted as skipped. The assertions and their
+evaluated `apply_expression_template` equation (or array entry, matched by
+its `coords`) it names. A fixture the adapter cannot run (one that needs a
+simulation) is listed in its tier with the reason, and an assertion on an
+array equation outside the adapter's slice (a `join`-gated or contracting
+`faq`, a geometry leaf) is reported by the adapter; both count as skipped. The assertions and their
 tolerances are read the way the inline-test runner reads them (each bound
 resolved assertion -> test -> model, `authored_assertions` in
 scripts/run-inline-tests-conformance.py); a zero band is a bit-for-bit match.
@@ -170,20 +172,44 @@ def bits(x):
     return str(struct.unpack("<Q", struct.pack("<d", float(x)))[0])
 
 
+def exact_value(r):
+    """The adapter's value, read from its `bits` (the printed `value` may be
+    rounded to a few digits)."""
+    if "bits" in r:
+        return struct.unpack("<d", struct.pack("<Q", int(r["bits"])))[0]
+    return float(r["value"])
+
+
+def _assertion_coords(path, model_name):
+    """`{(test_id, assertion_idx): coords}` for the assertions of the model that
+    pin an array entry (`coords`, esm-spec §6.6.5)."""
+    model = (json.loads(path.read_text(encoding="utf-8")).get("models") or {}).get(model_name) or {}
+    out = {}
+    for test in model.get("tests") or []:
+        for i, a in enumerate(test.get("assertions") or [], start=1):
+            if a.get("coords"):
+                out[(str(test.get("id")), i)] = tuple(sorted(a["coords"].items()))
+    return out
+
+
 def check_template_doc(manifest_path, fx):
     """`esm-lean templates` on the manifest fixture `fx`'s document, scored
-    against the assertions of the model it names. Returns (passed, failed, messages)."""
+    against the assertions of the model it names. An assertion on an array
+    equation the adapter reports `skipped` (outside its slice: a `join`-gated
+    or contracting `faq`, a geometry leaf) is counted as skipped.
+    Returns (passed, failed, skipped, messages)."""
     path = INLINE.fixture_path(manifest_path, fx)
     rel = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
     if "model" not in fx:
         try:
             models = list(json.loads(path.read_text(encoding="utf-8")).get("models") or {})
         except (OSError, json.JSONDecodeError) as e:
-            return 0, 1, [f"FAIL {rel}: cannot read: {e}"]
+            return 0, 1, 0, [f"FAIL {rel}: cannot read: {e}"]
         if len(models) != 1:
             return (
                 0,
                 1,
+                0,
                 [
                     f"FAIL {rel}: fixture {fx.get('id')!r} names no `model` and the document "
                     f"has {len(models)} models"
@@ -193,7 +219,8 @@ def check_template_doc(manifest_path, fx):
     try:
         asserts = INLINE.authored_assertions(manifest_path, fx)
     except INLINE.ManifestError as e:
-        return 0, 1, [f"FAIL {rel}: {e}"]
+        return 0, 1, 0, [f"FAIL {rel}: {e}"]
+    coords = _assertion_coords(path, fx["model"])
     proc = subprocess.run(
         [str(BINARY), "templates", str(path), fx["model"]], capture_output=True, text=True
     )
@@ -201,29 +228,41 @@ def check_template_doc(manifest_path, fx):
         return (
             0,
             len(asserts),
+            0,
             [f"FAIL {rel}: esm-lean exited {proc.returncode}: {proc.stderr.strip()}"],
         )
-    results = {r["name"]: r for r in json.loads(proc.stdout)["results"]}
-    passed = failed = 0
+    results = {}
+    skipped_names = set()
+    for r in json.loads(proc.stdout)["results"]:
+        if "skipped" in r:
+            skipped_names.add(r["name"])
+        key = (r["name"], tuple(sorted((r.get("coords") or {}).items())))
+        results[key] = r
+    passed = failed = skipped = 0
     msgs = []
     for a in asserts:
-        r = results.get(a["variable"])
+        where = coords.get((a["test_id"], a["assertion_idx"]), ())
+        if a["variable"] in skipped_names:
+            skipped += 1
+            continue
+        r = results.get((a["variable"], where))
         if r is None or "value" not in r:
             ok, got = False, (r or {}).get("error", "no result")
         elif a["rtol"] == 0 and a["atol"] == 0:
             ok, got = r["bits"] == bits(a["expected"]), r["value"]
         else:
-            got = r["value"]
-            ok = INLINE.within(float(got), a["expected"], a["rtol"], a["atol"])
+            got = exact_value(r)
+            ok = INLINE.within(got, a["expected"], a["rtol"], a["atol"])
         if ok:
             passed += 1
         else:
             failed += 1
+            at = f"{dict(where)}" if where else ""
             msgs.append(
-                f"FAIL {rel} {a['test_id']}#{a['assertion_idx']} {a['variable']}: "
+                f"FAIL {rel} {a['test_id']}#{a['assertion_idx']} {a['variable']}{at}: "
                 f"expected {a['expected']!r}, got {got!r}"
             )
-    return passed, failed, msgs
+    return passed, failed, skipped, msgs
 
 
 def main():
@@ -269,8 +308,8 @@ def main():
                 if args.verbose:
                     print(f"skip {manifest_path.parent.name}/{fx['id']}: {skips[fx['id']]}")
                 continue
-            passed, failed, msgs = check_template_doc(manifest_path, fx)
-            tp, tf = tp + passed, tf + failed
+            passed, failed, skipped, msgs = check_template_doc(manifest_path, fx)
+            tp, tf, ts = tp + passed, tf + failed, ts + skipped
             for m in msgs:
                 print(m)
     print(f"closed-functions (lean): {tp} passed, {tf} failed, {ts} skipped in {nf} fixtures")
