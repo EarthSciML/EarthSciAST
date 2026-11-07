@@ -361,6 +361,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("geometry_assembly_conformance_test.jl")
     include("geometry_overlap_join_conformance_test.jl")
     include("geometry_ranged_clip_test.jl")
+    include("geometry_templates_test.jl")  # lib/geometry.esm overlap templates vs the polygon leaf
     include("setup_map_compile_once_test.jl")  # promoted-physics MAP: compile-once == per-cell, bitwise
     include("setup_fill_test.jl")  # construction-time fills through the cascade: bitwise, one compile across N
     include("geom_sweep_specialize_test.jl")   # geometry sweep: rank-specialized == rank-abstract, bitwise
