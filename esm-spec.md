@@ -4282,13 +4282,21 @@ interval:
 A repeated vertex (the explicit closing duplicate or the rectangular-storage
 padding above) makes a zero-length edge, which contributes exactly zero and bounds
 nothing, so the template needs no deduplication step and a padded ring gives the
-bits of its unpadded form. An edge shared by both cells counts once when the two
-run the same way and not at all when they run opposite ways, so cells of one grid
-(identical, adjacent, corner-touching) come out exact. The template agrees with
-the leaf within the CONFORMANCE_SPEC §5.8.2 tolerance on the cell pairs of every
-polygon and regridding fixture (`tests/conformance/geometry_templates/pairs.json`).
-It does not carry the leaf's operand checks: a ring of no extent gives `0` rather
-than an error, and non-convex input is outside its contract.
+bits of its unpadded form. A half-plane test counts a point as on the line when
+its signed value `g` satisfies `|g| ≤ 1e-12 · L1(b − a) · (L1(p) + L1(q) + L1(a))`
+on the plane (edge `p → q` tested against the line of edge `a → b`, `L1` the sum of
+absolute coordinates) and `|g| ≤ 1e-14` on the sphere (`g = (a × b) · p` over unit
+vectors). An edge shared by both cells counts once when the two run the same way
+and not at all when they run opposite ways, so cells of one grid (identical,
+adjacent, corner-touching) come out exact. The template agrees with the leaf
+within the CONFORMANCE_SPEC §5.8.2 tolerance on the cell pairs of every polygon and
+regridding fixture (`tests/conformance/geometry_templates/pairs.json`). It does not
+carry the leaf's operand checks, and three behaviours differ from the leaf by
+design: a ring of no extent (every vertex on one line or point, a zero fan sum)
+gives `0` rather than the degenerate-operand error; non-convex input is outside
+the contract and is not rejected; and distinct vertices closer than the leaf's
+`np.allclose` point-equality tolerance are not merged (only exactly repeated
+vertices are padding).
 
 ### 8.7 Out of scope
 
