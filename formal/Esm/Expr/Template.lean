@@ -91,7 +91,7 @@ inductive ApplyError where
 
 /-- The value of an `apply_expression_template` node: expand, then evaluate
 the expansion (§9.6.4 rule 2: a reference denotes its expansion). -/
-def evalApply {α : Type} [Scalar α] [Lits α] (t : Template) (σ : Bindings) (env : Env α) :
+def evalApply {α : Type} [Scalar α] [Lits α] [Elem α] (t : Template) (σ : Bindings) (env : Env α) :
     Except ApplyError (Val α) :=
   match expand t σ with
   | .error e => .error (.expand e)

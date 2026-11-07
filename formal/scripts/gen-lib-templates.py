@@ -4,10 +4,12 @@
     python3 formal/scripts/gen-lib-templates.py            # write the Lean file
     python3 formal/scripts/gen-lib-templates.py --check    # fail if it is stale
 
-Reads the `expression_templates` of `lib/interp.esm` and writes
-`formal/Esm/Lib/Interp.lean`, one `Esm.Expr.Template` per template, its body
+Reads the `expression_templates` of each library file in `TARGETS`
+(`lib/interp.esm`, `lib/calendar.esm`, …) and writes its Lean file
+(`formal/Esm/Lib/Interp.lean`, …), one `Esm.Expr.Template` per template, its body
 transcribed node for node into `Esm.Expr.Ast` (formal/Esm/Expr/Core.lean). The
-theorems in `formal/Esm/Closed/Interp/TemplateAst.lean` are about these
+theorems in `formal/Esm/Closed/Interp/TemplateAst.lean` (and the matching file
+of each library) are about these
 definitions, so `--check` (run by the formal CI workflow) keeps the proofs tied
 to the committed library file: an edit to `lib/interp.esm` that is not
 regenerated fails the check, and a regenerated file the proofs no longer fit
@@ -15,7 +17,8 @@ fails the Lean build.
 
 A node outside what `Esm.Expr.Ast` carries (an op field other than `op`,
 `args`, and a `faq`'s `output_idx`/`reduce`/`ranges`/`expr`, or a `const`'s
-`value`) is an error here rather than a silent drop, as is a missing field
+`value` and `units`; `units` is dropped, as evaluation does not read it) is an
+error here rather than a silent drop, as is a missing field
 the transcription needs and a literal `-0.0`: `Ast.num` is an integer mantissa
 and a decimal exponent, which has no negative zero.
 """
@@ -31,6 +34,9 @@ ROOT = Path(__file__).resolve().parents[2]
 # (source library file, Lean output file, Lean namespace)
 TARGETS = [
     ("lib/interp.esm", "formal/Esm/Lib/Interp.lean", "Esm.Lib.Interp"),
+    ("lib/calendar.esm", "formal/Esm/Lib/Calendar.lean", "Esm.Lib.Calendar"),
+    ("lib/relational.esm", "formal/Esm/Lib/Relational.lean", "Esm.Lib.Relational"),
+    ("lib/geometry.esm", "formal/Esm/Lib/Geometry.lean", "Esm.Lib.Geometry"),
 ]
 
 
@@ -84,7 +90,9 @@ def ast(e, indent, path):
         raise Unsupported(f"{path}: not an Expression: {e!r}")
     op = e["op"]
     if op == "const":
-        extra = set(e) - {"op", "value", "args"}
+        # `units` (§4.8.5) is a declaration for the units checker; the value is
+        # all evaluation reads, so the transcription drops it.
+        extra = set(e) - {"op", "value", "args", "units"}
         if extra or e.get("args", []) != []:
             raise Unsupported(f"{path}: const node fields {sorted(extra)}")
         if "value" not in e:

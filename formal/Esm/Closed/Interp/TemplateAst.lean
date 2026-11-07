@@ -152,7 +152,7 @@ theorem expand_bilinear (nx ny : ℕ) :
 
 section Eval
 
-variable {α : Type} [Scalar α] [RealNaN α] [Lits α] [ExprLaws α]
+variable {α : Type} [Scalar α] [RealNaN α] [Lits α] [Elem α] [ExprLaws α]
 
 theorem op_ifelse : Op.ofString "ifelse" = .ifelse := rfl
 theorem op_index : Op.ofString "index" = .strict .index := rfl
@@ -404,7 +404,7 @@ end Eval
 
 section Templates
 
-variable {α : Type} [Scalar α] [RealNaN α] [Lits α] [ExprLaws α]
+variable {α : Type} [Scalar α] [RealNaN α] [Lits α] [Elem α] [ExprLaws α]
 
 /-- The expanded `searchsorted` evaluates to the mirror `Template.searchsorted`. -/
 theorem ev_searchsorted (A : List α) (x : α) (h53 : A.length < 2 ^ 53) :
@@ -541,7 +541,7 @@ end Templates
 
 section Apply
 
-variable {α : Type} [Scalar α] [RealNaN α] [Lits α] [ExprLaws α]
+variable {α : Type} [Scalar α] [RealNaN α] [Lits α] [Elem α] [ExprLaws α]
 
 theorem evalApply_of {t : Esm.Expr.Template} {σ : Bindings} {a : Ast} {env : Env α} {v : Val α}
     (he : expand t σ = .ok a) (hv : eval a env = .ok v) : evalApply t σ env = .ok v := by

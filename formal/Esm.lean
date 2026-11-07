@@ -10,6 +10,9 @@ import Esm.Expr.Core
 import Esm.Expr.Template
 import Esm.Lib.Interp
 import Esm.Closed.Interp.TemplateAst
+import Esm.Lib.Calendar
+import Esm.Lib.Relational
+import Esm.Lib.Geometry
 import Esm.Closed.Tables
 import Esm.Closed.Tables.Enums
 import Esm.Closed.Tables.Nearest64

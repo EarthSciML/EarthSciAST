@@ -47,6 +47,15 @@ class MissingFields(unittest.TestCase):
         with self.assertRaisesRegex(gen.Unsupported, r"^t\.args\[1\]: faq has no expr"):
             gen.ast(node, 0, "t")
 
+    def test_const_units_are_dropped(self):
+        # §4.8.5 unit-bearing const: units are for the checker, not evaluation.
+        node = {"op": "const", "value": 86400, "units": "s"}
+        self.assertEqual(gen.ast(node, 0, "t"), "(Ast.const (Const.leaf (86400) 0))")
+
+    def test_const_other_fields_are_refused(self):
+        with self.assertRaisesRegex(gen.Unsupported, "const node fields"):
+            gen.ast({"op": "const", "value": 1, "shape": [1]}, 0, "t")
+
     def test_const_without_value(self):
         with self.assertRaisesRegex(gen.Unsupported, "const node has no value"):
             gen.ast({"op": "const"}, 0, "t")

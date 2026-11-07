@@ -43,7 +43,7 @@ partial def astOf (j : Json) : Except String Ast := do
     let op ← j.getObjValAs? String "op"
     let fields := kvs.toArray.map (·.1)
     let allowed : List String :=
-      if op == "const" then ["op", "args", "value"]
+      if op == "const" then ["op", "args", "value", "units"]
       else if op == "faq" then ["op", "args", "output_idx", "reduce", "ranges", "expr"]
       else ["op", "args"]
     for f in fields do
