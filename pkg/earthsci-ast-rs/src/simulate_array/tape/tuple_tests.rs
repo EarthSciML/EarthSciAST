@@ -684,7 +684,7 @@ fn hot_soak_doc(n_g: usize, n_v: usize, n_i: usize, n_s: usize, n_h: usize) -> V
                             let k = (g * n_i + i) * n_s + s;
                             // Some zeros (the `> 0` filter), and magnitudes
                             // that show a reordered fold in the low bits.
-                            if k % 5 == 0 {
+                            if k.is_multiple_of(5) {
                                 0.0
                             } else {
                                 (1.0 + 0.37 * k as f64) * 10f64.powi((k % 7) as i32 - 3)
