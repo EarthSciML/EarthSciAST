@@ -23,6 +23,7 @@
 //! with the tape's reason, never a per-cell walk.
 
 use super::*;
+use rustc_hash::FxHashSet;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -152,11 +153,95 @@ impl TapeBuilder<'_> {
         Ok(lv)
     }
 
+    /// [`Self::standalone_array_input`] for values the build already holds
+    /// behind an `Rc`, under [`TapeBuilder::defer_consts`]: the slot shares
+    /// `vals` rather than copying them into an [`Instr::ConstArray`], which
+    /// is emitted only if an instruction reads the slot whole
+    /// ([`Self::materialize_deferred`]). `shape` is not empty.
+    pub(super) fn standalone_known_input(&mut self, shape: &DimU, vals: &Rc<Vec<f64>>) -> LV {
+        debug_assert!(self.defer_consts && !shape.is_empty());
+        if shape.contains(&0) {
+            let ones = DimI::from_elem(1, shape.len());
+            let lv = self.emit_zero_array(shape, &ones);
+            if let LV::Arr(s) = lv {
+                self.known.insert(s, Known::Vals(Rc::new(Vec::new())));
+            }
+            return lv;
+        }
+        LV::Arr(self.defer_const(shape, Rc::clone(vals)))
+    }
+
+    /// A CONST slot over `shape` at the all-1s origin whose values are
+    /// `vals` ([`Known::Deferred`]): what [`Self::emit_const_array`] defines,
+    /// with the instruction left to [`Self::materialize_deferred`].
+    pub(super) fn defer_const(&mut self, shape: &[usize], vals: Rc<Vec<f64>>) -> SlotId {
+        debug_assert_eq!(shape.iter().product::<usize>(), vals.len());
+        let sec = self.placement(Cadence::Const);
+        let origin = DimI::from_elem(1, shape.len());
+        let out = self.new_slot(shape, &origin, false, sec);
+        self.known.insert(out, Known::Deferred(vals));
+        out
+    }
+
+    /// Define every [`Known::Deferred`] slot some instruction reads with an
+    /// [`Instr::ConstArray`] of its values, at the head of the CONST section,
+    /// in slot order. The head is ahead of every reader, and a jump's targets
+    /// are relative, so prepending moves none of them. A slot nothing reads
+    /// costs nothing: no instruction, no payload, and no slab storage.
+    fn materialize_deferred(&mut self) {
+        let mut deferred: Vec<SlotId> = self
+            .known
+            .iter()
+            .filter(|(_, k)| matches!(k, Known::Deferred(_)))
+            .map(|(&s, _)| s)
+            .collect();
+        if deferred.is_empty() {
+            return;
+        }
+        let mut read: FxHashSet<SlotId> = FxHashSet::default();
+        {
+            let tables = self.slot_tables();
+            for chunk in self.streams.iter().flatten() {
+                for (instr, _) in &chunk.instrs {
+                    instr.for_each_read(&tables, |s| {
+                        read.insert(s);
+                    });
+                }
+            }
+        }
+        deferred.retain(|s| read.contains(s));
+        deferred.sort_unstable();
+        let prec = crate::precision::active();
+        let mut instrs: Vec<Tagged> = Vec::with_capacity(deferred.len());
+        for out in deferred {
+            let Some(Known::Deferred(vals)) = self.known.remove(&out) else {
+                unreachable!("a deferred slot");
+            };
+            let data = self.const_data.len() as u32;
+            self.const_data.push(ConstArrayData {
+                shape: self.slots[out as usize].shape.clone(),
+                values: Rc::try_unwrap(vals).unwrap_or_else(|v| (*v).clone()),
+            });
+            self.known.insert(out, Known::Data(data));
+            instrs.push((Instr::ConstArray { data, out }, prec));
+        }
+        if !instrs.is_empty() {
+            self.streams[Cadence::Const as usize].insert(
+                0,
+                Chunk {
+                    rule: self.cur_rule,
+                    instrs,
+                },
+            );
+        }
+    }
+
     /// Close the standalone rule `rule` (whose value is bound in
     /// `obs_defined`) and finish the program, exporting it.
     pub(super) fn finish_standalone(mut self, rule: &AlgebraicRule) -> TapeProgram {
         self.end_rule();
         let exports = self.compute_exports(std::slice::from_ref(rule), true);
+        self.materialize_deferred();
         self.finish(exports, None, false)
     }
 

@@ -123,6 +123,15 @@ pub(super) struct BuiltGate {
     in_filter: bool,
 }
 
+/// The build-time value of one observed a folded tuple-list contraction
+/// reads ([`TapeBuilder::tuple_fold_inputs`]): its shape (empty for a scalar)
+/// and row-major values, shared by every chunk's tape.
+pub(super) struct FoldInput {
+    name: String,
+    shape: DimU,
+    vals: Rc<Vec<f64>>,
+}
+
 /// The admitted tuple list: per output cell a contiguous run.
 pub(super) struct TupleList {
     pub(super) rows: Vec<u32>,
@@ -553,7 +562,7 @@ impl TapeBuilder<'_> {
     fn fold_cell_in_windows(
         &self,
         cell: &TupleSpec<'_>,
-        inputs: &[(String, ndarray::ArrayD<f64>)],
+        inputs: &[FoldInput],
         combine_op: BinCode,
         budget: u64,
     ) -> LResult<Option<f64>> {
@@ -601,13 +610,14 @@ impl TapeBuilder<'_> {
     }
 
     /// The build-time value of every observed `spec`'s body and filter read
-    /// ([`Self::known_inputs`]); `None` when one of them has none. Names that
+    /// ([`Self::known_named`]); `None` when one of them has none. Names that
     /// are not observeds are left to the chunk's own build, which declines
     /// what it cannot resolve.
-    fn tuple_fold_inputs(
-        &self,
-        spec: &TupleSpec<'_>,
-    ) -> Option<Vec<(String, ndarray::ArrayD<f64>)>> {
+    ///
+    /// Taken once per fold and shared by every chunk's tape: each binds the
+    /// same `Rc`, so no chunk copies an input
+    /// ([`TapeBuilder::defer_consts`]).
+    fn tuple_fold_inputs(&self, spec: &TupleSpec<'_>) -> Option<Vec<FoldInput>> {
         let mut reads: HashSet<String> = HashSet::new();
         standalone::collect_variable_names(spec.body, &mut reads);
         if let Some(f) = spec.filter {
@@ -619,7 +629,17 @@ impl TapeBuilder<'_> {
             .filter(|n| self.obs_defined.contains_key(n.as_str()))
             .collect();
         names.sort();
-        self.known_inputs(names)
+        names
+            .into_iter()
+            .map(|name| {
+                let (shape, vals) = self.known_named(name)?;
+                (shape.iter().product::<usize>() == vals.len()).then(|| FoldInput {
+                    name: name.clone(),
+                    shape,
+                    vals,
+                })
+            })
+            .collect()
     }
 
     /// Lower the tuple `list` of `chunk` alone on a standalone tape over
@@ -630,7 +650,7 @@ impl TapeBuilder<'_> {
         &self,
         chunk: &TupleSpec<'_>,
         list: TupleList,
-        inputs: &[(String, ndarray::ArrayD<f64>)],
+        inputs: &[FoldInput],
         combine_op: BinCode,
     ) -> Option<Vec<f64>> {
         let name = "\u{0}tuple-list chunk";
@@ -641,14 +661,16 @@ impl TapeBuilder<'_> {
             self.f32_document,
             self.array_bool_reductions,
             |mut b| {
-                for (input, value) in inputs {
+                b.defer_consts = true;
+                for FoldInput { name, shape, vals } in inputs {
                     // A scalar is bound as the literal the enclosing build
                     // holds, unrounded, as that build reads it.
-                    let lv = match value.ndim() {
-                        0 => LV::Lit(value[ndarray::IxDyn(&[])]),
-                        _ => b.standalone_array_input(value).ok()?,
+                    let lv = if shape.is_empty() {
+                        LV::Lit(vals[0])
+                    } else {
+                        b.standalone_known_input(shape, vals)
                     };
-                    b.obs_defined.insert(input.clone(), ObsVal::Taped(lv));
+                    b.obs_defined.insert(name.clone(), ObsVal::Taped(lv));
                 }
                 let lo: DimI = chunk.ranges.iter().map(|(l, _)| *l).collect();
                 let shape: DimU = chunk
@@ -859,7 +881,17 @@ impl TapeBuilder<'_> {
     pub(super) fn known_values(&self, s: SlotId) -> Option<Rc<Vec<f64>>> {
         match self.known.get(&s)? {
             Known::Data(d) => Some(Rc::new(self.const_data[*d as usize].values.clone())),
-            Known::Vals(v) => Some(Rc::clone(v)),
+            Known::Vals(v) | Known::Deferred(v) => Some(Rc::clone(v)),
+        }
+    }
+
+    /// A slot's build-time values, borrowed: [`Self::known_values`] without
+    /// copying an [`Instr::ConstArray`]'s payload, for a reader that only
+    /// looks up a few of its elements (a gather).
+    pub(super) fn known_slice(&self, s: SlotId) -> Option<&[f64]> {
+        match self.known.get(&s)? {
+            Known::Data(d) => Some(&self.const_data[*d as usize].values),
+            Known::Vals(v) | Known::Deferred(v) => Some(v),
         }
     }
 
@@ -1083,6 +1115,11 @@ impl TapeBuilder<'_> {
         let frame = &mut self.tuple_frames[fi];
         let len = frame.len;
         let values = std::mem::take(&mut frame.cols[ci]);
+        if self.defer_consts {
+            let out = self.defer_const(&[len], Rc::new(values));
+            self.tuple_frames[fi].slots[ci] = Some(out);
+            return Ok(Some(LV::Arr(out)));
+        }
         let data = tape_index(self.const_data.len(), "array constants")?;
         self.const_data.push(ConstArrayData {
             shape: DimU::from_elem(len, 1),
@@ -1242,7 +1279,7 @@ impl TapeBuilder<'_> {
         // The gathered values, when the base's are known (a subscript of a
         // later gather reads them).
         let vals = match &base {
-            LV::Arr(s) => self.known_values(*s).map(|b| {
+            LV::Arr(s) => self.known_slice(*s).map(|b| {
                 pos.iter()
                     .map(|&p| {
                         if p == GATHER_GHOST {
@@ -1255,6 +1292,15 @@ impl TapeBuilder<'_> {
             }),
             _ => None,
         };
+        // On a chunk's tape the gathered values ARE the gather's result: the
+        // `TableGather` would copy exactly these elements (the ghost as
+        // `+0.0`) out of a slot that holds the whole base.
+        if self.defer_consts
+            && self.lv_cadence(&base) == Cadence::Const
+            && let Some(v) = vals
+        {
+            return Ok(LV::Arr(self.defer_const(&[m], Rc::new(v))));
+        }
         let table = tape_index(self.gather_tables.len(), "gather tables")?;
         self.gather_tables.push(GatherTable { src_shape, pos });
         let sec = self.placement(self.lv_cadence(&base));

@@ -633,6 +633,13 @@ pub(crate) struct TapeBuilder<'m> {
     /// path rejects the construct (CONFORMANCE_SPEC §5.6.1) before a tape is
     /// built, and the tape declines it too.
     array_bool_reductions: bool,
+    /// Bind build-time data as [`Known::Deferred`] slots instead of emitting
+    /// an [`Instr::ConstArray`] for each, and resolve a tuple-list gather of
+    /// such data at build. Set only on the standalone tape of one tuple-list
+    /// chunk ([`TapeBuilder::fold_tuple_contraction`]), which runs once and
+    /// whose every input is build-time data: there the program would copy
+    /// each whole input into its slab only to gather a chunk's worth of it.
+    defer_consts: bool,
     /// The scalar parameters a join key column reads, with the values the
     /// build baked them at (`crate::join::join_key_cone`): build-time data
     /// to [`TapeBuilder::fold_const_observed`], since a substitution of one
@@ -860,6 +867,11 @@ enum Known {
     Data(u32),
     /// Values the build computed itself, row-major.
     Vals(std::rc::Rc<Vec<f64>>),
+    /// Values the build knows for a CONST slot no instruction defines yet:
+    /// under [`TapeBuilder::defer_consts`], the slot's [`Instr::ConstArray`]
+    /// is emitted at the head of the program only if an instruction ends up
+    /// reading it ([`TapeBuilder::materialize_deferred`]).
+    Deferred(std::rc::Rc<Vec<f64>>),
 }
 
 /// The recurrence whose cell body is being lowered
@@ -982,6 +994,7 @@ impl<'m> TapeBuilder<'m> {
             observed_rules: &[],
             baked_params: FxHashMap::default(),
             array_bool_reductions: false,
+            defer_consts: false,
             folded: std::cell::RefCell::new(FxHashMap::default()),
             slots: Vec::new(),
             plans: Vec::new(),
