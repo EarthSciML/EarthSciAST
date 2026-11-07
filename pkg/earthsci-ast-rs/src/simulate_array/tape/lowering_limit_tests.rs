@@ -1202,3 +1202,60 @@ fn wholesale_rule_shares_repeated_subtrees() {
 fn ix_lit(table: &Value, k: i64) -> Value {
     json!({"op": "index", "args": [table, k]})
 }
+
+/// A join-gated `faq` with nothing contracted (each output cell one gated
+/// term), reached from a whole-body rule, numbers its output box like every
+/// other box lowering: a subtree its filter and body repeat is lowered once.
+/// Once with every pair admitted (no mask) and once with a partial gate (the
+/// masked form). Every executor writes the oracle's bits.
+#[test]
+fn pointwise_gated_faq_numbers_its_box() {
+    let sin_u = op("sin", vec![ix("u", vec![json!("i"), json!("j")])]);
+    let make = |bg: Value| {
+        json!({
+            "esm": "1.1.0",
+            "metadata": {"name": "pointwise_gated_sharing"},
+            "index_sets": {"s": {"kind": "interval", "size": 3},
+                           "g": {"kind": "interval", "size": 4}},
+            "models": {"M": {
+                "variables": {
+                    "u": {"type": "unknown", "shape": ["s", "g"], "default": 1.0},
+                    "bs": {"type": "unknown", "shape": ["s"]},
+                    "bg": {"type": "unknown", "shape": ["g"]},
+                    "w": {"type": "unknown", "shape": ["s", "g"]}
+                },
+                "equations": [
+                    {"lhs": "bs", "rhs": {"op": "const", "args": [], "value": [1.0, 1.0, 1.0]}},
+                    {"lhs": "bg", "rhs": {"op": "const", "args": [], "value": bg}},
+                    {"lhs": "w", "rhs": {
+                        "op": "faq", "args": [], "output_idx": ["i", "j"],
+                        "ranges": {"i": {"from": "s"}, "j": {"from": "g"}},
+                        "join": [{"on": [["bs", "bg"]]}],
+                        "filter": op(">", vec![sin_u.clone(), json!(0.25)]),
+                        "expr": op("*", vec![sin_u.clone(), sin_u.clone()])
+                    }},
+                    d_eq("u", &["i", "j"], json!({"i": {"from": "s"}, "j": {"from": "g"}}),
+                         op("-", vec![ix("w", vec![json!("i"), json!("j")]),
+                                      ix("u", vec![json!("i"), json!("j")])]))
+                ]
+            }}
+        })
+    };
+    let un = |p: &TapeProgram| {
+        p.instrs
+            .iter()
+            .filter(|i| matches!(i, Instr::Un { .. }))
+            .count()
+    };
+    for (label, bg) in [
+        ("every pair admitted", json!([1.0, 1.0, 1.0, 1.0])),
+        ("a partial gate", json!([1.0, 2.0, 1.0, 2.0])),
+    ] {
+        let d = make(bg);
+        oracle_ab(d.clone());
+        let file = crate::parse::load_string(&d.to_string()).expect("fixture document loads");
+        let compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
+        let prog = taped(compiled.build_tape_opts(&HashSet::new(), None)).0;
+        assert_eq!(un(&prog), 1, "{label}: sin(u[i, j]) is computed once");
+    }
+}
