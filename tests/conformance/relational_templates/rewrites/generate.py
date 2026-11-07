@@ -186,6 +186,20 @@ def rewrite_model(m, index_sets, keys):
             if isinstance(eq.get(k), str) and "skolem" in eq[k]:
                 eq[k] = eq[k] + " (Template rewrite: see tests/conformance/relational_templates/rewrites/.)"
         out.append(eq)
+    # A rank variable the op form left unshaped (it was dropped from the ODE) is
+    # now an ordinary observed over the derived set: declare its shape.
+    for eq in out:
+        lhs, rhs = eq.get("lhs"), eq.get("rhs")
+        if (
+            isinstance(lhs, dict)
+            and lhs.get("op") == "index"
+            and isinstance(rhs, dict)
+            and rhs.get("op") == "faq"
+            and rhs.get("output_idx") == [rhs.get("expr")]
+        ):
+            var = m["variables"].get(lhs["args"][0])
+            if var is not None and not var.get("shape"):
+                var["shape"] = [rhs["ranges"][rhs["expr"]]["from"]]
     m["equations"] = out
     return m
 

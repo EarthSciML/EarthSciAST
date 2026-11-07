@@ -59,7 +59,10 @@
           "type": "unknown"
         },
         "edge_dense_id": {
-          "type": "unknown"
+          "type": "unknown",
+          "shape": [
+            "edges"
+          ]
         }
       },
       "equations": [
