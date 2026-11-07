@@ -40,11 +40,8 @@ def _mask_refs(node):
 
 
 def _comparable(f) -> dict:
-    # A twin differs from its fixture in the `ref` spellings and in its
-    # metadata description; everything else must match.
-    doc = _mask_refs(json.loads(to_json(f)))
-    doc.pop("metadata", None)
-    return doc
+    # A twin differs from its fixture only in the `ref` spellings.
+    return _mask_refs(json.loads(to_json(f)))
 
 
 def _loaded(path: Path):
