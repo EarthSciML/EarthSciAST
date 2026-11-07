@@ -1,0 +1,403 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "native_probe_interp_array_query",
+    "description": "A scalar lookup component mounted on a grid, the shape of FastJX's actinic-flux lookups in reseact (issue #660): Photo's scalar parameters x and y are coupled (param_to_var) to the gridded states Grid.a and Grid.b, so its unshaped observeds F = interp.bilinear(table, axis_x, axis_y, x, y), G = interp.linear(row, axis_y, y) and S = interp.searchsorted(y, axis_y) take an array-valued query and are evaluated elementwise, one lookup per cell. Their sum feeds back into Grid.z. Over t in [0, 1] the queries sweep below, inside and above both axes.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "tags": [
+      "native",
+      "probe",
+      "interp"
+    ]
+  },
+  "index_sets": {
+    "cell": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "Grid": {
+      "variables": {
+        "a": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "cell"
+          ],
+          "default": 0.0
+        },
+        "b": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "cell"
+          ],
+          "default": 0.0
+        },
+        "z": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "cell"
+          ],
+          "default": 0.0
+        },
+        "J": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.0,
+          "description": "Coupled to Photo.Jt, the per-cell lookup sum.",
+          "shape": [
+            "cell"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                4
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "a",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                4
+              ]
+            },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    0.6,
+                    "i"
+                  ]
+                },
+                1.5
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                4
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "b",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                4
+              ]
+            },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    9.0,
+                    "i"
+                  ]
+                },
+                12.0
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                4
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "z",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                4
+              ]
+            },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "J",
+                    "i"
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.1,
+                    {
+                      "op": "index",
+                      "args": [
+                        "z",
+                        "i"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "Photo": {
+      "variables": {
+        "x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.0
+        },
+        "y": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.0
+        },
+        "F": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "G": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "S": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "Jt": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "F",
+          "rhs": {
+            "op": "fn",
+            "name": "interp.bilinear",
+            "args": [
+              {
+                "op": "const",
+                "args": [],
+                "value": [
+                  [
+                    0.0,
+                    1.0,
+                    2.0,
+                    3.0
+                  ],
+                  [
+                    10.0,
+                    11.5,
+                    12.0,
+                    13.0
+                  ],
+                  [
+                    20.0,
+                    21.0,
+                    22.5,
+                    23.0
+                  ]
+                ]
+              },
+              {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  2.0
+                ]
+              },
+              {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  10.0,
+                  25.0,
+                  30.0
+                ]
+              },
+              "x",
+              "y"
+            ]
+          }
+        },
+        {
+          "lhs": "G",
+          "rhs": {
+            "op": "fn",
+            "name": "interp.linear",
+            "args": [
+              {
+                "op": "const",
+                "args": [],
+                "value": [
+                  10.0,
+                  11.5,
+                  12.0,
+                  13.0
+                ]
+              },
+              {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  10.0,
+                  25.0,
+                  30.0
+                ]
+              },
+              "y"
+            ]
+          }
+        },
+        {
+          "lhs": "S",
+          "rhs": {
+            "op": "fn",
+            "name": "interp.searchsorted",
+            "args": [
+              "y",
+              {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  10.0,
+                  25.0,
+                  30.0
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "Jt",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "F",
+              "G",
+              "S"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "Grid.a",
+      "to": "Photo.x",
+      "transform": "param_to_var"
+    },
+    {
+      "type": "variable_map",
+      "from": "Grid.b",
+      "to": "Photo.y",
+      "transform": "param_to_var"
+    },
+    {
+      "type": "variable_map",
+      "from": "Photo.Jt",
+      "to": "Grid.J",
+      "transform": "param_to_var"
+    }
+  ]
+}

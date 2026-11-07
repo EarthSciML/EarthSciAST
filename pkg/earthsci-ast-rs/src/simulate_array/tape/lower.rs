@@ -2546,7 +2546,8 @@ impl<'m> TapeBuilder<'m> {
     /// `bx` is `Some` inside an output box — where an array-valued query is
     /// the vectorization of a per-cell scalar and must therefore span exactly
     /// that box — and `None` on the wholesale path, where an array-valued
-    /// query is a genuine array argument.
+    /// query is evaluated elementwise over its own box, as the oracle's
+    /// `eval_fn` does.
     fn lower_interp(
         &mut self,
         kind: InterpKind,
@@ -2606,15 +2607,13 @@ impl<'m> TapeBuilder<'m> {
                          registry takes a scalar)"
                     );
                 }
-                // Wholesale, `eval_fn` broadcasts an array query over the
-                // fixed table for `interp.linear` ONLY; the other two entries
-                // reach `expect_scalar` and come back as the NaN sentinel,
-                // which only the oracle produces.
-                None if kind != InterpKind::Linear => {
-                    bail_tape!(
-                        "wholesale: closed function `{name}` on an array-valued query \
-                         (the registry takes a scalar)"
-                    );
+                // Wholesale, `eval_fn` broadcasts the registry call over an
+                // array query (`eval_interp_elementwise`), which is this
+                // instruction's elementwise form — except that it reads a
+                // 0-D query of the two non-`linear` entries as the scalar it
+                // holds, where the instruction would produce a 0-D array.
+                None if kind != InterpKind::Linear && shape.is_empty() => {
+                    bail_tape!("wholesale: closed function `{name}` on a 0-D array query");
                 }
                 Some(_) | None => {}
             }
