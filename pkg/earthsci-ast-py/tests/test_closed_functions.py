@@ -13,15 +13,17 @@ from __future__ import annotations
 
 import json
 import math
+import struct
 from pathlib import Path
 from typing import Any, List
 
 import pytest
 from conftest import FIXTURES_ROOT as _TESTS_ROOT
-from conftest import INVALID_DIR, VALID_DIR
+from conftest import INVALID_DIR, REPO_ROOT, VALID_DIR
 
 from earthsci_ast import load_path, load_string
 from earthsci_ast.esm_types import ExprNode
+from earthsci_ast.expr_walk import walk
 from earthsci_ast.numpy_interpreter import evaluate, fold_constant_expr
 from earthsci_ast.registered_functions import (
     INTERP_CONST_ARG_POSITIONS,
@@ -203,6 +205,115 @@ def _fn_node_with_const_args(name: str, inputs: list) -> ExprNode:
         for i, v in enumerate(inputs)
     ]
     return ExprNode(op="fn", name=name, args=args)
+
+
+# --- The same interp scenarios through the pure-AST templates of lib/interp.esm
+
+INTERP_LIBRARY = REPO_ROOT / "lib" / "interp.esm"
+_INTERP_FIXTURE_DIRS = [d for d in _FIXTURE_DIRS if d.parent.name == "interp"]
+
+
+def _interp_template_call(name: str, raw_inputs: list, tag: str) -> tuple[dict, dict]:
+    """The ``bindings`` of the ``apply_expression_template`` node standing for
+    one ``interp.<name>`` scenario, and the values of its scalar queries: each
+    axis and table is a ``const`` array, each axis length its integer, and the
+    queries are parameters suffixed ``tag`` (a NaN query cannot be a JSON
+    literal)."""
+
+    def const(v: Any) -> dict:
+        return {"op": "const", "args": [], "value": v}
+
+    qx, qy = f"qx_{tag}", f"qy_{tag}"
+    if name == "searchsorted":
+        x, xs = raw_inputs
+        return {"x": qx, "xs": const(xs), "n": len(xs)}, {qx: x}
+    if name == "linear":
+        table, axis, x = raw_inputs
+        return {"table": const(table), "axis": const(axis), "x": qx, "n": len(axis)}, {qx: x}
+    table, axis_x, axis_y, x, y = raw_inputs
+    bindings = {
+        "table": const(table),
+        "axis_x": const(axis_x),
+        "axis_y": const(axis_y),
+        "x": qx,
+        "y": qy,
+        "nx": len(axis_x),
+        "ny": len(axis_y),
+    }
+    return bindings, {qx: x, qy: y}
+
+
+def _interp_template_doc(name: str, calls: list[tuple[dict, dict]]) -> dict:
+    """A model importing ``lib/interp.esm`` with one equation per call, its RHS
+    applying the ``name`` template with that call's bindings."""
+    variables: dict[str, Any] = {}
+    equations = []
+    for i, (bindings, queries) in enumerate(calls):
+        variables[f"out_{i}"] = {"type": "unknown", "default": 0.0, "units": "1"}
+        for q in queries:
+            variables[q] = {"type": "parameter", "default": 0.0, "units": "1"}
+        equations.append(
+            {
+                "lhs": {"op": "D", "args": [f"out_{i}"], "wrt": "t"},
+                "rhs": {
+                    "op": "apply_expression_template",
+                    "args": [],
+                    "name": name,
+                    "bindings": bindings,
+                },
+            }
+        )
+    return {
+        "esm": "1.1.0",
+        "metadata": {"name": f"interp_{name}_template"},
+        "models": {
+            "Probe": {
+                "expression_template_imports": [{"ref": str(INTERP_LIBRARY)}],
+                "variables": variables,
+                "equations": equations,
+            }
+        },
+    }
+
+
+def _same_bits(a: float, b: float) -> bool:
+    if math.isnan(a) or math.isnan(b):
+        return math.isnan(a) and math.isnan(b)
+    return struct.pack("<d", a) == struct.pack("<d", b)
+
+
+@pytest.mark.parametrize(
+    "fixture_dir",
+    _INTERP_FIXTURE_DIRS,
+    ids=[p.name for p in _INTERP_FIXTURE_DIRS],
+)
+def test_interp_scenarios_through_the_expanded_template(fixture_dir: Path):
+    """Every success scenario of an ``interp.*`` fixture, run through the
+    expanded ``lib/interp.esm`` template instead of ``fn``, gives the same bits
+    (NaN matches NaN). The load-time axis checks of ``error_scenarios`` have no
+    template counterpart."""
+    spec = json.loads((fixture_dir / "expected.json").read_text())
+    name = spec["function"].removeprefix("interp.")
+    scenarios = spec["scenarios"]
+    calls = [_interp_template_call(name, sc["inputs"], str(i)) for i, sc in enumerate(scenarios)]
+    equations = load_string(json.dumps(_interp_template_doc(name, calls))).models["Probe"].equations
+    assert len(equations) == len(scenarios)
+    failures: list[str] = []
+    for scenario, (_, raw_queries), eq in zip(scenarios, calls, equations):
+        sname = scenario["name"]
+        if any(getattr(n, "op", None) == "apply_expression_template" for n in walk(eq.rhs)):
+            failures.append(f"{sname}: the template reference survived load")
+            continue
+        queries = {k: _decode_input(v) for k, v in raw_queries.items()}
+        try:
+            actual = evaluate(eq.rhs, queries)
+        except Exception as e:
+            failures.append(f"{sname}: raised: {e!r}")
+            continue
+        expected = _decode_input(scenario["expected"])
+        if not _same_bits(actual, expected):
+            failures.append(f"{sname}: got={actual!r}, expected={expected!r}")
+    assert not failures, "Template mismatches:\n  " + "\n  ".join(failures)
 
 
 def _load_error_fixtures() -> list[str]:
