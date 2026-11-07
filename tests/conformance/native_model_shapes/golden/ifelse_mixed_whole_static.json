@@ -1,0 +1,79 @@
+{
+  "fixture": "ifelse_mixed_whole_static",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "values",
+      "assertion_idx": 1,
+      "variable": "R_on",
+      "actual": 2.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 2,
+      "variable": "R_on",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 3,
+      "variable": "R_on",
+      "actual": 6.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 4,
+      "variable": "R_off",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 5,
+      "variable": "R_off",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 6,
+      "variable": "R_off",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 7,
+      "variable": "R_scalar_first",
+      "actual": 0.25
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 8,
+      "variable": "R_scalar_first",
+      "actual": 0.25
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 9,
+      "variable": "R_scalar_first",
+      "actual": 0.25
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 10,
+      "variable": "R_wrapped",
+      "actual": 2.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 11,
+      "variable": "R_wrapped",
+      "actual": 2.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 12,
+      "variable": "R_wrapped",
+      "actual": 2.5
+    }
+  ]
+}

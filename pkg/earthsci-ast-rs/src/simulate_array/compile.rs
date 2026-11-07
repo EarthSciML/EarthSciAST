@@ -402,7 +402,15 @@ pub(super) fn apply_ragged_factor_scope(
 ///   [`normalize_model_angle_arguments`]. Without it `sin(theta)` with `theta`
 ///   declared `deg` evaluated `sin(90 radians)` = 0.894 where the scalar and
 ///   coupled routes, and the other bindings, returned 1.
-pub(crate) fn apply_flatten_rewrites(model: &mut Model) -> Result<(), CompileError> {
+/// * esm-spec §4.3.4, a variable with no declared `shape` whose value is an
+///   array on one arm of an `ifelse` and a scalar on the other takes the array
+///   arm's shape (`flatten`'s phase 5b‴, see
+///   [`crate::flatten::conditional_shape_promotions`]). `index_sets` is the
+///   registry the promoted shape must be sized by.
+pub(crate) fn apply_flatten_rewrites(
+    model: &mut Model,
+    index_sets: &HashMap<String, IndexSet>,
+) -> Result<(), CompileError> {
     let time_invariant: std::collections::HashSet<String> = model
         .variables
         .iter()
@@ -419,6 +427,16 @@ pub(crate) fn apply_flatten_rewrites(model: &mut Model) -> Result<(), CompileErr
         });
     }
     normalize_model_angle_arguments(model);
+    let promoted = crate::flatten::conditional_shape_promotions(
+        &|n: &str| model.variables.get(n),
+        model.equations.iter(),
+        index_sets,
+    );
+    for (name, axes) in promoted {
+        if let Some(var) = model.variables.get_mut(&name) {
+            var.shape = Some(axes);
+        }
+    }
     Ok(())
 }
 
@@ -753,7 +771,7 @@ impl ArrayCompiled {
         // `flatten`'s rewrites, which this SINGLE-MODEL route never gets
         // (see `from_file_owned`). Runs after mounting so a subsystem's
         // equations and declarations are in scope under their mounted names.
-        apply_flatten_rewrites(&mut model_owned)?;
+        apply_flatten_rewrites(&mut model_owned, &index_sets_owned)?;
         // Lower every SHAPED parameter whose value the document supplies —
         // inline array data, or one scalar broadcast over the grid (esm-spec
         // §6.3 / §6.6.2) — into the `const`-observed channel this runtime

@@ -1,0 +1,385 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "ifelse_mixed_whole_static",
+  "description": "An observed with NO declared shape defined by an `ifelse` whose condition is a runtime SCALAR, one branch an array over a declared index set and the other a scalar (`X = ifelse(lev < 2, F*2, 0.0)`, the NEI2016 emission observeds, issue #664). The observed takes its array branch's shape whichever branch is taken, so the scalar branch fills every element: condition true, false, scalar branch first, the `ifelse` inside elementwise arithmetic. Static variant: no state, so every value is a build-time observed.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ],
+  "tags": [
+   "native",
+   "conformance"
+  ]
+ },
+ "index_sets": {
+  "cell": {
+   "kind": "interval",
+   "size": 3
+  }
+ },
+ "models": {
+  "IfelseMixedWhole": {
+   "tolerance": {
+    "rel": 1e-12,
+    "abs": 1e-12
+   },
+   "variables": {
+    "F": {
+     "type": "parameter",
+     "units": "1",
+     "shape": [
+      "cell"
+     ],
+     "default": [
+      1.0,
+      2.0,
+      3.0
+     ]
+    },
+    "lev_on": {
+     "type": "parameter",
+     "units": "1",
+     "default": 1.0
+    },
+    "lev_off": {
+     "type": "parameter",
+     "units": "1",
+     "default": 3.0
+    },
+    "X_on": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "X_off": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "X_scalar_first": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "X_wrapped": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "R_on": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ]
+    },
+    "R_off": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ]
+    },
+    "R_scalar_first": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ]
+    },
+    "R_wrapped": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ]
+    }
+   },
+   "equations": [
+    {
+     "lhs": "X_on",
+     "rhs": {
+      "op": "ifelse",
+      "args": [
+       {
+        "op": "<",
+        "args": [
+         "lev_on",
+         2.0
+        ]
+       },
+       {
+        "op": "*",
+        "args": [
+         "F",
+         2.0
+        ]
+       },
+       0.0
+      ]
+     }
+    },
+    {
+     "lhs": "X_off",
+     "rhs": {
+      "op": "ifelse",
+      "args": [
+       {
+        "op": "<",
+        "args": [
+         "lev_off",
+         2.0
+        ]
+       },
+       {
+        "op": "*",
+        "args": [
+         "F",
+         2.0
+        ]
+       },
+       0.0
+      ]
+     }
+    },
+    {
+     "lhs": "X_scalar_first",
+     "rhs": {
+      "op": "ifelse",
+      "args": [
+       {
+        "op": "<",
+        "args": [
+         "lev_on",
+         2.0
+        ]
+       },
+       0.25,
+       "F"
+      ]
+     }
+    },
+    {
+     "lhs": "X_wrapped",
+     "rhs": {
+      "op": "+",
+      "args": [
+       1.0,
+       {
+        "op": "*",
+        "args": [
+         3.0,
+         {
+          "op": "ifelse",
+          "args": [
+           {
+            "op": "<",
+            "args": [
+             "lev_off",
+             2.0
+            ]
+           },
+           "F",
+           0.5
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "R_on",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X_on",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "R_off",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X_off",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "R_scalar_first",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X_scalar_first",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "R_wrapped",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X_wrapped",
+        "i"
+       ]
+      }
+     }
+    }
+   ],
+   "tests": [
+    {
+     "id": "values",
+     "time_span": {
+      "start": 0.0,
+      "end": 0.0
+     },
+     "assertions": [
+      {
+       "variable": "R_on",
+       "time": 0.0,
+       "expected": 2.0,
+       "coords": {
+        "cell": 1
+       }
+      },
+      {
+       "variable": "R_on",
+       "time": 0.0,
+       "expected": 4.0,
+       "coords": {
+        "cell": 2
+       }
+      },
+      {
+       "variable": "R_on",
+       "time": 0.0,
+       "expected": 6.0,
+       "coords": {
+        "cell": 3
+       }
+      },
+      {
+       "variable": "R_off",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 1
+       }
+      },
+      {
+       "variable": "R_off",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 2
+       }
+      },
+      {
+       "variable": "R_off",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 3
+       }
+      },
+      {
+       "variable": "R_scalar_first",
+       "time": 0.0,
+       "expected": 0.25,
+       "coords": {
+        "cell": 1
+       }
+      },
+      {
+       "variable": "R_scalar_first",
+       "time": 0.0,
+       "expected": 0.25,
+       "coords": {
+        "cell": 2
+       }
+      },
+      {
+       "variable": "R_scalar_first",
+       "time": 0.0,
+       "expected": 0.25,
+       "coords": {
+        "cell": 3
+       }
+      },
+      {
+       "variable": "R_wrapped",
+       "time": 0.0,
+       "expected": 2.5,
+       "coords": {
+        "cell": 1
+       }
+      },
+      {
+       "variable": "R_wrapped",
+       "time": 0.0,
+       "expected": 2.5,
+       "coords": {
+        "cell": 2
+       }
+      },
+      {
+       "variable": "R_wrapped",
+       "time": 0.0,
+       "expected": 2.5,
+       "coords": {
+        "cell": 3
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

@@ -419,9 +419,11 @@ pub(super) unsafe fn copy_strided_share(
     let rm = rm_strides(shape);
     if dstr[..] == rm[..] && sstr[..] == rm[..] {
         // A contiguous copy is cut where a fused group over the same box is
-        // (`share`), so each worker copies what it computed.
+        // (`share`), so each worker copies what it computed. A copy onto its
+        // own storage (slot coloring gave both the same buffer) is a no-op,
+        // as in the serial kernel.
         let (a, b) = share_at(tot, w, ways, dst);
-        if a < b {
+        if a < b && !std::ptr::eq(dst as *const f64, src) {
             unsafe { std::ptr::copy_nonoverlapping(src.add(a), dst.add(a), b - a) };
         }
         return;

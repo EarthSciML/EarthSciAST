@@ -507,6 +507,11 @@ spatial state) and propagates through elementwise ops, stopping at aggregate
 reductions and `index` gathers. The transform is a no-op for a system with no
 scalar-downstream-of-array variables (it returns an equivalent system).
 
+Only a variable declared WITHOUT a `shape` is promoted. An explicit `shape: []`
+declares a scalar (esm-spec §4.3.4); a definition that infers an array for one —
+an elementwise expression over an array, or a `faq` over inline ranges — throws
+a `DimensionPromotionError` (`array_shape_mismatch`) naming the variable.
+
 CONSUMERS of a promoted variable are closed too: a bare reference to a newly
 promoted name inside the body of a `faq` that already carries
 its loops (a pointwise-lifted species ODE, an authored per-cell equation) is
@@ -527,13 +532,20 @@ function promote_downstream_shapes(
         flat::FlattenedSystem;
         index_consumer_refs::Bool = true
     )::FlattenedSystem
-    # Current shapes from declarations (scalar = []).
+    # Current shapes from declarations (scalar = []). An ABSENT `shape` may be
+    # inferred below; an explicit `shape: []` DECLARES a scalar and is never
+    # promoted (esm-spec §4.3.4) — a definition that infers an array for one is
+    # a conflict, not a promotion.
     shapes = Dict{String, Vector{String}}()
     for d in (flat.state_variables, flat.parameters, flat.observed_variables)
         for (k, v) in d
             shapes[k] = v.shape === nothing ? String[] : String[string(s) for s in v.shape]
         end
     end
+    declared_scalar = Set{String}(
+        k for d in (flat.state_variables, flat.parameters, flat.observed_variables)
+            for (k, v) in d if _declares_scalar(v)
+    )
 
     # Index the ALGEBRAIC defining equations (bare `x = expr`). State equations
     # (`D(x,t) = …`) don't define x's shape (x keeps its declared shape).
@@ -553,6 +565,8 @@ function promote_downstream_shapes(
     for (name, rhs) in defs
         axes = _inline_producer_axes(rhs)
         axes === nothing && continue
+        name in declared_scalar &&
+            _throw_declared_scalar_conflict(name, [n for (_, n) in axes], "a faq over inline ranges")
         cur = get(shapes, name, String[])
         if !isempty(cur)
             _check_declared_producer_extents(name, cur, axes, index_sets)
@@ -585,6 +599,8 @@ function promote_downstream_shapes(
             isempty(cur) || continue                     # already array — leave it
             inferred = _infer_expr_shape(rhs, shapes)
             if !isempty(inferred)
+                name in declared_scalar &&
+                    _throw_declared_scalar_conflict(name, inferred, "its defining expression")
                 shapes[name] = inferred
                 changed = true
             end
@@ -599,8 +615,8 @@ function promote_downstream_shapes(
         out = OrderedDict{String, ModelVariable}()
         for (k, v) in part
             s = get(shapes, k, String[])
-            if !isempty(s) && (v.shape === nothing || isempty(v.shape))
-                out[k] = _with_shape(v, s)              # promoted: was scalar
+            if !isempty(s) && v.shape === nothing
+                out[k] = _with_shape(v, s)              # promoted: was unshaped
             else
                 out[k] = v
             end
@@ -716,7 +732,7 @@ function promoted_array_names(flat::FlattenedSystem, promoted::FlattenedSystem):
         for (k, v) in after
             (v.shape === nothing || isempty(v.shape)) && continue
             b = get(before, k, nothing)
-            (b !== nothing && (b.shape === nothing || isempty(b.shape))) && push!(out, k)
+            (b !== nothing && b.shape === nothing) && push!(out, k)
         end
     end
     return out
@@ -944,12 +960,28 @@ function _index_bare(node, av::Set{String}, loops::Vector{String})
     return node
 end
 
-# True iff `name` was authored scalar (no declared shape) in the original system.
+# True iff `name` was authored with NO declared shape in the original system —
+# the only declarations promotion may grow. An explicit `shape: []` is a declared
+# scalar (`_declares_scalar`), never promoted.
 function flat_was_scalar(flat::FlattenedSystem, name::AbstractString)::Bool
     for d in (flat.state_variables, flat.parameters, flat.observed_variables)
-        haskey(d, name) && return d[name].shape === nothing || isempty(d[name].shape)
+        haskey(d, name) && return d[name].shape === nothing
     end
     return true
+end
+
+# An explicit `shape: []`: a declared scalar, as opposed to an absent shape.
+_declares_scalar(v::ModelVariable) = v.shape !== nothing && isempty(v.shape)
+
+function _throw_declared_scalar_conflict(name, inferred, source::AbstractString)
+    throw(
+        DimensionPromotionError(
+            "array_shape_mismatch: '$(name)' declares shape [] (a scalar), but " *
+                "$(source) has array shape $(inferred). An explicit `shape: []` is " *
+                "never promoted (esm-spec §4.3.4); omit `shape` to let it be inferred, " *
+                "or declare the array shape"
+        )
+    )
 end
 
 # Return a copy of a ModelVariable with a new (array) shape. From esm 1.0.0 the

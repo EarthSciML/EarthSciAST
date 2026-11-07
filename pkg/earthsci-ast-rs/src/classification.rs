@@ -855,12 +855,13 @@ pub(crate) fn has_time_derivative(expr: &Expr) -> bool {
 /// sentinel — silently, since a rank-1 field of one element still reports the
 /// right number when it is OBSERVED directly.
 ///
-/// [`DeclaredRank::Unknown`] keeps `[1]`. The case it actually decides is a
-/// variable declared WITH a shape whose body still evaluates to a plain
-/// number; that ought to broadcast to the declared extents (issue #219's
-/// family) and is deliberately left where it was. Its other arm — a name the
+/// [`DeclaredRank::Unknown`] keeps `[1]`. A variable declared WITH a shape
+/// the registry can size never reaches it on the build pipeline, which fills
+/// a plain-number body over the declared extents (esm-spec §4.3.4,
+/// `prepare::BuildState::scalar_shape`); what is left is a shape it cannot
+/// size. Its other arm — a name the
 /// declaration table does not hold at all — is unreachable from every call
-/// site. The two here walk `self.order`, which is the key set of
+/// site. The callers walk `self.order`, which is the key set of
 /// `observed_defs`, and `classification::observed_definitions` admits only
 /// names the model declares as `unknown` variables;
 /// `problem::static_observed_fields` looks names up in the very map

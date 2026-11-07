@@ -680,3 +680,223 @@ fn shaped_ifelse_with_a_scalar_arm() {
         .collect();
     ab(&compiled, &maps);
 }
+
+/// An observed with NO declared shape defined by an `ifelse` under a runtime
+/// scalar condition, one arm an array (`F * 2`, `F: [cell]`) and the other a
+/// scalar (issue #664, the NEI2016 emission observeds). The compiler gives the
+/// observed its array arm's box, so the oracle fills the scalar arm over it
+/// and the tape joins the arms in that box. `extra_vars` and `readers` add
+/// the right-hand sides that read it; `lev` picks the arm.
+fn undeclared_mixed_doc(
+    body: serde_json::Value,
+    extra_vars: serde_json::Value,
+    readers: Vec<serde_json::Value>,
+) -> serde_json::Value {
+    let mut vars = json!({
+        "lev": {"type": "parameter", "default": 1.0},
+        "F": {"type": "parameter", "shape": ["cell"], "default": 1.5},
+        "X": {"type": "unknown"}
+    });
+    for (k, v) in extra_vars.as_object().expect("an object") {
+        vars[k] = v.clone();
+    }
+    let mut eqs = vec![json!({"lhs": "X", "rhs": body})];
+    eqs.extend(readers);
+    json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_undeclared_mixed_ifelse"},
+        "index_sets": {
+            "cell": {"kind": "interval", "size": 3},
+            "other": {"kind": "interval", "size": 2}
+        },
+        "models": {"M": {"variables": vars, "equations": eqs}}
+    })
+}
+
+fn mixed_ifelse(array_arm: serde_json::Value, scalar_arm: serde_json::Value) -> serde_json::Value {
+    json!({"op": "ifelse", "args": [{"op": "<", "args": ["lev", 2.0]}, array_arm, scalar_arm]})
+}
+
+/// Both arms, at both values of the runtime condition.
+fn both_arms() -> Vec<HashMap<String, f64>> {
+    [1.0, 3.0]
+        .iter()
+        .map(|&lev| HashMap::from([("lev".to_string(), lev)]))
+        .collect()
+}
+
+/// The observed is gathered per cell, read bare by a shaped state, summed
+/// into a scalar state and read at a fixed element: each reader sees the
+/// array arm's elements, or the scalar in every element, under both
+/// compilers.
+#[test]
+fn undeclared_ifelse_with_a_scalar_arm() {
+    let x = mixed_ifelse(json!({"op": "*", "args": ["F", 2.0]}), json!(0.25));
+    let readers = vec![
+        d_eq("q", 3, idx(json!("X"), &[json!("i")])),
+        json!({"lhs": {"op": "D", "args": ["r"], "wrt": "t"}, "rhs": "X"}),
+        json!({"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": {"op": "+", "args": [
+            {"op": "faq", "args": [], "output_idx": [], "ranges": {"j": [1, 3]},
+             "expr": idx(json!("X"), &[json!("j")])},
+            idx(json!("X"), &[json!(2)])]}}),
+    ];
+    let vars = json!({
+        "q": {"type": "unknown", "shape": ["cell"], "default": 0.0},
+        "r": {"type": "unknown", "shape": ["cell"], "default": 0.0},
+        "s": {"type": "unknown", "default": 0.0}
+    });
+    let compiled = compile(undeclared_mixed_doc(x, vars, readers));
+    ab(&compiled, &both_arms());
+}
+
+/// The scalar arm first, the `ifelse` nested inside elementwise arithmetic,
+/// and an observed nobody reads (the NEI2016 shape in reseact).
+#[test]
+fn undeclared_ifelse_scalar_arm_first_nested_and_unread() {
+    let wrapped = json!({"op": "+", "args": [1.0, {"op": "*", "args": [3.0,
+        {"op": "ifelse", "args": [{"op": ">=", "args": ["lev", 2.0]}, -0.5, "F"]}]}]});
+    let vars = json!({"q": {"type": "unknown", "shape": ["cell"], "default": 0.0}});
+    let compiled = compile(undeclared_mixed_doc(
+        wrapped,
+        vars.clone(),
+        vec![d_eq("q", 3, idx(json!("X"), &[json!("i")]))],
+    ));
+    ab(&compiled, &both_arms());
+    let x = mixed_ifelse(json!({"op": "*", "args": ["F", 2.0]}), json!(0.0));
+    let compiled = compile(undeclared_mixed_doc(
+        x,
+        vars,
+        vec![d_eq(
+            "q",
+            3,
+            json!({"op": "*", "args": [-1.0, idx(json!("q"), &[json!("i")])]}),
+        )],
+    ));
+    ab(&compiled, &both_arms());
+}
+
+/// The observed's box is its array arm's: both evaluators hold it as that
+/// array whichever arm the condition takes.
+#[test]
+fn undeclared_ifelse_observed_takes_its_array_arms_box() {
+    use super::super::AlgebraicRule;
+    let x = mixed_ifelse(json!({"op": "*", "args": ["F", 2.0]}), json!(0.0));
+    let compiled = compile(undeclared_mixed_doc(x, json!({}), vec![]));
+    let declared = compiled.observed_rules.iter().find_map(|r| match r {
+        AlgebraicRule::Scalar {
+            var,
+            declared_shape,
+            ..
+        } if var == "X" => Some(declared_shape.clone()),
+        _ => None,
+    });
+    assert_eq!(declared, Some(Some(vec![3])));
+}
+
+/// Where the arm's value is consumed whole — a gather of the `ifelse` itself,
+/// operands over different index sets — the oracle's answer follows the taken
+/// arm's shape, so no box is inferred and native still refuses.
+#[test]
+fn undeclared_ifelse_consumed_whole_is_still_refused() {
+    let gathered = idx(
+        mixed_ifelse(json!({"op": "*", "args": ["F", 2.0]}), json!(0.0)),
+        &[json!(2)],
+    );
+    let two_sets = mixed_ifelse(json!({"op": "+", "args": ["F", "G"]}), json!(0.0));
+    for body in [gathered, two_sets] {
+        let compiled = compile(undeclared_mixed_doc(
+            body,
+            json!({"G": {"type": "parameter", "shape": ["other"], "default": 1.0}}),
+            vec![],
+        ));
+        let (_, report) = compiled.build_tape_opts(&HashSet::new(), Some(cfg()));
+        assert!(
+            report
+                .fallbacks
+                .iter()
+                .any(|(_, why)| why.contains("branch value boxes differ")),
+            "{:?}",
+            report.fallbacks
+        );
+    }
+}
+
+/// The box each compiled observed rule carries, by name.
+fn declared_box(compiled: &ArrayCompiled, name: &str) -> Option<Option<Vec<usize>>> {
+    use super::super::AlgebraicRule;
+    compiled.observed_rules.iter().find_map(|r| match r {
+        AlgebraicRule::Scalar {
+            var,
+            declared_shape,
+            ..
+        } if var == name => Some(declared_shape.clone()),
+        _ => None,
+    })
+}
+
+/// Whether native refused some rule because its `ifelse` arms differ in box.
+fn refuses_mixed_arms(compiled: &ArrayCompiled) -> bool {
+    let (_, report) = compiled.build_tape_opts(&HashSet::new(), Some(cfg()));
+    report
+        .fallbacks
+        .iter()
+        .any(|(_, why)| why.contains("branch value boxes differ"))
+}
+
+/// `shape: []` declares a scalar (the PR #634 ruling: an explicit `[]` is a
+/// real shape, only an absent one is inferred). No box is inferred for it, and
+/// a scalar cannot hold the array arm, so native refuses the mixed `ifelse`.
+#[test]
+fn declared_scalar_ifelse_with_an_array_arm_is_not_promoted() {
+    let x = mixed_ifelse(json!({"op": "*", "args": ["F", 2.0]}), json!(0.0));
+    let compiled = compile(undeclared_mixed_doc(
+        x,
+        json!({"X": {"type": "unknown", "shape": []}}),
+        vec![],
+    ));
+    assert_eq!(declared_box(&compiled, "X"), Some(None));
+    assert!(refuses_mixed_arms(&compiled));
+}
+
+/// A chain: `Y = ifelse(c2, X, 0.0)` reads `X`, itself inferred from its own
+/// mixed `ifelse`. `Y` takes `X`'s inferred box, and both arms of both
+/// conditions agree with the interpreter.
+#[test]
+fn chained_ifelse_with_a_scalar_arm_takes_the_inferred_box() {
+    let x = mixed_ifelse(json!({"op": "*", "args": ["F", 2.0]}), json!(0.0));
+    let y = json!({"op": "ifelse", "args": [{"op": ">", "args": ["lev", 2.0]}, -1.0, "X"]});
+    let compiled = compile(undeclared_mixed_doc(
+        x,
+        json!({
+            "Y": {"type": "unknown"},
+            "q": {"type": "unknown", "shape": ["cell"], "default": 0.0}
+        }),
+        vec![
+            json!({"lhs": "Y", "rhs": y}),
+            d_eq("q", 3, idx(json!("Y"), &[json!("i")])),
+        ],
+    ));
+    assert_eq!(declared_box(&compiled, "X"), Some(Some(vec![3])));
+    assert_eq!(declared_box(&compiled, "Y"), Some(Some(vec![3])));
+    let maps: Vec<HashMap<String, f64>> = [1.0, 2.5, 3.0]
+        .iter()
+        .map(|&lev| HashMap::from([("lev".to_string(), lev)]))
+        .collect();
+    ab(&compiled, &maps);
+}
+
+/// An operand with no declared shape whose value is an array (a `faq` over
+/// `[cell, other]`) is not counted as a scalar: its rank is not read off a
+/// declaration, so no box is inferred for the `ifelse` that reads it.
+#[test]
+fn unshaped_array_operand_blocks_the_inference() {
+    let x = mixed_ifelse(json!({"op": "+", "args": ["F", "W"]}), json!(0.0));
+    let w = json!({"op": "faq", "args": [], "output_idx": ["i", "j"],
+        "ranges": {"i": [1, 3], "j": [1, 2]}, "expr": 1.0});
+    let compiled = compile(undeclared_mixed_doc(
+        x,
+        json!({"W": {"type": "unknown"}}),
+        vec![json!({"lhs": "W", "rhs": w})],
+    ));
+    assert_eq!(declared_box(&compiled, "X"), Some(None));
+}

@@ -348,3 +348,72 @@ end
         )
     end
 end
+
+# esm-spec §4.3.4: an ABSENT `shape` may be inferred and promoted; an explicit
+# `shape: []` DECLARES a scalar and is never promoted. A definition that infers
+# an array for a declared scalar is a conflict (`array_shape_mismatch`).
+@testset "explicit shape [] is a declared scalar, never promoted" begin
+    function chain(a_shape; rhs = op("*", "f", 2))
+        a = Dict{String, Any}("type" => "unknown")
+        a_shape === nothing || (a["shape"] = a_shape)
+        return Dict{String, Any}(
+            "esm" => "1.1.0", "metadata" => Dict("name" => "P"),
+            "index_sets" => Dict{String, Any}("c" => Dict{String, Any}("kind" => "interval", "size" => 3)),
+            "models" => Dict{String, Any}(
+                "M" => Dict{String, Any}(
+                    "variables" => Dict{String, Any}(
+                        "f" => Dict{String, Any}("type" => "parameter", "shape" => Any["c"]),
+                        "a" => a,
+                        "s" => Dict{String, Any}("type" => "unknown")
+                    ),
+                    "equations" => Any[
+                        Dict{String, Any}("lhs" => "a", "rhs" => rhs),
+                        Dict{String, Any}(
+                            "lhs" => Dict{String, Any}("op" => "D", "args" => Any["s"], "wrt" => "t"),
+                            "rhs" => op("*", -1, "s")
+                        ),
+                    ]
+                )
+            )
+        )
+    end
+    flat_of(d) = E.flatten(ESS.coerce_esm_file(ESS.JSON3.read(ESS.JSON3.write(d))))
+    shape_after(flat, n) = E.promote_downstream_shapes(flat).observed_variables[n].shape
+
+    # Parse keeps `[]` distinct from an absent shape, and flatten carries it.
+    @test flat_of(chain(Any[])).observed_variables["M.a"].shape == String[]
+    @test flat_of(chain(nothing)).observed_variables["M.a"].shape === nothing
+
+    # Absent shape downstream of an array: promoted, as before.
+    @test shape_after(flat_of(chain(nothing)), "M.a") == ["c"]
+
+    # Declared `[]` downstream of an array: refused, naming the variable.
+    err = try
+        E.promote_downstream_shapes(flat_of(chain(Any[])))
+        nothing
+    catch e
+        e
+    end
+    @test err isa E.DimensionPromotionError
+    msg = sprint(showerror, err)
+    @test occursin("array_shape_mismatch", msg)
+    @test occursin("'M.a'", msg) && occursin("[\"c\"]", msg)
+
+    # Declared `[]` whose definition IS scalar: kept as is, no error.
+    reduce_f = Dict{String, Any}(
+        "op" => "faq", "semiring" => "sum_product", "output_idx" => Any[],
+        "ranges" => Dict{String, Any}("k" => Dict{String, Any}("from" => "c")),
+        "args" => Any[], "expr" => ix("f", "k")
+    )
+    @test shape_after(flat_of(chain(Any[]; rhs = reduce_f)), "M.a") == String[]
+
+    # Declared `[]` defined by a faq over inline ranges: refused.
+    inline = Dict{String, Any}(
+        "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+        "ranges" => Dict{String, Any}("i" => Any[1, 2]), "expr" => op("*", "s", "i")
+    )
+    @test shape_after(flat_of(chain(nothing; rhs = inline)), "M.a") == ["M.a__i"]
+    @test_throws E.DimensionPromotionError E.promote_downstream_shapes(
+        flat_of(chain(Any[]; rhs = inline))
+    )
+end
