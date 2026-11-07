@@ -14,6 +14,7 @@ on:
     branches: [ main ]
     paths:
       - 'formal/**'
+      - 'lib/interp.esm'
       - 'esm-spec.md'
       - 'CONFORMANCE_SPEC.md'
       - 'scripts/formal-audit.py'
@@ -22,6 +23,7 @@ on:
     branches: [ main ]
     paths:
       - 'formal/**'
+      - 'lib/interp.esm'
       - 'esm-spec.md'
       - 'CONFORMANCE_SPEC.md'
       - 'scripts/formal-audit.py'
@@ -48,6 +50,12 @@ jobs:
       run: |
         python3 scripts/formal-audit.py tokens
         python3 scripts/formal-audit.py inventory
+
+    # The Lean ASTs of the standard-library templates are generated from
+    # lib/*.esm; the proofs about them are only about the committed library
+    # if the generated file is current.
+    - name: Check generated library templates
+      run: python3 formal/scripts/gen-lib-templates.py --check
 
     - name: Cache Lean toolchain
       uses: actions/cache@v6
