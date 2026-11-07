@@ -2,8 +2,9 @@
 
 The `lib/` directory ships ESS subsystems authored entirely in pure AST and the
 spec's closed-function registry (`esm-spec.md` §9.2). Each file except
-`lib/interp.esm` (a template library, below) is a self-contained subsystem
-includable from any consumer model via subsystem reference (`esm-spec.md` §4.7):
+`lib/interp.esm` and `lib/geometry.esm` (template libraries, below) is a
+self-contained subsystem includable from any consumer model via subsystem
+reference (`esm-spec.md` §4.7):
 
 ```json
 {
@@ -48,6 +49,7 @@ either a new `lib/` file or a new §9 entry, apply the table above.
 | [`lib/calendar.esm`](../lib/calendar.esm) | `Calendar` | `year`, `month`, `day`, `hour`, `minute`, `second`, `day_of_year`, `julian_day`, `is_leap_year`, `seconds_since_midnight`, `fractional_year` | `t_utc` (s) |
 | [`lib/solar.esm`](../lib/solar.esm) | `Solar` | `solar_declination` (rad), `equation_of_time` (min), `true_solar_time` (min), `hour_angle` (rad), `cos_zenith`, `solar_zenith_angle` (rad) | `t_utc` (s), `lat` (deg), `lon` (deg) |
 | [`lib/interp.esm`](../lib/interp.esm) | template library (no subsystem) | expression templates `searchsorted`, `linear`, `bilinear` | the template parameters (arrays, query, axis lengths) |
+| [`lib/geometry.esm`](../lib/geometry.esm) | template library (no subsystem) | expression templates `overlap_area_planar`, `overlap_area_spherical`, `lonlat_to_unit` | the template parameters (ring stacks, cell indices, vertex-slot counts) |
 
 ### `lib/calendar.esm`
 
@@ -157,6 +159,94 @@ scenario, and `tests/closed_functions/interp/*/template.esm` carries a subset
 as inline tests for the cross-binding `interp_templates` conformance tier.
 The templates do not repeat the load-time axis checks of the `fn` form (a
 non-monotonic or NaN axis is not rejected); the caller supplies a valid axis.
+
+### `lib/geometry.esm`
+
+A template-library file like `lib/interp.esm`: three match-less expression
+templates giving the overlap area of two convex polygons in the core AST, the
+quantity the `polygon_intersection_area` geometry leaf returns (`esm-spec.md`
+§8.6.1). Each polygon operand is one cell of a ring stack: the stack, the cell
+index (usually the loop symbol of the enclosing `faq` over candidate pairs) and
+the number of vertex slots (an integer, used as a `faq` `ranges` bound).
+
+| Template | Parameters | Value |
+|---|---|---|
+| `overlap_area_planar` | `ring_a`, `cell_a`, `nv_a`, `ring_b`, `cell_b`, `nv_b` | overlap area of cell `cell_a` of the `[cells, nv_a, 2]` stack `ring_a` and cell `cell_b` of `ring_b`, straight edges, in squared coordinate units: the leaf with `manifold: "planar"` |
+| `overlap_area_spherical` | the same, over `[cells, nv, 3]` stacks of unit vectors | the same with great-circle edges on the unit sphere, in steradians: the leaf with `manifold: "spherical"` or `"geodesic"` |
+| `lonlat_to_unit` | `ring`, `cell`, `vert`, `comp` | component `comp` (1, 2, 3) of the unit vector `(cos φ cos λ, cos φ sin λ, sin φ)` of vertex `vert` of a `[cells, verts, 2]` lon-lat stack in degrees |
+
+A conservative-regridding narrow phase over the planar manifold:
+
+```json
+{
+  "expression_template_imports": [{ "ref": "../lib/geometry.esm" }],
+  "equations": [
+    {
+      "lhs": "A_ij",
+      "rhs": {
+        "op": "faq", "args": [], "output_idx": ["i", "j"],
+        "ranges": { "i": { "from": "src_cells" }, "j": { "from": "tgt_cells" } },
+        "join": [{ "on": [["src_bin", "tgt_bin"]] }],
+        "expr": {
+          "op": "apply_expression_template", "args": [], "name": "overlap_area_planar",
+          "bindings": { "ring_a": "src_poly", "cell_a": "i", "nv_a": 4,
+                        "ring_b": "tgt_poly", "cell_b": "j", "nv_b": 4 }
+        }
+      }
+    }
+  ]
+}
+```
+
+On the sphere the caller first builds each unit-vector stack once per cell,
+`src_xyz[c, v, d] = lonlat_to_unit(src_poly, c, v, d)` as a `faq` over the
+cells, the vertex slots and a 3-element component axis, and passes `src_xyz`
+and `tgt_xyz` to `overlap_area_spherical`. Doing the trigonometry once per
+vertex instead of once per use inside the pair body is also what keeps the
+expanded spherical template small.
+
+**Method.** By Green's theorem the overlap area is the sum, over every edge of
+each polygon, of that edge's boundary contribution restricted to the part of the
+edge inside the other polygon. For convex polygons that part is one interval
+`[t0, t1]` of the edge's chord parameter: `t0` is a `max` and `t1` a `min` `faq`
+over the other polygon's closed half-planes, each of which is linear in the
+chord parameter (on the sphere too, as a great-circle half-space test
+`n · P(t) ≥ 0`). A planar edge from `P` to `Q` contributes
+`½ (t1 − t0)⁺ · ((P − O) × (Q − O))`, and a spherical edge the signed area of
+the spherical triangle it spans with `O` (Van Oosterom–Strackee, `atan2`), where
+`O` is the first vertex of `ring_a`; the contributions of each polygon carry its
+orientation sign, so either ring orientation is accepted (on the sphere the
+interior is the side of less than a hemisphere, as with S2).
+
+- **Padding.** A repeated vertex (an explicit closing duplicate, or the
+  rectangular-storage padding of a mixed-valence mesh) makes a zero-length edge,
+  which contributes exactly zero and imposes no half-plane constraint. No
+  deduplication step is needed, and a padded ring gives the bits of its
+  unpadded form. The leaf deduplicates with the `np.allclose` tolerance
+  instead; the two differ only on distinct vertices closer than that tolerance.
+- **Shared edges and vertices.** A half-plane test within a small tolerance of
+  zero (relative to the coordinates on the plane, absolute `1e-14` on the
+  sphere) counts as on the line. An edge lying on an edge of the other polygon
+  is counted once, by `ring_a`, when the two run the same way, and not at all
+  when they run opposite ways (adjacent cells). Pairs of cells from one grid
+  (identical, adjacent, corner-touching) are therefore exact: on the planar
+  fixtures the template gives the exact area, and touching cells give `0`.
+- **Contract.** Convex cells (CONFORMANCE_SPEC §5.8's conservative-regridding
+  cells), each spherical cell within a hemisphere. Non-convex input is outside
+  the contract; the template does not reject it. A degenerate ring (fewer than
+  three distinct vertices) is not rejected either: where the leaf raises
+  `E_TREEWALK_GEOMETRY_CLIP`, the template returns a value (zero area for a
+  ring of no extent).
+
+`tests/conformance/geometry_templates/pairs.json` (generated by
+`scripts/gen-geometry-template-pairs.py`) lists the cell pairs every polygon and
+regridding document in `tests/` clips, with an exact (planar) or 40-digit
+(spherical) reference area; the Julia, Python and Rust test suites run each pair
+through the template and the leaf and hold them to the CONFORMANCE_SPEC §5.8.2
+tolerance, the planar same-grid pairs exactly, and the padded copy of every pair
+to the same bits. The template is often closer to the reference than the leaf:
+taking contributions about a vertex of the cell rather than the coordinate
+origin avoids the cancellation of a shoelace sum far from the origin.
 
 ## Validation and conformance
 
