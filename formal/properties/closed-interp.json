@@ -849,6 +849,48 @@
       "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [inst_4 : Esm.Closed.TemplateAst.ExprLaws α] {MA MB : List (List (List α))} {ca cb na nb : ℕ}, Esm.Closed.GeometryAst.Shape MA ca na → Esm.Closed.GeometryAst.Shape MB cb nb → 1 ≤ na → 1 ≤ nb → na < 2 ^ 53 → nb < 2 ^ 53 → Esm.Expr.evalApply Esm.Lib.Geometry.overlap_area_planar (Esm.Closed.GeometryAst.bindP na nb) [(\"RA\", Esm.Expr.Val.arr3 MA), (\"CA\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin (ca : ℝ))), (\"RB\", Esm.Expr.Val.arr3 MB), (\"CB\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin (cb : ℝ)))] = Except.ok (Esm.Expr.Val.num (Esm.Closed.GeometryAst.planarRef MA ca na MB cb nb))",
       "status": "proven",
       "theorem": "Esm.Closed.GeometryAst.planar_template_eq"
+    },
+    {
+      "id": "P-geometry-lib-planar-pad-a",
+      "clauses": [
+        "spec.8.6.1.ring-dedup-equal",
+        "spec.8.6.1.ring-padding-accepted"
+      ],
+      "statement": "In binary64, for finite coordinates, the overlap_area_planar template of lib/geometry.esm evaluated with ring A padded by one zero-length edge (PadAt: first vertex kept, the other edges kept in order) equals it on the unpadded ring, bit for bit: exact duplicates need no deduplication step.",
+      "lean_statement": "∀ {MA MA' MB : List (List (List Esm.Closed.Template.Bin64))} {ca na cb nb p : ℕ}, Esm.Closed.GeometryAst.Shape MA ca na → Esm.Closed.GeometryAst.Shape MA' ca (na + 1) → Esm.Closed.GeometryAst.Shape MB cb nb → 1 ≤ na → 1 ≤ nb → na + 1 < 2 ^ 53 → nb < 2 ^ 53 → Esm.Closed.GeometryAst.PadAt MA MA' ca na p → Esm.Closed.GeometryAst.AllF MA ca na → Esm.Closed.GeometryAst.AllF MA' ca (na + 1) → Esm.Closed.GeometryAst.AllF MB cb nb → Esm.Expr.evalApply Esm.Lib.Geometry.overlap_area_planar (Esm.Closed.GeometryAst.bindP (na + 1) nb) (Esm.Closed.GeometryAst.envP MA' ca MB cb) = Esm.Expr.evalApply Esm.Lib.Geometry.overlap_area_planar (Esm.Closed.GeometryAst.bindP na nb) (Esm.Closed.GeometryAst.envP MA ca MB cb)",
+      "status": "proven",
+      "theorem": "Esm.Closed.GeometryAst.planar_template_pad_A"
+    },
+    {
+      "id": "P-geometry-lib-planar-pad-b",
+      "clauses": [
+        "spec.8.6.1.ring-dedup-equal",
+        "spec.8.6.1.ring-padding-accepted"
+      ],
+      "statement": "In binary64, for finite coordinates, the overlap_area_planar template of lib/geometry.esm evaluated with ring B padded by one zero-length edge (PadAt: first vertex kept, the other edges kept in order) equals it on the unpadded ring, bit for bit: exact duplicates need no deduplication step.",
+      "lean_statement": "∀ {MA MB MB' : List (List (List Esm.Closed.Template.Bin64))} {ca na cb nb p : ℕ}, Esm.Closed.GeometryAst.Shape MA ca na → Esm.Closed.GeometryAst.Shape MB cb nb → Esm.Closed.GeometryAst.Shape MB' cb (nb + 1) → 1 ≤ na → 1 ≤ nb → na < 2 ^ 53 → nb + 1 < 2 ^ 53 → Esm.Closed.GeometryAst.PadAt MB MB' cb nb p → Esm.Closed.GeometryAst.AllF MA ca na → Esm.Closed.GeometryAst.AllF MB cb nb → Esm.Closed.GeometryAst.AllF MB' cb (nb + 1) → Esm.Expr.evalApply Esm.Lib.Geometry.overlap_area_planar (Esm.Closed.GeometryAst.bindP na (nb + 1)) (Esm.Closed.GeometryAst.envP MA ca MB' cb) = Esm.Expr.evalApply Esm.Lib.Geometry.overlap_area_planar (Esm.Closed.GeometryAst.bindP na nb) (Esm.Closed.GeometryAst.envP MA ca MB cb)",
+      "status": "proven",
+      "theorem": "Esm.Closed.GeometryAst.planar_template_pad_B"
+    },
+    {
+      "id": "P-geometry-pad-consecutive-duplicate",
+      "clauses": [
+        "spec.8.6.1.ring-dedup-equal"
+      ],
+      "statement": "A ring with vertex j (1 <= j <= n) repeated right after itself is the ring with a zero-length edge inserted at edge position j (PadAt).",
+      "lean_statement": "∀ {M M' : List (List (List Esm.Closed.Template.Bin64))} {c n j : ℕ}, 1 ≤ j → j ≤ n → (∀ i, 1 ≤ i → i ≤ n + 1 → Esm.Closed.GeometryAst.vat M' c i = Esm.Closed.GeometryAst.vat M c (if i ≤ j then i else i - 1)) → Esm.Closed.GeometryAst.PadAt M M' c n j",
+      "status": "proven",
+      "theorem": "Esm.Closed.GeometryAst.pad_dup_edges"
+    },
+    {
+      "id": "P-geometry-pad-closing-duplicate",
+      "clauses": [
+        "spec.8.6.1.ring-dedup-equal"
+      ],
+      "statement": "A ring with its first vertex appended after the last (an explicit closing duplicate) is the ring with a zero-length edge inserted at edge position n + 1 (PadAt).",
+      "lean_statement": "∀ {M M' : List (List (List Esm.Closed.Template.Bin64))} {c n : ℕ}, 1 ≤ n → (∀ i, 1 ≤ i → i ≤ n + 1 → Esm.Closed.GeometryAst.vat M' c i = Esm.Closed.GeometryAst.vat M c (if i ≤ n then i else 1)) → Esm.Closed.GeometryAst.PadAt M M' c n (n + 1)",
+      "status": "proven",
+      "theorem": "Esm.Closed.GeometryAst.pad_close_edges"
     }
   ]
 }
