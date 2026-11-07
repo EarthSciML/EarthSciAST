@@ -2,12 +2,13 @@ import Lean.Data.Json
 import Adapter.Interp
 import Esm.Expr.Template
 
-/-! `esm-lean templates <document.esm>`: the `apply_expression_template`
+/-! `esm-lean templates <document.esm> [model]`: the `apply_expression_template`
 equations of a template-application document (the `interp_templates` tier,
 `tests/closed_functions/interp/*/template.esm`), evaluated with the model's
 expression evaluator (`Esm.Expr.evalApply`) at `Float`.
 
-Reads only what those documents use: one model; its `expression_template_imports`
+Reads only what those documents use: one model (the one named, or the
+document's sole model when none is); its `expression_template_imports`
 (each `ref` a library file relative to the document, `only` honoured); its
 `parameter` variables' numeric `default`s, which form the environment; and each
 equation `lhs ~ apply_expression_template(...)`. Prints
@@ -85,12 +86,21 @@ def errorString : ApplyError → String
 
 def main (args : List String) : IO UInt32 := do
   match args with
-  | [path] =>
+  | path :: rest =>
+    if rest.length > 1 then
+      IO.eprintln "usage: esm-lean templates <document.esm> [model]"
+      return 2
     let dir := (System.FilePath.mk path).parent.getD "."
     let run : ExceptT String IO Json := do
       let doc ← liftExcept (Json.parse (← IO.FS.readFile path))
-      let models ← liftExcept ((← liftExcept (doc.getObjVal? "models")).getObj?)
-      let [(_, m)] := models.toArray.toList | throw "expected exactly one model"
+      let modelsJ ← liftExcept (doc.getObjVal? "models")
+      let models ← liftExcept modelsJ.getObj?
+      let m ← match rest, models.toArray.toList with
+        | [name], _ => match modelsJ.getObjVal? name with
+          | .ok m => pure m
+          | .error _ => throw s!"no model {name}"
+        | _, [(_, m)] => pure m
+        | _, ms => throw s!"{ms.length} models: name the one to evaluate"
       -- the imported templates
       let mut tpls : List (String × Template) := []
       let imports := (m.getObjValD "expression_template_imports").getArr?.toOption.getD #[]
@@ -130,6 +140,6 @@ def main (args : List String) : IO UInt32 := do
     match ← run.run with
     | .ok j => IO.println j.compress; return 0
     | .error e => IO.eprintln s!"esm-lean templates: {e}"; return 2
-  | _ => IO.eprintln "usage: esm-lean templates <document.esm>"; return 2
+  | _ => IO.eprintln "usage: esm-lean templates <document.esm> [model]"; return 2
 
 end Adapter.Templates
