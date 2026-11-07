@@ -4009,10 +4009,45 @@ axis enumerates the **intersection** of their partner lists.
   still emitted. A binding MUST test this explicitly; it is the easiest thing to
   break here, and it breaks quietly.
 * Gates whose two symbols are **both contracted** (§5.5.8's fourth shape) cannot
-  be intersected this way, because neither side is bound. One of them MAY still
-  drive the partner-restricted walk — the most selective, per §5.24.1 — and it
-  MUST intersect its partner list with whatever the bound gates already admitted
-  for that axis. The rest remain per-leaf `filter` tests.
+  be intersected against a bound index, because neither side is bound. A
+  binding SHOULD still let EVERY such gate restrict the walk, in two ways:
+  1. **Semi-join propagation, before the walk.** For a both-contracted gate
+     between axes `p` and `q`, when the gates above already restricted `p`,
+     restrict `q` to the union of the partners of every admitted `p` position
+     (intersected with whatever `q` already admitted), and likewise from `q` to
+     `p`; repeat until nothing narrows. This is a fixpoint over the gate GRAPH,
+     which may be cyclic (three axes joined pairwise is a cycle): a binding
+     SHOULD iterate to the true fixpoint, not stop after a fixed number of
+     passes, since on a cycle each pass can remove as little as one position.
+     It terminates because an axis's admitted set only ever shrinks. Stopping
+     earlier is still correct, since every step only drops tuples some gate
+     rejects; it costs leaves, never values. A worklist that re-reads a gate
+     only from an axis that changed since it was last read reaches the same
+     fixpoint, because the fixpoint (every admitted position on each axis has a
+     partner among the admitted positions of every axis it is linked to) does
+     not depend on the order the gates are read in. The union of ascending
+     partner lists, merged and deduplicated, is ascending, so each axis still
+     enumerates an order-preserving subsequence of its range. An axis left with nothing admits no leaf: the
+     output position takes `0̄`. This is what carries a pin on one contracted
+     axis — from a gate to a bound output index — across a chain of
+     both-contracted gates to the axes beyond it.
+  2. **Every gate restricts during the walk.** When the walk reaches axis `d`,
+     `d` enumerates the INTERSECTION of the partner lists of every
+     both-contracted gate linking `d` to an axis bound earlier in the
+     odometer, each taken at that axis's current position — not one driving
+     gate's list with the rest tested per leaf. This is what closes a STAR
+     join (several axes each joined to one contracted hub).
+
+  Both only drop tuples some gate rejects, keep the odometer order (first axis
+  outermost, last fastest), and leave every axis an ascending, duplicate-free
+  subsequence of its range, so (a) and (b) of §5.24.1 still make the result
+  bit-identical; many-to-many partners all survive the union and the
+  intersection, by the argument of the previous bullet. A binding that does
+  neither MAY instead let one of these gates drive the partner-restricted walk
+  — the most selective, per §5.24.1 — and it MUST then intersect that gate's
+  partner list with whatever the bound gates already admitted for that axis;
+  the rest remain per-leaf `filter` tests. That is correct, and on the joins
+  measured below it is the difference between seconds and hours.
 * Gates with **both** symbols already bound reduce to a membership test; if any
   of them rejects, the output position takes `0̄` and no leaf is enumerated.
 
@@ -4028,6 +4063,20 @@ leaves actually enumerated over a whole-document `simulate`:
 the gap, and §5.24.1 alone captures under 5% of it on the second join. Whole
 document, release build: 515.88 s → 11.42 s → 3.71 s for the first, and
 298 s → 24.82 s → 4.85 s for the second, byte-identical output throughout.
+
+**What the both-contracted bullet is worth.** Measured on moves.esm's
+`rates-venting` RunSpec (Rust, release build), where a single driving
+both-contracted gate left three joins close to the full product:
+
+| join | shape | one gate drives, rest per leaf | every gate restricts |
+|---|---|---:|---:|
+| `run_startModeAgeVariation` | star: `k`, `m`, `s`, `a` each joined to contracted hub `x` | 235,782,144 leaves, 277 s | 755,712 leaves, about 1 s |
+| `tvh_soakTies` | chain: `w~v` pins `v`, then `i~v` (both contracted) | over 50 min in the tape builder, killed unfinished | about 20 s |
+| `rpd_ratePerDistance` | `x~o` pins `o`, then `o~b`, `o~k`, `o~g`, `o~m` | 133 s in the tape builder | 2 s |
+
+The whole document went from not finishing to 6 min 29 s, and a hand-tuned
+variant of it, with authoring workarounds for the chain, from 7 min 54 s to
+6 min 23 s (440 s to 345 s of CPU); the two now write byte-identical output.
 
 **This is a SHOULD and not a MUST** for the same reason §5.5.8's fourth shape
 is: a binding that declines is slower and not wrong, because the lowered

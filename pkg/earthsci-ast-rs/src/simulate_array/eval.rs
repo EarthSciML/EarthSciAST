@@ -4,6 +4,7 @@
 //! standalone [`eval_expression`] entry point. This path is the correctness
 //! reference the vectorized overlay is verified against.
 
+use super::gate_walk::{CellBufs, GatePlan, TupleSink};
 use super::*;
 use crate::compile_error::CompileError;
 use crate::faq::effective_reduce_kind;
@@ -4262,87 +4263,6 @@ pub(super) fn index_from_sides(sides: EqSides) -> (crate::broad_phase::OverlapIn
     )
 }
 
-/// One contracted dimension's enumeration source: its own ascending interval,
-/// or the explicit ascending value list the gate restricted it to.
-enum DimSrc<'a> {
-    Range(i64, i64),
-    List(&'a [i64]),
-}
-
-impl DimSrc<'_> {
-    #[inline]
-    fn len(&self) -> usize {
-        match self {
-            DimSrc::Range(lo, hi) => (hi - lo + 1).max(0) as usize,
-            DimSrc::List(v) => v.len(),
-        }
-    }
-    #[inline]
-    fn at(&self, i: usize) -> i64 {
-        match self {
-            DimSrc::Range(lo, _) => lo + i as i64,
-            DimSrc::List(v) => v[i],
-        }
-    }
-}
-
-/// One contracted dimension's admitted value list, ACCUMULATED across gates.
-///
-/// The first gate that restricts a dim hands over its own partner slice — the
-/// common case, and no allocation; a second gate intersects into an owned
-/// vector. Both are ascending and duplicate-free (an [`crate::broad_phase::OverlapIndex`]
-/// sorts and dedups its pairs), so the intersection is a linear merge and is
-/// itself an ascending, duplicate-free SUBSEQUENCE of the dim's own range.
-enum Restriction<'a> {
-    /// One gate's partner list, borrowed from its index.
-    Slice(&'a [i64]),
-    /// Two or more gates' intersection.
-    Owned(Vec<i64>),
-}
-
-impl Restriction<'_> {
-    #[inline]
-    fn as_slice(&self) -> &[i64] {
-        match self {
-            Restriction::Slice(s) => s,
-            Restriction::Owned(v) => v,
-        }
-    }
-}
-
-/// Intersect `slot` with one more gate's ascending partner list.
-///
-/// Returns `false` when the result is EMPTY — no leaf is admitted for this
-/// output cell at all, which is §5.5.6's identity fill and not a hole.
-fn intersect_restriction<'a>(slot: &mut Option<Restriction<'a>>, parts: &'a [i64]) -> bool {
-    match slot.take() {
-        None => {
-            let ok = !parts.is_empty();
-            *slot = Some(Restriction::Slice(parts));
-            ok
-        }
-        Some(cur) => {
-            let a = cur.as_slice();
-            let mut out: Vec<i64> = Vec::with_capacity(a.len().min(parts.len()));
-            let (mut i, mut j) = (0usize, 0usize);
-            while i < a.len() && j < parts.len() {
-                match a[i].cmp(&parts[j]) {
-                    std::cmp::Ordering::Less => i += 1,
-                    std::cmp::Ordering::Greater => j += 1,
-                    std::cmp::Ordering::Equal => {
-                        out.push(a[i]);
-                        i += 1;
-                        j += 1;
-                    }
-                }
-            }
-            let ok = !out.is_empty();
-            *slot = Some(Restriction::Owned(out));
-            ok
-        }
-    }
-}
-
 /// [`reduce_contraction`] under the node's join gates, DRIVING the enumeration
 /// CONJUNCTIVELY (CONFORMANCE_SPEC.md §5.24).
 ///
@@ -4361,313 +4281,89 @@ fn intersect_restriction<'a>(slot: &mut Option<Restriction<'a>>, parts: &'a [i64
 /// 2,601 — the relational answer, which is the count of tuples the four
 /// clauses TOGETHER admit.
 ///
+/// Gates between two CONTRACTED dims ([`super::gate_walk`]) take part the same
+/// way: a restriction Phase 1 put on one end is propagated across them to a
+/// fixpoint before the walk, and during the walk a dim enumerates the
+/// intersection of the partner lists of EVERY such gate to an earlier dim.
+///
 /// It stays bit-identical for the same reason the single-gate driver did: each
 /// list is ascending and duplicate-free, so their intersection is an
 /// order-preserving subsequence of the dim's own ascending range, and every
 /// leaf it drops is one the lowered equality `filter` would have excluded.
-pub(super) fn reduce_contraction_gated(
+pub(super) fn reduce_contraction_gated<'g>(
     spec: &ReduceSpec,
     ranges: &[(i64, i64)],
     gates: &[(JoinGate, GatePlacement)],
+    plan: &GatePlan<'g>,
+    bufs: &mut CellBufs<'g>,
     ctx: &mut EvalCtx,
 ) -> f64 {
-    use crate::broad_phase::Side;
-    let &ReduceSpec {
-        contract_names,
-        reduce,
-        ..
-    } = spec;
-
-    // ---- Phase 1: the conjunction of every gate with one side BOUND --------
-    let mut restrict: SmallVec<[Option<Restriction<'_>>; 4]> =
-        (0..ranges.len()).map(|_| None).collect();
-    // The one both-contracted gate that will drive the partner-restricted walk
-    // (§5.5.8's fourth shape). `gates` is selectivity-ordered, so this is the
-    // most selective of them; the others stay per-leaf `filter` tests, which is
-    // exactly what they were.
-    let mut pair_gate: Option<(&JoinGate, usize, usize, bool)> = None;
-    // Did ANY gate describe this node's loops? When none does we are in the
-    // pre-driver position and walk the full product, exactly as before.
-    let mut placed = false;
-
-    for (g, place) in gates {
-        match (place.src, place.tgt) {
-            // Both bound: a single membership test (§5.5.8, third case).
-            (GateAxis::Output, GateAxis::Output) => {
-                let (Some(&l), Some(&r)) = (
-                    ctx.loop_binds.get(&g.sym_src),
-                    ctx.loop_binds.get(&g.sym_tgt),
-                ) else {
-                    continue;
-                };
-                placed = true;
-                if !g.index.contains(l, r) {
-                    return reduce.identity();
-                }
-            }
-            // One bound, one contracted: the contracted dim enumerates the
-            // bound position's partners (§5.5.8, second case) — intersected
-            // with whatever the gates before it admitted.
-            (GateAxis::Contracted(d), GateAxis::Output) => {
-                let (Some(&r), Some(&(lo, hi))) = (ctx.loop_binds.get(&g.sym_tgt), ranges.get(d))
-                else {
-                    continue;
-                };
-                placed = true;
-                let parts = g.index.partners_in(Side::Tgt, r, lo, hi);
-                if !intersect_restriction(&mut restrict[d], parts) {
-                    return reduce.identity();
-                }
-            }
-            (GateAxis::Output, GateAxis::Contracted(d)) => {
-                let (Some(&l), Some(&(lo, hi))) = (ctx.loop_binds.get(&g.sym_src), ranges.get(d))
-                else {
-                    continue;
-                };
-                placed = true;
-                let parts = g.index.partners_in(Side::Src, l, lo, hi);
-                if !intersect_restriction(&mut restrict[d], parts) {
-                    return reduce.identity();
-                }
-            }
-            // Both contracted, on DIFFERENT dims: the pair list binds two axes
-            // at once. Only one such gate can drive the walk; the rest remain
-            // per-leaf tests.
-            (GateAxis::Contracted(a), GateAxis::Contracted(b)) if a != b => {
-                placed = true;
-                if pair_gate.is_none() {
-                    let (p, q, bound_is_src) = if a < b { (a, b, true) } else { (b, a, false) };
-                    pair_gate = Some((g, p, q, bound_is_src));
-                }
-            }
-            // Both sides on ONE contracted dim (two columns of one table), or a
-            // symbol this node does not bind: nothing a pair list can drive.
-            // The lowered `filter` still applies it (§5.5.8).
-            _ => {}
-        }
-    }
-
-    // ---- Phase 2: enumerate ------------------------------------------------
-    let mut srcs = full_sources(ranges);
-    if placed {
-        for (d, r) in restrict.iter().enumerate() {
-            if let Some(r) = r {
-                srcs[d] = DimSrc::List(r.as_slice());
-            }
-        }
-    }
-
-    let Some((gate, p, q, bound_is_src)) = pair_gate else {
-        return reduce_over_sources(spec, &srcs, ctx);
+    let reduce = spec.reduce;
+    // Phase 1, the empty-range guard and the propagation, shared with the
+    // tape builder ([`super::gate_walk`]).
+    let admitted = {
+        let binds = &ctx.loop_binds;
+        plan.restrict_cell(
+            ranges,
+            |g, src| {
+                let (gate, _) = &gates[g];
+                binds
+                    .get(if src { &gate.sym_src } else { &gate.sym_tgt })
+                    .copied()
+            },
+            bufs,
+        )
     };
-
-    // The PAIRS fast path: the two gated dims are the ONLY contracted dims and
-    // nothing else restricted them, so the pair list binds the whole tuple and
-    // the walk can skip straight to the matches instead of probing per value.
-    if contract_names.len() == 2 && restrict[0].is_none() && restrict[1].is_none() {
-        // The contraction odometer varies `contract_names[1]` FASTEST, so the
-        // product order over the surviving tuples is the pair list sorted by
-        // (contract_names[0] position, contract_names[1] position). With p < q
-        // and exactly two dims, p is 0, so the src side is the slow one exactly
-        // when the src is the earlier dim.
-        let src_is_slow = bound_is_src;
-        let (lo0, hi0) = ranges[0];
-        let (lo1, hi1) = ranges[1];
-        let mut tuples: Vec<(i64, i64)> = gate
-            .index
-            .pairs()
-            .map(|(l, r)| if src_is_slow { (l, r) } else { (r, l) })
-            .filter(|&(a, b)| a >= lo0 && a <= hi0 && b >= lo1 && b <= hi1)
-            .collect();
-        if !src_is_slow {
-            tuples.sort_unstable();
-        }
-        return reduce_over_pairs(spec, &tuples, ctx);
+    if !admitted {
+        return reduce.identity();
     }
-
-    // Otherwise walk the product in its usual order, except that the LATER
-    // gated dim enumerates only the partners of the EARLIER one's current
-    // binding — intersected with whatever Phase 1 already admitted there.
-    let mut acc = reduce.identity();
-    drive_partner_restricted(spec, &srcs, gate, p, q, bound_is_src, 0, &mut acc, ctx);
-    acc
+    let mut sink = EvalSink {
+        spec,
+        ctx,
+        acc: reduce.identity(),
+    };
+    plan.walk_cell(ranges, bufs, &mut sink);
+    sink.acc
 }
 
-/// One level of the general both-contracted driven walk (see the tail of
-/// [`reduce_contraction_gated`]): dim `q` — the LATER of the two gated dims —
-/// enumerates only the gate partners of dim `p`'s current binding, restricted
-/// to what `srcs[q]` already admits; every other dim walks its own source in
-/// the same odometer order (last dim fastest, which is what recursing
-/// depth-first on ascending `d` produces).
-#[allow(clippy::too_many_arguments)]
-fn drive_partner_restricted(
-    spec: &ReduceSpec,
-    srcs: &[DimSrc],
-    gate: &JoinGate,
-    p: usize,
-    q: usize,
-    bound_is_src: bool,
-    d: usize,
-    acc: &mut f64,
-    ctx: &mut EvalCtx,
-) {
-    let &ReduceSpec {
-        contract_names,
-        body,
-        reduce,
-        filter,
-        cell,
-    } = spec;
-    if d == srcs.len() {
-        crate::broad_phase::bump_overlap_enum_visits(1);
-        if !filter_excludes(filter, cell, ctx) {
-            let term = eval(body, ctx).as_scalar().unwrap_or(f64::NAN);
-            *acc = reduce.combine(*acc, term);
-        }
-        return;
-    }
-    if d == q {
-        let Some(&bound) = ctx.loop_binds.get(&contract_names[p]) else {
-            return;
-        };
-        let side = if bound_is_src {
-            crate::broad_phase::Side::Src
-        } else {
-            crate::broad_phase::Side::Tgt
-        };
-        match &srcs[q] {
-            // Borrowed from the gate, which is disjoint from `ctx` — no
-            // per-level allocation on a walk that runs once per interior tuple.
-            DimSrc::Range(lo, hi) => {
-                let parts = gate.index.partners_in(side, bound, *lo, *hi);
-                for i in 0..parts.len() {
-                    let v = parts[i];
-                    set_bind(&mut ctx.loop_binds, &contract_names[d], v);
-                    drive_partner_restricted(spec, srcs, gate, p, q, bound_is_src, d + 1, acc, ctx);
-                }
-            }
-            // Phase 1 already restricted this dim; walk the intersection of the
-            // two ascending lists in place rather than materialising it.
-            DimSrc::List(vals) => {
-                let parts = gate.index.partners(side, bound);
-                let (mut i, mut j) = (0usize, 0usize);
-                while i < vals.len() && j < parts.len() {
-                    match vals[i].cmp(&parts[j]) {
-                        std::cmp::Ordering::Less => i += 1,
-                        std::cmp::Ordering::Greater => j += 1,
-                        std::cmp::Ordering::Equal => {
-                            set_bind(&mut ctx.loop_binds, &contract_names[d], vals[i]);
-                            drive_partner_restricted(
-                                spec,
-                                srcs,
-                                gate,
-                                p,
-                                q,
-                                bound_is_src,
-                                d + 1,
-                                acc,
-                                ctx,
-                            );
-                            i += 1;
-                            j += 1;
-                        }
-                    }
-                }
-            }
-        }
-        return;
-    }
-    let s = &srcs[d];
-    for i in 0..s.len() {
-        set_bind(&mut ctx.loop_binds, &contract_names[d], s.at(i));
-        drive_partner_restricted(spec, srcs, gate, p, q, bound_is_src, d + 1, acc, ctx);
-    }
+/// The interpreter's [`TupleSink`]: bind each contracted symbol as the walk
+/// reaches its depth, and fold each leaf's term the way
+/// [`reduce_contraction`] does.
+struct EvalSink<'s, 'r, 'c, 'e> {
+    spec: &'s ReduceSpec<'r>,
+    ctx: &'c mut EvalCtx<'e>,
+    acc: f64,
 }
 
-fn full_sources(ranges: &[(i64, i64)]) -> SmallVec<[DimSrc<'_>; 4]> {
-    ranges
-        .iter()
-        .map(|&(lo, hi)| DimSrc::Range(lo, hi))
-        .collect()
-}
+impl TupleSink for EvalSink<'_, '_, '_, '_> {
+    #[inline]
+    fn bind(&mut self, d: usize, v: i64) {
+        set_bind(&mut self.ctx.loop_binds, &self.spec.contract_names[d], v);
+    }
 
-/// The gated unroll: an odometer over per-dimension sources with the LAST
-/// dimension varying fastest — bit-for-bit the order
-/// [`crate::simulate_array::layout::CartesianTuples`] walks, so a restricted
-/// dimension emits the exact subsequence of the terms the full product emitted.
-fn reduce_over_sources(spec: &ReduceSpec, srcs: &[DimSrc], ctx: &mut EvalCtx) -> f64 {
-    let &ReduceSpec {
-        contract_names,
-        body,
-        reduce,
-        filter,
-        cell,
-    } = spec;
-    let mut acc = reduce.identity();
-    let n = srcs.len();
-    if n == 0 {
-        // Pointwise (no contracted index) — the same arm `reduce_contraction`
-        // takes, returning the body itself rather than `0̄ ⊕ body` so a `-0.0`
-        // term stays `-0.0`.
+    #[inline]
+    fn leaf(&mut self, _cur: &[i64]) -> bool {
+        let &ReduceSpec {
+            body,
+            reduce,
+            filter,
+            cell,
+            contract_names,
+        } = self.spec;
         crate::broad_phase::bump_overlap_enum_visits(1);
-        return if filter_excludes(filter, cell, ctx) {
-            acc
-        } else {
-            eval(body, ctx).as_scalar().unwrap_or(f64::NAN)
-        };
-    }
-    if srcs.iter().any(|s| s.len() == 0) {
-        return acc;
-    }
-    let mut odom: SmallVec<[usize; 4]> = SmallVec::from_elem(0usize, n);
-    loop {
-        crate::broad_phase::bump_overlap_enum_visits(1);
-        for (d, name) in contract_names.iter().enumerate() {
-            set_bind(&mut ctx.loop_binds, name, srcs[d].at(odom[d]));
+        if !filter_excludes(filter, cell, self.ctx) {
+            let term = eval(body, self.ctx).as_scalar().unwrap_or(f64::NAN);
+            // Pointwise (no contracted index): the body itself, as
+            // `reduce_contraction` returns it, not `0̄ ⊕ body`, so a `-0.0`
+            // term stays `-0.0`.
+            self.acc = if contract_names.is_empty() {
+                term
+            } else {
+                reduce.combine(self.acc, term)
+            };
         }
-        if !filter_excludes(filter, cell, ctx) {
-            let term = eval(body, ctx).as_scalar().unwrap_or(f64::NAN);
-            acc = reduce.combine(acc, term);
-        }
-        let mut d = n;
-        loop {
-            if d == 0 {
-                return acc;
-            }
-            d -= 1;
-            odom[d] += 1;
-            if odom[d] < srcs[d].len() {
-                break;
-            }
-            odom[d] = 0;
-        }
+        true
     }
-}
-
-/// The PAIRS drive shape: the two contracted symbols are bound TOGETHER from
-/// the gate's candidate pairs (already reordered to match the odometer's
-/// slow/fast convention), so the emitted term sequence is the exact
-/// subsequence the filtered full product emitted.
-fn reduce_over_pairs(spec: &ReduceSpec, tuples: &[(i64, i64)], ctx: &mut EvalCtx) -> f64 {
-    let &ReduceSpec {
-        contract_names,
-        body,
-        reduce,
-        filter,
-        cell,
-    } = spec;
-    let mut acc = reduce.identity();
-    for &(a, b) in tuples {
-        crate::broad_phase::bump_overlap_enum_visits(1);
-        set_bind(&mut ctx.loop_binds, &contract_names[0], a);
-        set_bind(&mut ctx.loop_binds, &contract_names[1], b);
-        if filter_excludes(filter, cell, ctx) {
-            continue;
-        }
-        let term = eval(body, ctx).as_scalar().unwrap_or(f64::NAN);
-        acc = reduce.combine(acc, term);
-    }
-    acc
 }
 
 /// A recognized **prefix scan**: a `faq` whose single contracted index is
@@ -5449,7 +5145,15 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // Per-node cost accounting. The counter is thread-local and bumped
         // only on the gate-driven unroll, so the delta across this output loop
         // is exactly the leaves THIS aggregate enumerated.
-        let stats_from = (!gates.is_empty()).then(crate::broad_phase::overlap_enum_visits);
+        let stats_from = (!gates.is_empty() && crate::broad_phase::join_gate_log_enabled())
+            .then(crate::broad_phase::overlap_enum_visits);
+        // The gated walk's cell-independent plan and its per-cell buffers,
+        // built once for the whole output loop.
+        let gate_plan = GatePlan::new(
+            contract_names.len(),
+            gates.iter().map(|(g, p)| (&*g.index, p.src, p.tgt)),
+        );
+        let mut gate_bufs = gate_plan.bufs();
         let mut tuples = CartesianTuples::new(&ranges);
         while let Some(tuple) = tuples.next() {
             for (name, val) in idx_names.iter().zip(tuple.iter()) {
@@ -5469,7 +5173,14 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
                         &derived
                     }
                 };
-                reduce_contraction_gated(&spec, cell_ranges, &gates, ctx)
+                reduce_contraction_gated(
+                    &spec,
+                    cell_ranges,
+                    &gates,
+                    &gate_plan,
+                    &mut gate_bufs,
+                    ctx,
+                )
             };
             let flat = multi_to_flat_col_major(tuple, &shape, &origin);
             buf[flat] = v;

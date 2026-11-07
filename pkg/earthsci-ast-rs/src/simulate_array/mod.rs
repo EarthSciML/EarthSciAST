@@ -67,6 +67,7 @@ mod cse;
 mod driver;
 pub(crate) use driver::ParameterKeyResolver;
 mod eval;
+mod gate_walk;
 mod layout;
 pub(crate) mod range;
 mod rhs;

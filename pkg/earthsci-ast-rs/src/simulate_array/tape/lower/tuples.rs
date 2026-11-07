@@ -37,8 +37,9 @@
 //! as in `u[cols[i, k]]`), exactly as `index_into` resolves them.
 
 use super::*;
-use crate::broad_phase::{OverlapIndex, Side};
+use crate::broad_phase::OverlapIndex;
 use crate::simulate_array::eval::{EqSides, narrow_reach, reach_of};
+use crate::simulate_array::gate_walk::{GatePlan, TupleSink};
 use crate::types::JoinClause;
 use std::rc::Rc;
 
@@ -147,12 +148,6 @@ fn float_key_column(a: &ndarray::ArrayD<f64>) -> Option<(Vec<i64>, Vec<crate::re
         .map(|&v| crate::relational::Key::Int((if v == 0.0 { 0.0 } else { v }).to_bits() as i64))
         .collect();
     Some(((1..=a.len() as i64).collect(), keys))
-}
-
-/// One contracted dimension's enumeration source within one output cell.
-enum Src<'a> {
-    Range(i64, i64),
-    List(&'a [i64]),
 }
 
 /// A tuple-list contraction with its bounds and gates resolved: what
@@ -293,6 +288,7 @@ impl TapeBuilder<'_> {
             Some(list) => list,
             None => {
                 if let Some(v) = self.fold_tuple_contraction(&spec, &lo, &shape, combine_op)? {
+                    log_tuple_walk(&spec, "folded", None);
                     return Ok(v);
                 }
                 enumerate_tuples(&spec, MAX_PROMOTED_ELEMS)?.ok_or_else(|| Bail {
@@ -302,6 +298,7 @@ impl TapeBuilder<'_> {
                 })?
             }
         };
+        log_tuple_walk(&spec, "listed", Some(list.len()));
         // Charged whether or not the list fit: a list the fold declined is
         // held all the same.
         self.tuples_held = self.tuples_held.saturating_add(list.len() as u64);
@@ -1269,6 +1266,37 @@ impl TapeBuilder<'_> {
     }
 }
 
+/// The tape builder's counterpart of the interpreter's per-node `[join-gate]`
+/// stderr line: which gates drove a tuple-list contraction, over how many
+/// output cells, and how many tuples it listed (or that it was folded in
+/// chunks instead). Only for a gated node, as in the interpreter, and only
+/// when `ESS_JOIN_GATE_LOG` asks for it
+/// ([`crate::broad_phase::join_gate_log_enabled`]).
+fn log_tuple_walk(spec: &TupleSpec<'_>, how: &str, tuples: Option<usize>) {
+    if !crate::broad_phase::join_gate_log_enabled() {
+        return;
+    }
+    if spec.gates.is_empty() {
+        return;
+    }
+    let desc = spec
+        .gates
+        .iter()
+        .map(|g| format!("{}~{}:{}", g.sym_src, g.sym_tgt, g.index.len()))
+        .collect::<Vec<_>>()
+        .join(",");
+    // Saturating: a large output box must not overflow a diagnostic.
+    let cells: u128 = spec
+        .ranges
+        .iter()
+        .map(|(l, h)| (h - l + 1).max(0) as u128)
+        .fold(1u128, u128::saturating_mul);
+    match tuples {
+        Some(n) => eprintln!("[join-gate] tape gates={desc} cells={cells} {how} tuples={n}"),
+        None => eprintln!("[join-gate] tape gates={desc} cells={cells} {how}"),
+    }
+}
+
 /// Enumerate the tuple list of `spec`: output cells in row-major order, each
 /// cell's contraction tuples in the odometer order under the cell's bounds and
 /// the gates, exactly as `reduce_contraction_gated` walks them. `None` as soon
@@ -1338,16 +1366,24 @@ fn visit_tuples(
         ..
     } = spec;
     let nc = contract_names.len();
-    let placed: Vec<(GateAxis, GateAxis)> = gates
-        .iter()
-        .map(|g| {
+    // The cell-independent plan (built once, not per cell), and each gate's
+    // output position for the symbols a cell binds.
+    let plan = GatePlan::new(
+        nc,
+        gates.iter().map(|g| {
             (
+                &g.index,
                 gate_axis(&g.sym_src, idx_names, contract_names),
                 gate_axis(&g.sym_tgt, idx_names, contract_names),
             )
-        })
-        .collect();
+        }),
+    );
     let out_pos = |name: &str| idx_names.iter().position(|n| n == name);
+    let bound_at: Vec<(Option<usize>, Option<usize>)> = gates
+        .iter()
+        .map(|g| (out_pos(&g.sym_src), out_pos(&g.sym_tgt)))
+        .collect();
+    let mut bufs = plan.bufs();
 
     let mut cell: Vec<i64> = ranges.iter().map(|(l, _)| *l).collect();
     let n_cells: usize = ranges
@@ -1375,69 +1411,25 @@ fn visit_tuples(
         }
         // This cell's contraction bounds.
         let cell_ranges: Vec<(i64, i64)> = bounds.iter().map(|b| b.at(&cell, &cur)).collect();
-        // The gates' conjunction for this cell (`reduce_contraction_gated`,
-        // phase 1).
-        let mut restrict: Vec<Option<Vec<i64>>> = vec![None; nc];
-        let mut pair: Option<(&BuiltGate, usize, usize, bool)> = None;
-        let mut reject = false;
-        for (g, &(ps, pt)) in gates.iter().zip(&placed) {
-            match (ps, pt) {
-                (GateAxis::Output, GateAxis::Output) => {
-                    let (Some(a), Some(b)) = (out_pos(&g.sym_src), out_pos(&g.sym_tgt)) else {
-                        continue;
-                    };
-                    if !g.index.contains(cell[a], cell[b]) {
-                        reject = true;
-                    }
-                }
-                (GateAxis::Contracted(d), GateAxis::Output) => {
-                    let Some(b) = out_pos(&g.sym_tgt) else {
-                        continue;
-                    };
-                    let (lo, hi) = cell_ranges[d];
-                    let parts = g.index.partners_in(Side::Tgt, cell[b], lo, hi);
-                    if !intersect(&mut restrict[d], parts) {
-                        reject = true;
-                    }
-                }
-                (GateAxis::Output, GateAxis::Contracted(d)) => {
-                    let Some(a) = out_pos(&g.sym_src) else {
-                        continue;
-                    };
-                    let (lo, hi) = cell_ranges[d];
-                    let parts = g.index.partners_in(Side::Src, cell[a], lo, hi);
-                    if !intersect(&mut restrict[d], parts) {
-                        reject = true;
-                    }
-                }
-                // The first (most selective) both-contracted gate drives.
-                (GateAxis::Contracted(a), GateAxis::Contracted(b)) if a != b && pair.is_none() => {
-                    pair = Some(if a < b {
-                        (g, a, b, true)
-                    } else {
-                        (g, b, a, false)
-                    });
-                }
-                _ => {}
-            }
-            if reject {
-                break;
-            }
-        }
-        if !reject && nc > 0 {
-            let srcs: Vec<Src> = (0..nc)
-                .map(|d| match &restrict[d] {
-                    Some(v) => Src::List(v),
-                    None => Src::Range(cell_ranges[d].0, cell_ranges[d].1),
-                })
-                .collect();
-            let mut push = |t: &[i64]| tuple(&cell, t);
-            if !walk(&srcs, pair, 0, &mut cur, &mut push) {
+        // The gates' conjunction, the empty-range guard and the propagation,
+        // then the walk: all shared with the interpreter
+        // (`crate::simulate_array::gate_walk`).
+        let admitted = plan.restrict_cell(
+            &cell_ranges,
+            |g, src| {
+                let (a, b) = bound_at[g];
+                (if src { a } else { b }).map(|p| cell[p])
+            },
+            &mut bufs,
+        );
+        if admitted {
+            let mut sink = PushSink {
+                cell: &cell,
+                tuple: &mut *tuple,
+            };
+            if !plan.walk_cell(&cell_ranges, &mut bufs, &mut sink) {
                 return Ok(false);
             }
-        } else if !reject && !tuple(&cell, &[]) {
-            // No contracted index: the pointwise term, once.
-            return Ok(false);
         }
         cell_done()?;
         next_cell(&mut cell, ranges);
@@ -1650,100 +1642,21 @@ fn pointwise_keep(
     Ok(keep)
 }
 
-/// The odometer over `srcs` (last dimension fastest), the later dimension of
-/// a both-contracted gate walking only its partners of the earlier one's
-/// current value (`drive_partner_restricted`). `false` once `push` asks to
-/// stop.
-fn walk(
-    srcs: &[Src],
-    pair: Option<(&BuiltGate, usize, usize, bool)>,
-    d: usize,
-    cur: &mut Vec<i64>,
-    push: &mut impl FnMut(&[i64]) -> bool,
-) -> bool {
-    if d == srcs.len() {
-        return push(cur);
-    }
-    if let Some((g, p, q, bound_is_src)) = pair
-        && d == q
-    {
-        let side = if bound_is_src { Side::Src } else { Side::Tgt };
-        let bound = cur[p];
-        match &srcs[q] {
-            Src::Range(lo, hi) => {
-                for &v in g.index.partners_in(side, bound, *lo, *hi) {
-                    cur[d] = v;
-                    if !walk(srcs, pair, d + 1, cur, push) {
-                        return false;
-                    }
-                }
-            }
-            Src::List(vals) => {
-                let parts = g.index.partners(side, bound);
-                let (mut i, mut j) = (0usize, 0usize);
-                while i < vals.len() && j < parts.len() {
-                    match vals[i].cmp(&parts[j]) {
-                        std::cmp::Ordering::Less => i += 1,
-                        std::cmp::Ordering::Greater => j += 1,
-                        std::cmp::Ordering::Equal => {
-                            cur[d] = vals[i];
-                            if !walk(srcs, pair, d + 1, cur, push) {
-                                return false;
-                            }
-                            i += 1;
-                            j += 1;
-                        }
-                    }
-                }
-            }
-        }
-        return true;
-    }
-    match &srcs[d] {
-        Src::Range(lo, hi) => {
-            for v in *lo..=*hi {
-                cur[d] = v;
-                if !walk(srcs, pair, d + 1, cur, push) {
-                    return false;
-                }
-            }
-        }
-        Src::List(vals) => {
-            for &v in *vals {
-                cur[d] = v;
-                if !walk(srcs, pair, d + 1, cur, push) {
-                    return false;
-                }
-            }
-        }
-    }
-    true
+/// [`visit_tuples`]' [`TupleSink`]: hand each admitted tuple, with its output
+/// cell, to the visitor.
+struct PushSink<'a, 'f> {
+    cell: &'a [i64],
+    tuple: &'f mut dyn FnMut(&[i64], &[i64]) -> bool,
 }
 
-/// `slot ∩ parts`, both ascending; `false` when the result is empty.
-fn intersect(slot: &mut Option<Vec<i64>>, parts: &[i64]) -> bool {
-    let next = match slot.take() {
-        None => parts.to_vec(),
-        Some(cur) => {
-            let mut out = Vec::with_capacity(cur.len().min(parts.len()));
-            let (mut i, mut j) = (0usize, 0usize);
-            while i < cur.len() && j < parts.len() {
-                match cur[i].cmp(&parts[j]) {
-                    std::cmp::Ordering::Less => i += 1,
-                    std::cmp::Ordering::Greater => j += 1,
-                    std::cmp::Ordering::Equal => {
-                        out.push(cur[i]);
-                        i += 1;
-                        j += 1;
-                    }
-                }
-            }
-            out
-        }
-    };
-    let ok = !next.is_empty();
-    *slot = Some(next);
-    ok
+impl TupleSink for PushSink<'_, '_> {
+    #[inline]
+    fn bind(&mut self, _d: usize, _v: i64) {}
+
+    #[inline]
+    fn leaf(&mut self, cur: &[i64]) -> bool {
+        (self.tuple)(self.cell, cur)
+    }
 }
 
 /// `ragged_upper_bound` over build-time values: the offsets factor at the
@@ -1840,6 +1753,104 @@ mod tests {
                 .expect("keeps")
                 .unwrap_or_else(|| vec![1.0; walked.len()]);
             assert_eq!(keep, walked);
+        }
+    }
+
+    /// The tuple list under both-contracted gates is exactly the admitted
+    /// tuples in odometer order — no more (every gate restricts, and a pin
+    /// propagates), no fewer (many-to-many partners all survive) — for a star
+    /// into the last contracted dim and a chain off an output pin.
+    #[test]
+    fn contracted_gates_list_exactly_the_admitted_tuples() {
+        // Output `w` over 1..=3; contracted `a, b, c` over 1..=4.
+        let names: Vec<String> = vec!["w".into()];
+        let contracted: Vec<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
+        let ranges = [(1, 3)];
+        let bounds = [
+            DimBound::Static(1, 4),
+            DimBound::Static(1, 4),
+            DimBound::Static(1, 4),
+        ];
+        let p = |v: &[(i64, i64)]| v.to_vec();
+        let ab = p(&[(1, 2), (1, 3), (2, 2), (3, 4), (4, 1), (4, 3)]);
+        let ac = p(&[(1, 1), (1, 4), (2, 2), (3, 3), (4, 4), (4, 1)]);
+        let bc = p(&[(2, 1), (2, 4), (3, 3), (1, 2), (4, 4), (3, 1)]);
+        let wc = p(&[(1, 1), (1, 4), (2, 3), (3, 2)]);
+        let gate_sets: Vec<Vec<BuiltGate>> = vec![
+            // Star into `c`.
+            vec![gate("a", "c", &ac, 0), gate("b", "c", &bc, 1)],
+            // Star into `c` with `c` pinned by the output.
+            vec![
+                gate("a", "c", &ac, 0),
+                gate(
+                    "c",
+                    "b",
+                    &bc.iter().map(|&(x, y)| (y, x)).collect::<Vec<_>>(),
+                    1,
+                ),
+                gate("w", "c", &wc, 2),
+            ],
+            // Chain `w~c`, `b~c`, `a~b`: the pin crosses two gates.
+            vec![
+                gate("w", "c", &wc, 0),
+                gate("b", "c", &bc, 1),
+                gate("a", "b", &ab, 2),
+            ],
+            // All three pairwise, plus the pin.
+            vec![
+                gate("a", "b", &ab, 0),
+                gate("a", "c", &ac, 1),
+                gate("b", "c", &bc, 2),
+                gate("w", "c", &wc, 3),
+            ],
+        ];
+        let body = Expr::Number(0.0);
+        for gates in &gate_sets {
+            let spec = TupleSpec {
+                idx_names: &names,
+                ranges: &ranges,
+                body: &body,
+                contract_names: &contracted,
+                bounds: &bounds,
+                gates,
+                reduce: ReduceKind::Sum,
+                filter: None,
+                init: 0.0,
+            };
+            let list = enumerate_tuples(&spec, usize::MAX)
+                .expect("walks")
+                .expect("uncapped");
+            let sym = |n: &str, w: i64, t: &[i64]| -> i64 {
+                match n {
+                    "w" => w,
+                    "a" => t[0],
+                    "b" => t[1],
+                    _ => t[2],
+                }
+            };
+            let mut want: Vec<Vec<f64>> = vec![Vec::new(); 4];
+            let mut rows = vec![0u32];
+            for w in 1..=3 {
+                for a in 1..=4 {
+                    for b in 1..=4 {
+                        for c in 1..=4 {
+                            let t = [a, b, c];
+                            if gates.iter().all(|g| {
+                                g.index
+                                    .contains(sym(&g.sym_src, w, &t), sym(&g.sym_tgt, w, &t))
+                            }) {
+                                for (k, v) in [w, a, b, c].into_iter().enumerate() {
+                                    want[k].push(v as f64);
+                                }
+                            }
+                        }
+                    }
+                }
+                rows.push(want[0].len() as u32);
+            }
+            assert!(!want[0].is_empty());
+            assert_eq!(list.rows, rows);
+            assert_eq!(list.cols, want);
         }
     }
 }
