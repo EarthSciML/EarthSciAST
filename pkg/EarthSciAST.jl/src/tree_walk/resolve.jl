@@ -2237,6 +2237,37 @@ function _resolve_indices_op(
                         "but got $(length(idx_args_expr)) indices"
                 )
             )
+            # A subscript a symbolic resolve keeps symbolic (a contraction's loop
+            # counter, `F[i]`) has no build-time value: the gather stays a read of
+            # the live buffer at an offset computed per call (`_LiveGatherRef`),
+            # with each constant subscript bounds-checked here as below.
+            if !isempty(bound_syms) &&
+                    _anyof(a -> _subscript_is_runtime(a, const_arrays), idx_args_expr)
+                sub_nodes = Vector{ASTExpr}(undef, length(idx_args_expr))
+                for d in eachindex(idx_args_expr)
+                    a = idx_args_expr[d]
+                    if _subscript_is_runtime(a, const_arrays)
+                        sub_nodes[d] = _resolve_indices(
+                            a, array_var_info, var_map, const_arrays,
+                            pgather, memo, bound_syms
+                        )
+                    else
+                        ci = _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
+                        (1 <= ci <= pg.dims[d]) || throw(
+                            TreeWalkError(
+                                "E_TREEWALK_PGATHER_OOB",
+                                "forcing array '$(first_arg.name)' index $(ci) " *
+                                    "out of range [1, $(pg.dims[d])] on dim $(d)"
+                            )
+                        )
+                        sub_nodes[d] = IntExpr(Int64(ci))
+                    end
+                end
+                return OpExpr(
+                    "index", sub_nodes;
+                    value = _LiveGatherRef(pg.flat, pg.dims, first_arg.name)
+                )
+            end
             int_indices = [
                 _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
                     for a in idx_args_expr

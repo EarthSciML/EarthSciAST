@@ -268,7 +268,7 @@ function _sc_sig!(S::_ScSigCtx, nd::_Node)
     elseif k === _NK_PARAM_GATHER
         push!(sig, 8, _sc_obj(S, nd.payload))
         _sc_ihole!(S, nd.idx, _SCH_PGIDX, nd)
-    elseif k === _NK_CONST_GATHER || k === _NK_STATE_GATHER
+    elseif k === _NK_CONST_GATHER || k === _NK_STATE_GATHER || k === _NK_LIVE_GATHER
         # The payload carries the strides and bounds the emitted read bakes in,
         # so it is part of the signature by identity.
         push!(sig, Int(k), _sc_obj(S, nd.payload), length(nd.children))
@@ -410,7 +410,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGUnitCtx, nd::_Node)
     elseif k === _NK_PARAM_GATHER
         buf = _cg_tab!(ctx, nd.payload::Vector{Float64})
         return :($buf[$(kc.holes[nd])])
-    elseif k === _NK_CONST_GATHER
+    elseif k === _NK_CONST_GATHER || k === _NK_LIVE_GATHER
         return _cg_const_gather(ctx, kc, nd)
     elseif k === _NK_STATE_GATHER
         return _cg_state_gather(ctx, kc, nd)

@@ -43,6 +43,7 @@ const _NK_CONTRACTION_LOOP = UInt8(11)  # compile-once ⊕-reduction: iterate a 
 const _NK_STATE_GATHER = UInt8(12)  # read u at a slot computed at eval time from loop-var-dependent subscripts (ess-runtime-contraction)
 const _NK_RECUR_GATHER = UInt8(13)  # a recurrence's causal self-read: a PUBLISHED cell of its own buffer, or a fault (recurrence_sweep.jl)
 const _NK_RAGGED_LOOP = UInt8(14)  # ⊕-reduction over a range whose bounds are evaluated per call (a ragged `offsets` bound), seeded from 0̄
+const _NK_LIVE_GATHER = UInt8(15)  # read a captured live forcing buffer at an EVAL-TIME-computed offset (a loop-var subscript)
 
 # The ONE compiled IR node — scalar spines and access-kernel spines are both trees
 # of these. `kind` selects which fields are live. The catch-all `payload::Any` slot
@@ -69,6 +70,13 @@ const _NK_RAGGED_LOOP = UInt8(14)  # ⊕-reduction over a range whose bounds are
 #     node's `children` (subscript `_Node`s) and the column-major offset is
 #     computed AT EVAL TIME from them, so a runtime-varying subscript (e.g. a
 #     bound output index) selects a different element without a rebuild.
+#   * `_NK_LIVE_GATHER` — a `_ConstGatherArray` whose `flat` ALIASES a live
+#     forcing buffer (`_PGatherArray.flat`) rather than a frozen const array: the
+#     offset is computed at eval time from the subscript `children`, like
+#     `_NK_CONST_GATHER`, and the element is read from the buffer as it is at
+#     that call, like `_NK_PARAM_GATHER`. A kind of its own so that no pass that
+#     reads a `_NK_CONST_GATHER` as build-time data (a per-entry value column, a
+#     gate fixed while `p` is, the const tier) can take it for one.
 #   * `_NK_CACHED` — the shared CSE scratch (`_CSECache`, ess-r7h); `idx` holds
 #     the value-number slot.
 #   * every other kind — `nothing`.
@@ -135,6 +143,18 @@ end
 struct _ConstGatherRef
     vals::AbstractArray   # the frozen const/provider source array (read at eval time)
     name::String          # its `const_arrays` registry name — diagnostics / identity
+end
+
+# Build-time side channel from `_resolve_indices` to `_compile`: a live forcing
+# gather (`_PGatherArray`) whose subscripts are NOT all build-time constants — a
+# loop counter of a symbolic resolve (`F[i]` in a contraction's term) reaches
+# one. The `index` node's `args` are the resolved subscripts and `_compile`
+# lowers it to a `_NK_LIVE_GATHER` (`_live_gather_node`). Like `_ConstGatherRef`
+# it is made only under a non-empty `bound_syms`.
+struct _LiveGatherRef
+    flat::Vector{Float64}   # the aliased flat buffer (`_PGatherArray.flat`), read at eval time
+    dims::Vector{Int}       # its shape: each subscript is checked against its own axis
+    name::String            # its `pgather` registry name, for `E_TREEWALK_PGATHER_OOB`
 end
 
 # ── Runtime contraction loop (ess-runtime-contraction) ──────────────────────
@@ -375,6 +395,32 @@ function _const_gather_node(
         payload = _ConstGatherArray(
             flat, strides, collect(Int, sz),
             boundary, String(name)
+        ),
+        children = subscript_nodes
+    )
+end
+
+# The `_NK_LIVE_GATHER` of a `_LiveGatherRef`: the buffer itself (never a copy,
+# a data refresh writes it in place), its column-major strides, and the `:live`
+# boundary on every axis, under which an out-of-range subscript raises the
+# forcing gather's own `E_TREEWALK_PGATHER_OOB` when the read is evaluated.
+function _live_gather_node(ref::_LiveGatherRef, subscript_nodes::Vector{_Node})
+    nd = length(ref.dims)
+    length(subscript_nodes) == nd || throw(
+        ArgumentError(
+            "_live_gather_node: expected $nd subscript node(s), got $(length(subscript_nodes))"
+        )
+    )
+    strides = Vector{Int}(undef, nd)
+    acc = 1
+    for d in 1:nd
+        strides[d] = acc
+        acc *= ref.dims[d]
+    end
+    return _mknode(
+        kind = _NK_LIVE_GATHER,
+        payload = _ConstGatherArray(
+            ref.flat, strides, copy(ref.dims), fill(:live, nd), ref.name
         ),
         children = subscript_nodes
     )
@@ -861,6 +907,11 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         if expr.value isa _ConstGatherRef
             ref = expr.value::_ConstGatherRef
             return _const_gather_node(ref.vals, children; name = ref.name)
+        end
+        # A live forcing buffer read at a runtime-computed offset: the same
+        # subscript children, read from the buffer at each call.
+        if expr.value isa _LiveGatherRef
+            return _live_gather_node(expr.value::_LiveGatherRef, children)
         end
         # A gather `_resolve_indices` left alone because its base names no
         # array it knows: a variable with no declared or inferred shape, no
@@ -1906,8 +1957,9 @@ end
         # `::Vector{Float64}` assert keeps this monomorphic + zero-alloc (no
         # runtime-symbol `getfield`, so the scalar `p` NamedTuple stays homogeneous).
         @inbounds return (n.payload::Vector{Float64})[n.idx]
-    elseif k === _NK_CONST_GATHER
-        # Runtime-indexed read of a captured const/provider array (wall2 Phase B).
+    elseif k === _NK_CONST_GATHER || k === _NK_LIVE_GATHER
+        # Runtime-indexed read of a captured const/provider array (wall2 Phase B),
+        # or of a live forcing buffer (`_NK_LIVE_GATHER`, the same read).
         # `payload` is a `_ConstGatherArray` (flat column-major values + strides);
         # the subscript `children` are evaluated HERE and linearized HERE, so a
         # child that resolves to a runtime-varying value (Phase C: a bound output
