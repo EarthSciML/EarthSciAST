@@ -376,6 +376,65 @@ function _discover_geometry_vars(
     )
 end
 
+# ---- Stage: gated live-field geometry observeds → the materialized path ----
+# A live-field geometry observed (`inline_vars` above) whose definition holds a
+# `join` or `filter` aggregate (the `conservative_overlap_apply_gated` regrid
+# over a live source field) cannot be spliced into its reader: the
+# `index(obs, j)` beta-reduction declines an aggregate with a join or filter
+# (`index(aggregate) with join/filter`), and with no other whole-array route
+# the reader's equation is refused. `esm_problem` never meets this, because its
+# discrete-cadence cut lifts the observed into a per-refresh cache first; an
+# `rhs_program` build has no such cut (its forcing is an argument of every
+# call), so the observed stays inline (issue #665).
+#
+# Hand such an observed to the promoted-array-observed set instead, so the
+# compiled builds give it a buffer filled once per right-hand-side call
+# (`_collect_materialized_array_obs`), whose fill compiles the gated aggregate
+# on its own (live source gathers included, #657) and whose readers gather the
+# buffer. The interpreter inlines every array observed anyway, so nothing
+# changes there; an ungated live-field observed keeps the inline path.
+#
+# Returns the names moved. Such an observed has no inline route back, so one
+# that is read but does not get a buffer is refused by name and with the
+# reason (`_refuse_unmaterialized_gated`) rather than with the reader's
+# `index(aggregate) with join/filter`.
+_has_gated_aggregate(e::ASTExpr) = _any_subexpr(e) do x
+    x isa OpExpr && (x.join !== nothing || x.join_gates !== nothing || x.filter !== nothing)
+end
+
+function _move_gated_geometry_inline_vars!(
+        geom_inline_vars::Set{String}, array_inline_vars::Set{String},
+        equations::Vector{Equation}
+    )
+    moved = Set{String}()
+    (isempty(geom_inline_vars) || _array_obs_inline_forced()) && return moved
+    for eq in equations
+        eq.lhs isa VarExpr || continue
+        name = (eq.lhs::VarExpr).name
+        (name in geom_inline_vars && _has_gated_aggregate(eq.rhs)) || continue
+        delete!(geom_inline_vars, name)
+        push!(array_inline_vars, name)
+        push!(moved, name)
+    end
+    return moved
+end
+
+# Raise for the first (in name order) of the gated live-field geometry
+# observeds in `skipped` (name => why its buffer was not made).
+function _refuse_unmaterialized_gated(skipped::AbstractDict{String, String})
+    isempty(skipped) && return
+    name = minimum(keys(skipped))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_GATED_OBSERVED",
+            "array observed '$(name)' is a `join`/`filter` aggregate over a live " *
+                "forcing field, which this build can only evaluate into a buffer " *
+                "filled once per right-hand-side call (it cannot be spliced into " *
+                "its readers), but it gets no buffer: $(skipped[name])"
+        )
+    )
+end
+
 # ---- Stage: promoted array observeds (shape-promotion inlining) ----
 # An array-shaped observed defined by a `faq` is inlined into its readers
 # via the same index beta-reduction as a live-field geometry observed
@@ -471,9 +530,13 @@ _array_obs_inline_forced() = _compiler_plan_now().name === :interpreter
 # Candidate set: the promoted array observeds (post cadence cut) that are not
 # read by a discrete-cadence fill. `discrete_defs_refs` is the set of names
 # reachable from the discrete fills through the observed definitions.
+#
+# `why`, when given, receives a reason for each candidate that is READ but not
+# materialized (an unread one costs nothing inlined and is not recorded).
 function _collect_materialized_array_obs(
         model::Model, equations::Vector{Equation},
-        array_inline_vars, discrete_vars
+        array_inline_vars, discrete_vars;
+        why::Union{Nothing, Dict{String, String}} = nothing
     )
     (_array_obs_inline_forced() || isempty(array_inline_vars)) && return Set{String}()
     defs = Dict{String, ASTExpr}()
@@ -520,9 +583,19 @@ function _collect_materialized_array_obs(
     out = Set{String}()
     observed_here = Set{String}(observed_unknowns(model))
     for name in array_inline_vars
-        (name in blocked || !(name in live)) && continue
+        name in live || continue
+        if name in blocked
+            why === nothing || (
+                why[name] = "a discrete-cadence fill reads it, and that fill " *
+                    "runs outside the right-hand side, where the buffer is not filled"
+            )
+            continue
+        end
         v = get(model.variables, name, nothing)
-        (v !== nothing && name in observed_here && _is_array_shape(v.shape)) || continue
+        if !(v !== nothing && name in observed_here && _is_array_shape(v.shape))
+            why === nothing || (why[name] = "it is not an array-shaped observed")
+            continue
+        end
         push!(out, name)
     end
     # STRUCTURAL positions (mirrors the scalar slot plan's `_obs_structural_refs!`):
@@ -559,6 +632,13 @@ function _collect_materialized_array_obs(
         # esm 1.0.0: an observed's definition is an equation, so the loop above
         # has already seen every one of them.
         setdiff!(out, hits)
+        if why !== nothing
+            for name in hits
+                why[name] = "it is read where the build needs a concrete value " *
+                    "(a gather subscript, a range or integral bound, a key or a " *
+                    "table axis), which a per-call buffer cannot supply"
+            end
+        end
     end
     return out
 end
@@ -3989,6 +4069,9 @@ function _build_lower_and_classify(
             union!(geo.setup_vars, const_mat_vars)
         end
     end
+    gated_geom_vars = _move_gated_geometry_inline_vars!(
+        geom_inline_vars, array_inline_vars, equations
+    )
 
     # ---- polygon_intersection_area fused-leaf operands (esm-spec §8.6.1) ----
     pia_operand_vars, pia_operand_arrays =
@@ -4024,10 +4107,12 @@ function _build_lower_and_classify(
     # difference between a build that fits in memory and one that exhausts the
     # host, so a compiled build was not merely slower, it was impossible. Both
     # forms now carry the same materialized-observed fill levels.
+    skipped = Dict{String, String}()
     mat_array_vars = _collect_materialized_array_obs(
         model, equations,
-        array_inline_vars, discrete_vars
+        array_inline_vars, discrete_vars; why = skipped
     )
+    _refuse_unmaterialized_gated(filter(kv -> first(kv) in gated_geom_vars, skipped))
     # A recurrence cannot be inlined into its readers — its cells are defined by
     # one another — so it is materialized whatever the compiler, and whether or
     # not anything reads it: the output-time routes read the same buffer.
@@ -4041,6 +4126,7 @@ function _build_lower_and_classify(
         geom_defs = geo.defs, geom_inline_vars, array_inline_vars,
         discrete_vars, pia_operand_vars, pia_operand_arrays,
         const_obs_vars, const_obs_arrays, mat_array_vars, recur_vars,
+        gated_geom_vars,
     )
 end
 
@@ -4409,24 +4495,44 @@ function _build_state_layout(
         end
         array_var_info_ext = copy(array_var_info)
         mat_blocks = Pair{String, Tuple{Vector{Int}, Vector{Int}}}[]
+        # A gated live-field geometry observed has no inline path to fall back
+        # on (`_move_gated_geometry_inline_vars!`), so each skip below that
+        # leaves a reader of it is refused with its reason. One whose equation
+        # the range restriction dropped, or that the tile does not need, has
+        # no reader here.
+        gated_skips = Dict{String, String}()
+        skip!(name, why) = name in cls.gated_geom_vars && (gated_skips[name] = why)
         for name in sort(collect(cls.mat_array_vars))
             haskey(mat_defs_raw, name) || continue
-            haskey(array_var_info_ext, name) && continue   # never shadow a state
+            if haskey(array_var_info_ext, name)    # never shadow a state
+                skip!(name, "its name is also a state's")
+                continue
+            end
             v = model.variables[name]
             dims = _materialized_obs_dims(
                 mat_defs_raw[name], v.shape,
                 index_sets, parts.derived_extents
             )
-            (dims === nothing || isempty(dims) || any(d -> d <= 0, dims)) && continue
+            if dims === nothing || isempty(dims) || any(d -> d <= 0, dims)
+                skip!(name, "its extents do not resolve to positive sizes at build time")
+                continue
+            end
             # A declared shape of a different rank than the producer's output
             # would make the cell keys ambiguous — leave it inlined.
-            (v.shape !== nothing && length(v.shape) != length(dims)) && continue
+            if v.shape !== nothing && length(v.shape) != length(dims)
+                skip!(
+                    name, "its declared shape has rank $(length(v.shape)) but its " *
+                        "definition produces rank $(length(dims))"
+                )
+                continue
+            end
             box = _range_observed_box(_range_spec_now(), name, dims)
             box === nothing && continue
             mat_dims[name] = dims
             array_var_info_ext[name] = box
             push!(mat_blocks, name => array_var_info_ext[name])
         end
+        _refuse_unmaterialized_gated(gated_skips)
         var_map_ext = _layout_extend(var_map, mat_blocks)
     end
 

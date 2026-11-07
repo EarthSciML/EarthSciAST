@@ -291,6 +291,57 @@
    }
   },
   {
+   "id": "forcing_gated_overlap_regrid",
+   "kind": "forcing",
+   "document": "fixtures/forcing_gated_overlap_regrid.esm",
+   "options": {},
+   "n_states": 6,
+   "state_layout": [
+    {
+     "name": "Regrid.u",
+     "offset": 0,
+     "shape": [
+      2,
+      3
+     ]
+    }
+   ],
+   "parameters": [
+    {
+     "name": "Regrid.kd",
+     "default": 0.1
+    }
+   ],
+   "forcing_slots": [
+    {
+     "name": "Regrid.F",
+     "shape": [
+      1,
+      3
+     ],
+     "kind": "forcing"
+    }
+   ],
+   "replace_slot": "Regrid.F",
+   "stale_control": {
+    "rust": false,
+    "julia": false
+   },
+   "covers": [
+    2,
+    5,
+    6
+   ],
+   "note": "A gated conservative overlap regrid (overlap join on ring envelopes plus a sliver filter) whose source field is data-fed, read through a flattened cell-to-row reindex (floor of a quotient of the loop counter) and spread over a column with a surface-only ifelse. The Problem's reference lifts the regrid into a per-refresh cache; the program has no such cut and must fill it from the forcing set on every call. Julia's rhs_program used to refuse this under native (issue #665).",
+   "default_forcing": {
+    "Regrid.F": [
+     1.0,
+     1.0,
+     1.0
+    ]
+   }
+  },
+  {
    "id": "runtime_array_parameters",
    "kind": "array_parameters",
    "document": "../shaped_parameter_broadcast/fixtures/shaped_parameter_scalar_default.esm",

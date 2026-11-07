@@ -70,18 +70,30 @@ function _pstamp_comparable(x::AbstractArray, n::Base.RefValue{Int})
     return true
 end
 
-# A new stamp for `p`, written into the previous stamp `old` when both are
-# vectors of the same bits type and length: `old` is a private snapshot no one
-# else holds, so a tier that steps through parameter vectors (a solver's
-# sensitivity sweep, a workspace alternating two `p`s) restamps without
-# allocating.
-@inline _pstamp_reuse(old, p) = _pstamp(p)
-@inline function _pstamp_reuse(old, p::Vector{T}) where {T}
-    if isbitstype(T) && old isa Vector{T} && length(old) == length(p)
-        copyto!(old, p)
+# A new stamp for `p`, written into the previous stamp `old` when it can be:
+# `old` is a private snapshot no one else holds, so a tier that steps through
+# parameter vectors (a solver's sensitivity sweep, a workspace alternating two
+# `p`s) restamps without allocating. `_pprimal_restamp` below is the same for
+# the primal stamp.
+@inline _pstamp_reuse(old, p) = _restamp(old, p, identity)
+
+# The one restamp both stamps share. `f` is what the stamp holds of `p`
+# (`identity`, or `_pprimal`). `old` is reused when `p` is a vector whose
+# stamp is a vector of one bits type `S` (`_stamp_eltype`), `old` is that
+# vector at `p`'s length, and `p` is within the `_PSTAMP_MAX_ELEMS` a stamp may
+# hold; every other case takes a fresh `_pstamp`, which refuses what cannot be
+# stamped.
+@inline _restamp(old, p, f::F) where {F} = _pstamp(f(p))
+@inline function _restamp(old, p::Vector{T}, f::F) where {T, F}
+    S = _stamp_eltype(f, T)
+    if S !== nothing && isbitstype(S) && old isa Vector{S} &&
+            length(old) == length(p) && length(p) <= _PSTAMP_MAX_ELEMS
+        @inbounds for i in eachindex(p)
+            old[i] = f(p[i])
+        end
         return old
     end
-    return _pstamp(p)
+    return _pstamp(f(p))
 end
 
 @inline _pstamp_same(s, p) =
@@ -131,6 +143,15 @@ function _pvalue_same(a::AbstractArray, b::AbstractArray)
     end
     return true
 end
+
+# A new primal stamp for `p`, reusing `old` on the terms `_restamp` states.
+@inline _pprimal_restamp(old, p) = _restamp(old, p, _pprimal)
+
+# The element type of the stamp `f` makes of a vector with elements of type
+# `T`, or `nothing` when it is not one fixed type.
+_stamp_eltype(::typeof(identity), ::Type{T}) where {T} = T
+_stamp_eltype(::typeof(_pprimal), ::Type{T}) where {T <: Number} = typeof(_value(zero(T)))
+_stamp_eltype(::typeof(_pprimal), ::Type) = nothing
 
 # ---- The forcing epoch --------------------------------------------------------
 #
