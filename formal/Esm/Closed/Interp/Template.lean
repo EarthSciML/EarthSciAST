@@ -10,8 +10,10 @@ and the four arithmetic operations, instead of the `fn` primitives of §9.2.
 This file states that the template expansions compute what the primitives
 compute.
 
-The model has no AST evaluator for `faq` yet, so the three templates are
-written below as Lean functions that mirror the AST bodies term for term:
+The three templates are written below as Lean functions that mirror the AST
+bodies term for term. They are the proof route for the theorems about the
+generated ASTs themselves (`Esm/Closed/Interp/TemplateAst.lean`), whose
+evaluation (`Esm.Expr.eval`) is shown to reduce to these functions:
 
 * `ix l k` is `index(l, k)` (1-based, NaN out of range), `ix2` its rank-2 form;
 * `faqSum n f` is a `faq` with `reduce: "+"` over `k ∈ [1, n]`, folded in

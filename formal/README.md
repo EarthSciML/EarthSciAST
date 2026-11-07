@@ -18,6 +18,8 @@ It serves two purposes:
 |---|---|
 | `lean-toolchain`, `lakefile.toml` | Pinned Lean toolchain and Mathlib version |
 | `Esm/` | The model, one module per spec area |
+| `Esm/Expr/` | The Expression AST, its evaluator and template expansion (the slice built so far is listed in `Core.lean`) |
+| `Esm/Lib/` | Standard-library templates as ASTs, generated from `lib/*.esm` by `scripts/gen-lib-templates.py` (`--check` runs in CI) |
 | `Adapter/Main.lean` | The `esm-lean` executable used by the conformance runners |
 | `inventory/*.json` | Every normative (`MUST`) clause of the two spec files, classified |
 | `properties/*.json` | The property registry, one file per spec area: what is claimed about which clauses, and its status (`properties.json` lists verified checkers) |
