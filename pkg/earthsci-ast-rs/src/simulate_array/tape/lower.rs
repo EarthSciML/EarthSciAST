@@ -102,14 +102,18 @@ struct IndicatorCount<'e> {
     x: &'e Expr,
     lo: i64,
     hi: i64,
+    /// The body is `ifelse(cond, 0, 1)`: the entries that FAIL the
+    /// comparison are counted, `(hi - lo + 1) - count`.
+    complement: bool,
 }
 
 /// The rank-0 `faq` `sum_{k=lo..hi} ifelse(axis[k] REL x, 1, 0)`, REL one of
-/// `<= < >= >` with the indexed axis on either side, or `None`.
+/// `<= < >= >` with the indexed axis on either side, or its complement
+/// `ifelse(axis[k] REL x, 0, 1)`; otherwise `None`.
 ///
 /// The guard is the algebraic shape and nothing else: one statically ranged
 /// contracted index, a `+` reduction, no `filter` or `join`, a body that is
-/// exactly the indicator (the literals 1 and 0, in that order), an axis read
+/// exactly the indicator (the literals 1 and 0, in either order), an axis read
 /// `index(A, k)` whose base `A` is a variable or an inline `const` and does
 /// not mention `k`, and a query that does not mention `k`. Every other shape
 /// is the general reduction's.
@@ -139,9 +143,13 @@ fn detect_indicator_count<'e>(spec: &ArrayOpSpec<'e>) -> Option<IndicatorCount<'
         Expr::Integer(v) => *v as f64 == want,
         _ => false,
     };
-    if !lit(&ite.args[1], 1.0) || !lit(&ite.args[2], 0.0) {
+    let complement = if lit(&ite.args[1], 1.0) && lit(&ite.args[2], 0.0) {
+        false
+    } else if lit(&ite.args[1], 0.0) && lit(&ite.args[2], 1.0) {
+        true
+    } else {
         return None;
-    }
+    };
     let Expr::Operator(cmp) = &ite.args[0] else {
         return None;
     };
@@ -182,6 +190,7 @@ fn detect_indicator_count<'e>(spec: &ArrayOpSpec<'e>) -> Option<IndicatorCount<'
         x,
         lo,
         hi,
+        complement,
     })
 }
 
@@ -6857,11 +6866,22 @@ impl<'m> TapeBuilder<'m> {
             out,
         };
         self.emit(instr, sec);
-        Ok(Some(if scalar {
+        let count = if scalar {
             LV::Scalar(out)
         } else {
             LV::Arr(out)
-        }))
+        };
+        if !ic.complement {
+            return Ok(Some(count));
+        }
+        // Each term of the oracle's sum is 0 or 1, so the sum is an integer
+        // below 2^53 reached exactly, and so is `n - count`: the two are the
+        // same binary64 (both +0.0 when nothing is counted).
+        Ok(Some(self.emit_bin(
+            BinCode::Sub,
+            LV::Lit(f64::from(n)),
+            count,
+        )?))
     }
 
     /// `eval_makearray` mirror (wholesale): the bounding-box assembly around

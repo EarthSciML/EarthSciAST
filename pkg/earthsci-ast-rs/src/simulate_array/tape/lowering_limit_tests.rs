@@ -75,7 +75,7 @@ fn doc(name: &str, variables: Value, equations: Vec<Value>, domain: Option<Value
 /// executor, over the fused and the unfused program, write the per-cell
 /// oracle's `dy` bit for bit. Returns the fused program and the unfused one's
 /// length.
-fn oracle_ab(doc: Value) -> (TapeProgram, usize) {
+pub(super) fn oracle_ab(doc: Value) -> (TapeProgram, usize) {
     let file = crate::parse::load_string(&doc.to_string()).expect("fixture document loads");
     let env = crate::precision_infer::env_of_file(&file).expect("precision environment");
     let file = crate::precision_infer::annotated(&file)
@@ -144,7 +144,7 @@ fn oracle_ab(doc: Value) -> (TapeProgram, usize) {
 
 /// [`oracle_ab`] at two grid sizes, requiring the same lowered program length
 /// (the unfused one: fusion's grouping may differ with the box size).
-fn flat_in_n(make: impl Fn(i64) -> Value, small: i64, large: i64) -> TapeProgram {
+pub(super) fn flat_in_n(make: impl Fn(i64) -> Value, small: i64, large: i64) -> TapeProgram {
     let (_, a) = oracle_ab(make(small));
     let (b, b_len) = oracle_ab(make(large));
     assert_eq!(
@@ -154,7 +154,7 @@ fn flat_in_n(make: impl Fn(i64) -> Value, small: i64, large: i64) -> TapeProgram
     b
 }
 
-fn count(prog: &TapeProgram, opcode: &str) -> usize {
+pub(super) fn count(prog: &TapeProgram, opcode: &str) -> usize {
     prog.instrs.iter().filter(|i| i.opcode() == opcode).count()
 }
 
@@ -640,7 +640,7 @@ fn query() -> Value {
 }
 
 /// The `Instr::Count`s of `prog`, as `(rel, sorted)`.
-fn counts(prog: &TapeProgram) -> Vec<(CountRel, bool)> {
+pub(super) fn counts(prog: &TapeProgram) -> Vec<(CountRel, bool)> {
     prog.instrs
         .iter()
         .filter_map(|i| match i {
@@ -683,6 +683,39 @@ fn counted_bracket_every_relation_and_axis() {
             );
             assert_eq!(count(&prog, "Reduce"), 0, "{axis} {cmp}: no fold is left");
         }
+    }
+}
+
+/// The complement `ifelse(cmp, 0, 1)` (searchsorted's `not(>=)` form) is the
+/// window length minus the count of `cmp`: both are integers summed exactly,
+/// so the subtraction is the fold's own value, including under a NaN query,
+/// where every term is 1 (the mirrored relation would count 0 there).
+#[test]
+fn counted_bracket_complement() {
+    for axis in ["zc", "zp", "w"] {
+        for (cmp, rel) in [(">=", CountRel::Ge), ("<=", CountRel::Le), ("<", CountRel::Lt)] {
+            let make = |n: i64| {
+                count_doc(
+                    n,
+                    op("ifelse", vec![op(cmp, vec![axis_at(axis), query()]), json!(0), json!(1)]),
+                )
+            };
+            let prog = flat_in_n(make, 5, 37);
+            assert_eq!(counts(&prog), vec![(rel, axis == "zc")], "{axis} {cmp}");
+            assert_eq!(count(&prog, "Reduce"), 0, "{axis} {cmp}: no fold is left");
+        }
+    }
+    let nan = op(
+        "/",
+        vec![
+            op("-", vec![query(), query()]),
+            op("-", vec![query(), query()]),
+        ],
+    );
+    for axis in ["zc", "w"] {
+        let body = op("ifelse", vec![op(">=", vec![axis_at(axis), nan.clone()]), json!(0), json!(1)]);
+        let prog = oracle_ab(count_doc(9, body)).0;
+        assert_eq!(counts(&prog).len(), 1, "{axis}: NaN query");
     }
 }
 
@@ -753,10 +786,9 @@ fn counted_bracket_near_misses_decline() {
         d
     };
     let cases: Vec<(&str, Value)> = vec![
-        // The complement: under a NaN query not the count of the mirrored
-        // relation, and not a count of anything this instruction states.
-        ("complement", plain(ite(cmp("<="), json!(0), json!(1)))),
         ("weight 2", plain(ite(cmp("<="), json!(2), json!(0)))),
+        ("complement weight 2", plain(ite(cmp("<="), json!(0), json!(2)))),
+        ("constant indicator", plain(ite(cmp("<="), json!(1), json!(1)))),
         ("equality", plain(indicator(cmp("==")))),
         (
             "query reads k",
