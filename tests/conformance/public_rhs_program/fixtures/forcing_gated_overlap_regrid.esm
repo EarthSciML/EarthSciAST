@@ -1,0 +1,666 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "forcing_gated_overlap_regrid",
+    "description": "A gated conservative overlap regrid (join.overlap on ring envelopes plus a sliver filter A_ij > 1e-12, the conservative_overlap_*_gated template shape) whose source field F is data-fed, so it is a forcing slot of the program and the gated apply must read it from the forcing set on every call. F is a 1 x 3 loader field read through a flattened cell-to-row reindex, PHI[c] = F[floor((c-1)/3)+1, c-3 floor((c-1)/3)] (1 + 0.1 src_poly[c,1,1]), as reseact's NEI emissions read theirs. The regridded field F_tgt is spread over a 3-level column with a surface-only ifelse (Fm) and drives D(u[j,k]) = Fm[j,k] - kd u[j,k]. Source cells: unit squares at x = 0, 1.5, 3; targets [0,2] and [3.5,4.5]; surviving overlaps (1,1) = 1, (2,1) = 0.5, (3,2) = 0.5. Issue #665: Julia rhs_program used to refuse this under native. The ring pitch and the sliver tolerance are literals, not parameters: the Problem's reference fills its per-refresh cache with the parameters it was built with, while the program reads p on every call.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-11-07T00:00:00Z",
+    "tags": [
+      "conformance",
+      "public_rhs_program"
+    ]
+  },
+  "index_sets": {
+    "src_cells": {
+      "kind": "interval",
+      "size": 3
+    },
+    "tgt_cells": {
+      "kind": "interval",
+      "size": 2
+    },
+    "verts": {
+      "kind": "interval",
+      "size": 4
+    },
+    "coord": {
+      "kind": "interval",
+      "size": 2
+    },
+    "fr": {
+      "kind": "interval",
+      "size": 1
+    },
+    "fc": {
+      "kind": "interval",
+      "size": 3
+    },
+    "lev": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "data_sources": {
+    "Src": {
+      "kind": "static",
+      "source": {
+        "url_template": "{unused_placeholder}"
+      }
+    }
+  },
+  "models": {
+    "Regrid": {
+      "variables": {
+        "kd": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.1
+        },
+        "F": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "shape": [
+            "fr",
+            "fc"
+          ],
+          "update": {
+            "kind": "data",
+            "source": "Src",
+            "from": {
+              "file_variable": "F"
+            }
+          }
+        },
+        "PHI": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "src_cells"
+          ]
+        },
+        "src_poly": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "src_cells",
+            "verts",
+            "coord"
+          ]
+        },
+        "tgt_poly": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "tgt_cells",
+            "verts",
+            "coord"
+          ]
+        },
+        "A_ij": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "src_cells",
+            "tgt_cells"
+          ]
+        },
+        "A_j": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "tgt_cells"
+          ]
+        },
+        "F_tgt": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "tgt_cells"
+          ]
+        },
+        "Fm": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "tgt_cells",
+            "lev"
+          ]
+        },
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "tgt_cells",
+            "lev"
+          ],
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": "src_poly",
+          "rhs": {
+            "op": "faq",
+            "semiring": "sum_product",
+            "args": [],
+            "output_idx": [
+              "c",
+              "v",
+              "k"
+            ],
+            "ranges": {
+              "c": {
+                "from": "src_cells"
+              },
+              "v": {
+                "from": "verts"
+              },
+              "k": {
+                "from": "coord"
+              }
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<",
+                  "args": [
+                    "k",
+                    2
+                  ]
+                },
+                {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "-",
+                          "args": [
+                            "c",
+                            1
+                          ]
+                        },
+                        1.5
+                      ]
+                    },
+                    {
+                      "op": "ifelse",
+                      "args": [
+                        {
+                          "op": "<",
+                          "args": [
+                            "v",
+                            2
+                          ]
+                        },
+                        0.0,
+                        {
+                          "op": "ifelse",
+                          "args": [
+                            {
+                              "op": "<",
+                              "args": [
+                                "v",
+                                4
+                              ]
+                            },
+                            1.0,
+                            0.0
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "ifelse",
+                  "args": [
+                    {
+                      "op": "<",
+                      "args": [
+                        "v",
+                        3
+                      ]
+                    },
+                    0.0,
+                    1.0
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "tgt_poly",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  2,
+                  0
+                ],
+                [
+                  2,
+                  1
+                ],
+                [
+                  0,
+                  1
+                ]
+              ],
+              [
+                [
+                  3.5,
+                  0
+                ],
+                [
+                  4.5,
+                  0
+                ],
+                [
+                  4.5,
+                  1
+                ],
+                [
+                  3.5,
+                  1
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "lhs": "A_ij",
+          "rhs": {
+            "op": "faq",
+            "semiring": "sum_product",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "src_cells"
+              },
+              "j": {
+                "from": "tgt_cells"
+              }
+            },
+            "expr": {
+              "op": "polygon_intersection_area",
+              "manifold": "planar",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "src_poly",
+                    "i"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "tgt_poly",
+                    "j"
+                  ]
+                }
+              ]
+            },
+            "join": [
+              {
+                "overlap": {
+                  "src_env": [
+                    "src_poly"
+                  ],
+                  "tgt_env": [
+                    "tgt_poly"
+                  ],
+                  "eps": 1e-09
+                }
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "A_j",
+          "rhs": {
+            "op": "faq",
+            "semiring": "sum_product",
+            "args": [],
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "src_cells"
+              },
+              "j": {
+                "from": "tgt_cells"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "A_ij",
+                "i",
+                "j"
+              ]
+            },
+            "join": [
+              {
+                "overlap": {
+                  "src_env": [
+                    "src_poly"
+                  ],
+                  "tgt_env": [
+                    "tgt_poly"
+                  ],
+                  "eps": 1e-09
+                }
+              }
+            ],
+            "filter": {
+              "op": ">",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "A_ij",
+                    "i",
+                    "j"
+                  ]
+                },
+                1e-12
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "PHI",
+          "rhs": {
+            "op": "faq",
+            "semiring": "sum_product",
+            "args": [],
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "src_cells"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "F",
+                    {
+                      "op": "+",
+                      "args": [
+                        {
+                          "op": "floor",
+                          "args": [
+                            {
+                              "op": "/",
+                              "args": [
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "c",
+                                    1
+                                  ]
+                                },
+                                3
+                              ]
+                            }
+                          ]
+                        },
+                        1
+                      ]
+                    },
+                    {
+                      "op": "-",
+                      "args": [
+                        "c",
+                        {
+                          "op": "*",
+                          "args": [
+                            3,
+                            {
+                              "op": "floor",
+                              "args": [
+                                {
+                                  "op": "/",
+                                  "args": [
+                                    {
+                                      "op": "-",
+                                      "args": [
+                                        "c",
+                                        1
+                                      ]
+                                    },
+                                    3
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "+",
+                  "args": [
+                    1.0,
+                    {
+                      "op": "*",
+                      "args": [
+                        0.1,
+                        {
+                          "op": "index",
+                          "args": [
+                            "src_poly",
+                            "c",
+                            1,
+                            1
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "F_tgt",
+          "rhs": {
+            "op": "faq",
+            "semiring": "sum_product",
+            "args": [],
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "src_cells"
+              },
+              "j": {
+                "from": "tgt_cells"
+              }
+            },
+            "expr": {
+              "op": "/",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "A_ij",
+                        "i",
+                        "j"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "PHI",
+                        "i"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "A_j",
+                    "j"
+                  ]
+                }
+              ]
+            },
+            "join": [
+              {
+                "overlap": {
+                  "src_env": [
+                    "src_poly"
+                  ],
+                  "tgt_env": [
+                    "tgt_poly"
+                  ],
+                  "eps": 1e-09
+                }
+              }
+            ],
+            "filter": {
+              "op": ">",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "A_ij",
+                    "i",
+                    "j"
+                  ]
+                },
+                1e-12
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "Fm",
+          "rhs": {
+            "op": "faq",
+            "semiring": "sum_product",
+            "args": [],
+            "output_idx": [
+              "j",
+              "k"
+            ],
+            "ranges": {
+              "j": {
+                "from": "tgt_cells"
+              },
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<",
+                  "args": [
+                    "k",
+                    2
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "F_tgt",
+                    "j"
+                  ]
+                },
+                0.0
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "faq",
+            "semiring": "sum_product",
+            "args": [],
+            "output_idx": [
+              "j",
+              "k"
+            ],
+            "ranges": {
+              "j": {
+                "from": "tgt_cells"
+              },
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "Fm",
+                    "j",
+                    "k"
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    "kd",
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "j",
+                        "k"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

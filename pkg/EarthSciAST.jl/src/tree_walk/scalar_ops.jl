@@ -241,6 +241,17 @@ function _index_int(n::_Node)::Int
                 s *= _index_int(c[d])
             end
             return s
+        elseif (op === :floor || op === :ceil) && length(c) == 1
+            # A rounded quotient (`floor((c - 1) / NX)`), rounded the way the
+            # in-place walk rounds its floating-point value.
+            q = c[1]
+            if q.kind === _NK_OP && q.op === :/ && length(q.children) == 2
+                a, b = _index_int(q.children[1]), _index_int(q.children[2])
+                return op === :floor ? fld(a, b) : cld(a, b)
+            end
+            return _index_int(q)
+        elseif op === :mod && length(c) == 2
+            return mod(_index_int(c[1]), _index_int(c[2]))
         elseif op === :/
             return div(
                 _index_int(c[1]),

@@ -132,6 +132,21 @@ function _pvalue_same(a::AbstractArray, b::AbstractArray)
     return true
 end
 
+# A new primal stamp for `p`, written into the previous one `old` when `p` is a
+# vector of numbers and `old` a `Float64` vector of its length (a private
+# snapshot no one else holds), so a tier restamped on every change of a vector
+# `p` (a workspace alternating two parameter vectors) does not allocate.
+@inline _pprimal_restamp(old, p) = _pstamp(_pprimal(p))
+@inline function _pprimal_restamp(old, p::Vector{T}) where {T <: Real}
+    if old isa Vector{Float64} && length(old) == length(p) && _value(zero(T)) isa Float64
+        @inbounds for i in eachindex(p)
+            old[i] = _value(p[i])
+        end
+        return old
+    end
+    return _pstamp(_pprimal(p))
+end
+
 # ---- The forcing epoch --------------------------------------------------------
 #
 # A time-tier value may gather a LIVE forcing buffer (a `param_arrays` buffer or

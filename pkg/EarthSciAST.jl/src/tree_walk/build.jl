@@ -376,6 +376,42 @@ function _discover_geometry_vars(
     )
 end
 
+# ---- Stage: gated live-field geometry observeds → the materialized path ----
+# A live-field geometry observed (`inline_vars` above) whose definition holds a
+# `join` or `filter` aggregate (the `conservative_overlap_apply_gated` regrid
+# over a live source field) cannot be spliced into its reader: the
+# `index(obs, j)` beta-reduction declines an aggregate with a join or filter
+# (`index(aggregate) with join/filter`), and with no other whole-array route
+# the reader's equation is refused. `esm_problem` never meets this, because its
+# discrete-cadence cut lifts the observed into a per-refresh cache first; an
+# `rhs_program` build has no such cut (its forcing is an argument of every
+# call), so the observed stays inline (issue #665).
+#
+# Hand such an observed to the promoted-array-observed set instead, so the
+# compiled builds give it a buffer filled once per right-hand-side call
+# (`_collect_materialized_array_obs`), whose fill compiles the gated aggregate
+# on its own (live source gathers included, #657) and whose readers gather the
+# buffer. The interpreter inlines every array observed anyway, so nothing
+# changes there; an ungated live-field observed keeps the inline path.
+_has_gated_aggregate(e::ASTExpr) = _any_subexpr(e) do x
+    x isa OpExpr && (x.join !== nothing || x.join_gates !== nothing || x.filter !== nothing)
+end
+
+function _move_gated_geometry_inline_vars!(
+        geom_inline_vars::Set{String}, array_inline_vars::Set{String},
+        equations::Vector{Equation}
+    )
+    (isempty(geom_inline_vars) || _array_obs_inline_forced()) && return
+    for eq in equations
+        eq.lhs isa VarExpr || continue
+        name = (eq.lhs::VarExpr).name
+        (name in geom_inline_vars && _has_gated_aggregate(eq.rhs)) || continue
+        delete!(geom_inline_vars, name)
+        push!(array_inline_vars, name)
+    end
+    return
+end
+
 # ---- Stage: promoted array observeds (shape-promotion inlining) ----
 # An array-shaped observed defined by a `faq` is inlined into its readers
 # via the same index beta-reduction as a live-field geometry observed
@@ -3989,6 +4025,7 @@ function _build_lower_and_classify(
             union!(geo.setup_vars, const_mat_vars)
         end
     end
+    _move_gated_geometry_inline_vars!(geom_inline_vars, array_inline_vars, equations)
 
     # ---- polygon_intersection_area fused-leaf operands (esm-spec §8.6.1) ----
     pia_operand_vars, pia_operand_arrays =

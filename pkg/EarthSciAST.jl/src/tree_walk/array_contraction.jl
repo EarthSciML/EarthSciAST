@@ -1254,7 +1254,7 @@ end
 @inline function _ac_mask_refresh!(m::_ACMask, tabs, du, u, p, t)
     _pprimal_same(m.stamp, p) && return nothing
     m.f(du, u, p, t, tabs, 1, 1)
-    m.stamp = _pstamp(_pprimal(p))
+    m.stamp = _pprimal_restamp(m.stamp, p)
     m.fills += 1
     return nothing
 end

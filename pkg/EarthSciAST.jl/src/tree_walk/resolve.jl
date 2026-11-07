@@ -1624,16 +1624,28 @@ _subscript_is_runtime(e::ASTExpr, const_arrays::AbstractDict) =
 
 # True iff a run-time subscript is built only from loop counters — a bound
 # output-index symbol of a symbolic resolve, or a contraction loop variable
-# (`__esm_lv_*`) — numeric literals and `+ - *`: what a gather can evaluate
-# from the counters alone (`_index_int`). A subscript that reads a state, an
-# observed, a parameter, `t` or an array is not one.
-_subscript_from_counters(e::VarExpr, bound_syms::Set{String}) =
+# (`__esm_lv_*`) — numeric literals, `+ - *` and `mod`, and a quotient under
+# `floor` or `ceil`: what a gather can evaluate from the counters alone
+# (`_index_int`). The rounded quotient is the cell-to-row reindex a flattened
+# loader field takes (`F[floor((c - 1) / NX) + 1, c - NX * floor((c - 1) / NX)]`,
+# reseact's NEI emissions, issue #665); a bare quotient is not an integer and
+# stays refused. A subscript that reads a state, an observed, a parameter, `t`
+# or an array is not one.
+_subscript_from_counters(e::VarExpr, bound_syms::Set{String}, ::Bool = false) =
     e.name in bound_syms || startswith(e.name, _LOOPVAR_PREFIX)
-_subscript_from_counters(::Union{NumExpr, IntExpr}, ::Set{String}) = true
-_subscript_from_counters(e::OpExpr, bound_syms::Set{String}) =
-    (e.op == "+" || e.op == "-" || e.op == "*") &&
-    all(a -> _subscript_from_counters(a, bound_syms), e.args)
-_subscript_from_counters(::ASTExpr, ::Set{String}) = false
+_subscript_from_counters(::Union{NumExpr, IntExpr}, ::Set{String}, ::Bool = false) = true
+function _subscript_from_counters(e::OpExpr, bound_syms::Set{String}, rounded::Bool = false)
+    op = e.op
+    if op == "+" || op == "-" || op == "*" || (op == "mod" && length(e.args) == 2)
+        return all(a -> _subscript_from_counters(a, bound_syms, rounded), e.args)
+    elseif (op == "floor" || op == "ceil") && length(e.args) == 1
+        return _subscript_from_counters(e.args[1], bound_syms, true)
+    elseif op == "/" && rounded && length(e.args) == 2
+        return all(a -> _subscript_from_counters(a, bound_syms, true), e.args)
+    end
+    return false
+end
+_subscript_from_counters(::ASTExpr, ::Set{String}, ::Bool = false) = false
 
 # ── Guarded out-of-range reads ───────────────────────────────────────────────
 # esm-spec evaluates `ifelse` lazily and `and` / `or` with short circuit, so a
