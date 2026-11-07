@@ -175,7 +175,8 @@ def constVal : Const → Except EvalError (Val α)
       | .error e => .error e
 
 /-- The index values of a dense range `[a, b]`, in increasing order. -/
-def indices (a b : Int) : List Int := (List.range (b + 1 - a).toNat).map (a + ·)
+def indices (a b : Int) : List Int :=
+  (List.range (b + 1 - a).toNat).map (fun i : Nat => a + (i : Int))
 
 /-- The evaluable ops of the slice whose operands are all evaluated (every op
 but `ifelse`). -/

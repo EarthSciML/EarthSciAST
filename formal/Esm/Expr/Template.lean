@@ -29,6 +29,8 @@ string values, so they are not substitution sites. Nested
 
 namespace Esm.Expr
 
+open Esm.Closed (Scalar)
+
 /-- A match-less `expression_templates` entry (§9.6.1). -/
 structure Template where
   params : List String
@@ -82,5 +84,20 @@ def expand (t : Template) (σ : Bindings) : Except ExpandError Ast :=
     match σ.find? (fun b => !(t.params.contains b.1) || σ.countP (·.1 == b.1) ≠ 1) with
     | some b => .error (.extraBinding b.1)
     | none => .ok (subst σ t.body)
+
+inductive ApplyError where
+  | expand (e : ExpandError)
+  | eval (e : EvalError)
+
+/-- The value of an `apply_expression_template` node: expand, then evaluate
+the expansion (§9.6.4 rule 2: a reference denotes its expansion). -/
+def evalApply {α : Type} [Scalar α] [Lits α] (t : Template) (σ : Bindings) (env : Env α) :
+    Except ApplyError (Val α) :=
+  match expand t σ with
+  | .error e => .error (.expand e)
+  | .ok a =>
+    match eval a env with
+    | .ok v => .ok v
+    | .error e => .error (.eval e)
 
 end Esm.Expr
