@@ -243,6 +243,17 @@ fn run_fixture(fixture_dir: &Path, total_scenarios: &mut usize, total_errors: &m
                 &label,
             );
         }
+        #[cfg(feature = "solve")]
+        if fn_name.starts_with("interp.") {
+            template_form::check_scenario(
+                &fn_name,
+                scenario["inputs"]
+                    .as_array()
+                    .expect("scenario.inputs is array"),
+                expected_to_f64(&scenario["expected"]),
+                &format!("{}::{sname}", expected.display()),
+            );
+        }
         let actual = evaluate_closed_function(&fn_name, &inputs).unwrap_or_else(|e| {
             panic!(
                 "{}::{sname}: closed-function dispatch errored unexpectedly: {e}",
@@ -405,4 +416,185 @@ fn unknown_closed_function_via_dispatch() {
     let err =
         evaluate_closed_function("datetime.fortnight", &[ClosedArg::Scalar(0.0)]).unwrap_err();
     assert_eq!(err.code, "unknown_closed_function");
+}
+
+/// The `interp.*` scenarios through the pure-AST templates of
+/// `lib/interp.esm`: per success scenario, a document that imports the
+/// library and applies the template with the scenario's axes and tables as
+/// `const` arrays and each axis length as the integer parameter, evaluated by
+/// the interpreter and by the strict native tape. Both must give the
+/// scenario's expected value bit for bit (NaN matching NaN).
+///
+/// Each query is taken twice: as a literal in the document (so the build may
+/// fold the whole lookup), and as a state the probe sets (so the lookup runs
+/// at evaluation time, and a non-finite query, which no literal can carry,
+/// is covered too).
+#[cfg(feature = "solve")]
+mod template_form {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    use earthsci_ast::simulate_array::ArrayCompiled;
+    use earthsci_ast::{LoadOptions, load_string_with_options};
+    use serde_json::{Value, json};
+
+    use super::{expected_to_f64, has_non_finite_string};
+
+    fn repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    /// The template name and the parameters the fixture's inputs bind, in
+    /// input order (the axis lengths come from the arrays, see [`lengths`]).
+    fn signature(fn_name: &str) -> (&'static str, &'static [&'static str]) {
+        match fn_name {
+            "interp.searchsorted" => ("searchsorted", &["x", "xs"]),
+            "interp.linear" => ("linear", &["table", "axis", "x"]),
+            "interp.bilinear" => ("bilinear", &["table", "axis_x", "axis_y", "x", "y"]),
+            other => panic!("no template for {other}"),
+        }
+    }
+
+    fn is_query(param: &str) -> bool {
+        matches!(param, "x" | "y")
+    }
+
+    fn array_len(v: &Value) -> i64 {
+        v.as_array().expect("an array input").len() as i64
+    }
+
+    /// The axis-length bindings: `n` from the axis (searchsorted's `xs`,
+    /// linear's `axis`), `nx`/`ny` from the bilinear axes.
+    fn lengths(fn_name: &str, inputs: &[Value]) -> Vec<(&'static str, i64)> {
+        match fn_name {
+            "interp.searchsorted" => vec![("n", array_len(&inputs[1]))],
+            "interp.linear" => vec![("n", array_len(&inputs[1]))],
+            "interp.bilinear" => vec![("nx", array_len(&inputs[1])), ("ny", array_len(&inputs[2]))],
+            _ => unreachable!(),
+        }
+    }
+
+    /// The document, with each query either a literal (`as_state = false`) or
+    /// a state of the same name with `D(q) = 0`.
+    fn document(fn_name: &str, inputs: &[Value], as_state: bool) -> String {
+        let (template, params) = signature(fn_name);
+        let mut bindings = serde_json::Map::new();
+        let mut variables = serde_json::Map::new();
+        let mut equations = Vec::new();
+        for (param, input) in params.iter().zip(inputs) {
+            let bound = if input.is_array() {
+                json!({"op": "const", "args": [], "value": input})
+            } else if as_state {
+                let q = format!("q_{param}");
+                variables.insert(q.clone(), json!({"type": "unknown", "default": 0.0}));
+                equations.push(json!({"lhs": {"op": "D", "args": [q], "wrt": "t"}, "rhs": 0.0}));
+                Value::String(q)
+            } else {
+                assert!(is_query(param), "{param}: a scalar input is a query");
+                input.clone()
+            };
+            bindings.insert((*param).to_string(), bound);
+        }
+        for (name, n) in lengths(fn_name, inputs) {
+            bindings.insert(name.to_string(), json!(n));
+        }
+        variables.insert("y".into(), json!({"type": "unknown", "default": 0.0}));
+        equations.push(json!({
+            "lhs": {"op": "D", "args": ["y"], "wrt": "t"},
+            "rhs": {"op": "apply_expression_template", "args": [], "name": template,
+                    "bindings": bindings}
+        }));
+        json!({
+            "esm": "1.2.0",
+            "metadata": {"name": "interp_template_scenario", "authors": ["test"]},
+            "models": {"M": {
+                "expression_template_imports": [{"ref": "lib/interp.esm"}],
+                "variables": variables,
+                "equations": equations
+            }}
+        })
+        .to_string()
+    }
+
+    fn same_bits(a: f64, b: f64) -> bool {
+        (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits()
+    }
+
+    fn query_value(v: &Value) -> f64 {
+        expected_to_f64(v)
+    }
+
+    pub(super) fn check_scenario(fn_name: &str, inputs: &[Value], expected: f64, label: &str) {
+        let (_, params) = signature(fn_name);
+        // An axis or table entry no document can carry has no template form.
+        if inputs
+            .iter()
+            .any(|v| v.is_array() && has_non_finite_string(v))
+        {
+            return;
+        }
+        let literal_ok = !inputs.iter().any(has_non_finite_string);
+        for as_state in [false, true] {
+            if !as_state && !literal_ok {
+                continue;
+            }
+            let form = if as_state {
+                "state query"
+            } else {
+                "literal query"
+            };
+            let doc = document(fn_name, inputs, as_state);
+            let options = LoadOptions {
+                base_path: Some(repo_root()),
+                ..Default::default()
+            };
+            let file = load_string_with_options(&doc, &options)
+                .unwrap_or_else(|e| panic!("{label} ({form}): load: {e}"));
+            let compiled = ArrayCompiled::from_file(&file)
+                .unwrap_or_else(|e| panic!("{label} ({form}): compile: {e:?}"));
+            let report = compiled.debug_build_tape_report();
+            assert!(
+                report.fallbacks.is_empty(),
+                "{label} ({form}): rules left the tape: {:?}",
+                report.fallbacks
+            );
+            let names = compiled.state_variable_names().to_vec();
+            let slot = |bare: &str| {
+                names
+                    .iter()
+                    .position(|n| n == bare || n.split_once('.').map(|x| x.1) == Some(bare))
+                    .unwrap_or_else(|| panic!("{label}: no state {bare:?} in {names:?}"))
+            };
+            let mut u = vec![0.0; names.len()];
+            if as_state {
+                for (param, input) in params.iter().zip(inputs) {
+                    if !input.is_array() {
+                        u[slot(&format!("q_{param}"))] = query_value(input);
+                    }
+                }
+            }
+            let iy = slot("y");
+            let (oracle, _) = compiled.debug_eval_rhs(&u, 0.0, &HashMap::new(), true);
+            let mut taped = vec![0.0; names.len()];
+            let mut scratch = compiled
+                .debug_new_scratch_taped()
+                .unwrap_or_else(|e| panic!("{label} ({form}): strict native: {e}"));
+            compiled.debug_eval_rhs_into(
+                &u,
+                0.0,
+                &compiled.debug_resolve_params(&HashMap::new()),
+                &mut taped,
+                &mut scratch,
+                &mut Default::default(),
+            );
+            for (who, got) in [("interpreter", oracle[iy]), ("native", taped[iy])] {
+                assert!(
+                    same_bits(got, expected),
+                    "{label} ({form}, {who}): template gives {got:?} ({:#x}), expected {expected:?} ({:#x})",
+                    got.to_bits(),
+                    expected.to_bits()
+                );
+            }
+        }
+    }
 }

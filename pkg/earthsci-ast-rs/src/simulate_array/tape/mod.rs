@@ -77,6 +77,8 @@ mod exec;
 mod forcing_tests;
 mod fuse;
 mod geom;
+#[cfg(test)]
+mod interp_template_tests;
 mod ir;
 mod layout;
 mod lower;
