@@ -233,9 +233,15 @@ func cloneMapAny(m map[string]any) map[string]any {
 // Eager-expansion pre-pass (esm-spec §9.6.4 rule 3)
 // ---------------------------------------------------------------------------
 
+// expandMemo keys object nodes by map pointer identity. The walks expand
+// freshly instantiated template bodies, which become garbage once their result
+// is built, and Go may then hand a new map the same address; each entry
+// therefore holds its key map (`in`) so the address cannot be recycled while
+// the memo is live.
 type expandMemo map[uintptr]expandMemoEntry
 
 type expandMemoEntry struct {
+	in      map[string]any
 	out     any
 	changed bool
 }
@@ -313,10 +319,10 @@ func expandRefsShared(node any, named map[string]any, scope string, memo expandM
 				if err != nil {
 					return nil, false, err
 				}
-				memo[key] = expandMemoEntry{out: res, changed: true}
+				memo[key] = expandMemoEntry{in: n, out: res, changed: true}
 				return res, true, nil
 			}
-			memo[key] = expandMemoEntry{out: newnode, changed: newnode != nil && !mapPtrEqual(newnode, n)}
+			memo[key] = expandMemoEntry{in: n, out: newnode, changed: newnode != nil && !mapPtrEqual(newnode, n)}
 			return newnode, !mapPtrEqual(newnode, n), nil
 		}
 		var out map[string]any
@@ -333,10 +339,10 @@ func expandRefsShared(node any, named map[string]any, scope string, memo expandM
 			}
 		}
 		if out == nil {
-			memo[key] = expandMemoEntry{out: n, changed: false}
+			memo[key] = expandMemoEntry{in: n, out: n, changed: false}
 			return n, false, nil
 		}
-		memo[key] = expandMemoEntry{out: out, changed: true}
+		memo[key] = expandMemoEntry{in: n, out: out, changed: true}
 		return out, true, nil
 	}
 	return node, false, nil
@@ -417,7 +423,7 @@ func expandAllShared(node any, named map[string]any, scope string, memo expandMe
 			if err != nil {
 				return nil, false, err
 			}
-			memo[key] = expandMemoEntry{out: res, changed: true}
+			memo[key] = expandMemoEntry{in: n, out: res, changed: true}
 			return res, true, nil
 		}
 		var out map[string]any
@@ -434,10 +440,10 @@ func expandAllShared(node any, named map[string]any, scope string, memo expandMe
 			}
 		}
 		if out == nil {
-			memo[key] = expandMemoEntry{out: n, changed: false}
+			memo[key] = expandMemoEntry{in: n, out: n, changed: false}
 			return n, false, nil
 		}
-		memo[key] = expandMemoEntry{out: out, changed: true}
+		memo[key] = expandMemoEntry{in: n, out: out, changed: true}
 		return out, true, nil
 	}
 	return node, false, nil

@@ -499,25 +499,63 @@ describe('Closed function registry — interp scenarios through lib/interp.esm t
 // TypeScript checks the expansion, not its value (the template values are
 // checked in Julia, Python and Rust): the template import resolves, and each
 // right-hand side is the template body with every occurrence of its one
-// parameter `t` replaced — by each finite scenario instant as a literal, and
-// by a parameter, as a caller with a NaN or infinite instant would write it
-// (esm-spec §9.6.3 constraint 5).
+// parameter `t` replaced and every nested `civil_*` helper reference expanded
+// in turn (esm-spec §9.6.4 rule 2, §9.7.3) — `t` bound to each finite scenario
+// instant as a literal, and to a parameter, as a caller with a NaN or infinite
+// instant would write it (esm-spec §9.6.3 constraint 5).
 describe('Closed function registry — datetime scenarios through lib/calendar.esm templates', () => {
   const libraryPath = join(REPO_ROOT, 'lib', 'calendar.esm')
   const library = JSON.parse(readFileSync(libraryPath, 'utf-8'))
+  const templates: Record<string, { params: string[]; body: unknown }> =
+    library.expression_templates
 
-  // Test-local substitution oracle: every string other than an `op` name that
-  // equals `t` is replaced. The calendar templates carry no nested
-  // `apply_expression_template`, whose `name` would be exempt.
-  function substitute(body: unknown, t: unknown): unknown {
-    if (body === 't') return t
-    if (Array.isArray(body)) return body.map((v) => substitute(v, t))
+  // Test-local expansion oracle: every string other than an `op` name that is
+  // a parameter is replaced by its binding, and a nested
+  // `apply_expression_template` is replaced by its template's body expanded
+  // under its (already substituted) bindings.
+  function expand(body: unknown, bindings: Record<string, unknown>): unknown {
+    if (typeof body === 'string') return Object.hasOwn(bindings, body) ? bindings[body] : body
+    if (Array.isArray(body)) return body.map((v) => expand(v, bindings))
     if (body !== null && typeof body === 'object') {
+      const node = body as Record<string, unknown>
+      if (node.op === 'apply_expression_template') {
+        const inner: Record<string, unknown> = {}
+        for (const [k, v] of Object.entries(node.bindings as Record<string, unknown>)) {
+          inner[k] = expand(v, bindings)
+        }
+        return expand(templates[node.name as string]!.body, inner)
+      }
       const out: Record<string, unknown> = {}
-      for (const [k, v] of Object.entries(body)) out[k] = k === 'op' ? v : substitute(v, t)
+      for (const [k, v] of Object.entries(node)) out[k] = k === 'op' ? v : expand(v, bindings)
       return out
     }
     return body
+  }
+
+  function expandedRhs(name: string, instants: unknown[]): unknown[] {
+    const variables: Record<string, unknown> = {
+      tu: { type: 'parameter', default: 0.0, units: 's' },
+    }
+    instants.forEach((_, i) => {
+      variables[`out_${i}`] = { type: 'unknown' }
+    })
+    const doc = {
+      esm: '1.2.0',
+      metadata: { name: `datetime_${name}_template` },
+      models: {
+        Probe: {
+          expression_template_imports: [{ ref: libraryPath, only: [name] }],
+          variables,
+          equations: instants.map((t, i) => ({
+            lhs: `out_${i}`,
+            rhs: { op: 'apply_expression_template', args: [], name, bindings: { t } },
+          })),
+        },
+      },
+    }
+    const equations = (loadString(JSON.stringify(doc)).models!.Probe as Model).equations
+    expect(equations).toHaveLength(instants.length)
+    return equations.map((eq) => JSON.parse(JSON.stringify(eq.rhs)))
   }
 
   const names = [
@@ -531,9 +569,13 @@ describe('Closed function registry — datetime scenarios through lib/calendar.e
     'julian_day',
     'is_leap_year',
   ]
-  it('declares exactly the nine datetime.* templates, each of one parameter t', () => {
-    expect(Object.keys(library.expression_templates).sort()).toEqual([...names].sort())
-    for (const name of names) expect(library.expression_templates[name].params).toEqual(['t'])
+  it('declares the nine datetime.* templates and seconds_since_midnight, each of one parameter t', () => {
+    for (const name of [...names, 'seconds_since_midnight']) {
+      expect(templates[name]?.params, name).toEqual(['t'])
+    }
+    for (const name of Object.keys(templates)) {
+      if (![...names, 'seconds_since_midnight'].includes(name)) expect(name).toMatch(/^civil_/)
+    }
   })
 
   for (const name of names) {
@@ -545,34 +587,20 @@ describe('Closed function registry — datetime scenarios through lib/calendar.e
         .map((sc) => sc.inputs[0])
         .filter((v) => typeof v === 'number')
       instants.push('tu')
-      const variables: Record<string, unknown> = {
-        tu: { type: 'parameter', default: 0.0, units: 's' },
-      }
-      instants.forEach((_, i) => {
-        variables[`out_${i}`] = { type: 'unknown', units: '1' }
-      })
-      const doc = {
-        esm: '1.2.0',
-        metadata: { name: `datetime_${name}_template` },
-        models: {
-          Probe: {
-            expression_template_imports: [{ ref: libraryPath, only: [name] }],
-            variables,
-            equations: instants.map((t, i) => ({
-              lhs: `out_${i}`,
-              rhs: { op: 'apply_expression_template', args: [], name, bindings: { t } },
-            })),
-          },
-        },
-      }
-      const equations = (loadString(JSON.stringify(doc)).models!.Probe as Model).equations
-      expect(equations).toHaveLength(instants.length)
-      const body = library.expression_templates[name].body
-      equations.forEach((eq, i) => {
-        const got = JSON.parse(JSON.stringify(eq.rhs))
-        const want = JSON.parse(JSON.stringify(substitute(body, instants[i])))
+      expandedRhs(name, instants).forEach((got, i) => {
+        const want = JSON.parse(JSON.stringify(expand(templates[name]!.body, { t: instants[i] })))
         expect(got, `t = ${String(instants[i])}`).toEqual(want)
       })
     })
   }
+
+  it('expands seconds_since_midnight', () => {
+    const instants: unknown[] = [86399.5, 'tu']
+    expandedRhs('seconds_since_midnight', instants).forEach((got, i) => {
+      const want = JSON.parse(
+        JSON.stringify(expand(templates.seconds_since_midnight!.body, { t: instants[i] })),
+      )
+      expect(got, `t = ${String(instants[i])}`).toEqual(want)
+    })
+  })
 })

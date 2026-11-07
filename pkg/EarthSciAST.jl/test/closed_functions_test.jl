@@ -690,6 +690,32 @@ end
         end
     end
 
+    # `seconds_since_midnight` is the whole second of the day,
+    # 3600 hour + 60 minute + second of the `fn` forms, inside the domain, and
+    # NaN outside it.
+    @testset "seconds_since_midnight" begin
+        template = _cf_calendar_template("seconds_since_midnight")
+        instants = Set{Float64}(_CF_CALENDAR_EDGES)
+        for fdir in readdir(joinpath(_CF_FIX_ROOT, "datetime"))
+            spec = JSON3.read(read(joinpath(_CF_FIX_ROOT, "datetime", fdir, "expected.json"), String))
+            for sc in Iterators.flatten((spec.scenarios, spec.error_scenarios))
+                push!(instants, _decode_input(sc.inputs[1]))
+            end
+        end
+        for t in instants
+            want = if abs(t) < _CF_CALENDAR_DOMAIN
+                h, m, s = (Float64(evaluate_closed_function("datetime.$f", [t])) for f in ("hour", "minute", "second"))
+                h * 3600.0 + m * 60.0 + s
+            else
+                NaN
+            end
+            got = template(t)
+            ok = isequal(got, want)
+            ok || @info "seconds_since_midnight mismatch" t got want
+            @test ok
+        end
+    end
+
     # The template.esm fixture beside each expected.json (the document the
     # `datetime_templates` conformance tier runs in every binding) passes its
     # own inline tests, at tolerance 0, under the interpreter.

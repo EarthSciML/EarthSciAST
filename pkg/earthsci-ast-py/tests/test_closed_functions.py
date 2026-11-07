@@ -406,6 +406,33 @@ def test_datetime_scenarios_through_the_expanded_template(fixture_dir: Path):
     assert not failures, "Template mismatches:\n  " + "\n  ".join(failures)
 
 
+def test_seconds_since_midnight_template():
+    """``seconds_since_midnight`` of lib/calendar.esm is the whole second of
+    the day, ``3600 hour + 60 minute + second`` of the ``fn`` forms, on every
+    in-domain instant of the datetime fixtures and the domain edges, and NaN
+    outside the domain."""
+    rhs = _calendar_template_rhs("seconds_since_midnight")
+    instants: set[float] = set(_CALENDAR_DOMAIN_EDGES)
+    for fixture_dir in _DATETIME_FIXTURE_DIRS:
+        spec = json.loads((fixture_dir / "expected.json").read_text())
+        for sc in spec["scenarios"] + spec["error_scenarios"]:
+            instants.add(_decode_input(sc["inputs"][0]))
+    failures: list[str] = []
+    for t in sorted(instants, key=repr):
+        actual = _calendar_template_value(rhs, t)
+        if abs(t) < _CALENDAR_DOMAIN:
+            h, m, sec = (
+                float(evaluate_closed_function(f"datetime.{f}", [t]))
+                for f in ("hour", "minute", "second")
+            )
+            expected = h * 3600.0 + m * 60.0 + sec
+        else:
+            expected = float("nan")
+        if not _same_bits(actual, expected):
+            failures.append(f"t={t!r}: got={actual!r}, expected={expected!r}")
+    assert not failures, "seconds_since_midnight mismatches:\n  " + "\n  ".join(failures)
+
+
 def _load_error_fixtures() -> list[str]:
     return sorted(
         p.name
