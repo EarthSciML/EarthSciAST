@@ -1778,30 +1778,43 @@ function _resolve_const_array_gather(
     return NumExpr(Float64(vals[int_indices...]))
 end
 
-# A build-constant subscript as the integer it selects. One that holds a `faq`
-# — a comparison count, the bracket index of the interpolation templates
-# (lib/interp.esm) at a literal query — is a floating-point computation over
-# float data: it is resolved and evaluated with the float evaluator, as the run
-# time evaluates it, and only its final value is rounded to the subscript, as
-# the run-time gather rounds it. `_eval_const_int` reads every array entry as
-# an integer, which a comparison of float entries cannot take. Every other
-# subscript keeps `_eval_const_int`.
+# A build-constant subscript as the integer it selects, by `_eval_const_int`'s
+# integer arithmetic (`/` is `div`, every operand an integer). A `faq` in it — a
+# comparison count, the bracket index of the interpolation templates
+# (lib/interp.esm) at a literal query — is the one term that integer evaluator
+# cannot take, since it reads array entries as integers and a count compares
+# float entries: each such term is evaluated alone with the float evaluator, as
+# the run time evaluates it, and stands in the subscript as the literal it
+# evaluates to. A value that is not an integer is then refused exactly as that
+# literal written by hand would be.
 function _const_subscript_int(a::ASTExpr, const_arrays::AbstractDict)
-    _holds_faq(a) || return _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
-    r = _resolve_indices(
-        a, Dict{String, Tuple{Vector{Int}, Vector{Int}}}(), Dict{String, Int}(), const_arrays
-    )
-    v = _eval_node(_compile(r, Dict{String, Int}(), Set{Symbol}(), Dict{String, Any}()), Float64[], NamedTuple(), 0.0)
-    (isfinite(v) && abs(v) < 2.0^62) || throw(
-        TreeWalkError(
-            "E_TREEWALK_INDEX_NOT_CONST",
-            "a constant subscript evaluates to $(v), not an integer index"
-        )
-    )
-    return round(Int, v)
+    _holds_faq(a) && (a = _fold_faq_terms(a, const_arrays, IdDict{OpExpr, ASTExpr}()))
+    return _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
 end
 _holds_faq(::ASTExpr) = false
-_holds_faq(e::OpExpr) = e.op == "faq" || _anyof(_holds_faq, e.args)
+_holds_faq(e::OpExpr) = _is_faq_op(e.op) || _anyof(_holds_faq, e.args)
+
+# `e` with each `faq` sub-term replaced by the literal it evaluates to; the
+# nodes above one are copied, every other node is `e`'s own. Memoized by
+# identity, so a sub-term shared by reference is evaluated once.
+function _fold_faq_terms(e::ASTExpr, const_arrays::AbstractDict, memo::IdDict{OpExpr, ASTExpr})
+    e isa OpExpr && _holds_faq(e) || return e
+    got = get(memo, e, nothing)
+    got === nothing || return got
+    r = if _is_faq_op(e.op)
+        t = _resolve_indices(
+            e, Dict{String, Tuple{Vector{Int}, Vector{Int}}}(), Dict{String, Int}(), const_arrays
+        )
+        NumExpr(_eval_node(_compile(t, Dict{String, Int}(), Set{Symbol}(), Dict{String, Any}()), Float64[], NamedTuple(), 0.0))
+    else
+        c = OpExpr(e.op, ASTExpr[_fold_faq_terms(x, const_arrays, memo) for x in e.args])
+        for f in fieldnames(OpExpr)
+            f === :args || setfield!(c, f, getfield(e, f))
+        end
+        c
+    end
+    return memo[e] = r
+end
 
 # Name prefix reserved for INTERNED inline-`const` array literals (below). Kept
 # distinct from any authored variable name so a synthetic entry can never shadow

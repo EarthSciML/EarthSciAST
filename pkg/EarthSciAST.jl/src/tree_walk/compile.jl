@@ -1356,6 +1356,9 @@ const _CSE_KEY_UNSET = _CSEKeyUnset()
 # flag to all descendants, so a node inside a guarded arm is guarded however deep.
 @inline _cse_arg_conditional(op::String, i::Int) =
     (op == "ifelse" && i >= 2) || ((op == "and" || op == "or") && i >= 2)
+# The same three arms on a compiled `_Node`'s op symbol.
+@inline _cse_arg_conditional(op::Symbol, i::Int) =
+    (op === :ifelse || op === :and || op === :or) && i >= 2
 
 # Count pass: tally `canonical_json` occurrences of every hoistable subexpression
 # across all RHS trees, splitting each key's tally into (TOTAL, UNCONDITIONAL).
@@ -1386,51 +1389,83 @@ function _cse_count!(
         memos::_CSEKeyMemos = _CSEKeyMemos()
     )
     (e isa OpExpr && _cse_hoistable(e)) || return
-    # Unique hoistable nodes in postorder (children before parents). The walk
-    # descends only through hoistable nodes — a non-hoistable node is a
-    # counting barrier, exactly as in the original recursion.
-    order = OpExpr[]
-    seen = IdDict{OpExpr, Nothing}()
-    function dfs(n::ASTExpr)
-        (n isa OpExpr && _cse_hoistable(n)) || return
-        haskey(seen, n) && return
-        seen[n] = nothing
-        for a in n.args
-            dfs(a)
-        end
-        return push!(order, n)
-    end
-    dfs(e)
-    total = IdDict{OpExpr, Int}()
-    uncond = IdDict{OpExpr, Int}()
-    total[e] = 1
-    uncond[e] = 1
-    # Reverse postorder = parents before children along DAG edges.
-    for i in length(order):-1:1
-        n = order[i]
-        t = get(total, n, 0)
-        u = get(uncond, n, 0)
-        for (j, a) in enumerate(n.args)
-            (a isa OpExpr && _cse_hoistable(a)) || continue
-            total[a] = _sat_add(get(total, a, 0), t)
-            if !_cse_arg_conditional(n.op, j)
-                uncond[a] = _sat_add(get(uncond, a, 0), u)
-            end
-        end
-    end
-    for n in order
+    # The walk descends only through hoistable nodes — a non-hoistable node is
+    # a counting barrier, exactly as in the original recursion.
+    order, pos = _dag_postorder(e, _cse_args, _cse_counted)
+    total, uncond = _dag_path_counts(order, pos, _cse_args, _cse_counted, _cse_op_conditional)
+    for (i, n) in enumerate(order)
         k = _cse_key(n, pgctx, memos)
         k === nothing && continue
         t0, u0 = get(counts, k, (0, 0))
-        counts[k] = (_sat_add(t0, total[n]), _sat_add(u0, get(uncond, n, 0)))
+        counts[k] = (_sat_add(t0, total[i]), _sat_add(u0, uncond[i]))
     end
     return
 end
+_cse_args(n::OpExpr) = n.args
+_cse_counted(a) = a isa OpExpr && _cse_hoistable(a)
+_cse_op_conditional(n::OpExpr, j::Int) = _cse_arg_conditional(n.op, j)
 
 # Saturating add for path-multiplicity tallies: a structurally-shared DAG can
 # have more paths than an `Int` holds, and the consumers only ever compare
 # against small thresholds.
 _sat_add(a::Int, b::Int) = a > typemax(Int) - b ? typemax(Int) : a + b
+
+# ---- Unique-node walks over a shared DAG (ESS-0hh) -----------------------------
+# The structural passes that count repeats — the scalar CSE count (`_cse_count!`),
+# the access-kernel value numbering (`_build_acc_cse`, access_kernel.jl) and the
+# emitters' repeated sub-trees (`_cg_share_groups`, array_contraction.jl) — walk
+# trees whose sub-trees are shared by reference, so they visit each UNIQUE node
+# once and count paths by propagating multiplicities, never by recursing per path.
+
+# The unique nodes under `root` in postorder (children before parents; a node is
+# marked on entry, so one reached on several paths is visited once) and each
+# one's dense position in that order; the root is last. `kids(n)` is the
+# positional child list of `n` (empty where the walk stops), `keep(c)` whether a
+# child is a node of the walk at all.
+function _dag_postorder(root::N, kids::K, keep::F) where {N, K, F}
+    order = N[]
+    pos = IdDict{N, Int}()
+    function walk(n::N)
+        haskey(pos, n) && return
+        pos[n] = 0
+        for c in kids(n)
+            keep(c) && walk(c)
+        end
+        push!(order, n)
+        pos[n] = length(order)
+        return
+    end
+    walk(root)
+    return order, pos
+end
+
+# Path multiplicities over `_dag_postorder`'s `order`: per position, how many
+# paths from the root reach the node (`total`), and how many of those pass no
+# conditionally evaluated operand (`uncond`; `cond(n, j)` says whether operand
+# `j` of `n` is one). One reverse-postorder pass, parents before children, with
+# saturating additions. On a pure tree these are the occurrence counts.
+function _dag_path_counts(order::Vector, pos::IdDict, kids::K, keep::F, cond::C) where {K, F, C}
+    P = length(order)
+    total = zeros(Int, P)
+    uncond = zeros(Int, P)
+    P == 0 && return total, uncond
+    total[P] = 1
+    uncond[P] = 1
+    for i in P:-1:1
+        n = order[i]
+        t, u = total[i], uncond[i]
+        for (j, c) in enumerate(kids(n))
+            keep(c) || continue
+            pc = pos[c]
+            total[pc] = _sat_add(total[pc], t)
+            cond(n, j) || (uncond[pc] = _sat_add(uncond[pc], u))
+        end
+    end
+    return total, uncond
+end
+_dag_children(n) = n.children
+_dag_every(_) = true
+_dag_strict(_, _) = false
 
 # The CSE prelude's per-call scratch, captured on every `_NK_CACHED` node at
 # build time and refilled at the top of each `f!` call. TWO buffers, because the
