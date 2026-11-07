@@ -358,3 +358,146 @@ import OrdinaryDiffEqTsit5   # the solver `run_inline_tests` picks
         end
     end
 end
+
+# A gather subscript past the first is evaluated only when the ones before it
+# are: a state gather reads none past one out of its axis (a ghost read, 0̄),
+# a const gather none past one its boundary policy throws on. A repeated
+# sub-tree that occurs only in such subscripts is not computed ahead of the
+# gather. Here `c[k + s]` (an inline `const`, `error` boundary, read at a
+# subscript holding the state `s = 2`, so it is read per call) is out of
+# range exactly where both state reads' first subscript is out of `q`'s axis,
+# so the interpreter never evaluates it there; computing the shared copy at
+# the start of the whole-array nest's term would throw.
+@testset "repeated sub-tree only in later gather subscripts stays lazy" begin
+    M = 24
+    c = Float64[mod1(5m, M) for m in 1:M]
+    cg = _ti_ix(_ti_const(c), _ti_op("+", "k", "s"))
+    body = _ti_op(
+        "+", _ti_ix("q", _ti_op("+", "k", "i", 1), cg),
+        _ti_op("*", 2.0, _ti_ix("q", _ti_op("+", "k", "i", 2), cg))
+    )
+    fq(out, ranges, e; kw...) = Dict{String, Any}(
+        "op" => "faq", "args" => Any[], "output_idx" => Any[out...],
+        "ranges" => ranges, "expr" => e, (String(k) => v for (k, v) in kw)...
+    )
+    qr = Dict("a" => Any[1, M], "b" => Any[1, M])
+    doc = Dict{String, Any}(
+        "esm" => "1.2.0", "metadata" => Dict("name" => "lazy_gather_subscript"),
+        "models" => Dict(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "q" => Dict("type" => "unknown", "shape" => Any["a", "b"]),
+                    "out" => Dict("type" => "unknown", "shape" => Any["i"]),
+                    "s" => Dict("type" => "unknown", "default" => 2.0),
+                ),
+                "equations" => Any[
+                    Dict("lhs" => _ti_op("D", "s"; wrt = "t"), "rhs" => 0.0),
+                    Dict(
+                        "lhs" => fq(("a", "b"), qr, _ti_op("D", _ti_ix("q", "a", "b"); wrt = "t")),
+                        "rhs" => fq(("a", "b"), qr, 0.0),
+                    ),
+                    Dict(
+                        "lhs" => fq(("i",), Dict("i" => Any[1, 2]), _ti_op("D", _ti_ix("out", "i"); wrt = "t")),
+                        "rhs" => fq(("i",), Dict("i" => Any[1, 2], "k" => Any[1, M]), body; reduce = "+"),
+                    ),
+                ],
+            )
+        )
+    )
+    ics = Dict{String, Any}("out[$i]" => 0.0 for i in 1:2)
+    ics["s"] = 2.0
+    qv(a, b) = 10.0 * a + b / 64
+    for a in 1:M, b in 1:M
+        ics["q[$a,$b]"] = qv(a, b)
+    end
+    # Exact sums of the reads in range (every one an exact binary fraction).
+    rd(a, k) = a <= M ? qv(a, c[k + 2]) : 0.0
+    expect = [sum(rd(k + i + 1, k) + 2.0 * rd(k + i + 2, k) for k in 1:M) for i in 1:2]
+    r = Dict{Any, Any}()
+    for comp in (:native, _TI_NOSHARE, :interpreter)
+        _TI._reset_cascade_tally!()
+        f!, u0, p, _, vm = comp isa Symbol ?
+            _TI._build_evaluator(doc; initial_conditions = ics, compiler = comp) :
+            _TI._with_compiler_plan(() -> _TI._build_evaluator_dict(doc; initial_conditions = ics, compiler = comp), comp)
+        comp === :native && @test get(_TI._CASCADE_TALLY, :array_contraction_codegen, 0) >= 1
+        du = similar(u0)
+        f!(du, u0, p, 0.0)
+        r[comp] = Float64[du[vm["out[$i]"]] for i in 1:2]
+    end
+    @test r[:interpreter] == expect
+    @test all(r[:native] .=== r[:interpreter])
+    @test all(r[_TI_NOSHARE] .=== r[:interpreter])
+end
+
+# The structural numbers of a loop body whose nodes are shared by reference —
+# a diamond `x_{j+1} = sin(x_j) + cos(x_j)`, 2^40 paths from the top to the
+# counter — are found once per node, not once per path.
+@testset "repeated sub-tree keys are linear in a shared loop body" begin
+    function diamond(ref, depth)
+        x = _TI._mknode(kind = _TI._NK_LOOPVAR, payload = ref)
+        levels = _TI._Node[x]
+        for _ in 1:depth
+            s = _TI._mknode(kind = _TI._NK_OP, op = :sin, children = _TI._Node[x])
+            co = _TI._mknode(kind = _TI._NK_OP, op = :cos, children = _TI._Node[x])
+            x = _TI._mknode(kind = _TI._NK_OP, op = :+, children = _TI._Node[s, co])
+            push!(levels, x)
+        end
+        loop = _TI._mknode(
+            kind = _TI._NK_CONTRACTION_LOOP, op = :+, literal = 0.0,
+            payload = _TI._ContractLoop(ref, 1, 30, 1), children = _TI._Node[x]
+        )
+        return loop, levels
+    end
+    ref = Ref(0)
+    loop, levels = diamond(ref, 40)
+    two = _TI._mknode(kind = _TI._NK_OP, op = :*, children = _TI._Node[loop, loop])
+    root = _TI._mknode(kind = _TI._NK_OP, op = :+, children = _TI._Node[two, two])
+    kc = _TI._CGScalarCtx()
+    local g, gb
+    t = @elapsed begin
+        # The enclosing region keys the loop, and so its body under the loop's
+        # binder; then the body as its own region, the counter bound outside.
+        g = _TI._cg_share_groups(kc, root)
+        kc.loops[ref] = :kv
+        gb = _TI._cg_share_groups(kc, levels[end])
+        delete!(kc.loops, ref)
+    end
+    @test t < 30
+    # The enclosing region repeats the loop (opaque to it) and `two`, in that
+    # order; in the body every level below the top is reached on two paths.
+    @test g == [_TI._Node[loop], _TI._Node[two]]
+    @test gb !== nothing && issubset(levels[2:(end - 1)], Set(n for grp in gb for n in grp))
+    # A structurally equal loop built apart has the same number.
+    loop2, _ = diamond(Ref(0), 40)
+    @test _TI._cg_share_key!(kc.share, kc, loop, Any[]) == _TI._cg_share_key!(kc.share, kc, loop2, Any[])
+end
+
+# A build-constant subscript holding a `faq` keeps integer arithmetic outside
+# the `faq`: `/` is `div` there, as in the subscript without one, and a `faq`
+# whose value is not an integer is refused as that value written by hand is.
+@testset "build-constant subscript with a faq: integer arithmetic" begin
+    axis = _op("const"; value = Any[1.0, 2.0, 3.0, 4.0])
+    # The number of axis entries <= 1.5: one.
+    cnt = _op(
+        "faq"; output_idx = Any[], reduce = "+", ranges = Dict{String, Any}("k" => Any[1, 4]),
+        expr_body = _op("ifelse", _op("<=", _op("index", axis, _v("k")), _n(1.5)), _i(1), _i(0))
+    )
+    ca = Dict{String, Any}()
+    # 5/2 + 1 is 3 in integer arithmetic (3.5, rounded to 4, in floating point).
+    sub = _op("+", _op("/", _i(5), _i(2)), cnt)
+    @test _TI._const_subscript_int(sub, ca) == 3
+    @test _TI._const_subscript_int(sub, ca) ==
+        _TI._eval_const_int(_op("+", _op("/", _i(5), _i(2)), _i(1)), _TI._EMPTY_IDX_ENV, ca)
+    # A `faq` worth 1.5: 2 + 1.5 is no subscript.
+    half = _op("faq"; output_idx = Any[], reduce = "+", ranges = Dict{String, Any}("k" => Any[1, 3]), expr_body = _n(0.5))
+    err(f) = try
+        f()
+        nothing
+    catch e
+        e
+    end
+    e_faq = err(() -> _TI._const_subscript_int(_op("+", _i(2), half), ca))
+    e_lit = err(() -> _TI._const_subscript_int(_op("+", _i(2), _n(1.5)), ca))
+    @test e_lit !== nothing
+    @test e_faq !== nothing && typeof(e_faq) === typeof(e_lit)
+end
