@@ -430,34 +430,34 @@ struct BracketRhs {
 
 impl BracketRhs {
     /// Build `bench/interp_bracket/<doc>` under `native`, with the counted
-    /// bracket recognised or not. The tape is built inside the switch, and the
-    /// scratch keeps it.
+    /// bracket recognised or not ([`earthsci_ast::simulate_array::tape::CompilerRewrites`]).
     fn new(doc: &str, count_rewrite: bool) -> BracketRhs {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../bench/interp_bracket")
             .join(doc);
-        earthsci_ast::simulate_array::tape::with_count_rewrite(count_rewrite, || {
-            let prob = earthsci_ast::esm_problem(
-                path.as_path(),
-                (0.0, 1.0),
-                earthsci_ast::ProblemOptions {
-                    compiler: Some(earthsci_ast::Compiler::Native),
-                    rhs: earthsci_ast::Rhs::Always,
-                    ..Default::default()
-                },
-            )
-            .unwrap_or_else(|e| panic!("{doc}: {e}"));
-            let compiled = prob.debug_array_compiled().expect("a right-hand side");
-            let scratch = compiled.debug_new_scratch_taped().expect("taped");
-            let params = compiled.debug_resolve_params(prob.p());
-            let state = bracket_state(compiled.state_variable_names());
-            BracketRhs {
-                prob,
-                scratch,
-                params,
-                state,
-            }
-        })
+        let mut rewrites = earthsci_ast::simulate_array::tape::CompilerRewrites::default();
+        rewrites.count_fold = count_rewrite;
+        let prob = earthsci_ast::esm_problem(
+            path.as_path(),
+            (0.0, 1.0),
+            earthsci_ast::ProblemOptions {
+                compiler: Some(earthsci_ast::Compiler::Native),
+                rewrites,
+                rhs: earthsci_ast::Rhs::Always,
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("{doc}: {e}"));
+        let compiled = prob.debug_array_compiled().expect("a right-hand side");
+        let scratch = compiled.debug_new_scratch_taped().expect("taped");
+        let params = compiled.debug_resolve_params(prob.p());
+        let state = bracket_state(compiled.state_variable_names());
+        BracketRhs {
+            prob,
+            scratch,
+            params,
+            state,
+        }
     }
 
     fn call(&mut self, dy: &mut [f64]) {

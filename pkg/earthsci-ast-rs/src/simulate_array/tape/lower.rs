@@ -93,43 +93,6 @@ fn tape_index(n: usize, table: &str) -> LResult<u32> {
 
 type LResult<T> = Result<T, Bail>;
 
-thread_local! {
-    /// A per-thread override of [`count_rewrite_enabled`] ([`with_count_rewrite`]).
-    static COUNT_REWRITE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
-}
-
-/// Whether a build recognises the counted bracket
-/// ([`TapeBuilder::try_lower_indicator_count`]). On unless
-/// `ESS_TAPE_COUNT_DISABLE=1`, or a [`with_count_rewrite`] on this thread
-/// says otherwise: a switch for the A/B against the general lowering, which
-/// shapes the program a compiler builds and never selects another evaluator.
-pub(crate) fn count_rewrite_enabled() -> bool {
-    use std::sync::OnceLock;
-    static ENV: OnceLock<bool> = OnceLock::new();
-    COUNT_REWRITE.with(std::cell::Cell::get).unwrap_or_else(|| {
-        *ENV.get_or_init(|| {
-            !std::env::var("ESS_TAPE_COUNT_DISABLE")
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false)
-        })
-    })
-}
-
-/// Run `f` with the counted-bracket recognition on or off for every tape
-/// this thread builds meanwhile (a benchmark's and a test's A/B seam; the
-/// tape cache keeps whatever a build inside `f` produced).
-#[doc(hidden)]
-pub fn with_count_rewrite<R>(enabled: bool, f: impl FnOnce() -> R) -> R {
-    struct Restore(Option<bool>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            COUNT_REWRITE.with(|c| c.set(self.0));
-        }
-    }
-    let _restore = Restore(COUNT_REWRITE.with(|c| c.replace(Some(enabled))));
-    f()
-}
-
 /// The parts of a counted bracket ([`detect_indicator_count`]).
 struct IndicatorCount<'e> {
     rel: CountRel,
@@ -682,6 +645,10 @@ pub(crate) struct TapeBuilder<'m> {
     /// build-time data — a gather's subscripts, a join's key columns, a
     /// ragged bound — never to fold a value the program computes.
     known: FxHashMap<SlotId, Known>,
+    /// Whether the counted bracket is recognised
+    /// ([`Self::try_lower_indicator_count`]): the model's
+    /// [`crate::problem::CompilerRewrites::count_fold`].
+    count_fold: bool,
     /// Slots every element of which is known to lie in `[lo, hi]` (never
     /// NaN): a count, and what clamps and integer shifts make of one. Read
     /// only to prove a const-array gather's subscripts in range
@@ -1010,6 +977,7 @@ impl<'m> TapeBuilder<'m> {
             gather_tables: Vec::new(),
             seg_tables: Vec::new(),
             known: FxHashMap::default(),
+            count_fold: true,
             ranges: FxHashMap::default(),
             range_defs: HashSet::new(),
             tuple_frames: Vec::new(),
@@ -6773,7 +6741,7 @@ impl<'m> TapeBuilder<'m> {
         bx: &LBox,
         nested: bool,
     ) -> LResult<Option<LV>> {
-        if !count_rewrite_enabled() || bx.tuple != 0 || self.sweep.is_some() {
+        if !self.count_fold || bx.tuple != 0 || self.sweep.is_some() {
             return Ok(None);
         }
         let Some(ic) = detect_indicator_count(spec) else {
@@ -7623,6 +7591,9 @@ impl<'m> TapeBuilder<'m> {
         self.seg_tables.truncate(txn.seg_tables);
         let n_slots = self.slots.len() as SlotId;
         self.known.retain(|s, _| *s < n_slots);
+        // A rolled-back slot's id is handed out again: its bounds go with it.
+        self.ranges.retain(|s, _| *s < n_slots);
+        self.range_defs.retain(|s| *s < n_slots);
         self.tuple_frames.clear();
         self.faults.truncate(txn.faults);
         self.fault_order.truncate(txn.faults);

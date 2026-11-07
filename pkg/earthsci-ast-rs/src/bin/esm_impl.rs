@@ -159,6 +159,10 @@ enum Commands {
         /// bindings and are always `compiler_unavailable` here.
         #[arg(long, value_name = "NAME")]
         compiler: Option<String>,
+        /// Build without the counted-bracket rewrite
+        /// (`CompilerRewrites::count_fold`): the A/B seam for timing it.
+        #[arg(long, hide = true)]
+        no_count_fold: bool,
     },
     /// Show information about an ESM file
     Info {
@@ -2507,6 +2511,7 @@ fn run_simulate(
     model: Option<String>,
     format: SimulateFormat,
     compiler: Option<String>,
+    no_count_fold: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // A value outside the closed vocabulary is `compiler_unknown` (esm-spec
     // §9.6.6) and is refused HERE, before anything is loaded: it is the one of
@@ -2550,6 +2555,8 @@ fn run_simulate(
     })
     .map_err(fail)?;
     let ingesting = providers.is_some();
+    let mut rewrites = earthsci_ast::simulate_array::tape::CompilerRewrites::default();
+    rewrites.count_fold = !no_count_fold;
     let build = |pipeline: bool| -> Result<earthsci_ast::EsmProblem, Box<dyn std::error::Error>> {
         let mut popts = earthsci_ast::ProblemOptions {
             // `Auto`, not `Always`. A document with no differential equations
@@ -2560,6 +2567,7 @@ fn run_simulate(
             // gives it the static backend and the single evaluation below.
             rhs: earthsci_ast::Rhs::Auto,
             compiler,
+            rewrites,
             model_name: model.clone(),
             build_pipeline: pipeline,
             // A data-fed parameter named by `--observed` is written from its
@@ -4337,7 +4345,17 @@ pub fn main() -> std::process::ExitCode {
             model,
             format,
             compiler,
-        } => run_simulate(file, time, output, observed, model, format, compiler),
+            no_count_fold,
+        } => run_simulate(
+            file,
+            time,
+            output,
+            observed,
+            model,
+            format,
+            compiler,
+            no_count_fold,
+        ),
         Commands::Info { file } => run_info(file),
         Commands::Units { file, check } => run_units(file, check),
         Commands::CouplingAnalysis { file, depth } => run_coupling_analysis(file, depth),

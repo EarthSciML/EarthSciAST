@@ -762,3 +762,52 @@ fn xla_reports_observeds_from_the_tape_the_emitter_was_built_from() {
         }
     }
 }
+
+/// `ProblemOptions::rewrites` reaches the build: the counted bracket of the
+/// `bench/interp_bracket` composition is one count with the rewrite on and
+/// the general fold with it off, and the two right-hand sides agree bit for
+/// bit.
+#[test]
+fn the_count_rewrite_is_a_problem_option() {
+    let path = fixture("bench/interp_bracket/interp_bracket_const_compose_N59.esm");
+    let build = |count_fold: bool| {
+        let mut rewrites = earthsci_ast::simulate_array::tape::CompilerRewrites::default();
+        rewrites.count_fold = count_fold;
+        esm_problem(
+            path.as_path(),
+            (0.0, 1.0),
+            ProblemOptions {
+                compiler: Some(Compiler::Native),
+                rewrites,
+                rhs: Rhs::Always,
+                ..Default::default()
+            },
+        )
+        .expect("builds under native")
+    };
+    let counts = |p: &EsmProblem| {
+        let c = p.debug_array_compiled().expect("a right-hand side");
+        c.debug_tape_listing()
+            .lines()
+            .filter(|l| l.contains(" Count {"))
+            .count()
+    };
+    let (on, off) = (build(true), build(false));
+    assert_eq!(counts(&on), 1);
+    assert_eq!(counts(&off), 0);
+    let opts = SolveOptions {
+        saveat: Some(vec![0.0, 0.5, 1.0]),
+        ..Default::default()
+    };
+    let (a, b) = (
+        solve(&on, &opts).expect("solves"),
+        solve(&off, &opts).expect("solves"),
+    );
+    let bits = |s: &earthsci_ast::Solution| -> Vec<Vec<u64>> {
+        s.state
+            .iter()
+            .map(|r| r.iter().map(|x| x.to_bits()).collect())
+            .collect()
+    };
+    assert_eq!(bits(&a), bits(&b));
+}

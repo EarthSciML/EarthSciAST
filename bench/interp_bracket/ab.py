@@ -10,7 +10,7 @@ Spellings per N:
 
     fn_const                 interp.linear on const tables (the fast form)
     compose_const_fused      the composition, bracket counted (the default)
-    compose_const_unfused    the same, ESS_TAPE_COUNT_DISABLE=1 (the general fold)
+    compose_const_unfused    the same, --no-count-fold (the general fold)
     compose_runtime_fused    the composition over a parameter-built axis
     compose_runtime_unfused  the same, unfused
 
@@ -69,28 +69,27 @@ def main(argv=None):
     for n in sizes:
         generate.main(["--n", str(n), "--out", a.work])
         doc = lambda sp: os.path.join(a.work, generate.filename(sp, n))  # noqa: E731
-        base_env = dict(os.environ)
-        off = dict(base_env, ESS_TAPE_COUNT_DISABLE="1")
+        off = ["--no-count-fold"]
         configs = [
-            ("fn_const", a.esm, doc("const_fn"), base_env),
-            ("compose_const_fused", a.esm, doc("const_compose"), base_env),
+            ("fn_const", a.esm, doc("const_fn"), []),
+            ("compose_const_fused", a.esm, doc("const_compose"), []),
             ("compose_const_unfused", a.esm, doc("const_compose"), off),
-            ("compose_runtime_fused", a.esm, doc("runtime_compose"), base_env),
+            ("compose_runtime_fused", a.esm, doc("runtime_compose"), []),
             ("compose_runtime_unfused", a.esm, doc("runtime_compose"), off),
         ]
         if a.base_esm:
             configs += [
-                ("compose_const_base", a.base_esm, doc("const_compose"), base_env),
-                ("compose_runtime_base", a.base_esm, doc("runtime_compose"), base_env),
+                ("compose_const_base", a.base_esm, doc("const_compose"), []),
+                ("compose_runtime_base", a.base_esm, doc("runtime_compose"), []),
             ]
         times = {c[0]: [] for c in configs}
         outputs = {}
         for rep in range(a.repeats):
             order = configs[rep % len(configs):] + configs[: rep % len(configs)]
-            for label, exe, path, env in order:
+            for label, exe, path, flags in order:
                 out = os.path.join(a.work, f"out_N{n}_{label}.json")
-                cmd = [exe, "simulate", path, "--compiler", "native", "--time", str(a.time), "-o", out]
-                cpu, wall = run(cmd, env, a.taskset)
+                cmd = [exe, "simulate", path, "--compiler", "native", "--time", str(a.time), "-o", out] + flags
+                cpu, wall = run(cmd, os.environ, a.taskset)
                 times[label].append((cpu, wall))
                 records.append({"n": n, "label": label, "repeat": rep, "cpu_s": cpu, "wall_s": wall})
                 outputs[label] = out

@@ -17,6 +17,7 @@ use std::sync::Arc;
 #[derive(Default)]
 pub(in crate::simulate_array) struct ProgramModel {
     pub(in crate::simulate_array) runtime_mode: RuntimeMode,
+    pub(in crate::simulate_array) rewrites: crate::problem::CompilerRewrites,
     pub(in crate::simulate_array) merged_renames: HashMap<String, String>,
     pub(in crate::simulate_array) var_shapes: IndexMap<String, VarShape>,
     pub(in crate::simulate_array) state_defaults: Vec<StateDefault>,
@@ -45,6 +46,7 @@ impl ProgramModel {
     pub(in crate::simulate_array) fn from_compiled(c: ArrayCompiled) -> ProgramModel {
         ProgramModel {
             runtime_mode: c.runtime_mode,
+            rewrites: c.rewrites,
             merged_renames: c.merged_renames,
             var_shapes: c.var_shapes,
             state_defaults: c.state_defaults,
@@ -85,6 +87,7 @@ impl ProgramModel {
         let state_defaults = vec![StateDefault::Scalar(None); var_shapes.len()];
         ArrayCompiled {
             runtime_mode: self.runtime_mode,
+            rewrites: self.rewrites,
             #[cfg(feature = "xla")]
             xla_rhs: std::cell::OnceCell::new(),
             merged_renames: self.merged_renames.clone(),

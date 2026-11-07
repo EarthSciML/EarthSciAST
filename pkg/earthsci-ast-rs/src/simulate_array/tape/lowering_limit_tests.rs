@@ -1010,3 +1010,25 @@ fn count_window_outside_its_axis_is_refused() {
         .unwrap_or_default();
     assert!(msg.contains("does not hold the window"), "{msg}");
 }
+
+/// The count rewrite is a build option of the model, part of the tape
+/// cache's key: switching it off on the same model builds (and serves) the
+/// general fold, and switching it back serves the counted program again.
+#[test]
+fn count_rewrite_is_a_build_option() {
+    let d = count_doc(9, indicator(op("<=", vec![axis_at("zc"), query()])));
+    let file = crate::parse::load_string(&d.to_string()).expect("fixture document loads");
+    let mut compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
+    let tape = |c: &ArrayCompiled| c.tape(&HashSet::new()).0.expect("taped");
+    let on = tape(&compiled);
+    assert_eq!(counts(&on).len(), 1);
+    compiled.rewrites.count_fold = false;
+    let off = tape(&compiled);
+    assert!(counts(&off).is_empty(), "the general fold");
+    assert!(count(&off, "Reduce") > 0);
+    compiled.rewrites.count_fold = true;
+    assert!(
+        std::sync::Arc::ptr_eq(&on, &tape(&compiled)),
+        "served from the cache"
+    );
+}
