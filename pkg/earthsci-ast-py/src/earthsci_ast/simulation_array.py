@@ -948,6 +948,12 @@ def _expr_referenced_names(expr: Expr) -> set[str]:
             refs.add(e)
         elif isinstance(e, ExprNode):
             stack.extend(iter_children(e))
+            # A value-equality `join` reads its key columns: an observed column
+            # (a per-component bin column) must be materialized first.
+            for clause in getattr(e, "join", None) or []:
+                if isinstance(clause, dict):
+                    for pair in clause.get("on") or []:
+                        refs.update(str(x) for x in pair)
     return refs
 
 
@@ -1885,6 +1891,19 @@ def _frontdoor_join_keys_and_extents(
             and getattr(rhs, "join", None)
         ):
             producer_seed_nodes.append(rhs)
+    # A producer's `join.on` key columns that are plain observeds (the per-component
+    # integer bin columns of a lib/relational.esm rewrite) seed the closure too, so
+    # the coordinates they read are materialized before the producer runs.
+    observed_rhs = {str(name): rhs for name, rhs in ordered_observed}
+    for node in list(producer_seed_nodes):
+        for clause in getattr(node, "join", None) or []:
+            on = clause.get("on") if isinstance(clause, dict) else getattr(clause, "on", None)
+            for pair in on or []:
+                for col in pair:
+                    hits = [
+                        r for n, r in observed_rhs.items() if n == col or n.endswith("." + str(col))
+                    ]
+                    producer_seed_nodes.extend(h for h in hits if isinstance(h, ExprNode))
     const_arrays: dict[str, np.ndarray] = {
         str(k): np.asarray(v)
         for k, v in _binning_coord_arrays(
@@ -1955,6 +1974,8 @@ def _frontdoor_join_keys_and_extents(
         }
         return buffers, idx_sets, dict(res.extents), dict(res.members), outputs
     except ValueInventionError as exc:
+        if str(exc).startswith("value_invention_key_out_of_range"):
+            raise  # already names the column (esm-spec §9.6.6)
         # A producer a derived index set names could not run, so that set has no
         # members. Degrading its extent to {} would let a contraction over it fold
         # to 0, so it is refused here with the engine's reason (esm-spec §9.6.6).
