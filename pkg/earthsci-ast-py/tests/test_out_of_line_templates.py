@@ -89,6 +89,7 @@ _BRIDGE_CASES = [
     ("metaparam_axis_name_collision", "fixture.esm", "expanded.esm"),
     ("per_variable_scheme_literal_args", "fixture.esm", "expanded.esm"),
     ("scalar_field_param", "fixture.esm", "expanded.esm"),
+    ("ranges_param", "fixture.esm", "expanded.esm"),
     ("two_div_two_meshes", "fixture.esm", "expanded.esm"),
 ]
 

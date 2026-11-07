@@ -11,6 +11,15 @@
       "note": "A template call whose expanded-equivalent form puts an inadmissible literal in a scalar field (e.g. manifold) is rejected by that field's own check, reported at the call site."
     },
     {
+      "id": "spec.9.6.1.ranges-binding-admissible",
+      "section": "9.6.1",
+      "quote": "The bound value MUST be one a `ranges` tuple entry admits",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "A template parameter in a faq dense ranges tuple entry is a substitution site; the value it is bound to must be an integer literal or a metaparameter expression, which substitution itself does not check."
+    },
+    {
       "id": "spec.9.6.1.param-name-author-collision",
       "section": "9.6.1",
       "quote": "so an author MUST NOT name a parameter after a field literal its body means literally",
@@ -402,6 +411,14 @@
       "class": "out_of_scope",
       "area": "conformance_harness",
       "note": "Fixed-fixture assertion; the general property is spec.9.6.1.param-shadows-literal-substitute."
+    },
+    {
+      "id": "spec.9.6.7.fixture-ranges-param",
+      "section": "9.6.7",
+      "quote": "All five bindings MUST produce structurally-equal expanded `ranges` tuples",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Fixed-fixture assertion; the general property is spec.9.6.1.ranges-binding-admissible together with spec.9.6.1.param-shadows-literal-substitute."
     },
     {
       "id": "spec.9.6.7.fixture-opacity-negative",

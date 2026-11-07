@@ -1,0 +1,216 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "expression_templates_ranges_param",
+    "description": "esm-spec §9.6.1: a template parameter written as a `faq` dense `ranges` tuple entry is a substitution site. `count_le` counts the entries of an axis at or below a query over k in [1, n], with the axis length `n` a parameter; `count_le_step` does the same over every second entry, with the start, step and stop all parameters. Three call sites bind `n` to 3, 2 and 5 (the last with start 1 and step 2); each expanded `ranges` tuple carries the bound value (expanded.esm). Bindings substitute it like any other parameter occurrence (§9.6.3 constraint 5).",
+    "authors": [
+      "EarthSciML"
+    ],
+    "tags": [
+      "expression_templates",
+      "faq",
+      "ranges",
+      "esm-spec-9.6.1"
+    ]
+  },
+  "models": {
+    "M": {
+      "expression_templates": {
+        "count_le": {
+          "params": [
+            "axis",
+            "x",
+            "n"
+          ],
+          "body": {
+            "op": "faq",
+            "args": [
+              "axis"
+            ],
+            "output_idx": [],
+            "reduce": "+",
+            "ranges": {
+              "k_c": [
+                1,
+                "n"
+              ]
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<=",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "axis",
+                        "k_c"
+                      ]
+                    },
+                    "x"
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          }
+        },
+        "count_le_step": {
+          "params": [
+            "axis",
+            "x",
+            "lo",
+            "s",
+            "n"
+          ],
+          "body": {
+            "op": "faq",
+            "args": [
+              "axis"
+            ],
+            "output_idx": [],
+            "reduce": "+",
+            "ranges": {
+              "k_s": [
+                "lo",
+                "s",
+                "n"
+              ]
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<=",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "axis",
+                        "k_s"
+                      ]
+                    },
+                    "x"
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          }
+        }
+      },
+      "variables": {
+        "q": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.5
+        },
+        "c3": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "c2": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "c_step": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": "c3",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "count_le",
+            "bindings": {
+              "axis": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  2.0
+                ]
+              },
+              "x": "q",
+              "n": 3
+            }
+          }
+        },
+        {
+          "lhs": "c2",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "count_le",
+            "bindings": {
+              "axis": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  1.0,
+                  4.0
+                ]
+              },
+              "x": "q",
+              "n": 2
+            }
+          }
+        },
+        {
+          "lhs": "c_step",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "count_le_step",
+            "bindings": {
+              "axis": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  2.0,
+                  3.0,
+                  4.0
+                ]
+              },
+              "x": "q",
+              "lo": 1,
+              "s": 2,
+              "n": 5
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "+",
+            "args": [
+              "c3",
+              "c2",
+              "c_step"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
