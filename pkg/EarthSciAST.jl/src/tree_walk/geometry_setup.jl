@@ -190,21 +190,32 @@ _expr_has_polygon_intersection_area(::ASTExpr) = false
 # the same compiled setup sweep (`_materialize_geom_array`): its readers gather
 # a const array per cell instead of an `index(faq, …)` of a gated reduction the
 # right-hand-side tiers cannot fold. The body must speak only the setup
-# language (`_GEO_EVAL_OPS`). A gated faq whose body has no nested reduction
-# (a right-hand side's `Σ_i W[i,j]·F[i]`) is not matched.
+# language (`_GEO_EVAL_OPS`). Without a join the same holds for a body whose
+# reductions nest two deep (the templates' sum over edges of min/max folds
+# over the other ring's half-planes): unrolled into a right-hand-side kernel
+# that body is tens of thousands of nodes per cell, while the setup sweep
+# loops over it. A gated faq whose body has no nested reduction (a right-hand
+# side's `Σ_i W[i,j]·F[i]`), or an ungated one whose reductions nest only one
+# deep, is not matched.
 function _is_setup_join_reduction(e)
     (e isa OpExpr && _is_faq_op(e.op) && e.expr_body isa OpExpr) || return false
-    (e.join !== nothing || e.join_gates !== nothing) || return false
     (e.output_idx !== nothing && !isempty(e.output_idx)) || return false
     _body_needs_general_eval(e) && return false
-    return _has_nested_faq(e.expr_body::OpExpr, IdDict{OpExpr, Nothing}())
+    depth = _faq_nesting(e.expr_body::OpExpr, IdDict{OpExpr, Int}())
+    gated = e.join !== nothing || e.join_gates !== nothing
+    return gated ? depth >= 1 : depth >= 2
 end
-function _has_nested_faq(e::OpExpr, seen::IdDict{OpExpr, Nothing})
-    _is_faq_op(e.op) && return true
-    haskey(seen, e) && return false
-    seen[e] = nothing
-    _anyof(a -> a isa OpExpr && _has_nested_faq(a, seen), e.args) && return true
-    return e.expr_body isa OpExpr && _has_nested_faq(e.expr_body::OpExpr, seen)
+# How deep `faq` reductions nest inside `e` (0: none).
+function _faq_nesting(e::OpExpr, memo::IdDict{OpExpr, Int})
+    got = get(memo, e, nothing)
+    got === nothing || return got
+    d = 0
+    for a in e.args
+        a isa OpExpr && (d = max(d, _faq_nesting(a, memo)))
+    end
+    e.expr_body isa OpExpr && (d = max(d, _faq_nesting(e.expr_body::OpExpr, memo)))
+    _is_faq_op(e.op) && (d += 1)
+    return memo[e] = d
 end
 _model_has_setup_join_reduction(equations) =
     _anyof(eq -> eq.lhs isa VarExpr && _is_setup_join_reduction(eq.rhs), equations)

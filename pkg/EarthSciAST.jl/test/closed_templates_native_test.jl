@@ -254,8 +254,8 @@ end
     end
 
     # Near misses of the setup seed: a gated faq whose body has no nested
-    # reduction (left to the right-hand-side tiers), one with no join, and one
-    # whose body leaves the setup language are not seeded; a seeded body whose
+    # reduction (left to the right-hand-side tiers), an ungated one nested one
+    # deep, and one whose body leaves the setup language are not seeded; a seeded body whose
     # nested range does not start at 1 is refused by name, since the setup
     # sweep loops only over `1:n`.
     @testset "setup seed near misses" begin
@@ -263,8 +263,11 @@ end
         @test !_CT._is_setup_join_reduction(_CT.expression_from_json(_ct_faq(flat, ["i", "j"], Dict("i" => Dict("from" => "s"), "j" => Dict("from" => "t")); join = Any[Dict("on" => Any[Any["a", "b"]])])))
         nested = _ct_faq(_ct_ix("src_poly", "i", "k", 1), [], Dict("k" => Any[1, 4]); reduce = "max")
         @test _CT._is_setup_join_reduction(_CT.expression_from_json(_ct_faq(nested, ["i", "j"], Dict("i" => Dict("from" => "s"), "j" => Dict("from" => "t")); join = Any[Dict("on" => Any[Any["a", "b"]])])))
-        # No join: not the overlap shape.
+        # No join: reductions nested one deep are left to the right-hand-side
+        # tiers; two deep (the overlap templates' shape) is a setup array.
         @test !_CT._is_setup_join_reduction(_CT.expression_from_json(_ct_faq(nested, ["i", "j"], Dict("i" => Dict("from" => "s"), "j" => Dict("from" => "t")))))
+        nested2 = _ct_faq(_ct_op("+", 1, nested), [], Dict("m" => Any[1, 3]))
+        @test _CT._is_setup_join_reduction(_CT.expression_from_json(_ct_faq(nested2, ["i", "j"], Dict("i" => Dict("from" => "s"), "j" => Dict("from" => "t")))))
         # A body outside the setup language (`exp`) is not seeded.
         @test !_CT._is_setup_join_reduction(_CT.expression_from_json(_ct_faq(_ct_op("exp", nested), ["i", "j"], Dict("i" => Dict("from" => "s"), "j" => Dict("from" => "t")); join = Any[Dict("on" => Any[Any["a", "b"]])])))
         off = _ct_faq(_ct_ix("src_poly", "i", _ct_op("-", "k", 1), 1), [], Dict("k" => Any[2, 4]); reduce = "max")
