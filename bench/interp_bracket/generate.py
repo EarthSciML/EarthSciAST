@@ -38,6 +38,11 @@ Usage:
     python3 bench/interp_bracket/generate.py               # rewrite the committed N = 59, 200
     python3 bench/interp_bracket/generate.py --check       # committed documents are current
     python3 bench/interp_bracket/generate.py --n 400 --out "$BUILD"   # any N, anywhere
+
+Timing: ``ab.py`` here runs the spellings' whole solves interleaved (any binary
+with an ``esm simulate``); the Rust criterion group ``interp_bracket`` in
+``pkg/earthsci-ast-rs/benches/benchmarks.rs`` times one right-hand side of
+each against a hand-written loop.
 """
 
 import argparse
