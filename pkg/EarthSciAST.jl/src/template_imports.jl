@@ -1470,7 +1470,7 @@ end
 # `${VAR}` with the variable name as capture group 1.
 const _ENV_REF_RE = r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}"
 
-function _expand_ref_env(ref::AbstractString)
+function _expand_env_tokens(ref::AbstractString)
     # `replace` hands the callback the whole matched token (`"${VAR}"`);
     # re-match to pull the variable name out of the capture group.
     return replace(
@@ -1479,9 +1479,66 @@ function _expand_ref_env(ref::AbstractString)
     )
 end
 
+# esm-spec §4.7 standard-library refs: `esm:std/<file>.esm` names a file of the
+# package's bundled copy of the repo-root `lib/` (written by
+# `scripts/sync-lib.sh`). The directory is a `Ref` so tests can substitute a
+# bundle. The whole `esm:` scheme is reserved: a ref beginning with it is never
+# a path or a URL.
+const _STDLIB_DIR = Ref(joinpath(pkgdir(@__MODULE__), "data", "lib"))
+const _STD_NAME_RE = r"^[A-Za-z0-9_][A-Za-z0-9_.\-]*\.esm$"
+
+_is_std_ref(ref::AbstractString) = startswith(ref, "esm:")
+
+# Whether `path` is (or would be) a file of the bundle — what `_expand_ref_env`
+# maps a standard-library ref to. Such a path is never URL-joined.
+_is_bundled_path(path::AbstractString) =
+    startswith(path, joinpath(_STDLIB_DIR[], ""))
+
+# The bundled path a standard-library candidate names, or a path under the
+# bundle that cannot exist (its `unresolved` subdirectory is never written), so
+# each mechanism raises its ordinary unresolved diagnostic.
+function _std_ref_path(candidate::AbstractString)
+    m = match(r"^esm:std/(.*)$", candidate)
+    if m !== nothing
+        segs = filter(!=("."), split(m[1], '/'))
+        if length(segs) == 1 && occursin(_STD_NAME_RE, segs[1])
+            path = joinpath(_STDLIB_DIR[], segs[1])
+            isfile(path) && return path
+        end
+    end
+    return joinpath(_STDLIB_DIR[], "unresolved", replace(candidate, r"[/\\]" => "%2F"))
+end
+
+"""
+    _expand_ref_env(ref, base_dir = nothing) -> String
+
+The §4.7 spelling step before a ref resolves. A ref beginning with `esm:` is
+taken as written (no `\${VAR}` expansion) and mapped to the bundled standard
+library; any other ref has its `\${VAR}` tokens expanded, and an expansion that
+begins with `esm:` is a standard-library ref too. When `base_dir` is the
+bundle itself (a ref inside a bundled file), a relative ref must name another
+bundled file, so the library's own imports stay inside it.
+"""
+function _expand_ref_env(ref::AbstractString, base_dir = nothing)
+    r = _is_std_ref(ref) ? String(ref) : _expand_env_tokens(ref)
+    _is_std_ref(r) && return _std_ref_path(r)
+    if base_dir isa AbstractString && !isempty(base_dir) &&
+            normpath(base_dir) == normpath(_STDLIB_DIR[]) &&
+            !isabspath(r) && !_is_url(r)
+        return _std_ref_path("esm:std/" * r)
+    end
+    return r
+end
+
+# The URL-resolution test every ref site applies: a URL ref, or a relative ref
+# inside a URL-loaded document — but never a bundled standard-library file.
+_is_remote_ref(ref::AbstractString, base::AbstractString) =
+    !_is_bundled_path(ref) && (_is_url(ref) || _is_url(base))
+
 function _load_import_raw(ref::String, base_dir::String, origin::String)
-    ref = _expand_ref_env(ref)
-    if _is_url(ref) || _is_url(base_dir)
+    authored = ref
+    ref = _expand_ref_env(ref, base_dir)
+    if _is_remote_ref(ref, base_dir)
         # An absolute URL ref, or a relative ref inside a library that was
         # itself loaded from a URL: join against the URL base (RFC 3986
         # relative resolution over the cases §4.7 admits).
@@ -1516,7 +1573,7 @@ function _load_import_raw(ref::String, base_dir::String, origin::String)
     isfile(path) || throw(
         ExpressionTemplateError(
             ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
-            "$origin: template-library file not found: $path (from ref '$ref')"
+            "$origin: template-library file not found: $path (from ref '$authored')"
         )
     )
     raw = try
@@ -1564,7 +1621,9 @@ function _resolve_import_entry(
         )
     )
     ref = string(ref_raw)
-    canonical = _canonical_ref(ref, base_dir)
+    # Keyed on the resolved spelling, so a bundled file has one identity
+    # however it is reached (`esm:std/<f>`, or relative inside the bundle).
+    canonical = _canonical_ref(_expand_ref_env(ref, base_dir), base_dir)
     if canonical in stack
         cyc = vcat(stack[findfirst(==(canonical), stack):end], [canonical])
         throw(
@@ -2136,7 +2195,7 @@ function _collect_mount_declared_metaparameters(
         rv isa AbstractString || return
         ref_str = String(rv)
         key = try
-            _canonical_ref(_expand_ref_env(ref_str), base)
+            _canonical_ref(_expand_ref_env(ref_str, base), base)
         catch
             return
         end

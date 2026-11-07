@@ -432,6 +432,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     #      (src/lower_expression_templates.jl, template_imports.jl) ----
     include("expression_templates_test.jl")
     include("template_imports_test.jl")
+    include("stdlib_refs_test.jl")       # §4.7 esm:std/ refs to the bundled lib/
     include("scope_injection_test.jl")
     include("out_of_line_templates_test.jl")
     include("compile_once_templates_test.jl")

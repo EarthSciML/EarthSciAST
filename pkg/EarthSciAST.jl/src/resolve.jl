@@ -1552,8 +1552,8 @@ function _inline_model_subsystems!(
         sub isa AbstractDict || continue
         sub_name = String(sub_key)
         if haskey(sub, "ref") && sub["ref"] isa AbstractString
-            ref = _expand_ref_env(String(sub["ref"]))   # esm-spec §4.7 ${VAR} expansion
-            (_is_url(ref) || _is_url(base_path)) && continue   # typed resolver's
+            ref = _expand_ref_env(String(sub["ref"]), base_path)   # esm-spec §4.7 ${VAR} / esm:std
+            _is_remote_ref(ref, base_path) && continue   # typed resolver's
             try
                 canonical = _canonical_ref(ref, base_path)
                 canonical in visited &&
@@ -1746,7 +1746,7 @@ function _inline_toplevel_form!(
             entry isa AbstractDict && haskey(entry, "ref") &&
                 !haskey(entry, form.body_key)
         ) || continue
-        ref = _expand_ref_env(String(entry["ref"]))  # esm-spec §4.7 ${VAR} expansion
+        ref = _expand_ref_env(String(entry["ref"]), base_path)  # esm-spec §4.7 ${VAR} / esm:std
         # `bindings` / `index_set_rename` diagnostics name the mount form they
         # were read at, so the forms' messages stay distinguishable.
         mount_noun = "top-level $(form.noun) ref '$(ref)'"
@@ -1851,7 +1851,7 @@ function _absolutize_nested_refs!(node, compdir::String)
     if node isa AbstractDict
         r = get(node, "ref", nothing)
         if r isa AbstractString
-            r = _expand_ref_env(r)  # esm-spec §4.7 ${VAR} expansion (before anchoring)
+            r = _expand_ref_env(r, compdir)  # esm-spec §4.7 ${VAR} / esm:std (before anchoring)
             node["ref"] = (
                     startswith(r, "/") || startswith(r, "http://") ||
                     startswith(r, "https://")
@@ -2318,8 +2318,8 @@ function _typed_mount_data_sources(
     end
     native = _native_source_locations(ds)
     apply_mount_url_substitutions!(native, subs, base_path, where)
-    r = _expand_ref_env(String(ref))
-    if _is_url(r) || _is_url(base_path)
+    r = _expand_ref_env(String(ref), base_path)
+    if _is_remote_ref(r, base_path)
         leafdir = _url_dirname(_canonical_ref(r, base_path))
         locate(t) = (
                 startswith(t, "{") || startswith(t, "/") ||
@@ -2426,7 +2426,7 @@ function _load_ref(
         precision::AbstractString = _DEFAULT_ELEMENT_TYPE
     )::EsmFile
     # esm-spec §4.7: expand `${VAR}` from the environment before resolving.
-    ref = _expand_ref_env(ref)
+    ref = _expand_ref_env(ref, base_path)
     # Normalize the reference for cycle detection
     canonical = _canonical_ref(ref, base_path)
 
@@ -2436,7 +2436,7 @@ function _load_ref(
     push!(visited, canonical)
 
     return try
-        if _is_url(ref) || _is_url(base_path)
+        if _is_remote_ref(ref, base_path)
             # An absolute URL ref, or a relative ref inside a document that
             # was itself loaded from a URL: resolve against the URL base
             # (`canonical` is exactly the joined, normalized URL).
@@ -2636,7 +2636,9 @@ was itself loaded from a URL (`base_path` is a URL base) is joined
 against that base. Local paths are resolved to absolute paths.
 """
 function _canonical_ref(ref::String, base_path::String)::String
-    if _is_url(ref)
+    if _is_bundled_path(ref)
+        return ref
+    elseif _is_url(ref)
         return _url_normalize(ref)
     elseif _is_url(base_path)
         return _url_join(base_path, ref)

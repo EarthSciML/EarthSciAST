@@ -242,7 +242,7 @@ function _default_coupling_load_ref(ref::AbstractString, base_path::AbstractStri
     # formats — including `${VAR}` — "with the same per-binding capability rules
     # as a template import". Expansion runs BEFORE the URL classification, so a
     # variable holding a URL is recognised as the remote ref it expands to.
-    ref = _expand_ref_env(String(ref))
+    ref = _expand_ref_env(String(ref), String(base_path))
     if _is_url(ref)
         throw(
             ExpressionTemplateError(
