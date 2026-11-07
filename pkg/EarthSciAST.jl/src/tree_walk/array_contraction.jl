@@ -464,17 +464,18 @@ function _cg_count_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi, span)
     test(av) = cond.op === :<= ? Expr(:call, cmp, av, xv) : Expr(:call, cmp, xv, av)
     axis = _count_const_axis(a, spec)
     if axis !== nothing
-        _tally_cascade!(:count_fold_search)
         tv = _cg_name(ctx, "ct")
         hv = _cg_name(ctx, "ch")
         mv = _cg_name(ctx, "cm")
+        tab = _cg_tab!(ctx, axis)
+        _tally_cascade!(:count_fold_search)
         # The largest `m` with `axis[m] <= x`: the predicate holds on a prefix of
         # an ascending axis, so the search keeps `axis[cn] <= x` (or `cn == 0`)
         # and `!(axis[ch + 1] <= x)` (or `ch == n`).
         return quote
             let
                 local $xv = $xe
-                local $tv = $(_cg_tab!(ctx, axis))
+                local $tv = $tab
                 local $cv = 0
                 local $hv = length($tv)
                 while $cv < $hv
@@ -489,7 +490,6 @@ function _cg_count_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi, span)
             end
         end
     end
-    _tally_cascade!(:count_fold_linear)
     kv = _cg_name(ctx, "lk")
     kc.loops[spec.ref] = kv
     span === nothing || (kc.spans[spec.ref] = span)
@@ -499,6 +499,7 @@ function _cg_count_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi, span)
         delete!(kc.loops, spec.ref)
         span === nothing || delete!(kc.spans, spec.ref)
     end
+    _tally_cascade!(:count_fold_linear)
     return quote
         let
             local $xv = $xe
