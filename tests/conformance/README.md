@@ -80,6 +80,11 @@ tests/conformance/
 │   ├── fixtures/dimensionless_literal.esm  #   one equation per pattern class, plus controls; valid
 │   ├── golden/expected_warnings.json       #   exact warning pointers, incl. ten tests/valid files
 │   └── manifest.json
+├── stdlib_refs/                    # `esm:std/<file>.esm` refs to each binding's bundled lib/ (esm-spec §4.7)
+│   ├── README.md                   #   the contract: the cases and how a binding runs them
+│   ├── manifest.json               #   same_as_twin / error cases; run by each binding's stdlib_refs test file
+│   ├── <case>.esm                  #   documents with no relative path to lib/
+│   └── twins/<case>.esm            #   the same documents reaching lib/ through ../../../../lib/
 └── round_trip/
     └── manifest.json               # fixtures, normalizations, transforms, divergences
 ```
