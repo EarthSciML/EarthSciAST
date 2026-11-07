@@ -2,7 +2,7 @@
   "esm": "1.1.0",
   "metadata": {
     "name": "import_interp",
-    "description": "Twin of ../import_interp.esm reaching the same file through a relative path to the repository's lib/. Loading both must give the same document once every `ref` string is set aside.",
+    "description": "Imports the `linear` template of the standard library with `esm:std/interp.esm` (esm-spec §4.7, §9.7.2). No path to lib/ appears in the document.",
     "authors": [
       "EarthSciML"
     ]
