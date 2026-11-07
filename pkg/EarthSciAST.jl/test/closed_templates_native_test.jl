@@ -51,13 +51,19 @@ function _ct_write(doc)
     return path
 end
 
-# `du` by state name at a few times.
+# `du` by state name at a few times, at a state that differs from cell to
+# cell (so a regrid's derivative depends on every weight, not only on their
+# row sums) and is the same per name in every spelling.
 function _ct_du(path, compiler; times = (0.0, 0.7, 3.1, 1800.0))
     prob = _CT.esm_problem(path, (0.0, 1.0); compiler = compiler)
+    u = copy(prob.u0)
+    for (r, k) in enumerate(sort!(collect(keys(prob.var_map))))
+        u[prob.var_map[k]] += r / 64
+    end
     out = Dict{String, Vector{Float64}}()
     for t in times
         du = similar(prob.u0); fill!(du, NaN)
-        prob.f!(du, copy(prob.u0), prob.p, t)
+        prob.f!(du, u, prob.p, t)
         for (k, v) in prob.var_map
             push!(get!(() -> Float64[], out, k), du[v])
         end

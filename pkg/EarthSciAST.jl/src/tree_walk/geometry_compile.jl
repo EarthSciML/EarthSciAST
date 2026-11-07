@@ -99,16 +99,21 @@ struct _GeoSlotGate
 end
 
 # A nested scalar aggregate (`:geo_agg`): its loop slots (in `ranges`-key
-# order) and extents, the pre-resolved join gate, the compiled filter, and the
-# compiled body. ALWAYS the additive fold: the interpreter's nested-aggregate
-# arm summed unconditionally — `reduce`/`semiring` are honored only at the TOP
-# level (`_materialize_geom_array`'s contraction), as before.
+# order) and extents, the pre-resolved join gate, the compiled filter, the
+# compiled body, and its fold: `op` (`:+`, `:*`, `:max`, `:min`, from the
+# node's `reduce`/`semiring`) seeded with its identity `zero`, left to right
+# over the admitted tuples. Seeding with the identity gives the bits of the
+# right-hand side's unrolled `op(op(t1, t2), t3)` (`_combine_with_reducer`):
+# `max(-Inf, t) = t`, `1.0 * t = t`. A tuple the gate or the filter rejects is
+# skipped, which for `:*`/`:max`/`:min` is the same as folding the identity.
 struct _GeoAggSpec
     slots::Vector{Int}
     exts::Vector{Int}
     gates::Union{Nothing, Vector{_GeoSlotGate}}
     filter::Union{Nothing, _Node}
     body::_Node
+    op::Symbol
+    zero::Float64
 end
 
 # ---- Compile context --------------------------------------------------------
@@ -123,7 +128,12 @@ struct _GeoCompileCtx
     scope::Dict{String, Int}
     setof::Dict{String, String}
     nslots::Base.RefValue{Int}
+    # Compiled node per (expression, lexical scope): an interned sub-tree
+    # reached twice under one scope compiles to one node (`_geo_memoize!`).
+    memo::IdDict{Any, _Node}
 end
+_GeoCompileCtx(ctx, scope, setof, nslots) =
+    _GeoCompileCtx(ctx, scope, setof, nslots, IdDict{Any, _Node}())
 
 _geo_newslot!(g::_GeoCompileCtx) = (g.nslots[] += 1)
 
@@ -134,6 +144,14 @@ _geo_newslot!(g::_GeoCompileCtx) = (g.nslots[] += 1)
 # anything else throws the same E_TREEWALK_GEOMETRY_SETUP diagnostics it
 # threw — just at compile (before the sweep) instead of at the first cell.
 function _geo_compile(expr, g::_GeoCompileCtx)::_Node
+    expr isa OpExpr || return _geo_compile_uncached(expr, g)
+    key = (expr, g.scope)
+    got = get(g.memo, key, nothing)
+    got === nothing || return got
+    return g.memo[key] = _geo_compile_uncached(expr, g)
+end
+
+function _geo_compile_uncached(expr, g::_GeoCompileCtx)::_Node
     if expr isa NumExpr
         return _mknode(kind = _NK_LITERAL, literal = expr.value)
     elseif expr isa IntExpr
@@ -310,13 +328,20 @@ function _geo_compile_agg(expr::OpExpr, g::_GeoCompileCtx)::_Node
         r = expr.ranges[lv]
         r isa IndexSetRef && (setof[lv] = r.from)
     end
-    inner = _GeoCompileCtx(g.ctx, scope, setof, g.nslots)
+    inner = _GeoCompileCtx(g.ctx, scope, setof, g.nslots, g.memo)
     gates = _geo_slot_gates(expr, inner)
     filt = expr.filter === nothing ? nothing : _geo_compile(expr.filter, inner)
     body = _geo_compile(expr.expr_body, inner)
+    oplus, zero = _aggregate_oplus_identity(expr.semiring, expr.reduce)
+    oplus in ("+", "*", "max", "min") || throw(
+        TreeWalkError(
+            "E_TREEWALK_GEOMETRY_SETUP",
+            "a nested `faq` reducing with '$(oplus)' has no setup-time geometry form"
+        )
+    )
     return _mknode(
         kind = _NK_OP, op = :geo_agg,
-        payload = _GeoAggSpec(slots, exts, gates, filt, body)
+        payload = _GeoAggSpec(slots, exts, gates, filt, body, Symbol(oplus), zero)
     )
 end
 
@@ -467,7 +492,8 @@ end
 # Nested scalar aggregate (`:geo_agg`): the interpreter's product loop,
 # verbatim — write the loop slots, join-gate then filter, sum the body.
 function _geo_eval_agg(spec::_GeoAggSpec, u, p, t, ::Type{T})::Float64 where {T}
-    acc = 0.0
+    acc = spec.zero
+    op = spec.op
     slots = spec.slots
     gates = spec.gates
     filt = spec.filter
@@ -489,9 +515,109 @@ function _geo_eval_agg(spec::_GeoAggSpec, u, p, t, ::Type{T})::Float64 where {T}
         if filt !== nothing
             _eval_node(filt, u, p, t, T) != 0.0 || continue
         end
-        acc += _eval_node(body, u, p, t, T)
+        v = _eval_node(body, u, p, t, T)
+        acc = op === :+ ? acc + v : op === :max ? max(acc, v) : op === :min ? min(acc, v) : acc * v
     end
     return acc
+end
+
+# ---- Memo of shared sub-trees over the loop frame ----
+# With `_geo_compile`'s memo a body is a DAG: a node with several parents (an
+# edge or half-plane quantity the overlap-area templates write out at each of
+# its uses) is walked once per parent. `_geo_memoize!` wraps each such node in a
+# `:geomemo` node keyed by the frame slots its sub-tree reads, evaluated before
+# the sub-tree runs: while those slots hold the values it last saw, the walk
+# returns the value it computed then. The sub-tree's value is a function of
+# those slots alone (the env is fixed for the sweep), so the result is the
+# walk's own, bit for bit. A sub-tree holding a geometry leaf, a ring
+# reference or a skolem is left alone.
+mutable struct _GeoMemo
+    slots::Vector{Int}
+    last::Vector{Float64}
+    val::Float64
+    valid::Bool
+end
+
+function _geo_memoize!(roots::Vector{_Node})
+    refs = IdDict{_Node, Int}()
+    reads = IdDict{_Node, Union{Nothing, Set{Int}}}()   # `nothing`: not memoizable
+    kids(n) = n.op === :geo_agg ? begin
+            sp = n.payload::_GeoAggSpec
+            sp.filter === nothing ? _Node[sp.body] : _Node[sp.filter, sp.body]
+        end : n.children
+    function visit(n::_Node)
+        c = get(refs, n, 0)
+        refs[n] = c + 1
+        c == 0 || return reads[n]
+        r = if n.kind == _NK_STATE
+            Set{Int}(n.idx)
+        elseif n.kind == _NK_LITERAL
+            Set{Int}()
+        elseif n.kind == _NK_OP && !(n.op in (:geo_pia, :geo_skolem, :geomemo)) &&
+                !(n.op === :geo_agg && (n.payload::_GeoAggSpec).gates !== nothing) &&
+                !(n.op === :geo_gather && !(n.payload isa AbstractArray))
+            acc = Set{Int}()
+            n.op === :geo_agg && union!(acc, (n.payload::_GeoAggSpec).slots)
+            for ch in kids(n)
+                rc = visit(ch)
+                rc === nothing && (acc = nothing; break)
+                union!(acc, rc)
+            end
+            acc
+        else
+            for ch in kids(n)
+                visit(ch)
+            end
+            nothing
+        end
+        return reads[n] = r
+    end
+    foreach(visit, roots)
+    wrap = IdDict{_Node, _Node}()
+    for (n, c) in refs
+        r = reads[n]
+        (c >= 2 && r !== nothing && n.kind == _NK_OP) || continue
+        sl = sort!(collect(r))
+        wrap[n] = _mknode(
+            kind = _NK_OP, op = :geomemo, children = _Node[n],
+            payload = _GeoMemo(sl, zeros(Float64, length(sl)), 0.0, false)
+        )
+    end
+    isempty(wrap) && return roots
+    seen = IdDict{_Node, Nothing}()
+    function rewire(n::_Node)
+        haskey(seen, n) && return
+        seen[n] = nothing
+        for ch in kids(n)
+            rewire(ch)
+        end
+        for k in eachindex(n.children)
+            w = get(wrap, n.children[k], nothing)
+            w === nothing || (n.children[k] = w)
+        end
+        return
+    end
+    foreach(rewire, roots)
+    return _Node[get(wrap, r, r) for r in roots]
+end
+
+function _eval_geomemo(n::_Node, u, p, t, ::Type{T})::Float64 where {T}
+    m = n.payload::_GeoMemo
+    sl = m.slots
+    if m.valid
+        hit = true
+        @inbounds for k in eachindex(sl)
+            u[sl[k]] === m.last[k] || (hit = false; break)
+        end
+        hit && return m.val
+    end
+    @inbounds for k in eachindex(sl)
+        m.last[k] = u[sl[k]]
+    end
+    v = Float64(_eval_node(n.children[1], u, p, t, T))
+    m.val = v
+    m.valid = true
+    return v
 end
 
 # The join-then-filter gate for the TOP-level materialization sweeps:
@@ -549,6 +675,10 @@ function _eval_geo_op(n::_Node, u, p, t, ::Type{T})::Float64 where {T}
         return Float64(hash(Tuple(vals)) % _SKOLEM_HASH_CAP)
     elseif op === :geo_agg
         return _geo_eval_agg(n.payload::_GeoAggSpec, u, p, t, T)
+    elseif op === :cellmemo
+        return _eval_cellmemo(n, u, p, t, T)
+    elseif op === :geomemo
+        return _eval_geomemo(n, u, p, t, T)
     end
     throw(_unevaluable_operator(op, "the setup-geometry ladder has no arm for it"))
 end

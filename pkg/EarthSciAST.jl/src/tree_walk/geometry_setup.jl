@@ -1222,6 +1222,10 @@ function _materialize_geom_array(
     gates = _geo_slot_gates(faq, g)
     filt = faq.filter === nothing ? nothing : _geo_compile(faq.filter, g)
     body = _geo_compile(faq.expr_body, g)
+    if _compiler_plan_now().share_subtrees
+        roots = _geo_memoize!(filt === nothing ? _Node[body] : _Node[filt, body])
+        filt === nothing ? (body = roots[1]) : ((filt, body) = (roots[1], roots[2]))
+    end
     u = zeros(Float64, nslots[])
     nout = length(out)
     # ---- The OVERLAP broad phase (see `_geo_overlap_gate` above) ----
