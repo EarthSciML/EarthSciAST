@@ -2,7 +2,7 @@
  "category": "relational_templates",
  "runner": "inline_tests",
  "version": "1.0",
- "description": "The pure-AST `argmin` / `argmax` templates of lib/relational.esm under every compiler: argmin_template.esm applies them to every scenario of scenarios.json (ties, signed zeros, infinities, NaN candidates; each candidate `num[k] / den[k]` over two `const` arrays so 0/0 and ±1/0 can be written) and asserts the 1-based index at tolerance 0; nearest_generator_template_ode.esm is the value_invention_geometry nearest-generator document with its `argmin` op replaced by the template, and must integrate to the same values as the op document.",
+ "description": "The pure-AST `argmin` / `argmax` templates of lib/relational.esm under every compiler: argmin_template.esm applies them to every scenario of scenarios.json (ties, signed zeros, infinities, NaN candidates; each candidate `num[k] / den[k]` over two `const` arrays so 0/0 and ±1/0 can be written) and asserts the 1-based index at tolerance 0; nearest_generator_template_ode.esm is the value_invention_geometry nearest-generator document with its `argmin` op replaced by the template, and must integrate to the same values as the op document. The two rewrites of the value_invention_geometry skolem documents (rewrites/edge_enumeration_ode.esm, rewrites/bin_skolem_count_ode.esm) run here too and integrate to those documents' values.",
  "reference_binding": "julia",
  "reference_compiler": "interpreter",
  "bindings_required": [
@@ -79,6 +79,62 @@
     "gather"
    ],
    "note": "tests/conformance/value_invention_geometry/fixtures/nearest_generator_ode.esm with the op replaced by the template; its golden equals that document's.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "edge_enumeration_ode_template",
+   "path": "rewrites/edge_enumeration_ode.esm",
+   "model": "EdgeEnumerationODE",
+   "golden": "golden/edge_enumeration_ode_template.json",
+   "tags": [
+    "expression_templates",
+    "value-invention",
+    "distinct",
+    "composite-key"
+   ],
+   "note": "value_invention_geometry/fixtures/edge_enumeration_ode.esm with its skolem edge key written as edge_key(a, b, 1, 4); its golden matches that document's.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "bin_skolem_count_ode_template",
+   "path": "rewrites/bin_skolem_count_ode.esm",
+   "model": "BinSkolemCountODE",
+   "golden": "golden/bin_skolem_count_ode_template.json",
+   "tags": [
+    "expression_templates",
+    "value-invention",
+    "distinct",
+    "composite-key"
+   ],
+   "note": "value_invention_geometry/fixtures/bin_skolem_count_ode.esm with its bin keys split into per-component join columns and its pair key written as pair_key(i, j, 1, 1, 4, 4); its golden matches that document's.",
    "required": {
     "julia": [
      "interpreter",
