@@ -1,0 +1,47 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "mount_solar_subsystem",
+    "description": "Twin of ../mount_solar_subsystem.esm reaching the same file through a relative path to the repository's lib/. Loading both must give the same document once every `ref` string is set aside.",
+    "authors": [
+      "EarthSciML"
+    ]
+  },
+  "models": {
+    "Photolysis": {
+      "subsystems": {
+        "Solar": {
+          "ref": "../../../../lib/solar.esm"
+        }
+      },
+      "variables": {
+        "k_max": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.012
+        },
+        "j_rate": {
+          "type": "unknown",
+          "units": "1/s"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "j_rate",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "k_max",
+              {
+                "op": "cos",
+                "args": [
+                  "Solar.solar_zenith_angle"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

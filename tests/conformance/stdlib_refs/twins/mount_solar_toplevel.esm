@@ -1,0 +1,15 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "mount_solar_toplevel",
+    "description": "Twin of ../mount_solar_toplevel.esm reaching the same file through a relative path to the repository's lib/. Loading both must give the same document once every `ref` string is set aside.",
+    "authors": [
+      "EarthSciML"
+    ]
+  },
+  "models": {
+    "Solar": {
+      "ref": "../../../../lib/solar.esm"
+    }
+  }
+}

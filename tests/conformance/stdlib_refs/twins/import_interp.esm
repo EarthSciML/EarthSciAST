@@ -1,0 +1,80 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "import_interp",
+    "description": "Twin of ../import_interp.esm reaching the same file through a relative path to the repository's lib/. Loading both must give the same document once every `ref` string is set aside.",
+    "authors": [
+      "EarthSciML"
+    ]
+  },
+  "models": {
+    "M": {
+      "expression_template_imports": [
+        {
+          "ref": "../../../../lib/interp.esm",
+          "only": [
+            "linear"
+          ]
+        }
+      ],
+      "variables": {
+        "s": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.5
+        },
+        "r": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "s"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": "r",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "linear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  10.0,
+                  20.0,
+                  40.0
+                ]
+              },
+              "axis": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  2.0
+                ]
+              },
+              "x": "x",
+              "n": 3
+            }
+          }
+        }
+      ]
+    }
+  }
+}

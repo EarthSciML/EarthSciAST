@@ -1,0 +1,47 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "coupling_import_unknown_file",
+    "description": "A `coupling_import` of `esm:std/nope.esm`, a file the bundled standard library does not contain: coupling_import_unresolved (esm-spec §4.7 rule 2, §10.10).",
+    "authors": [
+      "EarthSciML"
+    ]
+  },
+  "models": {
+    "A": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "x"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "coupling_import",
+      "ref": "esm:std/nope.esm",
+      "bind": {
+        "R": "A"
+      }
+    }
+  ]
+}
