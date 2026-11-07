@@ -4697,17 +4697,19 @@ Each step covers every axis before the next step begins, so a bilinear call whos
 
 Both bounds are proven in `formal/` (`Esm/Closed/Interp/Rounding.lean`, `Esm/Closed/Interp/Bilinear64.lean`). No relative tolerance is sound: with FMA, `interp.linear([1, −2], [0, 3], 1)` is `2⁻⁵⁴` where the pinned result is `0`. The fixtures under `tests/closed_functions/interp/` are bit-exact (`0/0`) and avoid FMA-sensitive inputs.
 
-**Composition rationale (informative):** `interp.linear(table, axis, x)` is exactly equivalent to the following AST composition (modulo evaluation order / FMA effects, which the spec pins above):
+**Composition rationale (informative):** the three `interp.*` functions are expressible in the core AST, and the standard library carries those expressions: `lib/interp.esm` is a template-library file (§9.7.1) whose match-less templates `searchsorted(x, xs, n)`, `linear(table, axis, x, n)` and `bilinear(table, axis_x, axis_y, x, y, nx, ny)` are their pure-AST definitions, the axis lengths being integer parameters used as `faq` `ranges` bounds (§9.6.1). Each locates its cell by counting comparisons rather than by searching:
 
 ```jsonc
-// Let xc = clamp(x, axis[1], axis[N]) (extrapolate-flat; clamping the index alone
-// would clamp the cell but not the weight, and so extrapolate), then
-// i = interp.searchsorted(xc, axis) clamped to [2, N], i_lo = i − 1.
-// Then the linear blend is:
-//   table[i_lo] + (xc − axis[i_lo]) / (axis[i] − axis[i_lo]) · (table[i] − table[i_lo])
-// (At an interior knot this picks the cell to the LEFT of the knot, w = 1, where the
-// pinned form picks the cell to the right, w = 0; the two agree in exact arithmetic.)
+// searchsorted: 1 + Σ_{k=1..n} ifelse(xs[k] >= x, 0, 1)
+//   (the first k with xs[k] >= x; n + 1 when none is, or x is NaN; 1 when n = 0)
+// linear: i = min(max(Σ_{k=1..n} ifelse(axis[k] <= x, 1, 0), 1), n - 1), then
+//   ifelse(x <= axis[1], table[1], ifelse(x >= axis[n], table[n],
+//          table[i] + (x - axis[i]) / (axis[i+1] - axis[i]) · (table[i+1] - table[i])))
+// bilinear: x and y clamped to their axes, i and j counted the same way on the
+//   clamped queries, then the two x-blends and the y-blend in the order above.
 ```
+
+With a strictly increasing axis, the count clamped to `[1, n − 1]` is exactly the `i` of step 3 of `interp.linear` and the `i` of step 2 of `interp.bilinear`, including the interior-knot convention (`i = k`, weight `0`), and a NaN query counts `0`, so the blend weight is NaN. Each body evaluates in the order this section pins, and on every success scenario of `tests/closed_functions/interp/` the expanded template gives the same `binary64` result as the `fn` form. The templates do not carry the load-time argument checks above: a caller of a template supplies a valid axis.
 
 The named primitive exists so that symbolic layers in bindings (notably the Julia MTK extension) can mark each lookup as opaque to alias elimination via `@register_symbolic`, instead of paying the structural-simplify cost of ~10 alias-eliminated intermediates per lookup. With ~230 lookups per `fastjx` photolysis evaluation (18 wavelengths × 13 species), that difference is the gap between MTK simplification finishing in seconds versus minutes-to-hours (see escalation `hq-wisp-y6g6`).
 
@@ -4990,7 +4992,7 @@ The mechanism is purely structural — no evaluation, no metaprogramming. **PDE-
 Required fields:
 
 - `params`: ordered array of unique non-empty parameter (metavariable) names (strings). MAY be empty — a zero-parameter template is a named constant fragment (common in library files, e.g. a grid-spacing expression).
-- `body`: a normal Expression AST (the replacement). Parameter occurrences appear as bare parameter-name strings in any variable-reference position, **and in scalar-field position**: a parameter name appearing as the string value of a scalar (non-`args`, non-Expression-valued) Expression-node field in `body` (e.g. `dim`, `side`, `wrt`, `manifold`) is a substitution site — the exact mirror of the match-side scalar-field binding rule below. The value bound to a scalar-field parameter MUST be a literal admissible for that field; substitution itself never checks this (it is pure-syntactic, §9.6.3 constraint 5) — validity is discharged on the expanded-equivalent form (§9.6.4 rule 6, §9.6.9), so an inadmissible substituted value (e.g. `manifold: "bogus"`) is rejected by the field's own validation, reported at the offending call site. **Params shadow literals**: inside `body`, a declared parameter name shadows any coincident literal string — every string value equal to a declared parameter name is a substitution site — so an author MUST NOT name a parameter after a field literal its body means literally (e.g. a parameter named `planar` over a body that pins `manifold: "planar"`), nor after an index symbol the body uses; bindings MAY surface a lint-grade diagnostic for such a collision but MUST still substitute. A body MAY reference other **match-less** in-scope templates via `apply_expression_template` nodes; these are checked at registration time as a statically-checked acyclic DAG (§9.7.3) and, from `esm: 0.9.0`, preserved uninlined (§9.6.4).
+- `body`: a normal Expression AST (the replacement). Parameter occurrences appear as bare parameter-name strings in any variable-reference position, **and in scalar-field position**: a parameter name appearing as the string value of a scalar (non-`args`, non-Expression-valued) Expression-node field in `body` (e.g. `dim`, `side`, `wrt`, `manifold`) is a substitution site — the exact mirror of the match-side scalar-field binding rule below. The value bound to a scalar-field parameter MUST be a literal admissible for that field; substitution itself never checks this (it is pure-syntactic, §9.6.3 constraint 5) — validity is discharged on the expanded-equivalent form (§9.6.4 rule 6, §9.6.9), so an inadmissible substituted value (e.g. `manifold: "bogus"`) is rejected by the field's own validation, reported at the offending call site. A `faq` dense `ranges` tuple entry (§4.3.1) is a substitution site too, so a template can take a loop bound such as an axis length as a parameter: `"ranges": {"k": [1, "n"]}` instantiated with `"n": 5` becomes `[1, 5]`. The bound value MUST be one a `ranges` tuple entry admits (an integer literal or a §9.7.6 metaparameter expression); as for a scalar field, substitution does not check it (`tests/conformance/expression_templates/ranges_param/`). **Params shadow literals**: inside `body`, a declared parameter name shadows any coincident literal string — every string value equal to a declared parameter name is a substitution site — so an author MUST NOT name a parameter after a field literal its body means literally (e.g. a parameter named `planar` over a body that pins `manifold: "planar"`), nor after an index symbol the body uses; bindings MAY surface a lint-grade diagnostic for such a collision but MUST still substitute. A body MAY reference other **match-less** in-scope templates via `apply_expression_template` nodes; these are checked at registration time as a statically-checked acyclic DAG (§9.7.3) and, from `esm: 0.9.0`, preserved uninlined (§9.6.4).
 
 Optional fields:
 
@@ -5303,6 +5305,7 @@ Conformance fixtures live under `tests/conformance/expression_templates/`. From 
 - `arrhenius_smoke/fixture.esm` — a 2-parameter `arrhenius` template applied across three reactions with different scalar bindings.
 - `arrhenius_smoke/expanded.esm` — the canonical post-expansion form. All five bindings (Julia, Python, Rust, TypeScript, Go) MUST produce a structurally-equal `reactions` array under the `Expand ∘ load` oracle (above).
 - `scalar_field_param/` — the §9.6.1 scalar-field substitution site: one template parameterized on the `manifold` scalar field of a `polygon_intersection_area` node, instantiated twice (`planar` / `spherical`), plus the Julia-generated `expanded.esm`. All five bindings MUST produce structurally-equal post-substitution nodes; an inadmissible bound value is rejected on the expanded-equivalent form (§9.6.9).
+- `ranges_param/` — the §9.6.1 `ranges` substitution site: two templates whose `faq` dense `ranges` tuples carry parameters (a 2-element `[1, "n"]` and a 3-element `["lo", "s", "n"]`), instantiated three times, plus the Julia-generated `expanded.esm`. All five bindings MUST produce structurally-equal expanded `ranges` tuples.
 
 The template-library RFC adds (see `docs/content/rfcs/template-library-imports.md` §11):
 

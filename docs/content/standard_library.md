@@ -1,9 +1,9 @@
 # ESS Standard Subsystem Library
 
 The `lib/` directory ships ESS subsystems authored entirely in pure AST and the
-spec's closed-function registry (`esm-spec.md` §9.2). Each file is a self-contained
-subsystem includable from any consumer model via subsystem reference (`esm-spec.md`
-§4.7):
+spec's closed-function registry (`esm-spec.md` §9.2). Each file except
+`lib/interp.esm` (a template library, below) is a self-contained subsystem
+includable from any consumer model via subsystem reference (`esm-spec.md` §4.7):
 
 ```json
 {
@@ -47,7 +47,7 @@ either a new `lib/` file or a new §9 entry, apply the table above.
 |---|---|---|---|
 | [`lib/calendar.esm`](../lib/calendar.esm) | `Calendar` | `year`, `month`, `day`, `hour`, `minute`, `second`, `day_of_year`, `julian_day`, `is_leap_year`, `seconds_since_midnight`, `fractional_year` | `t_utc` (s) |
 | [`lib/solar.esm`](../lib/solar.esm) | `Solar` | `solar_declination` (rad), `equation_of_time` (min), `true_solar_time` (min), `hour_angle` (rad), `cos_zenith`, `solar_zenith_angle` (rad) | `t_utc` (s), `lat` (deg), `lon` (deg) |
-| [`lib/interp.esm`](../lib/interp.esm) | `Interp` | `y_linear` — worked example of 1-D linear interpolation | `x` |
+| [`lib/interp.esm`](../lib/interp.esm) | template library (no subsystem) | expression templates `searchsorted`, `linear`, `bilinear` | the template parameters (arrays, query, axis lengths) |
 
 ### `lib/calendar.esm`
 
@@ -109,27 +109,54 @@ To use:
 
 ### `lib/interp.esm`
 
-A copy-paste template for 1-D linear interpolation. The closed registry
-deliberately ships only `interp.searchsorted` because the rest of the
-linear-interp recipe — bracket index, fractional weight, blend — is pure AST
-and depends on the caller's `xs`/`ys` arrays. `lib/interp.esm` shows the
-canonical assembly with a small inline table; consumers copy the variable
-definitions and substitute their own `xs`, `ys`, and query variable.
+Unlike the other two files, `lib/interp.esm` is a template-library file
+(`esm-spec.md` §9.7.1), not a subsystem: it declares three match-less
+expression templates and no model. A component imports it with
+`expression_template_imports` and calls a template with
+`apply_expression_template` (§9.6.2); a template-library file cannot be
+mounted as a subsystem.
 
-The recipe (one line per AST node):
-
-```text
-i_raw = searchsorted(xs, x)             # 1-based, may be 1 or N+1
-i     = min(N, max(2, i_raw))           # clamp so i-1 and i are valid indices
-t_raw = (x - xs[i-1]) / (xs[i] - xs[i-1])
-t     = clamp(t_raw, 0, 1)              # constant-value extrapolation
-y     = ys[i-1] + t * (ys[i] - ys[i-1])
+```json
+{
+  "expression_template_imports": [{ "ref": "../lib/interp.esm" }],
+  "equations": [
+    {
+      "lhs": "k_photo",
+      "rhs": {
+        "op": "apply_expression_template", "args": [], "name": "linear",
+        "bindings": {
+          "table": { "op": "const", "args": [], "value": [1.0e-5, 4.0e-5, 9.0e-5] },
+          "axis":  { "op": "const", "args": [], "value": [0.0, 0.5, 1.0] },
+          "x": "cos_zenith",
+          "n": 3
+        }
+      }
+    }
+  ]
+}
 ```
 
-Bilinear (2-D) interpolation follows the same pattern with two
-`searchsorted` lookups and a 4-point bilinear blend over the 2-D table; it is
-left as an exercise (and as a future addition to `lib/interp.esm` once a
-real-model use case lands).
+The three templates are the pure-AST definitions of the `interp.*` closed
+functions of §9.2, written with `faq` comparison counts, the `index` op and
+arithmetic. Each axis length is an explicit integer parameter, used as the
+upper bound of a `faq` dense `ranges` entry (a substitution site, §9.6.1):
+
+| Template | Parameters | Value |
+|---|---|---|
+| `searchsorted` | `x`, `xs`, `n` | `1 + Σ_{k=1..n} ifelse(xs[k] ≥ x, 0, 1)`: the first index with `xs[k] ≥ x`; `n + 1` when there is none, or `x` is NaN; `1` for `n = 0` |
+| `linear` | `table`, `axis`, `x`, `n` | flat outside the axis; inside, `i = min(max(Σ_k ifelse(axis[k] ≤ x, 1, 0), 1), n − 1)` and `table[i] + w·(table[i+1] − table[i])` with `w = (x − axis[i]) / (axis[i+1] − axis[i])` |
+| `bilinear` | `table`, `axis_x`, `axis_y`, `x`, `y`, `nx`, `ny` | each query clamped to its axis, the cell on each axis found by the same count, then the two x-blends and the y-blend in §9.2's order |
+
+The evaluation order of each body is the one §9.2 pins for the matching
+function, including the interior-knot convention of `bilinear` (a clamped
+query on interior knot `k` selects cell `k`, so the weight is `0`). On every
+success scenario of `tests/closed_functions/interp/*/expected.json` the
+expanded template gives the same bits as the `fn` form, NaN queries included;
+the Julia harness (`test/closed_functions_test.jl`) checks this scenario by
+scenario, and `tests/closed_functions/interp/*/template.esm` carries a subset
+as inline tests for the cross-binding `interp_templates` conformance tier.
+The templates do not repeat the load-time axis checks of the `fn` form (a
+non-monotonic or NaN axis is not rejected); the caller supplies a valid axis.
 
 ## Validation and conformance
 

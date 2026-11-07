@@ -1,0 +1,125 @@
+{
+ "category": "interp_templates",
+ "runner": "inline_tests",
+ "version": "1.0",
+ "description": "The pure-AST interpolation templates of lib/interp.esm (`searchsorted`, `linear`, `bilinear`), each applied to scenarios of tests/closed_functions/interp/<fn>/expected.json and asserted at tolerance 0, so every binding's expanded template reproduces the bits the `interp.*` closed functions are pinned to (esm-spec §9.2). The query is a parameter, the arrays `const` nodes and each axis length an integer template argument used as a `faq` `ranges` bound (esm-spec §9.6.1).",
+ "reference_binding": "julia",
+ "reference_compiler": "interpreter",
+ "bindings_required": [
+  "julia",
+  "python",
+  "rust"
+ ],
+ "scope_excluded": {
+  "go": "No simulator and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md §3, capability profiles). Go's template expansion of a `ranges` parameter is pinned by tests/conformance/expression_templates/ranges_param. This is an exclusion from the CATEGORY, not from the rule.",
+  "typescript": "No simulator and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md §3, capability profiles). TypeScript's template expansion of a `ranges` parameter is pinned by tests/conformance/expression_templates/ranges_param. This is an exclusion from the CATEGORY, not from the rule."
+ },
+ "integrators": {
+  "julia": {
+   "algorithm": "Tsit5",
+   "reltol": 1e-12,
+   "abstol": 1e-14
+  },
+  "python": {
+   "method": "LSODA",
+   "rtol": 1e-12,
+   "atol": 1e-14
+  },
+  "rust": {
+   "solver": "Erk",
+   "reltol": 1e-12,
+   "abstol": 1e-14
+  }
+ },
+ "tolerances": {
+  "golden_rtol": 0,
+  "golden_atol": 0,
+  "detail": "Every asserted value is the closed function's pinned binary64 result, matched bit for bit."
+ },
+ "fixtures": [
+  {
+   "id": "searchsorted_template",
+   "path": "closed_functions/interp/searchsorted/template.esm",
+   "model": "interp_searchsorted_template",
+   "golden": "golden/searchsorted_template.json",
+   "tags": [
+    "expression_templates",
+    "faq",
+    "closed-function-registry",
+    "interp.searchsorted"
+   ],
+   "note": "Referenced from tests/closed_functions/interp/searchsorted/, beside the expected.json whose scenarios it applies.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "linear_template",
+   "path": "closed_functions/interp/linear/template.esm",
+   "model": "interp_linear_template",
+   "golden": "golden/linear_template.json",
+   "tags": [
+    "expression_templates",
+    "faq",
+    "closed-function-registry",
+    "interp.linear"
+   ],
+   "note": "Referenced from tests/closed_functions/interp/linear/, beside the expected.json whose scenarios it applies.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "bilinear_template",
+   "path": "closed_functions/interp/bilinear/template.esm",
+   "model": "interp_bilinear_template",
+   "golden": "golden/bilinear_template.json",
+   "tags": [
+    "expression_templates",
+    "faq",
+    "closed-function-registry",
+    "interp.bilinear"
+   ],
+   "note": "Referenced from tests/closed_functions/interp/bilinear/, beside the expected.json whose scenarios it applies.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  }
+ ]
+}

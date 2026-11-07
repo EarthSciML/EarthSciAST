@@ -1,0 +1,445 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "interp_searchsorted_template",
+    "description": "The `searchsorted` template of lib/interp.esm applied to scenarios of this directory's expected.json, which pins the same values for the `interp.searchsorted` closed function (esm-spec §9.2). Each scenario is one algebraic unknown defined by an `apply_expression_template` call with the scenario's arrays as `const` nodes, the axis lengths as integers and the query as a parameter; the inline test asserts the expected value exactly (tolerance 0). NaN scenarios stay in the binding harnesses, since JSON cannot write NaN. Run by the `interp_templates` inline-test conformance tier.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "tags": [
+      "closed-function-registry",
+      "interp",
+      "interp.searchsorted",
+      "expression-templates",
+      "standard-library"
+    ]
+  },
+  "models": {
+    "interp_searchsorted_template": {
+      "expression_template_imports": [
+        {
+          "ref": "../../../../lib/interp.esm",
+          "only": [
+            "searchsorted"
+          ]
+        }
+      ],
+      "variables": {
+        "s": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0,
+          "description": "Trivial state, so the document has something to integrate."
+        },
+        "x_below_minimum": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5,
+          "description": "Query of scenario `below_minimum`."
+        },
+        "r_below_minimum": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`searchsorted` template on scenario `below_minimum` of expected.json: clamp below: x under every entry."
+        },
+        "x_above_maximum": {
+          "type": "parameter",
+          "units": "1",
+          "default": 10.0,
+          "description": "Query of scenario `above_maximum`."
+        },
+        "r_above_maximum": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`searchsorted` template on scenario `above_maximum` of expected.json: clamp above: x over every entry gives n + 1."
+        },
+        "x_exact_on_boundary": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "Query of scenario `exact_on_boundary`."
+        },
+        "r_exact_on_boundary": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`searchsorted` template on scenario `exact_on_boundary` of expected.json: x on an interior entry (left bias)."
+        },
+        "x_between_entries": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.5,
+          "description": "Query of scenario `between_entries`."
+        },
+        "r_between_entries": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`searchsorted` template on scenario `between_entries` of expected.json: x strictly between two entries."
+        },
+        "x_exact_at_last": {
+          "type": "parameter",
+          "units": "1",
+          "default": 5.0,
+          "description": "Query of scenario `exact_at_last`."
+        },
+        "r_exact_at_last": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`searchsorted` template on scenario `exact_at_last` of expected.json: x on the last entry."
+        },
+        "x_single_element_above": {
+          "type": "parameter",
+          "units": "1",
+          "default": 5.0,
+          "description": "Query of scenario `single_element_above`."
+        },
+        "r_single_element_above": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`searchsorted` template on scenario `single_element_above` of expected.json: one-entry axis, x above it."
+        },
+        "x_duplicates_left_bias": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "Query of scenario `duplicates_left_bias`."
+        },
+        "r_duplicates_left_bias": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`searchsorted` template on scenario `duplicates_left_bias` of expected.json: x on a run of equal entries: the run's first index."
+        },
+        "x_duplicates_below_run": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.999999,
+          "description": "Query of scenario `duplicates_below_run`."
+        },
+        "r_duplicates_below_run": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`searchsorted` template on scenario `duplicates_below_run` of expected.json: x just below a run of equal entries."
+        },
+        "x_non_decreasing_allowed": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.5,
+          "description": "Query of scenario `non_decreasing_allowed`."
+        },
+        "r_non_decreasing_allowed": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`searchsorted` template on scenario `non_decreasing_allowed` of expected.json: equal neighbours elsewhere in the axis."
+        },
+        "x_empty_xs": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "Query of scenario `empty_xs`."
+        },
+        "r_empty_xs": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`searchsorted` template on scenario `empty_xs` of expected.json: empty axis (n = 0) gives 1."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "s"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": "r_below_minimum",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "searchsorted",
+            "bindings": {
+              "x": "x_below_minimum",
+              "xs": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  1.0,
+                  2.0,
+                  3.0,
+                  4.0,
+                  5.0
+                ]
+              },
+              "n": 5
+            }
+          }
+        },
+        {
+          "lhs": "r_above_maximum",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "searchsorted",
+            "bindings": {
+              "x": "x_above_maximum",
+              "xs": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  1.0,
+                  2.0,
+                  3.0,
+                  4.0,
+                  5.0
+                ]
+              },
+              "n": 5
+            }
+          }
+        },
+        {
+          "lhs": "r_exact_on_boundary",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "searchsorted",
+            "bindings": {
+              "x": "x_exact_on_boundary",
+              "xs": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  1.0,
+                  2.0,
+                  3.0,
+                  4.0,
+                  5.0
+                ]
+              },
+              "n": 5
+            }
+          }
+        },
+        {
+          "lhs": "r_between_entries",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "searchsorted",
+            "bindings": {
+              "x": "x_between_entries",
+              "xs": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  1.0,
+                  2.0,
+                  3.0,
+                  4.0,
+                  5.0
+                ]
+              },
+              "n": 5
+            }
+          }
+        },
+        {
+          "lhs": "r_exact_at_last",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "searchsorted",
+            "bindings": {
+              "x": "x_exact_at_last",
+              "xs": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  1.0,
+                  2.0,
+                  3.0,
+                  4.0,
+                  5.0
+                ]
+              },
+              "n": 5
+            }
+          }
+        },
+        {
+          "lhs": "r_single_element_above",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "searchsorted",
+            "bindings": {
+              "x": "x_single_element_above",
+              "xs": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  3.0
+                ]
+              },
+              "n": 1
+            }
+          }
+        },
+        {
+          "lhs": "r_duplicates_left_bias",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "searchsorted",
+            "bindings": {
+              "x": "x_duplicates_left_bias",
+              "xs": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  1.0,
+                  2.0,
+                  2.0,
+                  2.0,
+                  3.0
+                ]
+              },
+              "n": 5
+            }
+          }
+        },
+        {
+          "lhs": "r_duplicates_below_run",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "searchsorted",
+            "bindings": {
+              "x": "x_duplicates_below_run",
+              "xs": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  1.0,
+                  2.0,
+                  2.0,
+                  2.0,
+                  3.0
+                ]
+              },
+              "n": 5
+            }
+          }
+        },
+        {
+          "lhs": "r_non_decreasing_allowed",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "searchsorted",
+            "bindings": {
+              "x": "x_non_decreasing_allowed",
+              "xs": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  1.0,
+                  1.0,
+                  2.0,
+                  2.0,
+                  3.0
+                ]
+              },
+              "n": 5
+            }
+          }
+        },
+        {
+          "lhs": "r_empty_xs",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "searchsorted",
+            "bindings": {
+              "x": "x_empty_xs",
+              "xs": {
+                "op": "const",
+                "args": [],
+                "value": []
+              },
+              "n": 0
+            }
+          }
+        }
+      ],
+      "tolerance": {
+        "abs": 0,
+        "rel": 0
+      },
+      "tests": [
+        {
+          "id": "interp_searchsorted_template_t0",
+          "description": "Every scenario at t = 0.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "r_below_minimum",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "r_above_maximum",
+              "time": 0.0,
+              "expected": 6.0
+            },
+            {
+              "variable": "r_exact_on_boundary",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "r_between_entries",
+              "time": 0.0,
+              "expected": 3.0
+            },
+            {
+              "variable": "r_exact_at_last",
+              "time": 0.0,
+              "expected": 5.0
+            },
+            {
+              "variable": "r_single_element_above",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "r_duplicates_left_bias",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "r_duplicates_below_run",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "r_non_decreasing_allowed",
+              "time": 0.0,
+              "expected": 3.0
+            },
+            {
+              "variable": "r_empty_xs",
+              "time": 0.0,
+              "expected": 1.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
