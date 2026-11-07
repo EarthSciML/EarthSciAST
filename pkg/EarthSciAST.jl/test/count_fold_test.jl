@@ -15,7 +15,9 @@
 #     the whole-array nest and in a scalar equation. The queries hit the axis
 #     entries exactly, their neighbouring floats, ±0.0, ±Inf, NaN and both ends;
 #   * all four relations `<= < >= >`, with the axis on either side, against
-#     the interpreter and against the count itself, ties included;
+#     the interpreter and against the count itself, ties included; and the
+#     same with the branch values swapped (`ifelse(c, 0, 1)`, the count of
+#     entries where the comparison fails);
 #   * every near miss — another reducer, other branch values, an equality
 #     comparison, a query that reads the counter, a filter, a short range —
 #     keeps the fold: the rewrite never fires and the answer is the
@@ -219,6 +221,29 @@ end
                 for (i, x) in enumerate(_cf_queries(59))
         )
     end
+    # The branch values swapped, `ifelse(a REL x, 0, 1)`, count the entries
+    # where the comparison FAILS — searchsorted's `not(>=)` form; a NaN query
+    # fails every comparison, so it counts every entry.
+    _cf_nrel(op, flip) = (a, x) -> _cf_op("ifelse", flip ? _cf_op(op, x, a) : _cf_op(op, a, x), 0, 1)
+    @testset "swapped branches, relation $what, $axname axis" for (what, op, flip, f) in rels,
+            (axname, ax, kind) in (
+                ("ascending", _cf_axis(59), :count_fold_search),
+                ("unsorted", reverse(_cf_axis(59)), :count_fold_linear),
+            )
+        doc, ics = _cf_doc(59; axis = ax, body = _cf_nrel(op, flip)), _cf_ics(59)
+        tn, dn = _cf_agree(doc, ics)
+        @test get(tn, kind, 0) >= 1
+        @test all(
+            dn["q[$i]"] === Float64(count(v -> !f(v, x), ax))
+                for (i, x) in enumerate(_cf_queries(59))
+        )
+    end
+    @testset "swapped branches, state axis" begin
+        doc, ics = _cf_doc(59; axis = :state, body = _cf_nrel(">=", false)), _cf_ics(59; axis = :state)
+        tn, _ = _cf_agree(doc, ics)
+        @test get(tn, :count_fold_linear, 0) >= 1
+    end
+
     @testset "relation $what, state axis" for (what, op, flip, f) in rels[[2, 3, 6, 8]]
         doc, ics = _cf_doc(59; axis = :state, body = _cf_rel(op, flip)), _cf_ics(59; axis = :state)
         tn, _ = _cf_agree(doc, ics)
@@ -251,7 +276,8 @@ end
     # is still the interpreter's.
     near = (
         ("branch values 2/0", (a, x) -> _cf_op("ifelse", _cf_op("<=", a, x), 2, 0), (;)),
-        ("branches swapped", (a, x) -> _cf_op("ifelse", _cf_op("<=", a, x), 0, 1), (;)),
+        ("branch values 0/2", (a, x) -> _cf_op("ifelse", _cf_op("<=", a, x), 0, 2), (;)),
+        ("branch values 1/1", (a, x) -> _cf_op("ifelse", _cf_op("<=", a, x), 1, 1), (;)),
         ("equality", (a, x) -> _cf_op("ifelse", _cf_op("==", a, x), 1, 0), (;)),
         ("query reads k", (a, x) -> _cf_le(a, _cf_op("+", x, "k")), (;)),
         ("bare comparison", (a, x) -> _cf_op("<=", a, x), (;)),

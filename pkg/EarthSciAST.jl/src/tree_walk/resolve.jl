@@ -1753,7 +1753,7 @@ function _resolve_const_array_gather(
                     const_arrays, pgather, memo, bound_syms
                 )
             else
-                ci = _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
+                ci = _const_subscript_int(a, const_arrays)
                 ci = _resolve_const_index(vals, name, d, ci, size(vals, d))
                 sub_nodes[d] = IntExpr(Int64(ci))
             end
@@ -1761,10 +1761,7 @@ function _resolve_const_array_gather(
         return OpExpr("index", sub_nodes; value = _ConstGatherRef(vals, name))
     end
     # Fully-constant subscripts: inline the value as a NumExpr literal.
-    int_indices = [
-        _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
-            for a in idx_args_expr
-    ]
+    int_indices = Int[_const_subscript_int(a, const_arrays) for a in idx_args_expr]
     guards = _resolve_guards()
     if !isempty(guards) &&
             _anyof(
@@ -1780,6 +1777,31 @@ function _resolve_const_array_gather(
     end
     return NumExpr(Float64(vals[int_indices...]))
 end
+
+# A build-constant subscript as the integer it selects. One that holds a `faq`
+# — a comparison count, the bracket index of the interpolation templates
+# (lib/interp.esm) at a literal query — is a floating-point computation over
+# float data: it is resolved and evaluated with the float evaluator, as the run
+# time evaluates it, and only its final value is rounded to the subscript, as
+# the run-time gather rounds it. `_eval_const_int` reads every array entry as
+# an integer, which a comparison of float entries cannot take. Every other
+# subscript keeps `_eval_const_int`.
+function _const_subscript_int(a::ASTExpr, const_arrays::AbstractDict)
+    _holds_faq(a) || return _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
+    r = _resolve_indices(
+        a, Dict{String, Tuple{Vector{Int}, Vector{Int}}}(), Dict{String, Int}(), const_arrays
+    )
+    v = _eval_node(_compile(r, Dict{String, Int}(), Set{Symbol}(), Dict{String, Any}()), Float64[], NamedTuple(), 0.0)
+    (isfinite(v) && abs(v) < 2.0^62) || throw(
+        TreeWalkError(
+            "E_TREEWALK_INDEX_NOT_CONST",
+            "a constant subscript evaluates to $(v), not an integer index"
+        )
+    )
+    return round(Int, v)
+end
+_holds_faq(::ASTExpr) = false
+_holds_faq(e::OpExpr) = e.op == "faq" || _anyof(_holds_faq, e.args)
 
 # Name prefix reserved for INTERNED inline-`const` array literals (below). Kept
 # distinct from any authored variable name so a synthetic entry can never shadow
