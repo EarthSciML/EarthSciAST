@@ -36,13 +36,26 @@ _gt_plain(x) = x isa JSON3.Array ? Any[_gt_plain(v) for v in x] : (x isa Real ? 
 
 # The template areas. The interpreter build compiles a `faq` body once per output
 # cell, at ~0.3 s and ~45 MB a cell for the planar template and several times
-# that on the sphere, so this suite takes a sample of each group: its first pair
-# and its first same-grid pair, all groups of one manifold in a single `faq`
-# over a pair axis. Row k of `ra`/`rb` holds pair k's two rings, each padded to
-# the widest ring by repeating its last vertex (which the template must ignore
-# exactly). The Python and Rust suites evaluate every pair, and the padded
-# groups' bit equality.
+# that on the sphere (one spherical pair adds ~0.8 GB), so by default this suite
+# checks a small planar sample that keeps the run near 1 GB: the first pair of a
+# few groups (identical cells, a padded ring, a disjoint pair).
+# `ESM_GEOMETRY_TEMPLATE_FULL=1` checks the first pair and the first same-grid
+# pair of EVERY group, the spherical ones against GeometryOps included (~8 GB). Each manifold's pairs go into a single
+# `faq` over a pair axis; row k of `ra`/`rb` holds pair k's two rings, each
+# padded to the widest ring by repeating its last vertex (which the template
+# must ignore exactly). The Python and Rust suites evaluate every pair, and the
+# padded groups' bit equality.
+const _GT_FULL = get(ENV, "ESM_GEOMETRY_TEMPLATE_FULL", "") == "1"
+const _GT_DEFAULT_GROUPS = (
+    "build_once_spatial_ode:poly:poly:planar",
+    "polygon_intersection_area_padded_ring:src_poly:tgt_poly:planar",
+    "geometry_manifest:planar_disjoint:planar",
+)
+
 function _gt_sample(g)
+    if !_GT_FULL
+        return String(g.id) in _GT_DEFAULT_GROUPS ? [g.pairs[1]] : []
+    end
     first_same = findfirst(pr -> pr.same_grid, g.pairs)
     picks = first_same === nothing || first_same == 1 ? [1] : [1, first_same]
     return [g.pairs[n] for n in picks]
@@ -147,7 +160,7 @@ end
 @testset "lib/geometry.esm templates agree with polygon_intersection_area" begin
     tvals = _gt_template_values()
     for g in _GT_PAIRS.groups
-        haskey(g, :padding_of) && continue
+        (haskey(g, :padding_of) || isempty(_gt_sample(g))) && continue
         gid = String(g.id)
         atol = _gt_atol(g)
         @testset "$gid" begin
