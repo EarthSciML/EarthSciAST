@@ -1,0 +1,67 @@
+{
+  "fixture": "searchsorted_template",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "interp_searchsorted_template_t0",
+      "assertion_idx": 1,
+      "variable": "r_below_minimum",
+      "actual": 1.0
+    },
+    {
+      "test_id": "interp_searchsorted_template_t0",
+      "assertion_idx": 2,
+      "variable": "r_above_maximum",
+      "actual": 6.0
+    },
+    {
+      "test_id": "interp_searchsorted_template_t0",
+      "assertion_idx": 3,
+      "variable": "r_exact_on_boundary",
+      "actual": 2.0
+    },
+    {
+      "test_id": "interp_searchsorted_template_t0",
+      "assertion_idx": 4,
+      "variable": "r_between_entries",
+      "actual": 3.0
+    },
+    {
+      "test_id": "interp_searchsorted_template_t0",
+      "assertion_idx": 5,
+      "variable": "r_exact_at_last",
+      "actual": 5.0
+    },
+    {
+      "test_id": "interp_searchsorted_template_t0",
+      "assertion_idx": 6,
+      "variable": "r_single_element_above",
+      "actual": 2.0
+    },
+    {
+      "test_id": "interp_searchsorted_template_t0",
+      "assertion_idx": 7,
+      "variable": "r_duplicates_left_bias",
+      "actual": 2.0
+    },
+    {
+      "test_id": "interp_searchsorted_template_t0",
+      "assertion_idx": 8,
+      "variable": "r_duplicates_below_run",
+      "actual": 2.0
+    },
+    {
+      "test_id": "interp_searchsorted_template_t0",
+      "assertion_idx": 9,
+      "variable": "r_non_decreasing_allowed",
+      "actual": 3.0
+    },
+    {
+      "test_id": "interp_searchsorted_template_t0",
+      "assertion_idx": 10,
+      "variable": "r_empty_xs",
+      "actual": 1.0
+    }
+  ]
+}

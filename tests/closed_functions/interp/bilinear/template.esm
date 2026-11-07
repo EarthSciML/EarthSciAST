@@ -1,0 +1,881 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "interp_bilinear_template",
+    "description": "The `bilinear` template of lib/interp.esm applied to scenarios of this directory's expected.json, which pins the same values for the `interp.bilinear` closed function (esm-spec §9.2). Each scenario is one algebraic unknown defined by an `apply_expression_template` call with the scenario's arrays as `const` nodes, the axis lengths as integers and the query as a parameter; the inline test asserts the expected value exactly (tolerance 0). NaN scenarios stay in the binding harnesses, since JSON cannot write NaN. Run by the `interp_templates` inline-test conformance tier.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "tags": [
+      "closed-function-registry",
+      "interp",
+      "interp.bilinear",
+      "expression-templates",
+      "standard-library"
+    ]
+  },
+  "models": {
+    "interp_bilinear_template": {
+      "expression_template_imports": [
+        {
+          "ref": "../../../../lib/interp.esm",
+          "only": [
+            "bilinear"
+          ]
+        }
+      ],
+      "variables": {
+        "s": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0,
+          "description": "Trivial state, so the document has something to integrate."
+        },
+        "x_below_both_clamps_to_corner": {
+          "type": "parameter",
+          "units": "1",
+          "default": -100.0,
+          "description": "Query of scenario `below_both_clamps_to_corner`."
+        },
+        "y_below_both_clamps_to_corner": {
+          "type": "parameter",
+          "units": "1",
+          "default": -100.0,
+          "description": "Query of scenario `below_both_clamps_to_corner`."
+        },
+        "r_below_both_clamps_to_corner": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`bilinear` template on scenario `below_both_clamps_to_corner` of expected.json: clamp below on both axes."
+        },
+        "x_above_both_clamps_to_corner": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1000.0,
+          "description": "Query of scenario `above_both_clamps_to_corner`."
+        },
+        "y_above_both_clamps_to_corner": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1000.0,
+          "description": "Query of scenario `above_both_clamps_to_corner`."
+        },
+        "r_above_both_clamps_to_corner": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`bilinear` template on scenario `above_both_clamps_to_corner` of expected.json: clamp above on both axes."
+        },
+        "x_exact_corner_max": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "Query of scenario `exact_corner_max`."
+        },
+        "y_exact_corner_max": {
+          "type": "parameter",
+          "units": "1",
+          "default": 20.0,
+          "description": "Query of scenario `exact_corner_max`."
+        },
+        "r_exact_corner_max": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`bilinear` template on scenario `exact_corner_max` of expected.json: the last corner."
+        },
+        "x_exact_interior_knot_both_axes": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "description": "Query of scenario `exact_interior_knot_both_axes`."
+        },
+        "y_exact_interior_knot_both_axes": {
+          "type": "parameter",
+          "units": "1",
+          "default": 10.0,
+          "description": "Query of scenario `exact_interior_knot_both_axes`."
+        },
+        "r_exact_interior_knot_both_axes": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`bilinear` template on scenario `exact_interior_knot_both_axes` of expected.json: interior knot on both axes."
+        },
+        "x_exact_x_knot_blend_y": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "description": "Query of scenario `exact_x_knot_blend_y`."
+        },
+        "y_exact_x_knot_blend_y": {
+          "type": "parameter",
+          "units": "1",
+          "default": 5.0,
+          "description": "Query of scenario `exact_x_knot_blend_y`."
+        },
+        "r_exact_x_knot_blend_y": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`bilinear` template on scenario `exact_x_knot_blend_y` of expected.json: interior knot in x, blend in y."
+        },
+        "x_blend_x_exact_y_knot": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5,
+          "description": "Query of scenario `blend_x_exact_y_knot`."
+        },
+        "y_blend_x_exact_y_knot": {
+          "type": "parameter",
+          "units": "1",
+          "default": 10.0,
+          "description": "Query of scenario `blend_x_exact_y_knot`."
+        },
+        "r_blend_x_exact_y_knot": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`bilinear` template on scenario `blend_x_exact_y_knot` of expected.json: blend in x, interior knot in y."
+        },
+        "x_quarter_point_in_x_three_quarter_in_y": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.25,
+          "description": "Query of scenario `quarter_point_in_x_three_quarter_in_y`."
+        },
+        "y_quarter_point_in_x_three_quarter_in_y": {
+          "type": "parameter",
+          "units": "1",
+          "default": 7.5,
+          "description": "Query of scenario `quarter_point_in_x_three_quarter_in_y`."
+        },
+        "r_quarter_point_in_x_three_quarter_in_y": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`bilinear` template on scenario `quarter_point_in_x_three_quarter_in_y` of expected.json: blend in both axes."
+        },
+        "x_below_x_only_blend_y": {
+          "type": "parameter",
+          "units": "1",
+          "default": -5.0,
+          "description": "Query of scenario `below_x_only_blend_y`."
+        },
+        "y_below_x_only_blend_y": {
+          "type": "parameter",
+          "units": "1",
+          "default": 5.0,
+          "description": "Query of scenario `below_x_only_blend_y`."
+        },
+        "r_below_x_only_blend_y": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`bilinear` template on scenario `below_x_only_blend_y` of expected.json: clamp below in x only."
+        },
+        "x_above_y_only_blend_x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.5,
+          "description": "Query of scenario `above_y_only_blend_x`."
+        },
+        "y_above_y_only_blend_x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 100.0,
+          "description": "Query of scenario `above_y_only_blend_x`."
+        },
+        "r_above_y_only_blend_x": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`bilinear` template on scenario `above_y_only_blend_x` of expected.json: clamp above in y only."
+        },
+        "x_minimal_2x2_grid_center": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5,
+          "description": "Query of scenario `minimal_2x2_grid_center`."
+        },
+        "y_minimal_2x2_grid_center": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5,
+          "description": "Query of scenario `minimal_2x2_grid_center`."
+        },
+        "r_minimal_2x2_grid_center": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`bilinear` template on scenario `minimal_2x2_grid_center` of expected.json: 2 x 2 table."
+        },
+        "x_non_uniform_axis_y_blend": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.5,
+          "description": "Query of scenario `non_uniform_axis_y_blend`."
+        },
+        "y_non_uniform_axis_y_blend": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.5,
+          "description": "Query of scenario `non_uniform_axis_y_blend`."
+        },
+        "r_non_uniform_axis_y_blend": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`bilinear` template on scenario `non_uniform_axis_y_blend` of expected.json: non-uniform y axis."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "s"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": "r_below_both_clamps_to_corner",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "bilinear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  [
+                    0.0,
+                    1.0,
+                    2.0
+                  ],
+                  [
+                    10.0,
+                    11.0,
+                    12.0
+                  ],
+                  [
+                    20.0,
+                    21.0,
+                    22.0
+                  ]
+                ]
+              },
+              "axis_x": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  2.0
+                ]
+              },
+              "axis_y": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  10.0,
+                  20.0
+                ]
+              },
+              "x": "x_below_both_clamps_to_corner",
+              "y": "y_below_both_clamps_to_corner",
+              "nx": 3,
+              "ny": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_above_both_clamps_to_corner",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "bilinear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  [
+                    0.0,
+                    1.0,
+                    2.0
+                  ],
+                  [
+                    10.0,
+                    11.0,
+                    12.0
+                  ],
+                  [
+                    20.0,
+                    21.0,
+                    22.0
+                  ]
+                ]
+              },
+              "axis_x": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  2.0
+                ]
+              },
+              "axis_y": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  10.0,
+                  20.0
+                ]
+              },
+              "x": "x_above_both_clamps_to_corner",
+              "y": "y_above_both_clamps_to_corner",
+              "nx": 3,
+              "ny": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_exact_corner_max",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "bilinear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  [
+                    0.0,
+                    1.0,
+                    2.0
+                  ],
+                  [
+                    10.0,
+                    11.0,
+                    12.0
+                  ],
+                  [
+                    20.0,
+                    21.0,
+                    22.0
+                  ]
+                ]
+              },
+              "axis_x": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  2.0
+                ]
+              },
+              "axis_y": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  10.0,
+                  20.0
+                ]
+              },
+              "x": "x_exact_corner_max",
+              "y": "y_exact_corner_max",
+              "nx": 3,
+              "ny": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_exact_interior_knot_both_axes",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "bilinear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  [
+                    0.0,
+                    1.0,
+                    2.0
+                  ],
+                  [
+                    10.0,
+                    11.0,
+                    12.0
+                  ],
+                  [
+                    20.0,
+                    21.0,
+                    22.0
+                  ]
+                ]
+              },
+              "axis_x": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  2.0
+                ]
+              },
+              "axis_y": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  10.0,
+                  20.0
+                ]
+              },
+              "x": "x_exact_interior_knot_both_axes",
+              "y": "y_exact_interior_knot_both_axes",
+              "nx": 3,
+              "ny": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_exact_x_knot_blend_y",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "bilinear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  [
+                    0.0,
+                    1.0,
+                    2.0
+                  ],
+                  [
+                    10.0,
+                    11.0,
+                    12.0
+                  ],
+                  [
+                    20.0,
+                    21.0,
+                    22.0
+                  ]
+                ]
+              },
+              "axis_x": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  2.0
+                ]
+              },
+              "axis_y": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  10.0,
+                  20.0
+                ]
+              },
+              "x": "x_exact_x_knot_blend_y",
+              "y": "y_exact_x_knot_blend_y",
+              "nx": 3,
+              "ny": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_blend_x_exact_y_knot",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "bilinear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  [
+                    0.0,
+                    1.0,
+                    2.0
+                  ],
+                  [
+                    10.0,
+                    11.0,
+                    12.0
+                  ],
+                  [
+                    20.0,
+                    21.0,
+                    22.0
+                  ]
+                ]
+              },
+              "axis_x": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  2.0
+                ]
+              },
+              "axis_y": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  10.0,
+                  20.0
+                ]
+              },
+              "x": "x_blend_x_exact_y_knot",
+              "y": "y_blend_x_exact_y_knot",
+              "nx": 3,
+              "ny": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_quarter_point_in_x_three_quarter_in_y",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "bilinear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  [
+                    0.0,
+                    1.0,
+                    2.0
+                  ],
+                  [
+                    10.0,
+                    11.0,
+                    12.0
+                  ],
+                  [
+                    20.0,
+                    21.0,
+                    22.0
+                  ]
+                ]
+              },
+              "axis_x": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  2.0
+                ]
+              },
+              "axis_y": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  10.0,
+                  20.0
+                ]
+              },
+              "x": "x_quarter_point_in_x_three_quarter_in_y",
+              "y": "y_quarter_point_in_x_three_quarter_in_y",
+              "nx": 3,
+              "ny": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_below_x_only_blend_y",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "bilinear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  [
+                    0.0,
+                    1.0,
+                    2.0
+                  ],
+                  [
+                    10.0,
+                    11.0,
+                    12.0
+                  ],
+                  [
+                    20.0,
+                    21.0,
+                    22.0
+                  ]
+                ]
+              },
+              "axis_x": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  2.0
+                ]
+              },
+              "axis_y": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  10.0,
+                  20.0
+                ]
+              },
+              "x": "x_below_x_only_blend_y",
+              "y": "y_below_x_only_blend_y",
+              "nx": 3,
+              "ny": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_above_y_only_blend_x",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "bilinear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  [
+                    0.0,
+                    1.0,
+                    2.0
+                  ],
+                  [
+                    10.0,
+                    11.0,
+                    12.0
+                  ],
+                  [
+                    20.0,
+                    21.0,
+                    22.0
+                  ]
+                ]
+              },
+              "axis_x": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  2.0
+                ]
+              },
+              "axis_y": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  10.0,
+                  20.0
+                ]
+              },
+              "x": "x_above_y_only_blend_x",
+              "y": "y_above_y_only_blend_x",
+              "nx": 3,
+              "ny": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_minimal_2x2_grid_center",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "bilinear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  [
+                    0.0,
+                    1.0
+                  ],
+                  [
+                    2.0,
+                    3.0
+                  ]
+                ]
+              },
+              "axis_x": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0
+                ]
+              },
+              "axis_y": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0
+                ]
+              },
+              "x": "x_minimal_2x2_grid_center",
+              "y": "y_minimal_2x2_grid_center",
+              "nx": 2,
+              "ny": 2
+            }
+          }
+        },
+        {
+          "lhs": "r_non_uniform_axis_y_blend",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "bilinear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  [
+                    0.0,
+                    1.0,
+                    2.0
+                  ],
+                  [
+                    10.0,
+                    11.0,
+                    12.0
+                  ],
+                  [
+                    20.0,
+                    21.0,
+                    22.0
+                  ]
+                ]
+              },
+              "axis_x": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  2.0
+                ]
+              },
+              "axis_y": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  4.0
+                ]
+              },
+              "x": "x_non_uniform_axis_y_blend",
+              "y": "y_non_uniform_axis_y_blend",
+              "nx": 3,
+              "ny": 3
+            }
+          }
+        }
+      ],
+      "tolerance": {
+        "abs": 0,
+        "rel": 0
+      },
+      "tests": [
+        {
+          "id": "interp_bilinear_template_t0",
+          "description": "Every scenario at t = 0.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "r_below_both_clamps_to_corner",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "r_above_both_clamps_to_corner",
+              "time": 0.0,
+              "expected": 22.0
+            },
+            {
+              "variable": "r_exact_corner_max",
+              "time": 0.0,
+              "expected": 22.0
+            },
+            {
+              "variable": "r_exact_interior_knot_both_axes",
+              "time": 0.0,
+              "expected": 11.0
+            },
+            {
+              "variable": "r_exact_x_knot_blend_y",
+              "time": 0.0,
+              "expected": 10.5
+            },
+            {
+              "variable": "r_blend_x_exact_y_knot",
+              "time": 0.0,
+              "expected": 6.0
+            },
+            {
+              "variable": "r_quarter_point_in_x_three_quarter_in_y",
+              "time": 0.0,
+              "expected": 3.25
+            },
+            {
+              "variable": "r_below_x_only_blend_y",
+              "time": 0.0,
+              "expected": 0.5
+            },
+            {
+              "variable": "r_above_y_only_blend_x",
+              "time": 0.0,
+              "expected": 17.0
+            },
+            {
+              "variable": "r_minimal_2x2_grid_center",
+              "time": 0.0,
+              "expected": 1.5
+            },
+            {
+              "variable": "r_non_uniform_axis_y_blend",
+              "time": 0.0,
+              "expected": 16.5
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

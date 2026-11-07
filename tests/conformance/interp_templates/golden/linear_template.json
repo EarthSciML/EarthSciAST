@@ -1,0 +1,67 @@
+{
+  "fixture": "linear_template",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "interp_linear_template_t0",
+      "assertion_idx": 1,
+      "variable": "r_below_minimum_clamps",
+      "actual": 10.0
+    },
+    {
+      "test_id": "interp_linear_template_t0",
+      "assertion_idx": 2,
+      "variable": "r_above_maximum_clamps",
+      "actual": 160.0
+    },
+    {
+      "test_id": "interp_linear_template_t0",
+      "assertion_idx": 3,
+      "variable": "r_exact_at_first_knot",
+      "actual": 10.0
+    },
+    {
+      "test_id": "interp_linear_template_t0",
+      "assertion_idx": 4,
+      "variable": "r_exact_at_interior_knot",
+      "actual": 40.0
+    },
+    {
+      "test_id": "interp_linear_template_t0",
+      "assertion_idx": 5,
+      "variable": "r_exact_at_last_knot",
+      "actual": 160.0
+    },
+    {
+      "test_id": "interp_linear_template_t0",
+      "assertion_idx": 6,
+      "variable": "r_midpoint_first_cell",
+      "actual": 15.0
+    },
+    {
+      "test_id": "interp_linear_template_t0",
+      "assertion_idx": 7,
+      "variable": "r_quarter_point_interior_cell",
+      "actual": 50.0
+    },
+    {
+      "test_id": "interp_linear_template_t0",
+      "assertion_idx": 8,
+      "variable": "r_two_point_table_midpoint",
+      "actual": 4.0
+    },
+    {
+      "test_id": "interp_linear_template_t0",
+      "assertion_idx": 9,
+      "variable": "r_non_uniform_axis_blend",
+      "actual": 2.5
+    },
+    {
+      "test_id": "interp_linear_template_t0",
+      "assertion_idx": 10,
+      "variable": "r_negative_axis_and_table_values",
+      "actual": -2.5
+    }
+  ]
+}
