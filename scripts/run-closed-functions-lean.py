@@ -16,10 +16,13 @@ With no fixtures named, it also runs `esm-lean tables` on the §9.5.5 table-chec
 ledger `tests/conformance/function_tables/load_errors/cases.json` (tables built
 in memory, NaN / Inf / -Inf included, ruling Q-109) and checks each case's code
 (`expected_error_code`, null for a table that passes) exactly; and
-`esm-lean templates` on every document of the `interp_templates` tier
-(`tests/conformance/interp_templates/manifest.json`), checking each test
-assertion of the manifest's model against the evaluated
-`apply_expression_template` equation it names. The assertions and their
+`esm-lean templates` on every document of the standard-library template tiers
+in `TEMPLATE_TIERS` (`interp_templates`, `datetime_templates`,
+`relational_templates`, `geometry_templates`, each scored when its manifest
+exists), checking each test assertion of the manifest's model against the
+evaluated `apply_expression_template` equation it names. A fixture the adapter
+cannot run (one that needs a simulation) is listed in its tier with the reason,
+and counted as skipped. The assertions and their
 tolerances are read the way the inline-test runner reads them (each bound
 resolved assertion -> test -> model, `authored_assertions` in
 scripts/run-inline-tests-conformance.py); a zero band is a bit-for-bit match.
@@ -43,7 +46,20 @@ FORMAL = ROOT / "formal"
 FIXTURES = ROOT / "tests" / "closed_functions"
 BINARY = FORMAL / ".lake" / "build" / "bin" / "esm-lean"
 TABLE_LEDGER = ROOT / "tests" / "conformance" / "function_tables" / "load_errors" / "cases.json"
-TEMPLATE_MANIFEST = ROOT / "tests" / "conformance" / "interp_templates" / "manifest.json"
+CONFORMANCE = ROOT / "tests" / "conformance"
+# Standard-library template tiers: manifest -> {fixture id: why the adapter skips it}.
+TEMPLATE_TIERS = [
+    (CONFORMANCE / "interp_templates" / "manifest.json", {}),
+    (CONFORMANCE / "datetime_templates" / "manifest.json", {}),
+    (
+        CONFORMANCE / "relational_templates" / "manifest.json",
+        {
+            "nearest_generator_template_ode": "asserts an ODE trajectory; esm-lean evaluates "
+            "expressions and does not simulate",
+        },
+    ),
+    (CONFORMANCE / "geometry_templates" / "manifest.json", {}),
+]
 
 
 def _load_inline_runner():
@@ -242,11 +258,19 @@ def main():
         tp, tf, nf = tp + passed, tf + failed, nf + 1
         for m in msgs:
             print(m)
-    if not args.fixtures and TEMPLATE_MANIFEST.exists():
-        manifest = json.loads(TEMPLATE_MANIFEST.read_text(encoding="utf-8"))
+    for manifest_path, skips in TEMPLATE_TIERS if not args.fixtures else []:
+        if not manifest_path.exists():
+            continue
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         for fx in manifest.get("fixtures", []):
-            passed, failed, msgs = check_template_doc(TEMPLATE_MANIFEST, fx)
-            tp, tf, nf = tp + passed, tf + failed, nf + 1
+            nf += 1
+            if fx.get("id") in skips:
+                ts += 1
+                if args.verbose:
+                    print(f"skip {manifest_path.parent.name}/{fx['id']}: {skips[fx['id']]}")
+                continue
+            passed, failed, msgs = check_template_doc(manifest_path, fx)
+            tp, tf = tp + passed, tf + failed
             for m in msgs:
                 print(m)
     print(f"closed-functions (lean): {tp} passed, {tf} failed, {ts} skipped in {nf} fixtures")
