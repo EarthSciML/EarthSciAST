@@ -375,13 +375,36 @@ struct _CGUnitCtx
     holes::IdDict{_Node, Any}
     locals::Dict{Int, Any}            # slot -> expression of its value
     loops::IdDict{Any, Symbol}
+    share::_CGShareKeys
 end
 
 _cg_boxaddr(::_CGCtx, ::_CGUnitCtx, ::Int, ::Int, ::Int, ::Int, ::Vector{Int}, key) =
     throw(_CodegenDecline(:lane_spec_on_scalar_spine))
 
+# A repeated sub-tree (array_contraction.jl, "A repeated sub-tree computed
+# once"): a unit's node is keyed by its hole where it has one, since that is
+# what it reads for each member of the class.
+_cg_emit_region(ctx::_CGCtx, kc::_CGUnitCtx, nd::_Node) = _cg_emit_shared(ctx, kc, nd)
+function _cg_share_leaf(K::_CGShareKeys, kc::_CGUnitCtx, nd::_Node)
+    k = nd.kind
+    if k === _NK_LITERAL || k === _NK_STATE
+        h = get(kc.holes, nd, nothing)
+        h === nothing && return nothing
+        return h isa Float64 ? (:f, reinterpret(UInt64, h)) : (:h, h)
+    elseif k === _NK_PARAM || k === _NK_TIME
+        return 0
+    elseif k === _NK_PARAM_GATHER
+        h = get(kc.holes, nd, nothing)
+        h === nothing && return nothing
+        return (_cg_share_obj!(K, nd.payload), h)
+    end
+    return _cg_share_inner(K, nd)
+end
+
 function _cg_emit(ctx::_CGCtx, kc::_CGUnitCtx, nd::_Node)
     _cg_budget!(ctx)
+    shared = get(kc.loops, nd, nothing)
+    shared === nothing || return shared
     k = nd.kind
     if k === _NK_LITERAL
         return kc.holes[nd]
@@ -594,7 +617,7 @@ function _sc_emit_item!(
     recorded = Set(values(rec))
     stmt_hole = Int[h for h in 1:C.nih if !(h in recorded)]
     ns = length(U.slots)
-    kc = _CGUnitCtx(holes, Dict{Int, Any}(), IdDict{Any, Symbol}())
+    kc = _CGUnitCtx(holes, Dict{Int, Any}(), IdDict{Any, Symbol}(), _CGShareKeys())
     for i in 1:ns
         s = U.slots[i]
         h = stmt_hole[i]
@@ -605,7 +628,7 @@ function _sc_emit_item!(
     for i in it.stmts
         is_slot, sk, tree = _sc_stmt(U, i, rhs_list, prelude)
         h = stmt_hole[i]
-        ex = _cg_emit(ctx, kc, tree)
+        ex = _cg_emit_region(ctx, kc, tree)
         if cachemode
             ex = _cg_bound_body!(ctx, ex)
             push!(
