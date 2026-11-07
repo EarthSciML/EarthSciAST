@@ -1,0 +1,102 @@
+{
+ "category": "geometry_templates",
+ "runner": "inline_tests",
+ "version": "1.0",
+ "description": "The pure-AST convex overlap-area templates of lib/geometry.esm (`overlap_area_planar`, `overlap_area_spherical`, `lonlat_to_unit`), standing in for the `polygon_intersection_area` leaf (esm-spec \u00a78.6.1), applied inside a `faq` over every cell pair (and behind the overlap join gate) and asserted against exact planar areas and Girard's-theorem spherical areas: identical, adjacent and corner-touching cells, nested and partial overlaps, a clockwise ring, a pentagon, and rings padded by repeated vertices. The vertex-slot counts are integer template arguments used as `faq` `ranges` bounds (esm-spec \u00a79.6.1).",
+ "reference_binding": "julia",
+ "reference_compiler": "interpreter",
+ "bindings_required": [
+  "julia",
+  "python",
+  "rust"
+ ],
+ "scope_excluded": {
+  "go": "No simulator and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md \u00a73, capability profiles). Go's expansion of these documents (the import resolves and each faq body is the substituted template) is checked by its own test suite. This is an exclusion from the CATEGORY, not from the rule.",
+  "typescript": "No simulator and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md \u00a73, capability profiles). TypeScript's expansion of these documents (the import resolves and each faq body is the substituted template) is checked by its own test suite. This is an exclusion from the CATEGORY, not from the rule."
+ },
+ "integrators": {
+  "julia": {
+   "algorithm": "Tsit5",
+   "reltol": 1e-12,
+   "abstol": 1e-14
+  },
+  "python": {
+   "method": "LSODA",
+   "rtol": 1e-12,
+   "atol": 1e-14
+  },
+  "rust": {
+   "solver": "Erk",
+   "reltol": 1e-12,
+   "abstol": 1e-14
+  }
+ },
+ "tolerances": {
+  "golden_rtol": 1e-12,
+  "golden_atol": 1e-15,
+  "detail": "Every planar value is exact (dyadic coordinates and areas) and asserted at tolerance 0 in the document; a spherical overlap is a transcendental value asserted at the CONFORMANCE_SPEC 5.8.2 band (rel 1e-9, abs 1e-15 sr), and the golden band only absorbs libm differences across bindings in the atan2 / sqrt / sin / cos the spherical template evaluates."
+ },
+ "fixtures": [
+  {
+   "id": "planar_overlap",
+   "path": "fixtures/planar_overlap.esm",
+   "model": "GeometryPlanarOverlapTemplate",
+   "golden": "golden/planar_overlap.json",
+   "tags": [
+    "expression_templates",
+    "faq",
+    "geometry",
+    "polygon_intersection_area",
+    "planar",
+    "padded-ring",
+    "join-gate"
+   ],
+   "note": "Authored here. The leaf's values are asserted too, at the same exact expectations.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "spherical_fan",
+   "path": "fixtures/spherical_fan.esm",
+   "model": "GeometrySphericalFanTemplate",
+   "golden": "golden/spherical_fan.json",
+   "tags": [
+    "expression_templates",
+    "faq",
+    "geometry",
+    "polygon_intersection_area",
+    "spherical",
+    "padded-ring"
+   ],
+   "note": "Authored here. No leaf in the document: the spherical leaf needs an optional backend in Julia (GeometryOps) and Python (spherely).",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  }
+ ]
+}
