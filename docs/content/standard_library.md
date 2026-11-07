@@ -1,9 +1,10 @@
 # ESS Standard Subsystem Library
 
 The `lib/` directory ships ESS subsystems authored entirely in pure AST and the
-spec's closed-function registry (`esm-spec.md` §9.2). Each file except
-`lib/interp.esm` (a template library, below) is a self-contained subsystem
-includable from any consumer model via subsystem reference (`esm-spec.md` §4.7):
+spec's closed-function registry (`esm-spec.md` §9.2). `lib/solar.esm` is a
+self-contained subsystem includable from any consumer model via subsystem
+reference (`esm-spec.md` §4.7); `lib/calendar.esm` and `lib/interp.esm` are
+template libraries (below), imported rather than mounted:
 
 ```json
 {
@@ -45,41 +46,84 @@ either a new `lib/` file or a new §9 entry, apply the table above.
 
 | File | Subsystem | Provides | Inputs |
 |---|---|---|---|
-| [`lib/calendar.esm`](../lib/calendar.esm) | `Calendar` | `year`, `month`, `day`, `hour`, `minute`, `second`, `day_of_year`, `julian_day`, `is_leap_year`, `seconds_since_midnight`, `fractional_year` | `t_utc` (s) |
+| [`lib/calendar.esm`](../lib/calendar.esm) | template library (no subsystem) | expression templates `year`, `month`, `day`, `hour`, `minute`, `second`, `day_of_year`, `julian_day`, `is_leap_year` | the template parameter `t` (s) |
 | [`lib/solar.esm`](../lib/solar.esm) | `Solar` | `solar_declination` (rad), `equation_of_time` (min), `true_solar_time` (min), `hour_angle` (rad), `cos_zenith`, `solar_zenith_angle` (rad) | `t_utc` (s), `lat` (deg), `lon` (deg) |
 | [`lib/interp.esm`](../lib/interp.esm) | template library (no subsystem) | expression templates `searchsorted`, `linear`, `bilinear` | the template parameters (arrays, query, axis lengths) |
 
 ### `lib/calendar.esm`
 
-A thin AST veneer over the §9.2 `datetime.*` registry: each calendar field is
-exposed as an unknown defined by its own equation, so that consumers can scope-reference
-`Calendar.day_of_year`, `Calendar.hour`, etc. via §4.6 dot notation. Two
-helpers are defined as compositions:
+A template-library file (`esm-spec.md` §9.7.1), like `lib/interp.esm`: nine
+match-less expression templates, one per `datetime.*` closed function of §9.2,
+each of one parameter `t` — UTC seconds since 1970-01-01T00:00:00Z (binary64,
+proleptic Gregorian, no leap seconds). A component imports the templates it
+needs and applies them:
 
-- `seconds_since_midnight = hour·s_per_hour + minute·s_per_minute + second·s_per_second`
-  (integer-exact; the factors are 3600, 60 and 1).
-- `fractional_year` — the NOAA solar-position γ angle (radians), defined in
-  the file's docstring; reused inside `lib/solar.esm`.
+```json
+{
+  "expression_template_imports": [
+    { "ref": "../lib/calendar.esm", "only": ["hour", "minute", "second"] }
+  ],
+  "equations": [
+    {
+      "lhs": "hour_utc",
+      "rhs": { "op": "apply_expression_template", "args": [], "name": "hour",
+               "bindings": { "t": "t_utc" } }
+    }
+  ]
+}
+```
 
-**Why the conversion factors are named parameters.** The clock fields (`hour`,
-`minute`, `second`, `day_of_year`, …) are *dimensionless integer calendar field
-values* — `hour` is the integer 14, not a duration of 14 hours — exactly as
-`month` and `day` are. The seconds and radians therefore have to be carried by
-the conversion constants (`s_per_hour`, `rad_per_day`, …), which is what makes
-`seconds_since_midnight` (s) and `fractional_year` (rad) dimensionally
-well-formed under esm-spec §4.8.3. Annotating the clock fields with time units
-instead would be *wrong*, not merely different: `fractional_year`'s bracket
-`(day_of_year - 1) + (hour - 12)/24` is a dimensionless day count, so an `hour`
-in hours would make it add a time to a pure number.
+| Template | Value |
+|---|---|
+| `year` | proleptic-Gregorian year, astronomical numbering (0 = 1 BC) |
+| `month` | 1..12 |
+| `day` | day of month, 1..31 |
+| `hour`, `minute`, `second` | UTC clock fields, 0..23 and 0..59 (no leap-second slot); a fractional `t` floors toward −∞ |
+| `day_of_year` | 1..366 (1 = January 1) |
+| `julian_day` | the Julian Date, by §9.2's pinned binary64 formula `(d + 2440588) + ((s − 43200) + (t − floor(t))) / 86400` |
+| `is_leap_year` | 1 for a leap year, else 0 |
+
+Each body splits `t` exactly into the day number `d = floor(floor(t) / 86400)`
+and the whole second of the day `s = floor(t) − 86400·d`, then runs Howard
+Hinnant's `civil_from_days` (400-year eras counted from 0000-03-01, the day of
+the era, the year of the era, the day of the year from March 1, the month from
+`(5·doy + 2) / 153`), every integer division written `floor(a / b)`; §9.2's
+composition note gives the formulas. **Domain:** finite `t` with `|t| < 2^52`
+s, about ±142 million years. There every intermediate is an integer below
+`2^53`, so each `floor` is exact and each template gives the same bits as the
+matching `fn` form; outside it, and for a NaN or infinite `t`, every template
+returns NaN (the `fn` forms answer up to the signed 32-bit year range and raise
+`closed_function_overflow` beyond it). Each binding's closed-function harness runs every
+scenario of `tests/closed_functions/datetime/*/expected.json` through the
+expanded templates, and `tests/closed_functions/datetime/*/template.esm`
+carries a subset as inline tests for the cross-binding `datetime_templates`
+conformance tier.
+
+The fields are dimensionless numbers (`hour` is the count 14, not a duration of
+14 hours), `julian_day` included. The template bodies divide `t` by
+unit-bearing `const` nodes in seconds (§4.8.5), so a `t` declared in seconds
+validates cleanly, one in hours is a scale mismatch, and a dimensionless one
+is a dimension mismatch. A consumer that wants a quantity multiplies by its own
+conversion factor, as `lib/solar.esm` does with `rad_per_day` and
+`min_of_clock`.
+
+The templates replace the earlier `Calendar` subsystem, which wrapped the `fn`
+calls in equations and also defined `seconds_since_midnight` and
+`fractional_year`; a template library cannot declare a model. Those two helpers
+are one line each over the templates (`fractional_year` is `gamma` in
+`lib/solar.esm`).
 
 ### `lib/solar.esm`
 
 The NOAA Spencer-Fourier solar-position model. `solar_declination` and
 `equation_of_time` are 5- and 7-term Fourier series in the fractional-year
 angle γ; `solar_zenith_angle` then composes lat/lon and the NOAA hour-angle
-formula. The file is approximately 100 lines of AST; every constant is a
-binary64 literal so the result is bit-defined relative to the §9.2 registry
-and the §4.2 elementary-function ops. Cross-binding tolerance is ≤ 10 ulp,
+formula. It imports the `day_of_year`, `hour`, `minute` and `second`
+templates of `lib/calendar.esm` for its calendar fields, so a mount of
+`lib/solar.esm` resolves that import beside it (§4.7 edge pipeline). Every
+constant is a binary64 literal, so the result is bit-defined relative to the
+calendar templates (which give the §9.2 `datetime.*` values) and the §4.2
+elementary-function ops; for `|t_utc| ≥ 2^52` s the outputs are NaN. Cross-binding tolerance is ≤ 10 ulp,
 within the algorithm's intrinsic ~2 arcminute accuracy.
 
 To use:
@@ -109,7 +153,7 @@ To use:
 
 ### `lib/interp.esm`
 
-Unlike the other two files, `lib/interp.esm` is a template-library file
+Like `lib/calendar.esm`, `lib/interp.esm` is a template-library file
 (`esm-spec.md` §9.7.1), not a subsystem: it declares three match-less
 expression templates and no model. A component imports it with
 `expression_template_imports` and calls a template with
@@ -160,9 +204,11 @@ non-monotonic or NaN axis is not rejected); the caller supplies a valid axis.
 
 ## Validation and conformance
 
-Each `lib/*.esm` is a schema-valid file under `esm-schema.json` and is exercised
-by the `tests/valid/` parse-and-load suite via the `tests/valid/lib_*.esm`
-inclusion fixtures. Cross-binding numerical agreement is enforced by the
+Each `lib/*.esm` is a schema-valid file under `esm-schema.json`, swept by every
+binding's validation corpus. `tests/valid/lib_solar_subsystem_inclusion.esm`
+mounts `lib/solar.esm` (and through it imports `lib/calendar.esm`), and the
+`template.esm` documents under `tests/closed_functions/` apply the calendar
+and interpolation templates. Cross-binding numerical agreement is enforced by the
 per-function conformance fixtures under `tests/closed_functions/` (see
 `esm-spec.md` §9.4); the lib subsystems are AST compositions of those
 primitives and inherit their tolerance contracts.
