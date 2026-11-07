@@ -1,0 +1,284 @@
+{
+ "category": "datetime_templates",
+ "runner": "inline_tests",
+ "version": "1.0",
+ "description": "The pure-AST calendar templates of lib/calendar.esm (`year`, `month`, `day`, `hour`, `minute`, `second`, `day_of_year`, `julian_day`, `is_leap_year`), each applied to scenarios of tests/closed_functions/datetime/<fn>/expected.json and asserted at tolerance 0, so every binding's expanded template reproduces the bits the `datetime.*` closed functions are pinned to (esm-spec §9.2). The instant is a parameter in seconds; the templates use no `faq`.",
+ "reference_binding": "julia",
+ "reference_compiler": "interpreter",
+ "bindings_required": [
+  "julia",
+  "python",
+  "rust"
+ ],
+ "scope_excluded": {
+  "go": "No simulator and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md §3, capability profiles). Go's expansion of the calendar templates is checked by its closed-function harness (pkg/esm/closed_functions_test.go). This is an exclusion from the CATEGORY, not from the rule.",
+  "typescript": "No simulator and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md §3, capability profiles). TypeScript's expansion of the calendar templates is checked by its closed-function harness (src/closed-functions.test.ts). This is an exclusion from the CATEGORY, not from the rule."
+ },
+ "integrators": {
+  "julia": {
+   "algorithm": "Tsit5",
+   "reltol": 1e-12,
+   "abstol": 1e-14
+  },
+  "python": {
+   "method": "LSODA",
+   "rtol": 1e-12,
+   "atol": 1e-14
+  },
+  "rust": {
+   "solver": "Erk",
+   "reltol": 1e-12,
+   "abstol": 1e-14
+  }
+ },
+ "tolerances": {
+  "golden_rtol": 0,
+  "golden_atol": 0,
+  "detail": "Every asserted value is the closed function's pinned binary64 result, matched bit for bit."
+ },
+ "fixtures": [
+  {
+   "id": "year_template",
+   "path": "closed_functions/datetime/year/template.esm",
+   "model": "datetime_year_template",
+   "golden": "golden/year_template.json",
+   "tags": [
+    "expression_templates",
+    "closed-function-registry",
+    "datetime.year"
+   ],
+   "note": "Referenced from tests/closed_functions/datetime/year/, beside the expected.json whose scenarios it applies.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "month_template",
+   "path": "closed_functions/datetime/month/template.esm",
+   "model": "datetime_month_template",
+   "golden": "golden/month_template.json",
+   "tags": [
+    "expression_templates",
+    "closed-function-registry",
+    "datetime.month"
+   ],
+   "note": "Referenced from tests/closed_functions/datetime/month/, beside the expected.json whose scenarios it applies.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "day_template",
+   "path": "closed_functions/datetime/day/template.esm",
+   "model": "datetime_day_template",
+   "golden": "golden/day_template.json",
+   "tags": [
+    "expression_templates",
+    "closed-function-registry",
+    "datetime.day"
+   ],
+   "note": "Referenced from tests/closed_functions/datetime/day/, beside the expected.json whose scenarios it applies.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "hour_template",
+   "path": "closed_functions/datetime/hour/template.esm",
+   "model": "datetime_hour_template",
+   "golden": "golden/hour_template.json",
+   "tags": [
+    "expression_templates",
+    "closed-function-registry",
+    "datetime.hour"
+   ],
+   "note": "Referenced from tests/closed_functions/datetime/hour/, beside the expected.json whose scenarios it applies.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "minute_template",
+   "path": "closed_functions/datetime/minute/template.esm",
+   "model": "datetime_minute_template",
+   "golden": "golden/minute_template.json",
+   "tags": [
+    "expression_templates",
+    "closed-function-registry",
+    "datetime.minute"
+   ],
+   "note": "Referenced from tests/closed_functions/datetime/minute/, beside the expected.json whose scenarios it applies.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "second_template",
+   "path": "closed_functions/datetime/second/template.esm",
+   "model": "datetime_second_template",
+   "golden": "golden/second_template.json",
+   "tags": [
+    "expression_templates",
+    "closed-function-registry",
+    "datetime.second"
+   ],
+   "note": "Referenced from tests/closed_functions/datetime/second/, beside the expected.json whose scenarios it applies.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "day_of_year_template",
+   "path": "closed_functions/datetime/day_of_year/template.esm",
+   "model": "datetime_day_of_year_template",
+   "golden": "golden/day_of_year_template.json",
+   "tags": [
+    "expression_templates",
+    "closed-function-registry",
+    "datetime.day_of_year"
+   ],
+   "note": "Referenced from tests/closed_functions/datetime/day_of_year/, beside the expected.json whose scenarios it applies.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "julian_day_template",
+   "path": "closed_functions/datetime/julian_day/template.esm",
+   "model": "datetime_julian_day_template",
+   "golden": "golden/julian_day_template.json",
+   "tags": [
+    "expression_templates",
+    "closed-function-registry",
+    "datetime.julian_day"
+   ],
+   "note": "Referenced from tests/closed_functions/datetime/julian_day/, beside the expected.json whose scenarios it applies.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "is_leap_year_template",
+   "path": "closed_functions/datetime/is_leap_year/template.esm",
+   "model": "datetime_is_leap_year_template",
+   "golden": "golden/is_leap_year_template.json",
+   "tags": [
+    "expression_templates",
+    "closed-function-registry",
+    "datetime.is_leap_year"
+   ],
+   "note": "Referenced from tests/closed_functions/datetime/is_leap_year/, beside the expected.json whose scenarios it applies.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  }
+ ]
+}

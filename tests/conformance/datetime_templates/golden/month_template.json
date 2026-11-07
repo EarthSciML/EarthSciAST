@@ -1,0 +1,97 @@
+{
+  "fixture": "month_template",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "datetime_month_template_t0",
+      "assertion_idx": 1,
+      "variable": "r_epoch",
+      "actual": 1.0
+    },
+    {
+      "test_id": "datetime_month_template_t0",
+      "assertion_idx": 2,
+      "variable": "r_leap_2000_feb29",
+      "actual": 2.0
+    },
+    {
+      "test_id": "datetime_month_template_t0",
+      "assertion_idx": 3,
+      "variable": "r_not_leap_2100_feb28",
+      "actual": 2.0
+    },
+    {
+      "test_id": "datetime_month_template_t0",
+      "assertion_idx": 4,
+      "variable": "r_leap_2400_mar01",
+      "actual": 3.0
+    },
+    {
+      "test_id": "datetime_month_template_t0",
+      "assertion_idx": 5,
+      "variable": "r_leap_2024_dec31",
+      "actual": 12.0
+    },
+    {
+      "test_id": "datetime_month_template_t0",
+      "assertion_idx": 6,
+      "variable": "r_pre_epoch_1969",
+      "actual": 12.0
+    },
+    {
+      "test_id": "datetime_month_template_t0",
+      "assertion_idx": 7,
+      "variable": "r_century_1900",
+      "actual": 1.0
+    },
+    {
+      "test_id": "datetime_month_template_t0",
+      "assertion_idx": 8,
+      "variable": "r_frac_epoch_below_ulp",
+      "actual": 12.0
+    },
+    {
+      "test_id": "datetime_month_template_t0",
+      "assertion_idx": 9,
+      "variable": "r_frac_example_86399_9999999",
+      "actual": 1.0
+    },
+    {
+      "test_id": "datetime_month_template_t0",
+      "assertion_idx": 10,
+      "variable": "r_frac_leap_day_start_2000_02_29_below_ulp",
+      "actual": 2.0
+    },
+    {
+      "test_id": "datetime_month_template_t0",
+      "assertion_idx": 11,
+      "variable": "r_frac_leap_day_end_2000_03_01_at",
+      "actual": 3.0
+    },
+    {
+      "test_id": "datetime_month_template_t0",
+      "assertion_idx": 12,
+      "variable": "r_frac_year_0000_below_half",
+      "actual": 12.0
+    },
+    {
+      "test_id": "datetime_month_template_t0",
+      "assertion_idx": 13,
+      "variable": "r_frac_year_minus_4713_at",
+      "actual": 1.0
+    },
+    {
+      "test_id": "datetime_month_template_t0",
+      "assertion_idx": 14,
+      "variable": "r_frac_year_minus_100000_below_ulp",
+      "actual": 12.0
+    },
+    {
+      "test_id": "datetime_month_template_t0",
+      "assertion_idx": 15,
+      "variable": "r_frac_year_10000_above_ulp",
+      "actual": 1.0
+    }
+  ]
+}
