@@ -1,0 +1,601 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "ifelse_mixed_whole_dynamic",
+  "description": "An observed with NO declared shape defined by an `ifelse` whose condition is a runtime SCALAR, one branch an array over a declared index set and the other a scalar (`X = ifelse(lev < 2, F*2, 0.0)`, the NEI2016 emission observeds, issue #664). The observed takes its array branch's shape whichever branch is taken, so the scalar branch fills every element: condition true, false, scalar branch first, the `ifelse` inside elementwise arithmetic, and (dynamic variant) flipping during the run on a state. Dynamic variant: the same rules beside a state whose right-hand side gathers them, so they are lowered on the run-time path.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ],
+  "tags": [
+   "native",
+   "conformance"
+  ]
+ },
+ "index_sets": {
+  "cell": {
+   "kind": "interval",
+   "size": 3
+  }
+ },
+ "models": {
+  "IfelseMixedWhole": {
+   "tolerance": {
+    "rel": 1e-12,
+    "abs": 1e-12
+   },
+   "variables": {
+    "F": {
+     "type": "parameter",
+     "units": "1",
+     "shape": [
+      "cell"
+     ],
+     "default": [
+      1.0,
+      2.0,
+      3.0
+     ]
+    },
+    "lev_on": {
+     "type": "parameter",
+     "units": "1",
+     "default": 1.0
+    },
+    "lev_off": {
+     "type": "parameter",
+     "units": "1",
+     "default": 3.0
+    },
+    "X_on": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "X_off": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "X_scalar_first": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "X_wrapped": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "R_on": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ]
+    },
+    "R_off": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ]
+    },
+    "R_scalar_first": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ]
+    },
+    "R_wrapped": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ]
+    },
+    "w": {
+     "type": "unknown",
+     "units": "1",
+     "default": 0.0
+    },
+    "X_flip": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "acc": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ],
+     "default": 0.0
+    },
+    "R_flip": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cell"
+     ]
+    }
+   },
+   "equations": [
+    {
+     "lhs": "X_on",
+     "rhs": {
+      "op": "ifelse",
+      "args": [
+       {
+        "op": "<",
+        "args": [
+         "lev_on",
+         2.0
+        ]
+       },
+       {
+        "op": "*",
+        "args": [
+         "F",
+         2.0
+        ]
+       },
+       0.0
+      ]
+     }
+    },
+    {
+     "lhs": "X_off",
+     "rhs": {
+      "op": "ifelse",
+      "args": [
+       {
+        "op": "<",
+        "args": [
+         "lev_off",
+         2.0
+        ]
+       },
+       {
+        "op": "*",
+        "args": [
+         "F",
+         2.0
+        ]
+       },
+       0.0
+      ]
+     }
+    },
+    {
+     "lhs": "X_scalar_first",
+     "rhs": {
+      "op": "ifelse",
+      "args": [
+       {
+        "op": "<",
+        "args": [
+         "lev_on",
+         2.0
+        ]
+       },
+       0.25,
+       "F"
+      ]
+     }
+    },
+    {
+     "lhs": "X_wrapped",
+     "rhs": {
+      "op": "+",
+      "args": [
+       1.0,
+       {
+        "op": "*",
+        "args": [
+         3.0,
+         {
+          "op": "ifelse",
+          "args": [
+           {
+            "op": "<",
+            "args": [
+             "lev_off",
+             2.0
+            ]
+           },
+           "F",
+           0.5
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "R_on",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X_on",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "R_off",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X_off",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "R_scalar_first",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X_scalar_first",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "R_wrapped",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X_wrapped",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "w"
+      ],
+      "wrt": "t"
+     },
+     "rhs": 1.0
+    },
+    {
+     "lhs": "X_flip",
+     "rhs": {
+      "op": "ifelse",
+      "args": [
+       {
+        "op": ">",
+        "args": [
+         "w",
+         1.0
+        ]
+       },
+       0.0,
+       {
+        "op": "*",
+        "args": [
+         "F",
+         2.0
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "D",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "acc",
+          "i"
+         ]
+        }
+       ],
+       "wrt": "t"
+      }
+     },
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "+",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "X_on",
+          "i"
+         ]
+        },
+        {
+         "op": "index",
+         "args": [
+          "X_off",
+          "i"
+         ]
+        },
+        {
+         "op": "index",
+         "args": [
+          "X_wrapped",
+          "i"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "R_flip",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "cell"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "X_flip",
+        "i"
+       ]
+      }
+     }
+    }
+   ],
+   "tests": [
+    {
+     "id": "values",
+     "time_span": {
+      "start": 0.0,
+      "end": 2.0
+     },
+     "assertions": [
+      {
+       "variable": "R_on",
+       "time": 2.0,
+       "expected": 2.0,
+       "coords": {
+        "cell": 1
+       }
+      },
+      {
+       "variable": "R_on",
+       "time": 2.0,
+       "expected": 4.0,
+       "coords": {
+        "cell": 2
+       }
+      },
+      {
+       "variable": "R_on",
+       "time": 2.0,
+       "expected": 6.0,
+       "coords": {
+        "cell": 3
+       }
+      },
+      {
+       "variable": "R_off",
+       "time": 2.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 1
+       }
+      },
+      {
+       "variable": "R_off",
+       "time": 2.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 2
+       }
+      },
+      {
+       "variable": "R_off",
+       "time": 2.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 3
+       }
+      },
+      {
+       "variable": "R_scalar_first",
+       "time": 2.0,
+       "expected": 0.25,
+       "coords": {
+        "cell": 1
+       }
+      },
+      {
+       "variable": "R_scalar_first",
+       "time": 2.0,
+       "expected": 0.25,
+       "coords": {
+        "cell": 2
+       }
+      },
+      {
+       "variable": "R_scalar_first",
+       "time": 2.0,
+       "expected": 0.25,
+       "coords": {
+        "cell": 3
+       }
+      },
+      {
+       "variable": "R_wrapped",
+       "time": 2.0,
+       "expected": 2.5,
+       "coords": {
+        "cell": 1
+       }
+      },
+      {
+       "variable": "R_wrapped",
+       "time": 2.0,
+       "expected": 2.5,
+       "coords": {
+        "cell": 2
+       }
+      },
+      {
+       "variable": "R_wrapped",
+       "time": 2.0,
+       "expected": 2.5,
+       "coords": {
+        "cell": 3
+       }
+      },
+      {
+       "variable": "R_flip",
+       "time": 0.0,
+       "expected": 2.0,
+       "coords": {
+        "cell": 1
+       }
+      },
+      {
+       "variable": "R_flip",
+       "time": 0.0,
+       "expected": 4.0,
+       "coords": {
+        "cell": 2
+       }
+      },
+      {
+       "variable": "R_flip",
+       "time": 0.0,
+       "expected": 6.0,
+       "coords": {
+        "cell": 3
+       }
+      },
+      {
+       "variable": "R_flip",
+       "time": 2.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 1
+       }
+      },
+      {
+       "variable": "R_flip",
+       "time": 2.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 2
+       }
+      },
+      {
+       "variable": "R_flip",
+       "time": 2.0,
+       "expected": 0.0,
+       "coords": {
+        "cell": 3
+       }
+      },
+      {
+       "variable": "acc",
+       "time": 2.0,
+       "expected": 9.0,
+       "coords": {
+        "cell": 1
+       }
+      },
+      {
+       "variable": "acc",
+       "time": 2.0,
+       "expected": 13.0,
+       "coords": {
+        "cell": 2
+       }
+      },
+      {
+       "variable": "acc",
+       "time": 2.0,
+       "expected": 17.0,
+       "coords": {
+        "cell": 3
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

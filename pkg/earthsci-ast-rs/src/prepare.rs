@@ -1826,6 +1826,31 @@ struct BuildState<'o> {
 }
 
 impl<'o> BuildState<'o> {
+    /// A single value of an observed whose declared shape has more than one
+    /// element, given to every element of that shape, as the compiled route
+    /// does (esm-spec §4.3.4: a binding MUST NOT let the value's rank replace
+    /// the declared shape). Every other value is returned as it is.
+    fn fill_declared_shape(&self, name: &str, a: ArrayD<f64>) -> ArrayD<f64> {
+        if a.len() != 1 || a.ndim() > 1 {
+            return a;
+        }
+        let Some(shape) = self
+            .model
+            .variables
+            .get(name)
+            .and_then(|v| v.shape.as_deref())
+            .filter(|s| !s.is_empty())
+            .and_then(|s| crate::simulate_array::resolve_declared_shape(s, &self.index_sets))
+        else {
+            return a;
+        };
+        if shape.iter().product::<usize>() == 1 {
+            return a;
+        }
+        let v = a.iter().copied().next().expect("one element");
+        ArrayD::from_elem(IxDyn(&shape), v)
+    }
+
     fn log(&self, msg: &str) {
         vlog(self.opts, msg);
     }
@@ -1896,7 +1921,7 @@ impl<'o> BuildState<'o> {
             }
             None => Spelling::Qualified,
         };
-        let (model, flattened) = match &spelling {
+        let (mut model, flattened) = match &spelling {
             Spelling::ModelLocal(n) => (Self::authored_model(models, n, &mut index_sets)?, None),
             Spelling::Qualified => {
                 let flat = Self::whole_document(&file, &mut index_sets)?;
@@ -1904,6 +1929,10 @@ impl<'o> BuildState<'o> {
                 (model, unbound_load.then_some(flat))
             }
         };
+        // The shape the compiled route gives a variable defined by an
+        // `ifelse` with an array arm and a scalar arm, so both routes
+        // materialize it alike (issue #664).
+        crate::simulate_array::promote_conditional_observed_shapes(&mut model, &index_sets);
 
         let (param_vals, param_names) = scalar_params(&model, &spelling, &opts.parameters)?;
 
@@ -2414,6 +2443,7 @@ impl<'o> BuildState<'o> {
                     return Ok(());
                 }
                 Ok(Evaluated::Field(a, route)) => {
+                    let a = self.fill_declared_shape(&name, a);
                     self.log(&format!(
                         "  [prepare] build-time coordinate {name} -> {:?}",
                         a.shape()
@@ -2752,7 +2782,7 @@ impl<'o> BuildState<'o> {
                 DeclaredRank::of(&self.model, name),
                 self.opts.refuse_per_cell,
             )? {
-                Evaluated::Field(a, route) => (a, route),
+                Evaluated::Field(a, route) => (self.fill_declared_shape(name, a), route),
                 Evaluated::Refused(why) => {
                     self.record(PipelineRule {
                         name: name.clone(),

@@ -377,6 +377,56 @@
    "named_exclusions": []
   },
   {
+   "id": "ifelse_mixed_whole_static",
+   "path": "fixtures/ifelse_mixed_whole_static.esm",
+   "model": "IfelseMixedWhole",
+   "golden": "golden/ifelse_mixed_whole_static.json",
+   "tags": [
+    "ifelse",
+    "scalar-condition",
+    "broadcast",
+    "undeclared-shape",
+    "static"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "ifelse_mixed_whole_dynamic",
+   "path": "fixtures/ifelse_mixed_whole_dynamic.esm",
+   "model": "IfelseMixedWhole",
+   "golden": "golden/ifelse_mixed_whole_dynamic.json",
+   "tags": [
+    "ifelse",
+    "scalar-condition",
+    "broadcast",
+    "undeclared-shape",
+    "dynamic"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
    "id": "guarded_out_of_range_static",
    "path": "fixtures/guarded_out_of_range_static.esm",
    "model": "GuardedOutOfRange",

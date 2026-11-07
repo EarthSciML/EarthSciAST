@@ -98,7 +98,8 @@ pub(crate) use compile::{model_tree_any, parse_subsystem_model};
 // so it applies the same stand-ins for `flatten`'s rewrites.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::{
-    apply_flatten_rewrites, model_from_flattened, mount_subsystems, resolve_model_self_references,
+    apply_flatten_rewrites, model_from_flattened, mount_subsystems,
+    promote_conditional_observed_shapes, resolve_model_self_references,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use eval::eval_observed_taped;
