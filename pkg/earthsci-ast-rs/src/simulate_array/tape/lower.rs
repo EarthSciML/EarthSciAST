@@ -510,6 +510,145 @@ impl<'a> LBox<'a> {
     }
 }
 
+/// The integer bounds of `e` over every cell of `bx`, when its structure
+/// proves them: integer literals, the box's loop symbols (a symbol's bounds
+/// narrowed by `refine`, innermost last), `+`, `-`, `min`, `max`, and an
+/// `ifelse` whose condition compares a loop symbol with a constant, each arm
+/// bounded under the condition that selects it — so the cyclic successor
+/// `ifelse(k < n, k + 1, 1)` over `k in [1, n]` is bounded by `[1, n]`.
+/// Endpoints are kept below 2^24, where they are exact at either working
+/// precision.
+fn int_range(e: &Expr, bx: &LBox, refine: &[(&str, (f64, f64))]) -> Option<(f64, f64)> {
+    let exact = |r: (f64, f64)| {
+        (r.0.fract() == 0.0
+            && r.1.fract() == 0.0
+            && r.0.abs() < 16_777_216.0
+            && r.1.abs() < 16_777_216.0)
+            .then_some(r)
+    };
+    match e {
+        Expr::Integer(n) => exact((*n as f64, *n as f64)),
+        Expr::Number(v) => exact((*v, *v)),
+        Expr::Variable(name) => {
+            if let Some((_, r)) = refine.iter().rev().find(|(n, _)| *n == name.as_str()) {
+                return Some(*r);
+            }
+            if bx.tuple != 0 {
+                return None;
+            }
+            if let Some(a) = bx.syms.iter().position(|s| s == name) {
+                let n = bx.shape[a];
+                return (n > 0)
+                    .then(|| exact((bx.lo[a] as f64, (bx.lo[a] + n as i64 - 1) as f64)))
+                    .flatten();
+            }
+            bx.cbind(name).and_then(|v| exact((v as f64, v as f64)))
+        }
+        Expr::Operator(node) => {
+            let arg = |i: usize| int_range(&node.args[i], bx, refine);
+            match (node.op.as_str(), node.args.len()) {
+                ("+", n) if n >= 1 => {
+                    let mut acc = (0.0, 0.0);
+                    for i in 0..n {
+                        let r = arg(i)?;
+                        acc = exact((acc.0 + r.0, acc.1 + r.1))?;
+                    }
+                    Some(acc)
+                }
+                ("-", 1) => arg(0).map(|r| (-r.1, -r.0)),
+                ("-", 2) => {
+                    let (a, b) = (arg(0)?, arg(1)?);
+                    exact((a.0 - b.1, a.1 - b.0))
+                }
+                ("min" | "max", n) if n >= 1 => {
+                    let mut acc = arg(0)?;
+                    for i in 1..n {
+                        let r = arg(i)?;
+                        acc = if node.op == "min" {
+                            (acc.0.min(r.0), acc.1.min(r.1))
+                        } else {
+                            (acc.0.max(r.0), acc.1.max(r.1))
+                        };
+                    }
+                    Some(acc)
+                }
+                ("ifelse", 3) => {
+                    let arm = |i: usize, extra: Option<(&str, (f64, f64))>| {
+                        let mut r: SmallVec<[(&str, (f64, f64)); 4]> =
+                            refine.iter().copied().collect();
+                        if let Some((n, (lo, hi))) = extra {
+                            if lo > hi {
+                                return Some(None); // this arm is never taken
+                            }
+                            r.push((n, (lo, hi)));
+                        }
+                        int_range(&node.args[i], bx, &r).map(Some)
+                    };
+                    let (then_r, else_r) = match condition_refinement(&node.args[0], bx, refine) {
+                        Some((name, t, f)) => (arm(1, Some((name, t)))?, arm(2, Some((name, f)))?),
+                        None => (arm(1, None)?, arm(2, None)?),
+                    };
+                    match (then_r, else_r) {
+                        (Some(a), Some(b)) => Some((a.0.min(b.0), a.1.max(b.1))),
+                        (Some(a), None) | (None, Some(a)) => Some(a),
+                        (None, None) => None,
+                    }
+                }
+                _ => None,
+            }
+        }
+    }
+}
+
+/// For a condition `k <op> c` (either way round) with `k` a loop symbol of
+/// `bx` and `c` a constant, `k`'s bounds where it holds and where it fails.
+fn condition_refinement<'e>(
+    cond: &'e Expr,
+    bx: &LBox,
+    refine: &[(&str, (f64, f64))],
+) -> Option<(&'e str, (f64, f64), (f64, f64))> {
+    let Expr::Operator(c) = cond else {
+        return None;
+    };
+    if c.args.len() != 2 {
+        return None;
+    }
+    let constant = |e: &Expr| int_range(e, bx, refine).filter(|r| r.0 == r.1).map(|r| r.0);
+    let sym = |e: &'e Expr| match e {
+        Expr::Variable(n)
+            if bx.syms.contains(n) || refine.iter().any(|(r, _)| *r == n.as_str()) =>
+        {
+            Some(n.as_str())
+        }
+        _ => None,
+    };
+    // Normalize to `k <op> v`.
+    let (name, op, v) = match (sym(&c.args[0]), sym(&c.args[1])) {
+        (Some(n), _) if constant(&c.args[1]).is_some() => (n, c.op.as_str(), constant(&c.args[1])?),
+        (_, Some(n)) if constant(&c.args[0]).is_some() => {
+            let mirrored = match c.op.as_str() {
+                "<" => ">",
+                "<=" => ">=",
+                ">" => "<",
+                ">=" => "<=",
+                other => other,
+            };
+            (n, mirrored, constant(&c.args[0])?)
+        }
+        _ => return None,
+    };
+    let (lo, hi) = int_range(&Expr::Variable(name.to_string()), bx, refine)?;
+    let (t, f) = match op {
+        "<" => ((lo, hi.min(v - 1.0)), (lo.max(v), hi)),
+        "<=" => ((lo, hi.min(v)), (lo.max(v + 1.0), hi)),
+        ">" => ((lo.max(v + 1.0), hi), (lo, hi.min(v))),
+        ">=" => ((lo.max(v), hi), (lo, hi.min(v - 1.0))),
+        "==" => ((lo.max(v), hi.min(v)), (lo, hi)),
+        _ => return None,
+    };
+    Some((name, t, f))
+}
+
 /// Owned hoist key: everything a box-pure value can read from its box — the
 /// structural analogue of the runtime `box_sig` + binder-set check.
 #[derive(Hash, PartialEq, Eq, Clone)]
@@ -3181,6 +3320,21 @@ impl<'m> TapeBuilder<'m> {
         }
     }
 
+    /// Give the lowered value `v` of the subscript `e` the bounds its
+    /// structure proves over `bx` ([`int_range`]) when its instructions did
+    /// not: a loop symbol's own slot carries none, and an `ifelse` arm's
+    /// bounds hold only under its condition, so the cyclic successor
+    /// `ifelse(k < n, k + 1, 1)` and the clamp `min(k + 1, n)` are known to
+    /// stay inside `[1, n]` and a gather at them cannot fault.
+    fn note_int_range(&mut self, v: &LV, e: &Expr, bx: &LBox) {
+        if let LV::Arr(s) | LV::Scalar(s) = v
+            && !self.ranges.contains_key(s)
+            && let Some(r) = int_range(e, bx, &[])
+        {
+            self.ranges.insert(*s, r);
+        }
+    }
+
     /// `vec_select` made symbolic: `cond`'s box is the output box; `a`/`b` are
     /// scalars (broadcast) or arrays over the same box. A scalar `cond` is the
     /// filter-gate shape (whole-term keep/replace — elementwise identical).
@@ -3731,7 +3885,9 @@ impl<'m> TapeBuilder<'m> {
     ) -> LResult<LV> {
         let mut subs: SmallVec<[LV; 4]> = SmallVec::new();
         for e in &node.args[1..] {
-            subs.push(self.lower_expr(e, bx)?);
+            let s = self.lower_expr(e, bx)?;
+            self.note_int_range(&s, e, bx);
+            subs.push(s);
         }
         self.emit_data_gather(&node.args[0], base, &subs, Some(bx))
     }
