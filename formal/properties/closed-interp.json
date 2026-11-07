@@ -814,6 +814,30 @@
       "lean_statement": "∀ (U : List (List ℝ)) (ax ay : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ax → List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ay → Esm.Closed.TableShape U ax.length ay.length → ax.length ≤ (2 : ℕ) ^ (53 : ℕ) → ay.length ≤ (2 : ℕ) ^ (53 : ℕ) → ∀ (i j : ℕ) (x y : ℝ), Esm.Closed.InCell ax i x → Esm.Closed.InCell ay j y → Esm.F64.Repr (Esm.Closed.rentry U i j) → Esm.F64.Repr (Esm.Closed.rentry U (i + (1 : ℕ)) j) → Esm.F64.Repr (Esm.Closed.rentry U i (j + (1 : ℕ))) → Esm.F64.Repr (Esm.Closed.rentry U (i + (1 : ℕ)) (j + (1 : ℕ))) → have wx := Esm.Closed.Rounding.weight64 x (ax.getD i (0 : ℝ)) (ax.getD (i + (1 : ℕ)) (0 : ℝ)); have wy := Esm.Closed.Rounding.weight64 y (ay.getD j (0 : ℝ)) (ay.getD (j + (1 : ℕ)) (0 : ℝ)); have c := Esm.Closed.Rounding.bilinear64 (Esm.Closed.rentry U i j) (Esm.Closed.rentry U (i + (1 : ℕ)) j) (Esm.Closed.rentry U i (j + (1 : ℕ))) (Esm.Closed.rentry U (i + (1 : ℕ)) (j + (1 : ℕ))) wx wy; Esm.Expr.evalApply Esm.Lib.Interp.bilinear [(\"table\", Esm.Expr.Ast.var \"T\"), (\"axis_x\", Esm.Expr.Ast.var \"AX\"), (\"axis_y\", Esm.Expr.Ast.var \"AY\"), (\"x\", Esm.Expr.Ast.var \"X\"), (\"y\", Esm.Expr.Ast.var \"Y\"), (\"nx\", Esm.Expr.Ast.num (ax.length : ℤ) (0 : ℕ)), (\"ny\", Esm.Expr.Ast.num (ay.length : ℤ) (0 : ℕ))] [(\"T\", Esm.Expr.Val.arr2 (List.map (List.map Esm.Closed.Template.Bin64.fin) U)), (\"AX\", Esm.Expr.Val.arr1 (List.map Esm.Closed.Template.Bin64.fin ax)), (\"AY\", Esm.Expr.Val.arr1 (List.map Esm.Closed.Template.Bin64.fin ay)), (\"X\", Esm.Expr.Val.num (Esm.Closed.Template.Bin64.fin x)), (\"Y\", Esm.Expr.Val.num (Esm.Closed.Template.Bin64.fin y))] = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.Bin64.fin c)) ∧ |c - Esm.Closed.Rounding.bilinearFMA (Esm.Closed.rentry U i j) (Esm.Closed.rentry U (i + (1 : ℕ)) j) (Esm.Closed.rentry U i (j + (1 : ℕ))) (Esm.Closed.rentry U (i + (1 : ℕ)) (j + (1 : ℕ))) wx wy| ≤ (17 / 2 : ℝ) * Esm.F64.ulp (Max.max (Max.max |Esm.Closed.rentry U i j| |Esm.Closed.rentry U (i + (1 : ℕ)) j|) (Max.max |Esm.Closed.rentry U i (j + (1 : ℕ))| |Esm.Closed.rentry U (i + (1 : ℕ)) (j + (1 : ℕ))|))",
       "status": "proven",
       "theorem": "Esm.Closed.TemplateAst.bilinear_template_fma_le"
+    },
+    {
+      "id": "P-relational-lib-argmin",
+      "clauses": [
+        "spec.4.2.minmax-nan-propagates",
+        "spec.9.6.1.param-shadows-literal-substitute",
+        "spec.9.6.3.bindings-cover-params"
+      ],
+      "statement": "The argmin template of lib/relational.esm, applied to a candidate expression whose value at candidate j in [1, n] is v j (n >= 1) and evaluated, is an index j in [1, n]: the first NaN candidate if any candidate is NaN, else the smallest index of a minimum (every earlier candidate strictly greater).",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [inst_4 : Esm.Closed.TemplateAst.ExprLaws α] [inst_5 : Esm.Closed.RelationalAst.NaNIs α] (F : Esm.Expr.Ast) (n : ℕ), 1 ≤ n → n + 1 ≤ 2 ^ 53 → ∀ (env : Esm.Expr.Env α) (v : ℕ → α), (∀ j : ℕ, 1 ≤ j → j ≤ n → Esm.Expr.eval F ((\"k_argmin_1\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin (j : ℝ))) :: env) = Except.ok (Esm.Expr.Val.num (v j)) ∧ ∀ w : Esm.Expr.Val α, Esm.Expr.eval F ((\"k_argmin_1\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin (j : ℝ))) :: (\"k_argmin_1\", w) :: env) = Except.ok (Esm.Expr.Val.num (v j))) → ∃ j : ℕ, Esm.Expr.evalApply Esm.Lib.Relational.argmin [(\"f\", F), (\"n\", Esm.Expr.Ast.num (n : ℤ) 0)] env = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin (j : ℝ))) ∧ 1 ≤ j ∧ j ≤ n ∧ ((∃ i, 1 ≤ i ∧ i ≤ n ∧ v i = Esm.Closed.Scalar.nan) → v j = Esm.Closed.Scalar.nan ∧ ∀ i, 1 ≤ i → i < j → v i ≠ Esm.Closed.Scalar.nan) ∧ ((∀ i, 1 ≤ i → i ≤ n → v i ≠ Esm.Closed.Scalar.nan) → (∀ i, 1 ≤ i → i ≤ n → Esm.Closed.Scalar.le (v j) (v i) = true) ∧ (∀ i, 1 ≤ i → i < j → Esm.Closed.Scalar.lt (v j) (v i) = true))",
+      "status": "proven",
+      "theorem": "Esm.Closed.RelationalAst.argmin_template"
+    },
+    {
+      "id": "P-relational-lib-argmax",
+      "clauses": [
+        "spec.4.2.minmax-nan-propagates",
+        "spec.9.6.1.param-shadows-literal-substitute",
+        "spec.9.6.3.bindings-cover-params"
+      ],
+      "statement": "The argmax template of lib/relational.esm, applied to a candidate expression whose value at candidate j in [1, n] is v j (n >= 1) and evaluated, is an index j in [1, n]: the first NaN candidate if any candidate is NaN, else the smallest index of a maximum (every earlier candidate strictly smaller).",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [inst_4 : Esm.Closed.TemplateAst.ExprLaws α] [inst_5 : Esm.Closed.RelationalAst.NaNIs α] (F : Esm.Expr.Ast) (n : ℕ), 1 ≤ n → n + 1 ≤ 2 ^ 53 → ∀ (env : Esm.Expr.Env α) (v : ℕ → α), (∀ j : ℕ, 1 ≤ j → j ≤ n → Esm.Expr.eval F ((\"k_argmax_1\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin (j : ℝ))) :: env) = Except.ok (Esm.Expr.Val.num (v j)) ∧ ∀ w : Esm.Expr.Val α, Esm.Expr.eval F ((\"k_argmax_1\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin (j : ℝ))) :: (\"k_argmax_1\", w) :: env) = Except.ok (Esm.Expr.Val.num (v j))) → ∃ j : ℕ, Esm.Expr.evalApply Esm.Lib.Relational.argmax [(\"f\", F), (\"n\", Esm.Expr.Ast.num (n : ℤ) 0)] env = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin (j : ℝ))) ∧ 1 ≤ j ∧ j ≤ n ∧ ((∃ i, 1 ≤ i ∧ i ≤ n ∧ v i = Esm.Closed.Scalar.nan) → v j = Esm.Closed.Scalar.nan ∧ ∀ i, 1 ≤ i → i < j → v i ≠ Esm.Closed.Scalar.nan) ∧ ((∀ i, 1 ≤ i → i ≤ n → v i ≠ Esm.Closed.Scalar.nan) → (∀ i, 1 ≤ i → i ≤ n → Esm.Closed.Scalar.le (v i) (v j) = true) ∧ (∀ i, 1 ≤ i → i < j → Esm.Closed.Scalar.lt (v i) (v j) = true))",
+      "status": "proven",
+      "theorem": "Esm.Closed.RelationalAst.argmax_template"
     }
   ]
 }
