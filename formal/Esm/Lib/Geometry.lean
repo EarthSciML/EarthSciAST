@@ -46414,4 +46414,11 @@ def lonlat_to_unit : Template where
               (Ast.num (2) 0)]),
             (Ast.num (17453292519943295) 18)])])])])
 
+/-- Every template of the file, by name: the scope a reference in a body
+resolves in (esm-spec §9.7.3). -/
+def lib : List (String × Template) :=
+  [("overlap_area_planar", overlap_area_planar),
+   ("overlap_area_spherical", overlap_area_spherical),
+   ("lonlat_to_unit", lonlat_to_unit)]
+
 end Esm.Lib.Geometry

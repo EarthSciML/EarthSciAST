@@ -1355,4 +1355,11 @@ def bilinear : Template where
                       (Ast.var "ny"),
                       (Ast.num (1) 0)])])])])])])])])])
 
+/-- Every template of the file, by name: the scope a reference in a body
+resolves in (esm-spec §9.7.3). -/
+def lib : List (String × Template) :=
+  [("searchsorted", searchsorted),
+   ("linear", linear),
+   ("bilinear", bilinear)]
+
 end Esm.Lib.Interp

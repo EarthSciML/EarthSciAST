@@ -16,9 +16,9 @@ regenerated fails the check, and a regenerated file the proofs no longer fit
 fails the Lean build.
 
 A node outside what `Esm.Expr.Ast` carries (an op field other than `op`,
-`args`, and a `faq`'s `output_idx`/`reduce`/`ranges`/`expr`, or a `const`'s
-`value` and `units`; `units` is dropped, as evaluation does not read it) is an
-error here rather than a silent drop, as is a missing field
+`args`, a `faq`'s `output_idx`/`reduce`/`ranges`/`expr`, an
+`apply_expression_template`'s `name`/`bindings`, or a `const`'s `value` and
+`units`; `units` is dropped, as evaluation does not read it) is an error here rather than a silent drop, as is a missing field
 the transcription needs and a literal `-0.0`: `Ast.num` is an integer mantissa
 and a decimal exponent, which has no negative zero.
 """
@@ -122,6 +122,16 @@ def ast(e, indent, path):
                                     for i, a in enumerate(e.get("args", []))) + "])",
         ]
         return "\n".join(lines)
+    if op == "apply_expression_template":
+        extra = set(e) - {"op", "args", "name", "bindings"}
+        if extra or e.get("args", []) != []:
+            raise Unsupported(f"{path}: apply_expression_template fields {sorted(extra)}")
+        if not isinstance(e.get("name"), str) or not isinstance(e.get("bindings"), dict):
+            raise Unsupported(f"{path}: apply_expression_template needs a name and bindings")
+        binds = "Binds.nil"
+        for k, v in reversed(list(e["bindings"].items())):
+            binds = f"(Binds.cons {lean_str(k)} {ast(v, 0, f'{path}.bindings.{k}')} {binds})"
+        return pad + f"(Ast.apply {lean_str(e['name'])} {binds})"
     extra = set(e) - {"op", "args"}
     if extra:
         raise Unsupported(f"{path}: {op} node fields {sorted(extra)}")
@@ -147,6 +157,7 @@ def generate(src, ns):
         "open Esm.Expr",
         "",
     ]
+    names = []
     for name, t in doc.get("expression_templates", {}).items():
         where = f"expression_templates.{name}"
         if not isinstance(t, dict):
@@ -162,6 +173,12 @@ def generate(src, ns):
         out.append("  body :=")
         out.append(ast(t["body"], 2, where + ".body"))
         out.append("")
+        names.append(name)
+    out.append("/-- Every template of the file, by name: the scope a reference in a body")
+    out.append("resolves in (esm-spec §9.7.3). -/")
+    out.append("def lib : List (String × Template) :=")
+    out.append("  [" + ",\n   ".join(f"({lean_str(n)}, {n})" for n in names) + "]")
+    out.append("")
     out.append(f"end {ns}")
     return "\n".join(out) + "\n"
 

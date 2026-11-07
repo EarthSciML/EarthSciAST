@@ -67,4 +67,10 @@ def argmax : Template where
           (Ast.num (1) 0)])])
       [])
 
+/-- Every template of the file, by name: the scope a reference in a body
+resolves in (esm-spec §9.7.3). -/
+def lib : List (String × Template) :=
+  [("argmin", argmin),
+   ("argmax", argmax)]
+
 end Esm.Lib.Relational

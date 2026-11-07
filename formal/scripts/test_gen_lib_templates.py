@@ -52,6 +52,19 @@ class MissingFields(unittest.TestCase):
         node = {"op": "const", "value": 86400, "units": "s"}
         self.assertEqual(gen.ast(node, 0, "t"), "(Ast.const (Const.leaf (86400) 0))")
 
+    def test_reference_is_transcribed(self):
+        node = {"op": "apply_expression_template", "name": "f", "bindings": {"x": "t", "n": 3}}
+        self.assertEqual(
+            gen.ast(node, 0, "t"),
+            '(Ast.apply "f" (Binds.cons "x" (Ast.var "t") '
+            "(Binds.cons \"n\" (Ast.num (3) 0) Binds.nil)))",
+        )
+
+    def test_reference_other_fields_are_refused(self):
+        node = {"op": "apply_expression_template", "name": "f", "bindings": {}, "eager": True}
+        with self.assertRaisesRegex(gen.Unsupported, "apply_expression_template fields"):
+            gen.ast(node, 0, "t")
+
     def test_const_other_fields_are_refused(self):
         with self.assertRaisesRegex(gen.Unsupported, "const node fields"):
             gen.ast({"op": "const", "value": 1, "shape": [1]}, 0, "t")

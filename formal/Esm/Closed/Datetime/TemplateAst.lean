@@ -6,9 +6,11 @@ import Esm.Closed.Datetime.Binary64
 /-!
 # The `lib/calendar.esm` templates, evaluated, equal the `datetime.*` model
 
-`Esm/Lib/Calendar.lean` holds the nine `datetime.*` expression templates of
-`lib/calendar.esm` as ASTs (generated, checked current in CI). Each is
-`ifelse(abs(t) < 2^52, body, 0 / 0)`. This file proves, for every real `t`:
+`Esm/Lib/Calendar.lean` holds the expression templates of `lib/calendar.esm`
+as ASTs (generated, checked current in CI): the nine public `datetime.*`
+templates and the helper templates (`civil_day_number`, `civil_era`, …) their
+bodies reference (§9.7.3). Each public template, fully expanded through the
+file's templates (`expandIn`), is `ifelse(abs(t) < 2^52, body, 0 / 0)`. This file proves, for every real `t`:
 
 * `calendar_int_template_eq`: on `|t| < 2^52` the eight integer templates
   evaluate to the exact integer `IntFn.exact f t` of `Exact.lean` (year, month,
@@ -293,18 +295,24 @@ def julianA : Ast :=
 
 def bindT : Bindings := [("t", tA)]
 
-theorem expand_year : expand Esm.Lib.Calendar.year bindT = .ok (guardA yearA) := rfl
-theorem expand_month : expand Esm.Lib.Calendar.month bindT = .ok (guardA monthA) := rfl
-theorem expand_day : expand Esm.Lib.Calendar.day bindT = .ok (guardA dayA) := rfl
-theorem expand_hour : expand Esm.Lib.Calendar.hour bindT = .ok (guardA hourA) := rfl
-theorem expand_minute : expand Esm.Lib.Calendar.minute bindT = .ok (guardA minuteA) := rfl
-theorem expand_second : expand Esm.Lib.Calendar.second bindT = .ok (guardA secondA) := rfl
+theorem expand_year :
+    expandIn Esm.Lib.Calendar.lib 32 Esm.Lib.Calendar.year bindT = .ok (guardA yearA) := rfl
+theorem expand_month :
+    expandIn Esm.Lib.Calendar.lib 32 Esm.Lib.Calendar.month bindT = .ok (guardA monthA) := rfl
+theorem expand_day :
+    expandIn Esm.Lib.Calendar.lib 32 Esm.Lib.Calendar.day bindT = .ok (guardA dayA) := rfl
+theorem expand_hour :
+    expandIn Esm.Lib.Calendar.lib 32 Esm.Lib.Calendar.hour bindT = .ok (guardA hourA) := rfl
+theorem expand_minute :
+    expandIn Esm.Lib.Calendar.lib 32 Esm.Lib.Calendar.minute bindT = .ok (guardA minuteA) := rfl
+theorem expand_second :
+    expandIn Esm.Lib.Calendar.lib 32 Esm.Lib.Calendar.second bindT = .ok (guardA secondA) := rfl
 theorem expand_day_of_year :
-    expand Esm.Lib.Calendar.day_of_year bindT = .ok (guardA dayOfYearA) := rfl
+    expandIn Esm.Lib.Calendar.lib 32 Esm.Lib.Calendar.day_of_year bindT = .ok (guardA dayOfYearA) := rfl
 theorem expand_is_leap_year :
-    expand Esm.Lib.Calendar.is_leap_year bindT = .ok (guardA isLeapA) := rfl
+    expandIn Esm.Lib.Calendar.lib 32 Esm.Lib.Calendar.is_leap_year bindT = .ok (guardA isLeapA) := rfl
 theorem expand_julian_day :
-    expand Esm.Lib.Calendar.julian_day bindT = .ok (guardA julianA) := rfl
+    expandIn Esm.Lib.Calendar.lib 32 Esm.Lib.Calendar.julian_day bindT = .ok (guardA julianA) := rfl
 
 /-! ## Evaluating the shapes -/
 
@@ -846,32 +854,35 @@ evaluated, is the exact integer value of its `datetime.*` function. At `Bin64`
 this is a statement about binary64 evaluation: every operation in the
 expansion is exact. -/
 theorem calendar_int_template_eq (f : IntFn) (t : ℝ) (ht : |t| < 2 ^ 52) :
-    evalApply (intTemplate f) bindT (envT t : Env α) = .ok (.num (fin ((f.exact t : ℤ) : ℝ))) := by
+    evalApplyIn Esm.Lib.Calendar.lib 32 (intTemplate f) bindT (envT t : Env α) = .ok (.num (fin ((f.exact t : ℤ) : ℝ))) := by
   have hF := inDom_floor ht
   have hss := ss_range hF
   cases f
-  · unfold evalApply; rw [show intTemplate .year = Esm.Lib.Calendar.year from rfl, expand_year]
+  · unfold evalApplyIn; rw [show intTemplate .year = Esm.Lib.Calendar.year from rfl, expand_year]
     simp only [ev_guard_in ht, ev_yearF hF, IntFn.exact_year, dateOf_eq, hinnant_dZ,
       decide_eq_true_eq]
-  · unfold evalApply; rw [show intTemplate .month = Esm.Lib.Calendar.month from rfl, expand_month]
+  · unfold evalApplyIn; rw [show intTemplate .month = Esm.Lib.Calendar.month from rfl, expand_month]
     simp only [ev_guard_in ht, ev_monthF hF, IntFn.exact_month, dateOf_eq, hinnant_dZ,
       decide_eq_true_eq]
-  · unfold evalApply; rw [show intTemplate .day = Esm.Lib.Calendar.day from rfl, expand_day]
+  · unfold evalApplyIn; rw [show intTemplate .day = Esm.Lib.Calendar.day from rfl, expand_day]
     simp only [ev_guard_in ht, ev_dayF hF, IntFn.exact_day, dateOf_eq, hinnant_dZ]
-  · unfold evalApply; rw [show intTemplate .hour = Esm.Lib.Calendar.hour from rfl, expand_hour]
+  · unfold evalApplyIn; rw [show intTemplate .hour = Esm.Lib.Calendar.hour from rfl, expand_hour]
     simp only [ev_guard_in ht, ev_hourF hF, IntFn.exact_hour, secondOfDay_eq_ss]
-  · unfold evalApply; rw [show intTemplate .minute = Esm.Lib.Calendar.minute from rfl, expand_minute]
+  · unfold evalApplyIn; rw [show intTemplate .minute = Esm.Lib.Calendar.minute from rfl, expand_minute]
     simp only [ev_guard_in ht, ev_minuteF hF, IntFn.exact_minute, secondOfDay_eq_ss]
     have : ssZ ⌊t⌋ / 60 - 60 * (ssZ ⌊t⌋ / 3600) = ssZ ⌊t⌋ % 3600 / 60 := by omega
     rw [this]
-  · unfold evalApply; rw [show intTemplate .second = Esm.Lib.Calendar.second from rfl, expand_second]
+  · unfold evalApplyIn; rw [show intTemplate .second = Esm.Lib.Calendar.second from rfl, expand_second]
     simp only [ev_guard_in ht, ev_secondF hF, IntFn.exact_second, secondOfDay_eq_ss]
     have : ssZ ⌊t⌋ - 60 * (ssZ ⌊t⌋ / 60) = ssZ ⌊t⌋ % 60 := by omega
     rw [this]
-  · unfold evalApply; rw [show intTemplate .dayOfYear = Esm.Lib.Calendar.day_of_year from rfl, expand_day_of_year]
+  · unfold evalApplyIn
+    rw [show intTemplate .dayOfYear = Esm.Lib.Calendar.day_of_year from rfl, expand_day_of_year]
     simp only [ev_guard_in ht, ev_dayOfYearF hF, IntFn.exact_dayOfYear, dayNumber_eq, dayOfYear_eq]
     simp only [decide_eq_true_eq]
-  · unfold evalApply; rw [show intTemplate .isLeapYear = Esm.Lib.Calendar.is_leap_year from rfl, expand_is_leap_year]
+  · unfold evalApplyIn
+    rw [show intTemplate .isLeapYear = Esm.Lib.Calendar.is_leap_year from rfl,
+      expand_is_leap_year]
     simp only [ev_guard_in ht, ev_isLeapF hF, IntFn.exact_isLeapYear, dateOf_eq, isLeap_eq]
     simp only [decide_eq_true_eq]
 
@@ -896,7 +907,7 @@ theorem calendar_template_nan [ZeroDivNaN α] (tm : Template)
       Esm.Lib.Calendar.hour, Esm.Lib.Calendar.minute, Esm.Lib.Calendar.second,
       Esm.Lib.Calendar.day_of_year, Esm.Lib.Calendar.julian_day, Esm.Lib.Calendar.is_leap_year])
     (x : α) (hx : x = nan ∨ ∃ r : ℝ, x = fin r ∧ 2 ^ 52 ≤ |r|) :
-    evalApply tm bindT [("T", .num x)] = .ok (.num nan) := by
+    evalApplyIn Esm.Lib.Calendar.lib 32 tm bindT [("T", .num x)] = .ok (.num nan) := by
   have hcond : IB [("T", .num x)] (.node "<" [.node "abs" [tA], cst 4503599627370496]) false := by
     have hc := ev_cst (env := [("T", .num x)]) 4503599627370496 (by norm_num)
     unfold IV at hc
@@ -930,7 +941,7 @@ theorem calendar_template_nan [ZeroDivNaN α] (tm : Template)
     push_cast
     rw [ZeroDivNaN.zero_div_zero]
   simp only [List.mem_cons, List.not_mem_nil, or_false] at htm
-  rcases htm with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> unfold evalApply
+  rcases htm with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> unfold evalApplyIn
   · rw [expand_year]; simp only [hg]
   · rw [expand_month]; simp only [hg]
   · rw [expand_day]; simp only [hg]
@@ -951,7 +962,7 @@ operations are the same away from a zero divisor) is `fJulianDay t`, §9.2's
 `(d + 2440588) + ((s − 43200) + (t − floor(t))) / 86400` rounded operation by
 operation on the exact split — bit for bit. -/
 theorem julian_day_template_eq (t : ℝ) (ht : |t| < 2 ^ 52) :
-    evalApply Esm.Lib.Calendar.julian_day bindT (envT t : Env Bin64) =
+    evalApplyIn Esm.Lib.Calendar.lib 32 Esm.Lib.Calendar.julian_day bindT (envT t : Env Bin64) =
       .ok (.num (Bin64.fin (fJulianDay t))) := by
   have hF := inDom_floor ht
   have hss := ss_range hF
@@ -968,7 +979,7 @@ theorem julian_day_template_eq (t : ℝ) (ht : |t| < 2 ^ 52) :
   have hdl' : |dZ ⌊t⌋ + 2440588| ≤ 2 ^ 53 := by unfold dZ; exact abs_le_of (by omega) (by omega)
   have hsl' : |ssZ ⌊t⌋ - 43200| ≤ 2 ^ 53 := abs_le_of (by omega) (by omega)
   unfold IV at hd2 hs2 hc
-  unfold evalApply
+  unfold evalApplyIn
   rw [expand_julian_day]
   simp only [ev_guard_in ht]
   rw [show julianA = .node "+" [adA dA (lit 2440588),

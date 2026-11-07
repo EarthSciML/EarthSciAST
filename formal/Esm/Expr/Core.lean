@@ -139,8 +139,9 @@ inductive Const where
 mutual
 
 /-- The ESM Expression AST (§4.1). A JSON number is `num`, a bare string a
-`var`, an object with an `op` a `const`, a `faq` or a generic `node` (its
-remaining scalar fields, which this slice never needs, are not carried). -/
+`var`, an object with an `op` a `const`, a `faq`, an `apply_expression_template`
+reference or a generic `node` (its remaining scalar fields, which this slice
+never needs, are not carried). -/
 inductive Ast where
   | num (m : Int) (e : Nat)
   | var (name : String)
@@ -149,12 +150,21 @@ inductive Ast where
   /-- `faq`: `output_idx`, `reduce`, `ranges`, `expr`, `args`. -/
   | faq (outputIdx : List String) (reduce : String) (ranges : Ranges) (expr : Ast)
       (args : List Ast)
+  /-- `apply_expression_template`: the template `name` with its `bindings`
+  (§9.6.2). It denotes its expansion (§9.6.4 rule 2); `eval` refuses it, and
+  `Esm.Expr.expandRefs` replaces it by that expansion. -/
+  | apply (name : String) (bindings : Binds)
 
 /-- A `faq`'s `ranges` object, in key order: each symbol with its tuple
 (`[start, stop]` or `[start, step, stop]`). -/
 inductive Ranges where
   | nil
   | cons (sym : String) (tuple : List Ast) (rest : Ranges)
+
+/-- An `apply_expression_template` node's `bindings` object, in key order. -/
+inductive Binds where
+  | nil
+  | cons (param : String) (value : Ast) (rest : Binds)
 
 end
 
@@ -414,6 +424,7 @@ def eval : Ast → Env α → Except EvalError (Val α)
       let r ← js.foldlM (fun acc i => do
         return fmax acc (← asNum (← eval body ((k, .num (Lits.ofDec i 0)) :: env)))) v
       return .num r
+  | .apply n _, _ => .error (.unsupported s!"apply_expression_template {n}: not expanded")
   | .faq _ _ _ _ _, _ =>
     .error (.unsupported "faq outside output_idx [], reduce + * min max, one dense [start, stop] range")
 

@@ -266,7 +266,7 @@
         "spec.9.6.3.bindings-cover-params"
       ],
       "statement": "On |t| < 2^52 each of the eight integer templates of lib/calendar.esm (year, month, day, hour, minute, second, day_of_year, is_leap_year), applied to t and evaluated, is the exact integer value of its datetime.* function; at Bin64 every operation of the expansion is exact, so the binary64 result is that integer bit for bit.",
-      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [inst_4 : Esm.Closed.TemplateAst.ExprLaws α] [inst_5 : Esm.Closed.CalendarAst.CalLaws α] (f : Esm.Closed.Datetime.IntFn) (t : ℝ), |t| < (2 : ℝ) ^ (52 : ℕ) → Esm.Expr.evalApply (Esm.Closed.CalendarAst.intTemplate f) [(\"t\", Esm.Expr.Ast.var \"T\")] [(\"T\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin t : α))] = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ((f.exact t : ℤ) : ℝ)))",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [inst_4 : Esm.Closed.TemplateAst.ExprLaws α] [inst_5 : Esm.Closed.CalendarAst.CalLaws α] (f : Esm.Closed.Datetime.IntFn) (t : ℝ), |t| < (2 : ℝ) ^ (52 : ℕ) → Esm.Expr.evalApplyIn Esm.Lib.Calendar.lib 32 (Esm.Closed.CalendarAst.intTemplate f) [(\"t\", Esm.Expr.Ast.var \"T\")] [(\"T\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin t : α))] = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ((f.exact t : ℤ) : ℝ)))",
       "status": "proven",
       "theorem": "Esm.Closed.CalendarAst.calendar_int_template_eq"
     },
@@ -288,7 +288,7 @@
         "spec.9.6.3.bindings-cover-params"
       ],
       "statement": "On |t| < 2^52 the julian_day template of lib/calendar.esm evaluated in binary64 is fJulianDay t, the binary64 value of the pinned formula (d + 2440588) + ((s - 43200) + (t - floor(t))) / 86400 on the exact split, bit for bit.",
-      "lean_statement": "∀ (t : ℝ), |t| < (2 : ℝ) ^ (52 : ℕ) → Esm.Expr.evalApply Esm.Lib.Calendar.julian_day [(\"t\", Esm.Expr.Ast.var \"T\")] [(\"T\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin t : Esm.Closed.Template.Bin64))] = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.Bin64.fin (Esm.Closed.Datetime.fJulianDay t)))",
+      "lean_statement": "∀ (t : ℝ), |t| < (2 : ℝ) ^ (52 : ℕ) → Esm.Expr.evalApplyIn Esm.Lib.Calendar.lib 32 Esm.Lib.Calendar.julian_day [(\"t\", Esm.Expr.Ast.var \"T\")] [(\"T\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin t : Esm.Closed.Template.Bin64))] = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.Bin64.fin (Esm.Closed.Datetime.fJulianDay t)))",
       "status": "proven",
       "theorem": "Esm.Closed.CalendarAst.julian_day_template_eq"
     },
@@ -300,7 +300,7 @@
         "spec.9.6.3.bindings-cover-params"
       ],
       "statement": "For a NaN t, or a finite t with |t| >= 2^52, each of the nine lib/calendar.esm templates evaluates its 0/0 branch, NaN at every scalar type where 0/0 is NaN (Num, Bin64Z); the datetime.* functions raise closed_function_overflow there or return a value, the template returns NaN.",
-      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [inst_4 : Esm.Closed.TemplateAst.ExprLaws α] [inst_5 : Esm.Closed.CalendarAst.CalLaws α] [inst_6 : Esm.Closed.CalendarAst.ZeroDivNaN α] (tm : Esm.Expr.Template), tm ∈ [Esm.Lib.Calendar.year, Esm.Lib.Calendar.month, Esm.Lib.Calendar.day, Esm.Lib.Calendar.hour, Esm.Lib.Calendar.minute, Esm.Lib.Calendar.second, Esm.Lib.Calendar.day_of_year, Esm.Lib.Calendar.julian_day, Esm.Lib.Calendar.is_leap_year] → ∀ (x : α), (x = Esm.Closed.Scalar.nan ∨ ∃ r : ℝ, x = Esm.Closed.Template.RealNaN.fin r ∧ (2 : ℝ) ^ (52 : ℕ) ≤ |r|) → Esm.Expr.evalApply tm [(\"t\", Esm.Expr.Ast.var \"T\")] [(\"T\", Esm.Expr.Val.num x)] = Except.ok (Esm.Expr.Val.num Esm.Closed.Scalar.nan)",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [inst_4 : Esm.Closed.TemplateAst.ExprLaws α] [inst_5 : Esm.Closed.CalendarAst.CalLaws α] [inst_6 : Esm.Closed.CalendarAst.ZeroDivNaN α] (tm : Esm.Expr.Template), tm ∈ [Esm.Lib.Calendar.year, Esm.Lib.Calendar.month, Esm.Lib.Calendar.day, Esm.Lib.Calendar.hour, Esm.Lib.Calendar.minute, Esm.Lib.Calendar.second, Esm.Lib.Calendar.day_of_year, Esm.Lib.Calendar.julian_day, Esm.Lib.Calendar.is_leap_year] → ∀ (x : α), (x = Esm.Closed.Scalar.nan ∨ ∃ r : ℝ, x = Esm.Closed.Template.RealNaN.fin r ∧ (2 : ℝ) ^ (52 : ℕ) ≤ |r|) → Esm.Expr.evalApplyIn Esm.Lib.Calendar.lib 32 tm [(\"t\", Esm.Expr.Ast.var \"T\")] [(\"T\", Esm.Expr.Val.num x)] = Except.ok (Esm.Expr.Val.num Esm.Closed.Scalar.nan)",
       "status": "proven",
       "theorem": "Esm.Closed.CalendarAst.calendar_template_nan"
     },

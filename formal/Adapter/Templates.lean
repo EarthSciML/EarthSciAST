@@ -45,6 +45,7 @@ partial def astOf (j : Json) : Except String Ast := do
     let fields := kvs.toArray.map (·.1)
     let allowed : List String :=
       if op == "const" then ["op", "args", "value", "units"]
+      else if op == "apply_expression_template" then ["op", "args", "name", "bindings"]
       else if op == "faq" then ["op", "args", "output_idx", "reduce", "ranges", "expr"]
       else ["op", "args"]
     for f in fields do
@@ -54,6 +55,11 @@ partial def astOf (j : Json) : Except String Ast := do
       | _ => pure []
     if op == "const" then
       return .const (← constOf (← j.getObjVal? "value"))
+    else if op == "apply_expression_template" then
+      let bs ← (← j.getObjVal? "bindings").getObj?
+      let binds ← bs.toArray.toList.foldrM (fun (k, v) acc => do
+        return Binds.cons k (← astOf v) acc) Binds.nil
+      return .apply (← j.getObjValAs? String "name") binds
     else if op == "faq" then
       let out ← match j.getObjVal? "output_idx" with
         | .ok (.arr a) => a.toList.mapM (fun o => o.getStr?)
@@ -79,6 +85,8 @@ def templateOf (j : Json) : Except String Template := do
 def errorString : ApplyError → String
   | .expand (.missingBinding p) => s!"apply_expression_template: no binding for {p}"
   | .expand (.extraBinding b) => s!"apply_expression_template: binding {b} names no parameter"
+  | .expand (.unknownTemplate n) => s!"apply_expression_template: no template {n} in scope"
+  | .expand .tooDeep => "template_body_expansion_too_deep"
   | .eval (.unsupported w) => s!"unsupported: {w}"
   | .eval (.unbound n) => s!"unbound: {n}"
   | .eval (.typeError w) => s!"type error: {w}"
@@ -104,6 +112,9 @@ def main (args : List String) : IO UInt32 := do
         | _, ms => throw s!"{ms.length} models: name the one to evaluate"
       -- the imported templates
       let mut tpls : List (String × Template) := []
+      -- every template of an imported library: the scope its bodies' references
+      -- resolve in (§9.7.3), whatever `only` admits for direct use
+      let mut scope : List (String × Template) := []
       let imports := (m.getObjValD "expression_template_imports").getArr?.toOption.getD #[]
       for imp in imports do
         let ref ← liftExcept (imp.getObjValAs? String "ref")
@@ -111,8 +122,10 @@ def main (args : List String) : IO UInt32 := do
         let ts ← liftExcept ((← liftExcept (lib.getObjVal? "expression_templates")).getObj?)
         let only := (imp.getObjValD "only").getArr?.toOption.map (·.toList.filterMap (·.getStr?.toOption))
         for (name, tj) in ts.toArray.toList do
+          let t ← liftExcept (templateOf tj)
+          scope := (name, t) :: scope
           if only.all (·.contains name) then
-            tpls := (name, ← liftExcept (templateOf tj)) :: tpls
+            tpls := (name, t) :: tpls
       -- parameter defaults (numbers or nested arrays of numbers) and variables
       -- defined by a `const` equation (§4.3.3) form the environment
       let vars ← liftExcept ((← liftExcept (m.getObjVal? "variables")).getObj?)
@@ -143,7 +156,7 @@ def main (args : List String) : IO UInt32 := do
         let some t := tpls.lookup name | throw s!"{lhs}: template {name} is not imported"
         let bs ← liftExcept ((← liftExcept (rhs.getObjVal? "bindings")).getObj?)
         let σ ← liftExcept (bs.toArray.toList.mapM (fun (k, v) => do return (k, ← astOf v)))
-        match evalApply t σ env with
+        match evalApplyIn scope 32 t σ env with
         | .ok (.num x) => out := out.push ((Adapter.Interp.floatJson x).mergeObj
             (Json.mkObj [("name", lhs)]))
         | .ok _ => out := out.push (Json.mkObj [("name", lhs), ("error", "not a scalar")])
