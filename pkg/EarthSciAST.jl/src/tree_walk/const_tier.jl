@@ -122,9 +122,7 @@ function _def_tier(n::_Node, tier::Vector{Int8}, slot::Int, cache::_CSECache)::I
     k = n.kind
     if k === _NK_STATE
         return _TIER_DYNAMIC
-    elseif k === _NK_TIME || k === _NK_PARAM_GATHER || k === _NK_LIVE_GATHER
-        # A live forcing buffer is refreshed at time boundaries, whatever offset
-        # it is read at; its subscripts (literals, loop counters) cannot lower it.
+    elseif k === _NK_TIME || k === _NK_PARAM_GATHER
         return _TIER_TIME
     elseif k === _NK_CACHED
         # THE TRAP (clause 2): a cache ref has no leaves of its own, so its cadence is
@@ -135,8 +133,11 @@ function _def_tier(n::_Node, tier::Vector{Int8}, slot::Int, cache::_CSECache)::I
         return @inbounds tier[r]
     end
     # `_NK_LITERAL` / `_NK_PARAM` are childless ⇒ const. `_NK_OP` (`fn` included) and
-    # `_NK_CONTRACTION` are pure functions of their children: max over them.
-    tr = _TIER_CONST
+    # `_NK_CONTRACTION` are pure functions of their children: max over them. A
+    # live forcing buffer is refreshed at time boundaries, whatever offset it is
+    # read at, so `_NK_LIVE_GATHER` is at least TIME, and its subscripts can
+    # raise it further: a subscript that reads the state makes it DYNAMIC.
+    tr = k === _NK_LIVE_GATHER ? _TIER_TIME : _TIER_CONST
     for c in n.children
         tc = _def_tier(c, tier, slot, cache)
         tc === _TIER_DYNAMIC && return _TIER_DYNAMIC
