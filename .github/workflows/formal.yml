@@ -20,6 +20,9 @@ on:
       - 'CONFORMANCE_SPEC.md'
       - 'scripts/formal-audit.py'
       - 'scripts/run-closed-functions-lean.py'
+      - 'scripts/test_run_closed_functions_lean.py'
+      - 'scripts/run-inline-tests-conformance.py'
+      - 'scripts/conformance_lib.py'
       - 'tests/closed_functions/**'
       - 'tests/conformance/interp_templates/**'
       - 'tests/conformance/function_tables/load_errors/**'
@@ -33,6 +36,9 @@ on:
       - 'CONFORMANCE_SPEC.md'
       - 'scripts/formal-audit.py'
       - 'scripts/run-closed-functions-lean.py'
+      - 'scripts/test_run_closed_functions_lean.py'
+      - 'scripts/run-inline-tests-conformance.py'
+      - 'scripts/conformance_lib.py'
       - 'tests/closed_functions/**'
       - 'tests/conformance/interp_templates/**'
       - 'tests/conformance/function_tables/load_errors/**'
@@ -65,6 +71,12 @@ jobs:
     # if the generated file is current.
     - name: Check generated library templates
       run: python3 formal/scripts/gen-lib-templates.py --check
+
+    # The generator's and the scorer's own tests: pure Python, and instant.
+    - name: Test the generator and the scorer
+      run: |
+        python3 formal/scripts/test_gen_lib_templates.py
+        python3 scripts/test_run_closed_functions_lean.py
 
     - name: Cache Lean toolchain
       uses: actions/cache@v6

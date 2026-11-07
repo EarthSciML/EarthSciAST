@@ -12,7 +12,7 @@ def usage : String :=
   "modes:\n" ++
   "  datetime <expected.json>   evaluate a tests/closed_functions/datetime fixture\n" ++
   "  interp <expected.json>     evaluate a tests/closed_functions/interp fixture\n" ++
-  "  templates <document.esm> evaluate the apply_expression_template equations of a document\n" ++
+  "  templates <document.esm> [model] evaluate the apply_expression_template equations of a document\n" ++
   "  tables <cases.json>        run the §9.5.5 table checks on a function_tables load_errors ledger\n" ++
   "  units <unit_verdicts.json> resolve every unit string in a unit-registry golden\n"
 
