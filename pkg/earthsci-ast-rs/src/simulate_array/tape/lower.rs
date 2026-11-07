@@ -1129,6 +1129,12 @@ impl<'m> TapeBuilder<'m> {
                 out,
             } if !self.slots[*out as usize].scalar => {
                 if let Some(k) = self.known.get(a).cloned() {
+                    // The copy has an instruction of its own: only its
+                    // source's may still be deferred.
+                    let k = match k {
+                        Known::Deferred(v) => Known::Vals(v),
+                        k => k,
+                    };
                     self.known.insert(*out, k);
                 }
             }

@@ -657,6 +657,141 @@ fn a_rank_zero_join_over_the_tuple_list_budget_folds_in_windows() {
     }
 }
 
+/// The shape of a hot-soak fold (moves.esm's `tvh_hotMinutes`): output
+/// `[g, v, h]`, contracted `[i, s]` under a join of trips `i` to days `v`,
+/// and a body that gathers a large input `big[g, i, s]` at every tuple and
+/// keeps it only where a slot's hour matches the output hour. A chunk's tape
+/// binds every input by reference ([`TapeBuilder::defer_consts`]) and
+/// resolves each gather at build, so this also covers what still has to run:
+/// the comparisons, the `ifelse`, and a loop symbol read as a value (`s`).
+fn hot_soak_doc(n_g: usize, n_v: usize, n_i: usize, n_s: usize, n_h: usize) -> Value {
+    let day: Vec<f64> = (0..n_i).map(|i| (i % n_v + 1) as f64).collect();
+    let vday: Vec<f64> = (0..n_v).map(|v| (v + 1) as f64).collect();
+    let hour: Vec<Vec<f64>> = (0..n_i)
+        .map(|i| {
+            (0..n_s)
+                .map(|s| ((i * 7 + s * 3) % n_h + 1) as f64)
+                .collect()
+        })
+        .collect();
+    let hod: Vec<f64> = (0..n_h).map(|h| (h + 1) as f64).collect();
+    let big: Vec<Vec<Vec<f64>>> = (0..n_g)
+        .map(|g| {
+            (0..n_i)
+                .map(|i| {
+                    (0..n_s)
+                        .map(|s| {
+                            let k = (g * n_i + i) * n_s + s;
+                            // Some zeros (the `> 0` filter), and magnitudes
+                            // that show a reordered fold in the low bits.
+                            if k % 5 == 0 {
+                                0.0
+                            } else {
+                                (1.0 + 0.37 * k as f64) * 10f64.powi((k % 7) as i32 - 3)
+                            }
+                        })
+                        .collect()
+                })
+                .collect()
+        })
+        .collect();
+    let out = json!({"g": {"from": "gs"}, "v": {"from": "vs"}, "h": {"from": "hs"}});
+    let gvh = [json!("g"), json!("v"), json!("h")];
+    json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "hot_soak_fold", "authors": ["tape tests"]},
+        "index_sets": {
+            "gs": {"kind": "interval", "size": n_g},
+            "vs": {"kind": "interval", "size": n_v},
+            "is": {"kind": "interval", "size": n_i},
+            "ss": {"kind": "interval", "size": n_s},
+            "hs": {"kind": "interval", "size": n_h}
+        },
+        "models": {"M": {
+            "variables": {
+                "day": {"type": "unknown", "units": "1", "shape": ["is"]},
+                "vday": {"type": "unknown", "units": "1", "shape": ["vs"]},
+                "hour": {"type": "unknown", "units": "1", "shape": ["is", "ss"]},
+                "hod": {"type": "unknown", "units": "1", "shape": ["hs"]},
+                "big": {"type": "unknown", "units": "1", "shape": ["gs", "is", "ss"]},
+                "total": {"type": "unknown", "units": "1", "shape": ["gs", "vs", "hs"]},
+                "y": {"type": "unknown", "units": "1", "shape": ["gs", "vs", "hs"], "default": 1.0}
+            },
+            "equations": [
+                {"lhs": "day", "rhs": cnst(json!(day))},
+                {"lhs": "vday", "rhs": cnst(json!(vday))},
+                {"lhs": "hour", "rhs": cnst(json!(hour))},
+                {"lhs": "hod", "rhs": cnst(json!(hod))},
+                {"lhs": "big", "rhs": cnst(json!(big))},
+                {"lhs": "total", "rhs": {"op": "faq", "args": [], "semiring": "sum_product",
+                    "output_idx": ["g", "v", "h"],
+                    "ranges": {"g": {"from": "gs"}, "v": {"from": "vs"}, "h": {"from": "hs"},
+                               "i": {"from": "is"}, "s": {"from": "ss"}},
+                    "join": [{"on": [["day", "vday"]]}],
+                    "expr": {"op": "ifelse", "args": [
+                        {"op": "and", "args": [
+                            {"op": "==", "args": [
+                                idx(json!("hour"), &[json!("i"), json!("s")]),
+                                idx(json!("hod"), &[json!("h")])]},
+                            {"op": ">", "args": [
+                                idx(json!("big"), &[json!("g"), json!("i"), json!("s")]), 0.0]}]},
+                        {"op": "*", "args": [
+                            idx(json!("big"), &[json!("g"), json!("i"), json!("s")]),
+                            {"op": "+", "args": ["s", 0.25]}]},
+                        0.0]}}},
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["g", "v", "h"], "ranges": out,
+                         "expr": {"op": "D", "args": [idx(json!("y"), &gvh)], "wrt": "t"}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["g", "v", "h"], "ranges": out,
+                         "expr": {"op": "-", "args": [
+                             idx(json!("total"), &gvh), idx(json!("y"), &gvh)]}}}
+            ]
+        }}
+    })
+}
+
+/// The folded payload of the one CONST contraction a [`hot_soak_doc`]
+/// program holds: the largest `ConstArray` payload over its output box.
+fn folded_payload(prog: &TapeProgram, n_cells: usize) -> Vec<u64> {
+    let mut found: Vec<&ConstArrayData> = prog
+        .const_data
+        .iter()
+        .filter(|c| c.values.len() == n_cells)
+        .collect();
+    assert_eq!(found.len(), 1, "one folded payload over the output box");
+    found.remove(0).values.iter().map(|x| x.to_bits()).collect()
+}
+
+/// A fold whose chunk tapes share their inputs answers bit for bit what the
+/// whole tuple list does, however many chunks (and windows of one cell's run)
+/// it is split into: the interpreter is the reference for every budget
+/// (`ab_check`), and the folded payloads are identical across budgets.
+#[test]
+fn a_fold_over_many_chunks_sharing_its_inputs_is_bit_identical() {
+    use super::lower::set_tuple_list_budget;
+    let (n_g, n_v, n_i, n_s, n_h) = (3usize, 4usize, 40usize, 5usize, 6usize);
+    let doc = hot_soak_doc(n_g, n_v, n_i, n_s, n_h);
+    let tuples = n_g * n_h * n_i * n_s; // every trip joins exactly one day
+    let prev = set_tuple_list_budget(usize::MAX);
+    let prog = ab_check(doc.clone(), -2.0, 2.0);
+    set_tuple_list_budget(prev);
+    assert_eq!(count(&prog, "SegReduce"), 1, "under budget, the whole list");
+    assert_eq!(prog.seg_tables[0].rows.last().copied(), Some(tuples as u32));
+    let run = n_i / n_v * n_s; // one output cell's tuples
+    let mut payloads = Vec::new();
+    // Many chunks of several cells, chunks of one cell, and windows of a
+    // cell's run down to one tuple a window.
+    for budget in [tuples - 1, 7 * run, run, run - 1, 3, 1] {
+        let prev = set_tuple_list_budget(budget);
+        let prog = ab_check(doc.clone(), -2.0, 2.0);
+        set_tuple_list_budget(prev);
+        assert_eq!(count(&prog, "SegReduce"), 0, "budget {budget}: folded");
+        assert!(prog.gather_tables.is_empty(), "budget {budget}");
+        payloads.push(folded_payload(&prog, n_g * n_v * n_h));
+    }
+    assert!(payloads.iter().all(|p| *p == payloads[0]));
+    assert!(payloads[0].iter().any(|&b| f64::from_bits(b) != 0.0));
+}
+
 /// The tape PRICES an `on` gate before building it, as the interpreter's
 /// planner does (PR #423): a clause whose key barely discriminates — here a
 /// constant, so it matches the whole product — is declined once a selective
