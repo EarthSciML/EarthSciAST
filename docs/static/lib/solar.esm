@@ -2,7 +2,7 @@
   "esm": "1.2.0",
   "metadata": {
     "name": "Solar",
-    "description": "Standard-library solar-geometry subsystem. Computes solar declination δ, the equation of time, and the solar zenith angle θ_z given latitude (degrees north), longitude (degrees east of prime meridian), and a UTC scalar time `t_utc`. The algorithm is the Spencer-/NOAA-style Fourier series for δ and EoT; it is bit-defined relative to the closed `datetime.*` registry (esm-spec.md §9.2) plus the §4.2 elementary-function ops, so all bindings agree to ≤ 10 ulp on the transcendental composition. Includable via §4.7 reference; see docs/standard_library.md.",
+    "description": "Standard-library solar-geometry subsystem. Computes solar declination δ, the equation of time, and the solar zenith angle θ_z given latitude (degrees north), longitude (degrees east of prime meridian), and a UTC scalar time `t_utc`. The algorithm is the Spencer-/NOAA-style Fourier series for δ and EoT; its calendar fields come from the pure-AST `day_of_year`, `hour`, `minute` and `second` templates of lib/calendar.esm (imported with `expression_template_imports`; each gives the bits of the matching `datetime.*` closed function of esm-spec.md §9.2 for |t_utc| < 2^52 s, and NaN outside), and the rest is the §4.2 elementary-function ops, so all bindings agree to ≤ 10 ulp on the transcendental composition. Includable via §4.7 reference; see docs/standard_library.md.",
     "authors": [
       "EarthSciML"
     ],
@@ -12,7 +12,7 @@
       "solar",
       "zenith-angle",
       "noaa",
-      "closed-function-registry"
+      "expression-templates"
     ],
     "references": [
       {
@@ -25,12 +25,23 @@
   },
   "models": {
     "Solar": {
+      "expression_template_imports": [
+        {
+          "ref": "calendar.esm",
+          "only": [
+            "day_of_year",
+            "hour",
+            "minute",
+            "second"
+          ]
+        }
+      ],
       "variables": {
         "t_utc": {
           "type": "parameter",
           "units": "s",
           "default": 0.0,
-          "description": "UTC seconds since the Unix epoch (esm-spec.md §9.2). Same convention as `Calendar.t_utc`."
+          "description": "UTC seconds since the Unix epoch (esm-spec.md §9.2). Same convention as the `t` parameter of the lib/calendar.esm templates."
         },
         "lat": {
           "type": "parameter",
@@ -145,41 +156,45 @@
         {
           "lhs": "day_of_year",
           "rhs": {
-            "op": "fn",
-            "name": "datetime.day_of_year",
-            "args": [
-              "t_utc"
-            ]
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "day_of_year",
+            "bindings": {
+              "t": "t_utc"
+            }
           }
         },
         {
           "lhs": "hour",
           "rhs": {
-            "op": "fn",
-            "name": "datetime.hour",
-            "args": [
-              "t_utc"
-            ]
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "hour",
+            "bindings": {
+              "t": "t_utc"
+            }
           }
         },
         {
           "lhs": "minute",
           "rhs": {
-            "op": "fn",
-            "name": "datetime.minute",
-            "args": [
-              "t_utc"
-            ]
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "minute",
+            "bindings": {
+              "t": "t_utc"
+            }
           }
         },
         {
           "lhs": "second",
           "rhs": {
-            "op": "fn",
-            "name": "datetime.second",
-            "args": [
-              "t_utc"
-            ]
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "second",
+            "bindings": {
+              "t": "t_utc"
+            }
           }
         },
         {
