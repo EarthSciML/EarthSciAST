@@ -84,12 +84,10 @@ func loadedDocument(t *testing.T, path string) any {
 	if err != nil {
 		t.Fatalf("serialize %s: %v", path, err)
 	}
-	var doc map[string]any
+	var doc any
 	if err := json.Unmarshal([]byte(text), &doc); err != nil {
 		t.Fatal(err)
 	}
-	// The fixture and its twin differ in their descriptions by construction.
-	delete(doc, "metadata")
 	// Go serializes a loaded document reference-preserving, so the resolved
 	// content is compared through the flattened system.
 	flat, err := Flatten(f)
