@@ -67,6 +67,12 @@ tests/conformance/
 │   ├── README.md                   #   the contract
 │   ├── manifest.json               #   `"runner": "inline_tests"`; its nine documents are REFERENCED from tests/closed_functions/datetime/<fn>/template.esm
 │   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
+├── geometry_templates/            # lib/geometry.esm overlap-area templates in a faq over cell pairs (CONFORMANCE_SPEC §5.45.4)
+│   ├── README.md                   #   the contract
+│   ├── manifest.json               #   `"runner": "inline_tests"`
+│   ├── fixtures/<id>.esm
+│   ├── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
+│   └── pairs.json                  #   every fixture's clipped cell pairs + reference areas, for the per-binding leaf-agreement tests (scripts/gen-geometry-template-pairs.py)
 ├── interp_templates/              # lib/interp.esm templates bit-for-bit against the interp.* scenarios (CONFORMANCE_SPEC §5.45.4)
 │   ├── README.md                   #   the contract
 │   ├── manifest.json               #   `"runner": "inline_tests"`; its three documents are REFERENCED from tests/closed_functions/interp/<fn>/template.esm

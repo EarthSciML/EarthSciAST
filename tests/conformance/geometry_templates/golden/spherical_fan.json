@@ -1,0 +1,67 @@
+{
+  "fixture": "spherical_fan",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "spherical_fan_t0",
+      "assertion_idx": 1,
+      "variable": "A_template",
+      "actual": 0.26179938779914946
+    },
+    {
+      "test_id": "spherical_fan_t0",
+      "assertion_idx": 2,
+      "variable": "A_template",
+      "actual": 0.0
+    },
+    {
+      "test_id": "spherical_fan_t0",
+      "assertion_idx": 3,
+      "variable": "A_template",
+      "actual": 0.26179938779914946
+    },
+    {
+      "test_id": "spherical_fan_t0",
+      "assertion_idx": 4,
+      "variable": "A_template",
+      "actual": 0.0
+    },
+    {
+      "test_id": "spherical_fan_t0",
+      "assertion_idx": 5,
+      "variable": "A_template",
+      "actual": 0.0
+    },
+    {
+      "test_id": "spherical_fan_t0",
+      "assertion_idx": 6,
+      "variable": "A_template",
+      "actual": 0.26179938779914946
+    },
+    {
+      "test_id": "spherical_fan_t0",
+      "assertion_idx": 7,
+      "variable": "A_template",
+      "actual": 0.0
+    },
+    {
+      "test_id": "spherical_fan_t0",
+      "assertion_idx": 8,
+      "variable": "A_template",
+      "actual": 0.2617993877991495
+    },
+    {
+      "test_id": "spherical_fan_t0",
+      "assertion_idx": 9,
+      "variable": "A_j",
+      "actual": 0.5235987755982989
+    },
+    {
+      "test_id": "spherical_fan_t0",
+      "assertion_idx": 10,
+      "variable": "A_j",
+      "actual": 0.5235987755982989
+    }
+  ]
+}
