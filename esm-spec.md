@@ -4697,17 +4697,19 @@ Each step covers every axis before the next step begins, so a bilinear call whos
 
 Both bounds are proven in `formal/` (`Esm/Closed/Interp/Rounding.lean`, `Esm/Closed/Interp/Bilinear64.lean`). No relative tolerance is sound: with FMA, `interp.linear([1, −2], [0, 3], 1)` is `2⁻⁵⁴` where the pinned result is `0`. The fixtures under `tests/closed_functions/interp/` are bit-exact (`0/0`) and avoid FMA-sensitive inputs.
 
-**Composition rationale (informative):** `interp.linear(table, axis, x)` is exactly equivalent to the following AST composition (modulo evaluation order / FMA effects, which the spec pins above):
+**Composition rationale (informative):** the three `interp.*` functions are expressible in the core AST, and the standard library carries those expressions: `lib/interp.esm` is a template-library file (§9.7.1) whose match-less templates `searchsorted(x, xs, n)`, `linear(table, axis, x, n)` and `bilinear(table, axis_x, axis_y, x, y, nx, ny)` are their pure-AST definitions, the axis lengths being integer parameters used as `faq` `ranges` bounds (§9.6.1). Each locates its cell by counting comparisons rather than by searching:
 
 ```jsonc
-// Let xc = clamp(x, axis[1], axis[N]) (extrapolate-flat; clamping the index alone
-// would clamp the cell but not the weight, and so extrapolate), then
-// i = interp.searchsorted(xc, axis) clamped to [2, N], i_lo = i − 1.
-// Then the linear blend is:
-//   table[i_lo] + (xc − axis[i_lo]) / (axis[i] − axis[i_lo]) · (table[i] − table[i_lo])
-// (At an interior knot this picks the cell to the LEFT of the knot, w = 1, where the
-// pinned form picks the cell to the right, w = 0; the two agree in exact arithmetic.)
+// searchsorted: 1 + Σ_{k=1..n} ifelse(xs[k] >= x, 0, 1)
+//   (the first k with xs[k] >= x; n + 1 when none is, or x is NaN; 1 when n = 0)
+// linear: i = min(max(Σ_{k=1..n} ifelse(axis[k] <= x, 1, 0), 1), n - 1), then
+//   ifelse(x <= axis[1], table[1], ifelse(x >= axis[n], table[n],
+//          table[i] + (x - axis[i]) / (axis[i+1] - axis[i]) · (table[i+1] - table[i])))
+// bilinear: x and y clamped to their axes, i and j counted the same way on the
+//   clamped queries, then the two x-blends and the y-blend in the order above.
 ```
+
+With a strictly increasing axis, the count clamped to `[1, n − 1]` is exactly the `i` of step 3 of `interp.linear` and the `i` of step 2 of `interp.bilinear`, including the interior-knot convention (`i = k`, weight `0`), and a NaN query counts `0`, so the blend weight is NaN. Each body evaluates in the order this section pins, and on every success scenario of `tests/closed_functions/interp/` the expanded template gives the same `binary64` result as the `fn` form. The templates do not carry the load-time argument checks above: a caller of a template supplies a valid axis.
 
 The named primitive exists so that symbolic layers in bindings (notably the Julia MTK extension) can mark each lookup as opaque to alias elimination via `@register_symbolic`, instead of paying the structural-simplify cost of ~10 alias-eliminated intermediates per lookup. With ~230 lookups per `fastjx` photolysis evaluation (18 wavelengths × 13 species), that difference is the gap between MTK simplification finishing in seconds versus minutes-to-hours (see escalation `hq-wisp-y6g6`).
 
