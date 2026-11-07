@@ -1,7 +1,8 @@
 # The indicator sum emitted as a count (#588).
 #
-# A contraction loop folding `ifelse(a[k] <= x, 1, 0)` (or the mirrored
-# `x >= a[k]`) from +0.0 is the number of entries of `a` at or below `x` — the
+# A contraction loop folding `ifelse(a[k] <= x, 1, 0)` (or `<`, `>=`, `>`,
+# with `a[k]` on either side) from +0.0 is the number of entries of `a` that
+# satisfy the comparison — for `<=`, the entries at or below `x`: the
 # bracket of a table interpolation written in the format's own operators. The
 # emitter writes it as an integer count (`:count_fold_linear`), and as a binary
 # search when `a` is an ascending 1-D constant array read at the counter
@@ -13,9 +14,11 @@
 #     unsorted or NaN-holding constant axis, both comparison spellings, inside
 #     the whole-array nest and in a scalar equation. The queries hit the axis
 #     entries exactly, their neighbouring floats, ±0.0, ±Inf, NaN and both ends;
-#   * every near miss — another reducer, other branch values, a strict or
-#     reversed comparison, a query that reads the counter, a filter, a short
-#     range — keeps the fold: the rewrite never fires and the answer is the
+#   * all four relations `<= < >= >`, with the axis on either side, against
+#     the interpreter and against the count itself, ties included;
+#   * every near miss — another reducer, other branch values, an equality
+#     comparison, a query that reads the counter, a filter, a short range —
+#     keeps the fold: the rewrite never fires and the answer is the
 #     interpreter's;
 #   * zero allocation per call, and ForwardDiff through the count.
 
@@ -189,6 +192,39 @@ end
         )
     end
 
+    # All four relations, with the axis on either side of the comparison. A
+    # strict relation moves a query equal to an entry to the other side of the
+    # bracket, and an axis-on-the-right spelling counts the mirrored relation;
+    # the queries hit every entry exactly, and the repeated-entry axis puts
+    # several equal entries on the boundary at once. `>=`/`>` with the axis on
+    # the left count a suffix of an ascending axis.
+    rels = (
+        ("a <= x", "<=", false, <=), ("a < x", "<", false, <),
+        ("a >= x", ">=", false, >=), ("a > x", ">", false, >),
+        ("x >= a", ">=", true, <=), ("x > a", ">", true, <),
+        ("x <= a", "<=", true, >=), ("x < a", "<", true, >),
+    )
+    _cf_rel(op, flip) = (a, x) -> _cf_op("ifelse", flip ? _cf_op(op, x, a) : _cf_op(op, a, x), 1, 0)
+    @testset "relation $what, $axname axis" for (what, op, flip, f) in rels,
+            (axname, ax, kind) in (
+                ("ascending", _cf_axis(59), :count_fold_search),
+                ("repeated-entry", [floor((k - 3) / 4) for k in 1:59], :count_fold_search),
+                ("unsorted", reverse(_cf_axis(59)), :count_fold_linear),
+            )
+        doc, ics = _cf_doc(59; axis = ax, body = _cf_rel(op, flip)), _cf_ics(59)
+        tn, dn = _cf_agree(doc, ics)
+        @test get(tn, kind, 0) >= 1
+        @test all(
+            dn["q[$i]"] === Float64(count(v -> f(v, x), ax))
+                for (i, x) in enumerate(_cf_queries(59))
+        )
+    end
+    @testset "relation $what, state axis" for (what, op, flip, f) in rels[[2, 3, 6, 8]]
+        doc, ics = _cf_doc(59; axis = :state, body = _cf_rel(op, flip)), _cf_ics(59; axis = :state)
+        tn, _ = _cf_agree(doc, ics)
+        @test get(tn, :count_fold_linear, 0) >= 1
+    end
+
     # The same shape in a scalar equation, which the scalar codegen tier emits.
     @testset "scalar equation, $what axis" for what in (:const, :unsorted)
         N = 59
@@ -216,9 +252,7 @@ end
     near = (
         ("branch values 2/0", (a, x) -> _cf_op("ifelse", _cf_op("<=", a, x), 2, 0), (;)),
         ("branches swapped", (a, x) -> _cf_op("ifelse", _cf_op("<=", a, x), 0, 1), (;)),
-        ("strict <", (a, x) -> _cf_op("ifelse", _cf_op("<", a, x), 1, 0), (;)),
-        ("x <= a[k]", (a, x) -> _cf_op("ifelse", _cf_op("<=", x, a), 1, 0), (;)),
-        ("a[k] >= x", (a, x) -> _cf_op("ifelse", _cf_op(">=", a, x), 1, 0), (;)),
+        ("equality", (a, x) -> _cf_op("ifelse", _cf_op("==", a, x), 1, 0), (;)),
         ("query reads k", (a, x) -> _cf_le(a, _cf_op("+", x, "k")), (;)),
         ("bare comparison", (a, x) -> _cf_op("<=", a, x), (;)),
         ("max reducer", _cf_le, (; reduce = "max")),

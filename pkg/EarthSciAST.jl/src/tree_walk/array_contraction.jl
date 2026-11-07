@@ -419,22 +419,27 @@ end
 # ---- The indicator sum as a count ---------------------------------------------
 # A `+` loop seeded from +0.0 over ONE contracted index whose body is exactly
 #
-#     ifelse(a(k) <= x, 1, 0)      or its mirror      ifelse(x >= a(k), 1, 0)
+#     ifelse(a(k) REL x, 1, 0)      or its mirror      ifelse(x REL' a(k), 1, 0)
 #
-# with `x` not reading the counter, is the number of `k` with `a(k) <= x`: the
-# bracket of a table interpolation written in the format's own operators. Every
-# term is exactly 0.0 or 1.0 and every partial sum an integer far below 2^53, so
-# the fold is exact and ANY algorithm computing that count has its bits, for any
+# with REL one of `<= < >= >`, `a` the side that reads the counter and `x` the
+# side that does not, is the number of `k` with `a(k) REL x`: the bracket of a
+# table interpolation written in the format's own operators. Every term is
+# exactly 0.0 or 1.0 and every partial sum an integer far below 2^53, so the
+# fold is exact and ANY algorithm computing that count has its bits, for any
 # content of `a` (unsorted, NaN, ±0.0) and any `x` (a NaN matches nothing). It
 # is emitted as an integer count, `x` evaluated once (it is pure, and the range
 # is non-empty, so the fold evaluates it too). When `a` is a 1-D constant array
 # read at the counter itself and its entries over the range are in ascending
-# order, the count is a binary search over them; otherwise each entry is
-# compared, as the fold does.
+# order, the entries satisfying `a <= x` or `a < x` are a prefix of them and
+# those satisfying `a >= x` or `a > x` a suffix, whatever `x` is, and the count
+# is a binary search for that prefix's or suffix's length; otherwise each entry
+# is compared, as the fold does.
 #
 # The match is on this one algebraic shape, never on where it came from. Any
 # other seed, ⊕, body, branch literals or comparison is the ordinary fold.
 # `nothing` declines to it.
+const _COUNT_MIRROR = Dict{Symbol, Symbol}(:<= => :>=, :< => :>, :>= => :<=, :> => :<)
+
 function _cg_count_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi, span)
     spec = nd.payload::_ContractLoop
     (nd.op === :+ && nd.literal === 0.0 && length(nd.children) == 1) || return nothing
@@ -445,14 +450,12 @@ function _cg_count_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi, span)
     cond, yes, no = body.children
     (yes.kind === _NK_LITERAL && no.kind === _NK_LITERAL) || return nothing
     (cond.kind === _NK_OP && length(cond.children) == 2) || return nothing
-    if cond.op === :<=
-        a, x = cond.children
-    elseif cond.op === :>=
-        x, a = cond.children
-    else
-        return nothing
-    end
-    _reads_counter(x, spec.ref) && return nothing
+    haskey(_COUNT_MIRROR, cond.op) || return nothing
+    l, r = cond.children
+    lk, rk = _reads_counter(l, spec.ref), _reads_counter(r, spec.ref)
+    lk == rk && return nothing
+    # `rel` is the relation with the counted side on the left: `a rel x`.
+    a, x, rel = lk ? (l, r, cond.op) : (r, l, _COUNT_MIRROR[cond.op])
     # The branch values as the fold would emit them: under the scalar tier a
     # literal is a hole, baked only when every member of the class agrees.
     (_cg_emit(ctx, kc, yes) === 1.0 && _cg_emit(ctx, kc, no) === 0.0) || return nothing
@@ -461,21 +464,18 @@ function _cg_count_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi, span)
     cv = _cg_name(ctx, "cn")
     xe = _cg_emit(ctx, kc, x)
     # The comparison with the operands in the order the document wrote them.
-    test(av) = cond.op === :<= ? Expr(:call, cmp, av, xv) : Expr(:call, cmp, xv, av)
+    test(av) = lk ? Expr(:call, cmp, av, xv) : Expr(:call, cmp, xv, av)
     axis = _count_const_axis(a, spec)
     if axis !== nothing
         tv = _cg_name(ctx, "ct")
         hv = _cg_name(ctx, "ch")
         mv = _cg_name(ctx, "cm")
         tab = _cg_tab!(ctx, axis)
-        _tally_cascade!(:count_fold_search)
-        # The largest `m` with `axis[m] <= x`: the predicate holds on a prefix of
-        # an ascending axis, so the search keeps `axis[cn] <= x` (or `cn == 0`)
-        # and `!(axis[ch + 1] <= x)` (or `ch == n`).
-        return quote
-            let
-                local $xv = $xe
-                local $tv = $tab
+        search = if rel === :<= || rel === :<
+            # The largest `m` with `axis[m] rel x`: the predicate holds on a
+            # prefix of an ascending axis, so the search keeps `axis[cn] rel x`
+            # (or `cn == 0`) and `!(axis[ch + 1] rel x)` (or `ch == n`).
+            quote
                 local $cv = 0
                 local $hv = length($tv)
                 while $cv < $hv
@@ -487,6 +487,32 @@ function _cg_count_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi, span)
                     end
                 end
                 Float64($cv)
+            end
+        else
+            # The smallest `m` with `axis[m] rel x`: the predicate holds on a
+            # suffix, so the search keeps `axis[ch] rel x` (or `ch == n + 1`)
+            # and `!(axis[cn - 1] rel x)` (or `cn == 1`); the count is the
+            # suffix's length.
+            quote
+                local $cv = 1
+                local $hv = length($tv) + 1
+                while $cv < $hv
+                    local $mv = ($cv + $hv) >>> 1
+                    if $(test(:($tv[$mv])))
+                        $hv = $mv
+                    else
+                        $cv = $mv + 1
+                    end
+                end
+                Float64(length($tv) + 1 - $cv)
+            end
+        end
+        _tally_cascade!(:count_fold_search)
+        return quote
+            let
+                local $xv = $xe
+                local $tv = $tab
+                $search
             end
         end
     end
