@@ -205,6 +205,16 @@ end
 # Deliberately NARROW: exactly the kinds an index expression can contain. Anything
 # else is a genuinely state-dependent subscript, which cannot be resolved at trace
 # time at all, and says so rather than silently tracing into the same dead end.
+@noinline _inexact_subscript_quotient(a::Int, b::Int) = throw(
+    TreeWalkError(
+        "E_TREEWALK_TRACED_SUBSCRIPT",
+        "a gather subscript divides $(a) by $(b), which is not an integer; the " *
+            "out-of-place evaluator works in integers and would read a different " *
+            "element than the interpreted one. Round the quotient explicitly " *
+            "(`floor(a / b)` or `ceil(a / b)`)."
+    )
+)
+
 function _index_int(n::_Node)::Int
     k = n.kind
     if k === _NK_LOOPVAR
@@ -252,11 +262,15 @@ function _index_int(n::_Node)::Int
             return _index_int(q)
         elseif op === :mod && length(c) == 2
             return mod(_index_int(c[1]), _index_int(c[2]))
-        elseif op === :/
-            return div(
-                _index_int(c[1]),
-                _index_int(c[2])
-            )
+        elseif op === :/ && length(c) == 2
+            # A quotient not under `floor`/`ceil` (a const gather's subscript;
+            # a live gather's never has one, `_subscript_from_counters`). The
+            # walk carries its floating-point value into the enclosing
+            # arithmetic and rounds once at the end, so an integer quotient here
+            # can only agree with it when the division is exact.
+            a, b = _index_int(c[1]), _index_int(c[2])
+            (b != 0 && rem(a, b) == 0) && return div(a, b)
+            _inexact_subscript_quotient(a, b)
         end
     end
     throw(

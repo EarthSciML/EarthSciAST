@@ -303,6 +303,26 @@ end
         _, _, du = _program_du(EA.esm_problem(doc, (0.0, 1.0); compiler = c), [2.0, -4.0, 6.0])
         @test du ≈ expected([2.0, -4.0, 6.0])
     end
+    # The regrid read in a gather subscript, where a per-call buffer cannot
+    # stand in for it: native refuses it by name and says why, rather than
+    # falling back to splicing the gated aggregate into its reader.
+    doc = _with_reader() do m, _
+        m["equations"][end] = Dict(
+            "lhs" => _d("u"), "rhs" => _faq(
+                ("j",), ("j" => "tgt_cells",),
+                _op("+", _ix("F_tgt", "j"), _ix("u", _op("ifelse", _op(">", _ix("F_tgt", 1), 0.0), 1, 2)))
+            )
+        )
+    end
+    prob = EA.esm_problem(doc, (0.0, 1.0); compiler = :native, param_arrays = Dict{String, Any}("M.F" => [1.0, 2.0, 3.0]))
+    err = try
+        _program_du(prob, [1.0, 2.0, 3.0])
+        nothing
+    catch e
+        e
+    end
+    @test err isa EA.TreeWalkError && err.code == "E_TREEWALK_GATED_OBSERVED"
+    @test occursin("'M.F_tgt'", err.detail) && occursin("gather subscript", err.detail)
 end
 
 # Other shapes of a live read in the gated apply's term or filter, each built
@@ -388,6 +408,27 @@ end
         @test EA._index_int(opn(:ceil, q)) == ceil(Int, (c - 1) / 2)
         @test EA._index_int(opn(:mod, sub, lit(3))) == mod(c, 3)
     end
+    # The same gather read by the walk (`_eval_node`) and by the traced
+    # subscript evaluator (`_index_int`) at counters where flooring and
+    # truncating the quotient differ, including a negative numerator
+    # (`(1 - 2) / 3`, where `fld` is -1 and `div` 0). The buffer holds its own
+    # offsets, so both evaluators return the element they read.
+    ids = Float64[1, 2, 3, 4, 5, 6]
+    for (rnd, sub_of) in (
+            (:floor, opn(:/, opn(:-, sub, lit(2)), lit(3))),
+            (:ceil, opn(:/, opn(:-, sub, lit(2)), lit(3))),
+            (:floor, opn(:/, opn(:*, lit(2), sub), lit(3))),
+        )
+        g = EA._live_gather_node(
+            EA._LiveGatherRef(ids, [6], "F"),
+            [opn(:+, opn(rnd, sub_of), lit(2))]
+        )
+        for c in 1:6
+            ctr[] = c
+            walked = EA._eval_node(g, Float64[], NamedTuple(), 0.0)
+            @test reinterpret(UInt64, Float64(EA._index_int(g))) == reinterpret(UInt64, walked)
+        end
+    end
 
     # Its cadence tier is at least TIME (the buffer is refreshed at time
     # boundaries) and the max of its subscripts' tiers above that: a subscript
@@ -428,6 +469,16 @@ end
             O("+", V("k"), V("m")), O("+", V("k"), V("off")), O("+", V("k"), V("t")),
             O("index", V("conn"), V("k")), O("/", V("k"), I(1)),
             O("floor", O("/", V("k"), V("m"))), O("floor", V("t")),
+            # A quotient anywhere but directly under `floor`/`ceil`, and a
+            # non-integer literal: the traced evaluator works in integers and
+            # would read a different row than the walk (`floor(2 * (k / 3))`
+            # is 1 at k = 2, `2 * div(2, 3)` is 0).
+            O("floor", O("*", I(2), O("/", V("k"), I(3)))),
+            O("floor", O("+", O("/", V("k"), I(2)), O("/", V("k"), I(3)))),
+            O("floor", O("mod", O("/", V("k"), I(2)), I(3))),
+            O("floor", O("*", V("k"), O("/", I(1), I(2)))),
+            O("floor", O("/", O("/", V("k"), I(2)), I(3))),
+            O("floor", O("*", V("k"), N(0.5))),
         )
         err = try
             res(sub)

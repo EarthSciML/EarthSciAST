@@ -1624,28 +1624,36 @@ _subscript_is_runtime(e::ASTExpr, const_arrays::AbstractDict) =
 
 # True iff a run-time subscript is built only from loop counters — a bound
 # output-index symbol of a symbolic resolve, or a contraction loop variable
-# (`__esm_lv_*`) — numeric literals, `+ - *` and `mod`, and a quotient under
-# `floor` or `ceil`: what a gather can evaluate from the counters alone
-# (`_index_int`). The rounded quotient is the cell-to-row reindex a flattened
-# loader field takes (`F[floor((c - 1) / NX) + 1, c - NX * floor((c - 1) / NX)]`,
-# reseact's NEI emissions, issue #665); a bare quotient is not an integer and
-# stays refused. A subscript that reads a state, an observed, a parameter, `t`
-# or an array is not one.
-_subscript_from_counters(e::VarExpr, bound_syms::Set{String}, ::Bool = false) =
+# (`__esm_lv_*`) — integer literals, `+ - *` and `mod`, and a quotient that is
+# the DIRECT operand of `floor` or `ceil`: what a gather can evaluate from the
+# counters alone (`_index_int`). The rounded quotient is the cell-to-row
+# reindex a flattened loader field takes (`F[floor((c - 1) / NX) + 1, c - NX *
+# floor((c - 1) / NX)]`, reseact's NEI emissions, issue #665).
+#
+# Every intermediate must be an integer, because the traced evaluator works in
+# integers while the walk evaluates the subscript in floating point and rounds
+# once at the end. So a quotient anywhere else (`floor(2 * (k / 3))`,
+# `floor(k / 2 + k / 3)`, a bare `k / 2`) and a non-integer literal
+# (`floor(k * 0.5)`) are refused: the two evaluators would read different rows.
+# The quotient's own operands follow the same rule. A subscript that reads a
+# state, an observed, a parameter, `t` or an array is not one.
+_subscript_from_counters(e::VarExpr, bound_syms::Set{String}) =
     e.name in bound_syms || startswith(e.name, _LOOPVAR_PREFIX)
-_subscript_from_counters(::Union{NumExpr, IntExpr}, ::Set{String}, ::Bool = false) = true
-function _subscript_from_counters(e::OpExpr, bound_syms::Set{String}, rounded::Bool = false)
+_subscript_from_counters(::IntExpr, ::Set{String}) = true
+_subscript_from_counters(e::NumExpr, ::Set{String}) = isinteger(e.value)
+function _subscript_from_counters(e::OpExpr, bound_syms::Set{String})
     op = e.op
     if op == "+" || op == "-" || op == "*" || (op == "mod" && length(e.args) == 2)
-        return all(a -> _subscript_from_counters(a, bound_syms, rounded), e.args)
+        return all(a -> _subscript_from_counters(a, bound_syms), e.args)
     elseif (op == "floor" || op == "ceil") && length(e.args) == 1
-        return _subscript_from_counters(e.args[1], bound_syms, true)
-    elseif op == "/" && rounded && length(e.args) == 2
-        return all(a -> _subscript_from_counters(a, bound_syms, true), e.args)
+        q = e.args[1]
+        q isa OpExpr && q.op == "/" && length(q.args) == 2 &&
+            return all(a -> _subscript_from_counters(a, bound_syms), q.args)
+        return _subscript_from_counters(q, bound_syms)
     end
     return false
 end
-_subscript_from_counters(::ASTExpr, ::Set{String}, ::Bool = false) = false
+_subscript_from_counters(::ASTExpr, ::Set{String}) = false
 
 # ── Guarded out-of-range reads ───────────────────────────────────────────────
 # esm-spec evaluates `ifelse` lazily and `and` / `or` with short circuit, so a
