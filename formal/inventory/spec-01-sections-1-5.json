@@ -487,6 +487,15 @@
       "note": "An equation giving a shaped variable a scalar RHS assigns that value to every element of the declared shape."
     },
     {
+      "id": "spec.4.3.4.unshaped-mixed-ifelse-takes-array-shape",
+      "section": "4.3.4",
+      "quote": "its rank MUST NOT follow the branch taken",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A variable with an absent shape defined elementwise down to an ifelse under a scalar condition, one branch an array over index sets and the other a scalar, has the array branch's shape whichever branch is taken; the scalar branch fills every element."
+    },
+    {
       "id": "spec.4.4.fn-name-in-registry",
       "section": "4.4",
       "quote": "bindings MUST reject `fn` nodes whose `name` is not in the registry for the file's declared `esm` version. There is no per-file declaration",
