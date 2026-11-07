@@ -1,0 +1,224 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "Relational",
+    "description": "Standard-library relational templates (esm-spec §9.7.1 template-library file). Two match-less expression templates give the pure-AST definitions of the `argmin` and `argmax` arg-witness reducers: `argmin(f, n)` and `argmax(f, n)`, the 1-based index in [1, n] of the smallest (largest) candidate value `f`, where `f` is an expression over the template's loop symbol (`k_argmin_1`, `k_argmax_1`) and n, the number of candidates, is an explicit integer parameter. Ties go to the smallest index and a NaN candidate wins at its first occurrence. Written with two `faq` reductions, `ifelse` and comparisons only. Import with `expression_template_imports` and invoke with `apply_expression_template`; see docs/content/standard_library.md.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-11-07T00:00:00Z",
+    "tags": [
+      "standard-library",
+      "relational",
+      "argmin",
+      "argmax",
+      "arg-witness",
+      "expression-templates"
+    ],
+    "references": [
+      {
+        "citation": "esm-spec.md §4.2 (argmin, argmax; NaN in min/max reductions); §9.6 (expression templates); §9.7.1 (template-library files); RFC semiring-faq-unified-ir §5.7 rule 6 (smallest-index tie-break)."
+      }
+    ]
+  },
+  "expression_templates": {
+    "argmin": {
+      "params": [
+        "f",
+        "n"
+      ],
+      "description": "1-based index k in [1, n] at which the candidate value `f` attains its minimum. `f` is an expression over the loop symbol `k_argmin_1`, which this template binds to each candidate index in turn (write the candidate's value with `k_argmin_1` as its index, e.g. `index(d, i, k_argmin_1)`). Two `faq` reductions: m = min over k_argmin_1 of f, then the smallest k_argmin_1 at which f == m. On a tie the smallest index wins (RFC semiring-faq-unified-ir §5.7 rule 6). If any candidate is NaN, m is NaN (esm-spec §4.2) and the result is the index of the first NaN candidate. n = 0 gives +Inf (the identity of the `min` reduction). `f` is written twice in the expansion; it must not itself bind `k_argmin_1` for another purpose.",
+      "body": {
+        "op": "faq",
+        "args": [],
+        "output_idx": [],
+        "reduce": "min",
+        "ranges": {
+          "k_argmin_1": [
+            1,
+            "n"
+          ]
+        },
+        "expr": {
+          "op": "ifelse",
+          "args": [
+            {
+              "op": "or",
+              "args": [
+                {
+                  "op": "==",
+                  "args": [
+                    "f",
+                    {
+                      "op": "faq",
+                      "args": [],
+                      "output_idx": [],
+                      "reduce": "min",
+                      "ranges": {
+                        "k_argmin_1": [
+                          1,
+                          "n"
+                        ]
+                      },
+                      "expr": "f"
+                    }
+                  ]
+                },
+                {
+                  "op": "and",
+                  "args": [
+                    {
+                      "op": "!=",
+                      "args": [
+                        "f",
+                        "f"
+                      ]
+                    },
+                    {
+                      "op": "!=",
+                      "args": [
+                        {
+                          "op": "faq",
+                          "args": [],
+                          "output_idx": [],
+                          "reduce": "min",
+                          "ranges": {
+                            "k_argmin_1": [
+                              1,
+                              "n"
+                            ]
+                          },
+                          "expr": "f"
+                        },
+                        {
+                          "op": "faq",
+                          "args": [],
+                          "output_idx": [],
+                          "reduce": "min",
+                          "ranges": {
+                            "k_argmin_1": [
+                              1,
+                              "n"
+                            ]
+                          },
+                          "expr": "f"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            "k_argmin_1",
+            {
+              "op": "+",
+              "args": [
+                "n",
+                1
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "argmax": {
+      "params": [
+        "f",
+        "n"
+      ],
+      "description": "1-based index k in [1, n] at which the candidate value `f` attains its maximum. `f` is an expression over the loop symbol `k_argmax_1`, which this template binds to each candidate index in turn (write the candidate's value with `k_argmax_1` as its index, e.g. `index(d, i, k_argmax_1)`). Two `faq` reductions: m = max over k_argmax_1 of f, then the smallest k_argmax_1 at which f == m. On a tie the smallest index wins (RFC semiring-faq-unified-ir §5.7 rule 6). If any candidate is NaN, m is NaN (esm-spec §4.2) and the result is the index of the first NaN candidate. n = 0 gives +Inf (the identity of the `min` reduction). `f` is written twice in the expansion; it must not itself bind `k_argmax_1` for another purpose.",
+      "body": {
+        "op": "faq",
+        "args": [],
+        "output_idx": [],
+        "reduce": "min",
+        "ranges": {
+          "k_argmax_1": [
+            1,
+            "n"
+          ]
+        },
+        "expr": {
+          "op": "ifelse",
+          "args": [
+            {
+              "op": "or",
+              "args": [
+                {
+                  "op": "==",
+                  "args": [
+                    "f",
+                    {
+                      "op": "faq",
+                      "args": [],
+                      "output_idx": [],
+                      "reduce": "max",
+                      "ranges": {
+                        "k_argmax_1": [
+                          1,
+                          "n"
+                        ]
+                      },
+                      "expr": "f"
+                    }
+                  ]
+                },
+                {
+                  "op": "and",
+                  "args": [
+                    {
+                      "op": "!=",
+                      "args": [
+                        "f",
+                        "f"
+                      ]
+                    },
+                    {
+                      "op": "!=",
+                      "args": [
+                        {
+                          "op": "faq",
+                          "args": [],
+                          "output_idx": [],
+                          "reduce": "max",
+                          "ranges": {
+                            "k_argmax_1": [
+                              1,
+                              "n"
+                            ]
+                          },
+                          "expr": "f"
+                        },
+                        {
+                          "op": "faq",
+                          "args": [],
+                          "output_idx": [],
+                          "reduce": "max",
+                          "ranges": {
+                            "k_argmax_1": [
+                              1,
+                              "n"
+                            ]
+                          },
+                          "expr": "f"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            "k_argmax_1",
+            {
+              "op": "+",
+              "args": [
+                "n",
+                1
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}
