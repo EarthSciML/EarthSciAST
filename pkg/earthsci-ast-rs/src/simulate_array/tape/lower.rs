@@ -3253,19 +3253,17 @@ impl<'m> TapeBuilder<'m> {
             // A rank-1 const array at one computed subscript whose bounds
             // keep it inside the array (a clamped bracket) has no
             // out-of-range read for a policy to resolve: it is read as any
-            // array is, by one indexed gather.
+            // array is, by one indexed gather. The bounds are those of the
+            // lowered subscript, so the subscript is lowered speculatively:
+            // when the bounds do not prove the read inside, or anything in
+            // the attempt bails, everything it emitted (faults included) is
+            // undone and the read goes to the routes below as if no attempt
+            // had been made.
             if n == 1 && src_origin[0] == 1 && self.tile.is_none() {
-                let sub = self.lower_expr(&node.args[1], bx)?;
-                let inside = self
-                    .operand_range(&self.op_of(&sub))
-                    .is_some_and(|(lo, hi)| {
-                        subscript_of(lo) >= 1 && subscript_of(hi) <= src_shape[0] as i64
-                    });
-                if inside
-                    && let Some(v) =
-                        self.lower_index_gather(node, bx, &arg0, 0, &[None], &[], false)?
-                {
-                    return Ok(v);
+                let txn = self.sub_txn();
+                match self.lower_clamped_bracket_read(node, bx, &arg0, src_shape[0]) {
+                    Ok(Some(v)) => return Ok(v),
+                    Ok(None) | Err(_) => self.sub_rollback(txn),
                 }
             }
             if let Some(v) =
@@ -3610,6 +3608,26 @@ impl<'m> TapeBuilder<'m> {
             self.known.insert(out, Known::Vals(std::rc::Rc::new(v)));
         }
         Ok(Some(LV::Arr(out)))
+    }
+
+    /// `index(base, s)` on a rank-1 const array of `len` entries at origin 1,
+    /// read by one indexed gather when the lowered subscript's bounds keep
+    /// every read inside it; `Ok(None)` otherwise.
+    fn lower_clamped_bracket_read(
+        &mut self,
+        node: &Arc<ExpressionNode>,
+        bx: &LBox,
+        base: &LV,
+        len: usize,
+    ) -> LResult<Option<LV>> {
+        let sub = self.lower_expr(&node.args[1], bx)?;
+        let inside = self
+            .operand_range(&self.op_of(&sub))
+            .is_some_and(|(lo, hi)| subscript_of(lo) >= 1 && subscript_of(hi) <= len as i64);
+        if !inside {
+            return Ok(None);
+        }
+        self.lower_index_gather(node, bx, base, 0, &[None], &[], false)
     }
 
     /// `index(base, s…)` with every subscript evaluated per element of the

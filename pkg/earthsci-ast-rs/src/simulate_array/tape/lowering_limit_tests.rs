@@ -1052,3 +1052,28 @@ fn counted_bracket_query_box_mismatch_declines() {
     let prog = oracle_ab(d).0;
     assert_eq!(counts(&prog), vec![(CountRel::Le, true)], "only c's count");
 }
+
+/// A const-array read whose subscript the clamped-bracket route lowers but
+/// cannot prove inside the array (`zc[assign[l]]`, `assign` a const index
+/// array) is resolved at build time instead (one table gather), the route's
+/// attempt leaves no instruction of its own behind, and the oracle's bits
+/// hold.
+#[test]
+fn const_gather_declined_bracket_leaves_no_trace() {
+    let n = 9i64;
+    let assign: Vec<i64> = (0..n).map(|l| n - l).collect();
+    let mut d = count_doc(n, indicator(op("<=", vec![axis_at("zc"), query()])));
+    d["models"]["M"]["variables"]["assign"] = json!({"type": "unknown", "shape": ["lev"]});
+    d["models"]["M"]["equations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"lhs": "assign", "rhs": {"op": "const", "args": [], "value": assign}}));
+    d["models"]["M"]["equations"][2]["rhs"]["expr"] =
+        ix("zc", vec![ix("assign", vec![json!("l")])]);
+    let prog = oracle_ab(d).0;
+    assert_eq!(count(&prog, "TableGather"), 1);
+    for op in ["Gather", "IndexGather", "DataGather", "Count", "FaultScan"] {
+        assert_eq!(count(&prog, op), 0, "{op}");
+    }
+    assert_eq!(faulting_gathers(&prog), 0);
+}
