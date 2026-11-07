@@ -454,27 +454,6 @@ enum LV {
     State(u32),
 }
 
-/// Whether a runtime-scalar `ifelse` ([`TapeBuilder::lower_branchy`]) may
-/// join a scalar arm with an array arm, broadcasting the scalar into the
-/// array's box.
-#[derive(Clone, Debug)]
-enum ScalarArm {
-    /// The arms are values over an output box. The per-cell oracle takes the
-    /// same arm at every cell (the condition is one scalar), so each cell
-    /// reads the scalar or its own element, as the join does.
-    Broadcast,
-    /// The arms are on the elementwise value path of a wholesale observed
-    /// whose declared box is this one (a shape the document declares, or the
-    /// one `compile::promote_conditional_observed_shapes` gives it). The oracle evaluates only the
-    /// taken arm, carries a scalar through the elementwise ops, and fills the
-    /// rule's scalar result over this box; the join filling the scalar arm
-    /// into the same box, and the elementwise ops then running over it, give
-    /// every cell the same value. An array arm over any other box is refused.
-    FillInto(DimU),
-    /// Anywhere else: the oracle's result shape follows the taken arm.
-    Refuse,
-}
-
 /// The lowering-time output box (the `VecBox` analogue with owned lo/shape).
 struct LBox<'a> {
     syms: &'a [String],
@@ -625,12 +604,6 @@ pub(crate) struct TapeBuilder<'m> {
     /// written from ([`ArrayCompiled::inline_param_arrays`]), so the tape takes
     /// the numbers directly rather than reading the literal's JSON back.
     inline_params: Option<&'m HashMap<String, (Vec<usize>, Vec<f64>)>>,
-    /// The declared box (origin all-1s) of the wholesale observed being
-    /// lowered, while its value path is elementwise from the rule's root:
-    /// there the oracle fills a scalar result over the declared box, so a
-    /// runtime-scalar `ifelse` may join a scalar arm with an array arm over
-    /// that same box ([`ScalarArm::FillInto`]). `None` everywhere else.
-    wholesale_fill: Option<DimU>,
     /// The program's observed rules, so a CONST-cadence observed the build
     /// must know (a join key column) can be folded from its own rule
     /// ([`TapeBuilder::fold_const_observed`]). Empty for a standalone rule.
@@ -988,7 +961,6 @@ impl<'m> TapeBuilder<'m> {
             const_arrays,
             f32_document,
             inline_params: None,
-            wholesale_fill: None,
             observed_rules: &[],
             baked_params: FxHashMap::default(),
             array_bool_reductions: false,
@@ -3096,13 +3068,9 @@ impl<'m> TapeBuilder<'m> {
         match self.lv_box(&cond) {
             // Runtime SCALAR condition: short-circuit via JmpIfZero — the
             // untaken branch's instructions are never executed.
-            None => self.lower_branchy_ifelse(
-                cond,
-                &node.args[1],
-                &node.args[2],
-                ScalarArm::Broadcast,
-                |s, e| s.lower_expr(e, bx),
-            ),
+            None => self.lower_branchy_ifelse(cond, &node.args[1], &node.args[2], true, |s, e| {
+                s.lower_expr(e, bx)
+            }),
             // ARRAY condition: evaluate BOTH branches and select elementwise
             // (`vec_select`). The oracle, walking the box cell by cell, takes
             // one arm per cell, so each arm is a lazily evaluated position.
@@ -5947,7 +5915,7 @@ impl<'m> TapeBuilder<'m> {
             LV::Lit(_) => term(self),
             keep if self.lv_box(&keep).is_none() => {
                 let mut term = Some(term);
-                self.lower_branchy(keep, ScalarArm::Refuse, |s, taken| {
+                self.lower_branchy(keep, false, |s, taken| {
                     if taken {
                         (term.take().expect("the kept arm is lowered once"))(s)
                     } else {
@@ -6019,86 +5987,18 @@ impl<'m> TapeBuilder<'m> {
     /// the `broadcast` arm can re-enter with its `fn` against the SAME node —
     /// the oracle's `eval_broadcast` → `eval_op_named` (esm-spec §4.3.4).
     fn lower_wholesale_op_named(&mut self, op: &str, node: &Arc<ExpressionNode>) -> LResult<LV> {
-        // An operand of an op that is not elementwise (`index`, a shape op, a
-        // reduction, a closed function) is consumed whole, so the oracle's
-        // answer depends on whether it is a scalar or an array: there a
-        // scalar arm must stay a scalar, and mixed arms stay refused.
-        if self.wholesale_fill.is_some() && !super::super::compile::is_wholesale_elementwise_op(op)
-        {
-            let fill = self.wholesale_fill.take();
-            let v = self.lower_wholesale_op_dispatch(op, node);
-            self.wholesale_fill = fill;
-            return v;
-        }
-        self.lower_wholesale_op_dispatch(op, node)
-    }
-
-    fn lower_wholesale_op_dispatch(&mut self, op: &str, node: &Arc<ExpressionNode>) -> LResult<LV> {
         match op {
-            // n-ary arithmetic + logical connectives: `eval_arith` is a left
-            // fold of `apply_binary` over scalars AND arrays (the all-scalar
-            // `fold_scalar` and the `and`/`or` all/any forms agree with the
-            // left fold at every legal arity), so a chained `Bin` reproduces
-            // it bit for bit — for equal-shape operands.
-            "+" | "-" | "*" | "/" | "^" | "pow" | "min" | "max" | "and" | "or" => {
-                let Some((first, rest)) = node.args.split_first() else {
-                    return Ok(LV::Lit(f64::NAN)); // fold_scalar's empty-arity sentinel
-                };
-                if op == "-" && rest.is_empty() {
-                    let v = self.lower_wholesale(first)?;
-                    return self.emit_neg(v);
-                }
-                let mut acc = self.lower_wholesale(first)?;
-                for a in rest {
-                    let v = self.lower_wholesale(a)?;
-                    acc = self.emit_bin_wholesale(BinCode::of(op), acc, v)?;
-                }
-                Ok(acc)
-            }
-            "neg" => {
-                if node.args.len() != 1 {
-                    return Ok(LV::Lit(f64::NAN));
-                }
-                let v = self.lower_wholesale(&node.args[0])?;
-                self.emit_neg(v)
-            }
-            "exp" | "log" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil" | "sin"
-            | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh"
-            | "acosh" | "atanh" | "not" => {
-                // `eval_unary` evaluates args[0] only; no args ⇒ NaN sentinel.
-                let Some(first) = node.args.first() else {
-                    return Ok(LV::Lit(f64::NAN));
-                };
-                let v = self.lower_wholesale(first)?;
-                Ok(self.emit_un(UnCode::of(op), v))
-            }
-            "atan2" => {
-                // `eval_binary`: first two args, NaN sentinel below arity 2.
-                let ([a, b] | [a, b, ..]) = &node.args[..] else {
-                    return Ok(LV::Lit(f64::NAN));
-                };
-                let av = self.lower_wholesale(a)?;
-                let bv = self.lower_wholesale(b)?;
-                self.emit_bin_wholesale(BinCode::Atan2, av, bv)
-            }
-            "==" | "!=" | "<" | "<=" | ">" | ">=" => {
-                if node.args.len() != 2 {
-                    return Ok(LV::Lit(f64::NAN));
-                }
-                let av = self.lower_wholesale(&node.args[0])?;
-                let bv = self.lower_wholesale(&node.args[1])?;
-                self.emit_bin_wholesale(BinCode::of(op), av, bv)
+            "+" | "-" | "*" | "/" | "^" | "pow" | "min" | "max" | "and" | "or" | "neg" | "exp"
+            | "log" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil" | "sin" | "cos"
+            | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh" | "acosh"
+            | "atanh" | "not" | "atan2" | "==" | "!=" | "<" | "<=" | ">" | ">=" => {
+                self.lower_wholesale_elementwise(op, node, None)
             }
             "ifelse" => {
                 if node.args.len() != 3 {
                     return Ok(LV::Lit(f64::NAN));
                 }
-                // The condition is not on the value path: a scalar arm inside
-                // it stays a scalar, as the oracle's short circuit reads it.
-                let fill = self.wholesale_fill.take();
-                let cond = self.lower_wholesale(&node.args[0]);
-                self.wholesale_fill = fill;
-                let cond = cond?;
+                let cond = self.lower_wholesale(&node.args[0])?;
                 if let LV::Lit(c) = &cond {
                     let c = *c;
                     return if c != 0.0 {
@@ -6108,19 +6008,13 @@ impl<'m> TapeBuilder<'m> {
                     };
                 }
                 match self.lv_box(&cond) {
-                    None => {
-                        let arms = match &self.wholesale_fill {
-                            Some(shape) => ScalarArm::FillInto(shape.clone()),
-                            None => ScalarArm::Refuse,
-                        };
-                        self.lower_branchy_ifelse(
-                            cond,
-                            &node.args[1],
-                            &node.args[2],
-                            arms,
-                            |s, e| s.lower_wholesale(e),
-                        )
-                    }
+                    None => self.lower_branchy_ifelse(
+                        cond,
+                        &node.args[1],
+                        &node.args[2],
+                        false,
+                        |s, e| s.lower_wholesale(e),
+                    ),
                     Some(_) => {
                         let a = self.lower_wholesale(&node.args[1])?;
                         let b = self.lower_wholesale(&node.args[2])?;
@@ -6171,6 +6065,88 @@ impl<'m> TapeBuilder<'m> {
             "polygon_intersection_area" => self.lower_poly_area(node, None),
             "intersect_polygon" => self.lower_intersect_polygon(node),
             other => bail_tape!("wholesale: unsupported op `{other}`"),
+        }
+    }
+
+    /// The elementwise arms of [`Self::lower_wholesale_op_named`] (every op
+    /// except `ifelse`). With `shape`, the op is on the value path of an
+    /// observed declaring that box, and an operand holding an `ifelse` there
+    /// is lowered by [`Self::lower_wholesale_shaped`]: the oracle fills the
+    /// rule's scalar result over the box, and an elementwise op over a scalar
+    /// filled into the box gives every cell the same value, so a scalar arm
+    /// may be filled into its array arm's box before the op rather than
+    /// after it. Anywhere else the oracle's result rank follows the taken arm,
+    /// and mixed arms stay refused.
+    fn lower_wholesale_elementwise(
+        &mut self,
+        op: &str,
+        node: &Arc<ExpressionNode>,
+        shape: Option<&[usize]>,
+    ) -> LResult<LV> {
+        match op {
+            // n-ary arithmetic + logical connectives: `eval_arith` is a left
+            // fold of `apply_binary` over scalars AND arrays (the all-scalar
+            // `fold_scalar` and the `and`/`or` all/any forms agree with the
+            // left fold at every legal arity), so a chained `Bin` reproduces
+            // it bit for bit — for equal-shape operands.
+            "+" | "-" | "*" | "/" | "^" | "pow" | "min" | "max" | "and" | "or" => {
+                let Some((first, rest)) = node.args.split_first() else {
+                    return Ok(LV::Lit(f64::NAN)); // fold_scalar's empty-arity sentinel
+                };
+                if op == "-" && rest.is_empty() {
+                    let v = self.lower_wholesale_operand(shape, first)?;
+                    return self.emit_neg(v);
+                }
+                let mut acc = self.lower_wholesale_operand(shape, first)?;
+                for a in rest {
+                    let v = self.lower_wholesale_operand(shape, a)?;
+                    acc = self.emit_bin_wholesale(BinCode::of(op), acc, v)?;
+                }
+                Ok(acc)
+            }
+            "neg" => {
+                if node.args.len() != 1 {
+                    return Ok(LV::Lit(f64::NAN));
+                }
+                let v = self.lower_wholesale_operand(shape, &node.args[0])?;
+                self.emit_neg(v)
+            }
+            "exp" | "log" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil" | "sin"
+            | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh"
+            | "acosh" | "atanh" | "not" => {
+                // `eval_unary` evaluates args[0] only; no args ⇒ NaN sentinel.
+                let Some(first) = node.args.first() else {
+                    return Ok(LV::Lit(f64::NAN));
+                };
+                let v = self.lower_wholesale_operand(shape, first)?;
+                Ok(self.emit_un(UnCode::of(op), v))
+            }
+            "atan2" => {
+                // `eval_binary`: first two args, NaN sentinel below arity 2.
+                let ([a, b] | [a, b, ..]) = &node.args[..] else {
+                    return Ok(LV::Lit(f64::NAN));
+                };
+                let av = self.lower_wholesale_operand(shape, a)?;
+                let bv = self.lower_wholesale_operand(shape, b)?;
+                self.emit_bin_wholesale(BinCode::Atan2, av, bv)
+            }
+            "==" | "!=" | "<" | "<=" | ">" | ">=" => {
+                if node.args.len() != 2 {
+                    return Ok(LV::Lit(f64::NAN));
+                }
+                let av = self.lower_wholesale_operand(shape, &node.args[0])?;
+                let bv = self.lower_wholesale_operand(shape, &node.args[1])?;
+                self.emit_bin_wholesale(BinCode::of(op), av, bv)
+            }
+            other => bail_tape!("wholesale: `{other}` is not an elementwise op"),
+        }
+    }
+
+    /// One operand of [`Self::lower_wholesale_elementwise`].
+    fn lower_wholesale_operand(&mut self, shape: Option<&[usize]>, e: &Expr) -> LResult<LV> {
+        match shape {
+            Some(shape) if value_path_has_ifelse(e) => self.lower_wholesale_shaped(e, shape),
+            _ => self.lower_wholesale(e),
         }
     }
 
@@ -6228,22 +6204,15 @@ impl<'m> TapeBuilder<'m> {
     /// arms then carry the declared box and join on one phi. (Filling after
     /// the join is not expressible: the phi needs one box on both arms.)
     fn lower_wholesale_shaped(&mut self, e: &Expr, shape: &[usize]) -> LResult<LV> {
-        let saved = self.wholesale_fill.replace(shape.iter().copied().collect());
-        let v = self.lower_wholesale_shaped_inner(e, shape);
-        self.wholesale_fill = saved;
-        v
-    }
-
-    fn lower_wholesale_shaped_inner(&mut self, e: &Expr, shape: &[usize]) -> LResult<LV> {
         let ones = DimI::from_elem(1, shape.len());
-        if let Expr::Operator(node) = e
-            && node.op == "ifelse"
+        let op = match e {
+            Expr::Operator(node) => crate::op_registry::elementwise_op(node).map(|op| (op, node)),
+            _ => None,
+        };
+        if let Some(("ifelse", node)) = op
             && node.args.len() == 3
         {
-            let fill = self.wholesale_fill.take();
-            let cond = self.lower_wholesale(&node.args[0]);
-            self.wholesale_fill = fill;
-            let cond = cond?;
+            let cond = self.lower_wholesale(&node.args[0])?;
             if let LV::Lit(c) = cond {
                 let taken = if c != 0.0 {
                     &node.args[1]
@@ -6257,7 +6226,7 @@ impl<'m> TapeBuilder<'m> {
                     cond,
                     &node.args[1],
                     &node.args[2],
-                    ScalarArm::Refuse,
+                    false,
                     |s, e| s.lower_wholesale_shaped(e, shape),
                 );
             }
@@ -6266,7 +6235,12 @@ impl<'m> TapeBuilder<'m> {
             let v = self.emit_select_wholesale(cond, a, b)?;
             return Ok(v);
         }
-        let v = self.lower_wholesale(e)?;
+        let v = match op {
+            Some((op, node)) if node.args.iter().any(value_path_has_ifelse) => {
+                self.lower_wholesale_elementwise(op, node, Some(shape))?
+            }
+            _ => self.lower_wholesale(e)?,
+        };
         Ok(if self.lv_box(&v).is_none() {
             self.emit_fill(&v, shape, &ones, Cadence::Const)
         } else {
@@ -7179,21 +7153,23 @@ impl<'m> TapeBuilder<'m> {
         cond: LV,
         t_expr: &Expr,
         f_expr: &Expr,
-        arms: ScalarArm,
+        in_box: bool,
         mut low: F,
     ) -> LResult<LV>
     where
         F: FnMut(&mut Self, &Expr) -> LResult<LV>,
     {
-        self.lower_branchy(cond, arms, |s, taken| {
+        self.lower_branchy(cond, in_box, |s, taken| {
             low(s, if taken { t_expr } else { f_expr })
         })
     }
 
     /// A runtime-scalar-condition branch (JmpIfZero + phi) whose arms are
-    /// lowered by `arm(self, true)` and `arm(self, false)`. `arms` says
-    /// whether a scalar arm may join an array one ([`ScalarArm`]).
-    fn lower_branchy<F>(&mut self, cond: LV, arms: ScalarArm, mut arm: F) -> LResult<LV>
+    /// lowered by `arm(self, true)` and `arm(self, false)`. `in_box` says the
+    /// arms are values over an output box, where a scalar arm broadcasts
+    /// against an array one; on the wholesale path the oracle's result shape
+    /// follows the taken arm, so mixed arms stay refused there.
+    fn lower_branchy<F>(&mut self, cond: LV, in_box: bool, mut arm: F) -> LResult<LV>
     where
         F: FnMut(&mut Self, bool) -> LResult<LV>,
     {
@@ -7224,18 +7200,14 @@ impl<'m> TapeBuilder<'m> {
         let tb = self.lv_box(&tv);
         let fb = self.lv_box(&fv);
         // One arm a scalar and the other an array over a box: the join is
-        // that box, and the scalar arm broadcasts into it ([`ScalarArm`] says
-        // why that is the oracle's answer, where it is).
-        let mixed_ok = |s: &DimU, o: &DimI| match &arms {
-            ScalarArm::Refuse => false,
-            ScalarArm::Broadcast => true,
-            ScalarArm::FillInto(want) => s == want && o.iter().all(|&x| x == 1),
-        };
+        // that box, and the scalar arm broadcasts into it. The per-cell oracle
+        // takes the same arm at every cell (the condition is one scalar), so
+        // each cell reads the scalar or its own element, as the join does.
         let (shape, origin, scalar) = match (&tb, &fb) {
             (None, None) => (DimU::new(), DimI::new(), true),
             (Some((s, o)), Some((s2, o2))) if s == s2 && o == o2 => (s.clone(), o.clone(), false),
             (Some((s, o)), None) | (None, Some((s, o)))
-                if mixed_ok(s, o) && matches!((&tv, &fv), (LV::Arr(_), _) | (_, LV::Arr(_))) =>
+                if in_box && matches!((&tv, &fv), (LV::Arr(_), _) | (_, LV::Arr(_))) =>
             {
                 (s.clone(), o.clone(), false)
             }
@@ -8676,5 +8648,20 @@ fn mentions_shape_op(e: &Expr) -> bool {
                 || n.args.iter().any(mentions_shape_op)
         }
         _ => false,
+    }
+}
+
+/// True iff an `ifelse` sits on `e`'s value path: `e` is one, or an
+/// elementwise op one of whose operands has one on its value path. An
+/// `ifelse` inside an op that consumes its operand whole (a gather, a
+/// reduction, a shape op) or inside another `ifelse`'s condition is not.
+fn value_path_has_ifelse(e: &Expr) -> bool {
+    let Expr::Operator(n) = e else {
+        return false;
+    };
+    match crate::op_registry::elementwise_op(n) {
+        Some("ifelse") => true,
+        Some(_) => n.args.iter().any(value_path_has_ifelse),
+        None => false,
     }
 }

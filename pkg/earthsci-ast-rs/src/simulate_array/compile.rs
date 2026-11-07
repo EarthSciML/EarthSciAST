@@ -402,7 +402,15 @@ pub(super) fn apply_ragged_factor_scope(
 ///   [`normalize_model_angle_arguments`]. Without it `sin(theta)` with `theta`
 ///   declared `deg` evaluated `sin(90 radians)` = 0.894 where the scalar and
 ///   coupled routes, and the other bindings, returned 1.
-pub(crate) fn apply_flatten_rewrites(model: &mut Model) -> Result<(), CompileError> {
+/// * esm-spec §4.3.4, a variable with no declared `shape` whose value is an
+///   array on one arm of an `ifelse` and a scalar on the other takes the array
+///   arm's shape (`flatten`'s phase 5b‴, see
+///   [`crate::flatten::conditional_shape_promotions`]). `index_sets` is the
+///   registry the promoted shape must be sized by.
+pub(crate) fn apply_flatten_rewrites(
+    model: &mut Model,
+    index_sets: &HashMap<String, IndexSet>,
+) -> Result<(), CompileError> {
     let time_invariant: std::collections::HashSet<String> = model
         .variables
         .iter()
@@ -419,6 +427,16 @@ pub(crate) fn apply_flatten_rewrites(model: &mut Model) -> Result<(), CompileErr
         });
     }
     normalize_model_angle_arguments(model);
+    let promoted = crate::flatten::conditional_shape_promotions(
+        &|n: &str| model.variables.get(n),
+        model.equations.iter(),
+        index_sets,
+    );
+    for (name, axes) in promoted {
+        if let Some(var) = model.variables.get_mut(&name) {
+            var.shape = Some(axes);
+        }
+    }
     Ok(())
 }
 
@@ -753,8 +771,7 @@ impl ArrayCompiled {
         // `flatten`'s rewrites, which this SINGLE-MODEL route never gets
         // (see `from_file_owned`). Runs after mounting so a subsystem's
         // equations and declarations are in scope under their mounted names.
-        apply_flatten_rewrites(&mut model_owned)?;
-        promote_conditional_observed_shapes(&mut model_owned, &index_sets_owned);
+        apply_flatten_rewrites(&mut model_owned, &index_sets_owned)?;
         // Lower every SHAPED parameter whose value the document supplies —
         // inline array data, or one scalar broadcast over the grid (esm-spec
         // §6.3 / §6.6.2) — into the `const`-observed channel this runtime
@@ -3239,155 +3256,6 @@ fn lower_algebraic_body(
         output_ranges,
         body: std::sync::Arc::new(looped),
     })
-}
-
-/// Give a shape to every variable declared without one whose defining body is
-/// array-valued on one arm of an `ifelse` and scalar on the other
-/// (`X = ifelse(lev < 2, F * 2, 0.0)` with `F: [cell]`, the NEI2016 emission
-/// observeds, issue #664): the declared index sets of the arrays the body
-/// reads (esm-spec §4.3.4).
-///
-/// Under a runtime scalar condition the oracle evaluates only the taken arm,
-/// so without a shape the variable would be an array on some runs and a 0-D
-/// scalar on others — a shape no compiled slot can hold, a gather `X[i]` that
-/// faults on one arm, and not what the other bindings answer: Julia's
-/// `promote_downstream_shapes` gives such a variable its array arm's shape,
-/// and Python's `np.where` broadcasts the scalar arm. With the shape the
-/// variable is declared-shaped everywhere downstream — the scalar arm fills
-/// it, and readers align with it by name — on both compilers and on both the
-/// compiled route and the build pipeline (`crate::prepare`).
-///
-/// Only a body that is elementwise from its root down to an `ifelse`, every
-/// array it reads there declared over the same index sets in the same order,
-/// each sized by the registry. Anything else — a reduction, a gather, a shape
-/// op, operands over different index sets, an array without a declared shape
-/// — leaves the variable as it was. A body with no `ifelse` is left alone
-/// too: it is an array whichever way it is evaluated.
-pub(crate) fn promote_conditional_observed_shapes(
-    model: &mut Model,
-    index_sets: &HashMap<String, IndexSet>,
-) {
-    let array_axes = declared_axis_names(model);
-    let mut promoted: Vec<(String, Vec<String>)> = Vec::new();
-    for eq in &model.equations {
-        let Expr::Variable(name) = &eq.lhs else {
-            continue;
-        };
-        let Some(var) = model.variables.get(name) else {
-            continue;
-        };
-        if var.var_type == crate::types::VariableType::Parameter
-            || var.shape.as_ref().is_some_and(|s| !s.is_empty())
-        {
-            continue;
-        }
-        if let Some(axes) = inferred_conditional_axes(&eq.rhs, &array_axes)
-            && resolve_declared_shape(&axes, index_sets).is_some()
-        {
-            promoted.push((name.clone(), axes));
-        }
-    }
-    for (name, axes) in promoted {
-        if let Some(var) = model.variables.get_mut(&name) {
-            var.shape = Some(axes);
-        }
-    }
-}
-
-/// The index sets [`promote_conditional_observed_shapes`] gives a body, or
-/// `None`.
-fn inferred_conditional_axes(
-    body: &Expr,
-    array_axes: &HashMap<String, Vec<String>>,
-) -> Option<Vec<String>> {
-    let mut saw_ifelse = false;
-    let axes = elementwise_axes(body, array_axes, &mut saw_ifelse)?;
-    (saw_ifelse && !axes.is_empty()).then_some(axes)
-}
-
-/// The declared index sets an elementwise expression's value spans (empty for
-/// a scalar), or `None` when that cannot be read off the declarations. A
-/// variable with no declared shape counts as a scalar; `saw_ifelse` records an
-/// `ifelse` on the elementwise path.
-fn elementwise_axes(
-    e: &Expr,
-    array_axes: &HashMap<String, Vec<String>>,
-    saw_ifelse: &mut bool,
-) -> Option<Vec<String>> {
-    match e {
-        Expr::Number(_) | Expr::Integer(_) => Some(Vec::new()),
-        Expr::Variable(v) => Some(array_axes.get(v).cloned().unwrap_or_default()),
-        Expr::Operator(node) => {
-            if !is_wholesale_elementwise_op(&node.op) {
-                return None;
-            }
-            if node.op == "ifelse" {
-                *saw_ifelse = true;
-            }
-            let mut out: Vec<String> = Vec::new();
-            for a in &node.args {
-                let s = elementwise_axes(a, array_axes, saw_ifelse)?;
-                if s.is_empty() || s == out {
-                    continue;
-                }
-                if !out.is_empty() {
-                    return None;
-                }
-                out = s;
-            }
-            Some(out)
-        }
-    }
-}
-
-/// The ops the wholesale (`eval`) evaluation applies elementwise to their
-/// operands, broadcasting a scalar against an array: the §4.2 arithmetic,
-/// comparisons, logical connectives, elementary functions and `ifelse`.
-/// Every other op consumes an operand whole, so whether that operand is a
-/// scalar or an array changes its answer.
-pub(crate) fn is_wholesale_elementwise_op(op: &str) -> bool {
-    matches!(
-        op,
-        "+" | "-"
-            | "*"
-            | "/"
-            | "^"
-            | "pow"
-            | "min"
-            | "max"
-            | "and"
-            | "or"
-            | "neg"
-            | "not"
-            | "exp"
-            | "log"
-            | "log10"
-            | "sqrt"
-            | "abs"
-            | "sign"
-            | "floor"
-            | "ceil"
-            | "sin"
-            | "cos"
-            | "tan"
-            | "asin"
-            | "acos"
-            | "atan"
-            | "sinh"
-            | "cosh"
-            | "tanh"
-            | "asinh"
-            | "acosh"
-            | "atanh"
-            | "atan2"
-            | "=="
-            | "!="
-            | "<"
-            | "<="
-            | ">"
-            | ">="
-            | "ifelse"
-    )
 }
 
 /// Classify scoped-reference / array `ic` equations (esm-spec §11.4.1) out of

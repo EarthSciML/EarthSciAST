@@ -1052,11 +1052,11 @@ fn compile_on_tape(
     }
 }
 
-/// The interpreter's shape for an observed's value: a scalar fills the
-/// declared rank's scalar shape (`[]` or `[1]`), an array is kept.
-fn shape_like_interpreter(a: ArrayD<f64>, rank: DeclaredRank) -> ArrayD<f64> {
+/// The interpreter's shape for an observed's value: a scalar fills
+/// `scalar_shape` ([`BuildState::scalar_shape`]), an array is kept.
+fn shape_like_interpreter(a: ArrayD<f64>, scalar_shape: &[usize]) -> ArrayD<f64> {
     if a.ndim() == 0 {
-        ArrayD::from_elem(IxDyn(rank.scalar_shape()), a[IxDyn(&[])])
+        ArrayD::from_elem(IxDyn(scalar_shape), a[IxDyn(&[])])
     } else {
         a
     }
@@ -1077,7 +1077,7 @@ fn eval_observed(
     index_sets: &HashMap<String, IndexSet>,
     extents: &HashMap<String, i64>,
     const_arrays: &ConstArrayScope,
-    rank: DeclaredRank,
+    scalar_shape: &[usize],
     refuse_per_cell: bool,
 ) -> Result<Evaluated, PrepareError> {
     // The observed is evaluated at the element type of the variable it defines
@@ -1123,7 +1123,7 @@ fn eval_observed(
         return tape
             .map_err(|why| err(format!("evaluate {name}: {why}")))
             .map(|r| match r {
-                Ok(a) => Evaluated::Field(shape_like_interpreter(a, rank), Route::Tape),
+                Ok(a) => Evaluated::Field(shape_like_interpreter(a, scalar_shape), Route::Tape),
                 Err(declined) => Evaluated::Refused(format!(
                     "{PER_CELL_RECURRENCE}, and the tape declined it: {declined}"
                 )),
@@ -1180,7 +1180,7 @@ fn eval_observed(
         return match tape {
             Err(fault) => Err(err(format!("evaluate {name}: {fault}"))),
             Ok(Ok(a)) => Ok(Evaluated::Field(
-                shape_like_interpreter(a, rank),
+                shape_like_interpreter(a, scalar_shape),
                 Route::Tape,
             )),
             Ok(Err(declined)) => Ok(Evaluated::Refused(format!(
@@ -1194,7 +1194,7 @@ fn eval_observed(
         (crate::simulate_array::per_cell_walks() != walks_before).then(|| PER_CELL_FAQ.to_string());
     let field = match val {
         EvalValue::Array(a) => *a,
-        EvalValue::Scalar(s) => ArrayD::from_elem(IxDyn(rank.scalar_shape()), s),
+        EvalValue::Scalar(s) => ArrayD::from_elem(IxDyn(scalar_shape), s),
     };
     Ok(Evaluated::Field(field, Route::observed(per_cell)))
 }
@@ -1826,29 +1826,19 @@ struct BuildState<'o> {
 }
 
 impl<'o> BuildState<'o> {
-    /// A single value of an observed whose declared shape has more than one
-    /// element, given to every element of that shape, as the compiled route
-    /// does (esm-spec §4.3.4: a binding MUST NOT let the value's rank replace
-    /// the declared shape). Every other value is returned as it is.
-    fn fill_declared_shape(&self, name: &str, a: ArrayD<f64>) -> ArrayD<f64> {
-        if a.len() != 1 || a.ndim() > 1 {
-            return a;
-        }
-        let Some(shape) = self
-            .model
+    /// The shape `name`'s value takes when its body evaluates to a single
+    /// number: every element of its declared shape (esm-spec §4.3.4: a
+    /// binding MUST NOT let the value's rank replace the declared shape), as
+    /// the compiled route fills it, or the [`DeclaredRank`] shape when the
+    /// declaration has none the registry can size.
+    fn scalar_shape(&self, name: &str) -> Vec<usize> {
+        self.model
             .variables
             .get(name)
             .and_then(|v| v.shape.as_deref())
             .filter(|s| !s.is_empty())
             .and_then(|s| crate::simulate_array::resolve_declared_shape(s, &self.index_sets))
-        else {
-            return a;
-        };
-        if shape.iter().product::<usize>() == 1 {
-            return a;
-        }
-        let v = a.iter().copied().next().expect("one element");
-        ArrayD::from_elem(IxDyn(&shape), v)
+            .unwrap_or_else(|| DeclaredRank::of(&self.model, name).scalar_shape().to_vec())
     }
 
     fn log(&self, msg: &str) {
@@ -1921,7 +1911,7 @@ impl<'o> BuildState<'o> {
             }
             None => Spelling::Qualified,
         };
-        let (mut model, flattened) = match &spelling {
+        let (model, flattened) = match &spelling {
             Spelling::ModelLocal(n) => (Self::authored_model(models, n, &mut index_sets)?, None),
             Spelling::Qualified => {
                 let flat = Self::whole_document(&file, &mut index_sets)?;
@@ -1929,10 +1919,6 @@ impl<'o> BuildState<'o> {
                 (model, unbound_load.then_some(flat))
             }
         };
-        // The shape the compiled route gives a variable defined by an
-        // `ifelse` with an array arm and a scalar arm, so both routes
-        // materialize it alike (issue #664).
-        crate::simulate_array::promote_conditional_observed_shapes(&mut model, &index_sets);
 
         let (param_vals, param_names) = scalar_params(&model, &spelling, &opts.parameters)?;
 
@@ -1965,8 +1951,10 @@ impl<'o> BuildState<'o> {
     /// The model `name` as authored, with the rewrites `flatten` would have
     /// made applied in place: a self-qualified `M.a` resolves to `a`, a
     /// right-hand-side `D` to the tendency it names (or a refusal, never a
-    /// `NaN`), and a `sin` of a `deg` angle takes radians — without that last
-    /// one `sin(40 deg)` evaluated as `sin(40)` here and nowhere else. The
+    /// `NaN`), a `sin` of a `deg` angle takes radians — without that one
+    /// `sin(40 deg)` evaluated as `sin(40)` here and nowhere else — and an
+    /// unshaped variable whose `ifelse` arms differ in rank takes the array
+    /// arm's shape. The
     /// rewrites run after the subsystems are mounted, as on the array runtime,
     /// so a mounted subsystem's equations and declarations are in scope under
     /// their mounted names (`D(North.u)`, a `deg` `North.theta`).
@@ -1986,7 +1974,7 @@ impl<'o> BuildState<'o> {
         crate::simulate_array::mount_subsystems(&mut model, index_sets)
             .map_err(|e| err(format!("model '{name}': {e}")))?;
         crate::simulate_array::resolve_model_self_references(&mut model, name);
-        crate::simulate_array::apply_flatten_rewrites(&mut model)
+        crate::simulate_array::apply_flatten_rewrites(&mut model, index_sets)
             .map_err(|e| err(format!("model '{name}': {e}")))?;
         Ok(model)
     }
@@ -2431,7 +2419,7 @@ impl<'o> BuildState<'o> {
                 &self.index_sets,
                 &no_extents,
                 &self.const_scope,
-                DeclaredRank::of(&self.model, &name),
+                &self.scalar_shape(&name),
                 self.opts.refuse_per_cell,
             ) {
                 Ok(Evaluated::Refused(why)) => {
@@ -2443,7 +2431,6 @@ impl<'o> BuildState<'o> {
                     return Ok(());
                 }
                 Ok(Evaluated::Field(a, route)) => {
-                    let a = self.fill_declared_shape(&name, a);
                     self.log(&format!(
                         "  [prepare] build-time coordinate {name} -> {:?}",
                         a.shape()
@@ -2779,10 +2766,10 @@ impl<'o> BuildState<'o> {
                 &self.index_sets,
                 &self.extents,
                 &self.const_scope,
-                DeclaredRank::of(&self.model, name),
+                &self.scalar_shape(name),
                 self.opts.refuse_per_cell,
             )? {
-                Evaluated::Field(a, route) => (self.fill_declared_shape(name, a), route),
+                Evaluated::Field(a, route) => (a, route),
                 Evaluated::Refused(why) => {
                     self.record(PipelineRule {
                         name: name.clone(),
