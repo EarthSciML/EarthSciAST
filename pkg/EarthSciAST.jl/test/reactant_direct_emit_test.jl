@@ -695,6 +695,24 @@ end
         fresh = _de_ip(fi!, u, p, 0.0)
         @test fresh != before
         @test isapprox(Array(xla(ur, pr, tr, dev)), fresh; rtol = 1.0e-12)
+
+        # A subscript that also reads a state (`F[k + m]`) is no counter
+        # subscript: the build refuses it, so emission never meets a gather
+        # whose subscript is a traced value.
+        bad = deepcopy(doc)
+        mvars = bad["models"]["M"]["variables"]
+        mvars["m"] = _de_state(default = 0.0)
+        push!(bad["models"]["M"]["equations"], Dict{String, Any}("lhs" => _de_Dt("m"), "rhs" => 0.0))
+        bad["models"]["M"]["equations"][1]["rhs"]["expr"] =
+            _de_o("*", _de_ix("F", _de_o("+", "k", "m")), "k")
+        err = try
+            EarthSciAST._build_evaluator(bad; form = :oop, param_arrays = Dict("F" => copy(F)))
+            nothing
+        catch e
+            e
+        end
+        @test err isa EarthSciAST.TreeWalkError
+        @test err.code != "E_TREEWALK_TRACED_SUBSCRIPT"
     end
 
     @testset "template sub-kernels (`_NK_SUBCALL`)" begin

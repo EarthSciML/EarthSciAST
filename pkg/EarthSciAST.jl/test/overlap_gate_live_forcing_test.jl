@@ -244,6 +244,39 @@ end
     @test EA._def_tier(EA._live_gather_node(ref, [st, lit]), Int8[], 1, cache) === EA._TIER_DYNAMIC
 end
 
+# Which subscripts a live gather takes under a symbolic resolve: loop counters
+# (a bound symbol or a contraction loop variable), literals and `+ - *` give a
+# `_NK_LIVE_GATHER`; a subscript that reads a state, a parameter, `t` or an
+# array is refused as it was before the live gather existed, so it never
+# reaches a run-time (or traced) read of a non-counter value.
+@testset "live gather: only loop-counter subscripts" begin
+    pg = Dict{String, Any}("F" => EA._PGatherArray([1.0, 2.0, 3.0], [3]))
+    avi = Dict{String, Tuple{Vector{Int}, Vector{Int}}}()
+    vm = Dict{String, Int}("m" => 1)
+    ca = Dict{String, Any}("conn" => [1, 2, 3])
+    bound = Set{String}(["k"])
+    V, I, N = EA.VarExpr, EA.IntExpr, EA.NumExpr
+    O(o, a...) = EA.OpExpr(o, EA.ASTExpr[a...])
+    res(sub) = EA._resolve_indices(O("index", V("F"), sub), avi, vm, ca, pg, nothing, bound)
+    lv = EA._LOOPVAR_PREFIX * "1"
+    for sub in (V("k"), O("-", I(4), V("k")), O("+", O("*", I(2), V("k")), I(-1)), O("-", V(lv), N(1.0)))
+        r = res(sub)
+        @test r isa EA.OpExpr && r.value isa EA._LiveGatherRef
+    end
+    for sub in (
+            O("+", V("k"), V("m")), O("+", V("k"), V("off")), O("+", V("k"), V("t")),
+            O("index", V("conn"), V("k")), O("/", V("k"), I(1)),
+        )
+        err = try
+            res(sub)
+            nothing
+        catch e
+            e
+        end
+        @test err isa EA.TreeWalkError
+    end
+end
+
 # The same regrid with the SOURCE RING itself fed by a data source. An envelope
 # factor must be build-time data (§5.5.6), so this is refused with the gate's
 # own diagnostic rather than a bare `KeyError` from the broad phase.

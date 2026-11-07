@@ -1622,6 +1622,19 @@ end
 _subscript_is_runtime(e::ASTExpr, const_arrays::AbstractDict) =
     _subscript_is_runtime(e, _EMPTY_BOUND_SYMS, const_arrays)
 
+# True iff a run-time subscript is built only from loop counters — a bound
+# output-index symbol of a symbolic resolve, or a contraction loop variable
+# (`__esm_lv_*`) — numeric literals and `+ - *`: what a gather can evaluate
+# from the counters alone (`_index_int`). A subscript that reads a state, an
+# observed, a parameter, `t` or an array is not one.
+_subscript_from_counters(e::VarExpr, bound_syms::Set{String}) =
+    e.name in bound_syms || startswith(e.name, _LOOPVAR_PREFIX)
+_subscript_from_counters(::Union{NumExpr, IntExpr}, ::Set{String}) = true
+_subscript_from_counters(e::OpExpr, bound_syms::Set{String}) =
+    (e.op == "+" || e.op == "-" || e.op == "*") &&
+    all(a -> _subscript_from_counters(a, bound_syms), e.args)
+_subscript_from_counters(::ASTExpr, ::Set{String}) = false
+
 # ── Guarded out-of-range reads ───────────────────────────────────────────────
 # esm-spec evaluates `ifelse` lazily and `and` / `or` with short circuit, so a
 # const read out of range under a branch the cell does not take is no error
@@ -2240,9 +2253,16 @@ function _resolve_indices_op(
             # A subscript a symbolic resolve keeps symbolic (a contraction's loop
             # counter, `F[i]`) has no build-time value: the gather stays a read of
             # the live buffer at an offset computed per call (`_LiveGatherRef`),
-            # with each constant subscript bounds-checked here as below.
+            # with each constant subscript bounds-checked here as below. Only
+            # loop counters and literals qualify; any other run-time subscript
+            # (one reading a state, a parameter or `t`) is refused below.
             if !isempty(bound_syms) &&
-                    _anyof(a -> _subscript_is_runtime(a, const_arrays), idx_args_expr)
+                    _anyof(a -> _subscript_is_runtime(a, const_arrays), idx_args_expr) &&
+                    all(
+                    a -> !_subscript_is_runtime(a, const_arrays) ||
+                        _subscript_from_counters(a, bound_syms),
+                    idx_args_expr
+                )
                 sub_nodes = Vector{ASTExpr}(undef, length(idx_args_expr))
                 for d in eachindex(idx_args_expr)
                     a = idx_args_expr[d]
