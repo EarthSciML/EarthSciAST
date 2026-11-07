@@ -117,6 +117,8 @@ fn reversible(prog: &TapeProgram) -> bool {
         | Instr::JmpIfZero { .. }
         | Instr::Export { .. } => true,
         Instr::Reduce { axes, .. } => axes.len() <= 1,
+        // Elementwise in the query; the axis is rank 1, the same either way.
+        Instr::Count { .. } => true,
         Instr::SegReduce { out, .. } => slot_free(*out),
         Instr::Reshape { src, out } => order_free(src_shape(prog, src)) && slot_free(*out),
         Instr::ScalarRead { src, .. } => order_free(src_shape(prog, src)),

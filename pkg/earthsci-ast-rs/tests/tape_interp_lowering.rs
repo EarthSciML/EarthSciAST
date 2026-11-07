@@ -979,3 +979,153 @@ fn a_strict_table_over_a_gridded_query_faults_on_any_cell() {
     u[q0 + 3] = -2.0;
     assert_strict_agreement(&compiled, &u, true, "gridded, two cells out of range");
 }
+
+// ---------------------------------------------------------------------------
+// A scalar lookup component mounted on a grid (#660)
+// ---------------------------------------------------------------------------
+
+/// FastJX's shape in reseact: a component whose `interp.*` queries are SCALAR
+/// parameters, coupled (`param_to_var`) to gridded states, so its unshaped
+/// observeds are evaluated wholesale with an array query. Every entry runs
+/// elementwise, one registry call per cell, on the tape and in the
+/// interpreter alike — the interpreter used to answer `NaN` for
+/// `interp.bilinear` and `interp.searchsorted` there, and `native` refused.
+#[test]
+fn interp_on_a_coupled_array_query_is_elementwise() {
+    let compiled = strict_compiled_path("tests/fixtures/native_probes/interp_array_query.esm");
+    let n = compiled.state_variable_names().len();
+    let (a0, b0, z0) = (
+        slot(&compiled, "Grid.a[1]"),
+        slot(&compiled, "Grid.b[1]"),
+        slot(&compiled, "Grid.z[1]"),
+    );
+    // Per cell: (a, b) below both axes, on a corner, mid-cell, above both,
+    // NaN in either query, on an interior knot of the second axis.
+    let cells: [[(f64, f64); 4]; 2] = [
+        [(-1.0, -6.0), (0.0, 0.0), (0.4, 18.0), (5.0, 44.0)],
+        [(f64::NAN, 7.0), (1.75, f64::NAN), (1.0, 25.0), (2.0, 10.0)],
+    ];
+    let row = TABLE_2D[1].to_vec();
+    for probe in cells {
+        let mut u = vec![0.0; n];
+        for (k, (a, b)) in probe.iter().enumerate() {
+            u[a0 + k] = *a;
+            u[b0 + k] = *b;
+            u[z0 + k] = 0.5 * k as f64;
+        }
+        let (taped, oracle) = both(&compiled, &u, 0.0);
+        assert_same_bits(&format!("coupled lookups at {probe:?}"), &taped, &oracle);
+        for (k, (a, b)) in probe.iter().enumerate() {
+            let reg = |name: &str, args: &[ClosedArg]| {
+                evaluate_closed_function(name, args)
+                    .expect("registry")
+                    .as_f64()
+            };
+            let f = reg(
+                "interp.bilinear",
+                &[
+                    ClosedArg::Array2D(TABLE_2D.iter().map(|r| r.to_vec()).collect()),
+                    ClosedArg::Array(AXIS_X.to_vec()),
+                    ClosedArg::Array(AXIS_Y.to_vec()),
+                    ClosedArg::Scalar(*a),
+                    ClosedArg::Scalar(*b),
+                ],
+            );
+            let g = reg(
+                "interp.linear",
+                &[
+                    ClosedArg::Array(row.clone()),
+                    ClosedArg::Array(AXIS_Y.to_vec()),
+                    ClosedArg::Scalar(*b),
+                ],
+            );
+            let s = reg(
+                "interp.searchsorted",
+                &[ClosedArg::Scalar(*b), ClosedArg::Array(AXIS_Y.to_vec())],
+            );
+            let want = (f + g + s) - 0.1 * u[z0 + k];
+            assert!(
+                same_bits(taped[z0 + k], want),
+                "cell {k} at ({a:?}, {b:?}): tape {:?} vs registry {want:?}",
+                taped[z0 + k]
+            );
+        }
+    }
+}
+
+/// The near miss: two array queries of different shapes are not one
+/// elementwise call. The interpreter answers the registry's array-argument
+/// `NaN`, and `native` refuses the rule by name rather than guess a box.
+#[test]
+fn interp_on_array_queries_of_different_shapes_is_refused() {
+    let doc = format!(
+        r#"{{
+  "esm": "1.1.0",
+  "metadata": {{ "name": "TapeInterpMismatchedQueries", "description": "interp.bilinear with a 4-cell x query and a 3-cell y query." }},
+  "index_sets": {{ "c4": {{ "kind": "interval", "size": 4 }}, "c3": {{ "kind": "interval", "size": 3 }} }},
+  "models": {{ "M": {{ "variables": {{
+      "a": {{ "type": "unknown", "units": "1", "shape": ["c4"], "default": 0.5 }},
+      "b": {{ "type": "unknown", "units": "1", "shape": ["c3"], "default": 5.0 }},
+      "F": {{ "type": "unknown", "units": "1" }}
+    }},
+    "equations": [
+      {{ "lhs": {{ "op": "faq", "args": [], "output_idx": ["i"], "ranges": {{ "i": [1, 4] }},
+                 "expr": {{ "op": "D", "args": [{{ "op": "index", "args": ["a", "i"] }}], "wrt": "t" }} }},
+        "rhs": {{ "op": "faq", "args": [], "output_idx": ["i"], "ranges": {{ "i": [1, 4] }}, "expr": 0.0 }} }},
+      {{ "lhs": {{ "op": "faq", "args": [], "output_idx": ["i"], "ranges": {{ "i": [1, 3] }},
+                 "expr": {{ "op": "D", "args": [{{ "op": "index", "args": ["b", "i"] }}], "wrt": "t" }} }},
+        "rhs": {{ "op": "faq", "args": [], "output_idx": ["i"], "ranges": {{ "i": [1, 3] }}, "expr": 0.0 }} }},
+      {{ "lhs": "F", "rhs": {{ "op": "fn", "name": "interp.bilinear", "args": [
+          {{ "op": "const", "args": [], "value": {table} }},
+          {{ "op": "const", "args": [], "value": {ax} }},
+          {{ "op": "const", "args": [], "value": {ay} }},
+          "a", "b" ]}} }}
+    ] }} }}
+}}"#,
+        table = json_array_2d(&TABLE_2D),
+        ax = json_array(&AXIS_X),
+        ay = json_array(&AXIS_Y)
+    );
+    let compiled = compile(&doc);
+    let report = compiled.debug_build_tape_report();
+    assert!(
+        report
+            .fallbacks
+            .iter()
+            .any(|(rule, why)| rule == "F" && why.contains("different boxes")),
+        "{:?}",
+        report.fallbacks
+    );
+    let file = load_string(&doc).expect("load");
+    let refused = esm_problem(
+        &file,
+        (0.0, 1.0),
+        ProblemOptions {
+            compiler: Some(Compiler::Native),
+            rhs: Rhs::Always,
+            ..Default::default()
+        },
+    );
+    assert!(
+        refused.is_err(),
+        "native must refuse the mismatched queries"
+    );
+}
+
+/// [`strict_compiled`] for a fixture on disk.
+fn strict_compiled_path(rel: &str) -> std::rc::Rc<ArrayCompiled> {
+    let file = earthsci_ast::load_path(fixture(rel)).unwrap_or_else(|e| panic!("load: {e:?}"));
+    let prob = esm_problem(
+        &file,
+        (0.0, 1.0),
+        ProblemOptions {
+            compiler: Some(Compiler::Native),
+            rhs: Rhs::Always,
+            ..Default::default()
+        },
+    )
+    .unwrap_or_else(|e| panic!("native build of {rel}: {e}"));
+    let compiled = prob.debug_array_compiled().expect("an array backend");
+    assert_fully_taped(&compiled, rel);
+    compiled
+}

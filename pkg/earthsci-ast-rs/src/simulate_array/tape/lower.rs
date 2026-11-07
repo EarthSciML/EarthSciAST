@@ -93,6 +93,98 @@ fn tape_index(n: usize, table: &str) -> LResult<u32> {
 
 type LResult<T> = Result<T, Bail>;
 
+/// The parts of a counted bracket ([`detect_indicator_count`]).
+struct IndicatorCount<'e> {
+    rel: CountRel,
+    /// The array the comparison reads at the contracted index: a variable
+    /// or an inline `const`.
+    axis: &'e Expr,
+    x: &'e Expr,
+    lo: i64,
+    hi: i64,
+}
+
+/// The rank-0 `faq` `sum_{k=lo..hi} ifelse(axis[k] REL x, 1, 0)`, REL one of
+/// `<= < >= >` with the indexed axis on either side, or `None`.
+///
+/// The guard is the algebraic shape and nothing else: one statically ranged
+/// contracted index, a `+` reduction, no `filter` or `join`, a body that is
+/// exactly the indicator (the literals 1 and 0, in that order), an axis read
+/// `index(A, k)` whose base `A` is a variable or an inline `const` and does
+/// not mention `k`, and a query that does not mention `k`. Every other shape
+/// is the general reduction's.
+fn detect_indicator_count<'e>(spec: &ArrayOpSpec<'e>) -> Option<IndicatorCount<'e>> {
+    use super::super::vectorized::expr_mentions;
+    if spec.reduce != ReduceKind::Sum
+        || spec.filter.is_some()
+        || spec.join.is_some_and(|j| !j.is_empty())
+        || !spec.idx_names.is_empty()
+        || !spec.ranges.is_empty()
+        || spec.contract_names.len() != 1
+    {
+        return None;
+    }
+    let ContractDim::Static(lo, hi) = spec.contract_dims[0] else {
+        return None;
+    };
+    let k = spec.contract_names[0].as_str();
+    let Expr::Operator(ite) = spec.body else {
+        return None;
+    };
+    if ite.op != "ifelse" || ite.args.len() != 3 {
+        return None;
+    }
+    let lit = |e: &Expr, want: f64| match e {
+        Expr::Number(v) => *v == want,
+        Expr::Integer(v) => *v as f64 == want,
+        _ => false,
+    };
+    if !lit(&ite.args[1], 1.0) || !lit(&ite.args[2], 0.0) {
+        return None;
+    }
+    let Expr::Operator(cmp) = &ite.args[0] else {
+        return None;
+    };
+    let rel = CountRel::from_op(&cmp.op)?;
+    if cmp.args.len() != 2 {
+        return None;
+    }
+    // The axis read `index(A, k)`, on either side of the comparison.
+    let axis_read = |e: &'e Expr| -> Option<&'e Expr> {
+        let Expr::Operator(ix) = e else {
+            return None;
+        };
+        if ix.op != "index" || ix.args.len() != 2 {
+            return None;
+        }
+        if !matches!(&ix.args[1], Expr::Variable(v) if v == k) {
+            return None;
+        }
+        let base = &ix.args[0];
+        let ok = match base {
+            Expr::Variable(v) => v != k,
+            Expr::Operator(c) => c.op == "const" && !expr_mentions(base, k),
+            _ => false,
+        };
+        ok.then_some(base)
+    };
+    let (axis, x, rel) = match (axis_read(&cmp.args[0]), axis_read(&cmp.args[1])) {
+        (Some(a), None) => (a, &cmp.args[1], rel),
+        (None, Some(a)) => (a, &cmp.args[0], rel.mirror()),
+        _ => return None,
+    };
+    if expr_mentions(x, k) {
+        return None;
+    }
+    Some(IndicatorCount {
+        rel,
+        axis,
+        x,
+        lo,
+        hi,
+    })
+}
+
 mod scatter;
 mod standalone;
 mod tuples;
@@ -553,6 +645,18 @@ pub(crate) struct TapeBuilder<'m> {
     /// build-time data — a gather's subscripts, a join's key columns, a
     /// ragged bound — never to fold a value the program computes.
     known: FxHashMap<SlotId, Known>,
+    /// Whether the counted bracket is recognised
+    /// ([`Self::try_lower_indicator_count`]): the model's
+    /// [`crate::problem::CompilerRewrites::count_fold`].
+    count_fold: bool,
+    /// Slots every element of which is known to lie in `[lo, hi]` (never
+    /// NaN): a count, and what clamps and integer shifts make of one. Read
+    /// only to prove a const-array gather's subscripts in range
+    /// ([`Self::emit_data_gather`]), never to change a value.
+    ranges: FxHashMap<SlotId, (f64, f64)>,
+    /// Slots an instruction has defined: a second definition (a branch
+    /// join's phi) drops the slot from `ranges` for good.
+    range_defs: HashSet<SlotId>,
     /// Open tuple-list boxes, innermost last (`tuples`).
     tuple_frames: Vec<tuples::TupleFrame>,
     /// The id the next tuple-list box gets (0 means "not a tuple box").
@@ -873,6 +977,9 @@ impl<'m> TapeBuilder<'m> {
             gather_tables: Vec::new(),
             seg_tables: Vec::new(),
             known: FxHashMap::default(),
+            count_fold: true,
+            ranges: FxHashMap::default(),
+            range_defs: HashSet::new(),
             tuple_frames: Vec::new(),
             next_tuple: 1,
             tuples_held: 0,
@@ -963,6 +1070,7 @@ impl<'m> TapeBuilder<'m> {
     /// work, since what is hoisted is a pure map that cannot fault.
     fn emit_tagged(&mut self, instr: Instr, prec: Precision, section: Cadence) {
         self.track_known(&instr);
+        self.track_range(&instr);
         if self.sweep.is_some() {
             if self.reads_body(&instr) || (self.in_branch() && !Self::hoistable(&instr)) {
                 self.mark_body_defs(&instr);
@@ -994,6 +1102,72 @@ impl<'m> TapeBuilder<'m> {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Record the bounds an instruction's value is known to lie in (see
+    /// `ranges`). Interval arithmetic on `+` and `-` is kept to integer
+    /// endpoints below 2^24, where every endpoint is exact at either working
+    /// precision and rounding, being monotone, keeps each element inside.
+    fn track_range(&mut self, instr: &Instr) {
+        let Some(out) = instr.out() else {
+            return;
+        };
+        if !self.range_defs.insert(out) {
+            self.ranges.remove(&out);
+            return;
+        }
+        let exact = |v: f64| v.fract() == 0.0 && v.abs() < 16_777_216.0;
+        let r = match instr {
+            Instr::Count { n, .. } => Some((0.0, *n as f64)),
+            Instr::Copy { a, .. } | Instr::Fill { v: a, .. } => self.operand_range(a),
+            Instr::Bin { op, a, b, .. } => match (self.operand_range(a), self.operand_range(b)) {
+                (Some(x), Some(y)) => match op {
+                    BinCode::Max => Some((x.0.max(y.0), x.1.max(y.1))),
+                    BinCode::Min => Some((x.0.min(y.0), x.1.min(y.1))),
+                    BinCode::Add if [x.0, x.1, y.0, y.1].into_iter().all(exact) => {
+                        Some((x.0 + y.0, x.1 + y.1)).filter(|r| exact(r.0) && exact(r.1))
+                    }
+                    BinCode::Sub if [x.0, x.1, y.0, y.1].into_iter().all(exact) => {
+                        Some((x.0 - y.1, x.1 - y.0)).filter(|r| exact(r.0) && exact(r.1))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            },
+            // A gather that covers its whole box reads only source elements
+            // (no zero ghost).
+            Instr::Gather {
+                src: SrcRef::Slot(s),
+                plan,
+                ..
+            } => {
+                let p = &self.plans[*plan as usize];
+                let covered = p
+                    .segs
+                    .iter()
+                    .zip(&p.shape)
+                    .all(|(segs, &n)| segs.iter().map(|&(_, len, _)| len).sum::<usize>() == n);
+                if covered {
+                    self.ranges.get(s).copied()
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        if let Some(r) = r {
+            self.ranges.insert(out, r);
+        }
+    }
+
+    /// The bounds of an operand's value, when known: a finite literal, or a
+    /// slot in `ranges`.
+    fn operand_range(&self, o: &Operand) -> Option<(f64, f64)> {
+        match o {
+            Operand::Lit(v) if v.is_finite() => Some((*v, *v)),
+            Operand::Slot(s) => self.ranges.get(s).copied(),
+            _ => None,
         }
     }
 
@@ -1095,6 +1269,7 @@ impl<'m> TapeBuilder<'m> {
                 | Instr::Assemble { .. }
                 | Instr::ConstArray { .. }
                 | Instr::Interp { .. }
+                | Instr::Count { .. }
                 | Instr::Reduce { .. }
                 | Instr::Scan { .. }
                 | Instr::PolyArea { .. }
@@ -2339,7 +2514,8 @@ impl<'m> TapeBuilder<'m> {
     /// `bx` is `Some` inside an output box — where an array-valued query is
     /// the vectorization of a per-cell scalar and must therefore span exactly
     /// that box — and `None` on the wholesale path, where an array-valued
-    /// query is a genuine array argument.
+    /// query is evaluated elementwise over its own box, as the oracle's
+    /// `eval_fn` does.
     fn lower_interp(
         &mut self,
         kind: InterpKind,
@@ -2399,15 +2575,13 @@ impl<'m> TapeBuilder<'m> {
                          registry takes a scalar)"
                     );
                 }
-                // Wholesale, `eval_fn` broadcasts an array query over the
-                // fixed table for `interp.linear` ONLY; the other two entries
-                // reach `expect_scalar` and come back as the NaN sentinel,
-                // which only the oracle produces.
-                None if kind != InterpKind::Linear => {
-                    bail_tape!(
-                        "wholesale: closed function `{name}` on an array-valued query \
-                         (the registry takes a scalar)"
-                    );
+                // Wholesale, `eval_fn` broadcasts the registry call over an
+                // array query (`eval_interp_elementwise`), which is this
+                // instruction's elementwise form — except that it reads a
+                // 0-D query of the two non-`linear` entries as the scalar it
+                // holds, where the instruction would produce a 0-D array.
+                None if kind != InterpKind::Linear && shape.is_empty() => {
+                    bail_tape!("wholesale: closed function `{name}` on a 0-D array query");
                 }
                 Some(_) | None => {}
             }
@@ -3076,6 +3250,22 @@ impl<'m> TapeBuilder<'m> {
             && out_ndim == 1
             && (0..n).any(|d| classify_axis_role(&node.args[1 + d], &vb).is_none())
         {
+            // A rank-1 const array at one computed subscript whose bounds
+            // keep it inside the array (a clamped bracket) has no
+            // out-of-range read for a policy to resolve: it is read as any
+            // array is, by one indexed gather. The bounds are those of the
+            // lowered subscript, so the subscript is lowered speculatively:
+            // when the bounds do not prove the read inside, or anything in
+            // the attempt bails, everything it emitted (faults included) is
+            // undone and the read goes to the routes below as if no attempt
+            // had been made.
+            if n == 1 && src_origin[0] == 1 && self.tile.is_none() {
+                let txn = self.sub_txn();
+                match self.lower_clamped_bracket_read(node, bx, &arg0, src_shape[0]) {
+                    Ok(Some(v)) => return Ok(v),
+                    Ok(None) | Err(_) => self.sub_rollback(txn),
+                }
+            }
             if let Some(v) =
                 self.lower_const_data_gather(node, bx, &arg0, &src_shape, &src_origin)?
             {
@@ -3420,6 +3610,26 @@ impl<'m> TapeBuilder<'m> {
         Ok(Some(LV::Arr(out)))
     }
 
+    /// `index(base, s)` on a rank-1 const array of `len` entries at origin 1,
+    /// read by one indexed gather when the lowered subscript's bounds keep
+    /// every read inside it; `Ok(None)` otherwise.
+    fn lower_clamped_bracket_read(
+        &mut self,
+        node: &Arc<ExpressionNode>,
+        bx: &LBox,
+        base: &LV,
+        len: usize,
+    ) -> LResult<Option<LV>> {
+        let sub = self.lower_expr(&node.args[1], bx)?;
+        let inside = self
+            .operand_range(&self.op_of(&sub))
+            .is_some_and(|(lo, hi)| subscript_of(lo) >= 1 && subscript_of(hi) <= len as i64);
+        if !inside {
+            return Ok(None);
+        }
+        self.lower_index_gather(node, bx, base, 0, &[None], &[], false)
+    }
+
     /// `index(base, s…)` with every subscript evaluated per element of the
     /// box: one [`Instr::DataGather`]. This is the oracle's per-cell
     /// `eval_index` for any subscript the segment and table gathers have no
@@ -3503,7 +3713,14 @@ impl<'m> TapeBuilder<'m> {
             want = want.max(self.lv_cadence(s));
         }
         let kind = self.gather_kind(base, &src_shape);
-        let faults = matches!(&kind, ScalarReadKind::ConstArray { policy, .. }
+        // Subscripts whose bounds put every element inside the source (a
+        // clamped bracket, `table[i_lo]` and `table[i_lo + 1]`) cannot fault.
+        let in_range = subs.iter().zip(src_shape.iter()).all(|(s, &n)| {
+            self.operand_range(&self.op_of(s))
+                .is_some_and(|(lo, hi)| subscript_of(lo) >= 1 && subscript_of(hi) <= n as i64)
+        });
+        let faults = !in_range
+            && matches!(&kind, ScalarReadKind::ConstArray { policy, .. }
             if policy.iter().any(|p| matches!(p, BoundaryKind::Error)));
         let lazy = faults && self.lazy_depth > 0;
         let order = if lazy {
@@ -4877,6 +5094,9 @@ impl<'m> TapeBuilder<'m> {
             .collect();
         if read.len() < bx.syms.len() {
             return self.lower_nested_scalar_reduction_on(node, spec, bx, &read);
+        }
+        if let Some(v) = self.try_lower_indicator_count(spec, bx, true) {
+            return Ok(v);
         }
         let nc = spec.contract_names.len();
         if nc == 0 {
@@ -6422,6 +6642,10 @@ impl<'m> TapeBuilder<'m> {
             tuple: 0,
             visit: SmallVec::new(),
         };
+        if let Some(v) = self.try_lower_indicator_count(spec, &bx, false) {
+            self.pop_scope();
+            return Ok(v);
+        }
         let lowered = (|| -> LResult<Option<LV>> {
             let keep = match spec.filter {
                 None => None,
@@ -6499,6 +6723,145 @@ impl<'m> TapeBuilder<'m> {
             sec,
         );
         Ok(LV::Scalar(out))
+    }
+
+    /// A rank-0 `faq` that counts the entries of a rank-1 axis standing in one
+    /// comparison to a query ([`detect_indicator_count`]), lowered to one
+    /// [`Instr::Count`]; `None` for every other shape, which the caller
+    /// lowers as before.
+    ///
+    /// The oracle folds `ifelse(axis[k] REL x, 1, 0)` over the window from
+    /// `+0.0`: every term is `0.0` or `1.0`, so the fold is the count of
+    /// entries that satisfy the comparison, exactly, and the instruction's
+    /// count is that number whatever the axis holds. An axis whose window is
+    /// a build-time literal the lowering finds non-decreasing is marked
+    /// `sorted`, so the instruction bisects it without checking it first.
+    ///
+    /// `nested` is the per-cell form: `bx` is the enclosing box the query
+    /// reads, and the count is an array over it. Otherwise `bx` is the
+    /// contraction box of a standalone reduction, which the query does not
+    /// read, and the count is one scalar.
+    ///
+    /// The attempt is speculative: whatever it cannot lower (a query that
+    /// would note a fail-closed fault in the per-cell form, a query over
+    /// another box, an axis the resolver refuses) declines, and everything it
+    /// emitted is undone, so the general reduction lowers the `faq` as if no
+    /// count had been tried and reports anything it refuses itself.
+    fn try_lower_indicator_count(
+        &mut self,
+        spec: &ArrayOpSpec,
+        bx: &LBox,
+        nested: bool,
+    ) -> Option<LV> {
+        if !self.count_fold || bx.tuple != 0 || self.sweep.is_some() {
+            return None;
+        }
+        let ic = detect_indicator_count(spec)?;
+        let txn = self.sub_txn();
+        match self.lower_indicator_count(&ic, bx, nested) {
+            Ok(Some(v)) => Some(v),
+            Ok(None) | Err(_) => {
+                self.sub_rollback(txn);
+                None
+            }
+        }
+    }
+
+    /// [`Self::try_lower_indicator_count`]'s lowering of a detected count;
+    /// `Ok(None)` or a bail declines it.
+    fn lower_indicator_count(
+        &mut self,
+        ic: &IndicatorCount,
+        bx: &LBox,
+        nested: bool,
+    ) -> LResult<Option<LV>> {
+        // The axis, read whole. A name an enclosing box binds is not an
+        // array; anything the resolver would refuse is left to the general
+        // path, which reports it.
+        let axis = match ic.axis {
+            Expr::Variable(name) => {
+                if bx.syms.iter().chain(bx.cnames.iter()).any(|s| s == name) {
+                    return Ok(None);
+                }
+                if let Some(&ix) = self.state_ix.get(name.as_str()) {
+                    LV::State(tape_index(ix, "state variables")?)
+                } else if let Some(ObsVal::Taped(lv)) = self.obs_defined.get(name.as_str()) {
+                    lv.clone()
+                } else if self.obs_defined.contains_key(name.as_str())
+                    || self.param_ix.contains_key(name.as_str())
+                {
+                    return Ok(None);
+                } else if let Some(lv) = self.forcing_read(name)? {
+                    lv
+                } else {
+                    return Ok(None);
+                }
+            }
+            Expr::Operator(lit) => match eval_const(lit) {
+                Value::Array(a) if a.ndim() == 1 && !a.is_empty() => self.emit_const_array(&a)?,
+                _ => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+        let Some((ashape, aorigin)) = self.lv_box(&axis) else {
+            return Ok(None);
+        };
+        if ashape.len() != 1 {
+            return Ok(None);
+        }
+        // The window, inside the axis: no ghost read, no out-of-range fault.
+        let start = ic.lo - aorigin[0];
+        let n = ic.hi - ic.lo + 1;
+        if start < 0 || n < 1 || start + n > ashape[0] as i64 {
+            return Ok(None);
+        }
+        if self.tile.is_some() && self.tile_source(&axis).is_some() {
+            return Ok(None);
+        }
+        let (Ok(start), Ok(n)) = (u32::try_from(start), u32::try_from(n)) else {
+            return Ok(None);
+        };
+        // The query, as the oracle evaluates it at each cell.
+        let notes = self.fault_notes;
+        let x = self.lower_expr(ic.x, bx)?;
+        if nested && self.fault_notes != notes {
+            return Ok(None);
+        }
+        let (shape, origin, scalar) = if nested {
+            (bx.shape.clone(), bx.lo.clone(), false)
+        } else {
+            (DimU::new(), DimI::new(), true)
+        };
+        match self.lv_box(&x) {
+            None => {}
+            Some((s, o)) if !scalar && s == shape && o == origin => {}
+            Some(_) => return Ok(None),
+        }
+        let sorted = match &axis {
+            LV::Arr(s) => self.known_values(*s).is_some_and(|v| {
+                let w = &v[start as usize..(start + n) as usize];
+                non_decreasing(w.len(), |j| w[j])
+            }),
+            _ => false,
+        };
+        let sec = self.placement(self.lv_cadence(&axis).max(self.lv_cadence(&x)));
+        let axis_src = self.src_of(&axis);
+        let out = self.new_slot(&shape, &origin, scalar, sec);
+        let instr = Instr::Count {
+            rel: ic.rel,
+            axis: axis_src,
+            lo: start,
+            n,
+            sorted,
+            x: self.op_of(&x),
+            out,
+        };
+        self.emit(instr, sec);
+        Ok(Some(if scalar {
+            LV::Scalar(out)
+        } else {
+            LV::Arr(out)
+        }))
     }
 
     /// `eval_makearray` mirror (wholesale): the bounding-box assembly around
@@ -6997,6 +7360,7 @@ pub(super) fn build_tape_program(
     b.observed_rules = observed_rules;
     b.tile = tile;
     b.baked_params = baked_join_key_params(compiled);
+    b.count_fold = compiled.rewrites.count_fold;
 
     // ---- observed rules, in dependency order -------------------------------
     for (i, rule) in observed_rules.iter().enumerate() {
@@ -7254,6 +7618,9 @@ impl<'m> TapeBuilder<'m> {
         self.seg_tables.truncate(txn.seg_tables);
         let n_slots = self.slots.len() as SlotId;
         self.known.retain(|s, _| *s < n_slots);
+        // A rolled-back slot's id is handed out again: its bounds go with it.
+        self.ranges.retain(|s, _| *s < n_slots);
+        self.range_defs.retain(|s| *s < n_slots);
         self.tuple_frames.clear();
         self.faults.truncate(txn.faults);
         self.fault_order.truncate(txn.faults);
@@ -7340,6 +7707,18 @@ impl<'m> TapeBuilder<'m> {
         self.seg_tables.truncate(txn.seg_tables);
         let n_slots = self.slots.len() as SlotId;
         self.known.retain(|s, _| *s < n_slots);
+        // A rolled-back slot's id is handed out again: its bounds go with it.
+        self.ranges.retain(|s, _| *s < n_slots);
+        self.range_defs.retain(|s| *s < n_slots);
+        // The attempt's value numbers in the frame it ran in: one naming a
+        // rolled-back slot goes (a value it shadowed is simply recomputed).
+        let dead = |lv: &LV| matches!(lv, LV::Scalar(s) | LV::Arr(s) if *s >= n_slots);
+        if let Some(frame) = self.scope_frames.last_mut() {
+            frame.map.retain(|_, lv| !dead(lv));
+            frame
+                .journal
+                .retain(|(_, prev)| !prev.as_ref().is_some_and(dead));
+        }
         for (s, &(n_chunks, last_len)) in txn.streams.iter().enumerate() {
             let stream = &mut self.streams[s];
             stream.truncate(n_chunks);
@@ -8127,6 +8506,7 @@ fn color_slab(prog: &mut TapeProgram) {
                 | Instr::Fused { .. }
                 | Instr::Lanes { .. }
                 | Instr::Reduce { .. }
+                | Instr::Count { .. }
                 | Instr::Scan { .. }
                 | Instr::Assemble { .. }
                 | Instr::PolyArea { .. }

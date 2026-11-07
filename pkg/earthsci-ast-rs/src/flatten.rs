@@ -2343,10 +2343,10 @@ fn carry_data_fed_source_shape(
     let Some(source) = parts.parameters.get_mut(from) else {
         return Ok(());
     };
-    if !source
+    if source
         .update
         .as_ref()
-        .is_some_and(|s| crate::simulate_array::data_feed_source(s).is_some())
+        .is_none_or(|s| crate::simulate_array::data_feed_source(s).is_none())
     {
         return Ok(());
     }

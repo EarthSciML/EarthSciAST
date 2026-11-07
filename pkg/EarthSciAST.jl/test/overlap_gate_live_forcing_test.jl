@@ -133,17 +133,148 @@ expected(F) = [(F[1] + 0.5 * F[2]) / 1.5, F[3]]
     prob = EA.esm_problem(flat, (0.0, 1.0); compiler = :interpreter, param_arrays = Dict{String, Any}("M.F" => copy(F)))
     @test rhs(prob) ≈ expected(F)
 
-    # The native compiler's whole-array contraction tier does not yet lower a
-    # gather from a live forcing buffer at a loop-variable subscript, which a
-    # join-gated contraction needs, so it refuses the gated apply by name. Only
-    # that refusal counts as the known break; any other error fails the test.
-    native_ok = try
-        rhs(EA.esm_problem(document(), (0.0, 1.0); param_arrays = Dict{String, Any}("M.F" => copy(F)))) ≈ expected(F)
-    catch err
-        (err isa EA.TreeWalkError && err.code == EA.ERROR_CODES.COMPILER_REFUSED_RULE) || rethrow()
-        false
+    # The native compiler's whole-array contraction reads the live field at
+    # the contracted index (`F[i]`) inside the gated sum, from the buffer at
+    # each call, bit-identical to the interpreter (issue #657).
+    for F2 in (F, [2.0, -4.0, 6.0])
+        pa() = Dict{String, Any}("M.F" => copy(F2))
+        nat = rhs(EA.esm_problem(document(), (0.0, 1.0); compiler = :native, param_arrays = pa()))
+        ref = rhs(EA.esm_problem(document(), (0.0, 1.0); compiler = :interpreter, param_arrays = pa()))
+        @test nat ≈ expected(F2)
+        @test reinterpret(UInt64, nat) == reinterpret(UInt64, ref)
+        flat_nat = rhs(EA.esm_problem(flat, (0.0, 1.0); compiler = :native, param_arrays = pa()))
+        flat_ref = rhs(EA.esm_problem(flat, (0.0, 1.0); compiler = :interpreter, param_arrays = pa()))
+        @test reinterpret(UInt64, flat_nat) == reinterpret(UInt64, flat_ref)
+        @test reinterpret(UInt64, flat_nat) == reinterpret(UInt64, nat)
     end
-    @test_broken native_ok
+
+    # The buffer is read when the regrid runs, never folded at build: writing
+    # it in place and re-running the discrete fills (what a data refresh does)
+    # moves the next right-hand side.
+    buf = copy(F)
+    prob = EA.esm_problem(document(), (0.0, 1.0); compiler = :native, param_arrays = Dict{String, Any}("M.F" => buf))
+    @test rhs(prob) ≈ expected(F)
+    buf .= [5.0, 7.0, -1.0]
+    prob.dm.materialize!()
+    @test rhs(prob) ≈ expected(buf)
+    ref = EA.esm_problem(document(), (0.0, 1.0); compiler = :interpreter, param_arrays = Dict{String, Any}("M.F" => copy(buf)))
+    @test reinterpret(UInt64, rhs(prob)) == reinterpret(UInt64, rhs(ref))
+end
+
+# Other shapes of a live read in the gated apply's term or filter, each built
+# by `native` and checked bit for bit against the interpreter: a live read in
+# the FILTER (so the filter is not fixed while `p` is, and is evaluated per
+# call), a live read at a constant subscript beside one at the loop index, and
+# a live read at a computed subscript.
+function _with_apply(term, filter = SLIVER)
+    doc = document()
+    eqs = doc["models"]["M"]["equations"]
+    k = findfirst(e -> e["lhs"] == "F_tgt", eqs)
+    eqs[k] = Dict("lhs" => "F_tgt", "rhs" => _faq(("j",), IJ, term; join = GATE, filter = filter))
+    return doc
+end
+const _APPLY = _op("/", _op("*", _ix("A_ij", "i", "j"), _ix("F", "i")), _ix("A_j", "j"))
+
+@testset "overlap gate: live reads around the gated apply agree with the interpreter" begin
+    docs = [
+        "live read in the filter" => _with_apply(_APPLY, _op("and", SLIVER, _op(">", _ix("F", "i"), -10.0))),
+        "constant and loop-index reads" => _with_apply(_op("+", _APPLY, _op("*", 0.25, _ix("F", 2)))),
+        "computed subscript" => _with_apply(
+            _op("/", _op("*", _ix("A_ij", "i", "j"), _ix("F", _op("-", 4, "i"))), _ix("A_j", "j"))
+        ),
+    ]
+    for (label, doc) in docs, F in ([1.0, 2.0, 3.0], [2.0, -40.0, 6.0])
+        pa() = Dict{String, Any}("M.F" => copy(F))
+        nat = rhs(EA.esm_problem(doc, (0.0, 1.0); compiler = :native, param_arrays = pa()))
+        ref = rhs(EA.esm_problem(doc, (0.0, 1.0); compiler = :interpreter, param_arrays = pa()))
+        @test all(isfinite, nat)
+        @test reinterpret(UInt64, nat) == reinterpret(UInt64, ref)
+    end
+    # The filter reads `F`: with `F[2] = -40` cell 2 drops out of target 1.
+    doc = docs[1].second
+    du = rhs(EA.esm_problem(doc, (0.0, 1.0); compiler = :native, param_arrays = Dict{String, Any}("M.F" => [2.0, -40.0, 6.0])))
+    @test du ≈ [2.0 / 1.5, 6.0]
+
+    # A loop-index read past the end of the buffer is the forcing gather's
+    # own error under both compilers.
+    doc = _with_apply(_op("/", _op("*", _ix("A_ij", "i", "j"), _ix("F", _op("+", "i", 1))), _ix("A_j", "j")))
+    for c in (:native, :interpreter)
+        err = try
+            rhs(EA.esm_problem(doc, (0.0, 1.0); compiler = c, param_arrays = Dict{String, Any}("M.F" => [1.0, 2.0, 3.0])))
+            nothing
+        catch e
+            e
+        end
+        @test err !== nothing && occursin("E_TREEWALK_PGATHER_OOB", sprint(showerror, err))
+    end
+end
+
+# The live gather node itself: a run-time subscript, read from the buffer as it
+# is at the call, and `E_TREEWALK_PGATHER_OOB` past its end.
+@testset "_NK_LIVE_GATHER" begin
+    buf = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
+    ctr = Ref(0)
+    sub = EA._mknode(kind = EA._NK_LOOPVAR, payload = ctr)
+    node = EA._live_gather_node(
+        EA._LiveGatherRef(buf, [3, 2], "F"),
+        [sub, EA._mknode(kind = EA._NK_LITERAL, literal = 2.0)]
+    )
+    @test node.kind === EA._NK_LIVE_GATHER
+    ctr[] = 2
+    @test EA._eval_node(node, Float64[], NamedTuple(), 0.0) == 50.0
+    buf[5] = -1.0
+    @test EA._eval_node(node, Float64[], NamedTuple(), 0.0) == -1.0
+    ctr[] = 4
+    err = try
+        EA._eval_node(node, Float64[], NamedTuple(), 0.0)
+        nothing
+    catch e
+        e
+    end
+    @test err isa EA.TreeWalkError && err.code == "E_TREEWALK_PGATHER_OOB"
+
+    # Its cadence tier is at least TIME (the buffer is refreshed at time
+    # boundaries) and the max of its subscripts' tiers above that: a subscript
+    # reading the state would make it DYNAMIC, never a per-`t` memo.
+    cache = EA._CSECache()
+    lit = EA._mknode(kind = EA._NK_LITERAL, literal = 1.0)
+    st = EA._mknode(kind = EA._NK_STATE, idx = 1)
+    ref = EA._LiveGatherRef(buf, [3, 2], "F")
+    @test EA._def_tier(EA._live_gather_node(ref, [sub, lit]), Int8[], 1, cache) === EA._TIER_TIME
+    @test EA._def_tier(EA._live_gather_node(ref, [st, lit]), Int8[], 1, cache) === EA._TIER_DYNAMIC
+end
+
+# Which subscripts a live gather takes under a symbolic resolve: loop counters
+# (a bound symbol or a contraction loop variable), literals and `+ - *` give a
+# `_NK_LIVE_GATHER`; a subscript that reads a state, a parameter, `t` or an
+# array is refused as it was before the live gather existed, so it never
+# reaches a run-time (or traced) read of a non-counter value.
+@testset "live gather: only loop-counter subscripts" begin
+    pg = Dict{String, Any}("F" => EA._PGatherArray([1.0, 2.0, 3.0], [3]))
+    avi = Dict{String, Tuple{Vector{Int}, Vector{Int}}}()
+    vm = Dict{String, Int}("m" => 1)
+    ca = Dict{String, Any}("conn" => [1, 2, 3])
+    bound = Set{String}(["k"])
+    V, I, N = EA.VarExpr, EA.IntExpr, EA.NumExpr
+    O(o, a...) = EA.OpExpr(o, EA.ASTExpr[a...])
+    res(sub) = EA._resolve_indices(O("index", V("F"), sub), avi, vm, ca, pg, nothing, bound)
+    lv = EA._LOOPVAR_PREFIX * "1"
+    for sub in (V("k"), O("-", I(4), V("k")), O("+", O("*", I(2), V("k")), I(-1)), O("-", V(lv), N(1.0)))
+        r = res(sub)
+        @test r isa EA.OpExpr && r.value isa EA._LiveGatherRef
+    end
+    for sub in (
+            O("+", V("k"), V("m")), O("+", V("k"), V("off")), O("+", V("k"), V("t")),
+            O("index", V("conn"), V("k")), O("/", V("k"), I(1)),
+        )
+        err = try
+            res(sub)
+            nothing
+        catch e
+            e
+        end
+        @test err isa EA.TreeWalkError
+    end
 end
 
 # The same regrid with the SOURCE RING itself fed by a data source. An envelope

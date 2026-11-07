@@ -155,7 +155,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
         # is concrete without the walker's type assert.
         buf = _cg_tab!(ctx, nd.payload::Vector{Float64})
         return :($buf[$(_cg_geo!(ctx, nd.idx, (nd, :idx)))])
-    elseif k === _NK_CONST_GATHER
+    elseif k === _NK_CONST_GATHER || k === _NK_LIVE_GATHER
         return _cg_const_gather(ctx, kc, nd)
     elseif k === _NK_STATE_GATHER
         return _cg_state_gather(ctx, kc, nd)
@@ -390,6 +390,10 @@ _cg_oplus_fn(op::Symbol) =
 function _cg_contraction_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi; span = nothing)
     spec = nd.payload::_ContractLoop
     haskey(kc.loops, spec.ref) && throw(_CodegenDecline(:contraction_loop_reentered))
+    if _compiler_plan_now().count_fold
+        cnt = _cg_count_loop(ctx, kc, nd, lo, st, hi, span)
+        cnt === nothing || return cnt
+    end
     fnsym = _cg_oplus_fn(nd.op)
     kv = _cg_name(ctx, "lk")
     acc = _cg_name(ctx, "lacc")
@@ -410,6 +414,159 @@ function _cg_contraction_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi; span = not
             $acc
         end
     end
+end
+
+# ---- The indicator sum as a count ---------------------------------------------
+# A `+` loop seeded from +0.0 over ONE contracted index whose body is exactly
+#
+#     ifelse(a(k) REL x, 1, 0)      or its mirror      ifelse(x REL' a(k), 1, 0)
+#
+# with REL one of `<= < >= >`, `a` the side that reads the counter and `x` the
+# side that does not, is the number of `k` with `a(k) REL x`: the bracket of a
+# table interpolation written in the format's own operators. Every term is
+# exactly 0.0 or 1.0 and every partial sum an integer far below 2^53, so the
+# fold is exact and ANY algorithm computing that count has its bits, for any
+# content of `a` (unsorted, NaN, ±0.0) and any `x` (a NaN matches nothing). It
+# is emitted as an integer count, `x` evaluated once (it is pure, and the range
+# is non-empty, so the fold evaluates it too). When `a` is a 1-D constant array
+# read at the counter itself and its entries over the range are in ascending
+# order, the entries satisfying `a <= x` or `a < x` are a prefix of them and
+# those satisfying `a >= x` or `a > x` a suffix, whatever `x` is, and the count
+# is a binary search for that prefix's or suffix's length; otherwise each entry
+# is compared, as the fold does.
+#
+# The match is on this one algebraic shape, never on where it came from. Any
+# other seed, ⊕, body, branch literals or comparison is the ordinary fold.
+# `nothing` declines to it.
+const _COUNT_MIRROR = Dict{Symbol, Symbol}(:<= => :>=, :< => :>, :>= => :<=, :> => :<)
+
+function _cg_count_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi, span)
+    spec = nd.payload::_ContractLoop
+    (nd.op === :+ && nd.literal === 0.0 && length(nd.children) == 1) || return nothing
+    isempty(spec.lo:spec.step:spec.hi) && return nothing
+    body = nd.children[1]
+    (body.kind === _NK_OP && body.op === :ifelse && length(body.children) == 3) ||
+        return nothing
+    cond, yes, no = body.children
+    (yes.kind === _NK_LITERAL && no.kind === _NK_LITERAL) || return nothing
+    (cond.kind === _NK_OP && length(cond.children) == 2) || return nothing
+    haskey(_COUNT_MIRROR, cond.op) || return nothing
+    l, r = cond.children
+    lk, rk = _reads_counter(l, spec.ref), _reads_counter(r, spec.ref)
+    lk == rk && return nothing
+    # `rel` is the relation with the counted side on the left: `a rel x`.
+    a, x, rel = lk ? (l, r, cond.op) : (r, l, _COUNT_MIRROR[cond.op])
+    # The branch values as the fold would emit them: under the scalar tier a
+    # literal is a hole, baked only when every member of the class agrees.
+    (_cg_emit(ctx, kc, yes) === 1.0 && _cg_emit(ctx, kc, no) === 0.0) || return nothing
+    cmp = _CG_CMP_FN[cond.op]
+    xv = _cg_name(ctx, "cx")
+    cv = _cg_name(ctx, "cn")
+    xe = _cg_emit(ctx, kc, x)
+    # The comparison with the operands in the order the document wrote them.
+    test(av) = lk ? Expr(:call, cmp, av, xv) : Expr(:call, cmp, xv, av)
+    axis = _count_const_axis(a, spec)
+    if axis !== nothing
+        tv = _cg_name(ctx, "ct")
+        hv = _cg_name(ctx, "ch")
+        mv = _cg_name(ctx, "cm")
+        tab = _cg_tab!(ctx, axis)
+        search = if rel === :<= || rel === :<
+            # The largest `m` with `axis[m] rel x`: the predicate holds on a
+            # prefix of an ascending axis, so the search keeps `axis[cn] rel x`
+            # (or `cn == 0`) and `!(axis[ch + 1] rel x)` (or `ch == n`).
+            quote
+                local $cv = 0
+                local $hv = length($tv)
+                while $cv < $hv
+                    local $mv = ($cv + $hv + 1) >>> 1
+                    if $(test(:($tv[$mv])))
+                        $cv = $mv
+                    else
+                        $hv = $mv - 1
+                    end
+                end
+                Float64($cv)
+            end
+        else
+            # The smallest `m` with `axis[m] rel x`: the predicate holds on a
+            # suffix, so the search keeps `axis[ch] rel x` (or `ch == n + 1`)
+            # and `!(axis[cn - 1] rel x)` (or `cn == 1`); the count is the
+            # suffix's length.
+            quote
+                local $cv = 1
+                local $hv = length($tv) + 1
+                while $cv < $hv
+                    local $mv = ($cv + $hv) >>> 1
+                    if $(test(:($tv[$mv])))
+                        $hv = $mv
+                    else
+                        $cv = $mv + 1
+                    end
+                end
+                Float64(length($tv) + 1 - $cv)
+            end
+        end
+        _tally_cascade!(:count_fold_search)
+        return quote
+            let
+                local $xv = $xe
+                local $tv = $tab
+                $search
+            end
+        end
+    end
+    kv = _cg_name(ctx, "lk")
+    kc.loops[spec.ref] = kv
+    span === nothing || (kc.spans[spec.ref] = span)
+    ae = try
+        _cg_emit(ctx, kc, a)
+    finally
+        delete!(kc.loops, spec.ref)
+        span === nothing || delete!(kc.spans, spec.ref)
+    end
+    _tally_cascade!(:count_fold_linear)
+    return quote
+        let
+            local $xv = $xe
+            local $cv = 0
+            for $kv in $lo:$st:$hi
+                $cv += $(test(ae)) ? 1 : 0
+            end
+            Float64($cv)
+        end
+    end
+end
+
+# Whether a subtree reads the loop counter `ref`.
+_reads_counter(n::_Node, ref) =
+    (n.kind === _NK_LOOPVAR && n.payload === ref) ||
+    _anyof(c -> _reads_counter(c, ref), n.children)
+
+# The entries a counted loop's body reads from `a` over the whole range, when
+# `a` is a 1-D constant array read at the counter itself and they ascend
+# (`a[k] <= a[k+1]`, which no NaN satisfies); else `nothing`. Each entry is the
+# one the run-time gather reads, through the same boundary policy; a subscript
+# that policy refuses keeps the loop, which raises it at run time as the fold
+# does.
+function _count_const_axis(a::_Node, spec::_ContractLoop)
+    (a.kind === _NK_CONST_GATHER && length(a.children) == 1) || return nothing
+    s = a.children[1]
+    (s.kind === _NK_LOOPVAR && s.payload === spec.ref) || return nothing
+    cg = a.payload::_ConstGatherArray
+    length(cg.dims) == 1 || return nothing
+    rng = spec.lo:spec.step:spec.hi
+    vals = Vector{Float64}(undef, length(rng))
+    for (i, k) in enumerate(rng)
+        (1 <= k <= cg.dims[1]) ||
+            (cg.dims[1] >= 1 && (cg.boundary[1] === :periodic || cg.boundary[1] === :clamp)) ||
+            return nothing
+        vals[i] = cg.flat[_const_gather_sub(cg, 1, k)]
+    end
+    for i in 1:(length(vals) - 1)
+        vals[i] <= vals[i + 1] || return nothing
+    end
+    return vals
 end
 
 # A scalar reduction nested in a nest's term (`_NEST_SCALAR_LOOPS`). Its bounds
@@ -433,13 +590,23 @@ end
 # out-of-range subscript takes the array's declared boundary policy, including
 # its throw), linearize with the build-time strides, read the flat buffer. The
 # `let` bindings are sequential, which is the walker's subscript order.
+# `_NK_LIVE_GATHER` is the same read of a live buffer; under a TABLE fold its
+# per-entry column holds the OFFSETS (fixed per entry), never the values, which
+# the buffer supplies at each call.
 function _cg_const_gather(ctx::_CGCtx, kc, nd::_Node)
     cg = nd.payload::_ConstGatherArray
     children = nd.children
     if kc isa _CGScalarCtx
-        pre = _ac_const_gather_entries(kc, cg, children)
-        pre === nothing ||
-            return :($(_ac_entry_local(ctx, pre, kc.entry))[$((kc.entry::_ACEntries).ev)])
+        if nd.kind === _NK_LIVE_GATHER
+            offs = _ac_live_gather_entries(kc, cg, children)
+            offs === nothing || return :(
+                $(_cg_tab!(ctx, cg.flat))[$(_ac_entry_local(ctx, offs, kc.entry))[$((kc.entry::_ACEntries).ev)]]
+            )
+        else
+            pre = _ac_const_gather_entries(kc, cg, children)
+            pre === nothing ||
+                return :($(_ac_entry_local(ctx, pre, kc.entry))[$((kc.entry::_ACEntries).ev)])
+        end
     end
     cgv = _cg_name(ctx, "cga")
     binds = Any[:($cgv = $(_cg_tab!(ctx, cg)))]
@@ -485,6 +652,26 @@ function _ac_const_gather_entries(kc::_CGScalarCtx, cg::_ConstGatherArray, child
         vals[e] = cg.flat[lin]
     end
     return vals
+end
+
+# The linear offset a live gather reads at each TABLE entry; `nothing` when the
+# gather is not resolvable per entry or some entry's subscript is out of range,
+# which stays the call's error (raised only if that entry's term is evaluated).
+function _ac_live_gather_entries(kc::_CGScalarCtx, cg::_ConstGatherArray, children)
+    cols = _ac_entry_cols(kc, children)
+    cols === nothing && return nothing
+    nent = length(cols[1])
+    offs = Vector{Int}(undef, nent)
+    for e in 1:nent
+        lin = 1
+        for d in eachindex(cols)
+            x = cols[d][e]
+            1 <= x <= cg.dims[d] || return nothing
+            lin += (x - 1) * cg.strides[d]
+        end
+        offs[e] = lin
+    end
+    return offs
 end
 
 # The slot a state gather reads at each TABLE entry, 0 where a subscript is out

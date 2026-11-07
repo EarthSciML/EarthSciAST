@@ -578,8 +578,10 @@ end
 # (the plan a strict compiler's refusal sends a test to): it must not unroll, so
 # it takes the per-cell contraction loop when the loop takes it and is refused
 # by name when not. `out[i] = ⊕_{k ∈ 1:2:2K-1} body(F[i], W[k])` with `F` a live
-# forcing buffer, which the whole-array nest cannot keep symbolic, and a
-# non-unit step, which the affine tier's run-time fold does not take.
+# forcing buffer and a non-unit step, which the affine tier's run-time fold does
+# not take. The whole-array nest does take it (it reads `F[i]` from the buffer
+# at the symbolic output index), so the plans here switch the nest off to reach
+# the routes below it; the last testset checks the nest itself.
 function _cl_long_doc(n::Int, K::Int; orsr::Bool = false)
     W = [1.0 + k / 8 for k in 1:(2K - 1)]
     return Dict{String, Any}(
@@ -621,7 +623,10 @@ function _cl_long_doc(n::Int, K::Int; orsr::Bool = false)
         )
     )
 end
-const _CL_NONSTRICT = _CL_ESS._plan_with(_CL_ESS._compiler_plan(:native); strict = false)
+const _CL_NONSTRICT = _CL_ESS._plan_with(
+    _CL_ESS._compiler_plan(:native); strict = false, array_contraction = false
+)
+const _CL_NO_NEST = _CL_ESS._plan_with(_CL_ESS._compiler_plan(:native); array_contraction = false)
 function _cl_long_du(doc, n, compiler)
     return withenv("ESS_CONTRACTION_LOOP_MIN" => "8") do
         _CL_ESS._reset_cascade_tally!()
@@ -674,7 +679,7 @@ end
         # Its ⊕ is `+`, which the affine run-time fold takes; the step of 2 on
         # `k` is what it does not.
         e = try
-            _cl_long_du(_cl_long_doc(n, 10), n, :native); nothing
+            _cl_long_du(_cl_long_doc(n, 10), n, _CL_NO_NEST); nothing
         catch err
             err
         end
@@ -682,5 +687,12 @@ end
             e.code == _CL_ESS.ERROR_CODES.COMPILER_REFUSED_RULE
         @test occursin("unit-step ranges only, and `k` steps by 2 from 1 to 19", e.detail)
         @test !occursin("this one is `+`", e.detail)
+    end
+    @testset "strict native's whole-array nest reads the live buffer, bit for bit" begin
+        for orsr in (false, true), K in (10, 1000)
+            dn, _ = _cl_long_du(_cl_long_doc(n, K; orsr), n, :native)
+            di, _ = _cl_long_du(_cl_long_doc(n, K; orsr), n, :interpreter)
+            @test reinterpret(UInt64, dn) == reinterpret(UInt64, di)
+        end
     end
 end

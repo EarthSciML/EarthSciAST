@@ -104,9 +104,9 @@ end
     # ── The short-contraction route (#479) ────────────────────────────────────
     # `D(out[a,b,c,d]) = Σ_k W[k]·F[a,b,c,d]`: a constant-bound contraction whose
     # body reads an inline `const` at the contracted index and a LIVE forcing
-    # buffer `F` at the output index. The whole-array nest cannot keep that
-    # forcing read symbolic; the affine tier's run-time fold reads both, the
-    # inline `const` as a const lane, so it compiles the equation once.
+    # buffer `F` at the output index. The affine tier's run-time fold, offered
+    # it before the whole-array nest, reads both, the inline `const` as a const
+    # lane, so it compiles the equation once.
     @testset "a short contraction over a live forcing read compiles once" begin
         W = Float64[1, 2, 3, 4, 5, 6, 7, 8]
         doc = _pr_rank4_doc(W)
@@ -280,8 +280,14 @@ end
                 compiler = compiler
             ); dm
         )
-        @test _pr_refuses(() -> build_r(:native), "refuses 'g'"; one_cell = true)
+        # The whole-array nest takes the ragged fill, reading `F[a]` from the
+        # live buffer; past the emitter's node budget (a refusal boundary under
+        # `native`) nothing compiles it once and it is refused by name.
         @test build_r(:interpreter).caches["g"] == [10.0 * a for a in 1:N]
+        @test all(build_r(:native).caches["g"] .=== build_r(:interpreter).caches["g"])
+        @test withenv("ESS_CODEGEN_NODE_BUDGET" => "0") do
+            _pr_refuses(() -> build_r(:native), "refuses 'g'"; one_cell = true)
+        end
     end
 
     # ── faq-valued initialization equations (#482) ────────────────────────────
@@ -950,12 +956,13 @@ end
     end
 
     # What no compile-once form takes. A RAGGED contraction (its bound an
-    # expression of the output index) is not the affine tier's, and the nest
-    # cannot keep its live forcing read symbolic, so the only form left is the
-    # per-cell build: a strict compiler refuses it by name, naming the tier that
-    # was offered it and declined, and not claiming a decline from one that was
-    # not. Its one cell is evaluated first, in full when it is short, and only
-    # at the ends of its contracted range when it is long, which the note says.
+    # expression of the output index) is not the affine tier's, and past the
+    # emitter's node budget (a refusal boundary under `native`) the nest that
+    # otherwise takes it declines, so the only form left is the per-cell build:
+    # a strict compiler refuses it by name, naming the tier that was offered it
+    # and declined, and not claiming a decline from one that was not. Its one
+    # cell is evaluated first, in full when it is short, and only at the ends of
+    # its contracted range when it is long, which the note says.
     @testset "a contraction no compile-once form takes is refused by name" begin
         N = 3
         rag(len) = Dict{String, Any}(
@@ -1006,19 +1013,24 @@ end
             initial_conditions = Dict("u[$i]" => 0.0 for i in 1:N),
             param_arrays = Dict("F" => collect(1.0:N)), compiler = c
         )
-        e = err_of(() -> build(4, :native))
+        nobudget(f) = withenv(f, "ESS_CODEGEN_NODE_BUDGET" => "0")
+        e = nobudget(() -> err_of(() -> build(4, :native)))
         @test code_of(e) == _PR.ERROR_CODES.COMPILER_REFUSED_RULE
         @test occursin("declined by the whole-array contraction tier", e.detail)
         @test occursin("takes no ragged contraction", e.detail)
         @test !occursin("declined by the affine", e.detail)
         @test occursin("per-cell build", e.detail)
         @test occursin(_PR._ONE_CELL_NOTE, e.detail)
-        e_long = err_of(() -> build(5000, :native))
+        e_long = nobudget(() -> err_of(() -> build(5000, :native)))
         @test code_of(e_long) == _PR.ERROR_CODES.COMPILER_REFUSED_RULE
         @test occursin(_PR._PART_CELL_NOTE, e_long.detail)
         f!, u0, p, _, vm = build(4, :interpreter)
         du = similar(u0); f!(du, u0, p, 0.0)
         @test [du[vm["u[$i]"]] for i in 1:N] == [i * 10.0 for i in 1:N]
+        # Within the budget, the nest reads `F[i]` from the live buffer.
+        fn!, un, pn, _, vmn = build(4, :native)
+        dn = similar(un); fn!(dn, un, pn, 0.0)
+        @test all(dn[vmn["u[$i]"]] === du[vm["u[$i]"]] for i in 1:N)
     end
 
     # The diagnostic reports what it evaluated. A join gate that admits none of

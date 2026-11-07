@@ -99,6 +99,9 @@ mod tuple_tests;
 #[cfg(feature = "xla")]
 pub mod xla_emit;
 
+/// The A/B seam of the compiler rewrites ([`crate::ProblemOptions::rewrites`]).
+#[doc(hidden)]
+pub use crate::problem::CompilerRewrites;
 #[cfg(test)]
 pub(crate) use exec::section_primes;
 pub(in crate::simulate_array) use exec::{
@@ -369,9 +372,11 @@ pub(crate) type TapeBuild = Result<std::sync::Arc<TapeProgram>, Rc<DeclinedTape>
 /// * the precision in force (`crate::precision::active`), which rounds every
 ///   literal the build folds;
 /// * whether the tape serves the observed passes (the runtime mode), which
-///   decides what it exports.
+///   decides what it exports;
+/// * the compiler rewrites the build applies (`ArrayCompiled::rewrites`),
+///   which decide the instructions a recognised shape lowers to.
 ///
-/// The last four are the key an entry is looked up by. Parameter VALUES and
+/// The last five are the key an entry is looked up by. Parameter VALUES and
 /// the forcing buffer's VALUES are not inputs: the program reads parameters
 /// on every call and loads the forcing buffer in its CONST and SEGMENT
 /// sections. So a new parameter vector, or new forcing data, needs no rebuild:
@@ -387,6 +392,7 @@ struct CachedTape {
     forcing_buffer: Vec<(String, Vec<usize>)>,
     precision: crate::precision::Precision,
     serves_passes: bool,
+    rewrites: crate::problem::CompilerRewrites,
     prog: TapeBuild,
     report: Rc<TapeBuildReport>,
 }
@@ -412,11 +418,13 @@ impl ArrayCompiled {
         let forcing_buffer = self.forcing_buffer_signature();
         let precision = crate::precision::active();
         let serves_passes = self.tape_serves_passes();
+        let rewrites = self.rewrites;
         if let Some(e) = self.tape_cache.entries.borrow().iter().find(|e| {
             e.discrete_forcing == forcing
                 && e.forcing_buffer == forcing_buffer
                 && e.precision == precision
                 && e.serves_passes == serves_passes
+                && e.rewrites == rewrites
         }) {
             return (e.prog.clone(), Rc::clone(&e.report));
         }
@@ -430,6 +438,7 @@ impl ArrayCompiled {
             forcing_buffer,
             precision,
             serves_passes,
+            rewrites,
             prog: prog.clone(),
             report: Rc::clone(&report),
         });

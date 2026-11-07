@@ -572,3 +572,508 @@ fn shape_op_bases_under_loop_symbol_subscripts() {
     };
     flat_in_n(make, 3, 40);
 }
+
+// ---------------------------------------------------------------------------
+// The counted bracket (issue #588): a rank-0 indicator sum lowered to one
+// `Instr::Count`, bit-identical to the fold it replaces.
+// ---------------------------------------------------------------------------
+
+/// `ifelse(cmp, 1, 0)`.
+fn indicator(cmp: Value) -> Value {
+    op("ifelse", vec![cmp, json!(1), json!(0)])
+}
+
+/// A column of `n` levels: `c[l]` is the rank-0 `faq` `body(l)` over
+/// `k in [1, n]`, and the state `u` relaxes toward it. The axes a body may
+/// read: `zc` (a const observed, increasing), `zp` (increasing, built from a
+/// parameter, so unknown at build), `w` (a state, in no order), each over
+/// `k`; `u[l]` is the query.
+fn count_doc(n: i64, body: Value) -> Value {
+    let zc: Vec<f64> = (0..n).map(|k| 3.0 * k as f64 / (n - 1) as f64).collect();
+    doc(
+        "counted_bracket",
+        json!({
+            "u": {"type": "unknown", "shape": ["lev"], "default": 1.0},
+            "w": {"type": "unknown", "shape": ["lev"], "default": 0.5},
+            "dz": {"type": "parameter", "default": 3.0 / (n - 1) as f64},
+            "zc": {"type": "unknown", "shape": ["lev"]},
+            "zp": {"type": "unknown", "shape": ["lev"]},
+            "c": {"type": "unknown", "shape": ["lev"]}
+        }),
+        vec![
+            json!({"lhs": "zc", "rhs": {"op": "const", "args": [], "value": zc}}),
+            json!({"lhs": "zp", "rhs": faq(&["k"], json!({"k": [1, n]}),
+                op("*", vec![json!("dz"), op("-", vec![json!("k"), json!(1)])]))}),
+            json!({"lhs": "c", "rhs": faq(&["l"], json!({"l": [1, n]}), json!({
+                "op": "faq", "args": [], "output_idx": [], "ranges": {"k": [1, n]},
+                "expr": body
+            }))}),
+            d_eq(
+                "u",
+                &["l"],
+                json!({"l": [1, n]}),
+                op(
+                    "+",
+                    vec![
+                        op("*", vec![json!(-0.1), ix("u", vec![json!("l")])]),
+                        op("*", vec![json!(0.01), ix("c", vec![json!("l")])]),
+                    ],
+                ),
+            ),
+            d_eq(
+                "w",
+                &["l"],
+                json!({"l": [1, n]}),
+                op("*", vec![json!(-0.05), ix("w", vec![json!("l")])]),
+            ),
+        ],
+        None,
+    )
+}
+
+fn axis_at(axis: &str) -> Value {
+    ix(axis, vec![json!("k")])
+}
+
+fn query() -> Value {
+    ix("u", vec![json!("l")])
+}
+
+/// The `Instr::Count`s of `prog`, as `(rel, sorted)`.
+fn counts(prog: &TapeProgram) -> Vec<(CountRel, bool)> {
+    prog.instrs
+        .iter()
+        .filter_map(|i| match i {
+            Instr::Count { rel, sorted, .. } => Some((*rel, *sorted)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every comparison, with the axis on either side, over a literal axis
+/// (bisected without a check), a parameter-built one (checked once per call,
+/// then bisected) and a state in no order (counted entry by entry): one
+/// `Instr::Count` each, no reduction, and the oracle's bits.
+#[test]
+fn counted_bracket_every_relation_and_axis() {
+    let spellings: [(&str, bool, CountRel); 6] = [
+        ("<=", true, CountRel::Le),
+        ("<", true, CountRel::Lt),
+        (">=", true, CountRel::Ge),
+        (">", true, CountRel::Gt),
+        // The query on the left: the mirrored relation.
+        (">=", false, CountRel::Le),
+        ("<", false, CountRel::Gt),
+    ];
+    for axis in ["zc", "zp", "w"] {
+        for (cmp, axis_left, rel) in spellings {
+            let make = |n: i64| {
+                let args = if axis_left {
+                    vec![axis_at(axis), query()]
+                } else {
+                    vec![query(), axis_at(axis)]
+                };
+                count_doc(n, indicator(op(cmp, args)))
+            };
+            let prog = flat_in_n(make, 5, 37);
+            assert_eq!(
+                counts(&prog),
+                vec![(rel, axis == "zc")],
+                "{axis} {cmp} (axis left: {axis_left})"
+            );
+            assert_eq!(count(&prog, "Reduce"), 0, "{axis} {cmp}: no fold is left");
+        }
+    }
+}
+
+/// A query that is NaN at every cell satisfies no comparison: the count is 0,
+/// as every term of the fold is.
+#[test]
+fn counted_bracket_nan_query() {
+    let nan = op(
+        "/",
+        vec![
+            op("-", vec![query(), query()]),
+            op("-", vec![query(), query()]),
+        ],
+    );
+    for axis in ["zc", "w"] {
+        for cmp in ["<=", ">"] {
+            let prog = oracle_ab(count_doc(
+                9,
+                indicator(op(cmp, vec![axis_at(axis), nan.clone()])),
+            ))
+            .0;
+            assert_eq!(counts(&prog).len(), 1, "{axis} {cmp}");
+        }
+    }
+}
+
+/// The standalone rank-0 form: a scalar query, a scalar count.
+#[test]
+fn counted_bracket_standalone_scalar() {
+    let make = |n: i64| {
+        let zc: Vec<f64> = (0..n).map(|k| 3.0 * k as f64 / (n - 1) as f64).collect();
+        doc(
+            "counted_scalar",
+            json!({
+                "s": {"type": "unknown", "default": 1.0},
+                "zc": {"type": "unknown", "shape": ["lev"]},
+                "c": {"type": "unknown"}
+            }),
+            vec![
+                json!({"lhs": "zc", "rhs": {"op": "const", "args": [], "value": zc}}),
+                json!({"lhs": "c", "rhs": {
+                    "op": "faq", "args": [], "output_idx": [], "ranges": {"k": [1, n]},
+                    "expr": indicator(op("<=", vec![axis_at("zc"), json!("s")]))
+                }}),
+                json!({"lhs": {"op": "D", "args": ["s"], "wrt": "t"},
+                       "rhs": op("+", vec![op("*", vec![json!(-0.1), json!("s")]),
+                                           op("*", vec![json!(0.01), json!("c")])])}),
+            ],
+            None,
+        )
+    };
+    let prog = flat_in_n(make, 5, 37);
+    assert_eq!(counts(&prog), vec![(CountRel::Le, true)]);
+}
+
+/// Shapes next to the bracket that are not a count, or not one this
+/// recognition can prove: each keeps the general lowering (no
+/// `Instr::Count`) and the oracle's bits.
+#[test]
+fn counted_bracket_near_misses_decline() {
+    let cmp = |o: &str| op(o, vec![axis_at("zc"), query()]);
+    let ite = |c: Value, a: Value, b: Value| op("ifelse", vec![c, a, b]);
+    let n = 9i64;
+    let plain = |body: Value| count_doc(n, body);
+    let with = |body: Value, key: &str, v: Value| {
+        let mut d = count_doc(n, body);
+        d["models"]["M"]["equations"][2]["rhs"]["expr"][key] = v;
+        d
+    };
+    let cases: Vec<(&str, Value)> = vec![
+        // The complement: under a NaN query not the count of the mirrored
+        // relation, and not a count of anything this instruction states.
+        ("complement", plain(ite(cmp("<="), json!(0), json!(1)))),
+        ("weight 2", plain(ite(cmp("<="), json!(2), json!(0)))),
+        ("equality", plain(indicator(cmp("==")))),
+        (
+            "query reads k",
+            plain(indicator(op(
+                "<=",
+                vec![axis_at("zc"), op("+", vec![query(), json!("k")])],
+            ))),
+        ),
+        (
+            "shifted axis read",
+            plain(indicator(op(
+                "<=",
+                vec![ix("zc", vec![op("-", vec![json!("k"), json!(0)])]), query()],
+            ))),
+        ),
+        (
+            "product of indicators",
+            plain(op(
+                "*",
+                vec![
+                    indicator(cmp("<=")),
+                    indicator(op(">=", vec![axis_at("zp"), query()])),
+                ],
+            )),
+        ),
+        (
+            "filtered",
+            with(
+                indicator(cmp("<=")),
+                "filter",
+                op(">", vec![json!("k"), json!(1)]),
+            ),
+        ),
+        (
+            "max reduction",
+            with(indicator(cmp("<=")), "reduce", json!("max")),
+        ),
+        (
+            "axis past its extent",
+            with(
+                indicator(op("<=", vec![axis_at("w"), query()])),
+                "ranges",
+                json!({"k": [1, n + 2]}),
+            ),
+        ),
+    ];
+    for (label, d) in cases {
+        let prog = oracle_ab(d).0;
+        assert!(
+            counts(&prog).is_empty(),
+            "{label}: must keep the general lowering"
+        );
+    }
+    // Two contracted indices.
+    let mut d = count_doc(n, indicator(cmp("<=")));
+    d["models"]["M"]["equations"][2]["rhs"]["expr"]["ranges"] = json!({"k": [1, n], "m": [1, 2]});
+    let prog = oracle_ab(d).0;
+    assert!(counts(&prog).is_empty(), "two contracted indices");
+}
+
+/// The A/B documents (`bench/interp_bracket`): the composition is taped with
+/// one count per level box, agrees with the oracle bit for bit, and gives
+/// exactly the `interp.linear` spelling's derivative.
+#[test]
+fn counted_bracket_benchmark_documents() {
+    let read = |name: &str| -> Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../bench/interp_bracket")
+            .join(name);
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("benchmark document"))
+            .expect("benchmark document parses")
+    };
+    let const_compose = read("interp_bracket_const_compose_N59.esm");
+    let runtime = read("interp_bracket_runtime_compose_N59.esm");
+    let fn_doc = read("interp_bracket_const_fn_N59.esm");
+    let (prog, _) = oracle_ab(const_compose.clone());
+    assert_eq!(counts(&prog), vec![(CountRel::Le, true)]);
+    assert_eq!(
+        faulting_gathers(&prog),
+        0,
+        "a clamped bracket's table reads cannot fault"
+    );
+    let (prog, _) = oracle_ab(runtime.clone());
+    assert_eq!(counts(&prog), vec![(CountRel::Le, false)]);
+    // The three spellings integrate the same ODE: the same derivative, bit for bit.
+    let dy = |d: &Value| {
+        let file = crate::parse::load_string(&d.to_string()).expect("loads");
+        let compiled = ArrayCompiled::from_file(&file).expect("compiles");
+        let n = compiled.state_variable_names().len();
+        let state = seeded_state(n, 7, 0.25, 2.5);
+        let params = HashMap::new();
+        let mut scratch = compiled.debug_new_scratch_taped().expect("taped");
+        let p = compiled.debug_resolve_params(&params);
+        let mut out = vec![0.0; n];
+        compiled.debug_eval_rhs_into(
+            &state,
+            1.3,
+            &p,
+            &mut out,
+            &mut scratch,
+            &mut RhsStats::default(),
+        );
+        (
+            compiled.state_variable_names().to_vec(),
+            out.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+        )
+    };
+    let a = dy(&fn_doc);
+    assert_eq!(a, dy(&const_compose), "interp.linear vs the composition");
+    assert_eq!(a, dy(&runtime), "interp.linear vs the run-time composition");
+}
+
+/// The count itself, against the plain fold of the indicator, on windows
+/// with signed zeros, infinities, NaNs and ties, sorted and not.
+#[test]
+fn count_rel_is_the_indicator_fold() {
+    let pool = [
+        f64::NEG_INFINITY,
+        -2.5,
+        -0.0,
+        0.0,
+        1.0,
+        1.0,
+        3.5,
+        f64::INFINITY,
+        f64::NAN,
+    ];
+    let queries = [
+        f64::NEG_INFINITY,
+        -3.0,
+        -0.0,
+        0.0,
+        0.5,
+        1.0,
+        3.5,
+        9.0,
+        f64::INFINITY,
+        f64::NAN,
+    ];
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    for trial in 0..4000 {
+        let len = (next() % 9) as usize;
+        let mut w: Vec<f64> = (0..len)
+            .map(|_| pool[(next() % pool.len() as u64) as usize])
+            .collect();
+        if trial % 2 == 0 {
+            w.retain(|v| !v.is_nan());
+            w.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        }
+        let sorted = non_decreasing(w.len(), |j| w[j]);
+        for rel in [CountRel::Le, CountRel::Lt, CountRel::Ge, CountRel::Gt] {
+            for &x in &queries {
+                let fold = w.iter().fold(0.0f64, |acc, &a| {
+                    acc + if rel.holds(a, x) { 1.0 } else { 0.0 }
+                });
+                let got = count_rel(rel, w.len(), |j| w[j], sorted, x);
+                assert_eq!(
+                    got.to_bits(),
+                    fold.to_bits(),
+                    "{rel:?} {x} on {w:?} (sorted {sorted})"
+                );
+            }
+        }
+    }
+}
+
+/// Const-array gathers that can fault, and conditional fault scans.
+fn faulting_gathers(prog: &TapeProgram) -> usize {
+    prog.instrs
+        .iter()
+        .filter(|i| {
+            matches!(
+                i,
+                Instr::DataGather { faults: true, .. } | Instr::FaultScan { .. }
+            )
+        })
+        .count()
+}
+
+/// A const-array read at a count clamped into the array's extent cannot
+/// fault, so it compiles without the fault machinery; at the bare count
+/// (which can be 0) it keeps it. Both agree with the oracle bit for bit.
+#[test]
+fn const_gather_at_a_clamped_count() {
+    let n = 9i64;
+    let count = || {
+        json!({"op": "faq", "args": [], "output_idx": [], "ranges": {"k": [1, n]},
+               "expr": indicator(op("<=", vec![axis_at("zc"), query()]))})
+    };
+    let read = |sub: Value| {
+        let mut d = count_doc(n, indicator(op("<=", vec![axis_at("zc"), query()])));
+        d["models"]["M"]["equations"][2]["rhs"]["expr"] = ix("zc", vec![sub]);
+        d
+    };
+    let clamped = op(
+        "min",
+        vec![op("max", vec![count(), json!(1)]), json!(n - 1)],
+    );
+    let prog = oracle_ab(read(clamped.clone())).0;
+    assert_eq!(faulting_gathers(&prog), 0, "zc[clamp(count)]");
+    let prog = oracle_ab(read(op("+", vec![clamped, json!(1)]))).0;
+    assert_eq!(faulting_gathers(&prog), 0, "zc[clamp(count) + 1]");
+    let prog = oracle_ab(read(count())).0;
+    assert!(faulting_gathers(&prog) > 0, "zc[count] can read zc[0]");
+}
+
+/// A count window the axis does not hold at run time (a program whose
+/// window outgrew its axis) is refused in every build profile, not read past
+/// the axis's end.
+#[test]
+fn count_window_outside_its_axis_is_refused() {
+    let d = count_doc(9, indicator(op("<=", vec![axis_at("w"), query()])));
+    let file = crate::parse::load_string(&d.to_string()).expect("fixture document loads");
+    let compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
+    let (mut prog, _) = taped(compiled.build_tape_opts(&HashSet::new(), None));
+    let mut widened = 0;
+    for ins in &mut prog.instrs {
+        if let Instr::Count { n, .. } = ins {
+            *n += 1;
+            widened += 1;
+        }
+    }
+    assert_eq!(widened, 1);
+    let n = compiled.state_variable_names().len();
+    let param_vec = compiled.debug_resolve_params(&HashMap::new());
+    let mut scratch = super::super::RhsScratch::new(&compiled.var_shapes);
+    scratch.install_tape(std::sync::Arc::new(prog));
+    let state = seeded_state(n, 1, 0.25, 2.5);
+    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut dy = vec![0.0f64; n];
+        compiled.debug_eval_rhs_into(
+            &state,
+            0.0,
+            &param_vec,
+            &mut dy,
+            &mut scratch,
+            &mut RhsStats::default(),
+        );
+    }));
+    let err = run.expect_err("an out-of-axis window must be refused");
+    let msg = err
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default();
+    assert!(msg.contains("does not hold the window"), "{msg}");
+}
+
+/// The count rewrite is a build option of the model, part of the tape
+/// cache's key: switching it off on the same model builds (and serves) the
+/// general fold, and switching it back serves the counted program again.
+#[test]
+fn count_rewrite_is_a_build_option() {
+    let d = count_doc(9, indicator(op("<=", vec![axis_at("zc"), query()])));
+    let file = crate::parse::load_string(&d.to_string()).expect("fixture document loads");
+    let mut compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
+    let tape = |c: &ArrayCompiled| c.tape(&HashSet::new()).0.expect("taped");
+    let on = tape(&compiled);
+    assert_eq!(counts(&on).len(), 1);
+    compiled.rewrites.count_fold = false;
+    let off = tape(&compiled);
+    assert!(counts(&off).is_empty(), "the general fold");
+    assert!(count(&off, "Reduce") > 0);
+    compiled.rewrites.count_fold = true;
+    assert!(
+        std::sync::Arc::ptr_eq(&on, &tape(&compiled)),
+        "served from the cache"
+    );
+}
+
+/// A count the instruction cannot state declines to the general reduction
+/// instead of refusing the rule: here a standalone rank-0 sum whose query is
+/// the whole `u` (an array over its own box) rather than one element. It is
+/// taped by the general lowering, with the oracle's bits, beside the
+/// per-cell count.
+#[test]
+fn counted_bracket_query_box_mismatch_declines() {
+    let mut d = count_doc(9, indicator(op("<=", vec![axis_at("zc"), query()])));
+    d["models"]["M"]["variables"]["s"] = json!({"type": "unknown", "shape": ["lev"]});
+    d["models"]["M"]["equations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"lhs": "s", "rhs": {
+            "op": "faq", "args": [], "output_idx": [], "ranges": {"k": [1, 9]},
+            "expr": indicator(op("<=", vec![axis_at("zc"), json!("u")]))
+        }}));
+    let prog = oracle_ab(d).0;
+    assert_eq!(counts(&prog), vec![(CountRel::Le, true)], "only c's count");
+}
+
+/// A const-array read whose subscript the clamped-bracket route lowers but
+/// cannot prove inside the array (`zc[assign[l]]`, `assign` a const index
+/// array) is resolved at build time instead (one table gather), the route's
+/// attempt leaves no instruction of its own behind, and the oracle's bits
+/// hold.
+#[test]
+fn const_gather_declined_bracket_leaves_no_trace() {
+    let n = 9i64;
+    let assign: Vec<i64> = (0..n).map(|l| n - l).collect();
+    let mut d = count_doc(n, indicator(op("<=", vec![axis_at("zc"), query()])));
+    d["models"]["M"]["variables"]["assign"] = json!({"type": "unknown", "shape": ["lev"]});
+    d["models"]["M"]["equations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"lhs": "assign", "rhs": {"op": "const", "args": [], "value": assign}}));
+    d["models"]["M"]["equations"][2]["rhs"]["expr"] =
+        ix("zc", vec![ix("assign", vec![json!("l")])]);
+    let prog = oracle_ab(d).0;
+    assert_eq!(count(&prog, "TableGather"), 1);
+    for op in ["Gather", "IndexGather", "DataGather", "Count", "FaultScan"] {
+        assert_eq!(count(&prog, op), 0, "{op}");
+    }
+    assert_eq!(faulting_gathers(&prog), 0);
+}

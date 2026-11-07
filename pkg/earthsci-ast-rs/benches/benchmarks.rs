@@ -415,6 +415,250 @@ fn benchmark_memory_allocation(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// Interpolation bracket (issue #588): one right-hand side, three spellings.
+// ---------------------------------------------------------------------------
+
+/// One `native` right-hand side of a `bench/interp_bracket` document, ready to
+/// call: the compiled model, its scratch, parameters and a state.
+struct BracketRhs {
+    prob: earthsci_ast::EsmProblem,
+    scratch: earthsci_ast::simulate_array::RhsScratch,
+    params: Vec<f64>,
+    state: Vec<f64>,
+}
+
+impl BracketRhs {
+    /// Build `bench/interp_bracket/<doc>` under `native`, with the counted
+    /// bracket recognised or not ([`earthsci_ast::simulate_array::tape::CompilerRewrites`]).
+    fn new(doc: &str, count_rewrite: bool) -> BracketRhs {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../bench/interp_bracket")
+            .join(doc);
+        let mut rewrites = earthsci_ast::simulate_array::tape::CompilerRewrites::default();
+        rewrites.count_fold = count_rewrite;
+        let prob = earthsci_ast::esm_problem(
+            path.as_path(),
+            (0.0, 1.0),
+            earthsci_ast::ProblemOptions {
+                compiler: Some(earthsci_ast::Compiler::Native),
+                rewrites,
+                rhs: earthsci_ast::Rhs::Always,
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("{doc}: {e}"));
+        let compiled = prob.debug_array_compiled().expect("a right-hand side");
+        let scratch = compiled.debug_new_scratch_taped().expect("taped");
+        let params = compiled.debug_resolve_params(prob.p());
+        let state = bracket_state(compiled.state_variable_names());
+        BracketRhs {
+            prob,
+            scratch,
+            params,
+            state,
+        }
+    }
+
+    fn call(&mut self, dy: &mut [f64]) {
+        let compiled = self.prob.debug_array_compiled().expect("a right-hand side");
+        compiled.debug_eval_rhs_into(
+            &self.state,
+            BRACKET_T,
+            &self.params,
+            dy,
+            &mut self.scratch,
+            &mut earthsci_ast::simulate_array::RhsStats::default(),
+        );
+    }
+}
+
+/// The time every bracket call is made at: the forcing moves some queries
+/// past each end of the axis.
+const BRACKET_T: f64 = 1.3;
+
+/// `(variable, 1-based level)` of a state slot name `u[3]`.
+fn bracket_slot(name: &str) -> (String, usize) {
+    let (var, rest) = name.split_once('[').expect("an array state");
+    (
+        var.to_string(),
+        rest.trim_end_matches(']').parse().expect("a level"),
+    )
+}
+
+/// A state with every level different: `u = 10 + l/7`, `v = 2 - l/50`,
+/// `th = 290 + l/3`.
+fn bracket_state(names: &[String]) -> Vec<f64> {
+    names
+        .iter()
+        .map(|n| {
+            let (var, l) = bracket_slot(n);
+            let l = l as f64;
+            match var.as_str() {
+                "u" => 10.0 + l / 7.0,
+                "v" => 2.0 - l / 50.0,
+                _ => 290.0 + l / 3.0,
+            }
+        })
+        .collect()
+}
+
+/// The hand-written right-hand side: the formulas of
+/// `bench/interp_bracket/generate.py` evaluated once into tables at setup (the
+/// axis is a run-time array: nothing here assumes it is sorted until it has
+/// checked), then per call one bracket per level found by bisection and three
+/// pinned blends. Writes `dy` in the compiled model's state order.
+struct HandBracket {
+    z: Vec<f64>,
+    tables: [Vec<f64>; 3],
+    zq: Vec<f64>,
+    /// Per state slot: (table, level - 1).
+    slots: Vec<(usize, usize)>,
+    sorted: bool,
+}
+
+impl HandBracket {
+    fn new(n: usize, names: &[String], dz0: f64) -> HandBracket {
+        let k = |k: usize| k as f64;
+        let z: Vec<f64> = (1..=n)
+            .map(|i| (k(i) - 1.0) * (dz0 + (k(i) - 1.0)))
+            .collect();
+        let u = (1..=n)
+            .map(|i| (10.0 + 0.5 * k(i)) - 0.002 * (k(i) * k(i)))
+            .collect();
+        let v = (1..=n).map(|i| 2.0 - 0.05 * k(i)).collect();
+        let th = z.iter().map(|&zk| 290.0 + 0.004 * zk).collect();
+        let zq = (1..=n)
+            .map(|l| {
+                let s = k(l) - 0.6;
+                s * (100.0 + s)
+            })
+            .collect();
+        let slots = names
+            .iter()
+            .map(|nm| {
+                let (var, l) = bracket_slot(nm);
+                let t = match var.as_str() {
+                    "u" => 0,
+                    "v" => 1,
+                    _ => 2,
+                };
+                (t, l - 1)
+            })
+            .collect();
+        let sorted = z.windows(2).all(|w| w[0] <= w[1]);
+        HandBracket {
+            z,
+            tables: [u, v, th],
+            zq,
+            slots,
+            sorted,
+        }
+    }
+
+    fn call(&self, state: &[f64], t: f64, dy: &mut [f64]) {
+        let n = self.z.len();
+        let shift = 150.0 * (0.3 * t).sin();
+        for (p, &(tab, l)) in self.slots.iter().enumerate() {
+            let x = self.zq[l] + shift;
+            let z = &self.z;
+            let table = &self.tables[tab];
+            let below = if self.sorted {
+                z.partition_point(|&a| a <= x)
+            } else {
+                z.iter().filter(|&&a| a <= x).count()
+            };
+            let i = below.clamp(1, n - 1) - 1;
+            let look = if x <= z[0] {
+                table[0]
+            } else if x >= z[n - 1] {
+                table[n - 1]
+            } else {
+                let w = (x - z[i]) / (z[i + 1] - z[i]);
+                table[i] + w * (table[i + 1] - table[i])
+            };
+            dy[p] = 0.5 * (look - state[p]);
+        }
+    }
+}
+
+fn benchmark_interp_bracket(c: &mut Criterion) {
+    let mut group = c.benchmark_group("interp_bracket");
+    for n in [59usize, 200] {
+        let docs = [
+            (
+                "fn_const",
+                format!("interp_bracket_const_fn_N{n}.esm"),
+                true,
+            ),
+            (
+                "compose_const_fused",
+                format!("interp_bracket_const_compose_N{n}.esm"),
+                true,
+            ),
+            (
+                "compose_const_unfused",
+                format!("interp_bracket_const_compose_N{n}.esm"),
+                false,
+            ),
+            (
+                "compose_runtime_fused",
+                format!("interp_bracket_runtime_compose_N{n}.esm"),
+                true,
+            ),
+            (
+                "compose_runtime_unfused",
+                format!("interp_bracket_runtime_compose_N{n}.esm"),
+                false,
+            ),
+        ];
+        // Every spelling, and the hand loop, writes the same bits.
+        let mut reference: Option<Vec<u64>> = None;
+        let mut built = Vec::new();
+        for (label, doc, fused) in docs {
+            let mut rhs = BracketRhs::new(&doc, fused);
+            let mut dy = vec![0.0; rhs.state.len()];
+            rhs.call(&mut dy);
+            let bits: Vec<u64> = dy.iter().map(|x| x.to_bits()).collect();
+            match &reference {
+                None => reference = Some(bits),
+                Some(r) => assert_eq!(r, &bits, "N={n} {label}: not the interp.linear derivative"),
+            }
+            built.push((label, rhs));
+        }
+        let names = built[0]
+            .1
+            .prob
+            .debug_array_compiled()
+            .expect("a right-hand side")
+            .state_variable_names()
+            .to_vec();
+        let hand = HandBracket::new(n, &names, 100.0);
+        let state = built[0].1.state.clone();
+        let mut dy = vec![0.0; state.len()];
+        hand.call(&state, BRACKET_T, &mut dy);
+        let bits: Vec<u64> = dy.iter().map(|x| x.to_bits()).collect();
+        assert_eq!(reference.as_ref(), Some(&bits), "N={n}: the hand loop");
+
+        for (label, rhs) in built.iter_mut() {
+            let mut dy = vec![0.0; rhs.state.len()];
+            group.bench_function(BenchmarkId::new(*label, n), |b| {
+                b.iter(|| {
+                    rhs.call(&mut dy);
+                    black_box(&dy);
+                })
+            });
+        }
+        group.bench_function(BenchmarkId::new("hand_search", n), |b| {
+            b.iter(|| {
+                hand.call(black_box(&state), BRACKET_T, &mut dy);
+                black_box(&dy);
+            })
+        });
+    }
+    group.finish();
+}
+
 // Define benchmark groups
 criterion_group!(
     benches,
@@ -422,6 +666,7 @@ criterion_group!(
     benchmark_validation,
     benchmark_stoichiometric_matrix,
     benchmark_expression_evaluation,
+    benchmark_interp_bracket,
 );
 
 #[cfg(feature = "simd")]

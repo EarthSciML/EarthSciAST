@@ -101,6 +101,18 @@ function _de_scalar(ctx::_DECtx, nd::_E._Node, cache::Vector{_DEVal})::_DEVal
         # captured host array — see `_de_buffer`).
         buf = _de_buffer(ctx, nd.payload::Vector{Float64})
         return _de_slice(ctx, buf, nd.idx, nd.idx; why = :pgather)
+    elseif k === _E._NK_LIVE_GATHER
+        # The same live read at an offset the subscripts give: they are loop
+        # counters and literals, concrete here (a contraction loop is unrolled
+        # at emission), so the offset is resolved on host as the walker does.
+        cg = nd.payload::_E._ConstGatherArray
+        off = 1
+        for d in eachindex(nd.children)
+            sub = _E._const_gather_sub(cg, d, _de_index_int(nd.children[d]))
+            off += (sub - 1) * cg.strides[d]
+        end
+        buf = _de_buffer(ctx, cg.flat)
+        return _de_slice(ctx, buf, off, off; why = :pgather)
     elseif k === _E._NK_OP
         if nd.op === :fn
             return _de_fn(ctx, nd, ch -> _de_scalar(ctx, ch, cache))
@@ -126,6 +138,7 @@ const _DE_KINDS = Dict{UInt8, String}(
     _E._NK_CACHED => "_NK_CACHED", _E._NK_OP => "_NK_OP",
     _E._NK_PARAM_GATHER => "_NK_PARAM_GATHER",
     _E._NK_CONST_GATHER => "_NK_CONST_GATHER",
+    _E._NK_LIVE_GATHER => "_NK_LIVE_GATHER",
     _E._NK_STATE_GATHER => "_NK_STATE_GATHER",
     _E._NK_LOOPVAR => "_NK_LOOPVAR",
     _E._NK_CONTRACTION => "_NK_CONTRACTION",

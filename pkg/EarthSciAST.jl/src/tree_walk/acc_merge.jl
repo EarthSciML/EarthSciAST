@@ -282,7 +282,8 @@ function _struct_sig!(io::IOBuffer, n::_Node, direct::Bool)
         print(io, "C:", n.op, '(')
         _sig_children!(io, n.children, direct)
         print(io, ')')
-    elseif k === _NK_CONTRACTION_LOOP || k === _NK_LOOPVAR || k === _NK_RAGGED_LOOP
+    elseif k === _NK_CONTRACTION_LOOP || k === _NK_LOOPVAR || k === _NK_RAGGED_LOOP ||
+            k === _NK_LIVE_GATHER
         # Defensive: a runtime contraction loop (ess-runtime-contraction) or a
         # ragged loop is CONFINED to scalar contexts and never reaches the
         # array-equation merge. Should one ever arrive, key it by object
