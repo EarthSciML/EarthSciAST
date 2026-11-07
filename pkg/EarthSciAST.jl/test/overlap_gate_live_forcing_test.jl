@@ -232,6 +232,16 @@ end
         e
     end
     @test err isa EA.TreeWalkError && err.code == "E_TREEWALK_PGATHER_OOB"
+
+    # Its cadence tier is at least TIME (the buffer is refreshed at time
+    # boundaries) and the max of its subscripts' tiers above that: a subscript
+    # reading the state would make it DYNAMIC, never a per-`t` memo.
+    cache = EA._CSECache()
+    lit = EA._mknode(kind = EA._NK_LITERAL, literal = 1.0)
+    st = EA._mknode(kind = EA._NK_STATE, idx = 1)
+    ref = EA._LiveGatherRef(buf, [3, 2], "F")
+    @test EA._def_tier(EA._live_gather_node(ref, [sub, lit]), Int8[], 1, cache) === EA._TIER_TIME
+    @test EA._def_tier(EA._live_gather_node(ref, [st, lit]), Int8[], 1, cache) === EA._TIER_DYNAMIC
 end
 
 # The same regrid with the SOURCE RING itself fed by a data source. An envelope
