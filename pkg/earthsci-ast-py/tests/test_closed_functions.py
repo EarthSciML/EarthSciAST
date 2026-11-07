@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import math
 import struct
+import warnings
 from pathlib import Path
 from typing import Any, List
 
@@ -313,6 +314,95 @@ def test_interp_scenarios_through_the_expanded_template(fixture_dir: Path):
         expected = _decode_input(scenario["expected"])
         if not _same_bits(actual, expected):
             failures.append(f"{sname}: got={actual!r}, expected={expected!r}")
+    assert not failures, "Template mismatches:\n  " + "\n  ".join(failures)
+
+
+# --- The datetime scenarios through the pure-AST templates of lib/calendar.esm
+
+CALENDAR_LIBRARY = REPO_ROOT / "lib" / "calendar.esm"
+_DATETIME_FIXTURE_DIRS = [d for d in _FIXTURE_DIRS if d.parent.name == "datetime"]
+# The templates' domain (esm-spec §9.2 composition note): finite t with
+# |t| < 2^52 s. Outside it, and for NaN or an infinite t, every template is NaN.
+_CALENDAR_DOMAIN = 2.0**52
+# Instants at the edge of that domain, beside the fixture scenarios: the
+# largest whole and fractional instants inside it, and the bound itself.
+_CALENDAR_DOMAIN_EDGES = [
+    _CALENDAR_DOMAIN - 1.0,
+    -(_CALENDAR_DOMAIN - 1.0),
+    _CALENDAR_DOMAIN - 0.5,
+    -(_CALENDAR_DOMAIN - 0.5),
+    _CALENDAR_DOMAIN,
+    -_CALENDAR_DOMAIN,
+]
+
+
+def _calendar_template_rhs(name: str) -> Any:
+    """The right-hand side of ``y = <name>(tu)`` after load expands the
+    ``lib/calendar.esm`` template, with ``tu`` a parameter in seconds."""
+    doc = {
+        "esm": "1.2.0",
+        "metadata": {"name": f"datetime_{name}_template"},
+        "models": {
+            "Probe": {
+                "expression_template_imports": [{"ref": str(CALENDAR_LIBRARY), "only": [name]}],
+                "variables": {
+                    "tu": {"type": "parameter", "default": 0.0, "units": "s"},
+                    "y": {"type": "unknown", "units": "1"},
+                },
+                "equations": [
+                    {
+                        "lhs": "y",
+                        "rhs": {
+                            "op": "apply_expression_template",
+                            "args": [],
+                            "name": name,
+                            "bindings": {"t": "tu"},
+                        },
+                    }
+                ],
+            }
+        },
+    }
+    rhs = load_string(json.dumps(doc)).models["Probe"].equations[0].rhs
+    assert not any(getattr(n, "op", None) == "apply_expression_template" for n in walk(rhs))
+    return rhs
+
+
+def _calendar_template_value(rhs: Any, t: float) -> float:
+    # An infinite t makes the (unselected) body subtract infinities.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        return float(evaluate(rhs, {"tu": t}))
+
+
+@pytest.mark.parametrize(
+    "fixture_dir",
+    _DATETIME_FIXTURE_DIRS,
+    ids=[p.name for p in _DATETIME_FIXTURE_DIRS],
+)
+def test_datetime_scenarios_through_the_expanded_template(fixture_dir: Path):
+    """Every scenario of a ``datetime.*`` fixture, run through the expanded
+    ``lib/calendar.esm`` template instead of ``fn``: inside the domain
+    |t| < 2^52 s it gives the ``fn`` form's bits (for ``julian_day`` that is the
+    pinned formula, which one scenario's ``expected`` misses by an ulp within
+    the fixture tolerance), and outside it — the two int32-year success
+    scenarios and every ``closed_function_overflow`` scenario — it gives NaN.
+    The domain edges are checked against ``fn`` too."""
+    spec = json.loads((fixture_dir / "expected.json").read_text())
+    fn_name = spec["function"]
+    rhs = _calendar_template_rhs(fn_name.removeprefix("datetime."))
+    instants = [(sc["name"], _decode_input(sc["inputs"][0])) for sc in spec["scenarios"]]
+    instants += [(sc["name"], _decode_input(sc["inputs"][0])) for sc in spec["error_scenarios"]]
+    instants += [(f"domain_edge_{t!r}", t) for t in _CALENDAR_DOMAIN_EDGES]
+    failures: list[str] = []
+    for sname, t in instants:
+        actual = _calendar_template_value(rhs, t)
+        if abs(t) < _CALENDAR_DOMAIN:
+            expected = float(evaluate_closed_function(fn_name, [t]))
+        else:
+            expected = float("nan")
+        if not _same_bits(actual, expected):
+            failures.append(f"{sname} (t={t!r}): got={actual!r}, expected={expected!r}")
     assert not failures, "Template mismatches:\n  " + "\n  ".join(failures)
 
 

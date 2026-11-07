@@ -494,3 +494,85 @@ describe('Closed function registry — interp scenarios through lib/interp.esm t
     })
   }
 })
+
+// The datetime scenarios through the pure-AST templates of lib/calendar.esm.
+// TypeScript checks the expansion, not its value (the template values are
+// checked in Julia, Python and Rust): the template import resolves, and each
+// right-hand side is the template body with every occurrence of its one
+// parameter `t` replaced — by each finite scenario instant as a literal, and
+// by a parameter, as a caller with a NaN or infinite instant would write it
+// (esm-spec §9.6.3 constraint 5).
+describe('Closed function registry — datetime scenarios through lib/calendar.esm templates', () => {
+  const libraryPath = join(REPO_ROOT, 'lib', 'calendar.esm')
+  const library = JSON.parse(readFileSync(libraryPath, 'utf-8'))
+
+  // Test-local substitution oracle: every string other than an `op` name that
+  // equals `t` is replaced. The calendar templates carry no nested
+  // `apply_expression_template`, whose `name` would be exempt.
+  function substitute(body: unknown, t: unknown): unknown {
+    if (body === 't') return t
+    if (Array.isArray(body)) return body.map((v) => substitute(v, t))
+    if (body !== null && typeof body === 'object') {
+      const out: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(body)) out[k] = k === 'op' ? v : substitute(v, t)
+      return out
+    }
+    return body
+  }
+
+  const names = [
+    'year',
+    'month',
+    'day',
+    'hour',
+    'minute',
+    'second',
+    'day_of_year',
+    'julian_day',
+    'is_leap_year',
+  ]
+  it('declares exactly the nine datetime.* templates, each of one parameter t', () => {
+    expect(Object.keys(library.expression_templates).sort()).toEqual([...names].sort())
+    for (const name of names) expect(library.expression_templates[name].params).toEqual(['t'])
+  })
+
+  for (const name of names) {
+    it(`expands datetime.${name} for every scenario`, () => {
+      const expected: ExpectedFile = JSON.parse(
+        readFileSync(join(fixturesRoot, 'datetime', name, 'expected.json'), 'utf-8'),
+      )
+      const instants: unknown[] = expected.scenarios
+        .map((sc) => sc.inputs[0])
+        .filter((v) => typeof v === 'number')
+      instants.push('tu')
+      const variables: Record<string, unknown> = {
+        tu: { type: 'parameter', default: 0.0, units: 's' },
+      }
+      instants.forEach((_, i) => {
+        variables[`out_${i}`] = { type: 'unknown', units: '1' }
+      })
+      const doc = {
+        esm: '1.2.0',
+        metadata: { name: `datetime_${name}_template` },
+        models: {
+          Probe: {
+            expression_template_imports: [{ ref: libraryPath, only: [name] }],
+            variables,
+            equations: instants.map((t, i) => ({
+              lhs: `out_${i}`,
+              rhs: { op: 'apply_expression_template', args: [], name, bindings: { t } },
+            })),
+          },
+        },
+      }
+      const equations = (loadString(JSON.stringify(doc)).models!.Probe as Model).equations
+      expect(equations).toHaveLength(instants.length)
+      const body = library.expression_templates[name].body
+      equations.forEach((eq, i) => {
+        const got = JSON.parse(JSON.stringify(eq.rhs))
+        const want = JSON.parse(JSON.stringify(substitute(body, instants[i])))
+        expect(got, `t = ${String(instants[i])}`).toEqual(want)
+      })
+    })
+  }
+})
