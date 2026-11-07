@@ -79,7 +79,7 @@
     },
     {
       "id": "inlined_subsystem_default_emitted_as_string",
-      "fixtures": ["valid/lib_calendar_subsystem_inclusion", "valid/lib_solar_subsystem_inclusion", "valid/subsystem_index_set_merge"],
+      "fixtures": ["valid/lib_solar_subsystem_inclusion", "valid/subsystem_index_set_merge"],
       "rule": "esm-schema.json Variable.default (type: number); esm-spec 4.7 'Resolution timing'",
       "requirement": "4.7: 'After resolution, the in-memory representation is identical to a file with all subsystems defined inline.' An inlined subsystem's variables are therefore ordinary variables, and a numeric `default` MUST emit as a JSON number.",
       "severity": "load_breaking",
@@ -231,14 +231,9 @@
         { "transform": "metaparameter_folding", "spec": "esm-spec 9.7.6 / 9.6.4 rule 5 'Instantiating load'",
           "detail": "N folds into the faq ranges and the makearray region bounds — the fold this fixture exists to pin, since [2, N-1] at N = 2 must produce the legal EMPTY bound [2, 1] (4.3.2). All five bindings." }
       ] },
-    { "id": "valid/lib_calendar_subsystem_inclusion", "path": "valid/lib_calendar_subsystem_inclusion.esm", "tags": ["subsystems", "transforming"],
-      "load_transforms": [
-        { "transform": "subsystem_ref_resolution", "spec": "esm-spec 4.7, 'Resolution timing'",
-          "detail": "'Libraries must resolve all references at load time, before validation or any other processing. After resolution, the in-memory representation is identical to a file with all subsystems defined inline.' Julia, Python, Rust and Go resolve inside load. TypeScript's loadString leaves the {ref} stub and resolves through a SEPARATE entry point, so it round-trips this fixture unchanged — an API-seam difference rather than a missing capability, but it does mean TS's load alone does not meet 4.7's timing requirement." }
-      ] },
     { "id": "valid/lib_solar_subsystem_inclusion", "path": "valid/lib_solar_subsystem_inclusion.esm", "tags": ["subsystems", "transforming"],
       "load_transforms": [
-        { "transform": "subsystem_ref_resolution", "spec": "esm-spec 4.7, 'Resolution timing'", "detail": "as for lib_calendar_subsystem_inclusion, including the TypeScript seam note." }
+        { "transform": "subsystem_ref_resolution", "spec": "esm-spec 4.7, 'Resolution timing'", "detail": "'Libraries must resolve all references at load time, before validation or any other processing. After resolution, the in-memory representation is identical to a file with all subsystems defined inline.' Julia, Python, Rust and Go resolve inside load. TypeScript's loadString leaves the {ref} stub and resolves through a SEPARATE entry point, so it round-trips this fixture unchanged — an API-seam difference rather than a missing capability, but it does mean TS's load alone does not meet 4.7's timing requirement." }
       ] },
     { "id": "valid/subsystem_index_set_merge", "path": "valid/subsystem_index_set_merge.esm", "tags": ["subsystems", "index_sets", "transforming"],
       "load_transforms": [

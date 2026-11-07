@@ -1450,7 +1450,6 @@ class TestValidateBasePath:
             "subsystem_index_set_merge.esm",
             "template_import_minimal.esm",
             "lib_solar_subsystem_inclusion.esm",
-            "lib_calendar_subsystem_inclusion.esm",
         ):
             content = (valid_dir / name).read_text()
             result = validate_text(content, base_path=str(valid_dir))

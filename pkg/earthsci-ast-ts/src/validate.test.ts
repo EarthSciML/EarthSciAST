@@ -1782,18 +1782,19 @@ describe('validate({ basePath }) resolves relative refs and template imports', (
     [...r.schema_errors, ...r.structural_errors].map((e) => `${e.code}@${e.path}`)
 
   it('validates a subsystem-ref fixture clean WITH a basePath, and reports it unresolved WITHOUT one', () => {
-    const path = fixture('tests/valid/lib_calendar_subsystem_inclusion.esm')
+    const path = fixture('tests/valid/lib_solar_subsystem_inclusion.esm')
     const content = readFileSync(path, 'utf-8')
 
-    // WITH: the `{ref}` mount is opened, the component is inlined, and the
-    // observed expression's `Calendar.seconds_since_midnight` now resolves.
+    // WITH: the `{ref}` mount is opened, the component is inlined (its own
+    // lib/calendar.esm template import resolving beside it), and the
+    // observed expression's `Solar.solar_zenith_angle` now resolves.
     expect(validateText(content, { basePath: dirname(path) }).is_valid).toBe(true)
 
     // WITHOUT: unchanged legacy behaviour — the mount is honestly reported as
     // unresolved rather than silently passed over.
     const without = validateText(content)
     expect(without.is_valid).toBe(false)
-    expect(codes(without)).toContain('unresolved_subsystem_ref@/models/Diurnal/subsystems/Calendar')
+    expect(codes(without)).toContain('unresolved_subsystem_ref@/models/Photolysis/subsystems/Solar')
   })
 
   it('resolves the §4.7 index-set merge and §9.7 template imports through a basePath', () => {

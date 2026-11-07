@@ -96,8 +96,6 @@ include("testutils.jl")
         "tests/valid/enums_symbol_template_binding.esm" =>
             "esm-spec §9.6.4 rule 3, §9.3: the enum-bearing template call expands and lowers to `const` at load",
         # §4.7 subsystem `{ref}` resolution.
-        "tests/valid/lib_calendar_subsystem_inclusion.esm" =>
-            "esm-spec §4.7: a `{ref}` subsystem is resolved and inlined at load",
         "tests/valid/lib_solar_subsystem_inclusion.esm" =>
             "esm-spec §4.7: a `{ref}` subsystem is resolved and inlined at load",
         "tests/valid/subsystem_index_set_merge.esm" =>
