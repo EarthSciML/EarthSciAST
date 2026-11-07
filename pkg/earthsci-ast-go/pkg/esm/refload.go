@@ -83,6 +83,19 @@ func loadRefBytes(ref, baseDir string) (data []byte, dir string, err error) {
 	// inside canonicalRefPath. The expanded text is what the messages below
 	// name; an unset variable is still literal there, so the diagnostic quotes
 	// the `${VAR}` the document carries.
+	// esm-spec §4.7: a standard-library ref reads the embedded bundle and is
+	// never a path or a URL; classifyStdRef applies the `${VAR}` rule for it.
+	if identity, valid, isStd := classifyStdRef(ref, baseDir); isStd {
+		data, err = loadStdRef(ref, identity, valid)
+		if err != nil {
+			return nil, "", err
+		}
+		prepared, perr := prepareDocumentOps(string(data))
+		if perr != nil {
+			return nil, "", fmt.Errorf("ref %q: %w", ref, perr)
+		}
+		return []byte(prepared), stdlibBaseDir, nil
+	}
 	ref = expandRefEnv(ref)
 	if isRemoteRef(ref) {
 		data, err = fetchRemoteRef(ref)
