@@ -67,6 +67,13 @@ tests/conformance/
 │   ├── README.md                   #   the contract
 │   ├── manifest.json               #   `"runner": "inline_tests"`; its three documents are REFERENCED from tests/closed_functions/interp/<fn>/template.esm
 │   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
+├── relational_templates/          # lib/relational.esm argmin/argmax templates: ties, NaN, the nearest-generator document (CONFORMANCE_SPEC §5.45.4)
+│   ├── README.md                   #   the contract
+│   ├── generate.py                 #   writes scenarios.json and the two fixtures
+│   ├── scenarios.json              #   candidate values, the template's index, the op's where it differs
+│   ├── manifest.json               #   `"runner": "inline_tests"`
+│   ├── fixtures/<id>.esm
+│   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
 ├── native_model_shapes/            # downstream-model shapes native must run, static and dynamic (CONFORMANCE_SPEC §5.45.4)
 │   ├── README.md                   #   the contract, and the divergence it closed
 │   ├── manifest.json               #   `"runner": "inline_tests"`
