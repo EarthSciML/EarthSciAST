@@ -2070,6 +2070,14 @@
       }
     },
     {
+      "name": "code_value_invention_key_out_of_range",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeValueInventionKeyOutOfRange"
+      }
+    },
+    {
       "name": "coerce_coupling_entry",
       "kind": "function",
       "tier": "extension",

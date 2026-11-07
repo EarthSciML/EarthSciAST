@@ -153,3 +153,124 @@ func TestRelationalTemplateTierDocumentsExpand(t *testing.T) {
 		}
 	}
 }
+
+// TestRelationalKeyAndWhereTemplatesExpand checks the expansion of the key,
+// rank and gated arg-witness templates of lib/relational.esm: each call's
+// right-hand side is the template body with its bindings substituted.
+func TestRelationalKeyAndWhereTemplatesExpand(t *testing.T) {
+	repoRoot := filepath.Join(closedFunctionsFixturesDir(t), "..", "..")
+	libraryPath := filepath.Join(repoRoot, "lib", "relational.esm")
+	libRaw, err := os.ReadFile(libraryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var library struct {
+		Templates map[string]struct {
+			Body any `json:"body"`
+		} `json:"expression_templates"`
+	}
+	if err := json.Unmarshal(libRaw, &library); err != nil {
+		t.Fatal(err)
+	}
+	idx := func(sym string) map[string]any {
+		return map[string]any{"op": "index", "args": []any{
+			map[string]any{"op": "const", "args": []any{}, "value": []float64{3, 1, 2}}, sym}}
+	}
+	calls := []struct {
+		name     string
+		bindings map[string]any
+	}{
+		{"pair_key", map[string]any{"a": 2, "b": 3, "lo_a": 1, "lo_b": 1, "n_a": 4, "n_b": 5}},
+		{"edge_key", map[string]any{"u": 4, "v": 2, "lo": 1, "n": 5}},
+		{"rank_of", map[string]any{"x": 7, "members": map[string]any{"op": "const", "args": []any{}, "value": []float64{1, 3, 7}}, "n": 3}},
+		{"argmin_where", map[string]any{"f": idx("k_argmin_where_1"), "p": map[string]any{"op": ">", "args": []any{idx("k_argmin_where_1"), 1}}, "n": 3}},
+		{"argmax_where", map[string]any{"f": idx("k_argmax_where_1"), "p": map[string]any{"op": ">", "args": []any{idx("k_argmax_where_1"), 1}}, "n": 3}},
+	}
+	variables := map[string]any{}
+	equations := []any{}
+	for i, c := range calls {
+		out := fmt.Sprintf("out_%d", i)
+		variables[out] = map[string]any{"type": "unknown", "default": 0.0, "units": "1"}
+		equations = append(equations, map[string]any{
+			"lhs": map[string]any{"op": "D", "args": []any{out}, "wrt": "t"},
+			"rhs": map[string]any{"op": "apply_expression_template", "args": []any{}, "name": c.name, "bindings": c.bindings},
+		})
+	}
+	doc := map[string]any{
+		"esm":      "1.1.0",
+		"metadata": map[string]any{"name": "relational_key_templates"},
+		"models": map[string]any{"Probe": map[string]any{
+			"expression_template_imports": []any{map[string]any{"ref": libraryPath}},
+			"variables":                   variables,
+			"equations":                   equations,
+		}},
+	}
+	docJSON, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := LoadString(string(docJSON))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	for i, eq := range file.Models["Probe"].Equations {
+		s, err := SerializeExpressionCompact(eq.RHS)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var gotTree any
+		if err := json.Unmarshal([]byte(s), &gotTree); err != nil {
+			t.Fatal(err)
+		}
+		tmpl, ok := library.Templates[calls[i].name]
+		if !ok {
+			t.Fatalf("no %q template", calls[i].name)
+		}
+		wantTree := jsonRoundTrip(t, substituteTemplateParams(tmpl.Body, calls[i].bindings))
+		if !reflect.DeepEqual(gotTree, wantTree) {
+			t.Errorf("%s: expansion differs from the substituted body\n got: %s", calls[i].name, s)
+		}
+	}
+}
+
+// TestRelationalRewritesLoad loads every template rewrite of the skolem /
+// rank / gated-argmin fixtures: each resolves its lib/relational.esm import and
+// no template reference survives load.
+func TestRelationalRewritesLoad(t *testing.T) {
+	repoRoot := filepath.Join(closedFunctionsFixturesDir(t), "..", "..")
+	raw, err := os.ReadFile(filepath.Join(repoRoot, "tests", "conformance", "relational_templates", "rewrites", "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		Rewrites []struct {
+			ID  string `json:"id"`
+			Out string `json:"out"`
+		} `json:"rewrites"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range manifest.Rewrites {
+		path := filepath.Join(repoRoot, "tests", "conformance", "relational_templates", "rewrites", e.ID+".esm")
+		if e.Out != "" {
+			path = filepath.Join(repoRoot, e.Out)
+		}
+		file, err := LoadPath(path)
+		if err != nil {
+			t.Errorf("%s: load: %v", e.ID, err)
+			continue
+		}
+		for mname, m := range file.Models {
+			for i, eq := range m.Equations {
+				s, err := SerializeExpressionCompact(eq.RHS)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(s, "apply_expression_template") {
+					t.Errorf("%s %s equation %d: a template reference survived load", e.ID, mname, i)
+				}
+			}
+		}
+	}
+}

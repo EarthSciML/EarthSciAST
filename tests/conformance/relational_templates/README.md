@@ -38,11 +38,28 @@ op skips (it compares with `<` / `>` from the first candidate on) and the
 template picks. `scenarios.json` records the op's answer there as
 `op_expected`.
 
+## Template rewrites of the skolem / rank fixtures (`rewrites/`)
+
+`rewrites/generate.py` writes the `lib/relational.esm` form of every fixture
+that uses `skolem`, `rank` or a gated `argmin` (`rewrites/manifest.json` lists
+17, with their sources): a `distinct` key becomes `edge_key` / `pair_key` / the
+bare component, a bin key read only by `join.on` becomes one integer column
+per component with one `on` pair each, `rank(S)` over the set's own members
+becomes the loop index, and a joined `argmin` becomes `argmin_where`. The
+manifest carries the caller data and what must agree. Each binding's harness
+builds both forms (Julia `test/relational_rewrites_test.jl`, Python
+`tests/test_relational_rewrites.py`, Rust `tests/relational_rewrites.rs`):
+identical members (the template's integer keys decoded back to the op's
+tuples), dense IDs (the op's 0-based rank plus one), assignment buffers and
+right-hand sides; Go and TypeScript load every rewrite. The two
+value_invention_geometry rewrites run in this tier against the op documents'
+goldens, and the three value_invention_materialize rewrites (plus
+`key_out_of_range`) in that tier.
+
 ## What is not here
 
-- A gated arg-witness: the `join` of `NearestGeneratorBinned`
-  (`tests/valid/faq/nearest_generator_argmin.esm`) compares `skolem` bin keys,
-  which have no template form until `skolem` does.
+- A gated arg-witness inside this tier: `NearestGeneratorBinned` is rewritten
+  with `argmin_where` in `rewrites/` and compared there.
 - An empty candidate set: the op refuses it; the template returns +Inf (the
   identity of the `min` reduction) for n = 0.
 - `tests/scoping/loop_binder_shadowing_edges.esm` and the
