@@ -94,15 +94,19 @@ mutable struct _ACMask{F}
 end
 
 # Interning tables for the structural numbers that find a repeated sub-tree
-# ("A repeated sub-tree computed once", below): a key tuple, an object by
-# identity, a payload by its contents, and each node's number.
+# ("A repeated sub-tree computed once", below): a key tuple (by the value
+# numbering `_vn!` of access_kernel.jl), an object by identity, a payload by its
+# contents, and each node's number under each environment of loop binders it
+# was keyed in.
 struct _CGShareKeys
-    ids::Dict{Any, Int}
+    ids::Dict{_VNKey, Int}
     objs::IdDict{Any, Int}
     pays::IdDict{Any, Int}
-    memo::IdDict{_Node, Int}
+    memo::Dict{Tuple, IdDict{_Node, Int}}
 end
-_CGShareKeys() = _CGShareKeys(Dict{Any, Int}(), IdDict{Any, Int}(), IdDict{Any, Int}(), IdDict{_Node, Int}())
+_CGShareKeys() = _CGShareKeys(
+    Dict{_VNKey, Int}(), IdDict{Any, Int}(), IdDict{Any, Int}(), Dict{Tuple, IdDict{_Node, Int}}()
+)
 
 # Emission context for a scalar spine. `loops` maps a loop counter `Ref` — the
 # object an `_NK_LOOPVAR` leaf carries and the nest's odometer or fold drives —
@@ -330,11 +334,12 @@ end
 # brings its whole body to each of them. The Julia compiler merges some
 # repeated straight-line arithmetic on its own, but not a loop, a call it
 # cannot prove pure (`sin`), or a branch: each copy would run. So within one
-# REGION — a sub-tree evaluated as one piece, with an `ifelse` branch, an `and`
-# / `or` operand past the first and a loop body each a region of its own — a
-# sub-tree that is not a leaf and occurs at least twice, at least once outside
-# a lazy operand, is computed once at the region's start into a local and read
-# at every occurrence, the lazy ones included.
+# REGION — a sub-tree evaluated as one piece, with each LAZY operand (an
+# `ifelse` branch, an `and` / `or` operand past the first, a gather subscript
+# past the first: `_cg_lazy_operand`) and each loop body a region of its own —
+# a sub-tree that is not a leaf and occurs at least twice, at least once
+# outside a lazy operand, is computed once at the region's start into a local
+# and read at every occurrence, the lazy ones included.
 #
 # Bit-identical by construction: every node of the spine is pure, so each
 # occurrence computes the same value from the same inputs, and the one
@@ -386,7 +391,7 @@ function _cg_emit_shared(ctx::_CGCtx, kc, nd::_Node)
     end
 end
 
-_cg_share_id!(K::_CGShareKeys, key) = get!(K.ids, key, length(K.ids) + 1)
+_cg_share_id!(K::_CGShareKeys, key) = _vn!(K.ids, key)
 _cg_share_obj!(K::_CGShareKeys, o) = get!(K.objs, o, length(K.objs) + 1)
 
 # A payload whose CONTENTS fix what the node reads, numbered by those contents.
@@ -431,14 +436,17 @@ end
 
 # The structural number of `nd`. `env` holds the loop counters bound between
 # the region and `nd`, innermost last; a counter is keyed by how many binders
-# out it is bound, or by identity when it is bound outside the region. A
-# number computed outside every loop of the walk is the node's in any region,
-# so it is memoized by identity for the whole emission (`K.memo`).
-function _cg_share_key!(K::_CGShareKeys, kc, nd::_Node, env::Vector{Any})
-    if isempty(env)
-        got = get(K.memo, nd, 0)
-        got == 0 || return got
-    end
+# out it is bound, or by identity when it is bound outside the region. So a
+# node's number depends on the node and on `env` alone: it is memoized by
+# identity per environment (`memo`, `K.memo`) for the whole emission, and a
+# sub-tree shared by reference is keyed once per environment it is reached in,
+# never once per path.
+function _cg_share_key!(
+        K::_CGShareKeys, kc, nd::_Node, env::Vector{Any},
+        memo::IdDict{_Node, Int} = _cg_share_memo(K, env)
+    )
+    got = get(memo, nd, 0)
+    got == 0 || return got
     k = nd.kind
     key = if k === _NK_LOOPVAR
         d = findlast(r -> r === nd.payload, env)
@@ -457,19 +465,26 @@ function _cg_share_key!(K::_CGShareKeys, kc, nd::_Node, env::Vector{Any})
         if leaf === nothing
             (:unique, _cg_share_obj!(K, nd))
         else
-            ch = Int[_cg_share_key!(K, kc, c, env) for c in nd.children]
+            ch = Int[_cg_share_key!(K, kc, c, env, memo) for c in nd.children]
             (k, nd.op, nd.sym, nd.idx, reinterpret(UInt64, nd.literal), leaf, ch)
         end
     end
-    id = _cg_share_id!(K, key)
-    isempty(env) && (K.memo[nd] = id)
-    return id
+    return memo[nd] = _cg_share_id!(K, key)
 end
+_cg_share_memo(K::_CGShareKeys, env::Vector{Any}) =
+    get!(() -> IdDict{_Node, Int}(), K.memo, Tuple(env))
 
-# Whether an operand of `nd` is evaluated lazily (`_eval_node_op`'s short
-# circuits): an `ifelse` branch, an `and` / `or` operand past the first.
-@inline _cg_lazy_operand(nd::_Node, j::Int) =
-    j >= 2 && nd.kind === _NK_OP && (nd.op === :ifelse || nd.op === :and || nd.op === :or)
+# Whether operand `j` of `nd` is evaluated only on some evaluations of `nd`:
+# the walker's short circuits (`_cse_arg_conditional`: an `ifelse` branch, an
+# `and` / `or` operand past the first), and a gather's subscripts past the
+# first — a state gather evaluates none past the first that is out of its axis
+# (`_eval_state_gather`, `_cg_state_gather_dim`), a const or live gather none
+# past one whose boundary policy throws (`_const_gather_sub`).
+@inline function _cg_lazy_operand(nd::_Node, j::Int)
+    k = nd.kind
+    k === _NK_OP && return _cse_arg_conditional(nd.op, j)
+    return j >= 2 && (k === _NK_STATE_GATHER || k === _NK_CONST_GATHER || k === _NK_LIVE_GATHER)
+end
 
 # A node never worth a local of its own.
 @inline _cg_share_leafkind(nd::_Node) =
@@ -483,45 +498,27 @@ _cg_share_opaque(kc, nd::_Node) =
     nd.kind === _NK_RAGGED_LOOP || nd.kind === _NK_RECUR_GATHER ||
     nd.kind === _NK_CACHED || (nd.kind === _NK_OP && nd.op === :fn)
 
+const _CG_NO_KIDS = _Node[]
+
 # The sub-trees of the region rooted at `root` to compute once: groups of
 # structurally equal nodes, in dependency order (a group's nodes hold only
-# groups listed before it), or `nothing` when there are none.
+# groups listed before it), or `nothing` when there are none. The region's
+# unique nodes and their path multiplicities — every occurrence, and those
+# outside lazy operands — come from the shared DAG walks (compile.jl).
 function _cg_share_groups(kc, root::_Node)
-    # Unique region nodes in postorder.
-    order = _Node[]
-    pos = IdDict{_Node, Int}()
-    function walk(n::_Node)
-        haskey(pos, n) && return
-        pos[n] = 0
-        _cg_share_opaque(kc, n) || foreach(walk, n.children)
-        push!(order, n)
-        pos[n] = length(order)
-        return
-    end
-    walk(root)
+    kids = n -> _cg_share_opaque(kc, n) ? _CG_NO_KIDS : n.children
+    order, pos = _dag_postorder(root, kids, _dag_every)
     P = length(order)
     P > 2 || return nothing
-    # Path multiplicities: every occurrence, and those outside lazy operands.
-    total = zeros(Int, P)
-    strict = zeros(Int, P)
-    total[P] = 1
-    strict[P] = 1
-    for i in P:-1:1
-        n = order[i]
-        _cg_share_opaque(kc, n) && continue
-        for (j, c) in enumerate(n.children)
-            pc = pos[c]
-            total[pc] = _sat_add(total[pc], total[i])
-            _cg_lazy_operand(n, j) || (strict[pc] = _sat_add(strict[pc], strict[i]))
-        end
-    end
+    total, strict = _dag_path_counts(order, pos, kids, _dag_every, _cg_lazy_operand)
     K = kc.share
     env = Any[]
+    memo = _cg_share_memo(K, env)
     byid = Dict{Int, Vector{Int}}()
     for i in 1:(P - 1)
         n = order[i]
         (_cg_share_leafkind(n) || haskey(kc.loops, n)) && continue
-        id = _cg_share_key!(K, kc, n, env)
+        id = _cg_share_key!(K, kc, n, env, memo)
         push!(get!(() -> Int[], byid, id), i)
     end
     groups = Vector{_Node}[]
@@ -850,7 +847,11 @@ function _cg_const_gather(ctx::_CGCtx, kc, nd::_Node)
     for d in eachindex(children)
         sd = _cg_name(ctx, "cgs")
         cs = _cg_counter_subscript(kc, children[d])
-        sub = cs === nothing ? :(round(Int, $(_cg_emit(ctx, kc, children[d])))) : cs[1]
+        # A subscript past the first is evaluated only when the ones before it
+        # did not throw: a region of its own (`_cg_lazy_operand`).
+        sub = cs === nothing ?
+            :(round(Int, $(d == 1 ? _cg_emit(ctx, kc, children[d]) : _cg_emit_region(ctx, kc, children[d])))) :
+            cs[1]
         push!(binds, :($sd = _const_gather_sub($cgv, $d, $sub)))
         push!(off, :(($sd - 1) * $(_cg_geo!(ctx, cg.strides[d], (cg.strides, d), true))))
     end
@@ -988,9 +989,13 @@ function _cg_state_gather_dim(
         push!(copy(off), :(($sd - $lo) * $sd_stride))
     )
     cs = _cg_counter_subscript(kc, children[d])
+    # A subscript past the first is evaluated only when the ones before it are
+    # in range: a region of its own (`_cg_lazy_operand`).
+    sx = cs !== nothing ? nothing : d == 1 ? _cg_emit(ctx, kc, children[d]) :
+        _cg_emit_region(ctx, kc, children[d])
     cs === nothing && return Expr(
         :let,
-        Expr(:block, :($sd = round(Int, $(_cg_emit(ctx, kc, children[d]))))),
+        Expr(:block, :($sd = round(Int, $sx))),
         Expr(:block, :(($lo <= $sd <= $hi) ? $nxt : zero(eltype(u))))
     )
     span = cs[2]

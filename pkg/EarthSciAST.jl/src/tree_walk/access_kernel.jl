@@ -1059,6 +1059,12 @@ Base.hash(x::_VNKey, h::UInt) = hash(x.h, h)
 Base.isequal(a::_VNKey, b::_VNKey) =
     a.h == b.h && typeof(a.k) === typeof(b.k) && isequal(a.k, b.k)
 
+# The value number of structural key `key` in `tab`: the one it already has, or
+# the next free one (numbers are dense, in first-seen order). The one numbering
+# of the structural passes here and in the emitters (`_cg_share_key!`,
+# array_contraction.jl).
+@inline _vn!(tab::Dict{_VNKey, Int}, key) = get!(tab, _VNKey(key), length(tab) + 1)
+
 function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     _acc_has_reduce(spine) && return (spine, _ACC_NO_CSE)
     inv_only = _acc_has_areduce(spine)
@@ -1076,33 +1082,18 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     # path enumeration, O(nodes + edges).
     #
     # DENSE-POSITION KEYING (perf): number every UNIQUE node with a dense
-    # postorder position `pos_of[n] ∈ 1:P` (ONE identity dict, built once), so the
-    # value-number, path-multiplicity, and rewrite passes below index plain
-    # `Vector`s by position instead of hashing each freshly-lowered `_Node`
-    # through a SEPARATE `IdDict` per pass — `IdDict` get/set over these spines was
-    # the build's top self-time. Entry-marking + `order` are byte-identical to the
-    # prior `seen`-set walk, so vn/mult/slot decisions are unchanged.
-    order = _Node[]
-    pos_of = IdDict{_Node, Int}()
-    function collect_postorder(n::_Node)
-        haskey(pos_of, n) && return
-        pos_of[n] = 0                  # mark in-progress (entry-marked, as prior `seen`)
-        for c in n.children
-            collect_postorder(c)
-        end
-        push!(order, n)
-        return pos_of[n] = length(order)      # final dense position (spine ends up == P)
-    end
-    collect_postorder(spine)
+    # postorder position `pos_of[n] ∈ 1:P` (ONE identity dict, built once, by the
+    # shared `_dag_postorder`), so the value-number, path-multiplicity, and
+    # rewrite passes below index plain `Vector`s by position instead of hashing
+    # each freshly-lowered `_Node` through a SEPARATE `IdDict` per pass —
+    # `IdDict` get/set over these spines was the build's top self-time.
+    order, pos_of = _dag_postorder(spine, _dag_children, _dag_every)
     P = length(order)
     vn_by_pos = Vector{Int}(undef, P)
     for (p, n) in enumerate(order)    # postorder ⇒ children already numbered
         childvns = Int[vn_by_pos[pos_of[c]] for c in n.children]
-        key = _VNKey(_acc_vn_key(n, childvns, acc))
-        vn = get(key_to_vn, key, 0)
-        if vn == 0
-            vn = length(counts) + 1
-            key_to_vn[key] = vn
+        vn = _vn!(key_to_vn, _acc_vn_key(n, childvns, acc))
+        if vn > length(counts)
             k = n.kind
             inv = k === _NK_LITERAL || k === _NK_PARAM || k === _NK_TIME ? true :
                 k === _NK_ACCESS ? _acc_desc_invariant(acc[n.idx].kind) :
@@ -1115,15 +1106,7 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
         end
         vn_by_pos[p] = vn
     end
-    mult_by_pos = zeros(Int, P)
-    mult_by_pos[pos_of[spine]] = 1     # spine is the last postorder node
-    for i in P:-1:1                    # reverse postorder = parents before children
-        m = mult_by_pos[i]
-        for c in order[i].children
-            pc = pos_of[c]
-            mult_by_pos[pc] = _sat_add(mult_by_pos[pc], m)
-        end
-    end
+    mult_by_pos, _ = _dag_path_counts(order, pos_of, _dag_children, _dag_every, _dag_strict)
     for p in 1:P
         counts[vn_by_pos[p]] = _sat_add(counts[vn_by_pos[p]], mult_by_pos[p])
     end
