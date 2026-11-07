@@ -17,7 +17,9 @@
 #
 #     julia --project=<env> bench/closed_templates/bench_julia.jl [DIR] [name-filter…]
 #
-# Environment: CALLS (default 200), INTERP_CHECK (default 1: run the interpreter oracle).
+# Environment: CALLS (default 200), INTERP_CHECK (default 1: run the interpreter oracle;
+# the interpreter unrolls the argmin template's nested reductions per cell, so
+# at P500 x G100 it needs tens of GB: check it at a smaller size).
 
 using EarthSciAST, JSON3, Statistics, Printf
 import GeometryOps
@@ -129,5 +131,6 @@ for f in sort(readdir(DIR))
             @printf("    template native vs interpreter bit-identical: %s\n", same(dt, di))
         end
         @printf("    ratio template/%s: build %.2f  call %.2f\n", cf, rows["tpl"][2] / rows[cf][2], rows["tpl"][4] / rows[cf][4])
+        flush(stdout)
     end
 end
