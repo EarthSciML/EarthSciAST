@@ -555,7 +555,9 @@ struct ScopeFrame {
     journal: Vec<(VnKey, Option<LV>)>,
     /// The frame of a whole-body (`eval` mirror) lowering
     /// ([`TapeBuilder::lower_wholesale_rule`]): consulted only by the
-    /// wholesale path, never by a box's numbering.
+    /// wholesale path, never by a box's numbering — one node's whole value
+    /// and its value over a box are different values under the same key. A
+    /// box lowered from a whole-body rule opens its own frame above it.
     wholesale: bool,
 }
 
@@ -1738,6 +1740,12 @@ impl<'m> TapeBuilder<'m> {
     }
 
     fn vn_get(&mut self, key: VnKey, bx: &LBox) -> Option<LV> {
+        // A box lowering opens its own frame (`push_scope`); reaching one
+        // with the whole-body frame innermost would number nothing.
+        debug_assert!(
+            !self.scope_frames.last().is_some_and(|f| f.wholesale),
+            "box value numbering under a whole-body frame: the box lowering did not open a scope"
+        );
         if let Some(frame) = self.scope_frames.last().filter(|f| !f.wholesale) {
             if let Some(lv) = frame.map.get(&key) {
                 self.vn_scope_hits += 1;

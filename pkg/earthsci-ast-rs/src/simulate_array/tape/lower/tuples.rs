@@ -730,9 +730,13 @@ impl TapeBuilder<'_> {
             visit: SmallVec::new(),
         };
         let Some(keep) = keep.filter(|k| !k.iter().all(|&k| k != 0.0)) else {
-            return self
-                .lower_filtered(body, filter, &bx, LV::Lit(identity))
-                .map(|t| t.unwrap_or(LV::Lit(identity)));
+            // The output box is its own value-numbering scope, as every box
+            // lowering's is: the enclosing frame is a whole-body rule's (which
+            // numbers whole values, not this box's) or another box's.
+            self.push_scope();
+            let term = self.lower_filtered(body, filter, &bx, LV::Lit(identity));
+            self.pop_scope();
+            return term.map(|t| t.unwrap_or(LV::Lit(identity)));
         };
         if ranges.is_empty() {
             bail_tape!("aggregate: a rank-0 join gate");
@@ -753,7 +757,9 @@ impl TapeBuilder<'_> {
         );
         self.known.insert(mask_slot, Known::Data(data));
         self.lazy_depth += 1;
+        self.push_scope();
         let term = self.lower_filtered(body, filter, &bx, LV::Lit(identity));
+        self.pop_scope();
         self.lazy_depth -= 1;
         let term = term?.unwrap_or(LV::Lit(identity));
         self.emit_select(LV::Arr(mask_slot), term, LV::Lit(identity))
