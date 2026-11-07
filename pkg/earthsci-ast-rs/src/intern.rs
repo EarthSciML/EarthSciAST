@@ -43,11 +43,16 @@
 //!   compare unequal, i.e. cost a missed dedup, never a wrong merge;
 //! * `HashMap`-valued fields (`ranges`, `axes`, `bindings`) are compared as
 //!   maps and hashed in sorted-key order;
+//! * a `const` literal's `value` is keyed exactly ([`literal_eq`]): numbers
+//!   by representation (signed, unsigned or float) and floats by bit
+//!   pattern, arrays element by element, so the repeated `const` tables of an
+//!   expanded template collapse onto one node — and with them every subtree
+//!   that reads them;
 //! * a node carrying a field this module does not key **exactly** —
-//!   `value` / `output` (arbitrary `serde_json::Value` payloads) or `join`
-//!   (clauses with float `eps`) — is refused outright ([`internable`]) and
-//!   allocated fresh, so an unkeyed attribute can never cause two different
-//!   nodes to merge.
+//!   `output` (an arbitrary `serde_json::Value` payload) or `join` (clauses
+//!   with float `eps`) — is refused outright ([`internable`]) and allocated
+//!   fresh, so an unkeyed attribute can never cause two different nodes to
+//!   merge.
 //!
 //! ## What sharing must NOT break
 //!
@@ -149,12 +154,88 @@ pub fn intern_node(node: ExpressionNode) -> Arc<ExpressionNode> {
     })
 }
 
-/// Whether this module can key `node` exactly. `value` / `output` carry
-/// arbitrary `serde_json::Value` payloads and `join` carries float-bearing
-/// clause structs; rather than invent a keying for those rare fields, a node
+/// Whether this module can key `node` exactly. `output` carries an
+/// arbitrary `serde_json::Value` payload and `join` float-bearing clause
+/// structs; rather than invent a keying for those rare fields, a node
 /// carrying one is simply never shared.
 fn internable(node: &ExpressionNode) -> bool {
-    node.value.is_none() && node.output.is_none() && node.join.is_none()
+    node.output.is_none() && node.join.is_none()
+}
+
+/// A JSON number by its exact representation: a float never equals an
+/// integer spelling of the same value, and floats compare by bit pattern.
+#[derive(PartialEq, Eq, Hash)]
+enum NumberKey {
+    Signed(i64),
+    Unsigned(u64),
+    Float(u64),
+}
+
+fn number_key(n: &serde_json::Number) -> NumberKey {
+    if let Some(i) = n.as_i64() {
+        NumberKey::Signed(i)
+    } else if let Some(u) = n.as_u64() {
+        NumberKey::Unsigned(u)
+    } else {
+        NumberKey::Float(n.as_f64().unwrap_or(f64::NAN).to_bits())
+    }
+}
+
+/// Exact equality of two literal payloads (a `const` node's `value`):
+/// numbers by [`NumberKey`], arrays and objects entry by entry in order.
+fn literal_eq(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+    use serde_json::Value as V;
+    match (a, b) {
+        (V::Null, V::Null) => true,
+        (V::Bool(x), V::Bool(y)) => x == y,
+        (V::Number(x), V::Number(y)) => number_key(x) == number_key(y),
+        (V::String(x), V::String(y)) => x == y,
+        (V::Array(x), V::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(p, q)| literal_eq(p, q))
+        }
+        (V::Object(x), V::Object(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .zip(y)
+                    .all(|((ka, va), (kb, vb))| ka == kb && literal_eq(va, vb))
+        }
+        _ => false,
+    }
+}
+
+/// Hash consistent with [`literal_eq`].
+fn literal_hash<H: Hasher>(v: &serde_json::Value, h: &mut H) {
+    use serde_json::Value as V;
+    match v {
+        V::Null => 0u8.hash(h),
+        V::Bool(b) => {
+            1u8.hash(h);
+            b.hash(h);
+        }
+        V::Number(n) => {
+            2u8.hash(h);
+            number_key(n).hash(h);
+        }
+        V::String(s) => {
+            3u8.hash(h);
+            s.hash(h);
+        }
+        V::Array(items) => {
+            4u8.hash(h);
+            items.len().hash(h);
+            for x in items {
+                literal_hash(x, h);
+            }
+        }
+        V::Object(m) => {
+            5u8.hash(h);
+            m.len().hash(h);
+            for (k, x) in m {
+                k.hash(h);
+                literal_hash(x, h);
+            }
+        }
+    }
 }
 
 /// Child-expression equality under the hash-consing invariant: leaves by value
@@ -285,9 +366,14 @@ fn node_eq(a: &ExpressionNode, b: &ExpressionNode) -> bool {
         attrs,
     } = a;
     // `internable` refused these; assert the contract rather than compare.
-    debug_assert!(value.is_none() && output.is_none() && join.is_none());
-    debug_assert!(b.value.is_none() && b.output.is_none() && b.join.is_none());
+    debug_assert!(output.is_none() && join.is_none());
+    debug_assert!(b.output.is_none() && b.join.is_none());
     op == &b.op
+        && match (value, &b.value) {
+            (None, None) => true,
+            (Some(x), Some(y)) => literal_eq(x, y),
+            _ => false,
+        }
         && child_vec_eq(args, &b.args)
         && wrt == &b.wrt
         && units == &b.units
@@ -354,7 +440,7 @@ fn node_hash<H: Hasher>(n: &ExpressionNode, h: &mut H) {
         broadcast_fn,
         name,
         label,
-        value: _,
+        value,
         units,
         table,
         axes,
@@ -369,6 +455,13 @@ fn node_hash<H: Hasher>(n: &ExpressionNode, h: &mut H) {
         attrs,
     } = n;
     op.hash(h);
+    match value {
+        None => 0u8.hash(h),
+        Some(v) => {
+            1u8.hash(h);
+            literal_hash(v, h);
+        }
+    }
     args.len().hash(h);
     for a in args {
         child_hash(a, h);
@@ -586,21 +679,61 @@ mod tests {
         assert!(!Arc::ptr_eq(x1, y), "different ranges must not merge");
     }
 
-    /// Nodes carrying fields this module refuses to key (`value` / `output` /
+    /// Nodes carrying fields this module refuses to key (`output` /
     /// `join`) are never shared, even when byte-identical.
     #[test]
     fn unkeyed_fields_refuse_interning() {
         let _scope = InternScope::new();
         let mk = || {
-            let mut n = op("const", vec![]);
-            n.value = Some(serde_json::json!([1.0, 2.0]));
+            let mut n = op("table_lookup", vec![]);
+            n.output = Some(serde_json::json!(0));
             Expr::operator(n)
         };
         let (a, b) = (mk(), mk());
         let (Expr::Operator(x), Expr::Operator(y)) = (&a, &b) else {
             unreachable!()
         };
-        assert!(!Arc::ptr_eq(x, y), "value-bearing nodes are never merged");
+        assert!(!Arc::ptr_eq(x, y), "output-bearing nodes are never merged");
+    }
+
+    /// `const` literals are keyed exactly: the same array interns to one
+    /// node (and so does a subtree reading it), while a float and an
+    /// integer spelling of one value, `0.0` and `-0.0`, or a different
+    /// nesting stay apart.
+    #[test]
+    fn const_literals_intern_exactly() {
+        let _scope = InternScope::new();
+        let lit = |v: serde_json::Value| {
+            let mut n = op("const", vec![]);
+            n.value = Some(v);
+            Expr::operator(n)
+        };
+        let ptr = |e: &Expr| match e {
+            Expr::Operator(rc) => Arc::as_ptr(rc),
+            _ => unreachable!(),
+        };
+        let a = lit(serde_json::json!([1.0, 2.5, 4.0]));
+        let b = lit(serde_json::json!([1.0, 2.5, 4.0]));
+        assert_eq!(ptr(&a), ptr(&b), "equal literals intern together");
+        let read = |t: Expr| Expr::operator(op("index", vec![t, Expr::Variable("k".into())]));
+        assert_eq!(
+            ptr(&read(a.clone())),
+            ptr(&read(b)),
+            "and so do their readers"
+        );
+        for other in [
+            serde_json::json!([1, 2.5, 4.0]),
+            serde_json::json!([1.0, 2.5]),
+            serde_json::json!([[1.0, 2.5, 4.0]]),
+            serde_json::json!([1.0, 2.5, -4.0]),
+        ] {
+            assert_ne!(ptr(&a), ptr(&lit(other.clone())), "{other}");
+        }
+        assert_ne!(
+            ptr(&lit(serde_json::json!(0.0))),
+            ptr(&lit(serde_json::json!(-0.0))),
+            "-0.0 and 0.0 stay distinct"
+        );
     }
 
     /// Copy-on-write: mutating one occurrence of a shared node must not change

@@ -693,11 +693,18 @@ fn counted_bracket_every_relation_and_axis() {
 #[test]
 fn counted_bracket_complement() {
     for axis in ["zc", "zp", "w"] {
-        for (cmp, rel) in [(">=", CountRel::Ge), ("<=", CountRel::Le), ("<", CountRel::Lt)] {
+        for (cmp, rel) in [
+            (">=", CountRel::Ge),
+            ("<=", CountRel::Le),
+            ("<", CountRel::Lt),
+        ] {
             let make = |n: i64| {
                 count_doc(
                     n,
-                    op("ifelse", vec![op(cmp, vec![axis_at(axis), query()]), json!(0), json!(1)]),
+                    op(
+                        "ifelse",
+                        vec![op(cmp, vec![axis_at(axis), query()]), json!(0), json!(1)],
+                    ),
                 )
             };
             let prog = flat_in_n(make, 5, 37);
@@ -713,7 +720,14 @@ fn counted_bracket_complement() {
         ],
     );
     for axis in ["zc", "w"] {
-        let body = op("ifelse", vec![op(">=", vec![axis_at(axis), nan.clone()]), json!(0), json!(1)]);
+        let body = op(
+            "ifelse",
+            vec![
+                op(">=", vec![axis_at(axis), nan.clone()]),
+                json!(0),
+                json!(1),
+            ],
+        );
         let prog = oracle_ab(count_doc(9, body)).0;
         assert_eq!(counts(&prog).len(), 1, "{axis}: NaN query");
     }
@@ -787,8 +801,14 @@ fn counted_bracket_near_misses_decline() {
     };
     let cases: Vec<(&str, Value)> = vec![
         ("weight 2", plain(ite(cmp("<="), json!(2), json!(0)))),
-        ("complement weight 2", plain(ite(cmp("<="), json!(0), json!(2)))),
-        ("constant indicator", plain(ite(cmp("<="), json!(1), json!(1)))),
+        (
+            "complement weight 2",
+            plain(ite(cmp("<="), json!(0), json!(2))),
+        ),
+        (
+            "constant indicator",
+            plain(ite(cmp("<="), json!(1), json!(1))),
+        ),
         ("equality", plain(indicator(cmp("==")))),
         (
             "query reads k",
@@ -1108,4 +1128,77 @@ fn const_gather_declined_bracket_leaves_no_trace() {
         assert_eq!(count(&prog, op), 0, "{op}");
     }
     assert_eq!(faulting_gathers(&prog), 0);
+}
+
+/// A scalar rule (lowered whole, the oracle's `eval`) shares a subtree it
+/// repeats — the same interned node — as a box's numbering does: one
+/// instruction for `sin(s)` however often it appears, one materialized copy
+/// of a repeated inline table. A value first computed inside one arm of a
+/// branch is not served to the other arm or after the branch (it may not
+/// have run), so each arm computes its own. Every executor writes the
+/// oracle's bits.
+#[test]
+fn wholesale_rule_shares_repeated_subtrees() {
+    let table = json!({"op": "const", "args": [], "value": [1.5, 2.5, 4.0]});
+    let sin_s = op("sin", vec![json!("s")]);
+    let d = |rhs: Value| {
+        doc(
+            "wholesale_sharing",
+            json!({"s": {"type": "unknown", "default": 1.0}}),
+            vec![json!({"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": rhs})],
+            None,
+        )
+    };
+    // Counted on the unfused program, where every `sin` is its own `Un`.
+    let unfused = |d: &Value| {
+        let file = crate::parse::load_string(&d.to_string()).expect("fixture document loads");
+        let compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
+        taped(compiled.build_tape_opts(&HashSet::new(), None)).0
+    };
+    let un = |p: &TapeProgram| {
+        p.instrs
+            .iter()
+            .filter(|i| matches!(i, Instr::Un { .. }))
+            .count()
+    };
+    // Repeated outside any branch: once.
+    let doc_ = d(op(
+        "+",
+        vec![
+            op("*", vec![sin_s.clone(), sin_s.clone()]),
+            op("*", vec![sin_s.clone(), ix_lit(&table, 2)]),
+            ix_lit(&table, 3),
+        ],
+    ));
+    oracle_ab(doc_.clone());
+    let prog = unfused(&doc_);
+    assert_eq!(un(&prog), 1, "sin(s) is computed once");
+    assert!(
+        count(&prog, "ConstArray") <= 1,
+        "the table is materialized at most once"
+    );
+    // In both arms of a run-time branch, and after it: once per arm and once
+    // after.
+    let cond = op("<", vec![json!("s"), json!(1.25)]);
+    let doc_ = d(op(
+        "+",
+        vec![
+            op(
+                "ifelse",
+                vec![cond, sin_s.clone(), op("*", vec![json!(2), sin_s.clone()])],
+            ),
+            sin_s.clone(),
+        ],
+    ));
+    oracle_ab(doc_.clone());
+    assert_eq!(
+        un(&unfused(&doc_)),
+        3,
+        "each arm and the code after the branch"
+    );
+}
+
+/// `index(table, k)` with a literal subscript.
+fn ix_lit(table: &Value, k: i64) -> Value {
+    json!({"op": "index", "args": [table, k]})
 }
