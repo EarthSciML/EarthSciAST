@@ -134,6 +134,7 @@ pub(crate) mod registered_functions;
 pub(crate) mod relational;
 pub(crate) mod serialize;
 pub(crate) mod solver;
+pub mod stdlib;
 pub(crate) mod structural;
 pub(crate) mod substitute;
 pub(crate) mod template_imports;

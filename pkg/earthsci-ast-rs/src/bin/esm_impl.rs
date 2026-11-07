@@ -4603,16 +4603,21 @@ fn toplevel_mount_failure(
     sel: Option<&str>,
     noun: &str,
 ) -> Option<String> {
-    if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
-        return Some("is a remote URL and could not be resolved".to_string());
-    }
-    let Ok(canonical) = base.join(ref_str).canonicalize() else {
-        return Some("could not be resolved: the file does not exist".to_string());
+    // esm-spec §4.7: an `esm:` ref names the crate's bundled standard library.
+    let text = match earthsci_ast::stdlib::resolve(ref_str, base) {
+        Some(Ok((_, text))) => Some(text.to_string()),
+        Some(Err(why)) => return Some(format!("could not be resolved: {why}")),
+        None => {
+            if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
+                return Some("is a remote URL and could not be resolved".to_string());
+            }
+            let Ok(canonical) = base.join(ref_str).canonicalize() else {
+                return Some("could not be resolved: the file does not exist".to_string());
+            };
+            fs::read_to_string(&canonical).ok()
+        }
     };
-    let Some(leaf) = fs::read_to_string(&canonical)
-        .ok()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-    else {
+    let Some(leaf) = text.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()) else {
         return Some("could not be read or parsed".to_string());
     };
     let systems = leaf.get(block).and_then(|v| v.as_object());
@@ -4682,8 +4687,26 @@ fn collect_subsystem_ref_errors(
                     "parent_model": sys_name,
                 });
 
+                // esm-spec §4.7: an `esm:` ref names the crate's bundled
+                // standard library, never a path.
+                let bundled = earthsci_ast::stdlib::resolve(ref_str, base);
+                if let Some(Err(why)) = &bundled {
+                    out.push(StructuralError {
+                        path,
+                        code: StructuralErrorCode::UnresolvedSubsystemRef,
+                        message: format!(
+                            "Subsystem reference '{ref_str}' could not be resolved — {why}"
+                        ),
+                        details,
+                    });
+                    continue;
+                }
+                let bundled_text = bundled.and_then(Result::ok).map(|(_, text)| text);
+
                 // Remote refs are not resolvable by the local loader.
-                if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
+                if bundled_text.is_none()
+                    && (ref_str.starts_with("http://") || ref_str.starts_with("https://"))
+                {
                     out.push(StructuralError {
                         path,
                         code: StructuralErrorCode::UnresolvedSubsystemRef,
@@ -4695,21 +4718,24 @@ fn collect_subsystem_ref_errors(
                     continue;
                 }
 
-                let Ok(canonical) = base.join(ref_str).canonicalize() else {
-                    out.push(StructuralError {
-                        path,
-                        code: StructuralErrorCode::UnresolvedSubsystemRef,
-                        message: format!(
-                            "Subsystem reference '{ref_str}' could not be resolved — file does not exist"
-                        ),
-                        details,
-                    });
-                    continue;
+                let text = match bundled_text {
+                    Some(text) => Some(text.to_string()),
+                    None => {
+                        let Ok(canonical) = base.join(ref_str).canonicalize() else {
+                            out.push(StructuralError {
+                                path,
+                                code: StructuralErrorCode::UnresolvedSubsystemRef,
+                                message: format!(
+                                    "Subsystem reference '{ref_str}' could not be resolved — file does not exist"
+                                ),
+                                details,
+                            });
+                            continue;
+                        };
+                        fs::read_to_string(&canonical).ok()
+                    }
                 };
-
-                let doc = fs::read_to_string(&canonical)
-                    .ok()
-                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+                let doc = text.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
                 let Some(doc) = doc else {
                     out.push(StructuralError {
                         path,
