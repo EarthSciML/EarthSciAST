@@ -16,6 +16,7 @@ import Esm.Closed.Datetime.TemplateAst
 import Esm.Lib.Relational
 import Esm.Lib.Geometry
 import Esm.Closed.Relational.TemplateAst
+import Esm.Closed.Geometry.TemplateAst
 import Esm.Closed.Tables
 import Esm.Closed.Tables.Enums
 import Esm.Closed.Tables.Nearest64

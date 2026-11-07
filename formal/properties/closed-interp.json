@@ -838,6 +838,17 @@
       "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [inst_4 : Esm.Closed.TemplateAst.ExprLaws α] [inst_5 : Esm.Closed.RelationalAst.NaNIs α] (F : Esm.Expr.Ast) (n : ℕ), 1 ≤ n → n + 1 ≤ 2 ^ 53 → ∀ (env : Esm.Expr.Env α) (v : ℕ → α), (∀ j : ℕ, 1 ≤ j → j ≤ n → Esm.Expr.eval F ((\"k_argmax_1\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin (j : ℝ))) :: env) = Except.ok (Esm.Expr.Val.num (v j)) ∧ ∀ w : Esm.Expr.Val α, Esm.Expr.eval F ((\"k_argmax_1\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin (j : ℝ))) :: (\"k_argmax_1\", w) :: env) = Except.ok (Esm.Expr.Val.num (v j))) → ∃ j : ℕ, Esm.Expr.evalApply Esm.Lib.Relational.argmax [(\"f\", F), (\"n\", Esm.Expr.Ast.num (n : ℤ) 0)] env = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin (j : ℝ))) ∧ 1 ≤ j ∧ j ≤ n ∧ ((∃ i, 1 ≤ i ∧ i ≤ n ∧ v i = Esm.Closed.Scalar.nan) → v j = Esm.Closed.Scalar.nan ∧ ∀ i, 1 ≤ i → i < j → v i ≠ Esm.Closed.Scalar.nan) ∧ ((∀ i, 1 ≤ i → i ≤ n → v i ≠ Esm.Closed.Scalar.nan) → (∀ i, 1 ≤ i → i ≤ n → Esm.Closed.Scalar.le (v i) (v j) = true) ∧ (∀ i, 1 ≤ i → i < j → Esm.Closed.Scalar.lt (v i) (v j) = true))",
       "status": "proven",
       "theorem": "Esm.Closed.RelationalAst.argmax_template"
+    },
+    {
+      "id": "P-geometry-lib-planar-ref",
+      "clauses": [
+        "spec.9.6.1.param-shadows-literal-substitute",
+        "spec.9.6.3.bindings-cover-params"
+      ],
+      "statement": "The overlap_area_planar template of lib/geometry.esm, applied to two rank-3 ring stacks with 1 <= nv < 2^53 vertex slots of two coordinates in the named cells and evaluated, is planarRef: the clip-area algorithm (shoelace fans about the first vertex of ring A, orientation signs, each edge's parameter interval [t0, t1] from the other ring's half-planes with the relative on-the-line tolerance, the + / min / max folds in index order) operation for operation; at Bin64 bit for bit.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [inst_4 : Esm.Closed.TemplateAst.ExprLaws α] {MA MB : List (List (List α))} {ca cb na nb : ℕ}, Esm.Closed.GeometryAst.Shape MA ca na → Esm.Closed.GeometryAst.Shape MB cb nb → 1 ≤ na → 1 ≤ nb → na < 2 ^ 53 → nb < 2 ^ 53 → Esm.Expr.evalApply Esm.Lib.Geometry.overlap_area_planar (Esm.Closed.GeometryAst.bindP na nb) [(\"RA\", Esm.Expr.Val.arr3 MA), (\"CA\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin (ca : ℝ))), (\"RB\", Esm.Expr.Val.arr3 MB), (\"CB\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin (cb : ℝ)))] = Except.ok (Esm.Expr.Val.num (Esm.Closed.GeometryAst.planarRef MA ca na MB cb nb))",
+      "status": "proven",
+      "theorem": "Esm.Closed.GeometryAst.planar_template_eq"
     }
   ]
 }
