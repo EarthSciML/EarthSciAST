@@ -325,6 +325,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("array_contraction_table_test.jl")      # …its gated / ragged / filtered form, table-driven
     include("count_fold_test.jl")                   # #588: the indicator sum emitted as a count
     include("closed_interp_native_test.jl")         # #660: the interp templates under native; repeated sub-trees shared
+    include("relational_templates_test.jl")         # the lib/relational.esm argmin/argmax templates against the ops
     include("makearray_nested_reduction_test.jl")   # #547: a nested scalar reduction in a makearray region
     include("affine_reduce_test.jl")                # the affine tier's run-time contraction fold
     include("native_probe_fixtures_test.jl")        # native's probe fixtures: rank > 3, fill sections, const subscripts
