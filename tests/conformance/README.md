@@ -63,6 +63,10 @@ tests/conformance/
 │   ├── manifest.json
 │   ├── fixtures/<id>.esm
 │   └── golden/<id>.json            #   the right-hand side at the initial state, bit for bit
+├── interp_templates/              # lib/interp.esm templates bit-for-bit against the interp.* scenarios (CONFORMANCE_SPEC §5.45.4)
+│   ├── README.md                   #   the contract
+│   ├── manifest.json               #   `"runner": "inline_tests"`; its three documents are REFERENCED from tests/closed_functions/interp/<fn>/template.esm
+│   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
 ├── native_model_shapes/            # downstream-model shapes native must run, static and dynamic (CONFORMANCE_SPEC §5.45.4)
 │   ├── README.md                   #   the contract, and the divergence it closed
 │   ├── manifest.json               #   `"runner": "inline_tests"`

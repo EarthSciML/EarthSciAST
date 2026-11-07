@@ -27,14 +27,26 @@ tests/closed_functions/
 └── interp/
     ├── searchsorted/         (interp.searchsorted)
     │   ├── canonical.esm
-    │   └── expected.json
+    │   ├── expected.json
+    │   └── template.esm      (the lib/interp.esm template on a subset of the scenarios)
     ├── linear/               (interp.linear — 1-D tensor interpolation)
     │   ├── canonical.esm
-    │   └── expected.json
+    │   ├── expected.json
+    │   └── template.esm
     └── bilinear/             (interp.bilinear — 2-D tensor interpolation)
         ├── canonical.esm
-        └── expected.json
+        ├── expected.json
+        └── template.esm
 ```
+
+Each `interp/<fn>/template.esm` imports `lib/interp.esm` (the pure-AST
+templates `searchsorted`, `linear`, `bilinear`) and applies the template to
+scenarios of the sibling `expected.json`, asserting each value exactly in an
+inline test. The `interp_templates` conformance tier
+(`tests/conformance/interp_templates/`) runs those documents in every binding
+with an inline-test runner. Each binding's harness additionally runs every
+success scenario, NaN queries included, through the expanded template and
+asserts the same bits as the `fn` form.
 
 ## `expected.json` schema
 

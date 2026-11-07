@@ -1,0 +1,553 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "interp_linear_template",
+    "description": "The `linear` template of lib/interp.esm applied to scenarios of this directory's expected.json, which pins the same values for the `interp.linear` closed function (esm-spec §9.2). Each scenario is one algebraic unknown defined by an `apply_expression_template` call with the scenario's arrays as `const` nodes, the axis lengths as integers and the query as a parameter; the inline test asserts the expected value exactly (tolerance 0). NaN scenarios stay in the binding harnesses, since JSON cannot write NaN. Run by the `interp_templates` inline-test conformance tier.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "tags": [
+      "closed-function-registry",
+      "interp",
+      "interp.linear",
+      "expression-templates",
+      "standard-library"
+    ]
+  },
+  "models": {
+    "interp_linear_template": {
+      "expression_template_imports": [
+        {
+          "ref": "../../../../lib/interp.esm",
+          "only": [
+            "linear"
+          ]
+        }
+      ],
+      "variables": {
+        "s": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0,
+          "description": "Trivial state, so the document has something to integrate."
+        },
+        "x_below_minimum_clamps": {
+          "type": "parameter",
+          "units": "1",
+          "default": -5.0,
+          "description": "Query of scenario `below_minimum_clamps`."
+        },
+        "r_below_minimum_clamps": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`linear` template on scenario `below_minimum_clamps` of expected.json: clamp below."
+        },
+        "x_above_maximum_clamps": {
+          "type": "parameter",
+          "units": "1",
+          "default": 99.0,
+          "description": "Query of scenario `above_maximum_clamps`."
+        },
+        "r_above_maximum_clamps": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`linear` template on scenario `above_maximum_clamps` of expected.json: clamp above."
+        },
+        "x_exact_at_first_knot": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.0,
+          "description": "Query of scenario `exact_at_first_knot`."
+        },
+        "r_exact_at_first_knot": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`linear` template on scenario `exact_at_first_knot` of expected.json: x on the first knot."
+        },
+        "x_exact_at_interior_knot": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "Query of scenario `exact_at_interior_knot`."
+        },
+        "r_exact_at_interior_knot": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`linear` template on scenario `exact_at_interior_knot` of expected.json: x on an interior knot (w = 0)."
+        },
+        "x_exact_at_last_knot": {
+          "type": "parameter",
+          "units": "1",
+          "default": 4.0,
+          "description": "Query of scenario `exact_at_last_knot`."
+        },
+        "r_exact_at_last_knot": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`linear` template on scenario `exact_at_last_knot` of expected.json: x on the last knot."
+        },
+        "x_midpoint_first_cell": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5,
+          "description": "Query of scenario `midpoint_first_cell`."
+        },
+        "r_midpoint_first_cell": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`linear` template on scenario `midpoint_first_cell` of expected.json: blend in the first cell."
+        },
+        "x_quarter_point_interior_cell": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.25,
+          "description": "Query of scenario `quarter_point_interior_cell`."
+        },
+        "r_quarter_point_interior_cell": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`linear` template on scenario `quarter_point_interior_cell` of expected.json: blend in an interior cell."
+        },
+        "x_two_point_table_midpoint": {
+          "type": "parameter",
+          "units": "1",
+          "default": 12.5,
+          "description": "Query of scenario `two_point_table_midpoint`."
+        },
+        "r_two_point_table_midpoint": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`linear` template on scenario `two_point_table_midpoint` of expected.json: two-knot table."
+        },
+        "x_non_uniform_axis_blend": {
+          "type": "parameter",
+          "units": "1",
+          "default": 3.0,
+          "description": "Query of scenario `non_uniform_axis_blend`."
+        },
+        "r_non_uniform_axis_blend": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`linear` template on scenario `non_uniform_axis_blend` of expected.json: non-uniform axis."
+        },
+        "x_negative_axis_and_table_values": {
+          "type": "parameter",
+          "units": "1",
+          "default": -0.5,
+          "description": "Query of scenario `negative_axis_and_table_values`."
+        },
+        "r_negative_axis_and_table_values": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`linear` template on scenario `negative_axis_and_table_values` of expected.json: negative axis and table."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "s"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": "r_below_minimum_clamps",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "linear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  10.0,
+                  20.0,
+                  40.0,
+                  80.0,
+                  160.0
+                ]
+              },
+              "axis": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  2.0,
+                  3.0,
+                  4.0
+                ]
+              },
+              "x": "x_below_minimum_clamps",
+              "n": 5
+            }
+          }
+        },
+        {
+          "lhs": "r_above_maximum_clamps",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "linear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  10.0,
+                  20.0,
+                  40.0,
+                  80.0,
+                  160.0
+                ]
+              },
+              "axis": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  2.0,
+                  3.0,
+                  4.0
+                ]
+              },
+              "x": "x_above_maximum_clamps",
+              "n": 5
+            }
+          }
+        },
+        {
+          "lhs": "r_exact_at_first_knot",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "linear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  10.0,
+                  20.0,
+                  40.0,
+                  80.0,
+                  160.0
+                ]
+              },
+              "axis": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  2.0,
+                  3.0,
+                  4.0
+                ]
+              },
+              "x": "x_exact_at_first_knot",
+              "n": 5
+            }
+          }
+        },
+        {
+          "lhs": "r_exact_at_interior_knot",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "linear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  10.0,
+                  20.0,
+                  40.0,
+                  80.0,
+                  160.0
+                ]
+              },
+              "axis": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  2.0,
+                  3.0,
+                  4.0
+                ]
+              },
+              "x": "x_exact_at_interior_knot",
+              "n": 5
+            }
+          }
+        },
+        {
+          "lhs": "r_exact_at_last_knot",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "linear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  10.0,
+                  20.0,
+                  40.0,
+                  80.0,
+                  160.0
+                ]
+              },
+              "axis": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  2.0,
+                  3.0,
+                  4.0
+                ]
+              },
+              "x": "x_exact_at_last_knot",
+              "n": 5
+            }
+          }
+        },
+        {
+          "lhs": "r_midpoint_first_cell",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "linear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  10.0,
+                  20.0,
+                  40.0,
+                  80.0,
+                  160.0
+                ]
+              },
+              "axis": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  2.0,
+                  3.0,
+                  4.0
+                ]
+              },
+              "x": "x_midpoint_first_cell",
+              "n": 5
+            }
+          }
+        },
+        {
+          "lhs": "r_quarter_point_interior_cell",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "linear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  10.0,
+                  20.0,
+                  40.0,
+                  80.0,
+                  160.0
+                ]
+              },
+              "axis": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  2.0,
+                  3.0,
+                  4.0
+                ]
+              },
+              "x": "x_quarter_point_interior_cell",
+              "n": 5
+            }
+          }
+        },
+        {
+          "lhs": "r_two_point_table_midpoint",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "linear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  3.0,
+                  7.0
+                ]
+              },
+              "axis": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  10.0,
+                  20.0
+                ]
+              },
+              "x": "x_two_point_table_midpoint",
+              "n": 2
+            }
+          }
+        },
+        {
+          "lhs": "r_non_uniform_axis_blend",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "linear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  4.0
+                ]
+              },
+              "axis": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  5.0
+                ]
+              },
+              "x": "x_non_uniform_axis_blend",
+              "n": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_negative_axis_and_table_values",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "linear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  -10.0,
+                  -5.0,
+                  0.0,
+                  5.0
+                ]
+              },
+              "axis": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  -2.0,
+                  -1.0,
+                  0.0,
+                  1.0
+                ]
+              },
+              "x": "x_negative_axis_and_table_values",
+              "n": 4
+            }
+          }
+        }
+      ],
+      "tolerance": {
+        "abs": 0,
+        "rel": 0
+      },
+      "tests": [
+        {
+          "id": "interp_linear_template_t0",
+          "description": "Every scenario at t = 0.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "r_below_minimum_clamps",
+              "time": 0.0,
+              "expected": 10.0
+            },
+            {
+              "variable": "r_above_maximum_clamps",
+              "time": 0.0,
+              "expected": 160.0
+            },
+            {
+              "variable": "r_exact_at_first_knot",
+              "time": 0.0,
+              "expected": 10.0
+            },
+            {
+              "variable": "r_exact_at_interior_knot",
+              "time": 0.0,
+              "expected": 40.0
+            },
+            {
+              "variable": "r_exact_at_last_knot",
+              "time": 0.0,
+              "expected": 160.0
+            },
+            {
+              "variable": "r_midpoint_first_cell",
+              "time": 0.0,
+              "expected": 15.0
+            },
+            {
+              "variable": "r_quarter_point_interior_cell",
+              "time": 0.0,
+              "expected": 50.0
+            },
+            {
+              "variable": "r_two_point_table_midpoint",
+              "time": 0.0,
+              "expected": 4.0
+            },
+            {
+              "variable": "r_non_uniform_axis_blend",
+              "time": 0.0,
+              "expected": 2.5
+            },
+            {
+              "variable": "r_negative_axis_and_table_values",
+              "time": 0.0,
+              "expected": -2.5
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -57,6 +57,16 @@ exercised 1:1 by the per-binding unit suites). This is the rule that lets the
 EarthSciDiscretizations conservative-regrid library serve every manifold from
 one file instead of pinning `manifold: "planar"` per file.
 
+### `ranges_param/` (expanded.esm)
+
+A template parameter in a `faq` dense `ranges` tuple entry is a substitution
+site (esm-spec §9.6.1): `count_le` counts axis entries at or below a query over
+`k_c` in `[1, n]`, and `count_le_step` over `k_s` in `[lo, s, n]`, with every
+bound a parameter. Three call sites bind `n` to 3, 2 and 5. All five bindings
+MUST expand each `ranges` tuple to the bound integers (`expanded.esm`,
+Julia-generated via `scripts/generate-template-import-goldens.jl`). This is how
+the `lib/interp.esm` templates take an axis length as an integer parameter.
+
 ## Rewrite-engine fixtures (0.8.0: outermost-first + priority + bounded fixpoint)
 
 These exercise the auto-applied `match` rewrite engine (esm-spec §9.6.3) and the
