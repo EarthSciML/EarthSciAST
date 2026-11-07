@@ -968,3 +968,45 @@ fn const_gather_at_a_clamped_count() {
     let prog = oracle_ab(read(count())).0;
     assert!(faulting_gathers(&prog) > 0, "zc[count] can read zc[0]");
 }
+
+/// A count window the axis does not hold at run time (a program whose
+/// window outgrew its axis) is refused in every build profile, not read past
+/// the axis's end.
+#[test]
+fn count_window_outside_its_axis_is_refused() {
+    let d = count_doc(9, indicator(op("<=", vec![axis_at("w"), query()])));
+    let file = crate::parse::load_string(&d.to_string()).expect("fixture document loads");
+    let compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
+    let (mut prog, _) = taped(compiled.build_tape_opts(&HashSet::new(), None));
+    let mut widened = 0;
+    for ins in &mut prog.instrs {
+        if let Instr::Count { n, .. } = ins {
+            *n += 1;
+            widened += 1;
+        }
+    }
+    assert_eq!(widened, 1);
+    let n = compiled.state_variable_names().len();
+    let param_vec = compiled.debug_resolve_params(&HashMap::new());
+    let mut scratch = super::super::RhsScratch::new(&compiled.var_shapes);
+    scratch.install_tape(std::sync::Arc::new(prog));
+    let state = seeded_state(n, 1, 0.25, 2.5);
+    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut dy = vec![0.0f64; n];
+        compiled.debug_eval_rhs_into(
+            &state,
+            0.0,
+            &param_vec,
+            &mut dy,
+            &mut scratch,
+            &mut RhsStats::default(),
+        );
+    }));
+    let err = run.expect_err("an out-of-axis window must be refused");
+    let msg = err
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default();
+    assert!(msg.contains("does not hold the window"), "{msg}");
+}
