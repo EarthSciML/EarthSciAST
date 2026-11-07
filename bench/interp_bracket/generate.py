@@ -42,7 +42,8 @@ Usage:
 Timing: ``ab.py`` here runs the spellings' whole solves interleaved (any binary
 with an ``esm simulate``); the Rust criterion group ``interp_bracket`` in
 ``pkg/earthsci-ast-rs/benches/benchmarks.rs`` times one right-hand side of
-each against a hand-written loop.
+each against a hand-written loop, and ``bench_julia.jl`` times the same
+spellings under the Julia native compiler.
 """
 
 import argparse

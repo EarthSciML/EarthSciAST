@@ -390,6 +390,10 @@ _cg_oplus_fn(op::Symbol) =
 function _cg_contraction_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi; span = nothing)
     spec = nd.payload::_ContractLoop
     haskey(kc.loops, spec.ref) && throw(_CodegenDecline(:contraction_loop_reentered))
+    if _compiler_plan_now().count_fold
+        cnt = _cg_count_loop(ctx, kc, nd, lo, st, hi, span)
+        cnt === nothing || return cnt
+    end
     fnsym = _cg_oplus_fn(nd.op)
     kv = _cg_name(ctx, "lk")
     acc = _cg_name(ctx, "lacc")
@@ -410,6 +414,132 @@ function _cg_contraction_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi; span = not
             $acc
         end
     end
+end
+
+# ---- The indicator sum as a count ---------------------------------------------
+# A `+` loop seeded from +0.0 over ONE contracted index whose body is exactly
+#
+#     ifelse(a(k) <= x, 1, 0)      or its mirror      ifelse(x >= a(k), 1, 0)
+#
+# with `x` not reading the counter, is the number of `k` with `a(k) <= x`: the
+# bracket of a table interpolation written in the format's own operators. Every
+# term is exactly 0.0 or 1.0 and every partial sum an integer far below 2^53, so
+# the fold is exact and ANY algorithm computing that count has its bits, for any
+# content of `a` (unsorted, NaN, ±0.0) and any `x` (a NaN matches nothing). It
+# is emitted as an integer count, `x` evaluated once (it is pure, and the range
+# is non-empty, so the fold evaluates it too). When `a` is a 1-D constant array
+# read at the counter itself and its entries over the range are in ascending
+# order, the count is a binary search over them; otherwise each entry is
+# compared, as the fold does.
+#
+# The match is on this one algebraic shape, never on where it came from. Any
+# other seed, ⊕, body, branch literals or comparison is the ordinary fold.
+# `nothing` declines to it.
+function _cg_count_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi, span)
+    spec = nd.payload::_ContractLoop
+    (nd.op === :+ && nd.literal === 0.0 && length(nd.children) == 1) || return nothing
+    isempty(spec.lo:spec.step:spec.hi) && return nothing
+    body = nd.children[1]
+    (body.kind === _NK_OP && body.op === :ifelse && length(body.children) == 3) ||
+        return nothing
+    cond, yes, no = body.children
+    (yes.kind === _NK_LITERAL && no.kind === _NK_LITERAL) || return nothing
+    (cond.kind === _NK_OP && length(cond.children) == 2) || return nothing
+    if cond.op === :<=
+        a, x = cond.children
+    elseif cond.op === :>=
+        x, a = cond.children
+    else
+        return nothing
+    end
+    _reads_counter(x, spec.ref) && return nothing
+    # The branch values as the fold would emit them: under the scalar tier a
+    # literal is a hole, baked only when every member of the class agrees.
+    (_cg_emit(ctx, kc, yes) === 1.0 && _cg_emit(ctx, kc, no) === 0.0) || return nothing
+    cmp = _CG_CMP_FN[cond.op]
+    xv = _cg_name(ctx, "cx")
+    cv = _cg_name(ctx, "cn")
+    xe = _cg_emit(ctx, kc, x)
+    # The comparison with the operands in the order the document wrote them.
+    test(av) = cond.op === :<= ? Expr(:call, cmp, av, xv) : Expr(:call, cmp, xv, av)
+    axis = _count_const_axis(a, spec)
+    if axis !== nothing
+        _tally_cascade!(:count_fold_search)
+        tv = _cg_name(ctx, "ct")
+        hv = _cg_name(ctx, "ch")
+        mv = _cg_name(ctx, "cm")
+        # The largest `m` with `axis[m] <= x`: the predicate holds on a prefix of
+        # an ascending axis, so the search keeps `axis[cn] <= x` (or `cn == 0`)
+        # and `!(axis[ch + 1] <= x)` (or `ch == n`).
+        return quote
+            let
+                local $xv = $xe
+                local $tv = $(_cg_tab!(ctx, axis))
+                local $cv = 0
+                local $hv = length($tv)
+                while $cv < $hv
+                    local $mv = ($cv + $hv + 1) >>> 1
+                    if $(test(:($tv[$mv])))
+                        $cv = $mv
+                    else
+                        $hv = $mv - 1
+                    end
+                end
+                Float64($cv)
+            end
+        end
+    end
+    _tally_cascade!(:count_fold_linear)
+    kv = _cg_name(ctx, "lk")
+    kc.loops[spec.ref] = kv
+    span === nothing || (kc.spans[spec.ref] = span)
+    ae = try
+        _cg_emit(ctx, kc, a)
+    finally
+        delete!(kc.loops, spec.ref)
+        span === nothing || delete!(kc.spans, spec.ref)
+    end
+    return quote
+        let
+            local $xv = $xe
+            local $cv = 0
+            for $kv in $lo:$st:$hi
+                $cv += $(test(ae)) ? 1 : 0
+            end
+            Float64($cv)
+        end
+    end
+end
+
+# Whether a subtree reads the loop counter `ref`.
+_reads_counter(n::_Node, ref) =
+    (n.kind === _NK_LOOPVAR && n.payload === ref) ||
+    _anyof(c -> _reads_counter(c, ref), n.children)
+
+# The entries a counted loop's body reads from `a` over the whole range, when
+# `a` is a 1-D constant array read at the counter itself and they ascend
+# (`a[k] <= a[k+1]`, which no NaN satisfies); else `nothing`. Each entry is the
+# one the run-time gather reads, through the same boundary policy; a subscript
+# that policy refuses keeps the loop, which raises it at run time as the fold
+# does.
+function _count_const_axis(a::_Node, spec::_ContractLoop)
+    (a.kind === _NK_CONST_GATHER && length(a.children) == 1) || return nothing
+    s = a.children[1]
+    (s.kind === _NK_LOOPVAR && s.payload === spec.ref) || return nothing
+    cg = a.payload::_ConstGatherArray
+    length(cg.dims) == 1 || return nothing
+    rng = spec.lo:spec.step:spec.hi
+    vals = Vector{Float64}(undef, length(rng))
+    for (i, k) in enumerate(rng)
+        (1 <= k <= cg.dims[1]) ||
+            (cg.dims[1] >= 1 && (cg.boundary[1] === :periodic || cg.boundary[1] === :clamp)) ||
+            return nothing
+        vals[i] = cg.flat[_const_gather_sub(cg, 1, k)]
+    end
+    for i in 1:(length(vals) - 1)
+        vals[i] <= vals[i + 1] || return nothing
+    end
+    return vals
 end
 
 # A scalar reduction nested in a nest's term (`_NEST_SCALAR_LOOPS`). Its bounds
