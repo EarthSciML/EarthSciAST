@@ -209,6 +209,15 @@ pub(super) fn instr_work(prog: &TapeProgram, ins: &Instr) -> usize {
         | Instr::DataGather { out, .. }
         | Instr::Scan { out, .. } => prog.slots[*out as usize].elems(),
         Instr::Reduce { src_shape, .. } => src_shape.iter().product(),
+        // Per element, a bisection of the window or a pass over it.
+        Instr::Count { n, sorted, out, .. } => {
+            let per = if *sorted {
+                (usize::BITS - (*n as usize).leading_zeros()) as usize
+            } else {
+                *n as usize
+            };
+            prog.slots[*out as usize].elems().saturating_mul(per.max(1))
+        }
         Instr::Lanes { spec } => {
             let ls = &prog.lanes[*spec as usize];
             (ls.lanes as usize).saturating_mul(lane_cost(ls) + 1)
