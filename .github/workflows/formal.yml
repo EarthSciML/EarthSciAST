@@ -1,8 +1,9 @@
 name: Formal model (Lean)
 
 # Builds the Lean model of the spec in `formal/` and runs its audit gate
-# (`scripts/formal-audit.py`). Not a required check yet: it becomes blocking
-# per conformance tier once the model covers that tier (formal/README.md).
+# (`scripts/formal-audit.py`), then scores the model's adapter on the tiers
+# it covers: the closed-function fixtures, the function-table load checks and
+# the `interp_templates` tier. A mismatch there fails the job (formal/README.md).
 #
 # The spec files are in `paths` because the inventory audit checks that every
 # MUST clause is accounted for and that every citation still resolves: a spec
@@ -18,6 +19,10 @@ on:
       - 'esm-spec.md'
       - 'CONFORMANCE_SPEC.md'
       - 'scripts/formal-audit.py'
+      - 'scripts/run-closed-functions-lean.py'
+      - 'tests/closed_functions/**'
+      - 'tests/conformance/interp_templates/**'
+      - 'tests/conformance/function_tables/load_errors/**'
       - '.github/workflows/formal.yml'
   pull_request:
     branches: [ main ]
@@ -27,6 +32,10 @@ on:
       - 'esm-spec.md'
       - 'CONFORMANCE_SPEC.md'
       - 'scripts/formal-audit.py'
+      - 'scripts/run-closed-functions-lean.py'
+      - 'tests/closed_functions/**'
+      - 'tests/conformance/interp_templates/**'
+      - 'tests/conformance/function_tables/load_errors/**'
       - '.github/workflows/formal.yml'
   workflow_dispatch:
 
@@ -91,3 +100,10 @@ jobs:
 
     - name: Audit registry against the build
       run: python3 scripts/formal-audit.py registry --lean
+
+    # The model as a conformance participant: `esm-lean` on every
+    # closed-function fixture, the §9.5.5 table-check ledger and the
+    # interp_templates documents, bit for bit where the tolerance is zero.
+    # `lake build` above already built the adapter.
+    - name: Score the model on the closed-function and template tiers
+      run: python3 scripts/run-closed-functions-lean.py --no-build
