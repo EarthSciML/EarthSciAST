@@ -1032,3 +1032,23 @@ fn count_rewrite_is_a_build_option() {
         "served from the cache"
     );
 }
+
+/// A count the instruction cannot state declines to the general reduction
+/// instead of refusing the rule: here a standalone rank-0 sum whose query is
+/// the whole `u` (an array over its own box) rather than one element. It is
+/// taped by the general lowering, with the oracle's bits, beside the
+/// per-cell count.
+#[test]
+fn counted_bracket_query_box_mismatch_declines() {
+    let mut d = count_doc(9, indicator(op("<=", vec![axis_at("zc"), query()])));
+    d["models"]["M"]["variables"]["s"] = json!({"type": "unknown", "shape": ["lev"]});
+    d["models"]["M"]["equations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"lhs": "s", "rhs": {
+            "op": "faq", "args": [], "output_idx": [], "ranges": {"k": [1, 9]},
+            "expr": indicator(op("<=", vec![axis_at("zc"), json!("u")]))
+        }}));
+    let prog = oracle_ab(d).0;
+    assert_eq!(counts(&prog), vec![(CountRel::Le, true)], "only c's count");
+}
