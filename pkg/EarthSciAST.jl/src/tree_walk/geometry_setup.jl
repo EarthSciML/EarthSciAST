@@ -182,6 +182,33 @@ function _expr_has_polygon_intersection_area(e::OpExpr, seen::IdDict{OpExpr, Not
 end
 _expr_has_polygon_intersection_area(::ASTExpr) = false
 
+# A join-gated array `faq` whose body is itself a reduction over a nested
+# `faq` (`A_ij[i,j] = overlap_area_planar(src, i, 4, tgt, j, 4)` expanded from
+# lib/geometry.esm: per candidate pair, a sum over edges of min/max folds over
+# the other ring's half-planes) is the pure-AST form of the fused overlap-area
+# leaf. Over const inputs it is the same build-once setup array, and it takes
+# the same compiled setup sweep (`_materialize_geom_array`): its readers gather
+# a const array per cell instead of an `index(faq, …)` of a gated reduction the
+# right-hand-side tiers cannot fold. The body must speak only the setup
+# language (`_GEO_EVAL_OPS`). A gated faq whose body has no nested reduction
+# (a right-hand side's `Σ_i W[i,j]·F[i]`) is not matched.
+function _is_setup_join_reduction(e)
+    (e isa OpExpr && _is_faq_op(e.op) && e.expr_body isa OpExpr) || return false
+    (e.join !== nothing || e.join_gates !== nothing) || return false
+    (e.output_idx !== nothing && !isempty(e.output_idx)) || return false
+    _body_needs_general_eval(e) && return false
+    return _has_nested_faq(e.expr_body::OpExpr, IdDict{OpExpr, Nothing}())
+end
+function _has_nested_faq(e::OpExpr, seen::IdDict{OpExpr, Nothing})
+    _is_faq_op(e.op) && return true
+    haskey(seen, e) && return false
+    seen[e] = nothing
+    _anyof(a -> a isa OpExpr && _has_nested_faq(a, seen), e.args) && return true
+    return e.expr_body isa OpExpr && _has_nested_faq(e.expr_body::OpExpr, seen)
+end
+_model_has_setup_join_reduction(equations) =
+    _anyof(eq -> eq.lhs isa VarExpr && _is_setup_join_reduction(eq.rhs), equations)
+
 # An intersection-area leaf lives in an equation LHS/RHS — from esm 1.0.0 an
 # observed unknown's defining body is its equation, so there is nowhere else to
 # look.
@@ -362,6 +389,19 @@ end
 # aggregate onto `pd_support__<C>` — and when that aggregate's weight is an
 # intersection area, its body IS setup-time geometry.
 function _geo_index_extent(ref, index_sets, derived_extents)
+    # A dense `[1, n]` tuple (a template's loop over a vertex-slot count,
+    # esm-spec §9.6.1) is the same loop as an index set of size n. Another
+    # lower bound has no setup-time form.
+    if ref isa AbstractVector
+        (length(ref) == 2 && ref[1] isa Integer && ref[1] == 1 && ref[2] isa Integer) ||
+            throw(
+            TreeWalkError(
+                "E_TREEWALK_GEOMETRY_SETUP",
+                "setup-time geometry loops only over an index set or a dense [1, n] range, not $(ref)"
+            )
+        )
+        return max(Int(ref[2]), 0)
+    end
     name = ref isa IndexSetRef ? ref.from : String(ref)
     haskey(derived_extents, name) && return derived_extents[name]
     s = index_sets === nothing ? nothing : get(index_sets, name, nothing)
@@ -1845,6 +1885,10 @@ function _geometry_setup_vars(
             _expr_has_intersect_polygon(defs[n]) ||
                 _expr_has_polygon_intersection_area(defs[n])
         ) && push!(setup, n)
+        # The pure-AST overlap area, over inputs that read no state.
+        _is_setup_join_reduction(defs[n]) &&
+            !_anyof(f -> f in state_var_names, _referenced_var_names(defs[n])) &&
+            push!(setup, n)
     end
     mvars = Set{String}(keys(model.variables))
     # An array observed is build-once-SETUP-materializable only if it does NOT read a

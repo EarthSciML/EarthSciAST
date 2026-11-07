@@ -302,7 +302,8 @@ function _discover_geometry_vars(
     )
     has_geometry = _model_has_intersect_polygon(model)
     has_pia = _model_has_polygon_intersection_area(model, equations)
-    has_setup_geometry = has_geometry || has_pia
+    has_setup_geometry = has_geometry || has_pia ||
+        _model_has_setup_join_reduction(equations)
     ring_vars = Set{String}()
     if has_geometry
         for eq in equations
