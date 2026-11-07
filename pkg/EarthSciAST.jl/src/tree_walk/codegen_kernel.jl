@@ -1206,6 +1206,8 @@ function _cg_emit_op(ctx::_CGCtx, kc, nd::_Node)
     op = nd.op
     ch = nd.children
     ev(x) = _cg_emit(ctx, kc, x)
+    # A lazily evaluated operand is a region of its own (`_cg_emit_region`).
+    lz(x) = _cg_emit_region(ctx, kc, x)
     if op === :+ || op === :*
         isempty(ch) && throw(_CodegenDecline(:unsupported_op))
         length(ch) == 1 && return ev(ch[1])
@@ -1221,18 +1223,18 @@ function _cg_emit_op(ctx::_CGCtx, kc, nd::_Node)
         # `ev(x) == 0 && return 0.0` per child, else 1.0 — as an `&&` chain:
         # same child order, same short-circuit set, same 1.0/0.0 result.
         isempty(ch) && throw(_CodegenDecline(:unsupported_op))
-        cond = _cg_chain(:&&, Any[:($(ev(c)) != 0) for c in ch])
+        cond = _cg_chain(:&&, Any[:($(j == 1 ? ev(c) : lz(c)) != 0) for (j, c) in enumerate(ch)])
         return :($cond ? 1.0 : 0.0)
     elseif op === :or
         isempty(ch) && throw(_CodegenDecline(:unsupported_op))
-        cond = _cg_chain(:||, Any[:($(ev(c)) != 0) for c in ch])
+        cond = _cg_chain(:||, Any[:($(j == 1 ? ev(c) : lz(c)) != 0) for (j, c) in enumerate(ch)])
         return :($cond ? 1.0 : 0.0)
     elseif op === :not
         length(ch) == 1 || throw(_CodegenDecline(:unsupported_op))
         return :($(ev(ch[1])) == 0 ? 1.0 : 0.0)
     elseif op === :ifelse
         length(ch) == 3 || throw(_CodegenDecline(:unsupported_op))
-        return :($(ev(ch[1])) != 0 ? $(ev(ch[2])) : $(ev(ch[3])))
+        return :($(ev(ch[1])) != 0 ? $(lz(ch[2])) : $(lz(ch[3])))
     elseif op === :atan
         length(ch) == 1 && return :(atan($(ev(ch[1]))))
         length(ch) == 2 && return :(atan($(ev(ch[1])), $(ev(ch[2]))))

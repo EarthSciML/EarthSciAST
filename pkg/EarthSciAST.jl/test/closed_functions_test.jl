@@ -10,6 +10,7 @@
 using Test
 using JSON3
 using EarthSciAST
+import OrdinaryDiffEqTsit5  # the solver `run_inline_tests` picks for template.esm
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
@@ -498,4 +499,112 @@ end
     @test code("[1.0, 0.0]") == "interp_non_monotonic_axis"
     @test code("[0.0]") == "interp_axis_too_short"
     @test code("[[0.0, 1.0], [2.0, 3.0]]") == "interp_axis_not_const"
+end
+
+# lib/interp.esm carries the pure-AST definitions of the three `interp.*`
+# functions as expression templates (`searchsorted`, `linear`, `bilinear`).
+# Every success scenario of tests/closed_functions/interp/*/expected.json runs
+# through the expanded template under the interpreter and must give the SAME
+# bits as the `fn` form (`isequal`: NaN matches NaN, -0.0 does not match 0.0),
+# including the NaN-query scenarios JSON fixtures cannot carry. The query is a
+# parameter so a NaN can be supplied at call time; the arrays are `const` nodes
+# and each axis length is the integer the template takes.
+const _CF_INTERP_LIB = joinpath(_CF_REPO_ROOT, "lib", "interp.esm")
+
+_cf_const(a) = Dict{String, Any}("op" => "const", "args" => Any[], "value" => a)
+
+# (template name, its bindings, the query parameter values) for one scenario.
+function _cf_template_call(fn_name::String, raw_inputs)
+    if fn_name == "interp.searchsorted"
+        x, xs = raw_inputs
+        return "searchsorted",
+            Dict{String, Any}("x" => "q1", "xs" => _cf_const(xs), "n" => length(xs)),
+            (q1 = _decode_input(x),)
+    elseif fn_name == "interp.linear"
+        table, axis, x = raw_inputs
+        return "linear",
+            Dict{String, Any}(
+                "table" => _cf_const(table), "axis" => _cf_const(axis),
+                "x" => "q1", "n" => length(axis)
+            ),
+            (q1 = _decode_input(x),)
+    else
+        table, ax, ay, x, y = raw_inputs
+        return "bilinear",
+            Dict{String, Any}(
+                "table" => _cf_const(table), "axis_x" => _cf_const(ax),
+                "axis_y" => _cf_const(ay), "x" => "q1", "y" => "q2",
+                "nx" => length(ax), "ny" => length(ay)
+            ),
+            (q1 = _decode_input(x), q2 = _decode_input(y))
+    end
+end
+
+# `D(s) = <template call>` in a document importing lib/interp.esm, evaluated
+# once by the interpreter build: the derivative of `s` is the template's value.
+function _cf_template_value(fn_name::String, raw_inputs)
+    tname, bindings, qvals = _cf_template_call(fn_name, raw_inputs)
+    vars = Dict{String, Any}(
+        String(k) => Dict{String, Any}("type" => "parameter", "units" => "1", "default" => 0.0)
+            for k in keys(qvals)
+    )
+    vars["s"] = Dict{String, Any}("type" => "unknown", "units" => "1", "default" => 0.0)
+    call = Dict{String, Any}(
+        "op" => "apply_expression_template", "args" => Any[],
+        "name" => tname, "bindings" => bindings
+    )
+    doc = Dict{String, Any}(
+        "esm" => "1.1.0",
+        "metadata" => Dict{String, Any}("name" => "interp_template_probe", "authors" => Any["t"]),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "expression_template_imports" => Any[Dict{String, Any}("ref" => "interp.esm")],
+                "variables" => vars,
+                "equations" => Any[
+                    Dict{String, Any}(
+                        "lhs" => Dict{String, Any}("op" => "D", "args" => Any["s"], "wrt" => "t"),
+                        "rhs" => call
+                    ),
+                ]
+            )
+        )
+    )
+    file = load_string(JSON3.write(doc); base_path = dirname(_CF_INTERP_LIB))
+    f!, u0, p, _, vm = EarthSciAST._build_evaluator(file; compiler = :interpreter)
+    du = similar(u0)
+    f!(du, u0, merge(p, qvals), 0.0)
+    return du[vm["s"]]
+end
+
+@testset "lib/interp.esm templates give the fn bits (interpreter)" begin
+    for fname in ("searchsorted", "linear", "bilinear")
+        spec = JSON3.read(read(joinpath(_CF_FIX_ROOT, "interp", fname, "expected.json"), String))
+        fn_name = String(spec.function)
+        @testset "$(fname)" begin
+            for scenario in spec.scenarios
+                @testset "$(scenario.name)" begin
+                    inputs = [_decode_input(v) for v in scenario.inputs]
+                    via_fn = Float64(evaluate_closed_function(fn_name, inputs))
+                    via_template = _cf_template_value(fn_name, scenario.inputs)
+                    @test isequal(via_fn, _decode_input(scenario.expected))
+                    @test isequal(via_template, via_fn)
+                end
+            end
+        end
+    end
+
+    # The template.esm fixture beside each expected.json (the document the
+    # `interp_templates` conformance tier runs in every binding) passes its own
+    # inline tests, at tolerance 0, under the interpreter.
+    @testset "template.esm inline tests" begin
+        for fname in ("searchsorted", "linear", "bilinear")
+            path = joinpath(_CF_FIX_ROOT, "interp", fname, "template.esm")
+            results = run_inline_tests(path; compiler = :interpreter)
+            @test !isempty(results)
+            for r in results
+                @test r.status == EarthSciAST.PASS
+                @test r.actual !== nothing && isequal(r.actual, r.expected)
+            end
+        end
+    end
 end

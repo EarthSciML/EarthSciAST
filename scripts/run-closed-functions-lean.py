@@ -15,7 +15,14 @@ counted, not failed.
 With no fixtures named, it also runs `esm-lean tables` on the §9.5.5 table-check
 ledger `tests/conformance/function_tables/load_errors/cases.json` (tables built
 in memory, NaN / Inf / -Inf included, ruling Q-109) and checks each case's code
-(`expected_error_code`, null for a table that passes) exactly.
+(`expected_error_code`, null for a table that passes) exactly; and
+`esm-lean templates` on every document of the `interp_templates` tier
+(`tests/conformance/interp_templates/manifest.json`), checking each test
+assertion of the manifest's model against the evaluated
+`apply_expression_template` equation it names. The assertions and their
+tolerances are read the way the inline-test runner reads them (each bound
+resolved assertion -> test -> model, `authored_assertions` in
+scripts/run-inline-tests-conformance.py); a zero band is a bit-for-bit match.
 
 Prints one summary line; exits 1 on any mismatch or adapter failure.
 
@@ -23,8 +30,10 @@ Prints one summary line; exits 1 on any mismatch or adapter failure.
 """
 
 import argparse
+import importlib.util
 import json
 import math
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -34,6 +43,21 @@ FORMAL = ROOT / "formal"
 FIXTURES = ROOT / "tests" / "closed_functions"
 BINARY = FORMAL / ".lake" / "build" / "bin" / "esm-lean"
 TABLE_LEDGER = ROOT / "tests" / "conformance" / "function_tables" / "load_errors" / "cases.json"
+TEMPLATE_MANIFEST = ROOT / "tests" / "conformance" / "interp_templates" / "manifest.json"
+
+
+def _load_inline_runner():
+    """scripts/run-inline-tests-conformance.py, whose hyphenated name cannot be
+    imported with a plain `import`."""
+    spec = importlib.util.spec_from_file_location(
+        "run_inline_tests_conformance", ROOT / "scripts" / "run-inline-tests-conformance.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+INLINE = _load_inline_runner()
 
 # function-name prefix -> esm-lean mode
 MODES = {
@@ -126,6 +150,66 @@ def check_table_ledger(path):
     return passed, failed, msgs
 
 
+def bits(x):
+    return str(struct.unpack("<Q", struct.pack("<d", float(x)))[0])
+
+
+def check_template_doc(manifest_path, fx):
+    """`esm-lean templates` on the manifest fixture `fx`'s document, scored
+    against the assertions of the model it names. Returns (passed, failed, messages)."""
+    path = INLINE.fixture_path(manifest_path, fx)
+    rel = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
+    if "model" not in fx:
+        try:
+            models = list(json.loads(path.read_text(encoding="utf-8")).get("models") or {})
+        except (OSError, json.JSONDecodeError) as e:
+            return 0, 1, [f"FAIL {rel}: cannot read: {e}"]
+        if len(models) != 1:
+            return (
+                0,
+                1,
+                [
+                    f"FAIL {rel}: fixture {fx.get('id')!r} names no `model` and the document "
+                    f"has {len(models)} models"
+                ],
+            )
+        fx = {**fx, "model": models[0]}
+    try:
+        asserts = INLINE.authored_assertions(manifest_path, fx)
+    except INLINE.ManifestError as e:
+        return 0, 1, [f"FAIL {rel}: {e}"]
+    proc = subprocess.run(
+        [str(BINARY), "templates", str(path), fx["model"]], capture_output=True, text=True
+    )
+    if proc.returncode != 0:
+        return (
+            0,
+            len(asserts),
+            [f"FAIL {rel}: esm-lean exited {proc.returncode}: {proc.stderr.strip()}"],
+        )
+    results = {r["name"]: r for r in json.loads(proc.stdout)["results"]}
+    passed = failed = 0
+    msgs = []
+    for a in asserts:
+        r = results.get(a["variable"])
+        if r is None or "value" not in r:
+            ok, got = False, (r or {}).get("error", "no result")
+        elif a["rtol"] == 0 and a["atol"] == 0:
+            ok, got = r["bits"] == bits(a["expected"]), r["value"]
+        else:
+            got = r["value"]
+            ok = INLINE.within(float(got), a["expected"], a["rtol"], a["atol"])
+        if ok:
+            passed += 1
+        else:
+            failed += 1
+            msgs.append(
+                f"FAIL {rel} {a['test_id']}#{a['assertion_idx']} {a['variable']}: "
+                f"expected {a['expected']!r}, got {got!r}"
+            )
+    return passed, failed, msgs
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     ap.add_argument("fixtures", nargs="*", type=Path)
@@ -158,6 +242,13 @@ def main():
         tp, tf, nf = tp + passed, tf + failed, nf + 1
         for m in msgs:
             print(m)
+    if not args.fixtures and TEMPLATE_MANIFEST.exists():
+        manifest = json.loads(TEMPLATE_MANIFEST.read_text(encoding="utf-8"))
+        for fx in manifest.get("fixtures", []):
+            passed, failed, msgs = check_template_doc(TEMPLATE_MANIFEST, fx)
+            tp, tf, nf = tp + passed, tf + failed, nf + 1
+            for m in msgs:
+                print(m)
     print(f"closed-functions (lean): {tp} passed, {tf} failed, {ts} skipped in {nf} fixtures")
     sys.exit(1 if tf else 0)
 

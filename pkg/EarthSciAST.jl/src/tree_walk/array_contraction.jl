@@ -93,6 +93,21 @@ mutable struct _ACMask{F}
     fills::Int
 end
 
+# Interning tables for the structural numbers that find a repeated sub-tree
+# ("A repeated sub-tree computed once", below): a key tuple (by the value
+# numbering `_vn!` of access_kernel.jl), an object by identity, a payload by its
+# contents, and each node's number under each environment of loop binders it
+# was keyed in.
+struct _CGShareKeys
+    ids::Dict{_VNKey, Int}
+    objs::IdDict{Any, Int}
+    pays::IdDict{Any, Int}
+    memo::Dict{Tuple, IdDict{_Node, Int}}
+end
+_CGShareKeys() = _CGShareKeys(
+    Dict{_VNKey, Int}(), IdDict{Any, Int}(), IdDict{Any, Int}(), Dict{Tuple, IdDict{_Node, Int}}()
+)
+
 # Emission context for a scalar spine. `loops` maps a loop counter `Ref` — the
 # object an `_NK_LOOPVAR` leaf carries and the nest's odometer or fold drives —
 # to the generated local holding that counter's current value. Keyed by identity,
@@ -110,7 +125,9 @@ struct _CGScalarCtx
     entry::Any      # `nothing`, or the TABLE fold's `_ACEntries` while its term is emitted
     spans::IdDict{Any, Tuple{Int, Int}}
     nest::Any
+    share::_CGShareKeys   # structural numbers of the emission's nodes ("A repeated sub-tree")
 end
+_CGScalarCtx(loops, entry, spans, nest) = _CGScalarCtx(loops, entry, spans, nest, _CGShareKeys())
 _CGScalarCtx(loops, entry, spans) = _CGScalarCtx(loops, entry, spans, nothing)
 _CGScalarCtx(loops, entry) = _CGScalarCtx(loops, entry, IdDict{Any, Tuple{Int, Int}}())
 _CGScalarCtx() = _CGScalarCtx(IdDict{Any, Symbol}(), nothing)
@@ -233,7 +250,7 @@ function _cg_ragged_loop(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
         empty = :($s1 < $s0)
         iter = :($(en.ev) = $s0:$s1)
         bind = :(local $kv = $kcolv[$(en.ev)])
-        tkc = _CGScalarCtx(kc.loops, en, kc.spans, kc.nest)
+        tkc = _CGScalarCtx(kc.loops, en, kc.spans, kc.nest, kc.share)
     else
         lo = _cg_name(ctx, "rlo")
         hi = _cg_name(ctx, "rhi")
@@ -255,7 +272,7 @@ function _cg_ragged_loop(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
     end
     kc.loops[spec.ref] = kv
     term = try
-        _cg_emit(ctx, tkc, ch[1])
+        _cg_emit_region(ctx, tkc, ch[1])
     finally
         delete!(kc.loops, spec.ref)
         foreach(h -> delete!(kc.loops, h), hoists)
@@ -308,6 +325,211 @@ function _ragged_hoists!(out::Vector{_Node}, nd::_Node, ref, memo::IdDict{_Node,
         _ragged_hoists!(out, c, ref, memo)
     end
     return out
+end
+
+# ---- A repeated sub-tree computed once -----------------------------------------
+# An expression can hold one sub-tree several times over: a template has no
+# let-binding, so a bracket index `min(max(Σ_k ifelse(a[k] <= x, 1, 0), 1), n-1)`
+# is written out at each of its uses, and an observed spliced into its readers
+# brings its whole body to each of them. The Julia compiler merges some
+# repeated straight-line arithmetic on its own, but not a loop, a call it
+# cannot prove pure (`sin`), or a branch: each copy would run. So within one
+# REGION — a sub-tree evaluated as one piece, with each LAZY operand (an
+# `ifelse` branch, an `and` / `or` operand past the first, a gather subscript
+# past the first: `_cg_lazy_operand`) and each loop body a region of its own —
+# a sub-tree that is not a leaf and occurs at least twice, at least once
+# outside a lazy operand, is computed once at the region's start into a local
+# and read at every occurrence, the lazy ones included.
+#
+# Bit-identical by construction: every node of the spine is pure, so each
+# occurrence computes the same value from the same inputs, and the one
+# evaluation is one the region performs anyway (an occurrence outside the lazy
+# operands is evaluated whenever the region is). Only which copy runs, and how
+# often, changes; no arithmetic is reordered. A sub-tree whose occurrences all
+# sit under lazy operands is left to the regions those operands open.
+#
+# Two sub-trees are the same when their structure is: kind, operator and
+# literal bits node for node, the same state slots, parameters and build
+# constants (a constant array by its contents, a live buffer by identity), and
+# loop counters bound at the same depth inside them. What a node of a
+# class-emitted scalar unit reads per member is its HOLE (`_CGUnitCtx.holes`),
+# so there a literal or a state read is the same only when its hole expression
+# is. A node kind with no structural key here (a ragged loop, a recurrence
+# read, a cached slot, a closed function) is never shared, and nothing under it
+# is looked at. Plan field `share_subtrees`; off, every occurrence is emitted
+# where it stands.
+
+# Emit `nd` as a region of its own. Emission contexts without a scalar spine
+# emit it as it stands.
+_cg_emit_region(ctx::_CGCtx, kc, nd::_Node) = _cg_emit(ctx, kc, nd)
+_cg_emit_region(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node) = _cg_emit_shared(ctx, kc, nd)
+
+function _cg_emit_shared(ctx::_CGCtx, kc, nd::_Node)
+    groups = _compiler_plan_now().share_subtrees ? _cg_share_groups(kc, nd) : nothing
+    groups === nothing && return _cg_emit(ctx, kc, nd)
+    pre = Any[]
+    bound = _Node[]
+    body = try
+        for grp in groups
+            hv = _cg_name(ctx, "sh")
+            push!(pre, :(local $hv = $(_cg_emit(ctx, kc, grp[1]))))
+            for n in grp
+                kc.loops[n] = hv
+                push!(bound, n)
+            end
+            _tally_cascade!(:share_subtrees)
+        end
+        _cg_emit(ctx, kc, nd)
+    finally
+        foreach(n -> delete!(kc.loops, n), bound)
+    end
+    return quote
+        let
+            $(pre...)
+            $body
+        end
+    end
+end
+
+_cg_share_id!(K::_CGShareKeys, key) = _vn!(K.ids, key)
+_cg_share_obj!(K::_CGShareKeys, o) = get!(K.objs, o, length(K.objs) + 1)
+
+# A payload whose CONTENTS fix what the node reads, numbered by those contents.
+function _cg_share_pay!(K::_CGShareKeys, pl)
+    got = get(K.pays, pl, 0)
+    got == 0 || return got
+    key = if pl isa _ConstGatherArray
+        (:cga, reinterpret(UInt64, pl.flat), pl.strides, pl.dims, pl.boundary, pl.name)
+    elseif pl isa _StateGather
+        (:sg, pl.slot_flat, pl.strides, pl.lo, pl.hi, pl.len)
+    else
+        (:obj, _cg_share_obj!(K, pl))
+    end
+    return K.pays[pl] = _cg_share_id!(K, key)
+end
+
+# What a leaf (or the node's own payload) contributes to its key, or `nothing`
+# for a node that is never shared. The scalar spine's version; the scalar
+# unit's is in scalar_codegen.jl.
+function _cg_share_leaf(K::_CGShareKeys, kc::_CGScalarCtx, nd::_Node)
+    k = nd.kind
+    (k === _NK_LITERAL || k === _NK_STATE || k === _NK_PARAM || k === _NK_TIME) &&
+        return 0
+    k === _NK_PARAM_GATHER && return _cg_share_obj!(K, nd.payload)
+    return _cg_share_inner(K, nd)
+end
+
+# The kinds both emitters key the same way.
+function _cg_share_inner(K::_CGShareKeys, nd::_Node)
+    k = nd.kind
+    if k === _NK_CONST_GATHER || k === _NK_STATE_GATHER
+        return _cg_share_pay!(K, nd.payload)
+    elseif k === _NK_LIVE_GATHER
+        return (_cg_share_obj!(K, (nd.payload::_ConstGatherArray).flat), _cg_share_pay!(K, nd.payload))
+    elseif k === _NK_OP
+        return (nd.op === :fn || nd.payload !== nothing) ? nothing : 0
+    elseif k === _NK_CONTRACTION
+        return 0
+    end
+    return nothing
+end
+
+# The structural number of `nd`. `env` holds the loop counters bound between
+# the region and `nd`, innermost last; a counter is keyed by how many binders
+# out it is bound, or by identity when it is bound outside the region. So a
+# node's number depends on the node and on `env` alone: it is memoized by
+# identity per environment (`memo`, `K.memo`) for the whole emission, and a
+# sub-tree shared by reference is keyed once per environment it is reached in,
+# never once per path.
+function _cg_share_key!(
+        K::_CGShareKeys, kc, nd::_Node, env::Vector{Any},
+        memo::IdDict{_Node, Int} = _cg_share_memo(K, env)
+    )
+    got = get(memo, nd, 0)
+    got == 0 || return got
+    k = nd.kind
+    key = if k === _NK_LOOPVAR
+        d = findlast(r -> r === nd.payload, env)
+        d === nothing ? (k, :free, _cg_share_obj!(K, nd.payload)) : (k, :at, length(env) - d)
+    elseif k === _NK_CONTRACTION_LOOP
+        spec = nd.payload::_ContractLoop
+        push!(env, spec.ref)
+        b = try
+            _cg_share_key!(K, kc, nd.children[1], env)
+        finally
+            pop!(env)
+        end
+        (k, nd.op, reinterpret(UInt64, nd.literal), spec.lo, spec.step, spec.hi, b)
+    else
+        leaf = _cg_share_leaf(K, kc, nd)
+        if leaf === nothing
+            (:unique, _cg_share_obj!(K, nd))
+        else
+            ch = Int[_cg_share_key!(K, kc, c, env, memo) for c in nd.children]
+            (k, nd.op, nd.sym, nd.idx, reinterpret(UInt64, nd.literal), leaf, ch)
+        end
+    end
+    return memo[nd] = _cg_share_id!(K, key)
+end
+_cg_share_memo(K::_CGShareKeys, env::Vector{Any}) =
+    get!(() -> IdDict{_Node, Int}(), K.memo, Tuple(env))
+
+# Whether operand `j` of `nd` is evaluated only on some evaluations of `nd`:
+# the walker's short circuits (`_cse_arg_conditional`: an `ifelse` branch, an
+# `and` / `or` operand past the first), and a gather's subscripts past the
+# first — a state gather evaluates none past the first that is out of its axis
+# (`_eval_state_gather`, `_cg_state_gather_dim`), a const or live gather none
+# past one whose boundary policy throws (`_const_gather_sub`).
+@inline function _cg_lazy_operand(nd::_Node, j::Int)
+    k = nd.kind
+    k === _NK_OP && return _cse_arg_conditional(nd.op, j)
+    return j >= 2 && (k === _NK_STATE_GATHER || k === _NK_CONST_GATHER || k === _NK_LIVE_GATHER)
+end
+
+# A node never worth a local of its own.
+@inline _cg_share_leafkind(nd::_Node) =
+    nd.kind === _NK_LITERAL || nd.kind === _NK_STATE || nd.kind === _NK_PARAM ||
+    nd.kind === _NK_TIME || nd.kind === _NK_LOOPVAR || nd.kind === _NK_PARAM_GATHER
+
+# The region's nodes the walk does not descend through: a loop body, a node
+# with no structural key, and a node an enclosing region already bound.
+_cg_share_opaque(kc, nd::_Node) =
+    haskey(kc.loops, nd) || nd.kind === _NK_CONTRACTION_LOOP ||
+    nd.kind === _NK_RAGGED_LOOP || nd.kind === _NK_RECUR_GATHER ||
+    nd.kind === _NK_CACHED || (nd.kind === _NK_OP && nd.op === :fn)
+
+const _CG_NO_KIDS = _Node[]
+
+# The sub-trees of the region rooted at `root` to compute once: groups of
+# structurally equal nodes, in dependency order (a group's nodes hold only
+# groups listed before it), or `nothing` when there are none. The region's
+# unique nodes and their path multiplicities — every occurrence, and those
+# outside lazy operands — come from the shared DAG walks (compile.jl).
+function _cg_share_groups(kc, root::_Node)
+    kids = n -> _cg_share_opaque(kc, n) ? _CG_NO_KIDS : n.children
+    order, pos = _dag_postorder(root, kids, _dag_every)
+    P = length(order)
+    P > 2 || return nothing
+    total, strict = _dag_path_counts(order, pos, kids, _dag_every, _cg_lazy_operand)
+    K = kc.share
+    env = Any[]
+    memo = _cg_share_memo(K, env)
+    byid = Dict{Int, Vector{Int}}()
+    for i in 1:(P - 1)
+        n = order[i]
+        (_cg_share_leafkind(n) || haskey(kc.loops, n)) && continue
+        id = _cg_share_key!(K, kc, n, env, memo)
+        push!(get!(() -> Int[], byid, id), i)
+    end
+    groups = Vector{_Node}[]
+    firsts = Int[]
+    for (_, is) in byid
+        sum(i -> total[i], is) >= 2 && sum(i -> strict[i], is) >= 1 || continue
+        push!(groups, _Node[order[i] for i in is])
+        push!(firsts, minimum(is))
+    end
+    isempty(groups) && return nothing
+    return groups[sortperm(firsts)]
 end
 
 # A ragged loop's rows as TABLE entries over the nest's cells: `_ACEntries`
@@ -400,7 +622,7 @@ function _cg_contraction_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi; span = not
     kc.loops[spec.ref] = kv
     span === nothing || (kc.spans[spec.ref] = span)
     term = try
-        _cg_emit(ctx, kc, nd.children[1])
+        _cg_emit_region(ctx, kc, nd.children[1])
     finally
         delete!(kc.loops, spec.ref)
         span === nothing || delete!(kc.spans, spec.ref)
@@ -423,7 +645,10 @@ end
 #
 # with REL one of `<= < >= >`, `a` the side that reads the counter and `x` the
 # side that does not, is the number of `k` with `a(k) REL x`: the bracket of a
-# table interpolation written in the format's own operators. Every term is
+# table interpolation written in the format's own operators. With the branch
+# values swapped, `ifelse(a(k) REL x, 0, 1)`, it is the number of `k` where the
+# comparison fails (a NaN on either side fails it): the range's length less
+# that count, the search form of `searchsorted`. Every term is
 # exactly 0.0 or 1.0 and every partial sum an integer far below 2^53, so the
 # fold is exact and ANY algorithm computing that count has its bits, for any
 # content of `a` (unsorted, NaN, ±0.0) and any `x` (a NaN matches nothing). It
@@ -458,7 +683,15 @@ function _cg_count_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi, span)
     a, x, rel = lk ? (l, r, cond.op) : (r, l, _COUNT_MIRROR[cond.op])
     # The branch values as the fold would emit them: under the scalar tier a
     # literal is a hole, baked only when every member of the class agrees.
-    (_cg_emit(ctx, kc, yes) === 1.0 && _cg_emit(ctx, kc, no) === 0.0) || return nothing
+    yv, nv = _cg_emit(ctx, kc, yes), _cg_emit(ctx, kc, no)
+    # `neg`: the count of `k` where the comparison fails.
+    neg = if yv === 1.0 && nv === 0.0
+        false
+    elseif yv === 0.0 && nv === 1.0
+        true
+    else
+        return nothing
+    end
     cmp = _CG_CMP_FN[cond.op]
     xv = _cg_name(ctx, "cx")
     cv = _cg_name(ctx, "cn")
@@ -486,7 +719,7 @@ function _cg_count_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi, span)
                         $hv = $mv - 1
                     end
                 end
-                Float64($cv)
+                Float64($(neg ? :(length($tv) - $cv) : cv))
             end
         else
             # The smallest `m` with `axis[m] rel x`: the predicate holds on a
@@ -504,7 +737,7 @@ function _cg_count_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi, span)
                         $cv = $mv + 1
                     end
                 end
-                Float64(length($tv) + 1 - $cv)
+                Float64($(neg ? :($cv - 1) : :(length($tv) + 1 - $cv)))
             end
         end
         _tally_cascade!(:count_fold_search)
@@ -531,7 +764,7 @@ function _cg_count_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi, span)
             local $xv = $xe
             local $cv = 0
             for $kv in $lo:$st:$hi
-                $cv += $(test(ae)) ? 1 : 0
+                $cv += $(test(ae)) ? $(neg ? 0 : 1) : $(neg ? 1 : 0)
             end
             Float64($cv)
         end
@@ -614,7 +847,11 @@ function _cg_const_gather(ctx::_CGCtx, kc, nd::_Node)
     for d in eachindex(children)
         sd = _cg_name(ctx, "cgs")
         cs = _cg_counter_subscript(kc, children[d])
-        sub = cs === nothing ? :(round(Int, $(_cg_emit(ctx, kc, children[d])))) : cs[1]
+        # A subscript past the first is evaluated only when the ones before it
+        # did not throw: a region of its own (`_cg_lazy_operand`).
+        sub = cs === nothing ?
+            :(round(Int, $(d == 1 ? _cg_emit(ctx, kc, children[d]) : _cg_emit_region(ctx, kc, children[d])))) :
+            cs[1]
         push!(binds, :($sd = _const_gather_sub($cgv, $d, $sub)))
         push!(off, :(($sd - 1) * $(_cg_geo!(ctx, cg.strides[d], (cg.strides, d), true))))
     end
@@ -752,9 +989,13 @@ function _cg_state_gather_dim(
         push!(copy(off), :(($sd - $lo) * $sd_stride))
     )
     cs = _cg_counter_subscript(kc, children[d])
+    # A subscript past the first is evaluated only when the ones before it are
+    # in range: a region of its own (`_cg_lazy_operand`).
+    sx = cs !== nothing ? nothing : d == 1 ? _cg_emit(ctx, kc, children[d]) :
+        _cg_emit_region(ctx, kc, children[d])
     cs === nothing && return Expr(
         :let,
-        Expr(:block, :($sd = round(Int, $(_cg_emit(ctx, kc, children[d]))))),
+        Expr(:block, :($sd = round(Int, $sx))),
         Expr(:block, :(($lo <= $sd <= $hi) ? $nxt : zero(eltype(u))))
     )
     span = cs[2]
@@ -1044,7 +1285,7 @@ function _try_codegen_array_contraction(
     maskloop = nothing
     cell = try
         if gated === nothing
-            term = _cg_emit(ctx, kc, body)
+            term = _cg_emit_region(ctx, kc, body)
             fold === nothing ? term : _cg_fold(
                     ctx, fold, cv, kvs, term,
                     entries === nothing ? nothing : entries.ev

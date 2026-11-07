@@ -56,6 +56,10 @@ struct CompilerPlan
     # The emitted contraction loop's algebraic rewrites (array_contraction.jl):
     # the indicator sum emitted as a count. Off, the loop is the plain fold.
     count_fold::Bool
+    # The scalar-spine emitters' sharing of a repeated sub-tree: computed once
+    # per evaluation, read at each use. Off, every occurrence is emitted where
+    # it stands.
+    share_subtrees::Bool
     # ---- the array cascade ----
     stencil::Bool                 # the affine stencil tier
     array_contraction::Bool
@@ -97,7 +101,7 @@ end
 _plan_all(name::Symbol, strict::Bool, on::Bool) =
     CompilerPlan(
     name, strict,
-    on, on, on, on, on, on, on, on,
+    on, on, on, on, on, on, on, on, on,
     on, on, on, on, on, on, on, on, on,
     on, on, on, on, on, on, on,
     on, on,

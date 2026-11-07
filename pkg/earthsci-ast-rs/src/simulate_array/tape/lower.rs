@@ -32,7 +32,7 @@
 //!
 //! * scope-local numbering keyed by the interned node's `Arc` pointer
 //!   (structural identity IS pointer identity for interned subtrees; the few
-//!   address-unique nodes — `value`/`output`/`join` carriers, which the
+//!   address-unique nodes — `output`/`join` carriers, which the
 //!   interner refuses — merely under-share, which recomputes the same value),
 //!   consulted in the INNERMOST open scope only, mirroring the runtime memo's
 //!   current-scope stamp;
@@ -102,14 +102,18 @@ struct IndicatorCount<'e> {
     x: &'e Expr,
     lo: i64,
     hi: i64,
+    /// The body is `ifelse(cond, 0, 1)`: the entries that FAIL the
+    /// comparison are counted, `(hi - lo + 1) - count`.
+    complement: bool,
 }
 
 /// The rank-0 `faq` `sum_{k=lo..hi} ifelse(axis[k] REL x, 1, 0)`, REL one of
-/// `<= < >= >` with the indexed axis on either side, or `None`.
+/// `<= < >= >` with the indexed axis on either side, or its complement
+/// `ifelse(axis[k] REL x, 0, 1)`; otherwise `None`.
 ///
 /// The guard is the algebraic shape and nothing else: one statically ranged
 /// contracted index, a `+` reduction, no `filter` or `join`, a body that is
-/// exactly the indicator (the literals 1 and 0, in that order), an axis read
+/// exactly the indicator (the literals 1 and 0, in either order), an axis read
 /// `index(A, k)` whose base `A` is a variable or an inline `const` and does
 /// not mention `k`, and a query that does not mention `k`. Every other shape
 /// is the general reduction's.
@@ -139,9 +143,13 @@ fn detect_indicator_count<'e>(spec: &ArrayOpSpec<'e>) -> Option<IndicatorCount<'
         Expr::Integer(v) => *v as f64 == want,
         _ => false,
     };
-    if !lit(&ite.args[1], 1.0) || !lit(&ite.args[2], 0.0) {
+    let complement = if lit(&ite.args[1], 1.0) && lit(&ite.args[2], 0.0) {
+        false
+    } else if lit(&ite.args[1], 0.0) && lit(&ite.args[2], 1.0) {
+        true
+    } else {
         return None;
-    }
+    };
     let Expr::Operator(cmp) = &ite.args[0] else {
         return None;
     };
@@ -182,6 +190,7 @@ fn detect_indicator_count<'e>(spec: &ArrayOpSpec<'e>) -> Option<IndicatorCount<'
         x,
         lo,
         hi,
+        complement,
     })
 }
 
@@ -534,6 +543,9 @@ enum VnKey {
     Node(usize),
     /// Coordinate ramp along this output axis.
     Ramp(usize),
+    /// An inline array `const` read whole (interned node address): the
+    /// materialized literal, whatever box it is read in.
+    ConstLit(usize),
 }
 
 #[derive(Default)]
@@ -541,6 +553,12 @@ struct ScopeFrame {
     map: FxHashMap<VnKey, LV>,
     /// Insertions made while inside a conditional branch, for rollback.
     journal: Vec<(VnKey, Option<LV>)>,
+    /// The frame of a whole-body (`eval` mirror) lowering
+    /// ([`TapeBuilder::lower_wholesale_rule`]): consulted only by the
+    /// wholesale path, never by a box's numbering — one node's whole value
+    /// and its value over a box are different values under the same key. A
+    /// box lowered from a whole-body rule opens its own frame above it.
+    wholesale: bool,
 }
 
 /// What a (taped or declined) observed rule left behind for later readers.
@@ -1722,7 +1740,13 @@ impl<'m> TapeBuilder<'m> {
     }
 
     fn vn_get(&mut self, key: VnKey, bx: &LBox) -> Option<LV> {
-        if let Some(frame) = self.scope_frames.last() {
+        // A box lowering opens its own frame (`push_scope`); reaching one
+        // with the whole-body frame innermost would number nothing.
+        debug_assert!(
+            !self.scope_frames.last().is_some_and(|f| f.wholesale),
+            "box value numbering under a whole-body frame: the box lowering did not open a scope"
+        );
+        if let Some(frame) = self.scope_frames.last().filter(|f| !f.wholesale) {
             if let Some(lv) = frame.map.get(&key) {
                 self.vn_scope_hits += 1;
                 return Some(lv.clone());
@@ -1736,13 +1760,10 @@ impl<'m> TapeBuilder<'m> {
     }
 
     fn vn_put(&mut self, key: VnKey, lv: &LV, bx: &LBox) {
-        let in_branch = self.in_branch();
-        if let Some(frame) = self.scope_frames.last_mut() {
-            let prev = frame.map.insert(key, lv.clone());
-            if in_branch {
-                frame.journal.push((key, prev));
-            }
+        if !self.scope_frames.last().is_some_and(|f| f.wholesale) {
+            self.frame_put(key, lv);
         }
+        let in_branch = self.in_branch();
         // The cross-rule hoist (ess-lih analogue): only for values whose
         // cadence is ≤ SEGMENT — pure functions of (box, structure, constant
         // tier) — and only when computed UNCONDITIONALLY.
@@ -1756,6 +1777,73 @@ impl<'m> TapeBuilder<'m> {
                 self.hoist_journal.push(hk);
             }
         }
+    }
+
+    /// Record `key -> lv` in the innermost frame, journaled when inside a
+    /// conditional branch so the value does not escape it.
+    fn frame_put(&mut self, key: VnKey, lv: &LV) {
+        let in_branch = self.in_branch();
+        if let Some(frame) = self.scope_frames.last_mut() {
+            let prev = frame.map.insert(key, lv.clone());
+            if in_branch {
+                frame.journal.push((key, prev));
+            }
+        }
+    }
+
+    /// A whole-body lowering (`lower`, over [`Self::lower_wholesale`] and
+    /// friends) under its own value-numbering frame: a subtree the body
+    /// repeats — the same interned node — is lowered once, the way a box's
+    /// numbering shares it ([`Self::lower_expr`]). Every operator node is a
+    /// pure function of the solve state, so the shared slot holds the value
+    /// a recomputation would; a value defined inside a branch stays inside
+    /// it (the frame's journal).
+    fn lower_wholesale_rule<T>(
+        &mut self,
+        lower: impl FnOnce(&mut Self) -> LResult<T>,
+    ) -> LResult<T> {
+        self.scope_frames.push(ScopeFrame {
+            wholesale: true,
+            ..ScopeFrame::default()
+        });
+        let out = lower(self);
+        self.scope_frames.pop();
+        out
+    }
+
+    /// An inline array `const` read whole, materialized once per frame (and
+    /// once per box through the hoist): its value does not depend on where
+    /// it is read, so a hit in any open frame serves.
+    fn const_literal_array(
+        &mut self,
+        lit: &Arc<ExpressionNode>,
+        a: &ndarray::ArrayD<f64>,
+        bx: Option<&LBox>,
+    ) -> LResult<LV> {
+        let key = VnKey::ConstLit(Arc::as_ptr(lit) as usize);
+        if let Some(lv) = self
+            .scope_frames
+            .iter()
+            .rev()
+            .find_map(|f| f.map.get(&key).cloned())
+        {
+            self.vn_scope_hits += 1;
+            return Ok(lv);
+        }
+        if let Some(bx) = bx
+            && let Some(lv) = self.hoist.get(&(BoxKey::of(bx), key)).cloned()
+        {
+            self.vn_hoist_hits += 1;
+            return Ok(lv);
+        }
+        let lv = self.emit_const_array(a)?;
+        match bx {
+            Some(bx) if !self.scope_frames.last().is_some_and(|f| f.wholesale) => {
+                self.vn_put(key, &lv, bx)
+            }
+            _ => self.frame_put(key, &lv),
+        }
+        Ok(lv)
     }
 
     // -- conditional branches -------------------------------------------------
@@ -3208,7 +3296,7 @@ impl<'m> TapeBuilder<'m> {
         // an elementwise position would mean something else per cell.
         let arg0 = match &node.args[0] {
             Expr::Operator(lit) if lit.op == "const" => match eval_const(lit) {
-                Value::Array(a) => self.emit_const_array(&a)?,
+                Value::Array(a) => self.const_literal_array(lit, &a, Some(bx))?,
                 Value::Scalar(s) => LV::Lit(s),
             },
             // A shape-op or `broadcast` base (esm-spec §4.3.4, §4.3.5) is a
@@ -3927,7 +4015,7 @@ impl<'m> TapeBuilder<'m> {
             _ => {
                 let lv = match base {
                     Expr::Operator(lit) if lit.op == "const" => match eval_const(lit) {
-                        Value::Array(a) => self.emit_const_array(&a)?,
+                        Value::Array(a) => self.const_literal_array(lit, &a, Some(bx))?,
                         Value::Scalar(s) => LV::Lit(s),
                     },
                     other => self.lower_expr(other, bx)?,
@@ -5948,7 +6036,26 @@ impl<'m> TapeBuilder<'m> {
             Expr::Number(n) => Ok(LV::Lit(crate::precision::round(*n))),
             Expr::Integer(n) => Ok(LV::Lit(crate::precision::round(*n as f64))),
             Expr::Variable(name) => self.resolve_wholesale_var(name),
-            Expr::Operator(node) => self.lower_wholesale_op(node),
+            Expr::Operator(node) => {
+                if !self.scope_frames.last().is_some_and(|f| f.wholesale) {
+                    return self.lower_wholesale_op(node);
+                }
+                let key = VnKey::Node(Arc::as_ptr(node) as usize);
+                if let Some(hit) = self.scope_frames.last().and_then(|f| f.map.get(&key)) {
+                    self.vn_scope_hits += 1;
+                    return Ok(hit.clone());
+                }
+                // A node whose lowering notes a fault is not shared: where
+                // the fault sorts depends on the occurrence.
+                let notes = self.fault_notes;
+                let lv = self.lower_wholesale_op(node)?;
+                if self.fault_notes == notes
+                    && self.scope_frames.last().is_some_and(|f| f.wholesale)
+                {
+                    self.frame_put(key, &lv);
+                }
+                Ok(lv)
+            }
         }
     }
 
@@ -6086,7 +6193,7 @@ impl<'m> TapeBuilder<'m> {
                 // The wholesale `eval` serves an inline array literal as the
                 // whole array, origin-blind — which is exactly a materialized
                 // 1-origin box. `Instr::ConstArray` stores it once per solve.
-                Value::Array(a) => self.emit_const_array(&a),
+                Value::Array(a) => self.const_literal_array(node, &a, None),
             },
             "true" => Ok(LV::Lit(1.0)),
             "false" => Ok(LV::Lit(0.0)),
@@ -6798,7 +6905,9 @@ impl<'m> TapeBuilder<'m> {
                 }
             }
             Expr::Operator(lit) => match eval_const(lit) {
-                Value::Array(a) if a.ndim() == 1 && !a.is_empty() => self.emit_const_array(&a)?,
+                Value::Array(a) if a.ndim() == 1 && !a.is_empty() => {
+                    self.const_literal_array(lit, &a, Some(bx))?
+                }
                 _ => return Ok(None),
             },
             _ => return Ok(None),
@@ -6857,11 +6966,22 @@ impl<'m> TapeBuilder<'m> {
             out,
         };
         self.emit(instr, sec);
-        Ok(Some(if scalar {
+        let count = if scalar {
             LV::Scalar(out)
         } else {
             LV::Arr(out)
-        }))
+        };
+        if !ic.complement {
+            return Ok(Some(count));
+        }
+        // Each term of the oracle's sum is 0 or 1, so the sum is an integer
+        // below 2^53 reached exactly, and so is `n - count`: the two are the
+        // same binary64 (both +0.0 when nothing is counted).
+        Ok(Some(self.emit_bin(
+            BinCode::Sub,
+            LV::Lit(f64::from(n)),
+            count,
+        )?))
     }
 
     /// `eval_makearray` mirror (wholesale): the bounding-box assembly around
@@ -7953,8 +8073,10 @@ impl<'m> TapeBuilder<'m> {
                 // declared box, as the interpreter does.
                 let v = match (self.inline_param_literal(var, body), declared_shape) {
                     (Some(a), _) => self.emit_const_array(&a)?,
-                    (None, Some(shape)) => self.lower_wholesale_shaped(body, shape)?,
-                    (None, None) => self.lower_wholesale(body)?,
+                    (None, Some(shape)) => {
+                        self.lower_wholesale_rule(|s| s.lower_wholesale_shaped(body, shape))?
+                    }
+                    (None, None) => self.lower_wholesale_rule(|s| s.lower_wholesale(body))?,
                 };
                 let v = match declared_shape {
                     Some(shape) if self.lv_box(&v).is_none() => {
@@ -8037,7 +8159,7 @@ impl<'m> TapeBuilder<'m> {
     fn lower_rhs_rule(&mut self, rule: &RhsRule) -> LResult<()> {
         match rule {
             RhsRule::Scalar { slot, body } | RhsRule::IndexedScalar { slot, body } => {
-                let v = self.lower_wholesale(body)?;
+                let v = self.lower_wholesale_rule(|s| s.lower_wholesale(body))?;
                 // The oracle scalarizes: an array-valued body writes the NaN
                 // sentinel (`eval(body).as_scalar().unwrap_or(NAN)`).
                 let v = if self.lv_box(&v).is_some() {

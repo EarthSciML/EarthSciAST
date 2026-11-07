@@ -1,0 +1,73 @@
+{
+  "fixture": "bilinear_template",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "interp_bilinear_template_t0",
+      "assertion_idx": 1,
+      "variable": "r_below_both_clamps_to_corner",
+      "actual": 0.0
+    },
+    {
+      "test_id": "interp_bilinear_template_t0",
+      "assertion_idx": 2,
+      "variable": "r_above_both_clamps_to_corner",
+      "actual": 22.0
+    },
+    {
+      "test_id": "interp_bilinear_template_t0",
+      "assertion_idx": 3,
+      "variable": "r_exact_corner_max",
+      "actual": 22.0
+    },
+    {
+      "test_id": "interp_bilinear_template_t0",
+      "assertion_idx": 4,
+      "variable": "r_exact_interior_knot_both_axes",
+      "actual": 11.0
+    },
+    {
+      "test_id": "interp_bilinear_template_t0",
+      "assertion_idx": 5,
+      "variable": "r_exact_x_knot_blend_y",
+      "actual": 10.5
+    },
+    {
+      "test_id": "interp_bilinear_template_t0",
+      "assertion_idx": 6,
+      "variable": "r_blend_x_exact_y_knot",
+      "actual": 6.0
+    },
+    {
+      "test_id": "interp_bilinear_template_t0",
+      "assertion_idx": 7,
+      "variable": "r_quarter_point_in_x_three_quarter_in_y",
+      "actual": 3.25
+    },
+    {
+      "test_id": "interp_bilinear_template_t0",
+      "assertion_idx": 8,
+      "variable": "r_below_x_only_blend_y",
+      "actual": 0.5
+    },
+    {
+      "test_id": "interp_bilinear_template_t0",
+      "assertion_idx": 9,
+      "variable": "r_above_y_only_blend_x",
+      "actual": 17.0
+    },
+    {
+      "test_id": "interp_bilinear_template_t0",
+      "assertion_idx": 10,
+      "variable": "r_minimal_2x2_grid_center",
+      "actual": 1.5
+    },
+    {
+      "test_id": "interp_bilinear_template_t0",
+      "assertion_idx": 11,
+      "variable": "r_non_uniform_axis_y_blend",
+      "actual": 16.5
+    }
+  ]
+}

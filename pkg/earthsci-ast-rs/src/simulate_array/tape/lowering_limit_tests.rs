@@ -75,7 +75,7 @@ fn doc(name: &str, variables: Value, equations: Vec<Value>, domain: Option<Value
 /// executor, over the fused and the unfused program, write the per-cell
 /// oracle's `dy` bit for bit. Returns the fused program and the unfused one's
 /// length.
-fn oracle_ab(doc: Value) -> (TapeProgram, usize) {
+pub(super) fn oracle_ab(doc: Value) -> (TapeProgram, usize) {
     let file = crate::parse::load_string(&doc.to_string()).expect("fixture document loads");
     let env = crate::precision_infer::env_of_file(&file).expect("precision environment");
     let file = crate::precision_infer::annotated(&file)
@@ -144,7 +144,7 @@ fn oracle_ab(doc: Value) -> (TapeProgram, usize) {
 
 /// [`oracle_ab`] at two grid sizes, requiring the same lowered program length
 /// (the unfused one: fusion's grouping may differ with the box size).
-fn flat_in_n(make: impl Fn(i64) -> Value, small: i64, large: i64) -> TapeProgram {
+pub(super) fn flat_in_n(make: impl Fn(i64) -> Value, small: i64, large: i64) -> TapeProgram {
     let (_, a) = oracle_ab(make(small));
     let (b, b_len) = oracle_ab(make(large));
     assert_eq!(
@@ -154,7 +154,7 @@ fn flat_in_n(make: impl Fn(i64) -> Value, small: i64, large: i64) -> TapeProgram
     b
 }
 
-fn count(prog: &TapeProgram, opcode: &str) -> usize {
+pub(super) fn count(prog: &TapeProgram, opcode: &str) -> usize {
     prog.instrs.iter().filter(|i| i.opcode() == opcode).count()
 }
 
@@ -640,7 +640,7 @@ fn query() -> Value {
 }
 
 /// The `Instr::Count`s of `prog`, as `(rel, sorted)`.
-fn counts(prog: &TapeProgram) -> Vec<(CountRel, bool)> {
+pub(super) fn counts(prog: &TapeProgram) -> Vec<(CountRel, bool)> {
     prog.instrs
         .iter()
         .filter_map(|i| match i {
@@ -683,6 +683,53 @@ fn counted_bracket_every_relation_and_axis() {
             );
             assert_eq!(count(&prog, "Reduce"), 0, "{axis} {cmp}: no fold is left");
         }
+    }
+}
+
+/// The complement `ifelse(cmp, 0, 1)` (searchsorted's `not(>=)` form) is the
+/// window length minus the count of `cmp`: both are integers summed exactly,
+/// so the subtraction is the fold's own value, including under a NaN query,
+/// where every term is 1 (the mirrored relation would count 0 there).
+#[test]
+fn counted_bracket_complement() {
+    for axis in ["zc", "zp", "w"] {
+        for (cmp, rel) in [
+            (">=", CountRel::Ge),
+            ("<=", CountRel::Le),
+            ("<", CountRel::Lt),
+        ] {
+            let make = |n: i64| {
+                count_doc(
+                    n,
+                    op(
+                        "ifelse",
+                        vec![op(cmp, vec![axis_at(axis), query()]), json!(0), json!(1)],
+                    ),
+                )
+            };
+            let prog = flat_in_n(make, 5, 37);
+            assert_eq!(counts(&prog), vec![(rel, axis == "zc")], "{axis} {cmp}");
+            assert_eq!(count(&prog, "Reduce"), 0, "{axis} {cmp}: no fold is left");
+        }
+    }
+    let nan = op(
+        "/",
+        vec![
+            op("-", vec![query(), query()]),
+            op("-", vec![query(), query()]),
+        ],
+    );
+    for axis in ["zc", "w"] {
+        let body = op(
+            "ifelse",
+            vec![
+                op(">=", vec![axis_at(axis), nan.clone()]),
+                json!(0),
+                json!(1),
+            ],
+        );
+        let prog = oracle_ab(count_doc(9, body)).0;
+        assert_eq!(counts(&prog).len(), 1, "{axis}: NaN query");
     }
 }
 
@@ -753,10 +800,15 @@ fn counted_bracket_near_misses_decline() {
         d
     };
     let cases: Vec<(&str, Value)> = vec![
-        // The complement: under a NaN query not the count of the mirrored
-        // relation, and not a count of anything this instruction states.
-        ("complement", plain(ite(cmp("<="), json!(0), json!(1)))),
         ("weight 2", plain(ite(cmp("<="), json!(2), json!(0)))),
+        (
+            "complement weight 2",
+            plain(ite(cmp("<="), json!(0), json!(2))),
+        ),
+        (
+            "constant indicator",
+            plain(ite(cmp("<="), json!(1), json!(1))),
+        ),
         ("equality", plain(indicator(cmp("==")))),
         (
             "query reads k",
@@ -1076,4 +1128,134 @@ fn const_gather_declined_bracket_leaves_no_trace() {
         assert_eq!(count(&prog, op), 0, "{op}");
     }
     assert_eq!(faulting_gathers(&prog), 0);
+}
+
+/// A scalar rule (lowered whole, the oracle's `eval`) shares a subtree it
+/// repeats — the same interned node — as a box's numbering does: one
+/// instruction for `sin(s)` however often it appears, one materialized copy
+/// of a repeated inline table. A value first computed inside one arm of a
+/// branch is not served to the other arm or after the branch (it may not
+/// have run), so each arm computes its own. Every executor writes the
+/// oracle's bits.
+#[test]
+fn wholesale_rule_shares_repeated_subtrees() {
+    let table = json!({"op": "const", "args": [], "value": [1.5, 2.5, 4.0]});
+    let sin_s = op("sin", vec![json!("s")]);
+    let d = |rhs: Value| {
+        doc(
+            "wholesale_sharing",
+            json!({"s": {"type": "unknown", "default": 1.0}}),
+            vec![json!({"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": rhs})],
+            None,
+        )
+    };
+    // Counted on the unfused program, where every `sin` is its own `Un`.
+    let unfused = |d: &Value| {
+        let file = crate::parse::load_string(&d.to_string()).expect("fixture document loads");
+        let compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
+        taped(compiled.build_tape_opts(&HashSet::new(), None)).0
+    };
+    let un = |p: &TapeProgram| {
+        p.instrs
+            .iter()
+            .filter(|i| matches!(i, Instr::Un { .. }))
+            .count()
+    };
+    // Repeated outside any branch: once.
+    let doc_ = d(op(
+        "+",
+        vec![
+            op("*", vec![sin_s.clone(), sin_s.clone()]),
+            op("*", vec![sin_s.clone(), ix_lit(&table, 2)]),
+            ix_lit(&table, 3),
+        ],
+    ));
+    oracle_ab(doc_.clone());
+    let prog = unfused(&doc_);
+    assert_eq!(un(&prog), 1, "sin(s) is computed once");
+    assert!(
+        count(&prog, "ConstArray") <= 1,
+        "the table is materialized at most once"
+    );
+    // In both arms of a run-time branch, and after it: once per arm and once
+    // after.
+    let cond = op("<", vec![json!("s"), json!(1.25)]);
+    let doc_ = d(op(
+        "+",
+        vec![
+            op(
+                "ifelse",
+                vec![cond, sin_s.clone(), op("*", vec![json!(2), sin_s.clone()])],
+            ),
+            sin_s.clone(),
+        ],
+    ));
+    oracle_ab(doc_.clone());
+    assert_eq!(
+        un(&unfused(&doc_)),
+        3,
+        "each arm and the code after the branch"
+    );
+}
+
+/// `index(table, k)` with a literal subscript.
+fn ix_lit(table: &Value, k: i64) -> Value {
+    json!({"op": "index", "args": [table, k]})
+}
+
+/// A join-gated `faq` with nothing contracted (each output cell one gated
+/// term), reached from a whole-body rule, numbers its output box like every
+/// other box lowering: a subtree its filter and body repeat is lowered once.
+/// Once with every pair admitted (no mask) and once with a partial gate (the
+/// masked form). Every executor writes the oracle's bits.
+#[test]
+fn pointwise_gated_faq_numbers_its_box() {
+    let sin_u = op("sin", vec![ix("u", vec![json!("i"), json!("j")])]);
+    let make = |bg: Value| {
+        json!({
+            "esm": "1.1.0",
+            "metadata": {"name": "pointwise_gated_sharing"},
+            "index_sets": {"s": {"kind": "interval", "size": 3},
+                           "g": {"kind": "interval", "size": 4}},
+            "models": {"M": {
+                "variables": {
+                    "u": {"type": "unknown", "shape": ["s", "g"], "default": 1.0},
+                    "bs": {"type": "unknown", "shape": ["s"]},
+                    "bg": {"type": "unknown", "shape": ["g"]},
+                    "w": {"type": "unknown", "shape": ["s", "g"]}
+                },
+                "equations": [
+                    {"lhs": "bs", "rhs": {"op": "const", "args": [], "value": [1.0, 1.0, 1.0]}},
+                    {"lhs": "bg", "rhs": {"op": "const", "args": [], "value": bg}},
+                    {"lhs": "w", "rhs": {
+                        "op": "faq", "args": [], "output_idx": ["i", "j"],
+                        "ranges": {"i": {"from": "s"}, "j": {"from": "g"}},
+                        "join": [{"on": [["bs", "bg"]]}],
+                        "filter": op(">", vec![sin_u.clone(), json!(0.25)]),
+                        "expr": op("*", vec![sin_u.clone(), sin_u.clone()])
+                    }},
+                    d_eq("u", &["i", "j"], json!({"i": {"from": "s"}, "j": {"from": "g"}}),
+                         op("-", vec![ix("w", vec![json!("i"), json!("j")]),
+                                      ix("u", vec![json!("i"), json!("j")])]))
+                ]
+            }}
+        })
+    };
+    let un = |p: &TapeProgram| {
+        p.instrs
+            .iter()
+            .filter(|i| matches!(i, Instr::Un { .. }))
+            .count()
+    };
+    for (label, bg) in [
+        ("every pair admitted", json!([1.0, 1.0, 1.0, 1.0])),
+        ("a partial gate", json!([1.0, 2.0, 1.0, 2.0])),
+    ] {
+        let d = make(bg);
+        oracle_ab(d.clone());
+        let file = crate::parse::load_string(&d.to_string()).expect("fixture document loads");
+        let compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
+        let prog = taped(compiled.build_tape_opts(&HashSet::new(), None)).0;
+        assert_eq!(un(&prog), 1, "{label}: sin(u[i, j]) is computed once");
+    }
 }

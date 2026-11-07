@@ -29,7 +29,7 @@ import {
   interpLinear,
   interpBilinear,
 } from './closed-functions.js'
-import { fixturesDir } from './test-helpers.js'
+import { fixturesDir, REPO_ROOT } from './test-helpers.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import type { Expr, Model } from './types.js'
 
@@ -402,4 +402,95 @@ describe('interp.searchsorted: an xs that is not a rank-1 const array (esm-spec 
     expect(evaluateExpression(rhs, new Map([['x', 2]]))).toBe(1)
     expect(evaluateExpression(rhs, new Map([['x', Number.NaN]]))).toBe(1)
   })
+})
+
+// The interp scenarios through the pure-AST templates of lib/interp.esm. The
+// TypeScript evaluator is scalar-only: it has no rule for `faq` (nor for an
+// `index` read), so it cannot evaluate an expanded template. This pass checks
+// the expansion instead — the template import resolves, and each scenario's
+// right-hand side is the template body with every parameter occurrence
+// (including the axis length inside a `faq` `ranges` bound) replaced by the
+// scenario's arrays, query and length (esm-spec §9.6.3 constraint 5).
+describe('Closed function registry — interp scenarios through lib/interp.esm templates', () => {
+  const libraryPath = join(REPO_ROOT, 'lib', 'interp.esm')
+  const constArray = (v: unknown): unknown => ({ op: 'const', args: [], value: v })
+
+  // The `apply_expression_template` bindings of one scenario: arrays as `const`
+  // nodes, each axis length its integer, queries as parameters `qx_<tag>` /
+  // `qy_<tag>` (a NaN query cannot be a JSON literal).
+  function templateBindings(name: string, inputs: unknown[], tag: number): Record<string, unknown> {
+    const qx = `qx_${tag}`
+    const qy = `qy_${tag}`
+    if (name === 'searchsorted') {
+      const [, xs] = inputs as [unknown, unknown[]]
+      return { x: qx, xs: constArray(xs), n: xs.length }
+    }
+    if (name === 'linear') {
+      const [table, axis] = inputs as [unknown, unknown[]]
+      return { table: constArray(table), axis: constArray(axis), x: qx, n: axis.length }
+    }
+    const [table, axisX, axisY] = inputs as [unknown, unknown[], unknown[]]
+    return {
+      table: constArray(table),
+      axis_x: constArray(axisX),
+      axis_y: constArray(axisY),
+      x: qx,
+      y: qy,
+      nx: axisX.length,
+      ny: axisY.length,
+    }
+  }
+
+  // Test-local substitution oracle: every string other than an `op` name that
+  // equals a parameter is replaced by its binding. The interp templates carry no
+  // nested `apply_expression_template`, whose `name` would be exempt.
+  function substitute(body: unknown, bindings: Record<string, unknown>): unknown {
+    if (typeof body === 'string') return Object.hasOwn(bindings, body) ? bindings[body] : body
+    if (Array.isArray(body)) return body.map((v) => substitute(v, bindings))
+    if (body !== null && typeof body === 'object') {
+      const out: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(body)) out[k] = k === 'op' ? v : substitute(v, bindings)
+      return out
+    }
+    return body
+  }
+
+  const library = JSON.parse(readFileSync(libraryPath, 'utf-8'))
+  for (const name of ['searchsorted', 'linear', 'bilinear']) {
+    it(`expands interp.${name} for every success scenario`, () => {
+      const expected: ExpectedFile = JSON.parse(
+        readFileSync(join(fixturesRoot, 'interp', name, 'expected.json'), 'utf-8'),
+      )
+      const calls = expected.scenarios.map((sc, i) => templateBindings(name, sc.inputs, i))
+      const variables: Record<string, unknown> = {}
+      calls.forEach((b, i) => {
+        variables[`out_${i}`] = { type: 'unknown', default: 0.0, units: '1' }
+        for (const q of [b.x, b.y]) {
+          if (typeof q === 'string') variables[q] = { type: 'parameter', default: 0.0, units: '1' }
+        }
+      })
+      const doc = {
+        esm: '1.1.0',
+        metadata: { name: `interp_${name}_template` },
+        models: {
+          Probe: {
+            expression_template_imports: [{ ref: libraryPath }],
+            variables,
+            equations: calls.map((bindings, i) => ({
+              lhs: { op: 'D', args: [`out_${i}`], wrt: 't' },
+              rhs: { op: 'apply_expression_template', args: [], name, bindings },
+            })),
+          },
+        },
+      }
+      const equations = (loadString(JSON.stringify(doc)).models!.Probe as Model).equations
+      expect(equations).toHaveLength(calls.length)
+      const body = library.expression_templates[name].body
+      equations.forEach((eq, i) => {
+        const got = JSON.parse(JSON.stringify(eq.rhs))
+        const want = JSON.parse(JSON.stringify(substitute(body, calls[i]!)))
+        expect(got, expected.scenarios[i]!.name).toEqual(want)
+      })
+    })
+  }
 })

@@ -181,9 +181,12 @@ fn run_fixture(
 ) -> Result<Answer, String> {
     let rel = fx["path"].as_str().ok_or("fixture.path missing")?;
     let path = fixture_path(manifest_dir, tests, rel);
-    let text = fs::read_to_string(&path)
-        .map_err(|e| format!("fixture document not found at {}: {e}", path.display()))?;
-    let file = crate::load_string(&text).map_err(|e| format!("load: {e:?}"))?;
+    if !path.is_file() {
+        return Err(format!("fixture document not found at {}", path.display()));
+    }
+    // Loaded from its path, so its relative refs (subsystems,
+    // `expression_template_imports`) resolve against its own directory.
+    let file = crate::load_path(&path).map_err(|e| format!("load: {e:?}"))?;
     let model = fx["model"].as_str().ok_or("fixture.model missing")?;
 
     let integ = &manifest["integrators"]["rust"];
