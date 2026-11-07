@@ -4586,6 +4586,24 @@ Decomposes a UTC scalar time into proleptic-Gregorian calendar fields. All entri
 
 **Tolerance:** integer outputs are exact (zero error). `datetime.julian_day` is ≤ 1 ulp from the exact Julian Date.
 
+**Composition (informative):** on a bounded domain the nine `datetime.*` functions are expressible in the core AST, and the standard library carries those expressions: `lib/calendar.esm` is a template-library file (§9.7.1) whose match-less templates `year(t)`, `month(t)`, `day(t)`, `hour(t)`, `minute(t)`, `second(t)`, `day_of_year(t)`, `julian_day(t)` and `is_leap_year(t)` are their pure-AST definitions for finite `|t| < 2^52` s (about ±142 million years). Each takes the exact split above from `floor(t)`, which needs no correction step, and then runs Howard Hinnant's `civil_from_days` with every integer division written `floor(a / b)`:
+
+```jsonc
+// d = floor(floor(t) / 86400), s = floor(t) - 86400·d        (day number; whole second of the day)
+// hour = floor(s / 3600), minute = floor(s / 60) - 60·hour, second = s - 60·floor(s / 60)
+// z = d + 719468, era = floor(z / 146097), doe = z - 146097·era          (day of the 400-year era, from 0000-03-01)
+// yoe = floor((doe - floor(doe / 1460) + floor(doe / 36524) - floor(doe / 146096)) / 365)
+// doy = doe - (365·yoe + floor(yoe / 4) - floor(yoe / 100))               (day of the year from March 1)
+// mp = floor((5·doy + 2) / 153)                                           (month from March, 0..11)
+// day = doy - floor((153·mp + 2) / 5) + 1, month = mp + ifelse(mp < 10, 3, -9)
+// year = yoe + 400·era + ifelse(doy >= 306, 1, 0)                         (January and February: the next year)
+// day_of_year = doy + 60 + ifelse(doy >= 306, -365, leap(yoe)); is_leap_year = leap of the year modulo 400
+// julian_day = (d + 2440588) + ((s - 43200) + (t - floor(t))) / 86400    (the pinned formula, in that order)
+// every body: ifelse(abs(t) < 2^52, <body>, 0 / 0)
+```
+
+On that domain `floor(t)` is an integer of magnitude at most `2^52` and every intermediate is an integer below `2^53`, and the rounded quotient of two such integers has the exact floor, so each field is exact and equals the closed function's value bit for bit; `julian_day` is the pinned formula itself. Outside the domain, and for a NaN or infinite `t`, each template returns NaN where the closed function answers or raises `closed_function_overflow`; that includes years still inside the signed 32-bit range (`|t|` up to about `6.8e16` s), which only the `fn` form reaches. The second-valued constants are unit-bearing `const` nodes (§4.8.5), so `t` is checked as seconds and every field is dimensionless. `tests/closed_functions/datetime/*/template.esm` (the `datetime_templates` conformance tier) and each binding's closed-function harness check the expansions against the `fn` form. The `fn` functions stay.
+
 #### `interp.*` — search
 
 | Name | Arity | Args | Return |
