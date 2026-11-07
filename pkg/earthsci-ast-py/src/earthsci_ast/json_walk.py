@@ -28,6 +28,7 @@ from collections.abc import Iterator
 from typing import Any, Callable
 
 from .errors import EarthSciAstError
+from .stdlib import in_bundle_ref_path, is_std_ref, std_ref_path
 
 #: The op-name of an ``apply_expression_template`` node (esm-spec §9.6). Shared
 #: by the §9.6 lowering pass and the §9.7 import machinery.
@@ -354,17 +355,31 @@ def walk_dict_exprs(node: Any) -> Iterator[Any]:
 _ENV_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
-def expand_ref_env(ref: str) -> str:
-    """Expand ``${VAR}`` tokens in a §4.7 ref from the environment.
+def expand_ref_env(ref: str, base_dir: str | None = None) -> str:
+    """Expand a §4.7 ref: ``${VAR}`` tokens from the environment, and the
+    standard-library form ``esm:std/<file>.esm`` to its bundled file.
 
-    esm-spec §4.7: an OPTIONAL loader capability (like URL refs). An UNSET
-    variable is left literal, so the ref simply fails to resolve
-    (``template_import_unresolved`` / ``coupling_import_unresolved`` / the
-    subsystem error) rather than silently misresolving. Only the braced
+    esm-spec §4.7: ``${VAR}`` expansion is an OPTIONAL loader capability (like
+    URL refs). An UNSET variable is left literal, so the ref simply fails to
+    resolve (``template_import_unresolved`` / ``coupling_import_unresolved`` /
+    the subsystem error) rather than silently misresolving. Only the braced
     ``${VAR}`` form is expanded (not bare ``$VAR``), for byte-consistency with
     the Julia binding.
+
+    A ref beginning with ``esm:`` is a standard-library ref and is NOT
+    env-expanded; a ref whose expansion begins with ``esm:`` is one too. Either
+    becomes the absolute path of the bundled file (:mod:`earthsci_ast.stdlib`),
+    or a path that cannot exist for a name the bundle lacks. When ``base_dir``
+    is the bundle directory (the ref sits inside a bundled file), a relative ref
+    must name a sibling bundled file.
     """
-    return _ENV_REF_RE.sub(lambda m: os.environ.get(m.group(1), m.group(0)), ref)
+    if is_std_ref(ref):
+        return std_ref_path(ref)
+    expanded = _ENV_REF_RE.sub(lambda m: os.environ.get(m.group(1), m.group(0)), ref)
+    if is_std_ref(expanded):
+        return std_ref_path(expanded)
+    in_bundle = in_bundle_ref_path(expanded, base_dir)
+    return expanded if in_bundle is None else in_bundle
 
 
 def read_ref_text(
@@ -452,7 +467,7 @@ def load_ref_raw(
     ``base_dir`` unchanged for a URL.
     """
     prefix = f"{origin}: " if origin else ""
-    ref = expand_ref_env(ref)
+    ref = expand_ref_env(ref, base_dir)
     content, path = read_ref_text(
         ref,
         base_dir,
