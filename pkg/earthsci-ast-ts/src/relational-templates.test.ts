@@ -107,4 +107,61 @@ describe('lib/relational.esm argmin/argmax templates', () => {
       }
     })
   }
+
+  it('expands the key, rank and gated arg-witness templates', () => {
+    const constArray = (v: number[]): unknown => ({ op: 'const', args: [], value: v })
+    const idx = (sym: string): unknown => ({ op: 'index', args: [constArray([3, 1, 2]), sym] })
+    const calls: [string, Record<string, unknown>][] = [
+      ['pair_key', { a: 2, b: 3, lo_a: 1, lo_b: 1, n_a: 4, n_b: 5 }],
+      ['edge_key', { u: 4, v: 2, lo: 1, n: 5 }],
+      ['rank_of', { x: 7, members: constArray([1, 3, 7]), n: 3 }],
+      [
+        'argmin_where',
+        { f: idx('k_argmin_where_1'), p: { op: '>', args: [idx('k_argmin_where_1'), 1] }, n: 3 },
+      ],
+      [
+        'argmax_where',
+        { f: idx('k_argmax_where_1'), p: { op: '>', args: [idx('k_argmax_where_1'), 1] }, n: 3 },
+      ],
+    ]
+    const variables: Record<string, unknown> = {}
+    calls.forEach((_, i) => {
+      variables[`out_${i}`] = { type: 'unknown', default: 0.0, units: '1' }
+    })
+    const doc = {
+      esm: '1.1.0',
+      metadata: { name: 'relational_key_templates' },
+      models: {
+        Probe: {
+          expression_template_imports: [{ ref: libraryPath }],
+          variables,
+          equations: calls.map(([name, bindings], i) => ({
+            lhs: { op: 'D', args: [`out_${i}`], wrt: 't' },
+            rhs: { op: 'apply_expression_template', args: [], name, bindings },
+          })),
+        },
+      },
+    }
+    const equations = (loadString(JSON.stringify(doc)).models!.Probe as Model).equations
+    equations.forEach((eq, i) => {
+      const [name, bindings] = calls[i]!
+      const want = JSON.parse(
+        JSON.stringify(substitute(library.expression_templates[name].body, bindings)),
+      )
+      expect(JSON.parse(JSON.stringify(eq.rhs)), name).toEqual(want)
+    })
+  })
+
+  it('loads every template rewrite of the skolem / rank / gated-argmin fixtures', () => {
+    const manifest = JSON.parse(readFileSync(join(tierDir, 'rewrites', 'manifest.json'), 'utf-8'))
+    for (const e of manifest.rewrites as { id: string; out?: string }[]) {
+      const path = e.out ? join(REPO_ROOT, e.out) : join(tierDir, 'rewrites', `${e.id}.esm`)
+      const file = loadPath(path)
+      for (const m of Object.values(file.models ?? {})) {
+        for (const eq of (m as Model).equations) {
+          expect(JSON.stringify(eq.rhs), e.id).not.toContain('apply_expression_template')
+        }
+      }
+    }
+  })
 })

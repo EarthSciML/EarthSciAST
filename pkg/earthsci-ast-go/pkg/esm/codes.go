@@ -599,6 +599,12 @@ const (
 	// build (esm-spec §9.6.6). Registered for the cross-binding vocabulary;
 	// this binding has no simulator, so nothing here raises it.
 	CodeDerivedIndexSetUnmaterialized = "derived_index_set_unmaterialized"
+	// CodeValueInventionKeyOutOfRange: a `distinct` key or value-invention
+	// `join` column evaluates to NaN at build (a lib/relational.esm key
+	// template's out-of-range component; esm-spec §9.6.6). Registered for the
+	// cross-binding vocabulary; this binding has no simulator, so nothing here
+	// raises it.
+	CodeValueInventionKeyOutOfRange = "value_invention_key_out_of_range"
 	// CodeUnsupportedConstruct: a continuous or discrete event, or an implicit
 	// equation, reached an evaluator that cannot run it (esm-spec §9.6.6). Go does not simulate,
 	// so it never raises this; the constant keeps the §9.6.6 vocabulary uniform.
