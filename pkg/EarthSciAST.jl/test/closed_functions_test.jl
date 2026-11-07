@@ -608,3 +608,100 @@ end
         end
     end
 end
+
+# lib/calendar.esm carries the pure-AST definitions of the nine `datetime.*`
+# functions as expression templates of one parameter `t` (UTC seconds). Every
+# scenario of tests/closed_functions/datetime/*/expected.json, and the edges of
+# the templates' domain |t| < 2^52 s, runs through the expanded template under
+# the interpreter. Inside the domain it must give the SAME bits as the `fn`
+# form (for `julian_day` that is §9.2's pinned formula, which one scenario's
+# `expected` misses by an ulp within the fixture tolerance); outside it — the
+# two int32-year success scenarios and every `closed_function_overflow`
+# scenario, NaN and infinities included — it must give NaN.
+const _CF_CALENDAR_LIB = joinpath(_CF_REPO_ROOT, "lib", "calendar.esm")
+const _CF_CALENDAR_DOMAIN = 2.0^52
+const _CF_CALENDAR_EDGES = (
+    _CF_CALENDAR_DOMAIN - 1.0, -(_CF_CALENDAR_DOMAIN - 1.0),
+    _CF_CALENDAR_DOMAIN - 0.5, -(_CF_CALENDAR_DOMAIN - 0.5),
+    _CF_CALENDAR_DOMAIN, -_CF_CALENDAR_DOMAIN,
+)
+
+# `D(s) = <name>(tu)` in a document importing lib/calendar.esm, built once by
+# the interpreter; the returned closure evaluates the template at one instant.
+function _cf_calendar_template(name::String; compiler = :interpreter)
+    call = Dict{String, Any}(
+        "op" => "apply_expression_template", "args" => Any[],
+        "name" => name, "bindings" => Dict{String, Any}("t" => "tu")
+    )
+    doc = Dict{String, Any}(
+        "esm" => "1.2.0",
+        "metadata" => Dict{String, Any}("name" => "calendar_template_probe", "authors" => Any["t"]),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "expression_template_imports" => Any[
+                    Dict{String, Any}("ref" => "calendar.esm", "only" => Any[name]),
+                ],
+                "variables" => Dict{String, Any}(
+                    "tu" => Dict{String, Any}("type" => "parameter", "units" => "s", "default" => 0.0),
+                    "s" => Dict{String, Any}("type" => "unknown", "units" => "1", "default" => 0.0),
+                ),
+                "equations" => Any[
+                    Dict{String, Any}(
+                        "lhs" => Dict{String, Any}("op" => "D", "args" => Any["s"], "wrt" => "t"),
+                        "rhs" => call
+                    ),
+                ]
+            )
+        )
+    )
+    file = load_string(JSON3.write(doc); base_path = dirname(_CF_CALENDAR_LIB))
+    f!, u0, p, _, vm = EarthSciAST._build_evaluator(file; compiler = compiler)
+    du = similar(u0)
+    return function (t::Float64)
+        f!(du, u0, merge(p, (tu = t,)), 0.0)
+        return du[vm["s"]]
+    end
+end
+
+@testset "lib/calendar.esm templates give the fn bits (interpreter)" begin
+    for fdir in sort(readdir(joinpath(_CF_FIX_ROOT, "datetime")))
+        spec = JSON3.read(read(joinpath(_CF_FIX_ROOT, "datetime", fdir, "expected.json"), String))
+        fn_name = String(spec.function)
+        template = _cf_calendar_template(String(split(fn_name, '.')[2]))
+        instants = Tuple{String, Float64}[]
+        for sc in spec.scenarios
+            push!(instants, (String(sc.name), _decode_input(sc.inputs[1])))
+        end
+        for sc in spec.error_scenarios
+            push!(instants, (String(sc.name), _decode_input(sc.inputs[1])))
+        end
+        for t in _CF_CALENDAR_EDGES
+            push!(instants, ("domain_edge_$(t)", t))
+        end
+        @testset "$(fdir)" begin
+            for (sname, t) in instants
+                via_template = template(t)
+                want = abs(t) < _CF_CALENDAR_DOMAIN ?
+                    Float64(evaluate_closed_function(fn_name, [t])) : NaN
+                ok = isequal(via_template, want)
+                ok || @info "calendar template mismatch" fdir sname t via_template want
+                @test ok
+            end
+        end
+    end
+
+    # The template.esm fixture beside each expected.json (the document the
+    # `datetime_templates` conformance tier runs in every binding) passes its
+    # own inline tests, at tolerance 0, under the interpreter.
+    @testset "template.esm inline tests" begin
+        for fdir in sort(readdir(joinpath(_CF_FIX_ROOT, "datetime")))
+            path = joinpath(_CF_FIX_ROOT, "datetime", fdir, "template.esm")
+            results = run_inline_tests(path; compiler = :interpreter)
+            @test !isempty(results)
+            for r in results
+                @test r.status == EarthSciAST.PASS
+                @test r.actual !== nothing && isequal(r.actual, r.expected)
+            end
+        end
+    end
+end

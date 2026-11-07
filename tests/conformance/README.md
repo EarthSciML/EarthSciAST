@@ -63,6 +63,10 @@ tests/conformance/
 │   ├── manifest.json
 │   ├── fixtures/<id>.esm
 │   └── golden/<id>.json            #   the right-hand side at the initial state, bit for bit
+├── datetime_templates/            # lib/calendar.esm templates bit-for-bit against the datetime.* scenarios (CONFORMANCE_SPEC §5.45.4)
+│   ├── README.md                   #   the contract
+│   ├── manifest.json               #   `"runner": "inline_tests"`; its nine documents are REFERENCED from tests/closed_functions/datetime/<fn>/template.esm
+│   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
 ├── interp_templates/              # lib/interp.esm templates bit-for-bit against the interp.* scenarios (CONFORMANCE_SPEC §5.45.4)
 │   ├── README.md                   #   the contract
 │   ├── manifest.json               #   `"runner": "inline_tests"`; its three documents are REFERENCED from tests/closed_functions/interp/<fn>/template.esm
