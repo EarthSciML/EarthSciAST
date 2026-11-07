@@ -544,10 +544,17 @@ def _spherely_coords(geometry: object) -> np.ndarray:
         import json
 
         return _coords_from_geojson(json.loads(spherely.to_geojson(geometry)))
-    # The pinned ``spherely==0.1.0`` has no GeoJSON accessor but does serialize to
-    # WKT; parse the exterior ring out of the POLYGON / MULTIPOLYGON text.
+    # The pinned ``spherely`` has no GeoJSON accessor but does serialize to WKT;
+    # parse the exterior ring out of the POLYGON / MULTIPOLYGON text. ``to_wkt``
+    # prints 6 decimal places by default, which moves every clip vertex by up to
+    # 5e-7 degrees and the overlap area far outside the CONFORMANCE_SPEC §5.8.2
+    # tolerance, so ask for 17 (a binary64 degree value round-trips).
     if hasattr(spherely, "to_wkt"):
-        return _coords_from_wkt(spherely.to_wkt(geometry))
+        try:
+            text = spherely.to_wkt(geometry, precision=17)
+        except TypeError:  # a release whose to_wkt takes no precision
+            text = spherely.to_wkt(geometry)
+        return _coords_from_wkt(text)
     raise GeometryBackendUnavailable(
         "installed `spherely` exposes no GeoJSON / WKT accessor to "
         "read clip-ring vertices; pin a spherely release that provides one "
