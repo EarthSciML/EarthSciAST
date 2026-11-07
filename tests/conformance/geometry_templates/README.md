@@ -33,6 +33,18 @@ The goldens are the Julia interpreter's.
 - The leaf's operand errors: the template does not reject a degenerate ring (a
   ring of no extent gives 0) or a non-convex one (outside its contract).
 
+## Status: not yet in the gate
+
+The tier is not listed in `scripts/test-conformance.sh` or CONFORMANCE_SPEC
+§5.45.4 yet, because `native` does not build it in two bindings: Julia
+`native` refuses `planar_overlap` (`compiler_refused_rule`: the expanded
+template falls through the affine and contraction tiers to a refused per-cell
+build) and exhausts memory on `spherical_fan`; Rust `native` refuses
+`planar_overlap`'s gated equation (`compiler_refused_rule`: a const-array read
+behind a condition its run-time fault scan cannot read). Every binding's
+`interpreter`, and Python `native`, pass both documents. It joins the gate once
+the native compilers build both.
+
 ## Named exclusions
 
 None. Go and TypeScript are scope-excluded: neither has an inline-test runner;
