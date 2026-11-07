@@ -642,6 +642,11 @@ pub struct ArrayCompiled {
     /// [`crate::problem::esm_problem`] right after the build, and
     /// [`RuntimeMode::Legacy`] for every other entry point.
     pub(crate) runtime_mode: RuntimeMode,
+    /// The compiler rewrites a tape build of this model applies; set by
+    /// [`crate::problem::esm_problem`] from
+    /// [`crate::ProblemOptions::rewrites`], every rewrite on for every other
+    /// entry point. Part of the tape cache's key ([`tape::TapeCache`]).
+    pub(crate) rewrites: crate::problem::CompilerRewrites,
     /// The XLA executable this model's right-hand side runs on under
     /// [`RuntimeMode::Xla`], installed by
     /// [`crate::problem::esm_problem`] at CONSTRUCTION — so a model the

@@ -968,3 +968,112 @@ fn const_gather_at_a_clamped_count() {
     let prog = oracle_ab(read(count())).0;
     assert!(faulting_gathers(&prog) > 0, "zc[count] can read zc[0]");
 }
+
+/// A count window the axis does not hold at run time (a program whose
+/// window outgrew its axis) is refused in every build profile, not read past
+/// the axis's end.
+#[test]
+fn count_window_outside_its_axis_is_refused() {
+    let d = count_doc(9, indicator(op("<=", vec![axis_at("w"), query()])));
+    let file = crate::parse::load_string(&d.to_string()).expect("fixture document loads");
+    let compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
+    let (mut prog, _) = taped(compiled.build_tape_opts(&HashSet::new(), None));
+    let mut widened = 0;
+    for ins in &mut prog.instrs {
+        if let Instr::Count { n, .. } = ins {
+            *n += 1;
+            widened += 1;
+        }
+    }
+    assert_eq!(widened, 1);
+    let n = compiled.state_variable_names().len();
+    let param_vec = compiled.debug_resolve_params(&HashMap::new());
+    let mut scratch = super::super::RhsScratch::new(&compiled.var_shapes);
+    scratch.install_tape(std::sync::Arc::new(prog));
+    let state = seeded_state(n, 1, 0.25, 2.5);
+    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut dy = vec![0.0f64; n];
+        compiled.debug_eval_rhs_into(
+            &state,
+            0.0,
+            &param_vec,
+            &mut dy,
+            &mut scratch,
+            &mut RhsStats::default(),
+        );
+    }));
+    let err = run.expect_err("an out-of-axis window must be refused");
+    let msg = err
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default();
+    assert!(msg.contains("does not hold the window"), "{msg}");
+}
+
+/// The count rewrite is a build option of the model, part of the tape
+/// cache's key: switching it off on the same model builds (and serves) the
+/// general fold, and switching it back serves the counted program again.
+#[test]
+fn count_rewrite_is_a_build_option() {
+    let d = count_doc(9, indicator(op("<=", vec![axis_at("zc"), query()])));
+    let file = crate::parse::load_string(&d.to_string()).expect("fixture document loads");
+    let mut compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
+    let tape = |c: &ArrayCompiled| c.tape(&HashSet::new()).0.expect("taped");
+    let on = tape(&compiled);
+    assert_eq!(counts(&on).len(), 1);
+    compiled.rewrites.count_fold = false;
+    let off = tape(&compiled);
+    assert!(counts(&off).is_empty(), "the general fold");
+    assert!(count(&off, "Reduce") > 0);
+    compiled.rewrites.count_fold = true;
+    assert!(
+        std::sync::Arc::ptr_eq(&on, &tape(&compiled)),
+        "served from the cache"
+    );
+}
+
+/// A count the instruction cannot state declines to the general reduction
+/// instead of refusing the rule: here a standalone rank-0 sum whose query is
+/// the whole `u` (an array over its own box) rather than one element. It is
+/// taped by the general lowering, with the oracle's bits, beside the
+/// per-cell count.
+#[test]
+fn counted_bracket_query_box_mismatch_declines() {
+    let mut d = count_doc(9, indicator(op("<=", vec![axis_at("zc"), query()])));
+    d["models"]["M"]["variables"]["s"] = json!({"type": "unknown", "shape": ["lev"]});
+    d["models"]["M"]["equations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"lhs": "s", "rhs": {
+            "op": "faq", "args": [], "output_idx": [], "ranges": {"k": [1, 9]},
+            "expr": indicator(op("<=", vec![axis_at("zc"), json!("u")]))
+        }}));
+    let prog = oracle_ab(d).0;
+    assert_eq!(counts(&prog), vec![(CountRel::Le, true)], "only c's count");
+}
+
+/// A const-array read whose subscript the clamped-bracket route lowers but
+/// cannot prove inside the array (`zc[assign[l]]`, `assign` a const index
+/// array) is resolved at build time instead (one table gather), the route's
+/// attempt leaves no instruction of its own behind, and the oracle's bits
+/// hold.
+#[test]
+fn const_gather_declined_bracket_leaves_no_trace() {
+    let n = 9i64;
+    let assign: Vec<i64> = (0..n).map(|l| n - l).collect();
+    let mut d = count_doc(n, indicator(op("<=", vec![axis_at("zc"), query()])));
+    d["models"]["M"]["variables"]["assign"] = json!({"type": "unknown", "shape": ["lev"]});
+    d["models"]["M"]["equations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"lhs": "assign", "rhs": {"op": "const", "args": [], "value": assign}}));
+    d["models"]["M"]["equations"][2]["rhs"]["expr"] =
+        ix("zc", vec![ix("assign", vec![json!("l")])]);
+    let prog = oracle_ab(d).0;
+    assert_eq!(count(&prog, "TableGather"), 1);
+    for op in ["Gather", "IndexGather", "DataGather", "Count", "FaultScan"] {
+        assert_eq!(count(&prog, op), 0, "{op}");
+    }
+    assert_eq!(faulting_gathers(&prog), 0);
+}

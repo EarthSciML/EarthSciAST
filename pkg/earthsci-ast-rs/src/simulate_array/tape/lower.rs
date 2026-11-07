@@ -93,43 +93,6 @@ fn tape_index(n: usize, table: &str) -> LResult<u32> {
 
 type LResult<T> = Result<T, Bail>;
 
-thread_local! {
-    /// A per-thread override of [`count_rewrite_enabled`] ([`with_count_rewrite`]).
-    static COUNT_REWRITE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
-}
-
-/// Whether a build recognises the counted bracket
-/// ([`TapeBuilder::try_lower_indicator_count`]). On unless
-/// `ESS_TAPE_COUNT_DISABLE=1`, or a [`with_count_rewrite`] on this thread
-/// says otherwise: a switch for the A/B against the general lowering, which
-/// shapes the program a compiler builds and never selects another evaluator.
-pub(crate) fn count_rewrite_enabled() -> bool {
-    use std::sync::OnceLock;
-    static ENV: OnceLock<bool> = OnceLock::new();
-    COUNT_REWRITE.with(std::cell::Cell::get).unwrap_or_else(|| {
-        *ENV.get_or_init(|| {
-            !std::env::var("ESS_TAPE_COUNT_DISABLE")
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false)
-        })
-    })
-}
-
-/// Run `f` with the counted-bracket recognition on or off for every tape
-/// this thread builds meanwhile (a benchmark's and a test's A/B seam; the
-/// tape cache keeps whatever a build inside `f` produced).
-#[doc(hidden)]
-pub fn with_count_rewrite<R>(enabled: bool, f: impl FnOnce() -> R) -> R {
-    struct Restore(Option<bool>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            COUNT_REWRITE.with(|c| c.set(self.0));
-        }
-    }
-    let _restore = Restore(COUNT_REWRITE.with(|c| c.replace(Some(enabled))));
-    f()
-}
-
 /// The parts of a counted bracket ([`detect_indicator_count`]).
 struct IndicatorCount<'e> {
     rel: CountRel,
@@ -682,6 +645,10 @@ pub(crate) struct TapeBuilder<'m> {
     /// build-time data — a gather's subscripts, a join's key columns, a
     /// ragged bound — never to fold a value the program computes.
     known: FxHashMap<SlotId, Known>,
+    /// Whether the counted bracket is recognised
+    /// ([`Self::try_lower_indicator_count`]): the model's
+    /// [`crate::problem::CompilerRewrites::count_fold`].
+    count_fold: bool,
     /// Slots every element of which is known to lie in `[lo, hi]` (never
     /// NaN): a count, and what clamps and integer shifts make of one. Read
     /// only to prove a const-array gather's subscripts in range
@@ -1010,6 +977,7 @@ impl<'m> TapeBuilder<'m> {
             gather_tables: Vec::new(),
             seg_tables: Vec::new(),
             known: FxHashMap::default(),
+            count_fold: true,
             ranges: FxHashMap::default(),
             range_defs: HashSet::new(),
             tuple_frames: Vec::new(),
@@ -3285,19 +3253,17 @@ impl<'m> TapeBuilder<'m> {
             // A rank-1 const array at one computed subscript whose bounds
             // keep it inside the array (a clamped bracket) has no
             // out-of-range read for a policy to resolve: it is read as any
-            // array is, by one indexed gather.
+            // array is, by one indexed gather. The bounds are those of the
+            // lowered subscript, so the subscript is lowered speculatively:
+            // when the bounds do not prove the read inside, or anything in
+            // the attempt bails, everything it emitted (faults included) is
+            // undone and the read goes to the routes below as if no attempt
+            // had been made.
             if n == 1 && src_origin[0] == 1 && self.tile.is_none() {
-                let sub = self.lower_expr(&node.args[1], bx)?;
-                let inside = self
-                    .operand_range(&self.op_of(&sub))
-                    .is_some_and(|(lo, hi)| {
-                        subscript_of(lo) >= 1 && subscript_of(hi) <= src_shape[0] as i64
-                    });
-                if inside
-                    && let Some(v) =
-                        self.lower_index_gather(node, bx, &arg0, 0, &[None], &[], false)?
-                {
-                    return Ok(v);
+                let txn = self.sub_txn();
+                match self.lower_clamped_bracket_read(node, bx, &arg0, src_shape[0]) {
+                    Ok(Some(v)) => return Ok(v),
+                    Ok(None) | Err(_) => self.sub_rollback(txn),
                 }
             }
             if let Some(v) =
@@ -3642,6 +3608,26 @@ impl<'m> TapeBuilder<'m> {
             self.known.insert(out, Known::Vals(std::rc::Rc::new(v)));
         }
         Ok(Some(LV::Arr(out)))
+    }
+
+    /// `index(base, s)` on a rank-1 const array of `len` entries at origin 1,
+    /// read by one indexed gather when the lowered subscript's bounds keep
+    /// every read inside it; `Ok(None)` otherwise.
+    fn lower_clamped_bracket_read(
+        &mut self,
+        node: &Arc<ExpressionNode>,
+        bx: &LBox,
+        base: &LV,
+        len: usize,
+    ) -> LResult<Option<LV>> {
+        let sub = self.lower_expr(&node.args[1], bx)?;
+        let inside = self
+            .operand_range(&self.op_of(&sub))
+            .is_some_and(|(lo, hi)| subscript_of(lo) >= 1 && subscript_of(hi) <= len as i64);
+        if !inside {
+            return Ok(None);
+        }
+        self.lower_index_gather(node, bx, base, 0, &[None], &[], false)
     }
 
     /// `index(base, s…)` with every subscript evaluated per element of the
@@ -5109,7 +5095,7 @@ impl<'m> TapeBuilder<'m> {
         if read.len() < bx.syms.len() {
             return self.lower_nested_scalar_reduction_on(node, spec, bx, &read);
         }
-        if let Some(v) = self.try_lower_indicator_count(spec, bx, true)? {
+        if let Some(v) = self.try_lower_indicator_count(spec, bx, true) {
             return Ok(v);
         }
         let nc = spec.contract_names.len();
@@ -6656,17 +6642,9 @@ impl<'m> TapeBuilder<'m> {
             tuple: 0,
             visit: SmallVec::new(),
         };
-        let counted = self.try_lower_indicator_count(spec, &bx, false);
-        match counted {
-            Ok(Some(v)) => {
-                self.pop_scope();
-                return Ok(v);
-            }
-            Ok(None) => {}
-            Err(e) => {
-                self.pop_scope();
-                return Err(e);
-            }
+        if let Some(v) = self.try_lower_indicator_count(spec, &bx, false) {
+            self.pop_scope();
+            return Ok(v);
         }
         let lowered = (|| -> LResult<Option<LV>> {
             let keep = match spec.filter {
@@ -6749,7 +6727,7 @@ impl<'m> TapeBuilder<'m> {
 
     /// A rank-0 `faq` that counts the entries of a rank-1 axis standing in one
     /// comparison to a query ([`detect_indicator_count`]), lowered to one
-    /// [`Instr::Count`]; `Ok(None)` for every other shape, which the caller
+    /// [`Instr::Count`]; `None` for every other shape, which the caller
     /// lowers as before.
     ///
     /// The oracle folds `ifelse(axis[k] REL x, 1, 0)` over the window from
@@ -6764,21 +6742,39 @@ impl<'m> TapeBuilder<'m> {
     /// contraction box of a standalone reduction, which the query does not
     /// read, and the count is one scalar.
     ///
-    /// A query that would note a fail-closed fault in the per-cell form is
-    /// refused, as the promoted-box lowering refuses it: the oracle meets it
-    /// inside the nested reduction, which the count does not place.
+    /// The attempt is speculative: whatever it cannot lower (a query that
+    /// would note a fail-closed fault in the per-cell form, a query over
+    /// another box, an axis the resolver refuses) declines, and everything it
+    /// emitted is undone, so the general reduction lowers the `faq` as if no
+    /// count had been tried and reports anything it refuses itself.
     fn try_lower_indicator_count(
         &mut self,
         spec: &ArrayOpSpec,
         bx: &LBox,
         nested: bool,
-    ) -> LResult<Option<LV>> {
-        if !count_rewrite_enabled() || bx.tuple != 0 || self.sweep.is_some() {
-            return Ok(None);
+    ) -> Option<LV> {
+        if !self.count_fold || bx.tuple != 0 || self.sweep.is_some() {
+            return None;
         }
-        let Some(ic) = detect_indicator_count(spec) else {
-            return Ok(None);
-        };
+        let ic = detect_indicator_count(spec)?;
+        let txn = self.sub_txn();
+        match self.lower_indicator_count(&ic, bx, nested) {
+            Ok(Some(v)) => Some(v),
+            Ok(None) | Err(_) => {
+                self.sub_rollback(txn);
+                None
+            }
+        }
+    }
+
+    /// [`Self::try_lower_indicator_count`]'s lowering of a detected count;
+    /// `Ok(None)` or a bail declines it.
+    fn lower_indicator_count(
+        &mut self,
+        ic: &IndicatorCount,
+        bx: &LBox,
+        nested: bool,
+    ) -> LResult<Option<LV>> {
         // The axis, read whole. A name an enclosing box binds is not an
         // array; anything the resolver would refuse is left to the general
         // path, which reports it.
@@ -6829,9 +6825,7 @@ impl<'m> TapeBuilder<'m> {
         let notes = self.fault_notes;
         let x = self.lower_expr(ic.x, bx)?;
         if nested && self.fault_notes != notes {
-            bail_tape!(
-                "fault: a fail-closed fault inside a rank-0 output that reads its enclosing box"
-            );
+            return Ok(None);
         }
         let (shape, origin, scalar) = if nested {
             (bx.shape.clone(), bx.lo.clone(), false)
@@ -6841,7 +6835,7 @@ impl<'m> TapeBuilder<'m> {
         match self.lv_box(&x) {
             None => {}
             Some((s, o)) if !scalar && s == shape && o == origin => {}
-            Some(_) => bail_tape!("aggregate: a counted query's box does not match its box"),
+            Some(_) => return Ok(None),
         }
         let sorted = match &axis {
             LV::Arr(s) => self.known_values(*s).is_some_and(|v| {
@@ -7366,6 +7360,7 @@ pub(super) fn build_tape_program(
     b.observed_rules = observed_rules;
     b.tile = tile;
     b.baked_params = baked_join_key_params(compiled);
+    b.count_fold = compiled.rewrites.count_fold;
 
     // ---- observed rules, in dependency order -------------------------------
     for (i, rule) in observed_rules.iter().enumerate() {
@@ -7623,6 +7618,9 @@ impl<'m> TapeBuilder<'m> {
         self.seg_tables.truncate(txn.seg_tables);
         let n_slots = self.slots.len() as SlotId;
         self.known.retain(|s, _| *s < n_slots);
+        // A rolled-back slot's id is handed out again: its bounds go with it.
+        self.ranges.retain(|s, _| *s < n_slots);
+        self.range_defs.retain(|s| *s < n_slots);
         self.tuple_frames.clear();
         self.faults.truncate(txn.faults);
         self.fault_order.truncate(txn.faults);
@@ -7709,6 +7707,18 @@ impl<'m> TapeBuilder<'m> {
         self.seg_tables.truncate(txn.seg_tables);
         let n_slots = self.slots.len() as SlotId;
         self.known.retain(|s, _| *s < n_slots);
+        // A rolled-back slot's id is handed out again: its bounds go with it.
+        self.ranges.retain(|s, _| *s < n_slots);
+        self.range_defs.retain(|s| *s < n_slots);
+        // The attempt's value numbers in the frame it ran in: one naming a
+        // rolled-back slot goes (a value it shadowed is simply recomputed).
+        let dead = |lv: &LV| matches!(lv, LV::Scalar(s) | LV::Arr(s) if *s >= n_slots);
+        if let Some(frame) = self.scope_frames.last_mut() {
+            frame.map.retain(|_, lv| !dead(lv));
+            frame
+                .journal
+                .retain(|(_, prev)| !prev.as_ref().is_some_and(dead));
+        }
         for (s, &(n_chunks, last_len)) in txn.streams.iter().enumerate() {
             let stream = &mut self.streams[s];
             stream.truncate(n_chunks);

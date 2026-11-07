@@ -692,8 +692,11 @@ fn closed_arg_of(v: &Value) -> Option<crate::registered_functions::ClosedArg> {
 /// some other function — and is the general path's to answer. Array queries
 /// of different shapes are the registry's array-argument error, `NaN`.
 ///
-/// `interp.linear` broadcasts a 0-D array query too (into a 0-D result);
-/// the other two entries read a 0-D query as the scalar it holds.
+/// `interp.linear` broadcasts a 0-D array query too (into a 0-D result),
+/// and reads its table and axis as the row-major flattening of whatever
+/// rank they have (a scalar as one entry); the other two entries read a 0-D
+/// query as the scalar it holds, and their fixed arguments as the general
+/// path does.
 fn eval_interp_elementwise(name: &str, vals: &[Value], strict: Option<&str>) -> Option<Value> {
     use crate::registered_functions::{ClosedArg, evaluate_closed_function};
     // §9.2 puts the query LAST for the two tensor entries and FIRST for
@@ -722,6 +725,8 @@ fn eval_interp_elementwise(name: &str, vals: &[Value], strict: Option<&str>) -> 
     for (k, v) in vals.iter().enumerate() {
         if queries.contains(&k) {
             call.push(ClosedArg::Scalar(f64::NAN));
+        } else if name == "interp.linear" {
+            call.push(ClosedArg::Array(value_flat(v)));
         } else {
             call.push(closed_arg_of(v)?);
         }
@@ -909,6 +914,15 @@ pub(super) fn eval_ifelse(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         .and(&b_b)
         .for_each(|o, &c, &av, &bv| *o = if c != 0.0 { av } else { bv });
     Value::Array(Box::new(out))
+}
+
+/// Row-major flatten of a [`Value`] to a `Vec<f64>` (a scalar → one element) —
+/// used to snapshot a fixed interpolation table/axis.
+fn value_flat(v: &Value) -> Vec<f64> {
+    match v {
+        Value::Scalar(s) => vec![*s],
+        Value::Array(a) => a.iter().copied().collect(),
+    }
 }
 
 /// Broadcast a [`Value`] to `target` shape: a scalar fills; an array is
@@ -7205,5 +7219,75 @@ mod gate_plan_tests {
             })
             .collect();
         assert_eq!(got, want);
+    }
+}
+
+#[cfg(test)]
+mod interp_elementwise_tests {
+    use super::*;
+    use crate::registered_functions::{ClosedArg, evaluate_closed_function};
+
+    fn arr(shape: &[usize], v: &[f64]) -> Value {
+        Value::Array(Box::new(
+            ArrayD::from_shape_vec(IxDyn(shape), v.to_vec()).unwrap(),
+        ))
+    }
+
+    /// `interp.linear` over an array query reads its table and axis as their
+    /// row-major flattening whatever their rank — a scalar, a 0-D, a 2-D or a
+    /// rank-3 array — each element giving the scalar call's bits.
+    #[test]
+    fn interp_linear_array_query_flattens_table_and_axis() {
+        let table = [10.0, 20.0, 30.0, 40.0];
+        let axis = [0.0, 1.0, 2.0, 3.0];
+        let queries = [0.5, 2.5, 3.0, -0.0];
+        let q = arr(&[2, 2], &queries);
+        let want = |t: &[f64], a: &[f64]| -> Vec<u64> {
+            queries
+                .iter()
+                .map(|&x| {
+                    let call = [
+                        ClosedArg::Array(t.to_vec()),
+                        ClosedArg::Array(a.to_vec()),
+                        ClosedArg::Scalar(x),
+                    ];
+                    evaluate_closed_function("interp.linear", &call)
+                        .map(|v| v.as_f64())
+                        .unwrap_or(f64::NAN)
+                        .to_bits()
+                })
+                .collect()
+        };
+        let got = |t: Value, a: Value| -> Vec<u64> {
+            let Some(Value::Array(out)) =
+                eval_interp_elementwise("interp.linear", &[t, a, q.clone()], None)
+            else {
+                panic!("an array query is broadcast");
+            };
+            assert_eq!(out.shape(), &[2, 2]);
+            out.iter().map(|x| x.to_bits()).collect()
+        };
+        let flat = want(&table, &axis);
+        assert!(flat.iter().all(|b| !f64::from_bits(*b).is_nan()));
+        assert_eq!(
+            got(arr(&[2, 2, 1], &table), arr(&[4], &axis)),
+            flat,
+            "rank-3 table"
+        );
+        assert_eq!(
+            got(arr(&[4], &table), arr(&[1, 2, 2], &axis)),
+            flat,
+            "rank-3 axis"
+        );
+        assert_eq!(
+            got(arr(&[2, 2], &table), arr(&[4], &axis)),
+            flat,
+            "2-D table"
+        );
+        assert_eq!(
+            got(Value::Scalar(7.0), arr(&[], &[1.0])),
+            want(&[7.0], &[1.0]),
+            "scalar table, 0-D axis"
+        );
     }
 }

@@ -666,8 +666,17 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             out,
         } => {
             let av = resolve_src(axis, env, slab_ptr, slot_off);
-            debug_assert_eq!(av.shape.len(), 1, "Count axis rank");
-            debug_assert!((*lo + *n) as usize <= av.shape[0], "Count window");
+            // The window is read unchecked below, so it is checked here, once
+            // per execution, in every build: an axis whose run-time box no
+            // longer holds the window the lowering saw is refused, as the
+            // reference executor and the XLA emitter refuse it.
+            assert!(
+                av.shape.len() == 1 && *lo as usize + *n as usize <= av.shape[0],
+                "Count axis has shape {:?}, which does not hold the window {}..{}",
+                &av.shape[..],
+                lo,
+                *lo as usize + *n as usize
+            );
             // Rank 1, row-major: the window is contiguous. `out` never shares
             // storage with the axis (the slab coloring keeps them apart).
             let win = unsafe { std::slice::from_raw_parts(av.ptr.add(*lo as usize), *n as usize) };

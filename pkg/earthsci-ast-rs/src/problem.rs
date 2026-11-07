@@ -222,6 +222,34 @@ pub enum Rhs {
 )]
 pub type Compile = Rhs;
 
+/// The pattern rewrites the tape compilers (`native`, `xla`) apply to the
+/// expanded expression tree: each recognises one small algebraic shape and
+/// lowers it to a faster instruction with the same bits as the lowering it
+/// replaces. Every rewrite is on by default. Turning one off changes the
+/// program a compiler builds, never what it computes: it is the seam an A/B
+/// check or benchmark of the rewrite uses.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct CompilerRewrites {
+    /// The counted bracket (issue #588): a rank-0 `faq` summing
+    /// `ifelse(axis[k] REL x, 1, 0)` over one contracted index, `REL` one of
+    /// `<= < >= >`, lowered to one count of the axis window instead of the
+    /// fold.
+    pub count_fold: bool,
+}
+
+impl CompilerRewrites {
+    /// Every rewrite on: the default.
+    pub const ALL: CompilerRewrites = CompilerRewrites { count_fold: true };
+}
+
+impl Default for CompilerRewrites {
+    fn default() -> Self {
+        CompilerRewrites::ALL
+    }
+}
+
 /// Which strategy builds a Problem's right-hand side (API_SPEC §5.8,
 /// esm-libraries-spec §2.5.10).
 ///
@@ -564,6 +592,12 @@ pub struct ProblemOptions {
     /// nothing" and "the caller asked for native" stay distinguishable in a
     /// `ProblemOptions` a test prints; they build identically.
     pub compiler: Option<Compiler>,
+    /// The pattern rewrites the tape compilers apply (every one on by
+    /// default); ignored by [`Compiler::Interpreter`], which builds no tape.
+    /// An A/B seam for checking and timing a rewrite, outside the API
+    /// manifest.
+    #[doc(hidden)]
+    pub rewrites: CompilerRewrites,
 
     /// Opt in to the automatic projection-pushdown desugar. Turning this on
     /// also turns the build pipeline on.
@@ -671,6 +705,7 @@ impl std::fmt::Debug for ProblemOptions {
             .field("callbacks", &self.callbacks)
             .field("rhs", &self.rhs)
             .field("compiler", &self.compiler)
+            .field("rewrites", &self.rewrites)
             .field("inspect", &self.inspect)
             .field("retain_data_fields", &self.retain_data_fields)
             .field("sample_time", &self.sample_time)
@@ -2233,6 +2268,7 @@ pub fn esm_problem<'a>(
         model_name.as_deref(),
         opts.rhs,
         compiler,
+        opts.rewrites,
         opts.runtime_array_parameters,
     )?;
 
@@ -2279,6 +2315,7 @@ pub fn esm_problem<'a>(
             t0,
             model_name.as_deref(),
             compiler,
+            opts.rewrites,
         )?;
         build.fields = fields;
         build.static_eval_error = eval_error;
@@ -2757,6 +2794,7 @@ fn static_observed_fields(
     t0: f64,
     model_name: Option<&str>,
     compiler: Compiler,
+    rewrites: CompilerRewrites,
 ) -> Result<
     (
         HashMap<String, ArrayD<f64>>,
@@ -2830,6 +2868,7 @@ fn static_observed_fields(
         Compiler::Interpreter => crate::simulate_array::RuntimeMode::Interpreter,
         _ => crate::simulate_array::RuntimeMode::Native,
     };
+    compiled.rewrites = rewrites;
     let compiled = Rc::new(compiled);
     let report = rule_report(
         &compiled,
@@ -3185,6 +3224,7 @@ fn install_xla_program(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_backend(
     file: Option<&EsmFile>,
     flat: Option<&FlattenedSystem>,
@@ -3192,6 +3232,7 @@ fn compile_backend(
     model_name: Option<&str>,
     mode: Rhs,
     compiler: Compiler,
+    rewrites: CompilerRewrites,
     runtime_array_parameters: bool,
 ) -> Result<Backend, SimulateError> {
     if let Some(details) = unavailable_reason(compiler) {
@@ -3233,6 +3274,7 @@ fn compile_backend(
             runtime_array_parameters,
         )?;
         compiled.runtime_mode = runtime_mode;
+        compiled.rewrites = rewrites;
         return Ok(Backend::Array(Rc::new(compiled)));
     }
     let Some(file) = file else {
@@ -3285,6 +3327,7 @@ fn compile_backend(
     let mut compiled =
         crate::simulate::build_array_compiled(file, file_flattened, runtime_array_parameters)?;
     compiled.runtime_mode = runtime_mode;
+    compiled.rewrites = rewrites;
     Ok(Backend::Array(Rc::new(compiled)))
 }
 
