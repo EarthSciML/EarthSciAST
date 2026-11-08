@@ -102,7 +102,7 @@ const FIELDS: [&str; 9] = [
 
 /// Per cell `l` of 24, `tu[l] = t0 + 3601 l + 1e5 u[l]` (the state moves it
 /// across days and years), and each field relaxes a state of its own.
-fn calendar_doc(t0: f64, template: bool) -> Value {
+pub(super) fn calendar_doc(t0: f64, template: bool) -> Value {
     let l = json!({"l": [1, 24]});
     let mut vars = json!({
         "u": {"type": "unknown", "shape": ["lev"], "default": 1.0},
@@ -169,7 +169,7 @@ fn cells(lons: &[f64], lats: &[f64]) -> Value {
 /// the 3 x 3 grid of 2/3-degree cells over them, with one repeated vertex in
 /// a target ring), weighting a state per source cell into a state per target
 /// cell.
-fn overlap_doc(spherical: bool) -> Value {
+pub(super) fn overlap_doc(spherical: bool) -> Value {
     let src = cells(&[10.0, 11.0, 12.0], &[40.0, 41.0, 42.0]);
     let th = [10.0, 10.0 + 2.0 / 3.0, 10.0 + 4.0 / 3.0, 12.0];
     let ta = [40.0, 40.0 + 2.0 / 3.0, 40.0 + 4.0 / 3.0, 42.0];
@@ -233,7 +233,7 @@ fn overlap_area_templates_lower_and_match_the_oracle() {
 
 /// `assign[i] = argmin_g (x[i] - gx[g])^2`, the candidates reading the state
 /// `x`; ties are real (generators at equal distances).
-fn argmin_doc() -> Value {
+pub(super) fn argmin_doc() -> Value {
     let gx = json!([0.5, 1.0, 1.5, 1.0, 2.0, 2.5]);
     let dist = op(
         "*",
@@ -430,7 +430,7 @@ fn gated_pointwise_faq_compacts_to_its_candidate_cells() {
 /// `pair_key` / `edge_key` (NaN for an out-of-range or non-integral
 /// component), `rank_of` over literal members and `rank_of_set` over an
 /// index set the call names.
-fn relational_doc() -> Value {
+pub(super) fn relational_doc() -> Value {
     let x = || ix("x", vec![json!("i")]);
     let g = |k: &str| ix("gx", vec![json!(k)]);
     let d = |k: &str| {

@@ -89,6 +89,11 @@ use xla::{ArrayElement, ElementType, PrimitiveType, XlaBuilder, XlaComputation, 
 /// neither the ordered per-cell loop nor a channel for the causal self-read's
 /// fail-closed fault, and CONFORMANCE_SPEC §5.19.3b wants a route that cannot
 /// agree to decline loudly rather than return a number.
+/// The window length from which an [`Instr::Count`] over compile-time keys
+/// is lowered as a bisection ([`Emitter::count_search`]) rather than as one
+/// comparison per key.
+const COUNT_SEARCH_MIN: usize = 64;
+
 const RECURRENCE_REFUSAL: &str = "a causal self-reference (recurrence, esm-spec §4.3.1.1) is a \
      sequential sweep whose self-read fails closed at run time; this emitter lowers neither \
      the ordered per-cell loop nor a channel for that fault, so the model is refused \
@@ -1278,6 +1283,13 @@ impl<'a> Emitter<'a> {
                 let dims = self.out_dims(*out);
                 let q = self.operand(x)?;
                 let q = self.to_shape(&q, &dims)?;
+                if n >= COUNT_SEARCH_MIN {
+                    if let Some(keys) = self.const_window(axis, lo, n) {
+                        let v = self.count_search(*rel, keys, &dims, &q)?;
+                        self.define(*out, v);
+                        return Ok(());
+                    }
+                }
                 let win = self.wrap(
                     a.slice_in_dim(lo as i64, (lo + n) as i64, 1, 0),
                     "count: axis window",
@@ -1355,13 +1367,20 @@ impl<'a> Emitter<'a> {
                 return Err(self.err("JmpIfZero reached emit_one (handled by emit_range)"));
             }
             Instr::Sweep { .. } => return Err(self.err(RECURRENCE_REFUSAL)),
-            Instr::DataGather { faults, .. } => {
-                return Err(self.err(if *faults {
-                    "a computed-subscript const-array gather (`DataGather`) can raise a \
-                     fail-closed fault, which a compiled program cannot report"
-                } else {
-                    "a computed-subscript gather (`DataGather`) has no XLA lowering yet"
-                }));
+            Instr::DataGather {
+                src,
+                spec,
+                out,
+                faults,
+            } => {
+                if *faults {
+                    return Err(self.err(
+                        "a computed-subscript const-array gather (`DataGather`) can raise a \
+                         fail-closed fault, which a compiled program cannot report",
+                    ));
+                }
+                let v = self.emit_data_gather(src, *spec, *out)?;
+                self.define(*out, v);
             }
             Instr::ScalarRead { .. } => {
                 // Only a recurrence body holds one, and the sweep is refused
@@ -1664,6 +1683,79 @@ impl<'a> Emitter<'a> {
         self.wrap(flat.reshape(&d), "polygon area: reshape")
     }
 
+    /// The window `lo .. lo + n` of a count axis that is a compile-time
+    /// constant (a slot an [`Instr::ConstArray`] defines), or `None`.
+    fn const_window(&self, s: &SrcRef, lo: usize, n: usize) -> Option<Vec<f64>> {
+        let SrcRef::Slot(id) = s else {
+            return None;
+        };
+        let data = self.prog.instrs.iter().find_map(|i| match i {
+            Instr::ConstArray { data, out } if out == id => {
+                Some(&self.prog.const_data[*data as usize])
+            }
+            _ => None,
+        })?;
+        (data.shape.len() == 1 && lo + n <= data.values.len())
+            .then(|| data.values[lo..lo + n].to_vec())
+    }
+
+    /// [`Instr::Count`] over compile-time keys, as a bisection.
+    ///
+    /// A NaN key satisfies no comparison, so the keys that can count are the
+    /// others; sorted (under `<=`, which puts `-0.0` and `+0.0` together as
+    /// the comparison does), those satisfying `a <= x` / `a < x` are a prefix
+    /// and those satisfying `a >= x` / `a > x` a suffix, whatever `x` is (a
+    /// NaN `x` satisfies none). The prefix of keys where `P` holds — the
+    /// relation for `<=`/`<`, its negation for `>=`/`>` — is found by binary
+    /// lifting in `s32`: `c += step` whenever `P(keys[c + step - 1])`, for each
+    /// power of two from the largest down, which ends at the prefix's length.
+    /// The count is that length, or the remaining keys for `>=`/`>`: the same
+    /// integer the fold reaches, so the same `f64`.
+    fn count_search(&self, rel: CountRel, keys: Vec<f64>, dims: &[usize], q: &XlaOp) -> R<XlaOp> {
+        if dims.is_empty() {
+            let q1 = self.wrap(q.reshape(&[1]), "count: scalar query")?;
+            let c = self.count_search(rel, keys, &[1], &q1)?;
+            return self.wrap(c.reshape(&[]), "count: scalar count");
+        }
+        let mut keys: Vec<f64> = keys.into_iter().filter(|v| !v.is_nan()).collect();
+        keys.sort_by(|a, b| a.partial_cmp(b).expect("NaN keys were removed"));
+        let m = keys.len();
+        let prefix = matches!(rel, CountRel::Le | CountRel::Lt);
+        if m == 0 {
+            return self.splat(0.0, dims);
+        }
+        let kv = self.wrap(self.b.constant_r1(&keys[..]), "count: sorted keys")?;
+        let mut c = self.ci32(0, dims)?;
+        let top = self.ci32(m as i32, dims)?;
+        let one = self.ci32(1, dims)?;
+        let mut step = 1usize << (usize::BITS - 1 - m.leading_zeros());
+        while step > 0 {
+            let cand = self.wrap(c.add_(&self.ci32(step as i32, dims)?), "count: candidate")?;
+            let ok = self.wrap(cand.le(&top), "count: candidate in range")?;
+            let at = self.wrap(
+                cand.min(&top).and_then(|x| x.sub_(&one)),
+                "count: probe position",
+            )?;
+            let a = self.wrap(kv.take(&at, 0), "count: probe key")?;
+            let held = match rel {
+                CountRel::Le => a.le(q),
+                CountRel::Lt => a.lt(q),
+                CountRel::Ge => a.ge(q).and_then(|p| p.not()),
+                CountRel::Gt => a.gt(q).and_then(|p| p.not()),
+            };
+            let held = self.wrap(held, "count: probe compare")?;
+            let take = self.wrap(ok.and(&held), "count: advance")?;
+            c = self.wrap(take.select(&cand, &c), "count: step")?;
+            step >>= 1;
+        }
+        let c = if prefix {
+            c
+        } else {
+            self.wrap(top.sub_(&c), "count: suffix length")?
+        };
+        self.wrap(c.convert(PrimitiveType::F64), "count: s32 -> f64")
+    }
+
     /// The literal an [`Instr::ConstArray`] stores into ring-table slot `s`,
     /// or the refusal saying the table is not a compile-time constant.
     fn const_table(&self, s: &SrcRef) -> R<&ConstArrayData> {
@@ -1771,6 +1863,132 @@ impl<'a> Emitter<'a> {
         }
         let g = self.wrap(flat.take(&off, 0), "indexed gather: take")?;
         self.wrap(valid.select(&g, &zero), "indexed gather: ghost")
+    }
+
+    /// Lower one non-faulting [`Instr::DataGather`]: each subscript resolved
+    /// as [`DataGatherSpec::at`] resolves it — rounded half away from zero
+    /// (XLA's `round`), converted to an integer the way [`subscript_of`]'s
+    /// `as i64` does (NaN reads as 0, out-of-range magnitudes saturate), then
+    /// the zero ghost or the const array's boundary policy — the row-major
+    /// offset built in `s64`, and one `take` over the flattened source. Every
+    /// step is integer selection, so the element read is the oracle's.
+    fn emit_data_gather(&self, src: &SrcRef, spec: u32, out: SlotId) -> R<XlaOp> {
+        use crate::value_invention::BoundaryKind;
+        let spec = &self.prog.data_gathers[spec as usize];
+        let s = self.src(src)?;
+        let have = self.dims(&s)?;
+        if have != spec.src_shape.as_slice() {
+            return Err(self.err(format!(
+                "computed-subscript gather source has shape {have:?} but the spec expects \
+                 {:?}",
+                &spec.src_shape[..]
+            )));
+        }
+        let dims = self.out_dims(out);
+        let total: i64 = spec.src_shape.iter().product::<usize>() as i64;
+        let flat = self.wrap(s.reshape(&[total]), "data gather: flatten source")?;
+        let splat_i = |v: i64| -> R<XlaOp> {
+            let c = self.ci(v)?;
+            self.to_shape(&c, &dims)
+        };
+        let strides = rm_strides(&spec.src_shape);
+        let mut off = splat_i(0)?;
+        let mut ghost: Option<XlaOp> = None;
+        for (d, &n) in spec.src_shape.iter().enumerate() {
+            let v = self.operand(&spec.subs[d])?;
+            let v = self.to_shape(&v, &dims)?;
+            let r = self.wrap(v.round(), "data gather: round")?;
+            // `f as i64`: NaN -> 0, and saturation outside the s64 range.
+            let nan = self.wrap(r.ne(&r), "data gather: isnan")?;
+            let zero = self.splat(0.0, &dims)?;
+            let r = self.wrap(nan.select(&zero, &r), "data gather: NaN reads as 0")?;
+            let (hi_f, lo_f) = (
+                self.splat(9.223_372_036_854_775_808e18, &dims)?,
+                self.splat(-9.223_372_036_854_775_808e18, &dims)?,
+            );
+            let too_hi = self.wrap(r.ge(&hi_f), "data gather: saturate high")?;
+            let too_lo = self.wrap(r.lt(&lo_f), "data gather: saturate low")?;
+            let safe = self.wrap(
+                r.min(&self.splat(9.223_372_036_854_774_784e18, &dims)?)
+                    .and_then(|x| x.max(&lo_f)),
+                "data gather: pin",
+            )?;
+            let ri = self.wrap(safe.convert(PrimitiveType::S64), "data gather: convert")?;
+            let (imax, imin) = (splat_i(i64::MAX)?, splat_i(i64::MIN)?);
+            let ri = self.wrap(
+                too_hi
+                    .select(&imax, &ri)
+                    .and_then(|x| too_lo.select(&imin, &x)),
+                "data gather: saturate",
+            )?;
+            let n_i = n as i64;
+            let (one, nv) = (splat_i(1)?, splat_i(n_i)?);
+            let inside = self.wrap(
+                ri.ge(&one)
+                    .and_then(|lo| ri.le(&nv).and_then(|hi| lo.and(&hi))),
+                "data gather: in range",
+            )?;
+            let (zero_i, last_i) = (splat_i(0)?, splat_i((n_i - 1).max(0))?);
+            let in_pos = self.wrap(
+                ri.sub_(&one)
+                    .and_then(|p| p.max(&zero_i))
+                    .and_then(|p| p.min(&last_i)),
+                "data gather: position",
+            )?;
+            let policy = match &spec.kind {
+                ScalarReadKind::ConstArray { policy, .. } => Some(policy[d]),
+                _ => None,
+            };
+            let pos = match policy {
+                Some(BoundaryKind::Periodic) if n_i >= 1 => {
+                    // `(r - 1).rem_euclid(n)`, with the wrapping `r - 1`.
+                    let m =
+                        self.wrap(ri.sub_(&one).and_then(|x| x.rem_(&nv)), "data gather: rem")?;
+                    let neg = self.wrap(m.lt(&zero_i), "data gather: rem sign")?;
+                    let wrapped = self.wrap(m.add_(&nv), "data gather: rem + n")?;
+                    let m = self.wrap(neg.select(&wrapped, &m), "data gather: rem_euclid")?;
+                    self.wrap(inside.select(&in_pos, &m), "data gather: periodic")?
+                }
+                Some(BoundaryKind::Clamp) if n_i >= 1 => self.wrap(
+                    ri.max(&one)
+                        .and_then(|x| x.min(&nv))
+                        .and_then(|x| x.sub_(&one)),
+                    "data gather: clamp",
+                )?,
+                Some(_) => {
+                    // An `error` axis: the spec cannot fault (checked above),
+                    // so no element reaches it; `at` reads position 0 there.
+                    self.wrap(inside.select(&in_pos, &zero_i), "data gather: error axis")?
+                }
+                None => {
+                    let out_of = self.wrap(inside.not(), "data gather: ghost axis")?;
+                    ghost = Some(match ghost {
+                        None => out_of,
+                        Some(g) => self.wrap(g.or(&out_of), "data gather: ghost")?,
+                    });
+                    in_pos
+                }
+            };
+            let st = splat_i(strides[d])?;
+            off = self.wrap(
+                pos.mul_(&st).and_then(|t| off.add_(&t)),
+                "data gather: offset",
+            )?;
+        }
+        let g = if dims.is_empty() {
+            let o1 = self.wrap(off.reshape(&[1]), "data gather: scalar index")?;
+            let g1 = self.wrap(flat.take(&o1, 0), "data gather: take")?;
+            self.wrap(g1.reshape(&[]), "data gather: scalar result")?
+        } else {
+            self.wrap(flat.take(&off, 0), "data gather: take")?
+        };
+        match ghost {
+            None => Ok(g),
+            Some(gh) => {
+                let zero = self.splat(0.0, &dims)?;
+                self.wrap(gh.select(&zero, &g), "data gather: zero ghost")
+            }
+        }
     }
 
     // -- gather ------------------------------------------------------------
