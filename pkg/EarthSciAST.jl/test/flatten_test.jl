@@ -1041,6 +1041,45 @@ end
         @test E.SCHEMA_VERSION == "1.3.0"
     end
 
+    # The one placement rule for an equation that joins a component after
+    # collection (a couple tendency, a reattributed operator_compose merge):
+    # the end of its owner's block, i.e. after the last equation of the owner
+    # or of a component declared before it. Several items in one pass must
+    # land exactly where inserting them one at a time would.
+    @testset "_insert_into_component_blocks! places each item at its owner's block end" begin
+        E = EarthSciAST
+        mk(name) = Equation(_deriv(name), _N(0.0))
+        dep(eq) = (eq.lhs.args[1]::E.VarExpr).name
+        function place(names, owners, items, components)
+            eqs = Equation[mk(n) for n in names]
+            cs = Vector{E.Contribution}[E.Contribution[] for _ in names]
+            os = copy(owners)
+            E._insert_into_component_blocks!(
+                eqs, cs, os,
+                [(mk(n), E.Contribution[], o) for (n, o) in items], components
+            )
+            @test length(cs) == length(eqs)
+            return dep.(eqs), os
+        end
+        # Unowned "" equations belong to no block; items of one owner keep
+        # their order; owners are visited in component order whatever the
+        # items' order.
+        names, os = place(
+            ["x1", "y1", "z1", "y2", "c1"], ["A", "B", "", "B", "C"],
+            [("cn", "C"), ("an", "A"), ("bn1", "B"), ("an2", "A"), ("bn2", "B")],
+            ["A", "B", "C"]
+        )
+        @test names == ["x1", "an", "an2", "y1", "z1", "y2", "bn1", "bn2", "c1", "cn"]
+        @test os == ["A", "A", "A", "B", "", "B", "B", "B", "C", "C"]
+        # Two owners at one slot (B has no equations yet) come out in
+        # component order, as one-at-a-time insertion puts them.
+        names, _ = place(["x1", "c1"], ["A", "C"], [("b", "B"), ("a", "A")], ["A", "B", "C"])
+        @test names == ["x1", "a", "b", "c1"]
+        # No equation of the owner or of anything before it: the very front.
+        names, _ = place(["c1"], ["C"], [("a", "A")], ["A", "B", "C"])
+        @test names == ["a", "c1"]
+    end
+
     @testset "Flatten valid fixtures smoke test" begin
         # Every shared valid fixture must load, and then meet the step-0 rule:
         # a document that declares at least one component flattens cleanly, and

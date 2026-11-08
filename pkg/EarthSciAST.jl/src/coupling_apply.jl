@@ -281,7 +281,8 @@ is_placeholder(name::AbstractString)::Bool =
     name == PLACEHOLDER_VAR || endswith(name, "." * PLACEHOLDER_VAR)
 
 """
-    _apply_operator_compose!(equations, contribs, entry, states, observeds, owners)
+    _apply_operator_compose!(equations, contribs, entry, states, observeds, owners;
+                             components, renames = OrderedDict()) -> renames_made
 
 Apply a `CouplingOperatorCompose` entry (esm-libraries-spec §4.7.1). For
 `"systems": [A, B, …]` every B system's equations are merged INTO A's: B's
@@ -295,6 +296,11 @@ of what B authored, emits `operator_compose_no_merge` /
 `operator_compose_partial_merge`, and refuses outright when the entry declares
 `require_match`. Preserving an unmatched equation quietly is what made
 "merged everything" and "merged nothing" the same observable outcome.
+
+`components` is the document's component order, which places a merge
+reattributed to another component (see POSITION below). `renames` is the running
+document-wide map of names earlier merges deleted, through which `translate`
+endpoints are resolved; the renames this entry makes are returned (issue #230).
 
 The bare-name fallback resolves its surviving spelling by OWNERSHIP rather than
 by `systems[1]`, and REFUSES the case where ownership is genuinely ambiguous —
@@ -346,10 +352,16 @@ SILENTLY — which is the one outcome a coupling mis-specification must not have
     (`Chemistry.deposition_flux ~ Chemistry.O3 * 1e-3`) is not transported and
     must not collect an advection term.
 
-  * **The merged equation keeps A's POSITION.** §4.7.5 step 4 makes document
-    order normative and says a coupling-merged entry keeps the position of its
-    first occurrence; appending the merge to the end of the list instead
-    reorders the flattened equation vector against every other binding.
+  * **The merged equation's POSITION follows its owner.** §4.7.5 step 4 makes
+    document order normative. A merge that stays A's keeps A's slot; one the
+    next bullet reattributes to another component moves to the end of that
+    component's equations (after the last equation of it and of every component
+    declared before it), each such merge trailing the ones before it.
+    `components`, the document's component order, is what places it. Leaving
+    it at A's slot puts it ahead of its owner's own equations when A is
+    declared first, and appending it to the end of the whole list puts it
+    after later components'; either reorders the flattened equation vector
+    against every other binding.
 
   * **The merged equation is REATTRIBUTED to its dependent variable's system.**
     A document may CHAIN compose entries over one state with the operator as A
@@ -368,7 +380,7 @@ function _apply_operator_compose!(
         observeds::OrderedDict{String, ModelVariable},
         owners::Vector{String};
         renames::AbstractDict = OrderedDict{String, String}(),
-        components::Union{Nothing, Vector{String}} = nothing
+        components::Vector{String}
     )
     length(entry.systems) >= 2 || return OrderedDict{String, String}()
     a_name = entry.systems[1]
@@ -597,11 +609,9 @@ function _apply_operator_compose!(
     # A merged equation now owned by another component than A moves to the
     # end of that component's equations (see the POSITION note below).
     moving = falses(length(expanded))
-    if components !== nothing
-        for j in keys(extra)
-            o = new_owners[j]
-            moving[j] = o != a_name && o in components
-        end
+    for j in keys(extra)
+        o = new_owners[j]
+        moving[j] = o != a_name && o in components
     end
 
     # Step 5: everything not consumed by a merge survives, in document order.
@@ -654,14 +664,7 @@ function _apply_operator_compose!(
         go = findall(moving)
         moved = collect(zip(expanded[go], expanded_contribs[go], new_owners[go]))
         expanded, expanded_contribs, new_owners = expanded[stay], expanded_contribs[stay], new_owners[stay]
-        for (eq, cs, o) in moved
-            upto = Set{String}(components[1:findfirst(==(o), components)])
-            last = findlast(x -> x in upto, new_owners)
-            at = last === nothing ? 1 : last + 1
-            insert!(expanded, at, eq)
-            insert!(expanded_contribs, at, cs)
-            insert!(new_owners, at, o)
-        end
+        _insert_into_component_blocks!(expanded, expanded_contribs, new_owners, moved, components)
     end
 
     empty!(equations); append!(equations, expanded)
@@ -1317,6 +1320,67 @@ function _apply_connector_transform!(
     return
 end
 
+"""
+    _insert_into_component_blocks!(equations, contribs, owners, items, components)
+
+Insert each `(equation, contributions, owner)` of `items` at the end of its
+owner's block of the equation list: after the last equation owned by the owner
+or by any component declared before it in `components` (document order). Items
+for one owner keep their order in `items`; items landing at the same slot come
+out in component order. `owners` is parallel to `equations`, and an owner that
+is not a component (`""`) belongs to no block. Every item's owner must be in
+`components`.
+
+This is the one placement rule for an equation that joins a component after
+collection: a `couple` term that becomes a tendency (§4.7.2) and an
+`operator_compose` merge reattributed to another component (§4.7.1 step 4).
+It is one pass over the list, however many items there are.
+"""
+function _insert_into_component_blocks!(
+        equations::Vector{Equation},
+        contribs::Vector{Vector{Contribution}},
+        owners::Vector{String},
+        items::AbstractVector{<:Tuple{Equation, Vector{Contribution}, String}},
+        components::Vector{String}
+    )
+    isempty(items) && return
+    rank = Dict{String, Int}(c => k for (k, c) in enumerate(components))
+    # `upto[k]`: the last position owned by one of components[1:k], or 0.
+    upto = zeros(Int, length(components))
+    for (i, o) in enumerate(owners)
+        k = get(rank, o, 0)
+        k == 0 || (upto[k] = i)
+    end
+    for k in 2:length(upto)
+        upto[k] = max(upto[k], upto[k - 1])
+    end
+    # Stable by component rank, which also sorts by slot: `upto` is monotone.
+    order = sortperm([rank[it[3]] for it in items])
+    out_eqs = Vector{Equation}(undef, length(equations) + length(items))
+    out_cs = Vector{Vector{Contribution}}(undef, length(out_eqs))
+    out_owners = Vector{String}(undef, length(out_eqs))
+    n = 0
+    cursor = 1
+    for j in order
+        eq, cs, o = items[j]
+        for i in cursor:upto[rank[o]]
+            n += 1
+            out_eqs[n], out_cs[n], out_owners[n] = equations[i], contribs[i], owners[i]
+        end
+        cursor = max(cursor, upto[rank[o]] + 1)
+        n += 1
+        out_eqs[n], out_cs[n], out_owners[n] = eq, cs, o
+    end
+    for i in cursor:length(equations)
+        n += 1
+        out_eqs[n], out_cs[n], out_owners[n] = equations[i], contribs[i], owners[i]
+    end
+    copyto!(resize!(equations, n), out_eqs)
+    copyto!(resize!(contribs, n), out_cs)
+    copyto!(resize!(owners, n), out_owners)
+    return
+end
+
 # Fold `expression` into the equation that defines `to`. Additive targets the
 # LAST equation whose left-hand side's dependent variable is `to` (its `D(to)`
 # tendency or a bare definition); multiplicative targets the LAST `D(to)`
@@ -1354,17 +1418,14 @@ function _combine_tendency_term!(
         root = _component_root(to)
         pos = findfirst(==(root), components)
         (pos === nothing || !haskey(states, to)) && return
-        upto = Set{String}(components[1:pos])
-        last = findlast(o -> o in upto, owners)
-        at = last === nothing ? 1 : last + 1
-        insert!(
-            equations, at, Equation(
-                OpExpr("D", ASTExpr[VarExpr(to)], wrt = "t"), expression;
-                _comment = "couple:additive"
-            )
+        eq = Equation(
+            OpExpr("D", ASTExpr[VarExpr(to)], wrt = "t"), expression;
+            _comment = "couple:additive"
         )
-        insert!(contribs, at, _authored(expression, origin))
-        insert!(owners, at, root)
+        _insert_into_component_blocks!(
+            equations, contribs, owners,
+            [(eq, _authored(expression, origin), root)], components
+        )
         return
     end
     existing = equations[idx]
