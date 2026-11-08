@@ -847,18 +847,117 @@ function _cg_const_gather(ctx::_CGCtx, kc, nd::_Node)
     for d in eachindex(children)
         sd = _cg_name(ctx, "cgs")
         cs = _cg_counter_subscript(kc, children[d])
+        # A subscript whose every value is an integer on the axis
+        # (`_cg_int_span`) reads its element directly: `round` and the
+        # boundary policy both return such a value unchanged.
+        span = cs === nothing ? _cg_int_span(kc, children[d]) : cs[2]
+        inside = span !== nothing && 1 <= span[1] && span[2] <= cg.dims[d]
+        inside && _tally_cascade!(:gather_in_range)
         # A subscript past the first is evaluated only when the ones before it
         # did not throw: a region of its own (`_cg_lazy_operand`).
-        sub = cs === nothing ?
-            :(round(Int, $(d == 1 ? _cg_emit(ctx, kc, children[d]) : _cg_emit_region(ctx, kc, children[d])))) :
+        sub = if cs === nothing
+            se = d == 1 ? _cg_emit(ctx, kc, children[d]) : _cg_emit_region(ctx, kc, children[d])
+            inside ? :(unsafe_trunc(Int, $se)) : :(round(Int, $se))
+        else
             cs[1]
-        push!(binds, :($sd = _const_gather_sub($cgv, $d, $sub)))
+        end
+        push!(binds, inside ? :($sd = $sub) : :($sd = _const_gather_sub($cgv, $d, $sub)))
         push!(off, :(($sd - 1) * $(_cg_geo!(ctx, cg.strides[d], (cg.strides, d), true))))
     end
     return Expr(
         :let, Expr(:block, binds...),
         Expr(:block, :($cgv.flat[$(_cg_foldl(:+, off))]))
     )
+end
+
+# The least and greatest value of a subscript that is an integer at every
+# evaluation, or `nothing`. The grammar is closed over exact integers: integer
+# literals, loop counters of known span, `+ - neg max min` and the branches of
+# an `ifelse` over them, and a `+` fold seeded from an integer (unrolled, or a
+# loop over a constant range, the comparison count among them) whose terms are
+# such integers. Bounds are held to `_CG_SPAN_MAX`, far below 2^53, so every
+# partial sum is exact and no NaN can arise.
+# A literal counts only where the emission bakes it (`_cg_span_literal`): in
+# the nest's scalar spine always, under the scalar tier's class emission only
+# when every member of the class agrees on it.
+const _CG_SPAN_MAX = 1 << 40
+
+_cg_span_literal(kc, nd::_Node) = nothing
+_cg_span_literal(kc::_CGScalarCtx, nd::_Node) = nd.literal
+_cg_span_counter(kc, ref) = nothing
+_cg_span_counter(kc::_CGScalarCtx, ref) =
+    haskey(kc.loops, ref) ? get(kc.spans, ref, nothing) : nothing
+
+function _cg_int_span(kc, nd::_Node, inner = nothing)
+    k = nd.kind
+    sp = if k === _NK_LITERAL
+        v = _cg_span_literal(kc, nd)
+        (v isa Float64 && isinteger(v) && abs(v) <= _CG_SPAN_MAX) || return nothing
+        (Int(v), Int(v))
+    elseif k === _NK_LOOPVAR
+        s = inner === nothing ? nothing : get(inner, nd.payload, nothing)
+        s === nothing ? _cg_span_counter(kc, nd.payload) : s
+    elseif k === _NK_CONTRACTION
+        sd = (isinteger(nd.literal) && abs(nd.literal) <= _CG_SPAN_MAX) ?
+            (Int(nd.literal), Int(nd.literal)) : nothing
+        (nd.op === :+ && sd !== nothing) ? _cg_span_sum(kc, sd, nd.children, inner) : nothing
+    elseif k === _NK_CONTRACTION_LOOP
+        spec = nd.payload::_ContractLoop
+        rng = spec.lo:spec.step:spec.hi
+        (nd.op === :+ && nd.literal === 0.0 && length(nd.children) == 1) || return nothing
+        isempty(rng) && return (0, 0)
+        env = inner === nothing ? IdDict{Any, Tuple{Int, Int}}() : copy(inner)
+        env[spec.ref] = extrema((first(rng), last(rng)))
+        b = _cg_int_span(kc, nd.children[1], env)
+        b === nothing && return nothing
+        n = length(rng)
+        max(abs(b[1]), abs(b[2])) <= div(_CG_SPAN_MAX, n) || return nothing
+        (n * b[1], n * b[2])
+    elseif k === _NK_OP
+        op, ch = nd.op, nd.children
+        if op === :ifelse && length(ch) == 3
+            y = _cg_int_span(kc, ch[2], inner)
+            y === nothing && return nothing
+            z = _cg_int_span(kc, ch[3], inner)
+            z === nothing ? nothing : (min(y[1], z[1]), max(y[2], z[2]))
+        elseif op === :+ && !isempty(ch)
+            _cg_span_sum(kc, (0, 0), ch, inner)
+        elseif (op === :- && length(ch) == 1) || (op === :neg && length(ch) == 1)
+            a = _cg_int_span(kc, ch[1], inner)
+            a === nothing ? nothing : (-a[2], -a[1])
+        elseif op === :- && length(ch) == 2
+            a = _cg_int_span(kc, ch[1], inner)
+            a === nothing && return nothing
+            b = _cg_int_span(kc, ch[2], inner)
+            b === nothing ? nothing : (a[1] - b[2], a[2] - b[1])
+        elseif (op === :max || op === :min) && !isempty(ch)
+            acc = nothing
+            for c in ch
+                a = _cg_int_span(kc, c, inner)
+                a === nothing && return nothing
+                acc = acc === nothing ? a : op === :max ?
+                    (max(acc[1], a[1]), max(acc[2], a[2])) :
+                    (min(acc[1], a[1]), min(acc[2], a[2]))
+            end
+            acc
+        else
+            nothing
+        end
+    else
+        nothing
+    end
+    (sp === nothing || max(abs(sp[1]), abs(sp[2])) > _CG_SPAN_MAX) && return nothing
+    return sp
+end
+
+function _cg_span_sum(kc, acc::Tuple{Int, Int}, ch, inner)
+    for c in ch
+        a = _cg_int_span(kc, c, inner)
+        a === nothing && return nothing
+        acc = (acc[1] + a[1], acc[2] + a[2])
+        max(abs(acc[1]), abs(acc[2])) <= _CG_SPAN_MAX || return nothing
+    end
+    return acc
 end
 
 # The element a const gather reads at each TABLE entry, by `_const_gather_sub`
@@ -1205,7 +1304,9 @@ function _try_codegen_array_contraction(
     # The same odometer stepped instead of divided: `start` decomposes the
     # chunk's first cell once, `step` advances it after each cell, carrying
     # into the next dimension when one wraps. The counters take the values the
-    # division gives, cell for cell.
+    # division gives, cell for cell. Every cell loop but the gated TABLE fold's
+    # walks it: an integer division per output dimension per cell can cost more
+    # than a short cell's whole term.
     start = Any[:(local $rv = $cv - 1)]
     stepper = Any[]
     qs = Symbol[]
@@ -1351,12 +1452,19 @@ function _try_codegen_array_contraction(
             local $av = $tv[1]
             local $bv = $tv[2]
             local $dv = $dstore
-            for $cv in ($av + 1):$bv
-                $(seek...)
-                local $olv = $ov[$cv]
-                local $xv = convert(eltype($dv), $cell)
-                $dv[$olv] = $xv
-                $(cstmts...)
+            if $av < $bv
+                local $cv = $av + 1
+                $(start...)
+                $(
+                rowloop(
+                    quote
+                        local $olv = $ov[$cv]
+                        local $xv = convert(eltype($dv), $cell)
+                        $dv[$olv] = $xv
+                        $(cstmts...)
+                    end
+                )
+            )
             end
         end
     end
@@ -1586,14 +1694,30 @@ end
 # generated function is called at its own concrete type; a `Vector` of them would
 # box each call's `t` and cost an allocation per contraction per call. The same
 # reasoning `_fill_obs_levels!` states for its levels.
+#
+# The tail recursion stays static only while the tuple is short: past
+# inference's splat limit `Base.tail` of a long tuple is no longer inferred, so
+# every step allocates a fresh tuple and reaches the next generated function by
+# dynamic dispatch (a model with a table lookup per photolysis bin builds one
+# contraction per lookup, hundreds in all). A long section is therefore stored
+# as a tree of tuples no wider than `_SECTION_TUPLE_WIDTH`, walked depth first:
+# the same contractions in the same order.
 struct _ContractionSection{G}
-    gens::G                         # tuple of `_ArrayContraction`
+    gens::G                         # tuple of `_ArrayContraction` (or of such tuples)
+end
+
+const _SECTION_TUPLE_WIDTH = 16
+
+function _tuple_tree(xs::Tuple)
+    w = _SECTION_TUPLE_WIDTH
+    length(xs) <= w && return xs
+    return _tuple_tree(Tuple(xs[i:min(i + w - 1, length(xs))] for i in 1:w:length(xs)))
 end
 
 # The section is what the right-hand side keeps, so the re-emission closures
 # (`remit`), which only the build's consumer pass reads, are dropped here.
 _make_contraction_section(acs::AbstractVector) =
-    _ContractionSection(Tuple(map(_ac_drop_remit, acs)))
+    _ContractionSection(_tuple_tree(Tuple(map(_ac_drop_remit, acs))))
 
 Base.isempty(s::_ContractionSection) = isempty(s.gens)
 
@@ -1602,6 +1726,8 @@ Base.isempty(s::_ContractionSection) = isempty(s.gens)
     _run_acgen!(gs[1], du, u, p, t, T)
     return _run_acgens!(Base.tail(gs), du, u, p, t, T)
 end
+@inline _run_acgen!(gs::Tuple, du, u, p, t, ::Type{T}) where {T} =
+    _run_acgens!(gs, du, u, p, t, T)
 
 @inline function _apply_array_contractions!(
         du, u, p, t,

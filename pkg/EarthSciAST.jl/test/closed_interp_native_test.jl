@@ -502,6 +502,182 @@ end
     @test e_faq !== nothing && typeof(e_faq) === typeof(e_lit)
 end
 
+# Closed-AST phase 4: what the interpolation templates' cells cost around the
+# count.
+#
+#   * A table read whose subscript is an integer on the axis at every
+#     evaluation — the bracket `min(max(count, 1), n - 1)` and its `+ 1` —
+#     reads the element directly (`:gather_in_range`), without `round` and the
+#     boundary policy; a subscript that could leave the axis, or that reads a
+#     non-integer literal or a parameter, keeps them.
+#   * The nest's cell loop with a state consumer steps its odometer rather than
+#     dividing the cell ordinal per output dimension (two dimensions here).
+#   * A contraction section with more contractions than inference unrolls is a
+#     tree of short tuples: no allocation, no dynamic dispatch.
+# Each against the interpreter, bit for bit.
+
+_ti_sub_doc(sub; n = 9, nl = 23) = begin
+    z = _ti_z(n)
+    tab = _ti_tabs(n)[1]
+    # Every query inside (z[1], z[n]): the count is 1 … n - 1.
+    # The query moves with t, so the lookup is not folded at build.
+    xq = _ti_lev(
+        _ti_op(
+            "+", _ti_op("+", z[1] + 0.5, _ti_op("*", _ti_op("-", "l", 1), (z[n] - z[1] - 1.0) / (nl - 1))),
+            _ti_op("*", 0.25, _ti_op("sin", "t"))
+        )
+    )
+    cnt = _ti_count("k", n, _ti_op("<=", _ti_ix("axis", "k"), _ti_ix("xq", "l")), ["axis"])
+    vars = Dict{String, Any}(
+        "xq" => Dict{String, Any}("type" => "unknown", "shape" => ["lev"]),
+        "r" => Dict{String, Any}("type" => "unknown", "shape" => ["lev"]),
+        "u" => Dict{String, Any}("type" => "unknown", "shape" => ["lev"], "default" => 0.0),
+        "axis" => Dict{String, Any}("type" => "unknown", "shape" => ["kk"]),
+        "tab" => Dict{String, Any}("type" => "unknown", "shape" => ["kk"]),
+        "pn" => Dict{String, Any}("type" => "parameter", "default" => Float64(n - 1)),
+    )
+    eqs = Any[
+        Dict("lhs" => "axis", "rhs" => _ti_const(z)),
+        Dict("lhs" => "tab", "rhs" => _ti_const(tab)),
+        Dict("lhs" => "xq", "rhs" => xq),
+        Dict("lhs" => "r", "rhs" => _ti_lev(_ti_ix("tab", sub(cnt, n)))),
+        Dict("lhs" => _ti_dl("u"), "rhs" => _ti_lev(_ti_op("-", _ti_ix("r", "l"), _ti_ix("u", "l")))),
+    ]
+    Dict{String, Any}(
+        "esm" => "1.2.0", "metadata" => Dict("name" => "gather_span"),
+        "index_sets" => Dict(
+            "lev" => Dict("kind" => "interval", "size" => nl),
+            "kk" => Dict("kind" => "interval", "size" => n)
+        ),
+        "models" => Dict("M" => Dict{String, Any}("variables" => vars, "equations" => eqs))
+    )
+end
+
+# Every `_ContractionSection` the right-hand side holds, by a walk of `f!`.
+function _ti_sections(x, out = Any[], seen = Base.IdSet{Any}())
+    x isa _TI._ContractionSection && (push!(out, x); return out)
+    (x isa Module || x isa DataType || x isa Number || x isa AbstractString || x isa Symbol) && return out
+    isbitstype(typeof(x)) && return out
+    x in seen && return out
+    push!(seen, x)
+    x isa AbstractArray && return out
+    for i in 1:nfields(x)
+        isdefined(x, i) && _ti_sections(getfield(x, i), out, seen)
+    end
+    return out
+end
+_ti_widest(g::Tuple) = isempty(g) ? 0 : max(length(g), maximum(_ti_widest, g))
+_ti_widest(_) = 0
+_ti_ngens(g::Tuple) = sum(_ti_ngens, g; init = 0)
+_ti_ngens(_) = 1
+
+@testset "interpolation template cells around the count (closed-AST phase 4)" begin
+    @testset "bracket table reads skip the boundary policy ($shape)" for shape in (:cell, :bil, :scalar)
+        doc = _ti_doc(shape, 59; tpl = true)
+        dn, tn, _ = _ti_eval(doc, :native)
+        di, _, _ = _ti_eval(doc, :interpreter; times = _TI_TIMES[1:3])
+        @test _ti_same(Dict(k => v[1:3] for (k, v) in dn), di)
+        @test get(tn, :gather_in_range, 0) >= 1
+    end
+
+    bracket(c, n) = _ti_op("min", _ti_op("max", c, 1), _ti_op("-", n, 1))
+    @testset "subscript $what" for (what, sub, fires) in (
+            ("the bracket", bracket, true),
+            ("the bracket + 1", (c, n) -> _ti_op("+", bracket(c, n), 1), true),
+            ("an unrolled count", nothing, true),
+            ("the bare count (can be 0)", (c, n) -> c, false),
+            ("past the axis (bracket of n, + 1)",
+                (c, n) -> _ti_op("+", _ti_op("min", _ti_op("max", c, 1), n), 1), false),
+            ("with a non-integer literal", (c, n) -> _ti_op("+", bracket(c, n), 0.25), false),
+            ("clamped by a parameter", (c, n) -> _ti_op("min", _ti_op("max", c, 1), "pn"), false),
+        )
+        # A count shorter than the loop floor is unrolled into a seeded sum.
+        doc = sub === nothing ? _ti_sub_doc(bracket; n = 5) : _ti_sub_doc(sub)
+        dn, tn, _ = _ti_eval(doc, :native)
+        di, _, _ = _ti_eval(doc, :interpreter; times = _TI_TIMES[1:3])
+        @test _ti_same(Dict(k => v[1:3] for (k, v) in dn), di)
+        @test (get(tn, :gather_in_range, 0) >= 1) == fires
+    end
+
+    @testset "two-dimensional nest with a state consumer" begin
+        n, ni, nj = 9, 7, 5
+        z = _ti_z(n)
+        tab = _ti_tabs(n)[2]
+        ij(e) = Dict{String, Any}(
+            "op" => "faq", "args" => Any[], "output_idx" => Any["i", "j"],
+            "ranges" => Dict("i" => Dict("from" => "ii"), "j" => Dict("from" => "jj")), "expr" => e
+        )
+        # The query reads the state, so the lookup is recomputed every call.
+        x = _ti_op(
+            "+", _ti_op("*", _ti_op("+", "i", _ti_op("*", 3, "j")), z[n] / (ni + 3 * nj)),
+            _ti_op("*", 50.0, _ti_ix("u", "i", "j"))
+        )
+        look = _ti_apply("linear"; table = _ti_const(tab), axis = _ti_const(z), x = x, n = n)
+        doc = Dict{String, Any}(
+            "esm" => "1.2.0", "metadata" => Dict("name" => "nest_2d_consumer"),
+            "index_sets" => Dict(
+                "ii" => Dict("kind" => "interval", "size" => ni),
+                "jj" => Dict("kind" => "interval", "size" => nj)
+            ),
+            "models" => Dict(
+                "M" => Dict{String, Any}(
+                    "variables" => Dict{String, Any}(
+                        "r" => Dict{String, Any}("type" => "unknown", "shape" => ["ii", "jj"]),
+                        "u" => Dict{String, Any}("type" => "unknown", "shape" => ["ii", "jj"], "default" => 1.0),
+                    ),
+                    "equations" => Any[
+                        Dict("lhs" => "r", "rhs" => ij(look)),
+                        Dict(
+                            "lhs" => ij(_ti_op("D", _ti_ix("u", "i", "j"); wrt = "t")),
+                            "rhs" => ij(_ti_op("-", _ti_ix("r", "i", "j"), _ti_ix("u", "i", "j")))
+                        ),
+                    ],
+                    "expression_templates" => _ti_templates(),
+                )
+            )
+        )
+        dn, tn, _ = _ti_eval(doc, :native)
+        di, _, _ = _ti_eval(doc, :interpreter)
+        @test _ti_same(dn, di)
+        @test get(tn, :array_contraction_consumer, 0) >= 1
+    end
+
+    @testset "a section of more contractions than inference unrolls" begin
+        n, nl, m = 5, 17, 24
+        z = _ti_z(n)
+        vars = Dict{String, Any}(
+            "xq" => Dict{String, Any}("type" => "unknown", "shape" => ["lev"]),
+            "u" => Dict{String, Any}("type" => "unknown", "shape" => ["lev"], "default" => 0.0),
+        )
+        eqs = Any[Dict("lhs" => "xq", "rhs" => _ti_lev(_ti_op("+", _ti_op("*", "l", z[n] / nl), _ti_op("*", 30.0, _ti_op("sin", "t")))))]
+        terms = Any[]
+        for j in 1:m
+            vars["r$j"] = Dict{String, Any}("type" => "unknown", "shape" => ["lev"])
+            tab = Float64[j + 0.125 * k * k for k in 1:n]
+            push!(eqs, Dict("lhs" => "r$j", "rhs" => _ti_lev(_ti_apply("linear"; table = _ti_const(tab), axis = _ti_const(z), x = _ti_ix("xq", "l"), n = n))))
+            push!(terms, _ti_ix("r$j", "l"))
+        end
+        push!(eqs, Dict("lhs" => _ti_dl("u"), "rhs" => _ti_lev(_ti_op("-", _ti_op("+", terms...), _ti_ix("u", "l")))))
+        doc = Dict{String, Any}(
+            "esm" => "1.2.0", "metadata" => Dict("name" => "many_contractions"),
+            "index_sets" => Dict("lev" => Dict("kind" => "interval", "size" => nl)),
+            "models" => Dict("M" => Dict{String, Any}("variables" => vars, "equations" => eqs, "expression_templates" => _ti_templates()))
+        )
+        dn, tn, (f!, u0, p) = _ti_eval(doc, :native)
+        di, _, _ = _ti_eval(doc, :interpreter)
+        @test _ti_same(dn, di)
+        @test get(tn, :array_contraction_codegen, 0) >= m
+        secs = _ti_sections(f!)
+        @test sum(s -> _ti_ngens(s.gens), secs) >= m
+        @test all(s -> _ti_widest(s.gens) <= _TI._SECTION_TUPLE_WIDTH, secs)
+        if VERSION >= v"1.12"
+            du = similar(u0)
+            f!(du, u0, p, 0.3)
+            @test (@allocated f!(du, u0, p, 0.4)) == 0
+        end
+    end
+end
+
 # A scalar program whose class is split through the cache stores slots and
 # reads them back inside one generated function. A scalar site whose queries
 # read the state and t, at node caps small enough to split it: each read-back

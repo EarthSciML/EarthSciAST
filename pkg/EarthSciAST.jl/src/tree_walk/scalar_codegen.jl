@@ -401,6 +401,13 @@ function _cg_share_leaf(K::_CGShareKeys, kc::_CGUnitCtx, nd::_Node)
     return _cg_share_inner(K, nd)
 end
 
+# A literal's value for a subscript's range (`_cg_int_span`), when its hole is
+# baked: the same for every member of the class.
+function _cg_span_literal(kc::_CGUnitCtx, nd::_Node)
+    h = get(kc.holes, nd, nothing)
+    return h isa Float64 ? h : nothing
+end
+
 function _cg_emit(ctx::_CGCtx, kc::_CGUnitCtx, nd::_Node)
     _cg_budget!(ctx)
     shared = get(kc.loops, nd, nothing)
