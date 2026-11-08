@@ -252,6 +252,14 @@ def canonicalize(value) -> str:
 SOURCE_PARTICIPANT = "SOURCE"
 
 
+def source_path(fixture: Path) -> Path:
+    """The file holding what `serialize(parse(fixture))` must reproduce: the
+    fixture itself, unless `<corpus>/../expected/<name>` exists, which holds the
+    canonical form of a fixture authored non-canonically on purpose."""
+    expected = fixture.parent.parent / "expected" / fixture.name
+    return expected if expected.is_file() else fixture
+
+
 def read_sources(fixtures: List[Path]) -> Dict[str, dict]:
     """The corpus fixtures themselves, shaped like a binding driver's output.
 
@@ -267,11 +275,17 @@ def read_sources(fixtures: List[Path]) -> Dict[str, dict]:
     an oracle at zero cost, and it is why the source is compared with the same
     `canonicalize` the bindings get — object key order is free, everything else
     is not.
+
+    One fixture is deliberately NOT canonical: its point is the normalization
+    itself (a `const` table spelled `[100.0, 0.5]` must be written `[100,0.5]`,
+    CONFORMANCE_SPEC.md §5.5.3.1 rule 1), which a canonical input cannot
+    exercise. Its canonical form is authored beside the corpus, under
+    `expected/<same name>` (see `source_path`), and that is the oracle for it.
     """
     out: Dict[str, dict] = {}
     for path in fixtures:
         try:
-            out[path.name] = {"ok": True, "value": json.loads(path.read_text())}
+            out[path.name] = {"ok": True, "value": json.loads(source_path(path).read_text())}
         except Exception as exc:  # pragma: no cover — a corrupt corpus file
             out[path.name] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     return out
@@ -393,6 +407,19 @@ def self_test() -> int:
         not r["diverged"] and not r["source_mismatch"],
         "object-key-order-is-free",
         str(r),
+    )
+
+    # The non-canonical fixture is judged against its authored canonical form,
+    # and that form differs from the source in spelling only.
+    spelled = DEFAULT_CORPUS / "expr_const_integral_floats.json"
+    expected = source_path(spelled)
+    check(
+        expected != spelled
+        and json.loads(expected.read_text()) == json.loads(spelled.read_text())
+        and canonicalize(json.loads(expected.read_text()))
+        != canonicalize(json.loads(spelled.read_text())),
+        "non-canonical-fixture-has-its-canonical-oracle",
+        str(expected),
     )
 
     unconfigured = [b for b in detect_bindings() if b.optional and not b.available]
