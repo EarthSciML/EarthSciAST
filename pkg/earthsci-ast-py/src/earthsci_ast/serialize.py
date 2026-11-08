@@ -102,13 +102,16 @@ def _canonical_number(value: Any) -> Any:
 
 def _canonical_nested(value: Any) -> Any:
     """Apply :func:`_canonical_number` to every scalar in a (possibly nested)
-    list — the integer descriptor arrays of array ops (``shape`` / ``regions`` /
-    ``ranges`` / ``perm``), i.e. the reshape / makearray / aggregate bodies the
-    §5.5.3.1 rule applies inside. Strings (e.g. a metaparameter symbol in an
+    list or object — the integer descriptor arrays of array ops (``shape`` /
+    ``regions`` / ``ranges`` / ``perm``) and a ``const`` node's ``value`` (a
+    table, or the expression object a ``bc`` value may hold), i.e. the bodies
+    the §5.5.3.1 rule applies inside. Strings (e.g. a metaparameter symbol in an
     unresolved library range) are left untouched.
     """
     if isinstance(value, list):
         return [_canonical_nested(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _canonical_nested(v) for k, v in value.items()}
     return _canonical_number(value)
 
 
