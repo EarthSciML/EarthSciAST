@@ -692,6 +692,16 @@ struct BoxKey {
 }
 
 impl BoxKey {
+    /// Whether this is `bx`'s key, without building one.
+    fn is_of(&self, bx: &LBox) -> bool {
+        self.tuple == bx.tuple
+            && self.syms[..] == *bx.syms
+            && self.lo[..] == bx.lo[..]
+            && self.shape[..] == bx.shape[..]
+            && self.cnames[..] == *bx.cnames
+            && self.cvals[..] == bx.cvals[..]
+    }
+
     fn of(bx: &LBox) -> BoxKey {
         BoxKey {
             syms: bx.syms.to_vec(),
@@ -935,6 +945,10 @@ pub(crate) struct TapeBuilder<'m> {
     hoist_journal: Vec<(BoxKey, VnKey)>,
     /// Observed values defined so far, in rule order.
     obs_defined: FxHashMap<String, ObsVal>,
+    /// [`TapeBuilder::sub_box_axes`]'s memo for the current rule, one per
+    /// box: a node's axis mask over a box is scanned once, however many of
+    /// the terms above it ask.
+    sub_box_memo: Vec<(BoxKey, FxHashMap<usize, Option<u32>>)>,
     /// The current rule's first fail-closed fault in the oracle's evaluation
     /// order, with its message: emitted as one [`Instr::Fault`] when the rule
     /// lowers ([`Self::flush_rule_fault`]).
@@ -1236,6 +1250,7 @@ impl<'m> TapeBuilder<'m> {
             held_exprs: Vec::new(),
             hoist_journal: Vec::new(),
             obs_defined: FxHashMap::default(),
+            sub_box_memo: Vec::new(),
             fault_first: None,
             fault_seq: 0,
             fault_prefix: FaultKey::new(),
@@ -3826,9 +3841,7 @@ impl<'m> TapeBuilder<'m> {
         if self.const_arrays.is_const_base(&node.args[0])
             || !self.fault_free_reads(&Expr::Operator(Arc::clone(node)), bx, &mut used)
         {
-            let mut memo = FxHashMap::default();
-            let Some(m) = self.sub_box_axes(&Expr::Operator(Arc::clone(node)), bx, &mut memo)
-            else {
+            let Some(m) = self.sub_box_mask(node, bx) else {
                 return Ok(None);
             };
             for (a, u) in used.iter_mut().enumerate() {
@@ -3931,8 +3944,7 @@ impl<'m> TapeBuilder<'m> {
         {
             return Ok(None);
         }
-        let mut memo: FxHashMap<usize, Option<u32>> = FxHashMap::default();
-        let Some(used) = self.sub_box_axes(&Expr::Operator(Arc::clone(node)), bx, &mut memo) else {
+        let Some(used) = self.sub_box_mask(node, bx) else {
             return Ok(None);
         };
         let used = used & !SUB_BOX_OP;
@@ -3943,11 +3955,7 @@ impl<'m> TapeBuilder<'m> {
         // The broadcast is a pass over the full box of its own, and a short
         // term left in the box fuses with its neighbours: only a term of
         // several operations is worth moving.
-        let ops = memo
-            .values()
-            .filter(|m| m.is_some_and(|m| m & SUB_BOX_OP != 0))
-            .count();
-        if ops < SUB_BOX_MIN_OPS {
+        if !Self::has_sub_box_ops(node, SUB_BOX_MIN_OPS) {
             return Ok(None);
         }
         let keep: Vec<usize> = (0..n).filter(|&a| used & (1 << a) != 0).collect();
@@ -4053,12 +4061,62 @@ impl<'m> TapeBuilder<'m> {
         self.lazy_fault_notes = guard.1;
     }
 
+    /// [`Self::sub_box_axes`] of `node` over `bx`, through the current
+    /// rule's memo for `bx`.
+    fn sub_box_mask(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> Option<u32> {
+        let ix = match self.sub_box_memo.iter().position(|(k, _)| k.is_of(bx)) {
+            Some(ix) => ix,
+            None => {
+                self.sub_box_memo
+                    .push((BoxKey::of(bx), FxHashMap::default()));
+                self.sub_box_memo.len() - 1
+            }
+        };
+        let mut memo = std::mem::take(&mut self.sub_box_memo[ix].1);
+        let m = self.sub_box_axes(&Expr::Operator(Arc::clone(node)), bx, &mut memo);
+        self.sub_box_memo[ix].1 = memo;
+        m
+    }
+
+    /// Whether the term `node` holds at least `min` distinct operations of
+    /// the kinds [`Self::sub_box_axes`] marks with [`SUB_BOX_OP`], walking
+    /// what that scan walks (an `index` node's subscripts, not its base) and
+    /// stopping at the `min`-th. Called only on a term the scan accepted.
+    fn has_sub_box_ops(node: &Arc<ExpressionNode>, min: usize) -> bool {
+        let mut ops = 0;
+        let mut stack: SmallVec<[&ExpressionNode; 8]> = SmallVec::new();
+        stack.push(node);
+        let mut visited: rustc_hash::FxHashSet<usize> = rustc_hash::FxHashSet::default();
+        while let Some(nd) = stack.pop() {
+            if !visited.insert(nd as *const ExpressionNode as usize) {
+                continue;
+            }
+            let args = match vec_op_code(&nd.op) {
+                VecOp::Arith(_) | VecOp::Cmp(_) | VecOp::Unary(_) | VecOp::Neg | VecOp::Ifelse => {
+                    ops += 1;
+                    if ops >= min {
+                        return true;
+                    }
+                    &nd.args[..]
+                }
+                VecOp::Index => nd.args.get(1..).unwrap_or(&[]),
+                _ => &[],
+            };
+            for a in args.iter().rev() {
+                if let Expr::Operator(c) = a {
+                    stack.push(c);
+                }
+            }
+        }
+        false
+    }
+
     /// The box axes `e` reads, as a bit mask over `bx.syms`, for
     /// [`Self::lower_on_sub_box`]; `None` when `e` holds anything that rule
     /// does not take (a reduction, an array builder, a closed function, a
-    /// whole-array name). `memo` keys a node by address, for this scan only:
-    /// an expanded template shares its subterms, and a tree walk of the
-    /// sharing would repeat them.
+    /// whole-array name). `memo` keys a node by address: an expanded
+    /// template shares its subterms, and a tree walk of the sharing would
+    /// repeat them.
     fn sub_box_axes(
         &self,
         e: &Expr,
@@ -8148,6 +8206,7 @@ impl<'m> TapeBuilder<'m> {
         self.scope_frames.clear();
         self.branch_bufs.clear();
         self.hoist_journal.clear();
+        self.sub_box_memo.clear();
         self.fault_first = None;
         self.fault_seq = 0;
         self.fault_prefix.clear();
