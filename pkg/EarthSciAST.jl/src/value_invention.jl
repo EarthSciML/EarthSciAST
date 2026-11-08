@@ -132,6 +132,9 @@ function _vi_skolem_index_targets(model::Model)
     for (_, node, _) in det.chain
         _vi_index_targets!(refs, node)
     end
+    for (_, node) in det.columns
+        _vi_index_targets!(refs, node)
+    end
     return refs
 end
 
@@ -202,6 +205,12 @@ names an already-known VI buffer it is a `:grouped` semiring reduction keyed on
 that buffer (`num[g] = Σ_{p:assign=g} rho_p·x_p`); if its body merely reads VI
 buffers it is a `:derived` elementwise buffer (`centroid[g] = num[g]/den[g]`). The
 fixpoint discovery order is a valid materialisation (topological) order.
+
+`columns` are the plain per-element `faq`s (one output index) a producer's or an
+arg-witness's `join` names as a key column that no skolem map defines: the
+per-component integer bin columns of a lib/relational.esm rewrite
+(`src_bx[i] = floor(lon[i] / dx)`). They are materialised for the join but are
+NOT value-invention outputs: they stay ordinary observeds of the ODE.
 """
 function _vi_detect(model::Model)
     vi_var_names = Set{String}()
@@ -242,11 +251,37 @@ function _vi_detect(model::Model)
         end
         candidates = rest
     end
+    join_names = Set{String}()
+    for (_, node) in producers
+        _vi_join_on_names!(join_names, node.join)
+    end
+    for (_, node) in maps
+        body = node.expr_body
+        body isa OpExpr && _vi_join_on_names!(join_names, body.join)
+    end
+    columns = Tuple{String, OpExpr}[
+        (base, node) for (base, node) in candidates
+            if base in join_names && node.output_idx !== nothing && length(node.output_idx) == 1
+    ]
     has_vi = !isempty(maps) || !isempty(producers) || !isempty(chain)
     return (
         has_vi = has_vi, vi_var_names = vi_var_names, maps = maps, producers = producers,
-        chain = chain,
+        chain = chain, columns = columns,
     )
+end
+
+# Every key-column name of a typed `join`'s bin-equality clauses (a vector of
+# `(left, right)` pairs; an overlap clause names envelope factors, not columns).
+function _vi_join_on_names!(out::Set{String}, join)
+    join === nothing && return out
+    for clause in join
+        clause isa AbstractVector || continue
+        for pair in clause
+            length(pair) == 2 || continue
+            push!(out, String(pair[1]), String(pair[2]))
+        end
+    end
+    return out
 end
 
 # ---- Build-time evaluation context -----------------------------------------
@@ -365,10 +400,30 @@ function _vi_eval(node, ctx::_ViCtx, bindings::AbstractDict)
             return true
         elseif op == "false"
             return false
-        elseif op == "floor"
-            return floor(Int, Float64(_vi_num(args[1], ctx, bindings)))
-        elseif op == "ceil"
-            return ceil(Int, Float64(_vi_num(args[1], ctx, bindings)))
+        elseif op == "floor" || op == "ceil"
+            return _vi_round(op == "floor" ? floor : ceil, Float64(_vi_num(args[1], ctx, bindings)))
+        elseif op == "const"
+            v = node.value
+            v isa Real || throw(
+                TreeWalkError(
+                    "E_TREEWALK_VI_OP",
+                    "an array `const` is not a value-invention build-time scalar"
+                )
+            )
+            return Float64(v)
+        elseif op == "ifelse"
+            c = _vi_eval(args[1], ctx, bindings)
+            return _vi_eval(_vi_truthy(c) ? args[2] : args[3], ctx, bindings)
+        elseif op == "and"
+            return all(a -> _vi_truthy(_vi_eval(a, ctx, bindings)), args)
+        elseif op == "or"
+            return any(a -> _vi_truthy(_vi_eval(a, ctx, bindings)), args)
+        elseif op == "not"
+            return !_vi_truthy(_vi_eval(args[1], ctx, bindings))
+        elseif op == "min" || op == "max"
+            # NaN propagates (esm-spec §4.2), as Base `min`/`max` already do on floats.
+            vals = Float64[Float64(_vi_num(a, ctx, bindings)) for a in args]
+            return op == "min" ? minimum(vals) : maximum(vals)
         elseif op == "/"
             return Float64(_vi_num(args[1], ctx, bindings)) / Float64(_vi_num(args[2], ctx, bindings))
         elseif op == "*"
@@ -396,6 +451,44 @@ function _vi_eval(node, ctx::_ViCtx, bindings::AbstractDict)
         )
     end
     throw(TreeWalkError("E_TREEWALK_VI_NODE", "unevaluable value-invention node $(repr(node))"))
+end
+
+# `floor`/`ceil` to an exact integer; a non-finite value (a NaN component of a
+# key template) stays a float so the key test downstream can name it.
+_vi_round(f, x::Float64) = isfinite(x) ? f(Int, x) : x
+
+# A build-time condition value: a Bool, or a number > 0 (NaN is false).
+_vi_truthy(v) = v isa Bool ? v : (v isa Real ? v > 0 : _vi_num_fail(v))
+_vi_num_fail(v) = throw(
+    TreeWalkError(
+        "E_TREEWALK_VI_SYMBOL",
+        "value-invention expression requires a build-time number here but got $(repr(v))"
+    )
+)
+
+# A `distinct` key or `join` column value: a `skolem`'s canonical tuple, or any
+# other expression's exact integer (a lib/relational.esm `pair_key`/`edge_key`,
+# a bare `index`, `floor(...)`). `column` names the value for the diagnostic.
+function _vi_key(node, ctx::_ViCtx, bindings::AbstractDict, column::AbstractString)
+    node isa OpExpr && node.op == "skolem" && return _vi_skolem(node, ctx, bindings)
+    return _vi_key_checked(_vi_eval(node, ctx, bindings), column, bindings)
+end
+
+# A NaN key — a key template's out-of-range, non-integral or NaN component — is
+# `value_invention_key_out_of_range` naming the column and the loop indices
+# (esm-spec §9.6.6); any other value must be an exact integer (`_vi_key_int`).
+function _vi_key_checked(v, column::AbstractString, bindings::AbstractDict)
+    if v isa AbstractFloat && isnan(v)
+        at = join(("$k=$(bindings[k])" for k in sort!(collect(String, keys(bindings)))), ", ")
+        throw(
+            TreeWalkError(
+                ERROR_CODES.VALUE_INVENTION_KEY_OUT_OF_RANGE,
+                "$column is NaN at ($at); a key component is outside its declared " *
+                    "range, non-integral or NaN (esm-spec §9.6.6)"
+            )
+        )
+    end
+    return _vi_key_int(v)
 end
 
 # index(factor, i, …): gather from a const-array factor (1-based). The factor is
@@ -1054,9 +1147,9 @@ function _vic_eval(n::_ViC, v::Int)::Union{Int, Float64, Bool}
     end
     op = n.op
     if op === :floor
-        return floor(Int, Float64(_vic_eval(a[1], v)))
+        return _vi_round(floor, Float64(_vic_eval(a[1], v)))
     elseif op === :ceil
-        return ceil(Int, Float64(_vic_eval(a[1], v)))
+        return _vi_round(ceil, Float64(_vic_eval(a[1], v)))
     elseif op === :/
         return Float64(_vic_eval(a[1], v)) / Float64(_vic_eval(a[2], v))
     elseif op === :* || op === :+
@@ -1142,6 +1235,42 @@ function _vi_materialize_map!(ctx::_ViCtx, vname::AbstractString, node::OpExpr)
     return out
 end
 
+# Materialise a plain per-element `join` column (see `_vi_detect`'s `columns`)
+# → Dict(output-index → exact integer). A NaN value is
+# `value_invention_key_out_of_range` naming the column. A body over one interval
+# or categorical range is compiled once (`_vi_compile_node`), as a map's is.
+function _vi_materialize_column!(ctx::_ViCtx, vname::AbstractString, node::OpExpr)
+    sym = String(only(node.output_idx))
+    body = node.expr_body
+    body === nothing && throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_MAP",
+            "value-invention join column '$(vname)' has no `expr` body"
+        )
+    )
+    column = "join column '$(vname)'"
+    ranges = _vi_ranges(node)
+    out = Dict{Any, Any}()
+    if length(ranges) == 1 && haskey(ranges, sym)
+        spec = ranges[sym]
+        is = spec isa IndexSetRef ? get(ctx.index_sets, spec.from, nothing) : nothing
+        compiled = is !== nothing && is.kind in ("interval", "categorical") &&
+            !(body isa OpExpr && body.op == "skolem") ? _vi_compile_node(body, ctx, sym) : nothing
+        if compiled !== nothing
+            for v in _vi_range_values(spec, ctx, Dict{String, Any}())
+                x = _vic_eval(compiled, v)
+                out[v] = x isa AbstractFloat && isnan(x) ?
+                    _vi_key_checked(x, column, Dict{String, Any}(sym => v)) : _vi_key_int(x)
+            end
+            ctx.maps[vname] = out
+            return out
+        end
+    end
+    _vi_enumerate(ranges, ctx, bindings -> (out[bindings[sym]] = _vi_key(body, ctx, bindings, column)))
+    ctx.maps[vname] = out
+    return out
+end
+
 # Materialise an index-set-producing aggregate → the distinct member set (§5.5
 # sorted total order, via the Relational engine). Returns the member vector.
 function _vi_materialize_producer(ctx::_ViCtx, node::OpExpr)
@@ -1161,6 +1290,7 @@ function _vi_materialize_producer(ctx::_ViCtx, node::OpExpr)
     # O(∏ranges) with a per-tuple membership test; other gate kinds enumerate the
     # full product exactly as before.
     join_gates = join === nothing ? nothing : _vi_resolve_join(join, ranges, ctx)
+    column = "the `key` of producer '$(something(node.id, ""))'"
     members = Any[]
     _vi_enumerate_join(
         ranges, join_gates, ctx, bindings -> begin
@@ -1171,7 +1301,7 @@ function _vi_materialize_producer(ctx::_ViCtx, node::OpExpr)
             if join_gates !== nothing && !_vi_join_ok(join_gates, bindings)
                 return
             end
-            push!(members, _vi_skolem(key, ctx, bindings))
+            push!(members, _vi_key(key, ctx, bindings, column))
         end
     )
     return Relational.distinct(members)
@@ -1549,7 +1679,17 @@ function materialize_value_invention(
         )
     end
 
-    # Maps first (a producer's join/key — or an arg-witness `join` — may reference them).
+    # Plain join columns first, then maps (a producer's join/key — or an
+    # arg-witness `join` — may reference either). A column is recorded in
+    # `maps`/`map_sets` so a simulate-time join reads the same integers, but it
+    # is not in `vi_var_names`: it stays an ordinary observed.
+    for (vname, node) in det.columns
+        _vi_materialize_column!(ctx, vname, node)
+        v = get(ctx.variables, vname, nothing)
+        v === nothing && continue
+        shape = v.shape === nothing ? String[] : v.shape
+        length(shape) == 1 && (map_sets[vname] = String(shape[1]))
+    end
     for (vname, node) in det.maps
         _vi_materialize_map!(ctx, vname, node)
         # Record the buffer's 1-D shape index set so a downstream FAQ's
@@ -1619,6 +1759,8 @@ function materialize_value_invention(
             _vi_materialize_producer(ctx, node)
         catch err
             err isa TreeWalkError || rethrow()
+            # A NaN key already names its column; the producer ran.
+            err.code == ERROR_CODES.VALUE_INVENTION_KEY_OUT_OF_RANGE && rethrow()
             throw(
                 TreeWalkError(
                     "derived_index_set_unmaterialized",

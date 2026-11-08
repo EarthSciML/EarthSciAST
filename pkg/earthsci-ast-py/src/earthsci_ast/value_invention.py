@@ -43,6 +43,10 @@ class ValueInventionError(EarthSciAstError):
     """A value-invention build-time materialisation error."""
 
 
+#: esm-spec §9.6.6: a `distinct` key or `join` column value is NaN.
+KEY_OUT_OF_RANGE = "value_invention_key_out_of_range"
+
+
 # The relational body ops that mark a value-invention output (excluded from the
 # ODE): mirrors Julia ``_VI_BODY_OPS``.
 _VI_BODY_OPS = ("skolem", "rank", "distinct")
@@ -169,6 +173,10 @@ class _Detection:
     # The grouped/derived chain in materialisation (fixpoint discovery) order:
     # ``(lhs_base, node, "grouped" | "derived")``.
     chain: list[tuple[str, Any, str]]
+    # Plain per-element columns a value-invention `join` reads (an integer bin
+    # column such as ``src_bx[i] = floor(lon[i] / dx)``): materialised for the
+    # join, but NOT value-invention outputs -- they stay ordinary observeds.
+    columns: list[tuple[str, Any]] = field(default_factory=list)
 
 
 def _vi_index_targets(node: Any, out: set[str]) -> set[str]:
@@ -279,10 +287,40 @@ def _vi_detect(model_json: Mapping[str, Any]) -> _Detection:
             else:
                 rest.append((base, node))
         candidates = rest
+    # The `join.on` key columns a producer or an arg-witness reads that no skolem
+    # map defines: plain per-element aggregates over constant factors.
+    join_names: set[str] = set()
+    for _, node in producers:
+        _vi_join_on_names(node.get("join"), join_names)
+    for _, node in maps:
+        body = node.get("expr")
+        if isinstance(body, Mapping):
+            _vi_join_on_names(body.get("join"), join_names)
+    columns = [
+        (base, node)
+        for base, node in candidates
+        if base in join_names and len(node.get("output_idx") or []) == 1
+    ]
     has_vi = bool(maps) or bool(producers) or bool(chain)
     return _Detection(
-        has_vi=has_vi, vi_var_names=vi_var_names, maps=maps, producers=producers, chain=chain
+        has_vi=has_vi,
+        vi_var_names=vi_var_names,
+        maps=maps,
+        producers=producers,
+        chain=chain,
+        columns=columns,
     )
+
+
+def _vi_join_on_names(join: Any, out: set[str]) -> None:
+    """Every key-column name of a ``join``'s ``on`` clauses."""
+    if not isinstance(join, (list, tuple)):
+        return
+    for clause in join:
+        if isinstance(clause, Mapping):
+            for pair in clause.get("on") or []:
+                if isinstance(pair, (list, tuple)):
+                    out.update(str(x) for x in pair)
 
 
 # --------------------------------------------------------------------------- #
@@ -374,10 +412,31 @@ def _vi_eval(node: Any, ctx: _ViCtx, bindings: dict[str, Any]) -> Any:
             return True
         if op == "false":
             return False
-        if op == "floor":
-            return int(np.floor(float(_vi_eval(args[0], ctx, bindings))))
-        if op == "ceil":
-            return int(np.ceil(float(_vi_eval(args[0], ctx, bindings))))
+        if op in ("floor", "ceil"):
+            x = float(_vi_eval(args[0], ctx, bindings))
+            r = np.floor(x) if op == "floor" else np.ceil(x)
+            # A non-finite value (a NaN component of a key template) stays a float.
+            return int(r) if np.isfinite(r) else float(r)
+        if op == "const":
+            v = node.get("value")
+            if isinstance(v, (list, tuple)):
+                raise ValueInventionError("an array `const` is not a value-invention scalar")
+            return float(v)
+        if op == "ifelse":
+            c = _vi_eval(args[0], ctx, bindings)
+            return _vi_eval(args[1] if _vi_truthy(c) else args[2], ctx, bindings)
+        if op == "and":
+            return all(_vi_truthy(_vi_eval(a, ctx, bindings)) for a in args)
+        if op == "or":
+            return any(_vi_truthy(_vi_eval(a, ctx, bindings)) for a in args)
+        if op == "not":
+            return not _vi_truthy(_vi_eval(args[0], ctx, bindings))
+        if op in ("min", "max"):
+            vals = [float(_vi_eval(a, ctx, bindings)) for a in args]
+            # NaN propagates (esm-spec §4.2), unlike Python's built-ins.
+            if any(np.isnan(v) for v in vals):
+                return float("nan")
+            return min(vals) if op == "min" else max(vals)
         if op == "/":
             # IEEE 754 division (matches Julia / Rust f64): x/0 → ±inf, 0/0 → nan,
             # never a ZeroDivisionError — an empty grouped denominator yields a NaN
@@ -486,6 +545,31 @@ def _vi_index(node: Mapping[str, Any], ctx: _ViCtx, bindings: dict[str, Any]) ->
         n = arr.shape[d]
         zero_idx.append(_resolve_const_index(ctx, name, d, i, n) - 1)
     return arr[tuple(zero_idx)]
+
+
+def _vi_truthy(v: Any) -> bool:
+    """A build-time condition value: a boolean, or a number > 0 (NaN is false)."""
+    if isinstance(v, (bool, np.bool_)):
+        return bool(v)
+    return float(v) > 0
+
+
+def _vi_key(node: Any, ctx: _ViCtx, bindings: dict[str, Any], column: str) -> Any:
+    """A `distinct` key or `join` column value: a `skolem` node's canonical tuple,
+    or any other expression's exact integer (a lib/relational.esm key template,
+    a bare `index`, `floor(...)`). A NaN value -- a key template's out-of-range,
+    non-integral or NaN component -- is ``value_invention_key_out_of_range``
+    naming ``column`` (esm-spec §9.6.6)."""
+    if isinstance(node, Mapping) and node.get("op") == "skolem":
+        return _vi_skolem(node, ctx, bindings)
+    v = _vi_eval(node, ctx, bindings)
+    if isinstance(v, (float, np.floating)) and np.isnan(v):
+        where = ", ".join(f"{k}={bindings[k]}" for k in sorted(bindings))
+        raise ValueInventionError(
+            f"{KEY_OUT_OF_RANGE}: {column} is NaN at ({where}); a key component is out of "
+            f"its declared range, non-integral or NaN"
+        )
+    return _vi_key_int(v)
 
 
 def _vi_skolem(node: Mapping[str, Any], ctx: _ViCtx, bindings: dict[str, Any]) -> Any:
@@ -969,6 +1053,20 @@ def _vi_materialize_map(ctx: _ViCtx, vname: str, node: Mapping[str, Any]) -> dic
     return out
 
 
+def _vi_materialize_column(ctx: _ViCtx, vname: str, node: Mapping[str, Any]) -> None:
+    """Materialise a plain per-element `join` column (see ``_Detection.columns``):
+    each value an exact integer, a NaN value ``value_invention_key_out_of_range``."""
+    sym = str((node.get("output_idx") or [])[0])
+    body = node.get("expr")
+    out: dict[Any, Any] = {}
+
+    def visit(bindings: dict[str, Any]) -> None:
+        out[bindings[sym]] = _vi_key(body, ctx, bindings, f"join column {vname!r}")
+
+    _vi_enumerate(node.get("ranges") or {}, ctx, visit)
+    ctx.maps[vname] = out
+
+
 def _vi_materialize_producer(ctx: _ViCtx, node: Mapping[str, Any]) -> list[Any]:
     """Materialise an index-set-producing aggregate → the distinct member set
     (§5.5 sorted total order, via the relational engine). Returns the member
@@ -991,7 +1089,7 @@ def _vi_materialize_producer(ctx: _ViCtx, node: Mapping[str, Any]) -> list[Any]:
                 return
         if gates is not None and not _vi_join_ok(gates, bindings):
             return
-        members.append(_vi_skolem(key, ctx, bindings))
+        members.append(_vi_key(key, ctx, bindings, f"the `key` of producer {node.get('id')!r}"))
 
     # An overlap-gated producer DRIVES enumeration from its candidate pairs
     # (§5.5.6); every other producer takes the unchanged full-product path.
@@ -1381,6 +1479,9 @@ def materialize_value_invention(
     # 1-D declared-shape index set. In ``maps_only`` the arg-witness maps are
     # skipped — the join-key pre-pass needs only the bins (and cannot then fail on
     # an arg-witness reduction that would need the full hoist).
+    if not maps_only:
+        for vname, node in det.columns:
+            _vi_materialize_column(ctx, vname, node)
     for vname, node in det.maps:
         skexpr = _vi_map_skolem(node)
         if maps_only and skexpr is None:

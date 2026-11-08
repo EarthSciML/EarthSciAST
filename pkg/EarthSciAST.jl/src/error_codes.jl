@@ -389,6 +389,10 @@ const ERROR_CODES = (
     # producer could not be materialized at build (esm-spec §9.6.6). Refused
     # rather than contracted as an empty range, which would read as 0.
     DERIVED_INDEX_SET_UNMATERIALIZED = "derived_index_set_unmaterialized",
+    # A `distinct` key or a value-invention `join` column evaluates to NaN (a
+    # lib/relational.esm key template's out-of-range component), naming the
+    # column (esm-spec §9.6.6). Takes precedence over the code above.
+    VALUE_INVENTION_KEY_OUT_OF_RANGE = "value_invention_key_out_of_range",
     # ── Evaluator refusal (tree_walk/; esm-spec §9.6.6). A continuous event, a
     #    discrete event or an implicit equation reached the tree-walk evaluator,
     #    which runs none of them. Refused at build rather than skipped, because a

@@ -1,0 +1,199 @@
+{
+  "fixture": "argmin_template",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 1,
+      "variable": "r_distinct_minimum",
+      "actual": 2.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 2,
+      "variable": "r_first_is_extreme",
+      "actual": 1.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 3,
+      "variable": "r_last_is_extreme",
+      "actual": 4.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 4,
+      "variable": "r_negative_values",
+      "actual": 2.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 5,
+      "variable": "r_tie_two",
+      "actual": 2.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 6,
+      "variable": "r_tie_first_last",
+      "actual": 1.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 7,
+      "variable": "r_all_equal",
+      "actual": 1.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 8,
+      "variable": "r_single_candidate",
+      "actual": 1.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 9,
+      "variable": "r_signed_zero_tie",
+      "actual": 1.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 10,
+      "variable": "r_signed_zero_tie_reversed",
+      "actual": 1.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 11,
+      "variable": "r_subnormal_tie",
+      "actual": 1.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 12,
+      "variable": "r_equidistant_generators",
+      "actual": 2.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 13,
+      "variable": "r_pos_inf_candidate",
+      "actual": 2.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 14,
+      "variable": "r_all_pos_inf",
+      "actual": 1.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 15,
+      "variable": "r_neg_inf_tie",
+      "actual": 2.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 16,
+      "variable": "r_nan_first",
+      "actual": 1.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 17,
+      "variable": "r_nan_middle",
+      "actual": 2.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 18,
+      "variable": "r_nan_last",
+      "actual": 3.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 19,
+      "variable": "r_nan_and_neg_inf",
+      "actual": 2.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 20,
+      "variable": "r_all_nan",
+      "actual": 1.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 21,
+      "variable": "r_max_distinct",
+      "actual": 1.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 22,
+      "variable": "r_max_last",
+      "actual": 4.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 23,
+      "variable": "r_max_tie",
+      "actual": 2.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 24,
+      "variable": "r_max_farthest_tie",
+      "actual": 1.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 25,
+      "variable": "r_max_all_equal",
+      "actual": 1.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 26,
+      "variable": "r_max_single_candidate",
+      "actual": 1.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 27,
+      "variable": "r_max_signed_zero_tie",
+      "actual": 1.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 28,
+      "variable": "r_max_pos_inf_tie",
+      "actual": 2.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 29,
+      "variable": "r_max_all_neg_inf",
+      "actual": 1.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 30,
+      "variable": "r_max_nan_first",
+      "actual": 1.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 31,
+      "variable": "r_max_nan_middle",
+      "actual": 3.0
+    },
+    {
+      "test_id": "relational_argmin_template_t0",
+      "assertion_idx": 32,
+      "variable": "r_max_nan_and_pos_inf",
+      "actual": 2.0
+    }
+  ]
+}

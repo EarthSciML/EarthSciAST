@@ -2,7 +2,7 @@
   "esm": "1.1.0",
   "metadata": {
     "name": "Relational",
-    "description": "Standard-library relational templates (esm-spec §9.7.1 template-library file). Two match-less expression templates give the pure-AST definitions of the `argmin` and `argmax` arg-witness reducers: `argmin(f, n)` and `argmax(f, n)`, the 1-based index in [1, n] of the smallest (largest) candidate value `f`, where `f` is an expression over the template's loop symbol (`k_argmin_1`, `k_argmax_1`) and n, the number of candidates, is an explicit integer parameter. Ties go to the smallest index and a NaN candidate wins at its first occurrence. Written with two `faq` reductions, `ifelse` and comparisons only. Import with `expression_template_imports` and invoke with `apply_expression_template`; see docs/content/standard_library.md.",
+    "description": "Standard-library relational templates (esm-spec §9.7.1 template-library file), the pure-AST definitions of the arg-witness reducers and of value-invention keys and ranks. `argmin(f, n)` / `argmax(f, n)`: the 1-based index in [1, n] of the smallest (largest) candidate value `f`, an expression over the template's loop symbol (`k_argmin_1`, `k_argmax_1`); ties go to the smallest index and a NaN candidate wins at its first occurrence. `argmin_where(f, p, n)` / `argmax_where(f, p, n)`: the same over the candidates passing the predicate `p`, n + 1 when none does. `pair_key(a, b, lo_a, lo_b, n_a, n_b)` and `edge_key(u, v, lo, n)`: scalar integer composite keys (directed, undirected) for a `distinct` key, NaN for an out-of-range component. `rank_of(x, members, n)`: the 1-based rank of a key among a derived set's ascending members. Core ops only. Import with `expression_template_imports` and invoke with `apply_expression_template`; see docs/content/standard_library.md.",
     "authors": [
       "EarthSciML"
     ],
@@ -13,11 +13,14 @@
       "argmin",
       "argmax",
       "arg-witness",
+      "value-invention",
+      "composite-key",
+      "rank",
       "expression-templates"
     ],
     "references": [
       {
-        "citation": "esm-spec.md §4.2 (argmin, argmax; NaN in min/max reductions); §9.6 (expression templates); §9.7.1 (template-library files); RFC semiring-faq-unified-ir §5.7 rule 6 (smallest-index tie-break)."
+        "citation": "esm-spec.md §4.2 (argmin, argmax; NaN in min/max reductions); §9.6 (expression templates); §9.7.1 (template-library files); RFC semiring-faq-unified-ir §5.7 rule 6 (smallest-index tie-break). RFC §5.5 and §5.7 rules 1-4 (keys, distinct, rank)."
       }
     ]
   },
@@ -218,6 +221,618 @@
             }
           ]
         }
+      }
+    },
+    "pair_key": {
+      "params": [
+        "a",
+        "b",
+        "lo_a",
+        "lo_b",
+        "n_a",
+        "n_b"
+      ],
+      "description": "Directed composite key of the integer pair (a, b) with a in [lo_a, lo_a + n_a) and b in [lo_b, lo_b + n_b): (a − lo_a)·n_b + (b − lo_b), an integer in [0, n_a·n_b). Equal pairs give equal keys and the keys sort in the lexicographic order of the pairs, so a `distinct` over them yields the order and numbering a tuple key would. NaN when a component is out of its range, non-integral or NaN (the value-invention layer refuses a NaN key or join column with `value_invention_key_out_of_range`). Exact while n_a·n_b ≤ 2^53.",
+      "body": {
+        "op": "ifelse",
+        "args": [
+          {
+            "op": "and",
+            "args": [
+              {
+                "op": "and",
+                "args": [
+                  {
+                    "op": "and",
+                    "args": [
+                      {
+                        "op": "and",
+                        "args": [
+                          {
+                            "op": "and",
+                            "args": [
+                              {
+                                "op": ">=",
+                                "args": [
+                                  "a",
+                                  "lo_a"
+                                ]
+                              },
+                              {
+                                "op": "<",
+                                "args": [
+                                  "a",
+                                  {
+                                    "op": "+",
+                                    "args": [
+                                      "lo_a",
+                                      "n_a"
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "op": ">=",
+                            "args": [
+                              "b",
+                              "lo_b"
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "op": "<",
+                        "args": [
+                          "b",
+                          {
+                            "op": "+",
+                            "args": [
+                              "lo_b",
+                              "n_b"
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "op": "==",
+                    "args": [
+                      "a",
+                      {
+                        "op": "floor",
+                        "args": [
+                          "a"
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "==",
+                "args": [
+                  "b",
+                  {
+                    "op": "floor",
+                    "args": [
+                      "b"
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      "a",
+                      "lo_a"
+                    ]
+                  },
+                  "n_b"
+                ]
+              },
+              {
+                "op": "-",
+                "args": [
+                  "b",
+                  "lo_b"
+                ]
+              }
+            ]
+          },
+          {
+            "op": "/",
+            "args": [
+              0,
+              0
+            ]
+          }
+        ]
+      }
+    },
+    "edge_key": {
+      "params": [
+        "u",
+        "v",
+        "lo",
+        "n"
+      ],
+      "description": "Undirected composite key of the vertex pair {u, v}, both in [lo, lo + n): `pair_key(min(u, v), max(u, v), lo, lo, n, n)`, so (u, v) and (v, u) give the same key. NaN when an endpoint is out of range, non-integral or NaN.",
+      "body": {
+        "op": "ifelse",
+        "args": [
+          {
+            "op": "and",
+            "args": [
+              {
+                "op": "and",
+                "args": [
+                  {
+                    "op": "and",
+                    "args": [
+                      {
+                        "op": "and",
+                        "args": [
+                          {
+                            "op": "and",
+                            "args": [
+                              {
+                                "op": ">=",
+                                "args": [
+                                  {
+                                    "op": "min",
+                                    "args": [
+                                      "u",
+                                      "v"
+                                    ]
+                                  },
+                                  "lo"
+                                ]
+                              },
+                              {
+                                "op": "<",
+                                "args": [
+                                  {
+                                    "op": "min",
+                                    "args": [
+                                      "u",
+                                      "v"
+                                    ]
+                                  },
+                                  {
+                                    "op": "+",
+                                    "args": [
+                                      "lo",
+                                      "n"
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "op": ">=",
+                            "args": [
+                              {
+                                "op": "max",
+                                "args": [
+                                  "u",
+                                  "v"
+                                ]
+                              },
+                              "lo"
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "op": "<",
+                        "args": [
+                          {
+                            "op": "max",
+                            "args": [
+                              "u",
+                              "v"
+                            ]
+                          },
+                          {
+                            "op": "+",
+                            "args": [
+                              "lo",
+                              "n"
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "op": "==",
+                    "args": [
+                      {
+                        "op": "min",
+                        "args": [
+                          "u",
+                          "v"
+                        ]
+                      },
+                      {
+                        "op": "floor",
+                        "args": [
+                          {
+                            "op": "min",
+                            "args": [
+                              "u",
+                              "v"
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "==",
+                "args": [
+                  {
+                    "op": "max",
+                    "args": [
+                      "u",
+                      "v"
+                    ]
+                  },
+                  {
+                    "op": "floor",
+                    "args": [
+                      {
+                        "op": "max",
+                        "args": [
+                          "u",
+                          "v"
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      {
+                        "op": "min",
+                        "args": [
+                          "u",
+                          "v"
+                        ]
+                      },
+                      "lo"
+                    ]
+                  },
+                  "n"
+                ]
+              },
+              {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "max",
+                    "args": [
+                      "u",
+                      "v"
+                    ]
+                  },
+                  "lo"
+                ]
+              }
+            ]
+          },
+          {
+            "op": "/",
+            "args": [
+              0,
+              0
+            ]
+          }
+        ]
+      }
+    },
+    "rank_of": {
+      "params": [
+        "x",
+        "members",
+        "n"
+      ],
+      "description": "1-based rank of the key x among the n ascending members of a derived index set (its `member_factor` array): 1 plus the number of members below x, the `searchsorted` count of lib/interp.esm. For x a member this is its position; otherwise the position x would be inserted at. The rank of a set's own member is its loop index, which needs no template.",
+      "body": {
+        "op": "+",
+        "args": [
+          1,
+          {
+            "op": "faq",
+            "args": [
+              "members"
+            ],
+            "output_idx": [],
+            "reduce": "+",
+            "ranges": {
+              "k_rank_of_1": [
+                1,
+                "n"
+              ]
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": ">=",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "members",
+                        "k_rank_of_1"
+                      ]
+                    },
+                    "x"
+                  ]
+                },
+                0,
+                1
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "argmin_where": {
+      "params": [
+        "f",
+        "p",
+        "n"
+      ],
+      "description": "`argmin` over the candidates k in [1, n] for which the predicate `p` holds: the 1-based index of the smallest `f` among them, the smallest such index on a tie, the first NaN index among them when one is NaN, and n + 1 when no candidate passes `p`. `f` and `p` are expressions over the loop symbol `k_argmin_where_1`; `p` is the `filter` of both reductions, so an excluded candidate never competes.",
+      "body": {
+        "op": "min",
+        "args": [
+          {
+            "op": "faq",
+            "args": [],
+            "output_idx": [],
+            "reduce": "min",
+            "ranges": {
+              "k_argmin_where_1": [
+                1,
+                "n"
+              ]
+            },
+            "filter": "p",
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "or",
+                  "args": [
+                    {
+                      "op": "==",
+                      "args": [
+                        "f",
+                        {
+                          "op": "faq",
+                          "args": [],
+                          "output_idx": [],
+                          "reduce": "min",
+                          "ranges": {
+                            "k_argmin_where_1": [
+                              1,
+                              "n"
+                            ]
+                          },
+                          "filter": "p",
+                          "expr": "f"
+                        }
+                      ]
+                    },
+                    {
+                      "op": "and",
+                      "args": [
+                        {
+                          "op": "!=",
+                          "args": [
+                            "f",
+                            "f"
+                          ]
+                        },
+                        {
+                          "op": "!=",
+                          "args": [
+                            {
+                              "op": "faq",
+                              "args": [],
+                              "output_idx": [],
+                              "reduce": "min",
+                              "ranges": {
+                                "k_argmin_where_1": [
+                                  1,
+                                  "n"
+                                ]
+                              },
+                              "filter": "p",
+                              "expr": "f"
+                            },
+                            {
+                              "op": "faq",
+                              "args": [],
+                              "output_idx": [],
+                              "reduce": "min",
+                              "ranges": {
+                                "k_argmin_where_1": [
+                                  1,
+                                  "n"
+                                ]
+                              },
+                              "filter": "p",
+                              "expr": "f"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "k_argmin_where_1",
+                {
+                  "op": "+",
+                  "args": [
+                    "n",
+                    1
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "op": "+",
+            "args": [
+              "n",
+              1
+            ]
+          }
+        ]
+      }
+    },
+    "argmax_where": {
+      "params": [
+        "f",
+        "p",
+        "n"
+      ],
+      "description": "`argmax` over the candidates k in [1, n] for which the predicate `p` holds: the 1-based index of the largest `f` among them, the smallest such index on a tie, the first NaN index among them when one is NaN, and n + 1 when no candidate passes `p`. `f` and `p` are expressions over the loop symbol `k_argmax_where_1`; `p` is the `filter` of both reductions, so an excluded candidate never competes.",
+      "body": {
+        "op": "min",
+        "args": [
+          {
+            "op": "faq",
+            "args": [],
+            "output_idx": [],
+            "reduce": "min",
+            "ranges": {
+              "k_argmax_where_1": [
+                1,
+                "n"
+              ]
+            },
+            "filter": "p",
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "or",
+                  "args": [
+                    {
+                      "op": "==",
+                      "args": [
+                        "f",
+                        {
+                          "op": "faq",
+                          "args": [],
+                          "output_idx": [],
+                          "reduce": "max",
+                          "ranges": {
+                            "k_argmax_where_1": [
+                              1,
+                              "n"
+                            ]
+                          },
+                          "filter": "p",
+                          "expr": "f"
+                        }
+                      ]
+                    },
+                    {
+                      "op": "and",
+                      "args": [
+                        {
+                          "op": "!=",
+                          "args": [
+                            "f",
+                            "f"
+                          ]
+                        },
+                        {
+                          "op": "!=",
+                          "args": [
+                            {
+                              "op": "faq",
+                              "args": [],
+                              "output_idx": [],
+                              "reduce": "max",
+                              "ranges": {
+                                "k_argmax_where_1": [
+                                  1,
+                                  "n"
+                                ]
+                              },
+                              "filter": "p",
+                              "expr": "f"
+                            },
+                            {
+                              "op": "faq",
+                              "args": [],
+                              "output_idx": [],
+                              "reduce": "max",
+                              "ranges": {
+                                "k_argmax_where_1": [
+                                  1,
+                                  "n"
+                                ]
+                              },
+                              "filter": "p",
+                              "expr": "f"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "k_argmax_where_1",
+                {
+                  "op": "+",
+                  "args": [
+                    "n",
+                    1
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "op": "+",
+            "args": [
+              "n",
+              1
+            ]
+          }
+        ]
       }
     }
   }

@@ -3,8 +3,8 @@
 The `lib/` directory ships ESS subsystems authored entirely in pure AST and the
 spec's closed-function registry (`esm-spec.md` §9.2). `lib/solar.esm` is a
 self-contained subsystem includable from any consumer model via subsystem
-reference (`esm-spec.md` §4.7); `lib/calendar.esm` and `lib/interp.esm` are
-template libraries (below), imported rather than mounted:
+reference (`esm-spec.md` §4.7); `lib/calendar.esm`, `lib/interp.esm` and `lib/relational.esm`
+are template libraries (below), imported rather than mounted:
 
 ```json
 {
@@ -49,6 +49,7 @@ either a new `lib/` file or a new §9 entry, apply the table above.
 | [`lib/calendar.esm`](../lib/calendar.esm) | template library (no subsystem) | expression templates `year`, `month`, `day`, `hour`, `minute`, `second`, `day_of_year`, `julian_day`, `is_leap_year`, `seconds_since_midnight` | the template parameter `t` (s) |
 | [`lib/solar.esm`](../lib/solar.esm) | `Solar` | `solar_declination` (rad), `equation_of_time` (min), `true_solar_time` (min), `hour_angle` (rad), `cos_zenith`, `solar_zenith_angle` (rad) | `t_utc` (s), `lat` (deg), `lon` (deg) |
 | [`lib/interp.esm`](../lib/interp.esm) | template library (no subsystem) | expression templates `searchsorted`, `linear`, `bilinear` | the template parameters (arrays, query, axis lengths) |
+| [`lib/relational.esm`](../lib/relational.esm) | template library (no subsystem) | expression templates `argmin`, `argmax`, `argmin_where`, `argmax_where`, `pair_key`, `edge_key`, `rank_of` | the template parameters (candidate values and counts, key components and their ranges) |
 
 ### `lib/calendar.esm`
 
@@ -209,6 +210,114 @@ scenario, and `tests/closed_functions/interp/*/template.esm` carries a subset
 as inline tests for the cross-binding `interp_templates` conformance tier.
 The templates do not repeat the load-time axis checks of the `fn` form (a
 non-monotonic or NaN axis is not rejected); the caller supplies a valid axis.
+
+### `lib/relational.esm`
+
+`lib/relational.esm` is a template-library file like `lib/interp.esm`. Its two
+templates, `argmin(f, n)` and `argmax(f, n)`, are the pure-AST definitions of
+the `argmin` / `argmax` arg-witness reducers (`esm-spec.md` §4.2): the 1-based
+index `k` in `1..n` at which the candidate value `f` is smallest (largest).
+`f` is an expression over the template's loop symbol — `k_argmin_1` for
+`argmin`, `k_argmax_1` for `argmax` — which the template binds to each
+candidate index in turn, so the caller writes the candidate's value with that
+symbol as its index. `n`, the number of candidates, is an integer used as a
+`faq` `ranges` bound. The nearest-generator assignment of
+`tests/valid/faq/nearest_generator_argmin.esm`, as a template call:
+
+```json
+{
+  "expression_template_imports": [{ "ref": "../lib/relational.esm" }],
+  "equations": [
+    {
+      "lhs": { "op": "index", "args": ["assign", "i"] },
+      "rhs": {
+        "op": "faq", "args": [], "output_idx": ["i"],
+        "ranges": { "i": { "from": "points" } },
+        "expr": {
+          "op": "apply_expression_template", "args": [], "name": "argmin",
+          "bindings": {
+            "f": { "op": "+", "args": [
+              { "op": "*", "args": [
+                { "op": "-", "args": [{ "op": "index", "args": ["px", "i"] }, { "op": "index", "args": ["gx", "k_argmin_1"] }] },
+                { "op": "-", "args": [{ "op": "index", "args": ["px", "i"] }, { "op": "index", "args": ["gx", "k_argmin_1"] }] }
+              ] },
+              { "op": "*", "args": [
+                { "op": "-", "args": [{ "op": "index", "args": ["py", "i"] }, { "op": "index", "args": ["gy", "k_argmin_1"] }] },
+                { "op": "-", "args": [{ "op": "index", "args": ["py", "i"] }, { "op": "index", "args": ["gy", "k_argmin_1"] }] }
+              ] }
+            ] },
+            "n": 3
+          }
+        }
+      }
+    }
+  ]
+}
+```
+
+Each body is two `faq` reductions over `k` in `[1, n]`:
+
+| Template | Value |
+|---|---|
+| `argmin` | `m = min_k f(k)`, then `min_k ifelse(f(k) == m or (f(k) != f(k) and m != m), k, n + 1)` |
+| `argmax` | the same with `m = max_k f(k)` |
+
+So equal candidates resolve to the smallest index (RFC semiring-faq-unified-ir
+§5.7 rule 6, `-0.0` and `0.0` being equal), and because a NaN term makes a
+`min` / `max` reduction NaN, a NaN candidate wins at its first occurrence.
+`n = 0` gives `+Inf`, the identity of the `min` reduction, where the op refuses
+an empty candidate set. The result is a float holding an integer, usable as an
+`index` subscript. `f` appears twice in the expansion (in `m` and in the
+selection), and `m` is nested inside the selecting reduction; it does not
+depend on that reduction's `k`, so an evaluator may compute it once per call.
+On every scenario of `tests/conformance/relational_templates/scenarios.json`
+the template returns the op's index, except where a NaN candidate follows the
+first one: the op skips such a candidate, the template picks it. The
+`relational_templates` conformance tier runs those scenarios and the
+nearest-generator document rewritten with the template; a gated arg-witness
+is written with `argmin_where` (below).
+
+#### Gated arg-witnesses, keys and ranks
+
+The other templates replace the `skolem` and `rank` value-invention ops and the
+`join` of an arg-witness (the ops themselves are unchanged):
+
+| Template | Value |
+|---|---|
+| `argmin_where(f, p, n)`, `argmax_where(f, p, n)` | the `argmin` / `argmax` body with the predicate `p` as the `filter` of both reductions, capped at `n + 1`: only candidates passing `p` compete, and `n + 1` means none did. `f` and `p` are written over `k_argmin_where_1` (`k_argmax_where_1`). |
+| `pair_key(a, b, lo_a, lo_b, n_a, n_b)` | `(a − lo_a)·n_b + (b − lo_b)` for integers `a ∈ [lo_a, lo_a + n_a)`, `b ∈ [lo_b, lo_b + n_b)`; NaN for a component out of range, non-integral or NaN. A directed composite key: equal pairs give equal keys and the keys sort in the pairs' lexicographic order. Exact while `n_a·n_b ≤ 2^53`. |
+| `edge_key(u, v, lo, n)` | `pair_key(min(u, v), max(u, v), lo, lo, n, n)`: the undirected key, so `(u, v)` and `(v, u)` coincide. |
+| `rank_of(x, members, n)` | `1 + Σ_k ifelse(members[k] ≥ x, 0, 1)`: the 1-based rank of the key `x` among the `n` ascending members of a derived index set (its `member_factor`), the same count as `searchsorted`. |
+
+How a document uses them in place of the ops:
+
+- **A `distinct` key** is a scalar integer expression: `edge_key(...)` for an
+  undirected edge, `pair_key(...)` for a directed pair (nest two calls for
+  three components), or the bare component for a one-component key. The
+  skolem `label` has no counterpart; its meaning goes in a `_comment`.
+- **A key read only as a `join.on` column** (a bin key) is written as one
+  integer column per component, `src_bx[i] = floor(src_lon[i] / dx)` and
+  `src_by[i] = floor(src_lat[i] / dy)`, joined with one `on` pair per
+  component: `{"on": [["src_bx", "tgt_bx"], ["src_by", "tgt_by"]]}`.
+- **The rank of a set's own member** is its loop index: `edge_dense_id[e] = e`
+  over `e ∈ edges`. `rank_of` looks up the rank of any other key.
+- **A gated arg-witness** (`argmin` with a `join`) becomes `argmin_where` whose
+  predicate compares the per-component columns at the point and the candidate.
+
+The value-invention layer of each binding accepts a `distinct` `key` that is
+any integer-valued expression, and a `join.on` column that is a plain observed
+over constant factors. A NaN key or column value (a key template's
+out-of-range component) is refused with `value_invention_key_out_of_range`,
+naming the column. `tests/conformance/relational_templates/rewrites/` holds the
+template form of every fixture that uses `skolem`, `rank` or a gated `argmin`,
+and each binding's harness checks it against the op form: the same members,
+the same dense IDs (the op's 0-based rank plus one), the same assignment
+buffers and the same right-hand side.
+
+`rank_of` needs the member count `n` as a literal or metaparameter, like every
+template `ranges` bound. A derived set's size is known only after value
+invention, so `rank_of` over a derived set cannot yet be written without
+knowing its size; the fixtures need only the own-member case.
 
 ## Validation and conformance
 
