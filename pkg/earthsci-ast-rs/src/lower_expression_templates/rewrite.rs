@@ -488,6 +488,15 @@ fn try_match(
                 .iter()
                 .zip(tarr.iter())
                 .all(|(p, t)| try_match(p, t, params, binds)),
+            // A pattern array may name parameters at its elements: match it
+            // against the data's own node form.
+            SNode::Data(v) => match &**v {
+                Value::Array(items) if parr.len() == items.len() => {
+                    let t = Rc::new(SNode::Arr(items.iter().map(to_shared).collect()));
+                    try_match(pattern, &t, params, binds)
+                }
+                _ => false,
+            },
             _ => false,
         },
         Value::Object(pobj) => match &**target {
