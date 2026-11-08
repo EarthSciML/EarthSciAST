@@ -501,3 +501,32 @@ end
     @test e_lit !== nothing
     @test e_faq !== nothing && typeof(e_faq) === typeof(e_lit)
 end
+
+# A scalar program whose class is split through the cache stores slots and
+# reads them back inside one generated function. A scalar site whose queries
+# read the state and t, at node caps small enough to split it: each read-back
+# sees this call's store, against the interpreter, bit for bit.
+@testset "scalar program split through the cache reads back its stores (cap $cap)" for cap in (100, 300, 1000)
+    n = 9
+    z = _ti_z(n)
+    t2, ya = _ti_rows(_ti_t2(n)), _ti_ya()
+    x = _ti_op("+", 0.5 * z[end], _ti_op("+", _ti_op("*", 100.0, "u"), _ti_op("*", 30.0, "t")))
+    y = _ti_op("+", 2.25, _ti_op("+", "u", _ti_op("*", 0.001, "t")))
+    look = _ti_apply(
+        "bilinear"; table = _ti_const(t2), axis_x = _ti_const(z), axis_y = _ti_const(ya),
+        x = x, y = y, nx = n, ny = _TI_NY
+    )
+    model = Dict{String, Any}(
+        "variables" => Dict{String, Any}("u" => Dict{String, Any}("type" => "unknown", "default" => 0.0)),
+        "equations" => Any[
+            Dict("lhs" => _ti_op("D", "u"; wrt = "t"), "rhs" => _ti_op("-", _ti_op("*", 1.0e-6, look), "u")),
+        ],
+        "expression_templates" => _ti_templates(),
+    )
+    doc = Dict{String, Any}("esm" => "1.2.0", "metadata" => Dict("name" => "site"), "models" => Dict("M" => model))
+    withenv("ESS_CODEGEN_FN_NODE_CAP" => string(cap)) do
+        dn, _, _ = _ti_eval(doc, :native)
+        di, _, _ = _ti_eval(doc, :interpreter)
+        @test _ti_same(dn, di)
+    end
+end
