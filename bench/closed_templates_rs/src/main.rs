@@ -603,7 +603,8 @@ fn overlap(dir: &Path) {
                     rb[q]
                 );
                 let bad: Vec<usize> = (0..al.len()).filter(|&i| (al[i] - at[i]).abs() > 1.0e-9).collect();
-                eprintln!("  {} pairs differ by more than 1e-9", bad.len());
+                let ids: Vec<(usize, f64, f64)> = bad.iter().map(|&i| (idx[i] + 1, al[i], at[i])).collect();
+                eprintln!("  {} pairs differ by more than 1e-9: {ids:?}", bad.len());
             }
             println!(
                 "{mf}\t{size}\t{}\t{:.4}\t{:.4}\t{:.2}\t{cl:.0}\t{ct:.0}\t{ext}\t{:.3e}\t{d_ext_leaf}\t{d_ext_tpl}\t{oracle}",
