@@ -300,8 +300,21 @@ pub(crate) fn emit_program(
     compiled: &ArrayCompiled,
 ) -> Result<EmittedRhs, XlaEmitError> {
     debug_assert!(!prog.col_major, "the emitter lowers row-major programs");
+    let hoisted = hoist(prog, compiled)?;
     let builder = XlaBuilder::new("earthsci_rhs");
     let mut em = Emitter::new(&builder, prog, compiled)?;
+    if let Some(h) = hoisted {
+        for (slot, values) in &h.values {
+            let dims = em.out_dims(*slot);
+            let d: Vec<i64> = dims.iter().map(|&x| x as i64).collect();
+            let lit = em.wrap(
+                builder.constant_r1(&values[..]).and_then(|c| c.reshape(&d)),
+                "hoisted constant",
+            )?;
+            em.define(*slot, lit);
+        }
+        em.hoisted = h.slots;
+    }
     let du = em.run()?;
     let forcing = em.forcing_param.take().map(|_| ForcingFeed {
         buffer: Rc::clone(&compiled.forcing),
@@ -335,6 +348,264 @@ fn opcode_counts(prog: &TapeProgram) -> Vec<(&'static str, usize)> {
         }
     }
     counts
+}
+
+// ---------------------------------------------------------------------------
+// Constant hoisting.
+// ---------------------------------------------------------------------------
+
+/// Elements the hoistable instructions write, at and above which they are
+/// evaluated once ahead of the program rather than on every call.
+const HOIST_MIN_ELEMENTS: usize = 4096;
+
+/// Which slots hold compile-time constants: defined once, outside every
+/// branch, by an instruction of a pure kind whose every input is a literal or
+/// another constant slot. No state, parameter, time or forcing reaches one.
+fn constant_slots(prog: &TapeProgram) -> Vec<bool> {
+    let n = prog.slots.len();
+    let tables = prog.tables();
+    let mut defs = vec![0u32; n];
+    for ins in &prog.instrs {
+        ins.for_each_def(&tables, |s| defs[s as usize] += 1);
+    }
+    let mut in_branch = vec![false; prog.instrs.len()];
+    for (pc, ins) in prog.instrs.iter().enumerate() {
+        if let Instr::JmpIfZero {
+            n_true, n_false, ..
+        } = ins
+        {
+            let end = (pc + 1 + *n_true as usize + *n_false as usize).min(prog.instrs.len());
+            in_branch[pc + 1..end].iter_mut().for_each(|f| *f = true);
+        }
+    }
+    let mut k = vec![false; n];
+    for (pc, ins) in prog.instrs.iter().enumerate() {
+        let Some(out) = ins.out() else { continue };
+        if in_branch[pc] || defs[out as usize] != 1 {
+            continue;
+        }
+        let constant = {
+            let op = |o: &Operand| match o {
+                Operand::Lit(_) => true,
+                Operand::Slot(s) => k[*s as usize],
+                _ => false,
+            };
+            let src = |s: &SrcRef| matches!(s, SrcRef::Slot(id) if k[*id as usize]);
+            match ins {
+                Instr::ConstArray { .. } | Instr::Ramp { .. } => true,
+                Instr::Bin { a, b, .. } => op(a) && op(b),
+                Instr::Un { a, .. }
+                | Instr::Neg { a, .. }
+                | Instr::Fill { v: a, .. }
+                | Instr::Copy { a, .. } => op(a),
+                Instr::Select { cond, a, b, .. } => op(cond) && op(a) && op(b),
+                Instr::Gather { src: s, .. }
+                | Instr::LoadElem { src: s, .. }
+                | Instr::Reduce { src: s, .. }
+                | Instr::Scan { src: s, .. }
+                | Instr::TableGather { src: s, .. }
+                | Instr::Reshape { src: s, .. } => src(s),
+                Instr::Count { axis, x, .. } => src(axis) && op(x),
+                Instr::IndexGather { src: s, idx, .. } => src(s) && op(idx),
+                Instr::DataGather { src: s, spec, .. } => {
+                    src(s) && prog.data_gathers[*spec as usize].subs.iter().all(op)
+                }
+                Instr::SegReduce { src: s, mask, .. } => {
+                    k[*s as usize] && mask.is_none_or(|m| k[m as usize])
+                }
+                Instr::Region { base, src: s, .. } => k[*base as usize] && op(s),
+                Instr::PolyArea { a, b, .. } => src(a) && src(b),
+                _ => false,
+            }
+        };
+        if constant {
+            k[out as usize] = true;
+        }
+    }
+    k
+}
+
+/// What [`hoist`] evaluated: which slots are constants, and the values of
+/// those the rest of the program reads.
+struct Hoisted {
+    slots: Vec<bool>,
+    values: Vec<(SlotId, Vec<f64>)>,
+}
+
+/// Evaluate the program's compile-time constants once, ahead of it.
+///
+/// The emitted program recomputes its whole CONST section on every call (the
+/// module docs' cadence note). When that section holds real work — an
+/// overlap area per source x target pair over literal rings, a table read at
+/// literal subscripts — it is emitted on its own, run once with the same
+/// emitter arms, and its results enter the program as literals: the same
+/// numbers, computed once. A computed-subscript gather that can fault, which
+/// the program could not report, is resolved here too: its subscripts are
+/// evaluated with the rest and checked on the host exactly as
+/// [`DataGatherSpec::at`] checks them — a fault there is a fault on every
+/// call, and the model is refused with it; otherwise the gather is a
+/// constant like any other.
+///
+/// `None` when there is too little constant work to pay for the extra
+/// compile and nothing that can fault, or when the constant section does not
+/// emit on its own (the program then emits as before and reports whatever it
+/// refuses itself).
+fn hoist(prog: &TapeProgram, compiled: &ArrayCompiled) -> R<Option<Hoisted>> {
+    let k = constant_slots(prog);
+    let is_const = |ins: &Instr| ins.out().is_some_and(|o| k[o as usize]);
+    let mut work = 0usize;
+    let mut faulting = Vec::new();
+    for (pc, ins) in prog.instrs.iter().enumerate() {
+        if !is_const(ins) {
+            continue;
+        }
+        match ins {
+            Instr::ConstArray { .. } | Instr::Ramp { .. } | Instr::Fill { .. } => {}
+            Instr::DataGather { faults: true, .. } => faulting.push(pc),
+            _ => {
+                let o = ins.out().expect("a constant instruction defines a slot");
+                work += prog.slots[o as usize].shape.iter().product::<usize>();
+            }
+        }
+    }
+    if faulting.is_empty() && work < HOIST_MIN_ELEMENTS {
+        return Ok(None);
+    }
+    let tables = prog.tables();
+    let mut frontier: Vec<SlotId> = Vec::new();
+    for ins in &prog.instrs {
+        if !is_const(ins) {
+            ins.for_each_read(&tables, |s| {
+                if k[s as usize] && !frontier.contains(&s) {
+                    frontier.push(s);
+                }
+            });
+        }
+    }
+    let rule_of = |pc: usize| {
+        prog.provenance
+            .get(pc)
+            .and_then(|ord| prog.rules.get(*ord as usize))
+            .map_or_else(|| "<program>".to_string(), |r| r.name.clone())
+    };
+
+    let b = XlaBuilder::new("earthsci_rhs_constants");
+    let mut em = Emitter::new(&b, prog, compiled)?;
+    for (pc, ins) in prog.instrs.iter().enumerate() {
+        if !is_const(ins) {
+            continue;
+        }
+        em.cur_rule = rule_of(pc);
+        let done = match ins {
+            Instr::DataGather { src, spec, out, .. } => em
+                .emit_data_gather(src, *spec, *out)
+                .map(|v| em.define(*out, v)),
+            _ => em.emit_one(pc),
+        };
+        if done.is_err() {
+            return Ok(None);
+        }
+    }
+    // Everything the host needs, flattened into one vector: the frontier
+    // slots, then each faulting gather's subscripts over its box.
+    let mut pieces: Vec<XlaOp> = Vec::new();
+    let mut lens: Vec<usize> = Vec::new();
+    let mut flat = |em: &Emitter, v: &XlaOp| -> R<()> {
+        let n: usize = em.dims(v)?.iter().product::<usize>();
+        pieces.push(em.wrap(v.reshape(&[n as i64]), "hoist: flatten")?);
+        lens.push(n);
+        Ok(())
+    };
+    for &s in &frontier {
+        let v = em.slots[s as usize]
+            .clone()
+            .ok_or_else(|| em.err(format!("hoisted slot {s} was not defined")))?;
+        flat(&em, &v)?;
+    }
+    for &pc in &faulting {
+        let Instr::DataGather { spec, out, .. } = &prog.instrs[pc] else {
+            unreachable!("collected as a DataGather");
+        };
+        let dims = em.out_dims(*out);
+        for sub in &prog.data_gathers[*spec as usize].subs {
+            let v = em.operand(sub)?;
+            let v = em.to_shape(&v, &dims)?;
+            flat(&em, &v)?;
+        }
+    }
+    if pieces.is_empty() {
+        return Ok(Some(Hoisted {
+            slots: k,
+            values: Vec::new(),
+        }));
+    }
+    let all = if pieces.len() == 1 {
+        pieces.pop().expect("one piece")
+    } else {
+        let rest: Vec<XlaOp> = pieces.split_off(1);
+        em.wrap(pieces[0].concat_in_dim(&rest, 0), "hoist: concatenate")?
+    };
+    let Ok(comp) = all.build() else {
+        return Ok(None);
+    };
+    let Ok(client) = crate::xla_runtime::client() else {
+        return Ok(None);
+    };
+    let Ok(exe) = client.compile(&comp) else {
+        return Ok(None);
+    };
+    let mut args = vec![
+        xla::Literal::vec1(&vec![0.0f64; compiled.n_states]),
+        xla::Literal::vec1(&vec![0.0f64; prog.params_len.max(1)]),
+        xla::Literal::scalar(0.0f64),
+    ];
+    if em.forcing_param.is_some() {
+        args.push(xla::Literal::vec1(&vec![0.0f64; em.forcing_len.max(1)]));
+    }
+    let total: usize = lens.iter().sum();
+    let mut host = vec![0.0f64; total];
+    let copied = exe.execute::<xla::Literal>(&args).ok().and_then(|r| {
+        let buf = r.first()?.first()?;
+        buf.copy_raw_to_host_sync(&mut host, 0).ok()
+    });
+    if copied.is_none() {
+        return Ok(None);
+    }
+
+    let mut at = 0usize;
+    let mut values = Vec::with_capacity(frontier.len());
+    for (i, &s) in frontier.iter().enumerate() {
+        values.push((s, host[at..at + lens[i]].to_vec()));
+        at += lens[i];
+    }
+    let mut li = frontier.len();
+    for &pc in &faulting {
+        let Instr::DataGather { spec, .. } = &prog.instrs[pc] else {
+            unreachable!("collected as a DataGather");
+        };
+        let spec = &prog.data_gathers[*spec as usize];
+        let mut subs: Vec<&[f64]> = Vec::with_capacity(spec.subs.len());
+        for _ in &spec.subs {
+            subs.push(&host[at..at + lens[li]]);
+            at += lens[li];
+            li += 1;
+        }
+        let n_out = subs.first().map_or(0, |s| s.len());
+        for e in 0..n_out {
+            if let DataAt::Fault { d, raw } = spec.at(|d| subs[d][e]) {
+                return Err(XlaEmitError::new(
+                    rule_of(pc),
+                    format!(
+                        "the program raises a fail-closed evaluation fault on every call \
+                         (a computed-subscript gather over compile-time data), which a \
+                         compiled program cannot report: {}",
+                        spec.fault_message(d, raw)
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(Some(Hoisted { slots: k, values }))
 }
 
 // ---------------------------------------------------------------------------
@@ -372,6 +643,10 @@ struct Emitter<'a> {
     /// The loaded forcings in `f` order, and `f`'s length.
     forcing_layout: Vec<(ForcingRef, usize)>,
     forcing_len: usize,
+    /// Per slot: a compile-time constant [`hoist`] evaluated ahead of the
+    /// program, so the instruction defining it is not emitted (the slots the
+    /// rest of the program reads arrive as literals).
+    hoisted: Vec<bool>,
 }
 
 impl<'a> Emitter<'a> {
@@ -463,6 +738,7 @@ impl<'a> Emitter<'a> {
             forcing_offsets,
             forcing_layout,
             forcing_len,
+            hoisted: vec![false; prog.slots.len()],
         };
         em.state = em.build_state_views()?;
         Ok(em)
@@ -847,7 +1123,12 @@ impl<'a> Emitter<'a> {
             if let Instr::Sweep { .. } = &self.prog.instrs[pc] {
                 return Err(self.err(RECURRENCE_REFUSAL));
             }
-            self.emit_one(pc)?;
+            if !self.prog.instrs[pc]
+                .out()
+                .is_some_and(|o| self.hoisted[o as usize])
+            {
+                self.emit_one(pc)?;
+            }
             pc += 1;
         }
         Ok(())
@@ -2450,6 +2731,74 @@ impl<'a> Emitter<'a> {
             _ => {
                 let head = flat.remove(0);
                 self.wrap(head.concat_in_dim(&flat, 0), "du: concat")
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// [`Emitter::count_search`] against a direct count, over keys with
+    /// NaNs, signed zeros and duplicates in no order, for every relation, at
+    /// queries on, between and outside the keys, NaN and both infinities.
+    #[test]
+    fn bisection_counts_what_a_direct_count_counts() {
+        if std::env::var_os("XLA_EXTENSION_DIR").is_none() {
+            eprintln!("SKIP: XLA_EXTENSION_DIR is unset");
+            return;
+        }
+        let mut q = vec![
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            0.0,
+            -0.0,
+            -3.0,
+            9.0,
+        ];
+        let mut keys: Vec<f64> = (0..70)
+            .map(|j| ((j * 37) % 23) as f64 * 0.25 - 2.0)
+            .collect();
+        keys[5] = f64::NAN;
+        keys[40] = f64::NAN;
+        keys[11] = -0.0;
+        keys[12] = 0.0;
+        for &k in keys.iter().filter(|k| k.is_finite()) {
+            q.extend([k, k + 0.125]);
+        }
+        let n = q.len();
+        let d = super::super::array_tests::doc(
+            serde_json::json!({"u": {"type": "unknown", "shape": ["i"]}}),
+            vec![super::super::array_tests::d_eq(
+                "u",
+                n as i64,
+                serde_json::json!({"op": "neg", "args": [{"op": "index", "args": ["u", "i"]}]}),
+            )],
+        );
+        let compiled = super::super::array_tests::compile(d);
+        let (prog, _) = compiled.build_tape_layout(&HashSet::new(), None, false);
+        let prog = prog.expect("tape");
+        let client = crate::xla_runtime::client().expect("client");
+        for rel in [CountRel::Le, CountRel::Lt, CountRel::Ge, CountRel::Gt] {
+            let b = XlaBuilder::new("count_search_probe");
+            let em = Emitter::new(&b, &prog, &compiled).expect("emitter");
+            let c = em
+                .count_search(rel, keys.clone(), &[n], &em.u)
+                .expect("bisection");
+            let exe = client.compile(&c.build().expect("build")).expect("compile");
+            let args = [
+                xla::Literal::vec1(&q),
+                xla::Literal::vec1(&vec![0.0f64; prog.params_len.max(1)]),
+                xla::Literal::scalar(0.0f64),
+            ];
+            let out = exe.execute::<xla::Literal>(&args).expect("execute");
+            let mut got = vec![0.0f64; n];
+            out[0][0].copy_raw_to_host_sync(&mut got, 0).expect("copy");
+            for (x, g) in q.iter().zip(&got) {
+                let want = keys.iter().filter(|&&k| rel.holds(k, *x)).count() as f64;
+                assert_eq!(g.to_bits(), want.to_bits(), "{rel:?} at {x}: {g} vs {want}");
             }
         }
     }

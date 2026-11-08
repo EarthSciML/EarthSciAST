@@ -176,10 +176,15 @@ fn counts_over_compile_time_keys_are_the_folds_integer() {
                     let hlo = super::xla_emit::emit_rhs(&compiled)
                         .and_then(|e| e.hlo_text())
                         .expect("emits");
+                    // Keys fed through `const_arrays` with a NaN among
+                    // them do not reach the tape as a `ConstArray` slot, so
+                    // only the NaN-free sets are held to the bisection here;
+                    // `xla_emit`'s own test covers NaN keys in it.
+                    let clean = keys.iter().all(|k| !k.is_nan());
                     assert_eq!(
                         hlo.contains("gather("),
-                        keys.len() >= 64,
-                        "{label} {rel}: bisection iff at least 64 keys"
+                        clean && keys.len() >= 64,
+                        "{label} {rel}: bisection iff at least 64 NaN-free keys"
                     );
                     let what = format!(
                         "{label}, key {} {rel} query, branches ({yes}, {no})",
@@ -350,5 +355,69 @@ fn every_template_family_lowers_and_matches_the_oracle() {
         let compiled = compile(d);
         let prog = program(&compiled);
         assert_close(&compiled, &prog, 1e-13, 1e-300, "interp template");
+    }
+}
+
+/// The nearest-generator template fixture: `D(w[i]) = gx[assign[i]]` with
+/// `assign` the argmin template over literal positions. The gather's
+/// subscript is computed, so the tape marks it as able to fault, but every
+/// input is a compile-time constant: the emitter evaluates it once ahead of
+/// the program (`hoist`), finds no fault, and the program lowers.
+fn nearest_doc() -> Value {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../../tests/conformance/relational_templates/fixtures/nearest_generator_template_ode.esm",
+    );
+    serde_json::from_str(&std::fs::read_to_string(path).expect("fixture")).expect("parses")
+}
+
+#[test]
+fn a_gather_over_compile_time_data_is_evaluated_ahead_of_the_program() {
+    if !runtime_available() {
+        return;
+    }
+    let compiled = compile(nearest_doc());
+    let prog = program(&compiled);
+    let n = compiled.state_variable_names().len();
+    for seed in 0..3u64 {
+        let state = super::tests::seeded_state(n, seed, -1.0, 1.0);
+        assert_bits(
+            &compiled,
+            &prog,
+            &state,
+            "nearest generator, hoisted gather",
+        );
+    }
+    // The planar overlap template over literal rings: its areas are a
+    // constant of the program.
+    let compiled = compile(super::closed_template_tests::overlap_doc(false));
+    let prog = program(&compiled);
+    assert_close(&compiled, &prog, 1e-11, 1e-14, "planar overlap, hoisted");
+}
+
+/// The same gather one generator past the end at every point: a fault on
+/// every call, refused with the fault it would raise.
+#[test]
+fn a_gather_that_always_faults_is_refused_with_its_fault() {
+    if !runtime_available() {
+        return;
+    }
+    let mut d = nearest_doc();
+    let eqs = d["models"]["NearestGeneratorTemplateODE"]["equations"]
+        .as_array_mut()
+        .expect("equations");
+    let last = eqs.last_mut().expect("the w equation");
+    last["rhs"]["expr"] = idx(
+        json!("gx"),
+        &[plus(idx(json!("assign"), &[json!("i")]), json!(3))],
+    );
+    let compiled = compile(d);
+    match CompiledRhs::compile(&compiled) {
+        Err(CompileRhsError::Refused(e)) => assert!(
+            e.reason.contains("on every call") && e.reason.contains("gx"),
+            "{}",
+            e.reason
+        ),
+        Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
+        Ok(_) => panic!("a gather that faults on every call must be refused"),
     }
 }
