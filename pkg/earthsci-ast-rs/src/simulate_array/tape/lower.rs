@@ -4320,6 +4320,9 @@ impl<'m> TapeBuilder<'m> {
         bx: &LBox,
         base: &LV,
     ) -> LResult<LV> {
+        if let Some(v) = self.lower_known_subscript_gather(node, bx, base)? {
+            return Ok(v);
+        }
         let mut subs: SmallVec<[LV; 4]> = SmallVec::new();
         for e in &node.args[1..] {
             let s = self.lower_expr(e, bx)?;
@@ -4327,6 +4330,68 @@ impl<'m> TapeBuilder<'m> {
             subs.push(s);
         }
         self.emit_data_gather(&node.args[0], base, &subs, Some(bx))
+    }
+
+    /// `index(base, s…)` over a rank-1 box whose every subscript is
+    /// build-time data ([`Self::build_time_subscript`]) and lands inside
+    /// `base` at every element: the positions are resolved here into one
+    /// [`Instr::TableGather`], which reads the elements the per-element
+    /// gather would. A read with any position outside `base`, whose
+    /// resolution depends on the source's kind, is left to that gather.
+    fn lower_known_subscript_gather(
+        &mut self,
+        node: &Arc<ExpressionNode>,
+        bx: &LBox,
+        base: &LV,
+    ) -> LResult<Option<LV>> {
+        if bx.shape.len() != 1 || bx.tuple != 0 || self.sweep.is_some() {
+            return Ok(None);
+        }
+        let Some((src_shape, src_origin)) = self.lv_box(base) else {
+            return Ok(None);
+        };
+        let subs_e = &node.args[1..];
+        if subs_e.len() != src_shape.len() {
+            return Ok(None);
+        }
+        let n_src: usize = src_shape.iter().product();
+        if n_src >= GATHER_GHOST as usize {
+            return Ok(None);
+        }
+        let mut subs: Vec<Vec<f64>> = Vec::with_capacity(subs_e.len());
+        for e in subs_e {
+            match self.build_time_subscript(e, bx)? {
+                Some(v) => subs.push(v),
+                None => return Ok(None),
+            }
+        }
+        let m = bx.shape[0];
+        let mut pos = Vec::with_capacity(m);
+        for p in 0..m {
+            let mut flat = 0usize;
+            for (d, sv) in subs.iter().enumerate() {
+                let k = subscript_of(sv[p]) - src_origin[d];
+                if k < 0 || k >= src_shape[d] as i64 {
+                    return Ok(None);
+                }
+                flat = flat * src_shape[d] + k as usize;
+            }
+            pos.push(flat as u32);
+        }
+        let table = tape_index(self.gather_tables.len(), "gather tables")?;
+        self.gather_tables.push(GatherTable {
+            src_shape: src_shape.iter().copied().collect(),
+            pos,
+        });
+        let sec = self.placement(self.lv_cadence(base));
+        let out = self.new_slot(&bx.shape, &bx.lo, false, sec);
+        let instr = Instr::TableGather {
+            src: self.src_of(base),
+            table,
+            out,
+        };
+        self.emit(instr, sec);
+        Ok(Some(LV::Arr(out)))
     }
 
     /// How an `index` on `base` (a source of extents `shape`) resolves an
@@ -4574,6 +4639,28 @@ impl<'m> TapeBuilder<'m> {
                 }
             }
             let Ok(pos) = self.const_positions(name, &shape, &subs, m) else {
+                return Ok(None);
+            };
+            return Ok(Some(pos.iter().map(|&p| vals[p as usize]).collect()));
+        }
+        // The same read of an inline literal (`index([…], k)`).
+        if let Expr::Operator(n) = e
+            && n.op == "index"
+            && let Some(Expr::Operator(c)) = n.args.first()
+            && c.op == "const"
+            && let Value::Array(a) = eval_const(c)
+            && a.ndim() + 1 == n.args.len()
+        {
+            let shape: Vec<usize> = a.shape().to_vec();
+            let vals: Vec<f64> = a.iter().copied().collect();
+            let mut subs: Vec<Vec<f64>> = Vec::with_capacity(shape.len());
+            for x in &n.args[1..] {
+                match self.build_time_subscript(x, bx)? {
+                    Some(v) => subs.push(v),
+                    None => return Ok(None),
+                }
+            }
+            let Ok(pos) = self.const_positions(INLINE_CONST_NAME, &shape, &subs, m) else {
                 return Ok(None);
             };
             return Ok(Some(pos.iter().map(|&p| vals[p as usize]).collect()));
