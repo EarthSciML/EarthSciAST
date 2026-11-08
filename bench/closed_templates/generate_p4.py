@@ -439,7 +439,8 @@ SIZE_FAMILIES = ["searchsorted", "linear", "bilinear", "calendar", "argmin", "ov
 
 
 def size_doc(family, sp, s):
-    """s independent scalar sites of `family`, each reading the scalar state u."""
+    """s independent scalar sites of `family`, each reading the scalar state u
+    (the argmin sites read constants only: the op requires them)."""
     rng = random.Random(77 + s)
     v = {"u": unknown(None, 0.0), "acc": unknown()}
     eqs, sets, names, file = [], {}, [], None
@@ -473,14 +474,23 @@ def size_doc(family, sp, s):
             v[g] = unknown(["gens"])
             eqs.append({"lhs": g, "rhs": const([lattice(rng, 0.0, 1.0, 1.0 / 64) for _ in range(16)])})
             sets["gens"] = 16
-            xi = op("+", 0.01 * (i % 97), x)
+            # A build-time query: the argmin op requires constant inputs.
+            xi = 0.01 * (i % 97) + 0.003
+            sets["one"] = 1
             if sp == "op":
                 dk = op("-", ix(g, "k"), xi)
                 site = op("argmin", g, arg="k", ranges={"k": {"from": "gens"}}, expr=op("*", dk, dk))
             else:
                 dk = op("-", ix(g, "k_argmin_1"), xi)
                 site = apply("argmin", f=op("*", dk, dk), n=16)
+            # The argmin op is defined inside a `faq` (as in the nearest workload):
+            # each site is a one-cell array.
+            r = f"r{i}"
+            v[r] = unknown(["one"])
+            eqs.append({"lhs": ix(r, "j"), "rhs": faq(site, ["j"], {"j": {"from": "one"}}, args=[g])})
+            sites.append(ix(r, 1))
             file, names = "relational", ["argmin"]
+            continue
         else:  # overlap_planar
             sets.update({"cell_verts": 4, "coord": 2, "sites": s})
             if i == 1:
@@ -497,10 +507,7 @@ def size_doc(family, sp, s):
         v[r] = unknown()
         eqs.append({"lhs": r, "rhs": site})
         sites.append(r)
-    total = sites[0]
-    for r in sites[1:]:
-        total = op("+", total, r)
-    eqs.append({"lhs": "acc", "rhs": total})
+    eqs.append({"lhs": "acc", "rhs": op("+", *sites) if len(sites) > 1 else sites[0]})
     eqs.append({"lhs": op("D", "u", wrt="t"), "rhs": op("-", op("*", 1.0e-6, "acc"), "u")})
     model = {"variables": v, "equations": eqs}
     if sp == "tpl":

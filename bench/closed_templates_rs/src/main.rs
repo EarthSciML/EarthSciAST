@@ -570,6 +570,23 @@ fn overlap(dir: &Path) {
             } else {
                 ("-".into(), "-".into(), "-".into())
             };
+            let worst = (0..al.len())
+                .max_by(|&i, &j| (al[i] - at[i]).abs().total_cmp(&(al[j] - at[j]).abs()))
+                .unwrap();
+            if (al[worst] - at[worst]).abs() > 1.0e-9 {
+                let q = idx[worst];
+                eprintln!(
+                    "{mf} {size}: worst pair {} (state {}): leaf {:e} template {:e}\n  a {:?}\n  b {:?}",
+                    q + 1,
+                    leaf.names[worst],
+                    al[worst],
+                    at[worst],
+                    ra[q],
+                    rb[q]
+                );
+                let bad: Vec<usize> = (0..al.len()).filter(|&i| (al[i] - at[i]).abs() > 1.0e-9).collect();
+                eprintln!("  {} pairs differ by more than 1e-9", bad.len());
+            }
             println!(
                 "{mf}\t{size}\t{}\t{:.4}\t{:.4}\t{:.2}\t{cl:.0}\t{ct:.0}\t{ext}\t{:.3e}\t{d_ext_leaf}\t{d_ext_tpl}\t{oracle}",
                 ra.len(),
@@ -596,7 +613,10 @@ fn const_eq(doc: &Value, var: &str) -> Vec<f64> {
 
 fn nearest(dir: &Path) {
     println!("# nearest-generator argmin: ns per right-hand-side call");
-    header(&["size", "op", "tpl", "hand", "tpl/op", "bits(tpl,hand vs op)", "oracle"]);
+    header(&[
+        "size", "op_call_ns", "tpl_call_ns", "hand_call_ns", "tpl/op", "op_build_s", "tpl_build_s",
+        "hand_setup_s", "bits(tpl,hand vs op)", "oracle",
+    ]);
     for size in sizes(dir, "nearest_op_") {
         let p = |sp: &str| dir.join(format!("nearest_{sp}_{size}.esm"));
         let doc = load_json(&p("op"));
@@ -606,13 +626,17 @@ fn nearest(dir: &Path) {
             const_eq(&doc, "gx"),
             const_eq(&doc, "gy"),
         );
-        let mut o = Model::build(&p("op"), true, false);
-        let mut tp = Model::build(&p("tpl"), true, false);
+        let mut o = build_median(&p("op"), true);
+        let mut tp = build_median(&p("tpl"), true);
         let reference = o.dy(T_BASE);
         let idx = slots(&o.names);
         let w = o.state.clone();
-        let hand = |dy: &mut [f64]| {
-            for (s, &i) in idx.iter().enumerate() {
+        // The assignment depends only on const data, so both compilers compute
+        // it once at build; the hand-written version does the same: an argmin
+        // per point at setup, a gather per call.
+        let assign = |assign: &mut Vec<usize>| {
+            assign.clear();
+            for i in 0..px.len() {
                 let dist = |k: usize| {
                     let dx = px[i] - gx[k];
                     let dyy = py[i] - gy[k];
@@ -626,7 +650,17 @@ fn nearest(dir: &Path) {
                         bd = d;
                     }
                 }
-                dy[s] = gx[best] - w[s];
+                assign.push(best);
+            }
+        };
+        let mut a_ix = Vec::new();
+        let setup_ns = time_ns(|_| {
+            assign(&mut a_ix);
+            black_box(&a_ix);
+        });
+        let hand = |dy: &mut [f64]| {
+            for (s, &i) in idx.iter().enumerate() {
+                dy[s] = gx[a_ix[i]] - w[s];
             }
         };
         let mut dy = vec![0.0; reference.len()];
@@ -638,7 +672,13 @@ fn nearest(dir: &Path) {
             hand(&mut dy);
             black_box(&dy);
         });
-        println!("{size}\t{a:.0}\t{b:.0}\t{h:.0}\t{:.2}\t{ok}\t{oracle}", b / a);
+        println!(
+            "{size}\t{a:.0}\t{b:.0}\t{h:.0}\t{:.2}\t{:.4}\t{:.4}\t{:.6}\t{ok}\t{oracle}",
+            b / a,
+            o.build_s,
+            tp.build_s,
+            setup_ns / 1.0e9
+        );
     }
 }
 

@@ -347,24 +347,38 @@ function run_nearest()
         idx = slotidx.(o.names)
         w = o.u0
         du = similar(w)
-        hand = () -> for (s, i) in enumerate(idx)
-            best, bd = 1, (px[i] - gx[1]) * (px[i] - gx[1]) + (py[i] - gy[1]) * (py[i] - gy[1])
-            for k in 2:length(gx)
-                dx, dyy = px[i] - gx[k], py[i] - gy[k]
-                dd = dx * dx + dyy * dyy
-                if dd < bd
-                    best, bd = k, dd
-                end
-            end
-            du[s] = gx[best] - w[s]
+        # The assignment depends only on const data, so both compilers compute
+        # it once at build; the hand-written version does the same: an argmin
+        # per point at setup, a gather per call.
+        assign = nearest_assign(px, py, gx, gy)
+        setup = per_call_ns(_ -> nearest_assign(px, py, gx, gy))
+        hand = () -> @inbounds for (s, i) in enumerate(idx)
+            du[s] = gx[assign[i]] - w[s]
         end
         hand()
         ok = same(dy(tp, TB), ref) && same(du, ref)
         orc = oracle(p("tpl"), tp)
         a, b = time_model(o), time_model(tp)
         h = per_call_ns(_ -> hand())
-        row(sz, "op", a, "tpl", b, "hand", h, "bits", ok, "oracle", orc, "build_op", o.build_s, "build_tpl", tp.build_s)
+        row(sz, "op", a, "tpl", b, "hand", h, "hand_setup_s", setup / 1.0e9, "bits", ok, "oracle", orc,
+            "build_op", o.build_s, "build_tpl", tp.build_s)
     end
+end
+
+function nearest_assign(px, py, gx, gy)
+    out = Vector{Int}(undef, length(px))
+    @inbounds for i in eachindex(px)
+        best, bd = 1, (px[i] - gx[1]) * (px[i] - gx[1]) + (py[i] - gy[1]) * (py[i] - gy[1])
+        for k in 2:length(gx)
+            dx, dyy = px[i] - gx[k], py[i] - gy[k]
+            dd = dx * dx + dyy * dyy
+            if dd < bd
+                best, bd = k, dd
+            end
+        end
+        out[i] = best
+    end
+    return out
 end
 
 function run_fastjx()
