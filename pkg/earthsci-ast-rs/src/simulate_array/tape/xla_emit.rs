@@ -2183,14 +2183,16 @@ impl<'a> Emitter<'a> {
             let nan = self.wrap(r.ne(&r), "data gather: isnan")?;
             let zero = self.splat(0.0, &dims)?;
             let r = self.wrap(nan.select(&zero, &r), "data gather: NaN reads as 0")?;
+            // 2^63 and -2^63, exactly; the largest f64 below 2^63 converts
+            // exactly too.
             let (hi_f, lo_f) = (
-                self.splat(9.223_372_036_854_775_808e18, &dims)?,
-                self.splat(-9.223_372_036_854_775_808e18, &dims)?,
+                self.splat(i64::MAX as f64, &dims)?,
+                self.splat(i64::MIN as f64, &dims)?,
             );
             let too_hi = self.wrap(r.ge(&hi_f), "data gather: saturate high")?;
             let too_lo = self.wrap(r.lt(&lo_f), "data gather: saturate low")?;
             let safe = self.wrap(
-                r.min(&self.splat(9.223_372_036_854_774_784e18, &dims)?)
+                r.min(&self.splat((i64::MAX - 1023) as f64, &dims)?)
                     .and_then(|x| x.max(&lo_f)),
                 "data gather: pin",
             )?;
@@ -2617,6 +2619,7 @@ impl<'a> Emitter<'a> {
     /// Planes are folded strictly in ascending order, one elementwise combine
     /// per step, so every position folds its terms in the tape's own
     /// association: this lowering adds no reordering of its own.
+    #[allow(clippy::too_many_arguments)]
     fn emit_scan_loop(
         &self,
         op: BinCode,
