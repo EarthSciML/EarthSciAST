@@ -9,7 +9,7 @@
 //! base directory `esm:std`. Cycle detection uses that identity, and a relative
 //! ref inside a bundled file joins onto the base to give `esm:std/<rel>`, which
 //! resolves by the same rule, so the library's own relative imports
-//! (`lib/solar.esm` importing `calendar.esm`) stay inside the bundle.
+//! (a library file importing `calendar.esm`) stay inside the bundle.
 
 use std::borrow::Cow;
 use std::path::Path;

@@ -7,7 +7,7 @@
  *
  * A bundled file has the identity `esm:std/<file>.esm` (its cycle-detection
  * key) and the virtual base directory `esm:std`, so a relative ref inside it
- * (`lib/solar.esm` importing `calendar.esm`) names a sibling in the bundle.
+ * (a library file importing `calendar.esm`) names a sibling in the bundle.
  */
 
 import { STDLIB_FILES } from './stdlib-bundle.js'

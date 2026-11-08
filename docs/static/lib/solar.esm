@@ -27,7 +27,7 @@
     "Solar": {
       "expression_template_imports": [
         {
-          "ref": "calendar.esm",
+          "ref": "esm:std/calendar.esm",
           "only": [
             "day_of_year",
             "hour",

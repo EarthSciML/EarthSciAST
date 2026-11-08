@@ -36,11 +36,11 @@ How a binding runs a case:
 - **`env`**: set these environment variables around the case and restore them
   afterwards.
 
-`mount_solar_*` also cover the rule that relative refs inside a bundled file
-resolve among the bundled files once `lib/solar.esm` imports `calendar.esm`.
-Each binding's unit tests check that rule directly with a substitute bundle, as
-well as cycle detection by `esm:std` identity and loading a document from a
-string with no base directory.
+`mount_solar_*` also cover an `esm:std/` ref inside a bundled file:
+`lib/solar.esm` imports `esm:std/calendar.esm`. The rule that a relative ref
+inside a bundled file resolves among the bundled files is checked by each
+binding's unit tests with a substitute bundle, as are cycle detection by
+`esm:std` identity and loading a document from a string with no base directory.
 
 Wired into: Julia `test/stdlib_refs_test.jl`, Python
 `tests/test_stdlib_refs.py`, Rust `tests/stdlib_refs_conformance.rs`,
