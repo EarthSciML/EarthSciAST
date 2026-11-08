@@ -8890,6 +8890,394 @@
       "field_ics": [],
       "loader_fields": [],
       "lifted_shapes": {}
+    },
+    {
+      "id": "ifelse_mixed_whole_dynamic",
+      "tier": "unshaped_mixed_ifelse",
+      "fixture": "conformance/native_model_shapes/fixtures/ifelse_mixed_whole_dynamic.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "IfelseMixedWhole.w",
+          "role": "state",
+          "units": "1",
+          "default": 0.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "IfelseMixedWhole"
+        },
+        {
+          "name": "IfelseMixedWhole.acc",
+          "role": "state",
+          "units": "1",
+          "default": 0.0,
+          "shape": [
+            "cell"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "IfelseMixedWhole"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "IfelseMixedWhole.F",
+          "role": "parameter",
+          "units": "1",
+          "default": [
+            1.0,
+            2.0,
+            3.0
+          ],
+          "shape": [
+            "cell"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "IfelseMixedWhole"
+        },
+        {
+          "name": "IfelseMixedWhole.lev_on",
+          "role": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "IfelseMixedWhole"
+        },
+        {
+          "name": "IfelseMixedWhole.lev_off",
+          "role": "parameter",
+          "units": "1",
+          "default": 3.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "IfelseMixedWhole"
+        }
+      ],
+      "observed_variables": [
+        {
+          "name": "IfelseMixedWhole.X_on",
+          "role": "observed",
+          "units": "1",
+          "default": null,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "IfelseMixedWhole"
+        },
+        {
+          "name": "IfelseMixedWhole.X_off",
+          "role": "observed",
+          "units": "1",
+          "default": null,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "IfelseMixedWhole"
+        },
+        {
+          "name": "IfelseMixedWhole.X_scalar_first",
+          "role": "observed",
+          "units": "1",
+          "default": null,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "IfelseMixedWhole"
+        },
+        {
+          "name": "IfelseMixedWhole.X_wrapped",
+          "role": "observed",
+          "units": "1",
+          "default": null,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "IfelseMixedWhole"
+        },
+        {
+          "name": "IfelseMixedWhole.R_on",
+          "role": "observed",
+          "units": "1",
+          "default": null,
+          "shape": [
+            "cell"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "IfelseMixedWhole"
+        },
+        {
+          "name": "IfelseMixedWhole.R_off",
+          "role": "observed",
+          "units": "1",
+          "default": null,
+          "shape": [
+            "cell"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "IfelseMixedWhole"
+        },
+        {
+          "name": "IfelseMixedWhole.R_scalar_first",
+          "role": "observed",
+          "units": "1",
+          "default": null,
+          "shape": [
+            "cell"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "IfelseMixedWhole"
+        },
+        {
+          "name": "IfelseMixedWhole.R_wrapped",
+          "role": "observed",
+          "units": "1",
+          "default": null,
+          "shape": [
+            "cell"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "IfelseMixedWhole"
+        },
+        {
+          "name": "IfelseMixedWhole.X_flip",
+          "role": "observed",
+          "units": "1",
+          "default": null,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "IfelseMixedWhole"
+        },
+        {
+          "name": "IfelseMixedWhole.R_flip",
+          "role": "observed",
+          "units": "1",
+          "default": null,
+          "shape": [
+            "cell"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "IfelseMixedWhole"
+        }
+      ],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 12,
+      "equations": [
+        {
+          "lhs": "IfelseMixedWhole.X_on",
+          "rhs": "ifelse(IfelseMixedWhole.lev_on < 2, IfelseMixedWhole.F * 2, 0)",
+          "source_system": "IfelseMixedWhole",
+          "contributions": [
+            {
+              "rhs": "ifelse(IfelseMixedWhole.lev_on < 2, IfelseMixedWhole.F * 2, 0)",
+              "origins": [
+                {
+                  "component": "IfelseMixedWhole"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "IfelseMixedWhole.X_off",
+          "rhs": "ifelse(IfelseMixedWhole.lev_off < 2, IfelseMixedWhole.F * 2, 0)",
+          "source_system": "IfelseMixedWhole",
+          "contributions": [
+            {
+              "rhs": "ifelse(IfelseMixedWhole.lev_off < 2, IfelseMixedWhole.F * 2, 0)",
+              "origins": [
+                {
+                  "component": "IfelseMixedWhole"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "IfelseMixedWhole.X_scalar_first",
+          "rhs": "ifelse(IfelseMixedWhole.lev_on < 2, 0.25, IfelseMixedWhole.F)",
+          "source_system": "IfelseMixedWhole",
+          "contributions": [
+            {
+              "rhs": "ifelse(IfelseMixedWhole.lev_on < 2, 0.25, IfelseMixedWhole.F)",
+              "origins": [
+                {
+                  "component": "IfelseMixedWhole"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "IfelseMixedWhole.X_wrapped",
+          "rhs": "1 + 3 * ifelse(IfelseMixedWhole.lev_off < 2, IfelseMixedWhole.F, 0.5)",
+          "source_system": "IfelseMixedWhole",
+          "contributions": [
+            {
+              "rhs": "1 + 3 * ifelse(IfelseMixedWhole.lev_off < 2, IfelseMixedWhole.F, 0.5)",
+              "origins": [
+                {
+                  "component": "IfelseMixedWhole"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "IfelseMixedWhole.R_on",
+          "rhs": "sum[i] (IfelseMixedWhole.X_on[i]) where {i in cell}",
+          "source_system": "IfelseMixedWhole",
+          "contributions": [
+            {
+              "rhs": "sum[i] (IfelseMixedWhole.X_on[i]) where {i in cell}",
+              "origins": [
+                {
+                  "component": "IfelseMixedWhole"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "IfelseMixedWhole.R_off",
+          "rhs": "sum[i] (IfelseMixedWhole.X_off[i]) where {i in cell}",
+          "source_system": "IfelseMixedWhole",
+          "contributions": [
+            {
+              "rhs": "sum[i] (IfelseMixedWhole.X_off[i]) where {i in cell}",
+              "origins": [
+                {
+                  "component": "IfelseMixedWhole"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "IfelseMixedWhole.R_scalar_first",
+          "rhs": "sum[i] (IfelseMixedWhole.X_scalar_first[i]) where {i in cell}",
+          "source_system": "IfelseMixedWhole",
+          "contributions": [
+            {
+              "rhs": "sum[i] (IfelseMixedWhole.X_scalar_first[i]) where {i in cell}",
+              "origins": [
+                {
+                  "component": "IfelseMixedWhole"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "IfelseMixedWhole.R_wrapped",
+          "rhs": "sum[i] (IfelseMixedWhole.X_wrapped[i]) where {i in cell}",
+          "source_system": "IfelseMixedWhole",
+          "contributions": [
+            {
+              "rhs": "sum[i] (IfelseMixedWhole.X_wrapped[i]) where {i in cell}",
+              "origins": [
+                {
+                  "component": "IfelseMixedWhole"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "D(IfelseMixedWhole.w)/Dt",
+          "rhs": "1",
+          "source_system": "IfelseMixedWhole",
+          "contributions": [
+            {
+              "rhs": "1",
+              "origins": [
+                {
+                  "component": "IfelseMixedWhole"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "IfelseMixedWhole.X_flip",
+          "rhs": "ifelse(IfelseMixedWhole.w > 1, 0, IfelseMixedWhole.F * 2)",
+          "source_system": "IfelseMixedWhole",
+          "contributions": [
+            {
+              "rhs": "ifelse(IfelseMixedWhole.w > 1, 0, IfelseMixedWhole.F * 2)",
+              "origins": [
+                {
+                  "component": "IfelseMixedWhole"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "sum[i] (D(IfelseMixedWhole.acc[i])/Dt) where {i in cell}",
+          "rhs": "sum[i] (IfelseMixedWhole.X_on[i] + IfelseMixedWhole.X_off[i] + IfelseMixedWhole.X_wrapped[i]) where {i in cell}",
+          "source_system": "IfelseMixedWhole",
+          "contributions": [
+            {
+              "rhs": "sum[i] (IfelseMixedWhole.X_on[i] + IfelseMixedWhole.X_off[i] + IfelseMixedWhole.X_wrapped[i]) where {i in cell}",
+              "origins": [
+                {
+                  "component": "IfelseMixedWhole"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "IfelseMixedWhole.R_flip",
+          "rhs": "sum[i] (IfelseMixedWhole.X_flip[i]) where {i in cell}",
+          "source_system": "IfelseMixedWhole",
+          "contributions": [
+            {
+              "rhs": "sum[i] (IfelseMixedWhole.X_flip[i]) where {i in cell}",
+              "origins": [
+                {
+                  "component": "IfelseMixedWhole"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "IfelseMixedWhole"
+        ],
+        "coupling_rules": [],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [
+        "cell"
+      ],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {}
     }
   ],
   "refusals": [

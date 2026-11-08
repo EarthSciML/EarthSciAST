@@ -2891,12 +2891,24 @@ fn static_observed_fields(
         }
         Err(e) => return Ok((HashMap::new(), report.rules, Some(e.to_string()))),
     };
+    // A variable `flatten` left unshaped but the build gives an array shape
+    // (esm-spec §4.3.4, an unshaped mixed-rank `ifelse`) is not 0-D.
+    let built: std::collections::HashSet<String> =
+        crate::flatten::flattened_conditional_shapes(flat)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
     let fields = values
         .into_iter()
         .filter_map(|(name, arr)| {
             let declared = flat.observed_variables.get(&name);
             if arr.len() == 1 {
-                let shape = DeclaredRank::of_declaration(declared).scalar_shape();
+                let rank = if built.contains(&name) {
+                    DeclaredRank::Unknown
+                } else {
+                    DeclaredRank::of_declaration(declared)
+                };
+                let shape = rank.scalar_shape();
                 let v = arr.iter().copied().next().expect("one element");
                 let arr = ArrayD::from_shape_vec(ndarray::IxDyn(shape), vec![v])
                     .expect("`scalar_shape` is `[]` or `[1]`, and both hold exactly one element");

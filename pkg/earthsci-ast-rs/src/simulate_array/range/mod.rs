@@ -1301,6 +1301,16 @@ fn check_lengths(
     Ok(())
 }
 
+/// The shape each unshaped mixed-rank `ifelse` variable of `flat` is built at
+/// (esm-spec §4.3.4). `flatten` keeps it out of the flattened declarations
+/// (esm-libraries-spec §4.7.5), so a reader of a declared shape falls back to
+/// it.
+fn built_shapes(flat: &FlattenedSystem) -> HashMap<String, Vec<String>> {
+    crate::flatten::flattened_conditional_shapes(flat)
+        .into_iter()
+        .collect()
+}
+
 /// The index-set name of each axis of each compiled state, from its
 /// flattened declaration (empty when it names none at the compiled rank).
 fn state_set_names(
@@ -1308,11 +1318,16 @@ fn state_set_names(
     compiled: &ProgramModel,
 ) -> HashMap<String, Vec<String>> {
     let sizes = index_set_sizes(flat);
+    let built = built_shapes(flat);
     compiled
         .var_shapes
         .iter()
         .map(|(name, vs)| {
-            let declared = flat.state_variables.get(name).and_then(|v| v.shape.clone());
+            let declared = flat
+                .state_variables
+                .get(name)
+                .and_then(|v| v.shape.clone())
+                .or_else(|| built.get(name).cloned());
             let extents: Vec<i64> = vs.shape.iter().map(|&n| n as i64).collect();
             (name.clone(), axis_set_names(declared, &extents, &sizes))
         })
@@ -1398,6 +1413,7 @@ fn var_infos(prog: &RhsProgram, dec: &Decomposition) -> HashMap<String, VarInfo>
     let prog = &*prog.inner;
     let flat = prog.flat();
     let sizes = index_set_sizes(flat);
+    let built = built_shapes(flat);
     let set_names = state_set_names(flat, &prog.model);
     let mut out = HashMap::new();
     for (name, vs) in &prog.model.var_shapes {
@@ -1437,7 +1453,8 @@ fn var_infos(prog: &RhsProgram, dec: &Decomposition) -> HashMap<String, VarInfo>
             .observed_variables
             .get(var)
             .or_else(|| flat.state_variables.get(var))
-            .and_then(|v| v.shape.clone());
+            .and_then(|v| v.shape.clone())
+            .or_else(|| built.get(var).cloned());
         let extents: Vec<i64> = ranges.iter().map(|r| r.1).collect();
         let sets = axis_set_names(declared, &extents, &sizes);
         let axes = (0..ranges.len())

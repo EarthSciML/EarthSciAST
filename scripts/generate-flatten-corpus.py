@@ -425,6 +425,16 @@ CASES: list[tuple[str, str, str]] = [
             "rhs_time_derivative",
         )
     ],
+    # --- an unshaped mixed-rank `ifelse` keeps its declared shape -------------
+    # esm-spec §4.3.4 builds `X = ifelse(lev < 2, F*2, 0.0)` (no declared
+    # `shape`) at its array branch's shape, but that is a build-time shape:
+    # flatten changes no declared `shape` other than a pointwise-lifted state's
+    # (esm-libraries-spec §4.7.5), so every such observed records `shape: null`.
+    (
+        "unshaped_mixed_ifelse",
+        "ifelse_mixed_whole_dynamic",
+        "conformance/native_model_shapes/fixtures/ifelse_mixed_whole_dynamic.esm",
+    ),
 ]
 
 # --- explicit refusals -------------------------------------------------------

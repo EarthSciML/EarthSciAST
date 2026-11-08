@@ -227,6 +227,10 @@ pub(crate) fn parse_subsystem_model(
 /// rejection, and a `data`-kind discrete parameter still reaches the provider
 /// forcing seam `classify_variables` routes.
 ///
+/// Each unshaped mixed-rank `ifelse` variable takes the shape it is built at
+/// ([`crate::flatten::flattened_conditional_shapes`], esm-spec §4.3.4), which
+/// `flatten` leaves out of the flattened system itself.
+///
 /// Shared by [`ArrayCompiled::from_flattened_with`] and the build pipeline's
 /// whole-document build (`crate::prepare`), so a document of several models
 /// is one namespaced system on both routes.
@@ -239,6 +243,14 @@ pub(crate) fn model_from_flattened(flat: &FlattenedSystem) -> Model {
         .chain(&flat.observed_variables)
     {
         variables.insert(name.clone(), var.clone());
+    }
+    // The shape an unshaped mixed-rank `ifelse` takes when built (esm-spec
+    // §4.3.4), which `flatten` leaves out of its output
+    // (esm-libraries-spec §4.7.5).
+    for (name, axes) in crate::flatten::flattened_conditional_shapes(flat) {
+        if let Some(var) = variables.get_mut(&name) {
+            var.shape = Some(axes);
+        }
     }
     Model {
         variables,
@@ -404,9 +416,11 @@ pub(super) fn apply_ragged_factor_scope(
 ///   coupled routes, and the other bindings, returned 1.
 /// * esm-spec §4.3.4, a variable with no declared `shape` whose value is an
 ///   array on one arm of an `ifelse` and a scalar on the other takes the array
-///   arm's shape (`flatten`'s phase 5b‴, see
-///   [`crate::flatten::conditional_shape_promotions`]). `index_sets` is the
-///   registry the promoted shape must be sized by.
+///   arm's shape (see [`crate::flatten::conditional_shape_promotions`]).
+///   `flatten` does not record this shape in its output (esm-libraries-spec
+///   §4.7.5); a build from a flattened system gets it from
+///   [`model_from_flattened`] instead. `index_sets` is the registry the
+///   promoted shape must be sized by.
 pub(crate) fn apply_flatten_rewrites(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
