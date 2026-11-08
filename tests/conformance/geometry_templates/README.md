@@ -33,17 +33,16 @@ The goldens are the Julia interpreter's.
 - The leaf's operand errors: the template does not reject a degenerate ring (a
   ring of no extent gives 0) or a non-convex one (outside its contract).
 
-## Status: not yet in the gate
+## Status: in the gate
 
-The tier is not listed in `scripts/test-conformance.sh` or CONFORMANCE_SPEC
-§5.45.4 on this branch, because `native` does not build it at the phase-2
-compilers: Julia `native` refuses `planar_overlap` (`compiler_refused_rule`, a
-refused per-cell build) and exhausts memory on `spherical_fan`; Rust `native`
-refuses `planar_overlap`'s gated equation (`compiler_refused_rule`, a const-array
-read behind a condition its fault scan cannot read). With the phase-3 compilers
-work (`closedast/p3-comp` at `79a55c804`) both documents pass under `native` in
-Julia and Rust, so the tier joins the gate when that branch is integrated. Every
-binding's `interpreter`, and Python `native`, pass both documents now.
+The tier is listed in `scripts/test-conformance.sh` (`INLINE_TESTS_TIERS`) and
+CONFORMANCE_SPEC §5.45.4. `native` builds it only with the phase-3 compilers
+work (`closedast/p3-comp`): at the phase-2 compilers Julia `native` refuses
+`planar_overlap` (`compiler_refused_rule`, a refused per-cell build) and
+exhausts memory on `spherical_fan`, and Rust `native` refuses
+`planar_overlap`'s gated equation (`compiler_refused_rule`, a const-array read
+behind a condition its fault scan cannot read). Every binding's `interpreter`,
+and Python `native`, pass both documents without it.
 
 ## Named exclusions
 
