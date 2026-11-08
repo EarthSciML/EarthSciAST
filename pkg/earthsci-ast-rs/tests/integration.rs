@@ -307,6 +307,8 @@ mod recurrence_causal_self_reference;
 mod recurrence_native_agreement;
 #[path = "refresh_conformance.rs"]
 mod refresh_conformance;
+#[path = "relational_rewrites.rs"]
+mod relational_rewrites;
 #[path = "relational_templates.rs"]
 mod relational_templates;
 #[path = "reserved_index_symbol.rs"]

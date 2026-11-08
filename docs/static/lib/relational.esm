@@ -2,7 +2,7 @@
   "esm": "1.1.0",
   "metadata": {
     "name": "Relational",
-    "description": "Standard-library relational templates (esm-spec §9.7.1 template-library file), the pure-AST definitions of the arg-witness reducers and of value-invention keys and ranks. `argmin(f, n)` / `argmax(f, n)`: the 1-based index in [1, n] of the smallest (largest) candidate value `f`, an expression over the template's loop symbol (`k_argmin_1`, `k_argmax_1`); ties go to the smallest index and a NaN candidate wins at its first occurrence. `argmin_where(f, p, n)` / `argmax_where(f, p, n)`: the same over the candidates passing the predicate `p`, n + 1 when none does. `pair_key(a, b, lo_a, lo_b, n_a, n_b)` and `edge_key(u, v, lo, n)`: scalar integer composite keys (directed, undirected) for a `distinct` key, NaN for an out-of-range component. `rank_of(x, members, n)`: the 1-based rank of a key among a derived set's ascending members. Core ops only. Import with `expression_template_imports` and invoke with `apply_expression_template`; see docs/content/standard_library.md.",
+    "description": "Standard-library relational templates (esm-spec §9.7.1 template-library file), the pure-AST definitions of the arg-witness reducers and of value-invention keys and ranks. `argmin(f, n)` / `argmax(f, n)`: the 1-based index in [1, n] of the smallest (largest) candidate value `f`, an expression over the template's loop symbol (`k_argmin_1`, `k_argmax_1`); ties go to the smallest index and a NaN candidate wins at its first occurrence. `argmin_where(f, p, n)` / `argmax_where(f, p, n)`: the same over the candidates passing the predicate `p`, n + 1 when none does. `pair_key(a, b, lo_a, lo_b, n_a, n_b)` and `edge_key(u, v, lo, n)`: scalar integer composite keys (directed, undirected) for a `distinct` key, NaN for an out-of-range component. `rank_of(x, members, n)` / `rank_of_set(x, members, S)`: the 1-based rank of a key among n ascending members, or among the members of the index set S (a derived set's `member_factor`). Core ops only. Import with `expression_template_imports` and invoke with `apply_expression_template`; see docs/content/standard_library.md.",
     "authors": [
       "EarthSciML"
     ],
@@ -590,6 +590,53 @@
                       "args": [
                         "members",
                         "k_rank_of_1"
+                      ]
+                    },
+                    "x"
+                  ]
+                },
+                0,
+                1
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "rank_of_set": {
+      "params": [
+        "x",
+        "members",
+        "S"
+      ],
+      "description": "1-based rank of the key x among the ascending members of the index set S, read as `members[k]` for k in S (for a derived set, its `member_factor` array): 1 plus the number of members below x, the `rank_of` count with the candidate range `{\"from\": S}` in place of `[1, n]` (esm-spec §9.6.1), so the set's size need not be known when the document is written. S must name a declared index set.",
+      "body": {
+        "op": "+",
+        "args": [
+          1,
+          {
+            "op": "faq",
+            "args": [
+              "members"
+            ],
+            "output_idx": [],
+            "reduce": "+",
+            "ranges": {
+              "k_rank_of_set_1": {
+                "from": "S"
+              }
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": ">=",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "members",
+                        "k_rank_of_set_1"
                       ]
                     },
                     "x"

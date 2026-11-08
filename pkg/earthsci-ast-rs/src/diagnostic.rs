@@ -442,6 +442,10 @@ diagnostic_code_registry! {
     /// An expression ranges over a `kind: "derived"` index set whose producer
     /// could not be materialized at build (esm-spec §9.6.6).
     DERIVED_INDEX_SET_UNMATERIALIZED = "derived_index_set_unmaterialized";
+    /// A `distinct` key or a value-invention `join` column evaluates to NaN —
+    /// a lib/relational.esm key template's out-of-range, non-integral or NaN
+    /// component (esm-spec §9.6.6). The message names the column.
+    VALUE_INVENTION_KEY_OUT_OF_RANGE = "value_invention_key_out_of_range";
     /// A domain axis whose units disagree with the coordinate's.
     DOMAIN_UNIT_MISMATCH = "domain_unit_mismatch";
     /// A model whose equation count cannot match its unknown count.
@@ -839,6 +843,7 @@ mod error_code_tests {
             "unresolved_subsystem_ref",
             "unsupported_construct",
             "url_substitution_unknown_name",
+            "value_invention_key_out_of_range",
         ];
         assert_eq!(error_code_names(), expected);
     }
