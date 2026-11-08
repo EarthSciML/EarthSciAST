@@ -236,7 +236,8 @@ The other templates replace the `skolem` and `rank` value-invention ops and the
 | `argmin_where(f, p, n)`, `argmax_where(f, p, n)` | the `argmin` / `argmax` body with the predicate `p` as the `filter` of both reductions, capped at `n + 1`: only candidates passing `p` compete, and `n + 1` means none did. `f` and `p` are written over `k_argmin_where_1` (`k_argmax_where_1`). |
 | `pair_key(a, b, lo_a, lo_b, n_a, n_b)` | `(a − lo_a)·n_b + (b − lo_b)` for integers `a ∈ [lo_a, lo_a + n_a)`, `b ∈ [lo_b, lo_b + n_b)`; NaN for a component out of range, non-integral or NaN. A directed composite key: equal pairs give equal keys and the keys sort in the pairs' lexicographic order. Exact while `n_a·n_b ≤ 2^53`. |
 | `edge_key(u, v, lo, n)` | `pair_key(min(u, v), max(u, v), lo, lo, n, n)`: the undirected key, so `(u, v)` and `(v, u)` coincide. |
-| `rank_of(x, members, n)` | `1 + Σ_k ifelse(members[k] ≥ x, 0, 1)`: the 1-based rank of the key `x` among the `n` ascending members of a derived index set (its `member_factor`), the same count as `searchsorted`. |
+| `rank_of(x, members, n)` | `1 + Σ_k ifelse(members[k] ≥ x, 0, 1)`: the 1-based rank of the key `x` among `n` ascending members, the same count as `searchsorted`. |
+| `rank_of_set(x, members, S)` | the same count with the candidate range `{"from": S}` (a template parameter may name an index set there, esm-spec §9.6.1): the rank of `x` among the members of the index set `S`, read as `members[k]` for `k` in `S`. For a derived set, `members` is its `member_factor` array, so the set's size need not be known when the document is written. |
 
 How a document uses them in place of the ops:
 
@@ -249,7 +250,8 @@ How a document uses them in place of the ops:
   `src_by[i] = floor(src_lat[i] / dy)`, joined with one `on` pair per
   component: `{"on": [["src_bx", "tgt_bx"], ["src_by", "tgt_by"]]}`.
 - **The rank of a set's own member** is its loop index: `edge_dense_id[e] = e`
-  over `e ∈ edges`. `rank_of` looks up the rank of any other key.
+  over `e ∈ edges`. `rank_of_set` looks up the rank of any other key among a
+  derived set's members.
 - **A gated arg-witness** (`argmin` with a `join`) becomes `argmin_where` whose
   predicate compares the per-component columns at the point and the candidate.
 
@@ -263,10 +265,13 @@ and each binding's harness checks it against the op form: the same members,
 the same dense IDs (the op's 0-based rank plus one), the same assignment
 buffers and the same right-hand side.
 
-`rank_of` needs the member count `n` as a literal or metaparameter, like every
-template `ranges` bound. A derived set's size is known only after value
-invention, so `rank_of` over a derived set cannot yet be written without
-knowing its size; the fixtures need only the own-member case.
+`rank_of_set` ranks against a derived set by name; in
+`tests/conformance/relational_templates/rewrites/skolem_distinct_rank.esm` each
+face edge's rank among the derived `edges` set is
+`rank_of_set(edge_key(edge_lo, edge_hi, 1, 6), edge_members, "edges")`, with
+`edge_members` the set's `member_factor`. A name that is not a declared index
+set is `undefined_index_set`. `argmin_where` / `argmax_where` keep `[1, n]`:
+their "none passed" answer `n + 1` needs the count.
 
 ## Validation and conformance
 

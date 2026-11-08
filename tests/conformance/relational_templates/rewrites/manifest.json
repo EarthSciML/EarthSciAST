@@ -1,5 +1,5 @@
 {
- "description": "Template rewrites of every fixture carrying a skolem, rank or gated argmin (generate.py writes them). `cases` are the caller data each binding harness builds both forms with; `compare` names what must agree: derived-set members (`sets`, the op's tuples against the template's integer keys decoded with `decode`: a = floor(k / n_b) + lo[0], b = k - n_b*floor(k / n_b) + lo[1]), the dense IDs (`rank`: the op set's 0-based rank + 1 against the template's loop-index variable), arg-witness buffers (`assignments`), the right-hand side at the initial state (`rhs`), inline tests (`inline_tests`), or load only (`load_only`, for documents a harness does not build). A `tier` entry is compared by that conformance tier instead.",
+ "description": "Template rewrites of every fixture carrying a skolem, rank or gated argmin (generate.py writes them). `cases` are the caller data each binding harness builds both forms with; `compare` names what must agree: derived-set members (`sets`, the op's tuples against the template's integer keys decoded with `decode`: a = floor(k / n_b) + lo[0], b = k - n_b*floor(k / n_b) + lo[1]), the dense IDs (`rank`: the op set's 0-based rank + 1 against the template's loop-index variable), a rank looked up against a derived set (`rank_lookup`: the template variable against the op set's 0-based rank of each row's (columns) tuple, sorted, plus one), arg-witness buffers (`assignments`), the right-hand side at the initial state (`rhs`), inline tests (`inline_tests`), or load only (`load_only`, for documents a harness does not build). A `tier` entry is compared by that conformance tier instead.",
  "rewrites": [
   {
    "id": "bin_skolem_spatial_join",
@@ -115,7 +115,7 @@
      "n": 6
     }
    },
-   "note": "The edge key is edge_key(edge_lo, edge_hi, 1, 6); rank(edges) is the loop index.",
+   "note": "The edge key is edge_key(edge_lo, edge_hi, 1, 6); rank(edges) is the loop index. face_edge_rank looks up each face edge's rank among the derived set with rank_of_set over {\"from\": \"edges\"}.",
    "cases": [
     {
      "const_arrays": {
@@ -267,7 +267,107 @@
      "faq": "edge_set",
      "variable": "edge_dense_id"
     },
-    "rhs": true
+    "rhs": true,
+    "rank_lookup": {
+     "variable": "face_edge_rank",
+     "faq": "edge_set",
+     "columns": [
+      "edge_lo",
+      "edge_hi"
+     ]
+    }
+   },
+   "extra": {
+    "index_sets": {
+     "edges": {
+      "member_factor": "edge_members"
+     }
+    },
+    "variables": {
+     "edge_members": {
+      "type": "parameter",
+      "shape": [
+       "edges"
+      ],
+      "default": 0.0,
+      "description": "The ascending edge keys of the derived set `edges` (its member_factor, fed back after value invention)."
+     },
+     "face_edge_rank": {
+      "type": "unknown",
+      "shape": [
+       "faces",
+       "local_edges"
+      ],
+      "description": "1-based rank of each face edge's key among the derived edge set: rank_of_set over `edges`, whose size is known only after value invention."
+     }
+    },
+    "equations": [
+     {
+      "_comment": "face_edge_rank[f, le] = the rank of edge_key(edge_lo, edge_hi) among the members of the derived set `edges` (rank_of_set ranges over {\"from\": \"edges\"}).",
+      "lhs": {
+       "op": "index",
+       "args": [
+        "face_edge_rank",
+        "f",
+        "le"
+       ]
+      },
+      "rhs": {
+       "op": "faq",
+       "args": [
+        "edge_lo",
+        "edge_hi",
+        "edge_members"
+       ],
+       "output_idx": [
+        "f",
+        "le"
+       ],
+       "ranges": {
+        "f": {
+         "from": "faces"
+        },
+        "le": {
+         "from": "local_edges"
+        }
+       },
+       "expr": {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "rank_of_set",
+        "bindings": {
+         "x": {
+          "op": "apply_expression_template",
+          "args": [],
+          "name": "edge_key",
+          "bindings": {
+           "u": {
+            "op": "index",
+            "args": [
+             "edge_lo",
+             "f",
+             "le"
+            ]
+           },
+           "v": {
+            "op": "index",
+            "args": [
+             "edge_hi",
+             "f",
+             "le"
+            ]
+           },
+           "lo": 1,
+           "n": 6
+          }
+         },
+         "members": "edge_members",
+         "S": "edges"
+        }
+       }
+      }
+     }
+    ]
    }
   },
   {
