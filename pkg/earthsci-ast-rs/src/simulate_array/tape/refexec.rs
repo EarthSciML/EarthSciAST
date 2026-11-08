@@ -251,7 +251,7 @@ pub(super) fn run_reference(
             }
             Instr::ConstArray { data, out } => {
                 let d = &prog.const_data[*data as usize];
-                let arr = ArrayD::from_shape_vec(IxDyn(&d.shape[..]), d.values.clone())
+                let arr = ArrayD::from_shape_vec(IxDyn(&d.shape[..]), d.values.to_vec())
                     .expect("ConstArray payload matches its shape");
                 slots[*out as usize] = Some(RefVal::Arr(arr));
             }
