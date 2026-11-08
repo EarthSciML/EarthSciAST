@@ -682,3 +682,246 @@ function _eval_geo_op(n::_Node, u, p, t, ::Type{T})::Float64 where {T}
     end
     throw(_unevaluable_operator(op, "the setup-geometry ladder has no arm for it"))
 end
+
+# ---- Native code for a setup body ----
+# The sweeps above walk the compiled body once per cell (or candidate pair)
+# with `_eval_node`. `_geo_kernel` emits the same body as Julia code instead,
+# compiled once through RuntimeGeneratedFunctions, and the sweeps call it in
+# place of the walk (`_geo_body_eval`). Every arm mirrors the walker's
+# (`_eval_node_op`, `_geo_eval_agg`, `_geo_gather_from`): the same operations
+# in the same order, left-nested folds, lazy `ifelse`/`and`/`or`, a nested
+# reduction's tuples in `Iterators.product` order with its loop slots written
+# to the frame, subscripts rounded to `Int` with bounds checked. A node with
+# several parents is computed once per binding of the frame slots it reads: a
+# local memo, reset where the innermost of those slots is set, and filled at
+# its first use — so a value only an untaken branch reads is never computed.
+# Bit-exactness is the contract, as in codegen_kernel.jl: no `@fastmath`, no
+# `muladd`, no reassociation. A body the emitter has no arm for (a geometry
+# leaf, a ring reference, a skolem, a gated nested reduction) keeps the walker.
+struct _GeoKernel{F, S}
+    f::F
+    srcs::S
+end
+@inline _geo_body_eval(n::_Node, u) = _eval_node(n, u, nothing, 0.0, Float64)
+@inline _geo_body_eval(k::_GeoKernel, u) = k.f(u, k.srcs)
+
+const _GEO_CG_UNARY = Dict{Symbol, Function}(r.sym => r.fn for r in _UNARY_ELEMENTWISE_OPS)
+const _GEO_CG_BINARY = Dict{Symbol, Symbol}(r.sym => r.fnsym for r in _BINARY_ELEMENTWISE_OPS)
+const _GEO_CG_CMP = Dict{Symbol, Symbol}(r.sym => r.fnsym for r in _COMPARISON_ELEMENTWISE_OPS)
+const _GEO_CG_MINMAX = Dict{Symbol, Symbol}(r.sym => r.fnsym for r in _NARY_MINMAX_OPS)
+
+struct _GeoCGDecline <: Exception end
+
+mutable struct _GeoCG
+    refs::IdDict{_Node, Int}
+    level::IdDict{_Node, Int}          # the agg nest level that owns the node's innermost slot
+    slot_level::Dict{Int, Int}
+    memo::IdDict{_Node, Symbol}        # shared node => its memo local
+    resets::Dict{Int, Vector{Symbol}}  # level => memo locals reset at its iteration
+    srcs::Vector{Any}
+    src_ix::IdDict{Any, Int}
+    nvar::Int
+end
+
+_geo_cg_var!(g::_GeoCG, p::String) = Symbol("_gk_", p, g.nvar += 1)
+
+_geo_cg_kids(n::_Node) = n.op === :geo_agg ? begin
+        sp = n.payload::_GeoAggSpec
+        sp.filter === nothing ? _Node[sp.body] : _Node[sp.filter, sp.body]
+    end : n.children
+
+# Reference counts, and each node's level: the deepest nest level among the
+# slots its sub-tree reads (0: only the sweep's own slots).
+function _geo_cg_scan!(g::_GeoCG, n::_Node, depth::Int)
+    c = get(g.refs, n, 0)
+    g.refs[n] = c + 1
+    c == 0 || return g.level[n]
+    lv = 0
+    if n.kind == _NK_STATE
+        lv = get(g.slot_level, n.idx, 0)
+    elseif n.kind == _NK_OP && n.op === :geo_agg
+        sp = n.payload::_GeoAggSpec
+        sp.gates === nothing || throw(_GeoCGDecline())
+        for s in sp.slots
+            g.slot_level[s] = depth + 1
+        end
+        for ch in _geo_cg_kids(n)
+            l = _geo_cg_scan!(g, ch, depth + 1)
+            # The reduction's value does not depend on its own slots.
+            lv = max(lv, l > depth ? 0 : l)
+        end
+        # A body reading an enclosing nest's slot ties the reduction to it.
+        lv = _geo_cg_outer_level(g, n, depth)
+    else
+        for ch in n.children
+            lv = max(lv, _geo_cg_scan!(g, ch, depth))
+        end
+    end
+    return g.level[n] = lv
+end
+
+# The deepest level <= depth among the slots the reduction's sub-tree reads.
+function _geo_cg_outer_level(g::_GeoCG, n::_Node, depth::Int)
+    seen = IdDict{_Node, Nothing}()
+    lv = 0
+    function walk(x::_Node)
+        haskey(seen, x) && return
+        seen[x] = nothing
+        if x.kind == _NK_STATE
+            l = get(g.slot_level, x.idx, 0)
+            l <= depth && (lv = max(lv, l))
+        end
+        return foreach(walk, _geo_cg_kids(x))
+    end
+    foreach(walk, _geo_cg_kids(n))
+    return lv
+end
+
+function _geo_cg(g::_GeoCG, n::_Node)
+    if get(g.refs, n, 0) >= 2 && n.kind == _NK_OP
+        m = get(g.memo, n, nothing)
+        if m === nothing
+            m = _geo_cg_var!(g, "m")
+            g.memo[n] = m
+            push!(get!(() -> Symbol[], g.resets, g.level[n]), m)
+        end
+        f = Symbol(m, :_set)
+        return :(
+            $f ? $m : begin
+                    $m = $(_geo_cg_raw(g, n))::Float64
+                    $f = true
+                    $m
+                end
+        )
+    end
+    return _geo_cg_raw(g, n)
+end
+
+function _geo_cg_raw(g::_GeoCG, n::_Node)
+    n.kind == _NK_LITERAL && return n.literal
+    n.kind == _NK_STATE && return :(u[$(n.idx)])
+    n.kind == _NK_OP || throw(_GeoCGDecline())
+    op = n.op
+    c = n.children
+    em(x) = _geo_cg(g, x)
+    if op === :geomemo
+        return em(c[1])
+    elseif op === :+ || op === :*
+        acc = em(c[1])
+        for i in 2:length(c)
+            acc = Expr(:call, op, acc, em(c[i]))
+        end
+        return acc
+    elseif op === :- || op === :neg
+        length(c) == 1 && return :(-$(em(c[1])))
+        length(c) == 2 || throw(_GeoCGDecline())
+        return :($(em(c[1])) - $(em(c[2])))
+    elseif haskey(_GEO_CG_BINARY, op)
+        length(c) == 2 || throw(_GeoCGDecline())
+        return Expr(:call, _GEO_CG_BINARY[op], em(c[1]), em(c[2]))
+    elseif haskey(_GEO_CG_CMP, op)
+        length(c) == 2 || throw(_GeoCGDecline())
+        return :($(Expr(:call, _GEO_CG_CMP[op], em(c[1]), em(c[2]))) ? 1.0 : 0.0)
+    elseif op === :and || op === :or
+        acc = op === :and ? 1.0 : 0.0
+        for i in length(c):-1:1
+            acc = op === :and ? :($(em(c[i])) == 0 ? 0.0 : $acc) : :($(em(c[i])) != 0 ? 1.0 : $acc)
+        end
+        return acc
+    elseif op === :not
+        length(c) == 1 || throw(_GeoCGDecline())
+        return :($(em(c[1])) == 0 ? 1.0 : 0.0)
+    elseif op === :ifelse
+        length(c) == 3 || throw(_GeoCGDecline())
+        return :($(em(c[1])) != 0 ? $(em(c[2])) : $(em(c[3])))
+    elseif haskey(_GEO_CG_UNARY, op)
+        length(c) == 1 || throw(_GeoCGDecline())
+        return Expr(:call, _GEO_CG_UNARY[op], em(c[1]))
+    elseif haskey(_GEO_CG_MINMAX, op)
+        length(c) >= 2 || throw(_GeoCGDecline())
+        acc = em(c[1])
+        for i in 2:length(c)
+            acc = Expr(:call, _GEO_CG_MINMAX[op], acc, em(c[i]))
+        end
+        return acc
+    elseif op === :geo_gather
+        src = n.payload
+        (src isa Array{Float64} && 1 <= ndims(src) <= 3 && ndims(src) == length(c)) ||
+            throw(_GeoCGDecline())
+        k = get!(g.src_ix, src) do
+            push!(g.srcs, src)
+            length(g.srcs)
+        end
+        ixs = [:(Int(round($(em(x))::Float64))) for x in c]
+        return :(Float64(srcs[$k][$(ixs...)]))
+    elseif op === :geo_agg
+        return _geo_cg_agg(g, n)
+    end
+    throw(_GeoCGDecline())
+end
+
+function _geo_cg_agg(g::_GeoCG, n::_Node)
+    sp = n.payload::_GeoAggSpec
+    acc = _geo_cg_var!(g, "acc")
+    ks = [_geo_cg_var!(g, "k") for _ in sp.slots]
+    lv = maximum(g.slot_level[s] for s in sp.slots)
+    body = em_body = _geo_cg(g, sp.body)
+    filt = sp.filter === nothing ? nothing : _geo_cg(g, sp.filter)
+    resets = Any[]
+    for m in get(g.resets, lv, Symbol[])
+        push!(resets, :($(Symbol(m, :_set)) = false))
+    end
+    sets = Any[:(u[$(sp.slots[i])] = Float64($(ks[i]))) for i in eachindex(ks)]
+    fold = sp.op === :+ ? :($acc = $acc + _v) : sp.op === :max ? :($acc = max($acc, _v)) :
+        sp.op === :min ? :($acc = min($acc, _v)) : :($acc = $acc * _v)
+    inner = quote
+        $(sets...)
+        $(resets...)
+        $(filt === nothing ? nothing : :($filt != 0 || continue))
+        _v = $body
+        $fold
+    end
+    # `Iterators.product` runs the first slot fastest: it is the innermost loop.
+    loop = inner
+    for i in eachindex(ks)
+        loop = Expr(:for, :($(ks[i]) = 1:$(sp.exts[i])), loop)
+    end
+    # The memo locals of this nest's level are declared here, outside its loops.
+    decls = Any[]
+    for m in get(g.resets, lv, Symbol[])
+        push!(decls, :(local $m::Float64 = 0.0), :(local $(Symbol(m, :_set))::Bool = false))
+    end
+    return quote
+        let $acc = $(sp.zero)
+            $(decls...)
+            $loop
+            $acc
+        end
+    end
+end
+
+# The native kernel of a setup body, or `nothing` (keep the walker). Only under
+# the share_subtrees plan flag, so the interpreter oracle walks.
+function _geo_kernel(body::_Node)
+    _compiler_plan_now().share_subtrees || return nothing
+    g = _GeoCG(
+        IdDict{_Node, Int}(), IdDict{_Node, Int}(), Dict{Int, Int}(), IdDict{_Node, Symbol}(),
+        Dict{Int, Vector{Symbol}}(), Any[], IdDict{Any, Int}(), 0
+    )
+    try
+        _geo_cg_scan!(g, body, 0)
+        e = _geo_cg(g, body)
+        top = Any[]
+        for m in get(g.resets, 0, Symbol[])
+            push!(top, :(local $m::Float64 = 0.0), :(local $(Symbol(m, :_set))::Bool = false))
+        end
+        ex = Expr(:function, Expr(:tuple, :u, :srcs), Expr(:block, top..., :(return Float64($e))))
+        f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(@__MODULE__, @__MODULE__, ex)
+        _tally_cascade!(:geo_kernel)
+        return _GeoKernel(f, Tuple(g.srcs))
+    catch err
+        err isa _GeoCGDecline && return nothing
+        _is_resource_error(err) && rethrow()
+        return nothing
+    end
+end

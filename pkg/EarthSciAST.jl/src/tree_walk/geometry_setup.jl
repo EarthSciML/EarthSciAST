@@ -735,7 +735,7 @@ function _geom_sweep_map!(
         # declined to drive; `nothing` (the usual case) compiles away.
         _geo_ov_ok(ov, u) || continue
         _geo_gate_ok(gates, filt, u) || continue
-        v = _eval_node(body, u, nothing, 0.0, Float64)
+        v = _geo_body_eval(body, u)
         @inbounds arr[I] = v
     end
     return arr
@@ -760,7 +760,7 @@ function _geom_sweep_contract!(
             end
             _geo_ov_ok(ov, u) || continue
             _geo_gate_ok(gates, filt, u) || continue
-            acc = fold(acc, _eval_node(body, u, nothing, 0.0, Float64))
+            acc = fold(acc, _geo_body_eval(body, u))
         end
         @inbounds arr[I] = acc
     end
@@ -1133,7 +1133,7 @@ function _geom_sweep_pairs_map!(
                 u[restpos[d]] = Float64(R[d])
             end
             _geo_gate_ok(gates, filt, u) || continue
-            v = _eval_node(body, u, nothing, 0.0, Float64)
+            v = _geo_body_eval(body, u)
             @inbounds arr[CartesianIndex(ntuple(d -> ix[d], Val(N)))] = v
         end
     end
@@ -1177,7 +1177,7 @@ function _geom_sweep_restrict_contract!(
                     u[nout + k] = Float64(k == gc ? vals[C[k]] : C[k])
                 end
                 _geo_gate_ok(gates, filt, u) || continue
-                acc = fold(acc, _eval_node(body, u, nothing, 0.0, Float64))
+                acc = fold(acc, _geo_body_eval(body, u))
             end
         end
         @inbounds arr[I] = acc
@@ -1237,6 +1237,9 @@ function _materialize_geom_array(
         roots = _geo_memoize!(filt === nothing ? _Node[body] : _Node[filt, body])
         filt === nothing ? (body = roots[1]) : ((filt, body) = (roots[1], roots[2]))
     end
+    # The body as native code when the emitter models it (the walker otherwise).
+    kbody = _geo_kernel(body)
+    body = kbody === nothing ? body : kbody
     u = zeros(Float64, nslots[])
     nout = length(out)
     # ---- The OVERLAP broad phase (see `_geo_overlap_gate` above) ----

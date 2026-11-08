@@ -33,6 +33,7 @@ const TIMES = (0.0, 0.7, 3.1, 1800.0)
 
 function build(path, compiler)
     E._reset_cascade_tally!()
+    GC.gc()
     t0 = time_ns()
     prob = E.esm_problem(path, (0.0, 1.0); compiler = compiler)
     dt = (time_ns() - t0) / 1.0e9

@@ -335,8 +335,44 @@ def nearest(spelling, p, g, lib, out_dir):
     }
 
 
-def documents(out_dir, lib, hours, ns, near, manifolds=("planar", "spherical")):
+# ---------------------------------------------------------------------------
+# The scaling family's regrid documents, with the template in the leaf's place.
+# ---------------------------------------------------------------------------
+
+SCALING = os.path.join(REPO, "tests", "conformance", "scaling", "fixtures", "regrid")
+
+
+def scaling_regrid(manifold, spelling, n, lib, out_dir):
+    """tests/conformance/scaling/fixtures/regrid/regrid_N<n>.esm on `manifold`,
+    its overlap areas by the leaf or by the lib/geometry.esm template."""
+    d = json.load(open(os.path.join(SCALING, f"regrid_N{n}.esm")))
+    d["esm"] = ESM_VERSION
+    d["metadata"]["name"] = f"regrid_scaling_{manifold}_{spelling}_N{n}"
+    m = d["models"]["Regrid"]
+    for e in m["equations"]:
+        if e["lhs"] == "A_ij":
+            if spelling == "leaf":
+                e["rhs"]["expr"]["manifold"] = manifold
+            else:
+                e["rhs"]["expr"] = overlap_template(manifold)
+    if spelling == "tpl":
+        names = [GEOMETRY_TEMPLATE[manifold]]
+        if manifold == "spherical":
+            d["index_sets"]["xyz"] = {"kind": "interval", "size": 3}
+            for xyz, poly, cells in (("src_xyz", "src_poly", "src_cells"), ("tgt_xyz", "tgt_poly", "tgt_cells")):
+                m["variables"][xyz] = {"type": "unknown", "units": "1", "shape": [cells, "cell_verts", "xyz"]}
+                m["equations"].insert(2, unit_stack(xyz, poly, cells))
+            names.append("lonlat_to_unit")
+        m["expression_template_imports"] = imports(lib, out_dir, [("geometry.esm", names)])
+    return d
+
+
+def documents(out_dir, lib, hours, ns, near, manifolds=("planar", "spherical"), scaling=()):
     docs = {}
+    for n in scaling:
+        for mf in manifolds:
+            for s in ("leaf", "tpl"):
+                docs[f"regrid_scaling_{mf}_{s}_N{n}.esm"] = scaling_regrid(mf, s, n, lib, out_dir)
     for h in hours:
         for s in ("fn", "tpl"):
             docs[f"solar_year_{s}_H{h}.esm"] = solar_year(s, h, lib, out_dir)
@@ -364,11 +400,13 @@ def main(argv=None):
     ap.add_argument("--nearest", type=lambda s: tuple(int(x) for x in s.split("x")), action="append",
                     help="PxG, e.g. 2000x200")
     ap.add_argument("--manifold", action="append")
+    ap.add_argument("--scaling", type=int, action="append", help="a scaling-family regrid size (100, 1000)")
     a = ap.parse_args(argv)
     out = os.path.abspath(a.out)
     os.makedirs(out, exist_ok=True)
     docs = documents(out, os.path.abspath(a.lib), a.hours or COMMITTED["hours"], a.n or COMMITTED["n"],
-                     a.nearest or COMMITTED["nearest"], tuple(a.manifold or ("planar", "spherical")))
+                     a.nearest or COMMITTED["nearest"], tuple(a.manifold or ("planar", "spherical")),
+                     tuple(a.scaling or ()))
     stale = []
     for name, d in docs.items():
         path = os.path.join(out, name)
