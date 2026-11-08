@@ -305,6 +305,10 @@ struct Detection {
     candidates: Vec<(String, Value)>,
     /// The grouped/derived chain in materialisation (fixpoint discovery) order.
     chain: Vec<(String, Value, ChainKind)>,
+    /// Plain per-element columns a value-invention `join` reads (an integer bin
+    /// column such as `src_bx[i] = floor(lon[i] / dx)`): materialised for the
+    /// join, but NOT value-invention outputs — they stay ordinary observeds.
+    columns: Vec<(String, Value)>,
 }
 
 /// Every `index` target name (the array a value reads from) reachable in a
@@ -427,6 +431,7 @@ fn vi_detect(model_json: &Value) -> Detection {
         producers: Vec::new(),
         candidates: Vec::new(),
         chain: Vec::new(),
+        columns: Vec::new(),
     };
     if let Some(eqs) = model_json.get("equations").and_then(|v| v.as_array()) {
         for eq in eqs {
@@ -469,8 +474,50 @@ fn vi_detect(model_json: &Value) -> Detection {
         }
         candidates = rest;
     }
+    // The `join.on` key columns a producer or an arg-witness reads that no skolem
+    // map defines: plain per-element aggregates over constant factors.
+    let mut join_names: HashSet<String> = HashSet::new();
+    for (_, node) in &det.producers {
+        vi_join_on_names(node.get("join"), &mut join_names);
+    }
+    for (_, node) in &det.maps {
+        if let Some(body) = node.get("expr") {
+            vi_join_on_names(body.get("join"), &mut join_names);
+        }
+    }
+    det.columns = candidates
+        .into_iter()
+        .filter(|(base, node)| {
+            join_names.contains(base)
+                && node
+                    .get("output_idx")
+                    .and_then(|v| v.as_array())
+                    .is_some_and(|oi| oi.len() == 1)
+        })
+        .collect();
     det.has_vi = !det.maps.is_empty() || !det.producers.is_empty() || !det.chain.is_empty();
     det
+}
+
+/// Every key-column name of a `join`'s `on` clauses.
+fn vi_join_on_names(join: Option<&Value>, out: &mut HashSet<String>) {
+    let Some(join) = join.and_then(|v| v.as_array()) else {
+        return;
+    };
+    for clause in join {
+        for pair in clause
+            .get("on")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+        {
+            for col in pair.as_array().into_iter().flatten() {
+                if let Some(c) = col.as_str() {
+                    out.insert(c.to_string());
+                }
+            }
+        }
+    }
 }
 
 fn classify_assignment(base: &str, rhs: &Value, det: &mut Detection) {
@@ -617,12 +664,48 @@ fn vi_eval_op(node: &Value, ctx: &ViCtx, bindings: &Bindings) -> Result<Val, Val
         "skolem" => Ok(Val::Key(vi_skolem(node, ctx, bindings)?)),
         "true" => Ok(Val::Bool(true)),
         "false" => Ok(Val::Bool(false)),
-        "floor" => Ok(Val::Int(
-            vi_eval(arg(0)?, ctx, bindings)?.as_f64()?.floor() as i64
+        "floor" => Ok(rounded_int(
+            vi_eval(arg(0)?, ctx, bindings)?.as_f64()?.floor(),
         )),
-        "ceil" => Ok(Val::Int(
-            vi_eval(arg(0)?, ctx, bindings)?.as_f64()?.ceil() as i64
+        "ceil" => Ok(rounded_int(
+            vi_eval(arg(0)?, ctx, bindings)?.as_f64()?.ceil(),
         )),
+        "const" => match node.get("value") {
+            Some(Value::Number(n)) => Ok(match n.as_i64() {
+                Some(i) => Val::Int(i),
+                None => Val::Float(crate::precision::round(n.as_f64().unwrap_or(f64::NAN))),
+            }),
+            Some(Value::Bool(b)) => Ok(Val::Bool(*b)),
+            _ => err("only a scalar `const` is a value-invention build-time value"),
+        },
+        "ifelse" => {
+            let c = vi_eval(arg(0)?, ctx, bindings)?;
+            let branch = if truthy(&c)? { arg(1)? } else { arg(2)? };
+            vi_eval(branch, ctx, bindings)
+        }
+        "and" | "or" => {
+            // Short-circuit, as the value evaluator's boolean reductions do.
+            let want = op == "or";
+            for a in args {
+                if truthy(&vi_eval(a, ctx, bindings)?)? == want {
+                    return Ok(Val::Bool(want));
+                }
+            }
+            Ok(Val::Bool(!want))
+        }
+        "not" => Ok(Val::Bool(!truthy(&vi_eval(arg(0)?, ctx, bindings)?)?)),
+        "min" | "max" => {
+            let mut acc = vi_eval(arg(0)?, ctx, bindings)?.as_f64()?;
+            for a in &args[1..] {
+                let x = vi_eval(a, ctx, bindings)?.as_f64()?;
+                // NaN propagates (esm-spec §4.2), unlike `f64::min` / `f64::max`.
+                let better = if op == "min" { x < acc } else { x > acc };
+                if x.is_nan() || better {
+                    acc = x;
+                }
+            }
+            Ok(Val::Float(acc))
+        }
         // Arithmetic rounds to the active precision (`crate::precision`).
         //
         // This evaluator is the RELATIONAL half of the pipeline: what it
@@ -682,6 +765,24 @@ fn vi_eval_op(node: &Value, ctx: &ViCtx, bindings: &Bindings) -> Result<Val, Val
         other => err(format!(
             "value-invention build-time evaluator does not support op {other:?}"
         )),
+    }
+}
+
+/// A rounded (`floor` / `ceil`) value: an exact integer, or the non-finite
+/// float itself (a NaN component of a key template stays NaN).
+fn rounded_int(r: f64) -> Val {
+    if r.is_finite() {
+        Val::Int(r as i64)
+    } else {
+        Val::Float(r)
+    }
+}
+
+/// A build-time condition value: a boolean, or a number > 0 (NaN is false).
+fn truthy(v: &Val) -> Result<bool, ValueInventionError> {
+    match v {
+        Val::Bool(b) => Ok(*b),
+        other => Ok(other.as_f64()? > 0.0),
     }
 }
 
@@ -798,6 +899,37 @@ fn vi_skolem(node: &Value, ctx: &ViCtx, bindings: &Bindings) -> Result<Key, Valu
         Ok(key_comps.into_iter().next().unwrap())
     } else {
         Ok(Key::Tuple(key_comps))
+    }
+}
+
+/// A `distinct` key or `join` column value: a `skolem` node's canonical tuple,
+/// or any other expression's exact integer (a lib/relational.esm key template,
+/// a bare `index`, `floor(...)`). A NaN value — a key template's out-of-range,
+/// non-integral or NaN component — is `value_invention_key_out_of_range`
+/// naming `column` and the loop indices (esm-spec §9.6.6).
+fn vi_key(
+    node: &Value,
+    ctx: &ViCtx,
+    bindings: &Bindings,
+    column: &str,
+) -> Result<Key, ValueInventionError> {
+    if node_op(node) == Some("skolem") {
+        return vi_skolem(node, ctx, bindings);
+    }
+    match vi_eval(node, ctx, bindings)? {
+        Val::Key(k) => Ok(k),
+        Val::Float(f) if f.is_nan() => {
+            let mut at: Vec<(&String, &i64)> = bindings.iter().collect();
+            at.sort();
+            let at: Vec<String> = at.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            err(format!(
+                "{}: {column} is NaN at ({}); a key component is out of its declared range, \
+                 non-integral or NaN",
+                crate::diagnostic::codes::VALUE_INVENTION_KEY_OUT_OF_RANGE,
+                at.join(", ")
+            ))
+        }
+        v => Ok(Key::Int(v.key_int()?)),
     }
 }
 
@@ -1442,6 +1574,48 @@ fn vi_materialize_map(
     Ok(())
 }
 
+/// Materialise a plain per-element `join` column (see [`Detection::columns`]):
+/// each value an exact integer, a NaN value `value_invention_key_out_of_range`.
+fn vi_materialize_column(
+    ctx: &mut ViCtx,
+    vname: &str,
+    node: &Value,
+) -> Result<(), ValueInventionError> {
+    let sym = node
+        .get("output_idx")
+        .and_then(|v| v.as_array())
+        .and_then(|oi| oi.first())
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let body = node
+        .get("expr")
+        .ok_or_else(|| ValueInventionError(format!("join column {vname:?} has no `expr` body")))?;
+    let empty = Map::new();
+    let ranges = node
+        .get("ranges")
+        .and_then(|v| v.as_object())
+        .unwrap_or(&empty);
+    let column = format!("join column '{vname}'");
+    let mut out = ViBuf::default();
+    {
+        let ctx_ref = &*ctx;
+        vi_enumerate(ranges, ctx_ref, |bindings| {
+            let v = match vi_key(body, ctx_ref, bindings, &column)? {
+                Key::Int(i) => Val::Int(i),
+                k => Val::Key(k),
+            };
+            let at = *bindings.get(&sym).ok_or_else(|| {
+                ValueInventionError(format!("join column {vname:?} output index is unbound"))
+            })?;
+            out.insert(at, v);
+            Ok(())
+        })?;
+    }
+    ctx.maps.insert(vname.to_string(), out);
+    Ok(())
+}
+
 /// A map body compiled once before its enumeration: the part of [`vi_eval`]
 /// whose names resolve before any point is bound — the map's own range
 /// symbols, scalar parameters and const-array factors — evaluated per point
@@ -1573,8 +1747,8 @@ impl<'a> Fast<'a> {
                     Key::Tuple(comps)
                 })
             }
-            Fast::Floor(e) => Val::Int(f(e)?.floor() as i64),
-            Fast::Ceil(e) => Val::Int(f(e)?.ceil() as i64),
+            Fast::Floor(e) => rounded_int(f(e)?.floor()),
+            Fast::Ceil(e) => rounded_int(f(e)?.ceil()),
             Fast::Div(a, b) => {
                 let a = f(a)?;
                 let b = f(b)?;
@@ -1631,6 +1805,10 @@ fn vi_materialize_producer(ctx: &ViCtx, node: &Value) -> Result<Vec<Key>, ValueI
     } else {
         vi_resolve_join(&join, ranges, ctx)?
     };
+    let column = format!(
+        "the `key` of producer '{}'",
+        node.get("id").and_then(|v| v.as_str()).unwrap_or("")
+    );
     let mut members: Vec<Key> = Vec::new();
     vi_enumerate_join(ranges, &gates, ctx, |bindings| {
         if let Some(f) = filt {
@@ -1648,7 +1826,7 @@ fn vi_materialize_producer(ctx: &ViCtx, node: &Value) -> Result<Vec<Key>, ValueI
         if !gates.is_empty() && !vi_join_ok(&gates, ctx, bindings)? {
             return Ok(());
         }
-        members.push(vi_skolem(key, ctx, bindings)?);
+        members.push(vi_key(key, ctx, bindings, &column)?);
         Ok(())
     })?;
     Ok(relational::distinct(&members))
@@ -2025,7 +2203,12 @@ pub fn materialize_value_invention(
         }
     }
 
-    // Maps first (a producer's join / key — or an arg-witness `join` — may reference them).
+    // Join columns, then maps (a producer's join / key — or an arg-witness
+    // `join` — may reference either).
+    for (vname, node) in &det.columns {
+        let _prec = vi_variable_precision(vname);
+        vi_materialize_column(&mut ctx, vname, node)?;
+    }
     for (vname, node) in &det.maps {
         // Each buffer is materialized at the element type of the variable it
         // fills (esm-spec §11.3.1): a build-time relational output is an

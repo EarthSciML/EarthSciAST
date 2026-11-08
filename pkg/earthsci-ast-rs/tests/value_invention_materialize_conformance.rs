@@ -8,7 +8,9 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{SolveOptions, load_string, run_inline_tests_with_base_dir};
+use earthsci_ast::{
+    LoadOptions, SolveOptions, load_string_with_options, run_inline_tests_with_base_dir,
+};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
@@ -58,7 +60,13 @@ fn value_invention_materialize_outcomes_match_the_manifest() {
         let test_id = fx["test_id"].as_str().expect("test_id");
         let text =
             fs::read_to_string(&esm_path).unwrap_or_else(|e| panic!("read {esm_path:?}: {e}"));
-        let file = load_string(&text)
+        // A `_template` fixture imports lib/relational.esm by a path relative
+        // to its own directory.
+        let options = LoadOptions {
+            base_path: esm_path.parent().map(|p| p.to_path_buf()),
+            ..Default::default()
+        };
+        let file = load_string_with_options(&text, &options)
             .unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
         let results =
             run_inline_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir.as_path()));

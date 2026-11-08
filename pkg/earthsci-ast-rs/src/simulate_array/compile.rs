@@ -827,8 +827,8 @@ impl ArrayCompiled {
         // counted above are all that survive of such a set: its members and
         // skolem maps are not materialized, and the elided gate is numerically
         // inert only where a dense narrow phase follows (see
-        // `strip_value_invention`). A no-op unless a `skolem` op or a
-        // derived-set-shaped variable is present.
+        // `strip_value_invention`). A no-op unless a `skolem` op, a
+        // `distinct` producer or a derived-set-shaped variable is present.
         // A producer that could not run leaves its derived set with no
         // members: a stage that then trips over the stripped producer (a
         // surviving read of one of its outputs, an output shaped on its set)
@@ -3972,7 +3972,8 @@ pub(super) fn strip_vi_joins(expr: &mut Expr, vi_cols: &HashSet<String>) {
 /// zero on exactly the pairs the bin-skolem gate would prune, so the dense
 /// contraction is numerically identical (see [`strip_vi_joins`]). Genuine
 /// (loop-symbol) joins and non-VI models stay byte-identical: the pass is a
-/// no-op unless a `skolem` op or a derived-set-shaped variable is present.
+/// no-op unless a `skolem` op, a `distinct` producer or a derived-set-shaped
+/// variable is present.
 pub(super) fn strip_value_invention(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
@@ -4030,11 +4031,14 @@ pub(super) fn strip_value_invention(
             }
         }
     }
-    // (b) A variable defined by an equation whose RHS produces a skolem id, or
-    //     a `rank` dense id over an invented set: build-time relational
-    //     outputs, dropped as the other bindings drop them.
+    // (b) A variable defined by an equation whose RHS produces a skolem id, a
+    //     `rank` dense id over an invented set, or is a `distinct` producer
+    //     (whatever its key): build-time relational outputs, dropped as the
+    //     other bindings drop them.
     for eq in &model.equations {
-        if (vi.skolem && expr_contains_skolem(&eq.rhs))
+        let distinct = matches!(&eq.rhs, Expr::Operator(n) if n.distinct == Some(true));
+        if distinct
+            || (vi.skolem && expr_contains_skolem(&eq.rhs))
             || (any_derived && ranks_a_derived_set(&eq.rhs, index_sets))
         {
             if let Some(v) = equation_defined_var(&eq.lhs) {
@@ -4499,7 +4503,15 @@ pub fn run_value_invention_with_params<S: std::hash::BuildHasher>(
     }
 
     materialize_value_invention(&model_json, &const_arrays, &params, &HashMap::new()).map_err(|e| {
-        CompileError::build_err(format!("value-invention materialize failed: {}", e.0))
+        let code = crate::diagnostic::codes::VALUE_INVENTION_KEY_OUT_OF_RANGE;
+        // A NaN key or join column already names its column (esm-spec §9.6.6).
+        match e.0.strip_prefix(code).and_then(|r| r.strip_prefix(": ")) {
+            Some(reason) => CompileError::ValueInventionRefused {
+                code,
+                reason: reason.to_string(),
+            },
+            None => CompileError::build_err(format!("value-invention materialize failed: {}", e.0)),
+        }
     })
 }
 
@@ -4667,9 +4679,29 @@ fn value_invention_factors(
         }
     }
 
+    /// The `join.on` column names of every `distinct` producer and arg-witness.
+    fn vi_join_columns(e: &Expr, out: &mut BTreeSet<String>) {
+        let Expr::Operator(node) = e else {
+            return;
+        };
+        if node.distinct == Some(true) || matches!(node.op.as_str(), "argmin" | "argmax") {
+            for clause in node.join.iter().flatten() {
+                out.extend(clause.on.iter().flatten().cloned());
+            }
+        }
+        node.for_each_child(&mut |c| vi_join_columns(c, out));
+    }
+    let mut columns = BTreeSet::new();
+    for eq in &model.equations {
+        vi_join_columns(&eq.rhs, &mut columns);
+    }
+    // The coordinates a skolem map gathers from, and those a plain join column
+    // (a per-component bin column) reads.
     let mut targets = BTreeSet::new();
     for eq in &model.equations {
-        if expr_contains_skolem(&eq.rhs) {
+        if expr_contains_skolem(&eq.rhs)
+            || equation_defined_var(&eq.lhs).is_some_and(|v| columns.contains(&v))
+        {
             index_targets(&eq.rhs, &mut targets);
         }
     }
@@ -4752,6 +4784,16 @@ pub(super) fn unmaterialized_derived_error(
         None => format!("the derived index set produced by '{from_faq}'"),
     };
     match failure {
+        // The producer ran and its key, not the data, is wrong: that code wins
+        // over `derived_index_set_unmaterialized` (esm-spec §9.6.6).
+        Some(reason)
+            if reason.contains(crate::diagnostic::codes::VALUE_INVENTION_KEY_OUT_OF_RANGE) =>
+        {
+            CompileError::ValueInventionRefused {
+                code: crate::diagnostic::codes::VALUE_INVENTION_KEY_OUT_OF_RANGE,
+                reason: format!("{subject}: {reason}"),
+            }
+        }
         Some(reason)
             if reason.contains(crate::diagnostic::codes::RELATIONAL_NODE_IN_CONTINUOUS) =>
         {
