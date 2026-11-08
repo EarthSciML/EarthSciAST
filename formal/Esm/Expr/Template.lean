@@ -68,6 +68,9 @@ def subst (σ : Bindings) : Ast → Ast
   | .faq out red rs body args =>
     .faq (out.map (fieldSub σ)) (fieldSub σ red) (substRanges σ rs) (subst σ body)
       (substList σ args)
+  | .faqWhere out red rs p body args =>
+    .faqWhere (out.map (fieldSub σ)) (fieldSub σ red) (substRanges σ rs) (subst σ p)
+      (subst σ body) (substList σ args)
   | .apply n bs => .apply n (substBinds σ bs)
 
 def substList (σ : Bindings) : List Ast → List Ast
@@ -77,6 +80,7 @@ def substList (σ : Bindings) : List Ast → List Ast
 def substRanges (σ : Bindings) : Ranges → Ranges
   | .nil => .nil
   | .cons k t rs => .cons k (substList σ t) (substRanges σ rs)
+  | .fromSet k set rs => .fromSet k (fieldSub σ set) (substRanges σ rs)
 
 def substBinds (σ : Bindings) : Binds → Binds
   | .nil => .nil
@@ -119,6 +123,9 @@ def walkRefs (f : String → Binds → Except ExpandError Ast) : Ast → Except 
   | .node op args => do return .node op (← walkRefsList f args)
   | .faq out red rs body args => do
     return .faq out red (← walkRefsRanges f rs) (← walkRefs f body) (← walkRefsList f args)
+  | .faqWhere out red rs p body args => do
+    return .faqWhere out red (← walkRefsRanges f rs) (← walkRefs f p) (← walkRefs f body)
+      (← walkRefsList f args)
   | .apply n bs => do f n (← walkRefsBinds f bs)
 
 def walkRefsList (f : String → Binds → Except ExpandError Ast) :
@@ -130,6 +137,7 @@ def walkRefsRanges (f : String → Binds → Except ExpandError Ast) :
     Ranges → Except ExpandError Ranges
   | .nil => .ok .nil
   | .cons k t rs => do return .cons k (← walkRefsList f t) (← walkRefsRanges f rs)
+  | .fromSet k set rs => do return .fromSet k set (← walkRefsRanges f rs)
 
 def walkRefsBinds (f : String → Binds → Except ExpandError Ast) :
     Binds → Except ExpandError Binds

@@ -783,8 +783,8 @@ theorem planar_template_pad_A {MA MA' MB : List (List (List B))} {ca na cb nb p 
     (hSA : Shape MA ca na) (hSA' : Shape MA' ca (na + 1)) (hSB : Shape MB cb nb) (ha : 1 ≤ na)
     (hb : 1 ≤ nb) (han : na + 1 < 2 ^ 53) (hbn : nb < 2 ^ 53) (hP : PadAt MA MA' ca na p)
     (hFA : AllF MA ca na) (hFA' : AllF MA' ca (na + 1)) (hFB : AllF MB cb nb) :
-    evalApply Esm.Lib.Geometry.overlap_area_planar (bindP (na + 1) nb) (envP MA' ca MB cb) =
-      evalApply Esm.Lib.Geometry.overlap_area_planar (bindP na nb) (envP MA ca MB cb) := by
+    evalApplyIn Esm.Lib.Geometry.lib 32 Esm.Lib.Geometry.overlap_area_planar (bindP (na + 1) nb) (envP MA' ca MB cb) =
+      evalApplyIn Esm.Lib.Geometry.lib 32 Esm.Lib.Geometry.overlap_area_planar (bindP na nb) (envP MA ca MB cb) := by
   rw [planar_template_eq hSA' hSB (by omega) hb han hbn,
     planar_template_eq hSA hSB ha hb (by omega) hbn, planar_pad_A ha hb hP hFA hFA' hFB]
 
@@ -793,8 +793,8 @@ theorem planar_template_pad_B {MA MB MB' : List (List (List B))} {ca na cb nb p 
     (hSA : Shape MA ca na) (hSB : Shape MB cb nb) (hSB' : Shape MB' cb (nb + 1)) (ha : 1 ≤ na)
     (hb : 1 ≤ nb) (han : na < 2 ^ 53) (hbn : nb + 1 < 2 ^ 53) (hP : PadAt MB MB' cb nb p)
     (hFA : AllF MA ca na) (hFB : AllF MB cb nb) (hFB' : AllF MB' cb (nb + 1)) :
-    evalApply Esm.Lib.Geometry.overlap_area_planar (bindP na (nb + 1)) (envP MA ca MB' cb) =
-      evalApply Esm.Lib.Geometry.overlap_area_planar (bindP na nb) (envP MA ca MB cb) := by
+    evalApplyIn Esm.Lib.Geometry.lib 32 Esm.Lib.Geometry.overlap_area_planar (bindP na (nb + 1)) (envP MA ca MB' cb) =
+      evalApplyIn Esm.Lib.Geometry.lib 32 Esm.Lib.Geometry.overlap_area_planar (bindP na nb) (envP MA ca MB cb) := by
   rw [planar_template_eq hSA hSB' ha (by omega) han hbn,
     planar_template_eq hSA hSB ha hb han (by omega), planar_pad_B ha hb hP hFA hFB hFB']
 

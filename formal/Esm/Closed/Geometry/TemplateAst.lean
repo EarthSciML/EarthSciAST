@@ -151,7 +151,7 @@ def bindP (na nb : ℕ) : Bindings :=
    ("ring_b", RB), ("cell_b", CB), ("nv_b", .num (nb : ℤ) 0)]
 
 theorem expand_planar (na nb : ℕ) :
-    expand Esm.Lib.Geometry.overlap_area_planar (bindP na nb) =
+    expandIn Esm.Lib.Geometry.lib 32 Esm.Lib.Geometry.overlap_area_planar (bindP na nb) =
       .ok (planarA (.num (na : ℤ) 0) (.num (nb : ℤ) 0)) := rfl
 
 /-! ## The reference: the clip-area algorithm on two vertex lists -/
@@ -377,7 +377,7 @@ theorem ev_ix3 {R C i : Ast} {M : List (List (List α))} {c j n : ℕ} (dz : ℤ
   rw [List.getD_eq_getElem _ _ (show j - 1 < M[c - 1].length by omega)] at hv
   simp only [EV, ixA3, eval, op_index, evalList, hR, hC, hi, bind, Except.bind, pure,
     Except.pure, hdl]
-  simp [applyStrict, asNum, asInt, toInt_nat, indexVal, crd, hc', hj', hd', c1, c2, hj1,
+  simp [hasInf, applyStrict, asNum, asInt, toInt_nat, indexVal, crd, hc', hj', hd', c1, c2, hj1,
     hd1, bind, Except.bind, pure, Except.pure,
     List.getElem?_eq_getElem (show c - 1 < M.length by omega),
     List.getElem?_eq_getElem (show j - 1 < M[c - 1].length by omega),
@@ -573,7 +573,7 @@ in the named cells, `overlap_area_planar` applied and evaluated is
 this is bit-for-bit. -/
 theorem planar_template_eq (hSA : Shape MA ca na) (hSB : Shape MB cb nb) (ha1 : 1 ≤ na)
     (hb1 : 1 ≤ nb) (han : na < 2 ^ 53) (hbn : nb < 2 ^ 53) :
-    evalApply Esm.Lib.Geometry.overlap_area_planar (bindP na nb)
+    evalApplyIn Esm.Lib.Geometry.lib 32 Esm.Lib.Geometry.overlap_area_planar (bindP na nb)
         [("RA", .arr3 MA), ("CA", .num (fin (ca : ℝ))), ("RB", .arr3 MB),
           ("CB", .num (fin (cb : ℝ)))] =
       .ok (.num (planarRef MA ca na MB cb nb)) := by
@@ -581,7 +581,7 @@ theorem planar_template_eq (hSA : Shape MA ca na) (hSB : Shape MB cb nb) (ha1 : 
     ("CB", .num (fin (cb : ℝ)))]
   have hG0 : Good MA ca MB cb E0 := ⟨rfl, rfl, rfl, rfl⟩
   suffices h : EV E0 (planarA (.num (na : ℤ) 0) (.num (nb : ℤ) 0)) (planarRef MA ca na MB cb nb) by
-    unfold evalApply; rw [expand_planar]; simp only []; rw [h]
+    unfold evalApplyIn; rw [expand_planar]; simp only []; rw [h]
   obtain ⟨ma, rfl⟩ : ∃ m, na = m + 1 := ⟨na - 1, by omega⟩
   obtain ⟨mb, rfl⟩ : ∃ m, nb = m + 1 := ⟨nb - 1, by omega⟩
   have hfA : ∀ env, Good MA ca MB cb env →

@@ -33,11 +33,12 @@ The evaluator covers exactly the slice the `lib/interp.esm` templates use:
 * `faq` with `output_idx: []`, `reduce` one of `+`, `*`, `min`, `max`, and one
   dense `ranges` entry `[start, stop]`: the fold `0 + t_start + … + t_stop`
   seeded at `+0.0` (`1` for `*`), in increasing index order (§4.3.1). A `min` /
-  `max` fold starts from its first term: its identity `±∞` is not a value of
-  the model's scalar types, so a `min` / `max` reduction over an empty range is
-  `EvalError.unsupported` (IEEE `minimum(+∞, x) = x`, so a non-empty fold is
-  unchanged). A `faq` nested in another's body is evaluated afresh at each
-  outer index.
+  `max` fold starts from its first term (IEEE `minimum(+∞, x) = x`, so this is
+  the fold from the identity); over no term it is the identity `±∞`, the value
+  `Val.inf`, which the scalar types do not have: only `min` and `max` consume
+  it, and every other op refuses it. The same `faq` with a `filter` (reduce `+`,
+  `min` or `max`) folds only the terms at whose index the filter holds. A `faq`
+  nested in another's body is evaluated afresh at each outer index.
 
 Everything else — another op, a `faq` with output indices, another reduction,
 a stepped or `from` range, several range symbols — evaluates to
@@ -150,6 +151,10 @@ inductive Ast where
   /-- `faq`: `output_idx`, `reduce`, `ranges`, `expr`, `args`. -/
   | faq (outputIdx : List String) (reduce : String) (ranges : Ranges) (expr : Ast)
       (args : List Ast)
+  /-- `faq` with a `filter`: `output_idx`, `reduce`, `ranges`, `filter`, `expr`,
+  `args`. -/
+  | faqWhere (outputIdx : List String) (reduce : String) (ranges : Ranges) (filter : Ast)
+      (expr : Ast) (args : List Ast)
   /-- `apply_expression_template`: the template `name` with its `bindings`
   (§9.6.2). It denotes its expansion (§9.6.4 rule 2); `eval` refuses it, and
   `Esm.Expr.expandRefs` replaces it by that expansion. -/
@@ -160,6 +165,9 @@ inductive Ast where
 inductive Ranges where
   | nil
   | cons (sym : String) (tuple : List Ast) (rest : Ranges)
+  /-- A range over a whole index set, `{"from": set}`. The model has no index
+  sets, so a `faq` with one is refused; the name is a substitution site. -/
+  | fromSet (sym : String) (set : String) (rest : Ranges)
 
 /-- An `apply_expression_template` node's `bindings` object, in key order. -/
 inductive Binds where
@@ -176,6 +184,10 @@ inductive Val (α : Type) where
   | arr1 (v : List α)
   | arr2 (v : List (List α))
   | arr3 (v : List (List (List α)))
+  /-- `+∞` (`neg = false`) or `-∞`: only the value of a `min` / `max`
+  reduction over no term (its identity, §4.3.1). `min` and `max` consume it;
+  every other op refuses it, as the scalar types have no infinities. -/
+  | inf (neg : Bool)
 
 inductive EvalError where
   /-- Outside the modelled slice: an explicit refusal, not a value. -/
@@ -369,6 +381,32 @@ def applyStrict : StrictOp → List (Val α) → Except EvalError α
   | .atan2, [a, b] => do return Elem.atan2 (← asNum a) (← asNum b)
   | _, _ => .error (.typeError "operand count")
 
+/-- Some operand is an infinity (the value of an empty `min` / `max`). -/
+def hasInf : List (Val α) → Bool
+  | [] => false
+  | .inf _ :: _ => true
+  | _ :: vs => hasInf vs
+
+/-- `min` / `max` over operands some of which are infinities: `+∞` is the
+identity of `min` and absorbs `max` unless an operand is NaN (IEEE 754-2019
+`minimum` / `maximum`), and `-∞` the reverse. -/
+def infMinMax : StrictOp → List (Val α) → Except EvalError (Val α)
+  | o, vs => do
+    let isMin := o == .min
+    unless o == .min || o == .max do throw (.typeError "an infinity outside min / max")
+    let nums ← vs.filterMapM (fun v => match v with
+      | .num x => pure (some x)
+      | .inf _ => pure none
+      | _ => throw (.typeError "expected a scalar"))
+    -- the absorbing infinity: `-∞` for `min`, `+∞` for `max`
+    if vs.any (fun v => match v with | .inf neg => neg == isMin | _ => false) then
+      match nums.find? isNaN with
+      | some x => return .num x
+      | none => return .inf isMin
+    match nums with
+    | [] => return .inf (!isMin)
+    | u :: us => return .num (us.foldl (if isMin then fmin else fmax) u)
+
 /-- One step of a `faq` `+` fold. -/
 def faqStep (acc : α) (v : Val α) : Except EvalError α := do
   return add acc (← asNum v)
@@ -388,7 +426,7 @@ def eval : Ast → Env α → Except EvalError (Val α)
     | .ifelse => evalIfelse args env
     | .strict o => do
       let vs ← evalList args env
-      return .num (← applyStrict o vs)
+      if hasInf vs then infMinMax o vs else return .num (← applyStrict o vs)
     | .other s => .error (.unsupported s)
   | .faq [] "+" (.cons k [s, t] .nil) body _, env => do
     -- §4.3.1: a `+` reduction over one dense range, seeded at `+0.0`, in index order
@@ -408,7 +446,7 @@ def eval : Ast → Env α → Except EvalError (Val α)
     let a ← asInt (← asNum (← eval s env))
     let b ← asInt (← asNum (← eval t env))
     match indices a b with
-    | [] => .error (.unsupported "min reduction over an empty range (its identity +Inf)")
+    | [] => .ok (.inf false)
     | j :: js => do
       let v ← asNum (← eval body ((k, .num (Lits.ofDec j 0)) :: env))
       let r ← js.foldlM (fun acc i => do
@@ -418,12 +456,30 @@ def eval : Ast → Env α → Except EvalError (Val α)
     let a ← asInt (← asNum (← eval s env))
     let b ← asInt (← asNum (← eval t env))
     match indices a b with
-    | [] => .error (.unsupported "max reduction over an empty range (its identity -Inf)")
+    | [] => .ok (.inf true)
     | j :: js => do
       let v ← asNum (← eval body ((k, .num (Lits.ofDec j 0)) :: env))
       let r ← js.foldlM (fun acc i => do
         return fmax acc (← asNum (← eval body ((k, .num (Lits.ofDec i 0)) :: env)))) v
       return .num r
+  | .faqWhere [] red (.cons k [s, t] .nil) p body _, env => do
+    -- a filtered reduction: only the indices at which `p` holds contribute
+    let a ← asInt (← asNum (← eval s env))
+    let b ← asInt (← asNum (← eval t env))
+    let r ← (indices a b).foldlM (fun (acc : Option α) j => do
+      let e := (k, Val.num (Lits.ofDec j 0)) :: env
+      if truthy (← asNum (← eval p e)) then
+        let v ← asNum (← eval body e)
+        return some (match acc with
+          | none => if red = "+" then add zero v else v
+          | some x => if red = "+" then add x v else if red = "min" then fmin x v else fmax x v)
+      else return acc) none
+    if red = "+" then return .num (r.getD zero)
+    else if red = "min" then return (match r with | some x => .num x | none => .inf false)
+    else if red = "max" then return (match r with | some x => .num x | none => .inf true)
+    else .error (.unsupported s!"filtered faq with reduce {red}")
+  | .faqWhere _ _ _ _ _ _, _ =>
+    .error (.unsupported "filtered faq outside output_idx [], one dense [start, stop] range")
   | .apply n _, _ => .error (.unsupported s!"apply_expression_template {n}: not expanded")
   | .faq _ _ _ _ _, _ =>
     .error (.unsupported "faq outside output_idx [], reduce + * min max, one dense [start, stop] range")

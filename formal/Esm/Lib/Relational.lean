@@ -67,10 +67,238 @@ def argmax : Template where
           (Ast.num (1) 0)])])
       [])
 
+/-- `pair_key` (params `a`, `b`, `lo_a`, `lo_b`, `n_a`, `n_b`). -/
+def pair_key : Template where
+  params := ["a", "b", "lo_a", "lo_b", "n_a", "n_b"]
+  body :=
+    (Ast.node "ifelse" [
+      (Ast.node "and" [
+        (Ast.node "and" [
+          (Ast.node "and" [
+            (Ast.node "and" [
+              (Ast.node "and" [
+                (Ast.node ">=" [
+                  (Ast.var "a"),
+                  (Ast.var "lo_a")]),
+                (Ast.node "<" [
+                  (Ast.var "a"),
+                  (Ast.node "+" [
+                    (Ast.var "lo_a"),
+                    (Ast.var "n_a")])])]),
+              (Ast.node ">=" [
+                (Ast.var "b"),
+                (Ast.var "lo_b")])]),
+            (Ast.node "<" [
+              (Ast.var "b"),
+              (Ast.node "+" [
+                (Ast.var "lo_b"),
+                (Ast.var "n_b")])])]),
+          (Ast.node "==" [
+            (Ast.var "a"),
+            (Ast.node "floor" [
+              (Ast.var "a")])])]),
+        (Ast.node "==" [
+          (Ast.var "b"),
+          (Ast.node "floor" [
+            (Ast.var "b")])])]),
+      (Ast.node "+" [
+        (Ast.node "*" [
+          (Ast.node "-" [
+            (Ast.var "a"),
+            (Ast.var "lo_a")]),
+          (Ast.var "n_b")]),
+        (Ast.node "-" [
+          (Ast.var "b"),
+          (Ast.var "lo_b")])]),
+      (Ast.node "/" [
+        (Ast.num (0) 0),
+        (Ast.num (0) 0)])])
+
+/-- `edge_key` (params `u`, `v`, `lo`, `n`). -/
+def edge_key : Template where
+  params := ["u", "v", "lo", "n"]
+  body :=
+    (Ast.node "ifelse" [
+      (Ast.node "and" [
+        (Ast.node "and" [
+          (Ast.node "and" [
+            (Ast.node "and" [
+              (Ast.node "and" [
+                (Ast.node ">=" [
+                  (Ast.node "min" [
+                    (Ast.var "u"),
+                    (Ast.var "v")]),
+                  (Ast.var "lo")]),
+                (Ast.node "<" [
+                  (Ast.node "min" [
+                    (Ast.var "u"),
+                    (Ast.var "v")]),
+                  (Ast.node "+" [
+                    (Ast.var "lo"),
+                    (Ast.var "n")])])]),
+              (Ast.node ">=" [
+                (Ast.node "max" [
+                  (Ast.var "u"),
+                  (Ast.var "v")]),
+                (Ast.var "lo")])]),
+            (Ast.node "<" [
+              (Ast.node "max" [
+                (Ast.var "u"),
+                (Ast.var "v")]),
+              (Ast.node "+" [
+                (Ast.var "lo"),
+                (Ast.var "n")])])]),
+          (Ast.node "==" [
+            (Ast.node "min" [
+              (Ast.var "u"),
+              (Ast.var "v")]),
+            (Ast.node "floor" [
+              (Ast.node "min" [
+                (Ast.var "u"),
+                (Ast.var "v")])])])]),
+        (Ast.node "==" [
+          (Ast.node "max" [
+            (Ast.var "u"),
+            (Ast.var "v")]),
+          (Ast.node "floor" [
+            (Ast.node "max" [
+              (Ast.var "u"),
+              (Ast.var "v")])])])]),
+      (Ast.node "+" [
+        (Ast.node "*" [
+          (Ast.node "-" [
+            (Ast.node "min" [
+              (Ast.var "u"),
+              (Ast.var "v")]),
+            (Ast.var "lo")]),
+          (Ast.var "n")]),
+        (Ast.node "-" [
+          (Ast.node "max" [
+            (Ast.var "u"),
+            (Ast.var "v")]),
+          (Ast.var "lo")])]),
+      (Ast.node "/" [
+        (Ast.num (0) 0),
+        (Ast.num (0) 0)])])
+
+/-- `rank_of` (params `x`, `members`, `n`). -/
+def rank_of : Template where
+  params := ["x", "members", "n"]
+  body :=
+    (Ast.node "+" [
+      (Ast.num (1) 0),
+      (Ast.faq [] "+" (Ranges.cons "k_rank_of_1" [(Ast.num (1) 0), (Ast.var "n")] Ranges.nil)
+        (Ast.node "ifelse" [
+          (Ast.node ">=" [
+            (Ast.node "index" [
+              (Ast.var "members"),
+              (Ast.var "k_rank_of_1")]),
+            (Ast.var "x")]),
+          (Ast.num (0) 0),
+          (Ast.num (1) 0)])
+        [(Ast.var "members")])])
+
+/-- `rank_of_set` (params `x`, `members`, `S`). -/
+def rank_of_set : Template where
+  params := ["x", "members", "S"]
+  body :=
+    (Ast.node "+" [
+      (Ast.num (1) 0),
+      (Ast.faq [] "+" (Ranges.fromSet "k_rank_of_set_1" "S" Ranges.nil)
+        (Ast.node "ifelse" [
+          (Ast.node ">=" [
+            (Ast.node "index" [
+              (Ast.var "members"),
+              (Ast.var "k_rank_of_set_1")]),
+            (Ast.var "x")]),
+          (Ast.num (0) 0),
+          (Ast.num (1) 0)])
+        [(Ast.var "members")])])
+
+/-- `argmin_where` (params `f`, `p`, `n`). -/
+def argmin_where : Template where
+  params := ["f", "p", "n"]
+  body :=
+    (Ast.node "min" [
+      (Ast.faqWhere [] "min" (Ranges.cons "k_argmin_where_1" [(Ast.num (1) 0), (Ast.var "n")] Ranges.nil)
+        (Ast.var "p")
+        (Ast.node "ifelse" [
+          (Ast.node "or" [
+            (Ast.node "==" [
+              (Ast.var "f"),
+              (Ast.faqWhere [] "min" (Ranges.cons "k_argmin_where_1" [(Ast.num (1) 0), (Ast.var "n")] Ranges.nil)
+                (Ast.var "p")
+                (Ast.var "f")
+                [])]),
+            (Ast.node "and" [
+              (Ast.node "!=" [
+                (Ast.var "f"),
+                (Ast.var "f")]),
+              (Ast.node "!=" [
+                (Ast.faqWhere [] "min" (Ranges.cons "k_argmin_where_1" [(Ast.num (1) 0), (Ast.var "n")] Ranges.nil)
+                  (Ast.var "p")
+                  (Ast.var "f")
+                  []),
+                (Ast.faqWhere [] "min" (Ranges.cons "k_argmin_where_1" [(Ast.num (1) 0), (Ast.var "n")] Ranges.nil)
+                  (Ast.var "p")
+                  (Ast.var "f")
+                  [])])])]),
+          (Ast.var "k_argmin_where_1"),
+          (Ast.node "+" [
+            (Ast.var "n"),
+            (Ast.num (1) 0)])])
+        []),
+      (Ast.node "+" [
+        (Ast.var "n"),
+        (Ast.num (1) 0)])])
+
+/-- `argmax_where` (params `f`, `p`, `n`). -/
+def argmax_where : Template where
+  params := ["f", "p", "n"]
+  body :=
+    (Ast.node "min" [
+      (Ast.faqWhere [] "min" (Ranges.cons "k_argmax_where_1" [(Ast.num (1) 0), (Ast.var "n")] Ranges.nil)
+        (Ast.var "p")
+        (Ast.node "ifelse" [
+          (Ast.node "or" [
+            (Ast.node "==" [
+              (Ast.var "f"),
+              (Ast.faqWhere [] "max" (Ranges.cons "k_argmax_where_1" [(Ast.num (1) 0), (Ast.var "n")] Ranges.nil)
+                (Ast.var "p")
+                (Ast.var "f")
+                [])]),
+            (Ast.node "and" [
+              (Ast.node "!=" [
+                (Ast.var "f"),
+                (Ast.var "f")]),
+              (Ast.node "!=" [
+                (Ast.faqWhere [] "max" (Ranges.cons "k_argmax_where_1" [(Ast.num (1) 0), (Ast.var "n")] Ranges.nil)
+                  (Ast.var "p")
+                  (Ast.var "f")
+                  []),
+                (Ast.faqWhere [] "max" (Ranges.cons "k_argmax_where_1" [(Ast.num (1) 0), (Ast.var "n")] Ranges.nil)
+                  (Ast.var "p")
+                  (Ast.var "f")
+                  [])])])]),
+          (Ast.var "k_argmax_where_1"),
+          (Ast.node "+" [
+            (Ast.var "n"),
+            (Ast.num (1) 0)])])
+        []),
+      (Ast.node "+" [
+        (Ast.var "n"),
+        (Ast.num (1) 0)])])
+
 /-- Every template of the file, by name: the scope a reference in a body
 resolves in (esm-spec §9.7.3). -/
 def lib : List (String × Template) :=
   [("argmin", argmin),
-   ("argmax", argmax)]
+   ("argmax", argmax),
+   ("pair_key", pair_key),
+   ("edge_key", edge_key),
+   ("rank_of", rank_of),
+   ("rank_of_set", rank_of_set),
+   ("argmin_where", argmin_where),
+   ("argmax_where", argmax_where)]
 
 end Esm.Lib.Relational

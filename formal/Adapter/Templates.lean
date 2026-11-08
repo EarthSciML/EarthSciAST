@@ -53,7 +53,7 @@ partial def astOf (j : Json) : Except String Ast := do
     let allowed : List String :=
       if op == "const" then ["op", "args", "value", "units"]
       else if op == "apply_expression_template" then ["op", "args", "name", "bindings"]
-      else if op == "faq" then ["op", "args", "output_idx", "reduce", "ranges", "expr"]
+      else if op == "faq" then ["op", "args", "output_idx", "reduce", "ranges", "expr", "filter"]
       else ["op", "args"]
     for f in fields do
       unless allowed.contains f do throw s!"{op} node field {f} is outside the modelled slice"
@@ -75,12 +75,15 @@ partial def astOf (j : Json) : Except String Ast := do
       let ranges ← match j.getObjVal? "ranges" with
         | .ok (.obj rs) =>
           rs.toArray.toList.foldrM (fun (k, t) acc => do
-            let tup ← match t with
-              | .arr a => a.toList.mapM astOf
-              | _ => throw s!"faq range {k}: only a [start, stop] tuple is modelled"
-            return Ranges.cons k tup acc) Ranges.nil
+            match t with
+              | .arr a => return Ranges.cons k (← a.toList.mapM astOf) acc
+              | _ => match t.getObjValAs? String "from" with
+                | .ok set => return Ranges.fromSet k set acc
+                | .error _ => throw s!"faq range {k}: neither a tuple nor a from-set") Ranges.nil
         | _ => pure Ranges.nil
-      return .faq out red ranges (← astOf (← j.getObjVal? "expr")) args
+      match j.getObjVal? "filter" with
+      | .ok p => return .faqWhere out red ranges (← astOf p) (← astOf (← j.getObjVal? "expr")) args
+      | .error _ => return .faq out red ranges (← astOf (← j.getObjVal? "expr")) args
     else
       return .node op args
   | _ => throw s!"not an Expression: {j.compress}"
@@ -225,6 +228,9 @@ def main (args : List String) : IO UInt32 := do
           | .ok (.num x) =>
             out := out.push ((Adapter.Interp.floatJson x).mergeObj (Json.mkObj [("name", lhs)]))
             env := (lhs, .num x) :: env
+          | .ok (.inf neg) =>
+            let x : Float := if neg then -(1.0 / 0.0) else 1.0 / 0.0
+            out := out.push ((Adapter.Interp.floatJson x).mergeObj (Json.mkObj [("name", lhs)]))
           | .ok _ => out := out.push (Json.mkObj [("name", lhs), ("error", "not a scalar")])
           | .error err =>
             out := out.push (Json.mkObj [("name", lhs), ("error", errorString err)])

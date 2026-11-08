@@ -16,7 +16,7 @@ regenerated fails the check, and a regenerated file the proofs no longer fit
 fails the Lean build.
 
 A node outside what `Esm.Expr.Ast` carries (an op field other than `op`,
-`args`, a `faq`'s `output_idx`/`reduce`/`ranges`/`expr`, an
+`args`, a `faq`'s `output_idx`/`reduce`/`ranges`/`filter`/`expr`, an
 `apply_expression_template`'s `name`/`bindings`, or a `const`'s `value` and
 `units`; `units` is dropped, as evaluation does not read it) is an error here rather than a silent drop, as is a missing field
 the transcription needs and a literal `-0.0`: `Ast.num` is an integer mantissa
@@ -99,7 +99,7 @@ def ast(e, indent, path):
             raise Unsupported(f"{path}: const node has no value")
         return pad + f"(Ast.const {const_value(e['value'], path + '.value')})"
     if op == "faq":
-        extra = set(e) - {"op", "args", "output_idx", "reduce", "ranges", "expr"}
+        extra = set(e) - {"op", "args", "output_idx", "reduce", "ranges", "expr", "filter"}
         if extra:
             raise Unsupported(f"{path}: faq fields {sorted(extra)}")
         if "expr" not in e:
@@ -109,14 +109,22 @@ def ast(e, indent, path):
             raise Unsupported(f"{path}: faq output_idx entry that is not a symbol")
         ranges = "Ranges.nil"
         for k, r in reversed(list(e.get("ranges", {}).items())):
+            if isinstance(r, dict) and set(r) == {"from"} and isinstance(r["from"], str):
+                ranges = f"(Ranges.fromSet {lean_str(k)} {lean_str(r['from'])} {ranges})"
+                continue
             if not isinstance(r, list):
-                raise Unsupported(f"{path}: faq range {k!r} is not a tuple")
+                raise Unsupported(f"{path}: faq range {k!r} is neither a tuple nor a from-set")
             ranges = (f"(Ranges.cons {lean_str(k)} ["
                       + ", ".join(ast(x, 0, f"{path}.ranges.{k}[{i}]") for i, x in enumerate(r))
                       + f"] {ranges})")
+        head = "(Ast.faqWhere [" if "filter" in e else "(Ast.faq ["
         lines = [
-            pad + "(Ast.faq [" + ", ".join(lean_str(o) for o in out) + "] "
+            pad + head + ", ".join(lean_str(o) for o in out) + "] "
             + lean_str(e.get("reduce", "+")) + " " + ranges,
+        ]
+        if "filter" in e:
+            lines.append(ast(e["filter"], indent + 1, path + ".filter"))
+        lines += [
             ast(e["expr"], indent + 1, path + ".expr"),
             pad + "  [" + ", ".join(ast(a, 0, f"{path}.args[{i}]")
                                     for i, a in enumerate(e.get("args", []))) + "])",

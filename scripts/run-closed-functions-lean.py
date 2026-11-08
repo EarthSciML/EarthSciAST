@@ -58,6 +58,10 @@ TEMPLATE_TIERS = [
         {
             "nearest_generator_template_ode": "asserts an ODE trajectory; esm-lean evaluates "
             "expressions and does not simulate",
+            "edge_enumeration_ode_template": "asserts an ODE trajectory over invented index "
+            "sets; esm-lean does not simulate or run value invention",
+            "bin_skolem_count_ode_template": "asserts an ODE trajectory over invented index "
+            "sets; esm-lean does not simulate or run value invention",
         },
     ),
     (CONFORMANCE / "geometry_templates" / "manifest.json", {}),
