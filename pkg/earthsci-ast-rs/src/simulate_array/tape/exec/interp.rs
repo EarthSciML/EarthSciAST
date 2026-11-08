@@ -10,8 +10,9 @@ use super::fused::{dispatch_bin_kernel, dispatch_un_kernel, exec_fused};
 #[cfg(not(target_arch = "wasm32"))]
 use super::kernels::scan_leading_cols;
 use super::kernels::{
-    copy_strided, data_gather, data_gather_sub, ew_select, ew1, ew2, exec_gather, fill_strided,
-    index_gather, reduce_axis, reduce_rows, scan_axis, seg_reduce, table_gather,
+    copy_strided, count_bisects, count_many, count_one, data_gather, data_gather_sub, ew_select,
+    ew1, ew2, exec_gather, fill_strided, index_gather, reduce_axis, reduce_rows, scan_axis,
+    seg_reduce, table_gather,
 };
 use super::resolve::{Rv, SrcView, resolve_rv, resolve_scalar, resolve_src, rm_strides, src_base};
 use super::*;
@@ -922,9 +923,8 @@ impl ScalarOp {
                 let win = unsafe {
                     std::slice::from_raw_parts(base_ptr(axis).add(*lo as usize), *n as usize)
                 };
-                let at = |j: usize| win[j];
-                let sorted = *sorted || non_decreasing(win.len(), at);
-                put(*out, count_rel(*rel, win.len(), at, sorted, get(x)));
+                let bisect = count_bisects(win, *sorted);
+                put(*out, count_one(*rel, win, bisect, get(x)));
             }
             ScalarOp::Jmp { .. } => return false,
             ScalarOp::Lane(i) => unsafe { slanes[*i as usize].run(env, slab_ptr, dy) },
@@ -1370,24 +1370,16 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             // Rank 1, row-major: the window is contiguous. `out` never shares
             // storage with the axis (the slab coloring keeps them apart).
             let win = unsafe { std::slice::from_raw_parts(aptr.add(*lo as usize), *n as usize) };
-            let at = |j: usize| win[j];
-            // A window the lowering could not see is checked here, once per
-            // execution: O(n) against the O(n) per element it can save.
-            let sorted = *sorted || non_decreasing(win.len(), at);
-            let rel = *rel;
             let desc = &prog.slots[*out as usize];
             let off = slot_off[*out as usize];
             if desc.scalar {
                 let xv = resolve_scalar(x, env, slab_ptr, slot_off);
-                unsafe { *slab_ptr.add(off) = count_rel(rel, win.len(), at, sorted, xv) };
+                let bisect = count_bisects(win, *sorted);
+                unsafe { *slab_ptr.add(off) = count_one(*rel, win, bisect, xv) };
             } else {
                 let xv = resolve_rv(x, &desc.shape, env, slab_ptr, slot_off);
                 let dst = unsafe { slab_ptr.add(off) };
-                unsafe {
-                    ew1(dst, &desc.shape, &xv, |q| {
-                        count_rel(rel, win.len(), at, sorted, q)
-                    })
-                };
+                unsafe { count_many(dst, &desc.shape, &xv, *rel, win, *sorted) };
             }
         }
         Instr::Calendar { func, a, out } => {

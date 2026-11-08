@@ -646,3 +646,71 @@ fn a_filtered_out_const_gather_never_faults() {
         );
     }
 }
+
+/// Two and three data subscripts into a rank-2 / rank-3 source over a
+/// rank-1 box (the `table[i[k], j[k]]` shape the bilinear template reads):
+/// whole-number subscripts inside the source, fractional ones rounded half
+/// away from zero, and ones past either end under each boundary policy, the
+/// fail-closed fault, and a state's zero ghost.
+#[test]
+fn several_data_subscripts_over_a_rank_1_box() {
+    let n = 8;
+    let u = || idx(json!("u"), &[json!("i")]);
+    // Whole numbers in [-1, 6) and fractions in [-1.4, 5.4).
+    let whole = plus(floor(u()), json!(3));
+    let frac = plus(json!({"op": "*", "args": [json!(1.7), u()]}), json!(2));
+    let c2 = json!([
+        [1.0, 2.0, 3.0],
+        [4.0, 5.0, 6.0],
+        [7.0, 8.0, 9.0],
+        [10.0, 11.0, 12.0]
+    ]);
+    let c3 = json!([
+        [[1.0, 2.0], [3.0, 4.0]],
+        [[5.0, 6.0], [7.0, 8.0]],
+        [[9.0, 10.0], [11.0, 12.0]]
+    ]);
+    let bodies = [
+        idx(json!("C"), &[whole.clone(), frac.clone()]),
+        idx(json!("C"), &[frac.clone(), json!(2)]),
+        idx(json!("D"), &[frac.clone(), whole.clone(), json!(1)]),
+        idx(json!("W"), &[json!("i"), whole.clone()]),
+    ];
+    for policy in [
+        None,
+        Some(BoundaryKind::Clamp),
+        Some(BoundaryKind::Periodic),
+    ] {
+        for body in &bodies {
+            let mut compiled = compile(doc(
+                json!({
+                    "u": {"type": "unknown", "shape": ["i"]},
+                    "W": {"type": "unknown", "shape": ["i", "j"]},
+                    "C": {"type": "unknown", "shape": ["a", "b"]},
+                    "D": {"type": "unknown", "shape": ["a", "b", "c"]}
+                }),
+                vec![
+                    json!({"lhs": "C", "rhs": {"op": "const", "args": [], "value": c2}}),
+                    json!({"lhs": "D", "rhs": {"op": "const", "args": [], "value": c3}}),
+                    d_eq("u", n, body.clone()),
+                    json!({
+                        "lhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                                "expr": {"op": "D", "args": [idx(json!("W"), &[json!("i"), json!("j")])], "wrt": "t"},
+                                "ranges": {"i": [1, n], "j": [1, 4]}},
+                        "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                                "ranges": {"i": [1, n], "j": [1, 4]},
+                                "expr": minus(json!(0), idx(json!("W"), &[json!("i"), json!("j")]))}
+                    }),
+                ],
+            ));
+            if let Some(kind) = policy {
+                compiled.const_scope = std::sync::Arc::new(
+                    ConstArrayScope::default()
+                        .with_boundary("C", vec![kind, kind])
+                        .with_boundary("D", vec![kind, kind, kind]),
+                );
+            }
+            ab(&compiled, &no_params());
+        }
+    }
+}

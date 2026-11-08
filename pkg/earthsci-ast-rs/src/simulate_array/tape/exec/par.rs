@@ -211,7 +211,7 @@ pub(super) fn instr_work(prog: &TapeProgram, ins: &Instr) -> usize {
         Instr::Reduce { src_shape, .. } => src_shape.iter().product(),
         // Per element, a bisection of the window or a pass over it.
         Instr::Count { n, sorted, out, .. } => {
-            let per = if *sorted {
+            let per = if *sorted && *n as usize > super::kernels::COUNT_SCAN_MAX {
                 (usize::BITS - (*n as usize).leading_zeros()) as usize
             } else {
                 *n as usize
