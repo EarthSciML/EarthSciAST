@@ -510,6 +510,14 @@ impl<'a> LBox<'a> {
     }
 }
 
+/// [`TapeBuilder::sub_box_axes`]'s mark of a term that is itself an
+/// operation (not a leaf or a read), above every axis bit.
+const SUB_BOX_OP: u32 = 1 << 31;
+
+/// The fewest distinct operations a term moved to a sub-box carries
+/// ([`TapeBuilder::lower_on_sub_box`]).
+const SUB_BOX_MIN_OPS: usize = 4;
+
 /// The integer bounds of `e` over every cell of `bx`, when its structure
 /// proves them: integer literals, the box's loop symbols (a symbol's bounds
 /// narrowed by `refine`, innermost last), `+`, `-`, `min`, `max`, and an
@@ -719,6 +727,25 @@ struct ScopeFrame {
     /// and its value over a box are different values under the same key. A
     /// box lowered from a whole-body rule opens its own frame above it.
     wholesale: bool,
+    /// The frames of this box's sub-boxes ([`TapeBuilder::lower_on_sub_box`]),
+    /// by sub-box and branch depth, so terms moved to the same sub-box share
+    /// their reads and subterms as they would in the box. A frame opened
+    /// inside a branch is dropped when the branch closes.
+    subs: FxHashMap<(BoxKey, usize), ScopeFrame>,
+}
+
+impl ScopeFrame {
+    /// Forget every value naming a slot at or past `n_slots`, here and in
+    /// the sub-box frames.
+    fn retain_live(&mut self, n_slots: SlotId) {
+        let dead = |lv: &LV| matches!(lv, LV::Scalar(s) | LV::Arr(s) if *s >= n_slots);
+        self.map.retain(|_, lv| !dead(lv));
+        self.journal
+            .retain(|(_, prev)| !prev.as_ref().is_some_and(dead));
+        for f in self.subs.values_mut() {
+            f.retain_live(n_slots);
+        }
+    }
 }
 
 /// What a (taped or declined) observed rule left behind for later readers.
@@ -2020,7 +2047,9 @@ impl<'m> TapeBuilder<'m> {
     /// return its instruction buffer.
     fn pop_branch(&mut self, journal_mark: usize) -> Vec<Tagged> {
         let buf = self.branch_bufs.pop().expect("branch buffer open");
+        let depth = self.branch_bufs.len();
         if let Some(frame) = self.scope_frames.last_mut() {
+            frame.subs.retain(|(_, d), _| *d <= depth);
             while frame.journal.len() > journal_mark {
                 let (key, prev) = frame.journal.pop().expect("journal entry");
                 match prev {
@@ -2240,6 +2269,10 @@ impl<'m> TapeBuilder<'m> {
                 let key = VnKey::Node(Arc::as_ptr(node) as usize);
                 if let Some(hit) = self.vn_get(key, bx) {
                     return Ok(hit);
+                }
+                if let Some(lv) = self.lower_on_sub_box(node, bx)? {
+                    self.vn_put(key, &lv, bx);
+                    return Ok(lv);
                 }
                 let lazy_notes = self.lazy_fault_notes;
                 let lv = self.lower_op(node, bx)?;
@@ -3710,9 +3743,10 @@ impl<'m> TapeBuilder<'m> {
         bx: &LBox,
     ) -> LResult<Option<LV>> {
         if bx.syms.len() < 2
+            || bx.syms.len() > 31
             || bx.shape.len() != bx.syms.len()
+            || bx.tuple != 0
             || self.sweep.is_some()
-            || self.const_arrays.is_const_base(&node.args[0])
         {
             return Ok(None);
         }
@@ -3723,9 +3757,21 @@ impl<'m> TapeBuilder<'m> {
         {
             return Ok(None);
         }
+        // The axes it reads. A read that could fault (a const array) is
+        // still taken when its lowering over the sub-box notes no fault and
+        // emits no gather that checks at run time; see below.
         let mut used = vec![false; bx.syms.len()];
-        if !self.fault_free_reads(&Expr::Operator(Arc::clone(node)), bx, &mut used) {
-            return Ok(None);
+        if self.const_arrays.is_const_base(&node.args[0])
+            || !self.fault_free_reads(&Expr::Operator(Arc::clone(node)), bx, &mut used)
+        {
+            let mut memo = FxHashMap::default();
+            let Some(m) = self.sub_box_axes(&Expr::Operator(Arc::clone(node)), bx, &mut memo)
+            else {
+                return Ok(None);
+            };
+            for (a, u) in used.iter_mut().enumerate() {
+                *u = m & (1 << a) != 0;
+            }
         }
         let keep: Vec<usize> = (0..bx.syms.len()).filter(|&a| used[a]).collect();
         if keep.is_empty() || keep.len() == bx.syms.len() {
@@ -3755,13 +3801,14 @@ impl<'m> TapeBuilder<'m> {
         // gather cannot be lowered at all. Nothing in it can fault, so no
         // fault is dropped with it.
         let txn = self.sub_txn();
-        self.push_scope();
+        let guard = self.sub_box_guard();
+        let fkey = self.enter_sub_frame(&sub);
         let v = self.lower_index(node, &sub);
-        self.pop_scope();
+        self.leave_sub_frame(fkey);
         let v = match v {
-            Ok(v) => v,
-            Err(_) => {
-                self.sub_rollback(txn);
+            Ok(v) if self.sub_box_clean(guard) => v,
+            _ => {
+                self.sub_box_undo(txn, guard);
                 return Ok(None);
             }
         };
@@ -3769,7 +3816,7 @@ impl<'m> TapeBuilder<'m> {
             return Ok(Some(v));
         };
         if vs != sub.shape || vo != sub.lo {
-            self.sub_rollback(txn);
+            self.sub_box_undo(txn, guard);
             return Ok(None);
         }
         // Broadcast: output axis `keep[j]` reads source axis `j`.
@@ -3791,6 +3838,232 @@ impl<'m> TapeBuilder<'m> {
             &bx.shape,
             &bx.lo,
         )))
+    }
+
+    /// An elementwise operation over a box of two or more axes whose value
+    /// depends on only some of them (a term of a nested reduction that does
+    /// not read the inner reduction's index): evaluated once over the sub-box
+    /// of the axes it reads and broadcast along the others. Each cell of the
+    /// sub-box computes what every cell of the full box it stands for would
+    /// have computed, with the same operations in the same order, so the
+    /// broadcast values are the full-box values bit for bit; only the
+    /// repeats along the unread axes are gone.
+    ///
+    /// Applies to arithmetic, comparisons, unary maps and `ifelse` whose
+    /// leaves are literals, the box's loop symbols, scalar names, and
+    /// `index` reads of a named array or literal; anything else, or a term
+    /// that reads every axis or none, takes the full box. A term whose
+    /// lowering over the sub-box notes a fail-closed fault is lowered over
+    /// the full box instead, so every fault keeps its place in the oracle's
+    /// order.
+    fn lower_on_sub_box(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<Option<LV>> {
+        let n = bx.syms.len();
+        if !(2..=31).contains(&n)
+            || bx.shape.len() != n
+            || bx.tuple != 0
+            || self.sweep.is_some()
+            || !matches!(
+                vec_op_code(&node.op),
+                VecOp::Arith(_) | VecOp::Cmp(_) | VecOp::Unary(_) | VecOp::Neg | VecOp::Ifelse
+            )
+        {
+            return Ok(None);
+        }
+        let mut memo: FxHashMap<usize, Option<u32>> = FxHashMap::default();
+        let Some(used) = self.sub_box_axes(&Expr::Operator(Arc::clone(node)), bx, &mut memo) else {
+            return Ok(None);
+        };
+        let used = used & !SUB_BOX_OP;
+        let full = (1u32 << n) - 1;
+        if used == 0 || used == full {
+            return Ok(None);
+        }
+        // The broadcast is a pass over the full box of its own, and a short
+        // term left in the box fuses with its neighbours: only a term of
+        // several operations is worth moving.
+        let ops = memo
+            .values()
+            .filter(|m| m.is_some_and(|m| m & SUB_BOX_OP != 0))
+            .count();
+        if ops < SUB_BOX_MIN_OPS {
+            return Ok(None);
+        }
+        let keep: Vec<usize> = (0..n).filter(|&a| used & (1 << a) != 0).collect();
+        let syms: Vec<String> = keep.iter().map(|&a| bx.syms[a].clone()).collect();
+        let sub = LBox {
+            syms: &syms,
+            lo: keep.iter().map(|&a| bx.lo[a]).collect(),
+            shape: keep.iter().map(|&a| bx.shape[a]).collect(),
+            cnames: bx.cnames,
+            cvals: bx.cvals.clone(),
+            tuple: 0,
+            visit: SmallVec::new(),
+        };
+        // Its own value-numbering scope, as in `lower_index_on_sub_box`: a
+        // node lowered over the sub-box must not answer for the same node
+        // over the full box.
+        let txn = self.sub_txn();
+        let guard = self.sub_box_guard();
+        let fkey = self.enter_sub_frame(&sub);
+        let v = self.lower_op(node, &sub);
+        self.leave_sub_frame(fkey);
+        let v = match v {
+            Ok(v) if self.sub_box_clean(guard) => v,
+            _ => {
+                self.sub_box_undo(txn, guard);
+                return Ok(None);
+            }
+        };
+        let Some((vs, vo)) = self.lv_box(&v) else {
+            return Ok(Some(v));
+        };
+        if vs != sub.shape || vo != sub.lo {
+            self.sub_box_undo(txn, guard);
+            return Ok(None);
+        }
+        let mapped: SmallVec<[bool; 4]> = (0..n).map(|a| used & (1 << a) != 0).collect();
+        let segs: SmallVec<[SmallVec<[(usize, usize, usize); 2]>; 4]> = (0..n)
+            .map(|a| {
+                let mut s = SmallVec::new();
+                s.push((0usize, bx.shape[a], 0usize));
+                s
+            })
+            .collect();
+        let mapped_src: Vec<usize> = (0..keep.len()).collect();
+        Ok(Some(self.emit_gather(
+            &v,
+            SmallVec::new(),
+            &mapped_src,
+            mapped,
+            segs,
+            &bx.shape,
+            &bx.lo,
+        )))
+    }
+
+    /// Open the value-numbering frame of sub-box `sub` of the box whose frame
+    /// is innermost: the one an earlier term moved to `sub` left, at this
+    /// branch depth, or a fresh one. A node lowered over the sub-box never
+    /// answers for the same node over the box, nor the reverse.
+    fn enter_sub_frame(&mut self, sub: &LBox) -> (BoxKey, usize) {
+        let key = (BoxKey::of(sub), self.branch_bufs.len());
+        let frame = self
+            .scope_frames
+            .last_mut()
+            .and_then(|f| f.subs.remove(&key))
+            .unwrap_or_default();
+        self.scope_frames.push(frame);
+        key
+    }
+
+    /// Close the frame [`Self::enter_sub_frame`] opened, keeping it for the
+    /// next term moved to the same sub-box.
+    fn leave_sub_frame(&mut self, key: (BoxKey, usize)) {
+        let frame = self.scope_frames.pop().expect("sub-box frame open");
+        if let Some(parent) = self.scope_frames.last_mut() {
+            parent.subs.insert(key, frame);
+        }
+    }
+
+    /// The fault counters a sub-box lowering must leave as they were:
+    /// noted faults (certain and lazy) and run-time-checked gathers.
+    fn sub_box_guard(&self) -> (u32, u32, usize) {
+        (
+            self.fault_notes,
+            self.lazy_fault_notes,
+            self.data_gathers.len(),
+        )
+    }
+
+    /// Whether nothing since `guard` can fault: a fault over the sub-box
+    /// would be placed by the sub-box's cells, not the full box's.
+    fn sub_box_clean(&self, guard: (u32, u32, usize)) -> bool {
+        self.fault_notes == guard.0
+            && self.lazy_fault_notes == guard.1
+            && self.data_gathers[guard.2..]
+                .iter()
+                .all(|d| d.order.is_none())
+    }
+
+    fn sub_box_undo(&mut self, txn: SubTxn, guard: (u32, u32, usize)) {
+        self.sub_rollback(txn);
+        self.fault_notes = guard.0;
+        self.lazy_fault_notes = guard.1;
+    }
+
+    /// The box axes `e` reads, as a bit mask over `bx.syms`, for
+    /// [`Self::lower_on_sub_box`]; `None` when `e` holds anything that rule
+    /// does not take (a reduction, an array builder, a closed function, a
+    /// whole-array name). `memo` keys a node by address, for this scan only:
+    /// an expanded template shares its subterms, and a tree walk of the
+    /// sharing would repeat them.
+    fn sub_box_axes(
+        &self,
+        e: &Expr,
+        bx: &LBox,
+        memo: &mut FxHashMap<usize, Option<u32>>,
+    ) -> Option<u32> {
+        match e {
+            Expr::Number(_) | Expr::Integer(_) => Some(0),
+            Expr::Variable(v) => {
+                if let Some(a) = bx.syms.iter().position(|s| s == v) {
+                    return Some(1 << a);
+                }
+                let scalar = v == "t"
+                    || bx.cbind(v).is_some()
+                    || self.param_ix.contains_key(v.as_str())
+                    || match self.obs_defined.get(v) {
+                        Some(ObsVal::Taped(lv)) => self.lv_box(lv).is_none(),
+                        Some(ObsVal::Declined) => false,
+                        None => self.var_shapes.get(v).is_some_and(|s| s.shape.is_empty()),
+                    };
+                scalar.then_some(0)
+            }
+            Expr::Operator(nd) => {
+                let key = Arc::as_ptr(nd) as usize;
+                if let Some(hit) = memo.get(&key) {
+                    return *hit;
+                }
+                let r = self.sub_box_axes_op(nd, bx, memo);
+                memo.insert(key, r);
+                r
+            }
+        }
+    }
+
+    fn sub_box_axes_op(
+        &self,
+        nd: &Arc<ExpressionNode>,
+        bx: &LBox,
+        memo: &mut FxHashMap<usize, Option<u32>>,
+    ) -> Option<u32> {
+        let args = |b: &Self, xs: &[Expr], memo: &mut FxHashMap<usize, Option<u32>>| {
+            xs.iter()
+                .try_fold(0u32, |acc, a| Some(acc | b.sub_box_axes(a, bx, memo)?))
+        };
+        match vec_op_code(&nd.op) {
+            VecOp::Arith(_) | VecOp::Cmp(_) | VecOp::Unary(_) | VecOp::Neg | VecOp::Ifelse => {
+                args(self, &nd.args, memo).map(|m| m | SUB_BOX_OP)
+            }
+            VecOp::Const => match eval_const(nd) {
+                Value::Scalar(_) => Some(0),
+                Value::Array(_) => None,
+            },
+            VecOp::BoolLit(_) => Some(0),
+            VecOp::Index => {
+                let (base, subs) = nd.args.split_first()?;
+                let base_ok = match base {
+                    Expr::Variable(_) => true,
+                    Expr::Operator(b) => b.op == "const",
+                    _ => false,
+                };
+                if !base_ok || subs.is_empty() {
+                    return None;
+                }
+                args(self, subs, memo).map(|m| m & !SUB_BOX_OP)
+            }
+            _ => None,
+        }
     }
 
     /// Whether `e` reads nothing that can fault (no const array or array
@@ -8020,12 +8293,8 @@ impl<'m> TapeBuilder<'m> {
         self.range_defs.retain(|s| *s < n_slots);
         // The attempt's value numbers in the frame it ran in: one naming a
         // rolled-back slot goes (a value it shadowed is simply recomputed).
-        let dead = |lv: &LV| matches!(lv, LV::Scalar(s) | LV::Arr(s) if *s >= n_slots);
         if let Some(frame) = self.scope_frames.last_mut() {
-            frame.map.retain(|_, lv| !dead(lv));
-            frame
-                .journal
-                .retain(|(_, prev)| !prev.as_ref().is_some_and(dead));
+            frame.retain_live(n_slots);
         }
         for (s, &(n_chunks, last_len)) in txn.streams.iter().enumerate() {
             let stream = &mut self.streams[s];
