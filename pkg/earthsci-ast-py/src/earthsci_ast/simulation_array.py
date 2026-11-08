@@ -1831,6 +1831,25 @@ def _has_arg_witness(flat: FlattenedSystem) -> bool:
     return any(walk(eq.rhs) for eq in flat.equations)
 
 
+def _join_producer_nodes(equations: list[Any]) -> list[ExprNode]:
+    """The ``distinct`` ``faq`` producers with a ``join`` among ``equations``'
+    right-hand sides: the nodes that seed :func:`_binning_coord_arrays`'s
+    producer closure. A producer's ``join.on`` key columns are among the names
+    :func:`_expr_referenced_names` reads, so a column that is a plain observed
+    (the per-component integer bin column of a lib/relational.esm rewrite) is
+    materialized, with the coordinates it reads, before the producer runs. The
+    column is matched by its exact (flattened) name, as every other reference
+    is."""
+    return [
+        eq.rhs
+        for eq in equations
+        if isinstance(eq.rhs, ExprNode)
+        and eq.rhs.op == "faq"
+        and getattr(eq.rhs, "distinct", None) is True
+        and getattr(eq.rhs, "join", None)
+    ]
+
+
 def _frontdoor_join_keys_and_extents(
     flat: FlattenedSystem,
     ordered_observed: list[tuple[str, Expr]],
@@ -1881,29 +1900,7 @@ def _frontdoor_join_keys_and_extents(
     # its envelope/filter factors may be join-free observeds (the in-model LCC
     # projections) that must be materialized for the producer to run. Seed the
     # binning-coordinate closure from those producer nodes too.
-    producer_seed_nodes: list[ExprNode] = []
-    for eq in flat.equations:
-        rhs = eq.rhs
-        if (
-            isinstance(rhs, ExprNode)
-            and rhs.op == "faq"
-            and getattr(rhs, "distinct", None) is True
-            and getattr(rhs, "join", None)
-        ):
-            producer_seed_nodes.append(rhs)
-    # A producer's `join.on` key columns that are plain observeds (the per-component
-    # integer bin columns of a lib/relational.esm rewrite) seed the closure too, so
-    # the coordinates they read are materialized before the producer runs.
-    observed_rhs = {str(name): rhs for name, rhs in ordered_observed}
-    for node in list(producer_seed_nodes):
-        for clause in getattr(node, "join", None) or []:
-            on = clause.get("on") if isinstance(clause, dict) else getattr(clause, "on", None)
-            for pair in on or []:
-                for col in pair:
-                    hits = [
-                        r for n, r in observed_rhs.items() if n == col or n.endswith("." + str(col))
-                    ]
-                    producer_seed_nodes.extend(h for h in hits if isinstance(h, ExprNode))
+    producer_seed_nodes = _join_producer_nodes(flat.equations)
     const_arrays: dict[str, np.ndarray] = {
         str(k): np.asarray(v)
         for k, v in _binning_coord_arrays(
