@@ -7554,7 +7554,9 @@ impl<'m> TapeBuilder<'m> {
     /// entries that satisfy the comparison, exactly, and the instruction's
     /// count is that number whatever the axis holds. An axis whose window is
     /// a build-time literal the lowering finds non-decreasing is marked
-    /// `sorted`, so the instruction bisects it without checking it first.
+    /// `sorted`, so the instruction bisects it without checking it first; a
+    /// build-time literal in any other order is counted through a sorted copy
+    /// of its non-NaN entries, also bisected.
     ///
     /// `nested` is the per-cell form: `bx` is the enclosing box the query
     /// reads, and the count is an array over it. Otherwise `bx` is the
@@ -7658,12 +7660,47 @@ impl<'m> TapeBuilder<'m> {
             Some((s, o)) if !scalar && s == shape && o == origin => {}
             Some(_) => return Ok(None),
         }
-        let sorted = match &axis {
-            LV::Arr(s) => self.known_slice(*s).is_some_and(|v| {
-                let w = &v[start as usize..(start + n) as usize];
-                non_decreasing(w.len(), |j| w[j])
-            }),
-            _ => false,
+        // A window known at build: counted as it stands when non-decreasing,
+        // else through a sorted copy of its non-NaN entries. The count is the
+        // same number either way: a NaN entry satisfies no comparison, and
+        // reordering the entries does not change how many satisfy one. The
+        // copy is sorted under the comparison itself, so -0.0 and +0.0 stay
+        // equal neighbours. The complement below still subtracts from the
+        // whole window, NaN entries included, as the fold counts them.
+        let window: Option<Vec<f64>> = match &axis {
+            LV::Arr(s) => self
+                .known_slice(*s)
+                .map(|v| v[start as usize..(start + n) as usize].to_vec()),
+            _ => None,
+        };
+        let (axis, start, count_n, sorted) = match window {
+            Some(w) if non_decreasing(w.len(), |j| w[j]) => (axis, start, n, true),
+            Some(w) => {
+                let mut keys: Vec<f64> = w.into_iter().filter(|v| !v.is_nan()).collect();
+                if keys.is_empty() {
+                    // No entry satisfies the comparison.
+                    let zero = LV::Lit(0.0);
+                    return Ok(Some(if !ic.complement {
+                        if scalar {
+                            zero
+                        } else {
+                            self.emit_fill(&zero, &shape, &origin, Cadence::Const)
+                        }
+                    } else {
+                        let all = LV::Lit(f64::from(n));
+                        if scalar {
+                            all
+                        } else {
+                            self.emit_fill(&all, &shape, &origin, Cadence::Const)
+                        }
+                    }));
+                }
+                keys.sort_by(|a, b| a.partial_cmp(b).expect("NaN entries are set aside"));
+                let m = u32::try_from(keys.len()).expect("no longer than the window");
+                let copy = self.emit_const_data(&[keys.len()], &[1], Arc::new(keys), true)?;
+                (LV::Arr(copy), 0, m, true)
+            }
+            None => (axis, start, n, false),
         };
         let sec = self.placement(self.lv_cadence(&axis).max(self.lv_cadence(&x)));
         let axis_src = self.src_of(&axis);
@@ -7672,7 +7709,7 @@ impl<'m> TapeBuilder<'m> {
             rel: ic.rel,
             axis: axis_src,
             lo: start,
-            n,
+            n: count_n,
             sorted,
             x: self.op_of(&x),
             out,
