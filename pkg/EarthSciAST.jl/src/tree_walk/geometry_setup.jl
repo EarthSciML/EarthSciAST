@@ -220,6 +220,51 @@ end
 _model_has_setup_join_reduction(equations) =
     _anyof(eq -> eq.lhs isa VarExpr && _is_setup_join_reduction(eq.rhs), equations)
 
+# An ungated array `faq` whose body holds an indicator sum (`_is_count_faq`:
+# `rank_of` / `rank_of_set` / `searchsorted` from the standard library) is,
+# over inputs that read no state, a build-once table like the relational op's
+# dense ids: the setup sweep fills it once, with the count as a binary search
+# (`_geo_count_node`), and its readers gather it. Under a plan without the
+# count rewrite (the interpreter) it stays an observed.
+function _is_setup_count_reduction(e)
+    (e isa OpExpr && _is_faq_op(e.op) && e.expr_body isa OpExpr) || return false
+    (e.join === nothing && e.join_gates === nothing) || return false
+    (e.output_idx !== nothing && !isempty(e.output_idx)) || return false
+    _compiler_plan_now().count_fold || return false
+    _body_needs_general_eval(e) && return false
+    return _has_count_faq(e.expr_body::OpExpr, IdDict{OpExpr, Nothing}())
+end
+function _has_count_faq(e::OpExpr, seen::IdDict{OpExpr, Nothing})
+    _is_count_faq(e) && return true
+    haskey(seen, e) && return false
+    seen[e] = nothing
+    _anyof(a -> a isa OpExpr && _has_count_faq(a, seen), e.args) && return true
+    return e.expr_body isa OpExpr && _has_count_faq(e.expr_body::OpExpr, seen)
+end
+_model_has_setup_count_reduction(equations) =
+    _anyof(eq -> eq.lhs isa VarExpr && _is_setup_count_reduction(eq.rhs), equations)
+
+# The indicator sum on the typed tree: a `+` faq seeded +0.0 over one range,
+# with no filter or join, whose body is `ifelse(l REL r, c1, c2)` with REL one of
+# `<= < >= >`, {c1, c2} = {0, 1} and exactly one of `l`, `r` reading the range
+# symbol (the shape `_cg_count_loop` and `_geo_count_node` rewrite).
+function _is_count_faq(e::OpExpr)
+    (_is_faq_op(e.op) && e.ranges !== nothing && length(e.ranges) == 1) || return false
+    (e.filter === nothing && e.join === nothing && e.join_gates === nothing) || return false
+    (e.output_idx === nothing || isempty(e.output_idx)) || return false
+    oplus, zero = _aggregate_oplus_identity(e.semiring, e.reduce)
+    (oplus == "+" && zero === 0.0) || return false
+    b = e.expr_body
+    (b isa OpExpr && b.op == "ifelse" && length(b.args) == 3) || return false
+    c, y, n = b.args
+    lit(x) = x isa IntExpr || x isa NumExpr ? Float64(x.value) : nothing
+    ((lit(y), lit(n)) in ((1.0, 0.0), (0.0, 1.0))) || return false
+    (c isa OpExpr && c.op in ("<=", "<", ">=", ">") && length(c.args) == 2) || return false
+    k = first(keys(e.ranges))
+    reads(x) = k in _referenced_var_names(x)
+    return reads(c.args[1]) != reads(c.args[2])
+end
+
 # An intersection-area leaf lives in an equation LHS/RHS — from esm 1.0.0 an
 # observed unknown's defining body is its equation, so there is nowhere else to
 # look.
@@ -1903,9 +1948,12 @@ function _geometry_setup_vars(
             _expr_has_intersect_polygon(defs[n]) ||
                 _expr_has_polygon_intersection_area(defs[n])
         ) && push!(setup, n)
-        # The pure-AST overlap area, over inputs that read no state.
+        # The pure-AST overlap area, or a rank table, over inputs that read no state.
         _is_setup_join_reduction(defs[n]) &&
             !_anyof(f -> f in state_var_names, _referenced_var_names(defs[n])) &&
+            push!(setup, n)
+        _is_setup_count_reduction(defs[n]) &&
+            !_anyof(f -> f in state_var_names || f == "t", _referenced_var_names(defs[n])) &&
             push!(setup, n)
     end
     mvars = Set{String}(keys(model.variables))
