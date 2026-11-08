@@ -41,7 +41,6 @@ use crate::broad_phase::OverlapIndex;
 use crate::simulate_array::eval::{EqSides, narrow_reach, reach_of};
 use crate::simulate_array::gate_walk::{GatePlan, TupleSink};
 use crate::types::JoinClause;
-use std::rc::Rc;
 
 /// An open tuple-list box: its loop symbols' columns.
 pub(in crate::simulate_array::tape) struct TupleFrame {
@@ -62,7 +61,7 @@ pub(super) enum DimBound {
     /// shape (empty for a scalar), and where each parent is bound.
     Ragged {
         shape: DimU,
-        vals: Rc<Vec<f64>>,
+        vals: Arc<Vec<f64>>,
         parents: Vec<Parent>,
     },
 }
@@ -121,6 +120,15 @@ pub(super) struct BuiltGate {
     /// `on` gate, which `crate::join` lowers into it), so the gate only
     /// narrows an enumeration and never has to mask a cell itself.
     in_filter: bool,
+}
+
+/// The build-time value of one observed a folded tuple-list contraction
+/// reads ([`TapeBuilder::tuple_fold_inputs`]): its shape (empty for a scalar)
+/// and row-major values, shared by every chunk's tape.
+pub(super) struct FoldInput {
+    name: String,
+    shape: DimU,
+    vals: Arc<Vec<f64>>,
 }
 
 /// The admitted tuple list: per output cell a contiguous run.
@@ -218,6 +226,20 @@ pub(in crate::simulate_array) fn set_tuple_list_budget(tuples: usize) -> usize {
     let prev = tuple_list_budget();
     TUPLE_LIST_BUDGET.with(|c| c.set(Some(tuples)));
     prev
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Per chunk program [`TapeBuilder::eval_tuple_chunk`] built on this
+    /// thread: the names of the inputs whose payload the program holds.
+    static CHUNK_INPUTS_HELD: std::cell::RefCell<Vec<Vec<String>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Take what [`CHUNK_INPUTS_HELD`] recorded on this thread.
+#[cfg(test)]
+pub(in crate::simulate_array) fn take_chunk_inputs_held() -> Vec<Vec<String>> {
+    CHUNK_INPUTS_HELD.with(|c| std::mem::take(&mut *c.borrow_mut()))
 }
 
 impl TapeBuilder<'_> {
@@ -533,14 +555,7 @@ impl TapeBuilder<'_> {
                 values[c] = x;
             }
         }
-        let data = tape_index(self.const_data.len(), "array constants")?;
-        self.const_data.push(ConstArrayData {
-            shape: shape.clone(),
-            values,
-        });
-        let sec = self.placement(Cadence::Const);
-        let out = self.new_slot(shape, lo, false, sec);
-        self.emit(Instr::ConstArray { data, out }, sec);
+        let out = self.emit_const_data(shape, lo, Arc::new(values), false)?;
         Ok(Some(LV::Arr(out)))
     }
 
@@ -553,7 +568,7 @@ impl TapeBuilder<'_> {
     fn fold_cell_in_windows(
         &self,
         cell: &TupleSpec<'_>,
-        inputs: &[(String, ndarray::ArrayD<f64>)],
+        inputs: &[FoldInput],
         combine_op: BinCode,
         budget: u64,
     ) -> LResult<Option<f64>> {
@@ -601,13 +616,14 @@ impl TapeBuilder<'_> {
     }
 
     /// The build-time value of every observed `spec`'s body and filter read
-    /// ([`Self::known_inputs`]); `None` when one of them has none. Names that
+    /// ([`Self::known_named`]); `None` when one of them has none. Names that
     /// are not observeds are left to the chunk's own build, which declines
     /// what it cannot resolve.
-    fn tuple_fold_inputs(
-        &self,
-        spec: &TupleSpec<'_>,
-    ) -> Option<Vec<(String, ndarray::ArrayD<f64>)>> {
+    ///
+    /// Taken once per fold and shared by every chunk's tape: each binds the
+    /// same `Arc`, so no chunk copies an input
+    /// ([`TapeBuilder::defer_consts`]).
+    fn tuple_fold_inputs(&self, spec: &TupleSpec<'_>) -> Option<Vec<FoldInput>> {
         let mut reads: HashSet<String> = HashSet::new();
         standalone::collect_variable_names(spec.body, &mut reads);
         if let Some(f) = spec.filter {
@@ -619,7 +635,17 @@ impl TapeBuilder<'_> {
             .filter(|n| self.obs_defined.contains_key(n.as_str()))
             .collect();
         names.sort();
-        self.known_inputs(names)
+        names
+            .into_iter()
+            .map(|name| {
+                let (shape, vals) = self.known_named(name)?;
+                (shape.iter().product::<usize>() == vals.len()).then(|| FoldInput {
+                    name: name.clone(),
+                    shape,
+                    vals,
+                })
+            })
+            .collect()
     }
 
     /// Lower the tuple `list` of `chunk` alone on a standalone tape over
@@ -630,7 +656,7 @@ impl TapeBuilder<'_> {
         &self,
         chunk: &TupleSpec<'_>,
         list: TupleList,
-        inputs: &[(String, ndarray::ArrayD<f64>)],
+        inputs: &[FoldInput],
         combine_op: BinCode,
     ) -> Option<Vec<f64>> {
         let name = "\u{0}tuple-list chunk";
@@ -641,14 +667,16 @@ impl TapeBuilder<'_> {
             self.f32_document,
             self.array_bool_reductions,
             |mut b| {
-                for (input, value) in inputs {
+                b.defer_consts = true;
+                for FoldInput { name, shape, vals } in inputs {
                     // A scalar is bound as the literal the enclosing build
                     // holds, unrounded, as that build reads it.
-                    let lv = match value.ndim() {
-                        0 => LV::Lit(value[ndarray::IxDyn(&[])]),
-                        _ => b.standalone_array_input(value).ok()?,
+                    let lv = if shape.is_empty() {
+                        LV::Lit(vals[0])
+                    } else {
+                        b.standalone_known_input(shape, Arc::clone(vals)).ok()?
                     };
-                    b.obs_defined.insert(input.clone(), ObsVal::Taped(lv));
+                    b.obs_defined.insert(name.clone(), ObsVal::Taped(lv));
                 }
                 let lo: DimI = chunk.ranges.iter().map(|(l, _)| *l).collect();
                 let shape: DimU = chunk
@@ -679,6 +707,21 @@ impl TapeBuilder<'_> {
                     declared_shape: (!shape.is_empty()).then(|| shape.to_vec()),
                 };
                 let prog = b.finish_standalone(&rule);
+                #[cfg(test)]
+                CHUNK_INPUTS_HELD.with(|c| {
+                    let held = inputs
+                        .iter()
+                        .filter(|i| {
+                            let n = i.vals.len();
+                            prog.const_data.iter().any(|d| {
+                                Arc::ptr_eq(&d.values, &i.vals)
+                                    || (n > 1 && d.values.len() == n && d.values[..] == i.vals[..])
+                            })
+                        })
+                        .map(|i| i.name.clone())
+                        .collect();
+                    c.borrow_mut().push(held);
+                });
                 let a = standalone::run_standalone_export(prog, name, &[], &[]).ok()?;
                 Some(a.iter().copied().collect())
             },
@@ -741,21 +784,7 @@ impl TapeBuilder<'_> {
         if ranges.is_empty() {
             bail_tape!("aggregate: a rank-0 join gate");
         }
-        let data = tape_index(self.const_data.len(), "array constants")?;
-        self.const_data.push(ConstArrayData {
-            shape: shape.clone(),
-            values: keep,
-        });
-        let sec = self.placement(Cadence::Const);
-        let mask_slot = self.new_slot(&shape, &lo, false, sec);
-        self.emit(
-            Instr::ConstArray {
-                data,
-                out: mask_slot,
-            },
-            sec,
-        );
-        self.known.insert(mask_slot, Known::Data(data));
+        let mask_slot = self.emit_const_data(&shape, &lo, Arc::new(keep), false)?;
         self.lazy_depth += 1;
         self.push_scope();
         let term = self.lower_filtered(body, filter, &bx, LV::Lit(identity));
@@ -824,9 +853,9 @@ impl TapeBuilder<'_> {
     /// the build knows, or a CONST-cadence observed it can fold
     /// ([`Self::fold_const_observed`]) — as `(shape, row-major values)`; a
     /// scalar has an empty shape and one value.
-    pub(super) fn known_named(&self, name: &str) -> Option<(DimU, Rc<Vec<f64>>)> {
+    pub(super) fn known_named(&self, name: &str) -> Option<(DimU, Arc<Vec<f64>>)> {
         match self.obs_defined.get(name)? {
-            ObsVal::Taped(LV::Lit(x)) => Some((DimU::new(), Rc::new(vec![*x]))),
+            ObsVal::Taped(LV::Lit(x)) => Some((DimU::new(), Arc::new(vec![*x]))),
             ObsVal::Taped(LV::Arr(s)) => {
                 let shape = self.slots[*s as usize].shape.clone();
                 match self.known_values(*s) {
@@ -856,10 +885,19 @@ impl TapeBuilder<'_> {
     }
 
     /// A slot's build-time values, if the build knows them.
-    pub(super) fn known_values(&self, s: SlotId) -> Option<Rc<Vec<f64>>> {
+    pub(super) fn known_values(&self, s: SlotId) -> Option<Arc<Vec<f64>>> {
         match self.known.get(&s)? {
-            Known::Data(d) => Some(Rc::new(self.const_data[*d as usize].values.clone())),
-            Known::Vals(v) => Some(Rc::clone(v)),
+            Known::Data(d) => Some(Arc::clone(&self.const_data[*d as usize].values)),
+            Known::Vals(v) | Known::Deferred { vals: v, .. } => Some(Arc::clone(v)),
+        }
+    }
+
+    /// A slot's build-time values, borrowed, for a reader that only compares
+    /// or looks up its elements.
+    pub(super) fn known_slice(&self, s: SlotId) -> Option<&[f64]> {
+        match self.known.get(&s)? {
+            Known::Data(d) => Some(&self.const_data[*d as usize].values),
+            Known::Vals(v) | Known::Deferred { vals: v, .. } => Some(v),
         }
     }
 
@@ -1083,19 +1121,10 @@ impl TapeBuilder<'_> {
         let frame = &mut self.tuple_frames[fi];
         let len = frame.len;
         let values = std::mem::take(&mut frame.cols[ci]);
-        let data = tape_index(self.const_data.len(), "array constants")?;
-        self.const_data.push(ConstArrayData {
-            shape: DimU::from_elem(len, 1),
-            values,
-        });
-        let sec = self.placement(Cadence::Const);
-        let out = self.new_slot(&[len], &[1], false, sec);
         // Every later read shares this slot, so it is defined unconditionally:
         // a first read inside a conditional branch still places the column
         // ahead of the branch, not in it.
-        let branches = std::mem::take(&mut self.branch_bufs);
-        self.emit(Instr::ConstArray { data, out }, sec);
-        self.branch_bufs = branches;
+        let out = self.emit_const_data(&[len], &[1], Arc::new(values), true)?;
         self.tuple_frames[fi].slots[ci] = Some(out);
         Ok(Some(LV::Arr(out)))
     }
@@ -1110,7 +1139,7 @@ impl TapeBuilder<'_> {
         &mut self,
         e: &Expr,
         bx: &LBox,
-    ) -> LResult<Option<Rc<Vec<f64>>>> {
+    ) -> LResult<Option<Arc<Vec<f64>>>> {
         let m = bx.shape[0];
         if let Expr::Operator(n) = e
             && matches!(n.op.as_str(), "+" | "-" | "*" | "/")
@@ -1137,10 +1166,10 @@ impl TapeBuilder<'_> {
                     *a = apply_binary(&n.op, *a, b);
                 }
             }
-            return Ok(Some(Rc::new(acc)));
+            return Ok(Some(Arc::new(acc)));
         }
         Ok(match self.lower_expr(e, bx)? {
-            LV::Lit(x) => Some(Rc::new(vec![x; m])),
+            LV::Lit(x) => Some(Arc::new(vec![x; m])),
             LV::Arr(s) => self.known_values(s).filter(|v| v.len() == m),
             _ => None,
         })
@@ -1195,7 +1224,7 @@ impl TapeBuilder<'_> {
         }
         let m = bx.shape[0];
         // Each subscript's per-tuple values.
-        let mut sub_vals: Vec<Rc<Vec<f64>>> = Vec::with_capacity(subs.len());
+        let mut sub_vals: Vec<Arc<Vec<f64>>> = Vec::with_capacity(subs.len());
         for e in subs {
             match self.tuple_known_values(e, bx)? {
                 Some(vals) => sub_vals.push(vals),
@@ -1242,7 +1271,7 @@ impl TapeBuilder<'_> {
         // The gathered values, when the base's are known (a subscript of a
         // later gather reads them).
         let vals = match &base {
-            LV::Arr(s) => self.known_values(*s).map(|b| {
+            LV::Arr(s) => self.known_slice(*s).map(|b| {
                 pos.iter()
                     .map(|&p| {
                         if p == GATHER_GHOST {
@@ -1255,6 +1284,20 @@ impl TapeBuilder<'_> {
             }),
             _ => None,
         };
+        // Under `defer_consts` the gathered values ARE the gather's result:
+        // the `TableGather` would copy exactly these elements (the ghost as
+        // `+0.0`) out of a slot that holds the whole base.
+        if self.defer_consts
+            && self.lv_cadence(&base) == Cadence::Const
+            && let Some(v) = vals
+        {
+            return Ok(LV::Arr(self.emit_const_data(
+                &[m],
+                &[1],
+                Arc::new(v),
+                false,
+            )?));
+        }
         let table = tape_index(self.gather_tables.len(), "gather tables")?;
         self.gather_tables.push(GatherTable { src_shape, pos });
         let sec = self.placement(self.lv_cadence(&base));
@@ -1266,7 +1309,7 @@ impl TapeBuilder<'_> {
         };
         self.emit(instr, sec);
         if let Some(v) = vals {
-            self.known.insert(out, Known::Vals(Rc::new(v)));
+            self.known.insert(out, Known::Vals(Arc::new(v)));
         }
         Ok(LV::Arr(out))
     }

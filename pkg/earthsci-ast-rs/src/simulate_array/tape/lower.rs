@@ -199,7 +199,7 @@ mod standalone;
 mod tuples;
 
 #[cfg(test)]
-pub(super) use tuples::set_tuple_list_budget;
+pub(super) use tuples::{set_tuple_list_budget, take_chunk_inputs_held};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use standalone::StandaloneError;
@@ -633,13 +633,21 @@ pub(crate) struct TapeBuilder<'m> {
     /// path rejects the construct (CONFORMANCE_SPEC §5.6.1) before a tape is
     /// built, and the tape declines it too.
     array_bool_reductions: bool,
+    /// Define every CONST payload ([`TapeBuilder::emit_const_data`]) as a
+    /// [`Known::Deferred`] slot instead of with an [`Instr::ConstArray`], and
+    /// resolve a gather of known data at build into its gathered values. Set
+    /// only on the standalone tape of one tuple-list chunk
+    /// ([`TapeBuilder::fold_tuple_contraction`]), which runs once and whose
+    /// every input is build-time data: there the program would copy each
+    /// whole input into its slab only to gather a chunk's worth of it.
+    defer_consts: bool,
     /// The scalar parameters a join key column reads, with the values the
     /// build baked them at (`crate::join::join_key_cone`): build-time data
     /// to [`TapeBuilder::fold_const_observed`], since a substitution of one
     /// is refused (CONFORMANCE_SPEC §5.5.8). Empty for a standalone rule.
     baked_params: FxHashMap<String, f64>,
     /// [`TapeBuilder::fold_const_observed`]'s memo.
-    folded: std::cell::RefCell<FxHashMap<String, Option<(DimU, std::rc::Rc<Vec<f64>>)>>>,
+    folded: std::cell::RefCell<FxHashMap<String, Option<(DimU, Arc<Vec<f64>>)>>>,
 
     // Program under construction -------------------------------------------
     slots: Vec<SlotDesc>,
@@ -859,7 +867,17 @@ enum Known {
     /// The payload of the `ConstArray` that defines it.
     Data(u32),
     /// Values the build computed itself, row-major.
-    Vals(std::rc::Rc<Vec<f64>>),
+    Vals(Arc<Vec<f64>>),
+    /// Values the build knows for a CONST slot no instruction defines yet:
+    /// under [`TapeBuilder::defer_consts`], the slot's [`Instr::ConstArray`]
+    /// is emitted at the head of the program only if an instruction ends up
+    /// reading it ([`TapeBuilder::materialize_deferred`]), tagged with the
+    /// rule and precision in force where the payload was bound.
+    Deferred {
+        vals: Arc<Vec<f64>>,
+        rule: u32,
+        prec: Precision,
+    },
 }
 
 /// The recurrence whose cell body is being lowered
@@ -982,6 +1000,7 @@ impl<'m> TapeBuilder<'m> {
             observed_rules: &[],
             baked_params: FxHashMap::default(),
             array_bool_reductions: false,
+            defer_consts: false,
             folded: std::cell::RefCell::new(FxHashMap::default()),
             slots: Vec::new(),
             plans: Vec::new(),
@@ -1116,6 +1135,12 @@ impl<'m> TapeBuilder<'m> {
                 out,
             } if !self.slots[*out as usize].scalar => {
                 if let Some(k) = self.known.get(a).cloned() {
+                    // The copy has an instruction of its own: only its
+                    // source's may still be deferred.
+                    let k = match k {
+                        Known::Deferred { vals, .. } => Known::Vals(vals),
+                        k => k,
+                    };
                     self.known.insert(*out, k);
                 }
             }
@@ -2398,16 +2423,52 @@ impl<'m> TapeBuilder<'m> {
         }
         // `iter()` is the LOGICAL row-major walk, which is the slab layout.
         let values: Vec<f64> = a.iter().copied().collect();
-        let data = self.const_data.len() as u32;
+        let origin = DimI::from_elem(1, shape.len());
+        let out = self.emit_const_data(&shape, &origin, Arc::new(values), false)?;
+        Ok(LV::Arr(out))
+    }
+
+    /// A CONST slot over `shape` at `origin` holding `values` (row-major):
+    /// one [`Instr::ConstArray`], the one way a payload the build holds
+    /// becomes a slot. `hoist` defines it ahead of any open conditional
+    /// branch, for a slot every later read shares.
+    ///
+    /// Under [`Self::defer_consts`] no instruction is emitted here: the slot
+    /// is [`Known::Deferred`], and `finish_standalone` emits its
+    /// `ConstArray` only if an instruction reads it.
+    fn emit_const_data(
+        &mut self,
+        shape: &[usize],
+        origin: &[i64],
+        values: Arc<Vec<f64>>,
+        hoist: bool,
+    ) -> LResult<SlotId> {
+        debug_assert_eq!(shape.iter().product::<usize>(), values.len());
+        let sec = self.placement(Cadence::Const);
+        let out = self.new_slot(shape, origin, false, sec);
+        if self.defer_consts {
+            let k = Known::Deferred {
+                vals: values,
+                rule: self.cur_rule,
+                prec: crate::precision::active(),
+            };
+            self.known.insert(out, k);
+            return Ok(out);
+        }
+        let data = tape_index(self.const_data.len(), "array constants")?;
         self.const_data.push(ConstArrayData {
-            shape: shape.clone(),
+            shape: shape.iter().copied().collect(),
             values,
         });
-        let sec = self.placement(Cadence::Const);
-        let origin = DimI::from_elem(1, shape.len());
-        let out = self.new_slot(&shape, &origin, false, sec);
-        self.emit(Instr::ConstArray { data, out }, sec);
-        Ok(LV::Arr(out))
+        let instr = Instr::ConstArray { data, out };
+        if hoist {
+            let branches = std::mem::take(&mut self.branch_bufs);
+            self.emit(instr, sec);
+            self.branch_bufs = branches;
+        } else {
+            self.emit(instr, sec);
+        }
+        Ok(out)
     }
 
     /// Fill an array slot over `box` with a scalar LV (`Fill` broadcast).
@@ -3673,12 +3734,24 @@ impl<'m> TapeBuilder<'m> {
         let Ok(pos) = self.const_positions(name, src_shape, &sub_vals, m) else {
             return Ok(None);
         };
+        // Every position is in range (`const_positions` resolves or
+        // declines each), so no element is a ghost.
         let vals = match base {
             LV::Arr(s) => self
-                .known_values(*s)
+                .known_slice(*s)
                 .map(|b| pos.iter().map(|&p| b[p as usize]).collect::<Vec<f64>>()),
             _ => None,
         };
+        // Under `defer_consts` the gathered values ARE the gather's result:
+        // the `TableGather` would copy exactly these elements out of a slot
+        // that holds the whole base.
+        if self.defer_consts
+            && self.lv_cadence(base) == Cadence::Const
+            && let Some(v) = vals
+        {
+            let out = self.emit_const_data(&bx.shape, &bx.lo, Arc::new(v), false)?;
+            return Ok(Some(LV::Arr(out)));
+        }
         let table = tape_index(self.gather_tables.len(), "gather tables")?;
         self.gather_tables.push(GatherTable {
             src_shape: src_shape.iter().copied().collect(),
@@ -3693,7 +3766,7 @@ impl<'m> TapeBuilder<'m> {
         };
         self.emit(instr, sec);
         if let Some(v) = vals {
-            self.known.insert(out, Known::Vals(std::rc::Rc::new(v)));
+            self.known.insert(out, Known::Vals(Arc::new(v)));
         }
         Ok(Some(LV::Arr(out)))
     }
@@ -4648,7 +4721,7 @@ impl<'m> TapeBuilder<'m> {
             let Some((table, r)) = self.lower_ring_operand(e, None)? else {
                 return no_ring(self);
             };
-            let Some(data) = self.const_slot_data(&table) else {
+            let Some((dshape, dvals)) = self.const_slot_data(&table) else {
                 bail_tape!(
                     "geometry: `intersect_polygon` of a ring that is not a compile-time \
                      constant: its overlap has a data-dependent length, and a tape slot's \
@@ -4657,9 +4730,9 @@ impl<'m> TapeBuilder<'m> {
             };
             let lead = r.sel.len();
             // Row-major strides of the literal, which is how it is stored.
-            let mut st = vec![1usize; data.shape.len()];
-            for d in (0..data.shape.len().saturating_sub(1)).rev() {
-                st[d] = st[d + 1] * data.shape[d + 1];
+            let mut st = vec![1usize; dshape.len()];
+            for d in (0..dshape.len().saturating_sub(1)).rev() {
+                st[d] = st[d + 1] * dshape[d + 1];
             }
             let mut base = 0usize;
             for (d, s) in r.sel.iter().enumerate() {
@@ -4668,10 +4741,10 @@ impl<'m> TapeBuilder<'m> {
                 };
                 base += st[d] * i;
             }
-            rings[k] = (0..data.shape[lead])
+            rings[k] = (0..dshape[lead])
                 .map(|v| {
                     let p = base + st[lead] * v;
-                    (data.values[p], data.values[p + st[lead + 1]])
+                    (dvals[p], dvals[p + st[lead + 1]])
                 })
                 .collect();
         }
@@ -4689,21 +4762,17 @@ impl<'m> TapeBuilder<'m> {
         self.emit_const_array(&arr)
     }
 
-    /// The literal data behind an array LV the tape stores with an
-    /// [`Instr::ConstArray`] in the CONST section, if that is what it is.
-    fn const_slot_data(&self, lv: &LV) -> Option<&ConstArrayData> {
+    /// The extents and row-major values of an array LV whose values the
+    /// build knows ([`Self::known_slice`]): a `ConstArray` payload, one
+    /// still deferred, or values the build computed.
+    fn const_slot_data(&self, lv: &LV) -> Option<(&[usize], &[f64])> {
         let LV::Arr(slot) = lv else {
             return None;
         };
-        self.streams[Cadence::Const as usize]
-            .iter()
-            .flat_map(|c| c.instrs.iter())
-            .find_map(|(i, _)| match i {
-                Instr::ConstArray { data, out } if out == slot => {
-                    Some(&self.const_data[*data as usize])
-                }
-                _ => None,
-            })
+        let shape = &self.slots[*slot as usize].shape;
+        self.known_slice(*slot)
+            .filter(|v| v.len() == shape.iter().product::<usize>())
+            .map(|v| (&shape[..], v))
     }
 
     /// The distinct-vertex count of the build-time ring produced under `id`.
@@ -5048,14 +5117,8 @@ impl<'m> TapeBuilder<'m> {
                 }
                 view.fill(*x);
             }
-            let data = tape_index(self.const_data.len(), "array constants")?;
-            self.const_data.push(ConstArrayData {
-                shape: bb_shape.clone(),
-                values: values.iter().copied().collect(),
-            });
-            let sec = self.placement(Cadence::Const);
-            let out = self.new_slot(&bb_shape, &lo_bb, false, sec);
-            self.emit(Instr::ConstArray { data, out }, sec);
+            let values = Arc::new(values.iter().copied().collect());
+            let out = self.emit_const_data(&bb_shape, &lo_bb, values, false)?;
             return Ok(LV::Arr(out));
         }
 
@@ -6989,7 +7052,7 @@ impl<'m> TapeBuilder<'m> {
             Some(_) => return Ok(None),
         }
         let sorted = match &axis {
-            LV::Arr(s) => self.known_values(*s).is_some_and(|v| {
+            LV::Arr(s) => self.known_slice(*s).is_some_and(|v| {
                 let w = &v[start as usize..(start + n) as usize];
                 non_decreasing(w.len(), |j| w[j])
             }),
@@ -7380,7 +7443,7 @@ impl<'m> TapeBuilder<'m> {
         // false branch's last. Which branch runs is a runtime question, so
         // the join is build-time data only when the two agree bit for bit.
         let agree = match (&tv, &fv) {
-            (LV::Arr(a), LV::Arr(b)) => match (self.known_values(*a), self.known_values(*b)) {
+            (LV::Arr(a), LV::Arr(b)) => match (self.known_slice(*a), self.known_slice(*b)) {
                 (Some(x), Some(y)) => {
                     x.len() == y.len()
                         && x.iter()

@@ -1587,8 +1587,9 @@ pub(crate) struct ConstArrayData {
     /// Row-major elements, exactly as `json_to_value` produces them from the
     /// literal (precision-rounded at ingress under `element_type: "Float32"`)
     /// — taken from the declared data directly for a lowered shaped-parameter
-    /// default.
-    pub values: Vec<f64>,
+    /// default. Shared, so a payload the build already holds (a folded
+    /// contraction's input, bound on every chunk's tape) is not copied.
+    pub values: std::sync::Arc<Vec<f64>>,
 }
 
 /// The position an [`Instr::TableGather`] element reads when its source cell

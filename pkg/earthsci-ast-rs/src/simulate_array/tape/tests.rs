@@ -2988,7 +2988,7 @@ fn ab_const_array_observed() {
     );
     assert_eq!(prog.const_data.len(), 1);
     assert_eq!(&prog.const_data[0].shape[..], &[4]);
-    assert_eq!(&prog.const_data[0].values, &[0.25, -1.5, 2.0, 3.75]);
+    assert_eq!(&prog.const_data[0].values[..], &[0.25, -1.5, 2.0, 3.75]);
     // CONST cadence: the literal is stored once per solve, not per RHS call.
     let store = prog
         .instrs
@@ -3645,7 +3645,7 @@ fn a_shaped_parameter_default_is_taped_from_its_data() {
     assert!(
         payloads
             .iter()
-            .any(|d| d.shape[..] == shape && d.values == values),
+            .any(|d| d.shape[..] == shape && d.values[..] == values),
         "the default's row-major data is a ConstArray payload: {payloads:?}"
     );
     // And against the per-cell oracle, not only the overlay.
