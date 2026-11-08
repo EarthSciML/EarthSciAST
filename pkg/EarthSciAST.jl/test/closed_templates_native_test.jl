@@ -209,7 +209,8 @@ end
 
 # The other lib/relational.esm templates per cell of a state: the gated
 # arg-witnesses (a contracted `faq` with a `filter`; no candidate passing
-# gives `n + 1`), the composite keys and `rank_of` over literal members.
+# gives `n + 1`), the composite keys, `rank_of` over literal members and
+# `rank_of_set` over a named index set.
 function _ct_relational_doc()
     P = Dict("i" => Dict("from" => "points"))
     x = _ct_ix("x", "i")
@@ -225,6 +226,7 @@ function _ct_relational_doc()
         _ct_apply("pair_key"; a = ka, b = kb, lo_a = 0, lo_b = 1, n_a = 8, n_b = 5),
         _ct_apply("edge_key"; u = ka, v = kb, lo = 0, n = 8),
         _ct_apply("rank_of"; x = x, members = _ct_const([0.5, 1.0, 1.5, 2.25]), n = 4),
+        _ct_apply("rank_of_set"; x = x, members = "gx", S = "generators"),
     )
     vars = Dict{String, Any}(
         "gx" => Dict("type" => "unknown", "shape" => Any["generators"]),
@@ -238,7 +240,7 @@ function _ct_relational_doc()
     ]
     model = Dict{String, Any}(
         "variables" => vars, "equations" => eqs,
-        "expression_template_imports" => Any[_ct_import("relational.esm", ["argmin_where", "argmax_where", "pair_key", "edge_key", "rank_of"])]
+        "expression_template_imports" => Any[_ct_import("relational.esm", ["argmin_where", "argmax_where", "pair_key", "edge_key", "rank_of", "rank_of_set"])]
     )
     return Dict{String, Any}(
         "esm" => "1.2.0", "metadata" => Dict("name" => "relational"),
