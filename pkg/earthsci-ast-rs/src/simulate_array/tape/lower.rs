@@ -572,6 +572,27 @@ fn int_range(e: &Expr, bx: &LBox, refine: &[(&str, (f64, f64))]) -> Option<(f64,
                     }
                     Some(acc)
                 }
+                // A read of an inline literal table lies between its least
+                // and greatest entry, wherever it is read.
+                ("index", n) if n >= 2 => match &node.args[0] {
+                    Expr::Operator(c) if c.op == "const" => {
+                        fn walk(v: &serde_json::Value, acc: &mut Option<(f64, f64)>) -> bool {
+                            match v {
+                                serde_json::Value::Array(a) => a.iter().all(|x| walk(x, acc)),
+                                serde_json::Value::Number(x) => {
+                                    let Some(x) = x.as_f64() else { return false };
+                                    *acc = Some(acc.map_or((x, x), |(l, h)| (l.min(x), h.max(x))));
+                                    true
+                                }
+                                _ => false,
+                            }
+                        }
+                        let mut acc = None;
+                        let v = c.value.as_ref()?;
+                        walk(v, &mut acc).then_some(acc).flatten().and_then(exact)
+                    }
+                    _ => None,
+                },
                 ("ifelse", 3) => {
                     let arm = |i: usize, extra: Option<(&str, (f64, f64))>| {
                         let mut r: SmallVec<[(&str, (f64, f64)); 4]> =
@@ -2542,8 +2563,19 @@ impl<'m> TapeBuilder<'m> {
             shape: shape.clone(),
             values,
         });
-        let sec = self.placement(Cadence::Const);
         let origin = DimI::from_elem(1, shape.len());
+        // A literal table read inside a conditional branch is the same on
+        // every call and cannot fault: it is materialized once, in the CONST
+        // section, instead of on each call that takes the branch.
+        if self.in_branch() && self.sweep.is_none() {
+            let out = self.new_slot(&shape, &origin, false, Cadence::Const);
+            let instr = Instr::ConstArray { data, out };
+            self.track_known(&instr);
+            self.track_range(&instr);
+            self.push_stream(instr, crate::precision::active(), Cadence::Const);
+            return Ok(LV::Arr(out));
+        }
+        let sec = self.placement(Cadence::Const);
         let out = self.new_slot(&shape, &origin, false, sec);
         self.emit(Instr::ConstArray { data, out }, sec);
         Ok(LV::Arr(out))

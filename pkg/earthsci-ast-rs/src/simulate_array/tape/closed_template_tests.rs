@@ -17,6 +17,7 @@
 //! (`ifelse(k < n, k + 2, 1)`, `ifelse(k <= n, k + 1, 1)`) still declines.
 
 use super::super::{ArrayCompiled, RhsStats};
+use super::ir::Instr;
 use super::lowering_limit_tests::oracle_ab;
 use super::tests::seeded_state;
 use serde_json::{Value, json};
@@ -363,4 +364,130 @@ fn successor_subscripts_bounded_by_their_condition() {
     for sub in [succ("<", 2), succ("<=", 1), op("+", vec![k(), json!(1)])] {
         assert!(!lowers(&successor_doc(sub.clone())), "{sub}: must decline");
     }
+}
+
+/// The scaling family's conservative regrid with its overlap areas written
+/// as the planar template, `dx` the bin width.
+fn template_regrid(n: usize, dx: f64) -> Value {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../tests/conformance/scaling/fixtures/regrid/regrid_N{n}.esm"
+    ));
+    let mut doc: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("fixture")).expect("parses");
+    let m = &mut doc["models"]["Regrid"];
+    for eq in m["equations"].as_array_mut().expect("equations") {
+        if eq["lhs"] == json!("A_ij") {
+            eq["rhs"]["expr"] = apply(
+                "overlap_area_planar",
+                json!({"ring_a": "src_poly", "cell_a": "i", "nv_a": 4,
+                       "ring_b": "tgt_poly", "cell_b": "j", "nv_b": 4}),
+            );
+        }
+    }
+    m["variables"]["dx"]["default"] = json!(dx);
+    m["expression_templates"] = library("geometry.esm");
+    doc
+}
+
+/// The largest element count any instruction of `prog` writes.
+fn widest(prog: &super::ir::TapeProgram) -> usize {
+    prog.instrs
+        .iter()
+        .map(|ins| match ins {
+            Instr::Fused { spec } => prog.fused[*spec as usize].shape.iter().product::<usize>(),
+            _ => ins.out().map_or(0, |o| {
+                prog.slots[o as usize].shape.iter().product::<usize>()
+            }),
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// A join-gated pointwise `faq` whose gate keeps few cells evaluates its body
+/// at the candidate cells only: no instruction spans the source x target box
+/// times a vertex loop, and every executor writes the oracle's `dy`. When
+/// the gate keeps most cells (one bin holds every cell) the body runs over
+/// the whole box, as before, with the same agreement.
+#[test]
+fn gated_pointwise_faq_compacts_to_its_candidate_cells() {
+    let n = 100;
+    let sparse = super::tests::ab_check(template_regrid(n, 2.0), 0.5, 2.0);
+    assert!(
+        widest(&sparse) <= n * n,
+        "the overlap body ran over a box of {} elements",
+        widest(&sparse)
+    );
+    let dense = super::tests::ab_check(template_regrid(n, 1.0e6), 0.5, 2.0);
+    assert!(
+        widest(&dense) >= n * n * 4,
+        "a gate keeping every cell is not compacted"
+    );
+}
+
+/// The other lib/relational.esm templates per cell of a state: a gated
+/// arg-witness (`argmin_where` / `argmax_where`, a contracted `faq` with a
+/// `filter`; no candidate passing gives `n + 1`), the composite keys
+/// `pair_key` / `edge_key` (NaN for an out-of-range or non-integral
+/// component) and `rank_of` over literal members.
+fn relational_doc() -> Value {
+    let x = || ix("x", vec![json!("i")]);
+    let g = |k: &str| ix("gx", vec![json!(k)]);
+    let d = |k: &str| {
+        op(
+            "*",
+            vec![op("-", vec![x(), g(k)]), op("-", vec![x(), g(k)])],
+        )
+    };
+    // Candidates above the cell's own value compete (none for the largest).
+    let pass = |k: &str| op(">", vec![g(k), x()]);
+    let key_a = op("floor", vec![op("*", vec![json!(3), x()])]);
+    let key_b = op("floor", vec![op("*", vec![json!(2), x()])]);
+    let r = json!({"i": [1, 7]});
+    let cell = |e: Value| faq(e, vec!["i"], r.clone());
+    let sum = op(
+        "+",
+        vec![
+            apply(
+                "argmin_where",
+                json!({"f": d("k_argmin_where_1"), "p": pass("k_argmin_where_1"), "n": 6}),
+            ),
+            apply(
+                "argmax_where",
+                json!({"f": d("k_argmax_where_1"), "p": pass("k_argmax_where_1"), "n": 6}),
+            ),
+            apply(
+                "pair_key",
+                json!({"a": key_a, "b": key_b, "lo_a": 0, "lo_b": 1, "n_a": 8, "n_b": 5}),
+            ),
+            apply("edge_key", json!({"u": key_a, "v": key_b, "lo": 0, "n": 8})),
+            apply(
+                "rank_of",
+                json!({"x": x(), "members": {"op": "const", "args": [], "value": [0.5, 1.0, 1.5, 2.25]}, "n": 4}),
+            ),
+        ],
+    );
+    let mut model = json!({
+        "variables": {
+            "gx": {"type": "unknown", "shape": ["g"]},
+            "x": {"type": "unknown", "shape": ["p"], "default": 1.0},
+            "y": {"type": "unknown", "shape": ["p"]}
+        },
+        "equations": [
+            {"lhs": "gx", "rhs": {"op": "const", "args": [], "value": [0.5, 1.0, 1.5, 1.0, 2.0, 2.5]}},
+            {"lhs": "y", "rhs": cell(sum)},
+            {"lhs": d_lhs("x", vec!["i"], r.clone()),
+             "rhs": cell(op("-", vec![op("*", vec![json!(0.01), ix("y", vec![json!("i")])]), x()]))}
+        ]
+    });
+    model["expression_templates"] = library("relational.esm");
+    document(
+        "relational_on_the_tape",
+        json!({"p": {"kind": "interval", "size": 7}, "g": {"kind": "interval", "size": 6}}),
+        model,
+    )
+}
+
+#[test]
+fn keyed_and_gated_relational_templates_lower_and_match_the_oracle() {
+    oracle_ab(relational_doc());
 }
