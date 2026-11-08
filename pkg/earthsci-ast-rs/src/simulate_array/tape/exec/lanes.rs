@@ -320,9 +320,6 @@ unsafe fn run_lanes(
     }
 }
 
-/// A one-lane program: the micro-ops one after another over scalar
-/// registers, each through the same kernel definitions the chunk loops
-/// expand (`dispatch_bin_kernel` / `dispatch_un_kernel`).
 /// [`exec_lanes`] for a program of one lane and no lane inputs: its
 /// scalars resolved, then its micro-ops run once as a block, whatever the
 /// call's split width.
@@ -346,6 +343,9 @@ pub(super) unsafe fn exec_one_lane(
     exec_block(ls, svals, &mut own.regs, slab_ptr, slot_off, dy);
 }
 
+/// A one-lane program: the micro-ops one after another over scalar
+/// registers, each through the same kernel definitions the chunk loops
+/// expand (`dispatch_bin_kernel` / `dispatch_un_kernel`).
 fn exec_block(
     ls: &LaneSpec,
     svals: &[f64],

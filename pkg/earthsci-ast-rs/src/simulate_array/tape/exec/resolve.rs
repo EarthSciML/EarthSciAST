@@ -131,7 +131,6 @@ pub(super) fn resolve_rv(
     }
 }
 
-/// Resolve a gather/load-elem source to its own full view.
 /// A gather/load source's base pointer and its own shape, without the
 /// stride vector [`resolve_src`] builds: what a scalar read needs.
 #[inline]
@@ -153,6 +152,7 @@ pub(super) fn src_base<'a>(
     }
 }
 
+/// Resolve a gather/load-elem source to its own full view.
 pub(super) fn resolve_src(
     src: &SrcRef,
     env: &Env,
