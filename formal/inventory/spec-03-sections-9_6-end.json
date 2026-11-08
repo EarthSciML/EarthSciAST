@@ -20,6 +20,15 @@
       "note": "A template parameter in a faq dense ranges tuple entry is a substitution site; the value it is bound to must be an integer literal or a metaparameter expression, which substitution itself does not check."
     },
     {
+      "id": "spec.9.6.1.ranges-from-binding-index-set",
+      "section": "9.6.1",
+      "quote": "The bound value MUST be a string naming an index set",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "A template parameter written as the `from` of a faq ranges entry is a substitution site; the value bound to it must name an index set, and an expanded `from` naming no declared set is undefined_index_set at the call site."
+    },
+    {
       "id": "spec.9.6.1.param-name-author-collision",
       "section": "9.6.1",
       "quote": "so an author MUST NOT name a parameter after a field literal its body means literally",

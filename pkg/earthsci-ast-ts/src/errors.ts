@@ -96,6 +96,12 @@ export const ERROR_CODES = {
   //   build (esm-spec §9.6.6). Registered for the cross-binding vocabulary; this
   //   binding has no simulator, so nothing here raises it.
   DERIVED_INDEX_SET_UNMATERIALIZED: 'derived_index_set_unmaterialized',
+  // `value_invention_key_out_of_range` — a `distinct` key or value-invention
+  //   `join` column evaluates to NaN at build (a lib/relational.esm key
+  //   template's out-of-range component; esm-spec §9.6.6). Registered for the
+  //   cross-binding vocabulary; this binding has no simulator, so nothing here
+  //   raises it.
+  VALUE_INVENTION_KEY_OUT_OF_RANGE: 'value_invention_key_out_of_range',
   // `undefined_index_set` — a `faq` `ranges` entry `{ from: NAME }`
   //   naming an index set absent from the document `index_sets` registry
   //   (RFC semiring-faq-unified-ir §5.2; no implicit interval is inferred).

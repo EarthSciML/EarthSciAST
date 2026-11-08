@@ -1,0 +1,134 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "template_from_param_undeclared",
+    "description": "INVALID — the template parameter `S` of `total(v, S)` stands for the `from` of a `faq` `ranges` entry (esm-spec §9.6.1), and the call site binds it to `ghost_cells`, which names no declared index set. Substitution does not check the bound value; the expanded range `{\"from\": \"ghost_cells\"}` is refused exactly as a hand-written one is (tests/invalid/faq/undeclared_from_name.esm), with `undefined_index_set`. SCHEMA-VALID, so the schema-only bindings accept it, as they accept that fixture.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "tags": [
+      "faq",
+      "index-set",
+      "invalid",
+      "resolver",
+      "expression_templates"
+    ]
+  },
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "M": {
+      "expression_templates": {
+        "total": {
+          "params": [
+            "v",
+            "S"
+          ],
+          "body": {
+            "op": "faq",
+            "args": [
+              "v"
+            ],
+            "output_idx": [],
+            "reduce": "+",
+            "ranges": {
+              "k_t": {
+                "from": "S"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "v",
+                "k_t"
+              ]
+            }
+          }
+        },
+        "count_below": {
+          "params": [
+            "x",
+            "v",
+            "S"
+          ],
+          "body": {
+            "op": "faq",
+            "args": [
+              "v"
+            ],
+            "output_idx": [],
+            "reduce": "+",
+            "ranges": {
+              "k_b": {
+                "from": "S"
+              }
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "v",
+                        "k_b"
+                      ]
+                    },
+                    "x"
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          }
+        }
+      },
+      "variables": {
+        "a": {
+          "type": "parameter",
+          "shape": [
+            "cells"
+          ],
+          "default": [
+            1.0,
+            2.0,
+            4.0
+          ],
+          "units": "1"
+        },
+        "y_cells": {
+          "type": "unknown",
+          "default": 0.0,
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y_cells"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "total",
+            "bindings": {
+              "v": "a",
+              "S": "ghost_cells"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

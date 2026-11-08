@@ -97,7 +97,7 @@ mod tests {
             "FloatKeyError: f"
         );
         assert_eq!(
-            crate::value_invention::ValueInventionError("v".into()).to_string(),
+            crate::value_invention::ValueInventionError::new("v").to_string(),
             "ValueInventionError: v"
         );
     }

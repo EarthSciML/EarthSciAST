@@ -659,6 +659,201 @@ fn benchmark_interp_bracket(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// Standard-library templates against the closed forms they replace
+// (bench/closed_templates: calendar, geometry, relational).
+// ---------------------------------------------------------------------------
+
+/// One right-hand side of a `bench/closed_templates` document under `native`
+/// (or the per-cell oracle), with what it cost to get there.
+struct TemplateRhs {
+    prob: earthsci_ast::EsmProblem,
+    scratch: earthsci_ast::simulate_array::RhsScratch,
+    params: Vec<f64>,
+    state: Vec<f64>,
+    /// Problem construction plus tape installation, and the first call.
+    build_s: f64,
+    first_call_s: f64,
+}
+
+/// The time the steady calls are made at.
+const TEMPLATE_T: f64 = 1.3;
+
+impl TemplateRhs {
+    fn new(path: &std::path::Path, oracle: bool) -> TemplateRhs {
+        let t0 = std::time::Instant::now();
+        let prob = earthsci_ast::esm_problem(
+            path,
+            (0.0, 1.0),
+            earthsci_ast::ProblemOptions {
+                compiler: Some(earthsci_ast::Compiler::Native),
+                rhs: earthsci_ast::Rhs::Always,
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let compiled = prob.debug_array_compiled().expect("a right-hand side");
+        let mut scratch = if oracle {
+            compiled.debug_new_scratch()
+        } else {
+            compiled.debug_new_scratch_taped().expect("taped")
+        };
+        let params = compiled.debug_resolve_params(prob.p());
+        // A state that differs from cell to cell, the same per name in every
+        // spelling, so a regrid's derivative depends on every weight.
+        let names = compiled.state_variable_names();
+        let mut sorted: Vec<&String> = names.iter().collect();
+        sorted.sort();
+        let rank: HashMap<&String, usize> = sorted
+            .iter()
+            .enumerate()
+            .map(|(r, n)| (*n, r + 1))
+            .collect();
+        let state: Vec<f64> = names
+            .iter()
+            .map(|n| prob.u0().get(n).copied().unwrap_or(0.0) + rank[n] as f64 / 64.0)
+            .collect();
+        let build_s = t0.elapsed().as_secs_f64();
+        let mut dy = vec![0.0; state.len()];
+        let t1 = std::time::Instant::now();
+        compiled.debug_eval_rhs_into(
+            &state,
+            0.0,
+            &params,
+            &mut dy,
+            &mut scratch,
+            &mut earthsci_ast::simulate_array::RhsStats::default(),
+        );
+        let first_call_s = t1.elapsed().as_secs_f64();
+        TemplateRhs {
+            prob,
+            scratch,
+            params,
+            state,
+            build_s,
+            first_call_s,
+        }
+    }
+
+    fn call(&mut self, t: f64, dy: &mut [f64]) {
+        let compiled = self.prob.debug_array_compiled().expect("a right-hand side");
+        compiled.debug_eval_rhs_into(
+            &self.state,
+            t,
+            &self.params,
+            dy,
+            &mut self.scratch,
+            &mut earthsci_ast::simulate_array::RhsStats::default(),
+        );
+    }
+
+    /// `dy` at a few times, as bits.
+    fn bits(&mut self) -> Vec<u64> {
+        let mut dy = vec![0.0; self.state.len()];
+        let mut out = Vec::new();
+        for t in [0.0, 0.7, 3.1, 1800.0] {
+            self.call(t, &mut dy);
+            out.extend(dy.iter().map(|x| x.to_bits()));
+        }
+        out
+    }
+}
+
+/// Each template document of `CLOSED_TEMPLATES_DIR` (default
+/// `bench/closed_templates`) beside the closed-form document it mirrors, by
+/// file name: `*_fn_*` / `*_leaf_*` / `*_op_*` against `*_tpl_*`.
+/// `CLOSED_TEMPLATES_FILTER` keeps the names containing it.
+fn closed_template_pairs() -> Vec<(String, std::path::PathBuf, std::path::PathBuf)> {
+    let dir = std::env::var("CLOSED_TEMPLATES_DIR").map_or_else(
+        |_| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench/closed_templates"),
+        std::path::PathBuf::from,
+    );
+    let filter = std::env::var("CLOSED_TEMPLATES_FILTER").unwrap_or_default();
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok()?.file_name().into_string().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    let mut pairs = Vec::new();
+    for name in names {
+        for form in ["_fn_", "_leaf_", "_op_"] {
+            if name.ends_with(".esm") && name.contains(form) && name.contains(&filter) {
+                let tpl = name.replacen(form, "_tpl_", 1);
+                if dir.join(&tpl).exists() {
+                    pairs.push((
+                        form.trim_matches('_').to_string(),
+                        dir.join(&name),
+                        dir.join(tpl),
+                    ));
+                }
+            }
+        }
+    }
+    pairs
+}
+
+fn benchmark_closed_templates(c: &mut Criterion) {
+    let mut group = c.benchmark_group("closed_templates");
+    group.sample_size(20);
+    let nan_eq = |a: &[u64], b: &[u64]| {
+        a.len() == b.len()
+            && a.iter().zip(b).all(|(x, y)| {
+                x == y || (f64::from_bits(*x).is_nan() && f64::from_bits(*y).is_nan())
+            })
+    };
+    for (form, closed_path, tpl_path) in closed_template_pairs() {
+        let stem = tpl_path
+            .file_stem()
+            .unwrap()
+            .to_string_lossy()
+            .replace("_tpl", "");
+        let mut closed = TemplateRhs::new(&closed_path, false);
+        let mut tpl = TemplateRhs::new(&tpl_path, false);
+        let (cb, tb) = (closed.bits(), tpl.bits());
+        // The per-cell oracle is slow on the large workloads:
+        // `CLOSED_TEMPLATES_ORACLE=0` skips it.
+        if std::env::var("CLOSED_TEMPLATES_ORACLE").map_or(true, |v| v != "0") {
+            let mut oracle = TemplateRhs::new(&tpl_path, true);
+            assert!(
+                nan_eq(&tb, &oracle.bits()),
+                "{stem}: the template's native derivative is not the oracle's"
+            );
+        }
+        let versus = if form == "leaf" {
+            let d = cb
+                .iter()
+                .zip(&tb)
+                .map(|(a, b)| (f64::from_bits(*a) - f64::from_bits(*b)).abs())
+                .fold(0.0f64, f64::max);
+            format!("max |template - leaf| {d:.3e}")
+        } else {
+            format!("bit-identical to {form}: {}", nan_eq(&cb, &tb))
+        };
+        eprintln!(
+            "{stem}: states {}  build {form} {:.4}s tpl {:.4}s  first call {form} {:.6}s tpl {:.6}s  {versus}",
+            closed.state.len(),
+            closed.build_s,
+            tpl.build_s,
+            closed.first_call_s,
+            tpl.first_call_s
+        );
+        for (label, rhs) in [(form.as_str(), &mut closed), ("tpl", &mut tpl)] {
+            let mut dy = vec![0.0; rhs.state.len()];
+            let mut k = 0u64;
+            group.bench_function(BenchmarkId::new(label, &stem), |b| {
+                b.iter(|| {
+                    k += 1;
+                    rhs.call(TEMPLATE_T + 1.0e-3 * (k % 1000) as f64, &mut dy);
+                    black_box(&dy);
+                })
+            });
+        }
+    }
+    group.finish();
+}
+
 // Define benchmark groups
 criterion_group!(
     benches,
@@ -667,6 +862,7 @@ criterion_group!(
     benchmark_stoichiometric_matrix,
     benchmark_expression_evaluation,
     benchmark_interp_bracket,
+    benchmark_closed_templates,
 );
 
 #[cfg(feature = "simd")]

@@ -1,0 +1,168 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ValueInventionKeyOutOfRange",
+    "description": "The composite_key_axis document with its key written as pair_key(polProcessID, engTechID, 0, 0, 1000, 100): engTechID takes the values 121 and 122, outside its declared range [0, 100), so the key template returns NaN and the producer is refused with value_invention_key_out_of_range (esm-spec §9.6.6), naming the producer key_set. Without the guard the key would collide silently with another pair.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ]
+  },
+  "index_sets": {
+    "rows": {
+      "kind": "interval",
+      "size": 4
+    },
+    "composite_keys": {
+      "kind": "derived",
+      "from_faq": "key_set"
+    }
+  },
+  "models": {
+    "CompositeKeyAxis": {
+      "expression_template_imports": [
+        {
+          "ref": "esm:std/relational.esm"
+        }
+      ],
+      "variables": {
+        "polProcessID": {
+          "type": "unknown",
+          "shape": [
+            "rows"
+          ]
+        },
+        "engTechID": {
+          "type": "unknown",
+          "shape": [
+            "rows"
+          ]
+        },
+        "keyExists": {
+          "type": "unknown",
+          "shape": [
+            "composite_keys"
+          ]
+        },
+        "distinctKeyCount": {
+          "type": "unknown"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "polProcessID",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              101,
+              201,
+              101,
+              101
+            ]
+          }
+        },
+        {
+          "lhs": "engTechID",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              121,
+              121,
+              122,
+              121
+            ]
+          }
+        },
+        {
+          "_comment": "The key's second component engTechID (121, 122) lies outside [0, 100), so pair_key is NaN and the build refuses the producer with value_invention_key_out_of_range naming it.",
+          "lhs": {
+            "op": "index",
+            "args": [
+              "keyExists",
+              "e"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "id": "key_set",
+            "args": [],
+            "semiring": "bool_and_or",
+            "distinct": true,
+            "output_idx": [
+              "e"
+            ],
+            "ranges": {
+              "n": {
+                "from": "rows"
+              }
+            },
+            "key": {
+              "op": "apply_expression_template",
+              "args": [],
+              "name": "pair_key",
+              "bindings": {
+                "a": {
+                  "op": "index",
+                  "args": [
+                    "polProcessID",
+                    "n"
+                  ]
+                },
+                "b": {
+                  "op": "index",
+                  "args": [
+                    "engTechID",
+                    "n"
+                  ]
+                },
+                "lo_a": 0,
+                "lo_b": 0,
+                "n_a": 1000,
+                "n_b": 100
+              }
+            },
+            "filter": {
+              "op": "true",
+              "args": []
+            },
+            "expr": {
+              "op": "true",
+              "args": []
+            }
+          }
+        },
+        {
+          "lhs": "distinctKeyCount",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [],
+            "ranges": {
+              "e": {
+                "from": "composite_keys"
+              }
+            },
+            "expr": 1.0
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "derived_axis_has_three_members",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "distinctKeyCount",
+              "time": 0.0,
+              "expected": 3.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

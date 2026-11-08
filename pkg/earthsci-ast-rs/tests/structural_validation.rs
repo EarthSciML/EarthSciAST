@@ -1550,6 +1550,17 @@ fn test_f6_continuous_relational_node() {
     );
 }
 
+/// The template twin: the same producer with its one-component skolem key
+/// written as the bare integer expression `u[f]` is refused the same way.
+#[test]
+fn test_f6_continuous_relational_node_template() {
+    assert_structural(
+        include_str!("../../../tests/invalid/faq/continuous_relational_node_template.esm"),
+        StructuralErrorCode::RelationalNodeInContinuous,
+        "/models/ContinuousRelationalNode/equations/0/rhs",
+    );
+}
+
 /// An aggregate `ranges` entry `{from: NAME}` naming an index set absent from
 /// the document registry is rejected (no implicit interval inference).
 #[test]
@@ -1558,6 +1569,18 @@ fn test_f6_undefined_index_set() {
         include_str!("../../../tests/invalid/faq/undeclared_from_name.esm"),
         StructuralErrorCode::UndefinedIndexSet,
         "/models/UndeclaredFrom/equations/0/lhs",
+    );
+}
+
+/// esm-spec §9.6.1: a template parameter standing for a range's `from` bound
+/// to a name that is not a declared index set is `undefined_index_set` at the
+/// call site, exactly as for a hand-written range.
+#[test]
+fn test_template_from_param_undeclared() {
+    assert_structural(
+        include_str!("../../../tests/invalid/faq/template_from_param_undeclared.esm"),
+        StructuralErrorCode::UndefinedIndexSet,
+        "/models/M/equations/0/rhs",
     );
 }
 

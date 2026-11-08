@@ -20,6 +20,7 @@
 
 using Test
 using EarthSciAST
+using JSON3
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
@@ -127,6 +128,66 @@ end
     end
     @test err isa EarthSciAST.TreeWalkError
     @test occursin("ghost_cells", sprint(showerror, err))
+end
+
+@testset "invalid: a template ranges over an undeclared index set (esm-spec §9.6.1)" begin
+    path = joinpath(
+        _AGG_REPO_ROOT, "tests", "invalid", "faq",
+        "template_from_param_undeclared.esm"
+    )
+    file = EarthSciAST.load_path(path)   # schema-valid: load must succeed
+    errs = EarthSciAST.validate(file).structural_errors
+    @test any(e -> e.error_type == "undefined_index_set" && e.path == "/models/M/equations/0/rhs", errs)
+    @test !any(e -> e.error_type == "undefined_variable", errs)
+    err = try
+        EarthSciAST._build_evaluator(file; model_name = "M")
+        nothing
+    catch e
+        e
+    end
+    @test err !== nothing
+    @test occursin("ghost_cells", sprint(showerror, err))
+end
+
+# The same undeclared name reached through a template that forwards it to
+# another, an initialization equation, and a subsystem model: every expression
+# field of the expanded model is checked, as Python checks every site.
+@testset "invalid: a template-bound undeclared index set at every site (esm-spec §9.6.1)" begin
+    path = joinpath(_AGG_REPO_ROOT, "tests", "invalid", "faq", "template_from_param_undeclared.esm")
+    base = JSON3.read(read(path, String), Dict{String, Any})
+    call(name, b) = Dict{String, Any}(
+        "op" => "apply_expression_template", "args" => Any[], "name" => name, "bindings" => b
+    )
+    bad = base["models"]["M"]["equations"][1]["rhs"]
+    good = call("total", Dict{String, Any}("v" => "a", "S" => "cells"))
+    cases = Dict{String, Tuple{Dict{String, Any}, String}}()
+
+    doc = deepcopy(base)
+    m = doc["models"]["M"]
+    m["expression_templates"]["outer"] = Dict{String, Any}(
+        "params" => ["w", "T"], "body" => call("total", Dict{String, Any}("v" => "w", "S" => "T"))
+    )
+    m["equations"][1]["rhs"] = call("outer", Dict{String, Any}("w" => "a", "T" => "ghost_cells"))
+    cases["wrapper"] = (doc, "/models/M/equations/0/rhs")
+
+    doc = deepcopy(base)
+    m = doc["models"]["M"]
+    m["equations"][1]["rhs"] = good
+    m["initialization_equations"] = Any[Dict{String, Any}("lhs" => "y_cells", "rhs" => bad)]
+    cases["initialization equation"] = (doc, "/models/M/initialization_equations/0/rhs")
+
+    doc = deepcopy(base)
+    m = doc["models"]["M"]
+    inner = Dict{String, Any}(k => deepcopy(v) for (k, v) in m if k != "expression_templates")
+    m["equations"][1]["rhs"] = good
+    m["subsystems"] = Dict{String, Any}("Sub" => inner)
+    cases["subsystem"] = (doc, "/models/M/subsystems/Sub/equations/0/rhs")
+
+    @testset "$name" for (name, (doc, pointer)) in cases
+        errs = EarthSciAST.validate(EarthSciAST.load_string(JSON3.write(doc))).structural_errors
+        @test any(e -> e.error_type == "undefined_index_set" && e.path == pointer, errs)
+        @test !any(e -> e.error_type == "undefined_variable", errs)
+    end
 end
 
 # esm-spec §9.7.10 / §6.6.6 (issue #185): a discretization-agnostic PDE leaf

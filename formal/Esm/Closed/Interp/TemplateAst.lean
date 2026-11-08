@@ -152,7 +152,7 @@ theorem expand_bilinear (nx ny : ℕ) :
 
 section Eval
 
-variable {α : Type} [Scalar α] [RealNaN α] [Lits α] [ExprLaws α]
+variable {α : Type} [Scalar α] [RealNaN α] [Lits α] [Elem α] [ExprLaws α]
 
 theorem op_ifelse : Op.ofString "ifelse" = .ifelse := rfl
 theorem op_index : Op.ofString "index" = .strict .index := rfl
@@ -284,7 +284,7 @@ theorem ev_index1 {a i : Ast} {xs : List α} {k : ℕ} (ha : eval a env = .ok (.
     eval (ixA a [i]) env = .ok (.num (Template.ix xs k)) := by
   simp only [ixA, eval, op_index, evalList, ha, hi]
   have hk : ((k : ℤ) - 1).toNat = k - 1 := by omega
-  simp [applyStrict, asNum, asInt, toInt_nat, indexVal, h1, h2, Template.ix, hk, bind,
+  simp [hasInf, applyStrict, asNum, asInt, toInt_nat, indexVal, h1, h2, Template.ix, hk, bind,
     Except.bind, pure, Except.pure]
   rw [List.getElem?_eq_getElem (by omega)]; rfl
 
@@ -296,7 +296,7 @@ theorem ev_index2 {a i j : Ast} {T : List (List α)} {p q : ℕ} (ha : eval a en
   have hp : ((p : ℤ) - 1).toNat = p - 1 := by omega
   have hq : ((q : ℤ) - 1).toNat = q - 1 := by omega
   rw [List.getD_eq_getElem _ _ (show p - 1 < T.length by omega)] at h4
-  simp [applyStrict, asNum, asInt, toInt_nat, indexVal, h1, h2, h3, h4, Template.ix2, entry, hp,
+  simp [hasInf, applyStrict, asNum, asInt, toInt_nat, indexVal, h1, h2, h3, h4, Template.ix2, entry, hp,
     hq, bind, Except.bind, pure, Except.pure, List.getElem?_eq_getElem (show p - 1 < T.length by omega),
     List.getElem?_eq_getElem (show q - 1 < T[p - 1].length by omega)]
 
@@ -404,7 +404,7 @@ end Eval
 
 section Templates
 
-variable {α : Type} [Scalar α] [RealNaN α] [Lits α] [ExprLaws α]
+variable {α : Type} [Scalar α] [RealNaN α] [Lits α] [Elem α] [ExprLaws α]
 
 /-- The expanded `searchsorted` evaluates to the mirror `Template.searchsorted`. -/
 theorem ev_searchsorted (A : List α) (x : α) (h53 : A.length < 2 ^ 53) :
@@ -541,7 +541,7 @@ end Templates
 
 section Apply
 
-variable {α : Type} [Scalar α] [RealNaN α] [Lits α] [ExprLaws α]
+variable {α : Type} [Scalar α] [RealNaN α] [Lits α] [Elem α] [ExprLaws α]
 
 theorem evalApply_of {t : Esm.Expr.Template} {σ : Bindings} {a : Ast} {env : Env α} {v : Val α}
     (he : expand t σ = .ok a) (hv : eval a env = .ok v) : evalApply t σ env = .ok v := by

@@ -2553,7 +2553,7 @@ function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
         )
 
     elseif op === :geo_gather || op === :geo_pia || op === :geo_skolem ||
-            op === :geo_agg
+            op === :geo_agg || op === :cellmemo || op === :geomemo
         # Compiled setup-time GEOMETRY nodes (tree_walk/geometry_compile.jl).
         # These exist only in build-time compiled geometry bodies — `u` is a
         # small loop-index frame there, never the ODE state — so this arm is

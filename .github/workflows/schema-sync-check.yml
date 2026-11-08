@@ -16,6 +16,12 @@ on:
       - 'scripts/sync-schema.sh'
       - 'lib/*.esm'
       - 'docs/static/lib/*.esm'
+      - 'pkg/EarthSciAST.jl/data/lib/*.esm'
+      - 'pkg/earthsci-ast-py/src/earthsci_ast/data/lib/*.esm'
+      - 'pkg/earthsci-ast-rs/src/stdlib/*.esm'
+      - 'pkg/earthsci-ast-go/pkg/esm/stdlib/*.esm'
+      - 'pkg/earthsci-ast-ts/src/stdlib-bundle.ts'
+      - 'pkg/earthsci-ast-ts/scripts/generate-stdlib-bundle.mjs'
       - 'scripts/sync-lib.sh'
   pull_request:
     branches: [ main ]
@@ -32,6 +38,12 @@ on:
       - 'scripts/sync-schema.sh'
       - 'lib/*.esm'
       - 'docs/static/lib/*.esm'
+      - 'pkg/EarthSciAST.jl/data/lib/*.esm'
+      - 'pkg/earthsci-ast-py/src/earthsci_ast/data/lib/*.esm'
+      - 'pkg/earthsci-ast-rs/src/stdlib/*.esm'
+      - 'pkg/earthsci-ast-go/pkg/esm/stdlib/*.esm'
+      - 'pkg/earthsci-ast-ts/src/stdlib-bundle.ts'
+      - 'pkg/earthsci-ast-ts/scripts/generate-stdlib-bundle.mjs'
       - 'scripts/sync-lib.sh'
 
 permissions:
@@ -72,5 +84,8 @@ jobs:
     - name: Check schema copies and binding versions are in sync
       run: scripts/sync-schema.sh --check
 
-    - name: Check the standard library mirror (docs/static/lib) is in sync
+    # Every binding bundles lib/ for `esm:std/<file>.esm` refs (esm-spec
+    # §4.7), and the docs site serves it too; all the copies are written from
+    # lib/ by scripts/sync-lib.sh.
+    - name: Check every standard library copy (docs and the five bindings) is in sync
       run: scripts/sync-lib.sh --check

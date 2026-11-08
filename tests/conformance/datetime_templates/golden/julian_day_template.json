@@ -1,0 +1,109 @@
+{
+  "fixture": "julian_day_template",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "datetime_julian_day_template_t0",
+      "assertion_idx": 1,
+      "variable": "r_epoch",
+      "actual": 2440587.5
+    },
+    {
+      "test_id": "datetime_julian_day_template_t0",
+      "assertion_idx": 2,
+      "variable": "r_leap_2000_feb29",
+      "actual": 2451604.0
+    },
+    {
+      "test_id": "datetime_julian_day_template_t0",
+      "assertion_idx": 3,
+      "variable": "r_not_leap_2100_feb28",
+      "actual": 2488128.499988426
+    },
+    {
+      "test_id": "datetime_julian_day_template_t0",
+      "assertion_idx": 4,
+      "variable": "r_leap_2400_mar01",
+      "actual": 2597701.5
+    },
+    {
+      "test_id": "datetime_julian_day_template_t0",
+      "assertion_idx": 5,
+      "variable": "r_leap_2024_dec31",
+      "actual": 2460676.271354167
+    },
+    {
+      "test_id": "datetime_julian_day_template_t0",
+      "assertion_idx": 6,
+      "variable": "r_pre_epoch_1969",
+      "actual": 2440587.499988426
+    },
+    {
+      "test_id": "datetime_julian_day_template_t0",
+      "assertion_idx": 7,
+      "variable": "r_century_1900",
+      "actual": 2415021.0
+    },
+    {
+      "test_id": "datetime_julian_day_template_t0",
+      "assertion_idx": 8,
+      "variable": "r_frac_epoch_below_ulp",
+      "actual": 2440587.5
+    },
+    {
+      "test_id": "datetime_julian_day_template_t0",
+      "assertion_idx": 9,
+      "variable": "r_frac_example_86399_9999999",
+      "actual": 2440588.5
+    },
+    {
+      "test_id": "datetime_julian_day_template_t0",
+      "assertion_idx": 10,
+      "variable": "r_frac_leap_day_start_2000_02_29_below_ulp",
+      "actual": 2451603.5
+    },
+    {
+      "test_id": "datetime_julian_day_template_t0",
+      "assertion_idx": 11,
+      "variable": "r_frac_leap_day_end_2000_03_01_at",
+      "actual": 2451604.5
+    },
+    {
+      "test_id": "datetime_julian_day_template_t0",
+      "assertion_idx": 12,
+      "variable": "r_frac_year_0000_below_half",
+      "actual": 1721059.499994213
+    },
+    {
+      "test_id": "datetime_julian_day_template_t0",
+      "assertion_idx": 13,
+      "variable": "r_frac_year_minus_4713_at",
+      "actual": -327.5
+    },
+    {
+      "test_id": "datetime_julian_day_template_t0",
+      "assertion_idx": 14,
+      "variable": "r_frac_year_minus_100000_below_ulp",
+      "actual": -34803190.50000001
+    },
+    {
+      "test_id": "datetime_julian_day_template_t0",
+      "assertion_idx": 15,
+      "variable": "r_frac_year_10000_above_ulp",
+      "actual": 5373484.5
+    },
+    {
+      "test_id": "datetime_julian_day_template_t0",
+      "assertion_idx": 16,
+      "variable": "r_jd_zero",
+      "actual": 0.0
+    },
+    {
+      "test_id": "datetime_julian_day_template_t0",
+      "assertion_idx": 17,
+      "variable": "r_jd_minus_100000_06_15T18_00",
+      "actual": -34803023.75
+    }
+  ]
+}

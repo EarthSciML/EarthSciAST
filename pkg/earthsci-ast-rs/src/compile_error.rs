@@ -228,8 +228,9 @@ pub enum CompileError {
     /// folds to the additive identity and reads as a plausible 0.
     #[error("{code}: {reason}")]
     ValueInventionRefused {
-        /// `derived_index_set_unmaterialized`, or `relational_node_in_continuous`
-        /// when the producer reads live state.
+        /// `derived_index_set_unmaterialized`, `relational_node_in_continuous`
+        /// when the producer reads live state, or `value_invention_key_out_of_range`
+        /// when a `distinct` key or `join` column is NaN.
         code: &'static str,
         /// The index set, its producer, and why the producer could not run.
         reason: String,

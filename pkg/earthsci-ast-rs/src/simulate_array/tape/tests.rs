@@ -4583,3 +4583,62 @@ fn ab_an_all_negative_zero_sum_is_positive_zero() {
         }
     }
 }
+
+/// A term of a two-axis box that reads only one of its axes, and carries
+/// several operations, is evaluated once over that axis and broadcast along
+/// the other (`lower_on_sub_box`); a short term stays in the box. Both are
+/// bit-identical to the oracle.
+#[test]
+fn ab_sub_box_term_is_evaluated_once_per_axis_it_reads() {
+    let n = 5i64;
+    let doc = |term: serde_json::Value| {
+        json!({
+            "esm": "1.1.0",
+            "metadata": {"name": "tape_sub_box_term"},
+            "models": {"M": {
+                "variables": {
+                    "u": {"type": "unknown", "shape": ["i"]},
+                    "P": {"type": "unknown", "shape": ["i", "j"]}
+                },
+                "equations": [
+                    {"lhs": "P", "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                        "ranges": {"i": [1, n], "j": [1, n]},
+                        "expr": {"op": "*", "args": [term, "j"]}}},
+                    d_eq("u", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
+                        "ranges": {"i": [1, n], "j": [1, n]},
+                        "expr": {"op": "+", "args": [
+                            {"op": "*", "args": [-0.1, idx("u", json!("i"))]},
+                            {"op": "*", "args": [0.01,
+                                {"op": "index", "args": ["P", "i", "j"]}]}]}}))
+                ]
+            }}
+        })
+    };
+    // The elementwise instructions over the one-axis box `[n]`.
+    let sub_box_ops = |d: serde_json::Value| {
+        let prog = taped(compile(d).build_tape_opts(&HashSet::new(), None)).0;
+        prog.instrs
+            .iter()
+            .filter(|i| match i {
+                Instr::Bin { out, .. } | Instr::Un { out, .. } => {
+                    prog.slots[*out as usize].shape.as_slice() == [n as usize]
+                }
+                _ => false,
+            })
+            .count()
+    };
+    let long = json!({"op": "-", "args": [
+        {"op": "+", "args": [
+            {"op": "*", "args": [idx("u", json!("i")), idx("u", json!("i"))]},
+            {"op": "sin", "args": [idx("u", json!("i"))]}]},
+        {"op": "*", "args": [0.5, idx("u", json!("i"))]}]});
+    let short = json!({"op": "+", "args": [{"op": "*", "args": [2.0, idx("u", json!("i"))]}, 1.0]});
+    ab_check(doc(long.clone()), -2.0, 2.0);
+    ab_check(doc(short.clone()), -2.0, 2.0);
+    assert!(sub_box_ops(doc(long)) >= 4, "the long term runs over [n]");
+    assert_eq!(
+        sub_box_ops(doc(short)),
+        0,
+        "the short term stays in the box"
+    );
+}

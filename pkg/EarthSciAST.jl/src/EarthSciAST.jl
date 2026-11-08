@@ -480,6 +480,7 @@ nothing converted a custom unit; `tests/conformance/unit_registry`, which pins
 SCALES and not only dimensions, is what converts them.
 """
 function __init__()
+    _init_stdlib_dir!()
     return Unitful.register(EarthSciAST)
 end
 

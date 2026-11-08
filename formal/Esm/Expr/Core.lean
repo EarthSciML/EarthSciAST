@@ -1,4 +1,5 @@
 import Esm.Closed.Interp.Template
+import Mathlib.Analysis.SpecialFunctions.Complex.Arg
 
 /-!
 # The ESM Expression AST and its evaluator (esm-spec §4.1–4.3), first slice
@@ -12,24 +13,35 @@ The evaluator covers exactly the slice the `lib/interp.esm` templates use:
 
 * numeric literals (a JSON number `m · 10^-e`, rounded as the scalar type
   rounds, `Lits.ofDec`);
-* `const` nodes (§4.3.3: a scalar, or a rank-1 or rank-2 array of literals);
+* `const` nodes (§4.3.3: a scalar, or a rank-1, rank-2 or rank-3 array of
+  literals);
 * references to variables and parameters, looked up in an environment, whose
   values may be arrays (§4.3.3: a variable whose defining equation is a
   `const` node gathers like an inline `const`);
 * `+` and `*` (n-ary left folds), binary `-` and `/` (§4.2 Arithmetic);
-* `<=`, `>=`, `<`, `>` (IEEE comparisons; §4.2 encodes a comparison as `1`/`0`
-  in a numeric position) and `ifelse`, which evaluates only the branch it
+* unary `-` and `neg`;
+* `<=`, `>=`, `<`, `>`, `==`, `!=` (IEEE comparisons; §4.2 encodes a comparison
+  as `1`/`0` in a numeric position), `and`, `or`, `not` (an operand holds when
+  it is a nonzero number) and `ifelse`, which evaluates only the branch it
   takes (§4.3.3 "Only a read that happens can fault");
+* the elementary functions `floor`, `abs`, `sqrt`, `sin`, `cos` and `atan2`,
+  through the `Elem` operations of the scalar type;
 * `min` / `max`, n-ary with arity ≥ 2, left folds, NaN-propagating (§4.2: IEEE
   754-2019 `minimum`/`maximum`, not `minNum`/`maxNum`);
-* `index` on a rank-1 or rank-2 array, 1-based, each index a value holding an
+* `index` on a rank-1, rank-2 or rank-3 array, 1-based, each index a value holding an
   integer, out of range an error (§4.3.3, `E_TREEWALK_CONSTARRAY_OOB`);
-* `faq` with `output_idx: []`, `reduce: "+"` and one dense `ranges` entry
-  `[start, stop]`: the fold `0 + t_start + … + t_stop` seeded at `+0.0`, in
-  increasing index order (§4.3.1).
+* `faq` with `output_idx: []`, `reduce` one of `+`, `*`, `min`, `max`, and one
+  dense `ranges` entry `[start, stop]`: the fold `0 + t_start + … + t_stop`
+  seeded at `+0.0` (`1` for `*`), in increasing index order (§4.3.1). A `min` /
+  `max` fold starts from its first term (IEEE `minimum(+∞, x) = x`, so this is
+  the fold from the identity); over no term it is the identity `±∞`, the value
+  `Val.inf`, which the scalar types do not have: only `min` and `max` consume
+  it, and every other op refuses it. The same `faq` with a `filter` (reduce `+`,
+  `min` or `max`) folds only the terms at whose index the filter holds. A `faq`
+  nested in another's body is evaluated afresh at each outer index.
 
-Everything else — another op, unary `-`, a `faq` with output indices, another
-reduction, a stepped or `from` range, several range symbols — evaluates to
+Everything else — another op, a `faq` with output indices, another reduction,
+a stepped or `from` range, several range symbols — evaluates to
 `EvalError.unsupported`, never to a value. Signed zeros are not modelled by
 `Num`/`Bin64` (so `min`/`max` do not order `-0.0` below `+0.0`).
 -/
@@ -69,6 +81,55 @@ instance : Lits Float where
       some (if x < 0 then -((-x).toUInt64.toNat : Int) else (x.toUInt64.toNat : Int))
     else none
 
+/-! ## Elementary functions -/
+
+/-- The §4.2 elementary functions and unary minus on a scalar type. At `Num`
+they are the exact real functions; at `Bin64` each is the real function
+rounded once to nearest (`floor`, `abs` and `neg` are exact on a double; for
+`sqrt`, `sin`, `cos` and `atan2` this is the correctly rounded result, an
+idealisation of a binding's libm); at `Float` they are Lean's `Float`
+functions. NaN propagates, and `sqrt` of a negative number is NaN. -/
+class Elem (α : Type) where
+  floor : α → α
+  abs : α → α
+  neg : α → α
+  sqrt : α → α
+  sin : α → α
+  cos : α → α
+  /-- `atan2(y, x)`. -/
+  atan2 : α → α → α
+
+/-- The angle of the point `(x, y)` in `(-π, π]` (`0` at the origin), the
+real `atan2(y, x)`. -/
+noncomputable def realAtan2 (y x : ℝ) : ℝ := Complex.arg ⟨x, y⟩
+
+noncomputable instance : Elem Num where
+  floor | .fin r => .fin ⌊r⌋ | .nan => .nan
+  abs | .fin r => .fin |r| | .nan => .nan
+  neg | .fin r => .fin (-r) | .nan => .nan
+  sqrt | .fin r => if r < 0 then .nan else .fin (Real.sqrt r) | .nan => .nan
+  sin | .fin r => .fin (Real.sin r) | .nan => .nan
+  cos | .fin r => .fin (Real.cos r) | .nan => .nan
+  atan2 | .fin y, .fin x => .fin (realAtan2 y x) | _, _ => .nan
+
+noncomputable instance : Elem Bin64 where
+  floor | .fin r => .fin ⌊r⌋ | .nan => .nan
+  abs | .fin r => .fin |r| | .nan => .nan
+  neg | .fin r => .fin (-r) | .nan => .nan
+  sqrt | .fin r => if r < 0 then .nan else .fin (Esm.F64.rn (Real.sqrt r)) | .nan => .nan
+  sin | .fin r => .fin (Esm.F64.rn (Real.sin r)) | .nan => .nan
+  cos | .fin r => .fin (Esm.F64.rn (Real.cos r)) | .nan => .nan
+  atan2 | .fin y, .fin x => .fin (Esm.F64.rn (realAtan2 y x)) | _, _ => .nan
+
+instance : Elem Float where
+  floor := Float.floor
+  abs := Float.abs
+  neg := fun x => -x
+  sqrt := Float.sqrt
+  sin := Float.sin
+  cos := Float.cos
+  atan2 := Float.atan2
+
 /-! ## The AST -/
 
 /-- A `const` node's `value`: a numeric leaf or a nested array. -/
@@ -79,8 +140,9 @@ inductive Const where
 mutual
 
 /-- The ESM Expression AST (§4.1). A JSON number is `num`, a bare string a
-`var`, an object with an `op` a `const`, a `faq` or a generic `node` (its
-remaining scalar fields, which this slice never needs, are not carried). -/
+`var`, an object with an `op` a `const`, a `faq`, an `apply_expression_template`
+reference or a generic `node` (its remaining scalar fields, which this slice
+never needs, are not carried). -/
 inductive Ast where
   | num (m : Int) (e : Nat)
   | var (name : String)
@@ -89,22 +151,43 @@ inductive Ast where
   /-- `faq`: `output_idx`, `reduce`, `ranges`, `expr`, `args`. -/
   | faq (outputIdx : List String) (reduce : String) (ranges : Ranges) (expr : Ast)
       (args : List Ast)
+  /-- `faq` with a `filter`: `output_idx`, `reduce`, `ranges`, `filter`, `expr`,
+  `args`. -/
+  | faqWhere (outputIdx : List String) (reduce : String) (ranges : Ranges) (filter : Ast)
+      (expr : Ast) (args : List Ast)
+  /-- `apply_expression_template`: the template `name` with its `bindings`
+  (§9.6.2). It denotes its expansion (§9.6.4 rule 2); `eval` refuses it, and
+  `Esm.Expr.expandRefs` replaces it by that expansion. -/
+  | apply (name : String) (bindings : Binds)
 
 /-- A `faq`'s `ranges` object, in key order: each symbol with its tuple
 (`[start, stop]` or `[start, step, stop]`). -/
 inductive Ranges where
   | nil
   | cons (sym : String) (tuple : List Ast) (rest : Ranges)
+  /-- A range over a whole index set, `{"from": set}`. The model has no index
+  sets, so a `faq` with one is refused; the name is a substitution site. -/
+  | fromSet (sym : String) (set : String) (rest : Ranges)
+
+/-- An `apply_expression_template` node's `bindings` object, in key order. -/
+inductive Binds where
+  | nil
+  | cons (param : String) (value : Ast) (rest : Binds)
 
 end
 
 /-! ## Values and errors -/
 
-/-- A value: a scalar or a rank-1 / rank-2 array (row-major). -/
+/-- A value: a scalar or a rank-1, rank-2 or rank-3 array (row-major). -/
 inductive Val (α : Type) where
   | num (v : α)
   | arr1 (v : List α)
   | arr2 (v : List (List α))
+  | arr3 (v : List (List (List α)))
+  /-- `+∞` (`neg = false`) or `-∞`: only the value of a `min` / `max`
+  reduction over no term (its identity, §4.3.1). `min` and `max` consume it;
+  every other op refuses it, as the scalar types have no infinities. -/
+  | inf (neg : Bool)
 
 inductive EvalError where
   /-- Outside the modelled slice: an explicit refusal, not a value. -/
@@ -120,7 +203,7 @@ abbrev Env (α : Type) := List (String × Val α)
 
 section Eval
 
-variable {α : Type} [Scalar α] [Lits α]
+variable {α : Type} [Scalar α] [Lits α] [Elem α]
 
 def zero : α := Lits.ofDec 0 0
 def one : α := Lits.ofDec 1 0
@@ -156,11 +239,30 @@ def indexVal : Val α → List Int → Except EvalError α
       if h' : 1 ≤ j ∧ j ≤ row.length then .ok (row[(j - 1).toNat]'(by omega))
       else .error .outOfRange
     else .error .outOfRange
+  | .arr3 m, [i, j, k] =>
+    if h : 1 ≤ i ∧ i ≤ m.length then
+      let pl := m[(i - 1).toNat]'(by omega)
+      if h' : 1 ≤ j ∧ j ≤ pl.length then
+        let row := pl[(j - 1).toNat]'(by omega)
+        if h'' : 1 ≤ k ∧ k ≤ row.length then .ok (row[(k - 1).toNat]'(by omega))
+        else .error .outOfRange
+      else .error .outOfRange
+    else .error .outOfRange
   | _, _ => .error (.typeError "index: operand rank and index count disagree")
 
 def constLeaf : Const → Except EvalError α
   | .leaf m e => .ok (Lits.ofDec m e)
-  | .arr _ => .error (.unsupported "const: array rank above 2")
+  | .arr _ => .error (.unsupported "const: array rank above 3")
+
+/-- A rank-1 row of a `const` array. -/
+def constRow : Const → Except EvalError (List α)
+  | .arr r => r.mapM constLeaf
+  | .leaf _ _ => .error (.unsupported "const: ragged")
+
+/-- A rank-2 plane of a `const` array. -/
+def constPlane : Const → Except EvalError (List (List α))
+  | .arr r => r.mapM constRow
+  | .leaf _ _ => .error (.unsupported "const: ragged")
 
 def constVal : Const → Except EvalError (Val α)
   | .leaf m e => .ok (.num (Lits.ofDec m e))
@@ -168,11 +270,12 @@ def constVal : Const → Except EvalError (Val α)
     match cs.mapM constLeaf with
     | .ok v => .ok (.arr1 v)
     | .error _ =>
-      match cs.mapM (fun c => match c with
-          | .arr r => r.mapM constLeaf
-          | .leaf _ _ => .error (.unsupported "const: ragged")) with
+      match cs.mapM constRow with
       | .ok v => .ok (.arr2 v)
-      | .error e => .error e
+      | .error _ =>
+        match cs.mapM constPlane with
+        | .ok v => .ok (.arr3 v)
+        | .error e => .error e
 
 /-- The index values of a dense range `[a, b]`, in increasing order. -/
 def indices (a b : Int) : List Int :=
@@ -182,6 +285,7 @@ def indices (a b : Int) : List Int :=
 but `ifelse`). -/
 inductive StrictOp where
   | index | add | mul | sub | div | le | ge | lt | gt | max | min
+  | eq | ne | and | or | not | neg | floor | abs | sqrt | sin | cos | atan2
   deriving DecidableEq
 
 /-- How an `op` string is dispatched. -/
@@ -203,6 +307,18 @@ def Op.ofString (s : String) : Op :=
   else if s = ">" then .strict .gt
   else if s = "max" then .strict .max
   else if s = "min" then .strict .min
+  else if s = "==" then .strict .eq
+  else if s = "!=" then .strict .ne
+  else if s = "and" then .strict .and
+  else if s = "or" then .strict .or
+  else if s = "not" then .strict .not
+  else if s = "neg" then .strict .neg
+  else if s = "floor" then .strict .floor
+  else if s = "abs" then .strict .abs
+  else if s = "sqrt" then .strict .sqrt
+  else if s = "sin" then .strict .sin
+  else if s = "cos" then .strict .cos
+  else if s = "atan2" then .strict .atan2
   else .other s
 
 /-- A strict op on its evaluated operands. -/
@@ -219,6 +335,8 @@ def applyStrict : StrictOp → List (Val α) → Except EvalError α
     let us ← vs.mapM asNum
     return us.foldl mul u
   | .sub, [a, b] => do return sub (← asNum a) (← asNum b)
+  | .sub, [a] => do return Elem.neg (← asNum a)
+  | .neg, [a] => do return Elem.neg (← asNum a)
   | .div, [a, b] => do return div (← asNum a) (← asNum b)
   | .le, [a, b] => do return ofBool (le (← asNum a) (← asNum b))
   | .ge, [a, b] => do
@@ -238,7 +356,56 @@ def applyStrict : StrictOp → List (Val α) → Except EvalError α
     let u ← asNum v
     let us ← (w :: vs).mapM asNum
     return us.foldl fmin u
+  | .eq, [a, b] => do
+    let u ← asNum a
+    let v ← asNum b
+    return ofBool (le u v && le v u)
+  | .ne, [a, b] => do
+    let u ← asNum a
+    let v ← asNum b
+    return ofBool !(le u v && le v u)
+  | .and, [a, b] => do
+    let u ← asNum a
+    let v ← asNum b
+    return ofBool (truthy u && truthy v)
+  | .or, [a, b] => do
+    let u ← asNum a
+    let v ← asNum b
+    return ofBool (truthy u || truthy v)
+  | .not, [a] => do return ofBool !(truthy (← asNum a))
+  | .floor, [a] => do return Elem.floor (← asNum a)
+  | .abs, [a] => do return Elem.abs (← asNum a)
+  | .sqrt, [a] => do return Elem.sqrt (← asNum a)
+  | .sin, [a] => do return Elem.sin (← asNum a)
+  | .cos, [a] => do return Elem.cos (← asNum a)
+  | .atan2, [a, b] => do return Elem.atan2 (← asNum a) (← asNum b)
   | _, _ => .error (.typeError "operand count")
+
+/-- Some operand is an infinity (the value of an empty `min` / `max`). -/
+def hasInf : List (Val α) → Bool
+  | [] => false
+  | .inf _ :: _ => true
+  | _ :: vs => hasInf vs
+
+/-- `min` / `max` over operands some of which are infinities: `+∞` is the
+identity of `min` and absorbs `max` unless an operand is NaN (IEEE 754-2019
+`minimum` / `maximum`), and `-∞` the reverse. -/
+def infMinMax : StrictOp → List (Val α) → Except EvalError (Val α)
+  | o, vs => do
+    let isMin := o == .min
+    unless o == .min || o == .max do throw (.typeError "an infinity outside min / max")
+    let nums ← vs.filterMapM (fun v => match v with
+      | .num x => pure (some x)
+      | .inf _ => pure none
+      | _ => throw (.typeError "expected a scalar"))
+    -- the absorbing infinity: `-∞` for `min`, `+∞` for `max`
+    if vs.any (fun v => match v with | .inf neg => neg == isMin | _ => false) then
+      match nums.find? isNaN with
+      | some x => return .num x
+      | none => return .inf isMin
+    match nums with
+    | [] => return .inf (!isMin)
+    | u :: us => return .num (us.foldl (if isMin then fmin else fmax) u)
 
 /-- One step of a `faq` `+` fold. -/
 def faqStep (acc : α) (v : Val α) : Except EvalError α := do
@@ -259,7 +426,7 @@ def eval : Ast → Env α → Except EvalError (Val α)
     | .ifelse => evalIfelse args env
     | .strict o => do
       let vs ← evalList args env
-      return .num (← applyStrict o vs)
+      if hasInf vs then infMinMax o vs else return .num (← applyStrict o vs)
     | .other s => .error (.unsupported s)
   | .faq [] "+" (.cons k [s, t] .nil) body _, env => do
     -- §4.3.1: a `+` reduction over one dense range, seeded at `+0.0`, in index order
@@ -268,8 +435,54 @@ def eval : Ast → Env α → Except EvalError (Val α)
     let r ← (indices a b).foldlM
       (fun acc j => do faqStep acc (← eval body ((k, .num (Lits.ofDec j 0)) :: env))) (zero : α)
     return .num r
+  | .faq [] "*" (.cons k [s, t] .nil) body _, env => do
+    let a ← asInt (← asNum (← eval s env))
+    let b ← asInt (← asNum (← eval t env))
+    let r ← (indices a b).foldlM
+      (fun acc j => do return mul acc (← asNum (← eval body ((k, .num (Lits.ofDec j 0)) :: env))))
+      (one : α)
+    return .num r
+  | .faq [] "min" (.cons k [s, t] .nil) body _, env => do
+    let a ← asInt (← asNum (← eval s env))
+    let b ← asInt (← asNum (← eval t env))
+    match indices a b with
+    | [] => .ok (.inf false)
+    | j :: js => do
+      let v ← asNum (← eval body ((k, .num (Lits.ofDec j 0)) :: env))
+      let r ← js.foldlM (fun acc i => do
+        return fmin acc (← asNum (← eval body ((k, .num (Lits.ofDec i 0)) :: env)))) v
+      return .num r
+  | .faq [] "max" (.cons k [s, t] .nil) body _, env => do
+    let a ← asInt (← asNum (← eval s env))
+    let b ← asInt (← asNum (← eval t env))
+    match indices a b with
+    | [] => .ok (.inf true)
+    | j :: js => do
+      let v ← asNum (← eval body ((k, .num (Lits.ofDec j 0)) :: env))
+      let r ← js.foldlM (fun acc i => do
+        return fmax acc (← asNum (← eval body ((k, .num (Lits.ofDec i 0)) :: env)))) v
+      return .num r
+  | .faqWhere [] red (.cons k [s, t] .nil) p body _, env => do
+    -- a filtered reduction: only the indices at which `p` holds contribute
+    let a ← asInt (← asNum (← eval s env))
+    let b ← asInt (← asNum (← eval t env))
+    let r ← (indices a b).foldlM (fun (acc : Option α) j => do
+      let e := (k, Val.num (Lits.ofDec j 0)) :: env
+      if truthy (← asNum (← eval p e)) then
+        let v ← asNum (← eval body e)
+        return some (match acc with
+          | none => if red = "+" then add zero v else v
+          | some x => if red = "+" then add x v else if red = "min" then fmin x v else fmax x v)
+      else return acc) none
+    if red = "+" then return .num (r.getD zero)
+    else if red = "min" then return (match r with | some x => .num x | none => .inf false)
+    else if red = "max" then return (match r with | some x => .num x | none => .inf true)
+    else .error (.unsupported s!"filtered faq with reduce {red}")
+  | .faqWhere _ _ _ _ _ _, _ =>
+    .error (.unsupported "filtered faq outside output_idx [], one dense [start, stop] range")
+  | .apply n _, _ => .error (.unsupported s!"apply_expression_template {n}: not expanded")
   | .faq _ _ _ _ _, _ =>
-    .error (.unsupported "faq outside output_idx [], reduce +, one dense [start, stop] range")
+    .error (.unsupported "faq outside output_idx [], reduce + * min max, one dense [start, stop] range")
 
 def evalList : List Ast → Env α → Except EvalError (List (Val α))
   | [], _ => .ok []

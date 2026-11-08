@@ -943,6 +943,43 @@ pub(super) unsafe fn data_gather(
         }
     }
     let m = subs.len();
+    // Up to four subscripts over a box of up to three axes: nested loops
+    // over fixed-size stride tables, the same row-major element order as the
+    // odometer below without its per-element bookkeeping.
+    if m <= 4 && (1..=3).contains(&nd) {
+        let mut dims = [1usize; 3];
+        dims[3 - nd..].copy_from_slice(shape);
+        let mut ps = [std::ptr::null::<f64>(); 4];
+        let mut st = [[0isize; 3]; 4];
+        for (d, sub) in subs.iter().enumerate() {
+            match sub {
+                Rv::S(v) => ps[d] = v as *const f64,
+                Rv::V { ptr, strides } => {
+                    ps[d] = *ptr;
+                    for a in 0..nd {
+                        st[d][3 - nd + a] = strides[a] as isize;
+                    }
+                }
+            }
+        }
+        let mut k = 0usize;
+        for i0 in 0..dims[0] {
+            for i1 in 0..dims[1] {
+                for i2 in 0..dims[2] {
+                    let at = spec.at(|d| unsafe {
+                        let o = i0 as isize * st[d][0]
+                            + i1 as isize * st[d][1]
+                            + i2 as isize * st[d][2];
+                        *ps[d].offset(o)
+                    });
+                    let x = read(at, &mut faulted);
+                    unsafe { *dst.add(k) = x };
+                    k += 1;
+                }
+            }
+        }
+        return faulted;
+    }
     let mut ptrs: SmallVec<[*const f64; 4]> = SmallVec::with_capacity(m);
     let mut strs: SmallVec<[DimI; 4]> = SmallVec::with_capacity(m);
     for sub in subs {

@@ -253,12 +253,11 @@ function declaresName(
  *
  * `enclosing`, when supplied, is the component the reference was WRITTEN IN, and
  * it is tried FIRST. That is what lets a component name its OWN mounted
- * subsystem: the model `Diurnal` mounts a subsystem `Calendar` and refers to
- * `Calendar.seconds_since_midnight` — the entire point of subsystem inclusion,
- * and the shape of `tests/valid/lib_calendar_subsystem_inclusion.esm` and
- * `lib_solar_subsystem_inclusion.esm`. Resolving only from the FILE ROOT looked
- * up a top-level system named `Calendar`, found none, and reported a valid,
- * pinned fixture as an unresolved scoped reference.
+ * subsystem: the model `Photolysis` mounts a subsystem `Solar` and refers to
+ * `Solar.solar_zenith_angle` — the entire point of subsystem inclusion, and the
+ * shape of `tests/valid/lib_solar_subsystem_inclusion.esm`. Resolving only from
+ * the FILE ROOT looked up a top-level system named `Solar`, found none, and
+ * reported a valid, pinned fixture as an unresolved scoped reference.
  *
  * (This was invisible until reference integrity began checking observed
  * `expression`s — both fixtures hide the reference in one. It is the same class

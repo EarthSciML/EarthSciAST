@@ -829,7 +829,8 @@ impl Spelling {
 
 /// Every declared 0-D parameter's default (overridden by `overrides`, each key
 /// read through [`Spelling::resolve`]) — the scalar evaluation scope, sorted
-/// by name.
+/// by name. A parameter with no `default` is in it only when an override
+/// gives its value.
 ///
 /// **Selection and value resolution must agree.** They did not: the filter
 /// admitted every parameter with `default.is_some()`, while the value read
@@ -853,13 +854,14 @@ fn scalar_params(
     spelling: &Spelling,
     overrides: &HashMap<String, f64>,
 ) -> Result<(Vec<f64>, Vec<String>), PrepareError> {
+    // Every scalar parameter: one with no `default` takes its value from an
+    // override alone, and is left out without one.
     let mut names: Vec<String> = model
         .variables
         .iter()
         .filter(|(_, v)| {
             v.var_type == VariableType::Parameter
                 && v.shape.as_ref().map(|s| s.is_empty()).unwrap_or(true)
-                && v.default_scalar().is_some()
         })
         .map(|(k, _)| k.clone())
         .collect();
@@ -878,16 +880,16 @@ fn scalar_params(
             }
         }
     }
-    let vals = names
+    let (vals, names): (Vec<f64>, Vec<String>) = names
         .iter()
-        .map(|n| {
-            chosen.get(n.as_str()).map(|&(_, v)| v).unwrap_or_else(|| {
-                model.variables[n]
-                    .default_scalar()
-                    .expect("selected on default_scalar().is_some()")
-            })
+        .filter_map(|n| {
+            let v = match chosen.get(n.as_str()) {
+                Some(&(_, v)) => v,
+                None => model.variables[n].default_scalar()?,
+            };
+            Some((v, n.clone()))
         })
-        .collect();
+        .unzip();
     Ok((vals, names))
 }
 
@@ -990,6 +992,14 @@ fn producer_seed_closure(
     let mut refs = HashSet::new();
     for s in seeds {
         declared_args(s, &mut refs);
+        // A producer's `join.on` columns that are plain observeds (the
+        // per-component integer bin columns of a lib/relational.esm rewrite)
+        // seed the closure too, so the coordinates they read are evaluated.
+        if let Expr::Operator(node) = s {
+            for clause in node.join.iter().flatten() {
+                refs.extend(clause.on.iter().flatten().cloned());
+            }
+        }
     }
     for r in refs {
         if join_free.contains(&r) && needed.insert(r.clone()) {

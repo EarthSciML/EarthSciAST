@@ -15,8 +15,9 @@ tests/closed_functions/
 ├── datetime/
 │   ├── year/                 (datetime.year — proleptic-Gregorian year)
 │   │   ├── canonical.esm     (trivial ODE invoking the function from RHS)
-│   │   └── expected.json     (input vectors + expected outputs + tolerance)
-│   ├── month/                (datetime.month)
+│   │   ├── expected.json     (input vectors + expected outputs + tolerance)
+│   │   └── template.esm      (the lib/calendar.esm template on a subset of the scenarios)
+│   ├── month/                (datetime.month; each datetime/<fn>/ has the same three files)
 │   ├── day/                  (datetime.day)
 │   ├── hour/                 (datetime.hour)
 │   ├── minute/               (datetime.minute)
@@ -47,6 +48,17 @@ inline test. The `interp_templates` conformance tier
 with an inline-test runner. Each binding's harness additionally runs every
 success scenario, NaN queries included, through the expanded template and
 asserts the same bits as the `fn` form.
+
+Each `datetime/<fn>/template.esm` likewise imports `lib/calendar.esm` (the nine
+pure-AST templates `year`, `month`, `day`, `hour`, `minute`, `second`,
+`day_of_year`, `julian_day`, `is_leap_year`, each of one parameter `t`) and
+applies the template to scenarios of the sibling `expected.json` inside the
+templates' domain `|t| < 2^52` s; the `datetime_templates` tier
+(`tests/conformance/datetime_templates/`) runs them. Each binding's harness runs
+every scenario, the error scenarios included, through the expanded template:
+inside the domain it must give the `fn` form's bits, outside it (the two
+int32-year success scenarios, the `closed_function_overflow` scenarios) NaN.
+Julia, Python and Rust check the value; TypeScript and Go check the expansion.
 
 ## `expected.json` schema
 

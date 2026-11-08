@@ -1224,6 +1224,86 @@ function _cellwise_compile_once(
     return ce
 end
 
+# ---- Per-cell memo of shared sub-trees ----
+# A compiled cell evaluator is a DAG: a node reached from several parents (the
+# same resolved sub-tree in several unrolled terms) is walked once per parent.
+# Every such node whose value depends only on the cell's parameters and `t`
+# (it reads no state, no loop counter and no live buffer) is wrapped in a
+# `:cellmemo` node that keeps the last (parameters, `t`) it was evaluated at
+# and its value, so it is computed once per cell. The value is the walk's own
+# value, so the result is unchanged bit for bit. `P` is the evaluator's
+# parameter `NamedTuple` type, so an entry is stored inline and a miss
+# allocates nothing. Each thread has its own entry: only the task running on a
+# thread reads or writes that thread's entry, and it does not yield between
+# the read and the write, so threads never share one; a task that moves to
+# another thread between two cells finds an entry whose key says whether it
+# holds this cell's value.
+struct _CellMemo{P}
+    entries::Vector{Tuple{Bool, P, Float64, Float64}}
+end
+function _CellMemo{P}() where {P <: NamedTuple}
+    blank = (false, P(ntuple(_ -> NaN, Val(fieldcount(P)))), NaN, NaN)
+    return _CellMemo{P}(fill(blank, Threads.maxthreadid()))
+end
+
+const _CELL_IMPURE_KINDS = (
+    _NK_STATE, _NK_CACHED, _NK_PARAM_GATHER, _NK_LOOPVAR, _NK_STATE_GATHER,
+    _NK_RECUR_GATHER, _NK_LIVE_GATHER,
+)
+
+function _cell_memoize!(root::_Node, ::Type{P}) where {P <: NamedTuple}
+    refs = IdDict{_Node, Int}()
+    pure = IdDict{_Node, Bool}()
+    function visit(n::_Node)
+        c = get(refs, n, 0)
+        refs[n] = c + 1
+        c == 0 || return pure[n]
+        p = !(n.kind in _CELL_IMPURE_KINDS) && n.op !== :cellmemo
+        for ch in n.children
+            p &= visit(ch)
+        end
+        return pure[n] = p
+    end
+    visit(root)
+    wrap = IdDict{_Node, _Node}()
+    for (n, c) in refs
+        (c >= 2 && pure[n] && !isempty(n.children)) || continue
+        wrap[n] = _mknode(
+            kind = _NK_OP, op = :cellmemo, payload = _CellMemo{P}(), children = _Node[n]
+        )
+    end
+    isempty(wrap) && return root
+    seen = IdDict{_Node, Nothing}()
+    function rewire(n::_Node)
+        haskey(seen, n) && return
+        seen[n] = nothing
+        for k in eachindex(n.children)
+            ch = n.children[k]
+            rewire(ch)
+            w = get(wrap, ch, nothing)
+            w === nothing || (n.children[k] = w)
+        end
+        return
+    end
+    rewire(root)
+    return get(wrap, root, root)
+end
+
+@inline function _eval_cellmemo(n::_Node, u, p, t, ::Type{T})::Float64 where {T}
+    m = n.payload
+    if m isa _CellMemo{typeof(p)} && t isa Float64
+        tid = Threads.threadid()
+        if tid <= length(m.entries)
+            e = @inbounds m.entries[tid]
+            e[1] && e[2] === p && e[3] === t && return e[4]
+            v = Float64(_eval_node(n.children[1], u, p, t, T))
+            @inbounds m.entries[tid] = (true, p, t, v)
+            return v
+        end
+    end
+    return Float64(_eval_node(n.children[1], u, p, t, T))
+end
+
 # Build the compile-once evaluator for `expr` over an `nidx`-D output grid, or
 # `nothing` if the fast path cannot apply (the caller falls back to per-cell). The
 # resolve+compile is attempted ONCE with the output indices bound as reserved
@@ -1264,13 +1344,23 @@ function _cellwise_compile_once_impl(
     reg = Dict{String, Any}(String(k) => v for (k, v) in registered_functions)
     node = try
         cellwise = _index_at_cell_sym(expr, syms_str)
+        # One build memo for the resolve and the compile: a sub-tree shared by
+        # reference (an inner reduction that does not read the enclosing
+        # unrolled loop's symbol, such as argmin's minimum) resolves and
+        # compiles to one node, which `_cell_memoize!` then evaluates once per
+        # cell.
+        bmemo = _BuildMemo()
+        vmap = Dict{String, Int}()
         resolved = _resolve_indices(
             cellwise,
             Dict{String, Tuple{Vector{Int}, Vector{Int}}}(),
-            Dict{String, Int}(), const_arrays,
-            _EMPTY_PGATHER, nothing, bound
+            vmap, const_arrays,
+            _EMPTY_PGATHER, bmemo, bound
         )
-        _compile(resolved, Dict{String, Int}(), Set{Symbol}(psyms), reg)
+        _cell_memoize!(
+            _compile(resolved, vmap, Set{Symbol}(psyms), reg, bmemo),
+            NamedTuple{Tuple(psyms), NTuple{length(psyms), Float64}}
+        )
     catch err
         _is_resource_error(err) && rethrow()
         return nothing   # anything unsupported → per-cell fallback

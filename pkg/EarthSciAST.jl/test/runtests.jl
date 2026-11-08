@@ -325,6 +325,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("array_contraction_table_test.jl")      # …its gated / ragged / filtered form, table-driven
     include("count_fold_test.jl")                   # #588: the indicator sum emitted as a count
     include("closed_interp_native_test.jl")         # #660: the interp templates under native; repeated sub-trees shared
+    include("relational_templates_test.jl")         # the lib/relational.esm argmin/argmax templates against the ops
+    include("closed_templates_native_test.jl")      # the phase-3 library templates under strict native
+    include("relational_rewrites_test.jl")          # the skolem / rank / gated-argmin fixtures against their lib/relational.esm rewrites
     include("makearray_nested_reduction_test.jl")   # #547: a nested scalar reduction in a makearray region
     include("affine_reduce_test.jl")                # the affine tier's run-time contraction fold
     include("native_probe_fixtures_test.jl")        # native's probe fixtures: rank > 3, fill sections, const subscripts
@@ -361,6 +364,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("geometry_assembly_conformance_test.jl")
     include("geometry_overlap_join_conformance_test.jl")
     include("geometry_ranged_clip_test.jl")
+    include("geometry_templates_test.jl")  # lib/geometry.esm overlap templates vs the polygon leaf
     include("setup_map_compile_once_test.jl")  # promoted-physics MAP: compile-once == per-cell, bitwise
     include("setup_fill_test.jl")  # construction-time fills through the cascade: bitwise, one compile across N
     include("geom_sweep_specialize_test.jl")   # geometry sweep: rank-specialized == rank-abstract, bitwise
@@ -432,6 +436,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     #      (src/lower_expression_templates.jl, template_imports.jl) ----
     include("expression_templates_test.jl")
     include("template_imports_test.jl")
+    include("stdlib_refs_test.jl")       # §4.7 esm:std/ refs to the bundled lib/
     include("scope_injection_test.jl")
     include("out_of_line_templates_test.jl")
     include("compile_once_templates_test.jl")

@@ -147,6 +147,7 @@ fn bridge_expand_equals_expanded_oracle() {
         ),
         ("scalar_field_param", "fixture.esm", "expanded.esm"),
         ("ranges_param", "fixture.esm", "expanded.esm"),
+        ("ranges_from_param", "fixture.esm", "expanded.esm"),
         ("two_div_two_meshes", "fixture.esm", "expanded.esm"),
     ];
     for (dir, fix, gold) in cases {

@@ -271,3 +271,112 @@ fn interp_templates_nan_query() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// The scalar lookup's instructions in the executor's scalar loop: loads,
+// one-element gathers, counts and the `ifelse` jumps run there, and every
+// case they do not cover (a gather that faults, an unsorted window) still
+// writes the oracle's `dy` and latches its fault.
+// ---------------------------------------------------------------------------
+
+/// A document of a scalar query state `s`, a rank-1 state `u` over `i` in
+/// `[1, n]` whose derivative reads the scalar observed `c = body`, with the
+/// interpolation library loaded.
+fn scalar_lookup_doc(n: i64, body: Value) -> Value {
+    use super::array_tests::{d_eq, doc, idx};
+    let mut d = doc(
+        json!({
+            "u": {"type": "unknown", "shape": ["i"]},
+            "s": {"type": "unknown"},
+            "c": {"type": "unknown"}
+        }),
+        vec![
+            json!({"lhs": "c", "rhs": body}),
+            d_eq(
+                "u",
+                n,
+                op("*", vec![json!("c"), idx(json!("u"), &[json!("i")])]),
+            ),
+            json!({"lhs": {"op": "D", "args": ["s"], "wrt": "t"},
+                   "rhs": op("*", vec![json!(-0.1), json!("s")])}),
+        ],
+    );
+    d["models"]["M"]["expression_templates"] = library();
+    d
+}
+
+fn apply(name: &str, bindings: Value) -> Value {
+    json!({"op": "apply_expression_template", "args": [], "name": name, "bindings": bindings})
+}
+
+/// The executor's scalar loop of a lookup: `linear` over a literal axis at
+/// a scalar query that reaches both clamps and the interior (every jump of
+/// its two `ifelse`s, taken and not), and `linear` over the STATE `u` as its
+/// axis, a window the lowering cannot see sorted, so the count checks it on
+/// every call and counts the unsorted seeded states entry by entry.
+#[test]
+fn scalar_lookup_loop_matches_the_oracle() {
+    use super::array_tests::{ab, compile, no_params, opcount};
+    let axis: Vec<f64> = AXIS.iter().map(|a| a * 1.6 - 2.0).collect();
+    // Three queries, `s`, `4 s` and `s / 5`, so each seeded state reaches
+    // the interior and, mostly, a clamp.
+    let at = |x: Value| {
+        apply(
+            "linear",
+            json!({"table": konst(json!(TABLE)), "axis": konst(json!(axis)), "x": x,
+                   "n": AXIS.len()}),
+        )
+    };
+    let literal = op(
+        "+",
+        vec![
+            op(
+                "+",
+                vec![at(json!("s")), at(op("*", vec![json!(4.0), json!("s")]))],
+            ),
+            at(op("/", vec![json!("s"), json!(5.0)])),
+        ],
+    );
+    let prog = ab(&compile(scalar_lookup_doc(7, literal)), &no_params());
+    assert_eq!(counts(&prog), vec![(CountRel::Le, true); 3]);
+    assert!(opcount(&prog, "JmpIfZero") >= 2, "the clamps short-circuit");
+    let state_axis = apply(
+        "linear",
+        json!({"table": konst(json!(TABLE)), "axis": "u", "x": "s", "n": 7}),
+    );
+    let prog = ab(&compile(scalar_lookup_doc(7, state_axis)), &no_params());
+    assert_eq!(counts(&prog), vec![(CountRel::Le, false)]);
+}
+
+/// A count used unclamped as a subscript: `searchsorted` is `n + 1` above
+/// the last knot, one past the end of a table of `n` entries. Read from an
+/// inline const the gather faults there (the oracle's fault, latched by the
+/// general path), from the state `u` it reads the zero ghost; in range it is
+/// the entry. Seeded queries fall on both sides.
+#[test]
+fn scalar_lookup_gather_past_the_end_matches_the_oracle() {
+    use super::array_tests::{ab, compile, idx, no_params, opcount};
+    let xs = [-1.5, -1.0, -0.5, 0.0, 0.5, 1.0];
+    let bracket = |x: Value| {
+        apply(
+            "searchsorted",
+            json!({"x": x, "xs": konst(json!(xs)), "n": xs.len()}),
+        )
+    };
+    for base in [konst(json!(TABLE[..6])), json!("u")] {
+        // At `s` and at `4 s`, which is past the last knot more often.
+        let body = op(
+            "+",
+            vec![
+                idx(base.clone(), &[bracket(json!("s"))]),
+                idx(
+                    base.clone(),
+                    &[bracket(op("*", vec![json!(4.0), json!("s")]))],
+                ),
+            ],
+        );
+        let prog = ab(&compile(scalar_lookup_doc(6, body)), &no_params());
+        assert_eq!(counts(&prog), vec![(CountRel::Ge, true); 2], "{base}");
+        assert_eq!(opcount(&prog, "DataGather"), 2, "{base}");
+    }
+}

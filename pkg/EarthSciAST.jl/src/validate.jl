@@ -705,7 +705,7 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
     end
 
     # 2. Validate reference integrity
-    append!(errors, validate_reference_integrity(file))
+    append!(errors, validate_reference_integrity(file; views = units.models))
 
     # 2b. An inline test's assertion targets, override keys and assertion ranks
     # (esm-spec §6.6.2, §6.6.3, §6.6.5).
@@ -868,7 +868,7 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
     #                                     whose key/body reads a STATE variable, so it
     #                                     classifies CONTINUOUS (§5.7 guard 2).
     # Each attaches at the containing expression FIELD, matching the corpus pins.
-    append!(errors, validate_aggregate_semantics(file))
+    append!(errors, validate_aggregate_semantics(file; views = units.models))
 
     # 5c'. Array broadcast semantics (esm-spec §4.3.4). Two statically decidable
     # defects the schema cannot express:
@@ -1836,15 +1836,62 @@ expression-bearing field of every model (and its subsystems) and, for each
 Findings attach at the FIELD pointer (`/models/M/equations/i/rhs`, …), the same
 convention the reference-integrity pass uses.
 """
-function validate_aggregate_semantics(file::EsmFile)::Vector{StructuralError}
+function validate_aggregate_semantics(file::EsmFile; views = nothing)::Vector{StructuralError}
     errors = StructuralError[]
     file.models === nothing && return errors
     registry = Set{String}(keys(file.index_sets))
     for model_name in sort!(collect(keys(file.models)))
+        model = file.models[model_name]
         _check_model_aggregates!(
-            errors, file, file.models[model_name],
+            errors, file, model,
             "/models/$model_name", registry
         )
+        # A template parameter may stand for a range's `from` (esm-spec §9.6.1),
+        # so the index-set name a call binds is checked on the expansion; the
+        # pointer still names the authored field.
+        view = _units_view(file, model_name, model, views)
+        view === model && continue
+        reg = get(file.component_templates, "models.$model_name", nothing)
+        reg === nothing && continue
+        _check_template_index_sets!(errors, model, view, "/models/$model_name", registry, reg)
+    end
+    return errors
+end
+
+# The `undefined_index_set` check of `_check_undefined_index_set!` on every
+# expression field of `model` (`_foreach_model_expression`: equations,
+# initialization equations, parameter updates, guesses, events, inline tests,
+# subsystem models) that calls a template, read from the expanded `view`. A
+# field the view leaves unexpanded is expanded here against `reg`.
+function _check_template_index_sets!(
+        errors::Vector{StructuralError}, model::Model, view::Model,
+        path::String, registry::Set{String}, reg
+    )
+    templated = Set{String}()
+    _foreach_model_expression(model, path, nothing) do e, anchor, _
+        _contains_template_reference(e) && push!(templated, anchor)
+        nothing
+    end
+    isempty(templated) && return errors
+    memo = Dict{Tuple{String, String}, OpExpr}()
+    _foreach_model_expression(view, path, nothing) do e, anchor, _
+        anchor in templated || return nothing
+        any(x -> x.path == anchor && x.error_type == ERROR_CODES.UNDEFINED_INDEX_SET, errors) &&
+            return nothing
+        if _contains_template_reference(e)
+            e = try
+                _expand_expr_refs(e, reg, nothing, memo)
+            catch err
+                # An unresolvable call is reported by the template checks.
+                err isa ExpressionTemplateError || rethrow()
+                return nothing
+            end
+        end
+        foreach_subexpr_once(e) do sub
+            sub isa OpExpr && sub.op == "faq" && _check_undefined_index_set!(errors, sub, anchor, registry)
+            nothing
+        end
+        return nothing
     end
     return errors
 end
@@ -2406,9 +2453,60 @@ function _units_view(file::EsmFile, model_name::AbstractString, model::Model)
     file.component_templates === nothing && return model
     reg = get(file.component_templates, "models.$model_name", nothing)
     reg === nothing && return model
-    view = deepcopy(model)
+    view = _expansion_copy(model)
     _expand_model_refs!(view, reg)
     return view
+end
+# The same, read from `views` — a validation pass's `_UnitsInputs.models`,
+# which holds each top-level model's view — when the caller built them.
+_units_view(file::EsmFile, model_name::AbstractString, model::Model, ::Nothing) =
+    _units_view(file, model_name, model)
+_units_view(::EsmFile, model_name::AbstractString, ::Model, views::AbstractDict) =
+    views[model_name]
+
+# A copy of `model` that `_expand_model_refs!` can expand without touching the
+# original: the containers it rewrites (the equation vectors, the variable
+# map, and the same in every subsystem model) are copied, and what it only
+# reads or replaces whole — each `Equation`, each `ModelVariable`, the events,
+# tests and analyses, a non-model subsystem — is shared. A whole `deepcopy`
+# also copied every inline array the equations carry (a regrid's polygon
+# rings), work that grew with the data.
+function _expansion_copy(model::Model)
+    seen = IdDict{Any, Any}()
+    _share_unexpanded!(seen, model)
+    return Base.deepcopy_internal(model, seen)
+end
+function _share_unexpanded!(seen::IdDict{Any, Any}, m::Model)
+    for eq in m.equations
+        _share_fields!(seen, eq)
+    end
+    for eq in m.initialization_equations
+        _share_fields!(seen, eq)
+    end
+    for (_, v) in m.variables
+        _share_fields!(seen, v)
+    end
+    for x in (m.discrete_events, m.continuous_events, m.tests, m.analyses, m.guesses)
+        seen[x] = x
+    end
+    for (_, sub) in m.subsystems
+        sub isa Model ? _share_unexpanded!(seen, sub) : (seen[sub] = sub)
+    end
+    return seen
+end
+# `deepcopy` consults `seen` only for a mutable object, so an immutable
+# `Equation` or `ModelVariable` is shared through its fields: each mutable
+# field value (an expression tree, an inline array) is marked as its own copy,
+# and an immutable struct field is shared the same way.
+function _share_fields!(seen::IdDict{Any, Any}, x)
+    if ismutable(x)
+        seen[x] = x
+    elseif isstructtype(typeof(x))
+        for i in 1:nfields(x)
+            isdefined(x, i) && _share_fields!(seen, getfield(x, i))
+        end
+    end
+    return seen
 end
 
 # The reaction system the units engine judges: `_units_view` for a reaction
@@ -2803,7 +2901,7 @@ end
 
 Validate that all variable references can be resolved through the hierarchy.
 """
-function validate_reference_integrity(file::EsmFile)::Vector{StructuralError}
+function validate_reference_integrity(file::EsmFile; views = nothing)::Vector{StructuralError}
     errors = StructuralError[]
 
     # Validate model variable references. A COUPLED model — operator-composed or
@@ -2820,7 +2918,7 @@ function validate_reference_integrity(file::EsmFile)::Vector{StructuralError}
                 errors, validate_model_references(
                     file, model, "/models/$model_name";
                     model_name = model_name,
-                    is_coupled = (model_name ∈ coupled)
+                    is_coupled = (model_name ∈ coupled), views = views
                 )
             )
         end
@@ -3188,7 +3286,7 @@ Validate variable references within a model.
 function validate_model_references(
         file::EsmFile, model::Model, path::String;
         model_name::AbstractString = "",
-        is_coupled::Bool = false
+        is_coupled::Bool = false, views = nothing
     )::Vector{StructuralError}
     errors = StructuralError[]
 
@@ -3239,11 +3337,12 @@ function validate_model_references(
     # denotes its expansion). A template binding is a value substituted into the
     # body, and only where the body uses it in an expression position is it a
     # reference; one bound to a scalar field (`K_manifold => "planar"` filling a
-    # `manifold`) is a literal. Expansion keeps the equation order, so pointers
-    # still name the authored equation.
-    eqs = isempty(model_name) ? model.equations :
-        _units_view(file, model_name, model).equations
-    for (i, eq) in enumerate(eqs)
+    # `manifold`) or to a range's `from` is a literal. Expansion keeps the
+    # equation order, so pointers still name the authored equation. The view
+    # expands the equations, initialization equations and parameter updates of
+    # the model and of its subsystems, which are walked from it below too.
+    view = isempty(model_name) ? model : _units_view(file, model_name, model, views)
+    for (i, eq) in enumerate(view.equations)
         append!(errors, validate_expression_references(file, eq.lhs, "$path/equations/$(i - 1)/lhs"; scope = scope))
         append!(errors, validate_expression_references(file, eq.rhs, "$path/equations/$(i - 1)/rhs"; scope = scope))
     end
@@ -3271,8 +3370,8 @@ function validate_model_references(
     #    `when` trigger and the `expression` value form. An observed unknown's
     #    defining expression is NOT here any more — it is an ordinary equation,
     #    walked with every other equation.
-    for name in sort!(collect(keys(model.variables)))
-        rules = model.variables[name].update
+    for name in sort!(collect(keys(view.variables)))
+        rules = view.variables[name].update
         rules === nothing && continue
         for (ri, rule) in enumerate(rules)
             for (field, e) in (("when", rule.when), ("expression", rule.expression))
@@ -3301,7 +3400,7 @@ function validate_model_references(
     end
 
     # 3. `initialization_equations`.
-    for (i, eq) in enumerate(model.initialization_equations)
+    for (i, eq) in enumerate(view.initialization_equations)
         append!(
             errors, validate_expression_references(
                 file, eq.lhs, "$path/initialization_equations/$(i - 1)/lhs"; scope = scope
@@ -3328,8 +3427,8 @@ function validate_model_references(
         append!(errors, validate_event_references(file, event, "$path/continuous_events/$(i - 1)"; scope = scope))
     end
 
-    # Recursively check subsystems
-    for (subsys_name, subsys) in model_subsystems(model)
+    # Recursively check subsystems (already expanded in the view)
+    for (subsys_name, subsys) in model_subsystems(view)
         append!(errors, validate_model_references(file, subsys, "$path/subsystems/$subsys_name"))
     end
 

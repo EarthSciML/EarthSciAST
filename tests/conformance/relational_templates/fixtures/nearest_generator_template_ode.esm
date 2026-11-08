@@ -1,0 +1,336 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "RelationalNearestGeneratorTemplateODE",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "description": "The value_invention_geometry document nearest_generator_ode.esm with its `argmin` arg-witness replaced by the `argmin` template of lib/relational.esm: the same squared distance, written over the template's loop symbol `k_argmin_1` in place of the op's `g`, with n = 3 generators. Point 3 is exactly 0.25 (squared) from generators 2 and 3 and the template takes the smaller index, so assign = [1, 2, 2, 3] as with the op, and w = [0, 1, 1, 2] at t = 1. Written by generate.py."
+  },
+  "index_sets": {
+    "points": {
+      "kind": "interval",
+      "size": 4
+    },
+    "generators": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "NearestGeneratorTemplateODE": {
+      "expression_template_imports": [
+        {
+          "ref": "esm:std/relational.esm"
+        }
+      ],
+      "variables": {
+        "px": {
+          "type": "unknown",
+          "shape": [
+            "points"
+          ]
+        },
+        "py": {
+          "type": "unknown",
+          "shape": [
+            "points"
+          ]
+        },
+        "gx": {
+          "type": "unknown",
+          "shape": [
+            "generators"
+          ]
+        },
+        "gy": {
+          "type": "unknown",
+          "shape": [
+            "generators"
+          ]
+        },
+        "assign": {
+          "type": "unknown",
+          "shape": [
+            "points"
+          ]
+        },
+        "w": {
+          "type": "unknown",
+          "shape": [
+            "points"
+          ],
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": "px",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              0.0,
+              1.0,
+              1.5,
+              2.0
+            ]
+          }
+        },
+        {
+          "lhs": "py",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              0.0,
+              0.5,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        {
+          "lhs": "gx",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              0.0,
+              1.0,
+              2.0
+            ]
+          }
+        },
+        {
+          "lhs": "gy",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        {
+          "_comment": "assign[i] = the argmin template over the squared distance from point i to generator k_argmin_1.",
+          "lhs": {
+            "op": "index",
+            "args": [
+              "assign",
+              "i"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "points"
+              }
+            },
+            "args": [
+              "px",
+              "py",
+              "gx",
+              "gy"
+            ],
+            "expr": {
+              "op": "apply_expression_template",
+              "args": [],
+              "name": "argmin",
+              "bindings": {
+                "f": {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "-",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "px",
+                                "i"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "gx",
+                                "k_argmin_1"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "-",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "px",
+                                "i"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "gx",
+                                "k_argmin_1"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "-",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "py",
+                                "i"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "gy",
+                                "k_argmin_1"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "-",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "py",
+                                "i"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "gy",
+                                "k_argmin_1"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "n": 3
+              }
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "points"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "w",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [
+              "gx",
+              "assign"
+            ],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "points"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "gx",
+                {
+                  "op": "index",
+                  "args": [
+                    "assign",
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "nearest_generator_template_ode",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "tolerance": {
+            "rel": 1e-09,
+            "abs": 1e-12
+          },
+          "assertions": [
+            {
+              "variable": "w[1]",
+              "time": 1.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "w[2]",
+              "time": 1.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "w[3]",
+              "time": 1.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "w[4]",
+              "time": 1.0,
+              "expected": 2.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

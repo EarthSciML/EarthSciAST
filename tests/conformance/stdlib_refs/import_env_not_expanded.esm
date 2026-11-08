@@ -1,0 +1,77 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "import_env_not_expanded",
+    "description": "Imports `esm:std/${ESM_STDLIB_TEST_NAME}` with the variable set to `interp.esm` by the harness. `${VAR}` is never expanded inside an `esm:` ref, so the name is the literal `${ESM_STDLIB_TEST_NAME}`, which the bundle does not contain: template_import_unresolved (esm-spec §4.7 rule 3).",
+    "authors": [
+      "EarthSciML"
+    ]
+  },
+  "models": {
+    "M": {
+      "expression_template_imports": [
+        {
+          "ref": "esm:std/${ESM_STDLIB_TEST_NAME}"
+        }
+      ],
+      "variables": {
+        "s": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.5
+        },
+        "r": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "s"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": "r",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "linear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  10.0,
+                  20.0,
+                  40.0
+                ]
+              },
+              "axis": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  2.0
+                ]
+              },
+              "x": "x",
+              "n": 3
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -78,6 +78,7 @@ from .simulation_common import (
 )
 from .sympy_bridge import SimulationError
 from .value_invention import (
+    KEY_OUT_OF_RANGE,
     ValueInventionError,
     _vi_detect,
     _vi_lhs_base,
@@ -948,6 +949,12 @@ def _expr_referenced_names(expr: Expr) -> set[str]:
             refs.add(e)
         elif isinstance(e, ExprNode):
             stack.extend(iter_children(e))
+            # A value-equality `join` reads its key columns: an observed column
+            # (a per-component bin column) must be materialized first.
+            for clause in getattr(e, "join", None) or []:
+                if isinstance(clause, dict):
+                    for pair in clause.get("on") or []:
+                        refs.update(str(x) for x in pair)
     return refs
 
 
@@ -1825,6 +1832,25 @@ def _has_arg_witness(flat: FlattenedSystem) -> bool:
     return any(walk(eq.rhs) for eq in flat.equations)
 
 
+def _join_producer_nodes(equations: list[Any]) -> list[ExprNode]:
+    """The ``distinct`` ``faq`` producers with a ``join`` among ``equations``'
+    right-hand sides: the nodes that seed :func:`_binning_coord_arrays`'s
+    producer closure. A producer's ``join.on`` key columns are among the names
+    :func:`_expr_referenced_names` reads, so a column that is a plain observed
+    (the per-component integer bin column of a lib/relational.esm rewrite) is
+    materialized, with the coordinates it reads, before the producer runs. The
+    column is matched by its exact (flattened) name, as every other reference
+    is."""
+    return [
+        eq.rhs
+        for eq in equations
+        if isinstance(eq.rhs, ExprNode)
+        and eq.rhs.op == "faq"
+        and getattr(eq.rhs, "distinct", None) is True
+        and getattr(eq.rhs, "join", None)
+    ]
+
+
 def _frontdoor_join_keys_and_extents(
     flat: FlattenedSystem,
     ordered_observed: list[tuple[str, Expr]],
@@ -1875,16 +1901,7 @@ def _frontdoor_join_keys_and_extents(
     # its envelope/filter factors may be join-free observeds (the in-model LCC
     # projections) that must be materialized for the producer to run. Seed the
     # binning-coordinate closure from those producer nodes too.
-    producer_seed_nodes: list[ExprNode] = []
-    for eq in flat.equations:
-        rhs = eq.rhs
-        if (
-            isinstance(rhs, ExprNode)
-            and rhs.op == "faq"
-            and getattr(rhs, "distinct", None) is True
-            and getattr(rhs, "join", None)
-        ):
-            producer_seed_nodes.append(rhs)
+    producer_seed_nodes = _join_producer_nodes(flat.equations)
     const_arrays: dict[str, np.ndarray] = {
         str(k): np.asarray(v)
         for k, v in _binning_coord_arrays(
@@ -1955,6 +1972,8 @@ def _frontdoor_join_keys_and_extents(
         }
         return buffers, idx_sets, dict(res.extents), dict(res.members), outputs
     except ValueInventionError as exc:
+        if exc.code == KEY_OUT_OF_RANGE:
+            raise  # already names the column (esm-spec §9.6.6)
         # A producer a derived index set names could not run, so that set has no
         # members. Degrading its extent to {} would let a contraction over it fold
         # to 0, so it is refused here with the engine's reason (esm-spec §9.6.6).

@@ -175,6 +175,9 @@ class ErrorCode(Enum):
     # producer could not be materialized at build. Refused rather than contracted
     # as an empty range, which would read as a plausible 0.
     DERIVED_INDEX_SET_UNMATERIALIZED = "derived_index_set_unmaterialized"
+    # §9.6.6: a `distinct` key or a value-invention `join` column evaluates to
+    # NaN (a lib/relational.esm key template's out-of-range component), named.
+    VALUE_INVENTION_KEY_OUT_OF_RANGE = "value_invention_key_out_of_range"
 
 
 # ===========================================================================

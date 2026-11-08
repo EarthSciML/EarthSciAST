@@ -151,6 +151,8 @@ mod function_tables_lowering;
 mod geometry_conformance;
 #[path = "geometry_simulate_conformance.rs"]
 mod geometry_simulate_conformance;
+#[path = "geometry_templates.rs"]
+mod geometry_templates;
 #[path = "graph_conformance.rs"]
 mod graph_conformance;
 #[path = "graph_structure.rs"]
@@ -305,6 +307,10 @@ mod recurrence_causal_self_reference;
 mod recurrence_native_agreement;
 #[path = "refresh_conformance.rs"]
 mod refresh_conformance;
+#[path = "relational_rewrites.rs"]
+mod relational_rewrites;
+#[path = "relational_templates.rs"]
+mod relational_templates;
 #[path = "reserved_index_symbol.rs"]
 mod reserved_index_symbol;
 #[path = "reservoir_constant_species.rs"]
@@ -351,6 +357,8 @@ mod solver_external_conformance;
 mod solver_time_span_conformance;
 #[path = "static_evaluation_assertions_conformance.rs"]
 mod static_evaluation_assertions_conformance;
+#[path = "stdlib_refs_conformance.rs"]
+mod stdlib_refs_conformance;
 #[path = "stoichiometric_matrix.rs"]
 mod stoichiometric_matrix;
 #[path = "structural_validation.rs"]

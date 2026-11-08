@@ -293,4 +293,43 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
 
 end
 
+# A node reached from two parents is wrapped by `_cell_memoize!` in a
+# `:cellmemo` node: evaluated once per cell, to the same bits as the tree
+# without sharing, and allocating nothing per cell.
+@testset "a shared sub-tree is evaluated once per cell" begin
+    t1 = EA.expression_from_json(_op("*", "a", _op("+", "b", "__esm_oidx_1")))
+    t2 = EA.expression_from_json(_op("*", "a", _op("+", "b", "__esm_oidx_1")))
+    e = EA.OpExpr("+", EA.ASTExpr[t1, EA.OpExpr("-", EA.ASTExpr[t2, EA.VarExpr("c")])])
+    params = Dict{String, Any}("a" => 0.3, "b" => -1.25, "c" => 7.0)
+    ce_plain = EA._cellwise_compile_once(e, 1, Dict{String, Any}(), Dict{String, Function}(), params)
+    @test ce_plain !== nothing
+    # The same evaluator with the second copy of the term replaced by the
+    # first, so one node has two parents.
+    ce0 = EA._cellwise_compile_once(e, 1, Dict{String, Any}(), Dict{String, Function}(), params)
+    root = ce0.node
+    root.children[2].children[1] = root.children[1]
+    syms, np, ni = typeof(ce0).parameters
+    P = NamedTuple{syms, NTuple{length(syms), Float64}}
+    ce = EA._CellEval{syms, np, ni}(EA._cell_memoize!(root, P), ce0.base, ce0.t)
+    memos = 0
+    seen = IdDict{Any, Nothing}()
+    function count_memos(n)
+        haskey(seen, n) && return
+        seen[n] = nothing
+        n.op === :cellmemo && (memos += 1)
+        foreach(count_memos, n.children)
+        return
+    end
+    count_memos(ce.node)
+    @test memos == 1
+    cells = [[i] for i in 1:64]
+    got = EA._eval_cells(ce, cells)
+    @test isequal(got, EA._eval_cells(ce_plain, cells))
+    @test isequal(got, EA._eval_cells(ce, cells))
+    if VERSION >= v"1.12"
+        # Only the output vector: a memo miss stores its entry in place.
+        @test (@allocated EA._eval_cells(ce, cells)) == (@allocated EA._eval_cells(ce_plain, cells))
+    end
+end
+
 end # module
