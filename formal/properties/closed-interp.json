@@ -973,6 +973,90 @@
       "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α] [Esm.Closed.RelationalAst.NaNIs α] (F P : Esm.Expr.Ast) (n : ℕ), n + (1 : ℕ) ≤ (2 : ℕ) ^ (53 : ℕ) → ∀ (env : Esm.Expr.Env α) (v : ℕ → α) (Pb : ℕ → Bool), (∀ (j : ℕ), (1 : ℕ) ≤ j → j ≤ n → Esm.Expr.eval F ((\"k_argmax_where_1\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑j)) :: env) = Except.ok (Esm.Expr.Val.num (v j)) ∧ ∀ (w : Esm.Expr.Val α), Esm.Expr.eval F ((\"k_argmax_where_1\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑j)) :: (\"k_argmax_where_1\", w) :: env) = Except.ok (Esm.Expr.Val.num (v j))) → (∀ (j : ℕ), (1 : ℕ) ≤ j → j ≤ n → Esm.Expr.eval P ((\"k_argmax_where_1\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑j)) :: env) = Except.ok (Esm.Expr.Val.num (Esm.Expr.ofBool (Pb j))) ∧ ∀ (w : Esm.Expr.Val α), Esm.Expr.eval P ((\"k_argmax_where_1\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑j)) :: (\"k_argmax_where_1\", w) :: env) = Except.ok (Esm.Expr.Val.num (Esm.Expr.ofBool (Pb j)))) → ∃ (j : ℕ), Esm.Expr.evalApply Esm.Lib.Relational.argmax_where [(\"f\", F), (\"p\", P), (\"n\", Esm.Expr.Ast.num ↑n (0 : ℕ))] env = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑j)) ∧ ((∀ (i : ℕ), (1 : ℕ) ≤ i → i ≤ n → Pb i = Bool.false) → j = n + (1 : ℕ)) ∧ ((∃ (i : ℕ), (1 : ℕ) ≤ i ∧ i ≤ n ∧ Pb i = Bool.true) → (1 : ℕ) ≤ j ∧ j ≤ n ∧ Pb j = Bool.true ∧ ((∃ (i : ℕ), (1 : ℕ) ≤ i ∧ i ≤ n ∧ Pb i = Bool.true ∧ v i = Esm.Closed.Scalar.nan) → v j = Esm.Closed.Scalar.nan ∧ ∀ (i : ℕ), (1 : ℕ) ≤ i → i < j → Pb i = Bool.true → v i ≠ Esm.Closed.Scalar.nan) ∧ ((∀ (i : ℕ), (1 : ℕ) ≤ i → i ≤ n → Pb i = Bool.true → v i ≠ Esm.Closed.Scalar.nan) → (∀ (i : ℕ), (1 : ℕ) ≤ i → i ≤ n → Pb i = Bool.true → Esm.Closed.Scalar.le (v i) (v j) = Bool.true) ∧ ∀ (i : ℕ), (1 : ℕ) ≤ i → i < j → Pb i = Bool.true → Esm.Closed.Scalar.lt (v i) (v j) = Bool.true))",
       "status": "proven",
       "theorem": "Esm.Closed.RelationalAst.argmax_where_template"
+    },
+    {
+      "id": "P-count-bisection",
+      "clauses": [
+        "spec.9.2.searchsorted-xs-monotone"
+      ],
+      "statement": "When a predicate holds on a prefix of a list and fails on the rest, the bisection partitionPoint returns the number of elements satisfying it.",
+      "lean_statement": "∀ {β : Type} (p : β → Bool) (S : List β), Esm.Closed.CountAst.PrefixClosed p S → Esm.Closed.CountAst.partitionPoint p S = List.countP p S",
+      "status": "proven",
+      "theorem": "Esm.Closed.CountAst.partitionPoint_eq_countP"
+    },
+    {
+      "id": "P-count-search-list",
+      "clauses": [
+        "spec.9.2.searchsorted-xs-monotone"
+      ],
+      "statement": "For the comparisons <=, <, >=, >, every key list A (any order, NaN keys allowed) and every query q (NaN included): with S the non-NaN keys sorted ascending, the number of keys with a REL q is the bisection count searchCount rel S q, and the number without it is |A| minus that.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [Esm.Closed.CountAst.LtNaN α] [inst_3 : Esm.Expr.Lits α] [Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α] [Esm.Closed.RelationalAst.NaNIs α], ∀ rel ∈ Esm.Closed.CountAst.ordOps, ∀ (A S : List α) (q : α), S.Perm (List.filter (fun (a : α) => !Esm.Closed.Scalar.isNaN a) A) → List.Pairwise (fun (a b : α) => Esm.Closed.Scalar.le a b = Bool.true) S → List.countP (fun (a : α) => Esm.Closed.CountAst.relB rel a q) A = Esm.Closed.CountAst.searchCount rel S q ∧ List.countP (fun (a : α) => !Esm.Closed.CountAst.relB rel a q) A = A.length - Esm.Closed.CountAst.searchCount rel S q",
+      "status": "proven",
+      "theorem": "Esm.Closed.CountAst.countP_eq_search"
+    },
+    {
+      "id": "P-count-fold-exact",
+      "clauses": [
+        "spec.9.6.4.observable-as-expand",
+        "conf.5.6.3.empty-reduction-registry-identity"
+      ],
+      "statement": "The faq + reduction seeded at +0.0 over k in [1, n] of ifelse(a[k] REL x, 1, 0) or ifelse(a[k] REL x, 0, 1), for each of the six comparisons, evaluates exactly to the natural-number count of keys among the first n for which the indicator is 1, for n <= |a| and n <= 2^53, at every scalar type with exact small-integer arithmetic.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α] {env : Esm.Expr.Env α}, ∀ rel ∈ Esm.Closed.CountAst.relOps, ∀ (swap : Bool) {axis qE nE : Esm.Expr.Ast} {k : String} {n : ℕ} {A : List α} {q : α}, n ≤ (2 : ℕ) ^ (53 : ℕ) → n ≤ A.length → Esm.Expr.eval nE env = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑n)) → (∀ (v : Esm.Expr.Val α), Esm.Expr.eval axis ((k, v) :: env) = Except.ok (Esm.Expr.Val.arr1 A)) → (∀ (v : Esm.Expr.Val α), Esm.Expr.eval qE ((k, v) :: env) = Except.ok (Esm.Expr.Val.num q)) → Esm.Expr.eval (Esm.Closed.CountAst.countRelA rel swap axis qE k nE) env = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑(List.countP (fun (a : α) => Esm.Closed.CountAst.relB rel a q != swap) (List.take n A))))",
+      "status": "proven",
+      "theorem": "Esm.Closed.CountAst.count_fold_exact"
+    },
+    {
+      "id": "P-count-fold-exact-binary64",
+      "clauses": [
+        "spec.9.6.4.observable-as-expand"
+      ],
+      "statement": "In binary64 (every addition rounded to nearest even), the comparison-count faq over all of a key array of at most 2^53 entries evaluates exactly to the natural-number count.",
+      "lean_statement": "∀ rel ∈ Esm.Closed.CountAst.relOps, ∀ (swap : Bool) (k : String), k ≠ \"A\" → k ≠ \"X\" → ∀ (A : List Esm.Closed.Template.Bin64) (q : Esm.Closed.Template.Bin64), A.length ≤ (2 : ℕ) ^ (53 : ℕ) → Esm.Expr.eval (Esm.Closed.CountAst.countRelA rel swap (Esm.Expr.Ast.var \"A\") (Esm.Expr.Ast.var \"X\") k (Esm.Expr.Ast.num ↑A.length (0 : ℕ))) (Esm.Closed.CountAst.cenv A q) = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.Bin64.fin ↑(List.countP (fun (a : Esm.Closed.Template.Bin64) => Esm.Closed.CountAst.relB rel a q != swap) A)))",
+      "status": "proven",
+      "theorem": "Esm.Closed.CountAst.count_fold_exact_binary64"
+    },
+    {
+      "id": "P-count-perm-invariant",
+      "clauses": [
+        "conf.5.5.pure-function-of-total-order"
+      ],
+      "statement": "The evaluated comparison-count faq is the same for every permutation of its key array, for each of the six comparisons and both branch orders: sorting a copy of the keys does not change the result.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α], ∀ rel ∈ Esm.Closed.CountAst.relOps, ∀ (swap : Bool) (k : String), k ≠ \"A\" → k ≠ \"X\" → ∀ (A B : List α), A.Perm B → ∀ (q : α), A.length ≤ (2 : ℕ) ^ (53 : ℕ) → Esm.Expr.eval (Esm.Closed.CountAst.countRelA rel swap (Esm.Expr.Ast.var \"A\") (Esm.Expr.Ast.var \"X\") k (Esm.Expr.Ast.num ↑A.length (0 : ℕ))) (Esm.Closed.CountAst.cenv A q) = Esm.Expr.eval (Esm.Closed.CountAst.countRelA rel swap (Esm.Expr.Ast.var \"A\") (Esm.Expr.Ast.var \"X\") k (Esm.Expr.Ast.num ↑A.length (0 : ℕ))) (Esm.Closed.CountAst.cenv B q)",
+      "status": "proven",
+      "theorem": "Esm.Closed.CountAst.count_perm_invariant"
+    },
+    {
+      "id": "P-count-eq-search",
+      "clauses": [
+        "spec.9.2.searchsorted-xs-monotone",
+        "spec.9.6.4.observable-as-expand"
+      ],
+      "statement": "For <=, <, >=, >, the evaluated count faq_k ifelse(A[k] REL q, 1, 0) over any key array (NaN keys allowed, any order) equals the bisection count over a sorted copy of its non-NaN keys, for every query including NaN; the swapped-branch form ifelse(A[k] REL q, 0, 1) equals |A| minus it.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α] [Esm.Closed.CountAst.LtNaN α] [Esm.Closed.RelationalAst.NaNIs α], ∀ rel ∈ Esm.Closed.CountAst.ordOps, ∀ (k : String), k ≠ \"A\" → k ≠ \"X\" → ∀ (A S : List α) (q : α), S.Perm (List.filter (fun (a : α) => !Esm.Closed.Scalar.isNaN a) A) → List.Pairwise (fun (a b : α) => Esm.Closed.Scalar.le a b = Bool.true) S → A.length ≤ (2 : ℕ) ^ (53 : ℕ) → Esm.Expr.eval (Esm.Closed.CountAst.countRelA rel Bool.false (Esm.Expr.Ast.var \"A\") (Esm.Expr.Ast.var \"X\") k (Esm.Expr.Ast.num ↑A.length (0 : ℕ))) (Esm.Closed.CountAst.cenv A q) = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑(Esm.Closed.CountAst.searchCount rel S q))) ∧ Esm.Expr.eval (Esm.Closed.CountAst.countRelA rel Bool.true (Esm.Expr.Ast.var \"A\") (Esm.Expr.Ast.var \"X\") k (Esm.Expr.Ast.num ↑A.length (0 : ℕ))) (Esm.Closed.CountAst.cenv A q) = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑(A.length - Esm.Closed.CountAst.searchCount rel S q)))",
+      "status": "proven",
+      "theorem": "Esm.Closed.CountAst.count_eq_search"
+    },
+    {
+      "id": "P-relational-rank-of-set-eq-rank-of",
+      "clauses": [
+        "spec.9.6.1.ranges-from-binding-index-set",
+        "spec.9.6.3.bindings-cover-params"
+      ],
+      "statement": "With the {\"from\": S} range read as the dense range over the |S| positions of S, the rank_of_set template of lib/relational.esm evaluates to exactly what rank_of(x, members, |S|) does, for every key and member array.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α] (A : List α) (x : α), A.length < (2 : ℕ) ^ (53 : ℕ) → Esm.Closed.CountAst.evalApplyFrom [(\"S\", A.length)] Esm.Lib.Relational.rank_of_set [(\"x\", Esm.Expr.Ast.var \"X\"), (\"members\", Esm.Expr.Ast.var \"A\"), (\"S\", Esm.Expr.Ast.var \"S\")] [(\"A\", Esm.Expr.Val.arr1 A), (\"X\", Esm.Expr.Val.num x)] = Esm.Expr.evalApply Esm.Lib.Relational.rank_of [(\"x\", Esm.Expr.Ast.var \"X\"), (\"members\", Esm.Expr.Ast.var \"A\"), (\"n\", Esm.Expr.Ast.num ↑A.length (0 : ℕ))] [(\"A\", Esm.Expr.Val.arr1 A), (\"X\", Esm.Expr.Val.num x)]",
+      "status": "proven",
+      "theorem": "Esm.Closed.CountAst.rank_of_set_eq_rank_of"
+    },
+    {
+      "id": "P-relational-rank-of-set",
+      "clauses": [
+        "spec.9.6.1.ranges-from-binding-index-set",
+        "spec.9.2.searchsorted-xs-monotone"
+      ],
+      "statement": "With the {\"from\": S} range read as the dense range over the members' positions, the rank_of_set template on ascending real members of length below 2^53 evaluates to interp.searchsorted(x, members) for every key, NaN included.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α] (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 ≤ x2) a → a.length < (2 : ℕ) ^ (53 : ℕ) → ∀ (x : α), Esm.Closed.CountAst.evalApplyFrom [(\"S\", a.length)] Esm.Lib.Relational.rank_of_set [(\"x\", Esm.Expr.Ast.var \"X\"), (\"members\", Esm.Expr.Ast.var \"A\"), (\"S\", Esm.Expr.Ast.var \"S\")] [(\"A\", Esm.Expr.Val.arr1 (List.map Esm.Closed.Template.RealNaN.fin a)), (\"X\", Esm.Expr.Val.num x)] = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑(Esm.Closed.searchsorted x (List.map Esm.Closed.Template.RealNaN.fin a))))",
+      "status": "proven",
+      "theorem": "Esm.Closed.CountAst.rank_of_set_template_eq"
     }
   ]
 }

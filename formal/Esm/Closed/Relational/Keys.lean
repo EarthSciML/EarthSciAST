@@ -22,8 +22,10 @@ for a `join`-gated arg-witness:
   result is `n + 1` when no candidate passes, and otherwise the index the
   unfiltered argmin / argmax theorems give, over the passing candidates only.
 
-`rank_of_set` (the candidate range `{"from": S}`) is transcribed but not
-evaluated: the model has no index sets.
+`rank_of_set` (the candidate range `{"from": S}`) is not evaluated by
+`Esm.Expr.eval`, which has no index sets; `Esm/Closed/Relational/Count.lean`
+reads that range as the dense range over the set's positions and proves the
+template equal to `rank_of` (`rank_of_set_eq_rank_of`).
 -/
 
 namespace Esm.Closed.RelationalAst
