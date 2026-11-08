@@ -148,6 +148,10 @@ pub(super) unsafe fn exec_lanes(
 ) {
     #[cfg(target_arch = "wasm32")]
     let _ = ways;
+    if ls.lanes == 1 && ls.inputs.is_empty() {
+        unsafe { exec_one_lane(ls, env, slab_ptr, slot_off, scratch, dy) };
+        return;
+    }
     let LaneScratch {
         codes,
         own,
@@ -163,10 +167,6 @@ pub(super) unsafe fn exec_lanes(
     svals.clear();
     for op in &ls.scalars {
         svals.push(resolve_scalar(op, env, slab_ptr, slot_off));
-    }
-    if ls.lanes == 1 && ls.inputs.is_empty() {
-        exec_block(ls, svals, &mut own.regs, slab_ptr, slot_off, dy);
-        return;
     }
     // The folds are the `f64` kernels; Float32 runs the micro-ops.
     let code = codes[spec].as_ref().filter(|_| !crate::precision::is_f32());
@@ -323,6 +323,29 @@ unsafe fn run_lanes(
 /// A one-lane program: the micro-ops one after another over scalar
 /// registers, each through the same kernel definitions the chunk loops
 /// expand (`dispatch_bin_kernel` / `dispatch_un_kernel`).
+/// [`exec_lanes`] for a program of one lane and no lane inputs: its
+/// scalars resolved, then its micro-ops run once as a block, whatever the
+/// call's split width.
+///
+/// # Safety
+/// As [`exec_lanes`].
+pub(super) unsafe fn exec_one_lane(
+    ls: &LaneSpec,
+    env: &Env,
+    slab_ptr: *mut f64,
+    slot_off: &[usize],
+    scratch: &mut LaneScratch,
+    dy: &mut [f64],
+) {
+    debug_assert!(ls.lanes == 1 && ls.inputs.is_empty());
+    let LaneScratch { own, svals, .. } = scratch;
+    svals.clear();
+    for op in &ls.scalars {
+        svals.push(resolve_scalar(op, env, slab_ptr, slot_off));
+    }
+    exec_block(ls, svals, &mut own.regs, slab_ptr, slot_off, dy);
+}
+
 fn exec_block(
     ls: &LaneSpec,
     svals: &[f64],
