@@ -209,6 +209,40 @@ fn serialize_canonical_eps<S: serde::Serializer>(
     }
 }
 
+/// `deserialize_with` adapter for [`ExpressionNode::value`]: a `const` node's
+/// inline value in canonical-number form (§5.5.3.1 rule 1). Every number whose
+/// value is integral and fits `i64`, at any depth of a nested array, is held as
+/// an integer, however the document spelled it, so `[100.0, 0.5]` is
+/// `[100, 0.5]` and re-serializes so. This is what the Julia binding's parse
+/// does to every number of a `const` value, and what this binding's
+/// serialization does to a literal [`Expr::Number`]; without it a `const`
+/// table authored with integral floats kept its `.0`s on the way out, and one
+/// document serialized differently in the two bindings. Only the parse is
+/// affected: a `const` node built in code (a lowered `table_lookup`) keeps the
+/// numbers it was built with, as in Julia.
+fn deserialize_canonical_value<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<serde_json::Value>, D::Error> {
+    fn narrow(v: &mut serde_json::Value) {
+        match v {
+            serde_json::Value::Number(n) if n.is_f64() => {
+                let x = n.as_f64().unwrap_or(f64::NAN);
+                // 2^63, as in `serialize_canonical_f64`.
+                if x.is_finite() && x.fract() == 0.0 && x.abs() < 9_223_372_036_854_775_808.0 {
+                    *v = serde_json::Value::from(x as i64);
+                }
+            }
+            serde_json::Value::Array(a) => a.iter_mut().for_each(narrow),
+            _ => {}
+        }
+    }
+    let mut value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    if let Some(v) = value.as_mut() {
+        narrow(v);
+    }
+    Ok(value)
+}
+
 /// One bound of a `makearray` region box (esm-spec §4.3.2).
 ///
 /// Almost always a concrete integer: esm-spec §9.7.6 folds metaparameter bound
@@ -658,7 +692,13 @@ pub struct ExpressionNode {
 
     /// For the `const` op: inline literal value (any JSON number, integer,
     /// or nested array thereof). `args` MUST be empty when this is set.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Parsed in the canonical number form (§5.5.3.1): every integral number
+    /// that fits `i64`, of a nested array included, is held as an integer.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_canonical_value"
+    )]
     pub value: Option<serde_json::Value>,
 
     /// For the `const` op (esm 1.2.0): the declared unit `value` is in. A
@@ -1085,6 +1125,37 @@ mod expr_deserialize_token_mapping_tests {
     fn parse_via_value(src: &str) -> Result<Expr, serde_json::Error> {
         let v: serde_json::Value = serde_json::from_str(src).expect("fixture is JSON");
         serde_json::from_value::<Expr>(v)
+    }
+
+    #[test]
+    fn const_value_parses_in_canonical_number_form() {
+        // §5.5.3.1 rule 1: every integral number of a `const` node's `value`,
+        // nested arrays included, is an integer, as Julia's parse holds it, so
+        // both bindings write the same bytes.
+        for parse in [parse, parse_via_value] {
+            let e = parse(
+                r#"{"op": "const", "args": [], "value": [[100.0, 0.5, 2], [-0.0, 1e3, 1.0e300]]}"#,
+            )
+            .unwrap();
+            assert_eq!(
+                serde_json::to_value(&e).unwrap()["value"],
+                serde_json::json!([[100, 0.5, 2], [0, 1000, 1.0e300]])
+            );
+            assert_eq!(
+                serde_json::to_string(&serde_json::to_value(&e).unwrap()["value"][0]).unwrap(),
+                "[100,0.5,2]"
+            );
+            let scalar = parse(r#"{"op": "const", "args": [], "value": 4.0}"#).unwrap();
+            assert_eq!(
+                serde_json::to_value(&scalar).unwrap()["value"],
+                serde_json::json!(4)
+            );
+            let text = parse(r#"{"op": "const", "args": [], "value": "NO2"}"#).unwrap();
+            assert_eq!(
+                serde_json::to_value(&text).unwrap()["value"],
+                serde_json::json!("NO2")
+            );
+        }
     }
 
     #[test]

@@ -1082,8 +1082,26 @@ mod tests {
                 .iter()
                 .find(|eq| eq.lhs == Expr::Variable(lhs.to_string()))
                 .unwrap_or_else(|| panic!("no equation for {lhs}"));
-            serde_json::to_value(&eq.rhs).unwrap()
+            // The hand-spelled `const` values parse in canonical-number form
+            // (integral numbers as integers, §5.5.3.1), the lowered ones keep
+            // the `f64`s they are built from, as in Julia: compare numbers
+            // by value.
+            canonical_numbers(serde_json::to_value(&eq.rhs).unwrap())
         };
+        fn canonical_numbers(v: serde_json::Value) -> serde_json::Value {
+            match v {
+                serde_json::Value::Number(n) => match n.as_f64() {
+                    Some(x) if x.fract() == 0.0 && x.abs() < 9.0e15 => serde_json::json!(x as i64),
+                    _ => serde_json::Value::Number(n),
+                },
+                serde_json::Value::Array(a) => a.into_iter().map(canonical_numbers).collect(),
+                serde_json::Value::Object(m) => m
+                    .into_iter()
+                    .map(|(k, v)| (k, canonical_numbers(v)))
+                    .collect(),
+                other => other,
+            }
+        }
         assert_eq!(defining("n_tie_2_4"), defining("n_tie_2_4_hand"));
     }
 
