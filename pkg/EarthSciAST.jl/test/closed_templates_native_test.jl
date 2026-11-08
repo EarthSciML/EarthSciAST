@@ -303,6 +303,37 @@ end
         VERSION >= v"1.12" && @test (@allocated prob.f!(du, prob.u0, prob.p, 0.2)) == 0
     end
 
+    # The template-expanded copy validation and the build take of a model
+    # copies only the containers expansion rewrites: an equation it leaves
+    # alone (a polygon table's inline rings) is the original's tree, and the
+    # original keeps its references. One validation pass builds the expanded
+    # view once and its checks read it, with the findings of a check that
+    # expands for itself.
+    @testset "template expansion copies share the inline data" begin
+        file = _CT.load_path(_ct_write(_ct_regrid_doc(4, "planar")))
+        model = file.models["Regrid"]
+        view = _CT._units_view(file, "Regrid", model)
+        @test view !== model && view.equations !== model.equations
+        names = [eq.lhs isa _CT.VarExpr ? eq.lhs.name : "" for eq in model.equations]
+        poly = findfirst(==("src_poly"), names)
+        aij = findfirst(==("A_ij"), names)
+        @test view.equations[poly].rhs === model.equations[poly].rhs
+        @test view.equations[aij].rhs !== model.equations[aij].rhs
+        @test _CT._model_has_surviving_refs(model)
+        @test !_CT._model_has_surviving_refs(view)
+        copy_ = _CT._expansion_copy(model)
+        @test copy_.equations !== model.equations && copy_.variables !== model.variables
+        @test all(copy_.equations[i].rhs === model.equations[i].rhs for i in eachindex(names))
+        sig(es) = sort!([(e.path, e.error_type, e.message) for e in es])
+        bad = _CT.load_path(joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "faq", "template_from_param_undeclared.esm"))
+        for f in (file, bad)
+            u = _CT._UnitsInputs(f)
+            @test sig(_CT.validate_reference_integrity(f; views = u.models)) == sig(_CT.validate_reference_integrity(f))
+            @test sig(_CT.validate_aggregate_semantics(f; views = u.models)) == sig(_CT.validate_aggregate_semantics(f))
+        end
+        @test "undefined_index_set" in [e.error_type for e in _CT.validate_structural(bad)]
+    end
+
     # Near misses of the setup seed: a gated faq whose body has no nested
     # reduction (left to the right-hand-side tiers), an ungated one nested one
     # deep, and one whose body leaves the setup language are not seeded; a seeded body whose

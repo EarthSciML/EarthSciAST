@@ -225,6 +225,7 @@ function _find_json_segs(hit, node)
             h === nothing || return push!(h, string(k))
         end
     elseif _is_array(node)
+        _may_hold_object(node) || return nothing
         for (i, v) in enumerate(node)
             _is_json_leaf(v) && continue        # `hit` only ever sees objects
             # The common nested `Vector{Any}` row takes a static call.
