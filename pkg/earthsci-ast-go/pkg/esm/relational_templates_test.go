@@ -183,10 +183,13 @@ func TestRelationalKeyAndWhereTemplatesExpand(t *testing.T) {
 		{"pair_key", map[string]any{"a": 2, "b": 3, "lo_a": 1, "lo_b": 1, "n_a": 4, "n_b": 5}},
 		{"edge_key", map[string]any{"u": 4, "v": 2, "lo": 1, "n": 5}},
 		{"rank_of", map[string]any{"x": 7, "members": map[string]any{"op": "const", "args": []any{}, "value": []float64{1, 3, 7}}, "n": 3}},
+		{"rank_of_set", map[string]any{"x": 7, "members": "m", "S": "cells"}},
 		{"argmin_where", map[string]any{"f": idx("k_argmin_where_1"), "p": map[string]any{"op": ">", "args": []any{idx("k_argmin_where_1"), 1}}, "n": 3}},
 		{"argmax_where", map[string]any{"f": idx("k_argmax_where_1"), "p": map[string]any{"op": ">", "args": []any{idx("k_argmax_where_1"), 1}}, "n": 3}},
 	}
-	variables := map[string]any{}
+	variables := map[string]any{
+		"m": map[string]any{"type": "parameter", "shape": []any{"cells"}, "default": 0.0, "units": "1"},
+	}
 	equations := []any{}
 	for i, c := range calls {
 		out := fmt.Sprintf("out_%d", i)
@@ -197,8 +200,9 @@ func TestRelationalKeyAndWhereTemplatesExpand(t *testing.T) {
 		})
 	}
 	doc := map[string]any{
-		"esm":      "1.1.0",
-		"metadata": map[string]any{"name": "relational_key_templates"},
+		"esm":        "1.1.0",
+		"metadata":   map[string]any{"name": "relational_key_templates"},
+		"index_sets": map[string]any{"cells": map[string]any{"kind": "interval", "size": 3}},
 		"models": map[string]any{"Probe": map[string]any{
 			"expression_template_imports": []any{map[string]any{"ref": libraryPath}},
 			"variables":                   variables,

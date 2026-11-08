@@ -1841,10 +1841,24 @@ function validate_aggregate_semantics(file::EsmFile)::Vector{StructuralError}
     file.models === nothing && return errors
     registry = Set{String}(keys(file.index_sets))
     for model_name in sort!(collect(keys(file.models)))
+        model = file.models[model_name]
         _check_model_aggregates!(
-            errors, file, file.models[model_name],
+            errors, file, model,
             "/models/$model_name", registry
         )
+        # A template parameter may stand for a range's `from` (esm-spec §9.6.1),
+        # so the index-set name a call binds is checked on the expansion; the
+        # pointer still names the authored equation.
+        view = _units_view(file, model_name, model)
+        view === model && continue
+        for (i, eq) in enumerate(view.equations), (side, e) in (("lhs", eq.lhs), ("rhs", eq.rhs))
+            anchor = "/models/$model_name/equations/$(i - 1)/$side"
+            any(x -> x.path == anchor && x.error_type == ERROR_CODES.UNDEFINED_INDEX_SET, errors) && continue
+            foreach_subexpr_once(e) do sub
+                sub isa OpExpr && sub.op == "faq" && _check_undefined_index_set!(errors, sub, anchor, registry)
+                nothing
+            end
+        end
     end
     return errors
 end

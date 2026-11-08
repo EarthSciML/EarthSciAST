@@ -163,6 +163,21 @@ const _RR_CASES = [
                 tp_members = _rr_vi(tpl, case, model).members[faq]
                 @test [_rr_rank_of(m, tp_members) for m in tp_members] == want
             end
+            if haskey(cmp, :rank_lookup)
+                # A rank looked up against the derived set (rank_of_set over
+                # its members): the op set's 0-based rank of each row's tuple, + 1.
+                rl = cmp.rank_lookup
+                op_members = [Tuple(m) for m in _rr_vi(src, case, model).members[String(rl.faq)]]
+                ids = EarthSciAST.Relational.rank(op_members; base = 0)
+                cols = [reduce(vcat, permutedims.(Vector{Float64}.(case.const_arrays[Symbol(c)]))) for c in rl.columns]
+                want = map(CartesianIndices(cols[1])) do I
+                    t = Tuple(sort([Int(c[I]) for c in cols]))
+                    Float64(ids.id[t] + 1)
+                end
+                # The field is flat, rows outermost (the order of the case's nested arrays).
+                got = Float64.(vec(observed_field(tp_prob, String(rl.variable))))
+                @test reinterpret(UInt64, got) == reinterpret(UInt64, vec(permutedims(want)))
+            end
             for a in get(cmp, :assignments, [])
                 op_buf = Float64.(_rr_vi(src, case, model).assignments[String(a.op)])
                 tp_buf = Float64.(vec(observed_field(tp_prob, String(a.template))))

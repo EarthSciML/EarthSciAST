@@ -286,3 +286,14 @@ def test_build_time_invalid_fixture_rejected(fixture_path: Path) -> None:
     assert not result.is_valid, f"{fixture_path.name}: expected a structural rejection"
     got = {(e.code, e.path) for e in result.structural_errors}
     assert want <= got, f"{fixture_path.name}: want {sorted(want)}, got {sorted(got)}"
+
+
+def test_template_from_param_undeclared_is_undefined_index_set() -> None:
+    """esm-spec §9.6.1: a template parameter standing for a range's ``from``,
+    bound to a name that is not a declared index set, is ``undefined_index_set``
+    at the call site — not an undefined variable."""
+    path = _INVALID_FIXTURES_DIR / "template_from_param_undeclared.esm"
+    result = validate_text(path.read_text(), base_path=str(path.parent))
+    codes = {(e.code, e.path) for e in result.structural_errors}
+    assert ("undefined_index_set", "/models/M/equations/0/rhs") in codes, codes
+    assert not any(c == "undefined_variable" for c, _ in codes), codes

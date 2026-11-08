@@ -129,6 +129,25 @@ end
     @test occursin("ghost_cells", sprint(showerror, err))
 end
 
+@testset "invalid: a template ranges over an undeclared index set (esm-spec §9.6.1)" begin
+    path = joinpath(
+        _AGG_REPO_ROOT, "tests", "invalid", "faq",
+        "template_from_param_undeclared.esm"
+    )
+    file = EarthSciAST.load_path(path)   # schema-valid: load must succeed
+    errs = EarthSciAST.validate(file).structural_errors
+    @test any(e -> e.error_type == "undefined_index_set" && e.path == "/models/M/equations/0/rhs", errs)
+    @test !any(e -> e.error_type == "undefined_variable", errs)
+    err = try
+        EarthSciAST._build_evaluator(file; model_name = "M")
+        nothing
+    catch e
+        e
+    end
+    @test err !== nothing
+    @test occursin("ghost_cells", sprint(showerror, err))
+end
+
 # esm-spec §9.7.10 / §6.6.6 (issue #185): a discretization-agnostic PDE leaf
 # declares NO `index_sets` of its own — its registry arrives from the grid
 # library a composing document, a subsystem-ref edge or an inline test injects

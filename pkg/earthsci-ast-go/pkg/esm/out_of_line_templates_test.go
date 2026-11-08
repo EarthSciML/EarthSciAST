@@ -187,6 +187,7 @@ func TestOOL_BridgeGate_ExpandEqualsExpandedGolden(t *testing.T) {
 		{"per_variable_scheme_literal_args", "fixture.esm", "expanded.esm"},
 		{"scalar_field_param", "fixture.esm", "expanded.esm"},
 		{"ranges_param", "fixture.esm", "expanded.esm"},
+		{"ranges_from_param", "fixture.esm", "expanded.esm"},
 		{"two_div_two_meshes", "fixture.esm", "expanded.esm"},
 	}
 	for _, c := range cases {
@@ -625,6 +626,7 @@ func TestOOL_EmitIdempotentByteWise(t *testing.T) {
 		{"per_variable_scheme_literal_args", "fixture.esm"},
 		{"scalar_field_param", "fixture.esm"},
 		{"ranges_param", "fixture.esm"},
+		{"ranges_from_param", "fixture.esm"},
 		{"two_div_two_meshes", "fixture.esm"},
 	}
 	for _, c := range cases {

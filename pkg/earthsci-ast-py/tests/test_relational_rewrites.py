@@ -122,6 +122,16 @@ def test_rewrite_agrees_with_the_op_form(entry: dict, idx: int, case: dict, comp
         # rank_of over the template's own members returns the same IDs.
         members = list(tp_prob.build.vi_members[faq])
         assert [_rank_of(m, members) for m in members] == [float(x) for x in want]
+    if "rank_lookup" in cmp:
+        # A rank looked up against the derived set (rank_of_set over its
+        # members): the op set's 0-based rank of each row's tuple, plus one.
+        rl = cmp["rank_lookup"]
+        op_members = [tuple(m) for m in op_prob.build.vi_members[rl["faq"]]]
+        op_ids = relational.rank(op_members, base=0)
+        cols = [np.asarray(case["const_arrays"][c], dtype=float) for c in rl["columns"]]
+        want = np.vectorize(lambda *t: op_ids[tuple(sorted(int(x) for x in t))] + 1.0)(*cols)
+        got = np.asarray(observed_field(tp_prob, rl["variable"]), dtype=float)
+        assert _bits(got) == _bits(want), (got, want)
     for a in cmp.get("assignments", []):
         # The op's buffer is a value-invention output, not an observed.
         src = json.loads((REPO_ROOT / entry["source"]).read_text())
