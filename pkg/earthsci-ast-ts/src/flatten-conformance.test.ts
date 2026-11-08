@@ -188,8 +188,11 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     // `param_to_var` onto a shaped target survives exactly as declared, `update`
     // and `shape` included, whatever its data source is keyed, and a state
     // source keyed like a data source stays a state, and a source that declares
-    // no shape takes its target's (esm-libraries-spec §4.7.3).
-    expect(corpus.cases.length).toBe(54)
+    // no shape takes its target's (esm-libraries-spec §4.7.3), plus the three
+    // `compose_position` cases — an operator that writes another component's
+    // state, whose merge moves to the end of that component's equations
+    // (esm-libraries-spec §4.7.1 step 4, §4.7.5 step 4 "Ordering").
+    expect(corpus.cases.length).toBe(57)
     // 9 = template_import_lib, couple_multiplicative_no_tendency, the
     // nonterminating rewrite, `coupling_resolution_edge_cases`, whose EDGE
     // CASE 10 maps onto a target the document declares nowhere,
