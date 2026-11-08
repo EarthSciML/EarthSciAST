@@ -712,7 +712,24 @@ impl TapeBuilder<'_> {
         if shape.contains(&0) {
             bail_tape!("faq: empty output box");
         }
-        let keep = pointwise_keep(idx_names, ranges, &gates)?;
+        // Few candidate cells (the pairs a join matches, of a source x target
+        // box): the body runs over those only (`lower_pointwise_compacted`),
+        // when that lowers.
+        if !ranges.is_empty()
+            && let Some(cand) = pointwise_keep(idx_names, ranges, &gates, true)?
+        {
+            let kept = cand.iter().filter(|&&k| k != 0.0).count();
+            if kept > 0 && kept * COMPACT_KEEP_DENOM <= cand.len() {
+                let txn = self.sub_txn();
+                match self
+                    .lower_pointwise_compacted(idx_names, ranges, cand, body, filter, identity)
+                {
+                    Ok(v) => return Ok(v),
+                    Err(_) => self.sub_rollback(txn),
+                }
+            }
+        }
+        let keep = pointwise_keep(idx_names, ranges, &gates, false)?;
         if keep.as_ref().is_some_and(|k| k.iter().all(|&k| k == 0.0)) {
             return Ok(if ranges.is_empty() {
                 LV::Lit(identity)
@@ -763,6 +780,138 @@ impl TapeBuilder<'_> {
         self.lazy_depth -= 1;
         let term = term?.unwrap_or(LV::Lit(identity));
         self.emit_select(LV::Arr(mask_slot), term, LV::Lit(identity))
+    }
+
+    /// A join-gated pointwise `faq` whose gate keeps few cells, with the body
+    /// evaluated at the kept cells only, as the oracle evaluates it. The kept
+    /// cells are listed in row-major order as a 1-D box over `PW_SYM`; each
+    /// output index becomes a read of its column, an inline literal, so
+    /// `src[i]` reads `src[index([i at each kept cell], k)]`. The body and the
+    /// filter are lowered once over that box, then every output cell gathers
+    /// its own position in the list and the gate's mask selects the identity
+    /// at the others: each kept cell holds the body's own value, bit for bit,
+    /// and the work and the program grow with the kept cells, not the box
+    /// (a conservative regrid's overlap areas: the candidate pairs, not
+    /// source x target). The substituted body keeps the body's sharing: a
+    /// node reached twice maps to one node.
+    fn lower_pointwise_compacted(
+        &mut self,
+        idx_names: &[String],
+        ranges: &[(i64, i64)],
+        keep: Vec<f64>,
+        body: &Expr,
+        filter: Option<&Expr>,
+        identity: f64,
+    ) -> LResult<LV> {
+        let bx = LBox {
+            syms: idx_names,
+            lo: ranges.iter().map(|(l, _)| *l).collect(),
+            shape: ranges
+                .iter()
+                .map(|(l, h)| (h - l + 1).max(0) as usize)
+                .collect(),
+            cnames: &[],
+            cvals: SmallVec::new(),
+            tuple: 0,
+            visit: SmallVec::new(),
+        };
+        let bx = &bx;
+        let nd = bx.shape.len();
+        let mut strides = vec![1usize; nd];
+        for d in (0..nd.saturating_sub(1)).rev() {
+            strides[d] = strides[d + 1] * bx.shape[d + 1];
+        }
+        let mut cols: Vec<Vec<f64>> = vec![Vec::new(); nd];
+        let mut pos = vec![1.0f64; keep.len()];
+        let mut m = 0usize;
+        for (p, &k) in keep.iter().enumerate() {
+            if k == 0.0 {
+                continue;
+            }
+            m += 1;
+            pos[p] = m as f64;
+            for d in 0..nd {
+                cols[d].push((bx.lo[d] + ((p / strides[d]) % bx.shape[d]) as i64) as f64);
+            }
+        }
+        if m == 0 {
+            bail_tape!("faq: no kept cell to compact");
+        }
+        let mut subs: FxHashMap<&str, Expr> = FxHashMap::default();
+        for d in 0..nd {
+            let col = Expr::operator(ExpressionNode {
+                op: "const".to_string(),
+                value: Some(serde_json::json!(cols[d])),
+                ..Default::default()
+            });
+            subs.insert(
+                bx.syms[d].as_str(),
+                Expr::operator(ExpressionNode {
+                    op: "index".to_string(),
+                    args: vec![col, Expr::Variable(PW_SYM.to_string())],
+                    ..Default::default()
+                }),
+            );
+        }
+        let mut memo: FxHashMap<*const ExpressionNode, Expr> = FxHashMap::default();
+        let cbody = subst_shared(body, &subs, &mut memo);
+        let cfilter = filter.map(|f| subst_shared(f, &subs, &mut memo));
+        let syms = [PW_SYM.to_string()];
+        let cbx = LBox {
+            syms: &syms,
+            lo: DimI::from_elem(1, 1),
+            shape: DimU::from_elem(m, 1),
+            cnames: &[],
+            cvals: SmallVec::new(),
+            tuple: 0,
+            visit: SmallVec::new(),
+        };
+        self.push_scope();
+        let term = self.lower_filtered(&cbody, cfilter.as_ref(), &cbx, LV::Lit(identity));
+        self.pop_scope();
+        self.held_exprs.push(cbody);
+        self.held_exprs.extend(cfilter);
+        let term = term?.unwrap_or(LV::Lit(identity));
+        let vals = match self.lv_box(&term) {
+            Some((sh, o)) if sh.as_slice() == [m] && o.as_slice() == [1] => term,
+            Some(_) => bail_tape!("faq: a compacted term is not over the kept cells"),
+            None => self.emit_fill(&term, &[m], &[1], Cadence::Const),
+        };
+        // Each output cell's position in the list (1 at a dropped cell, whose
+        // gathered value the mask discards).
+        let data = tape_index(self.const_data.len(), "array constants")?;
+        self.const_data.push(ConstArrayData {
+            shape: bx.shape.clone(),
+            values: pos,
+        });
+        let sec = self.placement(Cadence::Const);
+        let pos_slot = self.new_slot(&bx.shape, &bx.lo, false, sec);
+        self.emit(
+            Instr::ConstArray {
+                data,
+                out: pos_slot,
+            },
+            sec,
+        );
+        self.known.insert(pos_slot, Known::Data(data));
+        self.ranges.insert(pos_slot, (1.0, m as f64));
+        let base = Expr::Variable(PW_SYM.to_string());
+        let gathered = self.emit_data_gather(&base, &vals, &[LV::Arr(pos_slot)], Some(bx))?;
+        let data = tape_index(self.const_data.len(), "array constants")?;
+        self.const_data.push(ConstArrayData {
+            shape: bx.shape.clone(),
+            values: keep,
+        });
+        let mask_slot = self.new_slot(&bx.shape, &bx.lo, false, sec);
+        self.emit(
+            Instr::ConstArray {
+                data,
+                out: mask_slot,
+            },
+            sec,
+        );
+        self.known.insert(mask_slot, Known::Data(data));
+        self.emit_select(LV::Arr(mask_slot), gathered, LV::Lit(identity))
     }
 
     /// Resolve each contracted dimension's bound: a static interval as it
@@ -1576,16 +1725,69 @@ fn plan_chunks(
     out
 }
 
+/// A gated pointwise `faq` is compacted to its kept cells when at most one
+/// cell in this many is kept.
+const COMPACT_KEEP_DENOM: usize = 4;
+
+/// The loop symbol of a compacted pointwise box (never an authored name).
+const PW_SYM: &str = "__esm_pw_k";
+
+/// `e` with each read of a name in `subs` replaced, a node reached twice
+/// mapping to one node (by address), and a sub-tree with nothing to replace
+/// returned as it stands.
+fn subst_shared(
+    e: &Expr,
+    subs: &FxHashMap<&str, Expr>,
+    memo: &mut FxHashMap<*const ExpressionNode, Expr>,
+) -> Expr {
+    match e {
+        Expr::Variable(v) => subs.get(v.as_str()).cloned().unwrap_or_else(|| e.clone()),
+        Expr::Operator(n) => {
+            let key = Arc::as_ptr(n);
+            if let Some(hit) = memo.get(&key) {
+                return hit.clone();
+            }
+            let mut changed = false;
+            let node = n.map_children(&mut |c| {
+                let r = subst_shared(c, subs, memo);
+                changed |= !same_expr(&r, c);
+                r
+            });
+            let out = if changed {
+                Expr::operator(node)
+            } else {
+                e.clone()
+            };
+            memo.insert(key, out.clone());
+            out
+        }
+        _ => e.clone(),
+    }
+}
+
+fn same_expr(a: &Expr, b: &Expr) -> bool {
+    match (a, b) {
+        (Expr::Operator(x), Expr::Operator(y)) => Arc::ptr_eq(x, y),
+        (Expr::Variable(x), Expr::Variable(y)) => x == y,
+        (Expr::Integer(x), Expr::Integer(y)) => x == y,
+        (Expr::Number(x), Expr::Number(y)) => x.to_bits() == y.to_bits(),
+        _ => false,
+    }
+}
+
 /// The admitted cells of a gated aggregate with no contracted index, as a
 /// row-major 0/1 mask over the output box: what [`enumerate_tuples`] admits
 /// with nothing contracted (a cell is kept when every gate over two output
 /// symbols holds its pair), built from each gate's pair list rather than by
 /// testing every cell. A gate the aggregate's `filter` already tests is left
-/// to the filter; `None` when no other gate masks a cell.
+/// to the filter (with `with_filtered`, its pairs narrow the mask too, to a
+/// superset of the admitted cells the filter then decides); `None` when no
+/// gate masks a cell.
 fn pointwise_keep(
     idx_names: &[String],
     ranges: &[(i64, i64)],
     gates: &[BuiltGate],
+    with_filtered: bool,
 ) -> LResult<Option<Vec<f64>>> {
     let shape: Vec<usize> = ranges
         .iter()
@@ -1599,7 +1801,7 @@ fn pointwise_keep(
     // `None` until a gate applies: then the cells every applicable gate so
     // far admits.
     let mut keep: Option<Vec<f64>> = None;
-    for g in gates.iter().filter(|g| !g.in_filter) {
+    for g in gates.iter().filter(|g| with_filtered || !g.in_filter) {
         let pos = |s: &str| idx_names.iter().position(|x| x == s);
         let (Some(a), Some(b)) = (pos(&g.sym_src), pos(&g.sym_tgt)) else {
             continue;
@@ -1755,7 +1957,7 @@ mod tests {
                 .windows(2)
                 .map(|w| if w[1] > w[0] { 1.0 } else { 0.0 })
                 .collect();
-            let keep = pointwise_keep(&names, &ranges, gates)
+            let keep = pointwise_keep(&names, &ranges, gates, false)
                 .expect("keeps")
                 .unwrap_or_else(|| vec![1.0; walked.len()]);
             assert_eq!(keep, walked);

@@ -13,7 +13,7 @@ use super::kernels::{
     copy_strided, data_gather, data_gather_sub, ew_select, ew1, ew2, exec_gather, fill_strided,
     index_gather, reduce_axis, reduce_rows, scan_axis, seg_reduce, table_gather,
 };
-use super::resolve::{Rv, SrcView, resolve_rv, resolve_scalar, resolve_src, rm_strides};
+use super::resolve::{Rv, SrcView, resolve_rv, resolve_scalar, resolve_src, rm_strides, src_base};
 use super::*;
 use crate::simulate_array::eval::{latch_gather_fault, latch_ordered_fault};
 
@@ -57,6 +57,7 @@ pub(super) fn run_range(
         obs,
         parked,
         pending,
+        scode,
         plan_full,
         asm_covered,
         scratch,
@@ -87,6 +88,17 @@ pub(super) fn run_range(
     // The open recurrence sweep, if any: the `Sweep` instruction's position
     // and the 0-based frame cell its body is evaluating.
     let mut sweep: Option<(usize, SmallVec<[usize; 4]>)> = None;
+    if scode.len() != prog.instrs.len() {
+        *scode = prog
+            .instrs
+            .iter()
+            .map(|i| ScalarOp::decode(prog, i))
+            .collect();
+    }
+    // Runs of scalar elementwise ops execute in the loop at the top of each
+    // step (see `ScalarOp`); a per-instruction precision keeps the general
+    // path, which arms it.
+    let scalar_runs = prog.precision.is_empty();
     let mut pc = range.start;
     // The next segmented-reduction chain that may split (see `chain`).
     #[cfg(not(target_arch = "wasm32"))]
@@ -132,6 +144,18 @@ pub(super) fn run_range(
         if pc >= range.end {
             break;
         }
+        if scalar_runs && sweep.is_none() {
+            let start = pc;
+            while pc < range.end && pending.last().is_none_or(|&(pos, _)| pos as usize != pc) {
+                if !unsafe { scode[pc].run(env, slab_ptr, slot_off) } {
+                    break;
+                }
+                pc += 1;
+            }
+            if pc != start {
+                continue;
+            }
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if next_chain < seg_chains.len() {
             while seg_chains.get(next_chain).is_some_and(|c| c.start < pc) {
@@ -169,6 +193,14 @@ pub(super) fn run_range(
             .get(pc)
             .filter(|&&p| p != crate::precision::active())
             .map(|&p| crate::precision::enter(p));
+        // A scalar instruction runs here, in a few lines, instead of through
+        // the general dispatch below: a scalar right-hand side (a template's
+        // lookup at one query) is mostly such instructions, each a few
+        // flops, so their dispatch was most of its cost.
+        if unsafe { exec_scalar(&prog.instrs[pc], env, slab_ptr, slot_off) } {
+            pc += 1;
+            continue;
+        }
         match &prog.instrs[pc] {
             Instr::LoadForcing { forcing, out } => {
                 let fr = &prog.forcings[*forcing as usize];
@@ -324,6 +356,158 @@ pub(super) fn run_range(
         }
         pc += 1;
     }
+}
+
+/// A scalar operand, decoded: a slot (its slab offset is looked up per call,
+/// since a threaded plan may move it), a literal, a parameter, `t`, or a 0-d
+/// state at its flat offset.
+#[derive(Clone, Copy)]
+pub(super) enum ScalarSrc {
+    Slot(u32),
+    Lit(f64),
+    Param(u32),
+    Time,
+    State(usize),
+}
+
+/// One instruction's scalar elementwise form: what its [`exec_straight`] arm
+/// does for a scalar `out`, with the kernel and the operands decoded once
+/// instead of matched on every call. A scalar right-hand side (a template's
+/// lookup at one query) is mostly such instructions, a few flops each, so
+/// their dispatch was most of its cost; consecutive ones run in one loop.
+#[derive(Clone, Copy)]
+pub(super) enum ScalarOp {
+    None,
+    Bin(fn(f64, f64) -> f64, ScalarSrc, ScalarSrc, u32),
+    Un(fn(f64) -> f64, ScalarSrc, u32),
+    Neg(ScalarSrc, u32),
+    Copy(ScalarSrc, u32),
+    Select(ScalarSrc, ScalarSrc, ScalarSrc, u32),
+}
+
+impl ScalarOp {
+    pub(super) fn decode(prog: &TapeProgram, ins: &Instr) -> ScalarOp {
+        let src = |o: &Operand| -> Option<ScalarSrc> {
+            Some(match o {
+                Operand::Slot(s) if prog.slots[*s as usize].scalar => ScalarSrc::Slot(*s),
+                Operand::Lit(v) => ScalarSrc::Lit(*v),
+                Operand::Param(p) => ScalarSrc::Param(*p),
+                Operand::Time => ScalarSrc::Time,
+                Operand::State(ix) => {
+                    let sv = &prog.state_vars[*ix as usize];
+                    if !sv.shape.is_empty() {
+                        return None;
+                    }
+                    ScalarSrc::State(sv.flat_offset)
+                }
+                _ => return None,
+            })
+        };
+        let scalar = |out: &SlotId| prog.slots[*out as usize].scalar;
+        let op = match ins {
+            Instr::Bin { op, a, b, out } if scalar(out) => {
+                (|| Some(ScalarOp::Bin(binary_kernel_of(*op), src(a)?, src(b)?, *out)))()
+            }
+            Instr::Un { op, a, out } if scalar(out) => {
+                (|| Some(ScalarOp::Un(unary_kernel_of(*op), src(a)?, *out)))()
+            }
+            Instr::Neg { a, out } if scalar(out) => (|| Some(ScalarOp::Neg(src(a)?, *out)))(),
+            Instr::Copy { a, out } if scalar(out) => (|| Some(ScalarOp::Copy(src(a)?, *out)))(),
+            Instr::Select { cond, a, b, out } if scalar(out) => {
+                (|| Some(ScalarOp::Select(src(cond)?, src(a)?, src(b)?, *out)))()
+            }
+            _ => None,
+        };
+        op.unwrap_or(ScalarOp::None)
+    }
+
+    /// Run the op, or return `false` for [`ScalarOp::None`].
+    ///
+    /// # Safety
+    /// As [`exec_straight`].
+    #[inline(always)]
+    pub(super) unsafe fn run(&self, env: &Env, slab_ptr: *mut f64, slot_off: &[usize]) -> bool {
+        let get = |s: &ScalarSrc| match *s {
+            ScalarSrc::Slot(k) => unsafe { *slab_ptr.add(slot_off[k as usize]) },
+            ScalarSrc::Lit(v) => v,
+            ScalarSrc::Param(p) => env.params[p as usize],
+            ScalarSrc::Time => env.t,
+            ScalarSrc::State(off) => env.state[off],
+        };
+        let put = |out: u32, v: f64| unsafe { *slab_ptr.add(slot_off[out as usize]) = v };
+        match self {
+            ScalarOp::None => return false,
+            ScalarOp::Bin(f, a, b, out) => put(*out, f(get(a), get(b))),
+            ScalarOp::Un(f, a, out) => put(*out, f(get(a))),
+            ScalarOp::Neg(a, out) => put(*out, -get(a)),
+            ScalarOp::Copy(a, out) => put(*out, get(a)),
+            ScalarOp::Select(c, a, b, out) => {
+                let c = get(c);
+                let x = get(a);
+                let y = get(b);
+                put(*out, if c != 0.0 { x } else { y });
+            }
+        }
+        true
+    }
+}
+
+/// Run `ins` if it is a scalar instruction with a scalar form here, and say
+/// whether it ran. Each arm is the scalar branch of its [`exec_straight`]
+/// arm, operation for operation: an elementwise op on scalar slots, a
+/// one-element load, a one-element gather that does not fault (a faulting
+/// one is left to the general path, which latches it), a count at one query.
+///
+/// # Safety
+/// As [`exec_straight`].
+#[inline]
+unsafe fn exec_scalar(ins: &Instr, env: &Env, slab_ptr: *mut f64, slot_off: &[usize]) -> bool {
+    let prog = env.prog;
+    let scalar_out = |out: &SlotId| prog.slots[*out as usize].scalar;
+    let put = |out: &SlotId, v: f64| unsafe { *slab_ptr.add(slot_off[*out as usize]) = v };
+    let get = |o: &Operand| resolve_scalar(o, env, slab_ptr, slot_off);
+    match ins {
+        Instr::Bin { op, a, b, out } if scalar_out(out) => {
+            put(out, binary_kernel_of(*op)(get(a), get(b)));
+        }
+        Instr::Un { op, a, out } if scalar_out(out) => put(out, unary_kernel_of(*op)(get(a))),
+        Instr::Neg { a, out } if scalar_out(out) => put(out, -get(a)),
+        Instr::Copy { a, out } if scalar_out(out) => put(out, get(a)),
+        Instr::Select { cond, a, b, out } if scalar_out(out) => {
+            let c = get(cond);
+            let x = get(a);
+            let y = get(b);
+            put(out, if c != 0.0 { x } else { y });
+        }
+        Instr::LoadElem { src, idx, out } => {
+            let (base, shape) = src_base(src, env, slab_ptr, slot_off);
+            let mut soff = 0usize;
+            let mut stride = 1usize;
+            for d in (0..idx.len()).rev() {
+                soff += idx[d] * stride;
+                stride *= shape[d];
+            }
+            put(out, unsafe { *base.add(soff) });
+        }
+        Instr::DataGather { src, spec, out, .. } => {
+            let spec = &prog.data_gathers[*spec as usize];
+            if !spec.shape.is_empty() || spec.subs.len() > 4 {
+                return false;
+            }
+            let mut v = [0.0f64; 4];
+            for (d, o) in spec.subs.iter().enumerate() {
+                v[d] = get(o);
+            }
+            let (base, _) = src_base(src, env, slab_ptr, slot_off);
+            match spec.at(|d| v[d]) {
+                DataAt::Elem(p) => put(out, unsafe { *base.add(p) }),
+                DataAt::Ghost => put(out, 0.0),
+                DataAt::Fault { .. } => return false,
+            }
+        }
+        _ => return false,
+    }
+    true
 }
 
 /// Everything a straight-line instruction reads besides its own scratch:
@@ -665,21 +849,21 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             x,
             out,
         } => {
-            let av = resolve_src(axis, env, slab_ptr, slot_off);
+            let (aptr, ashape) = src_base(axis, env, slab_ptr, slot_off);
             // The window is read unchecked below, so it is checked here, once
             // per execution, in every build: an axis whose run-time box no
             // longer holds the window the lowering saw is refused, as the
             // reference executor and the XLA emitter refuse it.
             assert!(
-                av.shape.len() == 1 && *lo as usize + *n as usize <= av.shape[0],
+                ashape.len() == 1 && *lo as usize + *n as usize <= ashape[0],
                 "Count axis has shape {:?}, which does not hold the window {}..{}",
-                &av.shape[..],
+                ashape,
                 lo,
                 *lo as usize + *n as usize
             );
             // Rank 1, row-major: the window is contiguous. `out` never shares
             // storage with the axis (the slab coloring keeps them apart).
-            let win = unsafe { std::slice::from_raw_parts(av.ptr.add(*lo as usize), *n as usize) };
+            let win = unsafe { std::slice::from_raw_parts(aptr.add(*lo as usize), *n as usize) };
             let at = |j: usize| win[j];
             // A window the lowering could not see is checked here, once per
             // execution: O(n) against the O(n) per element it can save.
@@ -868,6 +1052,26 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             faults,
         } => {
             let spec = &prog.data_gathers[*spec as usize];
+            // One element read at scalar subscripts: the position straight
+            // from the subscripts' values, no source view, no subscript
+            // views. A read that faults takes the general path below, which
+            // latches it.
+            if spec.shape.is_empty() && spec.subs.len() <= 4 {
+                let mut v = [0.0f64; 4];
+                for (d, o) in spec.subs.iter().enumerate() {
+                    v[d] = resolve_scalar(o, env, slab_ptr, slot_off);
+                }
+                let (base, _) = src_base(src, env, slab_ptr, slot_off);
+                let x = match spec.at(|d| v[d]) {
+                    DataAt::Elem(p) => Some(unsafe { *base.add(p) }),
+                    DataAt::Ghost => Some(0.0),
+                    DataAt::Fault { .. } => None,
+                };
+                if let Some(x) = x {
+                    unsafe { *slab_ptr.add(slot_off[*out as usize]) = x };
+                    return;
+                }
+            }
             let sv = resolve_src(src, env, slab_ptr, slot_off);
             let subs: SmallVec<[Rv; 4]> = spec
                 .subs

@@ -149,12 +149,53 @@ function _json3_to_ordered(x::JSON3.Object)
 end
 function _json3_to_ordered(x::JSON3.Array)
     out = Vector{Any}(undef, length(x))
+    # JSON3 keeps every number of an array as a float once one element is a
+    # float (`[0.5, 2]` reads `[0.5, 2.0]`), and its parser carries that mode
+    # into the objects and arrays that follow the float, so in
+    # `[0.5, {"ranges": {"k": [1, "n"]}}]` the bound reads `1.0`. A container
+    # after a float element is therefore read back with the integer rule
+    # JSON3 applies everywhere else (`_json3_reint`).
+    floated = false
     for (i, v) in enumerate(x)
-        out[i] = _json3_to_ordered(v)
+        out[i] = floated && (v isa JSON3.Object || v isa JSON3.Array) ?
+            _json3_reint(v) : _json3_to_ordered(v)
+        v isa Float64 && (floated = true)
     end
     return out
 end
 _json3_to_ordered(x) = x
+
+# A subtree JSON3 parsed with every number as a float, normalized as if parsed
+# with its integer rule: an integral number in Int64 range is an `Int64`,
+# except an array's numbers after its first non-integral one, which stay
+# floats as JSON3 keeps them. (An integer literal above 2^53 has already been
+# rounded by then; JSON3 would have re-read its text.)
+_json3_int(v::Float64) = isinteger(v) && -9.223372036854775808e18 <= v < 9.223372036854775808e18
+function _json3_reint(x::JSON3.Object)
+    out = OrderedDict{String, Any}()
+    for (k, v) in pairs(x)
+        out[string(k)] = v isa Float64 ? (_json3_int(v) ? unsafe_trunc(Int64, v) : v) :
+            (v isa JSON3.Object || v isa JSON3.Array) ? _json3_reint(v) : v
+    end
+    return out
+end
+function _json3_reint(x::JSON3.Array)
+    out = Vector{Any}(undef, length(x))
+    floated = false
+    for (i, v) in enumerate(x)
+        if v isa Float64
+            if !floated && _json3_int(v)
+                out[i] = unsafe_trunc(Int64, v)
+            else
+                out[i] = v
+                floated = true
+            end
+        else
+            out[i] = (v isa JSON3.Object || v isa JSON3.Array) ? _json3_reint(v) : v
+        end
+    end
+    return out
+end
 
 # ---------------------------------------------------------------------------
 # Traversal combinators

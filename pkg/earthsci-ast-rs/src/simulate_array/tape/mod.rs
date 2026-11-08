@@ -71,6 +71,8 @@
 #[cfg(test)]
 mod array_tests;
 #[cfg(test)]
+mod closed_template_tests;
+#[cfg(test)]
 mod data_gather_tests;
 mod exec;
 #[cfg(test)]

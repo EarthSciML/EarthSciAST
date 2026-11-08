@@ -809,6 +809,7 @@ impl ArrayCompiled {
         // producer. A producer that cannot run is recorded rather than raised, and
         // is refused below only if a surviving expression ranges over its set.
         let derived = materialize_derived_extents(&model_owned, &index_sets_owned, vi_arrays, &vi);
+        bind_member_factors(&mut model_owned, &derived.member_factors);
         // A skolem map buffer (a broad-phase bin key per cell) becomes constant
         // data, so a `join.on` gate comparing two of them stays a gate — a
         // value-equality filter on data columns — rather than being dropped.
@@ -4527,6 +4528,11 @@ pub(super) struct DerivedMaterialization {
     /// The skolem map buffers as integer codes
     /// ([`ValueInventionResult::map_codes`]).
     map_codes: HashMap<String, Vec<f64>>,
+    /// Each derived set's `member_factor` parameter with the member ids the
+    /// engine invented for it, in member order: the column the build pipeline
+    /// feeds back (`crate::prepare`'s `feed_member_factors`), so a read of the
+    /// factor over the set sees the same values on this route.
+    member_factors: Vec<(String, Vec<f64>)>,
 }
 
 /// Run value invention when the model has a derived index set whose producer is
@@ -4553,6 +4559,7 @@ fn materialize_derived_extents(
         geometry_ids,
         failure: None,
         map_codes: HashMap::new(),
+        member_factors: Vec::new(),
     };
     // A skolem bin map that a `join.on` gate compares needs the engine too,
     // derived set or not: its codes keep the gate (`map_codes` below), which
@@ -4570,6 +4577,7 @@ fn materialize_derived_extents(
         let lean = without_factor_literals(model, &factors);
         match run_value_invention(&lean, index_sets, Some(&factors)) {
             Ok(result) => {
+                out.member_factors = member_factor_columns(index_sets, &result, caller_arrays);
                 out.extents = result.extents;
                 out.map_codes = result.map_codes;
             }
@@ -4577,6 +4585,67 @@ fn materialize_derived_extents(
         }
     }
     out
+}
+
+/// The member ids each derived set with a `member_factor` feeds back, sorted by
+/// set name. Only a set whose members are all scalar keys has ids; a
+/// tuple-keyed producer is sized by its extent alone, as on the build
+/// pipeline. A factor the caller supplies stays the caller's.
+fn member_factor_columns(
+    index_sets: &HashMap<String, IndexSet>,
+    result: &ValueInventionResult,
+    caller_arrays: Option<&HashMap<String, ArrayD<f64>>>,
+) -> Vec<(String, Vec<f64>)> {
+    let mut sets: Vec<(&String, &IndexSet)> = index_sets
+        .iter()
+        .filter(|(_, is)| is.kind == "derived")
+        .collect();
+    sets.sort_by(|a, b| a.0.cmp(b.0));
+    sets.into_iter()
+        .filter_map(|(_, is)| {
+            let (mf, faq) = (is.member_factor.as_ref()?, is.from_faq.as_ref()?);
+            if caller_arrays.is_some_and(|a| a.contains_key(mf)) {
+                return None;
+            }
+            let ids: Option<Vec<f64>> = result
+                .members
+                .get(faq)?
+                .iter()
+                .map(|k| match k {
+                    crate::relational::Key::Int(i) => Some(*i as f64),
+                    _ => None,
+                })
+                .collect();
+            Some((mf.clone(), ids?))
+        })
+        .collect()
+}
+
+/// Bind each fed-back `member_factor` column onto its parameter as `const`
+/// data (an observed over the derived set, which [`strip_value_invention`]
+/// keeps). The parameter is found under its declared name, else under the one
+/// mounted name that ends in it; a factor no parameter declares is left alone.
+fn bind_member_factors(model: &mut Model, columns: &[(String, Vec<f64>)]) {
+    for (mf, values) in columns {
+        let name = if model.variables.contains_key(mf) {
+            Some(mf.clone())
+        } else {
+            let suffix = format!(".{mf}");
+            let mut hits = model.variables.keys().filter(|k| k.ends_with(&suffix));
+            match (hits.next(), hits.next()) {
+                (Some(k), None) => Some(k.clone()),
+                _ => None,
+            }
+        };
+        let Some(name) = name else { continue };
+        let var = model.variables.get_mut(&name).expect("found above");
+        if var.var_type != VariableType::Parameter || var.update.is_some() {
+            continue;
+        }
+        var.var_type = VariableType::Unknown;
+        var.default = None;
+        rewrite_equation_to_const(model, &name, values);
+    }
 }
 
 /// Whether a `join.on` key pair anywhere in `model` names a variable defined by
