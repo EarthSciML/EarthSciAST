@@ -9,7 +9,8 @@ expression evaluator (`Esm.Expr.evalApply`) at `Float`.
 
 Reads only what those documents use: one model (the one named, or the
 document's sole model when none is); its `expression_template_imports`
-(each `ref` a library file relative to the document, `only` honoured); its
+(each `ref` a library file relative to the document, or `esm:std/<file>.esm`
+for the repository's `lib/`; `only` honoured); its
 `parameter` variables' `default`s (a number, or a nested array of numbers up
 to rank 3) and the variables defined by an equation `x ~ const(...)`, which
 form the environment; each equation `lhs ~ apply_expression_template(...)`; and
@@ -34,6 +35,24 @@ well-formed document, 2 on a usage or parse error. -/
 namespace Adapter.Templates
 
 open Lean Esm.Expr
+
+/-- The file an `expression_template_imports` `ref` names. A standard-library
+ref `esm:std/<file>.esm` (esm-spec §4.7) names a file of the repository's
+top-level `lib/`, the library this model is checked against (the adapter runs
+from `formal/.lake/build/bin/`); its `<file>` is one path segment. Any other ref
+is a path relative to the document's directory. -/
+def libPath (dir : System.FilePath) (ref : String) : ExceptT String IO System.FilePath := do
+  let pre := "esm:std/"
+  unless ref.startsWith "esm:" do return dir / ref
+  let name := String.ofList (ref.toList.drop pre.length)
+  unless ref.startsWith pre && name.endsWith ".esm" && !name.contains '/' && name != ".esm" do
+    throw s!"template_import_unresolved: {ref}"
+  let app ← IO.appPath
+  let some root := app.parent >>= (·.parent) >>= (·.parent) >>= (·.parent) >>= (·.parent)
+    | throw s!"template_import_unresolved: {ref} (no repository root above {app})"
+  let path := root / "lib" / name
+  unless ← path.pathExists do throw s!"template_import_unresolved: {ref}"
+  return path
 
 partial def constOf (j : Json) : Except String Const :=
   match j with
@@ -180,7 +199,7 @@ def main (args : List String) : IO UInt32 := do
       let imports := (m.getObjValD "expression_template_imports").getArr?.toOption.getD #[]
       for imp in imports do
         let ref ← liftExcept (imp.getObjValAs? String "ref")
-        let lib ← liftExcept (Json.parse (← IO.FS.readFile (dir / ref)))
+        let lib ← liftExcept (Json.parse (← IO.FS.readFile (← libPath dir ref)))
         let ts ← liftExcept ((← liftExcept (lib.getObjVal? "expression_templates")).getObj?)
         let only := (imp.getObjValD "only").getArr?.toOption.map (·.toList.filterMap (·.getStr?.toOption))
         for (name, tj) in ts.toArray.toList do
