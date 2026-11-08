@@ -710,11 +710,12 @@ const _GEO_CG_BINARY = Dict{Symbol, Symbol}(r.sym => r.fnsym for r in _BINARY_EL
 const _GEO_CG_CMP = Dict{Symbol, Symbol}(r.sym => r.fnsym for r in _COMPARISON_ELEMENTWISE_OPS)
 const _GEO_CG_MINMAX = Dict{Symbol, Symbol}(r.sym => r.fnsym for r in _NARY_MINMAX_OPS)
 
-struct _GeoCGDecline <: Exception end
+struct _GeoCGDecline <: EarthSciASTError end
 
 mutable struct _GeoCG
     refs::IdDict{_Node, Int}
     level::IdDict{_Node, Int}          # the agg nest level that owns the node's innermost slot
+    levels::IdDict{_Node, UInt64}      # bit k: the node's sub-tree reads a slot of level k
     slot_level::Dict{Int, Int}
     memo::IdDict{_Node, Symbol}        # shared node => its memo local
     resets::Dict{Int, Vector{Symbol}}  # level => memo locals reset at its iteration
@@ -731,50 +732,34 @@ _geo_cg_kids(n::_Node) = n.op === :geo_agg ? begin
     end : n.children
 
 # Reference counts, and each node's level: the deepest nest level among the
-# slots its sub-tree reads (0: only the sweep's own slots).
+# slots its sub-tree reads (0: only the sweep's own slots). The scan returns
+# the set of levels read, as bits.
 function _geo_cg_scan!(g::_GeoCG, n::_Node, depth::Int)
     c = get(g.refs, n, 0)
     g.refs[n] = c + 1
-    c == 0 || return g.level[n]
-    lv = 0
+    c == 0 || return g.levels[n]
+    bits = UInt64(0)
     if n.kind == _NK_STATE
-        lv = get(g.slot_level, n.idx, 0)
+        bits = UInt64(1) << get(g.slot_level, n.idx, 0)
     elseif n.kind == _NK_OP && n.op === :geo_agg
         sp = n.payload::_GeoAggSpec
-        sp.gates === nothing || throw(_GeoCGDecline())
+        (sp.gates === nothing && depth + 1 < 64) || throw(_GeoCGDecline())
         for s in sp.slots
             g.slot_level[s] = depth + 1
         end
         for ch in _geo_cg_kids(n)
-            l = _geo_cg_scan!(g, ch, depth + 1)
-            # The reduction's value does not depend on its own slots.
-            lv = max(lv, l > depth ? 0 : l)
+            bits |= _geo_cg_scan!(g, ch, depth + 1)
         end
-        # A body reading an enclosing nest's slot ties the reduction to it.
-        lv = _geo_cg_outer_level(g, n, depth)
+        # The reduction's value does not depend on its own slots or deeper
+        # ones; a body reading an enclosing nest's slot ties it to that nest.
+        bits &= (UInt64(1) << (depth + 1)) - 1
     else
         for ch in n.children
-            lv = max(lv, _geo_cg_scan!(g, ch, depth))
+            bits |= _geo_cg_scan!(g, ch, depth)
         end
     end
-    return g.level[n] = lv
-end
-
-# The deepest level <= depth among the slots the reduction's sub-tree reads.
-function _geo_cg_outer_level(g::_GeoCG, n::_Node, depth::Int)
-    seen = IdDict{_Node, Nothing}()
-    lv = 0
-    function walk(x::_Node)
-        haskey(seen, x) && return
-        seen[x] = nothing
-        if x.kind == _NK_STATE
-            l = get(g.slot_level, x.idx, 0)
-            l <= depth && (lv = max(lv, l))
-        end
-        return foreach(walk, _geo_cg_kids(x))
-    end
-    foreach(walk, _geo_cg_kids(n))
-    return lv
+    g.level[n] = bits == 0 ? 0 : 63 - leading_zeros(bits)
+    return g.levels[n] = bits
 end
 
 function _geo_cg(g::_GeoCG, n::_Node)
@@ -905,7 +890,8 @@ end
 function _geo_kernel(body::_Node)
     _compiler_plan_now().share_subtrees || return nothing
     g = _GeoCG(
-        IdDict{_Node, Int}(), IdDict{_Node, Int}(), Dict{Int, Int}(), IdDict{_Node, Symbol}(),
+        IdDict{_Node, Int}(), IdDict{_Node, Int}(), IdDict{_Node, UInt64}(), Dict{Int, Int}(),
+        IdDict{_Node, Symbol}(),
         Dict{Int, Vector{Symbol}}(), Any[], IdDict{Any, Int}(), 0
     )
     try
