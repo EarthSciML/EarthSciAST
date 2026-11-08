@@ -78,6 +78,7 @@ from .simulation_common import (
 )
 from .sympy_bridge import SimulationError
 from .value_invention import (
+    KEY_OUT_OF_RANGE,
     ValueInventionError,
     _vi_detect,
     _vi_lhs_base,
@@ -1971,7 +1972,7 @@ def _frontdoor_join_keys_and_extents(
         }
         return buffers, idx_sets, dict(res.extents), dict(res.members), outputs
     except ValueInventionError as exc:
-        if str(exc).startswith("value_invention_key_out_of_range"):
+        if exc.code == KEY_OUT_OF_RANGE:
             raise  # already names the column (esm-spec §9.6.6)
         # A producer a derived index set names could not run, so that set has no
         # members. Degrading its extent to {} would let a contraction over it fold

@@ -40,7 +40,12 @@ from .esm_types import ExprNode
 
 
 class ValueInventionError(EarthSciAstError):
-    """A value-invention build-time materialisation error."""
+    """A value-invention build-time materialisation error. ``code`` is the
+    diagnostic code when the error carries one (``KEY_OUT_OF_RANGE``)."""
+
+    def __init__(self, message: str, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 #: esm-spec §9.6.6: a `distinct` key or `join` column value is NaN.
@@ -567,7 +572,8 @@ def _vi_key(node: Any, ctx: _ViCtx, bindings: dict[str, Any], column: str) -> An
         where = ", ".join(f"{k}={bindings[k]}" for k in sorted(bindings))
         raise ValueInventionError(
             f"{KEY_OUT_OF_RANGE}: {column} is NaN at ({where}); a key component is out of "
-            f"its declared range, non-integral or NaN"
+            f"its declared range, non-integral or NaN",
+            code=KEY_OUT_OF_RANGE,
         )
     return _vi_key_int(v)
 

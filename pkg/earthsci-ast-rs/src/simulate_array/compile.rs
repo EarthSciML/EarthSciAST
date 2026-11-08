@@ -4522,14 +4522,16 @@ pub fn run_value_invention_with_params<S: std::hash::BuildHasher>(
     }
 
     materialize_value_invention(&model_json, &const_arrays, &params, &HashMap::new()).map_err(|e| {
-        let code = crate::diagnostic::codes::VALUE_INVENTION_KEY_OUT_OF_RANGE;
         // A NaN key or join column already names its column (esm-spec §9.6.6).
-        match e.0.strip_prefix(code).and_then(|r| r.strip_prefix(": ")) {
-            Some(reason) => CompileError::ValueInventionRefused {
+        match e.code {
+            Some(code) => CompileError::ValueInventionRefused {
                 code,
-                reason: reason.to_string(),
+                reason: e.message,
             },
-            None => CompileError::build_err(format!("value-invention materialize failed: {}", e.0)),
+            None => CompileError::build_err(format!(
+                "value-invention materialize failed: {}",
+                e.message
+            )),
         }
     })
 }
@@ -4542,7 +4544,7 @@ pub(super) struct DerivedMaterialization {
     /// Ids of the geometry ring producers, whose sets the runtime sizes itself.
     geometry_ids: HashSet<String>,
     /// The engine's error, if it could not run.
-    failure: Option<String>,
+    failure: Option<CompileError>,
     /// The skolem map buffers as integer codes
     /// ([`ValueInventionResult::map_codes`]).
     map_codes: HashMap<String, Vec<f64>>,
@@ -4599,7 +4601,7 @@ fn materialize_derived_extents(
                 out.extents = result.extents;
                 out.map_codes = result.map_codes;
             }
-            Err(e) => out.failure = Some(e.to_string()),
+            Err(e) => out.failure = Some(e),
         }
     }
     out
@@ -4857,7 +4859,7 @@ pub(super) fn first_unmaterialized_derived_range(
 pub(super) fn unmaterialized_derived_error(
     from_faq: &str,
     index_sets: &HashMap<String, IndexSet>,
-    failure: Option<&str>,
+    failure: Option<&CompileError>,
 ) -> CompileError {
     let mut names: Vec<&str> = index_sets
         .iter()
@@ -4870,18 +4872,19 @@ pub(super) fn unmaterialized_derived_error(
         Some(set) => format!("derived index set '{set}' (from_faq '{from_faq}')"),
         None => format!("the derived index set produced by '{from_faq}'"),
     };
-    match failure {
+    let reason = failure.map(|e| e.to_string());
+    match (failure, reason.as_deref()) {
         // The producer ran and its key, not the data, is wrong: that code wins
         // over `derived_index_set_unmaterialized` (esm-spec §9.6.6).
-        Some(reason)
-            if reason.contains(crate::diagnostic::codes::VALUE_INVENTION_KEY_OUT_OF_RANGE) =>
+        (Some(CompileError::ValueInventionRefused { code, .. }), Some(reason))
+            if *code == crate::diagnostic::codes::VALUE_INVENTION_KEY_OUT_OF_RANGE =>
         {
             CompileError::ValueInventionRefused {
                 code: crate::diagnostic::codes::VALUE_INVENTION_KEY_OUT_OF_RANGE,
                 reason: format!("{subject}: {reason}"),
             }
         }
-        Some(reason)
+        (_, Some(reason))
             if reason.contains(crate::diagnostic::codes::RELATIONAL_NODE_IN_CONTINUOUS) =>
         {
             CompileError::ValueInventionRefused {
@@ -4893,7 +4896,9 @@ pub(super) fn unmaterialized_derived_error(
             code: crate::diagnostic::codes::DERIVED_INDEX_SET_UNMATERIALIZED,
             reason: format!(
                 "{subject} is not materialized: {}",
-                failure.unwrap_or("no geometry or value-invention producer supplied its extent")
+                reason
+                    .as_deref()
+                    .unwrap_or("no geometry or value-invention producer supplied its extent")
             ),
         },
     }
@@ -4906,7 +4911,7 @@ impl DerivedMaterialization {
         &self,
         index_sets: &HashMap<String, IndexSet>,
     ) -> Result<(), CompileError> {
-        let Some(failure) = self.failure.as_deref() else {
+        let Some(failure) = self.failure.as_ref() else {
             return Ok(());
         };
         let mut sets: Vec<(&String, &str)> = index_sets
@@ -4996,7 +5001,7 @@ fn refuse_unmaterialized_derived_ranges(
         Some(from_faq) => Err(unmaterialized_derived_error(
             &from_faq,
             index_sets,
-            derived.failure.as_deref(),
+            derived.failure.as_ref(),
         )),
         None => Ok(()),
     }

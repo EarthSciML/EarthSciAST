@@ -45,18 +45,45 @@ use crate::types::{Expr, IndexSet, Model};
 /// A value-invention build-time materialisation error (the Rust analog of
 /// Julia's `TreeWalkError` value-invention codes).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ValueInventionError(pub String);
+pub struct ValueInventionError {
+    /// What went wrong.
+    pub message: String,
+    /// The diagnostic code, when the error carries one
+    /// (`value_invention_key_out_of_range`).
+    pub code: Option<&'static str>,
+}
+
+impl ValueInventionError {
+    /// An error with no diagnostic code of its own.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            code: None,
+        }
+    }
+
+    /// An error carrying the diagnostic `code`.
+    pub fn with_code(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            code: Some(code),
+        }
+    }
+}
 
 impl std::fmt::Display for ValueInventionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ValueInventionError: {}", self.0)
+        match self.code {
+            Some(code) => write!(f, "ValueInventionError: {code}: {}", self.message),
+            None => write!(f, "ValueInventionError: {}", self.message),
+        }
     }
 }
 
 impl std::error::Error for ValueInventionError {}
 
 fn err<T>(msg: impl Into<String>) -> Result<T, ValueInventionError> {
-    Err(ValueInventionError(msg.into()))
+    Err(ValueInventionError::new(msg))
 }
 
 /// The relational body ops that mark a value-invention output (excluded from the
@@ -629,14 +656,14 @@ fn vi_eval(node: &Value, ctx: &ViCtx, bindings: &Bindings) -> Result<Val, ValueI
 
 fn vi_eval_op(node: &Value, ctx: &ViCtx, bindings: &Bindings) -> Result<Val, ValueInventionError> {
     let op = node_op(node)
-        .ok_or_else(|| ValueInventionError("value-invention node has no `op`".into()))?;
+        .ok_or_else(|| ValueInventionError::new("value-invention node has no `op`"))?;
     let args = node_args(node);
     // Arity guard: `args` comes straight from user JSON (schema-valid files
     // may still carry too few operands), so a missing operand must surface
     // as a diagnostic, never a slice-index panic.
     let arg = |i: usize| -> Result<&Value, ValueInventionError> {
         args.get(i).ok_or_else(|| {
-            ValueInventionError(format!(
+            ValueInventionError::new(format!(
                 "op {op:?} expects at least {} operand(s), found {}",
                 i + 1,
                 args.len()
@@ -813,7 +840,7 @@ fn vi_index(node: &Value, ctx: &ViCtx, bindings: &Bindings) -> Result<Val, Value
         }
         let idx = vi_eval(&args[1], ctx, bindings)?.key_int()?;
         return buf.get(&idx).cloned().ok_or_else(|| {
-            ValueInventionError(format!(
+            ValueInventionError::new(format!(
                 "materialised value-invention buffer {name:?} has no entry at index {idx}"
             ))
         });
@@ -922,11 +949,13 @@ fn vi_key(
             let mut at: Vec<(&String, &i64)> = bindings.iter().collect();
             at.sort();
             let at: Vec<String> = at.iter().map(|(k, v)| format!("{k}={v}")).collect();
-            err(format!(
-                "{}: {column} is NaN at ({}); a key component is out of its declared range, \
-                 non-integral or NaN",
+            Err(ValueInventionError::with_code(
                 crate::diagnostic::codes::VALUE_INVENTION_KEY_OUT_OF_RANGE,
-                at.join(", ")
+                format!(
+                    "{column} is NaN at ({}); a key component is out of its declared range, \
+                     non-integral or NaN",
+                    at.join(", ")
+                ),
             ))
         }
         v => Ok(Key::Int(v.key_int()?)),
@@ -1022,17 +1051,19 @@ fn vi_range_values(
                 ));
             };
             let parent = *bindings.get(parent_sym).ok_or_else(|| {
-                ValueInventionError(format!("ragged parent {parent_sym:?} is not bound"))
+                ValueInventionError::new(format!("ragged parent {parent_sym:?} is not bound"))
             })?;
             let offsets_name = iset.get("offsets").and_then(|v| v.as_str()).unwrap_or("");
             let values_name = iset.get("values").and_then(|v| v.as_str()).unwrap_or("");
             let offs = ctx.const_arrays.get(offsets_name).ok_or_else(|| {
-                ValueInventionError(format!(
+                ValueInventionError::new(format!(
                     "ragged offsets factor {offsets_name:?} not supplied"
                 ))
             })?;
             let vals = ctx.const_arrays.get(values_name).ok_or_else(|| {
-                ValueInventionError(format!("ragged values factor {values_name:?} not supplied"))
+                ValueInventionError::new(format!(
+                    "ragged values factor {values_name:?} not supplied"
+                ))
             })?;
             // `offs` / `vals` are caller-supplied ndarray factors and `parent`
             // comes from the enumeration binding, so every index into them must be
@@ -1137,7 +1168,7 @@ fn vi_join_index_sym(
     ctx: &ViCtx,
 ) -> Result<String, ValueInventionError> {
     let v = ctx.variables.get(vname).ok_or_else(|| {
-        ValueInventionError(format!("join references unknown variable {vname:?}"))
+        ValueInventionError::new(format!("join references unknown variable {vname:?}"))
     })?;
     let shape: Vec<String> = v
         .get("shape")
@@ -1207,9 +1238,9 @@ fn overlap_candidate_set(
     eps: f64,
 ) -> Result<OverlapIndex, ValueInventionError> {
     let src_envs = crate::broad_phase::envelope_vectors(src_env, ctx.const_arrays)
-        .map_err(ValueInventionError)?;
+        .map_err(ValueInventionError::new)?;
     let tgt_envs = crate::broad_phase::envelope_vectors(tgt_env, ctx.const_arrays)
-        .map_err(ValueInventionError)?;
+        .map_err(ValueInventionError::new)?;
     let pairs = crate::broad_phase::broad_phase_candidates(&src_envs, &tgt_envs, eps);
     // Broad-phase pairs are 0-based positions; the enumeration bindings are
     // 1-based (`vi_range_values` binds interval/categorical position p to p), so
@@ -1221,7 +1252,7 @@ fn overlap_candidate_set(
 /// 2 points / 4 rectangle bounds), mirroring Julia's `_valid_env_arity`.
 fn overlap_env_names(ov: &Value, field: &str) -> Result<Vec<String>, ValueInventionError> {
     let raw = ov.get(field).and_then(|v| v.as_array()).ok_or_else(|| {
-        ValueInventionError(format!(
+        ValueInventionError::new(format!(
             "join `overlap` clause requires both `src_env` and `tgt_env` arrays of envelope \
              factor names (Phase 2a spatial overlap gate); missing/invalid `{field}`"
         ))
@@ -1270,7 +1301,7 @@ fn vi_resolve_join(
         } else if let Some(on) = clause.get("on").and_then(|v| v.as_array()) {
             for pair in on {
                 let cols = pair.as_array().filter(|c| c.len() == 2).ok_or_else(|| {
-                    ValueInventionError("join.on entry must be a [left, right] pair".into())
+                    ValueInventionError::new("join.on entry must be a [left, right] pair")
                 })?;
                 let lname = cols[0].as_str().unwrap_or_default().to_string();
                 let rname = cols[1].as_str().unwrap_or_default().to_string();
@@ -1300,7 +1331,7 @@ fn vi_join_ok(
     // `join.on` names and index symbols come from user JSON, so a missing map
     // buffer or unbound symbol is a diagnostic, not a panicking `Index` lookup.
     let unbound =
-        |sym: &str| ValueInventionError(format!("join index symbol {sym:?} is not bound"));
+        |sym: &str| ValueInventionError::new(format!("join index symbol {sym:?} is not bound"));
     for g in gates {
         match g {
             ViJoinGate::Equality {
@@ -1310,7 +1341,9 @@ fn vi_join_ok(
                 rname,
             } => {
                 let missing_map = |name: &str| {
-                    ValueInventionError(format!("join key {name:?} has no materialised map buffer"))
+                    ValueInventionError::new(format!(
+                        "join key {name:?} has no materialised map buffer"
+                    ))
                 };
                 let lmap = ctx.maps.get(lname).ok_or_else(|| missing_map(lname))?;
                 let rmap = ctx.maps.get(rname).ok_or_else(|| missing_map(rname))?;
@@ -1433,12 +1466,12 @@ fn vi_argreduce(
         .and_then(|v| v.as_object())
         .unwrap_or(&empty);
     let arg_sym = node.get("arg").and_then(|v| v.as_str()).ok_or_else(|| {
-        ValueInventionError(format!(
+        ValueInventionError::new(format!(
             "arg-witness op {op:?} requires an `arg` naming the witnessing index symbol"
         ))
     })?;
     let value_expr = node.get("expr").ok_or_else(|| {
-        ValueInventionError(format!(
+        ValueInventionError::new(format!(
             "arg-witness op {op:?} requires an `expr` body (the scalar to optimise)"
         ))
     })?;
@@ -1535,7 +1568,7 @@ fn vi_materialize_map(
         ));
     }
     let body = node.get("expr").ok_or_else(|| {
-        ValueInventionError(format!("value-invention map {vname:?} has no `expr` body"))
+        ValueInventionError::new(format!("value-invention map {vname:?} has no `expr` body"))
     })?;
     let empty = Map::new();
     let ranges = node
@@ -1588,9 +1621,9 @@ fn vi_materialize_column(
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_string();
-    let body = node
-        .get("expr")
-        .ok_or_else(|| ValueInventionError(format!("join column {vname:?} has no `expr` body")))?;
+    let body = node.get("expr").ok_or_else(|| {
+        ValueInventionError::new(format!("join column {vname:?} has no `expr` body"))
+    })?;
     let empty = Map::new();
     let ranges = node
         .get("ranges")
@@ -1606,7 +1639,7 @@ fn vi_materialize_column(
                 k => Val::Key(k),
             };
             let at = *bindings.get(&sym).ok_or_else(|| {
-                ValueInventionError(format!("join column {vname:?} output index is unbound"))
+                ValueInventionError::new(format!("join column {vname:?} output index is unbound"))
             })?;
             out.insert(at, v);
             Ok(())
@@ -1782,7 +1815,7 @@ impl<'a> Fast<'a> {
 /// sorted total order, via the relational engine). Returns the member list.
 fn vi_materialize_producer(ctx: &ViCtx, node: &Value) -> Result<Vec<Key>, ValueInventionError> {
     let key = node.get("key").ok_or_else(|| {
-        ValueInventionError("value-invention producer aggregate requires a `key` (§5.5)".into())
+        ValueInventionError::new("value-invention producer aggregate requires a `key` (§5.5)")
     })?;
     let empty = Map::new();
     let ranges = node
@@ -1913,13 +1946,13 @@ fn vi_materialize_grouped(
         .and_then(|v| v.as_array())
         .filter(|a| a.len() == 1)
         .ok_or_else(|| {
-            ValueInventionError(format!(
+            ValueInventionError::new(format!(
                 "grouped value-invention aggregate {vname:?} must have a single output index"
             ))
         })?;
     let gsym = oi[0]
         .as_str()
-        .ok_or_else(|| ValueInventionError("grouped output index must be a string".into()))?
+        .ok_or_else(|| ValueInventionError::new("grouped output index must be a string"))?
         .to_string();
     let empty = Map::new();
     let ranges = node
@@ -1932,17 +1965,17 @@ fn vi_materialize_grouped(
         ));
     }
     let body = node.get("expr").ok_or_else(|| {
-        ValueInventionError(format!("grouped aggregate {vname:?} has no expr body"))
+        ValueInventionError::new(format!("grouped aggregate {vname:?} has no expr body"))
     })?;
     let join = node.get("join").and_then(|v| v.as_array()).ok_or_else(|| {
-        ValueInventionError(format!(
+        ValueInventionError::new(format!(
             "grouped aggregate {vname:?} needs a join pairing its group-key buffer with {gsym:?}"
         ))
     })?;
     // The group KEY buffer: the join column paired with the output index that
     // names a materialised VI buffer (`assign`).
     let keyvar = vi_join_partner(join, &gsym, |n| ctx.maps.contains_key(n)).ok_or_else(|| {
-        ValueInventionError(format!(
+        ValueInventionError::new(format!(
             "grouped aggregate {vname:?} join.on must pair a materialised value-invention buffer \
              with the output index {gsym:?}"
         ))
@@ -1962,14 +1995,14 @@ fn vi_materialize_grouped(
         let mut rows: Vec<(Key, Num)> = Vec::new();
         vi_enumerate(&contract, ctx_imm, |bindings| {
             let p = *bindings.get(&keysym).ok_or_else(|| {
-                ValueInventionError(format!("grouped key index symbol {keysym:?} is unbound"))
+                ValueInventionError::new(format!("grouped key index symbol {keysym:?} is unbound"))
             })?;
             let kval = ctx_imm
                 .maps
                 .get(&keyvar)
                 .and_then(|m| m.get(&p))
                 .ok_or_else(|| {
-                    ValueInventionError(format!(
+                    ValueInventionError::new(format!(
                         "grouped key buffer {keyvar:?} has no entry at index {p}"
                     ))
                 })?;
@@ -2016,13 +2049,13 @@ fn vi_materialize_derived(
         .and_then(|v| v.as_array())
         .filter(|a| a.len() == 1)
         .ok_or_else(|| {
-            ValueInventionError(format!(
+            ValueInventionError::new(format!(
                 "derived value-invention aggregate {vname:?} must have a single output index"
             ))
         })?;
     let gsym = oi[0]
         .as_str()
-        .ok_or_else(|| ValueInventionError("derived output index must be a string".into()))?
+        .ok_or_else(|| ValueInventionError::new("derived output index must be a string"))?
         .to_string();
     let empty = Map::new();
     let ranges = node
@@ -2030,7 +2063,7 @@ fn vi_materialize_derived(
         .and_then(|v| v.as_object())
         .unwrap_or(&empty);
     let body = node.get("expr").ok_or_else(|| {
-        ValueInventionError(format!(
+        ValueInventionError::new(format!(
             "derived value-invention aggregate {vname:?} has no expr body"
         ))
     })?;
@@ -2039,7 +2072,7 @@ fn vi_materialize_derived(
         let mut out = ViBuf::default();
         vi_enumerate(ranges, ctx_imm, |bindings| {
             let g = *bindings.get(&gsym).ok_or_else(|| {
-                ValueInventionError(format!("derived output index {gsym:?} is unbound"))
+                ValueInventionError::new(format!("derived output index {gsym:?} is unbound"))
             })?;
             out.insert(g, Val::Float(vi_eval(body, ctx_imm, bindings)?.as_f64()?));
             Ok(())
@@ -2078,7 +2111,7 @@ fn vi_classification_model(
             continue;
         };
         let bcls = cadence::classify(body, model_json)
-            .map_err(|e| ValueInventionError(format!("cadence classify failed: {e}")))?;
+            .map_err(|e| ValueInventionError::new(format!("cadence classify failed: {e}")))?;
         let newtype = match bcls {
             Cadence::Const => "parameter",
             Cadence::Discrete => "discrete",
@@ -2194,7 +2227,7 @@ pub fn materialize_value_invention(
             continue;
         }
         let cls = cadence::classify(node, &cls_model)
-            .map_err(|e| ValueInventionError(format!("cadence classify failed: {e}")))?;
+            .map_err(|e| ValueInventionError::new(format!("cadence classify failed: {e}")))?;
         if cls == Cadence::Continuous {
             return err(format!(
                 "arg-witness map {vname:?} classifies CONTINUOUS — a build-time assignment \
@@ -2319,9 +2352,8 @@ pub fn materialize_value_invention(
 
     for (_, node) in &det.producers {
         let node_id = node.get("id").and_then(|v| v.as_str()).ok_or_else(|| {
-            ValueInventionError(
-                "value-invention producer aggregate requires an `id` naming it for `from_faq`"
-                    .into(),
+            ValueInventionError::new(
+                "value-invention producer aggregate requires an `id` naming it for `from_faq`",
             )
         })?;
         if !faq_to_set.contains_key(node_id) {
@@ -2329,7 +2361,7 @@ pub fn materialize_value_invention(
         }
         // §5.7 guard 2: a relational node may not run on the hot path.
         let cls = cadence::classify(node, &cls_model)
-            .map_err(|e| ValueInventionError(format!("cadence classify failed: {e}")))?;
+            .map_err(|e| ValueInventionError::new(format!("cadence classify failed: {e}")))?;
         if cls == Cadence::Continuous {
             return err(format!(
                 "relational_node_in_continuous: value-invention producer {node_id:?} classifies \
@@ -2530,9 +2562,43 @@ mod tests {
         let typo = serde_json::json!({"op": "skolem", "args": ["aa", "b"]});
         let e = vi_skolem(&typo, &ctx, &bindings).unwrap_err();
         assert!(
-            e.0.contains("non-numeric key component"),
+            e.message.contains("non-numeric key component"),
             "unexpected error message: {}",
-            e.0
+            e.message
+        );
+    }
+
+    #[test]
+    fn a_nan_key_carries_the_out_of_range_code() {
+        let const_arrays: HashMap<String, ArrayD<f64>> = HashMap::new();
+        let params: HashMap<String, f64> = [("p".to_string(), f64::NAN)].into_iter().collect();
+        let empty = Map::new();
+        let mut vars = Map::new();
+        vars.insert("p".to_string(), serde_json::json!({"type": "parameter"}));
+        let no_bnds = no_bounds();
+        let ctx = ViCtx {
+            const_arrays: &const_arrays,
+            params: &params,
+            index_sets: &empty,
+            variables: &vars,
+            const_array_boundaries: &no_bnds,
+            maps: HashMap::new(),
+        };
+        let bindings: Bindings = [("a".to_string(), 1)].into_iter().collect();
+        let e = vi_key(&serde_json::json!("p"), &ctx, &bindings, "bin_col").unwrap_err();
+        assert_eq!(
+            e.code,
+            Some(crate::diagnostic::codes::VALUE_INVENTION_KEY_OUT_OF_RANGE)
+        );
+        assert!(
+            e.message.starts_with("bin_col is NaN at (a=1)"),
+            "{}",
+            e.message
+        );
+        assert!(
+            e.to_string()
+                .starts_with("ValueInventionError: value_invention_key_out_of_range: bin_col"),
+            "{e}"
         );
     }
 
@@ -2955,9 +3021,10 @@ mod tests {
         for bnds in [&no_bounds(), &err_pol] {
             let e = gather_1d("M", &m, 5, bnds).unwrap_err();
             assert!(
-                e.0.contains("const array 'M' index 5 out of range 1..4 in dim 0"),
+                e.message
+                    .contains("const array 'M' index 5 out of range 1..4 in dim 0"),
                 "unexpected error message: {}",
-                e.0
+                e.message
             );
             assert!(gather_1d("M", &m, 0, bnds).is_err());
         }

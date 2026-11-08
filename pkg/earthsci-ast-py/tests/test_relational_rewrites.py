@@ -232,4 +232,5 @@ def test_out_of_range_key_component_names_the_column() -> None:
         esm_problem(
             doc, (0.0, 1.0), p=dict(case["params"]), const_arrays=ca, compiler="interpreter"
         )
+    assert exc.value.code == "value_invention_key_out_of_range"
     assert "candidate_set" in str(exc.value)
