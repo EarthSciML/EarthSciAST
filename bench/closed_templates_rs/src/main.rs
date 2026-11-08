@@ -763,6 +763,15 @@ fn size(dir: &Path) {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let family = args.get(1).map(String::as_str).unwrap_or("all");
+    if family == "list" {
+        // `list FILE`: the tape listing of FILE under `native` (diagnostics).
+        let m = Model::build(Path::new(&args[2]), true, false);
+        print!("{}", m.prob.debug_array_compiled().unwrap().debug_tape_listing());
+        let mut m = m;
+        let (b, f) = (m.build_s, m.first_s);
+        println!("call_ns\t{:.0}\tbuild_s\t{b:.6}\tfirst_s\t{f:.6}", time_model(&mut m));
+        return;
+    }
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let dir = args
         .get(2)
