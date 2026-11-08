@@ -31,9 +31,9 @@ rests on, over the expression evaluator `Esm.Expr.eval`:
   NaN query satisfies none of them either; the statement needs no hypothesis
   on the query, so it covers that case too.
 
-`rank_of_set_eq_rank_of` closes the second item of the phase-4 contract: with
-a `{"from": S}` range read as the dense range over the positions `1..|S|` of
-an interval or derived index set (`denseFrom`), `rank_of_set(x, members, S)`
+`ev_fromSet`: `Esm.Expr.eval` evaluates a `{"from": S}` range over the set's
+positions `1..|S|`, so such a reduction is exactly the one over the dense range
+`[1, |S|]`. With it, `rank_of_set_eq_rank_of`: `rank_of_set(x, members, S)`
 evaluates to what `rank_of(x, members, |S|)` does, which is §9.2's
 `interp.searchsorted(x, members)` on ascending members.
 
@@ -466,76 +466,66 @@ theorem count_fold_exact_binary64 (rel : String) (hrel : rel ∈ relOps) (swap :
       .ok (.num (Bin64.fin (A.countP (fun a => relB rel a q != swap) : ℝ))) :=
   count_fold_cenv rel hrel swap k hkA hkX A q h53
 
-/-! ## `rank_of_set` over a `{"from": S}` range -/
+/-! ## `{"from": S}` ranges and `rank_of_set` -/
 
-mutual
-
-/-- Read every `{"from": S}` range whose set `sizes` knows as the dense range
-`[1, |S|]` over the set's positions (an interval or derived index set; a
-ragged set's `{"from": S, "of": …}` is a different form, not modelled). -/
-def denseFrom (sizes : List (String × ℕ)) : Ast → Ast
-  | .num m e => .num m e
-  | .var s => .var s
-  | .const c => .const c
-  | .node op args => .node op (denseFromList sizes args)
-  | .faq out red rs body args =>
-    .faq out red (denseFromRanges sizes rs) (denseFrom sizes body) (denseFromList sizes args)
-  | .faqWhere out red rs p body args =>
-    .faqWhere out red (denseFromRanges sizes rs) (denseFrom sizes p) (denseFrom sizes body)
-      (denseFromList sizes args)
-  | .apply n bs => .apply n (denseFromBinds sizes bs)
-
-def denseFromList (sizes : List (String × ℕ)) : List Ast → List Ast
-  | [] => []
-  | a :: as => denseFrom sizes a :: denseFromList sizes as
-
-def denseFromRanges (sizes : List (String × ℕ)) : Ranges → Ranges
-  | .nil => .nil
-  | .cons k t rs => .cons k (denseFromList sizes t) (denseFromRanges sizes rs)
-  | .fromSet k set rs =>
-    match sizes.lookup set with
-    | some n => .cons k [.num 1 0, .num (n : ℤ) 0] (denseFromRanges sizes rs)
-    | none => .fromSet k set (denseFromRanges sizes rs)
-
-def denseFromBinds (sizes : List (String × ℕ)) : Binds → Binds
-  | .nil => .nil
-  | .cons p v bs => .cons p (denseFrom sizes v) (denseFromBinds sizes bs)
-
-end
-
-/-- Expand a template, read its `from` ranges through `sizes`, evaluate. -/
-def evalApplyFrom {α : Type} [Scalar α] [Lits α] [Elem α] (sizes : List (String × ℕ))
-    (t : Template) (σ : Bindings) (env : Env α) : Except ApplyError (Val α) :=
-  match expand t σ with
-  | .error e => .error (.expand e)
-  | .ok a =>
-    match eval (denseFrom sizes a) env with
-    | .ok v => .ok v
-    | .error e => .error (.eval e)
-
-/-- The expansion of `rank_of_set` with its `from` range read as `[1, n]`. -/
-def rankSetA (n : ℕ) : Ast :=
-  .node "+" [.num 1 0, sumA "k_rank_of_set_1" (.num (n : ℤ) 0)
-    (.node "ifelse" [.node ">=" [ixA (.var "A") [.var "k_rank_of_set_1"], .var "X"], .num 0 0,
-      .num 1 0]) [.var "A"]]
-
-theorem expand_rank_of_set (n : ℕ) :
-    (expand Esm.Lib.Relational.rank_of_set
-        [("x", .var "X"), ("members", .var "A"), ("S", .var "S")]).map
-      (denseFrom [("S", n)]) = .ok (rankSetA n) := rfl
-
-section RankSet
+section FromSet
 
 variable {α : Type} [Scalar α] [RealNaN α] [Lits α] [Elem α] [ExprLaws α]
 
+/-- **A `{"from": S}` range is the dense range over the set's positions.** When
+the environment binds the size `n ≤ 2^53` of the index set `S`, a `faq`
+reduction (`+`, `*`, `min` or `max`) ranging over `{"from": S}` evaluates to
+exactly what the same reduction over `[1, n]` does, error or value. -/
+theorem ev_fromSet {red : String} (hred : red ∈ ["+", "*", "min", "max"]) {k S : String}
+    {body : Ast} {args : List Ast} {env : Env α} {n : ℕ} (hn : n ≤ 2 ^ 53)
+    (hS : env.lookup (setKey S) = some (.num (fin (n : ℝ)))) :
+    eval (.faq [] red (.fromSet k S .nil) body args) env =
+      eval (.faq [] red (.cons k [.num 1 0, .num (n : ℤ) 0] .nil) body args) env := by
+  have o1 : (Lits.ofDec 1 0 : α) = fin 1 := by
+    have := ofDec_nat (α := α) (n := 1) (by norm_num); simpa using this
+  have t1 : Lits.toInt? (fin 1 : α) = some 1 := by
+    have := toInt_nat (α := α) 1; simpa using this
+  simp only [List.mem_cons, List.not_mem_nil, or_false] at hred
+  have m1 : ("*" : String) ≠ "+" := by decide
+  have m2 : ("min" : String) ≠ "+" := by decide
+  have m3 : ("min" : String) ≠ "*" := by decide
+  have m4 : ("max" : String) ≠ "+" := by decide
+  have m5 : ("max" : String) ≠ "*" := by decide
+  have m6 : ("max" : String) ≠ "min" := by decide
+  rcases hred with rfl | rfl | rfl | rfl
+  · simp only [eval, setSize, hS, foldRed, asNum, asInt, toInt_nat, ofDec_nat hn, o1, t1, bind,
+      Except.bind, pure, Except.pure, ↓reduceIte]
+  · simp only [eval, setSize, hS, foldRed, asNum, asInt, toInt_nat, ofDec_nat hn, o1, t1, bind,
+      Except.bind, pure, Except.pure, m1, ↓reduceIte]
+  · simp only [eval, setSize, hS, foldRed, asNum, asInt, toInt_nat, ofDec_nat hn, o1, t1, bind,
+      Except.bind, pure, Except.pure, m2, m3, ↓reduceIte]
+  · simp only [eval, setSize, hS, foldRed, asNum, asInt, toInt_nat, ofDec_nat hn, o1, t1, bind,
+      Except.bind, pure, Except.pure, m4, m5, m6, ↓reduceIte]
+
+/-- The expansion of `rank_of_set` with `S` bound to the set `S`. -/
+def rankSetFA : Ast :=
+  .node "+" [.num 1 0, .faq [] "+" (.fromSet "k_rank_of_set_1" "S" .nil)
+    (.node "ifelse" [.node ">=" [ixA (.var "A") [.var "k_rank_of_set_1"], .var "X"], .num 0 0,
+      .num 1 0]) [.var "A"]]
+
+theorem expand_rank_of_set :
+    expand Esm.Lib.Relational.rank_of_set
+        [("x", .var "X"), ("members", .var "A"), ("S", .var "S")] = .ok rankSetFA := rfl
+
+/-- The environment of the `rank_of_set` statements: members `A`, key `X`, and
+the index set `S` of `|A|` positions. -/
+def senv (A : List α) (x : α) : Env α :=
+  [("A", .arr1 A), ("X", .num x), (setKey "S", .num (fin (A.length : ℝ)))]
+
 theorem ev_rank_set (A : List α) (x : α) (h53 : A.length < 2 ^ 53) :
-    eval (rankSetA A.length) [("A", .arr1 A), ("X", .num x)] =
-      .ok (.num (fin (Template.searchsorted x A A.length : ℝ))) := by
-  set env : Env α := [("A", .arr1 A), ("X", .num x)]
-  have hs : eval (sumA "k_rank_of_set_1" (.num (A.length : ℤ) 0)
+    eval rankSetFA (senv A x) = .ok (.num (fin (Template.searchsorted x A A.length : ℝ))) := by
+  set env : Env α := senv A x
+  have hS : env.lookup (setKey "S") = some (.num (fin (A.length : ℝ))) := rfl
+  have hs : eval (.faq [] "+" (.fromSet "k_rank_of_set_1" "S" .nil)
       (.node "ifelse" [.node ">=" [ixA (.var "A") [.var "k_rank_of_set_1"], .var "X"], .num 0 0,
         .num 1 0]) [.var "A"]) env =
       .ok (.num (fin (faqSum A.length (fun k => if le x (Template.ix A k) then 0 else 1) : ℝ))) := by
+    rw [ev_fromSet (by simp) h53.le hS]
     refine ev_sum h53.le (ev_nat env h53.le) (fun j => by split <;> omega) ?_
     intro j h1 h2
     have eA : eval (.var "A") (("k_rank_of_set_1", Val.num (fin (j : ℝ))) :: env) =
@@ -548,47 +538,38 @@ theorem ev_rank_set (A : List α) (x : α) (h53 : A.length < 2 ^ 53) :
     · simpa using ev_zero (α := α) _
   have hle := faqSum_le A.length (fun k => if le x (Template.ix A k) then 0 else 1)
     (fun j => by split <;> omega)
-  unfold rankSetA Template.searchsorted
+  unfold rankSetFA Template.searchsorted
   rw [ev_add (ev_lit1 env) hs, add_nat (by omega)]
 
 /-- **`rank_of_set` over a set of the members' size is `rank_of`.** With the
-key bound to `X`, the members to `A` and the set `S` of `|A|` positions, the
-expanded `rank_of_set(x, members, S)` evaluates to exactly what
-`rank_of(x, members, |A|)` does, for every key and every member array (NaN
-included, any order). -/
+key bound to `X`, the members to `A` and `S` an index set of `|A|` positions,
+the expanded `rank_of_set(x, members, S)` evaluates (`Esm.Expr.eval`, its
+`{"from": S}` range included) to exactly what `rank_of(x, members, |A|)` does,
+for every key and every member array (NaN included, any order). -/
 theorem rank_of_set_eq_rank_of (A : List α) (x : α) (h53 : A.length < 2 ^ 53) :
-    evalApplyFrom [("S", A.length)] Esm.Lib.Relational.rank_of_set
-        [("x", .var "X"), ("members", .var "A"), ("S", .var "S")]
-        [("A", .arr1 A), ("X", .num x)] =
+    evalApply Esm.Lib.Relational.rank_of_set
+        [("x", .var "X"), ("members", .var "A"), ("S", .var "S")] (senv A x) =
       evalApply Esm.Lib.Relational.rank_of
         [("x", .var "X"), ("members", .var "A"), ("n", .num (A.length : ℤ) 0)]
         [("A", .arr1 A), ("X", .num x)] := by
-  have e1 : expand Esm.Lib.Relational.rank_of_set
-      [("x", .var "X"), ("members", .var "A"), ("S", .var "S")] =
-      .ok (Esm.Expr.subst [("x", .var "X"), ("members", .var "A"), ("S", .var "S")]
-        Esm.Lib.Relational.rank_of_set.body) := rfl
-  have e2 : denseFrom [("S", A.length)]
-      (Esm.Expr.subst [("x", .var "X"), ("members", .var "A"), ("S", .var "S")]
-        Esm.Lib.Relational.rank_of_set.body) = rankSetA A.length := rfl
-  unfold evalApplyFrom evalApply
-  rw [e1, expand_rank_of A.length]
+  unfold evalApply
+  rw [expand_rank_of_set, expand_rank_of A.length]
   dsimp only
-  rw [e2, ev_rank_set A x h53, ev_rank A x h53]
+  rw [ev_rank_set A x h53, ev_rank A x h53]
 
 /-- **`rank_of_set` is `interp.searchsorted`.** On ascending real members, the
-expanded `rank_of_set(x, members, S)` with `S` the members' positions is §9.2's
-`interp.searchsorted(x, members)` for every key, NaN included. -/
+expanded `rank_of_set(x, members, S)` with `S` an index set of the members'
+size is §9.2's `interp.searchsorted(x, members)` for every key, NaN included. -/
 theorem rank_of_set_template_eq (a : List ℝ) (ha : a.Pairwise (· ≤ ·)) (h53 : a.length < 2 ^ 53)
     (x : α) :
-    evalApplyFrom [("S", a.length)] Esm.Lib.Relational.rank_of_set
-        [("x", .var "X"), ("members", .var "A"), ("S", .var "S")]
-        [("A", .arr1 (a.map fin)), ("X", .num x)] =
+    evalApply Esm.Lib.Relational.rank_of_set
+        [("x", .var "X"), ("members", .var "A"), ("S", .var "S")] (senv (a.map fin) x) =
       .ok (.num (fin (Esm.Closed.searchsorted x (a.map fin) : ℝ))) := by
   have h := rank_of_set_eq_rank_of (a.map (fin : ℝ → α)) x (by simpa using h53)
   rw [List.length_map] at h
   rw [h]
   exact rank_of_template_eq a ha h53 x
 
-end RankSet
+end FromSet
 
 end Esm.Closed.CountAst

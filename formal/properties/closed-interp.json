@@ -1037,13 +1037,23 @@
       "theorem": "Esm.Closed.CountAst.count_eq_search"
     },
     {
+      "id": "P-expr-from-range-dense",
+      "clauses": [
+        "spec.9.6.1.ranges-from-binding-index-set"
+      ],
+      "statement": "A faq reduction (+, *, min or max) over a {\"from\": S} range, where the evaluation environment binds the size n <= 2^53 of the index set S, evaluates to exactly what the same reduction over the dense range [1, n] does.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α] {red : String}, red ∈ [\"+\", \"*\", \"min\", \"max\"] → ∀ {k S : String} {body : Esm.Expr.Ast} {args : List Esm.Expr.Ast} {env : Esm.Expr.Env α} {n : ℕ}, n ≤ (2 : ℕ) ^ (53 : ℕ) → List.lookup (Esm.Expr.setKey S) env = Option.some (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑n)) → Esm.Expr.eval (Esm.Expr.Ast.faq [] red (Esm.Expr.Ranges.fromSet k S Esm.Expr.Ranges.nil) body args) env = Esm.Expr.eval (Esm.Expr.Ast.faq [] red (Esm.Expr.Ranges.cons k [Esm.Expr.Ast.num (1 : ℤ) (0 : ℕ), Esm.Expr.Ast.num ↑n (0 : ℕ)] Esm.Expr.Ranges.nil) body args) env",
+      "status": "proven",
+      "theorem": "Esm.Closed.CountAst.ev_fromSet"
+    },
+    {
       "id": "P-relational-rank-of-set-eq-rank-of",
       "clauses": [
         "spec.9.6.1.ranges-from-binding-index-set",
         "spec.9.6.3.bindings-cover-params"
       ],
-      "statement": "With the {\"from\": S} range read as the dense range over the |S| positions of S, the rank_of_set template of lib/relational.esm evaluates to exactly what rank_of(x, members, |S|) does, for every key and member array.",
-      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α] (A : List α) (x : α), A.length < (2 : ℕ) ^ (53 : ℕ) → Esm.Closed.CountAst.evalApplyFrom [(\"S\", A.length)] Esm.Lib.Relational.rank_of_set [(\"x\", Esm.Expr.Ast.var \"X\"), (\"members\", Esm.Expr.Ast.var \"A\"), (\"S\", Esm.Expr.Ast.var \"S\")] [(\"A\", Esm.Expr.Val.arr1 A), (\"X\", Esm.Expr.Val.num x)] = Esm.Expr.evalApply Esm.Lib.Relational.rank_of [(\"x\", Esm.Expr.Ast.var \"X\"), (\"members\", Esm.Expr.Ast.var \"A\"), (\"n\", Esm.Expr.Ast.num ↑A.length (0 : ℕ))] [(\"A\", Esm.Expr.Val.arr1 A), (\"X\", Esm.Expr.Val.num x)]",
+      "statement": "With S an index set of |members| positions, the rank_of_set template of lib/relational.esm (its {\"from\": S} range evaluated by the expression evaluator) evaluates to exactly what rank_of(x, members, |members|) does, for every key and member array.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α] (A : List α) (x : α), A.length < (2 : ℕ) ^ (53 : ℕ) → Esm.Expr.evalApply Esm.Lib.Relational.rank_of_set [(\"x\", Esm.Expr.Ast.var \"X\"), (\"members\", Esm.Expr.Ast.var \"A\"), (\"S\", Esm.Expr.Ast.var \"S\")] (Esm.Closed.CountAst.senv A x) = Esm.Expr.evalApply Esm.Lib.Relational.rank_of [(\"x\", Esm.Expr.Ast.var \"X\"), (\"members\", Esm.Expr.Ast.var \"A\"), (\"n\", Esm.Expr.Ast.num ↑A.length (0 : ℕ))] [(\"A\", Esm.Expr.Val.arr1 A), (\"X\", Esm.Expr.Val.num x)]",
       "status": "proven",
       "theorem": "Esm.Closed.CountAst.rank_of_set_eq_rank_of"
     },
@@ -1053,8 +1063,8 @@
         "spec.9.6.1.ranges-from-binding-index-set",
         "spec.9.2.searchsorted-xs-monotone"
       ],
-      "statement": "With the {\"from\": S} range read as the dense range over the members' positions, the rank_of_set template on ascending real members of length below 2^53 evaluates to interp.searchsorted(x, members) for every key, NaN included.",
-      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α] (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 ≤ x2) a → a.length < (2 : ℕ) ^ (53 : ℕ) → ∀ (x : α), Esm.Closed.CountAst.evalApplyFrom [(\"S\", a.length)] Esm.Lib.Relational.rank_of_set [(\"x\", Esm.Expr.Ast.var \"X\"), (\"members\", Esm.Expr.Ast.var \"A\"), (\"S\", Esm.Expr.Ast.var \"S\")] [(\"A\", Esm.Expr.Val.arr1 (List.map Esm.Closed.Template.RealNaN.fin a)), (\"X\", Esm.Expr.Val.num x)] = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑(Esm.Closed.searchsorted x (List.map Esm.Closed.Template.RealNaN.fin a))))",
+      "statement": "With S an index set of the members' size, the rank_of_set template on ascending real members of length below 2^53 evaluates to interp.searchsorted(x, members) for every key, NaN included.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α] (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 ≤ x2) a → a.length < (2 : ℕ) ^ (53 : ℕ) → ∀ (x : α), Esm.Expr.evalApply Esm.Lib.Relational.rank_of_set [(\"x\", Esm.Expr.Ast.var \"X\"), (\"members\", Esm.Expr.Ast.var \"A\"), (\"S\", Esm.Expr.Ast.var \"S\")] (Esm.Closed.CountAst.senv (List.map Esm.Closed.Template.RealNaN.fin a) x) = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑(Esm.Closed.searchsorted x (List.map Esm.Closed.Template.RealNaN.fin a))))",
       "status": "proven",
       "theorem": "Esm.Closed.CountAst.rank_of_set_template_eq"
     }

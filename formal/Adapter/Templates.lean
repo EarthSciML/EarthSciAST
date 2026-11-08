@@ -13,11 +13,14 @@ document's sole model when none is); its `expression_template_imports`
 for the repository's `lib/`; `only` honoured); its
 `parameter` variables' `default`s (a number, or a nested array of numbers up
 to rank 3) and the variables defined by an equation `x ~ const(...)`, which
-form the environment; each equation `lhs ~ apply_expression_template(...)`; and
-each array equation `lhs ~ faq(...)` whose output indices are all its range
-symbols, each over a whole interval index set (`{"from": set}`, extent from
-`index_sets`), with no `join` or `filter` — its body evaluated at every index
-tuple. Each result is bound for the equations after it. Prints
+form the environment, together with every interval index set's `size` (so a
+`{"from": set}` range evaluates over the set's positions); each equation
+`lhs ~ apply_expression_template(...)`; and each array equation `lhs ~ faq(...)`
+whose output indices each range over a whole interval index set
+(`{"from": set}`, extent from `index_sets`), with no `join` or `filter` — its
+body, or the reduction over its remaining (contracted) ranges, evaluated at
+every output index tuple. A ragged range (`{"from": set, "of": [...]}`) is
+refused. Each result is bound for the equations after it. Prints
 
 ```json
 {"results": [{"name": "r_x", "value": 15.0, "bits": "4624633867356078080"},
@@ -96,7 +99,12 @@ partial def astOf (j : Json) : Except String Ast := do
           rs.toArray.toList.foldrM (fun (k, t) acc => do
             match t with
               | .arr a => return Ranges.cons k (← a.toList.mapM astOf) acc
-              | _ => match t.getObjValAs? String "from" with
+              | _ =>
+                if let .ok o := t.getObj? then
+                  for (f, _) in o.toArray.toList do
+                    unless f == "from" do
+                      throw s!"faq range {k}: field {f} (a ragged range) is outside the modelled slice"
+                match t.getObjValAs? String "from" with
                 | .ok set => return Ranges.fromSet k set acc
                 | .error _ => throw s!"faq range {k}: neither a tuple nor a from-set") Ranges.nil
         | _ => pure Ranges.nil
@@ -152,16 +160,19 @@ def evalAt (scope : List (String × Template)) (env : Env Float) (body : Ast)
   | .ok _ => throw "not a scalar"
   | .error e => throw (errorString (.eval e))
 
-/-- A `faq` whose output indices are all its range symbols, each ranging over a
-whole interval index set (`{"from": set}`), with no `join` or `filter`: its
-index-set names and extents in `output_idx` order, or why it is not one. -/
-def mapFaq (sets : Json) (rhs : Json) : Except String (List String × List String × List Nat) := do
+/-- A `faq` whose output indices each range over a whole interval index set
+(`{"from": set}`), with no `join` or `filter`: its output symbols, their
+index-set names and extents in `output_idx` order, and the faq left to
+evaluate at each output tuple — the node itself with no output indices and only
+its contracted ranges, or just its body when it contracts nothing. Or why it is
+not one. -/
+def mapFaq (sets : Json) (rhs : Json) :
+    Except String (List String × List String × List Nat × Json) := do
   for f in ["join", "filter", "distinct", "key", "semiring"] do
     if (rhs.getObjVal? f).toOption.isSome then throw s!"faq with {f}"
   let out ← (← rhs.getObjVal? "output_idx").getArr?
   let syms ← out.toList.mapM (·.getStr?)
   let ranges ← (← rhs.getObjVal? "ranges").getObj?
-  unless ranges.toArray.size == syms.length do throw "faq contracts an index"
   let mut names : List String := []
   let mut sizes : List Nat := []
   for k in syms do
@@ -172,7 +183,10 @@ def mapFaq (sets : Json) (rhs : Json) : Except String (List String × List Strin
     let size ← (← sets.getObjVal? set).getObjValAs? Nat "size"
     names := names ++ [set]
     sizes := sizes ++ [size]
-  return (syms, names, sizes)
+  let contracted := ranges.toArray.toList.filter (fun (k, _) => !syms.contains k)
+  let cell := if contracted.isEmpty then rhs.getObjValD "expr"
+    else (rhs.setObjVal! "output_idx" (Json.arr #[])).setObjVal! "ranges" (Json.mkObj contracted)
+  return (syms, names, sizes, cell)
 
 def main (args : List String) : IO UInt32 := do
   match args with
@@ -233,6 +247,13 @@ def main (args : List String) : IO UInt32 := do
       let sets := match doc.getObjVal? "index_sets" with
         | .ok j => j
         | .error _ => m.getObjValD "index_sets"
+      -- every interval set's declared size, for the `{"from": set}` ranges the
+      -- evaluator visits (`Esm.Expr.setKey`); a derived or ragged set has none
+      if let .ok so := sets.getObj? then
+        for (name, sj) in so.toArray.toList do
+          if (sj.getObjValAs? String "kind").toOption == some "interval" then
+            if let .ok n := sj.getObjValAs? Nat "size" then
+              env := (setKey name, .num (Float.ofNat n)) :: env
       let mut out : Array Json := #[]
       for e in eqs do
         let rhs := e.getObjValD "rhs"
@@ -256,8 +277,8 @@ def main (args : List String) : IO UInt32 := do
         else if op == some "faq" && (rhs.getObjVal? "output_idx").toOption.isSome then
           match mapFaq sets rhs with
           | .error why => out := out.push (Json.mkObj [("name", lhs), ("skipped", why)])
-          | .ok (syms, names, sizes) =>
-            match astOf (rhs.getObjValD "expr") with
+          | .ok (syms, names, sizes, cell) =>
+            match astOf cell with
             | .error why => out := out.push (Json.mkObj [("name", lhs), ("skipped", why)])
             | .ok body =>
               let ts := tuples sizes
