@@ -935,6 +935,9 @@ pub(crate) struct TapeBuilder<'m> {
     scope_frames: Vec<ScopeFrame>,
     /// Nested conditional-branch buffers (top = innermost).
     branch_bufs: Vec<Vec<Tagged>>,
+    /// Per open branch, the latest section any instruction buffered in it
+    /// asked for: the earliest section the whole block could run in.
+    branch_secs: Vec<Cadence>,
     hoist: FxHashMap<(BoxKey, VnKey), LV>,
     /// Expressions the builder synthesized and lowered (the equality
     /// scatter's rewritten bodies and filters). Value numbering keys a node by
@@ -1246,6 +1249,7 @@ impl<'m> TapeBuilder<'m> {
             home: Cadence::Continuous,
             scope_frames: Vec::new(),
             branch_bufs: Vec::new(),
+            branch_secs: Vec::new(),
             hoist: FxHashMap::default(),
             held_exprs: Vec::new(),
             hoist_journal: Vec::new(),
@@ -1278,9 +1282,18 @@ impl<'m> TapeBuilder<'m> {
     }
 
     /// Section an instruction with operand cadence `want` lands in.
+    ///
+    /// Inside a conditional branch the instruction is buffered with its
+    /// block, and the block's section is settled when it closes
+    /// ([`Self::lower_branchy`]); the cadence returned here is provisional
+    /// and the block raises every slot it defines to the section it lands in.
     fn placement(&self, want: Cadence) -> Cadence {
         if self.in_branch() {
-            self.home
+            if self.sweep.is_some() {
+                self.home
+            } else {
+                want.min(self.home)
+            }
         } else {
             debug_assert!(
                 want <= self.home,
@@ -1319,8 +1332,28 @@ impl<'m> TapeBuilder<'m> {
             }
             return;
         }
-        if let Some(buf) = self.branch_bufs.last_mut() {
-            buf.push((instr, prec));
+        if self.in_branch() {
+            // A pure instruction that cannot fault and whose operands are
+            // available in an earlier section runs there, unconditionally:
+            // computing it where the branch is not taken only costs work.
+            if section < self.home && Self::hoistable(&instr) {
+                self.push_stream(instr, prec, section);
+                return;
+            }
+            // Anything else runs with its block, at the block's section,
+            // which is the rule's home unless the whole block moves
+            // ([`Self::lower_branchy`]).
+            let mut defs: SmallVec<[SlotId; 2]> = SmallVec::new();
+            instr.for_each_def(&self.slot_tables(), |s| defs.push(s));
+            for s in defs {
+                self.slots[s as usize].cadence = self.home;
+            }
+            if let Some(m) = self.branch_secs.last_mut() {
+                *m = (*m).max(section.min(self.home));
+            }
+            if let Some(buf) = self.branch_bufs.last_mut() {
+                buf.push((instr, prec));
+            }
             return;
         }
         self.push_stream(instr, prec, section);
@@ -2077,6 +2110,7 @@ impl<'m> TapeBuilder<'m> {
 
     fn push_branch(&mut self) -> usize {
         self.branch_bufs.push(Vec::new());
+        self.branch_secs.push(Cadence::Const);
         self.scope_frames
             .last()
             .map(|f| f.journal.len())
@@ -2085,8 +2119,9 @@ impl<'m> TapeBuilder<'m> {
 
     /// Close the innermost branch: roll back VN insertions made inside it and
     /// return its instruction buffer.
-    fn pop_branch(&mut self, journal_mark: usize) -> Vec<Tagged> {
+    fn pop_branch(&mut self, journal_mark: usize) -> (Vec<Tagged>, Cadence) {
         let buf = self.branch_bufs.pop().expect("branch buffer open");
+        let sec = self.branch_secs.pop().expect("branch section open");
         let depth = self.branch_bufs.len();
         if let Some(frame) = self.scope_frames.last_mut() {
             frame.subs.retain(|(_, d), _| *d <= depth);
@@ -2102,7 +2137,7 @@ impl<'m> TapeBuilder<'m> {
                 }
             }
         }
-        buf
+        (buf, sec)
     }
 
     // -- fail-closed faults -------------------------------------------------
@@ -5853,7 +5888,7 @@ impl<'m> TapeBuilder<'m> {
         if read.len() < bx.syms.len() {
             return self.lower_nested_scalar_reduction_on(node, spec, bx, &read);
         }
-        if let Some(v) = self.try_lower_indicator_count(spec, bx, true) {
+        if let Some(v) = self.try_lower_indicator_count(spec, bx, true, None) {
             return Ok(v);
         }
         let nc = spec.contract_names.len();
@@ -7451,6 +7486,8 @@ impl<'m> TapeBuilder<'m> {
         // The body over the contraction box: the contracted names ARE its
         // axis symbols, in `faq_spec`'s (sorted) order. The filter first: the
         // oracle tests it before the body at every tuple.
+        let txn = self.sub_txn();
+        let query = self.wholesale_count_query(spec);
         self.push_scope();
         let bx = LBox {
             syms: &spec.contract_names,
@@ -7461,9 +7498,14 @@ impl<'m> TapeBuilder<'m> {
             tuple: 0,
             visit: SmallVec::new(),
         };
-        if let Some(v) = self.try_lower_indicator_count(spec, &bx, false) {
+        if let Some(v) = self.try_lower_indicator_count(spec, &bx, false, query.clone()) {
             self.pop_scope();
             return Ok(v);
+        }
+        if query.is_some() {
+            self.pop_scope();
+            self.sub_rollback(txn);
+            self.push_scope();
         }
         let lowered = (|| -> LResult<Option<LV>> {
             let keep = match spec.filter {
@@ -7571,15 +7613,42 @@ impl<'m> TapeBuilder<'m> {
         spec: &ArrayOpSpec,
         bx: &LBox,
         nested: bool,
+        query: Option<LV>,
     ) -> Option<LV> {
         if !self.count_fold || bx.tuple != 0 || self.sweep.is_some() {
             return None;
         }
         let ic = detect_indicator_count(spec)?;
         let txn = self.sub_txn();
-        match self.lower_indicator_count(&ic, bx, nested) {
+        match self.lower_indicator_count(&ic, bx, nested, query) {
             Ok(Some(v)) => Some(v),
             Ok(None) | Err(_) => {
+                self.sub_rollback(txn);
+                None
+            }
+        }
+    }
+
+    /// The query of a standalone comparison count in a whole-body rule,
+    /// lowered in the rule's own frame rather than the contraction's: it
+    /// reads no contraction index, so it is one value for the whole window,
+    /// and an identical sub-tree elsewhere in the rule (an interpolation's
+    /// clamped coordinate, read again by its weight) is shared with it. `None`
+    /// (and nothing emitted) for any other reduction, outside a whole-body
+    /// frame, or when the query notes a fault or is not a scalar.
+    fn wholesale_count_query(&mut self, spec: &ArrayOpSpec) -> Option<LV> {
+        if !self.count_fold
+            || self.sweep.is_some()
+            || !self.scope_frames.last().is_some_and(|f| f.wholesale)
+        {
+            return None;
+        }
+        let ic = detect_indicator_count(spec)?;
+        let txn = self.sub_txn();
+        let notes = self.fault_notes;
+        match self.lower_wholesale(ic.x) {
+            Ok(x) if self.fault_notes == notes && self.lv_box(&x).is_none() => Some(x),
+            _ => {
                 self.sub_rollback(txn);
                 None
             }
@@ -7593,6 +7662,7 @@ impl<'m> TapeBuilder<'m> {
         ic: &IndicatorCount,
         bx: &LBox,
         nested: bool,
+        query: Option<LV>,
     ) -> LResult<Option<LV>> {
         // The axis, read whole. A name an enclosing box binds is not an
         // array; anything the resolver would refuse is left to the general
@@ -7644,7 +7714,10 @@ impl<'m> TapeBuilder<'m> {
         };
         // The query, as the oracle evaluates it at each cell.
         let notes = self.fault_notes;
-        let x = self.lower_expr(ic.x, bx)?;
+        let x = match query {
+            Some(x) => x,
+            None => self.lower_expr(ic.x, bx)?,
+        };
         if nested && self.fault_notes != notes {
             return Ok(None);
         }
@@ -7974,7 +8047,7 @@ impl<'m> TapeBuilder<'m> {
                 return Err(e);
             }
         };
-        let mut tbuf = self.pop_branch(mark);
+        let (mut tbuf, tsec) = self.pop_branch(mark);
         let mark = self.push_branch();
         self.reach.push((cond.clone(), false));
         let fv = arm(self, false);
@@ -7986,7 +8059,7 @@ impl<'m> TapeBuilder<'m> {
                 return Err(e);
             }
         };
-        let mut fbuf = self.pop_branch(mark);
+        let (mut fbuf, fsec) = self.pop_branch(mark);
         let tb = self.lv_box(&tv);
         let fb = self.lv_box(&fv);
         // One arm a scalar and the other an array over a box: the join is
@@ -8003,6 +8076,25 @@ impl<'m> TapeBuilder<'m> {
             }
             _ => bail_tape!("ifelse: branch value boxes differ under a runtime scalar condition"),
         };
+        // Two scalar arms of at most `IF_CONVERT_MAX` pure instructions that
+        // cannot fault: both are computed and the condition picks one
+        // (`Instr::Select` reads `cond != 0` as the jump does), the same value
+        // for less than the jump and the two copies into a join cost.
+        const IF_CONVERT_MAX: usize = 2;
+        if scalar
+            && self.sweep.is_none()
+            && tbuf.len() + fbuf.len() <= IF_CONVERT_MAX
+            && tbuf
+                .iter()
+                .chain(fbuf.iter())
+                .all(|(i, _)| Self::hoistable(i))
+        {
+            let home = self.home;
+            for (i, p) in tbuf.into_iter().chain(fbuf) {
+                self.emit_tagged(i, p, home);
+            }
+            return self.emit_select(cond, tv, fv);
+        }
         let phi = self.new_slot(&shape, &origin, scalar, self.home);
         let prec = crate::precision::active();
         let join = |s: &Self, v: &LV, arm_box: &Option<(DimU, DimI)>| {
@@ -8020,7 +8112,35 @@ impl<'m> TapeBuilder<'m> {
             n_true: tbuf.len() as u32,
             n_false: fbuf.len() as u32,
         };
-        let sec = self.home;
+        // The block runs in the earliest section its condition, its arms'
+        // values and every instruction in it allow, when all of it is pure
+        // and cannot fault (a block of build-time data then runs once, not on
+        // every call); otherwise at the rule's home, as before. Every slot it
+        // defines takes that section.
+        let sec = if self.sweep.is_none() {
+            let want = tsec
+                .max(fsec)
+                .max(self.lv_cadence(&cond))
+                .max(self.lv_cadence(&tv))
+                .max(self.lv_cadence(&fv));
+            let pure = tbuf
+                .iter()
+                .chain(fbuf.iter())
+                .all(|(i, _)| Self::hoistable(i) || matches!(i, Instr::JmpIfZero { .. }));
+            if pure { want.min(self.home) } else { self.home }
+        } else {
+            self.home
+        };
+        if self.sweep.is_none() {
+            let mut defs: SmallVec<[SlotId; 8]> = SmallVec::new();
+            let tables = self.slot_tables();
+            for (i, _) in tbuf.iter().chain(fbuf.iter()) {
+                i.for_each_def(&tables, |s| defs.push(s));
+            }
+            for s in defs {
+                self.slots[s as usize].cadence = sec;
+            }
+        }
         if self.sweep.is_some() {
             // Inside a recurrence body the block moves as one: its skip counts
             // must stay exact. It runs per cell when anything in it depends on
@@ -8039,6 +8159,14 @@ impl<'m> TapeBuilder<'m> {
                 } else {
                     self.push_stream(i, p, sec);
                 }
+            }
+        } else if self.in_branch() && sec < self.home {
+            // A block that moved out of its enclosing branch runs there whole,
+            // so its skip counts stay exact.
+            for (i, p) in std::iter::once((jmp, prec)).chain(tbuf).chain(fbuf) {
+                self.track_known(&i);
+                self.track_range(&i);
+                self.push_stream(i, p, sec);
             }
         } else {
             self.emit(jmp, sec);
@@ -8292,6 +8420,7 @@ impl<'m> TapeBuilder<'m> {
         self.rule_home_chunk.push(None);
         self.scope_frames.clear();
         self.branch_bufs.clear();
+        self.branch_secs.clear();
         self.hoist_journal.clear();
         self.sub_box_memo.clear();
         self.fault_first = None;
@@ -8478,6 +8607,7 @@ impl<'m> TapeBuilder<'m> {
         self.tuples_held = txn.tuples_held;
         self.scope_frames.clear();
         self.branch_bufs.clear();
+        self.branch_secs.clear();
         self.fault_first = None;
         self.fault_prefix.clear();
         self.lazy_depth = 0;
