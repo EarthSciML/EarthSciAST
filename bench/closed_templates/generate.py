@@ -23,12 +23,24 @@ same, so a timing difference is the template's.
   `tests/conformance/value_invention_geometry` at p points and g generators,
   feeding a right-hand side through a gather. `op` spelling: `argmin`; `tpl`:
   the `lib/relational.esm` argmin template.
+* ``mesh_rank_<spelling>_E<e>``: edge enumeration of a triangulated n x n
+  vertex-grid mesh with e unique edges (the MPAS-scale rank workload, modelled
+  on `edge_enumeration_*` and `skolem_distinct_rank`): a `distinct` over every
+  face's three vertex pairs invents the edge set, each edge gets its dense id,
+  `n_edges` grows by the set's size, a state per edge id (an interval set of
+  the known edge count, as `edge_enumeration_ode`'s `edge_ids`) relaxes toward
+  its id and a state per face toward the sum of its edges' states, read through
+  each face's edge ids. `op` spelling: a
+  `skolem` key, `rank`, and the face edge ids as mesh connectivity data (what
+  an MPAS mesh file supplies); `tpl`: an `edge_key` key, the loop index, and
+  the face edge ids computed by `rank_of_set` over the derived set.
 
 Usage:
 
     python3 bench/closed_templates/generate.py              # rewrite the committed documents
     python3 bench/closed_templates/generate.py --check      # committed documents are current
     python3 bench/closed_templates/generate.py --out DIR --lib LIBDIR [--hours H] [--n N] ...
+    python3 bench/closed_templates/generate.py --out DIR --only mesh --mesh 57 --mesh 182 --mesh 577   # ~1e4, 1e5, 1e6 edges
 
 `--lib` points the template imports at another directory holding
 `calendar.esm`, `geometry.esm` and `relational.esm` (default: the repository's
@@ -52,6 +64,7 @@ COMMITTED = {
     "hours": [8760],
     "n": [12],
     "nearest": [(500, 100)],
+    "mesh": [8],
 }
 
 # The template that stands in for each closed form. The geometry and argmin
@@ -336,6 +349,103 @@ def nearest(spelling, p, g, lib, out_dir):
 
 
 # ---------------------------------------------------------------------------
+# Relational: MPAS-scale edge enumeration and rank.
+# ---------------------------------------------------------------------------
+
+
+def mesh_faces(n):
+    """The triangles of an n x n grid of unit squares, two per square, as
+    (lo, hi) vertex-id pairs per face edge (1-based vertex ids, lo < hi), the
+    faces in a fixed pseudo-random order so neighbouring queries are not
+    neighbouring keys."""
+    def vid(i, j):
+        return 1 + j * (n + 1) + i
+
+    faces = []
+    for j in range(n):
+        for i in range(n):
+            a, b, c, d = vid(i, j), vid(i + 1, j), vid(i, j + 1), vid(i + 1, j + 1)
+            for tri in ((a, b, d), (a, d, c)):
+                faces.append([tuple(sorted((tri[k], tri[(k + 1) % 3]))) for k in range(3)])
+    r = lcg(577)
+    for k in range(len(faces) - 1, 0, -1):
+        m = int(next(r) * (k + 1))
+        faces[k], faces[m] = faces[m], faces[k]
+    return faces, (n + 1) * (n + 1)
+
+
+def mesh_edge_count(n):
+    return 3 * n * n + 2 * n
+
+
+def mesh_rank(spelling, n, lib, out_dir):
+    faces, nv = mesh_faces(n)
+    lo = [[e[0] for e in f] for f in faces]
+    hi = [[e[1] for e in f] for f in faces]
+    ne = mesh_edge_count(n)
+    F = {"f": {"from": "faces"}}
+    FL = {"f": {"from": "faces"}, "le": {"from": "local_edges"}}
+    E = {"e": {"from": "edges"}}
+    W = {"e": {"from": "edge_ids"}}
+    v = {k: {"type": "unknown", "shape": ["faces", "local_edges"]} for k in ("edge_lo", "edge_hi")}
+    v["edge_exists"] = {"type": "unknown", "shape": ["edges"]}
+    v["edge_dense_id"] = {"type": "unknown", "shape": ["edges"]}
+    v["n_edges"] = {"type": "unknown", "default": 0.0}
+    v["w"] = {"type": "unknown", "shape": ["edge_ids"], "default": 0.0}
+    v["q"] = {"type": "unknown", "shape": ["faces"], "default": 0.0}
+    a, b = ix("edge_lo", "f", "le"), ix("edge_hi", "f", "le")
+    if spelling == "op":
+        key = op("skolem", a, b, label="edge")
+        dense = op("rank", "edges")
+        face_edge = "edges_on_face"
+        keys = sorted({k for f in faces for k in f})
+        rank = {k: r + 1 for r, k in enumerate(keys)}
+        v[face_edge] = {"type": "unknown", "shape": ["faces", "local_edges"]}
+        extra = [{"lhs": face_edge, "rhs": const([[rank[k] for k in f] for f in faces])}]
+    else:
+        key = apply("edge_key", u=a, v=b, lo=1, n=nv)
+        dense = op("-", "e", 1)
+        face_edge = "face_edge_rank"
+        v["edge_members"] = {"type": "parameter", "shape": ["edges"], "default": 0.0}
+        v[face_edge] = {"type": "unknown", "shape": ["faces", "local_edges"]}
+        extra = [{"lhs": ix(face_edge, "f", "le"),
+                  "rhs": faq(apply("rank_of_set", x=apply("edge_key", u=a, v=b, lo=1, n=nv),
+                                   members="edge_members", S="edges"),
+                             ["f", "le"], FL, args=["edge_lo", "edge_hi", "edge_members"])}]
+    eqs = [
+        {"lhs": "edge_lo", "rhs": const(lo)}, {"lhs": "edge_hi", "rhs": const(hi)},
+        {"lhs": ix("edge_exists", "e"),
+         "rhs": faq(op("true"), ["e"], FL, id="edge_set", args=["edge_lo", "edge_hi"], semiring="bool_and_or",
+                    distinct=True, key=key, filter=op("true"))},
+        {"lhs": ix("edge_dense_id", "e"), "rhs": faq(dense, ["e"], E, semiring="sum_product")},
+    ] + extra + [
+        {"lhs": op("D", "n_edges", wrt="t"), "rhs": faq(1.0, [], E, semiring="sum_product")},
+        {"lhs": faq_lhs("w", ["e"], W), "rhs": faq(op("-", "e", ix("w", "e")), ["e"], W)},
+        {"lhs": faq_lhs("q", ["f"], F),
+         "rhs": op("-", faq(ix("w", ix(face_edge, "f", "le")), ["f"], FL, args=["w", face_edge],
+                            semiring="sum_product"), ix("q", "f"))},
+    ]
+    model = {"variables": v, "equations": eqs}
+    edges = {"kind": "derived", "from_faq": "edge_set"}
+    if spelling == "tpl":
+        model["expression_template_imports"] = imports(lib, out_dir, [("relational.esm", ["edge_key", "rank_of_set"])])
+        edges["member_factor"] = "edge_members"
+    return {
+        "esm": ESM_VERSION,
+        "metadata": {"name": f"mesh_rank_{spelling}_E{ne}",
+                     "description": f"edge enumeration of a {n} x {n} triangulated grid ({len(faces)} faces, {ne} unique edges) by "
+                     + ("a skolem key and rank, the face edge ids given as connectivity data"
+                        if spelling == "op" else
+                        "an edge_key key and the loop index, the face edge ids by rank_of_set over the derived set")
+                     + "; a state per edge id and per face, the face's read through its edge ids."},
+        "index_sets": {"faces": {"kind": "interval", "size": len(faces)},
+                       "local_edges": {"kind": "interval", "size": 3}, "edges": edges,
+                       "edge_ids": {"kind": "interval", "size": ne}},
+        "models": {"MeshRank": model},
+    }
+
+
+# ---------------------------------------------------------------------------
 # The scaling family's regrid documents, with the template in the leaf's place.
 # ---------------------------------------------------------------------------
 
@@ -367,7 +477,7 @@ def scaling_regrid(manifold, spelling, n, lib, out_dir):
     return d
 
 
-def documents(out_dir, lib, hours, ns, near, manifolds=("planar", "spherical"), scaling=()):
+def documents(out_dir, lib, hours, ns, near, manifolds=("planar", "spherical"), scaling=(), meshes=()):
     docs = {}
     for n in scaling:
         for mf in manifolds:
@@ -383,6 +493,9 @@ def documents(out_dir, lib, hours, ns, near, manifolds=("planar", "spherical"), 
     for p, g in near:
         for s in ("op", "tpl"):
             docs[f"nearest_{s}_P{p}_G{g}.esm"] = nearest(s, p, g, lib, out_dir)
+    for n in meshes:
+        for s in ("op", "tpl"):
+            docs[f"mesh_rank_{s}_E{mesh_edge_count(n)}.esm"] = mesh_rank(s, n, lib, out_dir)
     return docs
 
 
@@ -401,12 +514,19 @@ def main(argv=None):
                     help="PxG, e.g. 2000x200")
     ap.add_argument("--manifold", action="append")
     ap.add_argument("--scaling", type=int, action="append", help="a scaling-family regrid size (100, 1000)")
+    ap.add_argument("--mesh", type=int, action="append",
+                    help="a mesh_rank grid side n (3n^2 + 2n edges: 57, 182, 577 give ~1e4, 1e5, 1e6)")
+    ap.add_argument("--only", choices=("solar", "regrid", "nearest", "mesh"),
+                    help="write only this family (with --out, e.g. a large mesh_rank pair)")
     a = ap.parse_args(argv)
     out = os.path.abspath(a.out)
     os.makedirs(out, exist_ok=True)
-    docs = documents(out, os.path.abspath(a.lib), a.hours or COMMITTED["hours"], a.n or COMMITTED["n"],
-                     a.nearest or COMMITTED["nearest"], tuple(a.manifold or ("planar", "spherical")),
-                     tuple(a.scaling or ()))
+    fams = {"solar": a.hours or COMMITTED["hours"], "regrid": a.n or COMMITTED["n"],
+            "nearest": a.nearest or COMMITTED["nearest"], "mesh": a.mesh or COMMITTED["mesh"]}
+    if a.only:
+        fams = {k: (v if k == a.only else []) for k, v in fams.items()}
+    docs = documents(out, os.path.abspath(a.lib), fams["solar"], fams["regrid"], fams["nearest"],
+                     tuple(a.manifold or ("planar", "spherical")), tuple(a.scaling or ()), fams["mesh"])
     stale = []
     for name, d in docs.items():
         path = os.path.join(out, name)
