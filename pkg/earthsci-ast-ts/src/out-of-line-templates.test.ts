@@ -136,6 +136,7 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
       ['per_variable_scheme_literal_args', 'fixture.esm', 'expanded.esm'],
       ['scalar_field_param', 'fixture.esm', 'expanded.esm'],
       ['ranges_param', 'fixture.esm', 'expanded.esm'],
+      ['ranges_from_param', 'fixture.esm', 'expanded.esm'],
       ['two_div_two_meshes', 'fixture.esm', 'expanded.esm'],
     ]
     it.each(cases)('%s / %s == %s', (dir, fix, gold) => {

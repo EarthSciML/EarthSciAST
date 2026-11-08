@@ -1572,6 +1572,18 @@ fn test_f6_undefined_index_set() {
     );
 }
 
+/// esm-spec §9.6.1: a template parameter standing for a range's `from` bound
+/// to a name that is not a declared index set is `undefined_index_set` at the
+/// call site, exactly as for a hand-written range.
+#[test]
+fn test_template_from_param_undeclared() {
+    assert_structural(
+        include_str!("../../../tests/invalid/faq/template_from_param_undeclared.esm"),
+        StructuralErrorCode::UndefinedIndexSet,
+        "/models/M/equations/0/rhs",
+    );
+}
+
 /// Issue #259 (esm-spec §4.3.1 "Ragged ranges"): a range over a `kind: "ragged"`
 /// index set binds the POSITION k in 1..offsets[parent], so a body that never
 /// reads the set's `values` array reads positions where the author meant

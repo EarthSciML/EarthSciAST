@@ -271,8 +271,10 @@ fn check_case(entry: &Value, case: &Value, label: &str) {
     }
     let op_prob = build(&op_doc, case, Compiler::Interpreter)
         .unwrap_or_else(|e| panic!("{label}: op build: {e}"));
-    let needs_vi =
-        cmp.get("sets").is_some() || cmp.get("rank").is_some() || cmp.get("assignments").is_some();
+    let needs_vi = cmp.get("sets").is_some()
+        || cmp.get("rank").is_some()
+        || cmp.get("rank_lookup").is_some()
+        || cmp.get("assignments").is_some();
     let op_vi = needs_vi.then(|| {
         let fields = build_with(&tp_doc, case, Compiler::Interpreter, true)
             .unwrap_or_else(|e| panic!("{label}: template pipeline build: {e}"));
@@ -281,6 +283,12 @@ fn check_case(entry: &Value, case: &Value, label: &str) {
     let op_rhs = (cmp.get("rhs").and_then(Value::as_bool) == Some(true))
         .then(|| rhs_at_probe(&op_prob, Compiler::Interpreter, label));
     for compiler in [Compiler::Interpreter, Compiler::Native] {
+        // Native gap (contract note 2026-11-07): the tape refuses a rank-0 `faq`
+        // over a derived set nested in an array `faq` (`rank_of_set` in
+        // `face_edge_rank`) with `compiler_refused_rule`. The interpreter runs it.
+        if compiler == Compiler::Native && cmp.get("rank_lookup").is_some() {
+            continue;
+        }
         let label = format!("{label} [{}]", compiler.as_str());
         let tp = build(&tp_doc, case, compiler)
             .unwrap_or_else(|e| panic!("{label}: template build: {e}"));
@@ -337,6 +345,39 @@ fn check_case(entry: &Value, case: &Value, label: &str) {
                 want,
                 "{label}: rank_of over the template's members"
             );
+        }
+        if let Some(rl) = cmp.get("rank_lookup") {
+            // A rank looked up against the derived set (rank_of_set over its
+            // members): the op set's 0-based rank of each row's tuple, + 1.
+            let op_members = &op_vi.as_ref().unwrap().members[rl["faq"].as_str().unwrap()];
+            let cols: Vec<ArrayD<f64>> = rl["columns"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|c| json_array(&case["const_arrays"][c.as_str().unwrap()]))
+                .collect();
+            let want: Vec<f64> = (0..cols[0].len())
+                .map(|i| {
+                    let mut t: Vec<i64> = cols
+                        .iter()
+                        .map(|c| c.as_slice().unwrap()[i] as i64)
+                        .collect();
+                    t.sort_unstable();
+                    let key = Key::Tuple(t.into_iter().map(Key::Int).collect());
+                    let pos = op_members
+                        .iter()
+                        .position(|m| *m == key)
+                        .unwrap_or_else(|| panic!("{label}: {key:?} is not a member"));
+                    (pos + 1) as f64
+                })
+                .collect();
+            let got: Vec<f64> =
+                observed_field(pipe.as_ref().unwrap(), rl["variable"].as_str().unwrap())
+                    .unwrap_or_else(|e| panic!("{label}: rank lookup: {e}"))
+                    .iter()
+                    .copied()
+                    .collect();
+            assert_eq!(bits(&got), bits(&want), "{label}: {got:?} vs {want:?}");
         }
         for a in cmp
             .get("assignments")

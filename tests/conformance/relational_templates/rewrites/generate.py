@@ -219,6 +219,12 @@ def main():
                 **{k: v for k, v in m.items() if k != "expression_template_imports"},
             }
             doc["models"][mname] = m
+        extra = entry.get("extra", {})
+        for name, patch in extra.get("index_sets", {}).items():
+            doc["index_sets"][name].update(patch)
+        for mname in entry["models"][:1]:
+            doc["models"][mname]["variables"].update(extra.get("variables", {}))
+            doc["models"][mname]["equations"] += extra.get("equations", [])
         for other in [
             k for k in doc["models"] if k not in entry["models"] and not entry.get("keep_all_models")
         ]:

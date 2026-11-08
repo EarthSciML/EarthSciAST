@@ -45,7 +45,9 @@ that uses `skolem`, `rank` or a gated `argmin` (`rewrites/manifest.json` lists
 17, with their sources): a `distinct` key becomes `edge_key` / `pair_key` / the
 bare component, a bin key read only by `join.on` becomes one integer column
 per component with one `on` pair each, `rank(S)` over the set's own members
-becomes the loop index, and a joined `argmin` becomes `argmin_where`. The
+becomes the loop index, and a joined `argmin` becomes `argmin_where`. `skolem_distinct_rank` also looks up each face edge's rank among the derived
+`edges` set with `rank_of_set` over `{"from": "edges"}`, compared with the op
+set's rank of the same tuple. The
 manifest carries the caller data and what must agree. Each binding's harness
 builds both forms (Julia `test/relational_rewrites_test.jl`, Python
 `tests/test_relational_rewrites.py`, Rust `tests/relational_rewrites.rs`):

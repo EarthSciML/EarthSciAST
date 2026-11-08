@@ -115,6 +115,7 @@ describe('lib/relational.esm argmin/argmax templates', () => {
       ['pair_key', { a: 2, b: 3, lo_a: 1, lo_b: 1, n_a: 4, n_b: 5 }],
       ['edge_key', { u: 4, v: 2, lo: 1, n: 5 }],
       ['rank_of', { x: 7, members: constArray([1, 3, 7]), n: 3 }],
+      ['rank_of_set', { x: 7, members: 'm', S: 'cells' }],
       [
         'argmin_where',
         { f: idx('k_argmin_where_1'), p: { op: '>', args: [idx('k_argmin_where_1'), 1] }, n: 3 },
@@ -124,13 +125,16 @@ describe('lib/relational.esm argmin/argmax templates', () => {
         { f: idx('k_argmax_where_1'), p: { op: '>', args: [idx('k_argmax_where_1'), 1] }, n: 3 },
       ],
     ]
-    const variables: Record<string, unknown> = {}
+    const variables: Record<string, unknown> = {
+      m: { type: 'parameter', shape: ['cells'], default: 0.0, units: '1' },
+    }
     calls.forEach((_, i) => {
       variables[`out_${i}`] = { type: 'unknown', default: 0.0, units: '1' }
     })
     const doc = {
       esm: '1.1.0',
       metadata: { name: 'relational_key_templates' },
+      index_sets: { cells: { kind: 'interval', size: 3 } },
       models: {
         Probe: {
           expression_template_imports: [{ ref: libraryPath }],

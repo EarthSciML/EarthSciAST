@@ -490,9 +490,23 @@ def _check_aggregate_semantics(data: dict[str, Any], errors: list) -> None:
             for vn, v in (m.get("variables") or {}).items()
             if isinstance(v, dict) and isinstance(v.get("shape"), list)
         }
+        from_map = _from_param_map(_model_template_registry(data, m)) if check_index_sets else {}
         for site in _model_expression_sites(m, mname):
             location, expr = site[0], site[1]
             pointer = _pointer(location)
+            # --- undefined_index_set: a template call binding a `ranges` `from`
+            # parameter (esm-spec §9.6.1) to a name that is not a declared set.
+            for call in _iter_template_calls(expr) if from_map else []:
+                for param in from_map.get(call.get("name"), ()):
+                    name = (call.get("bindings") or {}).get(param)
+                    if isinstance(name, str) and name not in index_sets:
+                        emit(
+                            "undefined_index_set",
+                            pointer,
+                            f"template '{call.get('name')}' ranges over undeclared index set "
+                            f"'{name}' (bound to its parameter '{param}'; declared: {sorted(index_sets)})",
+                            {"index_set": name, "declared": sorted(index_sets)},
+                        )
             for agg in _iter_aggregate_nodes(expr):
                 ranges = agg.get("ranges") or {}
 
@@ -1401,6 +1415,7 @@ def _literal_param_map(registry: dict[str, Any]) -> dict[str, frozenset[str]]:
             mf = node.get("manifold")
             if isinstance(mf, str) and mf in params:
                 literal.add(mf)
+            literal.update(_from_params_of_node(node, params))
             if node.get("op") == "enum":
                 for a in node.get("args") or []:
                     if isinstance(a, str) and a in params:
@@ -1425,6 +1440,52 @@ def _literal_param_map(registry: dict[str, Any]) -> dict[str, frozenset[str]]:
         return resolved[name]
 
     return {name: params_of(name, ()) for name in registry}
+
+
+def _from_params_of_node(node: dict[str, Any], params: set[str]) -> set[str]:
+    """The params a node's ``ranges`` name as a ``{"from": NAME}`` (esm-spec
+    §9.6.1: a substitution site whose bound value is an index-set name)."""
+    ranges = node.get("ranges")
+    if not isinstance(ranges, dict):
+        return set()
+    return {
+        spec["from"]
+        for spec in ranges.values()
+        if isinstance(spec, dict) and isinstance(spec.get("from"), str) and spec["from"] in params
+    }
+
+
+def _iter_template_calls(expr: Any):
+    """Every ``apply_expression_template`` node in ``expr``."""
+    stack = [expr]
+    while stack:
+        e = stack.pop()
+        if isinstance(e, list):
+            stack.extend(e)
+        elif isinstance(e, dict):
+            if e.get("op") == "apply_expression_template":
+                yield e
+            stack.extend(e.values())
+
+
+def _from_param_map(registry: dict[str, Any]) -> dict[str, frozenset[str]]:
+    """For each template, the params its body uses as a ``ranges`` ``from``."""
+    out: dict[str, frozenset[str]] = {}
+    for name, tpl in registry.items():
+        if not isinstance(tpl, dict):
+            continue
+        params = {p for p in tpl.get("params") or [] if isinstance(p, str)}
+        found: set[str] = set()
+        nodes: list[Any] = [tpl.get("body")]
+        while nodes:
+            node = nodes.pop()
+            if isinstance(node, list):
+                nodes.extend(node)
+            elif isinstance(node, dict):
+                found |= _from_params_of_node(node, params)
+                nodes.extend(node.values())
+        out[name] = frozenset(found)
+    return out
 
 
 def _strip_literal_bindings(expr: Any, literal_map: dict[str, frozenset[str]]) -> Any:
