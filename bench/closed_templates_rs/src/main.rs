@@ -45,7 +45,11 @@ struct Model {
     params: Vec<f64>,
     state: Vec<f64>,
     names: Vec<String>,
+    /// Problem construction and tape installation, then the first call (where
+    /// the tape's CONST instructions, such as build-once overlap areas, run):
+    /// together the setup.
     build_s: f64,
+    first_s: f64,
 }
 
 impl Model {
@@ -78,14 +82,24 @@ impl Model {
             .map(|n| prob.u0().get(n).copied().unwrap_or(0.0))
             .collect();
         let build_s = t0.elapsed().as_secs_f64();
-        Model {
+        let mut m = Model {
             prob,
             scratch,
             params,
             state,
             names,
             build_s,
-        }
+            first_s: 0.0,
+        };
+        let t1 = Instant::now();
+        m.dy(0.0);
+        m.first_s = t1.elapsed().as_secs_f64();
+        m
+    }
+
+    /// Build plus first call.
+    fn setup_s(&self) -> f64 {
+        self.build_s + self.first_s
     }
 
     fn call(&mut self, t: f64, dy: &mut [f64]) {
@@ -174,19 +188,23 @@ fn oracle_check(path: &Path, m: &mut Model) -> &'static str {
     if ok { "bit-identical" } else { "DIFFERS" }
 }
 
-/// Build `path` `BUILDS` times; the median build and the last model.
+/// Build `path` `BUILDS` times; the last model, carrying the median build and
+/// first-call times.
 fn build_median(path: &Path, count_fold: bool) -> Model {
     let n = env_num("BUILDS", 3.0) as usize;
-    let mut times = Vec::new();
+    let (mut bs, mut fs) = (Vec::new(), Vec::new());
     let mut last = None;
     for _ in 0..n.max(1) {
         let m = Model::build(path, count_fold, false);
-        times.push(m.build_s);
+        bs.push(m.build_s);
+        fs.push(m.first_s);
         last = Some(m);
     }
-    times.sort_by(f64::total_cmp);
+    bs.sort_by(f64::total_cmp);
+    fs.sort_by(f64::total_cmp);
     let mut m = last.unwrap();
-    m.build_s = times[times.len() / 2];
+    m.build_s = bs[bs.len() / 2];
+    m.first_s = fs[fs.len() / 2];
     m
 }
 
@@ -525,9 +543,9 @@ fn rings(v: &Value) -> Vec<Vec<(f64, f64)>> {
 }
 
 fn overlap(dir: &Path) {
-    println!("# overlap: build (setup) seconds, median of BUILDS; per-call ns; areas = the derivative");
+    println!("# overlap: setup (build + first call) seconds, median of BUILDS; per-call ns; areas = the derivative");
     header(&[
-        "manifold", "N", "pairs", "leaf_build_s", "tpl_build_s", "tpl/leaf build", "leaf_call_ns",
+        "manifold", "N", "pairs", "leaf_setup_s", "tpl_setup_s", "tpl/leaf setup", "leaf_call_ns",
         "tpl_call_ns", "s2rst_per_pair_ns", "max|tpl-leaf|", "max|s2rst-leaf|", "max|s2rst-tpl|", "oracle",
     ]);
     for size in sizes(dir, "overlap_planar_leaf_") {
@@ -590,9 +608,9 @@ fn overlap(dir: &Path) {
             println!(
                 "{mf}\t{size}\t{}\t{:.4}\t{:.4}\t{:.2}\t{cl:.0}\t{ct:.0}\t{ext}\t{:.3e}\t{d_ext_leaf}\t{d_ext_tpl}\t{oracle}",
                 ra.len(),
-                leaf.build_s,
-                tp.build_s,
-                tp.build_s / leaf.build_s,
+                leaf.setup_s(),
+                tp.setup_s(),
+                tp.setup_s() / leaf.setup_s(),
                 max_diff(&al, &at)
             );
         }
@@ -614,7 +632,7 @@ fn const_eq(doc: &Value, var: &str) -> Vec<f64> {
 fn nearest(dir: &Path) {
     println!("# nearest-generator argmin: ns per right-hand-side call");
     header(&[
-        "size", "op_call_ns", "tpl_call_ns", "hand_call_ns", "tpl/op", "op_build_s", "tpl_build_s",
+        "size", "op_call_ns", "tpl_call_ns", "hand_call_ns", "tpl/op", "op_setup_s", "tpl_setup_s",
         "hand_setup_s", "bits(tpl,hand vs op)", "oracle",
     ]);
     for size in sizes(dir, "nearest_op_") {
@@ -675,8 +693,8 @@ fn nearest(dir: &Path) {
         println!(
             "{size}\t{a:.0}\t{b:.0}\t{h:.0}\t{:.2}\t{:.4}\t{:.4}\t{:.6}\t{ok}\t{oracle}",
             b / a,
-            o.build_s,
-            tp.build_s,
+            o.setup_s(),
+            tp.setup_s(),
             setup_ns / 1.0e9
         );
     }
@@ -688,7 +706,7 @@ fn nearest(dir: &Path) {
 
 fn fastjx(dir: &Path) {
     println!("# fastjx: real FastJX cross-section tables over a grid; ns per right-hand-side call");
-    header(&["cells", "lookups/cell", "fn", "tpl", "tpl/fn", "fn_build_s", "tpl_build_s", "bits", "oracle"]);
+    header(&["cells", "lookups/cell", "fn", "tpl", "tpl/fn", "fn_setup_s", "tpl_setup_s", "bits", "oracle"]);
     for size in sizes(dir, "fastjx_fn_") {
         let p = |sp: &str| dir.join(format!("fastjx_{sp}_{size}.esm"));
         let data = load_json(&dir.join(format!("fastjx_{size}.data.json")));
@@ -701,8 +719,8 @@ fn fastjx(dir: &Path) {
             "{size}\t{}\t{a:.0}\t{b:.0}\t{:.2}\t{:.4}\t{:.4}\t{ok}\t{oracle}",
             data["lookups"],
             b / a,
-            f.build_s,
-            tp.build_s
+            f.setup_s(),
+            tp.setup_s()
         );
     }
 }
@@ -712,8 +730,11 @@ fn fastjx(dir: &Path) {
 // ---------------------------------------------------------------------------
 
 fn size(dir: &Path) {
-    println!("# build time (esm_problem + tape) against site count; median of BUILDS");
-    header(&["family", "sites", "closed_build_s", "tpl_build_s", "tpl/closed", "closed_call_ns", "tpl_call_ns", "bits"]);
+    println!("# setup (esm_problem + tape + first call) against site count; median of BUILDS");
+    header(&[
+        "family", "sites", "closed_setup_s", "tpl_setup_s", "tpl/closed", "closed_call_ns", "tpl_call_ns",
+        "max|tpl-closed|",
+    ]);
     for (fam, closed) in [
         ("searchsorted", "fn"),
         ("linear", "fn"),
@@ -726,13 +747,13 @@ fn size(dir: &Path) {
             let p = |sp: &str| dir.join(format!("size_{fam}_{sp}_{s}.esm"));
             let mut c = build_median(&p(closed), true);
             let mut tp = build_median(&p("tpl"), true);
-            let ok = bits_eq(&tp.dy(T_BASE), &c.dy(T_BASE));
+            let d = max_diff(&tp.dy(T_BASE), &c.dy(T_BASE));
             let (a, b) = (time_model(&mut c), time_model(&mut tp));
             println!(
-                "{fam}\t{s}\t{:.4}\t{:.4}\t{:.2}\t{a:.0}\t{b:.0}\t{ok}",
-                c.build_s,
-                tp.build_s,
-                tp.build_s / c.build_s
+                "{fam}\t{s}\t{:.4}\t{:.4}\t{:.2}\t{a:.0}\t{b:.0}\t{d:.3e}",
+                c.setup_s(),
+                tp.setup_s(),
+                tp.setup_s() / c.setup_s()
             );
         }
     }

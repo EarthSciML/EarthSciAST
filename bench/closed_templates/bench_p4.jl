@@ -18,8 +18,9 @@
 # DIR defaults to bench/closed_templates/p4 (nearest: bench/closed_templates).
 # Output: one tab-separated `ROW` line per measurement, for aggregating medians
 # over several processes. Environment: CALLS (calls per sample, default 200),
-# INTERP_CHECK (default 0), BUILDS (default 2: the reported build is the last,
-# after Julia has compiled the builder).
+# INTERP_CHECK (default 0), BUILDS (default 2: the reported setup, problem
+# construction plus the first call, is the last build's, after Julia has
+# compiled the builder).
 
 using EarthSciAST, JSON3, Statistics, Printf, Dates
 import GeometryOps as GO, GeoInterface as GI, Interpolations
@@ -42,26 +43,38 @@ struct Built
     u0::Vector{Float64}
     p::Any
     names::Vector{String}  # state name per slot
-    build_s::Float64
+    build_s::Float64       # problem construction
+    first_s::Float64       # the first call after it
 end
 
+setup_s(b::Built) = b.build_s + b.first_s
+
+# `esm_problem` under a compiler name; a compiler plan (the count rewrite off)
+# goes through the internal builder, as bench/interp_bracket does.
 function build(path; compiler = :native)
     local f!, u0, p, vm
-    dt = 0.0
+    dt = ft = 0.0
     for _ in 1:(compiler === :interpreter ? 1 : BUILDS)
         GC.gc()
         t0 = time_ns()
-        model = E.load_path(path)
-        f!, u0, p, _, vm = compiler isa Symbol ?
-            E._build_evaluator(model; compiler = compiler) :
-            E._with_compiler_plan(() -> E._build_evaluator(model; compiler = compiler), compiler)
+        if compiler isa Symbol
+            prob = E.esm_problem(path, (0.0, 1.0); compiler = compiler)
+            f!, u0, p, vm = prob.f!, prob.u0, prob.p, prob.var_map
+        else
+            f!, u0, p, _, vm = E._with_compiler_plan(
+                () -> E._build_evaluator(E.load_path(path); compiler = compiler), compiler)
+        end
         dt = (time_ns() - t0) / 1.0e9
+        du = similar(u0)
+        t1 = time_ns()
+        f!(du, u0, p, 0.0)
+        ft = (time_ns() - t1) / 1.0e9
     end
     names = Vector{String}(undef, length(u0))
     for (k, v) in vm
         names[v] = string(k)
     end
-    return Built(f!, copy(u0), p, names, dt)
+    return Built(f!, copy(u0), p, names, dt, ft)
 end
 
 dy(b::Built, t) = (du = fill(NaN, length(b.u0)); b.f!(du, b.u0, b.p, t); du)
@@ -162,7 +175,7 @@ function run_search()
         hs = map(how -> per_call_ns(k -> hand(tof(k), how)), (0, 1, 2))
         row(sz, "fn", ts[1], "tpl_binary", ts[2], "tpl_linear", ts[3], "tpl_fold", ts[4],
             "hand_linear", hs[1], "hand_binary", hs[2], "searchsortedfirst", hs[3],
-            "bits", ok, "oracle", orc, "build_fn", f.build_s, "build_tpl", tb.build_s)
+            "bits", ok, "oracle", orc, "setup_fn", setup_s(f), "setup_tpl", setup_s(tb))
     end
 end
 
@@ -235,7 +248,7 @@ function run_interp(family)
         h = per_call_ns(k -> hand(tof(k)))
         x = per_call_ns(k -> ext(tof(k)))
         row(sz, "fn", a, "tpl", b, "hand", h, "Interpolations", x, "maxdiff_Interpolations", acc,
-            "bits", ok, "oracle", orc, "build_fn", f.build_s, "build_tpl", tp.build_s)
+            "bits", ok, "oracle", orc, "setup_fn", setup_s(f), "setup_tpl", setup_s(tp))
     end
 end
 
@@ -288,7 +301,7 @@ function run_calendar()
         h = per_call_ns(k -> run(tof(k), hand_calendar))
         x = per_call_ns(k -> run(tof(k), dates_calendar))
         row(sz, "fn", a, "tpl", b, "hand", h, "Dates", x, "bits_tpl", okt, "bits_hand", okh,
-            "maxdiff_Dates", accd, "oracle", orc, "build_fn", f.build_s, "build_tpl", tp.build_s)
+            "maxdiff_Dates", accd, "oracle", orc, "setup_fn", setup_s(f), "setup_tpl", setup_s(tp))
     end
 end
 
@@ -323,7 +336,7 @@ function run_overlap()
             cl, ct = time_model(leaf), time_model(tp)
             n = length(ra)
             g = per_call_ns(k -> go_area(ra[k % n + 1], rb[k % n + 1], mf))
-            row(mf, sz, "pairs", n, "build_leaf", leaf.build_s, "build_tpl", tp.build_s,
+            row(mf, sz, "pairs", n, "setup_leaf", setup_s(leaf), "setup_tpl", setup_s(tp),
                 "call_leaf", cl, "call_tpl", ct, "GeometryOps_per_pair", g,
                 "maxdiff_tpl_leaf", maxdiff(at, al), "maxdiff_GO_leaf", maxdiff(areas, al),
                 "maxdiff_GO_tpl", maxdiff(areas, at), "oracle", orc)
@@ -361,7 +374,7 @@ function run_nearest()
         a, b = time_model(o), time_model(tp)
         h = per_call_ns(_ -> hand())
         row(sz, "op", a, "tpl", b, "hand", h, "hand_setup_s", setup / 1.0e9, "bits", ok, "oracle", orc,
-            "build_op", o.build_s, "build_tpl", tp.build_s)
+            "setup_op", setup_s(o), "setup_tpl", setup_s(tp))
     end
 end
 
@@ -389,7 +402,7 @@ function run_fastjx()
         orc = oracle(p("tpl"), tp)
         a, b = time_model(f), time_model(tp)
         row(sz, "lookups", data("fastjx_$sz").lookups, "fn", a, "tpl", b, "bits", ok, "oracle", orc,
-            "build_fn", f.build_s, "build_tpl", tp.build_s)
+            "setup_fn", setup_s(f), "setup_tpl", setup_s(tp))
     end
 end
 
@@ -399,9 +412,9 @@ function run_size()
         for sz in sizes("size_$(fam)_$(closed)_")
             p(sp) = joinpath(DIR, "size_$(fam)_$(sp)_$(sz).esm")
             c, tp = build(p(closed)), build(p("tpl"))
-            ok = same(dy(tp, TB), dy(c, TB))
-            row(fam, sz, "build_closed", c.build_s, "build_tpl", tp.build_s, "call_closed", time_model(c),
-                "call_tpl", time_model(tp), "bits", ok)
+            d = maxdiff(dy(tp, TB), dy(c, TB))
+            row(fam, sz, "setup_closed", setup_s(c), "setup_tpl", setup_s(tp), "call_closed", time_model(c),
+                "call_tpl", time_model(tp), "maxdiff", d)
         end
     end
 end
