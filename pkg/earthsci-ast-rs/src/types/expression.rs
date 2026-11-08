@@ -188,13 +188,20 @@ pub(crate) fn serialize_canonical_f64<S: serde::Serializer>(
     n: f64,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    // 2^63; an integral f64 strictly below this in magnitude round-trips
-    // losslessly through `i64`.
-    if n.is_finite() && n.fract() == 0.0 && n.abs() < 9_223_372_036_854_775_808.0 {
-        serializer.serialize_i64(n as i64)
-    } else {
-        serializer.serialize_f64(n)
+    match canonical_i64(n) {
+        Some(i) => serializer.serialize_i64(i),
+        None => serializer.serialize_f64(n),
     }
+}
+
+/// The integer a float is written as under §5.5.3.1 rule 1: `Some` when `x`
+/// is finite, integral and representable in `i64` (`[-2^63, 2^63)`, both
+/// bounds exact in `f64`), `None` otherwise. The one statement of that test;
+/// every writer and reader of the rule goes through it.
+#[must_use]
+pub(crate) fn canonical_i64(x: f64) -> Option<i64> {
+    const TWO_63: f64 = 9_223_372_036_854_775_808.0;
+    (x.is_finite() && x.fract() == 0.0 && (-TWO_63..TWO_63).contains(&x)).then_some(x as i64)
 }
 
 /// `serialize_with` adapter for [`OverlapClause::eps`]: canonical-number form
@@ -206,6 +213,53 @@ fn serialize_canonical_eps<S: serde::Serializer>(
     match eps {
         Some(n) => serialize_canonical_f64(*n, serializer),
         None => serializer.serialize_none(),
+    }
+}
+
+/// `serialize_with` adapter for [`ExpressionNode::value`]: a `const` node's
+/// inline value written in canonical-number form (§5.5.3.1 rule 1). Every
+/// number at any depth (nested arrays, and the objects a `bc` value may hold)
+/// goes through [`serialize_canonical_f64`], so `[100.0, 0.5]` is written
+/// `[100,0.5]` whether it was parsed from a document or built in code (a
+/// lowered `table_lookup`), as the Julia binding writes it. The value in
+/// memory is left as it was parsed or built.
+fn serialize_canonical_value<S: serde::Serializer>(
+    value: &Option<serde_json::Value>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match value {
+        Some(v) => CanonicalJson(v).serialize(serializer),
+        None => serializer.serialize_none(),
+    }
+}
+
+/// A JSON value that serializes its numbers in canonical-number form.
+struct CanonicalJson<'a>(&'a serde_json::Value);
+
+impl Serialize for CanonicalJson<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{SerializeMap, SerializeSeq};
+        use serde_json::Value as V;
+        match self.0 {
+            V::Number(n) if n.is_f64() => {
+                serialize_canonical_f64(n.as_f64().unwrap_or(f64::NAN), serializer)
+            }
+            V::Array(items) => {
+                let mut seq = serializer.serialize_seq(Some(items.len()))?;
+                for x in items {
+                    seq.serialize_element(&CanonicalJson(x))?;
+                }
+                seq.end()
+            }
+            V::Object(entries) => {
+                let mut map = serializer.serialize_map(Some(entries.len()))?;
+                for (k, x) in entries {
+                    map.serialize_entry(k, &CanonicalJson(x))?;
+                }
+                map.end()
+            }
+            other => other.serialize(serializer),
+        }
     }
 }
 
@@ -246,11 +300,7 @@ impl RegionBound {
         match self {
             RegionBound::Int(i) => Some(*i),
             RegionBound::Expr(Expr::Integer(i)) => Some(*i),
-            RegionBound::Expr(Expr::Number(n))
-                if n.fract() == 0.0 && n.abs() < 9_223_372_036_854_775_808.0 =>
-            {
-                Some(*n as i64)
-            }
+            RegionBound::Expr(Expr::Number(n)) => canonical_i64(*n),
             RegionBound::Expr(_) => None,
         }
     }
@@ -658,7 +708,14 @@ pub struct ExpressionNode {
 
     /// For the `const` op: inline literal value (any JSON number, integer,
     /// or nested array thereof). `args` MUST be empty when this is set.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Held as parsed or built; written in canonical-number form
+    /// (§5.5.3.1): every integral number that fits `i64`, at any depth, is
+    /// written as an integer.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_canonical_value"
+    )]
     pub value: Option<serde_json::Value>,
 
     /// For the `const` op (esm 1.2.0): the declared unit `value` is in. A
@@ -1085,6 +1142,66 @@ mod expr_deserialize_token_mapping_tests {
     fn parse_via_value(src: &str) -> Result<Expr, serde_json::Error> {
         let v: serde_json::Value = serde_json::from_str(src).expect("fixture is JSON");
         serde_json::from_value::<Expr>(v)
+    }
+
+    #[test]
+    fn const_value_writes_in_canonical_number_form() {
+        // §5.5.3.1 rule 1: every integral number of a `const` node's `value`,
+        // at any depth, is written as an integer, as Julia writes it, so both
+        // bindings write the same bytes. Parsed and built nodes alike.
+        for parse in [parse, parse_via_value] {
+            let e = parse(
+                r#"{"op": "const", "args": [], "value": [[100.0, 0.5, 2], [-0.0, 1e3, 1.0e300]]}"#,
+            )
+            .unwrap();
+            assert_eq!(
+                serde_json::to_string(&e).unwrap(),
+                r#"{"op":"const","args":[],"value":[[100,0.5,2],[0,1000,1e+300]]}"#
+            );
+            // Memory keeps what was parsed: only the output is canonical.
+            let Expr::Operator(node) = &e else { panic!() };
+            assert!(node.value.as_ref().unwrap()[0][0].is_f64());
+            let scalar = parse(r#"{"op": "const", "args": [], "value": 4.0}"#).unwrap();
+            assert_eq!(
+                serde_json::to_value(&scalar).unwrap()["value"],
+                serde_json::json!(4)
+            );
+            let text = parse(r#"{"op": "const", "args": [], "value": "NO2"}"#).unwrap();
+            assert_eq!(
+                serde_json::to_value(&text).unwrap()["value"],
+                serde_json::json!("NO2")
+            );
+            // A `bc` value may be an expression object; its numbers too.
+            let bc =
+                parse(r#"{"op": "bc", "args": ["u"], "value": {"op": "*", "args": [2.0, "k"]}}"#)
+                    .unwrap();
+            assert_eq!(
+                serde_json::to_value(&bc).unwrap()["value"],
+                serde_json::json!({"op": "*", "args": [2, "k"]})
+            );
+        }
+        // Built in code (a lowered `table_lookup` holds `f64`s): same bytes.
+        let built = Expr::operator(ExpressionNode {
+            op: "const".to_string(),
+            value: Some(serde_json::json!([100.0, 0.5])),
+            ..Default::default()
+        });
+        assert_eq!(
+            serde_json::to_string(&built).unwrap(),
+            r#"{"op":"const","args":[],"value":[100,0.5]}"#
+        );
+    }
+
+    #[test]
+    fn canonical_i64_is_the_int64_range_exactly() {
+        assert_eq!(canonical_i64(100.0), Some(100));
+        assert_eq!(canonical_i64(-0.0), Some(0));
+        assert_eq!(canonical_i64(0.5), None);
+        assert_eq!(canonical_i64(f64::NAN), None);
+        assert_eq!(canonical_i64(f64::INFINITY), None);
+        // -2^63 is `i64::MIN`; 2^63 is one past `i64::MAX`.
+        assert_eq!(canonical_i64(-9_223_372_036_854_775_808.0), Some(i64::MIN));
+        assert_eq!(canonical_i64(9_223_372_036_854_775_808.0), None);
     }
 
     #[test]

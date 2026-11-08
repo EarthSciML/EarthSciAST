@@ -1433,7 +1433,9 @@ run_property_corpus() {
     # corpus fixture must already be in canonical form, so a fixture that spells
     # a number non-canonically (`0.0` where CONFORMANCE_SPEC.md §5.5.3.1 rule 1
     # requires the integer literal `0`) is a corpus defect, and fixing it means
-    # correcting the fixture, not relaxing this flag.
+    # correcting the fixture, not relaxing this flag. The one deliberate
+    # exception tests that normalization itself: its canonical form is authored
+    # in tests/property_corpus/expected/ under the same name, and is its oracle.
     python3 "$SCRIPT_DIR/run-property-corpus-conformance.py" \
         --corpus "$corpus" \
         --output "$OUTPUT_DIR/property_corpus_report.json" \

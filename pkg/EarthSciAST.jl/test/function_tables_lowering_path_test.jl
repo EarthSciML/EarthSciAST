@@ -78,6 +78,14 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
         @test lowered.args[1].value ==
             [1.1e-17, 1.0e-17, 9.5e-18, 8.7e-18, 7.9e-18, 7.0e-18, 6.1e-18, 5.2e-18]
         @test lowered.args[2].value == Float64[1, 2, 3, 4, 5, 6, 7, 8]
+        # The lowered axis holds `Float64`s but is written in canonical-number
+        # form (CONFORMANCE_SPEC §5.5.3.1 rule 1), as a reload of it reads and
+        # as every other binding writes it.
+        @test JSON3.write(_FTP.serialize_expression(lowered.args[2])["value"]) ==
+            "[1,2,3,4,5,6,7,8]"
+        lowered_file = _FTP.lower_table_lookups(file)
+        @test _FTP.to_json(_FTP.load_string(IOBuffer(_FTP.to_json(lowered_file)))) ==
+            _FTP.to_json(lowered_file)
         @test (lowered.args[3]::VarExpr).name == "lambda"
         # Idempotent, and identity-preserving: a tree with no `table_lookup`
         # left is returned as itself, not rebuilt.
