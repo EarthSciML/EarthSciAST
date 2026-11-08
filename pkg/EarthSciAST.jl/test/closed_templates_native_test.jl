@@ -206,6 +206,47 @@ function _ct_nearest_doc(np, ng; tpl::Bool)
     )
 end
 
+
+# The other lib/relational.esm templates per cell of a state: the gated
+# arg-witnesses (a contracted `faq` with a `filter`; no candidate passing
+# gives `n + 1`), the composite keys and `rank_of` over literal members.
+function _ct_relational_doc()
+    P = Dict("i" => Dict("from" => "points"))
+    x = _ct_ix("x", "i")
+    g(k) = _ct_ix("gx", k)
+    d(k) = _ct_op("*", _ct_op("-", x, g(k)), _ct_op("-", x, g(k)))
+    pass(k) = _ct_op(">", g(k), x)
+    ka = _ct_op("floor", _ct_op("*", 3, x))
+    kb = _ct_op("floor", _ct_op("*", 2, x))
+    sum = _ct_op(
+        "+",
+        _ct_apply("argmin_where"; f = d("k_argmin_where_1"), p = pass("k_argmin_where_1"), n = 6),
+        _ct_apply("argmax_where"; f = d("k_argmax_where_1"), p = pass("k_argmax_where_1"), n = 6),
+        _ct_apply("pair_key"; a = ka, b = kb, lo_a = 0, lo_b = 1, n_a = 8, n_b = 5),
+        _ct_apply("edge_key"; u = ka, v = kb, lo = 0, n = 8),
+        _ct_apply("rank_of"; x = x, members = _ct_const([0.5, 1.0, 1.5, 2.25]), n = 4),
+    )
+    vars = Dict{String, Any}(
+        "gx" => Dict("type" => "unknown", "shape" => Any["generators"]),
+        "x" => Dict("type" => "unknown", "shape" => Any["points"], "default" => 1.0),
+        "y" => Dict("type" => "unknown", "shape" => Any["points"]),
+    )
+    eqs = Any[
+        Dict("lhs" => "gx", "rhs" => _ct_const([0.5, 1.0, 1.5, 1.0, 2.0, 2.5])),
+        Dict("lhs" => "y", "rhs" => _ct_faq(sum, ["i"], P)),
+        Dict("lhs" => _ct_dlhs("x", ["i"], P), "rhs" => _ct_faq(_ct_op("-", _ct_op("*", 0.01, _ct_ix("y", "i")), x), ["i"], P)),
+    ]
+    model = Dict{String, Any}(
+        "variables" => vars, "equations" => eqs,
+        "expression_template_imports" => Any[_ct_import("relational.esm", ["argmin_where", "argmax_where", "pair_key", "edge_key", "rank_of"])]
+    )
+    return Dict{String, Any}(
+        "esm" => "1.2.0", "metadata" => Dict("name" => "relational"),
+        "index_sets" => Dict("points" => Dict("kind" => "interval", "size" => 7), "generators" => Dict("kind" => "interval", "size" => 6)),
+        "models" => Dict("Rel" => model)
+    )
+end
+
 @testset "phase-3 templates under strict native (closed-AST phase 3)" begin
     @testset "JSON numbers after a float in an array" begin
         x = JSON3.read("""{"a": [0.5, {"r": [1, "n"], "s": 3, "t": [2, 2.5, 3, {"u": 4}]}, [1]], "b": [1, 2.0, 2.5, 3]}""")
@@ -285,6 +326,11 @@ end
             e
         end
         @test err !== nothing && occursin("dense [1, n] range", sprint(showerror, err))
+    end
+
+    @testset "keyed and gated relational templates" begin
+        tp = _ct_write(_ct_relational_doc())
+        @test _ct_same(_ct_du(tp, :native), _ct_du(tp, :interpreter))
     end
 
     @testset "argmin" begin
