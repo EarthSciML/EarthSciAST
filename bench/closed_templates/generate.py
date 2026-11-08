@@ -393,6 +393,7 @@ def mesh_rank(spelling, n, lib, out_dir):
     v["n_edges"] = {"type": "unknown", "default": 0.0}
     v["w"] = {"type": "unknown", "shape": ["edge_ids"], "default": 0.0}
     v["q"] = {"type": "unknown", "shape": ["faces"], "default": 0.0}
+    v["q_in"] = {"type": "unknown", "shape": ["faces"]}
     a, b = ix("edge_lo", "f", "le"), ix("edge_hi", "f", "le")
     if spelling == "op":
         key = op("skolem", a, b, label="edge")
@@ -421,9 +422,11 @@ def mesh_rank(spelling, n, lib, out_dir):
     ] + extra + [
         {"lhs": op("D", "n_edges", wrt="t"), "rhs": faq(1.0, [], E, semiring="sum_product")},
         {"lhs": faq_lhs("w", ["e"], W), "rhs": faq(op("-", "e", ix("w", "e")), ["e"], W)},
-        {"lhs": faq_lhs("q", ["f"], F),
-         "rhs": op("-", faq(ix("w", ix(face_edge, "f", "le")), ["f"], FL, args=["w", face_edge],
-                            semiring="sum_product"), ix("q", "f"))},
+        # The edge-state sum is its own observed: Julia builds a gather of a state
+        # by a data subscript as a whole-array contraction, not under an elementwise op.
+        {"lhs": ix("q_in", "f"),
+         "rhs": faq(ix("w", ix(face_edge, "f", "le")), ["f"], FL, args=["w", face_edge], semiring="sum_product")},
+        {"lhs": faq_lhs("q", ["f"], F), "rhs": faq(op("-", ix("q_in", "f"), ix("q", "f")), ["f"], F)},
     ]
     model = {"variables": v, "equations": eqs}
     edges = {"kind": "derived", "from_faq": "edge_set"}
