@@ -505,10 +505,12 @@ def size_doc(family, sp, s):
                 eqs.append({"lhs": name, "rhs": const([ring])})
             area = (op("polygon_intersection_area", ix(ra, "j"), ix(rb, "j"), manifold="planar") if sp == "leaf"
                     else apply("overlap_area_planar", ring_a=ra, cell_a="j", nv_a=4, ring_b=rb, cell_b="j", nv_b=4))
+            # The area is build-time geometry (constant rings only); the site
+            # scales it by the state outside that faq.
             r = f"r{i}"
             v[r] = unknown(["one"])
-            eqs.append({"lhs": ix(r, "j"), "rhs": faq(op("*", area, op("+", 1, x)), ["j"], {"j": {"from": "one"}})})
-            sites.append(ix(r, 1))
+            eqs.append({"lhs": ix(r, "j"), "rhs": faq(area, ["j"], {"j": {"from": "one"}})})
+            sites.append(op("*", ix(r, 1), op("+", 1, x)))
             file, names = "geometry", ["overlap_area_planar"]
             continue
         r = f"r{i}"
