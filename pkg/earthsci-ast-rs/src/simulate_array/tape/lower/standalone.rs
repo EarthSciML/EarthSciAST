@@ -23,9 +23,9 @@
 //! with the tape's reason, never a per-cell walk.
 
 use super::*;
+use rustc_hash::FxHashSet;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 
 /// Why [`eval_standalone_rule`] produced no value.
 #[derive(Debug)]
@@ -138,18 +138,84 @@ pub(super) fn with_standalone_builder<R>(
 
 impl TapeBuilder<'_> {
     /// An array-valued input of a standalone program, whose values the build
-    /// knows: a `ConstArray`, or for an empty table (a zero extent) a box
-    /// with no element, whose values the build knows to be none.
+    /// knows: a `ConstArray` ([`Self::emit_const_data`]), or for an empty
+    /// table (a zero extent) a box with no element, whose values the build
+    /// knows to be none.
     pub(super) fn standalone_array_input(&mut self, value: &ndarray::ArrayD<f64>) -> LResult<LV> {
-        if !value.is_empty() {
-            return self.emit_const_array(value);
+        let shape: DimU = value.shape().iter().copied().collect();
+        // `iter()` is the LOGICAL row-major walk, which is the slab layout.
+        self.standalone_known_input(&shape, Arc::new(value.iter().copied().collect()))
+    }
+
+    /// [`Self::standalone_array_input`] for row-major `vals` the build
+    /// already holds behind an `Arc`: the slot shares them, so binding the
+    /// same input on many tapes copies nothing. `shape` is not empty.
+    pub(super) fn standalone_known_input(
+        &mut self,
+        shape: &[usize],
+        vals: Arc<Vec<f64>>,
+    ) -> LResult<LV> {
+        let ones = DimI::from_elem(1, shape.len());
+        if shape.contains(&0) {
+            let lv = self.emit_zero_array(shape, &ones);
+            if let LV::Arr(s) = lv {
+                self.known.insert(s, Known::Vals(Arc::new(Vec::new())));
+            }
+            return Ok(lv);
         }
-        let ones = DimI::from_elem(1, value.ndim());
-        let lv = self.emit_zero_array(value.shape(), &ones);
-        if let LV::Arr(s) = lv {
-            self.known.insert(s, Known::Vals(Rc::new(Vec::new())));
+        Ok(LV::Arr(self.emit_const_data(shape, &ones, vals, false)?))
+    }
+
+    /// Define every [`Known::Deferred`] slot some instruction reads with an
+    /// [`Instr::ConstArray`] of its values, at the head of the CONST section,
+    /// in slot order, each tagged with the rule and precision it was bound
+    /// under. The head is ahead of every reader, and a jump's targets are
+    /// relative, so prepending moves none of them. A slot nothing reads
+    /// costs nothing: no instruction, no payload, and no slab storage.
+    fn materialize_deferred(&mut self) {
+        let mut deferred: Vec<SlotId> = self
+            .known
+            .iter()
+            .filter(|(_, k)| matches!(k, Known::Deferred { .. }))
+            .map(|(&s, _)| s)
+            .collect();
+        if deferred.is_empty() {
+            return;
         }
-        Ok(lv)
+        let mut read: FxHashSet<SlotId> = FxHashSet::default();
+        {
+            let tables = self.slot_tables();
+            for chunk in self.streams.iter().flatten() {
+                for (instr, _) in &chunk.instrs {
+                    instr.for_each_read(&tables, |s| {
+                        read.insert(s);
+                    });
+                }
+            }
+        }
+        deferred.retain(|s| read.contains(s));
+        deferred.sort_unstable();
+        let mut head: Vec<Chunk> = Vec::new();
+        for out in deferred {
+            let Some(Known::Deferred { vals, rule, prec }) = self.known.remove(&out) else {
+                unreachable!("a deferred slot");
+            };
+            let data = self.const_data.len() as u32;
+            self.const_data.push(ConstArrayData {
+                shape: self.slots[out as usize].shape.clone(),
+                values: vals,
+            });
+            self.known.insert(out, Known::Data(data));
+            let instr = (Instr::ConstArray { data, out }, prec);
+            match head.last_mut() {
+                Some(c) if c.rule == rule => c.instrs.push(instr),
+                _ => head.push(Chunk {
+                    rule,
+                    instrs: vec![instr],
+                }),
+            }
+        }
+        self.streams[Cadence::Const as usize].splice(0..0, head);
     }
 
     /// Close the standalone rule `rule` (whose value is bound in
@@ -157,6 +223,7 @@ impl TapeBuilder<'_> {
     pub(super) fn finish_standalone(mut self, rule: &AlgebraicRule) -> TapeProgram {
         self.end_rule();
         let exports = self.compute_exports(std::slice::from_ref(rule), true);
+        self.materialize_deferred();
         self.finish(exports, None, false)
     }
 
@@ -170,8 +237,8 @@ impl TapeBuilder<'_> {
             .into_iter()
             .map(|name| {
                 let (shape, vals) = self.known_named(name)?;
-                let a = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&shape), (*vals).clone())
-                    .ok()?;
+                let vals = Arc::try_unwrap(vals).unwrap_or_else(|v| (*v).clone());
+                let a = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&shape), vals).ok()?;
                 Some((name.clone(), a))
             })
             .collect()
@@ -235,7 +302,7 @@ impl TapeBuilder<'_> {
     /// input.
     ///
     /// Memoized per name, so a key column several joins read is folded once.
-    pub(super) fn fold_const_observed(&self, name: &str) -> Option<(DimU, Rc<Vec<f64>>)> {
+    pub(super) fn fold_const_observed(&self, name: &str) -> Option<(DimU, Arc<Vec<f64>>)> {
         if let Some(hit) = self.folded.borrow().get(name) {
             return hit.clone();
         }
@@ -246,7 +313,7 @@ impl TapeBuilder<'_> {
         out
     }
 
-    fn fold_const_observed_uncached(&self, name: &str) -> Option<(DimU, Rc<Vec<f64>>)> {
+    fn fold_const_observed_uncached(&self, name: &str) -> Option<(DimU, Arc<Vec<f64>>)> {
         if self.obs_tier.get(name) != Some(&Cadence::Const) {
             return None;
         }
@@ -282,7 +349,7 @@ impl TapeBuilder<'_> {
         // No parameters beyond the baked ones.
         let a = eval_standalone_rule(rule, &inputs, &[], &[], self.const_arrays, false).ok()?;
         let shape: DimU = a.shape().iter().copied().collect();
-        Some((shape, Rc::new(a.iter().copied().collect())))
+        Some((shape, Arc::new(a.iter().copied().collect())))
     }
 }
 
