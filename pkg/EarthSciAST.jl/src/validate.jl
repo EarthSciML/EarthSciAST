@@ -705,7 +705,7 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
     end
 
     # 2. Validate reference integrity
-    append!(errors, validate_reference_integrity(file))
+    append!(errors, validate_reference_integrity(file; views = units.models))
 
     # 2b. An inline test's assertion targets, override keys and assertion ranks
     # (esm-spec §6.6.2, §6.6.3, §6.6.5).
@@ -868,7 +868,7 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
     #                                     whose key/body reads a STATE variable, so it
     #                                     classifies CONTINUOUS (§5.7 guard 2).
     # Each attaches at the containing expression FIELD, matching the corpus pins.
-    append!(errors, validate_aggregate_semantics(file))
+    append!(errors, validate_aggregate_semantics(file; views = units.models))
 
     # 5c'. Array broadcast semantics (esm-spec §4.3.4). Two statically decidable
     # defects the schema cannot express:
@@ -1836,7 +1836,7 @@ expression-bearing field of every model (and its subsystems) and, for each
 Findings attach at the FIELD pointer (`/models/M/equations/i/rhs`, …), the same
 convention the reference-integrity pass uses.
 """
-function validate_aggregate_semantics(file::EsmFile)::Vector{StructuralError}
+function validate_aggregate_semantics(file::EsmFile; views = nothing)::Vector{StructuralError}
     errors = StructuralError[]
     file.models === nothing && return errors
     registry = Set{String}(keys(file.index_sets))
@@ -1849,7 +1849,7 @@ function validate_aggregate_semantics(file::EsmFile)::Vector{StructuralError}
         # A template parameter may stand for a range's `from` (esm-spec §9.6.1),
         # so the index-set name a call binds is checked on the expansion; the
         # pointer still names the authored equation.
-        view = _units_view(file, model_name, model)
+        view = _units_view(file, model_name, model, views)
         view === model && continue
         for (i, eq) in enumerate(view.equations), (side, e) in (("lhs", eq.lhs), ("rhs", eq.rhs))
             anchor = "/models/$model_name/equations/$(i - 1)/$side"
@@ -2424,6 +2424,12 @@ function _units_view(file::EsmFile, model_name::AbstractString, model::Model)
     _expand_model_refs!(view, reg)
     return view
 end
+# The same, read from `views` — a validation pass's `_UnitsInputs.models`,
+# which holds each top-level model's view — when the caller built them.
+_units_view(file::EsmFile, model_name::AbstractString, model::Model, ::Nothing) =
+    _units_view(file, model_name, model)
+_units_view(::EsmFile, model_name::AbstractString, ::Model, views::AbstractDict) =
+    views[model_name]
 
 # A copy of `model` that `_expand_model_refs!` can expand without touching the
 # original: the containers it rewrites (the equation vectors, the variable
@@ -2439,19 +2445,33 @@ function _expansion_copy(model::Model)
 end
 function _share_unexpanded!(seen::IdDict{Any, Any}, m::Model)
     for eq in m.equations
-        seen[eq] = eq
+        _share_fields!(seen, eq)
     end
     for eq in m.initialization_equations
-        seen[eq] = eq
+        _share_fields!(seen, eq)
     end
     for (_, v) in m.variables
-        seen[v] = v
+        _share_fields!(seen, v)
     end
     for x in (m.discrete_events, m.continuous_events, m.tests, m.analyses, m.guesses)
         seen[x] = x
     end
     for (_, sub) in m.subsystems
         sub isa Model ? _share_unexpanded!(seen, sub) : (seen[sub] = sub)
+    end
+    return seen
+end
+# `deepcopy` consults `seen` only for a mutable object, so an immutable
+# `Equation` or `ModelVariable` is shared through its fields: each mutable
+# field value (an expression tree, an inline array) is marked as its own copy,
+# and an immutable struct field is shared the same way.
+function _share_fields!(seen::IdDict{Any, Any}, x)
+    if ismutable(x)
+        seen[x] = x
+    elseif isstructtype(typeof(x))
+        for i in 1:nfields(x)
+            isdefined(x, i) && _share_fields!(seen, getfield(x, i))
+        end
     end
     return seen
 end
@@ -2848,7 +2868,7 @@ end
 
 Validate that all variable references can be resolved through the hierarchy.
 """
-function validate_reference_integrity(file::EsmFile)::Vector{StructuralError}
+function validate_reference_integrity(file::EsmFile; views = nothing)::Vector{StructuralError}
     errors = StructuralError[]
 
     # Validate model variable references. A COUPLED model — operator-composed or
@@ -2865,7 +2885,7 @@ function validate_reference_integrity(file::EsmFile)::Vector{StructuralError}
                 errors, validate_model_references(
                     file, model, "/models/$model_name";
                     model_name = model_name,
-                    is_coupled = (model_name ∈ coupled)
+                    is_coupled = (model_name ∈ coupled), views = views
                 )
             )
         end
@@ -3233,7 +3253,7 @@ Validate variable references within a model.
 function validate_model_references(
         file::EsmFile, model::Model, path::String;
         model_name::AbstractString = "",
-        is_coupled::Bool = false
+        is_coupled::Bool = false, views = nothing
     )::Vector{StructuralError}
     errors = StructuralError[]
 
@@ -3287,7 +3307,7 @@ function validate_model_references(
     # `manifold`) is a literal. Expansion keeps the equation order, so pointers
     # still name the authored equation.
     eqs = isempty(model_name) ? model.equations :
-        _units_view(file, model_name, model).equations
+        _units_view(file, model_name, model, views).equations
     for (i, eq) in enumerate(eqs)
         append!(errors, validate_expression_references(file, eq.lhs, "$path/equations/$(i - 1)/lhs"; scope = scope))
         append!(errors, validate_expression_references(file, eq.rhs, "$path/equations/$(i - 1)/rhs"; scope = scope))

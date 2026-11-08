@@ -5364,11 +5364,12 @@ function _build_evaluator_impl_inner(
     # symbolic paths are byte-identical to a pre-expanded build. The recorded
     # expansion roots are consumed ONLY by the affine stencil build, which
     # compiles each (use site, region class) body once and calls it as a
-    # sub-kernel. Expansion works on a deep copy: the caller's typed model must
-    # keep its references (`serialize_esm_file` emits them verbatim — R1).
+    # sub-kernel. Expansion works on a copy (`_expansion_copy`): the caller's
+    # typed model must keep its references (`serialize_esm_file` emits them
+    # verbatim — R1).
     _template_sites = nothing
     if _template_reg !== nothing
-        model = deepcopy(model)
+        model = _expansion_copy(model)
         sites = IdDict{OpExpr, OpExpr}()
         _expand_model_refs!(model, _template_reg; sites = sites)
         isempty(sites) || (_template_sites = sites)
@@ -8458,7 +8459,7 @@ function _build_evaluator_dict(
     if model !== nothing && _model_has_surviving_refs(model)
         _tmpl_reg = _component_template_reg(file, model_name)
         if _tmpl_reg !== nothing
-            model = deepcopy(model)
+            model = _expansion_copy(model)
             _expand_model_refs!(model, _tmpl_reg)
         end
     end
