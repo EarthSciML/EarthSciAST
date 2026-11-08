@@ -299,6 +299,16 @@ CASES: list[tuple[str, str, str]] = [
         "chained_operator_compose",
         "coupling/chained_operator_compose.esm",
     ),
+    # The operator declared BEFORE the component whose state it writes
+    # (reseact's NEI2016 emission source ahead of SuperFast). The merged
+    # equation belongs to `Chem` and is appended to `Chem`'s equations;
+    # EarthSciAST.jl left it at `Src`'s position, first (found by
+    # EarthSciIntegrator's planners, whose derived documents differed).
+    (
+        "chained_compose",
+        "operator_declared_before_owner_compose",
+        "coupling/operator_declared_before_owner_compose.esm",
+    ),
     # --- reaction system: species -> derived ODEs, initial values ------------
     (
         "reaction_system",

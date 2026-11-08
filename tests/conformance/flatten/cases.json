@@ -5157,6 +5157,149 @@
       "lifted_shapes": {}
     },
     {
+      "id": "operator_declared_before_owner_compose",
+      "tier": "chained_compose",
+      "fixture": "coupling/operator_declared_before_owner_compose.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "Chem.A",
+          "role": "state",
+          "units": "1",
+          "default": 5.5,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Chem"
+        },
+        {
+          "name": "Chem.B",
+          "role": "state",
+          "units": "1",
+          "default": 10.5,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Chem"
+        },
+        {
+          "name": "Chem.C",
+          "role": "state",
+          "units": "1",
+          "default": 40.5,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Chem"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "Src.e",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.0025,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Src"
+        },
+        {
+          "name": "Chem.k",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.0125,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Chem"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 3,
+      "equations": [
+        {
+          "lhs": "D(Chem.A)/Dt",
+          "rhs": "-Chem.k * Chem.A",
+          "source_system": "Chem",
+          "contributions": [
+            {
+              "rhs": "-Chem.k * Chem.A",
+              "origins": [
+                {
+                  "component": "Chem"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "D(Chem.C)/Dt",
+          "rhs": "Chem.k * Chem.B",
+          "source_system": "Chem",
+          "contributions": [
+            {
+              "rhs": "Chem.k * Chem.B",
+              "origins": [
+                {
+                  "component": "Chem"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "D(Chem.B)/Dt",
+          "rhs": "Src.e + (Chem.k * Chem.A - Chem.k * Chem.B)",
+          "source_system": "Src",
+          "contributions": [
+            {
+              "rhs": "Src.e",
+              "origins": [
+                {
+                  "component": "Src"
+                }
+              ]
+            },
+            {
+              "rhs": "Chem.k * Chem.A - Chem.k * Chem.B",
+              "origins": [
+                {
+                  "component": "Chem"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "Src",
+          "Chem"
+        ],
+        "coupling_rules": [
+          "operator_compose(Src + Chem)"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {}
+    },
+    {
       "id": "autocatalytic_reaction",
       "tier": "reaction_system",
       "fixture": "simulation/autocatalytic_reaction.esm",

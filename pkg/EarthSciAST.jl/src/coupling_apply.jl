@@ -367,7 +367,8 @@ function _apply_operator_compose!(
         states::OrderedDict{String, ModelVariable},
         observeds::OrderedDict{String, ModelVariable},
         owners::Vector{String};
-        renames::AbstractDict = OrderedDict{String, String}()
+        renames::AbstractDict = OrderedDict{String, String}(),
+        components::Union{Nothing, Vector{String}} = nothing
     )
     length(entry.systems) >= 2 || return OrderedDict{String, String}()
     a_name = entry.systems[1]
@@ -593,6 +594,15 @@ function _apply_operator_compose!(
             dep === nothing || (new_owners[j] = _component_root(dep))
         end
     end
+    # A merged equation now owned by another component than A moves to the
+    # end of that component's equations (see the POSITION note below).
+    moving = falses(length(expanded))
+    if components !== nothing
+        for j in keys(extra)
+            o = new_owners[j]
+            moving[j] = o != a_name && o in components
+        end
+    end
 
     # Step 5: everything not consumed by a merge survives, in document order.
     if any(consumed)
@@ -601,6 +611,7 @@ function _apply_operator_compose!(
         kept_contribs = Vector{Contribution}[expanded_contribs[i] for i in keep]
         kept_owners = String[new_owners[i] for i in keep]
         expanded, expanded_contribs, new_owners = kept_eqs, kept_contribs, kept_owners
+        moving = moving[keep]
     end
 
     # §4.7.1 step 4, the merged-away name (see the docstring). Retarget FIRST,
@@ -624,6 +635,32 @@ function _apply_operator_compose!(
         for gone in keys(renames_made)
             delete!(states, gone)
             delete!(observeds, gone)
+        end
+    end
+
+    # POSITION (esm-libraries-spec §4.7.1 step 4, §4.7.5 step 4). A merged
+    # equation whose owner is not A — A an operator that authored
+    # `D(Chem.X, t)` directly, `"systems": ["EmissionSource", "Chem"]` — is
+    # APPENDED to its owner's equations, after every equation of the owner and
+    # of the components before it, rather than left at A's slot. This is the
+    # order the reference (Python) and the Rust binding produce, where the
+    # block an equation sits in is its owner: each merge trails the ones
+    # before it. Leaving it at A's slot put such an equation ahead of the
+    # owner's own when A is declared first (reseact's NEI2016 emission source
+    # ahead of SuperFast), so the flattened equation order, which is
+    # observable, differed between the bindings.
+    if any(moving)
+        stay = findall(!, moving)
+        go = findall(moving)
+        moved = collect(zip(expanded[go], expanded_contribs[go], new_owners[go]))
+        expanded, expanded_contribs, new_owners = expanded[stay], expanded_contribs[stay], new_owners[stay]
+        for (eq, cs, o) in moved
+            upto = Set{String}(components[1:findfirst(==(o), components)])
+            last = findlast(x -> x in upto, new_owners)
+            at = last === nothing ? 1 : last + 1
+            insert!(expanded, at, eq)
+            insert!(expanded_contribs, at, cs)
+            insert!(new_owners, at, o)
         end
     end
 
