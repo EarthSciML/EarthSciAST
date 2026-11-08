@@ -428,7 +428,8 @@ fn gated_pointwise_faq_compacts_to_its_candidate_cells() {
 /// arg-witness (`argmin_where` / `argmax_where`, a contracted `faq` with a
 /// `filter`; no candidate passing gives `n + 1`), the composite keys
 /// `pair_key` / `edge_key` (NaN for an out-of-range or non-integral
-/// component) and `rank_of` over literal members.
+/// component), `rank_of` over literal members and `rank_of_set` over an
+/// index set the call names.
 fn relational_doc() -> Value {
     let x = || ix("x", vec![json!("i")]);
     let g = |k: &str| ix("gx", vec![json!(k)]);
@@ -464,6 +465,7 @@ fn relational_doc() -> Value {
                 "rank_of",
                 json!({"x": x(), "members": {"op": "const", "args": [], "value": [0.5, 1.0, 1.5, 2.25]}, "n": 4}),
             ),
+            apply("rank_of_set", json!({"x": x(), "members": "gx", "S": "g"})),
         ],
     );
     let mut model = json!({

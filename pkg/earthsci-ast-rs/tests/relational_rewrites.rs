@@ -283,12 +283,6 @@ fn check_case(entry: &Value, case: &Value, label: &str) {
     let op_rhs = (cmp.get("rhs").and_then(Value::as_bool) == Some(true))
         .then(|| rhs_at_probe(&op_prob, Compiler::Interpreter, label));
     for compiler in [Compiler::Interpreter, Compiler::Native] {
-        // Native gap (contract note 2026-11-07): the tape refuses a rank-0 `faq`
-        // over a derived set nested in an array `faq` (`rank_of_set` in
-        // `face_edge_rank`) with `compiler_refused_rule`. The interpreter runs it.
-        if compiler == Compiler::Native && cmp.get("rank_lookup").is_some() {
-            continue;
-        }
         let label = format!("{label} [{}]", compiler.as_str());
         let tp = build(&tp_doc, case, compiler)
             .unwrap_or_else(|e| panic!("{label}: template build: {e}"));
