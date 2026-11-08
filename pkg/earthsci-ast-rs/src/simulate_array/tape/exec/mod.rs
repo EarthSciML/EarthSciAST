@@ -217,6 +217,9 @@ pub(crate) struct TapeExec {
     /// Pending `(resume_pc, skip)` records for taken `JmpIfZero` branches
     /// (the reference executor's discipline). Capacity preallocated.
     pending: Vec<(u32, u32)>,
+    /// Per instruction, its scalar form when it is a scalar elementwise op
+    /// (see [`interp::ScalarOp`]), decoded by the first call.
+    scode: Vec<interp::ScalarOp>,
     /// Row-major mirror of the flat state vector for a program stored
     /// row-major ([`TapeProgram::col_major`] false), refilled once per call
     /// for the variables `mirror` marks (each column-major block transposed
@@ -400,6 +403,7 @@ impl TapeExec {
             obs,
             parked,
             pending: Vec::with_capacity(16),
+            scode: Vec::new(),
             state_rm: vec![0.0f64; n_state],
             mirror_vars: (0..mirror.len() as u32)
                 .filter(|&i| mirror[i as usize])

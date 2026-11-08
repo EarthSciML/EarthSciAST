@@ -57,6 +57,7 @@ pub(super) fn run_range(
         obs,
         parked,
         pending,
+        scode,
         plan_full,
         asm_covered,
         scratch,
@@ -87,6 +88,17 @@ pub(super) fn run_range(
     // The open recurrence sweep, if any: the `Sweep` instruction's position
     // and the 0-based frame cell its body is evaluating.
     let mut sweep: Option<(usize, SmallVec<[usize; 4]>)> = None;
+    if scode.len() != prog.instrs.len() {
+        *scode = prog
+            .instrs
+            .iter()
+            .map(|i| ScalarOp::decode(prog, i))
+            .collect();
+    }
+    // Runs of scalar elementwise ops execute in the loop at the top of each
+    // step (see `ScalarOp`); a per-instruction precision keeps the general
+    // path, which arms it.
+    let scalar_runs = prog.precision.is_empty();
     let mut pc = range.start;
     // The next segmented-reduction chain that may split (see `chain`).
     #[cfg(not(target_arch = "wasm32"))]
@@ -131,6 +143,18 @@ pub(super) fn run_range(
         }
         if pc >= range.end {
             break;
+        }
+        if scalar_runs && sweep.is_none() {
+            let start = pc;
+            while pc < range.end && !pending.last().is_some_and(|&(pos, _)| pos as usize == pc) {
+                if !unsafe { scode[pc].run(env, slab_ptr, slot_off) } {
+                    break;
+                }
+                pc += 1;
+            }
+            if pc != start {
+                continue;
+            }
         }
         #[cfg(not(target_arch = "wasm32"))]
         if next_chain < seg_chains.len() {
@@ -331,6 +355,100 @@ pub(super) fn run_range(
             }
         }
         pc += 1;
+    }
+}
+
+/// A scalar operand, decoded: a slot (its slab offset is looked up per call,
+/// since a threaded plan may move it), a literal, a parameter, `t`, or a 0-d
+/// state at its flat offset.
+#[derive(Clone, Copy)]
+pub(super) enum ScalarSrc {
+    Slot(u32),
+    Lit(f64),
+    Param(u32),
+    Time,
+    State(usize),
+}
+
+/// One instruction's scalar elementwise form: what its [`exec_straight`] arm
+/// does for a scalar `out`, with the kernel and the operands decoded once
+/// instead of matched on every call. A scalar right-hand side (a template's
+/// lookup at one query) is mostly such instructions, a few flops each, so
+/// their dispatch was most of its cost; consecutive ones run in one loop.
+#[derive(Clone, Copy)]
+pub(super) enum ScalarOp {
+    None,
+    Bin(fn(f64, f64) -> f64, ScalarSrc, ScalarSrc, u32),
+    Un(fn(f64) -> f64, ScalarSrc, u32),
+    Neg(ScalarSrc, u32),
+    Copy(ScalarSrc, u32),
+    Select(ScalarSrc, ScalarSrc, ScalarSrc, u32),
+}
+
+impl ScalarOp {
+    pub(super) fn decode(prog: &TapeProgram, ins: &Instr) -> ScalarOp {
+        let src = |o: &Operand| -> Option<ScalarSrc> {
+            Some(match o {
+                Operand::Slot(s) if prog.slots[*s as usize].scalar => ScalarSrc::Slot(*s),
+                Operand::Lit(v) => ScalarSrc::Lit(*v),
+                Operand::Param(p) => ScalarSrc::Param(*p),
+                Operand::Time => ScalarSrc::Time,
+                Operand::State(ix) => {
+                    let sv = &prog.state_vars[*ix as usize];
+                    if !sv.shape.is_empty() {
+                        return None;
+                    }
+                    ScalarSrc::State(sv.flat_offset)
+                }
+                _ => return None,
+            })
+        };
+        let scalar = |out: &SlotId| prog.slots[*out as usize].scalar;
+        let op = match ins {
+            Instr::Bin { op, a, b, out } if scalar(out) => {
+                (|| Some(ScalarOp::Bin(binary_kernel_of(*op), src(a)?, src(b)?, *out)))()
+            }
+            Instr::Un { op, a, out } if scalar(out) => {
+                (|| Some(ScalarOp::Un(unary_kernel_of(*op), src(a)?, *out)))()
+            }
+            Instr::Neg { a, out } if scalar(out) => (|| Some(ScalarOp::Neg(src(a)?, *out)))(),
+            Instr::Copy { a, out } if scalar(out) => (|| Some(ScalarOp::Copy(src(a)?, *out)))(),
+            Instr::Select { cond, a, b, out } if scalar(out) => {
+                (|| Some(ScalarOp::Select(src(cond)?, src(a)?, src(b)?, *out)))()
+            }
+            _ => None,
+        };
+        op.unwrap_or(ScalarOp::None)
+    }
+
+    /// Run the op, or return `false` for [`ScalarOp::None`].
+    ///
+    /// # Safety
+    /// As [`exec_straight`].
+    #[inline(always)]
+    pub(super) unsafe fn run(&self, env: &Env, slab_ptr: *mut f64, slot_off: &[usize]) -> bool {
+        let get = |s: &ScalarSrc| match *s {
+            ScalarSrc::Slot(k) => unsafe { *slab_ptr.add(slot_off[k as usize]) },
+            ScalarSrc::Lit(v) => v,
+            ScalarSrc::Param(p) => env.params[p as usize],
+            ScalarSrc::Time => env.t,
+            ScalarSrc::State(off) => env.state[off],
+        };
+        let put = |out: u32, v: f64| unsafe { *slab_ptr.add(slot_off[out as usize]) = v };
+        match self {
+            ScalarOp::None => return false,
+            ScalarOp::Bin(f, a, b, out) => put(*out, f(get(a), get(b))),
+            ScalarOp::Un(f, a, out) => put(*out, f(get(a))),
+            ScalarOp::Neg(a, out) => put(*out, -get(a)),
+            ScalarOp::Copy(a, out) => put(*out, get(a)),
+            ScalarOp::Select(c, a, b, out) => {
+                let c = get(c);
+                let x = get(a);
+                let y = get(b);
+                put(*out, if c != 0.0 { x } else { y });
+            }
+        }
+        true
     }
 }
 
