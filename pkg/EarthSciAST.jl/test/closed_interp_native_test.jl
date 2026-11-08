@@ -179,7 +179,8 @@ function _ti_eval(doc, compiler; times = _TI_TIMES)
 end
 
 _ti_same(a, b) = keys(a) == keys(b) && all(all(a[k] .=== b[k]) for k in keys(a))
-_ti_count_fired(t) = get(t, :count_fold_search, 0) + get(t, :count_fold_linear, 0)
+_ti_count_fired(t) = get(t, :count_fold_search, 0) + get(t, :count_fold_sorted, 0) +
+    get(t, :count_fold_linear, 0)
 
 @testset "pure-AST interpolation templates under strict native (closed-AST phase 2)" begin
     # The templates built here are the library's, sub-tree for sub-tree.

@@ -654,11 +654,14 @@ end
 # content of `a` (unsorted, NaN, ±0.0) and any `x` (a NaN matches nothing). It
 # is emitted as an integer count, `x` evaluated once (it is pure, and the range
 # is non-empty, so the fold evaluates it too). When `a` is a 1-D constant array
-# read at the counter itself and its entries over the range are in ascending
-# order, the entries satisfying `a <= x` or `a < x` are a prefix of them and
-# those satisfying `a >= x` or `a > x` a suffix, whatever `x` is, and the count
-# is a binary search for that prefix's or suffix's length; otherwise each entry
-# is compared, as the fold does.
+# read at the counter itself, its entries over the range are copied at build,
+# NaNs set aside (a NaN entry satisfies no comparison) and the rest sorted
+# unless they already ascend. Over ascending entries those satisfying `a <= x`
+# or `a < x` are a prefix and those satisfying `a >= x` or `a > x` a suffix,
+# whatever `x` is (-0.0 and +0.0 compare equal, so their order among themselves
+# does not matter), and the count is a binary search with the comparison itself
+# for that prefix's or suffix's length; the swapped-branch count is the range's
+# length less it. Otherwise each entry is compared, as the fold does.
 #
 # The match is on this one algebraic shape, never on where it came from. Any
 # other seed, ⊕, body, branch literals or comparison is the ordinary fold.
@@ -698,8 +701,10 @@ function _cg_count_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi, span)
     xe = _cg_emit(ctx, kc, x)
     # The comparison with the operands in the order the document wrote them.
     test(av) = lk ? Expr(:call, cmp, av, xv) : Expr(:call, cmp, xv, av)
-    axis = _count_const_axis(a, spec)
-    if axis !== nothing
+    found = _count_const_axis(a, spec)
+    if found !== nothing
+        axis, ascending = found
+        nrng = length(spec.lo:spec.step:spec.hi)
         tv = _cg_name(ctx, "ct")
         hv = _cg_name(ctx, "ch")
         mv = _cg_name(ctx, "cm")
@@ -719,7 +724,7 @@ function _cg_count_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi, span)
                         $hv = $mv - 1
                     end
                 end
-                Float64($(neg ? :(length($tv) - $cv) : cv))
+                Float64($(neg ? :($nrng - $cv) : cv))
             end
         else
             # The smallest `m` with `axis[m] rel x`: the predicate holds on a
@@ -737,10 +742,10 @@ function _cg_count_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi, span)
                         $cv = $mv + 1
                     end
                 end
-                Float64($(neg ? :($cv - 1) : :(length($tv) + 1 - $cv)))
+                Float64($(neg ? :($nrng - (length($tv) + 1 - $cv)) : :(length($tv) + 1 - $cv)))
             end
         end
-        _tally_cascade!(:count_fold_search)
+        _tally_cascade!(ascending ? :count_fold_search : :count_fold_sorted)
         return quote
             let
                 local $xv = $xe
@@ -777,11 +782,12 @@ _reads_counter(n::_Node, ref) =
     _anyof(c -> _reads_counter(c, ref), n.children)
 
 # The entries a counted loop's body reads from `a` over the whole range, when
-# `a` is a 1-D constant array read at the counter itself and they ascend
-# (`a[k] <= a[k+1]`, which no NaN satisfies); else `nothing`. Each entry is the
-# one the run-time gather reads, through the same boundary policy; a subscript
-# that policy refuses keeps the loop, which raises it at run time as the fold
-# does.
+# `a` is a 1-D constant array read at the counter itself, as `(table,
+# ascending)`: the entries as they are when they ascend (`a[k] <= a[k+1]`,
+# which no NaN satisfies; `ascending` true), else their non-NaN entries sorted;
+# `nothing` for any other `a`. Each entry is the one the run-time gather
+# reads, through the same boundary policy; a subscript that policy refuses
+# keeps the loop, which raises it at run time as the fold does.
 function _count_const_axis(a::_Node, spec::_ContractLoop)
     (a.kind === _NK_CONST_GATHER && length(a.children) == 1) || return nothing
     s = a.children[1]
@@ -797,9 +803,10 @@ function _count_const_axis(a::_Node, spec::_ContractLoop)
         vals[i] = cg.flat[_const_gather_sub(cg, 1, k)]
     end
     for i in 1:(length(vals) - 1)
-        vals[i] <= vals[i + 1] || return nothing
+        vals[i] <= vals[i + 1] && continue
+        return (sort!(filter!(!isnan, vals)), false)
     end
-    return vals
+    return (vals, true)
 end
 
 # A scalar reduction nested in a nest's term (`_NEST_SCALAR_LOOPS`). Its bounds

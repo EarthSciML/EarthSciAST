@@ -5,8 +5,9 @@
 # satisfy the comparison — for `<=`, the entries at or below `x`: the
 # bracket of a table interpolation written in the format's own operators. The
 # emitter writes it as an integer count (`:count_fold_linear`), and as a binary
-# search when `a` is an ascending 1-D constant array read at the counter
-# (`:count_fold_search`). This pins:
+# search when `a` is a 1-D constant array read at the counter: over its entries
+# when they ascend (`:count_fold_search`), else over a sorted copy of its
+# non-NaN entries made at build (`:count_fold_sorted`). This pins:
 #
 #   * BIT-IDENTITY, `===` per element, against `compiler = :interpreter` (which
 #     unrolls the indicator sum term by term) and against native with the
@@ -123,7 +124,8 @@ function _cf_du(doc, ics, compiler)
     return (Dict(k => du[v] for (k, v) in vm), tally)
 end
 
-_cf_fired(t) = get(t, :count_fold_search, 0) + get(t, :count_fold_linear, 0)
+_cf_fired(t) = get(t, :count_fold_search, 0) + get(t, :count_fold_sorted, 0) +
+    get(t, :count_fold_linear, 0)
 _cf_same(a, b) = keys(a) == keys(b) && all(a[k] === b[k] for k in keys(a))
 
 # Native (with and without the rewrite) against the interpreter; returns the
@@ -211,7 +213,7 @@ end
             (axname, ax, kind) in (
                 ("ascending", _cf_axis(59), :count_fold_search),
                 ("repeated-entry", [floor((k - 3) / 4) for k in 1:59], :count_fold_search),
-                ("unsorted", reverse(_cf_axis(59)), :count_fold_linear),
+                ("unsorted", reverse(_cf_axis(59)), :count_fold_sorted),
             )
         doc, ics = _cf_doc(59; axis = ax, body = _cf_rel(op, flip)), _cf_ics(59)
         tn, dn = _cf_agree(doc, ics)
@@ -228,7 +230,7 @@ end
     @testset "swapped branches, relation $what, $axname axis" for (what, op, flip, f) in rels,
             (axname, ax, kind) in (
                 ("ascending", _cf_axis(59), :count_fold_search),
-                ("unsorted", reverse(_cf_axis(59)), :count_fold_linear),
+                ("unsorted", reverse(_cf_axis(59)), :count_fold_sorted),
             )
         doc, ics = _cf_doc(59; axis = ax, body = _cf_nrel(op, flip)), _cf_ics(59)
         tn, dn = _cf_agree(doc, ics)
