@@ -1483,9 +1483,13 @@ end
 # esm-spec §4.7 standard-library refs: `esm:std/<file>.esm` names a file of the
 # package's bundled copy of the repo-root `lib/` (written by
 # `scripts/sync-lib.sh`). The directory is a `Ref` so tests can substitute a
-# bundle. The whole `esm:` scheme is reserved: a ref beginning with it is never
-# a path or a URL.
-const _STDLIB_DIR = Ref(joinpath(pkgdir(@__MODULE__), "data", "lib"))
+# bundle, and `__init__` sets it from where the package is loaded at run time
+# (`_init_stdlib_dir!`): a path computed at precompile time would go stale when
+# the depot or a system image is relocated. The whole `esm:` scheme is
+# reserved: a ref beginning with it is never a path or a URL.
+_bundled_stdlib_dir() = joinpath(pkgdir(@__MODULE__), "data", "lib")
+const _STDLIB_DIR = Ref(_bundled_stdlib_dir())
+_init_stdlib_dir!() = (_STDLIB_DIR[] = _bundled_stdlib_dir())
 const _STD_NAME_RE = r"^[A-Za-z0-9_][A-Za-z0-9_.\-]*\.esm$"
 
 _is_std_ref(ref::AbstractString) = startswith(ref, "esm:")

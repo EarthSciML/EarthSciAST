@@ -67,6 +67,21 @@ _stdref_doc(path) =
         end
     end
 
+    @testset "the bundle is located when the package loads" begin
+        # A relocated depot or system image moves the bundle: `__init__`
+        # re-derives the directory from where the package is loaded.
+        saved = EarthSciAST._STDLIB_DIR[]
+        try
+            EarthSciAST._STDLIB_DIR[] = joinpath(tempdir(), "moved-depot", "lib")
+            EarthSciAST.__init__()
+            @test EarthSciAST._STDLIB_DIR[] == joinpath(pkgdir(EarthSciAST), "data", "lib")
+            path = EarthSciAST._expand_ref_env("esm:std/interp.esm")
+            @test isfile(path) && EarthSciAST._is_bundled_path(path)
+        finally
+            EarthSciAST._STDLIB_DIR[] = saved
+        end
+    end
+
     @testset "conformance case $(c.id)" for c in manifest.cases
         env = Dict{String, String}(String(k) => String(v) for (k, v) in get(c, :env, Dict()))
         fixture = joinpath(root, c.fixture)
