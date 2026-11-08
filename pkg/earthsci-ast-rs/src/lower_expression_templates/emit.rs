@@ -206,15 +206,10 @@ fn canon_number(n: &serde_json::Number) -> serde_json::Number {
     if n.is_i64() || n.is_u64() {
         return n.clone();
     }
-    if let Some(f) = n.as_f64()
-        && f.is_finite()
-        && f.fract() == 0.0
-        && f >= i64::MIN as f64
-        && f <= i64::MAX as f64
-    {
-        return serde_json::Number::from(f as i64);
+    match n.as_f64().and_then(crate::types::canonical_i64) {
+        Some(i) => serde_json::Number::from(i),
+        None => n.clone(),
     }
-    n.clone()
 }
 
 /// Write `value` canonically into `out` at nesting `indent`. Object keys are

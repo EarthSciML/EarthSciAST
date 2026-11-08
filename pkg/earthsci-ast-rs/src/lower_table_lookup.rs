@@ -878,8 +878,8 @@ mod tests {
             "op": "fn",
             "name": "interp.linear",
             "args": [
-                {"op": "const", "args": [], "value": [10.0, 20.0, 30.0, 40.0]},
-                {"op": "const", "args": [], "value": [1.0, 2.0, 3.0, 4.0]},
+                {"op": "const", "args": [], "value": [10, 20, 30, 40]},
+                {"op": "const", "args": [], "value": [1, 2, 3, 4]},
                 "p"
             ]
         });
@@ -943,16 +943,16 @@ mod tests {
         assert_eq!(by_name["name"], "interp.bilinear");
         assert_eq!(
             by_name["args"][0]["value"],
-            serde_json::json!([[1.0, 1.5, 2.0], [1.1, 1.6, 2.1], [1.2, 1.7, 2.2]]),
+            serde_json::json!([[1, 1.5, 2], [1.1, 1.6, 2.1], [1.2, 1.7, 2.2]]),
             "output \"NO2\" is the first row"
         );
         assert_eq!(
             by_name["args"][1]["value"],
-            serde_json::json!([10.0, 100.0, 1000.0])
+            serde_json::json!([10, 100, 1000])
         );
         assert_eq!(
             by_name["args"][2]["value"],
-            serde_json::json!([0.1, 0.5, 1.0])
+            serde_json::json!([0.1, 0.5, 1])
         );
         assert_eq!(by_name["args"][3], serde_json::json!("P_atm"));
         assert_eq!(by_name["args"][4], serde_json::json!("cos_sza"));
@@ -960,7 +960,7 @@ mod tests {
         let by_index = serde_json::to_value(eqs[1].rhs.clone()).unwrap();
         assert_eq!(
             by_index["args"][0]["value"],
-            serde_json::json!([[2.0, 2.5, 3.0], [2.1, 2.6, 3.1], [2.2, 2.7, 3.2]]),
+            serde_json::json!([[2, 2.5, 3], [2.1, 2.6, 3.1], [2.2, 2.7, 3.2]]),
             "output 1 is the second row"
         );
     }
@@ -1082,26 +1082,8 @@ mod tests {
                 .iter()
                 .find(|eq| eq.lhs == Expr::Variable(lhs.to_string()))
                 .unwrap_or_else(|| panic!("no equation for {lhs}"));
-            // The hand-spelled `const` values parse in canonical-number form
-            // (integral numbers as integers, §5.5.3.1), the lowered ones keep
-            // the `f64`s they are built from, as in Julia: compare numbers
-            // by value.
-            canonical_numbers(serde_json::to_value(&eq.rhs).unwrap())
+            serde_json::to_string(&eq.rhs).unwrap()
         };
-        fn canonical_numbers(v: serde_json::Value) -> serde_json::Value {
-            match v {
-                serde_json::Value::Number(n) => match n.as_f64() {
-                    Some(x) if x.fract() == 0.0 && x.abs() < 9.0e15 => serde_json::json!(x as i64),
-                    _ => serde_json::Value::Number(n),
-                },
-                serde_json::Value::Array(a) => a.into_iter().map(canonical_numbers).collect(),
-                serde_json::Value::Object(m) => m
-                    .into_iter()
-                    .map(|(k, v)| (k, canonical_numbers(v)))
-                    .collect(),
-                other => other,
-            }
-        }
         assert_eq!(defining("n_tie_2_4"), defining("n_tie_2_4_hand"));
     }
 
@@ -1121,7 +1103,7 @@ mod tests {
             let lowered = serde_json::to_value(rhs(&file)).unwrap();
             assert_eq!(
                 lowered["args"][0]["value"],
-                serde_json::json!([10.0, 20.0, 30.0, 40.0]),
+                serde_json::json!([10, 20, 30, 40]),
                 "output {output:?}: the whole `data`, not `data[0]`"
             );
         }
@@ -1141,7 +1123,7 @@ mod tests {
                 .unwrap();
         assert_eq!(
             omitted["args"][0]["value"],
-            serde_json::json!([[1.0, 1.5, 2.0], [1.1, 1.6, 2.1], [1.2, 1.7, 2.2]]),
+            serde_json::json!([[1, 1.5, 2], [1.1, 1.6, 2.1], [1.2, 1.7, 2.2]]),
             "an omitted output is output 0"
         );
     }

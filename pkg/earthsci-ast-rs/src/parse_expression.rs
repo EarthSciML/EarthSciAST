@@ -1238,9 +1238,7 @@ fn node(op: &str, args: Vec<Expr>) -> Expr {
 fn expr_as_i64(e: &Expr) -> Option<i64> {
     match e {
         Expr::Integer(i) => Some(*i),
-        Expr::Number(n) if n.fract() == 0.0 && n.abs() < 9_223_372_036_854_775_808.0 => {
-            Some(*n as i64)
-        }
+        Expr::Number(n) => crate::types::canonical_i64(*n),
         _ => None,
     }
 }
