@@ -455,10 +455,20 @@ pub fn is_scalar_operator(op: &str) -> bool {
 /// and it keeps aligning it the way it always did.
 #[must_use]
 pub fn is_elementwise_node(node: &ExpressionNode) -> bool {
-    if node.op == "broadcast" {
-        return is_scalar_operator(node.broadcast_fn.as_deref().unwrap_or("+"));
-    }
-    is_scalar_operator(&node.op)
+    elementwise_op(node).is_some()
+}
+
+/// The scalar operator an elementwise node applies element by element — its
+/// `op`, or a `broadcast`'s `fn` — or `None` for a node that is not
+/// elementwise ([`is_elementwise_node`]).
+#[must_use]
+pub fn elementwise_op(node: &ExpressionNode) -> Option<&str> {
+    let op = if node.op == "broadcast" {
+        node.broadcast_fn.as_deref().unwrap_or("+")
+    } else {
+        node.op.as_str()
+    };
+    is_scalar_operator(op).then_some(op)
 }
 
 /// Validate a `broadcast` node's `fn` field (esm-spec §4.3.4).

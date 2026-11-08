@@ -1079,6 +1079,11 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     // 3a), and before 5c, so classification never sees an `ic` equation.
     extract_field_ics(&mut parts)?;
 
+    // Phase 5b‴: a variable declared without a shape whose value is an array on
+    // one arm of an `ifelse` and a scalar on the other takes the array arm's
+    // shape (esm-spec §4.3.4). Before 5c, so the subset maps carry it too.
+    promote_conditional_shapes(&mut parts, &index_sets);
+
     // Phase 5c: the §6.3.1 SUBSET maps, re-derived over the FINISHED system so
     // they see the equations coupling and the pointwise lift actually produced
     // rather than the ones the document declared. Each is a subset of the map
@@ -1260,6 +1265,200 @@ fn normalize_angle_arguments(flat: &mut AssembledParts) {
         }
         for a in ev.affects.iter_mut().flatten() {
             rewrite(&mut a.rhs);
+        }
+    }
+}
+
+/// Give a shape to every variable declared WITHOUT one whose value is an array
+/// on one arm of an `ifelse` and a scalar on the other (esm-spec §4.3.4): the
+/// index sets of its array arm. `X = ifelse(lev < 2, F * 2, 0.0)` with
+/// `F: ["cell"]` is a `cell`-shaped array of zeros when `lev >= 2`, not a
+/// scalar `0.0` (issue #664, the NEI2016 emission observeds).
+///
+/// **Why here.** Evaluating only the taken arm, a binding would make `X` an
+/// array on some runs and a 0-D scalar on others — a value no compiled slot
+/// can hold, and a gather `X[i]` that faults on one arm. Julia gives such a
+/// variable its array arm's shape in `promote_downstream_shapes`, on the
+/// flattened system before anything is built. This is that step: a phase of
+/// [`flatten`], and of `simulate_array::apply_flatten_rewrites`, which stands
+/// in for `flatten`'s rewrites on the routes that build an authored model
+/// without flattening it. Every evaluator, both build routes and every reader
+/// of a variable's declared shape downstream of them then sees one shape. It
+/// is NOT on the load or validation path: the document as authored keeps no
+/// `shape`, and saving it writes none.
+///
+/// Only an explicitly ABSENT shape is inferred. `shape: []` declares a scalar,
+/// which cannot hold an array arm, so it is left as it is (and a binding
+/// refuses the mixed `ifelse` on it).
+///
+/// The inference reads declarations and elementwise structure only, and gives
+/// up — leaving the variable unshaped — wherever that cannot decide the shape:
+/// a reduction, gather or shape op on the value path, operands over different
+/// index sets, or a name whose rank is not known statically (see
+/// [`ConditionalShapes::var_axes`]). Each inferred shape feeds the inference
+/// of the variables that read it, so a chain `Y = ifelse(c, X, 0.0)` over a
+/// promoted `X` is promoted too. A body with no `ifelse` on its value path is
+/// left alone: it is an array or a scalar whichever way it is evaluated.
+pub(crate) fn conditional_shape_promotions<'a>(
+    variable: &dyn Fn(&str) -> Option<&'a ModelVariable>,
+    equations: impl Iterator<Item = &'a Equation> + Clone,
+    index_sets: &HashMap<String, IndexSet>,
+) -> Vec<(String, Vec<String>)> {
+    let mut defs: HashMap<&'a str, &'a Expr> = HashMap::new();
+    let mut ode_states: HashSet<&'a str> = HashSet::new();
+    for eq in equations.clone() {
+        match &eq.lhs {
+            Expr::Variable(v) => {
+                defs.insert(v.as_str(), &eq.rhs);
+            }
+            Expr::Operator(node) if node.op == "D" => {
+                if let Some(Expr::Variable(v)) = node.args.first() {
+                    ode_states.insert(v.as_str());
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut inference = ConditionalShapes {
+        variable,
+        defs: &defs,
+        ode_states: &ode_states,
+        memo: HashMap::new(),
+        depth: 0,
+    };
+    let mut out = Vec::new();
+    for eq in equations {
+        let Expr::Variable(name) = &eq.lhs else {
+            continue;
+        };
+        let Some(var) = variable(name) else {
+            continue;
+        };
+        if var.shape.is_some() || var.var_type == VariableType::Parameter {
+            continue;
+        }
+        if let Some((axes, true)) = inference.body_axes(&eq.rhs)
+            && !axes.is_empty()
+            && crate::simulate_array::resolve_declared_shape(&axes, index_sets).is_some()
+        {
+            out.push((name.clone(), axes));
+        }
+    }
+    out
+}
+
+/// The shape inference behind [`conditional_shape_promotions`].
+struct ConditionalShapes<'a, 'd> {
+    variable: &'d dyn Fn(&str) -> Option<&'a ModelVariable>,
+    /// Each bare-LHS (`x = …`) definition's right-hand side.
+    defs: &'d HashMap<&'a str, &'a Expr>,
+    /// The names a `D(x, t)` equation defines.
+    ode_states: &'d HashSet<&'a str>,
+    /// Each name's inferred index sets (`None`: not decidable, or a definition
+    /// still being inferred — a cycle).
+    memo: HashMap<String, Option<Vec<String>>>,
+    depth: usize,
+}
+
+/// How deep [`ConditionalShapes::var_axes`] follows definitions before it
+/// gives up (and leaves the variable unshaped) rather than risk the stack.
+const CONDITIONAL_SHAPE_MAX_DEPTH: usize = 256;
+
+impl ConditionalShapes<'_, '_> {
+    /// The index sets a name's value spans, empty for a scalar, or `None` when
+    /// its rank is not known statically. A declared `shape` is authoritative
+    /// (`[]` is a scalar), and so are `t`, an unshaped parameter that no data
+    /// source feeds, and an unshaped ODE state. An unshaped variable a bare
+    /// `x = …` equation defines spans what its body does. Anything else
+    /// unshaped — a data-fed parameter, whose shape the provider's data
+    /// supplies, or an unknown defined some other way (an indexed LHS, an
+    /// algebraic constraint) — is undecided.
+    fn var_axes(&mut self, name: &str) -> Option<Vec<String>> {
+        if name == "t" {
+            return Some(Vec::new());
+        }
+        if let Some(known) = self.memo.get(name) {
+            return known.clone();
+        }
+        let var = (self.variable)(name)?;
+        let axes = match (&var.shape, var.var_type) {
+            (Some(shape), _) => Some(shape.clone()),
+            (None, VariableType::Parameter) => var
+                .update
+                .as_ref()
+                .is_none_or(|u| crate::simulate_array::data_feed_source(u).is_none())
+                .then(Vec::new),
+            (None, VariableType::Unknown) => match self.defs.get(name) {
+                Some(body) if self.depth < CONDITIONAL_SHAPE_MAX_DEPTH => {
+                    self.memo.insert(name.to_string(), None);
+                    self.depth += 1;
+                    let axes = self.body_axes(body).map(|(axes, _)| axes);
+                    self.depth -= 1;
+                    axes
+                }
+                Some(_) => None,
+                None => self.ode_states.contains(name).then(Vec::new),
+            },
+        };
+        self.memo.insert(name.to_string(), axes.clone());
+        axes
+    }
+
+    /// The index sets an expression that is elementwise throughout spans
+    /// (empty for a scalar), and whether an `ifelse` is on its value path; or
+    /// `None` when any op in it consumes an operand whole, or two operands
+    /// span different index sets.
+    fn body_axes(&mut self, e: &Expr) -> Option<(Vec<String>, bool)> {
+        match e {
+            Expr::Number(_) | Expr::Integer(_) => Some((Vec::new(), false)),
+            Expr::Variable(v) => self.var_axes(v).map(|axes| (axes, false)),
+            Expr::Operator(node) => {
+                let op = crate::op_registry::elementwise_op(node)?;
+                let mut saw_ifelse = op == "ifelse";
+                let mut out: Vec<String> = Vec::new();
+                for a in &node.args {
+                    let (axes, ifelse) = self.body_axes(a)?;
+                    saw_ifelse |= ifelse;
+                    if axes.is_empty() || axes == out {
+                        continue;
+                    }
+                    if !out.is_empty() {
+                        return None;
+                    }
+                    out = axes;
+                }
+                Some((out, saw_ifelse))
+            }
+        }
+    }
+}
+
+/// Phase 5b‴ of [`flatten`]: [`conditional_shape_promotions`] over the
+/// assembled system, written into every variable map that holds the name.
+fn promote_conditional_shapes(parts: &mut AssembledParts, index_sets: &IndexMap<String, IndexSet>) {
+    let index_sets: HashMap<String, IndexSet> = index_sets
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let promoted = {
+        let lookup = |n: &str| {
+            parts
+                .observed_variables
+                .get(n)
+                .or_else(|| parts.state_variables.get(n))
+                .or_else(|| parts.parameters.get(n))
+        };
+        conditional_shape_promotions(
+            &lookup,
+            parts.equations.iter().map(|fe| &fe.eq),
+            &index_sets,
+        )
+    };
+    for (name, axes) in promoted {
+        for map in [&mut parts.observed_variables, &mut parts.state_variables] {
+            if let Some(var) = map.get_mut(&name) {
+                var.shape = Some(axes.clone());
+            }
         }
     }
 }
@@ -6445,6 +6644,50 @@ mod tests {
         assert_eq!(
             node.expr.as_deref(),
             Some(&fold_contributions(contributions))
+        );
+    }
+
+    /// esm-spec §4.3.4: an unshaped variable whose `ifelse` arms differ in
+    /// rank takes the array arm's shape in the flattened system, and a chain
+    /// through it does too; the loaded document keeps the shape it was
+    /// authored with, so saving it writes none.
+    #[test]
+    fn flatten_gives_an_unshaped_mixed_ifelse_its_array_arms_shape() {
+        let doc = serde_json::json!({
+            "esm": "1.1.0",
+            "metadata": {"name": "mixed_ifelse"},
+            "index_sets": {"cell": {"kind": "interval", "size": 3}},
+            "models": {"M": {
+                "variables": {
+                    "lev": {"type": "parameter", "default": 1.0},
+                    "F": {"type": "parameter", "shape": ["cell"], "default": 1.5},
+                    "X": {"type": "unknown"},
+                    "Y": {"type": "unknown"},
+                    "S": {"type": "unknown", "shape": []}
+                },
+                "equations": [
+                    {"lhs": "X", "rhs": {"op": "ifelse", "args": [
+                        {"op": "<", "args": ["lev", 2.0]},
+                        {"op": "*", "args": ["F", 2.0]}, 0.0]}},
+                    {"lhs": "Y", "rhs": {"op": "ifelse", "args": [
+                        {"op": ">", "args": ["t", 2.0]}, "X", 0.0]}},
+                    {"lhs": "S", "rhs": {"op": "ifelse", "args": [
+                        {"op": "<", "args": ["lev", 2.0]}, "F", 0.0]}}
+                ]
+            }}
+        });
+        let file = crate::parse::load_string(&doc.to_string()).expect("loads");
+        let flat = flatten(&file).expect("flattens");
+        let shape = |n: &str| flat.observed_variables[n].shape.clone();
+        assert_eq!(shape("M.X"), Some(vec!["cell".to_string()]));
+        assert_eq!(shape("M.Y"), Some(vec!["cell".to_string()]));
+        assert_eq!(shape("M.S"), Some(vec![]));
+        let saved: serde_json::Value =
+            serde_json::from_str(&crate::serialize::to_json(&file).expect("saves")).unwrap();
+        assert!(
+            saved["models"]["M"]["variables"]["X"]
+                .get("shape")
+                .is_none()
         );
     }
 }
