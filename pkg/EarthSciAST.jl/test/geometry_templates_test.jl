@@ -65,8 +65,10 @@ _gt_faq(out, ranges, expr) = Dict{String, Any}(
     "op" => "faq", "args" => Any[], "output_idx" => out, "ranges" => ranges, "expr" => expr
 )
 _gt_from(s) = Dict{String, Any}("from" => s)
-_gt_pad(ring, n) = vcat(Any[Any[Float64(p[1]), Float64(p[2])] for p in ring],
-    Any[Any[Float64(ring[end][1]), Float64(ring[end][2])] for _ in (length(ring) + 1):n])
+_gt_pad(ring, n) = vcat(
+    Any[Any[Float64(p[1]), Float64(p[2])] for p in ring],
+    Any[Any[Float64(ring[end][1]), Float64(ring[end][2])] for _ in (length(ring) + 1):n]
+)
 
 function _gt_document(manifold, rows)
     nv = maximum(max(length(g.ring_a[pr.i]), length(g.ring_b[pr.j])) for (g, pr) in rows)
@@ -92,36 +94,55 @@ function _gt_document(manifold, rows)
         name = "overlap_area_spherical"
         for (x, ring) in (("xa", a), ("xb", b))
             vars[x] = Dict{String, Any}("type" => "unknown", "units" => "1", "shape" => Any["pairs", "verts", "xyz"])
-            push!(eqs, Dict{String, Any}(
-                "lhs" => x,
-                "rhs" => _gt_faq(Any["c", "v", "d"],
-                    Dict{String, Any}("c" => _gt_from("pairs"), "v" => _gt_from("verts"), "d" => _gt_from("xyz")),
-                    _gt_apply("lonlat_to_unit", Dict{String, Any}("ring" => ring, "cell" => "c", "vert" => "v", "comp" => "d")))
-            ))
+            push!(
+                eqs, Dict{String, Any}(
+                    "lhs" => x,
+                    "rhs" => _gt_faq(
+                        Any["c", "v", "d"],
+                        Dict{String, Any}("c" => _gt_from("pairs"), "v" => _gt_from("verts"), "d" => _gt_from("xyz")),
+                        _gt_apply("lonlat_to_unit", Dict{String, Any}("ring" => ring, "cell" => "c", "vert" => "v", "comp" => "d"))
+                    )
+                )
+            )
         end
         a, b = "xa", "xb"
     end
     ranges = Dict{String, Any}("k" => _gt_from("pairs"))
-    push!(eqs, Dict{String, Any}(
-        "lhs" => _gt_faq(Any["k"], ranges,
-            Dict{String, Any}("op" => "D", "args" => Any[Dict{String, Any}("op" => "index", "args" => Any["S", "k"])], "wrt" => "t")),
-        "rhs" => _gt_faq(Any["k"], ranges, _gt_apply(name, Dict{String, Any}(
-            "ring_a" => a, "cell_a" => "k", "nv_a" => nv, "ring_b" => b, "cell_b" => "k", "nv_b" => nv)))
-    ))
+    push!(
+        eqs, Dict{String, Any}(
+            "lhs" => _gt_faq(
+                Any["k"], ranges,
+                Dict{String, Any}("op" => "D", "args" => Any[Dict{String, Any}("op" => "index", "args" => Any["S", "k"])], "wrt" => "t")
+            ),
+            "rhs" => _gt_faq(
+                Any["k"], ranges, _gt_apply(
+                    name, Dict{String, Any}(
+                        "ring_a" => a, "cell_a" => "k", "nv_a" => nv, "ring_b" => b, "cell_b" => "k", "nv_b" => nv
+                    )
+                )
+            )
+        )
+    )
     return Dict{String, Any}(
         "esm" => "1.1.0",
         "metadata" => Dict{String, Any}("name" => "geometry_template_probe", "authors" => Any["t"]),
         "index_sets" => index_sets,
-        "models" => Dict{String, Any}("M" => Dict{String, Any}(
-            "expression_template_imports" => Any[Dict{String, Any}("ref" => "geometry.esm")],
-            "variables" => vars, "equations" => eqs)))
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "expression_template_imports" => Any[Dict{String, Any}("ref" => "geometry.esm")],
+                "variables" => vars, "equations" => eqs
+            )
+        )
+    )
 end
 
 function _gt_template_values()
     out = Dict{String, Dict{Tuple{Int, Int}, Float64}}()
     for manifold in ("planar", "spherical")
-        rows = [(g, pr) for g in _GT_PAIRS.groups if g.manifold == manifold && !haskey(g, :padding_of)
-                for pr in _gt_sample(g)]
+        rows = [
+            (g, pr) for g in _GT_PAIRS.groups if g.manifold == manifold && !haskey(g, :padding_of)
+                for pr in _gt_sample(g)
+        ]
         isempty(rows) && continue
         file = load_string(JSON3.write(_gt_document(manifold, rows)); base_path = dirname(_GT_LIB))
         f!, u0, p, _, vm = EarthSciAST._build_evaluator(file; compiler = :interpreter)
@@ -184,8 +205,10 @@ end
                 end
             end
             get(ENV, "ESM_GEOMETRY_TEMPLATE_REPORT", "") == "1" &&
-                println("geometry template ", gid, ": max |template - reference| = ", max_ref,
-                    ", max |template - leaf| = ", max_leaf)
+                println(
+                "geometry template ", gid, ": max |template - reference| = ", max_ref,
+                ", max |template - leaf| = ", max_leaf
+            )
         end
     end
 
@@ -197,16 +220,26 @@ end
         for (k, _) in enumerate(pts), d in 1:3
             v = "u_$(k)_$d"
             vars[v] = Dict{String, Any}("type" => "unknown", "units" => "1", "default" => 0.0)
-            push!(eqs, Dict{String, Any}(
-                "lhs" => Dict{String, Any}("op" => "D", "args" => Any[v], "wrt" => "t"),
-                "rhs" => _gt_apply("lonlat_to_unit",
-                    Dict{String, Any}("ring" => _gt_const(ring), "cell" => 1, "vert" => k, "comp" => d))))
+            push!(
+                eqs, Dict{String, Any}(
+                    "lhs" => Dict{String, Any}("op" => "D", "args" => Any[v], "wrt" => "t"),
+                    "rhs" => _gt_apply(
+                        "lonlat_to_unit",
+                        Dict{String, Any}("ring" => _gt_const(ring), "cell" => 1, "vert" => k, "comp" => d)
+                    )
+                )
+            )
         end
-        doc = Dict{String, Any}("esm" => "1.1.0",
+        doc = Dict{String, Any}(
+            "esm" => "1.1.0",
             "metadata" => Dict{String, Any}("name" => "lonlat_to_unit_probe", "authors" => Any["t"]),
-            "models" => Dict{String, Any}("M" => Dict{String, Any}(
-                "expression_template_imports" => Any[Dict{String, Any}("ref" => "geometry.esm")],
-                "variables" => vars, "equations" => eqs)))
+            "models" => Dict{String, Any}(
+                "M" => Dict{String, Any}(
+                    "expression_template_imports" => Any[Dict{String, Any}("ref" => "geometry.esm")],
+                    "variables" => vars, "equations" => eqs
+                )
+            )
+        )
         file = load_string(JSON3.write(doc); base_path = dirname(_GT_LIB))
         f!, u0, p, _, vm = EarthSciAST._build_evaluator(file; compiler = :interpreter)
         du = similar(u0)
