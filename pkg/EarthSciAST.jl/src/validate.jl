@@ -1848,17 +1848,50 @@ function validate_aggregate_semantics(file::EsmFile; views = nothing)::Vector{St
         )
         # A template parameter may stand for a range's `from` (esm-spec §9.6.1),
         # so the index-set name a call binds is checked on the expansion; the
-        # pointer still names the authored equation.
+        # pointer still names the authored field.
         view = _units_view(file, model_name, model, views)
         view === model && continue
-        for (i, eq) in enumerate(view.equations), (side, e) in (("lhs", eq.lhs), ("rhs", eq.rhs))
-            anchor = "/models/$model_name/equations/$(i - 1)/$side"
-            any(x -> x.path == anchor && x.error_type == ERROR_CODES.UNDEFINED_INDEX_SET, errors) && continue
-            foreach_subexpr_once(e) do sub
-                sub isa OpExpr && sub.op == "faq" && _check_undefined_index_set!(errors, sub, anchor, registry)
-                nothing
+        reg = get(file.component_templates, "models.$model_name", nothing)
+        reg === nothing && continue
+        _check_template_index_sets!(errors, model, view, "/models/$model_name", registry, reg)
+    end
+    return errors
+end
+
+# The `undefined_index_set` check of `_check_undefined_index_set!` on every
+# expression field of `model` (`_foreach_model_expression`: equations,
+# initialization equations, parameter updates, guesses, events, inline tests,
+# subsystem models) that calls a template, read from the expanded `view`. A
+# field the view leaves unexpanded is expanded here against `reg`.
+function _check_template_index_sets!(
+        errors::Vector{StructuralError}, model::Model, view::Model,
+        path::String, registry::Set{String}, reg
+    )
+    templated = Set{String}()
+    _foreach_model_expression(model, path, nothing) do e, anchor, _
+        _contains_template_reference(e) && push!(templated, anchor)
+        nothing
+    end
+    isempty(templated) && return errors
+    memo = Dict{Tuple{String, String}, OpExpr}()
+    _foreach_model_expression(view, path, nothing) do e, anchor, _
+        anchor in templated || return nothing
+        any(x -> x.path == anchor && x.error_type == ERROR_CODES.UNDEFINED_INDEX_SET, errors) &&
+            return nothing
+        if _contains_template_reference(e)
+            e = try
+                _expand_expr_refs(e, reg, nothing, memo)
+            catch err
+                # An unresolvable call is reported by the template checks.
+                err isa ExpressionTemplateError || rethrow()
+                return nothing
             end
         end
+        foreach_subexpr_once(e) do sub
+            sub isa OpExpr && sub.op == "faq" && _check_undefined_index_set!(errors, sub, anchor, registry)
+            nothing
+        end
+        return nothing
     end
     return errors
 end
@@ -3304,11 +3337,12 @@ function validate_model_references(
     # denotes its expansion). A template binding is a value substituted into the
     # body, and only where the body uses it in an expression position is it a
     # reference; one bound to a scalar field (`K_manifold => "planar"` filling a
-    # `manifold`) is a literal. Expansion keeps the equation order, so pointers
-    # still name the authored equation.
-    eqs = isempty(model_name) ? model.equations :
-        _units_view(file, model_name, model, views).equations
-    for (i, eq) in enumerate(eqs)
+    # `manifold`) or to a range's `from` is a literal. Expansion keeps the
+    # equation order, so pointers still name the authored equation. The view
+    # expands the equations, initialization equations and parameter updates of
+    # the model and of its subsystems, which are walked from it below too.
+    view = isempty(model_name) ? model : _units_view(file, model_name, model, views)
+    for (i, eq) in enumerate(view.equations)
         append!(errors, validate_expression_references(file, eq.lhs, "$path/equations/$(i - 1)/lhs"; scope = scope))
         append!(errors, validate_expression_references(file, eq.rhs, "$path/equations/$(i - 1)/rhs"; scope = scope))
     end
@@ -3336,8 +3370,8 @@ function validate_model_references(
     #    `when` trigger and the `expression` value form. An observed unknown's
     #    defining expression is NOT here any more — it is an ordinary equation,
     #    walked with every other equation.
-    for name in sort!(collect(keys(model.variables)))
-        rules = model.variables[name].update
+    for name in sort!(collect(keys(view.variables)))
+        rules = view.variables[name].update
         rules === nothing && continue
         for (ri, rule) in enumerate(rules)
             for (field, e) in (("when", rule.when), ("expression", rule.expression))
@@ -3366,7 +3400,7 @@ function validate_model_references(
     end
 
     # 3. `initialization_equations`.
-    for (i, eq) in enumerate(model.initialization_equations)
+    for (i, eq) in enumerate(view.initialization_equations)
         append!(
             errors, validate_expression_references(
                 file, eq.lhs, "$path/initialization_equations/$(i - 1)/lhs"; scope = scope
@@ -3393,8 +3427,8 @@ function validate_model_references(
         append!(errors, validate_event_references(file, event, "$path/continuous_events/$(i - 1)"; scope = scope))
     end
 
-    # Recursively check subsystems
-    for (subsys_name, subsys) in model_subsystems(model)
+    # Recursively check subsystems (already expanded in the view)
+    for (subsys_name, subsys) in model_subsystems(view)
         append!(errors, validate_model_references(file, subsys, "$path/subsystems/$subsys_name"))
     end
 
