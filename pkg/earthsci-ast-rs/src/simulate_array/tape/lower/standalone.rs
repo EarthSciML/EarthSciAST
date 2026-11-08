@@ -26,7 +26,6 @@ use super::*;
 use rustc_hash::FxHashSet;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 
 /// Why [`eval_standalone_rule`] produced no value.
 #[derive(Debug)]
@@ -139,60 +138,45 @@ pub(super) fn with_standalone_builder<R>(
 
 impl TapeBuilder<'_> {
     /// An array-valued input of a standalone program, whose values the build
-    /// knows: a `ConstArray`, or for an empty table (a zero extent) a box
-    /// with no element, whose values the build knows to be none.
+    /// knows: a `ConstArray` ([`Self::emit_const_data`]), or for an empty
+    /// table (a zero extent) a box with no element, whose values the build
+    /// knows to be none.
     pub(super) fn standalone_array_input(&mut self, value: &ndarray::ArrayD<f64>) -> LResult<LV> {
-        if !value.is_empty() {
-            return self.emit_const_array(value);
-        }
-        let ones = DimI::from_elem(1, value.ndim());
-        let lv = self.emit_zero_array(value.shape(), &ones);
-        if let LV::Arr(s) = lv {
-            self.known.insert(s, Known::Vals(Rc::new(Vec::new())));
-        }
-        Ok(lv)
+        let shape: DimU = value.shape().iter().copied().collect();
+        // `iter()` is the LOGICAL row-major walk, which is the slab layout.
+        self.standalone_known_input(&shape, Arc::new(value.iter().copied().collect()))
     }
 
-    /// [`Self::standalone_array_input`] for values the build already holds
-    /// behind an `Rc`, under [`TapeBuilder::defer_consts`]: the slot shares
-    /// `vals` rather than copying them into an [`Instr::ConstArray`], which
-    /// is emitted only if an instruction reads the slot whole
-    /// ([`Self::materialize_deferred`]). `shape` is not empty.
-    pub(super) fn standalone_known_input(&mut self, shape: &DimU, vals: &Rc<Vec<f64>>) -> LV {
-        debug_assert!(self.defer_consts && !shape.is_empty());
+    /// [`Self::standalone_array_input`] for row-major `vals` the build
+    /// already holds behind an `Arc`: the slot shares them, so binding the
+    /// same input on many tapes copies nothing. `shape` is not empty.
+    pub(super) fn standalone_known_input(
+        &mut self,
+        shape: &[usize],
+        vals: Arc<Vec<f64>>,
+    ) -> LResult<LV> {
+        let ones = DimI::from_elem(1, shape.len());
         if shape.contains(&0) {
-            let ones = DimI::from_elem(1, shape.len());
             let lv = self.emit_zero_array(shape, &ones);
             if let LV::Arr(s) = lv {
-                self.known.insert(s, Known::Vals(Rc::new(Vec::new())));
+                self.known.insert(s, Known::Vals(Arc::new(Vec::new())));
             }
-            return lv;
+            return Ok(lv);
         }
-        LV::Arr(self.defer_const(shape, Rc::clone(vals)))
-    }
-
-    /// A CONST slot over `shape` at the all-1s origin whose values are
-    /// `vals` ([`Known::Deferred`]): what [`Self::emit_const_array`] defines,
-    /// with the instruction left to [`Self::materialize_deferred`].
-    pub(super) fn defer_const(&mut self, shape: &[usize], vals: Rc<Vec<f64>>) -> SlotId {
-        debug_assert_eq!(shape.iter().product::<usize>(), vals.len());
-        let sec = self.placement(Cadence::Const);
-        let origin = DimI::from_elem(1, shape.len());
-        let out = self.new_slot(shape, &origin, false, sec);
-        self.known.insert(out, Known::Deferred(vals));
-        out
+        Ok(LV::Arr(self.emit_const_data(shape, &ones, vals, false)?))
     }
 
     /// Define every [`Known::Deferred`] slot some instruction reads with an
     /// [`Instr::ConstArray`] of its values, at the head of the CONST section,
-    /// in slot order. The head is ahead of every reader, and a jump's targets
-    /// are relative, so prepending moves none of them. A slot nothing reads
+    /// in slot order, each tagged with the rule and precision it was bound
+    /// under. The head is ahead of every reader, and a jump's targets are
+    /// relative, so prepending moves none of them. A slot nothing reads
     /// costs nothing: no instruction, no payload, and no slab storage.
     fn materialize_deferred(&mut self) {
         let mut deferred: Vec<SlotId> = self
             .known
             .iter()
-            .filter(|(_, k)| matches!(k, Known::Deferred(_)))
+            .filter(|(_, k)| matches!(k, Known::Deferred { .. }))
             .map(|(&s, _)| s)
             .collect();
         if deferred.is_empty() {
@@ -211,29 +195,27 @@ impl TapeBuilder<'_> {
         }
         deferred.retain(|s| read.contains(s));
         deferred.sort_unstable();
-        let prec = crate::precision::active();
-        let mut instrs: Vec<Tagged> = Vec::with_capacity(deferred.len());
+        let mut head: Vec<Chunk> = Vec::new();
         for out in deferred {
-            let Some(Known::Deferred(vals)) = self.known.remove(&out) else {
+            let Some(Known::Deferred { vals, rule, prec }) = self.known.remove(&out) else {
                 unreachable!("a deferred slot");
             };
             let data = self.const_data.len() as u32;
             self.const_data.push(ConstArrayData {
                 shape: self.slots[out as usize].shape.clone(),
-                values: Rc::try_unwrap(vals).unwrap_or_else(|v| (*v).clone()),
+                values: vals,
             });
             self.known.insert(out, Known::Data(data));
-            instrs.push((Instr::ConstArray { data, out }, prec));
+            let instr = (Instr::ConstArray { data, out }, prec);
+            match head.last_mut() {
+                Some(c) if c.rule == rule => c.instrs.push(instr),
+                _ => head.push(Chunk {
+                    rule,
+                    instrs: vec![instr],
+                }),
+            }
         }
-        if !instrs.is_empty() {
-            self.streams[Cadence::Const as usize].insert(
-                0,
-                Chunk {
-                    rule: self.cur_rule,
-                    instrs,
-                },
-            );
-        }
+        self.streams[Cadence::Const as usize].splice(0..0, head);
     }
 
     /// Close the standalone rule `rule` (whose value is bound in
@@ -255,8 +237,8 @@ impl TapeBuilder<'_> {
             .into_iter()
             .map(|name| {
                 let (shape, vals) = self.known_named(name)?;
-                let a = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&shape), (*vals).clone())
-                    .ok()?;
+                let vals = Arc::try_unwrap(vals).unwrap_or_else(|v| (*v).clone());
+                let a = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&shape), vals).ok()?;
                 Some((name.clone(), a))
             })
             .collect()
@@ -320,7 +302,7 @@ impl TapeBuilder<'_> {
     /// input.
     ///
     /// Memoized per name, so a key column several joins read is folded once.
-    pub(super) fn fold_const_observed(&self, name: &str) -> Option<(DimU, Rc<Vec<f64>>)> {
+    pub(super) fn fold_const_observed(&self, name: &str) -> Option<(DimU, Arc<Vec<f64>>)> {
         if let Some(hit) = self.folded.borrow().get(name) {
             return hit.clone();
         }
@@ -331,7 +313,7 @@ impl TapeBuilder<'_> {
         out
     }
 
-    fn fold_const_observed_uncached(&self, name: &str) -> Option<(DimU, Rc<Vec<f64>>)> {
+    fn fold_const_observed_uncached(&self, name: &str) -> Option<(DimU, Arc<Vec<f64>>)> {
         if self.obs_tier.get(name) != Some(&Cadence::Const) {
             return None;
         }
@@ -367,7 +349,7 @@ impl TapeBuilder<'_> {
         // No parameters beyond the baked ones.
         let a = eval_standalone_rule(rule, &inputs, &[], &[], self.const_arrays, false).ok()?;
         let shape: DimU = a.shape().iter().copied().collect();
-        Some((shape, Rc::new(a.iter().copied().collect())))
+        Some((shape, Arc::new(a.iter().copied().collect())))
     }
 }
 

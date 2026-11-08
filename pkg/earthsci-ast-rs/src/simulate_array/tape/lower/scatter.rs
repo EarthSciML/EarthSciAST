@@ -35,7 +35,6 @@
 use super::tuples::{DimBound, Parent, TupleList, TupleSpec, parent_first_order, walk_nest};
 use super::*;
 use crate::simulate_array::eval::{apply_binary, apply_unary, fold_scalar};
-use std::rc::Rc;
 
 /// The most points one scatter's build-time walk visits: a bound on build
 /// time only (the dense lowering's own box limit is
@@ -56,7 +55,7 @@ enum IxNode {
     Cmp(&'static str, Box<IxNode>, Box<IxNode>),
     /// `index(a, subs…)` of an array the build knows, row-major.
     Index {
-        vals: Rc<Vec<f64>>,
+        vals: Arc<Vec<f64>>,
         shape: DimU,
         subs: Vec<IxNode>,
     },

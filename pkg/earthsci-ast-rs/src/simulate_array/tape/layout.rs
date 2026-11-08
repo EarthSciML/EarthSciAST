@@ -214,7 +214,7 @@ fn reverse(prog: &mut TapeProgram) {
         r.shape = rev(&r.shape);
     }
     for d in &mut prog.const_data {
-        d.values = transpose_values(&d.values, &d.shape);
+        d.values = std::sync::Arc::new(transpose_values(&d.values, &d.shape));
         d.shape = rev(&d.shape);
     }
     for g in &mut prog.index_gathers {

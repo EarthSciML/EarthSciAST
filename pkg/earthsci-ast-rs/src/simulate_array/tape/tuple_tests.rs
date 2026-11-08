@@ -767,7 +767,7 @@ fn folded_payload(prog: &TapeProgram, n_cells: usize) -> Vec<u64> {
 /// (`ab_check`), and the folded payloads are identical across budgets.
 #[test]
 fn a_fold_over_many_chunks_sharing_its_inputs_is_bit_identical() {
-    use super::lower::set_tuple_list_budget;
+    use super::lower::{set_tuple_list_budget, take_chunk_inputs_held};
     let (n_g, n_v, n_i, n_s, n_h) = (3usize, 4usize, 40usize, 5usize, 6usize);
     let doc = hot_soak_doc(n_g, n_v, n_i, n_s, n_h);
     let tuples = n_g * n_h * n_i * n_s; // every trip joins exactly one day
@@ -778,6 +778,7 @@ fn a_fold_over_many_chunks_sharing_its_inputs_is_bit_identical() {
     assert_eq!(prog.seg_tables[0].rows.last().copied(), Some(tuples as u32));
     let run = n_i / n_v * n_s; // one output cell's tuples
     let mut payloads = Vec::new();
+    take_chunk_inputs_held();
     // Many chunks of several cells, chunks of one cell, and windows of a
     // cell's run down to one tuple a window.
     for budget in [tuples - 1, 7 * run, run, run - 1, 3, 1] {
@@ -786,6 +787,72 @@ fn a_fold_over_many_chunks_sharing_its_inputs_is_bit_identical() {
         set_tuple_list_budget(prev);
         assert_eq!(count(&prog, "SegReduce"), 0, "budget {budget}: folded");
         assert!(prog.gather_tables.is_empty(), "budget {budget}");
+        payloads.push(folded_payload(&prog, n_g * n_v * n_h));
+        // No chunk's program holds the large input: each gather of it is
+        // resolved at build, and only the gathered values are stored.
+        let held = take_chunk_inputs_held();
+        assert!(
+            !held.is_empty(),
+            "budget {budget}: chunk programs were built"
+        );
+        assert!(
+            held.iter().all(|h| !h.iter().any(|n| n == "big")),
+            "budget {budget}: a chunk program holds `big`: {held:?}"
+        );
+    }
+    assert!(payloads.iter().all(|p| *p == payloads[0]));
+    assert!(payloads[0].iter().any(|&b| f64::from_bits(b) != 0.0));
+}
+
+/// A chunk's tape resolves `intersect_polygon` of CONST observed rings at
+/// build, as the whole list's tape does, though its inputs are bound
+/// without a `ConstArray` of their own: the hot-soak body's kept term is
+/// scaled by a vertex of the clip of two literal rings, and the fold still
+/// folds, bit for bit the interpreter's answer at every budget.
+#[test]
+fn a_fold_whose_body_clips_const_rings_still_folds() {
+    use super::lower::set_tuple_list_budget;
+    let (n_g, n_v, n_i, n_s, n_h) = (2usize, 3usize, 12usize, 3usize, 4usize);
+    let mut doc = hot_soak_doc(n_g, n_v, n_i, n_s, n_h);
+    let m = &mut doc["models"]["M"];
+    for v in ["src", "tgt"] {
+        m["variables"][v] = json!({"type": "unknown", "units": "1", "shape": ["vtx", "coord"]});
+    }
+    let eqs = m["equations"].as_array_mut().unwrap();
+    eqs.insert(
+        0,
+        json!({"lhs": "src", "rhs": cnst(json!([[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]]))}),
+    );
+    eqs.insert(
+        1,
+        json!({"lhs": "tgt", "rhs": cnst(json!([[1.0, 1.0], [3.0, 1.5], [2.5, 3.0], [0.5, 2.5]]))}),
+    );
+    let total = eqs
+        .iter_mut()
+        .find(|e| e["lhs"] == json!("total"))
+        .expect("the contraction");
+    let clip = json!({"op": "intersect_polygon", "manifold": "planar", "args": ["src", "tgt"]});
+    let vertex = json!({"op": "+", "args": [
+        {"op": "index", "args": [clip, 2, 1]}, 1.0]});
+    total["rhs"]["expr"]["args"][1]["args"]
+        .as_array_mut()
+        .unwrap()
+        .push(vertex);
+    doc["index_sets"]["vtx"] = json!({"kind": "interval", "size": 4});
+    doc["index_sets"]["coord"] = json!({"kind": "interval", "size": 2});
+    let tuples = n_g * n_h * n_i * n_s;
+    let prev = set_tuple_list_budget(usize::MAX);
+    let prog = ab_check(doc.clone(), -2.0, 2.0);
+    set_tuple_list_budget(prev);
+    assert_eq!(count(&prog, "SegReduce"), 1, "under budget, the whole list");
+    assert_eq!(prog.seg_tables[0].rows.last().copied(), Some(tuples as u32));
+    let run = n_i / n_v * n_s;
+    let mut payloads = Vec::new();
+    for budget in [run, 3] {
+        let prev = set_tuple_list_budget(budget);
+        let prog = ab_check(doc.clone(), -2.0, 2.0);
+        set_tuple_list_budget(prev);
+        assert_eq!(count(&prog, "SegReduce"), 0, "budget {budget}: folded");
         payloads.push(folded_payload(&prog, n_g * n_v * n_h));
     }
     assert!(payloads.iter().all(|p| *p == payloads[0]));
