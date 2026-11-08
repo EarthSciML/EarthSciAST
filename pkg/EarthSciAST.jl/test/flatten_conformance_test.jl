@@ -290,6 +290,8 @@ _fc_compare(id, key) = !(key in _fc_skips(id))
 _fc_scalar(::Nothing) = nothing
 _fc_scalar(v::Real) = v
 _fc_scalar(v::ASTExpr) = Dict{String, Any}("expr" => to_ascii(v))
+# An array default (a shaped parameter's inline values) keeps its nesting.
+_fc_scalar(v::AbstractArray) = Any[_fc_scalar(x) for x in v]
 
 """The ordered `update.kind` tags of a variable, `[]` when it declares none."""
 _fc_update_kinds(v::ModelVariable) =

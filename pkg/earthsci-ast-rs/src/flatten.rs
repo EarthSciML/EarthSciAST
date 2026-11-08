@@ -1079,10 +1079,10 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     // 3a), and before 5c, so classification never sees an `ic` equation.
     extract_field_ics(&mut parts)?;
 
-    // Phase 5b‴: a variable declared without a shape whose value is an array on
-    // one arm of an `ifelse` and a scalar on the other takes the array arm's
-    // shape (esm-spec §4.3.4). Before 5c, so the subset maps carry it too.
-    promote_conditional_shapes(&mut parts, &index_sets);
+    // No phase writes a shape inferred for an unshaped mixed-rank `ifelse`
+    // (esm-spec §4.3.4) here: flatten changes no declared `shape` other than a
+    // pointwise-lifted state's (esm-libraries-spec §4.7.5). The compilers infer
+    // it where they build — see [`conditional_shape_promotions`].
 
     // Phase 5c: the §6.3.1 SUBSET maps, re-derived over the FINISHED system so
     // they see the equations coupling and the pointwise lift actually produced
@@ -1269,23 +1269,31 @@ fn normalize_angle_arguments(flat: &mut AssembledParts) {
     }
 }
 
+/// The shape each unshaped mixed-rank-`ifelse` variable is BUILT at
+/// (esm-spec §4.3.4), by variable name. See [`conditional_shape_promotions`].
+pub(crate) type BuiltShapes = HashMap<String, Vec<String>>;
+
 /// Give a shape to every variable declared WITHOUT one whose value is an array
 /// on one arm of an `ifelse` and a scalar on the other (esm-spec §4.3.4): the
 /// index sets of its array arm. `X = ifelse(lev < 2, F * 2, 0.0)` with
 /// `F: ["cell"]` is a `cell`-shaped array of zeros when `lev >= 2`, not a
 /// scalar `0.0` (issue #664, the NEI2016 emission observeds).
 ///
-/// **Why here.** Evaluating only the taken arm, a binding would make `X` an
-/// array on some runs and a 0-D scalar on others — a value no compiled slot
-/// can hold, and a gather `X[i]` that faults on one arm. Julia gives such a
-/// variable its array arm's shape in `promote_downstream_shapes`, on the
-/// flattened system before anything is built. This is that step: a phase of
-/// [`flatten`], and of `simulate_array::apply_flatten_rewrites`, which stands
-/// in for `flatten`'s rewrites on the routes that build an authored model
-/// without flattening it. Every evaluator, both build routes and every reader
-/// of a variable's declared shape downstream of them then sees one shape. It
-/// is NOT on the load or validation path: the document as authored keeps no
-/// `shape`, and saving it writes none.
+/// **Why at build time.** Evaluating only the taken arm, a binding would make
+/// `X` an array on some runs and a 0-D scalar on others — a value no compiled
+/// slot can hold, and a gather `X[i]` that faults on one arm. Julia gives such
+/// a variable its array arm's shape in `promote_downstream_shapes`, when it
+/// builds from the flattened system. This is that step, run where Rust builds,
+/// in ONE place: `simulate_array::promote_conditional_shapes`, which every
+/// build route calls on the model it builds and whose result the compiled
+/// model keeps (`ArrayCompiled::conditional_shapes`), so a later reader of a
+/// variable's shape — a restricted `RhsProgram`, the tile layout, the static
+/// observeds — takes it from there rather than inferring it again from a
+/// system that may no longer decide it. It is NOT written into any document or
+/// into `flatten`'s output:
+/// the document as authored keeps no `shape`, saving it writes none, and the
+/// flattened system keeps each variable's declared shape
+/// (esm-libraries-spec §4.7.5), as Julia's does.
 ///
 /// Only an explicitly ABSENT shape is inferred. `shape: []` declares a scalar,
 /// which cannot hold an array arm, so it is left as it is (and a binding
@@ -1303,7 +1311,7 @@ pub(crate) fn conditional_shape_promotions<'a>(
     variable: &dyn Fn(&str) -> Option<&'a ModelVariable>,
     equations: impl Iterator<Item = &'a Equation> + Clone,
     index_sets: &HashMap<String, IndexSet>,
-) -> Vec<(String, Vec<String>)> {
+) -> BuiltShapes {
     let mut defs: HashMap<&'a str, &'a Expr> = HashMap::new();
     let mut ode_states: HashSet<&'a str> = HashSet::new();
     for eq in equations.clone() {
@@ -1326,7 +1334,7 @@ pub(crate) fn conditional_shape_promotions<'a>(
         memo: HashMap::new(),
         depth: 0,
     };
-    let mut out = Vec::new();
+    let mut out = BuiltShapes::new();
     for eq in equations {
         let Expr::Variable(name) = &eq.lhs else {
             continue;
@@ -1341,7 +1349,7 @@ pub(crate) fn conditional_shape_promotions<'a>(
             && !axes.is_empty()
             && crate::simulate_array::resolve_declared_shape(&axes, index_sets).is_some()
         {
-            out.push((name.clone(), axes));
+            out.insert(name.clone(), axes);
         }
     }
     out
@@ -1428,36 +1436,6 @@ impl ConditionalShapes<'_, '_> {
                     out = axes;
                 }
                 Some((out, saw_ifelse))
-            }
-        }
-    }
-}
-
-/// Phase 5b‴ of [`flatten`]: [`conditional_shape_promotions`] over the
-/// assembled system, written into every variable map that holds the name.
-fn promote_conditional_shapes(parts: &mut AssembledParts, index_sets: &IndexMap<String, IndexSet>) {
-    let index_sets: HashMap<String, IndexSet> = index_sets
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    let promoted = {
-        let lookup = |n: &str| {
-            parts
-                .observed_variables
-                .get(n)
-                .or_else(|| parts.state_variables.get(n))
-                .or_else(|| parts.parameters.get(n))
-        };
-        conditional_shape_promotions(
-            &lookup,
-            parts.equations.iter().map(|fe| &fe.eq),
-            &index_sets,
-        )
-    };
-    for (name, axes) in promoted {
-        for map in [&mut parts.observed_variables, &mut parts.state_variables] {
-            if let Some(var) = map.get_mut(&name) {
-                var.shape = Some(axes.clone());
             }
         }
     }
@@ -6648,11 +6626,13 @@ mod tests {
     }
 
     /// esm-spec §4.3.4: an unshaped variable whose `ifelse` arms differ in
-    /// rank takes the array arm's shape in the flattened system, and a chain
-    /// through it does too; the loaded document keeps the shape it was
-    /// authored with, so saving it writes none.
+    /// rank is BUILT at the array arm's shape, and a chain through it is too.
+    /// Neither the loaded document nor the flattened system records that
+    /// shape (esm-libraries-spec §4.7.5: flatten changes only a lifted state's
+    /// `shape`), so saving either writes none — as Julia's flattened system
+    /// does not.
     #[test]
-    fn flatten_gives_an_unshaped_mixed_ifelse_its_array_arms_shape() {
+    fn flatten_keeps_an_unshaped_mixed_ifelse_unshaped() {
         let doc = serde_json::json!({
             "esm": "1.1.0",
             "metadata": {"name": "mixed_ifelse"},
@@ -6679,9 +6659,32 @@ mod tests {
         let file = crate::parse::load_string(&doc.to_string()).expect("loads");
         let flat = flatten(&file).expect("flattens");
         let shape = |n: &str| flat.observed_variables[n].shape.clone();
-        assert_eq!(shape("M.X"), Some(vec!["cell".to_string()]));
-        assert_eq!(shape("M.Y"), Some(vec!["cell".to_string()]));
+        assert_eq!(shape("M.X"), None);
+        assert_eq!(shape("M.Y"), None);
         assert_eq!(shape("M.S"), Some(vec![]));
+        // The shapes a build gives them.
+        let mut model = crate::simulate_array::model_from_flattened(&flat);
+        assert_eq!(model.variables["M.X"].shape, None);
+        let index_sets: HashMap<String, IndexSet> = flat
+            .index_sets
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let built = crate::simulate_array::promote_conditional_shapes(&mut model, &index_sets);
+        let cell = vec!["cell".to_string()];
+        assert_eq!(built.get("M.X"), Some(&cell));
+        assert_eq!(built.get("M.Y"), Some(&cell));
+        assert_eq!(built.get("M.S"), None);
+        assert_eq!(model.variables["M.X"].shape.as_ref(), Some(&cell));
+        assert_eq!(model.variables["M.Y"].shape.as_ref(), Some(&cell));
+        // The flattened system round-trips through JSON with no `shape` on X/Y.
+        let flat_json = serde_json::to_value(&flat).expect("serializes");
+        for name in ["M.X", "M.Y"] {
+            let shape = &flat_json["observed_variables"][name]["shape"];
+            assert!(shape.is_null(), "{name}: {shape}");
+        }
+        let back: FlattenedSystem = serde_json::from_value(flat_json).expect("deserializes");
+        assert_eq!(back.observed_variables["M.X"].shape, None);
         let saved: serde_json::Value =
             serde_json::from_str(&crate::serialize::to_json(&file).expect("saves")).unwrap();
         assert!(

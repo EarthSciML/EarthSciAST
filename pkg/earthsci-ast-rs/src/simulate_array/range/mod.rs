@@ -35,7 +35,7 @@ pub use tile::TileProgram;
 
 use super::tape::{CallInputs, ForcingView, TapeCtx, TapeProgram, run_tape_inputs};
 use super::{ArrayCompiled, RhsCall, RhsScratch, RhsStats, evaluate_rhs_with_scratch};
-use crate::flatten::{FlattenedSystem, TermOrigin};
+use crate::flatten::{BuiltShapes, FlattenedSystem, TermOrigin};
 use crate::problem::{Compiler, EsmProblem, ProgramSource};
 use crate::simulate::SimulateError;
 use ndarray::{ArrayD, IxDyn, ShapeBuilder};
@@ -479,6 +479,12 @@ struct ProgramInner {
     /// each at its own offset), so a call reads `u` and writes `du` in place.
     identity: bool,
     declared: Arc<HashSet<String>>,
+    /// The shape each unshaped mixed-rank-`ifelse` variable was built at
+    /// (esm-spec §4.3.4), which `flat`'s declarations do not carry
+    /// (esm-libraries-spec §4.7.5). Inferred once, over the WHOLE system, and
+    /// handed down to every program [`RhsProgram::select`] cuts from it: the
+    /// cut system may no longer decide it.
+    conditional_shapes: Arc<BuiltShapes>,
 }
 
 impl ProgramInner {
@@ -662,7 +668,14 @@ impl RhsProgram {
         forcing: ForcingSource,
         runtime_array_parameters: bool,
     ) -> Result<RhsProgram, SimulateError> {
-        let mut compiled = ArrayCompiled::from_flattened_with(&flat, runtime_array_parameters)?;
+        // A selection is built at the shapes its parent was (esm-spec §4.3.4).
+        let inherited = match &forcing {
+            ForcingSource::Parent(p) => Some(&*p.conditional_shapes),
+            ForcingSource::Problem(_) => None,
+        };
+        let mut compiled =
+            ArrayCompiled::from_flattened_shaped(&flat, runtime_array_parameters, inherited)?;
+        let conditional_shapes = Arc::new(std::mem::take(&mut compiled.conditional_shapes));
         compiled.runtime_mode = match compiler {
             Compiler::Interpreter => super::RuntimeMode::Interpreter,
             _ => super::RuntimeMode::Native,
@@ -730,7 +743,7 @@ impl RhsProgram {
             .collect();
         flat_layout_order(&mut writes, &model);
         flat_layout_order(&mut aux, &model);
-        let set_names = state_set_names(&flat, &model);
+        let set_names = state_set_names(&flat, &model, &conditional_shapes);
         let mut entries = Vec::new();
         for (input, names) in [(TileInput::U, &writes), (TileInput::Aux, &aux)] {
             for name in names {
@@ -801,6 +814,7 @@ impl RhsProgram {
                 scatter,
                 identity,
                 declared,
+                conditional_shapes,
             }),
         })
     }
@@ -1081,6 +1095,7 @@ impl RhsProgram {
                 scatter: Vec::new(),
                 identity: true,
                 declared: Arc::new(c.declared_names.clone()),
+                conditional_shapes: Arc::default(),
                 blocks,
                 layout,
                 model: Arc::new(model),
@@ -1302,17 +1317,24 @@ fn check_lengths(
 }
 
 /// The index-set name of each axis of each compiled state, from its
-/// flattened declaration (empty when it names none at the compiled rank).
+/// flattened declaration, else the shape the build gave it (`built`,
+/// [`ProgramInner::conditional_shapes`]); empty when it names none at the
+/// compiled rank.
 fn state_set_names(
     flat: &FlattenedSystem,
     compiled: &ProgramModel,
+    built: &BuiltShapes,
 ) -> HashMap<String, Vec<String>> {
     let sizes = index_set_sizes(flat);
     compiled
         .var_shapes
         .iter()
         .map(|(name, vs)| {
-            let declared = flat.state_variables.get(name).and_then(|v| v.shape.clone());
+            let declared = flat
+                .state_variables
+                .get(name)
+                .and_then(|v| v.shape.clone())
+                .or_else(|| built.get(name).cloned());
             let extents: Vec<i64> = vs.shape.iter().map(|&n| n as i64).collect();
             (name.clone(), axis_set_names(declared, &extents, &sizes))
         })
@@ -1398,7 +1420,8 @@ fn var_infos(prog: &RhsProgram, dec: &Decomposition) -> HashMap<String, VarInfo>
     let prog = &*prog.inner;
     let flat = prog.flat();
     let sizes = index_set_sizes(flat);
-    let set_names = state_set_names(flat, &prog.model);
+    let built = &*prog.conditional_shapes;
+    let set_names = state_set_names(flat, &prog.model, built);
     let mut out = HashMap::new();
     for (name, vs) in &prog.model.var_shapes {
         let sets = &set_names[name];
@@ -1437,7 +1460,8 @@ fn var_infos(prog: &RhsProgram, dec: &Decomposition) -> HashMap<String, VarInfo>
             .observed_variables
             .get(var)
             .or_else(|| flat.state_variables.get(var))
-            .and_then(|v| v.shape.clone());
+            .and_then(|v| v.shape.clone())
+            .or_else(|| built.get(var).cloned());
         let extents: Vec<i64> = ranges.iter().map(|r| r.1).collect();
         let sets = axis_set_names(declared, &extents, &sizes);
         let axes = (0..ranges.len())

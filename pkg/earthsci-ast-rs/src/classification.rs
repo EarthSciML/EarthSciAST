@@ -896,8 +896,22 @@ impl DeclaredRank {
     /// would let the same document come back rank-0 down one path and rank-1
     /// down the other.
     pub(crate) fn of_declaration(decl: Option<&crate::types::ModelVariable>) -> Self {
+        Self::of_built(decl, None)
+    }
+
+    /// [`Self::of_declaration`] for a variable the build gave `built` as its
+    /// shape where the declaration has none (esm-spec §4.3.4, an unshaped
+    /// mixed-rank `ifelse`: `ArrayCompiled::conditional_shapes`). A route that
+    /// reads a flattened declaration rather than the built model passes it,
+    /// so it reads the same rank the build did.
+    pub(crate) fn of_built(
+        decl: Option<&crate::types::ModelVariable>,
+        built: Option<&Vec<String>>,
+    ) -> Self {
         match decl {
-            Some(v) if v.shape.as_ref().is_none_or(|s| s.is_empty()) => DeclaredRank::Scalar,
+            Some(v) if v.shape.as_ref().or(built).is_none_or(|s| s.is_empty()) => {
+                DeclaredRank::Scalar
+            }
             _ => DeclaredRank::Unknown,
         }
     }
