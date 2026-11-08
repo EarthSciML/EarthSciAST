@@ -13,7 +13,7 @@ use super::kernels::{
     copy_strided, data_gather, data_gather_sub, ew_select, ew1, ew2, exec_gather, fill_strided,
     index_gather, reduce_axis, reduce_rows, scan_axis, seg_reduce, table_gather,
 };
-use super::resolve::{Rv, SrcView, resolve_rv, resolve_scalar, resolve_src, rm_strides};
+use super::resolve::{Rv, SrcView, resolve_rv, resolve_scalar, resolve_src, rm_strides, src_base};
 use super::*;
 use crate::simulate_array::eval::{latch_gather_fault, latch_ordered_fault};
 
@@ -169,6 +169,14 @@ pub(super) fn run_range(
             .get(pc)
             .filter(|&&p| p != crate::precision::active())
             .map(|&p| crate::precision::enter(p));
+        // A scalar instruction runs here, in a few lines, instead of through
+        // the general dispatch below: a scalar right-hand side (a template's
+        // lookup at one query) is mostly such instructions, each a few
+        // flops, so their dispatch was most of its cost.
+        if unsafe { exec_scalar(&prog.instrs[pc], env, slab_ptr, slot_off) } {
+            pc += 1;
+            continue;
+        }
         match &prog.instrs[pc] {
             Instr::LoadForcing { forcing, out } => {
                 let fr = &prog.forcings[*forcing as usize];
@@ -324,6 +332,64 @@ pub(super) fn run_range(
         }
         pc += 1;
     }
+}
+
+/// Run `ins` if it is a scalar instruction with a scalar form here, and say
+/// whether it ran. Each arm is the scalar branch of its [`exec_straight`]
+/// arm, operation for operation: an elementwise op on scalar slots, a
+/// one-element load, a one-element gather that does not fault (a faulting
+/// one is left to the general path, which latches it), a count at one query.
+///
+/// # Safety
+/// As [`exec_straight`].
+#[inline]
+unsafe fn exec_scalar(ins: &Instr, env: &Env, slab_ptr: *mut f64, slot_off: &[usize]) -> bool {
+    let prog = env.prog;
+    let scalar_out = |out: &SlotId| prog.slots[*out as usize].scalar;
+    let put = |out: &SlotId, v: f64| unsafe { *slab_ptr.add(slot_off[*out as usize]) = v };
+    let get = |o: &Operand| resolve_scalar(o, env, slab_ptr, slot_off);
+    match ins {
+        Instr::Bin { op, a, b, out } if scalar_out(out) => {
+            put(out, binary_kernel_of(*op)(get(a), get(b)));
+        }
+        Instr::Un { op, a, out } if scalar_out(out) => put(out, unary_kernel_of(*op)(get(a))),
+        Instr::Neg { a, out } if scalar_out(out) => put(out, -get(a)),
+        Instr::Copy { a, out } if scalar_out(out) => put(out, get(a)),
+        Instr::Select { cond, a, b, out } if scalar_out(out) => {
+            let c = get(cond);
+            let x = get(a);
+            let y = get(b);
+            put(out, if c != 0.0 { x } else { y });
+        }
+        Instr::LoadElem { src, idx, out } => {
+            let (base, shape) = src_base(src, env, slab_ptr, slot_off);
+            let mut soff = 0usize;
+            let mut stride = 1usize;
+            for d in (0..idx.len()).rev() {
+                soff += idx[d] * stride;
+                stride *= shape[d];
+            }
+            put(out, unsafe { *base.add(soff) });
+        }
+        Instr::DataGather { src, spec, out, .. } => {
+            let spec = &prog.data_gathers[*spec as usize];
+            if !spec.shape.is_empty() || spec.subs.len() > 4 {
+                return false;
+            }
+            let mut v = [0.0f64; 4];
+            for (d, o) in spec.subs.iter().enumerate() {
+                v[d] = get(o);
+            }
+            let (base, _) = src_base(src, env, slab_ptr, slot_off);
+            match spec.at(|d| v[d]) {
+                DataAt::Elem(p) => put(out, unsafe { *base.add(p) }),
+                DataAt::Ghost => put(out, 0.0),
+                DataAt::Fault { .. } => return false,
+            }
+        }
+        _ => return false,
+    }
+    true
 }
 
 /// Everything a straight-line instruction reads besides its own scratch:
@@ -665,21 +731,21 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             x,
             out,
         } => {
-            let av = resolve_src(axis, env, slab_ptr, slot_off);
+            let (aptr, ashape) = src_base(axis, env, slab_ptr, slot_off);
             // The window is read unchecked below, so it is checked here, once
             // per execution, in every build: an axis whose run-time box no
             // longer holds the window the lowering saw is refused, as the
             // reference executor and the XLA emitter refuse it.
             assert!(
-                av.shape.len() == 1 && *lo as usize + *n as usize <= av.shape[0],
+                ashape.len() == 1 && *lo as usize + *n as usize <= ashape[0],
                 "Count axis has shape {:?}, which does not hold the window {}..{}",
-                &av.shape[..],
+                ashape,
                 lo,
                 *lo as usize + *n as usize
             );
             // Rank 1, row-major: the window is contiguous. `out` never shares
             // storage with the axis (the slab coloring keeps them apart).
-            let win = unsafe { std::slice::from_raw_parts(av.ptr.add(*lo as usize), *n as usize) };
+            let win = unsafe { std::slice::from_raw_parts(aptr.add(*lo as usize), *n as usize) };
             let at = |j: usize| win[j];
             // A window the lowering could not see is checked here, once per
             // execution: O(n) against the O(n) per element it can save.
@@ -868,6 +934,26 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             faults,
         } => {
             let spec = &prog.data_gathers[*spec as usize];
+            // One element read at scalar subscripts: the position straight
+            // from the subscripts' values, no source view, no subscript
+            // views. A read that faults takes the general path below, which
+            // latches it.
+            if spec.shape.is_empty() && spec.subs.len() <= 4 {
+                let mut v = [0.0f64; 4];
+                for (d, o) in spec.subs.iter().enumerate() {
+                    v[d] = resolve_scalar(o, env, slab_ptr, slot_off);
+                }
+                let (base, _) = src_base(src, env, slab_ptr, slot_off);
+                let x = match spec.at(|d| v[d]) {
+                    DataAt::Elem(p) => Some(unsafe { *base.add(p) }),
+                    DataAt::Ghost => Some(0.0),
+                    DataAt::Fault { .. } => None,
+                };
+                if let Some(x) = x {
+                    unsafe { *slab_ptr.add(slot_off[*out as usize]) = x };
+                    return;
+                }
+            }
             let sv = resolve_src(src, env, slab_ptr, slot_off);
             let subs: SmallVec<[Rv; 4]> = spec
                 .subs
