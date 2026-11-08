@@ -740,6 +740,7 @@ end
 # (document order) — the §9.7.3 body-reference edges.
 function _collect_apply_names!(out::Vector{String}, x)
     _walk_json(x) do _, n
+        _is_array(n) && return _may_hold_object(n)
         _is_object(n) || return true
         op = _raw_get(n, "op")
         if op !== nothing && string(op) == APPLY_EXPRESSION_TEMPLATE_OP
