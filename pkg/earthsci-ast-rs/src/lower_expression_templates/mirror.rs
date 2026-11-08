@@ -619,3 +619,50 @@ fn subst_shared(node: &Sv, bindings: &Binds, memo: &mut PtrMemo<Sv>) -> Sv {
         _ => node.clone(),
     }
 }
+
+/// Whether `v` holds an `apply_expression_template` op anywhere.
+fn has_apply(v: &Value) -> bool {
+    match v {
+        Value::Object(o) => {
+            o.get("op").and_then(|w| w.as_str()) == Some(APPLY_OP) || o.values().any(has_apply)
+        }
+        Value::Array(a) => a.iter().any(has_apply),
+        _ => false,
+    }
+}
+
+/// Take every element of the array `v` that holds no template reference out
+/// of it, leaving `null` in its place, and return them with their positions
+/// ([`unpark_plain`] puts them back). A pass with no `match` rule to fire
+/// leaves such an element as it is, so it need not mirror it (an equation of
+/// const data is most of a document's size). Nothing is taken when `rules` is
+/// true, or when `v` is not an array.
+pub(super) fn park_plain(v: &mut Value, rules: bool) -> Vec<(usize, Value)> {
+    let Value::Array(items) = v else {
+        return Vec::new();
+    };
+    if rules {
+        return Vec::new();
+    }
+    items
+        .iter_mut()
+        .enumerate()
+        .filter(|(_, e)| !e.is_null() && !has_apply(e))
+        .map(|(i, e)| (i, std::mem::take(e)))
+        .collect()
+}
+
+/// Put back what [`park_plain`] took out of `v` (or out of the array that
+/// replaced it, which has the same length: a pass with no `match` rule
+/// rewrites inside elements, never the list).
+pub(super) fn unpark_plain(v: &mut Value, parked: Vec<(usize, Value)>) {
+    if parked.is_empty() {
+        return;
+    }
+    let Value::Array(items) = v else {
+        unreachable!("only an array's elements are parked");
+    };
+    for (i, e) in parked {
+        items[i] = e;
+    }
+}
