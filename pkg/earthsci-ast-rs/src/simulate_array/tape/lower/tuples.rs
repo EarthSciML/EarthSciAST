@@ -851,14 +851,16 @@ impl TapeBuilder<'_> {
             strides[d] = strides[d + 1] * bx.shape[d + 1];
         }
         let mut cols: Vec<Vec<f64>> = vec![Vec::new(); nd];
-        let mut pos = vec![1.0f64; keep.len()];
+        // Each output cell's 0-based position in the list (the first kept
+        // cell at a dropped one, whose gathered value the mask discards).
+        let mut pos = vec![0u32; keep.len()];
         let mut m = 0usize;
         for (p, &k) in keep.iter().enumerate() {
             if k == 0.0 {
                 continue;
             }
+            pos[p] = tape_index(m, "compacted cells")?;
             m += 1;
-            pos[p] = m as f64;
             for d in 0..nd {
                 cols[d].push((bx.lo[d] + ((p / strides[d]) % bx.shape[d]) as i64) as f64);
             }
@@ -906,12 +908,38 @@ impl TapeBuilder<'_> {
             Some(_) => bail_tape!("faq: a compacted term is not over the kept cells"),
             None => self.emit_fill(&term, &[m], &[1], Cadence::Const),
         };
-        // Each output cell's position in the list (1 at a dropped cell, whose
-        // gathered value the mask discards).
-        let pos_slot = self.emit_const_data(&bx.shape, &bx.lo, Arc::new(pos), false)?;
-        self.ranges.insert(pos_slot, (1.0, m as f64));
-        let base = Expr::Variable(PW_SYM.to_string());
-        let gathered = self.emit_data_gather(&base, &vals, &[LV::Arr(pos_slot)], Some(bx))?;
+        // Every output cell gathers its position in the list, known at build:
+        // one table gather into the box's cells in row-major order, then the
+        // box's own shape.
+        let n = pos.len();
+        let table = tape_index(self.gather_tables.len(), "gather tables")?;
+        self.gather_tables.push(GatherTable {
+            src_shape: DimU::from_elem(m, 1),
+            pos,
+        });
+        let sec = self.placement(self.lv_cadence(&vals));
+        let flat = if nd == 1 {
+            self.new_slot(&bx.shape, &bx.lo, false, sec)
+        } else {
+            self.new_slot(&[n], &[1], false, sec)
+        };
+        let instr = Instr::TableGather {
+            src: self.src_of(&vals),
+            table,
+            out: flat,
+        };
+        self.emit(instr, sec);
+        let gathered = if nd == 1 {
+            LV::Arr(flat)
+        } else {
+            let out = self.new_slot(&bx.shape, &bx.lo, false, sec);
+            let instr = Instr::Reshape {
+                src: SrcRef::Slot(flat),
+                out,
+            };
+            self.emit(instr, sec);
+            LV::Arr(out)
+        };
         let mask_slot = self.emit_const_data(&bx.shape, &bx.lo, Arc::new(keep), false)?;
         self.emit_select(LV::Arr(mask_slot), gathered, LV::Lit(identity))
     }
