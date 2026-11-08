@@ -492,17 +492,25 @@ def size_doc(family, sp, s):
             file, names = "relational", ["argmin"]
             continue
         else:  # overlap_planar
-            sets.update({"cell_verts": 4, "coord": 2, "sites": s})
+            # One pair per site, each ring a one-cell stack read at the cell of
+            # a one-cell faq: the leaf takes only a ring read at a loop symbol.
+            sets.update({"cell_verts": 4, "coord": 2, "one": 1})
             if i == 1:
-                a, b = overlap_pairs(12)
-                step = max(1, len(a) // s)
-                v["ring_a"] = unknown(["sites", "cell_verts", "coord"])
-                v["ring_b"] = unknown(["sites", "cell_verts", "coord"])
-                eqs += [{"lhs": "ring_a", "rhs": const(a[::step][:s])}, {"lhs": "ring_b", "rhs": const(b[::step][:s])}]
-            area = (op("polygon_intersection_area", ix("ring_a", i), ix("ring_b", i), manifold="planar") if sp == "leaf"
-                    else apply("overlap_area_planar", ring_a="ring_a", cell_a=i, nv_a=4, ring_b="ring_b", cell_b=i, nv_b=4))
-            site = op("*", area, op("+", 1, x))
+                pa, pb = overlap_pairs(12)
+                step = max(1, len(pa) // s)
+                pairs = list(zip(pa[::step], pb[::step]))[:s]
+            ra, rb = f"ra{i}", f"rb{i}"
+            for name, ring in ((ra, pairs[i - 1][0]), (rb, pairs[i - 1][1])):
+                v[name] = unknown(["one", "cell_verts", "coord"])
+                eqs.append({"lhs": name, "rhs": const([ring])})
+            area = (op("polygon_intersection_area", ix(ra, "j"), ix(rb, "j"), manifold="planar") if sp == "leaf"
+                    else apply("overlap_area_planar", ring_a=ra, cell_a="j", nv_a=4, ring_b=rb, cell_b="j", nv_b=4))
+            r = f"r{i}"
+            v[r] = unknown(["one"])
+            eqs.append({"lhs": ix(r, "j"), "rhs": faq(op("*", area, op("+", 1, x)), ["j"], {"j": {"from": "one"}})})
+            sites.append(ix(r, 1))
             file, names = "geometry", ["overlap_area_planar"]
+            continue
         r = f"r{i}"
         v[r] = unknown()
         eqs.append({"lhs": r, "rhs": site})
