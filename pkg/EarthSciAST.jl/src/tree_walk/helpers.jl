@@ -1231,10 +1231,19 @@ end
 # (it reads no state, no loop counter and no live buffer) is wrapped in a
 # `:cellmemo` node that keeps the last (parameters, `t`) it was evaluated at
 # and its value, so it is computed once per cell. The value is the walk's own
-# value, so the result is unchanged bit for bit. The entry is one immutable
-# tuple swapped whole, so a concurrent reader sees a consistent pair.
-mutable struct _CellMemo
-    @atomic entry::Any
+# value, so the result is unchanged bit for bit. `P` is the evaluator's
+# parameter `NamedTuple` type, so an entry is stored inline and a miss
+# allocates nothing. Each thread has its own entry: only the task running on a
+# thread reads or writes that thread's entry, and it does not yield between
+# the read and the write, so threads never share one; a task that moves to
+# another thread between two cells finds an entry whose key says whether it
+# holds this cell's value.
+struct _CellMemo{P}
+    entries::Vector{Tuple{Bool, P, Float64, Float64}}
+end
+function _CellMemo{P}() where {P <: NamedTuple}
+    blank = (false, P(ntuple(_ -> NaN, Val(fieldcount(P)))), NaN, NaN)
+    return _CellMemo{P}(fill(blank, Threads.maxthreadid()))
 end
 
 const _CELL_IMPURE_KINDS = (
@@ -1242,7 +1251,7 @@ const _CELL_IMPURE_KINDS = (
     _NK_RECUR_GATHER, _NK_LIVE_GATHER,
 )
 
-function _cell_memoize!(root::_Node)
+function _cell_memoize!(root::_Node, ::Type{P}) where {P <: NamedTuple}
     refs = IdDict{_Node, Int}()
     pure = IdDict{_Node, Bool}()
     function visit(n::_Node)
@@ -1260,7 +1269,7 @@ function _cell_memoize!(root::_Node)
     for (n, c) in refs
         (c >= 2 && pure[n] && !isempty(n.children)) || continue
         wrap[n] = _mknode(
-            kind = _NK_OP, op = :cellmemo, payload = _CellMemo(nothing), children = _Node[n]
+            kind = _NK_OP, op = :cellmemo, payload = _CellMemo{P}(), children = _Node[n]
         )
     end
     isempty(wrap) && return root
@@ -1281,13 +1290,18 @@ function _cell_memoize!(root::_Node)
 end
 
 @inline function _eval_cellmemo(n::_Node, u, p, t, ::Type{T})::Float64 where {T}
-    m = n.payload::_CellMemo
-    key = (p, t)
-    e = @atomic m.entry
-    e !== nothing && e[1] === key && return e[2]::Float64
-    v = Float64(_eval_node(n.children[1], u, p, t, T))
-    @atomic m.entry = (key, v)
-    return v
+    m = n.payload
+    if m isa _CellMemo{typeof(p)} && t isa Float64
+        tid = Threads.threadid()
+        if tid <= length(m.entries)
+            e = @inbounds m.entries[tid]
+            e[1] && e[2] === p && e[3] === t && return e[4]
+            v = Float64(_eval_node(n.children[1], u, p, t, T))
+            @inbounds m.entries[tid] = (true, p, t, v)
+            return v
+        end
+    end
+    return Float64(_eval_node(n.children[1], u, p, t, T))
 end
 
 # Build the compile-once evaluator for `expr` over an `nidx`-D output grid, or
@@ -1343,7 +1357,10 @@ function _cellwise_compile_once_impl(
             vmap, const_arrays,
             _EMPTY_PGATHER, bmemo, bound
         )
-        _cell_memoize!(_compile(resolved, vmap, Set{Symbol}(psyms), reg, bmemo))
+        _cell_memoize!(
+            _compile(resolved, vmap, Set{Symbol}(psyms), reg, bmemo),
+            NamedTuple{Tuple(psyms), NTuple{length(psyms), Float64}}
+        )
     catch err
         _is_resource_error(err) && rethrow()
         return nothing   # anything unsupported → per-cell fallback
