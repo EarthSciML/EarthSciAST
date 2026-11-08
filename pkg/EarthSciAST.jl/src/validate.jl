@@ -2420,9 +2420,40 @@ function _units_view(file::EsmFile, model_name::AbstractString, model::Model)
     file.component_templates === nothing && return model
     reg = get(file.component_templates, "models.$model_name", nothing)
     reg === nothing && return model
-    view = deepcopy(model)
+    view = _expansion_copy(model)
     _expand_model_refs!(view, reg)
     return view
+end
+
+# A copy of `model` that `_expand_model_refs!` can expand without touching the
+# original: the containers it rewrites (the equation vectors, the variable
+# map, and the same in every subsystem model) are copied, and what it only
+# reads or replaces whole — each `Equation`, each `ModelVariable`, the events,
+# tests and analyses, a non-model subsystem — is shared. A whole `deepcopy`
+# also copied every inline array the equations carry (a regrid's polygon
+# rings), work that grew with the data.
+function _expansion_copy(model::Model)
+    seen = IdDict{Any, Any}()
+    _share_unexpanded!(seen, model)
+    return Base.deepcopy_internal(model, seen)
+end
+function _share_unexpanded!(seen::IdDict{Any, Any}, m::Model)
+    for eq in m.equations
+        seen[eq] = eq
+    end
+    for eq in m.initialization_equations
+        seen[eq] = eq
+    end
+    for (_, v) in m.variables
+        seen[v] = v
+    end
+    for x in (m.discrete_events, m.continuous_events, m.tests, m.analyses, m.guesses)
+        seen[x] = x
+    end
+    for (_, sub) in m.subsystems
+        sub isa Model ? _share_unexpanded!(seen, sub) : (seen[sub] = sub)
+    end
+    return seen
 end
 
 # The reaction system the units engine judges: `_units_view` for a reaction
