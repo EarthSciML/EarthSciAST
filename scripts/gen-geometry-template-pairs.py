@@ -91,6 +91,10 @@ def scan_documents():
         rel = os.path.relpath(path, REPO)
         if rel.startswith(os.path.join("tests", "invalid")):
             continue
+        # The relational rewrites copy their source documents' polygons, which
+        # this scan already reaches at the source.
+        if rel.startswith(os.path.join("tests", "conformance", "relational_templates", "rewrites")):
+            continue
         try:
             doc = json.load(open(path))
         except (json.JSONDecodeError, UnicodeDecodeError):
