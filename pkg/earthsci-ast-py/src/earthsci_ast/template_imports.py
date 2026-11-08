@@ -70,6 +70,7 @@ from .json_walk import (
     _is_object,
     _rewrite_json,
     _walk_json,
+    expand_ref_env,
     load_ref_raw,
 )
 
@@ -1462,7 +1463,9 @@ def _load_import_raw(ref: str, base_dir: str, origin: str):
 
 def _canonical_ref(ref: str, base_dir: str) -> str:
     """Canonical key for a reference, used for import-cycle detection: URLs
-    as-is; local paths resolved to absolute paths (as §4.7)."""
+    as-is; local paths resolved to absolute paths (as §4.7). A standard-library
+    ref keys on its bundled file, one-to-one with its ``esm:std/<file>`` name."""
+    ref = expand_ref_env(ref, base_dir)
     if ref.startswith("http://") or ref.startswith("https://"):
         return ref
     return os.path.abspath(os.path.join(base_dir, ref))
@@ -2157,7 +2160,7 @@ def collect_mount_declared_metaparameters(
         if not isinstance(ref_str, str):
             return
         try:
-            expanded = expand_ref_env(ref_str)
+            expanded = expand_ref_env(ref_str, str(base_path))
             key = _ref_location(expanded, str(base_path))
             if key in seen:
                 return

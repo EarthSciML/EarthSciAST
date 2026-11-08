@@ -1,0 +1,47 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "mount_solar_subsystem",
+    "description": "Mounts the standard-library solar subsystem with `esm:std/solar.esm` at a `subsystems.<k>` entry (esm-spec §4.7). Relative refs inside the bundled solar.esm (its calendar.esm import) resolve among the bundled files.",
+    "authors": [
+      "EarthSciML"
+    ]
+  },
+  "models": {
+    "Photolysis": {
+      "subsystems": {
+        "Solar": {
+          "ref": "../../../../lib/solar.esm"
+        }
+      },
+      "variables": {
+        "k_max": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.012
+        },
+        "j_rate": {
+          "type": "unknown",
+          "units": "1/s"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "j_rate",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "k_max",
+              {
+                "op": "cos",
+                "args": [
+                  "Solar.solar_zenith_angle"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

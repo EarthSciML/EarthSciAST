@@ -160,7 +160,7 @@ where = ["src"]
 "" = "src"
 
 [tool.setuptools.package-data]
-earthsci_ast = ["data/*.json"]
+earthsci_ast = ["data/*.json", "data/lib/*.esm"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

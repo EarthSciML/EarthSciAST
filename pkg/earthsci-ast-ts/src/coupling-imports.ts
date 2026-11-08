@@ -19,6 +19,7 @@ import type { EsmFile, CouplingEntry, CouplingImport, Expression } from './types
 import { numericValue } from './numeric-literal.js'
 import { deepClone, isObject } from './object-utils.js'
 import { expandRefEnv, isRemoteRef, joinPath } from './path-utils.js'
+import { classifyStdRef, readStdRef } from './stdlib.js'
 import { ERROR_CODES } from './errors.js'
 import { EsmMachineryError } from './lower-expression-templates.js'
 import { prepareDocumentOps } from './parse.js'
@@ -322,6 +323,20 @@ export function collectRoleSegments(edge: unknown): Set<string> {
 // here — so the shared form is adopted.
 // ---------------------------------------------------------------------------
 
+function parseStdCouplingLibrary(ref: string, content: string): unknown {
+  let raw: unknown
+  try {
+    raw = JSON.parse(content)
+  } catch (e) {
+    throw new EsmMachineryError(
+      ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
+      `coupling-library ref '${ref}' is not valid JSON: ${e instanceof Error ? e.message : String(e)}`,
+    )
+  }
+  prepareDocumentOps(raw)
+  return raw
+}
+
 function defaultLoadRef(ref: string, basePath: string): unknown {
   if (isRemoteRef(ref)) {
     throw new EsmMachineryError(
@@ -563,7 +578,13 @@ export function expandCouplingImports(
     }
     let lib: unknown
     try {
-      lib = loadRef(ref, basePath)
+      // esm-spec §4.7: a standard-library ref reads the bundled lib/, whatever
+      // `loadRef` hook the caller supplied.
+      const std = classifyStdRef(ref, basePath)
+      lib =
+        std !== undefined
+          ? parseStdCouplingLibrary(ref, readStdRef(ref, std))
+          : loadRef(ref, basePath)
     } catch (e) {
       if (e instanceof EsmMachineryError) throw e
       throw new EsmMachineryError(

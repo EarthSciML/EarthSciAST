@@ -1980,7 +1980,11 @@ fn lexical_normalize(p: &Path) -> PathBuf {
 fn canonical_ref(ref_str: &str, base_dir: &Path) -> String {
     // esm-spec §4.7: the cycle/cache key is built from the EXPANDED ref, so it
     // names the same file `load_import_raw` actually reads.
-    let expanded = crate::ref_loading::expand_env_refs(ref_str);
+    let expanded = crate::stdlib::expand_ref(ref_str);
+    // A bundled file's key is its `esm:std/<name>` identity (esm-spec §4.7).
+    if let Some(found) = crate::stdlib::resolve(&expanded, base_dir) {
+        return found.map_or_else(|_| expanded.into_owned(), |(identity, _)| identity);
+    }
     lexical_normalize(&base_dir.join(expanded.as_ref()))
         .to_string_lossy()
         .into_owned()
@@ -1994,28 +1998,41 @@ fn load_import_raw(
     // esm-spec §4.7: expand before classifying, so a variable holding a URL is
     // rejected as the remote ref it expands to rather than joined onto
     // `base_dir` as a path segment.
-    let expanded = crate::ref_loading::expand_env_refs(ref_str);
+    let expanded = crate::stdlib::expand_ref(ref_str);
     let ref_str: &str = &expanded;
-    if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
-        return Err(err(
-            codes::TEMPLATE_IMPORT_UNRESOLVED,
-            format!(
-                "{origin}: failed to load template-library ref '{ref_str}': remote refs are not \
-                 fetched by the Rust loader; download the file and import it by local path"
-            ),
-        ));
-    }
-    let path = lexical_normalize(&base_dir.join(ref_str));
-    let content = std::fs::read_to_string(&path).map_err(|e| {
-        err(
-            codes::TEMPLATE_IMPORT_UNRESOLVED,
-            format!(
-                "{origin}: template-library file not found or unreadable: {} (from ref \
-                 '{ref_str}'): {e}",
-                path.display()
-            ),
-        )
-    })?;
+    let (path, content) = match crate::stdlib::resolve(ref_str, base_dir) {
+        Some(Ok((identity, text))) => (PathBuf::from(identity), text.to_string()),
+        Some(Err(why)) => {
+            return Err(err(
+                codes::TEMPLATE_IMPORT_UNRESOLVED,
+                format!("{origin}: failed to load template-library ref '{ref_str}': {why}"),
+            ));
+        }
+        None => {
+            if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
+                return Err(err(
+                    codes::TEMPLATE_IMPORT_UNRESOLVED,
+                    format!(
+                        "{origin}: failed to load template-library ref '{ref_str}': remote refs \
+                         are not fetched by the Rust loader; download the file and import it by \
+                         local path"
+                    ),
+                ));
+            }
+            let path = lexical_normalize(&base_dir.join(ref_str));
+            let content = std::fs::read_to_string(&path).map_err(|e| {
+                err(
+                    codes::TEMPLATE_IMPORT_UNRESOLVED,
+                    format!(
+                        "{origin}: template-library file not found or unreadable: {} (from ref \
+                         '{ref_str}'): {e}",
+                        path.display()
+                    ),
+                )
+            })?;
+            (path, content)
+        }
+    };
     let mut raw: Value = serde_json::from_str(&content).map_err(|e| {
         err(
             codes::TEMPLATE_IMPORT_UNRESOLVED,
@@ -2561,8 +2578,28 @@ fn visit_mount_ref(
         return;
     };
     // esm-spec §4.7 `${VAR}` expansion, before the remote classification below.
-    let expanded = crate::ref_loading::expand_env_refs(ref_str);
+    let expanded = crate::stdlib::expand_ref(ref_str);
     let ref_str: &str = &expanded;
+    if let Some(found) = crate::stdlib::resolve(ref_str, base_path) {
+        // A bundled library file: same walk, over its text, from the bundle's
+        // virtual directory. An unresolved one contributes nothing, as an
+        // unreadable file does below.
+        let Ok((identity, text)) = found else {
+            return;
+        };
+        if !seen.insert(identity) {
+            return;
+        }
+        let Ok(child) = serde_json::from_str::<Value>(text) else {
+            return;
+        };
+        if let Some(decls) = child.get("metaparameters").and_then(|v| v.as_object()) {
+            out.extend(decls.keys().cloned());
+        }
+        let std_dir = Path::new(crate::stdlib::STD_BASE);
+        collect_mount_declared_into(&child, std_dir, follow_imports, seen, out);
+        return;
+    }
     // Remote refs are not fetched by this crate: the ref loader refuses them at
     // BOTH mount forms (`load_ref_document`), so no document here is ever
     // URL-loaded and no relative ref ever needs joining onto a URL directory.

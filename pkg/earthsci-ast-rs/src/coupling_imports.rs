@@ -294,27 +294,41 @@ fn default_load_ref(ref_str: &str, base_path: &str) -> Result<Value, DiagnosticE
     // formats (relative path, absolute path, URL, `${VAR}`), with the same
     // per-binding capability rules as a template import" — so `${VAR}` expands
     // here too, before the remote classification.
-    let expanded = crate::ref_loading::expand_env_refs(ref_str);
+    let expanded = crate::stdlib::expand_ref(ref_str);
     let ref_str: &str = &expanded;
-    if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
-        return Err(err(
-            codes::COUPLING_IMPORT_UNRESOLVED,
-            format!(
-                "remote coupling_import ref '{ref_str}' cannot be loaded synchronously; \
-                 download the file and import it by local path"
-            ),
-        ));
-    }
-    let path = std::path::Path::new(base_path).join(ref_str);
-    let content = std::fs::read_to_string(&path).map_err(|e| {
-        err(
-            codes::COUPLING_IMPORT_UNRESOLVED,
-            format!(
-                "coupling-library file not found or unreadable: {} (from ref '{ref_str}'): {e}",
-                path.display()
-            ),
-        )
-    })?;
+    let base = std::path::Path::new(base_path);
+    let (path, content) = match crate::stdlib::resolve(ref_str, base) {
+        Some(Ok((identity, text))) => (std::path::PathBuf::from(identity), text.to_string()),
+        Some(Err(why)) => {
+            return Err(err(
+                codes::COUPLING_IMPORT_UNRESOLVED,
+                format!("coupling_import ref '{ref_str}' does not resolve: {why}"),
+            ));
+        }
+        None => {
+            if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
+                return Err(err(
+                    codes::COUPLING_IMPORT_UNRESOLVED,
+                    format!(
+                        "remote coupling_import ref '{ref_str}' cannot be loaded synchronously; \
+                         download the file and import it by local path"
+                    ),
+                ));
+            }
+            let path = base.join(ref_str);
+            let content = std::fs::read_to_string(&path).map_err(|e| {
+                err(
+                    codes::COUPLING_IMPORT_UNRESOLVED,
+                    format!(
+                        "coupling-library file not found or unreadable: {} (from ref \
+                         '{ref_str}'): {e}",
+                        path.display()
+                    ),
+                )
+            })?;
+            (path, content)
+        }
+    };
     let mut raw: Value = serde_json::from_str(&content).map_err(|e| {
         err(
             codes::COUPLING_IMPORT_UNRESOLVED,

@@ -1,0 +1,47 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "mount_unknown_file",
+    "description": "Mounts `esm:std/nope.esm`, a file the bundled standard library does not contain: the subsystem-ref resolution error (esm-spec §4.7 rule 2).",
+    "authors": [
+      "EarthSciML"
+    ]
+  },
+  "models": {
+    "Photolysis": {
+      "subsystems": {
+        "Solar": {
+          "ref": "esm:std/nope.esm"
+        }
+      },
+      "variables": {
+        "k_max": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.012
+        },
+        "j_rate": {
+          "type": "unknown",
+          "units": "1/s"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "j_rate",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "k_max",
+              {
+                "op": "cos",
+                "args": [
+                  "Solar.solar_zenith_angle"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

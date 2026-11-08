@@ -357,6 +357,8 @@ mod solver_external_conformance;
 mod solver_time_span_conformance;
 #[path = "static_evaluation_assertions_conformance.rs"]
 mod static_evaluation_assertions_conformance;
+#[path = "stdlib_refs_conformance.rs"]
+mod stdlib_refs_conformance;
 #[path = "stoichiometric_matrix.rs"]
 mod stoichiometric_matrix;
 #[path = "structural_validation.rs"]

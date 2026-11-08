@@ -10,10 +10,53 @@ imported rather than mounted:
 ```json
 {
   "subsystems": {
-    "Solar": { "ref": "../lib/solar.esm" }
+    "Solar": { "ref": "esm:std/solar.esm" }
   }
 }
 ```
+
+## Referencing the library: `esm:std/<file>.esm`
+
+Every binding ships a copy of `lib/` inside its own package, and a ref spelled
+`esm:std/<file>.esm` resolves to that copy (`esm-spec.md` §4.7, "Standard-library
+references"). A document anywhere on disk, or one loaded from a string, reaches
+the library without knowing where the repository is:
+
+| Mechanism | Example |
+|---|---|
+| Subsystem mount (§4.7) | `"subsystems": { "Solar": { "ref": "esm:std/solar.esm" } }` |
+| Top-level mount (§4.7) | `"models": { "Solar": { "ref": "esm:std/solar.esm" } }` |
+| Template import (§9.7.2) | `"expression_template_imports": [{ "ref": "esm:std/interp.esm" }]` |
+| Coupling import (§10.10) | `{ "type": "coupling_import", "ref": "esm:std/<file>.esm", "bind": { ... } }` |
+
+The rules, in short:
+
+- Every binding MUST resolve the form; it is not an optional capability like URL
+  refs or `${VAR}` expansion.
+- The whole `esm:` scheme is reserved. A ref beginning with `esm:` is never read
+  as a path or a URL. A file the bundle does not contain (`esm:std/nope.esm`) and
+  any other `esm:` spelling are the mechanism's ordinary unresolved error
+  (`template_import_unresolved`, `coupling_import_unresolved`,
+  `unresolved_subsystem_ref`).
+- `${VAR}` is not expanded inside an `esm:` ref.
+- A relative ref inside a library file names another library file, so
+  `lib/solar.esm` importing `calendar.esm` works from the bundle.
+- The bundle is the `lib/` of the release, so the library a document reaches is
+  the one that ships with the format version its binding implements.
+
+Where each binding keeps its copy:
+
+| Binding | Bundled copy | How it is read |
+|---|---|---|
+| Julia | `pkg/EarthSciAST.jl/data/lib/` | files under `pkgdir(EarthSciAST)` |
+| Python | `pkg/earthsci-ast-py/src/earthsci_ast/data/lib/` | package data |
+| Rust | `pkg/earthsci-ast-rs/src/stdlib/` | `include_str!`, listed by `build.rs` |
+| TypeScript | `pkg/earthsci-ast-ts/src/stdlib-bundle.ts` | a generated module of the file texts |
+| Go | `pkg/earthsci-ast-go/pkg/esm/stdlib/` | `go:embed` |
+
+`lib/` is the only copy to edit. `scripts/sync-lib.sh` writes all of the above
+(and the docs site's `docs/static/lib/`) from it, and `scripts/sync-lib.sh --check`
+fails CI when any copy differs from `lib/`.
 
 ## Design principle: AST compositions go here, not in the registry
 
@@ -145,7 +188,7 @@ To use:
   "models": {
     "MyChem": {
       "subsystems": {
-        "Solar": { "ref": "../lib/solar.esm" }
+        "Solar": { "ref": "esm:std/solar.esm" }
       },
       "variables": {
         "j_NO2": { "type": "unknown", "units": "1/s" }
@@ -173,7 +216,7 @@ mounted as a subsystem.
 
 ```json
 {
-  "expression_template_imports": [{ "ref": "../lib/interp.esm" }],
+  "expression_template_imports": [{ "ref": "esm:std/interp.esm" }],
   "equations": [
     {
       "lhs": "k_photo",
@@ -445,7 +488,9 @@ primitives and inherit their tolerance contracts.
    atmospheric standard-pressure profile, saturation vapor pressure) and is
    expressible in AST + the §9.2 registry.
 2. Author `lib/<name>.esm` as a single self-contained subsystem, with
-   parameter inputs and unknown outputs defined by equations.
+   parameter inputs and unknown outputs defined by equations. A ref to another
+   library file is written relative (`calendar.esm`) or as `esm:std/calendar.esm`.
+   Then run `scripts/sync-lib.sh` to copy it into the docs site and every binding.
 3. Document it in this file, including units, references, and the
    composition's algebraic form.
 4. Add a fixture under `tests/valid/lib_<name>_inclusion.esm` exercising

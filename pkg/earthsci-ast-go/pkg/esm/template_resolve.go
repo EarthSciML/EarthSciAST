@@ -173,7 +173,13 @@ func instantiateScope(scope *templateScope, values map[string]any, ctx string) e
 // the plain path it expands to one and the same key, so a document reached
 // under both spellings is visited once and a cycle through an expanded ref is
 // still detected.
+//
+// A standard-library ref (esm-spec §4.7) is identified by its
+// `esm:std/<file>.esm` string.
 func canonicalImportRef(ref, baseDir string) string {
+	if identity, _, isStd := classifyStdRef(ref, baseDir); isStd {
+		return identity
+	}
 	return canonicalRefPath(expandRefEnv(ref), baseDir)
 }
 
