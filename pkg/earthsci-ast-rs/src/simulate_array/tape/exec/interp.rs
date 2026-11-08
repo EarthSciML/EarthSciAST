@@ -146,7 +146,7 @@ pub(super) fn run_range(
         }
         if scalar_runs && sweep.is_none() {
             let start = pc;
-            while pc < range.end && !pending.last().is_some_and(|&(pos, _)| pos as usize == pc) {
+            while pc < range.end && pending.last().is_none_or(|&(pos, _)| pos as usize != pc) {
                 if !unsafe { scode[pc].run(env, slab_ptr, slot_off) } {
                     break;
                 }
