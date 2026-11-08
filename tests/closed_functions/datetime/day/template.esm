@@ -18,7 +18,7 @@
     "datetime_day_template": {
       "expression_template_imports": [
         {
-          "ref": "../../../../lib/calendar.esm",
+          "ref": "esm:std/calendar.esm",
           "only": [
             "day"
           ]

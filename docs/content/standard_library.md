@@ -39,8 +39,9 @@ The rules, in short:
   (`template_import_unresolved`, `coupling_import_unresolved`,
   `unresolved_subsystem_ref`).
 - `${VAR}` is not expanded inside an `esm:` ref.
-- A relative ref inside a library file names another library file, so
-  `lib/solar.esm` importing `calendar.esm` works from the bundle.
+- A relative ref inside a library file names another library file, so a
+  library file importing `calendar.esm` works from the bundle (`lib/solar.esm`
+  itself writes `esm:std/calendar.esm`).
 - The bundle is the `lib/` of the release, so the library a document reaches is
   the one that ships with the format version its binding implements.
 
@@ -93,7 +94,7 @@ either a new `lib/` file or a new §9 entry, apply the table above.
 | [`lib/calendar.esm`](../lib/calendar.esm) | template library (no subsystem) | expression templates `year`, `month`, `day`, `hour`, `minute`, `second`, `day_of_year`, `julian_day`, `is_leap_year`, `seconds_since_midnight` | the template parameter `t` (s) |
 | [`lib/solar.esm`](../lib/solar.esm) | `Solar` | `solar_declination` (rad), `equation_of_time` (min), `true_solar_time` (min), `hour_angle` (rad), `cos_zenith`, `solar_zenith_angle` (rad) | `t_utc` (s), `lat` (deg), `lon` (deg) |
 | [`lib/interp.esm`](../lib/interp.esm) | template library (no subsystem) | expression templates `searchsorted`, `linear`, `bilinear` | the template parameters (arrays, query, axis lengths) |
-| [`lib/relational.esm`](../lib/relational.esm) | template library (no subsystem) | expression templates `argmin`, `argmax`, `argmin_where`, `argmax_where`, `pair_key`, `edge_key`, `rank_of` | the template parameters (candidate values and counts, key components and their ranges) |
+| [`lib/relational.esm`](../lib/relational.esm) | template library (no subsystem) | expression templates `argmin`, `argmax`, `argmin_where`, `argmax_where`, `pair_key`, `edge_key`, `rank_of`, `rank_of_set` | the template parameters (candidate values and counts, key components and their ranges) |
 | [`lib/geometry.esm`](../lib/geometry.esm) | template library (no subsystem) | expression templates `overlap_area_planar`, `overlap_area_spherical`, `lonlat_to_unit` | the template parameters (ring stacks, cell indices, vertex-slot counts) |
 
 ### `lib/calendar.esm`
@@ -107,7 +108,7 @@ component imports the templates it needs and applies them:
 ```json
 {
   "expression_template_imports": [
-    { "ref": "../lib/calendar.esm", "only": ["hour", "minute", "second"] }
+    { "ref": "esm:std/calendar.esm", "only": ["hour", "minute", "second"] }
   ],
   "equations": [
     {
@@ -173,8 +174,9 @@ The NOAA Spencer-Fourier solar-position model. `solar_declination` and
 `equation_of_time` are 5- and 7-term Fourier series in the fractional-year
 angle γ; `solar_zenith_angle` then composes lat/lon and the NOAA hour-angle
 formula. It imports the `day_of_year`, `hour`, `minute` and `second`
-templates of `lib/calendar.esm` for its calendar fields, so a mount of
-`lib/solar.esm` resolves that import beside it (§4.7 edge pipeline). Every
+templates of `lib/calendar.esm` for its calendar fields through the
+standard-library ref `esm:std/calendar.esm`, so a mount of `lib/solar.esm`
+resolves that import wherever the mounting document lives (§4.7). Every
 constant is a binary64 literal, so the result is bit-defined relative to the
 calendar templates (which give the §9.2 `datetime.*` values) and the §4.2
 elementary-function ops; for `|t_utc| ≥ 2^52` s the outputs are NaN. Cross-binding tolerance is ≤ 10 ulp,
@@ -271,7 +273,7 @@ symbol as its index. `n`, the number of candidates, is an integer used as a
 
 ```json
 {
-  "expression_template_imports": [{ "ref": "../lib/relational.esm" }],
+  "expression_template_imports": [{ "ref": "esm:std/relational.esm" }],
   "equations": [
     {
       "lhs": { "op": "index", "args": ["assign", "i"] },
@@ -388,7 +390,7 @@ A conservative-regridding narrow phase over the planar manifold:
 
 ```json
 {
-  "expression_template_imports": [{ "ref": "../lib/geometry.esm" }],
+  "expression_template_imports": [{ "ref": "esm:std/geometry.esm" }],
   "equations": [
     {
       "lhs": "A_ij",

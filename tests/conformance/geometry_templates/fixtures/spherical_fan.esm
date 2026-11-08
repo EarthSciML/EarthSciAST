@@ -42,7 +42,7 @@
     "GeometrySphericalFanTemplate": {
       "expression_template_imports": [
         {
-          "ref": "../../../../lib/geometry.esm",
+          "ref": "esm:std/geometry.esm",
           "only": [
             "overlap_area_spherical",
             "lonlat_to_unit"

@@ -18,7 +18,7 @@
     "Photolysis": {
       "subsystems": {
         "Solar": {
-          "ref": "../../lib/solar.esm"
+          "ref": "esm:std/solar.esm"
         }
       },
       "variables": {

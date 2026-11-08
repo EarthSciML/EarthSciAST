@@ -55,7 +55,7 @@
     "EdgeEnumerationAreaEff": {
       "expression_template_imports": [
         {
-          "ref": "../../../../lib/relational.esm"
+          "ref": "esm:std/relational.esm"
         }
       ],
       "variables": {

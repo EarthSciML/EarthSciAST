@@ -20,12 +20,11 @@ binding harnesses compare the two forms.
 
 import copy
 import json
-import os
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[3]
-LIB = ROOT / "lib" / "relational.esm"
+LIB_REF = "esm:std/relational.esm"  # the bundled standard library (esm-spec §4.7)
 
 
 def op(o, *a):
@@ -210,12 +209,11 @@ def main():
         src = ROOT / entry["source"]
         doc = json.loads(src.read_text())
         dst = ROOT / entry["out"] if "out" in entry else HERE / f"{entry['id']}.esm"
-        ref = os.path.relpath(LIB, dst.parent)
         for mname in entry["models"]:
             m = rewrite_model(doc["models"][mname], doc["index_sets"], entry.get("keys", {}))
             imports = m.get("expression_template_imports", [])
             m = {
-                "expression_template_imports": imports + [{"ref": ref}],
+                "expression_template_imports": imports + [{"ref": LIB_REF}],
                 **{k: v for k, v in m.items() if k != "expression_template_imports"},
             }
             doc["models"][mname] = m

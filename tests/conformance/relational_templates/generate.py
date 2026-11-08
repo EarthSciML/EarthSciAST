@@ -9,7 +9,7 @@ from pathlib import Path
 
 TIER = Path(__file__).resolve().parent
 ROOT = TIER.parents[2]
-LIB_REF = "../../../../lib/relational.esm"
+LIB_REF = "esm:std/relational.esm"
 
 NAN, INF, NINF = "NaN", "Inf", "-Inf"
 # (name, op, candidate values, expected index, the op's index where it differs, note)
