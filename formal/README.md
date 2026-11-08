@@ -48,6 +48,9 @@ python3 ../scripts/formal-audit.py all
 - **Statements are never edited to make them pass.** If the spec changes, the
   old property is retired (with a pointer to the ruling) and a new one added.
   A fix turns a refuted property into a proven one with its statement unchanged.
+  An edit that only adds an instance binder an extended model needs (such as
+  `[Elem α]` when the evaluator gained elementary functions) to an existing
+  statement is allowed and does not count as weakening it (ruling 17).
 - **A refutation needs a reproducer**: a fixture under `tests/` showing the
   behaviour in at least one binding, or a `QUESTIONS.md` entry showing the spec
   admits it. A Lean counterexample with neither is presumed to be a model bug.
