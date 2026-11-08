@@ -100,7 +100,8 @@
       }
      }
     ]
-   }
+   },
+   "golden": "golden/bin_skolem_spatial_join.json"
   },
   {
    "id": "skolem_distinct_rank",
@@ -368,7 +369,8 @@
       }
      }
     ]
-   }
+   },
+   "golden": "golden/skolem_distinct_rank.json"
   },
   {
    "id": "edge_enumeration_area_eff",
@@ -455,7 +457,8 @@
      "variable": "edge_dense_id"
     },
     "rhs": true
-   }
+   },
+   "golden": "golden/edge_enumeration_area_eff.json"
   },
   {
    "id": "pure_topology",
@@ -519,7 +522,8 @@
      "faq": "edge_set",
      "variable": "edge_dense_id"
     }
-   }
+   },
+   "golden": "golden/pure_topology.json"
   },
   {
    "id": "conservative_regrid_assembly",
@@ -561,7 +565,8 @@
      }
     ],
     "rhs": true
-   }
+   },
+   "golden": "golden/conservative_regrid_assembly.json"
   },
   {
    "id": "conservative_regrid_overlap_join",
@@ -657,7 +662,8 @@
      }
     ],
     "vi_only": true
-   }
+   },
+   "golden": "golden/conservative_regrid_overlap_join.json"
   },
   {
    "id": "wildfire_atmosphere_ocean",
@@ -683,7 +689,8 @@
    "cases": [],
    "compare": {
     "inline_tests": true
-   }
+   },
+   "golden": "golden/wildfire_atmosphere_ocean.json"
   },
   {
    "id": "cross_domain_coupling",
@@ -783,7 +790,8 @@
       "template": "assign_binned"
      }
     ]
-   }
+   },
+   "golden": "golden/nearest_generator_binned.json"
   },
   {
    "id": "regrid_N100",
@@ -801,7 +809,8 @@
    ],
    "compare": {
     "rhs": true
-   }
+   },
+   "golden": "golden/regrid_N100.json"
   },
   {
    "id": "data_sources_ingest_and_select",

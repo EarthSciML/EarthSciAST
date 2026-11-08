@@ -1,0 +1,18 @@
+{
+  "fixture": "nearest_generator_binned",
+  "reference_binding": "python",
+  "reference_compiler": "interpreter",
+  "reference_form": "op",
+  "cases": [
+    {
+      "assignments": {
+        "assign_binned": [
+          1.0,
+          2.0,
+          3.0,
+          2.0
+        ]
+      }
+    }
+  ]
+}
