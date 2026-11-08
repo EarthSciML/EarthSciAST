@@ -1,0 +1,15 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "mount_unknown_file_toplevel",
+    "description": "Mounts `esm:std/nope.esm` as a top-level `models.<k>` entry: the subsystem-ref resolution error (esm-spec §4.7 rule 2).",
+    "authors": [
+      "EarthSciML"
+    ]
+  },
+  "models": {
+    "Solar": {
+      "ref": "esm:std/nope.esm"
+    }
+  }
+}

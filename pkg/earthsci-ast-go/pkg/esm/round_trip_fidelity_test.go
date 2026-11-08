@@ -165,7 +165,6 @@ var transformingFixtures = map[string]string{
 
 	// Subsystem `{"ref": ...}` resolution: the mount is replaced in place by
 	// the referenced file's spliced-in variables and equations.
-	"lib_calendar_subsystem_inclusion.esm":       "subsystem ref resolution",
 	"lib_solar_subsystem_inclusion.esm":          "subsystem ref resolution",
 	"subsystem_index_set_merge.esm":              "subsystem ref resolution + index_sets merge",
 	"mount_rename_two_columns.esm":               "subsystem ref resolution + index_sets merge under a mount-edge index_set_rename",

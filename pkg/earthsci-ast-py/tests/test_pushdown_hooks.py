@@ -25,10 +25,12 @@ from earthsci_ast.pushdown_rewrite import (
     _pushdown_provider_gates,
     desugar_pushdown,
 )
+from earthsci_ast.esm_types import Equation
 from earthsci_ast.simulation_array import (
     _binning_coord_arrays,
     _feed_back_vi_members,
     _fetch_gated_providers,
+    _join_producer_nodes,
     _neutral_selection_to_native,
 )
 from earthsci_ast.sympy_bridge import SimulationError
@@ -285,6 +287,45 @@ def test_binning_coords_seeded_producer_missing_input_degrades():
         input_arrays={},
     )
     assert "X" not in out
+
+
+def test_join_column_seeds_only_the_observed_it_names():
+    # A producer joins on the column `bx`; another component's `Other.bx` (and
+    # what it reads) is a different variable and is not materialized for it.
+    idx = {"op": "faq", "output_idx": ["e"], "ranges": {"e": {"from": "recs"}}}
+    bx = _obs({**idx, "args": ["lon"], "expr": {"op": "index", "args": ["lon", "e"]}})
+    other_cx = _obs({**idx, "args": ["lat"], "expr": {"op": "index", "args": ["lat", "e"]}})
+    other_bx = _obs(
+        {**idx, "args": ["Other.cx"], "expr": {"op": "index", "args": ["Other.cx", "e"]}}
+    )
+    producer = _obs(
+        {
+            "op": "faq",
+            "output_idx": ["m"],
+            "ranges": {"r": {"from": "recs"}, "c": {"from": "recs"}},
+            "expr": {"op": "true", "args": []},
+            "distinct": True,
+            "semiring": "bool_and_or",
+            "join": [{"on": [["bx", "c"]]}],
+            "key": {"op": "index", "args": ["bx", "r"]},
+            "args": ["bx"],
+        }
+    )
+    seeds = _join_producer_nodes([Equation(lhs="P", rhs=producer), Equation(lhs="bx", rhs=bx)])
+    assert seeds == [producer]
+    out = _binning_coord_arrays(
+        [("bx", bx), ("Other.cx", other_cx), ("Other.bx", other_bx)],
+        [],
+        {"recs": {"kind": "interval", "size": 3}},
+        {},
+        {},
+        {},
+        0,
+        producer_seed_nodes=seeds,
+        input_arrays={"lon": np.array([1.0, 2.0, 3.0]), "lat": np.array([4.0, 5.0, 6.0])},
+    )
+    np.testing.assert_array_equal(out["bx"], [1.0, 2.0, 3.0])
+    assert "Other.bx" not in out and "Other.cx" not in out
 
 
 def test_binning_coords_no_specs_no_seeds_is_noop():

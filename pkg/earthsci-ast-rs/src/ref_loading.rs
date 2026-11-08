@@ -359,25 +359,38 @@ fn load_ref_document(
     // esm-spec §4.7: `${VAR}` expands from the environment BEFORE the ref is
     // classified, so a variable holding a URL is recognised as the remote ref
     // it expands to rather than joined onto `base` as a path segment.
-    let expanded = expand_env_refs(ref_str);
+    // A standard-library ref (`esm:...`) is taken as written and resolves to
+    // the bundled copy of lib/, as does a relative ref inside a bundled file.
+    let expanded = crate::stdlib::expand_ref(ref_str);
     let ref_str: &str = &expanded;
-    if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
-        return Err(err(
-            noun.code,
-            format!(
-                "Remote {} are not supported in the Rust loader; \
-                 download {ref_str:?} to a local file first",
-                noun.remote_plural
-            ),
-        ));
-    }
-
-    let canonical = base.join(ref_str).canonicalize().map_err(|e| {
-        err(
-            noun.code,
-            format!("failed to resolve {} {ref_str:?}: {e}", noun.item),
-        )
-    })?;
+    let (canonical, bundled) = match crate::stdlib::resolve(ref_str, base) {
+        Some(Ok((identity, text))) => (PathBuf::from(identity), Some(text)),
+        Some(Err(why)) => {
+            return Err(err(
+                noun.code,
+                format!("failed to resolve {} {ref_str:?}: {why}", noun.item),
+            ));
+        }
+        None => {
+            if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
+                return Err(err(
+                    noun.code,
+                    format!(
+                        "Remote {} are not supported in the Rust loader; \
+                         download {ref_str:?} to a local file first",
+                        noun.remote_plural
+                    ),
+                ));
+            }
+            let canonical = base.join(ref_str).canonicalize().map_err(|e| {
+                err(
+                    noun.code,
+                    format!("failed to resolve {} {ref_str:?}: {e}", noun.item),
+                )
+            })?;
+            (canonical, None)
+        }
+    };
 
     if visited.contains(&canonical) {
         return Err(err(
@@ -392,17 +405,20 @@ fn load_ref_document(
     visited.insert(canonical.clone());
 
     let loaded = (|| -> Result<Value, DiagnosticError> {
-        let content = std::fs::read_to_string(&canonical).map_err(|e| {
-            err(
-                noun.code,
-                format!(
-                    "failed to read {} {}: {}",
-                    noun.item,
-                    canonical.display(),
-                    e
-                ),
-            )
-        })?;
+        let content = match bundled {
+            Some(text) => Cow::Borrowed(text),
+            None => Cow::Owned(std::fs::read_to_string(&canonical).map_err(|e| {
+                err(
+                    noun.code,
+                    format!(
+                        "failed to read {} {}: {}",
+                        noun.item,
+                        canonical.display(),
+                        e
+                    ),
+                )
+            })?),
+        };
         let mut parsed: Value = serde_json::from_str(&content).map_err(|e| {
             err(
                 noun.code,
@@ -1207,9 +1223,11 @@ fn absolutize_nested_refs(value: &mut Value, base_dir: &Path) {
                 // is absolute, as the Julia reference does — classifying first
                 // would anchor an expanded ABSOLUTE ref at `base_dir` as though
                 // it were relative.
-                let r = expand_env_refs(r).into_owned();
-                let is_abs =
-                    r.starts_with('/') || r.starts_with("http://") || r.starts_with("https://");
+                let r = crate::stdlib::expand_ref(r).into_owned();
+                let is_abs = r.starts_with('/')
+                    || r.starts_with("http://")
+                    || r.starts_with("https://")
+                    || crate::stdlib::is_std_ref(&r);
                 if !is_abs {
                     let joined = base_dir.join(&r);
                     let abs = joined

@@ -47,6 +47,7 @@ import {
   normalizeRef,
   readFileSyncNode,
 } from './path-utils.js'
+import { STDLIB_BASE, classifyStdRef, readStdRef } from './stdlib.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import { applyMountUrlSubstitutions, resolveDataSourceUrls } from './data-source-urls.js'
 import { loadString, validateSchema, ROOT_PATH } from './parse.js'
@@ -1164,7 +1165,18 @@ function resolveRefEdge(
   try {
     let content: string
     try {
-      content = read(ref, basePath)
+      // esm-spec §4.7: a standard-library ref reads the bundled lib/, whatever
+      // reader the caller supplied.
+      const std = classifyStdRef(ref, basePath)
+      if (std !== undefined) {
+        try {
+          content = readStdRef(ref, std)
+        } catch (error) {
+          throw new RefLoadError(ref, error instanceof Error ? error : new Error(String(error)))
+        }
+      } else {
+        content = read(ref, basePath)
+      }
     } catch (error) {
       // Re-throw with the offending mount's pointer attached.
       if (error instanceof RefLoadError) {
@@ -1972,6 +1984,14 @@ function loadRefSync(ref: string, basePath: string): string {
 }
 
 async function loadRef(ref: string, basePath: string): Promise<string> {
+  const std = classifyStdRef(ref, basePath)
+  if (std !== undefined) {
+    try {
+      return readStdRef(ref, std)
+    } catch (error) {
+      throw new RefLoadError(ref, error instanceof Error ? error : new Error(String(error)))
+    }
+  }
   // esm-spec §4.7 "URL (remote) references": a URL ref, or a relative one
   // inside a URL-loaded document joined onto its URL directory.
   const location = normalizeRef(ref, basePath)
@@ -2026,6 +2046,7 @@ async function loadLocalRef(ref: string, basePath: string): Promise<string> {
  * the prefetch, the edge walk and the forwarding walk (`forwardThroughLeaf`).
  */
 function refBaseOf(ref: string, basePath: string): string {
+  if (classifyStdRef(ref, basePath) !== undefined) return STDLIB_BASE
   const location = normalizeRef(ref, basePath)
   return isRemoteRef(location) ? getRemoteBase(location) : getLocalBase(ref, basePath)
 }

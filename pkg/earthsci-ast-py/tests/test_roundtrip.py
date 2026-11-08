@@ -316,6 +316,25 @@ def test_roundtrip_normalizes_integral_floats_keeps_fractional():
     assert eqs[3]["rhs"]["args"] == [1, 2.5]
 
 
+def test_const_value_writes_in_canonical_number_form():
+    """A ``const`` node's ``value`` obeys the same rule (CONFORMANCE_SPEC
+    §5.5.3.1 rule 1) at any depth, so a table authored ``[100.0, 0.5]`` or built
+    in code with floats is written ``[100, 0.5]``, as every other binding writes
+    it; and the numbers of the expression object a ``bc`` value may hold."""
+    from earthsci_ast.esm_types import ExprNode
+    from earthsci_ast.parse import _parse_expression
+    from earthsci_ast.serialize import _serialize_expression
+
+    built = _serialize_expression(ExprNode(op="const", args=[], value=[[100.0, 0.5], [2, -0.0]]))
+    assert json.dumps(built["value"], separators=(",", ":")) == "[[100,0.5],[2,0]]"
+    parsed = _serialize_expression(_parse_expression({"op": "const", "args": [], "value": 4.0}))
+    assert json.dumps(parsed["value"]) == "4"
+    bc = _parse_expression({"op": "bc", "args": ["u"], "value": {"op": "*", "args": [2.0, "k"]}})
+    assert json.dumps(_serialize_expression(bc)["value"], sort_keys=True) == (
+        '{"args": [2, "k"], "op": "*"}'
+    )
+
+
 def test_roundtrip_tests_and_analyses_fixture():
     """Round-trip the tests_analyses_comprehensive fixture: inline Test/Assertion/
     Analysis/Plot/ParameterSweep blocks must survive parse -> serialize (gt-krpg)."""

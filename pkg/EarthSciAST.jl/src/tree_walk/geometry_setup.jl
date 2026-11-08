@@ -182,6 +182,44 @@ function _expr_has_polygon_intersection_area(e::OpExpr, seen::IdDict{OpExpr, Not
 end
 _expr_has_polygon_intersection_area(::ASTExpr) = false
 
+# A join-gated array `faq` whose body is itself a reduction over a nested
+# `faq` (`A_ij[i,j] = overlap_area_planar(src, i, 4, tgt, j, 4)` expanded from
+# lib/geometry.esm: per candidate pair, a sum over edges of min/max folds over
+# the other ring's half-planes) is the pure-AST form of the fused overlap-area
+# leaf. Over const inputs it is the same build-once setup array, and it takes
+# the same compiled setup sweep (`_materialize_geom_array`): its readers gather
+# a const array per cell instead of an `index(faq, …)` of a gated reduction the
+# right-hand-side tiers cannot fold. The body must speak only the setup
+# language (`_GEO_EVAL_OPS`). Without a join the same holds for a body whose
+# reductions nest two deep (the templates' sum over edges of min/max folds
+# over the other ring's half-planes): unrolled into a right-hand-side kernel
+# that body is tens of thousands of nodes per cell, while the setup sweep
+# loops over it. A gated faq whose body has no nested reduction (a right-hand
+# side's `Σ_i W[i,j]·F[i]`), or an ungated one whose reductions nest only one
+# deep, is not matched.
+function _is_setup_join_reduction(e)
+    (e isa OpExpr && _is_faq_op(e.op) && e.expr_body isa OpExpr) || return false
+    (e.output_idx !== nothing && !isempty(e.output_idx)) || return false
+    _body_needs_general_eval(e) && return false
+    depth = _faq_nesting(e.expr_body::OpExpr, IdDict{OpExpr, Int}())
+    gated = e.join !== nothing || e.join_gates !== nothing
+    return gated ? depth >= 1 : depth >= 2
+end
+# How deep `faq` reductions nest inside `e` (0: none).
+function _faq_nesting(e::OpExpr, memo::IdDict{OpExpr, Int})
+    got = get(memo, e, nothing)
+    got === nothing || return got
+    d = 0
+    for a in e.args
+        a isa OpExpr && (d = max(d, _faq_nesting(a, memo)))
+    end
+    e.expr_body isa OpExpr && (d = max(d, _faq_nesting(e.expr_body::OpExpr, memo)))
+    _is_faq_op(e.op) && (d += 1)
+    return memo[e] = d
+end
+_model_has_setup_join_reduction(equations) =
+    _anyof(eq -> eq.lhs isa VarExpr && _is_setup_join_reduction(eq.rhs), equations)
+
 # An intersection-area leaf lives in an equation LHS/RHS — from esm 1.0.0 an
 # observed unknown's defining body is its equation, so there is nowhere else to
 # look.
@@ -362,6 +400,19 @@ end
 # aggregate onto `pd_support__<C>` — and when that aggregate's weight is an
 # intersection area, its body IS setup-time geometry.
 function _geo_index_extent(ref, index_sets, derived_extents)
+    # A dense `[1, n]` tuple (a template's loop over a vertex-slot count,
+    # esm-spec §9.6.1) is the same loop as an index set of size n. Another
+    # lower bound has no setup-time form.
+    if ref isa AbstractVector
+        (length(ref) == 2 && ref[1] isa Integer && ref[1] == 1 && ref[2] isa Integer) ||
+            throw(
+            TreeWalkError(
+                "E_TREEWALK_GEOMETRY_SETUP",
+                "setup-time geometry loops only over an index set or a dense [1, n] range, not $(ref)"
+            )
+        )
+        return max(Int(ref[2]), 0)
+    end
     name = ref isa IndexSetRef ? ref.from : String(ref)
     haskey(derived_extents, name) && return derived_extents[name]
     s = index_sets === nothing ? nothing : get(index_sets, name, nothing)
@@ -684,7 +735,7 @@ function _geom_sweep_map!(
         # declined to drive; `nothing` (the usual case) compiles away.
         _geo_ov_ok(ov, u) || continue
         _geo_gate_ok(gates, filt, u) || continue
-        v = _eval_node(body, u, nothing, 0.0, Float64)
+        v = _geo_body_eval(body, u)
         @inbounds arr[I] = v
     end
     return arr
@@ -709,7 +760,7 @@ function _geom_sweep_contract!(
             end
             _geo_ov_ok(ov, u) || continue
             _geo_gate_ok(gates, filt, u) || continue
-            acc = fold(acc, _eval_node(body, u, nothing, 0.0, Float64))
+            acc = fold(acc, _geo_body_eval(body, u))
         end
         @inbounds arr[I] = acc
     end
@@ -1082,7 +1133,7 @@ function _geom_sweep_pairs_map!(
                 u[restpos[d]] = Float64(R[d])
             end
             _geo_gate_ok(gates, filt, u) || continue
-            v = _eval_node(body, u, nothing, 0.0, Float64)
+            v = _geo_body_eval(body, u)
             @inbounds arr[CartesianIndex(ntuple(d -> ix[d], Val(N)))] = v
         end
     end
@@ -1126,7 +1177,7 @@ function _geom_sweep_restrict_contract!(
                     u[nout + k] = Float64(k == gc ? vals[C[k]] : C[k])
                 end
                 _geo_gate_ok(gates, filt, u) || continue
-                acc = fold(acc, _eval_node(body, u, nothing, 0.0, Float64))
+                acc = fold(acc, _geo_body_eval(body, u))
             end
         end
         @inbounds arr[I] = acc
@@ -1182,6 +1233,13 @@ function _materialize_geom_array(
     gates = _geo_slot_gates(faq, g)
     filt = faq.filter === nothing ? nothing : _geo_compile(faq.filter, g)
     body = _geo_compile(faq.expr_body, g)
+    if _compiler_plan_now().share_subtrees
+        roots = _geo_memoize!(filt === nothing ? _Node[body] : _Node[filt, body])
+        filt === nothing ? (body = roots[1]) : ((filt, body) = (roots[1], roots[2]))
+    end
+    # The body as native code when the emitter models it (the walker otherwise).
+    kbody = _geo_kernel(body)
+    body = kbody === nothing ? body : kbody
     u = zeros(Float64, nslots[])
     nout = length(out)
     # ---- The OVERLAP broad phase (see `_geo_overlap_gate` above) ----
@@ -1845,6 +1903,10 @@ function _geometry_setup_vars(
             _expr_has_intersect_polygon(defs[n]) ||
                 _expr_has_polygon_intersection_area(defs[n])
         ) && push!(setup, n)
+        # The pure-AST overlap area, over inputs that read no state.
+        _is_setup_join_reduction(defs[n]) &&
+            !_anyof(f -> f in state_var_names, _referenced_var_names(defs[n])) &&
+            push!(setup, n)
     end
     mvars = Set{String}(keys(model.variables))
     # An array observed is build-once-SETUP-materializable only if it does NOT read a

@@ -1,0 +1,15 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "mount_solar_toplevel",
+    "description": "Mounts the standard-library solar subsystem with `esm:std/solar.esm` as a top-level `models.<k>` entry (esm-spec §4.7, the second mount form).",
+    "authors": [
+      "EarthSciML"
+    ]
+  },
+  "models": {
+    "Solar": {
+      "ref": "esm:std/solar.esm"
+    }
+  }
+}

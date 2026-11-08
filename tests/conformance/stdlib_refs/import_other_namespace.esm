@@ -1,0 +1,77 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "import_other_namespace",
+    "description": "Imports `esm:other/interp.esm`. The whole `esm:` scheme is reserved and only `esm:std/<file>.esm` names a file, so this is template_import_unresolved, never a relative path (esm-spec §4.7 rules 1 and 2).",
+    "authors": [
+      "EarthSciML"
+    ]
+  },
+  "models": {
+    "M": {
+      "expression_template_imports": [
+        {
+          "ref": "esm:other/interp.esm"
+        }
+      ],
+      "variables": {
+        "s": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.5
+        },
+        "r": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "s"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": "r",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "linear",
+            "bindings": {
+              "table": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  10.0,
+                  20.0,
+                  40.0
+                ]
+              },
+              "axis": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0,
+                  2.0
+                ]
+              },
+              "x": "x",
+              "n": 3
+            }
+          }
+        }
+      ]
+    }
+  }
+}

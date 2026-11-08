@@ -1,7 +1,7 @@
 {
   "category": "value_invention_materialize",
   "version": "1.0",
-  "description": "Cross-binding conformance for build-time value invention over a `kind: \"derived\"` index set (esm-spec §4.2, §9.6.6; issue #266). A `distinct` faq under `bool_and_or` with a `skolem` key, exposed via `from_faq`, MUST be materialized at build so a contraction over the derived axis counts its members. Before this category Rust skipped value invention for any model without an `argmin`/`argmax` op and sized the unmaterialized axis as 0, so the document validated and silently answered 0; Julia and Python refused it because they read only supplied arrays as key columns, not an unknown defined by a `const` equation. The VALUE half pins the answer 3. The REFUSAL half pins that a producer which cannot run is refused rather than contracted as empty: an absent key column MUST be refused with `derived_index_set_unmaterialized`, and a state-reading key with `relational_node_in_continuous`, which a binding MAY raise at load (structural validation) or at build. In both refusals there is no actual, and in particular not 0.",
+  "description": "Cross-binding conformance for build-time value invention over a `kind: \"derived\"` index set (esm-spec §4.2, §9.6.6; issue #266). A `distinct` faq under `bool_and_or` with a `skolem` key, exposed via `from_faq`, MUST be materialized at build so a contraction over the derived axis counts its members. Before this category Rust skipped value invention for any model without an `argmin`/`argmax` op and sized the unmaterialized axis as 0, so the document validated and silently answered 0; Julia and Python refused it because they read only supplied arrays as key columns, not an unknown defined by a `const` equation. The VALUE half pins the answer 3. The REFUSAL half pins that a producer which cannot run is refused rather than contracted as empty: an absent key column MUST be refused with `derived_index_set_unmaterialized`, and a state-reading key with `relational_node_in_continuous`, which a binding MAY raise at load (structural validation) or at build. In both refusals there is no actual, and in particular not 0. The `_template` fixtures are the same documents with their skolem key written as lib/relational.esm `pair_key` templates (identical answers and refusals), and `key_out_of_range` pins `value_invention_key_out_of_range` for a key component outside its declared range.",
   "reference_binding": "julia",
   "bindings_required": ["julia", "python", "rust"],
   "scope_excluded": {
@@ -53,6 +53,72 @@
           "code": "relational_node_in_continuous",
           "refused_at": ["load", "build"],
           "note": "The key reads the ODE state `u`, so the producer classifies CONTINUOUS (CONFORMANCE_SPEC §5.7 guard 2)."
+        }
+      ]
+    },
+    {
+      "id": "composite_key_axis_template",
+      "path": "fixtures/composite_key_axis_template.esm",
+      "model": "CompositeKeyAxis",
+      "test_id": "derived_axis_has_three_members",
+      "cases": [
+        {
+          "assertion_idx": 1,
+          "variable": "distinctKeyCount",
+          "outcome": "value",
+          "expected": 3.0,
+          "note": "Template rewrite: the key is pair_key(polProcessID, engTechID, 0, 0, 1000, 1000) from lib/relational.esm. Four rows carry three distinct (polProcessID, engTechID) pairs; both key columns are unknowns defined by `const` equations."
+        }
+      ]
+    },
+    {
+      "id": "absent_key_factor_template",
+      "path": "fixtures/absent_key_factor_template.esm",
+      "model": "CompositeKeyAxis",
+      "test_id": "derived_axis_has_three_members",
+      "cases": [
+        {
+          "assertion_idx": 1,
+          "variable": "distinctKeyCount",
+          "outcome": "refused",
+          "code": "derived_index_set_unmaterialized",
+          "names": "composite_keys",
+          "note": "Template rewrite: the key is pair_key(polProcessID, engTechID, 0, 0, 1000, 1000). `engTechID` is a shaped parameter with no data, so the producer cannot run and the contraction has no members to count."
+        }
+      ]
+    },
+    {
+      "id": "state_dependent_key_template",
+      "path": "fixtures/state_dependent_key_template.esm",
+      "model": "CompositeKeyAxis",
+      "test_id": "derived_axis_has_three_members",
+      "cases": [
+        {
+          "assertion_idx": 1,
+          "variable": "distinctKeyCount",
+          "outcome": "refused",
+          "code": "relational_node_in_continuous",
+          "refused_at": [
+            "load",
+            "build"
+          ],
+          "note": "Template rewrite: the key is two nested pair_key calls. The key reads the ODE state `u`, so the producer classifies CONTINUOUS (CONFORMANCE_SPEC §5.7 guard 2)."
+        }
+      ]
+    },
+    {
+      "id": "key_out_of_range",
+      "path": "fixtures/key_out_of_range.esm",
+      "model": "CompositeKeyAxis",
+      "test_id": "derived_axis_has_three_members",
+      "cases": [
+        {
+          "assertion_idx": 1,
+          "variable": "distinctKeyCount",
+          "outcome": "refused",
+          "code": "value_invention_key_out_of_range",
+          "names": "key_set",
+          "note": "engTechID (121, 122) is outside the key template's declared range [0, 100), so the key is NaN: refused, naming the producer, rather than a silent collision."
         }
       ]
     }

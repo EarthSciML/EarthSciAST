@@ -1,0 +1,470 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "datetime_minute_template",
+    "description": "The `minute` template of lib/calendar.esm applied to scenarios of this directory's expected.json, which pins the same values for the `datetime.minute` closed function (esm-spec §9.2). Each scenario is one algebraic unknown defined by an `apply_expression_template` call on a parameter (in seconds) holding the scenario's instant; the inline test asserts the expected value exactly (tolerance 0). The scenarios outside the template's domain |t| < 2^52 s, where it returns NaN, stay in the binding harnesses, since JSON cannot write NaN. Run by the `datetime_templates` inline-test conformance tier.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "tags": [
+      "closed-function-registry",
+      "datetime",
+      "datetime.minute",
+      "expression-templates",
+      "standard-library"
+    ]
+  },
+  "models": {
+    "datetime_minute_template": {
+      "expression_template_imports": [
+        {
+          "ref": "esm:std/calendar.esm",
+          "only": [
+            "minute"
+          ]
+        }
+      ],
+      "variables": {
+        "s": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0,
+          "description": "Trivial state, so the document has something to integrate."
+        },
+        "t_epoch": {
+          "type": "parameter",
+          "units": "s",
+          "default": 0.0,
+          "description": "UTC instant of scenario `epoch`."
+        },
+        "r_epoch": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`minute` template on scenario `epoch` of expected.json: the Unix epoch."
+        },
+        "t_leap_2000_feb29": {
+          "type": "parameter",
+          "units": "s",
+          "default": 951825600.0,
+          "description": "UTC instant of scenario `leap_2000_feb29`."
+        },
+        "r_leap_2000_feb29": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`minute` template on scenario `leap_2000_feb29` of expected.json: Feb 29 of a year divisible by 400."
+        },
+        "t_not_leap_2100_feb28": {
+          "type": "parameter",
+          "units": "s",
+          "default": 4107542399.0,
+          "description": "UTC instant of scenario `not_leap_2100_feb28`."
+        },
+        "r_not_leap_2100_feb28": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`minute` template on scenario `not_leap_2100_feb28` of expected.json: the last second of Feb 28 in a century year that is not a leap year."
+        },
+        "t_leap_2400_mar01": {
+          "type": "parameter",
+          "units": "s",
+          "default": 13574649600.0,
+          "description": "UTC instant of scenario `leap_2400_mar01`."
+        },
+        "r_leap_2400_mar01": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`minute` template on scenario `leap_2400_mar01` of expected.json: Mar 1 of a far-future leap year."
+        },
+        "t_leap_2024_dec31": {
+          "type": "parameter",
+          "units": "s",
+          "default": 1735669845.0,
+          "description": "UTC instant of scenario `leap_2024_dec31`."
+        },
+        "r_leap_2024_dec31": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`minute` template on scenario `leap_2024_dec31` of expected.json: the last day of a leap year."
+        },
+        "t_pre_epoch_1969": {
+          "type": "parameter",
+          "units": "s",
+          "default": -1.0,
+          "description": "UTC instant of scenario `pre_epoch_1969`."
+        },
+        "r_pre_epoch_1969": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`minute` template on scenario `pre_epoch_1969` of expected.json: one second before the epoch."
+        },
+        "t_century_1900": {
+          "type": "parameter",
+          "units": "s",
+          "default": -2208945600.0,
+          "description": "UTC instant of scenario `century_1900`."
+        },
+        "r_century_1900": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`minute` template on scenario `century_1900` of expected.json: noon of Jan 1 in a century year before the epoch."
+        },
+        "t_frac_epoch_below_ulp": {
+          "type": "parameter",
+          "units": "s",
+          "default": -5e-324,
+          "description": "UTC instant of scenario `frac_epoch_below_ulp`."
+        },
+        "r_frac_epoch_below_ulp": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`minute` template on scenario `frac_epoch_below_ulp` of expected.json: one subnormal below the epoch, which floors into 1969-12-31T23:59:59."
+        },
+        "t_frac_example_86399_9999999": {
+          "type": "parameter",
+          "units": "s",
+          "default": 86399.9999999,
+          "description": "UTC instant of scenario `frac_example_86399_9999999`."
+        },
+        "r_frac_example_86399_9999999": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`minute` template on scenario `frac_example_86399_9999999` of expected.json: a fraction below the next day, floored, not rounded."
+        },
+        "t_frac_leap_day_start_2000_02_29_below_ulp": {
+          "type": "parameter",
+          "units": "s",
+          "default": 951782399.9999999,
+          "description": "UTC instant of scenario `frac_leap_day_start_2000_02_29_below_ulp`."
+        },
+        "r_frac_leap_day_start_2000_02_29_below_ulp": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`minute` template on scenario `frac_leap_day_start_2000_02_29_below_ulp` of expected.json: one ulp before a leap day."
+        },
+        "t_frac_leap_day_end_2000_03_01_at": {
+          "type": "parameter",
+          "units": "s",
+          "default": 951868800.0,
+          "description": "UTC instant of scenario `frac_leap_day_end_2000_03_01_at`."
+        },
+        "r_frac_leap_day_end_2000_03_01_at": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`minute` template on scenario `frac_leap_day_end_2000_03_01_at` of expected.json: the first instant after a leap day."
+        },
+        "t_frac_year_0000_below_half": {
+          "type": "parameter",
+          "units": "s",
+          "default": -62167219200.5,
+          "description": "UTC instant of scenario `frac_year_0000_below_half`."
+        },
+        "r_frac_year_0000_below_half": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`minute` template on scenario `frac_year_0000_below_half` of expected.json: half a second before year 0 (1 BC)."
+        },
+        "t_frac_year_minus_4713_at": {
+          "type": "parameter",
+          "units": "s",
+          "default": -210895056000.0,
+          "description": "UTC instant of scenario `frac_year_minus_4713_at`."
+        },
+        "r_frac_year_minus_4713_at": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`minute` template on scenario `frac_year_minus_4713_at` of expected.json: the first instant of year -4713."
+        },
+        "t_frac_year_minus_100000_below_ulp": {
+          "type": "parameter",
+          "units": "s",
+          "default": -3217862419200.0005,
+          "description": "UTC instant of scenario `frac_year_minus_100000_below_ulp`."
+        },
+        "r_frac_year_minus_100000_below_ulp": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`minute` template on scenario `frac_year_minus_100000_below_ulp` of expected.json: one ulp before year -100000, in era -251."
+        },
+        "t_frac_year_10000_above_ulp": {
+          "type": "parameter",
+          "units": "s",
+          "default": 253402300800.00003,
+          "description": "UTC instant of scenario `frac_year_10000_above_ulp`."
+        },
+        "r_frac_year_10000_above_ulp": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`minute` template on scenario `frac_year_10000_above_ulp` of expected.json: one ulp after the start of year 10000."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "s"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": "r_epoch",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "minute",
+            "bindings": {
+              "t": "t_epoch"
+            }
+          }
+        },
+        {
+          "lhs": "r_leap_2000_feb29",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "minute",
+            "bindings": {
+              "t": "t_leap_2000_feb29"
+            }
+          }
+        },
+        {
+          "lhs": "r_not_leap_2100_feb28",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "minute",
+            "bindings": {
+              "t": "t_not_leap_2100_feb28"
+            }
+          }
+        },
+        {
+          "lhs": "r_leap_2400_mar01",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "minute",
+            "bindings": {
+              "t": "t_leap_2400_mar01"
+            }
+          }
+        },
+        {
+          "lhs": "r_leap_2024_dec31",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "minute",
+            "bindings": {
+              "t": "t_leap_2024_dec31"
+            }
+          }
+        },
+        {
+          "lhs": "r_pre_epoch_1969",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "minute",
+            "bindings": {
+              "t": "t_pre_epoch_1969"
+            }
+          }
+        },
+        {
+          "lhs": "r_century_1900",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "minute",
+            "bindings": {
+              "t": "t_century_1900"
+            }
+          }
+        },
+        {
+          "lhs": "r_frac_epoch_below_ulp",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "minute",
+            "bindings": {
+              "t": "t_frac_epoch_below_ulp"
+            }
+          }
+        },
+        {
+          "lhs": "r_frac_example_86399_9999999",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "minute",
+            "bindings": {
+              "t": "t_frac_example_86399_9999999"
+            }
+          }
+        },
+        {
+          "lhs": "r_frac_leap_day_start_2000_02_29_below_ulp",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "minute",
+            "bindings": {
+              "t": "t_frac_leap_day_start_2000_02_29_below_ulp"
+            }
+          }
+        },
+        {
+          "lhs": "r_frac_leap_day_end_2000_03_01_at",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "minute",
+            "bindings": {
+              "t": "t_frac_leap_day_end_2000_03_01_at"
+            }
+          }
+        },
+        {
+          "lhs": "r_frac_year_0000_below_half",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "minute",
+            "bindings": {
+              "t": "t_frac_year_0000_below_half"
+            }
+          }
+        },
+        {
+          "lhs": "r_frac_year_minus_4713_at",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "minute",
+            "bindings": {
+              "t": "t_frac_year_minus_4713_at"
+            }
+          }
+        },
+        {
+          "lhs": "r_frac_year_minus_100000_below_ulp",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "minute",
+            "bindings": {
+              "t": "t_frac_year_minus_100000_below_ulp"
+            }
+          }
+        },
+        {
+          "lhs": "r_frac_year_10000_above_ulp",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "minute",
+            "bindings": {
+              "t": "t_frac_year_10000_above_ulp"
+            }
+          }
+        }
+      ],
+      "tolerance": {
+        "abs": 0,
+        "rel": 0
+      },
+      "tests": [
+        {
+          "id": "datetime_minute_template_t0",
+          "description": "Every scenario at t = 0.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "r_epoch",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "r_leap_2000_feb29",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "r_not_leap_2100_feb28",
+              "time": 0.0,
+              "expected": 59.0
+            },
+            {
+              "variable": "r_leap_2400_mar01",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "r_leap_2024_dec31",
+              "time": 0.0,
+              "expected": 30.0
+            },
+            {
+              "variable": "r_pre_epoch_1969",
+              "time": 0.0,
+              "expected": 59.0
+            },
+            {
+              "variable": "r_century_1900",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "r_frac_epoch_below_ulp",
+              "time": 0.0,
+              "expected": 59.0
+            },
+            {
+              "variable": "r_frac_example_86399_9999999",
+              "time": 0.0,
+              "expected": 59.0
+            },
+            {
+              "variable": "r_frac_leap_day_start_2000_02_29_below_ulp",
+              "time": 0.0,
+              "expected": 59.0
+            },
+            {
+              "variable": "r_frac_leap_day_end_2000_03_01_at",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "r_frac_year_0000_below_half",
+              "time": 0.0,
+              "expected": 59.0
+            },
+            {
+              "variable": "r_frac_year_minus_4713_at",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "r_frac_year_minus_100000_below_ulp",
+              "time": 0.0,
+              "expected": 59.0
+            },
+            {
+              "variable": "r_frac_year_10000_above_ulp",
+              "time": 0.0,
+              "expected": 0.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

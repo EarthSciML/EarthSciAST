@@ -1558,7 +1558,10 @@ def _ref_location(ref: str, base_path: str) -> str:
     document that wrote it: a URL as-is; a relative ref inside a document loaded
     from a URL joined onto that URL directory by RFC 3986 §5.2 (esm-spec §4.7
     "URL (remote) references"); otherwise the ``normpath``-joined local path.
-    Also the canonical key the circular-reference guards compare."""
+    Also the canonical key the circular-reference guards compare. A
+    standard-library ref (``esm:std/<file>.esm``) is the absolute path of its
+    bundled file, never a URL join, whatever ``base_path`` is."""
+    ref = expand_ref_env(ref, str(base_path))
     if _is_url(ref):
         return ref
     base = str(base_path)
@@ -1592,7 +1595,7 @@ def _fetch_ref_content(ref: str, base_path: str) -> str:
     """
     import urllib.error
 
-    ref = expand_ref_env(ref)  # esm-spec §4.7 ${VAR} expansion
+    ref = expand_ref_env(ref, base_path)  # esm-spec §4.7 ${VAR} / esm:std expansion
     # Delegate the URL-vs-local read to the shared json_walk primitive, keeping
     # this loader's own policy: normpath+exists resolution (matches dirs), the
     # platform-default open encoding, only the urllib error classes wrapped, and
@@ -1678,7 +1681,7 @@ def _absolutize_injected_imports(
         if isinstance(e, dict):
             ref = e.get("ref")
             if isinstance(ref, str) and ref:
-                ref = expand_ref_env(ref)
+                ref = expand_ref_env(ref, mount_base)
                 if not ref.startswith(("http://", "https://")) and not os.path.isabs(ref):
                     ref = os.path.abspath(os.path.join(mount_base, ref))
                 e["ref"] = ref
@@ -1754,7 +1757,7 @@ def _load_ref_data(
         resolve_template_machinery,
     )
 
-    ref_str = expand_ref_env(ref_str)  # esm-spec §4.7 ${VAR} expansion
+    ref_str = expand_ref_env(ref_str, base_path)  # esm-spec §4.7 ${VAR} / esm:std expansion
     if mount_pointer is None:
         ref_data = json.loads(_fetch_ref_content(ref_str, base_path))
     else:

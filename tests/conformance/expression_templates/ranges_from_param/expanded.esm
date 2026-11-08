@@ -1,0 +1,208 @@
+{
+  "esm": "1.1.0",
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 3
+    },
+    "sites": {
+      "kind": "interval",
+      "size": 2
+    }
+  },
+  "metadata": {
+    "authors": [
+      "EarthSciML"
+    ],
+    "description": "esm-spec §9.6.1: a template parameter written as the `from` of a `faq` `ranges` entry is a substitution site, so a template can range over an index set the caller names. `total(v, S)` sums `v` over `{\"from\": S}` and `count_below(x, v, S)` counts the entries of `v` below `x` over the same range. The call sites bind `S` to `cells` (3 members) and `sites` (2 members); each expanded `ranges` entry names the bound set (expanded.esm). This is how lib/relational.esm's `rank_of_set` ranges over a derived set whose size is known only after value invention.",
+    "name": "expression_templates_ranges_from_param",
+    "tags": [
+      "expression_templates",
+      "faq",
+      "ranges",
+      "index-set",
+      "esm-spec-9.6.1"
+    ]
+  },
+  "models": {
+    "M": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "y_cells"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "a"
+            ],
+            "expr": {
+              "args": [
+                "a",
+                "k_t"
+              ],
+              "op": "index"
+            },
+            "op": "faq",
+            "output_idx": [],
+            "ranges": {
+              "k_t": {
+                "from": "cells"
+              }
+            },
+            "reduce": "+"
+          }
+        },
+        {
+          "lhs": {
+            "args": [
+              "y_sites"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "b"
+            ],
+            "expr": {
+              "args": [
+                "b",
+                "k_t"
+              ],
+              "op": "index"
+            },
+            "op": "faq",
+            "output_idx": [],
+            "ranges": {
+              "k_t": {
+                "from": "sites"
+              }
+            },
+            "reduce": "+"
+          }
+        },
+        {
+          "lhs": {
+            "args": [
+              "n_below"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "a"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "a",
+                        "k_b"
+                      ],
+                      "op": "index"
+                    },
+                    "q"
+                  ],
+                  "op": "<"
+                },
+                1,
+                0
+              ],
+              "op": "ifelse"
+            },
+            "op": "faq",
+            "output_idx": [],
+            "ranges": {
+              "k_b": {
+                "from": "cells"
+              }
+            },
+            "reduce": "+"
+          }
+        }
+      ],
+      "tests": [
+        {
+          "assertions": [
+            {
+              "expected": 7,
+              "time": 1,
+              "variable": "y_cells"
+            },
+            {
+              "expected": 24,
+              "time": 1,
+              "variable": "y_sites"
+            },
+            {
+              "expected": 2,
+              "time": 1,
+              "variable": "n_below"
+            }
+          ],
+          "id": "ranges_from_param",
+          "time_span": {
+            "end": 1,
+            "start": 0
+          },
+          "tolerance": {
+            "abs": 1.0e-12,
+            "rel": 1.0e-9
+          }
+        }
+      ],
+      "variables": {
+        "a": {
+          "default": [
+            1,
+            2,
+            4
+          ],
+          "shape": [
+            "cells"
+          ],
+          "type": "parameter",
+          "units": "1"
+        },
+        "b": {
+          "default": [
+            8,
+            16
+          ],
+          "shape": [
+            "sites"
+          ],
+          "type": "parameter",
+          "units": "1"
+        },
+        "n_below": {
+          "default": 0,
+          "type": "unknown",
+          "units": "1"
+        },
+        "q": {
+          "default": 3,
+          "type": "parameter",
+          "units": "1"
+        },
+        "y_cells": {
+          "default": 0,
+          "type": "unknown",
+          "units": "1"
+        },
+        "y_sites": {
+          "default": 0,
+          "type": "unknown",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

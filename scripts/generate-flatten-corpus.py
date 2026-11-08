@@ -10,7 +10,7 @@ properties the corpus cannot recover after the fact:
 
   * DOCUMENT ORDER. Step 4 makes ordering normative — components in file order,
     variables in declaration order, coupling-merged entries keeping their first
-    occurrence. A parameter vector is positional, so Go's sorted order and
+    occurrence (or trailing their new owner's equations). A parameter vector is positional, so Go's sorted order and
     Julia's Dict-hash order are observable defects. Python already emits
     [OU.theta, OU.sigma, OU.Bw], the order the file declares.
   * FULL PER-VARIABLE METADATA. Step 4's "Full metadata, not names" requires each
@@ -298,6 +298,40 @@ CASES: list[tuple[str, str, str]] = [
         "chained_compose",
         "chained_operator_compose",
         "coupling/chained_operator_compose.esm",
+    ),
+    # --- operator_compose: WHERE a reattributed merge lands ----------------
+    # One entry, the OPERATOR as A, authoring a state of another component by
+    # its scoped name. §4.7.1 step 4 gives the merged equation to that
+    # component, and it moves to the end of that component's equations: after
+    # the last equation of it and of every component declared before it
+    # (esm-libraries-spec §4.7.5 step 4, "Ordering"). The chained case above
+    # cannot tell this from "keeps A's slot": its operators write nothing else
+    # and Chem's block is where both rules put the merge.
+    #
+    # Operator declared BEFORE the owner (reseact's NEI2016 emission source
+    # ahead of SuperFast): left at A's slot the merge comes first, which is
+    # what EarthSciAST.jl did (found by EarthSciIntegrator's planners, whose
+    # derived documents differed).
+    (
+        "compose_position",
+        "operator_declared_before_owner_compose",
+        "coupling/operator_declared_before_owner_compose.esm",
+    ),
+    # Several merges move at once: they keep the operator's order (not the
+    # owner's declaration order), and the operator's own equation keeps its slot.
+    (
+        "compose_position",
+        "operator_compose_merges_several_species",
+        "coupling/operator_compose_merges_several_species.esm",
+    ),
+    # Operator declared AFTER the owner, with an equation of its own ahead of
+    # the merge and a further component after it: the merge lands at the end
+    # of the owner's block, before both, not at A's slot and not at the end of
+    # the whole list.
+    (
+        "compose_position",
+        "operator_declared_after_owner_compose",
+        "coupling/operator_declared_after_owner_compose.esm",
     ),
     # --- reaction system: species -> derived ODEs, initial values ------------
     (

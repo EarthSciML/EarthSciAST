@@ -137,7 +137,8 @@ class ExprNode:
     # const (inline literal): the carried value. Any JSON number or nested
     # array thereof. Used to thread const-array tables through the AST without
     # premature numeric collapse (notably as `xs` for `interp.searchsorted`).
-    value: Any | None = field(default=None, metadata={"kind": "scalar"})
+    # Written in canonical-number form (§5.5.3.1): ``[100.0, 0.5]`` -> ``[100, 0.5]``.
+    value: Any | None = field(default=None, metadata={"kind": "canonical_nested"})
     # const (esm 1.2.0): the declared unit ``value`` is in. A unit-bearing
     # constant has that dimension and exact scale in dimensional analysis
     # (esm-spec §4.8.5); legal on no other op.

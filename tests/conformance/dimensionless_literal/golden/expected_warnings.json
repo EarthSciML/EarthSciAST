@@ -97,7 +97,6 @@
     "tests/valid/inline_test_reference_mount_name.esm": [],
     "tests/valid/inline_test_static_check_spellings.esm": [],
     "tests/valid/integral_operator_pide.esm": [],
-    "tests/valid/lib_calendar_subsystem_inclusion.esm": [],
     "tests/valid/lib_solar_subsystem_inclusion.esm": [],
     "tests/valid/makearray_empty_region_min_extent.esm": [],
     "tests/valid/metadata_author_variations.esm": [],

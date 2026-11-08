@@ -1,0 +1,107 @@
+{
+  "category": "stdlib_refs",
+  "version": "1.0",
+  "description": "Standard-library refs (esm-spec §4.7): `esm:std/<file>.esm` resolves to the binding's bundled copy of lib/ at every ref site, the whole `esm:` scheme is reserved, `${VAR}` is not expanded inside it, and an unknown name is the mechanism's ordinary unresolved diagnostic. The fixtures sit away from lib/ and use no relative path to it; each `same_as_twin` case has a twin under twins/ that reaches the same file through the repository's lib/, and loading the two must give the same document once every string value of a `ref` key is replaced by one placeholder. `error` cases must fail through `driver` (load, or flatten for coupling imports) with `code`. `env` lists environment variables the harness sets around the case.",
+  "bindings_required": [
+    "julia",
+    "python",
+    "rust",
+    "typescript",
+    "go"
+  ],
+  "cases": [
+    {
+      "id": "import_interp",
+      "fixture": "import_interp.esm",
+      "twin": "twins/import_interp.esm",
+      "expect": "same_as_twin",
+      "driver": "load"
+    },
+    {
+      "id": "mount_solar_subsystem",
+      "fixture": "mount_solar_subsystem.esm",
+      "twin": "twins/mount_solar_subsystem.esm",
+      "expect": "same_as_twin",
+      "driver": "load"
+    },
+    {
+      "id": "mount_solar_toplevel",
+      "fixture": "mount_solar_toplevel.esm",
+      "twin": "twins/mount_solar_toplevel.esm",
+      "expect": "same_as_twin",
+      "driver": "load"
+    },
+    {
+      "id": "import_interp_via_env",
+      "fixture": "import_interp_via_env.esm",
+      "twin": "twins/import_interp_via_env.esm",
+      "expect": "same_as_twin",
+      "driver": "load",
+      "env": {
+        "ESM_STDLIB_TEST_REF": "esm:std/interp.esm"
+      }
+    },
+    {
+      "id": "import_unknown_file",
+      "fixture": "import_unknown_file.esm",
+      "expect": "error",
+      "code": "template_import_unresolved",
+      "driver": "load"
+    },
+    {
+      "id": "import_other_namespace",
+      "fixture": "import_other_namespace.esm",
+      "expect": "error",
+      "code": "template_import_unresolved",
+      "driver": "load"
+    },
+    {
+      "id": "import_no_namespace",
+      "fixture": "import_no_namespace.esm",
+      "expect": "error",
+      "code": "template_import_unresolved",
+      "driver": "load"
+    },
+    {
+      "id": "import_parent_segment",
+      "fixture": "import_parent_segment.esm",
+      "expect": "error",
+      "code": "template_import_unresolved",
+      "driver": "load"
+    },
+    {
+      "id": "import_env_not_expanded",
+      "fixture": "import_env_not_expanded.esm",
+      "expect": "error",
+      "code": "template_import_unresolved",
+      "driver": "load",
+      "env": {
+        "ESM_STDLIB_TEST_NAME": "interp.esm"
+      }
+    },
+    {
+      "id": "mount_unknown_file",
+      "fixture": "mount_unknown_file.esm",
+      "expect": "error",
+      "code": "unresolved_subsystem_ref",
+      "driver": "load",
+      "note": "Each binding raises its own subsystem-ref resolution error; the code is the one tests/invalid/expected_errors.json pins for subsystem_ref_not_found.esm."
+    },
+    {
+      "id": "mount_unknown_file_toplevel",
+      "fixture": "mount_unknown_file_toplevel.esm",
+      "expect": "error",
+      "code": "unresolved_subsystem_ref",
+      "driver": "load",
+      "note": "As mount_unknown_file, at the top-level mount form."
+    },
+    {
+      "id": "coupling_import_unknown_file",
+      "fixture": "coupling_import_unknown_file.esm",
+      "expect": "error",
+      "code": "coupling_import_unresolved",
+      "driver": "flatten",
+      "note": "Coupling imports resolve when the coupling is expanded (flatten), as in tests/coupling_libraries/expected_errors.json."
+    }
+  ]
+}

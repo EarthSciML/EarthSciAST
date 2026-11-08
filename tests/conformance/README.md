@@ -63,9 +63,26 @@ tests/conformance/
 │   ├── manifest.json
 │   ├── fixtures/<id>.esm
 │   └── golden/<id>.json            #   the right-hand side at the initial state, bit for bit
+├── datetime_templates/            # lib/calendar.esm templates bit-for-bit against the datetime.* scenarios (CONFORMANCE_SPEC §5.45.4)
+│   ├── README.md                   #   the contract
+│   ├── manifest.json               #   `"runner": "inline_tests"`; its nine documents are REFERENCED from tests/closed_functions/datetime/<fn>/template.esm
+│   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
+├── geometry_templates/            # lib/geometry.esm overlap-area templates in a faq over cell pairs (CONFORMANCE_SPEC §5.45.4)
+│   ├── README.md                   #   the contract
+│   ├── manifest.json               #   `"runner": "inline_tests"`
+│   ├── fixtures/<id>.esm
+│   ├── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
+│   └── pairs.json                  #   every fixture's clipped cell pairs + reference areas, for the per-binding leaf-agreement tests (scripts/gen-geometry-template-pairs.py)
 ├── interp_templates/              # lib/interp.esm templates bit-for-bit against the interp.* scenarios (CONFORMANCE_SPEC §5.45.4)
 │   ├── README.md                   #   the contract
 │   ├── manifest.json               #   `"runner": "inline_tests"`; its three documents are REFERENCED from tests/closed_functions/interp/<fn>/template.esm
+│   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
+├── relational_templates/          # lib/relational.esm argmin/argmax templates: ties, NaN, the nearest-generator document (CONFORMANCE_SPEC §5.45.4)
+│   ├── README.md                   #   the contract
+│   ├── generate.py                 #   writes scenarios.json and the two fixtures
+│   ├── scenarios.json              #   candidate values, the template's index, the op's where it differs
+│   ├── manifest.json               #   `"runner": "inline_tests"`
+│   ├── fixtures/<id>.esm
 │   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
 ├── native_model_shapes/            # downstream-model shapes native must run, static and dynamic (CONFORMANCE_SPEC §5.45.4)
 │   ├── README.md                   #   the contract, and the divergence it closed
@@ -80,6 +97,11 @@ tests/conformance/
 │   ├── fixtures/dimensionless_literal.esm  #   one equation per pattern class, plus controls; valid
 │   ├── golden/expected_warnings.json       #   exact warning pointers, incl. ten tests/valid files
 │   └── manifest.json
+├── stdlib_refs/                    # `esm:std/<file>.esm` refs to each binding's bundled lib/ (esm-spec §4.7)
+│   ├── README.md                   #   the contract: the cases and how a binding runs them
+│   ├── manifest.json               #   same_as_twin / error cases; run by each binding's stdlib_refs test file
+│   ├── <case>.esm                  #   documents with no relative path to lib/
+│   └── twins/<case>.esm            #   the same documents reaching lib/ through ../../../../lib/
 └── round_trip/
     └── manifest.json               # fixtures, normalizations, transforms, divergences
 ```

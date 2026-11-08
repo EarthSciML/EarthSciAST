@@ -1,0 +1,949 @@
+{
+ "description": "Template rewrites of every fixture carrying a skolem, rank or gated argmin (generate.py writes them). `cases` are the caller data each binding harness builds both forms with; `compare` names what must agree: derived-set members (`sets`, the op's tuples against the template's integer keys decoded with `decode`: a = floor(k / n_b) + lo[0], b = k - n_b*floor(k / n_b) + lo[1]), the dense IDs (`rank`: the op set's 0-based rank + 1 against the template's loop-index variable), a rank looked up against a derived set (`rank_lookup`: the template variable against the op set's 0-based rank of each row's (columns) tuple, sorted, plus one), arg-witness buffers (`assignments`), the right-hand side at the initial state (`rhs`), inline tests (`inline_tests`), or load only (`load_only`, for documents a harness does not build). A `tier` entry is compared by that conformance tier instead.",
+ "rewrites": [
+  {
+   "id": "bin_skolem_spatial_join",
+   "source": "tests/valid/geometry/bin_skolem_spatial_join.esm",
+   "models": [
+    "BinSkolemSpatialJoin"
+   ],
+   "keys": {
+    "candidate_set": {
+     "kind": "pair",
+     "lo": [
+      1,
+      1
+     ],
+     "n": [
+      4,
+      4
+     ]
+    }
+   },
+   "note": "Bin keys split into per-component join columns; the pair key is pair_key(i, j, 1, 1, 4, 4).",
+   "cases": [
+    {
+     "const_arrays": {
+      "src_lon": [
+       0.2,
+       1.2,
+       2.2,
+       3.2
+      ],
+      "src_lat": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "tgt_lon": [
+       0.2,
+       1.2,
+       2.2,
+       9.9
+      ],
+      "tgt_lat": [
+       0,
+       0,
+       0,
+       0
+      ]
+     },
+     "params": {
+      "dx": 1.0,
+      "dy": 1.0
+     }
+    },
+    {
+     "const_arrays": {
+      "src_lon": [
+       0.2,
+       1.2,
+       2.2,
+       3.2
+      ],
+      "src_lat": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "tgt_lon": [
+       0.2,
+       1.2,
+       2.2,
+       9.9
+      ],
+      "tgt_lat": [
+       0,
+       0,
+       0,
+       0
+      ]
+     },
+     "params": {
+      "dx": 5.0,
+      "dy": 1.0
+     }
+    }
+   ],
+   "compare": {
+    "sets": [
+     {
+      "faq": "candidate_set",
+      "decode": {
+       "lo": [
+        1,
+        1
+       ],
+       "n_b": 4
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "skolem_distinct_rank",
+   "source": "tests/valid/faq/skolem_distinct_rank.esm",
+   "models": [
+    "EdgeEnumeration"
+   ],
+   "keys": {
+    "edge_set": {
+     "kind": "edge",
+     "lo": 1,
+     "n": 6
+    }
+   },
+   "note": "The edge key is edge_key(edge_lo, edge_hi, 1, 6); rank(edges) is the loop index. face_edge_rank looks up each face edge's rank among the derived set with rank_of_set over {\"from\": \"edges\"}.",
+   "cases": [
+    {
+     "const_arrays": {
+      "edge_lo": [
+       [
+        2.0,
+        3.0,
+        4.0
+       ],
+       [
+        3.0,
+        4.0,
+        5.0
+       ],
+       [
+        4.0,
+        5.0,
+        1.0
+       ],
+       [
+        5.0,
+        1.0,
+        2.0
+       ],
+       [
+        1.0,
+        2.0,
+        3.0
+       ],
+       [
+        2.0,
+        3.0,
+        4.0
+       ],
+       [
+        3.0,
+        4.0,
+        5.0
+       ],
+       [
+        4.0,
+        5.0,
+        1.0
+       ],
+       [
+        5.0,
+        1.0,
+        2.0
+       ],
+       [
+        1.0,
+        2.0,
+        3.0
+       ],
+       [
+        2.0,
+        3.0,
+        4.0
+       ],
+       [
+        3.0,
+        4.0,
+        5.0
+       ]
+      ],
+      "edge_hi": [
+       [
+        3.0,
+        4.0,
+        5.0
+       ],
+       [
+        4.0,
+        5.0,
+        6.0
+       ],
+       [
+        5.0,
+        6.0,
+        2.0
+       ],
+       [
+        6.0,
+        2.0,
+        3.0
+       ],
+       [
+        2.0,
+        3.0,
+        4.0
+       ],
+       [
+        3.0,
+        4.0,
+        5.0
+       ],
+       [
+        4.0,
+        5.0,
+        6.0
+       ],
+       [
+        5.0,
+        6.0,
+        2.0
+       ],
+       [
+        6.0,
+        2.0,
+        3.0
+       ],
+       [
+        2.0,
+        3.0,
+        4.0
+       ],
+       [
+        3.0,
+        4.0,
+        5.0
+       ],
+       [
+        4.0,
+        5.0,
+        6.0
+       ]
+      ]
+     },
+     "params": {},
+     "u0": {
+      "u": 1.0
+     }
+    }
+   ],
+   "compare": {
+    "sets": [
+     {
+      "faq": "edge_set",
+      "decode": {
+       "lo": [
+        1,
+        1
+       ],
+       "n_b": 6
+      }
+     }
+    ],
+    "rank": {
+     "faq": "edge_set",
+     "variable": "edge_dense_id"
+    },
+    "rhs": true,
+    "rank_lookup": {
+     "variable": "face_edge_rank",
+     "faq": "edge_set",
+     "columns": [
+      "edge_lo",
+      "edge_hi"
+     ]
+    }
+   },
+   "extra": {
+    "index_sets": {
+     "edges": {
+      "member_factor": "edge_members"
+     }
+    },
+    "variables": {
+     "edge_members": {
+      "type": "parameter",
+      "shape": [
+       "edges"
+      ],
+      "default": 0.0,
+      "description": "The ascending edge keys of the derived set `edges` (its member_factor, fed back after value invention)."
+     },
+     "face_edge_rank": {
+      "type": "unknown",
+      "shape": [
+       "faces",
+       "local_edges"
+      ],
+      "description": "1-based rank of each face edge's key among the derived edge set: rank_of_set over `edges`, whose size is known only after value invention."
+     }
+    },
+    "equations": [
+     {
+      "_comment": "face_edge_rank[f, le] = the rank of edge_key(edge_lo, edge_hi) among the members of the derived set `edges` (rank_of_set ranges over {\"from\": \"edges\"}).",
+      "lhs": {
+       "op": "index",
+       "args": [
+        "face_edge_rank",
+        "f",
+        "le"
+       ]
+      },
+      "rhs": {
+       "op": "faq",
+       "args": [
+        "edge_lo",
+        "edge_hi",
+        "edge_members"
+       ],
+       "output_idx": [
+        "f",
+        "le"
+       ],
+       "ranges": {
+        "f": {
+         "from": "faces"
+        },
+        "le": {
+         "from": "local_edges"
+        }
+       },
+       "expr": {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "rank_of_set",
+        "bindings": {
+         "x": {
+          "op": "apply_expression_template",
+          "args": [],
+          "name": "edge_key",
+          "bindings": {
+           "u": {
+            "op": "index",
+            "args": [
+             "edge_lo",
+             "f",
+             "le"
+            ]
+           },
+           "v": {
+            "op": "index",
+            "args": [
+             "edge_hi",
+             "f",
+             "le"
+            ]
+           },
+           "lo": 1,
+           "n": 6
+          }
+         },
+         "members": "edge_members",
+         "S": "edges"
+        }
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "edge_enumeration_area_eff",
+   "source": "tests/valid/faq/edge_enumeration_area_eff.esm",
+   "models": [
+    "EdgeEnumerationAreaEff"
+   ],
+   "keys": {
+    "edge_set": {
+     "kind": "edge",
+     "lo": 1,
+     "n": 4
+    }
+   },
+   "note": "The edge key is edge_key(a, b, 1, 4) over the ragged face members; rank(edges) is the loop index.",
+   "cases": [
+    {
+     "const_arrays": {
+      "n_verts_on_face": [
+       3,
+       3
+      ],
+      "verts_on_face": [
+       [
+        1,
+        2,
+        3
+       ],
+       [
+        2,
+        3,
+        4
+       ]
+      ],
+      "n_edges_on_cell": [
+       3,
+       3
+      ],
+      "edges_on_cell": [
+       [
+        1,
+        2,
+        3
+       ],
+       [
+        3,
+        4,
+        5
+       ]
+      ],
+      "dc": [
+       2,
+       3,
+       5,
+       7,
+       11
+      ],
+      "dv": [
+       13,
+       17,
+       19,
+       23,
+       29
+      ]
+     },
+     "params": {}
+    }
+   ],
+   "compare": {
+    "sets": [
+     {
+      "faq": "edge_set",
+      "decode": {
+       "lo": [
+        1,
+        1
+       ],
+       "n_b": 4
+      }
+     }
+    ],
+    "rank": {
+     "faq": "edge_set",
+     "variable": "edge_dense_id"
+    },
+    "rhs": true
+   }
+  },
+  {
+   "id": "pure_topology",
+   "source": "tests/valid/cadence/pure_topology.esm",
+   "models": [
+    "PureTopologyEdges"
+   ],
+   "keys": {
+    "edge_set": {
+     "kind": "edge",
+     "lo": 1,
+     "n": 4
+    }
+   },
+   "note": "The edge key is edge_key(face_lo, face_hi, 1, 4); rank(edges) is the loop index.",
+   "cases": [
+    {
+     "const_arrays": {
+      "face_lo": [
+       [
+        1,
+        2,
+        1
+       ],
+       [
+        2,
+        3,
+        2
+       ]
+      ],
+      "face_hi": [
+       [
+        2,
+        3,
+        3
+       ],
+       [
+        3,
+        4,
+        4
+       ]
+      ]
+     },
+     "params": {}
+    }
+   ],
+   "compare": {
+    "sets": [
+     {
+      "faq": "edge_set",
+      "decode": {
+       "lo": [
+        1,
+        1
+       ],
+       "n_b": 4
+      }
+     }
+    ],
+    "rank": {
+     "faq": "edge_set",
+     "variable": "edge_dense_id"
+    }
+   }
+  },
+  {
+   "id": "conservative_regrid_assembly",
+   "source": "tests/valid/geometry/conservative_regrid_assembly.esm",
+   "models": [
+    "ConservativeRegridAssembly"
+   ],
+   "keys": {
+    "candidate_set": {
+     "kind": "pair",
+     "lo": [
+      1,
+      1
+     ],
+     "n": [
+      4,
+      4
+     ]
+    }
+   },
+   "note": "Bin keys split into per-component join columns in the producer and every gathered contraction; the pair key is pair_key(i, j, 1, 1, 4, 4).",
+   "cases": [
+    {
+     "const_arrays": {},
+     "params": {}
+    }
+   ],
+   "compare": {
+    "sets": [
+     {
+      "faq": "candidate_set",
+      "decode": {
+       "lo": [
+        1,
+        1
+       ],
+       "n_b": 4
+      }
+     }
+    ],
+    "rhs": true
+   }
+  },
+  {
+   "id": "conservative_regrid_overlap_join",
+   "source": "tests/valid/geometry/conservative_regrid_overlap_join.esm",
+   "models": [
+    "ConservativeRegridOverlapJoin"
+   ],
+   "keys": {
+    "candidate_set": {
+     "kind": "pair",
+     "lo": [
+      1,
+      1
+     ],
+     "n": [
+      3,
+      3
+     ]
+    }
+   },
+   "note": "Bin keys split into per-component join columns; the pair key is pair_key(i, j, 1, 1, 3, 3).",
+   "cases": [
+    {
+     "const_arrays": {
+      "src_lon": [
+       0.2,
+       1.2,
+       2.2
+      ],
+      "src_lat": [
+       0,
+       0,
+       0
+      ],
+      "tgt_lon": [
+       0.2,
+       1.2,
+       2.2
+      ],
+      "tgt_lat": [
+       0,
+       0,
+       0
+      ]
+     },
+     "params": {
+      "dx": 1.0,
+      "dy": 1.0,
+      "atol": 1e-12
+     }
+    },
+    {
+     "const_arrays": {
+      "src_lon": [
+       0.2,
+       1.2,
+       2.2
+      ],
+      "src_lat": [
+       0,
+       0,
+       0
+      ],
+      "tgt_lon": [
+       1.2,
+       2.2,
+       9.9
+      ],
+      "tgt_lat": [
+       0,
+       0,
+       0
+      ]
+     },
+     "params": {
+      "dx": 1.0,
+      "dy": 1.0,
+      "atol": 1e-12
+     }
+    }
+   ],
+   "compare": {
+    "sets": [
+     {
+      "faq": "candidate_set",
+      "decode": {
+       "lo": [
+        1,
+        1
+       ],
+       "n_b": 3
+      }
+     }
+    ],
+    "vi_only": true
+   }
+  },
+  {
+   "id": "wildfire_atmosphere_ocean",
+   "source": "tests/valid/wildfire_atmosphere_ocean.esm",
+   "models": [
+    "OceanDynamics"
+   ],
+   "keep_all_models": true,
+   "keys": {
+    "rg_candidate_set": {
+     "kind": "pair",
+     "lo": [
+      1,
+      1
+     ],
+     "n": [
+      4,
+      3
+     ]
+    }
+   },
+   "note": "OceanDynamics only: bin keys split into per-component join columns; the pair key is pair_key(a, o, 1, 1, 4, 3).",
+   "cases": [],
+   "compare": {
+    "inline_tests": true
+   }
+  },
+  {
+   "id": "cross_domain_coupling",
+   "source": "tests/coupling/cross_domain_coupling.esm",
+   "models": [
+    "Ocean3D"
+   ],
+   "keep_all_models": true,
+   "keys": {
+    "rg_candidate_set": {
+     "kind": "pair",
+     "lo": [
+      1,
+      1
+     ],
+     "n": [
+      4,
+      3
+     ]
+    }
+   },
+   "note": "Ocean3D only: bin keys split into per-component join columns; the pair key is pair_key(a, o, 1, 1, 4, 3).",
+   "cases": [],
+   "compare": {
+    "load_only": true
+   }
+  },
+  {
+   "id": "interfaces",
+   "source": "tests/coupling/interfaces.esm",
+   "models": [
+    "LowerAtmosphere"
+   ],
+   "keep_all_models": true,
+   "keys": {
+    "rg_candidate_set": {
+     "kind": "pair",
+     "lo": [
+      1,
+      1
+     ],
+     "n": [
+      3,
+      4
+     ]
+    }
+   },
+   "note": "LowerAtmosphere only: bin keys split into per-component join columns; the pair key is pair_key(u, l, 1, 1, 3, 4).",
+   "cases": [],
+   "compare": {
+    "load_only": true
+   }
+  },
+  {
+   "id": "nearest_generator_binned",
+   "source": "tests/valid/faq/nearest_generator_argmin.esm",
+   "models": [
+    "NearestGeneratorBinned"
+   ],
+   "keys": {},
+   "note": "Bin keys split into per-component columns; the gated argmin becomes argmin_where with the predicate point_bin == gen_bin per component.",
+   "cases": [
+    {
+     "const_arrays": {
+      "gx": [
+       0,
+       1,
+       2
+      ],
+      "gy": [
+       0,
+       0,
+       0
+      ],
+      "px": [
+       0.1,
+       1.1,
+       2.1,
+       1.9
+      ],
+      "py": [
+       0,
+       0,
+       0,
+       0
+      ]
+     },
+     "params": {
+      "binw": 1.0
+     }
+    }
+   ],
+   "compare": {
+    "assignments": [
+     {
+      "op": "assign_binned",
+      "template": "assign_binned"
+     }
+    ]
+   }
+  },
+  {
+   "id": "regrid_N100",
+   "source": "tests/conformance/scaling/fixtures/regrid/regrid_N100.esm",
+   "models": [
+    "Regrid"
+   ],
+   "keys": {},
+   "note": "Bin keys split into per-component join columns in every gathered contraction.",
+   "cases": [
+    {
+     "const_arrays": {},
+     "params": {}
+    }
+   ],
+   "compare": {
+    "rhs": true
+   }
+  },
+  {
+   "id": "data_sources_ingest_and_select",
+   "source": "tests/valid/data_sources_ingest_and_select.esm",
+   "models": [
+    "Ingest"
+   ],
+   "keep_all_models": true,
+   "keys": {
+    "emis_cell_set": {
+     "kind": "scalar"
+    }
+   },
+   "note": "The one-component cell key is the bare integer expression.",
+   "cases": [],
+   "compare": {
+    "load_only": true
+   }
+  },
+  {
+   "id": "edge_enumeration_ode",
+   "source": "tests/conformance/value_invention_geometry/fixtures/edge_enumeration_ode.esm",
+   "models": [
+    "EdgeEnumerationODE"
+   ],
+   "keys": {
+    "edge_set": {
+     "kind": "edge",
+     "lo": 1,
+     "n": 4
+    }
+   },
+   "note": "The edge key is edge_key(a, b, 1, 4). Run by the relational_templates tier; its golden equals the op document's.",
+   "cases": [],
+   "compare": {
+    "tier": "relational_templates"
+   }
+  },
+  {
+   "id": "bin_skolem_count_ode",
+   "source": "tests/conformance/value_invention_geometry/fixtures/bin_skolem_count_ode.esm",
+   "models": [
+    "BinSkolemCountODE"
+   ],
+   "keys": {
+    "candidate_set": {
+     "kind": "pair",
+     "lo": [
+      1,
+      1
+     ],
+     "n": [
+      4,
+      4
+     ]
+    }
+   },
+   "note": "Bin keys split into per-component join columns; the pair key is pair_key(i, j, 1, 1, 4, 4). Run by the relational_templates tier; its golden equals the op document's.",
+   "cases": [],
+   "compare": {
+    "tier": "relational_templates"
+   }
+  },
+  {
+   "id": "composite_key_axis",
+   "source": "tests/conformance/value_invention_materialize/fixtures/composite_key_axis.esm",
+   "models": [
+    "CompositeKeyAxis"
+   ],
+   "out": "tests/conformance/value_invention_materialize/fixtures/composite_key_axis_template.esm",
+   "keys": {
+    "key_set": {
+     "kind": "pair",
+     "lo": [
+      0,
+      0
+     ],
+     "n": [
+      1000,
+      1000
+     ]
+    }
+   },
+   "note": "The two-column key is pair_key(polProcessID, engTechID, 0, 0, 1000, 1000). Run by the value_invention_materialize tier.",
+   "cases": [],
+   "compare": {
+    "tier": "value_invention_materialize"
+   }
+  },
+  {
+   "id": "absent_key_factor",
+   "source": "tests/conformance/value_invention_materialize/fixtures/absent_key_factor.esm",
+   "models": [
+    "CompositeKeyAxis"
+   ],
+   "out": "tests/conformance/value_invention_materialize/fixtures/absent_key_factor_template.esm",
+   "keys": {
+    "key_set": {
+     "kind": "pair",
+     "lo": [
+      0,
+      0
+     ],
+     "n": [
+      1000,
+      1000
+     ]
+    }
+   },
+   "note": "The two-column key is pair_key(polProcessID, engTechID, 0, 0, 1000, 1000); engTechID has no data. Run by the value_invention_materialize tier.",
+   "cases": [],
+   "compare": {
+    "tier": "value_invention_materialize"
+   }
+  },
+  {
+   "id": "state_dependent_key",
+   "source": "tests/conformance/value_invention_materialize/fixtures/state_dependent_key.esm",
+   "models": [
+    "CompositeKeyAxis"
+   ],
+   "out": "tests/conformance/value_invention_materialize/fixtures/state_dependent_key_template.esm",
+   "keys": {
+    "key_set": {
+     "kind": "triple",
+     "lo": [
+      0,
+      0,
+      0
+     ],
+     "n": [
+      1000,
+      1000,
+      1000
+     ]
+    }
+   },
+   "note": "The three-column key is two nested pair_key calls; its third column reads the state u. Run by the value_invention_materialize tier.",
+   "cases": [],
+   "compare": {
+    "tier": "value_invention_materialize"
+   }
+  }
+ ]
+}

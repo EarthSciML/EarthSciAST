@@ -21,6 +21,7 @@ RFC: ``docs/content/rfcs/semiring-faq-unified-ir.md`` §5.1 / §5.2 / §7.1.
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -286,3 +287,74 @@ def test_build_time_invalid_fixture_rejected(fixture_path: Path) -> None:
     assert not result.is_valid, f"{fixture_path.name}: expected a structural rejection"
     got = {(e.code, e.path) for e in result.structural_errors}
     assert want <= got, f"{fixture_path.name}: want {sorted(want)}, got {sorted(got)}"
+
+
+def test_template_from_param_undeclared_is_undefined_index_set() -> None:
+    """esm-spec §9.6.1: a template parameter standing for a range's ``from``,
+    bound to a name that is not a declared index set, is ``undefined_index_set``
+    at the call site — not an undefined variable."""
+    path = _INVALID_FIXTURES_DIR / "template_from_param_undeclared.esm"
+    result = validate_text(path.read_text(), base_path=str(path.parent))
+    codes = {(e.code, e.path) for e in result.structural_errors}
+    assert ("undefined_index_set", "/models/M/equations/0/rhs") in codes, codes
+    assert not any(c == "undefined_variable" for c, _ in codes), codes
+
+
+def _template_from_param_variants() -> dict[str, tuple[dict, str]]:
+    """``template_from_param_undeclared.esm`` with the undeclared ``from`` name
+    reached through a wrapper template, an initialization equation, and a
+    subsystem model, each with the pointer its finding attaches at."""
+    path = _INVALID_FIXTURES_DIR / "template_from_param_undeclared.esm"
+    base = json.loads(path.read_text())
+    model = base["models"]["M"]
+    bad_call = model["equations"][0]["rhs"]
+    good_call = copy.deepcopy(bad_call)
+    good_call["bindings"]["S"] = "cells"
+
+    wrapper = copy.deepcopy(base)
+    m = wrapper["models"]["M"]
+    # outer(w, T) forwards T to total's `from` parameter S.
+    m["expression_templates"]["outer"] = {
+        "params": ["w", "T"],
+        "body": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "total",
+            "bindings": {"v": "w", "S": "T"},
+        },
+    }
+    m["equations"][0]["rhs"] = {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "outer",
+        "bindings": {"w": "a", "T": "ghost_cells"},
+    }
+
+    init = copy.deepcopy(base)
+    m = init["models"]["M"]
+    m["equations"][0]["rhs"] = copy.deepcopy(good_call)
+    m["initialization_equations"] = [{"lhs": "y_cells", "rhs": copy.deepcopy(bad_call)}]
+
+    sub = copy.deepcopy(base)
+    m = sub["models"]["M"]
+    inner = {k: copy.deepcopy(v) for k, v in m.items() if k != "expression_templates"}
+    m["equations"][0]["rhs"] = copy.deepcopy(good_call)
+    m["subsystems"] = {"Sub": inner}
+
+    return {
+        "wrapper": (wrapper, "/models/M/equations/0/rhs"),
+        "initialization_equation": (init, "/models/M/initialization_equations/0/rhs"),
+        "subsystem": (sub, "/models/M/subsystems/Sub/equations/0/rhs"),
+    }
+
+
+@pytest.mark.parametrize("case", sorted(_template_from_param_variants()))
+def test_template_from_param_undeclared_at_every_site(case: str) -> None:
+    """The template-bound ``from`` name is checked through a template that
+    forwards it to another, and at every expression site of a model, its
+    subsystems included — as the Julia binding checks the expanded model."""
+    doc, pointer = _template_from_param_variants()[case]
+    result = validate_text(json.dumps(doc))
+    codes = {(e.code, e.path) for e in result.structural_errors}
+    assert ("undefined_index_set", pointer) in codes, codes
+    assert not any(c == "undefined_variable" for c, _ in codes), codes

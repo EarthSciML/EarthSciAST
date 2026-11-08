@@ -417,7 +417,7 @@ export function validateReferenceIntegrity(
       if (varRef.includes('.')) {
         // Scoped reference
         // `model` is the ENCLOSING scope: a reference to this model's own mounted
-        // subsystem (`Calendar.seconds_since_midnight`) resolves against it.
+        // subsystem (`Solar.solar_zenith_angle`) resolves against it.
         if (!resolveScopedReference(varRef, esmFile, model)) {
           errors.push({
             path: sitePath,

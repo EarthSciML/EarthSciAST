@@ -15,6 +15,7 @@
  */
 
 import { joinUrlDirectory, removeUrlPathDotSegments } from './data-source-urls.js'
+import { classifyStdRef } from './stdlib.js'
 
 /** True for `http://` / `https://` refs, which are resolved as opaque keys. */
 export function isRemoteRef(ref: string): boolean {
@@ -55,8 +56,12 @@ const ENV_REF_RE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g
  * Where there is no environment to read, EVERY token is simply unset and so
  * left literal — which is exactly the clean-unresolved behaviour §4.7 already
  * blesses for a binding without the capability.
+ *
+ * A standard-library ref (one beginning with `esm:`) is returned unchanged:
+ * §4.7 never expands `${VAR}` inside that form (see `stdlib.ts`).
  */
 export function expandRefEnv(ref: string): string {
+  if (ref.startsWith('esm:')) return ref
   const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
     ?.env
   if (env === undefined) return ref
@@ -132,6 +137,10 @@ function urlPathStart(url: string): number {
  * ref is canonicalized on its own with no base prefix.
  */
 export function normalizeRef(ref: string, baseDir?: string): string {
+  // esm-spec §4.7: a standard-library ref is identified by its
+  // `esm:std/<file>.esm` string, never by a path or URL join.
+  const std = classifyStdRef(ref, baseDir)
+  if (std !== undefined) return std.identity
   if (isRemoteRef(ref)) return removeUrlPathDotSegments(ref)
   // esm-spec §4.7 "URL (remote) references": a document loaded from a URL is
   // the base for its own relative refs, which join onto its URL directory by

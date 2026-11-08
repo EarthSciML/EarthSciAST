@@ -97,6 +97,16 @@ jobs:
           python3 tests/conformance/scaling/generate.py --check
           python3 tests/conformance/scaling/test_check.py
 
+      # tests/conformance/geometry_templates/pairs.json lists the cell pairs every
+      # polygon and regridding document clips, for the bindings' lib/geometry.esm
+      # agreement tests; a fixture edited without regenerating it would leave
+      # those tests checking stale geometry. Its reference areas need mpmath.
+      - name: Geometry template pairs match the documents
+        if: ${{ !cancelled() }}
+        run: |
+          python3 -m pip install --quiet mpmath
+          python3 scripts/gen-geometry-template-pairs.py --check
+
   # Run each language's individual tests first.
   # Matrices absorbed from the per-language CI workflows (gt-9ju):
   #   python-package.yml, rust-ci.yml, julia-ci.yml, go-ci.yml, npm-publish.yml

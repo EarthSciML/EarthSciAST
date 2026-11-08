@@ -1122,7 +1122,7 @@ INLINE_TESTS_RUNNER="$SCRIPT_DIR/run-inline-tests-conformance.py"
 # Every tier whose manifest declares `"runner": "inline_tests"`. Listed
 # explicitly rather than globbed: a tier appears in the gate because someone put
 # it there, and a manifest that lands without a stage should be noticed.
-INLINE_TESTS_TIERS=(broadcast_alignment scalar_operator_semantics faq_pointwise_filter recurrence value_invention_geometry array_expression_forms bool_and_or_reductions native_model_shapes interp_templates)
+INLINE_TESTS_TIERS=(broadcast_alignment scalar_operator_semantics faq_pointwise_filter recurrence value_invention_geometry array_expression_forms bool_and_or_reductions native_model_shapes interp_templates datetime_templates relational_templates geometry_templates)
 
 run_inline_tests_conformance_self_test() {
     local rc=0 tier manifest
@@ -1433,7 +1433,9 @@ run_property_corpus() {
     # corpus fixture must already be in canonical form, so a fixture that spells
     # a number non-canonically (`0.0` where CONFORMANCE_SPEC.md §5.5.3.1 rule 1
     # requires the integer literal `0`) is a corpus defect, and fixing it means
-    # correcting the fixture, not relaxing this flag.
+    # correcting the fixture, not relaxing this flag. The one deliberate
+    # exception tests that normalization itself: its canonical form is authored
+    # in tests/property_corpus/expected/ under the same name, and is its oracle.
     python3 "$SCRIPT_DIR/run-property-corpus-conformance.py" \
         --corpus "$corpus" \
         --output "$OUTPUT_DIR/property_corpus_report.json" \

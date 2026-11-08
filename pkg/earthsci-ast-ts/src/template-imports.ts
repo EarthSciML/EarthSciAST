@@ -48,6 +48,7 @@ import { EnumLoweringError, lowerEnumOpsForFile } from './lower-enums.js'
 import { isNumericLiteral } from './numeric-literal.js'
 import { deepClone, isObject } from './object-utils.js'
 import { expandRefEnv, isRemoteRef, normalizeRef, readFileSyncNode } from './path-utils.js'
+import { STDLIB_BASE, classifyStdRef, readStdRef } from './stdlib.js'
 import { ERROR_CODES } from './errors.js'
 import { prepareDocumentOps } from './parse.js'
 
@@ -876,8 +877,11 @@ function loadImportRaw(
   origin: string,
   opts: TemplateResolveOptions,
 ): { raw: unknown; dir: string } {
+  // esm-spec §4.7: a standard-library ref reads the bundled lib/ — never a
+  // path, never a URL, and never through a caller's `readFile` hook.
+  const std = classifyStdRef(ref, baseDir)
   // A relative ref inside a URL-loaded document is a remote ref too (§4.7).
-  if (isRemoteRef(ref) || isRemoteRef(baseDir)) {
+  if (std === undefined && (isRemoteRef(ref) || isRemoteRef(baseDir))) {
     // The synchronous §9.7 resolver cannot fetch over the network (mirrors
     // the Rust binding's remote-ref stance): download the library first and
     // import it by local path.
@@ -889,7 +893,7 @@ function loadImportRaw(
   const path = normalizeRef(ref, baseDir)
   let content: string
   try {
-    content = (opts.readFile ?? readFileSyncNode)(path)
+    content = std !== undefined ? readStdRef(ref, std) : (opts.readFile ?? readFileSyncNode)(path)
   } catch (e) {
     throw new EsmMachineryError(
       ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
@@ -909,7 +913,7 @@ function loadImportRaw(
   // expression nodes — same wire boundary as the root
   // (docs/content/rfcs/faq-node-rename.md §5.2).
   prepareDocumentOps(raw)
-  return { raw, dir: dirName(path) }
+  return { raw, dir: std !== undefined ? STDLIB_BASE : dirName(path) }
 }
 
 // ---------------------------------------------------------------------------
@@ -1917,15 +1921,19 @@ export function collectMountDeclaredMetaparameters(
     // the remote ref it expands to (and an unset one stays literal and simply
     // fails the read below, which this widening walk ignores by design).
     const ref = expandRefEnv(authoredRef)
-    const viaLoader = isMount && options.readRef !== undefined
-    if (!viaLoader && (isRemoteRef(ref) || isRemoteRef(basePath))) return
+    const std = classifyStdRef(ref, basePath)
+    const viaLoader = std === undefined && isMount && options.readRef !== undefined
+    if (std === undefined && !viaLoader && (isRemoteRef(ref) || isRemoteRef(basePath))) return
     const path = normalizeRef(ref, basePath)
     if (seen.has(path)) return
     seen.add(path)
     let child: unknown
     let childBase: string
     try {
-      if (viaLoader) {
+      if (std !== undefined) {
+        child = JSON.parse(readStdRef(ref, std))
+        childBase = STDLIB_BASE
+      } else if (viaLoader) {
         const got = options.readRef!(ref, basePath)
         child = JSON.parse(got.text)
         childBase = got.base

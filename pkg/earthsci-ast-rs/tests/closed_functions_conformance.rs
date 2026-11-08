@@ -598,3 +598,206 @@ mod template_form {
         }
     }
 }
+
+/// The `datetime.*` scenarios through the pure-AST templates of
+/// `lib/calendar.esm`. Per function, one document imports the library and
+/// defines `D(y) = <name>(tq)` with the instant `tq` a state, so one build
+/// serves every scenario and a non-finite instant, which no literal can carry,
+/// is covered too; each finite instant is also taken as a literal, so the build
+/// may fold the whole decomposition. Every scenario, the
+/// `closed_function_overflow` ones included, and the edges of the domain
+/// |t| < 2^52 s run through the interpreter and the strict native tape: inside
+/// the domain both must give the `fn` form's bits (for `julian_day` that is
+/// the pinned formula, which one scenario's `expected` misses by an ulp within
+/// the fixture tolerance), outside it NaN.
+#[cfg(feature = "solve")]
+mod calendar_template_form {
+    use std::collections::HashMap;
+    use std::fs;
+    use std::path::PathBuf;
+
+    use earthsci_ast::simulate_array::ArrayCompiled;
+    use earthsci_ast::{
+        ClosedArg, LoadOptions, evaluate_closed_function, load_string_with_options,
+    };
+    use serde_json::{Value, json};
+
+    use super::{closed_value_to_f64, decode_input, fixtures_root};
+
+    const DOMAIN: f64 = 4_503_599_627_370_496.0; // 2^52
+
+    /// Instants at the edge of the domain: the largest whole and fractional
+    /// instants inside it, and the bound itself.
+    const EDGES: [f64; 6] = [
+        DOMAIN - 1.0,
+        -(DOMAIN - 1.0),
+        DOMAIN - 0.5,
+        -(DOMAIN - 0.5),
+        DOMAIN,
+        -DOMAIN,
+    ];
+
+    fn repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    fn same_bits(a: f64, b: f64) -> bool {
+        (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits()
+    }
+
+    /// The document applying template `name` to `instant`: a literal, or (for
+    /// `None`) the state `tq` with `D(tq) = 0`.
+    fn document(name: &str, instant: Option<f64>) -> String {
+        let mut variables = serde_json::Map::new();
+        let mut equations = Vec::new();
+        let bound = match instant {
+            Some(t) => json!(t),
+            None => {
+                variables.insert("tq".into(), json!({"type": "unknown", "default": 0.0}));
+                equations.push(json!({"lhs": {"op": "D", "args": ["tq"], "wrt": "t"}, "rhs": 0.0}));
+                json!("tq")
+            }
+        };
+        variables.insert("y".into(), json!({"type": "unknown", "default": 0.0}));
+        equations.push(json!({
+            "lhs": {"op": "D", "args": ["y"], "wrt": "t"},
+            "rhs": {"op": "apply_expression_template", "args": [], "name": name,
+                    "bindings": {"t": bound}}
+        }));
+        json!({
+            "esm": "1.2.0",
+            "metadata": {"name": "calendar_template_scenario", "authors": ["test"]},
+            "models": {"M": {
+                "expression_template_imports": [{"ref": "lib/calendar.esm", "only": [name]}],
+                "variables": variables,
+                "equations": equations
+            }}
+        })
+        .to_string()
+    }
+
+    struct Probe {
+        compiled: ArrayCompiled,
+        names: Vec<String>,
+    }
+
+    impl Probe {
+        fn new(name: &str, instant: Option<f64>, label: &str) -> Self {
+            let options = LoadOptions {
+                base_path: Some(repo_root()),
+                ..Default::default()
+            };
+            let file = load_string_with_options(&document(name, instant), &options)
+                .unwrap_or_else(|e| panic!("{label}: load: {e}"));
+            let compiled = ArrayCompiled::from_file(&file)
+                .unwrap_or_else(|e| panic!("{label}: compile: {e:?}"));
+            let report = compiled.debug_build_tape_report();
+            assert!(
+                report.fallbacks.is_empty(),
+                "{label}: rules left the tape: {:?}",
+                report.fallbacks
+            );
+            let names = compiled.state_variable_names().to_vec();
+            Probe { compiled, names }
+        }
+
+        fn slot(&self, bare: &str) -> Option<usize> {
+            self.names
+                .iter()
+                .position(|n| n == bare || n.split_once('.').map(|x| x.1) == Some(bare))
+        }
+
+        /// `(interpreter, native)` values of the template at instant `t` (or
+        /// at the literal the document was built with).
+        fn eval(&self, t: f64, label: &str) -> (f64, f64) {
+            let mut u = vec![0.0; self.names.len()];
+            if let Some(iq) = self.slot("tq") {
+                u[iq] = t;
+            }
+            let iy = self.slot("y").expect("state y");
+            let (oracle, _) = self.compiled.debug_eval_rhs(&u, 0.0, &HashMap::new(), true);
+            let mut taped = vec![0.0; self.names.len()];
+            let mut scratch = self
+                .compiled
+                .debug_new_scratch_taped()
+                .unwrap_or_else(|e| panic!("{label}: strict native: {e}"));
+            self.compiled.debug_eval_rhs_into(
+                &u,
+                0.0,
+                &self.compiled.debug_resolve_params(&HashMap::new()),
+                &mut taped,
+                &mut scratch,
+                &mut Default::default(),
+            );
+            (oracle[iy], taped[iy])
+        }
+    }
+
+    fn instant(v: &Value) -> f64 {
+        match decode_input(v) {
+            ClosedArg::Scalar(t) => t,
+            other => panic!("a datetime input is a scalar, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn datetime_scenarios_through_the_calendar_templates() {
+        let root = fixtures_root().join("datetime");
+        let mut dirs: Vec<PathBuf> = fs::read_dir(&root)
+            .expect("read tests/closed_functions/datetime")
+            .map(|e| e.expect("dir entry").path())
+            .filter(|p| p.is_dir())
+            .collect();
+        dirs.sort();
+        assert_eq!(dirs.len(), 9, "the nine datetime.* functions");
+        let mut checked = 0usize;
+        for dir in dirs {
+            let spec: Value = serde_json::from_str(
+                &fs::read_to_string(dir.join("expected.json")).expect("read expected.json"),
+            )
+            .expect("expected.json is valid JSON");
+            let fn_name = spec["function"].as_str().expect("function").to_string();
+            let name = fn_name
+                .strip_prefix("datetime.")
+                .expect("a datetime.* fixture");
+            let mut instants: Vec<(String, f64)> = Vec::new();
+            for key in ["scenarios", "error_scenarios"] {
+                for sc in spec[key].as_array().expect("scenario array") {
+                    let sname = sc["name"].as_str().unwrap_or("(unnamed)").to_string();
+                    instants.push((sname, instant(&sc["inputs"][0])));
+                }
+            }
+            for t in EDGES {
+                instants.push((format!("domain_edge_{t:?}"), t));
+            }
+            let state_probe = Probe::new(name, None, &format!("{fn_name} (state instant)"));
+            for (sname, t) in instants {
+                let label = format!("{fn_name}::{sname} (t = {t:?})");
+                let want = if t.abs() < DOMAIN {
+                    let v = evaluate_closed_function(&fn_name, &[ClosedArg::Scalar(t)])
+                        .unwrap_or_else(|e| panic!("{label}: fn form errored: {e}"));
+                    closed_value_to_f64(v)
+                } else {
+                    f64::NAN
+                };
+                let mut forms = vec![("state instant", state_probe.eval(t, &label))];
+                if t.is_finite() {
+                    let probe = Probe::new(name, Some(t), &format!("{label} (literal instant)"));
+                    forms.push(("literal instant", probe.eval(t, &label)));
+                }
+                for (form, (interp, native)) in forms {
+                    for (who, got) in [("interpreter", interp), ("native", native)] {
+                        assert!(
+                            same_bits(got, want),
+                            "{label} ({form}, {who}): template gives {got:?} ({:#x}), fn form {want:?} ({:#x})",
+                            got.to_bits(),
+                            want.to_bits()
+                        );
+                    }
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked > 1000, "only {checked} instants checked");
+    }
+}

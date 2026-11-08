@@ -768,6 +768,8 @@ function _expand_refs_walk(
         memo[node] = res
         return res
     elseif _is_array(node)
+        # An array of numbers or number rows holds no reference.
+        _may_hold_object(node) || return node
         r = get(memo, node, _JSON_DESCEND)
         r === _JSON_DESCEND || return r
         changed = false
@@ -1184,6 +1186,9 @@ function _rewrite_node(
         memo[n] = res
         return res
     elseif _is_array(n)
+        # A rule fires only on an object: an array of numbers or number rows
+        # comes back unchanged.
+        _may_hold_object(n) || return n
         r = get(memo, n, _JSON_DESCEND)
         r === _JSON_DESCEND || return r
         kids_changed = false

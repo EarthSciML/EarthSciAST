@@ -211,14 +211,9 @@ pub fn lower_reactions_to_equations(
 /// A stoichiometric coefficient or exponent as the literal the lowered tree
 /// carries: [`Expr::Integer`] when the value is integral and representable in
 /// `i64` (CONFORMANCE_SPEC §5.5.3.1 rule 3, esm-libraries-spec §4.6.2 rule 5),
-/// [`Expr::Number`] otherwise. `i64::MAX as f64` rounds up to 2^63, one past
-/// `i64::MAX`, so the upper bound is exclusive.
+/// [`Expr::Number`] otherwise.
 fn stoich_literal(value: f64) -> Expr {
-    if value.fract() == 0.0 && (i64::MIN as f64..i64::MAX as f64).contains(&value) {
-        Expr::Integer(value as i64)
-    } else {
-        Expr::Number(value)
-    }
+    crate::types::canonical_i64(value).map_or(Expr::Number(value), Expr::Integer)
 }
 
 /// Generate ODE model from a reaction system

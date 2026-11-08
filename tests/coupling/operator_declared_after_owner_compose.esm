@@ -1,0 +1,44 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "operator_declared_after_owner_compose",
+    "description": "An operator declared AFTER the component whose state it writes, with an equation of its own ahead of the merge and a further component after it. The merged equation belongs to Chem (esm-libraries-spec §4.7.1 step 4) and moves to the end of Chem's equations, ahead of every later component's: the flattened order is D(Chem.A), D(Chem.C), D(Chem.B), D(Src.s), D(Tail.x). Left at Src's slot it would follow D(Src.s); appended to the whole list it would follow D(Tail.x)."
+  },
+  "models": {
+    "Chem": {
+      "variables": {
+        "A": {"type": "unknown", "units": "1", "default": 5.5},
+        "B": {"type": "unknown", "units": "1", "default": 10.5},
+        "C": {"type": "unknown", "units": "1", "default": 40.5},
+        "k": {"type": "parameter", "units": "1/s", "default": 0.0125}
+      },
+      "equations": [
+        {"lhs": {"op": "D", "args": ["A"], "wrt": "t"}, "rhs": {"op": "-", "args": [{"op": "*", "args": ["k", "A"]}]}},
+        {"lhs": {"op": "D", "args": ["B"], "wrt": "t"}, "rhs": {"op": "-", "args": [{"op": "*", "args": ["k", "A"]}, {"op": "*", "args": ["k", "B"]}]}},
+        {"lhs": {"op": "D", "args": ["C"], "wrt": "t"}, "rhs": {"op": "*", "args": ["k", "B"]}}
+      ]
+    },
+    "Src": {
+      "variables": {
+        "e": {"type": "parameter", "units": "1/s", "default": 0.0025},
+        "s": {"type": "unknown", "units": "1", "default": 1.5}
+      },
+      "equations": [
+        {"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": {"op": "-", "args": [{"op": "*", "args": ["e", "s"]}]}},
+        {"lhs": {"op": "D", "args": ["Chem.B"], "wrt": "t"}, "rhs": {"op": "*", "args": ["e", "s"]}}
+      ]
+    },
+    "Tail": {
+      "variables": {
+        "r": {"type": "parameter", "units": "1/s", "default": 0.05},
+        "x": {"type": "unknown", "units": "1", "default": 2.5}
+      },
+      "equations": [
+        {"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": {"op": "-", "args": [{"op": "*", "args": ["r", "x"]}]}}
+      ]
+    }
+  },
+  "coupling": [
+    {"type": "operator_compose", "systems": ["Src", "Chem"], "require_match": false}
+  ]
+}

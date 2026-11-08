@@ -54,9 +54,11 @@ Base.showerror(io::IO, e::ParseError) = print(io, "ParseError: ", e.message)
 # returned as is, not copied: none of the jobs above mutates one.
 function _to_native_json(x)
     x isa Vector{Any} && _leaves_only(x) && return x
-    if x isa JSON3.Array || x isa AbstractVector
+    # A JSON3 view's numbers are read back by `_json3_to_ordered` (json_walk.jl).
+    (x isa JSON3.Array || x isa JSON3.Object) && return _to_native_json(_json3_to_ordered(x))
+    if x isa AbstractVector
         return Any[_to_native_json(v) for v in x]
-    elseif x isa JSON3.Object || x isa AbstractDict
+    elseif x isa AbstractDict
         return Dict{String, Any}(string(k) => _to_native_json(v) for (k, v) in pairs(x))
     else
         return x

@@ -4,18 +4,21 @@
     python3 formal/scripts/gen-lib-templates.py            # write the Lean file
     python3 formal/scripts/gen-lib-templates.py --check    # fail if it is stale
 
-Reads the `expression_templates` of `lib/interp.esm` and writes
-`formal/Esm/Lib/Interp.lean`, one `Esm.Expr.Template` per template, its body
+Reads the `expression_templates` of each library file in `TARGETS`
+(`lib/interp.esm`, `lib/calendar.esm`, …) and writes its Lean file
+(`formal/Esm/Lib/Interp.lean`, …), one `Esm.Expr.Template` per template, its body
 transcribed node for node into `Esm.Expr.Ast` (formal/Esm/Expr/Core.lean). The
-theorems in `formal/Esm/Closed/Interp/TemplateAst.lean` are about these
+theorems in `formal/Esm/Closed/Interp/TemplateAst.lean` (and the matching file
+of each library) are about these
 definitions, so `--check` (run by the formal CI workflow) keeps the proofs tied
 to the committed library file: an edit to `lib/interp.esm` that is not
 regenerated fails the check, and a regenerated file the proofs no longer fit
 fails the Lean build.
 
 A node outside what `Esm.Expr.Ast` carries (an op field other than `op`,
-`args`, and a `faq`'s `output_idx`/`reduce`/`ranges`/`expr`, or a `const`'s
-`value`) is an error here rather than a silent drop, as is a missing field
+`args`, a `faq`'s `output_idx`/`reduce`/`ranges`/`filter`/`expr`, an
+`apply_expression_template`'s `name`/`bindings`, or a `const`'s `value` and
+`units`; `units` is dropped, as evaluation does not read it) is an error here rather than a silent drop, as is a missing field
 the transcription needs and a literal `-0.0`: `Ast.num` is an integer mantissa
 and a decimal exponent, which has no negative zero.
 """
@@ -31,6 +34,9 @@ ROOT = Path(__file__).resolve().parents[2]
 # (source library file, Lean output file, Lean namespace)
 TARGETS = [
     ("lib/interp.esm", "formal/Esm/Lib/Interp.lean", "Esm.Lib.Interp"),
+    ("lib/calendar.esm", "formal/Esm/Lib/Calendar.lean", "Esm.Lib.Calendar"),
+    ("lib/relational.esm", "formal/Esm/Lib/Relational.lean", "Esm.Lib.Relational"),
+    ("lib/geometry.esm", "formal/Esm/Lib/Geometry.lean", "Esm.Lib.Geometry"),
 ]
 
 
@@ -84,14 +90,16 @@ def ast(e, indent, path):
         raise Unsupported(f"{path}: not an Expression: {e!r}")
     op = e["op"]
     if op == "const":
-        extra = set(e) - {"op", "value", "args"}
+        # `units` (§4.8.5) is a declaration for the units checker; the value is
+        # all evaluation reads, so the transcription drops it.
+        extra = set(e) - {"op", "value", "args", "units"}
         if extra or e.get("args", []) != []:
             raise Unsupported(f"{path}: const node fields {sorted(extra)}")
         if "value" not in e:
             raise Unsupported(f"{path}: const node has no value")
         return pad + f"(Ast.const {const_value(e['value'], path + '.value')})"
     if op == "faq":
-        extra = set(e) - {"op", "args", "output_idx", "reduce", "ranges", "expr"}
+        extra = set(e) - {"op", "args", "output_idx", "reduce", "ranges", "expr", "filter"}
         if extra:
             raise Unsupported(f"{path}: faq fields {sorted(extra)}")
         if "expr" not in e:
@@ -101,19 +109,37 @@ def ast(e, indent, path):
             raise Unsupported(f"{path}: faq output_idx entry that is not a symbol")
         ranges = "Ranges.nil"
         for k, r in reversed(list(e.get("ranges", {}).items())):
+            if isinstance(r, dict) and set(r) == {"from"} and isinstance(r["from"], str):
+                ranges = f"(Ranges.fromSet {lean_str(k)} {lean_str(r['from'])} {ranges})"
+                continue
             if not isinstance(r, list):
-                raise Unsupported(f"{path}: faq range {k!r} is not a tuple")
+                raise Unsupported(f"{path}: faq range {k!r} is neither a tuple nor a from-set")
             ranges = (f"(Ranges.cons {lean_str(k)} ["
                       + ", ".join(ast(x, 0, f"{path}.ranges.{k}[{i}]") for i, x in enumerate(r))
                       + f"] {ranges})")
+        head = "(Ast.faqWhere [" if "filter" in e else "(Ast.faq ["
         lines = [
-            pad + "(Ast.faq [" + ", ".join(lean_str(o) for o in out) + "] "
+            pad + head + ", ".join(lean_str(o) for o in out) + "] "
             + lean_str(e.get("reduce", "+")) + " " + ranges,
+        ]
+        if "filter" in e:
+            lines.append(ast(e["filter"], indent + 1, path + ".filter"))
+        lines += [
             ast(e["expr"], indent + 1, path + ".expr"),
             pad + "  [" + ", ".join(ast(a, 0, f"{path}.args[{i}]")
                                     for i, a in enumerate(e.get("args", []))) + "])",
         ]
         return "\n".join(lines)
+    if op == "apply_expression_template":
+        extra = set(e) - {"op", "args", "name", "bindings"}
+        if extra or e.get("args", []) != []:
+            raise Unsupported(f"{path}: apply_expression_template fields {sorted(extra)}")
+        if not isinstance(e.get("name"), str) or not isinstance(e.get("bindings"), dict):
+            raise Unsupported(f"{path}: apply_expression_template needs a name and bindings")
+        binds = "Binds.nil"
+        for k, v in reversed(list(e["bindings"].items())):
+            binds = f"(Binds.cons {lean_str(k)} {ast(v, 0, f'{path}.bindings.{k}')} {binds})"
+        return pad + f"(Ast.apply {lean_str(e['name'])} {binds})"
     extra = set(e) - {"op", "args"}
     if extra:
         raise Unsupported(f"{path}: {op} node fields {sorted(extra)}")
@@ -139,6 +165,7 @@ def generate(src, ns):
         "open Esm.Expr",
         "",
     ]
+    names = []
     for name, t in doc.get("expression_templates", {}).items():
         where = f"expression_templates.{name}"
         if not isinstance(t, dict):
@@ -154,6 +181,12 @@ def generate(src, ns):
         out.append("  body :=")
         out.append(ast(t["body"], 2, where + ".body"))
         out.append("")
+        names.append(name)
+    out.append("/-- Every template of the file, by name: the scope a reference in a body")
+    out.append("resolves in (esm-spec §9.7.3). -/")
+    out.append("def lib : List (String × Template) :=")
+    out.append("  [" + ",\n   ".join(f"({lean_str(n)}, {n})" for n in names) + "]")
+    out.append("")
     out.append(f"end {ns}")
     return "\n".join(out) + "\n"
 

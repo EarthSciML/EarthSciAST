@@ -1,0 +1,1837 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "relational_argmin_template",
+    "description": "The `argmin` and `argmax` templates of lib/relational.esm applied to every scenario of tests/conformance/relational_templates/scenarios.json. Candidate k of a scenario is `num[k] / den[k]` over two `const` arrays, so a NaN (0/0), +Inf (1/0) and -Inf (-1/0) candidate can be written in JSON; a finite candidate is `v / 1`, which is `v` exactly. Each scenario is one algebraic unknown `r_<scenario>`; the inline test asserts its 1-based index exactly (tolerance 0): the smallest index on a tie, the first NaN index when a candidate is NaN. Run by the `relational_templates` inline-test tier; written by generate.py.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "tags": [
+      "relational",
+      "argmin",
+      "argmax",
+      "arg-witness",
+      "expression-templates",
+      "standard-library"
+    ]
+  },
+  "models": {
+    "relational_argmin_template": {
+      "expression_template_imports": [
+        {
+          "ref": "esm:std/relational.esm"
+        }
+      ],
+      "variables": {
+        "s": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0,
+          "description": "Trivial state, so the document has something to integrate."
+        },
+        "r_distinct_minimum": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmin` template on scenario `distinct_minimum` of scenarios.json: one smallest candidate."
+        },
+        "r_first_is_extreme": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmin` template on scenario `first_is_extreme` of scenarios.json: the first candidate."
+        },
+        "r_last_is_extreme": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmin` template on scenario `last_is_extreme` of scenarios.json: the last candidate."
+        },
+        "r_negative_values": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmin` template on scenario `negative_values` of scenarios.json: negative candidates."
+        },
+        "r_tie_two": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmin` template on scenario `tie_two` of scenarios.json: a tie goes to the smaller index."
+        },
+        "r_tie_first_last": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmin` template on scenario `tie_first_last` of scenarios.json: a tie between the first and last candidates."
+        },
+        "r_all_equal": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmin` template on scenario `all_equal` of scenarios.json: every candidate equal."
+        },
+        "r_single_candidate": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmin` template on scenario `single_candidate` of scenarios.json: one candidate."
+        },
+        "r_signed_zero_tie": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmin` template on scenario `signed_zero_tie` of scenarios.json: -0.0 == 0.0, so a tie."
+        },
+        "r_signed_zero_tie_reversed": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmin` template on scenario `signed_zero_tie_reversed` of scenarios.json: -0.0 == 0.0, so a tie."
+        },
+        "r_subnormal_tie": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmin` template on scenario `subnormal_tie` of scenarios.json: equal subnormal candidates."
+        },
+        "r_equidistant_generators": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmin` template on scenario `equidistant_generators` of scenarios.json: the nearest_generator tie: point 1.5 to generators 0, 1, 2."
+        },
+        "r_pos_inf_candidate": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmin` template on scenario `pos_inf_candidate` of scenarios.json: +Inf is never the minimum of finite candidates."
+        },
+        "r_all_pos_inf": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmin` template on scenario `all_pos_inf` of scenarios.json: every candidate +Inf: a tie."
+        },
+        "r_neg_inf_tie": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmin` template on scenario `neg_inf_tie` of scenarios.json: -Inf tie."
+        },
+        "r_nan_first": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmin` template on scenario `nan_first` of scenarios.json: a NaN candidate wins at its first occurrence."
+        },
+        "r_nan_middle": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmin` template on scenario `nan_middle` of scenarios.json: first NaN, not the smallest number."
+        },
+        "r_nan_last": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmin` template on scenario `nan_last` of scenarios.json: a NaN after the minimum."
+        },
+        "r_nan_and_neg_inf": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmin` template on scenario `nan_and_neg_inf` of scenarios.json: NaN beats -Inf."
+        },
+        "r_all_nan": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmin` template on scenario `all_nan` of scenarios.json: every candidate NaN."
+        },
+        "r_max_distinct": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmax` template on scenario `max_distinct` of scenarios.json: one largest candidate."
+        },
+        "r_max_last": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmax` template on scenario `max_last` of scenarios.json: the last candidate."
+        },
+        "r_max_tie": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmax` template on scenario `max_tie` of scenarios.json: a tie goes to the smaller index."
+        },
+        "r_max_farthest_tie": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmax` template on scenario `max_farthest_tie` of scenarios.json: the farthest-generator tie (point 1.0 to generators 0, 1, 2)."
+        },
+        "r_max_all_equal": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmax` template on scenario `max_all_equal` of scenarios.json: every candidate equal."
+        },
+        "r_max_single_candidate": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmax` template on scenario `max_single_candidate` of scenarios.json: one candidate."
+        },
+        "r_max_signed_zero_tie": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmax` template on scenario `max_signed_zero_tie` of scenarios.json: -0.0 == 0.0, so a tie."
+        },
+        "r_max_pos_inf_tie": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmax` template on scenario `max_pos_inf_tie` of scenarios.json: +Inf tie."
+        },
+        "r_max_all_neg_inf": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmax` template on scenario `max_all_neg_inf` of scenarios.json: every candidate -Inf: a tie."
+        },
+        "r_max_nan_first": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmax` template on scenario `max_nan_first` of scenarios.json: a NaN candidate wins at its first occurrence."
+        },
+        "r_max_nan_middle": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmax` template on scenario `max_nan_middle` of scenarios.json: first NaN, not the largest number."
+        },
+        "r_max_nan_and_pos_inf": {
+          "type": "unknown",
+          "units": "1",
+          "description": "`argmax` template on scenario `max_nan_and_pos_inf` of scenarios.json: NaN beats +Inf."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "s"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": "r_distinct_minimum",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmin",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          3.0,
+                          1.0,
+                          2.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_first_is_extreme",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmin",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          0.5,
+                          2.0,
+                          3.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_last_is_extreme",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmin",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          4.0,
+                          3.0,
+                          2.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          1.0,
+                          1.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 4
+            }
+          }
+        },
+        {
+          "lhs": "r_negative_values",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmin",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          -1.0,
+                          -3.0,
+                          -2.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_tie_two",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmin",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          2.0,
+                          1.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_tie_first_last",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmin",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          2.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_all_equal",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmin",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          5.0,
+                          5.0,
+                          5.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_single_candidate",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmin",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          7.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 1
+            }
+          }
+        },
+        {
+          "lhs": "r_signed_zero_tie",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmin",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          0.0,
+                          -0.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 2
+            }
+          }
+        },
+        {
+          "lhs": "r_signed_zero_tie_reversed",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmin",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          -0.0,
+                          0.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 2
+            }
+          }
+        },
+        {
+          "lhs": "r_subnormal_tie",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmin",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          5e-324,
+                          1.0,
+                          5e-324
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_equidistant_generators",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmin",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          2.25,
+                          0.25,
+                          0.25
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_pos_inf_candidate",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmin",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          0.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 2
+            }
+          }
+        },
+        {
+          "lhs": "r_all_pos_inf",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmin",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          0.0,
+                          0.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 2
+            }
+          }
+        },
+        {
+          "lhs": "r_neg_inf_tie",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmin",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          -1.0,
+                          -1.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          0.0,
+                          0.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_nan_first",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmin",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          0.0,
+                          0.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          0.0,
+                          1.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_nan_middle",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmin",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          3.0,
+                          0.0,
+                          1.0,
+                          0.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          0.0,
+                          1.0,
+                          0.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 4
+            }
+          }
+        },
+        {
+          "lhs": "r_nan_last",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmin",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          2.0,
+                          0.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          1.0,
+                          0.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_nan_and_neg_inf",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmin",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          -1.0,
+                          0.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          0.0,
+                          0.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 2
+            }
+          }
+        },
+        {
+          "lhs": "r_all_nan",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmin",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          0.0,
+                          0.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          0.0,
+                          0.0
+                        ]
+                      },
+                      "k_argmin_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 2
+            }
+          }
+        },
+        {
+          "lhs": "r_max_distinct",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmax",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          3.0,
+                          1.0,
+                          2.0
+                        ]
+                      },
+                      "k_argmax_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmax_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_max_last",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmax",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          2.0,
+                          3.0,
+                          4.0
+                        ]
+                      },
+                      "k_argmax_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          1.0,
+                          1.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmax_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 4
+            }
+          }
+        },
+        {
+          "lhs": "r_max_tie",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmax",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          4.0,
+                          4.0
+                        ]
+                      },
+                      "k_argmax_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmax_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_max_farthest_tie",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmax",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          0.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmax_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmax_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_max_all_equal",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmax",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          -2.0,
+                          -2.0
+                        ]
+                      },
+                      "k_argmax_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmax_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 2
+            }
+          }
+        },
+        {
+          "lhs": "r_max_single_candidate",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmax",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          -7.0
+                        ]
+                      },
+                      "k_argmax_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0
+                        ]
+                      },
+                      "k_argmax_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 1
+            }
+          }
+        },
+        {
+          "lhs": "r_max_signed_zero_tie",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmax",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          -0.0,
+                          0.0
+                        ]
+                      },
+                      "k_argmax_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmax_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 2
+            }
+          }
+        },
+        {
+          "lhs": "r_max_pos_inf_tie",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmax",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmax_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          0.0,
+                          0.0
+                        ]
+                      },
+                      "k_argmax_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_max_all_neg_inf",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmax",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          -1.0,
+                          -1.0,
+                          -1.0
+                        ]
+                      },
+                      "k_argmax_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          0.0,
+                          0.0,
+                          0.0
+                        ]
+                      },
+                      "k_argmax_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 3
+            }
+          }
+        },
+        {
+          "lhs": "r_max_nan_first",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmax",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          0.0,
+                          5.0
+                        ]
+                      },
+                      "k_argmax_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          0.0,
+                          1.0
+                        ]
+                      },
+                      "k_argmax_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 2
+            }
+          }
+        },
+        {
+          "lhs": "r_max_nan_middle",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmax",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          9.0,
+                          0.0,
+                          2.0,
+                          0.0
+                        ]
+                      },
+                      "k_argmax_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          1.0,
+                          0.0,
+                          1.0,
+                          0.0
+                        ]
+                      },
+                      "k_argmax_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 5
+            }
+          }
+        },
+        {
+          "lhs": "r_max_nan_and_pos_inf",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "argmax",
+            "bindings": {
+              "f": {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          1.0,
+                          0.0
+                        ]
+                      },
+                      "k_argmax_1"
+                    ]
+                  },
+                  {
+                    "op": "index",
+                    "args": [
+                      {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                          0.0,
+                          0.0
+                        ]
+                      },
+                      "k_argmax_1"
+                    ]
+                  }
+                ]
+              },
+              "n": 2
+            }
+          }
+        }
+      ],
+      "tolerance": {
+        "abs": 0.0,
+        "rel": 0.0
+      },
+      "tests": [
+        {
+          "id": "relational_argmin_template_t0",
+          "description": "Every scenario at t = 0.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "r_distinct_minimum",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "r_first_is_extreme",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "r_last_is_extreme",
+              "time": 0.0,
+              "expected": 4.0
+            },
+            {
+              "variable": "r_negative_values",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "r_tie_two",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "r_tie_first_last",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "r_all_equal",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "r_single_candidate",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "r_signed_zero_tie",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "r_signed_zero_tie_reversed",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "r_subnormal_tie",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "r_equidistant_generators",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "r_pos_inf_candidate",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "r_all_pos_inf",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "r_neg_inf_tie",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "r_nan_first",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "r_nan_middle",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "r_nan_last",
+              "time": 0.0,
+              "expected": 3.0
+            },
+            {
+              "variable": "r_nan_and_neg_inf",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "r_all_nan",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "r_max_distinct",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "r_max_last",
+              "time": 0.0,
+              "expected": 4.0
+            },
+            {
+              "variable": "r_max_tie",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "r_max_farthest_tie",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "r_max_all_equal",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "r_max_single_candidate",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "r_max_signed_zero_tie",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "r_max_pos_inf_tie",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "r_max_all_neg_inf",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "r_max_nan_first",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "r_max_nan_middle",
+              "time": 0.0,
+              "expected": 3.0
+            },
+            {
+              "variable": "r_max_nan_and_pos_inf",
+              "time": 0.0,
+              "expected": 2.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -878,6 +878,7 @@ impl ArrayCompiled {
         // producer. A producer that cannot run is recorded rather than raised, and
         // is refused below only if a surviving expression ranges over its set.
         let derived = materialize_derived_extents(&model_owned, &index_sets_owned, vi_arrays, &vi);
+        bind_member_factors(&mut model_owned, &derived.member_factors);
         // A skolem map buffer (a broad-phase bin key per cell) becomes constant
         // data, so a `join.on` gate comparing two of them stays a gate — a
         // value-equality filter on data columns — rather than being dropped.
@@ -896,8 +897,8 @@ impl ArrayCompiled {
         // counted above are all that survive of such a set: its members and
         // skolem maps are not materialized, and the elided gate is numerically
         // inert only where a dense narrow phase follows (see
-        // `strip_value_invention`). A no-op unless a `skolem` op or a
-        // derived-set-shaped variable is present.
+        // `strip_value_invention`). A no-op unless a `skolem` op, a
+        // `distinct` producer or a derived-set-shaped variable is present.
         // A producer that could not run leaves its derived set with no
         // members: a stage that then trips over the stripped producer (a
         // surviving read of one of its outputs, an output shaped on its set)
@@ -4042,7 +4043,8 @@ pub(super) fn strip_vi_joins(expr: &mut Expr, vi_cols: &HashSet<String>) {
 /// zero on exactly the pairs the bin-skolem gate would prune, so the dense
 /// contraction is numerically identical (see [`strip_vi_joins`]). Genuine
 /// (loop-symbol) joins and non-VI models stay byte-identical: the pass is a
-/// no-op unless a `skolem` op or a derived-set-shaped variable is present.
+/// no-op unless a `skolem` op, a `distinct` producer or a derived-set-shaped
+/// variable is present.
 pub(super) fn strip_value_invention(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
@@ -4100,11 +4102,14 @@ pub(super) fn strip_value_invention(
             }
         }
     }
-    // (b) A variable defined by an equation whose RHS produces a skolem id, or
-    //     a `rank` dense id over an invented set: build-time relational
-    //     outputs, dropped as the other bindings drop them.
+    // (b) A variable defined by an equation whose RHS produces a skolem id, a
+    //     `rank` dense id over an invented set, or is a `distinct` producer
+    //     (whatever its key): build-time relational outputs, dropped as the
+    //     other bindings drop them.
     for eq in &model.equations {
-        if (vi.skolem && expr_contains_skolem(&eq.rhs))
+        let distinct = matches!(&eq.rhs, Expr::Operator(n) if n.distinct == Some(true));
+        if distinct
+            || (vi.skolem && expr_contains_skolem(&eq.rhs))
             || (any_derived && ranks_a_derived_set(&eq.rhs, index_sets))
         {
             if let Some(v) = equation_defined_var(&eq.lhs) {
@@ -4569,7 +4574,17 @@ pub fn run_value_invention_with_params<S: std::hash::BuildHasher>(
     }
 
     materialize_value_invention(&model_json, &const_arrays, &params, &HashMap::new()).map_err(|e| {
-        CompileError::build_err(format!("value-invention materialize failed: {}", e.0))
+        // A NaN key or join column already names its column (esm-spec §9.6.6).
+        match e.code {
+            Some(code) => CompileError::ValueInventionRefused {
+                code,
+                reason: e.message,
+            },
+            None => CompileError::build_err(format!(
+                "value-invention materialize failed: {}",
+                e.message
+            )),
+        }
     })
 }
 
@@ -4581,10 +4596,15 @@ pub(super) struct DerivedMaterialization {
     /// Ids of the geometry ring producers, whose sets the runtime sizes itself.
     geometry_ids: HashSet<String>,
     /// The engine's error, if it could not run.
-    failure: Option<String>,
+    failure: Option<CompileError>,
     /// The skolem map buffers as integer codes
     /// ([`ValueInventionResult::map_codes`]).
     map_codes: HashMap<String, Vec<f64>>,
+    /// Each derived set's `member_factor` parameter with the member ids the
+    /// engine invented for it, in member order: the column the build pipeline
+    /// feeds back (`crate::prepare`'s `feed_member_factors`), so a read of the
+    /// factor over the set sees the same values on this route.
+    member_factors: Vec<(String, Vec<f64>)>,
 }
 
 /// Run value invention when the model has a derived index set whose producer is
@@ -4611,6 +4631,7 @@ fn materialize_derived_extents(
         geometry_ids,
         failure: None,
         map_codes: HashMap::new(),
+        member_factors: Vec::new(),
     };
     // A skolem bin map that a `join.on` gate compares needs the engine too,
     // derived set or not: its codes keep the gate (`map_codes` below), which
@@ -4628,13 +4649,75 @@ fn materialize_derived_extents(
         let lean = without_factor_literals(model, &factors);
         match run_value_invention(&lean, index_sets, Some(&factors)) {
             Ok(result) => {
+                out.member_factors = member_factor_columns(index_sets, &result, caller_arrays);
                 out.extents = result.extents;
                 out.map_codes = result.map_codes;
             }
-            Err(e) => out.failure = Some(e.to_string()),
+            Err(e) => out.failure = Some(e),
         }
     }
     out
+}
+
+/// The member ids each derived set with a `member_factor` feeds back, sorted by
+/// set name. Only a set whose members are all scalar keys has ids; a
+/// tuple-keyed producer is sized by its extent alone, as on the build
+/// pipeline. A factor the caller supplies stays the caller's.
+fn member_factor_columns(
+    index_sets: &HashMap<String, IndexSet>,
+    result: &ValueInventionResult,
+    caller_arrays: Option<&HashMap<String, ArrayD<f64>>>,
+) -> Vec<(String, Vec<f64>)> {
+    let mut sets: Vec<(&String, &IndexSet)> = index_sets
+        .iter()
+        .filter(|(_, is)| is.kind == "derived")
+        .collect();
+    sets.sort_by(|a, b| a.0.cmp(b.0));
+    sets.into_iter()
+        .filter_map(|(_, is)| {
+            let (mf, faq) = (is.member_factor.as_ref()?, is.from_faq.as_ref()?);
+            if caller_arrays.is_some_and(|a| a.contains_key(mf)) {
+                return None;
+            }
+            let ids: Option<Vec<f64>> = result
+                .members
+                .get(faq)?
+                .iter()
+                .map(|k| match k {
+                    crate::relational::Key::Int(i) => Some(*i as f64),
+                    _ => None,
+                })
+                .collect();
+            Some((mf.clone(), ids?))
+        })
+        .collect()
+}
+
+/// Bind each fed-back `member_factor` column onto its parameter as `const`
+/// data (an observed over the derived set, which [`strip_value_invention`]
+/// keeps). The parameter is found under its declared name, else under the one
+/// mounted name that ends in it; a factor no parameter declares is left alone.
+fn bind_member_factors(model: &mut Model, columns: &[(String, Vec<f64>)]) {
+    for (mf, values) in columns {
+        let name = if model.variables.contains_key(mf) {
+            Some(mf.clone())
+        } else {
+            let suffix = format!(".{mf}");
+            let mut hits = model.variables.keys().filter(|k| k.ends_with(&suffix));
+            match (hits.next(), hits.next()) {
+                (Some(k), None) => Some(k.clone()),
+                _ => None,
+            }
+        };
+        let Some(name) = name else { continue };
+        let var = model.variables.get_mut(&name).expect("found above");
+        if var.var_type != VariableType::Parameter || var.update.is_some() {
+            continue;
+        }
+        var.var_type = VariableType::Unknown;
+        var.default = None;
+        rewrite_equation_to_const(model, &name, values);
+    }
 }
 
 /// Whether a `join.on` key pair anywhere in `model` names a variable defined by
@@ -4737,9 +4820,29 @@ fn value_invention_factors(
         }
     }
 
+    /// The `join.on` column names of every `distinct` producer and arg-witness.
+    fn vi_join_columns(e: &Expr, out: &mut BTreeSet<String>) {
+        let Expr::Operator(node) = e else {
+            return;
+        };
+        if node.distinct == Some(true) || matches!(node.op.as_str(), "argmin" | "argmax") {
+            for clause in node.join.iter().flatten() {
+                out.extend(clause.on.iter().flatten().cloned());
+            }
+        }
+        node.for_each_child(&mut |c| vi_join_columns(c, out));
+    }
+    let mut columns = BTreeSet::new();
+    for eq in &model.equations {
+        vi_join_columns(&eq.rhs, &mut columns);
+    }
+    // The coordinates a skolem map gathers from, and those a plain join column
+    // (a per-component bin column) reads.
     let mut targets = BTreeSet::new();
     for eq in &model.equations {
-        if expr_contains_skolem(&eq.rhs) {
+        if expr_contains_skolem(&eq.rhs)
+            || equation_defined_var(&eq.lhs).is_some_and(|v| columns.contains(&v))
+        {
             index_targets(&eq.rhs, &mut targets);
         }
     }
@@ -4808,7 +4911,7 @@ pub(super) fn first_unmaterialized_derived_range(
 pub(super) fn unmaterialized_derived_error(
     from_faq: &str,
     index_sets: &HashMap<String, IndexSet>,
-    failure: Option<&str>,
+    failure: Option<&CompileError>,
 ) -> CompileError {
     let mut names: Vec<&str> = index_sets
         .iter()
@@ -4821,8 +4924,19 @@ pub(super) fn unmaterialized_derived_error(
         Some(set) => format!("derived index set '{set}' (from_faq '{from_faq}')"),
         None => format!("the derived index set produced by '{from_faq}'"),
     };
-    match failure {
-        Some(reason)
+    let reason = failure.map(|e| e.to_string());
+    match (failure, reason.as_deref()) {
+        // The producer ran and its key, not the data, is wrong: that code wins
+        // over `derived_index_set_unmaterialized` (esm-spec §9.6.6).
+        (Some(CompileError::ValueInventionRefused { code, .. }), Some(reason))
+            if *code == crate::diagnostic::codes::VALUE_INVENTION_KEY_OUT_OF_RANGE =>
+        {
+            CompileError::ValueInventionRefused {
+                code: crate::diagnostic::codes::VALUE_INVENTION_KEY_OUT_OF_RANGE,
+                reason: format!("{subject}: {reason}"),
+            }
+        }
+        (_, Some(reason))
             if reason.contains(crate::diagnostic::codes::RELATIONAL_NODE_IN_CONTINUOUS) =>
         {
             CompileError::ValueInventionRefused {
@@ -4834,7 +4948,9 @@ pub(super) fn unmaterialized_derived_error(
             code: crate::diagnostic::codes::DERIVED_INDEX_SET_UNMATERIALIZED,
             reason: format!(
                 "{subject} is not materialized: {}",
-                failure.unwrap_or("no geometry or value-invention producer supplied its extent")
+                reason
+                    .as_deref()
+                    .unwrap_or("no geometry or value-invention producer supplied its extent")
             ),
         },
     }
@@ -4847,7 +4963,7 @@ impl DerivedMaterialization {
         &self,
         index_sets: &HashMap<String, IndexSet>,
     ) -> Result<(), CompileError> {
-        let Some(failure) = self.failure.as_deref() else {
+        let Some(failure) = self.failure.as_ref() else {
             return Ok(());
         };
         let mut sets: Vec<(&String, &str)> = index_sets
@@ -4937,7 +5053,7 @@ fn refuse_unmaterialized_derived_ranges(
         Some(from_faq) => Err(unmaterialized_derived_error(
             &from_faq,
             index_sets,
-            derived.failure.as_deref(),
+            derived.failure.as_ref(),
         )),
         None => Ok(()),
     }

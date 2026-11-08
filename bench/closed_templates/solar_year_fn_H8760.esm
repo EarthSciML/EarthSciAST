@@ -1,0 +1,950 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "solar_year_fn_H8760",
+  "description": "lib/solar.esm over 8760 hourly timestamps from 2026-01-01, datetime fields as fn calls."
+ },
+ "index_sets": {
+  "hours": {
+   "kind": "interval",
+   "size": 8760
+  }
+ },
+ "models": {
+  "SolarYear": {
+   "variables": {
+    "lat": {
+     "type": "parameter",
+     "default": 40.1
+    },
+    "lon": {
+     "type": "parameter",
+     "default": -88.2
+    },
+    "rad_per_day": {
+     "type": "parameter",
+     "default": 0.01721420632103996
+    },
+    "rad_per_deg": {
+     "type": "parameter",
+     "default": 0.017453292519943295
+    },
+    "min_per_deg": {
+     "type": "parameter",
+     "default": 4.0
+    },
+    "min_of_clock": {
+     "type": "parameter",
+     "default": 1.0
+    },
+    "rad_of_series": {
+     "type": "parameter",
+     "default": 1.0
+    },
+    "eot_scale": {
+     "type": "parameter",
+     "default": 229.18
+    },
+    "cos_zenith": {
+     "type": "unknown",
+     "shape": [
+      "hours"
+     ]
+    },
+    "day_of_year": {
+     "type": "unknown",
+     "shape": [
+      "hours"
+     ]
+    },
+    "equation_of_time": {
+     "type": "unknown",
+     "shape": [
+      "hours"
+     ]
+    },
+    "gamma": {
+     "type": "unknown",
+     "shape": [
+      "hours"
+     ]
+    },
+    "hour": {
+     "type": "unknown",
+     "shape": [
+      "hours"
+     ]
+    },
+    "hour_angle": {
+     "type": "unknown",
+     "shape": [
+      "hours"
+     ]
+    },
+    "lat_rad": {
+     "type": "unknown",
+     "shape": [
+      "hours"
+     ]
+    },
+    "minute": {
+     "type": "unknown",
+     "shape": [
+      "hours"
+     ]
+    },
+    "second": {
+     "type": "unknown",
+     "shape": [
+      "hours"
+     ]
+    },
+    "solar_declination": {
+     "type": "unknown",
+     "shape": [
+      "hours"
+     ]
+    },
+    "solar_zenith_angle": {
+     "type": "unknown",
+     "shape": [
+      "hours"
+     ]
+    },
+    "t_utc": {
+     "type": "unknown",
+     "shape": [
+      "hours"
+     ]
+    },
+    "true_solar_time": {
+     "type": "unknown",
+     "shape": [
+      "hours"
+     ]
+    },
+    "z": {
+     "type": "unknown",
+     "shape": [
+      "hours"
+     ],
+     "default": 1.0
+    }
+   },
+   "equations": [
+    {
+     "lhs": "t_utc",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "h"
+      ],
+      "ranges": {
+       "h": {
+        "from": "hours"
+       }
+      },
+      "expr": {
+       "op": "+",
+       "args": [
+        1767225600.0,
+        {
+         "op": "*",
+         "args": [
+          3600,
+          {
+           "op": "-",
+           "args": [
+            "h",
+            1
+           ]
+          }
+         ]
+        },
+        "t"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "day_of_year",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "h"
+      ],
+      "ranges": {
+       "h": {
+        "from": "hours"
+       }
+      },
+      "expr": {
+       "op": "fn",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "t_utc",
+          "h"
+         ]
+        }
+       ],
+       "name": "datetime.day_of_year"
+      }
+     }
+    },
+    {
+     "lhs": "hour",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "h"
+      ],
+      "ranges": {
+       "h": {
+        "from": "hours"
+       }
+      },
+      "expr": {
+       "op": "fn",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "t_utc",
+          "h"
+         ]
+        }
+       ],
+       "name": "datetime.hour"
+      }
+     }
+    },
+    {
+     "lhs": "minute",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "h"
+      ],
+      "ranges": {
+       "h": {
+        "from": "hours"
+       }
+      },
+      "expr": {
+       "op": "fn",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "t_utc",
+          "h"
+         ]
+        }
+       ],
+       "name": "datetime.minute"
+      }
+     }
+    },
+    {
+     "lhs": "second",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "h"
+      ],
+      "ranges": {
+       "h": {
+        "from": "hours"
+       }
+      },
+      "expr": {
+       "op": "fn",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "t_utc",
+          "h"
+         ]
+        }
+       ],
+       "name": "datetime.second"
+      }
+     }
+    },
+    {
+     "lhs": "gamma",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "h"
+      ],
+      "ranges": {
+       "h": {
+        "from": "hours"
+       }
+      },
+      "expr": {
+       "op": "*",
+       "args": [
+        "rad_per_day",
+        {
+         "op": "+",
+         "args": [
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "day_of_year",
+              "h"
+             ]
+            },
+            1
+           ]
+          },
+          {
+           "op": "/",
+           "args": [
+            {
+             "op": "-",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "hour",
+                "h"
+               ]
+              },
+              12
+             ]
+            },
+            24.0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "solar_declination",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "h"
+      ],
+      "ranges": {
+       "h": {
+        "from": "hours"
+       }
+      },
+      "expr": {
+       "op": "*",
+       "args": [
+        "rad_of_series",
+        {
+         "op": "+",
+         "args": [
+          0.006918,
+          {
+           "op": "*",
+           "args": [
+            -0.399912,
+            {
+             "op": "cos",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "gamma",
+                "h"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "op": "*",
+           "args": [
+            0.070257,
+            {
+             "op": "sin",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "gamma",
+                "h"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "op": "*",
+           "args": [
+            -0.006758,
+            {
+             "op": "cos",
+             "args": [
+              {
+               "op": "*",
+               "args": [
+                2.0,
+                {
+                 "op": "index",
+                 "args": [
+                  "gamma",
+                  "h"
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "op": "*",
+           "args": [
+            0.000907,
+            {
+             "op": "sin",
+             "args": [
+              {
+               "op": "*",
+               "args": [
+                2.0,
+                {
+                 "op": "index",
+                 "args": [
+                  "gamma",
+                  "h"
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "op": "*",
+           "args": [
+            -0.002697,
+            {
+             "op": "cos",
+             "args": [
+              {
+               "op": "*",
+               "args": [
+                3.0,
+                {
+                 "op": "index",
+                 "args": [
+                  "gamma",
+                  "h"
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "op": "*",
+           "args": [
+            0.00148,
+            {
+             "op": "sin",
+             "args": [
+              {
+               "op": "*",
+               "args": [
+                3.0,
+                {
+                 "op": "index",
+                 "args": [
+                  "gamma",
+                  "h"
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "equation_of_time",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "h"
+      ],
+      "ranges": {
+       "h": {
+        "from": "hours"
+       }
+      },
+      "expr": {
+       "op": "*",
+       "args": [
+        "eot_scale",
+        {
+         "op": "+",
+         "args": [
+          7.5e-05,
+          {
+           "op": "*",
+           "args": [
+            0.001868,
+            {
+             "op": "cos",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "gamma",
+                "h"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "op": "*",
+           "args": [
+            -0.032077,
+            {
+             "op": "sin",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "gamma",
+                "h"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "op": "*",
+           "args": [
+            -0.014615,
+            {
+             "op": "cos",
+             "args": [
+              {
+               "op": "*",
+               "args": [
+                2.0,
+                {
+                 "op": "index",
+                 "args": [
+                  "gamma",
+                  "h"
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "op": "*",
+           "args": [
+            -0.040849,
+            {
+             "op": "sin",
+             "args": [
+              {
+               "op": "*",
+               "args": [
+                2.0,
+                {
+                 "op": "index",
+                 "args": [
+                  "gamma",
+                  "h"
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "true_solar_time",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "h"
+      ],
+      "ranges": {
+       "h": {
+        "from": "hours"
+       }
+      },
+      "expr": {
+       "op": "+",
+       "args": [
+        {
+         "op": "*",
+         "args": [
+          "min_of_clock",
+          {
+           "op": "+",
+           "args": [
+            {
+             "op": "*",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "hour",
+                "h"
+               ]
+              },
+              60.0
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "minute",
+              "h"
+             ]
+            },
+            {
+             "op": "/",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "second",
+                "h"
+               ]
+              },
+              60.0
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "op": "index",
+         "args": [
+          "equation_of_time",
+          "h"
+         ]
+        },
+        {
+         "op": "*",
+         "args": [
+          "min_per_deg",
+          "lon"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "hour_angle",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "h"
+      ],
+      "ranges": {
+       "h": {
+        "from": "hours"
+       }
+      },
+      "expr": {
+       "op": "*",
+       "args": [
+        "rad_per_deg",
+        {
+         "op": "-",
+         "args": [
+          {
+           "op": "/",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "true_solar_time",
+              "h"
+             ]
+            },
+            "min_per_deg"
+           ]
+          },
+          {
+           "op": "const",
+           "args": [],
+           "value": 180.0
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "lat_rad",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "h"
+      ],
+      "ranges": {
+       "h": {
+        "from": "hours"
+       }
+      },
+      "expr": {
+       "op": "*",
+       "args": [
+        "rad_per_deg",
+        "lat"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "cos_zenith",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "h"
+      ],
+      "ranges": {
+       "h": {
+        "from": "hours"
+       }
+      },
+      "expr": {
+       "op": "+",
+       "args": [
+        {
+         "op": "*",
+         "args": [
+          {
+           "op": "sin",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "lat_rad",
+              "h"
+             ]
+            }
+           ]
+          },
+          {
+           "op": "sin",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "solar_declination",
+              "h"
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "op": "*",
+         "args": [
+          {
+           "op": "cos",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "lat_rad",
+              "h"
+             ]
+            }
+           ]
+          },
+          {
+           "op": "cos",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "solar_declination",
+              "h"
+             ]
+            }
+           ]
+          },
+          {
+           "op": "cos",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "hour_angle",
+              "h"
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "solar_zenith_angle",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "h"
+      ],
+      "ranges": {
+       "h": {
+        "from": "hours"
+       }
+      },
+      "expr": {
+       "op": "acos",
+       "args": [
+        {
+         "op": "min",
+         "args": [
+          1.0,
+          {
+           "op": "max",
+           "args": [
+            -1.0,
+            {
+             "op": "index",
+             "args": [
+              "cos_zenith",
+              "h"
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "h"
+      ],
+      "ranges": {
+       "h": {
+        "from": "hours"
+       }
+      },
+      "expr": {
+       "op": "D",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "z",
+          "h"
+         ]
+        }
+       ],
+       "wrt": "t"
+      }
+     },
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "h"
+      ],
+      "ranges": {
+       "h": {
+        "from": "hours"
+       }
+      },
+      "expr": {
+       "op": "*",
+       "args": [
+        0.01,
+        {
+         "op": "-",
+         "args": [
+          {
+           "op": "index",
+           "args": [
+            "solar_zenith_angle",
+            "h"
+           ]
+          },
+          {
+           "op": "index",
+           "args": [
+            "z",
+            "h"
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    }
+   ]
+  }
+ }
+}

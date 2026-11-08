@@ -17,6 +17,7 @@
 #   tests/conformance/expression_templates/import_rename_diamond/expanded.esm
 #   tests/conformance/expression_templates/import_rename_name_keyed_map_entries/expanded.esm
 #   tests/conformance/expression_templates/ranges_param/expanded.esm
+#   tests/conformance/expression_templates/ranges_from_param/expanded.esm
 #   tests/conformance/expression_templates/metaparam_axis_name_collision/expanded.esm
 #   tests/conformance/expression_templates/metaparam_structural_field_collision/expanded.esm
 #   tests/conformance/expression_templates/import_library_enum/expanded.esm
@@ -97,6 +98,7 @@ for (dir, fixture, golden) in [
         ("import_order_determinism", "fixture_priority_override.esm", "expanded_priority_override.esm"),
         ("scalar_field_param", "fixture.esm", "expanded.esm"),
         ("ranges_param", "fixture.esm", "expanded.esm"),
+        ("ranges_from_param", "fixture.esm", "expanded.esm"),
         ("faq_int_ratio_golden", "fixture.esm", "expanded.esm"),
         ("import_rename_two_instances", "fixture.esm", "expanded.esm"),
         ("import_rename_integral_axis", "fixture.esm", "expanded.esm"),
