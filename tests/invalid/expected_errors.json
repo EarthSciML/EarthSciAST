@@ -2259,6 +2259,17 @@
     "is_valid": false,
     "notes": "Resolver-level invalid (bead ess-my4.1.6; RFC semiring-faq-unified-ir \u00a75.2). The faq `ranges` entry references { \"from\": \"ghost_cells\" }, a name absent from the model `index_sets` registry (which declares only \"cells\"). The document is SCHEMA-VALID, so schema-only bindings (TypeScript, Go) accept it (is_valid: true) \u2014 their invalid-fixture loops read `resolver_only` and assert schema acceptance instead of rejection. The evaluating bindings reject the undeclared name: Julia build_evaluator -> TreeWalkError E_TREEWALK_UNDECLARED_INDEX_SET; Rust resolve_aggregate_ranges -> CompileError::InterpreterBuildError; Python build_reference_graph -> ReferenceResolutionError E_REF_UNDECLARED_INDEX_SET. NEGATIVE CONTROL for issue #185: this fixture DECLARES a registry (`cells`), so the `from` name is resolved against it at validate() and the rejection stands. A document that declares NO `index_sets` at all is instead a \u00a79.7.10 / \u00a76.6.6 discretization-agnostic leaf whose sets arrive by injection, and `undefined_index_set` is deferred for it (CONFORMANCE_SPEC \u00a75.6.4; positive control tests/conformance/expression_templates/inject_agnostic_faq/fixture.esm)."
   },
+  "template_from_param_undeclared.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/M/equations/0/rhs",
+        "code": "undefined_index_set"
+      }
+    ],
+    "is_valid": false,
+    "notes": "A template parameter standing for a faq `ranges` `from` (esm-spec 9.6.1) is bound to `ghost_cells`, which names no declared index set; the expanded range is refused exactly as undeclared_from_name.esm is, with undefined_index_set at the call site. Schema-valid, so the schema-only bindings (TypeScript, Go) accept it, as they accept that fixture."
+  },
   "ragged_values_not_gathered.esm": {
     "schema_errors": [],
     "structural_errors": [

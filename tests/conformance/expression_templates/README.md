@@ -67,6 +67,18 @@ MUST expand each `ranges` tuple to the bound integers (`expanded.esm`,
 Julia-generated via `scripts/generate-template-import-goldens.jl`). This is how
 the `lib/interp.esm` templates take an axis length as an integer parameter.
 
+### `ranges_from_param/` (expanded.esm)
+
+A template parameter written as the `from` of a `faq` `ranges` entry is a
+substitution site too (esm-spec §9.6.1), so a template can range over an
+index set the caller names: `total(v, S)` sums `v` over `{"from": S}` and
+`count_below(x, v, S)` counts the entries below `x`. The call sites bind `S` to
+`cells` and `sites`; all five bindings MUST expand each range to
+`{"from": "<bound name>"}` (`expanded.esm`), and the inline test pins the
+values. This is how `lib/relational.esm`'s `rank_of_set` ranges over a derived
+set. A bound name that is not a declared index set is `undefined_index_set`
+(`tests/invalid/faq/template_from_param_undeclared.esm`).
+
 ## Rewrite-engine fixtures (0.8.0: outermost-first + priority + bounded fixpoint)
 
 These exercise the auto-applied `match` rewrite engine (esm-spec §9.6.3) and the
