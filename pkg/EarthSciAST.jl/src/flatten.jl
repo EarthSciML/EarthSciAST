@@ -1441,7 +1441,7 @@ function flatten(
             merged_renames,
             _apply_operator_compose!(
                 equations, contribs, entry, states, observeds,
-                eq_owners; renames = merged_renames
+                eq_owners; renames = merged_renames, components = source_systems
             )
         )
     end

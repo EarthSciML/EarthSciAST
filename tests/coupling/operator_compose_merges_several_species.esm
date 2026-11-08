@@ -1,0 +1,36 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "operator_compose_merges_several_species",
+    "description": "An operator declared BEFORE the component whose states it writes authors three tendencies: two of Chem's species, by their scoped names and in the opposite of Chem's declaration order, and one of its own. Both merged equations belong to Chem (esm-libraries-spec §4.7.1 step 4) and move to the end of Chem's equations, in the operator's order: the flattened order is D(Src.s), D(Chem.B), D(Chem.C), D(Chem.A). Src's own equation keeps its slot."
+  },
+  "models": {
+    "Src": {
+      "variables": {
+        "e": {"type": "parameter", "units": "1/s", "default": 0.0025},
+        "s": {"type": "unknown", "units": "1", "default": 1.5}
+      },
+      "equations": [
+        {"lhs": {"op": "D", "args": ["Chem.C"], "wrt": "t"}, "rhs": "e"},
+        {"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": {"op": "-", "args": [{"op": "*", "args": ["e", "s"]}]}},
+        {"lhs": {"op": "D", "args": ["Chem.A"], "wrt": "t"}, "rhs": {"op": "*", "args": ["e", "s"]}}
+      ]
+    },
+    "Chem": {
+      "variables": {
+        "A": {"type": "unknown", "units": "1", "default": 5.5},
+        "B": {"type": "unknown", "units": "1", "default": 10.5},
+        "C": {"type": "unknown", "units": "1", "default": 40.5},
+        "k": {"type": "parameter", "units": "1/s", "default": 0.0125}
+      },
+      "equations": [
+        {"lhs": {"op": "D", "args": ["A"], "wrt": "t"}, "rhs": {"op": "-", "args": [{"op": "*", "args": ["k", "A"]}]}},
+        {"lhs": {"op": "D", "args": ["B"], "wrt": "t"}, "rhs": {"op": "-", "args": [{"op": "*", "args": ["k", "A"]}, {"op": "*", "args": ["k", "B"]}]}},
+        {"lhs": {"op": "D", "args": ["C"], "wrt": "t"}, "rhs": {"op": "*", "args": ["k", "B"]}}
+      ]
+    }
+  },
+  "coupling": [
+    {"type": "operator_compose", "systems": ["Src", "Chem"], "require_match": false}
+  ]
+}

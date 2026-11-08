@@ -1194,14 +1194,17 @@ order; the application sequence and the reporting sequence are separate.
      therefore carry it explicitly — as a per-equation owner beside the equation list, or as which
      component's equation list the equation lives in — and MUST update it here.
 
-     Attribution is about VISIBILITY to later entries, not about ordering; ordering stays what
-     §4.7.5 step 4 says. Nor is it provenance: an equation has one attributed owner but may have
+     Attribution also places the merged equation in the flattened order: one attributed to a
+     component other than A moves to the end of that component's equations (§4.7.5 step 4,
+     "Ordering"). It is not provenance: an equation has one attributed owner but may have
      several authors, and which component or coupling entry wrote each summand is recorded
      separately, in the equation's contribution list (§4.7.5, "Per-term provenance").
 
-     Note that in an implementation whose attribution IS the equation list an equation sits in,
-     updating it necessarily moves the equation: append it to the owner's list, so that in a
-     chained composition each merged equation trails the merges that preceded it.
+     In an implementation whose attribution IS the equation list an equation sits in, updating
+     it is that move: append the equation to the owner's list, so that in a chained composition
+     each merged equation trails the merges that preceded it. An implementation with one list
+     and a per-equation owner inserts it after the last equation of the owner and of every
+     component declared before it, which is the same place.
 
    - **The merged-away name does not survive.** When a match renames the dependent variable — a
      translation match, or the bare-name fallback, which is a name-based translation — B's
@@ -1575,9 +1578,13 @@ TypeScript `camelCase`, others verbatim).
 - **Ordering (normative).** Every ordered map and list above is in **document order**:
   components in the order the file declares them, and within a component, the order the
   component declares its variables. Coupling-merged entries keep the position of their
-  first occurrence. Ordering is observable — a binding's parameter vector is positional —
-  so lexicographic sorting, insertion-hash order, or any order that varies with the host
-  language's map implementation is non-conforming.
+  first occurrence, with one exception: an `operator_compose` merged equation that §4.7.1
+  step 4 attributes to a component other than `systems[0]` moves to the end of that
+  component's equations, after the last equation of that component and of every component
+  declared before it; several such equations keep their order relative to each other, and each
+  trails those an earlier entry moved. Ordering is observable — a binding's parameter vector
+  is positional — so lexicographic sorting, insertion-hash order, or any order that varies
+  with the host language's map implementation is non-conforming.
 - **Full metadata, not names.** Each `name → variable` map carries the complete declared
   variable (units, `default`, `shape`, `update`, `distribution`), not a bare name list. A
   consumer must be able to build a solver problem from the flattened form alone. The one
