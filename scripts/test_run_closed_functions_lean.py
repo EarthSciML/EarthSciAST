@@ -72,7 +72,9 @@ class TemplateDocs(unittest.TestCase):
                 ],
             }
         ]
-        (self.dir / "doc.esm").write_text(json.dumps({"models": {"m": model(tests, {"rel": 0, "abs": 0})}}))
+        (self.dir / "doc.esm").write_text(
+            json.dumps({"models": {"m": model(tests, {"rel": 0, "abs": 0})}})
+        )
         res = [
             {**result("A", 0.5), "coords": {"s": 1, "u": 2}},
             {**result("A", 9.0), "coords": {"s": 2, "u": 1}},

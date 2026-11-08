@@ -184,7 +184,9 @@ def _dedup_exact(ring):
 
 def _signed2(ring):
     n = len(ring)
-    return sum(ring[i][0] * ring[(i + 1) % n][1] - ring[(i + 1) % n][0] * ring[i][1] for i in range(n))
+    return sum(
+        ring[i][0] * ring[(i + 1) % n][1] - ring[(i + 1) % n][0] * ring[i][1] for i in range(n)
+    )
 
 
 def _clip(subject, clip):
@@ -229,7 +231,9 @@ def planar_reference(a, b):
 def _unit(lon, lat):
     lo = mpmath.radians(mpmath.mpf(lon))
     la = mpmath.radians(mpmath.mpf(lat))
-    return mpmath.matrix([mpmath.cos(la) * mpmath.cos(lo), mpmath.cos(la) * mpmath.sin(lo), mpmath.sin(la)])
+    return mpmath.matrix(
+        [mpmath.cos(la) * mpmath.cos(lo), mpmath.cos(la) * mpmath.sin(lo), mpmath.sin(la)]
+    )
 
 
 def _dot(u, v):
@@ -237,7 +241,9 @@ def _dot(u, v):
 
 
 def _cross(u, v):
-    return mpmath.matrix([u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]])
+    return mpmath.matrix(
+        [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]
+    )
 
 
 def spherical_reference(a, b):
@@ -282,7 +288,9 @@ def spherical_reference(a, b):
         total = mpmath.mpf(0)
         for i in range(1, len(verts) - 1):
             p, q = verts[i], verts[i + 1]
-            total += 2 * mpmath.atan2(_dot(o, _cross(p, q)), 1 + _dot(o, p) + _dot(p, q) + _dot(q, o))
+            total += 2 * mpmath.atan2(
+                _dot(o, _cross(p, q)), 1 + _dot(o, p) + _dot(p, q) + _dot(q, o)
+            )
         return float(abs(total))
 
 
@@ -367,7 +375,11 @@ def build():
     raw = scan_documents() + manifest_groups() + [overlap_join_group()]
     groups = []
     for g in raw:
-        stem = g["source"].split("#")[-1] if "#" in g["source"] else os.path.splitext(os.path.basename(g["source"]))[0]
+        stem = (
+            g["source"].split("#")[-1]
+            if "#" in g["source"]
+            else os.path.splitext(os.path.basename(g["source"]))[0]
+        )
         gid = f"{stem}:{g['operands'][0]}:{g['operands'][1]}:{g['manifold']}"
         if g["source"].startswith("tests/conformance/geometry/manifest.json"):
             gid = f"geometry_manifest:{g['source'].split('#')[1]}:{g['manifold']}"
@@ -398,7 +410,9 @@ def main():
     if "--check" in sys.argv[1:]:
         current = open(OUT).read() if os.path.exists(OUT) else ""
         if current != text:
-            print(f"STALE: {os.path.relpath(OUT, REPO)}; run scripts/gen-geometry-template-pairs.py")
+            print(
+                f"STALE: {os.path.relpath(OUT, REPO)}; run scripts/gen-geometry-template-pairs.py"
+            )
             sys.exit(1)
         print(f"OK: {os.path.relpath(OUT, REPO)}")
         return

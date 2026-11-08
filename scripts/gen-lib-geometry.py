@@ -132,12 +132,20 @@ def helper(name, params, description):
     return wrap
 
 
-@helper("geo_next", ["gn_v", "gn_n"], "The vertex slot after `gn_v` in a ring of `gn_n` slots: gn_v + 1, wrapping to 1.")
+@helper(
+    "geo_next",
+    ["gn_v", "gn_n"],
+    "The vertex slot after `gn_v` in a ring of `gn_n` slots: gn_v + 1, wrapping to 1.",
+)
 def geo_next(v, n):
     return ifelse(op("<", v, n), add(v, 1), 1)
 
 
-@helper("geo_cross2", ["gc_ux", "gc_uy", "gc_wx", "gc_wy"], "The planar cross product u x w = ux wy - uy wx.")
+@helper(
+    "geo_cross2",
+    ["gc_ux", "gc_uy", "gc_wx", "gc_wy"],
+    "The planar cross product u x w = ux wy - uy wx.",
+)
 def geo_cross2(ux, uy, wx, wy):
     return sub(mul(ux, wy), mul(uy, wx))
 
@@ -256,7 +264,12 @@ def geo_t1(g0, g1, s, tol):
 def geo_contrib2(s, t0, t1, px, py, qx, qy, ox, oy):
     # The float literal goes last: JSON3 (Julia) reads every integer in a container
     # that follows a float in the same array as a float.
-    return mul(s, op("max", 0, sub(t1, t0)), geo_cross2(sub(px, ox), sub(py, oy), sub(qx, ox), sub(qy, oy)), 0.5)
+    return mul(
+        s,
+        op("max", 0, sub(t1, t0)),
+        geo_cross2(sub(px, ox), sub(py, oy), sub(qx, ox), sub(qy, oy)),
+        0.5,
+    )
 
 
 @helper(
@@ -274,7 +287,20 @@ def geo_vos(t, tau, oa1, lin, dd):
 
 @helper(
     "geo_contrib3",
-    ["gq_s", "gq_t0", "gq_t1", "gq_ax", "gq_ay", "gq_az", "gq_qx", "gq_qy", "gq_qz", "gq_ox", "gq_oy", "gq_oz"],
+    [
+        "gq_s",
+        "gq_t0",
+        "gq_t1",
+        "gq_ax",
+        "gq_ay",
+        "gq_az",
+        "gq_qx",
+        "gq_qy",
+        "gq_qz",
+        "gq_ox",
+        "gq_oy",
+        "gq_oz",
+    ],
     "A spherical edge a -> q's contribution over the chord interval [t0, t1], about the vertex o: "
     "the signed area 2 s (vos(t1) - vos(t0)) of the spherical triangle the clipped edge spans with o "
     "when t1 > t0, else 0; s is the edge's polygon's orientation.",
@@ -326,13 +352,22 @@ def fan_helper(tname, which, sym, ofan, arrays, dim):
             args = [ring, other] if first else [other, ring]
             return faq(sym, n, ofan(r, sym), "+", args)
 
-        helper(name, params, f"The signed orientation fan sum of ring `gf_ring` (cell `gf_cell`, `gf_n` slots): positive when it runs counter-clockwise. Loop symbol `{sym}`.")(body)
+        helper(
+            name,
+            params,
+            f"The signed orientation fan sum of ring `gf_ring` (cell `gf_cell`, `gf_n` slots): positive when it runs counter-clockwise. Loop symbol `{sym}`.",
+        )(body)
     params_, fn, _ = HELPERS[name]
 
     def call(*a):
         if INLINE:
             return fn(*a)
-        return {"op": "apply_expression_template", "args": [], "name": name, "bindings": dict(zip(params_, a))}
+        return {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": name,
+            "bindings": dict(zip(params_, a)),
+        }
 
     return call
 
@@ -343,7 +378,7 @@ def build(manifold, tname):
     B = Ring("ring_b", "cell_b", "nv_b", dim)
     arrays = ["ring_a", "ring_b"]
     sym = [f"k_{tname}_{i}" for i in range(1, 9)]
-    O = A.pt(1)
+    origin = A.pt(1)
 
     if dim == 2:
 
@@ -380,7 +415,9 @@ def build(manifold, tname):
                 g0 = geo_side3(*p0, *b0, *b1)
                 g1 = geo_side3(*p1, *b0, *b1)
                 tol = TOL_SPHERICAL
-                dotd = geo_dot3(*(sub(b1[i], b0[i]) for i in range(3)), *(sub(p1[i], p0[i]) for i in range(3)))
+                dotd = geo_dot3(
+                    *(sub(b1[i], b0[i]) for i in range(3)), *(sub(p1[i], p0[i]) for i in range(3))
+                )
             same = mul(sR, sS, dotd)
             if own:
                 # An opposite-direction shared edge bounds no area: drop it.
@@ -396,9 +433,9 @@ def build(manifold, tname):
         g0, g1, tol, _ = halfplane(ks_hi)
         t1 = faq(ks_hi, S.n, geo_t1(g0, g1, sS, tol), "min", arrays)
         if dim == 2:
-            body = geo_contrib2(sR, t0, t1, *p0, *p1, *O)
+            body = geo_contrib2(sR, t0, t1, *p0, *p1, *origin)
         else:
-            body = geo_contrib3(sR, t0, t1, *p0, *p1, *O)
+            body = geo_contrib3(sR, t0, t1, *p0, *p1, *origin)
         return faq(ks_outer, R.n, body, "+", arrays)
 
     # A ring of no extent (every vertex on one line or point) overlaps nothing; its
@@ -435,7 +472,7 @@ def library():
                 "Overlap area of two convex polygons with straight edges in the plane: cell `cell_a` "
                 "of the `[cells, nv_a, 2]` ring stack `ring_a` and cell `cell_b` of `ring_b` "
                 "(vertex v = [x, y], e.g. [lon, lat]). The value of `polygon_intersection_area` "
-                "with `manifold: \"planar\"` within the esm-spec §8.6.1 / CONFORMANCE_SPEC §5.8.2 "
+                'with `manifold: "planar"` within the esm-spec §8.6.1 / CONFORMANCE_SPEC §5.8.2 '
                 "tolerance. Either ring orientation; repeated vertices contribute exactly zero. "
                 "Contributions are taken about the first vertex of `ring_a`, so translating both "
                 "polygons together changes the result only by rounding. A half-plane test within "
@@ -452,7 +489,7 @@ def library():
                 "great-circle edges: cell `cell_a` of the `[cells, nv_a, 3]` unit-vector stack "
                 "`ring_a` and cell `cell_b` of `ring_b` (build a stack from lon-lat degrees with "
                 "`lonlat_to_unit`). The value of `polygon_intersection_area` with `manifold: "
-                "\"spherical\"` (or `\"geodesic\"`, the same great-circle model) within the "
+                '"spherical"` (or `"geodesic"`, the same great-circle model) within the '
                 "CONFORMANCE_SPEC §5.8.2 tolerance; multiply by R^2 for a physical area. Either ring "
                 "orientation (the interior is the side of less than a hemisphere); repeated vertices "
                 "contribute exactly zero. Half-space tests are linear in the chord parameter; each "
@@ -588,7 +625,10 @@ def main():
     INLINE = False
     templates = lib["expression_templates"]
     for name in ("overlap_area_planar", "overlap_area_spherical", "lonlat_to_unit"):
-        if expand(templates[name]["body"], templates) != inlined["expression_templates"][name]["body"]:
+        if (
+            expand(templates[name]["body"], templates)
+            != inlined["expression_templates"][name]["body"]
+        ):
             sys.exit(f"{name}: the expanded body differs from the inlined body")
     text = render(lib)
     if "--check" in args:
