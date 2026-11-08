@@ -113,6 +113,9 @@ impl ProgramModel {
             namespace: self.namespace.clone(),
             precision: self.precision.clone(),
             declared_names: self.declared_names.clone(),
+            // Read only by the build's downstream readers, which take it
+            // from the program (`ProgramInner::conditional_shapes`).
+            conditional_shapes: Default::default(),
             #[cfg(feature = "solve")]
             field_ic_memo: std::cell::RefCell::new(None),
             inline_param_arrays: self.inline_param_arrays.clone(),

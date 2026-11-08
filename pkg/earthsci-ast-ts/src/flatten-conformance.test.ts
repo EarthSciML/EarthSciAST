@@ -189,9 +189,9 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     // and `shape` included, whatever its data source is keyed, and a state
     // source keyed like a data source stays a state, and a source that declares
     // no shape takes its target's (esm-libraries-spec §4.7.3), plus the
-    // `unshaped_mixed_ifelse` case — an observed declared without a shape and
-    // defined by an `ifelse` over an array keeps no shape (esm-libraries-spec
-    // §4.7.5).
+    // `ifelse_mixed_whole_dynamic` case (tier `unshaped_mixed_ifelse`) — an
+    // observed declared without a shape and defined by an `ifelse` over an
+    // array keeps no shape (esm-libraries-spec §4.7.5).
     expect(corpus.cases.length).toBe(55)
     // 9 = template_import_lib, couple_multiplicative_no_tendency, the
     // nonterminating rewrite, `coupling_resolution_edge_cases`, whose EDGE

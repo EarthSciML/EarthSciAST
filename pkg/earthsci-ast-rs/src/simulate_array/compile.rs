@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::faq::{effective_reduce_kind, is_faq_op, validate_oplus_spellings};
-use crate::flatten::FlattenedSystem;
+use crate::flatten::{BuiltShapes, FlattenedSystem};
 use crate::op_registry::{OpError, is_builtin_function_name};
 use crate::simulate::{CompileError, SimulateError};
 use crate::types::{
@@ -227,9 +227,9 @@ pub(crate) fn parse_subsystem_model(
 /// rejection, and a `data`-kind discrete parameter still reaches the provider
 /// forcing seam `classify_variables` routes.
 ///
-/// Each unshaped mixed-rank `ifelse` variable takes the shape it is built at
-/// ([`crate::flatten::flattened_conditional_shapes`], esm-spec §4.3.4), which
-/// `flatten` leaves out of the flattened system itself.
+/// The model keeps each variable's DECLARED shape, as `flatten` does: the
+/// shape an unshaped mixed-rank `ifelse` is built at (esm-spec §4.3.4) is
+/// written by [`promote_conditional_shapes`], which the build runs on it.
 ///
 /// Shared by [`ArrayCompiled::from_flattened_with`] and the build pipeline's
 /// whole-document build (`crate::prepare`), so a document of several models
@@ -243,14 +243,6 @@ pub(crate) fn model_from_flattened(flat: &FlattenedSystem) -> Model {
         .chain(&flat.observed_variables)
     {
         variables.insert(name.clone(), var.clone());
-    }
-    // The shape an unshaped mixed-rank `ifelse` takes when built (esm-spec
-    // §4.3.4), which `flatten` leaves out of its output
-    // (esm-libraries-spec §4.7.5).
-    for (name, axes) in crate::flatten::flattened_conditional_shapes(flat) {
-        if let Some(var) = variables.get_mut(&name) {
-            var.shape = Some(axes);
-        }
     }
     Model {
         variables,
@@ -416,15 +408,15 @@ pub(super) fn apply_ragged_factor_scope(
 ///   coupled routes, and the other bindings, returned 1.
 /// * esm-spec §4.3.4, a variable with no declared `shape` whose value is an
 ///   array on one arm of an `ifelse` and a scalar on the other takes the array
-///   arm's shape (see [`crate::flatten::conditional_shape_promotions`]).
-///   `flatten` does not record this shape in its output (esm-libraries-spec
-///   §4.7.5); a build from a flattened system gets it from
-///   [`model_from_flattened`] instead. `index_sets` is the registry the
-///   promoted shape must be sized by.
+///   arm's shape ([`promote_conditional_shapes`]). `flatten` does not record
+///   this shape in its output (esm-libraries-spec §4.7.5), so every build,
+///   from a flattened system or an authored model, gets it here. Returns the
+///   shapes it gave. `index_sets` is the registry the promoted shape must be
+///   sized by.
 pub(crate) fn apply_flatten_rewrites(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
-) -> Result<(), CompileError> {
+) -> Result<BuiltShapes, CompileError> {
     let time_invariant: std::collections::HashSet<String> = model
         .variables
         .iter()
@@ -441,17 +433,37 @@ pub(crate) fn apply_flatten_rewrites(
         });
     }
     normalize_model_angle_arguments(model);
+    Ok(promote_conditional_shapes(model, index_sets))
+}
+
+/// Give each unshaped mixed-rank-`ifelse` variable of `model` the shape it is
+/// built at (esm-spec §4.3.4, [`crate::flatten::conditional_shape_promotions`])
+/// and return what it gave. The one place a build writes that shape: every
+/// route that builds a model runs it, and the compiled model keeps the result
+/// (`ArrayCompiled::conditional_shapes`) for the readers downstream of the
+/// build, which must not infer it again from a system that may have lost what
+/// decided it (a restricted `RhsProgram` drops `D(w)` for a state it only
+/// reads).
+pub(crate) fn promote_conditional_shapes(
+    model: &mut Model,
+    index_sets: &HashMap<String, IndexSet>,
+) -> BuiltShapes {
     let promoted = crate::flatten::conditional_shape_promotions(
         &|n: &str| model.variables.get(n),
         model.equations.iter(),
         index_sets,
     );
-    for (name, axes) in promoted {
-        if let Some(var) = model.variables.get_mut(&name) {
-            var.shape = Some(axes);
+    set_declared_shapes(model, &promoted);
+    promoted
+}
+
+/// Write `shapes` into `model`'s declarations, by name.
+fn set_declared_shapes(model: &mut Model, shapes: &BuiltShapes) {
+    for (name, axes) in shapes {
+        if let Some(var) = model.variables.get_mut(name) {
+            var.shape = Some(axes.clone());
         }
     }
-    Ok(())
 }
 
 /// Fold a declared angle's scale into every `sin`/`cos`/`tan` argument of
@@ -601,6 +613,21 @@ impl ArrayCompiled {
         flat: &FlattenedSystem,
         runtime_array_parameters: bool,
     ) -> Result<Self, CompileError> {
+        Self::from_flattened_shaped(flat, runtime_array_parameters, None)
+    }
+
+    /// [`Self::from_flattened_with`], building each variable `inherited`
+    /// names at that shape: the shapes an unshaped mixed-rank `ifelse` took
+    /// when the system `flat` was cut from was built (esm-spec §4.3.4). A
+    /// restricted system can no longer decide them itself — `RhsProgram::
+    /// select` keeps a state a kept summand reads but drops its `D` equation,
+    /// and an unshaped state with no `D` equation has no rank the inference
+    /// can read — so the program it is cut from hands them down.
+    pub(crate) fn from_flattened_shaped(
+        flat: &FlattenedSystem,
+        runtime_array_parameters: bool,
+        inherited: Option<&BuiltShapes>,
+    ) -> Result<Self, CompileError> {
         // A coupling can mix precisions the per-model inference never saw
         // (esm-spec §4.7 "Working precision crosses a mount", §11.3.1).
         crate::precision_infer::check_flattened(flat)?;
@@ -650,7 +677,10 @@ impl ArrayCompiled {
             ));
         }
 
-        let model = model_from_flattened(flat);
+        let mut model = model_from_flattened(flat);
+        if let Some(shapes) = inherited {
+            set_declared_shapes(&mut model, shapes);
+        }
         // The document `index_sets` registry is carried through flatten
         // (`FlattenedSystem::index_sets`), so a coupled array system can resolve
         // `faq` `ranges` `{ "from": <set> }`, `join.on` gates, and
@@ -664,6 +694,13 @@ impl ArrayCompiled {
             .collect();
         let mut compiled =
             Self::compile_pipeline(model, &index_sets, None, None, runtime_array_parameters)?;
+        // The pipeline recorded only what it inferred; the inherited shapes
+        // were already declared when it ran.
+        if let Some(shapes) = inherited {
+            compiled
+                .conditional_shapes
+                .extend(shapes.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
         // `flatten` routed every `ic` equation out of `flat.equations`, so the
         // synthetic model's stage-(0) walk never saw an initial-condition
         // right-hand side. Walk them here, before anything evaluates one
@@ -785,7 +822,7 @@ impl ArrayCompiled {
         // `flatten`'s rewrites, which this SINGLE-MODEL route never gets
         // (see `from_file_owned`). Runs after mounting so a subsystem's
         // equations and declarations are in scope under their mounted names.
-        apply_flatten_rewrites(&mut model_owned, &index_sets_owned)?;
+        let conditional_shapes = apply_flatten_rewrites(&mut model_owned, &index_sets_owned)?;
         // Lower every SHAPED parameter whose value the document supplies —
         // inline array data, or one scalar broadcast over the grid (esm-spec
         // §6.3 / §6.6.2) — into the `const`-observed channel this runtime
@@ -1125,6 +1162,7 @@ impl ArrayCompiled {
             rule_set: next_rule_set_id(),
             n_states,
             declared_names,
+            conditional_shapes,
             forcing: Rc::new(RefCell::new(HashMap::new())),
             data_fed,
             forcing_generation: std::cell::Cell::new(0),

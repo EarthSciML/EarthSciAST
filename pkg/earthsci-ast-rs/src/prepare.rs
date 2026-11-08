@@ -1915,7 +1915,11 @@ impl<'o> BuildState<'o> {
             Spelling::ModelLocal(n) => (Self::authored_model(models, n, &mut index_sets)?, None),
             Spelling::Qualified => {
                 let flat = Self::whole_document(&file, &mut index_sets)?;
-                let model = crate::simulate_array::model_from_flattened(&flat);
+                let mut model = crate::simulate_array::model_from_flattened(&flat);
+                // The shape an unshaped mixed-rank `ifelse` is built at
+                // (esm-spec §4.3.4); the model-local route gets it from
+                // `apply_flatten_rewrites`.
+                crate::simulate_array::promote_conditional_shapes(&mut model, &index_sets);
                 (model, unbound_load.then_some(flat))
             }
         };

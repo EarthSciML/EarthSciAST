@@ -9,7 +9,7 @@ use std::cell::Cell;
 
 use earthsci_ast::{
     AxisCut, Compiler, Decomposition, LaneKind, LaneProgram, ProblemOptions, RhsProgram,
-    RhsSelection, SimulateError, TileBox, TileProgram, esm_problem, rhs_program,
+    RhsSelection, SimulateError, TermOrigin, TileBox, TileProgram, esm_problem, rhs_program,
 };
 use serde_json::json;
 
@@ -292,6 +292,70 @@ fn select_follows_every_region_of_a_split_observed() {
             want.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
         );
         assert_eq!(got[0], 3.0 * u[1]);
+    }
+}
+
+#[test]
+fn select_builds_an_unshaped_mixed_ifelse_at_its_whole_system_shape() {
+    // esm-spec §4.3.4: `X = ifelse(w > 1, 0.0, F * 2)` is built at `F`'s
+    // shape, which the inference decides from `w` being an unshaped ODE state.
+    // Selecting only `B`'s terms keeps `A.w` (the cone reads it) but drops
+    // `D(w)`, so the cut system alone cannot decide `w`'s rank: the selection
+    // must be built at the shapes the whole system was.
+    let n = 3;
+    let doc = json!({
+        "esm": "1.2.0",
+        "metadata": {"name": "review", "authors": ["test"]},
+        "index_sets": {"cell": {"kind": "interval", "size": n}},
+        "models": {
+            "A": {
+                "variables": {"w": {"type": "unknown", "units": "1", "default": 0.0}},
+                "equations": [{"lhs": d_of(json!("w")), "rhs": 1.0}]
+            },
+            "B": {
+                "variables": {
+                    "F": {"type": "parameter", "units": "1", "shape": ["cell"],
+                          "default": [1.0, 2.0, 3.0]},
+                    "X": {"type": "unknown", "units": "1"},
+                    "acc": {"type": "unknown", "units": "1", "shape": ["cell"], "default": 0.0}
+                },
+                "equations": [
+                    {"lhs": "X", "rhs": {"op": "ifelse", "args": [
+                        {"op": ">", "args": ["A.w", 1.0]}, 0.0,
+                        {"op": "*", "args": ["F", 2.0]}]}},
+                    faq_eq(d_of(ix("acc", vec![json!("i")])), ix("X", vec![json!("i")]),
+                           json!({"i": {"from": "cell"}}), &["i"])
+                ]
+            }
+        }
+    });
+    for compiler in [Compiler::Native, Compiler::Interpreter] {
+        let prog = program(&doc, compiler);
+        let op = prog
+            .select(&RhsSelection {
+                writes: Some(vec!["B.acc".to_string()]),
+                terms: Some(vec![TermOrigin::Component {
+                    component: "B".to_string(),
+                }]),
+            })
+            .unwrap_or_else(|e| panic!("{compiler:?}: the selection builds: {e}"));
+        let cut = op.flattened();
+        let has_d_w = cut.equations.iter().any(|eq| {
+            let lhs = serde_json::to_string(&eq.lhs).unwrap();
+            lhs.contains("\"D\"") && lhs.contains("\"A.w\"")
+        });
+        assert!(
+            cut.state_variables.contains_key("A.w") && !has_d_w,
+            "{compiler:?}: `A.w` is kept as a read-only state with no `D` equation"
+        );
+        let layout = op.layout();
+        assert_eq!(layout.u_len, n as usize, "{compiler:?}: `u` is `acc`");
+        assert_eq!(layout.aux_len, 1, "{compiler:?}: `aux` is `w`");
+        let u = vec![0.0; layout.u_len];
+        for (w, want) in [(0.0, [2.0, 4.0, 6.0]), (2.0, [0.0, 0.0, 0.0])] {
+            let got = whole_du(&op, &u, &[w]);
+            assert_eq!(got, want, "{compiler:?}: du(acc) at w = {w}");
+        }
     }
 }
 
