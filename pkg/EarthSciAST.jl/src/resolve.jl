@@ -2279,10 +2279,20 @@ function _resolve_subsystem_ref(
             _contribute!(sources, k, v, edge)
         end
     end
+    # The leaf's surviving template references name its own registry, which
+    # does not cross the mount: they are expanded here, as the native pass
+    # expands them when it inlines the leaf (esm-spec §9.6.4 rule 2).
+    name, model = first(loaded.models)
+    if loaded.component_templates !== nothing
+        reg = get(loaded.component_templates, "models.$name", nothing)
+        if reg !== nothing
+            model = _expansion_copy(model)
+            _expand_model_refs!(model, reg)
+        end
+    end
     # esm-spec §4.7 "Working precision crosses a mount".
     return _carry_mounted_element_type!(
-        first(values(loaded.models)),
-        _declared_element_type(loaded), precision,
+        model, _declared_element_type(loaded), precision,
         "subsystem ref '$(ref.ref)'"
     )
 end
