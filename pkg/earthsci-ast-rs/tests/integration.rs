@@ -151,6 +151,8 @@ mod function_tables_lowering;
 mod geometry_conformance;
 #[path = "geometry_simulate_conformance.rs"]
 mod geometry_simulate_conformance;
+#[path = "geometry_templates.rs"]
+mod geometry_templates;
 #[path = "graph_conformance.rs"]
 mod graph_conformance;
 #[path = "graph_structure.rs"]

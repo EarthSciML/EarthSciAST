@@ -1,0 +1,503 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "geometry_spherical_fan_template",
+    "description": "The `overlap_area_spherical` and `lonlat_to_unit` templates of lib/geometry.esm on a meridian fan on the unit sphere. Apex E = (0E, 0N) is a pole of the meridian lon = 90E, so every fan arc meets that meridian at a right angle and each triangle (E, (90E, a), (90E, b)) has area b - a in radians by Girard's theorem. Four source triangles of 15 degrees tile two target triangles of 30 degrees along shared great-circle arcs: a nested pair overlaps by pi/12 sr (it shares two edges with its target, run the same way), a pair touching along a fan arc run in opposite directions or only at the apex overlaps by exactly 0, and each target's row sum is pi/6. Every ring is a triangle padded to four slots. The unit-vector stacks are built once per cell by a faq over `lonlat_to_unit`. Run by the `geometry_templates` inline-test conformance tier.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "tags": [
+      "geometry",
+      "polygon_intersection_area",
+      "expression_templates",
+      "faq",
+      "spherical",
+      "padded-ring",
+      "conformance"
+    ]
+  },
+  "index_sets": {
+    "src_cells": {
+      "kind": "interval",
+      "size": 4
+    },
+    "tgt_cells": {
+      "kind": "interval",
+      "size": 2
+    },
+    "verts": {
+      "kind": "interval",
+      "size": 4
+    },
+    "lonlat": {
+      "kind": "interval",
+      "size": 2
+    },
+    "xyz": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "GeometrySphericalFanTemplate": {
+      "expression_template_imports": [
+        {
+          "ref": "../../../../lib/geometry.esm",
+          "only": [
+            "overlap_area_spherical",
+            "lonlat_to_unit"
+          ]
+        }
+      ],
+      "variables": {
+        "src_poly": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "src_cells",
+            "verts",
+            "lonlat"
+          ],
+          "description": "Source fan triangles S_k = (E, (90E, 15(k-1)N), (90E, 15kN)), E = (0E, 0N), each padded to four slots by repeating its last vertex."
+        },
+        "tgt_poly": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "tgt_cells",
+            "verts",
+            "lonlat"
+          ],
+          "description": "Target fan triangles T_1 = (E, (90E, 0N), (90E, 30N)) and T_2 = (E, (90E, 30N), (90E, 60N)), padded the same way."
+        },
+        "src_xyz": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "src_cells",
+            "verts",
+            "xyz"
+          ],
+          "description": "Unit vectors of the source vertices, by the `lonlat_to_unit` template."
+        },
+        "tgt_xyz": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "tgt_cells",
+            "verts",
+            "xyz"
+          ],
+          "description": "Unit vectors of the target vertices, by the `lonlat_to_unit` template."
+        },
+        "A_template": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "src_cells",
+            "tgt_cells"
+          ],
+          "description": "Overlap areas in steradians by the `overlap_area_spherical` template of lib/geometry.esm."
+        },
+        "A_j": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "tgt_cells"
+          ],
+          "description": "Row sums of the computed overlaps: each target's area, pi/6."
+        },
+        "s": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0,
+          "description": "Trivial state, so the document has something to integrate."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "src_poly",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  90.0,
+                  0.0
+                ],
+                [
+                  90.0,
+                  15.0
+                ],
+                [
+                  90.0,
+                  15.0
+                ]
+              ],
+              [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  90.0,
+                  15.0
+                ],
+                [
+                  90.0,
+                  30.0
+                ],
+                [
+                  90.0,
+                  30.0
+                ]
+              ],
+              [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  90.0,
+                  30.0
+                ],
+                [
+                  90.0,
+                  45.0
+                ],
+                [
+                  90.0,
+                  45.0
+                ]
+              ],
+              [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  90.0,
+                  45.0
+                ],
+                [
+                  90.0,
+                  60.0
+                ],
+                [
+                  90.0,
+                  60.0
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "lhs": "tgt_poly",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  90.0,
+                  0.0
+                ],
+                [
+                  90.0,
+                  30.0
+                ],
+                [
+                  90.0,
+                  30.0
+                ]
+              ],
+              [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  90.0,
+                  30.0
+                ],
+                [
+                  90.0,
+                  60.0
+                ],
+                [
+                  90.0,
+                  60.0
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "lhs": "src_xyz",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "c",
+              "v",
+              "d"
+            ],
+            "ranges": {
+              "c": {
+                "from": "src_cells"
+              },
+              "v": {
+                "from": "verts"
+              },
+              "d": {
+                "from": "xyz"
+              }
+            },
+            "expr": {
+              "op": "apply_expression_template",
+              "args": [],
+              "name": "lonlat_to_unit",
+              "bindings": {
+                "ring": "src_poly",
+                "cell": "c",
+                "vert": "v",
+                "comp": "d"
+              }
+            }
+          }
+        },
+        {
+          "lhs": "tgt_xyz",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "c",
+              "v",
+              "d"
+            ],
+            "ranges": {
+              "c": {
+                "from": "tgt_cells"
+              },
+              "v": {
+                "from": "verts"
+              },
+              "d": {
+                "from": "xyz"
+              }
+            },
+            "expr": {
+              "op": "apply_expression_template",
+              "args": [],
+              "name": "lonlat_to_unit",
+              "bindings": {
+                "ring": "tgt_poly",
+                "cell": "c",
+                "vert": "v",
+                "comp": "d"
+              }
+            }
+          }
+        },
+        {
+          "lhs": "A_template",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "src_cells"
+              },
+              "j": {
+                "from": "tgt_cells"
+              }
+            },
+            "expr": {
+              "op": "apply_expression_template",
+              "args": [],
+              "name": "overlap_area_spherical",
+              "bindings": {
+                "ring_a": "src_xyz",
+                "cell_a": "i",
+                "nv_a": 4,
+                "ring_b": "tgt_xyz",
+                "cell_b": "j",
+                "nv_b": 4
+              }
+            }
+          }
+        },
+        {
+          "lhs": "A_j",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "src_cells"
+              },
+              "j": {
+                "from": "tgt_cells"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "A_template",
+                "i",
+                "j"
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "s"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        }
+      ],
+      "tolerance": {
+        "abs": 1e-15,
+        "rel": 1e-09
+      },
+      "tests": [
+        {
+          "id": "spherical_fan_t0",
+          "description": "Every pair against Girard's theorem (pi/12 for a nested pair) at the CONFORMANCE_SPEC 5.8.2 band; the touching pairs exactly 0.",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "A_template",
+              "time": 0.0,
+              "expected": 0.2617993877991494,
+              "coords": {
+                "src_cells": 1,
+                "tgt_cells": 1
+              }
+            },
+            {
+              "variable": "A_template",
+              "time": 0.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 1,
+                "tgt_cells": 2
+              },
+              "tolerance": {
+                "abs": 0,
+                "rel": 0
+              }
+            },
+            {
+              "variable": "A_template",
+              "time": 0.0,
+              "expected": 0.2617993877991494,
+              "coords": {
+                "src_cells": 2,
+                "tgt_cells": 1
+              }
+            },
+            {
+              "variable": "A_template",
+              "time": 0.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 2,
+                "tgt_cells": 2
+              },
+              "tolerance": {
+                "abs": 0,
+                "rel": 0
+              }
+            },
+            {
+              "variable": "A_template",
+              "time": 0.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 3,
+                "tgt_cells": 1
+              },
+              "tolerance": {
+                "abs": 0,
+                "rel": 0
+              }
+            },
+            {
+              "variable": "A_template",
+              "time": 0.0,
+              "expected": 0.2617993877991494,
+              "coords": {
+                "src_cells": 3,
+                "tgt_cells": 2
+              }
+            },
+            {
+              "variable": "A_template",
+              "time": 0.0,
+              "expected": 0.0,
+              "coords": {
+                "src_cells": 4,
+                "tgt_cells": 1
+              },
+              "tolerance": {
+                "abs": 0,
+                "rel": 0
+              }
+            },
+            {
+              "variable": "A_template",
+              "time": 0.0,
+              "expected": 0.2617993877991494,
+              "coords": {
+                "src_cells": 4,
+                "tgt_cells": 2
+              }
+            },
+            {
+              "variable": "A_j",
+              "time": 0.0,
+              "expected": 0.5235987755982988,
+              "coords": {
+                "tgt_cells": 1
+              }
+            },
+            {
+              "variable": "A_j",
+              "time": 0.0,
+              "expected": 0.5235987755982988,
+              "coords": {
+                "tgt_cells": 2
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

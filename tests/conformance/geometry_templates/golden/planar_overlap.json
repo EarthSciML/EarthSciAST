@@ -1,0 +1,223 @@
+{
+  "fixture": "planar_overlap",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 1,
+      "variable": "A_template",
+      "actual": 1.0
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 2,
+      "variable": "A_template",
+      "actual": 0.5
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 3,
+      "variable": "A_template",
+      "actual": 0.125
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 4,
+      "variable": "A_template",
+      "actual": 0.0
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 5,
+      "variable": "A_template",
+      "actual": 1.0
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 6,
+      "variable": "A_template",
+      "actual": 0.125
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 7,
+      "variable": "A_template",
+      "actual": 0.0
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 8,
+      "variable": "A_template",
+      "actual": 0.0
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 9,
+      "variable": "A_template",
+      "actual": 0.125
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 10,
+      "variable": "A_template",
+      "actual": 0.0
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 11,
+      "variable": "A_template",
+      "actual": 0.5
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 12,
+      "variable": "A_template",
+      "actual": 0.0
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 13,
+      "variable": "A_gated",
+      "actual": 1.0
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 14,
+      "variable": "A_gated",
+      "actual": 0.5
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 15,
+      "variable": "A_gated",
+      "actual": 0.125
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 16,
+      "variable": "A_gated",
+      "actual": 0.0
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 17,
+      "variable": "A_gated",
+      "actual": 1.0
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 18,
+      "variable": "A_gated",
+      "actual": 0.125
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 19,
+      "variable": "A_gated",
+      "actual": 0.0
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 20,
+      "variable": "A_gated",
+      "actual": 0.0
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 21,
+      "variable": "A_gated",
+      "actual": 0.125
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 22,
+      "variable": "A_gated",
+      "actual": 0.0
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 23,
+      "variable": "A_gated",
+      "actual": 0.5
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 24,
+      "variable": "A_gated",
+      "actual": 0.0
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 25,
+      "variable": "A_leaf",
+      "actual": 1.0
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 26,
+      "variable": "A_leaf",
+      "actual": 0.5
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 27,
+      "variable": "A_leaf",
+      "actual": 0.125
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 28,
+      "variable": "A_leaf",
+      "actual": 0.0
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 29,
+      "variable": "A_leaf",
+      "actual": 1.0
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 30,
+      "variable": "A_leaf",
+      "actual": 0.125
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 31,
+      "variable": "A_leaf",
+      "actual": 0.0
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 32,
+      "variable": "A_leaf",
+      "actual": 0.0
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 33,
+      "variable": "A_leaf",
+      "actual": 0.125
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 34,
+      "variable": "A_leaf",
+      "actual": 0.0
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 35,
+      "variable": "A_leaf",
+      "actual": 0.5
+    },
+    {
+      "test_id": "planar_overlap_t0",
+      "assertion_idx": 36,
+      "variable": "A_leaf",
+      "actual": 0.0
+    }
+  ]
+}
