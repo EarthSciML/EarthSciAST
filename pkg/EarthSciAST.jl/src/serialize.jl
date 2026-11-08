@@ -69,7 +69,20 @@ function _serialize_join_clause(clause)
     return out
 end
 
+# A `const` node's `value` in canonical-number form (CONFORMANCE_SPEC §5.5.3.1
+# rule 1): every integral, Int64-representable float, at any depth, is written
+# as an integer. A parsed value is already narrowed (JSON3 reads `100.0` as
+# `100`); a lowered `table_lookup` holds `Float64`s and would otherwise write
+# `100.0`, unlike a reload of the same document and unlike every other binding.
+_canonical_value_numbers(x::AbstractFloat) =
+    (isfinite(x) && isinteger(x) && _int64_exactly_representable(Float64(x))) ? Int64(x) : x
+_canonical_value_numbers(x::AbstractVector) = Any[_canonical_value_numbers(e) for e in x]
+_canonical_value_numbers(x::AbstractDict) =
+    Dict{String, Any}(string(k) => _canonical_value_numbers(e) for (k, e) in pairs(x))
+_canonical_value_numbers(x) = x
+
 function _serialize_opexpr_field(field::Symbol, v)
+    field === :value && return _canonical_value_numbers(v)
     # `regions` is a `:scalar` field whose bounds are USUALLY plain integers but
     # MAY be metaparameter Expressions (esm-spec §9.7.6 / the schema's
     # `MetaparameterExpression` items) — an `ASTExpr` bound has to go back out as
