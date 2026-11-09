@@ -12,19 +12,21 @@
 #     cap left at its default, which the kernel fits inside — at Float64 and
 #     under ForwardDiff (the split is value-exact, order-preserving).
 # The split has TWO transports, and this pins both, on every Julia. Which one a
-# build takes is `_cg_split_by_value`:
+# build takes is `_cg_carry_by_value`:
 #
 #   * inner `@noinline` definitions inside the generated body, called by name —
-#     the cheapest, and the only one on Julia >= 1.12, where RGF's rewrite of an
-#     inner definition into an opaque closure is typed;
+#     one generated function, kept on Julia >= 1.12 (where RGF's rewrite of an
+#     inner definition into an opaque closure is typed) while the generated
+#     function is at most `_CG_BY_VALUE_MIN_NODES` emitted nodes;
 #   * BY VALUE — each sub-function compiled as its own RuntimeGeneratedFunction
 #     and handed to the body in a tuple appended to `tabs`, called as
-#     `_cgfns[k](...)` at a literal index. Julia < 1.12 takes this one (an inner
-#     definition is an UNTYPED opaque closure there: it boxes per cell and
-#     segfaults when nested), and `ESS_CODEGEN_SPLIT_TRANSPORT=value` forces it
-#     anywhere, which is how the transport is testable on 1.12 as well.
+#     `_cgfns[k](...)` at a literal index. Julia < 1.12 always takes this one (an
+#     inner definition is an UNTYPED opaque closure there: it boxes per cell and
+#     segfaults when nested), 1.12+ takes it above the size threshold, and
+#     `ESS_CODEGEN_SPLIT_TRANSPORT=value` / `=definition` forces one or the
+#     other, which is how both are testable on a small body.
 #
-# Both emit the SAME partitioned expression, so this pins that the split
+# Both run the SAME partitioned expression, so this pins that the split
 # codegens and is bit-identical under EITHER transport -- there is no Julia on
 # which an oversized body has to decline to the per-cell interpreter, which
 # under `compiler=:native` would be a refusal.
@@ -95,6 +97,9 @@ _decl(t) = sum(v for (k, v) in t if startswith(String(k), "codegen_decline"); in
     fs, v0, ps, st = _bs_build(model, ics; fncap = 40)
     @test get(st, :codegen_kernel, 0) >= 1    # STILL codegen'd (split, not declined)
     @test _decl(st) == 0                      # the split never falls back to the interpreter
+    # This body is far under the by-value threshold, so 1.12+ keeps the inner
+    # definitions; older Julia carries the sub-functions by value regardless.
+    @test (get(st, :cg_split_by_value, 0) >= 1) == !ESM._cg_split_supported()
 
     @test u0 == v0
 
@@ -114,6 +119,7 @@ _decl(t) = sum(v for (k, v) in t if startswith(String(k), "codegen_decline"); in
     fv, w0, pv, vt = _bs_build(model, ics; fncap = 40, transport = "value")
     @test get(vt, :codegen_kernel, 0) >= 1
     @test _decl(vt) == 0
+    @test get(vt, :cg_split_by_value, 0) >= 1
     @test u0 == w0
     for k in 1:5, t in (0.0, 0.7, 3.25)
         u = k == 1 ? copy(u0) : _bs_probe(length(u0), k)
@@ -121,11 +127,88 @@ _decl(t) = sum(v for (k, v) in t if startswith(String(k), "codegen_decline"); in
     end
     @test _bs_same(ForwardDiff.jacobian(uu -> _bs_du(fv, uu, pv, 0.4), u0), Jr)
 
+    # The INNER-DEFINITION transport, forced: what 1.12+ takes under the
+    # threshold, pinned here too so the override itself is exercised.
+    if ESM._cg_split_supported()
+        fd, y0, pd, dt = _bs_build(model, ics; fncap = 40, transport = "definition")
+        @test get(dt, :codegen_kernel, 0) >= 1
+        @test _decl(dt) == 0
+        @test get(dt, :cg_split_by_value, 0) == 0
+        @test u0 == y0
+        for k in 1:5, t in (0.0, 0.7, 3.25)
+            u = k == 1 ? copy(u0) : _bs_probe(length(u0), k)
+            @test _bs_same(_bs_du(fd, u, pd, t), _bs_du(fr, u, pr, t))
+        end
+        @test _bs_same(ForwardDiff.jacobian(uu -> _bs_du(fd, uu, pd, 0.4), u0), Jr)
+    end
+
     # A by-value build that does NOT split is unchanged by the transport: no
     # sub-function is minted, so nothing is appended to `tabs`.
     fn, x0, pn, nt = _bs_build(model, ics; transport = "value")
     @test get(nt, :codegen_kernel, 0) >= 1
     @test _decl(nt) == 0
+    @test get(nt, :cg_split_by_value, 0) == 0
     @test u0 == x0
     @test _bs_same(_bs_du(fn, copy(u0), pn, 0.7), _bs_du(fr, copy(u0), pr, 0.7))
+end
+
+@testset "split transport choice" begin
+    lim = ESM._CG_BY_VALUE_MIN_NODES
+    withenv("ESS_CODEGEN_SPLIT_TRANSPORT" => nothing) do
+        # By size: inner definitions up to the threshold, by value above it
+        # (always by value where inner definitions are unsupported).
+        @test ESM._cg_carry_by_value(lim) == !ESM._cg_split_supported()
+        @test ESM._cg_carry_by_value(lim + 1)
+    end
+    withenv("ESS_CODEGEN_SPLIT_TRANSPORT" => "value") do
+        @test ESM._cg_carry_by_value(1)
+    end
+    withenv("ESS_CODEGEN_SPLIT_TRANSPORT" => "definition") do
+        @test ESM._cg_carry_by_value(typemax(Int)) == !ESM._cg_split_supported()
+    end
+
+    # The rewrite to by-value form: every call of an inner definition — from
+    # the body and from another definition — becomes `_cgfns[k](…, _cgfns)`,
+    # and the definitions leave the body.
+    ex = :(
+        function (du, u, p, t, tabs, _cgci, _cgnc)
+            local _cggrp1 = tabs[1]
+            @noinline function _cgh1(u, p, t, x)
+                return x + 1.0
+            end
+            @noinline function _cgh2(u, p, t, x)
+                return _cgh1(u, p, t, x) * 2.0
+            end
+            du[1] = _cgh2(u, p, t, u[1])
+            return nothing
+        end
+    )
+    withenv("ESS_CODEGEN_SPLIT_TRANSPORT" => "value") do
+        ex2, fns = ESM._cg_split_transport(Base.remove_linenums!(ex), 1)
+        @test length(fns) == 2
+        @test fns[1].args[1] == Expr(:tuple, :u, :p, :t, :x, :_cgfns)
+        txt = string(ex2)
+        @test occursin("_cgfns = tabs[2]", txt)
+        @test occursin("(_cgfns[2])(u, p, t, u[1], _cgfns)", txt)
+        @test !occursin("_cgh", txt)
+        @test occursin("(_cgfns[1])(u, p, t, x, _cgfns)", string(fns[2]))
+        # A definition referenced other than by a call cannot be carried.
+        bad = :(
+            function (du, u, p, t, tabs, _cgci, _cgnc)
+                @noinline function _cgh1(u, p, t)
+                    return 1.0
+                end
+                f = _cgh1
+                return nothing
+            end
+        )
+        @test_throws ErrorException ESM._cg_split_transport(bad, 0)
+    end
+    # Nothing to carry: the function comes back unchanged.
+    plain = :(
+        function (du, u, p, t, tabs, _cgci, _cgnc)
+            return nothing
+        end
+    )
+    @test ESM._cg_split_transport(plain, 0) === (plain, nothing)
 end
