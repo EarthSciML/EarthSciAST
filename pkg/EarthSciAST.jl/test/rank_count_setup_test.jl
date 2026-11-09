@@ -341,12 +341,13 @@ _rc_rel(op, flip, yes = 1, no = 0) = (a, x) -> _rc_op("ifelse", flip ? _rc_op(op
     # over a one-element set): a reduction over build constants, filled at
     # setup (its index search and the min before it run once), the op form's
     # bits and the interpreter's. Near misses stay observeds: a candidate
-    # value that reads a state or a scalar parameter.
+    # value that reads a state or a scalar parameter, and ranges not starting
+    # at 1.
     _rc_gens = [
         0.8125, 0.09375, 0.921875, 0.71875, 0.25, 0.421875, 0.03125, 0.140625,
         0.640625, 0.765625, 0.1875, 0.6875, 0.375, 0.53125, 0.828125, 0.03125,
     ]
-    function _rc_arg_doc(spelling, which; shift = 0.013, extra = nothing)
+    function _rc_arg_doc(spelling, which; shift = 0.013, extra = nothing, lo = 1)
         k = spelling === :op ? "k" : "k_$(which)_1"
         d = _rc_op("-", _rc_ix("g", k), shift)
         f = _rc_op("*", d, d)
@@ -373,6 +374,16 @@ _rc_rel(op, flip, yes = 1, no = 0) = (a, x) -> _rc_op("ifelse", flip ? _rc_op(op
         ]
         model = Dict{String, Any}("variables" => vars, "equations" => eqs)
         spelling === :op || (model["expression_templates"] = _rc_templates(which))
+        if lo != 1
+            # The template's own [1, n] ranges rewritten to [lo, n].
+            walk(x) = x isa AbstractDict ?
+                (
+                    haskey(x, "ranges") && foreach(r -> r isa AbstractVector && (r[1] = lo), values(x["ranges"]));
+                    foreach(walk, values(x))
+                ) :
+                x isa AbstractVector ? foreach(walk, x) : nothing
+            walk(model["expression_templates"][which])
+        end
         return Dict{String, Any}(
             "esm" => "1.2.0", "metadata" => Dict("name" => "arg_$(which)_$(spelling)"),
             "index_sets" => Dict("gens" => Dict("kind" => "interval", "size" => 16), "one" => Dict("kind" => "interval", "size" => 1)),
@@ -395,6 +406,7 @@ _rc_rel(op, flip, yes = 1, no = 0) = (a, x) -> _rc_op("ifelse", flip ? _rc_op(op
     @testset "argmin template near miss stays an observed: $what" for (what, kw) in (
             ("reads a state", (; extra = "u")),
             ("reads a scalar parameter", (; extra = "w")),
+            ("range from 2", (; lo = 2)),
         )
         tp = _rc_arg_doc(:tpl, "argmin"; kw...)
         dn, tn = _rc_du_doc(tp, :native)

@@ -203,6 +203,10 @@ function _is_setup_join_reduction(e)
     _body_needs_general_eval(e) && return false
     depth = _faq_nesting(e.expr_body::OpExpr, IdDict{OpExpr, Int}())
     gated = e.join !== nothing || e.join_gates !== nothing
+    # Ungated, a dense range the setup sweep has no loop for (not starting at
+    # 1) leaves the faq to the right-hand-side tiers. Gated, no tier takes it,
+    # so it stays a setup var and the sweep refuses it by name.
+    gated || _setup_ranges_ok(e, nothing, IdDict{OpExpr, Nothing}()) || return false
     return gated ? depth >= 1 : depth >= 2
 end
 # How deep `faq` reductions nest inside `e` (0: none).
@@ -228,7 +232,8 @@ _model_has_setup_join_reduction(equations) =
 # sweep fills it once and its readers gather it (an indicator sum in it is a
 # binary search, `_geo_count_node`). Every range of it and of its nested
 # reductions must be one the sweep loops over: a dense `[1, n]` range or an
-# interval or derived index set (`_setup_range_ok`). Under a plan without the
+# interval or derived index set (`_setup_range_ok`; without the registry, any
+# index set). Under a plan without the
 # construction-time compiled forms (the interpreter) it stays an observed.
 function _is_setup_const_reduction(e, index_sets, scalar_params)
     (e isa OpExpr && _is_faq_op(e.op) && e.expr_body isa OpExpr) || return false
@@ -255,7 +260,8 @@ end
 function _setup_range_ok(r, index_sets)
     r isa AbstractVector && return length(r) == 2 && r[1] isa Integer && r[1] == 1 && r[2] isa Integer
     (r isa IndexSetRef && isempty(r.of)) || return false
-    s = index_sets === nothing ? nothing : get(index_sets, r.from, nothing)
+    index_sets === nothing && return true
+    s = get(index_sets, r.from, nothing)
     return s isa IndexSet && (s.kind == "interval" || (s.kind == "derived" && s.from_faq !== nothing))
 end
 
