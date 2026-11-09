@@ -897,8 +897,9 @@ fn propagate_operator_dim(
         }
         "sqrt" => propagate_sqrt_dim(op, env, findings),
         // abs/floor/ceil preserve dimensions; `Pre` is an initial-value
-        // marker — same dimensions as its argument.
-        "abs" | "floor" | "ceil" | "round" | "Pre" => {
+        // marker — same dimensions as its argument; a `cast` changes only the
+        // precision its operand is held in (esm-spec §4.2).
+        "abs" | "floor" | "ceil" | "round" | "Pre" | "cast" => {
             if !require_arity(op, 1, findings) {
                 return Dim::Unknown;
             }

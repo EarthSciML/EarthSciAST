@@ -724,6 +724,14 @@ pub struct ExpressionNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub units: Option<String>,
 
+    /// For the `cast` op only (esm-spec §4.2, §11.3.1): the precision,
+    /// `"Float64"` or `"Float32"`, the node converts its one operand to. The
+    /// operand is evaluated at its own precision and the value rounded once to
+    /// this one; the node carries this precision to its parent. Legal on no
+    /// other op (schema).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub element_type: Option<String>,
+
     /// For the `table_lookup` op (esm-spec §9.5, v0.4.0): the
     /// `function_tables` entry id this node references. ``args`` MUST be
     /// empty for a `table_lookup` node — the per-axis input expressions live

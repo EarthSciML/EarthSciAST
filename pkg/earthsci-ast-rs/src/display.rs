@@ -1206,6 +1206,22 @@ fn format_structural_op(node: &ExpressionNode, fmt: Fmt) -> Option<String> {
             Some(format!("{name}({inner}, manifold={manifold}{id_part})"))
         }
 
+        // The precision is a trailing named argument, like `manifold=`, so the
+        // text form is lossless (tests/display/RENDERING_CONTRACT.md "cast").
+        "cast" => {
+            let inner = args
+                .iter()
+                .map(|a| render_fmt(a, fmt))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let et = node.element_type.as_deref().unwrap_or("");
+            Some(if fmt == Fmt::Latex {
+                format!("\\mathrm{{cast}}({inner}, element\\_type={et})")
+            } else {
+                format!("cast({inner}, element_type={et})")
+            })
+        }
+
         // The documentary `label` is a trailing named argument, like
         // `intersect_polygon`'s `manifold=`; an unlabeled skolem is a plain
         // call (the generic fallback).

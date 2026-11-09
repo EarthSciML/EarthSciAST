@@ -227,6 +227,9 @@ pub fn arity_of(op: &str) -> Option<Arity> {
         // parse and never authored: a transparent unary wrapper naming the
         // element type its operand is evaluated at.
         crate::precision_infer::MARKER_OP => Arity::Exact(1),
+        // The authored precision conversion (esm-spec §4.2, §11.3.1): one
+        // operand, rounded to the node's `element_type`.
+        "cast" => Arity::Exact(1),
 
         // --- Elementary functions (§4.2). All unary except `atan2` and
         // `min`/`max`.
@@ -848,6 +851,7 @@ mod tests {
         "argmax",
         "intersect_polygon",
         "polygon_intersection_area",
+        "cast",
     ];
 
     /// [`is_scalar_operator`] may only CLASSIFY registry ops, never invent them.

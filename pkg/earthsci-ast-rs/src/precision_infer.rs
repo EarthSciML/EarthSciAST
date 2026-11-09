@@ -279,10 +279,83 @@ type SubsystemDeclarations = Vec<(String, Option<String>)>;
 
 /// Does `model` — or any subsystem it carries, at any depth (`subs`, its
 /// [`subsystem_declarations_of`]) — declare an `element_type` on some
-/// variable?
+/// variable, or hold a `cast`?
+///
+/// A `cast` is a precision declaration in its own right (esm-spec §11.3.1): a
+/// document that declares no per-variable `element_type` can still convert a
+/// value, and `cast(cast(x, Float32), Float64)` in a binary64 document needs
+/// its operand marked exactly as a declared binary32 variable would be. So it
+/// switches the pass on too.
 fn declares_element_type(model: &Model, subs: &SubsystemDeclarations) -> bool {
     model.variables.values().any(|v| v.element_type.is_some())
         || subs.iter().any(|(_, et)| et.is_some())
+        || model_holds_cast(model)
+}
+
+/// The authored precision conversion (esm-spec §4.2, §11.3.1).
+pub const CAST_OP: &str = "cast";
+
+/// Does `expr` contain a [`CAST_OP`] node anywhere?
+fn expr_holds_cast(expr: &Expr) -> bool {
+    match expr {
+        Expr::Operator(node) => node.op == CAST_OP || node.any_child(&mut expr_holds_cast),
+        _ => false,
+    }
+}
+
+/// Does the raw JSON of an expression or equation list contain a `cast` node?
+fn json_holds_cast(v: &serde_json::Value) -> bool {
+    match v {
+        serde_json::Value::Object(o) => {
+            o.get("op").and_then(serde_json::Value::as_str) == Some(CAST_OP)
+                || o.values().any(json_holds_cast)
+        }
+        serde_json::Value::Array(a) => a.iter().any(json_holds_cast),
+        _ => false,
+    }
+}
+
+/// Does a raw subsystem component — its equations, or a subsystem of its own
+/// at any depth — hold a `cast`? Only the equation lists are walked, so a
+/// whole-file leaf's data arrays are not.
+fn component_holds_cast(value: &serde_json::Value) -> bool {
+    let comp = crate::precision::subsystem_component(value);
+    ["equations", "initialization_equations"]
+        .iter()
+        .any(|k| comp.get(*k).is_some_and(json_holds_cast))
+        || comp
+            .get("subsystems")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|subs| subs.values().any(component_holds_cast))
+}
+
+/// Does any model of a document, or a subsystem one carries, hold a `cast`?
+///
+/// A build entry that gates the inference pass on the document declaring a
+/// per-variable `element_type` must also run it for this: a `cast` in a
+/// document that declares none is a precision boundary all the same, and its
+/// operand has to be marked to be evaluated at its own precision.
+#[must_use]
+pub fn models_hold_cast(models: &indexmap::IndexMap<String, Model>) -> bool {
+    models.values().any(model_holds_cast)
+}
+
+/// Does `model`, or a subsystem it carries, hold a `cast`?
+fn model_holds_cast(model: &Model) -> bool {
+    let in_equations = |eqs: &[Equation]| {
+        eqs.iter()
+            .any(|eq| expr_holds_cast(&eq.lhs) || expr_holds_cast(&eq.rhs))
+    };
+    in_equations(&model.equations)
+        || model
+            .initialization_equations
+            .as_deref()
+            .is_some_and(in_equations)
+        || model
+            .subsystems
+            .iter()
+            .flatten()
+            .any(|(_, sub)| component_holds_cast(sub))
 }
 
 /// Every variable of `model`'s subsystems, at any depth, as `(Sub.path.var,
@@ -574,6 +647,10 @@ pub fn check_flattened(flat: &crate::flatten::FlattenedSystem) -> Result<(), Com
     if !registries
         .iter()
         .any(|r| r.values().any(|v| v.element_type.is_some()))
+        && !flat
+            .equations
+            .iter()
+            .any(|eq| expr_holds_cast(&eq.lhs) || expr_holds_cast(&eq.rhs))
     {
         return Ok(());
     }
@@ -674,6 +751,9 @@ fn infer_op<'a>(
     node: &ExpressionNode,
     env: &'a HashMap<String, Precision>,
 ) -> Result<(Inferred<'a>, Expr), CompileError> {
+    if node.op == CAST_OP {
+        return infer_cast(node, env);
+    }
     // Infer every child first, remembering each one's own precision so a clash
     // can be reported against the operator that joins them.
     let mut children: Vec<(Inferred<'a>, Expr)> = Vec::new();
@@ -736,6 +816,75 @@ fn infer_op<'a>(
         }
         Some(src) => Ok((Some(src), out)),
     }
+}
+
+/// The precision a `cast` node converts to: its `element_type`, which is
+/// required (the schema refuses a `cast` without one, so a missing one here
+/// means the document bypassed validation, and is refused rather than read
+/// as the binary64 default).
+///
+/// # Errors
+///
+/// [`CompileError::UnsupportedElementType`] for a missing or unknown spelling.
+pub fn cast_precision(node: &ExpressionNode) -> Result<Precision, CompileError> {
+    match node.element_type.as_deref() {
+        None => Err(CompileError::UnsupportedElementType {
+            element_type: "(missing on a `cast` node)".to_string(),
+        }),
+        some => Precision::from_element_type(some),
+    }
+}
+
+/// [`cast_precision`] for the RAW-JSON form of a node, for the
+/// value-invention engine.
+///
+/// # Errors
+///
+/// As [`cast_precision`].
+pub fn cast_precision_json(node: &serde_json::Value) -> Result<Precision, CompileError> {
+    match node.get("element_type") {
+        None => Err(CompileError::UnsupportedElementType {
+            element_type: "(missing on a `cast` node)".to_string(),
+        }),
+        Some(v) => Precision::from_element_type(Some(v.as_str().unwrap_or("(not a string)"))),
+    }
+}
+
+/// A `cast` (esm-spec §4.2, §11.3.1): a precision LEAF. Its operand is
+/// inferred on its own, marked when it carries a precision other than the
+/// cast's (so it is evaluated at that precision, not at the cast's), and the
+/// node hands its parent the cast's precision whatever the operand's was. An
+/// operand with no precision of its own adopts the cast's, which is the
+/// context the evaluator arms for it.
+fn infer_cast<'a>(
+    node: &ExpressionNode,
+    env: &'a HashMap<String, Precision>,
+) -> Result<(Inferred<'a>, Expr), CompileError> {
+    let target = cast_precision(node)?;
+    let [operand] = &node.args[..] else {
+        return Err(CompileError::build_err(format!(
+            "`cast` takes exactly one operand, got {} (esm-spec §4.2)",
+            node.args.len()
+        )));
+    };
+    let (src, inner) = infer(operand, env)?;
+    let inner = match src {
+        Some(src) if src.prec != target => mark(inner, src.prec),
+        _ => inner,
+    };
+    let mut rebuilt = node.clone();
+    rebuilt.args = vec![inner];
+    let label = match target {
+        Precision::Float32 => "a `cast` to Float32",
+        Precision::Float64 => "a `cast` to Float64",
+    };
+    Ok((
+        Some(Source {
+            prec: target,
+            var: label,
+        }),
+        Expr::Operator(Arc::new(rebuilt)),
+    ))
 }
 
 #[cfg(test)]

@@ -1925,11 +1925,13 @@ pub fn esm_problem<'a>(
     // inserted after it would arrive too late to decide anything.
     //
     // Skipped entirely, not merely a no-op walk, for a document that declares
-    // no per-variable element type.
+    // no per-variable element type and holds no `cast` (a cast is a precision
+    // boundary in a document that declares none).
     let mut inferred = false;
-    if precision::has_variable_overrides()
-        && let Some(f) = owned_file.as_mut()
+    if let Some(f) = owned_file.as_mut()
         && let Some(models) = f.models.as_mut()
+        && (precision::has_variable_overrides()
+            || crate::precision_infer::models_hold_cast(models))
     {
         crate::precision_infer::annotate_models(models, prec).map_err(SimulateError::Compile)?;
         inferred = true;
@@ -2187,9 +2189,10 @@ pub fn esm_problem<'a>(
     // JSON input has no typed form until stage (3) — this is its first chance,
     // and the pass has to happen before stage (4) lowers the equations.
     if !inferred
-        && precision::has_variable_overrides()
         && let Some(f) = owned_file.as_mut()
         && let Some(models) = f.models.as_mut()
+        && (precision::has_variable_overrides()
+            || crate::precision_infer::models_hold_cast(models))
     {
         crate::precision_infer::annotate_models(models, prec).map_err(SimulateError::Compile)?;
         pipeline_flat = None;

@@ -311,14 +311,14 @@ pub enum CompileError {
     /// binary64 operand, which is the very corruption per-variable element
     /// types exist to prevent (a ten-digit key rounded to binary32 collides
     /// with its neighbours). So the mix is an error naming both variables, and
-    /// the author states the intent by computing the mixed step into a variable
-    /// whose own `element_type` says which precision it is in.
+    /// the author states the intent with a `cast` (esm-spec §4.2), which says
+    /// at the site which way the value crosses.
     #[error(
         "mixed_element_type: operator '{op}' mixes operands of different element types — \
          {lhs_name} is {lhs_type} and {rhs_name} is {rhs_type}. One operator cannot be both; \
-         neither widening nor narrowing is silently applied. Compute one side into a variable \
-         whose own `element_type` states which precision that step lands in, then combine the \
-         declared variables (esm-spec §11.3.1)"
+         neither widening nor narrowing is silently applied. Convert one side explicitly with \
+         {{\"op\": \"cast\", \"element_type\": \"Float32\" | \"Float64\", \"args\": [x]}}, \
+         which states which precision the step lands in (esm-spec §11.3.1)"
     )]
     MixedElementType {
         /// The operator whose operands disagree (or `"equation"` for an

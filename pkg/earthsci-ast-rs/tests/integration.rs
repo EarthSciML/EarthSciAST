@@ -105,6 +105,8 @@ mod display_conformance;
 mod doubly_defined_state_conformance;
 #[path = "earthscidata_loader_coverage.rs"]
 mod earthscidata_loader_coverage;
+#[path = "element_type_cast.rs"]
+mod element_type_cast;
 #[path = "elementwise_observed_gather_conformance.rs"]
 mod elementwise_observed_gather_conformance;
 #[path = "esio_document_cadence.rs"]

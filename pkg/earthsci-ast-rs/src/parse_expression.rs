@@ -1388,6 +1388,38 @@ fn make_call(name: &str, args: Vec<Expr>, named: Vec<(String, Expr)>, pos: usize
         n.axis = Some(axis);
         return Ok(Expr::operator(n));
     }
+    // `cast(a, element_type=<Float32|Float64>)` (esm-spec §4.2): exactly one
+    // operand and that one named argument.
+    if name == "cast" {
+        let element_type = match take_named(&named, "element_type") {
+            Some(Expr::Variable(s)) if s == "Float32" || s == "Float64" => s,
+            _ => {
+                return Err(ExpressionParseError::new(
+                    "cast(...) requires element_type=Float32 or element_type=Float64",
+                    pos,
+                ));
+            }
+        };
+        if let Some((k, _)) = named.iter().find(|(k, _)| k != "element_type") {
+            return Err(ExpressionParseError::new(
+                format!("unexpected {k}=… in cast(...)"),
+                pos,
+            ));
+        }
+        if args.len() != 1 {
+            return Err(ExpressionParseError::new(
+                format!("cast(...) takes exactly one operand, got {}", args.len()),
+                pos,
+            ));
+        }
+        let mut n = ExpressionNode {
+            op: name.to_string(),
+            args,
+            ..Default::default()
+        };
+        n.element_type = Some(element_type);
+        return Ok(Expr::operator(n));
+    }
     // Geometry ops `polygon_intersection_area(a, b, manifold=<name>)` and
     // `intersect_polygon(a, b, manifold=<name>[, id=<name>])`. `id` (RFC §6.1
     // node identity) is optional and only emitted by the printer when present.

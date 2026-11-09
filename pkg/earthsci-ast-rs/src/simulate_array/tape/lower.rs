@@ -2446,6 +2446,11 @@ impl<'m> TapeBuilder<'m> {
                 let (arg, _precision) = self.marker_operand(node)?;
                 self.lower_expr(arg, bx)
             }
+            VecOp::Cast => {
+                let (arg, _precision) = self.cast_operand(node)?;
+                let v = self.lower_expr(arg, bx)?;
+                self.emit_cast_rounding(v)
+            }
             VecOp::Arith(code) => {
                 let Some((first, rest)) = node.args.split_first() else {
                     bail_tape!("op: `{}` with no arguments", node.op);
@@ -3416,6 +3421,38 @@ impl<'m> TapeBuilder<'m> {
             arg,
             crate::precision_infer::marker_precision(node).map(crate::precision::enter),
         ))
+    }
+
+    /// The operand of a `cast` (esm-spec §4.2, §11.3.1) and a guard for the
+    /// cast's precision, which the operand is lowered under — an operand with
+    /// a precision of its own carries its own marker (`crate::precision_infer`)
+    /// — and which [`Self::emit_cast_rounding`] then rounds to while the guard
+    /// stands.
+    fn cast_operand<'n>(
+        &self,
+        node: &'n Arc<ExpressionNode>,
+    ) -> LResult<(&'n Expr, crate::precision::PrecisionGuard)> {
+        let [arg] = &node.args[..] else {
+            bail_tape!("op: `cast` with arity {}", node.args.len());
+        };
+        let Ok(p) = crate::precision_infer::cast_precision(node) else {
+            bail_tape!("op: `cast` without a valid `element_type`");
+        };
+        Ok((arg, crate::precision::enter(p)))
+    }
+
+    /// Round `v` once to the precision in force — a `cast`'s, armed by
+    /// [`Self::cast_operand`]. Widening to binary64 is exact and emits
+    /// nothing. Narrowing to binary32 is a multiply by one tagged binary32:
+    /// that kernel narrows its operand to `f32` and multiplies by an exact
+    /// one, so it IS the round-to-nearest-even conversion (signed zero, NaN
+    /// and infinities included) and needs no instruction of its own.
+    fn emit_cast_rounding(&mut self, v: LV) -> LResult<LV> {
+        if crate::precision::is_f32() {
+            self.emit_bin(BinCode::Mul, v, LV::Lit(1.0))
+        } else {
+            Ok(v)
+        }
     }
 
     fn lower_ifelse(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
@@ -6832,6 +6869,11 @@ impl<'m> TapeBuilder<'m> {
             crate::precision_infer::MARKER_OP => {
                 let (arg, _precision) = self.marker_operand(node)?;
                 self.lower_wholesale(arg)
+            }
+            crate::precision_infer::CAST_OP => {
+                let (arg, _precision) = self.cast_operand(node)?;
+                let v = self.lower_wholesale(arg)?;
+                self.emit_cast_rounding(v)
             }
             "reshape" => self.lower_wholesale_reshape(node),
             "transpose" => self.lower_wholesale_transpose(node),

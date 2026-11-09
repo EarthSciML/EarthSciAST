@@ -837,6 +837,8 @@ pub(super) enum VecOp {
     Broadcast,
     /// The precision-boundary marker (`crate::precision_infer::MARKER_OP`).
     Precision,
+    /// The authored precision conversion (`crate::precision_infer::CAST_OP`).
+    Cast,
     /// Everything the overlay does not vectorize (→ per-cell oracle).
     Unsupported,
 }
@@ -846,6 +848,7 @@ pub(super) enum VecOp {
 pub(super) fn vec_op_code(op: &str) -> VecOp {
     match op {
         crate::precision_infer::MARKER_OP => VecOp::Precision,
+        crate::precision_infer::CAST_OP => VecOp::Cast,
         "+" => VecOp::Arith(BinCode::Add),
         "-" => VecOp::Arith(BinCode::Sub),
         "*" => VecOp::Arith(BinCode::Mul),
@@ -932,6 +935,22 @@ fn eval_vec_op_code<'a>(
             let p = crate::precision_infer::marker_precision(node)?;
             let _guard = crate::precision::enter(p);
             eval_vec(arg, bx, ctx, pool, ops)
+        }
+
+        // `cast` (esm-spec §4.2, §11.3.1): the operand under the cast's
+        // precision (an operand with a precision of its own is already marked
+        // by `crate::precision_infer`), then one rounding to it — the oracle's
+        // `eval::round_value`, elementwise.
+        VecOp::Cast => {
+            let [arg] = &node.args[..] else {
+                return None;
+            };
+            let p = crate::precision_infer::cast_precision(node).ok()?;
+            let v = {
+                let _guard = crate::precision::enter(p);
+                eval_vec(arg, bx, ctx, pool, ops)?
+            };
+            Some(if p.is_f32() { vec_round(v, p, pool) } else { v })
         }
 
         // Elementwise / n-ary arithmetic, plus `atan2` (binary) and the logical
@@ -1207,6 +1226,24 @@ pub(super) fn scalar_compare(op: &str, a: f64, b: f64) -> f64 {
         _ => return f64::NAN,
     };
     if t { 1.0 } else { 0.0 }
+}
+
+/// Round every element of `v` to `p` — the whole-array `cast`.
+fn vec_round<'a>(v: VecValue<'a>, p: crate::precision::Precision, pool: &mut Pool) -> VecValue<'a> {
+    match v {
+        VecValue::Scalar(s) => VecValue::Scalar(p.round(s)),
+        VecValue::Owned { mut data, origin } => {
+            data.mapv_inplace(|x| p.round(x));
+            VecValue::Owned { data, origin }
+        }
+        VecValue::View { data, origin } => {
+            let mut buf = pool.take_array_uninit(data.shape());
+            ndarray::Zip::from(&mut buf)
+                .and(data)
+                .for_each(|o, &x| *o = p.round(x));
+            VecValue::Owned { data: buf, origin }
+        }
+    }
 }
 
 pub(super) fn vec_negate<'a>(v: VecValue<'a>, pool: &mut Pool) -> VecValue<'a> {

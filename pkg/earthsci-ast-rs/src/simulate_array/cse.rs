@@ -766,6 +766,7 @@ fn attrs_key(node: &ExpressionNode) -> Option<Rendered> {
         && node.name.is_none()
         && node.label.is_none()
         && node.value.is_none()
+        && node.element_type.is_none()
         && node.id.is_none();
     if bare {
         return Some(Rendered::Bare);
@@ -775,7 +776,7 @@ fn attrs_key(node: &ExpressionNode) -> Option<Rendered> {
     use std::fmt::Write as _;
     let _ = write!(
         s,
-        "|w={:?}|d={:?}|oi={:?}|rd={:?}|sr={:?}|rg={:?}|sh={:?}|pm={:?}|ax={:?}|bf={:?}|nm={:?}|lb={:?}|id={:?}",
+        "|w={:?}|d={:?}|oi={:?}|rd={:?}|sr={:?}|rg={:?}|sh={:?}|pm={:?}|ax={:?}|bf={:?}|nm={:?}|lb={:?}|id={:?}|et={:?}",
         node.wrt,
         node.dim,
         node.output_idx,
@@ -789,6 +790,7 @@ fn attrs_key(node: &ExpressionNode) -> Option<Rendered> {
         node.name,
         node.label,
         node.id,
+        node.element_type,
     );
     // `ranges` is a `HashMap`, so it must be rendered in a deterministic order.
     if let Some(r) = &node.ranges {

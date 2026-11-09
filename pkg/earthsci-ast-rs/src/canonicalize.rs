@@ -98,7 +98,7 @@ fn validate_emissible(e: &Expr) -> Result<(), CanonicalizeError> {
 /// encoding, or `None` if the node is fully emissible.
 ///
 /// EMISSIBLE (have a wire slot): `op`, `args`, `wrt`, `dim`, `fn`
-/// (`broadcast_fn`), `name`, `value`. TOLERATED-AND-IGNORED (may be present, no
+/// (`broadcast_fn`), `name`, `value`, `units`, `element_type`. TOLERATED-AND-IGNORED (may be present, no
 /// wire slot, NOT an error — matching Julia's `_CANONICAL_IGNORED_FIELDS`):
 /// `arg`, `bindings`. Every OTHER `ExpressionNode` field is NON-EMISSIBLE.
 ///
@@ -121,6 +121,7 @@ fn first_non_emissible_field(n: &ExpressionNode) -> Option<&'static str> {
         name: _,
         value: _,
         units: _,
+        element_type: _,
         // TOLERATED-AND-IGNORED — no wire slot, presence is NOT an error
         // (Julia's `_CANONICAL_IGNORED_FIELDS`).
         arg: _,
@@ -257,7 +258,7 @@ fn canon_op(node: &ExpressionNode) -> Result<Expr, CanonicalizeError> {
     // `args` was descended, so such a NaN escaped the guard.
     //
     // Sidecar fields are NOT part of the emitted canonical JSON (see
-    // `emit_node_json`, which emits only op/args/wrt/dim/fn/name/value/units — the
+    // `emit_node_json`, which emits only op/args/wrt/dim/fn/name/value/units/element_type — the
     // closed cross-binding field set the TS/Python/Julia siblings pin), so
     // normalizing the sidecar sub-trees here only strengthens the finiteness
     // guard and normalizes the returned tree. A node that still carries a
@@ -591,6 +592,9 @@ fn emit_node_json(n: &ExpressionNode) -> String {
     }
     if let Some(ref u) = n.units {
         entries.push(("units".into(), json_string(u)));
+    }
+    if let Some(ref p) = n.element_type {
+        entries.push(("element_type".into(), json_string(p)));
     }
     if let Some(ref s) = n.broadcast_fn {
         entries.push(("fn".into(), json_string(s)));

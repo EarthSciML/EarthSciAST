@@ -687,6 +687,26 @@ fn vi_eval_op(node: &Value, ctx: &ViCtx, bindings: &Bindings) -> Result<Val, Val
                 None => vi_eval(inner, ctx, bindings),
             }
         }
+        // `cast` (esm-spec §4.2, §11.3.1): the operand under the cast's
+        // precision (one with its own carries its own marker), then one
+        // rounding. A boolean flag and an integer that survives the rounding
+        // are exact in either precision and keep their kind.
+        crate::precision_infer::CAST_OP => {
+            if args.len() != 1 {
+                return err(format!("`cast` takes exactly one operand, got {}", args.len()));
+            }
+            let p = crate::precision_infer::cast_precision_json(node)
+                .map_err(|e| ValueInventionError::new(e.to_string()))?;
+            let v = {
+                let _guard = crate::precision::enter(p);
+                vi_eval(arg(0)?, ctx, bindings)?
+            };
+            match v {
+                Val::Bool(b) => Ok(Val::Bool(b)),
+                Val::Int(i) if p.round(i as f64) == i as f64 => Ok(Val::Int(i)),
+                other => Ok(Val::Float(p.round(other.as_f64()?))),
+            }
+        }
         "index" => vi_index(node, ctx, bindings),
         "skolem" => Ok(Val::Key(vi_skolem(node, ctx, bindings)?)),
         "true" => Ok(Val::Bool(true)),

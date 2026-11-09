@@ -272,6 +272,8 @@ pub fn is_evaluable_op(op: &str) -> bool {
         // (`crate::precision_infer::MARKER_OP`): a transparent wrapper that
         // evaluates its one operand at a stated element type. Never authored.
         | crate::precision_infer::MARKER_OP
+        // The authored precision conversion (esm-spec §4.2, §11.3.1).
+        | crate::precision_infer::CAST_OP
     )
 }
 
@@ -482,6 +484,34 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
                 }
                 None => eval(&node.args[0], ctx),
             }
+        }
+
+        // `cast` (esm-spec §4.2, §11.3.1): evaluate the operand under the
+        // cast's precision — `crate::precision_infer` has already marked an
+        // operand whose own precision differs, so this arms only what has none
+        // of its own — then round the value ONCE to that precision. Widening is
+        // exact (a binary32 value is a binary64 carrier already); narrowing is
+        // round-to-nearest-even, elementwise over an array.
+        crate::precision_infer::CAST_OP => {
+            let (Some(arg), 1) = (node.args.first(), node.args.len()) else {
+                latch_gather_fault(format!(
+                    "`cast` takes exactly one operand, got {} (esm-spec §4.2)",
+                    node.args.len()
+                ));
+                return Value::Scalar(f64::NAN);
+            };
+            let p = match crate::precision_infer::cast_precision(node) {
+                Ok(p) => p,
+                Err(e) => {
+                    latch_gather_fault(e.to_string());
+                    return Value::Scalar(f64::NAN);
+                }
+            };
+            let v = {
+                let _guard = crate::precision::enter(p);
+                eval(arg, ctx)
+            };
+            round_value(v, p)
         }
 
         // Unary / scalar transcendentals.
@@ -865,6 +895,15 @@ pub(crate) fn fold_scalar(op: &str, vs: &[f64]) -> f64 {
     }
     rest.iter()
         .fold(prec.round(*first), |acc, &v| apply_binary(op, acc, v))
+}
+
+/// Round a value to `p`, elementwise over an array: the `cast` conversion.
+pub(super) fn round_value(v: Value, p: crate::precision::Precision) -> Value {
+    match v {
+        Value::Scalar(s) => Value::Scalar(p.round(s)),
+        Value::Array(a) if p.is_f32() => Value::Array(Box::new(a.mapv(|x| p.round(x)))),
+        arr @ Value::Array(_) => arr,
+    }
 }
 
 pub(super) fn negate(v: Value) -> Value {

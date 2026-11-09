@@ -22,6 +22,17 @@
           "type": "unknown",
           "units": "1",
           "description": "1 - stored, in binary64: 0.8999999985098839."
+        },
+        "n": {
+          "type": "parameter",
+          "units": "1",
+          "default": 16777217.0,
+          "description": "2^24 + 1: exact in binary64, not representable in binary32."
+        },
+        "excess": {
+          "type": "unknown",
+          "units": "1",
+          "description": "cast(cast(n - 2^24, Float32), Float64): the subtraction runs in binary64, the operand's own precision, so 1. Evaluated in the cast's binary32 it would be 0, because n would narrow to 2^24 first."
         }
       },
       "equations": [
@@ -50,6 +61,28 @@
               "stored"
             ]
           }
+        },
+        {
+          "lhs": "excess",
+          "rhs": {
+            "op": "cast",
+            "element_type": "Float64",
+            "args": [
+              {
+                "op": "cast",
+                "element_type": "Float32",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      "n",
+                      16777216.0
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
         }
       ],
       "tests": [
@@ -73,6 +106,15 @@
               "variable": "residual",
               "time": 0.0,
               "expected": 0.8999999985098839,
+              "tolerance": {
+                "rel": 0.0,
+                "abs": 0.0
+              }
+            },
+            {
+              "variable": "excess",
+              "time": 0.0,
+              "expected": 1.0,
               "tolerance": {
                 "rel": 0.0,
                 "abs": 0.0
