@@ -41,27 +41,12 @@ pub(super) enum SNode {
     Str(String),
     Arr(Vec<Sv>),
     Obj(Vec<(String, Sv)>),
-    /// A long array of numbers (at any depth, e.g. a `const` node's mesh
+    /// A long array of numbers ([`crate::json_visit::is_number_data`], at
+    /// any depth, e.g. a `const` node's mesh
     /// connectivity), kept as the JSON it is. It holds no string or object,
     /// so no template reference, parameter or rule can occur inside it, and
     /// every walk treats it as one leaf instead of one node per number.
     Data(Rc<Value>),
-}
-
-/// The fewest elements an all-number array has to be held as [`SNode::Data`].
-const DATA_MIN_LEN: usize = 16;
-
-/// Whether `v` is an array of numbers or of such arrays, at least
-/// [`DATA_MIN_LEN`] long at the top.
-fn is_number_data(v: &[Value]) -> bool {
-    fn numbers(v: &Value) -> bool {
-        match v {
-            Value::Number(_) => true,
-            Value::Array(a) => a.iter().all(numbers),
-            _ => false,
-        }
-    }
-    v.len() >= DATA_MIN_LEN && v.iter().all(numbers)
 }
 
 /// A shared (reference-counted) expression node.
@@ -75,7 +60,9 @@ pub(super) fn to_shared(v: &Value) -> Sv {
         Value::Bool(b) => SNode::Bool(*b),
         Value::Number(n) => SNode::Num(n.clone()),
         Value::String(s) => SNode::Str(s.clone()),
-        Value::Array(arr) if is_number_data(arr) => SNode::Data(Rc::new(v.clone())),
+        Value::Array(arr) if crate::json_visit::is_number_data(arr) => {
+            SNode::Data(Rc::new(v.clone()))
+        }
         Value::Array(arr) => SNode::Arr(arr.iter().map(to_shared).collect()),
         Value::Object(obj) => {
             SNode::Obj(obj.iter().map(|(k, v)| (k.clone(), to_shared(v))).collect())
