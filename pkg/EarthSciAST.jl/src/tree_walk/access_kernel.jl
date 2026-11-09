@@ -1066,8 +1066,13 @@ Base.isequal(a::_VNKey, b::_VNKey) =
 @inline _vn!(tab::Dict{_VNKey, Int}, key) = get!(tab, _VNKey(key), length(tab) + 1)
 
 function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
-    _acc_has_reduce(spine) && return (spine, _ACC_NO_CSE)
-    inv_only = _acc_has_areduce(spine)
+    # Every node reachable from the spine, once each (see the dense-position
+    # note below). The two kind tests read it rather than walking the spine
+    # twice more with an identity set of their own: the same nodes, so the
+    # same answers as `_acc_has_reduce` / `_acc_has_areduce`.
+    order, pos_of = _dag_postorder(spine, _dag_children, _dag_every)
+    _anyof(n -> n.kind === _NK_REDUCE, order) && return (spine, _ACC_NO_CSE)
+    inv_only = _anyof(n -> n.kind === _NK_AREDUCE, order)
     key_to_vn = Dict{_VNKey, Int}()
     counts = Int[]; is_op = Bool[]; is_inv = Bool[]; rep = _Node[]
     # Occurrence counting must stay PER PATH (a value occurring on ≥2 paths is
@@ -1087,7 +1092,6 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     # rewrite passes below index plain `Vector`s by position instead of hashing
     # each freshly-lowered `_Node` through a SEPARATE `IdDict` per pass —
     # `IdDict` get/set over these spines was the build's top self-time.
-    order, pos_of = _dag_postorder(spine, _dag_children, _dag_every)
     P = length(order)
     vn_by_pos = Vector{Int}(undef, P)
     for (p, n) in enumerate(order)    # postorder ⇒ children already numbered

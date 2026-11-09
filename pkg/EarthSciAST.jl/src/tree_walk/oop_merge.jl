@@ -1223,11 +1223,11 @@ function _affine_keep_has_fn(K::_AccKernel, seen = IdDict{_Node, Nothing}())
     _anyof(r -> _affine_keep_has_fn(r, seen), K.cse.inv_recipes) && return true
     return _anyof(S -> _affine_keep_has_fn(S, seen), K.subs)
 end
-function _affine_box_rank(K::_AccKernel)
+function _affine_box_rank(K::_AccKernel, fnmemo::IdDict{Any, Bool} = IdDict{Any, Bool}())
     cs = K.cells
     (
         _is_outs(cs) || length(cs.strides) < 2 || !_affine_keep_reads(K) ||
-            _affine_keep_has_fn(K)
+            get!(() -> _affine_keep_has_fn(K), fnmemo, (K.spine, K.cse, K.subs))
     ) && return 0
     return count(d -> !_cellset_slab(cs, d), eachindex(cs.strides))
 end
@@ -1237,7 +1237,11 @@ function _affine_boxes_to_keep(kernels::AbstractVector{_AccKernel})
     (_codegen_disabled() || _codegen_node_budget() <= 0) && return Int[]
     cap = _affine_keep_max()
     cap <= 0 && return Int[]
-    rk = [_affine_box_rank(K) for K in kernels]
+    # Boxes that lowered to one cached spine (`spine_cache`) share their spine,
+    # CSE recipes and sub-kernels, so whether they hold a `:fn` is asked once
+    # per shared triple, not once per box.
+    fnmemo = IdDict{Any, Bool}()
+    rk = [_affine_box_rank(K, fnmemo) for K in kernels]
     cand = [j for j in eachindex(kernels) if rk[j] > 0]
     sort!(cand; by = j -> (-rk[j], j))
     length(cand) > cap && resize!(cand, cap)

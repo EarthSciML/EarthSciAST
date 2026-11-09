@@ -75,12 +75,12 @@ function _lower_to_access(
         acc::Vector{_AccDesc},
         subcalls::Vector{_SubCallSite} = _SubCallSite[]
     )::_Node
-    return _lower_to_access(tmpl, lane_repl, acc, subcalls, IdDict{_Node, _Node}())
+    return _lower_to_access(tmpl, lane_repl, acc, subcalls, _NodeIdMap{_Node}())
 end
 function _lower_to_access(
         tmpl::_Node, lane_repl::Vector{<:_LaneRepl},
         acc::Vector{_AccDesc}, subcalls::Vector{_SubCallSite},
-        memo::IdDict{_Node, _Node}
+        memo::_NodeIdMap{_Node}
     )::_Node
     cached = get(memo, tmpl, nothing)
     cached === nothing || return cached
@@ -91,7 +91,7 @@ end
 function _lower_to_access_node(
         tmpl::_Node, lane_repl::Vector{<:_LaneRepl},
         acc::Vector{_AccDesc}, subcalls::Vector{_SubCallSite},
-        memo::IdDict{_Node, _Node}
+        memo::_NodeIdMap{_Node}
     )::_Node
     k = tmpl.kind
     if k === _NK_STATE
@@ -347,7 +347,7 @@ mutable struct _AffineSig
     # or `nothing`, so a keyed cell does not walk the subscripts through the
     # Dict environment; and the visited set `_branch_key!` clears per keyed cell.
     lane_evals::Dict{String, Any}
-    bseen::IdDict{OpExpr, Nothing}
+    bseen::_SeenSet
     # Per body: whether it holds an indexed array producer (`makearray` or a
     # `faq`), the only nodes `_branch_key!` prints. A body without one has the
     # empty branch key at every cell.
@@ -364,13 +364,15 @@ mutable struct _AffineSig
     # Per branch key, the guard paths each lane is read under
     # (`_lane_guard_paths`), built only when a lane is out of range somewhere.
     lane_guards::Dict{String, Vector{Vector{_GuardPath}}}
+    # Each subscript expression's compiled form (`_lane_evaluator`'s `ixmemo`).
+    ix_memo::IdDict{OpExpr, Any}
 end
 _AffineSig() = _AffineSig(
     Dict{String, _StencilBranch}(), IdDict{OpExpr, Bool}(), IOBuffer(), Int[],
     Dict{String, Vector{Vector{Bool}}}(), Int[], Dict{String, Any}(),
-    IdDict{OpExpr, Nothing}(), IdDict{Any, Bool}(), Dict{String, Int}(),
+    _SeenSet(), IdDict{Any, Bool}(), Dict{String, Int}(),
     Dict{String, Vector{Union{Nothing, _LaneEval}}}(), nothing, nothing,
-    Dict{String, Vector{Vector{_GuardPath}}}()
+    Dict{String, Vector{Vector{_GuardPath}}}(), IdDict{OpExpr, Any}()
 )
 
 # Whether `e` reaches an `index` of a `makearray` or `faq` producer, through the
@@ -597,7 +599,7 @@ function _cell_bkey!(
     empty!(env)
     _set_env!(env, idx_names, loop)
     if get!(() -> _has_indexed_producer(body), sig.bkey_sites, body)
-        empty!(sig.bseen)
+        _seen_restart!(sig.bseen)
         _branch_key!(
             sig.bio, body, ctx_proto.idxset, env, ctx_proto.const_arrays, sig.bmemo,
             sig.bseen
@@ -621,9 +623,14 @@ function _ckey_state_slots!(
     )
     evs = get!(sig.lane_evals, bkey) do
         compiled = loop isa Vector{Int} && idx_names isa Vector{String}
+        # The state lanes' evaluators are the box processor's
+        # (`_box_lane_evals!`, the same recipes under the same branch key):
+        # compiled once per branch key for the scan and the boxes both.
+        all_evs = compiled ?
+            _box_lane_evals!(sig, bkey, recipes, idx_names, var_map, const_arrays) :
+            nothing
         Union{Nothing, _LaneEval{typeof(var_map)}}[
-            compiled ? _lane_evaluator(recipes[k], idx_names, var_map, const_arrays) : nothing
-                for k in state_ks
+            compiled ? all_evs[k] : nothing for k in state_ks
         ]
     end
     _ckey_fill_slots!(state_vals, evs, recipes, state_ks, loop, env, var_map, const_arrays)
@@ -2221,7 +2228,7 @@ function _box_lane_evals!(
         compiled = idx_names isa Vector{String}
         Union{Nothing, _LaneEval}[
             compiled && rec.kind == LANE_STATE ?
-                _lane_evaluator(rec, idx_names, var_map, const_arrays) : nothing
+                _lane_evaluator(rec, idx_names, var_map, const_arrays, sig.ix_memo) : nothing
                 for rec in recipes
         ]
     end::Vector{Union{Nothing, _LaneEval}}
