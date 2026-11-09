@@ -2030,23 +2030,31 @@ function faq_bare_array_operands(expr::ASTExpr, var_shapes::AbstractDict; exclud
             for (n, s) in var_shapes if !isempty(s) && !(String(n) in exclude)
     )
     isempty(shaped) && return found
-    _faq_bare_walk!(found, expr, shaped, Set{String}())
+    _faq_bare_walk!(found, expr, shaped, Set{String}(), IdDict{Any, Vector{Set{String}}}())
     return found
 end
 
-function _faq_bare_operands!(out::Vector{String}, e::ASTExpr, shaped)
+# Both walks are DAG-safe: a node shared by many parents (a lifted or folded
+# chain) is visited once per distinct loop-symbol scope, not once per path, so
+# the check stays O(nodes) where a per-path walk is exponential in the depth.
+function _faq_bare_operands!(out::Vector{String}, e::ASTExpr, shaped, seen = IdDict{Any, Nothing}())
     if e isa VarExpr
         haskey(shaped, e.name) && push!(out, e.name)
     elseif e isa OpExpr && _is_elementwise_node(e)
+        haskey(seen, e) && return out
+        seen[e] = nothing
         for a in e.args
-            _faq_bare_operands!(out, a, shaped)
+            _faq_bare_operands!(out, a, shaped, seen)
         end
     end
     return out
 end
 
-function _faq_bare_walk!(found, e::ASTExpr, shaped, bound::Set{String})
+function _faq_bare_walk!(found, e::ASTExpr, shaped, bound::Set{String}, visited)
     e isa OpExpr || return found
+    scopes = get!(() -> Set{String}[], visited, e)
+    any(==(bound), scopes) && return found
+    push!(scopes, bound)
     if e.op == "faq" || e.op == "aggregate"
         bound = copy(bound)
         e.output_idx === nothing || foreach(s -> push!(bound, string(s)), e.output_idx)
@@ -2063,7 +2071,7 @@ function _faq_bare_walk!(found, e::ASTExpr, shaped, bound::Set{String})
         end
     end
     for c in _expr_children(e)
-        _faq_bare_walk!(found, c, shaped, bound)
+        _faq_bare_walk!(found, c, shaped, bound, visited)
     end
     return found
 end
