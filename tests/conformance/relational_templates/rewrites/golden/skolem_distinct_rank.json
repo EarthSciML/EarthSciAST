@@ -1,0 +1,96 @@
+{
+  "fixture": "skolem_distinct_rank",
+  "reference_binding": "python",
+  "reference_compiler": "interpreter",
+  "reference_form": "op",
+  "cases": [
+    {
+      "sets": {
+        "edge_set": {
+          "members": [
+            [
+              1,
+              2
+            ],
+            [
+              2,
+              3
+            ],
+            [
+              3,
+              4
+            ],
+            [
+              4,
+              5
+            ],
+            [
+              5,
+              6
+            ]
+          ],
+          "extent": 5
+        }
+      },
+      "rank": {
+        "variable": "edge_dense_id",
+        "values": [
+          1.0,
+          2.0,
+          3.0,
+          4.0,
+          5.0
+        ]
+      },
+      "rank_lookup": {
+        "variable": "face_edge_rank",
+        "values": [
+          2.0,
+          3.0,
+          4.0,
+          3.0,
+          4.0,
+          5.0,
+          4.0,
+          5.0,
+          1.0,
+          5.0,
+          1.0,
+          2.0,
+          1.0,
+          2.0,
+          3.0,
+          2.0,
+          3.0,
+          4.0,
+          3.0,
+          4.0,
+          5.0,
+          4.0,
+          5.0,
+          1.0,
+          5.0,
+          1.0,
+          2.0,
+          1.0,
+          2.0,
+          3.0,
+          2.0,
+          3.0,
+          4.0,
+          3.0,
+          4.0,
+          5.0
+        ]
+      },
+      "rhs": {
+        "state": {
+          "u": 1.0
+        },
+        "dy": {
+          "u": -1.0
+        }
+      }
+    }
+  ]
+}

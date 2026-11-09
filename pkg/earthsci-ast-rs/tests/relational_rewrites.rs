@@ -8,8 +8,10 @@
 //! set's members (the op's tuples against the template's integer keys,
 //! decoded), the extents, the 1-based dense IDs, the arg-witness buffers, and
 //! the right-hand side at a probe state, bit for bit. The template form is
-//! built under the interpreter and the strict native tape. A
-//! `value_invention_key_out_of_range` refusal names the column.
+//! built under the interpreter and the strict native tape. Both forms are also
+//! checked against the expected values the manifest's `golden` files hold
+//! (computed from the op form by the reference binding, `rewrites/goldens.py`).
+//! A `value_invention_key_out_of_range` refusal names the column.
 
 #![cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
 
@@ -48,6 +50,47 @@ fn manifest() -> Vec<Value> {
     let text = std::fs::read_to_string(rewrites_dir().join("manifest.json")).unwrap();
     let m: Value = serde_json::from_str(&text).unwrap();
     m["rewrites"].as_array().unwrap().clone()
+}
+
+/// The expected values of `entry` (its manifest `golden` file).
+fn golden(entry: &Value) -> Value {
+    let rel = entry["golden"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{}: no golden", entry["id"]));
+    read_doc(&rewrites_dir().join(rel))
+}
+
+/// A golden derived set's members as op-form keys.
+fn golden_members(g: &Value) -> Vec<Key> {
+    g["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| {
+            Key::Tuple(
+                m.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|c| Key::Int(c.as_i64().unwrap()))
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+fn golden_floats(v: &Value) -> Vec<f64> {
+    v.as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_f64().unwrap())
+        .collect()
+}
+
+/// A state element's golden key: `Model.var[1, 2]` -> `var[1,2]`.
+fn elem_key(name: &str, model: &str) -> String {
+    name.strip_prefix(&format!("{model}."))
+        .unwrap_or(name)
+        .replace(' ', "")
 }
 
 fn rewrite_path(entry: &Value) -> PathBuf {
@@ -198,11 +241,54 @@ fn decode(k: i64, lo: &[i64], n_b: i64) -> Key {
 /// `dy` at `u = 1 + 0.1 sin(0.37 k)`: the interpreter, or the strict native
 /// tape with no rule off it.
 fn rhs_at_probe(prob: &EsmProblem, compiler: Compiler, label: &str) -> (Vec<String>, Vec<f64>) {
-    let comp = prob.debug_array_compiled().expect("a right-hand side");
-    let names = comp.state_variable_names().to_vec();
-    let state: Vec<f64> = (0..names.len())
+    let n = prob
+        .debug_array_compiled()
+        .expect("a right-hand side")
+        .state_variable_names()
+        .len();
+    let state: Vec<f64> = (0..n)
         .map(|k| 1.0 + 0.1 * (0.37 * k as f64).sin())
         .collect();
+    rhs_at(prob, compiler, label, &state)
+}
+
+/// `dy` at the golden probe state, keyed like it.
+fn rhs_at_golden(
+    prob: &EsmProblem,
+    compiler: Compiler,
+    label: &str,
+    model: &str,
+    g: &Value,
+) -> HashMap<String, f64> {
+    let names: Vec<String> = prob
+        .debug_array_compiled()
+        .expect("a right-hand side")
+        .state_variable_names()
+        .iter()
+        .map(|n| elem_key(n, model))
+        .collect();
+    let gs = g["state"].as_object().unwrap();
+    let mut sorted = names.clone();
+    sorted.sort();
+    let mut want: Vec<String> = gs.keys().cloned().collect();
+    want.sort();
+    assert_eq!(sorted, want, "{label}: state elements");
+    let state: Vec<f64> = names.iter().map(|n| gs[n].as_f64().unwrap()).collect();
+    let (_, dy) = rhs_at(prob, compiler, label, &state);
+    names.into_iter().zip(dy).collect()
+}
+
+/// `dy` at `state`: the interpreter, or the strict native tape with no rule
+/// off it.
+fn rhs_at(
+    prob: &EsmProblem,
+    compiler: Compiler,
+    label: &str,
+    state: &[f64],
+) -> (Vec<String>, Vec<f64>) {
+    let comp = prob.debug_array_compiled().expect("a right-hand side");
+    let names = comp.state_variable_names().to_vec();
+    let state = state.to_vec();
     let dy = if compiler == Compiler::Native {
         let _precision = comp.debug_precision_env().enter();
         let params = comp.debug_resolve_params(prob.p());
@@ -259,14 +345,15 @@ fn rank_of_each(members: &[i64]) -> Vec<f64> {
         .collect()
 }
 
-fn check_case(entry: &Value, case: &Value, label: &str) {
+fn check_case(entry: &Value, idx: usize, case: &Value, label: &str) {
     let cmp = &entry["compare"];
     let model = entry["models"][0].as_str().unwrap();
     let source = repo_root().join(entry["source"].as_str().unwrap());
     let op_doc = single_model(&source, model);
     let tp_doc = single_model(&rewrite_path(entry), model);
+    let gold = &golden(entry)["cases"][idx];
     if cmp.get("vi_only").and_then(Value::as_bool) == Some(true) {
-        check_vi_only(entry, case, &op_doc, &tp_doc, model, label);
+        check_vi_only(entry, case, &op_doc, &tp_doc, model, label, gold);
         return;
     }
     let op_prob = build(&op_doc, case, Compiler::Interpreter)
@@ -282,6 +369,25 @@ fn check_case(entry: &Value, case: &Value, label: &str) {
     });
     let op_rhs = (cmp.get("rhs").and_then(Value::as_bool) == Some(true))
         .then(|| rhs_at_probe(&op_prob, Compiler::Interpreter, label));
+    let golden_dy = |dy: &HashMap<String, f64>, form: &str| {
+        let want = gold["rhs"]["dy"].as_object().unwrap();
+        assert_eq!(dy.len(), want.len(), "{label}: {form} form state elements");
+        for (n, w) in want {
+            let w = w.as_f64().unwrap();
+            assert_eq!(
+                dy[n].to_bits(),
+                w.to_bits(),
+                "{label}: {form} form vs golden at {n}: {} vs {w}",
+                dy[n]
+            );
+        }
+    };
+    if op_rhs.is_some() {
+        golden_dy(
+            &rhs_at_golden(&op_prob, Compiler::Interpreter, label, model, &gold["rhs"]),
+            "op",
+        );
+    }
     for compiler in [Compiler::Interpreter, Compiler::Native] {
         let label = format!("{label} [{}]", compiler.as_str());
         let tp = build(&tp_doc, case, compiler)
@@ -320,6 +426,14 @@ fn check_case(entry: &Value, case: &Value, label: &str) {
             assert_eq!(decoded, op.members[faq], "{label}: {faq} members");
             let tp_extent = pipe.as_ref().unwrap().extents()[faq];
             assert_eq!(tp_extent, op.extents[faq], "{label}: {faq} extent");
+            let want = golden_members(&gold["sets"][faq]);
+            assert_eq!(op.members[faq], want, "{label}: op form {faq} vs golden");
+            assert_eq!(decoded, want, "{label}: template {faq} vs golden");
+            assert_eq!(
+                tp_extent as u64,
+                gold["sets"][faq]["extent"].as_u64().unwrap(),
+                "{label}: {faq} extent vs golden"
+            );
         }
         if let Some(r) = cmp.get("rank") {
             let faq = r["faq"].as_str().unwrap();
@@ -334,6 +448,8 @@ fn check_case(entry: &Value, case: &Value, label: &str) {
                 want,
                 "{label}: dense ids"
             );
+            let gw = golden_floats(&gold["rank"]["values"]);
+            assert_eq!(bits(&want), bits(&gw), "{label}: op dense ids vs golden");
             assert_eq!(
                 rank_of_each(&tp_members[faq]),
                 want,
@@ -372,6 +488,8 @@ fn check_case(entry: &Value, case: &Value, label: &str) {
                     .copied()
                     .collect();
             assert_eq!(bits(&got), bits(&want), "{label}: {got:?} vs {want:?}");
+            let gw = golden_floats(&gold["rank_lookup"]["values"]);
+            assert_eq!(bits(&want), bits(&gw), "{label}: op rank lookup vs golden");
         }
         for a in cmp
             .get("assignments")
@@ -393,11 +511,17 @@ fn check_case(entry: &Value, case: &Value, label: &str) {
                 bits(&op_buf),
                 "{label}: {tp_buf:?} vs {op_buf:?}"
             );
+            let gw = golden_floats(&gold["assignments"][a["template"].as_str().unwrap()]);
+            assert_eq!(bits(&op_buf), bits(&gw), "{label}: op assignment vs golden");
         }
         if let Some((op_names, op_dy)) = &op_rhs {
             let (names, dy) = rhs_at_probe(&tp, compiler, &label);
             assert_eq!(names, *op_names, "{label}: state order");
             assert_eq!(bits(&dy), bits(op_dy), "{label}: {dy:?} vs {op_dy:?}");
+            golden_dy(
+                &rhs_at_golden(&tp, compiler, &label, model, &gold["rhs"]),
+                "template",
+            );
         }
     }
 }
@@ -412,6 +536,7 @@ fn check_vi_only(
     tp_doc: &Value,
     model: &str,
     label: &str,
+    gold: &Value,
 ) {
     let arrays = case_arrays(case);
     let params = case_params(case);
@@ -459,6 +584,14 @@ fn check_vi_only(
             .collect();
         assert_eq!(decoded, op.members[faq], "{label}: {faq} members");
         assert_eq!(tp.extents[faq], op.extents[faq], "{label}: {faq} extent");
+        let want = golden_members(&gold["sets"][faq]);
+        assert_eq!(decoded, want, "{label}: template {faq} vs golden");
+        assert_eq!(op.members[faq], want, "{label}: op form {faq} vs golden");
+        assert_eq!(
+            tp.extents[faq] as u64,
+            gold["sets"][faq]["extent"].as_u64().unwrap(),
+            "{label}: {faq} extent vs golden"
+        );
     }
 }
 
@@ -471,7 +604,7 @@ fn every_rewrite_agrees_with_its_op_form() {
         }
         let id = entry["id"].as_str().unwrap();
         for (i, case) in entry["cases"].as_array().unwrap().iter().enumerate() {
-            check_case(&entry, case, &format!("{id}-{i}"));
+            check_case(&entry, i, case, &format!("{id}-{i}"));
             ran += 1;
         }
     }
@@ -524,6 +657,23 @@ fn rewrites_load_and_inline_tests_match_the_op_form() {
                 .map(|r| r.1)
                 .collect();
             assert_eq!(tp, op, "{id}: inline-test actuals");
+            // Integrator outputs: within each assertion's tolerance, not bit for bit.
+            let gold = golden(&entry)["inline_tests"].as_array().unwrap().clone();
+            for (form, res) in [("op", &op), ("template", &tp)] {
+                assert_eq!(res.len(), gold.len(), "{id}: {form} inline-test count");
+                for (r, g) in res.iter().zip(&gold) {
+                    let (want, rtol, atol) = (
+                        g["actual"].as_f64().unwrap(),
+                        g["rtol"].as_f64().unwrap(),
+                        g["atol"].as_f64().unwrap(),
+                    );
+                    let got = r.unwrap_or_else(|| panic!("{id}: {form}: no actual"));
+                    assert!(
+                        (got - want).abs() <= atol.max(rtol * want.abs()),
+                        "{id}: {form} inline-test actual {got} vs golden {want}"
+                    );
+                }
+            }
         } else if tier == Some("relational_templates") {
             // The rewrite's own inline tests, under both compilers.
             for compiler in [Compiler::Interpreter, Compiler::Native] {

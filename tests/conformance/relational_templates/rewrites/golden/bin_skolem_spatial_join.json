@@ -1,0 +1,86 @@
+{
+  "fixture": "bin_skolem_spatial_join",
+  "reference_binding": "python",
+  "reference_compiler": "interpreter",
+  "reference_form": "op",
+  "cases": [
+    {
+      "sets": {
+        "candidate_set": {
+          "members": [
+            [
+              1,
+              1
+            ],
+            [
+              2,
+              2
+            ],
+            [
+              3,
+              3
+            ]
+          ],
+          "extent": 3
+        }
+      }
+    },
+    {
+      "sets": {
+        "candidate_set": {
+          "members": [
+            [
+              1,
+              1
+            ],
+            [
+              1,
+              2
+            ],
+            [
+              1,
+              3
+            ],
+            [
+              2,
+              1
+            ],
+            [
+              2,
+              2
+            ],
+            [
+              2,
+              3
+            ],
+            [
+              3,
+              1
+            ],
+            [
+              3,
+              2
+            ],
+            [
+              3,
+              3
+            ],
+            [
+              4,
+              1
+            ],
+            [
+              4,
+              2
+            ],
+            [
+              4,
+              3
+            ]
+          ],
+          "extent": 12
+        }
+      }
+    }
+  ]
+}
