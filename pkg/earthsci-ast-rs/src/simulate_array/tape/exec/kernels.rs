@@ -82,7 +82,7 @@ unsafe fn gather_direct<const M: usize>(
 /// Windows of at most this many entries are counted entry by entry even
 /// when they are sorted: a branch-free scan of a short window is cheaper than
 /// the bisection's chain of dependent, unpredictable steps.
-pub(super) const COUNT_SCAN_MAX: usize = 64;
+pub(super) const COUNT_SCAN_MAX: usize = 128;
 
 /// The number of entries of `win` for which `p` holds, as an `f64`.
 #[inline(always)]
