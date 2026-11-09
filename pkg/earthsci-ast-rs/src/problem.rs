@@ -1930,8 +1930,7 @@ pub fn esm_problem<'a>(
     let mut inferred = false;
     if let Some(f) = owned_file.as_mut()
         && let Some(models) = f.models.as_mut()
-        && (precision::has_variable_overrides()
-            || crate::precision_infer::models_hold_cast(models))
+        && (precision::has_variable_overrides() || crate::precision_infer::models_hold_cast(models))
     {
         crate::precision_infer::annotate_models(models, prec).map_err(SimulateError::Compile)?;
         inferred = true;
@@ -2191,8 +2190,7 @@ pub fn esm_problem<'a>(
     if !inferred
         && let Some(f) = owned_file.as_mut()
         && let Some(models) = f.models.as_mut()
-        && (precision::has_variable_overrides()
-            || crate::precision_infer::models_hold_cast(models))
+        && (precision::has_variable_overrides() || crate::precision_infer::models_hold_cast(models))
     {
         crate::precision_infer::annotate_models(models, prec).map_err(SimulateError::Compile)?;
         pipeline_flat = None;

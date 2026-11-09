@@ -156,7 +156,10 @@ fn a_mix_without_a_cast_is_still_refused() {
         };
         let err = evaluate(fixture, &model, &var, earthsci_ast::Compiler::Interpreter)
             .expect_err("a mixed precision must not build");
-        assert!(err.contains(code), "{fixture}: expected `{code}`, got {err}");
+        assert!(
+            err.contains(code),
+            "{fixture}: expected `{code}`, got {err}"
+        );
     }
 }
 

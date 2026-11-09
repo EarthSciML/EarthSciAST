@@ -693,7 +693,10 @@ fn vi_eval_op(node: &Value, ctx: &ViCtx, bindings: &Bindings) -> Result<Val, Val
         // are exact in either precision and keep their kind.
         crate::precision_infer::CAST_OP => {
             if args.len() != 1 {
-                return err(format!("`cast` takes exactly one operand, got {}", args.len()));
+                return err(format!(
+                    "`cast` takes exactly one operand, got {}",
+                    args.len()
+                ));
             }
             let p = crate::precision_infer::cast_precision_json(node)
                 .map_err(|e| ValueInventionError::new(e.to_string()))?;
