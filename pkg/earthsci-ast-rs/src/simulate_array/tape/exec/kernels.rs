@@ -38,7 +38,7 @@ fn total(shape: &[usize]) -> usize {
 /// element whose subscripts are all whole numbers inside the source box
 /// reads its position directly (what [`DataGatherSpec::at`] gives it); any
 /// other element goes through `at` itself.
-#[inline(always)]
+#[inline(never)]
 unsafe fn gather_direct<const M: usize>(
     dst: *mut f64,
     n: usize,
@@ -57,8 +57,15 @@ unsafe fn gather_direct<const M: usize>(
         for d in 0..M {
             let x = unsafe { *ps[d].add(k * step[d]) };
             v[d] = x;
-            let i = x as i64;
-            inside &= i as f64 == x && i >= 1 && i <= ext[d] as i64;
+            // In range first (false for NaN), so the conversion below is exact
+            // and needs no saturation; then a whole number.
+            let ok = x >= 1.0 && x <= ext[d] as f64;
+            let i = if ok {
+                unsafe { x.to_int_unchecked::<i64>() }
+            } else {
+                1
+            };
+            inside &= ok && i as f64 == x;
             flat = flat
                 .wrapping_mul(ext[d])
                 .wrapping_add((i as usize).wrapping_sub(1));
@@ -66,16 +73,33 @@ unsafe fn gather_direct<const M: usize>(
         let y = if inside {
             unsafe { *src.add(flat) }
         } else {
-            match spec.at(|d| v[d]) {
-                DataAt::Elem(p) => unsafe { *src.add(p) },
-                DataAt::Ghost => 0.0,
-                DataAt::Fault { .. } => {
-                    *faulted = true;
-                    f64::NAN
-                }
-            }
+            unsafe { gather_resolved(spec, src, &v, faulted) }
         };
         unsafe { *dst.add(k) = y };
+    }
+}
+
+/// One element of a [`data_gather`] at subscripts `v` through
+/// [`DataGatherSpec::at`]: the zero ghost, a boundary policy, or the fault
+/// (`NaN`, `faulted` set).
+///
+/// # Safety
+/// `src` must hold the spec's source box.
+#[cold]
+#[inline(never)]
+unsafe fn gather_resolved(
+    spec: &DataGatherSpec,
+    src: *const f64,
+    v: &[f64],
+    faulted: &mut bool,
+) -> f64 {
+    match spec.at(|d| v[d]) {
+        DataAt::Elem(p) => unsafe { *src.add(p) },
+        DataAt::Ghost => 0.0,
+        DataAt::Fault { .. } => {
+            *faulted = true;
+            f64::NAN
+        }
     }
 }
 
