@@ -1655,6 +1655,38 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
     "mathml": "<mrow><mi>k</mi><mo>&#x22C5;</mo><mfrac><mi>a</mi><mi>b</mi></mfrac><mo>&#x22C5;</mo><mi>c</mi></mrow>",
     "unicode": "k·(a/b)·c",
   },
+  {
+    "ascii": "cast(x, element_type=Float32)",
+    "input": {
+      "args": [
+        "x",
+      ],
+      "element_type": "Float32",
+      "op": "cast",
+    },
+    "latex": "\\mathrm{cast}(x, element\\_type=Float32)",
+    "mathml": "<mtext>cast(x, element_type=Float32)</mtext>",
+    "unicode": "cast(x, element_type=Float32)",
+  },
+  {
+    "ascii": "cast(a + b, element_type=Float64)",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "a",
+            "b",
+          ],
+          "op": "+",
+        },
+      ],
+      "element_type": "Float64",
+      "op": "cast",
+    },
+    "latex": "\\mathrm{cast}(a + b, element\\_type=Float64)",
+    "mathml": "<mtext>cast(a + b, element_type=Float64)</mtext>",
+    "unicode": "cast(a + b, element_type=Float64)",
+  },
 ]
 `;
 

@@ -961,6 +961,23 @@ function makeCall(name: string, args: Expr[], named: Record<string, Expr>, pos: 
     }
     return node as unknown as Expr
   }
+  // `cast(A, element_type=P)` — the precision conversion (esm-spec §4.2):
+  // exactly one positional operand and that one named argument, P Float32 or
+  // Float64.
+  if (name === 'cast') {
+    const et = named.element_type
+    if (
+      args.length !== 1 ||
+      Object.keys(named).length !== 1 ||
+      (et !== 'Float32' && et !== 'Float64')
+    ) {
+      throw new ExpressionParseError(
+        'cast(...) takes one operand and element_type=Float32|Float64',
+        pos,
+      )
+    }
+    return { op: 'cast', args, element_type: et } as unknown as Expr
+  }
   // `skolem(a, b, label=<name>)` — the documentary relation tag.
   if (name === 'skolem' && named.label !== undefined) {
     for (const k of Object.keys(named)) {

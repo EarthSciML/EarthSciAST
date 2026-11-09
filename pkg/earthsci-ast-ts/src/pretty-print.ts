@@ -1100,6 +1100,7 @@ interface StructuralView {
   ranges?: Record<string, unknown>
   join?: JoinClauseView[]
   label?: string
+  element_type?: string
 }
 
 /** One `faq` / `argmin` join clause: a key-column equality gate or an overlap gate. */
@@ -1939,6 +1940,17 @@ function formatStructuralOp(node: ExprNode, format: TextFormat): string | undefi
       const inner = args.map(r).join(', ')
       const name = format === 'latex' ? '\\mathrm{skolem}' : 'skolem'
       return `${name}(${inner}, label=${String(n.label)})`
+    }
+
+    case 'cast': {
+      // `cast(A, element_type=P)`: the target precision is a trailing named
+      // argument, like `manifold=`, so the text form is lossless
+      // (tests/display/RENDERING_CONTRACT.md "cast", esm-spec §4.2).
+      if (n.element_type === undefined) return undefined
+      const inner = args.map(r).join(', ')
+      const name = format === 'latex' ? '\\mathrm{cast}' : 'cast'
+      const key = format === 'latex' ? 'element\\_type' : 'element_type'
+      return `${name}(${inner}, ${key}=${String(n.element_type)})`
     }
 
     case 'faq':

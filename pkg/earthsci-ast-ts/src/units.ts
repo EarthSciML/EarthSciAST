@@ -944,6 +944,8 @@ function computeDimensions(
     case 'abs':
     case 'floor':
     case 'ceil':
+    case 'cast':
+      // A `cast` changes only its operand's precision, never its unit (esm-spec §4.2).
       return finish(get(0))
 
     case 'min':

@@ -149,6 +149,20 @@ function unevaluableOperator(node: ExpressionNode): Error {
 }
 
 /**
+ * The refusal of a `cast` this binary64-only evaluator cannot honour (esm-spec
+ * §4.2, §11.3.1; CONFORMANCE_SPEC §5.18.2a): a cast to Float32 MUST NOT be
+ * evaluated as the identity, which would silently drop its rounding.
+ */
+function float32Unsupported(node: ExpressionNode): EvaluatorError {
+  return new EvaluatorError(
+    ERROR_CODES.FLOAT32_UNSUPPORTED,
+    `cast to ${String(node.element_type)} cannot be evaluated: this ` +
+      `evaluator computes in binary64 only, and evaluating the cast as the identity would ` +
+      `drop the rounding it asks for (esm-spec §4.2, §11.3.1)`,
+  )
+}
+
+/**
  * Walk `expr` without evaluating it and throw the diagnostic for the first
  * operator (pre-order) the scalar evaluator cannot evaluate (esm-spec §9.6.6:
  * the check precedes evaluation).
@@ -164,6 +178,10 @@ function assertEvaluable(expr: Expr): void {
       return
     case 'fn':
     case 'table_lookup':
+      forEachChild(node, (child) => assertEvaluable(child))
+      return
+    case 'cast':
+      if (node.element_type !== 'Float64') throw float32Unsupported(node)
       forEachChild(node, (child) => assertEvaluable(child))
       return
   }
@@ -345,6 +363,15 @@ function evalExprNode(
     // report this evaluable node as an unlowered spatial operator.
     if (node.op === 'table_lookup') {
       return evalExprNode(lowerTableLookupNode(node, options?.functionTables), bindings, options)
+    }
+
+    // cast (esm-spec §4.2): every value this evaluator holds is already
+    // binary64, so a cast to Float64 is the identity on its operand. A cast to
+    // Float32 is refused, never evaluated as the identity.
+    if (node.op === 'cast') {
+      if (node.element_type !== 'Float64') throw float32Unsupported(node)
+      checkArity(node.op, node.args.length)
+      return evalExprNode(node.args[0], bindings, options)
     }
 
     // Rewrite-target op gate (esm-spec §4.2 / §9.6.8). The evaluable-core op

@@ -18,7 +18,7 @@ describe('ERROR_CODES', () => {
 
   it('uses snake_case-ish diagnostic strings (no whitespace)', () => {
     for (const [key, value] of Object.entries(ERROR_CODES)) {
-      expect(value, key).toMatch(/^[a-z][a-z_]*$/)
+      expect(value, key).toMatch(/^[a-z][a-z0-9_]*$/)
     }
   })
 

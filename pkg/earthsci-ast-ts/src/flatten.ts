@@ -2471,6 +2471,8 @@ const TEMPLATE_BODY_NON_OPERAND_KEYS: ReadonlySet<string> = new Set([
   'name',
   'semiring',
   'reduce',
+  // A `cast` node's target precision (esm-spec §4.2): a closed enum, not a name.
+  'element_type',
 ])
 
 /**

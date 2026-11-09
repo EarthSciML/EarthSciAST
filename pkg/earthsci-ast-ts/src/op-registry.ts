@@ -401,6 +401,14 @@ export const OPS: Record<string, OpInfo> = {
   // consumed by system assembly, STRICTLY UNARY. A spatial `D` is a
   // rewrite-target whose arity relaxes — see `isRewriteTargetDerivative`.
   D: { arity: { min: 1, max: 1 }, cost: 30 },
+  // ---- precision conversion (esm-spec §4.2) ------------------------------
+  // `{op:'cast', element_type:P, args:[x]}` rounds its ONE operand once to P.
+  // No registry `evaluate`: the scalar evaluator (codegen.ts) evaluates a cast
+  // to Float64 as the identity and refuses one to Float32 by its
+  // `element_type`, a field this name-keyed table cannot see. Not `scalar`:
+  // a `broadcast` `fn` carries no `element_type`. Renders as
+  // `cast(A, element_type=P)` (pretty-print.ts).
+  cast: { arity: { min: 1, max: 1 }, cost: 1 },
 }
 
 /**

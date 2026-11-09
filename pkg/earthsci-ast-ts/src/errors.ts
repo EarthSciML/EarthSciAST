@@ -527,6 +527,10 @@ export const ERROR_CODES = {
   UNBOUND_VARIABLE: 'unbound_variable',
   UNLOWERED_OPERATOR: 'unlowered_operator',
   UNSUPPORTED_OPERATOR: 'unsupported_operator',
+  // A `cast` to Float32 reaching this binary64-only evaluator (esm-spec §4.2,
+  // §11.3.1; CONFORMANCE_SPEC §5.18.2a): refused, never evaluated as the
+  // identity, which would drop the rounding the document asked for.
+  FLOAT32_UNSUPPORTED: 'float32_unsupported',
   // ---- flatten: FlattenError and its subclasses (flatten.ts) ----
   CONFLICTING_DERIVATIVE: 'conflicting_derivative',
   DIMENSION_PROMOTION: 'dimension_promotion',
