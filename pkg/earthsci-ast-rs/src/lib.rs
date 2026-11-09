@@ -95,6 +95,7 @@ pub(crate) mod data_source_urls;
 pub(crate) mod diagnostic;
 pub(crate) mod display;
 pub(crate) mod edit;
+pub(crate) mod elementwise_lift;
 pub(crate) mod error;
 pub(crate) mod faq;
 // The tier-2 EXTENSION SEAM (API_SPEC.md §3): the one deliberately-named place

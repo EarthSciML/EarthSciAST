@@ -1,0 +1,155 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "template_array_args_lin1d_shaped",
+  "description": "esm-spec \u00a79.6.11: `linear` applied to a `[c]` parameter, defining an observed declared over `[c]`. Every element must equal the `interp.*` closed function at that element's argument, bit for bit."
+ },
+ "index_sets": {
+  "c": {
+   "kind": "interval",
+   "size": 3
+  }
+ },
+ "models": {
+  "template_array_args_lin1d_shaped": {
+   "variables": {
+    "lev": {
+     "type": "parameter",
+     "shape": [
+      "c"
+     ],
+     "default": [
+      1.0,
+      2.5,
+      4.0
+     ]
+    },
+    "Dz": {
+     "type": "unknown",
+     "shape": [
+      "c"
+     ]
+    },
+    "s_Dz": {
+     "type": "unknown",
+     "shape": [
+      "c"
+     ],
+     "default": 0.0
+    }
+   },
+   "equations": [
+    {
+     "lhs": "Dz",
+     "rhs": {
+      "op": "apply_expression_template",
+      "args": [],
+      "name": "linear",
+      "bindings": {
+       "table": {
+        "op": "const",
+        "args": [],
+        "value": [
+         10.0,
+         20.0,
+         40.0,
+         80.0,
+         160.0
+        ]
+       },
+       "axis": {
+        "op": "const",
+        "args": [],
+        "value": [
+         1,
+         2,
+         3,
+         4,
+         5
+        ]
+       },
+       "x": "lev",
+       "n": 5
+      }
+     }
+    },
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "s_Dz"
+      ],
+      "wrt": "t"
+     },
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "c"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "Dz",
+        "i"
+       ]
+      }
+     }
+    }
+   ],
+   "expression_template_imports": [
+    {
+     "ref": "esm:std/interp.esm",
+     "only": [
+      "linear"
+     ]
+    }
+   ],
+   "tolerance": {
+    "abs": 0,
+    "rel": 0
+   },
+   "tests": [
+    {
+     "id": "template_array_args_lin1d_shaped_t0",
+     "description": "Every element at t = 0.",
+     "time_span": {
+      "start": 0.0,
+      "end": 1.0
+     },
+     "assertions": [
+      {
+       "variable": "Dz",
+       "time": 0.0,
+       "coords": {
+        "c": 1
+       },
+       "expected": 10.0
+      },
+      {
+       "variable": "Dz",
+       "time": 0.0,
+       "coords": {
+        "c": 2
+       },
+       "expected": 30.0
+      },
+      {
+       "variable": "Dz",
+       "time": 0.0,
+       "coords": {
+        "c": 3
+       },
+       "expected": 80.0
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

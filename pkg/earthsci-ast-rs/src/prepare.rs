@@ -1929,7 +1929,8 @@ impl<'o> BuildState<'o> {
                 // The shape an unshaped mixed-rank `ifelse` is built at
                 // (esm-spec §4.3.4); the model-local route gets it from
                 // `apply_flatten_rewrites`.
-                crate::simulate_array::promote_conditional_shapes(&mut model, &index_sets);
+                crate::simulate_array::promote_conditional_shapes(&mut model, &index_sets)
+                    .map_err(|e| err(e.to_string()))?;
                 (model, unbound_load.then_some(flat))
             }
         };

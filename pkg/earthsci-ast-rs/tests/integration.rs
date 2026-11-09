@@ -381,6 +381,8 @@ mod tape_fallback_reporting;
 mod tape_interp_lowering;
 #[path = "tape_loop_lowering.rs"]
 mod tape_loop_lowering;
+#[path = "template_array_args.rs"]
+mod template_array_args;
 #[path = "template_imports_conformance.rs"]
 mod template_imports_conformance;
 #[path = "term_provenance.rs"]

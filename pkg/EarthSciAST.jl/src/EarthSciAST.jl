@@ -83,6 +83,7 @@ include("pointwise_lift.jl")
 include("flatten.jl")
 include("array_shape_inference.jl")
 include("shape_promotion.jl")
+include("elementwise_lift.jl")
 # Load-time lowering passes (closed registry, templates, imports) and their
 # shared raw-JSON traversal helpers
 include("json_walk.jl")

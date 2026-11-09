@@ -258,6 +258,15 @@ as inline tests for the cross-binding `interp_templates` conformance tier.
 The templates do not repeat the load-time axis checks of the `fn` form (a
 non-monotonic or NaN axis is not rejected); the caller supplies a valid axis.
 
+Each template takes one query, but `x` and `y` may be arrays: an array bound to
+a scalar-role parameter (one the body never indexes) makes the application
+elementwise (esm-spec §9.6.11), one lookup per element, bit for bit the
+`interp.*` result at that element. This holds when the array arrives by
+coupling too: a component that declares `lev` a scalar and computes
+`linear(table, axis, lev, n)` gets one lookup per grid cell when a
+`variable_map` binds a gridded `lev` to it. The `template_array_args`
+conformance tier pins these cases.
+
 ### `lib/relational.esm`
 
 `lib/relational.esm` is a template-library file like `lib/interp.esm`. Its two

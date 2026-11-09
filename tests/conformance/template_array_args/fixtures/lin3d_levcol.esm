@@ -1,0 +1,619 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "template_array_args_lin3d_levcol",
+  "description": "esm-spec \u00a79.6.11: `linear` applied to a `[z]` level column, alone and multiplied by a `[x, y, z]` field: the column replicates over `x` and `y` (esm-spec \u00a74.3.4). Every element must equal the `interp.*` closed function at that element's argument, bit for bit."
+ },
+ "index_sets": {
+  "x": {
+   "kind": "interval",
+   "size": 2
+  },
+  "y": {
+   "kind": "interval",
+   "size": 3
+  },
+  "z": {
+   "kind": "interval",
+   "size": 4
+  }
+ },
+ "models": {
+  "template_array_args_lin3d_levcol": {
+   "variables": {
+    "lev": {
+     "type": "parameter",
+     "shape": [
+      "z"
+     ],
+     "default": [
+      1.0,
+      2.0,
+      3.5,
+      5.0
+     ]
+    },
+    "w": {
+     "type": "parameter",
+     "shape": [
+      "x",
+      "y",
+      "z"
+     ],
+     "default": [
+      [
+       [
+        1.0,
+        1.25,
+        1.5,
+        1.75
+       ],
+       [
+        1.5,
+        1.75,
+        2.0,
+        2.25
+       ],
+       [
+        2.0,
+        2.25,
+        2.5,
+        2.75
+       ]
+      ],
+      [
+       [
+        2.0,
+        2.25,
+        2.5,
+        2.75
+       ],
+       [
+        2.5,
+        2.75,
+        3.0,
+        3.25
+       ],
+       [
+        3.0,
+        3.25,
+        3.5,
+        3.75
+       ]
+      ]
+     ]
+    },
+    "Dz": {
+     "type": "unknown"
+    },
+    "s_Dz": {
+     "type": "unknown",
+     "shape": [
+      "z"
+     ],
+     "default": 0.0
+    },
+    "F": {
+     "type": "unknown"
+    },
+    "s_F": {
+     "type": "unknown",
+     "shape": [
+      "x",
+      "y",
+      "z"
+     ],
+     "default": 0.0
+    },
+    "Dz_out": {
+     "type": "unknown",
+     "shape": [
+      "z"
+     ],
+     "description": "`Dz` read element by element, so the test can assert on a declared shape (esm-spec \u00a76.6.5)."
+    },
+    "F_out": {
+     "type": "unknown",
+     "shape": [
+      "x",
+      "y",
+      "z"
+     ],
+     "description": "`F` read element by element, so the test can assert on a declared shape (esm-spec \u00a76.6.5)."
+    }
+   },
+   "equations": [
+    {
+     "lhs": "Dz",
+     "rhs": {
+      "op": "apply_expression_template",
+      "args": [],
+      "name": "linear",
+      "bindings": {
+       "table": {
+        "op": "const",
+        "args": [],
+        "value": [
+         10.0,
+         20.0,
+         40.0,
+         80.0,
+         160.0
+        ]
+       },
+       "axis": {
+        "op": "const",
+        "args": [],
+        "value": [
+         1,
+         2,
+         3,
+         4,
+         5
+        ]
+       },
+       "x": "lev",
+       "n": 5
+      }
+     }
+    },
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "s_Dz"
+      ],
+      "wrt": "t"
+     },
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "z"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "Dz",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "F",
+     "rhs": {
+      "op": "*",
+      "args": [
+       "w",
+       {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "linear",
+        "bindings": {
+         "table": {
+          "op": "const",
+          "args": [],
+          "value": [
+           10.0,
+           20.0,
+           40.0,
+           80.0,
+           160.0
+          ]
+         },
+         "axis": {
+          "op": "const",
+          "args": [],
+          "value": [
+           1,
+           2,
+           3,
+           4,
+           5
+          ]
+         },
+         "x": "lev",
+         "n": 5
+        }
+       }
+      ]
+     }
+    },
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "s_F"
+      ],
+      "wrt": "t"
+     },
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i",
+       "j",
+       "k"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       },
+       "j": {
+        "from": "y"
+       },
+       "k": {
+        "from": "z"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "F",
+        "i",
+        "j",
+        "k"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "Dz_out",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "z"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "Dz",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "F_out",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i",
+       "j",
+       "k"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       },
+       "j": {
+        "from": "y"
+       },
+       "k": {
+        "from": "z"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "F",
+        "i",
+        "j",
+        "k"
+       ]
+      }
+     }
+    }
+   ],
+   "expression_template_imports": [
+    {
+     "ref": "esm:std/interp.esm",
+     "only": [
+      "linear"
+     ]
+    }
+   ],
+   "tolerance": {
+    "abs": 0,
+    "rel": 0
+   },
+   "tests": [
+    {
+     "id": "template_array_args_lin3d_levcol_t0",
+     "description": "Every element at t = 0.",
+     "time_span": {
+      "start": 0.0,
+      "end": 1.0
+     },
+     "assertions": [
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "z": 1
+       },
+       "expected": 10.0
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "z": 2
+       },
+       "expected": 20.0
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "z": 3
+       },
+       "expected": 60.0
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "z": 4
+       },
+       "expected": 160.0
+      },
+      {
+       "variable": "F_out",
+       "time": 0.0,
+       "coords": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+       },
+       "expected": 10.0
+      },
+      {
+       "variable": "F_out",
+       "time": 0.0,
+       "coords": {
+        "x": 1,
+        "y": 1,
+        "z": 2
+       },
+       "expected": 25.0
+      },
+      {
+       "variable": "F_out",
+       "time": 0.0,
+       "coords": {
+        "x": 1,
+        "y": 1,
+        "z": 3
+       },
+       "expected": 90.0
+      },
+      {
+       "variable": "F_out",
+       "time": 0.0,
+       "coords": {
+        "x": 1,
+        "y": 1,
+        "z": 4
+       },
+       "expected": 280.0
+      },
+      {
+       "variable": "F_out",
+       "time": 0.0,
+       "coords": {
+        "x": 1,
+        "y": 2,
+        "z": 1
+       },
+       "expected": 15.0
+      },
+      {
+       "variable": "F_out",
+       "time": 0.0,
+       "coords": {
+        "x": 1,
+        "y": 2,
+        "z": 2
+       },
+       "expected": 35.0
+      },
+      {
+       "variable": "F_out",
+       "time": 0.0,
+       "coords": {
+        "x": 1,
+        "y": 2,
+        "z": 3
+       },
+       "expected": 120.0
+      },
+      {
+       "variable": "F_out",
+       "time": 0.0,
+       "coords": {
+        "x": 1,
+        "y": 2,
+        "z": 4
+       },
+       "expected": 360.0
+      },
+      {
+       "variable": "F_out",
+       "time": 0.0,
+       "coords": {
+        "x": 1,
+        "y": 3,
+        "z": 1
+       },
+       "expected": 20.0
+      },
+      {
+       "variable": "F_out",
+       "time": 0.0,
+       "coords": {
+        "x": 1,
+        "y": 3,
+        "z": 2
+       },
+       "expected": 45.0
+      },
+      {
+       "variable": "F_out",
+       "time": 0.0,
+       "coords": {
+        "x": 1,
+        "y": 3,
+        "z": 3
+       },
+       "expected": 150.0
+      },
+      {
+       "variable": "F_out",
+       "time": 0.0,
+       "coords": {
+        "x": 1,
+        "y": 3,
+        "z": 4
+       },
+       "expected": 440.0
+      },
+      {
+       "variable": "F_out",
+       "time": 0.0,
+       "coords": {
+        "x": 2,
+        "y": 1,
+        "z": 1
+       },
+       "expected": 20.0
+      },
+      {
+       "variable": "F_out",
+       "time": 0.0,
+       "coords": {
+        "x": 2,
+        "y": 1,
+        "z": 2
+       },
+       "expected": 45.0
+      },
+      {
+       "variable": "F_out",
+       "time": 0.0,
+       "coords": {
+        "x": 2,
+        "y": 1,
+        "z": 3
+       },
+       "expected": 150.0
+      },
+      {
+       "variable": "F_out",
+       "time": 0.0,
+       "coords": {
+        "x": 2,
+        "y": 1,
+        "z": 4
+       },
+       "expected": 440.0
+      },
+      {
+       "variable": "F_out",
+       "time": 0.0,
+       "coords": {
+        "x": 2,
+        "y": 2,
+        "z": 1
+       },
+       "expected": 25.0
+      },
+      {
+       "variable": "F_out",
+       "time": 0.0,
+       "coords": {
+        "x": 2,
+        "y": 2,
+        "z": 2
+       },
+       "expected": 55.0
+      },
+      {
+       "variable": "F_out",
+       "time": 0.0,
+       "coords": {
+        "x": 2,
+        "y": 2,
+        "z": 3
+       },
+       "expected": 180.0
+      },
+      {
+       "variable": "F_out",
+       "time": 0.0,
+       "coords": {
+        "x": 2,
+        "y": 2,
+        "z": 4
+       },
+       "expected": 520.0
+      },
+      {
+       "variable": "F_out",
+       "time": 0.0,
+       "coords": {
+        "x": 2,
+        "y": 3,
+        "z": 1
+       },
+       "expected": 30.0
+      },
+      {
+       "variable": "F_out",
+       "time": 0.0,
+       "coords": {
+        "x": 2,
+        "y": 3,
+        "z": 2
+       },
+       "expected": 65.0
+      },
+      {
+       "variable": "F_out",
+       "time": 0.0,
+       "coords": {
+        "x": 2,
+        "y": 3,
+        "z": 3
+       },
+       "expected": 210.0
+      },
+      {
+       "variable": "F_out",
+       "time": 0.0,
+       "coords": {
+        "x": 2,
+        "y": 3,
+        "z": 4
+       },
+       "expected": 600.0
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

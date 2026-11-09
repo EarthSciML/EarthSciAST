@@ -77,6 +77,12 @@ tests/conformance/
 │   ├── README.md                   #   the contract
 │   ├── manifest.json               #   `"runner": "inline_tests"`; its three documents are REFERENCED from tests/closed_functions/interp/<fn>/template.esm
 │   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
+├── template_array_args/           # a lib/interp.esm template applied elementwise over array arguments, esm-spec §9.6.11 (CONFORMANCE_SPEC §5.45.4)
+│   ├── README.md                   #   the contract
+│   ├── manifest.json               #   `"runner": "inline_tests"`
+│   ├── fixtures/<id>.esm
+│   ├── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
+│   └── coupled/{fn,template}.esm   #   the coupled case, compared bit for bit by each binding's own test
 ├── relational_templates/          # lib/relational.esm argmin/argmax templates: ties, NaN, the nearest-generator document (CONFORMANCE_SPEC §5.45.4)
 │   ├── README.md                   #   the contract
 │   ├── generate.py                 #   writes scenarios.json and the two fixtures

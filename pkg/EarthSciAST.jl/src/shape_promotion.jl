@@ -27,7 +27,8 @@
 # under the current per-variable shape map.
 function _infer_expr_shape(
         expr::ASTExpr,
-        shapes::Dict{String, Vector{String}}
+        shapes::Dict{String, Vector{String}},
+        roles = nothing
     )::Vector{String}
     if expr isa NumExpr || expr isa IntExpr
         return String[]
@@ -74,9 +75,19 @@ function _infer_expr_shape(
             # name sets — neither a subset of the other — are a conflict.
             # `lower`/`upper` (integral bounds) and `filter` don't shape the
             # elementwise result.
+            # A template application is elementwise in its scalar-role
+            # bindings (esm-spec §9.6.11); its array-role bindings (tables,
+            # axes) are consumed whole and do not shape the result. With the
+            # roles unknown, the application is scalar, as before.
+            operands = if op == "apply_expression_template"
+                sb = _scalar_role_bindings(expr, roles)
+                sb === nothing ? ASTExpr[] : ASTExpr[v for (_, v) in sb]
+            else
+                expr.args
+            end
             sh = String[]
-            for a in expr.args
-                s = _infer_expr_shape(a, shapes)
+            for a in operands
+                s = _infer_expr_shape(a, shapes, roles)
                 isempty(s) && continue
                 if isempty(sh)
                     sh = s
@@ -547,6 +558,10 @@ function promote_downstream_shapes(
             for (k, v) in d if _declares_scalar(v)
     )
 
+    # Which template parameters are consumed whole (esm-spec §9.6.11): an
+    # application binding an array to any OTHER parameter is elementwise.
+    roles = _template_array_roles(flat.template_registry)
+
     # Index the ALGEBRAIC defining equations (bare `x = expr`). State equations
     # (`D(x,t) = …`) don't define x's shape (x keeps its declared shape).
     defs = Dict{String, ASTExpr}()
@@ -597,7 +612,7 @@ function promote_downstream_shapes(
         for (name, rhs) in defs
             cur = get(shapes, name, String[])
             isempty(cur) || continue                     # already array — leave it
-            inferred = _infer_expr_shape(rhs, shapes)
+            inferred = _infer_expr_shape(rhs, shapes, roles)
             if !isempty(inferred)
                 name in declared_scalar &&
                     _throw_declared_scalar_conflict(name, inferred, "its defining expression")
@@ -609,6 +624,17 @@ function promote_downstream_shapes(
 
     # The set of variables that are now array-shaped (for leaf indexing).
     arrayvars = Set{String}(k for (k, s) in shapes if !isempty(s))
+
+    # An equation applying a template elementwise over an array (esm-spec
+    # §9.6.11) is lifted over its variable's shape — declared, or inferred
+    # above — with each scalar-role binding read at the cell. It replaces the
+    # leaf-indexing lift below, which does not reach into template bindings.
+    ew_lifted = Dict{String, OpExpr}()
+    for (name, rhs) in defs
+        sh = get(shapes, name, String[])
+        (isempty(sh) || !_has_elementwise_application(rhs, shapes, roles)) && continue
+        ew_lifted[name] = _lift_elementwise_application(rhs, sh, shapes, roles, name)
+    end
 
     # Rebuild variable partitions with promoted shapes.
     function promote_partition(part)
@@ -652,7 +678,10 @@ function promote_downstream_shapes(
     new_contribs = Vector{Contribution}[]
     for (eq, cs) in zip(flat.equations, _flat_contributions(flat))
         out, out_cs = eq, cs
-        if eq.lhs isa VarExpr && (eq.lhs::VarExpr).name in arrayvars &&
+        if eq.lhs isa VarExpr && haskey(ew_lifted, (eq.lhs::VarExpr).name)
+            out_cs = Contribution[Contribution(ew_lifted[(eq.lhs::VarExpr).name], _union_origins(cs))]
+            out = _equation_from(eq, out_cs)
+        elseif eq.lhs isa VarExpr && (eq.lhs::VarExpr).name in arrayvars &&
                 haskey(defs, (eq.lhs::VarExpr).name) &&
                 (flat_was_scalar(flat, (eq.lhs::VarExpr).name))
             wrapped = _lift_to_faq(eq.rhs, shapes[(eq.lhs::VarExpr).name], arrayvars, shapes)
