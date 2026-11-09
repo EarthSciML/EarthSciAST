@@ -1547,6 +1547,7 @@ fn validate_geometry_manifolds_at(
     at: &JsonPath<'_>,
 ) -> Result<(), ExpressionTemplateError> {
     match tree {
+        Value::Array(arr) if crate::json_visit::is_number_data(arr) => Ok(()),
         Value::Array(arr) => {
             for (i, child) in arr.iter().enumerate() {
                 validate_geometry_manifolds_at(child, &JsonPath::Index(at, i))?;
@@ -1624,6 +1625,7 @@ fn validate_makearray_regions_at(
     at: &JsonPath<'_>,
 ) -> Result<(), ExpressionTemplateError> {
     match tree {
+        Value::Array(arr) if crate::json_visit::is_number_data(arr) => Ok(()),
         Value::Array(arr) => {
             for (i, child) in arr.iter().enumerate() {
                 validate_makearray_regions_at(child, &JsonPath::Index(at, i))?;

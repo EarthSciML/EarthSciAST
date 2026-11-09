@@ -626,6 +626,7 @@ fn has_apply(v: &Value) -> bool {
         Value::Object(o) => {
             o.get("op").and_then(|w| w.as_str()) == Some(APPLY_OP) || o.values().any(has_apply)
         }
+        Value::Array(a) if crate::json_visit::is_number_data(a) => false,
         Value::Array(a) => a.iter().any(has_apply),
         _ => false,
     }
