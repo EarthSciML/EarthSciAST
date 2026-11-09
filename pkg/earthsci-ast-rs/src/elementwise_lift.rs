@@ -122,7 +122,7 @@ pub(crate) fn lift_elementwise_applications(
                 shapes: &shapes,
                 lhs: &lhs,
             };
-            let body = ctx.wrap(rhs, &HashSet::new())?;
+            let body = intern_tree(&ctx.wrap(rhs, &HashSet::new())?);
             let ranges: HashMap<String, RangeSpec> = loops
                 .iter()
                 .zip(&axes)
@@ -157,6 +157,35 @@ pub(crate) fn lift_elementwise_applications(
         }
     }
     Ok(lifted)
+}
+
+/// `expr` with every structurally identical subtree one shared node, as load
+/// interns a document ([`crate::intern`]).
+///
+/// The lifted body is a new tree, and the copies an expanded template repeats
+/// in it — the query of `linear` sits in five bracket counts and the blend,
+/// each count over the same `const` axis — must be one node again: the native
+/// tape's value numbering keys a node by its address, so unshared copies are
+/// each evaluated once per cell, where the same `faq` written by hand
+/// evaluates them once. The whole body is rebuilt bottom-up under one
+/// interning scope, not only the nodes the lift rewrote: the subtrees it keeps
+/// may already be unshared copies (flatten rewrites a coupled component's
+/// equations node by node).
+fn intern_tree(expr: &Expr) -> Expr {
+    fn go(e: &Expr, memo: &mut HashMap<*const ExpressionNode, Expr>) -> Expr {
+        let Expr::Operator(node) = e else {
+            return e.clone();
+        };
+        let key = std::sync::Arc::as_ptr(node);
+        if let Some(hit) = memo.get(&key) {
+            return hit.clone();
+        }
+        let out = Expr::operator(node.map_children(&mut |c| go(c, memo)));
+        memo.insert(key, out.clone());
+        out
+    }
+    let _intern = crate::intern::InternScope::new();
+    go(expr, &mut HashMap::new())
 }
 
 /// The argument positions of a closed function that take a whole array (the
@@ -430,6 +459,38 @@ mod tests {
                 "expr":{"op":"index","args":["ax","lev"]}}"#,
         );
         assert!(!has_scalar_slot_read(&shadow, &shapes));
+    }
+
+    #[test]
+    fn the_lifted_body_shares_its_repeated_subtrees() {
+        // Two copies of one bracket count, as an expanded `linear` repeats it,
+        // parsed outside an interning scope: distinct nodes going in, one node
+        // in the lifted body, so the tape evaluates the count once per cell.
+        let count = r#"{"op":"faq","args":[],"output_idx":[],"ranges":{"k":[1,3]},
+            "expr":{"op":"ifelse","args":[{"op":"<=","args":[
+                {"op":"index","args":[{"op":"const","args":[],"value":[1.0,2.0,3.0]},"k"]},
+                "lev"]},1,0]}}"#;
+        let e = parse(&format!(r#"{{"op":"+","args":[{count},{count}]}}"#));
+        let Expr::Operator(n) = &e else { panic!() };
+        let (Expr::Operator(a), Expr::Operator(b)) = (&n.args[0], &n.args[1]) else {
+            panic!()
+        };
+        assert!(!std::sync::Arc::ptr_eq(a, b));
+        let shapes: HashMap<String, Vec<String>> =
+            [("lev".to_string(), vec!["c".to_string()])].into();
+        let (axes, loops) = (vec!["c".to_string()], vec!["_p0".to_string()]);
+        let ctx = Lift {
+            axes: &axes,
+            loops: &loops,
+            shapes: &shapes,
+            lhs: "x",
+        };
+        let body = intern_tree(&ctx.wrap(&e, &HashSet::new()).expect("lift"));
+        let Expr::Operator(n) = &body else { panic!() };
+        let (Expr::Operator(a), Expr::Operator(b)) = (&n.args[0], &n.args[1]) else {
+            panic!()
+        };
+        assert!(std::sync::Arc::ptr_eq(a, b));
     }
 
     #[test]
