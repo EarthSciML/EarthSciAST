@@ -451,6 +451,8 @@ func loadPrepared(jsonStr string, view map[string]any, o loadOptions) (*ESMFile,
 	// one side of esm-spec §9.7.6 as before.
 	topLevelRefs := extractTopLevelRefEdges(jsonStr)
 
+	authoredTemplateRHS := authoredTemplateApplications(view)
+
 	expanded, componentTemplates, err := resolveAndLowerJSONCapturing(jsonStr, o.basePath, o.metaparameters,
 		authoredMountDeclared)
 	if err != nil {
@@ -515,6 +517,7 @@ func loadPrepared(jsonStr string, view map[string]any, o loadOptions) (*ESMFile,
 	// ReactionSystem.speciesOrder.
 	attachSpeciesOrders(&esmFile)
 	esmFile.componentTemplates = componentTemplates
+	esmFile.authoredTemplateRHS = authoredTemplateRHS
 
 	// v0.3.0 closes the function registry (closed-function-registry RFC).
 	// Reject any v0.2.x file that still carries the removed top-level

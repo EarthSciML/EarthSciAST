@@ -3403,7 +3403,10 @@ fn refuse_parameter_definitions(
 /// * an `ic` equation among a reaction system's `constraint_equations`
 ///   (`ic_in_reaction_system`, esm-spec §11.4.1), which no evaluator applies.
 ///
-/// Julia and Python refuse both at their front doors too.
+/// Julia and Python refuse both at their front doors too. A shaped variable
+/// read by bare name in a `faq` (`faq_bare_array_operand`) is refused later,
+/// on the model the build compiles
+/// ([`crate::simulate_array::refuse_faq_bare_array_operands`]).
 fn refuse_structurally_unreachable(file: &EsmFile) -> Result<(), SimulateError> {
     let refuse = |code: &str, path: &str, message: &str, section: &str| {
         SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(

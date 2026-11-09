@@ -171,6 +171,18 @@ pub struct EsmFile {
     /// NOT a wire field: `#[serde(skip)]` keeps it out of both directions.
     #[serde(default, skip)]
     pub document_base: Option<String>,
+
+    /// The right-hand side AS AUTHORED of every model equation (inline
+    /// subsystems included) that applies an expression template, keyed by its
+    /// equation pointer (`/models/M/equations/0`), captured at load before the
+    /// Expand-at-build pass replaced the application with its body.
+    /// `faq_bare_array_operand` is decided on this form, where a template
+    /// application is opaque (esm-spec §4.3.1). Empty for a document with no
+    /// template application, or one built in memory.
+    ///
+    /// NOT a wire field: `#[serde(skip)]` keeps it out of both directions.
+    #[serde(default, skip)]
+    pub authored_template_rhs: HashMap<String, Expr>,
 }
 
 /// The empty document: every optional section absent, `esm` set to
@@ -200,6 +212,7 @@ impl Default for EsmFile {
             component_templates: None,
             coupling_import_base: None,
             document_base: None,
+            authored_template_rhs: HashMap::new(),
         }
     }
 }

@@ -336,6 +336,15 @@
       "note": "validate rejects a non-value-invention faq ranging over a declared ragged set whose expr/filter never reads that set's values array (template references and injected sets excepted)."
     },
     {
+      "id": "spec.4.3.1.faq-bare-array-operand",
+      "section": "4.3.1",
+      "quote": "The read MUST say so, `index(a_val, i)`; a bare `a_val` there MUST be rejected with `faq_bare_array_operand` (§9.6.6)",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "validate (authored equations, every model and inline subsystem, template applications opaque) and every evaluating build (flattened, template-expanded, declared and inferred shapes) reject a faq whose expr or filter reads a shaped variable by bare name in an elementwise position; loop symbols and an observed or recurrence definition's own variable are exempt, a derivative's state is not; it is never aligned positionally or by broadcasting."
+    },
+    {
       "id": "spec.4.3.1.no-private-cumsum-op",
       "section": "4.3.1",
       "quote": "binding MUST NOT introduce one under a private op name. The `integral` op (§4.2) is *not* the discrete cumulative form",

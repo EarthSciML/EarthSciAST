@@ -178,6 +178,17 @@ export type EsmFile = ESMFormat1 &
     loaderMetaparameters?: Record<string, number>
 
     /**
+     * NON-SCHEMA, LOADER-POPULATED. The right-hand side, as authored, of every
+     * model equation (inline subsystems included) that applies an expression
+     * template, keyed by its equation pointer (`/models/M/equations/0`), taken
+     * before load expanded the application. `faq_bare_array_operand` is decided
+     * on this form, where a template application is opaque (esm-spec §4.3.1).
+     * NON-ENUMERABLE for the same reason `componentTemplates` is; absent when
+     * no equation applies a template.
+     */
+    authoredTemplateRhs?: Record<string, unknown>
+
+    /**
      * NON-SCHEMA, LOADER-POPULATED. The directory relative `coupling_import`
      * refs resolve against (esm-spec §10.10 -> §4.7: "relative to the directory
      * of the referencing file"), recorded by `loadInput` when the load had an

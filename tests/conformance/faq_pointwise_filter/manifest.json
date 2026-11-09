@@ -63,6 +63,33 @@
     ]
    },
    "named_exclusions": []
+  },
+  {
+   "id": "indexed_filter_two_outputs",
+   "path": "fixtures/indexed_filter_two_outputs.esm",
+   "model": "indexed_filter_two_outputs",
+   "golden": "golden/indexed_filter_two_outputs.json",
+   "tags": [
+    "faq",
+    "filter",
+    "multiple-output-indices"
+   ],
+   "note": "Authored here (issue #441).",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
   }
  ]
 }

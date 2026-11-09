@@ -1,0 +1,158 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "FaqBareArrayOperandSubsystem",
+    "description": "INVALID: tests/invalid/faq/bare_array_operand_filter.esm mounted as the inline subsystem `Host.subsystems.Probe`. Its `faq` filter reads the shaped variable `a_val` by bare name (issue #441). The rule applies to a subsystem's equations exactly as to a top-level model's; rejected by validate() with `faq_bare_array_operand` (esm-spec §4.3.1) at the subsystem equation's containing field.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "faq",
+      "filter",
+      "subsystem",
+      "invalid"
+    ]
+  },
+  "index_sets": {
+    "a_rows": {
+      "kind": "interval",
+      "size": 3
+    },
+    "c_rows": {
+      "kind": "interval",
+      "size": 2
+    }
+  },
+  "models": {
+    "Host": {
+      "variables": {
+        "z": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Host's own state."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "z"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        }
+      ],
+      "subsystems": {
+        "Probe": {
+          "variables": {
+            "a_val": {
+              "type": "unknown",
+              "units": "1",
+              "shape": [
+                "a_rows"
+              ],
+              "description": "1, 2, 3"
+            },
+            "c_val": {
+              "type": "unknown",
+              "units": "1",
+              "shape": [
+                "c_rows"
+              ],
+              "description": "10, 20"
+            },
+            "two_outputs": {
+              "type": "unknown",
+              "units": "1",
+              "shape": [
+                "a_rows",
+                "c_rows"
+              ],
+              "description": "a_val[i] * c_val[g] where a_val > 1.5 -- the filter names a_val bare"
+            }
+          },
+          "equations": [
+            {
+              "lhs": "a_val",
+              "rhs": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  1.0,
+                  2.0,
+                  3.0
+                ]
+              }
+            },
+            {
+              "lhs": "c_val",
+              "rhs": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  10.0,
+                  20.0
+                ]
+              }
+            },
+            {
+              "lhs": "two_outputs",
+              "rhs": {
+                "op": "faq",
+                "args": [],
+                "semiring": "sum_product",
+                "output_idx": [
+                  "i",
+                  "g"
+                ],
+                "ranges": {
+                  "i": {
+                    "from": "a_rows"
+                  },
+                  "g": {
+                    "from": "c_rows"
+                  }
+                },
+                "filter": {
+                  "op": "ifelse",
+                  "args": [
+                    {
+                      "op": ">",
+                      "args": [
+                        "a_val",
+                        1.5
+                      ]
+                    },
+                    1.0,
+                    0.0
+                  ]
+                },
+                "expr": {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "a_val",
+                        "i"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "c_val",
+                        "g"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

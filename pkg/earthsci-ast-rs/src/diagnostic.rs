@@ -460,6 +460,11 @@ diagnostic_code_registry! {
     EVENT_VAR_UNDECLARED = "event_var_undeclared";
     /// A coupling `factor` carrying an expression transform.
     FACTOR_WITH_EXPRESSION_TRANSFORM = "factor_with_expression_transform";
+    /// A `faq`'s `expr` or `filter` reads a variable declared with a non-empty
+    /// `shape` by BARE name in an elementwise position (esm-spec §4.3.1
+    /// "Shaped variables inside a `faq`"): the node names its axes by its
+    /// range symbols, so the read must say which ones, `index(v, i, …)`.
+    FAQ_BARE_ARRAY_OPERAND = "faq_bare_array_operand";
     /// An `ic` block inside a reaction system (§4.7).
     IC_IN_REACTION_SYSTEM = "ic_in_reaction_system";
     /// A bare-index observed definition (`index(V, k…) ~ rhs`, esm-spec §6.3.1)
@@ -738,6 +743,7 @@ mod error_code_tests {
             "event_affects_parameter",
             "event_var_undeclared",
             "factor_with_expression_transform",
+            "faq_bare_array_operand",
             "geometry_manifold_invalid",
             "ic_in_reaction_system",
             "indexed_definition_unsupported_form",

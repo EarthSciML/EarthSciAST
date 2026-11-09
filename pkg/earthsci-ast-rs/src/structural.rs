@@ -603,7 +603,7 @@ impl<'a> ModelCtx<'a> {
         };
         validate_aggregate_constraints(
             self.esm_file,
-            self.model_name,
+            &format!("/models/{}", self.model_name),
             self.model,
             &is_state,
             self.faq_equations.borrow().as_deref(),
@@ -2172,13 +2172,12 @@ fn collect_free_symbols(expr: &crate::Expr, out: &mut HashSet<String>) {
 ///   hot path (CONFORMANCE_SPEC.md §5.7.6).
 fn validate_aggregate_constraints(
     esm_file: &EsmFile,
-    model_name: &str,
+    model_path: &str,
     model: &crate::Model,
     is_state: &dyn Fn(&str) -> bool,
     faq_equations: Option<&[bool]>,
     errors: &mut Vec<StructuralError>,
 ) {
-    let model_path = format!("/models/{model_name}");
     // A join key may name a DATA COLUMN, whose range symbol comes from its
     // declared 1-D shape — so the side checks below need the model's shapes.
     let var_shapes = crate::join::declared_var_shapes(model);
@@ -2193,6 +2192,19 @@ fn validate_aggregate_constraints(
     for (eq_idx, equation) in model.equations.iter().enumerate() {
         // An equation the reference check saw no `faq` node in has none to check.
         if faq_equations.is_none_or(|faq| faq.get(eq_idx).copied().unwrap_or(true)) {
+            // On the right-hand side as authored, where a template application
+            // is opaque; load has already expanded it.
+            let rhs = esm_file
+                .authored_template_rhs
+                .get(&format!("{model_path}/equations/{eq_idx}"))
+                .unwrap_or(&equation.rhs);
+            faq_bare_array_operand_errors(
+                &equation.lhs,
+                rhs,
+                &format!("{model_path}/equations/{eq_idx}/rhs"),
+                &var_shapes,
+                errors,
+            );
             for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
                 let field_path = || format!("{model_path}/equations/{eq_idx}/{field}");
                 check_aggregates_in_expr(
@@ -2214,6 +2226,35 @@ fn validate_aggregate_constraints(
                 errors,
             );
         }
+    }
+    // Each inline subsystem is a model whose equations take the same checks,
+    // against its own declarations. An unresolved `{ref}` mount carries none.
+    let mut subsystems: Vec<(&String, &serde_json::Value)> =
+        model.subsystems.iter().flatten().collect();
+    subsystems.sort_by(|a, b| a.0.cmp(b.0));
+    for (name, value) in subsystems {
+        if value.get("ref").is_some() {
+            continue;
+        }
+        let Ok(sub) = serde_json::from_value::<crate::Model>(value.clone()) else {
+            continue;
+        };
+        let class = crate::classification::Classification::of(&sub);
+        let states: HashSet<&str> = class
+            .ode_states
+            .iter()
+            .chain(&class.algebraic_unknowns)
+            .chain(&class.brownian_parameters)
+            .map(String::as_str)
+            .collect();
+        validate_aggregate_constraints(
+            esm_file,
+            &format!("{model_path}/subsystems/{name}"),
+            &sub,
+            &|n: &str| states.contains(n),
+            None,
+            errors,
+        );
     }
 }
 
@@ -3071,6 +3112,317 @@ fn collect_bare_array_operands<'a>(
         }
         _ => {}
     }
+}
+
+/// `faq_bare_array_operand` (esm-spec §4.3.1 "Shaped variables inside a
+/// `faq`", issue #441): every `faq` node in `expr` whose `expr` or `filter`
+/// reads a variable declared with a non-empty `shape` by BARE name in an
+/// elementwise position, reported at `path`.
+///
+/// A `faq` names its axes by its range symbols, and an elementwise operator
+/// inside its body is evaluated once per index tuple, so a whole array there
+/// has no defined meaning: nothing says WHICH of the node's symbols its axes
+/// are. Every evaluator nonetheless gave it one, and they disagreed. Rust's
+/// per-cell reference aligned an array-valued `filter` to the output box by
+/// position and treated a rank mismatch as "keep the term", so with two
+/// output indices the filter was silently ignored; Python's whole-box tiers
+/// let numpy broadcasting align the array's axis with the LAST box axis, which
+/// is a different symbol whenever the extents coincide; the tape refused it.
+/// The document has to say which index it means, `index(a_val, i)`, and a
+/// document that says so cannot silently mean the wrong one.
+///
+/// The descent is the one [`collect_bare_array_operands`] uses (elementwise
+/// operators only): a shaped variable consumed whole by its own operator
+/// contract (an `index` base, a nested `faq`, a shape op, a geometry or
+/// closed-function argument) is not a per-tuple read. A name bound as a loop
+/// symbol by this node or an enclosing one shadows the declaration and is not
+/// a variable read. Nested `faq` nodes are checked in their own right.
+///
+/// An `apply_expression_template` application is opaque: an array bound to
+/// one of its arguments is not a bare read here. `validate` passes the
+/// equation's authored right-hand side, and the build the expanded one.
+///
+/// `expr` is an equation's right-hand side and `lhs` its left-hand side. A
+/// variable an observed or recurrence definition's left-hand side names is
+/// skipped: a bare read of the variable such an equation defines is a causal
+/// self-reference read whole, which `recurrence_not_wellfounded` (esm-spec
+/// §4.3.1.1) or `observed_cycle` already reports, and one defect is reported
+/// once. A derivative left-hand side — `D(y)`, or the array-equation
+/// `faq[i](D(y[i]))` — skips nothing: no other check reports
+/// `D(y) ~ faq(… y …)`.
+pub(crate) fn faq_bare_array_operand_errors(
+    lhs: &crate::Expr,
+    expr: &crate::Expr,
+    path: &str,
+    var_shapes: &HashMap<String, Vec<String>>,
+    errors: &mut Vec<StructuralError>,
+) {
+    let mut defined = HashSet::new();
+    fn holds_derivative(e: &crate::Expr) -> bool {
+        let crate::Expr::Operator(n) = e else {
+            return false;
+        };
+        let mut found = n.op == "D";
+        n.for_each_child(&mut |c| found = found || holds_derivative(c));
+        found
+    }
+    if !holds_derivative(lhs) {
+        collect_variable_refs(lhs, &mut defined);
+    }
+    let declared_axes: HashMap<&str, &Vec<String>> = var_shapes
+        .iter()
+        .filter(|(n, s)| !s.is_empty() && !defined.contains(n.as_str()))
+        .map(|(n, s)| (n.as_str(), s))
+        .collect();
+    if declared_axes.is_empty() {
+        return;
+    }
+    let mut bound: Vec<String> = Vec::new();
+    let mut visited = HashMap::new();
+    walk_faq_bare_operands(expr, path, &declared_axes, &mut bound, &mut visited, errors);
+}
+
+/// The walk is DAG-safe: a node shared by many parents (a lifted or folded
+/// chain on the build's expanded model) is visited once per distinct
+/// loop-symbol scope, not once per path.
+fn walk_faq_bare_operands(
+    expr: &crate::Expr,
+    path: &str,
+    declared_axes: &HashMap<&str, &Vec<String>>,
+    bound: &mut Vec<String>,
+    visited: &mut HashMap<*const crate::types::ExpressionNode, Vec<Vec<String>>>,
+    errors: &mut Vec<StructuralError>,
+) {
+    let crate::Expr::Operator(node) = expr else {
+        return;
+    };
+    if node.op == "apply_expression_template" {
+        return;
+    }
+    let scopes = visited.entry(std::sync::Arc::as_ptr(node)).or_default();
+    if scopes.iter().any(|s| s == bound) {
+        return;
+    }
+    scopes.push(bound.clone());
+    let is_faq = crate::faq::is_faq_op(&node.op);
+    let pushed = if is_faq {
+        let syms = bound_index_symbols(node);
+        let n = syms.len();
+        bound.extend(syms);
+        n
+    } else {
+        0
+    };
+    if is_faq {
+        for (field, part) in [
+            ("expr", node.expr.as_deref()),
+            ("filter", node.filter.as_deref()),
+        ] {
+            let Some(part) = part else { continue };
+            let mut operands: Vec<&str> = Vec::new();
+            collect_bare_array_operands_once(
+                part,
+                declared_axes,
+                &mut HashSet::new(),
+                &mut operands,
+            );
+            let mut seen: HashSet<&str> = HashSet::new();
+            for operand in operands {
+                if bound.iter().any(|b| b == operand) || !seen.insert(operand) {
+                    continue;
+                }
+                let axes = declared_axes[operand];
+                let syms: Vec<String> = node
+                    .ranges
+                    .as_ref()
+                    .map(|r| {
+                        let mut k: Vec<&String> = r.keys().collect();
+                        k.sort();
+                        k.into_iter().cloned().collect()
+                    })
+                    .unwrap_or_default();
+                errors.push(StructuralError {
+                    path: path.to_string(),
+                    code: StructuralErrorCode::FaqBareArrayOperand,
+                    message: format!(
+                        "faq `{field}` reads '{operand}', declared over [{}], by bare name. A \
+                         faq names its axes by its range symbols ({}), and its `{field}` is \
+                         evaluated once per index tuple, so a whole array there does not say \
+                         which symbol each of its axes is. Read it through `index`, e.g. \
+                         index({operand}, <symbol>…) (esm-spec §4.3.1)",
+                        axes.join(", "),
+                        if syms.is_empty() {
+                            "none".to_string()
+                        } else {
+                            syms.join(", ")
+                        },
+                    ),
+                    details: serde_json::json!({
+                        "field": field,
+                        "variable": operand,
+                        "shape": axes,
+                    }),
+                });
+            }
+        }
+    }
+    node.for_each_child(&mut |child| {
+        walk_faq_bare_operands(child, path, declared_axes, bound, visited, errors);
+    });
+    bound.truncate(bound.len() - pushed);
+}
+
+/// [`collect_bare_array_operands`], visiting each shared node once.
+fn collect_bare_array_operands_once<'a>(
+    expr: &'a crate::Expr,
+    declared_axes: &HashMap<&str, &Vec<String>>,
+    seen: &mut HashSet<*const crate::types::ExpressionNode>,
+    out: &mut Vec<&'a str>,
+) {
+    match expr {
+        crate::Expr::Variable(name) if declared_axes.contains_key(name.as_str()) => {
+            out.push(name.as_str());
+        }
+        crate::Expr::Operator(node) => {
+            if !crate::op_registry::is_elementwise_node(node)
+                || !seen.insert(std::sync::Arc::as_ptr(node))
+            {
+                return;
+            }
+            node.for_each_child(&mut |child| {
+                collect_bare_array_operands_once(child, declared_axes, seen, out)
+            });
+        }
+        _ => {}
+    }
+}
+
+/// Every variable's index-set axes as the build sees them: the declared
+/// `shape`, or, for a variable declared without one, the shape its defining
+/// (bare left-hand side) equation infers. The inference is Julia's
+/// `promote_downstream_shapes` (`shape_promotion.jl`) and Python's
+/// `_promoted_axes`: a `faq` / `makearray` over named ranges has its output
+/// axes' index sets, one over inline `[1, n]` ranges has anonymous axes, an
+/// `index` gather and a geometry kernel are scalar, and every other op
+/// broadcasts its operands' axes by name, the superset winning. Iterated to a
+/// fixed point. A variable declared `shape: []` is a scalar and never inferred.
+pub(crate) fn promoted_var_shapes(model: &crate::Model) -> HashMap<String, Vec<String>> {
+    let mut shapes: HashMap<String, Vec<String>> = HashMap::new();
+    let mut declared_scalar: HashSet<&str> = HashSet::new();
+    for (name, var) in &model.variables {
+        match &var.shape {
+            Some(s) if s.is_empty() => {
+                declared_scalar.insert(name.as_str());
+            }
+            Some(s) => {
+                shapes.insert(name.clone(), s.clone());
+            }
+            None => {}
+        }
+    }
+    let open: Vec<(&str, &crate::Expr)> = model
+        .equations
+        .iter()
+        .filter_map(|eq| match &eq.lhs {
+            crate::Expr::Variable(n) => Some((n.as_str(), &eq.rhs)),
+            _ => None,
+        })
+        .filter(|(n, _)| !shapes.contains_key(*n) && !declared_scalar.contains(n))
+        .collect();
+    for (name, rhs) in &open {
+        if let Some(axes) = inline_producer_axes(rhs, name) {
+            shapes.insert((*name).to_string(), axes);
+        }
+    }
+    loop {
+        let mut changed = false;
+        for (name, rhs) in &open {
+            if shapes.contains_key(*name) {
+                continue;
+            }
+            let inferred = infer_expr_axes(rhs, &shapes, &mut HashMap::new());
+            if !inferred.is_empty() {
+                shapes.insert((*name).to_string(), inferred);
+                changed = true;
+            }
+        }
+        if !changed {
+            return shapes;
+        }
+    }
+}
+
+/// The ops whose result is an array over their own `output_idx`.
+fn is_array_producer_op(op: &str) -> bool {
+    crate::faq::is_faq_op(op) || op == "makearray"
+}
+
+/// The anonymous axes of a `faq` / `makearray` whose every output index ranges
+/// over an inline `[1, n]` interval.
+fn inline_producer_axes(rhs: &crate::Expr, name: &str) -> Option<Vec<String>> {
+    let crate::Expr::Operator(node) = rhs else {
+        return None;
+    };
+    if !is_array_producer_op(&node.op) {
+        return None;
+    }
+    let (idx, ranges) = (node.output_idx.as_ref()?, node.ranges.as_ref()?);
+    if idx.is_empty() {
+        return None;
+    }
+    idx.iter()
+        .map(|sym| match ranges.get(sym) {
+            Some(crate::types::RangeSpec::Interval([1, _])) => Some(format!("{name}__{sym}")),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Julia's `_infer_expr_shape`: the index-set axes `expr` evaluates over.
+fn infer_expr_axes(
+    expr: &crate::Expr,
+    shapes: &HashMap<String, Vec<String>>,
+    memo: &mut HashMap<*const crate::types::ExpressionNode, Vec<String>>,
+) -> Vec<String> {
+    let node = match expr {
+        crate::Expr::Variable(n) => return shapes.get(n).cloned().unwrap_or_default(),
+        crate::Expr::Operator(node) => node,
+        _ => return Vec::new(),
+    };
+    let key = std::sync::Arc::as_ptr(node);
+    if let Some(hit) = memo.get(&key) {
+        return hit.clone();
+    }
+    let out = if matches!(
+        node.op.as_str(),
+        "index" | "intersect_polygon" | "polygon_intersection_area"
+    ) {
+        Vec::new()
+    } else if is_array_producer_op(&node.op) {
+        node.output_idx
+            .iter()
+            .flatten()
+            .map(|sym| match node.ranges.as_ref().and_then(|r| r.get(sym)) {
+                Some(crate::types::RangeSpec::IndexSetRef { from, .. }) => Some(from.clone()),
+                _ => None,
+            })
+            .collect::<Option<Vec<String>>>()
+            .unwrap_or_default()
+    } else {
+        let mut result: Vec<String> = Vec::new();
+        for arg in &node.args {
+            let a = infer_expr_axes(arg, shapes, memo);
+            if a.is_empty() || a.iter().all(|x| result.contains(x)) {
+                continue;
+            }
+            if result.is_empty() || result.iter().all(|x| a.contains(x)) {
+                result = a;
+            }
+        }
+        result
+    };
+    memo.insert(key, out.clone());
+    out
 }
 
 /// Recurse through `expr`, applying [`check_aggregate_node`] to every
