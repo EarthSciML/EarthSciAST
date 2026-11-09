@@ -273,6 +273,64 @@ end
     return nothing
 end
 
+# `foreach_child_with_path`'s walk (same children, same order) without the path
+# strings: `g(child, field, i)` gets the child's field and its 1-based position
+# in that field (1 for a single-expression field).
+@eval function _foreach_child_field(g, e::OpExpr)
+    $(
+        (
+            begin
+                fq = QuoteNode(f)
+                if spec.kind === :expr
+                    :(
+                        let x = e.$f
+                            x === nothing || g(x, $fq, 1)
+                        end
+                    )
+                elseif spec.kind === :expr_vec
+                    :(
+                        let v = e.$f
+                            if v !== nothing
+                                for (i, x) in enumerate(v)
+                                    g(x, $fq, i)
+                                end
+                            end
+                        end
+                    )
+                elseif spec.kind === :expr_map
+                    :(
+                        let m = e.$f
+                            if m !== nothing
+                                for mk in sort!(collect(keys(m)))
+                                    g(m[mk], $fq, 1)
+                                end
+                            end
+                        end
+                    )
+                else # :ranges
+                    :(
+                        let m = e.$f
+                            if m !== nothing
+                                for mk in sort!(collect(keys(m)))
+                                    v = m[mk]
+                                    if v isa AbstractVector
+                                        for (i, x) in enumerate(v)
+                                            x isa ASTExpr && g(x, $fq, i)
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    )
+                end
+            end
+                for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
+                if spec.kind in (:expr, :expr_vec, :expr_map, :ranges)
+        )...
+    )
+    return nothing
+end
+
 @doc """
     foreach_child_with_path(g, e::OpExpr, path::String) -> Nothing
 
