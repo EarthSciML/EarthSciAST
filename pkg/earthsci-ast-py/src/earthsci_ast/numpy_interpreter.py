@@ -3580,7 +3580,7 @@ def _fold_ragged_entries(
             for s, v in bindings.items():
                 ctx.locals[s] = np.asarray(v, dtype=float)
             kept = np.asarray(_require_real(_compile_expr(filter_expr)(ctx), "aggregate filter"))
-            kept = np.broadcast_to(kept.astype(bool), (row.size,))
+            kept = _entry_aligned_mask(kept, row.size)
         except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError) as exc:
             return _decline(
                 tier,
@@ -3751,7 +3751,7 @@ def _eval_faq_overlap_driven(
             for s, v in bindings.items():
                 ctx.locals[s] = np.asarray(v, dtype=float)
             kept = np.asarray(_require_real(_compile_expr(filter_expr)(ctx), "aggregate filter"))
-            kept = np.broadcast_to(kept.astype(bool), (values[0].size,))
+            kept = _entry_aligned_mask(kept, values[0].size)
         except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError) as exc:
             return _decline(
                 tier,
@@ -4871,6 +4871,24 @@ def _box_aligned_mask(keep: np.ndarray, ndim: int) -> np.ndarray:
             "its axes are not the node's symbols"
         )
     return keep.astype(bool)
+
+
+def _entry_aligned_mask(keep: np.ndarray, n: int) -> np.ndarray:
+    """A flat-entry ``filter`` value as a boolean mask over ``n`` entries, or
+    ``ValueError``.
+
+    The flat-entry tiers bind every index symbol to an ``n``-entry vector, so a
+    filter written over the node's symbols evaluates to a 0-D value or to
+    exactly ``n`` entries. Anything else is an array whose axes no symbol names,
+    and broadcasting would stretch or align it by accident, so the caller
+    declines (see :func:`_box_aligned_mask`)."""
+    keep = _box_aligned_mask(keep, 1)
+    if keep.ndim == 1 and keep.shape[0] != n:
+        raise ValueError(
+            f"the filter evaluated to {keep.shape[0]} values over {n} entries; "
+            "its axis is not the node's symbols"
+        )
+    return np.broadcast_to(keep, (n,))
 
 
 def _gated_box_term(

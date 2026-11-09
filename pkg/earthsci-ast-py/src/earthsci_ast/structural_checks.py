@@ -71,7 +71,11 @@ from .error_handling import (
     RAGGED_VALUES_NOT_GATHERED,
 )
 from .esm_types import effective_records_per_sample
-from .index_alignment import faq_bare_array_operand_message, faq_bare_array_operands
+from .index_alignment import (
+    faq_bare_array_operand_message,
+    faq_bare_array_operands,
+    faq_bare_exempt_names,
+)
 from .json_walk import iter_child_values, walk_dict_exprs
 
 # StructuralValidationError is built lazily (and cached) so that its base class,
@@ -512,16 +516,17 @@ def _check_aggregate_semantics(data: dict[str, Any], errors: list) -> None:
         from_map = _from_param_map(_model_template_registry(data, top)) if check_index_sets else {}
         # --- faq_bare_array_operand: a shaped variable read by bare name in a
         # faq body or filter (esm-spec §4.3.1, issue #441), on each equation's
-        # RHS. A variable the LHS names is left to the recurrence / cycle checks
-        # (a bare self-read), and a RHS still holding a template reference is
-        # not decided here; the build front door checks the expanded form.
+        # RHS as authored. An observed or recurrence definition's own variable is
+        # left to the recurrence / cycle checks (a bare self-read); a template
+        # application is opaque, and the build front door checks its expansion.
         for i, eq in enumerate(m.get("equations") or []):
             if not isinstance(eq, dict):
                 continue
             rhs = eq.get("rhs")
-            if rhs is None or _contains_template_reference(rhs):
+            if rhs is None:
                 continue
-            defined = _bare_string_leaves(eq.get("lhs"))
+            lhs = eq.get("lhs")
+            defined = faq_bare_exempt_names(lhs, _bare_string_leaves(lhs))
             axes_here = {n: a for n, a in bare_axes.items() if n not in defined}
             for field_name, name, axes in faq_bare_array_operands(rhs, axes_here):
                 emit(

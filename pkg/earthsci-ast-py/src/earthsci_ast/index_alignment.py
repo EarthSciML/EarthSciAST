@@ -88,6 +88,7 @@ __all__ = [
     "declared_axes",
     "faq_bare_array_operand_message",
     "faq_bare_array_operands",
+    "faq_bare_exempt_names",
     "iter_named_operands",
     "unalignable_axes",
 ]
@@ -106,18 +107,16 @@ __all__ = [
 #: them cell-wise, and so its operands are NOT in the enclosing result's frame.
 #:
 #: CROSS-BINDING: this is Python's counterpart to Rust's
-#: ``op_registry::is_elementwise_op``. The two agree on all 39 ops that matter,
-#: and differ in four ways, none of them accidental:
+#: ``op_registry::is_elementwise_node``. Both descend through ``broadcast``
+#: (esm-spec §4.3.4: the rule governs an array-level expression "whether
+#: spelled with an explicit `broadcast` node or written bare"), and they agree
+#: on every op that occurs in a document. The differences are spellings Rust
+#: never sees:
 #:
-#: * ``broadcast`` — Python descends, Rust does not. esm-spec §4.3.4 says the
-#:   rule governs an array-level expression "whether spelled with an explicit
-#:   `broadcast` node or written bare", so Python follows the normative text.
 #: * ``pow`` / ``**`` — registry ALIASES of ``^``, equally elementwise. Python
 #:   descends; Rust matches raw op strings and lists only ``^``.
 #: * ``true`` / ``false`` / ``=`` — Python-side only, and inert: the literals
 #:   are nullary (descending yields no operands) and ``=`` is an alias of ``==``.
-#: * ``ln`` — Rust lists it; it is not in the spec's §4.2 elementary-function
-#:   table and Python does not register it, so it never occurs.
 ELEMENTWISE_OPS: frozenset[str] = frozenset({"broadcast"}).union(
     *(op_registry.by_category(c) for c in op_registry.SCALAR_FN_CATEGORIES)
 )
@@ -245,9 +244,11 @@ def faq_bare_array_operands(
 
     The descent is :func:`iter_named_operands`' (elementwise ops only), a name
     bound as a loop symbol by this node or an enclosing one shadows the
-    declaration, and nested ``faq`` nodes are checked in their own right. Works
-    on the raw dict form and on typed :class:`ExprNode` trees alike. Order is
-    pre-order over nodes, ``expr`` before ``filter``, matching Rust's
+    declaration, nested ``faq`` nodes are checked in their own right, and an
+    ``apply_expression_template`` application is opaque: an array bound to one
+    of its arguments is not a bare read here. Works on the raw dict form and on
+    typed :class:`ExprNode` trees alike. Order is pre-order over nodes, ``expr``
+    before ``filter``, matching Rust's
     ``structural::faq_bare_array_operand_errors``.
     """
     shaped = {n: a for n, a in var_axes.items() if a}
@@ -257,7 +258,7 @@ def faq_bare_array_operands(
 
     def walk(node: Any, bound: frozenset[str]) -> None:
         op = _faq_field(node, "op")
-        if op is None:
+        if op is None or op == "apply_expression_template":
             return
         if op in ("faq", "aggregate"):
             syms = set(_faq_field(node, "output_idx") or [])
@@ -281,6 +282,15 @@ def faq_bare_array_operands(
 
     walk(expr, frozenset())
     return found
+
+
+def faq_bare_exempt_names(lhs: Any, names: set[str]) -> set[str]:
+    """The names ``faq_bare_array_operand`` skips for an equation whose
+    left-hand side is ``lhs`` and names ``names``: all of them for an observed
+    or recurrence definition, whose bare self-read ``recurrence_not_wellfounded``
+    or ``observed_cycle`` reports; none for a derivative, whose bare state read
+    no other check reports."""
+    return set() if _faq_field(lhs, "op") == "D" else names
 
 
 def unalignable_axes(axes: tuple[str, ...], target_axes: tuple[str, ...]) -> tuple[str, ...]:
