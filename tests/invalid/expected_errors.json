@@ -4548,5 +4548,49 @@
     ],
     "is_valid": false,
     "notes": "Structural invalid (issue #441; esm-spec \u00a74.3.1 \"Shaped variables inside a `faq` are read through `index`\"; CONFORMANCE_SPEC \u00a75.6.4). The `faq` has two output indices (`i` over `a_rows`, `g` over `c_rows`) and its filter `ifelse(a_val > 1.5, 1, 0)` names the shaped variable `a_val` bare. Before this code existed Rust's reference evaluator aligned the array-valued filter to the output box by position, found rank 1 against 2 and kept every term, so the filter was silently ignored ([10,20 / 20,40 / 30,60] where [0,0 / 20,40 / 30,60] is meant). SCHEMA-VALID and decidable from the declared shapes alone, so every binding's validate() rejects it with `faq_bare_array_operand` at the containing field. Positive control: tests/conformance/faq_pointwise_filter/fixtures/indexed_filter_two_outputs.esm (`index(a_val, i)`)."
+  },
+  "bare_array_operand_derivative.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/equations/0/rhs",
+        "code": "faq_bare_array_operand"
+      }
+    ],
+    "is_valid": false,
+    "notes": "Structural invalid (esm-spec \u00a74.3.1 \"Shaped variables inside a `faq` are read through `index`\"; CONFORMANCE_SPEC \u00a75.6.4). `D(y) ~ faq(output_idx [i], ranges i\u2208a_rows, k\u2208b_rows, expr: index(K, i, k) * y)` reads the state `y` bare in the body of its own derivative. The left-hand-side exemption covers only an observed or recurrence definition, whose bare self-read `recurrence_not_wellfounded` / `observed_cycle` report; a derivative left-hand side has no such check, so the read is `faq_bare_array_operand`. Built anyway, the evaluators disagreed (Python 21, 2100; Rust's compiled tape 11, 2200; Rust's interpreter NaN; Julia failed)."
+  },
+  "bare_array_operand_subsystem.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Host/subsystems/Probe/equations/2/rhs",
+        "code": "faq_bare_array_operand"
+      }
+    ],
+    "is_valid": false,
+    "notes": "Structural invalid (esm-spec \u00a74.3.1; CONFORMANCE_SPEC \u00a75.6.4). bare_array_operand_filter.esm mounted as the inline subsystem `Host.subsystems.Probe`: the check walks every inline subsystem's equations, as every other per-equation `faq` check does."
+  },
+  "ragged_values_not_gathered_subsystem.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Host/subsystems/RaggedValuesNotGathered/equations/3/rhs",
+        "code": "ragged_values_not_gathered"
+      }
+    ],
+    "is_valid": false,
+    "notes": "Structural invalid (issue #259; esm-spec \u00a74.3.1 \"Ragged ranges\"). ragged_values_not_gathered.esm mounted as the inline subsystem `Host.subsystems.RaggedValuesNotGathered`: the check walks every inline subsystem's equations."
+  },
+  "bare_array_operand_beside_template.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/equations/0/rhs",
+        "code": "faq_bare_array_operand"
+      }
+    ],
+    "is_valid": false,
+    "notes": "Structural invalid (esm-spec \u00a74.3.1; CONFORMANCE_SPEC \u00a75.6.4). The `faq` body is `twice(x = v) + w`. The template application is opaque: `v`, bound to its argument, is not a bare read (on the authored form, in a binding that expands templates at load). The bare `w` beside it is, so exactly one finding is reported, for `w`."
   }
 }

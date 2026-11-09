@@ -1,6 +1,7 @@
 package esm
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -72,12 +73,13 @@ const (
 // opAggregate is the array-query reduction op these checks key on.
 const opAggregate = "faq"
 
-// validateModelStaticAggregateChecks runs the three per-model aggregate checks
-// (join_key_invalid_type, relational_node_in_continuous, undefined_index_set)
-// over every equation of a model. Each aggregate node reachable in an equation's
-// LHS / RHS tree is inspected; a finding is reported at the CONTAINING field
-// (`.../equations/i/lhs` or `.../rhs`), never at the leaf position — the same
-// granularity §7.1.2 and the shared corpus pin.
+// validateModelStaticAggregateChecks runs the per-model aggregate checks
+// (join_key_invalid_type, relational_node_in_continuous, undefined_index_set,
+// ragged_values_not_gathered, faq_bare_array_operand) over every equation of a
+// model and, recursively, of each of its inline subsystems. Each aggregate node
+// reachable in an equation's LHS / RHS tree is inspected; a finding is reported
+// at the CONTAINING field (`.../equations/i/lhs` or `.../rhs`), never at the
+// leaf position — the same granularity §7.1.2 and the shared corpus pin.
 func (s *structuralScan) validateModelStaticAggregateChecks(modelName string, model *Model, basePath string) {
 	// "Reads a STATE" is the cadence question, and from esm 1.0.0 it is DERIVED:
 	// an ODE state is an unknown under D(·,t) on some equation LHS (esm-spec
@@ -127,19 +129,110 @@ func (s *structuralScan) validateModelStaticAggregateChecks(modelName string, mo
 		eqPath := fmt.Sprintf("%s/equations/%d", basePath, i)
 		checkField(eqPath+"/lhs", eq.LHS)
 		checkField(eqPath+"/rhs", eq.RHS)
-		// A variable the LHS names is skipped: a bare read of the variable an
-		// equation defines is a self-reference the recurrence and cycle checks
-		// already report.
-		defined := make(map[string]bool)
-		collectStringLeaves(eq.LHS, defined)
-		here := make(map[string][]string, len(shaped))
-		for name, axes := range shaped {
-			if !defined[name] {
-				here[name] = axes
+		// The RHS as authored: a template application there is opaque to the
+		// check, and load has already expanded it.
+		rhs := eq.RHS
+		if authored, ok := s.file.authoredTemplateRHS[eqPath]; ok {
+			rhs = authored
+		}
+		s.checkFAQBareArrayOperands(rhs, shapedExceptSelfDefined(shaped, eq.LHS), eqPath+"/rhs", modelName)
+	}
+
+	for _, name := range sortedKeys(model.Subsystems) {
+		raw := model.Subsystems[name]
+		if _, _, isRef := extractRefWithBindings(raw); isRef {
+			continue
+		}
+		sub, ok := decodeSubsystemAs[Model](raw)
+		if !ok {
+			continue
+		}
+		s.validateModelStaticAggregateChecks(modelName+"."+name, &sub, basePath+"/subsystems/"+name)
+	}
+}
+
+// shapedExceptSelfDefined is shaped less the variables an observed or
+// recurrence definition's LHS names. A bare read of the variable such an
+// equation defines is a self-reference recurrence_not_wellfounded or
+// observed_cycle already reports. A derivative LHS keeps every name: no other
+// check reports `D(y) ~ faq(… y …)`, and the bare `y` there is the same
+// unaligned whole-array read as any other.
+func shapedExceptSelfDefined(shaped map[string][]string, lhs Expression) map[string][]string {
+	if node, ok := asExprNode(lhs); ok && node.Op == "D" {
+		return shaped
+	}
+	defined := make(map[string]bool)
+	collectStringLeaves(lhs, defined)
+	here := make(map[string][]string, len(shaped))
+	for name, axes := range shaped {
+		if !defined[name] {
+			here[name] = axes
+		}
+	}
+	return here
+}
+
+// authoredTemplateApplications records, from the authored document view, the
+// right-hand side of every model equation (inline subsystems included) that
+// holds an `apply_expression_template` node, keyed by its equation pointer.
+func authoredTemplateApplications(view map[string]any) map[string]Expression {
+	out := make(map[string]Expression)
+	var visit func(model map[string]any, path string)
+	visit = func(model map[string]any, path string) {
+		eqs, _ := model["equations"].([]any)
+		for i, raw := range eqs {
+			eq, ok := raw.(map[string]any)
+			if !ok || !rawHoldsTemplateApplication(eq["rhs"]) {
+				continue
+			}
+			b, err := json.Marshal(eq["rhs"])
+			if err != nil {
+				continue
+			}
+			rhs, err := UnmarshalExpression(b)
+			if err != nil {
+				continue
+			}
+			out[fmt.Sprintf("%s/equations/%d", path, i)] = rhs
+		}
+		subs, _ := model["subsystems"].(map[string]any)
+		for name, raw := range subs {
+			if sub, ok := raw.(map[string]any); ok {
+				visit(sub, path+"/subsystems/"+name)
 			}
 		}
-		s.checkFAQBareArrayOperands(eq.RHS, here, eqPath+"/rhs", modelName)
 	}
+	models, _ := view["models"].(map[string]any)
+	for name, raw := range models {
+		if model, ok := raw.(map[string]any); ok {
+			visit(model, "/models/"+name)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func rawHoldsTemplateApplication(v any) bool {
+	switch t := v.(type) {
+	case map[string]any:
+		if t["op"] == "apply_expression_template" {
+			return true
+		}
+		for _, child := range t {
+			if rawHoldsTemplateApplication(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range t {
+			if rawHoldsTemplateApplication(child) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // checkFAQBareArrayOperands reports faq_bare_array_operand for every `faq`
@@ -156,11 +249,11 @@ func (s *structuralScan) validateModelStaticAggregateChecks(modelName string, mo
 //
 // The descent is collectBareArrayOperands' (elementwise nodes only); a name a
 // `faq` binds as a loop symbol, there or further out, shadows the declaration;
-// nested `faq` nodes are checked in their own right; a field still holding a
-// template reference is not decided. Order: pre-order over nodes, `expr` before
-// `filter`, matching the other bindings.
+// nested `faq` nodes are checked in their own right; a template application is
+// opaque, so an array bound to one of its arguments is not a bare read. Order:
+// pre-order over nodes, `expr` before `filter`, matching the other bindings.
 func (s *structuralScan) checkFAQBareArrayOperands(expr Expression, shaped map[string][]string, fieldPath, modelName string) {
-	if len(shaped) == 0 || containsTemplateReference(expr) {
+	if len(shaped) == 0 {
 		return
 	}
 	var walk func(e Expression, bound map[string]bool)
@@ -172,7 +265,7 @@ func (s *structuralScan) checkFAQBareArrayOperands(expr Expression, shaped map[s
 			return
 		}
 		node, ok := asExprNode(e)
-		if !ok {
+		if !ok || node.Op == "apply_expression_template" {
 			return
 		}
 		inner := bound

@@ -1,0 +1,169 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "RaggedValuesNotGatheredSubsystem",
+    "description": "INVALID: tests/invalid/faq/ragged_values_not_gathered.esm mounted as the inline subsystem `Host.subsystems.RaggedValuesNotGathered`. Its `faq` ranges over the ragged set `members_of_parent` but never reads the set's `values` array (issue #259). The rule applies to a subsystem's equations exactly as to a top-level model's; rejected by validate() with `ragged_values_not_gathered` (esm-spec §4.3.1 \"Ragged ranges\") at the subsystem equation's containing field.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "faq",
+      "index-sets",
+      "ragged",
+      "subsystem",
+      "invalid"
+    ]
+  },
+  "index_sets": {
+    "parent_rows": {
+      "kind": "interval",
+      "size": 3
+    },
+    "flat_member_rows": {
+      "kind": "interval",
+      "size": 6
+    },
+    "members_of_parent": {
+      "kind": "ragged",
+      "of": [
+        "parent_rows"
+      ],
+      "offsets": "parentMemberCount",
+      "values": "parentMember"
+    }
+  },
+  "models": {
+    "Host": {
+      "variables": {
+        "z": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Host's own state."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "z"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        }
+      ],
+      "subsystems": {
+        "RaggedValuesNotGathered": {
+          "variables": {
+            "parentMemberCount": {
+              "type": "unknown",
+              "shape": [
+                "parent_rows"
+              ],
+              "units": "1",
+              "description": "Per-parent member count: one, two and three."
+            },
+            "parentMember": {
+              "type": "unknown",
+              "shape": [
+                "flat_member_rows"
+              ],
+              "units": "1",
+              "description": "The member array, laid out flat. Never read by the faq body, which is the defect."
+            },
+            "flatValue": {
+              "type": "unknown",
+              "shape": [
+                "flat_member_rows"
+              ],
+              "units": "1",
+              "description": "A payload over the flat member axis."
+            },
+            "perParentTotal": {
+              "type": "unknown",
+              "shape": [
+                "parent_rows"
+              ],
+              "units": "1",
+              "description": "Meant to be the sum of each parent's own members' payloads."
+            }
+          },
+          "equations": [
+            {
+              "lhs": "parentMemberCount",
+              "rhs": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  1,
+                  2,
+                  3
+                ]
+              }
+            },
+            {
+              "lhs": "parentMember",
+              "rhs": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  1,
+                  2,
+                  3,
+                  4,
+                  5,
+                  6
+                ]
+              }
+            },
+            {
+              "lhs": "flatValue",
+              "rhs": {
+                "op": "const",
+                "args": [],
+                "value": [
+                  10,
+                  20,
+                  30,
+                  40,
+                  50,
+                  60
+                ]
+              }
+            },
+            {
+              "lhs": "perParentTotal",
+              "rhs": {
+                "op": "faq",
+                "args": [],
+                "semiring": "sum_product",
+                "output_idx": [
+                  "i"
+                ],
+                "ranges": {
+                  "i": {
+                    "from": "parent_rows"
+                  },
+                  "j": {
+                    "from": "members_of_parent",
+                    "of": [
+                      "i"
+                    ]
+                  }
+                },
+                "expr": {
+                  "op": "index",
+                  "args": [
+                    "flatValue",
+                    "j"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}
