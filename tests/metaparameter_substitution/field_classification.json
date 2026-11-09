@@ -157,6 +157,7 @@
       "Distribution|2.kind",
       "Domain.array_type",
       "Domain.element_type",
+      "ExpressionNode.element_type",
       "FunctionTable.interpolation",
       "FunctionTable.out_of_bounds",
       "IndexSet.kind",
