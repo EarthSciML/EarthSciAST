@@ -3192,28 +3192,50 @@ pub(super) fn filter_excludes(
             if a.ndim() == 0 {
                 return a.first().copied().unwrap_or(0.0) == 0.0;
             }
-            let Some(cell) = cell else {
-                return false;
-            };
-            if a.ndim() != cell.names.len() || cell.origin.len() != cell.names.len() {
-                return false;
-            }
-            let ix: Vec<usize> = cell
-                .names
-                .iter()
-                .zip(cell.origin.iter())
-                .map(|(n, &lo)| {
-                    let bound = ctx.loop_binds.get(n).copied().unwrap_or(lo);
-                    (bound - lo).max(0) as usize
-                })
-                .collect();
-            match a.get(IxDyn(&ix)) {
-                Some(&m) => m == 0.0,
-                // Out of the mask's bounds: include, rather than silently
-                // dropping the term.
-                None => false,
-            }
+            // Out of the mask's bounds, or not alignable: include, rather
+            // than silently dropping the term.
+            cell.and_then(|cell| cell_element(&a, cell, ctx))
+                .is_some_and(|m| m == 0.0)
         }
+    }
+}
+
+/// The element of an output-box-shaped `a` at the current output cell, aligned
+/// as the vectorized overlay's `VecBox` aligns an array operand to its box
+/// (`element = a[idx - lo]` per output axis). `None` when the rank differs from
+/// the box's or the cell lies outside `a`.
+fn cell_element(a: &ArrayD<f64>, cell: &CellBox, ctx: &EvalCtx) -> Option<f64> {
+    if a.ndim() != cell.names.len() || cell.origin.len() != cell.names.len() {
+        return None;
+    }
+    let ix: DimU = cell
+        .names
+        .iter()
+        .zip(cell.origin.iter())
+        .map(|(n, &lo)| {
+            let bound = ctx.loop_binds.get(n).copied().unwrap_or(lo);
+            (bound - lo).max(0) as usize
+        })
+        .collect();
+    a.get(IxDyn(&ix)).copied()
+}
+
+/// One cell's term: the body's value at the current output cell.
+///
+/// A body that is array-valued over the output box — an array-producing
+/// nested `faq` under an elementwise operator, `faq_f(Σ_k w[e(f, k)]) - q[f]`
+/// inside the node over `f` — denotes, per cell, its element at that cell: the
+/// nested node rebinds `f` and so is a whole array (esm-spec §4.3.1 shadowing),
+/// and the whole-array overlay combines it with the box's other operands
+/// position by position. This reads the same element ([`cell_element`]), so the
+/// oracle and the overlay agree. Anything else that is not a scalar is NaN.
+pub(super) fn cell_term(v: Value, cell: Option<&CellBox>, ctx: &EvalCtx) -> f64 {
+    match v {
+        Value::Scalar(s) => s,
+        Value::Array(a) if a.ndim() == 0 => a[IxDyn(&[])],
+        Value::Array(a) => cell
+            .and_then(|cell| cell_element(&a, cell, ctx))
+            .unwrap_or(f64::NAN),
     }
 }
 
@@ -3245,7 +3267,8 @@ pub(super) fn reduce_contraction(
         return if filter_excludes(filter, cell, ctx) {
             reduce.identity()
         } else {
-            eval(body, ctx).as_scalar().unwrap_or(f64::NAN)
+            let v = eval(body, ctx);
+            cell_term(v, cell, ctx)
         };
     }
     // A ragged dim whose parent is itself CONTRACTED (esm-spec §4.3.1 "Ragged
@@ -3282,7 +3305,8 @@ pub(super) fn reduce_contraction(
             if filter_excludes(filter, Some(cell), ctx) {
                 continue;
             }
-            let term = eval(body, ctx).as_scalar().unwrap_or(f64::NAN);
+            let v = eval(body, ctx);
+            let term = cell_term(v, Some(cell), ctx);
             acc = reduce.combine(acc, term);
         }
         return acc;
@@ -3298,7 +3322,8 @@ pub(super) fn reduce_contraction(
         if filter_excludes(filter, cell, ctx) {
             continue;
         }
-        let term = eval(body, ctx).as_scalar().unwrap_or(f64::NAN);
+        let v = eval(body, ctx);
+        let term = cell_term(v, cell, ctx);
         acc = reduce.combine(acc, term);
     }
     acc
@@ -4408,7 +4433,8 @@ impl TupleSink for EvalSink<'_, '_, '_, '_> {
         } = self.spec;
         crate::broad_phase::bump_overlap_enum_visits(1);
         if !filter_excludes(filter, cell, self.ctx) {
-            let term = eval(body, self.ctx).as_scalar().unwrap_or(f64::NAN);
+            let v = eval(body, self.ctx);
+            let term = cell_term(v, cell, self.ctx);
             // Pointwise (no contracted index): the body itself, as
             // `reduce_contraction` returns it, not `0̄ ⊕ body`, so a `-0.0`
             // term stays `-0.0`.
@@ -4735,7 +4761,8 @@ fn fold_dependent_nest(
         if filter_excludes(spec.filter, spec.cell, ctx) {
             return;
         }
-        let term = eval(spec.body, ctx).as_scalar().unwrap_or(f64::NAN);
+        let v = eval(spec.body, ctx);
+        let term = cell_term(v, spec.cell, ctx);
         *acc = spec.reduce.combine(*acc, term);
         return;
     }

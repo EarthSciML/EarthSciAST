@@ -680,12 +680,18 @@ pub(super) fn materialize_observeds_pass(
                     // output index names are the same every cell, so `set_bind`
                     // rebinds in place — no per-cell `IdxMap` alloc or key clone.
                     let mut ctx = env.oracle_ctx(&*dst);
+                    let output_origin: Vec<i64> = output_ranges.iter().map(|(lo, _)| *lo).collect();
+                    let cellbox = CellBox {
+                        names: output_idx_names,
+                        origin: &output_origin,
+                    };
                     let mut tuples = CartesianTuples::new(output_ranges);
                     while let Some(tuple) = tuples.next() {
                         for (name, val) in output_idx_names.iter().zip(tuple.iter()) {
                             set_bind(&mut ctx.loop_binds, name, *val);
                         }
-                        let v = eval(body, &mut ctx).as_scalar().unwrap_or(f64::NAN);
+                        let v = eval(body, &mut ctx);
+                        let v = cell_term(v, Some(&cellbox), &ctx);
                         let flat = multi_to_flat_col_major(tuple, &padded_shape, &padded_origin);
                         if flat < buf.len() {
                             buf[flat] = v;
