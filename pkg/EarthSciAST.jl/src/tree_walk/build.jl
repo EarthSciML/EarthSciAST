@@ -353,11 +353,12 @@ function _discover_geometry_vars(
         # regrid's own outputs still qualify (they read `A_ij`), so the motivating
         # met→fire coupling edge is unchanged.
         geom_derived = Set{String}()
+        refmemo = Dict{String, Set{String}}()
         _saturate!() do
             changed = false
             for (name, rhs) in defs
                 name in geom_derived && continue
-                refs = _referenced_var_names(rhs)
+                refs = get!(() -> _referenced_var_names(rhs), refmemo, name)
                 if any(r -> r in setup_vars || r in ring_vars || r in geom_derived, refs)
                     push!(geom_derived, name); changed = true
                 end
