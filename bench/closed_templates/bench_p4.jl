@@ -421,7 +421,7 @@ end
 
 function run_size()
     for (fam, closed) in (("searchsorted", "fn"), ("linear", "fn"), ("bilinear", "fn"), ("calendar", "fn"),
-                          ("argmin", "op"), ("overlap_planar", "leaf"))
+                          ("argmin", "op"), ("overlap_planar", "leaf"), ("mixed", "fn"))
         for sz in sizes("size_$(fam)_$(closed)_")
             p(sp) = joinpath(DIR, "size_$(fam)_$(sp)_$(sz).esm")
             c, tp = build(p(closed)), build(p("tpl"))

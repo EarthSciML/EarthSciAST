@@ -628,8 +628,8 @@ mutable struct _GeoMemo
 end
 
 function _geo_memoize!(roots::Vector{_Node})
-    refs = IdDict{_Node, Int}()
-    reads = IdDict{_Node, Union{Nothing, Set{Int}}}()   # `nothing`: not memoizable
+    refs = _NodeMap{Int}()
+    reads = _NodeMap{Union{Nothing, Set{Int}}}()   # `nothing`: not memoizable
     kids(n) = n.op === :geo_agg ? begin
             sp = n.payload::_GeoAggSpec
             sp.filter === nothing ? _Node[sp.body] : _Node[sp.filter, sp.body]
@@ -662,7 +662,7 @@ function _geo_memoize!(roots::Vector{_Node})
         return reads[n] = r
     end
     foreach(visit, roots)
-    wrap = IdDict{_Node, _Node}()
+    wrap = _NodeMap{_Node}()
     for (n, c) in refs
         r = reads[n]
         (c >= 2 && r !== nothing && n.kind == _NK_OP) || continue
@@ -673,7 +673,7 @@ function _geo_memoize!(roots::Vector{_Node})
         )
     end
     isempty(wrap) && return roots
-    seen = IdDict{_Node, Nothing}()
+    seen = _NodeMap{Nothing}()
     function rewire(n::_Node)
         haskey(seen, n) && return
         seen[n] = nothing
@@ -804,11 +804,11 @@ const _GEO_CG_MINMAX = Dict{Symbol, Symbol}(r.sym => r.fnsym for r in _NARY_MINM
 struct _GeoCGDecline <: EarthSciASTError end
 
 mutable struct _GeoCG
-    refs::IdDict{_Node, Int}
-    level::IdDict{_Node, Int}          # the agg nest level that owns the node's innermost slot
-    levels::IdDict{_Node, UInt64}      # bit k: the node's sub-tree reads a slot of level k
+    refs::_NodeMap{Int}
+    level::_NodeMap{Int}               # the agg nest level that owns the node's innermost slot
+    levels::_NodeMap{UInt64}           # bit k: the node's sub-tree reads a slot of level k
     slot_level::Dict{Int, Int}
-    memo::IdDict{_Node, Symbol}        # shared node => its memo local
+    memo::_NodeMap{Symbol}             # shared node => its memo local
     resets::Dict{Int, Vector{Symbol}}  # level => memo locals reset at its iteration
     srcs::Vector{Any}
     src_ix::IdDict{Any, Int}
@@ -982,13 +982,70 @@ function _geo_cg_agg(g::_GeoCG, n::_Node)
     end
 end
 
+# Kernels of one setup pass, shared by sweeps that differ only in the arrays
+# they read (one template call site per ring pair, say). A kernel reads its
+# arrays through `srcs`, so `byexpr` maps a kernel expression to its generated
+# function, and `byshape` maps a body's `_geo_shape_key` to that function and
+# the order of its `srcs` among the key's arrays, or to `nothing` when the
+# emitter declined the body.
+struct _GeoKernelCache
+    byexpr::Dict{Expr, Any}
+    byshape::Dict{Vector{Any}, Any}
+end
+_GeoKernelCache() = _GeoKernelCache(Dict{Expr, Any}(), Dict{Vector{Any}, Any}())
+
+# Everything the memoize pass and the emitter read from a body, as a token list,
+# with the arrays it reads in first-visit order: two bodies with equal keys are
+# memoized alike and emit the same kernel, over their own arrays. Shared nodes
+# are keyed by their first visit, so the sharing (which the memoize pass
+# counts) is in the key. An unknown payload is keyed by identity.
+function _geo_shape_key(body::_Node)
+    key = Any[]
+    arrays = Any[]
+    aix = IdDict{Any, Int}()
+    objs = IdDict{Any, Int}()
+    seen = _NodeMap{Int}()
+    function visit(n::_Node)
+        got = get(seen, n, 0)
+        got == 0 || (push!(key, :ref, got); return)
+        seen[n] = length(seen) + 1
+        push!(key, n.kind, n.op, reinterpret(UInt64, n.literal), n.idx, n.sym, length(n.children))
+        pl = n.payload
+        if pl === nothing
+            push!(key, :none)
+        elseif n.op === :geo_gather || n.op === :geo_count
+            i = get!(aix, pl) do
+                push!(arrays, pl)
+                length(arrays)
+            end
+            push!(key, :src, i, typeof(pl))
+        elseif n.op === :geo_agg
+            sp = pl::_GeoAggSpec
+            push!(
+                key, :agg, Tuple(sp.slots), Tuple(sp.exts), sp.gates === nothing,
+                sp.op, reinterpret(UInt64, sp.zero), sp.filter === nothing
+            )
+            sp.gates === nothing || push!(key, :obj, get!(objs, sp.gates, length(objs) + 1))
+            sp.filter === nothing || visit(sp.filter)
+            visit(sp.body)
+        else
+            push!(key, :obj, get!(objs, pl, length(objs) + 1))
+        end
+        foreach(visit, n.children)
+        return
+    end
+    visit(body)
+    isempty(objs) || return nothing     # identity-keyed payloads never match another body
+    return key, arrays
+end
+
 # The native kernel of a setup body, or `nothing` (keep the walker). Only under
 # the share_subtrees plan flag, so the interpreter oracle walks.
-function _geo_kernel(body::_Node)
+function _geo_kernel(body::_Node; cache::Union{Nothing, _GeoKernelCache} = nothing)
     _compiler_plan_now().share_subtrees || return nothing
     g = _GeoCG(
-        IdDict{_Node, Int}(), IdDict{_Node, Int}(), IdDict{_Node, UInt64}(), Dict{Int, Int}(),
-        IdDict{_Node, Symbol}(),
+        _NodeMap{Int}(), _NodeMap{Int}(), _NodeMap{UInt64}(), Dict{Int, Int}(),
+        _NodeMap{Symbol}(),
         Dict{Int, Vector{Symbol}}(), Any[], IdDict{Any, Int}(), 0
     )
     try
@@ -999,7 +1056,11 @@ function _geo_kernel(body::_Node)
             push!(top, :(local $m::Float64 = 0.0), :(local $(Symbol(m, :_set))::Bool = false))
         end
         ex = Expr(:function, Expr(:tuple, :u, :srcs), Expr(:block, top..., :(return Float64($e))))
-        f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(@__MODULE__, @__MODULE__, ex)
+        f = cache === nothing ? nothing : get(cache.byexpr, ex, nothing)
+        if f === nothing
+            f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(@__MODULE__, @__MODULE__, ex)
+            cache === nothing || (cache.byexpr[ex] = f)
+        end
         _tally_cascade!(:geo_kernel)
         return _GeoKernel(f, Tuple(g.srcs))
     catch err

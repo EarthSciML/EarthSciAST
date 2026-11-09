@@ -90,6 +90,44 @@ struct _Node
     children::Vector{_Node}
 end
 
+# A map keyed by `_Node` with `IdDict` semantics (keys equal iff `===`). An
+# `IdDict` hashes an immutable key by its whole content through `objectid`,
+# which costs microseconds per `_Node`; this hashes the fields that tell nodes
+# apart cheaply (the children vector and the payload by `objectid`, which for a
+# mutable object is its address) and compares with `===`. Iteration order is
+# unspecified, as for `IdDict`.
+struct _NodeKey
+    n::_Node
+end
+Base.:(==)(a::_NodeKey, b::_NodeKey) = a.n === b.n
+Base.isequal(a::_NodeKey, b::_NodeKey) = a.n === b.n
+Base.hash(k::_NodeKey, h::UInt) = hash(
+    objectid(k.n.children),
+    hash(objectid(k.n.payload), hash(k.n.op, hash(k.n.idx, hash(reinterpret(UInt64, k.n.literal), h))))
+)
+
+struct _NodeMap{V}
+    d::Dict{_NodeKey, V}
+end
+_NodeMap{V}() where {V} = _NodeMap{V}(Dict{_NodeKey, V}())
+Base.get(m::_NodeMap, n::_Node, default) = get(m.d, _NodeKey(n), default)
+Base.get!(f::Function, m::_NodeMap, n::_Node) = get!(f, m.d, _NodeKey(n))
+Base.get!(m::_NodeMap, n::_Node, default) = get!(m.d, _NodeKey(n), default)
+Base.getindex(m::_NodeMap, n::_Node) = m.d[_NodeKey(n)]
+Base.setindex!(m::_NodeMap, v, n::_Node) = (m.d[_NodeKey(n)] = v; m)
+Base.haskey(m::_NodeMap, n::_Node) = haskey(m.d, _NodeKey(n))
+Base.empty!(m::_NodeMap) = (empty!(m.d); m)
+Base.length(m::_NodeMap) = length(m.d)
+Base.isempty(m::_NodeMap) = isempty(m.d)
+Base.values(m::_NodeMap) = values(m.d)
+Base.keys(m::_NodeMap) = (k.n for k in keys(m.d))
+function Base.iterate(m::_NodeMap, st...)
+    r = iterate(m.d, st...)
+    r === nothing && return nothing
+    (k, v), s = r
+    return (k.n => v, s)
+end
+
 # Build-time side channel from `_resolve_indices` to `_compile` (ess-14f.3): a
 # RESOLVED live-forcing gather, carried in the `value` slot of a synthetic
 # argless `index` node. It exists only between the resolve and compile passes of
@@ -1286,8 +1324,21 @@ end
 struct _CSEKeyMemos
     canon::IdDict{OpExpr, Any}   # ASTExpr result or CanonicalizeError
     key::IdDict{OpExpr, Any}     # String or nothing
+    json::IdDict{OpExpr, String} # canonical node => its `_emit_json`
 end
-_CSEKeyMemos() = _CSEKeyMemos(IdDict{OpExpr, Any}(), IdDict{OpExpr, Any}())
+_CSEKeyMemos() = _CSEKeyMemos(IdDict{OpExpr, Any}(), IdDict{OpExpr, Any}(), IdDict{OpExpr, String}())
+
+# `_emit_json` memoized by canonical node: the emission is compositional, so a
+# node's bytes are its children's bytes spliced, and each canonical node (shared
+# by `_canonicalize_memo` across every key that contains it) is emitted once.
+function _emit_json_memo(e::ASTExpr, memo::IdDict{OpExpr, String})
+    e isa OpExpr || return _emit_json(e)
+    v = get(memo, e, nothing)
+    v === nothing || return v
+    r = _emit_node_json(e, a -> _emit_json_memo(a, memo))
+    memo[e] = r
+    return r
+end
 
 # Identity-memoized `canonicalize`: drives the recursion over unique nodes
 # only, delegating the per-node work to `_canonicalize_shallow`
@@ -1333,7 +1384,7 @@ function _cse_key(
         # canonical NODE can be inspected before it is flattened to bytes.
         canon = _canonicalize_memo(keyed, memos.canon)
         # Fail-close on a non-value-preserving collapse to a literal.
-        (canon isa NumExpr || canon isa IntExpr) ? nothing : _emit_json(canon)
+        (canon isa NumExpr || canon isa IntExpr) ? nothing : _emit_json_memo(canon, memos.json)
     catch err
         err isa CanonicalizeError || rethrow()
         nothing

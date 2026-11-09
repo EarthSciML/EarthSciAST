@@ -102,10 +102,10 @@ struct _CGShareKeys
     ids::Dict{_VNKey, Int}
     objs::IdDict{Any, Int}
     pays::IdDict{Any, Int}
-    memo::Dict{Tuple, IdDict{_Node, Int}}
+    memo::Dict{Tuple, _NodeMap{Int}}
 end
 _CGShareKeys() = _CGShareKeys(
-    Dict{_VNKey, Int}(), IdDict{Any, Int}(), IdDict{Any, Int}(), Dict{Tuple, IdDict{_Node, Int}}()
+    Dict{_VNKey, Int}(), IdDict{Any, Int}(), IdDict{Any, Int}(), Dict{Tuple, _NodeMap{Int}}()
 )
 
 # Emission context for a scalar spine. `loops` maps a loop counter `Ref` — the
@@ -443,7 +443,7 @@ end
 # never once per path.
 function _cg_share_key!(
         K::_CGShareKeys, kc, nd::_Node, env::Vector{Any},
-        memo::IdDict{_Node, Int} = _cg_share_memo(K, env)
+        memo::_NodeMap{Int} = _cg_share_memo(K, env)
     )
     got = get(memo, nd, 0)
     got == 0 || return got
@@ -472,7 +472,7 @@ function _cg_share_key!(
     return memo[nd] = _cg_share_id!(K, key)
 end
 _cg_share_memo(K::_CGShareKeys, env::Vector{Any}) =
-    get!(() -> IdDict{_Node, Int}(), K.memo, Tuple(env))
+    get!(() -> _NodeMap{Int}(), K.memo, Tuple(env))
 
 # Whether operand `j` of `nd` is evaluated only on some evaluations of `nd`:
 # the walker's short circuits (`_cse_arg_conditional`: an `ifelse` branch, an

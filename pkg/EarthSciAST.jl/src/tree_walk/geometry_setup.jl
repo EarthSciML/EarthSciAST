@@ -1275,7 +1275,7 @@ end
 function _materialize_geom_array(
         faq, env, index_sets, derived_extents,
         var_shapes = Dict{String, Vector{String}}();
-        ov_cache = nothing, eq_cache = nothing
+        ov_cache = nothing, eq_cache = nothing, kernel_cache = nothing
     )
     out = String[v for v in faq.output_idx]
     exts = Int[_geo_index_extent(faq.ranges[v], index_sets, derived_extents) for v in out]
@@ -1308,12 +1308,31 @@ function _materialize_geom_array(
     gates = _geo_slot_gates(faq, g)
     filt = faq.filter === nothing ? nothing : _geo_compile(faq.filter, g)
     body = _geo_compile(faq.expr_body, g)
-    if _compiler_plan_now().share_subtrees
-        roots = _geo_memoize!(filt === nothing ? _Node[body] : _Node[filt, body])
-        filt === nothing ? (body = roots[1]) : ((filt, body) = (roots[1], roots[2]))
+    share = _compiler_plan_now().share_subtrees
+    # A body keyed like one already compiled in this pass takes that kernel
+    # over its own arrays, with no memoize pass and no emission (see
+    # `_GeoKernelCache`).
+    shape = share && filt === nothing && kernel_cache !== nothing ? _geo_shape_key(body) : nothing
+    known = shape === nothing ? missing : get(kernel_cache.byshape, shape[1], missing)
+    kbody = nothing
+    if known isa Tuple
+        f, order = known
+        kbody = _GeoKernel(f, Tuple(shape[2][i] for i in order))
+        _tally_cascade!(:geo_kernel)
+    else
+        if share
+            roots = _geo_memoize!(filt === nothing ? _Node[body] : _Node[filt, body])
+            filt === nothing ? (body = roots[1]) : ((filt, body) = (roots[1], roots[2]))
+        end
+        # The body as native code when the emitter models it (the walker otherwise).
+        if known === missing
+            kbody = _geo_kernel(body; cache = kernel_cache)
+            if shape !== nothing
+                kernel_cache.byshape[shape[1]] = kbody === nothing ? nothing :
+                    (kbody.f, Int[findfirst(a -> a === s, shape[2]) for s in kbody.srcs])
+            end
+        end
     end
-    # The body as native code when the emitter models it (the walker otherwise).
-    kbody = _geo_kernel(body)
     body = kbody === nothing ? body : kbody
     u = zeros(Float64, nslots[])
     nout = length(out)
@@ -1948,6 +1967,10 @@ function _geometry_setup_vars(
         eq.lhs isa VarExpr || continue
         defs[(eq.lhs::VarExpr).name] = eq.rhs
     end
+    # The names each definition reads, walked once: the saturation passes below
+    # ask again on every sweep.
+    refmemo = Dict{String, Set{String}}()
+    refs_of(n) = get!(() -> _referenced_var_names(defs[n]), refmemo, n)
     observed_here = Set{String}(observed_unknowns(model))
     is_arr_obs(n) = haskey(model.variables, n) && n in observed_here &&
         _is_array_shape(model.variables[n].shape)
@@ -1963,7 +1986,7 @@ function _geometry_setup_vars(
         changed = false
         for (n, rhs) in defs
             n in tainted && continue
-            refs = _referenced_var_names(rhs)
+            refs = refs_of(n)
             if any(r -> (r in live_params) || (r in tainted), refs)
                 push!(tainted, n); changed = true
             end
@@ -1985,7 +2008,7 @@ function _geometry_setup_vars(
         ) && push!(setup, n)
         # The pure-AST overlap area, or a rank table, over inputs that read no state.
         _is_setup_join_reduction(defs[n]) &&
-            !_anyof(f -> f in state_var_names, _referenced_var_names(defs[n])) &&
+            !_anyof(f -> f in state_var_names, refs_of(n)) &&
             push!(setup, n)
         _is_setup_const_reduction(defs[n], index_sets, scalar_params) && !(n in dynamic) &&
             push!(setup, n)
@@ -2023,7 +2046,7 @@ function _geometry_setup_vars(
         changed = false
         for (n, rhs) in defs
             (is_arr_obs(n) && !(n in blocked)) || continue
-            refs = intersect(_referenced_var_names(rhs), mvars)
+            refs = intersect(refs_of(n), mvars)
             if _anyof(_is_scalar_computed_obs, refs) || _anyof(f -> f in blocked, refs)
                 push!(blocked, n); changed = true
             end
@@ -2037,7 +2060,7 @@ function _geometry_setup_vars(
                 is_arr_obs(n) && !(n in setup) && !(n in geom_ring_vars) &&
                     !(n in tainted) && !(n in blocked)
             ) || continue
-            refs = intersect(_referenced_var_names(rhs), mvars)
+            refs = intersect(refs_of(n), mvars)
             if any(f -> (f in setup) || (f in geom_ring_vars), refs) &&
                     !any(f -> f in state_var_names, refs)
                 push!(setup, n); changed = true
@@ -2062,13 +2085,13 @@ function _geometry_setup_vars(
     _saturate!() do   # SETUP-BACKWARD pass: state-free array observeds READ BY setup vars
         changed = false
         for n in collect(setup)
-            for r in intersect(_referenced_var_names(defs[n]), mvars)
+            for r in intersect(refs_of(n), mvars)
                 (
                     is_arr_obs(r) && !(r in setup) && !(r in geom_ring_vars) &&
                         !(r in tainted) && !(r in blocked) && haskey(defs, r) &&
                         !_is_const_op(defs[r]) && !(defs[r] isa VarExpr)
                 ) || continue
-                rrefs = intersect(_referenced_var_names(defs[r]), mvars)
+                rrefs = intersect(refs_of(r), mvars)
                 any(f -> f in state_var_names, rrefs) && continue
                 push!(setup, r); changed = true
             end
@@ -2081,11 +2104,12 @@ end
 # Dependency order over the setup vars (clip before area before A_ij).
 function _geom_setup_order(setup, defs)
     order = String[]; done = Set{String}()
+    deps = Dict{String, Set{String}}(n => intersect(_referenced_var_names(defs[n]), setup) for n in setup)
     while length(order) < length(setup)
         progressed = false
         for n in setup
             n in done && continue
-            if all(d -> d in done, intersect(_referenced_var_names(defs[n]), setup))
+            if all(d -> d in done, deps[n])
                 push!(order, n); push!(done, n); progressed = true
             end
         end
@@ -2241,6 +2265,10 @@ function _materialize_geometry_setup(
     # Likewise one bin-equality match index per pair of key columns (the env
     # buffers stay bound, so their identities are stable for the pass).
     eq_cache = Dict{Tuple{UInt, UInt, Int, Int}, Union{Nothing, _OverlapIndex}}()
+    # And one native body function per kernel shape (`_GeoKernelCache`): sweeps
+    # that differ only in their source arrays (one template site per ring pair)
+    # share it.
+    kernel_cache = _GeoKernelCache()
     for n in _geom_setup_order(setup, defs)
         rhs = defs[n]
         _open_rule!(n, :setup_array)
@@ -2270,7 +2298,7 @@ function _materialize_geometry_setup(
         else
             _materialize_geom_array(
                 rhs, env, index_sets, derived_extents, var_shapes;
-                ov_cache = ov_cache, eq_cache = eq_cache
+                ov_cache = ov_cache, eq_cache = eq_cache, kernel_cache = kernel_cache
             )
         end
         env[n] = arr

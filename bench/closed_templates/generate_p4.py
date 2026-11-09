@@ -38,6 +38,8 @@ nothing is a build constant.
   template.
 * ``size_<family>_<sp>_S<s>``: s independent scalar sites of one template
   family (or its closed form), for build time against expression size.
+* ``size_mixed_<sp>_L<nl>B<nb>``: nl linear and nb bilinear sites in one
+  document (written with the size family; ``--mix NL,NB`` for other counts).
 
 Each workload has a sidecar ``<workload>_<size>.data.json`` (the document name
 without its spelling and manifold) holding the inputs (axes,
@@ -77,6 +79,8 @@ DEFAULTS = {
     "overlap": [6],
     "fastjx": [256],
     "size": [1, 8, 64],
+    # EarthSciModels' interpolation call sites: 420 interp.linear, 58 bilinear.
+    "mix": [(420, 58)],
 }
 CALENDAR = ["year", "month", "day", "hour", "minute", "second", "day_of_year", "julian_day", "is_leap_year"]
 
@@ -411,14 +415,19 @@ def fastjx_doc(sp, ncells):
 SIZE_FAMILIES = ["searchsorted", "linear", "bilinear", "calendar", "argmin", "overlap_planar"]
 
 
-def size_doc(family, sp, s):
+def size_doc(family, sp, s, mix=None):
     """s independent scalar sites of `family`, each reading the scalar state u
-    (the argmin sites read constants only: the op requires them)."""
+    (the argmin sites read constants only: the op requires them). With
+    `mix = (nl, nb)` (family "mixed"), nl linear sites then nb bilinear ones."""
     rng = random.Random(77 + s)
     v = {"u": unknown(None, 0.0), "acc": unknown()}
     eqs, sets, names, file = [], {}, [], None
     sites = []
+    fam_of = (lambda i: family) if mix is None else (lambda i: "linear" if i <= mix[0] else "bilinear")
+    if mix is not None:
+        s = mix[0] + mix[1]
     for i in range(1, s + 1):
+        family = fam_of(i)
         x = op("+", op("+", "u", 0.001 * i), op("*", 0.001, "t"))
         if family in ("searchsorted", "linear"):
             axis = knots(8, 1000 * i + 1)
@@ -493,8 +502,14 @@ def size_doc(family, sp, s):
     eqs.append({"lhs": "acc", "rhs": op("+", *sites) if len(sites) > 1 else sites[0]})
     eqs.append({"lhs": op("D", "u", wrt="t"), "rhs": op("-", op("*", 1.0e-6, "acc"), "u")})
     model = {"variables": v, "equations": eqs}
+    if mix is not None:
+        names = ["linear", "bilinear"]
     if sp == "tpl":
         model["expression_template_imports"] = std_imports([(file, names)])
+    if mix is not None:
+        return doc(f"size_mixed_{sp}_L{mix[0]}B{mix[1]}",
+                   f"{mix[0]} independent scalar linear sites and {mix[1]} bilinear ones ({sp} spelling).",
+                   sets, model), None
     return doc(f"size_{family}_{sp}_S{s}", f"{s} independent scalar {family} sites ({sp} spelling).", sets, model), None
 
 
@@ -531,6 +546,9 @@ def documents(a):
         for s in a.size:
             for sp in (CLOSED[fam], "tpl"):
                 docs[f"size_{fam}_{sp}_S{s}"] = size_doc(fam, sp, s)
+    for nl, nb in a.mix:
+        for sp in ("fn", "tpl"):
+            docs[f"size_mixed_{sp}_L{nl}B{nb}"] = size_doc("mixed", sp, 0, mix=(nl, nb))
     return docs
 
 
@@ -563,12 +581,16 @@ def main(argv=None):
     ap.add_argument("--overlap", type=int, action="append")
     ap.add_argument("--fastjx-cells", type=int, action="append")
     ap.add_argument("--size", type=int, action="append")
+    ap.add_argument("--mix", type=lambda s: tuple(int(x) for x in s.split(",")), action="append",
+                    help="NL,NB (with the size family): one build-size document with NL linear and NB bilinear sites")
     a = ap.parse_args(argv)
     explicit = any(getattr(a, k) for k in FAMILIES.values())
     for fam, attr in FAMILIES.items():
         if getattr(a, attr) is None:
             wanted = (fam in a.only) if a.only else not explicit
             setattr(a, attr, DEFAULTS[fam] if wanted else [])
+    if a.mix is None:
+        a.mix = DEFAULTS["mix"] if a.size else []
     out = os.path.abspath(a.out or default_out())
     os.makedirs(out, exist_ok=True)
     docs = documents(a)

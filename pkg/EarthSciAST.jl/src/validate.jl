@@ -1873,7 +1873,7 @@ function _check_template_index_sets!(
         nothing
     end
     isempty(templated) && return errors
-    memo = Dict{Tuple{String, String}, OpExpr}()
+    memo = _ExpandCache()
     _foreach_model_expression(view, path, nothing) do e, anchor, _
         anchor in templated || return nothing
         any(x -> x.path == anchor && x.error_type == ERROR_CODES.UNDEFINED_INDEX_SET, errors) &&
@@ -3579,18 +3579,38 @@ function validate_expression_references(
     # A reference-integrity finding attaches at that FIELD (§7.1.2: "the node
     # that carries the defect"), NOT at the deepest leaf the walk descends into —
     # the corpus pins `undefined_variable` at `/models/M/equations/0/rhs`, never
-    # at `/rhs/args/1`. The constant field root is threaded as `anchor`; the
-    # growing `path` is retained only for any diagnostic that is genuinely
-    # leaf-local (none carry a pin today, but the descent still visits every
-    # node so nothing goes unchecked).
-    _check_expression_references!(errors, file, expr, path, path, scope)
+    # at `/rhs/args/1`. The constant field root is threaded as `anchor`; no
+    # diagnostic is leaf-local, so no leaf path is built (the descent still
+    # visits every node so nothing goes unchecked).
+    _check_expression_references!(
+        errors, file, expr, path, path,
+        scope === nothing ? nothing : _RefScope(scope, nothing, String[])
+    )
     return errors
+end
+
+# The in-scope names at one node of the reference walk: the caller's set plus
+# the symbols each enclosing node binds, as a chain (no copy of the set per
+# binding node).
+struct _RefScope
+    base::Set{String}
+    parent::Union{Nothing, _RefScope}
+    bound::Vector{String}
+end
+function _in_ref_scope(name::String, sc::_RefScope)
+    name in sc.base && return true
+    s = sc
+    while s !== nothing
+        name in s.bound && return true
+        s = s.parent
+    end
+    return false
 end
 
 function _check_expression_references!(
         errors::Vector{StructuralError}, file::EsmFile,
         expr::ASTExpr, path::String, anchor::String,
-        scope::Union{Set{String}, Nothing}
+        scope::Union{_RefScope, Nothing}
     )
     if isa(expr, VarExpr)
         _check_bare_variable!(errors, expr.name, anchor, scope)
@@ -3600,7 +3620,7 @@ function _check_expression_references!(
         child_scope = scope
         if scope !== nothing
             bound = _bound_index_symbols(expr)
-            isempty(bound) || (child_scope = union(scope, bound))
+            isempty(bound) || (child_scope = _RefScope(scope.base, scope, bound))
         end
 
         # `operator_apply`: the referenced operator can never resolve (v0.3.0
@@ -3625,11 +3645,12 @@ function _check_expression_references!(
         # root) is threaded UNCHANGED so any finding raised deeper still
         # attaches at the expression FIELD, not the leaf. The `operator_apply`
         # operator-name arg is skipped by its path (`args/0`), matching the
-        # hand-written descent this replaces.
-        first_arg_path = "$path/args/0"
-        foreach_child_with_path(expr, path) do child, cpath
-            (skip_operator_arg && cpath == first_arg_path) && return
-            _check_expression_references!(errors, file, child, cpath, anchor, child_scope)
+        # hand-written descent this replaces. Findings carry no leaf path, so
+        # the descent builds none (`_foreach_child_field`: the same children in
+        # the same order).
+        _foreach_child_field(expr) do child, field, i
+            (skip_operator_arg && field === :args && i == 1) && return
+            _check_expression_references!(errors, file, child, path, anchor, child_scope)
         end
     end
     # NumExpr / IntExpr are literals — no references to validate.
@@ -3649,12 +3670,12 @@ end
 # belong to the DOMAIN, not to any `variables` block (finding (a)).
 function _check_bare_variable!(
         errors::Vector{StructuralError}, name::String,
-        path::String, scope::Union{Set{String}, Nothing}
+        path::String, scope::Union{Set{String}, _RefScope, Nothing}
     )
     scope === nothing && return errors
     occursin('.', name) && return errors
     (startswith(name, "d(") || name in _BUILTIN_FUNCTION_NAMES) && return errors
-    if !(name in scope)
+    if !(scope isa _RefScope ? _in_ref_scope(name, scope) : name in scope)
         push!(
             errors, StructuralError(
                 path,
