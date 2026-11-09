@@ -1555,5 +1555,35 @@
     "unicode": "k·(a/b)·c",
     "latex": "k \\cdot \\frac{a}{b} \\cdot c",
     "ascii": "k * (a / b) * c"
+  },
+  {
+    "input": {
+      "op": "cast",
+      "element_type": "Float32",
+      "args": [
+        "x"
+      ]
+    },
+    "unicode": "cast(x, element_type=Float32)",
+    "latex": "\\mathrm{cast}(x, element\\_type=Float32)",
+    "ascii": "cast(x, element_type=Float32)"
+  },
+  {
+    "input": {
+      "op": "cast",
+      "element_type": "Float64",
+      "args": [
+        {
+          "op": "+",
+          "args": [
+            "a",
+            "b"
+          ]
+        }
+      ]
+    },
+    "unicode": "cast(a + b, element_type=Float64)",
+    "latex": "\\mathrm{cast}(a + b, element\\_type=Float64)",
+    "ascii": "cast(a + b, element_type=Float64)"
   }
 ]

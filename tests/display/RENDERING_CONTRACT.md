@@ -118,6 +118,14 @@ if operator node). With `perm`: `transpose(A, [p0, p1, …])` (latex `\mathrm{�
 ### intersect_polygon / polygon_intersection_area  `{…, manifold:M, args:[P,Q]}`
 `name(P, Q, manifold=M)`; latex `\mathrm{ESC(name)}(P, Q, manifold=M)`.
 
+### cast  `{op:"cast", element_type:P, args:[A]}`
+`cast(A, element_type=P)` in unicode and ascii; latex
+`\mathrm{cast}(A, element\_type=P)`. The precision is a trailing named
+argument, like `manifold=`, so the text form is lossless; the text parsers read
+`cast(A, element_type=P)` back to the node, and refuse a `cast` call without
+exactly one positional operand and that one named argument. (Added 2026-11-08,
+esm-spec §4.2.)
+
 ### faq  `{op:"faq", output_idx:[…], expr:E, reduce:R, semiring?, ranges?, join?, filter?, distinct?, key?}`
 Big-operator symbol `⊕` chosen from `semiring` if present else `reduce`:
 
