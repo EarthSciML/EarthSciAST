@@ -3121,6 +3121,7 @@ expression, once, at build time:
 | any other operator | its operands' |
 | comparison / logical operator (`== != < <= > >= and or not`) | its operands must agree with EACH OTHER; the 0/1 flag it returns is exact in every precision, so the operator is context-adopting to its parent |
 | equation | stores at its left-hand side's |
+| `cast` (`element_type` P) | P, whatever its operand's. The operand is evaluated at its own precision (one with none adopts P) and the value is rounded once to P: round-to-nearest-even narrowing, exact widening, the identity when they agree; elementwise over an array |
 
 The comparison rule is load-bearing, not a convenience: it is what makes
 `sum(quant[i] * (key[i] == k))` legal with `quant` binary32 and `key` binary64.
@@ -3133,8 +3134,27 @@ an error naming BOTH variables and both types (`mixed_element_type`). A binding
 MUST NOT resolve the mix by a usual-arithmetic-conversions rule: widening makes
 a quantity declared binary32 come out binary64 with nothing in the result to say
 so, and narrowing destroys the binary64 operand, which is the corruption the
-field exists to prevent. The author states the intent by computing the mixed
-step into a variable whose own `element_type` says which precision it lands in.
+field exists to prevent. The author states the intent with an explicit
+conversion, `{"op": "cast", "element_type": "Float32" | "Float64", "args": [x]}`
+(esm-spec §4.2, §11.3.1), the one construct that changes a value's precision.
+`y ~ cast(x, Float32)` with `y` binary32 and `x` binary64 is legal; `y ~ x` is
+still `mixed_element_type`, and so is `cast(x, Float32) + z` with `z` binary64.
+
+**`cast`, per binding.** Its `element_type` is required and MUST be
+`"Float64"` or `"Float32"`; a missing or other value is a schema violation,
+refused at load by all five bindings, which also carry the field through
+`load → emit` and give the node its operand's units. A binding that evaluates per-variable precision
+(today Rust) evaluates the operand at its own precision, rounds the value once,
+and treats the node as a precision leaf for inference: a document that declares
+no per-variable `element_type` but holds a `cast` is checked and annotated like
+one that does, since a `cast` to a precision other than the document's is a
+boundary. A binding that evaluates binary64 only (Julia, Python) evaluates
+`cast` to `"Float64"` as the identity and refuses a `cast` to `"Float32"` with
+`float32_unsupported` naming the node; it MUST NOT evaluate it as the identity,
+which would drop the rounding the document asked for. A binding with no
+evaluator (Go) and a scalar code generator (TypeScript) parse, validate and
+round-trip it; the TypeScript generator emits `Math.fround` for a `cast` to
+`"Float32"`. Gate: `tests/conformance/element_type_cast/` (README there).
 
 **Ingress is not enough.** A binding MUST NOT implement this field by exempting
 a variable only where its data enters. The first expression over the value undoes

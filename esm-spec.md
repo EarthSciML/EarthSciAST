@@ -917,6 +917,12 @@ by this spec.
 |---|---|---|
 | `const` | `value`, optional `units` | Inline literal value embedded in the expression tree. `value` is any JSON value (number, integer, or nested array of numbers/integers); `args` MUST be empty `[]`. The optional `units` (esm 1.2.0) declares the unit `value` is in, which gives the constant a dimension and exact scale in dimensional analysis (§4.8.5). Used to carry small inline tables that participate in `index` lookups, `interp.searchsorted` queries, and other AST positions where a JSON array is needed but a bare scalar number won't do. Large arrays belong in a `data_sources` entry. |
 
+#### Precision conversion
+
+| Op | Required extra fields | Meaning |
+|---|---|---|
+| `cast` | `element_type` | Convert the value of its one operand `args[0]` to the floating-point precision `element_type` names, `"Float64"` or `"Float32"`. The operand is evaluated at its own precision, the result is rounded to `element_type` (round-to-nearest-even when narrowing, exact when widening, the identity when the two agree) elementwise for an array, and the node's precision is `element_type`. Units pass through unchanged. The format's only conversion between precisions: an operator or an equation that mixes two still refuses (`mixed_element_type`). See Section 11.3.1. |
+
 #### Array / Tensor
 
 | Op | Required extra fields | Meaning |
@@ -6293,7 +6299,13 @@ Precision then propagates from the leaves of an expression, statically:
   `sum(quant[i] * (key[i] == k))` be legal with `quant` binary32 and `key`
   binary64: the predicate is evaluated in binary64 and hands the arithmetic a
   flag, not a key;
-* an **equation** stores at its left-hand side's precision.
+* an **equation** stores at its left-hand side's precision;
+* a **`cast`** node (§4.2) has the precision its `element_type` names, whatever
+  its operand's. The operand is evaluated at its OWN precision (an operand with
+  none of its own, such as a literal or an expression over loop symbols, adopts
+  the cast's), and the value is then rounded once to the cast's precision:
+  round-to-nearest-even when narrowing binary64 to binary32, exact when
+  widening, the identity when the two agree. An array is converted elementwise.
 
 An operator whose operands carry **different** declared element types, or an
 equation whose right-hand side disagrees with its left-hand side, MUST be an
@@ -6301,8 +6313,41 @@ error naming both variables (`mixed_element_type`). Neither resolution is
 available to a runtime: widening makes a quantity declared binary32 come out
 binary64 with nothing in the result to say so, and narrowing destroys the
 binary64 operand — which is the corruption the field exists to prevent. The
-author states the intent by computing the mixed step into a variable whose own
-`element_type` says which precision it lands in.
+author states the intent with a `cast`, which says at the site which way the
+value crosses and is the only construct that may. Accumulating in binary64 and
+continuing in binary32 is a binary64 variable and a conversion out of it:
+
+```json
+"variables": {
+  "pop64": { "type": "unknown", "element_type": "Float64", "shape": ["rows"] },
+  "pop":   { "type": "unknown", "shape": ["rows"] }
+},
+"equations": [
+  { "lhs": "pop64", "rhs": { "op": "faq", "...": "a sum over binary64 inputs" } },
+  { "lhs": "pop",   "rhs": { "op": "cast", "element_type": "Float32", "args": ["pop64"] } }
+]
+```
+
+under `"domain": {"element_type": "Float32"}`. Without the `cast` the second
+equation is `mixed_element_type`. A binary64 value that a reference
+implementation stores in a binary32 column and reads back is
+`cast(cast(x, Float32), Float64)` in a binary64 document — the inner `cast` is
+the rounding, the outer one says the result rejoins binary64 arithmetic. A
+`cast` is legal in a document that declares no per-variable `element_type`;
+the conversion is itself the declaration.
+
+The conversion is an operator rather than a relaxation of the equation rule
+because the refusal at an equation is what catches the accidental mix: a
+binary32 quantity defined from a binary64 key column (`qty ~ key * 2`) would
+otherwise be narrowed silently, which is the corruption this section exists to
+prevent. An operator also converts INSIDE an expression, where an equation
+cannot, so a rounding the reference applies mid-formula needs no auxiliary
+variable. Its `element_type` is required and is `"Float64"` or `"Float32"`; a
+missing or any other value is a schema violation, refused at load. A binding that does not evaluate binary32 at all
+evaluates `cast` to `"Float64"` as the identity (every value it holds is
+already binary64) and MUST refuse a `cast` to `"Float32"`
+(`float32_unsupported`, CONFORMANCE_SPEC §5.18.2) rather than skip the
+rounding.
 
 Exempting a variable only where its data ENTERS is not sufficient and MUST NOT
 be offered as an implementation of this field: the first expression over the
