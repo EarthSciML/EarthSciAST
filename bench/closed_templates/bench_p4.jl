@@ -1,6 +1,6 @@
 # Closed-AST phase-4 benchmarks, Julia native side.
 #
-# Times the documents generate_p4.py writes (and the phase-3 `nearest_*` pair):
+# Times the documents generate_p4.py writes (and generate.py's `nearest_*` pair):
 # one right-hand-side call of each spelling under `:native`, its build, and,
 # where the workload has one, a hand-written loop and an external library
 # (Base `searchsortedfirst`, Interpolations.jl, Dates, GeometryOps) computing
@@ -12,10 +12,14 @@
 # Usage (an environment with EarthSciAST, JSON3, GeometryOps, GeoInterface and
 # Interpolations):
 #
-#     julia --project=<env> bench/closed_templates/bench_p4.jl <family> [DIR] [filter]
+#     julia --project=<env> bench/closed_templates/bench_p4.jl <family> [DIR|-] [filter]
 #
 # Families: search, linear, bilinear, calendar, overlap, nearest, fastjx, size.
-# DIR defaults to bench/closed_templates/p4 (nearest: bench/closed_templates).
+# With no DIR (or `-`) the family's documents are generated at their default
+# sizes into $CLOSED_TEMPLATES_P4_DIR, else closed_templates_p4 under $TMPDIR
+# (nearest: generate.py into $CLOSED_TEMPLATES_DIR, else closed_templates under
+# $TMPDIR). A DIR given must already hold them (generate_p4.py --out DIR ...,
+# e.g. for larger sizes); otherwise the run stops with the command to write them.
 # Output: one tab-separated `ROW` line per measurement, for aggregating medians
 # over several processes. Environment: CALLS (calls per sample, default 200),
 # INTERP_CHECK (default 0), BUILDS (default 2: the reported setup, problem
@@ -27,8 +31,17 @@ import GeometryOps as GO, GeoInterface as GI, Interpolations
 
 const E = EarthSciAST
 const FAMILY = isempty(ARGS) ? "search" : ARGS[1]
-const DIR = length(ARGS) > 1 ? ARGS[2] :
-    (FAMILY == "nearest" ? (@__DIR__) : joinpath(@__DIR__, "p4"))
+include(joinpath(@__DIR__, "docs.jl"))
+const DIR = let given = length(ARGS) > 1 && ARGS[2] != "-" ? ARGS[2] : nothing
+    if FAMILY == "nearest"
+        bench_docs("generate.py", given, ["--only", "nearest"]; env = "CLOSED_TEMPLATES_DIR",
+                   name = "closed_templates", prefix = "nearest_")
+    else
+        prefix = FAMILY == "search" ? "search_" : FAMILY * "_"
+        bench_docs("generate_p4.py", given, ["--only", FAMILY]; env = "CLOSED_TEMPLATES_P4_DIR",
+                   name = "closed_templates_p4", prefix = prefix)
+    end
+end
 const FILTER = length(ARGS) > 2 ? ARGS[3] : ""
 const CALLS = parse(Int, get(ENV, "CALLS", "200"))
 const INTERP_CHECK = get(ENV, "INTERP_CHECK", "0") == "1"

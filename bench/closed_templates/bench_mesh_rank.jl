@@ -17,6 +17,9 @@
 #     python3 bench/closed_templates/generate.py --out DIR --only mesh --mesh 57 --mesh 182
 #     julia --project=<env> bench/closed_templates/bench_mesh_rank.jl DIR [name-filter…]
 #
+# With no DIR (or `-`), the default-size pair (208 edges) is generated into
+# $CLOSED_TEMPLATES_DIR, else closed_templates under $TMPDIR.
+#
 # Environment: REPS (default 3), CALLS (default 20), INTERP_CHECK (default 0).
 
 using EarthSciAST, Statistics, Printf, Serialization
@@ -71,8 +74,10 @@ if length(ARGS) >= 3 && ARGS[1] == "--one"
     exit(0)
 end
 
-const DIR = ARGS[1]
-const FILTERS = ARGS[2:end]
+include(joinpath(@__DIR__, "docs.jl"))
+const DIR = bench_docs("generate.py", isempty(ARGS) || ARGS[1] == "-" ? nothing : ARGS[1], ["--only", "mesh"];
+                       env = "CLOSED_TEMPLATES_DIR", name = "closed_templates", prefix = "mesh_rank_")
+const FILTERS = length(ARGS) > 1 ? ARGS[2:end] : String[]
 const REPS = parse(Int, get(ENV, "REPS", "3"))
 const INTERP_CHECK = get(ENV, "INTERP_CHECK", "0") == "1"
 const TMP = mktempdir(get(ENV, "TMPDIR", tempdir()))

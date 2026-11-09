@@ -1,7 +1,7 @@
 //! Closed-AST phase-4 benchmarks, Rust tape side.
 //!
-//! Times the documents `bench/closed_templates/generate_p4.py` writes (and the
-//! phase-3 `nearest_*` pair) under `Compiler::Native`: one right-hand-side
+//! Times the documents `bench/closed_templates/generate_p4.py` writes (and
+//! `generate.py`'s `nearest_*` pair) under `Compiler::Native`: one right-hand-side
 //! call of each spelling, its build, and, where the workload has one, a
 //! hand-written loop and an external library computing the same derivative
 //! from the document's sidecar data. Every spelling's derivative is checked
@@ -10,12 +10,17 @@
 //! per-cell oracle's.
 //!
 //! ```text
-//! RUSTFLAGS="-C llvm-args=-align-loops=64" cargo run --release -- <family> [DIR] [filter]
+//! RUSTFLAGS="-C llvm-args=-align-loops=64" cargo run --release -- <family> [DIR]
 //! ```
 //!
 //! Families: `search`, `linear`, `bilinear`, `calendar`, `overlap`, `nearest`,
-//! `fastjx`, `size`, `all`. DIR defaults to `bench/closed_templates/p4`
-//! (`nearest` reads `bench/closed_templates`). Environment: `ORACLE=0` skips
+//! `fastjx`, `size`, `all`. No document is committed: with no DIR (or `-`),
+//! each family's documents are generated at their default sizes into
+//! `$CLOSED_TEMPLATES_P4_DIR`, else `closed_templates_p4` under `$TMPDIR`
+//! (`nearest`: `generate.py` into `$CLOSED_TEMPLATES_DIR`, else
+//! `closed_templates`). A DIR given must already hold them (`generate_p4.py
+//! --out DIR ...`, e.g. for larger sizes); otherwise the run stops with the
+//! command that writes them. Environment: `ORACLE=0` skips
 //! the per-cell oracle check, `SAMPLE_MS` (default 30) sets the length of one
 //! timing sample, `BUILDS` (default 3) the builds per document.
 
@@ -24,8 +29,8 @@ use std::hint::black_box;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use earthsci_ast::simulate_array::{RhsScratch, RhsStats};
 use earthsci_ast::simulate_array::tape::CompilerRewrites;
+use earthsci_ast::simulate_array::{RhsScratch, RhsStats};
 use earthsci_ast::{Compiler, EsmProblem, ProblemOptions, Rhs};
 use serde_json::Value;
 
@@ -209,8 +214,10 @@ fn build_median(path: &Path, count_fold: bool) -> Model {
 }
 
 fn load_json(path: &Path) -> Value {
-    serde_json::from_str(&std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display())))
-        .unwrap()
+    serde_json::from_str(
+        &std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display())),
+    )
+    .unwrap()
 }
 
 fn f64s(v: &Value) -> Vec<f64> {
@@ -259,10 +266,23 @@ fn header(cols: &[&str]) {
 // ---------------------------------------------------------------------------
 
 fn search(dir: &Path) {
-    println!("# searchsorted: ns per right-hand-side call ({} queries); per query = /512", 512);
+    println!(
+        "# searchsorted: ns per right-hand-side call ({} queries); per query = /512",
+        512
+    );
     header(&[
-        "K", "fn", "tpl_binary", "tpl_linear(shuffled)", "tpl_fold(count off)", "hand_linear",
-        "hand_binary", "partition_point", "tpl/fn", "tpl_lin/tpl_bin", "bits", "oracle",
+        "K",
+        "fn",
+        "tpl_binary",
+        "tpl_linear(shuffled)",
+        "tpl_fold(count off)",
+        "hand_linear",
+        "hand_binary",
+        "partition_point",
+        "tpl/fn",
+        "tpl_lin/tpl_bin",
+        "bits",
+        "oracle",
     ]);
     for size in sizes(dir, "search_fn_") {
         let p = |sp: &str| dir.join(format!("search_{sp}_{size}.esm"));
@@ -374,7 +394,15 @@ fn hand_bilinear(t: &[Vec<f64>], ax: &[f64], ay: &[f64], x: f64, y: f64) -> f64 
 
 fn interp(dir: &Path, family: &str) {
     println!("# {family}: ns per right-hand-side call (512 queries)");
-    header(&["K", "fn", "tpl", "hand", "tpl/fn", "bits(tpl,hand vs fn)", "oracle"]);
+    header(&[
+        "K",
+        "fn",
+        "tpl",
+        "hand",
+        "tpl/fn",
+        "bits(tpl,hand vs fn)",
+        "oracle",
+    ]);
     for size in sizes(dir, &format!("{family}_fn_")) {
         let p = |sp: &str| dir.join(format!("{family}_{sp}_{size}.esm"));
         let data = load_json(&dir.join(format!("{family}_{size}.data.json")));
@@ -393,7 +421,11 @@ fn interp(dir: &Path, family: &str) {
                 }
             })
         } else {
-            let (ax, ay, d) = (f64s(&data["axis_x"]), f64s(&data["axis_y"]), f64s(&data["d"]));
+            let (ax, ay, d) = (
+                f64s(&data["axis_x"]),
+                f64s(&data["axis_y"]),
+                f64s(&data["d"]),
+            );
             let table: Vec<Vec<f64>> = data["table"].as_array().unwrap().iter().map(f64s).collect();
             Box::new(move |t, dy| {
                 for (s, &q) in idx.iter().enumerate() {
@@ -412,7 +444,10 @@ fn interp(dir: &Path, family: &str) {
             hand(t_of(k), &mut dy);
             black_box(&dy);
         });
-        println!("{size}\t{a:.0}\t{b:.0}\t{h:.0}\t{:.2}\t{ok}\t{oracle}", b / a);
+        println!(
+            "{size}\t{a:.0}\t{b:.0}\t{h:.0}\t{:.2}\t{ok}\t{oracle}",
+            b / a
+        );
     }
 }
 
@@ -437,7 +472,11 @@ fn hand_calendar(t: f64) -> f64 {
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + 400 * era + i64::from(month <= 2);
     let leap = i64::from(year % 4 == 0 && (year % 100 != 0 || year % 400 == 0));
-    let day_of_year = if doy >= 306 { doy - 305 } else { doy + 60 + leap };
+    let day_of_year = if doy >= 306 {
+        doy - 305
+    } else {
+        doy + 60 + leap
+    };
     let jd = (d as f64 + 2440588.0) + (((s as f64) - 43200.0) + (t - ft)) / 86400.0;
     (year as f64)
         + month as f64
@@ -453,7 +492,8 @@ fn hand_calendar(t: f64) -> f64 {
 fn chrono_calendar(t: f64) -> f64 {
     use chrono::{Datelike, Timelike};
     let ft = t.floor();
-    let dt = chrono::DateTime::from_timestamp(ft as i64, ((t - ft) * 1.0e9) as u32).expect("in range");
+    let dt =
+        chrono::DateTime::from_timestamp(ft as i64, ((t - ft) * 1.0e9) as u32).expect("in range");
     let d = (dt.num_days_from_ce() - 719163) as f64;
     let s = dt.num_seconds_from_midnight() as f64;
     let jd = (d + 2440588.0) + ((s - 43200.0) + (t - ft)) / 86400.0;
@@ -473,7 +513,16 @@ fn chrono_calendar(t: f64) -> f64 {
 
 fn calendar(dir: &Path) {
     println!("# calendar: ns per right-hand-side call (nine fields per timestamp)");
-    header(&["H", "fn", "tpl", "hand", "chrono", "tpl/fn", "bits(tpl,hand,chrono vs fn)", "oracle"]);
+    header(&[
+        "H",
+        "fn",
+        "tpl",
+        "hand",
+        "chrono",
+        "tpl/fn",
+        "bits(tpl,hand,chrono vs fn)",
+        "oracle",
+    ]);
     for size in sizes(dir, "calendar_fn_") {
         let p = |sp: &str| dir.join(format!("calendar_{sp}_{size}.esm"));
         let data = load_json(&dir.join(format!("calendar_{size}.data.json")));
@@ -498,7 +547,10 @@ fn calendar(dir: &Path) {
         let oracle = oracle_check(&p("tpl"), &mut tp);
         let (a, b) = (time_model(&mut f), time_model(&mut tp));
         let mut hs = [0.0; 2];
-        for (i, g) in [hand_calendar as fn(f64) -> f64, chrono_calendar].into_iter().enumerate() {
+        for (i, g) in [hand_calendar as fn(f64) -> f64, chrono_calendar]
+            .into_iter()
+            .enumerate()
+        {
             hs[i] = time_ns(|k| {
                 run(t_of(k), &mut dy, g);
                 black_box(&dy);
@@ -543,10 +595,23 @@ fn rings(v: &Value) -> Vec<Vec<(f64, f64)>> {
 }
 
 fn overlap(dir: &Path) {
-    println!("# overlap: setup (build + first call) seconds, median of BUILDS; per-call ns; areas = the derivative");
+    println!(
+        "# overlap: setup (build + first call) seconds, median of BUILDS; per-call ns; areas = the derivative"
+    );
     header(&[
-        "manifold", "N", "pairs", "leaf_setup_s", "tpl_setup_s", "tpl/leaf setup", "leaf_call_ns",
-        "tpl_call_ns", "s2rst_per_pair_ns", "max|tpl-leaf|", "max|s2rst-leaf|", "max|s2rst-tpl|", "oracle",
+        "manifold",
+        "N",
+        "pairs",
+        "leaf_setup_s",
+        "tpl_setup_s",
+        "tpl/leaf setup",
+        "leaf_call_ns",
+        "tpl_call_ns",
+        "s2rst_per_pair_ns",
+        "max|tpl-leaf|",
+        "max|s2rst-leaf|",
+        "max|s2rst-tpl|",
+        "oracle",
     ]);
     for size in sizes(dir, "overlap_planar_leaf_") {
         let data = load_json(&dir.join(format!("overlap_{size}.data.json")));
@@ -602,8 +667,11 @@ fn overlap(dir: &Path) {
                     ra[q],
                     rb[q]
                 );
-                let bad: Vec<usize> = (0..al.len()).filter(|&i| (al[i] - at[i]).abs() > 1.0e-9).collect();
-                let ids: Vec<(usize, f64, f64)> = bad.iter().map(|&i| (idx[i] + 1, al[i], at[i])).collect();
+                let bad: Vec<usize> = (0..al.len())
+                    .filter(|&i| (al[i] - at[i]).abs() > 1.0e-9)
+                    .collect();
+                let ids: Vec<(usize, f64, f64)> =
+                    bad.iter().map(|&i| (idx[i] + 1, al[i], at[i])).collect();
                 eprintln!("  {} pairs differ by more than 1e-9: {ids:?}", bad.len());
             }
             println!(
@@ -633,8 +701,16 @@ fn const_eq(doc: &Value, var: &str) -> Vec<f64> {
 fn nearest(dir: &Path) {
     println!("# nearest-generator argmin: ns per right-hand-side call");
     header(&[
-        "size", "op_call_ns", "tpl_call_ns", "hand_call_ns", "tpl/op", "op_setup_s", "tpl_setup_s",
-        "hand_setup_s", "bits(tpl,hand vs op)", "oracle",
+        "size",
+        "op_call_ns",
+        "tpl_call_ns",
+        "hand_call_ns",
+        "tpl/op",
+        "op_setup_s",
+        "tpl_setup_s",
+        "hand_setup_s",
+        "bits(tpl,hand vs op)",
+        "oracle",
     ]);
     for size in sizes(dir, "nearest_op_") {
         let p = |sp: &str| dir.join(format!("nearest_{sp}_{size}.esm"));
@@ -706,8 +782,18 @@ fn nearest(dir: &Path) {
 // ---------------------------------------------------------------------------
 
 fn fastjx(dir: &Path) {
-    println!("# fastjx: real FastJX cross-section tables over a grid; ns per right-hand-side call");
-    header(&["cells", "lookups/cell", "fn", "tpl", "tpl/fn", "fn_setup_s", "tpl_setup_s", "bits", "oracle"]);
+    println!("# fastjx: Fast-JX-shaped lookups over a grid; ns per right-hand-side call");
+    header(&[
+        "cells",
+        "lookups/cell",
+        "fn",
+        "tpl",
+        "tpl/fn",
+        "fn_setup_s",
+        "tpl_setup_s",
+        "bits",
+        "oracle",
+    ]);
     for size in sizes(dir, "fastjx_fn_") {
         let p = |sp: &str| dir.join(format!("fastjx_{sp}_{size}.esm"));
         let data = load_json(&dir.join(format!("fastjx_{size}.data.json")));
@@ -733,7 +819,13 @@ fn fastjx(dir: &Path) {
 fn size(dir: &Path) {
     println!("# setup (esm_problem + tape + first call) against site count; median of BUILDS");
     header(&[
-        "family", "sites", "closed_setup_s", "tpl_setup_s", "tpl/closed", "closed_call_ns", "tpl_call_ns",
+        "family",
+        "sites",
+        "closed_setup_s",
+        "tpl_setup_s",
+        "tpl/closed",
+        "closed_call_ns",
+        "tpl_call_ns",
         "max|tpl-closed|",
     ]);
     for (fam, closed) in [
@@ -760,14 +852,71 @@ fn size(dir: &Path) {
     }
 }
 
+/// The directory holding `prefix*` documents: `given` as is (stopping with the
+/// generate command when it holds none), or, with none given, `generator` run
+/// with `args` into `$env`, else `<temp dir>/<name>`.
+fn docs_dir(
+    given: Option<&str>,
+    generator: &str,
+    args: &[&str],
+    env: &str,
+    name: &str,
+    prefix: &str,
+) -> PathBuf {
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../closed_templates")
+        .join(generator);
+    let command = |dir: &Path| {
+        format!(
+            "python3 {} --out {} {}",
+            script.display(),
+            dir.display(),
+            args.join(" ")
+        )
+    };
+    if let Some(d) = given {
+        let dir = PathBuf::from(d);
+        let has = std::fs::read_dir(&dir).is_ok_and(|rd| {
+            rd.filter_map(|e| e.ok()?.file_name().into_string().ok())
+                .any(|n| n.starts_with(prefix))
+        });
+        if !has {
+            eprintln!(
+                "no {prefix}* documents in {}; write them with:\n    {}",
+                dir.display(),
+                command(&dir)
+            );
+            std::process::exit(2);
+        }
+        return dir;
+    }
+    let dir = std::env::var(env).map_or_else(|_| std::env::temp_dir().join(name), PathBuf::from);
+    let status = std::process::Command::new("python3")
+        .arg(&script)
+        .arg("--out")
+        .arg(&dir)
+        .args(args)
+        .status()
+        .unwrap_or_else(|e| panic!("running {}: {e}", command(&dir)));
+    assert!(status.success(), "{} failed", command(&dir));
+    dir
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let family = args.get(1).map(String::as_str).unwrap_or("all");
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-    let dir = args
-        .get(2)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root.join("closed_templates/p4"));
+    let given = args.get(2).map(String::as_str).filter(|d| *d != "-");
+    let p4 = |fam: &str| {
+        let prefix = format!("{fam}_");
+        docs_dir(
+            given,
+            "generate_p4.py",
+            &["--only", fam],
+            "CLOSED_TEMPLATES_P4_DIR",
+            "closed_templates_p4",
+            &prefix,
+        )
+    };
     let mut done: HashMap<&str, bool> = HashMap::new();
     let all = family == "all";
     let mut run = |name: &'static str, f: &dyn Fn()| {
@@ -776,17 +925,24 @@ fn main() {
             done.insert(name, true);
         }
     };
-    run("search", &|| search(&dir));
-    run("linear", &|| interp(&dir, "linear"));
-    run("bilinear", &|| interp(&dir, "bilinear"));
-    run("calendar", &|| calendar(&dir));
-    run("overlap", &|| overlap(&dir));
+    run("search", &|| search(&p4("search")));
+    run("linear", &|| interp(&p4("linear"), "linear"));
+    run("bilinear", &|| interp(&p4("bilinear"), "bilinear"));
+    run("calendar", &|| calendar(&p4("calendar")));
+    run("overlap", &|| overlap(&p4("overlap")));
     run("nearest", &|| {
-        let d = args.get(2).map(PathBuf::from).unwrap_or_else(|| root.join("closed_templates"));
+        let d = docs_dir(
+            given,
+            "generate.py",
+            &["--only", "nearest"],
+            "CLOSED_TEMPLATES_DIR",
+            "closed_templates",
+            "nearest_",
+        );
         nearest(&d)
     });
-    run("fastjx", &|| fastjx(&dir));
-    run("size", &|| size(&dir));
+    run("fastjx", &|| fastjx(&p4("fastjx")));
+    run("size", &|| size(&p4("size")));
     if done.is_empty() {
         eprintln!("unknown family {family}");
         std::process::exit(2);

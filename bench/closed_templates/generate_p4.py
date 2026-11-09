@@ -28,13 +28,14 @@ nothing is a build constant.
   1-degree grid and the 2/3-degree grid over it (the regrid workload's pairs),
   ``D(s[p]) = area[p]``, so the derivative is the area list. ``leaf``:
   `polygon_intersection_area`; ``tpl``: the `lib/geometry.esm` template.
-* ``fastjx_<sp>_C<c>``: EarthSciModels' `components/gaschem/fastjx/fastjx.esm`
-  (its real cross-section tables: 180 `interp.linear` lookups in temperature)
-  over a grid of c cells, each with its own temperature
-  ``T[c] = (Tc[c] + 0.001 t) + z[c]``; every quantity depending on `T` becomes
-  an array over the cells, and ``D(z[c])`` is the sum of the model's terminal
-  outputs minus ``z[c]``. ``fn``: `fn interp.linear`; ``tpl``: the template.
-  The documents are committed, so EarthSciModels is needed only to regenerate.
+* ``fastjx_<sp>_C<c>``: a workload shaped like Fast-JX photolysis over a grid
+  of c cells, each with its own temperature ``T[c] = (Tc[c] + 0.001 t) + z[c]``:
+  180 `interp.linear` cross-section lookups per cell on 2- and 3-entry
+  temperature axes (126 and 54, as in Fast-JX), each weighted by its
+  wavelength bin's flux, summed into 12 outputs, and ``D(z[c])`` the sum of the
+  outputs minus ``z[c]``. The tables are synthetic, of Fast-JX's magnitudes
+  (1e-21 to 1e-17, some all zero). ``fn``: `fn interp.linear`; ``tpl``: the
+  template.
 * ``size_<family>_<sp>_S<s>``: s independent scalar sites of one template
   family (or its closed form), for build time against expression size.
 
@@ -43,11 +44,15 @@ without its spelling and manifold) holding the inputs (axes,
 tables, query offsets, rings) for the hand-written and external comparisons
 in `bench_p4.jl` and `bench/closed_templates_rs`.
 
+Nothing here is committed: the harnesses call this script, writing into
+``--out`` (default ``$CLOSED_TEMPLATES_P4_DIR``, else ``closed_templates_p4``
+under ``$TMPDIR``).
+
 Usage:
 
-    python3 bench/closed_templates/generate_p4.py              # rewrite the committed documents (p4/)
-    python3 bench/closed_templates/generate_p4.py --check      # committed documents are current
-    python3 bench/closed_templates/generate_p4.py --out DIR --search 4096 --fastjx-cells 4096 ...
+    python3 bench/closed_templates/generate_p4.py                        # every family, default sizes
+    python3 bench/closed_templates/generate_p4.py --only search --out DIR
+    python3 bench/closed_templates/generate_p4.py --out DIR --overlap 12 --overlap 24 --fastjx-cells 1024
 """
 
 import argparse
@@ -56,22 +61,19 @@ import math
 import os
 import random
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.normpath(os.path.join(HERE, "..", ".."))
 ESM_VERSION = "1.2.0"
 T0 = 1767225600.0  # 2026-01-01T00:00:00Z
 QUERIES = 512
-# EarthSciModels checked out beside this repository (or beside the worktree's parent).
-FASTJX = next((p for p in (os.path.normpath(os.path.join(REPO, *up, "EarthSciModels", "components", "gaschem", "fastjx",
-                                                                  "fastjx.esm")) for up in (("..",), ("..", "..")))
-               if os.path.exists(p)), "")
 
-COMMITTED = {
+DEFAULTS = {
     "search": [2, 4, 8, 16, 32, 64, 128, 1024],
     "linear": [8, 64, 1024],
     "bilinear": [(8, 8), (61, 23), (64, 64)],
-    "hours": [8760],
+    "calendar": [8760],
     "overlap": [6],
     "fastjx": [256],
     "size": [1, 8, 64],
@@ -340,95 +342,66 @@ def overlap_doc(manifold, sp, n):
 
 
 # ---------------------------------------------------------------------------
-# FastJX over a grid.
+# FastJX-shaped grid.
 # ---------------------------------------------------------------------------
 
-
-def refs(e, out):
-    if isinstance(e, str):
-        out.add(e)
-    elif isinstance(e, list):
-        for x in e:
-            refs(x, out)
-    elif isinstance(e, dict):
-        for k, x in e.items():
-            if k in ("args", "expr", "bindings") or isinstance(x, (dict, list)):
-                refs(x, out)
+FASTJX_OUTPUTS = 12
+FASTJX_BINS = 15  # lookups per output: 12 x 15 = 180 per cell
+FASTJX_THREE = 54  # lookups on a 3-entry temperature axis; the other 126 on 2 entries
 
 
-def strip_units(e):
-    if isinstance(e, dict):
-        return {k: strip_units(v) for k, v in e.items() if k != "units"}
-    if isinstance(e, list):
-        return [strip_units(v) for v in e]
-    return e
+def fastjx_tables():
+    """180 (table, axis) pairs shaped like Fast-JX's cross sections: 2- and
+    3-entry temperature axes, cross sections of 1e-21 to 1e-17 with some
+    zero tables, one flux per wavelength bin."""
+    rng = random.Random(4242)
+    three = set(rng.sample(range(FASTJX_OUTPUTS * FASTJX_BINS), FASTJX_THREE))
+    flux = [lattice(rng, 1.0, 10.0, 1.0 / 64) * 10.0 ** rng.randint(11, 14) for _ in range(FASTJX_BINS)]
+    looks = []
+    for l in range(FASTJX_OUTPUTS * FASTJX_BINS):
+        axis = [200.0, 250.0, 300.0] if l in three else [235.0, 298.0]
+        if rng.random() < 0.1:
+            tab = [0.0] * len(axis)
+        else:
+            mag = 10.0 ** rng.randint(-21, -18)
+            tab = [lattice(rng, 1.0, 10.0, 1.0 / 256) * mag for _ in axis]
+        looks.append((tab, axis))
+    return flux, looks
 
 
-def per_cell(e, arrayed, sp):
-    if isinstance(e, str):
-        return ix(e, "c") if e in arrayed else e
-    if isinstance(e, list):
-        return [per_cell(x, arrayed, sp) for x in e]
-    if not isinstance(e, dict):
-        return e
-    if e.get("op") == "const":
-        return e
-    if e.get("op") == "fn" and e["name"] == "interp.linear" and sp == "tpl":
-        tab, axis, x = e["args"]
-        return apply("linear", table=tab, axis=axis, x=per_cell(x, arrayed, sp), n=len(axis["value"]))
-    return {k: (per_cell(v, arrayed, sp) if k == "args" else v) for k, v in e.items()}
-
-
-def fastjx_doc(sp, ncells, source):
-    src = strip_units(json.load(open(source)))
-    m = src["models"]["FastJX"]
-    eqs = {e["lhs"]: e["rhs"] for e in m["equations"]}
-    deps = {}
-    for k, rhs in eqs.items():
-        s = set()
-        refs(rhs, s)
-        deps[k] = s & set(m["variables"])
-    arrayed = {"T"}
-    changed = True
-    while changed:
-        changed = False
-        for k, s in deps.items():
-            if k not in arrayed and s & arrayed:
-                arrayed.add(k)
-                changed = True
-    used = set().union(*deps.values())
-    terminal = [k for k in eqs if k not in used]
+def fastjx_doc(sp, ncells):
+    flux, looks = fastjx_tables()
     rng = random.Random(1234)
     tc = [lattice(rng, 180.0, 320.0, 1.0 / 64) for _ in range(ncells)]
-    v = {}
-    for k, var in m["variables"].items():
-        if k == "T":
-            continue
-        if var["type"] == "parameter":
-            v[k] = {"type": "parameter", "default": var["default"]}
-        else:
-            v[k] = unknown(["cells"]) if k in arrayed else unknown()
-    v.update({"T": unknown(["cells"]), "Tc": unknown(["cells"]), "z": unknown(["cells"], 0.0),
-              "jsum": unknown(["cells"])})
-    out = [{"lhs": "Tc", "rhs": const(tc)},
+    T = ix("T", "c")
+    v = {"T": unknown(["cells"]), "Tc": unknown(["cells"]), "z": unknown(["cells"], 0.0), "jsum": unknown(["cells"])}
+    eqs = [{"lhs": "Tc", "rhs": const(tc)},
            {"lhs": "T", "rhs": over(op("+", op("+", ix("Tc", "c"), op("*", 0.001, "t")), ix("z", "c")), "c", "cells")}]
-    for e in m["equations"]:
-        rhs = per_cell(e["rhs"], arrayed, sp)
-        out.append({"lhs": e["lhs"], "rhs": over(rhs, "c", "cells") if e["lhs"] in arrayed else rhs})
-    total = per_cell(terminal[0], arrayed, sp)
-    for k in terminal[1:]:
-        total = op("+", total, per_cell(k, arrayed, sp))
-    out.append({"lhs": "jsum", "rhs": over(total, "c", "cells")})
-    out.append(relax("z", "jsum", "c", "cells"))
-    model = {"variables": v, "equations": out}
+    outs = []
+    for k in range(FASTJX_OUTPUTS):
+        terms = []
+        for w in range(FASTJX_BINS):
+            tab, axis = looks[k * FASTJX_BINS + w]
+            look = (op("fn", const(tab), const(axis), T, name="interp.linear") if sp == "fn"
+                    else apply("linear", table=const(tab), axis=const(axis), x=T, n=len(axis)))
+            terms.append(op("*", flux[w], look))
+        j = f"j{k + 1}"
+        v[j] = unknown(["cells"])
+        eqs.append({"lhs": j, "rhs": over(op("+", *terms), "c", "cells")})
+        outs.append(ix(j, "c"))
+    eqs.append({"lhs": "jsum", "rhs": over(op("+", *outs), "c", "cells")})
+    eqs.append(relax("z", "jsum", "c", "cells"))
+    model = {"variables": v, "equations": eqs}
     if sp == "tpl":
         model["expression_template_imports"] = std_imports([("interp", ["linear"])])
-    nlook = sum(json.dumps(e["rhs"]).count('"interp.linear"') for e in m["equations"])
+    n = len(looks)
     what = "fn interp.linear" if sp == "fn" else "the linear template"
     return doc(f"fastjx_{sp}_C{ncells}",
-               f"EarthSciModels fastjx.esm (its {nlook} interp.linear cross-section lookups in temperature) over "
-               f"{ncells} cells of differing temperature, {len(terminal)} terminal outputs summed per cell, lookups by "
-               f"{what}.", {"cells": ncells}, model), {"Tc": tc, "lookups": nlook, "terminal": terminal}
+               f"A Fast-JX-shaped workload over {ncells} cells of differing temperature: {n} interp.linear "
+               f"cross-section lookups per cell ({FASTJX_THREE} on 3-entry and {n - FASTJX_THREE} on 2-entry "
+               f"temperature axes), weighted by a flux per wavelength bin into {FASTJX_OUTPUTS} outputs that are "
+               f"summed, lookups by {what}.", {"cells": ncells}, model), {"Tc": tc, "lookups": n,
+                                                                         "outputs": FASTJX_OUTPUTS}
 
 
 # ---------------------------------------------------------------------------
@@ -528,6 +501,11 @@ def size_doc(family, sp, s):
 CLOSED = {"searchsorted": "fn", "linear": "fn", "bilinear": "fn", "calendar": "fn", "argmin": "op", "overlap_planar": "leaf"}
 
 
+# Family name (as `--only` and the harnesses spell it) -> its size option.
+FAMILIES = {"search": "search", "linear": "linear", "bilinear": "bilinear", "calendar": "hours",
+            "overlap": "overlap", "fastjx": "fastjx_cells", "size": "size"}
+
+
 def documents(a):
     docs = {}
     for k in a.search:
@@ -546,12 +524,9 @@ def documents(a):
         for mf in ("planar", "spherical"):
             for sp in ("leaf", "tpl"):
                 docs[f"overlap_{mf}_{sp}_N{n}"] = overlap_doc(mf, sp, n)
-    if a.fastjx_cells and os.path.exists(a.fastjx):
-        for c in a.fastjx_cells:
-            for sp in ("fn", "tpl"):
-                docs[f"fastjx_{sp}_C{c}"] = fastjx_doc(sp, c, a.fastjx)
-    elif a.fastjx_cells:
-        print(f"skipping fastjx: {a.fastjx} not found", file=sys.stderr)
+    for c in a.fastjx_cells:
+        for sp in ("fn", "tpl"):
+            docs[f"fastjx_{sp}_C{c}"] = fastjx_doc(sp, c)
     for fam in SIZE_FAMILIES:
         for s in a.size:
             for sp in (CLOSED[fam], "tpl"):
@@ -570,11 +545,17 @@ def dumps(d):
     return json.dumps(d, indent=1) + "\n"
 
 
+def default_out():
+    """Where the harnesses look when given no directory: `$CLOSED_TEMPLATES_P4_DIR`,
+    else `closed_templates_p4` under the temporary directory (`$TMPDIR`)."""
+    return os.environ.get("CLOSED_TEMPLATES_P4_DIR") or os.path.join(tempfile.gettempdir(), "closed_templates_p4")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--check", action="store_true", help="exit 1 if a committed document is stale")
-    ap.add_argument("--out", default=os.path.join(HERE, "p4"))
-    ap.add_argument("--fastjx", default=FASTJX, help="path to EarthSciModels' fastjx.esm")
+    ap.add_argument("--out", default=None, help="output directory (default: %(prog)s's default_out())")
+    ap.add_argument("--only", choices=sorted(FAMILIES), action="append",
+                    help="write only these families, at their default sizes unless a size flag is given")
     ap.add_argument("--search", type=int, action="append")
     ap.add_argument("--linear", type=int, action="append")
     ap.add_argument("--bilinear", type=lambda s: tuple(int(x) for x in s.split("x")), action="append")
@@ -583,14 +564,13 @@ def main(argv=None):
     ap.add_argument("--fastjx-cells", type=int, action="append")
     ap.add_argument("--size", type=int, action="append")
     a = ap.parse_args(argv)
-    explicit = any(getattr(a, k.replace("-", "_")) for k in ("search", "linear", "bilinear", "hours", "overlap", "fastjx_cells", "size"))
-    for k, v in COMMITTED.items():
-        attr = "fastjx_cells" if k == "fastjx" else k
+    explicit = any(getattr(a, k) for k in FAMILIES.values())
+    for fam, attr in FAMILIES.items():
         if getattr(a, attr) is None:
-            setattr(a, attr, [] if explicit else v)
-    out = os.path.abspath(a.out)
+            wanted = (fam in a.only) if a.only else not explicit
+            setattr(a, attr, DEFAULTS[fam] if wanted else [])
+    out = os.path.abspath(a.out or default_out())
     os.makedirs(out, exist_ok=True)
-    stale = []
     docs = documents(a)
     written = set()
     for name, (d, data) in docs.items():
@@ -600,18 +580,9 @@ def main(argv=None):
             written.add(stem)
             files.append((stem + ".data.json", json.dumps(data) + "\n"))
         for fname, text in files:
-            path = os.path.join(out, fname)
-            if a.check:
-                if not os.path.exists(path) or open(path).read() != text:
-                    stale.append(fname)
-            else:
-                with open(path, "w") as fh:
-                    fh.write(text)
-    if stale:
-        print("stale: " + ", ".join(stale), file=sys.stderr)
-        return 1
-    if not a.check:
-        print(f"wrote {len(docs)} documents to {out}")
+            with open(os.path.join(out, fname), "w") as fh:
+                fh.write(text)
+    print(f"wrote {len(docs)} documents to {out}")
     return 0
 
 

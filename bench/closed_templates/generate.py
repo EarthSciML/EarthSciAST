@@ -35,16 +35,19 @@ same, so a timing difference is the template's.
   an MPAS mesh file supplies); `tpl`: an `edge_key` key, the loop index, and
   the face edge ids computed by `rank_of_set` over the derived set.
 
+Nothing here is committed: the harnesses call this script, writing into
+``--out`` (default ``$CLOSED_TEMPLATES_DIR``, else ``closed_templates`` under
+``$TMPDIR``).
+
 Usage:
 
-    python3 bench/closed_templates/generate.py              # rewrite the committed documents
-    python3 bench/closed_templates/generate.py --check      # committed documents are current
-    python3 bench/closed_templates/generate.py --out DIR --lib LIBDIR [--hours H] [--n N] ...
+    python3 bench/closed_templates/generate.py                         # every family, default sizes
+    python3 bench/closed_templates/generate.py --out DIR --only nearest
     python3 bench/closed_templates/generate.py --out DIR --only mesh --mesh 57 --mesh 182 --mesh 577   # ~1e4, 1e5, 1e6 edges
 
-`--lib` points the template imports at another directory holding
-`calendar.esm`, `geometry.esm` and `relational.esm` (default: the repository's
-`lib/`). Timing: `bench_julia.jl` (Julia native) and the Rust criterion group
+Template imports are `esm:std/<file>` refs to the bundled standard library;
+`--lib` points them instead at another directory holding `calendar.esm`,
+`geometry.esm` and `relational.esm`. Timing: `bench_julia.jl` (Julia native) and the Rust criterion group
 `closed_templates` in `pkg/earthsci-ast-rs/benches/benchmarks.rs`.
 """
 
@@ -54,13 +57,14 @@ import json
 import math
 import os
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.normpath(os.path.join(HERE, "..", ".."))
 ESM_VERSION = "1.2.0"
 T0 = 1767225600.0  # 2026-01-01T00:00:00Z
 
-COMMITTED = {
+DEFAULTS = {
     "hours": [8760],
     "n": [12],
     "nearest": [(500, 100)],
@@ -101,6 +105,10 @@ def faq_lhs(var, out, ranges):
 
 
 def imports(lib, out_dir, names):
+    """Template imports: the bundled standard library (`esm:std/<file>`), or,
+    with `--lib`, a relative path to that directory's copy."""
+    if lib is None:
+        return [{"ref": f"esm:std/{f}", "only": n} for f, n in names]
     return [{"ref": os.path.relpath(os.path.join(lib, f), out_dir), "only": n} for f, n in names]
 
 
@@ -506,11 +514,16 @@ def dumps(d):
     return json.dumps(d, indent=1) + "\n"
 
 
+def default_out():
+    """Where the harnesses look when given no directory: `$CLOSED_TEMPLATES_DIR`,
+    else `closed_templates` under the temporary directory (`$TMPDIR`)."""
+    return os.environ.get("CLOSED_TEMPLATES_DIR") or os.path.join(tempfile.gettempdir(), "closed_templates")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--check", action="store_true", help="exit 1 if a committed document is stale")
-    ap.add_argument("--out", default=HERE)
-    ap.add_argument("--lib", default=os.path.join(REPO, "lib"))
+    ap.add_argument("--out", default=None, help="output directory (default: default_out())")
+    ap.add_argument("--lib", default=None, help="a lib/ directory to import from instead of esm:std/")
     ap.add_argument("--hours", type=int, action="append")
     ap.add_argument("--n", type=int, action="append")
     ap.add_argument("--nearest", type=lambda s: tuple(int(x) for x in s.split("x")), action="append",
@@ -519,32 +532,21 @@ def main(argv=None):
     ap.add_argument("--scaling", type=int, action="append", help="a scaling-family regrid size (100, 1000)")
     ap.add_argument("--mesh", type=int, action="append",
                     help="a mesh_rank grid side n (3n^2 + 2n edges: 57, 182, 577 give ~1e4, 1e5, 1e6)")
-    ap.add_argument("--only", choices=("solar", "regrid", "nearest", "mesh"),
-                    help="write only this family (with --out, e.g. a large mesh_rank pair)")
+    ap.add_argument("--only", choices=("solar", "regrid", "nearest", "mesh"), action="append",
+                    help="write only these families (repeatable)")
     a = ap.parse_args(argv)
-    out = os.path.abspath(a.out)
+    out = os.path.abspath(a.out or default_out())
     os.makedirs(out, exist_ok=True)
-    fams = {"solar": a.hours or COMMITTED["hours"], "regrid": a.n or COMMITTED["n"],
-            "nearest": a.nearest or COMMITTED["nearest"], "mesh": a.mesh or COMMITTED["mesh"]}
+    fams = {"solar": a.hours or DEFAULTS["hours"], "regrid": a.n or DEFAULTS["n"],
+            "nearest": a.nearest or DEFAULTS["nearest"], "mesh": a.mesh or DEFAULTS["mesh"]}
     if a.only:
-        fams = {k: (v if k == a.only else []) for k, v in fams.items()}
-    docs = documents(out, os.path.abspath(a.lib), fams["solar"], fams["regrid"], fams["nearest"],
+        fams = {k: (v if k in a.only else []) for k, v in fams.items()}
+    docs = documents(out, a.lib and os.path.abspath(a.lib), fams["solar"], fams["regrid"], fams["nearest"],
                      tuple(a.manifold or ("planar", "spherical")), tuple(a.scaling or ()), fams["mesh"])
-    stale = []
     for name, d in docs.items():
-        path = os.path.join(out, name)
-        text = dumps(d)
-        if a.check:
-            if not os.path.exists(path) or open(path).read() != text:
-                stale.append(name)
-        else:
-            with open(path, "w") as fh:
-                fh.write(text)
-    if stale:
-        print("stale: " + ", ".join(stale), file=sys.stderr)
-        return 1
-    if not a.check:
-        print(f"wrote {len(docs)} documents to {out}")
+        with open(os.path.join(out, name), "w") as fh:
+            fh.write(dumps(d))
+    print(f"wrote {len(docs)} documents to {out}")
     return 0
 
 
