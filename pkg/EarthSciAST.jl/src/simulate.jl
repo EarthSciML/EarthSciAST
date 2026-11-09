@@ -1210,6 +1210,9 @@ struct _ProgramSeedRecipe
     runtime_array_parameters::Bool
     memo::Base.RefValue{Any}
     lock::ReentrantLock
+    # The whole-model program when `esm_problem(…; program_build = true)` built
+    # it as the Problem's own right-hand side; `nothing` otherwise.
+    program::Base.RefValue{Any}
 end
 
 # The seed of `prob`'s programs, built once from its recipe; `nothing` for a
@@ -1217,16 +1220,27 @@ end
 function _program_seed(prob)
     r = prob.inspection.program_seed
     r isa _ProgramSeedRecipe || return r
+    return _recipe_seed(r, prob.param_buffers, prob.run_doc)
+end
+
+# The seed of recipe `r` for a Problem whose live buffers are `param_buffers`
+# and whose run document is `run_doc`. `prepared` is what `_prepare_run_doc`
+# returned through `flat_out` for the recipe's own input and arguments, when
+# the caller has it (the Problem's build ran that same call), else `nothing`
+# and the seed prepares the input again.
+function _recipe_seed(r::_ProgramSeedRecipe, param_buffers, run_doc, prepared = nothing)
     return lock(r.lock) do
         r.memo[] === nothing || return r.memo[]
-        input = r.pushdown ?
-            first(_pushdown_input(r.input, r.model_name, r.metaparams, r.base_path)) :
-            r.input
-        flat = Ref{Any}(nothing)
-        _prepare_run_doc(
-            input; metaparameters = r.metaparams, base_path = r.base_path,
-            supplied_names = r.supplied, flat_out = flat
-        )
+        flat = Ref{Any}(prepared)
+        if prepared === nothing
+            input = r.pushdown ?
+                first(_pushdown_input(r.input, r.model_name, r.metaparams, r.base_path)) :
+                r.input
+            _prepare_run_doc(
+                input; metaparameters = r.metaparams, base_path = r.base_path,
+                supplied_names = r.supplied, flat_out = flat
+            )
+        end
         # The const registry `esm_problem` merged, provider by provider as it
         # routed them; the live forcing buffers are the Problem's own.
         merged_const = Dict{String, Any}(String(k) => v for (k, v) in r.const_arrays)
@@ -1258,11 +1272,11 @@ function _program_seed(prob)
                 )
             end
         end
-        r.pushdown && _inject_pushdown_aliases!(merged_const, prob.run_doc, r.pd_coupling)
+        r.pushdown && _inject_pushdown_aliases!(merged_const, run_doc, r.pd_coupling)
         r.memo[] = (;
             flat[]..., compiler = r.compiler, model_name = r.model_name,
             overrides = r.overrides, const_arrays = merged_const,
-            param_arrays = Dict{String, Any}(prob.param_buffers),
+            param_arrays = Dict{String, Any}(param_buffers),
             gated_providers = r.gated_providers, sample_time = r.sample_time,
             runtime_array_parameters = r.runtime_array_parameters,
         )
@@ -1498,6 +1512,19 @@ after `u0`, see [`seed_expression_ic!`](@ref)), and the streaming-output set
 `sinks` / `snapshot` / `pre_write` / `checkpoint_predicates` /
 `checkpoint_sinks` / `terminate_on_checkpoint`.
 
+`program_build::Bool = false` builds the Problem's right-hand side as its
+whole-model program ([`rhs_program`](@ref), API_SPEC §5.8): the model is lowered
+once, by the build `rhs_program` would otherwise run on its first call, and
+`rhs_program(prob)` returns that program instead of lowering the model a
+second time. The program is the one a later `rhs_program` call builds, so its
+evaluations are bitwise the same; the Problem's `f!` is the program's own
+evaluator over the Problem's state layout, eltype-generic as always. Two things
+differ from a Problem built the default way: no discrete-cadence cut (a
+state-free field over a live forcing buffer is computed on every call, not
+cached per refresh, which changes no value), and every externally fed
+parameter is read from a live buffer, as a program reads it. Needs `compiler =
+:native` or `:interpreter`.
+
 `runtime_array_parameters::Bool = false` makes every shaped parameter with a
 value (a declared `default`, a scalar broadcast over its grid, an inline
 override in `p`, or a caller's `const_arrays` entry) a live buffer holding that
@@ -1561,6 +1588,7 @@ function esm_problem(
         inspect::Union{Nothing, BuildInspection} = nothing,
         materialize_out::Union{Nothing, DiscreteMaterializer} = nothing,
         pushdown_rewrite::Bool = false,
+        program_build::Bool = false,
         seed_ic! = nothing,
         sinks = (),
         snapshot = state_snapshot,
@@ -1806,29 +1834,61 @@ function esm_problem(
     # the build product too, for the discrete-materializer caches only the
     # build creates.
     compiler === :xla && _xla_refuse_before_build(merged_param)
+    program_build && !(compiler === :native || compiler === :interpreter) && throw(
+        SimulateError(
+            "esm_problem: program_build = true needs compiler = :native or :interpreter, " *
+                "the compilers a program is built with (API_SPEC §5.8); this call names :$compiler",
+            ERROR_CODES.COMPILER_UNAVAILABLE
+        )
+    )
+    # What `rhs_program` rebuilds its seed from, on its first call: the
+    # caller's own inputs, not the flattened system or the merged arrays, so a
+    # Problem no program is made from keeps nothing extra alive.
+    recipe = _ProgramSeedRecipe(
+        authored_input, pushdown_rewrite, metaparams,
+        String(base_path), supplied, model_name === nothing ? nothing : String(model_name),
+        compiler, overrides, const_arrays, providers,
+        Set{String}(keys(discovered)), provider_shapes, Set{String}(keys(pd_gates)),
+        pd_coupling,
+        gated_providers, t_sample, runtime_array_parameters,
+        Ref{Any}(nothing), ReentrantLock(), Ref{Any}(nothing)
+    )
     # `:xla` is built OUT OF PLACE — the compiled tree-walk intermediate
     # representation is what the direct StableHLO emitter lowers — and the
     # executable is wrapped back into the in-place `f!` this Problem's surface
     # promises, just below. Every other compiler builds the in-place evaluator
     # directly. See src/compiler_xla.jl.
-    f!, u0_built, p_built, _tspan, var_map = _with_caller_u0(u0) do
-        _build_evaluator(
-            doc;
-            compiler = compiler,
-            form = compiler === :xla ? :oop : :inplace,
-            model_name = model_name,
-            parameter_overrides = overrides,
-            const_arrays = merged_const,
-            param_arrays = merged_param,
-            inspect = insp,
-            materialize_out = dm,
-            _param_classes = param_classes,
-            _runtime_array_parameters = runtime_array_parameters,
-            # Phase 2b Hook 2: deferred gated providers + the build-time sample tick.
-            # The front door fetches these pre-sliced right after value-invention.
-            _gated_providers = gated_providers,
-            _sample_time = t_sample
-        )
+    # With `program_build`, the Problem's right-hand side IS its whole-model
+    # program: the build `rhs_program` would run, run once here
+    # (`_problem_program`), from the seed of this call's own prepared document;
+    # `rhs_program(prob)` returns it rather than lowering the model again.
+    shared_program = nothing
+    if program_build
+        shared_program, (u0_built, p_built) = _with_caller_u0(u0) do
+            seed = _recipe_seed(recipe, merged_param, doc, run_flat[])
+            _problem_program(seed, insp, param_classes)
+        end
+        f!, var_map = shared_program.f!, shared_program.internal
+    else
+        f!, u0_built, p_built, _tspan, var_map = _with_caller_u0(u0) do
+            _build_evaluator(
+                doc;
+                compiler = compiler,
+                form = compiler === :xla ? :oop : :inplace,
+                model_name = model_name,
+                parameter_overrides = overrides,
+                const_arrays = merged_const,
+                param_arrays = merged_param,
+                inspect = insp,
+                materialize_out = dm,
+                _param_classes = param_classes,
+                _runtime_array_parameters = runtime_array_parameters,
+                # Phase 2b Hook 2: deferred gated providers + the build-time sample tick.
+                # The front door fetches these pre-sliced right after value-invention.
+                _gated_providers = gated_providers,
+                _sample_time = t_sample
+            )
+        end
     end
 
     if compiler === :xla
@@ -1837,18 +1897,8 @@ function esm_problem(
             insp.compiler_report
         )
     end
-    # What `rhs_program` rebuilds its seed from, on its first call: the
-    # caller's own inputs, not the flattened system or the merged arrays, so a
-    # Problem no program is made from keeps nothing extra alive.
-    insp.program_seed = _ProgramSeedRecipe(
-        authored_input, pushdown_rewrite, metaparams,
-        String(base_path), supplied, model_name === nothing ? nothing : String(model_name),
-        compiler, overrides, const_arrays, providers,
-        Set{String}(keys(discovered)), provider_shapes, Set{String}(keys(pd_gates)),
-        pd_coupling,
-        gated_providers, t_sample, runtime_array_parameters,
-        Ref{Any}(nothing), ReentrantLock()
-    )
+    recipe.program[] = shared_program
+    insp.program_seed = recipe
 
     # ---- initial state: the document's own ICs, then the caller's -----------
     # Under the build's plan: a `seed_ic!` hook (`seed_expression_ic!`) is an

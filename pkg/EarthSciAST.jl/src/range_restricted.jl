@@ -428,12 +428,19 @@ end
 # slot), whatever the Problem's own build made of it: the build registers each
 # one the Problem holds no buffer for, filled with its value, in the program's
 # own copy of the buffer registry (`pa`, returned).
-function _program_build(seed, doc::Dict{String, Any})
+#
+# `inspect` and `param_classes` are the build's read-only sinks, which a
+# Problem built as its program (`esm_problem(…; program_build = true)`) passes
+# on; `built`, when given, receives the build's initial state and parameters.
+function _program_build(
+        seed, doc::Dict{String, Any};
+        inspect = nothing, param_classes = nothing, built = nothing
+    )
     front = Ref{Any}(nothing)
     memo = _ProgramMemo()
     pa = Dict{String, Any}(String(k) => v for (k, v) in seed.param_arrays)
     cap = _WsCapture()
-    f!, _u0, p, _ts, var_map = _with_ws_capture(cap) do
+    f!, u0, p, _ts, var_map = _with_ws_capture(cap) do
         _with_range_spec(_CaptureSpec(front, memo)) do
             _build_evaluator(
                 doc; compiler = seed.compiler, form = :inplace,
@@ -441,10 +448,12 @@ function _program_build(seed, doc::Dict{String, Any})
                 const_arrays = seed.const_arrays, param_arrays = pa,
                 _gated_providers = seed.gated_providers, _sample_time = seed.sample_time,
                 _runtime_array_parameters = get(seed, :runtime_array_parameters, false),
-                _live_fed_parameters = true
+                _live_fed_parameters = true,
+                inspect = inspect, _param_classes = param_classes
             )
         end
     end
+    built === nothing || (built[] = (u0, p))
     return f!, var_map, front[], p, pa, cap, memo
 end
 
@@ -638,13 +647,16 @@ end
 
 function _whole_program(
         seed, flat::FlattenedSystem, W::Set{String}, R::Set{String},
-        writes, terms; parent = nothing
+        writes, terms; parent = nothing, inspect = nothing,
+        param_classes = nothing, built = nothing
     )
     init = seed.init
     live = union(W, R)
     init2 = (init === nothing || isempty(init)) ? Equation[] : _select_init(init, live)
     doc = _flat_run_doc(_scalar_slots_to_arrays(flat), seed.coordinates, seed.solver, init2)
-    f!, internal, front, p, pa, cap, memo = _program_build(seed, doc)
+    f!, internal, front, p, pa, cap, memo = _program_build(
+        seed, doc; inspect = inspect, param_classes = param_classes, built = built
+    )
     present = Set{String}(
         vcat(
             collect(_layout_scalar_names(internal)),
@@ -687,6 +699,10 @@ value, is read from the set, never from build-time data.
 [`default_forcing_set`](@ref) holds the Problem's forcing as it is now.
 """
 function rhs_program(prob::EsmProblem)
+    # A Problem built as its program (`esm_problem(…; program_build = true)`)
+    # holds the very program this call would build.
+    r = prob.inspection.program_seed
+    r isa _ProgramSeedRecipe && r.program[] !== nothing && return r.program[]::RhsProgram
     c = compiler(prob)
     seed = c in (:native, :interpreter) ? _program_seed(prob) : nothing
     (seed === nothing || !(c in (:native, :interpreter))) &&
@@ -700,6 +716,20 @@ function rhs_program(prob::EsmProblem)
     )
     flat, W, R = _select_flat(seed.flat, :all, :all)
     return _whole_program(seed, flat, W, R, :all, :all)
+end
+
+# The whole-model program of `seed`, built as `rhs_program` builds it, with the
+# Problem's build sinks `inspect` and `param_classes` filled, and the build's
+# initial state and parameters `(u0, p)`: the right-hand side of a Problem built
+# with `program_build = true`.
+function _problem_program(seed, inspect, param_classes)
+    flat, W, R = _select_flat(seed.flat, :all, :all)
+    built = Ref{Any}(nothing)
+    prog = _whole_program(
+        seed, flat, W, R, :all, :all;
+        inspect = inspect, param_classes = param_classes, built = built
+    )
+    return prog, built[]
 end
 
 """
