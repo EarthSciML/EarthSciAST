@@ -156,6 +156,25 @@ pub(crate) fn strip_template_origins(value: &mut Value) {
     }
 }
 
+/// Serializes a component's raw `subsystems` map with the template-origin
+/// marks taken off. The map is held as JSON, so the marks a load placed on a
+/// mounted leaf's expansions stay in it for the build to read; they are load
+/// provenance and never go on the wire (esm-spec §9.6.11).
+pub(crate) fn serialize_subsystems_unmarked<S: serde::Serializer>(
+    subsystems: &Option<indexmap::IndexMap<String, Value>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::Serialize;
+    match subsystems {
+        Some(map) => {
+            let mut map = map.clone();
+            map.values_mut().for_each(strip_template_origins);
+            map.serialize(serializer)
+        }
+        None => serializer.serialize_none(),
+    }
+}
+
 /// Restores [`MARKING`] when dropped.
 struct MarkingScope(bool);
 

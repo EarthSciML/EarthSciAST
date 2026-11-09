@@ -32,7 +32,10 @@ pub struct ReactionSystem {
     pub continuous_events: Option<Vec<ContinuousEvent>>,
 
     /// Named child reaction systems (subsystems), keyed by unique identifier
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::lower_expression_templates::serialize_subsystems_unmarked"
+    )]
     pub subsystems: Option<IndexMap<String, serde_json::Value>>,
 
     /// System-level default numerical tolerance for inline tests (schema
