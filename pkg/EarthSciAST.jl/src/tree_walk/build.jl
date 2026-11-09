@@ -6480,6 +6480,32 @@ function _faq_range_view(
     return view, whole
 end
 
+# An array-producing nested `faq` in elementwise position of an equation body
+# over the same output box — `D(q[f]) = faq_f(Σ_le w[e(f, le)]) - q[f]` — is a
+# whole array (it rebinds `f`, esm-spec §4.3.1 shadowing) that the body combines
+# with its other operands cell by cell, so each cell reads its element at that
+# cell, as the Rust binding's whole-array overlay, tape and per-cell oracle do.
+# Make that gather explicit, `index(faq_f(…), f) - q[f]`, so every tier below
+# resolves it through `_resolve_index_of_faq` instead of meeting a bare
+# producer. Only a node whose output indices are the equation's own, in order,
+# over the same ranges is gathered; any other is left as written.
+function _gather_nested_faqs_at_cell(
+        body::ASTExpr, idx_names::Vector{String}, ranges_dict
+    )::ASTExpr
+    isempty(idx_names) && return body
+    same_box(o::OpExpr) = begin
+        _is_faq_op(o.op) && _is_array_producer(o) || return false
+        _output_idx_strings(o) == idx_names || return false
+        r = _ranges_dict(o)
+        all(n -> haskey(r, n) && haskey(ranges_dict, n) && r[n] == ranges_dict[n], idx_names)
+    end
+    return _wrap_bare_array_refs(
+        body, Set{String}(), idx_names;
+        wrap_node = same_box,
+        stop_node = e -> _is_array_producer(e) || e.op in _SELF_INDEXED_OPS
+    )
+end
+
 function _compile_faq_equation!(
         percell_scalar, acc_kernels, scan_folds,
         array_contractions, covered::_Covered,
@@ -6519,7 +6545,7 @@ function _compile_faq_equation!(
     # which is the only case the gather form costs anything (it hides the
     # contraction from every tier below). See `_unwrap_identity_gather`.
     rhs_expr = _unwrap_identity_gather(eq.rhs, idx_names, ranges_dict)
-    rhs_body = _extract_faq_body(rhs_expr)
+    rhs_body = _gather_nested_faqs_at_cell(_extract_faq_body(rhs_expr), idx_names, ranges_dict)
 
     # Generalized einsum: detect contracted (reduction) indices in the RHS.
     # Contracted indices are keys in rhs.ranges that are NOT in output_idx.
