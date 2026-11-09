@@ -2112,6 +2112,8 @@ function _expand_expr_refs(
             sort!(String[k * "\0" * _stable_json(v) for (k, v) in bindings_raw]),
             "\x01"
         )
+        # A marked expansion is never served where an unmarked one is wanted.
+        _marking_template_origins() && (bkey = "\x02" * bkey)
         mkey = (name::String, bkey)
         cached = get(memo.bind, mkey, nothing)
         if cached !== nothing
@@ -2196,10 +2198,13 @@ end
 
 function _tpl_skeleton(name::String, reg, memo::_ExpandCache)
     _cache_for!(memo, reg)
-    haskey(memo.skel, name) && return memo.skel[name]
-    memo.skel[name] = nothing      # a reference cycle reaching this template stays direct
+    # A skeleton built while expansions are marked carries the marks on its
+    # nested roots; one built unmarked does not.
+    key = _marking_template_origins() ? "\0marked\0" * name : name
+    haskey(memo.skel, key) && return memo.skel[key]
+    memo.skel[key] = nothing      # a reference cycle reaching this template stays direct
     sk = _build_tpl_skeleton(name, reg, memo)
-    memo.skel[name] = sk
+    memo.skel[key] = sk
     return sk
 end
 
@@ -2348,6 +2353,10 @@ function _tpl_instantiate(
     )
     sk = _tpl_skeleton(name, reg, memo)
     sk === nothing && return nothing
+    # A nested root that is a bare parameter is, on the direct route, the
+    # binding marked with the nested template's name, which the skeleton does
+    # not record: such a template stays direct while marking.
+    isempty(sk.root_params) || !_marking_template_origins() || return nothing
     length(bindings_raw) == length(sk.params) || return nothing
     for k in keys(bindings_raw)
         k in sk.params || return nothing

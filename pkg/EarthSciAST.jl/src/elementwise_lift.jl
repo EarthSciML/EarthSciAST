@@ -27,13 +27,14 @@
 
 # Expands the template references the lift meets, against the flattened
 # system's merged registry, each once.
-struct _ElementwiseContext
+# `M` is `_ExpandCache` (defined with the expansion, which is included after
+# this file).
+struct _ElementwiseContext{M}
     registry::Any
-    memo::Dict{Tuple{String, String}, OpExpr}
+    memo::M
 end
 
-_ElementwiseContext(registry) =
-    _ElementwiseContext(registry, Dict{Tuple{String, String}, OpExpr}())
+_ElementwiseContext(registry) = _ElementwiseContext(registry, _ExpandCache())
 
 # The expansion of the application `e`, its root marked with the template's
 # name, or `nothing` when `ctx` has no registry to expand it against.
