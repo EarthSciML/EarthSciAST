@@ -701,14 +701,13 @@ function _cg_count_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi, span)
     xe = _cg_emit(ctx, kc, x)
     # The comparison with the operands in the order the document wrote them.
     test(av) = lk ? Expr(:call, cmp, av, xv) : Expr(:call, cmp, xv, av)
-    found = _count_const_axis(a, spec)
+    found = _cg_count_axis(ctx, kc, a, spec)
     if found !== nothing
-        axis, ascending = found
+        tab, ascending = found
         nrng = length(spec.lo:spec.step:spec.hi)
         tv = _cg_name(ctx, "ct")
         hv = _cg_name(ctx, "ch")
         mv = _cg_name(ctx, "cm")
-        tab = _cg_tab!(ctx, axis)
         search = if rel === :<= || rel === :<
             # The largest `m` with `axis[m] rel x`: the predicate holds on a
             # prefix of an ascending axis, so the search keeps `axis[cn] rel x`
@@ -776,6 +775,18 @@ function _cg_count_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi, span)
     end
 end
 
+# The counted axis as an emitted table read, and whether it ascends, or
+# `nothing` (`_count_const_axis`). The scalar tier's class emission has its
+# own method, for an array that differs between members.
+function _cg_count_axis(ctx::_CGCtx, kc, a::_Node, spec::_ContractLoop)
+    f = _count_const_axis(a, spec)
+    f === nothing && return nothing
+    return (_cg_tab!(ctx, f[1]), f[2])
+end
+
+# A constant gather's array as the emitted code reads it.
+_cg_cga(ctx::_CGCtx, kc, cg) = _cg_tab!(ctx, cg)
+
 # Whether a subtree reads the loop counter `ref`.
 _reads_counter(n::_Node, ref) =
     (n.kind === _NK_LOOPVAR && n.payload === ref) ||
@@ -788,11 +799,11 @@ _reads_counter(n::_Node, ref) =
 # `nothing` for any other `a`. Each entry is the one the run-time gather
 # reads, through the same boundary policy; a subscript that policy refuses
 # keeps the loop, which raises it at run time as the fold does.
-function _count_const_axis(a::_Node, spec::_ContractLoop)
+function _count_const_axis(a::_Node, spec::_ContractLoop, cg = a.payload)
     (a.kind === _NK_CONST_GATHER && length(a.children) == 1) || return nothing
     s = a.children[1]
     (s.kind === _NK_LOOPVAR && s.payload === spec.ref) || return nothing
-    cg = a.payload::_ConstGatherArray
+    cg = cg::_ConstGatherArray
     length(cg.dims) == 1 || return nothing
     rng = spec.lo:spec.step:spec.hi
     vals = Vector{Float64}(undef, length(rng))
@@ -849,7 +860,7 @@ function _cg_const_gather(ctx::_CGCtx, kc, nd::_Node)
         end
     end
     cgv = _cg_name(ctx, "cga")
-    binds = Any[:($cgv = $(_cg_tab!(ctx, cg)))]
+    binds = Any[:($cgv = $(_cg_cga(ctx, kc, cg)))]
     off = Any[1]
     for d in eachindex(children)
         sd = _cg_name(ctx, "cgs")
