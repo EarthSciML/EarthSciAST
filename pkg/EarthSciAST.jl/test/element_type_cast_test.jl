@@ -96,6 +96,12 @@ using EarthSciAST
             @test_throws EA.ExpressionParseError EA.parse_expression(bad)
         end
     end
+    @testset "a cast has its operand's units" begin
+        units = Dict("x" => "m/s")
+        got = EA.get_expression_dimensions(to32, units)
+        @test got !== nothing
+        @test EA._exact_scale(got) == EA._exact_scale(EA.parse_units("m/s"))
+    end
     @testset "canonical JSON keeps the precision" begin
         @test EA.canonical_json(to32) == "{\"args\":[\"x\"],\"element_type\":\"Float32\",\"op\":\"cast\"}"
         @test EA.canonical_json(to32) != EA.canonical_json(to64)

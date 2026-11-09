@@ -199,6 +199,12 @@ const ESM = EarthSciAST
             cop = "faq", cargs = E(), kw = (units = "m",),
         ),
         (
+            field = :element_type,
+            json = """{"op":"cast","args":["x"],"element_type":"Float32"}""",
+            expected = "Float32",
+            cop = "cast", cargs = E(VarExpr("x")), kw = (element_type = "Float32",),
+        ),
+        (
             field = :distinct,
             json = """{"op":"faq","args":[],"distinct":true}""",
             expected = true,
