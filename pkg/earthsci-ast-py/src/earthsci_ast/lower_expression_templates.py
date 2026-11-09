@@ -42,8 +42,11 @@ schema validation but before ``_parse_esm_data``.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import copy
 import re
+from collections.abc import Iterator
 from typing import Any
 
 from . import op_registry
@@ -677,6 +680,30 @@ def _ref_is_eager(node: dict, target_bearing: dict[str, bool]) -> bool:
     return _contains_op(b, _op_in_T)
 
 
+#: The private key on which a load marks the root of each template expansion
+#: with its template's name (``ExprNode.template_origin``). The schema refuses it
+#: in an authored document.
+TEMPLATE_ORIGIN_KEY = "__esm_template_origin"
+
+_MARK_TEMPLATE_ORIGINS: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "_MARK_TEMPLATE_ORIGINS", default=False
+)
+
+
+@contextlib.contextmanager
+def marking_template_origins() -> Iterator[None]:
+    """While active, :func:`expand_document` marks the root of each expansion
+    it makes with its template's name (esm-spec §9.6.11: the elementwise lift
+    applies only to an application, and this binding expands applications at
+    load). Held by the typed load around its expansions; the public expansion,
+    whose output is a document, never marks."""
+    token = _MARK_TEMPLATE_ORIGINS.set(True)
+    try:
+        yield
+    finally:
+        _MARK_TEMPLATE_ORIGINS.reset(token)
+
+
 def _expand(
     node: Any,
     templates: dict,
@@ -703,6 +730,8 @@ def _expand(
     signature stability but no longer threaded (top-level callers always pass
     ``None``)."""
 
+    mark = _MARK_TEMPLATE_ORIGINS.get() and should_expand is _expand_everything
+
     def _on_object(node: dict, recurse) -> Any:
         if node.get("op") == APPLY_OP:
             # Innermost-first: expand references inside the bindings first.
@@ -720,7 +749,10 @@ def _expand(
                     newnode = {k: (nb if k == "bindings" else v) for k, v in node.items()}
             if should_expand(newnode):
                 body = _expand_apply(newnode, templates, scope)
-                return recurse(body)
+                expanded = recurse(body)
+                if mark and isinstance(expanded, dict):
+                    expanded = {**expanded, TEMPLATE_ORIGIN_KEY: newnode["name"]}
+                return expanded
             return newnode
         changed = False
         out = {}
@@ -749,6 +781,11 @@ def _expand_eager(
     return _expand(node, templates, scope, lambda n: _ref_is_eager(n, target_bearing), memo)
 
 
+def _expand_everything(_node: dict) -> bool:
+    """The :func:`_expand_all` policy: every reference expands."""
+    return True
+
+
 def _expand_all(
     node: Any, templates: dict, scope: str, memo: dict[int, tuple] | None = None
 ) -> Any:
@@ -758,7 +795,7 @@ def _expand_all(
     the per-registry kernel of the public :func:`expand_document` /
     :func:`Expand` function (esm-spec §9.6.4 rule 2). Deterministic and
     sharing-preserving."""
-    return _expand(node, templates, scope, lambda n: True, memo)
+    return _expand(node, templates, scope, _expand_everything, memo)
 
 
 # Maximum number of productive rewrite passes before a file is rejected as
@@ -1423,6 +1460,20 @@ def expand_document(loaded: Any) -> Any:
             comp.pop("expression_templates", None)
 
     coupling = root.get("coupling")
+    # A coupling transform is not a component expression: its expansions are
+    # not marked (the Julia reference expands them at load the same way).
+    unmark = _MARK_TEMPLATE_ORIGINS.set(False)
+    try:
+        _expand_coupling_transforms(coupling, comp_named)
+    finally:
+        _MARK_TEMPLATE_ORIGINS.reset(unmark)
+
+    return root
+
+
+def _expand_coupling_transforms(coupling: Any, comp_named: dict) -> None:
+    """Expand every ``variable_map`` transform reference of ``coupling`` against
+    the receiving component's registry, in place."""
     if _is_array(coupling):
         for i, entry in enumerate(coupling):
             if not _is_object(entry) or entry.get("type") != "variable_map":
@@ -1440,8 +1491,6 @@ def expand_document(loaded: Any) -> Any:
             if named is None:
                 continue
             entry["transform"] = _expand_all(tr, named, f"coupling[{i}].transform")
-
-    return root
 
 
 #: Public alias for :func:`expand_document` using the spec's spelling

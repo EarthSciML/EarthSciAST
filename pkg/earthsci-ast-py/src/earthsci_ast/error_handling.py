@@ -407,6 +407,12 @@ RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form"
 #: wrong number rather than a failure.
 RAGGED_VALUES_NOT_GATHERED = "ragged_values_not_gathered"
 
+#: A ``faq``'s ``expr`` or ``filter`` reads a variable declared with a non-empty
+#: ``shape`` by BARE name in an elementwise position (esm-spec §4.3.1, issue
+#: #441). The node names its axes by its range symbols, so the read must say
+#: which ones: ``index(v, i, …)``.
+FAQ_BARE_ARRAY_OPERAND = "faq_bare_array_operand"
+
 
 # ===========================================================================
 # Evaluator refusal (esm-spec §9.6.6), raised as

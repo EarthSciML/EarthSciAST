@@ -1,0 +1,345 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "template_array_args_lin1d_composite",
+  "description": "esm-spec \u00a79.6.11: `linear` inside larger arithmetic (`a * linear(lev) + lev`), and applied to an expression (`lev * 0.5`). Every element must equal the `interp.*` closed function at that element's argument, bit for bit."
+ },
+ "index_sets": {
+  "c": {
+   "kind": "interval",
+   "size": 4
+  }
+ },
+ "models": {
+  "template_array_args_lin1d_composite": {
+   "variables": {
+    "lev": {
+     "type": "parameter",
+     "shape": [
+      "c"
+     ],
+     "default": [
+      0.5,
+      2.5,
+      4.0,
+      7.0
+     ]
+    },
+    "a": {
+     "type": "parameter",
+     "default": 3.0
+    },
+    "Dz": {
+     "type": "unknown"
+    },
+    "s_Dz": {
+     "type": "unknown",
+     "shape": [
+      "c"
+     ],
+     "default": 0.0
+    },
+    "E": {
+     "type": "unknown"
+    },
+    "s_E": {
+     "type": "unknown",
+     "shape": [
+      "c"
+     ],
+     "default": 0.0
+    },
+    "Dz_out": {
+     "type": "unknown",
+     "shape": [
+      "c"
+     ],
+     "description": "`Dz` read element by element, so the test can assert on a declared shape (esm-spec \u00a76.6.5)."
+    },
+    "E_out": {
+     "type": "unknown",
+     "shape": [
+      "c"
+     ],
+     "description": "`E` read element by element, so the test can assert on a declared shape (esm-spec \u00a76.6.5)."
+    }
+   },
+   "equations": [
+    {
+     "lhs": "Dz",
+     "rhs": {
+      "op": "+",
+      "args": [
+       {
+        "op": "*",
+        "args": [
+         "a",
+         {
+          "op": "apply_expression_template",
+          "args": [],
+          "name": "linear",
+          "bindings": {
+           "table": {
+            "op": "const",
+            "args": [],
+            "value": [
+             10.0,
+             20.0,
+             40.0,
+             80.0,
+             160.0
+            ]
+           },
+           "axis": {
+            "op": "const",
+            "args": [],
+            "value": [
+             1,
+             2,
+             3,
+             4,
+             5
+            ]
+           },
+           "x": "lev",
+           "n": 5
+          }
+         }
+        ]
+       },
+       "lev"
+      ]
+     }
+    },
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "s_Dz"
+      ],
+      "wrt": "t"
+     },
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "c"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "Dz",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "E",
+     "rhs": {
+      "op": "apply_expression_template",
+      "args": [],
+      "name": "linear",
+      "bindings": {
+       "table": {
+        "op": "const",
+        "args": [],
+        "value": [
+         10.0,
+         20.0,
+         40.0,
+         80.0,
+         160.0
+        ]
+       },
+       "axis": {
+        "op": "const",
+        "args": [],
+        "value": [
+         1,
+         2,
+         3,
+         4,
+         5
+        ]
+       },
+       "x": {
+        "op": "*",
+        "args": [
+         "lev",
+         0.5
+        ]
+       },
+       "n": 5
+      }
+     }
+    },
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "s_E"
+      ],
+      "wrt": "t"
+     },
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "c"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "E",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "Dz_out",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "c"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "Dz",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "E_out",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "c"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "E",
+        "i"
+       ]
+      }
+     }
+    }
+   ],
+   "expression_template_imports": [
+    {
+     "ref": "esm:std/interp.esm",
+     "only": [
+      "linear"
+     ]
+    }
+   ],
+   "tolerance": {
+    "abs": 0,
+    "rel": 0
+   },
+   "tests": [
+    {
+     "id": "template_array_args_lin1d_composite_t0",
+     "description": "Every element at t = 0.",
+     "time_span": {
+      "start": 0.0,
+      "end": 1.0
+     },
+     "assertions": [
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "c": 1
+       },
+       "expected": 30.5
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "c": 2
+       },
+       "expected": 92.5
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "c": 3
+       },
+       "expected": 244.0
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "c": 4
+       },
+       "expected": 487.0
+      },
+      {
+       "variable": "E_out",
+       "time": 0.0,
+       "coords": {
+        "c": 1
+       },
+       "expected": 10.0
+      },
+      {
+       "variable": "E_out",
+       "time": 0.0,
+       "coords": {
+        "c": 2
+       },
+       "expected": 12.5
+      },
+      {
+       "variable": "E_out",
+       "time": 0.0,
+       "coords": {
+        "c": 3
+       },
+       "expected": 20.0
+      },
+      {
+       "variable": "E_out",
+       "time": 0.0,
+       "coords": {
+        "c": 4
+       },
+       "expected": 60.0
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

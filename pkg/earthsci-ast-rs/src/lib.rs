@@ -95,6 +95,7 @@ pub(crate) mod data_source_urls;
 pub(crate) mod diagnostic;
 pub(crate) mod display;
 pub(crate) mod edit;
+pub(crate) mod elementwise_lift;
 pub(crate) mod error;
 pub(crate) mod faq;
 // The tier-2 EXTENSION SEAM (API_SPEC.md §3): the one deliberately-named place
@@ -115,6 +116,7 @@ pub(crate) mod lower_enums;
 pub(crate) mod lower_expression_templates;
 pub(crate) mod lower_table_lookup;
 pub(crate) mod migration;
+pub(crate) mod observed_cone;
 pub(crate) mod op_registry;
 pub(crate) mod parse;
 /// Text→AST parsing of the INFIX expression surface `display::to_ascii` emits

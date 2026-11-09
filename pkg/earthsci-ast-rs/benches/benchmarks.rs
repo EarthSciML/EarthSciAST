@@ -872,6 +872,82 @@ fn benchmark_closed_templates(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// Templates applied elementwise over array arguments (esm-spec §9.6.11,
+// bench/template_array_args): the `fn` form, the template form the build
+// lifts per cell, and the per-cell `faq` written by hand.
+// ---------------------------------------------------------------------------
+
+/// Each `*_fn_*` document of `TEMPLATE_ARRAY_ARGS_DIR` (default
+/// `bench/template_array_args`) with its `*_tpl_*` and `*_faq_*` spellings.
+/// `TEMPLATE_ARRAY_ARGS_FILTER` keeps the names containing it.
+fn template_array_args_triples() -> Vec<(String, [std::path::PathBuf; 3])> {
+    let dir = std::env::var("TEMPLATE_ARRAY_ARGS_DIR").map_or_else(
+        |_| {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench/template_array_args")
+        },
+        std::path::PathBuf::from,
+    );
+    let filter = std::env::var("TEMPLATE_ARRAY_ARGS_FILTER").unwrap_or_default();
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok()?.file_name().into_string().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    let mut out = Vec::new();
+    for name in names {
+        if !(name.ends_with(".esm") && name.contains("_fn_") && name.contains(&filter)) {
+            continue;
+        }
+        let tpl = dir.join(name.replacen("_fn_", "_tpl_", 1));
+        let faq = dir.join(name.replacen("_fn_", "_faq_", 1));
+        if tpl.exists() && faq.exists() {
+            let stem = name.trim_end_matches(".esm").replacen("_fn", "", 1);
+            out.push((stem, [dir.join(&name), tpl, faq]));
+        }
+    }
+    out
+}
+
+fn benchmark_template_array_args(c: &mut Criterion) {
+    let mut group = c.benchmark_group("template_array_args");
+    group.sample_size(20);
+    for (stem, paths) in template_array_args_triples() {
+        let mut rhs: Vec<TemplateRhs> = paths.iter().map(|p| TemplateRhs::new(p, false)).collect();
+        let bits: Vec<Vec<u64>> = rhs.iter_mut().map(|r| r.bits()).collect();
+        // The lift is the hand-written per-cell faq: the same bits, always.
+        assert_eq!(
+            bits[1], bits[2],
+            "{stem}: the lifted template is not the per-cell faq"
+        );
+        eprintln!(
+            "{stem}: states {}  build fn {:.4}s tpl {:.4}s faq {:.4}s  first call fn {:.6}s tpl {:.6}s faq {:.6}s  template bit-identical to fn: {}",
+            rhs[0].state.len(),
+            rhs[0].build_s,
+            rhs[1].build_s,
+            rhs[2].build_s,
+            rhs[0].first_call_s,
+            rhs[1].first_call_s,
+            rhs[2].first_call_s,
+            bits[0] == bits[1]
+        );
+        for (label, r) in ["fn", "tpl", "faq"].into_iter().zip(rhs.iter_mut()) {
+            let mut dy = vec![0.0; r.state.len()];
+            let mut k = 0u64;
+            group.bench_function(BenchmarkId::new(label, &stem), |b| {
+                b.iter(|| {
+                    k += 1;
+                    r.call(TEMPLATE_T + 1.0e-3 * (k % 1000) as f64, &mut dy);
+                    black_box(&dy);
+                })
+            });
+        }
+    }
+    group.finish();
+}
+
 // Define benchmark groups
 criterion_group!(
     benches,
@@ -881,6 +957,7 @@ criterion_group!(
     benchmark_expression_evaluation,
     benchmark_interp_bracket,
     benchmark_closed_templates,
+    benchmark_template_array_args,
 );
 
 #[cfg(feature = "simd")]

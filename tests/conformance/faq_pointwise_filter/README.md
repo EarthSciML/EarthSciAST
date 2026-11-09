@@ -34,7 +34,9 @@ CONTRACTION, which Julia did apply, so nothing shared noticed.
 | each binding's `actual` vs `golden/<id>.json` | **reference-comparing**: the golden is the Julia `interpreter`, minted after its fix and only because it matched the authored values |
 | Rust / Python `actual` vs the golden | additionally **cross-binding-agreeing** |
 
-## The fixture
+## The fixtures
+
+### `pointwise_filter.esm`
 
 `pointwise_filter.esm` has two constant-rate array states over `x` (size 5):
 
@@ -50,9 +52,28 @@ a filter without a contracted index reads `2i + 1` and `10 i` at every cell and
 fails five assertions. The golden band is the integrator's (`1e-12` relative):
 the values are small integers up to the solver's rounding.
 
+### `indexed_filter_two_outputs.esm` (issue #441)
+
+The same rule with TWO output indices and no contraction, so each output cell is
+still one combination. `a_val = [1, 2]`, `c_val = [10, 20]`, and
+`two_outputs[i, g] = a_val[i] c_val[g] where a_val[i] > 1.5`, so row `i = 1` is
+0 in both columns. `two_outputs_swapped` is the same aggregate with
+`output_idx: ["g", "i"]`.
+
+The filter reads `a_val` through `index(a_val, i)`. Written bare, `a_val > 1.5`,
+it is now rejected (`faq_bare_array_operand`,
+`tests/invalid/faq/bare_array_operand_filter.esm`): Rust's reference evaluator
+aligned the array-valued filter to the output box by position, found rank 1
+against two output indices and kept every term, so the filter was silently
+ignored, and Python's whole-box tier aligned it with the box's last axis. The two
+index sets here have the SAME extent and the swapped aggregate puts `i` last, so
+an evaluator that aligned the filter by position or by broadcasting rather than
+by the symbol would gate the wrong axis and fail assertions here. The values are
+exact products of small integers, asserted at `1e-12` relative.
+
 ## Named exclusions
 
-None. The fixture is required under `interpreter` and `native` in all three
+None. Every fixture is required under `interpreter` and `native` in all three
 executing bindings.
 
 ## Running it

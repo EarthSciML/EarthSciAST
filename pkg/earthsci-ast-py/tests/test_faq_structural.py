@@ -126,3 +126,223 @@ def test_ragged_range_with_the_values_gather_is_valid() -> None:
 
     assert [e.code for e in result.structural_errors] == []
     assert result.is_valid
+
+
+def test_faq_filter_reading_a_shaped_variable_bare_is_rejected() -> None:
+    """Issue #441: a ``faq`` filter naming a shaped variable bare. With two
+    output indices Rust's reference ignored it silently and this binding's
+    whole-box tier aligned it with the box's last axis. It is now
+    ``faq_bare_array_operand`` at the containing field (esm-spec §4.3.1)."""
+    fixture = INVALID_DIR / "faq" / "bare_array_operand_filter.esm"
+
+    result = validate_text(fixture.read_text())
+
+    assert not result.is_valid
+    found = [e for e in result.structural_errors if e.code == "faq_bare_array_operand"]
+    assert [e.path for e in found] == ["/models/Probe/equations/2/rhs"]
+    assert found[0].details["variable"] == "a_val"
+    assert found[0].details["field"] == "filter"
+
+
+def test_faq_indexed_filter_over_two_outputs_is_valid() -> None:
+    """The positive control: the filter read through ``index(a_val, i)``."""
+    fixture = (
+        CONFORMANCE_DIR / "faq_pointwise_filter" / "fixtures" / "indexed_filter_two_outputs.esm"
+    )
+    result = validate_text(fixture.read_text())
+    assert [e.code for e in result.structural_errors] == []
+
+
+def _bare_operand_doc(filter_expr, *, templates=None, a_size=2):
+    """A two-output ``faq`` over two equal-extent index sets whose filter is
+    ``filter_expr`` (``a_val = [1, 2]``, ``c_val = [10, 20]``)."""
+    idx = lambda v, s: {"op": "index", "args": [v, s]}  # noqa: E731
+    model = {
+        "variables": {
+            "a_val": {"type": "unknown", "units": "1", "shape": ["a_rows"]},
+            "c_val": {"type": "unknown", "units": "1", "shape": ["c_rows"]},
+            "y": {"type": "unknown", "units": "1", "shape": ["a_rows", "c_rows"]},
+        },
+        "equations": [
+            {"lhs": "a_val", "rhs": {"op": "const", "args": [], "value": [1.0, 2.0]}},
+            {"lhs": "c_val", "rhs": {"op": "const", "args": [], "value": [10.0, 20.0]}},
+            {
+                "lhs": "y",
+                "rhs": {
+                    "op": "faq",
+                    "args": [],
+                    "output_idx": ["i", "g"],
+                    "ranges": {"i": {"from": "a_rows"}, "g": {"from": "c_rows"}},
+                    "filter": filter_expr,
+                    "expr": {"op": "*", "args": [idx("a_val", "i"), idx("c_val", "g")]},
+                },
+            },
+        ],
+    }
+    if templates:
+        model["expression_templates"] = templates
+    return {
+        "esm": "1.2.0",
+        "metadata": {"name": "bare_operand", "authors": ["test"]},
+        "index_sets": {
+            "a_rows": {"kind": "interval", "size": a_size},
+            "c_rows": {"kind": "interval", "size": 2},
+        },
+        "models": {"M": model},
+    }
+
+
+def test_faq_bare_filter_through_a_template_is_refused_at_build() -> None:
+    """The issue's own spelling: the bare name arrives through an
+    ``apply_expression_template`` binding, which ``validate`` cannot see into.
+    The build front door checks the expanded system and refuses it by code,
+    under both compilers -- before this the native whole-box tier aligned
+    ``a_val`` with ``g`` (the extents are equal) and returned a wrong number."""
+    from earthsci_ast.problem import esm_problem
+
+    gate = {"op": "ifelse", "args": [{"op": ">", "args": ["x", 1.5]}, 1.0, 0.0]}
+    doc = _bare_operand_doc(
+        {"op": "apply_expression_template", "args": [], "name": "gate", "bindings": {"x": "a_val"}},
+        templates={"gate": {"params": ["x"], "body": gate}},
+    )
+    for compiler in ("interpreter", "native"):
+        with pytest.raises(Exception, match="faq_bare_array_operand"):
+            esm_problem(doc, (0.0, 0.0), compiler=compiler)
+
+
+def test_whole_box_filter_mask_of_the_wrong_rank_declines() -> None:
+    """Defense in depth for an array whose shape no declaration states: a
+    whole-box filter value whose rank is neither 0 nor the box's raises, so the
+    tier declines rather than letting numpy broadcasting pick the axis."""
+    import numpy as np
+
+    from earthsci_ast.numpy_interpreter import _box_aligned_mask
+
+    assert _box_aligned_mask(np.ones((2, 2)), 2).dtype == bool
+    assert _box_aligned_mask(np.asarray(1.0), 2).ndim == 0
+    with pytest.raises(ValueError, match="not the node's symbols"):
+        _box_aligned_mask(np.ones(2), 2)
+
+
+@pytest.mark.parametrize(
+    ("name", "paths"),
+    [
+        (
+            "bare_array_operand_derivative.esm",
+            ["/models/Probe/equations/0/rhs", "/models/Probe/equations/1/rhs"],
+        ),
+        ("bare_array_operand_subsystem.esm", ["/models/Host/subsystems/Probe/equations/2/rhs"]),
+        ("bare_array_operand_beside_template.esm", ["/models/Probe/equations/0/rhs"]),
+    ],
+)
+def test_faq_bare_array_operand_fixture_pins(name, paths) -> None:
+    """A derivative left-hand side exempts nothing, in either spelling (``D(y)``
+    and ``faq[i](D(z[i]))``), the check reaches inline subsystems, and a
+    template application is opaque while a bare read beside it is not."""
+    result = validate_text((INVALID_DIR / "faq" / name).read_text())
+    found = [e for e in result.structural_errors if e.code == "faq_bare_array_operand"]
+    assert [e.path for e in found] == paths
+
+
+def test_faq_bare_array_operand_beside_template_names_the_bare_read() -> None:
+    result = validate_text(
+        (INVALID_DIR / "faq" / "bare_array_operand_beside_template.esm").read_text()
+    )
+    found = [e for e in result.structural_errors if e.code == "faq_bare_array_operand"]
+    assert [e.details["variable"] for e in found] == ["w"]
+
+
+def test_template_application_is_opaque_to_validate() -> None:
+    """An array bound to a template argument inside a faq body is not a bare
+    read at validation (esm-spec §4.3.1); its expansion is the build's to
+    check."""
+    doc = json.loads((INVALID_DIR / "faq" / "bare_array_operand_beside_template.esm").read_text())
+    doc["models"]["Probe"]["equations"][0]["rhs"]["expr"]["args"][1] = {
+        "op": "index",
+        "args": ["w", "i"],
+    }
+    result = validate_text(json.dumps(doc))
+    assert [e.code for e in result.structural_errors] == []
+
+
+def test_derivative_state_delivered_bare_by_a_template_is_refused_at_build() -> None:
+    """``D(y) ~ faq(… twice(y) …)``: the template hides the bare ``y`` from
+    validate, and the build check no longer exempts a derivative's own state."""
+    from earthsci_ast.problem import esm_problem
+
+    doc = json.loads((INVALID_DIR / "faq" / "bare_array_operand_derivative.esm").read_text())
+    model = doc["models"]["Probe"]
+    del model["equations"][1:], model["variables"]["z"]
+    model["expression_templates"] = {
+        "twice": {"params": ["x"], "body": {"op": "*", "args": [2.0, "x"]}}
+    }
+    model["equations"][0]["rhs"]["expr"]["args"][1] = {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "twice",
+        "bindings": {"x": "y"},
+    }
+    assert validate_text(json.dumps(doc)).structural_errors == []
+    for compiler in ("interpreter", "native"):
+        with pytest.raises(Exception, match="faq_bare_array_operand"):
+            esm_problem(doc, (0.0, 0.0), compiler=compiler)
+
+
+def test_bare_read_of_an_inferred_shape_is_refused_at_build() -> None:
+    """``a_val`` declares no shape; its defining faq makes it an array over
+    ``a_rows``. validate reads declarations only, so it passes there; the build
+    reads inferred shapes too, as Julia's does after shape promotion."""
+    from earthsci_ast.problem import esm_problem
+
+    doc = _bare_operand_doc(
+        {"op": "ifelse", "args": [{"op": ">", "args": ["a_val", 1.5]}, 1.0, 0.0]}
+    )
+    model = doc["models"]["M"]
+    del model["variables"]["a_val"]["shape"]
+    model["variables"]["base"] = {
+        "type": "parameter",
+        "units": "1",
+        "shape": ["a_rows"],
+        "default": [1.0, 2.0],
+    }
+    model["equations"][0]["rhs"] = {
+        "op": "faq",
+        "args": [],
+        "output_idx": ["i"],
+        "ranges": {"i": {"from": "a_rows"}},
+        "expr": {"op": "index", "args": ["base", "i"]},
+    }
+    assert validate_text(json.dumps(doc)).structural_errors == []
+    for compiler in ("interpreter", "native"):
+        with pytest.raises(Exception, match="faq_bare_array_operand"):
+            esm_problem(doc, (0.0, 0.0), compiler=compiler)
+
+
+def test_flat_entry_filter_mask_must_cover_every_entry() -> None:
+    """The flat-entry tiers bind each symbol to one value per entry, so a filter
+    value is 0-D or exactly one per entry. A length-1 array is not stretched
+    over the entries and a rank-2 one is not flattened: the tier declines."""
+    import numpy as np
+
+    from earthsci_ast.esm_types import ExprNode
+    from earthsci_ast.numpy_interpreter import (
+        EvalContext,
+        _entry_aligned_mask,
+        _fold_ragged_entries,
+    )
+
+    assert _entry_aligned_mask(np.asarray([1.0, 0.0, 1.0]), 3).tolist() == [True, False, True]
+    assert _entry_aligned_mask(np.asarray(1.0), 3).tolist() == [True, True, True]
+    for bad in (np.ones(1), np.ones((3, 1))):
+        with pytest.raises(ValueError, match="not the node's symbols"):
+            _entry_aligned_mask(bad, 3)
+
+    ctx = EvalContext(
+        state_layout={}, state_shapes={}, param_values={}, observed_values={}, y=np.zeros(0), t=0.0
+    )
+    body = ExprNode(op="faq", args=[], expr=1.0)
+    row = np.array([0, 0, 1])
+    bindings = {"j": np.array([1.0, 2.0, 1.0])}
+    one = ExprNode(op="const", args=[], value=[1.0])
+    assert _fold_ragged_entries(body, ctx, row, bindings, 2, None, "+", 0.0, "t") is not None
+    assert _fold_ragged_entries(body, ctx, row, bindings, 2, one, "+", 0.0, "t") is None

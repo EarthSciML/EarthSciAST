@@ -489,6 +489,16 @@ mutable struct OpExpr <: ASTExpr
     expect_cadence::Union{String, Nothing}
     attrs::Union{Dict{String, Any}, Nothing}
 
+    # ── Load provenance, never on the wire ──
+    # `template_origin` — the name of the template whose expansion this node is
+    #           the root of, set when the load expands an
+    #           `apply_expression_template` reference (a mounted leaf's, at the
+    #           mount) and when the elementwise lift expands one. The lift
+    #           (esm-spec §9.6.11, elementwise_lift.jl) applies only to a
+    #           template application, so a shaped read an author wrote by hand
+    #           is never lifted.
+    template_origin::Union{String, Nothing}
+
     OpExpr(
         op::String, args::Vector{ASTExpr};
         wrt = nothing, dim = nothing,
@@ -503,7 +513,7 @@ mutable struct OpExpr <: ASTExpr
         id = nothing, manifold = nothing,
         distinct = nothing, key = nothing,
         arg = nothing, bindings = nothing, label = nothing,
-        expect_cadence = nothing, attrs = nothing,
+        expect_cadence = nothing, attrs = nothing, template_origin = nothing,
         # `handler_id` was the v0.2.x field for the now-removed `call`
         # op (esm-spec §9.2 closure). Accept and ignore on construction
         # so internal helpers that still pass it through don't break
@@ -516,7 +526,7 @@ mutable struct OpExpr <: ASTExpr
         regions, values, shape, perm, axis, fn, name, value, units,
         table, table_axes, output, join, filter, join_gates,
         id, manifold, distinct, key, arg, bindings, label,
-        expect_cadence, attrs
+        expect_cadence, attrs, template_origin
     )
 end
 
@@ -621,6 +631,7 @@ const OPEXPR_FIELD_TABLE = (
     label = (wire = :label, kind = :scalar, parse = :string, binds_scope = false),
     expect_cadence = (wire = :expect_cadence, kind = :scalar, parse = :string, binds_scope = false),
     attrs = (wire = :attrs, kind = :scalar, parse = :attrs, binds_scope = false),
+    template_origin = (wire = nothing, kind = :internal, parse = nothing, binds_scope = false),
 )
 
 # The table must cover EXACTLY the struct's fields, in struct-field order —

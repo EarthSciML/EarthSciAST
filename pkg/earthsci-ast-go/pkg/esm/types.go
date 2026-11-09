@@ -1392,6 +1392,13 @@ type ESMFile struct {
 	// cannot be merged from a document that has already thrown its inputs
 	// away.
 	componentTemplates map[string]*orderedMap
+	// authoredTemplateRHS holds, keyed by equation pointer
+	// ("/models/<M>/equations/<i>", subsystems included), the right-hand side
+	// AS AUTHORED of every equation that applied an expression template, taken
+	// before load expanded it. faq_bare_array_operand is decided on the authored
+	// form, where a template application is opaque (esm-spec §4.3.1); the
+	// expansion it became is the build's to check.
+	authoredTemplateRHS map[string]Expression
 	// topLevelRefs holds the raw `{ref, bindings, index_set_rename,
 	// expression_template_imports, ...}` edge of every top-level `models.<k>` and
 	// `reaction_systems.<k>` MOUNT EDGE, keyed by block (`models` /

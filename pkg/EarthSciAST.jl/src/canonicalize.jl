@@ -351,7 +351,7 @@ const _EMISSIBLE_FIELDS = (:op, :args, :wrt, :dim, :fn, :name, :value, :units)
 # (before that, parse dropped both and the emitter never saw one). They fall
 # through to the derived `_NON_EMISSIBLE_FIELDS` below, so no edit is needed
 # here; this note records that the omission is a decision, not an oversight.
-const _CANONICAL_IGNORED_FIELDS = (:arg, :bindings)
+const _CANONICAL_IGNORED_FIELDS = (:arg, :bindings, :template_origin)
 
 # OpExpr fields WITHOUT a pinned slot in the cross-binding canonical JSON node
 # encoding (see `canonical_json` docstring). If any is set, the node cannot be

@@ -1,0 +1,468 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "template_array_args_lin3d",
+  "description": "esm-spec \u00a79.6.11: `linear` applied to a `[x, y, z]` parameter. Every element must equal the `interp.*` closed function at that element's argument, bit for bit."
+ },
+ "index_sets": {
+  "x": {
+   "kind": "interval",
+   "size": 2
+  },
+  "y": {
+   "kind": "interval",
+   "size": 3
+  },
+  "z": {
+   "kind": "interval",
+   "size": 4
+  }
+ },
+ "models": {
+  "template_array_args_lin3d": {
+   "variables": {
+    "q": {
+     "type": "parameter",
+     "shape": [
+      "x",
+      "y",
+      "z"
+     ],
+     "default": [
+      [
+       [
+        0.1,
+        0.47,
+        0.84,
+        1.21
+       ],
+       [
+        1.1,
+        1.4700000000000002,
+        1.84,
+        2.21
+       ],
+       [
+        2.1,
+        2.47,
+        2.84,
+        3.21
+       ]
+      ],
+      [
+       [
+        0.2,
+        0.5700000000000001,
+        0.94,
+        1.3099999999999998
+       ],
+       [
+        1.2,
+        1.5699999999999998,
+        1.94,
+        2.3099999999999996
+       ],
+       [
+        2.2,
+        2.5700000000000003,
+        2.9400000000000004,
+        3.31
+       ]
+      ]
+     ]
+    },
+    "Dz": {
+     "type": "unknown"
+    },
+    "s_Dz": {
+     "type": "unknown",
+     "shape": [
+      "x",
+      "y",
+      "z"
+     ],
+     "default": 0.0
+    },
+    "Dz_out": {
+     "type": "unknown",
+     "shape": [
+      "x",
+      "y",
+      "z"
+     ],
+     "description": "`Dz` read element by element, so the test can assert on a declared shape (esm-spec \u00a76.6.5)."
+    }
+   },
+   "equations": [
+    {
+     "lhs": "Dz",
+     "rhs": {
+      "op": "apply_expression_template",
+      "args": [],
+      "name": "linear",
+      "bindings": {
+       "table": {
+        "op": "const",
+        "args": [],
+        "value": [
+         10.0,
+         20.0,
+         40.0,
+         80.0,
+         160.0
+        ]
+       },
+       "axis": {
+        "op": "const",
+        "args": [],
+        "value": [
+         1,
+         2,
+         3,
+         4,
+         5
+        ]
+       },
+       "x": "q",
+       "n": 5
+      }
+     }
+    },
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "s_Dz"
+      ],
+      "wrt": "t"
+     },
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i",
+       "j",
+       "k"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       },
+       "j": {
+        "from": "y"
+       },
+       "k": {
+        "from": "z"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "Dz",
+        "i",
+        "j",
+        "k"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "Dz_out",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i",
+       "j",
+       "k"
+      ],
+      "ranges": {
+       "i": {
+        "from": "x"
+       },
+       "j": {
+        "from": "y"
+       },
+       "k": {
+        "from": "z"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "Dz",
+        "i",
+        "j",
+        "k"
+       ]
+      }
+     }
+    }
+   ],
+   "expression_template_imports": [
+    {
+     "ref": "esm:std/interp.esm",
+     "only": [
+      "linear"
+     ]
+    }
+   ],
+   "tolerance": {
+    "abs": 0,
+    "rel": 0
+   },
+   "tests": [
+    {
+     "id": "template_array_args_lin3d_t0",
+     "description": "Every element at t = 0.",
+     "time_span": {
+      "start": 0.0,
+      "end": 1.0
+     },
+     "assertions": [
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+       },
+       "expected": 10.0
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "x": 1,
+        "y": 1,
+        "z": 2
+       },
+       "expected": 10.0
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "x": 1,
+        "y": 1,
+        "z": 3
+       },
+       "expected": 10.0
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "x": 1,
+        "y": 1,
+        "z": 4
+       },
+       "expected": 12.1
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "x": 1,
+        "y": 2,
+        "z": 1
+       },
+       "expected": 11.0
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "x": 1,
+        "y": 2,
+        "z": 2
+       },
+       "expected": 14.700000000000003
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "x": 1,
+        "y": 2,
+        "z": 3
+       },
+       "expected": 18.4
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "x": 1,
+        "y": 2,
+        "z": 4
+       },
+       "expected": 24.2
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "x": 1,
+        "y": 3,
+        "z": 1
+       },
+       "expected": 22.0
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "x": 1,
+        "y": 3,
+        "z": 2
+       },
+       "expected": 29.400000000000006
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "x": 1,
+        "y": 3,
+        "z": 3
+       },
+       "expected": 36.8
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "x": 1,
+        "y": 3,
+        "z": 4
+       },
+       "expected": 48.4
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "x": 2,
+        "y": 1,
+        "z": 1
+       },
+       "expected": 10.0
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "x": 2,
+        "y": 1,
+        "z": 2
+       },
+       "expected": 10.0
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "x": 2,
+        "y": 1,
+        "z": 3
+       },
+       "expected": 10.0
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "x": 2,
+        "y": 1,
+        "z": 4
+       },
+       "expected": 13.099999999999998
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "x": 2,
+        "y": 2,
+        "z": 1
+       },
+       "expected": 12.0
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "x": 2,
+        "y": 2,
+        "z": 2
+       },
+       "expected": 15.7
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "x": 2,
+        "y": 2,
+        "z": 3
+       },
+       "expected": 19.4
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "x": 2,
+        "y": 2,
+        "z": 4
+       },
+       "expected": 26.199999999999992
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "x": 2,
+        "y": 3,
+        "z": 1
+       },
+       "expected": 24.000000000000004
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "x": 2,
+        "y": 3,
+        "z": 2
+       },
+       "expected": 31.400000000000006
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "x": 2,
+        "y": 3,
+        "z": 3
+       },
+       "expected": 38.80000000000001
+      },
+      {
+       "variable": "Dz_out",
+       "time": 0.0,
+       "coords": {
+        "x": 2,
+        "y": 3,
+        "z": 4
+       },
+       "expected": 52.400000000000006
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

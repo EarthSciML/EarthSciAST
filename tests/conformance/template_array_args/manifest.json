@@ -1,0 +1,284 @@
+{
+ "category": "template_array_args",
+ "runner": "inline_tests",
+ "version": "1.0",
+ "description": "An expression template of lib/interp.esm applied with an array bound to a scalar-role parameter (esm-spec \u00a79.6.11): the application is evaluated elementwise over the array's index sets, and every element equals the `interp.*` closed function at that element's argument, bit for bit (tolerance 0). Covers a 1-D query defining a shaped and an unshaped observed, the application inside larger arithmetic and on an expression argument, a 3-D query, a level column replicated over a 3-D field, `bilinear` with one and with both coordinates arrays (1-D and 2-D), and `searchsorted`.",
+ "reference_binding": "julia",
+ "reference_compiler": "interpreter",
+ "bindings_required": [
+  "julia",
+  "python",
+  "rust"
+ ],
+ "scope_excluded": {
+  "go": "No simulator and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md \u00a73, capability profiles). This is an exclusion from the CATEGORY, not from the rule.",
+  "typescript": "No simulator and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md \u00a73, capability profiles). This is an exclusion from the CATEGORY, not from the rule."
+ },
+ "integrators": {
+  "julia": {
+   "algorithm": "Tsit5",
+   "reltol": 1e-12,
+   "abstol": 1e-14
+  },
+  "python": {
+   "method": "LSODA",
+   "rtol": 1e-12,
+   "atol": 1e-14
+  },
+  "rust": {
+   "solver": "Erk",
+   "reltol": 1e-12,
+   "abstol": 1e-14
+  }
+ },
+ "tolerances": {
+  "golden_rtol": 0,
+  "golden_atol": 0,
+  "detail": "Every asserted value is the `interp.*` closed function's binary64 result at that element, matched bit for bit."
+ },
+ "fixtures": [
+  {
+   "id": "bilin_2d_grid",
+   "path": "fixtures/bilin_2d_grid.esm",
+   "model": "template_array_args_bilin_2d_grid",
+   "golden": "golden/bilin_2d_grid.json",
+   "tags": [
+    "expression_templates",
+    "elementwise_application",
+    "faq",
+    "interp"
+   ],
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "bilin_both_array",
+   "path": "fixtures/bilin_both_array.esm",
+   "model": "template_array_args_bilin_both_array",
+   "golden": "golden/bilin_both_array.json",
+   "tags": [
+    "expression_templates",
+    "elementwise_application",
+    "faq",
+    "interp"
+   ],
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "bilin_x_array",
+   "path": "fixtures/bilin_x_array.esm",
+   "model": "template_array_args_bilin_x_array",
+   "golden": "golden/bilin_x_array.json",
+   "tags": [
+    "expression_templates",
+    "elementwise_application",
+    "faq",
+    "interp"
+   ],
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "lin1d_composite",
+   "path": "fixtures/lin1d_composite.esm",
+   "model": "template_array_args_lin1d_composite",
+   "golden": "golden/lin1d_composite.json",
+   "tags": [
+    "expression_templates",
+    "elementwise_application",
+    "faq",
+    "interp"
+   ],
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "lin1d_shaped",
+   "path": "fixtures/lin1d_shaped.esm",
+   "model": "template_array_args_lin1d_shaped",
+   "golden": "golden/lin1d_shaped.json",
+   "tags": [
+    "expression_templates",
+    "elementwise_application",
+    "faq",
+    "interp"
+   ],
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "lin1d_unshaped",
+   "path": "fixtures/lin1d_unshaped.esm",
+   "model": "template_array_args_lin1d_unshaped",
+   "golden": "golden/lin1d_unshaped.json",
+   "tags": [
+    "expression_templates",
+    "elementwise_application",
+    "faq",
+    "interp"
+   ],
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "lin3d",
+   "path": "fixtures/lin3d.esm",
+   "model": "template_array_args_lin3d",
+   "golden": "golden/lin3d.json",
+   "tags": [
+    "expression_templates",
+    "elementwise_application",
+    "faq",
+    "interp"
+   ],
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "lin3d_levcol",
+   "path": "fixtures/lin3d_levcol.esm",
+   "model": "template_array_args_lin3d_levcol",
+   "golden": "golden/lin3d_levcol.json",
+   "tags": [
+    "expression_templates",
+    "elementwise_application",
+    "faq",
+    "interp"
+   ],
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "searchsorted_array",
+   "path": "fixtures/searchsorted_array.esm",
+   "model": "template_array_args_searchsorted_array",
+   "golden": "golden/searchsorted_array.json",
+   "tags": [
+    "expression_templates",
+    "elementwise_application",
+    "faq",
+    "interp"
+   ],
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  }
+ ]
+}

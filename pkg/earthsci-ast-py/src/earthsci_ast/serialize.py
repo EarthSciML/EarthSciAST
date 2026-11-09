@@ -178,7 +178,7 @@ def _serialize_expression(expr: Expr) -> int | float | str | dict[str, Any]:
         result: dict[str, Any] = {}
         for name, wire, kind, required in EXPR_WIRE_SPEC:
             value = getattr(expr, name)
-            if value is None and not required:
+            if (value is None and not required) or kind == "internal":
                 continue
             if kind == "scalar":
                 result[wire] = value

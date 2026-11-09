@@ -98,8 +98,10 @@ consumer_rhs(sys) = only(
         # so the build/eval fails to bind the (now-array) scalar name.
         body = consumer_rhs(broken).expr_body
         @test E.VarExpr("M.j") in E.child_exprs(body)
-        # The exact downstream symptom (reseact saw it as
-        # "E_TREEWALK_UNBOUND_VARIABLE: FastJX.j_NO2"):
+        # The downstream symptom reseact saw was
+        # "E_TREEWALK_UNBOUND_VARIABLE: FastJX.j_NO2". The build now refuses the
+        # bare shaped read by name first (`faq_bare_array_operand`, esm-spec
+        # §4.3.1), still naming the variable:
         err = try
             f!, u0, p, _t, vmap = E._build_evaluator(
                 E.flattened_to_esm(broken);
@@ -112,7 +114,7 @@ consumer_rhs(sys) = only(
             e
         end
         @test err isa E.TreeWalkError
-        @test occursin("E_TREEWALK_UNBOUND_VARIABLE", sprint(showerror, err))
+        @test occursin("faq_bare_array_operand", sprint(showerror, err))
         @test occursin("M.j", sprint(showerror, err))
     end
 

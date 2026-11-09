@@ -220,8 +220,11 @@ end
 # They are the reference-integrity findings: a name, reference or data source the
 # document uses and does not declare. A build that went ahead would read a value
 # the document does not describe. Equation-count and unit findings are not here:
-# they stay `validate`'s to report.
-const _BUILD_REFUSED_VALIDATION_CODES = ("undefined_variable", "undefined_parameter", "undefined_species", "undefined_system", "undefined_index_set", "unresolved_scoped_ref", "event_var_undeclared", "data_source_undefined", "missing_required_field")
+# they stay `validate`'s to report. `faq_bare_array_operand` (esm-spec §4.3.1,
+# issue #441) is here too: a shaped variable read by bare name in a `faq` body or
+# filter has no defined alignment to the node's symbols, and another binding
+# built it into a silently ignored filter.
+const _BUILD_REFUSED_VALIDATION_CODES = ("undefined_variable", "undefined_parameter", "undefined_species", "undefined_system", "undefined_index_set", "unresolved_scoped_ref", "event_var_undeclared", "data_source_undefined", "missing_required_field", "faq_bare_array_operand")
 
 function _refuse_reference_integrity_errors(file::EsmFile; supplied_names = ())
     for e in validate_structural(file)

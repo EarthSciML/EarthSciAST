@@ -5508,6 +5508,11 @@ function _build_evaluator_impl_inner(
             )
         )
     end
+    # ---- esm-spec §4.3.1 `faq_bare_array_operand`, on the EXPANDED model ----
+    # `validate` (and the front door's reference-integrity refusal) cannot see a
+    # bare shaped name a template binding delivers into a `faq` filter, the
+    # spelling issue #441 was found in; here every reference is expanded.
+    _refuse_faq_bare_array_operands(model)
     # ---- §9.6.3 constraint 6: walk every equation for an unlowered op ----
     # BEFORE any pass that drops a tree (the elementwise fold, dead-observed
     # elimination), so an op in a tree the build would discard is still refused.
@@ -8930,4 +8935,33 @@ function evaluate_expr(
     end
     t = haskey(bindings, "t") ? Float64(bindings["t"]) : 0.0
     return _eval_node(node, u, NamedTuple(), t)
+end
+
+
+# esm-spec §4.3.1 (issue #441): refuse a `faq` whose `expr` or `filter` reads a
+# shaped variable by bare name, with the same code `validate` reports. Run on the
+# template-expanded model at the build entry, so the refusal does not depend on
+# whether the name was written inline or delivered by a template binding.
+function _refuse_faq_bare_array_operands(model::Model)
+    shapes = Dict{String, Vector{String}}(
+        n => String[String(x) for x in v.shape]
+            for (n, v) in model.variables if v.shape !== nothing && !isempty(v.shape)
+    )
+    isempty(shapes) && return nothing
+    for (i, eq) in enumerate(model.equations)
+        # A bare read of the variable an observed or recurrence definition
+        # defines is a self-reference the recurrence / cycle rules own; a
+        # derivative's state is not exempt.
+        defined = faq_bare_exempt_names(eq.lhs)
+        found = faq_bare_array_operands(eq.rhs, shapes; exclude = defined)
+        isempty(found) && continue
+        field, name, shape = first(found)
+        throw(
+            TreeWalkError(
+                ERROR_CODES.FAQ_BARE_ARRAY_OPERAND,
+                "equations[$i].rhs: " * faq_bare_array_operand_message(field, name, shape)
+            )
+        )
+    end
+    return nothing
 end

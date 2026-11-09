@@ -1056,7 +1056,7 @@ pub fn derive_output_plan(
 }
 
 /// What an output request designates among `candidates`.
-pub(crate) enum RequestMatch<'a> {
+pub enum RequestMatch<'a> {
     /// The one candidate the request names.
     Named(&'a str),
     /// No candidate is named exactly, and these (sorted) share the request's
@@ -1069,7 +1069,7 @@ pub(crate) enum RequestMatch<'a> {
 /// The output-request rule of CONFORMANCE_SPEC §5.17.4: the candidate the
 /// request names exactly; failing that, the ONE candidate whose last dotted
 /// segment equals the request's. Mirrors Julia's `_resolve_output_requests`.
-pub(crate) fn match_output_request<'a>(request: &str, candidates: &[&'a str]) -> RequestMatch<'a> {
+pub fn match_output_request<'a>(request: &str, candidates: &[&'a str]) -> RequestMatch<'a> {
     if let Some(exact) = candidates.iter().find(|c| **c == request) {
         return RequestMatch::Named(exact);
     }

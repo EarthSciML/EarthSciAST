@@ -112,6 +112,11 @@ export const ERROR_CODES = {
   //   not a member, so the body reads positions where the author meant members
   //   (esm-spec §4.3.1 "Ragged ranges").
   RAGGED_VALUES_NOT_GATHERED: 'ragged_values_not_gathered',
+  // `faq_bare_array_operand` — a `faq`'s `expr` or `filter` reads a variable
+  //   declared with a non-empty `shape` by BARE name in an elementwise position.
+  //   The node names its axes by its range symbols, so the read must say which
+  //   ones: `index(v, i, …)` (esm-spec §4.3.1, issue #441).
+  FAQ_BARE_ARRAY_OPERAND: 'faq_bare_array_operand',
   // `invalid_broadcast_fn` — a `broadcast` node's `fn` is absent, does not name
   //   a SCALAR operator, or is applied to an argument count that operator's
   //   §4.2 arity does not admit (esm-spec §4.3.4 / §9.6.6). The value analogue

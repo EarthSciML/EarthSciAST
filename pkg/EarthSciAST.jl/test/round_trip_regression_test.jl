@@ -22,9 +22,11 @@ const ESM = EarthSciAST
     wire = ESM.OPEXPR_WIRE_KEYS
     fields = Set(fieldnames(OpExpr))
 
-    # `join_gates` is the single internal (never-serialized) field; everything
-    # else must appear in the wire-key table.
-    @test Set(keys(wire)) == setdiff(fields, Set([:join_gates]))
+    # The internal (never-serialized) fields are `join_gates` and
+    # `template_origin`; everything else must appear in the wire-key table.
+    internal = Set(k for (k, s) in pairs(ESM.OPEXPR_FIELD_TABLE) if s.kind === :internal)
+    @test internal == Set([:join_gates, :template_origin])
+    @test Set(keys(wire)) == setdiff(fields, internal)
 
     # reconstruct(::OpExpr) must offer a kwarg for EVERY field (including the
     # internal join_gates) so structural rewrites can't silently drop one.
@@ -254,9 +256,9 @@ const ESM = EarthSciAST
     ]
 
     # The spec list must cover every field except op/args (structural) and
-    # join_gates (internal). A newly added OpExpr field fails this until a
+    # the internal ones. A newly added OpExpr field fails this until a
     # spec — i.e. real parse + serialize behavior — exists for it.
-    @test Set(s.field for s in specs) == setdiff(fields, Set([:op, :args, :join_gates]))
+    @test Set(s.field for s in specs) == setdiff(fields, union(Set([:op, :args]), internal))
 
     # Structural expression equality (OpExpr has no field-wise `==`; compare
     # via the serialized wire form, which the specs above pin field-by-field).

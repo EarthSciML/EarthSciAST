@@ -1,0 +1,37 @@
+{
+  "fixture": "bilin_both_array",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "template_array_args_bilin_both_array_t0",
+      "assertion_idx": 1,
+      "variable": "B_out",
+      "actual": 1.0
+    },
+    {
+      "test_id": "template_array_args_bilin_both_array_t0",
+      "assertion_idx": 2,
+      "variable": "B_out",
+      "actual": 1.0
+    },
+    {
+      "test_id": "template_array_args_bilin_both_array_t0",
+      "assertion_idx": 3,
+      "variable": "B_out",
+      "actual": 2.8249999999999997
+    },
+    {
+      "test_id": "template_array_args_bilin_both_array_t0",
+      "assertion_idx": 4,
+      "variable": "B_out",
+      "actual": 16.72
+    },
+    {
+      "test_id": "template_array_args_bilin_both_array_t0",
+      "assertion_idx": 5,
+      "variable": "B_out",
+      "actual": 23.0
+    }
+  ]
+}

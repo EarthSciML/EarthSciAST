@@ -123,6 +123,8 @@ mod expression_operations;
 mod expression_parse_conformance;
 #[path = "expression_templates_conformance.rs"]
 mod expression_templates_conformance;
+#[path = "faq_bare_array_operand.rs"]
+mod faq_bare_array_operand;
 #[path = "faq_conformance.rs"]
 mod faq_conformance;
 #[path = "faq_equality_scatter_conformance.rs"]
@@ -223,6 +225,8 @@ mod native_model_shapes_conformance;
 mod nonadvancing_run_skips_the_solver;
 #[path = "observed_cadence_tier.rs"]
 mod observed_cadence_tier;
+#[path = "observed_cone.rs"]
+mod observed_cone;
 #[path = "observed_cycle.rs"]
 mod observed_cycle;
 #[path = "observed_field_static.rs"]
@@ -381,6 +385,8 @@ mod tape_fallback_reporting;
 mod tape_interp_lowering;
 #[path = "tape_loop_lowering.rs"]
 mod tape_loop_lowering;
+#[path = "template_array_args.rs"]
+mod template_array_args;
 #[path = "template_imports_conformance.rs"]
 mod template_imports_conformance;
 #[path = "term_provenance.rs"]

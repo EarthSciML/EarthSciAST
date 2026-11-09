@@ -196,6 +196,9 @@ pub enum StructuralErrorCode {
     /// A `faq` whose range iterates a `kind: "ragged"` index set but whose body
     /// never reads that set's `values` array (esm-spec §4.3.1 "Ragged ranges").
     RaggedValuesNotGathered,
+    /// A `faq` `expr`/`filter` that reads a shaped variable by bare name in an
+    /// elementwise position (esm-spec §4.3.1, issue #441).
+    FaqBareArrayOperand,
     /// A value-invention `faq` (`distinct: true`) whose `key`/`expr` reads
     /// a model STATE variable, so the cadence partition classes it CONTINUOUS —
     /// relational work is forbidden on the per-step hot path (RFC
@@ -367,6 +370,7 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::JoinSymsUnknownSymbol => codes::JOIN_SYMS_UNKNOWN_SYMBOL,
             Self::RelationalNodeInContinuous => codes::RELATIONAL_NODE_IN_CONTINUOUS,
             Self::RaggedValuesNotGathered => codes::RAGGED_VALUES_NOT_GATHERED,
+            Self::FaqBareArrayOperand => codes::FAQ_BARE_ARRAY_OPERAND,
             Self::RecurrenceNotWellfounded => codes::RECURRENCE_NOT_WELLFOUNDED,
             Self::RecurrenceUnsupportedForm => codes::RECURRENCE_UNSUPPORTED_FORM,
             Self::UndefinedIndexSet => codes::UNDEFINED_INDEX_SET,

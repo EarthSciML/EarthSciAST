@@ -1,0 +1,25 @@
+{
+  "fixture": "lin1d_shaped",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "template_array_args_lin1d_shaped_t0",
+      "assertion_idx": 1,
+      "variable": "Dz",
+      "actual": 10.0
+    },
+    {
+      "test_id": "template_array_args_lin1d_shaped_t0",
+      "assertion_idx": 2,
+      "variable": "Dz",
+      "actual": 30.0
+    },
+    {
+      "test_id": "template_array_args_lin1d_shaped_t0",
+      "assertion_idx": 3,
+      "variable": "Dz",
+      "actual": 80.0
+    }
+  ]
+}

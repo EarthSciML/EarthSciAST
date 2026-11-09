@@ -1,0 +1,105 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "FaqBareArrayOperandBesideTemplate",
+    "description": "INVALID: a `faq` body adds a template application `twice(x = v)` to the shaped variable `w` read by bare name. A template application is opaque to `faq_bare_array_operand` at validation (esm-spec §4.3.1): the array `v` bound to its argument is not a bare read, and a binding that expands templates at load decides the rule on the authored form. The bare `w` beside it is still a bare read, so validate() reports exactly one `faq_bare_array_operand`, for `w`. The indexed spelling `index(w, i)` would leave nothing to report.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "faq",
+      "template",
+      "invalid"
+    ]
+  },
+  "index_sets": {
+    "a_rows": {
+      "kind": "interval",
+      "size": 2
+    }
+  },
+  "models": {
+    "Probe": {
+      "variables": {
+        "v": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [
+            "a_rows"
+          ],
+          "default": [
+            1.0,
+            2.0
+          ],
+          "description": "Bound to the template's argument."
+        },
+        "w": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [
+            "a_rows"
+          ],
+          "default": [
+            10.0,
+            20.0
+          ],
+          "description": "Read by bare name in the faq body."
+        },
+        "out": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "a_rows"
+          ],
+          "description": "The faq's result."
+        }
+      },
+      "expression_templates": {
+        "twice": {
+          "params": [
+            "x"
+          ],
+          "body": {
+            "op": "*",
+            "args": [
+              2.0,
+              "x"
+            ]
+          }
+        }
+      },
+      "equations": [
+        {
+          "lhs": "out",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "semiring": "sum_product",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "a_rows"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "apply_expression_template",
+                  "args": [],
+                  "name": "twice",
+                  "bindings": {
+                    "x": "v"
+                  }
+                },
+                "w"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

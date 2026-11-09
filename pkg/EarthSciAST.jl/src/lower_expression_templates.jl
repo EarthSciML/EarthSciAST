@@ -2061,6 +2061,20 @@ _expand_cache(m::Dict{Tuple{String, String}, OpExpr}) = _ExpandCache(m)
 
 const _ExpandMemo = Union{Nothing, _ExpandCache}
 
+# `task_local_storage` key: while `true`, `_expand_expr_refs` marks the root of
+# each expansion it makes with its template's name (`OpExpr.template_origin`),
+# for the elementwise lift (esm-spec §9.6.11). Set at a mount, whose leaf's
+# references are expanded at load, and by the lift itself. Each of those
+# callers passes a memo of its own, so an unmarked cached expansion is never
+# served where a marked one is wanted.
+const _MARK_TEMPLATE_ORIGINS_KEY = :earthsciast_mark_template_origins
+
+_marking_template_origins() = get(task_local_storage(), _MARK_TEMPLATE_ORIGINS_KEY, false)::Bool
+
+# `ex` marked as the root of an expansion of `name`, while marking is on.
+_mark_origin(ex, name::String) =
+    (ex isa OpExpr && _marking_template_origins()) ? reconstruct(ex; template_origin = name) : ex
+
 _expand_expr_refs(e::VarExpr, reg, ::_TemplateSites, ::_ExpandMemo = nothing) = e
 _expand_expr_refs(e::NumExpr, reg, ::_TemplateSites, ::_ExpandMemo = nothing) = e
 _expand_expr_refs(e::IntExpr, reg, ::_TemplateSites, ::_ExpandMemo = nothing) = e
@@ -2089,7 +2103,7 @@ function _expand_expr_refs(
         # identically). Only built when the memo is live.
         if memo === nothing
             substituted = _substitute(_raw_get(reg[name], "body"), bindings_raw)
-            ex = _expand_expr_refs(expression_from_json(substituted), reg, sites, memo)
+            ex = _mark_origin(_expand_expr_refs(expression_from_json(substituted), reg, sites, memo), name::String)
             _record_site!(sites, memo, ex, e)
             return ex
         end
@@ -2116,6 +2130,7 @@ function _expand_expr_refs(
             substituted = _substitute(_raw_get(reg[name], "body"), bindings_raw)
             ex = _expand_expr_refs(expression_from_json(substituted), reg, col, memo)
         end
+        ex = _mark_origin(ex, name::String)
         _record_site!(col, memo, ex, e)
         if ex isa OpExpr
             memo.bind[mkey] = ex

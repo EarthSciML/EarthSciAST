@@ -433,7 +433,44 @@ pub(crate) fn apply_flatten_rewrites(
         });
     }
     normalize_model_angle_arguments(model);
-    Ok(promote_conditional_shapes(model, index_sets))
+    // After the elementwise lift (inside `promote_conditional_shapes`,
+    // esm-spec §9.6.11): the check reads the lifted equations.
+    let promoted = promote_conditional_shapes(model, index_sets)?;
+    refuse_faq_bare_array_operands(model)?;
+    Ok(promoted)
+}
+
+/// Refuse a `faq` whose `expr` or `filter` reads a shaped variable by bare name
+/// (`faq_bare_array_operand`, esm-spec §4.3.1), on the model a build compiles:
+/// flattened or mounted, every template expanded, after
+/// [`promote_conditional_shapes`], against declared and inferred shapes
+/// ([`crate::structural::promoted_var_shapes`]). `validate` reports the rule on
+/// the authored document, where a template application is opaque; this is the
+/// check on what the application expanded into, on every input a build takes —
+/// a typed document, a flattened system, a subsystem, a cross-model read.
+pub(crate) fn refuse_faq_bare_array_operands(model: &Model) -> Result<(), CompileError> {
+    let shapes = crate::structural::promoted_var_shapes(model);
+    if shapes.values().all(Vec::is_empty) {
+        return Ok(());
+    }
+    for (k, eq) in model.equations.iter().enumerate() {
+        let mut errors = Vec::new();
+        crate::structural::faq_bare_array_operand_errors(
+            &eq.lhs,
+            &eq.rhs,
+            &format!("/equations/{k}/rhs"),
+            &shapes,
+            false,
+            &mut errors,
+        );
+        if let Some(e) = errors.first() {
+            return Err(CompileError::build_err(format!(
+                "[{}] the equation defining `{}`: {}",
+                e.code, eq.lhs, e.message
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Give each unshaped mixed-rank-`ifelse` variable of `model` the shape it is
@@ -444,17 +481,25 @@ pub(crate) fn apply_flatten_rewrites(
 /// build, which must not infer it again from a system that may have lost what
 /// decided it (a restricted `RhsProgram` drops `D(w)` for a state it only
 /// reads).
+///
+/// First, an expression template applied elementwise over an array argument
+/// (esm-spec §9.6.11) is lifted to a per-cell `faq`
+/// ([`crate::elementwise_lift`]); a variable declared without a `shape` that
+/// the lift defines takes the lift's index sets, and is returned with the rest.
 pub(crate) fn promote_conditional_shapes(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
-) -> BuiltShapes {
-    let promoted = crate::flatten::conditional_shape_promotions(
+) -> Result<BuiltShapes, CompileError> {
+    let lifted = crate::elementwise_lift::lift_elementwise_applications(model)
+        .map_err(CompileError::build_err)?;
+    let mut promoted = crate::flatten::conditional_shape_promotions(
         &|n: &str| model.variables.get(n),
         model.equations.iter(),
         index_sets,
     );
     set_declared_shapes(model, &promoted);
-    promoted
+    promoted.extend(lifted);
+    Ok(promoted)
 }
 
 /// Write `shapes` into `model`'s declarations, by name.

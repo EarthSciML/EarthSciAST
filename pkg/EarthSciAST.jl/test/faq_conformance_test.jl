@@ -389,6 +389,95 @@ end
         ).is_valid
     end
 
+    @testset "faq_bare_array_operand (shared pin, issue #441)" begin
+        name = "bare_array_operand_filter.esm"
+        pins = JSON3.read(
+            read(joinpath(_AGG_REPO_ROOT, "tests", "invalid", "expected_errors.json"), String)
+        )
+        pin = pins[Symbol(name)]
+        want = Set((String(e["code"]), String(e["path"])) for e in pin["structural_errors"])
+        @test want == Set([("faq_bare_array_operand", "/models/Probe/equations/2/rhs")])
+        path = joinpath(_AGG_REPO_ROOT, "tests", "invalid", "faq", name)
+        r = EarthSciAST.validate_path(path)
+        @test r.is_valid == false
+        got = Set((e.error_type, e.path) for e in r.structural_errors)
+        @test issubset(want, got)
+        # The build refuses it with the same code rather than evaluating it.
+        err = try
+            EarthSciAST.esm_problem(path, (0.0, 0.0))
+            nothing
+        catch e
+            e
+        end
+        @test err !== nothing && occursin("faq_bare_array_operand", sprint(showerror, err))
+        # The positive control: the filter read through `index` validates clean.
+        @test EarthSciAST.validate_path(
+            joinpath(
+                _AGG_REPO_ROOT, "tests", "conformance", "faq_pointwise_filter",
+                "fixtures", "indexed_filter_two_outputs.esm"
+            )
+        ).is_valid
+    end
+
+    @testset "faq_bare_array_operand: derivative LHS, subsystems, templates" begin
+        pins = JSON3.read(
+            read(joinpath(_AGG_REPO_ROOT, "tests", "invalid", "expected_errors.json"), String)
+        )
+        faqdir = joinpath(_AGG_REPO_ROOT, "tests", "invalid", "faq")
+        bare(r) = [e for e in r.structural_errors if e.error_type == "faq_bare_array_operand"]
+        # Exactly the pinned finding each: a derivative LHS exempts nothing, the
+        # check reaches inline subsystems, and a template application is opaque
+        # while a bare read beside it is not. The subsystem ragged pin rides along.
+        for name in (
+                "bare_array_operand_derivative.esm", "bare_array_operand_subsystem.esm",
+                "bare_array_operand_beside_template.esm",
+                "ragged_values_not_gathered_subsystem.esm",
+            )
+            want = [
+                (String(e["code"]), String(e["path"]))
+                    for e in pins[Symbol(name)]["structural_errors"]
+            ]
+            r = EarthSciAST.validate_path(joinpath(faqdir, name))
+            @test [(e.error_type, e.path) for e in r.structural_errors] == want
+        end
+        readdoc(name) = JSON3.read(read(joinpath(faqdir, name), String), Dict{String, Any})
+        beside = readdoc("bare_array_operand_beside_template.esm")
+        @test [e.details["variable"] for e in bare(EarthSciAST.validate_text(JSON3.write(beside)))] ==
+            ["w"]
+
+        # The array bound to the template argument alone: clean at validate.
+        beside["models"]["Probe"]["equations"][1]["rhs"]["expr"]["args"][2] =
+            Dict{String, Any}("op" => "index", "args" => Any["w", "i"])
+        @test isempty(bare(EarthSciAST.validate_text(JSON3.write(beside))))
+
+        # `D(y) ~ faq(… twice(y) …)`: the template hides the bare state from
+        # validate; the build check does not exempt a derivative's own state.
+        deriv = readdoc("bare_array_operand_derivative.esm")
+        model = deriv["models"]["Probe"]
+        resize!(model["equations"], 1)
+        delete!(model["variables"], "z")
+        model["expression_templates"] = Dict{String, Any}(
+            "twice" => Dict{String, Any}(
+                "params" => Any["x"],
+                "body" => Dict{String, Any}("op" => "*", "args" => Any[2.0, "x"])
+            )
+        )
+        model["equations"][1]["rhs"]["expr"]["args"][2] = Dict{String, Any}(
+            "op" => "apply_expression_template", "args" => Any[], "name" => "twice",
+            "bindings" => Dict{String, Any}("x" => "y")
+        )
+        @test isempty(bare(EarthSciAST.validate_text(JSON3.write(deriv))))
+        path = joinpath(mktempdir(), "derivative_via_template.esm")
+        write(path, JSON3.write(deriv))
+        err = try
+            EarthSciAST.esm_problem(path, (0.0, 0.0))
+            nothing
+        catch e
+            e
+        end
+        @test err !== nothing && occursin("faq_bare_array_operand", sprint(showerror, err))
+    end
+
     @testset "ragged_values_not_gathered (shared pin)" begin
         name = "ragged_values_not_gathered.esm"
         pins = JSON3.read(
