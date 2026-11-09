@@ -2735,9 +2735,10 @@ impl<'o> BuildState<'o> {
             return;
         };
         let class = crate::classification::Classification::of(&self.model);
-        let has_state = self.model.variables.iter().any(|(name, var)| {
-            var.var_type == VariableType::Unknown && !class.is_observed(name)
-        });
+        let has_state =
+            self.model.variables.iter().any(|(name, var)| {
+                var.var_type == VariableType::Unknown && !class.is_observed(name)
+            });
         if has_state {
             return;
         }
@@ -2759,13 +2760,11 @@ impl<'o> BuildState<'o> {
                     .any(|n| crate::observed_cone::addresses(k, n, prefix.as_deref()))
             })
             .cloned();
-        let cone = crate::observed_cone::closure(
-            seeds,
-            |n| self.defs.contains_key(n),
-            |n| reads.get(n),
-        );
+        let cone =
+            crate::observed_cone::closure(seeds, |n| self.defs.contains_key(n), |n| reads.get(n));
         let before = self.order.len();
-        self.order.retain(|n| cone.contains(n) || self.fields.contains_key(n));
+        self.order
+            .retain(|n| cone.contains(n) || self.fields.contains_key(n));
         self.log(&format!(
             "  [prepare] observed cone: {} of {before} observeds",
             self.order.len()

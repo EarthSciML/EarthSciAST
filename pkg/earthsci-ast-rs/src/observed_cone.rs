@@ -138,9 +138,7 @@ pub(crate) fn prune_flattened(flat: &mut crate::flatten::FlattenedSystem, reques
     }
     let seeds = observed
         .iter()
-        .filter(|k| {
-            pinned.contains(**k) || requested.iter().any(|n| addresses(k, n, None))
-        })
+        .filter(|k| pinned.contains(**k) || requested.iter().any(|n| addresses(k, n, None)))
         .map(|k| k.to_string());
     let cone = closure(seeds, |n| observed.contains(n), |n| reads.get(n));
 

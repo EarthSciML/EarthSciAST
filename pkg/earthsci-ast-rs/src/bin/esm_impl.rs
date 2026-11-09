@@ -2758,11 +2758,9 @@ fn refuse_undeclared_observed(
         walk_subsystems(r, subs.as_ref(), &mut declared);
     }
     let known = |name: &str| {
-        declared.iter().any(|q| {
-            q == name
-                || q.strip_suffix(name)
-                    .is_some_and(|head| head.ends_with('.'))
-        })
+        declared
+            .iter()
+            .any(|q| q == name || q.strip_suffix(name).is_some_and(|head| head.ends_with('.')))
     };
     let unknown: Vec<&str> = observed
         .iter()

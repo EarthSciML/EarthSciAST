@@ -223,6 +223,8 @@ mod native_model_shapes_conformance;
 mod nonadvancing_run_skips_the_solver;
 #[path = "observed_cadence_tier.rs"]
 mod observed_cadence_tier;
+#[path = "observed_cone.rs"]
+mod observed_cone;
 #[path = "observed_cycle.rs"]
 mod observed_cycle;
 #[path = "observed_field_static.rs"]
