@@ -90,6 +90,43 @@ struct _Node
     children::Vector{_Node}
 end
 
+# A map keyed by `_Node` with `IdDict` semantics (keys equal iff `===`). An
+# `IdDict` hashes an immutable key by its whole content through `objectid`,
+# which costs microseconds per `_Node`; this hashes the fields that tell nodes
+# apart cheaply (the children vector and the payload by `objectid`, which for a
+# mutable object is its address) and compares with `===`. Iteration order is
+# unspecified, as for `IdDict`.
+struct _NodeKey
+    n::_Node
+end
+Base.:(==)(a::_NodeKey, b::_NodeKey) = a.n === b.n
+Base.isequal(a::_NodeKey, b::_NodeKey) = a.n === b.n
+Base.hash(k::_NodeKey, h::UInt) = hash(
+    objectid(k.n.children),
+    hash(objectid(k.n.payload), hash(k.n.op, hash(k.n.idx, hash(reinterpret(UInt64, k.n.literal), h))))
+)
+
+struct _NodeMap{V}
+    d::Dict{_NodeKey, V}
+end
+_NodeMap{V}() where {V} = _NodeMap{V}(Dict{_NodeKey, V}())
+Base.get(m::_NodeMap, n::_Node, default) = get(m.d, _NodeKey(n), default)
+Base.get!(f::Function, m::_NodeMap, n::_Node) = get!(f, m.d, _NodeKey(n))
+Base.getindex(m::_NodeMap, n::_Node) = m.d[_NodeKey(n)]
+Base.setindex!(m::_NodeMap, v, n::_Node) = (m.d[_NodeKey(n)] = v; m)
+Base.haskey(m::_NodeMap, n::_Node) = haskey(m.d, _NodeKey(n))
+Base.empty!(m::_NodeMap) = (empty!(m.d); m)
+Base.length(m::_NodeMap) = length(m.d)
+Base.isempty(m::_NodeMap) = isempty(m.d)
+Base.values(m::_NodeMap) = values(m.d)
+Base.keys(m::_NodeMap) = (k.n for k in keys(m.d))
+function Base.iterate(m::_NodeMap, st...)
+    r = iterate(m.d, st...)
+    r === nothing && return nothing
+    (k, v), s = r
+    return (k.n => v, s)
+end
+
 # Build-time side channel from `_resolve_indices` to `_compile` (ess-14f.3): a
 # RESOLVED live-forcing gather, carried in the `value` slot of a synthetic
 # argless `index` node. It exists only between the resolve and compile passes of

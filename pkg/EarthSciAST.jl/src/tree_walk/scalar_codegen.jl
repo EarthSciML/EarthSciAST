@@ -194,18 +194,18 @@ mutable struct _ScSigCtx
     ih::Vector{Int}
     ikind::Vector{UInt8}
     fh::Vector{Float64}
-    memo::IdDict{_Node, Int}          # node -> visit number (DAG sharing)
+    memo::_NodeMap{Int}               # node -> visit number (DAG sharing)
     nvisit::Int
     loops::Vector{Any}               # enclosing contraction-loop refs
     localpos::Dict{Int, Int}          # slot -> its statement position in the unit
     # Recording (the class representative only): node -> its hole number,
     # negative for a Float64 hole.
-    rec::Union{Nothing, IdDict{_Node, Int}}
+    rec::Union{Nothing, _NodeMap{Int}}
 end
 _ScSigCtx(cache::_CSECache, syms, objs) =
     _ScSigCtx(
     cache, syms, objs, Int[], Int[], UInt8[], Float64[],
-    IdDict{_Node, Int}(), 0, Any[], Dict{Int, Int}(), nothing
+    _NodeMap{Int}(), 0, Any[], Dict{Int, Int}(), nothing
 )
 
 function _sc_reset!(S::_ScSigCtx)
@@ -372,7 +372,7 @@ end
 # literal, a table read, a prefetched state local); `locals[pos]` is the
 # expression a read of the unit's `pos`-th slot emits.
 struct _CGUnitCtx
-    holes::IdDict{_Node, Any}
+    holes::_NodeMap{Any}
     locals::Dict{Int, Any}            # slot -> expression of its value
     loops::IdDict{Any, Symbol}
     share::_CGShareKeys
@@ -578,7 +578,7 @@ function _sc_emit_item!(
         ext::Set{Int}, alwaysstore::Bool
     )
     # Re-walk the representative to number its holes by node.
-    S.rec = IdDict{_Node, Int}()
+    S.rec = _NodeMap{Int}()
     _sc_unit_sig!(S, U, rhs_list, prelude, ext)
     rec = S.rec
     S.rec = nothing
@@ -615,7 +615,7 @@ function _sc_emit_item!(
     for h in 1:C.nfh
         fexpr[h] = L.fbake[h] ? C.fh[h] : :($ftv[$bfv + $(L.fcol[h])])
     end
-    holes = IdDict{_Node, Any}()
+    holes = _NodeMap{Any}()
     for (nd, h) in rec
         holes[nd] = h > 0 ? iexpr[h] : fexpr[-h]
     end
