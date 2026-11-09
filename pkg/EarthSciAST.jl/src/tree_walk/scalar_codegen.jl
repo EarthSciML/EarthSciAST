@@ -225,12 +225,13 @@ end
 
 function _sc_sig!(S::_ScSigCtx, nd::_Node)
     sig = S.sig
-    got = get(S.memo, nd, 0)
-    if got != 0
+    n0 = length(S.memo)
+    got = get!(S.memo, nd, S.nvisit + 1)     # one lookup: the number, or this visit's
+    if length(S.memo) == n0
         push!(sig, -1, got)              # the same node object again
         return nothing
     end
-    S.memo[nd] = (S.nvisit += 1)
+    S.nvisit += 1
     k = nd.kind
     if k === _NK_LITERAL
         push!(sig, 1)
@@ -322,6 +323,7 @@ mutable struct _ScClass
     nfh::Int
     ikind::Vector{UInt8}         # the int holes' kinds (one signature, one list)
     nodes::Int                   # emitted-node estimate of one member
+    rec::Union{Nothing, _NodeMap{Int}}  # the representative's node -> hole (`_sc_emit_item!`)
 end
 
 _sc_unit_nodes(U::_ScUnit, rhs_list, prelude) =
@@ -353,7 +355,7 @@ function _sc_classes(
                 classes, _ScClass(
                     ui, Int[], Int[], Float64[], length(S.ih),
                     length(S.fh), copy(S.ikind),
-                    _sc_unit_nodes(U, rhs_list, prelude)
+                    _sc_unit_nodes(U, rhs_list, prelude), nothing
                 )
             )
             ci = byclass[(level[ui], copy(S.sig))] = length(classes)
@@ -577,11 +579,15 @@ function _sc_emit_item!(
         U::_ScUnit, cachemode::Bool, S::_ScSigCtx, rhs_list, prelude,
         ext::Set{Int}, alwaysstore::Bool
     )
-    # Re-walk the representative to number its holes by node.
-    S.rec = _NodeMap{Int}()
-    _sc_unit_sig!(S, U, rhs_list, prelude, ext)
-    rec = S.rec
-    S.rec = nothing
+    # Re-walk the representative to number its holes by node, once per class
+    # (a class in cache mode is emitted as several items).
+    if C.rec === nothing
+        S.rec = _NodeMap{Int}()
+        _sc_unit_sig!(S, U, rhs_list, prelude, ext)
+        C.rec = S.rec
+        S.rec = nothing
+    end
+    rec = C.rec
     M = length(C.members)
     itv = _cg_name(ctx, "it")
     ftv = _cg_name(ctx, "ft")
@@ -597,10 +603,10 @@ function _sc_emit_item!(
     for h in 1:C.nih
         if L.ibake[h]
             v = C.ih[h]
-            iexpr[h] = S.ikind[h] === _SCH_STATE ? :(u[$v]) : v
+            iexpr[h] = C.ikind[h] === _SCH_STATE ? :(u[$v]) : v
         else
             c = L.icol[h]
-            if S.ikind[h] === _SCH_STATE
+            if C.ikind[h] === _SCH_STATE
                 sym = get!(prefetch, c) do
                     push!(preorder, c)
                     _cg_name(ctx, "u")

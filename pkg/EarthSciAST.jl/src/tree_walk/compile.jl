@@ -112,6 +112,7 @@ end
 _NodeMap{V}() where {V} = _NodeMap{V}(Dict{_NodeKey, V}())
 Base.get(m::_NodeMap, n::_Node, default) = get(m.d, _NodeKey(n), default)
 Base.get!(f::Function, m::_NodeMap, n::_Node) = get!(f, m.d, _NodeKey(n))
+Base.get!(m::_NodeMap, n::_Node, default) = get!(m.d, _NodeKey(n), default)
 Base.getindex(m::_NodeMap, n::_Node) = m.d[_NodeKey(n)]
 Base.setindex!(m::_NodeMap, v, n::_Node) = (m.d[_NodeKey(n)] = v; m)
 Base.haskey(m::_NodeMap, n::_Node) = haskey(m.d, _NodeKey(n))
