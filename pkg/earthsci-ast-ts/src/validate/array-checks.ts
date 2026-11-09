@@ -286,12 +286,13 @@ export function validateArrayBroadcastShapes(model: Model, modelPath: string): S
  */
 export function validateFaqBareArrayOperands(model: Model, modelPath: string): StructuralError[] {
   const errors: StructuralError[] = []
-  const axesOf = new Map<string, string[]>()
+  const declared = new Map<string, string[]>()
   for (const [name, variable] of Object.entries(model.variables ?? {})) {
     const shape = variable?.shape
-    if (Array.isArray(shape) && shape.length > 0) axesOf.set(name, shape.map(String))
+    if (Array.isArray(shape) && shape.length > 0) declared.set(name, shape.map(String))
   }
-  if (axesOf.size === 0) return errors
+  if (declared.size === 0) return errors
+  let axesOf = declared
 
   const walk = (node: Expr, bound: ReadonlySet<string>, path: string): void => {
     if (!isExprNode(node)) return
@@ -334,14 +335,23 @@ export function validateFaqBareArrayOperands(model: Model, modelPath: string): S
     forEachChild(node, (child) => walk(child, inner, path))
   }
 
+  // Each equation's right-hand side. A variable its left-hand side names is
+  // skipped: a bare read of the variable an equation defines is a
+  // self-reference the recurrence and cycle checks already report.
   for (const [index, equation] of (model.equations ?? []).entries()) {
-    for (const side of ['lhs', 'rhs'] as const) {
-      const expr = equation[side]
-      if (expr === undefined || containsTemplateReference(expr)) continue
-      walk(expr as Expr, new Set(), `${modelPath}/equations/${index}/${side}`)
-    }
+    const rhs = equation.rhs
+    if (rhs === undefined || containsTemplateReference(rhs)) continue
+    const defined = stringLeaves(equation.lhs)
+    axesOf = new Map([...declared].filter(([name]) => !defined.has(name)))
+    walk(rhs as Expr, new Set(), `${modelPath}/equations/${index}/rhs`)
   }
   return errors
+}
+
+function stringLeaves(expr: unknown, out: Set<string> = new Set()): Set<string> {
+  if (typeof expr === 'string') out.add(expr)
+  else if (isExprNode(expr)) forEachChild(expr, (child) => void stringLeaves(child, out))
+  return out
 }
 
 function containsTemplateReference(expr: unknown): boolean {

@@ -2193,11 +2193,17 @@ fn validate_aggregate_constraints(
     for (eq_idx, equation) in model.equations.iter().enumerate() {
         // An equation the reference check saw no `faq` node in has none to check.
         if faq_equations.is_none_or(|faq| faq.get(eq_idx).copied().unwrap_or(true)) {
+            if !contains_template_reference(&equation.rhs) {
+                faq_bare_array_operand_errors(
+                    &equation.lhs,
+                    &equation.rhs,
+                    &format!("{model_path}/equations/{eq_idx}/rhs"),
+                    &var_shapes,
+                    errors,
+                );
+            }
             for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
                 let field_path = || format!("{model_path}/equations/{eq_idx}/{field}");
-                if !contains_template_reference(expr) {
-                    faq_bare_array_operand_errors(expr, &field_path(), &var_shapes, errors);
-                }
                 check_aggregates_in_expr(
                     expr,
                     &field_path,
@@ -3099,15 +3105,24 @@ fn collect_bare_array_operands<'a>(
 /// closed-function argument) is not a per-tuple read. A name bound as a loop
 /// symbol by this node or an enclosing one shadows the declaration and is not
 /// a variable read. Nested `faq` nodes are checked in their own right.
+///
+/// `expr` is an equation's right-hand side and `lhs` its left-hand side. A
+/// variable the left-hand side names is skipped: a bare read of the variable an
+/// equation defines is a causal self-reference read whole, which
+/// `recurrence_not_wellfounded` (esm-spec §4.3.1.1) or `observed_cycle` already
+/// reports, and one defect is reported once.
 pub(crate) fn faq_bare_array_operand_errors(
+    lhs: &crate::Expr,
     expr: &crate::Expr,
     path: &str,
     var_shapes: &HashMap<String, Vec<String>>,
     errors: &mut Vec<StructuralError>,
 ) {
+    let mut defined = HashSet::new();
+    collect_variable_refs(lhs, &mut defined);
     let declared_axes: HashMap<&str, &Vec<String>> = var_shapes
         .iter()
-        .filter(|(_, s)| !s.is_empty())
+        .filter(|(n, s)| !s.is_empty() && !defined.contains(n.as_str()))
         .map(|(n, s)| (n.as_str(), s))
         .collect();
     if declared_axes.is_empty() {
@@ -3137,7 +3152,10 @@ fn walk_faq_bare_operands(
         0
     };
     if is_faq {
-        for (field, part) in [("expr", node.expr.as_deref()), ("filter", node.filter.as_deref())] {
+        for (field, part) in [
+            ("expr", node.expr.as_deref()),
+            ("filter", node.filter.as_deref()),
+        ] {
             let Some(part) = part else { continue };
             let mut operands: Vec<&str> = Vec::new();
             collect_bare_array_operands(part, declared_axes, &mut operands);

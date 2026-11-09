@@ -58,11 +58,11 @@ const (
 	// not a member, so the body reads positions where the author meant members
 	// (esm-spec §4.3.1 "Ragged ranges").
 	CodeRaggedValuesNotGathered = "ragged_values_not_gathered"
-	// CodeFaqBareArrayOperand: a `faq`'s `expr` or `filter` reads a variable
+	// CodeFAQBareArrayOperand: a `faq`'s `expr` or `filter` reads a variable
 	// declared with a non-empty `shape` by BARE name in an elementwise position.
 	// The node names its axes by its range symbols, so the read must say which
 	// ones: `index(v, i, …)` (esm-spec §4.3.1, issue #441).
-	CodeFaqBareArrayOperand = "faq_bare_array_operand"
+	CodeFAQBareArrayOperand = "faq_bare_array_operand"
 	// CodeUndefinedIndexSet: an aggregate `ranges` entry `{from: NAME}` names an
 	// index set that is not a key of the document `index_sets` registry. No
 	// implicit interval is inferred for an undeclared name (RFC §5.2).
@@ -127,12 +127,22 @@ func (s *structuralScan) validateModelStaticAggregateChecks(modelName string, mo
 		eqPath := fmt.Sprintf("%s/equations/%d", basePath, i)
 		checkField(eqPath+"/lhs", eq.LHS)
 		checkField(eqPath+"/rhs", eq.RHS)
-		s.checkFaqBareArrayOperands(eq.LHS, shaped, eqPath+"/lhs", modelName)
-		s.checkFaqBareArrayOperands(eq.RHS, shaped, eqPath+"/rhs", modelName)
+		// A variable the LHS names is skipped: a bare read of the variable an
+		// equation defines is a self-reference the recurrence and cycle checks
+		// already report.
+		defined := make(map[string]bool)
+		collectStringLeaves(eq.LHS, defined)
+		here := make(map[string][]string, len(shaped))
+		for name, axes := range shaped {
+			if !defined[name] {
+				here[name] = axes
+			}
+		}
+		s.checkFAQBareArrayOperands(eq.RHS, here, eqPath+"/rhs", modelName)
 	}
 }
 
-// checkFaqBareArrayOperands reports faq_bare_array_operand for every `faq`
+// checkFAQBareArrayOperands reports faq_bare_array_operand for every `faq`
 // node in expr whose `expr` or `filter` reads a variable declared with a
 // non-empty `shape` by BARE name in an elementwise position (esm-spec §4.3.1,
 // issue #441).
@@ -149,7 +159,7 @@ func (s *structuralScan) validateModelStaticAggregateChecks(modelName string, mo
 // nested `faq` nodes are checked in their own right; a field still holding a
 // template reference is not decided. Order: pre-order over nodes, `expr` before
 // `filter`, matching the other bindings.
-func (s *structuralScan) checkFaqBareArrayOperands(expr Expression, shaped map[string][]string, fieldPath, modelName string) {
+func (s *structuralScan) checkFAQBareArrayOperands(expr Expression, shaped map[string][]string, fieldPath, modelName string) {
 	if len(shaped) == 0 || containsTemplateReference(expr) {
 		return
 	}
@@ -194,7 +204,7 @@ func (s *structuralScan) checkFaqBareArrayOperands(expr Expression, shaped map[s
 					axes := shaped[name]
 					s.addErr(StructuralError{
 						Path: fieldPath,
-						Code: CodeFaqBareArrayOperand,
+						Code: CodeFAQBareArrayOperand,
 						Message: fmt.Sprintf("faq `%s` reads '%s', declared over [%s], by bare name. A faq names its axes by its range symbols, and its `%s` is evaluated once per index tuple, so a whole array there does not say which symbol each of its axes is. Read it through `index`, e.g. index(%s, <symbol>…) (esm-spec §4.3.1)",
 							part.field, name, strings.Join(axes, ", "), part.field, name),
 						Details: map[string]any{

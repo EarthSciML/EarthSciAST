@@ -506,12 +506,30 @@ def _check_aggregate_semantics(data: dict[str, Any], errors: list) -> None:
             for vn, v in (m.get("variables") or {}).items()
             if isinstance(v, dict) and isinstance(v.get("shape"), list)
         }
-        bare_axes = {
-            vn: tuple(str(a) for a in shape) for vn, shape in var_shapes.items() if shape
-        }
+        bare_axes = {vn: tuple(str(a) for a in shape) for vn, shape in var_shapes.items() if shape}
         # A subsystem's template calls expand against its top-level model's
         # registry, as the load-time rewrite does.
         from_map = _from_param_map(_model_template_registry(data, top)) if check_index_sets else {}
+        # --- faq_bare_array_operand: a shaped variable read by bare name in a
+        # faq body or filter (esm-spec §4.3.1, issue #441), on each equation's
+        # RHS. A variable the LHS names is left to the recurrence / cycle checks
+        # (a bare self-read), and a RHS still holding a template reference is
+        # not decided here; the build front door checks the expanded form.
+        for i, eq in enumerate(m.get("equations") or []):
+            if not isinstance(eq, dict):
+                continue
+            rhs = eq.get("rhs")
+            if rhs is None or _contains_template_reference(rhs):
+                continue
+            defined = _bare_string_leaves(eq.get("lhs"))
+            axes_here = {n: a for n, a in bare_axes.items() if n not in defined}
+            for field_name, name, axes in faq_bare_array_operands(rhs, axes_here):
+                emit(
+                    FAQ_BARE_ARRAY_OPERAND,
+                    _pointer(f"models/{mname}/equations[{i}]/rhs"),
+                    faq_bare_array_operand_message(field_name, name, axes),
+                    {"field": field_name, "variable": name, "shape": list(axes)},
+                )
         for site in _model_expression_sites(m, mname):
             location, expr = site[0], site[1]
             pointer = _pointer(location)
@@ -528,18 +546,6 @@ def _check_aggregate_semantics(data: dict[str, Any], errors: list) -> None:
                             f"'{name}' (bound to its parameter '{param}'; declared: {sorted(index_sets)})",
                             {"index_set": name, "declared": sorted(index_sets)},
                         )
-            # --- faq_bare_array_operand: a shaped variable read by bare name in
-            # a faq body or filter (esm-spec §4.3.1, issue #441). Not decided for
-            # an expression still holding a template reference; the build
-            # front door checks the expanded form.
-            if not _contains_template_reference(expr):
-                for field_name, name, axes in faq_bare_array_operands(expr, bare_axes):
-                    emit(
-                        FAQ_BARE_ARRAY_OPERAND,
-                        pointer,
-                        faq_bare_array_operand_message(field_name, name, axes),
-                        {"field": field_name, "variable": name, "shape": list(axes)},
-                    )
             for agg in _iter_aggregate_nodes(expr):
                 ranges = agg.get("ranges") or {}
 

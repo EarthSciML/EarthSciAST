@@ -1503,15 +1503,19 @@ def _refuse_faq_bare_array_operands(flat: FlattenedSystem) -> None:
     if not var_axes:
         return
     for eq in flat.equations:
-        for side in (eq.lhs, eq.rhs):
-            found = faq_bare_array_operands(side, var_axes)
-            if found:
-                field_name, name, axes = found[0]
-                raise SimulationError(
-                    f"{FAQ_BARE_ARRAY_OPERAND}: the equation "
-                    f"`{_expr_to_string(eq.lhs)} ~ {_expr_to_string(eq.rhs)}`: "
-                    + faq_bare_array_operand_message(field_name, name, axes)
-                )
+        # A bare read of the variable the equation defines is a self-reference
+        # the recurrence / cycle rules own; one defect, one report.
+        defined = free_variables(eq.lhs)
+        found = faq_bare_array_operands(
+            eq.rhs, {n: a for n, a in var_axes.items() if n not in defined}
+        )
+        if found:
+            field_name, name, axes = found[0]
+            raise SimulationError(
+                f"{FAQ_BARE_ARRAY_OPERAND}: the equation "
+                f"`{_expr_to_string(eq.lhs)} ~ {_expr_to_string(eq.rhs)}`: "
+                + faq_bare_array_operand_message(field_name, name, axes)
+            )
 
 
 def _assert_no_doubly_defined_state(flat: FlattenedSystem) -> None:

@@ -389,6 +389,36 @@ end
         ).is_valid
     end
 
+    @testset "faq_bare_array_operand (shared pin, issue #441)" begin
+        name = "bare_array_operand_filter.esm"
+        pins = JSON3.read(
+            read(joinpath(_AGG_REPO_ROOT, "tests", "invalid", "expected_errors.json"), String)
+        )
+        pin = pins[Symbol(name)]
+        want = Set((String(e["code"]), String(e["path"])) for e in pin["structural_errors"])
+        @test want == Set([("faq_bare_array_operand", "/models/Probe/equations/2/rhs")])
+        path = joinpath(_AGG_REPO_ROOT, "tests", "invalid", "faq", name)
+        r = EarthSciAST.validate_path(path)
+        @test r.is_valid == false
+        got = Set((e.error_type, e.path) for e in r.structural_errors)
+        @test issubset(want, got)
+        # The build refuses it with the same code rather than evaluating it.
+        err = try
+            EarthSciAST.esm_problem(path, (0.0, 0.0))
+            nothing
+        catch e
+            e
+        end
+        @test err !== nothing && occursin("faq_bare_array_operand", sprint(showerror, err))
+        # The positive control: the filter read through `index` validates clean.
+        @test EarthSciAST.validate_path(
+            joinpath(
+                _AGG_REPO_ROOT, "tests", "conformance", "faq_pointwise_filter",
+                "fixtures", "indexed_filter_two_outputs.esm"
+            )
+        ).is_valid
+    end
+
     @testset "ragged_values_not_gathered (shared pin)" begin
         name = "ragged_values_not_gathered.esm"
         pins = JSON3.read(

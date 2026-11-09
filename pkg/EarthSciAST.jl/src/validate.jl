@@ -1918,12 +1918,11 @@ function _check_model_aggregates!(
     )
 
     for (i, eq) in enumerate(model.equations)
-        for (side, e) in (("lhs", eq.lhs), ("rhs", eq.rhs))
-            anchor = "$path/equations/$(i - 1)/$side"
-            _contains_template_reference(e) ||
-                _check_faq_bare_array_operands!(errors, e, anchor, var_shapes)
-            _walk_aggregates!(errors, file, e, anchor, state_vars, registry, var_shapes)
-        end
+        _contains_template_reference(eq.rhs) || _check_faq_bare_array_operands!(
+            errors, eq.lhs, eq.rhs, "$path/equations/$(i - 1)/rhs", var_shapes
+        )
+        _walk_aggregates!(errors, file, eq.lhs, "$path/equations/$(i - 1)/lhs", state_vars, registry, var_shapes)
+        _walk_aggregates!(errors, file, eq.rhs, "$path/equations/$(i - 1)/rhs", state_vars, registry, var_shapes)
     end
     for (i, eq) in enumerate(model.initialization_equations)
         _walk_aggregates!(errors, file, eq.lhs, "$path/initialization_equations/$(i - 1)/lhs", state_vars, registry, var_shapes)
@@ -2024,10 +2023,11 @@ further out, shadows the declaration; nested `faq` nodes are checked in their
 own right. Order: pre-order over nodes, `expr` before `filter`, operands left to
 right — the order Rust and Python report in.
 """
-function faq_bare_array_operands(expr::ASTExpr, var_shapes::AbstractDict)
+function faq_bare_array_operands(expr::ASTExpr, var_shapes::AbstractDict; exclude = ())
     found = Tuple{String, String, Vector{String}}[]
     shaped = Dict{String, Vector{String}}(
-        String(n) => String[String(x) for x in s] for (n, s) in var_shapes if !isempty(s)
+        String(n) => String[String(x) for x in s]
+            for (n, s) in var_shapes if !isempty(s) && !(String(n) in exclude)
     )
     isempty(shaped) && return found
     _faq_bare_walk!(found, expr, shaped, Set{String}())
@@ -2075,10 +2075,15 @@ faq_bare_array_operand_message(field::AbstractString, name::AbstractString, shap
     "per index tuple, so a whole array there does not say which symbol each of its " *
     "axes is. Read it through `index`, e.g. index($name, <symbol>…) (esm-spec §4.3.1)"
 
+# `lhs` is the equation's left-hand side: a variable it names is skipped, since a
+# bare read of the variable an equation defines is a self-reference the
+# recurrence and cycle checks already report — one defect, one finding.
 function _check_faq_bare_array_operands!(
-        errors::Vector{StructuralError}, expr::ASTExpr, anchor::String, var_shapes
+        errors::Vector{StructuralError}, lhs::ASTExpr, expr::ASTExpr, anchor::String,
+        var_shapes
     )
-    for (field, name, shape) in faq_bare_array_operands(expr, var_shapes)
+    defined = _referenced_var_names(lhs, Set{String}())
+    for (field, name, shape) in faq_bare_array_operands(expr, var_shapes; exclude = defined)
         push!(
             errors, StructuralError(
                 anchor, faq_bare_array_operand_message(field, name, shape),

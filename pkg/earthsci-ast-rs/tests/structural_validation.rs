@@ -1597,6 +1597,35 @@ fn test_ragged_values_not_gathered() {
     );
 }
 
+/// Issue #441 (esm-spec §4.3.1 "Shaped variables inside a `faq` are read
+/// through `index`"): a `faq` filter that names a shaped variable bare. With
+/// two output indices the reference evaluator used to ignore it silently; it is
+/// now `faq_bare_array_operand` at the containing field.
+#[test]
+fn test_faq_bare_array_operand_filter() {
+    assert_structural(
+        include_str!("../../../tests/invalid/faq/bare_array_operand_filter.esm"),
+        StructuralErrorCode::FaqBareArrayOperand,
+        "/models/Probe/equations/2/rhs",
+    );
+}
+
+/// The positive control for #441: the same filter over two output indices,
+/// read through `index(a_val, i)`, validates clean.
+#[test]
+fn test_faq_indexed_filter_two_outputs_is_valid() {
+    let esm_file = load_string(include_str!(
+        "../../../tests/conformance/faq_pointwise_filter/fixtures/indexed_filter_two_outputs.esm"
+    ))
+    .expect("fixture must load");
+    let result = validate(&esm_file);
+    assert!(
+        result.structural_errors.is_empty(),
+        "unexpected structural errors: {:?}",
+        result.structural_errors
+    );
+}
+
 /// The positive control: the same sum spelled with the explicit
 /// `index(parentMember, i, j)` gather over a padded `values` array is clean.
 #[test]

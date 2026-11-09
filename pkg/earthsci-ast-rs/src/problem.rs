@@ -3427,14 +3427,13 @@ fn refuse_structurally_unreachable(file: &EsmFile) -> Result<(), SimulateError> 
             let shapes = crate::join::declared_var_shapes(model);
             let mut errors = Vec::new();
             for (k, eq) in model.equations.iter().enumerate() {
-                for (side, expr) in [("lhs", &eq.lhs), ("rhs", &eq.rhs)] {
-                    crate::structural::faq_bare_array_operand_errors(
-                        expr,
-                        &format!("/models/{model_name}/equations/{k}/{side}"),
-                        &shapes,
-                        &mut errors,
-                    );
-                }
+                crate::structural::faq_bare_array_operand_errors(
+                    &eq.lhs,
+                    &eq.rhs,
+                    &format!("/models/{model_name}/equations/{k}/rhs"),
+                    &shapes,
+                    &mut errors,
+                );
             }
             if let Some(e) = errors.first() {
                 return Err(refuse(&e.code.to_string(), &e.path, &e.message, "§4.3.1"));

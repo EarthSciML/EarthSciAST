@@ -126,3 +126,99 @@ def test_ragged_range_with_the_values_gather_is_valid() -> None:
 
     assert [e.code for e in result.structural_errors] == []
     assert result.is_valid
+
+
+def test_faq_filter_reading_a_shaped_variable_bare_is_rejected() -> None:
+    """Issue #441: a ``faq`` filter naming a shaped variable bare. With two
+    output indices Rust's reference ignored it silently and this binding's
+    whole-box tier aligned it with the box's last axis. It is now
+    ``faq_bare_array_operand`` at the containing field (esm-spec §4.3.1)."""
+    fixture = INVALID_DIR / "faq" / "bare_array_operand_filter.esm"
+
+    result = validate_text(fixture.read_text())
+
+    assert not result.is_valid
+    found = [e for e in result.structural_errors if e.code == "faq_bare_array_operand"]
+    assert [e.path for e in found] == ["/models/Probe/equations/2/rhs"]
+    assert found[0].details["variable"] == "a_val"
+    assert found[0].details["field"] == "filter"
+
+
+def test_faq_indexed_filter_over_two_outputs_is_valid() -> None:
+    """The positive control: the filter read through ``index(a_val, i)``."""
+    fixture = (
+        CONFORMANCE_DIR / "faq_pointwise_filter" / "fixtures" / "indexed_filter_two_outputs.esm"
+    )
+    result = validate_text(fixture.read_text())
+    assert [e.code for e in result.structural_errors] == []
+
+
+def _bare_operand_doc(filter_expr, *, templates=None, a_size=2):
+    """A two-output ``faq`` over two equal-extent index sets whose filter is
+    ``filter_expr`` (``a_val = [1, 2]``, ``c_val = [10, 20]``)."""
+    idx = lambda v, s: {"op": "index", "args": [v, s]}  # noqa: E731
+    model = {
+        "variables": {
+            "a_val": {"type": "unknown", "units": "1", "shape": ["a_rows"]},
+            "c_val": {"type": "unknown", "units": "1", "shape": ["c_rows"]},
+            "y": {"type": "unknown", "units": "1", "shape": ["a_rows", "c_rows"]},
+        },
+        "equations": [
+            {"lhs": "a_val", "rhs": {"op": "const", "args": [], "value": [1.0, 2.0]}},
+            {"lhs": "c_val", "rhs": {"op": "const", "args": [], "value": [10.0, 20.0]}},
+            {
+                "lhs": "y",
+                "rhs": {
+                    "op": "faq",
+                    "args": [],
+                    "output_idx": ["i", "g"],
+                    "ranges": {"i": {"from": "a_rows"}, "g": {"from": "c_rows"}},
+                    "filter": filter_expr,
+                    "expr": {"op": "*", "args": [idx("a_val", "i"), idx("c_val", "g")]},
+                },
+            },
+        ],
+    }
+    if templates:
+        model["expression_templates"] = templates
+    return {
+        "esm": "1.2.0",
+        "metadata": {"name": "bare_operand", "authors": ["test"]},
+        "index_sets": {
+            "a_rows": {"kind": "interval", "size": a_size},
+            "c_rows": {"kind": "interval", "size": 2},
+        },
+        "models": {"M": model},
+    }
+
+
+def test_faq_bare_filter_through_a_template_is_refused_at_build() -> None:
+    """The issue's own spelling: the bare name arrives through an
+    ``apply_expression_template`` binding, which ``validate`` cannot see into.
+    The build front door checks the expanded system and refuses it by code,
+    under both compilers -- before this the native whole-box tier aligned
+    ``a_val`` with ``g`` (the extents are equal) and returned a wrong number."""
+    from earthsci_ast.problem import esm_problem
+
+    gate = {"op": "ifelse", "args": [{"op": ">", "args": ["x", 1.5]}, 1.0, 0.0]}
+    doc = _bare_operand_doc(
+        {"op": "apply_expression_template", "args": [], "name": "gate", "bindings": {"x": "a_val"}},
+        templates={"gate": {"params": ["x"], "body": gate}},
+    )
+    for compiler in ("interpreter", "native"):
+        with pytest.raises(Exception, match="faq_bare_array_operand"):
+            esm_problem(doc, (0.0, 0.0), compiler=compiler)
+
+
+def test_whole_box_filter_mask_of_the_wrong_rank_declines() -> None:
+    """Defense in depth for an array whose shape no declaration states: a
+    whole-box filter value whose rank is neither 0 nor the box's raises, so the
+    tier declines rather than letting numpy broadcasting pick the axis."""
+    import numpy as np
+
+    from earthsci_ast.numpy_interpreter import _box_aligned_mask
+
+    assert _box_aligned_mask(np.ones((2, 2)), 2).dtype == bool
+    assert _box_aligned_mask(np.asarray(1.0), 2).ndim == 0
+    with pytest.raises(ValueError, match="not the node's symbols"):
+        _box_aligned_mask(np.ones(2), 2)

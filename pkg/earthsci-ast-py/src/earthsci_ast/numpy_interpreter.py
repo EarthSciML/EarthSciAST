@@ -4834,7 +4834,7 @@ def _eval_faq_reduce_nested(
             )
             admit = np.ones(full, dtype=bool)
             if filter_expr is not None:
-                keep = np.asarray(_compile_expr(filter_expr)(ctx)).astype(bool)
+                keep = _box_aligned_mask(np.asarray(_compile_expr(filter_expr)(ctx)), len(full))
                 admit = admit & np.broadcast_to(keep, full)
     except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError) as exc:
         return _decline(
@@ -4851,6 +4851,26 @@ def _eval_faq_reduce_nested(
     with np.errstate(over="ignore", invalid="ignore"):
         out = _fold_admitted_rows(reducer, term2d, admit2d, empty_zero)
     return out.reshape(lead)
+
+
+def _box_aligned_mask(keep: np.ndarray, ndim: int) -> np.ndarray:
+    """A whole-box ``filter`` value as a boolean mask, or ``ValueError``.
+
+    Every index symbol of a whole-box tier is bound to a range reshaped onto its
+    OWN axis of the ``ndim``-D box, so a filter written over the node's symbols
+    evaluates to a 0-D or a full-rank array. Any other rank is an array whose
+    axes no symbol names — a variable read by bare name — and numpy broadcasting
+    would align it with the box's LAST axes, a different symbol whenever two
+    extents coincide (issue #441). The caller declines on ``ValueError`` and the
+    scalar path refuses the non-scalar predicate. A declared-shape variable read
+    that way is refused before any build (``faq_bare_array_operand``); this
+    covers an array whose shape no declaration states."""
+    if keep.ndim not in (0, ndim):
+        raise ValueError(
+            f"the filter evaluated to a rank-{keep.ndim} array over a {ndim}-D box; "
+            "its axes are not the node's symbols"
+        )
+    return keep.astype(bool)
 
 
 def _gated_box_term(
@@ -4912,7 +4932,9 @@ def _gated_box_term(
                 term = np.broadcast_to(term, combined_shape)
                 admit = join_mask
                 if filter_expr is not None:
-                    keep = np.asarray(_compile_expr(filter_expr)(ctx)).astype(bool)
+                    keep = _box_aligned_mask(
+                        np.asarray(_compile_expr(filter_expr)(ctx)), len(combined_shape)
+                    )
                     keep = np.broadcast_to(keep, combined_shape)
                     admit = keep if admit is None else (admit & keep)
     except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError) as exc:
