@@ -4537,5 +4537,53 @@
     ],
     "is_valid": false,
     "notes": "esm-spec \u00a74.8.3, \u00a74.8.4: every transcendental of a dimensional argument in the file is reported, the bare-variable one and the three compound ones alike. A checker that looks only at a bare-variable argument finds just exp_of_bare_temperature; the other three need the dimension of a compound argument."
+  },
+  "cast_missing_element_type.esm": {
+    "schema_errors": [
+      {
+        "path": "/models/CastModel/equations/0/rhs",
+        "message": "Required property 'element_type' is missing",
+        "keyword": "required"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "A `cast` must say which precision it converts to (esm-spec \u00a74.2, \u00a711.3.1): the ExpressionNode schema requires `element_type` when op is `cast`."
+  },
+  "cast_unknown_element_type.esm": {
+    "schema_errors": [
+      {
+        "path": "/models/CastModel/equations/0/rhs/element_type",
+        "message": "Value 'Float16' not in enum: [Float32, Float64]",
+        "keyword": "enum"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "`element_type` on a `cast` is `Float64` or `Float32` (esm-spec \u00a711.3.1)."
+  },
+  "cast_arity.esm": {
+    "schema_errors": [
+      {
+        "path": "/models/CastModel/equations/0/rhs/args",
+        "message": "Array has more than 1 items",
+        "keyword": "maxItems"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "A `cast` converts exactly one operand (esm-spec \u00a74.2)."
+  },
+  "element_type_on_non_cast_node.esm": {
+    "schema_errors": [
+      {
+        "path": "/models/CastModel/equations/0/rhs/op",
+        "message": "must be equal to constant",
+        "keyword": "const"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "`element_type` is legal only on a `cast` node (esm-spec \u00a74.2): the ExpressionNode schema requires op to be `cast` when element_type is present. A variable's precision is declared on the variable (ModelVariable.element_type)."
   }
 }

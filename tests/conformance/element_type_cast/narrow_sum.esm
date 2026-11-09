@@ -1,0 +1,181 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "element_type_cast_narrow_sum",
+    "description": "Accumulate in binary64, continue in binary32 (esm-spec §11.3.1; EarthSciAST#536). The domain is Float32; the weights and their sum declare Float64, and `pop` is the sum narrowed ONCE by a cast. 2^24 + 1 + 1 is 16777218 in binary64 and representable in binary32, while a binary32 accumulation rounds each step back to 16777216."
+  },
+  "domain": {
+    "element_type": "Float32"
+  },
+  "index_sets": {
+    "rows": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Rows": {
+      "variables": {
+        "w": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "rows"
+          ],
+          "element_type": "Float64",
+          "description": "Per-row weights, declared binary64: 2^24, 1, 1."
+        },
+        "pop64": {
+          "type": "unknown",
+          "units": "1",
+          "element_type": "Float64",
+          "description": "The sum in binary64: 16777218."
+        },
+        "pop": {
+          "type": "unknown",
+          "units": "1",
+          "description": "cast(pop64, Float32): 16777218, rounded once. Without the cast this equation is mixed_element_type."
+        },
+        "pop32_sum": {
+          "type": "unknown",
+          "units": "1",
+          "description": "The same sum accumulated in binary32 over narrowed weights: each step 2^24 + 1 rounds back to 2^24, so 16777216."
+        },
+        "half": {
+          "type": "unknown",
+          "units": "1",
+          "description": "pop / 2, continuing in binary32: 8388609."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "w",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              16777216.0,
+              1.0,
+              1.0
+            ]
+          }
+        },
+        {
+          "lhs": "pop64",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "semiring": "sum_product",
+            "output_idx": [],
+            "ranges": {
+              "i": {
+                "from": "rows"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "w",
+                "i"
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "pop",
+          "rhs": {
+            "op": "cast",
+            "element_type": "Float32",
+            "args": [
+              "pop64"
+            ]
+          }
+        },
+        {
+          "lhs": "pop32_sum",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "semiring": "sum_product",
+            "output_idx": [],
+            "ranges": {
+              "i": {
+                "from": "rows"
+              }
+            },
+            "expr": {
+              "op": "cast",
+              "element_type": "Float32",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "w",
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "half",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "pop",
+              2
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "binary64_sum_narrowed_once",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "pop64",
+              "time": 0.0,
+              "expected": 16777218.0,
+              "tolerance": {
+                "rel": 0.0,
+                "abs": 0.0
+              }
+            },
+            {
+              "variable": "pop",
+              "time": 0.0,
+              "expected": 16777218.0,
+              "tolerance": {
+                "rel": 0.0,
+                "abs": 0.0
+              }
+            },
+            {
+              "variable": "pop32_sum",
+              "time": 0.0,
+              "expected": 16777216.0,
+              "tolerance": {
+                "rel": 0.0,
+                "abs": 0.0
+              }
+            },
+            {
+              "variable": "half",
+              "time": 0.0,
+              "expected": 8388609.0,
+              "tolerance": {
+                "rel": 0.0,
+                "abs": 0.0
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

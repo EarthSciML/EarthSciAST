@@ -1,0 +1,86 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "element_type_cast_float_storage",
+    "description": "A binary64 document that rounds one value through binary32 storage and continues in binary64: cast(cast(x, Float32), Float64), the value a FLOAT column holds when it is read back (esm-spec §11.3.1). No variable declares an element_type; the casts are the declaration."
+  },
+  "models": {
+    "Store": {
+      "variables": {
+        "x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.1,
+          "description": "A binary64 share."
+        },
+        "stored": {
+          "type": "unknown",
+          "units": "1",
+          "description": "cast(cast(x, Float32), Float64): 0.10000000149011612, binary32's nearest to 0.1, widened exactly."
+        },
+        "residual": {
+          "type": "unknown",
+          "units": "1",
+          "description": "1 - stored, in binary64: 0.8999999985098839."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "stored",
+          "rhs": {
+            "op": "cast",
+            "element_type": "Float64",
+            "args": [
+              {
+                "op": "cast",
+                "element_type": "Float32",
+                "args": [
+                  "x"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "residual",
+          "rhs": {
+            "op": "-",
+            "args": [
+              1,
+              "stored"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "float_storage_round_trip",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "stored",
+              "time": 0.0,
+              "expected": 0.10000000149011612,
+              "tolerance": {
+                "rel": 0.0,
+                "abs": 0.0
+              }
+            },
+            {
+              "variable": "residual",
+              "time": 0.0,
+              "expected": 0.8999999985098839,
+              "tolerance": {
+                "rel": 0.0,
+                "abs": 0.0
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

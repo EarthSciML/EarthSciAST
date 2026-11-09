@@ -1,0 +1,62 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "element_type_cast_identity_f64",
+    "description": "A cast to the precision the operand already has is the identity. A binary64 document casting to Float64: every binding that evaluates evaluates this, including the binary64-only ones."
+  },
+  "models": {
+    "Same": {
+      "variables": {
+        "x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.1,
+          "description": "A binary64 value with no exact binary32 form."
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "description": "cast(x, Float64) * 3: 0.30000000000000004, the binary64 product."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "y",
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "cast",
+                "element_type": "Float64",
+                "args": [
+                  "x"
+                ]
+              },
+              3
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "identity_cast",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "y",
+              "time": 0.0,
+              "expected": 0.30000000000000004,
+              "tolerance": {
+                "rel": 0.0,
+                "abs": 0.0
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

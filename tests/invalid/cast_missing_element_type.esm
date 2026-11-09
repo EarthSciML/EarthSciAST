@@ -1,0 +1,39 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "CastMissingElementType",
+    "description": "Invalid: a `cast` node without `element_type` (esm-spec §4.2, §11.3.1). The field is required: a conversion that does not say where it lands is no conversion.",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-11-08T00:00:00Z"
+  },
+  "models": {
+    "CastModel": {
+      "variables": {
+        "x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.1,
+          "description": "A binary64 value."
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Defined by a malformed cast."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "y",
+          "rhs": {
+            "op": "cast",
+            "args": [
+              "x"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -3148,13 +3148,12 @@ refused at load by all five bindings, which also carry the field through
 and treats the node as a precision leaf for inference: a document that declares
 no per-variable `element_type` but holds a `cast` is checked and annotated like
 one that does, since a `cast` to a precision other than the document's is a
-boundary. A binding that evaluates binary64 only (Julia, Python) evaluates
-`cast` to `"Float64"` as the identity and refuses a `cast` to `"Float32"` with
-`float32_unsupported` naming the node; it MUST NOT evaluate it as the identity,
-which would drop the rounding the document asked for. A binding with no
-evaluator (Go) and a scalar code generator (TypeScript) parse, validate and
-round-trip it; the TypeScript generator emits `Math.fround` for a `cast` to
-`"Float32"`. Gate: `tests/conformance/element_type_cast/` (README there).
+boundary. An evaluator that computes in binary64 only (Julia, Python, and
+TypeScript's scalar evaluator) evaluates `cast` to `"Float64"` as the identity
+and refuses a `cast` to `"Float32"` with `float32_unsupported` naming the node;
+it MUST NOT evaluate it as the identity, which would drop the rounding the
+document asked for. Go, which does not evaluate, parses, validates and
+round-trips it. Gate: `tests/conformance/element_type_cast/` (README there).
 
 **Ingress is not enough.** A binding MUST NOT implement this field by exempting
 a variable only where its data enters. The first expression over the value undoes

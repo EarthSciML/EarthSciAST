@@ -1003,6 +1003,20 @@ export const schema: AnySchemaObject = {
               }
             }
           }
+        },
+        {
+          "if": {
+            "required": [
+              "element_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "op": {
+                "const": "cast"
+              }
+            }
+          }
         }
       ]
     },

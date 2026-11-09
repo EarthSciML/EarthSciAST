@@ -1,0 +1,40 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "CastUnknownElementType",
+    "description": "Invalid: a `cast` to `Float16`. `element_type` is `Float64` or `Float32` (esm-spec §11.3.1).",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-11-08T00:00:00Z"
+  },
+  "models": {
+    "CastModel": {
+      "variables": {
+        "x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.1,
+          "description": "A binary64 value."
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Defined by a malformed cast."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "y",
+          "rhs": {
+            "op": "cast",
+            "element_type": "Float16",
+            "args": [
+              "x"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "description": "The `cast` op (esm-spec §4.2, §11.3.1; CONFORMANCE_SPEC §5.18.2a). `casts` lists, for every fixture, the `element_type` of every `cast` node in document order (models in order, equations in order, a node before its operands): ALL FIVE bindings assert that each fixture loads with exactly these and that load → emit → load keeps them. `values` (zero tolerance, compared bit for bit) and `build_errors` are asserted by the bindings in `evaluated_by`, which evaluate per-variable precision. `binary64_values` are asserted by the bindings in `binary64_only`, which evaluate binary64 alone and so evaluate a cast to Float64 as the identity; those same bindings MUST refuse every fixture in `binary64_refusals` with the code given, because each holds a cast to Float32 or a Float32 document. Malformed `cast` nodes are in tests/invalid (cast_*.esm).",
+  "casts": {
+    "narrow_sum.esm": ["Float32", "Float32"],
+    "float_storage.esm": ["Float64", "Float32"],
+    "widen.esm": ["Float64"],
+    "identity_f64.esm": ["Float64"],
+    "mixed_without_cast.esm": [],
+    "cast_then_mixed.esm": ["Float32"]
+  },
+  "evaluated_by": ["rust"],
+  "values": {
+    "narrow_sum.esm": {
+      "Rows.pop64": 16777218.0,
+      "Rows.pop": 16777218.0,
+      "Rows.pop32_sum": 16777216.0,
+      "Rows.half": 8388609.0
+    },
+    "float_storage.esm": {
+      "Store.stored": 0.10000000149011612,
+      "Store.residual": 0.8999999985098839
+    },
+    "widen.esm": {
+      "Ratio.x": 0.9999999403953552,
+      "Ratio.x64": 0.9999999403953552,
+      "Ratio.gap": 5.960464477539063e-08
+    },
+    "identity_f64.esm": {
+      "Same.y": 0.30000000000000004
+    }
+  },
+  "build_errors": {
+    "mixed_without_cast.esm": "mixed_element_type",
+    "cast_then_mixed.esm": "mixed_element_type"
+  },
+  "binary64_only": ["julia", "python"],
+  "binary64_values": {
+    "identity_f64.esm": {
+      "Same.y": 0.30000000000000004
+    }
+  },
+  "binary64_refusals": {
+    "narrow_sum.esm": "float32_unsupported",
+    "float_storage.esm": "float32_unsupported",
+    "widen.esm": "float32_unsupported"
+  },
+  "notes": {
+    "narrow_sum.esm": "The moves.esm NONROAD case in miniature: MOVES sums a population in binary64 and NONROAD reads it as real*4. 2^24 + 1 + 1 = 16777218 is representable in binary32, so the binary64 sum narrowed once keeps it, while a binary32 accumulation rounds each 2^24 + 1 back to 2^24 (ties to even).",
+    "float_storage.esm": "A binary64 value stored in a binary32 column and read back. The inner cast rounds, the outer one says the result rejoins binary64 arithmetic; without the outer cast the subtraction is mixed_element_type.",
+    "widen.esm": "0.99999994 is the binary32 value of the witness ratio; widening keeps it, and 1 - x64 is then 2^-24 exactly.",
+    "cast_then_mixed.esm": "A cast is a precision leaf for inference: it does not adopt its parent's precision."
+  }
+}

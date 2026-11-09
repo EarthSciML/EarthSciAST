@@ -1,0 +1,34 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "element_type_cast_mixed_without_cast",
+    "description": "The equation the cast exists for, written without it: a binary32 variable defined from a binary64 one. Still mixed_element_type."
+  },
+  "domain": {
+    "element_type": "Float32"
+  },
+  "models": {
+    "Rows": {
+      "variables": {
+        "pop64": {
+          "type": "parameter",
+          "units": "1",
+          "default": 16777218.0,
+          "element_type": "Float64",
+          "description": "A binary64 total."
+        },
+        "pop": {
+          "type": "unknown",
+          "units": "1",
+          "description": "pop64 with no cast: refused."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "pop",
+          "rhs": "pop64"
+        }
+      ]
+    }
+  }
+}

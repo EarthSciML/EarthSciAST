@@ -1,0 +1,133 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "element_type_cast_widen",
+    "description": "Widening is exact (esm-spec §11.3.1): a binary32 quantity cast to Float64 keeps its binary32 value, and the arithmetic over it then runs in binary64."
+  },
+  "domain": {
+    "element_type": "Float32"
+  },
+  "models": {
+    "Ratio": {
+      "variables": {
+        "a": {
+          "type": "parameter",
+          "units": "1",
+          "default": 73.5,
+          "description": "The operand of the witness ratio."
+        },
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "description": "100*((100-a)/100)/(100-a): 0.99999994 in binary32."
+        },
+        "x64": {
+          "type": "unknown",
+          "units": "1",
+          "element_type": "Float64",
+          "description": "cast(x, Float64): 0.9999999403953552 exactly."
+        },
+        "gap": {
+          "type": "unknown",
+          "units": "1",
+          "element_type": "Float64",
+          "description": "1 - x64 in binary64: 5.960464477539063e-08."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "x",
+          "rhs": {
+            "op": "/",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  100,
+                  {
+                    "op": "/",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          100,
+                          "a"
+                        ]
+                      },
+                      100
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "-",
+                "args": [
+                  100,
+                  "a"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "x64",
+          "rhs": {
+            "op": "cast",
+            "element_type": "Float64",
+            "args": [
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": "gap",
+          "rhs": {
+            "op": "-",
+            "args": [
+              1,
+              "x64"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "binary32_widened_exactly",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "x",
+              "time": 0.0,
+              "expected": 0.9999999403953552,
+              "tolerance": {
+                "rel": 0.0,
+                "abs": 0.0
+              }
+            },
+            {
+              "variable": "x64",
+              "time": 0.0,
+              "expected": 0.9999999403953552,
+              "tolerance": {
+                "rel": 0.0,
+                "abs": 0.0
+              }
+            },
+            {
+              "variable": "gap",
+              "time": 0.0,
+              "expected": 5.960464477539063e-08,
+              "tolerance": {
+                "rel": 0.0,
+                "abs": 0.0
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
