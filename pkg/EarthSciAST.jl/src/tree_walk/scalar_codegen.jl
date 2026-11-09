@@ -709,12 +709,12 @@ function _sc_build_gen(
     fnstmts = byval && !isempty(ctx.helpers) ?
         Any[:(local $(_CG_FNS) = tabs[$(ngrp + 1)])] : Any[]
     helperdefs = byval ? Any[] : ctx.helpers
-    # No alias scope, unlike the kernel section. This function stores cache
+    # No alias scope, as in the kernel section. This function stores cache
     # slots and reads them back (a class in cache mode, a tier slot that reads
-    # an earlier one), and inside `Base.Experimental.@aliasscope` Julia 1.12
-    # can move a plain load of an array ahead of an earlier store to the same
-    # element when the store sits in a loop of run-time trip count, such as
-    # the members loop here: the read-back then sees the previous call's value.
+    # an earlier one), and inside `Base.Experimental.@aliasscope` Julia 1.11 to
+    # 1.13 can move a plain load of an array ahead of an earlier store to the
+    # same element (JuliaLang/julia#63129), such as in the members loop here:
+    # the read-back then sees the previous call's value.
     run = Expr(:macrocall, Symbol("@inbounds"), ln, Expr(:block, loops...))
     body = Expr(
         :block, grpstmts..., fnstmts...,

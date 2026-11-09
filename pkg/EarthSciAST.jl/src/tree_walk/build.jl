@@ -3755,12 +3755,12 @@ end
 # A fill that reaches its OWN buffer through an inlined observed is an
 # observed cycle, and is refused here with the code the inlining build
 # (`_resolve_observed`) and `validate()` give it. It must be: a level's kernel
-# section runs in an alias scope that asserts no store to the buffers it fills
-# aliases a load (`_build_codegen_rhs`), and that level's writes are exactly its
-# own observeds, whose other reads all sit on strictly lower levels. A build
-# from a `Model` that skipped `validate()` would otherwise put a load of a slot
-# the same section stores into that scope, which is undefined, not merely
-# stale. The check is per observed and per name it reaches, never per cell.
+# section assumes no store to the buffers it fills aliases a load
+# (`_build_codegen_rhs`; its threaded chunks run concurrently), and that
+# level's writes are exactly its own observeds, whose other reads all sit on
+# strictly lower levels. A build from a `Model` that skipped `validate()` would
+# otherwise put a load of a slot the same section stores into one section,
+# which is a race between chunks, not merely stale. The check is per observed and per name it reaches, never per cell.
 #
 # The one self-edge that is not a cycle is a recurrence's DIRECT self-read
 # (esm-spec §4.3.1.1): its fill is an ordered sweep that reads only the cells it
