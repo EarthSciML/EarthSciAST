@@ -1087,19 +1087,22 @@ fn count_rewrite_is_a_build_option() {
 
 /// A count the instruction cannot state declines to the general reduction
 /// instead of refusing the rule: here a standalone rank-0 sum whose query is
-/// the whole `u` (an array over its own box) rather than one element. It is
-/// taped by the general lowering, with the oracle's bits, beside the
-/// per-cell count.
+/// a whole array over its own box (`u` gathered by a nested `faq`) rather
+/// than one element. It is taped by the general lowering, with the oracle's
+/// bits, beside the per-cell count. The query is not a bare `u`: a shaped
+/// variable read by bare name in a `faq` body has no meaning there.
 #[test]
 fn counted_bracket_query_box_mismatch_declines() {
     let mut d = count_doc(9, indicator(op("<=", vec![axis_at("zc"), query()])));
+    d["index_sets"] = json!({"lev": {"kind": "interval", "size": 9}});
     d["models"]["M"]["variables"]["s"] = json!({"type": "unknown", "shape": ["lev"]});
+    let whole_u = faq(&["m"], json!({"m": [1, 9]}), ix("u", vec![json!("m")]));
     d["models"]["M"]["equations"]
         .as_array_mut()
         .unwrap()
         .push(json!({"lhs": "s", "rhs": {
             "op": "faq", "args": [], "output_idx": [], "ranges": {"k": [1, 9]},
-            "expr": indicator(op("<=", vec![axis_at("zc"), json!("u")]))
+            "expr": indicator(op("<=", vec![axis_at("zc"), whole_u]))
         }}));
     let prog = oracle_ab(d).0;
     assert_eq!(counts(&prog), vec![(CountRel::Le, true)], "only c's count");

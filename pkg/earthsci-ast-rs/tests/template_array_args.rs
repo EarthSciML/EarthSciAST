@@ -3,7 +3,9 @@
 //! run as the `template_array_args` inline-test conformance tier; this pins the
 //! coupled case — parameters the component declares scalar, fed grid arrays by
 //! `variable_map` — bit for bit against the `interp.*` form, under both
-//! compilers, and the refusal of arrays over unrelated index sets.
+//! compilers, the refusals (arrays over unrelated index sets, an anonymous
+//! array argument), and what is not lifted: a template whose operands its body
+//! takes whole, and a shaped read written by hand.
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::{
@@ -88,5 +90,75 @@ fn arrays_over_unrelated_index_sets_are_refused() {
         };
         let err = esm_problem(&file, (0.0, 1.0), opts).expect_err("refused");
         assert!(err.to_string().contains("array_shape_mismatch"), "{err}");
+    }
+}
+
+/// A one-model document over index sets `c`, `verts` and `coord`; `extra`
+/// is spliced into the model object.
+fn model_doc(variables: &str, equations: &str, extra: &str) -> String {
+    format!(
+        r#"{{"esm": "1.2.0", "metadata": {{"name": "taa_probe"}},
+          "index_sets": {{"c": {{"kind": "interval", "size": 3}},
+                         "verts": {{"kind": "interval", "size": 4}},
+                         "coord": {{"kind": "interval", "size": 2}}}},
+          "models": {{"M": {{"variables": {variables}, "equations": {equations}{extra}}}}}}}"#
+    )
+}
+
+fn problem(doc: &str, compiler: Compiler) -> Result<earthsci_ast::EsmProblem, String> {
+    let file = load_string(doc).expect("load");
+    let opts = ProblemOptions {
+        compiler: Some(compiler),
+        ..Default::default()
+    };
+    esm_problem(&file, (0.0, 1.0), opts).map_err(|e| e.to_string())
+}
+
+#[test]
+fn an_anonymous_array_argument_is_refused() {
+    let doc = model_doc(
+        r#"{"y": {"type": "unknown"}, "s": {"type": "unknown", "default": 0.0}}"#,
+        r#"[{"lhs": "y", "rhs": {"op": "apply_expression_template", "args": [], "name": "linear",
+              "bindings": {"table": {"op": "const", "args": [], "value": [1.0, 2.0, 4.0]},
+                           "axis": {"op": "const", "args": [], "value": [0.0, 1.0, 2.0]},
+                           "x": {"op": "const", "args": [], "value": [0.5, 1.5]}, "n": 3}}},
+            {"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": 1.0}]"#,
+        r#", "expression_template_imports": [{"ref": "esm:std/interp.esm", "only": ["linear"]}]"#,
+    );
+    for compiler in [Compiler::Interpreter, Compiler::Native] {
+        let err = problem(&doc, compiler).expect_err("refused");
+        assert!(err.contains("array_shape_mismatch: '"), "{err}");
+        assert!(err.contains("anonymous array"), "{err}");
+    }
+}
+
+#[test]
+fn a_template_over_geometry_operands_is_not_lifted() {
+    // Both rings are array-role (a geometry operator takes them whole), so
+    // binding arrays to them is not an elementwise application: it builds and
+    // gives the overlap area (`elementwise_lift`'s unit tests pin that the
+    // equation is left as written).
+    let doc = model_doc(
+        r#"{"pa": {"type": "parameter", "shape": ["verts", "coord"],
+                   "default": [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]]},
+            "pb": {"type": "parameter", "shape": ["verts", "coord"],
+                   "default": [[1.0, 1.0], [3.0, 1.0], [3.0, 3.0], [1.0, 3.0]]},
+            "area": {"type": "unknown"}, "s": {"type": "unknown", "default": 0.0}}"#,
+        r#"[{"lhs": "area", "rhs": {"op": "apply_expression_template", "args": [],
+              "name": "overlap", "bindings": {"a": "pa", "b": "pb"}}},
+            {"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": "area"}]"#,
+        r#", "expression_templates": {"overlap": {"params": ["a", "b"],
+              "body": {"op": "polygon_intersection_area", "manifold": "planar", "args": ["a", "b"]}}}"#,
+    );
+    for compiler in [Compiler::Interpreter, Compiler::Native] {
+        let prob = problem(&doc, compiler).expect("builds");
+        let prog = rhs_program(&prob).expect("rhs_program");
+        let u = initial_state(&prob).expect("initial_state");
+        let p = prog.parameter_vector(&HashMap::new()).expect("parameters");
+        let mut ws = prog.new_workspace();
+        let mut du = vec![0.0; prog.n_states()];
+        prog.eval_into(&u, &[], &p, 0.0, &prog.default_forcing(), &mut du, &mut ws)
+            .expect("eval");
+        assert_eq!(du, vec![1.0], "{compiler:?}");
     }
 }

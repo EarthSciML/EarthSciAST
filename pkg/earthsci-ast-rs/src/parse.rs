@@ -213,12 +213,22 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // `index_sets` do not join the registry until the root has CLOSED — §9.7.6
     // site 3, "subsystem refs resolve post-close". They are applied just below,
     // immediately after `resolve_template_machinery_scoped`.
-    let staged_index_sets = crate::ref_loading::resolve_subsystem_refs_with_metaparameters(
-        &mut json_value,
-        &base,
-        &options.metaparameters,
-    )
+    //
+    // A mounted leaf is expanded here, so its template expansions are marked
+    // here too (esm-spec §9.6.11; `MarkTemplateOrigins`), and the schema check
+    // below reads the document with those marks taken off.
+    let marks_before = crate::lower_expression_templates::template_origins_placed();
+    let staged_index_sets = {
+        let _mark = crate::lower_expression_templates::MarkTemplateOrigins::on();
+        crate::ref_loading::resolve_subsystem_refs_with_metaparameters(
+            &mut json_value,
+            &base,
+            &options.metaparameters,
+        )
+    }
     .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+    let mounts_marked =
+        crate::lower_expression_templates::template_origins_placed() != marks_before;
 
     // esm-spec §8.2.1: resolve every `data_sources[*].source` location against
     // this document's own directory. AFTER ref resolution, because a referenced
@@ -277,7 +287,13 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     )?;
 
     // Validate against schema
-    validate_schema(&json_value)?;
+    if mounts_marked {
+        let mut authored = json_value.clone();
+        crate::lower_expression_templates::strip_template_origins(&mut authored);
+        validate_schema(&authored)?;
+    } else {
+        validate_schema(&json_value)?;
+    }
 
     // esm-spec §9.7.10 form B: fold any coupling-entry injection map into its
     // target components' own `expression_template_imports` BEFORE resolution,
@@ -357,6 +373,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     let component_templates =
         crate::lower_expression_templates::capture_component_templates(&json_value);
     if has_templates {
+        let _mark = crate::lower_expression_templates::MarkTemplateOrigins::on();
         crate::lower_expression_templates::expand(&mut json_value)
             .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
     } else {

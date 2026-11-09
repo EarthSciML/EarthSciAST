@@ -779,7 +779,11 @@ pub(super) fn expand_all(
                     }
                 }
                 let body = expand_apply(&newfields, named, scope)?;
-                expand_all(&body, named, scope, memo)?
+                let expanded = expand_all(&body, named, scope, memo)?;
+                match obj_get(&newfields, "name").map(|v| &**v) {
+                    Some(SNode::Str(name)) => mark_template_origin(expanded, name),
+                    _ => expanded,
+                }
             } else {
                 let mut changed = false;
                 let mut out = Vec::with_capacity(fields.len());
