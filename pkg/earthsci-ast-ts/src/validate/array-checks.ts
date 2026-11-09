@@ -260,3 +260,96 @@ export function validateArrayBroadcastShapes(model: Model, modelPath: string): S
 
   return errors
 }
+
+// ---------------------------------------------------------------------------
+// Rule 3 — `faq_bare_array_operand` (esm-spec §4.3.1, issue #441)
+// ---------------------------------------------------------------------------
+
+/**
+ * Report every `faq` node whose `expr` or `filter` reads a variable declared
+ * with a non-empty `shape` by BARE name in an element-wise position.
+ *
+ * A `faq` names its axes by its range symbols and evaluates its body and filter
+ * once per index tuple, so a whole array there does not say which symbol each
+ * of its axes is. The executing bindings each gave it a meaning and disagreed:
+ * Rust's reference kept every term of a filter it could not align to the output
+ * box, so a filter over a node with two output indices was silently ignored,
+ * and Python's whole-box tiers let numpy broadcasting align the array with the
+ * LAST box axis. The read must be `index(v, i, …)`.
+ *
+ * The descent is {@link collectBareArrayOperands}' (element-wise nodes only); a
+ * name a `faq` binds as a loop symbol, there or further out, shadows the
+ * declaration; nested `faq` nodes are checked in their own right; an equation
+ * side still holding a template reference is not decided (its expansion is the
+ * evaluating bindings' to check at build). Order: pre-order over nodes, `expr`
+ * before `filter`, matching Rust, Python and Julia.
+ */
+export function validateFaqBareArrayOperands(model: Model, modelPath: string): StructuralError[] {
+  const errors: StructuralError[] = []
+  const axesOf = new Map<string, string[]>()
+  for (const [name, variable] of Object.entries(model.variables ?? {})) {
+    const shape = variable?.shape
+    if (Array.isArray(shape) && shape.length > 0) axesOf.set(name, shape.map(String))
+  }
+  if (axesOf.size === 0) return errors
+
+  const walk = (node: Expr, bound: ReadonlySet<string>, path: string): void => {
+    if (!isExprNode(node)) return
+    let inner = bound
+    if (node.op === 'faq' || node.op === 'aggregate') {
+      const faq = node as ExpressionNode & {
+        output_idx?: unknown[]
+        ranges?: Record<string, unknown>
+        arg?: string
+        filter?: Expression
+        expr?: Expression
+      }
+      const next = new Set(bound)
+      for (const s of faq.output_idx ?? []) next.add(String(s))
+      for (const s of Object.keys(faq.ranges ?? {})) next.add(s)
+      if (typeof faq.arg === 'string') next.add(faq.arg)
+      inner = next
+      for (const field of ['expr', 'filter'] as const) {
+        const part = faq[field]
+        if (part === undefined) continue
+        const seen = new Set<string>()
+        for (const name of collectBareArrayOperands(part, axesOf)) {
+          if (inner.has(name) || seen.has(name)) continue
+          seen.add(name)
+          const axes = axesOf.get(name) ?? []
+          errors.push({
+            path,
+            code: ERROR_CODES.FAQ_BARE_ARRAY_OPERAND,
+            message:
+              `faq \`${field}\` reads '${name}', declared over [${axes.join(', ')}], by bare ` +
+              `name. A faq names its axes by its range symbols, and its \`${field}\` is ` +
+              `evaluated once per index tuple, so a whole array there does not say which ` +
+              `symbol each of its axes is. Read it through \`index\`, e.g. ` +
+              `index(${name}, <symbol>…) (esm-spec §4.3.1)`,
+            details: { field, variable: name, shape: axes },
+          })
+        }
+      }
+    }
+    forEachChild(node, (child) => walk(child, inner, path))
+  }
+
+  for (const [index, equation] of (model.equations ?? []).entries()) {
+    for (const side of ['lhs', 'rhs'] as const) {
+      const expr = equation[side]
+      if (expr === undefined || containsTemplateReference(expr)) continue
+      walk(expr as Expr, new Set(), `${modelPath}/equations/${index}/${side}`)
+    }
+  }
+  return errors
+}
+
+function containsTemplateReference(expr: unknown): boolean {
+  if (!isExprNode(expr)) return false
+  if (expr.op === 'apply_expression_template') return true
+  let found = false
+  forEachChild(expr, (child) => {
+    if (!found && containsTemplateReference(child)) found = true
+  })
+  return found
+}

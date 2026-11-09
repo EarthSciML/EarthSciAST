@@ -58,6 +58,11 @@ const (
 	// not a member, so the body reads positions where the author meant members
 	// (esm-spec §4.3.1 "Ragged ranges").
 	CodeRaggedValuesNotGathered = "ragged_values_not_gathered"
+	// CodeFaqBareArrayOperand: a `faq`'s `expr` or `filter` reads a variable
+	// declared with a non-empty `shape` by BARE name in an elementwise position.
+	// The node names its axes by its range symbols, so the read must say which
+	// ones: `index(v, i, …)` (esm-spec §4.3.1, issue #441).
+	CodeFaqBareArrayOperand = "faq_bare_array_operand"
 	// CodeUndefinedIndexSet: an aggregate `ranges` entry `{from: NAME}` names an
 	// index set that is not a key of the document `index_sets` registry. No
 	// implicit interval is inferred for an undeclared name (RFC §5.2).
@@ -112,11 +117,102 @@ func (s *structuralScan) validateModelStaticAggregateChecks(modelName string, mo
 		})
 	}
 
+	shaped := make(map[string][]string)
+	for varName, v := range model.Variables {
+		if v.Shape != nil && len(*v.Shape) > 0 {
+			shaped[varName] = *v.Shape
+		}
+	}
 	for i, eq := range model.Equations {
 		eqPath := fmt.Sprintf("%s/equations/%d", basePath, i)
 		checkField(eqPath+"/lhs", eq.LHS)
 		checkField(eqPath+"/rhs", eq.RHS)
+		s.checkFaqBareArrayOperands(eq.LHS, shaped, eqPath+"/lhs", modelName)
+		s.checkFaqBareArrayOperands(eq.RHS, shaped, eqPath+"/rhs", modelName)
 	}
+}
+
+// checkFaqBareArrayOperands reports faq_bare_array_operand for every `faq`
+// node in expr whose `expr` or `filter` reads a variable declared with a
+// non-empty `shape` by BARE name in an elementwise position (esm-spec §4.3.1,
+// issue #441).
+//
+// A `faq` names its axes by its range symbols and evaluates its body and filter
+// once per index tuple, so a whole array there does not say which symbol each
+// of its axes is. The executing bindings each gave it a meaning and disagreed
+// (Rust's reference kept every term of a filter it could not align to the
+// output box, so a filter over a node with two output indices was silently
+// ignored), so the read must be `index(v, i, …)`.
+//
+// The descent is collectBareArrayOperands' (elementwise nodes only); a name a
+// `faq` binds as a loop symbol, there or further out, shadows the declaration;
+// nested `faq` nodes are checked in their own right; a field still holding a
+// template reference is not decided. Order: pre-order over nodes, `expr` before
+// `filter`, matching the other bindings.
+func (s *structuralScan) checkFaqBareArrayOperands(expr Expression, shaped map[string][]string, fieldPath, modelName string) {
+	if len(shaped) == 0 || containsTemplateReference(expr) {
+		return
+	}
+	var walk func(e Expression, bound map[string]bool)
+	walk = func(e Expression, bound map[string]bool) {
+		if list, ok := e.([]any); ok {
+			for _, el := range list {
+				walk(el, bound)
+			}
+			return
+		}
+		node, ok := asExprNode(e)
+		if !ok {
+			return
+		}
+		inner := bound
+		if node.Op == opAggregate || node.Op == "aggregate" {
+			inner = make(map[string]bool, len(bound)+len(node.Ranges)+len(node.OutputIdx))
+			for k := range bound {
+				inner[k] = true
+			}
+			for _, sym := range node.OutputIdx {
+				inner[fmt.Sprint(sym)] = true
+			}
+			for sym := range node.Ranges {
+				inner[sym] = true
+			}
+			if node.Arg != nil {
+				inner[*node.Arg] = true
+			}
+			for _, part := range []struct {
+				field string
+				expr  Expression
+			}{{"expr", node.Expr}, {"filter", node.Filter}} {
+				if part.expr == nil {
+					continue
+				}
+				for _, name := range collectBareArrayOperands(part.expr, shaped) {
+					if inner[name] {
+						continue
+					}
+					axes := shaped[name]
+					s.addErr(StructuralError{
+						Path: fieldPath,
+						Code: CodeFaqBareArrayOperand,
+						Message: fmt.Sprintf("faq `%s` reads '%s', declared over [%s], by bare name. A faq names its axes by its range symbols, and its `%s` is evaluated once per index tuple, so a whole array there does not say which symbol each of its axes is. Read it through `index`, e.g. index(%s, <symbol>…) (esm-spec §4.3.1)",
+							part.field, name, strings.Join(axes, ", "), part.field, name),
+						Details: map[string]any{
+							"field":    part.field,
+							"variable": name,
+							"shape":    axes,
+							"model":    modelName,
+						},
+					})
+				}
+			}
+		}
+		_, _ = mapExprChildren(node, func(child Expression) (Expression, error) {
+			walk(child, inner)
+			return child, nil
+		})
+	}
+	walk(expr, map[string]bool{})
 }
 
 // checkAggregateUndefinedIndexSet reports undefined_index_set for every

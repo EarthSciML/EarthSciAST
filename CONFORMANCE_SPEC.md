@@ -1809,6 +1809,26 @@ value-invention `faq` (`distinct: true`, a `skolem` `key`, or a `skolem` /
 Positive control: `tests/valid/faq/ragged_member_gather.esm` (10, 50, 150);
 rejection: `tests/invalid/faq/ragged_values_not_gathered.esm`.
 
+**A shaped variable inside a `faq` is read through `index` (normative; esm-spec
+§4.3.1 "Shaped variables inside a `faq` are read through `index`").** A `faq`'s
+`expr` or `filter` that reads a variable declared with a non-empty `shape` by
+BARE name in an elementwise position MUST be rejected with
+`faq_bare_array_operand`: by every binding's `validate()` at the containing
+expression field, and by every evaluating binding at build on the expanded
+document (so a bare name a template binding delivers is refused before
+evaluation, not evaluated by some alignment of the evaluator's choosing). The
+evaluators had each chosen one, and the answers differed: Rust's per-cell
+reference aligned an array-valued filter to the output box by position and kept
+the term when the ranks differed, so a filter over a node with two output
+indices was silently ignored (issue #441); Python's whole-box tiers aligned it
+with the box's last axis by array broadcasting, which is a different symbol
+whenever two index sets have equal extents. As defense in depth, Rust's
+per-cell filter gate faults (`E_TREEWALK_FILTER_UNALIGNED`) on an array-valued
+filter it cannot align, an array whose shape no declaration states. Rejection:
+`tests/invalid/faq/bare_array_operand_filter.esm`; the indexed spelling of the
+same filter over two output indices is the positive control
+`tests/conformance/faq_pointwise_filter/fixtures/indexed_filter_two_outputs.esm`.
+
 The registry a `from` name resolves against is the **effective** one — the
 document's own `index_sets` merged with those of every template library imported
 into the component's scope (esm-spec §9.7.5), which is settled only once that
@@ -7654,6 +7674,7 @@ ever emitted it, and the code had zero real coverage.
 | `observed_cycle` | Structural | A dependency cycle among a model's OBSERVED unknowns (esm-spec §4.9.6): each observed on the cycle is defined by an equation whose RHS names the next, so no evaluation order satisfies every definition. Decidable from the equations alone — hard error in `validate`, in EVERY binding, executing or not. Pointer: `/models/<M>` (a cycle belongs to no single equation). `details.cycle` is the path in traversal order with the entry node repeated to close it — a PATH, so it is ordered semantically, not by §7.1.0. The self-edge of a §4.3.1.1 recurrence CANDIDATE is dropped (§5.19.5); every other self-reference (`x ~ x + 1`, `s ~ s + 1`) is a cycle of length one and IS reported. Fixture: `tests/invalid/observed_cycle_array_elementwise.esm`. |
 | `circular_dependency` | Structural | A cycle among OBSERVED unknowns (esm-spec §4.9.7) that crosses a scope boundary: two top-level models, or a model and one of its subsystems. The graph is §4.9.6's, built over the whole document: nodes are observeds by full scoped name, and `V → W` when `W` occurs in `V`'s defining RHS. States, parameters, species, algebraic unknowns and undefined unknowns are not nodes, so reading them is never an edge. A cycle inside one model or subsystem is `observed_cycle`. Hard error in `validate` in EVERY binding; Rust and Python also refuse at load. Pointer: `/models`. `details.cycle` is the scoped names on the cycle with the entry node repeated, found by the pinned depth-first search of §4.9.7. Fixtures: `tests/invalid/circular_coupling.esm`, `tests/invalid/circular_coupling_subsystem.esm` (invalid); `tests/valid/cross_model_state_reads.esm`, `tests/valid/cross_model_mixing_observed_state_cycle.esm`, `tests/valid/cross_model_observed_reads_no_loop.esm` (valid). |
 | `ragged_values_not_gathered` | Structural | A `faq` that is not a value-invention node ranges over a `kind: "ragged"` index set, but its body never reads that set's `values` array (esm-spec §4.3.1 "Ragged ranges", §5.6.4). The range binds the POSITION k in 1..offsets[parent], so the body reads positions where members were meant — a plausible wrong number rather than a failure. Hard error in `validate()` in EVERY binding. Pointer: the containing expression field (`…/equations/i/rhs`). Fixture: `tests/invalid/faq/ragged_values_not_gathered.esm`. |
+| `faq_bare_array_operand` | Structural | A `faq`'s `expr` or `filter` reads a variable declared with a non-empty `shape` by bare name in an elementwise position (esm-spec §4.3.1, §5.6.4). The read must say which of the node's symbols the variable's axes are, `index(v, i, …)`. `validate()` in every binding; refused at build on the expanded document by every evaluating binding. |
 | `recurrence_not_wellfounded` | Structural | A causal self-read (esm-spec §4.3.1.1) that is not strictly earlier along exactly one axis: a read provably at the same cell or later on its axis, an index argument that is not affine in its frame symbol with coefficient 1, an offset on more than one axis, self-reads disagreeing on the axis, a bare read of the variable in its own RHS, or a recurrence axis that is ragged / derived / strided. Hard error in EVERY binding, executing or not (§5.19.5) — the pre-1.0 behaviour was a plausible wrong number. Pointer: the containing expression field (`…/equations/i/rhs`). |
 | `recurrence_unsupported_form` | Structural | A self-read the runtime cannot restrict to one cell: reached through a `makearray` region value or a `reshape`/`transpose`/`concat` operand, or in an equation whose RHS is not a `faq` over the variable's frame or whose output ranges are not statically resolvable (esm-spec §4.3.1.1). Distinct from `recurrence_not_wellfounded`: the READ is causal, the CARRIER cannot sequence it. |
 | `unknown_override_key` | Structural | An inline test's `initial_conditions` or `parameter_overrides` key that matches no declared name under esm-spec §6.6.2 rules 1-3. Names are qualified by component and inline subsystem, and a trailing element suffix (`u[1]`) is removed from the key first. Pointer: the key, e.g. `/models/M/tests/0/parameter_overrides/rx`. Only the unknown case is a validation error; ambiguous and colliding keys stay runtime diagnostics (§5.15). A document with an unresolved `{ref}` mount skips the check. Fixtures: `tests/invalid/unknown_override_key_*.esm`. |

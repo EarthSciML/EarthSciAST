@@ -4537,5 +4537,16 @@
     ],
     "is_valid": false,
     "notes": "esm-spec \u00a74.8.3, \u00a74.8.4: every transcendental of a dimensional argument in the file is reported, the bare-variable one and the three compound ones alike. A checker that looks only at a bare-variable argument finds just exp_of_bare_temperature; the other three need the dimension of a compound argument."
+  },
+  "bare_array_operand_filter.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/equations/2/rhs",
+        "code": "faq_bare_array_operand"
+      }
+    ],
+    "is_valid": false,
+    "notes": "Structural invalid (issue #441; esm-spec \u00a74.3.1 \"Shaped variables inside a `faq` are read through `index`\"; CONFORMANCE_SPEC \u00a75.6.4). The `faq` has two output indices (`i` over `a_rows`, `g` over `c_rows`) and its filter `ifelse(a_val > 1.5, 1, 0)` names the shaped variable `a_val` bare. Before this code existed Rust's reference evaluator aligned the array-valued filter to the output box by position, found rank 1 against 2 and kept every term, so the filter was silently ignored ([10,20 / 20,40 / 30,60] where [0,0 / 20,40 / 30,60] is meant). SCHEMA-VALID and decidable from the declared shapes alone, so every binding's validate() rejects it with `faq_bare_array_operand` at the containing field. Positive control: tests/conformance/faq_pointwise_filter/fixtures/indexed_filter_two_outputs.esm (`index(a_val, i)`)."
   }
 }

@@ -102,6 +102,9 @@ const ERROR_CODES = (
     # 1..offsets[parent], not a member, so the body reads positions — a
     # plausible wrong number rather than a failure.
     RAGGED_VALUES_NOT_GATHERED = "ragged_values_not_gathered",
+    # A `faq` `expr`/`filter` reads a variable declared with a non-empty `shape`
+    # by BARE name in an elementwise position (esm-spec §4.3.1, issue #441).
+    FAQ_BARE_ARRAY_OPERAND = "faq_bare_array_operand",
     # An output name -- an `observed` request handed to `derive_output_plan` --
     # that matches no variable exactly and whose last dotted segment is shared
     # by more than one variable (CONFORMANCE_SPEC §5.17.4). A last-segment match

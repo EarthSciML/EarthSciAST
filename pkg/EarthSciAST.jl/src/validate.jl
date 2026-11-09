@@ -1918,8 +1918,12 @@ function _check_model_aggregates!(
     )
 
     for (i, eq) in enumerate(model.equations)
-        _walk_aggregates!(errors, file, eq.lhs, "$path/equations/$(i - 1)/lhs", state_vars, registry, var_shapes)
-        _walk_aggregates!(errors, file, eq.rhs, "$path/equations/$(i - 1)/rhs", state_vars, registry, var_shapes)
+        for (side, e) in (("lhs", eq.lhs), ("rhs", eq.rhs))
+            anchor = "$path/equations/$(i - 1)/$side"
+            _contains_template_reference(e) ||
+                _check_faq_bare_array_operands!(errors, e, anchor, var_shapes)
+            _walk_aggregates!(errors, file, e, anchor, state_vars, registry, var_shapes)
+        end
     end
     for (i, eq) in enumerate(model.initialization_equations)
         _walk_aggregates!(errors, file, eq.lhs, "$path/initialization_equations/$(i - 1)/lhs", state_vars, registry, var_shapes)
@@ -1994,6 +1998,92 @@ function _check_undefined_index_set!(
                     "declared in the document `index_sets` registry",
                 ERROR_CODES.UNDEFINED_INDEX_SET,
                 Dict{String, Any}("index_set" => from, "range" => sym)
+            )
+        )
+    end
+    return errors
+end
+
+"""
+    faq_bare_array_operands(expr, var_shapes) -> Vector{Tuple{String,String,Vector{String}}}
+
+`faq_bare_array_operand` (esm-spec §4.3.1, issue #441): every
+`(field, name, shape)` where a `faq` node's `expr` or `filter` reads a variable
+declared with a non-empty `shape` by BARE name in an elementwise position.
+
+A `faq` names its axes by its range symbols and evaluates its body and filter
+once per index tuple, so a whole array there does not say which symbol each of
+its axes is. The bindings disagreed about what it meant (Rust's reference kept
+every term of a filter it could not align, so a filter over a node with two
+output indices was silently ignored; Python's whole-box tiers aligned it to the
+last box axis), so it is refused: the read must be `index(name, i, …)`.
+
+The descent enters elementwise nodes only (`_is_elementwise_node`), as the
+§4.3.4 alignment rule does; a name a `faq` binds as a loop symbol, here or
+further out, shadows the declaration; nested `faq` nodes are checked in their
+own right. Order: pre-order over nodes, `expr` before `filter`, operands left to
+right — the order Rust and Python report in.
+"""
+function faq_bare_array_operands(expr::ASTExpr, var_shapes::AbstractDict)
+    found = Tuple{String, String, Vector{String}}[]
+    shaped = Dict{String, Vector{String}}(
+        String(n) => String[String(x) for x in s] for (n, s) in var_shapes if !isempty(s)
+    )
+    isempty(shaped) && return found
+    _faq_bare_walk!(found, expr, shaped, Set{String}())
+    return found
+end
+
+function _faq_bare_operands!(out::Vector{String}, e::ASTExpr, shaped)
+    if e isa VarExpr
+        haskey(shaped, e.name) && push!(out, e.name)
+    elseif e isa OpExpr && _is_elementwise_node(e)
+        for a in e.args
+            _faq_bare_operands!(out, a, shaped)
+        end
+    end
+    return out
+end
+
+function _faq_bare_walk!(found, e::ASTExpr, shaped, bound::Set{String})
+    e isa OpExpr || return found
+    if e.op == "faq" || e.op == "aggregate"
+        bound = copy(bound)
+        e.output_idx === nothing || foreach(s -> push!(bound, string(s)), e.output_idx)
+        e.ranges === nothing || foreach(s -> push!(bound, string(s)), keys(e.ranges))
+        e.arg === nothing || push!(bound, e.arg)
+        for (field, part) in (("expr", e.expr_body), ("filter", e.filter))
+            part === nothing && continue
+            seen = Set{String}()
+            for name in _faq_bare_operands!(String[], part, shaped)
+                (name in bound || name in seen) && continue
+                push!(seen, name)
+                push!(found, (field, name, shaped[name]))
+            end
+        end
+    end
+    for c in _expr_children(e)
+        _faq_bare_walk!(found, c, shaped, bound)
+    end
+    return found
+end
+
+"""The `faq_bare_array_operand` message, shared by `validate` and the build."""
+faq_bare_array_operand_message(field::AbstractString, name::AbstractString, shape) =
+    "faq `$field` reads '$name', declared over [$(join(shape, ", "))], by bare name. " *
+    "A faq names its axes by its range symbols, and its `$field` is evaluated once " *
+    "per index tuple, so a whole array there does not say which symbol each of its " *
+    "axes is. Read it through `index`, e.g. index($name, <symbol>…) (esm-spec §4.3.1)"
+
+function _check_faq_bare_array_operands!(
+        errors::Vector{StructuralError}, expr::ASTExpr, anchor::String, var_shapes
+    )
+    for (field, name, shape) in faq_bare_array_operands(expr, var_shapes)
+        push!(
+            errors, StructuralError(
+                anchor, faq_bare_array_operand_message(field, name, shape),
+                ERROR_CODES.FAQ_BARE_ARRAY_OPERAND,
+                Dict{String, Any}("field" => field, "variable" => name, "shape" => shape)
             )
         )
     end
