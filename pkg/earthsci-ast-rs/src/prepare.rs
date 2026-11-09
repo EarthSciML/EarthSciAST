@@ -522,6 +522,11 @@ pub struct PreparedBuild {
     /// [`PrepareOptions::refuse_per_cell`] was set. `fields` then holds only
     /// what was evaluated before it.
     pub refused: Option<PipelineRule>,
+    /// Whether [`PrepareOptions::observed_cone`] narrowed a non-empty
+    /// observed graph. [`Self::fields`] is then this build's answer even when
+    /// it is empty (the request named only a data-fed parameter), so nothing
+    /// re-evaluates the document to fill it.
+    pub(crate) observed_cone_applied: bool,
 }
 
 /// One evaluation the build pipeline performed, and HOW: through the
@@ -1839,6 +1844,8 @@ struct BuildState<'o> {
     evaluated: HashSet<String>,
     obs_done: usize,
     obs_total: usize,
+    /// [`PreparedBuild::observed_cone_applied`].
+    cone_applied: bool,
 }
 
 impl<'o> BuildState<'o> {
@@ -1965,6 +1972,7 @@ impl<'o> BuildState<'o> {
             evaluated: HashSet::new(),
             obs_done: 0,
             obs_total: 0,
+            cone_applied: false,
         })
     }
 
@@ -2710,9 +2718,14 @@ impl<'o> BuildState<'o> {
     /// Runs AFTER the coordinate pre-pass, value invention and member-factor
     /// feedback, and leaves all three whole: they size the derived index sets,
     /// so every observed an extent comes from has been evaluated already,
-    /// whether or not it is in the cone. What is narrowed is the observed graph
-    /// those passes leave behind — the one pass whose cost grows with the
-    /// document rather than with the request.
+    /// whether or not it is in the cone. The gated fetch runs after this pass
+    /// and is not narrowed by it either. What is narrowed is the observed
+    /// graph — the one pass whose cost grows with the document rather than
+    /// with the request.
+    ///
+    /// Every observed an index set's fields name (a ragged set's `offsets`
+    /// and `values`, a derived set's `member_factor`) is in the cone whatever
+    /// the request: a range over the set reads it without naming it.
     ///
     /// The cone is the requested observeds and, transitively, every observed
     /// their definitions NAME: any string anywhere in a definition (a bare
@@ -2751,18 +2764,21 @@ impl<'o> BuildState<'o> {
             .iter()
             .map(|(n, e)| (n.as_str(), crate::observed_cone::named_strings(e)))
             .collect();
+        let pinned = crate::observed_cone::index_set_names(self.index_sets.values());
         let seeds = self
             .defs
             .keys()
             .filter(|k| {
-                requested
-                    .iter()
-                    .any(|n| crate::observed_cone::addresses(k, n, prefix.as_deref()))
+                crate::observed_cone::addressed_by_any(k, &pinned, prefix.as_deref())
+                    || requested
+                        .iter()
+                        .any(|n| crate::observed_cone::addresses(k, n, prefix.as_deref()))
             })
             .cloned();
         let cone =
             crate::observed_cone::closure(seeds, |n| self.defs.contains_key(n), |n| reads.get(n));
         let before = self.order.len();
+        self.cone_applied = before > 0;
         self.order
             .retain(|n| cone.contains(n) || self.fields.contains_key(n));
         self.log(&format!(
@@ -2924,6 +2940,7 @@ impl<'o> BuildState<'o> {
             gated_provider_keys: self.gated_keys,
             rules: self.rules,
             refused: self.refused,
+            observed_cone_applied: self.cone_applied,
         }
     }
 }

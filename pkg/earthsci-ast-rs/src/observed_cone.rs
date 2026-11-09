@@ -64,6 +64,39 @@ pub(crate) fn addresses(key: &str, name: &str, prefix: Option<&str>) -> bool {
             .is_some_and(|head| head.ends_with('.'))
 }
 
+/// Whether any of `names` [`addresses`] `key`, without a scan of `names`: the
+/// key, the key under `prefix`, and each of its dot-boundary tails are looked
+/// up instead.
+pub(crate) fn addressed_by_any(key: &str, names: &HashSet<String>, prefix: Option<&str>) -> bool {
+    names.contains(key)
+        || prefix.is_some_and(|p| names.contains(&format!("{p}{key}")))
+        || key
+            .match_indices('.')
+            .any(|(i, _)| names.contains(&key[i + 1..]))
+}
+
+/// Every name an index set's fields carry — a ragged set's `offsets` and
+/// `values`, a derived set's `from_faq` and `member_factor`, the parents it
+/// ranges `of` — but not a categorical set's `members`, which are data. A
+/// range over the set never names these, so an observed that backs one (a
+/// ragged set's per-parent counts) is in no definition's names; it sizes an
+/// axis, and the cone keeps it whatever the request.
+pub(crate) fn index_set_names<'a>(
+    sets: impl IntoIterator<Item = &'a crate::types::IndexSet>,
+) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for set in sets {
+        if let Ok(serde_json::Value::Object(fields)) = serde_json::to_value(set) {
+            for (field, v) in &fields {
+                if field != "members" {
+                    json_strings(v, &mut out);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The closure of `seeds` under `reads`: every name reachable from a seed by
 /// following `reads(name)`, restricted to names `is_node` accepts.
 pub(crate) fn closure<'a>(
@@ -122,23 +155,27 @@ pub(crate) fn prune_flattened(flat: &mut crate::flatten::FlattenedSystem, reques
             entry.extend(named_strings(&eq.lhs));
         }
     }
-    let mut pinned: HashSet<String> = HashSet::new();
+    let mut pinned = index_set_names(flat.index_sets.values());
     let side = (
-        serde_json::to_value(&flat.index_sets),
         serde_json::to_value(&flat.continuous_events),
         serde_json::to_value(&flat.discrete_events),
         serde_json::to_value(&flat.field_ics),
     );
-    for v in [side.0, side.1, side.2, side.3] {
+    for v in [side.0, side.1, side.2] {
         match v {
             Ok(v) => json_strings(&v, &mut pinned),
             // Cannot see what sizes the system: leave it whole.
             Err(_) => return,
         }
     }
+    // The pins are spelled as the document wrote them (an index set's
+    // `offsets` is model-local) and the keys are qualified, so a pin matches
+    // the way a request does.
     let seeds = observed
         .iter()
-        .filter(|k| pinned.contains(**k) || requested.iter().any(|n| addresses(k, n, None)))
+        .filter(|k| {
+            addressed_by_any(k, &pinned, None) || requested.iter().any(|n| addresses(k, n, None))
+        })
         .map(|k| k.to_string());
     let cone = closure(seeds, |n| observed.contains(n), |n| reads.get(n));
 
@@ -155,24 +192,28 @@ pub(crate) fn prune_flattened(flat: &mut crate::flatten::FlattenedSystem, reques
         .iter()
         .map(|eq| defined_name(&eq.lhs).is_none_or(|n| !drop.contains(n)))
         .collect();
-    let mut i = 0;
-    flat.equations.retain(|_| {
-        i += 1;
-        keep[i - 1]
-    });
-    if flat.equation_contributions.len() == keep.len() {
-        let mut i = 0;
-        flat.equation_contributions.retain(|_| {
-            i += 1;
-            keep[i - 1]
-        });
+    // One pass over the mask compacts the equations and the two per-equation
+    // records that run parallel to them (when they do: either may be empty).
+    let n = keep.len();
+    let contributions = flat.equation_contributions.len() == n;
+    let lifted = flat.equation_lifted.len() == n;
+    let mut kept = 0;
+    for (i, _) in keep.iter().enumerate().filter(|(_, k)| **k) {
+        flat.equations.swap(kept, i);
+        if contributions {
+            flat.equation_contributions.swap(kept, i);
+        }
+        if lifted {
+            flat.equation_lifted.swap(kept, i);
+        }
+        kept += 1;
     }
-    if flat.equation_lifted.len() == keep.len() {
-        let mut i = 0;
-        flat.equation_lifted.retain(|_| {
-            i += 1;
-            keep[i - 1]
-        });
+    flat.equations.truncate(kept);
+    if contributions {
+        flat.equation_contributions.truncate(kept);
+    }
+    if lifted {
+        flat.equation_lifted.truncate(kept);
     }
     flat.observed_variables.retain(|n, _| !drop.contains(n));
     flat.state_variables.retain(|n, _| !drop.contains(n));
@@ -180,7 +221,7 @@ pub(crate) fn prune_flattened(flat: &mut crate::flatten::FlattenedSystem, reques
 
 #[cfg(test)]
 mod tests {
-    use super::addresses;
+    use super::{addressed_by_any, addresses};
 
     #[test]
     fn a_request_addresses_its_key_its_tail_and_its_prefixed_spelling() {
@@ -190,5 +231,32 @@ mod tests {
         assert!(addresses("x", "Rel.x", Some("Rel.")));
         assert!(!addresses("Rel.xx", "x", None));
         assert!(!addresses("Rel.x", "Other.x", None));
+    }
+
+    #[test]
+    fn addressed_by_any_agrees_with_addresses() {
+        let names: std::collections::HashSet<String> = ["x", "Sub.y", "Rel.z", "Rel.w"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        for key in [
+            "x",
+            "Rel.x",
+            "Rel.Sub.y",
+            "Sub.y",
+            "y",
+            "z",
+            "w",
+            "Rel.xx",
+            "Rel.Sub",
+        ] {
+            for prefix in [None, Some("Rel.")] {
+                assert_eq!(
+                    addressed_by_any(key, &names, prefix),
+                    names.iter().any(|n| addresses(key, n, prefix)),
+                    "{key} under {prefix:?}"
+                );
+            }
+        }
     }
 }

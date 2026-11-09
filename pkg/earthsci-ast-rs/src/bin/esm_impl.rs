@@ -134,11 +134,14 @@ enum Commands {
         /// observed by default (streaming-output-sinks RFC decision 8).
         ///
         /// On a document with nothing to integrate this selects the COLUMNS of
-        /// the single evaluation, and the build pipeline evaluates only their
-        /// dependency cone (each named observed and every observed it reads,
-        /// transitively), not the whole observed graph; omitted, every field
-        /// the build materialized is written. A name the document does not
-        /// declare is refused before anything is evaluated.
+        /// the single evaluation, and only their dependency cone (each named
+        /// observed and every observed it reads, transitively) is evaluated,
+        /// not the whole observed graph; omitted, every field the build
+        /// materialized is written. Under the strict `native` compiler only
+        /// the cone can be refused, so a document refused whole can still be
+        /// run for columns that do not read the refused rule. A name no
+        /// declared variable could answer is refused before anything is
+        /// evaluated.
         #[arg(long = "observed", value_name = "NAME")]
         observed: Vec<String>,
         /// Build this model when the document holds several.
@@ -2526,8 +2529,7 @@ fn run_simulate(
     let content = read_input(&file)?;
     let esm_file = load_at(&file, &content)?;
     // A name the document does not declare is refused HERE, before anything
-    // is ingested or evaluated: on a large relational document a typo used to
-    // cost the whole evaluation before the writer reported it.
+    // is ingested or evaluated.
     refuse_undeclared_observed(&esm_file, &observed)?;
 
     println!("Running simulation for: {}", file.display());
@@ -2712,16 +2714,19 @@ fn run_simulate(
 /// Refuse a `--observed` name that addresses no variable the document
 /// declares.
 ///
-/// A request is known when it is some declared variable's qualified name
-/// (`Model.var`, `Model.Sub.var`) or a dot-boundary tail of one (`var`,
-/// `Sub.var`) — the spellings `observed_field` and the output plan accept, so
-/// nothing they would answer is refused. This is a superset check, not a
-/// resolution: an ambiguous bare name, or a declared variable the build does
-/// not materialize, is still reported where it is reported today.
+/// A request is known unless CONFORMANCE_SPEC §5.17.4's output-request rule
+/// finds it MISSING among the declared variables' qualified names (`Model.var`,
+/// `Model.Sub.var`, reaction-system species and parameters included): the
+/// exact name, or any whose last dotted segment it shares. The writers
+/// resolve over a subset of those names by the same rule, so nothing they
+/// would answer is refused here. An ambiguous name passes, and is reported
+/// where it is resolved (`ambiguous_output_name`); so is a declared variable
+/// the build does not materialize.
 fn refuse_undeclared_observed(
     esm_file: &earthsci_ast::EsmFile,
     observed: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
+    use earthsci_ast::extension::data_output::{RequestMatch, match_output_request};
     if observed.is_empty() {
         return Ok(());
     }
@@ -2757,15 +2762,11 @@ fn refuse_undeclared_observed(
             .and_then(|s| serde_json::to_value(s).ok());
         walk_subsystems(r, subs.as_ref(), &mut declared);
     }
-    let known = |name: &str| {
-        declared
-            .iter()
-            .any(|q| q == name || q.strip_suffix(name).is_some_and(|head| head.ends_with('.')))
-    };
+    let candidates: Vec<&str> = declared.iter().map(String::as_str).collect();
     let unknown: Vec<&str> = observed
         .iter()
         .map(String::as_str)
-        .filter(|n| !known(n))
+        .filter(|n| matches!(match_output_request(n, &candidates), RequestMatch::Missing))
         .collect();
     if unknown.is_empty() {
         return Ok(());

@@ -695,9 +695,16 @@ pub struct ProblemOptions {
     /// invention seeds from, value invention itself (every derived index set
     /// and its extent), member-factor feedback, data ingestion and the gated
     /// fetch all run as they do without this option, and an observed an index
-    /// set, an event or an initial condition names is always in the cone. Nor
-    /// is anything pruned in a model with state: its build-time fields feed a
-    /// right-hand side.
+    /// set names (a ragged set's `offsets`, say) is always in the cone, as is,
+    /// on the state-free evaluation, one an event or a field initial condition
+    /// names. Nor is anything pruned in a model with state: its build-time
+    /// fields feed a right-hand side.
+    ///
+    /// A strict compiler ([`Compiler::Native`]) refuses only a rule in the
+    /// cone: a document it refuses whole can build with a request that leaves
+    /// the refused rule out. The free-name gate (a name declared nowhere)
+    /// still sees every equation, on both routes, and so does the state-free
+    /// evaluation's unlowered-operator gate.
     ///
     /// `esm simulate --observed` sets this, so a relational document's run
     /// costs what the requested columns cost rather than what the document
@@ -2022,6 +2029,10 @@ pub fn esm_problem<'a>(
     // of that rule set (API_SPEC §5.8, "Every Problem reports what ran").
     #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut route_rows: Vec<CompilerRuleReport> = Vec::new();
+    // Whether the build pipeline evaluated `observed_cone`'s cone: its fields
+    // are then the answer even when the cone held no observed.
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+    let mut pipeline_evaluated_cone = false;
 
     // What the caller supplied for the document's shaped parameters, captured
     // before the build pipeline consumes `const_arrays` and `build_providers`:
@@ -2123,6 +2134,7 @@ pub fn esm_problem<'a>(
             model_name = prepared.model_name;
             pipeline_flat = prepared.flattened;
             build.fields = prepared.fields;
+            pipeline_evaluated_cone = prepared.observed_cone_applied;
             retained_data_keys = retained_data_keys_of(
                 prepared.data_fields.keys(),
                 model_name.as_deref().unwrap_or(""),
@@ -2331,11 +2343,14 @@ pub fn esm_problem<'a>(
     // typed document, neither of which the surface contract mentions.
     //
     // Skipped when the build pipeline already produced fields, so the ISRM /
-    // pushdown path keeps its own (model-local) keys untouched.
+    // pushdown path keeps its own (model-local) keys untouched — or evaluated
+    // the cone of `observed_cone`, which leaves no fields when the request
+    // names only a data-fed parameter.
     //
     // Evaluated by the compiler the Problem names, and gated by it: the tape
     // under `native` / `xla`, the per-cell oracle under `interpreter`.
     if build.fields.is_empty()
+        && !pipeline_evaluated_cone
         && let Backend::Static(_) = &backend
     {
         let t0 = opts.sample_time.unwrap_or(tspan.0);
@@ -2894,8 +2909,11 @@ fn static_observed_fields(
             .map_err(SimulateError::Compile)?;
     }
     // `ProblemOptions::observed_cone`: compile and evaluate only what the
-    // requested fields read. After every whole-document gate above, so a
-    // document is refused for the same reasons with or without a request.
+    // requested fields read. The gates above see the whole document, so a
+    // document they refuse is refused with or without a request. Everything
+    // below sees only the cone: the compile, and a strict compiler's refusal
+    // of a rule it cannot lower, which therefore does not fire for a rule
+    // outside the cone.
     let pruned;
     let flat = match cone {
         Some(requested) => {

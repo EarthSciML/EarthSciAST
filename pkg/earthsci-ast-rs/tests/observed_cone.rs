@@ -1,18 +1,18 @@
 //! `ProblemOptions::observed_cone` — and `esm simulate --observed`, which sets
 //! it — evaluates only the dependency cone of the requested observeds on a
-//! document with nothing to integrate.
-//!
-//! Before it, a run that asked for one column of a large relational document
-//! paid for every observed in it: `--observed` chose which columns were
-//! WRITTEN, after the whole graph had been evaluated. The pins:
+//! document with nothing to integrate. The pins:
 //!
 //!   * an observed outside the cone is never evaluated — not reported to the
 //!     progress observer, and one that would FAIL does not fail the run;
+//!   * an observed an index set reads without any definition naming it (a
+//!     ragged set's `offsets`) is in the cone;
 //!   * every field inside the cone is bit-identical to the unpruned build's,
 //!     on the build pipeline and on the state-free evaluation, under the
 //!     native compiler and the interpreter;
-//!   * a name the document does not declare is refused by `esm simulate`
-//!     before anything is evaluated.
+//!   * a strict compiler refuses only a rule inside the cone;
+//!   * a name no declared variable could answer is refused by `esm simulate`
+//!     before anything is evaluated, and every name CONFORMANCE_SPEC §5.17.4
+//!     resolves is not.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -211,6 +211,189 @@ fn a_bare_name_seeds_every_observed_it_is_the_tail_of() {
     assert_eq!(seen, ["dep", "left"]);
 }
 
+/// tests/valid/faq/ragged_member_gather.esm with nothing to integrate:
+/// `total[i]` sums each parent's members over the ragged set
+/// `members_of_parent`, whose `offsets` is the observed `parentMemberCount`.
+/// A range over the set never names its offsets, so no definition does.
+fn ragged_document() -> Value {
+    json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "Ragged"},
+        "index_sets": {
+            "parent_rows": {"kind": "interval", "size": 3},
+            "max_members": {"kind": "interval", "size": 3},
+            "flat_member_rows": {"kind": "interval", "size": 6},
+            "members_of_parent": {"kind": "ragged", "of": ["parent_rows"],
+                "offsets": "parentMemberCount", "values": "parentMember"},
+        },
+        "models": {"R": {
+            "variables": {
+                "parentMemberCount": {"type": "unknown", "shape": ["parent_rows"], "units": "1"},
+                "parentMember": {"type": "unknown", "shape": ["parent_rows", "max_members"],
+                    "units": "1"},
+                "flatValue": {"type": "unknown", "shape": ["flat_member_rows"], "units": "1"},
+                "total": {"type": "unknown", "shape": ["parent_rows"], "units": "1"},
+                "other": {"type": "unknown", "units": "1"},
+            },
+            "equations": [
+                {"lhs": "parentMemberCount", "rhs": {"op": "const", "args": [], "value": [1, 2, 3]}},
+                {"lhs": "parentMember", "rhs": {"op": "const", "args": [],
+                    "value": [[1, 0, 0], [2, 3, 0], [4, 5, 6]]}},
+                {"lhs": "flatValue", "rhs": {"op": "const", "args": [],
+                    "value": [10, 20, 30, 40, 50, 60]}},
+                {"lhs": "total", "rhs": {
+                    "op": "faq", "args": [], "semiring": "sum_product", "output_idx": ["i"],
+                    "ranges": {"i": {"from": "parent_rows"},
+                               "j": {"from": "members_of_parent", "of": ["i"]}},
+                    "expr": {"op": "index", "args": ["flatValue",
+                        {"op": "index", "args": ["parentMember", "i", "j"]}]}}},
+                {"lhs": "other", "rhs": 2.0},
+            ],
+        }},
+    })
+}
+
+#[test]
+fn an_observed_an_index_set_reads_is_in_every_cone() {
+    for pipeline in [true, false] {
+        for compiler in [Compiler::Native, Compiler::Interpreter] {
+            let (prob, seen) = build(&ragged_document(), Some(&["total"]), pipeline, compiler);
+            let prob = prob.unwrap_or_else(|e| panic!("[pipeline={pipeline}, {compiler:?}] {e}"));
+            assert_eq!(
+                observed_field(&prob, "total")
+                    .unwrap()
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>(),
+                [10.0, 50.0, 150.0],
+                "[pipeline={pipeline}, {compiler:?}]"
+            );
+            // The pin keeps what sizes the set and nothing else.
+            assert!(
+                observed_field(&prob, "other").is_err(),
+                "[pipeline={pipeline}, {compiler:?}] 'other' is outside the cone"
+            );
+            if pipeline {
+                let mut seen = seen;
+                seen.sort();
+                assert_eq!(
+                    seen,
+                    ["flatValue", "parentMember", "parentMemberCount", "total"]
+                );
+            }
+        }
+    }
+}
+
+/// `s` is a recurrence whose self-read sits inside a nested `faq`, which the
+/// tape does not lower, so the strict native compiler refuses it; `good` is
+/// independent of it.
+fn refused_document() -> Value {
+    let inner = json!({"op": "faq", "args": [], "output_idx": ["j"],
+        "ranges": {"j": [1, 2]},
+        "expr": {"op": "*", "args": [
+            {"op": "index", "args": ["s", {"op": "-", "args": ["k", 1]}]}, "j"]}});
+    json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "Refused"},
+        "index_sets": {"steps": {"kind": "interval", "size": 4}},
+        "models": {"R": {
+            "variables": {
+                "s": {"type": "unknown", "units": "1", "shape": ["steps"]},
+                "good": {"type": "unknown", "units": "1"},
+            },
+            "equations": [
+                {"lhs": "s", "rhs": {
+                    "op": "faq", "args": [], "output_idx": ["k"],
+                    "ranges": {"k": {"from": "steps"}},
+                    "expr": {"op": "ifelse", "args": [
+                        {"op": "<=", "args": ["k", 1]},
+                        1.0,
+                        {"op": "index", "args": [inner, 2]}
+                    ]}}},
+                {"lhs": "good", "rhs": 7.0},
+            ],
+        }},
+    })
+}
+
+#[test]
+fn a_strict_compiler_refuses_only_a_rule_in_the_cone() {
+    let doc = refused_document();
+    let (whole, _) = build(&doc, None, false, Compiler::Native);
+    let Err(e) = whole else {
+        panic!("native refuses `s` in the whole document");
+    };
+    assert!(
+        e.contains("compiler_refused_rule") || e.contains("refus"),
+        "{e}"
+    );
+    let (refused, _) = build(&doc, Some(&["s"]), false, Compiler::Native);
+    assert!(refused.is_err(), "`s` is in its own cone");
+
+    let (prob, _) = build(&doc, Some(&["good"]), false, Compiler::Native);
+    let prob = prob.expect("`s` is outside the cone of `good`, so native does not refuse it");
+    assert_eq!(observed_field(&prob, "good").unwrap().sum(), 7.0);
+    assert!(observed_field(&prob, "s").is_err());
+}
+
+/// A request that names only a data-fed parameter leaves the build
+/// pipeline's cone empty, and the pipeline's evaluation is still the answer:
+/// the state-free route does not run again over the rewritten document. Here
+/// that route would flatten the whole document and stop at model `B`'s
+/// unlowered `grad`, which the build of model `M` never reads.
+#[test]
+fn a_request_for_a_data_fed_parameter_alone_is_answered_by_the_pipeline() {
+    use ndarray::{ArrayD, IxDyn};
+    use std::collections::HashMap;
+    let fed = json!({"type": "parameter", "units": "1", "default": 0.0, "shape": ["rows"],
+        "update": {"kind": "data", "source": "table", "from": {"file_variable": "p"}}});
+    let doc = json!({
+        "esm": "1.2.0",
+        "metadata": {"name": "DataFedOnly"},
+        "data_sources": {"table": {"kind": "static",
+            "source": {"url_template": "./table.parquet"}}},
+        "index_sets": {"rows": {"kind": "interval", "size": 4}},
+        "models": {
+            "M": {
+                "variables": {"p": fed, "total": {"type": "unknown", "units": "1"}},
+                "equations": [{"lhs": "total", "rhs": {"op": "faq", "args": [],
+                    "output_idx": [], "ranges": {"r": {"from": "rows"}},
+                    "expr": {"op": "index", "args": ["p", "r"]}}}],
+            },
+            "B": {
+                "variables": {"u": {"type": "parameter", "units": "1", "default": 1.0},
+                              "v": {"type": "unknown", "units": "1/m"}},
+                "equations": [{"lhs": "v",
+                    "rhs": {"op": "grad", "args": ["u"], "dim": "x"}}],
+            },
+        },
+    });
+    for cone in [None, Some(vec!["p".to_string()])] {
+        let prob = esm_problem(
+            &doc,
+            (0.0, 1.0),
+            ProblemOptions {
+                const_arrays: HashMap::from([(
+                    "p".to_string(),
+                    ArrayD::from_shape_vec(IxDyn(&[4]), vec![1.0, 2.0, 4.0, 8.0]).unwrap(),
+                )]),
+                build_pipeline: true,
+                model_name: Some("M".into()),
+                retain_data_fields: vec!["p".into()],
+                observed_cone: cone.clone(),
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("[cone {cone:?}] {e}"));
+        assert_eq!(
+            observed_field(&prob, "p").unwrap().sum(),
+            15.0,
+            "[cone {cone:?}]"
+        );
+    }
+}
+
 // --------------------------------------------------------------------------- //
 // What is inside the cone is bit-identical
 // --------------------------------------------------------------------------- //
@@ -250,6 +433,7 @@ fn every_field_in_the_cone_is_bit_identical_to_the_unpruned_build() {
 #[cfg(all(feature = "cli", feature = "solve"))]
 mod cli {
     use super::cone_document;
+    use serde_json::{Value, json};
     use std::process::Command;
 
     fn esm(dir: &std::path::Path, observed: &[&str]) -> (bool, String) {
@@ -297,5 +481,71 @@ mod cli {
             let (ok, text) = esm(tmp.path(), &[name]);
             assert!(ok, "'{name}':\n{text}");
         }
+    }
+
+    /// `Chem.O3` and `Emis.NO` integrate; with `with_sink`, `Sink.O3` too.
+    fn two_component_document(with_sink: bool) -> Value {
+        let decay = |v: &str| {
+            json!({"lhs": {"op": "D", "args": [v], "wrt": "t"},
+                   "rhs": {"op": "*", "args": [-1.0, "k", v]}})
+        };
+        let component = |v: &str| {
+            json!({
+                "variables": {
+                    v: {"type": "unknown", "units": "1", "default": 1.0},
+                    "k": {"type": "parameter", "units": "1/s", "default": 0.1},
+                },
+                "equations": [decay(v)],
+            })
+        };
+        let mut models = json!({"Chem": component("O3"), "Emis": component("NO")});
+        if with_sink {
+            models["Sink"] = component("O3");
+        }
+        json!({"esm": "1.1.0", "metadata": {"name": "Two"}, "models": models})
+    }
+
+    fn esm_grid(dir: &std::path::Path, doc: &Value, observed: &str) -> (bool, String) {
+        let path = dir.join("two.esm");
+        std::fs::write(&path, doc.to_string()).expect("write");
+        let out = Command::new(env!("CARGO_BIN_EXE_esm"))
+            .args([
+                "simulate",
+                path.to_str().unwrap(),
+                "--time",
+                "1",
+                "--format",
+                "grid",
+            ])
+            .args(["--observed", observed, "--output"])
+            .arg(dir.join("out.json"))
+            .output()
+            .expect("runs");
+        let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+        text.push_str(&String::from_utf8_lossy(&out.stderr));
+        (out.status.success(), text)
+    }
+
+    #[test]
+    fn a_name_the_output_rule_resolves_by_its_last_segment_is_not_refused() {
+        // CONFORMANCE_SPEC §5.17.4 rule 2: `Emis.O3` names no variable
+        // exactly, and `Chem.O3` is the one variable whose last segment is
+        // `O3`.
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let (ok, text) = esm_grid(tmp.path(), &two_component_document(false), "Emis.O3");
+        assert!(ok, "{text}");
+    }
+
+    #[test]
+    fn an_ambiguous_name_is_refused_as_ambiguous_not_as_undeclared() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let (ok, text) = esm_grid(tmp.path(), &two_component_document(true), "Emis.O3");
+        assert!(!ok, "{text}");
+        assert!(!text.contains("declares no variable"), "{text}");
+        assert!(text.contains("last segment is shared by"), "{text}");
+        assert!(
+            text.contains("Chem.O3") && text.contains("Sink.O3"),
+            "{text}"
+        );
     }
 }
