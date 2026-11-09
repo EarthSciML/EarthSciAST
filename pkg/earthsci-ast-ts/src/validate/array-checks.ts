@@ -279,12 +279,17 @@ export function validateArrayBroadcastShapes(model: Model, modelPath: string): S
  *
  * The descent is {@link collectBareArrayOperands}' (element-wise nodes only); a
  * name a `faq` binds as a loop symbol, there or further out, shadows the
- * declaration; nested `faq` nodes are checked in their own right; an equation
- * side still holding a template reference is not decided (its expansion is the
- * evaluating bindings' to check at build). Order: pre-order over nodes, `expr`
- * before `filter`, matching Rust, Python and Julia.
+ * declaration; nested `faq` nodes are checked in their own right; a template
+ * application is opaque, so an array bound to one of its arguments is not a
+ * bare read (its expansion is the evaluating bindings' to check at build).
+ * Order: pre-order over nodes, `expr` before `filter`, matching Rust, Python
+ * and Julia.
  */
-export function validateFaqBareArrayOperands(model: Model, modelPath: string): StructuralError[] {
+export function validateFaqBareArrayOperands(
+  model: Model,
+  modelPath: string,
+  authoredTemplateRhs: Record<string, unknown> = {},
+): StructuralError[] {
   const errors: StructuralError[] = []
   const declared = new Map<string, string[]>()
   for (const [name, variable] of Object.entries(model.variables ?? {})) {
@@ -295,7 +300,9 @@ export function validateFaqBareArrayOperands(model: Model, modelPath: string): S
   let axesOf = declared
 
   const walk = (node: Expr, bound: ReadonlySet<string>, path: string): void => {
-    if (!isExprNode(node)) return
+    // A template application is opaque: an array bound to one of its arguments
+    // is not a bare read here (its expansion is checked at build).
+    if (!isExprNode(node) || node.op === 'apply_expression_template') return
     let inner = bound
     if (node.op === 'faq' || node.op === 'aggregate') {
       const faq = node as ExpressionNode & {
@@ -335,13 +342,17 @@ export function validateFaqBareArrayOperands(model: Model, modelPath: string): S
     forEachChild(node, (child) => walk(child, inner, path))
   }
 
-  // Each equation's right-hand side. A variable its left-hand side names is
-  // skipped: a bare read of the variable an equation defines is a
-  // self-reference the recurrence and cycle checks already report.
+  // Each equation's right-hand side. A variable an observed or recurrence
+  // definition's left-hand side names is skipped: its bare self-read is
+  // `recurrence_not_wellfounded` or `observed_cycle`. A derivative left-hand
+  // side skips nothing; no other check reports `D(y) ~ faq(… y …)`.
+  // The right-hand side is read as authored: load has already expanded any
+  // template application in it.
   for (const [index, equation] of (model.equations ?? []).entries()) {
-    const rhs = equation.rhs
-    if (rhs === undefined || containsTemplateReference(rhs)) continue
-    const defined = stringLeaves(equation.lhs)
+    const rhs = authoredTemplateRhs[`${modelPath}/equations/${index}`] ?? equation.rhs
+    if (rhs === undefined) continue
+    const lhs = equation.lhs
+    const defined = isExprNode(lhs) && lhs.op === 'D' ? new Set<string>() : stringLeaves(lhs)
     axesOf = new Map([...declared].filter(([name]) => !defined.has(name)))
     walk(rhs as Expr, new Set(), `${modelPath}/equations/${index}/rhs`)
   }
@@ -352,14 +363,4 @@ function stringLeaves(expr: unknown, out: Set<string> = new Set()): Set<string> 
   if (typeof expr === 'string') out.add(expr)
   else if (isExprNode(expr)) forEachChild(expr, (child) => void stringLeaves(child, out))
   return out
-}
-
-function containsTemplateReference(expr: unknown): boolean {
-  if (!isExprNode(expr)) return false
-  if (expr.op === 'apply_expression_template') return true
-  let found = false
-  forEachChild(expr, (child) => {
-    if (!found && containsTemplateReference(child)) found = true
-  })
-  return found
 }

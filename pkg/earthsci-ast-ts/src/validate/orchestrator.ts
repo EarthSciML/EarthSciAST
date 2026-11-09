@@ -238,7 +238,7 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       // wired — so both run on every model.
       errors.push(...validateBroadcastFns(model, modelPath))
       errors.push(...validateArrayBroadcastShapes(model, modelPath))
-      errors.push(...validateFaqBareArrayOperands(model, modelPath))
+      errors.push(...validateFaqBareArrayOperands(model, modelPath, esmFile.authoredTemplateRhs))
 
       // esm-spec §4.3.1.1. A causal self-reference (recurrence): an equation
       // defining an array-shaped unknown whose RHS `faq` body reads the
@@ -286,7 +286,9 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
           errors.push(...validateRelationalNodesInContinuous(subsystem, subsystemPath))
           errors.push(...validateBroadcastFns(subsystem, subsystemPath))
           errors.push(...validateArrayBroadcastShapes(subsystem, subsystemPath))
-          errors.push(...validateFaqBareArrayOperands(subsystem, subsystemPath))
+          errors.push(
+            ...validateFaqBareArrayOperands(subsystem, subsystemPath, esmFile.authoredTemplateRhs),
+          )
           errors.push(...validateRecurrenceEquations(subsystem, subsystemPath, esmFile))
           errors.push(...validateObservedCycles(subsystem, subsystemPath, esmFile))
         }
