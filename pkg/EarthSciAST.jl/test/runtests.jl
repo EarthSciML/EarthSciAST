@@ -186,6 +186,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("intern_oracle_test.jl")               # A1 hash-consing ≡ the interpreter (differential)
     include("xeq_variant_oracle_test.jl")          # A3 cross-eq variant memo ≡ the interpreter (differential)
     include("expand_memo_oracle_test.jl")          # A4 template-expansion memo ≡ expand_flattened_refs (differential)
+    include("template_instantiation_cache_test.jl") # template sites from cached skeletons ≡ the direct expansion
     include("tree_walk_faq_test.jl")
     include("broadcast_alignment_test.jl")           # §4.3.4 broadcast lowering + name-based operand alignment
     include("tree_walk_inline_const_index_test.jl")  # inline `const` array as index() target (fix/index-inline-const-array)

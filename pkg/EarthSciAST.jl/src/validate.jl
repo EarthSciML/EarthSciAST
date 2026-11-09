@@ -1873,7 +1873,7 @@ function _check_template_index_sets!(
         nothing
     end
     isempty(templated) && return errors
-    memo = Dict{Tuple{String, String}, OpExpr}()
+    memo = _ExpandCache()
     _foreach_model_expression(view, path, nothing) do e, anchor, _
         anchor in templated || return nothing
         any(x -> x.path == anchor && x.error_type == ERROR_CODES.UNDEFINED_INDEX_SET, errors) &&

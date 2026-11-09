@@ -2017,7 +2017,24 @@ const _TemplateSites = Union{Nothing, IdDict{OpExpr, OpExpr}}
 # oracles), so the memo is not a choice of evaluator and every compiler keeps
 # it; `nothing` is the per-site re-expansion, for a caller that wants the
 # sharing measured rather than assumed.
-const _ExpandMemo = Union{Nothing, Dict{Tuple{String, String}, OpExpr}}
+#
+# The memo also carries the per-template INSTANTIATION cache (`_TplSkel`): each
+# template is substituted, parsed and expanded ONCE per memo with a sentinel
+# variable standing for every parameter, and each call site is then the typed
+# substitution of its bindings into that cached tree. See `_TplSkel`.
+mutable struct _ExpandCache
+    bind::Dict{Tuple{String, String}, OpExpr}
+    reg::Any                       # the registry the cached skeletons were built from
+    skel::Dict{String, Any}        # template name => `_TplSkel`, or `nothing` (ineligible)
+    building::Vector{Set{String}}  # per skeleton under construction: params whose image is a nested root
+end
+_ExpandCache(bind::Dict{Tuple{String, String}, OpExpr} = Dict{Tuple{String, String}, OpExpr}()) =
+    _ExpandCache(bind, nothing, Dict{String, Any}(), Set{String}[])
+# The entry points also take a bare bindings memo (the earlier form of `memo`).
+_expand_cache(m::Union{Nothing, _ExpandCache}) = m
+_expand_cache(m::Dict{Tuple{String, String}, OpExpr}) = _ExpandCache(m)
+
+const _ExpandMemo = Union{Nothing, _ExpandCache}
 
 _expand_expr_refs(e::VarExpr, reg, ::_TemplateSites, ::_ExpandMemo = nothing) = e
 _expand_expr_refs(e::NumExpr, reg, ::_TemplateSites, ::_ExpandMemo = nothing) = e
@@ -2035,44 +2052,345 @@ function _expand_expr_refs(
                     "'$(name === nothing ? "?" : name)' with no in-scope registry entry"
             )
         )
-        # Canonical bindings key: name-sorted `k=serialized(v)` pairs. The same
-        # serialization feeds `_substitute` below, so the key captures exactly
-        # what determines the expansion (two sites collide iff they substitute
-        # identically). Only built when the memo is live.
-        mkey = nothing
-        if memo !== nothing
-            bkey = e.bindings === nothing ? "" :
-                join(
-                    sort!(
-                        String[
-                            string(k) * "\0" * _stable_json(serialize_expression(v))
-                            for (k, v) in e.bindings
-                        ]
-                    ), "\x01"
-                )
-            mkey = (name::String, bkey)
-            cached = get(memo, mkey, nothing)
-            if cached !== nothing
-                sites === nothing || (sites[cached] = e)
-                return cached
-            end
-        end
-        body_raw = _raw_get(reg[name], "body")
         bindings_raw = Dict{String, Any}()
         if e.bindings !== nothing
             for (k, v) in e.bindings
                 bindings_raw[string(k)] = serialize_expression(v)
             end
         end
-        substituted = _substitute(body_raw, bindings_raw)
-        ex = _expand_expr_refs(expression_from_json(substituted), reg, sites, memo)
-        if sites !== nothing && ex isa OpExpr
-            sites[ex] = e
+        # Canonical bindings key: name-sorted `k=serialized(v)` pairs. The same
+        # serialization feeds `_substitute` below, so the key captures exactly
+        # what determines the expansion (two sites collide iff they substitute
+        # identically). Only built when the memo is live.
+        mkey = nothing
+        if memo !== nothing
+            bkey = join(
+                sort!(String[k * "\0" * _stable_json(v) for (k, v) in bindings_raw]),
+                "\x01"
+            )
+            mkey = (name::String, bkey)
+            cached = get(memo.bind, mkey, nothing)
+            if cached !== nothing
+                _record_site!(sites, memo, cached, e)
+                return cached
+            end
         end
-        memo !== nothing && ex isa OpExpr && (memo[mkey] = ex)
+        ex = memo === nothing ? nothing :
+            _tpl_instantiate(e, name::String, bindings_raw, reg, sites, memo)
+        if ex === nothing
+            substituted = _substitute(_raw_get(reg[name], "body"), bindings_raw)
+            ex = _expand_expr_refs(expression_from_json(substituted), reg, sites, memo)
+        end
+        _record_site!(sites, memo, ex, e)
+        memo !== nothing && ex isa OpExpr && (memo.bind[mkey] = ex)
         return ex
     end
     return map_children(c -> _expand_expr_refs(c, reg, sites, memo), e)
+end
+
+# Record `ex` as the expansion root of the apply node `e`. While a template's
+# skeleton is being built, a root that is a bare parameter sentinel stands for
+# that parameter's binding at every instantiation: noted on the skeleton.
+function _record_site!(sites::_TemplateSites, memo::_ExpandMemo, ex, e::OpExpr)
+    sites === nothing && return nothing
+    if ex isa OpExpr
+        sites[ex] = e
+    elseif ex isa VarExpr && memo !== nothing && !isempty(memo.building) &&
+            startswith(ex.name, _TPL_SENTINEL)
+        push!(memo.building[end], ex.name)
+    end
+    return nothing
+end
+
+# ---------------------------------------------------------------------------
+# Template instantiation cache
+# ---------------------------------------------------------------------------
+#
+# Expanding a call site the direct way serializes its bindings, substitutes
+# them into the raw template body, parses the result and expands the nested
+# references in it, each of which repeats the same steps one level down. All of
+# that work depends on the template, not on the site, except where a parameter
+# lands. A skeleton does it once per template: the body is substituted with a
+# sentinel variable per parameter (a string no document can contain), parsed,
+# and its nested references expanded through this same cache, so a nested
+# reference's bindings carry the outer sentinels into the inner skeleton. A site
+# is then instantiated by replacing the sentinels:
+#
+#   * a sentinel in an expression position becomes the parse of the binding's
+#     serialization, expanded (what the direct route parses there);
+#   * a sentinel in a `ranges` entry or in `output_idx` is re-coerced from the
+#     binding's serialization by the parser's own rules;
+#   * subtrees with no sentinel are shared, not copied.
+#
+# Parsing is context free (`expression_from_json` reads only the node), so the
+# result is structurally identical to the direct route. A template whose
+# sentinels land anywhere else (an op name, a `const` value, a scalar field), or
+# whose skeleton cannot be built at all, is marked ineligible and every one of
+# its sites takes the direct route, which raises whatever the direct route
+# raises. So does a site whose binding names differ from the template's params.
+const _TPL_SENTINEL = "\0esm-template-param\0"
+
+struct _TplSkel
+    root::ASTExpr
+    params::Set{String}
+    live::IdDict{OpExpr, Nothing}    # nodes with a sentinel at or below them
+    fix::IdDict{OpExpr, Nothing}     # nodes with a sentinel in `ranges` or `output_idx`
+    roots::IdDict{OpExpr, OpExpr}    # nested expansion roots => their apply nodes
+    root_params::Set{String}         # sentinels that are themselves a nested root
+    param_of::Dict{String, String}   # sentinel => its parameter
+end
+
+function _tpl_skeleton(name::String, reg, memo::_ExpandCache)
+    if memo.reg !== reg
+        empty!(memo.skel)
+        memo.reg = reg
+    end
+    haskey(memo.skel, name) && return memo.skel[name]
+    memo.skel[name] = nothing      # a reference cycle reaching this template stays direct
+    sk = _build_tpl_skeleton(name, reg, memo)
+    memo.skel[name] = sk
+    return sk
+end
+
+function _build_tpl_skeleton(name::String, reg, memo::_ExpandCache)
+    decl = reg[name]
+    params_raw = _raw_get(decl, "params")
+    params = params_raw === nothing ? String[] : String[string(p) for p in params_raw]
+    allunique(params) || return nothing
+    sent = Dict{String, Any}(p => _TPL_SENTINEL * p for p in params)
+    nested = IdDict{OpExpr, OpExpr}()
+    push!(memo.building, Set{String}())
+    # A bindings-memo hit records only the root it returns, so a skeleton gets
+    # its own memo: every nested root it holds is then recorded in `nested`.
+    outer_bind = memo.bind
+    memo.bind = Dict{Tuple{String, String}, OpExpr}()
+    root = try
+        body = _raw_get(decl, "body")
+        _expand_expr_refs(expression_from_json(_substitute(body, sent)), reg, nested, memo)
+    catch
+        # The direct route raises the real diagnostic at each site.
+        nothing
+    finally
+        root_params = pop!(memo.building)
+        memo.bind = outer_bind
+    end
+    root === nothing && return nothing
+    root_params = Set{String}(s for s in root_params if any(p -> sent[p] == s, params))
+    live = IdDict{OpExpr, Nothing}()
+    fix = IdDict{OpExpr, Nothing}()
+    ok = _tpl_scan!(root, live, fix, IdDict{OpExpr, Bool}())
+    ok === nothing && return nothing
+    return _TplSkel(
+        root, Set(params), live, fix, nested, root_params,
+        Dict{String, String}(s => p for (p, s) in sent)
+    )
+end
+
+_is_sentinel(x) = x isa AbstractString && occursin(_TPL_SENTINEL, x)
+_sentinel_param(s::AbstractString) = s[(ncodeunits(_TPL_SENTINEL) + 1):end]
+
+# Whether any string anywhere inside `x` (a field value of any shape) carries a
+# sentinel. `ASTExpr` values are expression children and are not looked into.
+function _holds_sentinel(x)::Bool
+    x isa AbstractString && return _is_sentinel(x)
+    x isa ASTExpr && return false
+    if x isa AbstractDict
+        for (k, v) in x
+            (_holds_sentinel(k) || _holds_sentinel(v)) && return true
+        end
+        return false
+    end
+    if x isa AbstractVector || x isa Tuple
+        for v in x
+            _holds_sentinel(v) && return true
+        end
+        return false
+    end
+    x isa IndexSetRef && return _holds_sentinel(x.from) || _holds_sentinel(x.of)
+    (x === nothing || x isa Number || x isa Symbol) && return false
+    T = typeof(x)
+    for f in fieldnames(T)
+        isdefined(x, f) && _holds_sentinel(getfield(x, f)) && return true
+    end
+    return false
+end
+
+# Mark the skeleton nodes a site instantiation must rebuild (`live`), and the
+# ones whose `ranges` / `output_idx` must be re-coerced (`fix`). Returns
+# `nothing` when a sentinel sits in a position the instantiation does not
+# handle (the template is then ineligible), else whether `n` is live.
+_tpl_scan!(n::VarExpr, live, fix, seen) = _is_sentinel(n.name)
+_tpl_scan!(n::Union{NumExpr, IntExpr}, live, fix, seen) = false
+function _tpl_scan!(n::OpExpr, live, fix, seen)::Union{Nothing, Bool}
+    r = get(seen, n, nothing)
+    r === nothing || return r
+    any_live = false
+    needs_fix = false
+    for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
+        v = getfield(n, f)
+        v === nothing && continue
+        if spec.kind === :expr
+            l = _tpl_scan!(v, live, fix, seen)
+            l === nothing && return nothing
+            any_live |= l
+        elseif spec.kind === :expr_vec
+            for c in v
+                l = _tpl_scan!(c, live, fix, seen)
+                l === nothing && return nothing
+                any_live |= l
+            end
+        elseif spec.kind === :expr_map
+            _holds_sentinel(collect(keys(v))) && return nothing
+            for c in values(v)
+                l = _tpl_scan!(c, live, fix, seen)
+                l === nothing && return nothing
+                any_live |= l
+            end
+        elseif f === :ranges
+            for (k, entry) in v
+                _is_sentinel(k) && return nothing
+                if entry isa AbstractVector
+                    for x in entry
+                        if x isa ASTExpr
+                            l = _tpl_scan!(x, live, fix, seen)
+                            l === nothing && return nothing
+                            if l
+                                any_live = true
+                                # A bare sentinel bound is re-coerced; a
+                                # sentinel deeper in a bound expression is an
+                                # ordinary expression substitution.
+                                x isa VarExpr && (needs_fix = true)
+                            end
+                        elseif _holds_sentinel(x)
+                            return nothing
+                        end
+                    end
+                elseif entry isa IndexSetRef
+                    if _holds_sentinel(entry)
+                        needs_fix = true
+                    end
+                else
+                    _holds_sentinel(entry) && return nothing
+                end
+            end
+        elseif f === :output_idx
+            for x in v
+                _holds_sentinel(x) || continue
+                (x isa AbstractString && startswith(x, _TPL_SENTINEL)) || return nothing
+                needs_fix = true
+            end
+        else
+            _holds_sentinel(v) && return nothing
+        end
+    end
+    needs_fix && (fix[n] = nothing)
+    l = any_live | needs_fix
+    l && (live[n] = nothing)
+    seen[n] = l
+    return l
+end
+
+# One call site through the template's skeleton, or `nothing` for the direct
+# route (ineligible template, or binding names that differ from its params).
+function _tpl_instantiate(
+        e::OpExpr, name::String, bindings_raw::Dict{String, Any}, reg,
+        sites::_TemplateSites, memo::_ExpandCache
+    )
+    sk = _tpl_skeleton(name, reg, memo)
+    sk === nothing && return nothing
+    length(bindings_raw) == length(sk.params) || return nothing
+    for k in keys(bindings_raw)
+        k in sk.params || return nothing
+    end
+    st = _TplInst(sk, bindings_raw, Dict{String, ASTExpr}(), IdDict{OpExpr, ASTExpr}(), reg, sites, memo)
+    root = _tpl_subst(st, sk.root)
+    if sites !== nothing
+        for (r, ap) in sk.roots
+            img = haskey(sk.live, r) ? get(st.img, r, nothing) : r
+            img === nothing || _record_site!(sites, memo, img, ap)
+        end
+        for s in sk.root_params
+            _record_site!(sites, memo, _tpl_binding(st, _sentinel_param(s)), e)
+        end
+    end
+    return root
+end
+
+struct _TplInst
+    sk::_TplSkel
+    raw::Dict{String, Any}           # param => serialized binding
+    typed::Dict{String, ASTExpr}     # param => parsed, expanded binding (on first use)
+    img::IdDict{OpExpr, ASTExpr}     # skeleton node => its instance
+    reg::Any
+    sites::_TemplateSites
+    memo::_ExpandCache
+end
+
+function _tpl_binding(st::_TplInst, p::String)
+    v = get(st.typed, p, nothing)
+    v === nothing || return v
+    v = _expand_expr_refs(expression_from_json(st.raw[p]), st.reg, st.sites, st.memo)
+    st.typed[p] = v
+    return v
+end
+
+_tpl_subst(st::_TplInst, n::VarExpr) =
+    (p = get(st.sk.param_of, n.name, nothing); p === nothing ? n : _tpl_binding(st, p))
+_tpl_subst(st::_TplInst, n::Union{NumExpr, IntExpr}) = n
+function _tpl_subst(st::_TplInst, n::OpExpr)
+    haskey(st.sk.live, n) || return n
+    r = get(st.img, n, nothing)
+    r === nothing || return r
+    out = map_children(c -> _tpl_subst(st, c), n)
+    if haskey(st.sk.fix, n)
+        out = reconstruct(
+            out; ranges = _tpl_fix_ranges(st, n.ranges, out.ranges),
+            output_idx = _tpl_fix_output_idx(st, n.output_idx)
+        )
+    end
+    st.img[n] = out
+    return out
+end
+
+# The serialized binding of the parameter a sentinel string names.
+_tpl_raw(st::_TplInst, s::AbstractString) = st.raw[_sentinel_param(s)]
+
+# `_coerce_ranges` applied to the entry the direct route would have parsed:
+# a bare sentinel bound is the binding's serialization, every other bound is
+# as the skeleton (already substituted in `inst`) has it.
+function _tpl_fix_ranges(st::_TplInst, skel, inst)
+    skel === nothing && return nothing
+    out = Dict{String, Any}()
+    for (k, v) in skel
+        if v isa AbstractVector
+            iv = inst[k]
+            rawv = Any[
+                (x isa VarExpr && startswith(x.name, _TPL_SENTINEL)) ? _tpl_raw(st, x.name) : iv[i]
+                    for (i, x) in enumerate(v)
+            ]
+            if all(x -> x isa Number, rawv)
+                out[k] = Any[Int(x) for x in rawv]
+            else
+                out[k] = Any[
+                    x isa Number ? Int(x) :
+                        ((y isa VarExpr && startswith(y.name, _TPL_SENTINEL)) ? iv[i] : x)
+                        for (i, (x, y)) in enumerate(zip(rawv, v))
+                ]
+            end
+        elseif v isa IndexSetRef
+            from = _is_sentinel(v.from) ? string(_tpl_raw(st, v.from)) : v.from
+            of = String[_is_sentinel(x) ? string(_tpl_raw(st, x)) : x for x in v.of]
+            out[k] = IndexSetRef(from; of = of)
+        else
+            out[k] = inst[k]
+        end
+    end
+    return out
+end
+
+function _tpl_fix_output_idx(st::_TplInst, skel)
+    skel === nothing && return nothing
+    return _coerce_output_idx(Any[_is_sentinel(x) ? _tpl_raw(st, x) : x for x in skel])
 end
 
 """
@@ -2162,8 +2480,9 @@ end
 
 function _expand_model_refs!(
         model::Model, reg; sites::_TemplateSites = nothing,
-        memo::_ExpandMemo = Dict{Tuple{String, String}, OpExpr}()
+        memo::Union{_ExpandMemo, Dict{Tuple{String, String}, OpExpr}} = _ExpandCache()
     )
+    memo = _expand_cache(memo)
     # esm 1.0.0: the only per-variable expression positions are a parameter
     # update's `when` trigger and `expression` value form (esm-spec §5.4); an
     # observed unknown's body is an equation, expanded just below.
@@ -2246,8 +2565,9 @@ would produce one pass later anyway.
 """
 function expand_flattened_refs(
         flat::FlattenedSystem;
-        memo::_ExpandMemo = Dict{Tuple{String, String}, OpExpr}()
+        memo::Union{_ExpandMemo, Dict{Tuple{String, String}, OpExpr}} = _ExpandCache()
     )::FlattenedSystem
+    memo = _expand_cache(memo)
     reg = flat.template_registry
     isempty(reg) && return flat
     # Expansion rewrites inside each contribution (esm-libraries-spec §4.7.5): a
