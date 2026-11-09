@@ -2036,7 +2036,7 @@ impl ScalarReadSpec {
                     } else {
                         match policy[d] {
                             BoundaryKind::Periodic if n >= 1 => {
-                                Some((r - 1).rem_euclid(n) as usize)
+                                Some(crate::simulate_array::eval::periodic_offset(r, n))
                             }
                             BoundaryKind::Clamp if n >= 1 => Some((r.clamp(1, n) - 1) as usize),
                             _ => None,
@@ -2528,7 +2528,9 @@ impl DataGatherSpec {
             } else {
                 match &self.kind {
                     ScalarReadKind::ConstArray { policy, .. } => match policy[d] {
-                        BoundaryKind::Periodic if n_i >= 1 => (r - 1).rem_euclid(n_i) as usize,
+                        BoundaryKind::Periodic if n_i >= 1 => {
+                            crate::simulate_array::eval::periodic_offset(r, n_i)
+                        }
                         BoundaryKind::Clamp if n_i >= 1 => (r.clamp(1, n_i) - 1) as usize,
                         _ => {
                             let logical = if self.reversed { m - 1 - d } else { d };

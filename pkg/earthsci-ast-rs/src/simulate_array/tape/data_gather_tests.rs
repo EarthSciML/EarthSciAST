@@ -646,3 +646,46 @@ fn a_filtered_out_const_gather_never_faults() {
         );
     }
 }
+
+/// A subscript that saturates (`±inf`, `±1e300` → `i64::MIN`/`i64::MAX`)
+/// under a periodic policy folds to the exact residue `(r − 1) mod n` of the
+/// saturated integer — the interpreter's `index_into` — with no overflow, in
+/// both the scalar read and the computed-subscript gather.
+#[test]
+fn a_saturated_subscript_folds_periodically_without_overflow() {
+    use super::ir::{DataAt, DataGatherSpec, ScalarReadAt, ScalarReadKind, ScalarReadSpec};
+    use smallvec::smallvec;
+    let kind = ScalarReadKind::ConstArray {
+        name: "M".into(),
+        policy: smallvec![BoundaryKind::Periodic],
+    };
+    let gather = DataGatherSpec {
+        subs: smallvec![],
+        kind: kind.clone(),
+        src_shape: smallvec![5],
+        shape: smallvec![],
+        order: None,
+        reversed: false,
+    };
+    let read = ScalarReadSpec {
+        subs: smallvec![],
+        kind,
+    };
+    for v in [
+        f64::NEG_INFINITY,
+        -1e300,
+        f64::INFINITY,
+        1e300,
+        -7.0,
+        0.0,
+        6.0,
+    ] {
+        let r = super::ir::subscript_of(v);
+        let want = (i128::from(r) - 1).rem_euclid(5) as usize;
+        assert_eq!(gather.at(|_| v), DataAt::Elem(want), "{v:?}");
+        match read.resolve(&[r], &[5], &[], &[]) {
+            ScalarReadAt::Elem(ix) => assert_eq!(ix.as_slice(), &[want], "{v:?}"),
+            _ => panic!("{v:?}: periodic read must resolve to an element"),
+        }
+    }
+}
