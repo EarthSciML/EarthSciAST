@@ -1626,14 +1626,18 @@ fn assert_exactly(fixture: &str, want: &[(&str, &str)]) {
     assert_eq!(got, want);
 }
 
-/// `D(y) ~ faq(… y …)`: the left-hand-side exemption is for an observed or
-/// recurrence definition's self-read, which other checks report; a
-/// derivative's own state read bare is `faq_bare_array_operand`.
+/// `D(y) ~ faq(… y …)`, and the array-equation `faq[i](D(z[i])) ~ faq(… z …)`:
+/// the left-hand-side exemption is for an observed or recurrence definition's
+/// self-read, which other checks report; a derivative's own state read bare is
+/// `faq_bare_array_operand`.
 #[test]
 fn test_faq_bare_array_operand_derivative() {
     assert_exactly(
         include_str!("../../../tests/invalid/faq/bare_array_operand_derivative.esm"),
-        &[("faq_bare_array_operand", "/models/Probe/equations/0/rhs")],
+        &[
+            ("faq_bare_array_operand", "/models/Probe/equations/0/rhs"),
+            ("faq_bare_array_operand", "/models/Probe/equations/1/rhs"),
+        ],
     );
 }
 

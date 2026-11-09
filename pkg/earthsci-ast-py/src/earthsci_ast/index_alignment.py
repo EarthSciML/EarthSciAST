@@ -288,9 +288,16 @@ def faq_bare_exempt_names(lhs: Any, names: set[str]) -> set[str]:
     """The names ``faq_bare_array_operand`` skips for an equation whose
     left-hand side is ``lhs`` and names ``names``: all of them for an observed
     or recurrence definition, whose bare self-read ``recurrence_not_wellfounded``
-    or ``observed_cycle`` reports; none for a derivative, whose bare state read
-    no other check reports."""
-    return set() if _faq_field(lhs, "op") == "D" else names
+    or ``observed_cycle`` reports; none for a derivative — ``D(y)``, or the
+    array-equation ``faq[i](D(y[i]))`` — whose bare state read no other check
+    reports."""
+
+    def holds_derivative(node: Any) -> bool:
+        if _faq_field(node, "op") == "D":
+            return True
+        return any(holds_derivative(child) for child in _faq_children(node))
+
+    return set() if holds_derivative(lhs) else names
 
 
 def unalignable_axes(axes: tuple[str, ...], target_axes: tuple[str, ...]) -> tuple[str, ...]:

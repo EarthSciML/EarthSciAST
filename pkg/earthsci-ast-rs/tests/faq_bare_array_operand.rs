@@ -272,6 +272,8 @@ fn derivative_state_delivered_bare_by_a_template_is_refused_at_build() {
     ))
     .unwrap();
     let model = &mut d["models"]["Probe"];
+    model["equations"].as_array_mut().unwrap().truncate(1);
+    model["variables"].as_object_mut().unwrap().remove("z");
     model["expression_templates"] =
         json!({"twice": {"params": ["x"], "body": {"op": "*", "args": [2.0, "x"]}}});
     model["equations"][0]["rhs"]["expr"]["args"][1] = json!({

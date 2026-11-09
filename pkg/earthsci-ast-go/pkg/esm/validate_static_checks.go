@@ -154,11 +154,18 @@ func (s *structuralScan) validateModelStaticAggregateChecks(modelName string, mo
 // shapedExceptSelfDefined is shaped less the variables an observed or
 // recurrence definition's LHS names. A bare read of the variable such an
 // equation defines is a self-reference recurrence_not_wellfounded or
-// observed_cycle already reports. A derivative LHS keeps every name: no other
-// check reports `D(y) ~ faq(… y …)`, and the bare `y` there is the same
-// unaligned whole-array read as any other.
+// observed_cycle already reports. A derivative LHS — `D(y)`, or the
+// array-equation `faq[i](D(y[i]))` — keeps every name: no other check reports
+// `D(y) ~ faq(… y …)`, and the bare `y` there is the same unaligned
+// whole-array read as any other.
 func shapedExceptSelfDefined(shaped map[string][]string, lhs Expression) map[string][]string {
-	if node, ok := asExprNode(lhs); ok && node.Op == "D" {
+	derivative := false
+	walkOperatorNodes(lhs, func(n ExprNode) {
+		if n.Op == "D" {
+			derivative = true
+		}
+	})
+	if derivative {
 		return shaped
 	}
 	defined := make(map[string]bool)

@@ -65,11 +65,14 @@ describe('faq_bare_array_operand', () => {
   })
 
   it.each([
-    ['bare_array_operand_derivative.esm', '/models/Probe/equations/0/rhs'],
-    ['bare_array_operand_subsystem.esm', '/models/Host/subsystems/Probe/equations/2/rhs'],
-    ['bare_array_operand_beside_template.esm', '/models/Probe/equations/0/rhs'],
-  ])('reports %s at %s', (name, path) => {
+    [
+      'bare_array_operand_derivative.esm',
+      ['/models/Probe/equations/0/rhs', '/models/Probe/equations/1/rhs'],
+    ],
+    ['bare_array_operand_subsystem.esm', ['/models/Host/subsystems/Probe/equations/2/rhs']],
+    ['bare_array_operand_beside_template.esm', ['/models/Probe/equations/0/rhs']],
+  ])('reports %s at %j', (name, paths) => {
     const got = findings(readFileSync(join(faqDir, name), 'utf-8'))
-    expect(got.map((e) => e.path)).toEqual([path])
+    expect(got.map((e) => e.path)).toEqual(paths)
   })
 })

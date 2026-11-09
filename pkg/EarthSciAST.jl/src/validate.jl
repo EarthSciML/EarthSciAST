@@ -2091,11 +2091,17 @@ faq_bare_array_operand_message(field::AbstractString, name::AbstractString, shap
 The names `faq_bare_array_operand` skips for an equation with left-hand side
 `lhs`: every name an observed or recurrence definition's LHS names, whose bare
 self-read `recurrence_not_wellfounded` or `observed_cycle` reports (one defect,
-one finding); none for a derivative, whose bare state read no other check
-reports.
+one finding); none for a derivative — `D(y)`, or the array-equation
+`faq[i](D(y[i]))` — whose bare state read no other check reports.
 """
-faq_bare_exempt_names(lhs::ASTExpr) =
-    lhs isa OpExpr && lhs.op == "D" ? Set{String}() : _referenced_var_names(lhs, Set{String}())
+function faq_bare_exempt_names(lhs::ASTExpr)
+    derivative = false
+    foreach_subexpr_once(lhs) do e
+        e isa OpExpr && e.op == "D" && (derivative = true)
+        nothing
+    end
+    return derivative ? Set{String}() : _referenced_var_names(lhs, Set{String}())
+end
 
 function _check_faq_bare_array_operands!(
         errors::Vector{StructuralError}, lhs::ASTExpr, expr::ASTExpr, anchor::String,

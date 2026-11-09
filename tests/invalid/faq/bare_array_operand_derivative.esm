@@ -2,7 +2,7 @@
   "esm": "1.2.0",
   "metadata": {
     "name": "FaqBareArrayOperandDerivative",
-    "description": "INVALID: the state `y` (declared over `a_rows`) is read by bare name in the body of the `faq` that defines its own derivative. A faq names its axes by its range symbols, and `y` here is not an observed or recurrence definition's self-read (which `recurrence_not_wellfounded` / `observed_cycle` report), so nothing else catches it. Built anyway, the evaluators disagreed: one aligned `y` with the output index, one with the reduced index `k`, one produced NaN, one failed. Rejected by validate() with `faq_bare_array_operand` (esm-spec §4.3.1). The read must say which symbol `y`'s axis is: `index(y, i)`.",
+    "description": "INVALID: the state `y` (declared over `a_rows`) is read by bare name in the body of the `faq` that defines its own derivative. A faq names its axes by its range symbols, and `y` here is not an observed or recurrence definition's self-read (which `recurrence_not_wellfounded` / `observed_cycle` report), so nothing else catches it. Built anyway, the evaluators disagreed: one aligned `y` with the output index, one with the reduced index `k`, one produced NaN, one failed. Rejected by validate() with `faq_bare_array_operand` (esm-spec §4.3.1). The second equation is the same defect in the array-equation spelling, `faq[i](D(z[i])) ~ faq[i](… z …)`. The read must say which symbol the state's axis is: `index(y, i)`.",
     "authors": [
       "EarthSciML Authors and Contributors"
     ],
@@ -55,6 +55,18 @@
             ]
           ],
           "description": "Rate matrix."
+        },
+        "z": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "a_rows"
+          ],
+          "default": [
+            3.0,
+            4.0
+          ],
+          "description": "A second state, its derivative written in the array-equation form, read bare in its own right-hand side."
         }
       },
       "equations": [
@@ -93,6 +105,63 @@
                   ]
                 },
                 "y"
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "a_rows"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "z",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "semiring": "sum_product",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "a_rows"
+              },
+              "k": {
+                "from": "b_rows"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "K",
+                    "i",
+                    "k"
+                  ]
+                },
+                "z"
               ]
             }
           }

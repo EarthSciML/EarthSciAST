@@ -3147,7 +3147,8 @@ fn collect_bare_array_operands<'a>(
 /// skipped: a bare read of the variable such an equation defines is a causal
 /// self-reference read whole, which `recurrence_not_wellfounded` (esm-spec
 /// §4.3.1.1) or `observed_cycle` already reports, and one defect is reported
-/// once. A derivative left-hand side skips nothing: no other check reports
+/// once. A derivative left-hand side — `D(y)`, or the array-equation
+/// `faq[i](D(y[i]))` — skips nothing: no other check reports
 /// `D(y) ~ faq(… y …)`.
 pub(crate) fn faq_bare_array_operand_errors(
     lhs: &crate::Expr,
@@ -3157,7 +3158,15 @@ pub(crate) fn faq_bare_array_operand_errors(
     errors: &mut Vec<StructuralError>,
 ) {
     let mut defined = HashSet::new();
-    if !matches!(lhs, crate::Expr::Operator(n) if n.op == "D") {
+    fn holds_derivative(e: &crate::Expr) -> bool {
+        let crate::Expr::Operator(n) = e else {
+            return false;
+        };
+        let mut found = n.op == "D";
+        n.for_each_child(&mut |c| found = found || holds_derivative(c));
+        found
+    }
+    if !holds_derivative(lhs) {
         collect_variable_refs(lhs, &mut defined);
     }
     let declared_axes: HashMap<&str, &Vec<String>> = var_shapes

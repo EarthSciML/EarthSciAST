@@ -2,6 +2,7 @@ package esm
 
 import (
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -81,19 +82,31 @@ func TestFAQBareArrayOperandDerivativeAndSubsystemFixtures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, want := range map[string]struct{ code, path string }{
-		"bare_array_operand_derivative.esm":        {CodeFAQBareArrayOperand, "/models/Probe/equations/0/rhs"},
-		"bare_array_operand_subsystem.esm":         {CodeFAQBareArrayOperand, "/models/Host/subsystems/Probe/equations/2/rhs"},
-		"ragged_values_not_gathered_subsystem.esm": {CodeRaggedValuesNotGathered, "/models/Host/subsystems/RaggedValuesNotGathered/equations/3/rhs"},
+	// The derivative fixture spells the defect twice: `D(y)` and the
+	// array-equation `faq[i](D(z[i]))`.
+	for name, want := range map[string][]string{
+		"bare_array_operand_derivative.esm": {
+			CodeFAQBareArrayOperand + " /models/Probe/equations/0/rhs",
+			CodeFAQBareArrayOperand + " /models/Probe/equations/1/rhs",
+		},
+		"bare_array_operand_subsystem.esm": {
+			CodeFAQBareArrayOperand + " /models/Host/subsystems/Probe/equations/2/rhs",
+		},
+		"ragged_values_not_gathered_subsystem.esm": {
+			CodeRaggedValuesNotGathered + " /models/Host/subsystems/RaggedValuesNotGathered/equations/3/rhs",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			file, err := LoadPath(filepath.Join(repoRoot, "tests", "invalid", "faq", name))
 			if err != nil {
 				t.Fatalf("load: %v", err)
 			}
-			errs := Validate(file).StructuralErrors
-			if len(errs) != 1 || errs[0].Code != want.code || errs[0].Path != want.path {
-				t.Fatalf("want exactly %s at %s, got %+v", want.code, want.path, errs)
+			var got []string
+			for _, e := range Validate(file).StructuralErrors {
+				got = append(got, e.Code+" "+e.Path)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("want exactly %v, got %v", want, got)
 			}
 		})
 	}

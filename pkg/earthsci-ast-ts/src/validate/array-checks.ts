@@ -345,14 +345,15 @@ export function validateFaqBareArrayOperands(
   // Each equation's right-hand side. A variable an observed or recurrence
   // definition's left-hand side names is skipped: its bare self-read is
   // `recurrence_not_wellfounded` or `observed_cycle`. A derivative left-hand
-  // side skips nothing; no other check reports `D(y) ~ faq(… y …)`.
+  // side — `D(y)`, or the array-equation `faq[i](D(y[i]))` — skips nothing; no
+  // other check reports `D(y) ~ faq(… y …)`.
   // The right-hand side is read as authored: load has already expanded any
   // template application in it.
   for (const [index, equation] of (model.equations ?? []).entries()) {
     const rhs = authoredTemplateRhs[`${modelPath}/equations/${index}`] ?? equation.rhs
     if (rhs === undefined) continue
     const lhs = equation.lhs
-    const defined = isExprNode(lhs) && lhs.op === 'D' ? new Set<string>() : stringLeaves(lhs)
+    const defined = holdsDerivative(lhs) ? new Set<string>() : stringLeaves(lhs)
     axesOf = new Map([...declared].filter(([name]) => !defined.has(name)))
     walk(rhs as Expr, new Set(), `${modelPath}/equations/${index}/rhs`)
   }
@@ -363,4 +364,14 @@ function stringLeaves(expr: unknown, out: Set<string> = new Set()): Set<string> 
   if (typeof expr === 'string') out.add(expr)
   else if (isExprNode(expr)) forEachChild(expr, (child) => void stringLeaves(child, out))
   return out
+}
+
+function holdsDerivative(expr: unknown): boolean {
+  if (!isExprNode(expr)) return false
+  if (expr.op === 'D') return true
+  let found = false
+  forEachChild(expr, (child) => {
+    if (!found && holdsDerivative(child)) found = true
+  })
+  return found
 }

@@ -454,6 +454,8 @@ end
         # validate; the build check does not exempt a derivative's own state.
         deriv = readdoc("bare_array_operand_derivative.esm")
         model = deriv["models"]["Probe"]
+        resize!(model["equations"], 1)
+        delete!(model["variables"], "z")
         model["expression_templates"] = Dict{String, Any}(
             "twice" => Dict{String, Any}(
                 "params" => Any["x"],

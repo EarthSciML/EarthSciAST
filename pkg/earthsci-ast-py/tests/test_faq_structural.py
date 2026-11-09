@@ -225,20 +225,23 @@ def test_whole_box_filter_mask_of_the_wrong_rank_declines() -> None:
 
 
 @pytest.mark.parametrize(
-    ("name", "path"),
+    ("name", "paths"),
     [
-        ("bare_array_operand_derivative.esm", "/models/Probe/equations/0/rhs"),
-        ("bare_array_operand_subsystem.esm", "/models/Host/subsystems/Probe/equations/2/rhs"),
-        ("bare_array_operand_beside_template.esm", "/models/Probe/equations/0/rhs"),
+        (
+            "bare_array_operand_derivative.esm",
+            ["/models/Probe/equations/0/rhs", "/models/Probe/equations/1/rhs"],
+        ),
+        ("bare_array_operand_subsystem.esm", ["/models/Host/subsystems/Probe/equations/2/rhs"]),
+        ("bare_array_operand_beside_template.esm", ["/models/Probe/equations/0/rhs"]),
     ],
 )
-def test_faq_bare_array_operand_fixture_pins(name, path) -> None:
-    """The derivative left-hand side exempts nothing, the check reaches inline
-    subsystems, and a template application is opaque while a bare read beside
-    it is not: exactly one finding each."""
+def test_faq_bare_array_operand_fixture_pins(name, paths) -> None:
+    """A derivative left-hand side exempts nothing, in either spelling (``D(y)``
+    and ``faq[i](D(z[i]))``), the check reaches inline subsystems, and a
+    template application is opaque while a bare read beside it is not."""
     result = validate_text((INVALID_DIR / "faq" / name).read_text())
     found = [e for e in result.structural_errors if e.code == "faq_bare_array_operand"]
-    assert [e.path for e in found] == [path]
+    assert [e.path for e in found] == paths
 
 
 def test_faq_bare_array_operand_beside_template_names_the_bare_read() -> None:
@@ -269,6 +272,7 @@ def test_derivative_state_delivered_bare_by_a_template_is_refused_at_build() -> 
 
     doc = json.loads((INVALID_DIR / "faq" / "bare_array_operand_derivative.esm").read_text())
     model = doc["models"]["Probe"]
+    del model["equations"][1:], model["variables"]["z"]
     model["expression_templates"] = {
         "twice": {"params": ["x"], "body": {"op": "*", "args": [2.0, "x"]}}
     }

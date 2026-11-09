@@ -4555,10 +4555,14 @@
       {
         "path": "/models/Probe/equations/0/rhs",
         "code": "faq_bare_array_operand"
+      },
+      {
+        "path": "/models/Probe/equations/1/rhs",
+        "code": "faq_bare_array_operand"
       }
     ],
     "is_valid": false,
-    "notes": "Structural invalid (esm-spec \u00a74.3.1 \"Shaped variables inside a `faq` are read through `index`\"; CONFORMANCE_SPEC \u00a75.6.4). `D(y) ~ faq(output_idx [i], ranges i\u2208a_rows, k\u2208b_rows, expr: index(K, i, k) * y)` reads the state `y` bare in the body of its own derivative. The left-hand-side exemption covers only an observed or recurrence definition, whose bare self-read `recurrence_not_wellfounded` / `observed_cycle` report; a derivative left-hand side has no such check, so the read is `faq_bare_array_operand`. Built anyway, the evaluators disagreed (Python 21, 2100; Rust's compiled tape 11, 2200; Rust's interpreter NaN; Julia failed)."
+    "notes": "Structural invalid (esm-spec \u00a74.3.1 \"Shaped variables inside a `faq` are read through `index`\"; CONFORMANCE_SPEC \u00a75.6.4). `D(y) ~ faq(output_idx [i], ranges i\u2208a_rows, k\u2208b_rows, expr: index(K, i, k) * y)` reads the state `y` bare in the body of its own derivative; equation 1 does the same in the array-equation spelling `faq[i](D(z[i])) ~ faq[i](\u2026 z \u2026)`. The left-hand-side exemption covers only an observed or recurrence definition, whose bare self-read `recurrence_not_wellfounded` / `observed_cycle` report; a derivative left-hand side has no such check, so the read is `faq_bare_array_operand`. Built anyway, the evaluators disagreed (Python 21, 2100; Rust's compiled tape 11, 2200; Rust's interpreter NaN; Julia failed)."
   },
   "bare_array_operand_subsystem.esm": {
     "schema_errors": [],
