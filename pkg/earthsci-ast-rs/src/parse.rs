@@ -1045,7 +1045,7 @@ fn unpark_const_data(doc: &mut Value, parked: Vec<ParkedConst>) -> Result<(), Es
             .and_then(|e| e.get_mut("rhs"))
             .filter(|r| r.get("op").and_then(Value::as_str) == Some("const"))
             .and_then(|r| r.get_mut("value"))
-            .filter(|v| **v == Value::from(0));
+            .filter(|v| v.as_i64() == Some(0));
         let Some(slot) = slot else {
             return Err(EsmError::StructuralValidation(format!(
                 "internal: the const data of {kind}.{name} equation {k} moved during load"
