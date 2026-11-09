@@ -2896,7 +2896,10 @@ fn static_observed_fields(
         .filter_map(|(name, arr)| {
             let declared = flat.observed_variables.get(&name);
             if arr.len() == 1 {
-                let shape = DeclaredRank::of_declaration(declared).scalar_shape();
+                // A variable `flatten` left unshaped that the build gave an
+                // array shape (esm-spec §4.3.4) is not 0-D.
+                let built = compiled.conditional_shapes.get(&name);
+                let shape = DeclaredRank::of_built(declared, built).scalar_shape();
                 let v = arr.iter().copied().next().expect("one element");
                 let arr = ArrayD::from_shape_vec(ndarray::IxDyn(shape), vec![v])
                     .expect("`scalar_shape` is `[]` or `[1]`, and both hold exactly one element");

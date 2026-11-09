@@ -98,7 +98,8 @@ pub(crate) use compile::{model_tree_any, parse_subsystem_model};
 // so it applies the same stand-ins for `flatten`'s rewrites.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::{
-    apply_flatten_rewrites, model_from_flattened, mount_subsystems, resolve_model_self_references,
+    apply_flatten_rewrites, model_from_flattened, mount_subsystems, promote_conditional_shapes,
+    resolve_model_self_references,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use eval::eval_observed_taped;
@@ -798,6 +799,12 @@ pub struct ArrayCompiled {
     /// document never declared from one it declared but had not produced a
     /// value for yet. See [`EvalCtx::declared`]; issue #181.
     declared_names: HashSet<String>,
+    /// The shape each unshaped mixed-rank-`ifelse` variable was built at
+    /// (esm-spec §4.3.4), which neither the document nor the flattened system
+    /// records (esm-libraries-spec §4.7.5). Kept so a reader downstream of the
+    /// build takes the shape the build used instead of inferring it again; see
+    /// [`compile::promote_conditional_shapes`].
+    pub(crate) conditional_shapes: crate::flatten::BuiltShapes,
     /// The field initial conditions construction resolved
     /// ([`Self::field_ic_records`]), held for the first solve to take instead
     /// of resolving them again. See [`driver::FieldIcMemo`].
