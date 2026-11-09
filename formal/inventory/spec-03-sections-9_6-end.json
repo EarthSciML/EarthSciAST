@@ -883,6 +883,15 @@
       "concern": "Operands are arbitrary sub-expressions whose precision is inferred from leaves, not necessarily variables, so 'naming both variables' is undefined when an operand is compound or when several variables of each precision feed it."
     },
     {
+      "id": "spec.11.3.1.cast-float32-refused-when-binary64-only",
+      "section": "11.3.1",
+      "quote": "MUST refuse a `cast` to `\"Float32\"`",
+      "class": "semantic",
+      "phase": 7,
+      "area": "precision",
+      "note": "An evaluator that computes in binary64 only evaluates cast to Float64 as the identity and fails with float32_unsupported on any cast to Float32; it never returns the unrounded operand."
+    },
+    {
       "id": "spec.11.3.1.precision-not-entry-only",
       "section": "11.3.1",
       "quote": "Exempting a variable only where its data ENTERS is not sufficient and MUST NOT be offered as an implementation of this field",

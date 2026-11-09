@@ -906,6 +906,24 @@
       "note": "Static precision inference fails with mixed_element_type exactly when some operator's declared operand precisions differ or an equation's RHS precision differs from its LHS; no implicit widening or narrowing."
     },
     {
+      "id": "conf.5.18.2a.cast-element-type-required",
+      "section": "5.18.2a",
+      "quote": "Its `element_type` is required and MUST be",
+      "class": "out_of_scope",
+      "phase": 7,
+      "area": "schema",
+      "note": "A schema constraint on the cast node (required enum field), enforced at load by schema validation; no evaluation semantics to model."
+    },
+    {
+      "id": "conf.5.18.2a.cast-float32-not-identity",
+      "section": "5.18.2a",
+      "quote": "it MUST NOT evaluate it as the identity, which would drop the rounding the",
+      "class": "semantic",
+      "phase": 7,
+      "area": "precision",
+      "note": "A binary64-only evaluator refuses a cast to Float32 with float32_unsupported rather than returning its operand unrounded."
+    },
+    {
       "id": "conf.5.18.2a.not-ingress-only",
       "section": "5.18.2a",
       "quote": "A binding MUST NOT implement this field by exempting a variable only where its data enters.",
