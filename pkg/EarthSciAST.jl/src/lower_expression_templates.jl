@@ -2034,9 +2034,17 @@ mutable struct _ExpandCache
     reg::Any                       # the registry the cache was filled from
     skel::Dict{String, Any}        # template name => `_TplSkel`, or `nothing` (ineligible)
     building::Vector{Set{String}}  # per skeleton under construction: params whose image is a nested root
+    # The nodes the unlowered-operator gate (`_reject_unlowered_operators`) has
+    # passed, as equation left and right sides: the front door and the build
+    # entry gate the same expansions.
+    gate_lhs::IdDict{OpExpr, Nothing}
+    gate_rhs::IdDict{OpExpr, Nothing}
 end
 _ExpandCache(bind::Dict{Tuple{String, String}, OpExpr} = Dict{Tuple{String, String}, OpExpr}()) =
-    _ExpandCache(bind, IdDict{OpExpr, Vector{Pair{OpExpr, OpExpr}}}(), nothing, Dict{String, Any}(), Set{String}[])
+    _ExpandCache(
+    bind, IdDict{OpExpr, Vector{Pair{OpExpr, OpExpr}}}(), nothing, Dict{String, Any}(), Set{String}[],
+    IdDict{OpExpr, Nothing}(), IdDict{OpExpr, Nothing}()
+)
 
 # Bind `memo` to `reg`: what it holds from another registry is dropped.
 function _cache_for!(memo::_ExpandCache, reg)

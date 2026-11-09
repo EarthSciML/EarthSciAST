@@ -5511,7 +5511,12 @@ function _build_evaluator_impl_inner(
     # ---- §9.6.3 constraint 6: walk every equation for an unlowered op ----
     # BEFORE any pass that drops a tree (the elementwise fold, dead-observed
     # elimination), so an op in a tree the build would discard is still refused.
-    _reject_unlowered_operators(model)
+    # The front door gated the same expansions: what it passed is not walked again.
+    if _expand_cache isa _ExpandCache
+        _reject_unlowered_operators(model, _expand_cache.gate_lhs, _expand_cache.gate_rhs)
+    else
+        _reject_unlowered_operators(model)
+    end
     # ---- esm-spec §6.3.1: an equation never defines a parameter ----
     _refuse_parameter_definitions(model.equations, model.variables)
     # ---- `broadcast` lowering (esm-spec §4.3.4; see `_lower_broadcast_model`) ----
@@ -8617,7 +8622,14 @@ function _build_evaluator_dict(
     # The binning-coordinate derivation and value invention below evaluate
     # observed bodies before `_build_evaluator_impl` is reached, so the
     # rewrite-target walk runs here too, ahead of them.
-    model === nothing || _reject_unlowered_operators(model)
+    if model !== nothing
+        cache = get(kwd, :_expand_cache, nothing)
+        if cache isa _ExpandCache
+            _reject_unlowered_operators(model, cache.gate_lhs, cache.gate_rhs)
+        else
+            _reject_unlowered_operators(model)
+        end
+    end
 
     # ---- Caller-key canonicalization (esm-spec §6.6) ----
     # Rewrite the caller's LOCAL-named `parameter_overrides` onto this
