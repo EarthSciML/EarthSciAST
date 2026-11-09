@@ -674,6 +674,30 @@ pub struct ProblemOptions {
     /// API_SPEC §5.8's rules.
     pub retain_data_fields: Vec<String>,
 
+    /// Evaluate only what these observeds need. `None` (the default)
+    /// evaluates every build-time observed.
+    ///
+    /// When `Some`, and the build pipeline runs over a model with nothing to
+    /// integrate, its observed-graph pass evaluates only the DEPENDENCY CONE
+    /// of the named observeds: each one, and transitively every observed its
+    /// definition names. Names are spelled as [`observed_field`] would be
+    /// called (exact, component-qualified, or bare; a bare name seeds every
+    /// observed it is the tail of). Every field in the cone is bit-identical
+    /// to the unpruned build's, and [`observed_field`] answers for nothing
+    /// outside it.
+    ///
+    /// What sizes the build is NOT pruned: the build-time coordinates value
+    /// invention seeds from, value invention itself (every derived index set
+    /// and its extent), member-factor feedback, data ingestion and the gated
+    /// fetch all run as they do without this option. Nor is a model with
+    /// state, nor the state-free evaluation of a document the pipeline does
+    /// not run for (see [`Self::build_pipeline`]).
+    ///
+    /// `esm simulate --observed` sets this, so a relational document's run
+    /// costs what the requested columns cost rather than what the document
+    /// costs.
+    pub observed_cone: Option<Vec<String>>,
+
     /// Time at which providers are sampled at construction: a DISCRETE
     /// provider gives its record in effect there (a CONST one is
     /// time-invariant). Defaults to `tspan.0`. It moves only the construction
@@ -708,6 +732,7 @@ impl std::fmt::Debug for ProblemOptions {
             .field("rewrites", &self.rewrites)
             .field("inspect", &self.inspect)
             .field("retain_data_fields", &self.retain_data_fields)
+            .field("observed_cone", &self.observed_cone)
             .field("sample_time", &self.sample_time)
             .field("runtime_array_parameters", &self.runtime_array_parameters);
         #[cfg(not(target_arch = "wasm32"))]
