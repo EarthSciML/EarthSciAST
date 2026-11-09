@@ -40,6 +40,15 @@ function _tic_agree(file)
             @test _tic_json(ea.lhs) == _tic_json(eb.lhs)
         end
         @test Set(_tic_json(k) for k in keys(sa)) == Set(_tic_json(k) for k in keys(sb))
+        # A cache shared with an earlier expansion (the build's front door,
+        # which records no sites) still records every site root.
+        shared = ESM._ExpandCache()
+        ESM._expand_model_refs!(ESM._expansion_copy(model), reg; memo = shared)
+        c = ESM._expansion_copy(model)
+        sc = IdDict{ESM.OpExpr, ESM.OpExpr}()
+        ESM._expand_model_refs!(c, reg; sites = sc, memo = shared)
+        @test Set(_tic_json(k) for k in keys(sc)) == Set(_tic_json(k) for k in keys(sb))
+        @test all(_tic_json(x.rhs) == _tic_json(y.rhs) for (x, y) in zip(c.equations, b.equations))
         n += 1
     end
     return n

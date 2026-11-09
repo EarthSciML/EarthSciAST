@@ -2022,14 +2022,31 @@ const _TemplateSites = Union{Nothing, IdDict{OpExpr, OpExpr}}
 # template is substituted, parsed and expanded ONCE per memo with a sentinel
 # variable standing for every parameter, and each call site is then the typed
 # substitution of its bindings into that cached tree. See `_TplSkel`.
+#
+# A cache may serve several expansions against one registry (the build's
+# front-door pre-passes and its compile-once entry share one): `roots` keeps,
+# for each memoized expansion, every site root recorded while it was expanded,
+# so a later hit records them all in its caller's `sites`, as the first
+# expansion did.
 mutable struct _ExpandCache
     bind::Dict{Tuple{String, String}, OpExpr}
-    reg::Any                       # the registry the cached skeletons were built from
+    roots::IdDict{OpExpr, Vector{Pair{OpExpr, OpExpr}}}
+    reg::Any                       # the registry the cache was filled from
     skel::Dict{String, Any}        # template name => `_TplSkel`, or `nothing` (ineligible)
     building::Vector{Set{String}}  # per skeleton under construction: params whose image is a nested root
 end
 _ExpandCache(bind::Dict{Tuple{String, String}, OpExpr} = Dict{Tuple{String, String}, OpExpr}()) =
-    _ExpandCache(bind, nothing, Dict{String, Any}(), Set{String}[])
+    _ExpandCache(bind, IdDict{OpExpr, Vector{Pair{OpExpr, OpExpr}}}(), nothing, Dict{String, Any}(), Set{String}[])
+
+# Bind `memo` to `reg`: what it holds from another registry is dropped.
+function _cache_for!(memo::_ExpandCache, reg)
+    memo.reg === reg && return memo
+    if memo.reg !== nothing
+        empty!(memo.bind); empty!(memo.roots); empty!(memo.skel)
+    end
+    memo.reg = reg
+    return memo
+end
 # The entry points also take a bare bindings memo (the earlier form of `memo`).
 _expand_cache(m::Union{Nothing, _ExpandCache}) = m
 _expand_cache(m::Dict{Tuple{String, String}, OpExpr}) = _ExpandCache(m)
@@ -2062,27 +2079,41 @@ function _expand_expr_refs(
         # serialization feeds `_substitute` below, so the key captures exactly
         # what determines the expansion (two sites collide iff they substitute
         # identically). Only built when the memo is live.
-        mkey = nothing
-        if memo !== nothing
-            bkey = join(
-                sort!(String[k * "\0" * _stable_json(v) for (k, v) in bindings_raw]),
-                "\x01"
-            )
-            mkey = (name::String, bkey)
-            cached = get(memo.bind, mkey, nothing)
-            if cached !== nothing
-                _record_site!(sites, memo, cached, e)
-                return cached
-            end
-        end
-        ex = memo === nothing ? nothing :
-            _tpl_instantiate(e, name::String, bindings_raw, reg, sites, memo)
-        if ex === nothing
+        if memo === nothing
             substituted = _substitute(_raw_get(reg[name], "body"), bindings_raw)
             ex = _expand_expr_refs(expression_from_json(substituted), reg, sites, memo)
+            _record_site!(sites, memo, ex, e)
+            return ex
         end
-        _record_site!(sites, memo, ex, e)
-        memo !== nothing && ex isa OpExpr && (memo.bind[mkey] = ex)
+        _cache_for!(memo, reg)
+        bkey = join(
+            sort!(String[k * "\0" * _stable_json(v) for (k, v) in bindings_raw]),
+            "\x01"
+        )
+        mkey = (name::String, bkey)
+        cached = get(memo.bind, mkey, nothing)
+        if cached !== nothing
+            if sites !== nothing
+                for (r, ap) in get(memo.roots, cached, ())
+                    sites[r] = ap
+                end
+                _record_site!(sites, memo, cached, e)
+            end
+            return cached
+        end
+        # The roots this expansion records, kept for later hits.
+        col = IdDict{OpExpr, OpExpr}()
+        ex = _tpl_instantiate(e, name::String, bindings_raw, reg, col, memo)
+        if ex === nothing
+            substituted = _substitute(_raw_get(reg[name], "body"), bindings_raw)
+            ex = _expand_expr_refs(expression_from_json(substituted), reg, col, memo)
+        end
+        _record_site!(col, memo, ex, e)
+        if ex isa OpExpr
+            memo.bind[mkey] = ex
+            memo.roots[ex] = collect(col)
+        end
+        sites === nothing || merge!(sites, col)
         return ex
     end
     return map_children(c -> _expand_expr_refs(c, reg, sites, memo), e)
@@ -2141,10 +2172,7 @@ struct _TplSkel
 end
 
 function _tpl_skeleton(name::String, reg, memo::_ExpandCache)
-    if memo.reg !== reg
-        empty!(memo.skel)
-        memo.reg = reg
-    end
+    _cache_for!(memo, reg)
     haskey(memo.skel, name) && return memo.skel[name]
     memo.skel[name] = nothing      # a reference cycle reaching this template stays direct
     sk = _build_tpl_skeleton(name, reg, memo)
@@ -2160,8 +2188,7 @@ function _build_tpl_skeleton(name::String, reg, memo::_ExpandCache)
     sent = Dict{String, Any}(p => _TPL_SENTINEL * p for p in params)
     nested = IdDict{OpExpr, OpExpr}()
     push!(memo.building, Set{String}())
-    # A bindings-memo hit records only the root it returns, so a skeleton gets
-    # its own memo: every nested root it holds is then recorded in `nested`.
+    # The skeleton's sentinel-keyed expansions stay out of the caller's memo.
     outer_bind = memo.bind
     memo.bind = Dict{Tuple{String, String}, OpExpr}()
     root = try

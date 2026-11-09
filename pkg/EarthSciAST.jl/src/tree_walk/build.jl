@@ -5411,6 +5411,9 @@ function _build_evaluator_impl_inner(
         # decl). Supplied by the `EsmFile` front-door when the
         # document carries references; `nothing` everywhere else.
         _template_reg = nothing,
+        # Internal: the front door's expansion cache for `_template_reg`
+        # (`_ExpandCache`), or `nothing`.
+        _expand_cache = nothing,
         # Internal: the SELECTED MODEL's own name, threaded from
         # the `EsmFile` / `AbstractDict` front-doors. Used only
         # for the esm-spec §6.6.2 rule-2 namespace scope — a raw
@@ -5484,7 +5487,10 @@ function _build_evaluator_impl_inner(
     if _template_reg !== nothing
         model = _expansion_copy(model)
         sites = IdDict{OpExpr, OpExpr}()
-        _expand_model_refs!(model, _template_reg; sites = sites)
+        _expand_model_refs!(
+            model, _template_reg; sites = sites,
+            memo = something(_expand_cache, _ExpandCache())
+        )
         isempty(sites) || (_template_sites = sites)
     elseif _model_has_surviving_refs(model)
         # A surviving reference with no registry in reach would compile into an
@@ -8599,7 +8605,11 @@ function _build_evaluator_dict(
         _tmpl_reg = _component_template_reg(file, model_name)
         if _tmpl_reg !== nothing
             model = _expansion_copy(model)
-            _expand_model_refs!(model, _tmpl_reg)
+            # The impl expands the same model against the same registry: it
+            # takes this expansion's cache (`_ExpandCache`).
+            cache = _ExpandCache()
+            _expand_model_refs!(model, _tmpl_reg; memo = cache)
+            kwd[:_expand_cache] = cache
         end
     end
 
