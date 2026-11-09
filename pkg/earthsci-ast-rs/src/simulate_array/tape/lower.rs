@@ -9378,6 +9378,7 @@ impl<'m> TapeBuilder<'m> {
             fuse_stats: FuseStats::default(),
             col_major: false,
         };
+        super::dedup::dedup_const(&mut prog);
         super::scan_shift::rewrite_scan_makearray_reads(&mut prog);
         if align_layout {
             super::layout::align_state_layout(&mut prog);

@@ -725,3 +725,60 @@ fn large_or_faulting_scalar_branches_keep_the_jump() {
         let _ = taped_dy(&scalar_select_doc(rhs));
     }
 }
+
+/// The repeated build-time work of the overlap template (its fan areas and
+/// ramps, lowered once per box they are read at) is computed once: no two
+/// pure CONST instructions of the program are the same computation, fused or
+/// not. The oracle's bits.
+#[test]
+fn repeated_build_time_instructions_are_computed_once() {
+    let (prog, _) = oracle_ab(overlap_doc(false));
+    let canon: Vec<u32> = (0..prog.slots.len() as u32).collect();
+    let guarded = prog.guarded_positions();
+    let mut seen = HashSet::new();
+    for pc in 0..prog.n_const as usize {
+        if guarded[pc] {
+            continue;
+        }
+        if let Some(k) = super::dedup::key(&prog, pc, &prog.instrs[pc], &canon) {
+            assert!(seen.insert(k.clone()), "repeated: {:?}", prog.instrs[pc]);
+        }
+    }
+}
+
+/// Near misses are different computations: another literal (even `-0.0`
+/// against `+0.0`, or another NaN payload), another operation, another
+/// operand.
+#[test]
+fn different_build_time_instructions_stay_apart() {
+    let (prog, _) = oracle_ab(scalar_select_doc(op("+", vec![json!("x"), json!(1)])));
+    let canon: Vec<u32> = (0..prog.slots.len() as u32).collect();
+    let out = (0..prog.slots.len() as u32)
+        .find(|&s| prog.slots[s as usize].scalar)
+        .expect("a scalar slot");
+    let other = (out + 1..prog.slots.len() as u32)
+        .find(|&s| prog.slots[s as usize].scalar)
+        .expect("another scalar slot");
+    use super::ir::Operand;
+    use crate::simulate_array::BinCode;
+    let bin = |op: BinCode, a: Operand, b: Operand| Instr::Bin { op, a, b, out };
+    let key = |i: &Instr| super::dedup::key(&prog, 0, i, &canon).expect("keyed");
+    let x = Operand::Slot(other);
+    let base = key(&bin(BinCode::Add, x, Operand::Lit(0.0)));
+    for near in [
+        bin(BinCode::Add, x, Operand::Lit(-0.0)),
+        bin(BinCode::Sub, x, Operand::Lit(0.0)),
+        bin(BinCode::Add, Operand::Slot(out), Operand::Lit(0.0)),
+        bin(BinCode::Add, x, Operand::Time),
+    ] {
+        assert_ne!(key(&near), base, "{near:?}");
+    }
+    let nan_a = key(&bin(BinCode::Add, x, Operand::Lit(f64::NAN)));
+    let nan_b = key(&bin(
+        BinCode::Add,
+        x,
+        Operand::Lit(f64::from_bits(f64::NAN.to_bits() ^ 1)),
+    ));
+    assert_ne!(nan_a, nan_b);
+    assert_eq!(base, key(&bin(BinCode::Add, x, Operand::Lit(0.0))));
+}
