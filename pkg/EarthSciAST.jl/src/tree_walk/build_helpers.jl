@@ -413,6 +413,24 @@ const _LOWER_BCAST_BUDGET = 1 << 21     # ~2.1M node visits, ~0.1 s un-memoized
 
 struct _BroadcastBudgetExceeded <: EarthSciASTError end
 
+# CONFORMANCE_SPEC §5.18.2a: this evaluator holds binary64 only, so a `cast` to
+# "Float64" is the identity on its operand, and a `cast` to "Float32" (or to
+# anything else) is refused with `float32_unsupported`: evaluating it as the
+# identity would drop the rounding the document asks for.
+function _binary64_cast_operand(e::OpExpr)::ASTExpr
+    e.element_type == "Float64" && length(e.args) == 1 && return e.args[1]
+    throw(
+        TreeWalkError(
+            ERROR_CODES.FLOAT32_UNSUPPORTED,
+            "a `cast` node to element_type $(repr(e.element_type)) " *
+                "(operand $(length(e.args) == 1 ? repr(e.args[1]) : "?")) rounds its value " *
+                "to binary32, but the Julia tree-walk evaluator computes in binary64; " *
+                "refusing rather than evaluating the cast as the identity " *
+                "(CONFORMANCE_SPEC §5.18.2a)"
+        )
+    )
+end
+
 function _lower_broadcast(expr::ASTExpr)::ASTExpr
     expr isa OpExpr || return expr
     try
@@ -426,6 +444,9 @@ end
 # The lowering itself, shared by both walks: `e` is the node with its children
 # already rewritten.
 @inline function _lower_broadcast_node(e::ASTExpr)::ASTExpr
+    # A `cast` (esm-spec §11.3.1) is lowered by the same walk, for the same
+    # reason: every pass and ladder below sees only its operand.
+    (e isa OpExpr && (e::OpExpr).op == "cast") && return _binary64_cast_operand(e::OpExpr)
     (e isa OpExpr && (e::OpExpr).op == "broadcast") || return e
     b = e::OpExpr
     prob = _broadcast_fn_problem(b.fn, length(b.args))
@@ -458,7 +479,7 @@ function _lower_broadcast_memoized(
     return out
 end
 
-# Lower every `broadcast` node in a Model's expression-bearing fields
+# Lower every `broadcast` (and `cast`) node in a Model's expression-bearing fields
 # (equations, initialization equations, guesses) and, recursively, in its Model
 # subsystems. Returns the SAME model object when nothing changed. Shaped after
 # `_intern_model` (src/intern.jl).

@@ -115,6 +115,7 @@ const ESM = EarthSciAST
                 "faq", "faq", "makearray", "index", "broadcast",
                 "reshape", "transpose",
                 "concat", "Pre", "ifelse", "call", "fn", "ic",
+                "cast",  # esm-spec §11.3.1: the identity to Float64, refused to Float32
             ]
         )
         @test ESM._ops_with(:mtk_known) isa Set{String}
@@ -307,7 +308,9 @@ end
     # `units` joins the closed emissible set at esm 1.2.0: a `const` node's
     # declared unit is meaning-bearing, so canonical JSON carries it and two
     # nodes differing only in it do not canonicalize alike (esm-spec §4.8.5).
-    @test ESM._EMISSIBLE_FIELDS == (:op, :args, :wrt, :dim, :fn, :name, :value, :units)
+    # `element_type` joins it with `cast` (esm-spec §4.2, §11.3.1).
+    @test ESM._EMISSIBLE_FIELDS ==
+        (:op, :args, :wrt, :dim, :fn, :name, :value, :units, :element_type)
     # `arg`/`bindings` were historically tolerated-and-ignored (absent from the
     # non-emissible literal): a node carrying them still canonicalizes.
     @test ESM._CANONICAL_IGNORED_FIELDS == (:arg, :bindings)

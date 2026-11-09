@@ -487,6 +487,10 @@ function format_julia_expression_node(node::OpExpr)
         return "ifelse($(join(map(format_julia_expression, args), ", ")))"
     elseif op == "Pre"
         return "Pre($(join(map(format_julia_expression, args), ", ")))"
+    elseif op == "cast"
+        # esm-spec §11.3.1: the generated model computes in binary64, so a cast
+        # to Float64 is its operand and one to Float32 is refused.
+        return format_julia_expression(_binary64_cast_operand(node))
     elseif op == "^"
         return fmt_chain(" ^ ")
     elseif op == "grad"

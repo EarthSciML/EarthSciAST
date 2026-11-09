@@ -325,6 +325,8 @@ an optional keyword (default `nothing`) that only some operators use. The
   to. Purely documentary: it is NOT part of the emitted key (it renders as a
   trailing `label=L` named argument); `args` are the pure key components.
 - `units`: for `const`, the declared unit of `value` (esm-spec §4.8.5).
+- `element_type`: for `cast`, the precision (`"Float64"` or `"Float32"`) the
+  node rounds its one operand to (esm-spec §4.2, §11.3.1).
 - `table`, `table_axes`, `output`: for `table_lookup` (esm-spec §9.5), the
   `function_tables` entry id, the per-axis input-coordinate expressions (wire
   key `"axes"`; `args` MUST be empty), and, for a multi-output table, the
@@ -374,6 +376,9 @@ mutable struct OpExpr <: ASTExpr
     value::Any
     # const (esm 1.2.0): the declared unit `value` is in (esm-spec §4.8.5).
     units::Union{String, Nothing}
+    # cast (esm-spec §4.2, §11.3.1): "Float64" or "Float32", the precision the
+    # node rounds its one operand to. Required on cast; legal on no other op.
+    element_type::Union{String, Nothing}
     # table_lookup (esm-spec §9.5, v0.4.0): the function_tables entry id this
     # node references. ``args`` MUST be empty for a table_lookup node — the
     # per-axis input expressions live in ``table_axes``.
@@ -497,7 +502,7 @@ mutable struct OpExpr <: ASTExpr
         semiring = nothing,
         ranges = nothing, regions = nothing, values = nothing,
         shape = nothing, perm = nothing, axis = nothing, fn = nothing,
-        name = nothing, value = nothing, units = nothing,
+        name = nothing, value = nothing, units = nothing, element_type = nothing,
         table = nothing, table_axes = nothing, output = nothing,
         join = nothing, filter = nothing, join_gates = nothing,
         id = nothing, manifold = nothing,
@@ -513,7 +518,7 @@ mutable struct OpExpr <: ASTExpr
         _new_typed(
         OpExpr, op, args, wrt, dim, int_var, lower, upper, output_idx, expr_body, reduce,
         semiring, ranges,
-        regions, values, shape, perm, axis, fn, name, value, units,
+        regions, values, shape, perm, axis, fn, name, value, units, element_type,
         table, table_axes, output, join, filter, join_gates,
         id, manifold, distinct, key, arg, bindings, label,
         expect_cadence, attrs
@@ -606,6 +611,7 @@ const OPEXPR_FIELD_TABLE = (
     name = (wire = :name, kind = :scalar, parse = :string, binds_scope = false),
     value = (wire = :value, kind = :scalar, parse = :json, binds_scope = false),
     units = (wire = :units, kind = :scalar, parse = :string, binds_scope = false),
+    element_type = (wire = :element_type, kind = :scalar, parse = :string, binds_scope = false),
     table = (wire = :table, kind = :scalar, parse = :string, binds_scope = false),
     table_axes = (wire = :axes, kind = :expr_map, parse = nothing, binds_scope = false),
     output = (wire = :output, kind = :scalar, parse = :int_or_string, binds_scope = false),

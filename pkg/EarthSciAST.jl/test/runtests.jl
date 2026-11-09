@@ -395,6 +395,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("mounted_component_tests_test.jl")   # #198: a mount does not carry the leaf's tests
     include("mount_enums_test.jl")               # #260: a mounted file's enum ops resolve in its own block
     include("mount_element_type_test.jl")        # §4.7: a mounted leaf's element_type crosses the mount
+    include("element_type_cast_test.jl")         # §11.3.1: cast between Float64 and Float32
     include("toplevel_reaction_system_ref_test.jl")  # §4.7: a top-level reaction_systems.<k> {ref} mounts
     include("scoped_assertion_variable_test.jl")  # #263: an assertion may name a scoped reference
     include("conformance_pde_inline_observed_rank2_test.jl")

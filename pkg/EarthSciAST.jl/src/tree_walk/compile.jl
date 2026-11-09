@@ -743,6 +743,11 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
     # loop-var `VarExpr` (→ `_NK_LOOPVAR`) where the unroll puts an `IntExpr`, and no
     # `_compile` arm treats those two leaf kinds differently — so this never fails
     # where the unroll fallback would have succeeded.
+    if op_sym === :cast
+        # esm-spec §11.3.1; normally lowered at the build entry already
+        # (`_lower_broadcast_node`), this arm keeps `evaluate_expr` honest.
+        return _compile(_binary64_cast_operand(expr), var_map, param_syms, reg_funcs, memo)
+    end
     if op_sym === :__contract_loop
         lb = expr.value::_ContractLoopBuild
         body = _compile(expr.args[1], var_map, param_syms, reg_funcs, memo)

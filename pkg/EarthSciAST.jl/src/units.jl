@@ -1726,6 +1726,8 @@ const _DIMENSION_RULES = let rules = Dict{String, Function}(
         # `Pre` PRESERVES its operand's dimension (esm-spec §4.8.3) — it names
         # the operand's value at the previous step, not a dimensionless one.
         "Pre" => _preserve_dimension_rule,
+        # `cast` changes only the precision; units pass through (esm-spec §4.2).
+        "cast" => _preserve_dimension_rule,
         # `ic(x)` names x's initial value, so it CARRIES x's unit, dimension
         # and scale (esm-spec §4.8.3) — under either literal rule.
         "ic" => _preserve_dimension_rule,

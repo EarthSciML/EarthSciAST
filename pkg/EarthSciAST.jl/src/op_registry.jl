@@ -28,7 +28,8 @@ Fields:
   conventions live outside the scalar ladders.
 - `category::Symbol` — coarse family, one of `:arithmetic`, `:comparison`,
   `:logical`, `:control`, `:elementary`, `:constant`, `:calculus`, `:array`,
-  `:aggregate`, `:function`, `:data`, `:geometry`, `:value_invention`.
+  `:aggregate`, `:function`, `:data`, `:geometry`, `:value_invention`,
+  `:conversion`.
 - `scalar_fn::Union{Function,Nothing}` — the scalar Julia function the
   elementwise evaluator arms apply per value/lane (`sin`, `+`, …). For the
   comparison ops this is the Base predicate (`<`, `==`, …); the evaluator arms
@@ -403,6 +404,14 @@ const _OP_TABLE = _OpSpec[
     #    `call` stays opaque: it was removed in v0.3.0 and always throws at compile.
     _op("fn"; category = :function, known = true, xcse = true),
     _op("call"; category = :function, cse = true, known = true),
+
+    # ── Precision conversion (esm-spec §4.2, §11.3.1) ──
+    #    `cast` carries `element_type`. This binding evaluates binary64 only, so
+    #    the build lowers a cast to Float64 to its operand and refuses one to
+    #    Float32 (`float32_unsupported`) before any pass sees it
+    #    (`_lower_broadcast_node`, tree_walk/build_helpers.jl); no ladder flag.
+    #    `known`: the MTK exporter has an arm for it (identity / refusal).
+    _op("cast"; arity = 1:1, category = :conversion, known = true),
 
     # ── Const data / enum markers ──
     _op("const"; category = :data, cse = true),

@@ -122,6 +122,12 @@ function _mtk_extended_op(
         t_val = _esm_to_symbolic(expr.args[2], var_dict, t_sym, dim_dict)
         f_val = _esm_to_symbolic(expr.args[3], var_dict, t_sym, dim_dict)
         return ifelse(cond, t_val, f_val)
+    elseif op == "cast"
+        # esm-spec §11.3.1: MTK computes in binary64, so a cast to Float64 is
+        # its operand and one to Float32 is refused (`float32_unsupported`).
+        return _esm_to_symbolic(
+            EarthSciAST._binary64_cast_operand(expr), var_dict, t_sym, dim_dict
+        )
     elseif op == "Pre"
         arg = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
         return ModelingToolkit.Pre(arg)

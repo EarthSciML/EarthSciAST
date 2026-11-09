@@ -1033,6 +1033,13 @@ function format_structural_op(node::OpExpr, format::Symbol)
         axis = node.axis === nothing ? 0 : node.axis
         name = format == :latex ? "\\mathrm{concat}" : "concat"
         return "$name($inner, axis=$axis)"
+    elseif op == "cast"
+        # `cast(A, element_type=P)` (esm-spec §4.2; RENDERING_CONTRACT "cast"):
+        # the precision is a trailing named argument, like `manifold=`.
+        inner = join([r(a) for a in args], ", ")
+        et = node.element_type === nothing ? "" : node.element_type
+        format == :latex && return "\\mathrm{cast}($inner, element\\_type=$et)"
+        return "cast($inner, element_type=$et)"
     elseif op == "intersect_polygon" || op == "polygon_intersection_area"
         inner = join([r(a) for a in args], ", ")
         manifold = node.manifold === nothing ? "" : node.manifold

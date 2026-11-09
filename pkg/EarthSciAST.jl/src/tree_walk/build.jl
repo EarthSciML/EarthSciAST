@@ -7918,6 +7918,33 @@ end
 # precision. After esm-spec §4.7 "Working precision crosses a mount" a mounted
 # binary32 leaf reaches here as exactly such per-variable declarations.
 function _refuse_float32(model::Model, document::AbstractString, name::AbstractString)
+    # A `cast` to Float32 (esm-spec §11.3.1) is a binary32 value whatever the
+    # variables declare: refused up front, naming the equation it sits in. (One
+    # inside a template body is refused when the build lowers it.)
+    for eqs in (model.equations, model.initialization_equations), eq in eqs
+        for side in (eq.lhs, eq.rhs)
+            hit = nothing
+            foreach_subexpr_once(side) do x
+                hit === nothing && x isa OpExpr && x.op == "cast" &&
+                    x.element_type != "Float64" && (hit = x)
+                nothing
+            end
+            hit === nothing && continue
+            try
+                _binary64_cast_operand(hit)
+            catch err
+                err isa TreeWalkError || rethrow()
+                lhs = eq.lhs isa VarExpr ? eq.lhs.name : "?"
+                throw(
+                    TreeWalkError(
+                        err.code,
+                        err.detail * " — in the equation defining '" *
+                            (isempty(name) ? lhs : "$(name).$(lhs)") * "'"
+                    )
+                )
+            end
+        end
+    end
     for (vname, v) in model.variables
         something(v.element_type, document) == "Float32" || continue
         throw(
@@ -8576,6 +8603,14 @@ function _build_evaluator_dict(
     # rewrite-target walk runs here too, ahead of them.
     model === nothing || _reject_unlowered_operators(model)
 
+    # ---- `cast` at the FRONT-DOOR pre-passes (esm-spec §11.3.1) ----
+    # The same pre-passes evaluate bodies through `_eval_cellwise`, so a cast
+    # is lowered here too (to its operand; one to Float32 is refused). Only a
+    # model holding a cast is touched, so every other build is byte-identical.
+    if model !== nothing && _model_has_cast(model)
+        model = _lower_broadcast_model(model)
+    end
+
     # ---- Caller-key canonicalization (esm-spec §6.6) ----
     # Rewrite the caller's LOCAL-named `parameter_overrides` onto this
     # document's (flattening-qualified) parameter names once, at the front
@@ -8781,6 +8816,19 @@ end
 # here — the apply node itself is what is being detected). Identity-memoized
 # (`foreach_subexpr_once`): an existence predicate is path-multiplicity-
 # insensitive, and equation trees can be compact DAGs (ESS-0hh).
+function _model_has_cast(model::Model)
+    found = false
+    check(e) = e === nothing || found ? nothing : foreach_subexpr_once(e) do x
+            x isa OpExpr && x.op == "cast" && (found = true)
+            nothing
+    end
+    for eqs in (model.equations, model.initialization_equations), eq in eqs
+        check(eq.lhs); check(eq.rhs)
+    end
+    found && return true
+    return any(s -> s isa Model && _model_has_cast(s), values(model.subsystems))
+end
+
 function _model_has_surviving_refs(model::Model)
     found = false
     check(e) = e === nothing || found ? nothing : foreach_subexpr_once(e) do x

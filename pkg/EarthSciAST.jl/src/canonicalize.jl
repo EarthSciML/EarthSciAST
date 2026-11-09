@@ -333,7 +333,7 @@ end
 # encoding: exactly the set every binding serializes and the cross-language
 # canonical fixtures pin (see `canonical_json` docstring). CLOSED — extending
 # it is a cross-binding format change, never a Julia-local edit.
-const _EMISSIBLE_FIELDS = (:op, :args, :wrt, :dim, :fn, :name, :value, :units)
+const _EMISSIBLE_FIELDS = (:op, :args, :wrt, :dim, :fn, :name, :value, :units, :element_type)
 
 # OpExpr fields that are TOLERATED-AND-IGNORED by the canonical emitter: a node
 # carrying them still canonicalizes, emitting the pinned fields only. Both are
@@ -379,7 +379,7 @@ function _emit_node_json(n::OpExpr)::String
             CanonicalizeError(
                 "E_CANONICAL_UNSUPPORTED_FIELD",
                 "op '$(n.op)' carries field(s) [$(join(offending, ", "))] outside " *
-                    "the canonical JSON node encoding (op/args/wrt/dim/fn/name/value/units); " *
+                    "the canonical JSON node encoding (op/args/wrt/dim/fn/name/value/units/element_type); " *
                     "emitting them would be lossy and non-portable (RFC §5.4.6)"
             )
         )
@@ -413,6 +413,11 @@ function _emit_node_json(n::OpExpr)::String
         # the same number in mi/h and in m/s are different quantities, so two
         # nodes differing only in `units` MUST NOT canonicalize alike.
         push!(entries, ("units", _json_string(n.units::String)))
+    end
+    if n.element_type !== nothing
+        # A `cast` node's precision (esm-spec §4.2): `cast(x, Float32)` and
+        # `cast(x, Float64)` are different values.
+        push!(entries, ("element_type", _json_string(n.element_type::String)))
     end
     sort!(entries, by = kv -> kv[1])
     body = join(("$(_json_string(k)):$v" for (k, v) in entries), ",")

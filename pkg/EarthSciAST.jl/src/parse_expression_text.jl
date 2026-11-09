@@ -1089,6 +1089,20 @@ function _tp_make_call(
             axis = _tp_int_literal(axis, "concat(...) axis", pos)
         )
     end
+    # `cast(A, element_type=P)` (esm-spec §4.2): exactly one operand and that
+    # one named argument, whose value is Float32 or Float64.
+    if name == "cast"
+        et = get(named, "element_type", nothing)
+        (
+            length(args) == 1 && order == ["element_type"] && et isa VarExpr &&
+                (et::VarExpr).name in ("Float32", "Float64")
+        ) || throw(
+            ExpressionParseError(
+                "cast(...) takes exactly one operand and element_type=Float32|Float64", pos
+            )
+        )
+        return OpExpr("cast", args; element_type = (et::VarExpr).name)
+    end
     # Geometry ops `polygon_intersection_area(a, b, manifold=<name>)` and
     # `intersect_polygon(a, b, manifold=<name>[, id=<name>])`. `id` (RFC §6.1
     # node identity) is optional and only emitted by the printer when present.
