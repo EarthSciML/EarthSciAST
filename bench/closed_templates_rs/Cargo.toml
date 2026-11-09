@@ -1,0 +1,20 @@
+[package]
+name = "closed-templates-bench"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Closed-AST phase-4 benchmarks: standard-library templates against the closed forms they replace, hand-written loops and external libraries (Rust tape side)."
+license = "AGPL-3.0-only"
+
+# Standalone: not a member of any workspace, so the external-library
+# comparisons (chrono) never become dependencies of the main crate.
+[workspace]
+
+[dependencies]
+earthsci-ast = { path = "../../pkg/earthsci-ast-rs", default-features = false }
+serde_json = "1.0"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+s2rst = "=0.5.1"
+
+[profile.release]
+debug = false

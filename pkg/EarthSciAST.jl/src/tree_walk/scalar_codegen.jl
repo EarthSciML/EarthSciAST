@@ -401,6 +401,13 @@ function _cg_share_leaf(K::_CGShareKeys, kc::_CGUnitCtx, nd::_Node)
     return _cg_share_inner(K, nd)
 end
 
+# A literal's value for a subscript's range (`_cg_int_span`), when its hole is
+# baked: the same for every member of the class.
+function _cg_span_literal(kc::_CGUnitCtx, nd::_Node)
+    h = get(kc.holes, nd, nothing)
+    return h isa Float64 ? h : nothing
+end
+
 function _cg_emit(ctx::_CGCtx, kc::_CGUnitCtx, nd::_Node)
     _cg_budget!(ctx)
     shared = get(kc.loops, nd, nothing)
@@ -702,21 +709,13 @@ function _sc_build_gen(
     fnstmts = byval && !isempty(ctx.helpers) ?
         Any[:(local $(_CG_FNS) = tabs[$(ngrp + 1)])] : Any[]
     helperdefs = byval ? Any[] : ctx.helpers
-    # `u` is read-only in an alias scope, as in the kernel section: the scalar
-    # section writes only `du` and the cache, never `u`.
-    run = Expr(
-        :macrocall, GlobalRef(Base.Experimental, Symbol("@aliasscope")), ln,
-        Expr(
-            :let, Expr(:block, :(u = _cg_readonly(u))),
-            Expr(
-                :block,
-                Expr(
-                    :macrocall, Symbol("@inbounds"), ln,
-                    Expr(:block, loops...)
-                )
-            )
-        )
-    )
+    # No alias scope, unlike the kernel section. This function stores cache
+    # slots and reads them back (a class in cache mode, a tier slot that reads
+    # an earlier one), and inside `Base.Experimental.@aliasscope` Julia 1.12
+    # can move a plain load of an array ahead of an earlier store to the same
+    # element when the store sits in a loop of run-time trip count, such as
+    # the members loop here: the read-back then sees the previous call's value.
+    run = Expr(:macrocall, Symbol("@inbounds"), ln, Expr(:block, loops...))
     body = Expr(
         :block, grpstmts..., fnstmts...,
         :(local _cgT = _rhs_value_type(u, p, t)),
