@@ -493,3 +493,154 @@ pub(super) fn relational_doc() -> Value {
 fn keyed_and_gated_relational_templates_lower_and_match_the_oracle() {
     oracle_ab(relational_doc());
 }
+
+/// A mesh's per-face state relaxing to the sum of the per-edge state over its
+/// three edges, read through the face-to-edge connectivity:
+/// `D(q[f]) = Σ_le w[edge(f, le)] - q[f]` (the `mesh_rank` workload's shape),
+/// the sum an array-producing nested `faq` over `f` under the `-`. The
+/// connectivity is an observed's values or an inline const. With `observed`,
+/// the same shape also defines an array observed `r[f] = 2 Σ_le w[…] - q[f]`
+/// that a second state reads, so the observed per-cell walk is covered too.
+fn mesh_face_sum_doc(observed_connectivity: bool, observed: bool) -> Value {
+    let conn = [[1, 2, 3], [3, 4, 5], [5, 6, 1], [2, 4, 6]];
+    let conn_lit = json!({"op": "const", "args": [], "value": conn});
+    let fl = json!({"f": {"from": "faces"}, "le": {"from": "local_edges"}});
+    let f = json!({"f": {"from": "faces"}});
+    let e = if observed_connectivity {
+        json!("edge_of")
+    } else {
+        conn_lit.clone()
+    };
+    let face_sum = || {
+        let mut s = faq(
+            ix("w", vec![ix_any(e.clone(), vec![json!("f"), json!("le")])]),
+            vec!["f"],
+            fl.clone(),
+        );
+        s["semiring"] = json!("sum_product");
+        s
+    };
+    let qf = || ix("q", vec![json!("f")]);
+    let mut vars = json!({
+        "w": {"type": "unknown", "shape": ["edge_ids"], "default": 0.0},
+        "q": {"type": "unknown", "shape": ["faces"], "default": 0.0}
+    });
+    let mut eqs = vec![
+        json!({"lhs": d_lhs("w", vec!["e"], json!({"e": {"from": "edge_ids"}})),
+               "rhs": faq(op("-", vec![json!("e"), ix("w", vec![json!("e")])]), vec!["e"],
+                          json!({"e": {"from": "edge_ids"}}))}),
+        json!({"lhs": d_lhs("q", vec!["f"], f.clone()),
+               "rhs": op("-", vec![face_sum(), qf()])}),
+    ];
+    if observed_connectivity {
+        vars["edge_of"] = json!({"type": "unknown", "shape": ["faces", "local_edges"]});
+        eqs.insert(0, json!({"lhs": "edge_of", "rhs": conn_lit}));
+    }
+    if observed {
+        vars["r"] = json!({"type": "unknown", "shape": ["faces"]});
+        vars["p"] = json!({"type": "unknown", "shape": ["faces"], "default": 0.0});
+        eqs.push(json!({"lhs": ix("r", vec![json!("f")]),
+            "rhs": faq(op("-", vec![op("*", vec![json!(2.0), face_sum()]), qf()]), vec!["f"], f.clone())}));
+        eqs.push(json!({"lhs": d_lhs("p", vec!["f"], f.clone()),
+            "rhs": faq(ix("r", vec![json!("f")]), vec!["f"], f)}));
+    }
+    document(
+        "mesh_face_sum",
+        json!({
+            "faces": {"kind": "interval", "size": 4},
+            "local_edges": {"kind": "interval", "size": 3},
+            "edge_ids": {"kind": "interval", "size": 6}
+        }),
+        json!({"variables": vars, "equations": eqs}),
+    )
+}
+
+fn ix_any(base: Value, subs: Vec<Value>) -> Value {
+    let mut args = vec![base];
+    args.extend(subs);
+    json!({"op": "index", "args": args})
+}
+
+/// The per-cell oracle reads an array-producing nested `faq` under an
+/// elementwise operator at the current output cell, as the whole-array
+/// overlay and the tape do: it used to answer NaN for every face.
+#[test]
+fn nested_face_sum_through_connectivity_matches_the_oracle() {
+    for observed_connectivity in [true, false] {
+        for observed in [false, true] {
+            let doc = mesh_face_sum_doc(observed_connectivity, observed);
+            let file = crate::parse::load_string(&doc.to_string()).expect("loads");
+            let compiled = ArrayCompiled::from_file(&file).expect("compiles");
+            let n = compiled.state_variable_names().len();
+            let state = seeded_state(n, 1, 0.25, 2.5);
+            let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), true);
+            assert!(
+                dy.iter().all(|x| x.is_finite()),
+                "the per-cell oracle answers every face: {dy:?}"
+            );
+            oracle_ab(doc);
+        }
+    }
+}
+
+/// `D(q[f]) = faq_f(w[f]) - q[f]` over faces 1..4, the nested node's `f`
+/// over `nested_range` instead (a sub-range, or the same range by another set).
+fn mismatched_nested_box_doc(nested: Value) -> Value {
+    let f = json!({"f": {"from": "faces"}});
+    let mut inner = faq(ix("w", vec![json!("f")]), vec!["f"], json!({"f": nested}));
+    inner["semiring"] = json!("sum_product");
+    document(
+        "nested_box",
+        json!({
+            "faces": {"kind": "interval", "size": 4},
+            "cells": {"kind": "interval", "size": 4}
+        }),
+        json!({
+            "variables": {
+                "w": {"type": "unknown", "shape": ["faces"], "default": 0.0},
+                "q": {"type": "unknown", "shape": ["faces"], "default": 0.0}
+            },
+            "equations": [
+                {"lhs": d_lhs("w", vec!["f"], f.clone()),
+                 "rhs": faq(op("*", vec![json!(-0.5), ix("w", vec![json!("f")])]), vec!["f"], f.clone())},
+                {"lhs": d_lhs("q", vec!["f"], f),
+                 "rhs": op("-", vec![inner, ix("q", vec![json!("f")])])}
+            ]
+        }),
+    )
+}
+
+/// A nested `faq` over a sub-range of the output box is not read at the
+/// cell: the per-cell oracle latches `E_TREEWALK_NESTED_BOX_MISMATCH` naming
+/// the equation and leaves those cells NaN, rather than reading the element of
+/// another cell, and the tape refuses the rule. Over the same `[1, 4]` by
+/// another index set it is the same box, and every evaluator agrees.
+#[test]
+fn nested_faq_over_another_box_is_not_read_at_the_cell() {
+    use crate::simulate_array::take_const_array_oob;
+    for nested in [json!([2, 4]), json!([1, 3])] {
+        let doc = mismatched_nested_box_doc(nested.clone());
+        let file = crate::parse::load_string(&doc.to_string()).expect("loads");
+        let compiled = ArrayCompiled::from_file(&file).expect("compiles");
+        let names = compiled.state_variable_names();
+        let state = seeded_state(names.len(), 1, 0.25, 2.5);
+        take_const_array_oob();
+        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), true);
+        let fault = take_const_array_oob().expect("the oracle latches a fault");
+        assert!(
+            fault.starts_with("E_TREEWALK_NESTED_BOX_MISMATCH")
+                && fault.contains("the equation for 'q'"),
+            "{nested}: {fault}"
+        );
+        for (name, v) in names.iter().zip(&dy) {
+            assert_eq!(v.is_nan(), name.contains("q["), "{nested}: {name} = {v}");
+        }
+        let (_, report) = compiled.build_tape_opts(&HashSet::new(), None);
+        assert!(
+            report.fallbacks.iter().any(|(rule, _)| rule == "D(q)"),
+            "{nested}: the tape refuses the rule: {:?}",
+            report.fallbacks
+        );
+    }
+    oracle_ab(mismatched_nested_box_doc(json!({"from": "cells"})));
+}

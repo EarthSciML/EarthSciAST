@@ -3138,6 +3138,11 @@ pub(super) struct CellBox<'a> {
     pub names: &'a [String],
     /// The lower bound of each output axis, in the same order.
     pub origin: &'a [i64],
+    /// The `(lo, hi)` range of each output axis, in the same order.
+    pub ranges: &'a [(i64, i64)],
+    /// The variable the rule being evaluated defines, when there is one, for
+    /// a diagnostic to name.
+    pub rule: Option<&'a str>,
 }
 
 /// The cell-invariant description of one ⊕-reduction: the contracted index
@@ -3200,26 +3205,131 @@ pub(super) fn filter_excludes(
             if a.ndim() == 0 {
                 return a.first().copied().unwrap_or(0.0) == 0.0;
             }
-            let Some(cell) = cell else {
-                return false;
-            };
-            if a.ndim() != cell.names.len() || cell.origin.len() != cell.names.len() {
-                return false;
+            // Out of the mask's bounds, or not alignable: include, rather
+            // than silently dropping the term.
+            cell.and_then(|cell| cell_element(&a, cell, ctx))
+                .is_some_and(|m| m == 0.0)
+        }
+    }
+}
+
+/// The element of an output-box-shaped `a` at the current output cell, aligned
+/// as the vectorized overlay's `VecBox` aligns an array operand to its box
+/// (`element = a[idx - lo]` per output axis). `None` when the rank differs from
+/// the box's or the cell lies outside `a`.
+fn cell_element(a: &ArrayD<f64>, cell: &CellBox, ctx: &EvalCtx) -> Option<f64> {
+    if a.ndim() != cell.names.len() || cell.origin.len() != cell.names.len() {
+        return None;
+    }
+    let ix: DimU = cell
+        .names
+        .iter()
+        .zip(cell.origin.iter())
+        .map(|(n, &lo)| {
+            let bound = ctx.loop_binds.get(n).copied().unwrap_or(lo);
+            (bound - lo).max(0) as usize
+        })
+        .collect();
+    a.get(IxDyn(&ix)).copied()
+}
+
+/// What the array-producing nested `faq`s a cell body combines elementwise
+/// say about the box its array value is over.
+enum NestedBox {
+    /// The body reaches no array-producing nested `faq` through elementwise
+    /// operators.
+    None,
+    /// Every one it reaches is over the output box: the same output index
+    /// symbols, in order, over the same ranges.
+    Same,
+    /// One it reaches is over another box (described).
+    Other(String),
+}
+
+/// [`NestedBox`] of `e`, walking only the elementwise operators the
+/// whole-array overlay combines position by position.
+fn nested_faq_box(e: &Expr, cell: &CellBox) -> NestedBox {
+    let Expr::Operator(node) = e else {
+        return NestedBox::None;
+    };
+    match vec_op_code(&node.op) {
+        VecOp::Arith(_)
+        | VecOp::Cmp(_)
+        | VecOp::Unary(_)
+        | VecOp::Neg
+        | VecOp::Ifelse
+        | VecOp::Precision => {
+            let mut verdict = NestedBox::None;
+            for a in &node.args {
+                match nested_faq_box(a, cell) {
+                    other @ NestedBox::Other(_) => return other,
+                    NestedBox::Same => verdict = NestedBox::Same,
+                    NestedBox::None => {}
+                }
             }
-            let ix: Vec<usize> = cell
-                .names
-                .iter()
-                .zip(cell.origin.iter())
-                .map(|(n, &lo)| {
-                    let bound = ctx.loop_binds.get(n).copied().unwrap_or(lo);
-                    (bound - lo).max(0) as usize
-                })
-                .collect();
-            match a.get(IxDyn(&ix)) {
-                Some(&m) => m == 0.0,
-                // Out of the mask's bounds: include, rather than silently
-                // dropping the term.
-                None => false,
+            verdict
+        }
+        VecOp::Aggregate => match faq_spec(node) {
+            Some(spec) if !spec.ranges.is_empty() => {
+                if spec.idx_names == cell.names && spec.ranges[..] == cell.ranges[..] {
+                    NestedBox::Same
+                } else {
+                    NestedBox::Other(format!(
+                        "a nested `faq` over {:?} with ranges {:?}",
+                        spec.idx_names,
+                        &spec.ranges[..]
+                    ))
+                }
+            }
+            _ => NestedBox::None,
+        },
+        _ => NestedBox::None,
+    }
+}
+
+/// The fault a cell body latches when it combines an array-producing nested
+/// `faq` over a box other than its own output box.
+fn nested_box_message(cell: &CellBox, what: &str) -> String {
+    let rule = cell
+        .rule
+        .map(|r| format!("the equation for '{r}'"))
+        .unwrap_or_else(|| "a `faq`".to_string());
+    format!(
+        "E_TREEWALK_NESTED_BOX_MISMATCH: {rule} over {:?} with ranges {:?} combines {what} \
+         elementwise, and an array is read at a cell only over the box the cell belongs to. \
+         Index the nested `faq` explicitly (`index(faq, ...)`) to say which element each \
+         cell reads.",
+        cell.names, cell.ranges
+    )
+}
+
+/// One cell's term: the body's value at the current output cell.
+///
+/// A body that is array-valued over the output box — an array-producing
+/// nested `faq` under an elementwise operator, `faq_f(Σ_k w[e(f, k)]) - q[f]`
+/// inside the node over `f` — denotes, per cell, its element at that cell: the
+/// nested node rebinds `f` and so is a whole array (esm-spec §4.3.1 shadowing),
+/// and the whole-array overlay combines it with the box's other operands
+/// position by position. This reads the same element ([`cell_element`]), so the
+/// oracle and the overlay agree. The read is taken only when the body's nested
+/// `faq`s are provably over the output box ([`nested_faq_box`]); one over any
+/// other box latches a fault rather than reading an element of a different
+/// cell. Anything else that is not a scalar is NaN, as before.
+pub(super) fn cell_term(v: Value, body: &Expr, cell: Option<&CellBox>, ctx: &EvalCtx) -> f64 {
+    match v {
+        Value::Scalar(s) => s,
+        Value::Array(a) if a.ndim() == 0 => a[IxDyn(&[])],
+        Value::Array(a) => {
+            let Some(cell) = cell else {
+                return f64::NAN;
+            };
+            match nested_faq_box(body, cell) {
+                NestedBox::Same => cell_element(&a, cell, ctx).unwrap_or(f64::NAN),
+                NestedBox::Other(what) => {
+                    latch_gather_fault(nested_box_message(cell, &what));
+                    f64::NAN
+                }
+                NestedBox::None => f64::NAN,
             }
         }
     }
@@ -3253,7 +3363,8 @@ pub(super) fn reduce_contraction(
         return if filter_excludes(filter, cell, ctx) {
             reduce.identity()
         } else {
-            eval(body, ctx).as_scalar().unwrap_or(f64::NAN)
+            let v = eval(body, ctx);
+            cell_term(v, body, cell, ctx)
         };
     }
     // A ragged dim whose parent is itself CONTRACTED (esm-spec §4.3.1 "Ragged
@@ -3290,7 +3401,8 @@ pub(super) fn reduce_contraction(
             if filter_excludes(filter, Some(cell), ctx) {
                 continue;
             }
-            let term = eval(body, ctx).as_scalar().unwrap_or(f64::NAN);
+            let v = eval(body, ctx);
+            let term = cell_term(v, body, Some(cell), ctx);
             acc = reduce.combine(acc, term);
         }
         return acc;
@@ -3306,7 +3418,8 @@ pub(super) fn reduce_contraction(
         if filter_excludes(filter, cell, ctx) {
             continue;
         }
-        let term = eval(body, ctx).as_scalar().unwrap_or(f64::NAN);
+        let v = eval(body, ctx);
+        let term = cell_term(v, body, cell, ctx);
         acc = reduce.combine(acc, term);
     }
     acc
@@ -4416,7 +4529,8 @@ impl TupleSink for EvalSink<'_, '_, '_, '_> {
         } = self.spec;
         crate::broad_phase::bump_overlap_enum_visits(1);
         if !filter_excludes(filter, cell, self.ctx) {
-            let term = eval(body, self.ctx).as_scalar().unwrap_or(f64::NAN);
+            let v = eval(body, self.ctx);
+            let term = cell_term(v, body, cell, self.ctx);
             // Pointwise (no contracted index): the body itself, as
             // `reduce_contraction` returns it, not `0̄ ⊕ body`, so a `-0.0`
             // term stays `-0.0`.
@@ -4743,7 +4857,8 @@ fn fold_dependent_nest(
         if filter_excludes(spec.filter, spec.cell, ctx) {
             return;
         }
-        let term = eval(spec.body, ctx).as_scalar().unwrap_or(f64::NAN);
+        let v = eval(spec.body, ctx);
+        let term = cell_term(v, spec.body, spec.cell, ctx);
         *acc = spec.reduce.combine(*acc, term);
         return;
     }
@@ -5198,6 +5313,8 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         let cellbox = CellBox {
             names: idx_names,
             origin: &origin,
+            ranges: &ranges,
+            rule: None,
         };
         let spec = ReduceSpec {
             contract_names: &contract_names,
