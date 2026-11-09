@@ -359,8 +359,13 @@ struct _BuildMemo
     resolve::IdDict{OpExpr, ASTExpr}
     compile::IdDict{OpExpr, _Node}
     deferrals::Base.RefValue{Int}
+    # An inline `const` array node => its interned array and registry name
+    # (`_intern_inline_const`): one node read at many subscripts is interned once.
+    inline::IdDict{OpExpr, Tuple{Any, String}}
 end
-_BuildMemo() = _BuildMemo(IdDict{OpExpr, ASTExpr}(), IdDict{OpExpr, _Node}(), Ref(0))
+_BuildMemo() = _BuildMemo(
+    IdDict{OpExpr, ASTExpr}(), IdDict{OpExpr, _Node}(), Ref(0), IdDict{OpExpr, Tuple{Any, String}}()
+)
 const _MaybeMemo = Union{Nothing, _BuildMemo}
 
 function _mknode(;

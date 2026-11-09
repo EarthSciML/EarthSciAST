@@ -2231,7 +2231,9 @@ function _resolve_indices_op(
         # generic recurse and const-folds in `_compile` as before.
         if first_arg isa OpExpr && (first_arg::OpExpr).op == "const" &&
                 (first_arg::OpExpr).value isa AbstractVector
-            vals, cname = _intern_inline_const(first_arg::OpExpr, const_arrays)
+            vals, cname = memo === nothing ?
+                _intern_inline_const(first_arg::OpExpr, const_arrays) :
+                get!(() -> _intern_inline_const(first_arg::OpExpr, const_arrays), memo.inline, first_arg::OpExpr)
             return _resolve_const_array_gather(
                 vals, cname, expr.args[2:end],
                 array_var_info, var_map, const_arrays, pgather, memo, bound_syms
