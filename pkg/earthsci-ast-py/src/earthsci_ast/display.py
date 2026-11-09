@@ -1105,13 +1105,14 @@ def _format_structural_op(node, format_type: str):
         return f"{name}({inner})"
 
     if op == "cast":
-        # `cast(x, Float32)` (esm-spec §4.2): the precision is a field, not an
-        # operand, and the text parser reads this form back.
+        # `cast(x, element_type=Float32)` (esm-spec §4.2; RENDERING_CONTRACT
+        # "cast"): the precision is a trailing named argument, like `manifold=`,
+        # so the text parser reads the node back losslessly.
         element_type = str(_node_field(node, "element_type") or "")
         inner = ", ".join(r(a) for a in args)
         if format_type == "latex":
-            return f"\\mathrm{{cast}}({inner}, \\mathrm{{{element_type}}})"
-        return f"cast({inner}, {element_type})"
+            return f"\\mathrm{{cast}}({inner}, element\\_type={element_type})"
+        return f"cast({inner}, element_type={element_type})"
 
     if op == "enum":
         label = f"{args[0]}.{args[1]}"

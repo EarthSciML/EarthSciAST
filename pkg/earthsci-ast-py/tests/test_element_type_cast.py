@@ -25,7 +25,7 @@ from earthsci_ast.esm_types import ExprNode
 from earthsci_ast.expression import to_sympy
 from earthsci_ast.numpy_interpreter import EvalContext, eval_expr
 from earthsci_ast.parse import load_path, load_string
-from earthsci_ast.parse_expression import parse_expression
+from earthsci_ast.parse_expression import ExpressionParseError, parse_expression
 from earthsci_ast.problem import esm_problem, observed_field
 from earthsci_ast.serialize import to_json
 from earthsci_ast.units import PINT_AVAILABLE, UnitValidator, parse_unit, unit_exact_scale
@@ -132,8 +132,23 @@ def test_codegen_refuses_a_float32_cast():
 
 def test_text_rendering_parses_back():
     text = to_ascii(_TO32)
-    assert text == "cast(x, Float32)"
+    assert text == "cast(x, element_type=Float32)"
     assert parse_expression(text) == {"op": "cast", "args": ["x"], "element_type": "Float32"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "cast(x)",
+        "cast(x, y, element_type=Float32)",
+        "cast(x, element_type=Float16)",
+        "cast(x, Float32)",
+        "cast(x, element_type=Float32, manifold=sphere)",
+    ],
+)
+def test_a_malformed_cast_call_is_refused(text):
+    with pytest.raises(ExpressionParseError):
+        parse_expression(text)
 
 
 def test_canonical_json_keeps_the_precision():
