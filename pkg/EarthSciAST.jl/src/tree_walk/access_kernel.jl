@@ -913,9 +913,9 @@ end
 # builders memoize by node identity), and the per-path recursion was
 # exponential on a doubling chain. A predicate is path-multiplicity-
 # insensitive, so a visited set is exactly equivalent.
-_acc_has_reduce(n::_Node) = _acc_has_kind(n, _NK_REDUCE, IdDict{_Node, Nothing}())
-_acc_has_areduce(n::_Node) = _acc_has_kind(n, _NK_AREDUCE, IdDict{_Node, Nothing}())
-function _acc_has_kind(n::_Node, kind::UInt8, seen::IdDict{_Node, Nothing})
+_acc_has_reduce(n::_Node) = _acc_has_kind(n, _NK_REDUCE, _NodeIdMap{Nothing}())
+_acc_has_areduce(n::_Node) = _acc_has_kind(n, _NK_AREDUCE, _NodeIdMap{Nothing}())
+function _acc_has_kind(n::_Node, kind::UInt8, seen::_NodeIdMap{Nothing})
     n.kind === kind && return true
     haskey(seen, n) && return false
     seen[n] = nothing
@@ -1067,11 +1067,14 @@ Base.isequal(a::_VNKey, b::_VNKey) =
 
 function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     # Every node reachable from the spine, once each (see the dense-position
-    # note below). The two kind tests read it rather than walking the spine
-    # twice more with an identity set of their own: the same nodes, so the
-    # same answers as `_acc_has_reduce` / `_acc_has_areduce`.
-    order, pos_of = _dag_postorder(spine, _dag_children, _dag_every)
-    _anyof(n -> n.kind === _NK_REDUCE, order) && return (spine, _ACC_NO_CSE)
+    # note below). The two kind tests ride on that walk rather than walking the
+    # spine twice more with an identity set of their own; they see the same
+    # nodes, so they give the answers of `_acc_has_reduce` / `_acc_has_areduce`.
+    # The walk stops at the first `_NK_REDUCE`, which keeps no CSE at all.
+    order, pos_of, has_reduce = _dag_postorder_until(
+        spine, _dag_children, _dag_every, n -> n.kind === _NK_REDUCE
+    )
+    has_reduce && return (spine, _ACC_NO_CSE)
     inv_only = _anyof(n -> n.kind === _NK_AREDUCE, order)
     key_to_vn = Dict{_VNKey, Int}()
     counts = Int[]; is_op = Bool[]; is_inv = Bool[]; rep = _Node[]

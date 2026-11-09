@@ -1419,17 +1419,29 @@ _sat_add(a::Int, b::Int) = a > typemax(Int) - b ? typemax(Int) : a + b
 # address of its `children` vector, a mutable object every node holds, and
 # compares the keys of a bucket with `===`, the same equality an `IdDict` uses:
 # two nodes are one key exactly when they are `===`, and nodes that are `===`
-# hold the same `children` vector, so they always meet in one bucket. A bucket
-# holds more than one node only where nodes share a `children` vector, which
-# the builders do only for a few copies of a node with another payload.
+# hold the same `children` vector, so they always meet in one bucket.
+#
+# The bucket spread rests on one invariant: distinct nodes hold distinct
+# `children` vectors. Every builder today allocates a fresh vector per node
+# (`_mknode`'s default `_Node[]` is evaluated per call, and the rebuilding
+# passes allocate `ch`/`kids` per node). A node sharing another's vector costs
+# speed only (a longer chain), never a wrong answer. The likely way to break
+# it is a constant empty vector shared by many leaves, so a leaf's bucket also
+# mixes in its scalar fields: `===` leaves have equal fields, so they still
+# meet, while leaves of different kind, index, literal or symbol spread out
+# even over one shared vector.
 struct _NodeIdMap{V}
-    head::Dict{UInt, Int}       # bucket address → its newest entry
+    head::Dict{UInt, Int}       # bucket → its newest entry
     keys::Vector{_Node}
     vals::Vector{V}
     next::Vector{Int}           # the bucket's next older entry (0: none)
 end
 _NodeIdMap{V}() where {V} = _NodeIdMap{V}(Dict{UInt, Int}(), _Node[], V[], Int[])
-@inline _node_bucket(n::_Node) = UInt(pointer_from_objref(n.children))
+@inline function _node_bucket(n::_Node)
+    h = UInt(pointer_from_objref(n.children))
+    isempty(n.children) || return h
+    return hash(n.idx, hash(reinterpret(UInt64, n.literal), hash(n.sym, hash(n.op, h ⊻ n.kind))))
+end
 @inline function _nim_index(m::_NodeIdMap, n::_Node)
     i = get(m.head, _node_bucket(n), 0)
     while i != 0
@@ -1480,20 +1492,28 @@ _identity_map(::Type{N}, ::Type{V}) where {N, V} = IdDict{N, V}()
 # positional child list of `n` (empty where the walk stops), `keep(c)` whether a
 # child is a node of the walk at all.
 function _dag_postorder(root::N, kids::K, keep::F) where {N, K, F}
+    order, pos, _ = _dag_postorder_until(root, kids, keep, _dag_never)
+    return order, pos
+end
+# `_dag_postorder` that gives up at the first unique node `stop(n)` holds for
+# (asked once per unique node, on entry, the root included): `stopped` is then
+# `true` and the order and positions are partial.
+function _dag_postorder_until(root::N, kids::K, keep::F, stop::S) where {N, K, F, S}
     order = N[]
     pos = _identity_map(N, Int)
-    function walk(n::N)
-        haskey(pos, n) && return
+    function walk(n::N)::Bool
+        haskey(pos, n) && return false
+        stop(n) && return true
         pos[n] = 0
         for c in kids(n)
-            keep(c) && walk(c)
+            keep(c) && walk(c) && return true
         end
         push!(order, n)
         pos[n] = length(order)
-        return
+        return false
     end
-    walk(root)
-    return order, pos
+    stopped = walk(root)
+    return order, pos, stopped
 end
 
 # Path multiplicities over `_dag_postorder`'s `order`: per position, how many
@@ -1502,7 +1522,7 @@ end
 # `j` of `n` is one). One reverse-postorder pass, parents before children, with
 # saturating additions. On a pure tree these are the occurrence counts.
 function _dag_path_counts(
-        order::Vector, pos::Union{IdDict, _NodeIdMap}, kids::K, keep::F, cond::C
+        order::Vector, pos, kids::K, keep::F, cond::C
     ) where {K, F, C}
     P = length(order)
     total = zeros(Int, P)
@@ -1524,6 +1544,7 @@ function _dag_path_counts(
 end
 _dag_children(n) = n.children
 _dag_every(_) = true
+_dag_never(_) = false
 _dag_strict(_, _) = false
 
 # The CSE prelude's per-call scratch, captured on every `_NK_CACHED` node at

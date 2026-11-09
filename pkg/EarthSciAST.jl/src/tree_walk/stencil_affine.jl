@@ -156,29 +156,37 @@ end
 
 # Distinct sub-kernels reachable from a lowered spine + its CSE recipes
 # (transitively, nested-first) — the runner prologue fills each one's invariant
-# tier once per call. Dedup by payload identity: a shared body appears once.
+# tier once per call. Dedup by payload identity: a shared body appears once. The
+# spine is a DAG, so each node is entered once (`nodes`); a node met again holds
+# only sub-kernels already listed, so the order is that of a walk per path.
 function _collect_subkernels(spine::_Node, cse::_AccCSE)::Vector{_AccKernel}
     out = _AccKernel[]
-    seen = IdDict{Any, Bool}()
-    _collect_subkernels!(out, seen, spine)
+    seen = IdDict{_AccKernel, Nothing}()
+    nodes = _NodeIdMap{Nothing}()
+    _collect_subkernels!(out, seen, nodes, spine)
     for r in cse.recipes
-        _collect_subkernels!(out, seen, r)
+        _collect_subkernels!(out, seen, nodes, r)
     end
     for r in cse.inv_recipes
-        _collect_subkernels!(out, seen, r)
+        _collect_subkernels!(out, seen, nodes, r)
     end
     return out
 end
-function _collect_subkernels!(out::Vector{_AccKernel}, seen::IdDict{Any, Bool}, n::_Node)
+function _collect_subkernels!(
+        out::Vector{_AccKernel}, seen::IdDict{_AccKernel, Nothing},
+        nodes::_NodeIdMap{Nothing}, n::_Node
+    )
+    haskey(nodes, n) && return
+    nodes[n] = nothing
     if n.kind === _NK_SUBCALL
         S = n.payload::_AccKernel
         haskey(seen, S) && return
-        seen[S] = true
+        seen[S] = nothing
         # `S.subs` already holds ITS transitive sub-kernels (built inside-out by
         # `_lower_subcall`), so splice those first — nested-first order.
         for T in S.subs
             if !haskey(seen, T)
-                seen[T] = true
+                seen[T] = nothing
                 push!(out, T)
             end
         end
@@ -186,7 +194,7 @@ function _collect_subkernels!(out::Vector{_AccKernel}, seen::IdDict{Any, Bool}, 
         return
     end
     for c in n.children
-        _collect_subkernels!(out, seen, c)
+        _collect_subkernels!(out, seen, nodes, c)
     end
     return
 end
@@ -330,11 +338,11 @@ end
 # template and the truth value the read needs it to have.
 const _GuardPath = Vector{Tuple{_Node, Bool}}
 
-# Reusable caches for the per-cell signature (branch template memo + branch-key
-# guard memo + a scratch IOBuffer), shared across the whole equation's sweep.
+# Reusable caches for the per-cell signature (branch template memo + a scratch
+# IOBuffer), shared across the whole equation's sweep. The branch-key walk's
+# loop-index memo is `ctx_proto.vsmemo` (see `_cell_bkey!`).
 mutable struct _AffineSig
     branch_cache::Dict{String, _StencilBranch}
-    bmemo::IdDict{OpExpr, Bool}
     bio::IOBuffer
     state_scratch::Vector{Int}   # reused per `_cell_ckey!` for the state-lane slots
     # LANE-AFFINE key support, per branch key: for every lane recipe, which of
@@ -366,13 +374,17 @@ mutable struct _AffineSig
     lane_guards::Dict{String, Vector{Vector{_GuardPath}}}
     # Each subscript expression's compiled form (`_lane_evaluator`'s `ixmemo`).
     ix_memo::IdDict{OpExpr, Any}
+    # The `(idx_names, var_map, const_arrays)` that `box_evals`, `lane_evals`
+    # and `ix_memo` were compiled under; `nothing` before the first compile.
+    # Every caller of `_box_lane_evals!` is checked against it (`_sig_bind!`).
+    lane_bind::Union{Nothing, Tuple{Any, Any, Any}}
 end
 _AffineSig() = _AffineSig(
-    Dict{String, _StencilBranch}(), IdDict{OpExpr, Bool}(), IOBuffer(), Int[],
+    Dict{String, _StencilBranch}(), IOBuffer(), Int[],
     Dict{String, Vector{Vector{Bool}}}(), Int[], Dict{String, Any}(),
     _SeenSet(), IdDict{Any, Bool}(), Dict{String, Int}(),
     Dict{String, Vector{Union{Nothing, _LaneEval}}}(), nothing, nothing,
-    Dict{String, Vector{Vector{_GuardPath}}}(), IdDict{OpExpr, Any}()
+    Dict{String, Vector{Vector{_GuardPath}}}(), IdDict{OpExpr, Any}(), nothing
 )
 
 # Whether `e` reaches an `index` of a `makearray` or `faq` producer, through the
@@ -600,9 +612,15 @@ function _cell_bkey!(
     _set_env!(env, idx_names, loop)
     if get!(() -> _has_indexed_producer(body), sig.bkey_sites, body)
         _seen_restart!(sig.bseen)
+        # The loop-index memo is the one every branch template's `_stencilize`
+        # reads (`ctx_proto.vsmemo`): both ask `_refs_idxset` of the same nodes
+        # under the same `idxset`. A nested walk that grows `idxset` takes a
+        # fresh memo of its own (`_branch_key_indexed!`) and restores the set
+        # before returning, so this memo only ever holds answers for
+        # `ctx_proto.idxset`.
         _branch_key!(
-            sig.bio, body, ctx_proto.idxset, env, ctx_proto.const_arrays, sig.bmemo,
-            sig.bseen
+            sig.bio, body, ctx_proto.idxset, env, ctx_proto.const_arrays,
+            ctx_proto.vsmemo, sig.bseen
         )
     end
     bkey = String(take!(sig.bio))
@@ -624,10 +642,10 @@ function _ckey_state_slots!(
     evs = get!(sig.lane_evals, bkey) do
         compiled = loop isa Vector{Int} && idx_names isa Vector{String}
         # The state lanes' evaluators are the box processor's
-        # (`_box_lane_evals!`, the same recipes under the same branch key):
-        # compiled once per branch key for the scan and the boxes both.
+        # (`_box_lane_evals!`, the branch key's recipes under the equation's
+        # context): compiled once per branch key for the scan and the boxes both.
         all_evs = compiled ?
-            _box_lane_evals!(sig, bkey, recipes, idx_names, var_map, const_arrays) :
+            _box_lane_evals!(sig, bkey, idx_names, var_map, const_arrays) :
             nothing
         Union{Nothing, _LaneEval{typeof(var_map)}}[
             compiled ? all_evs[k] : nothing for k in state_ks
@@ -2162,7 +2180,7 @@ function _process_affine_box!(
     # A tile's per-box tables cover only the cells of the box it runs
     # (`_box_table_addr`).
     run = view === nothing ? box : cbox
-    evs = _box_lane_evals!(sig, bkey, recipes, idx_names, var_map, const_arrays)
+    evs = _box_lane_evals!(sig, bkey, idx_names, var_map, const_arrays)
     lane_repl = Vector{_LaneRepl}(undef, length(recipes))
     for k in eachindex(recipes)
         lane_repl[k] = try
@@ -2219,12 +2237,17 @@ function _process_affine_box!(
 end
 
 # Every lane recipe's compiled evaluator (`nothing` where it has none), per
-# branch key: what `_derive_lane_repl` evaluates a state lane through.
+# branch key: what `_derive_lane_repl` evaluates a state lane through, and the
+# scan key reads its state lanes from. The recipes are the branch key's own
+# (`sig.branch_cache`), and the context is checked to be the one every earlier
+# entry was compiled under, so the scan and the box processor cannot read each
+# other's evaluators under different inputs.
 function _box_lane_evals!(
-        sig::_AffineSig, bkey::String, recipes, idx_names, var_map,
-        const_arrays
+        sig::_AffineSig, bkey::String, idx_names, var_map, const_arrays
     )
+    _sig_bind!(sig, idx_names, var_map, const_arrays)
     return get!(sig.box_evals, bkey) do
+        recipes = sig.branch_cache[bkey][2]
         compiled = idx_names isa Vector{String}
         Union{Nothing, _LaneEval}[
             compiled && rec.kind == LANE_STATE ?
@@ -2232,6 +2255,23 @@ function _box_lane_evals!(
                 for rec in recipes
         ]
     end::Vector{Union{Nothing, _LaneEval}}
+end
+
+# Fix the context `sig`'s compiled lane evaluators and subscripts belong to on
+# the first call; on every later one, require the same context. The sig lives
+# for one equation, whose loop index names, slot map and constant arrays are
+# fixed, so a mismatch is a broken caller, not a case to handle.
+function _sig_bind!(sig::_AffineSig, idx_names, var_map, const_arrays)
+    b = sig.lane_bind
+    if b === nothing
+        sig.lane_bind = (idx_names, var_map, const_arrays)
+    elseif !(isequal(b[1], idx_names) && b[2] === var_map && b[3] === const_arrays)
+        error(
+            "internal: an affine signature's lane evaluators were compiled " *
+                "under another equation context"
+        )
+    end
+    return sig
 end
 
 # The output subscripts compiled once per equation (`nothing` for one that has

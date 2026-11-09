@@ -1094,19 +1094,30 @@ function _scan_refs_idxset(e::OpExpr, idxset::Set{String}, memo::IdDict{OpExpr, 
     return false
 end
 
-# The visited set of one `_branch_key!` walk. A walk per keyed cell used to
-# start from `empty!` on an `IdDict`, which drops the table back to its
-# smallest size, so every cell re-grew it (a rehash per doubling) and
-# allocated a fresh table. Here each walk takes a new token and a node counts
-# as visited when its entry holds the current token: the table keeps its size
-# across walks, and starting a walk allocates one small object. Which nodes a
-# walk enters, and in which order, is unchanged.
+# The visited set of one `_branch_key!` walk. Each walk takes a new token and a
+# node counts as visited when its entry holds the current token, so the table
+# keeps its size across walks (emptying an `IdDict` shrinks it back to its
+# smallest size, and the next walk would regrow and rehash it), and starting a
+# walk allocates one small object. Which nodes a walk enters, and in which
+# order, does not depend on the reuse.
+#
+# A walk nested inside another (a producer's body gathered under its own
+# bindings) needs a set of its own while the outer walk is still live:
+# `_seen_nested!` hands out the one set kept for that depth, restarted, so the
+# nested walks at a depth reuse one table across bindings, cells and
+# contracted-index tuples.
 mutable struct _SeenSet
     d::IdDict{OpExpr, Any}
     tok::Base.RefValue{Nothing}
+    nested::Union{Nothing, _SeenSet}
 end
-_SeenSet() = _SeenSet(IdDict{OpExpr, Any}(), Ref(nothing))
+_SeenSet() = _SeenSet(IdDict{OpExpr, Any}(), Ref(nothing), nothing)
 _seen_restart!(s::_SeenSet) = (s.tok = Ref(nothing); s)
+function _seen_nested!(s::_SeenSet)
+    c = s.nested
+    c === nothing && (c = s.nested = _SeenSet())
+    return _seen_restart!(c)
+end
 # Whether `e` was visited in this walk; marks it visited if not.
 @inline function _seen_visit!(s::_SeenSet, e::OpExpr)
     tok = s.tok
@@ -1370,7 +1381,7 @@ function _branch_key_indexed!(
         bmemo = any(added) ? IdDict{OpExpr, Bool}() : memo
         _branch_key!(
             sub, body, idxset, idx_env, const_arrays, bmemo,
-            _SeenSet(), segs
+            _seen_nested!(seen), segs
         )
     else
         # FRESH `_refs_idxset` memo. That memo caches, per node, whether the node
@@ -1389,7 +1400,7 @@ function _branch_key_indexed!(
             print(sub, 'C')
             _branch_key!(
                 sub, body, idxset, idx_env, const_arrays, cmemo,
-                _SeenSet(), segs
+                _seen_nested!(seen), segs
             )
         end
     end
@@ -1871,7 +1882,8 @@ function _build_branch_template(
     # the prototype's loop-index memo: whether a node reads a loop index is a
     # function of the node and `idxset` alone, and every template of the
     # equation walks the same body under the same `idxset`, so the answers one
-    # template computes hold for the next.
+    # template computes hold for the next. The per-cell branch-key walk
+    # (`_cell_bkey!`) fills and reads the same memo.
     ctx = _StencilCtx(
         ctx_proto.idxset, rs, ctx_proto.idx_env,
         ctx_proto.array_var_info, ctx_proto.const_arrays,

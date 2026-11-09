@@ -1211,23 +1211,37 @@ _affine_keep_kind(k) =
 # count as the parent's.
 _affine_keep_reads(K::_AccKernel) =
     _allof(a -> _affine_keep_kind(a.kind), K.acc) && _allof(_affine_keep_reads, K.subs)
-function _affine_keep_has_fn(n::_Node, seen::IdDict{_Node, Nothing})
+function _affine_keep_has_fn(n::_Node, seen::_NodeIdMap{Nothing})
     haskey(seen, n) && return false
     seen[n] = nothing
     (n.kind === _NK_OP && n.op === :fn) && return true
     return _anyof(c -> _affine_keep_has_fn(c, seen), n.children)
 end
-function _affine_keep_has_fn(K::_AccKernel, seen = IdDict{_Node, Nothing}())
+function _affine_keep_has_fn(K::_AccKernel, seen = _NodeIdMap{Nothing}())
     _affine_keep_has_fn(K.spine, seen) && return true
     _anyof(r -> _affine_keep_has_fn(r, seen), K.cse.recipes) && return true
     _anyof(r -> _affine_keep_has_fn(r, seen), K.cse.inv_recipes) && return true
     return _anyof(S -> _affine_keep_has_fn(S, seen), K.subs)
 end
-function _affine_box_rank(K::_AccKernel, fnmemo::IdDict{Any, Bool} = IdDict{Any, Bool}())
+# `_affine_keep_has_fn(K)`, remembered per kernel triple (spine, CSE,
+# sub-kernels). The memo is keyed by the `subs` vector, the one mutable object
+# of the triple: boxes that lowered to one cached spine (`spine_cache`) share
+# that vector along with the spine and CSE. A hit counts only when the spine
+# and CSE are the stored ones too, so a builder that hands one `subs` vector to
+# kernels with other spines gets a fresh answer, never a stale one.
+const _AffineFnMemo = IdDict{Vector{_AccKernel}, Tuple{_Node, _AccCSE, Bool}}
+function _affine_keep_has_fn_memo(K::_AccKernel, fnmemo::_AffineFnMemo)
+    hit = get(fnmemo, K.subs, nothing)
+    hit !== nothing && hit[1] === K.spine && hit[2] === K.cse && return hit[3]
+    r = _affine_keep_has_fn(K)
+    hit === nothing && (fnmemo[K.subs] = (K.spine, K.cse, r))
+    return r
+end
+function _affine_box_rank(K::_AccKernel, fnmemo::_AffineFnMemo = _AffineFnMemo())
     cs = K.cells
     (
         _is_outs(cs) || length(cs.strides) < 2 || !_affine_keep_reads(K) ||
-            get!(() -> _affine_keep_has_fn(K), fnmemo, (K.spine, K.cse, K.subs))
+            _affine_keep_has_fn_memo(K, fnmemo)
     ) && return 0
     return count(d -> !_cellset_slab(cs, d), eachindex(cs.strides))
 end
@@ -1240,7 +1254,7 @@ function _affine_boxes_to_keep(kernels::AbstractVector{_AccKernel})
     # Boxes that lowered to one cached spine (`spine_cache`) share their spine,
     # CSE recipes and sub-kernels, so whether they hold a `:fn` is asked once
     # per shared triple, not once per box.
-    fnmemo = IdDict{Any, Bool}()
+    fnmemo = _AffineFnMemo()
     rk = [_affine_box_rank(K, fnmemo) for K in kernels]
     cand = [j for j in eachindex(kernels) if rk[j] > 0]
     sort!(cand; by = j -> (-rk[j], j))
