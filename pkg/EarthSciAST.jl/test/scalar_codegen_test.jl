@@ -353,7 +353,16 @@ end
             [ESM._cg_expr_size(ESM.RuntimeGeneratedFunctions.get_expression(g.f)) for g in P.gens]
                 for P in getfield(b.f!, :dynp).progs
         ]
-        s12, s24 = sz(_scg_sites_build(12)), sz(_scg_sites_build(24))
+        # A site reads each of its tables at many subscripts; the reads of one
+        # table are one per-member array (two tables per `linear` site, three
+        # per `bilinear` one), so the repeated reads in a body still share.
+        b12 = _scg_sites_build(12)
+        code = join(
+            string(ESM.RuntimeGeneratedFunctions.get_expression(g.f))
+                for g in getfield(b12.f!, :dynp).progs[1].gens
+        )
+        @test length(unique(m.match for m in eachmatch(r"_cgot\d+", code))) <= 5
+        s12, s24 = sz(b12), sz(_scg_sites_build(24))
         @test length(s12) == length(s24) >= 2
         @test s12[1] == s24[1]
         @test sum(sum, s12[2:end]) < sum(s12[1])

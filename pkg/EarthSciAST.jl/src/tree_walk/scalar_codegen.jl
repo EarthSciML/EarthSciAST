@@ -340,24 +340,26 @@ mutable struct _ScSigCtx
     # negative for a Float64 hole.
     rec::Union{Nothing, _NodeMap{Int}}
     # Constant-array holes: a constant gather's array is a hole of its own,
-    # numbered in the unit by first sight (`oh`, `ohpos`), and only its SHAPE
-    # (`shapes`: strides, extents and boundary policies) is in the signature.
-    # The numbering puts which gathers read one array in the signature too.
+    # numbered in the unit by first sight of its contents (`oh`, `ohpos` by
+    # object, `ohkey` by contents), and only its SHAPE (`shapes`: strides,
+    # extents and boundary policies) is in the signature. The numbering puts
+    # which gathers read equal arrays in the signature too.
     oh::Vector{Any}
     ohpos::IdDict{Any, Int}
+    ohkey::Dict{Any, Int}
     shapes::Dict{Any, Int}
 end
 _ScSigCtx(cache::_CSECache, syms, objs) =
     _ScSigCtx(
     cache, syms, objs, Int[], Int[], UInt8[], Float64[],
     _NodeMap{Int}(), 0, Any[], Dict{Int, Int}(), nothing,
-    Any[], IdDict{Any, Int}(), Dict{Any, Int}()
+    Any[], IdDict{Any, Int}(), Dict{Any, Int}(), Dict{Any, Int}()
 )
 
 function _sc_reset!(S::_ScSigCtx)
     empty!(S.sig); empty!(S.ih); empty!(S.ikind); empty!(S.fh)
     empty!(S.memo); S.nvisit = 0; empty!(S.loops); empty!(S.localpos)
-    empty!(S.oh); empty!(S.ohpos)
+    empty!(S.oh); empty!(S.ohpos); empty!(S.ohkey)
     return S
 end
 
@@ -423,8 +425,16 @@ function _sc_sig!(S::_ScSigCtx, nd::_Node)
         shp = get!(S.shapes, (cg.strides, cg.dims, cg.boundary), length(S.shapes) + 1)
         o = get(S.ohpos, cg, 0)
         if o == 0
-            push!(S.oh, cg)
-            o = S.ohpos[cg] = length(S.oh)
+            # Arrays with equal contents (and name: the error a read past the
+            # array raises names it) are one hole, as the repeated-sub-tree
+            # keys take them (`_cg_share_pay!`).
+            ck = (reinterpret(UInt64, cg.flat), cg.strides, cg.dims, cg.boundary, cg.name)
+            o = get(S.ohkey, ck, 0)
+            if o == 0
+                push!(S.oh, cg)
+                o = S.ohkey[ck] = length(S.oh)
+            end
+            S.ohpos[cg] = o
         end
         push!(sig, Int(k), shp, o, length(nd.children))
         for c in nd.children
