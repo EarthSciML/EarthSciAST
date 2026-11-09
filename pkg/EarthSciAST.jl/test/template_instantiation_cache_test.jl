@@ -16,6 +16,19 @@ const ESM = EarthSciAST
 
 _tic_json(e) = ESM._stable_json(ESM.serialize_expression(e))
 
+# Every node's template-origin mark (esm-spec §9.6.11), in a fixed preorder.
+# `serialize_expression` leaves the marks off, so they are compared apart.
+function _tic_marks(e, out = String[])
+    e isa ESM.OpExpr || return out
+    push!(out, e.op * "|" * something(e.template_origin, ""))
+    ESM.map_children(c -> (_tic_marks(c, out); c), e)
+    return out
+end
+
+# `f()` with template expansions marked, as a mount and the elementwise lift
+# expand them.
+_tic_marking(f) = task_local_storage(f, ESM._MARK_TEMPLATE_ORIGINS_KEY, true)
+
 # Expand every model of `file` both ways; compare equation trees and site roots.
 function _tic_agree(file)
     ct = file.component_templates
@@ -38,6 +51,7 @@ function _tic_agree(file)
             @test ja == jb
             @test !occursin("esm-template-param", ja)
             @test _tic_json(ea.lhs) == _tic_json(eb.lhs)
+            @test _tic_marks(ea.rhs) == _tic_marks(eb.rhs)
         end
         @test Set(_tic_json(k) for k in keys(sa)) == Set(_tic_json(k) for k in keys(sb))
         # A cache shared with an earlier expansion (the build's front door,
@@ -120,7 +134,7 @@ end
     @testset "agrees with the direct route on the template conformance tiers" begin
         root = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance")
         n = 0
-        for tier in ("interp_templates", "datetime_templates", "relational_templates", "geometry_templates", "expression_templates")
+        for tier in ("interp_templates", "datetime_templates", "relational_templates", "geometry_templates", "expression_templates", "template_array_args")
             for (d, _, fs) in walkdir(joinpath(root, tier)), f in fs
                 endswith(f, ".esm") || continue
                 file = try
@@ -198,6 +212,94 @@ end
             bindings = Dict{String, ESM.ASTExpr}("a" => ESM.VarExpr("u"))
         )
         @test ESM._tpl_instantiate(site, "scaled", Dict{String, Any}("a" => "u"), reg, nothing, cache) === nothing
+    end
+
+    @testset "marked expansions agree with the direct route (esm-spec §9.6.11)" begin
+        # A mount and the elementwise lift expand with every expansion root
+        # marked with its template's name; the cached route marks the same
+        # nodes the direct route does.
+        root = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance")
+        n = 0
+        for tier in ("template_array_args", "interp_templates", "relational_templates")
+            for (d, _, fs) in walkdir(joinpath(root, tier)), f in fs
+                endswith(f, ".esm") || continue
+                file = try
+                    load_path(joinpath(d, f))
+                catch
+                    continue
+                end
+                n += _tic_marking(() -> _tic_agree(file))
+            end
+        end
+        @test n > 10
+
+        # A nested template whose expansion is its bare parameter: on the direct
+        # route the binding itself becomes that nested expansion's root and is
+        # marked with the nested template's name, so while marking the outer
+        # template takes the direct route.
+        tpl = Dict{String, Any}(
+            "same" => Dict("params" => ["x"], "body" => "x"),
+            "outer" => Dict("params" => ["a"], "body" => _tic_op("+", _tic_apply("same"; x = "a"), 1)),
+        )
+        vars = Dict{String, Any}("u" => Dict("type" => "unknown", "default" => 0.5), "q" => Dict("type" => "unknown"))
+        eqs = Any[
+            Dict("lhs" => "q", "rhs" => _tic_op("+", _tic_apply("outer"; a = _tic_op("*", "u", "u")), _tic_apply("outer"; a = "u"))),
+            Dict("lhs" => _tic_op("D", "u"; wrt = "t"), "rhs" => _tic_op("-", "q", "u")),
+        ]
+        file = load_path(_tic_load(_tic_doc(Dict("variables" => vars, "equations" => eqs, "expression_templates" => tpl))))
+        reg = file.component_templates["models.M"]
+        @test _tic_agree(file) == 1
+        @test _tic_marking(() -> _tic_agree(file)) == 1
+        marked = _tic_marking() do
+            m = ESM._expansion_copy(file.models["M"])
+            ESM._expand_model_refs!(m, reg)
+            _tic_marks(m.equations[1].rhs)
+        end
+        @test "*|same" in marked && "+|outer" in marked
+        # Unmarked and marked expansions never share a cache entry.
+        cache = ESM._ExpandCache()
+        site = ESM.OpExpr(
+            "apply_expression_template", ESM.ASTExpr[]; name = "outer",
+            bindings = Dict{String, ESM.ASTExpr}("a" => ESM.VarExpr("u"))
+        )
+        plain = ESM._expand_expr_refs(site, reg, nothing, cache)
+        mk = _tic_marking(() -> ESM._expand_expr_refs(site, reg, nothing, cache))
+        @test plain.template_origin === nothing
+        @test mk.template_origin == "outer"
+        @test ESM._expand_expr_refs(site, reg, nothing, cache).template_origin === nothing
+    end
+
+    @testset "the elementwise lift's expansions agree with the direct route" begin
+        # `_ew_expansion` is what the lift reads (its cache, or none).
+        dir = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "template_array_args")
+        n = 0
+        for (d, _, fs) in walkdir(dir), f in fs
+            endswith(f, ".esm") || continue
+            flat = ESM.flatten(load_path(joinpath(d, f)))
+            reg = flat.template_registry
+            isempty(reg) && continue
+            cached = ESM._ElementwiseContext(reg)
+            direct = ESM._ElementwiseContext(reg, nothing)
+            for eq in flat.equations
+                apps = ESM.OpExpr[]
+                walk(e) = (
+                    e isa ESM.OpExpr && (
+                        e.op == "apply_expression_template" ? push!(apps, e) :
+                            ESM.map_children(c -> (walk(c); c), e)
+                    ); nothing
+                )
+                walk(eq.rhs)
+                for a in apps
+                    x = ESM._ew_expansion(a, cached)
+                    y = ESM._ew_expansion(a, direct)
+                    @test _tic_json(x) == _tic_json(y)
+                    @test _tic_marks(x) == _tic_marks(y)
+                    @test x.template_origin == a.name
+                    n += 1
+                end
+            end
+        end
+        @test n > 5
     end
 
     @testset "a bad binding is reported at its own call site" begin
