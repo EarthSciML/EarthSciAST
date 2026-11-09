@@ -782,3 +782,60 @@ fn different_build_time_instructions_stay_apart() {
     assert_ne!(nan_a, nan_b);
     assert_eq!(base, key(&bin(BinCode::Add, x, Operand::Lit(0.0))));
 }
+
+/// Several scalar lookup sites (the `linear` and `bilinear` templates at a
+/// scalar query each, the query moving past both ends of the axes and NaN at
+/// some states) run their straight scalar runs as one block each, inside the
+/// arms of the templates' branches too: the oracle's bits in every arm.
+#[test]
+fn scalar_lookup_blocks_match_the_oracle() {
+    let ax = json!([0.5, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0, 7.5]);
+    let ay = json!([-1.0, 0.0, 2.0, 3.0]);
+    let tx = json!([4.0, -1.5, 2.0, 0.25, 3.5, -2.0, 1.0, 6.0]);
+    let tbl: Vec<Value> = (0..8)
+        .map(|i| json!([i as f64, 0.5 * i as f64, -(i as f64), 2.0 + i as f64]))
+        .collect();
+    let mut eqs = vec![
+        json!({"lhs": "x", "rhs": op("-", vec![op("*", vec![json!(4), json!("u")]), json!(2)])}),
+        json!({"lhs": "y", "rhs": op("-", vec![op("*", vec![json!(2), json!("u")]), json!(1.5)])}),
+    ];
+    let mut vars = json!({
+        "u": {"type": "unknown", "default": 0.5},
+        "x": {"type": "unknown"},
+        "y": {"type": "unknown"}
+    });
+    let mut sum = Vec::new();
+    for s in 0..3 {
+        let xq = if s == 2 {
+            op(
+                "ifelse",
+                vec![
+                    op(">", vec![json!("u"), json!(2.0)]),
+                    op("/", vec![json!(0.0), json!(0.0)]),
+                    json!("x"),
+                ],
+            )
+        } else {
+            op("+", vec![json!("x"), json!(0.25 * s as f64)])
+        };
+        let lin = format!("l{s}");
+        let bil = format!("b{s}");
+        vars[&lin] = json!({"type": "unknown"});
+        vars[&bil] = json!({"type": "unknown"});
+        eqs.push(json!({"lhs": lin, "rhs": apply("linear", json!({
+            "table": {"op": "const", "args": [], "value": tx},
+            "axis": {"op": "const", "args": [], "value": ax}, "x": xq, "n": 8}))}));
+        eqs.push(json!({"lhs": bil, "rhs": apply("bilinear", json!({
+            "table": {"op": "const", "args": [], "value": tbl},
+            "axis_x": {"op": "const", "args": [], "value": ax},
+            "axis_y": {"op": "const", "args": [], "value": ay},
+            "x": xq, "y": "y", "nx": 8, "ny": 4}))}));
+        sum.push(json!(lin));
+        sum.push(json!(bil));
+    }
+    eqs.push(json!({"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+        "rhs": op("-", vec![op("*", vec![json!(0.01), op("+", sum)]), json!("u")])}));
+    let mut model = json!({"variables": vars, "equations": eqs});
+    model["expression_templates"] = library("interp.esm");
+    oracle_ab(document("scalar_lookup_blocks", json!({}), model));
+}
