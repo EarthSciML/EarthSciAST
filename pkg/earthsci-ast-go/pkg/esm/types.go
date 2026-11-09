@@ -31,6 +31,11 @@ type ExprNode struct {
 	// esm 1.2.0): a unit-bearing constant has that dimension and exact scale in
 	// dimensional analysis. Legal on no other op.
 	Units *string `json:"units,omitempty"`
+	// ElementType is the target precision of a `cast` op ("Float64" or
+	// "Float32", esm-spec §4.2 "Precision conversion", §11.3.1): the operand is
+	// evaluated at its own precision and rounded once to this one. Required on
+	// a `cast`, legal on no other op.
+	ElementType *string `json:"element_type,omitempty"`
 	// Table is the function_tables entry id targeted by a `table_lookup` op
 	// (esm-spec §9.5).
 	Table *string `json:"table,omitempty"`

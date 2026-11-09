@@ -2036,6 +2036,19 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 		}
 		return opDisplayName("skolem", format) + "(" + joinArgList(args, format) + ", label=" + *node.Label + ")", true
 
+	case "cast":
+		// `cast(A, element_type=P)`: the target precision is a trailing named
+		// argument, like intersect_polygon's `manifold=`, so the text form is
+		// lossless (tests/display/RENDERING_CONTRACT.md "cast").
+		if node.ElementType == nil {
+			return "", false
+		}
+		key := "element_type"
+		if format == FmtLatex {
+			key = latexEscape(key)
+		}
+		return opDisplayName("cast", format) + "(" + joinArgList(args, format) + ", " + key + "=" + *node.ElementType + ")", true
+
 	case "faq":
 		return formatAggregate(node, format), true
 

@@ -542,6 +542,10 @@ var closedNonScalarOps = map[string]struct{}{
 	"argmin": {}, "argmax": {},
 	"intersect_polygon": {}, "polygon_intersection_area": {}, "table_lookup": {},
 	"apply_expression_template": {}, "ic": {},
+	// `cast` (esm-spec §4.2): this binding evaluates binary64 only and has no
+	// binary32 rounding, so it refuses the conversion rather than evaluating it
+	// as the identity.
+	"cast": {},
 }
 
 // tryConstantFolding evaluates a node whose op is in arithOpTable and whose

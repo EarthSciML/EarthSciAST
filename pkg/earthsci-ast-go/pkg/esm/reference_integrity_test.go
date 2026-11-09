@@ -24,8 +24,9 @@ import (
 // fullyPopulatedExprNode below, which is what forces a newly-added field to be
 // classified (see TestExprRefChildrenCoverTheKeystone).
 var exprNodeNonExpressionFields = map[string]bool{
-	"units": true, // a const's declared unit string (esm-spec §4.8.5)
-	"op":    true, "wrt": true, "dim": true, "fn": true, "var": true,
+	"units":        true, // a const's declared unit string (esm-spec §4.8.5)
+	"element_type": true, // a cast's target precision (esm-spec §4.2)
+	"op":           true, "wrt": true, "dim": true, "fn": true, "var": true,
 	"name": true, "table": true, "manifold": true, "reduce": true,
 	"semiring": true, "distinct": true, "label": true, "arg": true,
 	"id": true, "expect_cadence": true,

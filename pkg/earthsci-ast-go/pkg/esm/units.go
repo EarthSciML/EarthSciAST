@@ -2088,9 +2088,10 @@ func (ut unitTyper) propagateNode(node ExprNode, env map[string]Unit) (*Unit, er
 		}
 		return &Unit{Scale: 1}, nil
 
-	case "abs", OpIC:
+	case "abs", OpIC, "cast":
 		// `ic(x)` names x's initial value, so it carries x's unit, dimension
-		// and scale (esm-spec §4.8.3).
+		// and scale (esm-spec §4.8.3). A `cast` changes only the value's
+		// precision, never its unit (esm-spec §4.2).
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
 		}

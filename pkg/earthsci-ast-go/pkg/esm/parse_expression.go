@@ -1151,6 +1151,20 @@ func (p *exprTextParser) makeParsedCall(name string, args []any, named []exprNam
 			return ExprNode{Op: "integral", Args: []any{args[0]}, Var: &v, Lower: args[2], Upper: args[3]}
 		}
 	}
+	// `cast(A, element_type=P)` — the precision conversion (esm-spec §4.2):
+	// exactly one positional operand and that one named argument, P Float32 or
+	// Float64.
+	if name == "cast" {
+		etVal, _ := lookup("element_type")
+		et, isStr := etVal.(string)
+		if len(args) != 1 || len(named) != 1 || !isStr || (et != "Float32" && et != "Float64") {
+			panic(exprParseFailure{&ExpressionParseError{
+				Message: "cast(...) takes one operand and element_type=Float32|Float64",
+				Pos:     pos,
+			}})
+		}
+		return ExprNode{Op: "cast", Args: args, ElementType: &et}
+	}
 	if name == "reshape" && len(args) == 2 {
 		p.noNamed(named, name, pos)
 		return ExprNode{Op: "reshape", Args: []any{args[0]}, Shape: p.exprArrayLiteral(args[1], pos)}

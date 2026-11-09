@@ -77,6 +77,8 @@ var evaluableCoreOps = map[string]struct{}{
 	// reach tier T through the generic `!evaluableCoreOps` fallback in opInT,
 	// exactly like an unregistered user op (`godunov_hamiltonian`).
 	"D": {}, "ic": {},
+	// Precision conversion (esm-spec §4.2)
+	"cast": {},
 	// Array producers / gathers / reshapes
 	"index": {}, "makearray": {}, "broadcast": {}, "reshape": {}, "transpose": {}, "concat": {},
 	// Aggregates
