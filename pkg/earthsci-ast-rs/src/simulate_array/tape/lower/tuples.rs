@@ -245,17 +245,18 @@ pub(in crate::simulate_array) fn take_chunk_inputs_held() -> Vec<Vec<String>> {
 
 #[cfg(test)]
 thread_local! {
-    /// How many [`visit_tuples`] walks ran on this thread, and the tuple
-    /// count of each list [`TapeBuilder::eval_tuple_chunk`] folded (a chunk
-    /// of cells, or a window of one cell's run), in fold order.
-    static TUPLE_WALKS: std::cell::RefCell<(usize, Vec<usize>)> =
-        const { std::cell::RefCell::new((0, Vec::new())) };
+    /// How many [`visit_tuples`] walks ran on this thread, the tuple count
+    /// of each list [`TapeBuilder::eval_tuple_chunk`] folded (a chunk of
+    /// cells, or a window of one cell's run), in fold order, and how many
+    /// cells with an empty run those lists held.
+    static TUPLE_WALKS: std::cell::RefCell<(usize, Vec<usize>, usize)> =
+        const { std::cell::RefCell::new((0, Vec::new(), 0)) };
 }
 
 /// Take what [`TUPLE_WALKS`] recorded on this thread: `(walks, chunk
-/// lengths)`.
+/// lengths, empty cells folded)`.
 #[cfg(test)]
-pub(in crate::simulate_array) fn take_tuple_walks() -> (usize, Vec<usize>) {
+pub(in crate::simulate_array) fn take_tuple_walks() -> (usize, Vec<usize>, usize) {
     TUPLE_WALKS.with(|c| std::mem::take(&mut *c.borrow_mut()))
 }
 
@@ -606,7 +607,11 @@ impl TapeBuilder<'_> {
     ) -> Option<Vec<f64>> {
         let name = "\u{0}tuple-list chunk";
         #[cfg(test)]
-        TUPLE_WALKS.with(|c| c.borrow_mut().1.push(list.len()));
+        TUPLE_WALKS.with(|c| {
+            let mut c = c.borrow_mut();
+            c.1.push(list.len());
+            c.2 += list.rows.windows(2).filter(|w| w[0] == w[1]).count();
+        });
         standalone::with_standalone_builder(
             name,
             &[],
@@ -2050,7 +2055,7 @@ pub(super) fn ragged_bound(
 /// an instruction on baseline x86-64) when `x` is already integral, as a
 /// subscript or a ragged bound almost always is: then the truncating cast is
 /// exact and is the rounded value. A value it does not round-trip (a
-/// fraction, a NaN, or one past `i64`'s range) takes `round` as before.
+/// fraction, a NaN, or one past `i64`'s range) takes `round`.
 #[inline]
 pub(super) fn round_to_i64(x: f64) -> i64 {
     let i = x as i64;

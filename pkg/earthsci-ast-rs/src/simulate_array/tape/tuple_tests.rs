@@ -804,10 +804,8 @@ fn a_fold_over_many_chunks_sharing_its_inputs_is_bit_identical() {
     assert!(payloads[0].iter().any(|&b| f64::from_bits(b) != 0.0));
 }
 
-/// The fold walks the tuples ONCE, chunking them as the walk produces them
-/// (it used to count every cell's run in one walk and enumerate the chunks in
-/// another, after abandoning a first listing walk): one `visit_tuples` per
-/// build at every budget, every admitted tuple folded in exactly one chunk,
+/// The fold walks the tuples ONCE, chunking them as the walk produces them:
+/// one `visit_tuples` per build at every budget, every admitted tuple folded in exactly one chunk,
 /// no chunk over the budget, chunks of whole cells as full as the budget
 /// allows, and a cell whose run alone is over it in windows of the budget.
 /// The payload is bit-identical across budgets and to the interpreter
@@ -843,10 +841,11 @@ fn a_folded_contraction_is_walked_once_in_chunks_within_the_budget() {
     for (budget, want) in cases {
         let prev = set_tuple_list_budget(budget);
         let (prog, _) = compiled.build_tape_opts(&std::collections::HashSet::new(), None);
-        let (walks, chunks) = take_tuple_walks();
+        let (walks, chunks, empty) = take_tuple_walks();
         set_tuple_list_budget(prev);
         let prog = prog.unwrap_or_else(|_| panic!("budget {budget}: the tape builds"));
         assert_eq!(walks, 1, "budget {budget}: one walk");
+        assert_eq!(empty, 0, "budget {budget}: no empty cell folded");
         assert_eq!(
             count(&prog, "SegReduce"),
             usize::from(want.is_empty()),
@@ -854,6 +853,165 @@ fn a_folded_contraction_is_walked_once_in_chunks_within_the_budget() {
         );
         assert!(chunks.iter().all(|&n| n <= budget), "budget {budget}");
         assert_eq!(chunks, want, "budget {budget}");
+    }
+}
+
+/// A [`star_join_doc`] whose output rows `o` with `o % 3 == 1` carry key 99,
+/// which no fact row has: every cell of those rows has an empty run. The
+/// cells whose rows match are `(n_out - n_out / 3) * n_free` (for `n_out` a
+/// multiple of 3), each with a run of `n_big / n_key`.
+fn with_unmatched_outputs(mut doc: Value, n_out: usize, n_key: usize) -> Value {
+    let okey: Vec<f64> = (0..n_out)
+        .map(|o| {
+            if o % 3 == 1 {
+                99.0
+            } else {
+                (o % n_key + 1) as f64
+            }
+        })
+        .collect();
+    let eqs = doc["models"]["M"]["equations"].as_array_mut().unwrap();
+    assert_eq!(eqs[2]["lhs"], json!("okey"));
+    eqs[2]["rhs"] = cnst(json!(okey));
+    doc
+}
+
+/// Build `doc` once at `budget` and return its program with what that one
+/// build's tuple walks recorded: `(walks, chunk lengths, empty cells folded)`.
+fn build_recording(doc: &Value, budget: usize) -> (TapeProgram, (usize, Vec<usize>, usize)) {
+    use super::lower::{set_tuple_list_budget, take_tuple_walks};
+    let compiled = super::tests::compile(doc.clone());
+    take_tuple_walks();
+    let prev = set_tuple_list_budget(budget);
+    let (prog, _) = compiled.build_tape_opts(&std::collections::HashSet::new(), None);
+    let walked = take_tuple_walks();
+    set_tuple_list_budget(prev);
+    let prog = prog.unwrap_or_else(|_| panic!("budget {budget}: the tape builds"));
+    (prog, walked)
+}
+
+/// Assert that the output rows `o % 3 == 1` of the one folded payload over
+/// `[outs, frees]` keep the sum's identity, `+0.0`, and that the others do
+/// not. The payload is held in either axis order.
+fn assert_unmatched_rows_keep_the_identity(
+    prog: &TapeProgram,
+    n_out: usize,
+    n_free: usize,
+    budget: usize,
+) {
+    let found: Vec<&ConstArrayData> = prog
+        .const_data
+        .iter()
+        .filter(|c| c.values.len() == n_out * n_free)
+        .collect();
+    assert_eq!(found.len(), 1, "budget {budget}: one folded payload");
+    let outs_fastest = match found[0].shape.as_slice() {
+        [o, f] if (*o, *f) == (n_out, n_free) => false,
+        [f, o] if (*f, *o) == (n_free, n_out) => true,
+        s => panic!("budget {budget}: payload shape {s:?}"),
+    };
+    for (c, &x) in found[0].values.iter().enumerate() {
+        let o = if outs_fastest { c % n_out } else { c / n_free };
+        if o % 3 == 1 {
+            assert_eq!(
+                x.to_bits(),
+                0f64.to_bits(),
+                "budget {budget}: empty cell {c}"
+            );
+        } else {
+            assert_ne!(x, 0.0, "budget {budget}: cell {c}");
+        }
+    }
+}
+
+/// A fold whose output has cells with no tuple: the empty cells are never
+/// folded in a chunk, keep the identity, and the cells around them get their
+/// own runs, however the budget breaks the list (chunks of several cells,
+/// chunks of one, windows of a cell's run), and wherever the walk switches
+/// from listing to folding. The interpreter is the reference (`ab_check`),
+/// and the chunks hold every tuple exactly once.
+#[test]
+fn a_fold_with_empty_output_cells_keeps_them_at_the_identity() {
+    use super::lower::set_tuple_list_budget;
+    let (n_big, n_key, n_out, n_free) = (600usize, 6usize, 12usize, 2usize);
+    let doc = with_unmatched_outputs(
+        star_join_doc(n_big, n_key, n_out, n_free, false),
+        n_out,
+        n_key,
+    );
+    let run = n_big / n_key;
+    let tuples = (n_out - n_out / 3) * n_free * run;
+    let (prog, (_, chunks, _)) = build_recording(&doc, usize::MAX);
+    assert_eq!(count(&prog, "SegReduce"), 1, "under budget");
+    assert!(chunks.is_empty());
+    assert_eq!(prog.seg_tables[0].rows.last().copied(), Some(tuples as u32));
+    for budget in [5 * run + 7, 2 * run, run + 1, run, run - 1, 7, 1] {
+        let prev = set_tuple_list_budget(budget);
+        ab_check(doc.clone(), -2.0, 2.0);
+        set_tuple_list_budget(prev);
+        let (prog, (walks, chunks, empty)) = build_recording(&doc, budget);
+        assert_eq!(walks, 1, "budget {budget}: one walk");
+        assert_eq!(count(&prog, "SegReduce"), 0, "budget {budget}: folded");
+        assert_eq!(empty, 0, "budget {budget}: an empty cell was folded");
+        assert!(
+            chunks.iter().all(|&n| 0 < n && n <= budget),
+            "budget {budget}: {chunks:?}"
+        );
+        assert_eq!(chunks.iter().sum::<usize>(), tuples, "budget {budget}");
+        assert_unmatched_rows_keep_the_identity(&prog, n_out, n_free, budget);
+    }
+}
+
+/// The program's budget, shared by two lists, can leave the second only part
+/// of it: the second list is listed into that room, then switches to folding
+/// mid-walk, after empty cells (rows `o % 3 == 1` match nothing) and partway
+/// through a cell's run. What it listed carries into the fold: every tuple is
+/// folded once, no empty cell is, and the answer is the interpreter's.
+#[test]
+fn a_list_given_part_of_the_shared_budget_switches_to_folding_mid_walk() {
+    use super::lower::set_tuple_list_budget;
+    let (n_big, n_key, n_out, n_free) = (600usize, 6usize, 12usize, 2usize);
+    let mut doc = with_unmatched_outputs(
+        star_join_doc(n_big, n_key, n_out, n_free, false),
+        n_out,
+        n_key,
+    );
+    let tuples = (n_out - n_out / 3) * n_free * (n_big / n_key);
+    let model = &mut doc["models"]["M"];
+    model["variables"]["total2"] = model["variables"]["total"].clone();
+    model["variables"]["z"] = model["variables"]["y"].clone();
+    let eqs = model["equations"].as_array_mut().unwrap();
+    let mut second = eqs[4].clone();
+    second["lhs"] = json!("total2");
+    second["rhs"]["expr"]["args"][0] = idx(json!("key"), &[json!("a")]);
+    let mut ode = eqs[5].clone();
+    ode["lhs"]["expr"]["args"][0]["args"][0] = json!("z");
+    ode["rhs"]["expr"]["args"][0]["args"][0] = json!("total2");
+    ode["rhs"]["expr"]["args"][1]["args"][0] = json!("z");
+    eqs.push(second);
+    eqs.push(ode);
+    // `total` (lowered first, by name) keeps its list; `total2` has the
+    // rest: one tuple, half a cell's run, a cell's run and a few tuples of
+    // the next, and all but one tuple.
+    for room in [1, 50, 103, tuples - 1] {
+        let budget = tuples + room;
+        let prev = set_tuple_list_budget(budget);
+        ab_check(doc.clone(), -2.0, 2.0);
+        set_tuple_list_budget(prev);
+        let (prog, (walks, chunks, empty)) = build_recording(&doc, budget);
+        assert_eq!(walks, 2, "budget {budget}");
+        assert_eq!(
+            count(&prog, "SegReduce"),
+            1,
+            "budget {budget}: one list kept"
+        );
+        assert_eq!(empty, 0, "budget {budget}: an empty cell was folded");
+        assert_eq!(
+            chunks,
+            vec![tuples],
+            "budget {budget}: one chunk, every tuple"
+        );
+        assert_unmatched_rows_keep_the_identity(&prog, n_out, n_free, budget);
     }
 }
 
