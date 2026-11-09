@@ -914,32 +914,114 @@ fn counted_bracket_unsorted_literal_axis() {
     }
 }
 
+/// The template spelling of the `mesh_rank` workload of
+/// `bench/closed_templates/generate.py` on an `n` x `n` triangulated grid:
+/// a `distinct` over every face's three vertex pairs (keyed by `edge_key`)
+/// invents the edge set, and each face reads one edge's state through
+/// `rank_of_set` over that derived set. The faces are visited in a strided
+/// order so neighbouring queries are not neighbouring keys.
+fn mesh_rank_template_doc(n: usize) -> Value {
+    let vid = |i: usize, j: usize| 1 + j * (n + 1) + i;
+    let mut faces: Vec<[(usize, usize); 3]> = Vec::new();
+    for j in 0..n {
+        for i in 0..n {
+            let (a, b, c, d) = (vid(i, j), vid(i + 1, j), vid(i, j + 1), vid(i + 1, j + 1));
+            for t in [[a, b, d], [a, d, c]] {
+                let e = |k: usize| {
+                    let (x, y) = (t[k], t[(k + 1) % 3]);
+                    (x.min(y), x.max(y))
+                };
+                faces.push([e(0), e(1), e(2)]);
+            }
+        }
+    }
+    let nf = faces.len();
+    assert!(
+        nf % 7 != 0,
+        "the stride must be coprime with the face count"
+    );
+    let faces: Vec<_> = (0..nf).map(|k| faces[(k * 7) % nf]).collect();
+    let nv = (n + 1) * (n + 1);
+    let ne = 3 * n * n + 2 * n;
+    let lo: Vec<Vec<usize>> = faces
+        .iter()
+        .map(|f| f.iter().map(|e| e.0).collect())
+        .collect();
+    let hi: Vec<Vec<usize>> = faces
+        .iter()
+        .map(|f| f.iter().map(|e| e.1).collect())
+        .collect();
+    let fl = json!({"f": {"from": "faces"}, "le": {"from": "local_edges"}});
+    let key = json!({"op": "apply_expression_template", "args": [], "name": "edge_key",
+        "bindings": {"u": ix("edge_lo", vec![json!("f"), json!("le")]),
+                     "v": ix("edge_hi", vec![json!("f"), json!("le")]), "lo": 1, "n": nv}});
+    let unknown = |shape: Value| json!({"type": "unknown", "shape": shape});
+    json!({
+        "esm": "1.2.0",
+        "metadata": {"name": "mesh_rank_tpl"},
+        "index_sets": {
+            "faces": {"kind": "interval", "size": nf},
+            "local_edges": {"kind": "interval", "size": 3},
+            "edges": {"kind": "derived", "from_faq": "edge_set", "member_factor": "edge_members"},
+            "edge_ids": {"kind": "interval", "size": ne}
+        },
+        "models": {"MeshRank": {
+            "expression_template_imports": [
+                {"ref": "esm:std/relational.esm", "only": ["edge_key", "rank_of_set"]}
+            ],
+            "variables": {
+                "edge_lo": unknown(json!(["faces", "local_edges"])),
+                "edge_hi": unknown(json!(["faces", "local_edges"])),
+                "edge_exists": unknown(json!(["edges"])),
+                "edge_dense_id": unknown(json!(["edges"])),
+                "n_edges": {"type": "unknown", "default": 0.0},
+                "w": {"type": "unknown", "shape": ["edge_ids"], "default": 0.0},
+                "q": {"type": "unknown", "shape": ["faces"], "default": 0.0},
+                "edge_members": {"type": "parameter", "shape": ["edges"], "default": 0.0},
+                "face_edge_rank": unknown(json!(["faces", "local_edges"]))
+            },
+            "equations": [
+                {"lhs": "edge_lo", "rhs": {"op": "const", "args": [], "value": lo}},
+                {"lhs": "edge_hi", "rhs": {"op": "const", "args": [], "value": hi}},
+                {"lhs": ix("edge_exists", vec![json!("e")]),
+                 "rhs": {"op": "faq", "args": ["edge_lo", "edge_hi"], "output_idx": ["e"], "ranges": fl,
+                         "expr": {"op": "true", "args": []}, "id": "edge_set", "semiring": "bool_and_or",
+                         "distinct": true, "key": key, "filter": {"op": "true", "args": []}}},
+                {"lhs": ix("edge_dense_id", vec![json!("e")]),
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["e"], "ranges": {"e": {"from": "edges"}},
+                         "expr": op("-", vec![json!("e"), json!(1)]), "semiring": "sum_product"}},
+                {"lhs": ix("face_edge_rank", vec![json!("f"), json!("le")]),
+                 "rhs": {"op": "faq", "args": ["edge_lo", "edge_hi", "edge_members"], "output_idx": ["f", "le"],
+                         "ranges": fl,
+                         "expr": {"op": "apply_expression_template", "args": [], "name": "rank_of_set",
+                                  "bindings": {"x": key, "members": "edge_members", "S": "edges"}}}},
+                {"lhs": {"op": "D", "args": ["n_edges"], "wrt": "t"},
+                 "rhs": {"op": "faq", "args": [], "output_idx": [], "ranges": {"e": {"from": "edges"}},
+                         "expr": 1.0, "semiring": "sum_product"}},
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["e"], "ranges": {"e": {"from": "edge_ids"}},
+                         "expr": {"op": "D", "args": [ix("w", vec![json!("e")])], "wrt": "t"}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["e"], "ranges": {"e": {"from": "edge_ids"}},
+                         "expr": op("-", vec![json!("e"), ix("w", vec![json!("e")])])}},
+                // Each face reads one edge's state through its rank.
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["f"], "ranges": {"f": {"from": "faces"}},
+                         "expr": {"op": "D", "args": [ix("q", vec![json!("f")])], "wrt": "t"}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["f"], "ranges": {"f": {"from": "faces"}},
+                         "expr": op("-", vec![
+                             ix("w", vec![ix("face_edge_rank", vec![json!("f"), json!(1)])]),
+                             ix("q", vec![json!("f")]),
+                         ])}}
+            ]
+        }}
+    })
+}
+
 /// `rank_of_set` over a derived index set (`{"from": "edges"}`, its members
 /// the set's `member_factor`, bound at build after value invention) is one
-/// bisected `Instr::Count` over the face edges: the `bench/closed_templates`
-/// `mesh_rank` template document, against the oracle bit for bit.
+/// bisected `Instr::Count` over the face edges: the `mesh_rank` template
+/// workload, against the oracle bit for bit.
 #[test]
 fn counted_bracket_rank_of_set_over_a_derived_set() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../bench/closed_templates/mesh_rank_tpl_E208.esm");
-    let mut d: Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).expect("benchmark document"))
-            .expect("benchmark document parses");
-    d["models"]["MeshRank"]["expression_template_imports"][0]["ref"] =
-        json!("esm:std/relational.esm");
-    // Each face reads one edge's state through its rank. (The document's
-    // own sum over the face's three edges is not used: the per-cell oracle
-    // reads it as NaN, for the op form too.)
-    let eqs = d["models"]["MeshRank"]["equations"].as_array_mut().unwrap();
-    let last = eqs.len() - 1;
-    eqs[last]["rhs"] = op(
-        "-",
-        vec![
-            ix("w", vec![ix("face_edge_rank", vec![json!("f"), json!(1)])]),
-            ix("q", vec![json!("f")]),
-        ],
-    );
-    let prog = oracle_ab(d).0;
+    let prog = oracle_ab(mesh_rank_template_doc(8)).0;
     assert_eq!(counts(&prog), vec![(CountRel::Ge, true)]);
 }
 
