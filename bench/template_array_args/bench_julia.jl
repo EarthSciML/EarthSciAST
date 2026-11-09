@@ -31,7 +31,7 @@ function build(path)
     for (r, k) in enumerate(sort!(collect(keys(prob.var_map))))
         u[prob.var_map[k]] += (r % 97) / 64
     end
-    return (f! = prob.f!, u = u, p = prob.p, vm = prob.var_map, time = st.time, bytes = st.bytes)
+    return (f! = prob.f!, u = u, u0 = copy(prob.u0), p = prob.p, vm = prob.var_map, time = st.time, bytes = st.bytes)
 end
 
 function steady(f!, u0, p)
@@ -66,14 +66,19 @@ same(a, b) = keys(a) == keys(b) && all(all(a[k] .=== b[k]) for k in keys(a))
 
 function first_call(f!, u0, p)
     du = similar(u0)
-    t0 = time_ns()
     f!(du, u0, p, 0.0)
-    return (time_ns() - t0) / 1.0e9
+    return nothing
 end
 
 function one(path)
     b1 = build(path)
-    fc = first_call(b1.f!, b1.u, b1.p)
+    # Timed from outside the call: compiling the call site for the right-hand
+    # side's type, which carries every generated kernel, is part of what the
+    # first call costs (on the reseact WetDeposition + FastJX piece, two
+    # minutes that a timer inside the call never sees).
+    t0 = time_ns()
+    first_call(b1.f!, b1.u0, b1.p)
+    fc = (time_ns() - t0) / 1.0e9
     b2 = build(path)
     st, al = steady(b2.f!, b2.u, b2.p)
     @printf(
