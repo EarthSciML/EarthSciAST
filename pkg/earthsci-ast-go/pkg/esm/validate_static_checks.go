@@ -177,7 +177,7 @@ func (s *structuralScan) checkFAQBareArrayOperands(expr Expression, shaped map[s
 		}
 		inner := bound
 		if node.Op == opAggregate || node.Op == "aggregate" {
-			inner = make(map[string]bool, len(bound)+len(node.Ranges)+len(node.OutputIdx))
+			inner = make(map[string]bool)
 			for k := range bound {
 				inner[k] = true
 			}
@@ -205,7 +205,7 @@ func (s *structuralScan) checkFAQBareArrayOperands(expr Expression, shaped map[s
 					s.addErr(StructuralError{
 						Path: fieldPath,
 						Code: CodeFAQBareArrayOperand,
-						Message: fmt.Sprintf("faq `%s` reads '%s', declared over [%s], by bare name. A faq names its axes by its range symbols, and its `%s` is evaluated once per index tuple, so a whole array there does not say which symbol each of its axes is. Read it through `index`, e.g. index(%s, <symbol>…) (esm-spec §4.3.1)",
+						Message: fmt.Sprintf("faq `%s` reads %q, declared over [%s], by bare name. A faq names its axes by its range symbols, and its `%s` is evaluated once per index tuple, so a whole array there does not say which symbol each of its axes is. Read it through `index`, e.g. index(%s, <symbol>…) (esm-spec §4.3.1)",
 							part.field, name, strings.Join(axes, ", "), part.field, name),
 						Details: map[string]any{
 							"field":    part.field,
