@@ -111,7 +111,9 @@ pub mod classification {
 
 /// Simulation-output derivation internals.
 pub mod data_output {
-    pub use crate::data_output::{DTYPE_FLOAT64, gather, scatter};
+    pub use crate::data_output::{
+        DTYPE_FLOAT64, RequestMatch, gather, match_output_request, scatter,
+    };
 }
 
 /// The structured diagnostic carrier every raise site funnels through.

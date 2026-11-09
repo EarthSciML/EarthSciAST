@@ -134,8 +134,14 @@ enum Commands {
         /// observed by default (streaming-output-sinks RFC decision 8).
         ///
         /// On a document with nothing to integrate this selects the COLUMNS of
-        /// the single evaluation; omitted, every field the build materialized
-        /// is written.
+        /// the single evaluation, and only their dependency cone (each named
+        /// observed and every observed it reads, transitively) is evaluated,
+        /// not the whole observed graph; omitted, every field the build
+        /// materialized is written. Under the strict `native` compiler only
+        /// the cone can be refused, so a document refused whole can still be
+        /// run for columns that do not read the refused rule. A name no
+        /// declared variable could answer is refused before anything is
+        /// evaluated.
         #[arg(long = "observed", value_name = "NAME")]
         observed: Vec<String>,
         /// Build this model when the document holds several.
@@ -2522,6 +2528,9 @@ fn run_simulate(
     };
     let content = read_input(&file)?;
     let esm_file = load_at(&file, &content)?;
+    // A name the document does not declare is refused HERE, before anything
+    // is ingested or evaluated.
+    refuse_undeclared_observed(&esm_file, &observed)?;
 
     println!("Running simulation for: {}", file.display());
     println!("Simulation time: 0 → {time}");
@@ -2573,6 +2582,9 @@ fn run_simulate(
             // A data-fed parameter named by `--observed` is written from its
             // ingested values (finding F43); the rest are not kept.
             retain_data_fields: observed.clone(),
+            // A document with nothing to integrate evaluates only what the
+            // named fields need; omitted, it evaluates every observed.
+            observed_cone: (!observed.is_empty()).then(|| observed.clone()),
             ..Default::default()
         };
         if let Some(make) = &providers {
@@ -2698,6 +2710,78 @@ fn run_simulate(
 //
 // These three functions are that route. They do not add a mode to the solver;
 // they add a SINK to the evaluation the build pipeline already performs.
+
+/// Refuse a `--observed` name that addresses no variable the document
+/// declares.
+///
+/// A request is known unless CONFORMANCE_SPEC §5.17.4's output-request rule
+/// finds it MISSING among the declared variables' qualified names (`Model.var`,
+/// `Model.Sub.var`, reaction-system species and parameters included): the
+/// exact name, or any whose last dotted segment it shares. The writers
+/// resolve over a subset of those names by the same rule, so nothing they
+/// would answer is refused here. An ambiguous name passes, and is reported
+/// where it is resolved (`ambiguous_output_name`); so is a declared variable
+/// the build does not materialize.
+fn refuse_undeclared_observed(
+    esm_file: &earthsci_ast::EsmFile,
+    observed: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
+    use earthsci_ast::extension::data_output::{RequestMatch, match_output_request};
+    if observed.is_empty() {
+        return Ok(());
+    }
+    fn walk_subsystems(prefix: &str, subs: Option<&serde_json::Value>, out: &mut Vec<String>) {
+        let Some(subs) = subs.and_then(|s| s.as_object()) else {
+            return;
+        };
+        for (name, sub) in subs {
+            let p = format!("{prefix}.{name}");
+            for key in ["variables", "species", "parameters"] {
+                if let Some(vars) = sub.get(key).and_then(|v| v.as_object()) {
+                    out.extend(vars.keys().map(|v| format!("{p}.{v}")));
+                }
+            }
+            walk_subsystems(&p, sub.get("subsystems"), out);
+        }
+    }
+    let mut declared: Vec<String> = Vec::new();
+    for (m, model) in esm_file.models.iter().flatten() {
+        declared.extend(model.variables.keys().map(|v| format!("{m}.{v}")));
+        let subs = model
+            .subsystems
+            .as_ref()
+            .and_then(|s| serde_json::to_value(s).ok());
+        walk_subsystems(m, subs.as_ref(), &mut declared);
+    }
+    for (r, rs) in esm_file.reaction_systems.iter().flatten() {
+        declared.extend(rs.species.keys().map(|v| format!("{r}.{v}")));
+        declared.extend(rs.parameters.keys().map(|v| format!("{r}.{v}")));
+        let subs = rs
+            .subsystems
+            .as_ref()
+            .and_then(|s| serde_json::to_value(s).ok());
+        walk_subsystems(r, subs.as_ref(), &mut declared);
+    }
+    let candidates: Vec<&str> = declared.iter().map(String::as_str).collect();
+    let unknown: Vec<&str> = observed
+        .iter()
+        .map(String::as_str)
+        .filter(|n| matches!(match_output_request(n, &candidates), RequestMatch::Missing))
+        .collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    Err(fail(format!(
+        "--observed {}: the document declares no variable of that name, so \
+         nothing was evaluated. Name a declared variable, bare (`var`) or \
+         qualified (`Model.var`).",
+        unknown
+            .iter()
+            .map(|n| format!("'{n}'"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )))
+}
 
 /// The materialized static fields a run emits: one named column per field,
 /// each an N-dimensional array.

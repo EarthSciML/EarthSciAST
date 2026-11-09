@@ -115,6 +115,7 @@ pub(crate) mod lower_enums;
 pub(crate) mod lower_expression_templates;
 pub(crate) mod lower_table_lookup;
 pub(crate) mod migration;
+pub(crate) mod observed_cone;
 pub(crate) mod op_registry;
 pub(crate) mod parse;
 /// Text→AST parsing of the INFIX expression surface `display::to_ascii` emits

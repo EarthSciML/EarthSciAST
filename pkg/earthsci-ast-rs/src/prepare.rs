@@ -450,6 +450,10 @@ pub(crate) struct PrepareOptions {
     /// document naming the observed instead of walking it. The walk itself
     /// stops at its first cell, so the refusal costs one cell, not the field.
     pub refuse_per_cell: bool,
+
+    /// Evaluate only the dependency cone of these observeds. See
+    /// [`crate::problem::ProblemOptions::observed_cone`].
+    pub observed_cone: Option<Vec<String>>,
 }
 
 // Hand-written because `PrepareProgressFn` is a trait object: it cannot derive
@@ -475,6 +479,7 @@ impl fmt::Debug for PrepareOptions {
             )
             .field("gated_fetch_batch", &self.gated_fetch_batch)
             .field("refuse_per_cell", &self.refuse_per_cell)
+            .field("observed_cone", &self.observed_cone)
             .finish()
     }
 }
@@ -517,6 +522,11 @@ pub struct PreparedBuild {
     /// [`PrepareOptions::refuse_per_cell`] was set. `fields` then holds only
     /// what was evaluated before it.
     pub refused: Option<PipelineRule>,
+    /// Whether [`PrepareOptions::observed_cone`] narrowed a non-empty
+    /// observed graph. [`Self::fields`] is then this build's answer even when
+    /// it is empty (the request named only a data-fed parameter), so nothing
+    /// re-evaluates the document to fill it.
+    pub(crate) observed_cone_applied: bool,
 }
 
 /// One evaluation the build pipeline performed, and HOW: through the
@@ -1528,6 +1538,7 @@ pub(crate) fn run_prepare(
     }
     st.invent_values()?;
     st.feed_member_factors()?;
+    st.prune_to_observed_cone();
     st.eval_observeds_before_fetch(&gated, &rw.pd_coupling)?;
     if st.refused.is_some() {
         return Ok(st.finish(rw.rewritten.into_owned()));
@@ -1833,6 +1844,8 @@ struct BuildState<'o> {
     evaluated: HashSet<String>,
     obs_done: usize,
     obs_total: usize,
+    /// [`PreparedBuild::observed_cone_applied`].
+    cone_applied: bool,
 }
 
 impl<'o> BuildState<'o> {
@@ -1961,6 +1974,7 @@ impl<'o> BuildState<'o> {
             evaluated: HashSet::new(),
             obs_done: 0,
             obs_total: 0,
+            cone_applied: false,
         })
     }
 
@@ -2699,6 +2713,82 @@ impl<'o> BuildState<'o> {
         Ok(())
     }
 
+    /// Narrow the observed graph to the dependency cone of
+    /// [`PrepareOptions::observed_cone`], when the built model has nothing to
+    /// integrate.
+    ///
+    /// Runs AFTER the coordinate pre-pass, value invention and member-factor
+    /// feedback, and leaves all three whole: they size the derived index sets,
+    /// so every observed an extent comes from has been evaluated already,
+    /// whether or not it is in the cone. The gated fetch runs after this pass
+    /// and is not narrowed by it either. What is narrowed is the observed
+    /// graph — the one pass whose cost grows with the document rather than
+    /// with the request.
+    ///
+    /// Every observed an index set's fields name (a ragged set's `offsets`
+    /// and `values`, a derived set's `member_factor`) is in the cone whatever
+    /// the request: a range over the set reads it without naming it.
+    ///
+    /// The cone is the requested observeds and, transitively, every observed
+    /// their definitions NAME: any string anywhere in a definition (a bare
+    /// reference, a `join.on` column, a table, a range) that is an observed's
+    /// key. That over-approximates the evaluator's own reads, which is the
+    /// safe direction: an observed in the cone is evaluated exactly as it
+    /// would have been, from the same inputs, so its value is bit-identical.
+    ///
+    /// A requested name addresses the keys [`crate::problem::observed_field`]
+    /// could resolve it to: the key itself, the key under the built model's
+    /// prefix, or — for a bare name — every key it is the tail of. A name that
+    /// addresses no observed (a data-fed parameter, a value-invention buffer, a
+    /// coordinate) seeds nothing; the caller decides whether it is known.
+    ///
+    /// A model WITH state is left whole: its build-time fields feed a
+    /// right-hand side, and which of them it reads is the compiler's business,
+    /// not the request's.
+    fn prune_to_observed_cone(&mut self) {
+        let Some(requested) = &self.opts.observed_cone else {
+            return;
+        };
+        let class = crate::classification::Classification::of(&self.model);
+        let has_state =
+            self.model.variables.iter().any(|(name, var)| {
+                var.var_type == VariableType::Unknown && !class.is_observed(name)
+            });
+        if has_state {
+            return;
+        }
+        let prefix = match &self.spelling {
+            Spelling::ModelLocal(m) => Some(format!("{m}.")),
+            Spelling::Qualified => None,
+        };
+        let reads: HashMap<&str, HashSet<String>> = self
+            .defs
+            .iter()
+            .map(|(n, e)| (n.as_str(), crate::observed_cone::named_strings(e)))
+            .collect();
+        let pinned = crate::observed_cone::index_set_names(self.index_sets.values());
+        let seeds = self
+            .defs
+            .keys()
+            .filter(|k| {
+                crate::observed_cone::addressed_by_any(k, &pinned, prefix.as_deref())
+                    || requested
+                        .iter()
+                        .any(|n| crate::observed_cone::addresses(k, n, prefix.as_deref()))
+            })
+            .cloned();
+        let cone =
+            crate::observed_cone::closure(seeds, |n| self.defs.contains_key(n), |n| reads.get(n));
+        let before = self.order.len();
+        self.cone_applied = before > 0;
+        self.order
+            .retain(|n| cone.contains(n) || self.fields.contains_key(n));
+        self.log(&format!(
+            "  [prepare] observed cone: {} of {before} observeds",
+            self.order.len()
+        ));
+    }
+
     /// Evaluate, ahead of the gated fetch, every observed that does not read a
     /// gated slab, directly or through another observed.
     ///
@@ -2852,6 +2942,7 @@ impl<'o> BuildState<'o> {
             gated_provider_keys: self.gated_keys,
             rules: self.rules,
             refused: self.refused,
+            observed_cone_applied: self.cone_applied,
         }
     }
 }
@@ -2880,6 +2971,7 @@ pub(crate) fn run_build_pipeline(
         progress: opts.progress.clone(),
         gated_fetch_batch: opts.gated_fetch_batch,
         refuse_per_cell: opts.compiler.unwrap_or_default().is_strict(),
+        observed_cone: opts.observed_cone.clone(),
     };
     let const_arrays = std::mem::take(&mut opts.const_arrays);
     let providers = std::mem::take(&mut opts.build_providers);

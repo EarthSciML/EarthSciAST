@@ -857,6 +857,40 @@ an ingested parameter that was not named, `observed_field` fails with an error
 that names the option. Such a parameter is not listed by `observed_field_names`.
 Julia and Python do not answer for one yet.
 
+#### Evaluating only what is asked for (Rust)
+
+`ProblemOptions::observed_cone` names the observeds a caller will read, spelled
+as `observed_field` would be called. On a model with nothing to integrate, the
+build then evaluates only their DEPENDENCY CONE: each named observed and,
+transitively, every observed its definition names (any string in the
+definition that is an observed's name, so the cone errs wide, never narrow).
+That holds on both routes a state-free document takes — the build pipeline's
+observed-graph pass, and the state-free evaluation of a document the pipeline
+does not run for, whose flattened system is compiled with only the cone's
+observed equations after the whole document has passed the build's gates.
+
+Every field in the cone is bit-identical to the unpruned build's, since it is
+evaluated from the same inputs by the same route. An observed outside it is not
+evaluated, so it can neither cost time nor fail the build, and `observed_field`
+does not answer for it. What sizes the build is not pruned: build-time
+coordinates, value invention (every derived index set and its extent),
+member-factor feedback, data ingestion and the gated fetch run whole. An
+observed an index set names (a ragged set's `offsets`, which a range over the
+set reads without naming) is always in the cone, and on the state-free
+evaluation so is one an event or a field initial condition names. A model WITH
+state is never pruned: its build-time fields feed a right-hand side. `None`
+(the default) evaluates every observed.
+
+A strict compiler (`native`) refuses only a rule in the cone. A document it
+refuses whole can therefore build when the request leaves the refused rule
+out; the free-name gate (a name declared nowhere) still sees every equation.
+
+`esm simulate --observed NAME …` sets it, and before anything is ingested or
+evaluated refuses a NAME that CONFORMANCE_SPEC §5.17.4 finds missing among the
+declared variables' qualified names: one that is no variable's name and shares
+no variable's last dotted segment. An ambiguous NAME is left to the writer,
+which refuses it with `ambiguous_output_name`.
+
 #### Reading an observed of a document that DOES integrate
 
 `observed_field` reports what the BUILD materialized, which is a constant. An
