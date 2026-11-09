@@ -156,9 +156,9 @@ fn bits(prob: &EsmProblem, name: &str) -> Vec<u64> {
 fn the_build_pipeline_evaluates_only_the_cone() {
     // Control: the whole graph includes `bad`, and its evaluation fails.
     let (full, _) = build(&cone_document(true), None, true, Compiler::Native);
-    let e = full
-        .err()
-        .expect("evaluating `bad` must fail the unpruned build");
+    let Err(e) = full else {
+        panic!("evaluating `bad` must fail the unpruned build");
+    };
     assert!(e.contains("table_lookup_out_of_bounds"), "{e}");
 
     let (prob, seen) = build(

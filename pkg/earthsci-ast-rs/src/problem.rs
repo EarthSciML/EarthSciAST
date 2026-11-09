@@ -2818,7 +2818,7 @@ pub(crate) fn has_nothing_to_integrate(prob: &EsmProblem) -> bool {
 /// under the compiler the caller named. An EVALUATION failure of a runtime
 /// that did build (a fail-closed fault) comes back as the third element, for
 /// [`observed_field`] to report.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn static_observed_fields(
     file: Option<&EsmFile>,
     flat_only: Option<&FlattenedSystem>,
