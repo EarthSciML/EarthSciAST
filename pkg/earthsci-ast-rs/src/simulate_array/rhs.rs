@@ -684,6 +684,8 @@ pub(super) fn materialize_observeds_pass(
                     let cellbox = CellBox {
                         names: output_idx_names,
                         origin: &output_origin,
+                        ranges: output_ranges,
+                        rule: Some(var.as_str()),
                     };
                     let mut tuples = CartesianTuples::new(output_ranges);
                     while let Some(tuple) = tuples.next() {
@@ -691,7 +693,7 @@ pub(super) fn materialize_observeds_pass(
                             set_bind(&mut ctx.loop_binds, name, *val);
                         }
                         let v = eval(body, &mut ctx);
-                        let v = cell_term(v, Some(&cellbox), &ctx);
+                        let v = cell_term(v, body, Some(&cellbox), &ctx);
                         let flat = multi_to_flat_col_major(tuple, &padded_shape, &padded_origin);
                         if flat < buf.len() {
                             buf[flat] = v;
@@ -1106,6 +1108,8 @@ fn evaluate_rhs_legacy(
                 let cellbox = CellBox {
                     names: output_idx_names,
                     origin: &output_origin,
+                    ranges: output_ranges,
+                    rule: Some(var_name.as_str()),
                 };
                 let spec = ReduceSpec {
                     contract_names,

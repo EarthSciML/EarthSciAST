@@ -582,3 +582,65 @@ fn nested_face_sum_through_connectivity_matches_the_oracle() {
         }
     }
 }
+
+/// `D(q[f]) = faq_f(w[f]) - q[f]` over faces 1..4, the nested node's `f`
+/// over `nested_range` instead (a sub-range, or the same range by another set).
+fn mismatched_nested_box_doc(nested: Value) -> Value {
+    let f = json!({"f": {"from": "faces"}});
+    let mut inner = faq(ix("w", vec![json!("f")]), vec!["f"], json!({"f": nested}));
+    inner["semiring"] = json!("sum_product");
+    document(
+        "nested_box",
+        json!({
+            "faces": {"kind": "interval", "size": 4},
+            "cells": {"kind": "interval", "size": 4}
+        }),
+        json!({
+            "variables": {
+                "w": {"type": "unknown", "shape": ["faces"], "default": 0.0},
+                "q": {"type": "unknown", "shape": ["faces"], "default": 0.0}
+            },
+            "equations": [
+                {"lhs": d_lhs("w", vec!["f"], f.clone()),
+                 "rhs": faq(op("*", vec![json!(-0.5), ix("w", vec![json!("f")])]), vec!["f"], f.clone())},
+                {"lhs": d_lhs("q", vec!["f"], f),
+                 "rhs": op("-", vec![inner, ix("q", vec![json!("f")])])}
+            ]
+        }),
+    )
+}
+
+/// A nested `faq` over a sub-range of the output box is not read at the
+/// cell: the per-cell oracle latches `E_TREEWALK_NESTED_BOX_MISMATCH` naming
+/// the equation and leaves those cells NaN, rather than reading the element of
+/// another cell, and the tape refuses the rule. Over the same `[1, 4]` by
+/// another index set it is the same box, and every evaluator agrees.
+#[test]
+fn nested_faq_over_another_box_is_not_read_at_the_cell() {
+    use crate::simulate_array::take_const_array_oob;
+    for nested in [json!([2, 4]), json!([1, 3])] {
+        let doc = mismatched_nested_box_doc(nested.clone());
+        let file = crate::parse::load_string(&doc.to_string()).expect("loads");
+        let compiled = ArrayCompiled::from_file(&file).expect("compiles");
+        let names = compiled.state_variable_names();
+        let state = seeded_state(names.len(), 1, 0.25, 2.5);
+        take_const_array_oob();
+        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), true);
+        let fault = take_const_array_oob().expect("the oracle latches a fault");
+        assert!(
+            fault.starts_with("E_TREEWALK_NESTED_BOX_MISMATCH")
+                && fault.contains("the equation for 'q'"),
+            "{nested}: {fault}"
+        );
+        for (name, v) in names.iter().zip(&dy) {
+            assert_eq!(v.is_nan(), name.contains("q["), "{nested}: {name} = {v}");
+        }
+        let (_, report) = compiled.build_tape_opts(&HashSet::new(), None);
+        assert!(
+            report.fallbacks.iter().any(|(rule, _)| rule == "D(q)"),
+            "{nested}: the tape refuses the rule: {:?}",
+            report.fallbacks
+        );
+    }
+    oracle_ab(mismatched_nested_box_doc(json!({"from": "cells"})));
+}
