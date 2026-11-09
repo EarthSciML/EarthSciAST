@@ -284,7 +284,7 @@ fn walk<'a>(
 
 /// Whether `node` is a `faq` with no output index (a reduction to a scalar).
 fn is_reduction(node: &ExpressionNode) -> bool {
-    !node.output_idx.as_ref().is_some_and(|o| !o.is_empty())
+    node.output_idx.as_ref().is_none_or(|o| o.is_empty())
 }
 
 /// `array_shape_mismatch` when a template application in `rhs` reads an
