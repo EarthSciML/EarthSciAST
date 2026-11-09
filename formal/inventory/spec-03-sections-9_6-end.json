@@ -474,6 +474,42 @@
       "note": "Template registry keys and apply_expression_template names may be dotted identifiers and resolve like any other name."
     },
     {
+      "id": "spec.9.6.11.elementwise-shape-mismatch-refused",
+      "section": "9.6.11",
+      "quote": "or one whose index sets would put one name on two axes. Each MUST be rejected with `array_shape_mismatch`",
+      "class": "semantic",
+      "phase": 4,
+      "area": "arrays",
+      "note": "An elementwise template application whose array arguments read in value positions have incomparable index sets, name an index set outside the target's declared shape, or would put one index set on two axes is rejected with array_shape_mismatch."
+    },
+    {
+      "id": "spec.9.6.11.elementwise-shape-decided-at-build",
+      "section": "9.6.11",
+      "quote": "`array_shape_mismatch` for an elementwise application MUST be decided at build",
+      "class": "semantic",
+      "phase": 4,
+      "area": "arrays",
+      "note": "The elementwise shape checks run on the flattened system, after coupling: an explicit exception to the §4.3.4 validation-time rule, so validate() of a component alone does not decide them."
+    },
+    {
+      "id": "spec.9.6.11.value-argument-declared-index-sets",
+      "section": "9.6.11",
+      "quote": "An argument read in a value position MUST be a scalar or an array over declared index sets",
+      "class": "semantic",
+      "phase": 4,
+      "area": "arrays",
+      "note": "Every array an application reads in a value position of its expansion is a variable over declared, inferred or coupled index sets, or an elementwise expression of such variables."
+    },
+    {
+      "id": "spec.9.6.11.anonymous-array-argument-refused",
+      "section": "9.6.11",
+      "quote": "every evaluating binding MUST reject it at build with `array_shape_mismatch`",
+      "class": "semantic",
+      "phase": 4,
+      "area": "arrays",
+      "note": "A const array literal or a reshape result read in a value position of a template application's expansion is rejected at build with array_shape_mismatch."
+    },
+    {
       "id": "spec.9.7.1.library-no-component-payload",
       "section": "9.7.1",
       "quote": "It MUST NOT declare `models`, `reaction_systems`, `data_sources`, `coupling`, or `domain`",

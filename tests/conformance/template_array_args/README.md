@@ -1,10 +1,13 @@
 # Templates applied over array arguments (`template_array_args`)
 
-esm-spec §9.6.11: a template parameter the body never uses as an `index` base is
-*scalar-role*. When an application binds an array to one, the application is
-elementwise. It is evaluated once per element of the array, with every
-array-valued scalar-role argument read at that element, and each element is
-bit-identical to the scalar application there. This tier checks that, in every
+esm-spec §9.6.11: a template parameter the body reads only as a value (never
+as an `index` base, a closed function's table or axis, a geometry ring or any
+other operand taken whole) is *scalar-role*. When an `apply_expression_template`
+application binds an array to one, the application is elementwise. It is
+evaluated once per element of the array, with every array-valued scalar-role
+argument read at that element, and each element is bit-identical to the scalar
+application there. Only an application is lifted: the same reads written by
+hand, with no template at the site, are not. This tier checks that, in every
 binding with an inline-test runner and under every compiler, for the
 `lib/interp.esm` templates: every element must equal the `interp.*` closed
 function at that element's argument, at tolerance 0.
@@ -48,12 +51,17 @@ compares the right-hand side at the initial state bit for bit:
 - Python: `tests/test_template_array_args.py`;
 - Rust: `tests/template_array_args.rs`.
 
-The same tests pin the `array_shape_mismatch` refusal of `bilinear` with `x`
-over `[a]` and `y` over `[b]`.
+The same tests pin, in each binding:
+
+- the `array_shape_mismatch` refusal of `bilinear` with `x` over `[a]` and `y`
+  over `[b]`, and of `linear` with a `const` array query (an anonymous array has
+  no index sets to align by);
+- that a template over geometry operands (`polygon_intersection_area(a, b)`,
+  both array-role) bound to arrays is not lifted;
+- that a hand-written `faq` reading a shaped variable by bare name, with no
+  template application, is not lifted.
 
 ## What is not here
 
 - An application in a differential equation's right-hand side: §9.6.11 lets a
   binding require the application to define a variable, and every fixture does.
-- An anonymous array (a `const` literal) bound to a scalar-role parameter, which
-  §9.6.11 leaves outside the rule.

@@ -259,8 +259,8 @@ The templates do not repeat the load-time axis checks of the `fn` form (a
 non-monotonic or NaN axis is not rejected); the caller supplies a valid axis.
 
 Each template takes one query, but `x` and `y` may be arrays: an array bound to
-a scalar-role parameter (one the body never indexes) makes the application
-elementwise (esm-spec §9.6.11), one lookup per element, bit for bit the
+a scalar-role parameter (one the body reads only as a value, never whole) makes
+the application elementwise (esm-spec §9.6.11), one lookup per element, bit for bit the
 `interp.*` result at that element. This holds when the array arrives by
 coupling too: a component that declares `lev` a scalar and computes
 `linear(table, axis, lev, n)` gets one lookup per grid cell when a
