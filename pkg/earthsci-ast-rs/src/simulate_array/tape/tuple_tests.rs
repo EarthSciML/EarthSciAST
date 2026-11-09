@@ -439,7 +439,7 @@ fn a_tuple_gather_from_an_empty_const_axis_is_refused_under_any_policy() {
 }
 
 // ---------------------------------------------------------------------------
-// The tuple-list budget: a CONST contraction is folded a sub-box at a time.
+// The tuple-list budget: a CONST contraction is folded a chunk at a time.
 // ---------------------------------------------------------------------------
 
 /// F58's star join (EarthSciML/EarthSciAST#418), scaled down: `total[o, f]`
@@ -523,7 +523,7 @@ fn materialized_elems(prog: &TapeProgram) -> usize {
 }
 
 /// Over the tuple-list budget, a CONST join contraction is folded at build
-/// time a sub-box at a time and the program holds only its answer: what the
+/// time a chunk at a time and the program holds only its answer: what the
 /// program materializes no longer grows with the candidate pairs the join
 /// matches (it did, by ~115 bytes a tuple, which took F58's control from 34
 /// to 445 bytes a pair), and the answer is bit-identical to the
@@ -802,6 +802,59 @@ fn a_fold_over_many_chunks_sharing_its_inputs_is_bit_identical() {
     }
     assert!(payloads.iter().all(|p| *p == payloads[0]));
     assert!(payloads[0].iter().any(|&b| f64::from_bits(b) != 0.0));
+}
+
+/// The fold walks the tuples ONCE, chunking them as the walk produces them
+/// (it used to count every cell's run in one walk and enumerate the chunks in
+/// another, after abandoning a first listing walk): one `visit_tuples` per
+/// build at every budget, every admitted tuple folded in exactly one chunk,
+/// no chunk over the budget, chunks of whole cells as full as the budget
+/// allows, and a cell whose run alone is over it in windows of the budget.
+/// The payload is bit-identical across budgets and to the interpreter
+/// (`a_fold_over_many_chunks_sharing_its_inputs_is_bit_identical`).
+#[test]
+fn a_folded_contraction_is_walked_once_in_chunks_within_the_budget() {
+    use super::lower::{set_tuple_list_budget, take_tuple_walks};
+    let (n_g, n_v, n_i, n_s, n_h) = (3usize, 4usize, 40usize, 5usize, 6usize);
+    let compiled = super::tests::compile(hot_soak_doc(n_g, n_v, n_i, n_s, n_h));
+    let cells = n_g * n_v * n_h;
+    let run = n_i / n_v * n_s; // every output cell's run
+    let tuples = cells * run;
+    let windows = |w: usize| -> Vec<usize> {
+        let mut one = vec![w; run / w];
+        if run % w != 0 {
+            one.push(run % w);
+        }
+        one.repeat(cells)
+    };
+    let mut seven = vec![7 * run; cells / 7];
+    seven.push(cells % 7 * run);
+    let cases: Vec<(usize, Vec<usize>)> = vec![
+        (usize::MAX, vec![]),
+        (tuples, vec![]),
+        (tuples - 1, vec![tuples - run, run]),
+        (7 * run, seven),
+        (run, vec![run; cells]),
+        (run - 1, windows(run - 1)),
+        (3, windows(3)),
+        (1, vec![1; tuples]),
+    ];
+    take_tuple_walks();
+    for (budget, want) in cases {
+        let prev = set_tuple_list_budget(budget);
+        let (prog, _) = compiled.build_tape_opts(&std::collections::HashSet::new(), None);
+        let (walks, chunks) = take_tuple_walks();
+        set_tuple_list_budget(prev);
+        let prog = prog.unwrap_or_else(|_| panic!("budget {budget}: the tape builds"));
+        assert_eq!(walks, 1, "budget {budget}: one walk");
+        assert_eq!(
+            count(&prog, "SegReduce"),
+            usize::from(want.is_empty()),
+            "budget {budget}"
+        );
+        assert!(chunks.iter().all(|&n| n <= budget), "budget {budget}");
+        assert_eq!(chunks, want, "budget {budget}");
+    }
 }
 
 /// A chunk's tape resolves `intersect_polygon` of CONST observed rings at

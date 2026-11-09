@@ -160,7 +160,8 @@ fn float_key_column(a: &ndarray::ArrayD<f64>) -> Option<(Vec<i64>, Vec<crate::re
 
 /// A tuple-list contraction with its bounds and gates resolved: what
 /// [`TapeBuilder::lower_tuple_list`] lowers, and what
-/// [`TapeBuilder::fold_tuple_contraction`] folds a sub-box of at a time.
+/// [`TapeBuilder::walk_tuple_contraction`] folds a chunk of cells' runs of at
+/// a time.
 #[derive(Clone, Copy)]
 pub(super) struct TupleSpec<'a> {
     pub(super) idx_names: &'a [String],
@@ -173,7 +174,7 @@ pub(super) struct TupleSpec<'a> {
     pub(super) filter: Option<&'a Expr>,
     /// What each cell's fold starts from: the semiring's identity, or the
     /// accumulator the previous window of the same cell's run left
-    /// ([`TapeBuilder::fold_cell_in_windows`]).
+    /// ([`TupleStream`]).
     pub(super) init: f64,
 }
 
@@ -192,7 +193,7 @@ thread_local! {
 
 /// The most tuples one program's tuple lists may hold together: a CONST
 /// contraction whose list would take the program past it is folded at build
-/// time a sub-box at a time ([`TapeBuilder::fold_tuple_contraction`]) instead
+/// time a chunk at a time ([`TapeBuilder::walk_tuple_contraction`]) instead
 /// of being materialized whole (`ESS_TUPLE_LIST_BUDGET`, default
 /// [`DEFAULT_TUPLE_LIST_BUDGET`]). It is the program's total and not a
 /// per-list cap because a list's arrays live as long as the program does: a
@@ -240,6 +241,22 @@ thread_local! {
 #[cfg(test)]
 pub(in crate::simulate_array) fn take_chunk_inputs_held() -> Vec<Vec<String>> {
     CHUNK_INPUTS_HELD.with(|c| std::mem::take(&mut *c.borrow_mut()))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many [`visit_tuples`] walks ran on this thread, and the tuple
+    /// count of each list [`TapeBuilder::eval_tuple_chunk`] folded (a chunk
+    /// of cells, or a window of one cell's run), in fold order.
+    static TUPLE_WALKS: std::cell::RefCell<(usize, Vec<usize>)> =
+        const { std::cell::RefCell::new((0, Vec::new())) };
+}
+
+/// Take what [`TUPLE_WALKS`] recorded on this thread: `(walks, chunk
+/// lengths)`.
+#[cfg(test)]
+pub(in crate::simulate_array) fn take_tuple_walks() -> (usize, Vec<usize>) {
+    TUPLE_WALKS.with(|c| std::mem::take(&mut *c.borrow_mut()))
 }
 
 impl TapeBuilder<'_> {
@@ -298,26 +315,31 @@ impl TapeBuilder<'_> {
             filter,
             init: reduce.identity(),
         };
-        // The list is built in the same walk that measures it, and abandoned
-        // once it outgrows what is left of the program's budget, so a list
-        // that fits costs one walk and one that does not costs at most the
-        // budget before it is folded instead.
+        // One walk lists the tuples while they fit what is left of the
+        // program's budget and, once they outgrow it, folds them a chunk at a
+        // time as it goes ([`Self::walk_tuple_contraction`]): a list that fits
+        // costs one walk, and so does one that is folded.
         let budget = tuple_list_budget() as u64;
         let room = budget
             .saturating_sub(self.tuples_held)
             .min(MAX_PROMOTED_ELEMS as u64) as usize;
-        let list = match enumerate_tuples(&spec, room)? {
-            Some(list) => list,
-            None => {
-                if let Some(v) = self.fold_tuple_contraction(&spec, &lo, &shape, combine_op)? {
-                    log_tuple_walk(&spec, "folded", None);
-                    return Ok(v);
-                }
-                enumerate_tuples(&spec, MAX_PROMOTED_ELEMS)?.ok_or_else(|| Bail {
-                    reason: format!(
-                        "contracted: tuple list too long (over {MAX_PROMOTED_ELEMS} tuples)"
-                    ),
-                })?
+        let too_long = || Bail {
+            reason: format!("contracted: tuple list too long (over {MAX_PROMOTED_ELEMS} tuples)"),
+        };
+        let list = match self.walk_tuple_contraction(&spec, room, combine_op)? {
+            Walked::Listed(list) => list,
+            Walked::Folded(values) => {
+                log_tuple_walk(&spec, "folded", None);
+                return Ok(if ranges.is_empty() {
+                    LV::Lit(values[0])
+                } else {
+                    LV::Arr(self.emit_const_data(&shape, &lo, Arc::new(values), false)?)
+                });
+            }
+            Walked::TooLong => return Err(too_long()),
+            // A chunk did not fold: list the whole contraction after all.
+            Walked::Declined => {
+                enumerate_tuples(&spec, MAX_PROMOTED_ELEMS)?.ok_or_else(too_long)?
             }
         };
         log_tuple_walk(&spec, "listed", Some(list.len()));
@@ -466,12 +488,14 @@ impl TapeBuilder<'_> {
         Ok(if rank0 { LV::Scalar(out) } else { LV::Arr(out) })
     }
 
-    /// Fold a CONST tuple-list contraction whose list would take the program
-    /// past [`tuple_list_budget`] at build time, one output sub-box at a time,
-    /// into a single [`Instr::ConstArray`] (a literal, for a rank-0 output).
-    /// `None` when anything the contraction reads is not build-time data (a
-    /// parameter, a state, the time, a forcing input), or when a chunk would
-    /// fault: the caller then lowers the whole list as before.
+    /// Walk `spec`'s admitted tuples ONCE ([`visit_tuples`]), listing them
+    /// while they fit `room`, what is left of the program's
+    /// [`tuple_list_budget`]. A CONST contraction whose list outgrows it is
+    /// then folded at build time as the walk goes, a chunk of at most the
+    /// budget's tuples at a time ([`TupleStream`]), into the values of its
+    /// output box (one value for a rank-0 output). A contraction that is not
+    /// build-time data (it reads a parameter, a state, the time or a forcing
+    /// input) goes on being listed whole.
     ///
     /// The whole list is O(tuples), and a tuple costs about a hundred bytes
     /// lowered and run, which made peak memory track every candidate pair a
@@ -479,140 +503,61 @@ impl TapeBuilder<'_> {
     /// gate — rather than the arrays a document declares (EarthSciAST#418's
     /// shape, returned by the tape). A cell's value depends only on that
     /// cell's run of tuples, and each chunk is the same lowering of the same
-    /// expression on the same kernels ([`super::standalone`]) over a sub-box
-    /// of whole cells, so the folded array is bit-identical to what the
+    /// expression on the same kernels ([`super::standalone`]) over whole
+    /// cells' runs, so the folded array is bit-identical to what the
     /// materialized list computes; only the peak changes, to one chunk's.
-    fn fold_tuple_contraction(
-        &mut self,
-        spec: &TupleSpec<'_>,
-        lo: &DimI,
-        shape: &DimU,
-        combine_op: BinCode,
-    ) -> LResult<Option<LV>> {
-        let Some(inputs) = self.tuple_fold_inputs(spec) else {
-            return Ok(None);
-        };
-        // A window's run table is `u32`, and a chunk is enumerated whole.
-        let budget = (tuple_list_budget() as u64).clamp(1, MAX_PROMOTED_ELEMS as u64);
-        // A rank-0 output is one cell: there is no sub-box to split it into,
-        // so its run is folded a window at a time.
-        if spec.ranges.is_empty() {
-            let acc = self.fold_cell_in_windows(spec, &inputs, combine_op, budget)?;
-            return Ok(acc.map(LV::Lit));
-        }
-        let counts = count_tuples(spec)?;
-        let n_cells: usize = shape.iter().product();
-        let mut strides = vec![1usize; shape.len()];
-        for d in (0..shape.len().saturating_sub(1)).rev() {
-            strides[d] = strides[d + 1] * shape[d + 1];
-        }
-        let mut values = vec![spec.reduce.identity(); n_cells];
-        for sub in plan_chunks(spec.ranges, shape, &strides, &counts, budget) {
-            let sub_shape: Vec<usize> = sub.iter().map(|(l, h)| (h - l + 1) as usize).collect();
-            let base: usize = sub
-                .iter()
-                .zip(spec.ranges)
-                .zip(&strides)
-                .map(|(((l, _), (l0, _)), st)| (l - l0) as usize * st)
-                .sum();
-            // The sub-box's cells, row-major, as flat positions in the box.
-            let mut cells: Vec<usize> = vec![base];
-            for (&n, &st) in sub_shape.iter().zip(&strides) {
-                let mut next = Vec::with_capacity(cells.len() * n);
-                for &c in &cells {
-                    next.extend((0..n).map(|k| c + k * st));
-                }
-                cells = next;
-            }
-            if cells.iter().all(|&c| counts[c] == 0) {
-                continue; // every cell is the identity already
-            }
-            let chunk = TupleSpec {
-                ranges: &sub,
-                ..*spec
-            };
-            if let [c] = cells[..]
-                && counts[c] > budget
-            {
-                // One cell whose run alone is over the budget.
-                let Some(acc) = self.fold_cell_in_windows(&chunk, &inputs, combine_op, budget)?
-                else {
-                    return Ok(None);
-                };
-                values[c] = acc;
-                continue;
-            }
-            let Some(list) = enumerate_tuples(&chunk, MAX_PROMOTED_ELEMS)? else {
-                return Ok(None);
-            };
-            let Some(v) = self.eval_tuple_chunk(&chunk, list, &inputs, combine_op) else {
-                return Ok(None);
-            };
-            if v.len() != cells.len() {
-                return Ok(None);
-            }
-            for (&c, x) in cells.iter().zip(v) {
-                values[c] = x;
-            }
-        }
-        let out = self.emit_const_data(shape, lo, Arc::new(values), false)?;
-        Ok(Some(LV::Arr(out)))
-    }
-
-    /// Fold the run of `cell`'s one output cell (a single-cell sub-box, or a
-    /// rank-0 output) a window of at most `budget` tuples at a time, each
-    /// window starting from the accumulator the last one left. `seg_reduce`
-    /// is a left fold in list order, so this is the whole run's fold exactly.
-    /// The run is walked once and only one window is held at a time. `None`
-    /// when a window does not fold ([`Self::eval_tuple_chunk`]).
-    fn fold_cell_in_windows(
+    /// A cell whose run alone is over the budget is folded a window at a
+    /// time, each window starting from the accumulator the last one left:
+    /// `seg_reduce` is a left fold in list order, so that is the whole run's
+    /// fold exactly, wherever the windows break.
+    ///
+    /// [`Walked::Declined`] when a chunk would not fold (it faults, or does
+    /// not lower to a CONST): the caller then lists the whole contraction.
+    fn walk_tuple_contraction(
         &self,
-        cell: &TupleSpec<'_>,
-        inputs: &[FoldInput],
+        spec: &TupleSpec<'_>,
+        room: usize,
         combine_op: BinCode,
-        budget: u64,
-    ) -> LResult<Option<f64>> {
-        let nr = cell.idx_names.len();
-        let width = nr + cell.contract_names.len();
-        let mut acc = Some(cell.reduce.identity());
-        let mut cols: Vec<Vec<f64>> = vec![Vec::new(); width];
-        let mut held = 0u64;
-        let flush = |cols: &mut Vec<Vec<f64>>, held: &mut u64, acc: &mut Option<f64>| {
-            let window = TupleList {
-                rows: vec![0, *held as u32],
-                cols: std::mem::replace(cols, vec![Vec::new(); width]),
-            };
-            *held = 0;
-            *acc = acc.and_then(|init| {
-                let chunk = TupleSpec { init, ..*cell };
-                match self
-                    .eval_tuple_chunk(&chunk, window, inputs, combine_op)
-                    .as_deref()
-                {
-                    Some(&[x]) => Some(x),
-                    _ => None,
-                }
-            });
+    ) -> LResult<Walked> {
+        let n_cells: usize = spec
+            .ranges
+            .iter()
+            .map(|(l, h)| (h - l + 1).max(0) as usize)
+            .product();
+        let mut s = TupleStream {
+            b: self,
+            spec,
+            combine_op,
+            n_cells,
+            cols: vec![Vec::new(); spec.idx_names.len() + spec.contract_names.len()],
+            rows: vec![0],
+            cells: Vec::new(),
+            held: 0,
+            cell: 0,
+            cap: room,
+            fold_tried: false,
+            fold: None,
+            window: None,
+            declined: false,
         };
-        visit_tuples(
-            cell,
-            &mut |c: &[i64], t: &[i64]| {
-                for (k, &v) in c.iter().chain(t).enumerate() {
-                    cols[k].push(v as f64);
-                }
-                held += 1;
-                if held >= budget {
-                    flush(&mut cols, &mut held, &mut acc);
-                }
-                // A window that does not fold ends the walk.
-                acc.is_some()
-            },
-            &mut || Ok(()),
-        )?;
-        if held > 0 {
-            flush(&mut cols, &mut held, &mut acc);
+        let whole = visit_tuples(spec, &mut s)?;
+        if s.declined {
+            return Ok(Walked::Declined);
         }
-        Ok(acc)
+        if !whole {
+            return Ok(Walked::TooLong);
+        }
+        if s.fold.is_none() {
+            return Ok(Walked::Listed(TupleList {
+                rows: s.rows,
+                cols: s.cols,
+            }));
+        }
+        if !s.cells.is_empty() && !s.flush_cells() {
+            return Ok(Walked::Declined);
+        }
+        let fold = s.fold.expect("folding");
+        Ok(Walked::Folded(fold.values))
     }
 
     /// The build-time value of every observed `spec`'s body and filter read
@@ -660,6 +605,8 @@ impl TapeBuilder<'_> {
         combine_op: BinCode,
     ) -> Option<Vec<f64>> {
         let name = "\u{0}tuple-list chunk";
+        #[cfg(test)]
+        TUPLE_WALKS.with(|c| c.borrow_mut().1.push(list.len()));
         standalone::with_standalone_builder(
             name,
             &[],
@@ -1395,7 +1342,7 @@ impl TapeBuilder<'_> {
             let mut ghost = false;
             for (d, vals) in sub_vals.iter().enumerate() {
                 // `eval_index_args`: the subscript rounded (NaN reads as 0).
-                let raw = vals[k].round() as i64;
+                let raw = round_to_i64(vals[k]);
                 let n = src_shape[d] as i64;
                 let mut i1 = raw;
                 if raw < 1 || raw > n {
@@ -1502,60 +1449,282 @@ fn log_tuple_walk(spec: &TupleSpec<'_>, how: &str, tuples: Option<usize>) {
 /// as it would hold more than `cap` tuples, so an over-long list is abandoned
 /// at `cap` rather than built whole.
 fn enumerate_tuples(spec: &TupleSpec<'_>, cap: usize) -> LResult<Option<TupleList>> {
-    let width = spec.idx_names.len() + spec.contract_names.len();
-    let mut cols: Vec<Vec<f64>> = vec![Vec::new(); width];
-    let mut rows: Vec<u32> = vec![0];
-    let len = std::cell::Cell::new(0usize);
-    let whole = visit_tuples(
-        spec,
-        &mut |cell: &[i64], t: &[i64]| {
-            if len.get() == cap {
+    struct Enumerate {
+        cols: Vec<Vec<f64>>,
+        rows: Vec<u32>,
+        len: usize,
+        cap: usize,
+    }
+    impl VisitTuples for Enumerate {
+        #[inline]
+        fn tuple(&mut self, cell: &[i64], t: &[i64]) -> bool {
+            if self.len == self.cap {
                 return false;
             }
-            for (k, &v) in cell.iter().chain(t).enumerate() {
-                cols[k].push(v as f64);
+            for (col, &v) in self.cols.iter_mut().zip(cell.iter().chain(t)) {
+                col.push(v as f64);
             }
-            len.set(len.get() + 1);
+            self.len += 1;
             true
-        },
-        &mut || {
-            rows.push(len.get() as u32);
+        }
+        fn cell_done(&mut self) -> LResult<()> {
+            self.rows.push(self.len as u32);
             Ok(())
-        },
-    )?;
-    Ok(whole.then_some(TupleList { rows, cols }))
+        }
+    }
+    let mut e = Enumerate {
+        cols: vec![Vec::new(); spec.idx_names.len() + spec.contract_names.len()],
+        rows: vec![0],
+        len: 0,
+        cap,
+    };
+    let whole = visit_tuples(spec, &mut e)?;
+    Ok(whole.then_some(TupleList {
+        rows: e.rows,
+        cols: e.cols,
+    }))
 }
 
-/// How many tuples [`enumerate_tuples`] admits in each output cell of `spec`,
-/// in the same row-major cell order, without materializing a column: what
-/// [`TapeBuilder::fold_tuple_contraction`] splits the output box by.
-fn count_tuples(spec: &TupleSpec<'_>) -> LResult<Vec<u64>> {
-    let mut counts: Vec<u64> = Vec::new();
-    let here = std::cell::Cell::new(0u64);
-    visit_tuples(
-        spec,
-        &mut |_: &[i64], _: &[i64]| {
-            here.set(here.get() + 1);
-            true
-        },
-        &mut || {
-            counts.push(here.replace(0));
-            Ok(())
-        },
-    )?;
-    Ok(counts)
+/// What [`TapeBuilder::walk_tuple_contraction`]'s one walk produced.
+enum Walked {
+    /// The whole list, within the room the program's budget left.
+    Listed(TupleList),
+    /// The output box's values, row-major, folded a chunk at a time.
+    Folded(Vec<f64>),
+    /// A chunk would not fold: list the whole contraction instead.
+    Declined,
+    /// Not build-time data, and over [`MAX_PROMOTED_ELEMS`] tuples.
+    TooLong,
 }
 
-/// The walk [`enumerate_tuples`], [`count_tuples`] and
-/// [`TapeBuilder::fold_cell_in_windows`] share: `tuple` sees each admitted
-/// `(cell, contracted tuple)` of `spec` in list order, and `cell_done` is
-/// called once per output cell, row-major, after that cell's tuples. `tuple`
-/// returning `false` stops the walk, and the result is then `false`.
-fn visit_tuples(
-    spec: &TupleSpec<'_>,
-    tuple: &mut dyn FnMut(&[i64], &[i64]) -> bool,
-    cell_done: &mut dyn FnMut() -> LResult<()>,
-) -> LResult<bool> {
+/// The fold state of a [`TupleStream`] once its list outgrew its room.
+struct StreamFold {
+    inputs: Vec<FoldInput>,
+    /// The output box's values, row-major; a cell with no tuple keeps the
+    /// identity.
+    values: Vec<f64>,
+    /// The most tuples one chunk (or one window of a cell's run) holds.
+    budget: usize,
+}
+
+/// The visitor of [`TapeBuilder::walk_tuple_contraction`]'s walk: it lists
+/// each admitted tuple, and once the list outgrows `cap` (and the
+/// contraction is build-time data) folds what it holds and goes on folding,
+/// a chunk at a time, as the walk produces tuples.
+///
+/// While listing, `rows` has an entry for every cell walked. While folding,
+/// `cols` holds the pending chunk: the runs of the cells in `cells` (only
+/// cells with at least one tuple; `rows` bounds their runs), then the run so
+/// far of the cell being walked. A chunk is flushed when the next tuple would
+/// take it past the budget; a cell whose run alone fills it is folded a
+/// window at a time, its accumulator in `window`.
+struct TupleStream<'s, 'b, 'a> {
+    b: &'s TapeBuilder<'b>,
+    spec: &'s TupleSpec<'a>,
+    combine_op: BinCode,
+    n_cells: usize,
+    cols: Vec<Vec<f64>>,
+    rows: Vec<u32>,
+    cells: Vec<usize>,
+    /// How many tuples `cols` holds.
+    held: usize,
+    /// The row-major position of the cell being walked.
+    cell: usize,
+    /// While listing: the most tuples the list may hold.
+    cap: usize,
+    fold_tried: bool,
+    fold: Option<StreamFold>,
+    window: Option<f64>,
+    /// A chunk did not fold: the walk stopped, and the caller lists.
+    declined: bool,
+}
+
+impl TupleStream<'_, '_, '_> {
+    /// The list holds `cap` tuples and one more is coming: switch to folding
+    /// if the contraction is build-time data, or go on listing up to
+    /// [`MAX_PROMOTED_ELEMS`]. `false` when neither has room.
+    fn outgrown(&mut self) -> bool {
+        if !self.fold_tried {
+            self.fold_tried = true;
+            if let Some(inputs) = self.b.tuple_fold_inputs(self.spec) {
+                // A window's run table is `u32`, and a chunk is held whole.
+                let budget = tuple_list_budget().clamp(1, MAX_PROMOTED_ELEMS);
+                // Keep only the cells with a run: an empty one is the
+                // identity, which `values` already holds.
+                let mut rows = vec![0u32];
+                let mut cells = Vec::new();
+                for (c, w) in self.rows.windows(2).enumerate() {
+                    if w[1] > w[0] {
+                        cells.push(c);
+                        rows.push(w[1]);
+                    }
+                }
+                self.rows = rows;
+                self.cells = cells;
+                self.fold = Some(StreamFold {
+                    inputs,
+                    values: vec![self.spec.reduce.identity(); self.n_cells.max(1)],
+                    budget,
+                });
+                // `cap` (the room left) is never over the whole budget, so
+                // what the list holds fits one chunk.
+                return true;
+            }
+        }
+        if self.cap < MAX_PROMOTED_ELEMS {
+            self.cap = MAX_PROMOTED_ELEMS;
+            return true;
+        }
+        false
+    }
+
+    /// Fold the runs of the complete cells the chunk holds, and keep only
+    /// the run so far of the cell being walked. `false` when the chunk does
+    /// not fold.
+    fn flush_cells(&mut self) -> bool {
+        let start = *self.rows.last().expect("rows starts at 0") as usize;
+        let tail: Vec<Vec<f64>> = self.cols.iter_mut().map(|c| c.split_off(start)).collect();
+        let list = TupleList {
+            rows: std::mem::replace(&mut self.rows, vec![0]),
+            cols: std::mem::replace(&mut self.cols, tail),
+        };
+        self.held -= start;
+        let cells = std::mem::take(&mut self.cells);
+        // The chunk's cells as one run of output positions: a rank-0 output
+        // is its one cell.
+        let flat = [(1i64, cells.len() as i64)];
+        let ranges: &[(i64, i64)] = if self.spec.ranges.is_empty() {
+            &[]
+        } else {
+            &flat
+        };
+        let chunk = TupleSpec {
+            ranges,
+            ..*self.spec
+        };
+        let fold = self.fold.as_mut().expect("folding");
+        match self
+            .b
+            .eval_tuple_chunk(&chunk, list, &fold.inputs, self.combine_op)
+        {
+            Some(v) if v.len() == cells.len() => {
+                for (c, x) in cells.into_iter().zip(v) {
+                    fold.values[c] = x;
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Fold what the chunk holds, all of it the run so far of the cell being
+    /// walked, as one window from the accumulator the last window left.
+    /// `false` when the window does not fold.
+    fn flush_window(&mut self) -> bool {
+        let width = self.cols.len();
+        let fold = self.fold.as_ref().expect("folding");
+        let init = self.window.unwrap_or(self.spec.reduce.identity());
+        let list = TupleList {
+            rows: vec![0, self.held as u32],
+            cols: std::mem::replace(&mut self.cols, vec![Vec::new(); width]),
+        };
+        self.held = 0;
+        let one = [(1i64, 1i64)];
+        let ranges: &[(i64, i64)] = if self.spec.ranges.is_empty() {
+            &[]
+        } else {
+            &one
+        };
+        let chunk = TupleSpec {
+            ranges,
+            init,
+            ..*self.spec
+        };
+        match self
+            .b
+            .eval_tuple_chunk(&chunk, list, &fold.inputs, self.combine_op)
+            .as_deref()
+        {
+            Some(&[x]) => {
+                self.window = Some(x);
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+impl VisitTuples for TupleStream<'_, '_, '_> {
+    #[inline]
+    fn tuple(&mut self, cell: &[i64], t: &[i64]) -> bool {
+        if self.declined {
+            return false;
+        }
+        if self.fold.is_none() && self.held == self.cap && !self.outgrown() {
+            return false;
+        }
+        // The chunk is full. Fold the complete cells it holds, which leaves
+        // the run so far of this cell, under the budget; or, when it holds
+        // nothing else, that run is a window of its own.
+        if let Some(f) = &self.fold
+            && self.held >= f.budget
+        {
+            let ok = if self.cells.is_empty() {
+                self.flush_window()
+            } else {
+                self.flush_cells()
+            };
+            if !ok {
+                self.declined = true;
+                return false;
+            }
+        }
+        for (col, &v) in self.cols.iter_mut().zip(cell.iter().chain(t)) {
+            col.push(v as f64);
+        }
+        self.held += 1;
+        true
+    }
+
+    fn cell_done(&mut self) -> LResult<()> {
+        let start = *self.rows.last().expect("rows starts at 0") as usize;
+        if self.fold.is_none() {
+            self.rows.push(self.held as u32);
+        } else if self.window.is_some() {
+            // The rest of a windowed cell's run (the chunk holds nothing
+            // else) is its last window.
+            if self.held > 0 && !self.flush_window() {
+                self.declined = true;
+            }
+            let acc = self.window.take().expect("windowed");
+            self.fold.as_mut().expect("folding").values[self.cell] = acc;
+        } else if self.held > start {
+            self.cells.push(self.cell);
+            self.rows.push(self.held as u32);
+        }
+        self.cell += 1;
+        Ok(())
+    }
+}
+
+/// What [`visit_tuples`] hands each admitted tuple and each finished cell to.
+/// Generic rather than a `dyn` callback, so that the per-tuple step inlines
+/// into the walk.
+trait VisitTuples {
+    /// One admitted `(cell, contracted tuple)`; `false` stops the walk.
+    fn tuple(&mut self, cell: &[i64], t: &[i64]) -> bool;
+    /// Called once per output cell, row-major, after that cell's tuples.
+    fn cell_done(&mut self) -> LResult<()>;
+}
+
+/// The walk [`enumerate_tuples`] and
+/// [`TapeBuilder::walk_tuple_contraction`] share: `v` sees each admitted
+/// `(cell, contracted tuple)` of `spec` in list order, and each output cell,
+/// row-major, once its tuples are done. A tuple the visitor refuses stops
+/// the walk, and the result is then `false`.
+fn visit_tuples(spec: &TupleSpec<'_>, v: &mut impl VisitTuples) -> LResult<bool> {
+    #[cfg(test)]
+    TUPLE_WALKS.with(|c| c.borrow_mut().0 += 1);
     let &TupleSpec {
         idx_names,
         ranges,
@@ -1598,18 +1767,20 @@ fn visit_tuples(
         .iter()
         .any(DimBound::reads_contracted)
         .then(|| parent_first_order(bounds));
+    // This cell's contraction bounds, in a buffer reused across cells.
+    let mut cell_ranges: Vec<(i64, i64)> = Vec::with_capacity(nc);
     for _ in 0..n_cells {
         if let Some(order) = &nest {
-            let mut push = |t: &[i64]| tuple(&cell, t);
+            let mut push = |t: &[i64]| v.tuple(&cell, t);
             if !walk_nest(bounds, order, 0, &cell, &mut cur, &mut push) {
                 return Ok(false);
             }
-            cell_done()?;
+            v.cell_done()?;
             next_cell(&mut cell, ranges);
             continue;
         }
-        // This cell's contraction bounds.
-        let cell_ranges: Vec<(i64, i64)> = bounds.iter().map(|b| b.at(&cell, &cur)).collect();
+        cell_ranges.clear();
+        cell_ranges.extend(bounds.iter().map(|b| b.at(&cell, &cur)));
         // The gates' conjunction, the empty-range guard and the propagation,
         // then the walk: all shared with the interpreter
         // (`crate::simulate_array::gate_walk`).
@@ -1622,15 +1793,12 @@ fn visit_tuples(
             &mut bufs,
         );
         if admitted {
-            let mut sink = PushSink {
-                cell: &cell,
-                tuple: &mut *tuple,
-            };
+            let mut sink = PushSink { cell: &cell, v };
             if !plan.walk_cell(&cell_ranges, &mut bufs, &mut sink) {
                 return Ok(false);
             }
         }
-        cell_done()?;
+        v.cell_done()?;
         next_cell(&mut cell, ranges);
     }
     Ok(true)
@@ -1703,70 +1871,6 @@ pub(super) fn walk_nest(
         }
     }
     true
-}
-
-/// Split the output box `ranges` (of `shape`, row-major `strides`) into
-/// sub-boxes of whole cells holding at most `budget` tuples each, by
-/// `counts` (per cell, row-major): runs of consecutive values along the
-/// leading axis, and a value whose slice alone is over the budget split the
-/// same way along the next axis. A single cell over the budget is a chunk of
-/// its own — a cell's run is never split, so each cell still folds its own
-/// tuples in list order.
-fn plan_chunks(
-    ranges: &[(i64, i64)],
-    shape: &[usize],
-    strides: &[usize],
-    counts: &[u64],
-    budget: u64,
-) -> Vec<Vec<(i64, i64)>> {
-    fn split(
-        d: usize,
-        base: usize,
-        sub: &mut Vec<(i64, i64)>,
-        g: (&[(i64, i64)], &[usize], &[usize], &[u64], u64),
-        out: &mut Vec<Vec<(i64, i64)>>,
-    ) {
-        let (ranges, shape, strides, counts, budget) = g;
-        let run = strides[d];
-        let l0 = ranges[d].0;
-        let flush =
-            |sub: &mut Vec<(i64, i64)>, out: &mut Vec<Vec<(i64, i64)>>, a: usize, b: usize| {
-                sub[d] = (l0 + a as i64, l0 + b as i64 - 1);
-                out.push(sub.clone());
-            };
-        let (mut start, mut acc) = (0usize, 0u64);
-        for v in 0..shape[d] {
-            let c: u64 = counts[base + v * run..base + (v + 1) * run].iter().sum();
-            if c > budget && d + 1 < shape.len() {
-                if start < v {
-                    flush(sub, out, start, v);
-                }
-                sub[d] = (l0 + v as i64, l0 + v as i64);
-                split(d + 1, base + v * run, sub, g, out);
-                sub[d + 1..].copy_from_slice(&ranges[d + 1..]);
-                (start, acc) = (v + 1, 0);
-                continue;
-            }
-            if acc + c > budget && start < v {
-                flush(sub, out, start, v);
-                (start, acc) = (v, 0);
-            }
-            acc += c;
-        }
-        if start < shape[d] {
-            flush(sub, out, start, shape[d]);
-        }
-    }
-    let mut out = Vec::new();
-    let mut sub = ranges.to_vec();
-    split(
-        0,
-        0,
-        &mut sub,
-        (ranges, shape, strides, counts, budget),
-        &mut out,
-    );
-    out
 }
 
 /// A gated pointwise `faq` is compacted to its kept cells when at most one
@@ -1896,18 +2000,18 @@ fn pointwise_keep(
 
 /// [`visit_tuples`]' [`TupleSink`]: hand each admitted tuple, with its output
 /// cell, to the visitor.
-struct PushSink<'a, 'f> {
+struct PushSink<'a, V> {
     cell: &'a [i64],
-    tuple: &'f mut dyn FnMut(&[i64], &[i64]) -> bool,
+    v: &'a mut V,
 }
 
-impl TupleSink for PushSink<'_, '_> {
+impl<V: VisitTuples> TupleSink for PushSink<'_, V> {
     #[inline]
     fn bind(&mut self, _d: usize, _v: i64) {}
 
     #[inline]
     fn leaf(&mut self, cur: &[i64]) -> bool {
-        (self.tuple)(self.cell, cur)
+        self.v.tuple(self.cell, cur)
     }
 }
 
@@ -1923,7 +2027,7 @@ pub(super) fn ragged_bound(
     cur: &[i64],
 ) -> i64 {
     if shape.is_empty() {
-        return vals[0].round() as i64;
+        return round_to_i64(vals[0]);
     }
     if parents.len() != shape.len() {
         return 0;
@@ -1939,12 +2043,58 @@ pub(super) fn ragged_bound(
         }
         flat = flat * shape[d] + (v - 1) as usize;
     }
-    vals[flat].round() as i64
+    round_to_i64(vals[flat])
+}
+
+/// `x.round() as i64`, bit for bit, without the call to libm's `round` (not
+/// an instruction on baseline x86-64) when `x` is already integral, as a
+/// subscript or a ragged bound almost always is: then the truncating cast is
+/// exact and is the rounded value. A value it does not round-trip (a
+/// fraction, a NaN, or one past `i64`'s range) takes `round` as before.
+#[inline]
+pub(super) fn round_to_i64(x: f64) -> i64 {
+    let i = x as i64;
+    if i as f64 == x { i } else { x.round() as i64 }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`round_to_i64`] is `round() as i64` on every class of value: exact
+    /// integers, halves (away from zero), signed zeros, NaN, infinities and
+    /// values past `i64`'s range on both sides.
+    #[test]
+    fn round_to_i64_is_round_then_cast() {
+        let mut xs = vec![
+            0.0,
+            -0.0,
+            0.5,
+            -0.5,
+            1.5,
+            2.5,
+            -2.5,
+            0.49999999999999994,
+            -0.49999999999999994,
+            3.0,
+            -7.0,
+            1e15 + 0.5,
+            4503599627370497.0,
+            9.223372036854776e18,
+            -9.223372036854776e18,
+            1e300,
+            -1e300,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::MIN_POSITIVE,
+            f64::EPSILON,
+        ];
+        xs.extend((-40..=40).map(|k| k as f64 * 0.25));
+        for x in xs {
+            assert_eq!(round_to_i64(x), x.round() as i64, "{x:e}");
+        }
+    }
 
     fn gate(src: &str, tgt: &str, pairs: &[(i64, i64)], clause_ix: usize) -> BuiltGate {
         BuiltGate {
