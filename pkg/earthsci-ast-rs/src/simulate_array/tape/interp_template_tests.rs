@@ -172,6 +172,21 @@ fn model(which: Lookup, spelling: Spelling, cells: Option<i64>, nan: bool) -> Va
     })
 }
 
+/// Every template-spelled lookup model: each family, per cell and scalar,
+/// with and without a NaN query.
+#[cfg(feature = "xla")]
+pub(super) fn all_template_models() -> Vec<Value> {
+    let mut out = Vec::new();
+    for which in [Lookup::Searchsorted, Lookup::Linear, Lookup::Bilinear] {
+        for cells in [Some(6), None] {
+            for nan in [false, true] {
+                out.push(model(which, Spelling::Template, cells, nan));
+            }
+        }
+    }
+    out
+}
+
 /// The taped `dy` of `doc` at a few seeded states, as bits.
 fn taped_dy(doc: &Value) -> Vec<Vec<u64>> {
     let file = crate::parse::load_string(&doc.to_string()).expect("loads");

@@ -68,9 +68,15 @@ function _de_scalar(ctx::_DECtx, nd::_E._Node, cache::Vector{_DEVal})::_DEVal
     elseif k === _E._NK_CACHED
         return cache[nd.idx]
     elseif k === _E._NK_CONTRACTION
+        cnt = _de_count_unrolled(nd, x -> _de_scalar_keyval(ctx, x), _de_same_node)
+        cnt === nothing ||
+            return _de_emit_count(ctx, cnt, _de_scalar(ctx, cnt.query, cache))
         terms = _DEVal[_de_scalar(ctx, ch, cache) for ch in nd.children]
         return _de_fold_terms(ctx, nd.op, nd.literal, terms)
     elseif k === _E._NK_CONTRACTION_LOOP
+        cnt = _de_count_loop(ctx, nd)
+        cnt === nothing ||
+            return _de_emit_count(ctx, cnt, _de_scalar(ctx, cnt.query, cache))
         # Emission-time unroll of the static range, in the interpreter's
         # ascending order. A loop whose BODY is host data never gets here — it
         # folded above — and a long one lands in `stablehlo.reduce` rather than a
@@ -86,7 +92,8 @@ function _de_scalar(ctx::_DECtx, nd::_E._Node, cache::Vector{_DEVal})::_DEVal
     elseif k === _E._NK_LOOPVAR
         return _de_const(ctx, Float64((nd.payload::Base.RefValue{Int})[]))
     elseif k === _E._NK_CONST_GATHER
-        return _de_const(ctx, _de_hostval(ctx, nd))
+        _de_static(ctx, nd) && return _de_const(ctx, _de_hostval(ctx, nd))
+        return _de_cgather(ctx, nd, ch -> _de_scalar(ctx, ch, cache), _ -> nothing)
     elseif k === _E._NK_STATE_GATHER
         sg = nd.payload::_E._StateGather
         off = 0
@@ -117,6 +124,13 @@ function _de_scalar(ctx::_DECtx, nd::_E._Node, cache::Vector{_DEVal})::_DEVal
         if nd.op === :fn
             return _de_fn(ctx, nd, ch -> _de_scalar(ctx, ch, cache))
         end
+        if nd.op === :+
+            cnt = _de_count_unrolled(nd, x -> _de_scalar_keyval(ctx, x), _de_same_node)
+            cnt === nothing ||
+                return _de_emit_count(ctx, cnt, _de_scalar(ctx, cnt.query, cache))
+        end
+        _de_is_cgather(nd) &&
+            return _de_cgather(ctx, nd, ch -> _de_scalar(ctx, ch, cache), _ -> nothing)
         if (nd.op === :^ || nd.op === :pow) && length(nd.children) == 2 &&
                 nd.children[2].kind === _E._NK_LITERAL
             base = _de_scalar(ctx, nd.children[1], cache)
@@ -309,6 +323,13 @@ function _de_acck(
         bodyE = _de_acck(ctx, nd.children[1], K, Ep, invvals, cellvals, sub)
         return _de_reduce_fold(ctx, bodyE, plan.red_seg, K.zerobar, :+)
     elseif k === _E._NK_CONTRACTION
+        cnt = _de_count_unrolled(
+            nd, x -> _de_acck_keyval(x, K, plan), (a, b) -> _de_acck_same(a, b, K, plan),
+            x -> _de_acck_term(x, K)
+        )
+        cnt === nothing || return _de_emit_count(
+            ctx, cnt, _de_acck(ctx, cnt.query, K, plan, invvals, cellvals, sub)
+        )
         terms = _DEVal[
             _de_acck(ctx, ch, K, plan, invvals, cellvals, sub)
                 for ch in nd.children
@@ -318,6 +339,19 @@ function _de_acck(
         if nd.op === :fn
             return _de_fn(ctx, nd, ch -> _de_acck(ctx, ch, K, plan, invvals, cellvals, sub))
         end
+        if nd.op === :+
+            cnt = _de_count_unrolled(
+                nd, x -> _de_acck_keyval(x, K, plan), (a, b) -> _de_acck_same(a, b, K, plan),
+                x -> _de_acck_term(x, K)
+            )
+            cnt === nothing || return _de_emit_count(
+                ctx, cnt, _de_acck(ctx, cnt.query, K, plan, invvals, cellvals, sub)
+            )
+        end
+        _de_is_cgather(nd) && return _de_cgather(
+            ctx, nd, ch -> _de_acck(ctx, ch, K, plan, invvals, cellvals, sub),
+            x -> _de_acck_cached(x, K)
+        )
         if (nd.op === :^ || nd.op === :pow) && length(nd.children) == 2 &&
                 nd.children[2].kind === _E._NK_LITERAL
             base = _de_acck(ctx, nd.children[1], K, plan, invvals, cellvals, sub)

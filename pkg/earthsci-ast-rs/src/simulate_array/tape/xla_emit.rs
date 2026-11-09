@@ -89,6 +89,11 @@ use xla::{ArrayElement, ElementType, PrimitiveType, XlaBuilder, XlaComputation, 
 /// neither the ordered per-cell loop nor a channel for the causal self-read's
 /// fail-closed fault, and CONFORMANCE_SPEC §5.19.3b wants a route that cannot
 /// agree to decline loudly rather than return a number.
+/// The window length from which an [`Instr::Count`] over compile-time keys
+/// is lowered as a bisection ([`Emitter::count_search`]) rather than as one
+/// comparison per key.
+const COUNT_SEARCH_MIN: usize = 64;
+
 const RECURRENCE_REFUSAL: &str = "a causal self-reference (recurrence, esm-spec §4.3.1.1) is a \
      sequential sweep whose self-read fails closed at run time; this emitter lowers neither \
      the ordered per-cell loop nor a channel for that fault, so the model is refused \
@@ -295,8 +300,21 @@ pub(crate) fn emit_program(
     compiled: &ArrayCompiled,
 ) -> Result<EmittedRhs, XlaEmitError> {
     debug_assert!(!prog.col_major, "the emitter lowers row-major programs");
+    let hoisted = hoist(prog, compiled)?;
     let builder = XlaBuilder::new("earthsci_rhs");
     let mut em = Emitter::new(&builder, prog, compiled)?;
+    if let Some(h) = hoisted {
+        for (slot, values) in &h.values {
+            let dims = em.out_dims(*slot);
+            let d: Vec<i64> = dims.iter().map(|&x| x as i64).collect();
+            let lit = em.wrap(
+                builder.constant_r1(&values[..]).and_then(|c| c.reshape(&d)),
+                "hoisted constant",
+            )?;
+            em.define(*slot, lit);
+        }
+        em.hoisted = h.slots;
+    }
     let du = em.run()?;
     let forcing = em.forcing_param.take().map(|_| ForcingFeed {
         buffer: Rc::clone(&compiled.forcing),
@@ -330,6 +348,264 @@ fn opcode_counts(prog: &TapeProgram) -> Vec<(&'static str, usize)> {
         }
     }
     counts
+}
+
+// ---------------------------------------------------------------------------
+// Constant hoisting.
+// ---------------------------------------------------------------------------
+
+/// Elements the hoistable instructions write, at and above which they are
+/// evaluated once ahead of the program rather than on every call.
+const HOIST_MIN_ELEMENTS: usize = 4096;
+
+/// Which slots hold compile-time constants: defined once, outside every
+/// branch, by an instruction of a pure kind whose every input is a literal or
+/// another constant slot. No state, parameter, time or forcing reaches one.
+fn constant_slots(prog: &TapeProgram) -> Vec<bool> {
+    let n = prog.slots.len();
+    let tables = prog.tables();
+    let mut defs = vec![0u32; n];
+    for ins in &prog.instrs {
+        ins.for_each_def(&tables, |s| defs[s as usize] += 1);
+    }
+    let mut in_branch = vec![false; prog.instrs.len()];
+    for (pc, ins) in prog.instrs.iter().enumerate() {
+        if let Instr::JmpIfZero {
+            n_true, n_false, ..
+        } = ins
+        {
+            let end = (pc + 1 + *n_true as usize + *n_false as usize).min(prog.instrs.len());
+            in_branch[pc + 1..end].iter_mut().for_each(|f| *f = true);
+        }
+    }
+    let mut k = vec![false; n];
+    for (pc, ins) in prog.instrs.iter().enumerate() {
+        let Some(out) = ins.out() else { continue };
+        if in_branch[pc] || defs[out as usize] != 1 {
+            continue;
+        }
+        let constant = {
+            let op = |o: &Operand| match o {
+                Operand::Lit(_) => true,
+                Operand::Slot(s) => k[*s as usize],
+                _ => false,
+            };
+            let src = |s: &SrcRef| matches!(s, SrcRef::Slot(id) if k[*id as usize]);
+            match ins {
+                Instr::ConstArray { .. } | Instr::Ramp { .. } => true,
+                Instr::Bin { a, b, .. } => op(a) && op(b),
+                Instr::Un { a, .. }
+                | Instr::Neg { a, .. }
+                | Instr::Fill { v: a, .. }
+                | Instr::Copy { a, .. } => op(a),
+                Instr::Select { cond, a, b, .. } => op(cond) && op(a) && op(b),
+                Instr::Gather { src: s, .. }
+                | Instr::LoadElem { src: s, .. }
+                | Instr::Reduce { src: s, .. }
+                | Instr::Scan { src: s, .. }
+                | Instr::TableGather { src: s, .. }
+                | Instr::Reshape { src: s, .. } => src(s),
+                Instr::Count { axis, x, .. } => src(axis) && op(x),
+                Instr::IndexGather { src: s, idx, .. } => src(s) && op(idx),
+                Instr::DataGather { src: s, spec, .. } => {
+                    src(s) && prog.data_gathers[*spec as usize].subs.iter().all(op)
+                }
+                Instr::SegReduce { src: s, mask, .. } => {
+                    k[*s as usize] && mask.is_none_or(|m| k[m as usize])
+                }
+                Instr::Region { base, src: s, .. } => k[*base as usize] && op(s),
+                Instr::PolyArea { a, b, .. } => src(a) && src(b),
+                _ => false,
+            }
+        };
+        if constant {
+            k[out as usize] = true;
+        }
+    }
+    k
+}
+
+/// What [`hoist`] evaluated: which slots are constants, and the values of
+/// those the rest of the program reads.
+struct Hoisted {
+    slots: Vec<bool>,
+    values: Vec<(SlotId, Vec<f64>)>,
+}
+
+/// Evaluate the program's compile-time constants once, ahead of it.
+///
+/// The emitted program recomputes its whole CONST section on every call (the
+/// module docs' cadence note). When that section holds real work — an
+/// overlap area per source x target pair over literal rings, a table read at
+/// literal subscripts — it is emitted on its own, run once with the same
+/// emitter arms, and its results enter the program as literals: the same
+/// numbers, computed once. A computed-subscript gather that can fault, which
+/// the program could not report, is resolved here too: its subscripts are
+/// evaluated with the rest and checked on the host exactly as
+/// [`DataGatherSpec::at`] checks them — a fault there is a fault on every
+/// call, and the model is refused with it; otherwise the gather is a
+/// constant like any other.
+///
+/// `None` when there is too little constant work to pay for the extra
+/// compile and nothing that can fault, or when the constant section does not
+/// emit on its own (the program then emits as before and reports whatever it
+/// refuses itself).
+fn hoist(prog: &TapeProgram, compiled: &ArrayCompiled) -> R<Option<Hoisted>> {
+    let k = constant_slots(prog);
+    let is_const = |ins: &Instr| ins.out().is_some_and(|o| k[o as usize]);
+    let mut work = 0usize;
+    let mut faulting = Vec::new();
+    for (pc, ins) in prog.instrs.iter().enumerate() {
+        if !is_const(ins) {
+            continue;
+        }
+        match ins {
+            Instr::ConstArray { .. } | Instr::Ramp { .. } | Instr::Fill { .. } => {}
+            Instr::DataGather { faults: true, .. } => faulting.push(pc),
+            _ => {
+                let o = ins.out().expect("a constant instruction defines a slot");
+                work += prog.slots[o as usize].shape.iter().product::<usize>();
+            }
+        }
+    }
+    if faulting.is_empty() && work < HOIST_MIN_ELEMENTS {
+        return Ok(None);
+    }
+    let tables = prog.tables();
+    let mut frontier: Vec<SlotId> = Vec::new();
+    for ins in &prog.instrs {
+        if !is_const(ins) {
+            ins.for_each_read(&tables, |s| {
+                if k[s as usize] && !frontier.contains(&s) {
+                    frontier.push(s);
+                }
+            });
+        }
+    }
+    let rule_of = |pc: usize| {
+        prog.provenance
+            .get(pc)
+            .and_then(|ord| prog.rules.get(*ord as usize))
+            .map_or_else(|| "<program>".to_string(), |r| r.name.clone())
+    };
+
+    let b = XlaBuilder::new("earthsci_rhs_constants");
+    let mut em = Emitter::new(&b, prog, compiled)?;
+    for (pc, ins) in prog.instrs.iter().enumerate() {
+        if !is_const(ins) {
+            continue;
+        }
+        em.cur_rule = rule_of(pc);
+        let done = match ins {
+            Instr::DataGather { src, spec, out, .. } => em
+                .emit_data_gather(src, *spec, *out)
+                .map(|v| em.define(*out, v)),
+            _ => em.emit_one(pc),
+        };
+        if done.is_err() {
+            return Ok(None);
+        }
+    }
+    // Everything the host needs, flattened into one vector: the frontier
+    // slots, then each faulting gather's subscripts over its box.
+    let mut pieces: Vec<XlaOp> = Vec::new();
+    let mut lens: Vec<usize> = Vec::new();
+    let mut flat = |em: &Emitter, v: &XlaOp| -> R<()> {
+        let n: usize = em.dims(v)?.iter().product::<usize>();
+        pieces.push(em.wrap(v.reshape(&[n as i64]), "hoist: flatten")?);
+        lens.push(n);
+        Ok(())
+    };
+    for &s in &frontier {
+        let v = em.slots[s as usize]
+            .clone()
+            .ok_or_else(|| em.err(format!("hoisted slot {s} was not defined")))?;
+        flat(&em, &v)?;
+    }
+    for &pc in &faulting {
+        let Instr::DataGather { spec, out, .. } = &prog.instrs[pc] else {
+            unreachable!("collected as a DataGather");
+        };
+        let dims = em.out_dims(*out);
+        for sub in &prog.data_gathers[*spec as usize].subs {
+            let v = em.operand(sub)?;
+            let v = em.to_shape(&v, &dims)?;
+            flat(&em, &v)?;
+        }
+    }
+    if pieces.is_empty() {
+        return Ok(Some(Hoisted {
+            slots: k,
+            values: Vec::new(),
+        }));
+    }
+    let all = if pieces.len() == 1 {
+        pieces.pop().expect("one piece")
+    } else {
+        let rest: Vec<XlaOp> = pieces.split_off(1);
+        em.wrap(pieces[0].concat_in_dim(&rest, 0), "hoist: concatenate")?
+    };
+    let Ok(comp) = all.build() else {
+        return Ok(None);
+    };
+    let Ok(client) = crate::xla_runtime::client() else {
+        return Ok(None);
+    };
+    let Ok(exe) = client.compile(&comp) else {
+        return Ok(None);
+    };
+    let mut args = vec![
+        xla::Literal::vec1(&vec![0.0f64; compiled.n_states]),
+        xla::Literal::vec1(&vec![0.0f64; prog.params_len.max(1)]),
+        xla::Literal::scalar(0.0f64),
+    ];
+    if em.forcing_param.is_some() {
+        args.push(xla::Literal::vec1(&vec![0.0f64; em.forcing_len.max(1)]));
+    }
+    let total: usize = lens.iter().sum();
+    let mut host = vec![0.0f64; total];
+    let copied = exe.execute::<xla::Literal>(&args).ok().and_then(|r| {
+        let buf = r.first()?.first()?;
+        buf.copy_raw_to_host_sync(&mut host, 0).ok()
+    });
+    if copied.is_none() {
+        return Ok(None);
+    }
+
+    let mut at = 0usize;
+    let mut values = Vec::with_capacity(frontier.len());
+    for (i, &s) in frontier.iter().enumerate() {
+        values.push((s, host[at..at + lens[i]].to_vec()));
+        at += lens[i];
+    }
+    let mut li = frontier.len();
+    for &pc in &faulting {
+        let Instr::DataGather { spec, .. } = &prog.instrs[pc] else {
+            unreachable!("collected as a DataGather");
+        };
+        let spec = &prog.data_gathers[*spec as usize];
+        let mut subs: Vec<&[f64]> = Vec::with_capacity(spec.subs.len());
+        for _ in &spec.subs {
+            subs.push(&host[at..at + lens[li]]);
+            at += lens[li];
+            li += 1;
+        }
+        let n_out = subs.first().map_or(0, |s| s.len());
+        for e in 0..n_out {
+            if let DataAt::Fault { d, raw } = spec.at(|d| subs[d][e]) {
+                return Err(XlaEmitError::new(
+                    rule_of(pc),
+                    format!(
+                        "the program raises a fail-closed evaluation fault on every call \
+                         (a computed-subscript gather over compile-time data), which a \
+                         compiled program cannot report: {}",
+                        spec.fault_message(d, raw)
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(Some(Hoisted { slots: k, values }))
 }
 
 // ---------------------------------------------------------------------------
@@ -367,6 +643,10 @@ struct Emitter<'a> {
     /// The loaded forcings in `f` order, and `f`'s length.
     forcing_layout: Vec<(ForcingRef, usize)>,
     forcing_len: usize,
+    /// Per slot: a compile-time constant [`hoist`] evaluated ahead of the
+    /// program, so the instruction defining it is not emitted (the slots the
+    /// rest of the program reads arrive as literals).
+    hoisted: Vec<bool>,
 }
 
 impl<'a> Emitter<'a> {
@@ -458,6 +738,7 @@ impl<'a> Emitter<'a> {
             forcing_offsets,
             forcing_layout,
             forcing_len,
+            hoisted: vec![false; prog.slots.len()],
         };
         em.state = em.build_state_views()?;
         Ok(em)
@@ -842,7 +1123,12 @@ impl<'a> Emitter<'a> {
             if let Instr::Sweep { .. } = &self.prog.instrs[pc] {
                 return Err(self.err(RECURRENCE_REFUSAL));
             }
-            self.emit_one(pc)?;
+            if !self.prog.instrs[pc]
+                .out()
+                .is_some_and(|o| self.hoisted[o as usize])
+            {
+                self.emit_one(pc)?;
+            }
             pc += 1;
         }
         Ok(())
@@ -1278,6 +1564,13 @@ impl<'a> Emitter<'a> {
                 let dims = self.out_dims(*out);
                 let q = self.operand(x)?;
                 let q = self.to_shape(&q, &dims)?;
+                if n >= COUNT_SEARCH_MIN {
+                    if let Some(keys) = self.const_window(axis, lo, n) {
+                        let v = self.count_search(*rel, keys, &dims, &q)?;
+                        self.define(*out, v);
+                        return Ok(());
+                    }
+                }
                 let win = self.wrap(
                     a.slice_in_dim(lo as i64, (lo + n) as i64, 1, 0),
                     "count: axis window",
@@ -1355,13 +1648,20 @@ impl<'a> Emitter<'a> {
                 return Err(self.err("JmpIfZero reached emit_one (handled by emit_range)"));
             }
             Instr::Sweep { .. } => return Err(self.err(RECURRENCE_REFUSAL)),
-            Instr::DataGather { faults, .. } => {
-                return Err(self.err(if *faults {
-                    "a computed-subscript const-array gather (`DataGather`) can raise a \
-                     fail-closed fault, which a compiled program cannot report"
-                } else {
-                    "a computed-subscript gather (`DataGather`) has no XLA lowering yet"
-                }));
+            Instr::DataGather {
+                src,
+                spec,
+                out,
+                faults,
+            } => {
+                if *faults {
+                    return Err(self.err(
+                        "a computed-subscript const-array gather (`DataGather`) can raise a \
+                         fail-closed fault, which a compiled program cannot report",
+                    ));
+                }
+                let v = self.emit_data_gather(src, *spec, *out)?;
+                self.define(*out, v);
             }
             Instr::ScalarRead { .. } => {
                 // Only a recurrence body holds one, and the sweep is refused
@@ -1664,6 +1964,79 @@ impl<'a> Emitter<'a> {
         self.wrap(flat.reshape(&d), "polygon area: reshape")
     }
 
+    /// The window `lo .. lo + n` of a count axis that is a compile-time
+    /// constant (a slot an [`Instr::ConstArray`] defines), or `None`.
+    fn const_window(&self, s: &SrcRef, lo: usize, n: usize) -> Option<Vec<f64>> {
+        let SrcRef::Slot(id) = s else {
+            return None;
+        };
+        let data = self.prog.instrs.iter().find_map(|i| match i {
+            Instr::ConstArray { data, out } if out == id => {
+                Some(&self.prog.const_data[*data as usize])
+            }
+            _ => None,
+        })?;
+        (data.shape.len() == 1 && lo + n <= data.values.len())
+            .then(|| data.values[lo..lo + n].to_vec())
+    }
+
+    /// [`Instr::Count`] over compile-time keys, as a bisection.
+    ///
+    /// A NaN key satisfies no comparison, so the keys that can count are the
+    /// others; sorted (under `<=`, which puts `-0.0` and `+0.0` together as
+    /// the comparison does), those satisfying `a <= x` / `a < x` are a prefix
+    /// and those satisfying `a >= x` / `a > x` a suffix, whatever `x` is (a
+    /// NaN `x` satisfies none). The prefix of keys where `P` holds — the
+    /// relation for `<=`/`<`, its negation for `>=`/`>` — is found by binary
+    /// lifting in `s32`: `c += step` whenever `P(keys[c + step - 1])`, for each
+    /// power of two from the largest down, which ends at the prefix's length.
+    /// The count is that length, or the remaining keys for `>=`/`>`: the same
+    /// integer the fold reaches, so the same `f64`.
+    fn count_search(&self, rel: CountRel, keys: Vec<f64>, dims: &[usize], q: &XlaOp) -> R<XlaOp> {
+        if dims.is_empty() {
+            let q1 = self.wrap(q.reshape(&[1]), "count: scalar query")?;
+            let c = self.count_search(rel, keys, &[1], &q1)?;
+            return self.wrap(c.reshape(&[]), "count: scalar count");
+        }
+        let mut keys: Vec<f64> = keys.into_iter().filter(|v| !v.is_nan()).collect();
+        keys.sort_by(|a, b| a.partial_cmp(b).expect("NaN keys were removed"));
+        let m = keys.len();
+        let prefix = matches!(rel, CountRel::Le | CountRel::Lt);
+        if m == 0 {
+            return self.splat(0.0, dims);
+        }
+        let kv = self.wrap(self.b.constant_r1(&keys[..]), "count: sorted keys")?;
+        let mut c = self.ci32(0, dims)?;
+        let top = self.ci32(m as i32, dims)?;
+        let one = self.ci32(1, dims)?;
+        let mut step = 1usize << (usize::BITS - 1 - m.leading_zeros());
+        while step > 0 {
+            let cand = self.wrap(c.add_(&self.ci32(step as i32, dims)?), "count: candidate")?;
+            let ok = self.wrap(cand.le(&top), "count: candidate in range")?;
+            let at = self.wrap(
+                cand.min(&top).and_then(|x| x.sub_(&one)),
+                "count: probe position",
+            )?;
+            let a = self.wrap(kv.take(&at, 0), "count: probe key")?;
+            let held = match rel {
+                CountRel::Le => a.le(q),
+                CountRel::Lt => a.lt(q),
+                CountRel::Ge => a.ge(q).and_then(|p| p.not()),
+                CountRel::Gt => a.gt(q).and_then(|p| p.not()),
+            };
+            let held = self.wrap(held, "count: probe compare")?;
+            let take = self.wrap(ok.and(&held), "count: advance")?;
+            c = self.wrap(take.select(&cand, &c), "count: step")?;
+            step >>= 1;
+        }
+        let c = if prefix {
+            c
+        } else {
+            self.wrap(top.sub_(&c), "count: suffix length")?
+        };
+        self.wrap(c.convert(PrimitiveType::F64), "count: s32 -> f64")
+    }
+
     /// The literal an [`Instr::ConstArray`] stores into ring-table slot `s`,
     /// or the refusal saying the table is not a compile-time constant.
     fn const_table(&self, s: &SrcRef) -> R<&ConstArrayData> {
@@ -1771,6 +2144,134 @@ impl<'a> Emitter<'a> {
         }
         let g = self.wrap(flat.take(&off, 0), "indexed gather: take")?;
         self.wrap(valid.select(&g, &zero), "indexed gather: ghost")
+    }
+
+    /// Lower one non-faulting [`Instr::DataGather`]: each subscript resolved
+    /// as [`DataGatherSpec::at`] resolves it — rounded half away from zero
+    /// (XLA's `round`), converted to an integer the way [`subscript_of`]'s
+    /// `as i64` does (NaN reads as 0, out-of-range magnitudes saturate), then
+    /// the zero ghost or the const array's boundary policy — the row-major
+    /// offset built in `s64`, and one `take` over the flattened source. Every
+    /// step is integer selection, so the element read is the oracle's.
+    fn emit_data_gather(&self, src: &SrcRef, spec: u32, out: SlotId) -> R<XlaOp> {
+        use crate::value_invention::BoundaryKind;
+        let spec = &self.prog.data_gathers[spec as usize];
+        let s = self.src(src)?;
+        let have = self.dims(&s)?;
+        if have != spec.src_shape.as_slice() {
+            return Err(self.err(format!(
+                "computed-subscript gather source has shape {have:?} but the spec expects \
+                 {:?}",
+                &spec.src_shape[..]
+            )));
+        }
+        let dims = self.out_dims(out);
+        let total: i64 = spec.src_shape.iter().product::<usize>() as i64;
+        let flat = self.wrap(s.reshape(&[total]), "data gather: flatten source")?;
+        let splat_i = |v: i64| -> R<XlaOp> {
+            let c = self.ci(v)?;
+            self.to_shape(&c, &dims)
+        };
+        let strides = rm_strides(&spec.src_shape);
+        let mut off = splat_i(0)?;
+        let mut ghost: Option<XlaOp> = None;
+        for (d, &n) in spec.src_shape.iter().enumerate() {
+            let v = self.operand(&spec.subs[d])?;
+            let v = self.to_shape(&v, &dims)?;
+            let r = self.wrap(v.round(), "data gather: round")?;
+            // `f as i64`: NaN -> 0, and saturation outside the s64 range.
+            let nan = self.wrap(r.ne(&r), "data gather: isnan")?;
+            let zero = self.splat(0.0, &dims)?;
+            let r = self.wrap(nan.select(&zero, &r), "data gather: NaN reads as 0")?;
+            // 2^63 and -2^63, exactly; the largest f64 below 2^63 converts
+            // exactly too.
+            let (hi_f, lo_f) = (
+                self.splat(i64::MAX as f64, &dims)?,
+                self.splat(i64::MIN as f64, &dims)?,
+            );
+            let too_hi = self.wrap(r.ge(&hi_f), "data gather: saturate high")?;
+            let too_lo = self.wrap(r.lt(&lo_f), "data gather: saturate low")?;
+            let safe = self.wrap(
+                r.min(&self.splat((i64::MAX - 1023) as f64, &dims)?)
+                    .and_then(|x| x.max(&lo_f)),
+                "data gather: pin",
+            )?;
+            let ri = self.wrap(safe.convert(PrimitiveType::S64), "data gather: convert")?;
+            let (imax, imin) = (splat_i(i64::MAX)?, splat_i(i64::MIN)?);
+            let ri = self.wrap(
+                too_hi
+                    .select(&imax, &ri)
+                    .and_then(|x| too_lo.select(&imin, &x)),
+                "data gather: saturate",
+            )?;
+            let n_i = n as i64;
+            let (one, nv) = (splat_i(1)?, splat_i(n_i)?);
+            let inside = self.wrap(
+                ri.ge(&one)
+                    .and_then(|lo| ri.le(&nv).and_then(|hi| lo.and(&hi))),
+                "data gather: in range",
+            )?;
+            let (zero_i, last_i) = (splat_i(0)?, splat_i((n_i - 1).max(0))?);
+            let in_pos = self.wrap(
+                ri.sub_(&one)
+                    .and_then(|p| p.max(&zero_i))
+                    .and_then(|p| p.min(&last_i)),
+                "data gather: position",
+            )?;
+            let policy = match &spec.kind {
+                ScalarReadKind::ConstArray { policy, .. } => Some(policy[d]),
+                _ => None,
+            };
+            let pos = match policy {
+                Some(BoundaryKind::Periodic) if n_i >= 1 => {
+                    // `(r - 1).rem_euclid(n)`, with the wrapping `r - 1`.
+                    let m =
+                        self.wrap(ri.sub_(&one).and_then(|x| x.rem_(&nv)), "data gather: rem")?;
+                    let neg = self.wrap(m.lt(&zero_i), "data gather: rem sign")?;
+                    let wrapped = self.wrap(m.add_(&nv), "data gather: rem + n")?;
+                    let m = self.wrap(neg.select(&wrapped, &m), "data gather: rem_euclid")?;
+                    self.wrap(inside.select(&in_pos, &m), "data gather: periodic")?
+                }
+                Some(BoundaryKind::Clamp) if n_i >= 1 => self.wrap(
+                    ri.max(&one)
+                        .and_then(|x| x.min(&nv))
+                        .and_then(|x| x.sub_(&one)),
+                    "data gather: clamp",
+                )?,
+                Some(_) => {
+                    // An `error` axis: the spec cannot fault (checked above),
+                    // so no element reaches it; `at` reads position 0 there.
+                    self.wrap(inside.select(&in_pos, &zero_i), "data gather: error axis")?
+                }
+                None => {
+                    let out_of = self.wrap(inside.not(), "data gather: ghost axis")?;
+                    ghost = Some(match ghost {
+                        None => out_of,
+                        Some(g) => self.wrap(g.or(&out_of), "data gather: ghost")?,
+                    });
+                    in_pos
+                }
+            };
+            let st = splat_i(strides[d])?;
+            off = self.wrap(
+                pos.mul_(&st).and_then(|t| off.add_(&t)),
+                "data gather: offset",
+            )?;
+        }
+        let g = if dims.is_empty() {
+            let o1 = self.wrap(off.reshape(&[1]), "data gather: scalar index")?;
+            let g1 = self.wrap(flat.take(&o1, 0), "data gather: take")?;
+            self.wrap(g1.reshape(&[]), "data gather: scalar result")?
+        } else {
+            self.wrap(flat.take(&off, 0), "data gather: take")?
+        };
+        match ghost {
+            None => Ok(g),
+            Some(gh) => {
+                let zero = self.splat(0.0, &dims)?;
+                self.wrap(gh.select(&zero, &g), "data gather: zero ghost")
+            }
+        }
     }
 
     // -- gather ------------------------------------------------------------
@@ -2118,6 +2619,7 @@ impl<'a> Emitter<'a> {
     /// Planes are folded strictly in ascending order, one elementwise combine
     /// per step, so every position folds its terms in the tape's own
     /// association: this lowering adds no reordering of its own.
+    #[allow(clippy::too_many_arguments)]
     fn emit_scan_loop(
         &self,
         op: BinCode,
@@ -2232,6 +2734,74 @@ impl<'a> Emitter<'a> {
             _ => {
                 let head = flat.remove(0);
                 self.wrap(head.concat_in_dim(&flat, 0), "du: concat")
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// [`Emitter::count_search`] against a direct count, over keys with
+    /// NaNs, signed zeros and duplicates in no order, for every relation, at
+    /// queries on, between and outside the keys, NaN and both infinities.
+    #[test]
+    fn bisection_counts_what_a_direct_count_counts() {
+        if std::env::var_os("XLA_EXTENSION_DIR").is_none() {
+            eprintln!("SKIP: XLA_EXTENSION_DIR is unset");
+            return;
+        }
+        let mut q = vec![
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            0.0,
+            -0.0,
+            -3.0,
+            9.0,
+        ];
+        let mut keys: Vec<f64> = (0..70)
+            .map(|j| ((j * 37) % 23) as f64 * 0.25 - 2.0)
+            .collect();
+        keys[5] = f64::NAN;
+        keys[40] = f64::NAN;
+        keys[11] = -0.0;
+        keys[12] = 0.0;
+        for &k in keys.iter().filter(|k| k.is_finite()) {
+            q.extend([k, k + 0.125]);
+        }
+        let n = q.len();
+        let d = super::super::array_tests::doc(
+            serde_json::json!({"u": {"type": "unknown", "shape": ["i"]}}),
+            vec![super::super::array_tests::d_eq(
+                "u",
+                n as i64,
+                serde_json::json!({"op": "neg", "args": [{"op": "index", "args": ["u", "i"]}]}),
+            )],
+        );
+        let compiled = super::super::array_tests::compile(d);
+        let (prog, _) = compiled.build_tape_layout(&HashSet::new(), None, false);
+        let prog = prog.expect("tape");
+        let client = crate::xla_runtime::client().expect("client");
+        for rel in [CountRel::Le, CountRel::Lt, CountRel::Ge, CountRel::Gt] {
+            let b = XlaBuilder::new("count_search_probe");
+            let em = Emitter::new(&b, &prog, &compiled).expect("emitter");
+            let c = em
+                .count_search(rel, keys.clone(), &[n], &em.u)
+                .expect("bisection");
+            let exe = client.compile(&c.build().expect("build")).expect("compile");
+            let args = [
+                xla::Literal::vec1(&q),
+                xla::Literal::vec1(&vec![0.0f64; prog.params_len.max(1)]),
+                xla::Literal::scalar(0.0f64),
+            ];
+            let out = exe.execute::<xla::Literal>(&args).expect("execute");
+            let mut got = vec![0.0f64; n];
+            out[0][0].copy_raw_to_host_sync(&mut got, 0).expect("copy");
+            for (x, g) in q.iter().zip(&got) {
+                let want = keys.iter().filter(|&&k| rel.holds(k, *x)).count() as f64;
+                assert_eq!(g.to_bits(), want.to_bits(), "{rel:?} at {x}: {g} vs {want}");
             }
         }
     }
