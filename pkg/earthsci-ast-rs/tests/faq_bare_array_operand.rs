@@ -10,7 +10,9 @@
 
 #![cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
 
-use earthsci_ast::{Compiler, ProblemOptions, esm_problem, observed_field};
+use earthsci_ast::{
+    Compiler, ProblemOptions, esm_problem, flatten, load_string, observed_field, validate,
+};
 use serde_json::{Value, json};
 
 fn idx(v: &str, s: &str) -> Value {
@@ -139,5 +141,158 @@ fn undeclared_array_filter_of_the_wrong_rank_fails_closed() {
                 c.as_str()
             ),
         }
+    }
+}
+
+fn refused_everywhere(d: &Value) {
+    for c in COMPILERS {
+        let err = y(d, c).expect_err(c.as_str());
+        assert!(
+            err.contains("faq_bare_array_operand"),
+            "{}: {err}",
+            c.as_str()
+        );
+    }
+}
+
+/// `a_val` declares no shape; its defining `faq` over `a_rows` makes it an
+/// array. `validate` reads declarations only and passes it; the build reads
+/// inferred shapes, as Julia's and Python's builds do, and refuses the bare
+/// read.
+#[test]
+fn bare_read_of_an_inferred_shape_is_refused_at_build() {
+    let mut d = doc(gate(json!("a_val")), None, None);
+    d["models"]["M"]["variables"]["base"] =
+        json!({"type": "parameter", "units": "1", "shape": ["a_rows"], "default": [1.0, 2.0, 3.0]});
+    d["models"]["M"]["equations"][0]["rhs"] = json!({
+        "op": "faq", "args": [], "output_idx": ["i"],
+        "ranges": {"i": {"from": "a_rows"}}, "expr": idx("base", "i")
+    });
+    let file = load_string(&d.to_string()).expect("loads");
+    assert!(validate(&file).structural_errors.is_empty());
+    refused_everywhere(&d);
+}
+
+/// The check runs on the model the build compiles, so an already-flattened
+/// input is refused as a document is.
+#[test]
+fn bare_shaped_filter_in_a_flattened_input_is_refused() {
+    let d = doc(gate(json!("a_val")), Some(json!(["a_rows"])), None);
+    let flat = flatten(&load_string(&d.to_string()).expect("loads")).expect("flattens");
+    for c in COMPILERS {
+        let opts = ProblemOptions {
+            compiler: Some(c),
+            ..Default::default()
+        };
+        let err = esm_problem(&flat, (0.0, 0.0), opts)
+            .map(|_| ())
+            .expect_err(c.as_str())
+            .to_string();
+        assert!(
+            err.contains("faq_bare_array_operand"),
+            "{}: {err}",
+            c.as_str()
+        );
+    }
+}
+
+/// A shaped variable of another model, read by its scoped name `Other.a_val`,
+/// and a subsystem's equation, delivered bare through a template so that
+/// `validate` passes them: both refused at build.
+#[test]
+fn cross_model_and_subsystem_bare_reads_are_refused_at_build() {
+    let templates = json!({"gate": {"params": ["x"], "body": gate(json!("x"))}});
+    let via = |x: &str| {
+        json!({
+            "op": "apply_expression_template", "args": [], "name": "gate",
+            "bindings": {"x": x}
+        })
+    };
+
+    // Cross-model: M's filter gates on Other.a_val.
+    let mut d = doc(
+        via("Other.a_val"),
+        Some(json!(["a_rows"])),
+        Some(templates.clone()),
+    );
+    d["models"]["Other"] = json!({
+        "variables": {"a_val": {"type": "unknown", "units": "1", "shape": ["a_rows"]}},
+        "equations": [{"lhs": "a_val", "rhs": {"op": "const", "args": [], "value": [1.0, 2.0, 3.0]}}]
+    });
+    let file = load_string(&d.to_string()).expect("loads");
+    assert!(
+        validate(&file)
+            .structural_errors
+            .iter()
+            .all(|e| e.code.to_string() != "faq_bare_array_operand")
+    );
+    refused_everywhere(&d);
+
+    // Subsystem: the whole of M mounted under Host.
+    // A subsystem's applications expand against its top-level model's
+    // registry, so the template is declared on Host.
+    let inner = doc(via("a_val"), Some(json!(["a_rows"])), None);
+    let mut d = inner.clone();
+    d["models"] = json!({"Host": {
+        "variables": {"z": {"type": "unknown", "units": "1"}},
+        "equations": [{"lhs": "z", "rhs": 1.0}],
+        "expression_templates": templates,
+        "subsystems": {"M": inner["models"]["M"].clone()}
+    }});
+    let file = load_string(&d.to_string()).expect("loads");
+    assert!(
+        validate(&file)
+            .structural_errors
+            .iter()
+            .all(|e| e.code.to_string() != "faq_bare_array_operand")
+    );
+    for c in COMPILERS {
+        let opts = ProblemOptions {
+            compiler: Some(c),
+            ..Default::default()
+        };
+        let err = esm_problem(&d, (0.0, 0.0), opts)
+            .and_then(|p| observed_field(&p, "Host.M.y").map(|_| ()))
+            .expect_err(c.as_str())
+            .to_string();
+        assert!(
+            err.contains("faq_bare_array_operand"),
+            "{}: {err}",
+            c.as_str()
+        );
+    }
+}
+
+/// `D(y) ~ faq(… twice(y) …)`: the template hides the bare state from
+/// `validate`, and the build check does not exempt a derivative's own state.
+#[test]
+fn derivative_state_delivered_bare_by_a_template_is_refused_at_build() {
+    let mut d: Value = serde_json::from_str(include_str!(
+        "../../../tests/invalid/faq/bare_array_operand_derivative.esm"
+    ))
+    .unwrap();
+    let model = &mut d["models"]["Probe"];
+    model["expression_templates"] =
+        json!({"twice": {"params": ["x"], "body": {"op": "*", "args": [2.0, "x"]}}});
+    model["equations"][0]["rhs"]["expr"]["args"][1] = json!({
+        "op": "apply_expression_template", "args": [], "name": "twice",
+        "bindings": {"x": "y"}
+    });
+    let file = load_string(&d.to_string()).expect("loads");
+    assert!(validate(&file).structural_errors.is_empty());
+    for c in COMPILERS {
+        let opts = ProblemOptions {
+            compiler: Some(c),
+            ..Default::default()
+        };
+        let err = esm_problem(&d, (0.0, 1.0), opts)
+            .map(|_| ())
+            .expect_err(c.as_str())
+            .to_string();
+        assert!(
+            err.contains("faq_bare_array_operand"),
+            "{}: {err}",
+            c.as_str()
+        );
     }
 }

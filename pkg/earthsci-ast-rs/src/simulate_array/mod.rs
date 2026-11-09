@@ -99,7 +99,7 @@ pub(crate) use compile::{model_tree_any, parse_subsystem_model};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::{
     apply_flatten_rewrites, model_from_flattened, mount_subsystems, promote_conditional_shapes,
-    resolve_model_self_references,
+    refuse_faq_bare_array_operands, resolve_model_self_references,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use eval::eval_observed_taped;

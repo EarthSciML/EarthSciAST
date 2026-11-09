@@ -3393,7 +3393,7 @@ fn refuse_parameter_definitions(
     Ok(())
 }
 
-/// Refuse three constructs the document can hold but no build may run, each a
+/// Refuse two declarations the document can hold but no build may run, each a
 /// structural error `validate` also reports, which built anyway would be
 /// finite, plausible and wrong:
 ///
@@ -3401,12 +3401,12 @@ fn refuse_parameter_definitions(
 ///   (`reserved_variable_name`, esm-spec §4.9.1.1): every reader of the name
 ///   gets the implicit symbol, never the declared quantity;
 /// * an `ic` equation among a reaction system's `constraint_equations`
-///   (`ic_in_reaction_system`, esm-spec §11.4.1), which no evaluator applies;
-/// * a shaped variable read by bare name in a `faq` body or filter
-///   (`faq_bare_array_operand`, esm-spec §4.3.1), which no evaluator aligns
-///   to the node's symbols by anything but accident.
+///   (`ic_in_reaction_system`, esm-spec §11.4.1), which no evaluator applies.
 ///
-/// Julia and Python refuse all three at their front doors too.
+/// Julia and Python refuse both at their front doors too. A shaped variable
+/// read by bare name in a `faq` (`faq_bare_array_operand`) is refused later,
+/// on the model the build compiles
+/// ([`crate::simulate_array::refuse_faq_bare_array_operands`]).
 fn refuse_structurally_unreachable(file: &EsmFile) -> Result<(), SimulateError> {
     let refuse = |code: &str, path: &str, message: &str, section: &str| {
         SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
@@ -3415,30 +3415,6 @@ fn refuse_structurally_unreachable(file: &EsmFile) -> Result<(), SimulateError> 
     };
     if let Some(e) = crate::structural::reserved_declaration_errors(file).first() {
         return Err(refuse(&e.code.to_string(), &e.path, &e.message, "§4.9.1.1"));
-    }
-    // A shaped variable read by bare name inside a `faq` body or filter
-    // (`faq_bare_array_operand`, esm-spec §4.3.1). `validate` reports it before
-    // template expansion; this is the same check on the EXPANDED document, so a
-    // bare name that arrived through an `apply_expression_template` binding is
-    // refused too. Built anyway, it was a filter the reference evaluator
-    // silently ignored once the node had two output indices (issue #441).
-    if let Some(models) = &file.models {
-        for (model_name, model) in models {
-            let shapes = crate::join::declared_var_shapes(model);
-            let mut errors = Vec::new();
-            for (k, eq) in model.equations.iter().enumerate() {
-                crate::structural::faq_bare_array_operand_errors(
-                    &eq.lhs,
-                    &eq.rhs,
-                    &format!("/models/{model_name}/equations/{k}/rhs"),
-                    &shapes,
-                    &mut errors,
-                );
-            }
-            if let Some(e) = errors.first() {
-                return Err(refuse(&e.code.to_string(), &e.path, &e.message, "§4.3.1"));
-            }
-        }
     }
     if let Some(systems) = &file.reaction_systems {
         for (rs_name, rs) in systems {
