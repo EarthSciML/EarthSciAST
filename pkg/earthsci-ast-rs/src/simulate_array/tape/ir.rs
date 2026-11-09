@@ -2201,22 +2201,26 @@ pub(crate) fn count_rel(
         return (0..n).filter(|&j| rel.holds(at(j), x)).count() as f64;
     }
     // The first position where `in_prefix` turns false (it is true on a
-    // prefix of the window).
-    let split = |in_prefix: &dyn Fn(f64) -> bool| {
-        let (mut lo, mut hi) = (0usize, n);
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            if in_prefix(at(mid)) {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
+    // prefix of the window): the answer lies in `base..=base + size`, and
+    // each step halves `size` with a select rather than a branch.
+    fn split(n: usize, at: &impl Fn(usize) -> f64, in_prefix: impl Fn(f64) -> bool) -> usize {
+        if n == 0 {
+            return 0;
         }
-        lo
-    };
+        let (mut base, mut size) = (0usize, n);
+        while size > 1 {
+            let half = size / 2;
+            let mid = base + half;
+            base = if in_prefix(at(mid)) { mid } else { base };
+            size -= half;
+        }
+        base + usize::from(in_prefix(at(base)))
+    }
     let c = match rel {
-        CountRel::Le | CountRel::Lt => split(&|a| rel.holds(a, x)),
-        CountRel::Ge | CountRel::Gt => n - split(&|a| !rel.holds(a, x)),
+        CountRel::Le => split(n, &at, |a| a <= x),
+        CountRel::Lt => split(n, &at, |a| a < x),
+        CountRel::Ge => n - split(n, &at, |a| !CountRel::Ge.holds(a, x)),
+        CountRel::Gt => n - split(n, &at, |a| !CountRel::Gt.holds(a, x)),
     };
     c as f64
 }

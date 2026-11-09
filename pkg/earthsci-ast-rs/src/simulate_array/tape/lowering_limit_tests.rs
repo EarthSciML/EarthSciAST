@@ -869,6 +869,80 @@ fn counted_bracket_near_misses_decline() {
     assert!(counts(&prog).is_empty(), "two contracted indices");
 }
 
+/// [`count_doc`] with the literal axis `zc` holding `keys` (one level each).
+fn count_doc_keys(keys: &[f64], body: Value) -> Value {
+    let mut d = count_doc(keys.len() as i64, body);
+    d["models"]["M"]["equations"][0]["rhs"]["value"] = json!(keys);
+    d
+}
+
+/// A literal axis in no order (signed zeros, ties) is counted through a
+/// sorted copy of its entries: one bisected `Instr::Count`, and the oracle's
+/// bits for every comparison, both branch orders and every query, including
+/// a NaN query and both zeros. (A document literal cannot hold a NaN; the
+/// copy sets NaN entries of a build-time window aside all the same.)
+#[test]
+fn counted_bracket_unsorted_literal_axis() {
+    let keys = [1.5, -0.0, 2.0, 0.0, 1.0, 1.0, 3.0, 0.25, 2.25, 0.5, 2.0];
+    let zero = op("*", vec![json!(0.0), query()]);
+    let queries = [
+        ("state", query()),
+        ("+0", zero.clone()),
+        ("-0", op("-", vec![zero.clone()])),
+        ("NaN", op("/", vec![zero.clone(), zero])),
+    ];
+    for (qlabel, q) in &queries {
+        for cmp in ["<=", "<", ">=", ">"] {
+            for complement in [false, true] {
+                let (a, b) = if complement { (0, 1) } else { (1, 0) };
+                for axis_left in [true, false] {
+                    let args = if axis_left {
+                        vec![axis_at("zc"), q.clone()]
+                    } else {
+                        vec![q.clone(), axis_at("zc")]
+                    };
+                    let body = op("ifelse", vec![op(cmp, args), json!(a), json!(b)]);
+                    let prog = oracle_ab(count_doc_keys(&keys, body)).0;
+                    let label = format!("{qlabel} {cmp} complement {complement} left {axis_left}");
+                    let c = counts(&prog);
+                    assert_eq!(c.len(), 1, "{label}");
+                    assert!(c[0].1, "{label}: the sorted copy is bisected");
+                    assert_eq!(count(&prog, "Reduce"), 0, "{label}: no fold is left");
+                }
+            }
+        }
+    }
+}
+
+/// `rank_of_set` over a derived index set (`{"from": "edges"}`, its members
+/// the set's `member_factor`, bound at build after value invention) is one
+/// bisected `Instr::Count` over the face edges: the `bench/closed_templates`
+/// `mesh_rank` template document, against the oracle bit for bit.
+#[test]
+fn counted_bracket_rank_of_set_over_a_derived_set() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../bench/closed_templates/mesh_rank_tpl_E208.esm");
+    let mut d: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("benchmark document"))
+            .expect("benchmark document parses");
+    d["models"]["MeshRank"]["expression_template_imports"][0]["ref"] =
+        json!("esm:std/relational.esm");
+    // Each face reads one edge's state through its rank. (The document's
+    // own sum over the face's three edges is not used: the per-cell oracle
+    // reads it as NaN, for the op form too.)
+    let eqs = d["models"]["MeshRank"]["equations"].as_array_mut().unwrap();
+    let last = eqs.len() - 1;
+    eqs[last]["rhs"] = op(
+        "-",
+        vec![
+            ix("w", vec![ix("face_edge_rank", vec![json!("f"), json!(1)])]),
+            ix("q", vec![json!("f")]),
+        ],
+    );
+    let prog = oracle_ab(d).0;
+    assert_eq!(counts(&prog), vec![(CountRel::Ge, true)]);
+}
+
 /// The A/B documents (`bench/interp_bracket`): the composition is taped with
 /// one count per level box, agrees with the oracle bit for bit, and gives
 /// exactly the `interp.linear` spelling's derivative.
