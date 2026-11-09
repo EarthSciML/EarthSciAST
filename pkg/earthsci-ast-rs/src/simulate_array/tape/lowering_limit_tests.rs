@@ -937,7 +937,7 @@ fn mesh_rank_template_doc(n: usize) -> Value {
     }
     let nf = faces.len();
     assert!(
-        nf % 7 != 0,
+        !nf.is_multiple_of(7),
         "the stride must be coprime with the face count"
     );
     let faces: Vec<_> = (0..nf).map(|k| faces[(k * 7) % nf]).collect();
