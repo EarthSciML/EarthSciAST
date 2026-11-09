@@ -64,6 +64,132 @@ pub fn capture_component_templates(value: &Value) -> Option<indexmap::IndexMap<S
     (!out.is_empty()).then_some(out)
 }
 
+/// The private JSON key on which a load marks the root of each template
+/// expansion with its template's name ([`crate::types::ExpressionNode::template_origin`]).
+/// Its value starts with [`template_origin_nonce`], so a key an author wrote
+/// is never taken for one: the schema refuses it.
+pub(crate) const TEMPLATE_ORIGIN_KEY: &str = "__esm_template_origin";
+
+/// This process's prefix of every [`TEMPLATE_ORIGIN_KEY`] value.
+fn template_origin_nonce() -> &'static str {
+    static NONCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NONCE.get_or_init(|| {
+        use std::hash::BuildHasher;
+        let n = std::collections::hash_map::RandomState::new().hash_one(std::process::id());
+        format!("{n:016x}:")
+    })
+}
+
+thread_local! {
+    /// Whether the load in progress marks expansions (see [`MarkTemplateOrigins`]).
+    static LOAD_MARKS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether [`expand_all`] marks the expansions it makes right now.
+    static MARKING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// How many marks this thread has placed, so a load can tell whether a
+    /// mount it resolved placed any before the schema check.
+    static MARKS_PLACED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// While alive, [`expand`] marks the root of each expansion it makes in a
+/// component with its template's name (esm-spec §9.6.11: the elementwise lift
+/// applies only to an application, and this binding expands applications at
+/// load). Held by the typed load around ref resolution and its own expansion;
+/// the public expansion seams, whose output is a document, never mark.
+pub(crate) struct MarkTemplateOrigins(bool);
+
+impl MarkTemplateOrigins {
+    pub(crate) fn on() -> Self {
+        MarkTemplateOrigins(LOAD_MARKS.with(|f| f.replace(true)))
+    }
+}
+
+impl Drop for MarkTemplateOrigins {
+    fn drop(&mut self) {
+        LOAD_MARKS.with(|f| f.set(self.0));
+    }
+}
+
+/// How many template-origin marks this thread has placed so far.
+pub(crate) fn template_origins_placed() -> u64 {
+    MARKS_PLACED.with(std::cell::Cell::get)
+}
+
+/// `expansion` marked as the root of an expansion of `name`, when marking is
+/// on and it is an object; otherwise unchanged.
+pub(super) fn mark_template_origin(expansion: Sv, name: &str) -> Sv {
+    if !MARKING.with(std::cell::Cell::get) {
+        return expansion;
+    }
+    let SNode::Obj(fields) = &*expansion else {
+        return expansion;
+    };
+    let mut out: Vec<(String, Sv)> = fields
+        .iter()
+        .filter(|(k, _)| k != TEMPLATE_ORIGIN_KEY)
+        .cloned()
+        .collect();
+    out.push((
+        TEMPLATE_ORIGIN_KEY.to_string(),
+        Rc::new(SNode::Str(format!("{}{name}", template_origin_nonce()))),
+    ));
+    MARKS_PLACED.with(|c| c.set(c.get() + 1));
+    Rc::new(SNode::Obj(out))
+}
+
+/// `value` with every template-origin mark this process placed removed: the
+/// document as authored and expanded, for the schema check, which a mark (a
+/// private key) would fail. A key an author wrote stays, and fails it.
+pub(crate) fn strip_template_origins(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if map
+                .get(TEMPLATE_ORIGIN_KEY)
+                .and_then(Value::as_str)
+                .is_some_and(|s| s.starts_with(template_origin_nonce()))
+            {
+                map.remove(TEMPLATE_ORIGIN_KEY);
+            }
+            map.values_mut().for_each(strip_template_origins);
+        }
+        Value::Array(items) => items.iter_mut().for_each(strip_template_origins),
+        _ => {}
+    }
+}
+
+/// Serializes a component's raw `subsystems` map with the template-origin
+/// marks taken off. The map is held as JSON, so the marks a load placed on a
+/// mounted leaf's expansions stay in it for the build to read; they are load
+/// provenance and never go on the wire (esm-spec §9.6.11).
+pub(crate) fn serialize_subsystems_unmarked<S: serde::Serializer>(
+    subsystems: &Option<indexmap::IndexMap<String, Value>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::Serialize;
+    match subsystems {
+        Some(map) => {
+            let mut map = map.clone();
+            map.values_mut().for_each(strip_template_origins);
+            map.serialize(serializer)
+        }
+        None => serializer.serialize_none(),
+    }
+}
+
+/// Restores [`MARKING`] when dropped.
+struct MarkingScope(bool);
+
+impl MarkingScope {
+    fn set(on: bool) -> Self {
+        MarkingScope(MARKING.with(|f| f.replace(on)))
+    }
+}
+
+impl Drop for MarkingScope {
+    fn drop(&mut self) {
+        MARKING.with(|f| f.set(self.0));
+    }
+}
+
 pub fn expand(value: &mut Value) -> Result<(), ExpressionTemplateError> {
     let Some(root) = value.as_object_mut() else {
         return Ok(());
@@ -106,6 +232,7 @@ pub fn expand(value: &mut Value) -> Result<(), ExpressionTemplateError> {
                 let Some(child) = comp.get(&k) else { continue };
                 let shared = to_shared(child);
                 let mut memo = PtrMemo::default();
+                let _marking = MarkingScope::set(LOAD_MARKS.with(std::cell::Cell::get));
                 let expanded = expand_all(&shared, &named, &format!("{scope}.{k}"), &mut memo)?;
                 if !Rc::ptr_eq(&expanded, &shared) {
                     comp.insert(k, to_value(&expanded));

@@ -310,7 +310,8 @@ end
     @test ESM._EMISSIBLE_FIELDS == (:op, :args, :wrt, :dim, :fn, :name, :value, :units)
     # `arg`/`bindings` were historically tolerated-and-ignored (absent from the
     # non-emissible literal): a node carrying them still canonicalizes.
-    @test ESM._CANONICAL_IGNORED_FIELDS == (:arg, :bindings)
+    # `template_origin` is load provenance, never on the wire (esm-spec §9.6.11).
+    @test ESM._CANONICAL_IGNORED_FIELDS == (:arg, :bindings, :template_origin)
     # Fail-closed: the three tuples exactly partition fieldnames(OpExpr).
     @test sort(
         collect(

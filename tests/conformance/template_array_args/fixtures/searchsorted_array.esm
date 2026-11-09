@@ -1,0 +1,179 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "template_array_args_searchsorted_array",
+  "description": "esm-spec \u00a79.6.11: `searchsorted` applied to a `[c]` parameter. Every element must equal the `interp.*` closed function at that element's argument, bit for bit."
+ },
+ "index_sets": {
+  "c": {
+   "kind": "interval",
+   "size": 4
+  }
+ },
+ "models": {
+  "template_array_args_searchsorted_array": {
+   "variables": {
+    "q": {
+     "type": "parameter",
+     "shape": [
+      "c"
+     ],
+     "default": [
+      0.0,
+      2.0,
+      2.5,
+      6.0
+     ]
+    },
+    "S": {
+     "type": "unknown"
+    },
+    "s_S": {
+     "type": "unknown",
+     "shape": [
+      "c"
+     ],
+     "default": 0.0
+    },
+    "S_out": {
+     "type": "unknown",
+     "shape": [
+      "c"
+     ],
+     "description": "`S` read element by element, so the test can assert on a declared shape (esm-spec \u00a76.6.5)."
+    }
+   },
+   "equations": [
+    {
+     "lhs": "S",
+     "rhs": {
+      "op": "apply_expression_template",
+      "args": [],
+      "name": "searchsorted",
+      "bindings": {
+       "x": "q",
+       "xs": {
+        "op": "const",
+        "args": [],
+        "value": [
+         1,
+         2,
+         3,
+         4,
+         5
+        ]
+       },
+       "n": 5
+      }
+     }
+    },
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "s_S"
+      ],
+      "wrt": "t"
+     },
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "c"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "S",
+        "i"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "S_out",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "c"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "S",
+        "i"
+       ]
+      }
+     }
+    }
+   ],
+   "expression_template_imports": [
+    {
+     "ref": "esm:std/interp.esm",
+     "only": [
+      "searchsorted"
+     ]
+    }
+   ],
+   "tolerance": {
+    "abs": 0,
+    "rel": 0
+   },
+   "tests": [
+    {
+     "id": "template_array_args_searchsorted_array_t0",
+     "description": "Every element at t = 0.",
+     "time_span": {
+      "start": 0.0,
+      "end": 1.0
+     },
+     "assertions": [
+      {
+       "variable": "S_out",
+       "time": 0.0,
+       "coords": {
+        "c": 1
+       },
+       "expected": 1.0
+      },
+      {
+       "variable": "S_out",
+       "time": 0.0,
+       "coords": {
+        "c": 2
+       },
+       "expected": 2.0
+      },
+      {
+       "variable": "S_out",
+       "time": 0.0,
+       "coords": {
+        "c": 3
+       },
+       "expected": 3.0
+      },
+      {
+       "variable": "S_out",
+       "time": 0.0,
+       "coords": {
+        "c": 4
+       },
+       "expected": 6.0
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

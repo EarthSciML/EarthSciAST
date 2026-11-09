@@ -1,0 +1,31 @@
+{
+  "fixture": "searchsorted_array",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "template_array_args_searchsorted_array_t0",
+      "assertion_idx": 1,
+      "variable": "S_out",
+      "actual": 1.0
+    },
+    {
+      "test_id": "template_array_args_searchsorted_array_t0",
+      "assertion_idx": 2,
+      "variable": "S_out",
+      "actual": 2.0
+    },
+    {
+      "test_id": "template_array_args_searchsorted_array_t0",
+      "assertion_idx": 3,
+      "variable": "S_out",
+      "actual": 3.0
+    },
+    {
+      "test_id": "template_array_args_searchsorted_array_t0",
+      "assertion_idx": 4,
+      "variable": "S_out",
+      "actual": 6.0
+    }
+  ]
+}

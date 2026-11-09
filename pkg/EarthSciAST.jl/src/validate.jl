@@ -2021,39 +2021,49 @@ The descent enters elementwise nodes only (`_is_elementwise_node`), as the
 §4.3.4 alignment rule does; a name a `faq` binds as a loop symbol, here or
 further out, shadows the declaration; nested `faq` nodes are checked in their
 own right; an `apply_expression_template` application is opaque, so an array
-bound to one of its arguments is not a bare read. Order: pre-order over nodes,
+bound to one of its arguments is not a bare read. With `opaque_applications`,
+an expansion the load marked as an application (`OpExpr.template_origin`, a
+mounted leaf's) is opaque too: that is how `validate` reads the equations as
+authored. The build passes `false` and checks what the applications expanded
+into, after the elementwise lift (esm-spec §9.6.11). Order: pre-order over nodes,
 `expr` before `filter`, operands left to right — the order Rust and Python
 report in.
 """
-function faq_bare_array_operands(expr::ASTExpr, var_shapes::AbstractDict; exclude = ())
+function faq_bare_array_operands(
+        expr::ASTExpr, var_shapes::AbstractDict; exclude = (), opaque_applications::Bool = false
+    )
     found = Tuple{String, String, Vector{String}}[]
     shaped = Dict{String, Vector{String}}(
         String(n) => String[String(x) for x in s]
             for (n, s) in var_shapes if !isempty(s) && !(String(n) in exclude)
     )
     isempty(shaped) && return found
-    _faq_bare_walk!(found, expr, shaped, Set{String}(), IdDict{Any, Vector{Set{String}}}())
+    opaque = e -> e.op == "apply_expression_template" ||
+        (opaque_applications && e.template_origin !== nothing)
+    _faq_bare_walk!(found, expr, shaped, Set{String}(), IdDict{Any, Vector{Set{String}}}(), opaque)
     return found
 end
 
 # Both walks are DAG-safe: a node shared by many parents (a lifted or folded
 # chain) is visited once per distinct loop-symbol scope, not once per path, so
 # the check stays O(nodes) where a per-path walk is exponential in the depth.
-function _faq_bare_operands!(out::Vector{String}, e::ASTExpr, shaped, seen = IdDict{Any, Nothing}())
+function _faq_bare_operands!(
+        out::Vector{String}, e::ASTExpr, shaped, opaque, seen = IdDict{Any, Nothing}()
+    )
     if e isa VarExpr
         haskey(shaped, e.name) && push!(out, e.name)
-    elseif e isa OpExpr && _is_elementwise_node(e)
+    elseif e isa OpExpr && _is_elementwise_node(e) && !opaque(e)
         haskey(seen, e) && return out
         seen[e] = nothing
         for a in e.args
-            _faq_bare_operands!(out, a, shaped, seen)
+            _faq_bare_operands!(out, a, shaped, opaque, seen)
         end
     end
     return out
 end
 
-function _faq_bare_walk!(found, e::ASTExpr, shaped, bound::Set{String}, visited)
-    (e isa OpExpr && e.op != "apply_expression_template") || return found
+function _faq_bare_walk!(found, e::ASTExpr, shaped, bound::Set{String}, visited, opaque)
+    (e isa OpExpr && !opaque(e)) || return found
     scopes = get!(() -> Set{String}[], visited, e)
     any(==(bound), scopes) && return found
     push!(scopes, bound)
@@ -2065,7 +2075,7 @@ function _faq_bare_walk!(found, e::ASTExpr, shaped, bound::Set{String}, visited)
         for (field, part) in (("expr", e.expr_body), ("filter", e.filter))
             part === nothing && continue
             seen = Set{String}()
-            for name in _faq_bare_operands!(String[], part, shaped)
+            for name in _faq_bare_operands!(String[], part, shaped, opaque)
                 (name in bound || name in seen) && continue
                 push!(seen, name)
                 push!(found, (field, name, shaped[name]))
@@ -2073,7 +2083,7 @@ function _faq_bare_walk!(found, e::ASTExpr, shaped, bound::Set{String}, visited)
         end
     end
     for c in _expr_children(e)
-        _faq_bare_walk!(found, c, shaped, bound, visited)
+        _faq_bare_walk!(found, c, shaped, bound, visited, opaque)
     end
     return found
 end
@@ -2108,7 +2118,10 @@ function _check_faq_bare_array_operands!(
         var_shapes
     )
     defined = faq_bare_exempt_names(lhs)
-    for (field, name, shape) in faq_bare_array_operands(expr, var_shapes; exclude = defined)
+    found = faq_bare_array_operands(
+        expr, var_shapes; exclude = defined, opaque_applications = true
+    )
+    for (field, name, shape) in found
         push!(
             errors, StructuralError(
                 anchor, faq_bare_array_operand_message(field, name, shape),

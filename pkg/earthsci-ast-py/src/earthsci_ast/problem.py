@@ -65,8 +65,9 @@ from .compiler import (
     resolve_compiler,
     use_policy,
 )
-from .errors import MissingDataError
+from .elementwise_lift import lift_elementwise_applications
 from .error_handling import CALLBACK_UNREGISTERED, FLOAT32_UNSUPPORTED
+from .errors import MissingDataError
 from .esm_types import CouplingType, EsmFile, ExprNode, is_aggregate_op
 from .expr_walk import iter_children
 from .expression import DataSourceUnboundError, UnsupportedConstructError, free_variables
@@ -753,6 +754,12 @@ def _esm_problem_under(
     # simulation, its expression trees are WALKED". A whole-tree walk, not a
     # reachability check.
     _assert_no_unlowered_operator(flat)
+
+    # esm-spec §9.6.11: a template applied elementwise over an array argument
+    # (an array bound to a parameter the body reads as a scalar) is lifted to a
+    # per-cell `faq` here, after flatten, so an array a coupling feeds into a
+    # parameter the component declared scalar is seen too.
+    flat = lift_elementwise_applications(flat)
 
     # esm-spec §9.6.6 `unsupported_construct`: neither evaluator runs a discrete
     # event or solves an implicit equation, so refuse both here, for every route,

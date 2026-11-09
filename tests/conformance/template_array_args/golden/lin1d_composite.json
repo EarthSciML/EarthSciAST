@@ -1,0 +1,55 @@
+{
+  "fixture": "lin1d_composite",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "template_array_args_lin1d_composite_t0",
+      "assertion_idx": 1,
+      "variable": "Dz_out",
+      "actual": 30.5
+    },
+    {
+      "test_id": "template_array_args_lin1d_composite_t0",
+      "assertion_idx": 2,
+      "variable": "Dz_out",
+      "actual": 92.5
+    },
+    {
+      "test_id": "template_array_args_lin1d_composite_t0",
+      "assertion_idx": 3,
+      "variable": "Dz_out",
+      "actual": 244.0
+    },
+    {
+      "test_id": "template_array_args_lin1d_composite_t0",
+      "assertion_idx": 4,
+      "variable": "Dz_out",
+      "actual": 487.0
+    },
+    {
+      "test_id": "template_array_args_lin1d_composite_t0",
+      "assertion_idx": 5,
+      "variable": "E_out",
+      "actual": 10.0
+    },
+    {
+      "test_id": "template_array_args_lin1d_composite_t0",
+      "assertion_idx": 6,
+      "variable": "E_out",
+      "actual": 12.5
+    },
+    {
+      "test_id": "template_array_args_lin1d_composite_t0",
+      "assertion_idx": 7,
+      "variable": "E_out",
+      "actual": 20.0
+    },
+    {
+      "test_id": "template_array_args_lin1d_composite_t0",
+      "assertion_idx": 8,
+      "variable": "E_out",
+      "actual": 60.0
+    }
+  ]
+}

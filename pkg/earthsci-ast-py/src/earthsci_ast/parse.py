@@ -298,7 +298,7 @@ def _parse_expression(
         for name, wire, kind, required in EXPR_WIRE_SPEC:
             if name in ("op", "table_axes"):
                 continue
-            if kind in ("scalar", "canonical_nested"):
+            if kind in ("scalar", "canonical_nested", "internal"):
                 # Parse does NOT canonicalize integer descriptor arrays — that is
                 # an emit-time normalization; here they are plain passthrough.
                 kwargs[name] = expr_data.get(wire)
@@ -1750,6 +1750,7 @@ def _load_ref_data(
         ExpressionTemplateError,
         expand_document,
         lower_expression_templates,
+        marking_template_origins,
     )
     from .template_imports import (
         _is_template_library_doc,
@@ -1902,7 +1903,8 @@ def _load_ref_data(
     # subsystem feeds the typed IR via `_parse_esm_data`, so Expand-at-build here
     # (RFC §7.7) yields the fully-expanded Option-A image — numerics identical.
     ref_data = lower_expression_templates(ref_data)
-    ref_data = expand_document(ref_data)
+    with marking_template_origins():
+        ref_data = expand_document(ref_data)
 
     # esm-spec §9.3: the referenced document's `enum` ops resolve against ITS
     # OWN `enums` block, here, while that block is still at hand. The mounting
@@ -3178,6 +3180,7 @@ def _load_data(
     from .lower_expression_templates import (
         expand_document,
         lower_expression_templates,
+        marking_template_origins,
     )
     from .solver import (
         reject_solver_external_pre_v13,
@@ -3377,7 +3380,8 @@ def _load_data(
     # Option-A image (no surviving references, no `expression_templates`
     # blocks); numeric results stay bit-identical. The reference-preserving form
     # travels only into emit (§9.6.4 rule 5, `emit_document`).
-    data = expand_document(data)
+    with marking_template_origins():
+        data = expand_document(data)
 
     # Parse into ESM objects
     esm_file = _parse_esm_data(data)

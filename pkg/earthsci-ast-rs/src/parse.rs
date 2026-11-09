@@ -213,12 +213,22 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // `index_sets` do not join the registry until the root has CLOSED — §9.7.6
     // site 3, "subsystem refs resolve post-close". They are applied just below,
     // immediately after `resolve_template_machinery_scoped`.
-    let staged_index_sets = crate::ref_loading::resolve_subsystem_refs_with_metaparameters(
-        &mut json_value,
-        &base,
-        &options.metaparameters,
-    )
+    //
+    // A mounted leaf is expanded here, so its template expansions are marked
+    // here too (esm-spec §9.6.11; `MarkTemplateOrigins`), and the schema check
+    // below reads the document with those marks taken off.
+    let marks_before = crate::lower_expression_templates::template_origins_placed();
+    let staged_index_sets = {
+        let _mark = crate::lower_expression_templates::MarkTemplateOrigins::on();
+        crate::ref_loading::resolve_subsystem_refs_with_metaparameters(
+            &mut json_value,
+            &base,
+            &options.metaparameters,
+        )
+    }
     .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+    let mounts_marked =
+        crate::lower_expression_templates::template_origins_placed() != marks_before;
 
     // esm-spec §8.2.1: resolve every `data_sources[*].source` location against
     // this document's own directory. AFTER ref resolution, because a referenced
@@ -277,7 +287,13 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     )?;
 
     // Validate against schema
-    validate_schema(&json_value)?;
+    if mounts_marked {
+        let mut authored = json_value.clone();
+        crate::lower_expression_templates::strip_template_origins(&mut authored);
+        validate_schema(&authored)?;
+    } else {
+        validate_schema(&json_value)?;
+    }
 
     // esm-spec §9.7.10 form B: fold any coupling-entry injection map into its
     // target components' own `expression_template_imports` BEFORE resolution,
@@ -330,11 +346,6 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // the two after it (enum lowering finds nothing to lower without an `enum`
     // node), so the template scan's walk also looks for `enum` nodes and
     // reserved binders, which are then not walked for again.
-    // The authored right-hand side of every equation that applies a template,
-    // before lowering and expansion replace the application with its body:
-    // `faq_bare_array_operand` is decided on this form (esm-spec §4.3.1).
-    let authored_template_rhs = authored_template_applications(&json_value);
-
     let mut reserved = ReservedIndexScan::new(&json_value);
     let mut has_enum_ops = false;
     let mut has_checked_node = false;
@@ -362,6 +373,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     let component_templates =
         crate::lower_expression_templates::capture_component_templates(&json_value);
     if has_templates {
+        let _mark = crate::lower_expression_templates::MarkTemplateOrigins::on();
         crate::lower_expression_templates::expand(&mut json_value)
             .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
     } else {
@@ -414,7 +426,6 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
         serde_json::from_value(json_value).map_err(EsmError::JsonParse)?
     };
     esm_file.component_templates = component_templates;
-    esm_file.authored_template_rhs = authored_template_rhs;
     // esm-spec §2.2: an EMPTY `solver` block normalizes to absence at load.
     esm_file.solver = crate::solver::normalize_empty(esm_file.solver.take());
     // esm-spec §10.10 / §4.7: relative `coupling_import` refs resolve against
@@ -1976,52 +1987,6 @@ fn raise_esm_floor_to_v11(value: &mut serde_json::Value) {
             serde_json::Value::String("1.1.0".to_string()),
         );
     }
-}
-
-/// The right-hand side of every model equation (inline subsystems included)
-/// that holds an `apply_expression_template` node, keyed by its equation
-/// pointer (`/models/M/equations/0`), read off the authored JSON.
-fn authored_template_applications(
-    document: &serde_json::Value,
-) -> std::collections::HashMap<String, crate::Expr> {
-    fn holds_application(v: &serde_json::Value) -> bool {
-        match v {
-            serde_json::Value::Object(o) => {
-                o.get("op").and_then(|op| op.as_str()) == Some("apply_expression_template")
-                    || o.values().any(holds_application)
-            }
-            serde_json::Value::Array(a) => a.iter().any(holds_application),
-            _ => false,
-        }
-    }
-    fn visit(
-        model: &serde_json::Value,
-        path: &str,
-        out: &mut std::collections::HashMap<String, crate::Expr>,
-    ) {
-        if let Some(eqs) = model.get("equations").and_then(|e| e.as_array()) {
-            for (i, eq) in eqs.iter().enumerate() {
-                let Some(rhs) = eq.get("rhs").filter(|r| holds_application(r)) else {
-                    continue;
-                };
-                if let Ok(expr) = serde_json::from_value::<crate::Expr>(rhs.clone()) {
-                    out.insert(format!("{path}/equations/{i}"), expr);
-                }
-            }
-        }
-        if let Some(subs) = model.get("subsystems").and_then(|s| s.as_object()) {
-            for (name, sub) in subs {
-                visit(sub, &format!("{path}/subsystems/{name}"), out);
-            }
-        }
-    }
-    let mut out = std::collections::HashMap::new();
-    if let Some(models) = document.get("models").and_then(|m| m.as_object()) {
-        for (name, model) in models {
-            visit(model, &format!("/models/{name}"), &mut out);
-        }
-    }
-    out
 }
 
 #[cfg(test)]

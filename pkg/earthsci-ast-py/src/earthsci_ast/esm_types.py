@@ -159,6 +159,18 @@ class ExprNode:
     # a string (an entry of the table's outputs list). Single-output tables
     # MAY omit this (defaults to 0 at lowering time).
     output: int | str | None = field(default=None, metadata={"kind": "scalar"})
+    # Load provenance, never on the wire: the name of the template whose
+    # ``apply_expression_template`` expansion this node is the root of, set when
+    # the load expands a component's references. The elementwise lift (esm-spec
+    # §9.6.11, ``elementwise_lift.py``) applies only to such a node, so a shaped
+    # read an author wrote by hand is never lifted. Read from a private key the
+    # schema refuses in an authored document; not part of node equality.
+    template_origin: str | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+        metadata={"kind": "internal", "wire": "__esm_template_origin"},
+    )
 
 
 #: An expression (esm-spec §4): a numeric literal (``int`` or ``float``), a
@@ -185,6 +197,8 @@ Expr = Union[int, float, str, ExprNode]
 #       "expr_list"        a list of nested Expressions
 #       "expr_dict"        a {name: Expression} map (table_lookup axes)
 #       "canonical_nested" integer descriptor array canonicalized on emit
+#       "internal"         load-time annotation: parsed from its private key,
+#                          never emitted
 # ---------------------------------------------------------------------------
 
 # Authored WIRE ORDER of ExprNode fields — the exact key order emitted by
@@ -228,6 +242,7 @@ _EXPR_WIRE_ORDER: tuple[str, ...] = (
     "table",
     "table_axes",
     "output",
+    "template_origin",
 )
 
 #: ExprNode fields ALWAYS emitted (never omitted when None/empty); every other

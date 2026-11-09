@@ -6670,7 +6670,8 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        let built = crate::simulate_array::promote_conditional_shapes(&mut model, &index_sets);
+        let built = crate::simulate_array::promote_conditional_shapes(&mut model, &index_sets)
+            .expect("promote");
         let cell = vec!["cell".to_string()];
         assert_eq!(built.get("M.X"), Some(&cell));
         assert_eq!(built.get("M.Y"), Some(&cell));

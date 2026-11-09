@@ -2192,17 +2192,14 @@ fn validate_aggregate_constraints(
     for (eq_idx, equation) in model.equations.iter().enumerate() {
         // An equation the reference check saw no `faq` node in has none to check.
         if faq_equations.is_none_or(|faq| faq.get(eq_idx).copied().unwrap_or(true)) {
-            // On the right-hand side as authored, where a template application
-            // is opaque; load has already expanded it.
-            let rhs = esm_file
-                .authored_template_rhs
-                .get(&format!("{model_path}/equations/{eq_idx}"))
-                .unwrap_or(&equation.rhs);
+            // As authored: a template application, which load expanded and
+            // marked, is opaque.
             faq_bare_array_operand_errors(
                 &equation.lhs,
-                rhs,
+                &equation.rhs,
                 &format!("{model_path}/equations/{eq_idx}/rhs"),
                 &var_shapes,
+                true,
                 errors,
             );
             for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
@@ -3138,9 +3135,13 @@ fn collect_bare_array_operands<'a>(
 /// symbol by this node or an enclosing one shadows the declaration and is not
 /// a variable read. Nested `faq` nodes are checked in their own right.
 ///
-/// An `apply_expression_template` application is opaque: an array bound to
-/// one of its arguments is not a bare read here. `validate` passes the
-/// equation's authored right-hand side, and the build the expanded one.
+/// With `opaque_applications`, a template application is opaque: an array
+/// bound to one of its arguments is not a bare read here. That is how
+/// `validate` decides the rule, on the equations as authored: a reference, or
+/// an expansion the load marked as one
+/// ([`crate::types::ExpressionNode::template_origin`]), is not entered. The
+/// build passes `false` and checks what the applications expanded into, after
+/// the elementwise lift (esm-spec §9.6.11).
 ///
 /// `expr` is an equation's right-hand side and `lhs` its left-hand side. A
 /// variable an observed or recurrence definition's left-hand side names is
@@ -3155,6 +3156,7 @@ pub(crate) fn faq_bare_array_operand_errors(
     expr: &crate::Expr,
     path: &str,
     var_shapes: &HashMap<String, Vec<String>>,
+    opaque_applications: bool,
     errors: &mut Vec<StructuralError>,
 ) {
     let mut defined = HashSet::new();
@@ -3179,121 +3181,139 @@ pub(crate) fn faq_bare_array_operand_errors(
     }
     let mut bound: Vec<String> = Vec::new();
     let mut visited = HashMap::new();
-    walk_faq_bare_operands(expr, path, &declared_axes, &mut bound, &mut visited, errors);
+    let walk = BareWalk {
+        path,
+        declared_axes: &declared_axes,
+        opaque_applications,
+    };
+    walk.faq_operands(expr, &mut bound, &mut visited, errors);
+}
+
+/// One [`faq_bare_array_operand_errors`] walk's fixed inputs.
+struct BareWalk<'a> {
+    path: &'a str,
+    declared_axes: &'a HashMap<&'a str, &'a Vec<String>>,
+    opaque_applications: bool,
+}
+
+impl BareWalk<'_> {
+    /// Whether the walk does not enter `node`: a template application, which
+    /// is opaque to it (see [`faq_bare_array_operand_errors`]).
+    fn is_opaque(&self, node: &crate::types::ExpressionNode) -> bool {
+        node.op == "apply_expression_template"
+            || (self.opaque_applications && node.template_origin.is_some())
+    }
 }
 
 /// The walk is DAG-safe: a node shared by many parents (a lifted or folded
 /// chain on the build's expanded model) is visited once per distinct
 /// loop-symbol scope, not once per path.
-fn walk_faq_bare_operands(
-    expr: &crate::Expr,
-    path: &str,
-    declared_axes: &HashMap<&str, &Vec<String>>,
-    bound: &mut Vec<String>,
-    visited: &mut HashMap<*const crate::types::ExpressionNode, Vec<Vec<String>>>,
-    errors: &mut Vec<StructuralError>,
-) {
-    let crate::Expr::Operator(node) = expr else {
-        return;
-    };
-    if node.op == "apply_expression_template" {
-        return;
-    }
-    let scopes = visited.entry(std::sync::Arc::as_ptr(node)).or_default();
-    if scopes.iter().any(|s| s == bound) {
-        return;
-    }
-    scopes.push(bound.clone());
-    let is_faq = crate::faq::is_faq_op(&node.op);
-    let pushed = if is_faq {
-        let syms = bound_index_symbols(node);
-        let n = syms.len();
-        bound.extend(syms);
-        n
-    } else {
-        0
-    };
-    if is_faq {
-        for (field, part) in [
-            ("expr", node.expr.as_deref()),
-            ("filter", node.filter.as_deref()),
-        ] {
-            let Some(part) = part else { continue };
-            let mut operands: Vec<&str> = Vec::new();
-            collect_bare_array_operands_once(
-                part,
-                declared_axes,
-                &mut HashSet::new(),
-                &mut operands,
-            );
-            let mut seen: HashSet<&str> = HashSet::new();
-            for operand in operands {
-                if bound.iter().any(|b| b == operand) || !seen.insert(operand) {
-                    continue;
-                }
-                let axes = declared_axes[operand];
-                let syms: Vec<String> = node
-                    .ranges
-                    .as_ref()
-                    .map(|r| {
-                        let mut k: Vec<&String> = r.keys().collect();
-                        k.sort();
-                        k.into_iter().cloned().collect()
-                    })
-                    .unwrap_or_default();
-                errors.push(StructuralError {
-                    path: path.to_string(),
-                    code: StructuralErrorCode::FaqBareArrayOperand,
-                    message: format!(
-                        "faq `{field}` reads '{operand}', declared over [{}], by bare name. A \
+impl BareWalk<'_> {
+    fn faq_operands(
+        &self,
+        expr: &crate::Expr,
+        bound: &mut Vec<String>,
+        visited: &mut HashMap<*const crate::types::ExpressionNode, Vec<Vec<String>>>,
+        errors: &mut Vec<StructuralError>,
+    ) {
+        let (path, declared_axes) = (self.path, self.declared_axes);
+        let crate::Expr::Operator(node) = expr else {
+            return;
+        };
+        if self.is_opaque(node) {
+            return;
+        }
+        let scopes = visited.entry(std::sync::Arc::as_ptr(node)).or_default();
+        if scopes.iter().any(|s| s == bound) {
+            return;
+        }
+        scopes.push(bound.clone());
+        let is_faq = crate::faq::is_faq_op(&node.op);
+        let pushed = if is_faq {
+            let syms = bound_index_symbols(node);
+            let n = syms.len();
+            bound.extend(syms);
+            n
+        } else {
+            0
+        };
+        if is_faq {
+            for (field, part) in [
+                ("expr", node.expr.as_deref()),
+                ("filter", node.filter.as_deref()),
+            ] {
+                let Some(part) = part else { continue };
+                let mut operands: Vec<&str> = Vec::new();
+                self.collect_operands(part, &mut HashSet::new(), &mut operands);
+                let mut seen: HashSet<&str> = HashSet::new();
+                for operand in operands {
+                    if bound.iter().any(|b| b == operand) || !seen.insert(operand) {
+                        continue;
+                    }
+                    let axes = declared_axes[operand];
+                    let syms: Vec<String> = node
+                        .ranges
+                        .as_ref()
+                        .map(|r| {
+                            let mut k: Vec<&String> = r.keys().collect();
+                            k.sort();
+                            k.into_iter().cloned().collect()
+                        })
+                        .unwrap_or_default();
+                    errors.push(StructuralError {
+                        path: path.to_string(),
+                        code: StructuralErrorCode::FaqBareArrayOperand,
+                        message: format!(
+                            "faq `{field}` reads '{operand}', declared over [{}], by bare name. A \
                          faq names its axes by its range symbols ({}), and its `{field}` is \
                          evaluated once per index tuple, so a whole array there does not say \
                          which symbol each of its axes is. Read it through `index`, e.g. \
                          index({operand}, <symbol>…) (esm-spec §4.3.1)",
-                        axes.join(", "),
-                        if syms.is_empty() {
-                            "none".to_string()
-                        } else {
-                            syms.join(", ")
-                        },
-                    ),
-                    details: serde_json::json!({
-                        "field": field,
-                        "variable": operand,
-                        "shape": axes,
-                    }),
-                });
+                            axes.join(", "),
+                            if syms.is_empty() {
+                                "none".to_string()
+                            } else {
+                                syms.join(", ")
+                            },
+                        ),
+                        details: serde_json::json!({
+                            "field": field,
+                            "variable": operand,
+                            "shape": axes,
+                        }),
+                    });
+                }
             }
         }
+        node.for_each_child(&mut |child| {
+            self.faq_operands(child, bound, visited, errors);
+        });
+        bound.truncate(bound.len() - pushed);
     }
-    node.for_each_child(&mut |child| {
-        walk_faq_bare_operands(child, path, declared_axes, bound, visited, errors);
-    });
-    bound.truncate(bound.len() - pushed);
-}
 
-/// [`collect_bare_array_operands`], visiting each shared node once.
-fn collect_bare_array_operands_once<'a>(
-    expr: &'a crate::Expr,
-    declared_axes: &HashMap<&str, &Vec<String>>,
-    seen: &mut HashSet<*const crate::types::ExpressionNode>,
-    out: &mut Vec<&'a str>,
-) {
-    match expr {
-        crate::Expr::Variable(name) if declared_axes.contains_key(name.as_str()) => {
-            out.push(name.as_str());
-        }
-        crate::Expr::Operator(node) => {
-            if !crate::op_registry::is_elementwise_node(node)
-                || !seen.insert(std::sync::Arc::as_ptr(node))
-            {
-                return;
+    /// [`collect_bare_array_operands`], visiting each shared node once and not
+    /// entering an opaque application.
+    fn collect_operands<'e>(
+        &self,
+        expr: &'e crate::Expr,
+        seen: &mut HashSet<*const crate::types::ExpressionNode>,
+        out: &mut Vec<&'e str>,
+    ) {
+        match expr {
+            crate::Expr::Variable(name) if self.declared_axes.contains_key(name.as_str()) => {
+                out.push(name.as_str());
             }
-            node.for_each_child(&mut |child| {
-                collect_bare_array_operands_once(child, declared_axes, seen, out)
-            });
+            crate::Expr::Operator(node) => {
+                if !crate::op_registry::is_elementwise_node(node)
+                    || self.is_opaque(node)
+                    || !seen.insert(std::sync::Arc::as_ptr(node))
+                {
+                    return;
+                }
+                node.for_each_child(&mut |child| self.collect_operands(child, seen, out));
+            }
+            _ => {}
         }
-        _ => {}
     }
 }
 

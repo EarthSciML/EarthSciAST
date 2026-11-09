@@ -1,0 +1,43 @@
+{
+  "fixture": "bilin_2d_grid",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "template_array_args_bilin_2d_grid_t0",
+      "assertion_idx": 1,
+      "variable": "B",
+      "actual": 1.52
+    },
+    {
+      "test_id": "template_array_args_bilin_2d_grid_t0",
+      "assertion_idx": 2,
+      "variable": "B",
+      "actual": 4.0
+    },
+    {
+      "test_id": "template_array_args_bilin_2d_grid_t0",
+      "assertion_idx": 3,
+      "variable": "B",
+      "actual": 9.533333333333333
+    },
+    {
+      "test_id": "template_array_args_bilin_2d_grid_t0",
+      "assertion_idx": 4,
+      "variable": "B",
+      "actual": 15.0
+    },
+    {
+      "test_id": "template_array_args_bilin_2d_grid_t0",
+      "assertion_idx": 5,
+      "variable": "B",
+      "actual": 22.294666666666664
+    },
+    {
+      "test_id": "template_array_args_bilin_2d_grid_t0",
+      "assertion_idx": 6,
+      "variable": "B",
+      "actual": 1.0
+    }
+  ]
+}

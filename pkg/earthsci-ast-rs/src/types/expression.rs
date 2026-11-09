@@ -812,6 +812,16 @@ pub struct ExpressionNode {
     /// content on the pre-lowering tree and must round-trip.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attrs: Option<serde_json::Value>,
+
+    /// Load provenance, never on the wire: the name of the template whose
+    /// `apply_expression_template` expansion this node is the root of, set
+    /// when the load expands a component's references. The elementwise lift
+    /// (esm-spec §9.6.11, [`crate::elementwise_lift`]) applies only to such a
+    /// node, so a shaped read an author wrote by hand is never lifted. Read
+    /// from a private key the schema refuses in an authored document
+    /// ([`crate::lower_expression_templates::TEMPLATE_ORIGIN_KEY`]).
+    #[serde(default, rename = "__esm_template_origin", skip_serializing)]
+    pub template_origin: Option<String>,
 }
 
 // ───────────────────────────────────────────────────────────────────────────

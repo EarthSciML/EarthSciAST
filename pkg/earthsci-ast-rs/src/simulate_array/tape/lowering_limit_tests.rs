@@ -1088,18 +1088,15 @@ fn count_rewrite_is_a_build_option() {
 /// A count the instruction cannot state declines to the general reduction
 /// instead of refusing the rule: here a standalone rank-0 sum whose query is
 /// the whole `u`, spelled as the array a `faq` produces over its own box,
-/// rather than one element. It is
-/// taped by the general lowering, with the oracle's bits, beside the
-/// per-cell count. (A declared shaped variable there, read bare, is
-/// `faq_bare_array_operand` and never reaches the tape.)
+/// rather than one element. It is taped by the general lowering, with the
+/// oracle's bits, beside the per-cell count. (A declared shaped variable
+/// there, read bare, is `faq_bare_array_operand` and never reaches the tape.)
 #[test]
 fn counted_bracket_query_box_mismatch_declines() {
     let mut d = count_doc(9, indicator(op("<=", vec![axis_at("zc"), query()])));
+    d["index_sets"] = json!({"lev": {"kind": "interval", "size": 9}});
     d["models"]["M"]["variables"]["s"] = json!({"type": "unknown", "shape": ["lev"]});
-    let whole = json!({
-        "op": "faq", "args": [], "output_idx": ["m"], "ranges": {"m": [1, 9]},
-        "expr": ix("u", vec![json!("m")])
-    });
+    let whole = faq(&["m"], json!({"m": [1, 9]}), ix("u", vec![json!("m")]));
     d["models"]["M"]["equations"]
         .as_array_mut()
         .unwrap()

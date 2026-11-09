@@ -343,7 +343,7 @@ _EMISSIBLE_FIELDS: tuple[str, ...] = (
 # the emitter never saw one. They fall through to the derived
 # ``_NON_EMISSIBLE_FIELDS`` below, so no edit is needed here; this note records
 # that the omission is a decision, not an oversight.
-_CANONICAL_IGNORED_FIELDS: tuple[str, ...] = ("arg", "bindings")
+_CANONICAL_IGNORED_FIELDS: tuple[str, ...] = ("arg", "bindings", "template_origin")
 
 # ExprNode fields WITHOUT a pinned slot in the cross-binding canonical JSON node
 # encoding. If any is set, the node cannot be emitted faithfully and

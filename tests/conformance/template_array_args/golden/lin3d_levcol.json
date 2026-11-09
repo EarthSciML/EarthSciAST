@@ -1,0 +1,175 @@
+{
+  "fixture": "lin3d_levcol",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 1,
+      "variable": "Dz_out",
+      "actual": 10.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 2,
+      "variable": "Dz_out",
+      "actual": 20.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 3,
+      "variable": "Dz_out",
+      "actual": 60.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 4,
+      "variable": "Dz_out",
+      "actual": 160.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 5,
+      "variable": "F_out",
+      "actual": 10.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 6,
+      "variable": "F_out",
+      "actual": 25.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 7,
+      "variable": "F_out",
+      "actual": 90.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 8,
+      "variable": "F_out",
+      "actual": 280.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 9,
+      "variable": "F_out",
+      "actual": 15.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 10,
+      "variable": "F_out",
+      "actual": 35.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 11,
+      "variable": "F_out",
+      "actual": 120.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 12,
+      "variable": "F_out",
+      "actual": 360.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 13,
+      "variable": "F_out",
+      "actual": 20.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 14,
+      "variable": "F_out",
+      "actual": 45.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 15,
+      "variable": "F_out",
+      "actual": 150.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 16,
+      "variable": "F_out",
+      "actual": 440.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 17,
+      "variable": "F_out",
+      "actual": 20.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 18,
+      "variable": "F_out",
+      "actual": 45.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 19,
+      "variable": "F_out",
+      "actual": 150.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 20,
+      "variable": "F_out",
+      "actual": 440.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 21,
+      "variable": "F_out",
+      "actual": 25.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 22,
+      "variable": "F_out",
+      "actual": 55.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 23,
+      "variable": "F_out",
+      "actual": 180.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 24,
+      "variable": "F_out",
+      "actual": 520.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 25,
+      "variable": "F_out",
+      "actual": 30.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 26,
+      "variable": "F_out",
+      "actual": 65.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 27,
+      "variable": "F_out",
+      "actual": 210.0
+    },
+    {
+      "test_id": "template_array_args_lin3d_levcol_t0",
+      "assertion_idx": 28,
+      "variable": "F_out",
+      "actual": 600.0
+    }
+  ]
+}

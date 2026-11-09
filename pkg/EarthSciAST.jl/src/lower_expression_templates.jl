@@ -2015,6 +2015,16 @@ const _TemplateSites = Union{Nothing, IdDict{OpExpr, OpExpr}}
 # sharing measured rather than assumed.
 const _ExpandMemo = Union{Nothing, Dict{Tuple{String, String}, OpExpr}}
 
+# `task_local_storage` key: while `true`, `_expand_expr_refs` marks the root of
+# each expansion it makes with its template's name (`OpExpr.template_origin`),
+# for the elementwise lift (esm-spec §9.6.11). Set at a mount, whose leaf's
+# references are expanded at load, and by the lift itself. Each of those
+# callers passes a memo of its own, so an unmarked cached expansion is never
+# served where a marked one is wanted.
+const _MARK_TEMPLATE_ORIGINS_KEY = :earthsciast_mark_template_origins
+
+_marking_template_origins() = get(task_local_storage(), _MARK_TEMPLATE_ORIGINS_KEY, false)::Bool
+
 _expand_expr_refs(e::VarExpr, reg, ::_TemplateSites, ::_ExpandMemo = nothing) = e
 _expand_expr_refs(e::NumExpr, reg, ::_TemplateSites, ::_ExpandMemo = nothing) = e
 _expand_expr_refs(e::IntExpr, reg, ::_TemplateSites, ::_ExpandMemo = nothing) = e
@@ -2062,6 +2072,9 @@ function _expand_expr_refs(
         end
         substituted = _substitute(body_raw, bindings_raw)
         ex = _expand_expr_refs(expression_from_json(substituted), reg, sites, memo)
+        if ex isa OpExpr && _marking_template_origins()
+            ex = reconstruct(ex; template_origin = name::String)
+        end
         if sites !== nothing && ex isa OpExpr
             sites[ex] = e
         end
