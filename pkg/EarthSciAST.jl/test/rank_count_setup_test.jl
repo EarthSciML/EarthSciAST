@@ -3,7 +3,7 @@
 # the template form of the `skolem` / `rank` edge enumeration.
 #
 #   * A state-free array observed holding the indicator sum is a build-once
-#     table: the setup sweep fills it (`_is_setup_count_reduction`), the count
+#     table: the setup sweep fills it (`_is_setup_const_reduction`), the count
 #     as a binary search over a sorted copy of the entries (`:count_fold_setup`,
 #     `_geo_count_node`). It gives the interpreter's bits (the interpreter
 #     keeps it an observed and folds every term) and the op form's, on the
@@ -13,6 +13,11 @@
 #     relations with the entry on either side, the swapped branches.
 #   * Near misses keep the fold (the table is still filled at setup when the
 #     observed holds another count shape, never with the rewrite).
+#   * Any reduction over build constants in such an observed fills at setup
+#     too: the argmin / argmax templates at a scalar site against the ops
+#     and the interpreter; a candidate reading a state or a scalar parameter,
+#     or a count over a range the setup sweep cannot loop over, stays an
+#     observed.
 #   * A producer's key and filter over interval ranges are compiled once
 #     (`_vi_producer_compiled`): the same members as the reference walk, and a
 #     NaN key is still `value_invention_key_out_of_range`.
@@ -174,12 +179,12 @@ end
 # r[i] = Σ_k body(keys[k], x[i]) over constant keys and queries, every cell's
 # count a table entry. `body(a, x)` builds the
 # summand; `kw` goes to the count's faq (another reduce, a filter). D(s[i]) = r[i].
-function _rc_count_doc(keys, queries, body; kw...)
+function _rc_count_doc(keys, queries, body; krange = Dict("from" => "keys"), kw...)
     n, m = length(keys), length(queries)
     I = Dict("i" => Dict("from" => "cells"))
     cnt = Dict{String, Any}(
         "op" => "faq", "args" => Any[], "output_idx" => Any[],
-        "ranges" => Dict("k" => Dict("from" => "keys")),
+        "ranges" => Dict("k" => krange),
         "expr" => body(_rc_ix("kv", "k"), _rc_ix("xq", "i")), (String(k) => v for (k, v) in kw)...
     )
     vars = Dict{String, Any}(
@@ -217,7 +222,7 @@ _rc_rel(op, flip, yes = 1, no = 0) = (a, x) -> _rc_op("ifelse", flip ? _rc_op(op
         @test get(tn, :count_fold_setup, 0) >= 1
         @test get(tn, :count_fold_search, 0) + get(tn, :count_fold_sorted, 0) + get(tn, :count_fold_linear, 0) == 0
         @test get(ti, :count_fold_setup, 0) == 0
-        # Without the count rewrite the lookup stays in the right-hand side.
+        # Without the count rewrite the table still fills at setup, by the fold.
         df, tf = _rc_du_doc(tp, _RC_NOFOLD)
         @test _rc_same(df, dn)
         @test get(tf, :count_fold_setup, 0) == 0
@@ -262,6 +267,7 @@ _rc_rel(op, flip, yes = 1, no = 0) = (a, x) -> _rc_op("ifelse", flip ? _rc_op(op
         ("max reducer", _rc_rel("<=", false), (; reduce = "max")),
         ("filter", _rc_rel("<=", false), (; filter = _rc_op(">=", "k", 2))),
         ("key reads the outer index", (a, x) -> _rc_op("ifelse", _rc_op("<=", _rc_op("+", a, _rc_ix("xq", "i")), x), 1, 0), (;)),
+        ("range from 2", _rc_rel("<=", false), (; krange = Any[2, 5])),
         ("key read at k + 0 * k", (a, x) -> _rc_op("ifelse", _rc_op("<=", _rc_ix("kv", _rc_op("+", "k", _rc_op("*", 0, "k"))), x), 1, 0), (;)),
     )
     @testset "near miss keeps the fold: $what" for (what, body, kw) in near
@@ -270,6 +276,8 @@ _rc_rel(op, flip, yes = 1, no = 0) = (a, x) -> _rc_op("ifelse", flip ? _rc_op(op
         di, _ = _rc_du_doc(doc, :interpreter)
         @test _rc_same(dn, di)
         @test get(tn, :count_fold_setup, 0) == 0
+        # A range the setup sweep cannot loop over keeps the observed.
+        haskey(kw, :krange) && @test get(tn, :geo_kernel, 0) == 0
     end
 
     # `rank_of(x, members, n)` with `n` a metaparameter (a `ranges` bound
@@ -326,5 +334,72 @@ _rc_rel(op, flip, yes = 1, no = 0) = (a, x) -> _rc_op("ifelse", flip ? _rc_op(op
             @test err !== nothing
             @test occursin("value_invention_key_out_of_range", sprint(showerror, err))
         end
+    end
+
+    # The argmin / argmax templates over constant candidates, written at a
+    # scalar site as the benchmark documents write them (`index(r, j) = …`
+    # over a one-element set): a reduction over build constants, filled at
+    # setup (its index search and the min before it run once), the op form's
+    # bits and the interpreter's. Near misses stay observeds: a candidate
+    # value that reads a state or a scalar parameter.
+    _rc_gens = [
+        0.8125, 0.09375, 0.921875, 0.71875, 0.25, 0.421875, 0.03125, 0.140625,
+        0.640625, 0.765625, 0.1875, 0.6875, 0.375, 0.53125, 0.828125, 0.03125,
+    ]
+    function _rc_arg_doc(spelling, which; shift = 0.013, extra = nothing)
+        k = spelling === :op ? "k" : "k_$(which)_1"
+        d = _rc_op("-", _rc_ix("g", k), shift)
+        f = _rc_op("*", d, d)
+        extra === nothing || (f = _rc_op("+", f, extra))
+        J = Dict("j" => Dict("from" => "one"))
+        body = spelling === :op ?
+            Dict{String, Any}(
+                "op" => which, "args" => Any["g"], "arg" => "k",
+                "ranges" => Dict("k" => Dict("from" => "gens")), "expr" => f
+            ) :
+            _rc_apply(which; f = f, n = 16)
+        vars = Dict{String, Any}(
+            "u" => Dict("type" => "unknown", "default" => 0.5),
+            "acc" => Dict("type" => "unknown"),
+            "g" => Dict("type" => "unknown", "shape" => Any["gens"]),
+            "r" => Dict("type" => "unknown", "shape" => Any["one"]),
+            "w" => Dict("type" => "parameter", "default" => 0.25),
+        )
+        eqs = Any[
+            Dict("lhs" => "g", "rhs" => _rc_const(_rc_gens)),
+            Dict("lhs" => _rc_ix("r", "j"), "rhs" => _rc_faq(body, ["j"], J; args = Any["g"])),
+            Dict("lhs" => "acc", "rhs" => _rc_ix("r", 1)),
+            Dict("lhs" => _rc_op("D", "u"; wrt = "t"), "rhs" => _rc_op("-", "acc", "u")),
+        ]
+        model = Dict{String, Any}("variables" => vars, "equations" => eqs)
+        spelling === :op || (model["expression_templates"] = _rc_templates(which))
+        return Dict{String, Any}(
+            "esm" => "1.2.0", "metadata" => Dict("name" => "arg_$(which)_$(spelling)"),
+            "index_sets" => Dict("gens" => Dict("kind" => "interval", "size" => 16), "one" => Dict("kind" => "interval", "size" => 1)),
+            "models" => Dict("M" => model)
+        )
+    end
+    @testset "$which template over constants is a setup table" for which in ("argmin", "argmax")
+        tp = _rc_arg_doc(:tpl, which)
+        dn, tn = _rc_du_doc(tp, :native)
+        di, ti = _rc_du_doc(tp, :interpreter)
+        dop, _ = _rc_du_doc(_rc_arg_doc(:op, which), :native)
+        @test _rc_same(dn, di)
+        @test _rc_same(dn, dop)
+        @test get(tn, :geo_kernel, 0) >= 1
+        @test get(ti, :geo_kernel, 0) == 0
+        dw, tw = _rc_du_doc(tp, _RC_NOCOMPILE)
+        @test _rc_same(dw, dn)
+        @test get(tw, :geo_kernel, 0) == 0
+    end
+    @testset "argmin template near miss stays an observed: $what" for (what, kw) in (
+            ("reads a state", (; extra = "u")),
+            ("reads a scalar parameter", (; extra = "w")),
+        )
+        tp = _rc_arg_doc(:tpl, "argmin"; kw...)
+        dn, tn = _rc_du_doc(tp, :native)
+        di, _ = _rc_du_doc(tp, :interpreter)
+        @test _rc_same(dn, di)
+        @test get(tn, :geo_kernel, 0) == 0
     end
 end

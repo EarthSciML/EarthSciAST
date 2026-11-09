@@ -220,49 +220,73 @@ end
 _model_has_setup_join_reduction(equations) =
     _anyof(eq -> eq.lhs isa VarExpr && _is_setup_join_reduction(eq.rhs), equations)
 
-# An ungated array `faq` whose body holds an indicator sum (`_is_count_faq`:
-# `rank_of` / `rank_of_set` / `searchsorted` from the standard library) is,
-# over inputs that read no state, a build-once table like the relational op's
-# dense ids: the setup sweep fills it once, with the count as a binary search
-# (`_geo_count_node`), and its readers gather it. Under a plan without the
-# count rewrite (the interpreter) it stays an observed.
-function _is_setup_count_reduction(e)
+# An ungated array `faq` whose body holds a nested reduction over build
+# constants (a `rank_of_set` lookup's count, an `argmin` template's min and
+# index search, any reduction the observed's cells cannot change) is, over
+# inputs that read no state, no time and no scalar parameter, a build-once
+# table like the relational op's ranks and arg-witness buffers: the setup
+# sweep fills it once and its readers gather it (an indicator sum in it is a
+# binary search, `_geo_count_node`). Every range of it and of its nested
+# reductions must be one the sweep loops over: a dense `[1, n]` range or an
+# interval or derived index set (`_setup_range_ok`). Under a plan without the
+# construction-time compiled forms (the interpreter) it stays an observed.
+function _is_setup_const_reduction(e, index_sets, scalar_params)
     (e isa OpExpr && _is_faq_op(e.op) && e.expr_body isa OpExpr) || return false
     (e.join === nothing && e.join_gates === nothing) || return false
     (e.output_idx !== nothing && !isempty(e.output_idx)) || return false
-    _compiler_plan_now().count_fold || return false
+    _setup_compile_once_enabled() || return false
     _body_needs_general_eval(e) && return false
-    return _has_count_faq(e.expr_body::OpExpr, IdDict{OpExpr, Nothing}())
+    _faq_nesting(e.expr_body::OpExpr, IdDict{OpExpr, Int}()) >= 1 || return false
+    _anyof(n -> n in scalar_params, _referenced_var_names(e)) && return false
+    return _setup_ranges_ok(e, index_sets, IdDict{OpExpr, Nothing}())
 end
-function _has_count_faq(e::OpExpr, seen::IdDict{OpExpr, Nothing})
-    _is_count_faq(e) && return true
-    haskey(seen, e) && return false
+function _setup_ranges_ok(e::OpExpr, index_sets, seen::IdDict{OpExpr, Nothing})
+    haskey(seen, e) && return true
     seen[e] = nothing
-    _anyof(a -> a isa OpExpr && _has_count_faq(a, seen), e.args) && return true
-    return e.expr_body isa OpExpr && _has_count_faq(e.expr_body::OpExpr, seen)
+    if _is_faq_op(e.op) && e.ranges !== nothing
+        _allof(r -> _setup_range_ok(r, index_sets), collect(values(e.ranges))) || return false
+    end
+    _allof(a -> !(a isa OpExpr) || _setup_ranges_ok(a, index_sets, seen), e.args) || return false
+    for c in (e.expr_body, e.filter)
+        c isa OpExpr && !_setup_ranges_ok(c, index_sets, seen) && return false
+    end
+    return true
 end
-_model_has_setup_count_reduction(equations) =
-    _anyof(eq -> eq.lhs isa VarExpr && _is_setup_count_reduction(eq.rhs), equations)
+function _setup_range_ok(r, index_sets)
+    r isa AbstractVector && return length(r) == 2 && r[1] isa Integer && r[1] == 1 && r[2] isa Integer
+    (r isa IndexSetRef && isempty(r.of)) || return false
+    s = index_sets === nothing ? nothing : get(index_sets, r.from, nothing)
+    return s isa IndexSet && (s.kind == "interval" || (s.kind == "derived" && s.from_faq !== nothing))
+end
 
-# The indicator sum on the typed tree: a `+` faq seeded +0.0 over one range,
-# with no filter or join, whose body is `ifelse(l REL r, c1, c2)` with REL one of
-# `<= < >= >`, {c1, c2} = {0, 1} and exactly one of `l`, `r` reading the range
-# symbol (the shape `_cg_count_loop` and `_geo_count_node` rewrite).
-function _is_count_faq(e::OpExpr)
-    (_is_faq_op(e.op) && e.ranges !== nothing && length(e.ranges) == 1) || return false
-    (e.filter === nothing && e.join === nothing && e.join_gates === nothing) || return false
-    (e.output_idx === nothing || isempty(e.output_idx)) || return false
-    oplus, zero = _aggregate_oplus_identity(e.semiring, e.reduce)
-    (oplus == "+" && zero === 0.0) || return false
-    b = e.expr_body
-    (b isa OpExpr && b.op == "ifelse" && length(b.args) == 3) || return false
-    c, y, n = b.args
-    lit(x) = x isa IntExpr || x isa NumExpr ? Float64(x.value) : nothing
-    ((lit(y), lit(n)) in ((1.0, 0.0), (0.0, 1.0))) || return false
-    (c isa OpExpr && c.op in ("<=", "<", ">=", ">") && length(c.args) == 2) || return false
-    k = first(keys(e.ranges))
-    reads(x) = k in _referenced_var_names(x)
-    return reads(c.args[1]) != reads(c.args[2])
+function _model_has_setup_const_reduction(model, equations, index_sets, state_var_names)
+    sp = Set{String}(
+        n for (n, v) in model.variables if v.type == ParameterVariable && !_is_array_shape(v.shape)
+    )
+    defs = Dict{String, ASTExpr}(
+        (eq.lhs::VarExpr).name => eq.rhs for eq in equations if eq.lhs isa VarExpr
+    )
+    dynamic = _dynamic_names(defs, state_var_names)
+    return _anyof(
+        n -> !(n in dynamic) && _is_setup_const_reduction(defs[n], index_sets, sp), collect(keys(defs))
+    )
+end
+
+# The defined names that read a state or `t`, directly or through other
+# definitions: never a build-once table.
+function _dynamic_names(defs, state_var_names)
+    dynamic = Set{String}()
+    _saturate!() do
+        changed = false
+        for (n, rhs) in defs
+            n in dynamic && continue
+            if _anyof(r -> r == "t" || r in state_var_names || r in dynamic, _referenced_var_names(rhs))
+                push!(dynamic, n); changed = true
+            end
+        end
+        changed
+    end
+    return dynamic
 end
 
 # An intersection-area leaf lives in an equation LHS/RHS — from esm 1.0.0 an
@@ -1907,7 +1931,11 @@ end
 
 function _geometry_setup_vars(
         model, equations, geom_ring_vars, state_var_names,
-        live_params
+        live_params; index_sets = nothing
+    )
+    scalar_params = Set{String}(
+        n for (n, v) in model.variables
+            if v.type == ParameterVariable && !_is_array_shape(v.shape)
     )
     defs = Dict{String, ASTExpr}()
     for eq in equations
@@ -1936,6 +1964,7 @@ function _geometry_setup_vars(
         end
         changed
     end
+    dynamic = _dynamic_names(defs, state_var_names)
     setup = Set{String}()
     for (n, _) in defs
         (is_arr_obs(n) && !(n in geom_ring_vars) && !(n in tainted) && haskey(defs, n)) || continue
@@ -1952,8 +1981,7 @@ function _geometry_setup_vars(
         _is_setup_join_reduction(defs[n]) &&
             !_anyof(f -> f in state_var_names, _referenced_var_names(defs[n])) &&
             push!(setup, n)
-        _is_setup_count_reduction(defs[n]) &&
-            !_anyof(f -> f in state_var_names || f == "t", _referenced_var_names(defs[n])) &&
+        _is_setup_const_reduction(defs[n], index_sets, scalar_params) && !(n in dynamic) &&
             push!(setup, n)
     end
     mvars = Set{String}(keys(model.variables))
