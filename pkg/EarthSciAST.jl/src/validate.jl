@@ -1918,7 +1918,7 @@ function _check_model_aggregates!(
     )
 
     for (i, eq) in enumerate(model.equations)
-        _contains_template_reference(eq.rhs) || _check_faq_bare_array_operands!(
+        _check_faq_bare_array_operands!(
             errors, eq.lhs, eq.rhs, "$path/equations/$(i - 1)/rhs", var_shapes
         )
         _walk_aggregates!(errors, file, eq.lhs, "$path/equations/$(i - 1)/lhs", state_vars, registry, var_shapes)
@@ -2020,8 +2020,10 @@ last box axis), so it is refused: the read must be `index(name, i, …)`.
 The descent enters elementwise nodes only (`_is_elementwise_node`), as the
 §4.3.4 alignment rule does; a name a `faq` binds as a loop symbol, here or
 further out, shadows the declaration; nested `faq` nodes are checked in their
-own right. Order: pre-order over nodes, `expr` before `filter`, operands left to
-right — the order Rust and Python report in.
+own right; an `apply_expression_template` application is opaque, so an array
+bound to one of its arguments is not a bare read. Order: pre-order over nodes,
+`expr` before `filter`, operands left to right — the order Rust and Python
+report in.
 """
 function faq_bare_array_operands(expr::ASTExpr, var_shapes::AbstractDict; exclude = ())
     found = Tuple{String, String, Vector{String}}[]
@@ -2051,7 +2053,7 @@ function _faq_bare_operands!(out::Vector{String}, e::ASTExpr, shaped, seen = IdD
 end
 
 function _faq_bare_walk!(found, e::ASTExpr, shaped, bound::Set{String}, visited)
-    e isa OpExpr || return found
+    (e isa OpExpr && e.op != "apply_expression_template") || return found
     scopes = get!(() -> Set{String}[], visited, e)
     any(==(bound), scopes) && return found
     push!(scopes, bound)
@@ -2083,14 +2085,23 @@ faq_bare_array_operand_message(field::AbstractString, name::AbstractString, shap
     "per index tuple, so a whole array there does not say which symbol each of its " *
     "axes is. Read it through `index`, e.g. index($name, <symbol>…) (esm-spec §4.3.1)"
 
-# `lhs` is the equation's left-hand side: a variable it names is skipped, since a
-# bare read of the variable an equation defines is a self-reference the
-# recurrence and cycle checks already report — one defect, one finding.
+"""
+    faq_bare_exempt_names(lhs) -> Set{String}
+
+The names `faq_bare_array_operand` skips for an equation with left-hand side
+`lhs`: every name an observed or recurrence definition's LHS names, whose bare
+self-read `recurrence_not_wellfounded` or `observed_cycle` reports (one defect,
+one finding); none for a derivative, whose bare state read no other check
+reports.
+"""
+faq_bare_exempt_names(lhs::ASTExpr) =
+    lhs isa OpExpr && lhs.op == "D" ? Set{String}() : _referenced_var_names(lhs, Set{String}())
+
 function _check_faq_bare_array_operands!(
         errors::Vector{StructuralError}, lhs::ASTExpr, expr::ASTExpr, anchor::String,
         var_shapes
     )
-    defined = _referenced_var_names(lhs, Set{String}())
+    defined = faq_bare_exempt_names(lhs)
     for (field, name, shape) in faq_bare_array_operands(expr, var_shapes; exclude = defined)
         push!(
             errors, StructuralError(
