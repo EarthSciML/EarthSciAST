@@ -43,4 +43,6 @@ Do not put "Co-Authored-By: Claude ..." in any commit messages. Claude is an LLM
 
 Whe you receive a report from a subagent that includes abbreviations, shorthand, or acronyms that the subagent made up, if you discuss the report with me please discuss it using actual words rather than the shorthand made up by the subagent.
 
-When developing locally, only run test suites directly related to the code you are changing; leave the full test suite to be run by CI
+When developing locally, only run test suites directly related to the code you are changing; leave the full test suite to be run by CI.
+
+Automatically generated .esm files for testing or benchmarks should not be checked into git; instead they should be generated a run-time.
