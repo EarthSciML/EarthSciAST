@@ -2215,6 +2215,14 @@ pub(crate) fn const_oob_message(name: &str, one_based: i64, n: i64, d: usize) ->
     )
 }
 
+/// The 0-based position the §5.5.5 periodic fold `mod1(one_based, n)` reads
+/// along an axis of extent `n >= 1`: `(one_based − 1) mod n`, exact for every
+/// `i64` (a saturated `i64::MIN` subscript must not overflow the `− 1`).
+#[inline]
+pub(crate) fn periodic_offset(one_based: i64, n: i64) -> usize {
+    (i128::from(one_based) - 1).rem_euclid(i128::from(n)) as usize
+}
+
 /// The out-of-range boundary policy of the gather being resolved
 /// (CONFORMANCE_SPEC §5.5.5).
 ///
@@ -2267,7 +2275,7 @@ pub(super) fn index_into(
                     match (dim_size >= 1).then(|| scope.boundary(name, d)) {
                         // 1-based periodic wrap == Julia `mod1(i, n)`.
                         Some(BoundaryKind::Periodic) => {
-                            resolved = (one_based - 1).rem_euclid(dim_size) + 1;
+                            resolved = periodic_offset(one_based, dim_size) as i64 + 1;
                         }
                         Some(BoundaryKind::Clamp) => {
                             resolved = one_based.clamp(1, dim_size);
@@ -7000,5 +7008,53 @@ mod interp_elementwise_tests {
             want(&[7.0], &[1.0]),
             "scalar table, 0-D axis"
         );
+    }
+}
+
+#[cfg(test)]
+mod saturated_subscript_tests {
+    //! A subscript of `±inf` or `±1e300` saturates to `i64::MIN`/`i64::MAX`
+    //! in `eval_index_args`; the periodic fold of CONFORMANCE_SPEC §5.5.5,
+    //! `((i − 1) mod N) + 1`, must still be the exact residue of that
+    //! integer, with no overflow.
+    use super::{GatherKind, Value, index_into, periodic_offset};
+    use crate::simulate_array::ConstArrayScope;
+    use crate::value_invention::BoundaryKind;
+    use ndarray::{ArrayD, IxDyn};
+
+    fn read(raw: i64, kind: BoundaryKind) -> f64 {
+        let arr = ArrayD::from_shape_vec(IxDyn(&[5]), vec![10.0, 20.0, 30.0, 40.0, 50.0]).unwrap();
+        let scope = ConstArrayScope::default().with_boundary("M", vec![kind]);
+        let kind = GatherKind::ConstArray {
+            name: "M",
+            scope: &scope,
+        };
+        match index_into(&arr, &[raw], true, kind) {
+            Value::Scalar(v) => v,
+            _ => panic!("scalar expected"),
+        }
+    }
+
+    #[test]
+    fn periodic_fold_of_a_saturated_subscript() {
+        for raw in [i64::MIN, i64::MIN + 1, i64::MAX, i64::MAX - 1, -7, 0, 6] {
+            let want = (raw as i128 - 1).rem_euclid(5) as usize;
+            assert_eq!(periodic_offset(raw, 5), want, "{raw}");
+            assert_eq!(
+                read(raw, BoundaryKind::Periodic),
+                10.0 * (want + 1) as f64,
+                "{raw}"
+            );
+        }
+        // (i64::MIN − 1) mod 5 = 1: element 2, not the wrapped i64::MAX's 3.
+        assert_eq!(read(f64::NEG_INFINITY as i64, BoundaryKind::Periodic), 20.0);
+        assert_eq!(read(-1e300_f64 as i64, BoundaryKind::Periodic), 20.0);
+        assert_eq!(read(f64::INFINITY as i64, BoundaryKind::Periodic), 20.0);
+    }
+
+    #[test]
+    fn clamp_of_a_saturated_subscript() {
+        assert_eq!(read(i64::MIN, BoundaryKind::Clamp), 10.0);
+        assert_eq!(read(i64::MAX, BoundaryKind::Clamp), 50.0);
     }
 }

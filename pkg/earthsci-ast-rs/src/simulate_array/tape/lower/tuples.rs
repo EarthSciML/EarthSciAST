@@ -1405,7 +1405,9 @@ impl TapeBuilder<'_> {
                         // or clamped into, so it is the error whatever the
                         // policy.
                         Some(name) => match (n >= 1).then(|| self.const_arrays.boundary(name, d)) {
-                            Some(BoundaryKind::Periodic) => i1 = (raw - 1).rem_euclid(n) + 1,
+                            Some(BoundaryKind::Periodic) => {
+                                i1 = crate::simulate_array::eval::periodic_offset(raw, n) as i64 + 1
+                            }
                             Some(BoundaryKind::Clamp) => i1 = raw.clamp(1, n),
                             Some(BoundaryKind::Error) | None => bail_tape!(
                                 "index: const-array gather out of range (§5.5.5) in a \

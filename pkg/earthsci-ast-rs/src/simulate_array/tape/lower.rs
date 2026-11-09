@@ -257,7 +257,9 @@ fn resolve_const_index(policy: BoundaryKind, raw: i64, n: i64) -> Option<usize> 
         return Some((raw - 1) as usize);
     }
     match policy {
-        BoundaryKind::Periodic if n >= 1 => Some((raw - 1).rem_euclid(n) as usize),
+        BoundaryKind::Periodic if n >= 1 => {
+            Some(crate::simulate_array::eval::periodic_offset(raw, n))
+        }
         BoundaryKind::Clamp if n >= 1 => Some((raw.clamp(1, n) - 1) as usize),
         _ => None,
     }
