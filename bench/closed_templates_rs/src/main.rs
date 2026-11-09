@@ -23,6 +23,9 @@
 //! command that writes them. Environment: `ORACLE=0` skips
 //! the per-cell oracle check, `SAMPLE_MS` (default 30) sets the length of one
 //! timing sample, `BUILDS` (default 3) the builds per document.
+//!
+//! `list FILE` prints the native tape listing of one document FILE, then its
+//! time per call, build time and first-call time (for profiling a workload).
 
 use std::collections::HashMap;
 use std::hint::black_box;
@@ -905,6 +908,21 @@ fn docs_dir(
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let family = args.get(1).map(String::as_str).unwrap_or("all");
+    if family == "list" {
+        // `list FILE`: the tape listing of FILE under `native` (diagnostics).
+        let m = Model::build(Path::new(&args[2]), true, false);
+        print!(
+            "{}",
+            m.prob.debug_array_compiled().unwrap().debug_tape_listing()
+        );
+        let mut m = m;
+        let (b, f) = (m.build_s, m.first_s);
+        println!(
+            "call_ns\t{:.0}\tbuild_s\t{b:.6}\tfirst_s\t{f:.6}",
+            time_model(&mut m)
+        );
+        return;
+    }
     let given = args.get(2).map(String::as_str).filter(|d| *d != "-");
     let p4 = |fam: &str| {
         let prefix = format!("{fam}_");

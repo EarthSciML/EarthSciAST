@@ -1417,12 +1417,29 @@ pub(crate) fn lower_expression_templates_visiting(
                     continue;
                 }
                 let scope = format!("{scope_base}.{k}");
-                let Some(child) = comp.get(&k) else { continue };
+                let Some(child) = comp.get_mut(&k) else {
+                    continue;
+                };
+                let parked = park_plain(child, !rules.is_empty());
                 let shared = to_shared(child);
-                let rewritten = rewrite_to_fixpoint(&shared, &ctx, &scope)?;
-                check_surviving_refs(&rewritten, &named, &scope, &mut PtrSet::default())?;
+                let rewritten = rewrite_to_fixpoint(&shared, &ctx, &scope);
+                let checked = rewritten.and_then(|r| {
+                    check_surviving_refs(&r, &named, &scope, &mut PtrSet::default()).map(|()| r)
+                });
+                let rewritten = match checked {
+                    Ok(r) => r,
+                    Err(e) => {
+                        if let Some(child) = comp.get_mut(&k) {
+                            unpark_plain(child, parked);
+                        }
+                        return Err(e);
+                    }
+                };
                 if !Rc::ptr_eq(&rewritten, &shared) {
-                    comp.insert(k, to_value(&rewritten));
+                    comp.insert(k.clone(), to_value(&rewritten));
+                }
+                if let Some(child) = comp.get_mut(&k) {
+                    unpark_plain(child, parked);
                 }
             }
             registries.entry(cname.clone()).or_insert(CompRegistry {
@@ -1530,6 +1547,7 @@ fn validate_geometry_manifolds_at(
     at: &JsonPath<'_>,
 ) -> Result<(), ExpressionTemplateError> {
     match tree {
+        Value::Array(arr) if crate::json_visit::is_number_data(arr) => Ok(()),
         Value::Array(arr) => {
             for (i, child) in arr.iter().enumerate() {
                 validate_geometry_manifolds_at(child, &JsonPath::Index(at, i))?;
@@ -1607,6 +1625,7 @@ fn validate_makearray_regions_at(
     at: &JsonPath<'_>,
 ) -> Result<(), ExpressionTemplateError> {
     match tree {
+        Value::Array(arr) if crate::json_visit::is_number_data(arr) => Ok(()),
         Value::Array(arr) => {
             for (i, child) in arr.iter().enumerate() {
                 validate_makearray_regions_at(child, &JsonPath::Index(at, i))?;

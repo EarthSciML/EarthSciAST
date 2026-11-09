@@ -103,12 +103,27 @@ pub fn expand(value: &mut Value) -> Result<(), ExpressionTemplateError> {
                 if k == "expression_templates" || k == "expression_template_imports" {
                     continue;
                 }
-                let Some(child) = comp.get(&k) else { continue };
+                let Some(child) = comp.get_mut(&k) else {
+                    continue;
+                };
+                let parked = park_plain(child, false);
                 let shared = to_shared(child);
                 let mut memo = PtrMemo::default();
-                let expanded = expand_all(&shared, &named, &format!("{scope}.{k}"), &mut memo)?;
+                let expanded = expand_all(&shared, &named, &format!("{scope}.{k}"), &mut memo);
+                let expanded = match expanded {
+                    Ok(x) => x,
+                    Err(e) => {
+                        if let Some(child) = comp.get_mut(&k) {
+                            unpark_plain(child, parked);
+                        }
+                        return Err(e);
+                    }
+                };
                 if !Rc::ptr_eq(&expanded, &shared) {
-                    comp.insert(k, to_value(&expanded));
+                    comp.insert(k.clone(), to_value(&expanded));
+                }
+                if let Some(child) = comp.get_mut(&k) {
+                    unpark_plain(child, parked);
                 }
             }
             comp.remove("expression_templates");

@@ -644,3 +644,349 @@ fn nested_faq_over_another_box_is_not_read_at_the_cell() {
     }
     oracle_ab(mismatched_nested_box_doc(json!({"from": "cells"})));
 }
+
+/// One scalar observed `r = rhs` over two const rings (`src`, `tgt`) and a
+/// scalar state `u` that relaxes toward it.
+fn scalar_branch_doc(rhs: Value) -> Value {
+    let src = cells(&[10.0, 11.0], &[40.0, 41.0]);
+    let tgt = cells(&[10.25, 10.75, 11.5], &[40.5, 41.5]);
+    let mut model = json!({
+        "variables": {
+            "src": {"type": "unknown", "shape": ["sc", "cv", "co"]},
+            "tgt": {"type": "unknown", "shape": ["tc", "cv", "co"]},
+            "u": {"type": "unknown", "default": 0.5},
+            "r": {"type": "unknown"}
+        },
+        "equations": [
+            {"lhs": "src", "rhs": {"op": "const", "args": [], "value": src}},
+            {"lhs": "tgt", "rhs": {"op": "const", "args": [], "value": tgt}},
+            {"lhs": "r", "rhs": rhs},
+            {"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+             "rhs": op("-", vec![op("*", vec![json!(1.0e-3), json!("r")]), json!("u")])}
+        ]
+    });
+    model["expression_templates"] = library("geometry.esm");
+    document(
+        "scalar_branch_block",
+        json!({"sc": {"kind": "interval", "size": 1}, "tc": {"kind": "interval", "size": 2},
+               "cv": {"kind": "interval", "size": 4}, "co": {"kind": "interval", "size": 2}}),
+        model,
+    )
+}
+
+/// The sections the `JmpIfZero`s of `prog` sit in.
+fn branch_sections(prog: &super::ir::TapeProgram) -> Vec<super::ir::Cadence> {
+    (0..prog.instrs.len())
+        .filter(|&pc| matches!(prog.instrs[pc], Instr::JmpIfZero { .. }))
+        .map(|pc| prog.section_of(pc))
+        .collect()
+}
+
+fn planar_area(cell_b: i64) -> Value {
+    apply(
+        "overlap_area_planar",
+        json!({"ring_a": "src", "cell_a": 1, "nv_a": 4, "ring_b": "tgt", "cell_b": cell_b, "nv_b": 4}),
+    )
+}
+
+/// The instructions of `prog`'s per-call section.
+fn per_call(prog: &super::ir::TapeProgram) -> Vec<&Instr> {
+    (0..prog.instrs.len())
+        .filter(|&pc| prog.section_of(pc) == super::ir::Cadence::Continuous)
+        .map(|pc| &prog.instrs[pc])
+        .collect()
+}
+
+/// A scalar `ifelse` whose condition, arms and every instruction are
+/// build-time data and pure runs once, in the CONST section, even inside an
+/// expression that reads the state (the planar overlap template as a plain
+/// scalar observed, its nested branches included), and so does a pure
+/// build-time instruction inside a branch taken at run time (the template in
+/// the arm of a condition on `t`): nothing of the template is left in the
+/// per-call section. The oracle's bits.
+#[test]
+fn build_time_branch_block_runs_once() {
+    let scale = op("+", vec![json!(1), json!("u")]);
+    let sum = op(
+        "+",
+        vec![
+            op("*", vec![planar_area(1), scale.clone()]),
+            op("*", vec![planar_area(2), scale]),
+        ],
+    );
+    let on_t = op(
+        "ifelse",
+        vec![
+            op(">", vec![json!("t"), json!(0.5)]),
+            planar_area(1),
+            json!(0),
+        ],
+    );
+    for rhs in [sum, on_t] {
+        let (prog, _) = oracle_ab(scalar_branch_doc(rhs.clone()));
+        let work: Vec<_> = per_call(&prog)
+            .into_iter()
+            .filter(|i| {
+                matches!(
+                    i,
+                    Instr::JmpIfZero { .. }
+                        | Instr::Reduce { .. }
+                        | Instr::Gather { .. }
+                        | Instr::DataGather { .. }
+                        | Instr::Fused { .. }
+                )
+            })
+            .collect();
+        assert!(work.is_empty(), "{rhs}: per-call template work {work:?}");
+    }
+}
+
+/// Near misses keep the block on every call: a condition on `t` and on
+/// build-time data, each with an arm that reads the state and is too large
+/// to compute unconditionally.
+#[test]
+fn branch_block_reading_time_or_state_stays_per_call() {
+    let kc = json!({"op": "faq", "args": [], "output_idx": [], "ranges": {"k": [1, 4]},
+                    "expr": ix("src", vec![json!(1), json!("k"), json!(1)])});
+    let big = op(
+        "sin",
+        vec![op(
+            "cos",
+            vec![op("exp", vec![op("*", vec![json!(2), json!("u")])])],
+        )],
+    );
+    for cond in [
+        op(">", vec![json!("t"), json!(0.5)]),
+        op(">", vec![kc, json!(0)]),
+    ] {
+        let rhs = op("ifelse", vec![cond, big.clone(), json!(1)]);
+        let (prog, _) = oracle_ab(scalar_branch_doc(rhs.clone()));
+        let secs = branch_sections(&prog);
+        assert_eq!(secs, vec![super::ir::Cadence::Continuous], "{rhs}");
+    }
+}
+
+/// A scalar observed `r = rhs` over a const axis `ax` of 8 entries and a
+/// scalar state `u`, with `x = 3 u + 1` (the seeded states move it across
+/// the axis and past both ends).
+fn scalar_select_doc(rhs: Value) -> Value {
+    let ax = json!([0.5, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0, 7.5]);
+    let model = json!({
+        "variables": {
+            "ax": {"type": "unknown", "shape": ["k"]},
+            "u": {"type": "unknown", "default": 0.5},
+            "x": {"type": "unknown"},
+            "r": {"type": "unknown"}
+        },
+        "equations": [
+            {"lhs": "ax", "rhs": {"op": "const", "args": [], "value": ax}},
+            {"lhs": "x", "rhs": op("+", vec![op("*", vec![json!(3), json!("u")]), json!(1)])},
+            {"lhs": "r", "rhs": rhs},
+            {"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+             "rhs": op("-", vec![op("*", vec![json!(0.1), json!("r")]), json!("u")])}
+        ]
+    });
+    document(
+        "scalar_select",
+        json!({"k": {"kind": "interval", "size": 8}}),
+        model,
+    )
+}
+
+fn count_of(prog: &super::ir::TapeProgram, pred: impl Fn(&Instr) -> bool) -> usize {
+    prog.instrs.iter().filter(|i| pred(i)).count()
+}
+
+/// A scalar `ifelse` whose arms are values already computed, or at most two
+/// pure instructions, lowers to `Instr::Select` instead of a jump and two
+/// copies: the flat clamp `ifelse(x <= ax[1], ax[1], ifelse(x >= ax[8],
+/// ax[8], x))` the interpolation templates spell, with a NaN `x` among the
+/// queries; the oracle's bits, and no jump left.
+#[test]
+fn small_pure_scalar_branches_become_selects() {
+    let lo = ix("ax", vec![json!(1)]);
+    let hi = ix("ax", vec![json!(8)]);
+    let clamp = op(
+        "ifelse",
+        vec![
+            op("<=", vec![json!("x"), lo.clone()]),
+            lo,
+            op(
+                "ifelse",
+                vec![op(">=", vec![json!("x"), hi.clone()]), hi, json!("x")],
+            ),
+        ],
+    );
+    let nan_x = op(
+        "ifelse",
+        vec![
+            op(">", vec![json!("u"), json!(1.0)]),
+            op("/", vec![json!(0.0), json!(0.0)]),
+            json!("x"),
+        ],
+    );
+    for rhs in [clamp.clone(), op("*", vec![clamp, nan_x])] {
+        let (prog, _) = oracle_ab(scalar_select_doc(rhs.clone()));
+        assert_eq!(
+            count_of(&prog, |i| matches!(i, Instr::JmpIfZero { .. })),
+            0,
+            "{rhs}"
+        );
+        let selects = count_of(&prog, |i| matches!(i, Instr::Select { .. }))
+            + prog
+                .lanes
+                .iter()
+                .flat_map(|l| l.micro.iter())
+                .filter(|m| format!("{m:?}").starts_with("Select"))
+                .count();
+        assert!(selects >= 2, "{rhs}: {selects} selects");
+    }
+}
+
+/// Near misses keep the jump: an arm of more than two instructions, and an
+/// arm holding a const read that may fault (its subscript reads the state).
+#[test]
+fn large_or_faulting_scalar_branches_keep_the_jump() {
+    let big = op(
+        "sin",
+        vec![op(
+            "cos",
+            vec![op("exp", vec![op("*", vec![json!("x"), json!("u")])])],
+        )],
+    );
+    let faulting = ix(
+        "ax",
+        vec![op("floor", vec![op("*", vec![json!(4), json!("u")])])],
+    );
+    for arm in [big, faulting] {
+        let rhs = op(
+            "ifelse",
+            vec![op(">", vec![json!("x"), json!(2.0)]), arm, json!(1.0)],
+        );
+        let file =
+            crate::parse::load_string(&scalar_select_doc(rhs.clone()).to_string()).expect("loads");
+        let compiled = ArrayCompiled::from_file(&file).expect("compiles");
+        let (prog, _) = compiled.tape(&HashSet::new());
+        let prog = prog.as_ref().expect("taped");
+        assert_eq!(
+            count_of(prog, |i| matches!(i, Instr::JmpIfZero { .. })),
+            1,
+            "{rhs}"
+        );
+        let _ = taped_dy(&scalar_select_doc(rhs));
+    }
+}
+
+/// The repeated build-time work of the overlap template (its fan areas and
+/// ramps, lowered once per box they are read at) is computed once: no two
+/// pure CONST instructions of the program are the same computation, fused or
+/// not. The oracle's bits.
+#[test]
+fn repeated_build_time_instructions_are_computed_once() {
+    let (prog, _) = oracle_ab(overlap_doc(false));
+    let canon: Vec<u32> = (0..prog.slots.len() as u32).collect();
+    let guarded = prog.guarded_positions();
+    let mut seen = HashSet::new();
+    for pc in 0..prog.n_const as usize {
+        if guarded[pc] {
+            continue;
+        }
+        if let Some(k) = super::dedup::key(&prog, pc, &prog.instrs[pc], &canon) {
+            assert!(seen.insert(k.clone()), "repeated: {:?}", prog.instrs[pc]);
+        }
+    }
+}
+
+/// Near misses are different computations: another literal (even `-0.0`
+/// against `+0.0`, or another NaN payload), another operation, another
+/// operand.
+#[test]
+fn different_build_time_instructions_stay_apart() {
+    let (prog, _) = oracle_ab(scalar_select_doc(op("+", vec![json!("x"), json!(1)])));
+    let canon: Vec<u32> = (0..prog.slots.len() as u32).collect();
+    let out = (0..prog.slots.len() as u32)
+        .find(|&s| prog.slots[s as usize].scalar)
+        .expect("a scalar slot");
+    let other = (out + 1..prog.slots.len() as u32)
+        .find(|&s| prog.slots[s as usize].scalar)
+        .expect("another scalar slot");
+    use super::ir::Operand;
+    use crate::simulate_array::BinCode;
+    let bin = |op: BinCode, a: Operand, b: Operand| Instr::Bin { op, a, b, out };
+    let key = |i: &Instr| super::dedup::key(&prog, 0, i, &canon).expect("keyed");
+    let x = Operand::Slot(other);
+    let base = key(&bin(BinCode::Add, x, Operand::Lit(0.0)));
+    for near in [
+        bin(BinCode::Add, x, Operand::Lit(-0.0)),
+        bin(BinCode::Sub, x, Operand::Lit(0.0)),
+        bin(BinCode::Add, Operand::Slot(out), Operand::Lit(0.0)),
+        bin(BinCode::Add, x, Operand::Time),
+    ] {
+        assert_ne!(key(&near), base, "{near:?}");
+    }
+    let nan_a = key(&bin(BinCode::Add, x, Operand::Lit(f64::NAN)));
+    let nan_b = key(&bin(
+        BinCode::Add,
+        x,
+        Operand::Lit(f64::from_bits(f64::NAN.to_bits() ^ 1)),
+    ));
+    assert_ne!(nan_a, nan_b);
+    assert_eq!(base, key(&bin(BinCode::Add, x, Operand::Lit(0.0))));
+}
+
+/// Several scalar lookup sites (the `linear` and `bilinear` templates at a
+/// scalar query each, the query moving past both ends of the axes and NaN at
+/// some states) run their straight scalar runs as one block each, inside the
+/// arms of the templates' branches too: the oracle's bits in every arm.
+#[test]
+fn scalar_lookup_blocks_match_the_oracle() {
+    let ax = json!([0.5, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0, 7.5]);
+    let ay = json!([-1.0, 0.0, 2.0, 3.0]);
+    let tx = json!([4.0, -1.5, 2.0, 0.25, 3.5, -2.0, 1.0, 6.0]);
+    let tbl: Vec<Value> = (0..8)
+        .map(|i| json!([i as f64, 0.5 * i as f64, -(i as f64), 2.0 + i as f64]))
+        .collect();
+    let mut eqs = vec![
+        json!({"lhs": "x", "rhs": op("-", vec![op("*", vec![json!(4), json!("u")]), json!(2)])}),
+        json!({"lhs": "y", "rhs": op("-", vec![op("*", vec![json!(2), json!("u")]), json!(1.5)])}),
+    ];
+    let mut vars = json!({
+        "u": {"type": "unknown", "default": 0.5},
+        "x": {"type": "unknown"},
+        "y": {"type": "unknown"}
+    });
+    let mut sum = Vec::new();
+    for s in 0..3 {
+        let xq = if s == 2 {
+            op(
+                "ifelse",
+                vec![
+                    op(">", vec![json!("u"), json!(2.0)]),
+                    op("/", vec![json!(0.0), json!(0.0)]),
+                    json!("x"),
+                ],
+            )
+        } else {
+            op("+", vec![json!("x"), json!(0.25 * s as f64)])
+        };
+        let lin = format!("l{s}");
+        let bil = format!("b{s}");
+        vars[&lin] = json!({"type": "unknown"});
+        vars[&bil] = json!({"type": "unknown"});
+        eqs.push(json!({"lhs": lin, "rhs": apply("linear", json!({
+            "table": {"op": "const", "args": [], "value": tx},
+            "axis": {"op": "const", "args": [], "value": ax}, "x": xq, "n": 8}))}));
+        eqs.push(json!({"lhs": bil, "rhs": apply("bilinear", json!({
+            "table": {"op": "const", "args": [], "value": tbl},
+            "axis_x": {"op": "const", "args": [], "value": ax},
+            "axis_y": {"op": "const", "args": [], "value": ay},
+            "x": xq, "y": "y", "nx": 8, "ny": 4}))}));
+        sum.push(json!(lin));
+        sum.push(json!(bil));
+    }
+    eqs.push(json!({"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+        "rhs": op("-", vec![op("*", vec![json!(0.01), op("+", sum)]), json!("u")])}));
+    let mut model = json!({"variables": vars, "equations": eqs});
+    model["expression_templates"] = library("interp.esm");
+    oracle_ab(document("scalar_lookup_blocks", json!({}), model));
+}

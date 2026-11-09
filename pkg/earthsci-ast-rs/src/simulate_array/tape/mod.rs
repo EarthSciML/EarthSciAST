@@ -74,6 +74,7 @@ mod array_tests;
 mod closed_template_tests;
 #[cfg(test)]
 mod data_gather_tests;
+mod dedup;
 mod exec;
 #[cfg(test)]
 mod forcing_tests;

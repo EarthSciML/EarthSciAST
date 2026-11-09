@@ -34,6 +34,140 @@ fn total(shape: &[usize]) -> usize {
     shape.iter().product::<usize>().max(1)
 }
 
+/// [`data_gather`] of `M` subscripts each read at `ps[d] + k * step[d]`: an
+/// element whose subscripts are all whole numbers inside the source box
+/// reads its position directly (what [`DataGatherSpec::at`] gives it); any
+/// other element goes through `at` itself.
+#[inline(never)]
+unsafe fn gather_direct<const M: usize>(
+    dst: *mut f64,
+    n: usize,
+    spec: &DataGatherSpec,
+    src: *const f64,
+    ps: &[*const f64; 4],
+    step: &[usize; 4],
+    faulted: &mut bool,
+) {
+    let mut ext = [0usize; M];
+    ext.copy_from_slice(&spec.src_shape[..M]);
+    for k in 0..n {
+        let mut v = [0.0f64; M];
+        let mut flat = 0usize;
+        let mut inside = true;
+        for d in 0..M {
+            let x = unsafe { *ps[d].add(k * step[d]) };
+            v[d] = x;
+            // In range first (false for NaN), so the conversion below is exact
+            // and needs no saturation; then a whole number.
+            let ok = x >= 1.0 && x <= ext[d] as f64;
+            let i = if ok {
+                unsafe { x.to_int_unchecked::<i64>() }
+            } else {
+                1
+            };
+            inside &= ok && i as f64 == x;
+            flat = flat
+                .wrapping_mul(ext[d])
+                .wrapping_add((i as usize).wrapping_sub(1));
+        }
+        let y = if inside {
+            unsafe { *src.add(flat) }
+        } else {
+            unsafe { gather_resolved(spec, src, &v, faulted) }
+        };
+        unsafe { *dst.add(k) = y };
+    }
+}
+
+/// One element of a [`data_gather`] at subscripts `v` through
+/// [`DataGatherSpec::at`]: the zero ghost, a boundary policy, or the fault
+/// (`NaN`, `faulted` set).
+///
+/// # Safety
+/// `src` must hold the spec's source box.
+#[cold]
+#[inline(never)]
+unsafe fn gather_resolved(
+    spec: &DataGatherSpec,
+    src: *const f64,
+    v: &[f64],
+    faulted: &mut bool,
+) -> f64 {
+    match spec.at(|d| v[d]) {
+        DataAt::Elem(p) => unsafe { *src.add(p) },
+        DataAt::Ghost => 0.0,
+        DataAt::Fault { .. } => {
+            *faulted = true;
+            f64::NAN
+        }
+    }
+}
+
+/// Windows of at most this many entries are counted entry by entry even
+/// when they are sorted: a branch-free scan of a short window is cheaper than
+/// the bisection's chain of dependent, unpredictable steps.
+pub(super) const COUNT_SCAN_MAX: usize = 128;
+
+/// The number of entries of `win` for which `p` holds, as an `f64`.
+#[inline(always)]
+fn scan_count(win: &[f64], p: impl Fn(f64) -> bool) -> f64 {
+    let mut c = 0usize;
+    for &a in win {
+        c += usize::from(p(a));
+    }
+    c as f64
+}
+
+/// Whether [`Instr::Count`] over `win` bisects: a window known (or found)
+/// non-decreasing and longer than [`COUNT_SCAN_MAX`]. The check of a window
+/// the lowering could not see runs once per execution.
+#[inline]
+pub(super) fn count_bisects(win: &[f64], sorted: bool) -> bool {
+    win.len() > COUNT_SCAN_MAX && (sorted || non_decreasing(win.len(), |j| win[j]))
+}
+
+/// One [`Instr::Count`] element: [`count_rel`]'s value, by a scan unless
+/// `bisect` ([`count_bisects`]).
+#[inline]
+pub(super) fn count_one(rel: CountRel, win: &[f64], bisect: bool, x: f64) -> f64 {
+    if bisect {
+        return count_rel(rel, win.len(), |j| win[j], true, x);
+    }
+    match rel {
+        CountRel::Le => scan_count(win, |a| a <= x),
+        CountRel::Lt => scan_count(win, |a| a < x),
+        CountRel::Ge => scan_count(win, |a| a >= x),
+        CountRel::Gt => scan_count(win, |a| a > x),
+    }
+}
+
+/// [`Instr::Count`] over an array of queries: `dst[k]` is the count of
+/// `win`'s entries standing in `rel` to `x[k]`, one monomorphic loop per
+/// relation.
+pub(super) unsafe fn count_many(
+    dst: *mut f64,
+    shape: &[usize],
+    x: &Rv,
+    rel: CountRel,
+    win: &[f64],
+    sorted: bool,
+) {
+    unsafe {
+        if count_bisects(win, sorted) {
+            ew1(dst, shape, x, |q| {
+                count_rel(rel, win.len(), |j| win[j], true, q)
+            });
+            return;
+        }
+        match rel {
+            CountRel::Le => ew1(dst, shape, x, |q| scan_count(win, |a| a <= q)),
+            CountRel::Lt => ew1(dst, shape, x, |q| scan_count(win, |a| a < q)),
+            CountRel::Ge => ew1(dst, shape, x, |q| scan_count(win, |a| a >= q)),
+            CountRel::Gt => ew1(dst, shape, x, |q| scan_count(win, |a| a > q)),
+        }
+    }
+}
+
 /// `dst[k] = f(a[k])` — dst contiguous row-major over `shape`.
 #[inline(never)]
 pub(super) unsafe fn ew1(dst: *mut f64, shape: &[usize], a: &Rv, f: impl Fn(f64) -> f64 + Copy) {
@@ -943,6 +1077,34 @@ pub(super) unsafe fn data_gather(
         }
     }
     let m = subs.len();
+    // Two to four subscripts, each contiguous over the box or one scalar:
+    // the common `table[i[k], j[k]]` shape, addressed directly.
+    if (2..=4).contains(&m) && m == spec.src_shape.len() {
+        let mut ps = [std::ptr::null::<f64>(); 4];
+        let mut step = [0usize; 4];
+        let mut ok = true;
+        for (d, sub) in subs.iter().enumerate() {
+            match sub {
+                Rv::S(v) => ps[d] = v as *const f64,
+                Rv::V { ptr, strides } if is_contig(strides, shape) => {
+                    ps[d] = *ptr;
+                    step[d] = 1;
+                }
+                Rv::V { .. } => ok = false,
+            }
+        }
+        if ok {
+            let src_ptr = src.ptr;
+            unsafe {
+                match m {
+                    2 => gather_direct::<2>(dst, n, spec, src_ptr, &ps, &step, &mut faulted),
+                    3 => gather_direct::<3>(dst, n, spec, src_ptr, &ps, &step, &mut faulted),
+                    _ => gather_direct::<4>(dst, n, spec, src_ptr, &ps, &step, &mut faulted),
+                }
+            }
+            return faulted;
+        }
+    }
     // Up to four subscripts over a box of up to three axes: nested loops
     // over fixed-size stride tables, the same row-major element order as the
     // odometer below without its per-element bookkeeping.
@@ -1260,8 +1422,28 @@ mod tests {
             wide,
             SmallVec::from_slice(&[7, 1]),
         ));
-        for (shape, segs, strides) in cases {
+        // Whole-box covers: a broadcast axis (stride 0) over a fixed slice of
+        // a wider source (the `base` offset), and a plain permuted read.
+        let full = |n: usize| -> SmallVec<[(usize, usize, usize); 2]> {
+            SmallVec::from_slice(&[(0, n, 0)])
+        };
+        let mut bc: Segs = SmallVec::new();
+        bc.push(full(5));
+        bc.push(full(3));
+        bc.push(full(4));
+        cases.push((
+            SmallVec::from_slice(&[5, 3, 4]),
+            bc.clone(),
+            SmallVec::from_slice(&[8, 2, 0]),
+        ));
+        cases.push((
+            SmallVec::from_slice(&[5, 3, 4]),
+            bc,
+            SmallVec::from_slice(&[1, 20, 5]),
+        ));
+        for (i, (shape, segs, strides)) in cases.into_iter().enumerate() {
             let g = ChunkGather {
+                base: (i % 3) as i64,
                 segs,
                 strides,
                 shape: shape.clone(),
@@ -1279,6 +1461,69 @@ mod tests {
                 let mut got = vec![f64::NAN; c];
                 unsafe { g.fill(src.as_ptr(), at, c, got.as_mut_ptr()) };
                 assert_eq!(got, want[at..at + c], "{g:?} window {at}+{c}");
+            }
+        }
+    }
+
+    /// The scan and the bisection both give the `+0.0`-seeded fold of the
+    /// 0/1 indicator, over windows on both sides of [`COUNT_SCAN_MAX`],
+    /// sorted (with duplicates and signed zeros) and not (with NaN keys), at
+    /// queries including NaN, the infinities and both zeros; one query at a
+    /// time and over a strided array of queries.
+    #[test]
+    fn count_kernels_match_the_fold() {
+        let pool = [-2.0, -0.0, 0.0, 0.5, 0.5, 1.0, 3.0, f64::NAN];
+        let queries = [
+            f64::NEG_INFINITY,
+            -3.0,
+            -0.0,
+            0.0,
+            0.5,
+            1.0,
+            2.0,
+            9.0,
+            f64::INFINITY,
+            f64::NAN,
+        ];
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for trial in 0..600 {
+            let len = (next() % (2 * COUNT_SCAN_MAX as u64 + 8)) as usize;
+            let mut w: Vec<f64> = (0..len)
+                .map(|_| pool[(next() % pool.len() as u64) as usize])
+                .collect();
+            if trial % 2 == 0 {
+                w.retain(|v| !v.is_nan());
+                w.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            }
+            let flag = trial % 4 == 0 && non_decreasing(w.len(), |j| w[j]);
+            for rel in [CountRel::Le, CountRel::Lt, CountRel::Ge, CountRel::Gt] {
+                let fold = |x: f64| {
+                    w.iter().fold(0.0f64, |acc, &a| {
+                        acc + if rel.holds(a, x) { 1.0 } else { 0.0 }
+                    })
+                };
+                let bisect = count_bisects(&w, flag);
+                for &x in &queries {
+                    let got = count_one(rel, &w, bisect, x);
+                    assert_eq!(got.to_bits(), fold(x).to_bits(), "{rel:?} {x} on {w:?}");
+                }
+                // Every other query of a doubled list, as a strided view.
+                let xs: Vec<f64> = queries.iter().flat_map(|&q| [q, 7.0]).collect();
+                let mut dst = vec![0.0f64; queries.len()];
+                let xv = Rv::V {
+                    ptr: xs.as_ptr(),
+                    strides: DimI::from_slice(&[2]),
+                };
+                unsafe { count_many(dst.as_mut_ptr(), &[queries.len()], &xv, rel, &w, flag) };
+                for (k, &x) in queries.iter().enumerate() {
+                    assert_eq!(dst[k].to_bits(), fold(x).to_bits(), "{rel:?} {x} on {w:?}");
+                }
             }
         }
     }
