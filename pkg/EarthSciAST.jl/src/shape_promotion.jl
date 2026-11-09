@@ -28,7 +28,7 @@
 function _infer_expr_shape(
         expr::ASTExpr,
         shapes::Dict{String, Vector{String}},
-        roles = nothing
+        ctx = nothing
     )::Vector{String}
     if expr isa NumExpr || expr isa IntExpr
         return String[]
@@ -36,18 +36,26 @@ function _infer_expr_shape(
         return get(shapes, expr.name, String[])
     elseif expr isa OpExpr
         op = expr.op
-        if op == "index"
+        # A template application (a reference, or an expansion made at load)
+        # is elementwise in the arrays its expansion reads in value positions
+        # (esm-spec §9.6.11); the tables and axes it reads whole do not shape
+        # the result. Without `ctx`, an application is scalar, as before.
+        site_operands = ctx !== nothing &&
+            (op == "apply_expression_template" || expr.template_origin !== nothing) ?
+            _application_operands(expr, shapes, ctx) : nothing
+        site = site_operands !== nothing && !isempty(site_operands)
+        if !site && op == "index"
             # A gather selects one element (or a fixed slice) — scalar output for
             # promotion purposes (the level-set already indexes its own field).
             return String[]
-        elseif op in _GEOMETRY_KERNEL_OPS
+        elseif !site && op in _GEOMETRY_KERNEL_OPS
             # A geometry kernel consumes each operand as a WHOLE ring, not per
             # cell, so its operands' shapes do not broadcast: two rings of
             # different vertex counts are independent operands. The scalar
             # `polygon_intersection_area` is scalar; an `intersect_polygon` clip
             # ring takes the shape its defining variable declares.
             return String[]
-        elseif op in _ARRAY_PRODUCER_OPS
+        elseif !site && op in _ARRAY_PRODUCER_OPS
             # Output is exactly the uncontracted axes named in output_idx, each
             # named by the index set its range draws `{from}`. An output symbol
             # is a node-local loop name, not an index set; one ranging over an
@@ -75,19 +83,11 @@ function _infer_expr_shape(
             # name sets — neither a subset of the other — are a conflict.
             # `lower`/`upper` (integral bounds) and `filter` don't shape the
             # elementwise result.
-            # A template application is elementwise in its scalar-role
-            # bindings (esm-spec §9.6.11); its array-role bindings (tables,
-            # axes) are consumed whole and do not shape the result. With the
-            # roles unknown, the application is scalar, as before.
-            operands = if op == "apply_expression_template"
-                sb = _scalar_role_bindings(expr, roles)
-                sb === nothing ? ASTExpr[] : ASTExpr[v for (_, v) in sb]
-            else
-                expr.args
-            end
+            operands = site ? site_operands :
+                op == "apply_expression_template" ? ASTExpr[] : expr.args
             sh = String[]
             for a in operands
-                s = _infer_expr_shape(a, shapes, roles)
+                s = _infer_expr_shape(a, shapes, ctx)
                 isempty(s) && continue
                 if isempty(sh)
                     sh = s
@@ -558,9 +558,9 @@ function promote_downstream_shapes(
             for (k, v) in d if _declares_scalar(v)
     )
 
-    # Which template parameters are consumed whole (esm-spec §9.6.11): an
-    # application binding an array to any OTHER parameter is elementwise.
-    roles = _template_array_roles(flat.template_registry)
+    # Expands the template references the elementwise lift meets (esm-spec
+    # §9.6.11).
+    ew = _ElementwiseContext(flat.template_registry)
 
     # Index the ALGEBRAIC defining equations (bare `x = expr`). State equations
     # (`D(x,t) = …`) don't define x's shape (x keeps its declared shape).
@@ -612,7 +612,7 @@ function promote_downstream_shapes(
         for (name, rhs) in defs
             cur = get(shapes, name, String[])
             isempty(cur) || continue                     # already array — leave it
-            inferred = _infer_expr_shape(rhs, shapes, roles)
+            inferred = _infer_expr_shape(rhs, shapes, ew)
             if !isempty(inferred)
                 name in declared_scalar &&
                     _throw_declared_scalar_conflict(name, inferred, "its defining expression")
@@ -627,13 +627,18 @@ function promote_downstream_shapes(
 
     # An equation applying a template elementwise over an array (esm-spec
     # §9.6.11) is lifted over its variable's shape — declared, or inferred
-    # above — with each scalar-role binding read at the cell. It replaces the
-    # leaf-indexing lift below, which does not reach into template bindings.
+    # above — with each array its applications read in a value position read
+    # at the cell. It replaces the leaf-indexing lift below, which does not
+    # reach into template applications. An application that reads an anonymous
+    # array there, in any equation, is refused first.
+    for eq in flat.equations
+        _refuse_anonymous_arrays(eq.rhs, eq.lhs, ew)
+    end
     ew_lifted = Dict{String, OpExpr}()
     for (name, rhs) in defs
         sh = get(shapes, name, String[])
-        (isempty(sh) || !_has_elementwise_application(rhs, shapes, roles)) && continue
-        ew_lifted[name] = _lift_elementwise_application(rhs, sh, shapes, roles, name)
+        (isempty(sh) || !_has_elementwise_application(rhs, shapes, ew)) && continue
+        ew_lifted[name] = _lift_elementwise_application(rhs, sh, shapes, ew, name)
     end
 
     # Rebuild variable partitions with promoted shapes.

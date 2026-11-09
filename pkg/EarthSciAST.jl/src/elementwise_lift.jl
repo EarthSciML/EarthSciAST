@@ -4,76 +4,44 @@
 # ============================================================================
 #
 # A template written for scalar inputs — the `lib/interp.esm` lookups are the
-# motivating case — reads a scalar-role parameter (one its body never uses as an
-# `index` base) inside a reduction body or an `index` subscript. Bound to an
-# array, by the author or by a coupling that feeds an array into a parameter the
-# component declared scalar, the substituted expansion would read a whole array
-# where the body needs one value. §9.6.11 gives the application its elementwise
-# meaning: it is evaluated once per element of the array argument.
+# motivating case — reads a scalar-role parameter inside a reduction body or an
+# `index` subscript. Bound to an array, by the author or by a coupling that
+# feeds an array into a parameter the component declared scalar, the
+# substituted expansion would read a whole array where the body needs one value.
+# §9.6.11 gives the application its elementwise meaning: it is evaluated once
+# per element of the array argument.
 #
-# This binding keeps template references unexpanded until the evaluator build,
-# so the rule is applied to the reference itself, on the flattened system,
-# inside `promote_downstream_shapes`: an equation `x = rhs` whose right-hand side
-# applies a template with an array bound to a scalar-role parameter (or reads a
-# shaped variable by bare name in a reduction body or a subscript — the same
-# application already expanded) becomes `x = faq(rhs read at the cell)` over the
-# application's index sets. Each scalar-role binding, and every other bare
-# shaped read in value position, is gathered at the cell aligned by index-set
-# name (esm-spec §4.3.4); array-role bindings (tables, axes) stay whole.
+# The rule applies to template applications only: an `apply_expression_template`
+# reference (this binding keeps them until the evaluator build), or the root of
+# an expansion made at load, which carries `template_origin` (a mounted leaf's
+# references are expanded at the mount). A shaped read an author wrote by hand
+# is never lifted. Inside `promote_downstream_shapes`, on the flattened system,
+# an equation `x = rhs` that holds, in elementwise position, an application
+# whose expansion reads a shaped variable in a value position becomes
+# `x = faq(rhs read at the cell)` over the application's index sets. Each such
+# read, and each bare shaped read outside the applications in elementwise
+# position, is gathered at the cell aligned by index-set name (esm-spec §4.3.4);
+# a table or axis the body reads whole stays whole. The Rust and Python
+# bindings, which expand every reference at load, run the same walk on their
+# marked expansions.
 
-# The array-role parameters of each template in `registry`: those its body uses
-# as an `index` base, directly or by passing them to an array-role parameter of
-# a template it references.
-function _template_array_roles(registry)::Dict{String, Set{String}}
-    roles = Dict{String, Set{String}}()
-    registry === nothing && return roles
-    visiting = Set{String}()
-    function roles_of(name::String)::Set{String}
-        haskey(roles, name) && return roles[name]
-        name in visiting && return Set{String}()
-        tpl = get(registry, name, nothing)
-        tpl isa AbstractDict || return Set{String}()
-        push!(visiting, name)
-        params = Set{String}(String(p) for p in get(tpl, "params", Any[]) if p isa AbstractString)
-        out = Set{String}()
-        walk(x) =
-        if x isa AbstractDict
-            op = get(x, "op", nothing)
-            if op == "index"
-                a = get(x, "args", Any[])
-                (!isempty(a) && a[1] isa AbstractString && a[1] in params) && push!(out, String(a[1]))
-            elseif op == "apply_expression_template"
-                inner = get(x, "name", nothing)
-                b = get(x, "bindings", nothing)
-                if inner isa AbstractString && b isa AbstractDict
-                    ir = roles_of(String(inner))
-                    for (q, v) in b
-                        (v isa AbstractString && v in params && String(q) in ir) && push!(out, String(v))
-                    end
-                end
-            end
-            foreach(walk, values(x))
-        elseif x isa AbstractVector
-            foreach(walk, x)
-        end
-        walk(get(tpl, "body", nothing))
-        delete!(visiting, name)
-        roles[name] = out
-        return out
-    end
-    for k in keys(registry)
-        roles_of(String(k))
-    end
-    return roles
+# Expands the template references the lift meets, against the flattened
+# system's merged registry, each once.
+struct _ElementwiseContext
+    registry::Any
+    memo::Dict{Tuple{String, String}, OpExpr}
 end
 
-# The scalar-role bindings of a template application, or `nothing` when the
-# template is not in `roles` (its parameters' roles are unknown here).
-function _scalar_role_bindings(e::OpExpr, roles)
-    (roles === nothing || e.name === nothing || e.bindings === nothing) && return nothing
-    arr = get(roles, e.name, nothing)
-    arr === nothing && return nothing
-    return [(k, v) for (k, v) in e.bindings if !(k in arr)]
+_ElementwiseContext(registry) =
+    _ElementwiseContext(registry, Dict{Tuple{String, String}, OpExpr}())
+
+# The expansion of the application `e`, its root marked with the template's
+# name, or `nothing` when `ctx` has no registry to expand it against.
+function _ew_expansion(e::OpExpr, ctx::Union{Nothing, _ElementwiseContext})
+    (ctx === nothing || ctx.registry === nothing || isempty(ctx.registry)) && return nothing
+    return task_local_storage(_MARK_TEMPLATE_ORIGINS_KEY, true) do
+        _expand_expr_refs(e, ctx.registry, nothing, ctx.memo)
+    end
 end
 
 # The argument positions of a closed function that take a whole array.
@@ -91,46 +59,110 @@ function _faq_bound(e::OpExpr, bound::Set{String})
     return union(bound, Set{String}(String(k) for k in keys(e.ranges)))
 end
 
-# Whether `expr` holds an elementwise template application over an array: a
-# scalar-role binding with an array shape, or a bare shaped read in a scalar slot
-# (a reduction body or filter, an `index` subscript), reached through value
-# positions only.
-function _has_elementwise_application(
-        expr::ASTExpr, shapes::Dict{String, Vector{String}}, roles,
-        bound::Set{String} = Set{String}(), slot::Bool = false
-    )::Bool
+_is_anonymous_array(e::OpExpr) =
+    e.op == "reshape" || (e.op == "const" && e.value isa AbstractVector)
+
+# Visit every value position of `expr` (esm-spec §9.6.11). Outside a template
+# application those are the operands of elementwise operators and the scalar
+# arguments of closed functions, the positions the per-cell reading commutes
+# with. Inside one (an expanded reference, a node carrying `template_origin`,
+# and everything below it) they are also the body and filter of a reduction
+# `faq` and the subscripts of an `index`, where the template reads its
+# scalar-role parameters. `on_read(name, inside)` is called for every bare
+# shaped read; `on_anonymous(node)` for an anonymous array (a `const` array
+# literal, a `reshape` result) in a value position inside an application. An
+# `index` base and every operand an op consumes whole are array positions, not
+# visited.
+function _ew_visit(
+        expr::ASTExpr, shapes::Dict{String, Vector{String}},
+        ctx::Union{Nothing, _ElementwiseContext}, bound::Set{String}, inside::Bool,
+        on_read, on_anonymous = nothing
+    )
     if expr isa VarExpr
-        return slot && !(expr.name in bound) && !isempty(get(shapes, expr.name, String[]))
+        (expr.name in bound || isempty(get(shapes, expr.name, String[]))) && return
+        on_read(expr.name, inside)
+        return
     end
-    expr isa OpExpr || return false
+    expr isa OpExpr || return
     op = expr.op
-    rec(a, s = slot, b = bound) = _has_elementwise_application(a, shapes, roles, b, s)
+    if op == "apply_expression_template"
+        ex = _ew_expansion(expr, ctx)
+        ex === nothing ||
+            _ew_visit(ex, shapes, ctx, bound, true, on_read, on_anonymous)
+        return
+    end
+    inside = inside || expr.template_origin !== nothing
+    rec(a, b = bound, i = inside) = _ew_visit(a, shapes, ctx, b, i, on_read, on_anonymous)
     if op == "index"
-        return any(a -> rec(a, true), expr.args[2:end])
-    elseif op == "apply_expression_template"
-        sb = _scalar_role_bindings(expr, roles)
-        sb === nothing && return false
-        return any(((_, v),) -> !isempty(_infer_expr_shape(v, shapes, roles)) || rec(v), sb)
+        inside && foreach(a -> rec(a, bound, true), expr.args[2:end])
     elseif op == "fn"
         whole = _whole_array_fn_args(expr.name)
-        return any(i -> !(i in whole) && rec(expr.args[i]), eachindex(expr.args))
+        for (i, a) in enumerate(expr.args)
+            i in whole || rec(a)
+        end
+    elseif op == "const" || op == "reshape"
+        inside && on_anonymous !== nothing && _is_anonymous_array(expr) && on_anonymous(expr)
     elseif op in _ARRAY_PRODUCER_OPS
-        _is_rank0_faq(expr) || return false
+        (inside && _is_rank0_faq(expr)) || return
         inner = _faq_bound(expr, bound)
-        return (expr.expr_body !== nothing && rec(expr.expr_body, true, inner)) ||
-            (expr.filter !== nothing && rec(expr.filter, true, inner))
-    elseif _is_scalar_op(op)
-        return any(a -> rec(a), expr.args)
+        expr.expr_body === nothing || rec(expr.expr_body, inner, true)
+        expr.filter === nothing || rec(expr.filter, inner, true)
+    elseif _is_elementwise_node(expr)
+        foreach(rec, expr.args)
     end
-    return false
+    return
 end
 
-# `expr` read at the current cell of `loops`: every bare shaped read in value
-# position gathered at the loops its index sets name, every scalar-role binding
-# of a template application read the same way, array-role bindings left whole.
+# Every `(name, inside)` read `_ew_visit` reports for `expr`.
+function _ew_reads(expr::ASTExpr, shapes, ctx)
+    out = Tuple{String, Bool}[]
+    _ew_visit(expr, shapes, ctx, Set{String}(), false, (n, i) -> push!(out, (n, i)))
+    return out
+end
+
+# Whether `expr` applies a template elementwise: an application, in elementwise
+# position, whose expansion reads a shaped variable in a value position.
+_has_elementwise_application(expr::ASTExpr, shapes, ctx) =
+    any(((_, inside),) -> inside, _ew_reads(expr, shapes, ctx))
+
+# `array_shape_mismatch` when a template application in `rhs` reads an
+# anonymous array in a value position: it has no index sets, so nothing says
+# which element each cell reads (esm-spec §9.6.11).
+function _refuse_anonymous_arrays(rhs::ASTExpr, lhs, ctx)
+    found = OpExpr[]
+    _ew_visit(
+        rhs, Dict{String, Vector{String}}(), ctx, Set{String}(), false,
+        (_, _) -> nothing, n -> push!(found, n)
+    )
+    isempty(found) && return
+    name = lhs isa VarExpr ? lhs.name : sprint(show, lhs)
+    throw(
+        DimensionPromotionError(
+            "array_shape_mismatch: '$(name)': a template application reads an anonymous " *
+                "array (a `$(found[1].op)` node) where its body reads a scalar; an array " *
+                "argument of an elementwise application must be declared over index sets, so " *
+                "each cell knows which element it reads (esm-spec §9.6.11)"
+        )
+    )
+end
+
+# The operands that shape an application's result: the shaped variables its
+# expansion reads in value positions, which broadcast by name (§4.3.4).
+function _application_operands(expr::OpExpr, shapes, ctx)::Vector{ASTExpr}
+    out = ASTExpr[]
+    _ew_visit(
+        expr, shapes, ctx, Set{String}(), false,
+        (n, inside) -> inside && push!(out, VarExpr(n))
+    )
+    return out
+end
+
+# `expr` read at the current cell of `loops`: every shaped read `_ew_visit`
+# reports gathered at the loops its index sets name; a template reference is
+# replaced by its expansion, so read.
 function _ew_at_cell(
-        expr::ASTExpr, shapes::Dict{String, Vector{String}}, roles,
-        loops::Vector{String}, align, bound::Set{String} = Set{String}()
+        expr::ASTExpr, shapes::Dict{String, Vector{String}}, ctx,
+        loops::Vector{String}, align, bound::Set{String} = Set{String}(), inside::Bool = false
     )::ASTExpr
     if expr isa VarExpr
         (expr.name in bound || isempty(get(shapes, expr.name, String[]))) && return expr
@@ -138,31 +170,32 @@ function _ew_at_cell(
     end
     expr isa OpExpr || return expr
     op = expr.op
-    rec(a, b = bound) = _ew_at_cell(a, shapes, roles, loops, align, b)
+    if op == "apply_expression_template"
+        ex = _ew_expansion(expr, ctx)
+        ex === nothing && return expr
+        return _ew_at_cell(ex, shapes, ctx, loops, align, bound, true)
+    end
+    inside = inside || expr.template_origin !== nothing
+    rec(a, b = bound, i = inside) = _ew_at_cell(a, shapes, ctx, loops, align, b, i)
     if op == "index"
-        return reconstruct(expr; args = ASTExpr[expr.args[1], (rec(a) for a in expr.args[2:end])...])
-    elseif op == "apply_expression_template"
-        sb = _scalar_role_bindings(expr, roles)
-        sb === nothing && return expr
-        nb = Dict{String, ASTExpr}(expr.bindings)
-        for (k, v) in sb
-            nb[k] = rec(v)
-        end
-        return reconstruct(expr; bindings = nb)
+        inside || return expr
+        return reconstruct(
+            expr; args = ASTExpr[expr.args[1], (rec(a, bound, true) for a in expr.args[2:end])...]
+        )
     elseif op == "fn"
         whole = _whole_array_fn_args(expr.name)
         return reconstruct(
             expr; args = ASTExpr[i in whole ? a : rec(a) for (i, a) in enumerate(expr.args)]
         )
     elseif op in _ARRAY_PRODUCER_OPS
-        _is_rank0_faq(expr) || return expr
+        (inside && _is_rank0_faq(expr)) || return expr
         inner = _faq_bound(expr, bound)
         return reconstruct(
             expr;
-            expr_body = expr.expr_body === nothing ? nothing : rec(expr.expr_body, inner),
-            filter = expr.filter === nothing ? nothing : rec(expr.filter, inner)
+            expr_body = expr.expr_body === nothing ? nothing : rec(expr.expr_body, inner, true),
+            filter = expr.filter === nothing ? nothing : rec(expr.filter, inner, true)
         )
-    elseif _is_scalar_op(op)
+    elseif _is_elementwise_node(expr)
         return reconstruct(expr; args = ASTExpr[rec(a) for a in expr.args])
     end
     return expr
@@ -173,7 +206,7 @@ end
 # only index sets of `shape`, each once (§4.3.4).
 function _lift_elementwise_application(
         rhs::ASTExpr, shape::Vector{String},
-        shapes::Dict{String, Vector{String}}, roles, lhs::AbstractString
+        shapes::Dict{String, Vector{String}}, ctx, lhs::AbstractString
     )::OpExpr
     allunique(shape) || throw(
         DimensionPromotionError(
@@ -184,7 +217,7 @@ function _lift_elementwise_application(
     loops = String["_p$(i - 1)" for i in eachindex(shape)]
     ranges = Dict{String, Any}(loops[i] => IndexSetRef(shape[i]) for i in eachindex(shape))
     body = try
-        _ew_at_cell(rhs, shapes, roles, loops, _AxisAlign(shape, shapes))
+        _ew_at_cell(rhs, shapes, ctx, loops, _AxisAlign(shape, shapes))
     catch e
         e isa TreeWalkError && e.code == "E_TREEWALK_ARRAY_SHAPE_MISMATCH" || rethrow()
         throw(DimensionPromotionError("array_shape_mismatch: '$(lhs)': $(e.detail) (esm-spec §9.6.11)"))

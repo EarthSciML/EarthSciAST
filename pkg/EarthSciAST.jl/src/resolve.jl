@@ -2287,7 +2287,11 @@ function _resolve_subsystem_ref(
         reg = get(loaded.component_templates, "models.$name", nothing)
         if reg !== nothing
             model = _expansion_copy(model)
-            _expand_model_refs!(model, reg)
+            # Marked: the elementwise lift applies to these applications
+            # (esm-spec §9.6.11).
+            task_local_storage(_MARK_TEMPLATE_ORIGINS_KEY, true) do
+                _expand_model_refs!(model, reg)
+            end
         end
     end
     # esm-spec §4.7 "Working precision crosses a mount".
