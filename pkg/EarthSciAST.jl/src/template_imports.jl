@@ -652,6 +652,8 @@ function _fold_structural_sites!(x, ctx::String)
     # place at its owning `faq` / `makearray` node before the walk
     # descends into it (the fold replaces entries, never reshapes).
     _walk_json(x) do _, n
+        # An array of numbers or number rows holds no faq or makearray node.
+        _is_array(n) && return _may_hold_object(n)
         _is_object(n) || return true
         op = get(n, "op", nothing)
         op_str = op === nothing ? "" : string(op)

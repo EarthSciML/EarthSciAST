@@ -298,12 +298,17 @@ end
 # ranged narrow phase compiles even when NO `intersect_polygon` node survives.
 function _discover_geometry_vars(
         model::Model, equations::Vector{Equation},
-        param_arrays::AbstractDict, vi_vars
+        param_arrays::AbstractDict, vi_vars; index_sets = nothing
     )
     has_geometry = _model_has_intersect_polygon(model)
     has_pia = _model_has_polygon_intersection_area(model, equations)
-    has_setup_geometry = has_geometry || has_pia ||
-        _model_has_setup_join_reduction(equations)
+    has_geometry_seed = has_geometry || has_pia || _model_has_setup_join_reduction(equations)
+    pre_state_names = setdiff(Set{String}(solver_unknowns(model)), vi_vars)
+    has_setup_geometry = has_geometry_seed ||
+        _model_has_setup_const_reduction(
+        model, equations, index_sets,
+        union(pre_state_names, (String(k) for k in keys(param_arrays)))
+    )
     ring_vars = Set{String}()
     if has_geometry
         for eq in equations
@@ -317,12 +322,11 @@ function _discover_geometry_vars(
     defs = Dict{String, ASTExpr}()
     inline_vars = Set{String}()
     if has_setup_geometry
-        pre_state_names = setdiff(Set{String}(solver_unknowns(model)), vi_vars)
         live_param_names = Set{String}(String(k) for k in keys(param_arrays))
         setup_vars, defs, live_tainted =
             _geometry_setup_vars(
             model, equations, ring_vars,
-            pre_state_names, live_param_names
+            pre_state_names, live_param_names; index_sets = index_sets
         )
         # GEOMETRY-DERIVED restriction. `live_tainted` is a DOCUMENT-WIDE set:
         # every var transitively reading a live `param_arrays` buffer. The
@@ -361,9 +365,11 @@ function _discover_geometry_vars(
             changed
         end
         obs_here = Set{String}(observed_unknowns(model))
+        # Constant reduction tables alone (`_is_setup_const_reduction`) are
+        # not geometry: they inline no live reader.
         for (name, v) in model.variables
             (
-                name in obs_here && _is_array_shape(v.shape) &&
+                has_geometry_seed && name in obs_here && _is_array_shape(v.shape) &&
                     !(name in setup_vars) && !(name in ring_vars) &&
                     name in live_tainted && name in geom_derived && haskey(defs, name) &&
                     defs[name] isa OpExpr
@@ -3988,7 +3994,7 @@ function _build_lower_and_classify(
         model::Model;
         const_arrays::AbstractDict, param_arrays::AbstractDict,
         vi_vars, has_value_invention::Bool, materialize_out,
-        form::Symbol = :inplace
+        form::Symbol = :inplace, index_sets = nothing
     )
     # ---- Observed synthesis + equation pre-lowering ----
     # (see `_prepare_model_equations`: expression-defined observed synthesis,
@@ -3998,7 +4004,7 @@ function _build_lower_and_classify(
     # ---- Geometry variable discovery ----
     # (see `_discover_geometry_vars`: direct clip rings, build-once setup vars,
     # live-field inline vars, and the has_* gates)
-    geo = _discover_geometry_vars(model, equations, param_arrays, vi_vars)
+    geo = _discover_geometry_vars(model, equations, param_arrays, vi_vars; index_sets = index_sets)
     geom_inline_vars = geo.inline_vars
 
     # ---- Promoted array observeds (shape-promotion inlining) ----
@@ -5588,7 +5594,7 @@ function _build_evaluator_impl_inner(
         model;
         const_arrays = const_arrays, param_arrays = param_arrays, vi_vars = _vi_vars,
         has_value_invention = _has_value_invention, materialize_out = materialize_out,
-        form = form
+        form = form, index_sets = index_sets
     )
 
     # The build-time parameter-read sink: continued from the front door (which

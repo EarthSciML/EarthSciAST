@@ -541,6 +541,8 @@ function _check_surviving_refs(
         seen::IdDict{Any, Nothing} = IdDict{Any, Nothing}()
     )
     if _is_array(node)
+        # An array of numbers or number rows holds no reference.
+        _may_hold_object(node) || return
         haskey(seen, node) && return
         seen[node] = nothing
         for c in node
@@ -1729,6 +1731,8 @@ function _narrow_arg_literals!(x)
                 _int64_narrowable(vi) && (n[i] = Int64(vi))
             end
         end
+        # Below an array of numbers or number rows there is no `args` array.
+        n isa AbstractVector && !_may_hold_object(n) && return false
         if _is_object(n) || n isa AbstractVector
             haskey(seen, n) && return false
             seen[n] = nothing

@@ -203,6 +203,10 @@ function _is_setup_join_reduction(e)
     _body_needs_general_eval(e) && return false
     depth = _faq_nesting(e.expr_body::OpExpr, IdDict{OpExpr, Int}())
     gated = e.join !== nothing || e.join_gates !== nothing
+    # Ungated, a dense range the setup sweep has no loop for (not starting at
+    # 1) leaves the faq to the right-hand-side tiers. Gated, no tier takes it,
+    # so it stays a setup var and the sweep refuses it by name.
+    gated || _setup_ranges_ok(e, nothing, IdDict{OpExpr, Nothing}()) || return false
     return gated ? depth >= 1 : depth >= 2
 end
 # How deep `faq` reductions nest inside `e` (0: none).
@@ -219,6 +223,77 @@ function _faq_nesting(e::OpExpr, memo::IdDict{OpExpr, Int})
 end
 _model_has_setup_join_reduction(equations) =
     _anyof(eq -> eq.lhs isa VarExpr && _is_setup_join_reduction(eq.rhs), equations)
+
+# An ungated array `faq` whose body holds a nested reduction over build
+# constants (a `rank_of_set` lookup's count, an `argmin` template's min and
+# index search, any reduction the observed's cells cannot change) is, over
+# inputs that read no state, no time and no scalar parameter, a build-once
+# table like the relational op's ranks and arg-witness buffers: the setup
+# sweep fills it once and its readers gather it (an indicator sum in it is a
+# binary search, `_geo_count_node`). Every range of it and of its nested
+# reductions must be one the sweep loops over: a dense `[1, n]` range or an
+# interval or derived index set (`_setup_range_ok`; without the registry, any
+# index set). Under a plan without the
+# construction-time compiled forms (the interpreter) it stays an observed.
+function _is_setup_const_reduction(e, index_sets, scalar_params)
+    (e isa OpExpr && _is_faq_op(e.op) && e.expr_body isa OpExpr) || return false
+    (e.join === nothing && e.join_gates === nothing) || return false
+    (e.output_idx !== nothing && !isempty(e.output_idx)) || return false
+    _setup_compile_once_enabled() || return false
+    _body_needs_general_eval(e) && return false
+    _faq_nesting(e.expr_body::OpExpr, IdDict{OpExpr, Int}()) >= 1 || return false
+    _anyof(n -> n in scalar_params, _referenced_var_names(e)) && return false
+    return _setup_ranges_ok(e, index_sets, IdDict{OpExpr, Nothing}())
+end
+function _setup_ranges_ok(e::OpExpr, index_sets, seen::IdDict{OpExpr, Nothing})
+    haskey(seen, e) && return true
+    seen[e] = nothing
+    if _is_faq_op(e.op) && e.ranges !== nothing
+        _allof(r -> _setup_range_ok(r, index_sets), collect(values(e.ranges))) || return false
+    end
+    _allof(a -> !(a isa OpExpr) || _setup_ranges_ok(a, index_sets, seen), e.args) || return false
+    for c in (e.expr_body, e.filter)
+        c isa OpExpr && !_setup_ranges_ok(c, index_sets, seen) && return false
+    end
+    return true
+end
+function _setup_range_ok(r, index_sets)
+    r isa AbstractVector && return length(r) == 2 && r[1] isa Integer && r[1] == 1 && r[2] isa Integer
+    (r isa IndexSetRef && isempty(r.of)) || return false
+    index_sets === nothing && return true
+    s = get(index_sets, r.from, nothing)
+    return s isa IndexSet && (s.kind == "interval" || (s.kind == "derived" && s.from_faq !== nothing))
+end
+
+function _model_has_setup_const_reduction(model, equations, index_sets, state_var_names)
+    sp = Set{String}(
+        n for (n, v) in model.variables if v.type == ParameterVariable && !_is_array_shape(v.shape)
+    )
+    defs = Dict{String, ASTExpr}(
+        (eq.lhs::VarExpr).name => eq.rhs for eq in equations if eq.lhs isa VarExpr
+    )
+    dynamic = _dynamic_names(defs, state_var_names)
+    return _anyof(
+        n -> !(n in dynamic) && _is_setup_const_reduction(defs[n], index_sets, sp), collect(keys(defs))
+    )
+end
+
+# The defined names that read a state or `t`, directly or through other
+# definitions: never a build-once table.
+function _dynamic_names(defs, state_var_names)
+    dynamic = Set{String}()
+    _saturate!() do
+        changed = false
+        for (n, rhs) in defs
+            n in dynamic && continue
+            if _anyof(r -> r == "t" || r in state_var_names || r in dynamic, _referenced_var_names(rhs))
+                push!(dynamic, n); changed = true
+            end
+        end
+        changed
+    end
+    return dynamic
+end
 
 # An intersection-area leaf lives in an equation LHS/RHS — from esm 1.0.0 an
 # observed unknown's defining body is its equation, so there is nowhere else to
@@ -1862,7 +1937,11 @@ end
 
 function _geometry_setup_vars(
         model, equations, geom_ring_vars, state_var_names,
-        live_params
+        live_params; index_sets = nothing
+    )
+    scalar_params = Set{String}(
+        n for (n, v) in model.variables
+            if v.type == ParameterVariable && !_is_array_shape(v.shape)
     )
     defs = Dict{String, ASTExpr}()
     for eq in equations
@@ -1891,6 +1970,7 @@ function _geometry_setup_vars(
         end
         changed
     end
+    dynamic = _dynamic_names(defs, state_var_names)
     setup = Set{String}()
     for (n, _) in defs
         (is_arr_obs(n) && !(n in geom_ring_vars) && !(n in tainted) && haskey(defs, n)) || continue
@@ -1903,9 +1983,11 @@ function _geometry_setup_vars(
             _expr_has_intersect_polygon(defs[n]) ||
                 _expr_has_polygon_intersection_area(defs[n])
         ) && push!(setup, n)
-        # The pure-AST overlap area, over inputs that read no state.
+        # The pure-AST overlap area, or a rank table, over inputs that read no state.
         _is_setup_join_reduction(defs[n]) &&
             !_anyof(f -> f in state_var_names, _referenced_var_names(defs[n])) &&
+            push!(setup, n)
+        _is_setup_const_reduction(defs[n], index_sets, scalar_params) && !(n in dynamic) &&
             push!(setup, n)
     end
     mvars = Set{String}(keys(model.variables))

@@ -339,10 +339,99 @@ function _geo_compile_agg(expr::OpExpr, g::_GeoCompileCtx)::_Node
             "a nested `faq` reducing with '$(oplus)' has no setup-time geometry form"
         )
     )
+    if oplus == "+" && zero === 0.0 && length(slots) == 1 && gates === nothing && filt === nothing
+        cnt = _geo_count_node(body, slots[1], exts[1])
+        cnt === nothing || return cnt
+    end
     return _mknode(
         kind = _NK_OP, op = :geo_agg,
         payload = _GeoAggSpec(slots, exts, gates, filt, body, Symbol(oplus), zero)
     )
+end
+
+# ---- The indicator sum as a count, at setup ----
+# The setup sweep's form of `_cg_count_loop` (array_contraction.jl): a `+` fold
+# from +0.0 over one slot, no gate or filter, whose body is
+# `ifelse(a[k] REL x, 1, 0)` (or with the branch values swapped, or the
+# comparison mirrored) with `a` a 1-D constant array read at the slot itself
+# and `x` not reading it. Every term is 0.0 or 1.0 and every partial sum an
+# integer below 2^53, so the fold is the count of entries satisfying (or, with
+# the branches swapped, failing) the comparison, exactly, whatever the entries.
+# The entries over the range are copied once, NaNs set aside (a NaN satisfies
+# no comparison) and the rest sorted; ascending, the entries satisfying
+# `a <= x` / `a < x` are a prefix and those satisfying `a >= x` / `a > x` a
+# suffix (-0.0 and +0.0 compare equal, so their order among themselves does not
+# matter), and the count is a binary search with the comparison itself. A NaN
+# `x` satisfies nothing. `nothing` keeps the fold: another shape, an empty
+# range, or a range past the array's end (the fold raises there).
+struct _GeoCountSpec
+    sorted::Vector{Float64}   # the non-NaN entries over the range, ascending
+    n::Int                    # the range's length
+    rel::Symbol               # the comparison with the entry on the left
+    neg::Bool                 # count the entries where it fails
+end
+
+function _geo_count_node(body::_Node, slot::Int, ext::Int)
+    _compiler_plan_now().count_fold || return nothing
+    ext >= 1 || return nothing
+    (body.kind == _NK_OP && body.op === :ifelse && length(body.children) == 3) || return nothing
+    cond, yes, no = body.children
+    (yes.kind == _NK_LITERAL && no.kind == _NK_LITERAL) || return nothing
+    neg = if yes.literal === 1.0 && no.literal === 0.0
+        false
+    elseif yes.literal === 0.0 && no.literal === 1.0
+        true
+    else
+        return nothing
+    end
+    (cond.kind == _NK_OP && haskey(_COUNT_MIRROR, cond.op) && length(cond.children) == 2) ||
+        return nothing
+    l, r = cond.children
+    lk, rk = _geo_reads_slot(l, slot), _geo_reads_slot(r, slot)
+    lk == rk && return nothing
+    a, x, rel = lk ? (l, r, cond.op) : (r, l, _COUNT_MIRROR[cond.op])
+    (a.kind == _NK_OP && a.op === :geo_gather && length(a.children) == 1) || return nothing
+    k = a.children[1]
+    (k.kind == _NK_STATE && k.idx == slot) || return nothing
+    src = a.payload
+    (src isa Array{Float64, 1} && ext <= length(src)) || return nothing
+    sorted = Float64[src[i] for i in 1:ext if !isnan(src[i])]
+    sort!(sorted)
+    _tally_cascade!(:count_fold_setup)
+    return _mknode(
+        kind = _NK_OP, op = :geo_count, children = _Node[x],
+        payload = _GeoCountSpec(sorted, ext, rel, neg)
+    )
+end
+
+function _geo_reads_slot(n::_Node, slot::Int)
+    n.kind == _NK_STATE && return n.idx == slot
+    kids = n.kind == _NK_OP && n.op === :geo_agg ? _geo_cg_kids(n) : n.children
+    return _anyof(c -> _geo_reads_slot(c, slot), kids)
+end
+
+# The count, as the fold computes it.
+function _geo_count_value(sp::_GeoCountSpec, x::Float64)::Float64
+    t = sp.sorted
+    rel = sp.rel
+    lo, hi = 0, length(t)
+    if rel === :<= || rel === :<
+        # The largest m with t[m] rel x (0 when none): the prefix's length.
+        while lo < hi
+            m = (lo + hi + 1) >>> 1
+            (rel === :<= ? t[m] <= x : t[m] < x) ? (lo = m) : (hi = m - 1)
+        end
+        c = lo
+    else
+        # The smallest m with t[m] rel x (n + 1 when none): the suffix starts there.
+        lo, hi = 1, length(t) + 1
+        while lo < hi
+            m = (lo + hi) >>> 1
+            (rel === :>= ? t[m] >= x : t[m] > x) ? (hi = m) : (lo = m + 1)
+        end
+        c = length(t) + 1 - lo
+    end
+    return Float64(sp.neg ? sp.n - c : c)
 end
 
 # Resolve a node's `join` to slot-addressed gates: `_resolve_geo_join_gates`
@@ -675,6 +764,8 @@ function _eval_geo_op(n::_Node, u, p, t, ::Type{T})::Float64 where {T}
         return Float64(hash(Tuple(vals)) % _SKOLEM_HASH_CAP)
     elseif op === :geo_agg
         return _geo_eval_agg(n.payload::_GeoAggSpec, u, p, t, T)
+    elseif op === :geo_count
+        return _geo_count_value(n.payload::_GeoCountSpec, Float64(_eval_node(n.children[1], u, p, t, T)))
     elseif op === :cellmemo
         return _eval_cellmemo(n, u, p, t, T)
     elseif op === :geomemo
@@ -841,6 +932,12 @@ function _geo_cg_raw(g::_GeoCG, n::_Node)
         return :(Float64(srcs[$k][$(ixs...)]))
     elseif op === :geo_agg
         return _geo_cg_agg(g, n)
+    elseif op === :geo_count
+        k = get!(g.src_ix, n.payload) do
+            push!(g.srcs, n.payload)
+            length(g.srcs)
+        end
+        return :(_geo_count_value(srcs[$k], $(em(c[1]))::Float64))
     end
     throw(_GeoCGDecline())
 end
