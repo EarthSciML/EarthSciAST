@@ -45,4 +45,4 @@ Whe you receive a report from a subagent that includes abbreviations, shorthand,
 
 When developing locally, only run test suites directly related to the code you are changing; leave the full test suite to be run by CI.
 
-Automatically generated .esm files for testing or benchmarks should not be checked into git; instead they should be generated a run-time.
+Automatically generated .esm files for testing or benchmarks should not be checked into git; instead they should be generated at run-time.
