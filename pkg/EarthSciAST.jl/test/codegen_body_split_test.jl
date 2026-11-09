@@ -18,7 +18,7 @@
 #     one generated function, kept on Julia >= 1.12 (where RGF's rewrite of an
 #     inner definition into an opaque closure is typed) while the generated
 #     function is at most `_CG_BY_VALUE_MIN_NODES` emitted nodes;
-#   * BY VALUE — each sub-function compiled as its own RuntimeGeneratedFunction
+#   * BY VALUE — each sub-function compiled on its own (a `_CGSubFn`)
 #     and handed to the body in a tuple appended to `tabs`, called as
 #     `_cgfns[k](...)` at a literal index. Julia < 1.12 always takes this one (an
 #     inner definition is an UNTYPED opaque closure there: it boxes per cell and
@@ -79,6 +79,12 @@ end
 _bs_du(f!, u, p, t) = (d = similar(u); fill!(d, 0.0); f!(d, u, p, t); d)
 _bs_probe(n, k) = Float64[1.4 + 0.9 * sin(1.3i + 0.7k) * cos(0.31i * k) + 0.05i for i in 1:n]
 _bs_same(a, b) = size(a) == size(b) && all(a .=== b)
+# Bytes one steady-state call of `f!` allocates (after a warm-up call).
+function _bs_alloc(f!, u, p)
+    du = zero(u)
+    f!(du, u, p, 0.7)
+    return @allocated f!(du, u, p, 0.7)
+end
 _decl(t) = sum(v for (k, v) in t if startswith(String(k), "codegen_decline"); init = 0)
 
 @testset "intra-kernel body split" begin
@@ -126,6 +132,12 @@ _decl(t) = sum(v for (k, v) in t if startswith(String(k), "codegen_decline"); in
         @test _bs_same(_bs_du(fv, u, pv, t), _bs_du(fr, u, pr, t))
     end
     @test _bs_same(ForwardDiff.jacobian(uu -> _bs_du(fv, uu, pv, 0.4), u0), Jr)
+    # …and allocation-free: each sub-function is called through its own
+    # method, so no argument is boxed at the call (an RGF calling an RGF is
+    # recursion to inference, and was called boxed, on every call).
+    @test _bs_alloc(fv, copy(u0), pv) == 0
+    T = ForwardDiff.Dual{Nothing, Float64, 2}
+    @test _bs_alloc(fv, T.(u0), pv) == 0
 
     # The INNER-DEFINITION transport, forced: what 1.12+ takes under the
     # threshold, pinned here too so the override itself is exercised.

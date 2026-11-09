@@ -2660,8 +2660,9 @@ const _CG_FNS = :_cgfns
 #     — see `_cg_split_supported` — and the whole body, every sub-function in
 #     it, goes through type inference as ONE unit.
 #
-#   BY VALUE: each sub-function is compiled as its OWN `RuntimeGeneratedFunction`
-#     and handed to the body at run time in a tuple, appended to the `tabs`
+#   BY VALUE: each sub-function is compiled on its own, as a `_CGSubFn` (a
+#     generated function of this module, not an RGF — see there for why), and
+#     handed to the body at run time in a tuple, appended to the `tabs`
 #     argument; a call site is `_cgfns[k](…)` at a LITERAL `k`, so the callee is
 #     a concrete callable the compiler resolves statically — no closure is
 #     constructed, and nothing is boxed. The tuple is the last argument of every
@@ -2778,17 +2779,57 @@ function _cg_split_transport(ex::Expr, ngrp::Int)
     return (Expr(:function, ex.args[1], Expr(:block, stmts...)), fns)
 end
 
+# A by-value sub-function: a callable whose call is a generated function of this
+# module, keyed by the content of its definition (`ID`, a 128-bit hash of the
+# `function (params…) body end` expression), so one `ID` always names one body.
+#
+# Why not a `RuntimeGeneratedFunction`. Every RGF of this module is called
+# through the one method RGF defines for it, so an RGF calling another RGF is,
+# to inference, that method calling itself; inference treats it as recursion
+# and widens the callee's signature, and the call is made through the generic
+# boxed calling convention — every argument heap-allocated, on every call. A
+# sub-function called through its own method is an ordinary static call.
+#
+# The definition is kept by the object (`def`) and found by the generator in
+# `_CG_SUBFN_DEFS`, which holds it weakly, so a definition lives as long as a
+# function built with it does. The generator only runs while such a function is
+# being called, so the entry is there when it is needed.
+struct _CGSubFn{ID}
+    def::Expr
+end
+const _CG_SUBFN_DEFS = Dict{UInt128, WeakRef}()
+const _CG_SUBFN_LOCK = ReentrantLock()
+
+function _cg_subfn(def::Expr)
+    id = (UInt128(hash(def)) << 64) | UInt128(hash(def, 0x9e3779b97f4a7c15))
+    def = lock(_CG_SUBFN_LOCK) do
+        w = get(_CG_SUBFN_DEFS, id, nothing)
+        w !== nothing && w.value !== nothing && return w.value::Expr
+        _CG_SUBFN_DEFS[id] = WeakRef(def)
+        return def
+    end
+    return _CGSubFn{id}(def)
+end
+
+@generated function (::_CGSubFn{ID})(args::Vararg{Any, N}) where {ID, N}
+    def = lock(() -> _CG_SUBFN_DEFS[ID].value, _CG_SUBFN_LOCK)
+    def === nothing && error("codegen: by-value sub-function $ID has no definition")
+    params = (def::Expr).args[1].args
+    length(params) == N || error("codegen: by-value sub-function $ID takes $(length(params)) arguments, called with $N")
+    return Expr(
+        :block,
+        # Compiled on its own, as the inner definition it replaces would be.
+        Expr(:meta, :noinline),
+        Any[:($(params[i]) = @inbounds args[$i]) for i in 1:N]...,
+        def.args[2],
+    )
+end
+
 # The runtime `tabs` tuple, plus — in the by-value transport — the sub-function
 # tuple as one more element: a heterogeneous tuple of concrete callables, so a
 # call site reading it at a LITERAL index resolves its callee statically.
 _cg_pack_fns(tabpack::Tuple, ::Nothing) = tabpack
-_cg_pack_fns(tabpack::Tuple, fns::Vector{Expr}) = (
-    tabpack...,
-    Tuple(
-        RuntimeGeneratedFunctions.RuntimeGeneratedFunction(@__MODULE__, @__MODULE__, h)
-            for h in fns
-    ),
-)
+_cg_pack_fns(tabpack::Tuple, fns::Vector{Expr}) = (tabpack..., Tuple(_cg_subfn(h) for h in fns))
 
 # Every Symbol referenced anywhere in `ex` (recursively). Used to compute the
 # exact set of outer-scope locals a chunk function must receive as arguments.
