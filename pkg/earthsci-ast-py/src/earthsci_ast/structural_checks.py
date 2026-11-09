@@ -66,10 +66,12 @@ from .classification import (
 from .error_handling import (
     CIRCULAR_DEPENDENCY,
     COUPLING_EDGE_UNKNOWN_ROLE,
+    FAQ_BARE_ARRAY_OPERAND,
     OBSERVED_CYCLE,
     RAGGED_VALUES_NOT_GATHERED,
 )
 from .esm_types import effective_records_per_sample
+from .index_alignment import faq_bare_array_operand_message, faq_bare_array_operands
 from .json_walk import iter_child_values, walk_dict_exprs
 
 # StructuralValidationError is built lazily (and cached) so that its base class,
@@ -504,6 +506,9 @@ def _check_aggregate_semantics(data: dict[str, Any], errors: list) -> None:
             for vn, v in (m.get("variables") or {}).items()
             if isinstance(v, dict) and isinstance(v.get("shape"), list)
         }
+        bare_axes = {
+            vn: tuple(str(a) for a in shape) for vn, shape in var_shapes.items() if shape
+        }
         # A subsystem's template calls expand against its top-level model's
         # registry, as the load-time rewrite does.
         from_map = _from_param_map(_model_template_registry(data, top)) if check_index_sets else {}
@@ -523,6 +528,18 @@ def _check_aggregate_semantics(data: dict[str, Any], errors: list) -> None:
                             f"'{name}' (bound to its parameter '{param}'; declared: {sorted(index_sets)})",
                             {"index_set": name, "declared": sorted(index_sets)},
                         )
+            # --- faq_bare_array_operand: a shaped variable read by bare name in
+            # a faq body or filter (esm-spec §4.3.1, issue #441). Not decided for
+            # an expression still holding a template reference; the build
+            # front door checks the expanded form.
+            if not _contains_template_reference(expr):
+                for field_name, name, axes in faq_bare_array_operands(expr, bare_axes):
+                    emit(
+                        FAQ_BARE_ARRAY_OPERAND,
+                        pointer,
+                        faq_bare_array_operand_message(field_name, name, axes),
+                        {"field": field_name, "variable": name, "shape": list(axes)},
+                    )
             for agg in _iter_aggregate_nodes(expr):
                 ranges = agg.get("ranges") or {}
 

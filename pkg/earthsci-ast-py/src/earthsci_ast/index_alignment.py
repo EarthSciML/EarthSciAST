@@ -86,6 +86,8 @@ __all__ = [
     "alignment_plan",
     "axis_sizes",
     "declared_axes",
+    "faq_bare_array_operand_message",
+    "faq_bare_array_operands",
     "iter_named_operands",
     "unalignable_axes",
 ]
@@ -190,6 +192,95 @@ def iter_named_operands(expr: Any, var_axes: dict[str, tuple[str, ...]]):
         op, args = _op_and_args(node)
         if op is not None and op in ELEMENTWISE_OPS:
             stack.extend(reversed(args))
+
+
+def _faq_field(node: Any, name: str) -> Any:
+    if isinstance(node, ExprNode):
+        return getattr(node, name, None)
+    if isinstance(node, dict):
+        return node.get(name)
+    return None
+
+
+def _faq_children(node: Any):
+    if isinstance(node, ExprNode):
+        from .expr_walk import iter_children
+
+        yield from iter_children(node)
+    elif isinstance(node, dict):
+        from .json_walk import iter_child_values
+
+        for _, child in iter_child_values(node):
+            yield child
+
+
+def faq_bare_array_operand_message(field_name: str, name: str, axes: tuple[str, ...]) -> str:
+    """The ``faq_bare_array_operand`` message, shared by ``validate`` and the
+    build front door."""
+    return (
+        f"faq `{field_name}` reads {name!r}, declared over [{', '.join(axes)}], by "
+        f"bare name. A faq names its axes by its range symbols, and its "
+        f"`{field_name}` is evaluated once per index tuple, so a whole array there "
+        f"does not say which symbol each of its axes is. Read it through `index`, "
+        f"e.g. index({name}, <symbol>…) (esm-spec §4.3.1)"
+    )
+
+
+def faq_bare_array_operands(
+    expr: Any, var_axes: dict[str, tuple[str, ...]]
+) -> list[tuple[str, str, tuple[str, ...]]]:
+    """``faq_bare_array_operand`` (esm-spec §4.3.1, issue #441): every
+    ``(field, name, axes)`` where a ``faq`` node's ``expr`` or ``filter`` reads a
+    shaped variable by BARE name in an elementwise position.
+
+    A ``faq`` names its axes by its range symbols and evaluates its body and
+    filter once per index tuple, so a whole array there does not say which
+    symbol each of its axes is. Evaluators each gave it a meaning, and they
+    disagreed: Rust's reference aligned an array filter to the output box by
+    position and kept every term on a rank mismatch (a filter silently ignored
+    once the node had two output indices), and this binding's whole-box tiers
+    let numpy broadcasting align the array with the LAST box axis, a different
+    symbol whenever the extents coincide. So the read is refused: it must be
+    ``index(name, i, …)``.
+
+    The descent is :func:`iter_named_operands`' (elementwise ops only), a name
+    bound as a loop symbol by this node or an enclosing one shadows the
+    declaration, and nested ``faq`` nodes are checked in their own right. Works
+    on the raw dict form and on typed :class:`ExprNode` trees alike. Order is
+    pre-order over nodes, ``expr`` before ``filter``, matching Rust's
+    ``structural::faq_bare_array_operand_errors``.
+    """
+    shaped = {n: a for n, a in var_axes.items() if a}
+    found: list[tuple[str, str, tuple[str, ...]]] = []
+    if not shaped:
+        return found
+
+    def walk(node: Any, bound: frozenset[str]) -> None:
+        op = _faq_field(node, "op")
+        if op is None:
+            return
+        if op in ("faq", "aggregate"):
+            syms = set(_faq_field(node, "output_idx") or [])
+            syms |= set((_faq_field(node, "ranges") or {}).keys())
+            arg = _faq_field(node, "arg")
+            if isinstance(arg, str):
+                syms.add(arg)
+            bound = bound | {str(s) for s in syms}
+            for field_name in ("expr", "filter"):
+                part = _faq_field(node, field_name)
+                if part is None:
+                    continue
+                seen: set[str] = set()
+                for name, axes in iter_named_operands(part, shaped):
+                    if name in bound or name in seen:
+                        continue
+                    seen.add(name)
+                    found.append((field_name, name, axes))
+        for child in _faq_children(node):
+            walk(child, bound)
+
+    walk(expr, frozenset())
+    return found
 
 
 def unalignable_axes(axes: tuple[str, ...], target_axes: tuple[str, ...]) -> tuple[str, ...]:

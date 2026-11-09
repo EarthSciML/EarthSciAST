@@ -2195,6 +2195,9 @@ fn validate_aggregate_constraints(
         if faq_equations.is_none_or(|faq| faq.get(eq_idx).copied().unwrap_or(true)) {
             for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
                 let field_path = || format!("{model_path}/equations/{eq_idx}/{field}");
+                if !contains_template_reference(expr) {
+                    faq_bare_array_operand_errors(expr, &field_path(), &var_shapes, errors);
+                }
                 check_aggregates_in_expr(
                     expr,
                     &field_path,
@@ -3071,6 +3074,117 @@ fn collect_bare_array_operands<'a>(
         }
         _ => {}
     }
+}
+
+/// `faq_bare_array_operand` (esm-spec §4.3.1 "Shaped variables inside a
+/// `faq`", issue #441): every `faq` node in `expr` whose `expr` or `filter`
+/// reads a variable declared with a non-empty `shape` by BARE name in an
+/// elementwise position, reported at `path`.
+///
+/// A `faq` names its axes by its range symbols, and an elementwise operator
+/// inside its body is evaluated once per index tuple, so a whole array there
+/// has no defined meaning: nothing says WHICH of the node's symbols its axes
+/// are. Every evaluator nonetheless gave it one, and they disagreed. Rust's
+/// per-cell reference aligned an array-valued `filter` to the output box by
+/// position and treated a rank mismatch as "keep the term", so with two
+/// output indices the filter was silently ignored; Python's whole-box tiers
+/// let numpy broadcasting align the array's axis with the LAST box axis, which
+/// is a different symbol whenever the extents coincide; the tape refused it.
+/// The document has to say which index it means, `index(a_val, i)`, and a
+/// document that says so cannot silently mean the wrong one.
+///
+/// The descent is the one [`collect_bare_array_operands`] uses (elementwise
+/// operators only): a shaped variable consumed whole by its own operator
+/// contract (an `index` base, a nested `faq`, a shape op, a geometry or
+/// closed-function argument) is not a per-tuple read. A name bound as a loop
+/// symbol by this node or an enclosing one shadows the declaration and is not
+/// a variable read. Nested `faq` nodes are checked in their own right.
+pub(crate) fn faq_bare_array_operand_errors(
+    expr: &crate::Expr,
+    path: &str,
+    var_shapes: &HashMap<String, Vec<String>>,
+    errors: &mut Vec<StructuralError>,
+) {
+    let declared_axes: HashMap<&str, &Vec<String>> = var_shapes
+        .iter()
+        .filter(|(_, s)| !s.is_empty())
+        .map(|(n, s)| (n.as_str(), s))
+        .collect();
+    if declared_axes.is_empty() {
+        return;
+    }
+    let mut bound: Vec<String> = Vec::new();
+    walk_faq_bare_operands(expr, path, &declared_axes, &mut bound, errors);
+}
+
+fn walk_faq_bare_operands(
+    expr: &crate::Expr,
+    path: &str,
+    declared_axes: &HashMap<&str, &Vec<String>>,
+    bound: &mut Vec<String>,
+    errors: &mut Vec<StructuralError>,
+) {
+    let crate::Expr::Operator(node) = expr else {
+        return;
+    };
+    let is_faq = crate::faq::is_faq_op(&node.op);
+    let pushed = if is_faq {
+        let syms = bound_index_symbols(node);
+        let n = syms.len();
+        bound.extend(syms);
+        n
+    } else {
+        0
+    };
+    if is_faq {
+        for (field, part) in [("expr", node.expr.as_deref()), ("filter", node.filter.as_deref())] {
+            let Some(part) = part else { continue };
+            let mut operands: Vec<&str> = Vec::new();
+            collect_bare_array_operands(part, declared_axes, &mut operands);
+            let mut seen: HashSet<&str> = HashSet::new();
+            for operand in operands {
+                if bound.iter().any(|b| b == operand) || !seen.insert(operand) {
+                    continue;
+                }
+                let axes = declared_axes[operand];
+                let syms: Vec<String> = node
+                    .ranges
+                    .as_ref()
+                    .map(|r| {
+                        let mut k: Vec<&String> = r.keys().collect();
+                        k.sort();
+                        k.into_iter().cloned().collect()
+                    })
+                    .unwrap_or_default();
+                errors.push(StructuralError {
+                    path: path.to_string(),
+                    code: StructuralErrorCode::FaqBareArrayOperand,
+                    message: format!(
+                        "faq `{field}` reads '{operand}', declared over [{}], by bare name. A \
+                         faq names its axes by its range symbols ({}), and its `{field}` is \
+                         evaluated once per index tuple, so a whole array there does not say \
+                         which symbol each of its axes is. Read it through `index`, e.g. \
+                         index({operand}, <symbol>…) (esm-spec §4.3.1)",
+                        axes.join(", "),
+                        if syms.is_empty() {
+                            "none".to_string()
+                        } else {
+                            syms.join(", ")
+                        },
+                    ),
+                    details: serde_json::json!({
+                        "field": field,
+                        "variable": operand,
+                        "shape": axes,
+                    }),
+                });
+            }
+        }
+    }
+    node.for_each_child(&mut |child| {
+        walk_faq_bare_operands(child, path, declared_axes, bound, errors);
+    });
+    bound.truncate(bound.len() - pushed);
 }
 
 /// Recurse through `expr`, applying [`check_aggregate_node`] to every

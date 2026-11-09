@@ -771,6 +771,12 @@ def _esm_problem_under(
     # passed through `validate`), never built with the equation dropped.
     _refuse_parameter_definition(flat)
 
+    # esm-spec §4.3.1: a shaped variable read by bare name in a `faq` body or
+    # filter, on the EXPANDED system (a bare name a template binding delivered
+    # included). Built anyway, the whole-box tiers let numpy broadcasting decide
+    # which symbol its axis is (issue #441).
+    _refuse_faq_bare_array_operands(flat)
+
     # One unknown carrying both a derivative equation and a bare-LHS one.
     _assert_no_doubly_defined_state(flat)
 
@@ -1478,6 +1484,34 @@ def _refuse_parameter_definition(flat: FlattenedSystem) -> None:
                 f"{name!r}, which is a parameter; an equation defines unknowns only "
                 f"(esm-spec §6.3.1)"
             )
+
+
+def _refuse_faq_bare_array_operands(flat: FlattenedSystem) -> None:
+    """``faq_bare_array_operand`` (esm-spec §4.3.1, issue #441): a ``faq`` whose
+    ``expr`` or ``filter`` reads a shaped variable by bare name. ``validate``
+    reports it on the authored document; this is the same check on the
+    flattened one, after template expansion, at the one front door."""
+    from .error_handling import FAQ_BARE_ARRAY_OPERAND
+    from .index_alignment import faq_bare_array_operand_message, faq_bare_array_operands
+
+    var_axes: dict[str, tuple[str, ...]] = {}
+    for registry in (flat.state_variables, flat.parameters, flat.observed_variables):
+        for name, var in registry.items():
+            shape = getattr(var, "shape", None)
+            if shape:
+                var_axes[name] = tuple(str(a) for a in shape)
+    if not var_axes:
+        return
+    for eq in flat.equations:
+        for side in (eq.lhs, eq.rhs):
+            found = faq_bare_array_operands(side, var_axes)
+            if found:
+                field_name, name, axes = found[0]
+                raise SimulationError(
+                    f"{FAQ_BARE_ARRAY_OPERAND}: the equation "
+                    f"`{_expr_to_string(eq.lhs)} ~ {_expr_to_string(eq.rhs)}`: "
+                    + faq_bare_array_operand_message(field_name, name, axes)
+                )
 
 
 def _assert_no_doubly_defined_state(flat: FlattenedSystem) -> None:

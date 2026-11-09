@@ -3173,10 +3173,17 @@ pub(super) struct ReduceSpec<'a> {
 ///
 /// The per-cell-mask reading is the intended one, so the oracle now implements
 /// it: an array filter is indexed at the current output cell, aligned to the
-/// output box exactly as `VecBox` aligns it. An array that cannot be aligned
-/// (its rank does not match the output box) is treated as *including* the cell —
-/// the conservative direction, since silently dropping every term is the failure
-/// mode this fix exists to remove.
+/// output box exactly as `VecBox` aligns it.
+///
+/// An array that cannot be aligned — its rank is not the output box's, or the
+/// cell lies outside it — is a FAULT, not a verdict. It used to be treated as
+/// *including* the cell, and that turned out to be the other half of the same
+/// failure: a filter `a_val > 1.5` over a node with TWO output indices (`a_val`
+/// rank 1) included every cell, so the filter was silently ignored and the
+/// answer was a sum over rows it excluded (issue #441). A shaped variable read
+/// by bare name in a filter is refused before any build
+/// (`faq_bare_array_operand`, esm-spec §4.3.1); this fault is what is left for
+/// an array whose shape no declaration states.
 pub(super) fn filter_excludes(
     filter: Option<&Expr>,
     cell: Option<&CellBox>,
@@ -3192,11 +3199,25 @@ pub(super) fn filter_excludes(
             if a.ndim() == 0 {
                 return a.first().copied().unwrap_or(0.0) == 0.0;
             }
+            let unaligned = |why: String| {
+                latch_gather_fault(format!(
+                    "E_TREEWALK_FILTER_UNALIGNED: a `faq` filter evaluated to an array of shape \
+                     {:?}, {why}, so it does not say which index tuple each element gates. \
+                     Read the filter's operands through `index` at the node's symbols \
+                     (esm-spec §4.3.1).",
+                    a.shape()
+                ));
+                true
+            };
             let Some(cell) = cell else {
-                return false;
+                return unaligned("and the node has no output box to align it to".to_string());
             };
             if a.ndim() != cell.names.len() || cell.origin.len() != cell.names.len() {
-                return false;
+                return unaligned(format!(
+                    "while the node has {} output indices ({})",
+                    cell.names.len(),
+                    cell.names.join(", ")
+                ));
             }
             let ix: Vec<usize> = cell
                 .names
@@ -3209,9 +3230,7 @@ pub(super) fn filter_excludes(
                 .collect();
             match a.get(IxDyn(&ix)) {
                 Some(&m) => m == 0.0,
-                // Out of the mask's bounds: include, rather than silently
-                // dropping the term.
-                None => false,
+                None => unaligned(format!("and the output cell {ix:?} lies outside it")),
             }
         }
     }
