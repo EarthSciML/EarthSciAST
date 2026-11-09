@@ -199,7 +199,7 @@ mod standalone;
 mod tuples;
 
 #[cfg(test)]
-pub(super) use tuples::{set_tuple_list_budget, take_chunk_inputs_held};
+pub(super) use tuples::{set_tuple_list_budget, take_chunk_inputs_held, take_tuple_walks};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use standalone::StandaloneError;
@@ -834,7 +834,7 @@ pub(crate) struct TapeBuilder<'m> {
     /// [`Known::Deferred`] slot instead of with an [`Instr::ConstArray`], and
     /// resolve a gather of known data at build into its gathered values. Set
     /// only on the standalone tape of one tuple-list chunk
-    /// ([`TapeBuilder::fold_tuple_contraction`]), which runs once and whose
+    /// ([`TapeBuilder::walk_tuple_contraction`]), which runs once and whose
     /// every input is build-time data: there the program would copy each
     /// whole input into its slab only to gather a chunk's worth of it.
     defer_consts: bool,

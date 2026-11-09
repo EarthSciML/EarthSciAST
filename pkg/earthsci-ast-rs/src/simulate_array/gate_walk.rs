@@ -242,9 +242,33 @@ fn partner_union<'a>(
     for &v in from {
         out.extend_from_slice(index.partners_in(side, v, lo, hi));
     }
-    out.sort_unstable();
-    out.dedup();
+    sort_dedup_within(&mut out, lo, hi);
     Cow::Owned(out)
+}
+
+/// Sort `v`, whose every element lies in `[lo, hi]`, ascending and drop its
+/// duplicates. When the range is narrow next to the list (as a union of many
+/// values' partners within one index set usually is), by marking each value
+/// and reading the marks back in order, O(len + width), instead of a
+/// comparison sort: the same set in the same order either way.
+fn sort_dedup_within(v: &mut Vec<i64>, lo: i64, hi: i64) {
+    let width = (hi as i128 - lo as i128 + 1).max(0) as u128;
+    if v.len() < 64 || width > 4 * v.len() as u128 {
+        v.sort_unstable();
+        v.dedup();
+        return;
+    }
+    let mut mark = vec![false; width as usize];
+    for &x in v.iter() {
+        mark[(x - lo) as usize] = true;
+    }
+    v.clear();
+    v.extend(
+        mark.iter()
+            .enumerate()
+            .filter(|&(_, &m)| m)
+            .map(|(k, _)| lo + k as i64),
+    );
 }
 
 /// Semi-join propagation across contracted–contracted gates (module docs,
@@ -778,6 +802,39 @@ mod tests {
         }
         assert_eq!(sink.0, want);
         assert_eq!(want, vec![vec![1, 1], vec![1, 2], vec![3, 3]]);
+    }
+
+    /// [`sort_dedup_within`] is `sort_unstable` + `dedup` on both of its
+    /// paths: short lists, wide ranges, and the marking path over a narrow
+    /// range with many duplicates, including negative bounds.
+    #[test]
+    fn sort_dedup_within_is_sort_then_dedup() {
+        let mut x = 12345u64;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        for (len, lo, hi) in [
+            (0usize, 1i64, 1i64),
+            (10, 1, 5),
+            (63, 1, 3),
+            (64, 1, 3),
+            (200, -7, 40),
+            (500, 1, 100_000),
+            (1000, 1, 1000),
+            (4000, 100, 120),
+        ] {
+            let span = (hi - lo + 1) as u64;
+            let v: Vec<i64> = (0..len).map(|_| lo + (next() % span) as i64).collect();
+            let mut want = v.clone();
+            want.sort_unstable();
+            want.dedup();
+            let mut got = v;
+            sort_dedup_within(&mut got, lo, hi);
+            assert_eq!(got, want, "len {len} in [{lo}, {hi}]");
+        }
     }
 
     #[test]
