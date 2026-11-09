@@ -10,14 +10,19 @@ declared scalar, the substituted expansion reads a whole array where the body
 needs one value. §9.6.11 gives the application its elementwise meaning: it is
 evaluated once per element of the array argument.
 
-This binding expands every template reference at load, so the rule is applied
-to its trace on the expanded, flattened equations: an observed equation whose
-right-hand side reads a shaped variable by bare name in a *scalar slot* (inside
-the body or filter of a reduction ``faq``, or inside an ``index`` subscript) is
-rewritten into a ``faq`` over the result's index sets whose body is the
-right-hand side with every bare shaped read gathered at that cell, aligned by
-index-set name (§4.3.4). An equation with no such read is left as it was. The
-Rust binding (``src/elementwise_lift.rs``) runs the same walk.
+This binding expands every template reference at load and marks the root of
+each expansion with its template's name (``ExprNode.template_origin``). The
+rule applies to those marked applications only: an observed equation whose
+right-hand side holds, in elementwise position, an application whose expansion
+reads a shaped variable in a value position (an operand of an elementwise
+operator, a scalar argument of a closed function, the body or filter of a
+reduction, an ``index`` subscript) is rewritten into a ``faq`` over the
+result's index sets. Its body is the right-hand side with each such read, and
+each bare shaped read outside the applications in elementwise position,
+gathered at that cell, aligned by index-set name (§4.3.4). An equation with no
+such application is left as it was: a shaped read an author wrote by hand in a
+reduction body or a subscript is never given this meaning. The Rust binding
+(``src/elementwise_lift.rs``) runs the same walk.
 """
 
 from __future__ import annotations
@@ -58,50 +63,92 @@ def _faq_bound(node: ExprNode, bound: frozenset[str]) -> frozenset[str]:
     return bound | frozenset((node.ranges or {}).keys())
 
 
-def _visit_reads(
+def _visit(
     expr: Expr,
     shapes: dict[str, list[str]],
     bound: frozenset[str],
-    slot: bool,
-    f: Callable[[str, bool], None],
+    inside: bool,
+    on_read: Callable[[str, bool], None],
+    on_anonymous: Callable[[ExprNode], None] | None = None,
 ) -> None:
-    """Call ``f(name, slot)`` for every bare shaped read of ``expr`` in VALUE
-    position; ``slot`` is True inside a reduction body or filter or an ``index``
-    subscript. An ``index`` base and every operand an op consumes whole (an
-    array-producing ``faq``, ``makearray``, the shape, geometry and relational
-    ops) are not visited."""
+    """Visit every value position of ``expr`` (esm-spec §9.6.11). Outside a
+    template application those are the operands of elementwise operators and
+    the scalar arguments of closed functions, the positions the per-cell
+    reading commutes with. Inside one (a node carrying ``template_origin``, and
+    everything below it) they are also the body and filter of a reduction
+    ``faq`` and the subscripts of an ``index``, where the template reads its
+    scalar-role parameters. ``on_read(name, inside)`` is called for every bare
+    shaped read; ``on_anonymous(node)`` for an anonymous array (a ``const`` array
+    literal, a ``reshape`` result) in a value position inside an application.
+    An ``index`` base and every operand an op consumes whole are array
+    positions, not visited."""
     if isinstance(expr, str):
         if expr not in bound and shapes.get(expr):
-            f(expr, slot)
+            on_read(expr, inside)
         return
     if not isinstance(expr, ExprNode):
         return
+
+    inside = inside or expr.template_origin is not None
+
+    def rec(a: Expr, b: frozenset[str] = bound, i: bool = inside) -> None:
+        _visit(a, shapes, b, i, on_read, on_anonymous)
+
     op = expr.op
     if op == "index":
-        for a in expr.args[1:]:
-            _visit_reads(a, shapes, bound, True, f)
+        if inside:
+            for a in expr.args[1:]:
+                rec(a, i=True)
     elif op == "faq":
-        if not _is_rank0_faq(expr):
-            return
-        inner = _faq_bound(expr, bound)
-        for b in (expr.expr, expr.filter):
-            if b is not None:
-                _visit_reads(b, shapes, inner, True, f)
+        if inside and _is_rank0_faq(expr):
+            inner = _faq_bound(expr, bound)
+            for b in (expr.expr, expr.filter):
+                if b is not None:
+                    rec(b, inner, True)
     elif op == "fn":
         whole = _WHOLE_ARRAY_FN_ARGS.get(expr.name or "", ())
         for i, a in enumerate(expr.args):
             if i not in whole:
-                _visit_reads(a, shapes, bound, slot, f)
+                rec(a, i=inside)
+    elif op in ("const", "reshape"):
+        if (
+            inside
+            and on_anonymous is not None
+            and (op == "reshape" or isinstance(expr.value, list))
+        ):
+            on_anonymous(expr)
     elif _is_elementwise(expr):
         for a in expr.args:
-            _visit_reads(a, shapes, bound, slot, f)
+            rec(a, i=inside)
 
 
 def _reads(expr: Expr, shapes: dict[str, list[str]]) -> list[tuple[str, bool]]:
-    """Every ``(name, slot)`` :func:`_visit_reads` reports for ``expr``."""
+    """Every ``(name, inside)`` :func:`_visit` reports for ``expr``."""
     out: list[tuple[str, bool]] = []
-    _visit_reads(expr, shapes, frozenset(), False, lambda n, s: out.append((n, s)))
+    _visit(expr, shapes, frozenset(), False, lambda n, i: out.append((n, i)))
     return out
+
+
+def _refuse_anonymous_arrays(rhs: Expr, lhs: Expr) -> None:
+    """``array_shape_mismatch`` when a template application in ``rhs`` reads an
+    anonymous array in a value position: it has no index sets, so nothing says
+    which element each cell reads (esm-spec §9.6.11)."""
+    found: list[ExprNode] = []
+    _visit(rhs, {}, frozenset(), False, lambda n, i: None, found.append)
+    if found:
+        name = lhs if isinstance(lhs, str) else _lhs_name(lhs)
+        raise ElementwiseLiftError(
+            f"array_shape_mismatch: '{name}': a template application reads an anonymous "
+            f"array (a `{found[0].op}` node) where its body reads a scalar; an array "
+            "argument of an elementwise application must be declared over index sets, so "
+            "each cell knows which element it reads (esm-spec §9.6.11)"
+        )
+
+
+def _lhs_name(lhs: Expr) -> str:
+    if isinstance(lhs, ExprNode) and lhs.args and isinstance(lhs.args[0], str):
+        return f"{lhs.op}({lhs.args[0]})"
+    return str(lhs)
 
 
 def _union_axes(reads: list[str], shapes: dict[str, list[str]], lhs: str) -> list[str] | None:
@@ -152,9 +199,10 @@ def _at_cell(
     loops: list[str],
     lhs: str,
     bound: frozenset[str] = frozenset(),
+    inside: bool = False,
 ) -> Expr:
-    def rec(a: Expr, b: frozenset[str] = bound) -> Expr:
-        return _at_cell(a, shapes, axes, loops, lhs, b)
+    """``expr`` read at the current cell: every shaped read :func:`_visit`
+    reports gathered at the loops its index sets name."""
 
     if isinstance(expr, str):
         shape = shapes.get(expr)
@@ -173,17 +221,26 @@ def _at_cell(
         return ExprNode(op="index", args=args)
     if not isinstance(expr, ExprNode):
         return expr
+    inside = inside or expr.template_origin is not None
+
+    def rec(a: Expr, b: frozenset[str] = bound, i: bool = inside) -> Expr:
+        return _at_cell(a, shapes, axes, loops, lhs, b, i)
+
     op = expr.op
     if op == "index":
-        return dataclasses.replace(expr, args=[expr.args[0], *(rec(a) for a in expr.args[1:])])
+        if not inside:
+            return expr
+        return dataclasses.replace(
+            expr, args=[expr.args[0], *(rec(a, i=True) for a in expr.args[1:])]
+        )
     if op == "faq":
-        if not _is_rank0_faq(expr):
+        if not (inside and _is_rank0_faq(expr)):
             return expr
         inner = _faq_bound(expr, bound)
         return dataclasses.replace(
             expr,
-            expr=None if expr.expr is None else rec(expr.expr, inner),
-            filter=None if expr.filter is None else rec(expr.filter, inner),
+            expr=None if expr.expr is None else rec(expr.expr, inner, True),
+            filter=None if expr.filter is None else rec(expr.filter, inner, True),
         )
     if op == "fn":
         whole = _WHOLE_ARRAY_FN_ARGS.get(expr.name or "", ())
@@ -196,21 +253,26 @@ def _at_cell(
 
 
 def lift_elementwise_applications(flat: FlattenedSystem) -> FlattenedSystem:
-    """Lift every observed equation of ``flat`` that reads a shaped variable in a
-    scalar slot (see the module docstring). A lifted variable declared without a
-    ``shape`` takes the lift's index sets. Returns ``flat`` itself when nothing
-    is lifted, else a shallow copy with the rewritten equations and variables.
+    """Lift every observed equation of ``flat`` that applies a template
+    elementwise (see the module docstring). A lifted variable declared without
+    a ``shape`` takes the lift's index sets. Returns ``flat`` itself when
+    nothing is lifted, else a shallow copy with the rewritten equations and
+    variables.
 
     Repeats until no equation changes, so a chain of applications is lifted
     link by link.
 
     Raises :class:`ElementwiseLiftError` (``array_shape_mismatch``) when the
-    array arguments of a lifted right-hand side have no common index sets.
+    array arguments of a lifted right-hand side have no common index sets, and
+    when an application of any equation reads an anonymous array in a value
+    position.
     """
     variables = {**flat.parameters, **flat.state_variables, **flat.observed_variables}
     shapes: dict[str, list[str]] = {n: list(v.shape) for n, v in variables.items() if v.shape}
     unshaped = {n for n, v in variables.items() if v.shape is None}
     equations = list(flat.equations)
+    for eq in equations:
+        _refuse_anonymous_arrays(eq.rhs, eq.lhs)
     lifted: dict[str, list[str]] = {}
     changed = True
     passes = 0
@@ -222,10 +284,10 @@ def lift_elementwise_applications(flat: FlattenedSystem) -> FlattenedSystem:
             if not isinstance(lhs, str):
                 continue
             reads = _reads(eq.rhs, shapes)
-            if not any(slot for _, slot in reads):
+            if not any(inside for _, inside in reads):
                 if lhs in unshaped and lhs not in shapes:
                     try:
-                        axes0 = _union_axes([n for n, slot in reads if not slot], shapes, lhs)
+                        axes0 = _union_axes([n for n, _ in reads], shapes, lhs)
                     except ElementwiseLiftError:
                         axes0 = None
                     if axes0:
