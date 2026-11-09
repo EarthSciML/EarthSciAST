@@ -360,6 +360,7 @@ CODEGEN_HANDLED = {
     "^",
     "**",
     "pow",
+    "cast",  # binary64 targets: the identity to Float64, refused to Float32
     "D",  # `grad`/`div`/`laplacian`/`curl` are no longer special-cased in codegen —
     # they render via the generic `op(args)` fallback (rewrite-target keywords a
     # discretization template lowers before codegen; `D` remains the special core

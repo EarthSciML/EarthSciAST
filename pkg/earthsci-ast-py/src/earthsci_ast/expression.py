@@ -12,7 +12,7 @@ import sympy as sp
 from . import op_registry
 from .classification import ode_states
 from .error_handling import DATA_SOURCE_UNBOUND, UNSUPPORTED_CONSTRUCT
-from .errors import EarthSciAstError, SimulationError
+from .errors import EarthSciAstError, SimulationError, binary64_cast_operand
 from .esm_types import Expr, ExprNode, Model
 from .expr_walk import iter_children, map_children
 from .numpy_interpreter import (
@@ -715,6 +715,11 @@ def _expr_to_sympy(
                     f"{display} requires exactly 2 arguments, got {len(sympy_args)}"
                 )
             return sympy_fn(sympy_args[0], sympy_args[1])
+        if expr.op == "cast":
+            # esm-spec §11.3.1: binary64 only, so a cast to Float64 is its
+            # operand and a cast to Float32 is refused (`float32_unsupported`).
+            binary64_cast_operand(expr)
+            return sympy_args[0]
         if not structural_ops and expr.op == "Pre":
             # On a right-hand side `Pre(x)` is `x`: it is the value just before
             # an event (esm-spec §5.1), and with no event firing that is the

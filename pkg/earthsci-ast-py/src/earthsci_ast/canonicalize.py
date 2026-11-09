@@ -323,6 +323,7 @@ _EMISSIBLE_FIELDS: tuple[str, ...] = (
     "name",
     "value",
     "units",
+    "element_type",
 )
 
 # ExprNode fields TOLERATED-AND-IGNORED by the canonical emitter: a node
@@ -379,7 +380,8 @@ def _assert_emissible(e: Expr) -> None:
 
 
 def _emit_node_json(n: ExprNode) -> str:
-    # Emit ONLY the closed emissible field set (op/args/wrt/dim/fn/name/value/units) —
+    # Emit ONLY the closed emissible field set (op/args/wrt/dim/fn/name/value/units/
+    # element_type) —
     # the set every binding serializes and the cross-language canonical fixtures
     # pin. Nodes carrying any other set field have already been rejected by
     # `_assert_emissible` (via `canonical_json`); `fn` also carries the
@@ -404,6 +406,10 @@ def _emit_node_json(n: ExprNode) -> str:
         # A `const` node's declared unit (esm-spec §4.8.5) is meaning-bearing:
         # two nodes differing only in `units` are different quantities.
         entries.append(("units", _json_string(n.units)))
+    if getattr(n, "element_type", None) is not None:
+        # A `cast` node's precision (esm-spec §4.2): `cast(x, Float32)` and
+        # `cast(x, Float64)` are different values.
+        entries.append(("element_type", _json_string(n.element_type)))
     entries.sort(key=lambda kv: kv[0])
     body = ",".join(f"{_json_string(k)}:{v}" for k, v in entries)
     return "{" + body + "}"

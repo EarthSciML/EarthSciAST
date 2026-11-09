@@ -934,8 +934,9 @@ _DIM_PRESERVING_NARY = frozenset({"+", "-", "min", "max"})
 
 #: Ops that carry through the dimension of their FIRST operand unchanged.
 #: (`ic`/`Pre` are value-preserving form ops; `floor`/`ceil`/`abs` preserve
-#: magnitude and therefore units.)
-_DIM_PRESERVING_UNARY = frozenset({"abs", "floor", "ceil", "ic", "Pre"})
+#: magnitude and therefore units; `cast` changes only the precision, and units
+#: pass through it, esm-spec §4.2.)
+_DIM_PRESERVING_UNARY = frozenset({"abs", "floor", "ceil", "ic", "Pre", "cast"})
 
 #: Elementary functions whose ARGUMENT must be dimensionless and whose result is
 #: dimensionless. `sqrt` is deliberately NOT here — it halves the dimension —

@@ -91,6 +91,42 @@ class SimulationError(EarthSciAstError):
     """
 
 
+class Float32UnsupportedError(SimulationError):
+    """A value whose precision is binary32 — a variable declared so, or a
+    ``cast`` to ``"Float32"`` (esm-spec §11.3.1) — reached an evaluator that
+    would compute it in binary64 (CONFORMANCE_SPEC §5.18.2,
+    ``float32_unsupported``). Here, in the leaf module, because the problem
+    builder and both evaluators (the NumPy interpreter and the SymPy bridge)
+    raise it."""
+
+    #: Stable cross-binding diagnostic code (``error_handling.FLOAT32_UNSUPPORTED``).
+    code = "float32_unsupported"
+
+
+def binary64_cast_operand(node: object) -> object:
+    """The operand of a ``cast`` node, for an evaluator that computes binary64
+    only (CONFORMANCE_SPEC §5.18.2a): a cast to ``"Float64"`` is the identity on
+    it, since every value such an evaluator holds is already binary64. A cast
+    to ``"Float32"`` — or with any other ``element_type`` — is refused with
+    ``float32_unsupported``: evaluating it as the identity would drop the
+    rounding the document asks for. ``node`` is an ``ExprNode`` or its raw-JSON
+    ``dict`` form."""
+    if isinstance(node, dict):  # the raw-JSON expression form
+        element_type, args = node.get("element_type"), node.get("args") or []
+    else:
+        element_type = getattr(node, "element_type", None)
+        args = getattr(node, "args", None) or []
+    if element_type == "Float64" and len(args) == 1:
+        return args[0]
+    raise Float32UnsupportedError(
+        f"float32_unsupported: a `cast` node to element_type {element_type!r} "
+        f"(operand {args[0] if len(args) == 1 else args!r}) rounds its value to binary32, "
+        "but this binding evaluates binary64 only; refusing rather than evaluating the "
+        "cast as the identity (CONFORMANCE_SPEC §5.18.2a). Evaluate the document with a "
+        "binding that implements binary32"
+    )
+
+
 class MissingDataError(SimulationError):
     """``E_TREEWALK_MISSING_DATA``: a SHAPED parameter reached construction with
     no value — no ``default``, no override, no caller array, and, for one the

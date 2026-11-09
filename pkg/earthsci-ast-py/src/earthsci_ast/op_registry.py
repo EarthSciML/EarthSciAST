@@ -71,6 +71,7 @@ Categories
 ``relational``       value-invention & index-returning reducers: skolem, rank,
                      argmin, argmax, distinct, join (RFC semiring-faq-unified-ir)
 ``geometry``         intersect_polygon, polygon_intersection_area (§8.6 kernels)
+``conversion``       ``cast`` (precision conversion, esm-spec §4.2 / §11.3.1)
 
 The open-tier rewrite-target sugar (grad/div/laplacian/curl/integral, esm-spec
 §4.2) is intentionally **NOT** registered: those ops carry no dimensional rule,
@@ -114,6 +115,7 @@ CATEGORIES: frozenset[str] = frozenset(
         "array",
         "relational",
         "geometry",
+        "conversion",
     }
 )
 
@@ -324,6 +326,17 @@ _ALL: tuple[OpSpec, ...] = (
     # --- inline constants (esm-spec §4.2 Inline Constants) ---
     OpSpec(
         "const", "constant", "nullary", arity_bounds=(0, 0), note="args empty; literal in `value`"
+    ),
+    # --- precision conversion (esm-spec §4.2, §11.3.1) ---
+    OpSpec(
+        "cast",
+        "conversion",
+        "unary",
+        arity_bounds=(1, 1),
+        note="carries `element_type` (Float32 | Float64): round the operand once to "
+        "that precision. This binding evaluates binary64 only, so a cast to "
+        "Float64 is the identity and a cast to Float32 is refused "
+        "(`float32_unsupported`, CONFORMANCE_SPEC §5.18.2a).",
     ),
     # --- array / tensor (esm-spec §4.2 Array / Tensor, §4.3) ---
     OpSpec("faq", "array", "special", note="FAQ semiring aggregate"),

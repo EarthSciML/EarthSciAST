@@ -143,6 +143,9 @@ class ExprNode:
     # constant has that dimension and exact scale in dimensional analysis
     # (esm-spec §4.8.5); legal on no other op.
     units: str | None = field(default=None, metadata={"kind": "scalar"})
+    # cast (esm-spec §4.2, §11.3.1): the precision, "Float64" or "Float32", the
+    # node rounds its one operand to. Required on cast; legal on no other op.
+    element_type: str | None = field(default=None, metadata={"kind": "scalar"})
     # table_lookup (esm-spec §9.5, v0.4.0): the function_tables entry id this
     # node references. ``args`` MUST be empty for a table_lookup node — the
     # per-axis input expressions live in ``table_axes``.
@@ -225,6 +228,7 @@ _EXPR_WIRE_ORDER: tuple[str, ...] = (
     "label",
     "value",
     "units",
+    "element_type",
     "table",
     "table_axes",
     "output",

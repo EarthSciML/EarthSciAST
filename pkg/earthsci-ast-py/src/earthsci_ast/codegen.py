@@ -13,6 +13,7 @@ from typing import Any
 
 from . import op_registry
 from .classification import algebraic_unknowns, ode_states
+from .errors import binary64_cast_operand
 
 
 def to_julia_code(file: dict[str, Any]) -> str:
@@ -385,6 +386,12 @@ def _format_expr_node(node: dict[str, Any], target: str) -> str:
         return f"{pfx}({r(args[0])})" if args else f"{pfx}()"
     if op in _CALL_NAME:
         return f"{_CALL_NAME[op][target]}({', '.join(r(arg) for arg in args)})"
+
+    if op == "cast":
+        # esm-spec §11.3.1: both targets compute in binary64, so a cast to
+        # Float64 is its operand and a cast to Float32 is refused
+        # (`float32_unsupported`) rather than generated as the identity.
+        return r(binary64_cast_operand(node))
 
     # Shape-divergent ops (explicit per-target branch).
     if op == "D":

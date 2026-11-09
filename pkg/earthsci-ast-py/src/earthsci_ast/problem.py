@@ -65,8 +65,8 @@ from .compiler import (
     resolve_compiler,
     use_policy,
 )
-from .errors import MissingDataError
 from .error_handling import CALLBACK_UNREGISTERED, FLOAT32_UNSUPPORTED
+from .errors import Float32UnsupportedError, MissingDataError, binary64_cast_operand
 from .esm_types import CouplingType, EsmFile, ExprNode, is_aggregate_op
 from .expr_walk import iter_children
 from .expression import DataSourceUnboundError, UnsupportedConstructError, free_variables
@@ -1647,15 +1647,6 @@ def _refuse_unregistered_callback_reads(file: EsmFile) -> None:
         visit(model, name)
 
 
-class Float32UnsupportedError(SimulationError):
-    """A variable whose working precision is binary32 reached an evaluator that
-    would compute it in binary64 (CONFORMANCE_SPEC §5.18.2,
-    ``float32_unsupported``)."""
-
-    #: Stable cross-binding diagnostic code.
-    code = FLOAT32_UNSUPPORTED
-
-
 def _refuse_unhonoured_float32(flat: FlattenedSystem) -> None:
     """Refuse every variable whose effective working precision is binary32 and
     that this binding does not evaluate in binary32 (CONFORMANCE_SPEC §5.18.2:
@@ -1672,6 +1663,10 @@ def _refuse_unhonoured_float32(flat: FlattenedSystem) -> None:
     document.
     """
     from .recurrence import is_recurrence_candidate
+
+    # A `cast` to Float32 (esm-spec §11.3.1) is a binary32 value whatever the
+    # variables declare; it is refused up front, on every route, by name.
+    _refuse_float32_casts(flat)
 
     domain = getattr(flat, "domain", None)
     document = (getattr(domain, "element_type", None) if domain is not None else None) or "Float64"
@@ -1700,6 +1695,34 @@ def _refuse_unhonoured_float32(flat: FlattenedSystem) -> None:
                 f"(CONFORMANCE_SPEC §5.18.2). Evaluate the document with a binding that "
                 f'implements binary32, or declare the variable "Float64"'
             )
+
+
+def _refuse_float32_casts(flat: FlattenedSystem) -> None:
+    """Refuse the first ``cast`` to anything but ``"Float64"`` in an equation,
+    naming the equation it sits in (CONFORMANCE_SPEC §5.18.2a): this binding
+    evaluates binary64 only, so it cannot round a value to binary32, and it
+    MUST NOT evaluate the cast as the identity."""
+
+    def first_cast(expr: Any) -> ExprNode | None:
+        if isinstance(expr, ExprNode):
+            if expr.op == "cast" and expr.element_type != "Float64":
+                return expr
+            for child in iter_children(expr):
+                hit = first_cast(child)
+                if hit is not None:
+                    return hit
+        return None
+
+    for eq in flat.equations:
+        for side in (eq.lhs, eq.rhs):
+            node = first_cast(side)
+            if node is None:
+                continue
+            lhs = eq.lhs if isinstance(eq.lhs, str) else _defined_lhs_name(eq.lhs) or "?"
+            try:
+                binary64_cast_operand(node)
+            except Float32UnsupportedError as e:
+                raise Float32UnsupportedError(f"{e} — in the equation defining '{lhs}'") from None
 
 
 def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) -> None:

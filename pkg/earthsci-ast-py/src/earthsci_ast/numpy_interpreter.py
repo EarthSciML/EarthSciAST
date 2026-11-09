@@ -41,7 +41,7 @@ from . import compiler as _compiler
 from .cadence import Partition
 from .cadence import partition as _partition_model
 from .error_handling import RECURRENCE_NOT_WELLFOUNDED, UNEVALUABLE_OPERATOR
-from .errors import EarthSciAstError
+from .errors import EarthSciAstError, binary64_cast_operand
 from .esm_types import ARRAY_OPS, Expr, ExprNode
 from .expr_walk import any_child, iter_children
 from .index_ranges import expand_range as _expand_range
@@ -1096,6 +1096,11 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> float | np.ndarray:
         a = eval_expr(expr.args[0], ctx)
         b = eval_expr(expr.args[1], ctx)
         return _apply_cmp(a, b, _CMP_UFUNCS[op])
+    if op == "cast":
+        # esm-spec §11.3.1: this evaluator holds binary64 only, so a cast to
+        # Float64 is its operand and a cast to Float32 is refused
+        # (`float32_unsupported`), never evaluated as the identity.
+        return eval_expr(binary64_cast_operand(expr), ctx)
     if op == "Pre":
         # `Pre(x)` is the value of x immediately before an event fires (esm-spec
         # §5.1). Evaluated anywhere else there is no event, so the value just

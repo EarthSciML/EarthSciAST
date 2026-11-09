@@ -915,6 +915,11 @@ def _make_call(name: str, args: list[Any], named: dict[str, Any], pos: int) -> A
             "lower": args[2],
             "upper": args[3],
         }
+    # `cast(x, Float32)`: the printer's form of the precision conversion
+    # (esm-spec §4.2); the second argument is the `element_type` field.
+    if name == "cast" and len(args) == 2 and args[1] in ("Float32", "Float64"):
+        _no_named(named, name, pos)
+        return {"op": "cast", "args": [args[0]], "element_type": args[1]}
     if name == "reshape" and len(args) == 2:
         _no_named(named, name, pos)
         return {"op": "reshape", "args": [args[0]], "shape": _as_array_literal(args[1], pos)}
