@@ -1597,6 +1597,117 @@ fn test_ragged_values_not_gathered() {
     );
 }
 
+/// Issue #441 (esm-spec §4.3.1 "Shaped variables inside a `faq` are read
+/// through `index`"): a `faq` filter that names a shaped variable bare. With
+/// two output indices the reference evaluator used to ignore it silently; it is
+/// now `faq_bare_array_operand` at the containing field.
+#[test]
+fn test_faq_bare_array_operand_filter() {
+    assert_structural(
+        include_str!("../../../tests/invalid/faq/bare_array_operand_filter.esm"),
+        StructuralErrorCode::FaqBareArrayOperand,
+        "/models/Probe/equations/2/rhs",
+    );
+}
+
+/// Exactly the pinned findings, for the fixtures whose point is that nothing
+/// else is reported.
+fn assert_exactly(fixture: &str, want: &[(&str, &str)]) {
+    let esm = load_string(fixture).expect("fixture must load");
+    let got: Vec<(String, String)> = validate(&esm)
+        .structural_errors
+        .iter()
+        .map(|e| (e.code.to_string(), e.path.clone()))
+        .collect();
+    let want: Vec<(String, String)> = want
+        .iter()
+        .map(|(c, p)| (c.to_string(), p.to_string()))
+        .collect();
+    assert_eq!(got, want);
+}
+
+/// `D(y) ~ faq(… y …)`, and the array-equation `faq[i](D(z[i])) ~ faq(… z …)`:
+/// the left-hand-side exemption is for an observed or recurrence definition's
+/// self-read, which other checks report; a derivative's own state read bare is
+/// `faq_bare_array_operand`.
+#[test]
+fn test_faq_bare_array_operand_derivative() {
+    assert_exactly(
+        include_str!("../../../tests/invalid/faq/bare_array_operand_derivative.esm"),
+        &[
+            ("faq_bare_array_operand", "/models/Probe/equations/0/rhs"),
+            ("faq_bare_array_operand", "/models/Probe/equations/1/rhs"),
+        ],
+    );
+}
+
+/// The check reaches an inline subsystem's equations, as do the other
+/// per-equation `faq` checks (ragged_values_not_gathered pinned alongside).
+#[test]
+fn test_faq_checks_reach_subsystems() {
+    assert_exactly(
+        include_str!("../../../tests/invalid/faq/bare_array_operand_subsystem.esm"),
+        &[(
+            "faq_bare_array_operand",
+            "/models/Host/subsystems/Probe/equations/2/rhs",
+        )],
+    );
+    assert_exactly(
+        include_str!("../../../tests/invalid/faq/ragged_values_not_gathered_subsystem.esm"),
+        &[(
+            "ragged_values_not_gathered",
+            "/models/Host/subsystems/RaggedValuesNotGathered/equations/3/rhs",
+        )],
+    );
+}
+
+/// A template application is opaque at validation, on the authored form load
+/// recorded before it expanded the application: `v`, bound to the argument,
+/// is not a bare read; `w` beside it is, and only `w` is reported.
+#[test]
+fn test_faq_bare_array_operand_template_application_is_opaque() {
+    let text = include_str!("../../../tests/invalid/faq/bare_array_operand_beside_template.esm");
+    let esm = load_string(text).expect("fixture must load");
+    let found: Vec<String> = validate(&esm)
+        .structural_errors
+        .iter()
+        .filter(|e| e.code.to_string() == "faq_bare_array_operand")
+        .map(|e| {
+            e.details["variable"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(found, vec!["w".to_string()]);
+
+    let mut doc: serde_json::Value = serde_json::from_str(text).unwrap();
+    doc["models"]["Probe"]["equations"][0]["rhs"]["expr"]["args"][1] =
+        serde_json::json!({"op": "index", "args": ["w", "i"]});
+    let esm = load_string(&doc.to_string()).expect("loads");
+    assert!(
+        validate(&esm).structural_errors.is_empty(),
+        "{:?}",
+        validate(&esm).structural_errors
+    );
+}
+
+/// The positive control for #441: the same filter over two output indices,
+/// read through `index(a_val, i)`, validates clean.
+#[test]
+fn test_faq_indexed_filter_two_outputs_is_valid() {
+    let esm_file = load_string(include_str!(
+        "../../../tests/conformance/faq_pointwise_filter/fixtures/indexed_filter_two_outputs.esm"
+    ))
+    .expect("fixture must load");
+    let result = validate(&esm_file);
+    assert!(
+        result.structural_errors.is_empty(),
+        "unexpected structural errors: {:?}",
+        result.structural_errors
+    );
+}
+
 /// The positive control: the same sum spelled with the explicit
 /// `index(parentMember, i, j)` gather over a padded `values` array is clean.
 #[test]

@@ -180,7 +180,8 @@ def test_a_template_over_geometry_operands_is_not_lifted(compiler):
 
 def test_a_shaped_read_written_by_hand_is_not_lifted():
     # The same reduction the `linear` expansion holds, written by hand: no
-    # template application, so the lift leaves it as written.
+    # template application, so nothing gives it a per-element meaning and it
+    # is `faq_bare_array_operand` (esm-spec §4.3.1), not lifted.
     doc = _model_doc(
         {
             "u": {"type": "parameter", "shape": ["c"], "default": [1.0, 2.0, 3.0]},
@@ -201,5 +202,6 @@ def test_a_shaped_read_written_by_hand_is_not_lifted():
             {"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": "tot"},
         ],
     )
-    flat = flatten(load_string(json.dumps(doc)))
-    assert lift_elementwise_applications(flat) is flat
+    with pytest.raises(Exception) as err:
+        esm_problem(doc, (0.0, 1.0), compiler="interpreter")
+    assert [code for code, _ in err.value.findings] == ["faq_bare_array_operand"]

@@ -3154,29 +3154,21 @@ pub(super) struct ReduceSpec<'a> {
 /// iff a filter is present and evaluates to false. With no filter this is always
 /// `false`, so the reduction is byte-identical to the no-filter form.
 ///
-/// # An array filter is a per-cell MASK, not "exclude everything"
+/// # An array filter is a per-cell MASK
 ///
-/// This function used to read `eval(f, ctx).as_scalar().unwrap_or(0.0) == 0.0`.
-/// A filter that evaluates to an ARRAY — the natural spelling of a regrid
-/// `overlap > 0` sparsity gate or a fuel gate `code >= 1`, where the predicate
-/// names a whole field rather than an indexed element — has no scalar form, so
-/// `as_scalar()` returned `None`, `unwrap_or(0.0)` turned that into `0.0`, and
-/// **every cell was excluded**: the aggregate collapsed to the reduction
-/// identity everywhere.
+/// A filter that evaluates to an ARRAY — a regrid `overlap > 0` sparsity gate
+/// or a fuel gate `code >= 1` that names a whole field rather than an indexed
+/// element — is indexed at the current output cell, aligned to the output box
+/// exactly as `VecBox` aligns it, so this oracle and the vectorized overlay
+/// (which feeds the array to `vec_select` as a mask) give one answer.
 ///
-/// The vectorized overlay, meanwhile, fed exactly that array into `vec_select`
-/// as a genuine per-cell mask — which is what its doc-comments advertise, and
-/// what the fixtures using it intend. So the same document produced `[10, 0, 10]`
-/// if its body happened to vectorize and `[0, 0, 0]` if a `reshape` in the body
-/// forced it onto this oracle. **Which answer you got depended solely on
-/// incidental vectorizability.**
-///
-/// The per-cell-mask reading is the intended one, so the oracle now implements
-/// it: an array filter is indexed at the current output cell, aligned to the
-/// output box exactly as `VecBox` aligns it. An array that cannot be aligned
-/// (its rank does not match the output box) is treated as *including* the cell —
-/// the conservative direction, since silently dropping every term is the failure
-/// mode this fix exists to remove.
+/// An array that cannot be aligned — its rank is not the output box's, or the
+/// cell lies outside it — is a FAULT, not a verdict: including the cell would
+/// silently ignore the filter, so a filter `a_val > 1.5` over a node with two
+/// output indices (`a_val` rank 1) would sum rows it excludes. A shaped
+/// variable read by bare name in a filter is refused at build
+/// (`faq_bare_array_operand`, esm-spec §4.3.1); this fault is what is left for
+/// an array whose shape the build cannot name.
 pub(super) fn filter_excludes(
     filter: Option<&Expr>,
     cell: Option<&CellBox>,
@@ -3192,11 +3184,25 @@ pub(super) fn filter_excludes(
             if a.ndim() == 0 {
                 return a.first().copied().unwrap_or(0.0) == 0.0;
             }
+            let unaligned = |why: String| {
+                latch_gather_fault(format!(
+                    "E_TREEWALK_FILTER_UNALIGNED: a `faq` filter evaluated to an array of shape \
+                     {:?}, {why}, so it does not say which index tuple each element gates. \
+                     Read the filter's operands through `index` at the node's symbols \
+                     (esm-spec §4.3.1).",
+                    a.shape()
+                ));
+                true
+            };
             let Some(cell) = cell else {
-                return false;
+                return unaligned("and the node has no output box to align it to".to_string());
             };
             if a.ndim() != cell.names.len() || cell.origin.len() != cell.names.len() {
-                return false;
+                return unaligned(format!(
+                    "while the node has {} output indices ({})",
+                    cell.names.len(),
+                    cell.names.join(", ")
+                ));
             }
             let ix: Vec<usize> = cell
                 .names
@@ -3209,9 +3215,7 @@ pub(super) fn filter_excludes(
                 .collect();
             match a.get(IxDyn(&ix)) {
                 Some(&m) => m == 0.0,
-                // Out of the mask's bounds: include, rather than silently
-                // dropping the term.
-                None => false,
+                None => unaligned(format!("and the output cell {ix:?} lies outside it")),
             }
         }
     }

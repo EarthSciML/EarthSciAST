@@ -260,3 +260,118 @@ export function validateArrayBroadcastShapes(model: Model, modelPath: string): S
 
   return errors
 }
+
+// ---------------------------------------------------------------------------
+// Rule 3 — `faq_bare_array_operand` (esm-spec §4.3.1, issue #441)
+// ---------------------------------------------------------------------------
+
+/**
+ * Report every `faq` node whose `expr` or `filter` reads a variable declared
+ * with a non-empty `shape` by BARE name in an element-wise position.
+ *
+ * A `faq` names its axes by its range symbols and evaluates its body and filter
+ * once per index tuple, so a whole array there does not say which symbol each
+ * of its axes is. The executing bindings each gave it a meaning and disagreed:
+ * Rust's reference kept every term of a filter it could not align to the output
+ * box, so a filter over a node with two output indices was silently ignored,
+ * and Python's whole-box tiers let numpy broadcasting align the array with the
+ * LAST box axis. The read must be `index(v, i, …)`.
+ *
+ * The descent is {@link collectBareArrayOperands}' (element-wise nodes only); a
+ * name a `faq` binds as a loop symbol, there or further out, shadows the
+ * declaration; nested `faq` nodes are checked in their own right; a template
+ * application is opaque, so an array bound to one of its arguments is not a
+ * bare read (its expansion is the evaluating bindings' to check at build).
+ * Order: pre-order over nodes, `expr` before `filter`, matching Rust, Python
+ * and Julia.
+ */
+export function validateFaqBareArrayOperands(
+  model: Model,
+  modelPath: string,
+  authoredTemplateRhs: Record<string, unknown> = {},
+): StructuralError[] {
+  const errors: StructuralError[] = []
+  const declared = new Map<string, string[]>()
+  for (const [name, variable] of Object.entries(model.variables ?? {})) {
+    const shape = variable?.shape
+    if (Array.isArray(shape) && shape.length > 0) declared.set(name, shape.map(String))
+  }
+  if (declared.size === 0) return errors
+  let axesOf = declared
+
+  const walk = (node: Expr, bound: ReadonlySet<string>, path: string): void => {
+    // A template application is opaque: an array bound to one of its arguments
+    // is not a bare read here (its expansion is checked at build).
+    if (!isExprNode(node) || node.op === 'apply_expression_template') return
+    let inner = bound
+    if (node.op === 'faq' || node.op === 'aggregate') {
+      const faq = node as ExpressionNode & {
+        output_idx?: unknown[]
+        ranges?: Record<string, unknown>
+        arg?: string
+        filter?: Expression
+        expr?: Expression
+      }
+      const next = new Set(bound)
+      for (const s of faq.output_idx ?? []) next.add(String(s))
+      for (const s of Object.keys(faq.ranges ?? {})) next.add(s)
+      if (typeof faq.arg === 'string') next.add(faq.arg)
+      inner = next
+      for (const field of ['expr', 'filter'] as const) {
+        const part = faq[field]
+        if (part === undefined) continue
+        const seen = new Set<string>()
+        for (const name of collectBareArrayOperands(part, axesOf)) {
+          if (inner.has(name) || seen.has(name)) continue
+          seen.add(name)
+          const axes = axesOf.get(name) ?? []
+          errors.push({
+            path,
+            code: ERROR_CODES.FAQ_BARE_ARRAY_OPERAND,
+            message:
+              `faq \`${field}\` reads '${name}', declared over [${axes.join(', ')}], by bare ` +
+              `name. A faq names its axes by its range symbols, and its \`${field}\` is ` +
+              `evaluated once per index tuple, so a whole array there does not say which ` +
+              `symbol each of its axes is. Read it through \`index\`, e.g. ` +
+              `index(${name}, <symbol>…) (esm-spec §4.3.1)`,
+            details: { field, variable: name, shape: axes },
+          })
+        }
+      }
+    }
+    forEachChild(node, (child) => walk(child, inner, path))
+  }
+
+  // Each equation's right-hand side. A variable an observed or recurrence
+  // definition's left-hand side names is skipped: its bare self-read is
+  // `recurrence_not_wellfounded` or `observed_cycle`. A derivative left-hand
+  // side — `D(y)`, or the array-equation `faq[i](D(y[i]))` — skips nothing; no
+  // other check reports `D(y) ~ faq(… y …)`.
+  // The right-hand side is read as authored: load has already expanded any
+  // template application in it.
+  for (const [index, equation] of (model.equations ?? []).entries()) {
+    const rhs = authoredTemplateRhs[`${modelPath}/equations/${index}`] ?? equation.rhs
+    if (rhs === undefined) continue
+    const lhs = equation.lhs
+    const defined = holdsDerivative(lhs) ? new Set<string>() : stringLeaves(lhs)
+    axesOf = new Map([...declared].filter(([name]) => !defined.has(name)))
+    walk(rhs as Expr, new Set(), `${modelPath}/equations/${index}/rhs`)
+  }
+  return errors
+}
+
+function stringLeaves(expr: unknown, out: Set<string> = new Set()): Set<string> {
+  if (typeof expr === 'string') out.add(expr)
+  else if (isExprNode(expr)) forEachChild(expr, (child) => void stringLeaves(child, out))
+  return out
+}
+
+function holdsDerivative(expr: unknown): boolean {
+  if (!isExprNode(expr)) return false
+  if (expr.op === 'D') return true
+  let found = false
+  forEachChild(expr, (child) => {
+    if (!found && holdsDerivative(child)) found = true
+  })
+  return found
+}

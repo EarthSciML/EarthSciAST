@@ -799,8 +799,10 @@ fn vectorized_matches_oracle_on_every_legal_arity() {
     }
 }
 
-/// The `mask = [1, 0, 1]` / `filter: mask > 0.5` / `body = 10` document from
-/// audit finding R4, with a body that vectorizes.
+/// The `filter: [1, 0, 1] > 0.5` / `body = 10` document from audit finding R4,
+/// with a body that vectorizes. The mask is an anonymous array: a declared
+/// shaped variable read bare in a filter is `faq_bare_array_operand` (esm-spec
+/// §4.3.1) and never reaches either path.
 fn array_filter_json() -> String {
     r#"
         {
@@ -867,7 +869,11 @@ fn array_filter_json() -> String {
                     "filter": {
                       "op": ">",
                       "args": [
-                        "mask",
+                        {
+                          "op": "const",
+                          "args": [],
+                          "value": [1.0, 0.0, 1.0]
+                        },
                         0.5
                       ]
                     },

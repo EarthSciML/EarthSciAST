@@ -1,0 +1,55 @@
+{
+  "fixture": "indexed_filter_two_outputs",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "indexed_filter_two_outputs_t1",
+      "assertion_idx": 1,
+      "variable": "two_outputs",
+      "actual": 0.0
+    },
+    {
+      "test_id": "indexed_filter_two_outputs_t1",
+      "assertion_idx": 2,
+      "variable": "two_outputs",
+      "actual": 0.0
+    },
+    {
+      "test_id": "indexed_filter_two_outputs_t1",
+      "assertion_idx": 3,
+      "variable": "two_outputs",
+      "actual": 20.0
+    },
+    {
+      "test_id": "indexed_filter_two_outputs_t1",
+      "assertion_idx": 4,
+      "variable": "two_outputs",
+      "actual": 40.0
+    },
+    {
+      "test_id": "indexed_filter_two_outputs_t1",
+      "assertion_idx": 5,
+      "variable": "two_outputs_swapped",
+      "actual": 0.0
+    },
+    {
+      "test_id": "indexed_filter_two_outputs_t1",
+      "assertion_idx": 6,
+      "variable": "two_outputs_swapped",
+      "actual": 20.0
+    },
+    {
+      "test_id": "indexed_filter_two_outputs_t1",
+      "assertion_idx": 7,
+      "variable": "two_outputs_swapped",
+      "actual": 0.0
+    },
+    {
+      "test_id": "indexed_filter_two_outputs_t1",
+      "assertion_idx": 8,
+      "variable": "two_outputs_swapped",
+      "actual": 40.0
+    }
+  ]
+}

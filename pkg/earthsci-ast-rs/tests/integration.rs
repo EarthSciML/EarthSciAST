@@ -123,6 +123,8 @@ mod expression_operations;
 mod expression_parse_conformance;
 #[path = "expression_templates_conformance.rs"]
 mod expression_templates_conformance;
+#[path = "faq_bare_array_operand.rs"]
+mod faq_bare_array_operand;
 #[path = "faq_conformance.rs"]
 mod faq_conformance;
 #[path = "faq_equality_scatter_conformance.rs"]

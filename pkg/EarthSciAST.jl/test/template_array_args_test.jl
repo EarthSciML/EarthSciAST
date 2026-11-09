@@ -129,7 +129,8 @@ end
 
     @testset "a shaped read written by hand is not lifted" begin
         # The same reduction the `linear` expansion holds, written by hand: no
-        # template application, so the lift leaves it as written.
+        # template application, so the lift leaves it as written and the build
+        # refuses it with `faq_bare_array_operand` (esm-spec §4.3.1).
         doc = _taa_doc(
             """{"u": {"type": "parameter", "shape": ["c"], "default": [1.0, 2.0, 3.0]},
             "tot": {"type": "unknown"}, "s": {"type": "unknown", "default": 0.0}}""",
@@ -140,5 +141,12 @@ end
         flat = EarthSciAST.flatten(EarthSciAST.load_string(doc))
         tot(f) = only(eq for eq in f.equations if eq.lhs isa EarthSciAST.VarExpr && eq.lhs.name == "M.tot").rhs
         @test tot(EarthSciAST.promote_downstream_shapes(flat)) == tot(flat)
+        err = try
+            EarthSciAST.esm_problem(EarthSciAST.load_string(doc), (0.0, 1.0); compiler = :interpreter)
+            nothing
+        catch e
+            e
+        end
+        @test err !== nothing && occursin("faq_bare_array_operand", sprint(showerror, err))
     end
 end

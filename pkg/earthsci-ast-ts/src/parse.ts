@@ -615,6 +615,7 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // `"models.<name>"` / `"reaction_systems.<name>"` (the Julia / Python
   // `component_templates` key shape).
   const componentTemplates = captureComponentTemplates(loweredTemplates)
+  const authoredTemplateRhs = captureTemplateApplicationRhs(loweredTemplates)
   const typedData = expandDocument(loweredTemplates) as EsmFile
 
   // Step 4: Lower `enum` ops to `const` integer nodes against the
@@ -647,6 +648,17 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   if (Object.keys(componentTemplates).length > 0) {
     Object.defineProperty(loweredData, 'componentTemplates', {
       value: componentTemplates,
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    })
+  }
+
+  // The authored right-hand side of every equation that applies a template, for
+  // `faq_bare_array_operand` (see `EsmFile.authoredTemplateRhs`).
+  if (Object.keys(authoredTemplateRhs).length > 0) {
+    Object.defineProperty(loweredData, 'authoredTemplateRhs', {
+      value: authoredTemplateRhs,
       enumerable: false,
       writable: true,
       configurable: true,
@@ -735,6 +747,41 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
  *
  * Mirrors the Python reference `parse._capture_component_templates`.
  */
+/**
+ * The right-hand side of every model equation, inline subsystems included,
+ * that holds an `apply_expression_template` node, keyed by its equation
+ * pointer. Taken on the reference-preserving form, before `expandDocument`.
+ */
+function captureTemplateApplicationRhs(data: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  const isObject = (v: unknown): v is Record<string, unknown> =>
+    v !== null && typeof v === 'object' && !Array.isArray(v)
+  const holdsApplication = (v: unknown): boolean => {
+    if (Array.isArray(v)) return v.some(holdsApplication)
+    if (!isObject(v)) return false
+    if (v.op === 'apply_expression_template') return true
+    return Object.values(v).some(holdsApplication)
+  }
+  const visit = (model: Record<string, unknown>, path: string): void => {
+    const equations = Array.isArray(model.equations) ? model.equations : []
+    equations.forEach((eq: unknown, i: number) => {
+      if (isObject(eq) && holdsApplication(eq.rhs))
+        out[`${path}/equations/${i}`] = deepClone(eq.rhs)
+    })
+    if (isObject(model.subsystems)) {
+      for (const [name, sub] of Object.entries(model.subsystems)) {
+        if (isObject(sub)) visit(sub, `${path}/subsystems/${name}`)
+      }
+    }
+  }
+  if (isObject(data) && isObject(data.models)) {
+    for (const [name, model] of Object.entries(data.models)) {
+      if (isObject(model)) visit(model, `/models/${name}`)
+    }
+  }
+  return out
+}
+
 function captureComponentTemplates(data: unknown): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   if (data === null || typeof data !== 'object' || Array.isArray(data)) return out
