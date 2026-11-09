@@ -18,6 +18,12 @@
 #     connected components of "reads the dynamic slot". A unit is
 #     self-contained — it reads no other unit's dynamic slot — so units run in
 #     any order, and in parallel. In a box model each box is one unit.
+#     A component past `_SC_CUT_UNIT_NODES` is cut further at its large slots
+#     (`_SC_CUT_SLOT_NODES`): a read of one no longer joins the reader to it,
+#     the slot is stored to the cache, and the reader's unit runs at a later
+#     LEVEL. A document whose every equation reads one sum of many large,
+#     alike terms (template call sites summed into one observed) is then a
+#     class of terms and a small unit summing them, not one unit.
 #   * Each unit gets a SIGNATURE: its statements in order (slots ascending, then
 #     equations in list order) with every node's kind, operator and payload
 #     identity, and with the values that say WHERE it reads and writes (state
@@ -109,51 +115,110 @@ function _sc_kernel_reads!(acc::Set{Int}, K::_AccKernel, cache::_CSECache, seen:
     return acc
 end
 
+# Units whose summed statement size reaches this are cut at their large slots.
+const _SC_CUT_UNIT_NODES = 2048
+# A dynamic slot at least this large is a cut point in such a unit.
+const _SC_CUT_SLOT_NODES = 64
+
 # Union-find over the dynamic slots and the equations: an equation or a slot
 # joins every dynamic slot it reads. Returns the units, plus the positions
 # (slots and equations) that cannot be emitted because a tree reads a foreign
 # scratch — those components stay on the walker whole.
+#
+# A component of at least `_SC_CUT_UNIT_NODES` nodes with no such position is
+# then cut: a read of one of its slots of at least `_SC_CUT_SLOT_NODES` nodes
+# does not join the reader to the slot. The reader's unit runs after the
+# slot's (`level`, one more than the deepest unit it reads that way) and the
+# slot is stored to the cache (`cut`). Units that would read each other's cut
+# slots both ways are joined again. Returns `(good, resid, level, cut)`, `good`
+# ordered by level.
 function _sc_dynamic_units(
         rhs_list, n_rhs::Int, prelude::AbstractVector{_Node},
-        cache::_CSECache, dyn_slots::AbstractVector{Int}
+        cache::_CSECache, dyn_slots::AbstractVector{Int}; cuts::Bool = true
     )
     nd_ = length(dyn_slots)
+    N = nd_ + n_rhs
     pos = Dict{Int, Int}()                     # dynamic slot -> union-find node
     for (i, s) in enumerate(dyn_slots)
         pos[s] = i
     end
-    parent = collect(1:(nd_ + n_rhs))
+    bad = falses(N)
+    # Each position's reads of dynamic slots, as union-find nodes.
+    rd = Vector{Vector{Int}}(undef, N)
+    reads = Int[]
+    for x in 1:N
+        empty!(reads)
+        tree = x <= nd_ ? prelude[dyn_slots[x]] : rhs_list[x - nd_][2]
+        _sc_cache_reads!(reads, tree, cache) || (bad[x] = true)
+        r = Int[]
+        for s in reads
+            j = get(pos, s, 0)
+            j == 0 || push!(r, j)
+        end
+        rd[x] = r
+    end
+    parent = collect(1:N)
     find(x) = (
         while parent[x] != x
             parent[x] = parent[parent[x]]; x = parent[x]
         end; x
     )
     unite(a, b) = (ra = find(a); rb = find(b); ra == rb || (parent[max(ra, rb)] = min(ra, rb)); nothing)
-    bad = falses(nd_ + n_rhs)
-    reads = Int[]
-    for (i, s) in enumerate(dyn_slots)
-        empty!(reads)
-        _sc_cache_reads!(reads, prelude[s], cache) || (bad[i] = true)
-        for r in reads
-            j = get(pos, r, 0)
-            j == 0 || unite(i, j)
-        end
+    for x in 1:N, j in rd[x]
+        unite(x, j)
     end
-    for k in 1:n_rhs
-        empty!(reads)
-        _sc_cache_reads!(reads, rhs_list[k][2], cache) || (bad[nd_ + k] = true)
-        for r in reads
-            j = get(pos, r, 0)
-            j == 0 || unite(nd_ + k, j)
+    # ---- Cut the large components at their large slots ----
+    cutpt = falses(N)
+    size_of(x) = _cg_node_tree_size(x <= nd_ ? prelude[dyn_slots[x]] : rhs_list[x - nd_][2])
+    sizes = Int[size_of(x) for x in 1:N]
+    comp_nodes = Dict{Int, Int}()
+    comp_bad = Set{Int}()
+    for x in 1:N
+        r = find(x)
+        comp_nodes[r] = get(comp_nodes, r, 0) + sizes[x]
+        bad[x] && push!(comp_bad, r)
+    end
+    for x in 1:nd_
+        cuts || break
+        r = find(x)
+        (sizes[x] >= _SC_CUT_SLOT_NODES && comp_nodes[r] >= _SC_CUT_UNIT_NODES && !(r in comp_bad)) &&
+            (cutpt[x] = true)
+    end
+    if any(cutpt)
+        parent .= 1:N
+        for x in 1:N, j in rd[x]
+            cutpt[j] || unite(x, j)
+        end
+        # Join the units on a cycle of cut reads (Tarjan over the unit graph).
+        while true
+            roots = unique!(Int[find(x) for x in 1:N])
+            idx = Dict{Int, Int}(r => i for (i, r) in enumerate(roots))
+            nU = length(roots)
+            succ = [Set{Int}() for _ in 1:nU]
+            for x in 1:N, j in rd[x]
+                cutpt[j] || continue
+                a, b = idx[find(x)], idx[find(j)]
+                a == b || push!(succ[a], b)
+            end
+            comp = _sc_scc(succ)
+            merged = false
+            for grp in values(comp)
+                length(grp) > 1 || continue
+                for g in grp
+                    unite(roots[grp[1]], roots[g])
+                end
+                merged = true
+            end
+            merged || break
         end
     end
     roots = Dict{Int, Int}()
     units = _ScUnit[]
     badroot = Set{Int}()
-    for x in 1:(nd_ + n_rhs)
+    for x in 1:N
         bad[x] && push!(badroot, find(x))
     end
-    for x in 1:(nd_ + n_rhs)
+    for x in 1:N
         r = find(x)
         u = get(roots, r, 0)
         if u == 0
@@ -162,20 +227,93 @@ function _sc_dynamic_units(
         end
         x <= nd_ ? push!(units[u].slots, dyn_slots[x]) : push!(units[u].outs, x - nd_)
     end
+    # Levels: a unit reading a cut slot of another runs after it. The unit graph
+    # is acyclic here, so a longest-path walk in topological order settles it.
+    lvl = ones(Int, length(units))
+    cut = Set{Int}()
+    if any(cutpt)
+        succ = [Set{Int}() for _ in 1:length(units)]   # producer -> readers
+        indeg = zeros(Int, length(units))
+        for x in 1:N, j in rd[x]
+            cutpt[j] || continue
+            a, b = roots[find(j)], roots[find(x)]
+            a == b && continue
+            if !(b in succ[a])
+                push!(succ[a], b); indeg[b] += 1
+            end
+            push!(cut, dyn_slots[j])
+        end
+        q = Int[u for u in eachindex(units) if indeg[u] == 0]
+        while !isempty(q)
+            a = pop!(q)
+            for b in succ[a]
+                lvl[b] = max(lvl[b], lvl[a] + 1)
+                indeg[b] -= 1
+                indeg[b] == 0 && push!(q, b)
+            end
+        end
+    end
     good = _ScUnit[]
+    goodlvl = Int[]
     resid = _ScUnit[]
     for (r, u) in roots
         U = units[u]
         sort!(U.slots); sort!(U.outs)
-        push!(r in badroot ? resid : good, U)
+        if r in badroot
+            push!(resid, U)
+        else
+            push!(good, U); push!(goodlvl, lvl[u])
+        end
     end
-    # Deterministic order: by the unit's first equation, then its first slot.
+    # Deterministic order: by level, then the unit's first equation, then its
+    # first slot.
     key(U) = (
         isempty(U.outs) ? typemax(Int) : U.outs[1],
         isempty(U.slots) ? typemax(Int) : U.slots[1],
     )
-    sort!(good; by = key); sort!(resid; by = key)
-    return good, resid
+    perm = sortperm(collect(zip(goodlvl, map(key, good))))
+    sort!(resid; by = key)
+    return good[perm], resid, goodlvl[perm], cut
+end
+
+# Strongly connected components of a graph given by successor sets over
+# `1:n` (Tarjan, iterative): component id -> its vertices.
+function _sc_scc(succ::Vector{Set{Int}})
+    n = length(succ)
+    index = zeros(Int, n); low = zeros(Int, n); onst = falses(n)
+    st = Int[]; out = Dict{Int, Vector{Int}}()
+    counter = 0
+    for v0 in 1:n
+        index[v0] == 0 || continue
+        work = Tuple{Int, Vector{Int}, Int}[]
+        counter += 1; index[v0] = low[v0] = counter; push!(st, v0); onst[v0] = true
+        push!(work, (v0, collect(succ[v0]), 1))
+        while !isempty(work)
+            v, ws, i = work[end]
+            if i <= length(ws)
+                work[end] = (v, ws, i + 1)
+                w = ws[i]
+                if index[w] == 0
+                    counter += 1; index[w] = low[w] = counter; push!(st, w); onst[w] = true
+                    push!(work, (w, collect(succ[w]), 1))
+                elseif onst[w]
+                    low[v] = min(low[v], index[w])
+                end
+            else
+                pop!(work)
+                isempty(work) || (low[work[end][1]] = min(low[work[end][1]], low[v]))
+                if low[v] == index[v]
+                    grp = Int[]
+                    while true
+                        w = pop!(st); onst[w] = false; push!(grp, w)
+                        w == v && break
+                    end
+                    out[v] = grp
+                end
+            end
+        end
+    end
+    return out
 end
 
 # ---- Signatures ---------------------------------------------------------
@@ -201,16 +339,27 @@ mutable struct _ScSigCtx
     # Recording (the class representative only): node -> its hole number,
     # negative for a Float64 hole.
     rec::Union{Nothing, _NodeMap{Int}}
+    # Constant-array holes: a constant gather's array is a hole of its own,
+    # numbered in the unit by first sight of its contents (`oh`, `ohpos` by
+    # object, `ohkey` by contents), and only its SHAPE (`shapes`: strides,
+    # extents and boundary policies) is in the signature. The numbering puts
+    # which gathers read equal arrays in the signature too.
+    oh::Vector{Any}
+    ohpos::IdDict{Any, Int}
+    ohkey::Dict{Any, Int}
+    shapes::Dict{Any, Int}
 end
 _ScSigCtx(cache::_CSECache, syms, objs) =
     _ScSigCtx(
     cache, syms, objs, Int[], Int[], UInt8[], Float64[],
-    _NodeMap{Int}(), 0, Any[], Dict{Int, Int}(), nothing
+    _NodeMap{Int}(), 0, Any[], Dict{Int, Int}(), nothing,
+    Any[], IdDict{Any, Int}(), Dict{Any, Int}(), Dict{Any, Int}()
 )
 
 function _sc_reset!(S::_ScSigCtx)
     empty!(S.sig); empty!(S.ih); empty!(S.ikind); empty!(S.fh)
     empty!(S.memo); S.nvisit = 0; empty!(S.loops); empty!(S.localpos)
+    empty!(S.oh); empty!(S.ohpos); empty!(S.ohkey)
     return S
 end
 
@@ -269,7 +418,29 @@ function _sc_sig!(S::_ScSigCtx, nd::_Node)
     elseif k === _NK_PARAM_GATHER
         push!(sig, 8, _sc_obj(S, nd.payload))
         _sc_ihole!(S, nd.idx, _SCH_PGIDX, nd)
-    elseif k === _NK_CONST_GATHER || k === _NK_STATE_GATHER || k === _NK_LIVE_GATHER
+    elseif k === _NK_CONST_GATHER
+        # The array is a hole; its shape, which the emitted read bakes in, is
+        # signature.
+        cg = nd.payload::_ConstGatherArray
+        shp = get!(S.shapes, (cg.strides, cg.dims, cg.boundary), length(S.shapes) + 1)
+        o = get(S.ohpos, cg, 0)
+        if o == 0
+            # Arrays with equal contents (and name: the error a read past the
+            # array raises names it) are one hole, as the repeated-sub-tree
+            # keys take them (`_cg_share_pay!`).
+            ck = (reinterpret(UInt64, cg.flat), cg.strides, cg.dims, cg.boundary, cg.name)
+            o = get(S.ohkey, ck, 0)
+            if o == 0
+                push!(S.oh, cg)
+                o = S.ohkey[ck] = length(S.oh)
+            end
+            S.ohpos[cg] = o
+        end
+        push!(sig, Int(k), shp, o, length(nd.children))
+        for c in nd.children
+            _sc_sig!(S, c)
+        end
+    elseif k === _NK_STATE_GATHER || k === _NK_LIVE_GATHER
         # The payload carries the strides and bounds the emitted read bakes in,
         # so it is part of the signature by identity.
         push!(sig, Int(k), _sc_obj(S, nd.payload), length(nd.children))
@@ -324,6 +495,9 @@ mutable struct _ScClass
     ikind::Vector{UInt8}         # the int holes' kinds (one signature, one list)
     nodes::Int                   # emitted-node estimate of one member
     rec::Union{Nothing, _NodeMap{Int}}  # the representative's node -> hole (`_sc_emit_item!`)
+    oh::Vector{Any}              # members' constant-array holes, member-major
+    noh::Int
+    orec::Union{Nothing, IdDict{Any, Int}}  # the representative's array -> hole
 end
 
 _sc_unit_nodes(U::_ScUnit, rhs_list, prelude) =
@@ -355,7 +529,8 @@ function _sc_classes(
                 classes, _ScClass(
                     ui, Int[], Int[], Float64[], length(S.ih),
                     length(S.fh), copy(S.ikind),
-                    _sc_unit_nodes(U, rhs_list, prelude), nothing
+                    _sc_unit_nodes(U, rhs_list, prelude), nothing,
+                    Any[], length(S.oh), nothing
                 )
             )
             ci = byclass[(level[ui], copy(S.sig))] = length(classes)
@@ -364,6 +539,7 @@ function _sc_classes(
         push!(C.members, ui)
         append!(C.ih, S.ih)
         append!(C.fh, S.fh)
+        append!(C.oh, S.oh)
     end
     return classes, declined
 end
@@ -378,6 +554,36 @@ struct _CGUnitCtx
     locals::Dict{Int, Any}            # slot -> expression of its value
     loops::IdDict{Any, Symbol}
     share::_CGShareKeys
+    # A constant array that differs between members: the representative's
+    # array -> the local holding the member's, and -> its table column (the
+    # members' arrays, `ocols`). `member` is the member counter's local.
+    objs::IdDict{Any, Symbol}
+    ocolid::IdDict{Any, Int}
+    ocols::IdDict{Any, Vector{_ConstGatherArray}}
+    member::Symbol
+end
+_CGUnitCtx(holes, locals, loops, share) = _CGUnitCtx(
+    holes, locals, loops, share, IdDict{Any, Symbol}(), IdDict{Any, Int}(),
+    IdDict{Any, Vector{_ConstGatherArray}}(), :_cgnomember
+)
+
+# The member's array where it differs between members.
+_cg_cga(ctx::_CGCtx, kc::_CGUnitCtx, cg) =
+    (v = get(kc.objs, cg, nothing); v === nothing ? _cg_tab!(ctx, cg) : v)
+
+# The counted axis of each member, when the array differs between members.
+function _cg_count_axis(ctx::_CGCtx, kc::_CGUnitCtx, a::_Node, spec::_ContractLoop)
+    col = a.kind === _NK_CONST_GATHER ? get(kc.ocols, a.payload, nothing) : nothing
+    col === nothing && return _cg_count_axis(ctx, nothing, a, spec)
+    axes = Vector{Vector{Float64}}(undef, length(col))
+    asc = true
+    for (m, cg) in enumerate(col)
+        f = _count_const_axis(a, spec, cg)
+        f === nothing && return nothing
+        axes[m] = f[1]
+        asc &= f[2]
+    end
+    return (:($(_cg_tab!(ctx, axes))[$(kc.member)]), asc)
 end
 
 _cg_boxaddr(::_CGCtx, ::_CGUnitCtx, ::Int, ::Int, ::Int, ::Int, ::Vector{Int}, key) =
@@ -399,6 +605,10 @@ function _cg_share_leaf(K::_CGShareKeys, kc::_CGUnitCtx, nd::_Node)
         h = get(kc.holes, nd, nothing)
         h === nothing && return nothing
         return (_cg_share_obj!(K, nd.payload), h)
+    elseif k === _NK_CONST_GATHER
+        # A member's own array: the same only where it is the same column.
+        c = get(kc.ocolid, nd.payload, 0)
+        c == 0 || return (:ocol, c)
     end
     return _cg_share_inner(K, nd)
 end
@@ -517,6 +727,9 @@ struct _ScLayout
     fcol::Vector{Int}
     nfcol::Int
     ftab::Vector{Float64}
+    obake::Vector{Bool}
+    ocol::Vector{Int}
+    otab::Vector{Vector{_ConstGatherArray}}   # per varying column, the members' arrays
 end
 
 # A slot's own cache index is read only when the slot is stored: in cache mode,
@@ -569,7 +782,28 @@ function _sc_layout(C::_ScClass, cachemode::Bool, alwaysstore::Bool, ext::Set{In
     for (c, col) in fvals, m in 1:M
         ftab[(m - 1) * nfcol + c] = col[m]
     end
-    return _ScLayout(ibake, icol, nicol, itab, fbake, fcol, nfcol, ftab)
+    no = C.noh
+    obake = fill(true, no); ocol = zeros(Int, no)
+    otab = Vector{_ConstGatherArray}[]
+    for h in 1:no
+        o1 = C.oh[h]
+        col = Vector{_ConstGatherArray}(undef, M)
+        same = true
+        for m in 1:M
+            o = C.oh[(m - 1) * no + h]
+            col[m] = o
+            same &= o === o1
+        end
+        same && continue
+        obake[h] = false
+        c = findfirst(t -> all(m -> t[m] === col[m], 1:M), otab)
+        if c === nothing
+            push!(otab, col)
+            c = length(otab)
+        end
+        ocol[h] = c
+    end
+    return _ScLayout(ibake, icol, nicol, itab, fbake, fcol, nfcol, ftab, obake, ocol, otab)
 end
 
 # Emit one item: a `let` block looping over this chunk's share of the class's
@@ -585,6 +819,7 @@ function _sc_emit_item!(
         S.rec = _NodeMap{Int}()
         _sc_unit_sig!(S, U, rhs_list, prelude, ext)
         C.rec = S.rec
+        C.orec = copy(S.ohpos)
         S.rec = nothing
     end
     rec = C.rec
@@ -630,7 +865,28 @@ function _sc_emit_item!(
     recorded = Set(values(rec))
     stmt_hole = Int[h for h in 1:C.nih if !(h in recorded)]
     ns = length(U.slots)
-    kc = _CGUnitCtx(holes, Dict{Int, Any}(), IdDict{Any, Symbol}(), _CGShareKeys())
+    kc = _CGUnitCtx(
+        holes, Dict{Int, Any}(), IdDict{Any, Symbol}(), _CGShareKeys(),
+        IdDict{Any, Symbol}(), IdDict{Any, Int}(), IdDict{Any, Vector{_ConstGatherArray}}(), jv
+    )
+    # The member's own constant arrays, one local per varying column.
+    ocolv = Symbol[]
+    obinds = Any[]
+    ohdr = Any[]
+    for c in eachindex(L.otab)
+        tv = _cg_name(ctx, "ot")
+        cv = _cg_name(ctx, "oc")
+        push!(ocolv, cv)
+        push!(obinds, :(local $tv = $(_cg_tab!(ctx, L.otab[c]))))
+        push!(ohdr, :(local $cv = $tv[$jv]))
+    end
+    for (obj, h) in C.orec::IdDict{Any, Int}
+        L.obake[h] && continue
+        c = L.ocol[h]
+        kc.objs[obj] = ocolv[c]
+        kc.ocolid[obj] = c
+        kc.ocols[obj] = L.otab[c]
+    end
     for i in 1:ns
         s = U.slots[i]
         h = stmt_hole[i]
@@ -666,10 +922,12 @@ function _sc_emit_item!(
     hdr = Any[]
     L.nicol > 0 && push!(hdr, :(local $bv = ($jv - 1) * $(L.nicol)))
     L.nfcol > 0 && push!(hdr, :(local $bfv = ($jv - 1) * $(L.nfcol)))
+    append!(hdr, ohdr)
     av = _cg_name(ctx, "a"); ev = _cg_name(ctx, "e"); abv = _cg_name(ctx, "ab")
     binds = Any[]
     L.nicol > 0 && push!(binds, :(local $itv = $(_cg_tab!(ctx, L.itab))))
     L.nfcol > 0 && push!(binds, :(local $ftv = $(_cg_tab!(ctx, L.ftab))))
+    append!(binds, obinds)
     mexpr = M == 1 ? 1 : _cg_geo!(ctx, M)
     return quote
         let
@@ -1033,6 +1291,50 @@ function _sc_tier_program(slots::AbstractVector{Int}, prelude, cache::_CSECache)
     return prog
 end
 
+# The dynamic program over units in level order: one program per level, run
+# in order, so that a chunked (threaded) call finishes a level before the next
+# one reads what it stored.
+struct _ScalarLevels{P}
+    progs::P
+end
+@inline _run_sclevels!(::Tuple{}, du, u, p, t, cache, ::Type{T}) where {T} = nothing
+@inline function _run_sclevels!(ps::Tuple, du, u, p, t, cache, ::Type{T}) where {T}
+    ps[1](du, u, p, t, cache, T)
+    return _run_sclevels!(Base.tail(ps), du, u, p, t, cache, T)
+end
+@inline (sl::_ScalarLevels)(du, u, p, t, cache, ::Type{T}) where {T} =
+    _run_sclevels!(sl.progs, du, u, p, t, cache, T)
+
+# Emit the dynamic units (`level` nondecreasing). Returns the program, the
+# emitted and the declined unit positions, as `_sc_program`.
+function _sc_dyn_program(good::Vector{_ScUnit}, level::Vector{Int}, rhs_list, prelude, cache, ext::Set{Int})
+    if isempty(level) || level[end] == 1
+        return _sc_program(
+            good, level, rhs_list, prelude, cache, ext;
+            alwaysstore = false, threaded = true
+        )
+    end
+    progs = Any[]
+    emitted = Int[]
+    resid = Int[]
+    a = 1
+    while a <= length(good)
+        b = a
+        while b < length(good) && level[b + 1] == level[a]
+            b += 1
+        end
+        prog, em, rs = _sc_program(
+            good[a:b], level[a:b], rhs_list, prelude, cache, ext;
+            alwaysstore = false, threaded = true
+        )
+        push!(progs, prog)
+        append!(emitted, em .+ (a - 1))
+        append!(resid, rs .+ (a - 1))
+        a = b + 1
+    end
+    return _ScalarLevels(Tuple(progs)), emitted, resid
+end
+
 # Build the scalar section. The first `n_rhs` entries of `rhs_list` are the
 # scalar equations; any after them (the forced per-cell reference) stay walked.
 # Returns `nothing` when the tier is off.
@@ -1053,11 +1355,14 @@ function _build_scalar_section(
     for K in acc_kernels
         _sc_kernel_reads!(ext, K, cache, seen)
     end
-    good, bad = _sc_dynamic_units(rhs_list, n_rhs, prelude, cache, dyn_slots)
-    dynp, emitted, resid = _sc_program(
-        good, ones(Int, length(good)), rhs_list, prelude,
-        cache, ext; alwaysstore = false, threaded = true
-    )
+    good, bad, level, cut = _sc_dynamic_units(rhs_list, n_rhs, prelude, cache, dyn_slots)
+    dynp, emitted, resid = _sc_dyn_program(good, level, rhs_list, prelude, cache, union(ext, cut))
+    if !isempty(cut) && !isempty(resid)
+        # A unit left on the walker runs after every emitted one, so no emitted
+        # unit may read it: emit the uncut units instead.
+        good, bad, level, cut = _sc_dynamic_units(rhs_list, n_rhs, prelude, cache, dyn_slots; cuts = false)
+        dynp, emitted, resid = _sc_dyn_program(good, level, rhs_list, prelude, cache, ext)
+    end
     resid_units = vcat(bad, good[resid])
     resid_dyn = sort!(reduce(vcat, (U.slots for U in resid_units); init = Int[]))
     resid_pos = sort!(reduce(vcat, (U.outs for U in resid_units); init = Int[]))
