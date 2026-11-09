@@ -619,35 +619,6 @@ fn join_names(expr: &Expr, out: &mut HashSet<String>) {
     }
 }
 
-/// Every string in `expr`'s serialized form, map keys included: a superset of
-/// the names its evaluation can read, whichever field of a node carries them.
-fn named_strings(expr: &Expr) -> HashSet<String> {
-    fn walk(v: &JsonValue, out: &mut HashSet<String>) {
-        match v {
-            JsonValue::String(s) => {
-                out.insert(s.clone());
-            }
-            JsonValue::Array(a) => a.iter().for_each(|x| walk(x, out)),
-            JsonValue::Object(m) => {
-                for (k, x) in m {
-                    out.insert(k.clone());
-                    walk(x, out);
-                }
-            }
-            _ => {}
-        }
-    }
-    let mut out = HashSet::new();
-    // Serializing an in-memory expression cannot fail; should it ever, the
-    // typed walks below still see every reference the evaluator resolves.
-    if let Ok(v) = serde_json::to_value(expr) {
-        walk(&v, &mut out);
-    }
-    declared_args(expr, &mut out);
-    join_names(expr, &mut out);
-    out
-}
-
 /// The observeds whose definitions read a state, directly or through another
 /// observed.
 ///
@@ -2774,28 +2745,25 @@ impl<'o> BuildState<'o> {
             Spelling::ModelLocal(m) => Some(format!("{m}.")),
             Spelling::Qualified => None,
         };
-        let addresses = |key: &str, name: &str| {
-            key == name
-                || prefix
-                    .as_deref()
-                    .and_then(|p| name.strip_prefix(p))
-                    .is_some_and(|rest| rest == key)
-                || (!name.contains('.') && key.rsplit('.').next() == Some(name))
-        };
-        let mut cone: HashSet<String> = self
+        let reads: HashMap<&str, HashSet<String>> = self
+            .defs
+            .iter()
+            .map(|(n, e)| (n.as_str(), crate::observed_cone::named_strings(e)))
+            .collect();
+        let seeds = self
             .defs
             .keys()
-            .filter(|k| requested.iter().any(|n| addresses(k, n)))
-            .cloned()
-            .collect();
-        let mut frontier: Vec<String> = cone.iter().cloned().collect();
-        while let Some(name) = frontier.pop() {
-            for read in named_strings(&self.defs[&name]) {
-                if self.defs.contains_key(&read) && cone.insert(read.clone()) {
-                    frontier.push(read);
-                }
-            }
-        }
+            .filter(|k| {
+                requested
+                    .iter()
+                    .any(|n| crate::observed_cone::addresses(k, n, prefix.as_deref()))
+            })
+            .cloned();
+        let cone = crate::observed_cone::closure(
+            seeds,
+            |n| self.defs.contains_key(n),
+            |n| reads.get(n),
+        );
         let before = self.order.len();
         self.order.retain(|n| cone.contains(n) || self.fields.contains_key(n));
         self.log(&format!(

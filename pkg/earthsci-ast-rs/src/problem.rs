@@ -686,12 +686,18 @@ pub struct ProblemOptions {
     /// to the unpruned build's, and [`observed_field`] answers for nothing
     /// outside it.
     ///
+    /// Without the build pipeline, the state-free evaluation of a document
+    /// with nothing to integrate is narrowed the same way: its flattened
+    /// system is compiled with only the cone's observed equations, after the
+    /// whole document has passed the build's gates.
+    ///
     /// What sizes the build is NOT pruned: the build-time coordinates value
     /// invention seeds from, value invention itself (every derived index set
     /// and its extent), member-factor feedback, data ingestion and the gated
-    /// fetch all run as they do without this option. Nor is a model with
-    /// state, nor the state-free evaluation of a document the pipeline does
-    /// not run for (see [`Self::build_pipeline`]).
+    /// fetch all run as they do without this option, and an observed an index
+    /// set, an event or an initial condition names is always in the cone. Nor
+    /// is anything pruned in a model with state: its build-time fields feed a
+    /// right-hand side.
     ///
     /// `esm simulate --observed` sets this, so a relational document's run
     /// costs what the requested columns cost rather than what the document
@@ -2341,6 +2347,7 @@ pub fn esm_problem<'a>(
             model_name.as_deref(),
             compiler,
             opts.rewrites,
+            opts.observed_cone.as_deref(),
         )?;
         build.fields = fields;
         build.static_eval_error = eval_error;
@@ -2820,6 +2827,7 @@ fn static_observed_fields(
     model_name: Option<&str>,
     compiler: Compiler,
     rewrites: CompilerRewrites,
+    cone: Option<&[String]>,
 ) -> Result<
     (
         HashMap<String, ArrayD<f64>>,
@@ -2885,6 +2893,19 @@ fn static_observed_fields(
         crate::simulate_array::check_free_variables(model, &index_sets, &[])
             .map_err(SimulateError::Compile)?;
     }
+    // `ProblemOptions::observed_cone`: compile and evaluate only what the
+    // requested fields read. After every whole-document gate above, so a
+    // document is refused for the same reasons with or without a request.
+    let pruned;
+    let flat = match cone {
+        Some(requested) => {
+            let mut f = flat.clone();
+            crate::observed_cone::prune_flattened(&mut f, requested);
+            pruned = f;
+            &pruned
+        }
+        None => flat,
+    };
     // The same gates the array route runs — the evaluable-core operator gate
     // (esm-spec §9.6.3 constraint 6), events, operator arity — fire here too:
     // a state-free document is evaluated, so it is built.

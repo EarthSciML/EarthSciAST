@@ -110,6 +110,7 @@ pub(crate) mod inline_test_checks;
 pub mod intern;
 pub(crate) mod join;
 pub(crate) mod json_visit;
+pub(crate) mod observed_cone;
 pub(crate) mod load_checks;
 pub(crate) mod lower_enums;
 pub(crate) mod lower_expression_templates;
