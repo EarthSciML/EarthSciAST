@@ -726,7 +726,7 @@
       "class": "semantic",
       "phase": 3,
       "area": "arrays",
-      "note": "A faq expr/filter reading a non-empty-shape variable by bare name in an elementwise position is rejected with faq_bare_array_operand by validate() and at build after template expansion."
+      "note": "A faq expr/filter reading a non-empty-shape variable by bare name in an elementwise position is rejected with faq_bare_array_operand by validate() (authored form, subsystems included, template applications opaque) and at build on the flattened, template-expanded system; a derivative LHS exempts nothing."
     },
     {
       "id": "conf.5.6.4.no-undefined-index-set-without-registry",
