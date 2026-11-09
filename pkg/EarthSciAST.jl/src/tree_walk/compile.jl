@@ -1323,8 +1323,21 @@ end
 struct _CSEKeyMemos
     canon::IdDict{OpExpr, Any}   # ASTExpr result or CanonicalizeError
     key::IdDict{OpExpr, Any}     # String or nothing
+    json::IdDict{OpExpr, String} # canonical node => its `_emit_json`
 end
-_CSEKeyMemos() = _CSEKeyMemos(IdDict{OpExpr, Any}(), IdDict{OpExpr, Any}())
+_CSEKeyMemos() = _CSEKeyMemos(IdDict{OpExpr, Any}(), IdDict{OpExpr, Any}(), IdDict{OpExpr, String}())
+
+# `_emit_json` memoized by canonical node: the emission is compositional, so a
+# node's bytes are its children's bytes spliced, and each canonical node (shared
+# by `_canonicalize_memo` across every key that contains it) is emitted once.
+function _emit_json_memo(e::ASTExpr, memo::IdDict{OpExpr, String})
+    e isa OpExpr || return _emit_json(e)
+    v = get(memo, e, nothing)
+    v === nothing || return v
+    r = _emit_node_json(e, a -> _emit_json_memo(a, memo))
+    memo[e] = r
+    return r
+end
 
 # Identity-memoized `canonicalize`: drives the recursion over unique nodes
 # only, delegating the per-node work to `_canonicalize_shallow`
@@ -1370,7 +1383,7 @@ function _cse_key(
         # canonical NODE can be inspected before it is flattened to bytes.
         canon = _canonicalize_memo(keyed, memos.canon)
         # Fail-close on a non-value-preserving collapse to a literal.
-        (canon isa NumExpr || canon isa IntExpr) ? nothing : _emit_json(canon)
+        (canon isa NumExpr || canon isa IntExpr) ? nothing : _emit_json_memo(canon, memos.json)
     catch err
         err isa CanonicalizeError || rethrow()
         nothing

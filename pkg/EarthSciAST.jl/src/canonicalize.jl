@@ -369,7 +369,10 @@ const _NON_EMISSIBLE_FIELDS = Tuple(
     )
 )
 
-function _emit_node_json(n::OpExpr)::String
+_emit_node_json(n::OpExpr)::String = _emit_node_json(n, _emit_json)
+
+# `emit` emits each argument: `_emit_json`, or a memoized twin of it.
+function _emit_node_json(n::OpExpr, emit::F)::String where {F}
     offending = String[]
     for f in _NON_EMISSIBLE_FIELDS
         getfield(n, f) === nothing || push!(offending, String(f))
@@ -386,7 +389,7 @@ function _emit_node_json(n::OpExpr)::String
     end
     entries = Tuple{String, String}[]
     push!(entries, ("op", _json_string(n.op)))
-    args_str = "[" * join((_emit_json(a) for a in n.args), ",") * "]"
+    args_str = "[" * join((emit(a) for a in n.args), ",") * "]"
     push!(entries, ("args", args_str))
     if n.wrt !== nothing
         push!(entries, ("wrt", _json_string(n.wrt::String)))
