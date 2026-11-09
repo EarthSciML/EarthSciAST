@@ -1398,8 +1398,28 @@ mod tests {
             wide,
             SmallVec::from_slice(&[7, 1]),
         ));
-        for (shape, segs, strides) in cases {
+        // Whole-box covers: a broadcast axis (stride 0) over a fixed slice of
+        // a wider source (the `base` offset), and a plain permuted read.
+        let full = |n: usize| -> SmallVec<[(usize, usize, usize); 2]> {
+            SmallVec::from_slice(&[(0, n, 0)])
+        };
+        let mut bc: Segs = SmallVec::new();
+        bc.push(full(5));
+        bc.push(full(3));
+        bc.push(full(4));
+        cases.push((
+            SmallVec::from_slice(&[5, 3, 4]),
+            bc.clone(),
+            SmallVec::from_slice(&[8, 2, 0]),
+        ));
+        cases.push((
+            SmallVec::from_slice(&[5, 3, 4]),
+            bc,
+            SmallVec::from_slice(&[1, 20, 5]),
+        ));
+        for (i, (shape, segs, strides)) in cases.into_iter().enumerate() {
             let g = ChunkGather {
+                base: (i % 3) as i64,
                 segs,
                 strides,
                 shape: shape.clone(),

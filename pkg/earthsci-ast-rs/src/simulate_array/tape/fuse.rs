@@ -703,7 +703,7 @@ enum GatherFold {
     /// at once, so the program does not depend on the box's extents. Holds
     /// the source stride of each output axis: a broadcast (an output axis the
     /// source lacks) reads that axis with stride 0, the other axes in order.
-    Chunk(SmallVec<[i64; 4]>),
+    Chunk(SmallVec<[i64; 4]>, i64),
 }
 
 /// How fusion absorbs a gather of `plan` into a box of `out_shape`, or
@@ -728,14 +728,12 @@ fn gather_fold(plan: &GatherPlan, out_shape: &[usize]) -> Option<GatherFold> {
         return Some(GatherFold::Shifted(g));
     }
     if foldable_plan(plan) {
-        Some(GatherFold::Chunk(rm_strides(&plan.src_shape)))
-    } else if plan.fixed_desc.is_empty() {
+        Some(GatherFold::Chunk(rm_strides(&plan.src_shape), 0))
+    } else {
         match broadcast_fold(plan) {
-            Some(ShiftedGeom::Segs { strides, .. }) => Some(GatherFold::Chunk(strides)),
+            Some(ShiftedGeom::Segs { strides, base, .. }) => Some(GatherFold::Chunk(strides, base)),
             _ => None,
         }
-    } else {
-        None
     }
 }
 
@@ -2849,7 +2847,7 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
                 i += 1;
                 continue;
             }
-            if let Some(GatherFold::Chunk(strides)) = fold {
+            if let Some(GatherFold::Chunk(strides, base)) = fold {
                 flush_hazards(ins, None, &mut open, fx);
                 let shape = out_desc.shape.clone();
                 let gi = find_or_open(&mut open, shape, prog.provenance[i], prec_at(prog, i), fx);
@@ -2867,6 +2865,7 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
                         .shape
                         .last()
                         .is_none_or(|&l| l < MIN_CHUNK_GATHER_ROW),
+                    base,
                 };
                 open[gi].add_chunk_gather(i as u32, *src, g, &plan_ref.src_shape, *out);
                 i += 1;
