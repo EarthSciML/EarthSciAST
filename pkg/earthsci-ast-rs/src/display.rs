@@ -328,33 +328,33 @@ fn format_display_float(n: f64) -> FloatParts {
         return FloatParts::Plain("0".to_string());
     }
 
-    let abs_n = n.abs();
-    let (digits, exp) = crate::canonicalize::shortest_digits(n);
-    let sign = if n < 0.0 { "-" } else { "" };
-    if !(SCI_NOTATION_MIN..SCI_NOTATION_MAX).contains(&abs_n) {
+    if (SCI_NOTATION_MIN..SCI_NOTATION_MAX).contains(&n.abs()) && n.fract() == 0.0 {
+        // Integers in normal range display without a decimal point.
+        return FloatParts::Plain(format!("{}", n as i64));
+    }
+
+    let d = crate::canonicalize::shortest_digits(n);
+    let mut out = String::with_capacity(24);
+    if n < 0.0 {
+        out.push('-');
+    }
+    if !(SCI_NOTATION_MIN..SCI_NOTATION_MAX).contains(&n.abs()) {
         // The shortest round-tripping mantissa with no precision loss (e.g.
         // 0.009999 -> "9.999e-3"), always with a fraction digit ("1" ->
         // "1.0"), and an exponent with no leading `+`, matching the normative
         // number-formatting contract. A decimal tie takes the even digit, as
         // every other binding does (see `shortest_digits`).
-        let frac = digits.get(1..).filter(|f| !f.is_empty()).unwrap_or("0");
+        crate::canonicalize::push_mantissa(&mut out, d.as_str(), true);
         return FloatParts::Scientific {
-            mantissa: format!("{sign}{}.{frac}", &digits[..1]),
-            exponent: exp.to_string(),
+            mantissa: out,
+            exponent: d.exp.to_string(),
         };
-    }
-
-    // Integers in normal range display without a decimal point.
-    if n.fract() == 0.0 {
-        return FloatParts::Plain(format!("{}", n as i64));
     }
 
     // In-range fractional value: the same shortest round-tripping digits,
     // positionally.
-    FloatParts::Plain(format!(
-        "{sign}{}",
-        crate::canonicalize::positional(&digits, exp)
-    ))
+    crate::canonicalize::push_positional(&mut out, d.as_str(), d.exp, true);
+    FloatParts::Plain(out)
 }
 
 /// Replace a leading ASCII hyphen with the Unicode U+2212 MINUS SIGN (used by

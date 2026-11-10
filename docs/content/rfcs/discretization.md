@@ -738,9 +738,11 @@ Additional rules specific to this RFC:
   shortest candidates that both parse back to it (`705129328097.90625`,
   between `705129328097.9062` and `705129328097.9063`), the one with the
   even last digit is emitted (`705129328097.9062`), as ECMAScript
-  `Number::toString` and Ryu specify; a writer that takes the digits from
-  Rust's `{:e}` / `Display` must correct this (they pick the upper
-  candidate). Fixture: `tests/conformance/canonical/float_ties.json`.
+  `Number::toString` and Ryu specify. When the even candidate does not
+  parse back to the same double — at a power of two, where the rounding
+  interval below is half as wide as the one above (`2^-24` is written
+  `5.960464477539063e-8`, not `…062e-8`) — the other candidate is emitted.
+  Fixture: `tests/conformance/canonical/float_ties.json`.
 - **Exponent form.** For magnitudes `|x| < 1e-6` or `|x| ≥ 1e21`, use
   exponent notation with lowercase `e` and no leading `+` on the
   exponent: `1e-7`, `3.14e25`, `-5e-300`. For magnitudes inside
