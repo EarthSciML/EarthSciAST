@@ -179,19 +179,19 @@ class TestMigrate:
     def test_refuses_a_1x_file_that_uses_a_removed_op(self, baseline_file):
         """A 1.x document that uses `fn` (or any removed op) cannot be relabelled:
         `removed_op`, naming where and the codemod."""
-        from earthsci_ast.esm_types import Equation, ExprNode
+        from earthsci_ast.esm_types import ExprNode
 
         source = _at_version(baseline_file, "1.2.0")
-        model = next(iter(source.models.values()))
-        fn = ExprNode(op="fn", args=["t"])
-        model.equations.append(Equation(lhs="probe", rhs=fn))
+        reaction = next(iter(source.reaction_systems.values())).reactions[0]
+        rate = reaction.rate_constant
+        reaction.rate_constant = ExprNode(op="fn", args=["t"])
         try:
             with pytest.raises(MigrationError, match="python -m earthsci_ast.migrate") as e:
                 migrate(source, SCHEMA_VERSION)
             assert e.value.code == "removed_op"
             assert "`fn`" in str(e.value)
         finally:
-            model.equations.pop()
+            reaction.rate_constant = rate
         assert migrate(source, SCHEMA_VERSION).version == SCHEMA_VERSION
 
     def test_missing_version_field_raises(self, baseline_file):
