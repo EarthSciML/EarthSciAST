@@ -74,6 +74,7 @@ mod array_tests;
 mod closed_template_tests;
 #[cfg(test)]
 mod data_gather_tests;
+mod dedup;
 mod exec;
 #[cfg(test)]
 mod forcing_tests;
@@ -98,6 +99,8 @@ mod sink;
 mod tests;
 #[cfg(test)]
 mod tuple_tests;
+#[cfg(all(test, feature = "xla"))]
+mod xla_template_tests;
 // Phase 2: the XLA emitter over this IR (feature `xla`, OFF by default). Last
 // in the list because it is the only optional one.
 #[cfg(feature = "xla")]

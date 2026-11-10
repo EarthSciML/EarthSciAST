@@ -369,24 +369,14 @@ const _NON_EMISSIBLE_FIELDS = Tuple(
     )
 )
 
-function _emit_node_json(n::OpExpr)::String
-    offending = String[]
-    for f in _NON_EMISSIBLE_FIELDS
-        getfield(n, f) === nothing || push!(offending, String(f))
-    end
-    if !isempty(offending)
-        throw(
-            CanonicalizeError(
-                "E_CANONICAL_UNSUPPORTED_FIELD",
-                "op '$(n.op)' carries field(s) [$(join(offending, ", "))] outside " *
-                    "the canonical JSON node encoding (op/args/wrt/dim/fn/name/value/units); " *
-                    "emitting them would be lossy and non-portable (RFC §5.4.6)"
-            )
-        )
-    end
+_emit_node_json(n::OpExpr)::String = _emit_node_json(n, _emit_json)
+
+# `emit` emits each argument: `_emit_json`, or a memoized twin of it.
+function _emit_node_json(n::OpExpr, emit::F)::String where {F}
+    _check_emissible(n)
     entries = Tuple{String, String}[]
     push!(entries, ("op", _json_string(n.op)))
-    args_str = "[" * join((_emit_json(a) for a in n.args), ",") * "]"
+    args_str = "[" * join((emit(a) for a in n.args), ",") * "]"
     push!(entries, ("args", args_str))
     if n.wrt !== nothing
         push!(entries, ("wrt", _json_string(n.wrt::String)))
@@ -423,6 +413,26 @@ function _json_string(s::AbstractString)::String
     # Use JSON3 to escape, but JSON3.write returns a string with surrounding
     # quotes. Strip and re-quote to avoid newlines/etc.
     return JSON3.write(String(s))
+end
+
+# Raise for a node carrying a field the canonical JSON node encoding has no
+# place for.
+function _check_emissible(n::OpExpr)
+    offending = nothing
+    for f in _NON_EMISSIBLE_FIELDS
+        getfield(n, f) === nothing && continue
+        offending === nothing && (offending = String[])
+        push!(offending, String(f))
+    end
+    offending === nothing && return nothing
+    throw(
+        CanonicalizeError(
+            "E_CANONICAL_UNSUPPORTED_FIELD",
+            "op '$(n.op)' carries field(s) [$(join(offending, ", "))] outside " *
+                "the canonical JSON node encoding (op/args/wrt/dim/fn/name/value/units); " *
+                "emitting them would be lossy and non-portable (RFC §5.4.6)"
+        )
+    )
 end
 
 # Canonical JSON for `const`-op values. Values are JSON-typed (integer,

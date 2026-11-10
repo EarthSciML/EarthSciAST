@@ -1853,11 +1853,22 @@ const _INLINE_CONST_PREFIX = "__inline_const#"
 # single shared array object; it is skipped for the read-only empty sentinel.
 function _intern_inline_const(cexpr::OpExpr, const_arrays::AbstractDict)
     vals = _const_op_to_array(cexpr.value)
-    for (k, v) in const_arrays
-        (startswith(k, _INLINE_CONST_PREFIX) && _dynamic((a, b) -> size(a) == size(b) && a == b, v, vals)::Bool) &&
-            return v, k
-    end
+    same(v) = _dynamic((a, b) -> size(a) == size(b) && a == b, v, vals)::Bool
     name = string(_INLINE_CONST_PREFIX, hash(vals))
+    # Every interned literal is registered under its own content hash and no
+    # two registered ones are equal, so an equal literal is normally the one
+    # under `name`. Equality is `==`, under which a value equal to this one may
+    # hash differently only through a signed zero: then, or on a hash
+    # collision, the scan below decides.
+    v0 = get(const_arrays, name, nothing)
+    v0 !== nothing && same(v0) && return v0, name
+    v0 === nothing && !_dynamic(a -> any(iszero, a), vals)::Bool && return _intern_new_const(vals, name, const_arrays)
+    for (k, v) in const_arrays
+        (startswith(k, _INLINE_CONST_PREFIX) && same(v)) && return v, k
+    end
+    return _intern_new_const(vals, name, const_arrays)
+end
+function _intern_new_const(vals, name::String, const_arrays::AbstractDict)
     const_arrays === _EMPTY_CONST_ARRAYS || (const_arrays[name] = vals)
     return vals, name
 end
@@ -2220,7 +2231,9 @@ function _resolve_indices_op(
         # generic recurse and const-folds in `_compile` as before.
         if first_arg isa OpExpr && (first_arg::OpExpr).op == "const" &&
                 (first_arg::OpExpr).value isa AbstractVector
-            vals, cname = _intern_inline_const(first_arg::OpExpr, const_arrays)
+            vals, cname = memo === nothing ?
+                _intern_inline_const(first_arg::OpExpr, const_arrays) :
+                get!(() -> _intern_inline_const(first_arg::OpExpr, const_arrays), memo.inline, first_arg::OpExpr)
             return _resolve_const_array_gather(
                 vals, cname, expr.args[2:end],
                 array_var_info, var_map, const_arrays, pgather, memo, bound_syms

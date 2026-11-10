@@ -306,12 +306,17 @@ end
 # ranged narrow phase compiles even when NO `intersect_polygon` node survives.
 function _discover_geometry_vars(
         model::Model, equations::Vector{Equation},
-        param_arrays::AbstractDict, vi_vars
+        param_arrays::AbstractDict, vi_vars; index_sets = nothing
     )
     has_geometry = _model_has_intersect_polygon(model)
     has_pia = _model_has_polygon_intersection_area(model, equations)
-    has_setup_geometry = has_geometry || has_pia ||
-        _model_has_setup_join_reduction(equations)
+    has_geometry_seed = has_geometry || has_pia || _model_has_setup_join_reduction(equations)
+    pre_state_names = setdiff(Set{String}(solver_unknowns(model)), vi_vars)
+    has_setup_geometry = has_geometry_seed ||
+        _model_has_setup_const_reduction(
+        model, equations, index_sets,
+        union(pre_state_names, (String(k) for k in keys(param_arrays)))
+    )
     ring_vars = Set{String}()
     if has_geometry
         for eq in equations
@@ -325,12 +330,11 @@ function _discover_geometry_vars(
     defs = Dict{String, ASTExpr}()
     inline_vars = Set{String}()
     if has_setup_geometry
-        pre_state_names = setdiff(Set{String}(solver_unknowns(model)), vi_vars)
         live_param_names = Set{String}(String(k) for k in keys(param_arrays))
         setup_vars, defs, live_tainted =
             _geometry_setup_vars(
             model, equations, ring_vars,
-            pre_state_names, live_param_names
+            pre_state_names, live_param_names; index_sets = index_sets
         )
         # GEOMETRY-DERIVED restriction. `live_tainted` is a DOCUMENT-WIDE set:
         # every var transitively reading a live `param_arrays` buffer. The
@@ -357,11 +361,12 @@ function _discover_geometry_vars(
         # regrid's own outputs still qualify (they read `A_ij`), so the motivating
         # met→fire coupling edge is unchanged.
         geom_derived = Set{String}()
+        refmemo = Dict{String, Set{String}}()
         _saturate!() do
             changed = false
             for (name, rhs) in defs
                 name in geom_derived && continue
-                refs = _referenced_var_names(rhs)
+                refs = get!(() -> _referenced_var_names(rhs), refmemo, name)
                 if any(r -> r in setup_vars || r in ring_vars || r in geom_derived, refs)
                     push!(geom_derived, name); changed = true
                 end
@@ -369,9 +374,11 @@ function _discover_geometry_vars(
             changed
         end
         obs_here = Set{String}(observed_unknowns(model))
+        # Constant reduction tables alone (`_is_setup_const_reduction`) are
+        # not geometry: they inline no live reader.
         for (name, v) in model.variables
             (
-                name in obs_here && _is_array_shape(v.shape) &&
+                has_geometry_seed && name in obs_here && _is_array_shape(v.shape) &&
                     !(name in setup_vars) && !(name in ring_vars) &&
                     name in live_tainted && name in geom_derived && haskey(defs, name) &&
                     defs[name] isa OpExpr
@@ -3787,12 +3794,12 @@ end
 # A fill that reaches its OWN buffer through an inlined observed is an
 # observed cycle, and is refused here with the code the inlining build
 # (`_resolve_observed`) and `validate()` give it. It must be: a level's kernel
-# section runs in an alias scope that asserts no store to the buffers it fills
-# aliases a load (`_build_codegen_rhs`), and that level's writes are exactly its
-# own observeds, whose other reads all sit on strictly lower levels. A build
-# from a `Model` that skipped `validate()` would otherwise put a load of a slot
-# the same section stores into that scope, which is undefined, not merely
-# stale. The check is per observed and per name it reaches, never per cell.
+# section assumes no store to the buffers it fills aliases a load
+# (`_build_codegen_rhs`; its threaded chunks run concurrently), and that
+# level's writes are exactly its own observeds, whose other reads all sit on
+# strictly lower levels. A build from a `Model` that skipped `validate()` would
+# otherwise put a load of a slot the same section stores into one section,
+# which is a race between chunks, not merely stale. The check is per observed and per name it reaches, never per cell.
 #
 # The one self-edge that is not a cycle is a recurrence's DIRECT self-read
 # (esm-spec §4.3.1.1): its fill is an ordered sweep that reads only the cells it
@@ -4026,7 +4033,7 @@ function _build_lower_and_classify(
         model::Model;
         const_arrays::AbstractDict, param_arrays::AbstractDict,
         vi_vars, has_value_invention::Bool, materialize_out,
-        form::Symbol = :inplace
+        form::Symbol = :inplace, index_sets = nothing
     )
     # ---- Observed synthesis + equation pre-lowering ----
     # (see `_prepare_model_equations`: expression-defined observed synthesis,
@@ -4036,7 +4043,7 @@ function _build_lower_and_classify(
     # ---- Geometry variable discovery ----
     # (see `_discover_geometry_vars`: direct clip rings, build-once setup vars,
     # live-field inline vars, and the has_* gates)
-    geo = _discover_geometry_vars(model, equations, param_arrays, vi_vars)
+    geo = _discover_geometry_vars(model, equations, param_arrays, vi_vars; index_sets = index_sets)
     geom_inline_vars = geo.inline_vars
 
     # ---- Promoted array observeds (shape-promotion inlining) ----
@@ -5442,6 +5449,9 @@ function _build_evaluator_impl_inner(
         # decl). Supplied by the `EsmFile` front-door when the
         # document carries references; `nothing` everywhere else.
         _template_reg = nothing,
+        # Internal: the front door's expansion cache for `_template_reg`
+        # (`_ExpandCache`), or `nothing`.
+        _expand_cache = nothing,
         # Internal: the SELECTED MODEL's own name, threaded from
         # the `EsmFile` / `AbstractDict` front-doors. Used only
         # for the esm-spec §6.6.2 rule-2 namespace scope — a raw
@@ -5515,7 +5525,10 @@ function _build_evaluator_impl_inner(
     if _template_reg !== nothing
         model = _expansion_copy(model)
         sites = IdDict{OpExpr, OpExpr}()
-        _expand_model_refs!(model, _template_reg; sites = sites)
+        _expand_model_refs!(
+            model, _template_reg; sites = sites,
+            memo = something(_expand_cache, _ExpandCache())
+        )
         isempty(sites) || (_template_sites = sites)
     elseif _model_has_surviving_refs(model)
         # A surviving reference with no registry in reach would compile into an
@@ -5541,7 +5554,12 @@ function _build_evaluator_impl_inner(
     # ---- §9.6.3 constraint 6: walk every equation for an unlowered op ----
     # BEFORE any pass that drops a tree (the elementwise fold, dead-observed
     # elimination), so an op in a tree the build would discard is still refused.
-    _reject_unlowered_operators(model)
+    # The front door gated the same expansions: what it passed is not walked again.
+    if _expand_cache isa _ExpandCache
+        _reject_unlowered_operators(model, _expand_cache.gate_lhs, _expand_cache.gate_rhs)
+    else
+        _reject_unlowered_operators(model)
+    end
     # ---- esm-spec §6.3.1: an equation never defines a parameter ----
     _refuse_parameter_definitions(model.equations, model.variables)
     # ---- `broadcast` lowering (esm-spec §4.3.4; see `_lower_broadcast_model`) ----
@@ -5631,7 +5649,7 @@ function _build_evaluator_impl_inner(
         model;
         const_arrays = const_arrays, param_arrays = param_arrays, vi_vars = _vi_vars,
         has_value_invention = _has_value_invention, materialize_out = materialize_out,
-        form = form
+        form = form, index_sets = index_sets
     )
 
     # The build-time parameter-read sink: continued from the front door (which
@@ -6523,6 +6541,32 @@ function _faq_range_view(
     return view, whole
 end
 
+# An array-producing nested `faq` in elementwise position of an equation body
+# over the same output box — `D(q[f]) = faq_f(Σ_le w[e(f, le)]) - q[f]` — is a
+# whole array (it rebinds `f`, esm-spec §4.3.1 shadowing) that the body combines
+# with its other operands cell by cell, so each cell reads its element at that
+# cell, as the Rust binding's whole-array overlay, tape and per-cell oracle do.
+# Make that gather explicit, `index(faq_f(…), f) - q[f]`, so every tier below
+# resolves it through `_resolve_index_of_faq` instead of meeting a bare
+# producer. Only a node whose output indices are the equation's own, in order,
+# over the same ranges is gathered; any other is left as written.
+function _gather_nested_faqs_at_cell(
+        body::ASTExpr, idx_names::Vector{String}, ranges_dict
+    )::ASTExpr
+    isempty(idx_names) && return body
+    same_box(o::OpExpr) = begin
+        _is_faq_op(o.op) && _is_array_producer(o) || return false
+        _output_idx_strings(o) == idx_names || return false
+        r = _ranges_dict(o)
+        all(n -> haskey(r, n) && haskey(ranges_dict, n) && r[n] == ranges_dict[n], idx_names)
+    end
+    return _wrap_bare_array_refs(
+        body, Set{String}(), idx_names;
+        wrap_node = same_box,
+        stop_node = e -> _is_array_producer(e) || e.op in _SELF_INDEXED_OPS
+    )
+end
+
 function _compile_faq_equation!(
         percell_scalar, acc_kernels, scan_folds,
         array_contractions, covered::_Covered,
@@ -6562,7 +6606,7 @@ function _compile_faq_equation!(
     # which is the only case the gather form costs anything (it hides the
     # contraction from every tier below). See `_unwrap_identity_gather`.
     rhs_expr = _unwrap_identity_gather(eq.rhs, idx_names, ranges_dict)
-    rhs_body = _extract_faq_body(rhs_expr)
+    rhs_body = _gather_nested_faqs_at_cell(_extract_faq_body(rhs_expr), idx_names, ranges_dict)
 
     # Generalized einsum: detect contracted (reduction) indices in the RHS.
     # Contracted indices are keys in rhs.ranges that are NOT in output_idx.
@@ -8609,7 +8653,11 @@ function _build_evaluator_dict(
         _tmpl_reg = _component_template_reg(file, model_name)
         if _tmpl_reg !== nothing
             model = _expansion_copy(model)
-            _expand_model_refs!(model, _tmpl_reg)
+            # The impl expands the same model against the same registry: it
+            # takes this expansion's cache (`_ExpandCache`).
+            cache = _ExpandCache()
+            _expand_model_refs!(model, _tmpl_reg; memo = cache)
+            kwd[:_expand_cache] = cache
         end
     end
 
@@ -8617,7 +8665,14 @@ function _build_evaluator_dict(
     # The binning-coordinate derivation and value invention below evaluate
     # observed bodies before `_build_evaluator_impl` is reached, so the
     # rewrite-target walk runs here too, ahead of them.
-    model === nothing || _reject_unlowered_operators(model)
+    if model !== nothing
+        cache = get(kwd, :_expand_cache, nothing)
+        if cache isa _ExpandCache
+            _reject_unlowered_operators(model, cache.gate_lhs, cache.gate_rhs)
+        else
+            _reject_unlowered_operators(model)
+        end
+    end
 
     # ---- Caller-key canonicalization (esm-spec §6.6) ----
     # Rewrite the caller's LOCAL-named `parameter_overrides` onto this

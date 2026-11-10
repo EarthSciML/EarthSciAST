@@ -339,10 +339,99 @@ function _geo_compile_agg(expr::OpExpr, g::_GeoCompileCtx)::_Node
             "a nested `faq` reducing with '$(oplus)' has no setup-time geometry form"
         )
     )
+    if oplus == "+" && zero === 0.0 && length(slots) == 1 && gates === nothing && filt === nothing
+        cnt = _geo_count_node(body, slots[1], exts[1])
+        cnt === nothing || return cnt
+    end
     return _mknode(
         kind = _NK_OP, op = :geo_agg,
         payload = _GeoAggSpec(slots, exts, gates, filt, body, Symbol(oplus), zero)
     )
+end
+
+# ---- The indicator sum as a count, at setup ----
+# The setup sweep's form of `_cg_count_loop` (array_contraction.jl): a `+` fold
+# from +0.0 over one slot, no gate or filter, whose body is
+# `ifelse(a[k] REL x, 1, 0)` (or with the branch values swapped, or the
+# comparison mirrored) with `a` a 1-D constant array read at the slot itself
+# and `x` not reading it. Every term is 0.0 or 1.0 and every partial sum an
+# integer below 2^53, so the fold is the count of entries satisfying (or, with
+# the branches swapped, failing) the comparison, exactly, whatever the entries.
+# The entries over the range are copied once, NaNs set aside (a NaN satisfies
+# no comparison) and the rest sorted; ascending, the entries satisfying
+# `a <= x` / `a < x` are a prefix and those satisfying `a >= x` / `a > x` a
+# suffix (-0.0 and +0.0 compare equal, so their order among themselves does not
+# matter), and the count is a binary search with the comparison itself. A NaN
+# `x` satisfies nothing. `nothing` keeps the fold: another shape, an empty
+# range, or a range past the array's end (the fold raises there).
+struct _GeoCountSpec
+    sorted::Vector{Float64}   # the non-NaN entries over the range, ascending
+    n::Int                    # the range's length
+    rel::Symbol               # the comparison with the entry on the left
+    neg::Bool                 # count the entries where it fails
+end
+
+function _geo_count_node(body::_Node, slot::Int, ext::Int)
+    _compiler_plan_now().count_fold || return nothing
+    ext >= 1 || return nothing
+    (body.kind == _NK_OP && body.op === :ifelse && length(body.children) == 3) || return nothing
+    cond, yes, no = body.children
+    (yes.kind == _NK_LITERAL && no.kind == _NK_LITERAL) || return nothing
+    neg = if yes.literal === 1.0 && no.literal === 0.0
+        false
+    elseif yes.literal === 0.0 && no.literal === 1.0
+        true
+    else
+        return nothing
+    end
+    (cond.kind == _NK_OP && haskey(_COUNT_MIRROR, cond.op) && length(cond.children) == 2) ||
+        return nothing
+    l, r = cond.children
+    lk, rk = _geo_reads_slot(l, slot), _geo_reads_slot(r, slot)
+    lk == rk && return nothing
+    a, x, rel = lk ? (l, r, cond.op) : (r, l, _COUNT_MIRROR[cond.op])
+    (a.kind == _NK_OP && a.op === :geo_gather && length(a.children) == 1) || return nothing
+    k = a.children[1]
+    (k.kind == _NK_STATE && k.idx == slot) || return nothing
+    src = a.payload
+    (src isa Array{Float64, 1} && ext <= length(src)) || return nothing
+    sorted = Float64[src[i] for i in 1:ext if !isnan(src[i])]
+    sort!(sorted)
+    _tally_cascade!(:count_fold_setup)
+    return _mknode(
+        kind = _NK_OP, op = :geo_count, children = _Node[x],
+        payload = _GeoCountSpec(sorted, ext, rel, neg)
+    )
+end
+
+function _geo_reads_slot(n::_Node, slot::Int)
+    n.kind == _NK_STATE && return n.idx == slot
+    kids = n.kind == _NK_OP && n.op === :geo_agg ? _geo_cg_kids(n) : n.children
+    return _anyof(c -> _geo_reads_slot(c, slot), kids)
+end
+
+# The count, as the fold computes it.
+function _geo_count_value(sp::_GeoCountSpec, x::Float64)::Float64
+    t = sp.sorted
+    rel = sp.rel
+    lo, hi = 0, length(t)
+    if rel === :<= || rel === :<
+        # The largest m with t[m] rel x (0 when none): the prefix's length.
+        while lo < hi
+            m = (lo + hi + 1) >>> 1
+            (rel === :<= ? t[m] <= x : t[m] < x) ? (lo = m) : (hi = m - 1)
+        end
+        c = lo
+    else
+        # The smallest m with t[m] rel x (n + 1 when none): the suffix starts there.
+        lo, hi = 1, length(t) + 1
+        while lo < hi
+            m = (lo + hi) >>> 1
+            (rel === :>= ? t[m] >= x : t[m] > x) ? (hi = m) : (lo = m + 1)
+        end
+        c = length(t) + 1 - lo
+    end
+    return Float64(sp.neg ? sp.n - c : c)
 end
 
 # Resolve a node's `join` to slot-addressed gates: `_resolve_geo_join_gates`
@@ -539,8 +628,8 @@ mutable struct _GeoMemo
 end
 
 function _geo_memoize!(roots::Vector{_Node})
-    refs = IdDict{_Node, Int}()
-    reads = IdDict{_Node, Union{Nothing, Set{Int}}}()   # `nothing`: not memoizable
+    refs = _NodeMap{Int}()
+    reads = _NodeMap{Union{Nothing, Set{Int}}}()   # `nothing`: not memoizable
     kids(n) = n.op === :geo_agg ? begin
             sp = n.payload::_GeoAggSpec
             sp.filter === nothing ? _Node[sp.body] : _Node[sp.filter, sp.body]
@@ -573,7 +662,7 @@ function _geo_memoize!(roots::Vector{_Node})
         return reads[n] = r
     end
     foreach(visit, roots)
-    wrap = IdDict{_Node, _Node}()
+    wrap = _NodeMap{_Node}()
     for (n, c) in refs
         r = reads[n]
         (c >= 2 && r !== nothing && n.kind == _NK_OP) || continue
@@ -584,7 +673,7 @@ function _geo_memoize!(roots::Vector{_Node})
         )
     end
     isempty(wrap) && return roots
-    seen = IdDict{_Node, Nothing}()
+    seen = _NodeMap{Nothing}()
     function rewire(n::_Node)
         haskey(seen, n) && return
         seen[n] = nothing
@@ -675,6 +764,8 @@ function _eval_geo_op(n::_Node, u, p, t, ::Type{T})::Float64 where {T}
         return Float64(hash(Tuple(vals)) % _SKOLEM_HASH_CAP)
     elseif op === :geo_agg
         return _geo_eval_agg(n.payload::_GeoAggSpec, u, p, t, T)
+    elseif op === :geo_count
+        return _geo_count_value(n.payload::_GeoCountSpec, Float64(_eval_node(n.children[1], u, p, t, T)))
     elseif op === :cellmemo
         return _eval_cellmemo(n, u, p, t, T)
     elseif op === :geomemo
@@ -713,11 +804,11 @@ const _GEO_CG_MINMAX = Dict{Symbol, Symbol}(r.sym => r.fnsym for r in _NARY_MINM
 struct _GeoCGDecline <: EarthSciASTError end
 
 mutable struct _GeoCG
-    refs::IdDict{_Node, Int}
-    level::IdDict{_Node, Int}          # the agg nest level that owns the node's innermost slot
-    levels::IdDict{_Node, UInt64}      # bit k: the node's sub-tree reads a slot of level k
+    refs::_NodeMap{Int}
+    level::_NodeMap{Int}               # the agg nest level that owns the node's innermost slot
+    levels::_NodeMap{UInt64}           # bit k: the node's sub-tree reads a slot of level k
     slot_level::Dict{Int, Int}
-    memo::IdDict{_Node, Symbol}        # shared node => its memo local
+    memo::_NodeMap{Symbol}             # shared node => its memo local
     resets::Dict{Int, Vector{Symbol}}  # level => memo locals reset at its iteration
     srcs::Vector{Any}
     src_ix::IdDict{Any, Int}
@@ -841,6 +932,12 @@ function _geo_cg_raw(g::_GeoCG, n::_Node)
         return :(Float64(srcs[$k][$(ixs...)]))
     elseif op === :geo_agg
         return _geo_cg_agg(g, n)
+    elseif op === :geo_count
+        k = get!(g.src_ix, n.payload) do
+            push!(g.srcs, n.payload)
+            length(g.srcs)
+        end
+        return :(_geo_count_value(srcs[$k], $(em(c[1]))::Float64))
     end
     throw(_GeoCGDecline())
 end
@@ -885,13 +982,70 @@ function _geo_cg_agg(g::_GeoCG, n::_Node)
     end
 end
 
+# Kernels of one setup pass, shared by sweeps that differ only in the arrays
+# they read (one template call site per ring pair, say). A kernel reads its
+# arrays through `srcs`, so `byexpr` maps a kernel expression to its generated
+# function, and `byshape` maps a body's `_geo_shape_key` to that function and
+# the order of its `srcs` among the key's arrays, or to `nothing` when the
+# emitter declined the body.
+struct _GeoKernelCache
+    byexpr::Dict{Expr, Any}
+    byshape::Dict{Vector{Any}, Any}
+end
+_GeoKernelCache() = _GeoKernelCache(Dict{Expr, Any}(), Dict{Vector{Any}, Any}())
+
+# Everything the memoize pass and the emitter read from a body, as a token list,
+# with the arrays it reads in first-visit order: two bodies with equal keys are
+# memoized alike and emit the same kernel, over their own arrays. Shared nodes
+# are keyed by their first visit, so the sharing (which the memoize pass
+# counts) is in the key. An unknown payload is keyed by identity.
+function _geo_shape_key(body::_Node)
+    key = Any[]
+    arrays = Any[]
+    aix = IdDict{Any, Int}()
+    objs = IdDict{Any, Int}()
+    seen = _NodeMap{Int}()
+    function visit(n::_Node)
+        got = get(seen, n, 0)
+        got == 0 || (push!(key, :ref, got); return)
+        seen[n] = length(seen) + 1
+        push!(key, n.kind, n.op, reinterpret(UInt64, n.literal), n.idx, n.sym, length(n.children))
+        pl = n.payload
+        if pl === nothing
+            push!(key, :none)
+        elseif n.op === :geo_gather || n.op === :geo_count
+            i = get!(aix, pl) do
+                push!(arrays, pl)
+                length(arrays)
+            end
+            push!(key, :src, i, typeof(pl))
+        elseif n.op === :geo_agg
+            sp = pl::_GeoAggSpec
+            push!(
+                key, :agg, Tuple(sp.slots), Tuple(sp.exts), sp.gates === nothing,
+                sp.op, reinterpret(UInt64, sp.zero), sp.filter === nothing
+            )
+            sp.gates === nothing || push!(key, :obj, get!(objs, sp.gates, length(objs) + 1))
+            sp.filter === nothing || visit(sp.filter)
+            visit(sp.body)
+        else
+            push!(key, :obj, get!(objs, pl, length(objs) + 1))
+        end
+        foreach(visit, n.children)
+        return
+    end
+    visit(body)
+    isempty(objs) || return nothing     # identity-keyed payloads never match another body
+    return key, arrays
+end
+
 # The native kernel of a setup body, or `nothing` (keep the walker). Only under
 # the share_subtrees plan flag, so the interpreter oracle walks.
-function _geo_kernel(body::_Node)
+function _geo_kernel(body::_Node; cache::Union{Nothing, _GeoKernelCache} = nothing)
     _compiler_plan_now().share_subtrees || return nothing
     g = _GeoCG(
-        IdDict{_Node, Int}(), IdDict{_Node, Int}(), IdDict{_Node, UInt64}(), Dict{Int, Int}(),
-        IdDict{_Node, Symbol}(),
+        _NodeMap{Int}(), _NodeMap{Int}(), _NodeMap{UInt64}(), Dict{Int, Int}(),
+        _NodeMap{Symbol}(),
         Dict{Int, Vector{Symbol}}(), Any[], IdDict{Any, Int}(), 0
     )
     try
@@ -902,7 +1056,11 @@ function _geo_kernel(body::_Node)
             push!(top, :(local $m::Float64 = 0.0), :(local $(Symbol(m, :_set))::Bool = false))
         end
         ex = Expr(:function, Expr(:tuple, :u, :srcs), Expr(:block, top..., :(return Float64($e))))
-        f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(@__MODULE__, @__MODULE__, ex)
+        f = cache === nothing ? nothing : get(cache.byexpr, ex, nothing)
+        if f === nothing
+            f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(@__MODULE__, @__MODULE__, ex)
+            cache === nothing || (cache.byexpr[ex] = f)
+        end
         _tally_cascade!(:geo_kernel)
         return _GeoKernel(f, Tuple(g.srcs))
     catch err

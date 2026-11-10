@@ -1,0 +1,46 @@
+{
+  "fixture": "conservative_regrid_overlap_join",
+  "reference_binding": "python",
+  "reference_compiler": "interpreter",
+  "reference_form": "op",
+  "cases": [
+    {
+      "sets": {
+        "candidate_set": {
+          "members": [
+            [
+              1,
+              1
+            ],
+            [
+              2,
+              2
+            ],
+            [
+              3,
+              3
+            ]
+          ],
+          "extent": 3
+        }
+      }
+    },
+    {
+      "sets": {
+        "candidate_set": {
+          "members": [
+            [
+              2,
+              1
+            ],
+            [
+              3,
+              2
+            ]
+          ],
+          "extent": 2
+        }
+      }
+    }
+  ]
+}

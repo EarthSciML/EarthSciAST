@@ -1035,10 +1035,12 @@ end
 # then evaluates it per cell with the same arms in the same order, so every key
 # is the one `_vi_eval` computes. A body with anything else (a ragged range, a
 # gather from a bounded or non-Float64 array or from an upstream buffer, an
-# unresolved name) returns `nothing` and keeps `_vi_eval`.
+# unresolved name) returns `nothing` and keeps `_vi_eval`. A producer's key
+# and filter over several interval / categorical ranges compile the same way
+# (`_vi_producer_compiled`), each range symbol a slot of the binding vector.
 const _VIC_INT = 1      # Int literal (`ival`)
 const _VIC_NUM = 2      # Float64 literal or resolved parameter (`fval`)
-const _VIC_SYM = 3      # the range symbol's value
+const _VIC_SYM = 3      # a range symbol's value (slot `ival`)
 const _VIC_GATHER = 4   # `arr[Int(args)...]`
 const _VIC_OP = 5       # an arithmetic / comparison / rounding op (`op`)
 
@@ -1060,17 +1062,22 @@ _ViC(
 const _VIC_OPS = Dict{String, Symbol}(
     "floor" => :floor, "ceil" => :ceil, "/" => :/,
     "*" => :*, "+" => :+, "-" => :-, "<" => :<, ">" => :>, "<=" => :<=,
-    ">=" => :>=, "==" => :(==), "!=" => :!=
+    ">=" => :>=, "==" => :(==), "!=" => :!=,
+    "ifelse" => :ifelse, "and" => :and, "or" => :or, "not" => :not,
+    "min" => :min, "max" => :max, "true" => :vtrue, "false" => :vfalse
 )
 
-function _vi_compile_node(node, ctx::_ViCtx, sym::String)
+_vi_compile_node(node, ctx::_ViCtx, sym::String) = _vi_compile_node(node, ctx, String[sym])
+
+function _vi_compile_node(node, ctx::_ViCtx, syms::Vector{String})
     if node isa IntExpr
         return _ViC(_VIC_INT; ival = Int(node.value))
     elseif node isa NumExpr
         return _ViC(_VIC_NUM; fval = Float64(node.value))
     elseif node isa VarExpr
         name = node.name
-        name == sym && return _ViC(_VIC_SYM)
+        slot = findfirst(==(name), syms)
+        slot === nothing || return _ViC(_VIC_SYM; ival = slot)
         haskey(ctx.const_arrays, name) && return nothing
         v = get(ctx.variables, name, nothing)
         (v !== nothing && v.type == ParameterVariable) || return nothing
@@ -1085,7 +1092,7 @@ function _vi_compile_node(node, ctx::_ViCtx, sym::String)
             (arr isa Array{Float64} && ndims(arr) == length(args) - 1) || return nothing
             sub = _ViC[]
             for a in args[2:end]
-                c = _vi_compile_node(a, ctx, sym)
+                c = _vi_compile_node(a, ctx, syms)
                 c === nothing && return nothing
                 push!(sub, c)
             end
@@ -1094,18 +1101,20 @@ function _vi_compile_node(node, ctx::_ViCtx, sym::String)
         op = get(_VIC_OPS, node.op, nothing)
         op === nothing && return nothing
         nargs = length(args)
-        if op in (:floor, :ceil)
-            nargs >= 1 || return nothing
-        elseif op === :-
-            nargs >= 1 || return nothing
-        elseif op in (:*, :+)
+        if op in (:vtrue, :vfalse)
+            nargs == 0 || return nothing
+        elseif op === :ifelse
+            nargs == 3 || return nothing
+        elseif op === :not
+            nargs == 1 || return nothing
+        elseif op in (:floor, :ceil, :-, :*, :+, :and, :or, :min, :max)
             nargs >= 1 || return nothing
         else
             nargs >= 2 || return nothing
         end
         sub = _ViC[]
         for a in args
-            c = _vi_compile_node(a, ctx, sym)
+            c = _vi_compile_node(a, ctx, syms)
             c === nothing && return nothing
             push!(sub, c)
         end
@@ -1131,13 +1140,17 @@ function _vi_compile_map_body(body, ctx::_ViCtx, sym::String)
     return c === nothing ? nothing : (false, _ViC[c])
 end
 
+# A range symbol's value: `v` is the one symbol's value, or the binding vector.
+@inline _vic_sym(v::Int, ::Int) = v
+@inline _vic_sym(v::Vector{Int}, slot::Int) = @inbounds v[slot]
+
 # `_vi_eval` arm for arm (the `_vi_num` guards cannot fire: every compiled
-# value is a number).
-function _vic_eval(n::_ViC, v::Int)::Union{Int, Float64, Bool}
+# value is a number or a Bool).
+function _vic_eval(n::_ViC, v::Union{Int, Vector{Int}})::Union{Int, Float64, Bool}
     k = n.kind
     k == _VIC_INT && return n.ival
     k == _VIC_NUM && return n.fval
-    k == _VIC_SYM && return v
+    k == _VIC_SYM && return _vic_sym(v, n.ival)
     a = n.args
     if k == _VIC_GATHER
         if length(a) == 1
@@ -1146,7 +1159,34 @@ function _vic_eval(n::_ViC, v::Int)::Union{Int, Float64, Bool}
         return n.arr[(Int(_vic_eval(x, v)) for x in a)...]
     end
     op = n.op
-    if op === :floor
+    if op === :vtrue
+        return true
+    elseif op === :vfalse
+        return false
+    elseif op === :ifelse
+        return _vic_eval(_vi_truthy(_vic_eval(a[1], v)) ? a[2] : a[3], v)
+    elseif op === :and
+        for x in a
+            _vi_truthy(_vic_eval(x, v)) || return false
+        end
+        return true
+    elseif op === :or
+        for x in a
+            _vi_truthy(_vic_eval(x, v)) && return true
+        end
+        return false
+    elseif op === :not
+        return !_vi_truthy(_vic_eval(a[1], v))
+    elseif op === :min || op === :max
+        # `minimum` / `maximum` of the operands: NaN wins, -0.0 < +0.0, in
+        # any order.
+        acc = Float64(_vic_eval(a[1], v))
+        for j in 2:length(a)
+            x = Float64(_vic_eval(a[j], v))
+            acc = op === :min ? min(acc, x) : max(acc, x)
+        end
+        return acc
+    elseif op === :floor
         return _vi_round(floor, Float64(_vic_eval(a[1], v)))
     elseif op === :ceil
         return _vi_round(ceil, Float64(_vic_eval(a[1], v)))
@@ -1291,6 +1331,10 @@ function _vi_materialize_producer(ctx::_ViCtx, node::OpExpr)
     # full product exactly as before.
     join_gates = join === nothing ? nothing : _vi_resolve_join(join, ranges, ctx)
     column = "the `key` of producer '$(something(node.id, ""))'"
+    if join_gates === nothing && _setup_compile_once_enabled()
+        members = _vi_producer_compiled(ctx, ranges, filt, key, column)
+        members === nothing || return Relational.distinct(members)
+    end
     members = Any[]
     _vi_enumerate_join(
         ranges, join_gates, ctx, bindings -> begin
@@ -1305,6 +1349,153 @@ function _vi_materialize_producer(ctx::_ViCtx, node::OpExpr)
         end
     )
     return Relational.distinct(members)
+end
+
+# The un-gated producer over interval / categorical ranges with its `key` and
+# `filter` compiled once (`_vi_compile_node`, each range symbol a slot): the
+# keys `_vi_enumerate` would push, in its order (the first symbol outermost),
+# as a concretely typed vector. `nothing` when a range, the filter or the key
+# has no compiled form; the caller then enumerates as before.
+function _vi_producer_compiled(ctx::_ViCtx, ranges, filt, key, column)
+    syms = _vi_order_syms(ranges)
+    lens = Int[]
+    for s in syms
+        spec = ranges[s]
+        spec isa IndexSetRef && isempty(_vi_range_of(spec)) || return nothing
+        is = get(ctx.index_sets, spec.from, nothing)
+        (is !== nothing && is.kind in ("interval", "categorical")) || return nothing
+        push!(lens, length(_vi_range_values(spec, ctx, Dict{String, Any}())))
+    end
+    cf = filt === nothing ? nothing : _vi_compile_node(filt, ctx, syms)
+    filt === nothing || cf !== nothing || return nothing
+    if key isa OpExpr && key.op == "skolem"
+        comps = _ViC[]
+        for a in key.args
+            c = _vi_compile_node(a, ctx, syms)
+            c === nothing && return nothing
+            push!(comps, c)
+        end
+        length(comps) in (1, 2, 3) || return nothing
+        nc = length(comps)
+        fk = Tuple(_vic_kernel(c) for c in comps)
+        ff = cf === nothing ? nothing : _vic_kernel(cf)
+        return nc == 1 ? _vic_produce(lens, ff, fk, Val(1), syms, column) :
+            nc == 2 ? _vic_produce(lens, ff, fk, Val(2), syms, column) :
+            _vic_produce(lens, ff, fk, Val(3), syms, column)
+    end
+    ck = _vi_compile_node(key, ctx, syms)
+    ck === nothing && return nothing
+    ff = cf === nothing ? nothing : _vic_kernel(cf)
+    return _vic_produce(lens, ff, (_vic_kernel(ck),), Val(0), syms, column)
+end
+
+# A compiled node as Julia code, compiled once through RuntimeGeneratedFunctions
+# and called per binding as `k(v)`: `_vic_eval` arm for arm, the same
+# operations in the same order on the same value types (an `Int` literal or
+# range symbol stays an `Int`, a `floor` keeps `_vi_round`'s result, a
+# comparison is a `Bool`), so every value is the walker's.
+struct _ViCKernel{F, S}
+    f::F
+    srcs::S
+end
+@inline (k::_ViCKernel)(v::Vector{Int}) = k.f(v, k.srcs)
+
+function _vic_kernel(n::_ViC)
+    srcs = Any[]
+    ix = IdDict{Any, Int}()
+    body = _vic_expr(n, srcs, ix)
+    ex = Expr(:function, Expr(:tuple, :v, :srcs), Expr(:block, :(return $body)))
+    f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(@__MODULE__, @__MODULE__, ex)
+    return _ViCKernel(f, Tuple(srcs))
+end
+
+function _vic_expr(n::_ViC, srcs::Vector{Any}, ix::IdDict{Any, Int})
+    k = n.kind
+    k == _VIC_INT && return n.ival
+    k == _VIC_NUM && return n.fval
+    k == _VIC_SYM && return :(@inbounds v[$(n.ival)])
+    a = n.args
+    em(x) = _vic_expr(x, srcs, ix)
+    if k == _VIC_GATHER
+        j = get!(ix, n.arr) do
+            push!(srcs, n.arr)
+            length(srcs)
+        end
+        return :(srcs[$j][$((:(Int($(em(x)))) for x in a)...)])
+    end
+    op = n.op
+    f64(x) = :(Float64($(em(x))))
+    if op === :vtrue
+        return true
+    elseif op === :vfalse
+        return false
+    elseif op === :ifelse
+        return :(_vi_truthy($(em(a[1]))) ? $(em(a[2])) : $(em(a[3])))
+    elseif op === :and || op === :or
+        e = :(_vi_truthy($(em(a[end]))))
+        for j in (length(a) - 1):-1:1
+            c = :(_vi_truthy($(em(a[j]))))
+            e = op === :and ? :($c && $e) : :($c || $e)
+        end
+        return e
+    elseif op === :not
+        return :(!_vi_truthy($(em(a[1]))))
+    elseif op === :min || op === :max || op === :* || op === :+
+        acc = f64(a[1])
+        for j in 2:length(a)
+            acc = Expr(:call, op, acc, f64(a[j]))
+        end
+        return acc
+    elseif op === :floor || op === :ceil
+        return :(_vi_round($op, $(f64(a[1]))))
+    elseif op === :/
+        return :($(f64(a[1])) / $(f64(a[2])))
+    elseif op === :-
+        return length(a) == 1 ? :(-$(f64(a[1]))) : :($(f64(a[1])) - $(f64(a[2])))
+    end
+    return Expr(:call, op, f64(a[1]), f64(a[2]))
+end
+
+# A skolem key of N components (every component evaluated, then each made a
+# key, as `_vi_skolem`; one component is a scalar key), or for N = 0 a plain
+# key (`_vi_key`: NaN is `value_invention_key_out_of_range`).
+@inline function _vic_key(comps, v, ::Val{N}, syms, column) where {N}
+    if N == 0
+        x = comps[1](v)
+        x isa AbstractFloat && isnan(x) && _vi_key_checked(
+            x, column, Dict{String, Any}(syms[d] => v[d] for d in eachindex(syms))
+        )
+        return _vi_key_int(x)::Int
+    end
+    xs = ntuple(j -> comps[j](v), Val(N))
+    ks = map(x -> _vi_key_int(x)::Int, xs)
+    return N == 1 ? ks[1] : ks
+end
+
+function _vic_produce(lens::Vector{Int}, cf, comps, ::Val{N}, syms, column) where {N}
+    out = (N <= 1 ? Int : NTuple{N, Int})[]
+    n = prod(lens; init = 1)
+    n == 0 && return out
+    sizehint!(out, n)
+    v = ones(Int, length(lens))
+    for _ in 1:n
+        _VI_ENUM_VISITS[] += 1
+        keep = true
+        if cf !== nothing
+            fv = cf(v)
+            keep = fv === true || (isa(fv, Real) && fv > 0)
+        end
+        keep && push!(out, _vic_key(comps, v, Val(N), syms, column))
+        # The last symbol runs fastest, as `_vi_enumerate`'s innermost loop.
+        d = length(v)
+        while d >= 1
+            v[d] += 1
+            v[d] <= lens[d] && break
+            v[d] = 1
+            d -= 1
+        end
+    end
+    return out
 end
 
 # ---- Cadence classification on the typed IR (§5.7 guard 2) ------------------

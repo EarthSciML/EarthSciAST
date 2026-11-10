@@ -420,4 +420,29 @@ _cx_du(prob, u, t) = (
                 for (a, b) in zip(rx, rn)
         )
     end
+
+    # A document with no state has nothing to integrate and nothing to emit:
+    # the Rust lane builds no program for one, and neither does this one. Its
+    # observed graph is evaluated at construction as under every compiler.
+    @testset "a state-free document builds, and its f! has nothing to write" begin
+        doc = Dict{String, Any}(
+            "esm" => "1.1.0", "metadata" => Dict{String, Any}("name" => "NoState"),
+            "models" => Dict{String, Any}(
+                "M" => Dict{String, Any}(
+                    "variables" => Dict{String, Any}(
+                        "k" => Dict{String, Any}("type" => "parameter", "default" => 2.0),
+                        "y" => Dict{String, Any}("type" => "unknown")
+                    ),
+                    "equations" => Any[
+                        Dict{String, Any}("lhs" => "y", "rhs" => _cx_o("*", 3.0, "k")),
+                    ]
+                )
+            )
+        )
+        px = esm_problem(doc, (0.0, 1.0); compiler = :xla)
+        @test compiler(px) === :xla
+        @test isempty(px.u0)
+        du = Float64[]
+        @test px.f!(du, Float64[], px.p, 0.0) === nothing
+    end
 end

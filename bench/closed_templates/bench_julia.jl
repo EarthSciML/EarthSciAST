@@ -1,6 +1,8 @@
 # Template versus closed form, Julia native side (closed-AST phase 3).
 #
-# For each workload pair written by generate.py (beside this file, or in DIR):
+# For each workload pair written by generate.py (in DIR, or, with no DIR or
+# `-`, generated at the default sizes into $CLOSED_TEMPLATES_DIR, else
+# closed_templates under $TMPDIR):
 #
 #   solar_year_{fn,tpl}_H<h>        datetime.* fn calls vs lib/calendar.esm
 #   regrid_<m>_{leaf,tpl}_N<n>      polygon_intersection_area vs lib/geometry.esm
@@ -15,7 +17,7 @@
 #
 # Usage (an environment with EarthSciAST, JSON3 and GeometryOps):
 #
-#     julia --project=<env> bench/closed_templates/bench_julia.jl [DIR] [name-filter…]
+#     julia --project=<env> bench/closed_templates/bench_julia.jl [DIR|-] [name-filter…]
 #
 # Environment: CALLS (default 200), INTERP_CHECK (default 1: run the interpreter oracle;
 # the interpreter unrolls the argmin template's nested reductions per cell, so
@@ -25,7 +27,12 @@ using EarthSciAST, JSON3, Statistics, Printf
 import GeometryOps
 
 const E = EarthSciAST
-const DIR = isempty(ARGS) ? (@__DIR__) : ARGS[1]
+include(joinpath(@__DIR__, "docs.jl"))
+const DIR = bench_docs(
+    "generate.py", isempty(ARGS) || ARGS[1] == "-" ? nothing : ARGS[1],
+    ["--only", "solar", "--only", "regrid", "--only", "nearest"];
+    env = "CLOSED_TEMPLATES_DIR", name = "closed_templates", prefix = ""
+)
 const FILTERS = length(ARGS) > 1 ? ARGS[2:end] : String[]
 const CALLS = parse(Int, get(ENV, "CALLS", "200"))
 const INTERP_CHECK = get(ENV, "INTERP_CHECK", "1") == "1"

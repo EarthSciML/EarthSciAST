@@ -1939,7 +1939,7 @@ fn eval_vec_data_gather<'a>(
                             0
                         }
                         Some(BoundaryKind::Periodic) if n_d >= 1 => {
-                            (r - 1).rem_euclid(n_d) as usize
+                            super::eval::periodic_offset(r, n_d)
                         }
                         Some(BoundaryKind::Clamp) if n_d >= 1 => (r.clamp(1, n_d) - 1) as usize,
                         Some(_) => {

@@ -223,6 +223,12 @@ pub(crate) struct TapeExec {
     scode: Vec<interp::ScalarOp>,
     /// The decoded one-lane programs `scode` refers to.
     slanes: Vec<interp::ScalarLane>,
+    /// Straight runs of `scode` run as one program each, and per instruction
+    /// the block starting there (`u32::MAX`: none). Decoded with `scode`.
+    sblocks: Vec<interp::ScalarBlock>,
+    sblock_at: Vec<u32>,
+    /// The blocks' register file.
+    sregs: Vec<f64>,
     /// Row-major mirror of the flat state vector for a program stored
     /// row-major ([`TapeProgram::col_major`] false), refilled once per call
     /// for the variables `mirror` marks (each column-major block transposed
@@ -408,6 +414,9 @@ impl TapeExec {
             pending: Vec::with_capacity(16),
             scode: Vec::new(),
             slanes: Vec::new(),
+            sblocks: Vec::new(),
+            sblock_at: Vec::new(),
+            sregs: Vec::new(),
             state_rm: vec![0.0f64; n_state],
             mirror_vars: (0..mirror.len() as u32)
                 .filter(|&i| mirror[i as usize])

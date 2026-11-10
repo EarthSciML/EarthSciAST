@@ -5875,6 +5875,10 @@ largest entry is 1e3 is an absolute floor of 1e-11.
 A fixture MAY carry a tighter or looser bound than its class only with a written
 reason in its manifest entry.
 
+XLA on CPU flushes subnormal floating-point values to zero, a property of both
+lanes that this tier accepts; integer results (counts, ranks, arg indices) are
+therefore exact except where an input is subnormal.
+
 #### 5.38.3 A refusal is a hard error, and a NAMED exclusion
 
 A compiled engine that cannot lower a model completely **MUST refuse it** —
@@ -6892,7 +6896,7 @@ binding that got better is the one way a ratchet can run backwards.
 | `interp_templates` | the pure-AST `searchsorted` / `linear` / `bilinear` templates of `lib/interp.esm` (esm-spec §9.2, §9.7.1), each applied to scenarios of `tests/closed_functions/interp/<fn>/expected.json`: the expanded template reproduces the closed function's pinned `binary64` result at tolerance 0, under every compiler |
 | `template_array_args` | a `lib/interp.esm` template applied with an array bound to a scalar-role parameter (esm-spec §9.6.11): elementwise over the array's index sets, a level column replicated over a 3-D field, `bilinear` with one and with both coordinates arrays; every element equals the `interp.*` result at tolerance 0, under every compiler |
 | `datetime_templates` | the nine pure-AST calendar templates of `lib/calendar.esm` (esm-spec §9.2, §9.7.1), each applied to scenarios of `tests/closed_functions/datetime/<fn>/expected.json` inside the templates' domain `|t| < 2^52` s: the expanded template reproduces the closed function's pinned `binary64` result at tolerance 0, under every compiler |
-| `relational_templates` | the pure-AST `argmin` / `argmax` templates of `lib/relational.esm` (esm-spec §4.2, §9.7.1): on ties, signed zeros, infinities and NaN candidates the expanded template returns the smallest index attaining the extremum, or the first NaN index, at tolerance 0, and the nearest-generator document rewritten with the template integrates to the `argmin` op document's golden, under every compiler |
+| `relational_templates` | the pure-AST `argmin` / `argmax` templates of `lib/relational.esm` (esm-spec §4.2, §9.7.1): on ties, signed zeros, infinities and NaN candidates the expanded template returns the smallest index attaining the extremum, or the first NaN index, at tolerance 0, and the nearest-generator document rewritten with the template integrates to the `argmin` op document's golden, under every compiler; `rewrites/` pairs every `skolem` / `rank` / gated-`argmin` fixture with its template form, and Python, Julia and Rust check both forms against `rewrites/golden/<id>.json` (computed from the op form by the Python interpreter; `rewrites/goldens.py` regenerates them, `--check` fails on a stale one) |
 | `geometry_templates` | the pure-AST convex overlap-area templates of `lib/geometry.esm` (esm-spec §8.6.1, §9.7.1): `overlap_area_planar` applied inside a `faq` over cell pairs, and behind the overlap join gate, gives the exact planar areas of identical, adjacent, corner-touching, nested, partially overlapping, clockwise and repeated-vertex-padded cells at tolerance 0, equal to the `polygon_intersection_area` leaf's; `overlap_area_spherical` over unit-vector stacks built with `lonlat_to_unit` gives Girard's-theorem areas of a meridian fan within the §5.8.2 band, under every compiler |
 
 Each tier's `README.md` is its contract and records what did NOT move into it.

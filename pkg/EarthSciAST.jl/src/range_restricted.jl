@@ -423,6 +423,7 @@ function _relower_kwargs(front)
     kw[:materialize_out] = nothing
     kw[:inspect] = nothing
     kw[:_param_classes] = nothing
+    kw[:_expand_cache] = nothing     # the front door's build owns it
     return kw
 end
 

@@ -611,7 +611,9 @@ impl<'a> ViCtx<'a> {
     }
 }
 
-type Bindings = HashMap<String, i64>;
+/// The range symbols bound at one point. Looked up per node evaluated, so
+/// the hasher is the fast one; never iterated in its own order.
+type Bindings = rustc_hash::FxHashMap<String, i64>;
 
 /// A materialised buffer: output index → value. Read by key and by sorted
 /// key only, never iterated in its own order, so the hasher is the fast one.
@@ -943,7 +945,12 @@ fn vi_key(
     if node_op(node) == Some("skolem") {
         return vi_skolem(node, ctx, bindings);
     }
-    match vi_eval(node, ctx, bindings)? {
+    key_of(vi_eval(node, ctx, bindings)?, bindings, column)
+}
+
+/// [`vi_key`]'s reading of a key expression's value.
+fn key_of(v: Val, bindings: &Bindings, column: &str) -> Result<Key, ValueInventionError> {
+    match v {
         Val::Key(k) => Ok(k),
         Val::Float(f) if f.is_nan() => {
             let mut at: Vec<(&String, &i64)> = bindings.iter().collect();
@@ -1124,7 +1131,7 @@ where
     F: FnMut(&Bindings) -> Result<(), ValueInventionError>,
 {
     let syms = vi_order_syms(ranges)?;
-    let mut bindings: Bindings = HashMap::new();
+    let mut bindings = Bindings::default();
     vi_enumerate_rec(&syms, 0, ranges, ctx, &mut bindings, &mut visit)
 }
 
@@ -1431,7 +1438,7 @@ where
         .into_iter()
         .filter(|s| s != sym_l && s != sym_r)
         .collect();
-    let mut bindings: Bindings = HashMap::new();
+    let mut bindings = Bindings::default();
     for (pl, pr) in pairs {
         // A candidate pair holds 1-based range POSITIONS; for an interval /
         // categorical range `vi_range_values` binds position p to the value p, so
@@ -1585,7 +1592,7 @@ fn vi_materialize_map(
         let fast = if is_arg {
             None
         } else {
-            Fast::compile(body, ctx_ref, ranges)
+            FastExpr::compile(body, ctx_ref, ranges)
         };
         vi_enumerate(ranges, ctx_ref, |bindings| {
             // An arg-witness body runs the inner reduction (with the outer point
@@ -1649,10 +1656,11 @@ fn vi_materialize_column(
     Ok(())
 }
 
-/// A map body compiled once before its enumeration: the part of [`vi_eval`]
-/// whose names resolve before any point is bound — the map's own range
-/// symbols, scalar parameters and const-array factors — evaluated per point
-/// without walking the JSON or looking a name up more than once. Each arm
+/// A map body, or a producer's `filter` or non-`skolem` `key`, compiled once
+/// before its enumeration: the part of [`vi_eval`] whose names resolve before
+/// any point is bound — the node's own range symbols, scalar parameters and
+/// const-array factors — evaluated per point without walking the JSON or
+/// looking a name up more than once. Each arm
 /// computes exactly what the [`vi_eval`] arm of the same op does. A body
 /// with anything else is not compiled, and a point whose evaluation fails
 /// is evaluated again by [`vi_eval`] for its diagnostic.
@@ -1678,13 +1686,159 @@ enum Fast<'a> {
     Add(Vec<Fast<'a>>),
     Neg(Box<Fast<'a>>),
     Sub(Box<Fast<'a>>, Box<Fast<'a>>),
+    Ifelse(Box<[Fast<'a>; 3]>),
+    /// `and` (`false`) or `or` (`true`): short-circuits on the first operand
+    /// whose truth is the payload.
+    AndOr(bool, Vec<Fast<'a>>),
+    Not(Box<Fast<'a>>),
+    /// `min` (`false`) or `max` (`true`).
+    MinMax(bool, Vec<Fast<'a>>),
+    Cmp(CmpOp, Box<Fast<'a>>, Box<Fast<'a>>),
+    /// A sub-expression written more than once in the node: [`FastExpr`]'s
+    /// `shared[i]`, evaluated at most once per point.
+    Shared(usize),
+}
+
+/// A compiled node ([`Fast`]) with its shared sub-expressions. A template
+/// expansion repeats its arguments (`edge_key` reads `min(u, v)` five times);
+/// each repeat is evaluated once per point and reused, which is the same
+/// value, since evaluation reads only the point's bindings and build-time
+/// data. A shared sub-expression is evaluated where it is first needed, so a
+/// branch not taken still evaluates nothing.
+struct FastExpr<'a> {
+    root: Fast<'a>,
+    shared: Vec<Fast<'a>>,
+    /// This point's value of each shared sub-expression, once evaluated.
+    memo: std::cell::RefCell<Vec<Option<Val>>>,
+}
+
+impl<'a> FastExpr<'a> {
+    fn compile(node: &'a Value, ctx: &'a ViCtx, ranges: &Map<String, Value>) -> Option<Self> {
+        let mut ids = TreeIds::default();
+        ids.id(node);
+        let mut count: HashMap<usize, usize> = HashMap::new();
+        for &id in ids.of.values() {
+            *count.entry(id).or_default() += 1;
+        }
+        count.retain(|_, n| *n > 1);
+        let mut cse = FastCse {
+            of: ids.of,
+            repeated: count,
+            slot: HashMap::new(),
+            shared: Vec::new(),
+        };
+        let root = Fast::compile(node, ctx, ranges, &mut cse)?;
+        let n = cse.shared.len();
+        Some(FastExpr {
+            root,
+            shared: cse.shared,
+            memo: std::cell::RefCell::new(vec![None; n]),
+        })
+    }
+
+    fn eval(&self, ctx: &ViCtx, bindings: &Bindings) -> Result<Val, ValueInventionError> {
+        self.memo.borrow_mut().fill(None);
+        self.root.eval(self, ctx, bindings)
+    }
+}
+
+/// [`FastExpr::compile`]'s shared sub-expressions: each operator sub-tree's
+/// structural id, the ids written more than once, the slot each has been
+/// given, and the slots' compiled nodes.
+struct FastCse<'a> {
+    of: HashMap<*const Value, usize>,
+    repeated: HashMap<usize, usize>,
+    slot: HashMap<usize, usize>,
+    shared: Vec<Fast<'a>>,
+}
+
+/// One part of a [`TreeIds`] key: an operand that is an operator sub-tree,
+/// by its id, or any other value, by its text.
+#[derive(PartialEq, Eq, Hash)]
+enum TreePart {
+    Tree(usize),
+    Text(String),
+}
+
+/// Structural ids of the operator sub-trees of an expression, numbered
+/// bottom-up: two sub-trees share an id exactly when their JSON text is the
+/// same. A node's key is its fields other than `args` as text and its
+/// operands' parts, so each value is serialized once and the numbering is
+/// linear in the tree.
+#[derive(Default)]
+struct TreeIds {
+    /// Each operator sub-tree visited, by address, and its id.
+    of: HashMap<*const Value, usize>,
+    by_key: HashMap<Vec<TreePart>, usize>,
+}
+
+impl TreeIds {
+    fn id(&mut self, node: &Value) -> Option<usize> {
+        let Value::Object(map) = node else {
+            return None;
+        };
+        let mut key: Vec<TreePart> = Vec::new();
+        for (k, v) in map {
+            match v {
+                Value::Array(args) if k == "args" => {
+                    key.push(TreePart::Text("args".into()));
+                    for a in args {
+                        key.push(match self.id(a) {
+                            Some(i) => TreePart::Tree(i),
+                            None => TreePart::Text(a.to_string()),
+                        });
+                    }
+                    key.push(TreePart::Text(String::new()));
+                }
+                _ => key.push(TreePart::Text(format!("{k:?}:{v}"))),
+            }
+        }
+        let n = self.by_key.len();
+        let id = *self.by_key.entry(key).or_insert(n);
+        self.of.insert(node as *const Value, id);
+        Some(id)
+    }
+}
+
+/// A comparison [`Fast`] evaluates.
+#[derive(Clone, Copy)]
+enum CmpOp {
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    Eq,
+    Ne,
 }
 
 impl<'a> Fast<'a> {
-    fn compile(node: &'a Value, ctx: &'a ViCtx, ranges: &Map<String, Value>) -> Option<Self> {
-        let sub = |n: &'a Value| Self::compile(n, ctx, ranges).map(Box::new);
-        let all = |ns: &'a [Value]| -> Option<Vec<Self>> {
-            ns.iter().map(|n| Self::compile(n, ctx, ranges)).collect()
+    fn compile(
+        node: &'a Value,
+        ctx: &'a ViCtx,
+        ranges: &Map<String, Value>,
+        cse: &mut FastCse<'a>,
+    ) -> Option<Self> {
+        if let Value::Object(_) = node
+            && !cse.repeated.is_empty()
+            && let Some(&id) = cse.of.get(&(node as *const Value))
+        {
+            if let Some(&i) = cse.slot.get(&id) {
+                return Some(Fast::Shared(i));
+            }
+            if cse.repeated.remove(&id).is_some() {
+                let f = Self::compile(node, ctx, ranges, cse)?;
+                cse.shared.push(f);
+                let i = cse.shared.len() - 1;
+                cse.slot.insert(id, i);
+                return Some(Fast::Shared(i));
+            }
+        }
+        let sub =
+            |n: &'a Value, cse: &mut FastCse<'a>| Self::compile(n, ctx, ranges, cse).map(Box::new);
+        let all = |ns: &'a [Value], cse: &mut FastCse<'a>| -> Option<Vec<Self>> {
+            ns.iter()
+                .map(|n| Self::compile(n, ctx, ranges, cse))
+                .collect()
         };
         match node {
             Value::Bool(b) => Some(Fast::Bool(*b)),
@@ -1727,19 +1881,41 @@ impl<'a> Fast<'a> {
                         Fast::Index {
                             name,
                             arr,
-                            subs: all(&args[1..])?,
+                            subs: all(&args[1..], cse)?,
                         }
                     }
-                    "skolem" => Fast::Skolem(all(args)?),
+                    "skolem" => Fast::Skolem(all(args, cse)?),
                     "true" => Fast::Bool(true),
                     "false" => Fast::Bool(false),
-                    "floor" => Fast::Floor(sub(a(0)?)?),
-                    "ceil" => Fast::Ceil(sub(a(0)?)?),
-                    "/" => Fast::Div(sub(a(0)?)?, sub(a(1)?)?),
-                    "*" => Fast::Mul(all(args)?),
-                    "+" => Fast::Add(all(args)?),
-                    "-" if args.len() == 1 => Fast::Neg(sub(a(0)?)?),
-                    "-" => Fast::Sub(sub(a(0)?)?, sub(a(1)?)?),
+                    "floor" => Fast::Floor(sub(a(0)?, cse)?),
+                    "ceil" => Fast::Ceil(sub(a(0)?, cse)?),
+                    "/" => Fast::Div(sub(a(0)?, cse)?, sub(a(1)?, cse)?),
+                    "*" => Fast::Mul(all(args, cse)?),
+                    "+" => Fast::Add(all(args, cse)?),
+                    "-" if args.len() == 1 => Fast::Neg(sub(a(0)?, cse)?),
+                    "-" => Fast::Sub(sub(a(0)?, cse)?, sub(a(1)?, cse)?),
+                    "ifelse" => {
+                        let c = Self::compile(a(0)?, ctx, ranges, cse)?;
+                        let t = Self::compile(a(1)?, ctx, ranges, cse)?;
+                        let e = Self::compile(a(2)?, ctx, ranges, cse)?;
+                        Fast::Ifelse(Box::new([c, t, e]))
+                    }
+                    o @ ("and" | "or") => Fast::AndOr(o == "or", all(args, cse)?),
+                    "not" => Fast::Not(sub(a(0)?, cse)?),
+                    o @ ("min" | "max") if !args.is_empty() => {
+                        Fast::MinMax(o == "max", all(args, cse)?)
+                    }
+                    o @ ("<" | ">" | "<=" | ">=" | "==" | "!=") => {
+                        let c = match o {
+                            "<" => CmpOp::Lt,
+                            ">" => CmpOp::Gt,
+                            "<=" => CmpOp::Le,
+                            ">=" => CmpOp::Ge,
+                            "==" => CmpOp::Eq,
+                            _ => CmpOp::Ne,
+                        };
+                        Fast::Cmp(c, sub(a(0)?, cse)?, sub(a(1)?, cse)?)
+                    }
                     _ => return None,
                 })
             }
@@ -1747,32 +1923,20 @@ impl<'a> Fast<'a> {
         }
     }
 
-    fn eval(&self, ctx: &ViCtx, bindings: &Bindings) -> Result<Val, ValueInventionError> {
-        let prec = crate::precision::active();
-        let f = |e: &Self| e.eval(ctx, bindings)?.as_f64();
+    fn eval(
+        &self,
+        env: &FastExpr<'a>,
+        ctx: &ViCtx,
+        bindings: &Bindings,
+    ) -> Result<Val, ValueInventionError> {
         Ok(match self {
             Fast::Bool(b) => Val::Bool(*b),
             Fast::Int(i) => Val::Int(*i),
-            Fast::Float(x) => Val::Float(crate::precision::round(*x)),
-            Fast::Bound(s) => match bindings.get(*s) {
-                Some(v) => Val::Int(*v),
-                None => return err(format!("range symbol {s:?} is not bound")),
-            },
-            Fast::Param(x) => Val::Float(crate::precision::round(*x)),
-            Fast::Index { name, arr, subs } => {
-                let shape = arr.shape();
-                let mut idx: smallvec::SmallVec<[usize; 4]> = smallvec::SmallVec::new();
-                for (d, e) in subs.iter().enumerate() {
-                    let one_based = e.eval(ctx, bindings)?.key_int()?;
-                    let n = shape[d] as i64;
-                    idx.push((resolve_const_index(ctx, name, d, one_based, n)? - 1) as usize);
-                }
-                Val::Float(crate::precision::round(arr[IxDyn(&idx)]))
-            }
+            Fast::Bound(s) => Val::Int(Self::bound(s, bindings)?),
             Fast::Skolem(args) => {
                 let mut comps: Vec<Key> = Vec::with_capacity(args.len());
                 for e in args {
-                    comps.push(Key::Int(e.eval(ctx, bindings)?.key_int()?));
+                    comps.push(Key::Int(e.key_int(env, ctx, bindings)?));
                 }
                 Val::Key(if comps.len() == 1 {
                     comps.pop().expect("one component")
@@ -1780,33 +1944,177 @@ impl<'a> Fast<'a> {
                     Key::Tuple(comps)
                 })
             }
-            Fast::Floor(e) => rounded_int(f(e)?.floor()),
-            Fast::Ceil(e) => rounded_int(f(e)?.ceil()),
+            Fast::Floor(e) => rounded_int(e.num(env, ctx, bindings)?.floor()),
+            Fast::Ceil(e) => rounded_int(e.num(env, ctx, bindings)?.ceil()),
+            Fast::Ifelse(cte) => {
+                let [c, t, e] = &**cte;
+                if c.truth(env, ctx, bindings)? {
+                    t.eval(env, ctx, bindings)?
+                } else {
+                    e.eval(env, ctx, bindings)?
+                }
+            }
+            Fast::Shared(i) => {
+                if let Some(v) = &env.memo.borrow()[*i] {
+                    return Ok(v.clone());
+                }
+                let v = env.shared[*i].eval(env, ctx, bindings)?;
+                env.memo.borrow_mut()[*i] = Some(v.clone());
+                v
+            }
+            Fast::AndOr(..) | Fast::Not(_) | Fast::Cmp(..) => {
+                Val::Bool(self.truth(env, ctx, bindings)?)
+            }
+            Fast::Float(_)
+            | Fast::Param(_)
+            | Fast::Index { .. }
+            | Fast::Div(..)
+            | Fast::Mul(_)
+            | Fast::Add(_)
+            | Fast::Neg(_)
+            | Fast::Sub(..)
+            | Fast::MinMax(..) => Val::Float(self.num(env, ctx, bindings)?),
+        })
+    }
+
+    fn bound(s: &str, bindings: &Bindings) -> Result<i64, ValueInventionError> {
+        match bindings.get(s) {
+            Some(v) => Ok(*v),
+            None => err(format!("range symbol {s:?} is not bound")),
+        }
+    }
+
+    /// `self.eval(..)?.key_int()`, without the [`Val`] for a range symbol.
+    fn key_int(
+        &self,
+        env: &FastExpr<'a>,
+        ctx: &ViCtx,
+        bindings: &Bindings,
+    ) -> Result<i64, ValueInventionError> {
+        match self {
+            Fast::Bound(s) => Self::bound(s, bindings),
+            _ => self.eval(env, ctx, bindings)?.key_int(),
+        }
+    }
+
+    /// `self.eval(..)?.as_f64()`, computed without building a [`Val`] where
+    /// the node is numeric or boolean.
+    fn num(
+        &self,
+        env: &FastExpr<'a>,
+        ctx: &ViCtx,
+        bindings: &Bindings,
+    ) -> Result<f64, ValueInventionError> {
+        let f = |e: &Self| e.num(env, ctx, bindings);
+        let prec = || crate::precision::active();
+        Ok(match self {
+            Fast::Bool(b) => f64::from(u8::from(*b)),
+            Fast::Int(i) => *i as f64,
+            Fast::Float(x) | Fast::Param(x) => crate::precision::round(*x),
+            Fast::Bound(s) => Self::bound(s, bindings)? as f64,
+            Fast::Index { name, arr, subs } => {
+                let shape = arr.shape();
+                let mut idx: smallvec::SmallVec<[usize; 4]> = smallvec::SmallVec::new();
+                for (d, e) in subs.iter().enumerate() {
+                    let one_based = e.key_int(env, ctx, bindings)?;
+                    let n = shape[d] as i64;
+                    idx.push((resolve_const_index(ctx, name, d, one_based, n)? - 1) as usize);
+                }
+                crate::precision::round(arr[IxDyn(&idx)])
+            }
             Fast::Div(a, b) => {
                 let a = f(a)?;
                 let b = f(b)?;
-                Val::Float(prec.round(a / b))
+                prec().round(a / b)
             }
             Fast::Mul(args) => {
                 let mut acc = 1.0;
                 for e in args {
-                    acc = prec.round(acc * f(e)?);
+                    acc = prec().round(acc * f(e)?);
                 }
-                Val::Float(acc)
+                acc
             }
             Fast::Add(args) => {
                 let mut acc = 0.0;
                 for e in args {
-                    acc = prec.round(acc + f(e)?);
+                    acc = prec().round(acc + f(e)?);
                 }
-                Val::Float(acc)
+                acc
             }
-            Fast::Neg(e) => Val::Float(-f(e)?),
+            Fast::Neg(e) => -f(e)?,
             Fast::Sub(a, b) => {
                 let a = f(a)?;
                 let b = f(b)?;
-                Val::Float(prec.round(a - b))
+                prec().round(a - b)
             }
+            Fast::MinMax(max, args) => {
+                let mut acc = f(&args[0])?;
+                for e in &args[1..] {
+                    let x = f(e)?;
+                    let better = if *max { x > acc } else { x < acc };
+                    if x.is_nan() || better {
+                        acc = x;
+                    }
+                }
+                acc
+            }
+            Fast::Ifelse(cte) => {
+                let [c, t, e] = &**cte;
+                if c.truth(env, ctx, bindings)? {
+                    f(t)?
+                } else {
+                    f(e)?
+                }
+            }
+            Fast::AndOr(..) | Fast::Not(_) | Fast::Cmp(..) => {
+                f64::from(u8::from(self.truth(env, ctx, bindings)?))
+            }
+            Fast::Skolem(_) | Fast::Floor(_) | Fast::Ceil(_) | Fast::Shared(_) => {
+                self.eval(env, ctx, bindings)?.as_f64()?
+            }
+        })
+    }
+
+    /// `truthy(&self.eval(..)?)`, computed without building a [`Val`].
+    fn truth(
+        &self,
+        env: &FastExpr<'a>,
+        ctx: &ViCtx,
+        bindings: &Bindings,
+    ) -> Result<bool, ValueInventionError> {
+        Ok(match self {
+            Fast::Bool(b) => *b,
+            Fast::AndOr(want, args) => {
+                for e in args {
+                    if e.truth(env, ctx, bindings)? == *want {
+                        return Ok(*want);
+                    }
+                }
+                !*want
+            }
+            Fast::Not(e) => !e.truth(env, ctx, bindings)?,
+            Fast::Cmp(c, a, b) => {
+                let prec = crate::precision::active();
+                let a = prec.round(a.num(env, ctx, bindings)?);
+                let b = prec.round(b.num(env, ctx, bindings)?);
+                match c {
+                    CmpOp::Lt => a < b,
+                    CmpOp::Gt => a > b,
+                    CmpOp::Le => a <= b,
+                    CmpOp::Ge => a >= b,
+                    CmpOp::Eq => a == b,
+                    CmpOp::Ne => a != b,
+                }
+            }
+            Fast::Ifelse(cte) => {
+                let [c, t, e] = &**cte;
+                if c.truth(env, ctx, bindings)? {
+                    t.truth(env, ctx, bindings)?
+                } else {
+                    e.truth(env, ctx, bindings)?
+                }
+            }
+            _ => truthy(&self.eval(env, ctx, bindings)?)?,
         })
     }
 }
@@ -1842,10 +2150,20 @@ fn vi_materialize_producer(ctx: &ViCtx, node: &Value) -> Result<Vec<Key>, ValueI
         "the `key` of producer '{}'",
         node.get("id").and_then(|v| v.as_str()).unwrap_or("")
     );
+    // The filter and key compiled once (a `skolem` key keeps `vi_skolem`). A
+    // point whose compiled evaluation fails is evaluated again by `vi_eval` /
+    // `vi_key`, which report the failure as they always have.
+    let fast_filt = filt.and_then(|f| FastExpr::compile(f, ctx, ranges));
+    let fast_key = (node_op(key) != Some("skolem"))
+        .then(|| FastExpr::compile(key, ctx, ranges))
+        .flatten();
     let mut members: Vec<Key> = Vec::new();
     vi_enumerate_join(ranges, &gates, ctx, |bindings| {
         if let Some(f) = filt {
-            let fv = vi_eval(f, ctx, bindings)?;
+            let fv = match fast_filt.as_ref().map(|ff| ff.eval(ctx, bindings)) {
+                Some(Ok(v)) => v,
+                _ => vi_eval(f, ctx, bindings)?,
+            };
             let pass = match fv {
                 Val::Bool(b) => b,
                 Val::Int(i) => i > 0,
@@ -1859,7 +2177,11 @@ fn vi_materialize_producer(ctx: &ViCtx, node: &Value) -> Result<Vec<Key>, ValueI
         if !gates.is_empty() && !vi_join_ok(&gates, ctx, bindings)? {
             return Ok(());
         }
-        members.push(vi_key(key, ctx, bindings, &column)?);
+        let k = match fast_key.as_ref().map(|fk| fk.eval(ctx, bindings)) {
+            Some(Ok(v)) => key_of(v, bindings, &column)?,
+            _ => vi_key(key, ctx, bindings, &column)?,
+        };
+        members.push(k);
         Ok(())
     })?;
     Ok(relational::distinct(&members))
@@ -2011,7 +2333,7 @@ fn vi_materialize_grouped(
             rows.push((key, Num::Float(v)));
             Ok(())
         })?;
-        let out_vals = vi_range_values(&gspec, ctx_imm, &HashMap::new())?;
+        let out_vals = vi_range_values(&gspec, ctx_imm, &Bindings::default())?;
         (rows, out_vals)
     };
     let agg = group_aggregate(&rows, op);
@@ -2973,7 +3295,7 @@ mod tests {
             maps: HashMap::new(),
         };
         let node = serde_json::json!({"op": "index", "args": [name, one_based]});
-        match vi_index(&node, &ctx, &HashMap::new())? {
+        match vi_index(&node, &ctx, &Bindings::default())? {
             Val::Float(f) => Ok(f),
             other => panic!("expected Float gather, got {other:?}"),
         }
@@ -3067,7 +3389,7 @@ mod tests {
         };
         let gather = |i: i64, j: i64| -> Result<f64, ValueInventionError> {
             let node = serde_json::json!({"op": "index", "args": ["M", i, j]});
-            match vi_index(&node, &ctx, &HashMap::new())? {
+            match vi_index(&node, &ctx, &Bindings::default())? {
                 Val::Float(f) => Ok(f),
                 other => panic!("expected Float, got {other:?}"),
             }
@@ -3205,5 +3527,41 @@ mod tests {
             materialize_value_invention(&model, &const_arrays, &HashMap::new(), &no_bounds())
                 .is_err()
         );
+    }
+
+    /// Two operator sub-trees share a structural id exactly when their JSON
+    /// text is the same: an operand, a field other than `args`, or the field
+    /// order apart gives a new id.
+    #[test]
+    fn tree_ids_match_equal_json_text() {
+        let tree = serde_json::json!({"op": "+", "args": [
+            {"op": "min", "args": ["u", "v"]},
+            {"op": "min", "args": ["u", "v"]},
+            {"op": "min", "args": ["v", "u"]},
+            {"op": "min", "args": ["u", 1]},
+            {"op": "min", "args": ["u", "1"]},
+            {"op": "min", "args": ["u", "v"], "wrt": "t"},
+            {"args": ["u", "v"], "op": "min"},
+            {"op": "*", "args": [{"op": "min", "args": ["u", "v"]}, 2]},
+            {"op": "*", "args": [{"op": "min", "args": ["u", "v"]}, 2]}
+        ]});
+        let mut ids = TreeIds::default();
+        ids.id(&tree);
+        let a = node_args(&tree);
+        let id = |v: &Value| ids.of[&(v as *const Value)];
+        let text: Vec<String> = a.iter().map(Value::to_string).collect();
+        for i in 0..a.len() {
+            for j in 0..a.len() {
+                assert_eq!(
+                    id(&a[i]) == id(&a[j]),
+                    text[i] == text[j],
+                    "{} vs {}",
+                    a[i],
+                    a[j]
+                );
+            }
+        }
+        assert_eq!(id(&a[0]), id(&node_args(&a[7])[0]));
+        assert_eq!(ids.of.len(), 12);
     }
 }

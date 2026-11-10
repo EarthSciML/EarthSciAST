@@ -188,6 +188,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("intern_oracle_test.jl")               # A1 hash-consing ≡ the interpreter (differential)
     include("xeq_variant_oracle_test.jl")          # A3 cross-eq variant memo ≡ the interpreter (differential)
     include("expand_memo_oracle_test.jl")          # A4 template-expansion memo ≡ expand_flattened_refs (differential)
+    include("template_instantiation_cache_test.jl") # template sites from cached skeletons ≡ the direct expansion
     include("tree_walk_faq_test.jl")
     include("broadcast_alignment_test.jl")           # §4.3.4 broadcast lowering + name-based operand alignment
     include("tree_walk_inline_const_index_test.jl")  # inline `const` array as index() target (fix/index-inline-const-array)
@@ -250,6 +251,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
         include("reactant_lane_dedup_test.jl")       # merged lane tables ≢ grid size
         include("reactant_locate_test.jl")           # count-locate ≢ a reduction, and bit-exact
         include("reactant_direct_emit_test.jl")      # the COMPILED backend: StableHLO built directly from the _Node IR
+        include("reactant_direct_closed_test.jl")    # the closed-AST library shapes: the count, computed-subscript table reads
         include("reactant_direct_sharding_test.jl") # multi-device: needs ESM_TEST_REACTANT_GPU=1 too, else self-skips
         include("compiler_xla_test.jl")              # esm_problem(; compiler = :xla): the emitter on the SOLVE path
     else
@@ -330,6 +332,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("relational_templates_test.jl")         # the lib/relational.esm argmin/argmax templates against the ops
     include("closed_templates_native_test.jl")      # the phase-3 library templates under strict native
     include("relational_rewrites_test.jl")          # the skolem / rank / gated-argmin fixtures against their lib/relational.esm rewrites
+    include("rank_count_setup_test.jl")             # rank_of_set lookups as a setup table; the count over sorted constant keys
     include("makearray_nested_reduction_test.jl")   # #547: a nested scalar reduction in a makearray region
     include("affine_reduce_test.jl")                # the affine tier's run-time contraction fold
     include("native_probe_fixtures_test.jl")        # native's probe fixtures: rank > 3, fill sections, const subscripts

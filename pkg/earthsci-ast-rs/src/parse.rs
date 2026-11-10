@@ -310,17 +310,14 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // index_sets merge, metaparameter close+fold — before structural
     // validation and the §9.6.3 fixpoint, so validators run on the folded,
     // expanded form (esm-spec §9.6.4 / §9.7.6).
-    if let Some(resolved) = crate::template_imports::resolve_template_machinery_scoped(
-        &json_value,
+    crate::template_imports::resolve_template_machinery_scoped_owned(
+        &mut json_value,
         &base,
         &options.metaparameters,
         &mount_declared,
         false,
     )
-    .map_err(|e| EsmError::SchemaValidation(e.to_string()))?
-    {
-        json_value = resolved;
-    }
+    .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
 
     // esm-spec §4.7 "Index-set merge", the deferred half: the root has now
     // closed and folded its own `index_sets`, so the staged mount contributions
@@ -331,6 +328,12 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
         crate::ref_loading::root_metaparameter_env(&json_value, &options.metaparameters);
     crate::ref_loading::apply_staged_index_sets(&mut json_value, staged_index_sets, &closed_env)
         .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+
+    // The template passes below walk the whole document several times; an
+    // equation whose right-hand side is a `const` of numbers (a document's
+    // data) holds nothing any of them acts on, so its payload waits outside
+    // the document until it is deserialized.
+    let parked = park_const_data(&mut json_value);
 
     // Post-schema structural + semantic checks (version compatibility,
     // cross-field format rules, reference integrity, cyclic coupling) — the
@@ -421,6 +424,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // bottom-up, so duplicates are collapsed before they can accumulate —
     // this is where the load-phase peak used to live (~978 MiB of typed AST
     // for `simpleclimate.esm` at the production grid; ~6 MiB deduplicated).
+    unpark_const_data(&mut json_value, parked)?;
     let mut esm_file: EsmFile = {
         let _intern = crate::intern::InternScope::new();
         serde_json::from_value(json_value).map_err(EsmError::JsonParse)?
@@ -975,6 +979,100 @@ impl ReservedIndexScan {
 
 /// Run every post-schema structural check, collecting errors and returning
 /// `EsmError::StructuralValidation` if any check fires.
+/// A `const` equation payload [`park_const_data`] set aside: component kind,
+/// component name, equation position, and the payload.
+type ParkedConst = (&'static str, String, usize, Value);
+
+/// Take the `value` of every component equation whose right-hand side is a
+/// `const` node holding an array of numbers ([`crate::json_visit::is_number_data`])
+/// out of a document with expression templates and no `match` rule, leaving
+/// the number `0` in its place. Such an equation is not inside any template
+/// application, so expansion neither reads nor copies it, and with no rule to
+/// fire nothing rewrites it; the passes in between act on objects and
+/// strings, which the payload holds none of. Nothing is taken from a document
+/// without templates, whose passes walk it once.
+fn park_const_data(doc: &mut Value) -> Vec<ParkedConst> {
+    let mut out = Vec::new();
+    let Some(root) = doc.as_object_mut() else {
+        return out;
+    };
+    let has_match = |t: Option<&Value>| {
+        t.and_then(Value::as_object)
+            .is_some_and(|t| t.values().any(|d| d.get("match").is_some()))
+    };
+    let has_templates =
+        |t: Option<&Value>| t.and_then(Value::as_object).is_some_and(|t| !t.is_empty());
+    if has_match(root.get("expression_templates")) {
+        return out;
+    }
+    let mut any = has_templates(root.get("expression_templates"));
+    for kind in ["models", "reaction_systems"] {
+        for (_, comp) in root
+            .get(kind)
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            if has_match(comp.get("expression_templates")) {
+                return out;
+            }
+            any |= has_templates(comp.get("expression_templates"));
+        }
+    }
+    if !any {
+        return out;
+    }
+    for kind in ["models", "reaction_systems"] {
+        let Some(Value::Object(comps)) = root.get_mut(kind) else {
+            continue;
+        };
+        for (name, comp) in comps.iter_mut() {
+            let Some(Value::Array(eqs)) = comp.get_mut("equations") else {
+                continue;
+            };
+            for (k, eq) in eqs.iter_mut().enumerate() {
+                let Some(Value::Object(rhs)) = eq.get_mut("rhs") else {
+                    continue;
+                };
+                if rhs.get("op").and_then(Value::as_str) != Some("const") {
+                    continue;
+                }
+                if let Some(v) = rhs.get_mut("value")
+                    && v.as_array()
+                        .is_some_and(|a| crate::json_visit::is_number_data(a))
+                {
+                    let payload = std::mem::replace(v, Value::from(0));
+                    out.push((kind, name.clone(), k, payload));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Put back what [`park_const_data`] took, each payload where it found the
+/// placeholder it left.
+fn unpark_const_data(doc: &mut Value, parked: Vec<ParkedConst>) -> Result<(), EsmError> {
+    for (kind, name, k, payload) in parked {
+        let slot = doc
+            .get_mut(kind)
+            .and_then(|c| c.get_mut(&name))
+            .and_then(|c| c.get_mut("equations"))
+            .and_then(|e| e.get_mut(k))
+            .and_then(|e| e.get_mut("rhs"))
+            .filter(|r| r.get("op").and_then(Value::as_str) == Some("const"))
+            .and_then(|r| r.get_mut("value"))
+            .filter(|v| v.as_i64() == Some(0));
+        let Some(slot) = slot else {
+            return Err(EsmError::StructuralValidation(format!(
+                "internal: the const data of {kind}.{name} equation {k} moved during load"
+            )));
+        };
+        *slot = payload;
+    }
+    Ok(())
+}
+
 fn validate_structural_json(json_value: &Value) -> Result<(), EsmError> {
     let mut errors: Vec<String> = Vec::new();
 

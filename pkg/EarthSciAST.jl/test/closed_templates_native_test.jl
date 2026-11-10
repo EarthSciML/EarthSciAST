@@ -249,6 +249,56 @@ function _ct_relational_doc()
     )
 end
 
+# A mesh's per-face state relaxing to the sum of the per-edge state over its
+# three edges, read through the face-to-edge connectivity (the mesh_rank
+# workload's shape): `D(q[f]) = Σ_le w[edge(f, le)] - q[f]`, the sum an
+# array-producing nested `faq` over `f` under the `-`. `split`: the sum is its
+# own observed `q_in[f]` and `D(q[f]) = q_in[f] - q[f]`. The connectivity is an
+# observed's values (`observed_conn`) or an inline const.
+function _ct_mesh_doc(; split::Bool, observed_conn::Bool)
+    conn = [[1, 2, 3], [3, 4, 5], [5, 6, 1], [2, 4, 6]]
+    F = Dict("f" => Dict("from" => "faces"))
+    FL = Dict("f" => Dict("from" => "faces"), "le" => Dict("from" => "local_edges"))
+    Ed = Dict("e" => Dict("from" => "edge_ids"))
+    e = observed_conn ? "edge_of" : _ct_const(conn)
+    face_sum = _ct_faq(_ct_ix("w", _ct_ix(e, "f", "le")), ["f"], FL; semiring = "sum_product")
+    vars = Dict{String, Any}(
+        "w" => Dict("type" => "unknown", "shape" => ["edge_ids"], "default" => 0.0),
+        "q" => Dict("type" => "unknown", "shape" => ["faces"], "default" => 0.0)
+    )
+    eqs = Any[
+        Dict(
+            "lhs" => _ct_dlhs("w", ["e"], Ed),
+            "rhs" => _ct_faq(_ct_op("-", "e", _ct_ix("w", "e")), ["e"], Ed)
+        ),
+    ]
+    if observed_conn
+        vars["edge_of"] = Dict("type" => "unknown", "shape" => ["faces", "local_edges"])
+        pushfirst!(eqs, Dict("lhs" => "edge_of", "rhs" => _ct_const(conn)))
+    end
+    if split
+        vars["q_in"] = Dict("type" => "unknown", "shape" => ["faces"])
+        push!(eqs, Dict("lhs" => _ct_ix("q_in", "f"), "rhs" => face_sum))
+        push!(
+            eqs, Dict(
+                "lhs" => _ct_dlhs("q", ["f"], F),
+                "rhs" => _ct_faq(_ct_op("-", _ct_ix("q_in", "f"), _ct_ix("q", "f")), ["f"], F)
+            )
+        )
+    else
+        push!(eqs, Dict("lhs" => _ct_dlhs("q", ["f"], F), "rhs" => _ct_op("-", face_sum, _ct_ix("q", "f"))))
+    end
+    return Dict(
+        "esm" => "1.2.0", "metadata" => Dict("name" => "mesh_face_sum"),
+        "index_sets" => Dict(
+            "faces" => Dict("kind" => "interval", "size" => 4),
+            "local_edges" => Dict("kind" => "interval", "size" => 3),
+            "edge_ids" => Dict("kind" => "interval", "size" => 6)
+        ),
+        "models" => Dict("M" => Dict("variables" => vars, "equations" => eqs))
+    )
+end
+
 @testset "phase-3 templates under strict native (closed-AST phase 3)" begin
     @testset "JSON numbers after a float in an array" begin
         x = JSON3.read("""{"a": [0.5, {"r": [1, "n"], "s": 3, "t": [2, 2.5, 3, {"u": 4}]}, [1]], "b": [1, 2.0, 2.5, 3]}""")
@@ -336,9 +386,10 @@ end
 
     # Near misses of the setup seed: a gated faq whose body has no nested
     # reduction (left to the right-hand-side tiers), an ungated one nested one
-    # deep, and one whose body leaves the setup language are not seeded; a seeded body whose
-    # nested range does not start at 1 is refused by name, since the setup
-    # sweep loops only over `1:n`.
+    # deep, and one whose body leaves the setup language are not seeded. The
+    # setup sweep loops only over `1:n`: an ungated body whose nested range
+    # does not start at 1 is not seeded (the right-hand-side tiers take it),
+    # a gated one is refused by name, since no right-hand-side tier folds it.
     @testset "setup seed near misses" begin
         flat = _ct_op("+", _ct_ix("src_lon", "i"), _ct_ix("tgt_lon", "j"))
         @test !_CT._is_setup_join_reduction(_CT.expression_from_json(_ct_faq(flat, ["i", "j"], Dict("i" => Dict("from" => "s"), "j" => Dict("from" => "t")); join = Any[Dict("on" => Any[Any["a", "b"]])])))
@@ -352,6 +403,8 @@ end
         # A body outside the setup language (`exp`) is not seeded.
         @test !_CT._is_setup_join_reduction(_CT.expression_from_json(_ct_faq(_ct_op("exp", nested), ["i", "j"], Dict("i" => Dict("from" => "s"), "j" => Dict("from" => "t")); join = Any[Dict("on" => Any[Any["a", "b"]])])))
         off = _ct_faq(_ct_ix("src_poly", "i", _ct_op("-", "k", 1), 1), [], Dict("k" => Any[2, 4]); reduce = "max")
+        off2 = _ct_faq(_ct_op("+", 1, off), [], Dict("m" => Any[1, 3]))
+        @test !_CT._is_setup_join_reduction(_CT.expression_from_json(_ct_faq(off2, ["i", "j"], Dict("i" => Dict("from" => "s"), "j" => Dict("from" => "t")))))
         err = try
             _CT.esm_problem(_ct_write(_ct_regrid_doc(2, "planar"; area = off)), (0.0, 1.0); compiler = :native)
             nothing
@@ -371,5 +424,15 @@ end
         dn = _ct_du(tp, :native)
         @test _ct_same(dn, _ct_du(tp, :interpreter))
         @test _ct_same(dn, _ct_du(_ct_write(_ct_nearest_doc(40, 9; tpl = false)), :native))
+    end
+
+    # The nested sum used to leave a bare array producer in the cell body, so
+    # every compiler failed with E_TREEWALK_UNBOUND_VARIABLE on `w`.
+    @testset "nested face sum through connectivity (observed=$observed_conn)" for observed_conn in (true, false)
+        unsplit = _ct_write(_ct_mesh_doc(; split = false, observed_conn))
+        ref = _ct_du(_ct_write(_ct_mesh_doc(; split = true, observed_conn)), :interpreter)
+        @test all(all(isfinite, v) for v in values(ref))
+        @test _ct_same(_ct_du(unsplit, :interpreter), ref)
+        @test _ct_same(_ct_du(unsplit, :native), ref)
     end
 end

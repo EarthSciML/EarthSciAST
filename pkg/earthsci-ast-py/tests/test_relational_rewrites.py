@@ -7,7 +7,10 @@ for a set's own rank, ``argmin_where`` for a gated arg-witness). Both forms are
 built with the same caller data and must agree: the derived set's members (the
 op's tuples against the template's integer keys, decoded), the 1-based dense
 IDs, the arg-witness buffers, and the right-hand side at the initial state, bit
-for bit. A `value_invention_key_out_of_range` refusal names the column.
+for bit. Both forms are also checked against the expected values the manifest's
+``golden`` files hold (computed from the op form by the reference binding,
+``rewrites/goldens.py``). A `value_invention_key_out_of_range` refusal names
+the column.
 """
 
 from __future__ import annotations
@@ -31,6 +34,9 @@ from earthsci_ast.value_invention import ValueInventionError, materialize_value_
 REWRITES = REPO_ROOT / "tests" / "conformance" / "relational_templates" / "rewrites"
 MANIFEST = json.loads((REWRITES / "manifest.json").read_text())["rewrites"]
 LIBRARY = REPO_ROOT / "lib" / "relational.esm"
+GOLDEN = {
+    e["id"]: json.loads((REWRITES / e["golden"]).read_text()) for e in MANIFEST if e.get("golden")
+}
 
 CASES = [
     (e, i, case)
@@ -93,13 +99,30 @@ def _bits(v) -> list[bytes]:
     return [struct.pack("<d", float(x)) for x in np.asarray(v, dtype=float).ravel()]
 
 
+def _elem_key(name: str, model: str) -> str:
+    """`Model.var[1, 2]` -> `var[1,2]`, the golden files' state-element key."""
+    name = name[len(model) + 1 :] if name.startswith(model + ".") else name
+    return name.replace(" ", "")
+
+
+def _rhs_at(build, model: str, state: dict) -> dict:
+    """The right-hand side at the golden probe state, keyed like it."""
+    names = [_elem_key(n, model) for n in build.elem_names]
+    assert sorted(names) == sorted(state), (names, sorted(state))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        dy = build.rhs_function(0.0, np.asarray([state[n] for n in names], dtype=float))
+    return dict(zip(names, dy))
+
+
 @pytest.mark.parametrize("entry,idx,case", CASES, ids=[f"{e['id']}-{i}" for e, i, _ in CASES])
 @pytest.mark.parametrize("compiler", ["interpreter", "native"])
 def test_rewrite_agrees_with_the_op_form(entry: dict, idx: int, case: dict, compiler: str) -> None:
     cmp = entry["compare"]
     model = entry["models"][0]
+    gold = GOLDEN[entry["id"]]["cases"][idx]
     if cmp.get("vi_only"):
-        _check_vi_only(entry, case, model)
+        _check_vi_only(entry, case, model, gold)
         return
     op_prob = _build(REPO_ROOT / entry["source"], case, "interpreter", model)
     tp_prob = _build(_rewrite_path(entry), case, compiler, model)
@@ -112,6 +135,10 @@ def test_rewrite_agrees_with_the_op_form(entry: dict, idx: int, case: dict, comp
         decoded = [_decode(m, s["decode"]["lo"], s["decode"]["n_b"]) for m in tp_members]
         assert decoded == [tuple(m) for m in op_members]
         assert tp_prob.build.derived_extents[faq] == op_prob.build.derived_extents[faq]
+        want = [tuple(m) for m in gold["sets"][faq]["members"]]
+        assert [tuple(m) for m in op_members] == want, "op form vs golden"
+        assert decoded == want, "template form vs golden"
+        assert tp_prob.build.derived_extents[faq] == gold["sets"][faq]["extent"]
     if "rank" in cmp:
         faq = cmp["rank"]["faq"]
         op_members = [tuple(m) for m in op_prob.build.vi_members[faq]]
@@ -119,6 +146,8 @@ def test_rewrite_agrees_with_the_op_form(entry: dict, idx: int, case: dict, comp
         want = [op_ids[m] + 1 for m in op_members]  # the 0 -> 1 base shift
         got = observed_field(tp_prob, cmp["rank"]["variable"])
         assert list(np.asarray(got, dtype=float)) == [float(x) for x in want]
+        assert [float(x) for x in want] == gold["rank"]["values"], "op form vs golden"
+        assert _bits(got) == _bits(gold["rank"]["values"]), "template form vs golden"
         # rank_of over the template's own members returns the same IDs.
         members = list(tp_prob.build.vi_members[faq])
         assert [_rank_of(m, members) for m in members] == [float(x) for x in want]
@@ -132,6 +161,7 @@ def test_rewrite_agrees_with_the_op_form(entry: dict, idx: int, case: dict, comp
         want = np.vectorize(lambda *t: op_ids[tuple(sorted(int(x) for x in t))] + 1.0)(*cols)
         got = np.asarray(observed_field(tp_prob, rl["variable"]), dtype=float)
         assert _bits(got) == _bits(want), (got, want)
+        assert _bits(want) == _bits(gold["rank_lookup"]["values"]), "op form vs golden"
     for a in cmp.get("assignments", []):
         # The op's buffer is a value-invention output, not an observed.
         src = json.loads((REPO_ROOT / entry["source"]).read_text())
@@ -141,6 +171,7 @@ def test_rewrite_agrees_with_the_op_form(entry: dict, idx: int, case: dict, comp
         op_buf = np.asarray(vi.assignments[a["op"]], dtype=float)
         tp_buf = np.asarray(observed_field(tp_prob, a["template"]), dtype=float)
         assert _bits(tp_buf) == _bits(op_buf), (tp_buf, op_buf)
+        assert _bits(op_buf) == _bits(gold["assignments"][a["template"]]), "op form vs golden"
     if cmp.get("rhs"):
         b_op, b_tp = op_prob.build, tp_prob.build
         assert b_tp.elem_names == b_op.elem_names
@@ -149,9 +180,14 @@ def test_rewrite_agrees_with_the_op_form(entry: dict, idx: int, case: dict, comp
             dy_op = b_op.rhs_function(0.0, np.asarray(b_op.y0, dtype=float))
             dy_tp = b_tp.rhs_function(0.0, np.asarray(b_tp.y0, dtype=float))
         assert _bits(dy_tp) == _bits(dy_op), (dy_tp, dy_op)
+        g = gold["rhs"]
+        want = [g["dy"][n] for n in sorted(g["dy"])]
+        for form, b in (("op", b_op), ("template", b_tp)):
+            got = _rhs_at(b, model, g["state"])
+            assert _bits([got[n] for n in sorted(g["dy"])]) == _bits(want), f"{form} form vs golden"
 
 
-def _check_vi_only(entry: dict, case: dict, model: str) -> None:
+def _check_vi_only(entry: dict, case: dict, model: str, gold: dict) -> None:
     """Value invention alone, for a document whose right-hand side needs data the
     manifest does not carry: the op form's raw model against the template form's
     expanded (flattened) model."""
@@ -170,6 +206,10 @@ def _check_vi_only(entry: dict, case: dict, model: str) -> None:
         decoded = [_decode(m, s["decode"]["lo"], s["decode"]["n_b"]) for m in tp.members[s["faq"]]]
         assert decoded == [tuple(m) for m in op.members[s["faq"]]]
         assert tp.extents[s["faq"]] == op.extents[s["faq"]]
+        want = [tuple(m) for m in gold["sets"][s["faq"]]["members"]]
+        assert decoded == want, "template form vs golden"
+        assert [tuple(m) for m in op.members[s["faq"]]] == want, "op form vs golden"
+        assert tp.extents[s["faq"]] == gold["sets"][s["faq"]]["extent"]
 
 
 def _rank_of(x: int, members: list[int]) -> float:
@@ -214,6 +254,13 @@ def test_rewrite_loads_and_runs_like_the_op_form(entry: dict) -> None:
         op = run_inline_tests(str(REPO_ROOT / entry["source"]), compiler="interpreter")
         tp = run_inline_tests(str(path), compiler="interpreter")
         assert [r.actual for r in tp] == [r.actual for r in op]
+        # Integrator outputs: within each assertion's tolerance, not bit for bit.
+        gold = GOLDEN[entry["id"]]["inline_tests"]
+        for form, res in (("op", op), ("template", tp)):
+            assert len(res) == len(gold), form
+            for r, g in zip(res, gold):
+                band = max(g["atol"], g["rtol"] * abs(g["actual"]))
+                assert abs(r.actual - g["actual"]) <= band, (form, r.actual, g)
 
 
 def test_out_of_range_key_component_names_the_column() -> None:
@@ -234,3 +281,20 @@ def test_out_of_range_key_component_names_the_column() -> None:
         )
     assert exc.value.code == "value_invention_key_out_of_range"
     assert "candidate_set" in str(exc.value)
+
+
+def test_golden_files_are_current() -> None:
+    """The golden files are what rewrites/goldens.py computes from the op forms
+    today (regenerate them with it, never by hand)."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("rewrite_goldens", REWRITES / "goldens.py")
+    goldens = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(goldens)
+    for entry in MANIFEST:
+        g = goldens.golden(entry)
+        if g is None:
+            assert not entry.get("golden"), entry["id"]
+            continue
+        assert entry.get("golden") == f"golden/{entry['id']}.json", entry["id"]
+        assert (REWRITES / entry["golden"]).read_text() == goldens.render(g), entry["id"]

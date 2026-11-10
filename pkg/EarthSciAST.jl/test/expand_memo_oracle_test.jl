@@ -48,8 +48,12 @@ const ESM = EarthSciAST
     # The three routes to one program: references surviving into the build (the
     # memo runs there, with site recording), the Option-A image expanded up
     # front, and that image built by per-site re-expansion.
-    function memo_oracle(fix; nstates = nothing, compiler = :native)
+    # `lift`: the system as the run path hands it to the build, after the
+    # elementwise lift of template applications over array arguments (esm-spec
+    # §9.6.11), whose lifted equations hold marked expansions.
+    function memo_oracle(fix; nstates = nothing, compiler = :native, lift = false)
         flat = flatten(load_path(fix))
+        lift && (flat = ESM.promote_downstream_shapes(ESM.algebraic_states_to_observeds(flat)))
         on = probe(flat; compiler = compiler)
         atload = probe(expand_flattened_refs(flat); compiler = compiler)
         nomemo = probe(
@@ -83,5 +87,20 @@ const ESM = EarthSciAST
 
     @testset "one-sided-face fixture: the three routes agree" begin
         memo_oracle(bench("transport_3axis_7cubed.esm"))
+    end
+
+    @testset "template applied over array arguments: the three routes agree ($(basename(fix)))" for fix in vcat(
+            [
+                joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "template_array_args", "fixtures", f)
+                    for f in readdir(joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "template_array_args", "fixtures"))
+                    if endswith(f, ".esm")
+            ],
+            [joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "template_array_args", "coupled", "template.esm")]
+        )
+        on = memo_oracle(fix; lift = true)
+        onpc = memo_oracle(fix; lift = true, compiler = :interpreter)
+        for k in 1:3
+            @test reinterpret(UInt64, on[1][k]) == reinterpret(UInt64, onpc[1][k])
+        end
     end
 end

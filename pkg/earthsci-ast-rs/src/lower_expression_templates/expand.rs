@@ -75,7 +75,9 @@ fn template_origin_nonce() -> &'static str {
     static NONCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     NONCE.get_or_init(|| {
         use std::hash::BuildHasher;
-        let n = std::collections::hash_map::RandomState::new().hash_one(std::process::id());
+        // The random keys of `RandomState` are the entropy; the hashed value
+        // is irrelevant. (`std::process::id` would panic on wasm32.)
+        let n = std::collections::hash_map::RandomState::new().hash_one(());
         format!("{n:016x}:")
     })
 }
@@ -229,13 +231,28 @@ pub fn expand(value: &mut Value) -> Result<(), ExpressionTemplateError> {
                 if k == "expression_templates" || k == "expression_template_imports" {
                     continue;
                 }
-                let Some(child) = comp.get(&k) else { continue };
+                let Some(child) = comp.get_mut(&k) else {
+                    continue;
+                };
+                let parked = park_plain(child, false);
                 let shared = to_shared(child);
                 let mut memo = PtrMemo::default();
                 let _marking = MarkingScope::set(LOAD_MARKS.with(std::cell::Cell::get));
-                let expanded = expand_all(&shared, &named, &format!("{scope}.{k}"), &mut memo)?;
+                let expanded = expand_all(&shared, &named, &format!("{scope}.{k}"), &mut memo);
+                let expanded = match expanded {
+                    Ok(x) => x,
+                    Err(e) => {
+                        if let Some(child) = comp.get_mut(&k) {
+                            unpark_plain(child, parked);
+                        }
+                        return Err(e);
+                    }
+                };
                 if !Rc::ptr_eq(&expanded, &shared) {
-                    comp.insert(k, to_value(&expanded));
+                    comp.insert(k.clone(), to_value(&expanded));
+                }
+                if let Some(child) = comp.get_mut(&k) {
+                    unpark_plain(child, parked);
                 }
             }
             comp.remove("expression_templates");
