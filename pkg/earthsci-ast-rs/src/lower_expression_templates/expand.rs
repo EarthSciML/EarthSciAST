@@ -75,7 +75,9 @@ fn template_origin_nonce() -> &'static str {
     static NONCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     NONCE.get_or_init(|| {
         use std::hash::BuildHasher;
-        let n = std::collections::hash_map::RandomState::new().hash_one(std::process::id());
+        // The random keys of `RandomState` are the entropy; the hashed value
+        // is irrelevant. (`std::process::id` would panic on wasm32.)
+        let n = std::collections::hash_map::RandomState::new().hash_one(());
         format!("{n:016x}:")
     })
 }
