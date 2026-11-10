@@ -13,8 +13,10 @@ carries three coordinated bodies of change:
   contract: six tests, one per binding, assert the declared surface against it
   in both directions.
 
-It also carries two changes to the **`.esm` document format** itself, which
-affect your documents rather than your code.
+It also carries changes to the **`.esm` document format** itself, which
+affect your documents rather than your code: the **esm 2.0.0** break, which
+removes every external function from the expression AST (next section), and
+two smaller changes in Part II.
 
 This guide is organised for someone with a working codebase who wants to know
 what breaks and what to write instead. If you have five minutes, read Part I.
@@ -37,6 +39,72 @@ Every row in this guide carries a kind:
 Where a deprecation alias exists, it disappears **at the next major release**.
 Aliases are not a permanent compatibility layer; they exist so you can move at
 your own pace inside one minor.
+
+---
+
+# esm 2.0.0 — the external functions leave the expression AST (`format`)
+
+esm 2.0.0 removes every operator whose evaluation needed code outside the
+expression AST. Each one is now an expression template in the standard library
+(`lib/*.esm`), imported from `esm:std/<file>.esm` with
+`expression_template_imports` and applied with `apply_expression_template`
+(esm-spec §4.2 "Removed ops", §9.2, §8.6.1). A template body is ordinary AST, so
+every binding evaluates it with the same core operators.
+
+| Removed (1.x) | 2.0.0 replacement | Kind |
+|---|---|---|
+| `fn` with `datetime.year` … `datetime.is_leap_year` | the template of the same name in `esm:std/calendar.esm` | `format` |
+| `fn` with `interp.searchsorted` / `interp.linear` / `interp.bilinear` | `searchsorted(x, xs, n)` / `linear(table, axis, x, n)` / `bilinear(table, axis_x, axis_y, x, y, nx, ny)` in `esm:std/interp.esm`; each axis length is now an explicit parameter | `format` |
+| the `function_tables` block and `table_lookup` | the table's data and axes as `const` arrays, read by `linear` / `bilinear` | `format` |
+| `skolem` | a scalar integer key: `pair_key` / `edge_key` in `esm:std/relational.esm`, or one integer column per component for a `join.on` key | `format` |
+| `rank` | the member's loop index over the `distinct` set, or `rank_of` / `rank_of_set` | `format` |
+| `argmin` / `argmax` | the `argmin` / `argmax` templates, or `argmin_where` / `argmax_where` when the candidates are filtered or joined | `format` |
+| `polygon_intersection_area` (and its `manifold` field) | `overlap_area_planar`, or `overlap_area_spherical` over a `lonlat_to_unit` stack, in `esm:std/geometry.esm` | `format` |
+| `intersect_polygon` | none | `format` |
+
+**Loading.** A 2.0.0 binding rejects a document that uses any of these, whatever
+`esm` it declares, with the hard error `removed_op`. The error names the
+operator or field and the node path. No binding rewrites the document for you
+at load.
+
+**`migrate()`.** Each binding's `migrate` / `can_migrate` relabels a 1.x
+document as 2.0.0 when it uses none of the removed operators or fields. When it
+uses one, `migrate` refuses with `removed_op` and points at the codemod.
+
+**The codemod.** One reference implementation, in Python, rewrites a 1.x
+document into 2.0.0: each removed node becomes its template call, the component
+gains the matching `expression_template_imports` entry, `function_tables` data
+moves inline, and `esm` becomes `2.0.0`.
+
+```bash
+python -m earthsci_ast.migrate model.esm                # rewrite in place
+python -m earthsci_ast.migrate old.esm -o new.esm        # write elsewhere (one input)
+python -m earthsci_ast.migrate *.esm --check             # write nothing; exit 1 if a file would change
+```
+
+From Python, call `earthsci_ast.migration.migrate_document(doc)`. A
+multi-component `skolem` key needs the range of each component before it can
+become a `pair_key`; pass them with `--key-bounds` (`key_bounds=` in Python).
+The codemod refuses, naming the node, what has no replacement:
+`intersect_polygon`, an `fn` outside `datetime.*` / `interp.*`, a table declaring
+`out_of_bounds: "error"`, and `skolem` / `rank` shapes it cannot map.
+
+**What changes numerically.** The calendar, interpolation, table and key
+templates reproduce the removed operators' `binary64` results. Three things
+differ:
+
+- The overlap-area templates agree with the old geometry backends within the
+  CONFORMANCE_SPEC §5.8.2 tolerance, not bit for bit. There is no `geodesic`
+  model; a `geodesic` document becomes `overlap_area_spherical`, the same
+  great-circle model the backends used.
+- `argmin` / `argmax` templates let a NaN candidate win at its first occurrence;
+  the operators skipped a NaN after the first candidate.
+- The calendar templates return NaN for `|t| ≥ 2^52` s, where `datetime.*`
+  answered or raised `closed_function_overflow`.
+
+The removed operators' own diagnostics (`unknown_closed_function`, the
+`interp_*`, `searchsorted_*`, `table_*`, `table_lookup_*` and
+`closed_function_*` codes, `geometry_manifold_invalid`) are gone with them.
 
 ---
 
