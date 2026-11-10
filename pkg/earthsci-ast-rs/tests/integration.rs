@@ -91,8 +91,6 @@ mod data_source_extent_scope;
 mod data_source_unbound_conformance;
 #[path = "data_source_url_conformance.rs"]
 mod data_source_url_conformance;
-#[path = "deprecated_op_alias.rs"]
-mod deprecated_op_alias;
 #[path = "discrete_materialize_conformance.rs"]
 mod discrete_materialize_conformance;
 #[path = "display_conformance.rs"]
@@ -301,6 +299,8 @@ mod refresh_conformance;
 mod relational_rewrites;
 #[path = "relational_templates.rs"]
 mod relational_templates;
+#[path = "removed_spellings.rs"]
+mod removed_spellings;
 #[path = "reserved_index_symbol.rs"]
 mod reserved_index_symbol;
 #[path = "reservoir_constant_species.rs"]

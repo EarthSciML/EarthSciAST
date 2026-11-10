@@ -302,22 +302,6 @@ fn opacity_priority_shadowing_generic_fires_compound_silently_does_not() {
 }
 
 // ---------------------------------------------------------------------------
-// per_instantiation_validation (§9.6.9): manifold param, two call sites, one
-// inadmissible -> geometry_manifold_invalid naming the call site.
-// ---------------------------------------------------------------------------
-#[test]
-fn per_instantiation_validation_names_call_site() {
-    let err = load_b("per_instantiation_validation", "fixture.esm").expect_err("must reject");
-    assert_eq!(err.code, "geometry_manifold_invalid");
-    assert!(
-        err.message.contains("area_bad"),
-        "call site: {}",
-        err.message
-    );
-    assert!(err.message.contains("overlap"), "template: {}", err.message);
-}
-
-// ---------------------------------------------------------------------------
 // flatten_registry_merge (§9.6.4 rule 7, §10.7): dedup + owner-path rename.
 // ---------------------------------------------------------------------------
 #[test]

@@ -34,8 +34,8 @@ fn faq_over(set: &str, idx: &[&str], output: &[&str], args: Value, expr: Value) 
 
 /// `left[i] = 10 i` over three rows, `dep = Σ left = 60`, `good = 3 dep =
 /// 180`; `expensive` is a million-cell product nothing requested reads, and
-/// `bad` a `table_lookup` past an `out_of_bounds: "error"` axis, which fails
-/// any evaluation of it.
+/// `bad` a gather of the parameter array `tab` past its end (no boundary policy),
+/// which fails any evaluation of it.
 fn cone_document(with_bad: bool) -> Value {
     let mut variables = json!({
         "q": {"type": "parameter", "units": "1", "default": 9.0},
@@ -54,9 +54,10 @@ fn cone_document(with_bad: bool) -> Value {
             json!({"op": "*", "args": ["a", "b", "c"]}))}),
     ];
     if with_bad {
+        variables["tab"] = json!({"type": "parameter", "units": "1", "shape": ["knots"],
+            "default": [1.0, 3.0, 2.0, 5.0]});
         variables["bad"] = json!({"type": "unknown", "units": "1"});
-        equations.push(json!({"lhs": "bad", "rhs": {
-            "op": "table_lookup", "table": "tab", "axes": {"q": "q"}, "args": []}}));
+        equations.push(json!({"lhs": "bad", "rhs": {"op": "index", "args": ["tab", "q"]}}));
     }
     json!({
         "esm": "2.0.0",
@@ -64,13 +65,8 @@ fn cone_document(with_bad: bool) -> Value {
         "index_sets": {
             "rows": {"kind": "interval", "size": 3},
             "big": {"kind": "interval", "size": 100},
+            "knots": {"kind": "interval", "size": 4},
         },
-        "function_tables": {"tab": {
-            "axes": [{"name": "q", "values": [0.0, 1.0, 2.0, 3.0]}],
-            "interpolation": "linear",
-            "out_of_bounds": "error",
-            "data": [1.0, 3.0, 2.0, 5.0],
-        }},
         "models": {"Rel": {"variables": variables, "equations": equations}},
     })
 }
@@ -159,7 +155,7 @@ fn the_build_pipeline_evaluates_only_the_cone() {
     let Err(e) = full else {
         panic!("evaluating `bad` must fail the unpruned build");
     };
-    assert!(e.contains("table_lookup_out_of_bounds"), "{e}");
+    assert!(e.contains("E_TREEWALK_CONSTARRAY_OOB"), "{e}");
 
     let (prob, seen) = build(
         &cone_document(true),
@@ -460,7 +456,7 @@ mod cli {
         // Without a request every observed is evaluated, `bad` among them.
         let (ok, text) = esm(tmp.path(), &[]);
         assert!(!ok, "{text}");
-        assert!(text.contains("table_lookup_out_of_bounds"), "{text}");
+        assert!(text.contains("E_TREEWALK_CONSTARRAY_OOB"), "{text}");
     }
 
     #[test]
@@ -474,7 +470,7 @@ mod cli {
         );
         // Refused before the build: not after an evaluation that would have
         // failed on `bad` first.
-        assert!(!text.contains("table_lookup_out_of_bounds"), "{text}");
+        assert!(!text.contains("E_TREEWALK_CONSTARRAY_OOB"), "{text}");
         assert!(!text.contains("Running simulation"), "{text}");
         // Every declared spelling is accepted.
         for name in ["good", "Rel.good"] {

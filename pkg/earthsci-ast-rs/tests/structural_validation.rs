@@ -1538,20 +1538,9 @@ fn test_self_join_syms_unknown_symbol() {
     );
 }
 
-/// A `distinct` value-invention aggregate whose Skolem key reads a state
+/// A `distinct` producer whose bare integer key `u[f]` reads a state
 /// variable classifies CONTINUOUS and is rejected (no relational engine on the
 /// hot path).
-#[test]
-fn test_f6_continuous_relational_node() {
-    assert_structural(
-        include_str!("../../../tests/invalid/faq/continuous_relational_node.esm"),
-        StructuralErrorCode::RelationalNodeInContinuous,
-        "/models/ContinuousRelationalNode/equations/0/rhs",
-    );
-}
-
-/// The template twin: the same producer with its one-component skolem key
-/// written as the bare integer expression `u[f]` is refused the same way.
 #[test]
 fn test_f6_continuous_relational_node_template() {
     assert_structural(

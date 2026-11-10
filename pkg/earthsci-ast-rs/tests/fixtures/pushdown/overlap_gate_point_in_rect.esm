@@ -63,7 +63,7 @@
               ]
             },
             "args": ["X", "Y", "W", "S", "E", "N"],
-            "key": { "op": "skolem", "label": "cell", "args": ["c"] },
+            "key": "c",
             "expr": { "op": "true", "args": [] }
           }
         }

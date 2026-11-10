@@ -232,21 +232,6 @@ fn attrs_on_rewrite_target_op_bind_as_scalar_metavariables() {
     assert_eq!(*expr, json!({"op": "*", "args": [1.4, "u"]}));
 }
 
-/// Drives tests/conformance/expression_templates/scalar_field_param — the
-/// scalar-field substitution site rule (esm-spec §9.6.1) instantiated twice
-/// (planar / spherical) — against its pinned Julia-generated expanded.esm.
-#[test]
-fn scalar_field_param_conformance_fixture_matches_expanded() {
-    let out = lower_fixture("scalar_field_param").expect("lowering must converge");
-    let src = std::fs::read_to_string(conf("scalar_field_param").join("expanded.esm"))
-        .expect("read expanded.esm");
-    let expanded: Value = serde_json::from_str(&src).expect("parse expanded.esm");
-    assert_eq!(out["models"], expanded["models"]);
-    let model = &out["models"]["Overlap"];
-    assert_eq!(obs_def(model, "area_planar")["manifold"], "planar");
-    assert_eq!(obs_def(model, "area_spherical")["manifold"], "spherical");
-}
-
 // ---------------------------------------------------------------------------
 // Static match-scoping constraints (`where`, esm-spec §9.6.1/§9.6.2/§9.6.3;
 // docs/content/rfcs/match-pattern-scoping-constraints.md)

@@ -159,8 +159,8 @@ fn an_op_with_no_rule_is_refused_by_name() {
     }
 
     // Evaluable-core ops with no value over scalar bindings: the build-time
-    // relational ops.
-    for name in ["skolem", "rank"] {
+    // relational op.
+    for name in ["distinct"] {
         let err = evaluate(&op(name, vec![n(1.0)]), &HashMap::new())
             .expect_err("an op with no scalar rule must not evaluate");
         let msg = err.join("; ");

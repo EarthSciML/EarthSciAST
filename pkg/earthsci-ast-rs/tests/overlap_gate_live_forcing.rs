@@ -101,6 +101,8 @@ fn document(fed: bool) -> Value {
         },
         "data_sources": {"Src": {"kind": "static", "source": {"url_template": "{unused_placeholder}"}}},
         "models": {"M": {
+            "expression_template_imports":
+                [{"ref": "esm:std/geometry.esm", "only": ["overlap_area_planar"]}],
             "variables": {
                 "pitch": {"type": "parameter", "units": "1", "default": 1.5},
                 "atol": {"type": "parameter", "units": "1", "default": 1.0e-12},
@@ -118,8 +120,9 @@ fn document(fed: bool) -> Value {
                 {"lhs": "tgt_poly", "rhs": {"op": "const", "args": [],
                     "value": [[[0, 0], [2, 0], [2, 1], [0, 1]], [[3.5, 0], [4.5, 0], [4.5, 1], [3.5, 1]]]}},
                 {"lhs": "A_ij", "rhs": faq(&["i", "j"], &ij, json!({
-                    "op": "polygon_intersection_area", "manifold": "planar",
-                    "args": [ix("src_poly", &["i"]), ix("tgt_poly", &["j"])]}), json!({"join": gate}))},
+                    "op": "apply_expression_template", "args": [], "name": "overlap_area_planar",
+                    "bindings": {"ring_a": "src_poly", "cell_a": "i", "nv_a": 4,
+                                 "ring_b": "tgt_poly", "cell_b": "j", "nv_b": 4}}), json!({"join": gate}))},
                 {"lhs": "A_j", "rhs": faq(&["j"], &ij, ix("A_ij", &["i", "j"]),
                     json!({"join": gate, "filter": sliver}))},
                 {"lhs": "F_tgt", "rhs": faq(&["j"], &ij,

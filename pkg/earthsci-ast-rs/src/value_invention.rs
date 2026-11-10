@@ -1255,7 +1255,7 @@ fn vi_materialize_column(
     Ok(())
 }
 
-/// A map body, or a producer's `filter` or non-`skolem` `key`, compiled once
+/// A join column's body, or a producer's `filter` or `key`, compiled once
 /// before its enumeration: the part of [`vi_eval`] whose names resolve before
 /// any point is bound — the node's own range symbols, scalar parameters and
 /// const-array factors — evaluated per point without walking the JSON or
@@ -1798,10 +1798,8 @@ fn vi_variable_precision(vname: &str) -> Option<crate::precision::PrecisionGuard
 /// Value invention mints new entities from data, once at setup: unique edge
 /// IDs from a mesh, dense ranks from a categorical column, bin keys from
 /// coordinates. This evaluates every value-invention aggregate in
-/// `model_json` (a `faq` with `distinct: true`, or whose body or `key` is
-/// `skolem` / `rank`, plus the arg-witness and grouped buffers that depend on
-/// them) and returns what it materialized as a [`ValueInventionResult`]. Pass
-/// that result to [`apply_value_invention`] to rewrite the model so the array
+/// `model_json` (a `faq` with `distinct: true`) and returns what it
+/// materialized as a [`ValueInventionResult`]. Pass that result to [`apply_value_invention`] to rewrite the model so the array
 /// runtime can compile it.
 ///
 /// - `model_json` is the raw model document, not the typed [`Model`]: the
@@ -1932,7 +1930,7 @@ pub fn rewrite_derived_index_sets(
 }
 
 /// Drop the value-invention equations (and their LHS variables) from the typed
-/// model: the skolem/distinct/rank outputs are materialised at setup, not
+/// model: the `distinct` outputs are materialised at setup, not
 /// integrated, so their defining equations must not reach the numeric pipeline
 /// (RFC §6.1). A no-op for an empty `vi_var_names`.
 pub fn drop_value_invention_equations(model: &mut Model, vi_var_names: &HashSet<String>) {

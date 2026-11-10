@@ -568,7 +568,7 @@ fn an_ic_reading_a_state_dependent_observed_says_why() {
 // (d) Value invention
 // ---------------------------------------------------------------------------
 
-/// `value_invention_materialize/composite_key_axis.esm` with a one-column key,
+/// `value_invention_materialize/composite_key_axis_template.esm` with a one-column key,
 /// the form the build pipeline's member ids take: four rows carrying the
 /// process ids `[101, 201, 101, 101]`, a `distinct` producer over them, and a
 /// count over the derived axis it sizes.
@@ -593,8 +593,7 @@ fn one_key_value_invention() -> Value {
                  "rhs": {"op": "faq", "id": "process_set", "args": [],
                          "semiring": "bool_and_or", "distinct": true,
                          "output_idx": ["e"], "ranges": {"n": {"from": "rows"}},
-                         "key": {"op": "skolem", "label": "process",
-                                 "args": [{"op": "index", "args": ["polProcessID", "n"]}]},
+                         "key": {"op": "index", "args": ["polProcessID", "n"]},
                          "filter": {"op": "true", "args": []},
                          "expr": {"op": "true", "args": []}}},
                 {"lhs": "nProcesses",
@@ -676,8 +675,9 @@ fn distinct_producer_fixtures() -> Vec<PathBuf> {
 fn a_native_build_of_a_distinct_producer_fixture_has_nothing_on_the_oracle() {
     let fixtures = distinct_producer_fixtures();
     assert!(
-        fixtures.iter().any(|p| p
-            .ends_with("conformance/value_invention_materialize/fixtures/composite_key_axis.esm")),
+        fixtures.iter().any(|p| p.ends_with(
+            "conformance/value_invention_materialize/fixtures/composite_key_axis_template.esm"
+        )),
         "the value_invention_materialize fixtures must be among {fixtures:?}"
     );
     let mut built = 0;

@@ -360,7 +360,7 @@ fn metaparam_structural_field_collision_matches_golden() {
     );
     assert_eq!(r["expr"]["args"], json!([22, 5]));
     let k = obs_def(model, "k");
-    assert_eq!(k["arg"], "p");
+    assert_eq!(k["reduce"], "max");
     assert_eq!(k["ranges"]["p"], json!([1, 11]));
     assert_eq!(k["expr"]["args"], json!(["c", 7]));
 

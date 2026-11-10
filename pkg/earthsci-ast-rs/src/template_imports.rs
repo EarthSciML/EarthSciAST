@@ -177,7 +177,7 @@ const OPAQUE_KEYS: [&str; 32] = [
 /// so it is never tested with [`is_meta_subst_skipped`]: a variable named
 /// `source` or a template param named `label` still has its value substituted.
 /// A key that is also skipped (`where`, `rename`, …) is skipped whole.
-const NAME_KEYED_MAP_KEYS: [&str; 20] = [
+const NAME_KEYED_MAP_KEYS: [&str; 19] = [
     "variables",
     "species",
     "parameters",
@@ -185,7 +185,6 @@ const NAME_KEYED_MAP_KEYS: [&str; 20] = [
     "subsystems",
     "expression_templates",
     "ranges",
-    "axes",
     "bindings",
     "config",
     "coords",

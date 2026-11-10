@@ -2,7 +2,7 @@
 //! 2.0.0) and `arrayop` (removed at 0.8.0) are rejected by name with
 //! `removed_op`, in the root and in a referenced child.
 //!
-//! Gates `tests/conformance/deprecated_op_alias/`. See CONFORMANCE_SPEC §7 and
+//! Gates `tests/conformance/removed_spellings/`. See CONFORMANCE_SPEC §7 and
 //! `docs/content/rfcs/faq-node-rename.md`.
 
 use crate::common;
@@ -10,19 +10,26 @@ use crate::common;
 use earthsci_ast::load_string;
 
 fn conf(name: &str) -> String {
-    let path = common::repo_fixture("conformance/deprecated_op_alias").join(name);
+    let path = common::repo_fixture("conformance/removed_spellings").join(name);
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
 #[test]
+fn the_canonical_spelling_loads() {
+    load_string(&conf("canonical.esm")).expect("the `faq` spelling loads");
+}
+
+#[test]
 fn the_removed_alias_is_rejected_by_name() {
-    let err = load_string(&conf("aliased.esm")).expect_err("`aggregate` is removed at 2.0.0");
-    let e = err.to_string();
+    let path = common::repo_fixture("invalid/removed_ops/removed_op_aggregate.esm");
+    let src = std::fs::read_to_string(&path).expect("read fixture");
+    let e = load_string(&src)
+        .expect_err("`aggregate` is removed at 2.0.0")
+        .to_string();
     assert!(
         e.contains("removed_op") && e.contains("aggregate"),
         "got: {e}"
     );
-    load_string(&conf("canonical.esm")).expect("the `faq` spelling loads");
 }
 
 #[test]
@@ -41,12 +48,11 @@ fn arrayop_is_rejected_by_name_not_left_to_the_open_tier() {
 
 // --- the wire boundary covers REFERENCED documents, not just the root -------
 //
-// Every other fixture here is a single self-contained document, which is
-// exactly why five green binding suites missed the leak: the normalizer ran on
-// the root's bytes and ref resolution then parsed child files raw.
+// Ref resolution parses each child file through the same wire boundary as the
+// root.
 
 fn conf_path(name: &str) -> std::path::PathBuf {
-    common::repo_fixture("conformance/deprecated_op_alias").join(name)
+    common::repo_fixture("conformance/removed_spellings").join(name)
 }
 
 #[test]

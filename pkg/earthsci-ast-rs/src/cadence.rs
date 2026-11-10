@@ -290,6 +290,13 @@ fn child_exprs(node: &Map<String, Value>) -> Vec<&Value> {
             out.push(v);
         }
     }
+    // A standard-library template call reads what its call site binds: the
+    // bound expressions are its operands.
+    if node.get("op").and_then(Value::as_str) == Some("apply_expression_template")
+        && let Some(Value::Object(bindings)) = node.get("bindings")
+    {
+        out.extend(bindings.values());
+    }
     out
 }
 
@@ -990,7 +997,7 @@ mod tests {
         assert_eq!(
             p.class_summary,
             ClassSummary {
-                const_: 6,
+                const_: 4,
                 discrete: 0,
                 continuous: 0
             }

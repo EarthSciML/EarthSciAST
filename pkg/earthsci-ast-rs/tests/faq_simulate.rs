@@ -199,30 +199,6 @@ fn min_sum_semiring_reduces_with_min() {
     assert_close(sim_value(&m, "y[2]").unwrap(), 3.0, "min_sum y[2]");
 }
 
-/// The deprecated `op: "aggregate"` alias reaches the simulator as `faq` and
-/// evaluates identically — the alias is normalized at the wire boundary, so by
-/// the time a document is simulated there is only one tag left
-/// (docs/content/rfcs/faq-node-rename.md §5.2).
-///
-/// This test used to `build("faq", …)` on both sides after the rename sweep
-/// rewrote its subject as well as its target, making it a byte-identical
-/// duplicate of `sum_product_semiring_matches_default` that pinned nothing. It
-/// now authors the ALIAS and asserts the canonical numbers come back.
-#[test]
-fn aggregate_alias_simulates_as_faq() {
-    let m = build(
-        "aggregate",
-        "y",
-        r#""semiring": "sum_product","#,
-        PROD_BODY,
-        I_2,
-        IJ_2X3,
-        "",
-    );
-    assert_close(sim_value(&m, "y[1]").unwrap(), 6.0, "alias y[1]");
-    assert_close(sim_value(&m, "y[2]").unwrap(), 12.0, "alias y[2]");
-}
-
 /// §5.2: `ranges` index-set references resolve against the model `index_sets`
 /// registry. `{from:"cells"}` (interval size 2) and `{from:"steps"}` (interval
 /// size 3) reproduce the explicit `[1,2]` / `[1,3]` bounds, so `y[1](1) = 6`.

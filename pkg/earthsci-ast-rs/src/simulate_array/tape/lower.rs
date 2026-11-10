@@ -3497,10 +3497,8 @@ impl<'m> TapeBuilder<'m> {
                 !self.const_arrays.is_const(v)
             }
             Expr::Operator(n) => {
-                if matches!(
-                    n.op.as_str(),
-                    "const" | "fn" | "faq" | "makearray" | "broadcast"
-                ) && !(n.op == "const" && n.value.as_ref().is_some_and(|v| v.is_number()))
+                if matches!(n.op.as_str(), "const" | "faq" | "makearray" | "broadcast")
+                    && !(n.op == "const" && n.value.as_ref().is_some_and(|v| v.is_number()))
                 {
                     return false;
                 }

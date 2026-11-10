@@ -7,7 +7,7 @@
 //! the in-memory representation — downstream consumers (evaluators,
 //! canonicalize, codegen) only ever see resolved integer constants.
 //!
-//! Mirrors the Python (`registered_functions.lower_enums`) and Julia
+//! Mirrors the Python (`lower_enums`) and Julia
 //! (`lower_enums!`) passes for cross-binding parity, with the same
 //! diagnostic codes (`unknown_enum`, `unknown_enum_symbol`).
 //!
