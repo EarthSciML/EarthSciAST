@@ -54,8 +54,9 @@ export class ExpressionParseError extends EsmDiagnosticError {
     message: string,
     /** 0-based character offset into the source where parsing failed. */
     public pos: number,
+    code: string = ERROR_CODES.PARSE_ERROR,
   ) {
-    super(ERROR_CODES.PARSE_ERROR, message)
+    super(code, message)
     this.name = 'ExpressionParseError'
   }
 }
@@ -123,6 +124,7 @@ const REMOVED_CALL_OPS = new Set<string>([
   'polygon_intersection_area',
   'argmin',
   'argmax',
+  'aggregate',
 ])
 
 /** An overlap (envelope-candidacy) join gate. */
@@ -825,9 +827,11 @@ function makeCall(name: string, args: Expr[], named: Record<string, Expr>, pos: 
   // the ops in REMOVED_CALL_OPS; the esm:std templates replace both.
   if (name.includes('.') || REMOVED_CALL_OPS.has(name)) {
     throw new ExpressionParseError(
-      `'${name}(...)' is not expressible: \`${name.includes('.') ? 'fn' : name}\` was ` +
-        `removed at esm 2.0.0; apply an esm:std template instead (name<param = value, …>)`,
+      `removed_op: '${name}(...)' is not expressible: ` +
+        `\`${name.includes('.') ? 'fn' : name}\` was removed at esm 2.0.0; apply an ` +
+        `esm:std template instead (name<param = value, …>)`,
       pos,
+      ERROR_CODES.REMOVED_OP,
     )
   }
   // Call-shaped structural ops: reconstruct their non-`args` fields from the

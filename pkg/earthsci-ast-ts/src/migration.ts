@@ -11,13 +11,14 @@
  * 2. Across the 2.0.0 break, for a 1.x document (`1.0.0 … 1.3.0`) that uses
  *    none of what 2.0.0 removed. esm 2.0.0 removes the `fn` op (the closed
  *    function registry), the `function_tables` block with the `table_lookup`
- *    op, the `skolem`, `rank`, `argmin` and `argmax` ops, and the geometry ops
- *    `intersect_polygon` and `polygon_intersection_area`, and changes nothing
- *    else, so a 1.x document that uses none of them means the same thing at
- *    2.0.0 and is relabelled. One that uses any of them is REFUSED with the
- *    `removed_op` diagnostic: replacing those constructs with `esm:std/...`
- *    template references is a rewrite, done by the one codemod
- *    (`earthsci-ast migrate`, Python `earthsci_ast.migration`), not here.
+ *    op, the `skolem`, `rank`, `argmin` and `argmax` ops, the geometry ops
+ *    `intersect_polygon` and `polygon_intersection_area`, and the `aggregate`
+ *    alias of `faq`, and changes nothing else, so a 1.x document that uses none
+ *    of them means the same thing at 2.0.0 and is relabelled. One that uses any
+ *    of them is REFUSED with the `removed_op` diagnostic: replacing those
+ *    constructs (with `esm:std/...` template references, or `faq`) is a
+ *    rewrite, done by the one codemod
+ *    (`python -m earthsci_ast.migrate`), not here.
  *
  * **There is no migration across the 1.0.0 boundary.** esm 1.0.0 is a clean
  * break with no deprecation path: the five declared variable types collapse to
@@ -36,7 +37,7 @@
  */
 
 import type { EsmFile } from './types.js'
-import { SCHEMA_VERSION, removedV2ConstructMessage } from './parse.js'
+import { SCHEMA_VERSION, findRemovedConstruct } from './parse.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 
 /**
@@ -166,8 +167,8 @@ export function migrate(file: EsmFile, targetVersion: string): EsmFile {
 
   const source = parseVersion(sourceVersion)
   if (source !== null && crossesV2Break(source)) {
-    const removed = removedV2ConstructMessage(file)
-    if (removed !== null) throw new MigrationError(removed, ERROR_CODES.REMOVED_OP)
+    const removed = findRemovedConstruct(file)
+    if (removed !== null) throw new MigrationError(removed.message, ERROR_CODES.REMOVED_OP)
   }
 
   return { ...file, esm: targetVersion }

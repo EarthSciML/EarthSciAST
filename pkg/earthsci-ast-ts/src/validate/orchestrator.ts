@@ -10,6 +10,7 @@
 import {
   validateSchema,
   loadDocument,
+  findRemovedConstruct,
   ParseError,
   SchemaValidationError,
   ROOT_PATH,
@@ -544,6 +545,26 @@ function validateAny(data: string | object, options: ValidateOptions = {}): Vali
       }
     } else {
       parsedData = data
+    }
+
+    // A removed op or block is refused by name ahead of schema validation, as
+    // the loader does: the schema no longer describes its fields, so it would
+    // otherwise surface as a pile of shape errors instead of `removed_op`.
+    const removed = findRemovedConstruct(parsedData)
+    if (removed !== null) {
+      return {
+        is_valid: false,
+        schema_errors: [
+          {
+            path: removed.path === '' ? ROOT_PATH : removed.path,
+            message: removed.message,
+            code: ERROR_CODES.REMOVED_OP,
+            details: {},
+          },
+        ],
+        structural_errors: [],
+        unit_warnings: [],
+      }
     }
 
     // Validate against schema

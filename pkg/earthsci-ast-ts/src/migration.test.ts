@@ -145,6 +145,7 @@ describe('migration', () => {
       ],
       ['argmin', { op: 'argmin', args: ['x'], arg: 'i', expr: 'x', ranges: {} }],
       ['argmax', { op: 'argmax', args: ['x'], arg: 'i', expr: 'x', ranges: {} }],
+      ['aggregate', { op: 'aggregate', args: [], output_idx: [], expr: 'x', ranges: {} }],
     ]
     for (const [op, node] of removed) {
       it.runIf(IMPLEMENTS_V2)(`refuses a 1.x file using \`${op}\` with removed_op`, () => {
@@ -159,7 +160,7 @@ describe('migration', () => {
         expect((err as MigrationError).code).toBe('removed_op')
         expect((err as MigrationError).message).toContain(`"op": "${op}"`)
         expect((err as MigrationError).message).toContain('/models/M/equations/0/rhs/args/1')
-        expect((err as MigrationError).message).toContain('earthsci-ast migrate')
+        expect((err as MigrationError).message).toContain('python -m earthsci_ast.migrate')
         expect(source.esm).toBe('1.3.0')
       })
     }

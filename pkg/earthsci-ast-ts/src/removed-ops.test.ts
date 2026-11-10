@@ -57,6 +57,7 @@ const REMOVED_NODES: [string, Record<string, unknown>][] = [
   ],
   ['argmin', { op: 'argmin', args: ['p'], arg: 'i', expr: 'p', ranges: { i: [1, 3] } }],
   ['argmax', { op: 'argmax', args: ['p'], arg: 'i', expr: 'p', ranges: { i: [1, 3] } }],
+  ['aggregate', { op: 'aggregate', args: [], output_idx: [], expr: 'p', ranges: { i: [1, 3] } }],
 ]
 
 describe('removed_op: ops removed at esm 2.0.0', () => {
@@ -67,8 +68,7 @@ describe('removed_op: ops removed at esm 2.0.0', () => {
       expect(err.message).toContain(`removed_op at /models/M/equations/0/rhs/args/1:`)
       expect(err.message).toContain(`"op": "${op}"`)
       expect(err.message).toContain('removed at esm 2.0.0')
-      expect(err.message).toContain('earthsci-ast migrate')
-      expect(err.message).toContain('earthsci_ast.migration')
+      expect(err.message).toContain('python -m earthsci_ast.migrate')
     })
   }
 
@@ -120,7 +120,7 @@ describe('removed_op: the function_tables block', () => {
     expect(err.code).toBe('removed_op')
     expect(err.message).toContain('removed_op at /function_tables:')
     expect(err.message).toContain('`function_tables` block was removed at esm 2.0.0')
-    expect(err.message).toContain('earthsci-ast migrate')
+    expect(err.message).toContain('python -m earthsci_ast.migrate')
   })
 
   it('refuses a component-level block', () => {

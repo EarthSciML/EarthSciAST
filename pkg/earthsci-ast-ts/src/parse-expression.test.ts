@@ -32,6 +32,7 @@ const STRUCTURAL = new Set([
   'polygon_intersection_area',
   'argmin',
   'argmax',
+  'aggregate',
 ])
 function hasStructuralOp(n: unknown): boolean {
   if (!n || typeof n !== 'object') return false
@@ -363,9 +364,18 @@ describe('ops removed at esm 2.0.0 are refused', () => {
     'polygon_intersection_area(a, b)',
     'argmin(a)',
     'argmax(a)',
+    'aggregate(a)',
   ]) {
-    it(`refuses ${s}`, () => {
-      expect(() => parseExpression(s)).toThrow(/removed at esm 2.0.0/)
+    it(`refuses ${s} with removed_op`, () => {
+      let err: unknown
+      try {
+        parseExpression(s)
+      } catch (e) {
+        err = e
+      }
+      expect(err).toBeInstanceOf(ExpressionParseError)
+      expect((err as ExpressionParseError).code).toBe('removed_op')
+      expect((err as ExpressionParseError).message).toMatch(/^removed_op: .*removed at esm 2\.0\.0/)
     })
   }
 

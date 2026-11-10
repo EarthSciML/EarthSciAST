@@ -1325,7 +1325,7 @@ function lhsBaseName(e: unknown): string | undefined {
     if (typeof cur === 'string') return cur
     if (typeof cur !== 'object' || cur === null || !('op' in cur)) return undefined
     const n = cur as { op: string; args?: unknown[]; expr?: unknown; wrt?: string }
-    if (n.op === 'faq' || n.op === 'aggregate') cur = n.expr
+    if (n.op === 'faq') cur = n.expr
     else if (n.op === 'index' || (n.op === 'D' && (n.wrt === undefined || n.wrt === 't'))) {
       if (!n.args || n.args.length === 0) return undefined
       cur = n.args[0]
@@ -1341,7 +1341,7 @@ function lhsDefinedName(e: unknown): string {
     if (typeof cur === 'string') return cur
     if (typeof cur !== 'object' || cur === null || !('op' in cur)) return ''
     const n = cur as { op: string; args?: unknown[]; expr?: unknown }
-    if (n.op === 'faq' || n.op === 'aggregate') cur = n.expr
+    if (n.op === 'faq') cur = n.expr
     else if (n.op === 'index' || n.op === 'D' || n.op === 'ic') {
       if (!n.args || n.args.length === 0) return ''
       cur = n.args[0]
@@ -1363,7 +1363,7 @@ function lhsFreeSymbols(
     output_idx?: unknown[]
     ranges?: Record<string, unknown>
   }
-  if (n.op === 'faq' || n.op === 'aggregate') {
+  if (n.op === 'faq') {
     const inner = new Set(bound)
     for (const x of n.output_idx ?? []) if (typeof x === 'string') inner.add(x)
     for (const k of Object.keys(n.ranges ?? {})) inner.add(k)
@@ -1390,7 +1390,7 @@ function rhsOutputIdx(e: unknown): Set<string> {
   const out = new Set<string>()
   if (typeof e !== 'object' || e === null || !('op' in e)) return out
   const n = e as { op: string; output_idx?: unknown[] }
-  if (n.op !== 'faq' && n.op !== 'aggregate') return out
+  if (n.op !== 'faq') return out
   for (const x of n.output_idx ?? []) if (typeof x === 'string') out.add(x)
   return out
 }

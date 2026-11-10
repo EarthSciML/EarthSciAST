@@ -344,8 +344,9 @@ export const ERROR_CODES = {
   PARSE_ERROR: 'parse_error',
   // `removed_op` — an op or block removed from the format (`arrayop` at esm
   //   0.8.0; `fn`, `table_lookup`, `skolem`, `rank`, `intersect_polygon`,
-  //   `polygon_intersection_area`, `argmin`, `argmax` and the `function_tables`
-  //   block at esm 2.0.0), rejected by name at the wire boundary (parse.ts).
+  //   `polygon_intersection_area`, `argmin`, `argmax`, the `aggregate` alias of
+  //   `faq` and the `function_tables` block at esm 2.0.0), rejected by name at
+  //   the wire boundary (parse.ts).
   REMOVED_OP: 'removed_op',
   EXPRESSION_TEMPLATE_ERROR: 'expression_template_error',
   ENUM_LOWERING_ERROR: 'enum_lowering_error',

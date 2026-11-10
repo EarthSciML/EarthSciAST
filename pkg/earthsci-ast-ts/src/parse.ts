@@ -436,22 +436,18 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
       validationView = data
     }
   } else {
-    // Copy: `prepareDocumentOps` rewrites `op` values on nested nodes, and a
-    // caller that handed us a live object should not see its document mutated.
+    // Copy: the passes below rewrite nested values (data-source locations, the
+    // solver block), and a caller that handed us a live object should not see
+    // its document mutated.
     // Rust, Go and Julia all work on their own copy; this makes the five agree.
     data = structuredClone(input)
     validationView = canonical ? stripNumericLiterals(data) : data
   }
 
-  // Step 1a-pre: esm 1.1.0 — rewrite the deprecated `aggregate` op spelling to
-  // the canonical `faq` at the wire boundary, ahead of every other pass, so
-  // the version gates, the schema, the typed tree and `emit` all see exactly
-  // one tag (docs/content/rfcs/faq-node-rename.md). Both views are rewritten
-  // because in canonical mode `validationView` is a separate stripped copy.
+  // Step 1a-pre: the wire boundary for `op` spellings — removed ops and blocks
+  // are refused by name, ahead of every other pass, and the `faq` version gate
+  // reads the authored form.
   prepareDocumentOps(data)
-  // In canonical mode `validationView` is a separate stripped copy, so it needs
-  // the same rewrite — but silently: the document has already been reported.
-  if (validationView !== data) prepareDocumentOps(validationView, { warn: false })
 
   // Step 1a: esm-spec §8.2.1 — resolve every `data_sources[*].source` location
   // against this document's own directory, before schema validation and before
@@ -850,22 +846,6 @@ function rejectRemovedV02Blocks(view: unknown): void {
   }
 }
 
-/** Depth-first rewrite of `"op": "aggregate"` to `"op": "faq"`; returns the count. */
-function rewriteOpAliases(node: unknown): number {
-  let n = 0
-  if (Array.isArray(node)) {
-    for (const v of node) n += rewriteOpAliases(v)
-  } else if (node !== null && typeof node === 'object') {
-    const obj = node as Record<string, unknown>
-    if (obj.op === 'aggregate') {
-      obj.op = 'faq'
-      n += 1
-    }
-    for (const k of Object.keys(obj)) n += rewriteOpAliases(obj[k])
-  }
-  return n
-}
-
 /** Path of the first node carrying `"op": <op>`, or `null`. */
 function findOp(node: unknown, op: string, at = ''): string | null {
   if (Array.isArray(node)) {
@@ -902,12 +882,11 @@ const REMOVED_OPS_V2: ReadonlyMap<string, string> = new Map([
   ],
   ['argmin', 'the `argmin` template of esm:std/relational.esm'],
   ['argmax', 'the `argmax` template of esm:std/relational.esm'],
+  ['aggregate', '`"op": "faq"`, the same node under its 1.1.0 name'],
 ])
 
 /** Where a removed construct's message sends the author. */
-const MIGRATE_HINT =
-  'Convert the document with the codemod: `earthsci-ast migrate` ' +
-  '(Python `earthsci_ast.migration`).'
+const MIGRATE_HINT = 'Convert the document with the codemod: `python -m earthsci_ast.migrate`.'
 
 /** Path and name of the first node (pre-order) whose `op` is in `ops`, or `null`. */
 function findFirstOp(
@@ -965,35 +944,44 @@ function findFunctionTables(doc: unknown): string | null {
 }
 
 /**
- * The `removed_op` message for the first construct removed at esm 2.0.0 that
- * `doc` uses — the `function_tables` block, then the ops in
- * {@link REMOVED_OPS_V2} in pre-order — naming the construct, where it sits,
- * and the codemod; `null` when it uses none. Shared by the load-time rejection
- * and `migrate()`, which refuses to relabel such a 1.x document.
+ * The first removed construct `doc` uses, as its JSON path and `removed_op`
+ * message, or `null` when it uses none: `"op": "arrayop"` (removed at esm
+ * 0.8.0), then the `function_tables` block, then the ops in
+ * {@link REMOVED_OPS_V2} in pre-order. The message names the construct, where
+ * it sits, and what replaces it. Shared by the load-time rejection,
+ * `validate()` and `migrate()`, which refuses to relabel such a 1.x document.
  */
-export function removedV2ConstructMessage(doc: unknown): string | null {
+export function findRemovedConstruct(doc: unknown): { path: string; message: string } | null {
+  const arrayopAt = findOp(doc, 'arrayop')
+  if (arrayopAt !== null) {
+    return {
+      path: arrayopAt,
+      message:
+        `removed_op at ${arrayopAt}: \`"op": "arrayop"\` was removed at esm 0.8.0 and is not ` +
+        `a deprecated alias; use \`"op": "faq"\` (the Functional Aggregate Query node). ` +
+        `See docs/content/rfcs/faq-node-rename.md.`,
+    }
+  }
   const tablesAt = findFunctionTables(doc)
   if (tablesAt !== null) {
-    return (
-      `removed_op at ${tablesAt}: the \`function_tables\` block was removed at esm 2.0.0; ` +
-      `read the table data with the \`linear\` / \`bilinear\` templates of ` +
-      `esm:std/interp.esm instead. ${MIGRATE_HINT}`
-    )
+    return {
+      path: tablesAt,
+      message:
+        `removed_op at ${tablesAt}: the \`function_tables\` block was removed at esm 2.0.0; ` +
+        `read the table data with the \`linear\` / \`bilinear\` templates of ` +
+        `esm:std/interp.esm instead. ${MIGRATE_HINT}`,
+    }
   }
   const hit = findFirstOp(doc, REMOVED_OPS_V2)
   if (hit !== null) {
-    return (
-      `removed_op at ${hit.path}: \`"op": "${hit.op}"\` was removed at esm 2.0.0; ` +
-      `use ${REMOVED_OPS_V2.get(hit.op)} instead. ${MIGRATE_HINT}`
-    )
+    return {
+      path: hit.path,
+      message:
+        `removed_op at ${hit.path}: \`"op": "${hit.op}"\` was removed at esm 2.0.0; ` +
+        `use ${REMOVED_OPS_V2.get(hit.op)} instead. ${MIGRATE_HINT}`,
+    }
   }
   return null
-}
-
-/** Throw `removed_op` for the first construct removed at esm 2.0.0 that `doc` uses. */
-function rejectRemovedV2Constructs(doc: unknown): void {
-  const message = removedV2ConstructMessage(doc)
-  if (message !== null) throw new ParseError(message, undefined, ERROR_CODES.REMOVED_OP)
 }
 
 /** Does `doc` declare an `esm` version below 1.1.0? */
@@ -1039,9 +1027,8 @@ export function rejectRootLoadGates(validationView: unknown): void {
  * by {@link loadDocument} and against every §4.7-mounted leaf on its OWN
  * declared `esm` (esm-spec §4.7), so the two paths cannot drift.
  *
- * Reads `esm` as raised by {@link prepareDocumentOps} (the `aggregate` → `faq`
- * normalization's 1.1.0 floor), so callers run that first. The `faq` gate
- * itself lives there, because it alone reads the AUTHORED version.
+ * The `faq` gate lives in {@link prepareDocumentOps}, because it alone reads the
+ * AUTHORED version.
  *
  * - `expression_templates` / `apply_expression_template` — esm 0.4.0
  * - `expression_template_imports`, top-level `expression_templates`,
@@ -1089,55 +1076,29 @@ export function raiseFaqVersionFloor(doc: unknown): void {
  * The wire boundary for expression-node `op` spellings, applied to EVERY
  * document — root, `{ref}`-loaded child, template library, coupling library.
  *
- * Three steps, in this order:
+ * Two steps, in this order:
  *
- * 1. `arrayop` (removed at esm 0.8.0), the ops removed at esm 2.0.0 and the
- *    `function_tables` block are rejected BY NAME with `removed_op`. Each op is
- *    a well-formed identifier, so esm-spec §4.2 would otherwise admit it as an
- *    OPEN rewrite-target op: the document would load silently and fail much
- *    later as `unlowered_operator`, or never.
+ * 1. `arrayop` (removed at esm 0.8.0), the ops removed at esm 2.0.0 (the
+ *    `aggregate` alias of `faq` among them) and the `function_tables` block are
+ *    rejected BY NAME with `removed_op`. Each op is a well-formed identifier, so
+ *    esm-spec §4.2 would otherwise admit it as an OPEN rewrite-target op: the
+ *    document would load silently and fail much later as `unlowered_operator`,
+ *    or never.
  * 2. The `faq` version gate, on the AUTHORED form — `faq` arrives at esm 1.1.0
- *    (esm-spec §2.2.4). Deliberately BEFORE normalization: `aggregate` is the
- *    pre-1.1.0 spelling, so a 1.0.0 document carrying the alias is legal.
- * 3. `aggregate` is normalized to `faq` and the declared version is raised to
- *    the 1.1.0 floor with it, so the upgraded document is self-consistent.
+ *    (esm-spec §2.2.4).
  *
- * Returns the number of nodes normalized.
- * See `docs/content/rfcs/faq-node-rename.md`.
+ * Read-only: the document is not modified.
  */
-export function prepareDocumentOps(doc: unknown, opts?: { warn?: boolean }): number {
-  const removedAt = findOp(doc, 'arrayop')
-  if (removedAt !== null) {
-    throw new ParseError(
-      `removed_op at ${removedAt}: \`"op": "arrayop"\` was removed at esm 0.8.0 and is not a ` +
-        `deprecated alias; use \`"op": "faq"\` (the Functional Aggregate Query node). ` +
-        `See docs/content/rfcs/faq-node-rename.md.`,
-      undefined,
-      ERROR_CODES.REMOVED_OP,
-    )
-  }
-  rejectRemovedV2Constructs(doc)
+export function prepareDocumentOps(doc: unknown): void {
+  const removed = findRemovedConstruct(doc)
+  if (removed !== null) throw new ParseError(removed.message, undefined, ERROR_CODES.REMOVED_OP)
   const faqAt = findOp(doc, 'faq')
   if (faqAt !== null && declaredBelowV11(doc)) {
     const declared = (doc as Record<string, unknown>).esm
     throw new ParseError(
       `faq_version_too_old at ${faqAt}: the \`faq\` op arrives at esm 1.1.0; file declares ` +
-        `${String(declared)}. Use \`"op": "aggregate"\` (the deprecated pre-1.1.0 spelling) ` +
-        `or raise the declared version. See docs/content/rfcs/faq-node-rename.md.`,
+        `${String(declared)}. Raise the declared version. ` +
+        `See docs/content/rfcs/faq-node-rename.md.`,
     )
   }
-  const n = rewriteOpAliases(doc)
-  if (n > 0) {
-    if (declaredBelowV11(doc)) (doc as Record<string, unknown>).esm = '1.1.0'
-    if (opts?.warn !== false) {
-      console.warn(
-        `deprecated_op_alias: \`"op": "aggregate"\` is the pre-1.1.0 spelling of ` +
-          `\`"op": "faq"\` (Functional Aggregate Query); ${n} ` +
-          `${n === 1 ? 'node was' : 'nodes were'} normalized on load. The alias is ` +
-          `REMOVED at esm 2.0.0 — re-emit this document to migrate it ` +
-          `(docs/content/rfcs/faq-node-rename.md).`,
-      )
-    }
-  }
-  return n
 }
