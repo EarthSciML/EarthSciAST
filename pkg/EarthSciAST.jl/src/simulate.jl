@@ -2161,6 +2161,12 @@ function _observed_field_memo(
     insp = prob.inspection
     memoizable = u === nothing && t === nothing
     memoizable && (p = nothing)
+    # The read gathers the discrete-cadence caches, so bring them up to an
+    # announced forcing write first, as `f!` does; a read between the
+    # announcement and the next `f!` would otherwise store the old fill under
+    # the new epoch. It also settles the epoch the memo is keyed on, since a
+    # refill bumps it.
+    prob.dm.refresh!()
     epoch = _epoch_value(prob.dm.epoch)
     key = (prob.run_file, name)
     if memoizable

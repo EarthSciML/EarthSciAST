@@ -523,6 +523,18 @@ using ForwardDiff
             g = copy(dm.caches["g"]); src .= [0.0, 0.0]
             @test rhs() ≈ _dm_g([5.0, 7.0]) .+ _dm_k(1.0)       # unannounced: stale, as before
             @test dm.caches["g"] == g
+            # `refresh!` is the same refill for a reader that is not `f!`: a
+            # no-op while the caches are current, a refill after an announcement.
+            e = dm.epoch[]
+            dm.refresh!()
+            @test dm.epoch[] == e && dm.caches["g"] == g
+            src .= [3.0, 1.0]
+            _DM_ESS.notify_forcing_refresh!(src)
+            dm.refresh!()
+            @test dm.caches["g"] ≈ _dm_g([3.0, 1.0])
+            e = dm.epoch[]
+            @test rhs() ≈ _dm_g([3.0, 1.0]) .+ _dm_k(1.0)
+            @test dm.epoch[] == e                               # f! found them current
         end
     end
     @testset "esm_problem f!, Float64 and dual numbers, bit for bit across the compilers" begin
@@ -548,5 +560,27 @@ using ForwardDiff
         @test all(runs[:native][1] .=== runs[:interpreter][1])
         @test all(runs[:native][2] .=== runs[:interpreter][2])
         @test runs[:native][3] == runs[:interpreter][3]
+    end
+    # `observed_field` reads the discrete caches too, so a read between the
+    # announcement and the next `f!` must refill them first rather than return
+    # (and memoize under the new epoch) the old fill. The document is the PR's
+    # reproduction: `q` reads only the live buffer `D.G`, so it is a discrete cut.
+    @testset "observed_field after an announced write, before any f!" begin
+        G = fill(1000.0, 2, 3)
+        prob = _DM_ESS.esm_problem(
+            _DM_ESS.load_path(joinpath(@__DIR__, "fixtures", "discrete_live_observed.esm")),
+            (0.0, 1.0); param_arrays = Dict("D.G" => G)
+        )
+        @test haskey(prob.dm.caches, "M.q")
+        @test _DM_ESS.observed_field(prob, "M.q") == [0.0, 0.0, 0.0]
+        G .= [1000 + 7a + 3i for a in 1:2, i in 1:3]
+        _DM_ESS.notify_forcing_refresh!(G)
+        @test _DM_ESS.observed_field(prob, "M.q") == [7.0, 7.0, 7.0]
+        @test _DM_ESS.observed_field(prob, "M.q") == [7.0, 7.0, 7.0]   # memo hit
+        e = prob.dm.epoch[]
+        du = zero(prob.u0)
+        prob.f!(du, prob.u0, prob.p, 0.0)
+        @test du == [7.0, 7.0, 7.0]
+        @test prob.dm.epoch[] == e                     # the read left them current
     end
 end

@@ -185,15 +185,23 @@ it gathers a raw forcing buffer. The build fills it:
   shows through to the RHS with zero reallocation).
 * `materialize!::Function` — a `() -> nothing` closure that recomputes every
   cache from the (already-refreshed) raw forcing buffers + const arrays + upstream
-  caches, in dependency order. `build_evaluator` runs it ONCE at build (so u0
-  seeding and the first RHS evaluation read valid caches); the caller re-runs it
-  after each in-place forcing refresh. [`esm_problem`](@ref) wires it as the
-  refresh callback's `post_refresh` hook automatically.
+  caches, in dependency order, unconditionally. `build_evaluator` runs it ONCE at
+  build (so u0 seeding and the first RHS evaluation read valid caches), and
+  [`esm_problem`](@ref) wires it as the refresh callback's `post_refresh` hook.
+* `refresh!::Function` — a `() -> nothing` closure that runs `materialize!` only
+  when the build's forcing epoch has moved since the last fill, i.e. only after a
+  forcing write announced with [`notify_forcing_refresh!`](@ref). The in-place
+  `f!` and [`observed_field`](@ref) call it themselves before reading the caches,
+  so a direct write needs only the announcement. A caller that reads the caches
+  through anything else — the out-of-place build product's
+  [`forcing_buffers`](@ref), copied to a device by [`sync_forcing!`](@ref) —
+  calls `refresh!()` first.
 * `var_order::Vector{String}` — the dependency order the fills run in.
 """
 mutable struct DiscreteMaterializer
     caches::Dict{String, Array{Float64}}
     materialize!::Function
+    refresh!::Function
     var_order::Vector{String}
     # The forcing epoch of the build this sink belongs to (cadence_stamp.jl):
     # bumped by `materialize!` and by a refresh of any buffer the build reads.
@@ -201,7 +209,7 @@ mutable struct DiscreteMaterializer
 end
 DiscreteMaterializer() =
     DiscreteMaterializer(
-    Dict{String, Array{Float64}}(), () -> nothing, String[],
+    Dict{String, Array{Float64}}(), () -> nothing, () -> nothing, String[],
     _new_forcing_epoch()
 )
 
@@ -3187,7 +3195,9 @@ function _build_discrete_materializer!(
     mut.caches = caches
     mut.materialize! = materialize!
     mut.var_order = order
-    return _DiscreteRefill{typeof(pp), typeof(materialize!)}(stamp, materialize!, epoch, filled_epoch)
+    refill = _DiscreteRefill{typeof(pp), typeof(materialize!)}(stamp, materialize!, epoch, filled_epoch)
+    mut.refresh! = () -> refill(nothing)
+    return refill
 end
 
 # The right-hand side's check that the discrete caches hold its own `p` and the
@@ -3202,7 +3212,13 @@ end
 # after it finds them current.) A `p` of another type than the build's — dual
 # numbers, for a derivative with respect to parameters — leaves the caches at
 # their `p`: they hold Float64 values and cannot carry a derivative; a moved
-# epoch still refills them, with that `p`.
+# epoch still refills them, with that `p`. `DiscreteMaterializer.refresh!` is
+# that second method, for a reader that has no `p` of its own.
+#
+# The refill writes the caches in place from inside `f!`. That makes it no less
+# safe to share across threads than the rest of `f!`, which writes the build's
+# prelude scratch and observed buffers on every call: one build's `f!` must not
+# be called concurrently.
 struct _DiscreteRefill{P, F}
     stamp::Base.RefValue{Any}
     materialize!::F
