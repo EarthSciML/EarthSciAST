@@ -1590,9 +1590,9 @@ TypeScript `camelCase`, others verbatim).
   consumer must be able to build a solver problem from the flattened form alone. The one
   field flatten changes is a pointwise-lifted state's `shape`, which becomes the lift's index
   sets (below): after the lift the state is an array on those index sets. (Flatten also
-  writes each elementwise template application as its per-cell `faq`, esm-spec §9.6.11, so
-  the flattened form keeps its meaning when serialized; that rewrites a right-hand side and
-  changes no declaration.)
+  writes each elementwise template application, in an equation or a `field_ics` entry, as
+  its per-cell `faq`, esm-spec §9.6.11, so the flattened form keeps its meaning when
+  serialized; that rewrites a right-hand side and changes no declaration.)
 
 **Loader fields (normative).** `loader_fields` holds one entry per data-fed
 parameter, a parameter with a `data` rule whose `source` names a declared

@@ -1,0 +1,175 @@
+{
+ "esm": "1.3.0",
+ "metadata": {
+  "name": "refused_lift",
+  "authors": [
+   "EarthSciAST test suite"
+  ],
+  "description": "y applies linear elementwise over a (over [x]) and over b (over [y]): neither one's index sets contain the other's, so the lift refuses y (array_shape_mismatch). z alone could be lifted, but when the lift refuses any right-hand side flatten leaves every equation as written (esm-spec 9.6.11), and the build refuses it."
+ },
+ "index_sets": {
+  "x": {
+   "kind": "interval",
+   "size": 2
+  },
+  "y": {
+   "kind": "interval",
+   "size": 3
+  }
+ },
+ "models": {
+  "M": {
+   "expression_template_imports": [
+    {
+     "ref": "esm:std/interp.esm",
+     "only": [
+      "linear"
+     ]
+    }
+   ],
+   "variables": {
+    "a": {
+     "type": "parameter",
+     "shape": [
+      "x"
+     ],
+     "default": [
+      1.5,
+      2.5
+     ]
+    },
+    "b": {
+     "type": "parameter",
+     "shape": [
+      "y"
+     ],
+     "default": [
+      1.5,
+      2.5,
+      3.5
+     ]
+    },
+    "y": {
+     "type": "unknown"
+    },
+    "z": {
+     "type": "unknown"
+    },
+    "s": {
+     "type": "unknown",
+     "default": 0.0
+    }
+   },
+   "equations": [
+    {
+     "lhs": "z",
+     "rhs": {
+      "op": "apply_expression_template",
+      "args": [],
+      "name": "linear",
+      "bindings": {
+       "table": {
+        "op": "const",
+        "args": [],
+        "value": [
+         10.0,
+         20.0,
+         30.0,
+         40.0
+        ]
+       },
+       "axis": {
+        "op": "const",
+        "args": [],
+        "value": [
+         1.0,
+         2.0,
+         3.0,
+         4.0
+        ]
+       },
+       "x": "a",
+       "n": 4
+      }
+     }
+    },
+    {
+     "lhs": "y",
+     "rhs": {
+      "op": "+",
+      "args": [
+       {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "linear",
+        "bindings": {
+         "table": {
+          "op": "const",
+          "args": [],
+          "value": [
+           10.0,
+           20.0,
+           30.0,
+           40.0
+          ]
+         },
+         "axis": {
+          "op": "const",
+          "args": [],
+          "value": [
+           1.0,
+           2.0,
+           3.0,
+           4.0
+          ]
+         },
+         "x": "a",
+         "n": 4
+        }
+       },
+       {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "linear",
+        "bindings": {
+         "table": {
+          "op": "const",
+          "args": [],
+          "value": [
+           10.0,
+           20.0,
+           30.0,
+           40.0
+          ]
+         },
+         "axis": {
+          "op": "const",
+          "args": [],
+          "value": [
+           1.0,
+           2.0,
+           3.0,
+           4.0
+          ]
+         },
+         "x": "b",
+         "n": 4
+        }
+       }
+      ]
+     }
+    },
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "s"
+      ],
+      "wrt": "t"
+     },
+     "rhs": 0.0
+    }
+   ]
+  }
+ }
+}

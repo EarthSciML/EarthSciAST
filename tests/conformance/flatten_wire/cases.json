@@ -1,7 +1,10 @@
 {
-  "description": "Byte-for-byte goldens of the flattened system as a binding writes it out (README.md).",
+  "description": "Byte-for-byte goldens of the flattened system as a binding writes it out (README.md). `builds` says whether the reference evaluator (`interpreter`) builds the fixture; each test checks the written-out system builds to the same initial state and right-hand side, or is refused too.",
   "cases": [
-    {"name": "template_array_args_coupled", "fixture": "../template_array_args/coupled/template.esm", "golden": "golden/template_array_args_coupled.json"},
-    {"name": "lift_inferred_operand", "fixture": "fixtures/lift_inferred_operand.esm", "golden": "golden/lift_inferred_operand.json"}
+    {"name": "template_array_args_coupled", "fixture": "../template_array_args/coupled/template.esm", "golden": "golden/template_array_args_coupled.json", "builds": true},
+    {"name": "lift_inferred_operand", "fixture": "fixtures/lift_inferred_operand.esm", "golden": "golden/lift_inferred_operand.json", "builds": true},
+    {"name": "field_ic_application", "fixture": "fixtures/field_ic_application.esm", "golden": "golden/field_ic_application.json", "builds": true},
+    {"name": "declared_scalar_application", "fixture": "fixtures/declared_scalar_application.esm", "golden": "golden/declared_scalar_application.json", "builds": false},
+    {"name": "refused_lift", "fixture": "fixtures/refused_lift.esm", "golden": "golden/refused_lift.json", "builds": false}
   ]
 }
