@@ -358,42 +358,7 @@ fn the_pointwise_lift_reads_an_inferred_array_at_the_cell() {
     );
     // The flattened system as a document: one model per component, every
     // reference fully qualified.
-    let mut models = serde_json::Map::new();
-    for (kind, part) in [
-        ("unknown", &flat.state_variables),
-        ("parameter", &flat.parameters),
-        ("unknown", &flat.observed_variables),
-    ] {
-        for (name, var) in part {
-            let (component, local) = name.rsplit_once('.').unwrap();
-            let m = models
-                .entry(component.to_string())
-                .or_insert_with(|| json!({"variables": {}, "equations": []}));
-            let mut decl = json!({"type": kind});
-            if let Some(s) = var.shape.as_ref().filter(|s| !s.is_empty()) {
-                decl["shape"] = json!(s);
-            }
-            if let Some(x) = &var.default {
-                decl["default"] = serde_json::to_value(x).unwrap();
-            }
-            m["variables"][local] = decl;
-        }
-    }
-    for eq in &flat.equations {
-        let lhs = serde_json::to_value(&eq.lhs).unwrap();
-        let text = lhs.to_string();
-        let component = if text.contains("Chem.c") {
-            "Chem"
-        } else {
-            "Grid"
-        };
-        models[component]["equations"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!({"lhs": lhs, "rhs": serde_json::to_value(&eq.rhs).unwrap()}));
-    }
-    let written = json!({"esm": "1.3.0", "metadata": {"name": "written"},
-        "index_sets": d["index_sets"], "models": models});
+    let written = crate::flatten_wire_conformance::flattened_document(&flat);
     let read_back = load_string(&written.to_string()).expect("the written-out system loads");
     for input in [&file, &read_back] {
         for c in COMPILERS {
@@ -401,7 +366,8 @@ fn the_pointwise_lift_reads_an_inferred_array_at_the_cell() {
                 compiler: Some(c),
                 ..Default::default()
             };
-            let prob = esm_problem(input, (0.0, 1.0), opts).expect(c.as_str());
+            let prob = esm_problem(input, (0.0, 1.0), opts)
+                .unwrap_or_else(|e| panic!("{}: {e}", c.as_str()));
             let prog = rhs_program(&prob).expect("rhs_program");
             let u = initial_state(&prob).expect("initial_state");
             let p = prog

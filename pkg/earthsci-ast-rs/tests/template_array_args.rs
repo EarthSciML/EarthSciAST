@@ -67,57 +67,6 @@ fn coupled_scalar_parameters_fed_grid_arrays_match_the_fn_form() {
     }
 }
 
-/// The flattened system written as a document and read back, as a consumer
-/// that splits it into derived documents does: one model per component, each
-/// variable with its declared type, `shape` and `default`, and each equation,
-/// every reference fully qualified.
-fn flattened_document(flat: &earthsci_ast::FlattenedSystem) -> serde_json::Value {
-    use serde_json::{Value, json};
-    let mut models = serde_json::Map::new();
-    fn owner(name: &str) -> (&str, &str) {
-        name.rsplit_once('.').expect("dotted")
-    }
-    for (kind, part) in [
-        ("unknown", &flat.state_variables),
-        ("parameter", &flat.parameters),
-        ("unknown", &flat.observed_variables),
-    ] {
-        for (name, var) in part {
-            let (component, local) = owner(name);
-            let model = models
-                .entry(component.to_string())
-                .or_insert_with(|| json!({"variables": {}, "equations": []}));
-            let mut decl = json!({"type": kind});
-            if let Some(shape) = var.shape.as_ref().filter(|s| !s.is_empty()) {
-                decl["shape"] = json!(shape);
-            }
-            if let Some(d) = &var.default {
-                decl["default"] = serde_json::to_value(d).unwrap();
-            }
-            model["variables"][local] = decl;
-        }
-    }
-    for eq in &flat.equations {
-        let lhs = serde_json::to_value(&eq.lhs).unwrap();
-        let subject = match &lhs {
-            Value::String(s) => s.clone(),
-            Value::Object(o) => o["args"][0].as_str().unwrap().to_string(),
-            other => panic!("left-hand side {other}"),
-        };
-        let rhs = serde_json::to_value(&eq.rhs).unwrap();
-        models[owner(&subject).0]["equations"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!({"lhs": lhs, "rhs": rhs}));
-    }
-    let sets: serde_json::Map<String, Value> = flat
-        .index_sets
-        .iter()
-        .map(|(k, v)| (k.clone(), serde_json::to_value(v).unwrap()))
-        .collect();
-    json!({"esm": "1.2.0", "metadata": {"name": "flattened"}, "index_sets": sets, "models": models})
-}
-
 /// The coupled case's flattened system keeps its meaning on the wire
 /// (esm-spec §9.6.11, "A flattened system keeps its applications' meaning on
 /// the wire"). This binding expands templates at load, and the mark that makes
@@ -128,9 +77,9 @@ fn flattened_document(flat: &earthsci_ast::FlattenedSystem) -> serde_json::Value
 /// so the read-back document builds, bit for bit the `fn` form.
 #[test]
 fn the_flattened_coupled_case_written_out_and_read_back_matches_the_fn_form() {
-    let file = load_path(&fixture("template.esm")).expect("load");
+    let file = load_path(fixture("template.esm")).expect("load");
     let flat = earthsci_ast::flatten(&file).expect("flatten");
-    let text = flattened_document(&flat).to_string();
+    let text = crate::flatten_wire_conformance::flattened_document(&flat).to_string();
     assert!(
         !text.contains("apply_expression_template"),
         "the flattened system holds expansions"

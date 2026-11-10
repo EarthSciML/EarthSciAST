@@ -35,7 +35,9 @@ use std::collections::{HashMap, HashSet};
 /// Lift every observed equation of `model` that applies a template
 /// elementwise (see the module docs), and give each lifted variable that was
 /// declared without a `shape` the index sets it was lifted over. Returns those
-/// shapes, by variable name.
+/// shapes, by variable name. A variable declared `shape: []` is a scalar and
+/// is never lifted. A field initial condition `ic(x) = rhs` is lifted over
+/// `x`'s declared shape.
 ///
 /// Repeats until no equation changes, so a chain — a lifted observed read by
 /// another elementwise application — is lifted link by link.
@@ -79,10 +81,15 @@ pub(crate) fn lift_elementwise_applications(
         changed = false;
         passes += 1;
         for k in 0..model.equations.len() {
-            let Expr::Variable(lhs) = &model.equations[k].lhs else {
-                continue;
+            // A field initial condition `ic(x) = rhs` is lifted over `x`'s
+            // declared shape; it defines no variable, so it shapes none.
+            let (lhs, is_ic) = match &model.equations[k].lhs {
+                Expr::Variable(n) => (n.clone(), false),
+                other => match crate::flatten::extract_ic_target(other) {
+                    Some(t) => (t, true),
+                    None => continue,
+                },
             };
-            let lhs = lhs.clone();
             let rhs = &model.equations[k].rhs;
             let mut reads: Vec<(String, bool)> = Vec::new();
             walk(rhs, &shapes, &HashSet::new(), false, &mut |seen| {
@@ -93,7 +100,7 @@ pub(crate) fn lift_elementwise_applications(
             if !reads.iter().any(|(_, inside)| *inside) {
                 // Not lifted: record the elementwise shape of an unshaped
                 // definition so an application reading it can be lifted.
-                if unshaped.contains(&lhs) && !shapes.contains_key(&lhs) {
+                if !is_ic && unshaped.contains(&lhs) && !shapes.contains_key(&lhs) {
                     let names: Vec<String> = reads.into_iter().map(|(n, _)| n).collect();
                     if let Ok(Some(axes)) = union_axes(&names, &shapes) {
                         shapes.insert(lhs, axes);
@@ -102,13 +109,13 @@ pub(crate) fn lift_elementwise_applications(
                 }
                 continue;
             }
-            let declared = model
-                .variables
-                .get(&lhs)
-                .and_then(|v| v.shape.clone())
-                .filter(|s| !s.is_empty());
+            let declared = model.variables.get(&lhs).and_then(|v| v.shape.clone());
             let axes = match &declared {
+                // `shape: []` declares a scalar (esm-spec §4.3.1): never lifted.
+                Some(s) if s.is_empty() => continue,
                 Some(s) => s.clone(),
+                // An initial condition takes its state's declared shape only.
+                None if is_ic => continue,
                 None => {
                     let names: Vec<String> = reads.into_iter().map(|(n, _)| n).collect();
                     union_axes(&names, &shapes)
@@ -362,6 +369,12 @@ fn fresh_loops(expr: &Expr, n: usize) -> Vec<String> {
     }
 }
 
+/// Every name `expr` reads or binds: the names the lift's loop symbols must
+/// not shadow. Every expression-bearing field ([`ExpressionNode::for_each_child`])
+/// and every name-bearing one: the symbols a node binds (`int_var`, range
+/// keys, `output_idx`), a range's `of` parents, `wrt`, `dim`, an
+/// argmin/argmax `arg`, and a `table_lookup`'s axis names. The Julia
+/// binding's `_ew_names!`.
 fn names_in(expr: &Expr, out: &mut HashSet<String>) {
     match expr {
         Expr::Variable(n) => {
@@ -369,21 +382,27 @@ fn names_in(expr: &Expr, out: &mut HashSet<String>) {
         }
         Expr::Number(_) | Expr::Integer(_) => {}
         Expr::Operator(node) => {
-            for a in &node.args {
-                names_in(a, out);
-            }
-            if let Some(b) = &node.expr {
-                names_in(b, out);
-            }
-            if let Some(b) = &node.filter {
-                names_in(b, out);
+            for name in [&node.int_var, &node.wrt, &node.dim, &node.arg]
+                .into_iter()
+                .flatten()
+            {
+                out.insert(name.clone());
             }
             if let Some(r) = &node.ranges {
-                out.extend(r.keys().cloned());
+                for (k, spec) in r {
+                    out.insert(k.clone());
+                    if let RangeSpec::IndexSetRef { of: Some(of), .. } = spec {
+                        out.extend(of.iter().cloned());
+                    }
+                }
             }
             if let Some(o) = &node.output_idx {
                 out.extend(o.iter().cloned());
             }
+            if let Some(a) = &node.axes {
+                out.extend(a.keys().cloned());
+            }
+            node.for_each_child(&mut |c| names_in(c, out));
         }
     }
 }
@@ -653,6 +672,40 @@ mod tests {
             panic!()
         };
         assert!(std::sync::Arc::ptr_eq(a, b));
+    }
+
+    #[test]
+    fn loop_symbols_avoid_a_name_bound_in_any_field() {
+        // An integral's variable is a name the right-hand side binds.
+        let rhs = parse(
+            r#"{"op":"*","args":["rho",{"op":"integral","args":[1.0],"var":"_p0",
+                "lower":0.0,"upper":1.0}]}"#,
+        );
+        assert_eq!(fresh_loops(&rhs, 2), vec!["__p0", "__p1"]);
+        assert_eq!(fresh_loops(&parse(r#""rho""#), 1), vec!["_p0"]);
+    }
+
+    #[test]
+    fn a_variable_declared_scalar_is_not_lifted() {
+        // `shape: []` declares a scalar (esm-spec §4.3.1): its elementwise
+        // application is left as written.
+        let doc = probe_doc(
+            serde_json::json!({
+                "u": {"type": "parameter", "shape": ["c"], "default": [1.0, 2.0, 3.0]},
+                "y": {"type": "unknown", "shape": []},
+                "s": {"type": "unknown", "default": 0.0}}),
+            serde_json::json!({"op": "apply_expression_template", "args": [], "name": "twice",
+                "bindings": {"x": "u"}}),
+            serde_json::json!({"expression_templates": {"twice": {"params": ["x"],
+                "body": {"op": "*", "args": [2, "x"]}}}}),
+        );
+        let (lifted, before, after) = lift_doc(&doc, "M.y");
+        assert!(lifted.is_empty());
+        assert_eq!(before, after);
+        let Expr::Operator(n) = &after else {
+            panic!("{after:?}")
+        };
+        assert_eq!(n.op, "*", "flatten left the application as written");
     }
 
     #[test]

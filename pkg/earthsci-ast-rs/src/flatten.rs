@@ -1176,7 +1176,8 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
 }
 
 /// Write every elementwise template application of the flattened equations
-/// (esm-spec §9.6.11) as the per-cell `faq` the build would lift it to.
+/// and field initial conditions (esm-spec §9.6.11) as the per-cell `faq` the
+/// build would lift it to.
 ///
 /// This binding expands every template reference at load, and an expansion
 /// is elementwise only because it came from an application: the build reads
@@ -1191,51 +1192,49 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
 /// the build refuses it (`faq_bare_array_operand`, esm-spec §4.3.1). Writing
 /// the lift here gives the flattened equations the meaning the build gives
 /// them, in a form that survives serialization; the build's own lift then
-/// finds nothing left to lift.
+/// finds nothing left to lift. A field initial condition `ic(x) = rhs` is
+/// lifted over `x`'s shape.
 ///
 /// No declared `shape` changes (esm-libraries-spec §4.7.5): a variable
 /// declared without one keeps none, and its shape is the one its `faq`
 /// definition ranges over. A lifted equation's contributions collapse into
 /// the one `faq`, their origins united, since the per-cell form is computed
 /// whole. When the lift refuses a right-hand side (`array_shape_mismatch`),
-/// every equation is left as it was, for the build to refuse.
+/// every equation and initial condition is left as it was, for the build to
+/// refuse.
 fn lift_elementwise_applications(flat: &mut AssembledParts) {
     fn marked(e: &Expr) -> bool {
         let Expr::Operator(n) = e else { return false };
-        if n.template_origin.is_some() {
-            return true;
-        }
-        let mut found = false;
-        n.for_each_child(&mut |c| found = found || marked(c));
-        found
+        n.template_origin.is_some() || n.any_child(&mut marked)
     }
-    if !flat.equations.iter().any(|fe| marked(&fe.eq.rhs)) {
+    if !flat.equations.iter().any(|fe| marked(&fe.eq.rhs))
+        && !flat.field_ics.iter().any(|(_, rhs)| marked(rhs))
+    {
         return;
     }
-    let mut variables: IndexMap<String, ModelVariable> = IndexMap::new();
-    for part in [
-        &flat.state_variables,
-        &flat.parameters,
-        &flat.observed_variables,
-    ] {
-        for (k, v) in part {
-            variables.entry(k.clone()).or_insert_with(|| v.clone());
-        }
-    }
-    let mut model = Model {
-        variables,
-        equations: flat.equations.iter().map(|fe| fe.eq.clone()).collect(),
-        ..Default::default()
-    };
+    let mut model = shapes_model(flat);
+    let n_eqs = model.equations.len();
+    model
+        .equations
+        .extend(flat.field_ics.iter().map(|(target, rhs)| Equation {
+            lhs: Expr::operator(ExpressionNode {
+                op: "ic".to_string(),
+                args: vec![Expr::Variable(target.clone())],
+                ..Default::default()
+            }),
+            rhs: rhs.clone(),
+            ..Default::default()
+        }));
     if crate::elementwise_lift::lift_elementwise_applications(&mut model).is_err() {
         return;
     }
-    for (fe, eq) in flat.equations.iter_mut().zip(model.equations) {
-        let unchanged = match (&fe.eq.rhs, &eq.rhs) {
-            (Expr::Operator(a), Expr::Operator(b)) => std::sync::Arc::ptr_eq(a, b),
-            (a, b) => a == b,
-        };
-        if unchanged {
+    let unchanged = |a: &Expr, b: &Expr| match (a, b) {
+        (Expr::Operator(a), Expr::Operator(b)) => std::sync::Arc::ptr_eq(a, b),
+        (a, b) => a == b,
+    };
+    let mut lifted = model.equations.into_iter();
+    for (fe, eq) in flat.equations.iter_mut().zip(lifted.by_ref().take(n_eqs)) {
+        if unchanged(&fe.eq.rhs, &eq.rhs) {
             continue;
         }
         fe.contributions = vec![Contribution {
@@ -1243,7 +1242,36 @@ fn lift_elementwise_applications(flat: &mut AssembledParts) {
             origins: union_origins(&fe.contributions, None),
         }];
         fe.eq.rhs = eq.rhs;
-        fe.lifted = false;
+    }
+    for ((_, rhs), eq) in flat.field_ics.iter_mut().zip(lifted) {
+        *rhs = eq.rhs;
+    }
+}
+
+/// The flattened system's variables and equations as a [`Model`], for the
+/// shape inference and the elementwise lift that read a model: each variable
+/// with only its type and `shape` (all either reads), the first of a name in
+/// `parameters`, `observed_variables`, `state_variables` order (the Julia
+/// binding's `_flat_array_shapes`).
+fn shapes_model(parts: &AssembledParts) -> Model {
+    let mut variables: IndexMap<String, ModelVariable> = IndexMap::new();
+    for map in [
+        &parts.parameters,
+        &parts.observed_variables,
+        &parts.state_variables,
+    ] {
+        for (k, v) in map {
+            variables.entry(k.clone()).or_insert_with(|| ModelVariable {
+                var_type: v.var_type,
+                shape: v.shape.clone(),
+                ..Default::default()
+            });
+        }
+    }
+    Model {
+        variables,
+        equations: parts.equations.iter().map(|fe| fe.eq.clone()).collect(),
+        ..Default::default()
     }
 }
 
@@ -2698,26 +2726,8 @@ fn maybe_apply_pointwise_lift(
         // refuses it (`faq_bare_array_operand`, esm-spec §4.3.1): the lift, not
         // the author, put it there. Such a variable names no index set for
         // the grid (rule 1 reads declared shapes only).
-        let read_shapes = {
-            let mut variables: IndexMap<String, ModelVariable> = IndexMap::new();
-            for map in [
-                &parts.parameters,
-                &parts.observed_variables,
-                &parts.state_variables,
-            ] {
-                for (k, v) in map {
-                    variables.entry(k.clone()).or_insert_with(|| v.clone());
-                }
-            }
-            let model = Model {
-                variables,
-                equations: parts.equations.iter().map(|fe| fe.eq.clone()).collect(),
-                ..Default::default()
-            };
-            let mut inferred = crate::structural::promoted_var_shapes(&model);
-            inferred.retain(|_, s| !s.is_empty());
-            inferred
-        };
+        let mut read_shapes = crate::structural::promoted_var_shapes(&shapes_model(parts));
+        read_shapes.retain(|_, s| !s.is_empty());
         let lift = PointwiseLift {
             lifted_shapes: &mut parts.lifted_shapes,
             state_variables: &mut parts.state_variables,

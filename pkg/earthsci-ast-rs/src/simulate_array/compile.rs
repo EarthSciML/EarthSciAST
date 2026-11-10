@@ -3805,8 +3805,12 @@ pub(crate) fn eval_buildtime_field_in_scope(
 /// 3. A COORDINATE EXPRESSION — an elementwise expression over array-producing
 ///    `faq`/`makearray` nodes (e.g. `cos(pi * x_coord)` where `x_coord`
 ///    is a grid-geometry aggregate expanded from a §9.7 template import),
-///    evaluated through the official array evaluator ([`eval_buildtime_field`])
-///    in a state-free context and indexed at this cell.
+///    evaluated through the official array evaluator
+///    ([`eval_buildtime_field_in_scope`]) in a state-free context, with the
+///    build-time array scope (`forcing`) bound by name, and indexed at this
+///    cell. A per-cell `faq` over the target's index sets, the form flatten
+///    writes for an elementwise template application (esm-spec §9.6.11), is
+///    one.
 ///
 /// Anything else is a hard error, so a scoped-reference ic that cannot be resolved
 /// is never silently dropped. Mirrors tree_walk.jl `_resolve_field_ic` and the
@@ -3872,7 +3876,7 @@ pub(super) fn resolve_field_ic_cell(
             // On a `CompileError` the memo stays empty and we fall through to
             // the case-(4) hard error below (byte-identical to the old
             // `match … { _ => {} }` arm, which likewise dropped the error).
-            if let Ok(v) = eval_buildtime_field(rhs, index_sets, params) {
+            if let Ok(v) = eval_buildtime_field_in_scope(rhs, index_sets, params, forcing) {
                 *cached_field = Some(v);
             }
         }
