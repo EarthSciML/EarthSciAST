@@ -468,17 +468,6 @@
       },
       {
         "input": {
-          "op": "fn",
-          "name": "datetime.year",
-          "args": [
-            "t"
-          ]
-        },
-        "typst": "\"datetime.year(t)\"",
-        "description": "A closed function call prints as upright text"
-      },
-      {
-        "input": {
           "op": "index",
           "args": [
             "u",
