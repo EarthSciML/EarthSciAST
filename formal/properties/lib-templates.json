@@ -1,0 +1,273 @@
+{
+  "properties": [
+    {
+      "id": "P-calendar-lib-int-exact",
+      "clauses": [
+        "spec.9.6.1.param-shadows-literal-substitute",
+        "spec.9.6.3.bindings-cover-params"
+      ],
+      "statement": "On |t| < 2^52 each of the eight integer templates of lib/calendar.esm (year, month, day, hour, minute, second, day_of_year, is_leap_year), applied to t and evaluated, is the exact integer value of its calendar field (Esm.Closed.Datetime.IntFn.exact); at Bin64 every operation of the expansion is exact, so the binary64 result is that integer bit for bit.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [inst_4 : Esm.Closed.TemplateAst.ExprLaws α] [inst_5 : Esm.Closed.CalendarAst.CalLaws α] (f : Esm.Closed.Datetime.IntFn) (t : ℝ), |t| < (2 : ℝ) ^ (52 : ℕ) → Esm.Expr.evalApplyIn Esm.Lib.Calendar.lib 32 (Esm.Closed.CalendarAst.intTemplate f) [(\"t\", Esm.Expr.Ast.var \"T\")] [(\"T\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin t : α))] = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ((f.exact t : ℤ) : ℝ)))",
+      "status": "proven",
+      "theorem": "Esm.Closed.CalendarAst.calendar_int_template_eq"
+    },
+    {
+      "id": "P-calendar-lib-julian-pinned",
+      "clauses": [
+        "spec.9.6.1.param-shadows-literal-substitute",
+        "spec.9.6.3.bindings-cover-params"
+      ],
+      "statement": "On |t| < 2^52 the julian_day template of lib/calendar.esm evaluated in binary64 is fJulianDay t, the binary64 value of the pinned formula (d + 2440588) + ((s - 43200) + (t - floor(t))) / 86400 on the exact split, bit for bit.",
+      "lean_statement": "∀ (t : ℝ), |t| < (2 : ℝ) ^ (52 : ℕ) → Esm.Expr.evalApplyIn Esm.Lib.Calendar.lib 32 Esm.Lib.Calendar.julian_day [(\"t\", Esm.Expr.Ast.var \"T\")] [(\"T\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin t : Esm.Closed.Template.Bin64))] = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.Bin64.fin (Esm.Closed.Datetime.fJulianDay t)))",
+      "status": "proven",
+      "theorem": "Esm.Closed.CalendarAst.julian_day_template_eq"
+    },
+    {
+      "id": "P-calendar-lib-nan-outside",
+      "clauses": [
+        "spec.9.6.1.param-shadows-literal-substitute",
+        "spec.9.6.3.bindings-cover-params"
+      ],
+      "statement": "For a NaN t, or a finite t with |t| >= 2^52, each of the nine lib/calendar.esm templates evaluates its 0/0 branch, NaN at every scalar type where 0/0 is NaN (Num, Bin64Z).",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [inst_4 : Esm.Closed.TemplateAst.ExprLaws α] [inst_5 : Esm.Closed.CalendarAst.CalLaws α] [inst_6 : Esm.Closed.CalendarAst.ZeroDivNaN α] (tm : Esm.Expr.Template), tm ∈ [Esm.Lib.Calendar.year, Esm.Lib.Calendar.month, Esm.Lib.Calendar.day, Esm.Lib.Calendar.hour, Esm.Lib.Calendar.minute, Esm.Lib.Calendar.second, Esm.Lib.Calendar.day_of_year, Esm.Lib.Calendar.julian_day, Esm.Lib.Calendar.is_leap_year] → ∀ (x : α), (x = Esm.Closed.Scalar.nan ∨ ∃ r : ℝ, x = Esm.Closed.Template.RealNaN.fin r ∧ (2 : ℝ) ^ (52 : ℕ) ≤ |r|) → Esm.Expr.evalApplyIn Esm.Lib.Calendar.lib 32 tm [(\"t\", Esm.Expr.Ast.var \"T\")] [(\"T\", Esm.Expr.Val.num x)] = Except.ok (Esm.Expr.Val.num Esm.Closed.Scalar.nan)",
+      "status": "proven",
+      "theorem": "Esm.Closed.CalendarAst.calendar_template_nan"
+    },
+    {
+      "id": "P-interp-lib-searchsorted-eq",
+      "clauses": [
+        "spec.9.6.1.ranges-binding-admissible",
+        "spec.9.6.1.param-shadows-literal-substitute",
+        "spec.9.6.3.bindings-cover-params"
+      ],
+      "statement": "The searchsorted template of lib/interp.esm (generated into Esm.Lib.Interp, checked current in CI), applied with the query, a non-decreasing axis xs and n = |xs| < 2^53 and evaluated by the model's expression evaluator, gives the reference searchsorted's result (Esm.Closed.searchsorted) for every query (NaN included) and for n = 0, at every scalar type with real values and one NaN and exact small-integer arithmetic (Num, Bin64).",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [inst_4 : Esm.Closed.TemplateAst.ExprLaws α] (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 ≤ x2) a → a.length < (2 : ℕ) ^ (53 : ℕ) → ∀ (x : α), Esm.Expr.evalApply Esm.Lib.Interp.searchsorted [(\"x\", Esm.Expr.Ast.var \"X\"), (\"xs\", Esm.Expr.Ast.var \"A\"), (\"n\", Esm.Expr.Ast.num (a.length : ℤ) (0 : ℕ))] [(\"A\", Esm.Expr.Val.arr1 (List.map (Esm.Closed.Template.RealNaN.fin : ℝ → α) a)), (\"X\", Esm.Expr.Val.num x)] = Except.ok (Esm.Expr.Val.num ((Esm.Closed.Template.RealNaN.fin : ℝ → α) ((Esm.Closed.searchsorted x (List.map (Esm.Closed.Template.RealNaN.fin : ℝ → α) a) : ℕ) : ℝ)))",
+      "status": "proven",
+      "theorem": "Esm.Closed.TemplateAst.searchsorted_template_eq"
+    },
+    {
+      "id": "P-interp-lib-linear-eq",
+      "clauses": [
+        "spec.9.6.1.ranges-binding-admissible",
+        "spec.9.6.1.param-shadows-literal-substitute",
+        "spec.9.6.3.bindings-cover-params"
+      ],
+      "statement": "The linear template of lib/interp.esm, applied and evaluated, equals the reference linear interpolation (Esm.Closed.linear) for every query (NaN included) on a non-decreasing axis of 2 ≤ n ≤ 2^53 knots and a table of length n; at Bin64 this is bit-for-bit binary64 equality.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [inst_4 : Esm.Closed.TemplateAst.ExprLaws α] (t : List α) (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 ≤ x2) a → (2 : ℕ) ≤ a.length → a.length ≤ (2 : ℕ) ^ (53 : ℕ) → t.length = a.length → ∀ (x : α), Esm.Expr.evalApply Esm.Lib.Interp.linear [(\"table\", Esm.Expr.Ast.var \"T\"), (\"axis\", Esm.Expr.Ast.var \"A\"), (\"x\", Esm.Expr.Ast.var \"X\"), (\"n\", Esm.Expr.Ast.num (a.length : ℤ) (0 : ℕ))] [(\"T\", Esm.Expr.Val.arr1 t), (\"A\", Esm.Expr.Val.arr1 (List.map (Esm.Closed.Template.RealNaN.fin : ℝ → α) a)), (\"X\", Esm.Expr.Val.num x)] = Except.ok (Esm.Expr.Val.num (Esm.Closed.linear t (List.map (Esm.Closed.Template.RealNaN.fin : ℝ → α) a) x))",
+      "status": "proven",
+      "theorem": "Esm.Closed.TemplateAst.linear_template_eq"
+    },
+    {
+      "id": "P-interp-lib-bilinear-eq",
+      "clauses": [
+        "spec.9.6.1.ranges-binding-admissible",
+        "spec.9.6.1.param-shadows-literal-substitute",
+        "spec.9.6.3.bindings-cover-params"
+      ],
+      "statement": "The bilinear template of lib/interp.esm, applied and evaluated, equals the reference bilinear interpolation (Esm.Closed.bilinear) for every query (NaN in either coordinate included) on non-decreasing axes of 2 ≤ n ≤ 2^53 knots each and a table of nx rows of ny entries; at Bin64 this is bit-for-bit binary64 equality.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [inst_4 : Esm.Closed.TemplateAst.ExprLaws α] (T : List (List α)) (ax ay : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 ≤ x2) ax → List.Pairwise (fun (x1 x2 : ℝ) => x1 ≤ x2) ay → (2 : ℕ) ≤ ax.length → (2 : ℕ) ≤ ay.length → ax.length ≤ (2 : ℕ) ^ (53 : ℕ) → ay.length ≤ (2 : ℕ) ^ (53 : ℕ) → T.length = ax.length → (∀ row ∈ T, row.length = ay.length) → ∀ (x y : α), Esm.Expr.evalApply Esm.Lib.Interp.bilinear [(\"table\", Esm.Expr.Ast.var \"T\"), (\"axis_x\", Esm.Expr.Ast.var \"AX\"), (\"axis_y\", Esm.Expr.Ast.var \"AY\"), (\"x\", Esm.Expr.Ast.var \"X\"), (\"y\", Esm.Expr.Ast.var \"Y\"), (\"nx\", Esm.Expr.Ast.num (ax.length : ℤ) (0 : ℕ)), (\"ny\", Esm.Expr.Ast.num (ay.length : ℤ) (0 : ℕ))] [(\"T\", Esm.Expr.Val.arr2 T), (\"AX\", Esm.Expr.Val.arr1 (List.map (Esm.Closed.Template.RealNaN.fin : ℝ → α) ax)), (\"AY\", Esm.Expr.Val.arr1 (List.map (Esm.Closed.Template.RealNaN.fin : ℝ → α) ay)), (\"X\", Esm.Expr.Val.num x), (\"Y\", Esm.Expr.Val.num y)] = Except.ok (Esm.Expr.Val.num (Esm.Closed.bilinear T (List.map (Esm.Closed.Template.RealNaN.fin : ℝ → α) ax) (List.map (Esm.Closed.Template.RealNaN.fin : ℝ → α) ay) x y))",
+      "status": "proven",
+      "theorem": "Esm.Closed.TemplateAst.bilinear_template_eq"
+    },
+    {
+      "id": "P-relational-lib-argmin",
+      "clauses": [
+        "spec.4.2.minmax-nan-propagates",
+        "spec.9.6.1.param-shadows-literal-substitute",
+        "spec.9.6.3.bindings-cover-params"
+      ],
+      "statement": "The argmin template of lib/relational.esm, applied to a candidate expression whose value at candidate j in [1, n] is v j (n >= 1) and evaluated, is an index j in [1, n]: the first NaN candidate if any candidate is NaN, else the smallest index of a minimum (every earlier candidate strictly greater).",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [inst_4 : Esm.Closed.TemplateAst.ExprLaws α] [inst_5 : Esm.Closed.RelationalAst.NaNIs α] (F : Esm.Expr.Ast) (n : ℕ), 1 ≤ n → n + 1 ≤ 2 ^ 53 → ∀ (env : Esm.Expr.Env α) (v : ℕ → α), (∀ j : ℕ, 1 ≤ j → j ≤ n → Esm.Expr.eval F ((\"k_argmin_1\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin (j : ℝ))) :: env) = Except.ok (Esm.Expr.Val.num (v j)) ∧ ∀ w : Esm.Expr.Val α, Esm.Expr.eval F ((\"k_argmin_1\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin (j : ℝ))) :: (\"k_argmin_1\", w) :: env) = Except.ok (Esm.Expr.Val.num (v j))) → ∃ j : ℕ, Esm.Expr.evalApply Esm.Lib.Relational.argmin [(\"f\", F), (\"n\", Esm.Expr.Ast.num (n : ℤ) 0)] env = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin (j : ℝ))) ∧ 1 ≤ j ∧ j ≤ n ∧ ((∃ i, 1 ≤ i ∧ i ≤ n ∧ v i = Esm.Closed.Scalar.nan) → v j = Esm.Closed.Scalar.nan ∧ ∀ i, 1 ≤ i → i < j → v i ≠ Esm.Closed.Scalar.nan) ∧ ((∀ i, 1 ≤ i → i ≤ n → v i ≠ Esm.Closed.Scalar.nan) → (∀ i, 1 ≤ i → i ≤ n → Esm.Closed.Scalar.le (v j) (v i) = true) ∧ (∀ i, 1 ≤ i → i < j → Esm.Closed.Scalar.lt (v j) (v i) = true))",
+      "status": "proven",
+      "theorem": "Esm.Closed.RelationalAst.argmin_template"
+    },
+    {
+      "id": "P-relational-lib-argmax",
+      "clauses": [
+        "spec.4.2.minmax-nan-propagates",
+        "spec.9.6.1.param-shadows-literal-substitute",
+        "spec.9.6.3.bindings-cover-params"
+      ],
+      "statement": "The argmax template of lib/relational.esm, applied to a candidate expression whose value at candidate j in [1, n] is v j (n >= 1) and evaluated, is an index j in [1, n]: the first NaN candidate if any candidate is NaN, else the smallest index of a maximum (every earlier candidate strictly smaller).",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [inst_4 : Esm.Closed.TemplateAst.ExprLaws α] [inst_5 : Esm.Closed.RelationalAst.NaNIs α] (F : Esm.Expr.Ast) (n : ℕ), 1 ≤ n → n + 1 ≤ 2 ^ 53 → ∀ (env : Esm.Expr.Env α) (v : ℕ → α), (∀ j : ℕ, 1 ≤ j → j ≤ n → Esm.Expr.eval F ((\"k_argmax_1\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin (j : ℝ))) :: env) = Except.ok (Esm.Expr.Val.num (v j)) ∧ ∀ w : Esm.Expr.Val α, Esm.Expr.eval F ((\"k_argmax_1\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin (j : ℝ))) :: (\"k_argmax_1\", w) :: env) = Except.ok (Esm.Expr.Val.num (v j))) → ∃ j : ℕ, Esm.Expr.evalApply Esm.Lib.Relational.argmax [(\"f\", F), (\"n\", Esm.Expr.Ast.num (n : ℤ) 0)] env = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin (j : ℝ))) ∧ 1 ≤ j ∧ j ≤ n ∧ ((∃ i, 1 ≤ i ∧ i ≤ n ∧ v i = Esm.Closed.Scalar.nan) → v j = Esm.Closed.Scalar.nan ∧ ∀ i, 1 ≤ i → i < j → v i ≠ Esm.Closed.Scalar.nan) ∧ ((∀ i, 1 ≤ i → i ≤ n → v i ≠ Esm.Closed.Scalar.nan) → (∀ i, 1 ≤ i → i ≤ n → Esm.Closed.Scalar.le (v i) (v j) = true) ∧ (∀ i, 1 ≤ i → i < j → Esm.Closed.Scalar.lt (v i) (v j) = true))",
+      "status": "proven",
+      "theorem": "Esm.Closed.RelationalAst.argmax_template"
+    },
+    {
+      "id": "P-geometry-lib-planar-ref",
+      "clauses": [
+        "spec.9.6.1.param-shadows-literal-substitute",
+        "spec.9.6.3.bindings-cover-params"
+      ],
+      "statement": "The overlap_area_planar template of lib/geometry.esm, applied to two rank-3 ring stacks with 1 <= nv < 2^53 vertex slots of two coordinates in the named cells and evaluated, is planarRef: the clip-area algorithm (shoelace fans about the first vertex of ring A, orientation signs, each edge's parameter interval [t0, t1] from the other ring's half-planes with the relative on-the-line tolerance, the + / min / max folds in index order) operation for operation; at Bin64 bit for bit.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [inst_4 : Esm.Closed.TemplateAst.ExprLaws α] {MA MB : List (List (List α))} {ca cb na nb : ℕ}, Esm.Closed.GeometryAst.Shape MA ca na → Esm.Closed.GeometryAst.Shape MB cb nb → 1 ≤ na → 1 ≤ nb → na < 2 ^ 53 → nb < 2 ^ 53 → Esm.Expr.evalApplyIn Esm.Lib.Geometry.lib 32 Esm.Lib.Geometry.overlap_area_planar (Esm.Closed.GeometryAst.bindP na nb) [(\"RA\", Esm.Expr.Val.arr3 MA), (\"CA\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin (ca : ℝ))), (\"RB\", Esm.Expr.Val.arr3 MB), (\"CB\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin (cb : ℝ)))] = Except.ok (Esm.Expr.Val.num (Esm.Closed.GeometryAst.planarRef MA ca na MB cb nb))",
+      "status": "proven",
+      "theorem": "Esm.Closed.GeometryAst.planar_template_eq"
+    },
+    {
+      "id": "P-geometry-lib-planar-pad-a",
+      "clauses": [
+        "spec.9.6.1.param-shadows-literal-substitute",
+        "spec.9.6.3.bindings-cover-params"
+      ],
+      "statement": "In binary64, for finite coordinates, the overlap_area_planar template of lib/geometry.esm evaluated with ring A padded by one zero-length edge (PadAt: first vertex kept, the other edges kept in order) equals it on the unpadded ring, bit for bit: exact duplicates need no deduplication step.",
+      "lean_statement": "∀ {MA MA' MB : List (List (List Esm.Closed.Template.Bin64))} {ca na cb nb p : ℕ}, Esm.Closed.GeometryAst.Shape MA ca na → Esm.Closed.GeometryAst.Shape MA' ca (na + 1) → Esm.Closed.GeometryAst.Shape MB cb nb → 1 ≤ na → 1 ≤ nb → na + 1 < 2 ^ 53 → nb < 2 ^ 53 → Esm.Closed.GeometryAst.PadAt MA MA' ca na p → Esm.Closed.GeometryAst.AllF MA ca na → Esm.Closed.GeometryAst.AllF MA' ca (na + 1) → Esm.Closed.GeometryAst.AllF MB cb nb → Esm.Expr.evalApplyIn Esm.Lib.Geometry.lib 32 Esm.Lib.Geometry.overlap_area_planar (Esm.Closed.GeometryAst.bindP (na + 1) nb) (Esm.Closed.GeometryAst.envP MA' ca MB cb) = Esm.Expr.evalApplyIn Esm.Lib.Geometry.lib 32 Esm.Lib.Geometry.overlap_area_planar (Esm.Closed.GeometryAst.bindP na nb) (Esm.Closed.GeometryAst.envP MA ca MB cb)",
+      "status": "proven",
+      "theorem": "Esm.Closed.GeometryAst.planar_template_pad_A"
+    },
+    {
+      "id": "P-geometry-lib-planar-pad-b",
+      "clauses": [
+        "spec.9.6.1.param-shadows-literal-substitute",
+        "spec.9.6.3.bindings-cover-params"
+      ],
+      "statement": "In binary64, for finite coordinates, the overlap_area_planar template of lib/geometry.esm evaluated with ring B padded by one zero-length edge (PadAt: first vertex kept, the other edges kept in order) equals it on the unpadded ring, bit for bit: exact duplicates need no deduplication step.",
+      "lean_statement": "∀ {MA MB MB' : List (List (List Esm.Closed.Template.Bin64))} {ca na cb nb p : ℕ}, Esm.Closed.GeometryAst.Shape MA ca na → Esm.Closed.GeometryAst.Shape MB cb nb → Esm.Closed.GeometryAst.Shape MB' cb (nb + 1) → 1 ≤ na → 1 ≤ nb → na < 2 ^ 53 → nb + 1 < 2 ^ 53 → Esm.Closed.GeometryAst.PadAt MB MB' cb nb p → Esm.Closed.GeometryAst.AllF MA ca na → Esm.Closed.GeometryAst.AllF MB cb nb → Esm.Closed.GeometryAst.AllF MB' cb (nb + 1) → Esm.Expr.evalApplyIn Esm.Lib.Geometry.lib 32 Esm.Lib.Geometry.overlap_area_planar (Esm.Closed.GeometryAst.bindP na (nb + 1)) (Esm.Closed.GeometryAst.envP MA ca MB' cb) = Esm.Expr.evalApplyIn Esm.Lib.Geometry.lib 32 Esm.Lib.Geometry.overlap_area_planar (Esm.Closed.GeometryAst.bindP na nb) (Esm.Closed.GeometryAst.envP MA ca MB cb)",
+      "status": "proven",
+      "theorem": "Esm.Closed.GeometryAst.planar_template_pad_B"
+    },
+    {
+      "id": "P-relational-lib-pair-key-in-range",
+      "clauses": [
+        "spec.4.2.value-invention-constant-factors",
+        "spec.9.6.1.param-shadows-literal-substitute",
+        "spec.9.6.3.bindings-cover-params"
+      ],
+      "statement": "For integers a in [lo_a, lo_a + n_a) and b in [lo_b, lo_b + n_b), all of magnitude at most 2^25, the pair_key template of lib/relational.esm evaluates to (a - lo_a)*n_b + (b - lo_b) exactly, at every type with the integer laws (so bit for bit in binary64).",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α] [Esm.Closed.CalendarAst.CalLaws α] {ia ib la lb na nb : ℤ}, |ia| ≤ (2 : ℤ) ^ (25 : ℕ) → |ib| ≤ (2 : ℤ) ^ (25 : ℕ) → |la| ≤ (2 : ℤ) ^ (25 : ℕ) → |lb| ≤ (2 : ℤ) ^ (25 : ℕ) → |na| ≤ (2 : ℤ) ^ (25 : ℕ) → |nb| ≤ (2 : ℤ) ^ (25 : ℕ) → la ≤ ia → ia < la + na → lb ≤ ib → ib < lb + nb → Esm.Expr.evalApply Esm.Lib.Relational.pair_key Esm.Closed.RelationalAst.bindPK (Esm.Closed.RelationalAst.envPK (Esm.Closed.Template.RealNaN.fin ↑ia : α) (Esm.Closed.Template.RealNaN.fin ↑ib) la lb na nb) = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑((ia - la) * nb + (ib - lb))))",
+      "status": "proven",
+      "theorem": "Esm.Closed.RelationalAst.pair_key_in_range"
+    },
+    {
+      "id": "P-relational-lib-pair-key-nan",
+      "clauses": [
+        "spec.4.2.value-invention-constant-factors",
+        "spec.9.6.1.param-shadows-literal-substitute",
+        "spec.9.6.3.bindings-cover-params"
+      ],
+      "statement": "When the two values are not integers in their ranges (one is NaN, non-integral or out of range), the pair_key template evaluates to NaN wherever 0/0 is NaN.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α] [Esm.Closed.CalendarAst.CalLaws α] [Esm.Closed.RelationalAst.KeyLaws α] [Esm.Closed.RelationalAst.NaNIs α] [Esm.Closed.CalendarAst.ZeroDivNaN α] {la lb na nb : ℤ}, |la| ≤ (2 : ℤ) ^ (25 : ℕ) → |lb| ≤ (2 : ℤ) ^ (25 : ℕ) → |na| ≤ (2 : ℤ) ^ (25 : ℕ) → |nb| ≤ (2 : ℤ) ^ (25 : ℕ) → ∀ (x y : α), (¬∃ (ia : ℤ) (ib : ℤ), x = Esm.Closed.Template.RealNaN.fin ↑ia ∧ y = Esm.Closed.Template.RealNaN.fin ↑ib ∧ la ≤ ia ∧ ia < la + na ∧ lb ≤ ib ∧ ib < lb + nb) → Esm.Expr.evalApply Esm.Lib.Relational.pair_key Esm.Closed.RelationalAst.bindPK (Esm.Closed.RelationalAst.envPK x y la lb na nb) = Except.ok (Esm.Expr.Val.num Esm.Closed.Scalar.nan)",
+      "status": "proven",
+      "theorem": "Esm.Closed.RelationalAst.pair_key_nan"
+    },
+    {
+      "id": "P-relational-lib-edge-key-symm",
+      "clauses": [
+        "spec.4.2.minmax-nan-propagates",
+        "spec.9.6.1.param-shadows-literal-substitute",
+        "spec.9.6.3.bindings-cover-params"
+      ],
+      "statement": "The edge_key template of lib/relational.esm gives the same value with u and v swapped, for every pair of values, NaN included.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α] [Esm.Closed.RelationalAst.NaNIs α] (x y l m : α), Esm.Expr.evalApply Esm.Lib.Relational.edge_key Esm.Closed.RelationalAst.bindEK (Esm.Closed.RelationalAst.envEK x y l m) = Esm.Expr.evalApply Esm.Lib.Relational.edge_key Esm.Closed.RelationalAst.bindEK' (Esm.Closed.RelationalAst.envEK x y l m)",
+      "status": "proven",
+      "theorem": "Esm.Closed.RelationalAst.edge_key_symm"
+    },
+    {
+      "id": "P-relational-lib-rank-of-searchsorted",
+      "clauses": [
+        "spec.9.6.1.param-shadows-literal-substitute",
+        "spec.9.6.3.bindings-cover-params"
+      ],
+      "statement": "The rank_of template of lib/relational.esm, with ascending members of length below 2^53, evaluates to the reference searchsorted(x, members) for every key, NaN included.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α] (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 ≤ x2) a → a.length < (2 : ℕ) ^ (53 : ℕ) → ∀ (x : α), Esm.Expr.evalApply Esm.Lib.Relational.rank_of [(\"x\", Esm.Expr.Ast.var \"X\"), (\"members\", Esm.Expr.Ast.var \"A\"), (\"n\", Esm.Expr.Ast.num ↑a.length (0 : ℕ))] [(\"A\", Esm.Expr.Val.arr1 (List.map Esm.Closed.Template.RealNaN.fin a)), (\"X\", Esm.Expr.Val.num x)] = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑(Esm.Closed.searchsorted x (List.map Esm.Closed.Template.RealNaN.fin a))))",
+      "status": "proven",
+      "theorem": "Esm.Closed.RelationalAst.rank_of_template_eq"
+    },
+    {
+      "id": "P-relational-lib-argmin-where",
+      "clauses": [
+        "spec.4.2.minmax-nan-propagates",
+        "spec.9.6.1.param-shadows-literal-substitute",
+        "spec.9.6.3.bindings-cover-params"
+      ],
+      "statement": "The argmin_where template of lib/relational.esm is n + 1 when no candidate passes the filter; otherwise a passing index: the first passing NaN candidate if one is NaN, else the smallest passing index of a minimum over the passing candidates.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α] [Esm.Closed.RelationalAst.NaNIs α] (F P : Esm.Expr.Ast) (n : ℕ), n + (1 : ℕ) ≤ (2 : ℕ) ^ (53 : ℕ) → ∀ (env : Esm.Expr.Env α) (v : ℕ → α) (Pb : ℕ → Bool), (∀ (j : ℕ), (1 : ℕ) ≤ j → j ≤ n → Esm.Expr.eval F ((\"k_argmin_where_1\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑j)) :: env) = Except.ok (Esm.Expr.Val.num (v j)) ∧ ∀ (w : Esm.Expr.Val α), Esm.Expr.eval F ((\"k_argmin_where_1\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑j)) :: (\"k_argmin_where_1\", w) :: env) = Except.ok (Esm.Expr.Val.num (v j))) → (∀ (j : ℕ), (1 : ℕ) ≤ j → j ≤ n → Esm.Expr.eval P ((\"k_argmin_where_1\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑j)) :: env) = Except.ok (Esm.Expr.Val.num (Esm.Expr.ofBool (Pb j))) ∧ ∀ (w : Esm.Expr.Val α), Esm.Expr.eval P ((\"k_argmin_where_1\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑j)) :: (\"k_argmin_where_1\", w) :: env) = Except.ok (Esm.Expr.Val.num (Esm.Expr.ofBool (Pb j)))) → ∃ (j : ℕ), Esm.Expr.evalApply Esm.Lib.Relational.argmin_where [(\"f\", F), (\"p\", P), (\"n\", Esm.Expr.Ast.num ↑n (0 : ℕ))] env = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑j)) ∧ ((∀ (i : ℕ), (1 : ℕ) ≤ i → i ≤ n → Pb i = Bool.false) → j = n + (1 : ℕ)) ∧ ((∃ (i : ℕ), (1 : ℕ) ≤ i ∧ i ≤ n ∧ Pb i = Bool.true) → (1 : ℕ) ≤ j ∧ j ≤ n ∧ Pb j = Bool.true ∧ ((∃ (i : ℕ), (1 : ℕ) ≤ i ∧ i ≤ n ∧ Pb i = Bool.true ∧ v i = Esm.Closed.Scalar.nan) → v j = Esm.Closed.Scalar.nan ∧ ∀ (i : ℕ), (1 : ℕ) ≤ i → i < j → Pb i = Bool.true → v i ≠ Esm.Closed.Scalar.nan) ∧ ((∀ (i : ℕ), (1 : ℕ) ≤ i → i ≤ n → Pb i = Bool.true → v i ≠ Esm.Closed.Scalar.nan) → (∀ (i : ℕ), (1 : ℕ) ≤ i → i ≤ n → Pb i = Bool.true → Esm.Closed.Scalar.le (v j) (v i) = Bool.true) ∧ ∀ (i : ℕ), (1 : ℕ) ≤ i → i < j → Pb i = Bool.true → Esm.Closed.Scalar.lt (v j) (v i) = Bool.true))",
+      "status": "proven",
+      "theorem": "Esm.Closed.RelationalAst.argmin_where_template"
+    },
+    {
+      "id": "P-relational-lib-argmax-where",
+      "clauses": [
+        "spec.4.2.minmax-nan-propagates",
+        "spec.9.6.1.param-shadows-literal-substitute",
+        "spec.9.6.3.bindings-cover-params"
+      ],
+      "statement": "The argmax_where template of lib/relational.esm is n + 1 when no candidate passes the filter; otherwise a passing index: the first passing NaN candidate if one is NaN, else the smallest passing index of a maximum over the passing candidates.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α] [Esm.Closed.RelationalAst.NaNIs α] (F P : Esm.Expr.Ast) (n : ℕ), n + (1 : ℕ) ≤ (2 : ℕ) ^ (53 : ℕ) → ∀ (env : Esm.Expr.Env α) (v : ℕ → α) (Pb : ℕ → Bool), (∀ (j : ℕ), (1 : ℕ) ≤ j → j ≤ n → Esm.Expr.eval F ((\"k_argmax_where_1\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑j)) :: env) = Except.ok (Esm.Expr.Val.num (v j)) ∧ ∀ (w : Esm.Expr.Val α), Esm.Expr.eval F ((\"k_argmax_where_1\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑j)) :: (\"k_argmax_where_1\", w) :: env) = Except.ok (Esm.Expr.Val.num (v j))) → (∀ (j : ℕ), (1 : ℕ) ≤ j → j ≤ n → Esm.Expr.eval P ((\"k_argmax_where_1\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑j)) :: env) = Except.ok (Esm.Expr.Val.num (Esm.Expr.ofBool (Pb j))) ∧ ∀ (w : Esm.Expr.Val α), Esm.Expr.eval P ((\"k_argmax_where_1\", Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑j)) :: (\"k_argmax_where_1\", w) :: env) = Except.ok (Esm.Expr.Val.num (Esm.Expr.ofBool (Pb j)))) → ∃ (j : ℕ), Esm.Expr.evalApply Esm.Lib.Relational.argmax_where [(\"f\", F), (\"p\", P), (\"n\", Esm.Expr.Ast.num ↑n (0 : ℕ))] env = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑j)) ∧ ((∀ (i : ℕ), (1 : ℕ) ≤ i → i ≤ n → Pb i = Bool.false) → j = n + (1 : ℕ)) ∧ ((∃ (i : ℕ), (1 : ℕ) ≤ i ∧ i ≤ n ∧ Pb i = Bool.true) → (1 : ℕ) ≤ j ∧ j ≤ n ∧ Pb j = Bool.true ∧ ((∃ (i : ℕ), (1 : ℕ) ≤ i ∧ i ≤ n ∧ Pb i = Bool.true ∧ v i = Esm.Closed.Scalar.nan) → v j = Esm.Closed.Scalar.nan ∧ ∀ (i : ℕ), (1 : ℕ) ≤ i → i < j → Pb i = Bool.true → v i ≠ Esm.Closed.Scalar.nan) ∧ ((∀ (i : ℕ), (1 : ℕ) ≤ i → i ≤ n → Pb i = Bool.true → v i ≠ Esm.Closed.Scalar.nan) → (∀ (i : ℕ), (1 : ℕ) ≤ i → i ≤ n → Pb i = Bool.true → Esm.Closed.Scalar.le (v i) (v j) = Bool.true) ∧ ∀ (i : ℕ), (1 : ℕ) ≤ i → i < j → Pb i = Bool.true → Esm.Closed.Scalar.lt (v i) (v j) = Bool.true))",
+      "status": "proven",
+      "theorem": "Esm.Closed.RelationalAst.argmax_where_template"
+    },
+    {
+      "id": "P-count-fold-exact",
+      "clauses": [
+        "spec.9.6.4.observable-as-expand",
+        "conf.5.6.3.empty-reduction-registry-identity"
+      ],
+      "statement": "The faq + reduction seeded at +0.0 over k in [1, n] of ifelse(a[k] REL x, 1, 0) or ifelse(a[k] REL x, 0, 1), for each of the six comparisons, evaluates exactly to the natural-number count of keys among the first n for which the indicator is 1, for n <= |a| and n <= 2^53, at every scalar type with exact small-integer arithmetic.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α] {env : Esm.Expr.Env α}, ∀ rel ∈ Esm.Closed.CountAst.relOps, ∀ (swap : Bool) {axis qE nE : Esm.Expr.Ast} {k : String} {n : ℕ} {A : List α} {q : α}, n ≤ (2 : ℕ) ^ (53 : ℕ) → n ≤ A.length → Esm.Expr.eval nE env = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑n)) → (∀ (v : Esm.Expr.Val α), Esm.Expr.eval axis ((k, v) :: env) = Except.ok (Esm.Expr.Val.arr1 A)) → (∀ (v : Esm.Expr.Val α), Esm.Expr.eval qE ((k, v) :: env) = Except.ok (Esm.Expr.Val.num q)) → Esm.Expr.eval (Esm.Closed.CountAst.countRelA rel swap axis qE k nE) env = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑(List.countP (fun (a : α) => Esm.Closed.CountAst.relB rel a q != swap) (List.take n A))))",
+      "status": "proven",
+      "theorem": "Esm.Closed.CountAst.count_fold_exact"
+    },
+    {
+      "id": "P-count-fold-exact-binary64",
+      "clauses": [
+        "spec.9.6.4.observable-as-expand"
+      ],
+      "statement": "In binary64 (every addition rounded to nearest even), the comparison-count faq over all of a key array of at most 2^53 entries evaluates exactly to the natural-number count.",
+      "lean_statement": "∀ rel ∈ Esm.Closed.CountAst.relOps, ∀ (swap : Bool) (k : String), k ≠ \"A\" → k ≠ \"X\" → ∀ (A : List Esm.Closed.Template.Bin64) (q : Esm.Closed.Template.Bin64), A.length ≤ (2 : ℕ) ^ (53 : ℕ) → Esm.Expr.eval (Esm.Closed.CountAst.countRelA rel swap (Esm.Expr.Ast.var \"A\") (Esm.Expr.Ast.var \"X\") k (Esm.Expr.Ast.num ↑A.length (0 : ℕ))) (Esm.Closed.CountAst.cenv A q) = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.Bin64.fin ↑(List.countP (fun (a : Esm.Closed.Template.Bin64) => Esm.Closed.CountAst.relB rel a q != swap) A)))",
+      "status": "proven",
+      "theorem": "Esm.Closed.CountAst.count_fold_exact_binary64"
+    },
+    {
+      "id": "P-count-perm-invariant",
+      "clauses": [
+        "conf.5.5.pure-function-of-total-order"
+      ],
+      "statement": "The evaluated comparison-count faq is the same for every permutation of its key array, for each of the six comparisons and both branch orders: sorting a copy of the keys does not change the result.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α], ∀ rel ∈ Esm.Closed.CountAst.relOps, ∀ (swap : Bool) (k : String), k ≠ \"A\" → k ≠ \"X\" → ∀ (A B : List α), A.Perm B → ∀ (q : α), A.length ≤ (2 : ℕ) ^ (53 : ℕ) → Esm.Expr.eval (Esm.Closed.CountAst.countRelA rel swap (Esm.Expr.Ast.var \"A\") (Esm.Expr.Ast.var \"X\") k (Esm.Expr.Ast.num ↑A.length (0 : ℕ))) (Esm.Closed.CountAst.cenv A q) = Esm.Expr.eval (Esm.Closed.CountAst.countRelA rel swap (Esm.Expr.Ast.var \"A\") (Esm.Expr.Ast.var \"X\") k (Esm.Expr.Ast.num ↑A.length (0 : ℕ))) (Esm.Closed.CountAst.cenv B q)",
+      "status": "proven",
+      "theorem": "Esm.Closed.CountAst.count_perm_invariant"
+    },
+    {
+      "id": "P-count-eq-search",
+      "clauses": [
+        "spec.9.6.4.observable-as-expand"
+      ],
+      "statement": "For <=, <, >=, >, the evaluated count faq_k ifelse(A[k] REL q, 1, 0) over any key array (NaN keys allowed, any order) equals the bisection count over a sorted copy of its non-NaN keys, for every query including NaN; the swapped-branch form ifelse(A[k] REL q, 0, 1) equals |A| minus it.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α] [Esm.Closed.CountAst.LtNaN α] [Esm.Closed.RelationalAst.NaNIs α], ∀ rel ∈ Esm.Closed.CountAst.ordOps, ∀ (k : String), k ≠ \"A\" → k ≠ \"X\" → ∀ (A S : List α) (q : α), S.Perm (List.filter (fun (a : α) => !Esm.Closed.Scalar.isNaN a) A) → List.Pairwise (fun (a b : α) => Esm.Closed.Scalar.le a b = Bool.true) S → A.length ≤ (2 : ℕ) ^ (53 : ℕ) → Esm.Expr.eval (Esm.Closed.CountAst.countRelA rel Bool.false (Esm.Expr.Ast.var \"A\") (Esm.Expr.Ast.var \"X\") k (Esm.Expr.Ast.num ↑A.length (0 : ℕ))) (Esm.Closed.CountAst.cenv A q) = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑(Esm.Closed.CountAst.searchCount rel S q))) ∧ Esm.Expr.eval (Esm.Closed.CountAst.countRelA rel Bool.true (Esm.Expr.Ast.var \"A\") (Esm.Expr.Ast.var \"X\") k (Esm.Expr.Ast.num ↑A.length (0 : ℕ))) (Esm.Closed.CountAst.cenv A q) = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑(A.length - Esm.Closed.CountAst.searchCount rel S q)))",
+      "status": "proven",
+      "theorem": "Esm.Closed.CountAst.count_eq_search"
+    },
+    {
+      "id": "P-expr-from-range-dense",
+      "clauses": [
+        "spec.9.6.1.ranges-from-binding-index-set"
+      ],
+      "statement": "A faq reduction (+, *, min or max) over a {\"from\": S} range, where the evaluation environment binds the size n <= 2^53 of the index set S, evaluates to exactly what the same reduction over the dense range [1, n] does.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α] {red : String}, red ∈ [\"+\", \"*\", \"min\", \"max\"] → ∀ {k S : String} {body : Esm.Expr.Ast} {args : List Esm.Expr.Ast} {env : Esm.Expr.Env α} {n : ℕ}, n ≤ (2 : ℕ) ^ (53 : ℕ) → List.lookup (Esm.Expr.setKey S) env = Option.some (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑n)) → Esm.Expr.eval (Esm.Expr.Ast.faq [] red (Esm.Expr.Ranges.fromSet k S Esm.Expr.Ranges.nil) body args) env = Esm.Expr.eval (Esm.Expr.Ast.faq [] red (Esm.Expr.Ranges.cons k [Esm.Expr.Ast.num (1 : ℤ) (0 : ℕ), Esm.Expr.Ast.num ↑n (0 : ℕ)] Esm.Expr.Ranges.nil) body args) env",
+      "status": "proven",
+      "theorem": "Esm.Closed.CountAst.ev_fromSet"
+    },
+    {
+      "id": "P-relational-rank-of-set-eq-rank-of",
+      "clauses": [
+        "spec.9.6.1.ranges-from-binding-index-set",
+        "spec.9.6.3.bindings-cover-params"
+      ],
+      "statement": "With S an index set of |members| positions, the rank_of_set template of lib/relational.esm (its {\"from\": S} range evaluated by the expression evaluator) evaluates to exactly what rank_of(x, members, |members|) does, for every key and member array.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α] (A : List α) (x : α), A.length < (2 : ℕ) ^ (53 : ℕ) → Esm.Expr.evalApply Esm.Lib.Relational.rank_of_set [(\"x\", Esm.Expr.Ast.var \"X\"), (\"members\", Esm.Expr.Ast.var \"A\"), (\"S\", Esm.Expr.Ast.var \"S\")] (Esm.Closed.CountAst.senv A x) = Esm.Expr.evalApply Esm.Lib.Relational.rank_of [(\"x\", Esm.Expr.Ast.var \"X\"), (\"members\", Esm.Expr.Ast.var \"A\"), (\"n\", Esm.Expr.Ast.num ↑A.length (0 : ℕ))] [(\"A\", Esm.Expr.Val.arr1 A), (\"X\", Esm.Expr.Val.num x)]",
+      "status": "proven",
+      "theorem": "Esm.Closed.CountAst.rank_of_set_eq_rank_of"
+    },
+    {
+      "id": "P-relational-rank-of-set",
+      "clauses": [
+        "spec.9.6.1.ranges-from-binding-index-set"
+      ],
+      "statement": "With S an index set of the members' size, the rank_of_set template on ascending real members of length below 2^53 evaluates to the reference searchsorted(x, members) for every key, NaN included.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] [inst_1 : Esm.Closed.Template.RealNaN α] [inst_2 : Esm.Expr.Lits α] [inst_3 : Esm.Expr.Elem α] [Esm.Closed.TemplateAst.ExprLaws α] (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 ≤ x2) a → a.length < (2 : ℕ) ^ (53 : ℕ) → ∀ (x : α), Esm.Expr.evalApply Esm.Lib.Relational.rank_of_set [(\"x\", Esm.Expr.Ast.var \"X\"), (\"members\", Esm.Expr.Ast.var \"A\"), (\"S\", Esm.Expr.Ast.var \"S\")] (Esm.Closed.CountAst.senv (List.map Esm.Closed.Template.RealNaN.fin a) x) = Except.ok (Esm.Expr.Val.num (Esm.Closed.Template.RealNaN.fin ↑(Esm.Closed.searchsorted x (List.map Esm.Closed.Template.RealNaN.fin a))))",
+      "status": "proven",
+      "theorem": "Esm.Closed.CountAst.rank_of_set_template_eq"
+    }
+  ]
+}

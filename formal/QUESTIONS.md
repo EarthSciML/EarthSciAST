@@ -630,13 +630,6 @@ with a pending question among its own clauses.
 - Problem: Operands are arbitrary sub-expressions whose precision is inferred from leaves, not necessarily variables, so 'naming both variables' is undefined when an operand is compound or when several variables of each precision feed it.
 - Ruling: (pending)
 
-## Q-89 esm-spec.md §8.6.1: ring dedup equal
-- Clauses: `spec.8.6.1.ring-dedup-equal`
-- Phase: 7
-- Found by: inventory
-- Problem: Deduplication 'under the shared point-equality tolerance' is not well defined: closeness under atol/rtol is not transitive (a chain of near-duplicates), np.allclose's rtol is asymmetric, and which of two near-equal vertices is kept is unspecified, so 'MUST equal the same op over the already-distinct ring' cannot hold exactly.
-- Ruling: (pending)
-
 ## Q-90 CONFORMANCE_SPEC.md §5.24.1: selectivity exact comparison
 - Clauses: `conf.5.24.1.selectivity-exact-comparison`
 - Phase: none (out_of_scope)

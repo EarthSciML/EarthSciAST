@@ -2,10 +2,10 @@ import Esm.Closed.Datetime.Exact
 import Mathlib.Basic.Real.Basic
 
 /-!
-# Properties of the exact `datetime.*` functions
+# Properties of the exact calendar reference
 
-The registry (`formal/properties/closed-datetime.json`) cites the `ℝ`-valued
-theorems in the last section; the generic lemmas above them are the proofs.
+The `ℝ`-valued theorems in the last section are what the calendar template
+theorems (`TemplateAst.lean`) use; the generic lemmas above them are the proofs.
 -/
 
 namespace Esm.Closed.Datetime
@@ -120,7 +120,7 @@ end Generic
 
 /-! ## The registry's statements, at `K = ℝ` -/
 
-/-- Every integer function's output lies in its stated range (§9.2 table). -/
+/-- Every integer function's output lies in its stated range (year to leap-year flag). -/
 theorem ranges (t : ℝ) :
     (1 ≤ IntFn.month.exact t ∧ IntFn.month.exact t ≤ 12) ∧
     (1 ≤ IntFn.day.exact t ∧
@@ -250,8 +250,8 @@ theorem yearInInt32_iff (t : ℝ) :
       have h' : ¬ yearOfDays (dayNumber t) < int32Max + 1 := by omega
       exact h' (h2.mpr (h4.mpr b))
 
-/-- §9.2 as ruled in Q-101: every `datetime.*` function, `julian_day` included,
-raises `closed_function_overflow` exactly when the year of `t` is outside Int32
+/-- Ruling Q-101: every calendar field, `julian_day` included, is `overflow`
+exactly when the year of `t` is outside Int32
 (i.e. outside [-2147483648-01-01, 2147483648-01-01)), and otherwise returns its
 exact value — every other integer field then fits in Int32. -/
 theorem overflow_year_rule (f : IntFn) (t : ℝ) :
@@ -285,87 +285,9 @@ theorem overflow_year_rule (f : IntFn) (t : ℝ) :
     unfold julianDayEval
     simp [hy]
 
-/-- §9.2 as ruled in Q-100: a NaN or ±∞ `t` raises `closed_function_overflow`
-in every `datetime.*` function; a finite one is evaluated as above. -/
-theorem nonfinite_overflow (f : IntFn) :
-    (∀ t : ℝ, f.evalTime (.finite t) = f.eval t ∧ julianDayEvalTime (.finite t) = julianDayEval t) ∧
-    f.evalTime (.nan : Time ℝ) = .overflow ∧ f.evalTime (.posInf : Time ℝ) = .overflow ∧
-    f.evalTime (.negInf : Time ℝ) = .overflow ∧
-    julianDayEvalTime (.nan : Time ℝ) = .overflow ∧ julianDayEvalTime (.posInf : Time ℝ) = .overflow ∧
-    julianDayEvalTime (.negInf : Time ℝ) = .overflow :=
-  ⟨fun _ => ⟨rfl, rfl⟩, rfl, rfl, rfl, rfl, rfl, rfl⟩
-
-/-- The first instant of year 2147483648 (one past Int32 max), as a day number. -/
-theorem civil_int32_end : civilFromDays 784351576777 = ⟨2147483648, 1, 1⟩ := by decide
-
-/-- At the first instant of year 2147483648, `datetime.month` is 1 (a small
-Int32) and still overflows. -/
-theorem month_overflows_at_int32_end :
-    IntFn.month.eval ((86400 : ℝ) * (784351576777 : ℤ)) = .overflow ∧
-      IntFn.month.exact ((86400 : ℝ) * (784351576777 : ℤ)) = 1 := by
-  have hn : dayNumber ((86400 : ℝ) * ((784351576777 : ℤ) : ℝ)) = 784351576777 := by
-    unfold dayNumber; rw [mul_div_cancel_left₀ _ (by norm_num), Int.floor_intCast]
-  have hd : dateOf ((86400 : ℝ) * ((784351576777 : ℤ) : ℝ)) = ⟨2147483648, 1, 1⟩ := by
-    unfold dateOf; rw [hn, civil_int32_end]
-  have hy : ¬ YearInInt32 ((86400 : ℝ) * ((784351576777 : ℤ) : ℝ)) := by
-    unfold YearInInt32; rw [IntFn.exact_year, hd]; unfold int32Max; norm_num
-  refine ⟨?_, ?_⟩
-  · unfold IntFn.eval; rw [ite_eq_right_of_eq_false _ _ (eq_false hy)]
-  · rw [IntFn.exact_month, hd]
-
-/-- Retired by ruling Q-101: the overflow is no longer decided by each field's
-own value. -/
-theorem overflow_iff_refuted :
-    ¬ ∀ (f : IntFn) (t : ℝ),
-      f.eval t = .overflow ↔ ¬ (int32Min ≤ f.exact t ∧ f.exact t ≤ int32Max) := by
-  intro h
-  obtain ⟨h1, h2⟩ := month_overflows_at_int32_end
-  have := (h .month ((86400 : ℝ) * (784351576777 : ℤ))).mp h1
-  rw [h2] at this
-  exact this ⟨by unfold int32Min; omega, by unfold int32Max; omega⟩
-
-/-- Retired by ruling Q-101: `datetime.year` is not the only function that
-overflows. -/
-theorem overflow_only_year_refuted :
-    ¬ ∀ (f : IntFn) (t : ℝ),
-      (f ≠ .year → f.eval t = .ok (f.exact t)) ∧
-      (IntFn.year.eval t = .overflow ↔
-        t < 86400 * (daysFromCivil ⟨int32Min, 1, 1⟩ : ℝ) ∨
-          86400 * (daysFromCivil ⟨int32Max + 1, 1, 1⟩ : ℝ) ≤ t) := by
-  intro h
-  obtain ⟨h1, -⟩ := month_overflows_at_int32_end
-  have := (h .month ((86400 : ℝ) * (784351576777 : ℤ))).1 (by decide)
-  rw [h1] at this
-  exact nomatch this
-
-/-- `datetime.julian_day` is the standard Julian Date for every `t` (ruling
+/-- `julian_day` is the standard Julian Date for every `t` (ruling
 Q-99). -/
 theorem julianDay_eq_standard (t : ℝ) : julianDay t = t / 86400 + 2440587.5 := by
   unfold julianDay timeOfDay; push_cast; ring
-
-/-- §9.2's informative note: on and after -4800-03-01 the Fliegel–van Flandern
-computation is the standard continuous Julian Date, `t / 86400 + 2440587.5`. -/
-theorem fvfJulianDay_eq_of_ge (t : ℝ) (h : 86400 * (daysFromCivil fvfFirstDate : ℝ) ≤ t) :
-    fvfJulianDay t = t / 86400 + 2440587.5 := by
-  have hn := (le_dayNumber_iff t _).mpr h
-  have hv := civilFromDays_valid (dayNumber t)
-  have he := fvfJdn_eq hv (by rw [daysFromCivil_civilFromDays]; exact hn)
-  rw [daysFromCivil_civilFromDays] at he
-  unfold fvfJulianDay dateOf timeOfDay
-  rw [he]; push_cast; ring
-
-/-- Unrestricted, it is false: on -4800-02-29 the FvF formula (as published,
-with truncating division) is one day ahead. -/
-theorem fvfJulianDay_ne_standard : ¬ ∀ t : ℝ, fvfJulianDay t = t / 86400 + 2440587.5 := by
-  intro h
-  have ht := h (86400 * (-2472633 : ℤ))
-  have hn : dayNumber ((86400 : ℝ) * ((-2472633 : ℤ) : ℝ)) = -2472633 := by
-    unfold dayNumber; rw [mul_div_cancel_left₀ _ (by norm_num), Int.floor_intCast]
-  have hc : civilFromDays (-2472633) = ⟨-4800, 2, 29⟩ := by decide
-  have hj : fvfJdn ⟨-4800, 2, 29⟩ = -32044 := by decide
-  unfold fvfJulianDay dateOf timeOfDay at ht
-  rw [hn, hc, hj] at ht
-  push_cast at ht
-  norm_num at ht
 
 end Esm.Closed.Datetime

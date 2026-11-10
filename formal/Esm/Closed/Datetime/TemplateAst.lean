@@ -4,10 +4,10 @@ import Esm.Closed.Datetime.Hinnant
 import Esm.Closed.Datetime.Binary64
 
 /-!
-# The `lib/calendar.esm` templates, evaluated, equal the `datetime.*` model
+# The `lib/calendar.esm` templates, evaluated, equal the calendar reference
 
 `Esm/Lib/Calendar.lean` holds the expression templates of `lib/calendar.esm`
-as ASTs (generated, checked current in CI): the nine public `datetime.*`
+as ASTs (generated, checked current in CI): the nine public calendar
 templates and the helper templates (`civil_day_number`, `civil_era`, …) their
 bodies reference (§9.7.3). Each public template, fully expanded through the
 file's templates (`expandIn`), is `ifelse(abs(t) < 2^52, body, 0 / 0)`. This file proves, for every real `t`:
@@ -18,9 +18,8 @@ file's templates (`expandIn`), is `ifelse(abs(t) < 2^52, body, 0 / 0)`. This fil
   with the `CalLaws` below — the exact `Num`, the binary64 `Bin64` and
   `Bin64Z` — so in binary64 every intermediate value and the result are exact;
 * `julian_day_template_eq`: on `|t| < 2^52` the `julian_day` template
-  evaluated in binary64 is `fJulianDay t`, the binary64 value of §9.2's pinned
-  formula (`Binary64.lean`; `fJulianDay_err` bounds it within one ulp of the
-  Julian Date for every double `t` with `|t| ≤ 2^59`);
+  evaluated in binary64 is `fJulianDay t`, the binary64 value of the pinned
+  formula (`Binary64.lean`);
 * `calendar_template_nan`: outside the domain (`t` NaN, or `|t| ≥ 2^52`) every
   template evaluates to `0 / 0`, which is NaN at `Num` and `Bin64Z`.
   (`Bin64` is the binary64 model the interp theorems use; its division rounds
@@ -134,7 +133,6 @@ noncomputable instance : Scalar Bin64Z where
   le := Bin64.le
   lt := Bin64.lt
   isNaN := Bin64.isNaN
-  nonFinite := Bin64.isNaN
 
 noncomputable instance : RealNaN Bin64Z where
   fin r := (Bin64.fin r : Bin64)
@@ -816,7 +814,7 @@ theorem isLeap_eq (F : ℤ) :
 
 /-! ## The nine templates -/
 
-/-- The template of each integer `datetime.*` function. -/
+/-- The template of each integer calendar field. -/
 def intTemplate : IntFn → Template
   | .year => Esm.Lib.Calendar.year
   | .month => Esm.Lib.Calendar.month
@@ -848,9 +846,9 @@ theorem ev_guard_in {t : ℝ} (ht : |t| < 2 ^ 52) (b : Ast) :
     eval (guardA b) (envT t : Env α) = eval b (envT t) := by
   unfold guardA iteA; rw [ev_ifelse (ev_cond_in ht)]; rfl
 
-/-- **The integer `datetime.*` templates are exact.** On `|t| < 2^52`, each of
+/-- **The integer calendar templates are exact.** On `|t| < 2^52`, each of
 the eight integer templates of `lib/calendar.esm`, applied to `t` and
-evaluated, is the exact integer value of its `datetime.*` function. At `Bin64`
+evaluated, is the exact integer value of its calendar field. At `Bin64`
 this is a statement about binary64 evaluation: every operation in the
 expansion is exact. -/
 theorem calendar_int_template_eq (f : IntFn) (t : ℝ) (ht : |t| < 2 ^ 52) :
@@ -886,7 +884,7 @@ theorem calendar_int_template_eq (f : IntFn) (t : ℝ) (ht : |t| < 2 ^ 52) :
     simp only [ev_guard_in ht, ev_isLeapF hF, IntFn.exact_isLeapYear, dateOf_eq, isLeap_eq]
     simp only [decide_eq_true_eq]
 
-/-- On the domain the year is a signed 32-bit integer, so §9.2's result is the
+/-- On the domain the year is a signed 32-bit integer, so the reference result is the
 exact value: the templates agree with `IntFn.eval`, not only `IntFn.exact`. -/
 theorem int_template_eq_eval (f : IntFn) (t : ℝ) (ht : |t| < 2 ^ 52) :
     f.eval t = .ok (f.exact t) := by
@@ -958,7 +956,7 @@ end Top
 
 /-- **`julian_day` is the pinned binary64 formula.** On `|t| < 2^52`, the
 `julian_day` template evaluated in binary64 (`Bin64`, and `Bin64Z`, whose
-operations are the same away from a zero divisor) is `fJulianDay t`, §9.2's
+operations are the same away from a zero divisor) is `fJulianDay t`, the pinned
 `(d + 2440588) + ((s − 43200) + (t − floor(t))) / 86400` rounded operation by
 operation on the exact split — bit for bit. -/
 theorem julian_day_template_eq (t : ℝ) (ht : |t| < 2 ^ 52) :
