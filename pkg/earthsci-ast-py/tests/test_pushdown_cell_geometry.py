@@ -8,9 +8,11 @@ symbol counts support positions and support position ``i`` is grid cell
 with it — not only the four envelope bounds of the containment predicate.
 
 Polygon allocation is the shape that makes the difference visible. Its weight is
-``polygon_intersection_area(cell_ring[c], rec_ring[r]) / cell_area[c]``, so the
-body reads a rank-3 ``[cells, vertex, xy]`` ring stack and a rank-1 area, and
-neither is an envelope factor. Gathering only the envelopes leaves both pointing
+the overlap area of the cell's and the record's rings over ``cell_area[c]``
+(the rings here are axis-aligned boxes, so the overlap is
+``max(0, min(x1) - max(x0)) * max(0, min(y1) - max(y0))`` read off the ring
+corners), so the body reads a rank-3 ``[cells, vertex, xy]`` ring stack and a
+rank-1 area, and neither is an envelope factor. Gathering only the envelopes leaves both pointing
 at the full grid while the axis is compact: full-grid values read at support
 positions, wrong numbers, no diagnostic anywhere. These tests hold the fix.
 """
@@ -31,6 +33,19 @@ NV = 5  # a closed unit square: four corners and the repeat
 
 def _ix(f, *idx):
     return {"op": "index", "args": [f, *idx]}
+
+
+def _box_overlap(ring_a, cell_a, ring_b, cell_b):
+    """The overlap area of two axis-aligned box rings ``[[x0,y0],[x1,y0],[x1,y1],
+    [x0,y1],[x0,y0]]``, gathered by corner: vertex 1 holds (x0, y0), vertex 3
+    holds (x1, y1)."""
+
+    def side(axis):
+        lo = {"op": "max", "args": [_ix(ring_a, cell_a, 1, axis), _ix(ring_b, cell_b, 1, axis)]}
+        hi = {"op": "min", "args": [_ix(ring_a, cell_a, 3, axis), _ix(ring_b, cell_b, 3, axis)]}
+        return {"op": "max", "args": [0.0, {"op": "-", "args": [hi, lo]}]}
+
+    return {"op": "*", "args": [side(1), side(2)]}
 
 
 def _ring(x0, y0, x1, y1):
@@ -178,14 +193,7 @@ def _doc():
                                             {
                                                 "op": "/",
                                                 "args": [
-                                                    {
-                                                        "op": "polygon_intersection_area",
-                                                        "manifold": "planar",
-                                                        "args": [
-                                                            _ix("cell_ring", "c"),
-                                                            _ix("rec_ring", "r"),
-                                                        ],
-                                                    },
+                                                    _box_overlap("cell_ring", "c", "rec_ring", "r"),
                                                     _ix("cell_area", "c"),
                                                 ],
                                             },
@@ -305,9 +313,9 @@ def test_every_cell_axis_array_is_gathered_rank_preserving():
 
 
 def test_body_reads_are_repointed_onto_the_gathers():
-    """The polygon operand and the area divisor follow the envelopes onto the
-    compact axis — the substitution is by NAME, so the sliced spelling
-    `index(cell_ring, c)` is untouched apart from the base."""
+    """The ring gathers and the area divisor follow the envelopes onto the
+    compact axis — the substitution is by NAME, so each gather
+    `index(cell_ring, c, v, d)` is untouched apart from the base."""
     out = desugar_pushdown(_doc(), "Binned")
     body = next(e["rhs"] for e in out["models"]["Binned"]["equations"] if e.get("lhs") == "E_PM25")
     assert body["ranges"]["c"]["from"] == "pd_support__src_cells"
@@ -331,27 +339,30 @@ def test_body_reads_are_repointed_onto_the_gathers():
     assert "pd_cell__src_cells__cell_ring" in bases
     assert "pd_cell__src_cells__cell_area" in bases
 
-    # The polygon operand keeps its SLICED spelling: the base name changed and
-    # nothing else did, which is what rank preservation buys.
-    found = []
+    # Each ring gather keeps its subscripts: the base name changed and nothing
+    # else did, which is what rank preservation buys.
+    gathers = []
 
-    def find_pia(n):
+    def find_ring_reads(n):
         if isinstance(n, dict):
-            if n.get("op") == "polygon_intersection_area":
-                found.append(n)
+            if n.get("op") == "index" and n["args"][0] in (
+                "pd_cell__src_cells__cell_ring",
+                "rec_ring",
+            ):
+                gathers.append(n["args"])
             for v in n.values():
-                find_pia(v)
+                find_ring_reads(v)
         elif isinstance(n, list):
             for x in n:
-                find_pia(x)
+                find_ring_reads(x)
 
-    find_pia(body)
-    assert len(found) == 1
-    assert found[0]["args"][0] == {
-        "op": "index",
-        "args": ["pd_cell__src_cells__cell_ring", "c"],
-    }
-    assert found[0]["args"][1] == {"op": "index", "args": ["rec_ring", "r"]}
+    find_ring_reads(body)
+    assert sorted(map(json.dumps, gathers)) == sorted(
+        json.dumps([base, sym, vert, axis])
+        for base, sym in (("pd_cell__src_cells__cell_ring", "c"), ("rec_ring", "r"))
+        for vert in (1, 3)
+        for axis in (1, 2)
+    )
 
 
 def test_computed_cell_position_is_refused_loudly():

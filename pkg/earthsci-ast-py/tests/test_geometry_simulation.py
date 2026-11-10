@@ -1,25 +1,14 @@
-"""Conservative-regridding geometry kernel — solve()-path ODE conformance.
+"""Conservative-regridding geometry — solve()-path ODE conformance.
 
-Bead ess-my4.4.13 (the Python solve() driver wiring). RFC
-``semiring-faq-unified-ir`` §8.1; ``CONFORMANCE_SPEC.md`` §5.8.
+RFC ``semiring-faq-unified-ir`` §8.1; ``CONFORMANCE_SPEC.md`` §5.8.
 
-The companion :mod:`test_geometry_kernel` exercises the ``intersect_polygon``
-leaf and the ``polygon_area`` FAQ at the ``eval_expr`` level. This module closes
-the loop: it drives the shared ``tests/valid/geometry/*.esm`` fixtures that carry
-inline ``tests`` blocks END-TO-END through :func:`simulate`, exactly as
+Drives the shared ``tests/valid/geometry/*.esm`` fixtures that carry inline
+``tests`` blocks END-TO-END through :func:`simulate`, exactly as
 :mod:`test_faq_conformance` does for the M1 semiring fixtures (the
-"Mechanism-A" runner).
-
-A geometry-ODE fixture integrates as a real ODE only because the array-op
-simulate driver now materializes, in dependency order, each array-valued
-observed (the clipped overlap ring → the derived ``clip_ring`` index set) and
-each scalar observed (``area = sum_product FAQ(clip)``) into the eval context
-before the state derivatives — so ``D(tracer) = -area·tracer`` can resolve
-``area`` and integrate.
-
-The shared runnable fixture uses the dependency-free ``planar`` manifold, so it
-runs without the optional ``spherely`` (S2) backend; a fixture whose clip needs a
-spherical/geodesic backend is skipped when ``spherely`` is absent.
+"Mechanism-A" runner). A geometry-ODE fixture integrates as a real ODE because
+the array-op simulate driver materializes, in dependency order, each observed
+(the ``lib/geometry.esm`` overlap area, …) into the eval context before the
+state derivatives — so ``D(tracer) = -area·tracer`` can resolve ``area``.
 """
 
 from __future__ import annotations
@@ -33,22 +22,15 @@ import pytest
 from conftest import VALID_DIR
 
 from earthsci_ast.esm_types import ExprNode
+from earthsci_ast.inline_tests import TEST_ABSTOL, TEST_RELTOL, _check_assertion
 from earthsci_ast.parse import load_path
 from earthsci_ast.problem import ReturnCode, esm_problem, solve
-from earthsci_ast.inline_tests import TEST_ABSTOL, TEST_RELTOL, _check_assertion
 from earthsci_ast.simulation import (
     _order_observed_equations,
     _time_varying_observeds,
 )
 
 _GEOM_DIR = VALID_DIR / "geometry"
-
-try:  # the spherical/geodesic clip path needs the pinned optional dependency
-    import spherely  # noqa: F401
-
-    _HAVE_SPHERELY = True
-except ImportError:
-    _HAVE_SPHERELY = False
 
 
 def _collect_fixtures() -> List[Path]:
@@ -61,36 +43,6 @@ def _collect_fixtures() -> List[Path]:
         if any(m.get("tests") for m in (raw.get("models") or {}).values()):
             out.append(p)
     return out
-
-
-def _needs_spherely(raw: dict) -> bool:
-    """True if any geometry-kernel leaf in the file declares a non-planar manifold.
-
-    Covers both the ``intersect_polygon`` clip and the fused
-    ``polygon_intersection_area`` leaf — either uses the pinned S2 backend under a
-    ``spherical`` / ``geodesic`` manifold.
-    """
-    found = False
-
-    def walk(node: object) -> None:
-        nonlocal found
-        if isinstance(node, dict):
-            if node.get("op") in (
-                "intersect_polygon",
-                "polygon_intersection_area",
-            ) and node.get("manifold") not in (
-                None,
-                "planar",
-            ):
-                found = True
-            for v in node.values():
-                walk(v)
-        elif isinstance(node, list):
-            for v in node:
-                walk(v)
-
-    walk(raw)
-    return found
 
 
 def _resolve_tolerance(*levels: Dict[str, float]) -> Tuple[float, float]:
@@ -141,8 +93,6 @@ def test_at_least_one_runnable_geometry_fixture() -> None:
 def test_geometry_fixture_simulate_conformance(fixture_path: Path) -> None:
     """Run every inline test in a geometry ODE fixture through :func:`simulate`."""
     raw = json.loads(fixture_path.read_text())
-    if _needs_spherely(raw) and not _HAVE_SPHERELY:
-        pytest.skip(f"{fixture_path.name}: spherical clip needs spherely (S2), absent")
 
     esm_file = load_path(fixture_path)
     any_assertions = False
@@ -182,23 +132,6 @@ def test_geometry_fixture_simulate_conformance(fixture_path: Path) -> None:
     assert any_assertions, f"{fixture_path.name}: no assertions were checked"
 
 
-def test_polygon_intersection_area_planar_fixture_simulates_to_one() -> None:
-    """Focused end-to-end check of the fused polygon_intersection_area leaf.
-
-    Loads the shared ``polygon_intersection_area_planar.esm`` fixture (two unit
-    squares overlapping in [1,2]×[1,2]) and integrates it through
-    :func:`simulate`. ``D(area_state)/dt = overlap_area`` from a zero IC, so
-    ``area_state(1) = overlap_area = 1.0`` — the scalar planar overlap area of the
-    fused leaf, to within 1e-9.
-    """
-    fixture = _GEOM_DIR / "polygon_intersection_area_planar.esm"
-    esm_file = load_path(fixture)
-    result = solve(esm_problem(esm_file, (0.0, 1.0)))
-    assert result.retcode is ReturnCode.Success, f"simulation failed: {result.message}"
-    area_state = _lookup(result, "area_state", 1.0)
-    assert abs(area_state - 1.0) <= 1e-9, f"area_state(1.0) = {area_state}, expected 1.0"
-
-
 # --------------------------------------------------------------------------- #
 # Unit coverage for the driver's observed-scheduling helpers
 # --------------------------------------------------------------------------- #
@@ -206,7 +139,7 @@ def test_polygon_intersection_area_planar_fixture_simulates_to_one() -> None:
 
 def test_order_observed_equations_is_dependency_sorted() -> None:
     """An observed is ordered after every observed its RHS references."""
-    clip = ExprNode(op="intersect_polygon", id="c", manifold="planar", args=["src", "tgt"])
+    clip = ExprNode(op="*", args=["src", "tgt"])
     area = ExprNode(
         op="faq",
         semiring="sum_product",
@@ -239,44 +172,3 @@ def test_time_varying_observeds_flags_state_t_and_transitive() -> None:
     varying = _time_varying_observeds(ordered, state_names={"tracer"})
     assert "poly" not in varying
     assert varying == {"rate", "ramp", "scaled"}
-
-
-# ---------------------------------------------------------------------------
-# §8.6.1 operand rings: padding / consecutive-duplicate dedup + degenerate
-# reject (mirrors the Julia reference _as_ring / _dedup_consecutive)
-# ---------------------------------------------------------------------------
-
-
-def test_as_ring_dedups_padded_and_closing_vertices() -> None:
-    """§8.6.1: a padded ring (consecutive duplicate vertices, e.g. an MPAS
-    pentagon in a hexagon-shaped slot) and an explicitly-closed ring both
-    collapse to their distinct vertices with implicit closure — dedup happens in
-    operand coercion, before any backend clip."""
-    from earthsci_ast.geometry import _as_ring
-
-    padded = [[0.5, 0.5], [2.5, 0.5], [2.5, 2.5], [0.5, 2.5], [0.5, 2.5]]
-    r = _as_ring(padded, who="poly_a")
-    assert r.shape[0] == 4
-    padded2 = [[1.5, 1.5], [3.5, 1.5], [3.5, 3.5], [1.5, 3.5], [1.5, 3.5], [1.5, 3.5]]
-    assert _as_ring(padded2, who="poly_b").shape[0] == 4
-    closed = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.0, 0.0]]
-    assert _as_ring(closed, who="ring").shape[0] == 4
-
-
-def test_as_ring_rejects_degenerate_ring() -> None:
-    """§8.6.1: fewer than 3 distinct vertices after dedup is degenerate."""
-    from earthsci_ast.geometry import GeometryError, _as_ring
-
-    with pytest.raises(GeometryError):
-        _as_ring([[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]], who="poly_a")
-
-
-def test_padded_ring_planar_overlap_area_is_one() -> None:
-    """§8.6.1 pin end-to-end (planar): the padded rings' overlap area equals the
-    deduplicated-ring overlap — the [1.5,2.5]x[1.5,2.5] box, exactly 1.0."""
-    from earthsci_ast.geometry import intersect_polygon, polygon_area
-
-    src = [[0.5, 0.5], [2.5, 0.5], [2.5, 2.5], [0.5, 2.5], [0.5, 2.5]]
-    tgt = [[1.5, 1.5], [3.5, 1.5], [3.5, 3.5], [1.5, 3.5], [1.5, 3.5], [1.5, 3.5]]
-    overlap = intersect_polygon(src, tgt, "planar")
-    assert polygon_area(overlap, "planar") == pytest.approx(1.0, abs=1e-12)

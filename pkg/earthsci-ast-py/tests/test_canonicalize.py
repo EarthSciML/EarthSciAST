@@ -103,11 +103,11 @@ def test_emissible_fields_emit():
     d = ExprNode(op="D", args=["u"], wrt="t")
     assert canonical_json(d) == '{"args":["u"],"op":"D","wrt":"t"}'
     # `fn` carries the boundary-condition kind on synthetic `bc` nodes — emitting
-    # it keeps bc(u,dirichlet,x) distinct from bc(u,neumann,x) (esm-spec §9.2).
+    # it keeps bc(u,dirichlet,x) distinct from bc(u,neumann,x).
     bc = ExprNode(op="bc", args=["u"], fn="dirichlet", dim="x")
     assert canonical_json(bc) == '{"args":["u"],"dim":"x","fn":"dirichlet","op":"bc"}'
-    call = ExprNode(op="call", args=["x"], name="datetime.year")
-    assert canonical_json(call) == '{"args":["x"],"name":"datetime.year","op":"call"}'
+    call = ExprNode(op="call", args=["x"], name="solar.zenith")
+    assert canonical_json(call) == '{"args":["x"],"name":"solar.zenith","op":"call"}'
     const = ExprNode(op="const", args=[], value=[1, 2.5])
     assert canonical_json(const) == '{"args":[],"op":"const","value":[1,2.5]}'
 
@@ -126,13 +126,12 @@ def _agg(body):
 
 def test_non_emissible_field_fails_closed():
     # A node carrying any field outside the emissible set (aggregate body,
-    # table selector, geometry id, …) has NO faithful canonical JSON — it
+    # node id, …) has NO faithful canonical JSON — it
     # raises the pinned coded error rather than emit ambiguous bytes.
     for node in (
         _agg(ExprNode(op="x", args=[])),
         ExprNode(op="faq", args=[], semiring="sum_product", output_idx=[]),
-        ExprNode(op="table_lookup", args=[], table="tbl", table_axes={"code": "fm"}),
-        ExprNode(op="intersect_polygon", args=["a", "b"], id="prod", manifold="planar"),
+        ExprNode(op="faq", args=["a", "b"], id="prod"),
         # handler_id is NOT emissible (unlike the historical full-coverage emitter).
         ExprNode(op="call", args=["x"], handler_id="h1"),
     ):
@@ -153,8 +152,8 @@ def test_non_emissible_nested_in_args_fails_closed():
 def test_canonicalize_is_field_preserving():
     # `canonicalize` itself stays field-preserving — the fail-closed check lives
     # in `canonical_json`, not `canonicalize`.
-    agg = ExprNode(op="faq", args=[], semiring="sum_product", table="tbl")
+    agg = ExprNode(op="faq", args=[], semiring="sum_product", id="tbl")
     c = canonicalize(agg)
     assert isinstance(c, ExprNode)
     assert c.semiring == "sum_product"
-    assert c.table == "tbl"
+    assert c.id == "tbl"

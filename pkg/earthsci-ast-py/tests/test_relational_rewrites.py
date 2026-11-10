@@ -1,16 +1,14 @@
-"""Template rewrites of the skolem / rank / gated-argmin fixtures against the
-op forms (``tests/conformance/relational_templates/rewrites/manifest.json``).
+"""The lib/relational.esm template rewrites of
+``tests/conformance/relational_templates/rewrites/manifest.json`` against the
+expected values the manifest's ``golden`` files hold.
 
-Each rewrite replaces the value-invention ops with lib/relational.esm templates
+Each rewrite spells value invention with lib/relational.esm templates
 (``pair_key`` / ``edge_key`` keys, per-component join columns, the loop index
-for a set's own rank, ``argmin_where`` for a gated arg-witness). Both forms are
-built with the same caller data and must agree: the derived set's members (the
-op's tuples against the template's integer keys, decoded), the 1-based dense
-IDs, the arg-witness buffers, and the right-hand side at the initial state, bit
-for bit. Both forms are also checked against the expected values the manifest's
-``golden`` files hold (computed from the op form by the reference binding,
-``rewrites/goldens.py``). A `value_invention_key_out_of_range` refusal names
-the column.
+for a set's own rank, ``argmin_where`` for a gated arg-witness). Built with the
+manifest's caller data under both compilers, it must reproduce the golden
+derived set's members (its integer keys, decoded), the 1-based dense IDs, the
+arg-witness buffers, and the right-hand side at the golden state, bit for bit.
+A `value_invention_key_out_of_range` refusal names the column.
 """
 
 from __future__ import annotations
@@ -23,7 +21,7 @@ import numpy as np
 import pytest
 from conftest import REPO_ROOT
 
-from earthsci_ast import load_path, load_string, relational
+from earthsci_ast import load_path, load_string
 from earthsci_ast.flatten import flatten
 from earthsci_ast.inline_tests import run_inline_tests
 from earthsci_ast.numpy_interpreter import evaluate
@@ -117,85 +115,49 @@ def _rhs_at(build, model: str, state: dict) -> dict:
 
 @pytest.mark.parametrize("entry,idx,case", CASES, ids=[f"{e['id']}-{i}" for e, i, _ in CASES])
 @pytest.mark.parametrize("compiler", ["interpreter", "native"])
-def test_rewrite_agrees_with_the_op_form(entry: dict, idx: int, case: dict, compiler: str) -> None:
+def test_rewrite_matches_the_golden(entry: dict, idx: int, case: dict, compiler: str) -> None:
     cmp = entry["compare"]
     model = entry["models"][0]
     gold = GOLDEN[entry["id"]]["cases"][idx]
     if cmp.get("vi_only"):
         _check_vi_only(entry, case, model, gold)
         return
-    op_prob = _build(REPO_ROOT / entry["source"], case, "interpreter", model)
     tp_prob = _build(_rewrite_path(entry), case, compiler, model)
     for s in cmp.get("sets", []):
         faq = s["faq"]
-        op_members = list(op_prob.build.vi_members[faq])
         tp_members = list(tp_prob.build.vi_members[faq])
         assert all(isinstance(m, int) for m in tp_members), tp_members
         assert tp_members == sorted(set(tp_members))
         decoded = [_decode(m, s["decode"]["lo"], s["decode"]["n_b"]) for m in tp_members]
-        assert decoded == [tuple(m) for m in op_members]
-        assert tp_prob.build.derived_extents[faq] == op_prob.build.derived_extents[faq]
-        want = [tuple(m) for m in gold["sets"][faq]["members"]]
-        assert [tuple(m) for m in op_members] == want, "op form vs golden"
-        assert decoded == want, "template form vs golden"
+        assert decoded == [tuple(m) for m in gold["sets"][faq]["members"]]
         assert tp_prob.build.derived_extents[faq] == gold["sets"][faq]["extent"]
     if "rank" in cmp:
         faq = cmp["rank"]["faq"]
-        op_members = [tuple(m) for m in op_prob.build.vi_members[faq]]
-        op_ids = relational.rank(op_members, base=0)
-        want = [op_ids[m] + 1 for m in op_members]  # the 0 -> 1 base shift
+        want = gold["rank"]["values"]
         got = observed_field(tp_prob, cmp["rank"]["variable"])
-        assert list(np.asarray(got, dtype=float)) == [float(x) for x in want]
-        assert [float(x) for x in want] == gold["rank"]["values"], "op form vs golden"
-        assert _bits(got) == _bits(gold["rank"]["values"]), "template form vs golden"
+        assert _bits(got) == _bits(want)
         # rank_of over the template's own members returns the same IDs.
         members = list(tp_prob.build.vi_members[faq])
         assert [_rank_of(m, members) for m in members] == [float(x) for x in want]
     if "rank_lookup" in cmp:
-        # A rank looked up against the derived set (rank_of_set over its
-        # members): the op set's 0-based rank of each row's tuple, plus one.
-        rl = cmp["rank_lookup"]
-        op_members = [tuple(m) for m in op_prob.build.vi_members[rl["faq"]]]
-        op_ids = relational.rank(op_members, base=0)
-        cols = [np.asarray(case["const_arrays"][c], dtype=float) for c in rl["columns"]]
-        want = np.vectorize(lambda *t: op_ids[tuple(sorted(int(x) for x in t))] + 1.0)(*cols)
-        got = np.asarray(observed_field(tp_prob, rl["variable"]), dtype=float)
-        assert _bits(got) == _bits(want), (got, want)
-        assert _bits(want) == _bits(gold["rank_lookup"]["values"]), "op form vs golden"
+        # A rank looked up against the derived set (rank_of_set over its members).
+        got = np.asarray(observed_field(tp_prob, cmp["rank_lookup"]["variable"]), dtype=float)
+        assert _bits(got) == _bits(gold["rank_lookup"]["values"])
     for a in cmp.get("assignments", []):
-        # The op's buffer is a value-invention output, not an observed.
-        src = json.loads((REPO_ROOT / entry["source"]).read_text())
-        raw = {**src["models"][model], "index_sets": src["index_sets"]}
-        ca = {k: np.asarray(v, dtype=float) for k, v in case["const_arrays"].items()}
-        vi = materialize_value_invention(raw, ca, case["params"])
-        op_buf = np.asarray(vi.assignments[a["op"]], dtype=float)
         tp_buf = np.asarray(observed_field(tp_prob, a["template"]), dtype=float)
-        assert _bits(tp_buf) == _bits(op_buf), (tp_buf, op_buf)
-        assert _bits(op_buf) == _bits(gold["assignments"][a["template"]]), "op form vs golden"
+        assert _bits(tp_buf) == _bits(gold["assignments"][a["template"]])
     if cmp.get("rhs"):
-        b_op, b_tp = op_prob.build, tp_prob.build
-        assert b_tp.elem_names == b_op.elem_names
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            dy_op = b_op.rhs_function(0.0, np.asarray(b_op.y0, dtype=float))
-            dy_tp = b_tp.rhs_function(0.0, np.asarray(b_tp.y0, dtype=float))
-        assert _bits(dy_tp) == _bits(dy_op), (dy_tp, dy_op)
         g = gold["rhs"]
         want = [g["dy"][n] for n in sorted(g["dy"])]
-        for form, b in (("op", b_op), ("template", b_tp)):
-            got = _rhs_at(b, model, g["state"])
-            assert _bits([got[n] for n in sorted(g["dy"])]) == _bits(want), f"{form} form vs golden"
+        got = _rhs_at(tp_prob.build, model, g["state"])
+        assert _bits([got[n] for n in sorted(g["dy"])]) == _bits(want)
 
 
 def _check_vi_only(entry: dict, case: dict, model: str, gold: dict) -> None:
     """Value invention alone, for a document whose right-hand side needs data the
-    manifest does not carry: the op form's raw model against the template form's
-    expanded (flattened) model."""
+    manifest does not carry: the template form's expanded (flattened) model."""
     ca = {k: np.asarray(v, dtype=float) for k, v in case["const_arrays"].items()}
     ca.update({f"{model}.{k}": v for k, v in list(ca.items())})
-    src = json.loads((REPO_ROOT / entry["source"]).read_text())
-    op_model = {**src["models"][model], "index_sets": src["index_sets"]}
-    op = materialize_value_invention(op_model, ca, case["params"])
     path = _rewrite_path(entry)
     flat = flatten(load_path(str(path)), base_path=str(path.parent))
     params = {**case["params"], **{f"{model}.{k}": v for k, v in case["params"].items()}}
@@ -204,11 +166,7 @@ def _check_vi_only(entry: dict, case: dict, model: str, gold: dict) -> None:
     )
     for s in entry["compare"]["sets"]:
         decoded = [_decode(m, s["decode"]["lo"], s["decode"]["n_b"]) for m in tp.members[s["faq"]]]
-        assert decoded == [tuple(m) for m in op.members[s["faq"]]]
-        assert tp.extents[s["faq"]] == op.extents[s["faq"]]
-        want = [tuple(m) for m in gold["sets"][s["faq"]]["members"]]
-        assert decoded == want, "template form vs golden"
-        assert [tuple(m) for m in op.members[s["faq"]]] == want, "op form vs golden"
+        assert decoded == [tuple(m) for m in gold["sets"][s["faq"]]["members"]]
         assert tp.extents[s["faq"]] == gold["sets"][s["faq"]]["extent"]
 
 
@@ -247,20 +205,17 @@ def _rank_of(x: int, members: list[int]) -> float:
     [e for e in MANIFEST if e["compare"].get("inline_tests") or e["compare"].get("load_only")],
     ids=lambda e: e["id"],
 )
-def test_rewrite_loads_and_runs_like_the_op_form(entry: dict) -> None:
+def test_rewrite_loads_and_runs_like_the_golden(entry: dict) -> None:
     path = _rewrite_path(entry)
     load_path(str(path))
     if entry["compare"].get("inline_tests"):
-        op = run_inline_tests(str(REPO_ROOT / entry["source"]), compiler="interpreter")
         tp = run_inline_tests(str(path), compiler="interpreter")
-        assert [r.actual for r in tp] == [r.actual for r in op]
         # Integrator outputs: within each assertion's tolerance, not bit for bit.
         gold = GOLDEN[entry["id"]]["inline_tests"]
-        for form, res in (("op", op), ("template", tp)):
-            assert len(res) == len(gold), form
-            for r, g in zip(res, gold):
-                band = max(g["atol"], g["rtol"] * abs(g["actual"]))
-                assert abs(r.actual - g["actual"]) <= band, (form, r.actual, g)
+        assert len(tp) == len(gold)
+        for r, g in zip(tp, gold):
+            band = max(g["atol"], g["rtol"] * abs(g["actual"]))
+            assert abs(r.actual - g["actual"]) <= band, (r.actual, g)
 
 
 def test_out_of_range_key_component_names_the_column() -> None:
@@ -281,20 +236,3 @@ def test_out_of_range_key_component_names_the_column() -> None:
         )
     assert exc.value.code == "value_invention_key_out_of_range"
     assert "candidate_set" in str(exc.value)
-
-
-def test_golden_files_are_current() -> None:
-    """The golden files are what rewrites/goldens.py computes from the op forms
-    today (regenerate them with it, never by hand)."""
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location("rewrite_goldens", REWRITES / "goldens.py")
-    goldens = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(goldens)
-    for entry in MANIFEST:
-        g = goldens.golden(entry)
-        if g is None:
-            assert not entry.get("golden"), entry["id"]
-            continue
-        assert entry.get("golden") == f"golden/{entry['id']}.json", entry["id"]
-        assert (REWRITES / entry["golden"]).read_text() == goldens.render(g), entry["id"]
