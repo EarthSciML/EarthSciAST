@@ -36,7 +36,7 @@ bounds: the pure op-SET tables now DERIVE their contents from it rather than
 re-authoring them, so drift is impossible by construction —
 ``structural_checks._OPERATOR_ARITY`` (:func:`arity_bounds_map`),
 ``cadence.RELATIONAL_OPS`` (``by_category("relational")``), ``esm_types.ARRAY_OPS``
-(``by_category("array") | by_category("geometry")``), and ``codegen._COMPARISON_OPS``.
+(``by_category("array")``), and ``codegen._COMPARISON_OPS``.
 The heterogeneous VALUE tables keep their local values (a SymPy class, a numpy
 ufunc, a target-language spelling, a precedence int — none of which may enter this
 sympy/numpy-free leaf) but derive their KEY SETS from the registry categories:
@@ -64,13 +64,12 @@ Categories
 ``conditional``      ``ifelse``
 ``calculus``         ``D`` (structural time-derivative LHS) and ``ic``
 ``event``            ``Pre``
-``closed_registry``  ``fn`` / ``enum`` / ``table_lookup`` (spec §4.4/§4.5/§9.5)
+``closed_registry``  ``enum`` (spec §9.3)
 ``template``         ``apply_expression_template`` (spec §9.6)
 ``constant``         ``const`` (inline literal)
 ``array``            aggregate/makearray/index/broadcast/reshape/transpose/concat
-``relational``       value-invention & index-returning reducers: skolem, rank,
-                     argmin, argmax, distinct, join (RFC semiring-faq-unified-ir)
-``geometry``         intersect_polygon, polygon_intersection_area (§8.6 kernels)
+``relational``       value-invention companions: distinct, join
+                     (RFC semiring-faq-unified-ir)
 
 The open-tier rewrite-target sugar (grad/div/laplacian/curl/integral, esm-spec
 §4.2) is intentionally **NOT** registered: those ops carry no dimensional rule,
@@ -113,9 +112,24 @@ CATEGORIES: frozenset[str] = frozenset(
         "constant",
         "array",
         "relational",
-        "geometry",
     }
 )
+
+#: Ops the format has REMOVED, each with the esm version that removed it. A
+#: removed op is not in the vocabulary: the loader rejects one BY NAME with
+#: ``removed_op`` (``parse.reject_removed_constructs``) before the open
+#: rewrite-target tier could admit it, and the text parser refuses to spell one.
+REMOVED_OPS: dict[str, str] = {
+    "arrayop": "0.8.0",
+    "fn": "2.0.0",
+    "table_lookup": "2.0.0",
+    "skolem": "2.0.0",
+    "rank": "2.0.0",
+    "intersect_polygon": "2.0.0",
+    "polygon_intersection_area": "2.0.0",
+    "argmin": "2.0.0",
+    "argmax": "2.0.0",
+}
 
 #: The closed set of tier labels.
 TIERS: frozenset[str] = frozenset({"core", "rewrite_target"})
@@ -148,7 +162,7 @@ class OpSpec:
         arity_bounds: The AUTHORITATIVE numeric operand-count contract, a
             ``(min_args, max_args)`` tuple (``max_args`` ``None`` = unbounded),
             or ``None`` for an op that carries no structural arity check (array /
-            relational / geometry ops with index-set-driven shapes, closed-registry
+            relational ops with index-set-driven shapes, closed-registry
             ops whose args live in dedicated fields, spelling aliases, boolean
             literals). This is the single source ``structural_checks._OPERATOR_ARITY``
             derives from (:func:`arity_bounds_map`).
@@ -299,20 +313,13 @@ _ALL: tuple[OpSpec, ...] = (
     ),
     # --- event-specific (esm-spec §4.2 Event-specific / §5) ---
     OpSpec("Pre", "event", "unary", arity_bounds=(1, 1)),
-    # --- closed-registry invocation (esm-spec §4.4 / §4.5 / §9.5) ---
-    OpSpec("fn", "closed_registry", "variadic", note="closed function call; carries `name`"),
+    # --- closed enum registry (esm-spec §9.3) ---
     OpSpec(
         "enum",
         "closed_registry",
         "binary",
         arity_bounds=(2, 2),
         note="[enum_name, symbol]; lowered at load",
-    ),
-    OpSpec(
-        "table_lookup",
-        "closed_registry",
-        "nullary",
-        note="args empty; `table`/`axes` fields; lowered at load",
     ),
     # --- expression templates (esm-spec §9.6) ---
     OpSpec(
@@ -334,10 +341,6 @@ _ALL: tuple[OpSpec, ...] = (
     OpSpec("transpose", "array", "unary", note="optional `perm`"),
     OpSpec("concat", "array", "variadic", note="carries `axis`"),
     # --- relational / value-invention (esm-spec §4.2 FAQ companions; RFC §5) ---
-    OpSpec("skolem", "relational", "variadic", note="build-time value invention"),
-    OpSpec("rank", "relational", "variadic", note="build-time dense IDs"),
-    OpSpec("argmin", "relational", "special", note="index-returning reduction"),
-    OpSpec("argmax", "relational", "special", note="index-returning reduction"),
     OpSpec(
         "distinct",
         "relational",
@@ -345,16 +348,6 @@ _ALL: tuple[OpSpec, ...] = (
         note="dedup reducer / aggregate distinct flag (cadence guard)",
     ),
     OpSpec("join", "relational", "special", note="equi-join gate (cadence guard)"),
-    # --- geometry kernel leaves (esm-spec §8.6) ---
-    OpSpec(
-        "intersect_polygon", "geometry", "binary", note="clipped overlap ring; carries `manifold`"
-    ),
-    OpSpec(
-        "polygon_intersection_area",
-        "geometry",
-        "binary",
-        note="fused scalar overlap area; carries `manifold`",
-    ),
     # --- open-tier rewrite-target sugar (esm-spec §4.2) is NOT registered ---
     # grad/div/laplacian/curl/integral are ORDINARY open-tier rewrite-target ops
     # with NO privilege over any other user op (`godunov_hamiltonian`): no
@@ -419,7 +412,7 @@ def unary_elementary() -> frozenset[str]:
 #: are exactly the ops that map operand cells to a result cell. Every other
 #: category is deliberately excluded: ``array`` (``faq``/``index``/
 #: ``makearray``/``reshape``/``transpose``/``concat``/``broadcast`` itself) and
-#: ``relational``/``geometry`` RESHAPE their operands, ``calculus``/``event`` are
+#: ``relational`` RESHAPE their operands, ``calculus``/``event`` are
 #: structural, and ``closed_registry``/``template``/``constant`` carry their
 #: payload in dedicated fields rather than in ``args``.
 SCALAR_FN_CATEGORIES: frozenset[str] = frozenset(
@@ -481,7 +474,7 @@ def arity_bounds_map() -> dict[str, tuple[int, int | None]]:
 
     This is the single source ``structural_checks._OPERATOR_ARITY`` derives from:
     exactly the ops whose :attr:`OpSpec.arity_bounds` is set (array / relational /
-    geometry / closed-registry-field ops, spelling aliases, and boolean literals
+    closed-registry-field ops, spelling aliases, and boolean literals
     have no fixed operand count and are absent, so structural validation skips
     their arity exactly as before).
     """

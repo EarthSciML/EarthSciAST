@@ -167,9 +167,8 @@ def _serialize_expression(expr: Expr) -> int | float | str | dict[str, Any]:
     — applying each field's codec: ``scalar`` passthrough, ``canonical_nested``
     integer-array canonicalization (``shape`` / ``regions`` / ``ranges`` /
     ``perm``, per CONFORMANCE_SPEC §5.5.3.1), and recursive serialization for the
-    ``expr`` / ``expr_list`` / ``expr_dict`` child slots (``lower``/``upper``/
-    ``expr``/``filter``/``key``; ``args``/``values``; ``table_axes`` under wire
-    key ``axes``). ``op``/``args`` are always emitted; every other field is
+    ``expr`` / ``expr_list`` child slots (``lower``/``upper``/
+    ``expr``/``filter``/``key``; ``args``/``values``). ``op``/``args`` are always emitted; every other field is
     omitted when None so nodes round-trip byte-identically.
     """
     if isinstance(expr, (int, float, str)):
@@ -188,8 +187,6 @@ def _serialize_expression(expr: Expr) -> int | float | str | dict[str, Any]:
                 result[wire] = _serialize_expression(value)
             elif kind == "expr_list":
                 result[wire] = [_serialize_expression(v) for v in value]
-            elif kind == "expr_dict":
-                result[wire] = {k: _serialize_expression(v) for k, v in value.items()}
             else:  # pragma: no cover - guarded by the esm_types wire-spec build
                 raise ValueError(f"unknown ExprNode codec kind {kind!r} for field {name!r}")
         return result
@@ -1188,40 +1185,6 @@ def _serialize_esm_file(esm_file: EsmFile) -> dict[str, Any]:
         result["enums"] = {
             enum_name: dict(mapping) for enum_name, mapping in esm_file.enums.items()
         }
-
-    # Serialize top-level function_tables block (esm-spec §9.5, v0.4.0).
-    # Tables are first-class authored constructs — round-trip MUST preserve
-    # the authored form (no auto-promotion of inline-const lookups).
-    if getattr(esm_file, "function_tables", None):
-        import copy as _copy_ft
-
-        ft_out = {}
-        for ft_name, ft in esm_file.function_tables.items():
-            entry: dict[str, Any] = {
-                "axes": [
-                    {
-                        "name": a.name,
-                        "values": list(a.values),
-                        **({"units": a.units} if a.units is not None else {}),
-                    }
-                    for a in ft.axes
-                ],
-                "data": _copy_ft.deepcopy(ft.data),
-            }
-            if ft.description is not None:
-                entry["description"] = ft.description
-            if ft.interpolation is not None:
-                entry["interpolation"] = ft.interpolation
-            if ft.out_of_bounds is not None:
-                entry["out_of_bounds"] = ft.out_of_bounds
-            if ft.outputs is not None:
-                entry["outputs"] = list(ft.outputs)
-            if ft.shape is not None:
-                entry["shape"] = list(ft.shape)
-            if ft.schema_version is not None:
-                entry["schema_version"] = ft.schema_version
-            ft_out[ft_name] = entry
-        result["function_tables"] = ft_out
 
     # Serialize coupling
     if esm_file.coupling:

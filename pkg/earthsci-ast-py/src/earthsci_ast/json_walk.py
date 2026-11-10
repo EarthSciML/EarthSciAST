@@ -258,18 +258,14 @@ def _rewrite_json(
 # single descent every raw-dict expression walker should route through.
 #
 # Relationship to the typed set (``expr_walk._SINGLE_CHILD_FIELDS`` +
-# ``args``/``values``/``table_axes``): the SINGLE/LIST fields and the ``axes``
-# MAP mirror the typed child set exactly (``axes`` is the raw JSON key for the
-# dataclass ``table_axes``). ``bindings`` and ``regions`` are raw-only fields
+# ``args``/``values``): the SINGLE/LIST fields mirror the typed child set
+# exactly. ``bindings`` and ``regions`` are raw-only fields
 # the typed child traversal does NOT visit — an ``apply_expression_template``'s
 # free-variable targets and a ``makearray``'s ``[[lo, hi], …]`` bound
 # expressions. They carry references/loop symbols that the raw-dict
 # reference-integrity walkers must still see, so they are included here and
 # tagged so a caller that wants only the typed-canonical subset can skip them
-# by field name. NOTE: unlike ``expr_walk`` (and ``cadence.child_exprs``), this
-# visits ``axes`` in INSERTION order, not sorted — it matches the raw-dict
-# reference walkers that route through it; a sorted-axes consumer keeps its own
-# traversal.
+# by field name.
 
 #: Raw-dict expression child fields carried as LISTS of child expressions.
 DICT_LIST_CHILD_FIELDS = ("args", "values")
@@ -277,7 +273,7 @@ DICT_LIST_CHILD_FIELDS = ("args", "values")
 #: the verbatim dict-form of ``expr_walk._SINGLE_CHILD_FIELDS``.
 DICT_SINGLE_CHILD_FIELDS = ("lower", "upper", "expr", "filter", "key")
 #: Raw-dict expression child fields carried as ``{name: child}`` MAPS.
-DICT_MAP_CHILD_FIELDS = ("axes", "bindings")
+DICT_MAP_CHILD_FIELDS = ("bindings",)
 
 
 def _iter_region_children(regions: Any) -> Iterator[Any]:
@@ -305,7 +301,7 @@ def iter_child_values(node: Any) -> Iterator[tuple[str, Any]]:
 
     Visit order (matching the raw-dict reference walkers this replaces):
     ``args`` items, then ``lower``/``upper``/``expr``/``filter``/``key``, then
-    ``values`` items, then ``axes`` then ``bindings`` map values, then
+    ``values`` items, then ``bindings`` map values, then
     ``regions`` bound expressions. Each child is tagged with the name of the
     field it came from so a caller that treats certain fields specially — a
     binder-aware walker, or one that wants only the typed-canonical subset and
@@ -314,8 +310,8 @@ def iter_child_values(node: Any) -> Iterator[tuple[str, Any]]:
 
     This is the raw-dict counterpart of
     :func:`earthsci_ast.expr_walk.iter_children`; see the module notes above for
-    how the two sets relate (``bindings``/``regions`` and insertion-order
-    ``axes`` are the raw-only differences)."""
+    how the two sets relate (``bindings``/``regions`` are the raw-only
+    differences)."""
     if not isinstance(node, dict):
         return
     for arg in node.get("args", []) or []:
@@ -326,10 +322,6 @@ def iter_child_values(node: Any) -> Iterator[tuple[str, Any]]:
             yield (field_name, child)
     for val in node.get("values", []) or []:
         yield ("values", val)
-    axes = node.get("axes")
-    if isinstance(axes, dict):
-        for child in axes.values():
-            yield ("axes", child)
     bindings = node.get("bindings")
     if isinstance(bindings, dict):
         for child in bindings.values():

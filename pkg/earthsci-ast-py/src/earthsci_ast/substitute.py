@@ -67,11 +67,9 @@ def substitute(expr: Expr, bindings: dict[str, Expr]) -> Expr:
     if isinstance(expr, ExprNode):
         # Recursively substitute in every child expression via the canonical
         # walker: ``args``, aggregate body/``filter``/``key``, integral
-        # ``lower``/``upper``, ``makearray`` values, and ``table_lookup`` axes
-        # (RFC §5.1/§5.3/§5.5). ``map_children`` rebuilds with ``replace`` so
-        # closed-function / lookup metadata (``name``, ``value``, ``id``,
-        # ``manifold``, ``handler_id``, ``table``, ``output``) is carried
-        # verbatim. A previous explicit field list silently dropped them, so a
+        # ``lower``/``upper``, and ``makearray`` values (RFC §5.1/§5.3/§5.5).
+        # ``map_children`` rebuilds with ``replace`` so node metadata
+        # (``name``, ``value``, ``id``, ``handler_id``, …) is carried verbatim. A previous explicit field list silently dropped them, so a
         # ``const`` table substituted through a ``param_to_var`` coupling lost
         # its ``value`` and the discretized document failed schema validation
         # with an empty ``{"op": "const", "args": []}`` node.
@@ -83,7 +81,7 @@ def substitute(expr: Expr, bindings: dict[str, Expr]) -> Expr:
         # expression-bearing keys. The single-child slots and list slots come
         # from the shared canonical field set (``json_walk.DICT_*_CHILD_FIELDS``,
         # the dict-form mirror of expr_walk's child set) rather than being
-        # re-listed here; ``axes`` is table_lookup's per-axis input map. Order is
+        # re-listed here. Order is
         # immaterial — each field is rebuilt independently and every non-child
         # key is preserved verbatim by the initial ``dict(expr)`` copy.
         if "op" in expr:
@@ -94,8 +92,6 @@ def substitute(expr: Expr, bindings: dict[str, Expr]) -> Expr:
             for k in DICT_LIST_CHILD_FIELDS:
                 if k in result and isinstance(result[k], list):
                     result[k] = [substitute(v, bindings) for v in result[k]]
-            if "axes" in result and isinstance(result["axes"], dict):
-                result["axes"] = {ak: substitute(av, bindings) for ak, av in result["axes"].items()}
             return result
         # For other dicts, return unchanged
         return expr
@@ -260,8 +256,8 @@ def has_var_placeholder(expr: Expr) -> bool:
         return expr == "_var"
     if isinstance(expr, ExprNode):
         # Check recursively in every child expression — including aggregate
-        # bodies, filter predicates, integral bounds, makearray values, and
-        # table_lookup axes, where a ``_var`` hidden from the old args-only
+        # bodies, filter predicates, integral bounds, and makearray values, where
+        # a ``_var`` hidden from the old args-only
         # walk escaped flatten's operator_compose expansion.
         return any_child(expr, has_var_placeholder)
     # Numbers and other types don't contain placeholders

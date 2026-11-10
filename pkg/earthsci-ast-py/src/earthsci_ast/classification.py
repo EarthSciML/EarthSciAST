@@ -124,7 +124,7 @@ _TIME = "t"
 _CHILD_SPEC: tuple[tuple[str, str, str], ...] = tuple(
     (name, wire, kind)
     for name, wire, kind, _req in EXPR_WIRE_SPEC
-    if kind in ("expr", "expr_list", "expr_dict")
+    if kind in ("expr", "expr_list")
 )
 
 
@@ -174,8 +174,8 @@ def children(node: Any) -> Iterator[Any]:
     for BOTH the dict and the :class:`~.esm_types.ExprNode` spellings.
 
     This descends every Expression child — ``args``, the integral bounds, an
-    aggregate ``expr`` / ``filter`` / ``key``, ``makearray`` ``values``, and the
-    ``table_lookup`` axis map — not just ``args``. A spatial derivative buried in
+    aggregate ``expr`` / ``filter`` / ``key``, and ``makearray`` ``values`` —
+    not just ``args``. A spatial derivative buried in
     an aggregate body is still a spatial derivative.
     """
     if not isinstance(node, (Mapping, ExprNode)):
@@ -189,10 +189,6 @@ def children(node: Any) -> Iterator[Any]:
         elif kind == "expr_list":
             if isinstance(child, (list, tuple)):
                 yield from child
-        elif kind == "expr_dict":
-            if isinstance(child, Mapping):
-                for key in sorted(child):
-                    yield child[key]
 
 
 def walk(node: Any) -> Iterator[Any]:

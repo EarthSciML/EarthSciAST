@@ -1331,7 +1331,7 @@ def _pd_apply(esm: dict, mname: str, plan: dict, templates: dict | None = None) 
                 }
             ],
             "filter": prod_filter,
-            "key": {"op": "skolem", "label": "cell", "args": [plan["rep_csym"]]},
+            "key": plan["rep_csym"],
             "args": prod_args,
         },
     }

@@ -140,10 +140,9 @@ def __getattr__(name: str):  # PEP 562: lazy module-level attribute.
 # (:mod:`earthsci_ast.op_registry`), the single source for the AST op vocabulary
 # and each op's arity contract, so this table cannot drift from it. The registry
 # supplies exactly the ops that carry a structural arity check — array /
-# relational / geometry ops (index-set-driven shapes), spelling aliases, boolean
-# literals, and the closed-registry ops whose args live in dedicated fields (`fn`
-# arity is checked by its dispatcher; `table_lookup`/`apply_expression_template`
-# carry no `args`) are intentionally absent, exactly as before. Notably `grad`/
+# relational ops (index-set-driven shapes), spelling aliases, boolean literals,
+# and `apply_expression_template` (which carries no `args`) are intentionally
+# absent, exactly as before. Notably `grad`/
 # `div` are (1, 2): they accept an optional per-field boundary metavariable bound
 # by a two-arg `grad(f, inflow, dim)` expression-template `match` (esm-spec §9.6).
 _OPERATOR_ARITY = op_registry.arity_bounds_map()
@@ -287,11 +286,10 @@ def _walk_expression_strings(expr) -> list[str]:
     op-expression node, not just ``args``.
 
     Earlier this descended only ``args`` and silently skipped the nested
-    single-expression fields (``expr``/``filter``/``key``/``lower``/``upper``),
-    the ``values`` list, and the ``axes`` map — so references hidden in
-    aggregate bodies, ``filter`` predicates, integral bounds, Skolem ``key``
-    terms, ``makearray`` value lists, and ``table_lookup`` axis expressions were
-    invisible to the reference checks. It now visits the full child-field set
+    single-expression fields (``expr``/``filter``/``key``/``lower``/``upper``)
+    and the ``values`` list — so references hidden in aggregate bodies,
+    ``filter`` predicates, integral bounds, ``distinct`` ``key`` terms, and
+    ``makearray`` value lists were invisible to the reference checks. It now visits the full child-field set
     the sibling walkers (and :mod:`earthsci_ast.expr_walk`) use. Bound index
     symbols surfaced from aggregate bodies are filtered by the caller via
     :func:`_expression_bound_symbols`."""
@@ -364,16 +362,13 @@ def _iter_aggregate_nodes(expr):
 #: Body ops that make a ``faq`` a value-invention node. Over such a node a ragged
 #: range binds the MEMBER ``values[parent, k]`` itself (esm-spec §4.3.1 "Ragged
 #: ranges"), so its ``values`` gather is implicit rather than authored.
-_VALUE_INVENTION_BODY_OPS = frozenset({"skolem", "rank", "distinct", "argmin", "argmax"})
+_VALUE_INVENTION_BODY_OPS = frozenset({"distinct"})
 
 
 def _is_value_invention_faq(agg: dict[str, Any]) -> bool:
-    """Whether ``agg`` is a value-invention ``faq``: ``distinct: true``, a
-    ``skolem`` key, or a skolem / rank / distinct / arg-witness body."""
+    """Whether ``agg`` is a value-invention ``faq``: ``distinct: true`` or a
+    ``distinct`` body."""
     if agg.get("distinct") is True:
-        return True
-    key = agg.get("key")
-    if isinstance(key, dict) and key.get("op") == "skolem":
         return True
     body = agg.get("expr")
     return isinstance(body, dict) and body.get("op") in _VALUE_INVENTION_BODY_OPS
@@ -1435,16 +1430,8 @@ def _template_param_maps(
 
     The first holds the param names a body consumes
     ONLY as a literal, never in a variable-reference position, directly or
-    forwarded through a nested ``apply_expression_template``. Two literal
-    positions exist:
-
-    * a scalar-FIELD substitution site (esm-spec §9.6.1) — today the
-      ``manifold`` field of the geometry ops, whose bound value is field
-      vocabulary (the closed manifold set, CONFORMANCE_SPEC §5.8.4). The schema
-      admits any string there so a body can carry a parameter name, and
-      admissibility is enforced on the expanded form (§9.6.4,
-      ``geometry_manifold_invalid``);
-    * an argument of an ``enum`` op (esm-spec §4.5, §9.3). Substitution is
+    forwarded through a nested ``apply_expression_template``. The literal
+    position is an argument of an ``enum`` op (esm-spec §4.5, §9.3). Substitution is
       position-blind (§9.6.3 constraint 5), so a string bound to such a param
       lands as an enum name or symbol, which the load-time lowering checks
       (``unknown_enum`` / ``unknown_enum_symbol``).
@@ -1452,7 +1439,7 @@ def _template_param_maps(
     A call-site STRING binding for such a param is therefore not an expression
     reference. A document is valid iff its expansion is (§9.6.9), and the other
     bindings validate references after expansion, where the literal sits in the
-    ``manifold`` field or the ``enum`` op; this map is how the raw-stage walk
+    ``enum`` op; this map is how the raw-stage walk
     reaches the same verdict. A param a body ALSO uses in a reference position
     is left out: its bound string is a reference there, and must be declared."""
     resolved: dict[str, tuple[frozenset[str], frozenset[str]]] = {}
@@ -1479,9 +1466,6 @@ def _template_param_maps(
                 continue
             if not isinstance(node, dict):
                 continue
-            mf = node.get("manifold")
-            if isinstance(mf, str) and mf in params:
-                literal.add(mf)
             own_from = _from_params_of_node(node, params)
             literal.update(own_from)
             from_params.update(own_from)
@@ -1547,8 +1531,7 @@ def _strip_literal_bindings(expr: Any, literal_map: dict[str, frozenset[str]]) -
     """Non-mutating copy of ``expr`` with every ``apply_expression_template``
     node's STRING bindings for literal-only params (see
     :func:`_literal_param_map`) removed, so the reference walker does not read
-    field vocabulary (``manifold: "planar"``) or an enum symbol as a variable
-    reference. Expression-valued bindings are kept — their references are real."""
+    an enum symbol as a variable reference. Expression-valued bindings are kept — their references are real."""
     if isinstance(expr, list):
         return [_strip_literal_bindings(x, literal_map) for x in expr]
     if not isinstance(expr, dict):
@@ -1600,9 +1583,8 @@ def _check_variable_references(
     global_symbols = tables["global_symbols"]
     for m, sites in _component_reference_sites(data):
         subsystems = m.get("subsystems") or {}
-        # Literal-only template params (§9.6.1 scalar fields, §9.3 `enum` args):
-        # a call-site STRING binding for one is field vocabulary
-        # (`manifold: "planar"`) or an enum symbol, not a reference — strip
+        # Literal-only template params (§9.3 `enum` args): a call-site STRING
+        # binding for one is an enum symbol, not a reference — strip
         # those bindings before the reference walk (never mutating the
         # document). See :func:`_literal_param_map`.
         literal_map = _literal_param_map(_model_template_registry(data, m))

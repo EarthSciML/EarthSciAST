@@ -58,7 +58,7 @@ literal (the pre-existing constant-fold). A whole equation whose RHS classifies
 **output buffer** (the observed-variable elimination that makes a pure-topology
 rule's hot tree empty).
 
-Topology FAQs (``distinct`` / ``skolem`` / ``rank``) fold via the build-time
+Topology FAQs (``distinct``) fold via the build-time
 relational engine (:mod:`earthsci_ast.relational`) in the ``const`` /
 ``discrete`` phase — *never* on the hot path.
 
@@ -68,8 +68,8 @@ The guards (checked, not hoped for)
 1. **Acyclicity** — the ``≤ discrete`` sub-DAG (derived index set ``--from_faq->``
    node ``--ranges{from}->`` set) MUST be acyclic; a cycle is an implicit/
    iterative solve, out of scope. Rejected naming the cycle.
-2. **No relational engine on the hot path** — a ``distinct`` / ``join`` /
-   ``skolem`` / ``rank`` node that classifies ``continuous`` is rejected;
+2. **No relational engine on the hot path** — a ``distinct`` / ``join``
+   node that classifies ``continuous`` is rejected;
    state-dependent topology may not run per step in v1.
 3. **Author assertion** — an ``expect_cadence`` annotation that disagrees with
    the derived class is an error (changes no semantics).
@@ -104,7 +104,7 @@ from .classification import (
 from .errors import EarthSciAstError
 from .op_registry import by_category as _by_category
 from .recurrence import is_recurrence_candidate as _is_recurrence_candidate
-from .relational import FloatKeyError, distinct, rank, skolem, skolem_edge
+from .relational import FloatKeyError, distinct
 
 __all__ = [
     "CadenceError",
@@ -139,11 +139,9 @@ CLASS_ORDER = ("const", "discrete", "continuous")
 _CLASS_RANK = {name: i for i, name in enumerate(CLASS_ORDER)}
 
 # The relational / value-invention ops that may not run on the hot path (§5.7
-# guard 2): one classifying ``continuous`` is a hard error. Includes the
-# arg-witness reducers (``argmin`` / ``argmax``, §5.7 rule 6) — a state-dependent
-# assignment is out of scope for v1, exactly like a state-dependent ``distinct``.
-# DERIVED from the canonical op registry's ``relational`` category so it cannot
-# drift: skolem/rank/argmin/argmax/distinct/join.
+# guard 2): one classifying ``continuous`` is a hard error. DERIVED from the
+# canonical op registry's ``relational`` category so it cannot drift:
+# distinct/join.
 RELATIONAL_OPS = _by_category("relational")
 
 
@@ -309,17 +307,16 @@ def seed_leaf(leaf: Any, model: Mapping[str, Any], _resolving: tuple = ()) -> st
                 return "const"
             return "discrete"
         raise CadenceError(f"leaf {leaf!r}: unknown variable kind {kind!r}")
-    # index-set name, bound index symbol (i, k, e, f, le), relation tag
-    # ("edge"), or numeric-string literal — all CONST.
+    # index-set name, bound index symbol (i, k, e, f, le), or numeric-string
+    # literal — all CONST.
     return "const"
 
 
 def child_exprs(node: Mapping[str, Any]) -> Iterator[Any]:
     """Yield every sub-Expression of a node: the operand list ``args``, the
-    aggregate/integral value sub-fields, the ``makearray`` ``values`` list, and
-    the ``table_lookup`` per-axis input map (raw JSON key ``axes``). This is the
-    dict-form mirror of the canonical :mod:`.expr_walk` child set — a state ref
-    inside a makearray value or a table-lookup axis must NOT be misclassified
+    aggregate/integral value sub-fields, and the ``makearray`` ``values`` list.
+    This is the dict-form mirror of the canonical :mod:`.expr_walk` child set — a
+    state ref inside a makearray value must NOT be misclassified
     ``const`` and folded off the hot path. ``output_idx``, ``ranges``, ``wrt``,
     ``dim``, ``var`` are index/metadata declarations (const), not value inputs,
     so they are intentionally excluded — this is what makes the gather rule fall
@@ -496,7 +493,7 @@ def has_continuous(
 def assert_no_continuous_relational(
     node: Any, model: Mapping[str, Any], _cache: dict[int, str] | None = None
 ) -> None:
-    """§5.7 guard 2: a ``distinct`` / ``join`` / ``skolem`` / ``rank`` node (or a
+    """§5.7 guard 2: a ``distinct`` / ``join`` node (or a
     ``distinct`` aggregate) that classifies ``continuous`` is rejected —
     state-dependent topology may not run on the hot path in v1."""
     if not isinstance(node, Mapping):
@@ -509,7 +506,7 @@ def assert_no_continuous_relational(
         raise CadenceError(
             f"relational/value-invention node op={op!r} classifies CONTINUOUS — "
             "it may not run on the hot path (§5.7 guard 2). A state-dependent "
-            "distinct/join/skolem/rank is out of scope for v1."
+            "distinct/join is out of scope for v1."
         )
     for c in child_exprs(node):
         assert_no_continuous_relational(c, model, _cache)
@@ -597,18 +594,21 @@ def fold_identity(arr: Sequence[Sequence[int]]) -> list[list[int]]:
 
 
 def _edge_keys(face_lo: Sequence[Sequence[int]], face_hi: Sequence[Sequence[int]], mode: str):
-    """Mint the canonical Skolem key for every face-local edge via the relational
-    engine (``skolem_edge`` for undirected, ``skolem`` for directed). Float
+    """The canonical key of every face-local edge: ``(min, max)`` for an
+    undirected edge, ``(lo, hi)`` as written for a directed one. Float
     components are rejected (§5.5.1 rule 1) — surfaced as a :class:`CadenceError`
     (a float topology key, §5.7)."""
     keys = []
     try:
         for f_lo, f_hi in zip(face_lo, face_hi):
             for lo, hi in zip(f_lo, f_hi):
-                if mode == "undirected":
-                    keys.append(skolem_edge(lo, hi))
-                else:
-                    keys.append(skolem((lo, hi)))
+                if isinstance(lo, float) or isinstance(hi, float):
+                    raise FloatKeyError(
+                        f"float in topology key {(lo, hi)!r} (CONFORMANCE_SPEC.md §5.5.1 rule 1)"
+                    )
+                if mode == "undirected" and hi < lo:
+                    lo, hi = hi, lo
+                keys.append((lo, hi))
     except FloatKeyError as e:
         raise CadenceError(f"float component forbidden in a topology key (§5.5 rule 1): {e}") from e
     return keys
@@ -618,7 +618,7 @@ def fold_edge_enumeration(
     face_lo: Sequence[Sequence[int]], face_hi: Sequence[Sequence[int]], mode: str
 ) -> list[list[int]]:
     """Enumerate the unique edges from the (lo, hi) endpoint tables through the
-    build-time relational engine: ``skolem`` canonicalises each pair, ``distinct``
+    build-time relational engine: each pair is canonicalised, ``distinct``
     sorts by the §5.5 total order and drops adjacent duplicates. Identical to the
     determinism ``edge_enumeration`` golden."""
     keys = _edge_keys(face_lo, face_hi, mode)
@@ -628,11 +628,9 @@ def fold_edge_enumeration(
 def fold_rank(
     face_lo: Sequence[Sequence[int]], face_hi: Sequence[Sequence[int]], mode: str
 ) -> list[int]:
-    """Dense 0-based ids over the deduped edge set via the relational engine's
-    ``rank`` (Python's native 0-based numbering, §5.5.1 rule 3)."""
-    keys = _edge_keys(face_lo, face_hi, mode)
-    ranking = rank(keys)  # native 0-based
-    return [ranking.ids[t] for t in ranking.order]
+    """Dense 0-based ids over the deduped edge set: each key's position in the
+    ``distinct`` sequence (Python's native 0-based numbering, §5.5.1 rule 3)."""
+    return list(range(len(distinct(_edge_keys(face_lo, face_hi, mode)))))
 
 
 def compute_fold(label: str, spec: Mapping[str, Any], inputs: Mapping[str, Any]) -> list[Any]:
