@@ -1198,8 +1198,8 @@ fn mount_rename_walk(x: &mut Value, m: &IndexMap<String, String>) {
             } else if let Some(Value::Array(shape)) = obj.get_mut("shape") {
                 // `ModelVariable`/`Parameter` `shape` and a `where` constraint's
                 // `shape` are ordered index-set names; an ExpressionNode `shape`
-                // (`reshape`'s target extents) and a `FunctionTable` `shape` are
-                // integers, so the `is_node` guard plus the string test cover both.
+                // (`reshape`'s target extents) is integers, so the `is_node`
+                // guard plus the string test cover both.
                 for e in shape.iter_mut() {
                     if let Value::String(s) = e
                         && let Some(n) = m.get(s.as_str())
