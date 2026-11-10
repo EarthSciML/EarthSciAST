@@ -1,0 +1,12 @@
+{"esm":"1.3.0","metadata":{"name":"live_forcing_observed"},
+ "data_sources":{"SRC":{"kind":"grid","source":{"url_template":"{esm_integrator_forcing}"}}},
+ "index_sets":{"x":{"kind":"interval","size":3},"two":{"kind":"interval","size":2}},
+ "models":{
+  "D":{"variables":{"G":{"type":"parameter","shape":["two","x"],"default":1000.0,
+        "update":{"kind":"data","source":"SRC","from":{"file_variable":"G"}}}},"equations":[]},
+  "M":{"variables":{"q":{"type":"unknown","shape":["x"]},"u":{"type":"unknown","shape":["x"],"default":1.0}},
+   "equations":[
+    {"lhs":"M.q","rhs":{"op":"faq","args":["D.G"],"output_idx":["i"],"ranges":{"i":{"from":"x"}},
+      "expr":{"op":"-","args":[{"op":"index","args":["D.G",2,"i"]},{"op":"index","args":["D.G",1,"i"]}]}}},
+    {"lhs":{"op":"D","args":["M.u"],"wrt":"t"},"rhs":{"op":"faq","args":["M.q"],"output_idx":["i"],"ranges":{"i":{"from":"x"}},
+      "expr":{"op":"index","args":["M.q","i"]}}}]}}}

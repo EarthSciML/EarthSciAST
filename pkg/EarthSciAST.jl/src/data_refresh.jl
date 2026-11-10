@@ -575,6 +575,11 @@ cb, tstops = build_refresh_callback(;
     post_refresh = () -> sync_forcing!(dev, host))
 ```
 
+A forcing write made outside that callback and announced with
+[`notify_forcing_refresh!`](@ref) reaches the discrete caches only when something
+refills them, so call the [`DiscreteMaterializer`](@ref)'s `refresh!()` before
+`sync_forcing!` copies them.
+
 `src` is normally [`forcing_buffers`](@ref)`(prob)`; any NamedTuple pair works
 as long as every key of `src` is present in `dest` and shapes/lengths agree
 (`copyto!` enforces length). Missing keys throw [`RefreshError`](@ref).

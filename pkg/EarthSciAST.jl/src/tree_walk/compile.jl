@@ -1615,19 +1615,41 @@ _CSECache() = _CSECache(
     notify_forcing_refresh!(buffer)
 
 Tell the tree-walk evaluator that the contents of a live forcing buffer (a
-`param_arrays` buffer bound into `build_evaluator`) were mutated in place, so any
-memoized time-cadence values that gather it are invalidated before the next
-RHS call. With `buffer`, only the builds that read that buffer are invalidated;
-without it, every build in the process is.
+`param_arrays` buffer bound into `build_evaluator`) were mutated in place. Two
+kinds of build product are derived from such a buffer, and both are brought up
+to the new contents by the next in-place `f!` call (or [`observed_field`](@ref)
+read):
+
+* the memoized time-cadence prelude values that gather it, which `f!` refills
+  on the next call at a `t` it has already been called at (a later `t`
+  re-evaluates them anyway), and
+* every discrete-cadence cache ([`DiscreteMaterializer`](@ref)) of the build,
+  which `f!` refills on its next call at ANY `t`. Nothing but this
+  announcement (or a change of `p`) refills them, so a forcing write that is
+  not announced leaves `f!` reading derived fields built from the old forcing,
+  whatever `t` it is next called at.
+
+With `buffer`, only the builds that read that buffer are affected; without it,
+every build in the process is.
 
 The supported refresh surfaces call this automatically: the data-refresh callback
-(`build_refresh_callback` → `_write_forcing!`) and the discrete-cadence
-[`DiscreteMaterializer`](@ref)'s `materialize!`. Only code that writes a forcing
-buffer *directly* — e.g. a hand-rolled callback doing `buf .= …` — needs to call it,
-and only when the RHS may next be evaluated at a `t` it has already been evaluated
-at (the memo is keyed on `(p, t, forcing epoch)`, so any later `t` re-evaluates
-regardless). Calling it spuriously is always safe: it costs one refill of the
-time-cadence slots, never a wrong number.
+(`build_refresh_callback` → `_write_forcing!`), whose `post_refresh` hook
+[`esm_problem`](@ref) wires to the discrete caches' `materialize!`. Code that
+writes a forcing buffer *directly* — e.g. a hand-rolled callback doing
+`buf .= …` — must call it after every such write. A reader of the out-of-place
+build product's [`forcing_buffers`](@ref) gets no refill from `f!`; it calls the
+[`DiscreteMaterializer`](@ref)'s `refresh!()` after the announcement.
+
+A spurious call never gives a wrong number, but it is not free: the next `f!` of
+each affected build re-runs its time-cadence slots and its whole discrete-cadence
+stack, which for a deep chain (a regrid feeding fire physics) is the cost of a
+data refresh. Prefer the `buffer` form, which reaches only the builds that read
+that buffer; the form without an argument re-runs the discrete stack of every
+build in the process.
+
+`f!` does the refill in place, inside the call, so the same rule applies as to
+the rest of `f!`: one build's `f!` must not be called from several threads at
+once.
 """
 notify_forcing_refresh!() = _bump_global_epoch!()
 notify_forcing_refresh!(buffer::AbstractArray) = _bump_buffer_epochs!(buffer)
