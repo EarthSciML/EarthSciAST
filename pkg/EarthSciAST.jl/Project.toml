@@ -146,4 +146,4 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 # environment (test/mtk/Project.toml) that .github/workflows/mtk-compiler.yml
 # runs. Adding one of them back here would make every `Pkg.test()` resolve and
 # precompile the SciML symbolic stack again.
-test = ["Test", "Logging", "BenchmarkTools", "ComponentArrays", "ForwardDiff", "DiffEqCallbacks", "Extents", "GeoInterface", "GeometryOps", "OrdinaryDiffEqNonlinearSolve", "OrdinaryDiffEqRosenbrock", "OrdinaryDiffEqTsit5", "Pkg", "Random", "Reactant", "SciMLBase", "SortTileRecursiveTree", "EarthSciIO", "Blosc", "JSON", "SHA", "SnoopCompileCore", "ZipFile"]
+test = ["Test", "Logging", "BenchmarkTools", "ComponentArrays", "ForwardDiff", "DiffEqCallbacks", "Extents", "GeoInterface", "GeometryOps", "OrdinaryDiffEqNonlinearSolve", "OrdinaryDiffEqRosenbrock", "OrdinaryDiffEqTsit5", "Pkg", "Random", "Reactant", "SciMLBase", "SortTileRecursiveTree", "EarthSciIO", "Blosc", "JSON", "SnoopCompileCore", "ZipFile"]
