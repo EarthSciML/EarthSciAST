@@ -2,7 +2,10 @@
 
 A migration is a pure version-MARKER bump, sound only along an ADDITIVE line —
 a run of releases whose changes were additive, so an older file already loads
-under the newer schema. The current line is ``1.0.0 … <current schema version>``.
+under the newer schema. The current line is ``2.0.0 … <current schema version>``.
+esm 2.0.0 removed operators, so a 1.x source is relabelled only when it uses none
+of them; one that does is refused with ``removed_op``, naming the codemod
+(``test_migration_codemod.py``).
 
 Nothing crosses the 1.0.0 boundary. esm 1.0.0 is a clean break: the five
 declared variable types collapse to two, an observed variable's ``expression``
@@ -62,15 +65,15 @@ class TestSupportedMigrationTargets:
         """The clean break is uncrossable, whatever the 0.x version."""
         assert supported_migration_targets(source) == []
 
-    @pytest.mark.parametrize("source", ["1.0.0", SCHEMA_VERSION])
-    def test_additive_line_source_bumps_to_current(self, source):
+    @pytest.mark.parametrize("source", ["1.0.0", "1.3.0", "1.99.0", SCHEMA_VERSION])
+    def test_1x_and_additive_line_sources_bump_to_current(self, source):
         assert supported_migration_targets(source) == [SCHEMA_VERSION]
 
     def test_version_newer_than_the_current_schema(self):
         """Same major, but beyond the current additive ceiling."""
-        assert supported_migration_targets("1.99.0") == []
+        assert supported_migration_targets("2.99.0") == []
 
-    @pytest.mark.parametrize("source", ["2.0.0", "2.5.1", "12.34.56"])
+    @pytest.mark.parametrize("source", ["3.0.0", "12.34.56"])
     def test_higher_major(self, source):
         assert supported_migration_targets(source) == []
 
@@ -95,7 +98,7 @@ class TestCanMigrate:
         assert can_migrate("0.9.0", "1.0.0") is False
         assert can_migrate("0.9.0", SCHEMA_VERSION) is False
 
-    def test_accepts_an_additive_line_source(self):
+    def test_accepts_a_1x_source(self):
         assert can_migrate("1.0.0", SCHEMA_VERSION) is True
 
     def test_identity_no_op(self):
@@ -104,7 +107,7 @@ class TestCanMigrate:
     def test_rejects_an_intermediate_target(self):
         """Only the current schema is a valid target; per-minor jumps are not offered."""
         assert can_migrate("1.0.0", "1.0.1") is False
-        assert can_migrate("1.0.0", "2.0.0") is False
+        assert can_migrate("1.0.0", "1.3.0") is False
 
     def test_agrees_with_supported_targets_for_every_pair(self):
         """`can_migrate` and `migrate` must share ONE source of truth.
@@ -120,6 +123,8 @@ class TestCanMigrate:
             "1.0.1",
             "1.99.0",
             "2.0.0",
+            "2.99.0",
+            "3.0.0",
             "bogus",
             SCHEMA_VERSION,
         ]
@@ -165,11 +170,29 @@ class TestMigrate:
 
     @pytest.mark.parametrize(
         ("source_version", "target"),
-        [("1.0.0", "2.0.0"), ("0.1.0", SCHEMA_VERSION), ("1.0.0", "1.0.1")],
+        [("1.0.0", "3.0.0"), ("0.1.0", SCHEMA_VERSION), ("1.0.0", "1.0.1")],
     )
     def test_unsupported_pair_raises(self, baseline_file, source_version, target):
         with pytest.raises(MigrationError):
             migrate(_at_version(baseline_file, source_version), target)
+
+    def test_refuses_a_1x_file_that_uses_a_removed_op(self, baseline_file):
+        """A 1.x document that uses `fn` (or any removed op) cannot be relabelled:
+        `removed_op`, naming where and the codemod."""
+        from earthsci_ast.esm_types import Equation, ExprNode
+
+        source = _at_version(baseline_file, "1.2.0")
+        model = next(iter(source.models.values()))
+        fn = ExprNode(op="fn", args=["t"])
+        model.equations.append(Equation(lhs="probe", rhs=fn))
+        try:
+            with pytest.raises(MigrationError, match="python -m earthsci_ast.migrate") as e:
+                migrate(source, SCHEMA_VERSION)
+            assert e.value.code == "removed_op"
+            assert "`fn`" in str(e.value)
+        finally:
+            model.equations.pop()
+        assert migrate(source, SCHEMA_VERSION).version == SCHEMA_VERSION
 
     def test_missing_version_field_raises(self, baseline_file):
         with pytest.raises(MigrationError, match="no 'esm' version field"):
