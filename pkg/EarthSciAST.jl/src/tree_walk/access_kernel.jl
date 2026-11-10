@@ -913,9 +913,9 @@ end
 # builders memoize by node identity), and the per-path recursion was
 # exponential on a doubling chain. A predicate is path-multiplicity-
 # insensitive, so a visited set is exactly equivalent.
-_acc_has_reduce(n::_Node) = _acc_has_kind(n, _NK_REDUCE, IdDict{_Node, Nothing}())
-_acc_has_areduce(n::_Node) = _acc_has_kind(n, _NK_AREDUCE, IdDict{_Node, Nothing}())
-function _acc_has_kind(n::_Node, kind::UInt8, seen::IdDict{_Node, Nothing})
+_acc_has_reduce(n::_Node) = _acc_has_kind(n, _NK_REDUCE, _NodeIdMap{Nothing}())
+_acc_has_areduce(n::_Node) = _acc_has_kind(n, _NK_AREDUCE, _NodeIdMap{Nothing}())
+function _acc_has_kind(n::_Node, kind::UInt8, seen::_NodeIdMap{Nothing})
     n.kind === kind && return true
     haskey(seen, n) && return false
     seen[n] = nothing
@@ -1066,8 +1066,16 @@ Base.isequal(a::_VNKey, b::_VNKey) =
 @inline _vn!(tab::Dict{_VNKey, Int}, key) = get!(tab, _VNKey(key), length(tab) + 1)
 
 function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
-    _acc_has_reduce(spine) && return (spine, _ACC_NO_CSE)
-    inv_only = _acc_has_areduce(spine)
+    # Every node reachable from the spine, once each (see the dense-position
+    # note below). The two kind tests ride on that walk rather than walking the
+    # spine twice more with an identity set of their own; they see the same
+    # nodes, so they give the answers of `_acc_has_reduce` / `_acc_has_areduce`.
+    # The walk stops at the first `_NK_REDUCE`, which keeps no CSE at all.
+    order, pos_of, has_reduce = _dag_postorder_until(
+        spine, _dag_children, _dag_every, n -> n.kind === _NK_REDUCE
+    )
+    has_reduce && return (spine, _ACC_NO_CSE)
+    inv_only = _anyof(n -> n.kind === _NK_AREDUCE, order)
     key_to_vn = Dict{_VNKey, Int}()
     counts = Int[]; is_op = Bool[]; is_inv = Bool[]; rep = _Node[]
     # Occurrence counting must stay PER PATH (a value occurring on ≥2 paths is
@@ -1087,7 +1095,6 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     # rewrite passes below index plain `Vector`s by position instead of hashing
     # each freshly-lowered `_Node` through a SEPARATE `IdDict` per pass —
     # `IdDict` get/set over these spines was the build's top self-time.
-    order, pos_of = _dag_postorder(spine, _dag_children, _dag_every)
     P = length(order)
     vn_by_pos = Vector{Int}(undef, P)
     for (p, n) in enumerate(order)    # postorder ⇒ children already numbered
