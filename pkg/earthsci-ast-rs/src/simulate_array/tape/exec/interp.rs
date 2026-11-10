@@ -836,30 +836,34 @@ impl ScalarOp {
             _ => None,
         };
         let op = match ins {
-            Instr::Bin { op, a, b, out }
-                if scalar(out)
-                    && !crate::precision::is_f32()
-                    && let Some(k) = arith(op)
-                    && let (Some(x), Some(y)) = (src(a), src(b))
-                    && matches!(x, ScalarSrc::Slot(_) | ScalarSrc::Lit(_))
-                    && matches!(y, ScalarSrc::Slot(_) | ScalarSrc::Lit(_))
-                    && !matches!((x, y), (ScalarSrc::Lit(_), ScalarSrc::Lit(_))) =>
-            {
-                Some(match (x, y) {
-                    (ScalarSrc::Slot(p), ScalarSrc::Slot(q)) => ScalarOp::Arith(k, p, q, off(out)),
-                    (ScalarSrc::Slot(p), ScalarSrc::Lit(v)) => ScalarOp::ArithL(k, p, v, off(out)),
-                    (ScalarSrc::Lit(v), ScalarSrc::Slot(q)) => ScalarOp::ArithR(k, v, q, off(out)),
-                    _ => unreachable!("matched above"),
+            Instr::Bin { op, a, b, out } if scalar(out) => {
+                // The f64 arithmetic fast path: one slot operand at least, the
+                // other a slot or a literal.
+                let fast = if crate::precision::is_f32() {
+                    None
+                } else {
+                    match (arith(op), src(a), src(b)) {
+                        (Some(k), Some(ScalarSrc::Slot(p)), Some(ScalarSrc::Slot(q))) => {
+                            Some(ScalarOp::Arith(k, p, q, off(out)))
+                        }
+                        (Some(k), Some(ScalarSrc::Slot(p)), Some(ScalarSrc::Lit(v))) => {
+                            Some(ScalarOp::ArithL(k, p, v, off(out)))
+                        }
+                        (Some(k), Some(ScalarSrc::Lit(v)), Some(ScalarSrc::Slot(q))) => {
+                            Some(ScalarOp::ArithR(k, v, q, off(out)))
+                        }
+                        _ => None,
+                    }
+                };
+                fast.or_else(|| {
+                    Some(ScalarOp::Bin(
+                        ScalarBin::of(*op),
+                        src(a)?,
+                        src(b)?,
+                        off(out),
+                    ))
                 })
             }
-            Instr::Bin { op, a, b, out } if scalar(out) => (|| {
-                Some(ScalarOp::Bin(
-                    ScalarBin::of(*op),
-                    src(a)?,
-                    src(b)?,
-                    off(out),
-                ))
-            })(),
             Instr::Un { op, a, out } if scalar(out) => {
                 (|| Some(ScalarOp::Un(unary_kernel_of(*op), src(a)?, off(out))))()
             }
