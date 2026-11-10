@@ -22,6 +22,9 @@ MANIFEST = json.loads((TIER / "manifest.json").read_text()) if TIER.is_dir() els
 CASES = {c["id"]: c for c in MANIFEST["cases"]}
 REJECTED = [c for c in MANIFEST["cases"] if "removed_op" in c["assert"]]
 
+# The tier arrives with the spec workstream's fixtures.
+pytestmark = pytest.mark.skipif(not TIER.is_dir(), reason=f"{TIER} is not present")
+
 
 def test_the_tier_has_its_cases():
     assert set(CASES) == {

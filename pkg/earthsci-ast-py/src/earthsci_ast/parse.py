@@ -185,8 +185,26 @@ def _count_top_level_systems(parsed) -> int:
 # derived from the bundled schema's `$id` so they cannot hand-drift from it.
 
 
+#: The last minor of the esm 1.x line. 2.0.0 removed ops and fields, it did not
+#: change what the rest of a 1.x document means: a 1.x document that uses no
+#: removed construct (``removed_op`` refuses one at the wire boundary) still
+#: loads, and its own 1.x version gates (``faq_version_too_old``, …) still apply.
+_LAST_1X_MINOR = 3
+
+
+def _newest_minor_by_major() -> dict[int, int]:
+    """The supported majors, each with the newest minor this library knows."""
+    newest = {1: _LAST_1X_MINOR}
+    newest[_CURRENT_VERSION[0]] = _CURRENT_VERSION[1]
+    return newest
+
+
 def _check_version_compatibility(version_string: str) -> None:
-    """Check ESM version compatibility, raising errors or warnings as appropriate."""
+    """Check ESM version compatibility, raising errors or warnings as appropriate.
+
+    Major 1 and the current major load; any other major is refused. A minor
+    newer than the newest this library knows for its major loads with a
+    warning."""
     import warnings
 
     match = re.match(r"^(\d+)\.(\d+)\.(\d+)$", version_string)
@@ -196,15 +214,15 @@ def _check_version_compatibility(version_string: str) -> None:
     major = int(match.group(1))
     minor = int(match.group(2))
 
-    # Reject unsupported major versions
-    if major != _CURRENT_VERSION[0]:
+    newest = _newest_minor_by_major()
+    if major not in newest:
         raise UnsupportedVersionError(
             f"Unsupported major version {major}. "
-            f"This library supports major version {_CURRENT_VERSION[0]}."
+            f"This library supports major versions {', '.join(map(str, sorted(newest)))}."
         )
 
     # Warn about newer minor versions
-    if minor > _CURRENT_VERSION[1]:
+    if minor > newest[major]:
         warnings.warn(
             f"{version_string} is newer than the current library version "
             f"{'.'.join(str(v) for v in _CURRENT_VERSION)}. "
