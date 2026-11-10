@@ -14,8 +14,11 @@
 > for keys, ranks and arg-witnesses, `lib/geometry.esm` for overlap areas
 > (`intersect_polygon` has no replacement). The deprecated `aggregate` spelling
 > of `faq` is removed too. A loader rejects a document using any of them with
-> `removed_op`. The 2.0.0 codemod rewrites a 1.x document; see
-> `MIGRATION.md`.
+> `removed_op`, whatever `esm` it declares. A 1.x document (1.0.0–1.3.0) that
+> uses none of them still loads, on its own and as a mounted or referenced
+> document of a 2.0.0 root, and the 1.x version gates still apply to it (§4.2,
+> "Removed ops"). The 2.0.0 codemod rewrites a 1.x document that does use one;
+> see `MIGRATION.md`.
 
 > **1.0.0 is a clean break.** The five declared variable types collapse to two:
 > `unknown` (the solver solves for it; its behavior is stated by **equations**)
@@ -711,6 +714,16 @@ The diagnostic names the op or field and the path of the first node carrying it,
 for a 2.0.0 removal it names the 2.0.0 codemod (`MIGRATION.md`), which rewrites a 1.x
 document into the replacement column. A loader carries no rewrite of its own: it never
 loads a removed op by translating it.
+
+**1.x documents (normative).** A binding implementing 2.0.0 MUST load a document
+declaring `esm` 1.0.0 through 1.3.0 that uses no removed op or field, both on its own
+and as a mounted (§4.7) or imported (§9.7.2, §10.10) document of a 2.0.0 root; it
+MUST NOT refuse a document because its major version is 1. A removed op or field
+anywhere in such a document is `removed_op`, as in a 2.0.0 one. The version gates
+of the 1.x releases stay live — `faq_version_too_old`, `solver_version_too_old`,
+`solver_external_version_too_old`, `solver_time_span_version_too_old`,
+`const_units_version_too_old` and the rest — and each file is held to its own
+declared version (§4.7).
 
 #### Arithmetic
 
@@ -4532,8 +4545,8 @@ the model-shaped runner code this field exists to delete.
 
 ## 9. Enums and Expression Templates
 
-This section defines the `enums` block (§9.3), expression templates (§9.6) and template
-libraries (§9.7). §9.1, §9.2, §9.4 and §9.5 held the closed function registry and
+This section defines the `enums` block (§9.3), expression templates (§9.6), template
+libraries (§9.7) and what the standard-library templates compute (§9.8). §9.1, §9.2, §9.4 and §9.5 held the closed function registry and
 function tables, removed at 2.0.0; their numbers are kept so that references to the later
 subsections stay valid.
 
@@ -4547,7 +4560,7 @@ is a standard-library template.
 Each closed function has a standard-library template of the same field, imported with
 `expression_template_imports` from the `esm:std/<file>.esm` form (§4.7) and applied with
 `apply_expression_template` (§9.6.2). The template bodies are their definitions;
-`docs/content/standard_library.md` describes them.
+§9.8 states what each computes.
 
 | Removed `fn` name | Template | Library |
 |---|---|---|
@@ -5277,6 +5290,180 @@ Each entry uses the §9.7.2 `TemplateImport` shape verbatim (`ref`, `only?`, `bi
 **Index sets and metaparameters.** In every form the injected library's `index_sets` merge into the **document's** registry as a §9.7.5 import would (deep-equal idempotent; non-equal collision `template_import_index_set_conflict`), so the stencil's axes and the target component's variable shapes resolve against one registry; the library's metaparameters close via `expression_template_imports[k].bindings` at the injection edge (left-open names re-export per §9.7.6 site 2). One rule file therefore serves every resolution — the assembler (or the test) binds the grid size at the edge, and re-binding serves a convergence sweep. An injected grid size inconsistent with the index-set sizes the target's variables are shaped over surfaces at the (ephemeral, for a test) build as the ordinary `template_import_index_set_conflict` / shape error.
 
 ---
+
+### 9.8 Standard-library contracts (normative)
+
+The files of `lib/` (§4.7, "Standard-library references") are template-library files
+(§9.7.1) whose bodies are trees of §4.2 operators. A body is the definition of its
+template: an application denotes its expansion (§9.6.4) and is evaluated like any other
+expression. The clauses below state what those bodies compute, so that a binding, a
+compiler rewrite or the Lean model can be checked against a stated contract rather than
+against another implementation. Each clause carries a stable identifier in brackets.
+Values are stated under binary64 evaluation (§11.3.1). Under `"Float32"` the same
+expansion evaluates in binary32, and a statement that a value is exact does not carry
+over. An index, count or rank is a number with an integer value, as every `faq` count
+is. Template parameters that are lengths (`n`, `nx`, `ny`, `nv_a`, `nv_b`) are `ranges`
+bounds (§9.6.1) and are bound to integers.
+
+#### 9.8.1 Search and interpolation (`lib/interp.esm`)
+
+**[spec.9.8.1.searchsorted-least-index]** For an array `xs` of `n` entries, `n` below
+2^53, `searchsorted(x, xs, n)` MUST evaluate to 1 plus the number of `k` in `[1, n]`
+for which `xs[k] >= x` is false. When `xs` is non-decreasing this is the least index
+`i` with `xs[i] >= x`, or `n + 1` when there is none: a NaN `x` satisfies no
+comparison, so it gives `n + 1`, and `n = 0` gives 1.
+
+**[spec.9.8.1.linear-contract]** For `table` and `axis` of `n >= 2` entries each, `axis`
+strictly increasing, `linear(table, axis, x, n)` MUST evaluate to `table[1]` when
+`x <= axis[1]`, to `table[n]` when `x >= axis[n]`, and otherwise to
+`table[i] + ((x - axis[i]) / (axis[i+1] - axis[i])) * (table[i+1] - table[i])`, each
+operation rounded once in that order, where `i` is the number of `k` in `[1, n]` with
+`axis[k] <= x`, held to `[1, n - 1]`. Outside the axis the result is the edge value;
+the template never extrapolates. A NaN `x` gives NaN.
+
+**[spec.9.8.1.bilinear-contract]** For a row-major `table` of `nx` rows of `ny` entries
+and strictly increasing axes `axis_x` (`nx >= 2`) and `axis_y` (`ny >= 2`),
+`bilinear(table, axis_x, axis_y, x, y, nx, ny)` MUST first clamp each query to its
+axis: `cx` is `axis_x[1]` when `x <= axis_x[1]`, `axis_x[nx]` when `x >= axis_x[nx]`,
+and `x` otherwise, and `cy` likewise from `y`. With `i` the number of `k` in
+`[1, nx]` with `axis_x[k] <= cx` held to `[1, nx - 1]`, `j` the same on the y axis,
+`wx = (cx - axis_x[i]) / (axis_x[i+1] - axis_x[i])`, `wy` likewise,
+`r0 = table[i, j] + wx * (table[i+1, j] - table[i, j])` and
+`r1 = table[i, j+1] + wx * (table[i+1, j+1] - table[i, j+1])`, the value is
+`r0 + wy * (r1 - r0)`, each operation rounded once in that order. A query on an
+interior knot `k` selects cell `k`, and outside an axis the result is the value at its
+edge. A NaN in either query gives NaN.
+
+On the domains above the three templates give the same binary64 result as the reference
+definitions in `formal/` (`Esm.Closed.searchsorted`, `linear`, `bilinear`), which also
+admit equal adjacent knots.
+
+#### 9.8.2 Calendar fields (`lib/calendar.esm`)
+
+Each calendar template takes `t`, UTC seconds since 1970-01-01T00:00:00Z on the proleptic
+Gregorian calendar with no leap seconds, and splits it exactly into the day number
+`d = floor(floor(t) / 86400)` and the whole second of the day `s = floor(t) - 86400 d`,
+so a fractional `t` floors toward minus infinity.
+
+**[spec.9.8.2.calendar-domain]** Each public template of `lib/calendar.esm` (`year`,
+`month`, `day`, `hour`, `minute`, `second`, `day_of_year`, `julian_day`, `is_leap_year`,
+`seconds_since_midnight`) MUST evaluate to NaN for a NaN or infinite `t` and for a finite
+`t` with `|t| >= 2^52` s.
+
+**[spec.9.8.2.calendar-fields]** For finite `t` with `|t| < 2^52` s, the integer
+templates MUST evaluate exactly, in binary64, to the field of the UTC instant `t`:
+`year` the proleptic-Gregorian year in astronomical numbering (0 is 1 BC); `month` in
+1..12 (1 is January); `day` the day of the month in 1..31; `hour` in 0..23; `minute` in
+0..59; `second` in 0..59 (no leap-second slot); `day_of_year` in 1..366 (1 is January 1);
+`is_leap_year` 1 when the year is divisible by 4 and not by 100 unless by 400, else 0;
+and `seconds_since_midnight` the whole second of the day `s`, in 0..86399, in seconds.
+
+**[spec.9.8.2.julian-day-formula]** For finite `t` with `|t| < 2^52` s, `julian_day(t)`
+MUST evaluate to `(d + 2440588) + ((s - 43200) + (t - floor(t))) / 86400`, each
+operation rounded once in that order: the Julian Date of `t`, including the fraction of
+the day.
+
+The bodies run Howard Hinnant's `civil_from_days` with every integer division written
+`floor(a / b)`; on the domain every intermediate is an integer below 2^53, so every
+floor is exact. The second-valued constants carry `units: "s"` (§4.8.5), so `t` is read
+in seconds; the fields are dimensionless except `seconds_since_midnight`.
+
+#### 9.8.3 Arg-witnesses, keys and ranks (`lib/relational.esm`)
+
+In `argmin(f, n)` and its relatives the candidate value `f` is an expression over the
+template's loop symbol (`k_argmin_1`, `k_argmax_1`, `k_argmin_where_1`,
+`k_argmax_where_1`), which the template binds to each candidate index `k` in `[1, n]`;
+`v_k` below is `f` at `k`.
+
+**[spec.9.8.3.argmin-contract]** For `n >= 1`, `argmin(f, n)` MUST evaluate to the
+index of the first NaN candidate when some `v_k` is NaN, and otherwise to the least `k`
+at which `v_k` equals the minimum of the candidates. `argmax(f, n)` MUST evaluate the
+same way with the maximum. For `n = 0` both evaluate to `+Inf`, the identity of the
+`min` reduction that selects the index.
+
+**[spec.9.8.3.argmin-where-contract]** `argmin_where(f, p, n)` MUST evaluate to `n + 1`
+when no `k` in `[1, n]` satisfies the predicate `p` (so `n = 0` gives 1), and otherwise
+to `argmin` over the candidates that do: the first such `k` whose `v_k` is NaN when one
+is NaN, else the least such `k` at which `v_k` equals their minimum.
+`argmax_where(f, p, n)` MUST evaluate the same way with the maximum. A candidate that
+fails `p` never competes.
+
+**[spec.9.8.3.pair-key-contract]** `pair_key(a, b, lo_a, lo_b, n_a, n_b)` MUST evaluate
+to `(a - lo_a) * n_b + (b - lo_b)` when `a` and `b` are integers with
+`lo_a <= a < lo_a + n_a` and `lo_b <= b < lo_b + n_b`, and to NaN (`0 / 0`) otherwise,
+including when either is NaN. When `a`, `b`, `lo_a`, `lo_b`, `n_a` and `n_b` all have
+magnitude at most 2^25 the value is exact in binary64. In range, equal pairs give equal
+keys and the keys order the pairs lexicographically, so a `distinct` over them yields
+the pairs in that order.
+
+**[spec.9.8.3.edge-key-contract]** `edge_key(u, v, lo, n)` MUST evaluate to
+`pair_key(min(u, v), max(u, v), lo, lo, n, n)`, so it gives the same value with `u`
+and `v` swapped, NaN included.
+
+**[spec.9.8.3.rank-of-contract]** `rank_of(x, members, n)` MUST evaluate to 1 plus the
+number of `k` in `[1, n]` for which `members[k] >= x` is false, and
+`rank_of_set(x, members, S)` to the same count over the positions of the index set `S`
+in place of `[1, n]`. For ascending members of length below 2^53 this is
+`searchsorted(x, members, n)` (§9.8.1): a member's own position, the position a
+non-member would be inserted at, and `n + 1` for a NaN `x`.
+
+#### 9.8.4 Polygon overlap areas (`lib/geometry.esm`)
+
+`overlap_area_planar(ring_a, cell_a, nv_a, ring_b, cell_b, nv_b)` reads polygon A as the
+`nv_a` vertices `ring_a[cell_a, v, 1:2]` of a `[cells, nv_a, 2]` stack (x-y, or lon-lat
+taken as planar coordinates), and polygon B likewise. `overlap_area_spherical` takes
+`[cells, nv, 3]` stacks of unit vectors. A ring closes implicitly (edge `nv -> 1`) and
+may run either way round.
+
+**[spec.9.8.4.overlap-convex-only]** The overlap templates MUST be applied to convex
+polygons, and on the sphere to polygons that each lie within a hemisphere. A template
+does not check this: for other input its value is the evaluation of its body and no
+area is claimed for it.
+
+**[spec.9.8.4.overlap-planar-definition]** `overlap_area_planar` MUST evaluate to 0 when
+the orientation fan sum of either ring is exactly 0, and otherwise to the sum, over every
+edge `p -> q` of each polygon, of `s · max(0, t1 - t0) · ((p - o) × (q - o)) / 2`, where
+`o` is the first vertex of A, `s` is the sign of the edge's polygon's fan sum (+1 when
+it is `>= 0`), `(u × w)` is `u_x w_y - u_y w_x`, and `[t0, t1]` is the part of the edge
+inside the other polygon: `t0` the `max` and `t1` the `min`, over that polygon's
+edges, of the bounds each one's closed half-plane imposes on the chord parameter.
+For two convex polygons this is the area of their intersection, in squared coordinate
+units.
+
+**[spec.9.8.4.overlap-planar-tolerance]** In the planar template a vertex `p` MUST
+count as on the line of edge `a -> b` when `|(b - a) × (p - a)|` is at most
+`1e-12 · L1(b - a) · (L1(p) + L1(q) + L1(a))`, with `p -> q` the edge being clipped and
+`L1` the sum of absolute coordinates. An edge both of whose ends are on the line is
+collinear with it; the template counts such an edge once when the two edges run the
+same way and not at all when they run opposite ways, which is what makes shared edges
+and vertices of cells of one grid exact.
+
+**[spec.9.8.4.overlap-spherical-definition]** `overlap_area_spherical` MUST evaluate the
+same construction on the unit sphere, with great-circle edges: 0 when either fan sum is
+exactly 0; the side of a point `p` against edge `a -> b` is `(a × b) · p`, on the great
+circle when its magnitude is at most `1e-14`; and an edge `a -> q` clipped to
+`[t0, t1]` contributes `s · (F(t1) - F(t0))` when `t1 > t0` and nothing otherwise, where
+`F(t)` is the signed solid angle, `2 · atan2(...)` in the Van Oosterom-Strackee form, of
+the spherical triangle with corners `o`, `a` and the chord point `a + t (q - a)`. For two
+convex polygons each within a hemisphere this is the area of their intersection in
+steradians; every edge, a lon-lat edge along a parallel included, is a great-circle
+arc.
+
+**[spec.9.8.4.overlap-padding]** A vertex repeated exactly (an explicit closing
+duplicate, or the rectangular-storage padding of a cell with fewer vertices than its
+stack has slots) makes a zero-length edge, which contributes exactly zero and bounds
+nothing. For finite coordinates `overlap_area_planar` MUST therefore give the same
+binary64 value on a padded ring as on the unpadded one. Distinct vertices are never
+merged, however close.
+
+**[spec.9.8.4.lonlat-to-unit]** `lonlat_to_unit(ring, cell, vert, comp)` MUST evaluate,
+with `lon = ring[cell, vert, 1]` and `lat = ring[cell, vert, 2]` in degrees and `c` the
+binary64 constant `0.017453292519943295` (π/180), to `cos(lat · c) · cos(lon · c)` for
+`comp = 1`, `cos(lat · c) · sin(lon · c)` for `comp = 2`, and `sin(lat · c)` for any
+other `comp`. Applied in a `faq` over cells, vertex slots and a three-entry component
+axis it builds the `[cells, verts, 3]` stack `overlap_area_spherical` takes.
+`sin` and `cos` are §4.2 elementary functions, so this value is held to the
+elementary-function agreement of CONFORMANCE_SPEC §5.2 rather than to bit identity.
 
 ## 10. Coupling
 

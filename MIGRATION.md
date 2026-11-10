@@ -66,7 +66,10 @@ every binding evaluates it with the same core operators.
 **Loading.** A 2.0.0 binding rejects a document that uses any of these, whatever
 `esm` it declares, with the hard error `removed_op`. The error names the
 operator or field and the node path. No binding rewrites the document for you
-at load.
+at load. A 1.x document (1.0.0–1.3.0) that uses none of them loads unchanged,
+on its own or mounted or imported into a 2.0.0 document; the 1.x version checks
+(`faq_version_too_old`, the `solver_*` and `const_units` gates) still apply to
+it, so you only need the codemod for documents that use a removed operator.
 
 **`migrate()`.** Each binding's `migrate` / `can_migrate` relabels a 1.x
 document as 2.0.0 when it uses none of the removed operators or fields. When it

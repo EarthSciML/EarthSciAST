@@ -291,6 +291,24 @@
       "note": "A document carrying a removed op spelling (arrayop; at 2.0.0 aggregate, fn, table_lookup, skolem, rank, argmin, argmax, intersect_polygon, polygon_intersection_area) is rejected at load with removed_op, before the version gates and schema validation, never admitted as an open-tier op."
     },
     {
+      "id": "spec.4.2.v1-document-loads",
+      "section": "4.2",
+      "quote": "A binding implementing 2.0.0 MUST load a document declaring `esm` 1.0.0 through 1.3.0 that uses no removed op or field",
+      "class": "semantic",
+      "phase": 5,
+      "area": "schema",
+      "note": "A 1.x document with no removed op or field loads at 2.0.0, standalone or as a mounted or imported document of a 2.0.0 root; the 1.x version gates still apply."
+    },
+    {
+      "id": "spec.4.2.no-major-1-refusal",
+      "section": "4.2",
+      "quote": "MUST NOT refuse a document because its major version is 1",
+      "class": "semantic",
+      "phase": 5,
+      "area": "schema",
+      "note": "No loader refuses a document for declaring major version 1."
+    },
+    {
       "id": "spec.4.3.loop-symbol-shadows-declaration",
       "section": "4.3",
       "quote": "Every transform that resolves names against a component's declarations MUST honor this, flattening's dot-namespacing (esm-libraries-spec §4.7.5 step 2) in particular",

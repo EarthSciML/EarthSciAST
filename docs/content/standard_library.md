@@ -5,7 +5,8 @@ entirely in the core expression AST (`esm-spec.md` §4). `lib/solar.esm` is a
 self-contained subsystem includable from any consumer model via subsystem
 reference (`esm-spec.md` §4.7); `lib/calendar.esm`, `lib/interp.esm`,
 `lib/relational.esm` and `lib/geometry.esm` are template libraries (below),
-imported rather than mounted:
+imported rather than mounted. What each template computes is stated normatively
+in `esm-spec.md` §9.8; this page describes how to use them.
 
 ```json
 {
