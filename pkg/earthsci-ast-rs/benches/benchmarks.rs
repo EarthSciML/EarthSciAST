@@ -878,13 +878,29 @@ fn benchmark_closed_templates(c: &mut Criterion) {
 // lifts per cell, and the per-cell `faq` written by hand.
 // ---------------------------------------------------------------------------
 
-/// Each `*_fn_*` document of `TEMPLATE_ARRAY_ARGS_DIR` (default
-/// `bench/template_array_args`) with its `*_tpl_*` and `*_faq_*` spellings.
-/// `TEMPLATE_ARRAY_ARGS_FILTER` keeps the names containing it.
+/// Each `*_fn_*` document of `TEMPLATE_ARRAY_ARGS_DIR` with its `*_tpl_*` and
+/// `*_faq_*` spellings. `TEMPLATE_ARRAY_ARGS_FILTER` keeps the names containing
+/// it. The documents are not committed: with `TEMPLATE_ARRAY_ARGS_DIR` unset,
+/// `bench/template_array_args/generate.py` writes its default set into
+/// `template_array_args` under the temporary directory first.
 fn template_array_args_triples() -> Vec<(String, [std::path::PathBuf; 3])> {
     let dir = std::env::var("TEMPLATE_ARRAY_ARGS_DIR").map_or_else(
         |_| {
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench/template_array_args")
+            let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../bench/template_array_args/generate.py");
+            let dir = std::env::temp_dir().join("template_array_args");
+            let status = std::process::Command::new("python3")
+                .arg(&script)
+                .arg("--out")
+                .arg(&dir)
+                .status();
+            assert!(
+                status.is_ok_and(|s| s.success()),
+                "python3 {} --out {} failed",
+                script.display(),
+                dir.display()
+            );
+            dir
         },
         std::path::PathBuf::from,
     );

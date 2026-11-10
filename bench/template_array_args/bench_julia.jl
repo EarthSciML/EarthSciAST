@@ -1,7 +1,9 @@
 # Elementwise template application (esm-spec §9.6.11), Julia native side.
 #
-# For each document named on the command line (written by generate.py), or each
-# `<case>_{fn,tpl,faq}_<size>.esm` triple in DIR, it reports the build (first,
+# For each `<case>_{fn,tpl,faq}_<size>.esm` triple written by generate.py (in
+# DIR, or, with no DIR or `-`, generated at the default sizes into
+# $TEMPLATE_ARRAY_ARGS_DIR, else template_array_args under $TMPDIR; no document
+# is committed), it reports the build (first,
 # which includes Julia compilation, and a second build of the same document,
 # each with the bytes it allocated), the first right-hand-side call of the first
 # build (which compiles its kernels), the median steady call and
@@ -10,9 +12,11 @@
 #
 # Usage (an environment with EarthSciAST):
 #
-#     julia --project=<env> bench/template_array_args/bench_julia.jl [DIR] [name-filter…]
+#     julia --project=<env> bench/template_array_args/bench_julia.jl [DIR|-] [name-filter…]
 #     julia --project=<env> bench/template_array_args/bench_julia.jl --one FILE.esm
 #
+# A DIR given must already hold the documents (generate.py --out DIR, e.g. with
+# --large for the 72 x 46 x 72 grids); otherwise the run stops with that command.
 # `--one` builds and times one document and prints one line, with the process's
 # peak resident set (run it once per document to compare build memory).
 # Environment: CALLS (default 50 per sample, 7 samples).
@@ -22,6 +26,23 @@ using EarthSciAST, Statistics, Printf
 const E = EarthSciAST
 const CALLS = parse(Int, get(ENV, "CALLS", "50"))
 const TIMES = (0.0, 0.7, 3.1)
+
+# The directory holding the documents: `dir` as is (stopping with the generate
+# command when it holds none), or, with `nothing`, generate.py run into
+# $TEMPLATE_ARRAY_ARGS_DIR, else <tempdir()>/template_array_args (tempdir()
+# honours TMPDIR).
+function bench_docs(dir)
+    script = joinpath(@__DIR__, "generate.py")
+    if dir === nothing
+        dir = get(ENV, "TEMPLATE_ARRAY_ARGS_DIR", joinpath(tempdir(), "template_array_args"))
+        run(`python3 $script --out $dir`)
+        return dir
+    end
+    if !isdir(dir) || !any(f -> endswith(f, ".esm"), readdir(dir))
+        error("no documents in $dir; write them with:\n    python3 $script --out $dir")
+    end
+    return dir
+end
 
 function build(path)
     GC.gc()
@@ -92,7 +113,7 @@ end
 if !isempty(ARGS) && ARGS[1] == "--one"
     one(ARGS[2])
 else
-    dir = isempty(ARGS) ? (@__DIR__) : ARGS[1]
+    dir = bench_docs(isempty(ARGS) || ARGS[1] == "-" ? nothing : ARGS[1])
     filters = length(ARGS) > 1 ? ARGS[2:end] : String[]
     for f in sort(readdir(dir))
         m = match(r"^(\w+?)_fn_(.+)\.esm$", f)

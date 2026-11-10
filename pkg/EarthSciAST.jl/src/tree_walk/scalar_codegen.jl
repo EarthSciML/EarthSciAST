@@ -969,10 +969,6 @@ function _sc_build_gen(
     ln = LineNumberNode(0, Symbol("ess-scalar-codegen"))
     ngrp = length(ctx.tab_types)
     grpstmts = Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]
-    byval = _cg_split_by_value()
-    fnstmts = byval && !isempty(ctx.helpers) ?
-        Any[:(local $(_CG_FNS) = tabs[$(ngrp + 1)])] : Any[]
-    helperdefs = byval ? Any[] : ctx.helpers
     # No alias scope, as in the kernel section. This function stores cache
     # slots and reads them back (a class in cache mode, a tier slot that reads
     # an earlier one), and inside `Base.Experimental.@aliasscope` Julia 1.11 to
@@ -981,10 +977,10 @@ function _sc_build_gen(
     # the read-back then sees the previous call's value.
     run = Expr(:macrocall, Symbol("@inbounds"), ln, Expr(:block, loops...))
     body = Expr(
-        :block, grpstmts..., fnstmts...,
+        :block, grpstmts...,
         :(local _cgT = _rhs_value_type(u, p, t)),
         ctx.geosink...,
-        helperdefs...,
+        ctx.helpers...,
         run,
         :(return nothing)
     )
@@ -992,18 +988,9 @@ function _sc_build_gen(
         :function,
         Expr(:tuple, :du, :u, :p, :t, :_cgcache, :tabs, :_cgci, :_cgnc), body
     )
+    ex, fns = _cg_split_transport(ex, ngrp)
     f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(@__MODULE__, @__MODULE__, ex)
-    tabpack = ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp)
-    if byval && !isempty(ctx.helpers)
-        tabpack = (
-            tabpack...,
-            Tuple(
-                RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
-                    @__MODULE__, @__MODULE__, h
-                ) for h in ctx.helpers
-            )
-        )
-    end
+    tabpack = _cg_pack_fns(ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp), fns)
     return _ScGen(f, tabpack)
 end
 

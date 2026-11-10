@@ -407,16 +407,22 @@ function _range_front_door_done(s::_CaptureSpec, file, model_name, kwd)
     return nothing
 end
 
-# The keyword set of a re-lowering: the front door's, with every registry a
-# build may extend copied, so one build never sees another's additions.
+# The keyword set of a re-lowering: the front door's, with every registry and
+# read set a build may extend copied, so one build never sees another's
+# additions, and without the build's sinks. A program a Problem was built as
+# (`esm_problem(…; program_build = true)`) recorded the Problem's own
+# `inspect` and `_param_classes`: a re-lowering, which may run on any thread,
+# writes into neither.
 function _relower_kwargs(front)
     _, _, kwd = front
     kw = Dict{Symbol, Any}()
     for (k, v) in kwd
-        kw[k] = (k === :const_arrays || k === :param_arrays) ? copy(v) : v
+        kw[k] = (k === :const_arrays || k === :param_arrays || k === :_param_reads) &&
+            v !== nothing ? copy(v) : v
     end
     kw[:materialize_out] = nothing
     kw[:inspect] = nothing
+    kw[:_param_classes] = nothing
     kw[:_expand_cache] = nothing     # the front door's build owns it
     return kw
 end
@@ -429,12 +435,18 @@ end
 # slot), whatever the Problem's own build made of it: the build registers each
 # one the Problem holds no buffer for, filled with its value, in the program's
 # own copy of the buffer registry (`pa`, returned).
-function _program_build(seed, doc::Dict{String, Any})
+#
+# `inspect` and `param_classes` are the build's sinks, which a Problem built as
+# its program (`esm_problem(…; program_build = true)`) passes on; the build's
+# initial state `u0` is returned for that Problem too.
+function _program_build(
+        seed, doc::Dict{String, Any}; inspect = nothing, param_classes = nothing
+    )
     front = Ref{Any}(nothing)
     memo = _ProgramMemo()
     pa = Dict{String, Any}(String(k) => v for (k, v) in seed.param_arrays)
     cap = _WsCapture()
-    f!, _u0, p, _ts, var_map = _with_ws_capture(cap) do
+    f!, u0, p, _ts, var_map = _with_ws_capture(cap) do
         _with_range_spec(_CaptureSpec(front, memo)) do
             _build_evaluator(
                 doc; compiler = seed.compiler, form = :inplace,
@@ -442,11 +454,12 @@ function _program_build(seed, doc::Dict{String, Any})
                 const_arrays = seed.const_arrays, param_arrays = pa,
                 _gated_providers = seed.gated_providers, _sample_time = seed.sample_time,
                 _runtime_array_parameters = get(seed, :runtime_array_parameters, false),
-                _live_fed_parameters = true
+                _live_fed_parameters = true,
+                inspect = inspect, _param_classes = param_classes
             )
         end
     end
-    return f!, var_map, front[], p, pa, cap, memo
+    return f!, var_map, front[], u0, p, pa, cap, memo
 end
 
 # The parameter and forcing-slot signatures of a program built from `seed`
@@ -637,15 +650,24 @@ function _copy_maps(
     return _CopyMaps(u_src, u_dst, a_src, a_dst, du_src, du_dst)
 end
 
-function _whole_program(
+_whole_program(
+    seed, flat::FlattenedSystem, W::Set{String}, R::Set{String}, writes, terms;
+    parent = nothing
+) = first(_whole_program_built(seed, flat, W, R, writes, terms; parent = parent))
+
+# `_whole_program`, with the build's sinks `inspect` and `param_classes` filled
+# and its initial state and parameters: `(prog, u0, p)`.
+function _whole_program_built(
         seed, flat::FlattenedSystem, W::Set{String}, R::Set{String},
-        writes, terms; parent = nothing
+        writes, terms; parent = nothing, inspect = nothing, param_classes = nothing
     )
     init = seed.init
     live = union(W, R)
     init2 = (init === nothing || isempty(init)) ? Equation[] : _select_init(init, live)
     doc = _flat_run_doc(_scalar_slots_to_arrays(flat), seed.coordinates, seed.solver, init2)
-    f!, internal, front, p, pa, cap, memo = _program_build(seed, doc)
+    f!, internal, front, u0, p, pa, cap, memo = _program_build(
+        seed, doc; inspect = inspect, param_classes = param_classes
+    )
     present = Set{String}(
         vcat(
             collect(_layout_scalar_names(internal)),
@@ -663,7 +685,7 @@ function _whole_program(
     ablocks, na = _make_blocks(internal, shapes, anames, gbox; owned = false)
     layout = TileLayout(ublocks, ablocks, nu, na)
     maps = _copy_maps(layout, internal, (n, d, x) -> x)
-    return RhsProgram(
+    prog = RhsProgram(
         seed, seed.compiler, unames, anames, flat, doc, front, f!,
         internal, shapes, layout, maps,
         parent === nothing ?
@@ -671,6 +693,7 @@ function _whole_program(
             _derived_shared(parent, f!, length(internal), cap, pa),
         memo, Ref{Union{Nothing, Tuple{TileLayout, _CopyMaps, _RhsShared}}}(nothing)
     )
+    return prog, u0, p
 end
 
 """
@@ -688,6 +711,12 @@ value, is read from the set, never from build-time data.
 [`default_forcing_set`](@ref) holds the Problem's forcing as it is now.
 """
 function rhs_program(prob::EsmProblem)
+    # A Problem built as its program (`esm_problem(…; program_build = true)`)
+    # holds the very program this call would build, but for its default
+    # forcing set, which is the Problem's forcing as it is now.
+    r = prob.inspection.program_seed
+    r isa _ProgramSeedRecipe && r.program[] !== nothing &&
+        return _current_program(r, prob.param_buffers)
     c = compiler(prob)
     seed = c in (:native, :interpreter) ? _program_seed(prob) : nothing
     (seed === nothing || !(c in (:native, :interpreter))) &&
@@ -699,8 +728,53 @@ function rhs_program(prob::EsmProblem)
                 "program of its own (API_SPEC §5.8)"
         )
     )
+    return first(_problem_program(seed))
+end
+
+# The whole-model program of `seed` with the build's sinks `inspect` and
+# `param_classes` filled, and the build's initial state and parameters:
+# `(prog, u0, p)`. `rhs_program` builds it with no sinks; a Problem built with
+# `program_build = true` is built from it, with its own.
+function _problem_program(seed; inspect = nothing, param_classes = nothing)
     flat, W, R = _select_flat(seed.flat, :all, :all)
-    return _whole_program(seed, flat, W, R, :all, :all)
+    return _whole_program_built(
+        seed, flat, W, R, :all, :all; inspect = inspect, param_classes = param_classes
+    )
+end
+
+# The program recipe `r` holds, as `rhs_program` would build it now: the same
+# program, with its default forcing set copied from the Problem's live buffers
+# `live` when one of them has changed since the set was taken (a discrete
+# provider's refresh writes them in place). The program then held is that one,
+# so a later call with nothing changed returns the same value. A slot the
+# Problem holds no buffer for is one the program's build registered itself,
+# which nothing writes; its buffer is kept.
+function _current_program(r::_ProgramSeedRecipe, live::AbstractDict)
+    return lock(r.lock) do
+        prog = r.program[]::RhsProgram
+        sh = prog.shared
+        d = sh.default
+        stale(k, s) = (b = get(live, s.name, nothing); b !== nothing && !isequal(vec(b), d.bufs[k]))
+        any(((k, s),) -> stale(k, s), enumerate(sh.slots)) || return prog
+        bufs = Vector{Float64}[
+            haskey(live, s.name) ? vec(copy(live[s.name])) : d.bufs[k]
+                for (k, s) in enumerate(sh.slots)
+        ]
+        m = prog.memo
+        # Its decomposed form (`_decomposed_form`) derives from the new set,
+        # so it is built afresh; the re-lowering caches are shared.
+        memo = _ProgramMemo(
+            m.lock, m.arrays, m.flats, m.inline, m.verdicts, Ref{Any}(nothing), Ref{Any}(missing)
+        )
+        cur = RhsProgram(
+            prog.seed, prog.compiler, prog.writes, prog.aux_names, prog.flat, prog.doc,
+            prog.front, prog.f!, prog.internal, prog.shapes, prog.layout, prog.maps,
+            _RhsShared(sh.params, sh.slots, ForcingSet(sh.slots, bufs, _next_set_epoch()), sh.factory),
+            memo, Ref{Union{Nothing, Tuple{TileLayout, _CopyMaps, _RhsShared}}}(nothing)
+        )
+        r.program[] = cur
+        return cur
+    end
 end
 
 """

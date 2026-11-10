@@ -461,3 +461,66 @@ end
     out2 = ESM._to_ordered(Any[big["t"], big["t"]])
     @test out2[1] == out2[2] && out2[1] !== out2[2]
 end
+
+# `_NodeIdMap` (compile.jl) files a `_Node` under its `children` vector and
+# chains the nodes that share one, telling them apart by `===`. Builders give
+# every node its own vector, so a chain is normally one long; these build the
+# shared case by hand.
+@testset "_NodeIdMap: nodes sharing one children vector stay distinct keys" begin
+    kid = ESM._mknode(kind = ESM._NK_LITERAL, literal = 1.0)
+    shared = ESM._Node[kid]
+    a = ESM._Node(ESM._NK_OP, :+, 0.0, 0, Symbol(""), nothing, shared)
+    b = ESM._Node(ESM._NK_OP, :+, 0.0, 0, Symbol(""), :other, shared)
+    c = ESM._Node(ESM._NK_OP, :*, 0.0, 0, Symbol(""), nothing, shared)
+    @test ESM._node_bucket(a) == ESM._node_bucket(b) == ESM._node_bucket(c)
+    m = ESM._NodeIdMap{Int}()
+    m[a] = 1
+    m[b] = 2
+    @test length(m) == 2
+    @test m[a] == 1 && m[b] == 2
+    @test !haskey(m, c) && get(m, c, -1) == -1
+    @test_throws KeyError m[c]
+    m[c] = 3
+    m[a] = 10                           # overwrite in the middle of the chain
+    @test length(m) == 3
+    @test (m[a], m[b], m[c]) == (10, 2, 3)
+    # A `===` copy (same fields, same vector) is the same key.
+    a2 = ESM._Node(ESM._NK_OP, :+, 0.0, 0, Symbol(""), nothing, shared)
+    @test m[a2] == 10
+    # Leaves sharing one empty vector still spread by their own fields, and
+    # `===` leaves still meet.
+    nokids = ESM._Node[]
+    l1 = ESM._Node(ESM._NK_STATE, Symbol(""), 0.0, 1, Symbol(""), nothing, nokids)
+    l2 = ESM._Node(ESM._NK_STATE, Symbol(""), 0.0, 2, Symbol(""), nothing, nokids)
+    l3 = ESM._Node(ESM._NK_LITERAL, Symbol(""), 2.0, 0, Symbol(""), nothing, nokids)
+    @test ESM._node_bucket(l1) != ESM._node_bucket(l2)
+    @test ESM._node_bucket(l1) != ESM._node_bucket(l3)
+    l1b = ESM._Node(ESM._NK_STATE, Symbol(""), 0.0, 1, Symbol(""), nothing, nokids)
+    @test ESM._node_bucket(l1) == ESM._node_bucket(l1b)
+    leaves = ESM._NodeIdMap{Nothing}()
+    leaves[l1] = nothing; leaves[l2] = nothing; leaves[l3] = nothing
+    @test length(leaves) == 3 && haskey(leaves, l1b)
+end
+
+# `_SeenSet` (stencil.jl): a restart forgets every node without emptying the
+# table, and a nested set is one per depth, restarted on each hand-out.
+@testset "_SeenSet: restart and nested sets" begin
+    x = _op("+", _v("i"), _v("j"))
+    y = _op("*", _v("i"), _v("i"))
+    s = ESM._SeenSet()
+    @test !ESM._seen_visit!(s, x)
+    @test ESM._seen_visit!(s, x)
+    @test !ESM._seen_visit!(s, y)
+    ESM._seen_restart!(s)
+    @test !ESM._seen_visit!(s, x)      # visited before the restart only
+    @test ESM._seen_visit!(s, x)
+    @test length(s.d) == 2              # the table kept its entries
+    n1 = ESM._seen_nested!(s)
+    @test n1 !== s
+    @test !ESM._seen_visit!(n1, x)      # a nested walk sees nothing of the outer
+    @test ESM._seen_visit!(s, x)        # nor the outer of the nested
+    n2 = ESM._seen_nested!(s)
+    @test n2 === n1                     # one set per depth, reused
+    @test !ESM._seen_visit!(n2, x)      # and restarted on each hand-out
+    @test ESM._seen_nested!(n2) !== n2  # the next depth down is its own
+end
