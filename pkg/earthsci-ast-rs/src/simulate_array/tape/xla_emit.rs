@@ -1547,7 +1547,7 @@ impl<'a> Emitter<'a> {
                 axis,
                 lo,
                 n,
-                sorted: _,
+                sorted,
                 x,
                 out,
             } => {
@@ -1564,17 +1564,17 @@ impl<'a> Emitter<'a> {
                 let dims = self.out_dims(*out);
                 let q = self.operand(x)?;
                 let q = self.to_shape(&q, &dims)?;
-                if n >= COUNT_SEARCH_MIN {
-                    if let Some(keys) = self.const_window(axis, lo, n) {
-                        let v = self.count_search(*rel, keys, &dims, &q)?;
-                        self.define(*out, v);
-                        return Ok(());
-                    }
-                }
                 let win = self.wrap(
                     a.slice_in_dim(lo as i64, (lo + n) as i64, 1, 0),
                     "count: axis window",
                 )?;
+                // A window the lowering proved non-decreasing at build (its
+                // own literal, or the sorted copy of its non-NaN entries).
+                if *sorted && n >= COUNT_SEARCH_MIN {
+                    let v = self.count_search(*rel, &win, n, &dims, &q)?;
+                    self.define(*out, v);
+                    return Ok(());
+                }
                 let mut wide: Vec<i64> = dims.iter().map(|&d| d as i64).collect();
                 wide.push(n as i64);
                 let keep: Vec<i64> = (0..dims.len() as i64).collect();
@@ -1964,48 +1964,36 @@ impl<'a> Emitter<'a> {
         self.wrap(flat.reshape(&d), "polygon area: reshape")
     }
 
-    /// The window `lo .. lo + n` of a count axis that is a compile-time
-    /// constant (a slot an [`Instr::ConstArray`] defines), or `None`.
-    fn const_window(&self, s: &SrcRef, lo: usize, n: usize) -> Option<Vec<f64>> {
-        let SrcRef::Slot(id) = s else {
-            return None;
-        };
-        let data = self.prog.instrs.iter().find_map(|i| match i {
-            Instr::ConstArray { data, out } if out == id => {
-                Some(&self.prog.const_data[*data as usize])
-            }
-            _ => None,
-        })?;
-        (data.shape.len() == 1 && lo + n <= data.values.len())
-            .then(|| data.values[lo..lo + n].to_vec())
-    }
-
-    /// [`Instr::Count`] over compile-time keys, as a bisection.
+    /// [`Instr::Count`] over a window of `m` keys the lowering proved
+    /// non-decreasing (`Instr::Count::sorted`), as a bisection.
     ///
-    /// A NaN key satisfies no comparison, so the keys that can count are the
-    /// others; sorted (under `<=`, which puts `-0.0` and `+0.0` together as
-    /// the comparison does), those satisfying `a <= x` / `a < x` are a prefix
-    /// and those satisfying `a >= x` / `a > x` a suffix, whatever `x` is (a
-    /// NaN `x` satisfies none). The prefix of keys where `P` holds — the
-    /// relation for `<=`/`<`, its negation for `>=`/`>` — is found by binary
-    /// lifting in `s32`: `c += step` whenever `P(keys[c + step - 1])`, for each
-    /// power of two from the largest down, which ends at the prefix's length.
-    /// The count is that length, or the remaining keys for `>=`/`>`: the same
-    /// integer the fold reaches, so the same `f64`.
-    fn count_search(&self, rel: CountRel, keys: Vec<f64>, dims: &[usize], q: &XlaOp) -> R<XlaOp> {
+    /// A non-decreasing window holds no NaN, and under `<=` it puts `-0.0`
+    /// and `+0.0` together as the comparison does, so the keys satisfying
+    /// `a <= x` / `a < x` are a prefix and those satisfying `a >= x` /
+    /// `a > x` a suffix, whatever `x` is (a NaN `x` satisfies none). The
+    /// prefix of keys where `P` holds — the relation for `<=`/`<`, its
+    /// negation for `>=`/`>` — is found by binary lifting in `s32`:
+    /// `c += step` whenever `P(keys[c + step - 1])`, for each power of two
+    /// from the largest down, which ends at the prefix's length. The count is
+    /// that length, or the remaining keys for `>=`/`>`: the same integer the
+    /// fold reaches, so the same `f64`.
+    fn count_search(
+        &self,
+        rel: CountRel,
+        kv: &XlaOp,
+        m: usize,
+        dims: &[usize],
+        q: &XlaOp,
+    ) -> R<XlaOp> {
         if dims.is_empty() {
             let q1 = self.wrap(q.reshape(&[1]), "count: scalar query")?;
-            let c = self.count_search(rel, keys, &[1], &q1)?;
+            let c = self.count_search(rel, kv, m, &[1], &q1)?;
             return self.wrap(c.reshape(&[]), "count: scalar count");
         }
-        let mut keys: Vec<f64> = keys.into_iter().filter(|v| !v.is_nan()).collect();
-        keys.sort_by(|a, b| a.partial_cmp(b).expect("NaN keys were removed"));
-        let m = keys.len();
         let prefix = matches!(rel, CountRel::Le | CountRel::Lt);
         if m == 0 {
             return self.splat(0.0, dims);
         }
-        let kv = self.wrap(self.b.constant_r1(&keys[..]), "count: sorted keys")?;
         let mut c = self.ci32(0, dims)?;
         let top = self.ci32(m as i32, dims)?;
         let one = self.ci32(1, dims)?;
@@ -2745,9 +2733,12 @@ impl<'a> Emitter<'a> {
 mod tests {
     use super::*;
 
-    /// [`Emitter::count_search`] against a direct count, over keys with
-    /// NaNs, signed zeros and duplicates in no order, for every relation, at
-    /// queries on, between and outside the keys, NaN and both infinities.
+    /// [`Emitter::count_search`] against a direct count, over a
+    /// non-decreasing window with signed zeros (in both orders) and
+    /// duplicates, for every relation, at queries on, between and outside
+    /// the keys, NaN and both infinities. Unsorted keys and NaN keys reach
+    /// the bisection through the lowering's sorted copy, which the template
+    /// tests run end to end.
     #[test]
     fn bisection_counts_what_a_direct_count_counts() {
         if std::env::var_os("XLA_EXTENSION_DIR").is_none() {
@@ -2766,10 +2757,12 @@ mod tests {
         let mut keys: Vec<f64> = (0..70)
             .map(|j| ((j * 37) % 23) as f64 * 0.25 - 2.0)
             .collect();
-        keys[5] = f64::NAN;
-        keys[40] = f64::NAN;
-        keys[11] = -0.0;
-        keys[12] = 0.0;
+        keys.sort_by(|a, b| a.partial_cmp(b).expect("no NaN key"));
+        let z = keys.iter().position(|&k| k == 0.0).expect("a zero key");
+        keys[z] = -0.0;
+        keys.insert(z, 0.0);
+        keys.insert(z, -0.0);
+        assert!(non_decreasing(keys.len(), |j| keys[j]));
         for &k in keys.iter().filter(|k| k.is_finite()) {
             q.extend([k, k + 0.125]);
         }
@@ -2789,8 +2782,9 @@ mod tests {
         for rel in [CountRel::Le, CountRel::Lt, CountRel::Ge, CountRel::Gt] {
             let b = XlaBuilder::new("count_search_probe");
             let em = Emitter::new(&b, &prog, &compiled).expect("emitter");
+            let kv = b.constant_r1(&keys[..]).expect("keys");
             let c = em
-                .count_search(rel, keys.clone(), &[n], &em.u)
+                .count_search(rel, &kv, keys.len(), &[n], &em.u)
                 .expect("bisection");
             let exe = client.compile(&c.build().expect("build")).expect("compile");
             let args = [
