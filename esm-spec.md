@@ -1,6 +1,20 @@
 # ESM Format Specification
 
-**EarthSciML Abstract Syntax Tree Format — Version 1.3.0**
+**EarthSciML Abstract Syntax Tree Format — Version 2.0.0**
+
+> **2.0.0 is a break.** Every external function leaves the expression AST, so
+> the format's core is the §4.2 operators alone. Removed: the `fn` op and the
+> closed function registry (every `datetime.*` and `interp.*` name); the
+> `function_tables` block and the `table_lookup` op; the `skolem` and `rank`
+> value-invention ops and the `argmin` / `argmax` ops; and the geometry leaves
+> `intersect_polygon` and `polygon_intersection_area`, with their `manifold`
+> field. Each is now an expression template in the standard library, imported
+> from `esm:std/<file>.esm` (§4.7, §9.7): `lib/calendar.esm` and
+> `lib/interp.esm` for the closed functions and the tables, `lib/relational.esm`
+> for keys, ranks and arg-witnesses, `lib/geometry.esm` for overlap areas
+> (`intersect_polygon` has no replacement). A loader rejects a document using
+> any of them with `removed_op`. The 2.0.0 codemod rewrites a 1.x document; see
+> `MIGRATION.md`.
 
 > **1.0.0 is a clean break.** The five declared variable types collapse to two:
 > `unknown` (the solver solves for it; its behavior is stated by **equations**)
@@ -24,21 +38,18 @@ The ESM (`.esm`) format is a JSON-based serialization format for EarthSciML mode
 
 ESM is **language-agnostic**. Every model must be fully self-describing: all equations, variables, parameters, species, and reactions are specified in the format itself. A conforming parser in any language can reconstruct the complete mathematical system from the `.esm` file alone, without access to any particular software package.
 
-Two things are excepted from full specification, both inherently runtime-specific: **data sources** (file I/O, format adapters, large external grids), which are described well enough to locate and decode but not reimplemented in-file; and **update handlers** (§5.5), referenced by `handler_id`. There is no in-file registry of arbitrary user-defined functions or operators: every callable invoked from an expression is drawn from the **closed function registry** (Section 9), whose entries are spec-defined with fixed names, signatures, and tolerances. See `docs/content/rfcs/closed-function-registry.md` for the rationale.
+Two things are excepted from full specification, both inherently runtime-specific: **data sources** (file I/O, format adapters, large external grids), which are described well enough to locate and decode but not reimplemented in-file; and **update handlers** (§5.5), referenced by `handler_id`. There is no registry of callable functions: every expression is a tree of the §4.2 operators, and anything larger — calendar fields, interpolation, polygon overlap — is an expression template (§9.6) from the standard library (`lib/*.esm`, imported as `esm:std/<file>.esm`), whose body is itself such a tree.
 
-### 1.1 Authoring Policy: AST first, registry second, factoring third
+### 1.1 Authoring Policy: AST first, factoring second
 
-Authors and reviewers MUST prefer the built-in expression AST (Section 4) over the closed function registry (Section 9). A `{"op": "fn", ...}` node is justified **only** when the desired primitive cannot be written as a finite closed-form composition of the AST ops in §4.2 — typically because it requires non-AST ingredients (calendar arithmetic, polygon clipping). Anything expressible in finite closed form (powers, polynomials, transcendentals, conditionals, piecewise, clip/clamp) belongs in the AST. Reviewers MUST reject `fn` nodes whose body can be written using existing AST ops; `^`, `min`, `max`, `ifelse`, `sign` and the trig / exp / log family already cover ordinary scalar math.
-
-The closed function registry is **closed**: bindings MUST reject any `fn` node whose `name` is not in the spec-defined set for the file's declared `esm` version. There is no per-file declaration of new functions, no `handler_id` lookup, and no out-of-band runtime registry. Adding a primitive requires a spec rev (see `docs/content/rfcs/closed-function-registry.md` §7).
+The evaluable core of §4.2 is **closed**: there is no per-file declaration of new functions, no `handler_id` lookup inside an expression, and no out-of-band runtime registry. Adding an operator requires a spec rev. A primitive that is not a core op — calendar decomposition, table interpolation, polygon overlap — is written as a finite tree of core ops and shipped as a standard-library template (§9.7.1, `lib/*.esm`). A binding recovers the speed of a hand-written kernel by recognising the template's expanded shape in its compiler, never by giving the template a second, built-in meaning.
 
 The full authoring stance, normatively:
 
-> **AST first, registry second, factoring third.**
+> **AST first, factoring second.**
 >
-> 1. *AST first.* The closed AST op set in §4 is the primary authoring surface. New mathematics SHOULD be expressible as a finite tree of existing ops.
-> 2. *Registry second.* Operations that genuinely cannot be written as AST trees (tabulated lookups, iterative solves, platform adapters) use the closed `fn`-op registry per §9.1; addition is normative spec work, not authoring.
-> 3. *Factoring third.* An author MAY name a fixed Expression AST tree as an `expression_templates` entry (§9.6) — declared within a component, or shared from a template-library file and imported (§9.7) — and reference it elsewhere by name with parameter substitution. A template body MAY reference other match-less templates as a statically-checked acyclic DAG (§9.7.3); from `esm: 0.9.0` such references are preserved through load and round-trip and denote their expansion (§9.6.4). Factoring is **not** programming: bodies are fixed AST trees, parameters are pure-syntactic substitution slots, no recursion, no metaprogramming.
+> 1. *AST first.* The closed AST op set in §4 is the only authoring surface. New mathematics MUST be expressible as a finite tree of existing ops.
+> 2. *Factoring second.* An author MAY name a fixed Expression AST tree as an `expression_templates` entry (§9.6) — declared within a component, or shared from a template-library file and imported (§9.7) — and reference it elsewhere by name with parameter substitution. A template body MAY reference other match-less templates as a statically-checked acyclic DAG (§9.7.3); from `esm: 0.9.0` such references are preserved through load and round-trip and denote their expansion (§9.6.4). Factoring is **not** programming: bodies are fixed AST trees, parameters are pure-syntactic substitution slots, no recursion, no metaprogramming.
 >
 > Mechanisms that require any capability beyond fixed-tree parameter substitution (conditional includes, generated definitions, computed bindings) are out of scope and require a separate RFC that revisits §1.1.
 
@@ -52,13 +63,12 @@ The full authoring stance, normatively:
 
 ```json
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": { ... },
   "models": { ... },
   "reaction_systems": { ... },
   "data_sources": { ... },
   "enums": { ... },
-  "function_tables": { ... },
   "coupling": [ ... ],
   "domain": { ... },
   "index_sets": { ... },
@@ -78,7 +88,6 @@ The full authoring stance, normatively:
 | `reaction_systems` | | Reaction network components (fully specified) |
 | `data_sources` | | External data-source ingest configuration, drawn from by a parameter's `update` (see Section 8). A registry, not a component. |
 | `enums` | | File-local symbol → integer mappings used by the `enum` op to make categorical lookups cross-binding-portable (see Section 9.3) |
-| `function_tables` | | Component-scoped sampled function tables — named axes plus literal nested-array data, referenced by the `table_lookup` AST op (see Section 9.5) |
 | `coupling` | | Composition and coupling rules |
 | `domain` | | The single temporal domain shared by all components (see Section 11) |
 | `index_sets` | | Document-scoped registry of named iteration domains (grid axes, categorical dimensions, data-derived sets) referenced by `faq` ranges (RFC semiring-faq-unified-ir §5.2) |
@@ -651,7 +660,7 @@ the same associative operator (`+`, `*`, `and`, `or`, which a parser flattens in
 n-ary node): `a * (b / c)`, `a + (b - c)`, `a == (b < c)`. A parser reads `a and b and c`
 as one n-ary `and`, exactly as it reads `a + b + c` as one n-ary `+`. The full printing
 contract, including the text spelling of every `faq` field (join clauses with `syms` or an
-`overlap` gate, `argmin`/`argmax` joins and filters, a skolem `label`), is
+`overlap` gate), is
 `tests/display/RENDERING_CONTRACT.md`.
 
 This section documents the text surface only; it places no requirement on `.esm`
@@ -676,6 +685,30 @@ Every `op` string belongs to one of **two tiers**:
   rejects malformed strings — the open tier is otherwise unconstrained, so a custom op
   carries its scheme parameters in the `attrs` object rather than in dedicated schema
   fields.
+
+**Removed ops (`removed_op`, normative).** A short list of `op` spellings is neither
+core nor open: they were removed from the format, and a loader MUST reject a document
+carrying one **BY NAME**, with the hard error `removed_op`, at the same wire boundary
+that normalizes the `aggregate` alias (§4.2, "The `faq` tag") — ahead of the version
+gates and schema validation, and on every document a load touches. Each is a
+well-formed identifier, so without the by-name check the open tier would admit it and
+the document would fail much later as `unlowered_operator`, or never. The list:
+
+| Removed | At | Replacement |
+|---|---|---|
+| `arrayop` | 0.8.0 | `faq` |
+| `fn` (every `datetime.*` and `interp.*` name) | 2.0.0 | the `lib/calendar.esm` and `lib/interp.esm` templates (§9.7.1) |
+| `table_lookup`, and the top-level `function_tables` block | 2.0.0 | the `linear` / `bilinear` templates of `lib/interp.esm` over the table's data |
+| `skolem`, `rank` | 2.0.0 | `pair_key` / `edge_key` keys on a `distinct` `faq`, then `rank_of` / `rank_of_set` (`lib/relational.esm`) |
+| `argmin`, `argmax` | 2.0.0 | the `argmin` / `argmax` / `argmin_where` / `argmax_where` templates (`lib/relational.esm`) |
+| `polygon_intersection_area` | 2.0.0 | `overlap_area_planar` / `overlap_area_spherical` (`lib/geometry.esm`, §8.6.1) |
+| `intersect_polygon` | 2.0.0 | none |
+
+The `function_tables` block is a field, not an op, and is rejected with the same code.
+The diagnostic names the op or field and the path of the first node carrying it, and
+for a 2.0.0 removal it names the 2.0.0 codemod (`MIGRATION.md`), which rewrites a 1.x
+document into the replacement column. A loader carries no rewrite of its own: it never
+loads a removed op by translating it.
 
 #### Arithmetic
 
@@ -875,8 +908,7 @@ operand. A language's native min/max that drops NaN (Rust's `f64::max`, C's
 The same holds for the `max`/`min` ⊕ of a `faq` reduction (§4.3, CONFORMANCE
 §5.6): one NaN term makes the reduction NaN. `min`/`max` are the canonical, AST-level
 encoding of clamp / clip / limiter primitives — `clamp(x, lo, hi)` is
-`{"op": "min", "args": [hi, {"op": "max", "args": [lo, "x"]}]}` — and reviewers
-MUST reject `fn` nodes that only re-implement these in disguise (see §9.2).
+`{"op": "min", "args": [hi, {"op": "max", "args": [lo, "x"]}]}`.
 
 The hyperbolic family `sinh`, `cosh`, `tanh` and their inverses `asinh`,
 `acosh`, `atanh` are unary, elementwise transcendentals evaluated exactly like
@@ -903,19 +935,17 @@ by this spec.
 |---|---|---|
 | `Pre` | `[var]` | Value of variable immediately before an event fires (see Section 5) |
 
-#### Closed-registry Invocation
+#### Enum Resolution
 
 | Op | Required extra fields | Meaning |
 |---|---|---|
-| `fn` | `name` | Invoke a spec-defined closed function. `name` is a dotted module path (e.g. `"datetime.julian_day"`) drawn from the closed registry in Section 9. `args` are the evaluated argument expressions, passed positionally. See Section 4.4. |
 | `enum` | — | Resolve a file-local symbolic name to its declared integer (any integer: negative, zero or positive). `args` is `[enum_name, symbol]`, both string literals; lowering happens at load time. See Section 4.5 and the `enums` top-level block (Section 9.3). |
-| `table_lookup` | `table`, `axes` (object); optional `output` | Evaluate a sampled function table from the top-level `function_tables` block. `table` is the table id; `axes` maps each declared axis name to a scalar input expression; `output` selects which output (integer index or named entry) to return. `args` MUST be empty. Lowers at load time to the equivalent `interp.linear` / `interp.bilinear` / `index` form (bit-equivalent). See Section 9.5. |
 
 #### Inline Constants
 
 | Op | Required extra fields | Meaning |
 |---|---|---|
-| `const` | `value`, optional `units` | Inline literal value embedded in the expression tree. `value` is any JSON value (number, integer, or nested array of numbers/integers); `args` MUST be empty `[]`. The optional `units` (esm 1.2.0) declares the unit `value` is in, which gives the constant a dimension and exact scale in dimensional analysis (§4.8.5). Used to carry small inline tables that participate in `index` lookups, `interp.searchsorted` queries, and other AST positions where a JSON array is needed but a bare scalar number won't do. Large arrays belong in a `data_sources` entry. |
+| `const` | `value`, optional `units` | Inline literal value embedded in the expression tree. `value` is any JSON value (number, integer, or nested array of numbers/integers); `args` MUST be empty `[]`. The optional `units` (esm 1.2.0) declares the unit `value` is in, which gives the constant a dimension and exact scale in dimensional analysis (§4.8.5). Used to carry small inline tables that participate in `index` lookups, the `lib/interp.esm` interpolation templates (§9.7.1), and other AST positions where a JSON array is needed but a bare scalar number won't do. Large arrays belong in a `data_sources` entry. |
 
 #### Array / Tensor
 
@@ -945,10 +975,7 @@ array, reducing nothing at all.
   alias. The alias is **REMOVED at esm 2.0.0**.
 - **`arrayop`** is the pre-0.8.0 spelling and is **NOT accepted**. It was
   removed at 0.8.0 and is rejected **BY NAME**, with the hard error
-  `removed_op` — not left to the open tier. `arrayop` is a well-formed
-  identifier, so §4.2's OPEN rewrite-target tier would otherwise admit it: the
-  document would load silently and fail much later as `unlowered_operator`, or
-  never.
+  `removed_op` (§4.2, "Removed ops").
 
 A document that spells the node `faq` declares `esm: 1.1.0` or later, the same
 rule the top-level `solver` block follows (§2.2.4), enforced with the hard error
@@ -976,31 +1003,26 @@ not the node's name. See `tests/display/RENDERING_CONTRACT.md`.
 
 See `docs/content/rfcs/faq-node-rename.md`.
 
-#### Relational / value-invention & geometry (FAQ companions)
+#### Boolean literals and value invention (FAQ companions)
 
-These accompany `faq` in Functional Aggregate Query expressions (RFC semiring-faq-unified-ir §5). The relational ops (`skolem`, `rank`) run at build/setup time to invent index values and dense IDs; `argmin`/`argmax` are index-returning reductions; `intersect_polygon` is a geometry kernel leaf.
+These accompany `faq` in Functional Aggregate Query expressions (RFC semiring-faq-unified-ir §5). Value invention — minting the members of a data-derived index set — is a `faq` with `distinct: true` and a scalar integer `key` (§4.3.1), run at build/setup time; keys, ranks, arg-witnesses and polygon overlap areas are standard-library templates over the core ops (below, and §8.6.1).
 
-**Constant factors for value invention (normative).** Because value invention runs at build time, every column a `skolem` key, `distinct` producer or arg-witness body reads MUST be build-time data. A **constant factor** is any of: an array supplied to the build (a loader- or caller-provided factor), a shaped parameter carrying inline data (§6.3), or an **unknown whose defining equation's right-hand side is an array `const` node** (`x ~ const([…])`). The last is build-time data exactly as the first two are, so a binding MUST accept it as a key column. A column that is none of these (a shaped parameter with no data, or anything reading a state) cannot be materialized. A `kind: "derived"` index set whose producer reads one is refused with `derived_index_set_unmaterialized` (§9.6.6) no later than the build of any expression that ranges over it; a binding MAY refuse it as soon as the producer fails, even if nothing ranges over the set. A state-reading producer is refused with `relational_node_in_continuous` instead, by structural validation at load or at build.
+**Constant factors for value invention (normative).** Because value invention runs at build time, every column a `distinct` producer's `key` or `join.on` clause reads MUST be build-time data. A **constant factor** is any of: an array supplied to the build (a loader- or caller-provided factor), a shaped parameter carrying inline data (§6.3), or an **unknown whose defining equation's right-hand side is an array `const` node** (`x ~ const([…])`). The last is build-time data exactly as the first two are, so a binding MUST accept it as a key column. A column that is none of these (a shaped parameter with no data, or anything reading a state) cannot be materialized. A `kind: "derived"` index set whose producer reads one is refused with `derived_index_set_unmaterialized` (§9.6.6) no later than the build of any expression that ranges over it; a binding MAY refuse it as soon as the producer fails, even if nothing ranges over the set. A state-reading producer is refused with `relational_node_in_continuous` instead, by structural validation at load or at build.
 
 | Op | Fields | Meaning |
 |---|---|---|
-| `skolem` | — | Mint a canonical value (a tuple, not a hash) identifying a relation instance — e.g. an undirected edge sorts its endpoints to `(min, max)`; dense IDs then come from `rank`. Build-time value invention. See RFC semiring-faq-unified-ir §5.7. |
-| `rank` | — | Assign a dense 0-based ID to each element by its position in the sorted `distinct` sequence of the input. Build-time. See RFC §5.7. |
-| `argmin`, `argmax` | `output_idx`, `expr`, `arg` | Index-returning reductions: the index at which the aggregated body attains its minimum / maximum over the contracted index set. |
-| `intersect_polygon` | `manifold` | Geometry kernel leaf: the clipped intersection polygon of two cells (a ring of data-dependent length), composed with a `polygon_area` `sum_product` FAQ for conservative regridding (§8.6). |
-| `polygon_intersection_area` | `manifold` | Geometry kernel leaf returning the **scalar** overlap area of two cells — the fused `polygon_area ∘ intersect_polygon`. Exposes no ragged clip ring, so a per-pair overlap-area factor `A_ij = polygon_intersection_area(src_i, tgt_j)` is a dense, evaluable `faq` (§8.6.1). |
 | `true` | — (`args: []`) | Nullary boolean-literal constant — e.g. an always-true join / `filter` predicate. |
 | `false` | — (`args: []`) | Nullary boolean-literal constant, the counterpart of `true`. In a numeric position the literals are `1` and `0`, the encoding every comparison produces. |
 
-**Composition (informative): `argmin` / `argmax`.** An arg-witness reducer over a dense candidate range is expressible in the core AST, and the standard library carries that expression: `lib/relational.esm` is a template-library file (§9.7.1) whose match-less templates `argmin(f, n)` and `argmax(f, n)` take the candidate value `f`, written over the template's loop symbol (`k_argmin_1`, `k_argmax_1`) in place of the op's `arg`, and the candidate count `n` as a `ranges` bound (§9.6.1). Each body is two `faq` reductions, `m = min_k f(k)` (`max` for `argmax`) and then `min_k ifelse(f(k) == m or (f(k) != f(k) and m != m), k, n + 1)`, so the result is the smallest index attaining the extremum, which is the tie-break of RFC semiring-faq-unified-ir §5.7 rule 6. Because a NaN term makes a `min`/`max` reduction NaN (§4.2, Elementary Functions), a NaN candidate wins at its first occurrence; the op instead compares with `<` / `>` from the first candidate on, so it skips a NaN candidate after the first, and the two differ only there. The template returns `+Inf` for `n = 0` where the op refuses an empty candidate set, and it has no `join` or `filter`, so a candidate set gated on `skolem` keys has no template form. On the scenarios of `tests/conformance/relational_templates/` the template returns the op's index (NaN cases aside). The `argmin` / `argmax` ops are unchanged.
+**Arg-witnesses: `argmin` / `argmax` templates.** `lib/relational.esm` is a template-library file (§9.7.1) whose match-less templates `argmin(f, n)` and `argmax(f, n)` take the candidate value `f`, written over the template's loop symbol (`k_argmin_1`, `k_argmax_1`), and the candidate count `n` as a `ranges` bound (§9.6.1). Each body is two `faq` reductions, `m = min_k f(k)` (`max` for `argmax`) and then `min_k ifelse(f(k) == m or (f(k) != f(k) and m != m), k, n + 1)`, so the result is the smallest index attaining the extremum (RFC semiring-faq-unified-ir §5.7 rule 6). Because a NaN term makes a `min`/`max` reduction NaN (§4.2, Elementary Functions), a NaN candidate wins at its first occurrence. The templates return `+Inf` for `n = 0`. `argmin_where(f, p, n)` / `argmax_where(f, p, n)` restrict the candidates to those passing the predicate `p` (the `filter` of both reductions) and return `n + 1` when none passes, which is the form of an arg-witness gated by a `join`.
 
-**Composition (informative): keys, ranks and gated arg-witnesses.** `lib/relational.esm` also carries the pure-AST forms of the other relational ops. A composite key is a scalar integer: `pair_key(a, b, lo_a, lo_b, n_a, n_b) = (a − lo_a)·n_b + (b − lo_b)` for `a ∈ [lo_a, lo_a + n_a)` and `b ∈ [lo_b, lo_b + n_b)`, NaN otherwise (or for a non-integral component), exact while `n_a·n_b ≤ 2^53`; it keeps equality and the lexicographic order of the pairs, so a `distinct` over these keys yields the members, in the order, that a two-component `skolem` key would. `edge_key(u, v, lo, n)` is `pair_key` of `(min(u, v), max(u, v))`, the undirected key. A key read only as a `join.on` column is written instead as one integer column per component, with one `on` pair per component. `rank_of(x, members, n) = 1 + Σ_k ifelse(members[k] ≥ x, 0, 1)` is the 1-based rank of a key among `n` ascending members, `rank_of_set(x, members, S)` the same over the index set `S` (`{"from": S}`, §9.6.1) — a derived set's `member_factor` array, whose size is known only after value invention — and the rank of a set's own member is its loop index. `argmin_where(f, p, n)` / `argmax_where(f, p, n)` restrict the candidates to those passing the predicate `p` (the `filter` of both reductions) and return `n + 1` when none passes, which is the form of an arg-witness gated by a `join`. A value-invention layer accepts a `distinct` `key` that is any integer-valued expression and a `join.on` column that is a plain observed over constant factors; a NaN in either is `value_invention_key_out_of_range` (§9.6.6). The `skolem` and `rank` ops are unchanged; `tests/conformance/relational_templates/rewrites/` holds the template form of every fixture that uses them.
+**Keys and ranks.** A composite key is a scalar integer: `pair_key(a, b, lo_a, lo_b, n_a, n_b) = (a − lo_a)·n_b + (b − lo_b)` for `a ∈ [lo_a, lo_a + n_a)` and `b ∈ [lo_b, lo_b + n_b)`, NaN otherwise (or for a non-integral component), exact while `n_a·n_b ≤ 2^53`; it keeps equality and the lexicographic order of the pairs, so a `distinct` over these keys yields the pairs in lexicographic order. `edge_key(u, v, lo, n)` is `pair_key` of `(min(u, v), max(u, v))`, the undirected key. A key read only as a `join.on` column is written instead as one integer column per component, with one `on` pair per component. `rank_of(x, members, n) = 1 + Σ_k ifelse(members[k] ≥ x, 0, 1)` is the 1-based rank of a key among `n` ascending members, `rank_of_set(x, members, S)` the same over the index set `S` (`{"from": S}`, §9.6.1) — a derived set's `member_factor` array, whose size is known only after value invention — and the rank of a set's own member is its loop index. A value-invention layer accepts a `distinct` `key` that is any integer-valued expression and a `join.on` column that is a plain observed over constant factors; a NaN in either is `value_invention_key_out_of_range` (§9.6.6).
 
 ### 4.3 Array / Tensor Semantics
 
 Earth-system models frequently need to serialize operations on arrays and tensors — discretized PDEs, matrix multiplies, stencils, index contractions, block assemblies. The array ops listed in Section 4.2 cover these cases. Their data model mirrors [`SymbolicUtils.jl`](https://github.com/JuliaSymbolics/SymbolicUtils.jl)'s `ArrayOp` and `ArrayMaker` (see `src/types.jl`, `src/arrayop.jl`, `src/arraymaker.jl`).
 
-**Implicit dimensions.** Array ops use an *implicit* dimension model: there is no per-variable `dimensions` field on schema variables. Index symbols are local to the enclosing `faq` node, and lengths are resolved at runtime from the declared `index_sets` and the shapes of the operand arrays. A given string can be a variable reference in most contexts but serves as an index symbol inside `faq.output_idx`, `faq.expr`, and `faq.ranges` keys. Callers must not rely on cross-node scoping of index symbols. **Shadowing (normative).** A name a node binds as a loop symbol — an `output_idx` entry, a `ranges` key, or an `integral`'s `int_var` — denotes that loop index everywhere inside the node's children (`expr`, `filter`, `key`, range bounds, an integrand and any nested node), whatever the node's `op` (`faq`, `argmin`, `argmax`, `integral`, …), even when the component holding the expression declares a variable, parameter or species of the same name: the binder shadows the declaration there. A nested node that rebinds the name shadows it again, and outside the binding node the name keeps its ordinary meaning. Only a bare name is shadowed: a dotted reference such as `j.x` is never a loop index, so its first segment still resolves against the component's declarations (a subsystem `j`) inside a node that binds `j`. So in a model declaring a parameter `j`, the `j` in `faq(output_idx: ["j"], expr: index(u, j))` is the loop index and the `j` in a sibling term `-j * y` is the parameter. Every transform that resolves names against a component's declarations MUST honor this, flattening's dot-namespacing (esm-libraries-spec §4.7.5 step 2) in particular: it prefixes the parameter reference and leaves the bound occurrence as written. (`tests/scoping/index_symbol_shadows_variable.esm`, pinned by the flatten conformance corpus.)
+**Implicit dimensions.** Array ops use an *implicit* dimension model: there is no per-variable `dimensions` field on schema variables. Index symbols are local to the enclosing `faq` node, and lengths are resolved at runtime from the declared `index_sets` and the shapes of the operand arrays. A given string can be a variable reference in most contexts but serves as an index symbol inside `faq.output_idx`, `faq.expr`, and `faq.ranges` keys. Callers must not rely on cross-node scoping of index symbols. **Shadowing (normative).** A name a node binds as a loop symbol — an `output_idx` entry, a `ranges` key, or an `integral`'s `int_var` — denotes that loop index everywhere inside the node's children (`expr`, `filter`, `key`, range bounds, an integrand and any nested node), whatever the node's `op` (`faq`, `integral`, …), even when the component holding the expression declares a variable, parameter or species of the same name: the binder shadows the declaration there. A nested node that rebinds the name shadows it again, and outside the binding node the name keeps its ordinary meaning. Only a bare name is shadowed: a dotted reference such as `j.x` is never a loop index, so its first segment still resolves against the component's declarations (a subsystem `j`) inside a node that binds `j`. So in a model declaring a parameter `j`, the `j` in `faq(output_idx: ["j"], expr: index(u, j))` is the loop index and the `j` in a sibling term `-j * y` is the parameter. Every transform that resolves names against a component's declarations MUST honor this, flattening's dot-namespacing (esm-libraries-spec §4.7.5 step 2) in particular: it prefixes the parameter reference and leaves the bound occurrence as written. (`tests/scoping/index_symbol_shadows_variable.esm`, pinned by the flatten conformance corpus.)
 
 #### 4.3.1 `faq`
 
@@ -1023,7 +1045,7 @@ evaluated with each index taking every value in its inferred (or declared) range
 
 **Ragged ranges (normative).** A `ranges` entry MAY instead reference a declared index set, `{"from": <name>}` or `{"from": <name>, "of": [<parent symbols>]}` (RFC semiring-faq-unified-ir §5.2). When the named set is `kind: "ragged"`, its `offsets` factor gives the per-parent LENGTH `offsets[i]` — not a cumulative offset — and its `values` factor is a PADDED `[parent, max length]` array whose row `i` holds parent `i`'s members in positions `1..offsets[i]`; entries past `offsets[i]` are padding and are never read. The range symbol `k` of `{"from": <ragged set>, "of": ["i"]}` binds the **position** `k ∈ 1..offsets[i]`, never a member. A body that needs the member gathers it explicitly — `index(values, i, k)`, e.g. `index(dvEdge, index(edgesOnCell, i, k))` for MPAS. A `faq` whose range iterates a ragged set but whose body (`expr` and `filter`) never reads that set's `values` array — by its name, or by a scoped reference ending in it — MUST be rejected by `validate()` with `ragged_values_not_gathered` (§9.6.6): such a body reads positions where members were meant, which yields a plausible wrong number rather than a failure. The rule is not decided for a body that still holds an `apply_expression_template` reference (§9.6.4), whose expansion may perform the gather, nor for a set the document does not declare itself (a §9.7.10 agnostic leaf, whose registry arrives by injection). The reduction over a ragged range visits the positions `k = 1, 2, …, offsets[i]` in increasing order, the left fold `((t_1 ⊕ t_2) ⊕ t_3) ⊕ …` of each row's own terms, as every other contraction does; a row with `offsets[i] = 0` reduces over the empty set and takes the semiring's additive identity, not an error. A binding may run each row over its own length (no dense padded box is implied) and must reach the same bits.
 
-**The one exception is value invention.** In a value-invention `faq` — `distinct: true`, a `skolem` `key`, or a `skolem` / `rank` / `distinct` / `argmin` / `argmax` body (RFC semiring-faq-unified-ir §5.5) — a range over a ragged set binds the member `values[i, k]` itself, so a symbol over `face_vertices` binds the vertex ids of its parent face. No gather is authored there and `ragged_values_not_gathered` does not apply. Positive control: `tests/valid/faq/ragged_member_gather.esm`; rejection: `tests/invalid/faq/ragged_values_not_gathered.esm`.
+**The one exception is value invention.** In a value-invention `faq` — one with `distinct: true` (RFC semiring-faq-unified-ir §5.5) — a range over a ragged set binds the member `values[i, k]` itself, so a symbol over `face_vertices` binds the vertex ids of its parent face. No gather is authored there and `ragged_values_not_gathered` does not apply. Positive control: `tests/valid/faq/ragged_member_gather.esm`; rejection: `tests/invalid/faq/ragged_values_not_gathered.esm`.
 
 **Shaped variables inside a `faq` are read through `index` (normative).** A `faq` names its axes by its range symbols, and its `expr` and `filter` are evaluated once per index tuple. A variable declared with a non-empty `shape` therefore has no meaning there as a whole array in an ELEMENTWISE position — an operand of an arithmetic, elementary, comparison, logical or conditional operator, or of a `broadcast` (the operators §4.3.4's alignment rule descends through) — because nothing says which of the node's symbols each of its axes is. The read MUST say so, `index(a_val, i)`; a bare `a_val` there MUST be rejected with `faq_bare_array_operand` (§9.6.6), by `validate()` in every binding at the containing expression field, and by every evaluating binding at build. `validate()` decides it on the equations as authored, from declared shapes, in every model and inline subsystem. The build decides it on the flattened system after template expansion and after the elementwise lift of §9.6.11, against the shape the build gives each variable — its declared `shape`, or, for a variable declared without one, the array shape its defining equation evaluates to — so a bare name a template binding delivers is refused too, unless the lift has given the application its per-element meaning. The rule reads declarations only: a name the node, or an enclosing node, binds as a loop symbol shadows the declaration and is not a variable read; an operand an op consumes whole under its own contract (an `index` base, a nested `faq`, a shape op, a closed-function or geometry argument) is not an elementwise read; a nested `faq` is checked against its own symbols; a template application (`apply_expression_template`) is opaque to `validate()`, so an array bound to one of its arguments is not a bare read there, and a binding that expands templates at load decides the rule on the authored form (it keeps, with each expansion, the fact that it came from an application, §9.6.11); and a variable an observed or recurrence definition's left-hand side names is not checked here, because a bare read of the variable being defined is a self-reference that `recurrence_not_wellfounded` (§4.3.1.1) or `observed_cycle` already reports. A derivative's left-hand side exempts nothing: no other rule reports the bare `y` in `D(y) ~ faq(…, expr: index(K, i, k) * y)`. A document that has to name the index it means cannot silently mean the wrong one (`tests/invalid/faq/bare_array_operand_filter.esm`, `…_derivative.esm`, `…_subsystem.esm`, `…_beside_template.esm`; positive control `tests/conformance/faq_pointwise_filter/fixtures/indexed_filter_two_outputs.esm`).
 
@@ -1560,9 +1582,9 @@ The `index` base is a const array when it is **either** a `const` node written i
 
 **Meaning.** `{ "op": "broadcast", "fn": F, "args": A }` denotes exactly what `{ "op": F, "args": A }` denotes, applied element-wise over the broadcast operands. That equivalence is the whole definition, and it settles the ONE-OPERAND case: a `broadcast` with a single operand applies `fn` **unarily**. `broadcast(fn: "-", [x])` is `-x`, `broadcast(fn: "log", [x])` is `log(x)`, and `broadcast(fn: "+", [x])` is `x` — for the same reason the bare `{"op": "+", "args": [x]}` node is `x`, because `+` is n-ary from one operand. A one-operand `broadcast` MUST NOT be treated as the identity on its operand: that discards `fn`, and a binding that folds `args` through a binary kernel degenerates to exactly that on a single-element list.
 
-The `fn` value must name a **scalar operator** — one whose meaning is a pointwise map from scalar operands to a scalar result: the §4.2 arithmetic (`+ - * / ^ neg`), elementary functions (`exp log log10 sqrt abs sign floor ceil`, the trigonometric and hyperbolic families, `atan2`, `min`, `max`), comparisons (`== != < <= > >=`), logical connectives (`and or not`), and `ifelse`. It may NOT name an op whose meaning is not pointwise — the array/tensor ops (`faq`, `makearray`, `index`, `reshape`, `transpose`, `concat`, and `broadcast` itself), the closed-registry invocation `fn`, the form ops (`D`, `ic`, `Pre`, `const`, `true`, `false`, `enum`, `table_lookup`, `apply_expression_template`), or the relational and geometry ops.
+The `fn` value must name a **scalar operator** — one whose meaning is a pointwise map from scalar operands to a scalar result: the §4.2 arithmetic (`+ - * / ^ neg`), elementary functions (`exp log log10 sqrt abs sign floor ceil`, the trigonometric and hyperbolic families, `atan2`, `min`, `max`), comparisons (`== != < <= > >=`), logical connectives (`and or not`), and `ifelse`. It may NOT name an op whose meaning is not pointwise — the array/tensor ops (`faq`, `makearray`, `index`, `reshape`, `transpose`, `concat`, and `broadcast` itself) or the form ops (`D`, `ic`, `Pre`, `const`, `true`, `false`, `enum`, `apply_expression_template`).
 
-**Validation.** A schema-valid `broadcast` node must carry an `fn` naming a scalar operator as defined above, applied to a number of `args` that operator admits under its §4.2 arity (so `broadcast(fn: "min", [x])` and `broadcast(fn: "sin", [a, b])` are rejected for exactly the reason the bare `min(x)` and `sin(a, b)` nodes are). Bindings **MUST emit an `invalid_broadcast_fn` error** when this invariant is violated — including when `fn` is absent, for which there is no default; **loading MUST fail**. This mirrors the §4.4 rule for `fn`-node names: an operator name that no binding can resolve must never reach an evaluator, because the failure is otherwise silent.
+**Validation.** A schema-valid `broadcast` node must carry an `fn` naming a scalar operator as defined above, applied to a number of `args` that operator admits under its §4.2 arity (so `broadcast(fn: "min", [x])` and `broadcast(fn: "sin", [a, b])` are rejected for exactly the reason the bare `min(x)` and `sin(a, b)` nodes are). Bindings **MUST emit an `invalid_broadcast_fn` error** when this invariant is violated — including when `fn` is absent, for which there is no default; **loading MUST fail**. An operator name that no binding can resolve must never reach an evaluator, because the failure is otherwise silent.
 
 Broadcasts do not fuse: a nested expression of broadcasts decomposes into primitive broadcast nodes. Runtimes are free to apply their own fusion.
 
@@ -1613,42 +1635,16 @@ The following are intentionally *not* represented in the schema:
 - Broadcast fusion — handled by the runtime, not the serialization.
 - The `term` optimization hint on `SymbolicUtils.ArrayOp` (a pre-computed array-valued form used to short-circuit codegen). It is an optimization cache, not part of the mathematical semantics, and is recomputed at load time.
 
-### 4.4 Closed Function Invocation (`fn`)
+### 4.4 (Removed at 2.0.0: closed function invocation)
 
-The `fn` op invokes a function from the **closed function registry** defined in Section 9. The set of valid `name` values is fixed by the spec version: bindings MUST reject `fn` nodes whose `name` is not in the registry for the file's declared `esm` version. There is no per-file declaration of new functions and no `handler_id` lookup. See `docs/content/rfcs/closed-function-registry.md` for the rationale and addition process.
-
-Fields:
-
-- `op`: `"fn"`.
-- `name`: string. Dotted module path of a function declared in Section 9 (e.g. `"datetime.julian_day"`, `"interp.searchsorted"`).
-- `args`: array of sub-expressions. Evaluated in the current context and passed positionally to the named function.
-
-**Semantics.** `name` resolves at load time to a spec-pinned implementation contract — argument types, return type, boundary semantics, and tolerance are defined in the registry entry (Section 9). Each binding ships a built-in implementation that satisfies the contract; the conformance suite verifies cross-binding agreement against per-function reference outputs. The return value takes the place of the `fn` node in the enclosing expression. All registry entries are **pure**: same inputs → same output, no hidden state.
-
-**Validation.** A schema-valid `fn` node must carry a `name` listed in the §9 registry table for the file's `esm` version. Bindings MUST emit an `unknown_closed_function` error when this invariant is violated; loading MUST fail. Argument arity and type compatibility are checked against the registry entry's signature.
-
-**Example — Julian day from UTC time:**
+The `fn` op and its closed function registry are removed (§4.2, "Removed ops"). A
+calendar field or an interpolation is a standard-library template (§9.7.1), imported
+into the component and applied by name:
 
 ```json
-{
-  "op": "fn",
-  "name": "datetime.julian_day",
-  "args": ["t_utc"]
-}
-```
-
-**Example — table search as a categorical index:**
-
-```json
-{
-  "op": "index",
-  "args": [
-    "deposition_table",
-    { "op": "fn",
-      "name": "interp.searchsorted",
-      "args": ["sza", { "op": "const", "value": [0.0, 0.5, 1.0, 1.5] }] }
-  ]
-}
+"expression_template_imports": [{ "ref": "esm:std/calendar.esm", "only": ["day_of_year"] }],
+...
+{ "op": "apply_expression_template", "args": [], "name": "day_of_year", "bindings": { "t": "t_utc" } }
 ```
 
 ### 4.5 Enum References (`enum`)
@@ -2030,7 +2026,7 @@ Three outcomes, and only three. The distinction that matters is between *"the fi
 
 Two consequences follow, and both have been violated in this repository:
 
-1. **An undeterminable dimension MUST NOT be reported as dimensionless.** Returning "dimensionless" for an op the checker does not model manufactures *false* mismatches against real, well-formed files — every structural op the checker has no rule for (`fn`, `table_lookup`, `skolem`, `rank`, a rewrite-target op, …) would poison the equation containing it. Return "unknown" and skip. The array operators `index`, `reshape`, `transpose`, `concat`, `makearray`, `broadcast` and `faq` are NOT in this class: they have rules (§4.8.3), and where a rule has nothing to read a unit from — an `index` with no operand, a `makearray` with no determinable region, an `faq` whose ⊕ is `*` over a dimensional body — the answer is "unknown", never dimensionless.
+1. **An undeterminable dimension MUST NOT be reported as dimensionless.** Returning "dimensionless" for an op the checker does not model manufactures *false* mismatches against real, well-formed files — every structural op the checker has no rule for (a rewrite-target op, …) would poison the equation containing it. Return "unknown" and skip. The array operators `index`, `reshape`, `transpose`, `concat`, `makearray`, `broadcast` and `faq` are NOT in this class: they have rules (§4.8.3), and where a rule has nothing to read a unit from — an `index` with no operand, a `makearray` with no determinable region, an `faq` whose ⊕ is `*` over a dimensional body — the answer is "unknown", never dimensionless.
 2. **An incomplete registry MUST NOT be papered over by downgrading the severity.** If a binding cannot parse `J/(mol*K)` or does not know `V`, the fix is the parser and the registry — *not* re-classifying an unresolvable unit as a warning, and not coercing it to dimensionless. Both of those turn a missing feature into a silently-disabled check across every file in the corpus.
 
 An error is reported at the **JSON Pointer of the node that carries the defect** — `/models/<M>/equations/<i>` for an equation, `/models/<M>/variables/<v>` for a declaration, `/reaction_systems/<S>/reactions/<i>` for a rate.
@@ -2186,7 +2182,7 @@ two).
 A key of a declaration map MUST NOT contain a NUL or any other C0 control
 character (U+0000–U+001F) or DEL (U+007F). The declaration maps are the
 top-level `models`, `reaction_systems`, `data_sources`, `enums`,
-`function_tables`, `index_sets`, `coordinates`, `expression_templates` and
+`index_sets`, `coordinates`, `expression_templates` and
 `coupling_roles`, each component's `variables`, `species`, `parameters`,
 `subsystems` and `expression_templates`, and a `metaparameters` block. Such a
 name cannot be written in the expression syntax (§4.1). A reference to it is
@@ -2241,7 +2237,7 @@ A checker MUST resolve the free symbols of **every** Expression in the document,
 
 **The set of DECLARATION sites must be complete, or this rule turns into false REJECTS.** A name resolves if it is declared in `models[M].variables`, is a species of a reaction system, is bound by an enclosing construct (a `faq`/`integral` index or bound `var`, a `dim` name), **or is injected by a `callback` coupling entry — `coupling[i].config.callback_variables[j].name` IS a declaration site.** And there are **no bare/undeclared names**: a forcing field delivered by the host at runtime MUST still be declared — as a `parameter` carrying the `update` that supplies it (§5.4). An undeclared forcing name is indistinguishable from a typo — which is exactly the false negative this section closes — so the escape hatch cannot coexist with the rule.
 
-**And within an Expression, the walk MUST descend every child field, not just `args`.** An `ExpressionNode` carries eight further Expression-valued children: `expr`, `filter`, `key` (`faq`), `lower`, `upper` (integral bounds), `values` (makearray), `axes` (table_lookup) and `bindings` (apply_expression_template). A hand-rolled walker that recurses `args` alone misses an undefined name in any of them *even inside an equation*. (`ranges` and `regions` carry load-time metaparameter/index expressions rather than runtime variable references, and are a separate concern — §9.7.6.)
+**And within an Expression, the walk MUST descend every child field, not just `args`.** An `ExpressionNode` carries seven further Expression-valued children: `expr`, `filter`, `key` (`faq`), `lower`, `upper` (integral bounds), `values` (makearray) and `bindings` (apply_expression_template). A hand-rolled walker that recurses `args` alone misses an undefined name in any of them *even inside an equation*. (`ranges` and `regions` carry load-time metaparameter/index expressions rather than runtime variable references, and are a separate concern — §9.7.6.)
 
 **`join` is the mixed case, and the distinction is load-bearing.** A `join` clause holds no Expression children at all — it is an object of plain strings — so the walk above has nothing to descend into there. But those strings are **not** structural metadata: an `overlap` clause's `src_env` / `tgt_env` name const-array **factor variables**, and an `on` key column MAY name a declared component-local buffer. They are variable references that merely happen to be *encoded as strings*; they resolve against the same variable registry every other reference does, and flattening therefore dot-namespaces them under a declared-local gate — normatively, **CONFORMANCE_SPEC §5.5.6**. What keeps them out of *this* section's undefined-name rule is not that they are non-references but that an `on` column is **polymorphic**: a loop symbol bound by the enclosing `ranges`, a document-scoped index set (§9.7.5), or a declared local variable — and only the last of the three lives in the variable namespace. Handing every join string to the free-symbol walk would therefore manufacture false rejects, which is precisely the failure mode this section exists to prevent. A binding MAY diagnose a join name that resolves nowhere, but it must do so against the variable **and** index-set registries under that gate, not through this walk.
 
@@ -2621,8 +2617,8 @@ interpolating a lookup, implementing control logic. These reference a
 
 Since ESM is language-agnostic, a handler cannot embed executable code; it
 references a `handler_id` that the runtime resolves. Handlers are intentionally
-*out of scope* for the §9 closed function registry: they mutate simulator state
-at update time, while §9 entries are pure expression-embedded callables.
+kept out of expressions: they mutate simulator state at update time, while an
+expression is a pure tree of §4.2 operators.
 `handler_id` is the sole remaining registration mechanism in the format.
 
 A handler needs no list of what it writes. It writes exactly one thing: the
@@ -2988,9 +2984,8 @@ subscript (`y[i+1] ~ …`), subscripts the `faq` does not bind in order, a neste
 gather (`index(index(V, j), k)`, which addresses a cell of a cell), and a rank
 disagreement. In each of those nothing binds the range, and filling the array
 from the declared shape, or writing a shifted window, would be a guess this
-rule does not make. Value-invention outputs (a `skolem`, `distinct` or `rank`
-producer, or an arg-witness reducer) are materialized by their own engine and
-are outside this rule. CONFORMANCE_SPEC.md §5.36.2 gates both halves.
+rule does not make. Value-invention outputs (a `distinct` producer) are
+materialized by their own engine and are outside this rule. CONFORMANCE_SPEC.md §5.36.2 gates both halves.
 
 **Parameters.** These four sets **partition** the parameters:
 
@@ -4180,111 +4175,70 @@ weights. The kernels map cleanly:
 
 - **conservative** (area-weighted, mass-conserving): the per-pair overlap area
   `A_ij = area(src_i ∩ tgt_j)`, then a `sum_product` apply normalized by a
-  group-by row-sum. `A_ij` has two spellings (§8.6.1): the explicit
-  `polygon_area` `sum_product` FAQ over the `intersect_polygon` clip ring, or the
-  fused `polygon_intersection_area` scalar leaf (the densely-evaluable form).
+  group-by row-sum. `A_ij` is a standard-library overlap-area template applied
+  in a dense `faq` over candidate pairs (§8.6.1).
 - **B-spline / bilinear** (interpolating): a `sum_product` over an interpolation
   stencil whose weights are an ordinary FAQ of the source coordinates.
-- **cell-averaging** (scattered points → cells): a bin/`skolem` spatial join
+- **cell-averaging** (scattered points → cells): a bin-key spatial join
   followed by a `sum_product` mean, with a `missing_value` fill expressed as an
   `ifelse` over the per-cell contributor count.
 
-None of this needs schema support beyond `faq` and the geometry leaves
-(`intersect_polygon`, `polygon_intersection_area`): a regridding rule is a normal
+None of this needs schema support beyond `faq` and expression templates: a
+regridding rule is a normal
 coupling expression, authored inline or referenced as an ESD subsystem. The
 carrier is the `variable_map` entry's `transform` field, which admits a full
 Expression alongside the legacy named transforms (§10.4 defines the evaluation
 contract; §10.5 shows the spelling — typically an `apply_expression_template`
 invocation of an imported overlap-weight library, expanded at load per §9.6.4).
 
-#### 8.6.1 Evaluating the overlap weights: the `polygon_intersection_area` leaf
+#### 8.6.1 Evaluating the overlap weights: the overlap-area templates
 
 A conservative regrid has two phases. The **broad phase** finds which
-`(src_i, tgt_j)` pairs can overlap — a bin/`skolem` spatial join
-(`floor(coord/dx)` → `skolem` bin key → `distinct` → `join.on` shared bin) that
+`(src_i, tgt_j)` pairs can overlap — a bin spatial join (`floor(coord/dx)` →
+integer bin key (`pair_key`, §4.2) → `distinct` → `join.on` shared bin) that
 produces a sparse `candidate_pairs` index set. This phase is required in
 production: it keeps the regrid `O(#overlaps)` rather than `O(N_src·N_tgt)`. It
-is **build-time value invention** (`skolem`/`distinct`/`rank`), run once when the
-regridder is constructed.
+is **build-time value invention** (§4.3.1), run once when the regridder is
+constructed.
 
-The **narrow phase** computes the overlap area of each candidate pair. Written
-with the general `intersect_polygon` leaf, the clip returns an intersection ring
-whose vertex count is **data-dependent** — a `derived` (`from_faq`) index set of
-per-pair-varying length — and `polygon_area` is an ordinary `sum_product` FAQ
-over that ring. Because the ring extent is ragged and differs per pair, the
-*full-mesh* narrow phase in that form is **not a dense tensor contraction**: it
-is declared structurally but cannot be walked by the dense evaluator (only a
-single fixed-extent clip can). This is the status the worked fixture
-`conservative_regrid_overlap_join.esm` documents.
-
-The `polygon_intersection_area` leaf removes that obstacle. It is the **fused,
-opaque** form of `polygon_area ∘ intersect_polygon`: it takes the two operand
-polygons plus a required `manifold` and returns the **scalar** overlap area
-directly, hiding the clip ring inside the kernel (never surfacing it as an index
-set). Its value is defined to equal `polygon_area(intersect_polygon(a, b))` at
-the same manifold and tolerance, so cross-binding agreement is inherited from its
-two constituent kernels — exactly the `interp.linear` / `interp.bilinear`
-fused-leaf pattern of §9.2 (a named opaque op standing in for an AST composition
-whose intermediate is problematic, here ragged rather than merely verbose). With
-it, the narrow phase over the candidate set is an ordinary **dense** `faq`:
+The **narrow phase** computes the overlap area of each candidate pair with a
+standard-library template. `lib/geometry.esm` is a template-library file (§9.7.1)
+whose match-less templates
+`overlap_area_planar(ring_a, cell_a, nv_a, ring_b, cell_b, nv_b)` and
+`overlap_area_spherical(ring_a, cell_a, nv_a, ring_b, cell_b, nv_b)` return the
+overlap area of two convex cells with straight edges in the coordinate plane
+(squared coordinate units) and with great-circle edges on the unit sphere
+(steradians). Each operand is cell `cell` of a ring stack (`[cells, nv, 2]`
+lon-lat or x-y on the plane, `[cells, nv, 3]` unit vectors on the sphere, built
+once per cell with the library's `lonlat_to_unit(ring, cell, vert, comp)`, which
+takes lon-lat in degrees), and the vertex-slot count `nv` is an integer used as a
+`faq` `ranges` bound (§9.6.1). A template call therefore sits directly in the
+dense narrow-phase `faq` over candidate pairs:
 
 ```
-A_ij[i, j] = polygon_intersection_area(src_poly_i, tgt_poly_j)     // over candidate_pairs
+A_ij[i, j] = overlap_area_spherical(src_ring, i, NV_SRC, tgt_ring, j, NV_TGT)     // over candidate_pairs
 ```
 
 carrying no ragged intermediate. The whole regrid — build-time candidate set,
 dense narrow-phase `A_ij`, group-by row-sum `A_j`, and the `sum_product` apply
-`F_tgt[j] = Σ_i (A_ij / A_j)·F_src[i]` — is then evaluable end to end, with only
+`F_tgt[j] = Σ_i (A_ij / A_j)·F_src[i]` — is evaluable end to end, with only
 the candidate-set construction living in the build-time value-invention layer.
+Under the spherical template every edge, including a lon-lat edge running along
+a parallel (a small circle), is a great-circle arc.
 
-Keep both leaves: `intersect_polygon` when the overlap **geometry** itself is
-needed (a centroid, a higher moment, or the ring fed onward), and
-`polygon_intersection_area` for the dominant area-weight case, where only the
-scalar area matters. `polygon_intersection_area` carries the same required
-`manifold` field and the same tolerance-based conformance contract as
-`intersect_polygon` (CONFORMANCE_SPEC §5.8.4).
+**Rings.** Rings close implicitly (edge `n → 1`), may run either way round, and
+may carry exactly repeated vertices: an explicit closing duplicate, or the
+rectangular-storage padding a mixed-valence mesh needs (an MPAS pentagon stored
+in a hexagon-shaped `[cells, NVERT, 2]` stack repeats its last vertex to fill the
+fixed `NVERT` slots). A repeated vertex makes a zero-length edge, which
+contributes exactly zero and bounds nothing, so a padded ring gives the bits of
+its unpadded form. The templates take convex cells; non-convex input is outside
+their contract and is not rejected, and a ring of no extent (every vertex on one
+line or point) gives `0`.
 
-**Operand rings, padding, and degenerate vertices.** Each polygon operand of
-`intersect_polygon` / `polygon_intersection_area` is an `[verts, 2]` lon-lat
-vertex array with **implicit closure** (edge `n→1` implied). Two departures
-from the plain distinct-vertex ring MUST be accepted by every binding:
-
-1. **Explicit closure** — a closing duplicate final vertex
-   (`ring[last] == ring[first]`) is dropped.
-2. **Consecutive duplicate vertices** — in particular trailing repeats of the
-   final vertex. This is the rectangular-storage padding a mixed-valence mesh
-   requires: an MPAS pentagon stored in a hexagon-shaped `[cells, NVERT, 2]`
-   ring stack repeats its last vertex to fill the fixed `NVERT` slots, so the
-   dense narrow-phase `A_ij` `faq` can gather per-cell rings of uniform
-   extent.
-
-A binding MUST evaluate such a ring as its **deduplicated** form: consecutive
-duplicates (wrap pair included) are removed under the shared point-equality
-tolerance (`atol 1e-8`, `rtol 1e-5` — the `np.allclose` defaults all bindings
-pin), and the op's value MUST equal the same op over the already-distinct ring.
-Deduplication is the **binding kernel's** job, performed in its operand
-coercion *before* the backend clip — never delegated to the backend and never
-imposed on the caller — because backend tolerance differs: a zero-length edge
-is a no-op for a Sutherland–Hodgman half-plane pass but a **rejected degenerate
-edge for S2** (the Python/Rust spherical backend). A ring with fewer than 3
-*distinct* vertices after deduplication is a degenerate operand and is
-rejected (the existing ≥3-distinct-vertices operand error). `intersect_polygon`
-returns its overlap ring in the same normal form — distinct vertices, implicit
-closure — on every manifold.
-
-**Composition (informative).** For convex cells the overlap area is also
-expressible in the core AST, and the standard library carries that expression:
-`lib/geometry.esm` is a template-library file (§9.7.1) whose match-less templates
-`overlap_area_planar(ring_a, cell_a, nv_a, ring_b, cell_b, nv_b)` and
-`overlap_area_spherical(...)` stand for `polygon_intersection_area` with
-`manifold: "planar"` and with `"spherical"` / `"geodesic"` (areas in steradians).
-Each operand is cell `cell` of a ring stack (`[cells, nv, 2]` lon-lat on the plane,
-`[cells, nv, 3]` unit vectors on the sphere, built once per cell with the
-library's `lonlat_to_unit`), and the vertex-slot count `nv` is an integer used as
-a `faq` `ranges` bound (§9.6.1), so a template call sits directly in the dense
-narrow-phase `faq` over candidate pairs. By Green's theorem the overlap is the sum
-over every edge of each polygon of its boundary contribution restricted to the
-part inside the other polygon, which for convex cells is one chord-parameter
+**Definition (informative).** By Green's theorem the overlap is the sum over
+every edge of each polygon of its boundary contribution restricted to the part
+inside the other polygon, which for convex cells is one chord-parameter
 interval:
 
 ```jsonc
@@ -4296,24 +4250,13 @@ interval:
 // s = the edge's polygon's orientation sign, O = the first vertex of ring_a
 ```
 
-A repeated vertex (the explicit closing duplicate or the rectangular-storage
-padding above) makes a zero-length edge, which contributes exactly zero and bounds
-nothing, so the template needs no deduplication step and a padded ring gives the
-bits of its unpadded form. A half-plane test counts a point as on the line when
-its signed value `g` satisfies `|g| ≤ 1e-12 · L1(b − a) · (L1(p) + L1(q) + L1(a))`
-on the plane (edge `p → q` tested against the line of edge `a → b`, `L1` the sum of
-absolute coordinates) and `|g| ≤ 1e-14` on the sphere (`g = (a × b) · p` over unit
+A half-plane test counts a point as on the line when its signed value `g`
+satisfies `|g| ≤ 1e-12 · L1(b − a) · (L1(p) + L1(q) + L1(a))` on the plane (edge
+`p → q` tested against the line of edge `a → b`, `L1` the sum of absolute
+coordinates) and `|g| ≤ 1e-14` on the sphere (`g = (a × b) · p` over unit
 vectors). An edge shared by both cells counts once when the two run the same way
 and not at all when they run opposite ways, so cells of one grid (identical,
-adjacent, corner-touching) come out exact. The template agrees with the leaf
-within the CONFORMANCE_SPEC §5.8.2 tolerance on the cell pairs of every polygon and
-regridding fixture (`tests/conformance/geometry_templates/pairs.json`). It does not
-carry the leaf's operand checks, and three behaviours differ from the leaf by
-design: a ring of no extent (every vertex on one line or point, a zero fan sum)
-gives `0` rather than the degenerate-operand error; non-convex input is outside
-the contract and is not rejected; and distinct vertices closer than the leaf's
-`np.allclose` point-equality tolerance are not merged (only exactly repeated
-vertices are padding).
+adjacent, corner-touching) come out exact.
 
 ### 8.7 Out of scope
 
@@ -4601,195 +4544,37 @@ Without `extent` the count has to reach the engine some other way, and the only
 other way is a caller that reads the file first and passes a number in — which is
 the model-shaped runner code this field exists to delete.
 
-## 9. Closed Function Registry
+## 9. Enums and Expression Templates
 
-### 9.1 Closed-set principle
+This section defines the `enums` block (§9.3), expression templates (§9.6) and template
+libraries (§9.7). §9.1, §9.2, §9.4 and §9.5 held the closed function registry and
+function tables, removed at 2.0.0; their numbers are kept so that references to the later
+subsections stay valid.
 
-Every callable that may appear inside an expression is drawn from this section's **closed registry**. There is no per-file declaration of new functions, no `handler_id` lookup, and no out-of-band runtime extension point. The set of valid `fn` `name` values is fixed by the spec version: bindings MUST reject any `fn` node whose `name` is not declared in §9.2 for the file's `esm` version, with diagnostic code `unknown_closed_function`. Loading MUST fail.
+### 9.1 (Removed at 2.0.0: closed-set principle)
 
-The closed-set rule is a deliberate constraint that recovers cross-binding bit-equivalence: an `.esm` file plus the spec version uniquely determines numerical behavior. The trade-off is that adding a primitive requires a spec rev (the addition process, deprecation policy, and compatibility-matrix discipline are described in `docs/content/rfcs/closed-function-registry.md` §7).
+There is no registry of callable functions (§1.1). A primitive that is not a §4.2 core op
+is a standard-library template.
 
-A function belongs in the closed registry **only** when **all three** of the following hold:
+### 9.2 (Removed at 2.0.0: v1 closed function set)
 
-- Not expressible in finite closed form using the §4.2 AST ops (powers, polynomials, `min`/`max`/`ifelse`/`sign`, trig / exp / log / sqrt, comparisons, n-ary arithmetic).
-- Has well-defined cross-binding semantics that the proposer can pin (formula, edge cases, tolerance).
-- There is no cleaner `data_sources` path: the function operates on inline scalars or small arrays passed via `const`, not on bulk gridded fields.
+Each closed function has a standard-library template of the same field, imported with
+`expression_template_imports` from the `esm:std/<file>.esm` form (§4.7) and applied with
+`apply_expression_template` (§9.6.2). The template bodies are their definitions;
+`docs/content/standard_library.md` describes them.
 
-Anything that fails one of these tests does not belong here. The §1.1 authoring policy MUST be enforced at review time.
+| Removed `fn` name | Template | Library |
+|---|---|---|
+| `datetime.year`, `.month`, `.day`, `.hour`, `.minute`, `.second`, `.day_of_year`, `.julian_day`, `.is_leap_year` | `year(t)`, `month(t)`, `day(t)`, `hour(t)`, `minute(t)`, `second(t)`, `day_of_year(t)`, `julian_day(t)`, `is_leap_year(t)` | `lib/calendar.esm` |
+| `interp.searchsorted(x, xs)` | `searchsorted(x, xs, n)` | `lib/interp.esm` |
+| `interp.linear(table, axis, x)` | `linear(table, axis, x, n)` | `lib/interp.esm` |
+| `interp.bilinear(table, axis_x, axis_y, x, y)` | `bilinear(table, axis_x, axis_y, x, y, nx, ny)` | `lib/interp.esm` |
 
-### 9.2 v1 closed function set
-
-The v1 set is intentionally narrow: calendar arithmetic on UTC time, plus a single search-into-sorted-table primitive that, composed with the existing `index` op, covers the categorical / interpolation lookups motivated in `docs/content/rfcs/closed-function-registry.md`. All real-valued time inputs are IEEE-754 `binary64` UTC seconds since the Unix epoch (1970-01-01T00:00:00Z, proleptic Gregorian, no leap-second consultation — the deliberate cross-binding contract). All integer outputs are signed 32-bit; bindings MUST raise `closed_function_overflow` if a result would overflow.
-
-#### `datetime.*` — calendar decomposition
-
-Decomposes a UTC scalar time into proleptic-Gregorian calendar fields. All entries are pure: same input → same output, no system-clock or timezone consultation. Bindings MUST use exact integer arithmetic on the decomposed `(date, time-of-day)` pair after a single floor-divmod by 86400: the day number is `floor(t_utc / 86400)` and the time of day is `t_utc − 86400·floor(t_utc / 86400)`, both taken exactly (as real numbers, not as rounded binary64 operations), so the time of day lies in `[0, 86400)`. `hour`, `minute` and `second` come from `floor(time of day)`; a fractional `t_utc` therefore floors toward −∞ and never rounds up into the next second. This guarantees per-binding agreement to the integer (zero ulp drift on the integer outputs, ≤ 1 ulp on `julian_day`, whose binary64 evaluation is pinned below).
-
-| Name | Arity | Args | Return | Range / convention |
-|---|---|---|---|---|
-| `datetime.year` | 1 | `t_utc: scalar [s]` | integer scalar | proleptic-Gregorian year (e.g. 2026) |
-| `datetime.month` | 1 | `t_utc: scalar [s]` | integer scalar (1..12) | 1 = January |
-| `datetime.day` | 1 | `t_utc: scalar [s]` | integer scalar (1..31) | day of month |
-| `datetime.hour` | 1 | `t_utc: scalar [s]` | integer scalar (0..23) | UTC hour |
-| `datetime.minute` | 1 | `t_utc: scalar [s]` | integer scalar (0..59) | UTC minute |
-| `datetime.second` | 1 | `t_utc: scalar [s]` | integer scalar (0..59) | UTC second (no leap-second slot) |
-| `datetime.day_of_year` | 1 | `t_utc: scalar [s]` | integer scalar (1..366) | 1 = Jan 1 |
-| `datetime.julian_day` | 1 | `t_utc: scalar [s]` | scalar | continuous Julian Date incl. fractional time-of-day |
-| `datetime.is_leap_year` | 1 | `t_utc: scalar [s]` | integer scalar (0 or 1) | 1 if the proleptic-Gregorian year of `t_utc` is a leap year, else 0 |
-
-**Boundary semantics:**
-
-- Negative `t_utc` (pre-1970) is supported. The proleptic-Gregorian calendar extends backwards without modification; `datetime.year` of a pre-1970 instant is the proleptic-Gregorian year (e.g. `1969`, `1900`, `-1` for 2 BC by ISO 8601 convention).
-- `datetime.julian_day` is the standard Julian Date (JD 0 = noon UTC on 4713 BC January 1, proleptic Julian calendar) for every `t_utc`: exactly `t_utc / 86400 + 2440587.5`. Its result MUST be the binary64 value of `(d + 2440588) + ((s − 43200) + (t_utc − floor(t_utc))) / 86400`, evaluated in that order from the exact split above, where `d = floor(t_utc / 86400)` is the day number and `s = floor(t_utc) − 86400·d` is the whole second of the day. `d + 2440588` and `s − 43200` are exact integers and `t_utc − floor(t_utc)` is exact in binary64 except when −0.5 < t_utc < 0 (there `1 + t_utc` can round), so beyond that subtraction only the inner addition, the division and the outer addition round; the result is within 1 ulp of the exact Julian Date. Bindings MAY use another computation that gives the same binary64 result. *Informative:* from −4800-03-01 on, the Fliegel–van Flandern (1968) integer formula (with truncating division) applied to the calendar date of `t_utc` equals `d + 2440588`. Before that date it differs by −2 to +1 days, and it is not the result there.
-- Every `datetime.*` function, whatever field it returns, MUST raise `closed_function_overflow` when the proleptic-Gregorian year of `t_utc` is outside the signed 32-bit range (before −2147483648-01-01T00:00:00Z, or at or after 2147483648-01-01T00:00:00Z), and when `t_utc` is NaN or ±Inf.
-- All other entries decompose using the rule that the calendar date is `floor(t_utc / 86400)` days after 1970-01-01, with `t_utc mod 86400` (floored, in `[0, 86400)`) giving the time-of-day seconds. Negative-modulo edge cases use Python-style floored division (so `floor(-1.0 / 86400) = -1` and `(-1.0) mod 86400 = 86399`). Fractional seconds are floored, never rounded: `59.9999999` is 00:00:59 of 1970-01-01, `86399.9999999` is 23:59:59 of 1970-01-01, and `-1e-7` is 23:59:59 of 1969-12-31.
-
-**Tolerance:** integer outputs are exact (zero error). `datetime.julian_day` is ≤ 1 ulp from the exact Julian Date.
-
-**Composition (informative):** on a bounded domain the nine `datetime.*` functions are expressible in the core AST, and the standard library carries those expressions: `lib/calendar.esm` is a template-library file (§9.7.1) whose match-less templates `year(t)`, `month(t)`, `day(t)`, `hour(t)`, `minute(t)`, `second(t)`, `day_of_year(t)`, `julian_day(t)` and `is_leap_year(t)` are their pure-AST definitions for finite `|t| < 2^52` s (about ±142 million years). Each takes the exact split above from `floor(t)`, which needs no correction step, and then runs Howard Hinnant's `civil_from_days` with every integer division written `floor(a / b)`; each step below is one `civil_*` helper template that the later steps call by reference (§9.7.3), and the library also carries `seconds_since_midnight(t)`, the guarded `s` in seconds:
-
-```jsonc
-// d = floor(floor(t) / 86400), s = floor(t) - 86400·d        (day number; whole second of the day)
-// hour = floor(s / 3600), minute = floor(s / 60) - 60·hour, second = s - 60·floor(s / 60)
-// z = d + 719468, era = floor(z / 146097), doe = z - 146097·era          (day of the 400-year era, from 0000-03-01)
-// yoe = floor((doe - floor(doe / 1460) + floor(doe / 36524) - floor(doe / 146096)) / 365)
-// doy = doe - (365·yoe + floor(yoe / 4) - floor(yoe / 100))               (day of the year from March 1)
-// mp = floor((5·doy + 2) / 153)                                           (month from March, 0..11)
-// day = doy - floor((153·mp + 2) / 5) + 1, month = mp + ifelse(mp < 10, 3, -9)
-// year = yoe + 400·era + ifelse(doy >= 306, 1, 0)                         (January and February: the next year)
-// day_of_year = doy + 60 + ifelse(doy >= 306, -365, leap(yoe)); is_leap_year = leap of the year modulo 400
-// julian_day = (d + 2440588) + ((s - 43200) + (t - floor(t))) / 86400    (the pinned formula, in that order)
-// every body: ifelse(abs(t) < 2^52, <body>, 0 / 0)
-```
-
-On that domain `floor(t)` is an integer of magnitude at most `2^52` and every intermediate is an integer below `2^53`, and the rounded quotient of two such integers has the exact floor, so each field is exact and equals the closed function's value bit for bit; `julian_day` is the pinned formula itself. Outside the domain, and for a NaN or infinite `t`, each template returns NaN where the closed function answers or raises `closed_function_overflow`; that includes years still inside the signed 32-bit range (`|t|` up to about `6.8e16` s), which only the `fn` form reaches. The second-valued constants are unit-bearing `const` nodes (§4.8.5), so `t` is checked as seconds and every field is dimensionless. `tests/closed_functions/datetime/*/template.esm` (the `datetime_templates` conformance tier) and each binding's closed-function harness check the expansions against the `fn` form. The `fn` functions stay.
-
-#### `interp.*` — search
-
-| Name | Arity | Args | Return |
-|---|---|---|---|
-| `interp.searchsorted` | 2 | `x: scalar, xs: const array[N]` | integer scalar (1..N+1) |
-
-**Semantics — `interp.searchsorted`:**
-
-Returns the 1-based index `i` of the first element of `xs` that is `≥ x` (left-side bias, equivalent to Julia's `searchsortedfirst`).
-
-- `xs` MUST be a `const`-op array of non-decreasing floats (equal neighbours allowed). Bindings MUST reject non-monotonic `xs` at load time with diagnostic `searchsorted_non_monotonic`.
-- Bindings MUST reject an `xs` that is not a rank-1 `const`-op array — a variable reference, a non-`const` expression, or a `const` whose `value` is a scalar or a nested array — at load time with diagnostic `interp_axis_not_const`, the code `interp.linear` and `interp.bilinear` raise for an axis that is not a `const` array (Errors, below). This check comes first: `searchsorted_nan` and `searchsorted_non_monotonic` are decided only on an `xs` that passes it.
-- `xs` MUST NOT contain NaN. Bindings MUST reject an `xs` containing a NaN entry at load time with diagnostic `searchsorted_nan`, and MUST check for NaN before monotonicity: an `xs` that contains a NaN is reported as `searchsorted_nan` whatever its other entries, never as `searchsorted_non_monotonic`. (A NaN compares false with every value, so whether a comparison-based monotonicity check passes or fails on it depends on how the check is written; checking NaN first makes the verdict independent of that.)
-- Equal values in `xs` (duplicates): the returned index is the **smallest** `i` for which `xs[i] ≥ x`. This makes the result deterministic on duplicate runs and lets authors compose searches (e.g. find the first interval containing `x` even when boundaries coincide).
-- Bindings MUST accept an empty `xs` (`[]`, `N = 0`): it is a rank-1 `const`-op array and trivially non-decreasing, so it passes every check above, and every query against it, a NaN `x` included, returns `N + 1 = 1`.
-- Out-of-range query: if `x ≤ xs[1]`, return `1`. If `x > xs[N]`, return `N + 1` (one past the end). Authors who need clamping wrap the result in `min(N, ...)` using the AST.
-- NaN `x`: result is `N + 1` (treated as "greater than every finite element"). NaN entries in `xs` are rejected at load (`searchsorted_nan`, above).
-
-**Tolerance:** exact (the returned index is integer; the comparison is the IEEE-754 `≥` predicate, which has no rounding tolerance).
-
-The `interp.searchsorted` primitive composes with the existing `index` op (§4.3.3) to express tabulated lookups: `{"op": "index", "args": ["table", {"op": "fn", "name": "interp.searchsorted", "args": ["x", {"op": "const", "value": [...]}]}]}`. Linear blends between adjacent table entries can be written in pure AST (subtract neighbouring `index`-ed values, multiply by a fractional weight, add); the `interp.linear` and `interp.bilinear` primitives below are the **named, opaque** form of those blends — semantically equivalent to the AST composition but exposed as a single `fn` node so that bindings with symbolic-rewriting layers (notably the Julia / MTK extension) can register them as opaque operators and avoid the alias-elimination blow-up that ~10-node-per-lookup AST inlining causes for components with hundreds of lookups (see `docs/content/rfcs/closed-function-registry.md` and the `interp.linear` / `interp.bilinear` rationale in §9.2 below).
-
-#### `interp.*` — tensor interpolation
-
-| Name | Arity | Args | Return |
-|---|---|---|---|
-| `interp.linear` | 3 | `table: const array[N], axis: const array[N], x: scalar` | scalar |
-| `interp.bilinear` | 5 | `table: const array[Nx][Ny], axis_x: const array[Nx], axis_y: const array[Ny], x: scalar, y: scalar` | scalar |
-
-These primitives are the named, opaque form of the searchsorted-plus-index-plus-AST-arithmetic pattern that produces a 1-D or 2-D linear interpolation into a tabulated dataset. They exist for the perf reason described in the paragraph above (pinning a single `fn` node lets bindings with symbolic layers stop alias-eliminating tens of intermediate nodes per lookup), not because the math is novel. Bindings MAY satisfy these by composing existing primitives internally (`interp.searchsorted` + `index` + AST blend) OR by direct implementation; either is conformant as long as the conformance fixtures in `tests/closed_functions/interp/linear/` and `tests/closed_functions/interp/bilinear/` pass.
-
-**Argument shape contract (loaded at file-load time, not at evaluation):**
-
-- `table` and the axis array(s) MUST be `const`-op arrays of floats, the axis entries finite (`table` entries MAY be NaN; see below). Loaders MUST resolve their nested shapes at load time. The shape relation MUST hold:
-  - `interp.linear`: `len(table) == len(axis) == N` with `N ≥ 2`.
-  - `interp.bilinear`: outer length of `table` MUST equal `Nx == len(axis_x)` and every inner row of `table` MUST have length `Ny == len(axis_y)`, with `Nx ≥ 2` and `Ny ≥ 2`. The table is row-major: `table[i][j]` is the value at `(axis_x[i], axis_y[j])`.
-- Each axis array MUST be **strictly increasing**. Equal adjacent axis values are not allowed (they would make a denominator zero in the blend). `interp.searchsorted` permits equal-adjacent (§9.2) because it returns an index, not a blend; `interp.linear` / `interp.bilinear` do not.
-- Axis arrays MUST NOT contain a non-finite value (NaN, +Inf or −Inf). Table arrays MAY contain NaN (a query landing in a cell whose corner is NaN will produce NaN in the output; this is intentional, since "missing data" is a real use case).
-- Bindings MUST reject violations at file-load time with the diagnostic codes listed under "Errors" below. Loading MUST fail.
-
-**Semantics — `interp.linear`:**
-
-Let `axis = [a₁, ..., aₙ]` (1-based indexing for spec exposition) and `table = [t₁, ..., tₙ]`. For a scalar query `x`:
-
-1. **Below-range clamp.** If `x ≤ a₁`, return `t₁`.
-2. **Above-range clamp.** If `x ≥ aₙ`, return `tₙ`.
-3. **In-range blend.** Otherwise let `i` be the unique index in `[1, n−1]` satisfying `aᵢ ≤ x < aᵢ₊₁` (existence and uniqueness are guaranteed by strict monotonicity and the clamps in steps 1–2). Compute the weight and blend in this exact order (pinned for cross-binding bit-equivalence):
-
-   ```
-   w      = (x − aᵢ) / (aᵢ₊₁ − aᵢ)
-   result = tᵢ + w · (tᵢ₊₁ − tᵢ)
-   ```
-
-   This form (rather than `(1 − w)·tᵢ + w·tᵢ₊₁`) is required because it is **exact at the left endpoint** and has no `1 − w` cancellation when `x` is near `aᵢ₊₁`: `w = 0` ⇒ `result = tᵢ` exactly in `binary64` (provided `tᵢ₊₁` is finite; a NaN `tᵢ₊₁` gives NaN). At `w = 1` the result is `tᵢ ⊕ (tᵢ₊₁ ⊖ tᵢ)`, which equals `tᵢ₊₁` exactly when `tᵢ/2 ≤ tᵢ₊₁ ≤ 2·tᵢ` (Sterbenz) and is otherwise within `3/2·ulp(max(|tᵢ|, |tᵢ₊₁|))` of it — for example `tᵢ = 1`, `tᵢ₊₁ = 2⁻⁶⁰` gives `0`. Both facts are proven in `formal/Esm/Closed/Interp/Rounding.lean`.
-
-4. **NaN propagation.** If `x` is NaN, the result is NaN. (The clamp comparisons in steps 1–2 are IEEE-754 `≤` and `≥`, which both return false for NaN, so the function falls through to step 3, where `aᵢ − x` and `(aᵢ₊₁ − aᵢ)` produce a NaN weight that propagates through the blend.)
-
-**Semantics — `interp.bilinear`:**
-
-Let `axis_x = [x₁, ..., x_{Nx}]`, `axis_y = [y₁, ..., y_{Ny}]`, and `table[i][j]` be the value at `(xᵢ, yⱼ)`. For scalar queries `(x, y)`:
-
-1. **Per-axis clamp.** Compute `x_q = clamp(x, x₁, x_{Nx})` and `y_q = clamp(y, y₁, y_{Ny})`, where `clamp(v, lo, hi)` is `lo` if `v ≤ lo`, `hi` if `v ≥ hi`, else `v`. This is the 2-D extrapolate-flat rule: queries outside the table are pinned to the nearest edge.
-2. **Cell location.** Choose `i` as the **largest** index in `[1, Nx − 1]` with `xᵢ ≤ x_q`, and `j` as the largest index in `[1, Ny − 1]` with `yⱼ ≤ y_q`. (Clamping the result of `interp.searchsorted(x_q, axis_x)` to `[2, Nx]` and subtracting 1 is **not** an equivalent formulation: `interp.searchsorted` returns the first knot `≥ x_q`, so at an interior knot `xₖ` it selects `i = k − 1`.) Both assignments are unique because step 1 guarantees `x₁ ≤ x_q ≤ x_{Nx}` and `y₁ ≤ y_q ≤ y_{Ny}`. When `x_q` lands exactly on an interior knot `xₖ` the convention selects `i = k` (so `wx = 0` and the x-blend reduces to the row at knot `k` exactly); the same blend evaluated under the alternative `i = k − 1` (so `wx = 1`) gives the same value in exact arithmetic but not always the same `binary64` result (rows `1` and `2⁻⁶⁰` blend to `0` at `wx = 1`; see the `w = 1` note under `interp.linear`), which is why the spec pins `i = k`.
-3. **Weights.**
-
-   ```
-   wx = (x_q − xᵢ) / (xᵢ₊₁ − xᵢ)
-   wy = (y_q − yⱼ) / (yⱼ₊₁ − yⱼ)
-   ```
-
-4. **Two 1-D blends in x, then one in y.** Pinned evaluation order (cross-binding bit-equivalence requires this exact form, as it is the natural composition of two `interp.linear` calls along the inner axis):
-
-   ```
-   row_j   = table[i][j]   + wx · (table[i+1][j]   − table[i][j])
-   row_jp1 = table[i][j+1] + wx · (table[i+1][j+1] − table[i][j+1])
-   result  = row_j + wy · (row_jp1 − row_j)
-   ```
-
-5. **NaN propagation.** If `x` or `y` is NaN, the corresponding axis weight is NaN, and the result is NaN. NaN entries in `table` propagate through whichever blend touches them.
-
-**Errors (load time):**
-
-| Diagnostic code | Condition |
-|---|---|
-| `interp_non_monotonic_axis` | Any `axis` (or `axis_x`, `axis_y`) is not strictly increasing. Includes equal-adjacent and decreasing pairs. |
-| `interp_axis_length_mismatch` | `interp.linear`: `len(table) != len(axis)`. `interp.bilinear`: outer length of `table` differs from `len(axis_x)`, or any row's length differs from `len(axis_y)`. |
-| `interp_nan_in_axis` | Any axis contains a value that is not finite (NaN, +Inf or −Inf). Takes precedence over `interp_non_monotonic_axis`: an axis containing a non-finite value MUST be reported with `interp_nan_in_axis`, whatever its other entries. |
-| `interp_axis_too_short` | Any axis has fewer than 2 entries (no interval to blend across). |
-| `interp_table_not_const` / `interp_axis_not_const` | The `table` or any axis argument is not a literal `const`-op array of the required rank (e.g. it is a variable reference or a non-`const` expression, or a `const` whose `value` has the wrong rank: anything but rank 1 for an axis or for the `table` of `interp.linear`, anything but rank 2 for the `table` of `interp.bilinear`). `interp_axis_not_const` is also the code for an `interp.searchsorted` `xs` that is not a rank-1 `const`-op array (see `interp.searchsorted` above), checked before `searchsorted_nan` and `searchsorted_non_monotonic`. An empty `const` array `[]` is rank 1, so as the `table` of `interp.bilinear` it is `interp_table_not_const`. |
-| `closed_function_arity` | A `fn` node naming `interp.searchsorted`, `interp.linear` or `interp.bilinear` has a number of arguments other than the function's arity (the Arity column of the tables above). Checked before every other argument check, since the arguments' roles are defined only by position. |
-
-**Order of the argument checks.** An `interp.linear` or `interp.bilinear` call can break several of the rules above at once; such a call is reported with a single code, and bindings MUST report the first rule the call breaks in this order:
-
-1. `closed_function_arity`;
-2. `interp_table_not_const`, then `interp_axis_not_const` — the `table`, then each axis in argument order, not a `const`-op array of the required rank;
-3. `interp_axis_too_short` — any axis with fewer than 2 entries;
-4. `interp_axis_length_mismatch`;
-5. `interp_nan_in_axis` — a non-finite entry in any axis;
-6. `interp_non_monotonic_axis`.
-
-Each step covers every axis before the next step begins, so a bilinear call whose `axis_x` disagrees with the table's outer length and whose `axis_y` has one entry is `interp_axis_too_short`. For `interp.searchsorted` the order is `closed_function_arity`, `interp_axis_not_const`, `searchsorted_nan`, `searchsorted_non_monotonic`.
-
-**When the argument checks run.** The load-time argument checks of this section — `closed_function_arity`, `interp_axis_not_const`, `searchsorted_nan` and `searchsorted_non_monotonic` for `interp.searchsorted`, and the Errors table above for `interp.linear` and `interp.bilinear` — MUST run during load, and in `validate()`, on every `fn` node that names one of these functions, wherever it appears in the document (every expression-bearing field, §4.9.5) and whether or not anything ever evaluates it. A document that fails one of them does not load. A binding MAY repeat the checks when it builds or evaluates an expression, but MUST NOT defer them to then. A `fn` node inside an expression-template body (§9.6) is checked where the template is applied, on the arguments the expansion gives it. Fixtures: `tests/invalid/closed_fn_*.esm`; the cases JSON cannot express (a NaN) are the `error_scenarios` of `tests/closed_functions/interp/*/expected.json`.
-
-**Tolerance:** when bindings implement the pinned evaluation order in IEEE-754 `binary64` arithmetic without fused multiply-add, agreement is **bit-exact** (`{ "abs": 0, "rel": 0 }`) for fixtures whose inputs are exactly representable. The spec does not require FMA, but a binding MAY contract a blend `a + w·(b − a)` into one. Bindings that use FMA selectively MUST ensure their results stay within these absolute bounds of the pinned non-FMA result, where `ulp(v) = 2^max(⌊log₂|v|⌋ − 52, −1074)` is the spacing of `binary64` values at `v`:
-
-- `interp.linear`: `2·ulp(max(|tᵢ|, |tᵢ₊₁|))`, over the two table entries of the cell. The constant is attained, so no smaller integer bound holds.
-- `interp.bilinear`: `17/2·ulp(m)`, where `m` is the largest magnitude among the four cell corners. This bound is proven but not known to be tight; differences of `4·ulp(m)` occur.
-
-Both bounds are proven in `formal/` (`Esm/Closed/Interp/Rounding.lean`, `Esm/Closed/Interp/Bilinear64.lean`). No relative tolerance is sound: with FMA, `interp.linear([1, −2], [0, 3], 1)` is `2⁻⁵⁴` where the pinned result is `0`. The fixtures under `tests/closed_functions/interp/` are bit-exact (`0/0`) and avoid FMA-sensitive inputs.
-
-**Composition rationale (informative):** the three `interp.*` functions are expressible in the core AST, and the standard library carries those expressions: `lib/interp.esm` is a template-library file (§9.7.1) whose match-less templates `searchsorted(x, xs, n)`, `linear(table, axis, x, n)` and `bilinear(table, axis_x, axis_y, x, y, nx, ny)` are their pure-AST definitions, the axis lengths being integer parameters used as `faq` `ranges` bounds (§9.6.1). Each locates its cell by counting comparisons rather than by searching:
-
-```jsonc
-// searchsorted: 1 + Σ_{k=1..n} ifelse(xs[k] >= x, 0, 1)
-//   (the first k with xs[k] >= x; n + 1 when none is, or x is NaN; 1 when n = 0)
-// linear: i = min(max(Σ_{k=1..n} ifelse(axis[k] <= x, 1, 0), 1), n - 1), then
-//   ifelse(x <= axis[1], table[1], ifelse(x >= axis[n], table[n],
-//          table[i] + (x - axis[i]) / (axis[i+1] - axis[i]) · (table[i+1] - table[i])))
-// bilinear: x and y clamped to their axes, i and j counted the same way on the
-//   clamped queries, then the two x-blends and the y-blend in the order above.
-```
-
-With a strictly increasing axis, the count clamped to `[1, n − 1]` is exactly the `i` of step 3 of `interp.linear` and the `i` of step 2 of `interp.bilinear`, including the interior-knot convention (`i = k`, weight `0`), and a NaN query counts `0`, so the blend weight is NaN. Each body evaluates in the order this section pins, and on every success scenario of `tests/closed_functions/interp/` the expanded template gives the same `binary64` result as the `fn` form. The templates do not carry the load-time argument checks above: a caller of a template supplies a valid axis. Applied with an array query (one per grid cell, as `interp.linear` takes one), each template is elementwise (§9.6.11) and gives the closed function's result at every element.
-
-The named primitive exists so that symbolic layers in bindings (notably the Julia MTK extension) can mark each lookup as opaque to alias elimination via `@register_symbolic`, instead of paying the structural-simplify cost of ~10 alias-eliminated intermediates per lookup. With ~230 lookups per `fastjx` photolysis evaluation (18 wavelengths × 13 species), that difference is the gap between MTK simplification finishing in seconds versus minutes-to-hours (see escalation `hq-wisp-y6g6`).
+The calendar templates take `t` in UTC seconds since 1970-01-01T00:00:00Z (binary64,
+proleptic Gregorian, no leap seconds) and are exact for finite `|t| < 2^52` s; outside that
+domain, and for a NaN or infinite `t`, they return NaN. The interpolation templates take
+each axis length as an explicit integer parameter, and do no load-time argument checking:
+the caller supplies a strictly increasing axis (non-decreasing for `searchsorted`).
 
 ### 9.3 The `enums` block
 
@@ -4838,202 +4623,16 @@ The `enums` top-level block declares file-local symbol → integer mappings used
 
 **Use with the `index` op:** the canonical use of `enums` is to keep categorical lookups portable. Tables are encoded as `const` arrays; categorical keys are written as `enum` ops; the existing `index` op (§4.3.3) does the actual lookup — the portable form of, e.g., a Wesely-style canopy resistance lookup (`enum` keys indexing a `const` resistance table, as in §4.5).
 
-### 9.4 Conformance contract
+### 9.4 (Removed at 2.0.0: closed-function conformance contract)
 
-Each function in §9.2 ships, in lockstep with the spec rev that introduces it, with:
+The standard library is held to the `tests/valid/` standard (CONFORMANCE_SPEC §2.2.1), and
+its templates are checked by the template conformance tiers.
 
-1. A spec section (§9.2) defining arity, types, units, boundary semantics, tolerance.
-2. A conformance fixture under `tests/closed_functions/<module>/<name>/` containing a canonical `.esm` file invoking the function from a trivial RHS, a reference output (`expected_<scenario>.json`) at the spec tolerance, and at least one boundary-case scenario (NaN input, edge index, leap-year boundary, negative epoch, etc.).
-3. A binding implementation contract: each binding's test harness loads the fixture, evaluates the `fn` node against the inputs, and asserts per-element agreement with the reference output within the declared tolerance.
+### 9.5 (Removed at 2.0.0: function tables)
 
-`scripts/test-conformance.sh` MUST run the closed-function fixtures across all five bindings on every PR. A binding that fails any fixture fails CI.
-
-### 9.5 Function tables (v0.4.0)
-
-Components that depend on tabulated functions — most prominently the `fastjx` photolysis component, with 18 actinic-flux slabs and ~220 σ-chain bindings sharing the same `(P, cos_sza, T)` axes — would otherwise inline the same data and the same axis declarations on every binding. The top-level `function_tables` block lifts each table once; the new `table_lookup` AST op references it by id. Tables are **syntactic sugar over §9.2's `interp.linear` / `interp.bilinear` / `index`**: the materialized AST a binding produces from a `table_lookup` MUST be bit-equivalent to the equivalent inline-`const` lookup. Lifting data does not change semantics.
-
-#### 9.5.1 `function_tables` block
-
-```jsonc
-{
-  "function_tables": {
-    "sigma_O3_298": {
-      "description": "O3 absorption cross-section vs. wavelength bin index, T=298 K.",
-      "axes": [
-        { "name": "lambda_idx", "values": [1, 2, 3, 4, 5, 6, 7, 8] }
-      ],
-      "interpolation": "linear",
-      "out_of_bounds": "clamp",
-      "data": [1.1e-17, 1.0e-17, 9.5e-18, 8.7e-18, 7.9e-18, 7.0e-18, 6.1e-18, 5.2e-18]
-    },
-    "F_actinic": {
-      "description": "Actinic flux F vs. (P, cos_sza), 3 species outputs.",
-      "axes": [
-        { "name": "P",       "units": "Pa", "values": [10.0, 100.0, 1000.0] },
-        { "name": "cos_sza",                "values": [0.1, 0.5, 1.0] }
-      ],
-      "interpolation": "bilinear",
-      "outputs": ["NO2", "O3", "HCHO"],
-      "data": [
-        [[1.0, 1.5, 2.0], [1.1, 1.6, 2.1], [1.2, 1.7, 2.2]],
-        [[2.0, 2.5, 3.0], [2.1, 2.6, 3.1], [2.2, 2.7, 3.2]],
-        [[3.0, 3.5, 4.0], [3.1, 3.6, 4.1], [3.2, 3.7, 4.2]]
-      ]
-    }
-  }
-}
-```
-
-**Schema:**
-
-- Each entry is a `FunctionTable` carrying `axes`, `data`, and (optionally) `description`, `interpolation`, `out_of_bounds`, `outputs`, `shape`, `schema_version`.
-- `axes` is an ordered list of named `FunctionTableAxis` entries. Axis order defines the order of inner dimensions of `data` (after the leading output dimension when `outputs` is present). Axis names within a single table MUST be unique. v0.4.0 caps axis count at 2 (matching the §9.2 `interp.linear` / `interp.bilinear` set); higher-dimensional lookups are deferred until the closed registry adds `interp.trilinear`.
-- Each axis declares `name`, `values` (strictly-increasing finite floats, ≥ 2 entries; §9.5.5 names the code for each violation), and an optional advisory `units` string. **`units` is advisory in v0.4.0** — bindings record it for documentation only; load-time unit-checking against `table_lookup.axes` input expressions is deferred to a future units RFC.
-- `interpolation` is `"linear"` (1 axis), `"bilinear"` (2 axes), or `"nearest"` (1 axis: the table value at the knot nearest the query, ties to the lower knot; lowering in §9.5.3). Default is `"linear"`. Bindings MUST reject mismatched (`linear` with 2 axes, `bilinear` with 1 axis, etc.) at load time with diagnostic `table_interpolation_axes_mismatch`.
-- `out_of_bounds` is `"clamp"` (default, matches `interp.linear` / `interp.bilinear` extrapolate-flat semantics) or `"error"` (raise at evaluation time with `table_lookup_out_of_bounds`). v0.4.0 requires all five bindings to implement `"clamp"`; `"error"` is conformant when implemented.
-- `outputs` is an optional ordered list of output names (strings, unique within the table). When present, the leading dimension of `data` MUST equal the length of `outputs`, and `table_lookup.output` MAY name an entry of this list in addition to using a 0-based integer index. When absent, the table is single-output: `data` has no output dimension, and `0` is its only output. Whether or not `outputs` is declared, an omitted `table_lookup.output` means `0`.
-- `data` is the canonical, nested-array literal. Leaves MUST be finite numbers — a NaN or infinite leaf is rejected at load time with `table_data_nan`. Shape: `[len(outputs), len(axes[0].values), len(axes[1].values), ...]` when `outputs` is present; `[len(axes[0].values), len(axes[1].values), ...]` otherwise. Loaders verify the actual nesting; mismatched shapes raise `table_data_shape_mismatch`. This is deliberately stricter than the inline §9.2 form, whose `table` MAY contain NaN for missing data: an inline lookup over a table with NaN entries cannot be lifted into `function_tables`.
-- `shape` is an optional redundant assertion on `data`'s shape. If present, MUST match the actual nesting; loaders reject mismatches. **`data` is the source of truth — `shape` is a load-time assertion only.** Round-trippers MUST NOT fabricate a `shape` field when the author did not write one.
-
-**Authoring policy:** tables are **opt-in**. Loaders MUST NOT silently auto-promote inline `const`-op arrays into `function_tables` entries during round-trip. The migration of an existing inline-const-heavy `.esm` to `function_tables` is a one-shot author-driven refactor, not a load-time canonicalization. This preserves the existing `tests/` corpus and the `earthsci-ast-go` byte-exact reload guarantee.
-
-#### 9.5.2 `table_lookup` AST op
-
-```jsonc
-{
-  "op": "table_lookup",
-  "table": "F_actinic",
-  "axes": {
-    "P":        "P_atm",
-    "cos_sza":  { "op": "cos", "args": ["sza"] }
-  },
-  "output": "O3"
-}
-```
-
-**Fields:**
-
-- `table` (string, required): id of a `function_tables` entry. References to undeclared tables raise `table_lookup_unknown_table` at load time.
-- `axes` (object, required): map from axis name to scalar input expression. The set of keys MUST exactly match the names of the referenced table's `axes[]` (same set, no extras, no omissions); mismatch raises `table_lookup_axis_name_mismatch`. Each value is an arbitrary scalar `Expression` (number literal, variable reference, or AST node).
-- `output` (integer ≥ 0 OR string): which output to return. Integer is a 0-based index into the table's leading data dimension. String MUST be an entry of the table's `outputs` array. Out-of-range integer or unknown name raises `table_lookup_output_out_of_range`. MAY be omitted whether or not the table declares `outputs`; an omitted `output` MUST be read as `0` (the first output of a multi-output table, the only output of a single-output one).
-- `args` MUST be empty `[]` for a `table_lookup` node — the per-axis input expressions live under `axes`, not `args`. An absent `args` means `[]`. (The schema requires `args` on every expression node, so a document always writes it; the absent case is a node that did not pass through schema validation, such as one built in memory.) Bindings MUST reject a `table_lookup` whose `args` is non-empty with diagnostic `table_lookup_args_nonempty` (the schema rejects one too, with `maxItems`; the code is what a binding raises where schema validation did not run).
-
-#### 9.5.3 Lowering to `interp.linear` / `interp.bilinear` / `index`
-
-A `table_lookup` node lowers at load time to a structurally-equivalent `fn` (or `index`) tree using the existing §9.2 closed-function set. The lowered tree is bit-equivalent: a `table_lookup` query and the equivalent inline lookup that an author would have written by hand produce the same IEEE-754 `binary64` result on the same axis weights and table values, modulo the same FMA caveats described in §9.2.
-
-In the lowered trees below, `D` is the table the lookup reads, and a binding MUST lower with this `D`. For a table that declares `outputs`, `D` is `data[i]`, the slice of the leading output dimension for the selected output `i` (`table_lookup.output`, `0` when omitted). For a table without `outputs`, `D` is the whole `data`: it has no output dimension to slice, and `0` is the only output it has. `data[0]` of a single-output table is its first row (or first value), not the table, and lowering with it is wrong.
-
-For a `table_lookup` referencing a 1-axis table with `interpolation: "linear"`, the lowered AST is:
-
-```jsonc
-{ "op": "fn", "name": "interp.linear", "args": [
-    { "op": "const", "value": D },               // 1-D table for the selected output
-    { "op": "const", "value": axes[0].values },    // axis values
-    <axis_input_expression>                         // the user-supplied axes[axis[0].name]
-] }
-```
-
-For a 2-axis table with `interpolation: "bilinear"`:
-
-```jsonc
-{ "op": "fn", "name": "interp.bilinear", "args": [
-    { "op": "const", "value": D },               // 2-D table for the selected output (Nx × Ny)
-    { "op": "const", "value": axes[0].values },    // axis_x values
-    { "op": "const", "value": axes[1].values },    // axis_y values
-    <x_input_expression>,                           // axes[axes[0].name]
-    <y_input_expression>                            // axes[axes[1].name]
-] }
-```
-
-For `interpolation: "nearest"` on a 1-axis table, the lookup MUST return `D[k]` for the knot `k` nearest the query `x`, a tie between two knots going to the lower one, and under `out_of_bounds: "clamp"` a query below the first knot returns `D[1]` and one above the last returns `D[N]` (the nearest knot in both cases). A NaN query returns NaN, as `interp.linear` does. There is no closed function for it: the lowering is an AST composition over `interp.searchsorted`, `index`, `min`, `max`, `-`, `<`, `==` and `ifelse`. With `N = len(axes[0].values)`, `A = { "op": "const", "value": axes[0].values }` and `x` the axis input expression (written once per use below; it is a pure expression, so the copies agree):
-
-```jsonc
-// j  = interp.searchsorted(x, A)   ∈ 1..N+1, the first knot ≥ x
-// lo = max(j - 1, 1)               the knot at or below x (1 below the range)
-// hi = min(j, N)                   the knot at or above x (N above the range)
-{ "op": "ifelse", "args": [
-    { "op": "==", "args": [ x, x ] },                         // false only for NaN
-    { "op": "index", "args": [
-        { "op": "const", "value": D },
-        { "op": "ifelse", "args": [
-            { "op": "<", "args": [
-                { "op": "-", "args": [ { "op": "index", "args": [ A, hi ] }, x ] },
-                { "op": "-", "args": [ x, { "op": "index", "args": [ A, lo ] } ] } ] },
-            hi,                                               // strictly nearer the upper knot
-            lo ] } ] },                                       // nearer the lower knot, or a tie
-    x ] }                                                     // NaN query: NaN
-```
-
-where `j` is `{ "op": "fn", "name": "interp.searchsorted", "args": [ x, A ] }`, `lo` is `{ "op": "max", "args": [ { "op": "-", "args": [ j, 1 ] }, 1 ] }` and `hi` is `{ "op": "min", "args": [ j, N ] }`. Both indices are always in `1..N` — below the range `lo = hi = 1`, above it (and for a NaN query, whose `searchsorted` is `N + 1`) `lo = hi = N` — so no `index` in the tree reads out of range, whichever branch an evaluator takes. "Nearest" and "tie" are decided on the two `binary64` differences `A[hi] − x` and `x − A[lo]` as the tree computes them; because both are computed in every binding with the same two subtractions, every binding picks the same knot, including on a query a rounding error away from a midpoint. The knot so picked is the truly nearest one (by exact distance, ties to the lower) except in one case: when the upper bracketing knot `A[hi]` is strictly nearer to `x` than `A[lo]`, by at most `ulp(x − A[lo])` (the §9.2 spacing), the two rounded differences can compare equal and the tree returns the lower knot. It never errs toward the upper knot. (Proven in `formal/`: `Esm.Closed.Tables.nearest64_spec` for the bound, `Esm.Closed.Tables.nearest64_not_exact` for a query where it is attained; fixture `q_rounding_tie` in `tests/conformance/function_tables/nearest/` pins the binary64 answer.) The result is always an entry of `D`, so it is exact. With `out_of_bounds: "error"`, a binding that implements the mode raises `table_lookup_out_of_bounds` for a query strictly below `A[1]` or strictly above `A[N]` (§9.5.3a) and otherwise evaluates this tree.
-
-Bindings MAY satisfy this lowering by an in-memory transformation at load time (resulting AST contains no `table_lookup` nodes after load) or by a thin evaluator that dispatches on `table_lookup` directly to the existing `interp.linear` / `interp.bilinear` / `index` implementations. Both are conformant. The serializer of every binding MUST round-trip the authored form (see §9.5.4).
-
-#### 9.5.4 Round-tripping
-
-`function_tables` and `table_lookup` are first-class authored constructs. Loaders MUST preserve them on save:
-
-- A file whose source contains `table_lookup` nodes serializes back with `table_lookup` nodes — bindings MUST NOT canonicalize a `table_lookup` to its lowered `fn` form on save.
-- A file whose source contains inline `const` lookups serializes back with inline `const` lookups — bindings MUST NOT canonicalize inline lookups into `table_lookup` references.
-
-The migration of inline-const lookups to tables is a one-shot author-driven refactor, recorded as its own bead per component, never a load-time rewrite.
-
-#### 9.5.5 Errors (load time)
-
-| Diagnostic code | Condition |
-|---|---|
-| `table_axis_non_monotonic` | An axis's `values` is not strictly increasing. |
-| `table_axis_nan` | An axis's `values` contains a value that is not finite (NaN, +Inf or −Inf). Takes precedence over `table_axis_non_monotonic`: an axis containing a non-finite value MUST be reported with `table_axis_nan`, whatever its other entries. |
-| `table_axis_too_short` | An axis's `values` has fewer than 2 entries (§9.5.1). The schema rejects such an axis too (`minItems: 2`); the code is what a binding raises where schema validation did not run, such as on a table built in memory. |
-| `table_data_shape_mismatch` | The actual nesting of `data` does not match the shape implied by `axes` (and `outputs`, when present), or the redundant `shape` assertion does not match `data`. |
-| `table_data_nan` | A leaf of `data` is not finite (NaN, +Inf or −Inf). |
-| `table_interpolation_axes_mismatch` | `interpolation` and the number of axes are inconsistent (`linear` requires 1, `bilinear` requires 2, `nearest` requires 1). |
-| `table_outputs_length_mismatch` | The leading dimension of `data` does not equal `len(outputs)` when `outputs` is declared. |
-| `table_axis_duplicate_name` | Two axes within a single table share the same `name`. |
-| `table_outputs_duplicate_name` | Two entries of `outputs` share the same name. |
-| `table_lookup_unknown_table` | `table_lookup.table` references an id not declared in `function_tables`. |
-| `table_lookup_axis_name_mismatch` | The set of keys in `table_lookup.axes` does not match the set of axis names declared on the referenced table. |
-| `table_lookup_output_out_of_range` | `table_lookup.output` integer is ≥ `len(outputs)` (or ≥ 1 when `outputs` is absent: a single-output table has only output `0`), or its string is not an entry of `outputs` (any string, when `outputs` is absent). |
-| `table_lookup_args_nonempty` | A `table_lookup` node carries a non-empty `args` (§9.5.2). An absent `args` is `[]` and is not an error. |
-| `table_out_of_bounds_unsupported` | The referenced table declares `out_of_bounds: "error"` and the binding does not implement that mode. Raised where the binding would otherwise lower or evaluate the lookup — see §9.5.3a. |
-
-**Order of the table checks.** A table can break several of the rules above at once; it is then reported with ONE code, and bindings MUST report the first rule it breaks in this order:
-
-1. `table_axis_duplicate_name`;
-2. `table_outputs_duplicate_name`;
-3. `table_interpolation_axes_mismatch`;
-4. `table_axis_nan` — a non-finite value (NaN or ±Inf) in any axis;
-5. `table_axis_non_monotonic` — any axis not strictly increasing;
-6. `table_axis_too_short` — any axis with fewer than 2 values;
-7. `table_outputs_length_mismatch` — `outputs` is declared, `data` is an array, and its length differs from `len(outputs)`;
-8. `table_data_shape_mismatch` — the nesting of `data` differs from the shape implied by `axes` (and `outputs`);
-9. `table_data_nan` — a non-finite leaf of `data`;
-10. `table_data_shape_mismatch` — the redundant `shape` assertion differs from the implied shape.
-
-Each step covers every axis of the table before the next step begins, so a table whose first axis is decreasing and whose second axis holds a NaN is `table_axis_nan`, and one whose first axis has a single value and whose second is decreasing is `table_axis_non_monotonic`. The order is a choice, not a consequence of the rules; it is pinned so that every binding names the same rule. (It is the order of `Esm.Closed.Tables.validateTable` in `formal/`; fixtures: `tests/invalid/function_table_*.esm`, and `tests/conformance/function_tables/load_errors/` for the cases JSON cannot express.)
-
-**When the table checks run.** Bindings MUST run the ten table checks above during load, and in `validate()`, on EVERY entry of `function_tables`, whether or not any `table_lookup` references it. A document with a table that fails one of them does not load. A binding MAY repeat the checks where it lowers or evaluates a lookup, but MUST NOT defer them to then. The checks of every `table_lookup` node (`table_lookup_unknown_table`, `table_lookup_args_nonempty`, `table_lookup_axis_name_mismatch`, `table_lookup_output_out_of_range`) MUST also run at load and in `validate()`, in the same way, on every node wherever it appears, as do the §9.2 argument checks on every `interp.*` `fn` node. Bindings MUST check every table before any expression node, so a document with both a failing table and a failing `fn` or `table_lookup` node is reported with the table's code; among expression nodes, which failing node is reported first is not pinned.
-
-**Order of the lookup checks.** A `table_lookup` node is checked in this order, and bindings MUST report the first code that applies: `table_lookup_unknown_table`; then the ten checks of the table it names, in the order above; then the lookup's own fields — `table_lookup_args_nonempty`, `table_lookup_axis_name_mismatch`, `table_lookup_output_out_of_range`, in that order. So a lookup whose `axes` keys do not match a table whose axis is decreasing is reported as `table_axis_non_monotonic` (fixture `tests/invalid/function_table_referenced_lookup_axis_mismatch.esm`). `table_out_of_bounds_unsupported` is not part of this order: it is raised where the binding would lower or evaluate a lookup that passed every check (§9.5.3a).
-
-##### 9.5.3a `out_of_bounds: "error"` in a binding that does not implement it
-
-`out_of_bounds: "clamp"` is required of every binding; `"error"` is "conformant when implemented" (§9.5.1). A binding that has not implemented `"error"` **MUST refuse the lookup** with `table_out_of_bounds_unsupported` rather than evaluate it under `"clamp"`. Substituting the mode the binding happens to have for the mode the author declared is a wrong answer with nothing in the result to say so — the same defect class as an unlowered `table_lookup` reaching an evaluator. The refusal is raised at the point the binding would otherwise lower or dispatch the node, so a document declaring `"error"` still LOADS and still round-trips (§9.5.4); it simply does not evaluate. A binding that implements `"error"` raises `table_lookup_out_of_bounds` exactly when a query lies strictly below an axis's first knot or strictly above its last; a query on an end knot is in range, and a NaN query is not out of bounds — it passes through the interpolation core and yields NaN, as §9.2 specifies for `interp.linear`. The Rust and Julia bindings implement `"error"` (Julia's `:mtk` compiler refuses it as described here, having no channel to raise at run time); the other three refuse it as described here.
-
-#### 9.5.6 Conformance fixtures
-
-Conformance fixtures under `tests/conformance/function_tables/` exercise:
-
-1. A single-output 1-axis linear table (canonical 1-D blend) — `linear/`.
-2. A multi-output 2-axis bilinear table with named outputs — `bilinear/`.
-3. A roundtrip-preservation case (load + save reproduces the authored byte sequence modulo whitespace, with NO promotion or demotion across the inline-const ↔ table_lookup boundary) — `roundtrip/`.
-4. An END-TO-END case run through the binding's own inline-test runner (§6.6) rather than through a lowering harness — `inline_test/`. It pairs an observed defined by a `table_lookup` with a sibling observed spelling the same lookup in the lowered form, plus an out-of-range input that must clamp; a binding whose lowering exists only inside its test harness fails the first and third assertions while passing the second. The lowering is a property of the EVALUATION path, and only this fixture pins that.
-5. The `out_of_bounds: "error"` refusal of §9.5.3a — `out_of_bounds_error/`.
-6. `interpolation: "nearest"` through the inline-test runner: queries on a knot, either side of a midpoint, exactly on a midpoint (the tie goes to the lower knot), and below and above the axis (clamped) — `nearest/`.
-7. The defaults of §9.5.2 and §9.5.3 through the inline-test runner: multi-output tables (one 1-axis, one 2-axis) read with `output` omitted (output `0`) beside the same read spelled out and a read of another output, and a single-output table read with `output` omitted and `0` (lowered with the whole `data`) — `lookup_defaults/`.
-8. The §9.5.5 load-time rejections and their order: tables that each break one rule, or two rules adjacent in the order above (with the first one the one to report). The cases a document can carry are `tests/invalid/function_table_*.esm`, each table unreferenced but one (which pins the lookup order); the rest are `load_errors/`, a `cases.json` ledger of tables a harness builds in memory and runs through the binding's load-time table check, because they need a NaN or an infinity, which JSON cannot carry, or an axis the schema rejects. Non-finite values are written as the strings `"NaN"`, `"Inf"` and `"-Inf"`, as in `tests/closed_functions/`.
-
-Each fixture pairs an `.esm` file with a small numeric harness that asserts the lowered evaluation matches the equivalent inline-const lookup at the §9.2 tolerance contract (bit-exact without FMA; the §9.2 absolute ulp bounds when FMA is used). All five bindings MUST pass.
+The `function_tables` block and the `table_lookup` op are removed (§4.2, "Removed ops"). A
+table's data is an ordinary array (a `const` node or a parameter carrying inline data, §6.3)
+read by the `linear` / `bilinear` templates of `lib/interp.esm` (§9.2).
 
 ### 9.6 Rewrite rules (expression templates)
 
@@ -5070,7 +4669,7 @@ The mechanism is purely structural — no evaluation, no metaprogramming. **PDE-
 Required fields:
 
 - `params`: ordered array of unique non-empty parameter (metavariable) names (strings). MAY be empty — a zero-parameter template is a named constant fragment (common in library files, e.g. a grid-spacing expression).
-- `body`: a normal Expression AST (the replacement). Parameter occurrences appear as bare parameter-name strings in any variable-reference position, **and in scalar-field position**: a parameter name appearing as the string value of a scalar (non-`args`, non-Expression-valued) Expression-node field in `body` (e.g. `dim`, `side`, `wrt`, `manifold`) is a substitution site — the exact mirror of the match-side scalar-field binding rule below. The value bound to a scalar-field parameter MUST be a literal admissible for that field; substitution itself never checks this (it is pure-syntactic, §9.6.3 constraint 5) — validity is discharged on the expanded-equivalent form (§9.6.4 rule 6, §9.6.9), so an inadmissible substituted value (e.g. `manifold: "bogus"`) is rejected by the field's own validation, reported at the offending call site. A `faq` dense `ranges` tuple entry (§4.3.1) is a substitution site too, so a template can take a loop bound such as an axis length as a parameter: `"ranges": {"k": [1, "n"]}` instantiated with `"n": 5` becomes `[1, 5]`. The bound value MUST be one a `ranges` tuple entry admits (an integer literal or a §9.7.6 metaparameter expression); as for a scalar field, substitution does not check it (`tests/conformance/expression_templates/ranges_param/`). Likewise the `from` of a `ranges` entry `{"from": <name>}` (§4.3.1) is a substitution site, so a template can range over an index set the caller names, a `kind: "derived"` one included: `"ranges": {"k": {"from": "S"}}` instantiated with `"S": "edges"` becomes `{"from": "edges"}`. The bound value MUST be a string naming an index set; substitution does not check it, and an expanded `from` that names no declared index set is `undefined_index_set` (§9.6.6), reported at the call site exactly as for a hand-written range (`tests/conformance/expression_templates/ranges_from_param/`, `tests/invalid/faq/template_from_param_undeclared.esm`). A string bound to such a parameter is therefore an index-set name, not a variable reference, wherever the body uses the parameter only as a `from`. **Params shadow literals**: inside `body`, a declared parameter name shadows any coincident literal string — every string value equal to a declared parameter name is a substitution site — so an author MUST NOT name a parameter after a field literal its body means literally (e.g. a parameter named `planar` over a body that pins `manifold: "planar"`), nor after an index symbol the body uses; bindings MAY surface a lint-grade diagnostic for such a collision but MUST still substitute. A body MAY reference other **match-less** in-scope templates via `apply_expression_template` nodes; these are checked at registration time as a statically-checked acyclic DAG (§9.7.3) and, from `esm: 0.9.0`, preserved uninlined (§9.6.4).
+- `body`: a normal Expression AST (the replacement). Parameter occurrences appear as bare parameter-name strings in any variable-reference position, **and in scalar-field position**: a parameter name appearing as the string value of a scalar (non-`args`, non-Expression-valued) Expression-node field in `body` (e.g. `dim`, `side`, `wrt`) is a substitution site — the exact mirror of the match-side scalar-field binding rule below. The value bound to a scalar-field parameter MUST be a literal admissible for that field; substitution itself never checks this (it is pure-syntactic, §9.6.3 constraint 5) — validity is discharged on the expanded-equivalent form (§9.6.4 rule 6, §9.6.9), so an inadmissible substituted value (e.g. `manifold: "bogus"`) is rejected by the field's own validation, reported at the offending call site. A `faq` dense `ranges` tuple entry (§4.3.1) is a substitution site too, so a template can take a loop bound such as an axis length as a parameter: `"ranges": {"k": [1, "n"]}` instantiated with `"n": 5` becomes `[1, 5]`. The bound value MUST be one a `ranges` tuple entry admits (an integer literal or a §9.7.6 metaparameter expression); as for a scalar field, substitution does not check it (`tests/conformance/expression_templates/ranges_param/`). Likewise the `from` of a `ranges` entry `{"from": <name>}` (§4.3.1) is a substitution site, so a template can range over an index set the caller names, a `kind: "derived"` one included: `"ranges": {"k": {"from": "S"}}` instantiated with `"S": "edges"` becomes `{"from": "edges"}`. The bound value MUST be a string naming an index set; substitution does not check it, and an expanded `from` that names no declared index set is `undefined_index_set` (§9.6.6), reported at the call site exactly as for a hand-written range (`tests/conformance/expression_templates/ranges_from_param/`, `tests/invalid/faq/template_from_param_undeclared.esm`). A string bound to such a parameter is therefore an index-set name, not a variable reference, wherever the body uses the parameter only as a `from`. **Params shadow literals**: inside `body`, a declared parameter name shadows any coincident literal string — every string value equal to a declared parameter name is a substitution site — so an author MUST NOT name a parameter after a field literal its body means literally (e.g. a parameter named `planar` over a body that pins `manifold: "planar"`), nor after an index symbol the body uses; bindings MAY surface a lint-grade diagnostic for such a collision but MUST still substitute. A body MAY reference other **match-less** in-scope templates via `apply_expression_template` nodes; these are checked at registration time as a statically-checked acyclic DAG (§9.7.3) and, from `esm: 0.9.0`, preserved uninlined (§9.6.4).
 
 Optional fields:
 
@@ -5140,7 +4739,7 @@ special-case older versions to recover Option A matching. Motivation and measure
 3. **Eager expansion.** A reference whose template is **target-bearing** (its composed body
    contains, transitively through the §9.7.3-checked DAG — including inside the `bindings` of
    nested references — an op no evaluator implements: the §4.2 open rewrite-target tier, or
-   the load-eliminated `table_lookup`/`enum` forms), or whose own `bindings` carry such an op
+   the load-eliminated `enum` form), or whose own `bindings` carry such an op
    or a nested eager reference, MUST be expanded innermost-first in a pre-pass before the
    §9.6.3 fixpoint. The pre-pass consumes no `MAX_REWRITE_PASSES` budget. Consequently no
    rewrite-target op can survive inside a reference, and the pre-evaluation
@@ -5330,7 +4929,7 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `apply_expression_template_recursive_body` | A template-body reference cycle (self or mutual) in the §9.7.3 registration-time DAG. (Redefined by the template-library RFC: acyclic body references are legal — checked at registration and, from `esm: 0.9.0`, preserved uninlined, §9.6.4/§9.7.3.) |
 | `apply_expression_template_invalid_declaration` | `params` is missing/empty/duplicates entries, `body` is missing, a malformed `where` block (§9.6.1: `where` without `match`, a key that is not a declared param, an unknown constraint kind — v1 admits exactly `shape` — or an empty/non-string `shape` list), or other structural defects. |
 | `rewrite_rule_nonterminating` | The rewrite fixpoint did not converge within `MAX_REWRITE_PASSES` (64) passes (§9.6.3). |
-| `derived_index_set_unmaterialized` | An expression ranges over a `kind: "derived"` index set whose producer could not be materialized at build — a `distinct` producer whose key column is not a constant factor (§4.2), or a producer no stage evaluated. Raised when the model is built for evaluation, naming the index set and its `from_faq` producer. The evaluator MUST NOT contract the range as empty: an empty range folds to the semiring's additive identity, and a `0` indistinguishable from a real count is exactly the silent wrong answer this code exists to prevent. An `intersect_polygon` clip that evaluates to an empty (disjoint) ring is materialized, not this condition. |
+| `derived_index_set_unmaterialized` | An expression ranges over a `kind: "derived"` index set whose producer could not be materialized at build — a `distinct` producer whose key column is not a constant factor (§4.2), or a producer no stage evaluated. Raised when the model is built for evaluation, naming the index set and its `from_faq` producer. The evaluator MUST NOT contract the range as empty: an empty range folds to the semiring's additive identity, and a `0` indistinguishable from a real count is exactly the silent wrong answer this code exists to prevent. |
 | `value_invention_key_out_of_range` | A `distinct` producer's `key`, or a column a value-invention `join.on` clause reads, evaluates to NaN at build. The key templates of `lib/relational.esm` (`pair_key`, `edge_key`) return NaN for a component that is outside its declared range, non-integral or NaN, so that a key can never collide silently with another; this code is how that reaches the author. Raised when value invention runs, naming the column (the producer whose `key` it is, or the join column) and the loop indices at which it was NaN. Takes precedence over `derived_index_set_unmaterialized`: the producer ran, and the column, not the data, is wrong. Fixture: `tests/conformance/value_invention_materialize/fixtures/key_out_of_range.esm`. |
 | `unlowered_operator` | A rewrite-target op (§4.2) reached evaluation/compilation without being lowered — no rule eliminated it. Fires before evaluation, not necessarily at load (loading is permissive). One uniform code superseding the former per-language spatial-op errors (`E_TREEWALK_UNREACHABLE_SPATIAL_OP` / `UnreachableSpatialOperatorError` / `UnsupportedDimensionalityError`). |
 | `unevaluable_operator` | An op that IS in the evaluable-core set (§4.2) reached an evaluator that has no evaluation rule for it. The complement of `unlowered_operator`, and the two are distinguished by which side of §4.2 the op falls on: `unlowered_operator` means the op is OUTSIDE evaluable-core and no rewrite rule eliminated it (the document is under-lowered), whereas `unevaluable_operator` means the op is INSIDE evaluable-core but *this* evaluator cannot produce a value for it — because an earlier pipeline stage (value invention, or a lowering pass) should have eliminated it, or because the document was built for a different runtime (a binding may legitimately offer more than one evaluator, e.g. a scalar ODE interpreter alongside a whole-array one, with different rule sets). The check MUST precede evaluation: the evaluator walks the whole expression (or, where it has a build step, every expression it builds) and refuses up front, so no part of an expression carrying such an op is evaluated — an op in the untaken branch of an `ifelse` is refused too. Raising only when evaluation happens to reach the node does not satisfy this. The diagnostic MUST name the offending op, and the evaluator MUST NOT evaluate the op to a sentinel value (NaN, zero, or any other number): a sentinel is indistinguishable from a legitimate numerical result and would propagate into the solution. Binding-local spellings of this condition (`E_TREEWALK_UNSUPPORTED_OP`, `unsupported_operator`, an uncoded interpreter error) are superseded by this code; the shared fixture is `tests/conformance/unevaluable_operator/`. |
@@ -5372,10 +4971,9 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `metaparameter_type_error` | A metaparameter binding is not an integer; a fold divides inexactly or overflows 64-bit; or a metaparameter expression uses an op outside `+ - * /` (§9.7.6). |
 | `metaparameter_name_conflict` | A metaparameter name collides with a visible variable/parameter/species/index-set name, or with a loop symbol (§9.7.6). |
 | `makearray_region_inverted` | A `makearray` region bound pair on the expanded, metaparameter-folded form has `stop < start − 1` (§4.3.2). The empty spelling `stop == start − 1` is legal and contributes no elements; anything further inverted is rejected — typically a §9.6.8 interior region instantiated below the scheme’s minimum extent. Bounds still carrying open metaparameter expressions — a library body on a §9.6.4-rule-5 generic load — are not checked until they fold at a binding site (§4.3.2). |
-| `invalid_broadcast_fn` | A `broadcast` node's `fn` is absent, does not name a scalar operator, or is applied to an argument count that operator's §4.2 arity does not admit (§4.3.4). The value analogue of `unknown_closed_function`: `broadcast` is the one op whose OPERATOR is carried as data, so no `op`-keyed check reaches it, and an unchecked `fn` is discarded silently rather than failing. Loading MUST fail. |
+| `invalid_broadcast_fn` | A `broadcast` node's `fn` is absent, does not name a scalar operator, or is applied to an argument count that operator's §4.2 arity does not admit (§4.3.4). `broadcast` is the one op whose OPERATOR is carried as data, so no `op`-keyed check reaches it, and an unchecked `fn` is discarded silently rather than failing. Loading MUST fail. |
 | `ragged_values_not_gathered` | A `faq` that is not a value-invention node ranges over a `kind: "ragged"` index set, but its body (`expr` / `filter`) never reads that set's `values` array (§4.3.1 "Ragged ranges"). The range binds the position `k ∈ 1..offsets[parent]`, not a member, so the body reads positions where members were meant. Reported by `validate()` in every binding at the containing expression field. Not decided for a body holding an `apply_expression_template` reference, nor for a set the document does not declare. |
 | `faq_bare_array_operand` | A `faq`'s `expr` or `filter` reads a variable declared with a non-empty `shape` by bare name in an elementwise position (§4.3.1 "Shaped variables inside a `faq` are read through `index`"). The node names its axes by its range symbols, so the read must be `index(v, i, …)`. Reported by `validate()` in every binding at the containing expression field, on the authored equations of every model and inline subsystem, where a template application is opaque; refused at build by every evaluating binding on the flattened, template-expanded system after the §9.6.11 elementwise lift, against declared and inferred shapes. A loop symbol of the node or an enclosing node shadows the declaration; an observed or recurrence definition's own variable is left to `recurrence_not_wellfounded` / `observed_cycle`, a derivative's is not. |
-| `geometry_manifold_invalid` | A geometry-kernel node's `manifold` is not an admissible literal (`planar`/`spherical`/`geodesic`) on the expanded-equivalent form — the enforcement for the scalar-field substitution sites of §9.6.1 (the schema admits arbitrary strings there so template bodies may carry parameter names). Discharged per-instantiation, memoized (§9.6.9); the diagnostic reports (call-site path, template name, intra-body path). |
 | `template_constraint_unknown_index_set` | A `where` `shape` constraint (§9.6.1) names an index set the consuming document's merged `index_sets` registry (§9.7.5) does not declare. Raised at rule registration in the consuming component — a loud typo failure, mirroring `template_import_unknown_name`. A constrained rule that merely never fires is NOT an error. |
 
 #### 9.6.7 Conformance fixtures
@@ -5384,7 +4982,7 @@ Conformance fixtures live under `tests/conformance/expression_templates/`. From 
 
 - `arrhenius_smoke/fixture.esm` — a 2-parameter `arrhenius` template applied across three reactions with different scalar bindings.
 - `arrhenius_smoke/expanded.esm` — the canonical post-expansion form. All five bindings (Julia, Python, Rust, TypeScript, Go) MUST produce a structurally-equal `reactions` array under the `Expand ∘ load` oracle (above).
-- `scalar_field_param/` — the §9.6.1 scalar-field substitution site: one template parameterized on the `manifold` scalar field of a `polygon_intersection_area` node, instantiated twice (`planar` / `spherical`), plus the Julia-generated `expanded.esm`. All five bindings MUST produce structurally-equal post-substitution nodes; an inadmissible bound value is rejected on the expanded-equivalent form (§9.6.9).
+- `scalar_field_param/` — the §9.6.1 scalar-field substitution site: one template parameterized on a scalar field of an Expression node, instantiated twice with different values, plus the Julia-generated `expanded.esm`. All five bindings MUST produce structurally-equal post-substitution nodes; an inadmissible bound value is rejected on the expanded-equivalent form (§9.6.9).
 - `ranges_param/` — the §9.6.1 `ranges` substitution site: two templates whose `faq` dense `ranges` tuples carry parameters (a 2-element `[1, "n"]` and a 3-element `["lo", "s", "n"]`), instantiated three times, plus the Julia-generated `expanded.esm`. All five bindings MUST produce structurally-equal expanded `ranges` tuples.
 
 The template-library RFC adds (see `docs/content/rfcs/template-library-imports.md` §11):
@@ -5417,13 +5015,13 @@ The Option B RFC adds (see `docs/content/rfcs/out-of-line-expression-templates.m
 - `eager_target_bearing/` — one match-less template whose body carries a `D`, one that doesn't; the first's reference is expanded and lowered at load, the second's survives (positive + negative in one golden).
 - `opacity_negative/` — a compound `match` pattern whose shape only assembles across a surviving-reference boundary: MUST NOT fire (§9.6.4 rule 4's pinned divergence).
 - `opacity_priority_shadowing/` — the silent form of the divergence: a high-priority compound rule whose structural fragment is hidden in a target-free reference, plus a lower-priority generic rule; the golden pins that the compound rule does NOT fire and the generic rule DOES (binding the surviving reference whole).
-- `per_instantiation_validation/` — a `manifold`-param template, two call sites, one inadmissible: rejected on the expanded-equivalent check (§9.6.9), naming the offending call site.
+- `per_instantiation_validation/` — a template parameterized on a scalar field, two call sites, one inadmissible: rejected on the expanded-equivalent check (§9.6.9), naming the offending call site.
 - `flatten_registry_merge/` — two components referencing one stencil (dedup) and a forced non-equal collision (deterministic owner-path rename).
 - Property over **all** fixtures, all five bindings: `emit ∘ load` idempotent byte-wise.
 
 #### 9.6.8 Discretizing spatial derivatives (rewrite rules over `D`)
 
-A spatial derivative — a `D` op with a spatial `wrt`, appearing on a right-hand side — is a **rewrite-target** (§4.2): it has no evaluator and MUST be lowered to a `faq` + `makearray` stencil by a `match` rewrite rule (§9.6) before evaluation, exactly as `table_lookup` lowers to `interp.*` (§9.5). There is **no** discretization block and **no** boundary-condition declaration anywhere in the format. A discretized derivative over a finite domain is inseparable from its boundary treatment, so **the boundary conditions are part of the rewrite rule itself**: the rule body is a single `makearray` whose interior region is the stencil `faq` and whose boundary-face regions encode the BC (later regions overwrite earlier, §4.3.2). Boundary conditions cannot be — and must not be — specified anywhere else.
+A spatial derivative — a `D` op with a spatial `wrt`, appearing on a right-hand side — is a **rewrite-target** (§4.2): it has no evaluator and MUST be lowered to a `faq` + `makearray` stencil by a `match` rewrite rule (§9.6) before evaluation. There is **no** discretization block and **no** boundary-condition declaration anywhere in the format. A discretized derivative over a finite domain is inseparable from its boundary treatment, so **the boundary conditions are part of the rewrite rule itself**: the rule body is a single `makearray` whose interior region is the stencil `faq` and whose boundary-face regions encode the BC (later regions overwrite earlier, §4.3.2). Boundary conditions cannot be — and must not be — specified anywhere else.
 
 **This format ships no discretization rules.** The standard library of finite-difference / finite-volume rules (central, upwind, WENO, Godunov, the BC variants) and its conformance golden live in [EarthSciDiscretizations](https://github.com/EarthSciML/EarthSciDiscretizations). A `.esm` file obtains discretization either by declaring in-file `expression_templates` with a `match` on `D`, or by importing a rule from that library via `expression_template_imports` (§9.7). The library is layered — a grid file (index sets + geometry metaparameters), an interior-stencil file importing it, and a BC file importing *that* and wrapping the stencil into the complete `match` rule — so one rule file serves every resolution through metaparameter bindings (§9.7.6).
 
@@ -5516,7 +5114,6 @@ A document is valid iff `Expand(document)` (§9.6.4 rule 2) is valid. Bindings M
 | `apply_expression_template_unknown_template`, `apply_expression_template_bindings_mismatch` | call site, at load | unchanged |
 | `apply_expression_template_recursive_body`, `template_body_expansion_too_deep` | §9.7.3 registration (then inlined) | §9.7.3 registration (check-only); same codes |
 | `makearray_region_inverted` | expanded, folded form | registration, on the composed folded body — on a §9.6.4-rule-5 *generic load* of a template-library file there is no folded body, so bounds still carrying open metaparameter expressions are not checked until they fold at a binding site (§4.3.2, §9.7.6). Sound because region bounds cannot contain template params — params substitute only in variable-reference and scalar-field positions (§9.6.1), and region bounds are metaparameter expressions (§9.7.6), not strings — so the check is instantiation-independent |
-| `geometry_manifold_invalid` | expanded form | per-instantiation (a `manifold` may be a param), memoized; diagnostic reports (call-site path, template name, intra-body path) |
 | Units and shape checks | expanded form | per-instantiation, memoized on `(template id, scalar-field values, per-param unit+shape signature)` |
 | `unlowered_operator` | pre-evaluation walk of the expanded tree | the same walk on the reference-preserving tree; sound by eager expansion (§9.6.4 rule 3) |
 | `rewrite_rule_nonterminating` | fixpoint | unchanged; the eager pre-pass consumes no pass budget |
@@ -5542,17 +5139,16 @@ Bindings that compile rules ahead of evaluation SHOULD report, per solve, which 
 
 #### 9.6.11 Elementwise application over array arguments (normative)
 
-**Positions and roles.** Each occurrence of a parameter in a match-less template's `body` is in a **value position** or an **array position**. The value positions are those reached from the body's root through: the operands of an elementwise operator (the arithmetic, elementary, comparison, logical and conditional operators and `broadcast`, the operators §4.3.4's alignment rule descends through); the arguments of a closed function (`fn`, §9.2) other than those it takes whole; the `expr` and `filter` of a `faq` with no output index; and the subscripts of an `index` node (`args[1:]`). The root itself is a value position. Every other operand position is an array position:
+**Positions and roles.** Each occurrence of a parameter in a match-less template's `body` is in a **value position** or an **array position**. The value positions are those reached from the body's root through: the operands of an elementwise operator (the arithmetic, elementary, comparison, logical and conditional operators and `broadcast`, the operators §4.3.4's alignment rule descends through); the `expr` and `filter` of a `faq` with no output index; and the subscripts of an `index` node (`args[1:]`). The root itself is a value position. Every other operand position is an array position:
 
 - the array operand of an `index` node (`args[0]`);
-- an argument a closed function takes whole: the `table` and axes of `interp.linear` and `interp.bilinear`, and the `xs` of `interp.searchsorted`;
-- every operand of a geometry operator (`intersect_polygon`, `polygon_intersection_area`, §8.6), of a shape operator (`reshape`, `transpose`, `concat`), of `makearray`, of a `faq` with an output index, and of every other operator not listed above.
+- every operand of a shape operator (`reshape`, `transpose`, `concat`), of `makearray`, of a `faq` with an output index, and of every other operator not listed above.
 
-A parameter bound into a referenced template (§9.7.3) occupies the positions of that template's parameter in its body. A parameter that fills a scalar field or a `ranges` bound (the axis lengths `n`, `nx`, `ny` of `lib/interp.esm`) occupies no operand position and is bound to a literal (§9.6.3 rule 5). A parameter with an occurrence in an array position is **array-role**; every other parameter is **scalar-role**. Roles are read from the body alone, never from a call site. In `lib/interp.esm`, `table`, `axis`, `axis_x`, `axis_y` and `xs` are array-role, and `x` and `y` are scalar-role. In a template whose body is `polygon_intersection_area(a, b)`, `a` and `b` are array-role: a geometry operator takes its rings whole, so binding arrays to them is not an elementwise application.
+A parameter bound into a referenced template (§9.7.3) occupies the positions of that template's parameter in its body. A parameter that fills a scalar field or a `ranges` bound (the axis lengths `n`, `nx`, `ny` of `lib/interp.esm`) occupies no operand position and is bound to a literal (§9.6.3 rule 5). A parameter with an occurrence in an array position is **array-role**; every other parameter is **scalar-role**. Roles are read from the body alone, never from a call site. In `lib/interp.esm`, `table`, `axis`, `axis_x`, `axis_y` and `xs` are array-role, and `x` and `y` are scalar-role. In `lib/geometry.esm`, `ring_a` and `ring_b` are array-role: the templates read the ring stacks through `index`, so binding arrays to them is not an elementwise application.
 
 **Applications.** This section applies to an `apply_expression_template` application and to nothing else. Whether an application is elementwise is decided on the application, never on the shape of what it expands to. A shaped variable an author reads by bare name in a `faq` body or an `index` subscript, with no template application at that site, is not an application and is never given an elementwise meaning here. A binding that expands template references at load (§9.6.4), at the root or at a mount (§4.7), keeps with each expansion the fact that it came from an application, and decides this section on it exactly as on the reference.
 
-An application whose array-valued arguments are read only in array positions denotes its expansion (§9.6.4 rule 2). When it reads an **array-valued** argument in a value position, the application is **elementwise**. It denotes the array whose element at each index tuple is the expansion with that argument read at that tuple in each of its value positions. In its array positions an argument is passed whole, and a scalar argument is passed unchanged. Each element is evaluated exactly as the scalar application at that element's argument values, reductions and gathers in the body's own order, so it is bit-identical to it. `linear(table, axis, lev, n)` with `lev` over `[lev]` is therefore `interp.linear(table, axis, lev[k])` (§9.2) at each `k`, bit for bit.
+An application whose array-valued arguments are read only in array positions denotes its expansion (§9.6.4 rule 2). When it reads an **array-valued** argument in a value position, the application is **elementwise**. It denotes the array whose element at each index tuple is the expansion with that argument read at that tuple in each of its value positions. In its array positions an argument is passed whole, and a scalar argument is passed unchanged. Each element is evaluated exactly as the scalar application at that element's argument values, reductions and gathers in the body's own order, so it is bit-identical to it. `linear(table, axis, lev, n)` with `lev` over `[lev]` is therefore `linear(table, axis, lev[k], n)` at each `k`, bit for bit.
 
 Whether an argument is array-valued is decided on the **flattened** system (§10.7), after coupling. A parameter the component declares as a scalar that a `variable_map` binds to a shaped variable is array-valued there. An application that reads it is elementwise even though the component, read alone, applies the template to a scalar. This is the case of a 0-D physics component (a scavenging rate, a photolysis lookup) coupled to a gridded host.
 
@@ -5566,7 +5162,7 @@ Whether an argument is array-valued is decided on the **flattened** system (§10
 
 **Anonymous arrays.** An argument read in a value position MUST be a scalar or an array over declared index sets: a variable whose `shape` is declared, inferred (§4.3.4) or given by coupling, or an elementwise expression of such variables. An anonymous array (a `const` array literal, a `reshape` result) read in a value position of an application has no index sets, so nothing says which element each cell reads; every evaluating binding MUST reject it at build with `array_shape_mismatch`.
 
-**Realization (normative for evaluating bindings).** A binding evaluates an elementwise application at build, after flatten, by **lifting** the equation `x = rhs` that holds it, where the application sits in elementwise position of `rhs`: `rhs` itself, or an operand reached from it through elementwise operators and closed-function arguments taken per element. `rhs` becomes a `faq` whose `output_idx` ranges over the result's index sets (`{"from": <set>}`). Its body is `rhs` with each array-valued argument gathered at the cell in each of its value positions, and every other bare shaped read in elementwise position of `rhs` gathered too, aligned by index-set name (`index(lev, ℓ)`). Arguments in array positions stay whole. A variable declared without a `shape` that the lift defines takes the result's index sets. An equation with no elementwise application in elementwise position is left as written; an application elsewhere (inside a `faq` body or an `index` subscript the author wrote) denotes its expansion. Any check that refuses a bare shaped read inside a `faq` body runs after this lift, on the lifted equations. The conformance fixtures place each application in the right-hand side of an equation that defines a variable. A binding MAY require that, and an application in a differential equation's right-hand side can be written through such a variable. Fixtures: `tests/conformance/template_array_args/` (inline tests, every element against the `interp.*` result at tolerance 0); `tests/conformance/template_array_args/coupled/` (the coupled case, `fn` form against template form).
+**Realization (normative for evaluating bindings).** A binding evaluates an elementwise application at build, after flatten, by **lifting** the equation `x = rhs` that holds it, where the application sits in elementwise position of `rhs`: `rhs` itself, or an operand reached from it through elementwise operators and closed-function arguments taken per element. `rhs` becomes a `faq` whose `output_idx` ranges over the result's index sets (`{"from": <set>}`). Its body is `rhs` with each array-valued argument gathered at the cell in each of its value positions, and every other bare shaped read in elementwise position of `rhs` gathered too, aligned by index-set name (`index(lev, ℓ)`). Arguments in array positions stay whole. A variable declared without a `shape` that the lift defines takes the result's index sets. An equation with no elementwise application in elementwise position is left as written; an application elsewhere (inside a `faq` body or an `index` subscript the author wrote) denotes its expansion. Any check that refuses a bare shaped read inside a `faq` body runs after this lift, on the lifted equations. The conformance fixtures place each application in the right-hand side of an equation that defines a variable. A binding MAY require that, and an application in a differential equation's right-hand side can be written through such a variable. Fixtures: `tests/conformance/template_array_args/` (inline tests, every element against the scalar application at tolerance 0); `tests/conformance/template_array_args/coupled/` (the coupled case).
 
 ### 9.7 Template libraries, cross-file imports, and metaparameters
 
@@ -5620,7 +5216,7 @@ A top-level `metaparameters` object declares document-scoped named integers:
 
 **Admissible sites.** A *metaparameter expression* is an integer literal, a declared metaparameter name, or `{"op": <"+"|"-"|"*"|"/">, "args": [...]}` over metaparameter expressions (unary `-` allowed). Metaparameter expressions are admissible wherever the schema previously required a bare integer in a structural position: `index_sets.<name>.size` (interval kind), `faq` dense `ranges` tuple entries, `makearray` `regions` bound pairs, **and as an import-edge / subsystem-edge binding VALUE** (`expression_template_imports[k].bindings` / a §4.7 subsystem-ref `bindings`, below). A `data`-update `select` axis `range` bound (`start`, `stop`, `step`, §8.9) MAY also be a bare string naming a metaparameter: it is substituted with the metaparameter's closed value, exactly like an expression position, so a prefix such as `W[0:N_SRC]` follows a loader-API or edge binding of `N_SRC` rather than only its `default`. These sites fold to concrete integers at load with exact 64-bit integer arithmetic; `/` MUST divide exactly, and overflow is an error (`metaparameter_type_error`). A binding value's free names resolve in the **importing** document's metaparameter scope, so a child metaparameter may be *derived* from the importer's — e.g. a regridder mounted with `{"NTGT": {"op": "*", "args": ["NX", "NY"]}}` closes its target-cell count from the fire grid's `NX`/`NY` in one edge, which import renaming (name→name, §9.7.7) cannot express. In ordinary **expression positions**, a metaparameter name appears as a bare string (the variable-reference surface syntax) and is substituted as an integer literal at load; no folding happens in expression positions — `{"op": "/", "args": [360, "NLON"]}` becomes `{"op": "/", "args": [360, 144]}` and stays an AST division.
 
-**What is NOT an expression position (normative).** Substitution is per-FIELD, not per-node: a structural string field of an Expression node holds a *name*, not a reference to a value, and MUST be copied verbatim even when a bound metaparameter spells it exactly. Four families of field are structural in this sense. (i) The **axis-naming scalars** — `wrt`, `dim` (§4.9.1), and `integral`'s integration variable `var` (§4.2), the same three the §9.7.7 rename walk rewrites through the index-set rename map — name a spatial coordinate, so with `x` bound to 3 the node `{"op": "grad", "args": ["x"], "dim": "x"}` MUST become `{"op": "grad", "args": [3], "dim": "x"}`: the `args` occurrence folds and the `dim` occurrence does not. (ii) The **node-header fields** `op`, `id` and `expect_cadence` describe the node itself rather than parameterizing whatever operator it carries; an operator NAME is not an expression position, so with `max` bound to 3 the node `{"op": "max", "args": ["k", "max"]}` MUST become `{"op": "max", "args": ["k", 3]}` — substituting the `op` slot yields a document that is not an Expression at all. (iii) The **op-parameterizing registry fields** — `reduce`, `semiring`, `manifold`, `fn`, `table`, `side`, `attrs`, `members` and `from_faq` — are closed-registry ids, literal enums, or (for `attrs`) named scalar attributes of an open rewrite-target op mirroring the fixed `dim`/`side`/`wrt`/`var` slots. They too hold names rather than values, so `{"op": "aggregate", "reduce": "max", …}` MUST keep `"reduce": "max"` while any `"max"` in its `expr` folds to 3. A `where` match-scoping block is likewise structural (§9.6.1). (iv) The **loop-symbol, reference, enum, unit and free-text fields** hold names or text wherever they appear: the loop symbols and bound index names of a `faq` node (`on`, `syms`, `arg`, `output_idx`, and a dependent range's `of`), a `table_lookup` `output` name, ids (`id`, `handler_id`), references to files, components, data sources and data columns (`ref`, `model`, `reaction_system`, `source`, `file_variable`, `path`, and the import-edge vocabulary `only`, `prefix`, `rename`, `rebind`, `index_set_rename`), closed enums (`type`, `kind`, `system_kind`, `direction`, `hook`, `root_find`, `element_type`, `scale`, `format`, `unmapped`), units (`units`, `default_units` — unit symbols such as `m`, `s` and `K` are valid identifiers), and free text (`name`, `description`, `label`, `location`, `notes`, `citation`, `doi`, `url`, `_comment`). With `row_id` bound to 22 — a data-column name, which the collision check does not cover — the join clause `{"on": [["row_id", "row_id"]], "syms": ["i", "j"]}` MUST stay as written; substituting it yields `{"on": [[22, 22]], "syms": ["i", "j"]}`, which is not schema-valid. (A metaparameter cannot spell a loop symbol in `syms`, `arg` or `output_idx` at all, by the collision rule above; those fields are structural regardless.) The one structural-looking field that IS an expression position is an `integral` `lower`/`upper` bound (§4.2), which substitutes like any other. This asymmetry is easy to miss because a metaparameter may not collide with a visible variable, parameter, species, or index-set name — but a `dim` value names a coordinate *structurally* (§4.9.1 clause ii), with no `index_sets` entry required, and an operator name, a reduction/semiring id, a loop symbol, a unit symbol or an enum value is in no namespace the collision check covers at all, so all four rules are reachable in a legal document.
+**What is NOT an expression position (normative).** Substitution is per-FIELD, not per-node: a structural string field of an Expression node holds a *name*, not a reference to a value, and MUST be copied verbatim even when a bound metaparameter spells it exactly. Four families of field are structural in this sense. (i) The **axis-naming scalars** — `wrt`, `dim` (§4.9.1), and `integral`'s integration variable `var` (§4.2), the same three the §9.7.7 rename walk rewrites through the index-set rename map — name a spatial coordinate, so with `x` bound to 3 the node `{"op": "grad", "args": ["x"], "dim": "x"}` MUST become `{"op": "grad", "args": [3], "dim": "x"}`: the `args` occurrence folds and the `dim` occurrence does not. (ii) The **node-header fields** `op`, `id` and `expect_cadence` describe the node itself rather than parameterizing whatever operator it carries; an operator NAME is not an expression position, so with `max` bound to 3 the node `{"op": "max", "args": ["k", "max"]}` MUST become `{"op": "max", "args": ["k", 3]}` — substituting the `op` slot yields a document that is not an Expression at all. (iii) The **op-parameterizing registry fields** — `reduce`, `semiring`, `fn`, `side`, `attrs`, `members` and `from_faq` — are closed-registry ids, literal enums, or (for `attrs`) named scalar attributes of an open rewrite-target op mirroring the fixed `dim`/`side`/`wrt`/`var` slots. They too hold names rather than values, so `{"op": "aggregate", "reduce": "max", …}` MUST keep `"reduce": "max"` while any `"max"` in its `expr` folds to 3. A `where` match-scoping block is likewise structural (§9.6.1). (iv) The **loop-symbol, reference, enum, unit and free-text fields** hold names or text wherever they appear: the loop symbols and bound index names of a `faq` node (`on`, `syms`, `output_idx`, and a dependent range's `of`), ids (`id`, `handler_id`), references to files, components, data sources and data columns (`ref`, `model`, `reaction_system`, `source`, `file_variable`, `path`, and the import-edge vocabulary `only`, `prefix`, `rename`, `rebind`, `index_set_rename`), closed enums (`type`, `kind`, `system_kind`, `direction`, `hook`, `root_find`, `element_type`, `scale`, `format`, `unmapped`), units (`units`, `default_units` — unit symbols such as `m`, `s` and `K` are valid identifiers), and free text (`name`, `description`, `label`, `location`, `notes`, `citation`, `doi`, `url`, `_comment`). With `row_id` bound to 22 — a data-column name, which the collision check does not cover — the join clause `{"on": [["row_id", "row_id"]], "syms": ["i", "j"]}` MUST stay as written; substituting it yields `{"on": [[22, 22]], "syms": ["i", "j"]}`, which is not schema-valid. (A metaparameter cannot spell a loop symbol in `syms`, `arg` or `output_idx` at all, by the collision rule above; those fields are structural regardless.) The one structural-looking field that IS an expression position is an `integral` `lower`/`upper` bound (§4.2), which substitutes like any other. This asymmetry is easy to miss because a metaparameter may not collide with a visible variable, parameter, species, or index-set name — but a `dim` value names a coordinate *structurally* (§4.9.1 clause ii), with no `index_sets` entry required, and an operator name, a reduction/semiring id, a loop symbol, a unit symbol or an enum value is in no namespace the collision check covers at all, so all four rules are reachable in a legal document.
 
 **The structural key set is derived, not hand-maintained (normative).** A binding decides structural-ness by an object key's NAME, so the set it holds MUST equal `skip_keys` in `tests/metaparameter_substitution/field_classification.json`. That file classifies every string-capable property of `esm-schema.json` as substituted or structural; a key is structural when some property under it that substitution can reach is structural and none is a live substitution site (a property naming a variable, parameter, species or index set counts as neither, since the collision check makes substituting it a no-op). `scripts/check-metaparameter-substitution-fields.py` fails when a schema property is unclassified, so a field added to the schema cannot be substituted by default. **A map key is a declared name, not a field.** In an object keyed by author-chosen names — the `name_keyed_map_keys` of the same file: `variables`, `species`, `parameters`, `guesses`, `subsystems`, `expression_templates`, `ranges`, `axes`, `bindings`, `config`, `coords`, `initial_conditions`, `parameter_overrides`, `pinned_coords`, `map` — the entry names are never compared against the structural key set, so a variable named `source` or `type` has its `guesses` entry substituted like any other expression, and a template parameter named `label` has its `bindings` value substituted. A key that is both (`where`, `rename`, `rebind`, `index_set_rename`) is structural and copied whole. The §9.7.7 import-edge rename walk, and the free-name inventory a `rebind` key is checked against, follow the same rule: a `ranges` entry spelled `dim` still has its `from` renamed, and an apply-node `bindings` entry spelled `units` is a variable-reference position like any other entry.
 
@@ -6580,7 +6176,7 @@ and **update handlers** (§5.5), which run control logic at update time. (A sour
 is pure I/O — it does not regrid; transferring its fields onto a model's target
 grid is a model concern, §8.) The `.esm` file declares *what* they provide and
 *what* they need, but delegates *how* to the runtime. Everything else is math in
-the file. State-mutating numerical schemes (advection, diffusion stencils, deposition algorithms) are **not** an externally-registered mechanism: they are expressed via `grad`/`div`/`laplacian` PDE operators in model equations, lowered by discretization rewrite rules (§9.6.8). Pure callables embedded inside expressions are **not** an externally-registered mechanism either: they are drawn from the closed function registry (Section 9), whose entries are spec-pinned with fixed names, signatures, and tolerances.
+the file. State-mutating numerical schemes (advection, diffusion stencils, deposition algorithms) are **not** an externally-registered mechanism: they are expressed via `grad`/`div`/`laplacian` PDE operators in model equations, lowered by discretization rewrite rules (§9.6.8). Pure callables embedded inside expressions are **not** an externally-registered mechanism either: they are expression templates (§9.6), most from the standard library (§9.7.1), whose bodies are trees of §4.2 operators.
 
 ### Expression AST over string math
 
