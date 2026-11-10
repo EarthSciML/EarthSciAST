@@ -273,16 +273,6 @@
       "note": "A broadcast node whose fn is not a pointwise scalar op, or is applied at an inadmissible arity, is rejected with invalid_broadcast_fn."
     },
     {
-      "id": "spec.4.2.aggregate-alias-normalized",
-      "section": "4.2",
-      "quote": "A loader MUST accept it, MUST normalize the node to `faq` at the wire boundary — ahead of the version gates and schema validation, so that nothing downstream of the loader, `emit` included, ever sees the alias — and MUST report the warning diagnostic `deprecated_op_alias` once per document per alias.",
-      "class": "semantic",
-      "phase": 3,
-      "area": "arrays",
-      "note": "load rewrites every `aggregate` node to `faq` (raising the declared esm to ≥ 1.1.0) and emits one deprecated_op_alias warning; emit never writes `aggregate`.",
-      "concern": "It says normalization runs 'ahead of the version gates', but the next paragraph says the faq_version_too_old gate 'reads the authored form, before normalization' — the order is stated both ways; and 'once per document' is ambiguous when one load touches several documents (root, ref-loaded children, libraries), each of which is normalized."
-    },
-    {
       "id": "spec.4.2.value-invention-constant-factors",
       "section": "4.2",
       "quote": "every column a `distinct` producer's `key` or `join.on` clause reads MUST be build-time data. A **constant factor** is any of: an array supplied to the build (a loader- or caller-provided factor), a shaped parameter carrying inline data (§6.3), or an **unknown whose defining equation's right-hand side is an array `const` node** (`x ~ const([…])`). The last is build-time data exactly as the first two are, so a binding MUST accept it as a key column.",
@@ -298,7 +288,7 @@
       "class": "semantic",
       "phase": 2,
       "area": "diagnostics",
-      "note": "A document carrying a removed op spelling is rejected at load with removed_op, before the version gates and schema validation, never admitted as an open-tier op."
+      "note": "A document carrying a removed op spelling (arrayop; at 2.0.0 aggregate, fn, table_lookup, skolem, rank, argmin, argmax, intersect_polygon, polygon_intersection_area) is rejected at load with removed_op, before the version gates and schema validation, never admitted as an open-tier op."
     },
     {
       "id": "spec.4.3.loop-symbol-shadows-declaration",

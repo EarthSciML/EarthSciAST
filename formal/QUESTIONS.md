@@ -140,20 +140,6 @@ with a pending question among its own clauses.
 - Problem: This row belongs to the §7.1 error-code table but sits after the §7.1.2 prose as an orphaned table fragment with no header, so its nearest heading is 7.1.2; it is also unclear what 'claim the stronger one' permits instead (a generic error, or E_TREEWALK_UNRESOLVED_ORDER for every case).
 - Ruling: (pending)
 
-## Q-19 CONFORMANCE_SPEC.md §7.1: alias warning once per document
-- Clauses: `conf.7.1.alias-warning-once-per-document`
-- Phase: 2
-- Found by: inventory
-- Problem: The sentence is a fragment ('…reaches `emit` untouched. and MUST report this…') whose subject and 'this' are unclear, and it does not say whether a ref-loaded child or library counts as a separate DOCUMENT for the once-per-document count, though the preceding sentence treats each as a document the load touches.
-- Ruling: (pending)
-
-## Q-20 CONFORMANCE_SPEC.md §7.1: faq version gate authored form
-- Clauses: `conf.7.1.faq-version-gate-authored-form`
-- Phase: 2
-- Found by: inventory
-- Problem: The next sentence ('a document whose EXPANDED form contains `faq` declares 1.1.0 even when its authored bytes do not') does not say whether a pre-1.1.0 document whose expansion produces faq is rejected or has its version raised, and sits awkwardly with the gate reading only the authored form.
-- Ruling: (pending)
-
 ## Q-21 esm-spec.md §2.2.6: external unresolved message
 - Clauses: `spec.2.2.6.external-unresolved-message`
 - Phase: 2
@@ -285,13 +271,6 @@ with a pending question among its own clauses.
 - Phase: 3
 - Found by: inventory
 - Problem: Says 'No FP comparison in the broad phase', but §5.5.6 defines the overlap gate's broad phase as a floating-point closed AABB comparison of envelope factors; the two broad phases are different constructs but the text does not say this rule is limited to the bin-Skolem regridding join.
-- Ruling: (pending)
-
-## Q-40 esm-spec.md §4.2: aggregate alias normalized
-- Clauses: `spec.4.2.aggregate-alias-normalized`
-- Phase: 3
-- Found by: inventory
-- Problem: It says normalization runs 'ahead of the version gates', but the next paragraph says the faq_version_too_old gate 'reads the authored form, before normalization' — the order is stated both ways; and 'once per document' is ambiguous when one load touches several documents (root, ref-loaded children, libraries), each of which is normalized.
 - Ruling: (pending)
 
 ## Q-41 esm-spec.md §4.3.1.1: recurrence coefficient one

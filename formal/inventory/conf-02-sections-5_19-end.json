@@ -794,7 +794,7 @@
       "class": "semantic",
       "phase": 2,
       "area": "diagnostics",
-      "note": "A node whose op is a removed spelling (arrayop; at 2.0.0 fn, table_lookup, skolem, rank, argmin, argmax, intersect_polygon, polygon_intersection_area) or a function_tables block is rejected at load with removed_op naming the node's path, rather than accepted as an open rewrite-target op."
+      "note": "A node whose op is a removed spelling (arrayop; at 2.0.0 aggregate, fn, table_lookup, skolem, rank, argmin, argmax, intersect_polygon, polygon_intersection_area) or a function_tables block is rejected at load with removed_op naming the node's path, rather than accepted as an open rewrite-target op."
     },
     {
       "id": "conf.7.1.faq-version-gate-authored-form",
