@@ -91,7 +91,6 @@ const ARRAY_TIER = [
   '[1, 2, 3]',
   '[[1, 2], [3, 4]]',
   'u[i, j]',
-  'datetime.year(t)',
   'true',
   'false',
   'ifelse(false, a, true)',
@@ -102,19 +101,11 @@ const ARRAY_TIER = [
   'concat(a, b, axis=0)',
 ]
 
-// Ops whose text surface landed in the id/table_lookup pass: `table_lookup`'s
-// bracket form, `intersect_polygon` (previously refused because its RFC §6.1
-// `id` was not printed), and `id=` on an aggregate.
+// `id=` on an aggregate (the table_lookup and geometry spellings of this pass
+// left with those ops at esm 2.0.0).
 const ID_AND_TABLE_TIER = [
-  'visc[T=temp]',
-  'k_rate[T=temp, p=pres]:1',
-  'intersect_polygon(P, Q, manifold=spherical)',
-  'intersect_polygon(src_poly, tgt_poly, manifold=planar, id=overlap_clip)',
-  'polygon_intersection_area(a[i], b[j], manifold=planar, id=area_faq)',
   'any[p] (u[a]) where {a in atmos_cells} id=rg_candidate_pairs [semiring=bool_and_or]',
   'sum[i] (u[i]) where {i in cells} id=cell_total',
-  'argmin[g] (a[g]) where {g in gens} id=cheapest',
-  'visc[T=temp] * k_rate[T=temp, p=pres]:1',
 ]
 
 const REDUCTION_TIER = [
@@ -124,32 +115,24 @@ const REDUCTION_TIER = [
   'sum[] (u[i]) where {i in cells}',
   'max[i] (i * j) where {i in 1:2, j in options} [semiring=max_product]',
   'sum[j] (A[i, j]) where {i in src, j in tgt} join(src_bin=tgt_bin) if A[i, j] > atol',
-  'argmin[g] (a[g]) where {g in gens}',
-  'argmax[g] (a[g]) where {g in gens}',
   'any[e] (u[f]) where {f in faces} [semiring=bool_and_or]',
   'sqrt(sum[] (v[e] * v[e]) where {e in space})',
   'arrhenius<A_pre=1.8e-12, Ea=1500>',
-  'polygon_intersection_area(a[i], b[j], manifold=planar)',
   'makearray([2:NLON - 1, 1:NLAT] = a[i, j] / dlon, [1:1, 1:NLAT] = b)',
   'makearray([2:NLON, 1:NLAT] = central_D<f=f>, [1:1, 1:NLAT] = sum[j] (u[1, j]) where {j in lat})',
 ]
 
 // The faq fields that used to be dropped by the printer (2026-10-06): a join
-// clause's `syms`, an `overlap` join gate, a join/filter on argmin/argmax, and a
-// skolem `label`. Plus the parenthesization cases the same sweep found: a
+// clause's `syms` and an `overlap` join gate (the argmin/argmax and skolem
+// spellings left with those ops at esm 2.0.0). Plus the parenthesization cases the same sweep found: a
 // same-level right operand, comparisons under arithmetic, and n-ary `and`.
 const FAQ_FIELD_TIER = [
   'sum[] (payload[b]) where {a in rows, b in rows} join(row_prior=row_id, syms=[b, a])',
   'sum[] (1) where {i in src, j in tgt} join(src_bin=tgt_bin, src_lvl=tgt_lvl; i=j)',
   'sum[] (1) where {i in src, j in tgt} join(syms=[j, i], a=b)',
-  'any[m] (true) where {c in cells, r in records} join(overlap(src=[px, py], tgt=[W, S, E, N])) if (W[c] <= px[r]) * (px[r] < E[c]) distinct key=skolem(c, label=cell) [semiring=bool_and_or]',
   'sum[c] (w[r]) where {c in cells, r in records} join(overlap(src=[xmin, ymin, xmax, ymax], tgt=[W, S, E, N], eps=1.0e-3))',
   'sum[c] (w[r]) where {c in cells, r in records} join(overlap(tgt=[W, S, E, N], src=[x, y], eps=0))',
   'sum[c] (w[r]) where {c in cells, r in records} join(overlap(src=[px, py], tgt=[W, S, E, N]); a=b)',
-  'argmin[g] (d[g]) where {g in gens} join(point_bin=gen_bin) if d[g] > 0',
-  'argmax[g] (d[g]) where {g in gens} if d[g] < dmax id=best',
-  'skolem(a, b, label=edge)',
-  'skolem(floor(px[i] / w), floor(py[i] / w))',
   'a * (b / c)',
   'a * b / c',
   'a + (b - c)',

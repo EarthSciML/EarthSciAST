@@ -733,18 +733,6 @@
       "reprint": "u[i, j]"
     },
     {
-      "text": "datetime.year(t)",
-      "tier": "array",
-      "ast": {
-        "op": "fn",
-        "name": "datetime.year",
-        "args": [
-          "t"
-        ]
-      },
-      "reprint": "datetime.year(t)"
-    },
-    {
       "text": "true",
       "tier": "array",
       "ast": {
@@ -1048,54 +1036,6 @@
       "reprint": "sum[j] (A[i, j]) where {i in src, j in tgt} join(src_bin=tgt_bin) if A[i, j] > atol"
     },
     {
-      "text": "argmin[g] (a[g]) where {g in gens}",
-      "tier": "reduction",
-      "ast": {
-        "op": "argmin",
-        "args": [
-          "a"
-        ],
-        "arg": "g",
-        "ranges": {
-          "g": {
-            "from": "gens"
-          }
-        },
-        "expr": {
-          "op": "index",
-          "args": [
-            "a",
-            "g"
-          ]
-        }
-      },
-      "reprint": "argmin[g] (a[g]) where {g in gens}"
-    },
-    {
-      "text": "argmax[g] (a[g]) where {g in gens}",
-      "tier": "reduction",
-      "ast": {
-        "op": "argmax",
-        "args": [
-          "a"
-        ],
-        "arg": "g",
-        "ranges": {
-          "g": {
-            "from": "gens"
-          }
-        },
-        "expr": {
-          "op": "index",
-          "args": [
-            "a",
-            "g"
-          ]
-        }
-      },
-      "reprint": "argmax[g] (a[g]) where {g in gens}"
-    },
-    {
       "text": "any[e] (u[f]) where {f in faces} [semiring=bool_and_or]",
       "tier": "reduction",
       "ast": {
@@ -1176,31 +1116,6 @@
         }
       },
       "reprint": "arrhenius<A_pre=1.8e-12, Ea=1500>"
-    },
-    {
-      "text": "polygon_intersection_area(a[i], b[j], manifold=planar)",
-      "tier": "reduction",
-      "ast": {
-        "op": "polygon_intersection_area",
-        "args": [
-          {
-            "op": "index",
-            "args": [
-              "a",
-              "i"
-            ]
-          },
-          {
-            "op": "index",
-            "args": [
-              "b",
-              "j"
-            ]
-          }
-        ],
-        "manifold": "planar"
-      },
-      "reprint": "polygon_intersection_area(a[i], b[j], manifold=planar)"
     },
     {
       "text": "makearray([2:NLON - 1, 1:NLAT] = a[i, j] / dlon, [1:1, 1:NLAT] = b)",
@@ -1450,105 +1365,6 @@
       "reprint": "sum[] (1) where {i in src, j in tgt} join(a=b, syms=[j, i])"
     },
     {
-      "text": "any[m] (true) where {c in cells, r in records} join(overlap(src=[px, py], tgt=[W, S, E, N])) if (W[c] <= px[r]) * (px[r] < E[c]) distinct key=skolem(c, label=cell) [semiring=bool_and_or]",
-      "tier": "reduction",
-      "ast": {
-        "op": "faq",
-        "output_idx": [
-          "m"
-        ],
-        "semiring": "bool_and_or",
-        "ranges": {
-          "c": {
-            "from": "cells"
-          },
-          "r": {
-            "from": "records"
-          }
-        },
-        "join": [
-          {
-            "overlap": {
-              "src_env": [
-                "px",
-                "py"
-              ],
-              "tgt_env": [
-                "W",
-                "S",
-                "E",
-                "N"
-              ]
-            }
-          }
-        ],
-        "filter": {
-          "op": "*",
-          "args": [
-            {
-              "op": "<=",
-              "args": [
-                {
-                  "op": "index",
-                  "args": [
-                    "W",
-                    "c"
-                  ]
-                },
-                {
-                  "op": "index",
-                  "args": [
-                    "px",
-                    "r"
-                  ]
-                }
-              ]
-            },
-            {
-              "op": "<",
-              "args": [
-                {
-                  "op": "index",
-                  "args": [
-                    "px",
-                    "r"
-                  ]
-                },
-                {
-                  "op": "index",
-                  "args": [
-                    "E",
-                    "c"
-                  ]
-                }
-              ]
-            }
-          ]
-        },
-        "distinct": true,
-        "key": {
-          "op": "skolem",
-          "args": [
-            "c"
-          ],
-          "label": "cell"
-        },
-        "expr": {
-          "op": "true",
-          "args": []
-        },
-        "args": [
-          "px",
-          "py",
-          "W",
-          "S",
-          "E",
-          "N"
-        ]
-      },
-      "reprint": "any[m] (true) where {c in cells, r in records} join(overlap(src=[px, py], tgt=[W, S, E, N])) if (W[c] <= px[r]) * (px[r] < E[c]) distinct key=skolem(c, label=cell) [semiring=bool_and_or]"
-    },
-    {
       "text": "sum[c] (w[r]) where {c in cells, r in records} join(overlap(src=[xmin, ymin, xmax, ymax], tgt=[W, S, E, N], eps=1.0e-3))",
       "tier": "reduction",
       "ast": {
@@ -1719,152 +1535,6 @@
         ]
       },
       "reprint": "sum[c] (w[r]) where {c in cells, r in records} join(overlap(src=[px, py], tgt=[W, S, E, N]); a=b)"
-    },
-    {
-      "text": "argmin[g] (d[g]) where {g in gens} join(point_bin=gen_bin) if d[g] > 0",
-      "tier": "reduction",
-      "ast": {
-        "op": "argmin",
-        "args": [
-          "d",
-          "point_bin",
-          "gen_bin"
-        ],
-        "arg": "g",
-        "ranges": {
-          "g": {
-            "from": "gens"
-          }
-        },
-        "expr": {
-          "op": "index",
-          "args": [
-            "d",
-            "g"
-          ]
-        },
-        "join": [
-          {
-            "on": [
-              [
-                "point_bin",
-                "gen_bin"
-              ]
-            ]
-          }
-        ],
-        "filter": {
-          "op": ">",
-          "args": [
-            {
-              "op": "index",
-              "args": [
-                "d",
-                "g"
-              ]
-            },
-            0
-          ]
-        }
-      },
-      "reprint": "argmin[g] (d[g]) where {g in gens} join(point_bin=gen_bin) if d[g] > 0"
-    },
-    {
-      "text": "argmax[g] (d[g]) where {g in gens} if d[g] < dmax id=best",
-      "tier": "reduction",
-      "ast": {
-        "op": "argmax",
-        "args": [
-          "d"
-        ],
-        "arg": "g",
-        "ranges": {
-          "g": {
-            "from": "gens"
-          }
-        },
-        "expr": {
-          "op": "index",
-          "args": [
-            "d",
-            "g"
-          ]
-        },
-        "filter": {
-          "op": "<",
-          "args": [
-            {
-              "op": "index",
-              "args": [
-                "d",
-                "g"
-              ]
-            },
-            "dmax"
-          ]
-        },
-        "id": "best"
-      },
-      "reprint": "argmax[g] (d[g]) where {g in gens} if d[g] < dmax id=best"
-    },
-    {
-      "text": "skolem(a, b, label=edge)",
-      "tier": "reduction",
-      "ast": {
-        "op": "skolem",
-        "args": [
-          "a",
-          "b"
-        ],
-        "label": "edge"
-      },
-      "reprint": "skolem(a, b, label=edge)"
-    },
-    {
-      "text": "skolem(floor(px[i] / w), floor(py[i] / w))",
-      "tier": "reduction",
-      "ast": {
-        "op": "skolem",
-        "args": [
-          {
-            "op": "floor",
-            "args": [
-              {
-                "op": "/",
-                "args": [
-                  {
-                    "op": "index",
-                    "args": [
-                      "px",
-                      "i"
-                    ]
-                  },
-                  "w"
-                ]
-              }
-            ]
-          },
-          {
-            "op": "floor",
-            "args": [
-              {
-                "op": "/",
-                "args": [
-                  {
-                    "op": "index",
-                    "args": [
-                      "py",
-                      "i"
-                    ]
-                  },
-                  "w"
-                ]
-              }
-            ]
-          }
-        ]
-      },
-      "reprint": "skolem(floor(px[i] / w), floor(py[i] / w))"
     },
     {
       "text": "a * (b / c)",
@@ -2108,87 +1778,6 @@
       "reprint": "sum[i] (0.25 * a[i] * b[i]) where {i in cells}"
     },
     {
-      "text": "visc[T=temp]",
-      "tier": "id-and-table",
-      "ast": {
-        "op": "table_lookup",
-        "args": [],
-        "table": "visc",
-        "axes": {
-          "T": "temp"
-        }
-      },
-      "reprint": "visc[T=temp]"
-    },
-    {
-      "text": "k_rate[T=temp, p=pres]:1",
-      "tier": "id-and-table",
-      "ast": {
-        "op": "table_lookup",
-        "args": [],
-        "table": "k_rate",
-        "axes": {
-          "T": "temp",
-          "p": "pres"
-        },
-        "output": 1
-      },
-      "reprint": "k_rate[T=temp, p=pres]:1"
-    },
-    {
-      "text": "intersect_polygon(P, Q, manifold=spherical)",
-      "tier": "id-and-table",
-      "ast": {
-        "op": "intersect_polygon",
-        "args": [
-          "P",
-          "Q"
-        ],
-        "manifold": "spherical"
-      },
-      "reprint": "intersect_polygon(P, Q, manifold=spherical)"
-    },
-    {
-      "text": "intersect_polygon(src_poly, tgt_poly, manifold=planar, id=overlap_clip)",
-      "tier": "id-and-table",
-      "ast": {
-        "op": "intersect_polygon",
-        "args": [
-          "src_poly",
-          "tgt_poly"
-        ],
-        "manifold": "planar",
-        "id": "overlap_clip"
-      },
-      "reprint": "intersect_polygon(src_poly, tgt_poly, manifold=planar, id=overlap_clip)"
-    },
-    {
-      "text": "polygon_intersection_area(a[i], b[j], manifold=planar, id=area_faq)",
-      "tier": "id-and-table",
-      "ast": {
-        "op": "polygon_intersection_area",
-        "args": [
-          {
-            "op": "index",
-            "args": [
-              "a",
-              "i"
-            ]
-          },
-          {
-            "op": "index",
-            "args": [
-              "b",
-              "j"
-            ]
-          }
-        ],
-        "manifold": "planar",
-        "id": "area_faq"
-      },
-      "reprint": "polygon_intersection_area(a[i], b[j], manifold=planar, id=area_faq)"
-    },
-    {
       "text": "any[p] (u[a]) where {a in atmos_cells} id=rg_candidate_pairs [semiring=bool_and_or]",
       "tier": "id-and-table",
       "ast": {
@@ -2242,59 +1831,6 @@
         ]
       },
       "reprint": "sum[i] (u[i]) where {i in cells} id=cell_total"
-    },
-    {
-      "text": "argmin[g] (a[g]) where {g in gens} id=cheapest",
-      "tier": "id-and-table",
-      "ast": {
-        "op": "argmin",
-        "args": [
-          "a"
-        ],
-        "arg": "g",
-        "ranges": {
-          "g": {
-            "from": "gens"
-          }
-        },
-        "expr": {
-          "op": "index",
-          "args": [
-            "a",
-            "g"
-          ]
-        },
-        "id": "cheapest"
-      },
-      "reprint": "argmin[g] (a[g]) where {g in gens} id=cheapest"
-    },
-    {
-      "text": "visc[T=temp] * k_rate[T=temp, p=pres]:1",
-      "tier": "id-and-table",
-      "ast": {
-        "op": "*",
-        "args": [
-          {
-            "op": "table_lookup",
-            "args": [],
-            "table": "visc",
-            "axes": {
-              "T": "temp"
-            }
-          },
-          {
-            "op": "table_lookup",
-            "args": [],
-            "table": "k_rate",
-            "axes": {
-              "T": "temp",
-              "p": "pres"
-            },
-            "output": 1
-          }
-        ]
-      },
-      "reprint": "visc[T=temp] * k_rate[T=temp, p=pres]:1"
     },
     {
       "text": "(-a) * b",
@@ -3538,28 +3074,6 @@
       "reprint": "acosh(x)"
     },
     {
-      "text": "argmin[g] (abs(d)) where {g in 1:10}",
-      "tier": "display-fixture",
-      "ast": {
-        "op": "argmin",
-        "args": [],
-        "arg": "g",
-        "ranges": {
-          "g": [
-            1,
-            10
-          ]
-        },
-        "expr": {
-          "op": "abs",
-          "args": [
-            "d"
-          ]
-        }
-      },
-      "reprint": "argmin[g] (abs(d)) where {g in 1:10}"
-    },
-    {
       "text": "asin(x)",
       "tier": "display-fixture",
       "ast": {
@@ -3940,18 +3454,6 @@
         ]
       },
       "reprint": "cosh(x)"
-    },
-    {
-      "text": "datetime.day_of_year(t)",
-      "tier": "display-fixture",
-      "ast": {
-        "op": "fn",
-        "name": "datetime.day_of_year",
-        "args": [
-          "t"
-        ]
-      },
-      "reprint": "datetime.day_of_year(t)"
     },
     {
       "text": "div(u * tracer)",
@@ -4386,33 +3888,6 @@
       "reprint": "p and q"
     },
     {
-      "text": "polygon_intersection_area(P, Q, manifold=planar)",
-      "tier": "display-fixture",
-      "ast": {
-        "op": "polygon_intersection_area",
-        "args": [
-          "P",
-          "Q"
-        ],
-        "manifold": "planar"
-      },
-      "reprint": "polygon_intersection_area(P, Q, manifold=planar)"
-    },
-    {
-      "text": "polygon_intersection_area(a, b, manifold=planar, id=area_faq)",
-      "tier": "display-fixture",
-      "ast": {
-        "op": "polygon_intersection_area",
-        "args": [
-          "a",
-          "b"
-        ],
-        "manifold": "planar",
-        "id": "area_faq"
-      },
-      "reprint": "polygon_intersection_area(a, b, manifold=planar, id=area_faq)"
-    },
-    {
       "text": "prod[i, j] (A)",
       "tier": "display-fixture",
       "ast": {
@@ -4427,17 +3902,6 @@
         "args": []
       },
       "reprint": "prod[i, j] (A)"
-    },
-    {
-      "text": "rank(S)",
-      "tier": "display-fixture",
-      "ast": {
-        "op": "rank",
-        "args": [
-          "S"
-        ]
-      },
-      "reprint": "rank(S)"
     },
     {
       "text": "reshape(A, [2, 3])",
@@ -4565,19 +4029,6 @@
         ]
       },
       "reprint": "sinh(x)"
-    },
-    {
-      "text": "skolem(u, v, label=edge)",
-      "tier": "display-fixture",
-      "ast": {
-        "op": "skolem",
-        "args": [
-          "u",
-          "v"
-        ],
-        "label": "edge"
-      },
-      "reprint": "skolem(u, v, label=edge)"
     },
     {
       "text": "sqrt(a^2 + b^2 + 2 * a * b * cos(gamma))",
