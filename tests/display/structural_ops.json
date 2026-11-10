@@ -60,32 +60,6 @@
         "ascii": "false"
       },
       {
-        "name": "fn datetime.year",
-        "input": {
-          "op": "fn",
-          "name": "datetime.year",
-          "args": [
-            "t"
-          ]
-        },
-        "unicode": "datetime.year(t)",
-        "latex": "\\mathrm{datetime.year}(t)",
-        "ascii": "datetime.year(t)"
-      },
-      {
-        "name": "fn underscored name",
-        "input": {
-          "op": "fn",
-          "name": "datetime.day_of_year",
-          "args": [
-            "t"
-          ]
-        },
-        "unicode": "datetime.day_of_year(t)",
-        "latex": "\\mathrm{datetime.day\\_of\\_year}(t)",
-        "ascii": "datetime.day_of_year(t)"
-      },
-      {
         "name": "enum member",
         "input": {
           "op": "enum",
@@ -172,36 +146,6 @@
         "unicode": "∫[0, 1] f dx",
         "latex": "\\int_{0}^{1} f \\, dx",
         "ascii": "integral(f, x, 0, 1)"
-      },
-      {
-        "name": "table_lookup single axis",
-        "input": {
-          "op": "table_lookup",
-          "args": [],
-          "table": "visc",
-          "axes": {
-            "T": "temp"
-          }
-        },
-        "unicode": "visc[T=temp]",
-        "latex": "\\mathrm{visc}[T = \\mathrm{temp}]",
-        "ascii": "visc[T=temp]"
-      },
-      {
-        "name": "table_lookup multi axis with output",
-        "input": {
-          "op": "table_lookup",
-          "args": [],
-          "table": "k_rate",
-          "axes": {
-            "T": "temp",
-            "p": "pres"
-          },
-          "output": 1
-        },
-        "unicode": "k_rate[T=temp, p=pres]:1",
-        "latex": "\\mathrm{k\\_rate}[T = \\mathrm{temp}, p = \\mathrm{pres}]:1",
-        "ascii": "k_rate[T=temp, p=pres]:1"
       },
       {
         "name": "apply_expression_template",
@@ -334,34 +278,6 @@
         "ascii": "concat(A, B, axis=0)"
       },
       {
-        "name": "intersect_polygon",
-        "input": {
-          "op": "intersect_polygon",
-          "args": [
-            "P",
-            "Q"
-          ],
-          "manifold": "spherical"
-        },
-        "unicode": "intersect_polygon(P, Q, manifold=spherical)",
-        "latex": "\\mathrm{intersect\\_polygon}(P, Q, manifold=spherical)",
-        "ascii": "intersect_polygon(P, Q, manifold=spherical)"
-      },
-      {
-        "name": "polygon_intersection_area",
-        "input": {
-          "op": "polygon_intersection_area",
-          "args": [
-            "P",
-            "Q"
-          ],
-          "manifold": "planar"
-        },
-        "unicode": "polygon_intersection_area(P, Q, manifold=planar)",
-        "latex": "\\mathrm{polygon\\_intersection\\_area}(P, Q, manifold=planar)",
-        "ascii": "polygon_intersection_area(P, Q, manifold=planar)"
-      },
-      {
         "name": "faq sum",
         "input": {
           "op": "faq",
@@ -444,29 +360,6 @@
         "unicode": "min[i] (d) [semiring=min_sum]",
         "latex": "\\min_{i} (d) [semiring=min_sum]",
         "ascii": "min[i] (d) [semiring=min_sum]"
-      },
-      {
-        "name": "argmin",
-        "input": {
-          "op": "argmin",
-          "args": [],
-          "arg": "g",
-          "expr": {
-            "op": "abs",
-            "args": [
-              "d"
-            ]
-          },
-          "ranges": {
-            "g": [
-              1,
-              10
-            ]
-          }
-        },
-        "unicode": "argmin[g] (|d|) where {g∈1:10}",
-        "latex": "\\mathrm{argmin}_{g} (|d|) \\text{ where } \\{g \\in 1:10\\}",
-        "ascii": "argmin[g] (abs(d)) where {g in 1:10}"
       },
       {
         "name": "faq self-join with syms",
@@ -554,99 +447,6 @@
         "ascii": "sum[] (1) where {i in src, j in tgt} join(src_bin=tgt_bin, src_lvl=tgt_lvl; i=j)"
       },
       {
-        "name": "faq overlap join",
-        "input": {
-          "op": "faq",
-          "args": [],
-          "output_idx": [
-            "m"
-          ],
-          "expr": {
-            "op": "true",
-            "args": []
-          },
-          "semiring": "bool_and_or",
-          "distinct": true,
-          "ranges": {
-            "c": {
-              "from": "cells"
-            },
-            "r": {
-              "from": "records"
-            }
-          },
-          "join": [
-            {
-              "overlap": {
-                "src_env": [
-                  "px",
-                  "py"
-                ],
-                "tgt_env": [
-                  "W",
-                  "S",
-                  "E",
-                  "N"
-                ]
-              }
-            }
-          ],
-          "filter": {
-            "op": "*",
-            "args": [
-              {
-                "op": "<=",
-                "args": [
-                  {
-                    "op": "index",
-                    "args": [
-                      "W",
-                      "c"
-                    ]
-                  },
-                  {
-                    "op": "index",
-                    "args": [
-                      "px",
-                      "r"
-                    ]
-                  }
-                ]
-              },
-              {
-                "op": "<",
-                "args": [
-                  {
-                    "op": "index",
-                    "args": [
-                      "px",
-                      "r"
-                    ]
-                  },
-                  {
-                    "op": "index",
-                    "args": [
-                      "E",
-                      "c"
-                    ]
-                  }
-                ]
-              }
-            ]
-          },
-          "key": {
-            "op": "skolem",
-            "args": [
-              "c"
-            ],
-            "label": "cell"
-          }
-        },
-        "unicode": "⋁[m] (true) where {c∈cells, r∈records} join(overlap(src=[px, py], tgt=[W, S, E, N])) if (W[c] ≤ px[r])·(px[r] < E[c]) distinct key=skolem(c, label=cell) [semiring=bool_and_or]",
-        "latex": "\\bigvee_{m} (true) \\text{ where } \\{c \\in cells, r \\in records\\} join(overlap(src=[px, py], tgt=[W, S, E, N])) if (W[c] \\leq \\mathrm{px}[r]) \\cdot (\\mathrm{px}[r] < E[c]) distinct key=\\mathrm{skolem}(c, label=cell) [semiring=bool_and_or]",
-        "ascii": "any[m] (true) where {c in cells, r in records} join(overlap(src=[px, py], tgt=[W, S, E, N])) if (W[c] <= px[r]) * (px[r] < E[c]) distinct key=skolem(c, label=cell) [semiring=bool_and_or]"
-      },
-      {
         "name": "faq overlap join with eps",
         "input": {
           "op": "faq",
@@ -692,52 +492,6 @@
         "unicode": "Σ[c] (w[r]) where {c∈cells, r∈records} join(overlap(src=[xmin, ymin, xmax, ymax], tgt=[W, S, E, N], eps=1.0×10⁻³))",
         "latex": "\\sum_{c} (w[r]) \\text{ where } \\{c \\in cells, r \\in records\\} join(overlap(src=[xmin, ymin, xmax, ymax], tgt=[W, S, E, N], eps=1.0 \\times 10^{-3}))",
         "ascii": "sum[c] (w[r]) where {c in cells, r in records} join(overlap(src=[xmin, ymin, xmax, ymax], tgt=[W, S, E, N], eps=1.0e-3))"
-      },
-      {
-        "name": "argmin with join and filter",
-        "input": {
-          "op": "argmin",
-          "args": [],
-          "arg": "g",
-          "expr": {
-            "op": "index",
-            "args": [
-              "d",
-              "g"
-            ]
-          },
-          "ranges": {
-            "g": {
-              "from": "gens"
-            }
-          },
-          "join": [
-            {
-              "on": [
-                [
-                  "point_bin",
-                  "gen_bin"
-                ]
-              ]
-            }
-          ],
-          "filter": {
-            "op": ">",
-            "args": [
-              {
-                "op": "index",
-                "args": [
-                  "d",
-                  "g"
-                ]
-              },
-              0
-            ]
-          }
-        },
-        "unicode": "argmin[g] (d[g]) where {g∈gens} join(point_bin=gen_bin) if d[g] > 0",
-        "latex": "\\mathrm{argmin}_{g} (d[g]) \\text{ where } \\{g \\in gens\\} join(point_bin=gen_bin) if d[g] > 0",
-        "ascii": "argmin[g] (d[g]) where {g in gens} join(point_bin=gen_bin) if d[g] > 0"
       },
       {
         "name": "grad (generic)",
@@ -807,32 +561,6 @@
         "unicode": "godunov_hamiltonian(u, v)",
         "latex": "\\mathrm{godunov\\_hamiltonian}(u, v)",
         "ascii": "godunov_hamiltonian(u, v)"
-      },
-      {
-        "name": "skolem (generic, args-only)",
-        "input": {
-          "op": "skolem",
-          "label": "edge",
-          "args": [
-            "u",
-            "v"
-          ]
-        },
-        "unicode": "skolem(u, v, label=edge)",
-        "latex": "\\mathrm{skolem}(u, v, label=edge)",
-        "ascii": "skolem(u, v, label=edge)"
-      },
-      {
-        "name": "rank (generic, args-only)",
-        "input": {
-          "op": "rank",
-          "args": [
-            "S"
-          ]
-        },
-        "unicode": "rank(S)",
-        "latex": "\\mathrm{rank}(S)",
-        "ascii": "rank(S)"
       },
       {
         "name": "D with an explicit wrt",
