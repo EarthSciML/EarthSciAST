@@ -142,11 +142,13 @@ end
 # codegen_kernel.jl / stencil.jl), so every non-reference build here enables
 # both the nested boundaries (which mint the `_NK_SUBCALL`s) and the function
 # tier; `disable=true` is the bare default path, the differential reference.
-function _scf_build(F; disable = false, floor = nothing)
+# `transport` forces the split's transport (`ESS_CODEGEN_SPLIT_TRANSPORT`).
+function _scf_build(F; disable = false, floor = nothing, transport = nothing)
     return withenv(
         "ESS_CG_SUBCALL_FN" => (disable ? nothing : "1"),
         "ESS_NESTED_TEMPLATE_BOUNDARY" => (disable ? nothing : "1"),
-        "ESS_CG_SUBCALL_FN_MIN_NODES" => (floor === nothing ? nothing : string(floor))
+        "ESS_CG_SUBCALL_FN_MIN_NODES" => (floor === nothing ? nothing : string(floor)),
+        "ESS_CODEGEN_SPLIT_TRANSPORT" => transport
     ) do
         ESM._reset_cascade_tally!()
         flat = ESM.flatten(ESM.load_path(F))
@@ -206,6 +208,21 @@ _scf_decl(t) = sum(v for (k, v) in t if startswith(String(k), "codegen_decline")
         Jf = ForwardDiff.jacobian(uu -> _scf_du(ff, uu, pf, 0.4), u0)
         Jr = ForwardDiff.jacobian(uu -> _scf_du(fr, uu, pr, 0.4), u0)
         @test _scf_same(Jf, Jr)
+
+        # The tier's functions carried BY VALUE — what a body over the
+        # by-value threshold takes on 1.12+ — run the same values.
+        if ESM._cg_split_supported()
+            fv, y0, pv, _vmv, vt = _scf_build(F; floor = 0, transport = "value")
+            @test u0 == y0
+            @test get(vt, :cg_subcall_fn, 0) >= 1
+            @test get(vt, :cg_split_by_value, 0) >= 1
+            @test _scf_decl(vt) == 0
+            for k in 1:4, t in (0.0, 0.6, 2.75)
+                u = k == 1 ? copy(u0) : _scf_probe(length(u0), k)
+                @test _scf_same(_scf_du(fv, u, pv, t), _scf_du(fr, u, pr, t))
+            end
+            @test _scf_same(ForwardDiff.jacobian(uu -> _scf_du(fv, uu, pv, 0.4), u0), Jr)
+        end
 
         # The call boundary must not cost allocation: serial path pinned (the
         # threaded tier's fixed dispatch cost is a different property, covered

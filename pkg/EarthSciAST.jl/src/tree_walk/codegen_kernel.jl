@@ -221,7 +221,7 @@ mutable struct _CGCtx
     # was first minted as. Reset per kernel so a declined kernel's rolled-back
     # helpers are never referenced (dedup scope is one kernel — where the
     # redundancy is; distinct kernels are distinct equations).
-    helper_dedup::Dict{String, Any}
+    helper_dedup::Dict{String, Symbol}
     # Sub-kernel function memo (ess-cg-subcall-fn): sub-`_AccKernel` → the
     # `@noinline` function serving its body, as `(fname, extra_params,
     # int_consts::Vector{Int}, flt_consts::Vector{Float64})`, or `:inline` for
@@ -293,7 +293,7 @@ _CGCtx(budget::Int, shared_cache::Union{Nothing, _CSECache} = nothing; nst::Int 
     _CGCtx(
     DataType[], Vector{Any}[], IdDict{Any, Tuple{Int, Int}}(),
     IdDict{Any, Vector{Symbol}}(),
-    Any[], Any[], 0, budget, 0, shared_cache, 0, Any[], Dict{String, Any}(),
+    Any[], Any[], 0, budget, 0, shared_cache, 0, Any[], Dict{String, Symbol}(),
     IdDict{Any, Any}(), Any[],
     Dict{String, Tuple{Symbol, Vector{Symbol}}}(), String[], false,
     Int[], Any[], IdDict{Any, Symbol}(), false, false, Symbol[], nothing,
@@ -1021,9 +1021,10 @@ end
 # A tiny body (≤ `_cg_subcall_fn_min_nodes()`) stays inlined per site, and
 # Julia < 1.12 keeps the pre-tier inlining wholesale — the emitted function is
 # the same inner-`function`-under-RGF mechanism as the split's inner-definition
-# transport, which boxes and segfaults there (`_cg_split_supported`). This tier
-# has not been ported to the by-value transport the split takes instead; it
-# ships off, so nothing on those versions depends on it.
+# transport, which boxes and segfaults there (`_cg_split_supported`). On 1.12+
+# its functions take whichever transport the split picks, by value included
+# (codegen_subcall_fn_test.jl runs both); below 1.12 it is not enabled at all.
+# It ships off, so nothing on those versions depends on it.
 # Canonicalizer/parametrizer for one emitted sub-kernel body
 # (ess-cg-subcall-struct). Rewrites the expression so that everything that
 # varies between two structurally-equal sub-kernels becomes an ARGUMENT:
@@ -2640,8 +2641,9 @@ _codegen_fn_node_cap() =
 # inner-definition transport is allocation-free and stable only there.
 #
 # This also gates the EXPERIMENTAL sub-kernel function tier
-# (`_cg_subcall_fn`/`_cg_cell_fn!`), which emits inner definitions of its own and
-# has not been tested in the by-value transport. That tier ships off.
+# (`_cg_subcall_fn`/`_cg_cell_fn!`), which emits inner definitions of its own;
+# where it is enabled they go through the same transport choice as the split's.
+# That tier ships off.
 _cg_split_supported() = VERSION >= v"1.12"
 
 # The name a by-value build gives the tuple of emitted sub-functions.
@@ -2691,18 +2693,46 @@ const _CG_FNS = :_cgfns
 # a build's transport is a function of the document alone. Chosen from first-call
 # measurements: every split section of the test suite sits well under it, and
 # the reseact transport section sits well over it (see the PR that set it).
-const _CG_BY_VALUE_MIN_NODES = 100_000
+# A `Ref` so a test can lower it to reach the size-based choice on a small body.
+const _CG_BY_VALUE_MIN_NODES = Ref(100_000)
 
 _cg_split_transport_override() = get(ENV, "ESS_CODEGEN_SPLIT_TRANSPORT", "")
 
-# Whether a generated function of `nodes` emitted nodes carries its
-# sub-functions by value (see the TRANSPORT note above).
-function _cg_carry_by_value(nodes::Int)
+# The transport the Julia version or the override fixes regardless of size:
+# `true` (by value), `false` (inner definitions), or `nothing` (decide by size).
+function _cg_fixed_transport()
     _cg_split_supported() || return true
     o = _cg_split_transport_override()
     o == "value" && return true
     o == "definition" && return false
-    return nodes > _CG_BY_VALUE_MIN_NODES
+    return nothing
+end
+
+# Whether a generated function of `nodes` emitted nodes carries its
+# sub-functions by value (see the TRANSPORT note above).
+function _cg_carry_by_value(nodes::Integer)
+    fixed = _cg_fixed_transport()
+    return fixed === nothing ? nodes > _CG_BY_VALUE_MIN_NODES[] : fixed
+end
+
+# The same choice for the generated function `ex`. Its size is counted only
+# when nothing else decides, and only until it passes the threshold.
+function _cg_carry_by_value(ex::Expr)
+    fixed = _cg_fixed_transport()
+    fixed === nothing || return fixed
+    lim = _CG_BY_VALUE_MIN_NODES[]
+    return _cg_expr_size_upto(ex, lim) > lim
+end
+
+# `_cg_expr_size(ex)`, or any count above `lim` once the walk passes it.
+function _cg_expr_size_upto(ex, lim::Int, n::Int = 0)
+    n += 1
+    ex isa Expr || return n
+    for a in ex.args
+        n > lim && return n
+        n = _cg_expr_size_upto(a, lim, n)
+    end
+    return n
 end
 
 # `(name, params, body)` of an emitted inner definition — `@noinline function
@@ -2753,23 +2783,26 @@ end
 function _cg_split_transport(ex::Expr, ngrp::Int)
     body = ex.args[2]::Expr
     defs = Tuple{Symbol, Vector{Symbol}, Any}[]
+    rest = Any[]
     idx = Dict{Symbol, Int}()
     for s in body.args
         d = _cg_inner_def(s)
-        d === nothing && continue
-        push!(defs, d)
-        idx[d[1]] = length(defs)
+        if d === nothing
+            push!(rest, s)
+        else
+            push!(defs, d)
+            idx[d[1]] = length(defs)
+        end
     end
     isempty(defs) && return (ex, nothing)
-    _cg_carry_by_value(_cg_expr_size(ex)) || return (ex, nothing)
+    _cg_carry_by_value(ex) || return (ex, nothing)
     left = Ref(0)
     fns = Expr[
         Expr(:function, Expr(:tuple, params..., _CG_FNS), _cg_calls_by_value(fb, idx, left))
             for (_, params, fb) in defs
     ]
     stmts = Any[:(local $(_CG_FNS) = tabs[$(ngrp + 1)])]
-    for s in body.args
-        _cg_inner_def(s) === nothing || continue
+    for s in rest
         push!(stmts, _cg_calls_by_value(s, idx, left))
     end
     # The emitter only ever CALLS a sub-function; a bare reference would be left
@@ -2780,8 +2813,10 @@ function _cg_split_transport(ex::Expr, ngrp::Int)
 end
 
 # A by-value sub-function: a callable whose call is a generated function of this
-# module, keyed by the content of its definition (`ID`, a 128-bit hash of the
-# `function (params…) body end` expression), so one `ID` always names one body.
+# module, keyed by the CONTENT of its definition — `ID` is a digest of the
+# serialized `function (params…) body end` expression (`_cg_subfn_id`), so one
+# `ID` names one body, in every session, and a literal's type is part of the
+# content (`x^2` and `x^2.0` are different sub-functions).
 #
 # Why not a `RuntimeGeneratedFunction`. Every RGF of this module is called
 # through the one method RGF defines for it, so an RGF calling another RGF is,
@@ -2790,37 +2825,116 @@ end
 # boxed calling convention — every argument heap-allocated, on every call. A
 # sub-function called through its own method is an ordinary static call.
 #
-# The definition is kept by the object (`def`) and found by the generator in
-# `_CG_SUBFN_DEFS`, which holds it weakly, so a definition lives as long as a
-# function built with it does. The generator only runs while such a function is
-# being called, so the entry is there when it is needed.
+# Where the generator finds the body. The instance holds its definition (`def`),
+# and the generator, which sees only the type, reads it from
+# `_CG_SUBFN_TABLE` — `ID` to a weak reference to that same `Expr`. Every way an
+# instance comes to exist puts its definition there first: built
+# (`_cg_subfns`), deserialized on another process (the `deserialize` method
+# below), or deep-copied (which returns the instance itself). So while an
+# instance can be called, the entry is live.
+#
+# Why that read is safe inside a generator, which may run during inference, on
+# any thread, any number of times. It takes no lock: the table is an immutable
+# snapshot that a registration replaces whole (copy, add, publish atomically),
+# so a reader sees one consistent `Dict` and never waits on a writer. And it is
+# pure in effect: an `ID` only ever maps to its own content, so every run of the
+# generator — in this session, or one whose result was cached in a precompile
+# image — produces the same body for the same `ID`. The one way a lookup can
+# fail is a call made with no instance alive, which cannot be a real call.
 struct _CGSubFn{ID}
     def::Expr
 end
-const _CG_SUBFN_DEFS = Dict{UInt128, WeakRef}()
+
+mutable struct _CGSubFnTable
+    @atomic defs::Dict{UInt128, WeakRef}
+end
+const _CG_SUBFN_TABLE = _CGSubFnTable(Dict{UInt128, WeakRef}())
+# Serializes registrations against each other; never taken by a reader.
 const _CG_SUBFN_LOCK = ReentrantLock()
 
-function _cg_subfn(def::Expr)
-    id = (UInt128(hash(def)) << 64) | UInt128(hash(def, 0x9e3779b97f4a7c15))
-    def = lock(_CG_SUBFN_LOCK) do
-        w = get(_CG_SUBFN_DEFS, id, nothing)
-        w !== nothing && w.value !== nothing && return w.value::Expr
-        _CG_SUBFN_DEFS[id] = WeakRef(def)
-        return def
+# The content address of a sub-function definition: the first 128 bits of the
+# SHA-256 of its serialization, which records every literal's type and value
+# and every name by its text, so it is the same in every session.
+function _cg_subfn_id(def::Expr)
+    io = IOBuffer()
+    Serialization.serialize(io, def)
+    d = SHA.sha256(take!(io))
+    id = UInt128(0)
+    for i in 1:16
+        id = (id << 8) | d[i]
     end
-    return _CGSubFn{id}(def)
+    return id
 end
 
-@generated function (::_CGSubFn{ID})(args::Vararg{Any, N}) where {ID, N}
-    def = lock(() -> _CG_SUBFN_DEFS[ID].value, _CG_SUBFN_LOCK)
-    def === nothing && error("codegen: by-value sub-function $ID has no definition")
+# Register `defs` under `ids`; return, per entry, the `Expr` an instance must
+# hold — the one already registered for that `ID` when it is still alive (so
+# every instance of one `ID` keeps the same entry alive), else its own. Dead
+# entries are dropped while the snapshot is copied.
+function _cg_subfn_register!(ids::Vector{UInt128}, defs::Vector{Expr})
+    return lock(_CG_SUBFN_LOCK) do
+        old = @atomic :acquire _CG_SUBFN_TABLE.defs
+        new = Dict{UInt128, WeakRef}()
+        sizehint!(new, length(old) + length(ids))
+        for (k, w) in old
+            w.value === nothing || (new[k] = w)
+        end
+        live = Vector{Expr}(undef, length(ids))
+        for i in eachindex(ids)
+            w = get(new, ids[i], nothing)
+            v = w === nothing ? nothing : w.value
+            if v === nothing
+                new[ids[i]] = WeakRef(defs[i])
+                live[i] = defs[i]
+            else
+                live[i] = v::Expr
+            end
+        end
+        @atomic :release _CG_SUBFN_TABLE.defs = new
+        live
+    end
+end
+
+# The sub-functions of one build, as the tuple a body indexes.
+function _cg_subfns(defs::Vector{Expr})
+    ids = UInt128[_cg_subfn_id(d) for d in defs]
+    live = _cg_subfn_register!(ids, defs)
+    return Tuple(_CGSubFn{ids[i]}(live[i]) for i in eachindex(ids))
+end
+
+# The registered definition of `id`, or `nothing`. Lock-free (see `_CGSubFn`).
+function _cg_subfn_def(id::UInt128)
+    w = get(@atomic(:acquire, _CG_SUBFN_TABLE.defs), id, nothing)
+    return w === nothing ? nothing : w.value
+end
+
+# Another process's instance arrives with its definition and registers it here.
+function Serialization.deserialize(
+        s::Serialization.AbstractSerializer, ::Type{_CGSubFn{ID}}
+    ) where {ID}
+    def = Serialization.deserialize(s)::Expr
+    return _CGSubFn{ID}(only(_cg_subfn_register!(UInt128[ID], Expr[def])))
+end
+
+# A deep copy is the instance itself, as for an RGF or any other function; the
+# copy keeps the original's entry alive.
+Base.deepcopy_internal(f::_CGSubFn, ::IdDict) = f
+
+# The method's own argument and parameter names are not ones the emitter mints
+# (they hold a `#`), so no sub-function parameter or local can rebind them.
+@generated function (::_CGSubFn{var"##id"})(
+        var"##args"::Vararg{Any, var"##n"}
+    ) where {var"##id", var"##n"}
+    def = _cg_subfn_def(var"##id")
+    def === nothing && error("codegen: by-value sub-function $(var"##id") has no definition")
     params = (def::Expr).args[1].args
-    length(params) == N || error("codegen: by-value sub-function $ID takes $(length(params)) arguments, called with $N")
+    length(params) == var"##n" ||
+        error("codegen: by-value sub-function $(var"##id") takes $(length(params)) arguments, called with $(var"##n")")
+    args = Symbol("##args")
     return Expr(
         :block,
         # Compiled on its own, as the inner definition it replaces would be.
         Expr(:meta, :noinline),
-        Any[:($(params[i]) = @inbounds args[$i]) for i in 1:N]...,
+        Any[:($(params[i]) = @inbounds $args[$i]) for i in 1:var"##n"]...,
         def.args[2],
     )
 end
@@ -2829,7 +2943,7 @@ end
 # tuple as one more element: a heterogeneous tuple of concrete callables, so a
 # call site reading it at a LITERAL index resolves its callee statically.
 _cg_pack_fns(tabpack::Tuple, ::Nothing) = tabpack
-_cg_pack_fns(tabpack::Tuple, fns::Vector{Expr}) = (tabpack..., Tuple(_cg_subfn(h) for h in fns))
+_cg_pack_fns(tabpack::Tuple, fns::Vector{Expr}) = (tabpack..., _cg_subfns(fns))
 
 # Every Symbol referenced anywhere in `ex` (recursively). Used to compute the
 # exact set of outer-scope locals a chunk function must receive as arguments.

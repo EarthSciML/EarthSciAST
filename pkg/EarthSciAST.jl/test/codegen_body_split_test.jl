@@ -33,6 +33,7 @@
 using Test
 using EarthSciAST
 using ForwardDiff
+using Serialization
 include("testutils.jl")
 const ESM = EarthSciAST
 
@@ -162,10 +163,110 @@ _decl(t) = sum(v for (k, v) in t if startswith(String(k), "codegen_decline"); in
     @test get(nt, :cg_split_by_value, 0) == 0
     @test u0 == x0
     @test _bs_same(_bs_du(fn, copy(u0), pn, 0.7), _bs_du(fr, copy(u0), pr, 0.7))
+
+    # The SIZE-based choice, end to end, with no override: a threshold under
+    # this body's size takes the by-value transport on every Julia, and one far
+    # over it keeps the inner definitions on 1.12+.
+    lim0 = ESM._CG_BY_VALUE_MIN_NODES[]
+    try
+        ESM._CG_BY_VALUE_MIN_NODES[] = 1
+        fz, z0, pz, zt = _bs_build(model, ics; fncap = 40)
+        @test get(zt, :codegen_kernel, 0) >= 1
+        @test _decl(zt) == 0
+        @test get(zt, :cg_split_by_value, 0) >= 1
+        @test u0 == z0
+        for k in 1:3, t in (0.0, 0.7)
+            u = k == 1 ? copy(u0) : _bs_probe(length(u0), k)
+            @test _bs_same(_bs_du(fz, u, pz, t), _bs_du(fr, u, pr, t))
+        end
+        ESM._CG_BY_VALUE_MIN_NODES[] = typemax(Int)
+        _, _, _, ht = _bs_build(model, ics; fncap = 40)
+        @test (get(ht, :cg_split_by_value, 0) >= 1) == !ESM._cg_split_supported()
+    finally
+        ESM._CG_BY_VALUE_MIN_NODES[] = lim0
+    end
+end
+
+# A by-value sub-function from a bare definition, `function (params…,
+# _cgfns) body end` — the form `_cg_split_transport` lifts.
+_bs_def(params, body) = Expr(:function, Expr(:tuple, params..., :_cgfns), body)
+
+# `x * k + 0.0625` as a sub-function definition, built inside a function so
+# nothing at top level keeps the `Expr` alive.
+_bs_lin(k) = _bs_def([:x], :(x * $k + 0.0625))
+
+# Register `_bs_lin(k)` and return only what survives without the instance: its
+# serialized bytes and its `ID`. Never called here, so no method instance for
+# that `ID` exists yet.
+function _bs_serialized(k)
+    f = only(ESM._cg_subfns(Expr[_bs_lin(k)]))
+    io = IOBuffer()
+    Serialization.serialize(io, f)
+    return take!(io), typeof(f).parameters[1]
+end
+_bs_deepcopied(k) = deepcopy(only(ESM._cg_subfns(Expr[_bs_lin(k)])))
+_bs_registered_id(k) = typeof(only(ESM._cg_subfns(Expr[_bs_lin(k)]))).parameters[1]
+
+@testset "by-value sub-function identity" begin
+    # A literal's TYPE is part of a definition's content: `hash` equates these
+    # literals, and each must still run its own body.
+    lits = Any[1, 1.0, Int32(1), true]
+    fs = ESM._cg_subfns(Expr[_bs_def([:x], :(typeof($l))) for l in lits])
+    @test length(unique(typeof.(fs))) == length(lits)
+    @test [f(0, fs) for f in fs] == Any[typeof(l) for l in lits]
+    sq = ESM._cg_subfns(Expr[_bs_def([:x], :(x^2)), _bs_def([:x], :(x^2.0))])
+    @test sq[1](3, sq) === 9
+    @test sq[2](3, sq) === 9.0
+
+    # The same content is the same sub-function (one compiled method).
+    a = only(ESM._cg_subfns(Expr[_bs_def([:x], :(x + 0.25))]))
+    b = only(ESM._cg_subfns(Expr[_bs_def([:x], :(x + 0.25))]))
+    @test typeof(a) === typeof(b)
+    @test a.def === b.def
+
+    # Parameter and local names the generated method itself might use.
+    nm = ESM._cg_subfns(Expr[_bs_def([:args, :N], :(ID = args + N; ID * 2))])
+    @test nm[1](3, 4, nm) == 14
+
+    # Serialized to another process: the instance carries its definition, and
+    # deserializing registers it, so a call works with the original gone.
+    bytes, id = _bs_serialized(3.0)
+    GC.gc(true); GC.gc(true)
+    @test ESM._cg_subfn_def(id) === nothing          # the original is collected
+    g = Serialization.deserialize(IOBuffer(bytes))
+    @test typeof(g).parameters[1] == id
+    @test g(2.0, (g,)) === 6.0625
+
+    # A deep copy outlives the original it was copied from.
+    h = _bs_deepcopied(5.0)
+    GC.gc(true); GC.gc(true)
+    @test h(2.0, (h,)) === 10.0625
+
+    # Dead entries leave the table at the next registration.
+    dead = _bs_registered_id(7.0)
+    GC.gc(true); GC.gc(true)
+    ESM._cg_subfns(Expr[_bs_lin(11.0)])
+    @test !haskey(@atomic(ESM._CG_SUBFN_TABLE.defs), dead)
+
+    # The generator takes no lock: a fresh sub-function compiles and runs while
+    # another task holds the registration lock.
+    fresh = ESM._cg_subfns(Expr[_bs_lin(13.0)])
+    held = Channel{Nothing}(1); release = Channel{Nothing}(1)
+    holder = @async lock(ESM._CG_SUBFN_LOCK) do
+        put!(held, nothing)
+        take!(release)
+    end
+    take!(held)
+    caller = @async fresh[1](1.0, fresh)
+    ok = timedwait(() -> istaskdone(caller), 60.0)
+    put!(release, nothing)
+    wait(holder)
+    @test ok === :ok
+    @test fetch(caller) === 13.0625
 end
 
 @testset "split transport choice" begin
-    lim = ESM._CG_BY_VALUE_MIN_NODES
+    lim = ESM._CG_BY_VALUE_MIN_NODES[]
     withenv("ESS_CODEGEN_SPLIT_TRANSPORT" => nothing) do
         # By size: inner definitions up to the threshold, by value above it
         # (always by value where inner definitions are unsupported).
