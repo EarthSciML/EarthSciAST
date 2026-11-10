@@ -75,8 +75,10 @@ if length(ARGS) >= 3 && ARGS[1] == "--one"
 end
 
 include(joinpath(@__DIR__, "docs.jl"))
-const DIR = bench_docs("generate.py", isempty(ARGS) || ARGS[1] == "-" ? nothing : ARGS[1], ["--only", "mesh"];
-                       env = "CLOSED_TEMPLATES_DIR", name = "closed_templates", prefix = "mesh_rank_")
+const DIR = bench_docs(
+    "generate.py", isempty(ARGS) || ARGS[1] == "-" ? nothing : ARGS[1], ["--only", "mesh"];
+    env = "CLOSED_TEMPLATES_DIR", name = "closed_templates", prefix = "mesh_rank_"
+)
 const FILTERS = length(ARGS) > 1 ? ARGS[2:end] : String[]
 const REPS = parse(Int, get(ENV, "REPS", "3"))
 const INTERP_CHECK = get(ENV, "INTERP_CHECK", "0") == "1"

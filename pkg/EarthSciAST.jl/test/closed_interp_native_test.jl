@@ -587,8 +587,10 @@ _ti_ngens(_) = 1
             ("the bracket + 1", (c, n) -> _ti_op("+", bracket(c, n), 1), true),
             ("an unrolled count", nothing, true),
             ("the bare count (can be 0)", (c, n) -> c, false),
-            ("past the axis (bracket of n, + 1)",
-                (c, n) -> _ti_op("+", _ti_op("min", _ti_op("max", c, 1), n), 1), false),
+            (
+                "past the axis (bracket of n, + 1)",
+                (c, n) -> _ti_op("+", _ti_op("min", _ti_op("max", c, 1), n), 1), false,
+            ),
             ("with a non-integer literal", (c, n) -> _ti_op("+", bracket(c, n), 0.25), false),
             ("clamped by a parameter", (c, n) -> _ti_op("min", _ti_op("max", c, 1), "pn"), false),
         )

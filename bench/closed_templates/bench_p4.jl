@@ -34,12 +34,16 @@ const FAMILY = isempty(ARGS) ? "search" : ARGS[1]
 include(joinpath(@__DIR__, "docs.jl"))
 const DIR = let given = length(ARGS) > 1 && ARGS[2] != "-" ? ARGS[2] : nothing
     if FAMILY == "nearest"
-        bench_docs("generate.py", given, ["--only", "nearest"]; env = "CLOSED_TEMPLATES_DIR",
-                   name = "closed_templates", prefix = "nearest_")
+        bench_docs(
+            "generate.py", given, ["--only", "nearest"]; env = "CLOSED_TEMPLATES_DIR",
+            name = "closed_templates", prefix = "nearest_"
+        )
     else
         prefix = FAMILY == "search" ? "search_" : FAMILY * "_"
-        bench_docs("generate_p4.py", given, ["--only", FAMILY]; env = "CLOSED_TEMPLATES_P4_DIR",
-                   name = "closed_templates_p4", prefix = prefix)
+        bench_docs(
+            "generate_p4.py", given, ["--only", FAMILY]; env = "CLOSED_TEMPLATES_P4_DIR",
+            name = "closed_templates_p4", prefix = prefix
+        )
     end
 end
 const FILTER = length(ARGS) > 2 ? ARGS[3] : ""
@@ -75,7 +79,8 @@ function build(path; compiler = :native)
             f!, u0, p, vm = prob.f!, prob.u0, prob.p, prob.var_map
         else
             f!, u0, p, _, vm = E._with_compiler_plan(
-                () -> E._build_evaluator(E.load_path(path); compiler = compiler), compiler)
+                () -> E._build_evaluator(E.load_path(path); compiler = compiler), compiler
+            )
         end
         dt = (time_ns() - t0) / 1.0e9
         du = similar(u0)
@@ -186,10 +191,13 @@ function run_search()
         orc = oracle(p("lin"), tl)
         ts = map(time_model, (f, tb, tl, tf))
         hs = map(how -> per_call_ns(k -> hand(tof(k), how)), (0, 1, 2))
-        row(sz, "fn", ts[1], "tpl_binary", ts[2], "tpl_linear", ts[3], "tpl_fold", ts[4],
+        row(
+            sz, "fn", ts[1], "tpl_binary", ts[2], "tpl_linear", ts[3], "tpl_fold", ts[4],
             "hand_linear", hs[1], "hand_binary", hs[2], "searchsortedfirst", hs[3],
-            "bits", ok, "oracle", orc, "setup_fn", setup_s(f), "setup_tpl", setup_s(tb))
+            "bits", ok, "oracle", orc, "setup_fn", setup_s(f), "setup_tpl", setup_s(tb)
+        )
     end
+    return
 end
 
 function hand_linear(table, axis, x)
@@ -260,9 +268,12 @@ function run_interp(family)
         a, b = time_model(f), time_model(tp)
         h = per_call_ns(k -> hand(tof(k)))
         x = per_call_ns(k -> ext(tof(k)))
-        row(sz, "fn", a, "tpl", b, "hand", h, "Interpolations", x, "maxdiff_Interpolations", acc,
-            "bits", ok, "oracle", orc, "setup_fn", setup_s(f), "setup_tpl", setup_s(tp))
+        row(
+            sz, "fn", a, "tpl", b, "hand", h, "Interpolations", x, "maxdiff_Interpolations", acc,
+            "bits", ok, "oracle", orc, "setup_fn", setup_s(f), "setup_tpl", setup_s(tp)
+        )
     end
+    return
 end
 
 # The nine fields, summed in generate_p4.py's order, by Hinnant's civil_from_days.
@@ -313,9 +324,12 @@ function run_calendar()
         a, b = time_model(f), time_model(tp)
         h = per_call_ns(k -> run(tof(k), hand_calendar))
         x = per_call_ns(k -> run(tof(k), dates_calendar))
-        row(sz, "fn", a, "tpl", b, "hand", h, "Dates", x, "bits_tpl", okt, "bits_hand", okh,
-            "maxdiff_Dates", accd, "oracle", orc, "setup_fn", setup_s(f), "setup_tpl", setup_s(tp))
+        row(
+            sz, "fn", a, "tpl", b, "hand", h, "Dates", x, "bits_tpl", okt, "bits_hand", okh,
+            "maxdiff_Dates", accd, "oracle", orc, "setup_fn", setup_s(f), "setup_tpl", setup_s(tp)
+        )
     end
+    return
 end
 
 function go_area(a, b, manifold)
@@ -349,12 +363,15 @@ function run_overlap()
             cl, ct = time_model(leaf), time_model(tp)
             n = length(ra)
             g = per_call_ns(k -> go_area(ra[k % n + 1], rb[k % n + 1], mf))
-            row(mf, sz, "pairs", n, "setup_leaf", setup_s(leaf), "setup_tpl", setup_s(tp),
+            row(
+                mf, sz, "pairs", n, "setup_leaf", setup_s(leaf), "setup_tpl", setup_s(tp),
                 "call_leaf", cl, "call_tpl", ct, "GeometryOps_per_pair", g,
                 "maxdiff_tpl_leaf", maxdiff(at, al), "maxdiff_GO_leaf", maxdiff(areas, al),
-                "maxdiff_GO_tpl", maxdiff(areas, at), "oracle", orc)
+                "maxdiff_GO_tpl", maxdiff(areas, at), "oracle", orc
+            )
         end
     end
+    return
 end
 
 function const_eq(doc, var)
@@ -386,9 +403,12 @@ function run_nearest()
         orc = oracle(p("tpl"), tp)
         a, b = time_model(o), time_model(tp)
         h = per_call_ns(_ -> hand())
-        row(sz, "op", a, "tpl", b, "hand", h, "hand_setup_s", setup / 1.0e9, "bits", ok, "oracle", orc,
-            "setup_op", setup_s(o), "setup_tpl", setup_s(tp))
+        row(
+            sz, "op", a, "tpl", b, "hand", h, "hand_setup_s", setup / 1.0e9, "bits", ok, "oracle", orc,
+            "setup_op", setup_s(o), "setup_tpl", setup_s(tp)
+        )
     end
+    return
 end
 
 function nearest_assign(px, py, gx, gy)
@@ -414,22 +434,30 @@ function run_fastjx()
         ok = same(dy(tp, TB), dy(f, TB))
         orc = oracle(p("tpl"), tp)
         a, b = time_model(f), time_model(tp)
-        row(sz, "lookups", data("fastjx_$sz").lookups, "fn", a, "tpl", b, "bits", ok, "oracle", orc,
-            "setup_fn", setup_s(f), "setup_tpl", setup_s(tp))
+        row(
+            sz, "lookups", data("fastjx_$sz").lookups, "fn", a, "tpl", b, "bits", ok, "oracle", orc,
+            "setup_fn", setup_s(f), "setup_tpl", setup_s(tp)
+        )
     end
+    return
 end
 
 function run_size()
-    for (fam, closed) in (("searchsorted", "fn"), ("linear", "fn"), ("bilinear", "fn"), ("calendar", "fn"),
-                          ("argmin", "op"), ("overlap_planar", "leaf"), ("mixed", "fn"))
+    for (fam, closed) in (
+            ("searchsorted", "fn"), ("linear", "fn"), ("bilinear", "fn"), ("calendar", "fn"),
+            ("argmin", "op"), ("overlap_planar", "leaf"), ("mixed", "fn"),
+        )
         for sz in sizes("size_$(fam)_$(closed)_")
             p(sp) = joinpath(DIR, "size_$(fam)_$(sp)_$(sz).esm")
             c, tp = build(p(closed)), build(p("tpl"))
             d = maxdiff(dy(tp, TB), dy(c, TB))
-            row(fam, sz, "setup_closed", setup_s(c), "setup_tpl", setup_s(tp), "call_closed", time_model(c),
-                "call_tpl", time_model(tp), "maxdiff", d)
+            row(
+                fam, sz, "setup_closed", setup_s(c), "setup_tpl", setup_s(tp), "call_closed", time_model(c),
+                "call_tpl", time_model(tp), "maxdiff", d
+            )
         end
     end
+    return
 end
 
 if FAMILY == "search"

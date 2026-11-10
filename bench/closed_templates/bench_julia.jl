@@ -28,9 +28,11 @@ import GeometryOps
 
 const E = EarthSciAST
 include(joinpath(@__DIR__, "docs.jl"))
-const DIR = bench_docs("generate.py", isempty(ARGS) || ARGS[1] == "-" ? nothing : ARGS[1],
-                       ["--only", "solar", "--only", "regrid", "--only", "nearest"];
-                       env = "CLOSED_TEMPLATES_DIR", name = "closed_templates", prefix = "")
+const DIR = bench_docs(
+    "generate.py", isempty(ARGS) || ARGS[1] == "-" ? nothing : ARGS[1],
+    ["--only", "solar", "--only", "regrid", "--only", "nearest"];
+    env = "CLOSED_TEMPLATES_DIR", name = "closed_templates", prefix = ""
+)
 const FILTERS = length(ARGS) > 1 ? ARGS[2:end] : String[]
 const CALLS = parse(Int, get(ENV, "CALLS", "200"))
 const INTERP_CHECK = get(ENV, "INTERP_CHECK", "1") == "1"

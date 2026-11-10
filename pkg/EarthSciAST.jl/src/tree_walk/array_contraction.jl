@@ -1474,15 +1474,15 @@ function _try_codegen_array_contraction(
                 local $cv = $av + 1
                 $(start...)
                 $(
-                rowloop(
-                    quote
-                        local $olv = $ov[$cv]
-                        local $xv = convert(eltype($dv), $cell)
-                        $dv[$olv] = $xv
-                        $(cstmts...)
-                    end
+                    rowloop(
+                        quote
+                            local $olv = $ov[$cv]
+                            local $xv = convert(eltype($dv), $cell)
+                            $dv[$olv] = $xv
+                            $(cstmts...)
+                        end
+                    )
                 )
-            )
             end
         end
     end
