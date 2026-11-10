@@ -233,17 +233,6 @@ CASES: list[tuple[str, str, str]] = [
         "loop_binder_shadowing_edges",
         "scoping/loop_binder_shadowing_edges.esm",
     ),
-    # --- function_tables / table_lookup --------------------------------------
-    (
-        "function_tables",
-        "function_tables_linear",
-        "conformance/function_tables/linear/fixture.esm",
-    ),
-    (
-        "function_tables",
-        "function_tables_bilinear",
-        "conformance/function_tables/bilinear/fixture.esm",
-    ),
     # --- expression templates: the merged template_registry ------------------
     # A reaction-system registry (carried unscoped by policy — a rate-law
     # reference is expanded eagerly at collect and never resolved post-flatten).
@@ -722,7 +711,6 @@ def _record(flat) -> dict:
             "callbacks": list(flat.metadata.callbacks),
         },
         "index_sets": list(flat.index_sets),
-        "function_tables": list(flat.function_tables),
         "template_registry": list(flat.template_registry),
         "field_ics": [{"state": s, "expr": to_ascii(e)} for s, e in flat.field_ics],
         "loader_fields": [
