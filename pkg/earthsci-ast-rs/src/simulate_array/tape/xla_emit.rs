@@ -647,6 +647,9 @@ struct Emitter<'a> {
     /// program, so the instruction defining it is not emitted (the slots the
     /// rest of the program reads arrive as literals).
     hoisted: Vec<bool>,
+    /// Per slot an [`Instr::ConstArray`] defines: its `const_data` index,
+    /// built once so a lookup is not a scan of the program.
+    const_of: HashMap<SlotId, u32>,
 }
 
 impl<'a> Emitter<'a> {
@@ -739,7 +742,14 @@ impl<'a> Emitter<'a> {
             forcing_layout,
             forcing_len,
             hoisted: vec![false; prog.slots.len()],
+            const_of: HashMap::new(),
         };
+        // The first definition, as a scan from the top finds it.
+        for ins in prog.instrs.iter().rev() {
+            if let Instr::ConstArray { data, out } = ins {
+                em.const_of.insert(*out, *data);
+            }
+        }
         em.state = em.build_state_views()?;
         Ok(em)
     }
@@ -2038,15 +2048,9 @@ impl<'a> Emitter<'a> {
         let SrcRef::Slot(id) = s else {
             return Err(not_const());
         };
-        self.prog
-            .instrs
-            .iter()
-            .find_map(|i| match i {
-                Instr::ConstArray { data, out } if out == id => {
-                    Some(&self.prog.const_data[*data as usize])
-                }
-                _ => None,
-            })
+        self.const_of
+            .get(id)
+            .map(|&data| &self.prog.const_data[data as usize])
             .ok_or_else(not_const)
     }
 
