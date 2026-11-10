@@ -941,6 +941,14 @@ def test_reaction_rates_are_converted():
     assert out["expression_template_imports"] == [{"ref": "esm:std/calendar.esm", "only": ["hour"]}]
 
 
+def test_aggregate_becomes_faq():
+    body = {"op": "aggregate", "args": [], "output_idx": [], "ranges": {"i": [1, 3]}, "expr": "i"}
+    res = migrate_document(_doc(body))
+    assert res.document["models"]["M"]["equations"][0]["rhs"]["op"] == "faq"
+    assert res.counts == {"aggregate": 1}
+    assert find_removed(res.document) == []
+
+
 def test_versions():
     clean = _doc(1.0)
     assert migrate_document(clean).document["esm"] == CODEMOD_TARGET_VERSION
@@ -969,6 +977,8 @@ def test_text_keeps_indentation_and_escaping():
         assert new.endswith("}\n")
         assert new.splitlines()[1].startswith(" " * indent + '"')
         assert ("\\u00a7" in new) == ascii_only
+    compact, _ = migrate_text(json.dumps(doc, separators=(",", ":")))
+    assert "\n" not in compact and compact.startswith('{"esm":"2.0.0"')
 
 
 def test_find_removed_names_every_removed_op():

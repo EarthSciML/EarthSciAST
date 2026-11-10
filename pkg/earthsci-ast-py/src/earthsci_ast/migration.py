@@ -30,8 +30,8 @@ standard library (``lib/*.esm``, referenced as ``esm:std/<file>.esm``):
 ``fn`` ``interp.searchsorted(x, xs)``           ``searchsorted(x, xs, n)`` of interp.esm
 ``fn`` ``interp.linear(table, axis, x)``        ``linear(table, axis, x, n)``
 ``fn`` ``interp.bilinear(t, ax, ay, x, y)``     ``bilinear(t, ax, ay, x, y, nx, ny)``
-``function_tables`` + ``table_lookup``          the §9.5.3 lowering, inline, over the
-                                                interp templates
+``function_tables`` + ``table_lookup``          the 1.x table lowering (esm-spec 1.x
+                                                §9.5.3), inline, over the interp templates
 ``polygon_intersection_area`` planar            ``overlap_area_planar`` (geometry.esm)
 ``polygon_intersection_area`` spherical or      ``overlap_area_spherical`` over a
 geodesic                                        ``lonlat_to_unit`` stack the codemod adds
@@ -43,6 +43,7 @@ geodesic                                        ``lonlat_to_unit`` stack the cod
                                                 component for one
 ``skolem`` map read only by ``join.on``         one integer column per component
 ``rank(S)`` over S's own members                the loop index minus one (0-based)
+``aggregate`` (the pre-1.1.0 ``faq``)           ``faq``
 =============================================  ==========================================
 
 Each replacement adds an ``expression_template_imports`` entry to the component
@@ -115,6 +116,7 @@ REMOVED_OPS = (
     "polygon_intersection_area",
     "argmin",
     "argmax",
+    "aggregate",
 )
 
 #: Document fields esm 2.0.0 removed (top level or on a component).
@@ -421,6 +423,7 @@ class _Codemod:
 
     def run(self) -> None:
         doc = self.doc
+        self._rename_aggregate(doc, "")
         for section in ("models", "reaction_systems"):
             comps = doc.get(section)
             if not isinstance(comps, dict):
@@ -475,6 +478,18 @@ class _Codemod:
                 _LEFTOVER.get(name, f"`{name}` has no rewrite in this position"), where
             )
         doc["esm"] = CODEMOD_TARGET_VERSION
+
+    def _rename_aggregate(self, x: Any, path: str) -> None:
+        """``aggregate``, the pre-1.1.0 spelling of ``faq``, is removed at 2.0.0."""
+        if isinstance(x, dict):
+            if x.get("op") == "aggregate":
+                x["op"] = "faq"
+                self._count("aggregate", path, "`aggregate` -> `faq`")
+            for k, v in x.items():
+                self._rename_aggregate(v, f"{path}/{k}")
+        elif isinstance(x, list):
+            for i, v in enumerate(x):
+                self._rename_aggregate(v, f"{path}/{i}")
 
     def _finish_scope(self, scope: _Scope) -> None:
         comp = scope.node
@@ -1208,6 +1223,9 @@ def _format_like(text: str, doc: dict) -> str:
             indent = len(line) - len(stripped)
             break
     ascii_only = all(ord(ch) < 128 for ch in text)
+    if "\n" not in text.strip():
+        out = json.dumps(doc, separators=(",", ":"), ensure_ascii=ascii_only)
+        return out + ("\n" if text.endswith("\n") else "")
     out = json.dumps(doc, indent=indent, ensure_ascii=ascii_only)
     return out + ("\n" if text.endswith("\n") else "")
 
