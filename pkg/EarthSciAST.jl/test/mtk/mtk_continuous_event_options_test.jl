@@ -16,7 +16,7 @@ import OrdinaryDiffEqTsit5
 # crossing sends it to 11; dropping the event lets it fall to -1.
 function _affect_neg_doc(affects::AbstractString)
     return """
-    {"esm": "1.1.0", "metadata": {"name": "AffectNeg", "authors": ["test"]},
+    {"esm": "2.0.0", "metadata": {"name": "AffectNeg", "authors": ["test"]},
      "models": {"AffectNeg": {
        "variables": {"x": {"type": "unknown", "units": "1"},
                      "v": {"type": "unknown", "units": "1"}},
@@ -73,7 +73,7 @@ end
 function _root_find_doc(root_find)
     field = root_find === nothing ? "" : """, "root_find": "$(root_find)" """
     return """
-    {"esm": "1.1.0", "metadata": {"name": "RootFind", "authors": ["test"]},
+    {"esm": "2.0.0", "metadata": {"name": "RootFind", "authors": ["test"]},
      "models": {"RootFind": {
        "variables": {"x": {"type": "unknown", "units": "1"},
                      "s": {"type": "unknown", "units": "1"}},

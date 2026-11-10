@@ -61,7 +61,7 @@ function _pc_doc(; fold_ic::Bool = true)
         )
     )
     return Dict{String, Any}(
-        "esm" => "1.0.0", "metadata" => Dict{String, Any}("name" => "PC"),
+        "esm" => "2.0.0", "metadata" => Dict{String, Any}("name" => "PC"),
         "index_sets" => Dict{String, Any}(
             "n" => Dict{String, Any}("kind" => "interval", "size" => 2)
         ),

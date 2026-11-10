@@ -422,7 +422,7 @@ end
     # occurrence site, reported as `coupling_edge_unknown_role`.
     lib = """
     {
-      "esm": "1.1.0",
+      "esm": "2.0.0",
       "metadata": {"name": "RoleScopedLib"},
       "coupling_roles": {
         "Source": {"description": "provides x"},

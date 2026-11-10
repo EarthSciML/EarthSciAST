@@ -55,10 +55,6 @@ module Phase5CleanAutoTests
 using Test
 using EarthSciAST
 import JSON3
-# STRtree broad-phase fast path (Phase 2a/3a); the brute-force core is
-# byte-identical, so this is a fast-path exercise, not a hard dependency.
-import GeometryOps
-import GeoInterface
 
 const EA = EarthSciAST
 
@@ -353,7 +349,7 @@ end
         )
 
         return Dict(
-            "esm" => "1.1.0",
+            "esm" => "2.0.0",
             "metadata" => Dict("name" => "isrm_clean_auto_L1"),
             "index_sets" => Dict(
                 "src_cells" => Dict("kind" => "interval", "size" => GRID),
@@ -435,7 +431,7 @@ end
     # raw lon/lat only; the scalar LCC params ride the model defaults.
     ca_vi = Dict{String, Any}("lon" => lon, "lat" => lat, "W" => W, "S" => Sv, "E" => Ev, "N" => Nv)
     @test !haskey(ca_vi, "X") && !haskey(ca_vi, "Y")
-    vt = EA._vi_skolem_index_targets(model)
+    vt = EA._vi_index_targets(model)
     @test "X" in vt && "Y" in vt                         # projection targets detected
     derived = EA._derive_binning_coords(
         model, f.index_sets, ca_vi,

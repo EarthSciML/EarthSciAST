@@ -87,7 +87,7 @@ function _csel_contraction_doc(NS::Int = 16, NR::Int = 16)
         )
     )
     doc = Dict{String, Any}(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "csel_sr"),
         "models" => Dict(
             "R" => Dict{String, Any}(
@@ -531,7 +531,7 @@ function _csel_filtered_gather_doc(filtered::Bool)
     filtered && (rhs["filter"] = op(">", idx("cnt", "c"), 0))
     K = [[10.0 * c + j for j in 1:2] for c in 1:3]
     return Dict{String, Any}(
-        "esm" => "1.1.0", "metadata" => Dict("name" => "csel_fg"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "csel_fg"),
         "index_sets" => Dict(
             "col" => Dict("kind" => "interval", "size" => 3),
             "lev" => Dict("kind" => "interval", "size" => 2),

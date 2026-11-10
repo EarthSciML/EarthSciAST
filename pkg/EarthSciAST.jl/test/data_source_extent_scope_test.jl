@@ -226,7 +226,7 @@ end
         dir = mktempdir()
         write(
             joinpath(dir, "leaf.esm"), """
-            {"esm":"1.1.0","metadata":{"name":"leaf"},
+            {"esm":"2.0.0","metadata":{"name":"leaf"},
              "metaparameters":{"NLEV":{"type":"integer","default":4}},
              "index_sets":{"lev":{"kind":"interval","size":"NLEV"}},
              "models":{"Column":{
@@ -235,7 +235,7 @@ end
                              "rhs":{"op":"*","args":[-1.0,"u"]}}]}}}"""
         )
         host_body(edge) = """
-        {"esm":"1.1.0","metadata":{"name":"host"},
+        {"esm":"2.0.0","metadata":{"name":"host"},
          "metaparameters":{"NLEV":{"type":"integer","default":12},
                            "NROWS":{"type":"integer","default":2}},
          "models":{"Host":{

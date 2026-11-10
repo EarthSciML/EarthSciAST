@@ -52,7 +52,7 @@ _pit_cos_pi_x() = Dict{String, Any}(
 function _pit_decay_doc(assertions::Vector)
     idx = Dict{String, Any}("op" => "index", "args" => Any["u", "i"])
     return Dict{String, Any}(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "pde_inline_decay"),
         "index_sets" => Dict{String, Any}(
             "x" => Dict("kind" => "interval", "size" => _PIT_N)
@@ -187,7 +187,7 @@ end
 
     # coords on a scalar (0-D) variable is ill-formed per §6.6.5.
     scalar_doc = Dict{String, Any}(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "scalar_coords"),
         "models" => Dict{String, Any}(
             "M" => Dict{String, Any}(
@@ -241,7 +241,7 @@ function _pit_2d_doc(ny::Int)
     idx = Dict{String, Any}("op" => "index", "args" => Any["u", "i", "j"])
     ranges = Dict{String, Any}("i" => Any[1, 4], "j" => Any[1, ny])
     return Dict{String, Any}(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "pde_inline_2d"),
         "index_sets" => Dict{String, Any}(
             "x" => Dict("kind" => "interval", "size" => 4),
@@ -448,7 +448,7 @@ function _pit_observed_doc(
         "expr" => Dict{String, Any}("op" => "*", "args" => Any[mult, index_base])
     )
     return Dict{String, Any}(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "pde_inline_observed_rankN"),
         "index_sets" => Dict{String, Any}(
             dims[k] => Dict("kind" => "interval", "size" => sizes[k]) for k in 1:R
@@ -565,7 +565,7 @@ function _pit_param_observed_doc(assertions::Vector)
         "expr" => Dict{String, Any}("op" => "*", "args" => Any["k", idx])
     )
     return Dict{String, Any}(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "pde_inline_param_observed"),
         "index_sets" => Dict{String, Any}(
             "d1" => Dict("kind" => "interval", "size" => 2),
@@ -835,7 +835,7 @@ end
 # component that produced no rows is indistinguishable in the result list from
 # one that was never looked at.
 _pit_reaction_decay_doc() = Dict{String, Any}(
-    "esm" => "1.1.0",
+    "esm" => "2.0.0",
     "metadata" => Dict("name" => "inline_test_reaction_system"),
     "reaction_systems" => Dict{String, Any}(
         "Decay" => Dict{String, Any}(
@@ -909,7 +909,7 @@ function _pit_ramp_doc(expected::Float64; test_overrides = nothing)
     )
     test_overrides === nothing || (test["parameter_overrides"] = test_overrides)
     return Dict{String, Any}(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "ramp"),
         "models" => Dict{String, Any}(
             "M" => Dict{String, Any}(

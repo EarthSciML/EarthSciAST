@@ -126,7 +126,7 @@ end
 # scalar (unindexed) equation, and two keys for one parameter.
 @testset "provider_forcing: scalar equation, key collisions" begin
     doc = Dict{String, Any}(
-        "esm" => "1.2.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "scalar_fed", "authors" => ["test"]),
         "data_sources" => Dict(
             "met" => Dict(

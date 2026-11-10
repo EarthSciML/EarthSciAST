@@ -1,8 +1,7 @@
-# The `aggregate` -> `faq` deprecated-op-alias contract (esm 1.1.0).
-#
-# Gates tests/conformance/deprecated_op_alias/ and the `removed_op` rejection
-# of `arrayop`. See CONFORMANCE_SPEC §7 and
-# docs/content/rfcs/faq-node-rename.md.
+# Removed op spellings: the `removed_op` rejection at the wire boundary, of
+# `arrayop` (removed at esm 0.8.0) and of the ops esm 2.0.0 removed, among them
+# `aggregate`, the pre-1.1.0 spelling of `faq`; and the esm 1.1.0 `faq` gate.
+# See CONFORMANCE_SPEC §7 and docs/content/rfcs/faq-node-rename.md.
 
 using Test
 using EarthSciAST
@@ -10,62 +9,76 @@ using JSON3
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
-const _ALIAS_CONF = joinpath(
-    TESTUTILS_REPO_ROOT, "tests", "conformance",
-    "deprecated_op_alias"
-)
+const _ALIAS_CONF = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "removed_spellings")
 
-# Every `op` string in a decoded document, depth-first.
-function _all_ops(node, out = String[])
-    if node isa AbstractDict
-        v = get(node, "op", nothing)
-        v isa AbstractString && push!(out, String(v))
-        for child in values(node)
-            _all_ops(child, out)
+_removed_op_error(f) =
+    try
+        f()
+        nothing
+    catch e
+        e
+    end
+
+@testset "removed op spellings" begin
+    @testset "aggregate is a removed op, at the root and through a ref" begin
+        for path in (
+                joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "removed_ops", "removed_op_aggregate.esm"),
+                joinpath(_ALIAS_CONF, "ref_parent_aliased.esm"),
+            )
+            err = _removed_op_error(() -> EarthSciAST.load_path(path))
+            # Through a ref the child's refusal arrives wrapped in the ref error.
+            msg = err === nothing ? "" : sprint(showerror, err)
+            @test err isa EarthSciAST.ParseError || err isa EarthSciAST.SubsystemRefError
+            @test occursin("removed_op", msg) && occursin("aggregate", msg)
         end
-    elseif node isa AbstractVector
-        for child in node
-            _all_ops(child, out)
+    end
+
+    @testset "every op esm 2.0.0 removed is refused by name, with its path" begin
+        node(op) = Dict{String, Any}("op" => op, "args" => Any["x"])
+        for op in ("fn", "table_lookup", "skolem", "rank", "intersect_polygon",
+                "polygon_intersection_area", "argmin", "argmax", "aggregate")
+            doc = Dict{String, Any}(
+                "esm" => EarthSciAST.SCHEMA_VERSION,
+                "metadata" => Dict{String, Any}("name" => "m"),
+                "models" => Dict{String, Any}(
+                    "M" => Dict{String, Any}(
+                        "variables" => Dict{String, Any}(
+                            "x" => Dict{String, Any}("type" => "unknown", "default" => 0.0)
+                        ),
+                        "equations" => Any[
+                            Dict{String, Any}(
+                                "lhs" => Dict{String, Any}("op" => "D", "args" => Any["x"], "wrt" => "t"),
+                                "rhs" => node(op),
+                            ),
+                        ],
+                    ),
+                ),
+            )
+            for load in (
+                    () -> EarthSciAST.load_string(JSON3.write(doc)),
+                    () -> EarthSciAST.load_document(doc),
+                )
+                err = _removed_op_error(load)
+                @test err isa EarthSciAST.ParseError
+                @test err.code == "removed_op"
+                @test err.path == "/models/M/equations/0/rhs"
+                @test occursin(op, err.message) && occursin("earthsci_ast.migrate", err.message)
+            end
+            # A node built directly, past the wire boundary, is refused too.
+            err = _removed_op_error(() -> EarthSciAST.expression_from_json(node(op)))
+            @test err isa EarthSciAST.ParseError && err.code == "removed_op"
         end
     end
-    return out
-end
 
-@testset "deprecated op alias: aggregate -> faq" begin
-    @testset "the alias loads and warns exactly once for the document" begin
-        # Once per DOCUMENT, not once per node: the fixture carries two aliased
-        # nodes and must still produce a single warning.
-        @test_logs (:warn,) match_mode = :any EarthSciAST.load_path(
-            joinpath(_ALIAS_CONF, "aliased.esm")
-        )
-    end
-
-    @testset "the alias never survives the loader" begin
-        f = EarthSciAST.load_path(joinpath(_ALIAS_CONF, "aliased.esm"))
-        ops = _all_ops(JSON3.read(EarthSciAST.to_json(f), Dict{String, Any}))
-        @test !("aggregate" in ops)   # the alias reached emit
-        @test "faq" in ops
-    end
-
-    @testset "emitting the alias document reproduces the canonical one" begin
-        aliased = EarthSciAST.load_path(joinpath(_ALIAS_CONF, "aliased.esm"))
-        canonical = EarthSciAST.load_path(joinpath(_ALIAS_CONF, "canonical.esm"))
-        @test EarthSciAST.to_json(aliased) == EarthSciAST.to_json(canonical)
-    end
-
-    @testset "the canonical document is quiet" begin
-        @test_logs EarthSciAST.load_path(joinpath(_ALIAS_CONF, "canonical.esm"))
-    end
-
-    @testset "the wire boundary covers REFERENCED documents" begin
-        # Every other fixture here is a single self-contained document — which
-        # is exactly why five green binding suites missed the leak: the
-        # normalizer ran on the ROOT's bytes and ref resolution then parsed
-        # child files raw, so a child's alias reached `emit` untouched.
-        f = EarthSciAST.load_path(joinpath(_ALIAS_CONF, "ref_parent_aliased.esm"))
-        ops = _all_ops(JSON3.read(EarthSciAST.to_json(f), Dict{String, Any}))
-        @test !("aggregate" in ops)
-        @test "faq" in ops
+    @testset "the shared removed_op fixtures" begin
+        dir = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "removed_ops")
+        if isdir(dir)
+            for f in filter(endswith(".esm"), readdir(dir))
+                err = _removed_op_error(() -> EarthSciAST.load_path(joinpath(dir, f)))
+                @test err isa EarthSciAST.ParseError
+                @test err.code == "removed_op"
+            end
+        end
     end
 
     @testset "arrayop in a referenced child is rejected" begin
@@ -96,73 +109,6 @@ end
             end
             @test err !== nothing
             @test occursin("faq_version_too_old", sprint(showerror, err))  # the shared diagnostic name
-            # `aggregate` IS the pre-1.1.0 spelling, so the gate must NOT catch
-            # it: the gate reads the AUTHORED form, and the alias is normalized
-            # with the declared version raised to the floor alongside it.
-            f = EarthSciAST.load_path(at_version("aliased.esm", "1.0.0"))
-            @test f.esm == "1.1.0"
-        end
-    end
-
-    @testset "the other version gates read the RAISED esm, on every path" begin
-        # A 1.0.0 file spelling `aggregate` is raised to 1.1.0 at the wire
-        # boundary, so its `solver` block (a 1.1.0 construct) is legal: as a
-        # root read from a file, as the same root held in memory, and as a
-        # mounted leaf. Only the `faq` gate reads the authored version.
-        err_text(f) = try
-            f(); ""
-        catch e
-            sprint(showerror, e)
-        end
-        mktempdir() do dir
-            function with_solver(src, version)
-                doc = JSON3.read(read(joinpath(_ALIAS_CONF, src), String), Dict{String, Any})
-                doc["esm"] = version
-                doc["solver"] = Dict{String, Any}("stiffness" => "high")
-                return doc
-            end
-            root = with_solver("aliased.esm", "1.0.0")
-            path = joinpath(dir, "root.esm")
-            write(path, JSON3.write(root))
-            @test EarthSciAST.load_path(path).esm == "1.1.0"
-            @test EarthSciAST.load_document(root).esm == "1.1.0"
-
-            write(
-                joinpath(dir, "ref_child_aliased.esm"),
-                JSON3.write(with_solver("ref_child_aliased.esm", "1.0.0"))
-            )
-            parent = JSON3.read(
-                read(joinpath(_ALIAS_CONF, "ref_parent_aliased.esm"), String),
-                Dict{String, Any}
-            )
-            write(joinpath(dir, "parent.esm"), JSON3.write(parent))
-            @test EarthSciAST.load_path(joinpath(dir, "parent.esm")) isa EarthSciAST.EsmFile
-
-            # The `faq` gate still reads the authored version in memory too.
-            canonical = with_solver("canonical.esm", "1.0.0")
-            @test occursin(
-                "faq_version_too_old",
-                err_text(() -> EarthSciAST.load_document(canonical))
-            )
-            # Without the alias there is nothing to raise: a 1.0.0 `solver`
-            # block is refused.
-            plain = with_solver("canonical.esm", "1.0.0")
-            delete!(plain, "index_sets")
-            plain["models"] = Dict{String, Any}(
-                "M" => Dict{String, Any}(
-                    "variables" => Dict{String, Any}("u" => Dict{String, Any}("type" => "unknown")),
-                    "equations" => Any[
-                        Dict{String, Any}(
-                            "lhs" => Dict{String, Any}("op" => "D", "args" => Any["u"], "wrt" => "t"),
-                            "rhs" => 0
-                        ),
-                    ]
-                )
-            )
-            @test occursin(
-                "solver_version_too_old",
-                err_text(() -> EarthSciAST.load_document(plain))
-            )
         end
     end
 

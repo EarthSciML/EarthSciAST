@@ -80,7 +80,7 @@ const _SSC_ESS = EarthSciAST
         )
 
         doc = Dict{String, Any}(
-            "esm" => "1.0.0",
+            "esm" => "2.0.0",
             "metadata" => Dict("name" => "scalar_slot_param_override"),
             "models" => Dict{String, Any}(
                 "M1" => component(

@@ -50,15 +50,11 @@ include("../testutils.jl")  # shared prelude: repo root, AST builders, _normj, _
     #      (src/run_tests.jl) ----
     include("run_esm_tests_mtk_test.jl")
     include("container_in_document_test.jl")
-    # §9.5.3 `table_lookup` lowering through the runner, and `:mtk` refusing an
-    # `out_of_bounds: "error"` table (#188).
-    include("function_tables_lowering_path_mtk_test.jl")
 
-    # ---- Array ops, broadcast, closed functions and const arrays through the
-    #      ModelingToolkit lowering ----
+    # ---- Array ops, broadcast and const arrays through the ModelingToolkit
+    #      lowering ----
     include("array_ops_mtk_test.jl")
     include("broadcast_alignment_mtk_test.jl")     # the exporter's `broadcast` `fn` vocabulary
-    include("closed_functions_mtk_test.jl")
     include("const_array_index_mtk_test.jl")       # #286: a bare const array as an index base
     include("tree_walk_mtk_parity_test.jl")        # tree-walk right-hand side ≡ MTK codegen
 

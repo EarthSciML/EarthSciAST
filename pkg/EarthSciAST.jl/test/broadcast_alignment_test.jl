@@ -438,15 +438,14 @@ _bc_oracle(name, body) = _bc_model(
         for n in [
                 "faq", "faq", "index", "makearray", "broadcast",
                 "reshape", "transpose", "concat",
-                "skolem", "intersect_polygon", "polygon_intersection_area",
-                "grad", "div", "laplacian", "D", "ic", "fn", "call",
+                "grad", "div", "laplacian", "D", "ic", "call",
                 "const", "enum", "some_open_tier_user_op",
             ]
             @test !E._is_scalar_op(n)
         end
-        # A non-element-wise consumer's operand is NOT axis-checked: `clip[ring,coord]
-        # = intersect_polygon(src[verts,coord], …)` is a kernel contract, not a
-        # broadcast, and must stay valid.
+        # A non-element-wise consumer's operand is NOT axis-checked: an open-tier
+        # op consumes its operands under its own contract, not as a broadcast,
+        # and must stay valid.
         vars = Dict{String, Any}(
             "dp" => Dict{String, Any}(
                 "type" => "unknown", "units" => "1",
@@ -490,8 +489,7 @@ _bc_oracle(name, body) = _bc_model(
         for n in [
                 "faq", "faq", "index", "makearray", "broadcast",
                 "reshape", "transpose", "concat", "D", "ic", "grad", "div",
-                "laplacian", "fn", "call", "const", "enum", "skolem",
-                "intersect_polygon", "polygon_intersection_area",
+                "laplacian", "call", "const", "enum",
                 "definitely_not_an_op",
             ]
             @test !E._is_scalar_op(n)

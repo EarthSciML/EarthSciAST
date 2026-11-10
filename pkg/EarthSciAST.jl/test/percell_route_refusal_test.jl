@@ -62,7 +62,7 @@ function _pr_rank4_doc(W::Vector{Float64}; past::Int = 0, filt::Bool = false)
     )
     filt && (agg["filter"] = Dict("op" => ">=", "args" => Any["k", 2]))
     return Dict{String, Any}(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "pr_rank4_contraction"),
         "models" => Dict(
             "R" => Dict{String, Any}(
@@ -184,7 +184,7 @@ end
             )
         )
         doc = Dict{String, Any}(
-            "esm" => "1.1.0",
+            "esm" => "2.0.0",
             "metadata" => Dict("name" => "pr_discrete_rank4"),
             "models" => Dict(
                 "R" => Dict{String, Any}(
@@ -459,7 +459,7 @@ end
             Dict("lhs" => Dict("op" => "ic", "args" => Any["f"]), "rhs" => rhs),
         ]
         doc(rhs) = Dict{String, Any}(
-            "esm" => "1.1.0",
+            "esm" => "2.0.0",
             "metadata" => Dict("name" => "pr_empty_ic"),
             "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 0)),
             "models" => Dict(
@@ -493,7 +493,7 @@ end
     # a refusal that blames the compiler; `min`, which is n-ary, builds.
     @testset "a malformed operator arity is the document's error under native" begin
         doc(rhs) = Dict{String, Any}(
-            "esm" => "1.1.0",
+            "esm" => "2.0.0",
             "metadata" => Dict("name" => "pr_arity"),
             "models" => Dict(
                 "U" => Dict{String, Any}(
@@ -550,7 +550,7 @@ end
     # default budgets: under zero budgets its scalar equation would itself be
     # left on the scalar walker, which native refuses at build.
     mk_doc() = Dict{String, Any}(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "pr_observed_routes"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 3)),
         "models" => Dict(
@@ -679,7 +679,7 @@ end
     # compiled program materializes `h` as a level of its own, and under
     # `interpreter` the build-time route materializes it per cell.
     obs_doc() = Dict{String, Any}(
-        "esm" => "1.1.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "pr_observed_memo"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 3)),
         "models" => Dict(
@@ -966,7 +966,7 @@ end
     @testset "a contraction no compile-once form takes is refused by name" begin
         N = 3
         rag(len) = Dict{String, Any}(
-            "esm" => "1.1.0",
+            "esm" => "2.0.0",
             "metadata" => Dict("name" => "pr_ragged_forcing"),
             "models" => Dict(
                 "R" => Dict{String, Any}(
@@ -1193,7 +1193,7 @@ end
     ixd(v) = Dict{String, Any}("op" => "index", "args" => Any[v, "i"])
     Dd(x) = Dict{String, Any}("op" => "D", "args" => Any[x], "wrt" => "t")
     doc = Dict{String, Any}(
-        "esm" => "1.1.0", "metadata" => Dict("name" => "init_reads_u0"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "init_reads_u0"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => 3)),
         "models" => Dict(
             "M" => Dict{String, Any}(

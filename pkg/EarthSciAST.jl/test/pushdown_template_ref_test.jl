@@ -96,7 +96,7 @@ function base_doc()
     end
     v["SR_PM25"] = _param(["src_cells", "rcv_cells"])
     d = Dict{String, Any}(
-        "esm" => "1.0.0", "metadata" => Dict{String, Any}("name" => "pd_tmpl"),
+        "esm" => "2.0.0", "metadata" => Dict{String, Any}("name" => "pd_tmpl"),
         "index_sets" => Dict{String, Any}(
             "src_cells" => Dict{String, Any}("kind" => "interval", "size" => 4),
             "rcv_cells" => Dict{String, Any}("kind" => "interval", "size" => 2),

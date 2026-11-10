@@ -11,11 +11,11 @@
 #   * rank4_contraction — a rank-4 output with a contraction, so the affine
 #     tier's run-time fold loops a rank-5 box;
 #   * fill_shared_invariant — a materialized observed's fill section carrying a
-#     lane-invariant closed-function subtree that the state kernels share with
+#     lane-invariant subtree that the state kernels share with
 #     the scalar prelude (the shared-scratch read the fill section's emitter
 #     does not take, `:foreign_scratch`): the state kernels read the shared
 #     slot, and the fill level keeps its own copy in its own invariant tier;
-#   * interp_array_query — a scalar `interp.*` component coupled
+#   * interp_array_query — a scalar interpolation component coupled
 #     (`param_to_var`) to gridded states, so its unshaped observeds take an
 #     array-valued query and are evaluated elementwise, one lookup per cell
 #     (issue #660, FastJX's actinic-flux lookups in reseact);

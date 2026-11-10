@@ -16,8 +16,8 @@
 #   1. For the shapes the conservative-regrid templates actually use — a
 #      `sum_product` weight matrix and a `sum_product` apply — the change is
 #      value-NEUTRAL, bit for bit. A pruned pair has disjoint envelopes, hence
-#      disjoint polygons, hence `_polygon_intersection_area` returns exactly
-#      `+0.0`, which is the additive identity the gate says it contributes.
+#      disjoint squares, hence the overlap weight below is exactly `+0.0`, which
+#      is the additive identity the gate says it contributes.
 #      Every case below compares against `compiler=:interpreter` (the
 #      historic ungated dense sweep) with `isequal` — never `≈`, never `==`, so
 #      `-0.0` cannot pass for `+0.0` and `NaN` must match `NaN`.
@@ -46,15 +46,6 @@ using Test
 using EarthSciAST
 const EA = EarthSciAST
 
-# The GeometryOps extension supplies the fast STRtree broad phase; without it
-# `_overlap_candidate_set` falls back to the brute-force reference, which is
-# specified to return an identical pair set. Load it when available so the
-# shipped path is the one under test.
-try
-    @eval import GeometryOps, GeoInterface, SortTileRecursiveTree, Extents
-catch
-end
-
 # ---- small JSON AST builders ----
 _op(o, args...) = Dict{String, Any}("op" => o, "args" => Any[args...])
 _ix(f, args...) = Dict{String, Any}("op" => "index", "args" => Any[f, args...])
@@ -79,10 +70,16 @@ _ovj(src, tgt; eps = 1.0e-9) = Any[
         )
     ),
 ]
-_pia(a, b) = Dict{String, Any}(
-    "op" => "polygon_intersection_area",
-    "manifold" => "planar", "args" => Any[a, b]
+# The overlap area of two axis-aligned square rings, from their SW (vertex 1)
+# and NE (vertex 3) corners: the product of the two axes' interval overlaps,
+# each clamped at `+0.0`, so a disjoint pair is exactly `+0.0`. `a` and `b` are
+# `index(ring_stack, cell)` slices.
+_corner(slice, v, c) = _ix(slice["args"]..., v, c)
+_axis_overlap(a, b, c) = _op(
+    "max", 0.0,
+    _op("-", _op("min", _corner(a, 3, c), _corner(b, 3, c)), _op("max", _corner(a, 1, c), _corner(b, 1, c)))
 )
+_pia(a, b) = _op("*", _axis_overlap(a, b, 1), _axis_overlap(a, b, 2))
 
 # One axis-aligned square ring at `(x, y)` with side `w`, CCW from the SW corner.
 function sq!(R, p, x, y, w)
@@ -362,7 +359,7 @@ const A_IJ = _agg(
     @testset "the candidate index is memoized per setup pass" begin
         # `_geo_overlap_index` must hand the SAME `_OverlapIndex` back for a
         # repeated clause — that is what stops a six-species regrid from
-        # rebuilding the STRtree (and its adjacency views) six times.
+        # rebuilding the candidate set (and its adjacency views) six times.
         clause = EA.expression_from_json(A_IJ).join[1]
         cache = Dict{Tuple{Vector{String}, Vector{String}, Float64}, EA._OverlapIndex}()
         a = EA._geo_overlap_index(clause, ENV0, cache)

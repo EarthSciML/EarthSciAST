@@ -92,7 +92,7 @@ function _ac_doc(NS::Int, NR::Int; coef = _ac_sr, red = nothing, asc::Bool = fal
     # two spellings are mutually exclusive rather than merged.
     red === nothing ? (agg["semiring"] = "sum_product") : (agg["reduce"] = red)
     return Dict{String, Any}(
-        "esm" => "1.1.0", "metadata" => Dict("name" => "ac_sr"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "ac_sr"),
         "models" => Dict(
             "R" => Dict{String, Any}(
                 "variables" => Dict(
@@ -275,7 +275,7 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
             )
         )
         doc = Dict{String, Any}(
-            "esm" => "1.1.0",
+            "esm" => "2.0.0",
             "metadata" => Dict("name" => "ac_sr2"),
             "models" => Dict(
                 "R" => Dict{String, Any}(
@@ -582,7 +582,7 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
             )
         )
         doc = Dict{String, Any}(
-            "esm" => "1.1.0", "metadata" => Dict("name" => "ac_ragged"),
+            "esm" => "2.0.0", "metadata" => Dict("name" => "ac_ragged"),
             "models" => Dict(
                 "R" => Dict{String, Any}(
                     "variables" => Dict(

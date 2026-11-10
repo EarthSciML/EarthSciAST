@@ -4,15 +4,14 @@
 # interpreter's bits.
 #
 #   * calendar: the nine datetime fields per cell of an index set, against
-#     the interpreter and against the `fn datetime.*` form;
+#     the interpreter;
 #   * geometry: a lat-lon conservative regrid whose overlap areas are the
 #     `overlap_area_planar` / `overlap_area_spherical` templates. The
 #     join-gated `A_ij` is a build-once setup array (`_is_setup_join_reduction`)
 #     materialized by the compiled setup sweep, which loops over the
-#     templates' dense `[1, n]` ranges; the leaf's areas are only compared
-#     within the geometry tolerance (GeometryOps is not the template);
+#     templates' dense `[1, n]` ranges;
 #   * relational: the nearest-generator assignment by the `argmin` template,
-#     against the interpreter and the `argmin` op.
+#     against the interpreter.
 #
 # Also pinned: a JSON number read back from a template library or document is
 # the integer JSON3 would give it, also inside an object that follows a float
@@ -21,12 +20,6 @@
 
 using Test
 include("testutils.jl")
-# The spherical leaf the geometry templates are compared with runs through
-# EarthSciASTGeometryOpsExt.
-import GeometryOps
-import GeoInterface
-import SortTileRecursiveTree
-import Extents
 
 const _CT = EarthSciAST
 const _CT_LIB = joinpath(TESTUTILS_REPO_ROOT, "lib")
@@ -75,20 +68,20 @@ _ct_same(a, b) = keys(a) == keys(b) && all(all(a[k] .=== b[k]) for k in keys(a))
 const _CT_FIELDS = ("year", "month", "day", "hour", "minute", "second", "day_of_year", "julian_day", "is_leap_year")
 
 # Every field of t[h] = T0 + 3601 (h - 1) + 37 t, a state per field and hour
-# relaxing toward it. `tpl`: the calendar templates; otherwise `fn datetime.*`.
-function _ct_calendar_doc(nh; tpl::Bool, t0 = 1.6e9)
+# relaxing toward it, through the calendar templates.
+function _ct_calendar_doc(nh; t0 = 1.6e9)
     H = Dict("h" => Dict("from" => "hours"))
     vars = Dict{String, Any}("tu" => Dict("type" => "unknown", "shape" => Any["hours"]))
     eqs = Any[Dict("lhs" => "tu", "rhs" => _ct_faq(_ct_op("+", t0, _ct_op("*", 3601, _ct_op("-", "h", 1)), _ct_op("*", 37, "t")), ["h"], H))]
     for f in _CT_FIELDS
-        call = tpl ? _ct_apply(f; t = _ct_ix("tu", "h")) : _ct_op("fn", _ct_ix("tu", "h"); name = "datetime.$f")
+        call = _ct_apply(f; t = _ct_ix("tu", "h"))
         vars["s_$f"] = Dict("type" => "unknown", "shape" => Any["hours"], "default" => 0.0)
         push!(eqs, Dict("lhs" => _ct_dlhs("s_$f", ["h"], H), "rhs" => _ct_faq(_ct_op("-", call, _ct_ix("s_$f", "h")), ["h"], H)))
     end
     model = Dict{String, Any}("variables" => vars, "equations" => eqs)
-    tpl && (model["expression_template_imports"] = Any[_ct_import("calendar.esm", _CT_FIELDS)])
+    model["expression_template_imports"] = Any[_ct_import("calendar.esm", _CT_FIELDS)]
     return Dict{String, Any}(
-        "esm" => "1.2.0", "metadata" => Dict("name" => "calendar_$(tpl)"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "calendar"),
         "index_sets" => Dict("hours" => Dict("kind" => "interval", "size" => nh)),
         "models" => Dict("Cal" => model)
     )
@@ -102,28 +95,26 @@ _ct_cells(lons, lats) = Any[
 ]
 _ct_thirds(n) = vcat([Float64[m, m + 2 / 3, m + 4 / 3] for m in 0:2:(n - 1)]..., Float64(n))
 
-# The conservative regrid of the scaling family (bin-skolem broad phase,
-# overlap area per candidate pair, row-sum normalisation): an n x n grid of
-# 1-degree cells onto the 2/3-degree grid over it. `area`: :leaf, :tpl, or a
-# Dict standing in for the A_ij body (a near miss).
+# The conservative regrid of the scaling family (binned broad phase on
+# per-component integer bin columns, overlap area per candidate pair, row-sum
+# normalisation): an n x n grid of 1-degree cells onto the 2/3-degree grid over
+# it. `area`: :tpl, or a Dict standing in for the A_ij body (a near miss).
 function _ct_regrid_doc(n, manifold; area = :tpl)
     src = _ct_cells([-100.0 + k for k in 0:n], [30.0 + k for k in 0:n])
     tgt = _ct_cells(-100.0 .+ _ct_thirds(n), 30.0 .+ _ct_thirds(n))
     S, T = Dict("from" => "src_cells"), Dict("from" => "tgt_cells")
-    join = Any[Dict("on" => Any[Any["src_bin", "tgt_bin"]])]
+    join = Any[Dict("on" => Any[Any["src_bx", "tgt_bx"], Any["src_by", "tgt_by"]])]
     alive = _ct_op(">", _ct_ix("A_ij", "i", "j"), "atol")
     u(shape, d = nothing) = (var = Dict{String, Any}("type" => "unknown", "shape" => Any[shape...]); d === nothing || (var["default"] = d); var)
     bbox(var, cells, poly, s, c) = Dict("lhs" => var, "rhs" => _ct_faq(_ct_ix(poly, s, "v", c), [s], Dict(s => Dict("from" => cells), "v" => Dict("from" => "cell_verts")); reduce = "min"))
-    binkey(var, lon, lat, s, cells) = Dict(
+    bincol(var, coord, step, s, cells) = Dict(
         "lhs" => _ct_ix(var, s), "rhs" => _ct_faq(
-            Dict("op" => "skolem", "label" => "bin", "args" => Any[_ct_op("floor", _ct_op("/", _ct_ix(lon, s), "dx")), _ct_op("floor", _ct_op("/", _ct_ix(lat, s), "dy"))]),
+            _ct_op("floor", _ct_op("/", _ct_ix(coord, s), step)),
             [s], Dict(s => Dict("from" => cells)); semiring = "sum_product"
         )
     )
     names = Any[]
-    if area === :leaf
-        body = _ct_op("polygon_intersection_area", _ct_ix("src_poly", "i"), _ct_ix("tgt_poly", "j"); manifold = manifold)
-    elseif area === :tpl
+    if area === :tpl
         tname = manifold == "planar" ? "overlap_area_planar" : "overlap_area_spherical"
         a, b = manifold == "planar" ? ("src_poly", "tgt_poly") : ("src_xyz", "tgt_xyz")
         body = _ct_apply(tname; ring_a = a, cell_a = "i", nv_a = 4, ring_b = b, cell_b = "j", nv_b = 4)
@@ -134,7 +125,8 @@ function _ct_regrid_doc(n, manifold; area = :tpl)
     v = Dict{String, Any}(
         "src_poly" => u(["src_cells", "cell_verts", "coord"]), "tgt_poly" => u(["tgt_cells", "cell_verts", "coord"]),
         "src_lon" => u(["src_cells"]), "src_lat" => u(["src_cells"]), "tgt_lon" => u(["tgt_cells"]), "tgt_lat" => u(["tgt_cells"]),
-        "src_bin" => u(["src_cells"]), "tgt_bin" => u(["tgt_cells"]),
+        "src_bx" => u(["src_cells"]), "src_by" => u(["src_cells"]),
+        "tgt_bx" => u(["tgt_cells"]), "tgt_by" => u(["tgt_cells"]),
         "A_ij" => u(["src_cells", "tgt_cells"]), "A_j" => u(["tgt_cells"]), "W_ij" => u(["src_cells", "tgt_cells"]),
         "F_rg" => u(["tgt_cells"]), "F_src" => u(["src_cells"], 10.0), "F_tgt" => u(["tgt_cells"], 0.0),
         "dx" => Dict("type" => "parameter", "default" => 2.0), "dy" => Dict("type" => "parameter", "default" => 2.0),
@@ -144,7 +136,8 @@ function _ct_regrid_doc(n, manifold; area = :tpl)
         Dict("lhs" => "src_poly", "rhs" => _ct_const(src)), Dict("lhs" => "tgt_poly", "rhs" => _ct_const(tgt)),
         bbox("src_lon", "src_cells", "src_poly", "i", 1), bbox("src_lat", "src_cells", "src_poly", "i", 2),
         bbox("tgt_lon", "tgt_cells", "tgt_poly", "j", 1), bbox("tgt_lat", "tgt_cells", "tgt_poly", "j", 2),
-        binkey("src_bin", "src_lon", "src_lat", "i", "src_cells"), binkey("tgt_bin", "tgt_lon", "tgt_lat", "j", "tgt_cells"),
+        bincol("src_bx", "src_lon", "dx", "i", "src_cells"), bincol("src_by", "src_lat", "dy", "i", "src_cells"),
+        bincol("tgt_bx", "tgt_lon", "dx", "j", "tgt_cells"), bincol("tgt_by", "tgt_lat", "dy", "j", "tgt_cells"),
         Dict("lhs" => "A_ij", "rhs" => _ct_faq(body, ["i", "j"], Dict("i" => S, "j" => T); semiring = "sum_product", join = join)),
         Dict("lhs" => "A_j", "rhs" => _ct_faq(_ct_ix("A_ij", "i", "j"), ["j"], Dict("i" => S, "j" => T); semiring = "sum_product", join = join, filter = alive)),
         Dict("lhs" => "W_ij", "rhs" => _ct_faq(_ct_op("/", _ct_ix("A_ij", "i", "j"), _ct_ix("A_j", "j")), ["i", "j"], Dict("i" => S, "j" => T); semiring = "sum_product", join = join, filter = alive)),
@@ -162,7 +155,7 @@ function _ct_regrid_doc(n, manifold; area = :tpl)
     model = Dict{String, Any}("variables" => v, "equations" => eqs)
     isempty(names) || (model["expression_template_imports"] = Any[_ct_import("geometry.esm", names)])
     return Dict{String, Any}(
-        "esm" => "1.2.0", "metadata" => Dict("name" => "regrid"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "regrid"),
         "index_sets" => Dict(
             "coord" => Dict("kind" => "interval", "size" => 2), "xyz" => Dict("kind" => "interval", "size" => 3),
             "cell_verts" => Dict("kind" => "interval", "size" => 4),
@@ -174,7 +167,7 @@ end
 
 # Nearest generator of each point (squared distance on a 1/64 lattice, so
 # ties are real), feeding a gather.
-function _ct_nearest_doc(np, ng; tpl::Bool)
+function _ct_nearest_doc(np, ng)
     px = Float64[mod(37 * k, 61) / 64 for k in 1:np]
     py = Float64[mod(23 * k, 59) / 64 for k in 1:np]
     gx = Float64[mod(11 * k, 17) / 16 for k in 1:ng]
@@ -184,8 +177,7 @@ function _ct_nearest_doc(np, ng; tpl::Bool)
         "+", _ct_op("*", _ct_op("-", _ct_ix("px", "i"), _ct_ix("gx", k)), _ct_op("-", _ct_ix("px", "i"), _ct_ix("gx", k))),
         _ct_op("*", _ct_op("-", _ct_ix("py", "i"), _ct_ix("gy", k)), _ct_op("-", _ct_ix("py", "i"), _ct_ix("gy", k)))
     )
-    assign = tpl ? _ct_apply("argmin"; f = dist("k_argmin_1"), n = ng) :
-        _ct_op("argmin", "px", "py", "gx", "gy"; arg = "g", ranges = Dict("g" => Dict("from" => "generators")), expr = dist("g"))
+    assign = _ct_apply("argmin"; f = dist("k_argmin_1"), n = ng)
     vars = Dict{String, Any}(
         k => Dict("type" => "unknown", "shape" => Any[s]) for (k, s) in
             (("px", "points"), ("py", "points"), ("gx", "generators"), ("gy", "generators"), ("assign", "points"))
@@ -198,9 +190,9 @@ function _ct_nearest_doc(np, ng; tpl::Bool)
         Dict("lhs" => _ct_dlhs("w", ["i"], P), "rhs" => _ct_faq(_ct_op("-", _ct_ix("gx", _ct_ix("assign", "i")), _ct_ix("w", "i")), ["i"], P; args = Any["gx", "assign"])),
     ]
     model = Dict{String, Any}("variables" => vars, "equations" => eqs)
-    tpl && (model["expression_template_imports"] = Any[_ct_import("relational.esm", ["argmin"])])
+    model["expression_template_imports"] = Any[_ct_import("relational.esm", ["argmin"])]
     return Dict{String, Any}(
-        "esm" => "1.2.0", "metadata" => Dict("name" => "nearest_$(tpl)"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "nearest"),
         "index_sets" => Dict("points" => Dict("kind" => "interval", "size" => np), "generators" => Dict("kind" => "interval", "size" => ng)),
         "models" => Dict("Nearest" => model)
     )
@@ -243,7 +235,7 @@ function _ct_relational_doc()
         "expression_template_imports" => Any[_ct_import("relational.esm", ["argmin_where", "argmax_where", "pair_key", "edge_key", "rank_of", "rank_of_set"])]
     )
     return Dict{String, Any}(
-        "esm" => "1.2.0", "metadata" => Dict("name" => "relational"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "relational"),
         "index_sets" => Dict("points" => Dict("kind" => "interval", "size" => 7), "generators" => Dict("kind" => "interval", "size" => 6)),
         "models" => Dict("Rel" => model)
     )
@@ -289,7 +281,7 @@ function _ct_mesh_doc(; split::Bool, observed_conn::Bool)
         push!(eqs, Dict("lhs" => _ct_dlhs("q", ["f"], F), "rhs" => _ct_op("-", face_sum, _ct_ix("q", "f"))))
     end
     return Dict(
-        "esm" => "1.2.0", "metadata" => Dict("name" => "mesh_face_sum"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "mesh_face_sum"),
         "index_sets" => Dict(
             "faces" => Dict("kind" => "interval", "size" => 4),
             "local_edges" => Dict("kind" => "interval", "size" => 3),
@@ -321,23 +313,18 @@ end
     end
 
     @testset "calendar" begin
-        tp = _ct_write(_ct_calendar_doc(40; tpl = true))
+        tp = _ct_write(_ct_calendar_doc(40))
         dn = _ct_du(tp, :native)
         @test _ct_same(dn, _ct_du(tp, :interpreter))
-        @test _ct_same(dn, _ct_du(_ct_write(_ct_calendar_doc(40; tpl = false)), :native))
         # Pre-1970 and leap-day instants.
-        tn = _ct_write(_ct_calendar_doc(30; tpl = true, t0 = -2.2e9))
+        tn = _ct_write(_ct_calendar_doc(30; t0 = -2.2e9))
         @test _ct_same(_ct_du(tn, :native), _ct_du(tn, :interpreter))
-        @test _ct_same(_ct_du(tn, :native), _ct_du(_ct_write(_ct_calendar_doc(30; tpl = false, t0 = -2.2e9)), :native))
     end
 
     @testset "geometry ($manifold)" for manifold in ("planar", "spherical")
         tp = _ct_write(_ct_regrid_doc(4, manifold))
         dn = _ct_du(tp, :native)
         @test _ct_same(dn, _ct_du(tp, :interpreter))
-        dl = _ct_du(_ct_write(_ct_regrid_doc(4, manifold; area = :leaf)), :native)
-        @test keys(dl) == keys(dn)
-        @test maximum(maximum(abs.(dn[k] .- dl[k])) for k in keys(dn)) <= 1.0e-12
         # The setup body runs as native code under native, walked under the
         # interpreter (which gave the same bits above).
         for (c, want) in ((:native, true), (:interpreter, false))
@@ -420,10 +407,8 @@ end
     end
 
     @testset "argmin" begin
-        tp = _ct_write(_ct_nearest_doc(40, 9; tpl = true))
-        dn = _ct_du(tp, :native)
-        @test _ct_same(dn, _ct_du(tp, :interpreter))
-        @test _ct_same(dn, _ct_du(_ct_write(_ct_nearest_doc(40, 9; tpl = false)), :native))
+        tp = _ct_write(_ct_nearest_doc(40, 9))
+        @test _ct_same(_ct_du(tp, :native), _ct_du(tp, :interpreter))
     end
 
     # The nested sum used to leave a bare array producer in the cell body, so

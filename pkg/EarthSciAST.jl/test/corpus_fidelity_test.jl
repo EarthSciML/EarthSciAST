@@ -390,7 +390,7 @@ include("testutils.jl")
     # such a file a hard `KeyError` at load — a rejection, not a drop.
     @testset "a distribution-valued parameter needs no `default`" begin
         doc = Dict{String, Any}(
-            "esm" => "1.0.0",
+            "esm" => "2.0.0",
             "metadata" => Dict{String, Any}("name" => "DistOnly"),
             "reaction_systems" => Dict{String, Any}(
                 "RS" => Dict{String, Any}(

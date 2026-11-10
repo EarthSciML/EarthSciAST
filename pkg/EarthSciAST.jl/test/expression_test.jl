@@ -407,16 +407,6 @@ using JSON3
             @test EarthSciAST.contains(integ, "s")  # containment still true
         end
 
-        @testset "table_lookup axis inputs traversed" begin
-            tl = OpExpr(
-                "table_lookup", E.ASTExpr[]; table = "fuel",
-                table_axes = Dict{String, E.ASTExpr}(
-                    "code" => OpExpr("+", E.ASTExpr[VarExpr("fm"), IntExpr(1)])
-                )
-            )
-            @test free_variables(tl) == Set(["fm"])
-            @test EarthSciAST.contains(tl, "fm")
-        end
     end
 
     @testset "UnboundVariableError uses showerror" begin

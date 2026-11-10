@@ -697,7 +697,7 @@ end
     _ix(a, ks...) = Dict{String, Any}("op" => "index", "args" => Any[a, ks...])
 
     doc = Dict{String, Any}(
-        "esm" => "1.0.0", "metadata" => Dict("name" => "agg_inline_capture"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "agg_inline_capture"),
         "models" => Dict(
             "R" => Dict{String, Any}(
                 "variables" => Dict(

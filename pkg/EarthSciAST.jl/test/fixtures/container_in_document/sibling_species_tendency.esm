@@ -1,5 +1,5 @@
 {
- "esm": "1.0.0",
+ "esm": "2.0.0",
  "metadata": {
   "name": "GapBProductOnly",
   "description": "Minimal repro: a reaction system with a PRODUCT-ONLY species P, plus a sibling model whose observeds are D(Rs.<X>, t). The Rust CLI evaluates all three; the Julia MTK lowering fails with 'Variable Rs.P not found in variable dictionary'.",

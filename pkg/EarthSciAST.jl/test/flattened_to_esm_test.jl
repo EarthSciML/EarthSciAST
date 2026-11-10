@@ -1,8 +1,8 @@
 # Tests for the lossless-flatten + FlattenedSystem→runnable-document path:
 #   - `reconstruct` keeps every OpExpr field across structural rewrites (so
 #     substitute / namespace_expr / simplify are no longer lossy);
-#   - `flatten` carries a namespaced index-set registry + the file's function
-#     tables on the FlattenedSystem;
+#   - `flatten` carries the document-scoped index-set registry on the
+#     FlattenedSystem;
 #   - `flattened_to_esm` reconstitutes a single runnable document, and a deep
 #     observed chain resolves through `build_evaluator` with no pre-inlining.
 # MTK-free: runs under the package test env and the pde_sim_adapter env alike.
@@ -15,26 +15,26 @@ V(n) = E.VarExpr(n); N(x) = E.NumExpr(x)
 @testset "Canonical reconstruct + lossless flatten + flattened_to_esm" begin
     @testset "reconstruct copies every OpExpr field; rewrites preserve them" begin
         tl = E.OpExpr(
-            "table_lookup", E.ASTExpr[]; table = "fuel", output = 2,
-            table_axes = Dict{String, E.ASTExpr}("code" => V("fm"))
+            "integral", E.ASTExpr[V("fm")]; int_var = "z",
+            lower = N(0.0), upper = V("H")
         )
         agg = E.OpExpr(
             "faq", E.ASTExpr[]; semiring = "sum_product", output_idx = Any[],
             ranges = Dict{String, Any}("i" => E.IndexSetRef("src_cells")),
             expr_body = E.OpExpr("*", E.ASTExpr[V("A"), V("F")]),
             join = Any[[("a", "b")]], filter = E.OpExpr(">", E.ASTExpr[V("A"), N(0.0)]),
-            id = "prod", manifold = nothing
+            id = "prod"
         )
         # override-only semantics
         r = E.reconstruct(agg; semiring = "min_plus")
         @test r.semiring == "min_plus" && r.ranges === agg.ranges && r.join === agg.join
-        # each rewrite keeps table/axes/output and semiring/ranges/id
+        # each rewrite keeps int_var/lower/upper and semiring/ranges/id
         for f in (
                 ESS.substitute(tl, Dict{String, E.ASTExpr}("fm" => N(1.0))),
                 ESS.namespace_expr(tl, "M", Set{String}(["fm"])),
                 ESS.simplify(tl),
             )
-            @test f.table == "fuel" && f.output == 2 && haskey(f.table_axes, "code")
+            @test f.int_var == "z" && f.lower == N(0.0) && f.upper isa E.ASTExpr
         end
         for f in (
                 ESS.substitute(agg, Dict{String, E.ASTExpr}("F" => N(2.0))),
@@ -45,28 +45,18 @@ V(n) = E.VarExpr(n); N(x) = E.NumExpr(x)
         end
     end
 
-    # A tiny two-component coupled system: a table_lookup + an index-set range, so
-    # flatten must carry both a function table and a namespaced index set, and the
-    # round-trip document must preserve them.
+    # A tiny system with an index set, so flatten must carry the index-set
+    # registry, and the round-trip document must preserve it.
     function tiny_doc()
         op(o, a...) = Dict{String, Any}("op" => o, "args" => collect(Any, a))
         Dict{String, Any}(
             "esm" => "0.5.0", "metadata" => Dict("name" => "Tiny"),
-            "function_tables" => Dict{String, Any}(
-                "fuel" => Dict{String, Any}(
-                    "axes" => Any[Dict{String, Any}("name" => "code", "values" => Any[1.0, 2.0])],
-                    "data" => Any[10.0, 20.0]
-                )
-            ),
             # esm-spec v0.8.0: index_sets is a single document-scoped registry.
             "index_sets" => Dict{String, Any}("cells" => Dict{String, Any}("kind" => "interval", "size" => 2)),
             "models" => Dict{String, Any}(
                 "A" => Dict{String, Any}(
                     "variables" => Dict{String, Any}(
                         "code" => Dict{String, Any}("type" => "parameter", "default" => 2.0),
-                        # `h` is plain arithmetic so the tree-walk eval needs no
-                        # table_lookup lowering (covered separately); the `fuel`
-                        # table is still carried through flatten + the bridge.
                         # esm 1.0.0 §6.3: an observed unknown is an `unknown`
                         # DEFINED by a bare-variable-LHS equation.
                         "h" => Dict{String, Any}("type" => "unknown"),
@@ -89,12 +79,11 @@ V(n) = E.VarExpr(n); N(x) = E.NumExpr(x)
     # validation of a hand-built fixture.
     parse_tiny() = E.flatten(ESS.coerce_esm_file(ESS.JSON3.read(ESS.JSON3.write(tiny_doc()))))
 
-    @testset "flatten carries document-scoped index_sets + function_tables" begin
+    @testset "flatten carries document-scoped index_sets" begin
         flat = parse_tiny()
         # esm-spec v0.8.0: document-scoped registry — plain (un-namespaced) names.
         @test haskey(flat.index_sets, "cells")
         @test !haskey(flat.index_sets, "A.cells")
-        @test haskey(flat.function_tables, "fuel")        # carried through
     end
 
     @testset "flattened_to_esm reconstitutes a runnable document" begin
@@ -102,8 +91,7 @@ V(n) = E.VarExpr(n); N(x) = E.NumExpr(x)
         doc = E.flattened_to_esm(flat)
         # index_sets is emitted at the document level (sibling of `models`).
         @test haskey(doc, "index_sets") && haskey(doc["index_sets"], "cells")
-        @test haskey(doc, "function_tables") && haskey(doc["function_tables"], "fuel")
-        # build + evaluate: table_lookup(code=2) -> 20, so D(y) = 20.
+        # build + evaluate: h = code·10 = 20, so D(y) = 20.
         f!, u0, p, _t, vmap = E._build_evaluator(doc; initial_conditions = Dict("A.y" => 0.0))
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[vmap["A.y"]] ≈ 20.0

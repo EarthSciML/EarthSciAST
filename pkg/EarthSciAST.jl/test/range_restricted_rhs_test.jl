@@ -47,7 +47,7 @@ function _rrt_doc(nx::Int, ny::Int)
         )
     )
     return Dict{String, Any}(
-        "esm" => "1.2.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "rrt"),
         "index_sets" => Dict(
             "x" => Dict("kind" => "interval", "size" => nx),
@@ -99,7 +99,7 @@ function _rrt_flux_doc(nx::Int)
     )
     lhs = faq(Dict("op" => "D", "args" => Any[ix("u", "i")], "wrt" => "t"))
     return Dict{String, Any}(
-        "esm" => "1.2.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "rrt_flux"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => nx)),
         "models" => Dict(
@@ -137,7 +137,7 @@ function _rrt_table_doc(nx::Int)
     lhs = faq(Dict("op" => "D", "args" => Any[u("i")], "wrt" => "t"))
     rhs = faq(add(mul(0.25, add(u(sub("i", 1)), add(mul(-2, u("i")), u(add("i", 1))))), agg))
     return Dict{String, Any}(
-        "esm" => "1.2.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "rrt_table"),
         "index_sets" => Dict(
             "x" => Dict("kind" => "interval", "size" => nx),
@@ -190,7 +190,7 @@ function _rrt_paths_doc(nx::Int)
     )
     lhs = faq(Dict("op" => "D", "args" => Any[u("i")], "wrt" => "t"))
     return Dict{String, Any}(
-        "esm" => "1.2.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "rrt_paths"),
         "index_sets" => Dict(
             "x" => Dict("kind" => "interval", "size" => nx),
@@ -247,7 +247,7 @@ function _rrt_faces_doc(nx::Int, ny::Int)
         )
     )
     return Dict{String, Any}(
-        "esm" => "1.2.0",
+        "esm" => "2.0.0",
         "metadata" => Dict("name" => "rrt_faces"),
         "index_sets" => Dict(
             "x" => Dict("kind" => "interval", "size" => nx),

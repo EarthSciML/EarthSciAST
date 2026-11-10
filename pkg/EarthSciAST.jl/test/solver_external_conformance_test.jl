@@ -111,7 +111,7 @@ include("testutils.jl")   # TESTUTILS_REPO_ROOT
         @test loaded.document_base == rstrip(normpath(pwd()), '/')
         @test !occursin("document_base", EarthSciAST.to_json(loaded))
         # Rebuilds carry it across.
-        @test EarthSciAST.migrate(loaded, loaded.esm).document_base == loaded.document_base
+        @test EarthSciAST.migrate(loaded, EarthSciAST.SCHEMA_VERSION).document_base == loaded.document_base
     end
 
     @testset "a drive-letter path is absolute, for `external` and for the base" begin

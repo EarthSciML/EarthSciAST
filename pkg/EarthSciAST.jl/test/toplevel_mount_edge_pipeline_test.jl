@@ -26,7 +26,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
 # the file is the minimum that makes it a loadable component.
 const _SELF_CONTAINED_LEAF = """
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": {"name": "leaf"},
   "metaparameters": {"NLEV": {"type": "integer", "default": 4}},
   "index_sets": {"lev": {"kind": "interval", "size": "NLEV"}},
@@ -41,7 +41,7 @@ const _SELF_CONTAINED_LEAF = """
 # old behaviour.
 const _ASSEMBLER_SCOPED_LEAF = """
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": {"name": "leaf"},
   "index_sets": {"rows": {"kind": "interval", "size": "n_rows"}},
   "models": {"Census": {
@@ -71,7 +71,7 @@ end
         _tmp_write(dir, "leaf.esm", _SELF_CONTAINED_LEAF)
         host = _tmp_write(
             dir, "host.esm",
-            """{"esm":"1.0.0","metadata":{"name":"host"},
+            """{"esm":"2.0.0","metadata":{"name":"host"},
             "models":{"M":{"ref":"./leaf.esm"}}}"""
         )
         f = EarthSciAST.load_path(host)
@@ -88,7 +88,7 @@ end
         _tmp_write(dir, "leaf.esm", _SELF_CONTAINED_LEAF)
         host = _tmp_write(
             dir, "host.esm",
-            """{"esm":"1.0.0","metadata":{"name":"host"},
+            """{"esm":"2.0.0","metadata":{"name":"host"},
             "models":{"M":{"ref":"./leaf.esm","bindings":{"NLEV":9}}}}"""
         )
         f = EarthSciAST.load_path(host)
@@ -99,7 +99,7 @@ end
         # that environment has at this edge.
         _tmp_write(
             dir, "expr.esm",
-            """{"esm":"1.0.0","metadata":{"name":"expr"},
+            """{"esm":"2.0.0","metadata":{"name":"expr"},
             "metaparameters":{"NX":{"type":"integer","default":3},
                               "NY":{"type":"integer","default":5}},
             "models":{"M":{"ref":"./leaf.esm",
@@ -118,7 +118,7 @@ end
         _tmp_write(dir, "leaf.esm", _SELF_CONTAINED_LEAF)
         host = _tmp_write(
             dir, "host.esm",
-            """{"esm":"1.0.0","metadata":{"name":"host"},
+            """{"esm":"2.0.0","metadata":{"name":"host"},
             "index_sets":{"lev":{"kind":"interval","size":59}},
             "models":{"M":{"ref":"./leaf.esm"}}}"""
         )
@@ -150,14 +150,14 @@ end
         _tmp_write(dir, "leaf.esm", _ASSEMBLER_SCOPED_LEAF)
         verbose = _tmp_write(
             dir, "verbose.esm",
-            """{"esm":"1.0.0","metadata":{"name":"verbose"},
+            """{"esm":"2.0.0","metadata":{"name":"verbose"},
             "metaparameters":{"n_rows":{"type":"integer","default":7}},
             "index_sets":{"rows":{"kind":"interval","size":"n_rows"}},
             "models":{"M":{"ref":"./leaf.esm"}}}"""
         )
         terse = _tmp_write(
             dir, "terse.esm",
-            """{"esm":"1.0.0","metadata":{"name":"terse"},
+            """{"esm":"2.0.0","metadata":{"name":"terse"},
             "metaparameters":{"n_rows":{"type":"integer","default":7}},
             "models":{"M":{"ref":"./leaf.esm"}}}"""
         )
@@ -192,7 +192,7 @@ end
         _tmp_write(
             dir, "leaf.esm", """
             {
-              "esm": "1.0.0",
+              "esm": "2.0.0",
               "metadata": {"name": "leaf"},
               "metaparameters": {"UNRELATED": {"type": "integer", "default": 1}},
               "index_sets": {"rows": {"kind": "interval", "size": "n_rows"}},
@@ -204,7 +204,7 @@ end
         )
         host = _tmp_write(
             dir, "host.esm",
-            """{"esm":"1.0.0","metadata":{"name":"host"},
+            """{"esm":"2.0.0","metadata":{"name":"host"},
             "metaparameters":{"n_rows":{"type":"integer","default":7}},
             "models":{"M":{"ref":"./leaf.esm"}}}"""
         )
@@ -220,7 +220,7 @@ end
         _tmp_write(dir, "leaf_bare.esm", _ASSEMBLER_SCOPED_LEAF)
         bare_host = _tmp_write(
             dir, "bare_host.esm",
-            """{"esm":"1.0.0","metadata":{"name":"bare_host"},
+            """{"esm":"2.0.0","metadata":{"name":"bare_host"},
             "metaparameters":{"n_rows":{"type":"integer","default":7}},
             "models":{"M":{"ref":"./leaf_bare.esm"}}}"""
         )
@@ -254,14 +254,14 @@ end
         # its own purposes, and does not bind it on the edge.
         top = _tmp_write(
             dir, "top.esm",
-            """{"esm":"1.0.0","metadata":{"name":"top"},
+            """{"esm":"2.0.0","metadata":{"name":"top"},
             "metaparameters":{"NLEV":{"type":"integer","default":12}},
             "models":{"M":{"ref":"./leaf.esm"}}}"""
         )
         # The same leaf, the same assembler, through the OTHER attachment point.
         sub = _tmp_write(
             dir, "sub.esm",
-            """{"esm":"1.0.0","metadata":{"name":"sub"},
+            """{"esm":"2.0.0","metadata":{"name":"sub"},
             "metaparameters":{"NLEV":{"type":"integer","default":12}},
             "models":{"Host":{
               "subsystems":{"M":{"ref":"./leaf.esm"}},
@@ -292,13 +292,13 @@ end
         _tmp_write(dir, "leaf.esm", _SELF_CONTAINED_LEAF)
         bare = _tmp_write(
             dir, "bare.esm",
-            """{"esm":"1.0.0","metadata":{"name":"bare"},
+            """{"esm":"2.0.0","metadata":{"name":"bare"},
             "metaparameters":{"NLEV":{"type":"integer","default":12}},
             "models":{"M":{"ref":"./leaf.esm"}}}"""
         )
         bound = _tmp_write(
             dir, "bound.esm",
-            """{"esm":"1.0.0","metadata":{"name":"bound"},
+            """{"esm":"2.0.0","metadata":{"name":"bound"},
             "metaparameters":{"NLEV":{"type":"integer","default":12}},
             "models":{"M":{"ref":"./leaf.esm","bindings":{"NLEV":7}}}}"""
         )
@@ -313,7 +313,7 @@ end
         # `template_import_unknown_name` against the leaf.
         other = _tmp_write(
             dir, "other.esm",
-            """{"esm":"1.0.0","metadata":{"name":"other"},
+            """{"esm":"2.0.0","metadata":{"name":"other"},
             "metaparameters":{"NROWS":{"type":"integer","default":2}},
             "models":{"M":{"ref":"./leaf.esm"}}}"""
         )
@@ -341,7 +341,7 @@ end
         _tmp_write(dir, "leaf.esm", _ASSEMBLER_SCOPED_LEAF)
         host = _tmp_write(
             dir, "host.esm",
-            """{"esm":"1.0.0","metadata":{"name":"host"},
+            """{"esm":"2.0.0","metadata":{"name":"host"},
             "metaparameters":{"n_rows":{"type":"integer","default":7}},
             "index_sets":{"rows":{"kind":"interval","size":7}},
             "models":{"M":{"ref":"./leaf.esm"}}}"""
@@ -363,7 +363,7 @@ end
         dir = mktempdir()
         _tmp_write(
             dir, "leaf.esm",
-            """{"esm":"1.0.0","metadata":{"name":"leaf"},
+            """{"esm":"2.0.0","metadata":{"name":"leaf"},
             "metaparameters":{"NLEV":{"type":"integer","default":40}},
             "index_sets":{"lev":{"kind":"interval","size":"NLEV"}},
             "models":{"Column":{
@@ -375,12 +375,12 @@ end
         "index_sets":{"lev":{"kind":"interval","size":"NLEV"}}"""
         top = _tmp_write(
             dir, "top.esm",
-            """{"esm":"1.0.0","metadata":{"name":"top"}, $(decls),
+            """{"esm":"2.0.0","metadata":{"name":"top"}, $(decls),
             "models":{"Col":{"ref":"./leaf.esm"}}}"""
         )
         sub = _tmp_write(
             dir, "sub.esm",
-            """{"esm":"1.0.0","metadata":{"name":"sub"}, $(decls),
+            """{"esm":"2.0.0","metadata":{"name":"sub"}, $(decls),
             "models":{"Host":{
               "variables":{"z":{"type":"unknown","units":"1","default":0.0}},
               "equations":[{"lhs":{"op":"D","args":["z"],"wrt":"t"},
@@ -409,7 +409,7 @@ end
         dir = mktempdir()
         host = _tmp_write(
             dir, "host.esm", """
-            {"esm":"1.0.0","metadata":{"name":"toplevel_inject"},
+            {"esm":"2.0.0","metadata":{"name":"toplevel_inject"},
              "models":{"Runoff":{
                "ref":"$(joinpath(conf, "leaf.esm"))",
                "expression_template_imports":[
@@ -435,7 +435,7 @@ end
         _tmp_write(dir, "leaf.esm", _SELF_CONTAINED_LEAF)
         host = _tmp_write(
             dir, "host.esm",
-            """{"esm":"1.0.0","metadata":{"name":"host"},
+            """{"esm":"2.0.0","metadata":{"name":"host"},
             "models":{"M":{"ref":"./leaf.esm","bindings":{"NLEV":6},
                            "index_set_rename":{"lev":"soil.lev"}}}}"""
         )

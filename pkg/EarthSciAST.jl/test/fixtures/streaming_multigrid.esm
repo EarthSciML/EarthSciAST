@@ -1,5 +1,5 @@
 {
-    "esm": "1.0.0",
+    "esm": "2.0.0",
     "metadata": {
         "name": "StreamingMultiGrid",
         "description": "Wave 3 (streaming-output-sinks RFC §9) multi-grid fixture: two decoupled array states on DIFFERENT grids in one model — `a` over a 1-D `col` axis (size 3) and `b` over a 2-D `row`x`lev` grid (2x2) — each with pointwise exponential decay. The two distinct spatial-dim signatures make two emergent grids, so `group_gridding_by_grid` splits them and one ZarrSink per grid writes to its own store. Fully runnable (scalar params, no data loaders).",

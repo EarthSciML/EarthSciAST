@@ -78,7 +78,7 @@ _dl_decay(id, species, k) = Dict{String, Any}(
 
     @testset "a nested reaction system's constraint equation is typed through its template" begin
         doc = Dict{String, Any}(
-            "esm" => "1.2.0",
+            "esm" => "2.0.0",
             "metadata" => Dict{String, Any}("name" => "nested_constraint_template"),
             "reaction_systems" => Dict{String, Any}(
                 "Chem" => Dict{String, Any}(

@@ -7,9 +7,8 @@
 #   * A REAL inline conservative REGRID inside OceanDynamics: the atmosphere-grid
 #     sensible-heat flux (`flux_field` = [50,150,250,350] on 4 atmos cells) is
 #     remapped onto the 3-cell ocean grid by overlap weights W[a,o]=A[a,o]/A_o
-#     computed INLINE from cell geometry — bin-skolem broad phase (value
-#     invention: `rg_src_bin`/`rg_tgt_bin`/`rg_pairs`) + fused
-#     `polygon_intersection_area` narrow phase (esm-spec §8.6.1). The overlaps are
+#     computed INLINE from cell geometry — a binned broad phase (value
+#     invention) + an overlap-area narrow phase (esm-spec §8.6.1). The overlaps are
 #     A=[[1,0,0],[1,0,0],[0,1,0],[0,.5,.5]], A_o=[2,1.5,.5], so
 #     surface_heat_flux = Σ_a W[a,o]·flux_atmos[a] = [100, 850/3, 350] W/m^2
 #     (conservative: Σ_o A_o·shf_o = Σ_a A_a·flux_a = 800).

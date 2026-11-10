@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "ParameterValueModel",
     "description": "A reaction-system parameter valued by a `distribution` and carrying NO `default`, plus the two data-source properties no corpus fixture exercised. esm-schema.json's `Parameter` declares no required properties, so a distribution-valued parameter with no default is a conforming document; Julia's field table pinned `default` as required and rejected it with a hard KeyError at load. `DataSource.select` and `DataSourceTemporal.records_per_sample` were the only two properties of those two objects with no fixture anywhere in the corpus."

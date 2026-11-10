@@ -145,13 +145,13 @@ _stdref_doc(path) =
             )
         )
         lib(name, imports, templates) = Dict(
-            "esm" => "1.1.0", "metadata" => Dict("name" => name),
+            "esm" => "2.0.0", "metadata" => Dict("name" => name),
             "expression_template_imports" => [Dict("ref" => r) for r in imports],
             "expression_templates" => templates
         )
         bundle_files = Dict(
             "b.esm" => Dict(
-                "esm" => "1.1.0", "metadata" => Dict("name" => "b"),
+                "esm" => "2.0.0", "metadata" => Dict("name" => "b"),
                 "expression_templates" => Dict("twice" => twice)
             ),
             "a.esm" => lib("a", ["b.esm"], Dict("quad" => quad("a"))),
@@ -161,7 +161,7 @@ _stdref_doc(path) =
             "c1.esm" => lib("c1", ["esm:std/c2.esm"], Dict("one" => Dict("params" => [], "body" => 1))),
             "c2.esm" => lib("c2", ["c1.esm"], Dict("two" => Dict("params" => [], "body" => 2))),
             "sub.esm" => Dict(
-                "esm" => "1.1.0", "metadata" => Dict("name" => "sub"),
+                "esm" => "2.0.0", "metadata" => Dict("name" => "sub"),
                 "models" => Dict(
                     "Sub" => Dict(
                         "expression_template_imports" => [Dict("ref" => "b.esm")],
@@ -183,7 +183,7 @@ _stdref_doc(path) =
         )
         consumer(ref, tmpl) = JSON3.write(
             Dict(
-                "esm" => "1.1.0", "metadata" => Dict("name" => "consumer"),
+                "esm" => "2.0.0", "metadata" => Dict("name" => "consumer"),
                 "models" => Dict(
                     "M" => Dict(
                         "expression_template_imports" => [Dict("ref" => ref)],
@@ -228,7 +228,7 @@ _stdref_doc(path) =
                 ) == "template_import_cycle"
                 mount = JSON3.write(
                     Dict(
-                        "esm" => "1.1.0", "metadata" => Dict("name" => "mount"),
+                        "esm" => "2.0.0", "metadata" => Dict("name" => "mount"),
                         "models" => Dict(
                             "Top" => Dict(
                                 "subsystems" => Dict("S" => Dict("ref" => "esm:std/sub.esm")),
