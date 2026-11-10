@@ -101,8 +101,8 @@ Arity `structural` means the operator's operands live in dedicated fields rather
 than in `args`, and are described on its own page.
 
 The operators esm 2.0.0 removed (`fn`, `table_lookup`, `skolem`, `rank`, the
-`argmin`/`argmax` operator forms and the two polygon operators) are rejected at
-load with `removed_op`; [removed operators](closed-functions/) lists the
+`argmin`/`argmax` operator forms, the two polygon operators, and `aggregate`, the
+old spelling of `faq`) are rejected at load with `removed_op`; [removed operators](closed-functions/) lists the
 standard-library template that replaces each, and [geometry](geometry/) covers
 polygon overlap areas.
 

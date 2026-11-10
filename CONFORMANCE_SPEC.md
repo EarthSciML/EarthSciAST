@@ -693,7 +693,9 @@ on hash-table iteration order or a language-native hash value.
    Because the templates are ordinary `faq` reductions, the emitted index is a
    pure function of the candidate ids and the metric, byte-identical across
    bindings. A float value participates only in the comparison, never in a key
-   (use a squared metric, not `sqrt`, to keep ties bit-exact). (The `argmin` /
+   (use a squared metric, not `sqrt`, to keep ties bit-exact). An arg-witness
+   template over state-dependent candidates is an ordinary `faq` and is allowed
+   in a continuous equation; no cadence rule rejects it. (The `argmin` /
    `argmax` ops were removed at 2.0.0.)
 
 7. **Grouped reduction over an arg-witness key (the SCVT centroid step).** A
@@ -705,9 +707,9 @@ on hash-table iteration order or a language-native hash value.
    bucket by the canonical integer key, reduce each bucket's floats sequentially in
    canonical value order, and emit `0̄` for an empty group (an unattended generator
    then has `den=0` and a NaN `centroid` — division is IEEE, never an exception, so
-   every binding agrees). The whole step is materialized off the hot path through
-   the value-invention front-door (the same CONST/DISCRETE point as the `assign`
-   buffer it consumes) and dropped from the ODE; `num`/`den`/`centroid` are pure
+   every binding agrees). When `assign` and the step's inputs are CONST/DISCRETE,
+   the whole step is materialized off the hot path through the value-invention
+   front-door and dropped from the ODE; `num`/`den`/`centroid` are pure
    functions of the inputs and the rule-5/rule-6 orders, hence byte/tolerance-
    identical across bindings. A grouped/derived buffer reading a live ODE state is
    rejected by §5.7.6 guard 2 (its inputs MUST be CONST/DISCRETE).
@@ -1780,10 +1782,9 @@ resolved against the document `index_sets` registry (RFC §5.2): `interval` →
 `[1, size]`, `categorical` → `[1, |members|]`, `ragged` → a per-cell dynamic
 bound `[1, offsets[i]]` over POSITIONS (below). An undeclared `from` name is a
 hard error — no implicit interval is inferred. The canonical tag is
-`op: "faq"`. The pre-1.1.0
-`op: "aggregate"` spelling is a DEPRECATED ALIAS, normalized to `faq` at the wire
-boundary and removed at esm 2.0.0; `op: "arrayop"` was removed at 0.8.0 and is
-not accepted (§5.6, docs/content/rfcs/faq-node-rename.md).
+`op: "faq"`. The earlier spellings `op: "arrayop"` (removed at 0.8.0) and
+`op: "aggregate"` (a deprecated alias from 1.1.0, removed at 2.0.0) are not
+accepted: both are `removed_op` (§7, docs/content/rfcs/faq-node-rename.md).
 
 **Ragged ranges bind positions (normative; esm-spec §4.3.1 "Ragged ranges").**
 A range `{"from": <ragged set>, "of": ["i"]}` binds the POSITION `k` in
@@ -4250,8 +4251,8 @@ member to something else is still non-conforming. A binding MUST show, on
 | Binding | Loads | Resolves to | Evidence |
 |---|---|---|---|
 | Rust | yes | `0`, `-1`, arithmetic `9` | `tests/lower_enums_integration.rs`; `esm test` on the fixture, 3/3 assertions |
-| Python | yes | `0`, `-1`, arithmetic `9` | `tests/test_closed_functions.py::test_zero_and_negative_enum_members_load_and_resolve_to_themselves` |
-| Julia | yes | `0`, `-1`, arithmetic `9` | `test/closed_functions_test.jl`, "zero and negative enum members" |
+| Python | yes | `0`, `-1`, arithmetic `9` | `tests/test_enums.py::test_zero_and_negative_enum_members_load_and_resolve_to_themselves` |
+| Julia | yes | `0`, `-1`, arithmetic `9` | no test since `test/closed_functions_test.jl` was deleted at 2.0.0 (its "zero and negative enum members" testset went with it) |
 | TypeScript | yes | `0`, `-1`, arithmetic `9` | `src/enums-zero-negative.test.ts` |
 | Go | yes | `0`, `-1`, arithmetic `9` | `pkg/esm/lower_enums_test.go::TestZeroAndNegativeEnumMembers` |
 
@@ -7628,9 +7629,8 @@ ever emitted it, and the code had zero real coverage.
 | `event_var_undeclared` | Structural | Event affects undeclared variable. NOT emitted for `_var` (esm-spec §6.4, §4.9.1) or for the independent variable. |
 | `equation_count_mismatch` (see above) | Structural | Unknowns vs equations. Algebraic and expression-LHS equations COUNT (esm-spec §4.9.4). |
 | `unit_dimension_mismatch` | Units | Dimensional analysis failure — a PROVABLE inconsistency (esm-spec §4.8.4). Emitted by the structural layer as `unit_inconsistency`. Hard error. |
-| `removed_op` | Structural | **Hard error.** A document uses an `op` spelling, or a top-level field, that was REMOVED rather than deprecated: `arrayop` (the pre-0.8.0 spelling of `faq`, removed at esm 0.8.0); and, removed at esm 2.0.0, the ops `fn`, `table_lookup`, `skolem`, `rank`, `argmin`, `argmax`, `intersect_polygon` and `polygon_intersection_area`, and the `function_tables` block. It MUST be rejected BY NAME at the wire boundary, before schema validation, not left to fall through: each removed op is a well-formed identifier, so esm-spec §4.2 would otherwise admit it as an OPEN rewrite-target op, load it silently, and fail much later (or never) as `unlowered_operator`. The message names the op or field and the offending path, and for a 2.0.0 removal points at the offline codemod (`python -m earthsci_ast.migrate`, module `earthsci_ast.migration`), which rewrites a 1.x document onto the `lib/*.esm` templates. A binding's `migrate()` refuses such a document with this code rather than rewriting it. Julia's removed `call` op (v0.3.0) is the precedent. Fixtures: `tests/invalid/faq/arrayop_op_removed.esm` and `tests/invalid/removed_ops/removed_op_<name>.esm`, one per 2.0.0 removal, each pinned `parse_error` (§7.1.2). |
-| `faq_version_too_old` | Structural | **Hard error.** A document spells `"op": "faq"` while declaring `esm` below 1.1.0. `faq` arrives at esm 1.1.0, the same version gate the top-level `solver` block follows (esm-spec §2.2.4). The gate MUST read the AUTHORED form, before alias normalization: `aggregate` is the legal pre-1.1.0 spelling, so a 1.0.0 document carrying the alias must NOT be caught — it is normalized instead, with its declared version raised to the 1.1.0 floor so the upgraded document is self-consistent. The rule is transitive through lowering: a document whose EXPANDED form contains `faq` declares 1.1.0 even when its authored bytes do not. Fixtures: `tests/conformance/deprecated_op_alias/`. |
-| `deprecated_op_alias` | Structural | **WARNING, not an error.** An expression node uses a deprecated `op` spelling. The one alias is `aggregate`, the pre-1.1.0 spelling of `faq` (the Functional Aggregate Query node, docs/content/rfcs/faq-node-rename.md). The loader MUST normalize the node to `faq` at ONE wire boundary per binding, applied to EVERY document a load touches — the root, a `{ref}`-loaded child, a template library, a coupling library — ahead of the version gates and schema validation, so nothing downstream of the loader, `emit` included, sees the alias. Normalizing only the root is NOT sufficient and was the shipped bug: ref resolution then parses child files raw, and a child's alias reaches `emit` untouched. and MUST report this once per DOCUMENT per alias, naming the count, not once per node. The alias is REMOVED at esm 2.0.0. Like `operator_compose_partial_merge`, this is a CLASSIFICATION: each binding asserts it idiomatically (Julia `@warn`, Python `DeprecationWarning`, TypeScript `console.warn`, Rust/Go stderr). The older `arrayop` spelling is NOT an alias — it was removed at 0.8.0 and is rejected. Fixtures: `tests/conformance/deprecated_op_alias/`, `tests/invalid/faq/arrayop_op_removed.esm`. |
+| `removed_op` | Structural | **Hard error.** A document uses an `op` spelling, or a top-level field, that was REMOVED rather than deprecated: `arrayop` (the pre-0.8.0 spelling of `faq`, removed at esm 0.8.0); and, removed at esm 2.0.0, `aggregate` (the pre-1.1.0 spelling of `faq`, a deprecated alias from 1.1.0, which the codemod renames to `faq`), the ops `fn`, `table_lookup`, `skolem`, `rank`, `argmin`, `argmax`, `intersect_polygon` and `polygon_intersection_area`, and the `function_tables` block. It MUST be rejected BY NAME at the wire boundary, before schema validation, not left to fall through: each removed op is a well-formed identifier, so esm-spec §4.2 would otherwise admit it as an OPEN rewrite-target op, load it silently, and fail much later (or never) as `unlowered_operator`. The message names the op or field and the offending path, and for a 2.0.0 removal points at the offline codemod (`python -m earthsci_ast.migrate`, module `earthsci_ast.migration`), which rewrites a 1.x document onto the `lib/*.esm` templates. A binding's `migrate()` refuses such a document with this code rather than rewriting it. Julia's removed `call` op (v0.3.0) is the precedent. Fixtures: `tests/invalid/faq/arrayop_op_removed.esm` and `tests/invalid/removed_ops/removed_op_<name>.esm`, one per 2.0.0 removal, each pinned `parse_error` (§7.1.2); `tests/conformance/removed_spellings/` covers the two removed `faq` spellings in a referenced child. |
+| `faq_version_too_old` | Structural | **Hard error.** A document spells `"op": "faq"` while declaring `esm` below 1.1.0. `faq` arrives at esm 1.1.0, the same version gate the top-level `solver` block follows (esm-spec §2.2.4). The rule is transitive through lowering: a document whose EXPANDED form contains `faq` declares 1.1.0 even when its authored bytes do not. Fixtures: `tests/conformance/removed_spellings/` (case `faq_requires_v11`). |
 | `unit_parse_error` | Units | Unrecognized unit string — does not parse under the esm-spec §4.8.2 grammar, or names a symbol absent from the §4.8.1 registry. Hard error, NOT a warning. |
 | `units_dimensionless_literal_mismatch` | Units | **WARNING, not an error.** A check site (an equation, initialization equation or constraint equation, or a reaction rate, of any model or reaction system, inline subsystems included) that the current neutral-literal rule passes or skips fails once every bare numeric literal other than zero is read as dimensionless at scale 1 (esm-spec §4.8.6). Emitted once per site on `unit_warnings`, with `path` the site's pointer (`/models/<M>/equations/<i>`, `/models/<M>/subsystems/<Sub>/initialization_equations/<i>`, `/reaction_systems/<S>/reactions/<i>`, …), and never changes `is_valid`. A site the current rule already rejects carries no warning. The next major esm version makes the dimensionless-literal rule the rule, and these sites become `unit_dimension_mismatch` errors. Fixtures: `tests/conformance/dimensionless_literal/` (its golden pins the exact warnings of every `tests/valid` file). |
 | `array_shape_mismatch` | Structural | An operand of a BARE array-level expression is declared over an index set the result is not shaped over (esm-spec §4.3.4). Operands align by index-set NAME: one declared over a SUBSET of the result's sets broadcasts along the missing axes and axis order is immaterial, but one carrying an EXTRA set has no axis to align to. Pointer: the containing expression field (`…/equations/i/rhs`, `…/variables/v/expression`). Both shapes are declared, so this is static — hard error, NOT a warning, and NOT a runtime concern. Fixture: `tests/invalid/array_broadcast/operand_index_set_not_in_result.esm`. |

@@ -61,6 +61,7 @@ every binding evaluates it with the same core operators.
 | `argmin` / `argmax` | the `argmin` / `argmax` templates, or `argmin_where` / `argmax_where` when the candidates are filtered or joined | `format` |
 | `polygon_intersection_area` (and its `manifold` field) | `overlap_area_planar`, or `overlap_area_spherical` over a `lonlat_to_unit` stack, in `esm:std/geometry.esm` | `format` |
 | `intersect_polygon` | none | `format` |
+| `aggregate`, the deprecated spelling of `faq` | `faq` (the same node); the `deprecated_op_alias` warning is gone with it | `format` |
 
 **Loading.** A 2.0.0 binding rejects a document that uses any of these, whatever
 `esm` it declares, with the hard error `removed_op`. The error names the
@@ -105,6 +106,12 @@ differ:
 The removed operators' own diagnostics (`unknown_closed_function`, the
 `interp_*`, `searchsorted_*`, `table_*`, `table_lookup_*` and
 `closed_function_*` codes, `geometry_manifold_invalid`) are gone with them.
+
+**Float32.** A template is an ordinary expression, so under `element_type:
+"Float32"` it evaluates in binary32 (esm-spec §11.3.1); nothing refuses it. The
+calendar templates lose precision there: a present-day Unix time in seconds is
+far above binary32's exact-integer range (2²⁴), so `julian_day` and the other
+fields are not exact.
 
 ---
 

@@ -12,8 +12,9 @@
 > from `esm:std/<file>.esm` (§4.7, §9.7): `lib/calendar.esm` and
 > `lib/interp.esm` for the closed functions and the tables, `lib/relational.esm`
 > for keys, ranks and arg-witnesses, `lib/geometry.esm` for overlap areas
-> (`intersect_polygon` has no replacement). A loader rejects a document using
-> any of them with `removed_op`. The 2.0.0 codemod rewrites a 1.x document; see
+> (`intersect_polygon` has no replacement). The deprecated `aggregate` spelling
+> of `faq` is removed too. A loader rejects a document using any of them with
+> `removed_op`. The 2.0.0 codemod rewrites a 1.x document; see
 > `MIGRATION.md`.
 
 > **1.0.0 is a clean break.** The five declared variable types collapse to two:
@@ -688,15 +689,16 @@ Every `op` string belongs to one of **two tiers**:
 
 **Removed ops (`removed_op`, normative).** A short list of `op` spellings is neither
 core nor open: they were removed from the format, and a loader MUST reject a document
-carrying one **BY NAME**, with the hard error `removed_op`, at the same wire boundary
-that normalizes the `aggregate` alias (§4.2, "The `faq` tag") — ahead of the version
-gates and schema validation, and on every document a load touches. Each is a
+carrying one **BY NAME**, with the hard error `removed_op`, at the wire boundary
+(§4.2, "The `faq` tag") — ahead of the version gates and schema validation, and on
+every document a load touches. Each is a
 well-formed identifier, so without the by-name check the open tier would admit it and
 the document would fail much later as `unlowered_operator`, or never. The list:
 
 | Removed | At | Replacement |
 |---|---|---|
 | `arrayop` | 0.8.0 | `faq` |
+| `aggregate` | 2.0.0 | `faq` (the same node; the tag is renamed) |
 | `fn` (every `datetime.*` and `interp.*` name) | 2.0.0 | the `lib/calendar.esm` and `lib/interp.esm` templates (§9.7.1) |
 | `table_lookup`, and the top-level `function_tables` block | 2.0.0 | the `linear` / `bilinear` templates of `lib/interp.esm` over the table's data |
 | `skolem`, `rank` | 2.0.0 | `pair_key` / `edge_key` keys on a `distinct` `faq`, then `rank_of` / `rank_of_set` (`lib/relational.esm`) |
@@ -959,7 +961,7 @@ by this spec.
 | `transpose` | — (optional `perm`) | Axis permutation of `args[0]`. See Section 4.3.5. |
 | `concat` | `axis` | Concatenate the operand arrays along the given axis. See Section 4.3.5. |
 
-##### The `faq` tag, and its one deprecated alias
+##### The `faq` tag
 
 `faq` — Functional Aggregate Query — is the canonical tag from esm **1.1.0**.
 The node is named for what it is rather than for one of its specializations:
@@ -967,34 +969,18 @@ it reduces over a semiring, but it also joins (`join`), filters (`filter`),
 and under `bool_and_or` with `distinct` produces an INDEX SET rather than an
 array, reducing nothing at all.
 
-- **`aggregate`** is the pre-1.1.0 spelling and is a **DEPRECATED ALIAS**. A
-  loader MUST accept it, MUST normalize the node to `faq` at the wire boundary
-  — ahead of the version gates and schema validation, so that nothing
-  downstream of the loader, `emit` included, ever sees the alias — and MUST
-  report the warning diagnostic `deprecated_op_alias` once per document per
-  alias. The alias is **REMOVED at esm 2.0.0**.
-- **`arrayop`** is the pre-0.8.0 spelling and is **NOT accepted**. It was
-  removed at 0.8.0 and is rejected **BY NAME**, with the hard error
-  `removed_op` (§4.2, "Removed ops").
+Its two earlier spellings are **NOT accepted**. `arrayop` (before 0.8.0) was
+removed at 0.8.0, and `aggregate` (before 1.1.0, then a deprecated alias) was
+removed at 2.0.0. Both are rejected **BY NAME**, with the hard error
+`removed_op` (§4.2, "Removed ops"); the 2.0.0 codemod renames `aggregate` to
+`faq`. A document that spells the node `faq` declares `esm: 1.1.0` or later,
+the same rule the top-level `solver` block follows (§2.2.4), enforced with the
+hard error `faq_version_too_old`.
 
-A document that spells the node `faq` declares `esm: 1.1.0` or later, the same
-rule the top-level `solver` block follows (§2.2.4), enforced with the hard error
-`faq_version_too_old`. The gate reads the **authored** form, before
-normalization: `aggregate` *is* the pre-1.1.0 spelling, so a 1.0.0 document
-carrying the alias is legal — it is normalized, and its declared version is
-raised to the 1.1.0 floor with it, so the upgraded document is self-consistent
-rather than spelling a 1.1.0 construct under an older version.
-
-Both of these, and the alias normalization, happen at ONE wire boundary per
-binding, applied to EVERY document a load touches — the root, a `{ref}`-loaded
-child, a template library, a coupling library. Doing it per call site is what
-let `arrayop` survive its own 0.8.0 removal.
-
-Because a loader normalizes rather than preserves, `emit` writes `faq` for a
-document authored with `aggregate`. The §9.6.4 round-trip invariant is
-therefore stated over documents **at the current schema version**: `emit ∘
-load` is a byte-wise fixed point for those, and a document carrying a
-deprecated alias is upgraded exactly once, on its first load.
+The by-name rejection happens at ONE wire boundary per binding, applied to
+EVERY document a load touches — the root, a `{ref}`-loaded child, a template
+library, a coupling library. Doing it per call site is what let `arrayop`
+survive its own 0.8.0 removal.
 
 The **text surface is unchanged**. The head keyword in the text form is the
 ⊕-word (`sum`, `prod`, `max`, `min`, `any`) chosen from `semiring` / `reduce`
@@ -1014,7 +1000,7 @@ These accompany `faq` in Functional Aggregate Query expressions (RFC semiring-fa
 | `true` | — (`args: []`) | Nullary boolean-literal constant — e.g. an always-true join / `filter` predicate. |
 | `false` | — (`args: []`) | Nullary boolean-literal constant, the counterpart of `true`. In a numeric position the literals are `1` and `0`, the encoding every comparison produces. |
 
-**Arg-witnesses: `argmin` / `argmax` templates.** `lib/relational.esm` is a template-library file (§9.7.1) whose match-less templates `argmin(f, n)` and `argmax(f, n)` take the candidate value `f`, written over the template's loop symbol (`k_argmin_1`, `k_argmax_1`), and the candidate count `n` as a `ranges` bound (§9.6.1). Each body is two `faq` reductions, `m = min_k f(k)` (`max` for `argmax`) and then `min_k ifelse(f(k) == m or (f(k) != f(k) and m != m), k, n + 1)`, so the result is the smallest index attaining the extremum (RFC semiring-faq-unified-ir §5.7 rule 6). Because a NaN term makes a `min`/`max` reduction NaN (§4.2, Elementary Functions), a NaN candidate wins at its first occurrence. The templates return `+Inf` for `n = 0`. `argmin_where(f, p, n)` / `argmax_where(f, p, n)` restrict the candidates to those passing the predicate `p` (the `filter` of both reductions) and return `n + 1` when none passes, which is the form of an arg-witness gated by a `join`.
+**Arg-witnesses: `argmin` / `argmax` templates.** `lib/relational.esm` is a template-library file (§9.7.1) whose match-less templates `argmin(f, n)` and `argmax(f, n)` take the candidate value `f`, written over the template's loop symbol (`k_argmin_1`, `k_argmax_1`), and the candidate count `n` as a `ranges` bound (§9.6.1). Each body is two `faq` reductions, `m = min_k f(k)` (`max` for `argmax`) and then `min_k ifelse(f(k) == m or (f(k) != f(k) and m != m), k, n + 1)`, so the result is the smallest index attaining the extremum (RFC semiring-faq-unified-ir §5.7 rule 6). Because a NaN term makes a `min`/`max` reduction NaN (§4.2, Elementary Functions), a NaN candidate wins at its first occurrence. The templates return `+Inf` for `n = 0`. They are ordinary `faq` reductions, so an arg-witness over state-dependent candidates is allowed in a continuous equation; only a `distinct` producer or a value-invention `join` is held to build-time data (below). `argmin_where(f, p, n)` / `argmax_where(f, p, n)` restrict the candidates to those passing the predicate `p` (the `filter` of both reductions) and return `n + 1` when none passes, which is the form of an arg-witness gated by a `join`.
 
 **Keys and ranks.** A composite key is a scalar integer: `pair_key(a, b, lo_a, lo_b, n_a, n_b) = (a − lo_a)·n_b + (b − lo_b)` for `a ∈ [lo_a, lo_a + n_a)` and `b ∈ [lo_b, lo_b + n_b)`, NaN otherwise (or for a non-integral component), exact while `n_a·n_b ≤ 2^53`; it keeps equality and the lexicographic order of the pairs, so a `distinct` over these keys yields the pairs in lexicographic order. `edge_key(u, v, lo, n)` is `pair_key` of `(min(u, v), max(u, v))`, the undirected key. A key read only as a `join.on` column is written instead as one integer column per component, with one `on` pair per component. `rank_of(x, members, n) = 1 + Σ_k ifelse(members[k] ≥ x, 0, 1)` is the 1-based rank of a key among `n` ascending members, `rank_of_set(x, members, S)` the same over the index set `S` (`{"from": S}`, §9.6.1) — a derived set's `member_factor` array, whose size is known only after value invention — and the rank of a set's own member is its loop index. A value-invention layer accepts a `distinct` `key` that is any integer-valued expression and a `join.on` column that is a plain observed over constant factors; a NaN in either is `value_invention_key_out_of_range` (§9.6.6).
 
@@ -4572,7 +4558,11 @@ Each closed function has a standard-library template of the same field, imported
 
 The calendar templates take `t` in UTC seconds since 1970-01-01T00:00:00Z (binary64,
 proleptic Gregorian, no leap seconds) and are exact for finite `|t| < 2^52` s; outside that
-domain, and for a NaN or infinite `t`, they return NaN. The interpolation templates take
+domain, and for a NaN or infinite `t`, they return NaN. Under `"Float32"` (§11.3.1) they
+evaluate in binary32 like any other expression, so their exactness claim does not
+hold there: binary32 represents integers exactly only up to 2²⁴, and a Unix time
+in seconds is far above it, so the calendar fields of a present-day `t` lose
+precision (`julian_day` most visibly). The interpolation templates take
 each axis length as an explicit integer parameter, and do no load-time argument checking:
 the caller supplies a strictly increasing axis (non-decreasing for `searchsorted`).
 
@@ -5216,7 +5206,7 @@ A top-level `metaparameters` object declares document-scoped named integers:
 
 **Admissible sites.** A *metaparameter expression* is an integer literal, a declared metaparameter name, or `{"op": <"+"|"-"|"*"|"/">, "args": [...]}` over metaparameter expressions (unary `-` allowed). Metaparameter expressions are admissible wherever the schema previously required a bare integer in a structural position: `index_sets.<name>.size` (interval kind), `faq` dense `ranges` tuple entries, `makearray` `regions` bound pairs, **and as an import-edge / subsystem-edge binding VALUE** (`expression_template_imports[k].bindings` / a §4.7 subsystem-ref `bindings`, below). A `data`-update `select` axis `range` bound (`start`, `stop`, `step`, §8.9) MAY also be a bare string naming a metaparameter: it is substituted with the metaparameter's closed value, exactly like an expression position, so a prefix such as `W[0:N_SRC]` follows a loader-API or edge binding of `N_SRC` rather than only its `default`. These sites fold to concrete integers at load with exact 64-bit integer arithmetic; `/` MUST divide exactly, and overflow is an error (`metaparameter_type_error`). A binding value's free names resolve in the **importing** document's metaparameter scope, so a child metaparameter may be *derived* from the importer's — e.g. a regridder mounted with `{"NTGT": {"op": "*", "args": ["NX", "NY"]}}` closes its target-cell count from the fire grid's `NX`/`NY` in one edge, which import renaming (name→name, §9.7.7) cannot express. In ordinary **expression positions**, a metaparameter name appears as a bare string (the variable-reference surface syntax) and is substituted as an integer literal at load; no folding happens in expression positions — `{"op": "/", "args": [360, "NLON"]}` becomes `{"op": "/", "args": [360, 144]}` and stays an AST division.
 
-**What is NOT an expression position (normative).** Substitution is per-FIELD, not per-node: a structural string field of an Expression node holds a *name*, not a reference to a value, and MUST be copied verbatim even when a bound metaparameter spells it exactly. Four families of field are structural in this sense. (i) The **axis-naming scalars** — `wrt`, `dim` (§4.9.1), and `integral`'s integration variable `var` (§4.2), the same three the §9.7.7 rename walk rewrites through the index-set rename map — name a spatial coordinate, so with `x` bound to 3 the node `{"op": "grad", "args": ["x"], "dim": "x"}` MUST become `{"op": "grad", "args": [3], "dim": "x"}`: the `args` occurrence folds and the `dim` occurrence does not. (ii) The **node-header fields** `op`, `id` and `expect_cadence` describe the node itself rather than parameterizing whatever operator it carries; an operator NAME is not an expression position, so with `max` bound to 3 the node `{"op": "max", "args": ["k", "max"]}` MUST become `{"op": "max", "args": ["k", 3]}` — substituting the `op` slot yields a document that is not an Expression at all. (iii) The **op-parameterizing registry fields** — `reduce`, `semiring`, `fn`, `side`, `attrs`, `members` and `from_faq` — are closed-registry ids, literal enums, or (for `attrs`) named scalar attributes of an open rewrite-target op mirroring the fixed `dim`/`side`/`wrt`/`var` slots. They too hold names rather than values, so `{"op": "aggregate", "reduce": "max", …}` MUST keep `"reduce": "max"` while any `"max"` in its `expr` folds to 3. A `where` match-scoping block is likewise structural (§9.6.1). (iv) The **loop-symbol, reference, enum, unit and free-text fields** hold names or text wherever they appear: the loop symbols and bound index names of a `faq` node (`on`, `syms`, `output_idx`, and a dependent range's `of`), ids (`id`, `handler_id`), references to files, components, data sources and data columns (`ref`, `model`, `reaction_system`, `source`, `file_variable`, `path`, and the import-edge vocabulary `only`, `prefix`, `rename`, `rebind`, `index_set_rename`), closed enums (`type`, `kind`, `system_kind`, `direction`, `hook`, `root_find`, `element_type`, `scale`, `format`, `unmapped`), units (`units`, `default_units` — unit symbols such as `m`, `s` and `K` are valid identifiers), and free text (`name`, `description`, `label`, `location`, `notes`, `citation`, `doi`, `url`, `_comment`). With `row_id` bound to 22 — a data-column name, which the collision check does not cover — the join clause `{"on": [["row_id", "row_id"]], "syms": ["i", "j"]}` MUST stay as written; substituting it yields `{"on": [[22, 22]], "syms": ["i", "j"]}`, which is not schema-valid. (A metaparameter cannot spell a loop symbol in `syms`, `arg` or `output_idx` at all, by the collision rule above; those fields are structural regardless.) The one structural-looking field that IS an expression position is an `integral` `lower`/`upper` bound (§4.2), which substitutes like any other. This asymmetry is easy to miss because a metaparameter may not collide with a visible variable, parameter, species, or index-set name — but a `dim` value names a coordinate *structurally* (§4.9.1 clause ii), with no `index_sets` entry required, and an operator name, a reduction/semiring id, a loop symbol, a unit symbol or an enum value is in no namespace the collision check covers at all, so all four rules are reachable in a legal document.
+**What is NOT an expression position (normative).** Substitution is per-FIELD, not per-node: a structural string field of an Expression node holds a *name*, not a reference to a value, and MUST be copied verbatim even when a bound metaparameter spells it exactly. Four families of field are structural in this sense. (i) The **axis-naming scalars** — `wrt`, `dim` (§4.9.1), and `integral`'s integration variable `var` (§4.2), the same three the §9.7.7 rename walk rewrites through the index-set rename map — name a spatial coordinate, so with `x` bound to 3 the node `{"op": "grad", "args": ["x"], "dim": "x"}` MUST become `{"op": "grad", "args": [3], "dim": "x"}`: the `args` occurrence folds and the `dim` occurrence does not. (ii) The **node-header fields** `op`, `id` and `expect_cadence` describe the node itself rather than parameterizing whatever operator it carries; an operator NAME is not an expression position, so with `max` bound to 3 the node `{"op": "max", "args": ["k", "max"]}` MUST become `{"op": "max", "args": ["k", 3]}` — substituting the `op` slot yields a document that is not an Expression at all. (iii) The **op-parameterizing registry fields** — `reduce`, `semiring`, `fn`, `side`, `attrs`, `members` and `from_faq` — are closed-registry ids, literal enums, or (for `attrs`) named scalar attributes of an open rewrite-target op mirroring the fixed `dim`/`side`/`wrt`/`var` slots. They too hold names rather than values, so `{"op": "faq", "reduce": "max", …}` MUST keep `"reduce": "max"` while any `"max"` in its `expr` folds to 3. A `where` match-scoping block is likewise structural (§9.6.1). (iv) The **loop-symbol, reference, enum, unit and free-text fields** hold names or text wherever they appear: the loop symbols and bound index names of a `faq` node (`on`, `syms`, `output_idx`, and a dependent range's `of`), ids (`id`, `handler_id`), references to files, components, data sources and data columns (`ref`, `model`, `reaction_system`, `source`, `file_variable`, `path`, and the import-edge vocabulary `only`, `prefix`, `rename`, `rebind`, `index_set_rename`), closed enums (`type`, `kind`, `system_kind`, `direction`, `hook`, `root_find`, `element_type`, `scale`, `format`, `unmapped`), units (`units`, `default_units` — unit symbols such as `m`, `s` and `K` are valid identifiers), and free text (`name`, `description`, `label`, `location`, `notes`, `citation`, `doi`, `url`, `_comment`). With `row_id` bound to 22 — a data-column name, which the collision check does not cover — the join clause `{"on": [["row_id", "row_id"]], "syms": ["i", "j"]}` MUST stay as written; substituting it yields `{"on": [[22, 22]], "syms": ["i", "j"]}`, which is not schema-valid. (A metaparameter cannot spell a loop symbol in `syms`, `arg` or `output_idx` at all, by the collision rule above; those fields are structural regardless.) The one structural-looking field that IS an expression position is an `integral` `lower`/`upper` bound (§4.2), which substitutes like any other. This asymmetry is easy to miss because a metaparameter may not collide with a visible variable, parameter, species, or index-set name — but a `dim` value names a coordinate *structurally* (§4.9.1 clause ii), with no `index_sets` entry required, and an operator name, a reduction/semiring id, a loop symbol, a unit symbol or an enum value is in no namespace the collision check covers at all, so all four rules are reachable in a legal document.
 
 **The structural key set is derived, not hand-maintained (normative).** A binding decides structural-ness by an object key's NAME, so the set it holds MUST equal `skip_keys` in `tests/metaparameter_substitution/field_classification.json`. That file classifies every string-capable property of `esm-schema.json` as substituted or structural; a key is structural when some property under it that substitution can reach is structural and none is a live substitution site (a property naming a variable, parameter, species or index set counts as neither, since the collision check makes substituting it a no-op). `scripts/check-metaparameter-substitution-fields.py` fails when a schema property is unclassified, so a field added to the schema cannot be substituted by default. **A map key is a declared name, not a field.** In an object keyed by author-chosen names — the `name_keyed_map_keys` of the same file: `variables`, `species`, `parameters`, `guesses`, `subsystems`, `expression_templates`, `ranges`, `axes`, `bindings`, `config`, `coords`, `initial_conditions`, `parameter_overrides`, `pinned_coords`, `map` — the entry names are never compared against the structural key set, so a variable named `source` or `type` has its `guesses` entry substituted like any other expression, and a template parameter named `label` has its `bindings` value substituted. A key that is both (`where`, `rename`, `rebind`, `index_set_rename`) is structural and copied whole. The §9.7.7 import-edge rename walk, and the free-name inventory a `rebind` key is checked against, follow the same rule: a `ranges` entry spelled `dim` still has its `from` renamed, and an apply-node `bindings` entry spelled `units` is a variable-reference position like any other entry.
 

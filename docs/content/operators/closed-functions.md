@@ -26,6 +26,7 @@ template form.
 | `argmin`, `argmax` (operator forms) | the `argmin`, `argmax`, `argmin_where`, `argmax_where` templates in `esm:std/relational.esm` |
 | `polygon_intersection_area` | `overlap_area_planar` / `overlap_area_spherical` (with `lonlat_to_unit`) in `esm:std/geometry.esm`; see [geometry](../geometry/) |
 | `intersect_polygon` | none |
+| `aggregate` (the deprecated spelling of `faq`) | `faq`, the same node |
 
 The `manifold` field went with the geometry operators.
 
