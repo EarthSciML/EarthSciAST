@@ -71,6 +71,7 @@ import dataclasses
 import json
 import re
 import sys
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -1214,8 +1215,38 @@ def migrate_document(doc: dict, *, key_bounds: dict | None = None) -> CodemodRes
     return CodemodResult(work, mod.notes, mod.counts)
 
 
+_VERSION_RE = re.compile(r'(^\s*\{\s*"esm"\s*:\s*")[^"]*(")')
+_AGGREGATE_RE = re.compile(r'("op"\s*:\s*)"aggregate"')
+
+
+_INLINE_NUMBERS_RE = re.compile(r"\[\s*-?[0-9][^\n\[\]{}]*,\s*-?[0-9][^\n\[\]{}]*\]")
+
+
+def _dumps_inline_numbers(x: Any, indent: int, ascii_only: bool, level: int = 0) -> str:
+    """``json.dumps(indent=...)``, except that a list of numbers stays on one line."""
+    pad, inner = " " * (indent * level), " " * (indent * (level + 1))
+    if isinstance(x, dict):
+        if not x:
+            return "{}"
+        items = [
+            f"{inner}{json.dumps(k, ensure_ascii=ascii_only)}: "
+            f"{_dumps_inline_numbers(v, indent, ascii_only, level + 1)}"
+            for k, v in x.items()
+        ]
+        return "{\n" + ",\n".join(items) + "\n" + pad + "}"
+    if isinstance(x, list):
+        if not x:
+            return "[]"
+        if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in x):
+            return json.dumps(x)
+        items = [inner + _dumps_inline_numbers(v, indent, ascii_only, level + 1) for v in x]
+        return "[\n" + ",\n".join(items) + "\n" + pad + "]"
+    return json.dumps(x, ensure_ascii=ascii_only)
+
+
 def _format_like(text: str, doc: dict) -> str:
-    """Serialize ``doc`` with the source text's indentation and escaping."""
+    """Serialize ``doc`` with the source text's indentation and escaping, and
+    with lists of numbers on one line when the source writes them so."""
     indent = 2
     for line in text.splitlines()[1:]:
         stripped = line.lstrip(" ")
@@ -1225,14 +1256,31 @@ def _format_like(text: str, doc: dict) -> str:
     ascii_only = all(ord(ch) < 128 for ch in text)
     if "\n" not in text.strip():
         out = json.dumps(doc, separators=(",", ":"), ensure_ascii=ascii_only)
-        return out + ("\n" if text.endswith("\n") else "")
-    out = json.dumps(doc, indent=indent, ensure_ascii=ascii_only)
+    else:
+        out = json.dumps(doc, indent=indent, ensure_ascii=ascii_only)
+        if _INLINE_NUMBERS_RE.search(text):
+            # Keep whichever layout shares more lines with the source.
+            inline = _dumps_inline_numbers(doc, indent, ascii_only)
+            source = Counter(text.splitlines())
+            if sum((Counter(inline.splitlines()) & source).values()) > sum(
+                (Counter(out.splitlines()) & source).values()
+            ):
+                out = inline
     return out + ("\n" if text.endswith("\n") else "")
 
 
 def migrate_text(text: str, *, key_bounds: dict | None = None) -> tuple[str, CodemodResult]:
-    """Convert the text of a 1.x document; returns ``(new_text, result)``."""
+    """Convert the text of a 1.x document; returns ``(new_text, result)``.
+
+    A document that needs only the version bump and the ``aggregate`` rename is
+    edited in place in its text, so its own layout survives; any other rewrite
+    is serialized with the source's indentation and escaping."""
     result = migrate_document(json.loads(text), key_bounds=key_bounds)
+    if set(result.counts) <= {"aggregate"}:
+        edited = _VERSION_RE.sub(rf"\g<1>{result.document['esm']}\g<2>", text, count=1)
+        edited = _AGGREGATE_RE.sub(r'\g<1>"faq"', edited)
+        if json.loads(edited) == result.document:
+            return edited, result
     return _format_like(text, result.document), result
 
 

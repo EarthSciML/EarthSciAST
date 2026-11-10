@@ -949,6 +949,13 @@ def test_aggregate_becomes_faq():
     assert find_removed(res.document) == []
 
 
+def test_a_bump_only_document_keeps_its_layout():
+    text = '{\n  "esm": "1.1.0",\n  "metadata": {"name": "x"},\n  "models": {"M": {"variables": {}, "equations": [\n    {"lhs": "r", "rhs": {"op": "aggregate", "args": [], "output_idx": [], "expr": 1}}]}}\n}\n'
+    new, res = migrate_text(text)
+    assert new == text.replace('"1.1.0"', '"2.0.0"').replace('"aggregate"', '"faq"')
+    assert res.counts == {"aggregate": 1}
+
+
 def test_versions():
     clean = _doc(1.0)
     assert migrate_document(clean).document["esm"] == CODEMOD_TARGET_VERSION
