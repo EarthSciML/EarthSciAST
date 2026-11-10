@@ -1,0 +1,141 @@
+{
+  "esm": "2.0.0",
+  "metadata": {
+    "name": "removed_op_polygon_intersection_area",
+    "description": "INVALID: the `polygon_intersection_area` geometry leaf, with its `manifold` field, was removed at esm 2.0.0. A loader rejects it BY NAME at the wire boundary with `removed_op`. Replacement: the `overlap_area_planar` / `overlap_area_spherical` templates of esm:std/geometry.esm (esm-spec §8.6.1). The 2.0.0 codemod (MIGRATION.md) rewrites it.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "invalid",
+      "removed_op",
+      "esm-2.0.0",
+      "polygon_intersection_area"
+    ]
+  },
+  "index_sets": {
+    "coord": {
+      "kind": "interval",
+      "size": 2
+    },
+    "src_verts": {
+      "kind": "interval",
+      "size": 4
+    },
+    "tgt_verts": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "PolygonIntersectionAreaPlanar": {
+      "variables": {
+        "src_poly": {
+          "type": "unknown",
+          "shape": [
+            "src_verts",
+            "coord"
+          ]
+        },
+        "tgt_poly": {
+          "type": "unknown",
+          "shape": [
+            "tgt_verts",
+            "coord"
+          ]
+        },
+        "overlap_area": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "area_state": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "area_state"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "area_state"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "overlap_area"
+        },
+        {
+          "lhs": "src_poly",
+          "rhs": {
+            "op": "const",
+            "value": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                2.0,
+                0.0
+              ],
+              [
+                2.0,
+                2.0
+              ],
+              [
+                0.0,
+                2.0
+              ]
+            ],
+            "args": []
+          }
+        },
+        {
+          "lhs": "tgt_poly",
+          "rhs": {
+            "op": "const",
+            "value": [
+              [
+                1.0,
+                1.0
+              ],
+              [
+                3.0,
+                1.0
+              ],
+              [
+                3.0,
+                3.0
+              ],
+              [
+                1.0,
+                3.0
+              ]
+            ],
+            "args": []
+          }
+        },
+        {
+          "lhs": "overlap_area",
+          "rhs": {
+            "op": "polygon_intersection_area",
+            "manifold": "planar",
+            "args": [
+              "src_poly",
+              "tgt_poly"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

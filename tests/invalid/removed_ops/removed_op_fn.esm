@@ -1,0 +1,47 @@
+{
+  "esm": "2.0.0",
+  "metadata": {
+    "name": "removed_op_fn",
+    "description": "INVALID: the `fn` op (closed function invocation) was removed at esm 2.0.0. A loader rejects it BY NAME at the wire boundary with `removed_op`. Replacement: the `julian_day` template of esm:std/calendar.esm. The 2.0.0 codemod (MIGRATION.md) rewrites it.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "invalid",
+      "removed_op",
+      "esm-2.0.0"
+    ]
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "default": 0.0
+        },
+        "t_utc": {
+          "type": "parameter",
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "fn",
+            "name": "datetime.julian_day",
+            "args": [
+              "t_utc"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
