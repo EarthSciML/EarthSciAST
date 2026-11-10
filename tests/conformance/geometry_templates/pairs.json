@@ -477,6 +477,189 @@
    ]
   },
   {
+   "id": "spherical_fan:src_poly:tgt_poly:spherical",
+   "source": "tests/conformance/geometry_templates/fixtures/spherical_fan.esm",
+   "operands": [
+    "src_poly",
+    "tgt_poly"
+   ],
+   "manifold": "spherical",
+   "cells_a": [
+    1,
+    2,
+    3,
+    4
+   ],
+   "cells_b": [
+    1,
+    2
+   ],
+   "nv_a": 4,
+   "nv_b": 4,
+   "ring_a": [
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      90.0,
+      0.0
+     ],
+     [
+      90.0,
+      15.0
+     ],
+     [
+      90.0,
+      15.0
+     ]
+    ],
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      90.0,
+      15.0
+     ],
+     [
+      90.0,
+      30.0
+     ],
+     [
+      90.0,
+      30.0
+     ]
+    ],
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      90.0,
+      30.0
+     ],
+     [
+      90.0,
+      45.0
+     ],
+     [
+      90.0,
+      45.0
+     ]
+    ],
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      90.0,
+      45.0
+     ],
+     [
+      90.0,
+      60.0
+     ],
+     [
+      90.0,
+      60.0
+     ]
+    ]
+   ],
+   "ring_b": [
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      90.0,
+      0.0
+     ],
+     [
+      90.0,
+      30.0
+     ],
+     [
+      90.0,
+      30.0
+     ]
+    ],
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      90.0,
+      30.0
+     ],
+     [
+      90.0,
+      60.0
+     ],
+     [
+      90.0,
+      60.0
+     ]
+    ]
+   ],
+   "pairs": [
+    {
+     "i": 1,
+     "j": 1,
+     "reference": 0.26179938779914946,
+     "same_grid": false
+    },
+    {
+     "i": 1,
+     "j": 2,
+     "reference": 0.0,
+     "same_grid": false
+    },
+    {
+     "i": 2,
+     "j": 1,
+     "reference": 0.26179938779914946,
+     "same_grid": false
+    },
+    {
+     "i": 2,
+     "j": 2,
+     "reference": 0.0,
+     "same_grid": false
+    },
+    {
+     "i": 3,
+     "j": 1,
+     "reference": 0.0,
+     "same_grid": false
+    },
+    {
+     "i": 3,
+     "j": 2,
+     "reference": 0.26179938779914946,
+     "same_grid": false
+    },
+    {
+     "i": 4,
+     "j": 1,
+     "reference": 0.0,
+     "same_grid": false
+    },
+    {
+     "i": 4,
+     "j": 2,
+     "reference": 0.26179938779914946,
+     "same_grid": false
+    }
+   ]
+  },
+  {
    "id": "polygon_area_in_faq_dynamic:pring:cring:planar",
    "source": "tests/conformance/native_model_shapes/fixtures/polygon_area_in_faq_dynamic.esm",
    "operands": [
@@ -2268,71 +2451,6 @@
    ]
   },
   {
-   "id": "intersect_polygon_planar_ode:src_poly:tgt_poly:planar",
-   "source": "tests/valid/geometry/intersect_polygon_planar_ode.esm",
-   "operands": [
-    "src_poly",
-    "tgt_poly"
-   ],
-   "manifold": "planar",
-   "cells_a": [
-    1
-   ],
-   "cells_b": [
-    1
-   ],
-   "nv_a": 4,
-   "nv_b": 4,
-   "ring_a": [
-    [
-     [
-      0.0,
-      0.0
-     ],
-     [
-      2.0,
-      0.0
-     ],
-     [
-      2.0,
-      2.0
-     ],
-     [
-      0.0,
-      2.0
-     ]
-    ]
-   ],
-   "ring_b": [
-    [
-     [
-      1.0,
-      1.0
-     ],
-     [
-      3.0,
-      1.0
-     ],
-     [
-      3.0,
-      3.0
-     ],
-     [
-      1.0,
-      3.0
-     ]
-    ]
-   ],
-   "pairs": [
-    {
-     "i": 1,
-     "j": 1,
-     "reference": 1.0,
-     "same_grid": false
-    }
-   ]
-  },
-  {
    "id": "polygon_intersection_area_padded_ring:src_poly:tgt_poly:planar",
    "source": "tests/valid/geometry/polygon_intersection_area_padded_ring.esm",
    "operands": [
@@ -3164,195 +3282,6 @@
    ]
   },
   {
-   "id": "conservative_regrid_overlap_join:spherical",
-   "source": "tests/valid/geometry/conservative_regrid_overlap_join.esm#pkg/EarthSciAST.jl/test/geometry_overlap_join_conformance_test.jl",
-   "operands": [
-    "_SRC",
-    "_TGT"
-   ],
-   "manifold": "spherical",
-   "cells_a": [
-    1,
-    2,
-    3
-   ],
-   "cells_b": [
-    1,
-    2,
-    3
-   ],
-   "nv_a": 4,
-   "nv_b": 4,
-   "ring_a": [
-    [
-     [
-      0.0,
-      0.0
-     ],
-     [
-      1.0,
-      0.0
-     ],
-     [
-      1.0,
-      1.0
-     ],
-     [
-      0.0,
-      1.0
-     ]
-    ],
-    [
-     [
-      1.0,
-      0.0
-     ],
-     [
-      2.0,
-      0.0
-     ],
-     [
-      2.0,
-      1.0
-     ],
-     [
-      1.0,
-      1.0
-     ]
-    ],
-    [
-     [
-      2.0,
-      0.0
-     ],
-     [
-      3.0,
-      0.0
-     ],
-     [
-      3.0,
-      1.0
-     ],
-     [
-      2.0,
-      1.0
-     ]
-    ]
-   ],
-   "ring_b": [
-    [
-     [
-      0.0,
-      0.0
-     ],
-     [
-      1.5,
-      0.0
-     ],
-     [
-      1.5,
-      1.0
-     ],
-     [
-      0.0,
-      1.0
-     ]
-    ],
-    [
-     [
-      1.5,
-      0.0
-     ],
-     [
-      2.0,
-      0.0
-     ],
-     [
-      2.0,
-      1.0
-     ],
-     [
-      1.5,
-      1.0
-     ]
-    ],
-    [
-     [
-      2.0,
-      0.0
-     ],
-     [
-      3.0,
-      0.0
-     ],
-     [
-      3.0,
-      1.0
-     ],
-     [
-      2.0,
-      1.0
-     ]
-    ]
-   ],
-   "pairs": [
-    {
-     "i": 1,
-     "j": 1,
-     "reference": 0.0003046096848622019,
-     "same_grid": false
-    },
-    {
-     "i": 1,
-     "j": 2,
-     "reference": 0.0,
-     "same_grid": false
-    },
-    {
-     "i": 1,
-     "j": 3,
-     "reference": 0.0,
-     "same_grid": false
-    },
-    {
-     "i": 2,
-     "j": 1,
-     "reference": 0.00015230387618953776,
-     "same_grid": false
-    },
-    {
-     "i": 2,
-     "j": 2,
-     "reference": 0.0001523019436082785,
-     "same_grid": false
-    },
-    {
-     "i": 2,
-     "j": 3,
-     "reference": 0.0,
-     "same_grid": false
-    },
-    {
-     "i": 3,
-     "j": 1,
-     "reference": 0.0,
-     "same_grid": false
-    },
-    {
-     "i": 3,
-     "j": 2,
-     "reference": 0.0,
-     "same_grid": false
-    },
-    {
-     "i": 3,
-     "j": 3,
-     "reference": 0.0003046096848622019,
-     "same_grid": true
-    }
-   ]
-  },
-  {
    "id": "build_once_spatial_ode:poly:poly:planar:padded",
    "source": "tests/conformance/build_once_spatial_field/fixtures/build_once_spatial_ode.esm",
    "operands": [
@@ -3928,6 +3857,238 @@
     }
    ],
    "padding_of": "planar_overlap:src_poly:tgt_poly:planar"
+  },
+  {
+   "id": "spherical_fan:src_poly:tgt_poly:spherical:padded",
+   "source": "tests/conformance/geometry_templates/fixtures/spherical_fan.esm",
+   "operands": [
+    "src_poly",
+    "tgt_poly"
+   ],
+   "manifold": "spherical",
+   "cells_a": [
+    1,
+    2,
+    3,
+    4
+   ],
+   "cells_b": [
+    1,
+    2
+   ],
+   "nv_a": 6,
+   "nv_b": 6,
+   "ring_a": [
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      90.0,
+      0.0
+     ],
+     [
+      90.0,
+      15.0
+     ],
+     [
+      90.0,
+      15.0
+     ],
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ],
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      90.0,
+      15.0
+     ],
+     [
+      90.0,
+      30.0
+     ],
+     [
+      90.0,
+      30.0
+     ],
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ],
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      90.0,
+      30.0
+     ],
+     [
+      90.0,
+      45.0
+     ],
+     [
+      90.0,
+      45.0
+     ],
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ],
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      90.0,
+      45.0
+     ],
+     [
+      90.0,
+      60.0
+     ],
+     [
+      90.0,
+      60.0
+     ],
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ]
+   ],
+   "ring_b": [
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      90.0,
+      0.0
+     ],
+     [
+      90.0,
+      30.0
+     ],
+     [
+      90.0,
+      30.0
+     ],
+     [
+      90.0,
+      30.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ],
+    [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      90.0,
+      30.0
+     ],
+     [
+      90.0,
+      60.0
+     ],
+     [
+      90.0,
+      60.0
+     ],
+     [
+      90.0,
+      60.0
+     ],
+     [
+      0.0,
+      0.0
+     ]
+    ]
+   ],
+   "pairs": [
+    {
+     "i": 1,
+     "j": 1,
+     "reference": 0.26179938779914946,
+     "same_grid": false
+    },
+    {
+     "i": 1,
+     "j": 2,
+     "reference": 0.0,
+     "same_grid": false
+    },
+    {
+     "i": 2,
+     "j": 1,
+     "reference": 0.26179938779914946,
+     "same_grid": false
+    },
+    {
+     "i": 2,
+     "j": 2,
+     "reference": 0.0,
+     "same_grid": false
+    },
+    {
+     "i": 3,
+     "j": 1,
+     "reference": 0.0,
+     "same_grid": false
+    },
+    {
+     "i": 3,
+     "j": 2,
+     "reference": 0.26179938779914946,
+     "same_grid": false
+    },
+    {
+     "i": 4,
+     "j": 1,
+     "reference": 0.0,
+     "same_grid": false
+    },
+    {
+     "i": 4,
+     "j": 2,
+     "reference": 0.26179938779914946,
+     "same_grid": false
+    }
+   ],
+   "padding_of": "spherical_fan:src_poly:tgt_poly:spherical"
   },
   {
    "id": "polygon_area_in_faq_dynamic:pring:cring:planar:padded",
@@ -6233,88 +6394,6 @@
    "padding_of": "conservative_regrid_assembly:src_poly:tgt_poly:planar"
   },
   {
-   "id": "intersect_polygon_planar_ode:src_poly:tgt_poly:planar:padded",
-   "source": "tests/valid/geometry/intersect_polygon_planar_ode.esm",
-   "operands": [
-    "src_poly",
-    "tgt_poly"
-   ],
-   "manifold": "planar",
-   "cells_a": [
-    1
-   ],
-   "cells_b": [
-    1
-   ],
-   "nv_a": 6,
-   "nv_b": 6,
-   "ring_a": [
-    [
-     [
-      0.0,
-      0.0
-     ],
-     [
-      2.0,
-      0.0
-     ],
-     [
-      2.0,
-      2.0
-     ],
-     [
-      0.0,
-      2.0
-     ],
-     [
-      0.0,
-      0.0
-     ],
-     [
-      0.0,
-      0.0
-     ]
-    ]
-   ],
-   "ring_b": [
-    [
-     [
-      1.0,
-      1.0
-     ],
-     [
-      3.0,
-      1.0
-     ],
-     [
-      3.0,
-      3.0
-     ],
-     [
-      1.0,
-      3.0
-     ],
-     [
-      1.0,
-      3.0
-     ],
-     [
-      1.0,
-      1.0
-     ]
-    ]
-   ],
-   "pairs": [
-    {
-     "i": 1,
-     "j": 1,
-     "reference": 1.0,
-     "same_grid": false
-    }
-   ],
-   "padding_of": "intersect_polygon_planar_ode:src_poly:tgt_poly:planar"
-  },
-  {
    "id": "polygon_intersection_area_padded_ring:src_poly:tgt_poly:planar:padded",
    "source": "tests/valid/geometry/polygon_intersection_area_padded_ring.esm",
    "operands": [
@@ -7368,244 +7447,6 @@
     }
    ],
    "padding_of": "geometry_manifest:spherical_polar:spherical"
-  },
-  {
-   "id": "conservative_regrid_overlap_join:spherical:padded",
-   "source": "tests/valid/geometry/conservative_regrid_overlap_join.esm#pkg/EarthSciAST.jl/test/geometry_overlap_join_conformance_test.jl",
-   "operands": [
-    "_SRC",
-    "_TGT"
-   ],
-   "manifold": "spherical",
-   "cells_a": [
-    1,
-    2,
-    3
-   ],
-   "cells_b": [
-    1,
-    2,
-    3
-   ],
-   "nv_a": 6,
-   "nv_b": 6,
-   "ring_a": [
-    [
-     [
-      0.0,
-      0.0
-     ],
-     [
-      1.0,
-      0.0
-     ],
-     [
-      1.0,
-      1.0
-     ],
-     [
-      0.0,
-      1.0
-     ],
-     [
-      0.0,
-      0.0
-     ],
-     [
-      0.0,
-      0.0
-     ]
-    ],
-    [
-     [
-      1.0,
-      0.0
-     ],
-     [
-      2.0,
-      0.0
-     ],
-     [
-      2.0,
-      1.0
-     ],
-     [
-      1.0,
-      1.0
-     ],
-     [
-      1.0,
-      0.0
-     ],
-     [
-      1.0,
-      0.0
-     ]
-    ],
-    [
-     [
-      2.0,
-      0.0
-     ],
-     [
-      3.0,
-      0.0
-     ],
-     [
-      3.0,
-      1.0
-     ],
-     [
-      2.0,
-      1.0
-     ],
-     [
-      2.0,
-      0.0
-     ],
-     [
-      2.0,
-      0.0
-     ]
-    ]
-   ],
-   "ring_b": [
-    [
-     [
-      0.0,
-      0.0
-     ],
-     [
-      1.5,
-      0.0
-     ],
-     [
-      1.5,
-      1.0
-     ],
-     [
-      0.0,
-      1.0
-     ],
-     [
-      0.0,
-      1.0
-     ],
-     [
-      0.0,
-      0.0
-     ]
-    ],
-    [
-     [
-      1.5,
-      0.0
-     ],
-     [
-      2.0,
-      0.0
-     ],
-     [
-      2.0,
-      1.0
-     ],
-     [
-      1.5,
-      1.0
-     ],
-     [
-      1.5,
-      1.0
-     ],
-     [
-      1.5,
-      0.0
-     ]
-    ],
-    [
-     [
-      2.0,
-      0.0
-     ],
-     [
-      3.0,
-      0.0
-     ],
-     [
-      3.0,
-      1.0
-     ],
-     [
-      2.0,
-      1.0
-     ],
-     [
-      2.0,
-      1.0
-     ],
-     [
-      2.0,
-      0.0
-     ]
-    ]
-   ],
-   "pairs": [
-    {
-     "i": 1,
-     "j": 1,
-     "reference": 0.0003046096848622019,
-     "same_grid": false
-    },
-    {
-     "i": 1,
-     "j": 2,
-     "reference": 0.0,
-     "same_grid": false
-    },
-    {
-     "i": 1,
-     "j": 3,
-     "reference": 0.0,
-     "same_grid": false
-    },
-    {
-     "i": 2,
-     "j": 1,
-     "reference": 0.00015230387618953776,
-     "same_grid": false
-    },
-    {
-     "i": 2,
-     "j": 2,
-     "reference": 0.0001523019436082785,
-     "same_grid": false
-    },
-    {
-     "i": 2,
-     "j": 3,
-     "reference": 0.0,
-     "same_grid": false
-    },
-    {
-     "i": 3,
-     "j": 1,
-     "reference": 0.0,
-     "same_grid": false
-    },
-    {
-     "i": 3,
-     "j": 2,
-     "reference": 0.0,
-     "same_grid": false
-    },
-    {
-     "i": 3,
-     "j": 3,
-     "reference": 0.0003046096848622019,
-     "same_grid": true
-    }
-   ],
-   "padding_of": "conservative_regrid_overlap_join:spherical"
   }
  ]
 }

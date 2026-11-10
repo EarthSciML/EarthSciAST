@@ -161,13 +161,7 @@
                 }
               }
             ],
-            "key": {
-              "args": [
-                "c"
-              ],
-              "label": "cell",
-              "op": "skolem"
-            },
+            "key": "c",
             "op": "faq",
             "output_idx": [
               "m"

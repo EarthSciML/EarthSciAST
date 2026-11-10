@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "polygon_intersection_area_padded_ring",
     "description": "Conformance fixture for the esm-spec §8.6.1 'Operand rings, padding, and degenerate vertices' pin: `polygon_intersection_area` operands carrying CONSECUTIVE DUPLICATE (padded) vertices MUST be accepted and evaluated as the deduplicated ring. This is the rectangular-storage padding a mixed-valence mesh needs — an MPAS pentagon stored in a hexagon-shaped [cells, NVERT, 2] ring stack repeats its final vertex to fill the fixed NVERT slots. Here src_poly is the square (0.5,0.5)-(2.5,0.5)-(2.5,2.5)-(0.5,2.5) padded to 5 vertices (final vertex repeated once) and tgt_poly is the square (1.5,1.5)-(3.5,1.5)-(3.5,3.5)-(1.5,3.5) padded to 6 vertices (final vertex repeated twice); the planar overlap is the [1.5,2.5]x[1.5,2.5] box, area exactly 1.0 — identical to the unpadded rings. Deduplication is the binding kernel's job, performed in operand coercion BEFORE the backend clip (S2 backends reject zero-length edges as degenerate; Sutherland-Hodgman treats them as no-ops — the contract must not depend on the backend). Sibling of polygon_intersection_area_planar.esm, which exercises the unpadded convention.",
@@ -31,10 +31,22 @@
     "tgt_verts": {
       "kind": "interval",
       "size": 6
+    },
+    "one_cell": {
+      "kind": "interval",
+      "size": 1
     }
   },
   "models": {
     "PolygonIntersectionAreaPaddedRing": {
+      "expression_template_imports": [
+        {
+          "ref": "esm:std/geometry.esm",
+          "only": [
+            "overlap_area_planar"
+          ]
+        }
+      ],
       "variables": {
         "src_poly": {
           "type": "unknown",
@@ -62,6 +74,24 @@
           "units": "1",
           "default": 0.0,
           "description": "Consumes overlap_area so the fused leaf evaluates in a well-formed ODE: d(area_state)/dt = overlap_area from a zero IC, so du = overlap_area = 1.0."
+        },
+        "src_poly_stack": {
+          "type": "unknown",
+          "shape": [
+            "one_cell",
+            "src_verts",
+            "coord"
+          ],
+          "description": "The ring `src_poly` as a one-cell ring stack, the operand form of the esm:std/geometry.esm overlap templates (written by the esm 2.0.0 codemod)."
+        },
+        "tgt_poly_stack": {
+          "type": "unknown",
+          "shape": [
+            "one_cell",
+            "tgt_verts",
+            "coord"
+          ],
+          "description": "The ring `tgt_poly` as a one-cell ring stack, the operand form of the esm:std/geometry.esm overlap templates (written by the esm 2.0.0 codemod)."
         }
       },
       "equations": [
@@ -150,12 +180,79 @@
         {
           "lhs": "overlap_area",
           "rhs": {
-            "op": "polygon_intersection_area",
-            "manifold": "planar",
-            "args": [
-              "src_poly",
-              "tgt_poly"
-            ]
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "overlap_area_planar",
+            "bindings": {
+              "ring_a": "src_poly_stack",
+              "cell_a": 1,
+              "nv_a": 5,
+              "ring_b": "tgt_poly_stack",
+              "cell_b": 1,
+              "nv_b": 6
+            }
+          }
+        },
+        {
+          "lhs": "src_poly_stack",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "c",
+              "v",
+              "d"
+            ],
+            "ranges": {
+              "c": {
+                "from": "one_cell"
+              },
+              "v": {
+                "from": "src_verts"
+              },
+              "d": {
+                "from": "coord"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "src_poly",
+                "v",
+                "d"
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "tgt_poly_stack",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "c",
+              "v",
+              "d"
+            ],
+            "ranges": {
+              "c": {
+                "from": "one_cell"
+              },
+              "v": {
+                "from": "tgt_verts"
+              },
+              "d": {
+                "from": "coord"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "tgt_poly",
+                "v",
+                "d"
+              ]
+            }
           }
         }
       ],

@@ -122,33 +122,6 @@
    "named_exclusions": []
   },
   {
-   "id": "intersect_polygon_planar_ode",
-   "path": "valid/geometry/intersect_polygon_planar_ode.esm",
-   "model": "PolygonClipAreaPlanarODE",
-   "golden": "golden/intersect_polygon_planar_ode.json",
-   "tags": [
-    "geometry",
-    "intersect_polygon",
-    "const-factor"
-   ],
-   "note": "Owned by tests/valid/geometry.",
-   "required": {
-    "julia": [
-     "interpreter",
-     "native"
-    ],
-    "python": [
-     "interpreter",
-     "native"
-    ],
-    "rust": [
-     "interpreter",
-     "native"
-    ]
-   },
-   "named_exclusions": []
-  },
-  {
    "id": "polygon_intersection_area_padded_ring",
    "path": "valid/geometry/polygon_intersection_area_padded_ring.esm",
    "model": "PolygonIntersectionAreaPaddedRing",

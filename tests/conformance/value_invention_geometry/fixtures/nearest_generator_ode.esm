@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "ValueInventionNearestGeneratorODE",
     "authors": [
@@ -19,6 +19,14 @@
   },
   "models": {
     "NearestGeneratorODE": {
+      "expression_template_imports": [
+        {
+          "ref": "esm:std/relational.esm",
+          "only": [
+            "argmin"
+          ]
+        }
+      ],
       "variables": {
         "px": {
           "type": "unknown",
@@ -135,109 +143,102 @@
               "gy"
             ],
             "expr": {
-              "op": "argmin",
-              "args": [
-                "px",
-                "py",
-                "gx",
-                "gy"
-              ],
-              "arg": "g",
-              "ranges": {
-                "g": {
-                  "from": "generators"
-                }
-              },
-              "expr": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "*",
-                    "args": [
-                      {
-                        "op": "-",
-                        "args": [
-                          {
-                            "op": "index",
-                            "args": [
-                              "px",
-                              "i"
-                            ]
-                          },
-                          {
-                            "op": "index",
-                            "args": [
-                              "gx",
-                              "g"
-                            ]
-                          }
-                        ]
-                      },
-                      {
-                        "op": "-",
-                        "args": [
-                          {
-                            "op": "index",
-                            "args": [
-                              "px",
-                              "i"
-                            ]
-                          },
-                          {
-                            "op": "index",
-                            "args": [
-                              "gx",
-                              "g"
-                            ]
-                          }
-                        ]
-                      }
-                    ]
-                  },
-                  {
-                    "op": "*",
-                    "args": [
-                      {
-                        "op": "-",
-                        "args": [
-                          {
-                            "op": "index",
-                            "args": [
-                              "py",
-                              "i"
-                            ]
-                          },
-                          {
-                            "op": "index",
-                            "args": [
-                              "gy",
-                              "g"
-                            ]
-                          }
-                        ]
-                      },
-                      {
-                        "op": "-",
-                        "args": [
-                          {
-                            "op": "index",
-                            "args": [
-                              "py",
-                              "i"
-                            ]
-                          },
-                          {
-                            "op": "index",
-                            "args": [
-                              "gy",
-                              "g"
-                            ]
-                          }
-                        ]
-                      }
-                    ]
-                  }
-                ]
+              "op": "apply_expression_template",
+              "args": [],
+              "name": "argmin",
+              "bindings": {
+                "f": {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "-",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "px",
+                                "i"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "gx",
+                                "k_argmin_1"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "-",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "px",
+                                "i"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "gx",
+                                "k_argmin_1"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "-",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "py",
+                                "i"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "gy",
+                                "k_argmin_1"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "-",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "py",
+                                "i"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "gy",
+                                "k_argmin_1"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "n": 3
               }
             }
           }

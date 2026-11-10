@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.0.0",
   "index_sets": {
     "emis_records": {
       "kind": "interval",
@@ -27,6 +27,14 @@
   },
   "models": {
     "Binned": {
+      "expression_template_imports": [
+        {
+          "ref": "esm:std/geometry.esm",
+          "only": [
+            "overlap_area_planar"
+          ]
+        }
+      ],
       "equations": [
         {
           "lhs": "E_PM25",
@@ -147,24 +155,17 @@
                     {
                       "args": [
                         {
-                          "args": [
-                            {
-                              "args": [
-                                "cell_ring",
-                                "c"
-                              ],
-                              "op": "index"
-                            },
-                            {
-                              "args": [
-                                "rec_ring",
-                                "r"
-                              ],
-                              "op": "index"
-                            }
-                          ],
-                          "manifold": "planar",
-                          "op": "polygon_intersection_area"
+                          "op": "apply_expression_template",
+                          "args": [],
+                          "name": "overlap_area_planar",
+                          "bindings": {
+                            "ring_a": "cell_ring",
+                            "cell_a": "c",
+                            "nv_a": 5,
+                            "ring_b": "rec_ring",
+                            "cell_b": "r",
+                            "nv_b": 5
+                          }
                         },
                         {
                           "args": [

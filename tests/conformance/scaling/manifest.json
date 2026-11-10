@@ -160,7 +160,7 @@
       }
     },
     "regrid": {
-      "description": "A conservative regrid (bin-skolem broad phase, inline polygon_intersection_area) applied on every call. The overlap arrays are declared dense over source x target, so the ladder stops at 3162.",
+      "description": "A conservative regrid (bin-key broad phase as integer join columns, the overlap_area_planar template of esm:std/geometry.esm) applied on every call. The overlap arrays are declared dense over source x target, so the ladder stops at 3162.",
       "size_meaning": "source cells = target cells (2 states per index)",
       "sizes": [
         100,

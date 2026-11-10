@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "ValueInventionBinSkolemCountODE",
     "authors": [
@@ -23,6 +23,14 @@
   },
   "models": {
     "BinSkolemCountODE": {
+      "expression_template_imports": [
+        {
+          "ref": "esm:std/relational.esm",
+          "only": [
+            "pair_key"
+          ]
+        }
+      ],
       "variables": {
         "src_lon": {
           "type": "unknown",
@@ -56,18 +64,6 @@
           "type": "parameter",
           "default": 1.0
         },
-        "src_bin": {
-          "type": "unknown",
-          "shape": [
-            "src_cells"
-          ]
-        },
-        "tgt_bin": {
-          "type": "unknown",
-          "shape": [
-            "tgt_cells"
-          ]
-        },
         "pair_exists": {
           "type": "unknown",
           "shape": [
@@ -77,6 +73,34 @@
         "n_pairs": {
           "type": "unknown",
           "default": 0.0
+        },
+        "src_bin_c1": {
+          "type": "unknown",
+          "shape": [
+            "src_cells"
+          ],
+          "description": "Component 1 of the key formerly `src_bin` (an integer join column)."
+        },
+        "src_bin_c2": {
+          "type": "unknown",
+          "shape": [
+            "src_cells"
+          ],
+          "description": "Component 2 of the key formerly `src_bin` (an integer join column)."
+        },
+        "tgt_bin_c1": {
+          "type": "unknown",
+          "shape": [
+            "tgt_cells"
+          ],
+          "description": "Component 1 of the key formerly `tgt_bin` (an integer join column)."
+        },
+        "tgt_bin_c2": {
+          "type": "unknown",
+          "shape": [
+            "tgt_cells"
+          ],
+          "description": "Component 2 of the key formerly `tgt_bin` (an integer join column)."
         }
       },
       "equations": [
@@ -136,7 +160,7 @@
           "lhs": {
             "op": "index",
             "args": [
-              "src_bin",
+              "src_bin_c1",
               "i"
             ]
           },
@@ -151,61 +175,74 @@
                 "from": "src_cells"
               }
             },
-            "args": [
-              "src_lon",
-              "src_lat",
-              "dx",
-              "dy"
-            ],
+            "args": [],
             "expr": {
-              "op": "skolem",
-              "label": "bin",
+              "op": "floor",
               "args": [
                 {
-                  "op": "floor",
+                  "op": "/",
                   "args": [
                     {
-                      "op": "/",
+                      "op": "index",
                       "args": [
-                        {
-                          "op": "index",
-                          "args": [
-                            "src_lon",
-                            "i"
-                          ]
-                        },
-                        "dx"
+                        "src_lon",
+                        "i"
                       ]
-                    }
-                  ]
-                },
-                {
-                  "op": "floor",
-                  "args": [
-                    {
-                      "op": "/",
-                      "args": [
-                        {
-                          "op": "index",
-                          "args": [
-                            "src_lat",
-                            "i"
-                          ]
-                        },
-                        "dy"
-                      ]
-                    }
+                    },
+                    "dx"
                   ]
                 }
               ]
             }
-          }
+          },
+          "_comment": "Component 1 of the former `skolem` key `src_bin`: an integer join column."
         },
         {
           "lhs": {
             "op": "index",
             "args": [
-              "tgt_bin",
+              "src_bin_c2",
+              "i"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "semiring": "sum_product",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "src_cells"
+              }
+            },
+            "args": [],
+            "expr": {
+              "op": "floor",
+              "args": [
+                {
+                  "op": "/",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "src_lat",
+                        "i"
+                      ]
+                    },
+                    "dy"
+                  ]
+                }
+              ]
+            }
+          },
+          "_comment": "Component 2 of the former `skolem` key `src_bin`: an integer join column."
+        },
+        {
+          "lhs": {
+            "op": "index",
+            "args": [
+              "tgt_bin_c1",
               "j"
             ]
           },
@@ -220,55 +257,68 @@
                 "from": "tgt_cells"
               }
             },
-            "args": [
-              "tgt_lon",
-              "tgt_lat",
-              "dx",
-              "dy"
-            ],
+            "args": [],
             "expr": {
-              "op": "skolem",
-              "label": "bin",
+              "op": "floor",
               "args": [
                 {
-                  "op": "floor",
+                  "op": "/",
                   "args": [
                     {
-                      "op": "/",
+                      "op": "index",
                       "args": [
-                        {
-                          "op": "index",
-                          "args": [
-                            "tgt_lon",
-                            "j"
-                          ]
-                        },
-                        "dx"
+                        "tgt_lon",
+                        "j"
                       ]
-                    }
-                  ]
-                },
-                {
-                  "op": "floor",
-                  "args": [
-                    {
-                      "op": "/",
-                      "args": [
-                        {
-                          "op": "index",
-                          "args": [
-                            "tgt_lat",
-                            "j"
-                          ]
-                        },
-                        "dy"
-                      ]
-                    }
+                    },
+                    "dx"
                   ]
                 }
               ]
             }
-          }
+          },
+          "_comment": "Component 1 of the former `skolem` key `tgt_bin`: an integer join column."
+        },
+        {
+          "lhs": {
+            "op": "index",
+            "args": [
+              "tgt_bin_c2",
+              "j"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "semiring": "sum_product",
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "j": {
+                "from": "tgt_cells"
+              }
+            },
+            "args": [],
+            "expr": {
+              "op": "floor",
+              "args": [
+                {
+                  "op": "/",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "tgt_lat",
+                        "j"
+                      ]
+                    },
+                    "dy"
+                  ]
+                }
+              ]
+            }
+          },
+          "_comment": "Component 2 of the former `skolem` key `tgt_bin`: an integer join column."
         },
         {
           "lhs": {
@@ -298,23 +348,34 @@
               {
                 "on": [
                   [
-                    "src_bin",
-                    "tgt_bin"
+                    "src_bin_c1",
+                    "tgt_bin_c1"
+                  ],
+                  [
+                    "src_bin_c2",
+                    "tgt_bin_c2"
                   ]
                 ]
               }
             ],
             "args": [
-              "src_bin",
-              "tgt_bin"
+              "src_bin_c1",
+              "src_bin_c2",
+              "tgt_bin_c1",
+              "tgt_bin_c2"
             ],
             "key": {
-              "op": "skolem",
-              "label": "pair",
-              "args": [
-                "i",
-                "j"
-              ]
+              "op": "apply_expression_template",
+              "args": [],
+              "name": "pair_key",
+              "bindings": {
+                "a": "i",
+                "b": "j",
+                "lo_a": 1,
+                "lo_b": 1,
+                "n_a": 4,
+                "n_b": 4
+              }
             },
             "expr": {
               "op": "true",

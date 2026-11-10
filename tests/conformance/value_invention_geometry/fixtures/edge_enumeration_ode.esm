@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "ValueInventionEdgeEnumerationODE",
     "authors": [
@@ -51,6 +51,14 @@
   },
   "models": {
     "EdgeEnumerationODE": {
+      "expression_template_imports": [
+        {
+          "ref": "esm:std/relational.esm",
+          "only": [
+            "pair_key"
+          ]
+        }
+      ],
       "variables": {
         "n_verts_on_face": {
           "type": "unknown",
@@ -240,12 +248,17 @@
               ]
             },
             "key": {
-              "op": "skolem",
-              "label": "edge",
-              "args": [
-                "a",
-                "b"
-              ]
+              "op": "apply_expression_template",
+              "args": [],
+              "name": "pair_key",
+              "bindings": {
+                "a": "a",
+                "b": "b",
+                "lo_a": 1,
+                "lo_b": 1,
+                "n_a": 4,
+                "n_b": 4
+              }
             },
             "expr": {
               "op": "true",

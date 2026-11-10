@@ -38,29 +38,25 @@ op skips (it compares with `<` / `>` from the first candidate on) and the
 template picks. `scenarios.json` records the op's answer there as
 `op_expected`.
 
-## Template rewrites of the skolem / rank fixtures (`rewrites/`)
+## Template rewrites of the former skolem / rank fixtures (`rewrites/`)
 
-`rewrites/generate.py` writes the `lib/relational.esm` form of every fixture
-that uses `skolem`, `rank` or a gated `argmin` (`rewrites/manifest.json` lists
-17, with their sources): a `distinct` key becomes `edge_key` / `pair_key` / the
-bare component, a bin key read only by `join.on` becomes one integer column
-per component with one `on` pair each, `rank(S)` over the set's own members
-becomes the loop index, and a joined `argmin` becomes `argmin_where`. `skolem_distinct_rank` also looks up each face edge's rank among the derived
-`edges` set with `rank_of_set` over `{"from": "edges"}`, compared with the op
-set's rank of the same tuple. The
-manifest carries the caller data and what must agree. Each binding's harness
-builds both forms (Julia `test/relational_rewrites_test.jl`, Python
-`tests/test_relational_rewrites.py`, Rust `tests/relational_rewrites.rs`):
-identical members (the template's integer keys decoded back to the op's
-tuples), dense IDs (the op's 0-based rank plus one), assignment buffers and
-right-hand sides. Entries with values carry `"golden": "golden/<id>.json"`,
-expected values computed from the op form by the Python interpreter
-(`rewrites/goldens.py` regenerates them, `--check` fails on a stale one); the
-Python, Julia and Rust harnesses assert both forms against them. Go and
-TypeScript load every rewrite. The two
-value_invention_geometry rewrites run in this tier against the op documents'
-goldens, and the three value_invention_materialize rewrites (plus
-`key_out_of_range`) in that tier.
+`rewrites/` holds the hand-written `lib/relational.esm` form, made in phase 3,
+of every fixture that used `skolem`, `rank` or a gated `argmin`
+(`rewrites/manifest.json` lists 13 with their sources): a `distinct` key becomes
+`edge_key` / `pair_key` / the bare component, a bin key read only by `join.on`
+becomes one integer column per component with one `on` pair each, `rank(S)` over
+the set's own members becomes the loop index (1-based), and a joined `argmin`
+becomes `argmin_where`. `skolem_distinct_rank` also looks up each face edge's
+rank among the derived `edges` set with `rank_of_set` over `{"from": "edges"}`.
+The ops were removed at esm 2.0.0 and the source fixtures were converted by the
+codemod (`python -m earthsci_ast.migrate`), which writes the same forms except
+that a two-component key is the directed `pair_key` and a set's own rank keeps
+the operator's 0-based value (`e - 1`). The goldens (`golden/<id>.json`) were
+computed from the op forms by the Python interpreter before the removal; they
+pin what both the rewrites and the converted sources must give. The manifest
+carries the caller data and what must agree; Go and TypeScript load every
+rewrite. The two value_invention_geometry rewrites run in this tier against that
+tier's goldens.
 
 ## What is not here
 

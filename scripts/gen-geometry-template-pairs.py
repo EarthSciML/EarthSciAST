@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """Generate tests/conformance/geometry_templates/pairs.json: the polygon pairs every
-binding runs through both the `polygon_intersection_area` leaf and the
-`lib/geometry.esm` templates.
+binding runs through the `lib/geometry.esm` overlap templates.
 
 Usage:
   scripts/gen-geometry-template-pairs.py          # write pairs.json
   scripts/gen-geometry-template-pairs.py --check  # fail if pairs.json is stale
 
-The pairs come from every document under tests/ whose polygon operands are
-written in the document (`const` equations or array `default`s), the
-canonical inputs of tests/conformance/geometry/manifest.json, and the cells
-pkg/EarthSciAST.jl/test/geometry_overlap_join_conformance_test.jl feeds to
-tests/valid/geometry/conservative_regrid_overlap_join.esm. Each group is one
-(document, ring stack, ring stack, manifold) the document clips. A group keeps
+The pairs come from every `overlap_area_planar` / `overlap_area_spherical` call
+of a document under tests/ whose polygon operands are written in the document
+(`const` equations or array `default`s; a spherical call's unit-vector stacks
+are traced back to the lon-lat stacks their `lonlat_to_unit` equations read),
+and the canonical inputs of tests/conformance/geometry/manifest.json. Each
+group is one (document, ring stack, ring stack, manifold) the document clips. A group keeps
 every pair whose closed bounding boxes meet (planar) or every pair (spherical),
 plus up to two disjoint pairs, at most MAX_PAIRS in all.
 
@@ -21,7 +20,7 @@ Sutherland-Hodgman on the vertices as written) or 40-digit (spherical: the
 gnomonic projection maps great-circle edges to straight lines, so the clip is
 planar and exact, and the area is the Van Oosterom-Strackee fan of the
 back-projected overlap) arithmetic, rounded to binary64. It is an oracle for
-the leaf and the template alike, independent of both. `same_grid` marks a pair
+the template, independent of it. `same_grid` marks a pair
 of cells from one grid (identical rings, or two cells of the same stack): the
 planar template must give the reference exactly there. A second copy of every
 group, `<id>:padded`, appends a closing duplicate and a repeated last vertex to
@@ -42,7 +41,7 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 OUT = os.path.join(REPO, "tests", "conformance", "geometry_templates", "pairs.json")
 MAX_PAIRS = 16
 MAX_DISJOINT = 2
-LEAF_OPS = ("polygon_intersection_area", "intersect_polygon")
+TEMPLATES = {"overlap_area_planar": "planar", "overlap_area_spherical": "spherical"}
 
 
 # --------------------------------------------------------------------------- scanning
@@ -50,13 +49,55 @@ LEAF_OPS = ("polygon_intersection_area", "intersect_polygon")
 
 def _walk(node, out):
     if isinstance(node, dict):
-        if node.get("op") in LEAF_OPS:
+        if node.get("op") == "apply_expression_template" and node.get("name") in TEMPLATES:
             out.append(node)
         for v in node.values():
             _walk(v, out)
     elif isinstance(node, list):
         for v in node:
             _walk(v, out)
+
+
+def _derived_stacks(model):
+    """Ring-stack variable -> the variable it is built from, for the two stack
+    equations a document writes around the templates: a `lonlat_to_unit` faq (a
+    unit-vector stack of a lon-lat stack) and a one-cell stack `index(ring, v, d)`
+    of a bare [verts, 2] ring (the codemod's form of a whole-ring operand)."""
+    out = {}
+    for eq in model.get("equations") or []:
+        lhs, rhs = eq.get("lhs"), eq.get("rhs")
+        if not (isinstance(lhs, str) and isinstance(rhs, dict) and rhs.get("op") == "faq"):
+            continue
+        body = rhs.get("expr")
+        if not isinstance(body, dict):
+            continue
+        if body.get("op") == "apply_expression_template" and body.get("name") == "lonlat_to_unit":
+            out[lhs] = ("unit", body["bindings"]["ring"])
+        elif (
+            body.get("op") == "index"
+            and len(body["args"]) == 3
+            and len(rhs.get("output_idx") or []) == 3
+            and body["args"][1:] == rhs["output_idx"][1:]
+        ):
+            out[lhs] = ("one_cell", body["args"][0])
+    return out
+
+
+def _leaf_form(call, derived):
+    """The template call as (manifold, operand a, operand b), each operand an
+    `index(stack, cell)` of the lon-lat stack or a bare ring name."""
+    b = call["bindings"]
+
+    def operand(ring, cell):
+        kind, src = derived.get(ring, (None, None))
+        if kind == "unit":
+            ring = src
+            kind, src = derived.get(ring, (None, None))
+        if kind == "one_cell":
+            return src
+        return {"op": "index", "args": [ring, cell]}
+
+    return TEMPLATES[call["name"]], [operand(b["ring_a"], b["cell_a"]), operand(b["ring_b"], b["cell_b"])]
 
 
 def _array_values(model):
@@ -105,13 +146,12 @@ def scan_documents():
             if not nodes:
                 continue
             vals = _array_values(model)
+            derived = _derived_stacks(model)
             seen = set()
             for node in nodes:
-                manifold = node.get("manifold")
-                if manifold not in ("planar", "spherical", "geodesic") or len(node["args"]) != 2:
-                    continue
-                a = _operand(node["args"][0], vals)
-                b = _operand(node["args"][1], vals)
+                manifold, args = _leaf_form(node, derived)
+                a = _operand(args[0], vals)
+                b = _operand(args[1], vals)
                 if a is None or b is None:
                     continue
                 key = (a[1], b[1], manifold)
@@ -122,7 +162,7 @@ def scan_documents():
                     {
                         "source": rel,
                         "operands": [a[1], b[1]],
-                        "manifold": "spherical" if manifold == "geodesic" else manifold,
+                        "manifold": manifold,
                         "a": a[2],
                         "b": b[2],
                         "same_stack": a[1] == b[1],
@@ -148,25 +188,6 @@ def manifest_groups():
             }
         )
     return out
-
-
-def overlap_join_group():
-    def rect(x0, x1, y0, y1):
-        return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
-
-    src = [rect(0, 1, 0, 1), rect(1, 2, 0, 1), rect(2, 3, 0, 1)]
-    tgt = [rect(0, 1.5, 0, 1), rect(1.5, 2, 0, 1), rect(2, 3, 0, 1)]
-    src = [[[float(x), float(y)] for x, y in c] for c in src]
-    tgt = [[[float(x), float(y)] for x, y in c] for c in tgt]
-    return {
-        "source": "tests/valid/geometry/conservative_regrid_overlap_join.esm"
-        "#pkg/EarthSciAST.jl/test/geometry_overlap_join_conformance_test.jl",
-        "operands": ["_SRC", "_TGT"],
-        "manifold": "spherical",
-        "a": src,
-        "b": tgt,
-        "same_stack": False,
-    }
 
 
 # --------------------------------------------------------------------------- references
@@ -372,7 +393,7 @@ def padded(group):
 
 
 def build():
-    raw = scan_documents() + manifest_groups() + [overlap_join_group()]
+    raw = scan_documents() + manifest_groups()
     groups = []
     for g in raw:
         stem = (
@@ -383,8 +404,6 @@ def build():
         gid = f"{stem}:{g['operands'][0]}:{g['operands'][1]}:{g['manifold']}"
         if g["source"].startswith("tests/conformance/geometry/manifest.json"):
             gid = f"geometry_manifest:{g['source'].split('#')[1]}:{g['manifold']}"
-        if "#pkg/" in g["source"]:
-            gid = f"conservative_regrid_overlap_join:{g['manifold']}"
         groups.append(build_group(g, gid))
     groups += [padded(g) for g in groups]
     return {

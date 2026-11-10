@@ -9,24 +9,9 @@
   },
   "cases": [
     {
-      "id": "rank_in_untaken_branch",
-      "op": "rank",
-      "expression": { "op": "ifelse", "args": [ { "op": ">", "args": ["u", 100.0] }, { "op": "rank", "args": ["p"] }, 1.0 ] }
-    },
-    {
       "id": "distinct_in_untaken_branch",
       "op": "distinct",
       "expression": { "op": "ifelse", "args": [ { "op": ">", "args": ["u", 100.0] }, { "op": "distinct", "args": ["p"] }, 1.0 ] }
-    },
-    {
-      "id": "argmin_in_untaken_branch",
-      "op": "argmin",
-      "expression": { "op": "ifelse", "args": [ { "op": ">", "args": ["u", 100.0] }, { "op": "argmin", "args": [], "arg": "i", "ranges": { "i": [1, 3] }, "expr": "p" }, 1.0 ] }
-    },
-    {
-      "id": "argmax_in_untaken_branch",
-      "op": "argmax",
-      "expression": { "op": "ifelse", "args": [ { "op": ">", "args": ["u", 100.0] }, { "op": "argmax", "args": [], "arg": "i", "ranges": { "i": [1, 3] }, "expr": "p" }, 1.0 ] }
     }
   ]
 }

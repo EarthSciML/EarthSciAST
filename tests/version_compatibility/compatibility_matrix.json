@@ -1,7 +1,7 @@
 {
   "version_compatibility_test_matrix": {
-    "description": "Expected behavior for ESM format version compatibility testing. Re-based on esm 1.3.0 (1.0.0 until the top-level `solver` block, esm-spec \u00a72.2, moved the library to 1.1.0; declared units on a `const` node, esm-spec \u00a74.8.5, moved it to 1.2.0; `solver.external`, esm-spec \u00a72.2.6, moved it to 1.3.0): the library implements major version 1, so major 0 is REJECTED (the 1.0.0 break carries no deprecation path) and the backward/forward gradation this category exists to cover is expressed in 1.x fixtures. Each fixture declares the version it is NAMED for — these files exercise the version GATE, and a fixture restamped to the library's own version tests nothing.",
-    "library_version": "1.3.0",
+    "description": "Expected behavior for ESM format version compatibility testing. Re-based on esm 2.0.0: 2.0.0 removed the operators and fields that needed code outside the expression AST (fn, function_tables/table_lookup, skolem, rank, argmin/argmax, the geometry leaves, the aggregate alias) and otherwise changed nothing, so the library implements major version 2 AND still loads major 1 (user ruling): a 1.x document that uses no removed construct loads as written, its own 1.x version gates (solver_*, const units, faq too old) still apply, and one that uses a removed construct is refused with `removed_op`, naming `python -m earthsci_ast.migrate`. Major 0 is REJECTED (the 1.0.0 break carries no deprecation path), and so is any major above 2. Each fixture declares the version it is NAMED for — these files exercise the version GATE, and a fixture restamped to the library's own version tests nothing.",
+    "library_version": "2.0.0",
     "migration_notes": {
       "0.x_to_1.0.0": {
         "summary": "Unified variable model — `states` and `observed` collapse into one `unknown` type whose behaviour is stated by equations, the per-variable `expression` field is removed, `brownian` and `discrete` become parameters carrying a `distribution` / `update`, and `data_loaders` becomes `data_sources`, a pure ingest registry. A CLEAN BREAK: a 1.0.0 library rejects every 0.x document rather than migrating it. See esm-spec.md §6.3 and §8.5.",
@@ -21,6 +21,15 @@
           "A `state` or `observed` variable becomes `\"type\": \"unknown\"`; an observed's `expression` becomes an equation `{\"lhs\": \"<name>\", \"rhs\": <expression>}`.",
           "A `brownian` variable becomes a parameter with `\"distribution\"` and `\"update\": {\"kind\": \"wiener\"}`.",
           "A `data_loaders` block becomes `data_sources` with its `variables` deleted; each consuming model declares the parameter that reads the field, with the units the loader used to carry."
+        ]
+      },
+      "1.x_to_2.0.0": {
+        "summary": "The external functions leave the expression AST. Every removed construct is a standard-library template (esm:std/*.esm); a 1.x document that uses none of them loads at 2.0.0 unchanged, and one that does is converted by the codemod.",
+        "breaking_changes": [
+          "`fn` (datetime.*, interp.*), `function_tables` + `table_lookup`, `skolem`, `rank`, `argmin` / `argmax`, `intersect_polygon`, `polygon_intersection_area` and the `aggregate` alias are a `removed_op` load error."
+        ],
+        "migration_path": [
+          "python -m earthsci_ast.migrate FILE... rewrites each removed construct as its template call, adds the expression_template_imports and sets esm to 2.0.0 (MIGRATION.md, esm 2.0.0 section)."
         ]
       }
     },
@@ -57,28 +66,34 @@
         "file": "version_1_2_0_const_units.esm",
         "file_version": "1.2.0",
         "expected_behavior": "load_success",
-        "description": "An EARLIER minor than the library since the esm 1.3.0 bump, loaded without warning because the 1.x line is additive. It held the exact-version-match role while the library was 1.2.0; version_1_3_0_solver_external.esm now holds that role. Uses declared units on a const node, the construct esm 1.2.0 adds (esm-spec \u00a74.8.5).",
+        "description": "An EARLIER minor than the library since the esm 1.3.0 bump, loaded without warning because the 1.x line is additive. It held the exact-version-match role while the library was 1.2.0; version_1_3_0_solver_external.esm now holds that role. Uses declared units on a const node, the construct esm 1.2.0 adds (esm-spec §4.8.5).",
         "warnings": []
       },
       {
         "file": "version_1_3_0_solver_external.esm",
         "file_version": "1.3.0",
         "expected_behavior": "load_success",
-        "description": "Exact version match - should load successfully, with no warning. Uses `solver.external`, the construct esm 1.3.0 adds (esm-spec \u00a72.2.6); the run configuration it names does not exist, which is not a load error.",
+        "description": "The last 1.x minor - loads at 2.0.0 with no warning (a 1.x document with no removed op still loads). Uses `solver.external`, the construct esm 1.3.0 adds (esm-spec §2.2.6); the run configuration it names does not exist, which is not a load error.",
         "warnings": []
       },
       {
         "file": "version_1_3_0_solver_time_span.esm",
         "file_version": "1.3.0",
         "expected_behavior": "load_success",
-        "description": "Exact version match - should load successfully, with no warning. Uses `solver.time_span`, the other construct esm 1.3.0 adds (esm-spec \u00a72.2.7).",
+        "description": "The last 1.x minor - loads at 2.0.0 with no warning (a 1.x document with no removed op still loads). Uses `solver.time_span`, the other construct esm 1.3.0 adds (esm-spec §2.2.7).",
         "warnings": []
+      },
+      {
+        "file": "version_2_0_0_baseline.esm",
+        "file_version": "2.0.0",
+        "expected_behavior": "load_success",
+        "description": "Exact version match - should load successfully, with no warning."
       },
       {
         "file": "version_1_10_0_double_digit.esm",
         "file_version": "1.10.0",
         "expected_behavior": "load_with_warning",
-        "description": "Double-digit minor version - 1.10.0 is newer than 1.3.0, which a lexicographic comparison gets wrong",
+        "description": "Double-digit minor version - 1.10.0 is newer than 1.3.0, the last 1.x minor, which a lexicographic comparison gets wrong",
         "warnings": [
           "File version 1.10.0 is newer than library version 1.0.0. Unknown fields will be ignored."
         ]
@@ -95,35 +110,42 @@
         "file_version": "0.1.0",
         "expected_behavior": "reject",
         "description": "Major version 0.x.x - rejected by a 1.x.x library; esm 1.0.0 is a clean break with no deprecation path",
-        "error": "Unsupported major version 0. This library supports major version 1 only."
+        "error": "Unsupported major version 0. This library supports major versions 1, 2."
       },
       {
         "file": "version_0_0_1_pre_break.esm",
         "file_version": "0.0.1",
         "expected_behavior": "reject",
         "description": "The oldest published version - rejected for its major like every other 0.x document",
-        "error": "Unsupported major version 0. This library supports major version 1 only."
+        "error": "Unsupported major version 0. This library supports major versions 1, 2."
       },
       {
         "file": "version_0_9_0_last_pre_break.esm",
         "file_version": "0.9.0",
         "expected_behavior": "reject",
         "description": "The release immediately preceding the break - rejected too, because there is no deprecation window",
-        "error": "Unsupported major version 0. This library supports major version 1 only."
+        "error": "Unsupported major version 0. This library supports major versions 1, 2."
       },
       {
         "file": "version_2_5_1_major_rejection.esm",
         "file_version": "2.5.1",
+        "expected_behavior": "load_with_warning",
+        "description": "2.5.1 - a NEWER minor of the supported major 2: loaded with a warning. It was the future-major rejection while the library was 1.x; version_3_0_0_major_rejection.esm took that role.",
+        "warning": "2.5.1 is newer than the current library version 2.0.0. Some features may not be supported."
+      },
+      {
+        "file": "version_3_0_0_major_rejection.esm",
+        "file_version": "3.0.0",
         "expected_behavior": "reject",
-        "description": "Major version 2.x.x - a FUTURE major, rejected in the other direction",
-        "error": "Unsupported major version 2. This library supports major version 1 only."
+        "description": "Major version 3.x.x - a FUTURE major, rejected",
+        "error": "Unsupported major version 3. This library supports major versions 1, 2."
       },
       {
         "file": "version_12_34_56_large_numbers.esm",
         "file_version": "12.34.56",
         "expected_behavior": "reject",
         "description": "Large major version - should be rejected",
-        "error": "Unsupported major version 12. This library supports major version 1 only."
+        "error": "Unsupported major version 12. This library supports major versions 1, 2."
       },
       {
         "file": "invalid_version_string.esm",
@@ -168,7 +190,7 @@
       }
     ],
     "validation_rules": {
-      "major_version_compatibility": "Libraries must reject files whose major version differs from their own, in EITHER direction. A 1.x library rejects 0.x and 2.x alike.",
+      "major_version_compatibility": "Libraries must reject files whose major version they do not implement, in EITHER direction. A 2.x library implements majors 1 and 2 (esm 2.0.0 only removed constructs, each refused with removed_op) and rejects 0.x and 3.x alike.",
       "minor_version_backward_compatibility": "Libraries must accept files with minor version <= their supported minor version, within the same major",
       "minor_version_forward_compatibility": "Libraries should warn but attempt to load files with minor version > their supported minor version, within the same major",
       "patch_version_compatibility": "Patch versions are fully compatible within the same major.minor",

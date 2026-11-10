@@ -38,14 +38,14 @@ runs.
 
 ## The coupled case
 
-`coupled/fn.esm` and `coupled/template.esm` are the case §9.6.11 was written
-for. A 0-D physics component `Phys` declares `lev`, `T` and `cos_sza` as
+`coupled/template.esm` is the case §9.6.11 was written
+for (its `interp.*` twin was removed with the `fn` op at esm 2.0.0). A 0-D physics component `Phys` declares `lev`, `T` and `cos_sza` as
 scalars. Three `variable_map` couplings bind a gridded host's `[x, y, z]`
 arrays to them, so `linear(…, lev, …)` and `bilinear(…, T, cos_sza, …)` are
 per-cell lookups only after flatten. Inline tests are per-component (§6.6) and
 cannot see a coupling, so this pair is not an inline-test fixture. Each
-binding's own test builds both documents under `interpreter` and `native` and
-compares the right-hand side at the initial state bit for bit:
+binding's own test builds it under `interpreter` and `native` and compares the
+right-hand side at the initial state bit for bit:
 
 - Julia: `test/template_array_args_test.jl`;
 - Python: `tests/test_template_array_args.py`;

@@ -1,5 +1,5 @@
 {
-  "esm": "1.2.0",
+  "esm": "2.0.0",
   "metadata": {
     "name": "CrossDomainCoupling",
     "description": "Cross-domain air-sea coupling. The atmosphere-grid sensible flux (a SPATIALLY-VARYING field on the 4-cell atmosphere surface grid) is remapped onto the DIFFERENT 3-cell ocean surface grid by a REAL conservative regrid whose overlap weights W[a,o] = A[a,o]/A_o are computed INLINE from cell geometry (bin-skolem broad phase + fused polygon_intersection_area narrow phase, esm-spec.md §8.6.1), not supplied. 0-D<->spatial maps to the bulk flux calculator use the coupling lifting field.",
@@ -39,6 +39,20 @@
   },
   "models": {
     "Ocean3D": {
+      "expression_template_imports": [
+        {
+          "ref": "esm:std/relational.esm",
+          "only": [
+            "pair_key"
+          ]
+        },
+        {
+          "ref": "esm:std/geometry.esm",
+          "only": [
+            "overlap_area_planar"
+          ]
+        }
+      ],
       "variables": {
         "SST": {
           "type": "unknown",
@@ -131,20 +145,6 @@
           "description": "Sliver floor: an overlap area at or below atol is dropped.",
           "default": 1e-12
         },
-        "rg_src_bin": {
-          "type": "unknown",
-          "shape": [
-            "atmos_cells"
-          ],
-          "description": "Integer bin key of each source cell: skolem(\"bin\", floor(lon/dx), floor(lat/dy)) — the equi-join column."
-        },
-        "rg_tgt_bin": {
-          "type": "unknown",
-          "shape": [
-            "ocean_cells"
-          ],
-          "description": "Integer bin key of each target cell, identically quantized."
-        },
         "rg_pairs": {
           "type": "unknown",
           "shape": [
@@ -181,15 +181,43 @@
             "ocean_cells"
           ],
           "description": "Surface heat flux on the ocean grid, regridded from the atmosphere-grid sensible flux via the INLINE conservative weights: heat_flux[o] = Σ_a W[a,o]·flux_atmos[a], W = A/A_o computed from cell geometry (the old air_sea interface as a real overlap-weighted regrid)."
+        },
+        "rg_src_bin_c1": {
+          "type": "unknown",
+          "shape": [
+            "atmos_cells"
+          ],
+          "description": "Component 1 of the key formerly `rg_src_bin` (an integer join column)."
+        },
+        "rg_src_bin_c2": {
+          "type": "unknown",
+          "shape": [
+            "atmos_cells"
+          ],
+          "description": "Component 2 of the key formerly `rg_src_bin` (an integer join column)."
+        },
+        "rg_tgt_bin_c1": {
+          "type": "unknown",
+          "shape": [
+            "ocean_cells"
+          ],
+          "description": "Component 1 of the key formerly `rg_tgt_bin` (an integer join column)."
+        },
+        "rg_tgt_bin_c2": {
+          "type": "unknown",
+          "shape": [
+            "ocean_cells"
+          ],
+          "description": "Component 2 of the key formerly `rg_tgt_bin` (an integer join column)."
         }
       },
       "equations": [
         {
-          "_comment": "BROAD PHASE (1a): bin each SOURCE cell to an integer lon-lat bin key.",
+          "_comment": "Component 1 of the former `skolem` key `rg_src_bin`: an integer join column.",
           "lhs": {
             "op": "index",
             "args": [
-              "rg_src_bin",
+              "rg_src_bin_c1",
               "a"
             ]
           },
@@ -206,43 +234,19 @@
             },
             "args": [],
             "expr": {
-              "op": "skolem",
-              "label": "bin",
+              "op": "floor",
               "args": [
                 {
-                  "op": "floor",
+                  "op": "/",
                   "args": [
                     {
-                      "op": "/",
+                      "op": "index",
                       "args": [
-                        {
-                          "op": "index",
-                          "args": [
-                            "rg_src_lon",
-                            "a"
-                          ]
-                        },
-                        "rg_dx"
+                        "rg_src_lon",
+                        "a"
                       ]
-                    }
-                  ]
-                },
-                {
-                  "op": "floor",
-                  "args": [
-                    {
-                      "op": "/",
-                      "args": [
-                        {
-                          "op": "index",
-                          "args": [
-                            "rg_src_lat",
-                            "a"
-                          ]
-                        },
-                        "rg_dy"
-                      ]
-                    }
+                    },
+                    "rg_dx"
                   ]
                 }
               ]
@@ -250,11 +254,52 @@
           }
         },
         {
-          "_comment": "BROAD PHASE (1b): bin each TARGET cell identically.",
+          "_comment": "Component 2 of the former `skolem` key `rg_src_bin`: an integer join column.",
           "lhs": {
             "op": "index",
             "args": [
-              "rg_tgt_bin",
+              "rg_src_bin_c2",
+              "a"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "semiring": "sum_product",
+            "output_idx": [
+              "a"
+            ],
+            "ranges": {
+              "a": {
+                "from": "atmos_cells"
+              }
+            },
+            "args": [],
+            "expr": {
+              "op": "floor",
+              "args": [
+                {
+                  "op": "/",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "rg_src_lat",
+                        "a"
+                      ]
+                    },
+                    "rg_dy"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "Component 1 of the former `skolem` key `rg_tgt_bin`: an integer join column.",
+          "lhs": {
+            "op": "index",
+            "args": [
+              "rg_tgt_bin_c1",
               "o"
             ]
           },
@@ -271,43 +316,60 @@
             },
             "args": [],
             "expr": {
-              "op": "skolem",
-              "label": "bin",
+              "op": "floor",
               "args": [
                 {
-                  "op": "floor",
+                  "op": "/",
                   "args": [
                     {
-                      "op": "/",
+                      "op": "index",
                       "args": [
-                        {
-                          "op": "index",
-                          "args": [
-                            "rg_tgt_lon",
-                            "o"
-                          ]
-                        },
-                        "rg_dx"
+                        "rg_tgt_lon",
+                        "o"
                       ]
-                    }
+                    },
+                    "rg_dx"
                   ]
-                },
+                }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "Component 2 of the former `skolem` key `rg_tgt_bin`: an integer join column.",
+          "lhs": {
+            "op": "index",
+            "args": [
+              "rg_tgt_bin_c2",
+              "o"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "semiring": "sum_product",
+            "output_idx": [
+              "o"
+            ],
+            "ranges": {
+              "o": {
+                "from": "ocean_cells"
+              }
+            },
+            "args": [],
+            "expr": {
+              "op": "floor",
+              "args": [
                 {
-                  "op": "floor",
+                  "op": "/",
                   "args": [
                     {
-                      "op": "/",
+                      "op": "index",
                       "args": [
-                        {
-                          "op": "index",
-                          "args": [
-                            "rg_tgt_lat",
-                            "o"
-                          ]
-                        },
-                        "rg_dy"
+                        "rg_tgt_lat",
+                        "o"
                       ]
-                    }
+                    },
+                    "rg_dy"
                   ]
                 }
               ]
@@ -343,19 +405,28 @@
               {
                 "on": [
                   [
-                    "rg_src_bin",
-                    "rg_tgt_bin"
+                    "rg_src_bin_c1",
+                    "rg_tgt_bin_c1"
+                  ],
+                  [
+                    "rg_src_bin_c2",
+                    "rg_tgt_bin_c2"
                   ]
                 ]
               }
             ],
             "key": {
-              "op": "skolem",
-              "label": "pair",
-              "args": [
-                "a",
-                "o"
-              ]
+              "op": "apply_expression_template",
+              "args": [],
+              "name": "pair_key",
+              "bindings": {
+                "a": "a",
+                "b": "o",
+                "lo_a": 1,
+                "lo_b": 1,
+                "n_a": 4,
+                "n_b": 3
+              }
             },
             "args": [],
             "expr": {
@@ -371,7 +442,12 @@
               "SST"
             ]
           },
-          "rhs": {"op": "const", "args": [], "value": 290.0, "units": "K"}
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": 290.0,
+            "units": "K"
+          }
         },
         {
           "lhs": {
@@ -623,32 +699,29 @@
               {
                 "on": [
                   [
-                    "rg_src_bin",
-                    "rg_tgt_bin"
+                    "rg_src_bin_c1",
+                    "rg_tgt_bin_c1"
+                  ],
+                  [
+                    "rg_src_bin_c2",
+                    "rg_tgt_bin_c2"
                   ]
                 ]
               }
             ],
             "args": [],
             "expr": {
-              "op": "polygon_intersection_area",
-              "manifold": "planar",
-              "args": [
-                {
-                  "op": "index",
-                  "args": [
-                    "rg_src_poly",
-                    "a"
-                  ]
-                },
-                {
-                  "op": "index",
-                  "args": [
-                    "rg_tgt_poly",
-                    "o"
-                  ]
-                }
-              ]
+              "op": "apply_expression_template",
+              "args": [],
+              "name": "overlap_area_planar",
+              "bindings": {
+                "ring_a": "rg_src_poly",
+                "cell_a": "a",
+                "nv_a": 4,
+                "ring_b": "rg_tgt_poly",
+                "cell_b": "o",
+                "nv_b": 4
+              }
             }
           }
         },
@@ -672,8 +745,12 @@
               {
                 "on": [
                   [
-                    "rg_src_bin",
-                    "rg_tgt_bin"
+                    "rg_src_bin_c1",
+                    "rg_tgt_bin_c1"
+                  ],
+                  [
+                    "rg_src_bin_c2",
+                    "rg_tgt_bin_c2"
                   ]
                 ]
               }
@@ -724,8 +801,12 @@
               {
                 "on": [
                   [
-                    "rg_src_bin",
-                    "rg_tgt_bin"
+                    "rg_src_bin_c1",
+                    "rg_tgt_bin_c1"
+                  ],
+                  [
+                    "rg_src_bin_c2",
+                    "rg_tgt_bin_c2"
                   ]
                 ]
               }
@@ -787,8 +868,12 @@
               {
                 "on": [
                   [
-                    "rg_src_bin",
-                    "rg_tgt_bin"
+                    "rg_src_bin_c1",
+                    "rg_tgt_bin_c1"
+                  ],
+                  [
+                    "rg_src_bin_c2",
+                    "rg_tgt_bin_c2"
                   ]
                 ]
               }
@@ -868,7 +953,12 @@
               "T_air"
             ]
           },
-          "rhs": {"op": "const", "args": [], "value": 288.0, "units": "K"}
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": 288.0,
+            "units": "K"
+          }
         },
         {
           "lhs": {
@@ -877,7 +967,12 @@
               "wind_speed"
             ]
           },
-          "rhs": {"op": "const", "args": [], "value": 5.0, "units": "m/s"}
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": 5.0,
+            "units": "m/s"
+          }
         },
         {
           "lhs": {

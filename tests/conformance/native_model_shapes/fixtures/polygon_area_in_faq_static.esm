@@ -1,5 +1,5 @@
 {
- "esm": "1.2.0",
+ "esm": "2.0.0",
  "metadata": {
   "name": "polygon_area_in_faq_static",
   "description": "`polygon_intersection_area` as the body of a `faq`, reading partial-rank ring slices `index(ring, r)` (the isrm polygon `E_*` shape), with and without an `overlap` gate over the rings' bounding boxes; the third cell overlaps nothing. Static variant: no state, so every value is a build-time observed.",
@@ -31,6 +31,14 @@
  },
  "models": {
   "PolygonAreaInFaq": {
+   "expression_template_imports": [
+    {
+     "ref": "esm:std/geometry.esm",
+     "only": [
+      "overlap_area_planar"
+     ]
+    }
+   ],
    "tolerance": {
     "rel": 1e-12,
     "abs": 1e-12
@@ -164,24 +172,17 @@
       },
       "reduce": "+",
       "expr": {
-       "op": "polygon_intersection_area",
-       "args": [
-        {
-         "op": "index",
-         "args": [
-          "pring",
-          "r"
-         ]
-        },
-        {
-         "op": "index",
-         "args": [
-          "cring",
-          "c"
-         ]
-        }
-       ],
-       "manifold": "planar"
+       "op": "apply_expression_template",
+       "args": [],
+       "name": "overlap_area_planar",
+       "bindings": {
+        "ring_a": "pring",
+        "cell_a": "r",
+        "nv_a": 4,
+        "ring_b": "cring",
+        "cell_b": "c",
+        "nv_b": 4
+       }
       }
      }
     },
@@ -216,24 +217,17 @@
        }
       ],
       "expr": {
-       "op": "polygon_intersection_area",
-       "args": [
-        {
-         "op": "index",
-         "args": [
-          "pring",
-          "r"
-         ]
-        },
-        {
-         "op": "index",
-         "args": [
-          "cring",
-          "c"
-         ]
-        }
-       ],
-       "manifold": "planar"
+       "op": "apply_expression_template",
+       "args": [],
+       "name": "overlap_area_planar",
+       "bindings": {
+        "ring_a": "pring",
+        "cell_a": "r",
+        "nv_a": 4,
+        "ring_b": "cring",
+        "cell_b": "c",
+        "nv_b": 4
+       }
       }
      }
     }
