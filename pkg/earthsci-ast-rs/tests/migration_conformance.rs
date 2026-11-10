@@ -92,7 +92,7 @@ fn matrix_fixture_versions_have_targets_only_on_the_additive_line() {
             checked += 1;
             continue;
         };
-        let on_line = (version >= (1, 0, 0) && version <= (1, 3, 0))
+        let on_line = ((1, 0, 0)..=(1, 3, 0)).contains(&version)
             || (version.0 == current.0 && version <= current);
         assert_eq!(
             !supported_migration_targets(file_version).is_empty(),

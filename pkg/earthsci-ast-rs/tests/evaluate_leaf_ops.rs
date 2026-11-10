@@ -159,16 +159,14 @@ fn an_op_with_no_rule_is_refused_by_name() {
     }
 
     // Evaluable-core ops with no value over scalar bindings: the build-time
-    // relational op.
-    for name in ["distinct"] {
-        let err = evaluate(&op(name, vec![n(1.0)]), &HashMap::new())
-            .expect_err("an op with no scalar rule must not evaluate");
-        let msg = err.join("; ");
-        assert!(
-            msg.contains("unevaluable_operator") && msg.contains(name),
-            "{name} must be refused by name: {msg}"
-        );
-    }
+    // relational op `distinct`.
+    let err = evaluate(&op("distinct", vec![n(1.0)]), &HashMap::new())
+        .expect_err("an op with no scalar rule must not evaluate");
+    let msg = err.join("; ");
+    assert!(
+        msg.contains("unevaluable_operator") && msg.contains("distinct"),
+        "distinct must be refused by name: {msg}"
+    );
 }
 
 #[test]

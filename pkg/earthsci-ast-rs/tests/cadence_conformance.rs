@@ -118,15 +118,14 @@ fn rust_partition_matches_golden() {
 #[test]
 fn rust_rejects_continuous_relational_fixture() {
     // The key is the bare integer `u[f]`.
-    for rel in ["tests/invalid/faq/continuous_relational_node_template.esm"] {
-        let doc = load_json(rel);
-        let model = &doc["models"]["ContinuousRelationalNode"];
-        let err = partition_model(model)
-            .expect_err("a CONTINUOUS-classified relational node must be rejected (guard 2)");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("CONTINUOUS"),
-            "{rel}: rejection should name the CONTINUOUS class, got: {msg}"
-        );
-    }
+    let rel = "tests/invalid/faq/continuous_relational_node_template.esm";
+    let doc = load_json(rel);
+    let model = &doc["models"]["ContinuousRelationalNode"];
+    let err = partition_model(model)
+        .expect_err("a CONTINUOUS-classified relational node must be rejected (guard 2)");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("CONTINUOUS"),
+        "{rel}: rejection should name the CONTINUOUS class, got: {msg}"
+    );
 }
