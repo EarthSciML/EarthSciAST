@@ -3,6 +3,7 @@
     {
       "id": "P-calendar-lib-int-exact",
       "clauses": [
+        "spec.9.8.2.calendar-fields",
         "spec.9.6.1.param-shadows-literal-substitute",
         "spec.9.6.3.bindings-cover-params"
       ],
@@ -14,6 +15,7 @@
     {
       "id": "P-calendar-lib-julian-pinned",
       "clauses": [
+        "spec.9.8.2.julian-day-formula",
         "spec.9.6.1.param-shadows-literal-substitute",
         "spec.9.6.3.bindings-cover-params"
       ],
@@ -25,6 +27,7 @@
     {
       "id": "P-calendar-lib-nan-outside",
       "clauses": [
+        "spec.9.8.2.calendar-domain",
         "spec.9.6.1.param-shadows-literal-substitute",
         "spec.9.6.3.bindings-cover-params"
       ],
@@ -36,6 +39,7 @@
     {
       "id": "P-interp-lib-searchsorted-eq",
       "clauses": [
+        "spec.9.8.1.searchsorted-least-index",
         "spec.9.6.1.ranges-binding-admissible",
         "spec.9.6.1.param-shadows-literal-substitute",
         "spec.9.6.3.bindings-cover-params"
@@ -48,6 +52,7 @@
     {
       "id": "P-interp-lib-linear-eq",
       "clauses": [
+        "spec.9.8.1.linear-contract",
         "spec.9.6.1.ranges-binding-admissible",
         "spec.9.6.1.param-shadows-literal-substitute",
         "spec.9.6.3.bindings-cover-params"
@@ -60,6 +65,7 @@
     {
       "id": "P-interp-lib-bilinear-eq",
       "clauses": [
+        "spec.9.8.1.bilinear-contract",
         "spec.9.6.1.ranges-binding-admissible",
         "spec.9.6.1.param-shadows-literal-substitute",
         "spec.9.6.3.bindings-cover-params"
@@ -72,6 +78,7 @@
     {
       "id": "P-relational-lib-argmin",
       "clauses": [
+        "spec.9.8.3.argmin-contract",
         "spec.4.2.minmax-nan-propagates",
         "spec.9.6.1.param-shadows-literal-substitute",
         "spec.9.6.3.bindings-cover-params"
@@ -84,6 +91,7 @@
     {
       "id": "P-relational-lib-argmax",
       "clauses": [
+        "spec.9.8.3.argmin-contract",
         "spec.4.2.minmax-nan-propagates",
         "spec.9.6.1.param-shadows-literal-substitute",
         "spec.9.6.3.bindings-cover-params"
@@ -96,6 +104,7 @@
     {
       "id": "P-geometry-lib-planar-ref",
       "clauses": [
+        "spec.9.8.4.overlap-planar-definition",
         "spec.9.6.1.param-shadows-literal-substitute",
         "spec.9.6.3.bindings-cover-params"
       ],
@@ -107,6 +116,7 @@
     {
       "id": "P-geometry-lib-planar-pad-a",
       "clauses": [
+        "spec.9.8.4.overlap-padding",
         "spec.9.6.1.param-shadows-literal-substitute",
         "spec.9.6.3.bindings-cover-params"
       ],
@@ -118,6 +128,7 @@
     {
       "id": "P-geometry-lib-planar-pad-b",
       "clauses": [
+        "spec.9.8.4.overlap-padding",
         "spec.9.6.1.param-shadows-literal-substitute",
         "spec.9.6.3.bindings-cover-params"
       ],
@@ -129,6 +140,7 @@
     {
       "id": "P-relational-lib-pair-key-in-range",
       "clauses": [
+        "spec.9.8.3.pair-key-contract",
         "spec.4.2.value-invention-constant-factors",
         "spec.9.6.1.param-shadows-literal-substitute",
         "spec.9.6.3.bindings-cover-params"
@@ -141,6 +153,7 @@
     {
       "id": "P-relational-lib-pair-key-nan",
       "clauses": [
+        "spec.9.8.3.pair-key-contract",
         "spec.4.2.value-invention-constant-factors",
         "spec.9.6.1.param-shadows-literal-substitute",
         "spec.9.6.3.bindings-cover-params"
@@ -153,6 +166,7 @@
     {
       "id": "P-relational-lib-edge-key-symm",
       "clauses": [
+        "spec.9.8.3.edge-key-contract",
         "spec.4.2.minmax-nan-propagates",
         "spec.9.6.1.param-shadows-literal-substitute",
         "spec.9.6.3.bindings-cover-params"
@@ -165,6 +179,7 @@
     {
       "id": "P-relational-lib-rank-of-searchsorted",
       "clauses": [
+        "spec.9.8.3.rank-of-contract",
         "spec.9.6.1.param-shadows-literal-substitute",
         "spec.9.6.3.bindings-cover-params"
       ],
@@ -176,6 +191,7 @@
     {
       "id": "P-relational-lib-argmin-where",
       "clauses": [
+        "spec.9.8.3.argmin-where-contract",
         "spec.4.2.minmax-nan-propagates",
         "spec.9.6.1.param-shadows-literal-substitute",
         "spec.9.6.3.bindings-cover-params"
@@ -188,6 +204,7 @@
     {
       "id": "P-relational-lib-argmax-where",
       "clauses": [
+        "spec.9.8.3.argmin-where-contract",
         "spec.4.2.minmax-nan-propagates",
         "spec.9.6.1.param-shadows-literal-substitute",
         "spec.9.6.3.bindings-cover-params"
@@ -251,6 +268,7 @@
     {
       "id": "P-relational-rank-of-set-eq-rank-of",
       "clauses": [
+        "spec.9.8.3.rank-of-contract",
         "spec.9.6.1.ranges-from-binding-index-set",
         "spec.9.6.3.bindings-cover-params"
       ],
@@ -262,6 +280,7 @@
     {
       "id": "P-relational-rank-of-set",
       "clauses": [
+        "spec.9.8.3.rank-of-contract",
         "spec.9.6.1.ranges-from-binding-index-set"
       ],
       "statement": "With S an index set of the members' size, the rank_of_set template on ascending real members of length below 2^53 evaluates to the reference searchsorted(x, members) for every key, NaN included.",
