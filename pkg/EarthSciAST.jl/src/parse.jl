@@ -309,6 +309,12 @@ function _parse_op_dict(data)
     args_data = _get_field(data, :args, ())
     args = Vector{ASTExpr}([expression_from_json(arg) for arg in args_data])
     flds = _parse_op_optional_fields(data, op, args)
+    # The root of an expansion a load made of raw JSON at a mount carries its
+    # template's name under `_TEMPLATE_ORIGIN_WIRE_KEY` (load provenance, never
+    # authored, never serialized): it becomes `template_origin`, so the
+    # elementwise lift sees an application (esm-spec §9.6.11).
+    origin = data isa AbstractDict ? get(data, _TEMPLATE_ORIGIN_WIRE_KEY, nothing) : nothing
+    origin isa AbstractString && return OpExpr(op, args; flds..., template_origin = String(origin))
     return OpExpr(op, args; flds...)
 end
 

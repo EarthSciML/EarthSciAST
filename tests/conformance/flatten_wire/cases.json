@@ -1,0 +1,7 @@
+{
+  "description": "Byte-for-byte goldens of the flattened system as a binding writes it out (README.md).",
+  "cases": [
+    {"name": "template_array_args_coupled", "fixture": "../template_array_args/coupled/template.esm", "golden": "golden/template_array_args_coupled.json"},
+    {"name": "lift_inferred_operand", "fixture": "fixtures/lift_inferred_operand.esm", "golden": "golden/lift_inferred_operand.json"}
+  ]
+}

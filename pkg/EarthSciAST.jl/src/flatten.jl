@@ -1590,6 +1590,12 @@ function flatten(
         continuous_events, discrete_events
     )
 
+    # Step 9: write each elementwise template application (esm-spec §9.6.11)
+    # as its per-cell `faq`. See `_lift_elementwise_applications_flat!`.
+    _lift_elementwise_applications_flat!(
+        equations, contribs, states, params, observeds, template_registry
+    )
+
     return FlattenedSystem(
         ivs, states, params, observeds,
         equations, continuous_events, discrete_events,

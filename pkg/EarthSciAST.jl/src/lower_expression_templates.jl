@@ -752,6 +752,14 @@ function _expand_refs_walk(
             if expand_pred(newnode)
                 body = _expand_apply(newnode, named, scope)
                 res = _expand_refs_walk(body, named, scope, expand_pred, memo)
+                # While marking (a mount's leaf, expanded at load), the root of
+                # the expansion records that it came from an application
+                # (esm-spec §9.6.11), as `_expand_expr_refs` does on typed trees.
+                if _marking_template_origins() && _is_object(res)
+                    marked = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(res))
+                    marked[_TEMPLATE_ORIGIN_WIRE_KEY] = string(_raw_get(newnode, "name"))
+                    res = marked
+                end
             else
                 res = newnode
             end
@@ -2024,6 +2032,48 @@ const _ExpandMemo = Union{Nothing, Dict{Tuple{String, String}, OpExpr}}
 const _MARK_TEMPLATE_ORIGINS_KEY = :earthsciast_mark_template_origins
 
 _marking_template_origins() = get(task_local_storage(), _MARK_TEMPLATE_ORIGINS_KEY, false)::Bool
+
+# The key a raw-JSON expansion made while marking (`_expand_refs_walk`, at a
+# mount) carries its template's name under, until the expression parser turns it
+# into `OpExpr.template_origin`. Load provenance: no document writes it, and
+# serialization never emits `template_origin`.
+const _TEMPLATE_ORIGIN_WIRE_KEY = "__esm_template_origin"
+
+# `node` without any `_TEMPLATE_ORIGIN_WIRE_KEY`: the document as authored and
+# expanded, for the schema check, which the private key would fail. Copies only
+# the containers on a path to a mark; returns `node` itself when it holds none.
+function _strip_template_origins(node, memo::IdDict{Any, Any} = IdDict{Any, Any}())
+    if _is_object(node)
+        r = get(memo, node, _JSON_DESCEND)
+        r === _JSON_DESCEND || return r
+        changed = haskey(node, _TEMPLATE_ORIGIN_WIRE_KEY)
+        buf = OrderedDict{String, Any}()
+        for (k, v) in pairs(node)
+            string(k) == _TEMPLATE_ORIGIN_WIRE_KEY && continue
+            rv = _strip_template_origins(v, memo)
+            rv === v || (changed = true)
+            buf[string(k)] = rv
+        end
+        res = changed ? buf : node
+        memo[node] = res
+        return res
+    elseif _is_array(node)
+        _may_hold_object(node) || return node
+        r = get(memo, node, _JSON_DESCEND)
+        r === _JSON_DESCEND || return r
+        changed = false
+        buf = Vector{Any}(undef, length(node))
+        for (i, v) in enumerate(node)
+            rv = _strip_template_origins(v, memo)
+            rv === v || (changed = true)
+            buf[i] = rv
+        end
+        res = changed ? buf : node
+        memo[node] = res
+        return res
+    end
+    return node
+end
 
 _expand_expr_refs(e::VarExpr, reg, ::_TemplateSites, ::_ExpandMemo = nothing) = e
 _expand_expr_refs(e::NumExpr, reg, ::_TemplateSites, ::_ExpandMemo = nothing) = e
