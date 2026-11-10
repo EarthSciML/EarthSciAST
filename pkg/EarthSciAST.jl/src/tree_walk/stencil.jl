@@ -1094,6 +1094,38 @@ function _scan_refs_idxset(e::OpExpr, idxset::Set{String}, memo::IdDict{OpExpr, 
     return false
 end
 
+# The visited set of one `_branch_key!` walk. Each walk takes a new token and a
+# node counts as visited when its entry holds the current token, so the table
+# keeps its size across walks (emptying an `IdDict` shrinks it back to its
+# smallest size, and the next walk would regrow and rehash it), and starting a
+# walk allocates one small object. Which nodes a walk enters, and in which
+# order, does not depend on the reuse.
+#
+# A walk nested inside another (a producer's body gathered under its own
+# bindings) needs a set of its own while the outer walk is still live:
+# `_seen_nested!` hands out the one set kept for that depth, restarted, so the
+# nested walks at a depth reuse one table across bindings, cells and
+# contracted-index tuples.
+mutable struct _SeenSet
+    d::IdDict{OpExpr, Any}
+    tok::Base.RefValue{Nothing}
+    nested::Union{Nothing, _SeenSet}
+end
+_SeenSet() = _SeenSet(IdDict{OpExpr, Any}(), Ref(nothing), nothing)
+_seen_restart!(s::_SeenSet) = (s.tok = Ref(nothing); s)
+function _seen_nested!(s::_SeenSet)
+    c = s.nested
+    c === nothing && (c = s.nested = _SeenSet())
+    return _seen_restart!(c)
+end
+# Whether `e` was visited in this walk; marks it visited if not.
+@inline function _seen_visit!(s::_SeenSet, e::OpExpr)
+    tok = s.tok
+    get(s.d, e, nothing) === tok && return true
+    s.d[e] = tok
+    return false
+end
+
 # Per-cell branch signature: the `index(makearray)` region selections a cell
 # takes, in traversal order. Cells with equal signatures resolve to the same
 # spine template (the ONLY per-cell structural branch is makearray region choice;
@@ -1120,13 +1152,12 @@ end
 function _branch_key!(
         io::IOBuffer, e, idxset::Set{String}, idx_env, const_arrays,
         memo::IdDict{OpExpr, Bool},
-        seen::IdDict{OpExpr, Nothing} = IdDict{OpExpr, Nothing}(),
+        seen::_SeenSet = _SeenSet(),
         segs::Dict{Any, Int} = Dict{Any, Int}()
     )
     e isa OpExpr || return
     _refs_idxset(e, idxset, memo) || return
-    haskey(seen, e) && return
-    seen[e] = nothing
+    _seen_visit!(seen, e) && return
     if e.op == "index" && !isempty(e.args)
         fa = e.args[1]
         if fa isa OpExpr && (fa.op == "makearray" || _is_faq_op(fa.op))
@@ -1196,7 +1227,7 @@ end
 function _branch_key_pushdown!(
         io::IOBuffer, fa::OpExpr, kargs::Vector{ASTExpr},
         idxset::Set{String}, idx_env, const_arrays,
-        memo::IdDict{OpExpr, Bool}, seen::IdDict{OpExpr, Nothing},
+        memo::IdDict{OpExpr, Bool}, seen::_SeenSet,
         segs::Dict{Any, Int}
     )
     for a in fa.args
@@ -1216,7 +1247,7 @@ end
 function _branch_key_indexed!(
         io::IOBuffer, producer::OpExpr, kargs::Vector{ASTExpr},
         idxset::Set{String}, idx_env, const_arrays,
-        memo::IdDict{OpExpr, Bool}, seen::IdDict{OpExpr, Nothing},
+        memo::IdDict{OpExpr, Bool}, seen::_SeenSet,
         segs::Dict{Any, Int}
     )
     if producer.op == "makearray"
@@ -1350,7 +1381,7 @@ function _branch_key_indexed!(
         bmemo = any(added) ? IdDict{OpExpr, Bool}() : memo
         _branch_key!(
             sub, body, idxset, idx_env, const_arrays, bmemo,
-            IdDict{OpExpr, Nothing}(), segs
+            _seen_nested!(seen), segs
         )
     else
         # FRESH `_refs_idxset` memo. That memo caches, per node, whether the node
@@ -1369,7 +1400,7 @@ function _branch_key_indexed!(
             print(sub, 'C')
             _branch_key!(
                 sub, body, idxset, idx_env, const_arrays, cmemo,
-                IdDict{OpExpr, Nothing}(), segs
+                _seen_nested!(seen), segs
             )
         end
     end
@@ -1676,9 +1707,17 @@ struct _LaneEval{M}
 end
 
 # `nothing` when the recipe (or one of its subscripts) has no compiled form.
+#
+# `ixmemo`, when given, holds the compiled form of every subscript expression
+# already compiled under the same `idx_names` and `const_arrays` (one that has
+# none is compiled again when asked). An `_IdxNode` is immutable and `_ix_eval` reads it
+# without writing, so evaluators share one; the lanes of every branch template
+# of an equation subscript with the same expression objects, which this
+# compiles once per equation rather than once per template and lane.
 function _lane_evaluator(
         rec::_LaneRecipe, idx_names::Vector{String}, var_map,
-        const_arrays::AbstractDict
+        const_arrays::AbstractDict,
+        ixmemo::Union{Nothing, IdDict{OpExpr, Any}} = nothing
     )
     if rec.kind == LANE_LOOPLIT
         pos = findfirst(==(rec.loop_name), idx_names)
@@ -1691,9 +1730,13 @@ function _lane_evaluator(
     rec.kind == LANE_EXPRTBL && return nothing
     args = _IdxNode[]
     for a in rec.idx_args
-        x = _ix_compile(a, idx_names, const_arrays)
-        x === nothing && return nothing
-        push!(args, x)
+        x = ixmemo === nothing || !(a isa OpExpr) ? nothing : get(ixmemo, a, nothing)
+        if x === nothing
+            x = _ix_compile(a, idx_names, const_arrays)
+            x === nothing && return nothing
+            ixmemo === nothing || !(a isa OpExpr) || (ixmemo[a] = x)
+        end
+        push!(args, x::_IdxNode)
     end
     n = length(args)
     flat = Float64[]
@@ -1835,10 +1878,17 @@ function _build_branch_template(
     )::_StencilBranch
     _BENCH_ON[] && (_BENCH_BRANCH_TEMPLATES[] += 1)   # §12 spine-template counter (off by default)
     rs = _LaneRecipe[]
+    # A fresh spine memo (its entries name this template's lane recipes), but
+    # the prototype's loop-index memo: whether a node reads a loop index is a
+    # function of the node and `idxset` alone, and every template of the
+    # equation walks the same body under the same `idxset`, so the answers one
+    # template computes hold for the next. The per-cell branch-key walk
+    # (`_cell_bkey!`) fills and reads the same memo.
     ctx = _StencilCtx(
         ctx_proto.idxset, rs, ctx_proto.idx_env,
         ctx_proto.array_var_info, ctx_proto.const_arrays,
-        ctx_proto.pgather, ctx_proto.tctx
+        ctx_proto.pgather, IdDict{OpExpr, ASTExpr}(), ctx_proto.vsmemo,
+        _SubCallSite[], ctx_proto.tctx, false
     )
     spine = _stencilize(body, ctx)
     # Attach each state gather's affine slot map (cold, once per branch) so the hot
