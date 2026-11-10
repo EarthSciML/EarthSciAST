@@ -61,6 +61,7 @@ func TestRemovedOpsAreRefusedAtLoad(t *testing.T) {
 		"polygon_intersection_area": `{"op": "polygon_intersection_area", "manifold": "spherical", "args": ["x", "x"]}`,
 		"argmin":                    `{"op": "argmin", "arg": "g", "expr": "x", "ranges": {"g": [1, 3]}, "args": ["x"]}`,
 		"argmax":                    `{"op": "argmax", "arg": "g", "expr": "x", "ranges": {"g": [1, 3]}, "args": ["x"]}`,
+		"aggregate":                 `{"op": "aggregate", "output_idx": [], "expr": "x", "ranges": {"g": [1, 3]}, "args": []}`,
 	}
 	for name, removedVersion := range removedOps {
 		if removedVersion != "2.0.0" {
@@ -141,7 +142,7 @@ func TestRemovedOpsSpareKeptNames(t *testing.T) {
 		if err := checkRemovedConstructs(removedOpDoc("2.0.0", node), ""); err != nil {
 			t.Errorf("%s: refused: %v", node, err)
 		}
-		_, _, removed, _ := scanOpAliases(removedOpDoc("2.0.0", node))
+		removed, _ := scanOps(removedOpDoc("2.0.0", node))
 		if removed != "" {
 			t.Errorf("%s: scan reported removed op %q", node, removed)
 		}

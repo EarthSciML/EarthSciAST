@@ -276,7 +276,7 @@ func (s *structuralScan) checkFAQBareArrayOperands(expr Expression, shaped map[s
 			return
 		}
 		inner := bound
-		if node.Op == opAggregate || node.Op == "aggregate" {
+		if node.Op == opAggregate {
 			inner = make(map[string]bool)
 			for k := range bound {
 				inner[k] = true

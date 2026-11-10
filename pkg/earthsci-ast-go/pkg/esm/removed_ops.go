@@ -6,8 +6,9 @@ package esm
 // with its `table_lookup` op, `skolem`, `rank`, the geometry leaves
 // `intersect_polygon` / `polygon_intersection_area` and the `argmin` /
 // `argmax` op forms; the standard-library templates (`esm:std/...`) replace
-// them. A removed op's name is still a well-formed identifier, which esm-spec
-// §4.2 would admit as an OPEN rewrite-target op, so a document using one is
+// them. `aggregate`, the pre-1.1.0 spelling of `faq`, is removed with them.
+// A removed op's name is still a well-formed identifier, which esm-spec §4.2
+// would admit as an OPEN rewrite-target op, so a document using one is
 // refused BY NAME at the wire boundary (prepareDocumentOps), before schema
 // validation and before the rewrite-target tier can see it. `arrayop`, removed
 // at 0.8.0, goes through the same check.
@@ -28,6 +29,7 @@ const migrateCommand = "python -m earthsci_ast.migrate"
 // removedOps maps each removed expression op to the esm version that removed it.
 var removedOps = map[string]string{
 	"arrayop":                   "0.8.0",
+	"aggregate":                 "2.0.0",
 	"fn":                        "2.0.0",
 	"table_lookup":              "2.0.0",
 	"skolem":                    "2.0.0",
@@ -68,6 +70,10 @@ func newRemovedOpError(name, path string, isField bool) *removedOpError {
 		msg = fmt.Sprintf("the `%s` block at %s was removed at esm 2.0.0; a table is now "+
 			"`const` data read by the `linear` / `bilinear` templates of esm:std/interp.esm. "+
 			"Convert the document with `%s` (MIGRATION.md)", name, where, migrateCommand)
+	case name == "aggregate":
+		msg = fmt.Sprintf("`\"op\": \"aggregate\"` at %s, the pre-1.1.0 spelling of `faq`, was "+
+			"removed at esm 2.0.0; spell it `\"op\": \"faq\"`. Convert the document with `%s` "+
+			"(MIGRATION.md)", where, migrateCommand)
 	case name == "arrayop":
 		msg = fmt.Sprintf("`\"op\": \"arrayop\"` at %s was removed at esm 0.8.0 and is not a "+
 			"deprecated alias; use `\"op\": \"faq\"` (the Functional Aggregate Query node). "+
@@ -81,7 +87,7 @@ func newRemovedOpError(name, path string, isField bool) *removedOpError {
 }
 
 // checkRemovedConstructs is the wire-boundary check of one document's JSON
-// text. removedOp is the first removed op scanOpAliases saw in the text ("" for
+// text. removedOp is the first removed op scanOps saw in the text ("" for
 // none). The document is decoded only when there is something to locate.
 func checkRemovedConstructs(jsonStr, removedOp string) error {
 	if removedOp == "" && !strings.Contains(jsonStr, `"`+removedFunctionTables+`"`) {
