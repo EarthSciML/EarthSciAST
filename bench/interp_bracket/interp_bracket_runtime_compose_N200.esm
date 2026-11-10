@@ -166,7 +166,7 @@
       "i_lo",
       "n"
      ],
-     "description": "interp.linear(table, axis, x) for a run-time table and axis of n entries, given i_lo = bracket_index(axis, x, n).",
+     "description": "Linear interpolation of table over axis at x, for a run-time table and axis of n entries, given i_lo = bracket_index(axis, x, n).",
      "body": {
       "op": "ifelse",
       "args": [

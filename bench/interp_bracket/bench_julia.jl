@@ -2,7 +2,6 @@
 #
 # Spellings, per N (the documents beside this file, written by generate.py):
 #
-#   fn        interp_bracket_const_fn_N<n>       the hand-written interp.linear form
 #   unfused   interp_bracket_const_compose_N<n>  the composition, count rewrite off
 #   fused     interp_bracket_const_compose_N<n>  the composition, count rewrite on
 #   rt_unfused / rt_fused                        the run-time-axis composition,
@@ -11,7 +10,7 @@
 # For each it times one right-hand-side call (median of many, the query moved
 # every call so no time-cadence slot is reused) and a Tsit5 solve over
 # [0, TEND] s, interleaving the spellings within each repeat, and checks that
-# every spelling's trajectory is bit-identical to the fn spelling's.
+# every spelling's trajectory is bit-identical to the unfused one's.
 #
 # Usage (an environment with EarthSciAST, JSON3 and OrdinaryDiffEqTsit5):
 #
@@ -66,7 +65,6 @@ states(sol, vm) = Dict(
 
 for N in (isempty(ARGS) ? [59, 200] : parse.(Int, ARGS))
     spell = [
-        ("fn", "interp_bracket_const_fn_N$N.esm", :native),
         ("unfused", "interp_bracket_const_compose_N$N.esm", NOFOLD),
         ("fused", "interp_bracket_const_compose_N$N.esm", :native),
         ("rt_unfused", "interp_bracket_runtime_compose_N$N.esm", NOFOLD),
@@ -98,7 +96,7 @@ for N in (isempty(ARGS) ? [59, 200] : parse.(Int, ARGS))
             else
                 same = keys(st) == keys(ref) && all(all(st[k] .=== ref[k]) for k in keys(ref))
                 @printf(
-                    "N=%d %-10s trajectory bit-identical to fn: %s (%d rhs calls)\n",
+                    "N=%d %-10s trajectory bit-identical to unfused: %s (%d rhs calls)\n",
                     N, lab, same, sol.stats.nf
                 )
             end
