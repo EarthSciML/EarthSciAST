@@ -264,8 +264,8 @@ class ESMEditor:
         # Delegate to the canonical reference walker (:func:`substitute.substitute`),
         # which recurses through EVERY expression-bearing child slot via
         # ``expr_walk.map_children`` — aggregate bodies, ``filter``/``key``,
-        # integral ``lower``/``upper``, ``makearray`` values, and ``table_lookup``
-        # axes — not just ``args``. The previous args-only recursion silently
+        # integral ``lower``/``upper``, and ``makearray`` values — not just
+        # ``args``. The previous args-only recursion silently
         # missed occurrences in those slots (the exact bug class expr_walk exists
         # to end), so ``rename_variable`` left stale references behind.
         return substitute(expr, substitutions)

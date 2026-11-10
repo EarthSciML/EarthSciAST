@@ -101,11 +101,11 @@ describe('pointwise lift gathers shaped operands by index-set name (esm-spec §4
     expect(run).toThrow(/index set 'z'/)
   })
 
-  // A shaped variable sharing no index set with the grid, passed to a closed
-  // function, is its whole-array argument and stays bare; a grid operand beside
-  // it is still read per cell.
-  it('leaves a whole-array fn argument bare', () => {
-    const call = { op: 'fn', name: 'interp.searchsorted', args: ['p', 'table'] } as ExpressionNode
+  // A shaped variable sharing no index set with the grid, passed to a
+  // non-elementwise op, is its whole-array argument and stays bare; a grid
+  // operand beside it is still read per cell.
+  it('leaves a whole-array argument of a non-elementwise op bare', () => {
+    const call = { op: 'lookup_profile', args: ['p', 'table'] } as ExpressionNode
     const lifted = divisor(lift2d(over(call), { p: ['x'], table: ['z'] })) as ExpressionNode
     expect(lifted.args![0]).toEqual({ op: 'index', args: ['p', 'i'] })
     expect(lifted.args![1]).toBe('table')

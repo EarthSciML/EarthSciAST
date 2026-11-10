@@ -172,7 +172,7 @@ func ApplyDAEContract(file *ESMFile) (DAEInfo, error) {
 // not occur anywhere in `f` — and "anywhere" now genuinely means anywhere,
 // because Contains walks EVERY expression-bearing field (audit G1). Before that
 // fix, an occurrence hidden in a sidecar field (`aggregate.expr`, an integral
-// bound, a `table_lookup` axis, …) was invisible: the guard passed, the
+// bound, …) was invisible: the guard passed, the
 // defining equation was DELETED, and the surviving equations went on referencing
 // an now-undefined variable — a silently corrupted model returned with err=nil
 // (audit G2).

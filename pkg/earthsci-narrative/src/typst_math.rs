@@ -82,22 +82,16 @@ fn unary_minus_needs_parens(operand: &Expr) -> bool {
 const STRUCTURAL_OPS: &[&str] = &[
     "const",
     "true",
-    "fn",
     "enum",
     "index",
     "broadcast",
     "integral",
-    "table_lookup",
     "apply_expression_template",
     "makearray",
     "reshape",
     "transpose",
     "concat",
-    "intersect_polygon",
-    "polygon_intersection_area",
     "faq",
-    "argmin",
-    "argmax",
 ];
 
 fn render(expr: &Expr, parent_prec: i32) -> String {

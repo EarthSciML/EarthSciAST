@@ -244,8 +244,8 @@ func modelExpressionSites(model Model, prefix string) []modelExpressionSite {
 //
 // Recursion is delegated to FreeVariables, which routes through the shared
 // field-preserving walker, so EVERY expression-bearing field is covered —
-// aggregate `expr`/`filter`, integral bounds, `makearray` values,
-// `table_lookup` axes, and the rest — not just `args`.
+// aggregate `expr`/`filter`, integral bounds, `makearray` values, and the
+// rest — not just `args`.
 //
 // A SCOPED reference like "Model.Sub.var" references the variable when one of
 // its dot-separated segments matches exactly; substring matching would falsely
@@ -580,7 +580,7 @@ func renameInRawComponent(raw map[string]any, bindings map[string]Expression) (m
 // The value is normalized to the typed Expression union, substituted with the
 // package's own field-preserving substituter, and rendered back to the raw
 // decoded form — so the rewrite covers every expression-bearing field (an
-// aggregate's `expr`/`filter`, integral bounds, a `table_lookup`'s axes, …)
+// aggregate's `expr`/`filter`, integral bounds, …)
 // rather than only `args`, and the result is comparable to its neighbours.
 func renameRawExpr(value any, bindings map[string]Expression) (any, bool, error) {
 	before, err := json.Marshal(value)
@@ -1149,10 +1149,6 @@ func Merge(a, b ESMFile) ESMFile {
 	out.IndexSets = copyMap(a.IndexSets)
 	for k, v := range b.IndexSets {
 		out.IndexSets[k] = v
-	}
-	out.FunctionTables = copyMap(a.FunctionTables)
-	for k, v := range b.FunctionTables {
-		out.FunctionTables[k] = v
 	}
 	out.Coupling = append(copySlice(a.Coupling), b.Coupling...)
 

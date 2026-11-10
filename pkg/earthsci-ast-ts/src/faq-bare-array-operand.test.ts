@@ -13,7 +13,7 @@ const faqDir = join(fixturesDir(), 'invalid', 'faq')
 
 function faqBareDoc(expr: unknown): string {
   return JSON.stringify({
-    esm: '1.2.0',
+    esm: '2.0.0',
     metadata: { name: 't', authors: ['t'] },
     index_sets: { a_rows: { kind: 'interval', size: 2 } },
     models: {

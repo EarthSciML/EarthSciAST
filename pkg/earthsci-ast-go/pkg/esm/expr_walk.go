@@ -69,11 +69,10 @@ func asExprNode(e Expression) (ExprNode, bool) {
 // mutated). All other fields — the operator name and the structural,
 // non-Expression slots — ride through untouched:
 //
-//	Op, Wrt, Dim, Fn, Var, Name, Value, Table, Manifold, Reduce, Semiring,
-//	Distinct, Arg, Shape, Perm, Axis, OutputIdx, Label, ID, ExpectCadence
+//	Op, Wrt, Dim, Fn, Var, Name, Value, Units, Reduce, Semiring, Distinct,
+//	Shape, Perm, Axis, OutputIdx, ID, ExpectCadence
 //
-// (Wrt/Dim/Fn/Var/Name/Table/Manifold/Reduce/Semiring/Arg/Label/ID/
-// ExpectCadence are *string, Distinct a *bool, Value/Axis raw literals,
+// (Wrt/Dim/Fn/Var/Name/Units/Reduce/Semiring/ID/ExpectCadence are *string, Distinct a *bool, Value/Axis raw literals,
 // Shape/Perm/OutputIdx structural index slices — none carry child Expressions,
 // so f is intentionally NOT applied to them.)
 //
@@ -84,11 +83,9 @@ func asExprNode(e Expression) (ExprNode, bool) {
 //	Join       []interface{}          — each element (aggregate join clauses)
 //	Lower      interface{}            — scalar (integral lower bound)
 //	Upper      interface{}            — scalar (integral upper bound)
-//	Output     interface{}            — scalar (table_lookup output selector)
-//	Expr       interface{}            — scalar (aggregate/argmin/argmax body)
+//	Expr       interface{}            — scalar (aggregate body)
 //	Filter     interface{}            — scalar (aggregate predicate)
 //	Key        interface{}            — scalar (aggregate grouping key)
-//	TableAxes  map[string]Expression  — each value (keys preserved)
 //	Attrs      map[string]interface{} — each value (keys preserved)
 //	Bindings   map[string]interface{} — each value (keys preserved)
 //	Ranges     map[string]interface{} — each value (keys preserved)
@@ -156,7 +153,6 @@ func mapExprChildren(node ExprNode, f func(Expression) (Expression, error)) (Exp
 	}{
 		{node.Lower, &out.Lower},
 		{node.Upper, &out.Upper},
-		{node.Output, &out.Output},
 		{node.Expr, &out.Expr},
 		{node.Filter, &out.Filter},
 		{node.Key, &out.Key},
@@ -184,17 +180,6 @@ func mapExprChildren(node ExprNode, f func(Expression) (Expression, error)) (Exp
 	}
 
 	// --- map fields (keys preserved) ---
-	if node.TableAxes != nil {
-		nt := make(map[string]Expression, len(node.TableAxes))
-		for _, k := range sortedKeys(node.TableAxes) {
-			var r Expression
-			if r, err = f(node.TableAxes[k]); err != nil {
-				return out, err
-			}
-			nt[k] = r
-		}
-		out.TableAxes = nt
-	}
 	if out.Attrs, err = mapStrIface(node.Attrs); err != nil {
 		return out, err
 	}
@@ -252,9 +237,7 @@ type exprRefChild struct {
 //
 //   - "attrs"   — scheme parameters of a rewrite-target op ({"scheme": "upwind"}).
 //     The string is a scheme NAME, not a variable.
-//   - "output"  — a table_lookup's output selector: the NAME of one of the table's
-//     declared outputs.
-//   - "ranges"  — aggregate/argmin loop BOUNDS. Per esm-spec §9.7.6 these are
+//   - "ranges"  — aggregate loop BOUNDS. Per esm-spec §9.7.6 these are
 //     LOAD-TIME index/metaparameter expressions ({"from": "faces"}, [2, N-1]),
 //     resolved against the index-set and metaparameter namespaces at load, not
 //     against the runtime variable namespace.
@@ -277,7 +260,7 @@ type exprRefChild struct {
 // exactly that: refs + non-ref slots == every child the keystone walks. A NEW
 // expression-bearing field added to ExprNode therefore cannot be silently skipped
 // by reference integrity — it must be classified as one or the other.
-var exprRefNonRefSlots = []string{"attrs", "output", "ranges", "join", "regions"}
+var exprRefNonRefSlots = []string{"attrs", "ranges", "join", "regions"}
 
 // exprRefChildren enumerates every child Expression of an operator node that may
 // hold a VARIABLE REFERENCE, each tagged with its JSON-Pointer segment.
@@ -287,8 +270,8 @@ var exprRefNonRefSlots = []string{"attrs", "output", "ranges", "join", "regions"
 // keystone (a rewriter) does not carry. Reference integrity walks THIS, so the
 // sidecars are covered structurally rather than by a hand-rolled descent that
 // happened to list some fields and forget others — which is exactly how an
-// undefined name inside an aggregate's `expr`, an integral bound, a makearray
-// `values`/`regions` entry or a `table_lookup` axis stayed invisible.
+// undefined name inside an aggregate's `expr`, an integral bound or a makearray
+// `values`/`regions` entry stayed invisible.
 func exprRefChildren(node ExprNode) []exprRefChild {
 	var out []exprRefChild
 	add := func(path string, child Expression) {
@@ -308,9 +291,6 @@ func exprRefChildren(node ExprNode) []exprRefChild {
 	add("/key", node.Key)
 	for i, v := range node.Values {
 		add(fmt.Sprintf("/values/%d", i), v)
-	}
-	for _, k := range sortedKeys(node.TableAxes) {
-		add("/axes/"+k, node.TableAxes[k])
 	}
 	for _, k := range sortedKeys(node.Bindings) {
 		add("/bindings/"+k, node.Bindings[k])
@@ -410,13 +390,12 @@ func VariableExprSites(mv *ModelVariable) []VariableExprSite {
 // works on a clone (cloneForExprLowering).
 //
 // It is the DOCUMENT-level counterpart of mapExprChildren, and exists for the
-// same reason: the lowering passes (lower_enums.go, lower_table_lookup.go) each
-// need "every expression in the file" and, spelled separately, would each grow a
-// different hole. An `enum` inside an event already survived lowering that way
+// same reason: a lowering pass (lower_enums.go) needs "every expression in the
+// file" and, spelled separately, would grow a different hole. An `enum` inside an event already survived lowering that way
 // once (audit G15).
 //
 // f is applied to the root of each position only; descending into the tree is
-// f's own job — both callers recurse through mapExprChildren.
+// f's own job — the caller recurses through mapExprChildren.
 //
 // WARNING — MAINTENANCE INVARIANT: a NEW Expression-bearing position added to
 // Model / ReactionSystem / CouplingEntry MUST be added here, or every pass built

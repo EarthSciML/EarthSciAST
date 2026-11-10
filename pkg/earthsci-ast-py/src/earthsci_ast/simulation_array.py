@@ -47,7 +47,6 @@ from .flatten import (
 from .index_alignment import align_expression, axis_sizes, declared_axes
 from .numpy_interpreter import (
     ConstArrayOutOfRangeError,
-    DegenerateOperandError,
     EvalContext,
     NumpyInterpreterError,
     _RaggedRange,
@@ -937,9 +936,8 @@ def _expr_referenced_names(expr: Expr) -> set[str]:
     references. Traversal goes through :func:`earthsci_ast.expr_walk.iter_children`,
     the single canonical child enumeration, so EVERY expression-bearing slot is
     covered — ``args``, the integral bounds ``lower`` / ``upper``, the aggregate
-    ``expr`` body, the join ``filter`` / ``key`` predicates, ``values``, and the
-    ``table_lookup`` ``table_axes`` — and a dependency edge hidden in a bound or
-    a lookup axis is never dropped.
+    ``expr`` body, the join ``filter`` / ``key`` predicates, and ``values`` — and
+    a dependency edge hidden in a bound is never dropped.
     """
     refs: set[str] = set()
     stack: list[Any] = [expr]
@@ -1030,7 +1028,7 @@ def _time_varying_observeds(
     state variable, ``t``, or another already-seen time-varying observed.
     The complement is constant along the trajectory and can be evaluated once
     and broadcast instead of re-sampled at every output node (the common case
-    for a fixed-geometry clip/area whose inputs are constants/parameters).
+    for a fixed-geometry area whose inputs are constants/parameters).
     """
     state_and_t = set(state_names) | {"t"}
     varying: set[str] = set()
@@ -1110,15 +1108,10 @@ def _materialize_observeds(
 ) -> None:
     """Evaluate observed assignments into ``ctx`` in dependency order.
 
-    Array-valued observeds (e.g. a clipped polygon ring) are registered in
-    ``ctx.derived_rings`` under their namespaced name so a downstream aggregate
-    body can ``index`` into them by name; an ``intersect_polygon`` body
-    additionally self-registers its clip ring under its node ``id`` (RFC §8.1),
-    which is how a ``kind:"derived"`` index set resolves its data-dependent
-    extent. Scalar observeds go to ``ctx.observed_values`` for bare-name
-    resolution. This is what lets a geometry model — ``clip = intersect_polygon``,
-    ``area = sum_product FAQ(clip)``, ``D(tracer) = -area·tracer`` — integrate
-    end-to-end through :func:`simulate` (RFC §8.1; CONFORMANCE_SPEC.md §5.8).
+    Array-valued observeds are registered in ``ctx.derived_rings`` under their
+    namespaced name so a downstream aggregate body can ``index`` into them by
+    name. Scalar observeds go to ``ctx.observed_values`` for bare-name
+    resolution.
 
     ``skip_unresolved`` silently drops an observed whose body cannot be
     evaluated — a DEAD observed nothing live reads, e.g. a passive-axis
@@ -1150,7 +1143,7 @@ def _materialize_observeds(
             try:
                 val = _materialize_one_observed(name, rhs, ctx)
             except (NumpyInterpreterError, RecurrenceError) as exc:
-                if isinstance(exc, (ConstArrayOutOfRangeError, DegenerateOperandError)):
+                if isinstance(exc, ConstArrayOutOfRangeError):
                     raise
                 if skip_reasons is not None:
                     skip_reasons[name] = str(exc)
@@ -1216,9 +1209,8 @@ class BuildInspection:
       reference), evaluated once at build. This is the official inspection
       surface for conformance runners that gate per-pair regridding values
       (CONFORMANCE_SPEC §5.8).
-    * ``const_arrays`` — the build-time array registry: the value-invention
-      join-key buffers (broad-phase bins) and provider-/loader-injected input
-      arrays.
+    * ``const_arrays`` — the build-time array registry: the provider-/
+      loader-injected input arrays.
     * ``observed_exprs`` — the dependency-ordered observed substitution map
       (flattened name → RHS expression), exactly as the RHS driver
       materializes it each step.
@@ -1275,8 +1267,6 @@ class _NumpyRhsBuild:
     # downstream, so a reader of a missing name (prepare.observed_field) uses
     # this to report the ROOT cause instead of the far-downstream symptom.
     static_skip_reasons: dict[str, str] = field(default_factory=dict)
-    join_key_buffers: dict[str, np.ndarray] = field(default_factory=dict)
-    join_key_index_sets: dict[str, str] = field(default_factory=dict)
     # Keyed-factor scope map (bare ragged offsets/values factor → in-scope
     # variable; see numpy_interpreter.ragged_factor_scope). Threaded into every
     # EvalContext this build spawns. Empty without ragged index sets.
@@ -1290,12 +1280,12 @@ class _NumpyRhsBuild:
     # that declares no per-variable precision.
     element_types: dict[str, str] = field(default_factory=dict)
     # Value-invention derived-index-set extents (RFC §6.1), keyed by the producing
-    # Did this system declare value-invention producer states (broad-phase bins /
-    # candidate-set membership)? Such a system legitimately has an EMPTY ODE state
+    # Did this system declare value-invention producer states (candidate-set
+    # membership)? Such a system legitimately has an EMPTY ODE state
     # vector — the producers are materialized at setup and dropped from the ODE —
     # so `solve` must not read `total_size == 0` as "nothing to integrate".
     has_value_invention_states: bool = False
-    # aggregate's `id` (the `from_faq` target): the build-time skolem/distinct/rank
+    # aggregate's `id` (the `from_faq` target): the build-time `distinct`
     # front-door's distinct-set cardinality, materialized ONCE at setup by
     # :func:`value_invention.materialize_value_invention` and threaded into every
     # EvalContext as :attr:`EvalContext.derived_extents` so a `kind:"derived"` set
@@ -1672,24 +1662,14 @@ def _resolve_index_set_shape(
 # :mod:`earthsci_ast.simulation` facade.
 
 
-def _detect_value_invention_states(
-    flat: FlattenedSystem,
-) -> tuple[set[str], list[tuple[str, ExprNode, str | None]]]:
-    """Detect value-invention state vars written by a skolem / distinct aggregate.
-
-    Returns ``(vi_var_names, bin_specs)`` where ``bin_specs`` is a list of
-    ``(var_name, aggregate_node, index_set_name)`` for the per-cell skolem MAP
-    buffers (the broad-phase bins ``rg_src_bin`` / ``rg_tgt_bin``) a downstream
-    ``join.on`` gates on. A ``distinct`` producer (the candidate-set membership)
-    is a VI var too — dropped from the ODE — but needs no build-time buffer here
-    (nothing ranges over its derived set for surface_heat_flux). Mirrors
+def _detect_value_invention_states(flat: FlattenedSystem) -> set[str]:
+    """The value-invention state vars: those written by a ``distinct`` aggregate
+    (a candidate-set membership producer), dropped from the ODE. Mirrors
     ``value_invention._vi_node_kind``, working directly on the flattened
     ExprNodes, which preserve ``distinct`` / ``key`` / ``join`` (unlike a
-    serialized round-trip). Non-fixture-specific: any state assigned by a skolem
-    or distinct aggregate is a build-time relational output, not an ODE state.
+    serialized round-trip).
     """
     vi_var_names: set[str] = set()
-    bin_specs: list[tuple[str, ExprNode, str | None]] = []
     states = flat.state_variables
     for eq in flat.equations:
         base = _vi_lhs_base(eq.lhs)
@@ -1698,20 +1678,13 @@ def _detect_value_invention_states(
         rhs = eq.rhs
         if not (isinstance(rhs, ExprNode) and rhs.op == "faq"):
             continue
-        skolem_body = isinstance(rhs.expr, ExprNode) and rhs.expr.op == "skolem"
-        skolem_key = isinstance(rhs.key, ExprNode) and rhs.key.op == "skolem"
         if rhs.distinct is True:
             vi_var_names.add(base)  # candidate-set producer — drop from ODE
-        elif skolem_body or skolem_key:
-            vi_var_names.add(base)
-            decl = getattr(states[base], "shape", None)
-            bin_specs.append((base, rhs, decl[0] if decl else None))
-    return vi_var_names, bin_specs
+    return vi_var_names
 
 
 def _binning_coord_arrays(
     ordered_observed: list[tuple[str, Expr]],
-    bin_specs: list[tuple[str, ExprNode, str | None]],
     index_sets: dict[str, Any],
     param_values: dict[str, float],
     shapes: dict[str, tuple[int, ...]],
@@ -1721,44 +1694,27 @@ def _binning_coord_arrays(
     producer_seed_nodes: list[ExprNode] | None = None,
     input_arrays: dict[str, np.ndarray] | None = None,
 ) -> dict[str, np.ndarray]:
-    """Materialize the JOIN-FREE binning coordinates the broad-phase bins read,
-    ONCE at setup, and return them as a name → array registry (RFC §5.3).
+    """Materialize the JOIN-FREE observeds a ``distinct`` producer reads, ONCE at
+    setup, and return them as a name → array registry (RFC §5.3).
 
-    The value-invention bins (``rg_src_bin`` = ``skolem("bin", floor(lon/dx),
-    floor(lat/dy))``) read binning coordinates that are themselves OBSERVED-
-    EXPRESSION-derived (``rg_src_lon`` = ``min_v rg_src_poly[a][v][1]``) — the
+    A producer's ``join`` key columns, envelope factors and filter references may
+    be OBSERVED-EXPRESSION-derived (the pushdown rewrite's in-model LCC
+    projections ``X`` / ``Y``, a lib/relational.esm integer bin column) — the
     front-door's ``_vi_eval`` cannot recompute an observed aggregate, so those
-    coordinates are materialized here FIRST (through the official numpy
+    observeds are materialized here FIRST (through the official numpy
     interpreter) and handed to :func:`value_invention.materialize_value_invention`
-    as additional ``const_arrays`` so the bins resolve at build time.
-
-    Join-carrying observeds (``rg_A`` / ``rg_At`` / ``rg_W`` /
-    ``surface_heat_flux``) gate on the bins themselves, so they are NOT
-    materialized here; nor is every join-free observed (a join-free reduction
-    ``total = sum(rg_A)`` reads a join-carrying observed unresolvable at bin-setup
-    time). ONLY the join-free observeds the bins transitively depend on — the
-    binning coordinates and their own inputs — are materialized. The returned dict
-    is keyed by the same (flattened) names the front-door indexes (``rg_src_poly``
-    → ``OceanDynamics.rg_src_poly``); it feeds the front-door's ``const_arrays``.
-
-    ``producer_seed_nodes`` (Phase 3, pushdown hook 3) additionally seeds the
-    closure from OVERLAP-GATED ``distinct`` producer aggregates: such a
-    producer contributes no ``bin_spec`` (its broad phase is the ``join.
-    overlap`` envelope, not a skolem bin), but its envelope factors and filter
-    references may be join-free observeds — the pushdown rewrite's in-model
-    LCC projections ``X`` / ``Y`` — that must be materialized here for
-    ``materialize_value_invention`` to run the producer at build time. These
-    seeded-only observeds are materialized with ``skip_unresolved=True`` so a
-    producer whose coordinates need factors absent pre-hoist degrades to the
-    existing maps-only/fail-closed contract instead of a hard build error;
-    the bin-spec closure keeps its strict (raising) behaviour.
+    as additional ``const_arrays``. ONLY the join-free observeds the
+    ``producer_seed_nodes`` transitively depend on are materialized, keyed by the
+    same (flattened) names the front-door indexes. They are materialized with
+    ``skip_unresolved=True``, so a producer whose coordinates need factors absent
+    pre-hoist fails closed in the front door instead of a hard build error here.
 
     ``input_arrays`` threads the loader/provider-bound arrays into the
     evaluation context (the projection observeds read coupling-fed inputs,
     e.g. ``EGU_Emis.lon``); absent arrays simply leave their dependents
     unresolved under the seeded-only ``skip_unresolved`` pass.
     """
-    if not bin_specs and not producer_seed_nodes:
+    if not producer_seed_nodes:
         return {}
     ctx = EvalContext(
         state_layout=state_layout,
@@ -1795,18 +1751,14 @@ def _binning_coord_arrays(
                     frontier.append(r)
         return needed
 
-    # Dependency closure of the bin specs over the join-free observeds (strict),
-    # then the producer-seeded remainder (tolerant; see docstring).
-    needed = _closure([node for _bn, node, _idx in bin_specs])
-    producer_needed = _closure(list(producer_seed_nodes or [])) - needed
-    # Preserve the dependency-sorted order of `ordered_observed`.
-    _materialize_observeds([(name, rhs) for name, rhs in join_free if name in needed], ctx)
-    if producer_needed:
-        _materialize_observeds(
-            [(name, rhs) for name, rhs in join_free if name in producer_needed],
-            ctx,
-            skip_unresolved=True,
-        )
+    # Dependency closure of the producers over the join-free observeds, in the
+    # dependency-sorted order of `ordered_observed` (tolerant; see docstring).
+    needed = _closure(list(producer_seed_nodes))
+    _materialize_observeds(
+        [(name, rhs) for name, rhs in join_free if name in needed],
+        ctx,
+        skip_unresolved=True,
+    )
     # Array observeds land in `derived_rings`, scalars in `observed_values`; both
     # are valid const-array factors for the front-door's `_vi_eval`. A SHAPED
     # observed whose value came out scalar is registered in BOTH (esm-spec
@@ -1818,24 +1770,10 @@ def _binning_coord_arrays(
     return {**ctx.observed_values, **ctx.derived_rings}
 
 
-def _has_arg_witness(flat: FlattenedSystem) -> bool:
-    """Whether an equation carries an ``argmin`` / ``argmax`` arg-witness, whose
-    assignment the value-invention front door materializes (§5.7 rule 6)."""
-
-    def walk(e: Any) -> bool:
-        if isinstance(e, ExprNode):
-            if e.op in ("argmin", "argmax"):
-                return True
-            return any(walk(a) for a in (e.args or [])) or walk(e.expr)
-        return False
-
-    return any(walk(eq.rhs) for eq in flat.equations)
-
-
 def _join_producer_nodes(equations: list[Any]) -> list[ExprNode]:
     """The ``distinct`` ``faq`` producers with a ``join`` among ``equations``'
     right-hand sides: the nodes that seed :func:`_binning_coord_arrays`'s
-    producer closure. A producer's ``join.on`` key columns are among the names
+    closure. A producer's ``join.on`` key columns are among the names
     :func:`_expr_referenced_names` reads, so a column that is a plain observed
     (the per-component integer bin column of a lib/relational.esm rewrite) is
     materialized, with the coordinates it reads, before the producer runs. The
@@ -1851,62 +1789,44 @@ def _join_producer_nodes(equations: list[Any]) -> list[ExprNode]:
     ]
 
 
-def _frontdoor_join_keys_and_extents(
+def _frontdoor_extents_and_members(
     flat: FlattenedSystem,
     ordered_observed: list[tuple[str, Expr]],
-    bin_specs: list[tuple[str, ExprNode, str | None]],
     param_values: dict[str, float],
     shapes: dict[str, tuple[int, ...]],
     state_layout: dict[str, slice],
     total_size: int,
     factor_scope: dict[str, str],
     loader_arrays: dict[str, np.ndarray],
-) -> tuple[
-    dict[str, np.ndarray], dict[str, str], dict[str, int], dict[str, list], dict[str, np.ndarray]
-]:
-    """Run the value-invention front-door ONCE at setup and return the broad-phase
-    join-key buffers plus the derived-index-set extents AND the derived-set
-    MEMBERS (RFC §5.3 / §6.1; members feed the Phase-3 pushdown hooks — the
-    ``member_factor`` const feedback and the gated-provider selection), and the
-    arg-witness assignment and grouped / derived buffers, which a right-hand side
-    reads as build-time data.
+) -> tuple[dict[str, int], dict[str, list]]:
+    """Run the value-invention front-door ONCE at setup and return the
+    derived-index-set extents AND the derived-set MEMBERS (RFC §5.3 / §6.1;
+    members feed the Phase-3 pushdown hooks — the ``member_factor`` const
+    feedback and the gated-provider selection).
 
-    This is the single source of truth that RETIRES the former per-cell mirror
-    (``_materialize_join_key_buffers`` + ``_value_invention_extents``): the
-    front-door materialises the skolem bins through the relational engine and
-    surfaces their dense per-cell code buffers (byte-identical to the mirror — each
-    code is the interpreter's own :func:`numpy_interpreter._skolem_code`), together
-    with the producer's distinct-set cardinality.
-
-    The bins must be available BEFORE the full observed hoist (the join-carrying
-    observeds ride it and gate on the bins), so the front-door is fed the
-    binning-coordinate closure (:func:`_binning_coord_arrays`) plus any loader
-    arrays as its ``const_arrays``. The FULL pass yields both bins and extents; if
-    a producer cannot be materialised from the pre-hoist factors (a ``kind:
-    "derived"`` set whose producer needs a wider const factor), it degrades to the
-    ``maps_only`` bins with empty extents — the same fail-closed contract the
-    retired ``_value_invention_extents`` had (the per-step ``derived_rings`` path
-    is then untouched). Empty ``({}, {}, {})`` when the system has neither a bin
-    nor a value-invention producer (the common case pays only the cheap gate).
+    The producers must be available BEFORE the full observed hoist (the
+    observeds that range over a derived set ride it), so the front-door is fed
+    the join-free closure of the producers (:func:`_binning_coord_arrays`) plus
+    any loader arrays as its ``const_arrays``. A producer a derived set names
+    that cannot be materialised from those factors is refused with
+    ``derived_index_set_unmaterialized``. Empty ``({}, {})`` when the system
+    declares no derived index set (the common case pays only the cheap gate).
     """
     has_derived = any(
         isinstance(s, dict) and s.get("kind") == "derived" and s.get("from_faq") is not None
         for s in flat.index_sets.values()
     )
-    if not bin_specs and not has_derived and not _has_arg_witness(flat):
-        return {}, {}, {}, {}, {}
+    if not has_derived:
+        return {}, {}
     model_json = _reconstruct_model_json(flat)
-    # Phase 3 pushdown hook 3: an OVERLAP-GATED `distinct` producer (the
-    # auto-rewrite's generated support-set aggregate) carries no bin_spec, but
-    # its envelope/filter factors may be join-free observeds (the in-model LCC
-    # projections) that must be materialized for the producer to run. Seed the
-    # binning-coordinate closure from those producer nodes too.
+    # Phase 3 pushdown hook 3: a join-gated `distinct` producer's envelope /
+    # filter / key-column factors may be join-free observeds (the in-model LCC
+    # projections) that must be materialized for the producer to run.
     producer_seed_nodes = _join_producer_nodes(flat.equations)
     const_arrays: dict[str, np.ndarray] = {
         str(k): np.asarray(v)
         for k, v in _binning_coord_arrays(
             ordered_observed,
-            bin_specs,
             flat.index_sets,
             param_values,
             shapes,
@@ -1956,21 +1876,11 @@ def _frontdoor_join_keys_and_extents(
         if len(_best) == 1:
             const_arrays[_tail] = const_arrays[_best[0]]
 
-    def _buffers(res: Any) -> tuple[dict[str, np.ndarray], dict[str, str]]:
-        return (
-            {k: np.asarray(v, dtype=float) for k, v in res.join_key_buffers.items()},
-            dict(res.join_key_index_sets),
-        )
-
     try:
         res = materialize_value_invention(
             model_json, const_arrays, param_values, index_sets=flat.index_sets
         )
-        buffers, idx_sets = _buffers(res)
-        outputs = {
-            str(k): np.asarray(v, dtype=float) for k, v in {**res.assignments, **res.groups}.items()
-        }
-        return buffers, idx_sets, dict(res.extents), dict(res.members), outputs
+        return dict(res.extents), dict(res.members)
     except ValueInventionError as exc:
         if exc.code == KEY_OUT_OF_RANGE:
             raise  # already names the column (esm-spec §9.6.6)
@@ -1988,13 +1898,8 @@ def _frontdoor_join_keys_and_extents(
                     f"derived_index_set_unmaterialized: derived index set {set_name!r} "
                     f"(from_faq {iset.get('from_faq')!r}) cannot be materialized: {exc}"
                 ) from exc
-        # Otherwise the failure is in a map or chain buffer no derived set depends
-        # on: still surface the bins (maps-only never touches producers).
-        res = materialize_value_invention(
-            model_json, const_arrays, param_values, index_sets=flat.index_sets, maps_only=True
-        )
-        buffers, idx_sets = _buffers(res)
-        return buffers, idx_sets, {}, {}, {}
+        # Otherwise the failure is in a join column no derived set depends on.
+        return {}, {}
 
 
 # --------------------------------------------------------------------------- #
@@ -2105,7 +2010,7 @@ def _feed_back_vi_members(
             if isinstance(m, bool) or not isinstance(m, (int, float)):
                 raise SimulationError(
                     f"derived index set member_factor '{mf}' requires SCALAR members "
-                    f"(a single-component skolem key); got a composite member for "
+                    f"(a scalar key); got a composite member for "
                     f"faq '{faq}'"
                 )
             vec[i] = float(m)
@@ -2307,7 +2212,7 @@ def _reconstruct_model_json(flat: FlattenedSystem) -> dict[str, Any]:
     :class:`FlattenedSystem`.
 
     The front-door detects / evaluates over the value-invention vocabulary
-    (``distinct`` / ``key`` / ``skolem`` / ``join``) in fields the typed
+    (``distinct`` / ``key`` / ``join``) in fields the typed
     ``ExprNode`` carries but the numeric interpreter never consumes, so it works
     on raw JSON (mirroring :mod:`earthsci_ast.cadence`). Every flattened variable
     becomes a ``{type, shape?, default?}`` entry and every flattened equation is
@@ -2365,8 +2270,6 @@ def _fill_build_inspection(
     driver already prunes such observeds from its dependency cone)."""
     for name, rhs in build.ordered_observed:
         sink.observed_exprs[name] = rhs
-    for k, arr in build.join_key_buffers.items():
-        sink.const_arrays[k] = arr
     for k, arr in (loader_arrays or {}).items():
         sink.const_arrays[k] = arr
     # Resolved scalar parameters (load-time constants) so the reference / ic
@@ -2394,8 +2297,6 @@ def _partition_and_materialize_observeds(
     param_values: dict[str, float],
     y0: np.ndarray,
     loader_arrays: dict[str, np.ndarray],
-    join_key_buffers: dict[str, np.ndarray],
-    join_key_index_sets: dict[str, str],
     factor_scope: dict[str, str],
     static_cache: dict[str, Any] | None,
     derived_extents: dict[str, int] | None = None,
@@ -2425,8 +2326,8 @@ def _partition_and_materialize_observeds(
     # trajectory) and TIME-VARYING, and materialize the static ones ONCE here.
     # An observed that transitively references neither a state nor `t` evaluates
     # to the same value every RHS call, so re-running it per step is pure waste —
-    # and for a conservative-regrid model the static half (the `intersect_polygon`
-    # overlap-area `A_ij`, its row-sums, the regridded elevation, the per-cell
+    # and for a conservative-regrid model the static half (the overlap-area
+    # `A_ij`, its row-sums, the regridded elevation, the per-cell
     # slopes) dominates a single evaluation. Materializing it once and seeding
     # every per-step / per-output context with the result leaves only the cheap
     # ∇ψ-dependent front stencils on the hot path, without changing any value
@@ -2481,8 +2382,6 @@ def _partition_and_materialize_observeds(
                 derived_extents=dict(derived_extents or {}),
                 input_arrays=loader_arrays if loader_arrays is not None else {},
                 axis_valued_input_names=axis_valued_input_names,
-                join_key_buffers=join_key_buffers,
-                join_key_index_sets=join_key_index_sets,
                 factor_scope=factor_scope,
                 var_index_sets=dict(var_index_sets or {}),
                 element_types=dict(element_types or {}),
@@ -2524,8 +2423,6 @@ def _partition_and_materialize_observeds(
             derived_rings=static_derived_rings,
             input_arrays=loader_arrays if loader_arrays is not None else {},
             axis_valued_input_names=axis_valued_input_names,
-            join_key_buffers=join_key_buffers,
-            join_key_index_sets=join_key_index_sets,
             factor_scope=factor_scope,
             var_index_sets=dict(var_index_sets or {}),
             element_types=dict(element_types or {}),
@@ -2547,8 +2444,7 @@ def _partition_and_materialize_observeds(
 def _var_index_sets(flat: FlattenedSystem) -> dict[str, str]:
     """``flattened variable name -> its FIRST declared index-set axis``.
 
-    The general form of ``join_key_index_sets``, covering states, observeds AND
-    parameters. A §5.5.6 ``join.overlap`` gate names its envelope FACTORS, not
+    Covers states, observeds AND parameters. A §5.5.6 ``join.overlap`` gate names its envelope FACTORS, not
     loop symbols, and resolves each side to a range symbol through the first
     factor's declared shape; this is the table it consults. The rule is
     deliberately RANK-AGNOSTIC — the FIRST axis is the position axis — matching
@@ -2760,9 +2656,9 @@ def _build_numpy_rhs(
                 _res = _resolve_index_set_shape(_decl, flat.index_sets)
                 if _res is not None:
                     shapes[_name] = _res
-    # Value-invention states (broad-phase bins / candidate-set membership) are
-    # materialized at setup and DROPPED from the ODE (RFC §5.3 / §6.1).
-    vi_var_names, bin_specs = _detect_value_invention_states(flat)
+    # Value-invention states (candidate-set membership) are materialized at setup
+    # and DROPPED from the ODE (RFC §5.3 / §6.1).
+    vi_var_names = _detect_value_invention_states(flat)
     # An unknown filed as a state but DEFINED by a bare-LHS equation (`x ~ body`,
     # no derivative anywhere) is algebraic, not integrated: esm-spec §6.3.1 makes
     # the bare-variable-LHS equation the thing that defines an observed. Left in
@@ -2820,9 +2716,8 @@ def _build_numpy_rhs(
     # LHS is an observed variable name (flatten lowers each observed's
     # `expression` to such an equation). These are materialized into the eval
     # context in dependency order BEFORE the state derivatives each RHS call,
-    # so an observed `clip = intersect_polygon(...)` ring and the
-    # `area = sum_product FAQ(clip)` that consumes it are available when
-    # `D(tracer) = -area·tracer` evaluates. Everything else (state ODEs,
+    # so an observed `area = sum_product FAQ(...)` and the observeds it reads
+    # are available when `D(tracer) = -area·tracer` evaluates. Everything else (state ODEs,
     # algebraic constraints) flows through the existing driver path.
     observed_eqs: list[tuple[str, Expr]] = []
     driver_equations: list[FlattenedEquation] = []
@@ -2853,8 +2748,8 @@ def _build_numpy_rhs(
         else:
             scalar_ic_eqs.append((_target, _rhs))
     for eq in flat.equations:
-        # Value-invention state assignments (bin skolem maps, distinct
-        # candidate-set membership) are materialized at setup, not integrated.
+        # Value-invention state assignments (distinct candidate-set
+        # membership) are materialized at setup, not integrated.
         _base = _vi_lhs_base(eq.lhs)
         if _base is not None and _base in vi_var_names:
             continue
@@ -3016,43 +2911,30 @@ def _build_numpy_rhs(
     # recurrence rounds its carried cell to at every step of the fold.
     element_types = _element_types(flat)
 
-    # Value-invention front-door (RFC §5.3 / §6.1): materialize the broad-phase
-    # bins (``rg_src_bin`` / ``rg_tgt_bin``) and the derived-index-set extents ONCE
-    # here through the relational engine, so a downstream ``join.on [[rg_src_bin,
-    # rg_tgt_bin]]`` can gate the regrid and a ``kind:"derived"`` set resolves to
-    # its dense extent ``[1, n]``. The front-door is the SINGLE source of both (it
-    # retired the former per-cell mirror + the separate late extents call); its
-    # join-key buffers are byte-identical to the mirror's, each code being the
-    # interpreter's own skolem code. Runs BEFORE the observed hoist so the join-
-    # carrying observeds (which ride it) can gate on the bins. These inputs (index
-    # sets, params, shapes, layout) are fixed for the run, so a cadence-segmented
-    # rebuild reuses them from ``static_cache`` rather than re-binning every segment.
-    if static_cache is not None and "join_key_buffers" in static_cache:
-        join_key_buffers = static_cache["join_key_buffers"]
-        join_key_index_sets = static_cache["join_key_index_sets"]
+    # Value-invention front-door (RFC §5.3 / §6.1): materialize the
+    # derived-index-set extents ONCE here through the relational engine, so a
+    # ``kind:"derived"`` set resolves to its dense extent ``[1, n]``. Runs BEFORE
+    # the observed hoist so the observeds that range over a derived set (which
+    # ride it) can resolve it. These inputs (index sets, params, shapes, layout)
+    # are fixed for the run, so a cadence-segmented rebuild reuses them from
+    # ``static_cache`` rather than re-running the producers every segment.
+    if static_cache is not None and "derived_extents" in static_cache:
         derived_extents = static_cache["derived_extents"]
         vi_members = static_cache.get("vi_members", {})
-        vi_outputs = static_cache.get("vi_outputs", {})
     else:
-        join_key_buffers, join_key_index_sets, derived_extents, vi_members, vi_outputs = (
-            _frontdoor_join_keys_and_extents(
-                flat,
-                ordered_observed,
-                bin_specs,
-                param_values,
-                shapes,
-                state_layout,
-                total_size,
-                factor_scope,
-                loader_arrays,
-            )
+        derived_extents, vi_members = _frontdoor_extents_and_members(
+            flat,
+            ordered_observed,
+            param_values,
+            shapes,
+            state_layout,
+            total_size,
+            factor_scope,
+            loader_arrays,
         )
         if static_cache is not None:
-            static_cache["join_key_buffers"] = join_key_buffers
-            static_cache["join_key_index_sets"] = join_key_index_sets
             static_cache["derived_extents"] = derived_extents
             static_cache["vi_members"] = vi_members
-            static_cache["vi_outputs"] = vi_outputs
 
     # ---- Phase 3 pushdown hook 1: value-invention MEMBERS fed back as const
     # factors. A `kind:"derived"` index set naming a `member_factor` gets that
@@ -3074,15 +2956,6 @@ def _build_numpy_rhs(
         for _k, _v in _feed_back_vi_members(flat.index_sets, vi_members, _all_var_names).items():
             loader_arrays[_k] = _v  # engine-derived: overwrites, like Julia merge!
             axis_valued_input_names.add(_k)
-    # An arg-witness assignment (`assign[i] = argmin_g …`) and the grouped /
-    # derived buffers keyed on it are CONST-cadence data the front door has just
-    # materialized: a right-hand side reads them as it reads a supplied const
-    # array, and the observed hoist does not re-evaluate their definitions.
-    if vi_outputs:
-        for _k, _v in vi_outputs.items():
-            loader_arrays[_k] = _v
-            axis_valued_input_names.add(_k)
-        ordered_observed = [(n, r) for n, r in ordered_observed if n not in vi_outputs]
 
     # ---- Phase 3 pushdown hook 2: gated-provider deferral → post-VI selective
     # fetch. Providers stashed by `prepare` (skipped by its eager const loop)
@@ -3221,8 +3094,6 @@ def _build_numpy_rhs(
             param_values,
             y0,
             loader_arrays,
-            join_key_buffers,
-            join_key_index_sets,
             factor_scope,
             static_cache,
             derived_extents,
@@ -3233,11 +3104,9 @@ def _build_numpy_rhs(
     )
 
     # ``derived_extents`` was materialized by the value-invention front-door above
-    # (:func:`_frontdoor_join_keys_and_extents`), alongside the join-key bins and
-    # from the same relational pass — the DESIGNED resolution for a ``kind:
-    # "derived"`` set whose ``from_faq`` names a skolem/distinct/rank producer,
-    # generalizing the geometry clip-ring ``derived_rings`` handoff. Threaded into
-    # every EvalContext below via ``derived_extents``.
+    # (:func:`_frontdoor_extents_and_members`) — the resolution for a ``kind:
+    # "derived"`` set whose ``from_faq`` names a ``distinct`` producer. Threaded
+    # into every EvalContext below via ``derived_extents``.
 
     # Per-call buffers hoisted out of rhs_function and reused across every
     # solver step, eliminating the two guaranteed per-step allocations.
@@ -3271,16 +3140,14 @@ def _build_numpy_rhs(
             derived_rings=dict(static_derived_rings),
             # Value-invention derived-index-set extents, materialized once at
             # setup by the relational front-door (above): the DESIGNED resolution
-            # for a `kind:"derived"` set whose `from_faq` names a skolem/distinct/
-            # rank producer. Constant for the run, so bound by reference.
+            # for a `kind:"derived"` set whose `from_faq` names a `distinct`
+            # producer. Constant for the run, so bound by reference.
             derived_extents=derived_extents,
             # Bind the SHARED loader-array registry by reference. Within a cadence
             # segment its contents are fixed, so the RHS is pure; the segmenting
             # driver mutates it in place between segments to advance the cadence.
             input_arrays=loader_arrays if loader_arrays is not None else {},
             axis_valued_input_names=axis_valued_names,
-            join_key_buffers=join_key_buffers,
-            join_key_index_sets=join_key_index_sets,
             factor_scope=factor_scope,
             var_index_sets=dict(var_index_sets or {}),
             element_types=element_types,
@@ -3335,8 +3202,6 @@ def _build_numpy_rhs(
         static_derived_rings=static_derived_rings,
         static_skip_reasons=static_skip_reasons,
         has_value_invention_states=bool(vi_var_names),
-        join_key_buffers=join_key_buffers,
-        join_key_index_sets=join_key_index_sets,
         factor_scope=factor_scope,
         var_index_sets=var_index_sets,
         element_types=element_types,
@@ -3446,8 +3311,6 @@ def observed_at_state(
             index_sets=flat.index_sets,
             derived_rings=dict(build.static_derived_rings),
             derived_extents=build.derived_extents,
-            join_key_buffers=build.join_key_buffers,
-            join_key_index_sets=build.join_key_index_sets,
             factor_scope=build.factor_scope,
             var_index_sets=build.var_index_sets,
             element_types=build.element_types,
@@ -3559,8 +3422,6 @@ def probe_output_time_observeds(
         # the probe measures that pass rather than a differently-seeded twin.
         input_arrays=loader_arrays if loader_arrays is not None else {},
         derived_extents=build.derived_extents,
-        join_key_buffers=build.join_key_buffers,
-        join_key_index_sets=build.join_key_index_sets,
         factor_scope=build.factor_scope,
         var_index_sets=build.var_index_sets,
         element_types=build.element_types,
@@ -3637,8 +3498,6 @@ def _simulate_observeds_only(
             t=t,
             index_sets=flat.index_sets,
             derived_extents=build.derived_extents,
-            join_key_buffers=build.join_key_buffers,
-            join_key_index_sets=build.join_key_index_sets,
             factor_scope=build.factor_scope,
             var_index_sets=build.var_index_sets,
             element_types=build.element_types,
@@ -3804,8 +3663,6 @@ def _simulate_with_numpy(
                         # handed) as a refusal.
                         input_arrays=loader_arrays if loader_arrays is not None else {},
                         derived_extents=build.derived_extents,
-                        join_key_buffers=build.join_key_buffers,
-                        join_key_index_sets=build.join_key_index_sets,
                         factor_scope=build.factor_scope,
                         var_index_sets=build.var_index_sets,
                         element_types=build.element_types,
@@ -3844,8 +3701,6 @@ def _simulate_with_numpy(
                             input_arrays=loader_arrays if loader_arrays is not None else {},
                             derived_rings=dict(build.static_derived_rings),
                             derived_extents=build.derived_extents,
-                            join_key_buffers=build.join_key_buffers,
-                            join_key_index_sets=build.join_key_index_sets,
                             factor_scope=build.factor_scope,
                             var_index_sets=build.var_index_sets,
                             element_types=build.element_types,

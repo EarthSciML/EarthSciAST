@@ -478,8 +478,8 @@ class UnparseableUnitError(ValueError):
     other bindings make (Go's ``UnitFindingUnparseable``, TS's ``unit_error``).
 
     Contrast with a GENUINELY UNDETERMINABLE dimension — a symbolic exponent
-    (``x^n``), an op with no dimensional rule (``faq``/``index``/``fn``/
-    ``table_lookup``), an undeclared variable — which is a statement about the
+    (``x^n``), an op with no dimensional rule (``faq``/``index``), an
+    undeclared variable — which is a statement about the
     checker and stays a WARNING (signalled by ``None``, never by an exception).
     """
 
@@ -2504,7 +2504,7 @@ class UnitValidator:
             )
 
         # Structural / array / query / rewrite-target ops (index, aggregate,
-        # fn, const, makearray, table_lookup, grad, ...) carry no dimensional
+        # const, makearray, grad, ...) carry no dimensional
         # rule here. Report UNKNOWN, not dimensionless.
         return None
 

@@ -7,38 +7,31 @@ import Mathlib.Tactic.Ring
 import Mathlib.Algebra.Order.Field.Basic
 
 /-!
-# `interp.searchsorted`, `interp.linear`, `interp.bilinear` (esm-spec §9.2)
+# The reference `searchsorted`, `linear` and `bilinear`
 
-The three primitives are written ONCE, over an abstract `Scalar` (four
-arithmetic operations, two comparisons, a NaN test). Two instances use the same
-code:
+The interpolation the `lib/interp.esm` templates are proven to compute
+(`Esm/Closed/Interp/TemplateAst.lean`), and the `rank_of` / `rank_of_set`
+templates of `lib/relational.esm` reduce to (`searchsorted`). The three are
+written ONCE, over an abstract `Scalar` (four arithmetic operations, two
+comparisons, a NaN test). Two instances use the same code:
 
 * `Num`, a finite real or NaN, with exact arithmetic. Every theorem in this
   file is about this instance.
-* `Float`, the executable C double, which the `esm-lean interp` adapter runs.
+* `Float`, the executable C double, at which the `esm-lean templates` adapter
+  evaluates expressions.
 
 Because the Float version is the generic definition instantiated at `Float`,
 it follows the exact version operation for operation by construction; the only
 difference between the two is rounding, which is the subject of the binary64
 claims (`Esm/Float64.lean`), not of this file.
 
-Load-time validation (§9.2 "Argument shape contract", "Errors") is also generic,
-so the adapter's verdicts are the model's verdicts.
-
-Rulings modelled here (formal/QUESTIONS.md): Q-4 (`interp_nan_in_axis` before
-`interp_non_monotonic_axis`), Q-5 (axes finite, tables MAY hold NaN), Q-7
-(`searchsorted_nan` before `searchsorted_non_monotonic`; `xs` non-decreasing),
-Q-105 (an `xs` that is not a rank-1 `const` array is `interp_axis_not_const`,
-checked first), Q-108 (an empty `xs` is valid and every query returns 1; a
-`const` table or axis of the wrong rank for `interp.linear` /
-`interp.bilinear` is `interp_table_not_const` / `interp_axis_not_const`).
-Q-106 (the checks run at load on every `fn` node) is modelled in
-`Esm/Closed/Tables/Load.lean`.
+The axes are finite and the tables MAY hold NaN (ruling Q-5); `searchsorted`'s
+`xs` is non-decreasing (ruling Q-7).
 -/
 
 namespace Esm.Closed
 
-/-- The operations the §9.2 interpolation primitives are written in. -/
+/-- The operations the reference interpolation definitions are written in. -/
 class Scalar (α : Type) where
   nan : α
   add : α → α → α
@@ -48,10 +41,8 @@ class Scalar (α : Type) where
   le : α → α → Bool
   lt : α → α → Bool
   isNaN : α → Bool
-  /-- Not a finite number: NaN, or (where the type has them) ±Inf. -/
-  nonFinite : α → Bool
 
-/-- A scalar as §9.2 sees it: a finite real, or NaN. (Infinite inputs are not
+/-- A scalar as the reference sees it: a finite real, or NaN. (Infinite inputs are not
 modelled over ℝ; the axes are required finite and JSON cannot spell an
 infinite table entry.) -/
 inductive Num where
@@ -96,7 +87,6 @@ noncomputable instance : Scalar Num where
   le := Num.le
   lt := Num.lt
   isNaN := Num.isNaN
-  nonFinite := Num.isNaN
 
 instance : Scalar Float where
   nan := (0.0 : Float) / 0.0
@@ -107,7 +97,6 @@ instance : Scalar Float where
   le := fun a b => a ≤ b
   lt := fun a b => a < b
   isNaN := Float.isNaN
-  nonFinite := fun x => !x.isFinite
 
 section Generic
 
@@ -116,15 +105,15 @@ open Scalar
 
 /-! ## Semantics -/
 
-/-- `interp.searchsorted(x, xs)`: the 1-based index of the first element of
+/-- `searchsorted(x, xs)`: the 1-based index of the first element of
 `xs` that is `≥ x` under IEEE `≥`, or `N + 1` when there is none. A NaN `x`
 satisfies no comparison, so it gets `N + 1` with no special case. -/
 def searchsorted (x : α) (xs : List α) : ℕ :=
   xs.findIdx (fun a => le x a) + 1
 
 /-- The 0-based cell index for a query `q` already clamped into
-`[ax[0], ax[n-1]]`: the largest `i ∈ [0, n-2]` with `ax[i] ≤ q` (§9.2
-bilinear step 2; for `interp.linear` step 3 it is the `i` with
+`[ax[0], ax[n-1]]`: the largest `i ∈ [0, n-2]` with `ax[i] ≤ q` (bilinear
+step 2; for `linear` step 3 it is the `i` with
 `ax[i] ≤ q < ax[i+1]`). Computed as one less than the first knot strictly
 above `q`, capped at `n - 2`; for a NaN `q` (no knot compares above it) it is
 `n - 2`, a definite cell whose weight is NaN. -/
@@ -137,7 +126,7 @@ def weight (q lo hi : α) : α := div (sub q lo) (sub hi lo)
 /-- The pinned blend `t + w · (u − t)`. -/
 def blend (t u w : α) : α := add t (mul w (sub u t))
 
-/-- `interp.linear(table, axis, x)`, §9.2 steps 1–4, in the pinned order. -/
+/-- `linear(table, axis, x)`, steps 1–4, in the pinned order. -/
 def linear (t ax : List α) (x : α) : α :=
   let n := ax.length
   if le x (ax.getD 0 nan) then t.getD 0 nan
@@ -147,7 +136,7 @@ def linear (t ax : List α) (x : α) : α :=
     blend (t.getD i nan) (t.getD (i + 1) nan)
       (weight x (ax.getD i nan) (ax.getD (i + 1) nan))
 
-/-- §9.2 bilinear step 1: `lo` if `v ≤ lo`, `hi` if `v ≥ hi`, else `v`. -/
+/-- Bilinear step 1: `lo` if `v ≤ lo`, `hi` if `v ≥ hi`, else `v`. -/
 def clamp (v lo hi : α) : α :=
   if le v lo then lo else if le hi v then hi else v
 
@@ -155,7 +144,7 @@ def clamp (v lo hi : α) : α :=
 def entry (T : List (List α)) (i j : ℕ) : α := (T.getD i []).getD j nan
 
 /-- The bilinear blend in a given cell `(i, j)` (0-based) at clamped queries
-`(xq, yq)`: §9.2 bilinear steps 3–4 in the pinned order (two x-blends, then one
+`(xq, yq)`: bilinear steps 3–4 in the pinned order (two x-blends, then one
 y-blend). -/
 def bilinearCell (T : List (List α)) (ax ay : List α) (i j : ℕ) (xq yq : α) : α :=
   let wx := weight xq (ax.getD i nan) (ax.getD (i + 1) nan)
@@ -164,153 +153,14 @@ def bilinearCell (T : List (List α)) (ax ay : List α) (i j : ℕ) (xq yq : α)
   let row_jp1 := blend (entry T i (j + 1)) (entry T (i + 1) (j + 1)) wx
   blend row_j row_jp1 wy
 
-/-- `interp.bilinear(table, axis_x, axis_y, x, y)`, §9.2 steps 1–5: clamp per
+/-- `bilinear(table, axis_x, axis_y, x, y)`, steps 1–5: clamp per
 axis, locate the cell, blend. -/
 def bilinear (T : List (List α)) (ax ay : List α) (x y : α) : α :=
   let xq := clamp x (ax.getD 0 nan) (ax.getD (ax.length - 1) nan)
   let yq := clamp y (ay.getD 0 nan) (ay.getD (ay.length - 1) nan)
   bilinearCell T ax ay (cell xq ax) (cell yq ay) xq yq
 
-/-! ## Load-time validation -/
-
-/-- A `fn` argument as the loader sees it: a `const` scalar, a `const`-op
-array of rank 1 or 2, a `const` of any other nesting, or anything else (a
-variable, a non-`const` expression). -/
-inductive Arg (α : Type) where
-  | const0 (v : α)
-  | const1 (v : List α)
-  | const2 (v : List (List α))
-  | constN
-  | other
-
-/-- Every adjacent pair satisfies `r`. -/
-def adjAll (r : α → α → Bool) : List α → Bool
-  | a :: b :: rest => r a b && adjAll r (b :: rest)
-  | _ => true
-
-def anyNaN (l : List α) : Bool := l.any isNaN
-
-/-- Some entry is not finite (Q-113: the `interp_nan_in_axis` test). -/
-def anyNonFinite (l : List α) : Bool := l.any nonFinite
-
 end Generic
-
-/-- Diagnostic codes. -/
-abbrev Code := String
-
-namespace Codes
-def searchsortedNaN : Code := "searchsorted_nan"
-def searchsortedNonMonotonic : Code := "searchsorted_non_monotonic"
-def interpNonMonotonic : Code := "interp_non_monotonic_axis"
-def interpLengthMismatch : Code := "interp_axis_length_mismatch"
-def interpNaNInAxis : Code := "interp_nan_in_axis"
-def interpTooShort : Code := "interp_axis_too_short"
-def interpTableNotConst : Code := "interp_table_not_const"
-def interpAxisNotConst : Code := "interp_axis_not_const"
-end Codes
-
-section Validation
-
-variable {α : Type} [Scalar α]
-open Scalar
-
-/-- `interp.searchsorted`'s load-time check on `xs` (§9.2, Q-7, Q-105): a
-rank-1 `const` array first (`interp_axis_not_const` otherwise), then NaN, then
-non-decreasing. Returns the validated array. -/
-def validateSearchsorted : Arg α → Except Code (List α)
-  | .const1 xs =>
-    if anyNaN xs then .error Codes.searchsortedNaN
-    else if !adjAll le xs then .error Codes.searchsortedNonMonotonic
-    else .ok xs
-  | _ => .error Codes.interpAxisNotConst
-
-/-- `interp.linear`'s load-time check (§9.2), in the order §9.2 pins (Q-110,
-"Order of the argument checks"; arity, step 1, is a property of the `fn` node
-and is checked by `Esm.Closed.Tables.checkNode`). The table must be a rank-1
-`const` array (`interp_table_not_const` otherwise: a non-`const` argument or a
-`const` of any other rank, Q-108), then the axis likewise
-(`interp_axis_not_const`); then axis length, shape relation, a non-finite axis
-entry (Q-113: `nonFinite`, NaN or ±Inf), monotonicity. -/
-def validateLinear : Arg α → Arg α → Except Code (List α × List α)
-  | .const1 t, .const1 ax =>
-    if ax.length < 2 then .error Codes.interpTooShort
-    else if t.length ≠ ax.length then .error Codes.interpLengthMismatch
-    else if anyNonFinite ax then .error Codes.interpNaNInAxis
-    else if !adjAll lt ax then .error Codes.interpNonMonotonic
-    else .ok (t, ax)
-  | .const1 _, _ => .error Codes.interpAxisNotConst
-  | _, _ => .error Codes.interpTableNotConst
-
-/-- `interp.bilinear`'s load-time check (§9.2): a rank-2 `const` table
-(`interp_table_not_const` otherwise, Q-108), then rank-1 `const` axes
-(`interp_axis_not_const` otherwise), then the same order as `validateLinear`
-(Q-110), each stage over both axes before the next (so a non-finite entry in
-either axis beats a non-monotonic other axis, Q-4, Q-113). An empty `[]` table
-is rank 1, so `interp_table_not_const` (Q-111). -/
-def validateBilinear : Arg α → Arg α → Arg α → Except Code (List (List α) × List α × List α)
-  | .const2 T, .const1 ax, .const1 ay =>
-    if ax.length < 2 || ay.length < 2 then .error Codes.interpTooShort
-    else if T.length ≠ ax.length || T.any (fun row => row.length ≠ ay.length) then
-      .error Codes.interpLengthMismatch
-    else if anyNonFinite ax || anyNonFinite ay then .error Codes.interpNaNInAxis
-    else if !(adjAll lt ax && adjAll lt ay) then .error Codes.interpNonMonotonic
-    else .ok (T, ax, ay)
-  | .const2 _, _, _ => .error Codes.interpAxisNotConst
-  | _, _, _ => .error Codes.interpTableNotConst
-
-end Validation
-
-/-! ## The pinned order of the argument checks (Q-110, Q-113), for every scalar type
-
-Stated for every `Scalar` instance, so for the exact `Num` (no infinities:
-`nonFinite` is NaN) and for the adapter's `Float` (`nonFinite` is
-`!Float.isFinite`: NaN, +Inf, −Inf). Step 1 (arity) is a property of the `fn`
-node (`Esm.Closed.Tables.interp_arity_first`); step 2 (not `const` / wrong rank)
-is `validateLinear_rank` / `validateBilinear_rank`. -/
-
-section Order
-
-variable {α : Type} [Scalar α]
-
-open Classical in
-/-- §9.2 "Order of the argument checks", steps 3–6, for `interp.linear`:
-too short, then length mismatch, then a non-finite axis entry, then not
-strictly increasing; the first rule broken names the code. -/
-theorem validateLinear_order (t a : List α) :
-    (validateLinear (Arg.const1 t) (Arg.const1 a)).map (fun _ => ()) =
-      if a.length < 2 then .error "interp_axis_too_short"
-      else if t.length ≠ a.length then .error "interp_axis_length_mismatch"
-      else if ∃ x ∈ a, Scalar.nonFinite x = true then .error "interp_nan_in_axis"
-      else if adjAll Scalar.lt a = false then .error "interp_non_monotonic_axis"
-      else .ok () := by
-  simp only [validateLinear]
-  split_ifs <;> simp_all [Except.map, anyNonFinite, Codes.interpTooShort,
-    Codes.interpLengthMismatch, Codes.interpNaNInAxis, Codes.interpNonMonotonic]
-
-open Classical in
-/-- §9.2 "Order of the argument checks", steps 3–6, for `interp.bilinear`,
-each step over both axes before the next. -/
-theorem validateBilinear_order (T : List (List α)) (a b : List α) :
-    (validateBilinear (Arg.const2 T) (Arg.const1 a) (Arg.const1 b)).map (fun _ => ()) =
-      if a.length < 2 ∨ b.length < 2 then .error "interp_axis_too_short"
-      else if T.length ≠ a.length ∨ ∃ row ∈ T, row.length ≠ b.length then
-        .error "interp_axis_length_mismatch"
-      else if (∃ x ∈ a, Scalar.nonFinite x = true) ∨ ∃ y ∈ b, Scalar.nonFinite y = true then
-        .error "interp_nan_in_axis"
-      else if adjAll Scalar.lt a = false ∨ adjAll Scalar.lt b = false then
-        .error "interp_non_monotonic_axis"
-      else .ok () := by
-  simp only [validateBilinear]
-  split_ifs <;> simp_all [Except.map, anyNonFinite, Codes.interpTooShort,
-    Codes.interpLengthMismatch, Codes.interpNaNInAxis, Codes.interpNonMonotonic]
-
-/-- Q-111: an empty table `[]` (rank 1) for `interp.bilinear` is
-`interp_table_not_const`, whatever the axes. -/
-theorem validateBilinear_empty_table (ax ay : Arg α) :
-    validateBilinear (Arg.const1 ([] : List α)) ax ay = .error "interp_table_not_const" := by
-  cases ax <;> cases ay <;> rfl
-
-end Order
 
 /-! ## The exact model: simp lemmas for `Num` -/
 
@@ -342,9 +192,6 @@ namespace Num
 @[simp] theorem isNaN_nan' : nan.isNaN = true := rfl
 
 end Num
-
-/-- `Num` has no infinities: its non-finite values are exactly NaN. -/
-theorem anyNonFinite_num (l : List Num) : anyNonFinite l = anyNaN l := rfl
 
 open Num in
 theorem getD_map_fin {a : List ℝ} {k : ℕ} (hk : k < a.length) :
@@ -454,13 +301,13 @@ theorem cell_spec {a : List ℝ} (ha : a.Pairwise (· < ·)) (hn : 2 ≤ a.lengt
 
 end Cells
 
-/-! ## `interp.searchsorted` over ℝ -/
+/-! ## `searchsorted` over ℝ -/
 
 section Searchsorted
 
 open Num
 
-/-- §9.2: `searchsorted` is the least 1-based `k` with `xs[k] ≥ x`, or `N + 1`. -/
+/-- `searchsorted` is the least 1-based `k` with `xs[k] ≥ x`, or `N + 1`. -/
 theorem searchsorted_least (xs : List ℝ) (x : ℝ) :
     let k := searchsorted (Num.fin x) (xs.map Num.fin)
     1 ≤ k ∧ k ≤ xs.length + 1 ∧ (∀ j, j + 1 < k → xs.getD j 0 < x) ∧
@@ -489,7 +336,7 @@ theorem searchsorted_least (xs : List ℝ) (x : ℝ) :
       simp only [List.getElem_map, Num.le_fin, decide_eq_true_eq] at this
       rw [List.getD_eq_getElem _ _ (by omega)]; convert this using 2; omega
 
-/-- §9.2: a NaN query returns `N + 1`, whatever `xs` holds. -/
+/-- A NaN query returns `N + 1`, whatever `xs` holds. -/
 theorem searchsorted_nan (xs : List Num) : searchsorted Num.nan xs = xs.length + 1 := by
   simp only [searchsorted, Nat.add_right_cancel_iff]
   exact List.findIdx_eq_length.mpr (fun _ _ => Num.nan_le _)
@@ -513,7 +360,7 @@ theorem searchsorted_mono (xs : List ℝ) (x y : ℝ) (hxy : x ≤ y) :
     simp only [searchsorted, List.length_map, Nat.add_le_add_iff_right]
     simpa using List.findIdx_le_length (p := fun a => Scalar.le (Num.fin y) a) (xs := xs.map Num.fin)
 
-/-- §9.2 out-of-range: `x ≤ xs[1]` gives 1; on a non-decreasing `xs`,
+/-- Out of range: `x ≤ xs[1]` gives 1; on a non-decreasing `xs`,
 `x > xs[N]` gives `N + 1`. -/
 theorem searchsorted_out_of_range (xs : List ℝ) (x : ℝ) (hne : xs ≠ []) :
     (x ≤ xs.getD 0 0 → searchsorted (Num.fin x) (xs.map Num.fin) = 1) ∧
@@ -541,7 +388,7 @@ theorem searchsorted_out_of_range (xs : List ℝ) (x : ℝ) (hne : xs ≠ []) :
 
 end Searchsorted
 
-/-! ## `interp.linear` over ℝ -/
+/-! ## `linear` over ℝ -/
 
 section Linear
 
@@ -554,7 +401,7 @@ theorem blend_nan_left (u w : Num) : blend Num.nan u w = Num.nan := by simp [ble
 theorem blend_nan_right (t w : Num) : blend t Num.nan w = Num.nan := by simp [blend]
 theorem blend_nan_w (t u : Num) : blend t u Num.nan = Num.nan := by simp [blend]
 
-/-- §9.2 step 3: inside a cell, `interp.linear` is the pinned blend with the
+/-- Step 3: inside a cell, `linear` is the pinned blend with the
 pinned weight. -/
 theorem linear_in_cell (t : List Num) (a : List ℝ) (ha : a.Pairwise (· < ·)) (i : ℕ) (x : ℝ)
     (hi : i + 1 < a.length) (h1 : a.getD i 0 ≤ x) (h2 : x < a.getD (i + 1) 0)
@@ -571,13 +418,13 @@ theorem linear_in_cell (t : List Num) (a : List ℝ) (ha : a.Pairwise (· < ·))
     Num.div_fin _ _ hd, not_le.mpr h0, not_le.mpr hL, decide_false, Bool.false_eq_true,
     ↓reduceIte]
 
-/-- §9.2 step 1: below-range clamp. -/
+/-- Step 1: below-range clamp. -/
 theorem linear_clamp_below (t : List Num) (a : List ℝ) (hn : 2 ≤ a.length) (x : ℝ)
     (hx : x ≤ a.getD 0 0) : linear t (a.map Num.fin) (Num.fin x) = t.getD 0 .nan := by
   simp only [linear, Num.nan_def, getD_map_fin (show 0 < a.length by omega), Num.le_fin, hx,
     decide_true, ↓reduceIte]
 
-/-- §9.2 step 2: above-range clamp. -/
+/-- Step 2: above-range clamp. -/
 theorem linear_clamp_above (t : List Num) (a : List ℝ) (ha : a.Pairwise (· < ·))
     (hn : 2 ≤ a.length) (x : ℝ) (hx : a.getD (a.length - 1) 0 ≤ x) :
     linear t (a.map Num.fin) (Num.fin x) = t.getD (a.length - 1) .nan := by
@@ -587,11 +434,11 @@ theorem linear_clamp_above (t : List Num) (a : List ℝ) (ha : a.Pairwise (· < 
     getD_map_fin (show a.length - 1 < a.length by omega), Num.le_fin, hx, this,
     decide_true, decide_false, Bool.false_eq_true, ↓reduceIte]
 
-/-- §9.2 step 4: a NaN query gives NaN. -/
+/-- Step 4: a NaN query gives NaN. -/
 theorem linear_nan (t ax : List Num) : linear t ax Num.nan = Num.nan := by
   simp [linear, weight, blend]
 
-/-- §9.2 "exact at the endpoints", w = 0: a query on knot `k` returns `t[k]`,
+/-- Exact at the endpoints, w = 0: a query on knot `k` returns `t[k]`,
 provided the right neighbour `t[k+1]` of an interior knot is not NaN (at an
 interior knot the blend still multiplies `0 · (t[k+1] − t[k])`). -/
 theorem linear_knot (t : List Num) (a : List ℝ) (ha : a.Pairwise (· < ·)) (hn : 2 ≤ a.length)
@@ -614,8 +461,7 @@ theorem linear_knot (t : List Num) (a : List ℝ) (ha : a.Pairwise (· < ·)) (h
 
 /-- The other side of `linear_knot`: an interior knot whose right neighbour is
 NaN evaluates to NaN — the knot belongs to the cell `[a[k], a[k+1])`, whose
-corner is NaN (§9.2 "a query landing in a cell whose corner is NaN will
-produce NaN"). -/
+corner is NaN (a query landing in a cell whose corner is NaN gives NaN). -/
 theorem linear_knot_nan_neighbour (t : List Num) (a : List ℝ) (ha : a.Pairwise (· < ·))
     (k : ℕ) (hk0 : 0 < k) (hk : k + 1 < a.length)
     (hnb : (t.getD (k + 1) .nan).isNaN = true) :
@@ -635,7 +481,7 @@ theorem blend_between (p q w : ℝ) (hw0 : 0 ≤ w) (hw1 : w ≤ 1) :
   · rw [min_eq_right h, max_eq_left h]
     constructor <;> nlinarith
 
-/-- §9.2: an in-range result lies between the two bracketing table values. -/
+/-- An in-range result lies between the two bracketing table values. -/
 theorem linear_between (t : List Num) (a : List ℝ) (ha : a.Pairwise (· < ·)) (hn : 2 ≤ a.length)
     (i : ℕ) (x p q : ℝ) (hi : i + 1 < a.length) (h1 : a.getD i 0 ≤ x)
     (h2 : x < a.getD (i + 1) 0) (hp : t.getD i .nan = Num.fin p)
@@ -655,7 +501,7 @@ theorem linear_between (t : List Num) (a : List ℝ) (ha : a.Pairwise (· < ·))
     · exact div_nonneg (by linarith) (by linarith)
     · rw [div_le_one (by linarith)]; linarith
 
-/-- §9.2: a query inside a cell one of whose corners is NaN gives NaN. -/
+/-- A query inside a cell one of whose corners is NaN gives NaN. -/
 theorem linear_nan_corner (t : List Num) (a : List ℝ) (ha : a.Pairwise (· < ·)) (i : ℕ) (x : ℝ)
     (hi : i + 1 < a.length) (h1 : a.getD i 0 ≤ x) (h2 : x < a.getD (i + 1) 0)
     (h0 : a.getD 0 0 < x)
@@ -672,7 +518,7 @@ theorem linear_nan_corner (t : List Num) (a : List ℝ) (ha : a.Pairwise (· < �
 
 end Linear
 
-/-! ## `interp.bilinear` over ℝ -/
+/-! ## `bilinear` over ℝ -/
 
 section Bilinear
 
@@ -708,7 +554,7 @@ theorem bilinear_clamp_fin (T : List (List Num)) (ax ay : List ℝ)
     getD_map_fin (show 0 < ay.length by omega),
     getD_map_fin (show ay.length - 1 < ay.length by omega), clamp_fin _ _ _ hax, clamp_fin _ _ _ hay]
 
-/-- §9.2 bilinear step 1 (extrapolate-flat): a query outside the table gives
+/-- Bilinear step 1 (extrapolate-flat): a query outside the table gives
 the same result as the query pinned to the nearest edge, per axis. -/
 theorem bilinear_clamp (T : List (List Num)) (ax ay : List ℝ)
     (hax : ax.Pairwise (· < ·)) (hay : ay.Pairwise (· < ·))
@@ -730,7 +576,7 @@ theorem bilinear_clamp (T : List (List Num)) (ax ay : List ℝ)
     rw [min_eq_left (max_le h2 (min_le_right _ _)), max_eq_right (le_max_left _ _)]
   simp only [e1, e2]
 
-/-- §9.2 bilinear step 5: NaN `x` or NaN `y` gives NaN, whatever the table. -/
+/-- Bilinear step 5: NaN `x` or NaN `y` gives NaN, whatever the table. -/
 theorem bilinear_nan (T : List (List Num)) (ax ay : List Num) (v : Num) :
     bilinear T ax ay Num.nan v = Num.nan ∧ bilinear T ax ay v Num.nan = Num.nan := by
   constructor
@@ -757,7 +603,7 @@ theorem inCell_range {a : List ℝ} (ha : a.Pairwise (· < ·)) {i : ℕ} {q : �
   · exact h2.le.trans (pw_getD_le ha (by omega) (by omega))
   · rw [h2]; exact pw_getD_le ha (by omega) (by omega)
 
-/-- §9.2 bilinear steps 2–4: a query in cell `(i, j)` is the pinned blend in
+/-- Bilinear steps 2–4: a query in cell `(i, j)` is the pinned blend in
 that cell. -/
 theorem bilinear_in_cell (T : List (List Num)) (ax ay : List ℝ)
     (hax : ax.Pairwise (· < ·)) (hay : ay.Pairwise (· < ·)) (i j : ℕ) (x y : ℝ)
@@ -828,7 +674,7 @@ theorem bilinearCell_fin (U : List (List ℝ)) (ax ay : List ℝ)
     r (i + 1) hi j (by omega), r i (by omega) (j + 1) hj, r (i + 1) hi (j + 1) hj, blend_fin,
     realCell]
 
-/-- §9.2 bilinear: on a finite table, a query exactly on knot `(k, l)` returns
+/-- Bilinear: on a finite table, a query exactly on knot `(k, l)` returns
 `table[k][l]` (over ℝ; whether the w = 1 case at the last knot is exact in
 binary64 is a separate, rounding, claim). -/
 theorem bilinear_knot (U : List (List ℝ)) (ax ay : List ℝ)
@@ -861,7 +707,7 @@ theorem bilinear_knot (U : List (List ℝ)) (ax ay : List ℝ)
   rcases hik with ⟨rfl, _⟩ | rfl <;> rcases hjl with ⟨rfl, _⟩ | rfl <;>
     simp only [sub_self, zero_div, div_self dx, div_self dy] <;> ring
 
-/-- §9.2 bilinear: on a finite table, the result in cell `(i, j)` lies between
+/-- Bilinear: on a finite table, the result in cell `(i, j)` lies between
 the smallest and largest of that cell's four corners. -/
 theorem bilinear_between (U : List (List ℝ)) (ax ay : List ℝ)
     (hax : ax.Pairwise (· < ·)) (hay : ay.Pairwise (· < ·))
@@ -901,7 +747,7 @@ theorem bilinear_between (U : List (List ℝ)) (ax ay : List ℝ)
   · refine le_trans c2 ?_
     exact max_le (le_trans a2 (le_max_left _ _)) (le_trans b2 (le_max_right _ _))
 
-/-- §9.2 bilinear step 2: at an interior x-knot `k`, the alternative cell
+/-- Bilinear step 2: at an interior x-knot `k`, the alternative cell
 `i = k − 1` (weight 1) gives the same value as the pinned `i = k` (weight 0),
 over ℝ on a finite table. (Bit-identity in binary64 is a rounding claim.) -/
 theorem bilinear_alt_cell (U : List (List ℝ)) (ax ay : List ℝ)
@@ -913,7 +759,7 @@ theorem bilinear_alt_cell (U : List (List ℝ)) (ax ay : List ℝ)
   simp only [realCell, e, div_self d, sub_self, zero_div]
   ring
 
-/-- §9.2 bilinear step 5: a query in a cell with a NaN corner gives NaN. -/
+/-- Bilinear step 5: a query in a cell with a NaN corner gives NaN. -/
 theorem bilinear_nan_corner (T : List (List Num)) (ax ay : List ℝ)
     (hax : ax.Pairwise (· < ·)) (hay : ay.Pairwise (· < ·)) (i j : ℕ) (x y : ℝ)
     (hi : InCell ax i x) (hj : InCell ay j y)
@@ -929,340 +775,5 @@ theorem bilinear_nan_corner (T : List (List Num)) (ax ay : List ℝ)
   rcases hnan with h | h | h | h <;> rw [isn _ h] <;> simp [blend]
 
 end Bilinear
-
-/-! ## Load-time validation over the exact model -/
-
-section ValidationProofs
-
-open Num
-
-theorem anyNaN_false_iff (l : List Num) : anyNaN l = false ↔ ∃ r : List ℝ, l = r.map Num.fin := by
-  induction l with
-  | nil => simp [anyNaN]
-  | cons x l ih =>
-    simp only [anyNaN, List.any_cons, Bool.or_eq_false_iff] at ih ⊢
-    rw [ih]
-    constructor
-    · rintro ⟨hx, r, rfl⟩
-      cases x with
-      | fin a => exact ⟨a :: r, rfl⟩
-      | nan => simp at hx
-    · rintro ⟨r, hr⟩
-      cases r with
-      | nil => simp at hr
-      | cons a r =>
-        simp only [List.map_cons, List.cons.injEq] at hr
-        obtain ⟨rfl, rfl⟩ := hr
-        exact ⟨rfl, r, rfl⟩
-
-theorem anyNaN_true_iff (l : List Num) : anyNaN l = true ↔ ∃ x ∈ l, x.isNaN = true := by
-  simp [anyNaN]; rfl
-
-theorem adjAll_iff_isChain {R : ℝ → ℝ → Prop} [DecidableRel R] {r : Num → Num → Bool}
-    (hr : ∀ a b, r (Num.fin a) (Num.fin b) = decide (R a b)) (l : List ℝ) :
-    adjAll r (l.map Num.fin) = true ↔ List.IsChain R l := by
-  induction l with
-  | nil => simp [adjAll]
-  | cons a l ih =>
-    cases l with
-    | nil => simp [adjAll]
-    | cons b l =>
-      simp only [List.map_cons, adjAll, Bool.and_eq_true, hr, decide_eq_true_eq,
-        List.isChain_cons_cons] at ih ⊢
-      rw [ih]
-
-theorem adjAll_lt_iff (l : List ℝ) :
-    adjAll Scalar.lt (l.map Num.fin) = true ↔ l.Pairwise (· < ·) := by
-  rw [adjAll_iff_isChain (R := (· < ·)) (fun a b => rfl), List.isChain_iff_pairwise]
-
-theorem adjAll_le_iff (l : List ℝ) :
-    adjAll Scalar.le (l.map Num.fin) = true ↔ l.Pairwise (· ≤ ·) := by
-  rw [adjAll_iff_isChain (R := (· ≤ ·)) (fun a b => rfl), List.isChain_iff_pairwise]
-
-/-- A NaN-free list is the image of a unique real list. -/
-theorem map_fin_injective : Function.Injective (List.map Num.fin) :=
-  List.map_injective_iff.mpr (fun a b h => by cases h; rfl)
-
-/-- §9.2 + Q-7: `xs` is accepted iff it is NaN-free and non-decreasing. -/
-theorem validateSearchsorted_ok_iff (xs : List Num) :
-    (∃ v, validateSearchsorted (Arg.const1 xs) = .ok v) ↔
-      ∃ r : List ℝ, xs = r.map Num.fin ∧ r.Pairwise (· ≤ ·) := by
-  simp only [validateSearchsorted]
-  constructor
-  · rintro ⟨v, hv⟩
-    split_ifs at hv with h1 h2
-    obtain ⟨r, rfl⟩ := (anyNaN_false_iff xs).mp (by simpa using h1)
-    exact ⟨r, rfl, (adjAll_le_iff r).mp (by simpa using h2)⟩
-  · rintro ⟨r, rfl, hr⟩
-    have h1 : anyNaN (r.map Num.fin) = false := (anyNaN_false_iff _).mpr ⟨r, rfl⟩
-    have h2 := (adjAll_le_iff r).mpr hr
-    exact ⟨r.map Num.fin, by simp [h1, h2]⟩
-
-/-- Q-7: a NaN in `xs` is `searchsorted_nan`, checked before monotonicity. -/
-theorem validateSearchsorted_nan (xs : List Num) (h : ∃ x ∈ xs, x.isNaN = true) :
-    validateSearchsorted (Arg.const1 xs) = .error "searchsorted_nan" := by
-  have := (anyNaN_true_iff xs).mpr h
-  simp [validateSearchsorted, this, Codes.searchsortedNaN]
-
-/-- §9.2: a NaN-free `xs` that is not non-decreasing is `searchsorted_non_monotonic`. -/
-theorem validateSearchsorted_non_monotonic (r : List ℝ) (h : ¬ r.Pairwise (· ≤ ·)) :
-    validateSearchsorted (Arg.const1 (r.map Num.fin)) = .error "searchsorted_non_monotonic" := by
-  have h1 : anyNaN (r.map Num.fin) = false := (anyNaN_false_iff _).mpr ⟨r, rfl⟩
-  have h2 : adjAll Scalar.le (r.map Num.fin) = false := by
-    cases e : adjAll Scalar.le (r.map Num.fin)
-    · rfl
-    · exact absurd ((adjAll_le_iff r).mp e) h
-  simp [validateSearchsorted, h1, h2, Codes.searchsortedNonMonotonic]
-
-/-- §9.2 + Q-105, the first check: `xs` is rejected with `interp_axis_not_const`
-exactly when it is not a rank-1 `const` array. -/
-theorem validateSearchsorted_not_const_iff (a : Arg Num) :
-    validateSearchsorted a = .error "interp_axis_not_const" ↔ ∀ xs, a ≠ Arg.const1 xs := by
-  constructor
-  · intro h xs ha
-    subst ha
-    simp only [validateSearchsorted] at h
-    split_ifs at h <;> simp [Codes.searchsortedNaN, Codes.searchsortedNonMonotonic] at h
-  · intro h
-    cases a with
-    | const1 xs => exact absurd rfl (h xs)
-    | _ => rfl
-
-/-- §9.2 + Q-7 + Q-105, the second check: `searchsorted_nan` exactly when `xs`
-is a rank-1 `const` array (the first check passes) holding a NaN. -/
-theorem validateSearchsorted_nan_iff (a : Arg Num) :
-    validateSearchsorted a = .error "searchsorted_nan" ↔
-      ∃ xs, a = Arg.const1 xs ∧ ∃ x ∈ xs, x.isNaN = true := by
-  constructor
-  · intro h
-    cases a with
-    | const1 xs =>
-      refine ⟨xs, rfl, ?_⟩
-      simp only [validateSearchsorted] at h
-      split_ifs at h with h1
-      · exact (anyNaN_true_iff xs).mp h1
-      all_goals simp [Codes.searchsortedNonMonotonic] at h
-    | _ => simp [validateSearchsorted, Codes.interpAxisNotConst] at h
-  · rintro ⟨xs, rfl, hx⟩
-    exact validateSearchsorted_nan xs hx
-
-/-- §9.2 + Q-105, the third check: `searchsorted_non_monotonic` exactly when
-`xs` is a NaN-free rank-1 `const` array (the first two checks pass) that is not
-non-decreasing. -/
-theorem validateSearchsorted_non_monotonic_iff (a : Arg Num) :
-    validateSearchsorted a = .error "searchsorted_non_monotonic" ↔
-      ∃ r : List ℝ, a = Arg.const1 (r.map Num.fin) ∧ ¬ r.Pairwise (· ≤ ·) := by
-  constructor
-  · intro h
-    cases a with
-    | const1 xs =>
-      simp only [validateSearchsorted] at h
-      split_ifs at h with h1 h2
-      · simp [Codes.searchsortedNaN] at h
-      · obtain ⟨r, rfl⟩ := (anyNaN_false_iff xs).mp (by simpa using h1)
-        exact ⟨r, rfl, fun hr => by simp [(adjAll_le_iff r).mpr hr] at h2⟩
-    | _ => simp [validateSearchsorted, Codes.interpAxisNotConst] at h
-  · rintro ⟨r, rfl, hr⟩
-    exact validateSearchsorted_non_monotonic r hr
-
-/-- §9.2 argument contract for `interp.linear`: accepted iff both arguments are
-rank-1 `const` arrays, the axis has ≥ 2 entries, the lengths agree, and the
-axis is NaN-free and strictly increasing (table entries MAY be NaN, Q-5). -/
-theorem validateLinear_ok_iff (t ax : Arg Num) :
-    (∃ v, validateLinear t ax = .ok v) ↔
-      ∃ t' ax', t = .const1 t' ∧ ax = .const1 ax' ∧ 2 ≤ ax'.length ∧ t'.length = ax'.length ∧
-        ∃ r : List ℝ, ax' = r.map Num.fin ∧ r.Pairwise (· < ·) := by
-  constructor
-  · rintro ⟨v, hv⟩
-    cases t <;> cases ax <;> simp only [validateLinear, reduceCtorEq] at hv
-    case const1.const1 t ax =>
-      split_ifs at hv with h1 h2 h3 h4
-      obtain ⟨r, rfl⟩ := (anyNaN_false_iff ax).mp (show anyNonFinite ax = false by simpa using h3)
-      exact ⟨t, _, rfl, rfl, by simpa using h1, by simpa using h2, r, rfl,
-        (adjAll_lt_iff r).mp (by simpa using h4)⟩
-  · rintro ⟨t, _, rfl, rfl, h1, h2, r, rfl, hr⟩
-    have h3 : anyNonFinite (r.map Num.fin) = false := (anyNaN_false_iff _).mpr ⟨r, rfl⟩
-    have h4 := (adjAll_lt_iff r).mpr hr
-    refine ⟨(t, r.map Num.fin), ?_⟩
-    have c1 : ¬ (r.map Num.fin).length < 2 := by omega
-    simp only [validateLinear, h3, h4, h2, c1, ne_eq, not_true_eq_false, Bool.not_true,
-      Bool.false_eq_true, ↓reduceIte]
-
-/-- The statement of the retired property P-interp-linear-not-const: a
-non-`const` table is `interp_table_not_const`, and ANY other table with a
-non-`const` axis is `interp_axis_not_const`. -/
-def LinearNotConstOld : Prop :=
-  ∀ (t ax : Arg Num), validateLinear .other ax = .error "interp_table_not_const" ∧
-    (t ≠ .other → validateLinear t .other = .error "interp_axis_not_const")
-
-/-- Refuted under Q-108: a scalar `const` table is the wrong rank, so it is
-`interp_table_not_const` (checked first), whatever the axis. -/
-theorem validateLinear_not_const_refuted : ¬ LinearNotConstOld := by
-  intro h
-  have := (h (.const0 .nan) .other).2 (fun e => by cases e)
-  simp [validateLinear, Codes.interpTableNotConst] at this
-
-/-- §9.2 + Q-108 for `interp.linear`: `interp_table_not_const` exactly when the
-table is not a rank-1 `const` array (checked first), and
-`interp_axis_not_const` exactly when the table is one and the axis is not. -/
-theorem validateLinear_rank (t ax : Arg Num) :
-    (validateLinear t ax = .error "interp_table_not_const" ↔ ∀ t', t ≠ .const1 t') ∧
-      (validateLinear t ax = .error "interp_axis_not_const" ↔
-        (∃ t', t = .const1 t') ∧ ∀ a', ax ≠ .const1 a') := by
-  cases t <;> cases ax <;>
-    simp only [validateLinear, Codes.interpTableNotConst, Codes.interpAxisNotConst,
-      ne_eq, reduceCtorEq, not_false_eq_true, implies_true, true_iff,
-      exists_false, false_and, and_true, true_and] <;>
-    first
-    | (split_ifs <;> simp [Codes.interpTooShort, Codes.interpLengthMismatch,
-        Codes.interpNaNInAxis, Codes.interpNonMonotonic])
-    | simp
-
-/-- §9.2 + Q-4: on rank-1 `const` arguments every rejection names a violated
-condition: `interp_axis_too_short` (axis shorter than 2),
-`interp_axis_length_mismatch` (lengths differ), `interp_nan_in_axis` (a NaN
-axis entry), `interp_non_monotonic_axis` (a NaN-free axis not strictly
-increasing). -/
-theorem validateLinear_code_sound (t ax : List Num) (c : Code)
-    (h : validateLinear (Arg.const1 t) (Arg.const1 ax) = .error c) :
-    (c = "interp_axis_too_short" ∧ ax.length < 2) ∨
-      (c = "interp_axis_length_mismatch" ∧ t.length ≠ ax.length) ∨
-      (c = "interp_nan_in_axis" ∧ ∃ x ∈ ax, x.isNaN = true) ∨
-      (c = "interp_non_monotonic_axis" ∧ ∃ r : List ℝ, ax = r.map Num.fin ∧ ¬ r.Pairwise (· < ·)) := by
-  simp only [validateLinear] at h
-  split_ifs at h with h1 h2 h3 h4 <;> simp only [Except.error.injEq] at h <;> subst h
-  · exact Or.inl ⟨rfl, h1⟩
-  · exact Or.inr (Or.inl ⟨rfl, h2⟩)
-  · exact Or.inr (Or.inr (Or.inl ⟨rfl, (anyNaN_true_iff ax).mp h3⟩))
-  · obtain ⟨r, rfl⟩ := (anyNaN_false_iff ax).mp (show anyNonFinite ax = false by simpa using h3)
-    refine Or.inr (Or.inr (Or.inr ⟨rfl, r, rfl, fun hr => ?_⟩))
-    exact absurd ((adjAll_lt_iff r).mpr hr) (by simpa using h4)
-
-/-- Q-4: an axis with a NaN entry is `interp_nan_in_axis`, never
-`interp_non_monotonic_axis` (whenever the shape checks pass). -/
-theorem validateLinear_nan_precedence (t ax : List Num) (hlen : 2 ≤ ax.length)
-    (heq : t.length = ax.length) (hn : ∃ x ∈ ax, x.isNaN = true) :
-    validateLinear (Arg.const1 t) (Arg.const1 ax) = .error "interp_nan_in_axis" := by
-  have : anyNonFinite ax = true := (anyNaN_true_iff ax).mpr hn
-  simp [validateLinear, this, heq, show ¬ ax.length < 2 by omega, Codes.interpNaNInAxis]
-
-/-- §9.2 argument contract for `interp.bilinear` (shape relation of
-`spec.9.2.interp-bilinear-shape`). -/
-theorem validateBilinear_ok_iff (T : List (List Num)) (ax ay : List Num) :
-    (∃ v, validateBilinear (Arg.const2 T) (Arg.const1 ax) (Arg.const1 ay) = .ok v) ↔
-      2 ≤ ax.length ∧ 2 ≤ ay.length ∧ T.length = ax.length ∧ (∀ row ∈ T, row.length = ay.length) ∧
-        (∃ r : List ℝ, ax = r.map Num.fin ∧ r.Pairwise (· < ·)) ∧
-        (∃ r : List ℝ, ay = r.map Num.fin ∧ r.Pairwise (· < ·)) := by
-  simp only [validateBilinear]
-  constructor
-  · rintro ⟨v, hv⟩
-    split_ifs at hv with h1 h2 h3 h4
-    simp only [Bool.or_eq_true, decide_eq_true_eq, not_or, not_lt] at h1
-    simp only [Bool.or_eq_true, decide_eq_true_eq, List.any_eq_true, not_or, not_exists,
-      not_and, Decidable.not_not, ne_eq] at h2
-    simp only [Bool.or_eq_true, not_or, Bool.not_eq_true] at h3
-    simp only [Bool.not_eq_true', Bool.and_eq_false_iff, not_or, Bool.not_eq_false] at h4
-    obtain ⟨rx, rfl⟩ := (anyNaN_false_iff ax).mp h3.1
-    obtain ⟨ry, rfl⟩ := (anyNaN_false_iff ay).mp h3.2
-    exact ⟨h1.1, h1.2, h2.1, h2.2, ⟨rx, rfl, (adjAll_lt_iff rx).mp h4.1⟩,
-      ⟨ry, rfl, (adjAll_lt_iff ry).mp h4.2⟩⟩
-  · rintro ⟨h1, h2, h3, h4, ⟨rx, rfl, hx⟩, ⟨ry, rfl, hy⟩⟩
-    have n1 : anyNonFinite (rx.map Num.fin) = false := (anyNaN_false_iff _).mpr ⟨rx, rfl⟩
-    have n2 : anyNonFinite (ry.map Num.fin) = false := (anyNaN_false_iff _).mpr ⟨ry, rfl⟩
-    have m1 := (adjAll_lt_iff rx).mpr hx
-    have m2 := (adjAll_lt_iff ry).mpr hy
-    have c1 : (decide ((rx.map Num.fin).length < 2) || decide ((ry.map Num.fin).length < 2)) = false := by
-      simp only [Bool.or_eq_false_iff, decide_eq_false_iff_not, not_lt]; omega
-    have c2 : (decide (T.length ≠ (rx.map Num.fin).length) ||
-        T.any (fun row => decide (row.length ≠ (ry.map Num.fin).length))) = false := by
-      simpa [h3] using h4
-    refine ⟨(T, rx.map Num.fin, ry.map Num.fin), ?_⟩
-    simp only [c1, c2, n1, n2, m1, m2, Bool.or_false, Bool.and_true, Bool.not_true,
-      Bool.false_eq_true, ↓reduceIte]
-
-/-- §9.2: `interp.bilinear` needs a rank-2 `const` table and rank-1 `const`
-axes; anything else is rejected, a non-`const` argument with the matching
-`*_not_const` code. -/
-theorem validateBilinear_needs_const (T ax ay : Arg Num) :
-    (validateBilinear .other ax ay = .error "interp_table_not_const") ∧
-      ((∃ v, validateBilinear T ax ay = .ok v) →
-        ∃ T' ax' ay', T = .const2 T' ∧ ax = .const1 ax' ∧ ay = .const1 ay') := by
-  refine ⟨rfl, ?_⟩
-  rintro ⟨v, hv⟩
-  cases T <;> cases ax <;> cases ay <;> simp only [validateBilinear, reduceCtorEq] at hv
-  exact ⟨_, _, _, rfl, rfl, rfl⟩
-
-/-- §9.2 + Q-4 for `interp.bilinear`: every rejection names a violated
-condition. -/
-theorem validateBilinear_code_sound (T : List (List Num)) (ax ay : List Num) (c : Code)
-    (h : validateBilinear (Arg.const2 T) (Arg.const1 ax) (Arg.const1 ay) = .error c) :
-    (c = "interp_axis_too_short" ∧ (ax.length < 2 ∨ ay.length < 2)) ∨
-      (c = "interp_axis_length_mismatch" ∧
-        (T.length ≠ ax.length ∨ ∃ row ∈ T, row.length ≠ ay.length)) ∨
-      (c = "interp_nan_in_axis" ∧ ((∃ x ∈ ax, x.isNaN = true) ∨ ∃ y ∈ ay, y.isNaN = true)) ∨
-      (c = "interp_non_monotonic_axis" ∧
-        ((∃ r : List ℝ, ax = r.map Num.fin ∧ ¬ r.Pairwise (· < ·)) ∨
-          ∃ r : List ℝ, ay = r.map Num.fin ∧ ¬ r.Pairwise (· < ·))) := by
-  simp only [validateBilinear] at h
-  split_ifs at h with h1 h2 h3 h4 <;> simp only [Except.error.injEq] at h <;> subst h
-  · simp only [Bool.or_eq_true, decide_eq_true_eq] at h1
-    exact Or.inl ⟨rfl, h1⟩
-  · simp only [Bool.or_eq_true, decide_eq_true_eq, List.any_eq_true, ne_eq] at h2
-    exact Or.inr (Or.inl ⟨rfl, h2⟩)
-  · simp only [Bool.or_eq_true] at h3
-    exact Or.inr (Or.inr (Or.inl ⟨rfl, h3.imp (anyNaN_true_iff ax).mp (anyNaN_true_iff ay).mp⟩))
-  · simp only [Bool.or_eq_true, not_or, Bool.not_eq_true] at h3
-    obtain ⟨rx, rfl⟩ := (anyNaN_false_iff ax).mp h3.1
-    obtain ⟨ry, rfl⟩ := (anyNaN_false_iff ay).mp h3.2
-    simp only [Bool.not_eq_true', Bool.and_eq_false_iff] at h4
-    refine Or.inr (Or.inr (Or.inr ⟨rfl, ?_⟩))
-    rcases h4 with h4 | h4
-    · exact Or.inl ⟨rx, rfl, fun hr => by simp [(adjAll_lt_iff rx).mpr hr] at h4⟩
-    · exact Or.inr ⟨ry, rfl, fun hr => by simp [(adjAll_lt_iff ry).mpr hr] at h4⟩
-
-/-- Q-4 for `interp.bilinear`: a NaN in EITHER axis is `interp_nan_in_axis`,
-even when the other axis is non-monotonic. -/
-theorem validateBilinear_nan_precedence (T : List (List Num)) (ax ay : List Num)
-    (h1 : 2 ≤ ax.length) (h2 : 2 ≤ ay.length) (h3 : T.length = ax.length)
-    (h4 : ∀ row ∈ T, row.length = ay.length)
-    (hn : (∃ x ∈ ax, x.isNaN = true) ∨ ∃ y ∈ ay, y.isNaN = true) :
-    validateBilinear (Arg.const2 T) (Arg.const1 ax) (Arg.const1 ay) = .error "interp_nan_in_axis" := by
-  have hn' : (anyNonFinite ax || anyNonFinite ay) = true := by
-    rcases hn with hn | hn
-    · simp [show anyNonFinite ax = true from (anyNaN_true_iff ax).mpr hn]
-    · simp [show anyNonFinite ay = true from (anyNaN_true_iff ay).mpr hn]
-  have c1 : (decide (ax.length < 2) || decide (ay.length < 2)) = false := by
-    simp only [Bool.or_eq_false_iff, decide_eq_false_iff_not, not_lt]; omega
-  have c2 : (decide (T.length ≠ ax.length) ||
-      T.any (fun row => decide (row.length ≠ ay.length))) = false := by
-    simpa [h3] using h4
-  simp only [validateBilinear, c1, c2, hn', Bool.false_eq_true, ↓reduceIte]
-  rfl
-
-/-- §9.2 + Q-108 for `interp.bilinear`: `interp_table_not_const` exactly when
-the table is not a rank-2 `const` array (checked first), and
-`interp_axis_not_const` exactly when it is one and some axis is not a rank-1
-`const` array. -/
-theorem validateBilinear_rank (T ax ay : Arg Num) :
-    (validateBilinear T ax ay = .error "interp_table_not_const" ↔ ∀ T', T ≠ .const2 T') ∧
-      (validateBilinear T ax ay = .error "interp_axis_not_const" ↔
-        (∃ T', T = .const2 T') ∧ ¬ ((∃ a', ax = .const1 a') ∧ ∃ b', ay = .const1 b')) := by
-  cases T <;> cases ax <;> cases ay <;>
-    simp only [validateBilinear, Codes.interpTableNotConst, Codes.interpAxisNotConst,
-      ne_eq, reduceCtorEq, not_false_eq_true, implies_true, true_iff,
-      exists_false, false_and, and_false, and_true, true_and,
-      iff_false, not_and, not_exists] <;>
-    first
-    | (split_ifs <;> simp [Codes.interpTooShort, Codes.interpLengthMismatch,
-        Codes.interpNaNInAxis, Codes.interpNonMonotonic])
-    | simp
-
-/-- §9.2 + Q-108: an empty `xs` passes every check, and every query against it,
-NaN included, returns `N + 1 = 1`. -/
-theorem searchsorted_empty (x : Num) :
-    validateSearchsorted (Arg.const1 ([] : List Num)) = .ok [] ∧ searchsorted x [] = 1 := by
-  simp [validateSearchsorted, anyNaN, adjAll, searchsorted]
-
-end ValidationProofs
 
 end Esm.Closed

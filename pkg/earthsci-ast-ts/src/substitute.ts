@@ -65,7 +65,7 @@ export function substitute(
   // ExpressionNode case: substitute EVERY expression-bearing child, not just
   // `args`. `mapChildren` (expression.ts) enumerates the complete, canonical
   // child set — `args`, aggregate `expr`/`filter`/`key`, integral
-  // `lower`/`upper`, `makearray` `values`, `table_lookup` `axes`, and template
+  // `lower`/`upper`, `makearray` `values`, and template
   // `bindings` — so structural subexpressions are no longer silently skipped.
   // Every non-child metadata field (`op`, `wrt`, `reduce`, `dim`, ...) is
   // preserved verbatim.

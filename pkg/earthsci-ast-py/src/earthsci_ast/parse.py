@@ -11,7 +11,6 @@ import copy
 import json
 import os
 import re
-import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -38,10 +37,12 @@ if TYPE_CHECKING:
 import jsonschema
 from jsonschema import validate
 
+from . import op_registry
 from .error_handling import (
     AMBIGUOUS_SUBSYSTEM_REF,
     DATA_SOURCE_MERGE_CONFLICT,
     ELEMENT_TYPE_UNCARRIED,
+    REMOVED_OP,
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
     SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
     UNRESOLVED_SUBSYSTEM_REF,
@@ -76,8 +77,6 @@ from .esm_types import (
     Expr,
     ExprNode,
     FunctionalUpdate,
-    FunctionTable,
-    FunctionTableAxis,
     Metadata,
     Model,
     ModelVariable,
@@ -180,7 +179,7 @@ def _count_top_level_systems(parsed) -> int:
 # Prior steps, for the record: 0.9.0 made template references survive
 # parse->emit (§9.6.4); 0.8.0 replaced the bespoke spatial-grid / discretization
 # / regrid machinery with `aggregate` FAQ nodes; 0.4.0 added the
-# sampled-function-tables block + `table_lookup`; 0.5.0 widened `plots.y`; 0.6.0
+# sampled-function-tables block (removed at 2.0.0); 0.5.0 widened `plots.y`; 0.6.0
 # added the `integral` AST op.
 # `SCHEMA_VERSION` / `_CURRENT_VERSION` are defined just below `_get_schema`,
 # derived from the bundled schema's `$id` so they cannot hand-drift from it.
@@ -291,12 +290,11 @@ def _parse_expression(
         # Parse ExprNode. ``op`` is required (direct index → KeyError on a
         # malformed hand-built node); every other field is decoded from the
         # single wire-codec declaration (EXPR_WIRE_SPEC, esm_types) by its codec
-        # ``kind``. ``table_axes`` is op-gated + validated, so it is handled
-        # after the generic pass rather than in it.
+        # ``kind``.
         op = expr_data["op"]
         kwargs: dict[str, Any] = {"op": op}
         for name, wire, kind, required in EXPR_WIRE_SPEC:
-            if name in ("op", "table_axes"):
+            if name == "op":
                 continue
             if kind in ("scalar", "canonical_nested", "internal"):
                 # Parse does NOT canonicalize integer descriptor arrays — that is
@@ -325,41 +323,10 @@ def _parse_expression(
         # scalar field (like `wrt`), so `grad`/`div`/`laplacian` are NOT forced to
         # supply one — they are ordinary rewrite-target ops with no privilege, and
         # the schema mandates no `dim` per op (esm-spec §4.2 / §4.9.1).
-        # Geometry-kernel manifold (RFC §8.1, esm-spec.md §8.6.1). Both geometry
-        # leaves — the array-valued `intersect_polygon` clip and the fused scalar
-        # `polygon_intersection_area` — are strictly binary with a REQUIRED
-        # manifold (the schema enforces both); fail fast so a hand-built node
-        # mirrors that.
-        if op in ("intersect_polygon", "polygon_intersection_area") and kwargs["manifold"] is None:
-            raise ParseError(
-                f"Operator {op!r} requires a 'manifold' field "
-                "(planar / spherical / geodesic); it carries no default"
-            )
         if op == "call" and kwargs["handler_id"] is None:
             raise ParseError("Operator 'call' requires 'handler_id' field to be specified")
-        if op == "fn" and kwargs["name"] is None:
-            raise ParseError("Operator 'fn' requires 'name' field to be specified")
         if op == "const" and "value" not in expr_data:
             raise ParseError("Operator 'const' requires 'value' field to be specified")
-
-        # table_lookup (esm-spec §9.5, v0.4.0): table id, per-axis input
-        # expression map (carried under JSON key "axes"), optional output
-        # selector. ``args`` MUST be empty for a table_lookup node.
-        table_axes = None
-        if op == "table_lookup":
-            if kwargs["table"] is None:
-                raise ParseError("Operator 'table_lookup' requires 'table' field to be specified")
-            table_axes_raw = expr_data.get("axes")
-            if not isinstance(table_axes_raw, dict):
-                raise ParseError(
-                    "Operator 'table_lookup' requires 'axes' to be an object mapping axis names to input expressions"
-                )
-            table_axes = {k: rec(v) for k, v in table_axes_raw.items()}
-            if kwargs["args"]:
-                raise ParseError(
-                    "Operator 'table_lookup' must have empty 'args' (per-axis inputs live under 'axes')"
-                )
-        kwargs["table_axes"] = table_axes
 
         node = ExprNode(**kwargs)
         # Keep the raw dict alive alongside the memo entry so its id is stable.
@@ -1453,7 +1420,7 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
     # here, since a JSON Schema cannot express it.
     enums: dict[str, dict[str, int]] = {}
     if "enums" in data and data["enums"] is not None:
-        from .registered_functions import check_enum_block
+        from .enums import check_enum_block
 
         check_enum_block(data["enums"])
         for enum_name, mapping in data["enums"].items():
@@ -1476,46 +1443,6 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
     if "coupling" in data:
         for coupling_data in data["coupling"]:
             coupling.append(_parse_coupling_entry(coupling_data))
-
-    # Parse function_tables (esm-spec §9.5, v0.4.0). Each entry is a
-    # FunctionTable carrying named axes plus literal nested-array data,
-    # referenced by table_lookup AST nodes.
-    function_tables: dict[str, FunctionTable] = {}
-    if "function_tables" in data and data["function_tables"] is not None:
-        ft_map = data["function_tables"]
-        if not isinstance(ft_map, dict):
-            raise ParseError(
-                "Top-level 'function_tables' must be an object keyed by table id "
-                f"(esm-spec §9.5). Got: {type(ft_map).__name__}"
-            )
-        for ft_name, ft_data in ft_map.items():
-            axes_raw = ft_data.get("axes")
-            if not isinstance(axes_raw, list):
-                raise ParseError(
-                    f"function_tables['{ft_name}']: 'axes' must be a list (esm-spec §9.5)"
-                )
-            axes = [
-                FunctionTableAxis(
-                    name=a["name"],
-                    values=list(a["values"]),
-                    units=a.get("units"),
-                )
-                for a in axes_raw
-            ]
-            if "data" not in ft_data:
-                raise ParseError(
-                    f"function_tables['{ft_name}']: 'data' is required (esm-spec §9.5)"
-                )
-            function_tables[ft_name] = FunctionTable(
-                axes=axes,
-                data=copy.deepcopy(ft_data["data"]),
-                description=ft_data.get("description"),
-                interpolation=ft_data.get("interpolation"),
-                out_of_bounds=ft_data.get("out_of_bounds"),
-                outputs=list(ft_data["outputs"]) if "outputs" in ft_data else None,
-                shape=list(ft_data["shape"]) if "shape" in ft_data else None,
-                schema_version=ft_data.get("schema_version"),
-            )
 
     # EsmFile.events is a flat aggregation of the component-owned events (the
     # SAME objects as model/rs .discrete_events/.continuous_events, so
@@ -1540,7 +1467,6 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
         operators=operators,
         registered_functions=registered_functions,
         enums=enums,
-        function_tables=function_tables,
         coupling=coupling,
         domain=domain,
         index_sets=index_sets,
@@ -1778,8 +1704,8 @@ def _load_ref_data(
                 path=mount_pointer,
             ) from exc
     # A REFERENCED document is a document: same wire boundary as the root
-    # (docs/content/rfcs/faq-node-rename.md §5.2). Without this the `aggregate`
-    # alias and `arrayop` both survive a `{ref}` all the way into `emit`.
+    # (docs/content/rfcs/faq-node-rename.md §5.2). Without this a removed op in
+    # a child would survive a `{ref}` all the way into `emit`.
     prepare_document_ops(ref_data)
 
     # Determine the new base_path for nested refs (and template imports): a
@@ -1912,7 +1838,7 @@ def _load_ref_data(
     # mount, so an importer declaring an enum of the same name cannot change
     # what the leaf computes. The leaf's own nested mounts resolve after this
     # returns, each lowered at its own edge.
-    from .registered_functions import EnumLoweringError, lower_mounted_document_enums
+    from .enums import EnumLoweringError, lower_mounted_document_enums
 
     try:
         ref_data = lower_mounted_document_enums(ref_data)
@@ -3166,10 +3092,9 @@ def _load_data(
     entry points above say which they are.
     """
 
-    # esm 1.1.0: rewrite the deprecated `aggregate` op spelling to the canonical
-    # `faq` at the wire boundary, ahead of every other pass, so the version
-    # gates, the schema, the typed tree and `emit` all see exactly one tag
-    # (docs/content/rfcs/faq-node-rename.md).
+    # Reject removed op spellings (`aggregate`, `arrayop`, the esm 2.0.0 ops)
+    # and fields at the wire boundary, ahead of every other pass, so none of
+    # them reaches the version gates, the schema or the open rewrite-target tier.
     prepare_document_ops(data)
 
     # Strip top-level events (not allowed by schema, but accepted for tooling roundtrip)
@@ -3437,7 +3362,7 @@ def _load_data(
     # returns a new document, but subsystem resolution just above may have
     # aliased Model / ReactionSystem objects into places that must see the
     # lowered trees, so the load path lowers `esm_file` in place.
-    from .registered_functions import lower_enums_mut
+    from .enums import lower_enums_mut
 
     lower_enums_mut(esm_file)
 
@@ -3449,43 +3374,7 @@ def _load_data(
         for ev in top_discrete_events:
             esm_file.events.append(_parse_discrete_event(ev))
 
-    # The §9.2 closed-function argument checks on every `interp.*` `fn` node and
-    # the §9.5.5 checks on every function table and `table_lookup`, on the tree
-    # as loaded (templates expanded, enums lowered): they run at load, not when
-    # something first evaluates or lowers the node (ruling Q-106).
-    from .load_checks import check_document
-
-    check_document(esm_file)
-
     return esm_file
-
-
-class EsmDeprecationWarning(UserWarning):
-    """A deprecated ESM construct was accepted and normalized.
-
-    Subclasses :class:`UserWarning`, not :class:`DeprecationWarning`, on
-    purpose: Python filters ``DeprecationWarning`` outside ``__main__``, so a
-    library-issued one is invisible to exactly the users who need it — the four
-    other bindings all print unconditionally.
-    """
-
-
-def _rewrite_op_aliases(node: object) -> int:
-    """Depth-first rewrite of ``"op": "aggregate"`` to ``"op": "faq"``.
-
-    Returns how many nodes were rewritten.
-    """
-    n = 0
-    if isinstance(node, dict):
-        if node.get("op") == "aggregate":
-            node["op"] = "faq"
-            n += 1
-        for value in node.values():
-            n += _rewrite_op_aliases(value)
-    elif isinstance(node, list):
-        for value in node:
-            n += _rewrite_op_aliases(value)
-    return n
 
 
 def _find_op(node: object, op: str, at: str = "") -> str | None:
@@ -3520,55 +3409,96 @@ def _version_below_v11(data: object) -> bool:
     return (major, minor) < (1, 1)
 
 
-def prepare_document_ops(data: object) -> int:
-    """The wire boundary for expression-node ``op`` spellings, applied to EVERY
-    document — root, ``{ref}``-loaded child, template library, coupling library.
+#: Ops removed at esm 2.0.0, rejected BY NAME with ``removed_op``. Each is a
+#: well-formed identifier, so the open rewrite-target tier (esm-spec §4.2) would
+#: otherwise admit it and the document would fail much later as
+#: ``unlowered_operator``.
+_REMOVED_OPS_2_0_0: frozenset[str] = frozenset(
+    op for op, version in op_registry.REMOVED_OPS.items() if version == "2.0.0"
+)
 
-    Three steps, in this order:
+#: The codemod a ``removed_op`` message points at.
+_CODEMOD_HINT = (
+    "Run the codemod (`python -m earthsci_ast.migrate`) to rewrite the document to "
+    "esm 2.0.0 (`aggregate` -> `faq`, removed ops -> esm:std/... templates)."
+)
 
-    1. ``arrayop`` (removed at esm 0.8.0) is rejected BY NAME. It is a
-       well-formed identifier, so esm-spec §4.2 would otherwise admit it as an
-       OPEN rewrite-target op: the document would load silently and fail much
-       later as ``unlowered_operator``, or never.
-    2. The ``faq`` version gate, on the AUTHORED form — ``faq`` arrives at esm
-       1.1.0 (esm-spec §2.2.4, same rule as the top-level ``solver`` block).
-       This runs BEFORE normalization deliberately: ``aggregate`` *is* the
-       pre-1.1.0 spelling, so a 1.0.0 document carrying the alias is legal and
-       must not be caught here.
-    3. ``aggregate`` is normalized to ``faq`` and the declared version is raised
-       to the 1.1.0 floor with it, so the upgraded document is self-consistent
-       rather than spelling a 1.1.0 construct under an older version.
 
-    Returns the number of nodes normalized. See
-    ``docs/content/rfcs/faq-node-rename.md``.
-    """
+def _find_removed(node: object, at: str = "") -> tuple[str, str, str] | None:
+    """The first removed construct in ``node``, as ``(kind, name, path)``:
+    ``("op", <op>, <path>)`` for a node whose ``op`` is in
+    :data:`_REMOVED_OPS_2_0_0`, ``("field", "function_tables", <path>)`` for a
+    ``function_tables`` key (top-level or on a component). ``None`` if there is
+    none."""
+    if isinstance(node, dict):
+        op = node.get("op")
+        if isinstance(op, str) and op in _REMOVED_OPS_2_0_0:
+            return ("op", op, at)
+        if "function_tables" in node:
+            return ("field", "function_tables", f"{at}/function_tables")
+        for key, child in node.items():
+            hit = _find_removed(child, f"{at}/{key}")
+            if hit is not None:
+                return hit
+    elif isinstance(node, list):
+        for i, child in enumerate(node):
+            hit = _find_removed(child, f"{at}/{i}")
+            if hit is not None:
+                return hit
+    return None
+
+
+def reject_removed_constructs(data: object) -> None:
+    """Raise ``removed_op`` (a :class:`ParseError` carrying ``code``) for the
+    first op or field ``data`` spells that the format has removed: ``arrayop``
+    (esm 0.8.0); the ops in :data:`_REMOVED_OPS_2_0_0` and the
+    ``function_tables`` block (esm 2.0.0). The message names the op or field
+    and its node path."""
     path = _find_op(data, "arrayop")
     if path is not None:
-        raise ParseError(
+        err = ParseError(
             f'removed_op at {path}: \'"op": "arrayop"\' was removed at esm 0.8.0 and is '
             'not a deprecated alias; use \'"op": "faq"\' (the Functional Aggregate Query '
             "node). See docs/content/rfcs/faq-node-rename.md."
         )
+        err.code = REMOVED_OP
+        raise err
+    hit = _find_removed(data)
+    if hit is None:
+        return
+    kind, name, at = hit
+    what = f'\'"op": "{name}"\'' if kind == "op" else f"the `{name}` block"
+    err = ParseError(f"removed_op at {at or '/'}: {what} was removed at esm 2.0.0. {_CODEMOD_HINT}")
+    err.code = REMOVED_OP
+    raise err
+
+
+def prepare_document_ops(data: object) -> None:
+    """The wire boundary for expression-node ``op`` spellings, applied to EVERY
+    document — root, ``{ref}``-loaded child, template library, coupling library.
+
+    Two steps, in this order:
+
+    1. Removed constructs are rejected BY NAME with ``removed_op``
+       (:func:`reject_removed_constructs`): ``arrayop`` (esm 0.8.0), and at esm
+       2.0.0 the ``aggregate`` alias of ``faq``, ``fn``, ``table_lookup``,
+       ``skolem``, ``rank``,
+       ``intersect_polygon``, ``polygon_intersection_area``, ``argmin``,
+       ``argmax`` and the ``function_tables`` block. Each op is a well-formed
+       identifier, so esm-spec §4.2 would otherwise admit it as an OPEN
+       rewrite-target op: the document would load silently and fail much later
+       as ``unlowered_operator``, or never.
+    2. The ``faq`` version gate — ``faq`` arrives at esm 1.1.0 (esm-spec
+       §2.2.4, same rule as the top-level ``solver`` block).
+
+    See ``docs/content/rfcs/faq-node-rename.md``.
+    """
+    reject_removed_constructs(data)
     faq_at = _find_op(data, "faq")
     if faq_at is not None and _version_below_v11(data):
         declared = data.get("esm") if isinstance(data, dict) else None
         raise ParseError(
             f"faq_version_too_old at {faq_at}: the `faq` op arrives at esm 1.1.0; file "
-            f'declares {declared}. Use \'"op": "aggregate"\' (the deprecated pre-1.1.0 '
-            "spelling) or raise the declared version. "
+            f"declares {declared}. Raise the declared version. "
             "See docs/content/rfcs/faq-node-rename.md."
         )
-    n = _rewrite_op_aliases(data)
-    if n:
-        if isinstance(data, dict) and _version_below_v11(data):
-            data["esm"] = "1.1.0"
-        warnings.warn(
-            'deprecated_op_alias: \'"op": "aggregate"\' is the pre-1.1.0 spelling of '
-            f'\'"op": "faq"\' (Functional Aggregate Query); {n} '
-            f"{'node was' if n == 1 else 'nodes were'} normalized on load. The alias is "
-            "REMOVED at esm 2.0.0 -- re-emit this document to migrate it "
-            "(docs/content/rfcs/faq-node-rename.md).",
-            EsmDeprecationWarning,
-            stacklevel=2,
-        )
-    return n

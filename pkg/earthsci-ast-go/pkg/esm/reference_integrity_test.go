@@ -26,8 +26,7 @@ import (
 var exprNodeNonExpressionFields = map[string]bool{
 	"units": true, // a const's declared unit string (esm-spec §4.8.5)
 	"op":    true, "wrt": true, "dim": true, "fn": true, "var": true,
-	"name": true, "table": true, "manifold": true, "reduce": true,
-	"semiring": true, "distinct": true, "label": true, "arg": true,
+	"name": true, "reduce": true, "semiring": true, "distinct": true,
 	"id": true, "expect_cadence": true,
 	// Expression-TYPED but deliberately not walked by the keystone: `value` is a
 	// const payload, `shape`/`perm`/`axis` are literal array metadata and
@@ -45,21 +44,19 @@ func fullyPopulatedExprNode() (ExprNode, map[string]string) {
 		return sentinel
 	}
 	return ExprNode{
-		Op:        "faq",
-		Args:      []any{mark("s_args", "args")},
-		Lower:     mark("s_lower", "lower"),
-		Upper:     mark("s_upper", "upper"),
-		Expr:      mark("s_expr", "expr"),
-		Filter:    mark("s_filter", "filter"),
-		Key:       mark("s_key", "key"),
-		Values:    []any{mark("s_values", "values")},
-		TableAxes: map[string]Expression{"a": mark("s_axes", "axes")},
-		Bindings:  map[string]any{"b": mark("s_bindings", "bindings")},
-		Output:    mark("s_output", "output"),
-		Attrs:     map[string]any{"scheme": mark("s_attrs", "attrs")},
-		Ranges:    map[string]any{"i": mark("s_ranges", "ranges")},
-		Join:      []any{mark("s_join", "join")},
-		Regions:   [][][]any{{{mark("s_regions", "regions")}}},
+		Op:       "faq",
+		Args:     []any{mark("s_args", "args")},
+		Lower:    mark("s_lower", "lower"),
+		Upper:    mark("s_upper", "upper"),
+		Expr:     mark("s_expr", "expr"),
+		Filter:   mark("s_filter", "filter"),
+		Key:      mark("s_key", "key"),
+		Values:   []any{mark("s_values", "values")},
+		Bindings: map[string]any{"b": mark("s_bindings", "bindings")},
+		Attrs:    map[string]any{"scheme": mark("s_attrs", "attrs")},
+		Ranges:   map[string]any{"i": mark("s_ranges", "ranges")},
+		Join:     []any{mark("s_join", "join")},
+		Regions:  [][][]any{{{mark("s_regions", "regions")}}},
 	}, where
 }
 
@@ -71,10 +68,10 @@ func fullyPopulatedExprNode() (ExprNode, map[string]string) {
 //
 // Reference integrity walks exprRefChildren. If a field is expression-bearing and
 // the keystone walks it, it is either a reference site (checked) or one of the
-// five slots explicitly declared non-referential (esm-spec §4.5/§9.7.6). It
+// four slots explicitly declared non-referential (esm-spec §4.5/§9.7.6). It
 // CANNOT be silently skipped — which is exactly how an undefined name hiding in
-// an aggregate `expr`, an integral bound, a `makearray` `values` entry or a
-// `table_lookup` axis stayed invisible to the validator.
+// an aggregate `expr`, an integral bound or a `makearray` `values` entry stayed
+// invisible to the validator.
 //
 // Adding a new expression-bearing field to ExprNode fails this test until the
 // author classifies it, because the field-coverage check below requires
@@ -152,12 +149,11 @@ func TestExprRefChildrenCoverTheKeystone(t *testing.T) {
 // than the node as a whole.
 func TestExprRefChildrenTagsPointerPaths(t *testing.T) {
 	node := ExprNode{
-		Op:        "faq",
-		Args:      []any{"a0"},
-		Expr:      "e",
-		Lower:     "lo",
-		TableAxes: map[string]Expression{"lat": "ax"},
-		Values:    []any{"v0", "v1"},
+		Op:     "faq",
+		Args:   []any{"a0"},
+		Expr:   "e",
+		Lower:  "lo",
+		Values: []any{"v0", "v1"},
 	}
 	got := map[string]string{}
 	for _, child := range exprRefChildren(node) {
@@ -165,7 +161,7 @@ func TestExprRefChildrenTagsPointerPaths(t *testing.T) {
 	}
 	want := map[string]string{
 		"/args/0": "a0", "/expr": "e", "/lower": "lo",
-		"/axes/lat": "ax", "/values/0": "v0", "/values/1": "v1",
+		"/values/0": "v0", "/values/1": "v1",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("exprRefChildren paths = %v; want %v", got, want)

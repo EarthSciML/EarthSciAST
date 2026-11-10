@@ -14,7 +14,7 @@ What is pinned per fixture:
   ``default``, ``shape``, update kinds, distribution kind);
 * the equation count and every equation rendered with ``to_ascii``;
 * the derived ``system_kind``;
-* the registries — ``index_sets``, ``function_tables``, ``template_registry`` —
+* the registries — ``index_sets``, ``template_registry`` —
   and ``field_ics`` / ``loader_fields`` / ``lifted_shapes``.
 
 ORDER IS PART OF THE CONTRACT. A parameter vector is positional, so sorted or

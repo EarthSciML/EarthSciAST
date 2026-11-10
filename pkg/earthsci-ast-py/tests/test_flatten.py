@@ -644,8 +644,8 @@ def test_pointwise_lift_refuses_an_operand_on_a_foreign_index_set(shape):
     assert "index set 'z'" in str(exc.value)
 
 
-def test_pointwise_lift_leaves_a_whole_array_fn_argument_bare():
-    call = ExprNode(op="fn", name="interp.searchsorted", args=["p", "table"])
+def test_pointwise_lift_leaves_a_whole_array_op_argument_bare():
+    call = ExprNode(op="table_search", args=["p", "table"])
     body = _lift_2d(call, {"p": ["x"], "table": ["z"]})
     assert body.args[1].args[0] == _gather("p", "i")
     assert body.args[1].args[1] == "table"

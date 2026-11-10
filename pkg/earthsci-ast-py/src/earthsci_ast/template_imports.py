@@ -1730,7 +1730,7 @@ def _lower_library_template_body(library: Any, name: str, decl: Any, body: Any, 
     open_names = (
         frozenset(p for p in params if isinstance(p, str)) if _is_array(params) else frozenset()
     )
-    from .registered_functions import EnumLoweringError, lower_enum_ops_for_file
+    from .enums import EnumLoweringError, lower_enum_ops_for_file
 
     try:
         return lower_enum_ops_for_file(library, body, open_names)

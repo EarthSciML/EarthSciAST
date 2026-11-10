@@ -68,7 +68,7 @@ function write(name: string, doc: unknown): string {
 /** A consuming model whose §9.7.2 import edge points at `ref`. */
 function importer(ref: string): unknown {
   return {
-    esm: '1.0.0',
+    esm: '2.0.0',
     metadata: { name: 'envref_importer' },
     models: {
       M: {
@@ -88,7 +88,7 @@ function importer(ref: string): unknown {
 
 /** A leaf component file, for the §4.7 mount cases. */
 const leafDoc = {
-  esm: '1.0.0',
+  esm: '2.0.0',
   metadata: { name: 'envref_leaf' },
   models: {
     Leaf: {
@@ -100,7 +100,7 @@ const leafDoc = {
 
 /** A §10.9 coupling-library file, for the §10.10 import case. */
 const couplingLibDoc = {
-  esm: '1.0.0',
+  esm: '2.0.0',
   metadata: { name: 'envref_coupling_lib' },
   coupling_roles: { Fuel: { description: 'source' }, Spread: { description: 'sink' } },
   coupling: [
@@ -111,7 +111,7 @@ const couplingLibDoc = {
 /** An assembly whose §10.10 import edge points at `ref`. */
 function couplingImporter(ref: string): EsmFile {
   return {
-    esm: '1.0.0',
+    esm: '2.0.0',
     metadata: { name: 'envref_assembly' },
     models: {
       Src: { variables: { sigma: { type: 'parameter', units: '1', default: 1 } }, equations: [] },
@@ -204,7 +204,7 @@ describe('§4.7 `${VAR}` in a mount ref', () => {
     write('leaf.esm', leafDoc)
     process.env[LIB_DIR_VAR] = dir
     const host = {
-      esm: '1.0.0',
+      esm: '2.0.0',
       metadata: { name: 'host' },
       models: { Mounted: { ref: `\${${LIB_DIR_VAR}}/leaf.esm` } },
     } as unknown as EsmFile
@@ -218,7 +218,7 @@ describe('§4.7 `${VAR}` in a mount ref', () => {
     write('nested/leaf.esm', leafDoc)
     process.env[SUB_DIR_VAR] = 'nested'
     const host = {
-      esm: '1.0.0',
+      esm: '2.0.0',
       metadata: { name: 'host' },
       models: {
         Host: {
@@ -241,7 +241,7 @@ describe('§4.7 `${VAR}` in a mount ref', () => {
     write('leaf.esm', leafDoc)
     process.env[LIB_DIR_VAR] = dir
     const host = {
-      esm: '1.0.0',
+      esm: '2.0.0',
       metadata: { name: 'host' },
       models: { Mounted: { ref: `\${${LIB_DIR_VAR}}/leaf.esm` } },
     } as unknown as EsmFile
@@ -253,7 +253,7 @@ describe('§4.7 `${VAR}` in a mount ref', () => {
 
   it('leaves an unset variable literal and fails naming the `${VAR}` text', () => {
     const host = {
-      esm: '1.0.0',
+      esm: '2.0.0',
       metadata: { name: 'host' },
       models: { Mounted: { ref: `\${${LIB_DIR_VAR}}/leaf.esm` } },
     } as unknown as EsmFile
@@ -264,7 +264,7 @@ describe('§4.7 `${VAR}` in a mount ref', () => {
     write('leaf.esm', leafDoc)
     process.env[LIB_DIR_VAR] = dir
     const host = {
-      esm: '1.0.0',
+      esm: '2.0.0',
       metadata: { name: 'host' },
       models: { Mounted: { ref: `$${LIB_DIR_VAR}/leaf.esm` } },
     } as unknown as EsmFile
@@ -278,7 +278,7 @@ describe('§4.7 `${VAR}` in the mount-declared-metaparameter walk (§9.7.6 site 
   // Without expansion the `${VAR}` ref is unreadable, the walk silently widens
   // nothing, and the binding is refused as a typo.
   const sizedLeaf = {
-    esm: '1.0.0',
+    esm: '2.0.0',
     metadata: { name: 'envref_sized_leaf' },
     metaparameters: { ENVREF_N: { type: 'integer', default: 8 } },
     index_sets: { cells: { kind: 'interval', size: 'ENVREF_N' } },
@@ -292,7 +292,7 @@ describe('§4.7 `${VAR}` in the mount-declared-metaparameter walk (§9.7.6 site 
     },
   }
   const host = (ref: string) => ({
-    esm: '1.0.0',
+    esm: '2.0.0',
     metadata: { name: 'envref_meta_host' },
     models: { Mounted: { ref } },
   })

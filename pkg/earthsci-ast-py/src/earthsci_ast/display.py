@@ -795,7 +795,7 @@ def _format(target: Expr | Equation | Model | ReactionSystem | EsmFile, format_t
 
     if isinstance(target, dict) and "op" in target:
         # Structural / array-query ops carry defining data in non-`args` fields
-        # (value, table, axes, output_idx, …) that the ExprNode conversion below
+        # (value, bindings, output_idx, …) that the ExprNode conversion below
         # would drop, so render them directly from the dict first.
         structural = _format_structural_op(target, format_type)
         if structural is not None:
@@ -957,7 +957,7 @@ def _aggregate_symbol(semiring, reduce, format_type: str) -> str:
 
 
 def _format_ranges_clause(ranges: dict, format_type: str) -> str:
-    """Render the ` where {…}` range clause shared by aggregate and argmin/argmax."""
+    """Render the ` where {…}` range clause of an aggregate."""
     in_sym = " \\in " if format_type == "latex" else "∈" if format_type == "unicode" else " in "
     parts = []
     for k in sorted(ranges.keys()):
@@ -977,7 +977,7 @@ def _format_ranges_clause(ranges: dict, format_type: str) -> str:
 
 
 def _format_join_clause(join, format_type: str) -> str:
-    """Render the `` join(…)`` clause shared by ``faq`` and ``argmin``/``argmax``.
+    """Render the `` join(…)`` clause of a ``faq``.
 
     Returns ``""`` when there is none. Clauses are joined ``; ``. An equality
     clause lists its key-column pairs ``l=r`` and then, when present, the
@@ -1038,39 +1038,12 @@ def _format_aggregate(node, format_type: str) -> str:
     key = _node_field(node, "key")
     if key is not None:
         out += f" key={r(key)}"
-    # `id` is a bare-name clause rather than part of the `[…]` suffix so it adds
-    # no new bracket ambiguity with `table_lookup`'s `name[axis=…]` surface.
+    # `id` is a bare-name clause rather than part of the `[…]` suffix.
     node_id = _node_field(node, "id")
     if node_id is not None:
         out += f" id={node_id}"
     if semiring and semiring != "sum_product":
         out += f" [semiring={semiring}]"
-    return out
-
-
-def _format_arg_witness(node, format_type: str) -> str:
-    """Render an ``argmin`` / ``argmax`` arg-witness node per the rendering contract."""
-
-    def r(e):
-        return _render_expr(e, format_type)
-
-    arg = str(_node_field(node, "arg") or "")
-    expr = _node_field(node, "expr")
-    expr_str = r(expr) if expr is not None else ""
-    idx_part = f"_{{{arg}}}" if format_type == "latex" else f"[{arg}]"
-    op = _node_field(node, "op")
-    name = f"\\mathrm{{{op}}}" if format_type == "latex" else op
-    out = f"{name}{idx_part} ({expr_str})"
-    ranges = _node_field(node, "ranges")
-    if ranges:
-        out += _format_ranges_clause(ranges, format_type)
-    out += _format_join_clause(_node_field(node, "join"), format_type)
-    filt = _node_field(node, "filter")
-    if filt is not None:
-        out += f" if {r(filt)}"
-    node_id = _node_field(node, "id")
-    if node_id is not None:
-        out += f" id={node_id}"
     return out
 
 
@@ -1096,13 +1069,6 @@ def _format_structural_op(node, format_type: str):
 
     if op in ("true", "false"):
         return op
-
-    if op == "fn":
-        name = str(_node_field(node, "name") or "")
-        inner = ", ".join(r(a) for a in args)
-        if format_type == "latex":
-            return f"\\mathrm{{{_latex_name(name)}}}({inner})"
-        return f"{name}({inner})"
 
     if op == "enum":
         label = f"{args[0]}.{args[1]}"
@@ -1136,18 +1102,6 @@ def _format_structural_op(node, format_type: str):
         if format_type == "unicode":
             return f"∫[{lo}, {hi}] {f} d{v}"
         return f"integral({f}, {v}, {lo}, {hi})"
-
-    if op == "table_lookup":
-        table = str(_node_field(node, "table") or "")
-        axes = _node_field(node, "axes")
-        if axes is None:
-            axes = _node_field(node, "table_axes") or {}
-        eq = " = " if format_type == "latex" else "="
-        bindings = ", ".join(f"{k}{eq}{r(axes[k])}" for k in sorted(axes.keys()))
-        output = _node_field(node, "output")
-        out_str = f":{output}" if output is not None else ""
-        name = f"\\mathrm{{{_latex_name(table)}}}" if format_type == "latex" else table
-        return f"{name}[{bindings}]{out_str}"
 
     if op == "apply_expression_template":
         name = str(_node_field(node, "name") or "")
@@ -1203,32 +1157,8 @@ def _format_structural_op(node, format_type: str):
         name = "\\mathrm{concat}" if format_type == "latex" else "concat"
         return f"{name}({inner}, axis={axis})"
 
-    if op in ("intersect_polygon", "polygon_intersection_area"):
-        inner = ", ".join(r(a) for a in args)
-        manifold = _node_field(node, "manifold")
-        name = f"\\mathrm{{{_latex_name(op)}}}" if format_type == "latex" else op
-        # `id` (RFC §6.1 node identity) is emitted as a trailing named argument
-        # when present, so a node addressable as a derived index set's referent
-        # survives the text round-trip. Absent `id` prints exactly as before.
-        node_id = _node_field(node, "id")
-        id_part = f", id={node_id}" if node_id is not None else ""
-        return f"{name}({inner}, manifold={manifold if manifold is not None else ''}{id_part})"
-
-    if op == "skolem":
-        # The documentary `label` is a trailing named argument, like
-        # intersect_polygon's `manifold=`; an unlabeled skolem is a plain call.
-        label = _node_field(node, "label")
-        if label is None:
-            return None
-        inner = ", ".join(r(a) for a in args)
-        name = "\\mathrm{skolem}" if format_type == "latex" else "skolem"
-        return f"{name}({inner}, label={label})"
-
     if op == "faq":
         return _format_aggregate(node, format_type)
-
-    if op in ("argmin", "argmax"):
-        return _format_arg_witness(node, format_type)
 
     return None
 
@@ -1238,7 +1168,7 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
     op, args = node.op, node.args
     wrt = getattr(node, "wrt", None)
 
-    # Closed-core structural / array-query ops (const, fn, index, aggregate, …)
+    # Closed-core structural / array-query ops (const, index, aggregate, …)
     # render from fields other than `args`; try them first.
     structural = _format_structural_op(node, format_type)
     if structural is not None:
@@ -1522,7 +1452,7 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
 
     # Generic fallback: function-call notation. This is the correct rendering for
     # every op that reaches here — the relational build-time ops
-    # (skolem/rank/distinct/join/…) which carry no dedicated math notation, and
+    # (distinct/join/…) which carry no dedicated math notation, and
     # the open-tier rewrite-target sugar (grad/div/laplacian/curl) which is
     # ordinary unregistered document sugar a rewrite rule lowers before eval,
     # rendered identically to any custom user op (`godunov_hamiltonian`). None of

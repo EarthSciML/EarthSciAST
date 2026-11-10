@@ -381,11 +381,11 @@ func (c *CadenceClassifier) checkExpectCadence(expr Expression, path string) []e
 // relationalOps are the value-invention / relational-engine ops that guard 2
 // (§5.7.6) forbids on the hot path.
 var relationalOps = map[string]struct{}{
-	"distinct": {}, "join": {}, "skolem": {}, "rank": {}, "argmin": {}, "argmax": {},
+	"distinct": {}, "join": {},
 }
 
 // CheckNoContinuousRelational is §5.7.6 guard 2: a
-// distinct/join/skolem/rank/argmin/argmax node (or a `distinct` aggregate) that
+// distinct/join node (or a `distinct` aggregate) that
 // classifies CONTINUOUS is rejected — state-dependent topology may not run per
 // step in v1.
 func (c *CadenceClassifier) CheckNoContinuousRelational() []error {

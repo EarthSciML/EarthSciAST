@@ -69,7 +69,7 @@ describe('circular_dependency (esm-spec §4.9.7)', () => {
     // N.Sub.s ~ Inner.v (relative to N.Sub), N.Sub.Inner.v ~ M.w, M.w ~ N.Sub.s.
     const doc = (subStateEq: boolean): EsmFile =>
       ({
-        esm: '1.0.0',
+        esm: '2.0.0',
         metadata: { name: 'RelativeScopedRefs' },
         models: {
           M: {

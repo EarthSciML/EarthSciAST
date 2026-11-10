@@ -31,7 +31,7 @@ describe('ERROR_CODES', () => {
     expect(ERROR_CODES.UNDEFINED_VARIABLE).toBe('undefined_variable')
     expect(ERROR_CODES.TEMPLATE_IMPORT_CYCLE).toBe('template_import_cycle')
     expect(ERROR_CODES.COUPLING_IMPORT_UNRESOLVED).toBe('coupling_import_unresolved')
-    expect(ERROR_CODES.UNKNOWN_CLOSED_FUNCTION).toBe('unknown_closed_function')
+    expect(ERROR_CODES.REMOVED_OP).toBe('removed_op')
     expect(ERROR_CODES.UNKNOWN_ENUM).toBe('unknown_enum')
     expect(ERROR_CODES.UNKNOWN_ENUM_SYMBOL).toBe('unknown_enum_symbol')
   })

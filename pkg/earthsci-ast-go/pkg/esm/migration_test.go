@@ -2,9 +2,11 @@ package esm
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -83,8 +85,8 @@ func TestSchemaVersionMatchesMatrix(t *testing.T) {
 // version-compatibility corpus through SupportedMigrationTargets / CanMigrate /
 // Migrate and asserts the contract the matrix states:
 //
-//   - a fixture on the additive line (major 1, ≤ current) migrates to
-//     SchemaVersion by a marker bump;
+//   - a fixture on the additive line (2.0.0 … current) or the 1.x line
+//     (1.0.0 … 1.3.0) migrates to SchemaVersion by a marker bump;
 //   - every other fixture — the 0.x pre-break documents, the future majors,
 //     and the malformed markers — has NO supported target, and Migrate refuses.
 func TestMigrationOverSharedCorpus(t *testing.T) {
@@ -97,9 +99,8 @@ func TestMigrationOverSharedCorpus(t *testing.T) {
 			version, isString := declaredVersion(t, path)
 
 			parsed, wellFormed := parseSemVer(version)
-			// The additive line is exactly "same major as the library, at or
-			// below the current version, at or above 1.0.0".
-			wantMigratable := isString && wellFormed && onAdditiveLine(parsed)
+			wantMigratable := isString && wellFormed &&
+				(onAdditiveLine(parsed, currentSchemaSemVer) || onRelabelLine(parsed, currentSchemaSemVer))
 
 			targets := SupportedMigrationTargets(version)
 			if wantMigratable {
@@ -147,7 +148,7 @@ func TestMigrationOverSharedCorpus(t *testing.T) {
 
 // TestMigrationPairIsARewriteNotAMarkerBump pins the corpus's one migration
 // pair: the 0.0.5 SOURCE is on the far side of the 1.0.0 clean break and is
-// NOT migratable, while the 1.0.0 TARGET already sits on the additive line.
+// NOT migratable, while the 1.0.0 TARGET is relabelled to the current version.
 // That asymmetry is what "migration across the break is a rewrite a human
 // performs" means in code.
 func TestMigrationPairIsARewriteNotAMarkerBump(t *testing.T) {
@@ -169,10 +170,10 @@ func TestMigrationPairIsARewriteNotAMarkerBump(t *testing.T) {
 				t.Fatalf("CanMigrate(%q, %q) = true; the 1.0.0 break carries no automated path",
 					srcVersion, tgtVersion)
 			}
-			// The target is already on the additive line, so it migrates to
-			// itself by a no-op marker bump.
+			// The target is on the 1.x line, so it migrates to the current
+			// version by a marker bump.
 			if !CanMigrate(tgtVersion, SchemaVersion) {
-				t.Fatalf("CanMigrate(%q, %q) = false; the migrated target must sit on the additive line",
+				t.Fatalf("CanMigrate(%q, %q) = false; the migrated target must sit on the 1.x line",
 					tgtVersion, SchemaVersion)
 			}
 		})
@@ -281,4 +282,76 @@ func asMigrationError(err error, out **MigrationError) bool {
 		*out = me
 	}
 	return ok
+}
+
+// v2 is the 2.0.0 schema version the relabel tests run against, independent of
+// the embedded schema this package was built with.
+var v2 = semVer{Major: 2}
+
+// A 1.x document that uses none of the removed constructs is relabelled to
+// 2.0.0; a 2.x document on the additive line migrates to itself; a 1.x minor
+// past 1.3.0 and a 0.x document are not offered.
+func TestMigrationRelabels1xTo2(t *testing.T) {
+	for _, v := range []string{"1.0.0", "1.2.0", "1.3.0", "2.0.0"} {
+		if got := migrationTargets(v, v2, "2.0.0"); len(got) != 1 || got[0] != "2.0.0" {
+			t.Errorf("migrationTargets(%q) = %v, want [2.0.0]", v, got)
+		}
+	}
+	for _, v := range []string{"0.9.0", "1.4.0", "1.10.0", "2.0.1", "3.0.0"} {
+		if got := migrationTargets(v, v2, "2.0.0"); len(got) != 0 {
+			t.Errorf("migrationTargets(%q) = %v, want []", v, got)
+		}
+	}
+	file := &ESMFile{
+		ESM:      "1.3.0",
+		Metadata: Metadata{Name: "m"},
+		Models: map[string]Model{"m": {
+			Variables: map[string]ModelVariable{"x": {Type: VarTypeUnknown}},
+			Equations: []Equation{{LHS: "x", RHS: ExprNode{Op: "floor", Args: []any{"x"}}}},
+		}},
+	}
+	got, err := migrateAgainst(file, "2.0.0", v2, "2.0.0")
+	if err != nil {
+		t.Fatalf("relabel: %v", err)
+	}
+	if got.ESM != "2.0.0" || file.ESM != "1.3.0" {
+		t.Fatalf("esm = %q (input %q), want 2.0.0 (input 1.3.0)", got.ESM, file.ESM)
+	}
+}
+
+// A 1.x document that uses a removed op is refused with `removed_op`, naming
+// the op, where it is, and the codemod.
+func TestMigrationRefusesRemovedOps(t *testing.T) {
+	for op := range removedOps {
+		op := op
+		t.Run(op, func(t *testing.T) {
+			file := &ESMFile{
+				ESM:      "1.1.0",
+				Metadata: Metadata{Name: "m"},
+				Models: map[string]Model{"m": {
+					Variables: map[string]ModelVariable{"x": {Type: VarTypeUnknown}},
+					Equations: []Equation{{LHS: "x", RHS: ExprNode{Op: "+", Args: []any{
+						1.0, ExprNode{Op: op, Args: []any{"x"}},
+					}}}},
+				}},
+			}
+			_, err := migrateAgainst(file, "2.0.0", v2, "2.0.0")
+			var me *MigrationError
+			if !errors.As(err, &me) || me.Code != "removed_op" {
+				t.Fatalf("err = %v, want a MigrationError with code removed_op", err)
+			}
+			var de DiagnosticError
+			if !errors.As(err, &de) || de.DiagnosticCode() != "removed_op" {
+				t.Fatalf("errors.As(DiagnosticError) = %v, want removed_op", err)
+			}
+			for _, want := range []string{"`\"op\": \"" + op + "\"`", "/models/m/equations/0/rhs/args/1"} {
+				if !strings.Contains(me.Message, want) {
+					t.Errorf("message %q does not name %s", me.Message, want)
+				}
+			}
+			if op != "arrayop" && !strings.Contains(me.Message, migrateCommand) {
+				t.Errorf("message %q does not name the codemod", me.Message)
+			}
+		})
+	}
 }

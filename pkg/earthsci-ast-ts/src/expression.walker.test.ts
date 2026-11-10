@@ -20,7 +20,6 @@ describe('EXPRESSION_CHILD_KEYS', () => {
       'expr',
       'filter',
       'values',
-      'axes',
       'key',
       'bindings',
     ])
@@ -55,10 +54,9 @@ describe('mapChildren — field preservation', () => {
       args: ['A'],
       expr: { op: '*', args: ['A', 'w'] },
       filter: { op: '>', args: ['A', 0] },
-      // `skolem` args are PURE key components — here the bound range symbols
-      // `i`, `j` declared in `ranges`, ordinary references the walker never
-      // treats as binders. The documentary relation tag lives in `label`.
-      key: { op: 'skolem', label: 'edge', args: ['i', 'j'] },
+      // The key reads the bound range symbols `i`, `j` declared in `ranges`,
+      // ordinary references the walker never treats as binders.
+      key: { op: '+', args: [{ op: '*', args: ['i', 10] }, 'j'] },
       reduce: '+',
       semiring: 'sum_product',
       ranges: { i: [1, 10], j: { from: 'edges' } },
@@ -75,9 +73,8 @@ describe('mapChildren — field preservation', () => {
     expect(rec.ranges).toEqual({ i: [1, 10], j: { from: 'edges' } })
     expect(rec.join).toEqual([{ on: [['i', 'j']] }])
     expect(rec.output_idx).toEqual(['i'])
-    // The skolem key round-trips whole: its `label` documentary tag is a sidecar
-    // field preserved verbatim, and its `args` (pure components) are unchanged.
-    expect(rec.key).toEqual({ op: 'skolem', label: 'edge', args: ['i', 'j'] })
+    // The key round-trips whole.
+    expect(rec.key).toEqual({ op: '+', args: [{ op: '*', args: ['i', 10] }, 'j'] })
   })
 
   it('visits integral bounds (lower/upper) and preserves var', () => {
@@ -93,19 +90,17 @@ describe('mapChildren — field preservation', () => {
     expect((out as unknown as Record<string, unknown>).var).toBe('x')
   })
 
-  it('visits table_lookup axes map and preserves table/output', () => {
+  it('visits template-apply bindings map and preserves name', () => {
     const node: ExprNode = {
-      op: 'table_lookup',
+      op: 'apply_expression_template',
       args: [],
-      table: 'saturation',
-      output: 1,
-      axes: { T: { op: '+', args: ['T', 1] }, p: 'pressure' },
+      name: 'saturation',
+      bindings: { T: { op: '+', args: ['T', 1] }, p: 'pressure' },
     } as unknown as ExprNode
     const out = mapChildren(node, identity)
     expect(out).toEqual(node)
     const rec = out as unknown as Record<string, unknown>
-    expect(rec.table).toBe('saturation')
-    expect(rec.output).toBe(1)
+    expect(rec.name).toBe('saturation')
   })
 
   it('visits makearray values and preserves regions', () => {
@@ -177,10 +172,10 @@ describe('mapChildren — transformation and callback contract', () => {
 
   it('reports map children with the entry key in sorted order', () => {
     const node: ExprNode = {
-      op: 'table_lookup',
+      op: 'apply_expression_template',
       args: [],
-      table: 't',
-      axes: { z: 'zc', a: 'ac', m: 'mc' },
+      name: 't',
+      bindings: { z: 'zc', a: 'ac', m: 'mc' },
     } as unknown as ExprNode
     const calls: Array<[Expr, string, number | undefined]> = []
     mapChildren(node, (child, key, index) => {
@@ -219,14 +214,14 @@ describe('forEachChild', () => {
       args: ['A', 'B'],
       expr: 'body',
       filter: 'pred',
-      key: 'skol',
+      key: 'k',
       values: undefined,
-      axes: { b: 'bx', a: 'ax' },
+      bindings: { b: 'bx', a: 'ax' },
     } as unknown as ExprNode
     const keys: string[] = []
     forEachChild(node, (_child, key) => keys.push(key))
-    // args, (lower/upper absent), expr, filter, (values absent), axes sorted, key
-    expect(keys).toEqual(['args', 'args', 'expr', 'filter', 'a', 'b', 'key'])
+    // args, (lower/upper absent), expr, filter, (values absent), key, bindings sorted
+    expect(keys).toEqual(['args', 'args', 'expr', 'filter', 'key', 'a', 'b'])
   })
 
   it('is read-only (does not mutate the node)', () => {
@@ -331,26 +326,26 @@ describe('deepEqualExpr', () => {
     expect(deepEqualExpr(base, diffReduce)).toBe(false)
   })
 
-  it('compares map-valued children (table_lookup axes)', () => {
+  it('compares map-valued children (template-apply bindings)', () => {
     const a: ExprNode = {
-      op: 'table_lookup',
+      op: 'apply_expression_template',
       args: [],
-      table: 't',
-      axes: { T: { op: '+', args: ['T', 1] }, p: 'pressure' },
+      name: 't',
+      bindings: { T: { op: '+', args: ['T', 1] }, p: 'pressure' },
     } as unknown as ExprNode
     const same: ExprNode = {
-      op: 'table_lookup',
+      op: 'apply_expression_template',
       args: [],
-      table: 't',
-      axes: { p: 'pressure', T: { op: '+', args: ['T', 1] } },
+      name: 't',
+      bindings: { p: 'pressure', T: { op: '+', args: ['T', 1] } },
     } as unknown as ExprNode
     expect(deepEqualExpr(a, same)).toBe(true)
 
     const diff: ExprNode = {
-      op: 'table_lookup',
+      op: 'apply_expression_template',
       args: [],
-      table: 't',
-      axes: { T: { op: '+', args: ['T', 2] }, p: 'pressure' },
+      name: 't',
+      bindings: { T: { op: '+', args: ['T', 2] }, p: 'pressure' },
     } as unknown as ExprNode
     expect(deepEqualExpr(a, diff)).toBe(false)
   })

@@ -45,12 +45,12 @@ function isJsonExprNode(v: unknown): v is Record<string, unknown> {
 // key order the deep-equal dedup below compares).
 // ---------------------------------------------------------------------------
 
-/** Single-child slots: integral bounds, aggregate body/predicate/Skolem key. */
+/** Single-child slots: integral bounds, aggregate body/predicate/key. */
 const SCALAR_CHILDREN = ['lower', 'upper', 'expr', 'filter', 'key'] as const
 /** Positional child arrays: operands and `makearray` values. */
 const ARRAY_CHILDREN = ['args', 'values'] as const
-/** String-keyed child maps: `table_lookup` axes and template-apply bindings. */
-const MAP_CHILDREN = ['axes', 'bindings'] as const
+/** String-keyed child maps: template-apply bindings. */
+const MAP_CHILDREN = ['bindings'] as const
 
 /**
  * Component-scope one carried template body: prefix exactly the references

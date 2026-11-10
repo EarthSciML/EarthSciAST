@@ -118,8 +118,8 @@ func loadRefBytes(ref, baseDir string) (data []byte, dir string, err error) {
 		return nil, "", fmt.Errorf("failed to read ref %q (%s): %w", ref, path, err)
 	}
 	// A referenced document is a document: same wire boundary as the root
-	// (docs/content/rfcs/faq-node-rename.md §5.2). Without this the `aggregate`
-	// alias and `arrayop` both survive a `{ref}` all the way into Emit.
+	// (docs/content/rfcs/faq-node-rename.md §5.2). Without this a removed op
+	// survives a `{ref}` all the way into Emit.
 	prepared, perr := prepareDocumentOps(string(data))
 	if perr != nil {
 		return nil, "", fmt.Errorf("ref %q (%s): %w", ref, path, perr)

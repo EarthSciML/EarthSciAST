@@ -512,35 +512,25 @@ def test_scalar_field_substitution_happy_path():
     src = _scalar_field_doc(
         {
             "overlap_area": {
-                "params": ["K_manifold", "a", "b"],
-                "body": {
-                    "op": "polygon_intersection_area",
-                    "manifold": "K_manifold",
-                    "args": ["a", "b"],
-                },
+                "params": ["K_dim", "a", "b"],
+                "body": {"op": "upwind_flux", "dim": "K_dim", "args": ["a", "b"]},
             }
         },
-        {"K_manifold": "planar", "a": "pa", "b": "pb"},
+        {"K_dim": "x", "a": "pa", "b": "pb"},
     )
-    # Option B: polygon_intersection_area is target-free → the reference
-    # survives lower; expand_document yields the substituted Option-A image.
     out = expand_document(lower_expression_templates(src))
-    assert _defining(out, "M", "area") == {
-        "op": "polygon_intersection_area",
-        "manifold": "planar",
-        "args": ["pa", "pb"],
-    }
+    assert _defining(out, "M", "area") == {"op": "upwind_flux", "dim": "x", "args": ["pa", "pb"]}
 
 
 def test_scalar_field_param_threads_through_body_composition():
     """A scalar-field param passed through a §9.7.3 registration-time body
     composition (outer body applies inner, forwarding its own param into the
-    inner manifold slot) substitutes end-to-end."""
+    inner `dim` slot) substitutes end-to-end."""
     src = _scalar_field_doc(
         {
             "inner": {
                 "params": ["m", "x", "y"],
-                "body": {"op": "polygon_intersection_area", "manifold": "m", "args": ["x", "y"]},
+                "body": {"op": "upwind_flux", "dim": "m", "args": ["x", "y"]},
             },
             "outer": {
                 "params": ["K", "p", "q"],
@@ -558,39 +548,14 @@ def test_scalar_field_param_threads_through_body_composition():
                 },
             },
         },
-        {"K": "spherical", "p": "pa", "q": "pb"},
+        {"K": "y", "p": "pa", "q": "pb"},
         name="outer",
     )
     out = expand_document(lower_expression_templates(src))
     assert _defining(out, "M", "area") == {
         "op": "*",
-        "args": [
-            {"op": "polygon_intersection_area", "manifold": "spherical", "args": ["pa", "pb"]},
-            2.0,
-        ],
+        "args": [{"op": "upwind_flux", "dim": "y", "args": ["pa", "pb"]}, 2.0],
     }
-
-
-def test_invalid_substituted_manifold_rejected_post_expansion():
-    """Validators run on the expanded form (esm-spec §9.6.4): a template
-    invocation binding the manifold parameter to a non-member literal is
-    rejected with `geometry_manifold_invalid`."""
-    src = _scalar_field_doc(
-        {
-            "overlap_area": {
-                "params": ["K_manifold", "a", "b"],
-                "body": {
-                    "op": "polygon_intersection_area",
-                    "manifold": "K_manifold",
-                    "args": ["a", "b"],
-                },
-            }
-        },
-        {"K_manifold": "bogus", "a": "pa", "b": "pb"},
-    )
-    with pytest.raises(ExpressionTemplateError) as exc:
-        lower_expression_templates(src)
-    assert exc.value.code == "geometry_manifold_invalid"
 
 
 def test_params_shadow_literals_in_scalar_fields():
@@ -600,31 +565,25 @@ def test_params_shadow_literals_in_scalar_fields():
     src = _scalar_field_doc(
         {
             "shadowed": {
-                "params": ["planar", "x", "y"],
-                "body": {
-                    "op": "polygon_intersection_area",
-                    "manifold": "planar",
-                    "args": ["x", "y"],
-                },
+                "params": ["lon", "x", "y"],
+                "body": {"op": "upwind_flux", "dim": "lon", "args": ["x", "y"]},
             }
         },
-        {"planar": "spherical", "x": "pa", "y": "pb"},
+        {"lon": "lat", "x": "pa", "y": "pb"},
         name="shadowed",
     )
     out = expand_document(lower_expression_templates(src))
-    assert _defining(out, "M", "area")["manifold"] == "spherical"
+    assert _defining(out, "M", "area")["dim"] == "lat"
 
 
 def test_scalar_field_param_conformance_fixture_matches_expanded():
     """Drives tests/conformance/expression_templates/scalar_field_param — the
-    scalar-field substitution site rule (esm-spec §9.6.1) instantiated twice
-    (planar / spherical) — against its pinned Julia-generated expanded.esm."""
+    scalar-field substitution site rule (esm-spec §9.6.1) — against its pinned
+    Julia-generated expanded.esm."""
     fixture = _conf_fixture("scalar_field_param")
     expanded = _conf_fixture("scalar_field_param", "expanded.esm")
     out = expand_document(lower_expression_templates(fixture))
     assert out["models"] == expanded["models"]
-    assert _defining(out, "Overlap", "area_planar")["manifold"] == "planar"
-    assert _defining(out, "Overlap", "area_spherical")["manifold"] == "spherical"
 
 
 # ---------------------------------------------------------------------------

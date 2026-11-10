@@ -20,6 +20,7 @@ It serves two purposes:
 | `Esm/` | The model, one module per spec area |
 | `Esm/Expr/` | The Expression AST, its evaluator and template expansion (the slice built so far is listed in `Core.lean`) |
 | `Esm/Lib/` | Standard-library templates as ASTs, generated from `lib/*.esm` by `scripts/gen-lib-templates.py` (`--check` runs in CI) |
+| `Esm/Closed/` | Reference definitions (interpolation, calendar, keys and ranks, planar overlap) and the theorems that each standard-library template, expanded and evaluated, computes its reference |
 | `Adapter/Main.lean` | The `esm-lean` executable used by the conformance runners |
 | `inventory/*.json` | Every normative (`MUST`) clause of the two spec files, classified |
 | `properties/*.json` | The property registry, one file per spec area: what is claimed about which clauses, and its status (`properties.json` lists verified checkers) |
@@ -118,7 +119,7 @@ one spec file:
 | Phase | Scope |
 |---|---|
 | 0 | Infrastructure (no clauses are assigned here) |
-| 1 | Closed function registry (§9.2–9.5) and the unit registry table (§4.8.1) |
+| 1 | The unit registry table (§4.8.1) |
 | 2 | Scalar expression evaluation (§4.1–4.2), parsing, canonical form, round-trip, the units checker (§4.8.2+), the determinism contract and semiring registry (CONFORMANCE §5.5–5.6), diagnostics for these |
 | 3 | Arrays, `faq`, `makearray`, broadcasting, gathers (§4.3 and the array sections of CONFORMANCE §5) |
 | 4 | Rewrite rules, templates, imports, metaparameters, discretization rules (§9.6–9.7) |
@@ -133,12 +134,12 @@ one spec file:
   "verified_checkers": [],
   "properties": [
     {
-      "id": "P-closed-searchsorted-least-index",
-      "clauses": ["spec.9.2.searchsorted-semantics"],
-      "statement": "searchsorted returns the least index i with xs[i] ≥ x, or N+1.",
-      "lean_statement": "∀ (xs : Array Float) (x : Float), ...",
+      "id": "P-interp-lib-searchsorted-eq",
+      "clauses": ["spec.9.6.3.bindings-cover-params"],
+      "statement": "The searchsorted template of lib/interp.esm, applied and evaluated, gives the reference searchsorted's result.",
+      "lean_statement": "∀ {α : Type} … (a : List ℝ), … → Esm.Expr.evalApply Esm.Lib.Interp.searchsorted … = …",
       "status": "proven",
-      "theorem": "Esm.Closed.searchsorted_least"
+      "theorem": "Esm.Closed.TemplateAst.searchsorted_template_eq"
     }
   ]
 }

@@ -95,17 +95,17 @@
     }
   },
   "counts": {
-    "symbols": 1014,
+    "symbols": 1010,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 345,
       "typescript": 245,
-      "python": 274,
+      "python": 260,
       "rust": 388,
       "go": 476
     },
     "by_tier": {
-      "extension": 708,
+      "extension": 704,
       "stable": 306
     }
   },
@@ -464,7 +464,6 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
-        "python": "area_tolerance_ok",
         "rust": "area_tolerance_ok"
       }
     },
@@ -2819,14 +2818,6 @@
       }
     },
     {
-      "name": "densify_parallel_edges",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "densify_parallel_edges"
-      }
-    },
-    {
       "name": "dependency_edge",
       "kind": "type",
       "tier": "stable",
@@ -4563,8 +4554,7 @@
       "tier": "stable",
       "bindings": {
         "go": "FunctionTable",
-        "julia": "FunctionTable",
-        "python": "FunctionTable"
+        "julia": "FunctionTable"
       }
     },
     {
@@ -4573,8 +4563,7 @@
       "tier": "stable",
       "bindings": {
         "go": "FunctionTableAxis",
-        "julia": "FunctionTableAxis",
-        "python": "FunctionTableAxis"
+        "julia": "FunctionTableAxis"
       }
     },
     {
@@ -4629,19 +4618,10 @@
       }
     },
     {
-      "name": "geometry_backend_unavailable",
-      "kind": "error",
-      "tier": "extension",
-      "bindings": {
-        "python": "GeometryBackendUnavailable"
-      }
-    },
-    {
       "name": "geometry_error",
       "kind": "error",
       "tier": "stable",
       "bindings": {
-        "python": "GeometryError",
         "rust": "GeometryError"
       }
     },
@@ -4879,7 +4859,6 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
-        "python": "intersect_polygon",
         "rust": "intersect_polygon"
       }
     },
@@ -5259,14 +5238,6 @@
       "tier": "extension",
       "bindings": {
         "rust": "Manifold"
-      }
-    },
-    {
-      "name": "manifolds",
-      "kind": "constant",
-      "tier": "extension",
-      "bindings": {
-        "python": "MANIFOLDS"
       }
     },
     {
@@ -6183,16 +6154,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
-        "python": "polygon_area",
         "rust": "polygon_area"
-      }
-    },
-    {
-      "name": "polygon_area_via_faq",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "polygon_area_via_faq"
       }
     },
     {
@@ -6425,7 +6387,6 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
-        "python": "rank",
         "rust": "rank"
       }
     },
@@ -6442,7 +6403,6 @@
       "kind": "type",
       "tier": "stable",
       "bindings": {
-        "python": "Ranking",
         "rust": "Ranking"
       }
     },
@@ -7489,7 +7449,6 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
-        "python": "skolem",
         "rust": "skolem"
       }
     },
@@ -7498,7 +7457,6 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
-        "python": "skolem_edge",
         "rust": "skolem_edge"
       }
     },

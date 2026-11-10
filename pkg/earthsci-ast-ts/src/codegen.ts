@@ -6,10 +6,7 @@
  * free-variable bindings map that returns the scalar numeric result;
  * `evaluateExpression` walks and applies in one step.
  *
- * Structural / array ops and the closed-function registry are dispatched to
- * their consumers. `table_lookup` is the one op lowered rather than dispatched
- * — to its §9.5.3 `interp.*` form, one node at a time, on the way through; see
- * `lower-table-lookups.ts` for why that happens HERE and not at load.
+ * Structural / array ops are dispatched to their consumers.
  *
  * Both entry points walk the whole expression BEFORE evaluating any of it
  * (esm-spec §9.6.6) and refuse an operator this evaluator cannot evaluate: an op
@@ -20,14 +17,11 @@
  * `unevaluable_operator`. An op in an untaken `ifelse` branch is refused too.
  */
 
-import type { Expr, Expression, ExpressionNode } from './types.js'
+import type { Expr, ExpressionNode } from './types.js'
 import { isNumericLiteral } from './numeric-literal.js'
-import { dispatchClosedFunction } from './closed-functions.js'
 import { getOpInfo, checkArity } from './op-registry.js'
 import { forEachChild } from './expression.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
-import type { FunctionTables } from './lower-table-lookups.js'
-import { lowerTableLookupNode } from './lower-table-lookups.js'
 
 /**
  * Compiled expression closure produced by {@link compileExpression}.
@@ -35,20 +29,6 @@ import { lowerTableLookupNode } from './lower-table-lookups.js'
  * returns the scalar result.
  */
 export type CompiledExpression = (bindings: Map<string, number>) => number
-
-/**
- * Document context an expression may need beyond its free-variable bindings.
- *
- * Only `table_lookup` needs any: the node names a `function_tables` entry that
- * lives on the DOCUMENT, not in the expression, so an expression lifted out of
- * an `EsmFile` cannot be evaluated without being handed the block it refers to
- * (`{ functionTables: file.function_tables }`). Every other op is
- * self-contained, which is why this is optional.
- */
-export interface EvaluateOptions {
-  /** The document's `function_tables` block (esm-spec §9.5.1). */
-  functionTables?: FunctionTables | undefined
-}
 
 /**
  * Error carrying the stable, cross-binding `unlowered_operator` diagnostic
@@ -97,15 +77,13 @@ export class UnevaluableOperatorError extends EsmDiagnosticError {
  * (`op-registry.ts`), which lists only ops with an arity contract. Membership
  * here is what tells a closed-core op with no scalar rule
  * (`unevaluable_operator`) apart from an open-tier op no rewrite rule lowered
- * (`unlowered_operator`). `const`, `fn`, `true`, `false` and `table_lookup`
- * are evaluated; the rest are refused.
+ * (`unlowered_operator`). `const`, `true` and `false` are evaluated; the rest
+ * are refused.
  */
 const CORE_OPS_WITHOUT_REGISTRY_ROW: ReadonlySet<string> = new Set([
   'const',
-  'fn',
   'true',
   'false',
-  'table_lookup',
   'enum',
   'apply_expression_template',
   'ic',
@@ -116,13 +94,7 @@ const CORE_OPS_WITHOUT_REGISTRY_ROW: ReadonlySet<string> = new Set([
   'reshape',
   'transpose',
   'concat',
-  'skolem',
-  'rank',
   'distinct',
-  'argmin',
-  'argmax',
-  'intersect_polygon',
-  'polygon_intersection_area',
 ])
 
 /** The diagnostic for an op the scalar evaluator has no rule for. */
@@ -162,10 +134,6 @@ function assertEvaluable(expr: Expr): void {
     case 'true':
     case 'false':
       return
-    case 'fn':
-    case 'table_lookup':
-      forEachChild(node, (child) => assertEvaluable(child))
-      return
   }
   const info = getOpInfo(node.op)
   if (node.op === 'D' || info === undefined || !info.evaluate) throw unevaluableOperator(node)
@@ -175,7 +143,7 @@ function assertEvaluable(expr: Expr): void {
 /**
  * Error raised by the tree-walking evaluator for a node it cannot reduce to a
  * scalar: an unbound variable, an unsupported operator, an unlowered `enum`, a
- * non-scalar `const`, a malformed `fn`, or a non-expression value. Carries a
+ * non-scalar `const`, or a non-expression value. Carries a
  * stable `code` field so callers can branch programmatically instead of
  * regex-matching prose.
  *
@@ -199,15 +167,11 @@ export class EvaluatorError extends EsmDiagnosticError {
  *
  * The walker rejects unlowered `enum` ops (lower via `lowerEnums()` at
  * load time) and array-valued `const` nodes (those are consumed by
- * container ops such as `interp.searchsorted` and `index`, not by
- * scalar evaluation).
- *
- * Pass `{ functionTables: file.function_tables }` to evaluate an expression
- * containing `table_lookup` nodes — see {@link EvaluateOptions}.
+ * container ops such as `index`, not by scalar evaluation).
  */
-export function compileExpression(expr: Expr, options?: EvaluateOptions): CompiledExpression {
+export function compileExpression(expr: Expr): CompiledExpression {
   assertEvaluable(expr)
-  return (bindings: Map<string, number>) => evalExprNode(expr, bindings, options)
+  return (bindings: Map<string, number>) => evalExprNode(expr, bindings)
 }
 
 /**
@@ -217,46 +181,12 @@ export function compileExpression(expr: Expr, options?: EvaluateOptions): Compil
  * fixed-point observed-variable resolution, unit-conversion
  * folding).
  */
-export function evaluateExpression(
-  expr: Expr,
-  bindings: Map<string, number>,
-  options?: EvaluateOptions,
-): number {
+export function evaluateExpression(expr: Expr, bindings: Map<string, number>): number {
   assertEvaluable(expr)
-  return evalExprNode(expr, bindings, options)
+  return evalExprNode(expr, bindings)
 }
 
-/**
- * Extract an array-valued `const` node's inline literal, or `null` when `arg`
- * is not one. Container closed-functions (`interp.*`) receive their table /
- * axis operands this way — as the raw array, NOT scalar-evaluated. The check is
- * arity-agnostic (it does not require an `args` field) so hand-built and
- * canonical `const` nodes are both recognized.
- */
-function constArrayValue(arg: Expression): unknown[] | null {
-  if (typeof arg === 'object' && arg !== null && (arg as { op?: unknown }).op === 'const') {
-    const value = (arg as { value?: unknown }).value
-    if (Array.isArray(value)) return value
-  }
-  return null
-}
-
-/**
- * The 0-based argument positions of each closed function whose operand is an
- * array, not a scalar (esm-spec §9.2 signatures): these are never
- * scalar-evaluated.
- */
-const ARRAY_ARG_POSITIONS: { [name: string]: readonly number[] | undefined } = {
-  'interp.searchsorted': [1],
-  'interp.linear': [0, 1],
-  'interp.bilinear': [0, 1, 2],
-}
-
-function evalExprNode(
-  expr: Expr,
-  bindings: Map<string, number>,
-  options?: EvaluateOptions,
-): number {
+function evalExprNode(expr: Expr, bindings: Map<string, number>): number {
   if (typeof expr === 'number') {
     return expr
   } else if (isNumericLiteral(expr)) {
@@ -276,14 +206,14 @@ function evalExprNode(
 
     // const: inline literal — only meaningful as a scalar when its
     // value is a number; array-valued const nodes are extracted by
-    // callers that consume them (e.g. interp.searchsorted's xs arg).
+    // callers that consume them (e.g. `index`).
     if (node.op === 'const') {
       const value: unknown = node.value
       if (typeof value === 'number') return value
       if (Array.isArray(value)) {
         throw new EvaluatorError(
           ERROR_CODES.CONST_NOT_SCALAR,
-          'const node with array value cannot be evaluated as a scalar; arrays are consumed by container ops (e.g. interp.searchsorted, index)',
+          'const node with array value cannot be evaluated as a scalar; arrays are consumed by container ops (e.g. index)',
         )
       }
       throw new EvaluatorError(
@@ -302,51 +232,6 @@ function evalExprNode(
     if (node.op === 'true') return 1
     if (node.op === 'false') return 0
 
-    // fn: closed function registry dispatch (esm-spec §9.2). Most
-    // args evaluate to scalars; interp.searchsorted's second arg is
-    // a const array that we extract WITHOUT evaluating it through
-    // the scalar path.
-    if (node.op === 'fn') {
-      const fnName = node.name
-      if (typeof fnName !== 'string') {
-        throw new EvaluatorError(
-          ERROR_CODES.FN_MISSING_NAME,
-          'fn op missing required string `name` field',
-        )
-      }
-      const arrayPositions = ARRAY_ARG_POSITIONS[fnName]
-      const fnArgs: unknown[] = node.args.map((arg, i): unknown => {
-        const arr = constArrayValue(arg)
-        if (arr !== null) return arr
-        // An array-typed position (a `table`, an axis, searchsorted's `xs`)
-        // must hold a `const` array literal (esm-spec §9.2). Anything else — a
-        // variable reference, a non-`const` expression, a scalar `const` — is
-        // handed over UNEVALUATED, so the closed function rejects it with its
-        // `*_not_const` code rather than this walker failing first on, say, an
-        // unbound variable.
-        if (arrayPositions?.includes(i)) return arg
-        return evalExprNode(arg, bindings, options)
-      })
-      return dispatchClosedFunction(fnName, fnArgs)
-    }
-
-    // table_lookup: §9.5.3 sugar over the closed-function set above. Lowered
-    // ONE NODE AT A TIME, HERE, rather than in `parse.ts` next to `lowerEnums`:
-    // §9.5.4 requires the authored `table_lookup` / `function_tables` forms to
-    // survive a round trip, and `toJson` serializes the image `loadString`
-    // produced — so a load-time rewrite would emit the lowered form instead.
-    // §9.5.3 admits exactly this alternative (an evaluator that dispatches on
-    // the node), and lowering-then-evaluating keeps ONE implementation of the
-    // semantics: the lowered tree drives the same `interp.*` closed functions
-    // an author would have called by hand, which is what makes the two
-    // spellings bit-equivalent. A `table_lookup` nested in an axis input is
-    // reached by the recursion below. Must precede the rewrite-target gate:
-    // `table_lookup` carries no op-registry entry, so the gate would otherwise
-    // report this evaluable node as an unlowered spatial operator.
-    if (node.op === 'table_lookup') {
-      return evalExprNode(lowerTableLookupNode(node, options?.functionTables), bindings, options)
-    }
-
     // Rewrite-target op gate (esm-spec §4.2 / §9.6.8). The evaluable-core op
     // vocabulary is the op-registry (op-registry.ts) — the SINGLE SOURCE OF
     // TRUTH, no bespoke {grad,div,laplacian} name list. ANY op reaching
@@ -359,7 +244,7 @@ function evalExprNode(
     // an RHS / observed / rate position) it is likewise an unlowered
     // rewrite-target, so it is named explicitly. Both fire the uniform
     // `unlowered_operator` diagnostic BEFORE evaluating args (mirrors the Julia
-    // `_compile` gate). The const/enum/fn structural ops are handled above; a
+    // `_compile` gate). The const/enum structural ops are handled above; a
     // registered-but-non-scalar op (`Pre`, `=`) passes this gate and falls
     // through to the `unevaluable_operator` arm below. Both entry points have
     // already refused all of these in their up-front walk. Loading stays permissive
@@ -382,15 +267,15 @@ function evalExprNode(
     const truthy = (v: number): boolean => v !== 0
     if (node.op === 'ifelse') {
       checkArity(node.op, node.args.length)
-      return truthy(evalExprNode(node.args[0], bindings, options))
-        ? evalExprNode(node.args[1], bindings, options)
-        : evalExprNode(node.args[2], bindings, options)
+      return truthy(evalExprNode(node.args[0], bindings))
+        ? evalExprNode(node.args[1], bindings)
+        : evalExprNode(node.args[2], bindings)
     }
     if (node.op === 'and') {
       checkArity(node.op, node.args.length)
       // Short-circuit on the first falsy operand.
       for (const arg of node.args) {
-        if (!truthy(evalExprNode(arg, bindings, options))) return 0
+        if (!truthy(evalExprNode(arg, bindings))) return 0
       }
       return 1
     }
@@ -398,7 +283,7 @@ function evalExprNode(
       checkArity(node.op, node.args.length)
       // Short-circuit on the first truthy operand.
       for (const arg of node.args) {
-        if (truthy(evalExprNode(arg, bindings, options))) return 1
+        if (truthy(evalExprNode(arg, bindings))) return 1
       }
       return 0
     }
@@ -413,7 +298,7 @@ function evalExprNode(
     const info = getOpInfo(node.op)
     if (!info || !info.evaluate) throw new UnevaluableOperatorError(node.op)
 
-    const args: number[] = node.args.map((arg) => evalExprNode(arg, bindings, options))
+    const args: number[] = node.args.map((arg) => evalExprNode(arg, bindings))
     checkArity(node.op, args.length)
     return info.evaluate(args)
   }

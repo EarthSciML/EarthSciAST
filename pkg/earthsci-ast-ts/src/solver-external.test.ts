@@ -23,6 +23,7 @@ import {
   toJson,
 } from './index.js'
 import { ERROR_CODES } from './errors.js'
+import { rejectRootLoadGates } from './parse.js'
 import { removeDotSegments } from './data-source-urls.js'
 import { REPO_ROOT } from './test-helpers.js'
 import type { EsmFile } from './types.js'
@@ -167,9 +168,17 @@ describe('solver.external load gates', () => {
     ['1.0.0', '{"external":"a.json"}', ERROR_CODES.SOLVER_VERSION_TOO_OLD],
     ['1.2.0', '{"external":"${X}/a.json"}', ERROR_CODES.SOLVER_EXTERNAL_VERSION_TOO_OLD],
     ['1.2.0', '{"reltol":1e-6}', null],
-    ['1.3.0', '{"external":"a.json"}', null],
+    ['2.0.0', '{"external":"a.json"}', null],
   ])('esm %s, solver %s -> %s', (esm, solver, want) => {
-    expect(codeOf(() => loadString(doc(esm, solver)))).toBe(want)
+    expect(
+      codeOf(() =>
+        // A 1.x root is refused by the major-version check before any gate runs,
+        // so the 1.x rows drive the gates themselves.
+        esm.startsWith('1.')
+          ? rejectRootLoadGates(JSON.parse(doc(esm, solver)))
+          : loadString(doc(esm, solver)),
+      ),
+    ).toBe(want)
   })
 
   it('names /solver/external in the version-gate message', () => {
@@ -194,7 +203,7 @@ describe('solver.external load gates', () => {
 describe('solverExternalLocation base handling', () => {
   const inMemory = (external?: string) =>
     ({
-      esm: '1.3.0',
+      esm: '2.0.0',
       metadata: { name: 'T' },
       ...(external ? { solver: { external } } : {}),
     }) as unknown as EsmFile

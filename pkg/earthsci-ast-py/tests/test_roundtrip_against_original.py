@@ -212,7 +212,6 @@ RESTORED_KEYS: frozenset[str] = frozenset(
         "initial_offset",  # DiscreteEventTrigger (periodic)
         "coordinates",  # top-level registry
         "lifting",  # coupling[] (variable_map / couple / operator_compose)
-        "arg",  # ExpressionNode (argmin / argmax witness)
         # ExpressionNode author annotations. `expect_cadence` guards the whole
         # §5.7 partition contract (CONFORMANCE_SPEC.md §5.7.6 rule 3) and is
         # corpus-covered by `cadence/**`; `attrs` carries an OPEN

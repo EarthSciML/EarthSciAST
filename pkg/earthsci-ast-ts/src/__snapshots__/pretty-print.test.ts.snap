@@ -1426,7 +1426,7 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
     "unicode": "a^(b^c)",
   },
   {
-    "ascii": "intersect_polygon(src_poly, tgt_poly, manifold=planar, id=overlap_clip)",
+    "ascii": "intersect_polygon(src_poly, tgt_poly)",
     "input": {
       "args": [
         "src_poly",
@@ -1436,12 +1436,12 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
       "manifold": "planar",
       "op": "intersect_polygon",
     },
-    "latex": "\\mathrm{intersect\\_polygon}(\\mathrm{src\\_poly}, \\mathrm{tgt\\_poly}, manifold=planar, id=overlap_clip)",
-    "mathml": "<mtext>intersect_polygon(src_poly, tgt_poly, manifold=planar, id=overlap_clip)</mtext>",
-    "unicode": "intersect_polygon(src_poly, tgt_poly, manifold=planar, id=overlap_clip)",
+    "latex": "\\mathrm{intersect\\_polygon}(\\mathrm{src\\_poly}, \\mathrm{tgt\\_poly})",
+    "mathml": "<mrow><mi>intersect_polygon</mi><mo>(</mo><mi>src_poly</mi><mo>,</mo><mi>tgt_poly</mi><mo>)</mo></mrow>",
+    "unicode": "intersect_polygon(src_poly, tgt_poly)",
   },
   {
-    "ascii": "polygon_intersection_area(a, b, manifold=planar, id=area_faq)",
+    "ascii": "polygon_intersection_area(a, b)",
     "input": {
       "args": [
         "a",
@@ -1451,12 +1451,12 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
       "manifold": "planar",
       "op": "polygon_intersection_area",
     },
-    "latex": "\\mathrm{polygon\\_intersection\\_area}(a, b, manifold=planar, id=area_faq)",
-    "mathml": "<mtext>polygon_intersection_area(a, b, manifold=planar, id=area_faq)</mtext>",
-    "unicode": "polygon_intersection_area(a, b, manifold=planar, id=area_faq)",
+    "latex": "\\mathrm{polygon\\_intersection\\_area}(a, b)",
+    "mathml": "<mrow><mi>polygon_intersection_area</mi><mo>(</mo><mi>a</mi><mo>,</mo><mi>b</mi><mo>)</mo></mrow>",
+    "unicode": "polygon_intersection_area(a, b)",
   },
   {
-    "ascii": "visc[T=temp]",
+    "ascii": "table_lookup()",
     "input": {
       "args": [],
       "axes": {
@@ -1465,12 +1465,12 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
       "op": "table_lookup",
       "table": "visc",
     },
-    "latex": "\\mathrm{visc}[T = \\mathrm{temp}]",
-    "mathml": "<mtext>visc[T=temp]</mtext>",
-    "unicode": "visc[T=temp]",
+    "latex": "\\mathrm{table\\_lookup}()",
+    "mathml": "<mrow><mi>table_lookup</mi><mo>(</mo><mo>)</mo></mrow>",
+    "unicode": "table_lookup()",
   },
   {
-    "ascii": "k_rate[T=temp, p=pres]:1",
+    "ascii": "table_lookup()",
     "input": {
       "args": [],
       "axes": {
@@ -1481,9 +1481,9 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
       "output": 1,
       "table": "k_rate",
     },
-    "latex": "\\mathrm{k\\_rate}[T = \\mathrm{temp}, p = \\mathrm{pres}]:1",
-    "mathml": "<mtext>k_rate[T=temp, p=pres]:1</mtext>",
-    "unicode": "k_rate[T=temp, p=pres]:1",
+    "latex": "\\mathrm{table\\_lookup}()",
+    "mathml": "<mrow><mi>table_lookup</mi><mo>(</mo><mo>)</mo></mrow>",
+    "unicode": "table_lookup()",
   },
   {
     "ascii": "any[p] (u[a]) where {a in atmos_cells} id=rg_candidate_pairs [semiring=bool_and_or]",
@@ -1515,7 +1515,7 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
     "unicode": "⋁[p] (u[a]) where {a∈atmos_cells} id=rg_candidate_pairs [semiring=bool_and_or]",
   },
   {
-    "ascii": "argmin[g] (a[g]) where {g in gens} id=cheapest",
+    "ascii": "argmin(a)",
     "input": {
       "arg": "g",
       "args": [
@@ -1536,9 +1536,9 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
         },
       },
     },
-    "latex": "\\mathrm{argmin}_{g} (a[g]) \\text{ where } \\{g \\in gens\\} id=cheapest",
-    "mathml": "<mtext>argmin[g] (a[g]) where {g∈gens} id=cheapest</mtext>",
-    "unicode": "argmin[g] (a[g]) where {g∈gens} id=cheapest",
+    "latex": "\\mathrm{argmin}(a)",
+    "mathml": "<mrow><mi>argmin</mi><mo>(</mo><mi>a</mi><mo>)</mo></mrow>",
+    "unicode": "argmin(a)",
   },
   {
     "ascii": "(a <= b) * (c < d)",
@@ -5095,7 +5095,7 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
     "unicode": "false",
   },
   {
-    "ascii": "datetime.year(t)",
+    "ascii": "fn(t)",
     "input": {
       "args": [
         "t",
@@ -5103,12 +5103,12 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
       "name": "datetime.year",
       "op": "fn",
     },
-    "latex": "\\mathrm{datetime.year}(t)",
-    "mathml": "<mtext>datetime.year(t)</mtext>",
-    "unicode": "datetime.year(t)",
+    "latex": "\\mathrm{fn}(t)",
+    "mathml": "<mrow><mi>fn</mi><mo>(</mo><mi>t</mi><mo>)</mo></mrow>",
+    "unicode": "fn(t)",
   },
   {
-    "ascii": "datetime.day_of_year(t)",
+    "ascii": "fn(t)",
     "input": {
       "args": [
         "t",
@@ -5116,9 +5116,9 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
       "name": "datetime.day_of_year",
       "op": "fn",
     },
-    "latex": "\\mathrm{datetime.day\\_of\\_year}(t)",
-    "mathml": "<mtext>datetime.day_of_year(t)</mtext>",
-    "unicode": "datetime.day_of_year(t)",
+    "latex": "\\mathrm{fn}(t)",
+    "mathml": "<mrow><mi>fn</mi><mo>(</mo><mi>t</mi><mo>)</mo></mrow>",
+    "unicode": "fn(t)",
   },
   {
     "ascii": "Season.summer",
@@ -5209,7 +5209,7 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
     "unicode": "∫[0, 1] f dx",
   },
   {
-    "ascii": "visc[T=temp]",
+    "ascii": "table_lookup()",
     "input": {
       "args": [],
       "axes": {
@@ -5218,12 +5218,12 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
       "op": "table_lookup",
       "table": "visc",
     },
-    "latex": "\\mathrm{visc}[T = \\mathrm{temp}]",
-    "mathml": "<mtext>visc[T=temp]</mtext>",
-    "unicode": "visc[T=temp]",
+    "latex": "\\mathrm{table\\_lookup}()",
+    "mathml": "<mrow><mi>table_lookup</mi><mo>(</mo><mo>)</mo></mrow>",
+    "unicode": "table_lookup()",
   },
   {
-    "ascii": "k_rate[T=temp, p=pres]:1",
+    "ascii": "table_lookup()",
     "input": {
       "args": [],
       "axes": {
@@ -5234,9 +5234,9 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
       "output": 1,
       "table": "k_rate",
     },
-    "latex": "\\mathrm{k\\_rate}[T = \\mathrm{temp}, p = \\mathrm{pres}]:1",
-    "mathml": "<mtext>k_rate[T=temp, p=pres]:1</mtext>",
-    "unicode": "k_rate[T=temp, p=pres]:1",
+    "latex": "\\mathrm{table\\_lookup}()",
+    "mathml": "<mrow><mi>table_lookup</mi><mo>(</mo><mo>)</mo></mrow>",
+    "unicode": "table_lookup()",
   },
   {
     "ascii": "central_diff<f=u, h=dx>",
@@ -5369,7 +5369,7 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
     "unicode": "concat(A, B, axis=0)",
   },
   {
-    "ascii": "intersect_polygon(P, Q, manifold=spherical)",
+    "ascii": "intersect_polygon(P, Q)",
     "input": {
       "args": [
         "P",
@@ -5378,12 +5378,12 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
       "manifold": "spherical",
       "op": "intersect_polygon",
     },
-    "latex": "\\mathrm{intersect\\_polygon}(P, Q, manifold=spherical)",
-    "mathml": "<mtext>intersect_polygon(P, Q, manifold=spherical)</mtext>",
-    "unicode": "intersect_polygon(P, Q, manifold=spherical)",
+    "latex": "\\mathrm{intersect\\_polygon}(P, Q)",
+    "mathml": "<mrow><mi>intersect_polygon</mi><mo>(</mo><mi>P</mi><mo>,</mo><mi>Q</mi><mo>)</mo></mrow>",
+    "unicode": "intersect_polygon(P, Q)",
   },
   {
-    "ascii": "polygon_intersection_area(P, Q, manifold=planar)",
+    "ascii": "polygon_intersection_area(P, Q)",
     "input": {
       "args": [
         "P",
@@ -5392,9 +5392,9 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
       "manifold": "planar",
       "op": "polygon_intersection_area",
     },
-    "latex": "\\mathrm{polygon\\_intersection\\_area}(P, Q, manifold=planar)",
-    "mathml": "<mtext>polygon_intersection_area(P, Q, manifold=planar)</mtext>",
-    "unicode": "polygon_intersection_area(P, Q, manifold=planar)",
+    "latex": "\\mathrm{polygon\\_intersection\\_area}(P, Q)",
+    "mathml": "<mrow><mi>polygon_intersection_area</mi><mo>(</mo><mi>P</mi><mo>,</mo><mi>Q</mi><mo>)</mo></mrow>",
+    "unicode": "polygon_intersection_area(P, Q)",
   },
   {
     "ascii": "sum[i] (A * B)",
@@ -5481,7 +5481,7 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
     "unicode": "min[i] (d) [semiring=min_sum]",
   },
   {
-    "ascii": "argmin[g] (abs(d)) where {g in 1:10}",
+    "ascii": "argmin()",
     "input": {
       "arg": "g",
       "args": [],
@@ -5499,9 +5499,9 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
         ],
       },
     },
-    "latex": "\\mathrm{argmin}_{g} (|d|) \\text{ where } \\{g \\in 1:10\\}",
-    "mathml": "<mtext>argmin[g] (|d|) where {g∈1:10}</mtext>",
-    "unicode": "argmin[g] (|d|) where {g∈1:10}",
+    "latex": "\\mathrm{argmin}()",
+    "mathml": "<mrow><mi>argmin</mi><mo>(</mo><mo>)</mo></mrow>",
+    "unicode": "argmin()",
   },
   {
     "ascii": "sum[] (payload[b]) where {a in rows, b in rows} join(row_prior=row_id, syms=[b, a])",
@@ -5589,7 +5589,7 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
     "unicode": "Σ[] (1) where {i∈src, j∈tgt} join(src_bin=tgt_bin, src_lvl=tgt_lvl; i=j)",
   },
   {
-    "ascii": "any[m] (true) where {c in cells, r in records} join(overlap(src=[px, py], tgt=[W, S, E, N])) if (W[c] <= px[r]) * (px[r] < E[c]) distinct key=skolem(c, label=cell) [semiring=bool_and_or]",
+    "ascii": "any[m] (true) where {c in cells, r in records} join(overlap(src=[px, py], tgt=[W, S, E, N])) if (W[c] <= px[r]) * (px[r] < E[c]) distinct key=skolem(c) [semiring=bool_and_or]",
     "input": {
       "args": [],
       "distinct": true,
@@ -5677,9 +5677,9 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
       },
       "semiring": "bool_and_or",
     },
-    "latex": "\\bigvee_{m} (true) \\text{ where } \\{c \\in cells, r \\in records\\} join(overlap(src=[px, py], tgt=[W, S, E, N])) if (W[c] \\leq \\mathrm{px}[r]) \\cdot (\\mathrm{px}[r] < E[c]) distinct key=\\mathrm{skolem}(c, label=cell) [semiring=bool_and_or]",
-    "mathml": "<mtext>⋁[m] (true) where {c∈cells, r∈records} join(overlap(src=[px, py], tgt=[W, S, E, N])) if (W[c] ≤ px[r])·(px[r] &lt; E[c]) distinct key=skolem(c, label=cell) [semiring=bool_and_or]</mtext>",
-    "unicode": "⋁[m] (true) where {c∈cells, r∈records} join(overlap(src=[px, py], tgt=[W, S, E, N])) if (W[c] ≤ px[r])·(px[r] < E[c]) distinct key=skolem(c, label=cell) [semiring=bool_and_or]",
+    "latex": "\\bigvee_{m} (true) \\text{ where } \\{c \\in cells, r \\in records\\} join(overlap(src=[px, py], tgt=[W, S, E, N])) if (W[c] \\leq \\mathrm{px}[r]) \\cdot (\\mathrm{px}[r] < E[c]) distinct key=\\mathrm{skolem}(c) [semiring=bool_and_or]",
+    "mathml": "<mtext>⋁[m] (true) where {c∈cells, r∈records} join(overlap(src=[px, py], tgt=[W, S, E, N])) if (W[c] ≤ px[r])·(px[r] &lt; E[c]) distinct key=skolem(c) [semiring=bool_and_or]</mtext>",
+    "unicode": "⋁[m] (true) where {c∈cells, r∈records} join(overlap(src=[px, py], tgt=[W, S, E, N])) if (W[c] ≤ px[r])·(px[r] < E[c]) distinct key=skolem(c) [semiring=bool_and_or]",
   },
   {
     "ascii": "sum[c] (w[r]) where {c in cells, r in records} join(overlap(src=[xmin, ymin, xmax, ymax], tgt=[W, S, E, N], eps=1.0e-3))",
@@ -5729,7 +5729,7 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
     "unicode": "Σ[c] (w[r]) where {c∈cells, r∈records} join(overlap(src=[xmin, ymin, xmax, ymax], tgt=[W, S, E, N], eps=1.0×10⁻³))",
   },
   {
-    "ascii": "argmin[g] (d[g]) where {g in gens} join(point_bin=gen_bin) if d[g] > 0",
+    "ascii": "argmin()",
     "input": {
       "arg": "g",
       "args": [],
@@ -5770,9 +5770,9 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
         },
       },
     },
-    "latex": "\\mathrm{argmin}_{g} (d[g]) \\text{ where } \\{g \\in gens\\} join(point_bin=gen_bin) if d[g] > 0",
-    "mathml": "<mtext>argmin[g] (d[g]) where {g∈gens} join(point_bin=gen_bin) if d[g] &gt; 0</mtext>",
-    "unicode": "argmin[g] (d[g]) where {g∈gens} join(point_bin=gen_bin) if d[g] > 0",
+    "latex": "\\mathrm{argmin}()",
+    "mathml": "<mrow><mi>argmin</mi><mo>(</mo><mo>)</mo></mrow>",
+    "unicode": "argmin()",
   },
   {
     "ascii": "grad(phi)",
@@ -5844,7 +5844,7 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
     "unicode": "godunov_hamiltonian(u, v)",
   },
   {
-    "ascii": "skolem(u, v, label=edge)",
+    "ascii": "skolem(u, v)",
     "input": {
       "args": [
         "u",
@@ -5853,9 +5853,9 @@ exports[`Rendering output lock (all display fixtures) > renders structural_ops.j
       "label": "edge",
       "op": "skolem",
     },
-    "latex": "\\mathrm{skolem}(u, v, label=edge)",
-    "mathml": "<mtext>skolem(u, v, label=edge)</mtext>",
-    "unicode": "skolem(u, v, label=edge)",
+    "latex": "\\mathrm{skolem}(u, v)",
+    "mathml": "<mrow><mi>skolem</mi><mo>(</mo><mi>u</mi><mo>,</mo><mi>v</mi><mo>)</mo></mrow>",
+    "unicode": "skolem(u, v)",
   },
   {
     "ascii": "rank(S)",

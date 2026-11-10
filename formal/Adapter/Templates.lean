@@ -1,10 +1,9 @@
 import Lean.Data.Json
-import Adapter.Interp
 import Esm.Expr.Template
 
 /-! `esm-lean templates <document.esm> [model]`: the `apply_expression_template`
-equations of a template-application document (the `interp_templates` tier,
-`tests/closed_functions/interp/*/template.esm`), evaluated with the model's
+equations of a template-application document (the standard-library template
+tiers under `tests/conformance/*_templates`), evaluated with the model's
 expression evaluator (`Esm.Expr.evalApply`) at `Float`.
 
 Reads only what those documents use: one model (the one named, or the
@@ -45,6 +44,15 @@ well-formed document, 2 on a usage or parse error. -/
 namespace Adapter.Templates
 
 open Lean Esm.Expr
+
+/-- A result value: `value` a JSON number (or the string `"NaN"`), `bits` the
+IEEE-754 bit pattern as a decimal string, for exact comparison. -/
+def floatJson (x : Float) : Json :=
+  let v : Json := if x.isNaN then .str "NaN"
+    else match JsonNumber.fromFloat? x with
+      | .inr n => .num n
+      | .inl s => .str s
+  Json.mkObj [("value", v), ("bits", .str (toString x.toBits))]
 
 /-- The file an `expression_template_imports` `ref` names. A standard-library
 ref `esm:std/<file>.esm` (esm-spec §4.7) names a file of the repository's
@@ -413,7 +421,7 @@ def main (args : List String) : IO UInt32 := do
               out := out.push (Json.mkObj [("name", lhs), ("set", id), ("error", what)])
             | .ok keys =>
               out := out.push (Json.mkObj [("name", lhs), ("set", id),
-                ("members", toJson (keys.map Adapter.Interp.floatJson)),
+                ("members", toJson (keys.map floatJson)),
                 ("extent", toJson keys.length)])
               -- every index set this node produces gets its size, and its
               -- `member_factor` the ascending keys
@@ -433,11 +441,11 @@ def main (args : List String) : IO UInt32 := do
             let σ ← liftExcept (bs.toArray.toList.mapM (fun (k, v) => do return (k, ← astOf v)))
             match evalApplyIn scope 32 t σ env with
             | .ok (.num x) =>
-              out := out.push ((Adapter.Interp.floatJson x).mergeObj (Json.mkObj [("name", lhs)]))
+              out := out.push ((floatJson x).mergeObj (Json.mkObj [("name", lhs)]))
               env := (lhs, .num x) :: env
             | .ok (.inf neg) =>
               let x : Float := if neg then -(1.0 / 0.0) else 1.0 / 0.0
-              out := out.push ((Adapter.Interp.floatJson x).mergeObj (Json.mkObj [("name", lhs)]))
+              out := out.push ((floatJson x).mergeObj (Json.mkObj [("name", lhs)]))
             | .ok _ => out := out.push (Json.mkObj [("name", lhs), ("error", "not a scalar")])
             | .error err =>
               out := out.push (Json.mkObj [("name", lhs), ("error", errorString err)])
@@ -454,7 +462,7 @@ def main (args : List String) : IO UInt32 := do
                 | .ok vals =>
                   for (t, x) in ts.zip vals do
                     let coords := Json.mkObj ((names.zip t).map (fun (n, k) => (n, toJson k)))
-                    out := out.push ((Adapter.Interp.floatJson x).mergeObj
+                    out := out.push ((floatJson x).mergeObj
                       (Json.mkObj [("name", lhs), ("coords", coords)]))
                   if let some v := shapeVal sizes vals then env := (lhs, v) :: env
         let ok := (out.filter (fun r => (r.getObjVal? "skipped").toOption.isNone &&

@@ -399,31 +399,6 @@ func TestOOL_OpacityPriorityShadowing(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------
-// per_instantiation_validation (§9.6.9): manifold param, two call sites, one
-// inadmissible → geometry_manifold_invalid naming the call site.
-// -----------------------------------------------------------------------
-
-func TestOOL_PerInstantiationValidation(t *testing.T) {
-	err := oolLoadErr("per_instantiation_validation")
-	if err == nil {
-		t.Fatalf("expected geometry_manifold_invalid, got nil")
-	}
-	etErr, ok := err.(*ExpressionTemplateError)
-	if !ok {
-		t.Fatalf("expected *ExpressionTemplateError, got %T (%v)", err, err)
-	}
-	if etErr.Code != "geometry_manifold_invalid" {
-		t.Errorf("code = %s; want geometry_manifold_invalid", etErr.Code)
-	}
-	if !strings.Contains(etErr.Message, "area_bad") {
-		t.Errorf("message must name offending call site area_bad: %s", etErr.Message)
-	}
-	if !strings.Contains(etErr.Message, "overlap") {
-		t.Errorf("message must name template overlap: %s", etErr.Message)
-	}
-}
-
-// -----------------------------------------------------------------------
 // flatten_registry_merge (§9.6.4 rule 7, §10.7): dedup + owner-path rename.
 // -----------------------------------------------------------------------
 
@@ -652,11 +627,11 @@ func mustRead(t *testing.T, parts ...string) string {
 	return string(data)
 }
 
-// The relational ops of the §4.2 array/query core are evaluable-core, not
-// rewrite targets: a template body that uses them is not target-bearing. This
-// is the classification the Julia, Python and Rust registries give them.
-func TestOpInTRelationalCoreOps(t *testing.T) {
-	for _, op := range []string{"skolem", "rank", "argmin", "argmax", "pow", "true", "false"} {
+// The ops of the §4.2 core are evaluable-core, not rewrite targets: a template
+// body that uses them is not target-bearing. This is the classification the
+// Julia, Python and Rust registries give them.
+func TestOpInTCoreOps(t *testing.T) {
+	for _, op := range []string{"faq", "index", "pow", "true", "false"} {
 		if opInT(op) {
 			t.Errorf("opInT(%q) = true, want false (evaluable core)", op)
 		}

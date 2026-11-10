@@ -260,12 +260,9 @@ def faq_bare_array_operands(
         op = _faq_field(node, "op")
         if op is None or op == "apply_expression_template":
             return
-        if op in ("faq", "aggregate"):
+        if op == "faq":
             syms = set(_faq_field(node, "output_idx") or [])
             syms |= set((_faq_field(node, "ranges") or {}).keys())
-            arg = _faq_field(node, "arg")
-            if isinstance(arg, str):
-                syms.add(arg)
             bound = bound | {str(s) for s in syms}
             for field_name in ("expr", "filter"):
                 part = _faq_field(node, field_name)

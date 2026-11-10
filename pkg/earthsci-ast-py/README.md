@@ -17,7 +17,6 @@ solver stack. The heavier tiers are opt-in extras:
 pip install "earthsci-ast[data]"      # xarray + netcdf4: the grid/static readers
 pip install "earthsci-ast[simulate]"  # scipy: the ODE solver behind `solve`
 pip install "earthsci-ast[plot]"      # matplotlib: Solution.plot
-pip install "earthsci-ast[geometry]"  # spherely: spherical/geodesic clipping
 ```
 
 This mirrors the Rust crate's non-default `esio` / `solve` features and Julia's
